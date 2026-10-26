@@ -2,17 +2,20 @@ use std::{
     borrow::Cow,
     collections::BTreeMap,
     fmt,
+    io::Write,
     ops::{Add, Div, Mul, Sub, SubAssign},
     path::Path,
-    sync::LazyLock,
+    sync::{Arc, LazyLock, Mutex, Weak},
 };
 
 use cap_cursor_info::CursorFamily;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use specta::Type;
 
 use crate::DisplayNotch;
+
+#[cfg(test)]
+mod style_resolution_tests;
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
@@ -789,7 +792,7 @@ impl Default for ClickSpringConfig {
     }
 }
 
-#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug)]
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ScreenMovementSpring {
     pub stiffness: f32,
@@ -929,6 +932,7 @@ pub struct HotkeysConfiguration {
 pub struct TimelineSegment {
     #[serde(default, rename = "recordingSegment")]
     pub recording_clip: u32,
+    #[serde(deserialize_with = "deserialize_timescale")]
     pub timescale: f64,
     pub start: f64,
     pub end: f64,
@@ -949,6 +953,44 @@ pub enum ClipSpeedAudioMode {
     Mute,
     MaintainPitch,
     MatchSpeed,
+}
+
+// Real clips end at or within rounding of their recording's end. One that
+// runs on far past it (a damaged project) would make export render billions
+// of frames and the editor precompute zoom for all of them.
+const MAX_CLIP_OVERRUN_SECS: f64 = 60.0;
+
+/// Pulls back the end of any timeline clip that runs more than a minute past
+/// its recording segment (`recording_durations[i]`, in seconds).
+pub fn clamp_timeline_to_sources(project: &mut ProjectConfiguration, recording_durations: &[f64]) {
+    let Some(timeline) = project.timeline.as_mut() else {
+        return;
+    };
+    for segment in &mut timeline.segments {
+        let Some(&duration) = recording_durations.get(segment.recording_clip as usize) else {
+            continue;
+        };
+        if duration.is_finite() && duration > 0.0 && segment.end > duration + MAX_CLIP_OVERRUN_SECS
+        {
+            segment.end = duration.max(segment.start);
+        }
+    }
+}
+
+// Clip speeds are 0.25x to 8x in the editor. A damaged project's zero,
+// non-finite or vanishingly small speed stretches the clip toward infinite
+// duration and hangs playback and export, so it reads as normal speed.
+const MIN_TIMESCALE: f64 = 0.01;
+
+fn deserialize_timescale<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<f64, D::Error> {
+    let timescale = f64::deserialize(deserializer)?;
+    Ok(if timescale.is_finite() && timescale >= MIN_TIMESCALE {
+        timescale
+    } else {
+        1.0
+    })
 }
 
 impl TimelineSegment {
@@ -988,7 +1030,7 @@ pub enum GlideDirection {
     Down,
 }
 
-#[derive(Type, Serialize, Deserialize, Clone, Debug)]
+#[derive(Type, Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ZoomSegment {
     pub start: f64,
@@ -1015,7 +1057,7 @@ impl ZoomSegment {
     }
 }
 
-#[derive(Type, Serialize, Deserialize, Clone, Debug)]
+#[derive(Type, Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub enum ZoomMode {
     Auto,
@@ -1786,6 +1828,15 @@ where
     Ok(by_segment.into_values().collect())
 }
 
+fn deserialize_scene_segments<'de, D>(deserializer: D) -> Result<Vec<SceneSegment>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let mut segments = Vec::<SceneSegment>::deserialize(deserializer)?;
+    segments.sort_by(|left, right| left.start.total_cmp(&right.start));
+    Ok(segments)
+}
+
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct TimelineConfiguration {
@@ -1797,7 +1848,7 @@ pub struct TimelineConfiguration {
     )]
     pub transitions: Vec<ClipTransition>,
     pub zoom_segments: Vec<ZoomSegment>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_scene_segments")]
     pub scene_segments: Vec<SceneSegment>,
     #[serde(default)]
     pub mask_segments: Vec<MaskSegment>,
@@ -1873,6 +1924,10 @@ pub struct CaptionTrackSegment {
     pub font_size_override: Option<u32>,
 }
 
+/// How far a hold's start may sit from the clips' end, after float rounding,
+/// and still count as a closing title.
+const CLOSING_HOLD_TOLERANCE: f64 = 1e-9;
+
 impl TimelineConfiguration {
     pub fn effective_transition(&self, segment_index: usize) -> Option<ClipTransition> {
         if segment_index == 0 || segment_index >= self.segments.len() {
@@ -1915,7 +1970,11 @@ impl TimelineConfiguration {
     /// Output-time windows where a fullscreen text segment pauses the
     /// recording clock, sorted and merged. Empty for every project without
     /// fullscreen text — the mapping below then short-circuits to the exact
-    /// pre-hold arithmetic.
+    /// pre-hold arithmetic. A hold that starts after the clips have ended
+    /// (a text card left there by a clip trim or delete, which do not ripple
+    /// text) has no frame to hold and is never reached, so it is left out
+    /// and adds nothing to `duration()`; one starting exactly at the end is
+    /// a closing title and stays.
     pub fn hold_windows(&self) -> Vec<(f64, f64)> {
         let mut windows: Vec<(f64, f64)> = self
             .text_segments
@@ -1927,14 +1986,24 @@ impl TimelineConfiguration {
             return windows;
         }
         windows.sort_by(|a, b| a.0.total_cmp(&b.0));
-        let mut merged: Vec<(f64, f64)> = Vec::with_capacity(windows.len());
-        for window in windows {
-            match merged.last_mut() {
-                Some(last) if window.0 <= last.1 => last.1 = last.1.max(window.1),
-                _ => merged.push(window),
+        windows.dedup_by(|next, previous| {
+            if next.0 <= previous.1 {
+                previous.1 = previous.1.max(next.1);
+                true
+            } else {
+                false
             }
-        }
-        merged
+        });
+        let clips_end = self.clips_duration();
+        let mut held = 0.0;
+        windows.retain(|(start, end)| {
+            if start - held > clips_end + CLOSING_HOLD_TOLERANCE {
+                return false;
+            }
+            held += end - start;
+            true
+        });
+        windows
     }
 
     /// Total output seconds inserted by fullscreen text holds.
@@ -1950,10 +2019,17 @@ impl TimelineConfiguration {
 
         if let Some((hold_start, hold_end)) = active_hold_window(&holds, frame_time) {
             let effective = hold_start - held_time_before(&holds, hold_start);
-            let source = match self.get_frame_mapping_unheld(effective)? {
-                TimelineFrameMapping::Single { source, .. }
-                | TimelineFrameMapping::Hold { source, .. } => source,
-                TimelineFrameMapping::Transition { incoming, .. } => incoming,
+            let source = match self.get_frame_mapping_unheld(effective) {
+                Some(
+                    TimelineFrameMapping::Single { source, .. }
+                    | TimelineFrameMapping::Hold { source, .. },
+                ) => source,
+                Some(TimelineFrameMapping::Transition { incoming, .. }) => incoming,
+                // A closing title starts at the clips' exclusive end, so it holds their last instant.
+                None if (effective - self.clips_duration()).abs() <= CLOSING_HOLD_TOLERANCE => {
+                    self.last_source()?
+                }
+                None => return None,
             };
             return Some(TimelineFrameMapping::Hold {
                 source,
@@ -1998,6 +2074,19 @@ impl TimelineConfiguration {
         })
     }
 
+    fn last_source(&self) -> Option<TimelineSource<'_>> {
+        let (segment_index, segment) = self
+            .segments
+            .iter()
+            .enumerate()
+            .rfind(|(_, segment)| segment.duration() > 0.0)?;
+        Some(TimelineSource {
+            source_time: segment.end.next_down(),
+            segment_index,
+            segment,
+        })
+    }
+
     fn get_frame_mapping_unheld(&self, frame_time: f64) -> Option<TimelineFrameMapping<'_>> {
         if self.transitions.is_empty() {
             return self.get_segment_time_without_transitions(frame_time).map(
@@ -2013,9 +2102,9 @@ impl TimelineConfiguration {
         }
 
         let mut segment_start = 0.0;
+        let mut incoming: Option<ClipTransition> = None;
 
         for (segment_index, segment) in self.segments.iter().enumerate() {
-            let incoming = self.effective_transition(segment_index);
             let incoming_duration = incoming.as_ref().map_or(0.0, |value| value.duration);
 
             if let Some(transition) = incoming {
@@ -2065,6 +2154,7 @@ impl TimelineConfiguration {
             }
 
             segment_start += segment.duration() - next_duration;
+            incoming = next_transition;
         }
 
         None
@@ -2109,8 +2199,13 @@ impl TimelineConfiguration {
     }
 
     pub fn duration(&self) -> f64 {
+        self.clips_duration() + self.held_duration()
+    }
+
+    /// Output seconds covered by the clips, without fullscreen text holds.
+    fn clips_duration(&self) -> f64 {
         let segment_duration: f64 = self.segments.iter().map(TimelineSegment::duration).sum();
-        let segment_duration = if self.transitions.is_empty() {
+        if self.transitions.is_empty() {
             segment_duration
         } else {
             segment_duration
@@ -2118,9 +2213,7 @@ impl TimelineConfiguration {
                     .filter_map(|segment_index| self.effective_transition(segment_index))
                     .map(|transition| transition.duration)
                     .sum::<f64>()
-        };
-
-        segment_duration + self.held_duration()
+        }
     }
 
     /// Gapless-time windows covered by clips that hide the cursor, with
@@ -2619,15 +2712,29 @@ pub struct ProjectConfiguration {
 pub const TEXT_SIZE_VERSION: u32 = 1;
 pub const TEXT_ANIM_VERSION: u32 = 1;
 
-fn camera_config_needs_migration(value: &Value) -> bool {
-    value
-        .get("camera")
-        .and_then(|camera| camera.as_object())
-        .is_some_and(|camera| {
-            camera.contains_key("zoom_size")
-                || camera.contains_key("advanced_shadow")
-                || camera.contains_key("rounding_type")
-        })
+/// The keys [`ProjectConfiguration::load`] migrates on presence, read in a pass
+/// that skips every value instead of building a JSON tree of a file that can
+/// hold a whole transcript. A key counts as present even when it is null.
+#[derive(Deserialize)]
+struct MigrationKeys {
+    #[serde(rename = "screenMotionBlur", default, deserialize_with = "key_present")]
+    screen_motion_blur: bool,
+    #[serde(default)]
+    camera: Option<LegacyCameraKeys>,
+}
+
+#[derive(Deserialize)]
+struct LegacyCameraKeys {
+    #[serde(default, deserialize_with = "key_present")]
+    zoom_size: bool,
+    #[serde(default, deserialize_with = "key_present")]
+    advanced_shadow: bool,
+    #[serde(default, deserialize_with = "key_present")]
+    rounding_type: bool,
+}
+
+fn key_present<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
+    serde::de::IgnoredAny::deserialize(deserializer).map(|_| true)
 }
 
 impl Default for ProjectConfiguration {
@@ -2652,6 +2759,68 @@ impl Default for ProjectConfiguration {
             text_size_version: TEXT_SIZE_VERSION,
             text_anim_version: TEXT_ANIM_VERSION,
         }
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct ProjectStyleCache {
+    cached: Mutex<Option<CachedStyle>>,
+}
+
+#[derive(Debug)]
+struct CachedStyle {
+    source: Weak<ProjectConfiguration>,
+    styles: [Option<usize>; 3],
+    project: Arc<ProjectConfiguration>,
+}
+
+impl CachedStyle {
+    fn matches(&self, source: &Weak<ProjectConfiguration>, styles: [Option<usize>; 3]) -> bool {
+        self.source.ptr_eq(source) && self.styles == styles
+    }
+}
+
+impl ProjectStyleCache {
+    pub fn resolve(
+        &self,
+        project: &Arc<ProjectConfiguration>,
+        time: f64,
+    ) -> Arc<ProjectConfiguration> {
+        let styles = project.style_indices_at(time);
+        if styles == [None; 3] {
+            return Arc::clone(project);
+        }
+
+        // A Weak keeps the allocation identity alive and makes Arc::make_mut
+        // detach before editing, even when the source has only one strong owner.
+        let source = Arc::downgrade(project);
+        {
+            let cached = self.cached.lock().unwrap();
+            if let Some(cached) = cached
+                .as_ref()
+                .filter(|cached| cached.matches(&source, styles))
+            {
+                return Arc::clone(&cached.project);
+            }
+        }
+
+        let resolved = Arc::new(project.style_at(time).into_owned());
+        let previous = {
+            let mut cached = self.cached.lock().unwrap();
+            if let Some(cached) = cached
+                .as_ref()
+                .filter(|cached| cached.matches(&source, styles))
+            {
+                return Arc::clone(&cached.project);
+            }
+            cached.replace(CachedStyle {
+                source,
+                styles,
+                project: Arc::clone(&resolved),
+            })
+        };
+        drop(previous);
+        resolved
     }
 }
 
@@ -2746,17 +2915,53 @@ impl ProjectConfiguration {
             .unwrap_or(&self.cursor)
     }
 
+    fn style_indices_at(&self, time: f64) -> [Option<usize>; 3] {
+        let mut selected: [Option<usize>; 3] = [None; 3];
+        let Some(timeline) = &self.timeline else {
+            return selected;
+        };
+        for (index, segment) in timeline.style_segments.iter().enumerate() {
+            if !segment.is_active_at(time) {
+                continue;
+            }
+            for (current, present) in selected.iter_mut().zip([
+                segment.overrides.background.is_some(),
+                segment.overrides.camera.is_some(),
+                segment.overrides.cursor.is_some(),
+            ]) {
+                if present
+                    && current.is_none_or(|previous| {
+                        let previous = &timeline.style_segments[previous];
+                        segment.track > previous.track
+                            || (segment.track == previous.track && segment.start >= previous.start)
+                    })
+                {
+                    *current = Some(index);
+                }
+            }
+        }
+        selected
+    }
+
     pub fn style_at(&self, time: f64) -> Cow<'_, Self> {
+        let Some(timeline) = &self.timeline else {
+            return Cow::Borrowed(self);
+        };
+        let [background, camera, cursor] = self.style_indices_at(time);
         let mut configuration = Cow::Borrowed(self);
-        if let Some(background) =
-            self.style_override_at(time, |overrides| overrides.background.as_ref())
+        if let Some(background) = background
+            .and_then(|index| timeline.style_segments[index].overrides.background.as_ref())
         {
             configuration.to_mut().background = background.clone();
         }
-        if let Some(camera) = self.style_override_at(time, |overrides| overrides.camera.as_ref()) {
+        if let Some(camera) =
+            camera.and_then(|index| timeline.style_segments[index].overrides.camera.as_ref())
+        {
             configuration.to_mut().camera = camera.clone();
         }
-        if let Some(cursor) = self.style_override_at(time, |overrides| overrides.cursor.as_ref()) {
+        if let Some(cursor) =
+            cursor.and_then(|index| timeline.style_segments[index].overrides.cursor.as_ref())
+        {
             configuration.to_mut().cursor = cursor.clone();
         }
         configuration
@@ -2806,16 +3011,16 @@ impl ProjectConfiguration {
         let project_path = project_path.as_ref();
         let config_path = project_path.join("project-config.json");
         let config_str = std::fs::read_to_string(&config_path)?;
-        let parsed_value = serde_json::from_str::<Value>(&config_str).ok();
-        let missing_screen_motion_blur = parsed_value.as_ref().is_some_and(|value| {
-            value
-                .as_object()
-                .is_some_and(|object| !object.contains_key("screenMotionBlur"))
-        });
-        let needs_camera_migration = parsed_value
+        let migration_keys = serde_json::from_str::<MigrationKeys>(&config_str).ok();
+        let missing_screen_motion_blur = migration_keys
             .as_ref()
-            .map(camera_config_needs_migration)
-            .unwrap_or(false);
+            .is_some_and(|keys| !keys.screen_motion_blur);
+        let needs_camera_migration = migration_keys
+            .as_ref()
+            .and_then(|keys| keys.camera.as_ref())
+            .is_some_and(|camera| {
+                camera.zoom_size || camera.advanced_shadow || camera.rounding_type
+            });
         let mut config: Self = serde_json::from_str(&config_str)
             .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
         let cursor_motion_blur = config.cursor.motion_blur.clamp(0.0, 1.0);
@@ -2865,6 +3070,17 @@ impl ProjectConfiguration {
             config.text_anim_version = TEXT_ANIM_VERSION;
         }
 
+        // Auto-calculated camera offsets used to repeat the camera decoder's
+        // start-time alignment, playing the camera ahead by the same amount.
+        // The correct automatic value is always 0; user-entered offsets stay.
+        let mut needs_clip_offset_repair = false;
+        for clip in &mut config.clips {
+            if clip.offsets_auto_calculated && clip.offsets.camera != 0.0 {
+                clip.offsets.camera = 0.0;
+                needs_clip_offset_repair = true;
+            }
+        }
+
         config
             .validate()
             .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
@@ -2873,6 +3089,7 @@ impl ProjectConfiguration {
             || needs_motion_blur_clamp
             || needs_screen_motion_blur_migration
             || needs_text_size_migration
+            || needs_clip_offset_repair
         {
             match config.write(project_path) {
                 Ok(_) => {
@@ -2893,17 +3110,16 @@ impl ProjectConfiguration {
 
         let project_path = project_path.as_ref();
         let config_path = project_path.join("project-config.json");
-        let temp_path =
-            project_path.join(format!(".project-config-{}.json.tmp", uuid::Uuid::new_v4()));
+        let temp_path = tempfile::TempPath::from_path(
+            project_path.join(format!(".project-config-{}.json.tmp", uuid::Uuid::new_v4())),
+        );
+        let config = serde_json::to_string_pretty(self)?;
+        let mut file = std::fs::File::create(&temp_path)?;
+        file.write_all(config.as_bytes())?;
+        file.sync_all()?;
+        drop(file);
 
-        std::fs::write(&temp_path, serde_json::to_string_pretty(self)?)?;
-
-        if let Err(error) = std::fs::rename(&temp_path, &config_path) {
-            let _ = std::fs::remove_file(&temp_path);
-            return Err(error);
-        }
-
-        Ok(())
+        std::fs::rename(&temp_path, &config_path)
     }
 
     pub fn get_segment_time(&self, frame_time: f64) -> Option<(f64, &TimelineSegment)> {
@@ -3024,6 +3240,7 @@ mod notch_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
 
     #[test]
     fn studio_sound_defaults_old_projects_to_balanced_and_round_trips_tiers() {
@@ -3674,6 +3891,101 @@ mod tests {
     }
 
     #[test]
+    fn fullscreen_outro_maps_every_frame_to_the_last_clip() {
+        for transitions in [
+            Vec::new(),
+            vec![ClipTransition {
+                segment_index: 1,
+                kind: ClipTransitionType::CrossFade,
+                duration: 1.0,
+            }],
+        ] {
+            let mut timeline = timeline_with_transitions(transitions);
+            timeline.segments[1].timescale = 2.0;
+            timeline.text_segments = vec![fullscreen_text(1.0, 3.0)];
+            let outro_start = timeline.duration();
+            let outro_end = outro_start + 3.0;
+            timeline
+                .text_segments
+                .push(fullscreen_text(outro_start, outro_end));
+            let timeline: TimelineConfiguration =
+                serde_json::from_value(serde_json::to_value(&timeline).unwrap()).unwrap();
+
+            assert_eq!(timeline.duration(), outro_end);
+            for frame in 0..(outro_end * 30.0) as u32 {
+                let time = f64::from(frame) / 30.0;
+                let mapping = timeline.get_frame_mapping(time);
+                assert!(mapping.is_some(), "no source at output time {time}");
+                if time >= outro_start {
+                    assert!(matches!(
+                        mapping,
+                        Some(TimelineFrameMapping::Hold { source, output_end })
+                            if source.segment.recording_clip == 1
+                                && source.source_time > 16.0 - 1e-12
+                                && source.source_time < 16.0
+                                && output_end == outro_end
+                    ));
+                }
+            }
+            assert!(timeline.get_frame_mapping(outro_end).is_none());
+        }
+    }
+
+    #[test]
+    fn closing_title_after_an_intro_maps_despite_rounding() {
+        let mut timeline = timeline_with_transitions(Vec::new());
+        timeline.segments.truncate(1);
+        timeline.segments[0].end = 1.2;
+        timeline.text_segments = vec![fullscreen_text(0.0, 3.0), fullscreen_text(4.2, 6.2)];
+        for time in [4.2, 5.0, 6.1] {
+            assert!(matches!(
+                timeline.get_frame_mapping(time),
+                Some(TimelineFrameMapping::Hold { source, output_end })
+                    if source.segment_index == 0 && source.source_time < 1.2 && output_end == 6.2
+            ));
+        }
+    }
+
+    #[test]
+    fn holds_left_past_the_end_of_the_clips_are_not_counted() {
+        let mut timeline = timeline_with_transitions(Vec::new());
+        timeline.segments.truncate(1);
+        timeline.segments[0].end = 3.2;
+        timeline.text_segments = vec![
+            fullscreen_text(1.0, 2.0),
+            fullscreen_text(4.2, 5.0),
+            fullscreen_text(6.4, 7.4),
+            fullscreen_text(9.0, 9.5),
+        ];
+
+        assert_eq!(timeline.hold_windows(), vec![(1.0, 2.0), (4.2, 5.0)]);
+        assert_eq!(timeline.duration(), 5.0);
+        for frame in 0..150 {
+            let time = f64::from(frame) / 30.0;
+            assert!(
+                timeline.get_frame_mapping(time).is_some(),
+                "no source at output time {time}"
+            );
+        }
+        assert!(timeline.get_frame_mapping(5.0).is_none());
+
+        timeline.segments[0].end = 2.0;
+        assert_eq!(timeline.hold_windows(), vec![(1.0, 2.0)]);
+        assert_eq!(timeline.duration(), 3.0);
+    }
+
+    #[test]
+    fn fullscreen_title_does_not_create_a_source_for_an_empty_timeline() {
+        let mut timeline = timeline_with_transitions(Vec::new());
+        timeline.text_segments = vec![fullscreen_text(0.0, 3.0)];
+        timeline.segments.truncate(1);
+        timeline.segments[0].end = 0.0;
+        assert!(timeline.get_frame_mapping(1.0).is_none());
+        timeline.segments.clear();
+        assert!(timeline.get_frame_mapping(1.0).is_none());
+    }
+
+    #[test]
     fn overlay_and_disabled_texts_do_not_hold() {
         let mut timeline = timeline_with_transitions(Vec::new());
         let mut overlay = fullscreen_text(2.0, 5.0);
@@ -3699,6 +4011,25 @@ mod tests {
         assert_eq!(frozen, 2.0);
         let (after, _) = timeline.get_segment_time(6.5).unwrap();
         assert_eq!(after, 2.5);
+    }
+
+    #[test]
+    fn fullscreen_holds_merge_unsorted_nested_and_touching_windows() {
+        let mut timeline = timeline_with_transitions(Vec::new());
+        timeline.text_segments = vec![
+            fullscreen_text(8.0, 9.0),
+            fullscreen_text(4.0, 6.0),
+            fullscreen_text(3.0, 4.0),
+            fullscreen_text(2.0, 5.0),
+            fullscreen_text(6.0, 7.0),
+            fullscreen_text(1.0, 1.0),
+            fullscreen_text(10.0, 9.0),
+        ];
+
+        assert_eq!(timeline.hold_windows(), vec![(2.0, 7.0), (8.0, 9.0)]);
+        assert_eq!(timeline.held_duration(), 6.0);
+        assert_eq!(timeline.text_segments[0].start, 8.0);
+        assert_eq!(timeline.text_segments[3].end, 5.0);
     }
 
     #[test]
@@ -3767,6 +4098,103 @@ mod tests {
                 && incoming.source_time == 10.5
                 && progress == 0.5
         ));
+    }
+
+    #[test]
+    fn adjacent_transition_mapping_matches_independent_clip_offsets() {
+        let mut timeline = timeline_with_transitions(Vec::new());
+        let template = timeline.segments[0].clone();
+        timeline.segments = (0..8)
+            .map(|index| {
+                let timescale = [0.5, 1.0, 2.0][index % 3];
+                TimelineSegment {
+                    recording_clip: index as u32,
+                    start: index as f64 * 10.0,
+                    end: index as f64 * 10.0 + 4.0 * timescale,
+                    timescale,
+                    ..template.clone()
+                }
+            })
+            .collect();
+        timeline.transitions = [1.0, 0.5, 999.0, f64::NAN, 0.0, 1.0, f64::INFINITY, 1.5, 1.0]
+            .into_iter()
+            .enumerate()
+            .map(|(index, duration)| ClipTransition {
+                segment_index: index as u32,
+                duration,
+                kind: if index % 2 == 0 {
+                    ClipTransitionType::CrossFade
+                } else {
+                    ClipTransitionType::FadeThroughBlack
+                },
+            })
+            .collect();
+        let offsets = crate::caption_timing::clip_timeline_offsets(&timeline);
+        for (index, segment) in timeline.segments.iter().enumerate() {
+            let start = offsets[index];
+            let incoming = timeline.effective_transition(index);
+            let next = timeline.effective_transition(index + 1);
+            let single_start = start + incoming.map_or(0.0, |transition| transition.duration);
+            let end =
+                start + segment.duration() - next.map_or(0.0, |transition| transition.duration);
+            for time in [single_start, (single_start + end) / 2.0, end.next_down()] {
+                let Some(TimelineFrameMapping::Single { source, output_end }) =
+                    timeline.get_frame_mapping(time)
+                else {
+                    panic!("expected single source at {time}");
+                };
+                assert_eq!(source.segment_index, index);
+                assert!(std::ptr::eq(source.segment, segment));
+                assert_eq!(
+                    source.source_time.to_bits(),
+                    (segment.start + (time - start) * segment.timescale).to_bits()
+                );
+                assert_eq!(output_end.to_bits(), end.to_bits());
+            }
+            if let Some(expected) = incoming {
+                for elapsed in [0.0, expected.duration / 2.0, expected.duration.next_down()] {
+                    let time = start + elapsed;
+                    if time >= start + expected.duration {
+                        continue;
+                    }
+                    let Some(TimelineFrameMapping::Transition {
+                        outgoing,
+                        incoming,
+                        kind,
+                        progress,
+                        duration,
+                        output_end,
+                    }) = timeline.get_frame_mapping(time)
+                    else {
+                        panic!("expected transition at {time}");
+                    };
+                    let previous = &timeline.segments[index - 1];
+                    let elapsed = time - start;
+                    assert_eq!(
+                        (outgoing.segment_index, incoming.segment_index),
+                        (index - 1, index)
+                    );
+                    assert!(std::ptr::eq(outgoing.segment, previous));
+                    assert!(std::ptr::eq(incoming.segment, segment));
+                    assert_eq!(
+                        outgoing.source_time.to_bits(),
+                        (previous.end - (expected.duration - elapsed) * previous.timescale)
+                            .to_bits()
+                    );
+                    assert_eq!(
+                        incoming.source_time.to_bits(),
+                        (segment.start + elapsed * segment.timescale).to_bits()
+                    );
+                    assert_eq!(kind, expected.kind);
+                    assert_eq!(duration.to_bits(), expected.duration.to_bits());
+                    assert_eq!(progress.to_bits(), (elapsed / duration).to_bits());
+                    assert_eq!(output_end.to_bits(), (start + duration).to_bits());
+                }
+            }
+        }
+        for time in [-1.0, timeline.duration(), f64::INFINITY, f64::NAN] {
+            assert!(timeline.get_frame_mapping(time).is_none());
+        }
     }
 
     #[test]
@@ -4147,6 +4575,151 @@ mod tests {
 
         assert_eq!(config.cursor.motion_blur, 0.0);
         assert_eq!(config.screen_motion_blur, 0.0);
+    }
+
+    #[test]
+    fn load_rewrites_a_missing_screen_motion_blur_and_null_legacy_camera_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        write_config_with_motion_blur_values(dir.path(), 1.0, None);
+        ProjectConfiguration::load(dir.path()).unwrap();
+        let written = std::fs::read_to_string(dir.path().join("project-config.json")).unwrap();
+        assert!(written.contains("\"screenMotionBlur\""));
+
+        for (legacy_key, key, null) in [
+            ("zoom_size", "zoomSize", true),
+            ("zoom_size", "zoomSize", false),
+            ("advanced_shadow", "advancedShadow", false),
+            ("rounding_type", "roundingType", false),
+        ] {
+            let mut value = serde_json::to_value(ProjectConfiguration::default()).unwrap();
+            let camera = value["camera"].as_object_mut().unwrap();
+            let current = camera.remove(key).unwrap();
+            camera.insert(
+                legacy_key.to_string(),
+                if null { Value::Null } else { current },
+            );
+            let path = dir.path().join("project-config.json");
+            std::fs::write(&path, serde_json::to_string(&value).unwrap()).unwrap();
+
+            ProjectConfiguration::load(dir.path()).unwrap();
+
+            let written: Value =
+                serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            assert!(
+                !written["camera"]
+                    .as_object()
+                    .unwrap()
+                    .contains_key(legacy_key),
+                "{legacy_key} (null: {null}) was not migrated"
+            );
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn benchmark_load_with_long_transcript() {
+        use std::time::Instant;
+
+        for (transcript, segments) in [("30 min", 600_u32), ("60 min", 1200)] {
+            let captions: Vec<_> = (0..segments)
+                .map(|i| {
+                    let start = f64::from(i) * 3.0;
+                    serde_json::json!({
+                        "id": format!("caption-{i}"),
+                        "start": start,
+                        "end": start + 2.5,
+                        "text": "the quick brown fox jumps over the lazy dog",
+                        "words": (0..8).map(|w| serde_json::json!({
+                            "text": format!("word{w}"),
+                            "start": start + f64::from(w) * 0.3,
+                            "end": start + f64::from(w) * 0.3 + 0.25,
+                        })).collect::<Vec<_>>(),
+                    })
+                })
+                .collect();
+            let config: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+                "timeline": {
+                    "segments": [{"recordingClip": 0, "start": 0.0, "end": f64::from(segments) * 3.0, "timescale": 1.0}],
+                    "zoomSegments": [],
+                    "captionSegments": captions,
+                },
+                "captions": {"segments": captions, "settings": {}},
+            }))
+            .unwrap();
+            let dir = tempfile::tempdir().unwrap();
+            config.write(dir.path()).unwrap();
+            let bytes = std::fs::metadata(dir.path().join("project-config.json"))
+                .unwrap()
+                .len();
+            let mut runs: Vec<f64> = (0..21)
+                .map(|_| {
+                    let start = Instant::now();
+                    ProjectConfiguration::load(dir.path()).unwrap();
+                    start.elapsed().as_secs_f64() * 1000.0
+                })
+                .collect();
+            runs.sort_by(f64::total_cmp);
+            println!(
+                "{}",
+                serde_json::json!({"transcript": transcript, "bytes": bytes, "median_ms": runs[10]})
+            );
+        }
+    }
+
+    #[test]
+    fn load_resets_auto_calculated_camera_offsets_and_keeps_user_offsets() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = ProjectConfiguration {
+            clips: vec![
+                ClipConfiguration {
+                    index: 0,
+                    offsets: ClipOffsets {
+                        camera: 1.0,
+                        mic: 0.25,
+                        system_audio: 0.5,
+                    },
+                    offsets_auto_calculated: true,
+                },
+                ClipConfiguration {
+                    index: 1,
+                    offsets: ClipOffsets {
+                        camera: -0.2,
+                        mic: 0.1,
+                        system_audio: 0.0,
+                    },
+                    offsets_auto_calculated: false,
+                },
+            ],
+            ..Default::default()
+        };
+        config.write(dir.path()).unwrap();
+
+        let loaded = ProjectConfiguration::load(dir.path()).unwrap();
+        let written: ProjectConfiguration = serde_json::from_str(
+            &std::fs::read_to_string(dir.path().join("project-config.json")).unwrap(),
+        )
+        .unwrap();
+
+        for clips in [&loaded.clips, &written.clips] {
+            assert_eq!(
+                [
+                    clips[0].offsets.camera,
+                    clips[0].offsets.mic,
+                    clips[0].offsets.system_audio
+                ],
+                [0.0, 0.25, 0.5]
+            );
+            assert!(clips[0].offsets_auto_calculated);
+            assert_eq!(
+                [
+                    clips[1].offsets.camera,
+                    clips[1].offsets.mic,
+                    clips[1].offsets.system_audio
+                ],
+                [-0.2, 0.1, 0.0]
+            );
+            assert!(!clips[1].offsets_auto_calculated);
+        }
     }
 
     #[test]
@@ -4691,5 +5264,58 @@ mod overlay_order_tests {
             project.resolved_overlay_order(&[text, new_image, image]),
             [new_image, image, text]
         );
+    }
+}
+
+#[cfg(test)]
+mod timeline_repair_tests {
+    use super::*;
+
+    fn project(segments: serde_json::Value) -> ProjectConfiguration {
+        serde_json::from_value(
+            serde_json::json!({ "timeline": { "segments": segments, "zoomSegments": [] } }),
+        )
+        .unwrap()
+    }
+
+    fn ends(project: &ProjectConfiguration) -> Vec<f64> {
+        project
+            .timeline
+            .as_ref()
+            .unwrap()
+            .segments
+            .iter()
+            .map(|s| s.end)
+            .collect()
+    }
+
+    #[test]
+    fn only_clips_far_past_their_recording_are_pulled_back() {
+        let mut config = project(serde_json::json!([
+            { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 10.02 },
+            { "recordingSegment": 0, "timescale": 1.0, "start": 2.0, "end": 1e300 },
+            { "recordingSegment": 1, "timescale": 1.0, "start": 0.0, "end": 500.0 },
+            { "recordingSegment": 7, "timescale": 1.0, "start": 0.0, "end": 1e300 }
+        ]));
+        clamp_timeline_to_sources(&mut config, &[10.0, 0.0]);
+        assert_eq!(ends(&config), vec![10.02, 10.0, 500.0, 1e300]);
+    }
+
+    #[test]
+    fn hostile_speeds_read_as_normal_speed() {
+        let config = project(serde_json::json!([
+            { "recordingSegment": 0, "timescale": 0.0, "start": 0.0, "end": 1.0 },
+            { "recordingSegment": 0, "timescale": 1e-300, "start": 0.0, "end": 1.0 },
+            { "recordingSegment": 0, "timescale": -2.0, "start": 0.0, "end": 1.0 },
+            { "recordingSegment": 0, "timescale": 0.25, "start": 0.0, "end": 1.0 }
+        ]));
+        let speeds: Vec<f64> = config
+            .timeline
+            .unwrap()
+            .segments
+            .iter()
+            .map(|s| s.timescale)
+            .collect();
+        assert_eq!(speeds, vec![1.0, 1.0, 1.0, 0.25]);
     }
 }

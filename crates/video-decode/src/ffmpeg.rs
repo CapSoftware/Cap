@@ -148,16 +148,18 @@ pub fn get_hw_decoder_capabilities() -> &'static HwDecoderCapabilities {
     HW_CAPABILITIES.get_or_init(query_d3d11_video_decoder_capabilities)
 }
 
-fn configure_software_threading(decoder: &mut avcodec::decoder::Video, width: u32, height: u32) {
+fn configure_software_threading(decoder: &mut avcodec::decoder::Decoder, width: u32, height: u32) {
     let pixel_count = (width as u64) * (height as u64);
     let cpu_count = num_cpus::get();
 
-    let thread_count = if pixel_count > 8294400 {
-        0
-    } else if pixel_count > 2073600 {
+    // Frame threads refill their pipeline after every seek, so each extra
+    // thread adds seek latency. Measured on a 3024x1964 recording, export
+    // throughput stops improving at 4 threads while editor seeks keep slowing;
+    // only 3840x2160 and larger sources still gain random-access speed up to 8.
+    let thread_count = if pixel_count >= 3840 * 2160 {
         cpu_count.clamp(2, 8) as i32
     } else {
-        cpu_count.clamp(2, 6) as i32
+        cpu_count.clamp(2, 4) as i32
     };
 
     let thread_type = ffmpeg::sys::FF_THREAD_FRAME | ffmpeg::sys::FF_THREAD_SLICE;
@@ -171,18 +173,14 @@ fn configure_software_threading(decoder: &mut avcodec::decoder::Video, width: u3
     }
 
     info!(
-        "Software decode configured: {width}x{height}, thread_count={}, thread_type=frame+slice, cpus={}",
-        if thread_count == 0 {
-            "auto".to_string()
-        } else {
-            thread_count.to_string()
-        },
-        cpu_count
+        "Software decode configured: {width}x{height}, thread_count={thread_count}, thread_type=frame+slice, cpus={cpu_count}"
     );
 }
 
 pub struct FFmpegDecoder {
     input: DecoderInput,
+    // Declared before `hw_device` so the codec context, whose get_format
+    // callback writes to the device's fallback flag, is freed first.
     decoder: avcodec::decoder::Video,
     stream_index: usize,
     hw_device: Option<HwDevice>,
@@ -192,6 +190,8 @@ pub struct FFmpegDecoder {
 enum DecoderInput {
     File(avformat::context::Input),
     Segmented(cap_enc_ffmpeg::SegmentedInput),
+    #[cfg(feature = "scripted")]
+    Scripted(crate::scripted::Demuxer),
 }
 
 impl DecoderInput {
@@ -199,6 +199,8 @@ impl DecoderInput {
         match self {
             Self::File(input) => input,
             Self::Segmented(input) => input.input(),
+            #[cfg(feature = "scripted")]
+            Self::Scripted(_) => unreachable!("scripted media has no container"),
         }
     }
 
@@ -206,6 +208,8 @@ impl DecoderInput {
         match self {
             Self::File(input) => input.seek(position, ..position),
             Self::Segmented(input) => input.seek(position),
+            #[cfg(feature = "scripted")]
+            Self::Scripted(demuxer) => demuxer.seek(position),
         }
     }
 
@@ -213,6 +217,8 @@ impl DecoderInput {
         match self {
             Self::File(input) => DecoderPackets::File(input.packets()),
             Self::Segmented(input) => DecoderPackets::Segmented(input),
+            #[cfg(feature = "scripted")]
+            Self::Scripted(demuxer) => DecoderPackets::Scripted(demuxer),
         }
     }
 }
@@ -220,6 +226,8 @@ impl DecoderInput {
 enum DecoderPackets<'a> {
     File(PacketIter<'a>),
     Segmented(&'a mut cap_enc_ffmpeg::SegmentedInput),
+    #[cfg(feature = "scripted")]
+    Scripted(&'a mut crate::scripted::Demuxer),
 }
 
 impl Iterator for DecoderPackets<'_> {
@@ -238,6 +246,8 @@ impl Iterator for DecoderPackets<'_> {
                     Err(error) => Some(Err(error)),
                 }
             }
+            #[cfg(feature = "scripted")]
+            Self::Scripted(_) => None,
         }
     }
 }
@@ -257,7 +267,14 @@ pub fn open_fragmented_input(
         .map(|entry| entry.map(|entry| entry.path()))
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| format!("read fragmented directory / {error}"))?;
-    fragments.retain(|path| path.extension().is_some_and(|extension| extension == "m4s"));
+    // exFAT stores macOS metadata in `._name` AppleDouble sidecars, which also
+    // end in .m4s and would sort ahead of the real fragments.
+    fragments.retain(|path| {
+        path.extension().is_some_and(|extension| extension == "m4s")
+            && !path
+                .file_name()
+                .is_some_and(|name| name.as_encoded_bytes().starts_with(b"._"))
+    });
     fragments.sort();
     if fragments.is_empty() {
         return Err(format!(
@@ -278,6 +295,18 @@ impl FFmpegDecoder {
     ) -> Result<Self, String> {
         let path = path.into();
 
+        #[cfg(feature = "scripted")]
+        if let Some(state) = crate::scripted::lookup(&path) {
+            let demuxer = crate::scripted::Demuxer::new(state);
+            return Ok(FFmpegDecoder {
+                decoder: demuxer.open_decoder()?,
+                start_time: demuxer.start_time(),
+                input: DecoderInput::Scripted(demuxer),
+                stream_index: 0,
+                hw_device: None,
+            });
+        }
+
         let input = if path.is_dir() {
             DecoderInput::Segmented(open_fragmented_input(&path)?)
         } else {
@@ -286,7 +315,7 @@ impl FFmpegDecoder {
             )
         };
 
-        Self::from_input(input, hw_device_type)
+        Self::from_input(input, hw_device_type, get_hw_decoder_capabilities())
     }
 
     pub fn new_relocatable<'a>(
@@ -296,7 +325,11 @@ impl FFmpegDecoder {
     ) -> Result<Self, String> {
         let input = cap_enc_ffmpeg::SegmentedInput::open_relocatable(source, paths)
             .map_err(|error| format!("open relocatable video / {error}"))?;
-        Self::from_input(DecoderInput::Segmented(input), hw_device_type)
+        Self::from_input(
+            DecoderInput::Segmented(input),
+            hw_device_type,
+            get_hw_decoder_capabilities(),
+        )
     }
 
     pub fn new_relocatable_interruptible<'a>(
@@ -309,12 +342,17 @@ impl FFmpegDecoder {
             source, paths, interrupt,
         )
         .map_err(|error| format!("open relocatable video / {error}"))?;
-        Self::from_input(DecoderInput::Segmented(input), hw_device_type)
+        Self::from_input(
+            DecoderInput::Segmented(input),
+            hw_device_type,
+            get_hw_decoder_capabilities(),
+        )
     }
 
     fn from_input(
         input: DecoderInput,
         hw_device_type: Option<AVHWDeviceType>,
+        hw_caps: &HwDecoderCapabilities,
     ) -> Result<Self, String> {
         let input_stream = input
             .input()
@@ -326,50 +364,61 @@ impl FFmpegDecoder {
 
         let stream_index = input_stream.index();
 
-        let mut decoder = avcodec::Context::from_parameters(input_stream.parameters())
-            .map_err(|e| format!("decoder context / {e}"))?
-            .decoder()
-            .video()
-            .map_err(|e| format!("video decoder / {e}"))?;
+        let (width, height) = unsafe {
+            let parameters = input_stream.parameters().as_ptr();
+            (
+                (*parameters).width.max(0) as u32,
+                (*parameters).height.max(0) as u32,
+            )
+        };
 
-        decoder.set_time_base(input_stream.time_base());
+        // avcodec_open2, which `.video()` calls, reads the thread settings, so
+        // software threading must be configured on the unopened decoder.
+        let open = |software_threading: bool| -> Result<avcodec::decoder::Video, String> {
+            let mut decoder = avcodec::Context::from_parameters(input_stream.parameters())
+                .map_err(|e| format!("decoder context / {e}"))?
+                .decoder();
+            if software_threading {
+                configure_software_threading(&mut decoder, width, height);
+            }
+            let mut decoder = decoder
+                .video()
+                .map_err(|e| format!("video decoder / {e}"))?;
+            decoder.set_time_base(input_stream.time_base());
+            Ok(decoder)
+        };
 
-        let width = decoder.width();
-        let height = decoder.height();
-
-        let hw_caps = get_hw_decoder_capabilities();
         let exceeds_hw_limits =
             width > hw_caps.max_width || height > hw_caps.max_height || !hw_caps.supports_hw_decode;
 
-        let hw_device = hw_device_type.and_then(|hw_device_type| {
-            if exceeds_hw_limits {
+        let (decoder, hw_device) = match hw_device_type {
+            Some(_) if exceeds_hw_limits => {
                 warn!(
                     "Video dimensions {width}x{height} exceed hardware decoder limits ({}x{}), using software decode",
                     hw_caps.max_width, hw_caps.max_height
                 );
-                configure_software_threading(&mut decoder, width, height);
-                None
-            } else {
+                (open(true)?, None)
+            }
+            Some(hw_device_type) => {
+                let mut decoder = open(false)?;
                 match decoder.try_use_hw_device(hw_device_type) {
                     Ok(device) => {
                         info!(
                             "Using hardware acceleration for {width}x{height} video (device: {:?})",
                             hw_device_type
                         );
-                        Some(device)
+                        (decoder, Some(device))
                     }
                     Err(error) => {
-                        warn!("Failed to enable hardware decoder: {error:?}, falling back to optimized software decode");
-                        configure_software_threading(&mut decoder, width, height);
-                        None
+                        warn!(
+                            "Failed to enable hardware decoder: {error:?}, falling back to optimized software decode"
+                        );
+                        (open(true)?, None)
                     }
                 }
             }
-        });
-
-        if hw_device.is_none() && hw_device_type.is_none() {
-            configure_software_threading(&mut decoder, width, height);
-        }
+            None => (open(true)?, None),
+        };
 
         Ok(FFmpegDecoder {
             input,
@@ -382,7 +431,12 @@ impl FFmpegDecoder {
 
     pub fn reset(&mut self, requested_time: f32) -> Result<(), ffmpeg::Error> {
         use ffmpeg::rescale;
-        let timestamp_us = (requested_time * 1_000_000.0) as i64;
+        // avformat rounds the target to the stream's tick, so a request just
+        // before a keyframe landed on that keyframe, past the request. The
+        // reader decodes forward to the request from wherever the seek lands.
+        const SEEK_MARGIN_US: i64 = 2_000;
+        let timestamp_us =
+            ((f64::from(requested_time) * 1_000_000.0) as i64 - SEEK_MARGIN_US).max(0);
         let position = rescale::Rescale::rescale(&timestamp_us, (1, 1_000_000), rescale::TIME_BASE);
 
         self.decoder.flush();
@@ -395,6 +449,7 @@ impl FFmpegDecoder {
             decoder: &mut self.decoder,
             stream_index: self.stream_index,
             hw_device: self.hw_device.as_mut(),
+            eof_sent: false,
         }
     }
 
@@ -406,8 +461,13 @@ impl FFmpegDecoder {
         self.start_time
     }
 
+    /// Whether frames come from the hardware decoder. False once FFmpeg has
+    /// fallen back to software because the hardware setup failed, which is
+    /// only known after the first packet is decoded.
     pub fn is_hardware_accelerated(&self) -> bool {
-        self.hw_device.is_some()
+        self.hw_device
+            .as_ref()
+            .is_some_and(|device| !device.is_software_fallback())
     }
 }
 
@@ -418,11 +478,19 @@ pub struct FramesIter<'a> {
     packets: DecoderPackets<'a>,
     stream_index: usize,
     hw_device: Option<&'a mut HwDevice>,
+    eof_sent: bool,
 }
 
 impl FramesIter<'_> {
     pub fn decoder(&self) -> &avcodec::decoder::Video {
         self.decoder
+    }
+
+    /// [`FFmpegDecoder::is_hardware_accelerated`] while frames are read.
+    pub fn is_hardware_accelerated(&self) -> bool {
+        self.hw_device
+            .as_ref()
+            .is_some_and(|device| !device.is_software_fallback())
     }
 }
 
@@ -430,6 +498,11 @@ impl<'a> Iterator for FramesIter<'a> {
     type Item = Result<avframe::Video, avutil::error::Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
+        #[cfg(feature = "scripted")]
+        if let DecoderPackets::Scripted(demuxer) = &mut self.packets {
+            return demuxer.next_frame().map(Ok);
+        }
+
         let mut frame = avframe::Video::empty();
 
         loop {
@@ -450,9 +523,20 @@ impl<'a> Iterator for FramesIter<'a> {
                 Err(e) => return Some(Err(e)),
             }
 
-            let (stream_index, packet) = match self.packets.next()? {
-                Ok(packet) => packet,
-                Err(error) => return Some(Err(error)),
+            // Frame threads hold up to thread_count - 1 decoded frames; only
+            // an end-of-stream signal drains them at the end of the input.
+            let (stream_index, packet) = match self.packets.next() {
+                Some(Ok(packet)) => packet,
+                Some(Err(error)) => return Some(Err(error)),
+                None if self.eof_sent => return None,
+                None => {
+                    self.eof_sent = true;
+                    match self.decoder.send_eof() {
+                        Ok(()) => continue,
+                        Err(ffmpeg::Error::Eof) => return None,
+                        Err(e) => return Some(Err(e)),
+                    }
+                }
             };
 
             if stream_index != self.stream_index {
@@ -558,6 +642,57 @@ mod tests {
             assert!(!expected.is_empty());
             assert_eq!(frames(&mut candidate), expected);
         }
+    }
+
+    #[test]
+    fn fragmented_decoder_skips_apple_double_sidecars() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("segments");
+        encode_segments(&source);
+        let expected = frames(&mut FFmpegDecoder::new(&source, None).unwrap());
+        let fragments = std::fs::read_dir(&source)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .filter(|name| name.to_string_lossy().ends_with(".m4s"))
+            .collect::<Vec<_>>();
+        for name in fragments {
+            let sidecar = format!("._{}", name.to_string_lossy());
+            std::fs::write(source.join(sidecar), b"\x00\x05\x16\x07").unwrap();
+        }
+        assert_eq!(
+            frames(&mut FFmpegDecoder::new(&source, None).unwrap()),
+            expected
+        );
+    }
+
+    #[test]
+    fn software_decoder_opens_with_frame_threads() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("segments");
+        encode_segments(&source);
+        // MediaCodec never exists on desktop, so with hardware-capable limits
+        // it exercises the failed hardware fallback.
+        for hw_device_type in [None, Some(AVHWDeviceType::AV_HWDEVICE_TYPE_MEDIACODEC)] {
+            let input = DecoderInput::Segmented(open_fragmented_input(&source).unwrap());
+            let decoder =
+                FFmpegDecoder::from_input(input, hw_device_type, &HwDecoderCapabilities::default())
+                    .unwrap();
+            assert!(decoder.hw_device.is_none());
+            let context = unsafe { &*decoder.decoder.as_ptr() };
+            assert!(context.thread_count >= 2);
+            assert_ne!(context.active_thread_type & ffmpeg::sys::FF_THREAD_FRAME, 0);
+        }
+    }
+
+    #[test]
+    fn threaded_decoder_drains_every_frame_at_end_of_input() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("segments");
+        encode_segments(&source);
+        let mut decoder = FFmpegDecoder::new(&source, None).unwrap();
+        assert_eq!(frames(&mut decoder).len(), 120);
+        decoder.reset(0.0).unwrap();
+        assert_eq!(frames(&mut decoder).len(), 120);
     }
 
     #[test]

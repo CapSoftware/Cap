@@ -1305,6 +1305,8 @@ export function EditVideoClient({
 					playableRange.end - currentTime <= PREVIEW_CUT_MUTE_LEAD_SECONDS
 				) {
 					muteForCut();
+				} else if (playableRange && !videoElement.seeking) {
+					restoreCutAudio();
 				}
 				const nextTime =
 					playableRangeIndex >= 0

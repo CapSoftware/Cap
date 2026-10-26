@@ -108,12 +108,13 @@ impl InstanceMaskObservation {
     #[objc::msg_send(instanceMask)]
     fn instance_mask(&self) -> &cv::PixelBuf;
 
+    /// Returns a +1 buffer (`CF_RETURNS_RETAINED`): one per call.
     #[objc::msg_send(generateMaskForInstances:error:)]
     unsafe fn generate_mask_err<'ear>(
         &self,
         instances: &ns::IndexSet,
         error: *mut Option<&'ear ns::Error>,
-    ) -> Option<&'ear cv::PixelBuf>;
+    ) -> Option<arc::Retained<cv::PixelBuf>>;
 }
 
 /// Person instance masks separate everyone in frame, so only the presenter
@@ -150,6 +151,20 @@ struct Session {
     transfer: Option<arc::R<vt::PixelTransferSession>>,
     cleanup: Cleanup,
     instance_areas: Vec<usize>,
+    repeat: RepeatedFrame,
+}
+
+/// The pixels and raw mask of the last frame Vision analysed. A camera
+/// frame held across several output frames arrives again byte for byte;
+/// person instance masks keep no state between frames, so the mask is
+/// reused instead of running Vision again. The cleanup still runs, so the
+/// temporal smoothing advances exactly as it did.
+#[derive(Default)]
+struct RepeatedFrame {
+    pixels: Vec<u8>,
+    dimensions: (u32, u32),
+    mask: Vec<f32>,
+    mask_dimensions: Option<(u32, u32)>,
 }
 
 /// Drops Vision's low-confidence blobs (pillows, chair backs) that are
@@ -161,6 +176,7 @@ struct Cleanup {
     mask: Vec<f32>,
     previous: Vec<f32>,
     motion: Vec<u8>,
+    motion_columns: Vec<usize>,
 }
 
 fn create_request() -> arc::R<vn::GenPersonSegmentationRequest> {
@@ -181,6 +197,7 @@ impl Session {
             transfer: None,
             cleanup: Cleanup::default(),
             instance_areas: Vec::new(),
+            repeat: RepeatedFrame::default(),
         }
     }
 
@@ -188,9 +205,13 @@ impl Session {
         self.handler = vn::SequenceRequestHandler::new();
         self.request = Request::new();
         self.cleanup.previous.clear();
+        self.repeat.mask_dimensions = None;
     }
 
     fn segment(&mut self, job: &mut VisionJob) -> Result<(), String> {
+        let cached = self.repeat.mask_dimensions.take();
+        let mut repeated = None;
+        let mut from_pixels = false;
         let input = match std::mem::replace(&mut job.input, VisionInput::None) {
             VisionInput::PixelBuffer(buffer) => {
                 let (width, height) =
@@ -225,22 +246,46 @@ impl Session {
                     Some(input) if input.width() == width && input.height() == height => input,
                     slot => slot.insert(create_input(width, height)?),
                 };
-                write_bgra(input, &job.bgra, width, height)?;
+                from_pixels = true;
+                repeated = cached.filter(|_| {
+                    self.repeat.dimensions == job.dimensions && self.repeat.pixels == job.bgra
+                });
+                if repeated.is_none() {
+                    write_bgra(input, &job.bgra, width, height)?;
+                }
                 input.clone()
             }
             VisionInput::None => return Err("missing segmentation input".into()),
         };
 
+        let reusable = if let Some(dimensions) = repeated {
+            self.cleanup.mask.clone_from(&self.repeat.mask);
+            job.mask_dimensions = dimensions;
+            repeated
+        } else {
+            self.analyse(&input, job)?;
+            (from_pixels && matches!(self.request, Request::Instances(_))).then(|| {
+                self.repeat.mask.clone_from(&self.cleanup.mask);
+                std::mem::swap(&mut self.repeat.pixels, &mut job.bgra);
+                self.repeat.dimensions = job.dimensions;
+                job.mask_dimensions
+            })
+        };
+        self.cleanup.motion_frame(&input, job.mask_dimensions)?;
+        self.cleanup.finish(job.mask_dimensions, &mut job.mask);
+        self.repeat.mask_dimensions = reusable;
+        Ok(())
+    }
+
+    fn analyse(&mut self, input: &cv::PixelBuf, job: &mut VisionJob) -> Result<(), String> {
         let requests = ns::Array::<vn::Request>::from_slice(&[self.request.as_request()]);
         self.handler
-            .perform_on_cv_pixel_buf(&requests, &input)
+            .perform_on_cv_pixel_buf(&requests, input)
             .map_err(|error| format!("Vision person segmentation failed: {error:?}"))?;
         match &self.request {
             Request::Segmentation(request) => {
                 let results = request.results().ok_or("Vision returned no segmentation")?;
-                let observation = results
-                    .get(0)
-                    .map_err(|_| "Vision returned no segmentation".to_string())?;
+                let observation = results.first().ok_or("Vision returned no segmentation")?;
                 read_mask(
                     observation.pixel_buffer(),
                     &mut self.cleanup.mask,
@@ -248,12 +293,9 @@ impl Session {
                 )?;
             }
             Request::Instances(request) => {
-                let observation = request.results().and_then(|results| {
-                    results
-                        .get(0)
-                        .ok()
-                        .map(|observation| observation.retained())
-                });
+                let observation = request
+                    .results()
+                    .and_then(|results| results.first().map(|observation| observation.retained()));
                 match observation {
                     Some(observation) => primary_person_mask(
                         &observation,
@@ -273,8 +315,6 @@ impl Session {
                 }
             }
         }
-        self.cleanup.motion_frame(&input, job.mask_dimensions)?;
-        self.cleanup.finish(job.mask_dimensions, &mut job.mask);
         Ok(())
     }
 }
@@ -288,8 +328,14 @@ impl Cleanup {
         (width, height): (u32, u32),
     ) -> Result<(), String> {
         let (source_width, source_height) = (frame.width(), frame.height());
+        let (width, height) = (width as usize, height as usize);
+        self.motion_columns.clear();
+        self.motion_columns
+            .extend((0..width).map(|x| x * source_width / width * 4));
+        let columns = &self.motion_columns;
         let motion = &mut self.motion;
         motion.clear();
+        motion.resize(width * height * 4, 0);
         with_locked_base(
             &mut frame.retained(),
             cv::pixel_buffer::LockFlags::READ_ONLY,
@@ -297,16 +343,15 @@ impl Cleanup {
                 if stride < source_width * 4 {
                     return Err("segmentation frame is not addressable".into());
                 }
-                for y in 0..height as usize {
-                    let row = unsafe { base.add(y * source_height / height as usize * stride) };
-                    for x in 0..width as usize {
-                        let pixel = unsafe {
-                            std::slice::from_raw_parts(
-                                row.add(x * source_width / width as usize * 4),
-                                4,
-                            )
-                        };
-                        motion.extend_from_slice(pixel);
+                for (y, output) in motion.chunks_exact_mut(width * 4).enumerate() {
+                    let row = unsafe {
+                        std::slice::from_raw_parts(
+                            base.add(y * source_height / height * stride),
+                            source_width * 4,
+                        )
+                    };
+                    for (pixel, &column) in output.chunks_exact_mut(4).zip(columns) {
+                        pixel.copy_from_slice(&row[column..column + 4]);
                     }
                 }
                 Ok(())
@@ -384,8 +429,7 @@ fn primary_person_mask(
 ) -> Result<(), String> {
     let labels = observation.instance_mask();
     let (width, height) = (labels.width(), labels.height());
-    areas.clear();
-    areas.resize(256, 0);
+    let mut lanes = [[0; 256]; 4];
     with_locked_base(
         &mut labels.retained(),
         cv::pixel_buffer::LockFlags::READ_ONLY,
@@ -395,13 +439,14 @@ fn primary_person_mask(
             }
             for y in 0..height {
                 let row = unsafe { std::slice::from_raw_parts(base.add(y * stride), width) };
-                for &label in row {
-                    areas[usize::from(label)] += 1;
-                }
+                count_labels(row, &mut lanes);
             }
             Ok(())
         },
     )?;
+    areas.clear();
+    areas
+        .extend((0..256).map(|label| lanes.iter().map(|lane| lane[label] as usize).sum::<usize>()));
     let Some(primary) = (1..areas.len())
         .filter(|&label| areas[label] > 0)
         .max_by_key(|&label| areas[label])
@@ -415,7 +460,25 @@ fn primary_person_mask(
     let mut error = None;
     let mask = unsafe { observation.generate_mask_err(&instances, &mut error) }
         .ok_or_else(|| format!("Vision instance mask failed: {error:?}"))?;
-    read_mask(mask, output, dimensions)
+    read_mask(&mask, output, dimensions)
+}
+
+/// Tallies every label in `row`. Nearly every sample repeats its
+/// neighbour's label, so a single table would chain each increment on the
+/// previous store to the same counter; four interleaved tables keep four
+/// independent chains in flight.
+fn count_labels(row: &[u8], lanes: &mut [[u32; 256]; 4]) {
+    let chunks = row.chunks_exact(4);
+    let tail = chunks.remainder();
+    for chunk in chunks {
+        lanes[0][usize::from(chunk[0])] += 1;
+        lanes[1][usize::from(chunk[1])] += 1;
+        lanes[2][usize::from(chunk[2])] += 1;
+        lanes[3][usize::from(chunk[3])] += 1;
+    }
+    for &label in tail {
+        lanes[0][usize::from(label)] += 1;
+    }
 }
 
 fn read_mask(
@@ -668,6 +731,33 @@ mod tests {
         assert_eq!(input_dimensions(1080, 1920), (540, 960));
         assert_eq!(input_dimensions(640, 480), (640, 480));
         assert_eq!(input_dimensions(1440, 1080), (720, 540));
+    }
+
+    #[test]
+    fn label_tallies_match_a_plain_count() {
+        let mut state = 0x2545_f491_u32;
+        let mut row = Vec::new();
+        while row.len() < 517 * 3 {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            let label = [0, 0, 1, 2, 255][(state % 5) as usize];
+            row.extend(std::iter::repeat_n(label, (state >> 8) as usize % 40 + 1));
+        }
+        for width in [1, 3, 4, 5, 512, 517] {
+            let mut lanes = [[0; 256]; 4];
+            let mut expected = [0usize; 256];
+            for chunk in row.chunks(width) {
+                count_labels(chunk, &mut lanes);
+                for &label in chunk {
+                    expected[usize::from(label)] += 1;
+                }
+            }
+            for (label, &expected) in expected.iter().enumerate() {
+                let total: usize = lanes.iter().map(|lane| lane[label] as usize).sum();
+                assert_eq!(total, expected, "width {width} label {label}");
+            }
+        }
     }
 
     #[test]

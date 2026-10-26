@@ -1,6 +1,6 @@
 "use client";
 
-import { Button } from "@cap/ui";
+import { Button } from "@cap/ui/button";
 import { useDetectPlatform } from "hooks/useDetectPlatform";
 import Link from "next/link";
 import { type CSSProperties, type ReactNode, useId, useState } from "react";
@@ -431,6 +431,10 @@ export const DownloadPage = ({
 							All versions
 						</Link>
 					</div>
+					<p className="mt-3 text-sm text-gray-10">
+						Linux downloads require glibc 2.39 or newer, such as Ubuntu 24.04 or
+						newer. Ubuntu 22.04 is not supported, including with AppImage.
+					</p>
 				</div>
 
 				{/* Discreet SEO Links */}

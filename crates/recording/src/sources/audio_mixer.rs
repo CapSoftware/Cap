@@ -1,6 +1,7 @@
 use anyhow::Context as _;
 use cap_media_info::AudioInfo;
 use cap_timestamp::{MasterClock, SourceClockOutcome, SourceClockState, Timestamp, Timestamps};
+use futures::StreamExt as _;
 use futures::channel::{mpsc, oneshot};
 use std::time::Instant;
 use std::{
@@ -14,13 +15,17 @@ use std::{
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
-use crate::output_pipeline::{AudioFrame, HealthSender, PipelineHealthEvent, emit_health};
+use crate::output_pipeline::{
+    AudioFrame, HealthSender, PipelineHealthEvent, emit_health, trim_audio_frame_front,
+};
 
 const DEFAULT_BUFFER_TIMEOUT: Duration = Duration::from_millis(100);
 const MIN_BUFFER_TIMEOUT_WIRED: Duration = Duration::from_millis(20);
 const MIN_BUFFER_TIMEOUT_WIRELESS: Duration = Duration::from_millis(90);
 const MAX_BUFFER_TIMEOUT: Duration = Duration::from_millis(250);
 const BUFFER_TIMEOUT_HEADROOM: f64 = 2.5;
+const STARTUP_GRACE: Duration = Duration::from_secs(1);
+pub(crate) const MIXER_STOP_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub const MAX_BUFFERING_TICKS: u32 = 45;
 pub const AUDIO_OUTPUT_FRAMES: u32 = cap_timestamp::AUDIO_OUTPUT_FRAMES as u32;
@@ -38,6 +43,9 @@ struct MixerSource {
     buffer_last: Option<(Timestamp, Duration)>,
     last_input_timestamp: Option<Timestamp>,
     clock_state: SourceClockState,
+    samples_supplied: usize,
+    late_samples_dropped: u64,
+    ended: bool,
 }
 
 pub struct AudioMixerBuilder {
@@ -101,6 +109,9 @@ impl AudioMixerBuilder {
             buffer_last: None,
             last_input_timestamp: None,
             clock_state: SourceClockState::new(clock_label),
+            samples_supplied: 0,
+            late_samples_dropped: 0,
+            ended: false,
         });
     }
 
@@ -139,6 +150,9 @@ impl AudioMixerBuilder {
             buffering: MixerBufferingTracker::new(),
             health_tx: self.health_tx,
             required_stop: self.required_stop,
+            drain_deadline: None,
+            finishing: false,
+            input_waker: std::task::Waker::noop().clone(),
         })
     }
 
@@ -161,6 +175,7 @@ impl AudioMixerBuilder {
         };
 
         let _ = ready_tx.send(Ok(()));
+        mixer.input_waker = std::task::Waker::from(Arc::new(ThreadUnpark(std::thread::current())));
 
         loop {
             if stop_flag.load(Ordering::Relaxed)
@@ -170,23 +185,27 @@ impl AudioMixerBuilder {
                     .is_some_and(CancellationToken::is_cancelled)
             {
                 info!("Mixer stop flag triggered");
+                mixer.finish()?;
                 break;
             }
 
-            #[cfg(target_os = "macos")]
-            let now = Timestamp::MachAbsoluteTime(cap_timestamp::MachAbsoluteTimestamp::now());
-            #[cfg(windows)]
-            let now =
-                Timestamp::PerformanceCounter(cap_timestamp::PerformanceCounterTimestamp::now());
-            #[cfg(not(any(target_os = "macos", windows)))]
-            let now = Timestamp::Instant(Instant::now());
+            let now = mixer_now();
 
             if !mixer.tick(start, now)? {
                 info!("Mixer output closed");
                 break;
             }
 
-            std::thread::sleep(Duration::from_millis(5));
+            std::thread::park_timeout(mixer.idle_wait());
+        }
+        for source in &mixer.sources {
+            if source.late_samples_dropped > 0 {
+                info!(
+                    source = source.clock_state.name(),
+                    late_samples_dropped = source.late_samples_dropped,
+                    "AudioMixer: late input sample count"
+                );
+            }
         }
         Ok(())
     }
@@ -211,6 +230,9 @@ pub struct AudioMixer {
     buffering: MixerBufferingTracker,
     health_tx: Option<HealthSender>,
     required_stop: Option<CancellationToken>,
+    drain_deadline: Option<Instant>,
+    finishing: bool,
+    input_waker: std::task::Waker,
 }
 
 #[derive(Debug, Clone)]
@@ -423,6 +445,11 @@ impl AudioMixer {
                 self._aformat = graph.aformat;
                 self.abuffersink = graph.abuffersink;
                 self._filter_graph = graph.filter_graph;
+                for source in &mut self.sources {
+                    source.samples_supplied =
+                        (self.samples_out as u128 * source.info.sample_rate as u128
+                            / Self::INFO.sample_rate as u128) as usize;
+                }
                 self.max_buffer_timeout = self
                     .sources
                     .iter()
@@ -497,17 +524,25 @@ impl AudioMixer {
     fn buffer_sources(&mut self, now: Timestamp) -> anyhow::Result<()> {
         let mut format_change: Option<(usize, AudioInfo, AudioInfo)> = None;
         let clock_anchor = self.master_clock.timestamps().instant();
+        let waker = self.input_waker.clone();
+        let mut input_context = std::task::Context::from_waker(&waker);
         for (index, source) in self.sources.iter_mut().enumerate() {
             let rate = source.info.rate();
-            let buffer_timeout = source.buffer_timeout;
 
             loop {
+                if self
+                    .drain_deadline
+                    .is_some_and(|deadline| Instant::now() >= deadline)
+                {
+                    source.rx.close();
+                }
                 let AudioFrame {
                     inner: frame,
                     timestamp: raw_timestamp,
-                } = match source.rx.try_next() {
-                    Ok(Some(frame)) => frame,
-                    Ok(None) => {
+                } = match source.rx.poll_next_unpin(&mut input_context) {
+                    std::task::Poll::Ready(Some(frame)) => frame,
+                    std::task::Poll::Ready(None) => {
+                        source.ended = true;
                         anyhow::ensure!(
                             self.required_stop
                                 .as_ref()
@@ -516,7 +551,7 @@ impl AudioMixer {
                         );
                         break;
                     }
-                    Err(_) => break,
+                    std::task::Poll::Pending => break,
                 };
                 source.last_input_timestamp = Some(raw_timestamp);
 
@@ -544,10 +579,11 @@ impl AudioMixer {
                     0
                 };
 
-                let remap =
-                    source
-                        .clock_state
-                        .remap(&self.master_clock, raw_timestamp, frame_duration_ns);
+                let remap = source.clock_state.remap_preserving_cadence(
+                    &self.master_clock,
+                    raw_timestamp,
+                    frame_duration_ns,
+                );
 
                 if matches!(remap.outcome, SourceClockOutcome::HardReset) {
                     let flushed = source.buffer.len();
@@ -562,50 +598,30 @@ impl AudioMixer {
                     source.last_input_timestamp = None;
                 }
 
-                let timestamp = Timestamp::Instant(clock_anchor + remap.duration());
+                // The remap clamps a packet captured before the master clock's
+                // origin to the origin. Drop only the samples that precede it,
+                // so the rest of the packet keeps its capture time instead of
+                // overlapping the next packet.
+                let (frame, master_ns, frame_duration_ns) = if remap.master_ns == 0
+                    && remap.raw_ns < 0
+                    && rate > 0
+                {
+                    let before_ns = u128::from(remap.raw_ns.unsigned_abs());
+                    let before = (before_ns * rate as u128).div_ceil(1_000_000_000) as usize;
+                    let Some(kept) = trim_audio_frame_front(&frame, before) else {
+                        continue;
+                    };
+                    let first_ns = (before as u128 * 1_000_000_000 / rate as u128)
+                        .saturating_sub(before_ns) as u64;
+                    let kept_ns = (kept.samples() as u128 * 1_000_000_000 / rate as u128) as u64;
+                    (kept, first_ns, kept_ns)
+                } else {
+                    (frame, remap.master_ns, frame_duration_ns)
+                };
 
-                if let Some((buffer_last_timestamp, buffer_last_duration)) = source.buffer_last {
-                    let timestamp_elapsed = timestamp.duration_since(self.timestamps);
-                    let buffer_last_elapsed = buffer_last_timestamp.duration_since(self.timestamps);
+                let timestamp = Timestamp::Instant(clock_anchor + Duration::from_nanos(master_ns));
 
-                    if timestamp_elapsed > buffer_last_elapsed {
-                        let elapsed_since_last_frame =
-                            timestamp_elapsed.saturating_sub(buffer_last_elapsed);
-
-                        if let Some(gap) = elapsed_since_last_frame
-                            .checked_sub(buffer_last_duration)
-                            .filter(|&diff| diff >= buffer_timeout)
-                        {
-                            debug!(?gap, "Gap between last buffer frame, inserting silence");
-
-                            let silence_samples_needed = (gap.as_secs_f64()) * rate as f64;
-                            let silence_samples_count = silence_samples_needed.ceil() as usize;
-
-                            let mut frame = ffmpeg::frame::Audio::new(
-                                source.info.sample_format,
-                                silence_samples_count,
-                                source.info.channel_layout(),
-                            );
-
-                            for i in 0..frame.planes() {
-                                frame.data_mut(i).fill(0);
-                            }
-
-                            frame.set_rate(source.info.rate() as u32);
-
-                            let silence_duration =
-                                Duration::from_secs_f64(silence_samples_count as f64 / rate as f64);
-                            let timestamp = buffer_last_timestamp + buffer_last_duration;
-                            source.buffer_last = Some((timestamp, silence_duration));
-                            source.buffer.push_back(AudioFrame::new(frame, timestamp));
-                        }
-                    }
-                }
-
-                source.buffer_last = Some((
-                    timestamp,
-                    Duration::from_secs_f64(frame.samples() as f64 / rate as f64),
-                ));
+                source.buffer_last = Some((timestamp, Duration::from_nanos(frame_duration_ns)));
                 source.buffer.push_back(AudioFrame::new(frame, timestamp));
             }
         }
@@ -614,8 +630,13 @@ impl AudioMixer {
             self.handle_source_format_change(index, old_info, new_info)?;
         }
 
-        if self.start_timestamp.is_none() {
-            self.start_timestamp = self
+        if self.samples_out == 0
+            && self
+                .sources
+                .iter()
+                .all(|source| source.samples_supplied == 0)
+        {
+            let earliest = self
                 .sources
                 .iter()
                 .filter_map(|s| s.buffer.front())
@@ -626,58 +647,51 @@ impl AudioMixer {
                 })
                 .map(|v| v.timestamp);
 
-            if self.start_timestamp.is_some() {
+            if let Some(earliest) = earliest {
+                self.start_timestamp = Some(earliest);
                 self.wall_clock_start = Some(now);
             }
         }
 
-        if let Some(start_timestamp) = self.start_timestamp
-            && let Some(elapsed_since_start) = now
-                .duration_since(self.timestamps)
-                .checked_sub(start_timestamp.duration_since(self.timestamps))
-            && elapsed_since_start > self.max_buffer_timeout
-        {
-            for source in &mut self.sources {
-                if source.buffer_last.is_none() {
-                    let rate = source.info.rate();
-                    let buffer_timeout = source.buffer_timeout;
-
-                    let mut remaining = elapsed_since_start;
-                    while remaining > buffer_timeout {
-                        let chunk_samples = samples_for_timeout(rate, buffer_timeout);
-                        let frame_duration = duration_from_samples(chunk_samples, rate);
-
-                        let mut frame = ffmpeg::frame::Audio::new(
-                            source.info.sample_format,
-                            chunk_samples,
-                            source.info.channel_layout(),
-                        );
-
-                        for i in 0..frame.planes() {
-                            frame.data_mut(i).fill(0);
-                        }
-
-                        frame.set_rate(source.info.rate() as u32);
-
-                        let timestamp =
-                            start_timestamp + elapsed_since_start.saturating_sub(remaining);
-                        source.buffer_last = Some((timestamp, frame_duration));
-                        source.buffer.push_front(AudioFrame::new(frame, timestamp));
-
-                        if frame_duration.is_zero() {
-                            break;
-                        }
-
-                        remaining = remaining.saturating_sub(frame_duration);
-                    }
-                }
-            }
-        }
         Ok(())
     }
 
     fn tick(&mut self, _start: Timestamps, now: Timestamp) -> anyhow::Result<bool> {
         self.tick_with_output(now, |sink, frame| sink.sink().frame(frame))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn tick_for_capture_pause(&mut self, now: Instant) -> anyhow::Result<bool> {
+        self.tick(self.timestamps, Timestamp::Instant(now))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn finish_for_capture_pause(&mut self) -> anyhow::Result<()> {
+        self.finish()
+    }
+
+    fn finish(&mut self) -> anyhow::Result<()> {
+        if let Some(stop) = &self.required_stop {
+            stop.cancel();
+        }
+        self.drain_deadline = Some(Instant::now() + STARTUP_GRACE);
+        loop {
+            self.buffer_sources(mixer_now())?;
+            if self.sources.iter().all(|source| source.ended) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        self.finishing = true;
+        self.drain_deadline = Some(Instant::now() + STARTUP_GRACE);
+        if !self.tick(self.timestamps, mixer_now())? {
+            return Ok(());
+        }
+        for input in &mut self.abuffers {
+            input.source().flush().context("Audio mixer flush failed")?;
+        }
+        self.tick(self.timestamps, mixer_now())?;
+        Ok(())
     }
 
     fn tick_with_output(
@@ -695,7 +709,11 @@ impl AudioMixer {
         };
 
         let wall_now = Instant::now();
-        let laggard = self.detect_laggard_source(now);
+        let laggard = if self.finishing {
+            None
+        } else {
+            self.detect_laggard_source(now)
+        };
         let action = self
             .buffering
             .observe(wall_now, laggard, self.health_tx.as_ref());
@@ -708,12 +726,94 @@ impl AudioMixer {
             self.force_reset_source(source, starvation_ms);
         }
 
-        for (i, source) in self.sources.iter_mut().enumerate() {
-            for buffer in source.buffer.drain(..) {
-                let result = self.abuffers[i].source().add(&buffer.inner);
-                if self.required_stop.is_some() {
-                    result
-                        .with_context(|| format!("Audio mixer source {i} filter input failed"))?;
+        let grace_elapsed = now
+            .duration_since(self.timestamps)
+            .saturating_sub(start_timestamp.duration_since(self.timestamps))
+            >= STARTUP_GRACE;
+        let mut watermark = None;
+        let mut waiting_for_input = false;
+        for source in &self.sources {
+            if let Some((timestamp, duration)) = source.buffer_last {
+                let end = timestamp + duration;
+                if watermark.is_none_or(|previous: Timestamp| {
+                    let end = end.duration_since(self.timestamps);
+                    let previous = previous.duration_since(self.timestamps);
+                    if self.finishing {
+                        end > previous
+                    } else {
+                        end < previous
+                    }
+                }) {
+                    watermark = Some(end);
+                }
+            } else if !grace_elapsed && !self.finishing {
+                waiting_for_input = true;
+            }
+        }
+
+        if let Some(watermark) = watermark.filter(|_| !waiting_for_input) {
+            for (i, source) in self.sources.iter_mut().enumerate() {
+                let rate = source.info.rate();
+                let limit = sample_position(watermark, start_timestamp, self.timestamps, rate)
+                    .max(0) as usize;
+                while let Some(mut buffer) = source.buffer.pop_front() {
+                    let position =
+                        sample_position(buffer.timestamp, start_timestamp, self.timestamps, rate);
+                    let correction = placement_correction(
+                        position - source.samples_supplied as i128,
+                        source.info.sample_rate,
+                        buffer.inner.samples(),
+                    );
+                    let overlap = (-correction).max(0) as usize;
+                    if overlap > 0 {
+                        let dropped = overlap.min(buffer.inner.samples());
+                        if source.late_samples_dropped == 0 {
+                            warn!(
+                                source = source.clock_state.name(),
+                                dropped_samples = dropped,
+                                "AudioMixer: dropping input samples that arrived after their time was committed"
+                            );
+                        }
+                        source.late_samples_dropped =
+                            source.late_samples_dropped.saturating_add(dropped as u64);
+                        if dropped == buffer.inner.samples() {
+                            continue;
+                        }
+                        buffer.inner = trim_audio_frame_front(&buffer.inner, dropped)
+                            .context("Audio mixer input overlap trim failed")?;
+                        buffer.timestamp = start_timestamp
+                            + samples_duration(source.samples_supplied, source.info.sample_rate);
+                    }
+                    let gap_end = (source.samples_supplied + correction.max(0) as usize).min(limit);
+                    supply_silence(source, &mut self.abuffers[i], i, gap_end)?;
+                    if source.samples_supplied >= limit {
+                        source.buffer.push_front(buffer);
+                        break;
+                    }
+                    let samples = buffer.inner.samples().min(limit - source.samples_supplied);
+                    if samples < buffer.inner.samples() {
+                        let remaining = trim_audio_frame_front(&buffer.inner, samples)
+                            .context("Audio mixer watermark split failed")?;
+                        source.buffer.push_front(AudioFrame::new(
+                            remaining,
+                            start_timestamp
+                                + samples_duration(
+                                    source.samples_supplied + samples,
+                                    source.info.sample_rate,
+                                ),
+                        ));
+                        buffer.inner.set_samples(samples);
+                    }
+                    let result = self.abuffers[i].source().add(&buffer.inner);
+                    if self.required_stop.is_some() {
+                        result.with_context(|| {
+                            format!("Audio mixer source {i} filter input failed")
+                        })?;
+                    }
+                    source.samples_supplied += samples;
+                }
+                if source.buffer_last.is_none() || self.finishing {
+                    supply_silence(source, &mut self.abuffers[i], i, limit)?;
                 }
             }
         }
@@ -750,6 +850,17 @@ impl AudioMixer {
                 match self.output.try_send(frame) {
                     Ok(()) => break,
                     Err(err) if err.is_full() => {
+                        // At stop, a consumer that stopped draining costs the
+                        // audio not yet delivered, never the recording.
+                        if self
+                            .drain_deadline
+                            .is_some_and(|deadline| Instant::now() >= deadline)
+                        {
+                            warn!(
+                                "Audio mixer output did not drain before the stop deadline; dropping the rest"
+                            );
+                            return Ok(false);
+                        }
                         frame = err.into_inner();
                         std::thread::sleep(Duration::from_millis(1));
                     }
@@ -769,6 +880,106 @@ impl AudioMixer {
     pub fn builder() -> AudioMixerBuilder {
         AudioMixerBuilder::new()
     }
+
+    /// How long the run loop sleeps when no input arrives first: half the
+    /// shortest source buffer timeout, so a source that went quiet is still
+    /// filled with silence on time, while arriving input wakes it at once.
+    fn idle_wait(&self) -> Duration {
+        idle_wait_for(self.sources.iter().map(|source| source.buffer_timeout))
+    }
+}
+
+fn mixer_now() -> Timestamp {
+    #[cfg(target_os = "macos")]
+    {
+        Timestamp::MachAbsoluteTime(cap_timestamp::MachAbsoluteTimestamp::now())
+    }
+    #[cfg(windows)]
+    {
+        Timestamp::PerformanceCounter(cap_timestamp::PerformanceCounterTimestamp::now())
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
+    {
+        Timestamp::Instant(Instant::now())
+    }
+}
+
+/// Input timestamps jitter around their sample clock (Linux stamps samples
+/// with their receipt time) and drift from the host clock by a few parts per
+/// million. Within this tolerance a packet continues the source's samples
+/// untouched.
+const PLACEMENT_JITTER_TOLERANCE: Duration = Duration::from_millis(2);
+/// A packet this far from where the source's samples have reached starts at
+/// its capture time: a real gap is filled with silence, input that arrived
+/// after its time was committed is dropped.
+const PLACEMENT_REALIGN_THRESHOLD: Duration = Duration::from_millis(10);
+
+/// Samples to add (silence, positive) or drop (negative) before a packet
+/// of `packet` samples whose capture time lies `drift` samples after the
+/// source's supplied samples. Between the tolerance and the realign
+/// threshold the source moves by at most one sample per 256 (a 0.4% rate
+/// change), so clock drift never causes an audible jump.
+fn placement_correction(drift: i128, rate: u32, packet: usize) -> i128 {
+    let samples =
+        |duration: Duration| duration.as_nanos() as i128 * i128::from(rate) / 1_000_000_000;
+    let tolerance = samples(PLACEMENT_JITTER_TOLERANCE);
+    if drift.abs() >= samples(PLACEMENT_REALIGN_THRESHOLD) {
+        drift
+    } else if drift.abs() > tolerance {
+        let step = (packet as i128 / 256).max(1);
+        drift.signum() * (drift.abs() - tolerance).min(step)
+    } else {
+        0
+    }
+}
+
+fn samples_duration(samples: usize, rate: u32) -> Duration {
+    Duration::from_nanos((samples as u128 * 1_000_000_000 / u128::from(rate)) as u64)
+}
+
+fn supply_silence(
+    source: &mut MixerSource,
+    input: &mut ffmpeg::filter::Context,
+    index: usize,
+    limit: usize,
+) -> anyhow::Result<()> {
+    while source.samples_supplied < limit {
+        let samples = (limit - source.samples_supplied).min(samples_for_timeout(
+            source.info.rate(),
+            source.buffer_timeout,
+        ));
+        input
+            .source()
+            .add(&silence_frame(source.info, samples))
+            .with_context(|| format!("Audio mixer source {index} silence input failed"))?;
+        source.samples_supplied += samples;
+    }
+    Ok(())
+}
+
+fn sample_position(
+    timestamp: Timestamp,
+    start: Timestamp,
+    timestamps: Timestamps,
+    rate: i32,
+) -> i128 {
+    let nanos = timestamp.duration_since(timestamps).as_nanos() as i128
+        - start.duration_since(timestamps).as_nanos() as i128;
+    (nanos * rate as i128 + 500_000_000).div_euclid(1_000_000_000)
+}
+
+fn silence_frame(info: AudioInfo, samples: usize) -> ffmpeg::frame::Audio {
+    let mut frame = ffmpeg::frame::Audio::new(info.sample_format, samples, info.channel_layout());
+    let silence = if matches!(info.sample_format, cap_media_info::Sample::U8(_)) {
+        128
+    } else {
+        0
+    };
+    for plane in 0..frame.planes() {
+        frame.data_mut(plane).fill(silence);
+    }
+    frame.set_rate(info.sample_rate);
+    frame
 }
 
 fn detect_format_mismatch(current: &AudioInfo, frame: &ffmpeg::frame::Audio) -> Option<AudioInfo> {
@@ -901,6 +1112,30 @@ fn mixer_source_label(index: usize) -> &'static str {
     LABELS.get(index).copied().unwrap_or("mixer-src-overflow")
 }
 
+const MIN_IDLE_WAIT: Duration = Duration::from_millis(5);
+const MAX_IDLE_WAIT: Duration = Duration::from_millis(25);
+
+fn idle_wait_for(timeouts: impl IntoIterator<Item = Duration>) -> Duration {
+    timeouts
+        .into_iter()
+        .map(|timeout| timeout / 2)
+        .min()
+        .unwrap_or(MIN_IDLE_WAIT)
+        .clamp(MIN_IDLE_WAIT, MAX_IDLE_WAIT)
+}
+
+struct ThreadUnpark(std::thread::Thread);
+
+impl std::task::Wake for ThreadUnpark {
+    fn wake(self: Arc<Self>) {
+        self.0.unpark();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        self.0.unpark();
+    }
+}
+
 fn buffer_timeout_for(info: &AudioInfo) -> Duration {
     if info.sample_rate == 0 || info.buffer_size == 0 {
         return DEFAULT_BUFFER_TIMEOUT;
@@ -942,14 +1177,6 @@ fn samples_for_timeout(rate: i32, timeout: Duration) -> usize {
     samples.max(1.0) as usize
 }
 
-fn duration_from_samples(samples: usize, rate: i32) -> Duration {
-    if rate <= 0 {
-        return Duration::ZERO;
-    }
-
-    Duration::from_secs_f64(samples as f64 / rate as f64)
-}
-
 #[cfg(test)]
 mod test {
     use futures::{SinkExt, StreamExt};
@@ -964,6 +1191,477 @@ mod test {
     );
     const ONE_SECOND: Duration = Duration::from_secs(1);
     const SAMPLES_SECOND: usize = SOURCE_INFO.rate() as usize;
+
+    struct PcmProbe {
+        mixer: AudioMixer,
+        inputs: Vec<mpsc::Sender<AudioFrame>>,
+        output: mpsc::Receiver<AudioFrame>,
+        pcm: Vec<[f32; 2]>,
+        deliveries: Vec<(usize, u64)>,
+    }
+
+    impl PcmProbe {
+        fn new(sources: usize) -> Self {
+            let (sender, output) = mpsc::channel(128);
+            let mut builder = AudioMixerBuilder::new();
+            let inputs = (0..sources)
+                .map(|_| {
+                    let (sender, receiver) = mpsc::channel(32);
+                    builder.add_source(AudioMixer::INFO, receiver);
+                    sender
+                })
+                .collect();
+            Self {
+                mixer: builder.build(sender).unwrap(),
+                inputs,
+                output,
+                pcm: Vec::new(),
+                deliveries: Vec::new(),
+            }
+        }
+
+        fn at(&self, millis: u64) -> Timestamp {
+            Timestamp::Instant(self.mixer.timestamps.instant() + Duration::from_millis(millis))
+        }
+
+        fn send(&mut self, source: usize, millis: u64, samples: usize, peak: Option<usize>) {
+            self.send_at(source, self.at(millis), samples, peak);
+        }
+
+        fn send_at(
+            &mut self,
+            source: usize,
+            timestamp: Timestamp,
+            samples: usize,
+            peak: Option<usize>,
+        ) {
+            let mut bytes = vec![0; samples * 8];
+            if let Some(peak) = peak {
+                let offset = peak * 8 + source * 4;
+                bytes[offset..offset + 4].copy_from_slice(&0.5_f32.to_le_bytes());
+            }
+            self.inputs[source]
+                .try_send(AudioFrame::new(
+                    AudioMixer::INFO.wrap_frame(&bytes),
+                    timestamp,
+                ))
+                .unwrap();
+        }
+
+        fn tick(&mut self, millis: u64) {
+            assert!(
+                self.mixer
+                    .tick(self.mixer.timestamps, self.at(millis))
+                    .unwrap()
+            );
+            self.collect(millis);
+        }
+
+        fn collect(&mut self, millis: u64) {
+            while let Ok(Some(frame)) = self.output.try_next() {
+                self.deliveries.push((self.pcm.len(), millis));
+                for pair in frame.inner.data(0)[..frame.inner.samples() * 8].chunks_exact(8) {
+                    self.pcm.push([
+                        f32::from_le_bytes(pair[..4].try_into().unwrap()),
+                        f32::from_le_bytes(pair[4..].try_into().unwrap()),
+                    ]);
+                }
+            }
+        }
+
+        fn peaks(&self, channel: usize) -> Vec<usize> {
+            self.pcm
+                .iter()
+                .enumerate()
+                .filter_map(|(index, sample)| (sample[channel].abs() > 0.01).then_some(index))
+                .collect()
+        }
+    }
+
+    #[test]
+    fn pcm_arrival_schedules_preserve_sixty_ms_source_offset() {
+        for early_poll in [false, true] {
+            let mut probe = PcmProbe::new(2);
+            probe.send(1, 200, 24_000, Some(9_600));
+            if early_poll {
+                probe.tick(200);
+                probe.tick(254);
+            }
+            probe.send(0, 260, 24_000, Some(9_600));
+            probe.send(1, 700, 2_880, None);
+            probe.tick(300);
+            assert_eq!(probe.peaks(1), [9_600]);
+            assert_eq!(probe.peaks(0), [12_480]);
+            assert_eq!(probe.peaks(0)[0] - probe.peaks(1)[0], 2_880);
+        }
+    }
+
+    #[test]
+    fn pcm_arrival_schedules_align_simultaneous_capture_events() {
+        for early_poll in [false, true] {
+            let mut probe = PcmProbe::new(2);
+            probe.send(1, 200, 24_000, Some(9_600));
+            if early_poll {
+                probe.tick(200);
+                probe.tick(254);
+            }
+            probe.send(0, 260, 24_000, Some(6_720));
+            probe.send(1, 700, 2_880, None);
+            probe.tick(300);
+            assert_eq!(probe.peaks(0), [9_600]);
+            assert_eq!(probe.peaks(1), [9_600]);
+        }
+    }
+
+    #[test]
+    fn pcm_continuous_system_and_late_mic_follow_capture_time() {
+        for early_poll in [false, true] {
+            let mut probe = PcmProbe::new(2);
+            probe.send(0, 0, 24_000, Some(14_400));
+            if early_poll {
+                probe.tick(0);
+                probe.tick(254);
+            }
+            probe.send(1, 200, 14_400, Some(4_800));
+            probe.tick(300);
+            assert_eq!(probe.peaks(0), [14_400]);
+            assert_eq!(probe.peaks(1), [14_400]);
+        }
+    }
+
+    #[test]
+    fn pcm_sparse_system_and_pause_resume_preserve_later_gaps() {
+        let mut probe = PcmProbe::new(2);
+        probe.send(1, 0, 48_000, Some(14_400));
+        probe.send(0, 0, 960, None);
+        probe.send(0, 300, 960, Some(0));
+        probe.send(0, 600, 960, Some(0));
+        probe.send(0, 900, 4_800, Some(0));
+        probe.send(0, 1_000, 4_800, None);
+        probe.send(1, 1_000, 4_800, None);
+        probe.tick(1_100);
+        assert_eq!(
+            probe.peaks(0),
+            [14_400, 28_800, 43_200],
+            "{} output samples",
+            probe.pcm.len()
+        );
+        assert_eq!(probe.peaks(1), [14_400]);
+        probe.send(0, 1_500, 4_800, Some(0));
+        probe.send(1, 1_500, 4_800, Some(0));
+        probe.send(0, 1_600, 4_800, None);
+        probe.send(1, 1_600, 4_800, None);
+        probe.tick(1_700);
+        assert_eq!(probe.peaks(0), [14_400, 28_800, 43_200, 72_000]);
+        assert_eq!(probe.peaks(1), [14_400, 72_000]);
+    }
+
+    #[test]
+    fn pcm_thousand_sparse_packets_preserve_samples_without_rounding_drift() {
+        for spacing_ns in [300_000_000, 300_006_944] {
+            let mut probe = PcmProbe::new(2);
+            let mut expected = Vec::new();
+            for packet in 0..=1_001_u64 {
+                let timestamp = Timestamp::Instant(
+                    probe.mixer.timestamps.instant() + Duration::from_nanos(packet * spacing_ns),
+                );
+                probe.send_at(0, timestamp, 960, (packet < 1_001).then_some(0));
+                probe.send_at(1, timestamp, 960, None);
+                probe.tick(packet * spacing_ns / 1_000_000 + 20);
+                if packet < 1_001 {
+                    let fractional_samples = if spacing_ns == 300_000_000 {
+                        0
+                    } else {
+                        (packet + 1) / 3
+                    };
+                    expected.push((packet * 14_400 + fractional_samples) as usize);
+                }
+            }
+            assert_eq!(probe.peaks(0), expected);
+            assert!(probe.peaks(1).is_empty());
+        }
+    }
+
+    #[test]
+    fn pcm_delayed_first_delivery_retains_captured_samples() {
+        for delivery_ms in [400, 800, 1_000] {
+            let mut probe = PcmProbe::new(2);
+            for chunk in 0..delivery_ms / 20 {
+                probe.send(0, chunk * 20, 960, None);
+                if (chunk + 1) * 20 < delivery_ms {
+                    probe.tick((chunk + 1) * 20);
+                }
+            }
+            probe.send(1, 200, 48_000, Some(2_400));
+            probe.send(0, delivery_ms, 57_600 - delivery_ms as usize * 48, None);
+            probe.tick(delivery_ms);
+            eprintln!(
+                "DELAYED delivery_ms={delivery_ms} peaks={:?}",
+                probe.peaks(1)
+            );
+            assert_eq!(probe.peaks(1), [12_000]);
+        }
+    }
+
+    #[test]
+    fn pcm_first_input_can_precede_the_uncommitted_mixer_origin() {
+        let mut probe = PcmProbe::new(2);
+        probe.send(0, 200, 24_000, Some(4_800));
+        probe.tick(300);
+        assert!(probe.pcm.is_empty());
+        probe.send(1, 0, 33_600, Some(14_400));
+        probe.tick(400);
+        assert_eq!(probe.peaks(0), [14_400]);
+        assert_eq!(probe.peaks(1), [14_400]);
+    }
+
+    #[test]
+    fn pcm_first_input_after_grace_drops_and_counts_only_committed_samples() {
+        let mut probe = PcmProbe::new(2);
+        probe.send(0, 0, 48_000, None);
+        probe.tick(999);
+        assert!(probe.pcm.is_empty());
+        probe.tick(1_000);
+        assert_eq!(probe.pcm.len(), 48_000);
+        assert_eq!(probe.deliveries[0].1, 1_000);
+        probe.send(1, 200, 48_000, Some(2_400));
+        probe.send(0, 1_000, 9_600, Some(0));
+        probe.tick(1_200);
+        assert!(probe.peaks(1).is_empty());
+        assert_eq!(probe.mixer.sources[1].late_samples_dropped, 38_400);
+        assert_eq!(probe.peaks(0), [48_000]);
+        probe.send(1, 1_200, 960, Some(0));
+        probe.send(0, 1_200, 960, None);
+        probe.tick(1_220);
+        assert_eq!(probe.peaks(1), [57_600]);
+        assert_eq!(probe.mixer.sources[1].late_samples_dropped, 38_400);
+    }
+
+    #[test]
+    fn pcm_watermark_limits_commitment_to_the_shortest_input() {
+        let mut probe = PcmProbe::new(2);
+        probe.send(0, 0, 4_800, Some(4_000));
+        probe.send(1, 0, 960, None);
+        probe.tick(20);
+        assert_eq!(probe.pcm.len(), 960);
+        assert_eq!(probe.mixer.sources[0].samples_supplied, 960);
+        assert_eq!(probe.mixer.sources[1].samples_supplied, 960);
+        probe.send(1, 20, 3_840, Some(3_040));
+        probe.tick(100);
+        assert_eq!(probe.pcm.len(), 4_800);
+        assert_eq!(probe.peaks(0), [4_000]);
+        assert_eq!(probe.peaks(1), [4_000]);
+    }
+
+    #[test]
+    fn pcm_continuous_input_watermarks_add_at_most_one_buffer() {
+        let mut probe = PcmProbe::new(2);
+        for chunk in 0..10 {
+            probe.send(0, chunk * 20, 960, None);
+            probe.tick(chunk * 20 + 20);
+            assert!(probe.pcm.len() >= chunk as usize * 960);
+            probe.send(1, chunk * 20, 960, None);
+            probe.tick(chunk * 20 + 20);
+            assert_eq!(probe.pcm.len(), (chunk as usize + 1) * 960);
+        }
+        assert_eq!(probe.deliveries[0].1, 20);
+    }
+
+    #[test]
+    fn pcm_watermark_splits_do_not_accumulate_timestamp_rounding() {
+        let mut probe = PcmProbe::new(2);
+        probe.send(0, 0, 50_001, Some(49_999));
+        for sample in 0..50_001 {
+            let timestamp = Timestamp::Instant(
+                probe.mixer.timestamps.instant()
+                    + Duration::from_nanos(sample * 1_000_000_000 / 48_000),
+            );
+            probe.send_at(1, timestamp, 1, None);
+            probe.tick(sample / 48);
+        }
+        assert_eq!(probe.peaks(0), [49_999]);
+        assert_eq!(probe.mixer.sources[0].late_samples_dropped, 0);
+        assert_eq!(probe.pcm.len(), 50_001);
+    }
+
+    #[test]
+    fn pcm_sub_timeout_gap_is_not_smoothed_away() {
+        let mut probe = PcmProbe::new(2);
+        probe.send(1, 0, 4_800, None);
+        probe.send(0, 0, 960, Some(0));
+        probe.send(0, 30, 960, Some(0));
+        probe.send(0, 50, 2_400, Some(0));
+        probe.tick(100);
+        assert_eq!(probe.peaks(0), [0, 1_440, 2_400]);
+    }
+
+    #[test]
+    fn pcm_stop_before_startup_grace_preserves_captured_audio() {
+        let mut probe = PcmProbe::new(2);
+        probe.send(1, 0, 4_800, Some(960));
+        probe.tick(100);
+        assert!(probe.pcm.is_empty());
+        probe.inputs.clear();
+        probe.mixer.finish().unwrap();
+        probe.collect(100);
+        assert_eq!(probe.peaks(1), [960]);
+        assert_eq!(probe.pcm.len(), 4_800);
+    }
+
+    #[test]
+    fn pcm_stop_drains_the_longest_input_and_pads_closed_sources() {
+        for millis in [100, 1_500] {
+            let mut probe = PcmProbe::new(2);
+            probe.send(0, 0, 960, None);
+            probe.send(1, 0, 4_800, Some(4_799));
+            probe.tick(millis);
+            probe.inputs.clear();
+            probe.mixer.finish().unwrap();
+            probe.collect(millis);
+            assert_eq!(probe.peaks(1), [4_799]);
+            assert_eq!(probe.pcm.len(), 4_800);
+        }
+    }
+
+    #[test]
+    fn pcm_stop_waits_for_queued_capture_before_closing_inputs() {
+        let mut probe = PcmProbe::new(2);
+        probe.send(1, 0, 960, None);
+        let mut input = probe.inputs.pop().unwrap();
+        probe.inputs.clear();
+        let timestamp = probe.at(20);
+        let worker = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(20));
+            let mut bytes = vec![0; 3_840 * 8];
+            bytes[3_000 * 8 + 4..3_000 * 8 + 8].copy_from_slice(&0.5_f32.to_le_bytes());
+            input
+                .try_send(AudioFrame::new(
+                    AudioMixer::INFO.wrap_frame(&bytes),
+                    timestamp,
+                ))
+                .unwrap();
+        });
+        probe.mixer.finish().unwrap();
+        worker.join().unwrap();
+        probe.collect(100);
+        assert_eq!(probe.peaks(1), [3_960]);
+        assert_eq!(probe.pcm.len(), 4_800);
+    }
+
+    #[test]
+    fn pcm_stop_bounds_a_producer_that_never_closes() {
+        let mut probe = PcmProbe::new(2);
+        probe.send(1, 0, 4_800, Some(960));
+        let start = Instant::now();
+        probe.mixer.finish().unwrap();
+        assert!(start.elapsed() < MIXER_STOP_TIMEOUT);
+        probe.collect(100);
+        assert_eq!(probe.peaks(1), [960]);
+        assert_eq!(probe.pcm.len(), 4_800);
+        assert!(probe.inputs.iter_mut().all(|input| input.is_closed()));
+    }
+
+    #[test]
+    fn pcm_input_captured_before_the_clock_origin_keeps_its_capture_time() {
+        let mut probe = PcmProbe::new(1);
+        let origin = probe.mixer.timestamps.instant();
+        // 480 samples from 4 ms before the origin: 192 precede it, and the
+        // marker at sample 300 was captured 2.25 ms after it.
+        probe.send_at(
+            0,
+            Timestamp::Instant(origin.checked_sub(Duration::from_millis(4)).unwrap()),
+            480,
+            Some(300),
+        );
+        probe.send_at(
+            0,
+            Timestamp::Instant(origin + Duration::from_millis(6)),
+            480,
+            Some(0),
+        );
+        probe.tick(100);
+        assert_eq!(probe.peaks(0), [108, 288]);
+        assert_eq!(probe.mixer.sources[0].late_samples_dropped, 0);
+    }
+
+    #[test]
+    fn pcm_timestamp_jitter_within_tolerance_keeps_samples_contiguous() {
+        let mut probe = PcmProbe::new(1);
+        let base = probe.mixer.timestamps.instant() + Duration::from_millis(100);
+        let jitter_us = [
+            0_i64, 1_500, -800, 1_900, 300, -1_900, 1_200, 0, 700, -1_500,
+        ];
+        for (packet, jitter) in jitter_us.into_iter().enumerate() {
+            let micros = 20_000 * packet as i64 + jitter;
+            let timestamp = base + Duration::from_micros(micros.max(0) as u64);
+            probe.send_at(0, Timestamp::Instant(timestamp), 960, Some(0));
+            probe.tick(20 * packet as u64 + 125);
+        }
+        assert_eq!(
+            probe.peaks(0),
+            (0..jitter_us.len())
+                .map(|packet| packet * 960)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(probe.mixer.sources[0].late_samples_dropped, 0);
+    }
+
+    #[test]
+    fn pcm_clock_drift_is_corrected_one_sample_at_a_time() {
+        let mut probe = PcmProbe::new(1);
+        let base = probe.mixer.timestamps.instant() + Duration::from_millis(100);
+        // 2,000 ppm: each 960-sample packet's capture time runs 1.92
+        // samples ahead of its sample count.
+        let spacing = Duration::from_nanos(20_040_000);
+        let packets = 200;
+        for packet in 0..packets {
+            probe.send_at(
+                0,
+                Timestamp::Instant(base + spacing * packet as u32),
+                960,
+                Some(0),
+            );
+            probe.tick(20 * packet as u64 + 125);
+        }
+        let peaks = probe.peaks(0);
+        assert_eq!(peaks.len(), packets);
+        for pair in peaks.windows(2) {
+            assert!(
+                (960..=963).contains(&(pair[1] - pair[0])),
+                "a drift correction jumped: {pair:?}"
+            );
+        }
+        let last_position =
+            (spacing.as_nanos() * (packets as u128 - 1) * 48_000 / 1_000_000_000) as usize;
+        assert!(
+            last_position.abs_diff(*peaks.last().unwrap()) <= 96 + 2,
+            "drift not followed: {} vs {last_position}",
+            peaks.last().unwrap()
+        );
+    }
+
+    #[test]
+    fn pcm_single_input_is_unchanged_and_reset_keeps_the_supplied_cursor() {
+        let mut probe = PcmProbe::new(1);
+        probe.send(0, 200, 4_800, Some(2_400));
+        probe.tick(300);
+        assert_eq!(probe.pcm.len(), 4_800);
+        assert_eq!(probe.peaks(0), [2_400]);
+        for (index, sample) in probe.pcm.iter().enumerate() {
+            assert_eq!(
+                *sample,
+                if index == 2_400 {
+                    [0.5, 0.0]
+                } else {
+                    [0.0, 0.0]
+                }
+            );
+        }
+        probe.mixer.force_reset_source(mixer_source_label(0), 2_000);
+        probe.send(0, 400, 4_800, Some(0));
+        probe.tick(500);
+        assert_eq!(probe.peaks(0), [2_400, 9_600]);
+    }
 
     #[tokio::test]
     async fn mix_sources() {
@@ -1370,6 +2068,59 @@ mod test {
         }
     }
 
+    mod input_wake {
+        use super::*;
+
+        struct CountingWaker(std::sync::atomic::AtomicUsize);
+
+        impl std::task::Wake for CountingWaker {
+            fn wake(self: Arc<Self>) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        #[tokio::test]
+        async fn a_frame_arriving_after_a_drain_wakes_the_mixer() {
+            let (output_tx, _) = mpsc::channel::<AudioFrame>(4);
+            let mut builder = AudioMixerBuilder::new();
+            let (mut tx, rx) = mpsc::channel(4);
+            builder.add_source(SOURCE_INFO, rx);
+            let mut mixer = builder.build(output_tx).unwrap();
+            let wakes = Arc::new(CountingWaker(std::sync::atomic::AtomicUsize::new(0)));
+            mixer.input_waker = std::task::Waker::from(wakes.clone());
+
+            let now = Timestamp::Instant(mixer.timestamps.instant());
+            mixer.buffer_sources(now).unwrap();
+            assert_eq!(wakes.0.load(Ordering::SeqCst), 0);
+
+            tx.send(AudioFrame::new(
+                SOURCE_INFO.wrap_frame(&vec![0; SAMPLES_SECOND / 10]),
+                now,
+            ))
+            .await
+            .unwrap();
+            assert_eq!(wakes.0.load(Ordering::SeqCst), 1);
+
+            mixer.buffer_sources(now).unwrap();
+            assert_eq!(mixer.sources[0].buffer.len(), 1);
+        }
+
+        #[test]
+        fn idle_wait_is_half_the_shortest_buffer_timeout_within_bounds() {
+            assert_eq!(
+                idle_wait_for([Duration::from_millis(40), Duration::from_millis(100)]),
+                Duration::from_millis(20)
+            );
+            assert_eq!(
+                idle_wait_for([MIN_BUFFER_TIMEOUT_WIRED]),
+                Duration::from_millis(10)
+            );
+            assert_eq!(idle_wait_for([MAX_BUFFER_TIMEOUT]), MAX_IDLE_WAIT);
+            assert_eq!(idle_wait_for([Duration::from_millis(4)]), MIN_IDLE_WAIT);
+            assert_eq!(idle_wait_for([]), MIN_IDLE_WAIT);
+        }
+    }
+
     mod source_buffer {
         use super::*;
 
@@ -1429,12 +2180,12 @@ mod test {
 
             let source = &mut mixer.sources[0];
 
-            assert_eq!(source.buffer.len(), 3);
+            assert_eq!(source.buffer.len(), 2);
             assert!(source.rx.try_next().is_err());
 
             assert_eq!(
                 source.buffer[1].timestamp.duration_since(mixer.timestamps),
-                ONE_SECOND / 2
+                ONE_SECOND
             );
             assert_eq!(source.buffer[1].samples(), SOURCE_INFO.rate() as usize / 2);
         }
@@ -1510,14 +2261,10 @@ mod test {
 
             let source = &mut mixer.sources[0];
 
-            assert_eq!(source.buffer.len(), 2);
+            assert_eq!(source.buffer.len(), 1);
             assert!(source.rx.try_next().is_err());
 
             let item = &source.buffer[0];
-            assert_eq!(item.timestamp.duration_since(start), ONE_SECOND / 2);
-            assert_eq!(item.inner.samples(), SOURCE_INFO.rate() as usize / 2);
-
-            let item = &source.buffer[1];
             assert_eq!(item.timestamp.duration_since(start), ONE_SECOND);
             assert_eq!(item.inner.samples(), SOURCE_INFO.rate() as usize / 2);
         }

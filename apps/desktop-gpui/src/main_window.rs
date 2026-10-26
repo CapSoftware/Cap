@@ -14,14 +14,19 @@ use gpui::{
 };
 use std::{cell::Cell, rc::Rc};
 
+use crate::i18n::tr;
+use crate::theme::LocaleFont as _;
 use crate::{
     MAIN_WINDOW_WIDTH, app_windows, devices,
     devices::{CameraOption, DeviceSnapshot, DisplayOption, MicrophoneOption, WindowOption},
     feeds::{self, Feeds},
     library::{self, RecordingItem, ScreenshotItem},
+    media_access::MediaAccess,
+    permissions::OSPermission,
     recording,
     session::{Phase, RecordingSession},
     settings_window::Page,
+    sign_in::{SignIn, SignInEvent, SignInOrigin, SignInOutcome},
     target_thumbnails,
     theme::Theme,
     ui,
@@ -51,10 +56,20 @@ fn remembered_camera(id: &recording::DeviceOrModelID, cameras: &[CameraOption]) 
                 recording::DeviceOrModelID::ModelID(model) => Some(model.clone()),
                 recording::DeviceOrModelID::DeviceID(_) => None,
             },
-            label: "Camera".to_string(),
+            label: String::new(),
             best_format: None,
             formats: Vec::new(),
         })
+}
+
+/// A remembered camera that isn't connected has no device name, so its row
+/// reads the fallback through the active locale on every render.
+pub(crate) fn camera_label(label: &str) -> String {
+    if label.is_empty() {
+        tr::main::device::fallback_camera().to_string()
+    } else {
+        label.to_string()
+    }
 }
 
 fn remembered_microphone(name: &str, microphones: &[MicrophoneOption]) -> MicrophoneOption {
@@ -152,20 +167,37 @@ impl Mode {
         }
     }
 
+    /// [`Self::panel_title`] in the UI language. `panel_title` stays English:
+    /// it names element ids and log fields.
+    fn display_name(self) -> &'static str {
+        match self {
+            Self::Instant => tr::main::mode::name::instant(),
+            Self::Studio => tr::main::mode::name::studio(),
+            Self::Screenshot => tr::main::mode::name::screenshot(),
+        }
+    }
+
+    fn hover_title(self) -> &'static str {
+        match self {
+            Self::Instant => tr::main::mode::hover::instant(),
+            Self::Studio => tr::main::mode::hover::studio(),
+            Self::Screenshot => tr::main::mode::hover::screenshot(),
+        }
+    }
+
+    fn header_title(self) -> &'static str {
+        match self {
+            Self::Instant => tr::main::mode::header::instant(),
+            Self::Studio => tr::main::mode::header::studio(),
+            Self::Screenshot => tr::main::mode::header::screenshot(),
+        }
+    }
+
     fn panel_description(self) -> &'static str {
         match self {
-            Self::Instant => {
-                "Share instantly with a link. Your recording uploads as you record, so you \
-                 can share it immediately when you're done."
-            }
-            Self::Studio => {
-                "Record locally in the highest quality for editing later. Perfect for \
-                 creating polished content with effects and transitions."
-            }
-            Self::Screenshot => {
-                "Capture and annotate screenshots instantly. Great for quick captures, bug \
-                 reports, and visual communication."
-            }
+            Self::Instant => tr::main::mode::info::instant(),
+            Self::Studio => tr::main::mode::info::studio(),
+            Self::Screenshot => tr::main::mode::info::screenshot(),
         }
     }
 }
@@ -302,13 +334,9 @@ impl gpui::RenderOnce for ModeHoverCard {
         let theme = self.theme;
         let mode = self.mode;
         let description = match mode {
-            Mode::Instant => {
-                "No rendering required — uploads on the fly so you can share the link the moment you stop."
-            }
-            Mode::Studio => {
-                "Saves to your computer and opens the editor when you stop. Choose recording quality in settings."
-            }
-            Mode::Screenshot => "Capture and annotate stills.",
+            Mode::Instant => tr::main::mode::hover::instant_description(),
+            Mode::Studio => tr::main::mode::hover::studio_description(),
+            Mode::Screenshot => tr::main::mode::hover::screenshot_description(),
         };
         div()
             .flex()
@@ -323,11 +351,7 @@ impl gpui::RenderOnce for ModeHoverCard {
             .bg(theme.gray_12)
             .text_color(theme.gray_1)
             .shadow_lg()
-            .child(
-                div()
-                    .text_size(px(12.))
-                    .child(format!("{} mode", mode.panel_title())),
-            )
+            .child(div().text_size(px(12.)).child(mode.hover_title()))
             .child(
                 div()
                     .text_size(px(10.))
@@ -360,7 +384,7 @@ impl gpui::RenderOnce for ModeHoverCard {
                                     style.text_color(theme.gray_1)
                                 }),
                         )
-                        .child("Quality settings")
+                        .child(tr::main::mode::hover::quality_settings())
                         .on_click(move |_, _, cx| {
                             cx.stop_propagation();
                             cx.defer(move |cx| app_windows::open_quality_settings(mode, cx));
@@ -385,6 +409,17 @@ impl TargetType {
             Self::Window => "Window",
             Self::Area => "Area",
             Self::CameraOnly => "Camera Only",
+        }
+    }
+
+    /// [`Self::label`] in the UI language. `label` stays English: it names
+    /// element ids.
+    fn display_label(self) -> &'static str {
+        match self {
+            Self::Display => tr::main::target::display(),
+            Self::Window => tr::main::target::window(),
+            Self::Area => tr::main::target::area(),
+            Self::CameraOnly => tr::main::target::camera_only(),
         }
     }
 
@@ -531,19 +566,19 @@ impl DeviceFormat {
                     (Some(width), Some(height), Some(rate)) => {
                         format!("{width}×{height} @ {rate:.0}fps")
                     }
-                    _ => "Default".into(),
+                    _ => tr::main::device::format::default().into(),
                 }
             }
             Self::Microphone(settings) => match (settings.sample_rate, settings.channels) {
                 (Some(rate), Some(channels)) => {
                     let channels = match channels {
-                        1 => "Mono".into(),
-                        2 => "Stereo".into(),
-                        count => format!("{count} channels"),
+                        1 => tr::main::device::format::mono().into(),
+                        2 => tr::main::device::format::stereo().into(),
+                        count => tr::main::device::format::channels(usize::from(count)),
                     };
                     format!("{}kHz {channels}", rate as f32 / 1000.)
                 }
-                _ => "Default".into(),
+                _ => tr::main::device::format::default().into(),
             },
         }
     }
@@ -570,7 +605,7 @@ fn complete_format_request(
         if save(&pending.target, pending.format) {
             Ok(pending.format)
         } else {
-            Err("Could not save the device format preference. Try again.".to_string())
+            Err(tr::main::device::format::save_failed().to_string())
         }
     }))
 }
@@ -592,17 +627,32 @@ fn save_device_format(target: &DeviceFormatTarget, format: DeviceFormat) -> bool
 }
 
 impl DeviceMenu {
-    fn title(self) -> &'static str {
+    fn permission(self) -> OSPermission {
+        match self {
+            Self::Camera => OSPermission::Camera,
+            Self::Microphone => OSPermission::Microphone,
+        }
+    }
+
+    /// Element ids; [`Self::title`] is the label.
+    fn id_name(self) -> &'static str {
         match self {
             Self::Camera => "Camera",
             Self::Microphone => "Microphone",
         }
     }
 
+    fn title(self) -> &'static str {
+        match self {
+            Self::Camera => tr::main::device::camera(),
+            Self::Microphone => tr::main::device::microphone(),
+        }
+    }
+
     fn none_label(self) -> &'static str {
         match self {
-            Self::Camera => "No Camera",
-            Self::Microphone => "No Microphone",
+            Self::Camera => tr::main::device::no_camera(),
+            Self::Microphone => tr::main::device::no_microphone(),
         }
     }
 
@@ -615,10 +665,10 @@ impl DeviceMenu {
 
     fn empty_message(self, searching: bool) -> &'static str {
         match (self, searching) {
-            (Self::Camera, false) => "No cameras found",
-            (Self::Camera, true) => "No matching cameras",
-            (Self::Microphone, false) => "No microphones found",
-            (Self::Microphone, true) => "No matching microphones",
+            (Self::Camera, false) => tr::main::device::no_cameras(),
+            (Self::Camera, true) => tr::main::device::no_matching_cameras(),
+            (Self::Microphone, false) => tr::main::device::no_microphones(),
+            (Self::Microphone, true) => tr::main::device::no_matching_microphones(),
         }
     }
 }
@@ -657,26 +707,22 @@ impl LibraryKind {
 
     fn import_label(self) -> &'static str {
         match self {
-            Self::Recordings => "Import",
-            Self::Screenshots => "Import image",
+            Self::Recordings => tr::main::library::import_recordings(),
+            Self::Screenshots => tr::main::library::import_screenshots(),
         }
     }
 
     fn empty_title(self) -> &'static str {
         match self {
-            Self::Recordings => "No recordings yet",
-            Self::Screenshots => "No screenshots yet",
+            Self::Recordings => tr::main::library::no_recordings(),
+            Self::Screenshots => tr::main::library::no_screenshots(),
         }
     }
 
     fn empty_description(self) -> &'static str {
         match self {
-            Self::Recordings => {
-                "Your screen recordings will appear here. Start recording to get started!"
-            }
-            Self::Screenshots => {
-                "Your screenshots will appear here. Take a screenshot to get started!"
-            }
+            Self::Recordings => tr::main::library::recordings_description(),
+            Self::Screenshots => tr::main::library::screenshots_description(),
         }
     }
 
@@ -689,15 +735,15 @@ impl LibraryKind {
 
     fn view_all_label(self) -> &'static str {
         match self {
-            Self::Recordings => "View All Recordings",
-            Self::Screenshots => "View All Screenshots",
+            Self::Recordings => tr::main::library::view_all_recordings(),
+            Self::Screenshots => tr::main::library::view_all_screenshots(),
         }
     }
 
     fn no_match(self) -> &'static str {
         match self {
-            Self::Recordings => "No matching recordings",
-            Self::Screenshots => "No matching screenshots",
+            Self::Recordings => tr::main::library::no_matching_recordings(),
+            Self::Screenshots => tr::main::library::no_matching_screenshots(),
         }
     }
 }
@@ -755,6 +801,14 @@ impl RecordingStartPermit {
     }
 }
 
+/// Instant Mode's sign-in gate, shown here when the overlay's "Sign In To
+/// Use" is pressed: the overlays close so the browser is reachable, and they
+/// re-open for `kind` once the account is signed in.
+struct SignInPrompt {
+    kind: TargetType,
+    error: Option<String>,
+}
+
 struct MicrophoneWarning {
     config: recording::StartConfig,
     permit: RecordingStartPermit,
@@ -774,6 +828,7 @@ pub struct MainWindow {
     camera_id: Option<recording::DeviceOrModelID>,
     microphone: Option<MicrophoneOption>,
     microphone_level: Entity<ui::MicrophoneLevel>,
+    device_microphone_level: Entity<ui::MicrophoneLevel>,
     pending_device_restore: crate::store::RecordingInputSettings,
     device_restore_suspended: bool,
     device_format_target: Option<DeviceFormatTarget>,
@@ -804,6 +859,8 @@ pub struct MainWindow {
     checking_storage: bool,
     deep_link_start: Option<RecordingStartPermit>,
     microphone_warning: Option<MicrophoneWarning>,
+    sign_in_prompt: Option<SignInPrompt>,
+    copied_error: Option<String>,
     /// Header recordings / screenshots panel. Scanned only while that panel
     /// is open so a large library is not walked on every home paint.
     library: Option<LibraryItems>,
@@ -831,6 +888,8 @@ pub struct MainWindow {
     input_enumeration_gate: devices::InputEnumerationGate,
     /// `scheduleTargetListPrewarm` (`new-main/index.tsx:1897-1965`).
     prewarm_task: Option<gpui::Task<()>>,
+    keyboard_nav: bool,
+    _keyboard_nav: gpui::Subscription,
 }
 
 /// `createLicenseQuery` (`utils/queries.ts:257-273`): pro from the auth
@@ -872,6 +931,8 @@ impl MainWindow {
         cx.observe_window_activation(window, |this, window, cx| {
             if !window.is_window_active() {
                 this.clear_mode_hover();
+            } else {
+                MediaAccess::global(cx).update(cx, |access, cx| access.refresh(cx));
             }
             #[cfg(target_os = "windows")]
             if window.is_window_active() && !this.devices.displays.is_empty() {
@@ -899,9 +960,9 @@ impl MainWindow {
                             main.update(cx, |_, window, cx| {
                                 window.prompt(
                                     gpui::PromptLevel::Warning,
-                                    "Low storage",
+                                    tr::main::storage::title(),
                                     Some(&notice),
-                                    &[gpui::PromptButton::cancel("OK")],
+                                    &[gpui::PromptButton::cancel(tr::common::ok())],
                                     cx,
                                 )
                             })
@@ -920,11 +981,20 @@ impl MainWindow {
 
         // Track the app-scoped feeds: the camera bubble's close button
         // deselects the camera there, and this window's selection has to
-        // follow. Repaints are gated to what is actually visible -- the mic
-        // meter notifies at ~20Hz and would otherwise repaint the home view
-        // for a level bar only the microphone picker shows.
+        // follow. Repaints are gated to what is actually visible.
         let feeds = Feeds::global(cx);
-        let microphone_level = cx.new(|cx| ui::MicrophoneLevel::new(&feeds, window, cx));
+        let mic_level = feeds.read(cx).mic_level().clone();
+        let microphone_level = cx.new(|cx| {
+            ui::MicrophoneLevel::new(
+                ui::MicrophoneLevelKind::CaptureButton,
+                &mic_level,
+                window,
+                cx,
+            )
+        });
+        let device_microphone_level = cx.new(|cx| {
+            ui::MicrophoneLevel::new(ui::MicrophoneLevelKind::DeviceRow, &mic_level, window, cx)
+        });
         cx.observe(&feeds, |this: &mut Self, feeds, cx| {
             let feeds = feeds.read(cx);
             let camera_id = feeds.camera.as_ref().map(|camera| &camera.id);
@@ -981,6 +1051,64 @@ impl MainWindow {
         let search_input = cx.new(|cx| ui::TextInputState::single_line(window, cx));
         let search_events = cx.subscribe(&search_input, Self::on_search_event);
 
+        let media = MediaAccess::global(cx);
+        let mut media_allowed = (
+            media.read(cx).allowed(OSPermission::Camera),
+            media.read(cx).allowed(OSPermission::Microphone),
+        );
+        cx.observe(&media, move |this: &mut Self, media, cx| {
+            let allowed = (
+                media.read(cx).allowed(OSPermission::Camera),
+                media.read(cx).allowed(OSPermission::Microphone),
+            );
+            // A grant that lands after a device was picked (the prompt
+            // answered, or the switch flipped in System Settings) retries
+            // that device instead of leaving its failed start behind.
+            if allowed.0 && !media_allowed.0 && this.camera.is_some() {
+                let (camera, id) = (this.camera.clone(), this.camera_id.clone());
+                this.apply_camera_selection(camera, id, cx);
+            }
+            if allowed.1 && !media_allowed.1 && this.microphone.is_some() {
+                let microphone = this.microphone.clone();
+                this.apply_microphone_selection(microphone, cx);
+            }
+            media_allowed = allowed;
+            cx.notify();
+        })
+        .detach();
+
+        let sign_in = SignIn::global(cx);
+        cx.observe(&sign_in, |_, _, cx| cx.notify()).detach();
+        cx.subscribe(&sign_in, |this, _, event, cx| {
+            let SignInEvent::Finished { origin, outcome } = event else {
+                return;
+            };
+            let Some(prompt) = this.sign_in_prompt.as_mut() else {
+                return;
+            };
+            match outcome {
+                SignInOutcome::SignedIn => {
+                    let kind = prompt.kind;
+                    this.sign_in_prompt = None;
+                    let session = this.session.read(cx);
+                    if session.phase == Phase::Idle && session.editor_recording_target().is_none() {
+                        this.arm_overlay(kind, cx);
+                    }
+                }
+                SignInOutcome::Failed(error) if matches!(origin, SignInOrigin::Overlay(_)) => {
+                    prompt.error = Some(error.clone());
+                }
+                SignInOutcome::TimedOut if matches!(origin, SignInOrigin::Overlay(_)) => {
+                    prompt.error = Some(tr::main::sign_in::timed_out().into());
+                }
+                _ => {}
+            }
+            cx.notify();
+        })
+        .detach();
+
+        let keyboard_nav = ui::keyboard_nav::install(window, cx, Self::keyboard_nav_blocked);
+
         Self {
             theme,
             // `rawOptions.mode` -- the recording mode is a persisted setting,
@@ -997,6 +1125,7 @@ impl MainWindow {
             camera_id: None,
             microphone: None,
             microphone_level,
+            device_microphone_level,
             pending_device_restore: crate::store::RecordingInputSettings::load(),
             device_restore_suspended: false,
             device_format_target: None,
@@ -1005,7 +1134,7 @@ impl MainWindow {
             device_format_generation: 0,
             device_format_pending: None,
             device_format_notice: None,
-            system_audio: false,
+            system_audio: crate::store::recording_system_audio(),
             selected_display: None,
             selected_window: None,
             panel: None,
@@ -1017,6 +1146,8 @@ impl MainWindow {
             checking_storage: false,
             deep_link_start: None,
             microphone_warning: None,
+            sign_in_prompt: None,
+            copied_error: None,
             library: None,
             library_task: None,
             incomplete_recording: None,
@@ -1033,7 +1164,17 @@ impl MainWindow {
             input_poll_generation: 0,
             input_enumeration_gate: devices::InputEnumerationGate::default(),
             prewarm_task: None,
+            keyboard_nav: false,
+            _keyboard_nav: keyboard_nav,
         }
+    }
+
+    fn keyboard_nav_blocked(&self, cx: &gpui::App) -> bool {
+        self.session.read(cx).phase != Phase::Idle
+            || self.microphone_warning.is_some()
+            || self.sign_in_prompt.is_some()
+            || self.idle_error(cx).is_some()
+            || app_windows::clean_capture_pending(cx)
     }
 
     /// Kick off device enumeration.
@@ -1185,11 +1326,14 @@ impl MainWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        for image in self.thumbnails.retain_displays(&displays) {
+        let dropped = self.thumbnails.retain_displays(&displays);
+        let changed = self.devices.install_displays(displays) || !dropped.is_empty();
+        for image in dropped {
             let _ = window.drop_image(image);
         }
-        self.devices.displays = displays;
-        cx.notify();
+        if changed {
+            cx.notify();
+        }
     }
 
     fn install_windows(
@@ -1198,11 +1342,14 @@ impl MainWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        for image in self.thumbnails.retain_windows(&windows) {
+        let dropped = self.thumbnails.retain_windows(&windows);
+        let changed = self.devices.install_windows(windows) || !dropped.is_empty();
+        for image in dropped {
             let _ = window.drop_image(image);
         }
-        self.devices.windows = windows;
-        cx.notify();
+        if changed {
+            cx.notify();
+        }
     }
 
     /// Start one capture sweep, or return `None` because one is already in
@@ -1224,6 +1371,9 @@ impl MainWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Task<()>> {
+        if target_thumbnails::captures_paused() {
+            return None;
+        }
         match kind {
             TargetType::Display => {
                 if self.thumbnails.display_inflight() {
@@ -1266,9 +1416,13 @@ impl MainWindow {
                     // `setDisplayThumbnailsSignature` runs
                     // (`new-main/index.tsx:2617-2620`). Committing the
                     // signature at `Listed` time instead would mark a sweep
-                    // that never landed as up to date.
+                    // that never landed as up to date. Likewise a sweep that a
+                    // capture hang cut short: it stays stale so the picker
+                    // retries it once the pause lifts.
                     this.update(cx, |this, cx| {
-                        if let Some(signature) = swept {
+                        if let Some(signature) = swept
+                            && !target_thumbnails::captures_paused()
+                        {
                             this.thumbnails.set_display_signature(signature);
                         }
                         this.thumbnails.set_display_inflight(false);
@@ -1288,8 +1442,9 @@ impl MainWindow {
                 self.thumbnails.set_window_inflight(true);
 
                 let (events_tx, events) = flume::unbounded();
+                let current = self.thumbnails.captured_windows();
                 let capture = gpui_tokio::Tokio::spawn(cx, async move {
-                    target_thumbnails::capture_windows(events_tx).await;
+                    target_thumbnails::capture_windows(events_tx, current).await;
                 });
 
                 Some(cx.spawn_in(window, async move |this, cx| {
@@ -1313,7 +1468,9 @@ impl MainWindow {
                         }
                     }
                     this.update(cx, |this, cx| {
-                        if let Some(signature) = swept {
+                        if let Some(signature) = swept
+                            && !target_thumbnails::captures_paused()
+                        {
                             this.thumbnails.set_window_signature(signature);
                         }
                         this.thumbnails.set_window_inflight(false);
@@ -1509,11 +1666,12 @@ impl MainWindow {
                     id,
                     image,
                     app_icon,
+                    entry,
                 } => {
                     let icon = app_icon.map(|bytes| {
                         std::sync::Arc::new(gpui::Image::from_bytes(gpui::ImageFormat::Png, bytes))
                     });
-                    if let Some(old) = self.thumbnails.insert_window(&id, image, icon) {
+                    if let Some(old) = self.thumbnails.insert_window(&id, image, icon, entry) {
                         let _ = window.drop_image(old);
                     }
                 }
@@ -1557,6 +1715,11 @@ impl MainWindow {
                 this.incomplete_recording = incomplete.into_iter().next();
                 if this.incomplete_recording.is_none() {
                     this.recovery_error = None;
+                } else if std::env::var("CAP_GPUI_AUTO_RECOVER").is_ok_and(|value| value == "1") {
+                    // The crash harness presses Recover, since unprivileged
+                    // synthetic clicks are dropped (as for every
+                    // `CAP_GPUI_AUTO_*` hook).
+                    this.process_incomplete_recording(true, window, cx);
                 }
                 cx.notify();
                 window.refresh();
@@ -1580,9 +1743,9 @@ impl MainWindow {
         if !recover
             && !crate::platform::confirm_dialog(
                 "Cap",
-                "Are you sure you want to delete this recording?",
-                "Yes",
-                "No",
+                tr::main::delete_recording_confirm(),
+                tr::common::yes(),
+                tr::common::no(),
                 false,
             )
         {
@@ -1767,7 +1930,7 @@ impl MainWindow {
     /// The concrete capture target the current UI state describes, or `None`
     /// when starting makes no sense yet (no target mode, Window mode with no
     /// window picked, Area mode -- which is drawn on the overlay).
-    fn armed_target(&self) -> Option<ScreenCaptureTarget> {
+    pub(crate) fn armed_target(&self) -> Option<ScreenCaptureTarget> {
         match self.target? {
             TargetType::Display => {
                 // The Tauri flow preselects the primary display the moment the
@@ -1838,6 +2001,9 @@ impl MainWindow {
             self.set_microphone_selection(None, cx);
         }
         let required_window = auto_window_title();
+        // Pause and stop go to the session: on Linux the main window is not
+        // there while a window or Instant recording runs.
+        let session = self.session.clone();
 
         cx.spawn_in(window, async move |this, cx| {
             // Give enumeration and the first paint a moment; the recorder
@@ -1963,18 +2129,14 @@ impl MainWindow {
             }
 
             let third = std::time::Duration::from_secs(record_secs.div_ceil(3));
-            let toggle = |this: &gpui::WeakEntity<Self>, cx: &mut gpui::AsyncWindowContext| {
-                this.update_in(cx, |this, _, cx| {
-                    this.session
-                        .update(cx, |session, cx| session.toggle_pause(cx));
-                })
-                .ok();
+            let toggle = |cx: &gpui::AsyncApp| {
+                cx.update(|cx| session.update(cx, |session, cx| session.toggle_pause(cx)));
             };
             if pause_wiggle {
                 cx.background_executor().timer(third).await;
-                toggle(&this, cx);
+                toggle(cx);
                 cx.background_executor().timer(third).await;
-                toggle(&this, cx);
+                toggle(cx);
                 cx.background_executor().timer(third).await;
             } else {
                 cx.background_executor()
@@ -1982,10 +2144,8 @@ impl MainWindow {
                     .await;
             }
             tracing::info!("auto-record stop requested");
-            this.update_in(cx, |this, _, cx| {
-                this.session.update(cx, |session, cx| session.stop(cx));
-            })
-            .ok();
+            let app: &gpui::AsyncApp = cx;
+            app.update(|cx| session.update(cx, |session, cx| session.stop(cx)));
         })
         .detach();
     }
@@ -2095,9 +2255,20 @@ impl MainWindow {
                 None => return,
             }
         };
+        if mode == recording::RecordingMode::Instant && !crate::store::auth_snapshot().signed_in() {
+            let kind = match &target {
+                ScreenCaptureTarget::Display { .. } => TargetType::Display,
+                ScreenCaptureTarget::Window { .. } => TargetType::Window,
+                ScreenCaptureTarget::Area { .. } => TargetType::Area,
+                ScreenCaptureTarget::CameraOnly => TargetType::CameraOnly,
+            };
+            self.show_sign_in_prompt(kind, cx);
+            cx.defer(app_windows::show_main_window);
+            return;
+        }
         if matches!(target, ScreenCaptureTarget::CameraOnly) && self.camera.is_none() {
             self.session.update(cx, |session, cx| {
-                session.error = Some("Camera-only recording requires a selected camera.".into());
+                session.error = Some(tr::main::error::camera_only_needs_camera().into());
                 cx.notify();
             });
             if editor_flow {
@@ -2108,13 +2279,14 @@ impl MainWindow {
             return;
         }
 
-        let (camera_feed, mic_feed, input_readiness, device_settings) = {
+        let (camera_feed, mic_feed, mic_meter, input_readiness, device_settings) = {
             let feeds = Feeds::global(cx);
             feeds.update(cx, |feeds, cx| feeds.resume_camera_preview(cx));
             let feeds = feeds.read(cx);
             (
                 feeds.camera_actor(),
                 feeds.mic_actor(),
+                feeds.mic_meter(),
                 feeds.input_readiness(),
                 feeds.requested_device_settings(),
             )
@@ -2130,10 +2302,19 @@ impl MainWindow {
             excluded_windows,
             camera_feed,
             mic_feed,
+            mic_meter,
             #[cfg(target_os = "linux")]
             linux_instant_camera: None,
             start_gate: None,
         };
+
+        // `RecordingSettingsStore.target`: what the Start shortcuts fall back
+        // to when nothing is selected here.
+        if let Ok(value) = serde_json::to_value(&config.target)
+            && !crate::store::set_store_setting(crate::store::RECORDING_SETTINGS, "target", value)
+        {
+            tracing::warn!("saving the last recording target failed");
+        }
 
         self.start_recording_config(config, cx);
     }
@@ -2149,9 +2330,7 @@ impl MainWindow {
             || self.pending_device_restore.microphone_name.is_some()
         {
             self.session.update(cx, |session, cx| {
-                session.error = Some(
-                    "Recording devices are not ready. Open the recorder and try again.".into(),
-                );
+                session.error = Some(tr::main::error::devices_not_ready().into());
                 cx.notify();
             });
             return;
@@ -2266,9 +2445,7 @@ impl MainWindow {
                 serde_json::Value::Bool(false),
             )
         {
-            warning.error = Some(
-                "Could not save your preference. Try again or leave the box unchecked.".into(),
-            );
+            warning.error = Some(tr::main::mic_warning::save_failed().into());
             self.microphone_warning = Some(warning);
             cx.notify();
             return;
@@ -2301,16 +2478,20 @@ impl MainWindow {
         self.checking_storage = true;
         let main = cx.global::<app_windows::AppWindows>().main;
         cx.spawn(async move |this, cx| {
-            let result = cx.background_executor().spawn(async {
-                recording::available_recording_storage()
-            }).await;
-            if !this.update(cx, |this, cx| {
-                if !this.recording_start_is_current(&permit, cx) {
-                    this.finish_recording_start(&permit);
-                    return false;
-                }
-                true
-            }).unwrap_or(false) {
+            let result = cx
+                .background_executor()
+                .spawn(async { recording::available_recording_storage() })
+                .await;
+            if !this
+                .update(cx, |this, cx| {
+                    if !this.recording_start_is_current(&permit, cx) {
+                        this.finish_recording_start(&permit);
+                        return false;
+                    }
+                    true
+                })
+                .unwrap_or(false)
+            {
                 return;
             }
             let storage = match result {
@@ -2323,59 +2504,76 @@ impl MainWindow {
                         }
                         this.finish_recording_start(&permit);
                         this.session.update(cx, |session, cx| {
-                            session.error = Some(format!("Could not check recording storage: {error}"));
+                            session.error = Some(tr::main::storage::check_failed(&error));
                             cx.notify();
                         });
                         cx.defer(app_windows::show_main_window);
                         if this.session.read(cx).editor_recording_target().is_some() {
                             cx.defer(app_windows::abort_editor_recording_flow);
                         }
-                    }).ok();
+                    })
+                    .ok();
                     return;
                 }
             };
             let can_start = storage.status() != cap_utils::disk_space::DiskSpaceStatus::Exhausted;
-            if storage.status() == cap_utils::disk_space::DiskSpaceStatus::Ok || acknowledged && can_start {
+            if storage.status() == cap_utils::disk_space::DiskSpaceStatus::Ok
+                || acknowledged && can_start
+            {
                 this.update(cx, |this, cx| {
                     if !this.recording_start_is_current(&permit, cx) {
                         this.finish_recording_start(&permit);
                         return;
                     }
                     cx.defer(move |cx| {
-                        let allowed = main.update(cx, |this, _, cx| {
-                            let allowed = this.recording_start_is_current(&permit, cx);
-                            this.finish_deep_link_start(&permit);
-                            allowed
-                        }).unwrap_or(false);
+                        let allowed = main
+                            .update(cx, |this, _, cx| {
+                                let allowed = this.recording_start_is_current(&permit, cx);
+                                this.finish_deep_link_start(&permit);
+                                allowed
+                            })
+                            .unwrap_or(false);
                         if !allowed {
                             return;
                         }
                         app_windows::begin_recording(config, cx);
                     });
-                }).ok();
+                })
+                .ok();
                 return;
             }
-            let available = storage.available_bytes as f64 / 1_073_741_824.0;
+            let available = format!("{:.2}", storage.available_bytes as f64 / 1_073_741_824.0);
             let detail = if can_start {
-                format!("Only {available:.2} GB is available on your recording drive. Cap will stop automatically if storage gets too low, preserving your recording.")
+                tr::main::storage::can_start(&available)
             } else {
-                format!("Only {available:.2} GB is available on your recording drive. Free up space so at least 512 MB is available before recording.")
+                tr::main::storage::blocked(&available)
             };
             let buttons = if can_start {
-                vec![gpui::PromptButton::ok("Record anyway"), gpui::PromptButton::cancel("Go back")]
+                vec![
+                    gpui::PromptButton::ok(tr::main::storage::record_anyway()),
+                    gpui::PromptButton::cancel(tr::common::go_back()),
+                ]
             } else {
-                vec![gpui::PromptButton::cancel("OK")]
+                vec![gpui::PromptButton::cancel(tr::common::ok())]
             };
             let receiver = cx.update(|cx| {
                 if RecordingSession::global(cx).read(cx).phase != Phase::Idle
                     || !permit.is_current(cx)
                 {
-                    return Err(anyhow::anyhow!("Recording preparation is no longer current."));
+                    return Err(anyhow::anyhow!(
+                        "Recording preparation is no longer current."
+                    ));
                 }
                 app_windows::show_main_window(cx);
                 cx.activate(true);
                 main.update(cx, |_, window, cx| {
-                    window.prompt(gpui::PromptLevel::Warning, "Low storage", Some(&detail), &buttons, cx)
+                    window.prompt(
+                        gpui::PromptLevel::Warning,
+                        tr::main::storage::title(),
+                        Some(&detail),
+                        &buttons,
+                        cx,
+                    )
                 })
             });
             let confirmed = match receiver {
@@ -2396,8 +2594,10 @@ impl MainWindow {
                     }
                 }
                 cx.notify();
-            }).ok();
-        }).detach();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// `await commands.focusWindow(target.id)` at the end of
@@ -2486,6 +2686,28 @@ impl MainWindow {
     /// Select (or clear) the camera -- the same wiring as the camera panel's
     /// rows: this window's state plus the app-scoped feed, which opens or
     /// closes the preview bubble.
+    fn access_pill(&self, permission: OSPermission, cx: &gpui::App) -> Option<PillState> {
+        let access = MediaAccess::global(cx);
+        let access = access.read(cx);
+        if access.allowed(permission) {
+            return None;
+        }
+        Some(PillState::Access(if access.requesting(permission) {
+            tr::main::device::pill::asking()
+        } else if access.status(permission) == crate::permissions::OSPermissionStatus::Denied {
+            tr::main::device::pill::allow_in_settings()
+        } else {
+            tr::main::device::pill::allow()
+        }))
+    }
+
+    fn ensure_media_access(&mut self, permission: OSPermission, cx: &mut Context<Self>) {
+        let access = MediaAccess::global(cx);
+        if !access.read(cx).allowed(permission) {
+            access.update(cx, |access, cx| access.request(permission, cx));
+        }
+    }
+
     pub fn set_camera_selection(&mut self, camera: Option<CameraOption>, cx: &mut Context<Self>) {
         let id = camera.as_ref().map(|camera| {
             camera
@@ -2556,10 +2778,14 @@ impl MainWindow {
         cx.notify();
     }
 
-    /// Toggle system audio capture -- the system-audio row is a plain flag.
+    /// Toggle system audio capture -- the system-audio row is a plain flag,
+    /// persisted as `recording_settings.systemAudio` like the Tauri app did.
     pub fn set_system_audio(&mut self, enabled: bool, cx: &mut Context<Self>) {
         if self.system_audio != enabled {
             self.system_audio = enabled;
+            if !crate::store::set_recording_system_audio(enabled) {
+                tracing::warn!("Could not save the system audio setting");
+            }
             cx.notify();
         }
     }
@@ -2568,12 +2794,35 @@ impl MainWindow {
 impl Render for MainWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_appearance(window, cx);
+        if self.keyboard_nav_blocked(cx) {
+            ui::keyboard_nav::leave(window, cx);
+        }
+        self.keyboard_nav = ui::keyboard_nav::active(window, cx);
         let theme = self.theme;
         let meter_active = self.panel.is_none()
             && self.microphone.is_some()
             && self.session.read(cx).phase == Phase::Idle;
         self.microphone_level.update(cx, |meter, cx| {
-            meter.configure(meter_active, theme.blue_9.into(), cx);
+            meter.configure(
+                meter_active,
+                theme.blue_9.into(),
+                gpui::transparent_black(),
+                cx,
+            );
+        });
+        let device_meter_active = self.microphone.is_some()
+            && matches!(self.panel, Some(Panel::Device(DeviceMenu::Microphone)));
+        self.device_microphone_level.update(cx, |meter, cx| {
+            meter.configure(
+                device_meter_active,
+                theme.blue_500.into(),
+                if theme.is_dark() {
+                    gpui::hsla(0., 0., 1., 0.1)
+                } else {
+                    gpui::hsla(0., 0., 0., 0.07)
+                },
+                cx,
+            );
         });
 
         div()
@@ -2593,6 +2842,7 @@ impl Render for MainWindow {
                 this.border_1().border_color(color)
             })
             .font_family(crate::theme::UI_FONT)
+            .locale_font()
             // `body { font-weight: 500 }` (`ui-solid/src/main.css:189-192`). The shipping app renders
             // *everything* Medium unless a `font-*` class says otherwise, so
             // Medium -- not Regular -- is the inherited default at every root.
@@ -2622,11 +2872,20 @@ impl Render for MainWindow {
             .when(self.microphone_warning.is_some(), |this| {
                 this.child(self.render_microphone_warning(cx))
             })
+            .when(self.sign_in_prompt.is_some(), |this| {
+                this.child(self.render_sign_in_prompt(cx))
+            })
+            // A failed start has nowhere else to surface: the overlays are
+            // gone by then and the bar closed itself.
+            .when_some(self.idle_error(cx), |this, error| {
+                this.child(self.render_idle_error(error, cx))
+            })
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
                 if event.keystroke.key == "escape" && this.dismiss_main(cx) {
                     cx.stop_propagation();
                 }
             }))
+            .child(ui::keyboard_nav::pointer_watcher())
     }
 }
 
@@ -2668,13 +2927,18 @@ impl MainWindow {
                     .flex()
                     .flex_col()
                     .gap(px(12.))
-                    .child(div().text_size(px(15.)).text_color(theme.gray_12).child("No microphone detected"))
+                    .child(
+                        div()
+                            .text_size(px(15.))
+                            .text_color(theme.gray_12)
+                            .child(tr::main::mic_warning::title()),
+                    )
                     .child(
                         div()
                             .text_size(px(12.))
                             .line_height(px(18.))
                             .text_color(theme.gray_11)
-                            .child("This recording will not include your voice. Select a microphone, or continue without one."),
+                            .child(tr::main::mic_warning::body()),
                     )
                     .child(
                         div()
@@ -2691,9 +2955,21 @@ impl MainWindow {
                                     .border_1()
                                     .border_color(if checked { theme.blue_9 } else { theme.gray_7 })
                                     .bg(if checked { theme.blue_9 } else { theme.gray_2 })
-                                    .when(checked, |this| this.child(svg().path("icons/check.svg").size(px(14.)).text_color(rgb(0xffffff)))),
+                                    .when(checked, |this| {
+                                        this.child(
+                                            svg()
+                                                .path("icons/check.svg")
+                                                .size(px(14.))
+                                                .text_color(rgb(0xffffff)),
+                                        )
+                                    }),
                             )
-                            .child(div().text_size(px(12.)).text_color(theme.gray_11).child("Don't show again"))
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .text_color(theme.gray_11)
+                                    .child(tr::main::mic_warning::dont_show_again()),
+                            )
                             .on_click(cx.listener(|this, _, _, cx| {
                                 if let Some(warning) = &mut this.microphone_warning {
                                     warning.dont_show_again = !warning.dont_show_again;
@@ -2702,24 +2978,326 @@ impl MainWindow {
                                 cx.notify();
                             })),
                     )
-                    .when_some(error, |this, error| this.child(div().text_size(px(11.)).text_color(theme.red_9).child(error)))
+                    .when_some(error, |this, error| {
+                        this.child(
+                            div()
+                                .text_size(px(11.))
+                                .text_color(theme.red_9)
+                                .child(error),
+                        )
+                    })
                     .child(
                         div()
                             .flex()
                             .flex_col()
                             .gap(px(8.))
                             .child(
-                                ui::Button::plain(&theme, "confirm-without-microphone", ui::ButtonVariant::Blue, ui::ButtonSize::Lg)
-                                    .label("Record without microphone")
-                                    .on_click(cx.listener(|this, _, _, cx| this.confirm_microphone_warning(cx))),
+                                ui::Button::plain(
+                                    &theme,
+                                    "confirm-without-microphone",
+                                    ui::ButtonVariant::Blue,
+                                    ui::ButtonSize::Lg,
+                                )
+                                .label(tr::main::mic_warning::record_without())
+                                .on_click(
+                                    cx.listener(|this, _, _, cx| {
+                                        this.confirm_microphone_warning(cx)
+                                    }),
+                                ),
                             )
                             .child(
-                                ui::Button::plain(&theme, "cancel-without-microphone", ui::ButtonVariant::Gray, ui::ButtonSize::Lg)
-                                    .label("Go back")
-                                    .on_click(cx.listener(|this, _, _, cx| this.dismiss_microphone_warning(cx))),
+                                ui::Button::plain(
+                                    &theme,
+                                    "cancel-without-microphone",
+                                    ui::ButtonVariant::Gray,
+                                    ui::ButtonSize::Lg,
+                                )
+                                .label(tr::common::go_back())
+                                .on_click(
+                                    cx.listener(|this, _, _, cx| {
+                                        this.dismiss_microphone_warning(cx)
+                                    }),
+                                ),
                             ),
                     ),
             )
+    }
+
+    pub fn show_sign_in_prompt(&mut self, kind: TargetType, cx: &mut Context<Self>) {
+        self.clear_mode_hover();
+        self.sign_in_prompt = Some(SignInPrompt { kind, error: None });
+        cx.notify();
+    }
+
+    fn dismiss_sign_in_prompt(&mut self, cx: &mut Context<Self>) {
+        if self.sign_in_prompt.take().is_none() {
+            return;
+        }
+        // Only the attempt this prompt started; one from Settings or an
+        // editor keeps running.
+        let sign_in = SignIn::global(cx);
+        if matches!(
+            sign_in.read(cx).pending_origin(),
+            Some(SignInOrigin::Overlay(_))
+        ) {
+            sign_in.update(cx, |sign_in, cx| sign_in.cancel(cx));
+        }
+        cx.notify();
+    }
+
+    /// The dialog frame the sign-in prompt and the error card share: a dimmed
+    /// backdrop over the home view (clicking it dismisses), and a raised card
+    /// with an icon badge, a title and a close button.
+    fn render_modal(
+        &self,
+        id: &'static str,
+        badge: (&'static str, gpui::Rgba, gpui::Rgba),
+        title: &'static str,
+        on_dismiss: fn(&mut Self, &mut Context<Self>),
+        body: gpui::AnyElement,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let theme = self.theme;
+        let (icon, badge_bg, badge_fg) = badge;
+        div()
+            .id(id)
+            .absolute()
+            .inset_0()
+            .when(cfg!(target_os = "windows"), |overlay| {
+                overlay.top(px(HEADER_HEIGHT))
+            })
+            .when(!cfg!(target_os = "windows"), |overlay| {
+                overlay.rounded(px(16.))
+            })
+            .occlude()
+            .flex()
+            .items_center()
+            .justify_center()
+            .p(px(14.))
+            .bg(gpui::hsla(
+                0.,
+                0.,
+                0.,
+                if theme.is_dark() { 0.55 } else { 0.32 },
+            ))
+            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(cx.listener(move |this, _, _, cx| on_dismiss(this, cx)))
+            .child(
+                div()
+                    .id("modal-card")
+                    .relative()
+                    .w_full()
+                    .rounded(px(14.))
+                    .border_1()
+                    .border_color(theme.body_border(6))
+                    .bg(theme.gray_1)
+                    .shadow_lg()
+                    .p(px(16.))
+                    .flex()
+                    .flex_col()
+                    .gap(px(14.))
+                    .on_click(|_, _, cx| cx.stop_propagation())
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(10.))
+                            .pr(px(24.))
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_shrink_0()
+                                    .items_center()
+                                    .justify_center()
+                                    .size(px(36.))
+                                    .rounded_full()
+                                    .bg(badge_bg)
+                                    .child(svg().path(icon).size(px(18.)).text_color(badge_fg)),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(15.))
+                                    .line_height(px(20.))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(theme.gray_12)
+                                    .child(title),
+                            ),
+                    )
+                    .child(body)
+                    .child(
+                        div()
+                            .id("modal-close")
+                            .absolute()
+                            .top(px(10.))
+                            .right(px(10.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .size(px(24.))
+                            .rounded_full()
+                            .cursor_pointer()
+                            .hover(|style| style.bg(theme.gray_3))
+                            .tooltip(move |_, cx| {
+                                ui::Tooltip::new(&theme, tr::common::close()).view(cx)
+                            })
+                            .child(
+                                svg()
+                                    .path("icons/x.svg")
+                                    .size(px(12.))
+                                    .text_color(theme.gray_10),
+                            )
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                cx.stop_propagation();
+                                on_dismiss(this, cx);
+                            })),
+                    ),
+            )
+    }
+
+    fn render_sign_in_prompt(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        let pending = SignIn::global(cx).read(cx).is_pending();
+        let error = self
+            .sign_in_prompt
+            .as_ref()
+            .and_then(|prompt| prompt.error.clone())
+            .filter(|_| !pending);
+
+        let message = if pending {
+            tr::main::sign_in::pending_message()
+        } else {
+            tr::main::sign_in::message()
+        };
+        let primary = if pending {
+            ui::Button::plain(
+                &theme,
+                "sign-in-prompt-reopen",
+                ui::ButtonVariant::Blue,
+                ui::ButtonSize::Lg,
+            )
+            .label(tr::main::sign_in::open_browser_again())
+            .full_width()
+            .on_click(cx.listener(|_, _, _, cx| {
+                SignIn::global(cx).update(cx, |sign_in, cx| sign_in.reopen(cx));
+            }))
+        } else {
+            ui::Button::plain(
+                &theme,
+                "sign-in-prompt-sign-in",
+                ui::ButtonVariant::Blue,
+                ui::ButtonSize::Lg,
+            )
+            .icon("icons/user-round.svg")
+            .label(tr::main::sign_in::sign_in())
+            .full_width()
+            .on_click(cx.listener(|this, _, _, cx| {
+                let Some(prompt) = this.sign_in_prompt.as_mut() else {
+                    return;
+                };
+                prompt.error = None;
+                let origin = SignInOrigin::Overlay(prompt.kind);
+                SignIn::global(cx).update(cx, |sign_in, cx| sign_in.start(origin, cx));
+                cx.notify();
+            }))
+        };
+        let secondary = if pending {
+            div().child(
+                ui::Button::plain(
+                    &theme,
+                    "sign-in-prompt-cancel",
+                    ui::ButtonVariant::Gray,
+                    ui::ButtonSize::Lg,
+                )
+                .label(tr::common::cancel())
+                .full_width()
+                .on_click(cx.listener(|_, _, _, cx| {
+                    SignIn::global(cx).update(cx, |sign_in, cx| sign_in.cancel(cx));
+                })),
+            )
+        } else {
+            div()
+                .flex()
+                .gap(px(8.))
+                .child(
+                    div().flex_1().child(
+                        ui::Button::plain(
+                            &theme,
+                            "sign-in-prompt-studio",
+                            ui::ButtonVariant::Gray,
+                            ui::ButtonSize::Lg,
+                        )
+                        .label(tr::main::sign_in::use_studio())
+                        .full_width()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            let Some(prompt) = this.sign_in_prompt.take() else {
+                                return;
+                            };
+                            this.set_mode(Mode::Studio, cx);
+                            this.arm_overlay(prompt.kind, cx);
+                        })),
+                    ),
+                )
+                .child(
+                    div().flex_1().child(
+                        ui::Button::plain(
+                            &theme,
+                            "sign-in-prompt-dismiss",
+                            ui::ButtonVariant::Gray,
+                            ui::ButtonSize::Lg,
+                        )
+                        .label(tr::main::sign_in::not_now())
+                        .full_width()
+                        .on_click(cx.listener(|this, _, _, cx| this.dismiss_sign_in_prompt(cx))),
+                    ),
+                )
+        };
+
+        let body = div()
+            .flex()
+            .flex_col()
+            .gap(px(14.))
+            .child(
+                div()
+                    .text_size(px(12.5))
+                    .line_height(px(19.))
+                    .text_color(theme.gray_11)
+                    .child(message),
+            )
+            .when_some(error, |this, error| {
+                this.child(
+                    div()
+                        .rounded(px(8.))
+                        .bg(theme.red_3)
+                        .px(px(10.))
+                        .py(px(7.))
+                        .text_size(px(12.))
+                        .line_height(px(16.))
+                        .text_color(theme.red_11)
+                        .child(error),
+                )
+            })
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.))
+                    .child(primary)
+                    .child(secondary),
+            )
+            .into_any_element();
+
+        self.render_modal(
+            "sign-in-prompt",
+            ("icons/instant.svg", theme.blue_3, theme.blue_9),
+            if pending {
+                tr::main::sign_in::waiting()
+            } else {
+                tr::main::sign_in::title()
+            },
+            Self::dismiss_sign_in_prompt,
+            body,
+            cx,
+        )
     }
 
     fn render_clean_capture_preflight(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -2733,7 +3311,11 @@ impl MainWindow {
             .justify_center()
             .gap(px(16.))
             .p(px(24.))
-            .child(div().text_size(px(18.)).child("Keep your capture clean"))
+            .child(
+                div()
+                    .text_size(px(18.))
+                    .child(tr::main::clean_capture::title()),
+            )
             .child(
                 div()
                     .text_size(px(14.))
@@ -2751,7 +3333,7 @@ impl MainWindow {
                     .p(px(12.))
                     .bg(theme.gray_3)
                     .cursor_pointer()
-                    .child("Cancel")
+                    .child(tr::common::cancel())
                     .on_click(
                         cx.listener(|_, _, _, cx| cx.defer(app_windows::cancel_clean_capture)),
                     ),
@@ -2766,25 +3348,7 @@ impl MainWindow {
         let theme = self.theme;
         let pending = self.recovery_pending;
         let duration = recording.estimated_duration_secs.round() as u64;
-        let duration_label = if duration == 0 {
-            String::new()
-        } else if duration < 60 {
-            format!(" · ~{duration}s")
-        } else if duration.is_multiple_of(60) {
-            format!(" · ~{}m", duration / 60)
-        } else {
-            format!(" · ~{}m {}s", duration / 60, duration % 60)
-        };
-        let segments = format!(
-            "{} segment{}{}",
-            recording.segment_count,
-            if recording.segment_count == 1 {
-                ""
-            } else {
-                "s"
-            },
-            duration_label
-        );
+        let segments = recovery_segments_label(recording.segment_count as usize, duration);
 
         div()
             .absolute()
@@ -2814,7 +3378,7 @@ impl MainWindow {
                                     .text_size(px(10.))
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_color(theme.red_11)
-                                    .child("Incomplete Recording"),
+                                    .child(tr::main::recovery::title()),
                             )
                             .child(
                                 div()
@@ -2853,7 +3417,11 @@ impl MainWindow {
                                     ui::ButtonVariant::Primary,
                                     ui::ButtonSize::Xs,
                                 )
-                                .label(if pending { "..." } else { "Recover" })
+                                .label(if pending {
+                                    "..."
+                                } else {
+                                    tr::main::recovery::recover()
+                                })
                                 .disabled(pending)
                                 .on_click(cx.listener(
                                     |this, _, window, cx| {
@@ -2868,7 +3436,7 @@ impl MainWindow {
                                     ui::ButtonVariant::Gray,
                                     ui::ButtonSize::Xs,
                                 )
-                                .label("Discard")
+                                .label(tr::main::recovery::discard())
                                 .disabled(pending)
                                 .on_click(cx.listener(
                                     |this, _, window, cx| {
@@ -3046,17 +3614,18 @@ impl MainWindow {
     /// 8px from the window edges (`mx-2`).
     fn render_header_actions(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
+        let keyboard_nav = self.keyboard_nav;
 
         // `IconButton::header`: a 20px hit box with no fill, `text-gray-11`
         // going to `text-gray-12` on hover.
         let icon_button = |id: &'static str, path: &'static str, size: f32| {
             let label = match id {
-                "help" => "Help & Tour",
-                "settings" => "Settings",
-                "screenshots" => "Screenshots",
-                "recordings" => "Recordings",
-                "teleprompter" => "Teleprompter",
-                "changelog" => "Changelog",
+                "help" => tr::main::header::help(),
+                "settings" => tr::main::header::settings(),
+                "screenshots" => tr::main::header::screenshots(),
+                "recordings" => tr::main::header::recordings(),
+                "teleprompter" => tr::main::header::teleprompter(),
+                "changelog" => tr::main::header::changelog(),
                 _ => unreachable!(),
             };
             div()
@@ -3064,6 +3633,9 @@ impl MainWindow {
                 .group(id)
                 .when(cfg!(target_os = "windows"), |this| this.occlude())
                 .tab_index(0)
+                .when(keyboard_nav, ui::keyboard_nav::ring)
+                .role(gpui::Role::Button)
+                .aria_label(label)
                 .flex()
                 .items_center()
                 .justify_center()
@@ -3173,61 +3745,103 @@ impl MainWindow {
         actions
     }
 
-    fn render_idle_error(&self, error: String, cx: &mut Context<Self>) -> impl IntoElement {
-        let copy_error = error.clone();
-        let shown_error = error.clone();
+    fn idle_error(&self, cx: &gpui::App) -> Option<String> {
+        let session = self.session.read(cx);
+        session
+            .error
+            .clone()
+            .filter(|_| session.phase == Phase::Idle)
+    }
 
-        div()
-            .id("recording-error-panel")
+    fn dismiss_idle_error(&mut self, cx: &mut Context<Self>) {
+        let Some(shown) = self.idle_error(cx) else {
+            return;
+        };
+        self.copied_error = None;
+        self.session.update(cx, |session, cx| {
+            if clear_shown_idle_error(session.phase, &mut session.error, &shown) {
+                cx.notify();
+            }
+        });
+    }
+
+    fn render_idle_error(&self, error: String, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        let copied = self.copied_error.as_deref() == Some(error.as_str());
+        let copy_error = error.clone();
+
+        let body = div()
             .flex()
             .flex_col()
-            .flex_shrink_0()
-            .min_w_0()
-            .max_h(px(72.))
-            .gap(px(4.))
-            .overflow_hidden()
-            .child(recording_error_text(error).text_color(self.theme.red_9))
+            .gap(px(14.))
+            .child(
+                recording_error_text(error)
+                    .rounded(px(8.))
+                    .bg(theme.gray_3)
+                    .px(px(10.))
+                    .py(px(8.))
+                    .text_size(px(12.5))
+                    .line_height(px(18.))
+                    .text_color(theme.gray_12),
+            )
             .child(
                 div()
                     .flex()
-                    .flex_shrink_0()
-                    .justify_end()
-                    .gap(px(6.))
+                    .gap(px(8.))
                     .child(
-                        ui::Button::body(
-                            &self.theme,
-                            "copy-recording-error",
-                            ui::ButtonVariant::Gray,
-                            ui::ButtonSize::Xs,
-                        )
-                        .label("Copy error")
-                        .on_click(cx.listener(move |_, _, _, cx| {
-                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(
-                                copy_error.clone(),
-                            ));
-                        })),
+                        div().flex_1().child(
+                            ui::Button::plain(
+                                &theme,
+                                "copy-recording-error",
+                                ui::ButtonVariant::Gray,
+                                ui::ButtonSize::Lg,
+                            )
+                            .icon(if copied {
+                                "icons/check.svg"
+                            } else {
+                                "icons/copy.svg"
+                            })
+                            .label(if copied {
+                                tr::common::copied()
+                            } else {
+                                tr::main::error::copy()
+                            })
+                            .full_width()
+                            .on_click(cx.listener(
+                                move |this, _, _, cx| {
+                                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                        copy_error.clone(),
+                                    ));
+                                    this.copied_error = Some(copy_error.clone());
+                                    cx.notify();
+                                },
+                            )),
+                        ),
                     )
                     .child(
-                        ui::Button::body(
-                            &self.theme,
-                            "dismiss-recording-error",
-                            ui::ButtonVariant::Gray,
-                            ui::ButtonSize::Xs,
-                        )
-                        .label("Dismiss")
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.session.update(cx, |session, cx| {
-                                if clear_shown_idle_error(
-                                    session.phase,
-                                    &mut session.error,
-                                    &shown_error,
-                                ) {
-                                    cx.notify();
-                                }
-                            });
-                        })),
+                        div().flex_1().child(
+                            ui::Button::plain(
+                                &theme,
+                                "dismiss-recording-error",
+                                ui::ButtonVariant::Blue,
+                                ui::ButtonSize::Lg,
+                            )
+                            .label(tr::common::dismiss())
+                            .full_width()
+                            .on_click(cx.listener(|this, _, _, cx| this.dismiss_idle_error(cx))),
+                        ),
                     ),
             )
+            .into_any_element();
+
+        self.render_modal(
+            "recording-error-panel",
+            ("icons/triangle-alert.svg", theme.red_3, theme.red_9),
+            tr::main::error::title(),
+            Self::dismiss_idle_error,
+            body,
+            cx,
+        )
     }
 
     /// Page root: `px-[13px] gap-2 pb-[8px]`.
@@ -3248,32 +3862,20 @@ impl MainWindow {
         // the full body, exactly as `!activeMenu() && ...` does in index.tsx.
         match self.panel {
             Some(panel) => root.child(self.render_panel(panel, cx)),
-            None => root
-                .child(self.render_logo_row(cx))
-                .child(
-                    div()
-                        .id("home-scroll")
-                        .flex()
-                        .flex_col()
-                        .flex_1()
-                        .min_h_0()
-                        .w_full()
-                        .pb(px(4.))
-                        .gap(px(8.))
-                        .overflow_y_scroll()
-                        .child(self.render_targets(cx))
-                        .child(self.render_base_controls(cx)),
-                )
-                // A failed start has nowhere else to surface: the overlays are
-                // gone by then and the bar closed itself.
-                .when_some(
-                    self.session
-                        .read(cx)
-                        .error
-                        .clone()
-                        .filter(|_| self.session.read(cx).phase == Phase::Idle),
-                    |this, error| this.child(self.render_idle_error(error, cx)),
-                ),
+            None => root.child(self.render_logo_row(cx)).child(
+                div()
+                    .id("home-scroll")
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h_0()
+                    .w_full()
+                    .pb(px(4.))
+                    .gap(px(8.))
+                    .overflow_y_scroll()
+                    .child(self.render_targets(cx))
+                    .child(self.render_base_controls(cx)),
+            ),
         }
     }
 
@@ -3316,9 +3918,9 @@ impl MainWindow {
             .when_some(countdown, |this, remaining| {
                 this.child(div().mb(px(16.)).text_size(px(18.)).text_center().child(
                     if remaining == 0 {
-                        "Starting...".to_string()
+                        tr::main::recording::starting().to_string()
                     } else {
-                        format!("Recording starts in {remaining}")
+                        tr::main::recording::starts_in(remaining)
                     },
                 ))
             })
@@ -3341,7 +3943,7 @@ impl MainWindow {
                         .flex_col()
                         .gap(px(8.))
                         .text_size(px(12.))
-                        .child("Recording paused. Cap will hide before resuming.")
+                        .child(tr::main::recording::paused_notice())
                         .child(
                             div()
                                 .id("resume-clean-recording")
@@ -3354,7 +3956,7 @@ impl MainWindow {
                                 .border_1()
                                 .border_color(theme.gray_5)
                                 .bg(theme.gray_3)
-                                .child("Resume")
+                                .child(tr::main::recording::resume())
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     #[cfg(target_os = "linux")]
                                     {
@@ -3407,10 +4009,10 @@ impl MainWindow {
                             .text_color(gpui::white()),
                     )
                     .child(match phase {
-                        Phase::Starting if countdown.is_some() => "Cancel Recording",
-                        Phase::Starting => "Starting...",
-                        Phase::Stopping => "Stopping...",
-                        _ => "Stop Recording",
+                        Phase::Starting if countdown.is_some() => tr::main::recording::cancel(),
+                        Phase::Starting => tr::main::recording::starting(),
+                        Phase::Stopping => tr::main::recording::stopping(),
+                        _ => tr::main::recording::stop(),
                     }),
             )
     }
@@ -3430,7 +4032,7 @@ impl MainWindow {
                 .text_size(px(12.))
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(theme.gray_11)
-                .child("Recording Modes")
+                .child(tr::main::mode::info::title())
                 .into_any_element(),
             Panel::Library(kind) => self.render_library_header(kind, cx).into_any_element(),
             Panel::Device(_) if self.device_format_target.is_some() => div()
@@ -3440,7 +4042,7 @@ impl MainWindow {
                 .text_size(px(12.))
                 .text_color(theme.gray_11)
                 .child(match self.device_format_target.as_ref().unwrap() {
-                    DeviceFormatTarget::Camera(camera) => camera.label.clone(),
+                    DeviceFormatTarget::Camera(camera) => camera_label(&camera.label),
                     DeviceFormatTarget::Microphone(name) => name.clone(),
                 })
                 .into_any_element(),
@@ -3465,6 +4067,9 @@ impl MainWindow {
                     .child(
                         div()
                             .id("panel-back")
+                            .when(self.keyboard_nav, ui::keyboard_nav::stop)
+                            .role(gpui::Role::Button)
+                            .aria_label("Back")
                             .flex()
                             .flex_row()
                             .items_center()
@@ -3485,7 +4090,7 @@ impl MainWindow {
                                 div()
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_color(theme.gray_12)
-                                    .child("Back"),
+                                    .child(tr::common::back()),
                             )
                             .hover(move |style| style.bg(glass_hover(theme)))
                             .active(move |style| style.bg(glass_press(theme)))
@@ -3566,6 +4171,10 @@ impl MainWindow {
     fn dismiss_main(&mut self, cx: &mut Context<Self>) -> bool {
         if self.microphone_warning.is_some() {
             self.dismiss_microphone_warning(cx);
+        } else if self.sign_in_prompt.is_some() {
+            self.dismiss_sign_in_prompt(cx);
+        } else if self.idle_error(cx).is_some() {
+            self.dismiss_idle_error(cx);
         } else if self.mode_hover.visible.is_some() {
             self.clear_mode_hover();
             cx.notify();
@@ -3628,7 +4237,7 @@ impl MainWindow {
     /// know, which is that Escape clears the filter before it closes the panel.
     fn render_search_field(&self, cx: &mut Context<Self>) -> gpui::Div {
         self.search_input
-            .update(cx, |input, _| input.set_placeholder("Search"));
+            .update(cx, |input, _| input.set_placeholder(tr::common::search()));
 
         div().flex().flex_1().min_w_0().child(ui::TextInput::search(
             &self.theme,
@@ -3686,13 +4295,13 @@ impl MainWindow {
                 .spawn(async move {
                     match kind {
                         LibraryKind::Recordings => {
-                            let mut items = library::list_recordings();
-                            items.truncate(library::LIBRARY_PANEL_LIMIT);
+                            let items =
+                                library::list_recordings_limited(library::LIBRARY_PANEL_LIMIT);
                             (Some(items), None)
                         }
                         LibraryKind::Screenshots => {
-                            let mut items = library::list_screenshots();
-                            items.truncate(library::LIBRARY_PANEL_LIMIT);
+                            let items =
+                                library::list_screenshots_limited(library::LIBRARY_PANEL_LIMIT);
                             (None, Some(items))
                         }
                     }
@@ -3709,15 +4318,19 @@ impl MainWindow {
             let (_decodes, results) = library::spawn_decode_pool(
                 cx.background_executor(),
                 thumbnails,
-                |(index, path)| library::decode_thumbnail(&path).map(|image| (index, path, image)),
+                |(index, path, version)| {
+                    library::decode_thumbnail(&path).map(|image| (index, path, version, image))
+                },
             );
             while let Ok(first) = results.recv_async().await {
                 let mut batch = vec![first];
                 batch.extend(results.try_iter());
                 if this
                     .update_in(cx, |this, window, cx| {
-                        for (index, path, image) in batch {
-                            this.set_library_thumbnail(kind, index, path, image, window, cx);
+                        for (index, path, version, image) in batch {
+                            this.set_library_thumbnail(
+                                kind, index, path, version, image, window, cx,
+                            );
                         }
                     })
                     .is_err()
@@ -3735,19 +4348,29 @@ impl MainWindow {
         screenshots: Option<Vec<ScreenshotItem>>,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Vec<(usize, std::path::PathBuf)> {
+    ) -> Vec<(usize, std::path::PathBuf, Option<u128>)> {
         let mut cached_recordings: std::collections::HashMap<_, _> =
-            match (kind, self.library.take()) {
-                (LibraryKind::Recordings, Some(LibraryItems::Recordings(rows))) => rows
+            std::collections::HashMap::new();
+        let mut cached_screenshots: std::collections::HashMap<_, _> =
+            std::collections::HashMap::new();
+        match (kind, self.library.take()) {
+            (LibraryKind::Recordings, Some(LibraryItems::Recordings(rows))) => {
+                cached_recordings = rows
                     .into_iter()
                     .map(|row| (row.item.path.clone(), row))
-                    .collect(),
-                (_, previous) => {
-                    self.library = previous;
-                    self.drop_library_images(window);
-                    std::collections::HashMap::new()
-                }
-            };
+                    .collect();
+            }
+            (LibraryKind::Screenshots, Some(LibraryItems::Screenshots(rows))) => {
+                cached_screenshots = rows
+                    .into_iter()
+                    .map(|row| (row.item.path.clone(), row))
+                    .collect();
+            }
+            (_, previous) => {
+                self.library = previous;
+                self.drop_library_images(window);
+            }
+        }
         let mut pending = Vec::new();
         self.library = Some(match kind {
             LibraryKind::Recordings => LibraryItems::Recordings(
@@ -3764,7 +4387,7 @@ impl MainWindow {
                                 || row.thumbnail.is_none()
                         });
                         if changed && let Some(path) = item.thumbnail.clone() {
-                            pending.push((index, path));
+                            pending.push((index, path, item.thumbnail_version));
                         }
                         LibraryRow {
                             item,
@@ -3780,19 +4403,35 @@ impl MainWindow {
                     .into_iter()
                     .enumerate()
                     .map(|(index, item)| {
-                        if let Some(path) = item.thumbnail.clone() {
-                            pending.push((index, path));
+                        let previous = cached_screenshots.remove(&item.path);
+                        let has_thumbnail =
+                            previous.as_ref().is_some_and(|row| row.thumbnail.is_some());
+                        let previous_stale =
+                            previous.as_ref().is_some_and(|row| row.thumbnail_stale);
+                        let changed = !library::screenshot_thumbnail_is_current(
+                            &item,
+                            previous.as_ref().map(|row| &row.item),
+                            has_thumbnail,
+                            previous_stale,
+                        );
+                        if changed && let Some(path) = item.thumbnail.clone() {
+                            pending.push((index, path, item.thumbnail_version));
                         }
                         LibraryRow {
                             item,
-                            thumbnail: None,
-                            thumbnail_stale: false,
+                            thumbnail: previous.and_then(|row| row.thumbnail),
+                            thumbnail_stale: changed,
                         }
                     })
                     .collect(),
             ),
         });
         for (_, row) in cached_recordings {
+            if let Some(image) = row.thumbnail {
+                let _ = window.drop_image(image);
+            }
+        }
+        for (_, row) in cached_screenshots {
             if let Some(image) = row.thumbnail {
                 let _ = window.drop_image(image);
             }
@@ -3807,6 +4446,7 @@ impl MainWindow {
         kind: LibraryKind,
         index: usize,
         path: std::path::PathBuf,
+        version: Option<u128>,
         image: std::sync::Arc<gpui::RenderImage>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -3821,8 +4461,14 @@ impl MainWindow {
                 }),
             (Some(LibraryItems::Screenshots(rows)), LibraryKind::Screenshots) => rows
                 .get_mut(index)
-                .filter(|row| row.item.thumbnail.as_deref() == Some(path.as_path()))
-                .and_then(|row| row.thumbnail.replace(image)),
+                .filter(|row| {
+                    row.item.thumbnail.as_deref() == Some(path.as_path())
+                        && row.item.thumbnail_version == version
+                })
+                .and_then(|row| {
+                    row.thumbnail_stale = false;
+                    row.thumbnail.replace(image)
+                }),
             _ => None,
         };
         if let Some(old) = replaced {
@@ -4068,7 +4714,7 @@ impl MainWindow {
                             .text_size(px(10.))
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(gpui::white())
-                            .child("Importing"),
+                            .child(tr::main::library::importing()),
                     ),
             )
             .child(
@@ -4137,7 +4783,7 @@ impl MainWindow {
                 } else if !studio && let Some(url) = &sharing {
                     cx.open_url(url);
                 } else if !studio {
-                    library::open_recording_folder(&path, mode);
+                    library::open_recording_folder(&path, mode, cx);
                 }
             }),
             actions,
@@ -4214,7 +4860,7 @@ impl MainWindow {
         row = row.child(self.library_action(
             ("lib-rec-folder", index),
             "icons/folder.svg",
-            move |_, _, _| library::open_recording_folder(&folder, mode),
+            move |_, _, cx| library::open_recording_folder(&folder, mode, cx),
         ));
         row.child(self.library_action(
             ("lib-rec-delete", index),
@@ -4272,13 +4918,17 @@ impl MainWindow {
                 self.library_action(("lib-ss-copy", index), "icons/copy.svg", {
                     let png = png.clone();
                     move |_, _, cx| {
-                        if let Err(error) = crate::platform::copy_image_to_clipboard(&png, cx) {
-                            tracing::warn!("copying screenshot failed: {error}");
-                            cx.spawn(async move |_| {
-                                crate::platform::alert_dialog("Could not copy screenshot", &error);
-                            })
-                            .detach();
-                        }
+                        let copied = crate::platform::copy_image_to_clipboard(png.clone(), cx);
+                        cx.spawn(async move |_| {
+                            if let Err(error) = copied.await {
+                                tracing::warn!("copying screenshot failed: {error}");
+                                crate::platform::alert_dialog(
+                                    tr::main::library::copy_screenshot_failed(),
+                                    &error,
+                                );
+                            }
+                        })
+                        .detach();
                     }
                 }),
             )
@@ -4292,7 +4942,7 @@ impl MainWindow {
             .child(
                 self.library_action(("lib-ss-open", index), "icons/folder.svg", {
                     let bundle = bundle.clone();
-                    move |_, _, _| library::reveal_in_folder(&bundle)
+                    move |_, _, cx| library::reveal_path(&bundle, cx)
                 }),
             )
             .child(self.library_action(
@@ -4395,7 +5045,7 @@ impl MainWindow {
                                         .text_size(px(10.))
                                         .font_weight(FontWeight::MEDIUM)
                                         .text_color(gpui::white())
-                                        .child(format!("{clip_count} clips")),
+                                        .child(tr::main::library::clips(clip_count as usize)),
                                 )
                             }),
                     )
@@ -4435,12 +5085,12 @@ impl MainWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        cx.spawn_in(window, async move |this, cx| {
+        cx.spawn_in(window, async move |_, cx| {
             if !crate::platform::confirm_dialog(
                 "Cap",
-                "Are you sure you want to delete this recording?",
-                "Yes",
-                "No",
+                tr::main::delete_recording_confirm(),
+                tr::common::yes(),
+                tr::common::no(),
                 false,
             ) {
                 return;
@@ -4455,10 +5105,8 @@ impl MainWindow {
                 tracing::error!(path = %path.display(), "deleting the recording failed: {error}");
                 return;
             }
-            this.update_in(cx, |this, window, cx| {
-                this.refresh_library(LibraryKind::Recordings, window, cx);
-            })
-            .ok();
+            cx.update(|_, cx| cx.defer(app_windows::refresh_library_after_delete))
+                .ok();
         })
         .detach();
     }
@@ -4472,9 +5120,9 @@ impl MainWindow {
         cx.spawn_in(window, async move |this, cx| {
             if !crate::platform::confirm_dialog(
                 "Cap",
-                "Are you sure you want to delete this screenshot?",
-                "Yes",
-                "No",
+                tr::main::delete_screenshot_confirm(),
+                tr::common::yes(),
+                tr::common::no(),
                 false,
             ) {
                 return;
@@ -4574,15 +5222,17 @@ impl MainWindow {
                     .w_full()
                     .text_size(px(14.))
                     .text_color(theme.gray_11)
-                    .child("Loading..."),
+                    .child(tr::common::loading()),
             );
         }
+
+        let list = list.children(self.render_access_banner(menu, cx));
 
         // The "none" row is always offered and is never filtered out -- it is
         // how you turn the device off, not a search result.
         let mut rows = vec![
             self.render_device_list_row(
-                SharedString::from(format!("{}-none", menu.title())),
+                SharedString::from(format!("{}-none", menu.id_name())),
                 "icons/circle-x.svg",
                 menu.none_label().to_string(),
                 None,
@@ -4644,7 +5294,7 @@ impl MainWindow {
                                             .map(|settings| DeviceFormat::Camera(settings).label())
                                     } else {
                                         camera.best_format.map(|format| {
-                                            format!("Available: {}", format.describe())
+                                            tr::main::device::format::available(format.describe())
                                         })
                                     },
                                     selected,
@@ -4653,6 +5303,7 @@ impl MainWindow {
                                         if !this.device_changes_allowed(cx) {
                                             return;
                                         }
+                                        this.ensure_media_access(OSPermission::Camera, cx);
                                         this.set_camera_selection(Some(chosen.clone()), cx);
                                         this.close_panel(cx);
                                     }),
@@ -4702,17 +5353,15 @@ impl MainWindow {
                                                 DeviceFormat::Microphone(settings).label()
                                             })
                                     } else {
-                                        mic.describe()
-                                            .map(|description| format!("Available: {description}"))
+                                        mic.describe().map(tr::main::device::format::available)
                                     },
                                     selected,
-                                    selected.then(|| {
-                                        feeds::picker_level(Feeds::global(cx).read(cx).mic_level_db)
-                                    }),
+                                    selected.then(|| self.device_microphone_level.clone()),
                                     cx.listener(move |this, _, _window, cx| {
                                         if !this.device_changes_allowed(cx) {
                                             return;
                                         }
+                                        this.ensure_media_access(OSPermission::Microphone, cx);
                                         this.set_microphone_selection(Some(chosen.clone()), cx);
                                         this.close_panel(cx);
                                     }),
@@ -4807,9 +5456,8 @@ impl MainWindow {
                         && let Some(DeviceFormatTarget::Camera(camera)) = &this.device_format_target
                         && !this.devices.update_camera_formats(camera, formats)
                     {
-                        this.device_formats = Some(Err(
-                            "Camera changed or disconnected. Reopen its format settings.".into(),
-                        ));
+                        this.device_formats =
+                            Some(Err(tr::main::device::format::camera_changed().into()));
                         cx.notify();
                         return;
                     }
@@ -4906,7 +5554,7 @@ impl MainWindow {
             Err(error) => {
                 self.device_format_notice = Some(error.clone());
                 self.session.update(cx, |session, cx| {
-                    session.error = Some(format!("Could not apply device format: {error}"));
+                    session.error = Some(tr::main::device::format::apply_failed(&error));
                     cx.notify();
                 });
             }
@@ -4924,7 +5572,7 @@ impl MainWindow {
             self.device_format_value = Some(format);
             self.device_format_notice = None;
         } else {
-            let error = "Could not save the device format preference. Try again.".to_string();
+            let error = tr::main::device::format::save_failed().to_string();
             self.device_format_notice = Some(error.clone());
             self.session.update(cx, |session, cx| {
                 session.error = Some(error);
@@ -4959,7 +5607,7 @@ impl MainWindow {
                     .text_size(px(12.))
                     .text_color(theme.gray_11)
                     .pb(px(8.))
-                    .child("Preferred format"),
+                    .child(tr::main::device::format::preferred()),
             )
             .when_some(applied, |list, format| {
                 list.child(
@@ -4967,11 +5615,11 @@ impl MainWindow {
                         .text_size(px(12.))
                         .text_color(theme.gray_11)
                         .pb(px(8.))
-                        .child(format!("Current: {}", format.label())),
+                        .child(tr::main::device::format::current(format.label())),
                 )
             });
         let list = match &self.device_formats {
-            None => list.child(self.render_empty_state("Loading formats...")),
+            None => list.child(self.render_empty_state(tr::main::device::format::loading())),
             Some(Err(error)) => list.child(self.render_empty_state(error.clone())),
             Some(Ok(formats)) => {
                 list.children(formats.iter().enumerate().map(|(index, format)| {
@@ -4989,7 +5637,7 @@ impl MainWindow {
             }
         };
         list.when(self.device_format_pending.is_some(), |list| {
-            list.child(self.render_empty_state("Applying format..."))
+            list.child(self.render_empty_state(tr::main::device::format::applying()))
         })
         .when_some(self.device_format_notice.as_ref(), |list, notice| {
             list.child(self.render_empty_state(notice.clone()))
@@ -5062,7 +5710,7 @@ impl MainWindow {
                     .w_full()
                     .text_size(px(14.))
                     .text_color(theme.gray_11)
-                    .child("Loading..."),
+                    .child(tr::common::loading()),
             );
         }
 
@@ -5143,10 +5791,10 @@ impl MainWindow {
         if cards.is_empty() {
             return grid.child(
                 self.render_empty_state(match (target, self.search.is_empty()) {
-                    (TargetType::Display, true) => "No displays found",
-                    (TargetType::Display, false) => "No matching displays",
-                    (_, true) => "No windows found",
-                    (_, false) => "No matching windows",
+                    (TargetType::Display, true) => tr::main::target::no_displays(),
+                    (TargetType::Display, false) => tr::main::target::no_matching_displays(),
+                    (_, true) => tr::main::target::no_windows(),
+                    (_, false) => tr::main::target::no_matching_windows(),
                 }),
             );
         }
@@ -5187,6 +5835,10 @@ impl MainWindow {
 
         div()
             .id(id)
+            .when(self.keyboard_nav, ui::keyboard_nav::stop)
+            .role(gpui::Role::Button)
+            .aria_label(label.clone())
+            .aria_selected(selected)
             .flex()
             .flex_col()
             .w(px(self.target_card_width()))
@@ -5306,7 +5958,7 @@ impl MainWindow {
                                     } else {
                                         theme.gray_12
                                     })
-                                    .child(mode.panel_title()),
+                                    .child(mode.display_name()),
                             )
                             .child(
                                 div()
@@ -5321,6 +5973,78 @@ impl MainWindow {
                         this.close_panel(cx);
                     }))
             }),
+        )
+    }
+
+    fn render_access_banner(
+        &self,
+        menu: DeviceMenu,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::AnyElement> {
+        let permission = menu.permission();
+        let access = MediaAccess::global(cx);
+        let access = access.read(cx);
+        if access.allowed(permission) {
+            return None;
+        }
+        let theme = self.theme;
+        let denied = access.status(permission) == crate::permissions::OSPermissionStatus::Denied;
+        let requesting = access.requesting(permission);
+        let noun = match menu {
+            DeviceMenu::Camera => "camera",
+            DeviceMenu::Microphone => "microphone",
+        };
+        let message = match (menu, denied, requesting) {
+            (DeviceMenu::Camera, true, _) => tr::main::device::access::camera_denied(),
+            (DeviceMenu::Microphone, true, _) => tr::main::device::access::microphone_denied(),
+            (_, false, true) => tr::common::choose_allow_prompt(),
+            (DeviceMenu::Camera, false, false) => tr::main::device::access::camera_needed(),
+            (DeviceMenu::Microphone, false, false) => tr::main::device::access::microphone_needed(),
+        };
+        let label = if denied {
+            tr::main::device::access::open_system_settings()
+        } else if requesting {
+            tr::main::device::pill::asking()
+        } else {
+            crate::media_access::action_label(access.status(permission))
+        };
+        Some(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(8.))
+                .w_full()
+                .px(px(10.))
+                .py(px(8.))
+                .mb(px(4.))
+                .rounded(px(10.))
+                .bg(theme.amber_3)
+                .border_1()
+                .border_color(theme.amber_6)
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_size(px(12.))
+                        .line_height(px(16.))
+                        .text_color(theme.amber_11)
+                        .child(message),
+                )
+                .child(
+                    ui::Button::body(
+                        &theme,
+                        SharedString::from(format!("{noun}-access")),
+                        ui::ButtonVariant::Primary,
+                        ui::ButtonSize::Xs,
+                    )
+                    .label(label)
+                    .disabled(requesting)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.ensure_media_access(permission, cx);
+                    })),
+                )
+                .into_any_element(),
         )
     }
 
@@ -5349,10 +6073,9 @@ impl MainWindow {
         label: String,
         detail: Option<String>,
         selected: bool,
-        // `MicrophoneListItem`'s live level wash: a white 25% overlay whose
-        // right edge sits at `level * 100%` (1 = silence, the web app's
-        // orientation). Only the selected microphone row gets one.
-        audio_level: Option<f64>,
+        // `MicrophoneListItem`'s live level bar. Only the selected
+        // microphone row gets one.
+        audio_level: Option<Entity<ui::MicrophoneLevel>>,
         on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
     ) -> gpui::Stateful<gpui::Div> {
         let theme = self.theme;
@@ -5360,6 +6083,10 @@ impl MainWindow {
 
         div()
             .id(id)
+            .when(self.keyboard_nav, ui::keyboard_nav::stop)
+            .role(gpui::Role::Button)
+            .aria_label(label.clone())
+            .aria_selected(selected)
             .relative()
             .flex()
             .flex_row()
@@ -5405,26 +6132,7 @@ impl MainWindow {
                             .child(detail)
                     }))
                     .when_some(audio_level.filter(|_| selected), |this, level| {
-                        this.child(
-                            div()
-                                .mt(px(3.))
-                                .h(px(3.))
-                                .w_full()
-                                .rounded_full()
-                                .overflow_hidden()
-                                .bg(if theme.is_dark() {
-                                    gpui::hsla(0., 0., 1., 0.1)
-                                } else {
-                                    gpui::hsla(0., 0., 0., 0.07)
-                                })
-                                .child(
-                                    div()
-                                        .h_full()
-                                        .rounded_full()
-                                        .bg(accent)
-                                        .w(gpui::relative(1. - level.clamp(0., 1.) as f32)),
-                                ),
-                        )
+                        this.child(level)
                     }),
             )
             .when(selected, |this| {
@@ -5465,12 +6173,12 @@ impl MainWindow {
                                 .flex()
                                 .flex_col()
                                 .gap(px(4.))
-                                .child(div().text_size(px(13.)).child("Record a new clip"))
+                                .child(div().text_size(px(13.)).child(tr::main::clip::record_new()))
                                 .child(
                                     div()
                                         .text_size(px(10.))
                                         .text_color(self.theme.gray_11)
-                                        .child("Add to your current project"),
+                                        .child(tr::main::clip::add_to_project()),
                                 ),
                         )
                     }),
@@ -5487,7 +6195,7 @@ impl MainWindow {
                             .text_size(px(9.))
                             .line_height(px(11.))
                             .text_color(self.theme.gray_11)
-                            .child(format!("{} Mode", self.effective_mode(cx).panel_title())),
+                            .child(self.effective_mode(cx).header_title()),
                     ),
             )
     }
@@ -5516,7 +6224,7 @@ impl MainWindow {
                 .border_color(theme.body_border(5))
                 .bg(theme.body_fill(3))
                 .text_color(theme.gray_12)
-                .child("Personal")
+                .child(tr::main::plan::personal())
                 .hover(|style| style.bg(theme.body_hover_fill(5)))
                 .on_click(|_, _, cx| {
                     cx.open_url(crate::auth::PRICING_URL);
@@ -5525,7 +6233,7 @@ impl MainWindow {
                 .bg(theme.blue_9)
                 .text_color(gpui::white())
                 .child(if self.plan == PlanBadge::Commercial {
-                    "Commercial"
+                    tr::main::plan::commercial()
                 } else {
                     "Pro"
                 }),
@@ -5634,6 +6342,10 @@ impl MainWindow {
             div()
                 .id(SharedString::from(id))
                 .tab_index(0)
+                .when(self.keyboard_nav, ui::keyboard_nav::ring)
+                .role(gpui::Role::Button)
+                .aria_label(mode.panel_title())
+                .aria_selected(selected)
                 .relative()
                 .on_hover(cx.listener(move |this, hovered, _, cx| {
                     this.update_mode_hover(mode, false, *hovered, cx);
@@ -5702,7 +6414,12 @@ impl MainWindow {
                 div()
                     .id("mode-info")
                     .tab_index(0)
-                    .tooltip(move |_, cx| ui::Tooltip::new(&theme, "Recording mode info").view(cx))
+                    .when(self.keyboard_nav, ui::keyboard_nav::ring)
+                    .role(gpui::Role::Button)
+                    .aria_label(tr::main::mode::info_tooltip())
+                    .tooltip(move |_, cx| {
+                        ui::Tooltip::new(&theme, tr::main::mode::info_tooltip()).view(cx)
+                    })
                     .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
                     .absolute()
                     .left(px(-6.))
@@ -5746,7 +6463,7 @@ impl MainWindow {
                     .text_size(px(10.))
                     .line_height(px(14.))
                     .text_color(self.theme.gray_11)
-                    .child("Choose a capture source"),
+                    .child(tr::main::target::heading()),
             )
             .child(
                 div()
@@ -5787,6 +6504,12 @@ impl MainWindow {
             .child(
                 div()
                     .id(dropdown_id.clone())
+                    .when(self.keyboard_nav, ui::keyboard_nav::stop)
+                    .role(gpui::Role::Button)
+                    .aria_label(match target {
+                        TargetType::Display => "Choose a display",
+                        _ => "Choose a window",
+                    })
                     .flex()
                     .w(px(28.))
                     .rounded_r(px(9.))
@@ -5823,8 +6546,8 @@ impl MainWindow {
                         ui::Tooltip::new(
                             &theme,
                             match target {
-                                TargetType::Display => "Choose a display",
-                                TargetType::Window => "Choose a window",
+                                TargetType::Display => tr::main::target::choose_display(),
+                                TargetType::Window => tr::main::target::choose_window(),
                                 _ => unreachable!(),
                             },
                         )
@@ -5878,6 +6601,10 @@ impl MainWindow {
 
         let base = div()
             .id(SharedString::from(target.label()))
+            .when(self.keyboard_nav, ui::keyboard_nav::stop)
+            .role(gpui::Role::Button)
+            .aria_label(target.label())
+            .aria_selected(selected)
             .flex()
             .flex_1()
             .py(px(8.))
@@ -5910,7 +6637,7 @@ impl MainWindow {
                     .text_size(px(12.))
                     .line_height(px(16.))
                     .text_color(label_color)
-                    .child(target.label()),
+                    .child(target.display_label()),
             )
     }
 
@@ -5927,7 +6654,7 @@ impl MainWindow {
                     .text_size(px(10.))
                     .line_height(px(14.))
                     .text_color(self.theme.gray_11)
-                    .child("Choose your camera and microphone"),
+                    .child(tr::main::device::heading()),
             )
             .child(
                 div().flex().flex_col().child(
@@ -5936,9 +6663,13 @@ impl MainWindow {
                         "icons/camera.svg",
                         self.camera
                             .as_ref()
-                            .map(|camera| camera.label.clone())
-                            .unwrap_or_else(|| "No Camera".into()),
-                        if self.camera.is_some() {
+                            .map(|camera| camera_label(&camera.label))
+                            .unwrap_or_else(|| tr::main::device::no_camera().into()),
+                        if self.camera.is_some()
+                            && let Some(pill) = self.access_pill(OSPermission::Camera, cx)
+                        {
+                            pill
+                        } else if self.camera.is_some() {
                             if self.devices.cameras.iter().any(|camera| {
                                 Some(&camera.device_id)
                                     == self.camera.as_ref().map(|selected| &selected.device_id)
@@ -5972,8 +6703,12 @@ impl MainWindow {
                         self.microphone
                             .as_ref()
                             .map(|mic| mic.name.clone())
-                            .unwrap_or_else(|| "No Microphone".into()),
-                        if self.microphone.is_some() {
+                            .unwrap_or_else(|| tr::main::device::no_microphone().into()),
+                        if self.microphone.is_some()
+                            && let Some(pill) = self.access_pill(OSPermission::Microphone, cx)
+                        {
+                            pill
+                        } else if self.microphone.is_some() {
                             if self.devices.microphones.iter().any(|microphone| {
                                 Some(&microphone.name)
                                     == self.microphone.as_ref().map(|selected| &selected.name)
@@ -6005,9 +6740,9 @@ impl MainWindow {
                         "system-audio-row",
                         "icons/screen.svg",
                         if self.system_audio {
-                            "Record System Audio".into()
+                            tr::main::device::system_audio_on().into()
                         } else {
-                            "No System Audio".into()
+                            tr::main::device::system_audio_off().into()
                         },
                         if self.system_audio {
                             PillState::On
@@ -6043,6 +6778,9 @@ impl MainWindow {
 
         div()
             .id(SharedString::from(id))
+            .when(self.keyboard_nav, ui::keyboard_nav::stop)
+            .role(gpui::Role::Button)
+            .aria_label(label.clone())
             .relative()
             .flex()
             .flex_row()
@@ -6107,6 +6845,16 @@ impl MainWindow {
                             cx.stop_propagation();
                             return;
                         }
+                        let permission = menu.permission();
+                        let selected = match menu {
+                            DeviceMenu::Camera => this.camera.is_some(),
+                            DeviceMenu::Microphone => this.microphone.is_some(),
+                        };
+                        if selected && !MediaAccess::global(cx).read(cx).allowed(permission) {
+                            cx.stop_propagation();
+                            this.ensure_media_access(permission, cx);
+                            return;
+                        }
                         match menu {
                             DeviceMenu::Camera if this.camera.is_some() => {
                                 cx.stop_propagation();
@@ -6168,18 +6916,30 @@ enum PillState {
     On,
     Off,
     Disconnected,
+    /// The device is picked but macOS has not given Cap access: the pill is
+    /// the button that asks (or opens System Settings).
+    Access(&'static str),
 }
 
 impl PillState {
     fn render(self, theme: Theme) -> impl IntoElement {
         let (bg, fg, text) = match self {
-            Self::On => (Hsla::from(theme.blue_9), gpui::white(), "On"),
-            Self::Off => (theme.body_fill(5), Hsla::from(theme.gray_11), "Off"),
+            Self::On => (
+                Hsla::from(theme.blue_9),
+                gpui::white(),
+                tr::main::device::pill::on(),
+            ),
+            Self::Off => (
+                theme.body_fill(5),
+                Hsla::from(theme.gray_11),
+                tr::main::device::pill::off(),
+            ),
             Self::Disconnected => (
                 theme.body_fill(5),
                 Hsla::from(theme.gray_11),
-                "Not connected",
+                tr::main::device::pill::not_connected(),
             ),
+            Self::Access(label) => (Hsla::from(theme.amber_3), Hsla::from(theme.amber_11), label),
         };
 
         div()
@@ -6199,13 +6959,30 @@ impl PillState {
     }
 }
 
+/// The recovery toast's `3 segments · ~2m 5s` line, one message per shape so
+/// each language can order and pluralize it.
+fn recovery_segments_label(count: usize, duration: u64) -> String {
+    let duration = if duration == 0 {
+        return tr::main::recovery::segments(count);
+    } else if duration < 60 {
+        tr::main::recovery::duration_seconds(duration)
+    } else if duration.is_multiple_of(60) {
+        tr::main::recovery::duration_minutes(duration / 60)
+    } else {
+        tr::main::recovery::duration_minutes_seconds(duration / 60, duration % 60)
+    };
+    tr::main::recovery::segments_with_duration(count, duration)
+}
+
+const ERROR_TEXT_MAX_HEIGHT: f32 = 132.;
+
 fn recording_error_text(error: String) -> impl IntoElement + Styled {
     div()
         .id("recording-error-text")
         .w_full()
         .min_w_0()
         .min_h_0()
-        .max_h(px(48.))
+        .max_h(px(ERROR_TEXT_MAX_HEIGHT))
         .text_size(px(12.))
         .line_height(px(16.))
         .whitespace_normal()
@@ -6265,6 +7042,12 @@ mod remembered_device_tests {
         let restored = remembered_camera(&missing, &cameras);
         assert_eq!(restored.device_id, "remembered");
         assert_ne!(restored, cameras[0]);
+        assert_eq!(restored.label, "");
+        assert_eq!(
+            camera_label(&restored.label),
+            tr::main::device::fallback_camera()
+        );
+        assert_eq!(camera_label(&cameras[0].label), cameras[0].label);
 
         let microphones = [MicrophoneOption {
             name: "Unrequested microphone".into(),
@@ -6586,7 +7369,10 @@ mod recording_error_panel_tests {
     fn long_error_keeps_bounded_scrollable_text() {
         let mut element = recording_error_text("Requested microphone unavailable. ".repeat(200));
         let style = element.style();
-        assert_eq!(style.max_size.height, Some(px(48.).into()));
+        assert_eq!(
+            style.max_size.height,
+            Some(px(ERROR_TEXT_MAX_HEIGHT).into())
+        );
         assert_eq!(style.min_size.height, Some(px(0.).into()));
         assert_eq!(style.overflow.x, Some(gpui::Overflow::Scroll));
         assert_eq!(style.overflow.y, Some(gpui::Overflow::Scroll));
@@ -6596,7 +7382,10 @@ mod recording_error_panel_tests {
     fn unbroken_error_keeps_both_scroll_axes() {
         let mut element = recording_error_text("x".repeat(8192));
         let style = element.style();
-        assert_eq!(style.max_size.height, Some(px(48.).into()));
+        assert_eq!(
+            style.max_size.height,
+            Some(px(ERROR_TEXT_MAX_HEIGHT).into())
+        );
         assert_eq!(style.overflow.x, Some(gpui::Overflow::Scroll));
         assert_eq!(style.overflow.y, Some(gpui::Overflow::Scroll));
     }
@@ -6636,6 +7425,42 @@ mod recording_error_panel_tests {
                 "Capture cleanup is unconfirmed",
             ));
             assert_eq!(current.as_deref(), Some("Capture cleanup is unconfirmed"));
+        }
+    }
+}
+
+#[cfg(test)]
+mod recovery_label_tests {
+    use super::recovery_segments_label;
+
+    fn replaced(segment_count: usize, duration: u64) -> String {
+        let duration_label = if duration == 0 {
+            String::new()
+        } else if duration < 60 {
+            format!(" · ~{duration}s")
+        } else if duration.is_multiple_of(60) {
+            format!(" · ~{}m", duration / 60)
+        } else {
+            format!(" · ~{}m {}s", duration / 60, duration % 60)
+        };
+        format!(
+            "{} segment{}{}",
+            segment_count,
+            if segment_count == 1 { "" } else { "s" },
+            duration_label
+        )
+    }
+
+    #[test]
+    fn english_matches_the_assembled_label() {
+        for count in [0, 1, 2, 7] {
+            for duration in [0, 1, 45, 59, 60, 61, 125, 180, 3_599, 3_600] {
+                assert_eq!(
+                    recovery_segments_label(count, duration),
+                    replaced(count, duration),
+                    "{count} segments, {duration}s"
+                );
+            }
         }
     }
 }

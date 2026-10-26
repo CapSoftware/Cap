@@ -19,13 +19,13 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use tokio::sync::watch;
+use tokio::sync::{Notify, watch};
 use tracing::{info, warn};
 
 use crate::{
     audio_output::{AudioOutput, PlaySpec},
     editor,
-    editor_instance::SegmentMedia,
+    editor_instance::{SegmentMedia, cursor_timeline_settings},
     segments::get_audio_segments,
     telemetry::{
         PlaybackFrameSource, PlaybackSkipReason, PlaybackTelemetry, PlaybackTelemetryEvent,
@@ -50,7 +50,13 @@ const MAX_FRAME_CACHE_BYTES: usize = 64 * 1024 * 1024;
 const RAMP_UP_FRAME_COUNT: u32 = 15;
 
 fn clip_audio_changed(previous: &ProjectConfiguration, next: &ProjectConfiguration) -> bool {
-    let settings = |segment: &cap_project::TimelineSegment| {
+    let settings = |project: &ProjectConfiguration, segment: &cap_project::TimelineSegment| {
+        let offsets = project
+            .clips
+            .iter()
+            .find(|clip| clip.index == segment.recording_clip)
+            .map(|clip| clip.offsets)
+            .unwrap_or_default();
         (
             segment.recording_clip,
             segment.start,
@@ -58,14 +64,19 @@ fn clip_audio_changed(previous: &ProjectConfiguration, next: &ProjectConfigurati
             segment.timescale,
             segment.speed_audio_mode,
             segment.volume(),
+            offsets.mic,
+            offsets.system_audio,
         )
     };
     match (&previous.timeline, &next.timeline) {
-        (Some(previous), Some(next)) => !previous
+        (Some(previous_timeline), Some(next_timeline)) => !previous_timeline
             .segments
             .iter()
-            .map(settings)
-            .eq(next.segments.iter().map(settings)),
+            .map(|segment| settings(previous, segment))
+            .eq(next_timeline
+                .segments
+                .iter()
+                .map(|segment| settings(next, segment))),
         (None, None) => false,
         _ => true,
     }
@@ -93,6 +104,70 @@ impl Drop for WindowsTimerResolution {
     }
 }
 
+/// Above normal, so a wake preempts decode and render threads instead of
+/// queueing behind them: at normal priority on a loaded machine the wake
+/// landed up to 10 ms late, with or without the spin.
+#[cfg(target_os = "windows")]
+fn raise_playback_thread_priority() {
+    use windows::Win32::System::Threading::{
+        GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_ABOVE_NORMAL,
+    };
+    unsafe {
+        let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
+    }
+}
+
+#[cfg(target_os = "windows")]
+struct WindowsWaitableTimer(windows::Win32::Foundation::HANDLE);
+
+#[cfg(target_os = "windows")]
+impl WindowsWaitableTimer {
+    /// How long before the deadline the timer wait ends and spinning starts.
+    /// The timer fires up to about 0.5 ms late.
+    const SPIN: Duration = Duration::from_micros(500);
+
+    /// `None` before Windows 10 1803, which rejects the high-resolution flag.
+    fn high_resolution() -> Option<Self> {
+        use windows::Win32::System::Threading::{
+            CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, CreateWaitableTimerExW, TIMER_ALL_ACCESS,
+        };
+        unsafe {
+            CreateWaitableTimerExW(
+                None,
+                windows::core::PCWSTR::null(),
+                CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+                TIMER_ALL_ACCESS.0,
+            )
+        }
+        .ok()
+        .map(Self)
+    }
+
+    fn sleep(&self, duration: Duration) -> bool {
+        use windows::Win32::{
+            Foundation::WAIT_OBJECT_0,
+            System::Threading::{INFINITE, SetWaitableTimer, WaitForSingleObject},
+        };
+        // Negative: relative, in 100 ns intervals.
+        let due = -i64::try_from(duration.as_nanos() / 100)
+            .unwrap_or(i64::MAX)
+            .max(1);
+        unsafe {
+            SetWaitableTimer(self.0, &due, 0, None, None, false).is_ok()
+                && WaitForSingleObject(self.0, INFINITE) == WAIT_OBJECT_0
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for WindowsWaitableTimer {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = windows::Win32::Foundation::CloseHandle(self.0);
+        }
+    }
+}
+
 fn precision_sleep_sync(deadline: Instant) {
     let now = Instant::now();
     if now >= deadline {
@@ -103,9 +178,25 @@ fn precision_sleep_sync(deadline: Instant) {
 
     #[cfg(target_os = "windows")]
     {
-        let spin_threshold = Duration::from_millis(2);
-        if remaining > spin_threshold {
-            std::thread::sleep(remaining.saturating_sub(spin_threshold));
+        thread_local! {
+            static WAITABLE_TIMER: Option<WindowsWaitableTimer> =
+                WindowsWaitableTimer::high_resolution();
+        }
+        // A high-resolution timer wakes within a fraction of a millisecond,
+        // so only the last 500 us are spun. Without one, `thread::sleep` can
+        // wake a full 1 ms timer period late and the last 2 ms are spun.
+        let timed = WAITABLE_TIMER.with(|timer| {
+            timer.as_ref().is_some_and(|timer| {
+                remaining <= WindowsWaitableTimer::SPIN
+                    || timer.sleep(remaining.saturating_sub(WindowsWaitableTimer::SPIN))
+            })
+        });
+        if !timed {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            let spin_threshold = Duration::from_millis(2);
+            if remaining > spin_threshold {
+                std::thread::sleep(remaining.saturating_sub(spin_threshold));
+            }
         }
         while Instant::now() < deadline {
             std::hint::spin_loop();
@@ -205,14 +296,33 @@ impl PrefetchedFrame {
     }
 }
 
+struct PrefetchReceiver {
+    frames: std_mpsc::Receiver<PrefetchedFrame>,
+    capacity: Arc<Notify>,
+}
+
+fn prefetch_channel(bound: usize) -> (std_mpsc::SyncSender<PrefetchedFrame>, PrefetchReceiver) {
+    let (sender, frames) = std_mpsc::sync_channel(bound);
+    (
+        sender,
+        PrefetchReceiver {
+            frames,
+            capacity: Arc::new(Notify::new()),
+        },
+    )
+}
+
 fn receive_prefetched_frame(
-    receiver: &std_mpsc::Receiver<PrefetchedFrame>,
+    receiver: &PrefetchReceiver,
     seek_generation: u64,
     timeout: Duration,
 ) -> Result<PrefetchedFrame, std_mpsc::RecvTimeoutError> {
     let deadline = Instant::now() + timeout;
     loop {
-        let frame = receiver.recv_timeout(deadline.saturating_duration_since(Instant::now()))?;
+        let frame = receiver
+            .frames
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))?;
+        receiver.capacity.notify_one();
         // A completed decode can already be queued when the producer observes a seek.
         if frame.seek_generation == seek_generation {
             return Ok(frame);
@@ -459,9 +569,13 @@ async fn decode_prefetched_frame(request: PrefetchDecodeRequest) -> PrefetchDeco
     };
     let transition = async {
         let transition = transition?;
+        let transition_decoders = if transition.segment_index == segment_index {
+            transition.decoders.transition_side().await
+        } else {
+            &transition.decoders
+        };
         let segment_frames = if is_initial {
-            transition
-                .decoders
+            transition_decoders
                 .get_frames_initial(
                     transition.segment_time as f32,
                     !hide_camera,
@@ -470,8 +584,7 @@ async fn decode_prefetched_frame(request: PrefetchDecodeRequest) -> PrefetchDeco
                 )
                 .await
         } else {
-            transition
-                .decoders
+            transition_decoders
                 .get_frames(
                     transition.segment_time as f32,
                     !hide_camera,
@@ -613,11 +726,13 @@ impl Playback {
             adopted: adopted.clone(),
         };
 
-        let (prefetch_tx, prefetch_rx) =
-            std_mpsc::sync_channel::<PrefetchedFrame>(PREFETCH_CHANNEL_SIZE);
+        let (prefetch_tx, prefetch_rx) = prefetch_channel(PREFETCH_CHANNEL_SIZE);
+        let prefetch_capacity = Arc::clone(&prefetch_rx.capacity);
+        let prefetch_fallback_wait = Duration::from_secs_f64(1.0 / fps_f64);
         let (frame_request_tx, mut frame_request_rx) =
             watch::channel((0u64, self.start_frame_number));
-        let (playback_position_tx, playback_position_rx) = watch::channel(self.start_frame_number);
+        let (playback_position_tx, mut playback_position_rx) =
+            watch::channel(self.start_frame_number);
         let prefetch_frame_limit = Arc::new(AtomicUsize::new(INITIAL_PREFETCH_BUFFER_SIZE));
 
         let output_size = ProjectUniforms::get_output_size(
@@ -729,7 +844,8 @@ impl Playback {
                                     }
                                     request_changed = true;
                                 }
-                                _ = tokio::time::sleep(Duration::from_millis(1)) => {}
+                                _ = prefetch_capacity.notified() => {}
+                                _ = tokio::time::sleep(prefetch_fallback_wait) => {}
                             }
                             continue;
                         }
@@ -737,7 +853,7 @@ impl Playback {
                     }
                 }
 
-                let current_playback_frame = *playback_position_rx.borrow();
+                let current_playback_frame = *playback_position_rx.borrow_and_update();
                 let max_prefetch_ahead = producer_prefetch_frame_limit
                     .load(Ordering::Relaxed)
                     .clamp(INITIAL_PREFETCH_BUFFER_SIZE, MAX_PREFETCH_BUFFER_SIZE)
@@ -863,7 +979,12 @@ impl Playback {
                         }
                     }
 
-                    _ = tokio::time::sleep(Duration::from_millis(1)), if in_flight.is_empty() => {}
+                    result = playback_position_rx.changed(), if in_flight.is_empty() => {
+                        if result.is_err() {
+                            break;
+                        }
+                    }
+                    _ = tokio::time::sleep(prefetch_fallback_wait), if in_flight.is_empty() => {}
                 }
             }
         });
@@ -878,6 +999,11 @@ impl Playback {
             telemetry.emit(PlaybackTelemetryEvent::AudioSegmentsResolved {
                 elapsed: audio_wait_start.elapsed(),
             });
+        }
+        // Restarts an idle-paused output stream while the video warms up, so
+        // the play request after warmup finds it already running.
+        if adopted.is_none() && has_playback_audio(&audio_segments, !self.music.is_empty()) {
+            self.audio_output.prewarm();
         }
 
         diagnostic.field(Field::number(
@@ -1044,7 +1170,7 @@ impl Playback {
                 .sort_by_key(|p| p.frame_number);
 
             let playback_start_frame = frame_number;
-            let mut cached_project = self.project.borrow().clone();
+            let mut cached_project = Arc::new(self.project.borrow().clone());
 
             let build_cursor_timelines =
                 |project: &ProjectConfiguration| -> Vec<Arc<PrecomputedCursorTimeline>> {
@@ -1263,6 +1389,8 @@ impl Playback {
 
             #[cfg(target_os = "windows")]
             let _timer_guard = WindowsTimerResolution::set_high_precision();
+            #[cfg(target_os = "windows")]
+            raise_playback_thread_priority();
 
             // Attach this playback's audio to the session's persistent output
             // stream. Blocks until the live callback is consuming the source,
@@ -1341,7 +1469,7 @@ impl Playback {
                     drop(adopted.take());
                     preparing_audio_released.store(true, Ordering::Release);
                     let project = self.project.borrow().clone();
-                    cached_project.audio = project.audio.clone();
+                    Arc::make_mut(&mut cached_project).audio = project.audio.clone();
                     let ticket = self.audio_output.prepare_playback(PlaySpec {
                         segments: audio_segments.clone(),
                         music: self.music.clone(),
@@ -1412,7 +1540,14 @@ impl Playback {
                     let next_project = self.project.borrow_and_update().clone();
                     let audio_changed = cached_project.audio != next_project.audio
                         || clip_audio_changed(&cached_project, &next_project);
-                    cached_project = next_project;
+                    let cursor_changed = cursor_timeline_settings(&cached_project.cursor)
+                        != cursor_timeline_settings(&next_project.cursor);
+                    let zoom_changed = !ZoomTransformTimeline::project_inputs_match(
+                        &cached_project,
+                        &next_project,
+                        self.render_constants.options.screen_size,
+                    );
+                    cached_project = Arc::new(next_project);
                     if adopted.is_none()
                         && audio_changed
                         && let Some(generation) = audio_generation
@@ -1421,7 +1556,7 @@ impl Playback {
                             PlaySpec {
                                 segments: audio_segments.clone(),
                                 music: self.music.clone(),
-                                project: cached_project.clone(),
+                                project: (*cached_project).clone(),
                                 duration_secs: duration,
                                 start_playhead_secs: frame_number as f64 / fps_f64,
                                 playhead_rx: audio_playhead_rx.clone(),
@@ -1429,9 +1564,13 @@ impl Playback {
                             generation,
                         );
                     }
-                    cursor_timelines = build_cursor_timelines(&cached_project);
-                    zoom_timelines = build_zoom_timelines(&cached_project);
-                    outgoing_zoom_timelines = build_outgoing_zoom_timelines(&cached_project);
+                    if cursor_changed {
+                        cursor_timelines = build_cursor_timelines(&cached_project);
+                    }
+                    if zoom_changed {
+                        zoom_timelines = build_zoom_timelines(&cached_project);
+                        outgoing_zoom_timelines = build_outgoing_zoom_timelines(&cached_project);
+                    }
                 }
 
                 let frame_offset = frame_number.saturating_sub(clock_anchor_frame) as f64;
@@ -2037,6 +2176,147 @@ mod tests {
     use super::*;
 
     #[test]
+    fn precision_sleep_returns_at_its_deadline() {
+        for micros in [0, 50, 250, 900, 2_100, 16_667, 33_333] {
+            let deadline = Instant::now() + Duration::from_micros(micros);
+            precision_sleep_sync(deadline);
+            let late = Instant::now()
+                .checked_duration_since(deadline)
+                .unwrap_or_else(|| panic!("{micros} us sleep returned early"));
+            assert!(
+                late < Duration::from_secs(1),
+                "{micros} us sleep returned {late:?} late"
+            );
+        }
+        let start = Instant::now();
+        precision_sleep_sync(start);
+        assert!(start.elapsed() < Duration::from_millis(100));
+    }
+
+    // Every supported runner is Windows 10 1803 or later; the spin fallback
+    // is for older builds.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_has_a_high_resolution_waitable_timer() {
+        let timer = WindowsWaitableTimer::high_resolution().expect("high-resolution timer");
+        let start = Instant::now();
+        assert!(timer.sleep(Duration::from_millis(5)));
+        assert!(start.elapsed() >= Duration::from_millis(4));
+    }
+
+    /// Pacing cost and accuracy of the playback sleep at 30 and 60 fps:
+    /// `cargo test -p cap-editor --lib playback::tests::precision_sleep_pacing -- --ignored --nocapture`
+    #[cfg(target_os = "windows")]
+    #[test]
+    #[ignore]
+    fn precision_sleep_pacing() {
+        fn thread_cpu() -> Duration {
+            use windows::Win32::{
+                Foundation::FILETIME,
+                System::Threading::{GetCurrentThread, GetThreadTimes},
+            };
+            let [mut creation, mut exit, mut kernel, mut user] = [FILETIME::default(); 4];
+            unsafe {
+                GetThreadTimes(
+                    GetCurrentThread(),
+                    &mut creation,
+                    &mut exit,
+                    &mut kernel,
+                    &mut user,
+                )
+                .unwrap();
+            }
+            let ticks =
+                |t: FILETIME| (u64::from(t.dwHighDateTime) << 32) | u64::from(t.dwLowDateTime);
+            Duration::from_nanos((ticks(kernel) + ticks(user)) * 100)
+        }
+
+        let _timer_guard = WindowsTimerResolution::set_high_precision();
+        raise_playback_thread_priority();
+        for fps in [30u32, 60] {
+            let frame = Duration::from_secs(1) / fps;
+            let frames = fps * 10;
+            let cpu_start = thread_cpu();
+            let start = Instant::now();
+            let mut late_us = Vec::with_capacity(frames as usize);
+            for n in 1..=frames {
+                let deadline = start + frame * n;
+                precision_sleep_sync(deadline);
+                late_us.push(Instant::now().duration_since(deadline).as_secs_f64() * 1e6);
+            }
+            let cpu = thread_cpu().saturating_sub(cpu_start).as_secs_f64()
+                / start.elapsed().as_secs_f64();
+            late_us.sort_by(f64::total_cmp);
+            let at = |q: f64| late_us[((late_us.len() - 1) as f64 * q).round() as usize];
+            println!(
+                "pacing fps={fps} cpu={:.1}% late_us p50={:.0} p95={:.0} p99={:.0} max={:.0}",
+                cpu * 100.0,
+                at(0.5),
+                at(0.95),
+                at(0.99),
+                at(1.0)
+            );
+        }
+    }
+
+    #[test]
+    fn source_audio_offset_edits_refresh_playback_for_the_recording_clip() {
+        let project: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "clips": [{ "index": 1 }, { "index": 0 }],
+            "timeline": { "zoomSegments": [], "segments": [
+                { "recordingSegment": 0, "start": 0.0, "end": 2.0, "timescale": 1.0 },
+                { "recordingSegment": 1, "start": 1.0, "end": 3.0, "timescale": 2.0 }
+            ] }
+        }))
+        .unwrap();
+
+        for clip in 0..project.clips.len() {
+            for offset in [-0.1, 0.1] {
+                let mut next = project.clone();
+                next.clips[clip].offsets.mic = offset;
+                assert!(clip_audio_changed(&project, &next));
+                assert!(clip_audio_changed(&next, &project));
+
+                let mut next = project.clone();
+                next.clips[clip].offsets.system_audio = offset;
+                assert!(clip_audio_changed(&project, &next));
+                assert!(clip_audio_changed(&next, &project));
+            }
+        }
+    }
+
+    #[test]
+    fn visual_and_unused_clip_offsets_do_not_refresh_playback_audio() {
+        let project: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "timeline": { "zoomSegments": [], "segments": [
+                { "recordingSegment": 0, "start": 0.0, "end": 2.0, "timescale": 1.0 }
+            ] }
+        }))
+        .unwrap();
+        let mut next = project.clone();
+        next.clips.push(cap_project::ClipConfiguration {
+            index: 0,
+            offsets_auto_calculated: true,
+            offsets: ClipOffsets {
+                camera: 0.1,
+                ..Default::default()
+            },
+        });
+        next.clips.push(cap_project::ClipConfiguration {
+            index: 1,
+            offsets: ClipOffsets {
+                mic: 0.1,
+                system_audio: -0.1,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        assert!(!clip_audio_changed(&project, &next));
+        next.clips.reverse();
+        assert!(!clip_audio_changed(&next, &project));
+    }
+
+    #[test]
     fn clip_audio_changes_refresh_playback_without_refreshing_for_names() {
         let project: ProjectConfiguration = serde_json::from_value(serde_json::json!({
             "timeline": { "zoomSegments": [], "segments": [
@@ -2111,7 +2391,7 @@ mod tests {
 
     #[test]
     fn backward_seek_discards_queued_frames_from_the_previous_generation() {
-        let (sender, receiver) = std_mpsc::sync_channel(4);
+        let (sender, receiver) = prefetch_channel(4);
         for (generation, frame) in [(1, 3000), (1, 480), (2, 480), (2, 481)] {
             assert!(sender.send(prefetched_frame(generation, frame)).is_ok());
         }
@@ -2125,7 +2405,7 @@ mod tests {
 
     #[test]
     fn repeated_seeks_to_the_same_frame_require_the_latest_generation() {
-        let (sender, receiver) = std_mpsc::sync_channel(3);
+        let (sender, receiver) = prefetch_channel(3);
         for generation in 0..3 {
             assert!(sender.send(prefetched_frame(generation, 480)).is_ok());
         }
@@ -2137,7 +2417,7 @@ mod tests {
 
     #[test]
     fn stale_prefetch_frames_do_not_hide_timeout_or_disconnection() {
-        let (sender, receiver) = std_mpsc::sync_channel(1);
+        let (sender, receiver) = prefetch_channel(1);
         assert!(sender.send(prefetched_frame(1, 3000)).is_ok());
         assert!(matches!(
             receive_prefetched_frame(&receiver, 2, Duration::ZERO),
@@ -2150,6 +2430,45 @@ mod tests {
             receive_prefetched_frame(&receiver, 2, Duration::ZERO),
             Err(std_mpsc::RecvTimeoutError::Disconnected)
         ));
+    }
+
+    #[tokio::test]
+    async fn draining_the_prefetch_channel_wakes_a_blocked_producer() {
+        let (sender, receiver) = prefetch_channel(1);
+        let capacity = Arc::clone(&receiver.capacity);
+        assert!(sender.try_send(prefetched_frame(1, 10)).is_ok());
+        assert!(matches!(
+            sender.try_send(prefetched_frame(1, 11)),
+            Err(std_mpsc::TrySendError::Full(_))
+        ));
+
+        let consumer = std::thread::spawn(move || {
+            let frame = receive_prefetched_frame(&receiver, 1, Duration::from_secs(5));
+            (frame.map(|frame| frame.frame_number), receiver)
+        });
+
+        tokio::time::timeout(Duration::from_secs(5), capacity.notified())
+            .await
+            .expect("consumer drain should wake the producer");
+        assert!(sender.try_send(prefetched_frame(1, 11)).is_ok());
+        let (frame, _receiver) = consumer.join().unwrap();
+        assert_eq!(frame.ok(), Some(10));
+    }
+
+    #[test]
+    fn discarding_stale_prefetch_frames_signals_capacity() {
+        use futures::FutureExt;
+
+        let (sender, receiver) = prefetch_channel(1);
+        assert!(sender.try_send(prefetched_frame(1, 10)).is_ok());
+        assert!(receiver.capacity.notified().now_or_never().is_none());
+
+        assert!(matches!(
+            receive_prefetched_frame(&receiver, 2, Duration::ZERO),
+            Err(std_mpsc::RecvTimeoutError::Timeout)
+        ));
+        assert!(receiver.capacity.notified().now_or_never().is_some());
+        assert!(sender.try_send(prefetched_frame(2, 10)).is_ok());
     }
 
     #[tokio::test]

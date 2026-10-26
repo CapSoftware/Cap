@@ -1,11 +1,12 @@
 import { spawn } from "node:child_process";
 import { createHash, type Hash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { lstat } from "node:fs/promises";
-import { isAbsolute } from "node:path";
+import { lstat, open, rm } from "node:fs/promises";
+import { availableParallelism } from "node:os";
+import { dirname, isAbsolute, join } from "node:path";
 import { Readable } from "node:stream";
 import { setTimeout as sleep } from "node:timers/promises";
-import { PROCESS_TIMEOUT_MS } from "./media-common";
+import { decodeThreadsFromEnv, PROCESS_TIMEOUT_MS } from "./media-common";
 import {
 	fetchMedia,
 	MediaTransferBudgetError,
@@ -53,6 +54,9 @@ export interface RecordingVerificationOptions {
 	hasAudio?: boolean;
 	sourceEvidence?: RecordingSourceEvidence;
 	allowObservedDuration?: boolean;
+	// Hashing every decoded frame costs as much as the decode; skip it when the
+	// caller has no source evidence to compare against.
+	hashDecodedContent?: boolean;
 	abortSignal?: AbortSignal;
 	timeoutMs?: number;
 	onProgress?: (progress: { frames: number; totalFrames?: number }) => void;
@@ -200,14 +204,23 @@ function videoTailIntegrity(
 		return `end:${relativeVideoNanoseconds(stream, lastVideoEndPts)}\n`;
 	}
 	const timeScale = BigInt(timing.timeScale);
-	if (
+	const differences = [
 		(timing.lastTimestampTicks - timing.firstTimestampTicks) *
 			timeBaseDenominator !==
-			(lastVideoPts - firstVideoPts) * timeBaseNumerator * timeScale ||
-		timing.videoPacketCount !== stream.frameCount ||
+		(lastVideoPts - firstVideoPts) * timeBaseNumerator * timeScale
+			? `span ${timing.lastTimestampTicks - timing.firstTimestampTicks}/${timing.timeScale} s vs decoded ${(lastVideoPts - firstVideoPts) * timeBaseNumerator}/${timeBaseDenominator} s`
+			: null,
+		timing.videoPacketCount !== stream.frameCount
+			? `packets ${timing.videoPacketCount} vs decoded frames ${stream.frameCount}`
+			: null,
 		timing.terminalPacketCount !== stream.terminalVideoFrameCount
-	) {
-		throw new Error("Recording container timing does not match decoded video");
+			? `final tied packets ${timing.terminalPacketCount} vs decoded ${stream.terminalVideoFrameCount}`
+			: null,
+	].filter((difference) => difference !== null);
+	if (differences.length > 0) {
+		throw new Error(
+			`Recording container timing does not match decoded video (${differences.join("; ")})`,
+		);
 	}
 	if (!/^[a-f0-9]{64}$/.test(timing.packetTimelineSha256)) {
 		throw new Error("Recording container packet timing is missing");
@@ -665,6 +678,600 @@ export async function inspectRecordingSources(
 	return { ...result, integrity: result.integrity };
 }
 
+export interface RecordingVideoChunkSource {
+	init: string;
+	segments: string[];
+}
+
+export function verifyDecodeChunks(
+	env: Record<string, string | undefined> = process.env,
+): number {
+	const value = Number(env.MEDIA_SERVER_VERIFY_DECODE_CHUNKS?.trim());
+	return Number.isInteger(value) && value > 1 ? Math.min(value, 16) : 1;
+}
+
+class ChunkedDecodeUnavailable extends Error {}
+
+const DECODED_STREAM_METADATA =
+	/^#(tb|media_type|sample_rate|dimensions|sar|channel_layout_name) (\d+):/;
+
+const metadataOf = (lines: string[]) =>
+	lines.filter((line) => DECODED_STREAM_METADATA.test(line)).join("\n");
+
+function describeHeaderChange(first: string, other: string): string {
+	const fields = (header: string) =>
+		new Map(
+			header
+				.split("\n")
+				.filter(Boolean)
+				.map((line) => {
+					const [name, ...value] = line.slice(1).split(": ");
+					return [name, value.join(": ")] as const;
+				}),
+		);
+	const before = fields(first);
+	const after = fields(other);
+	const changes = [...new Set([...before.keys(), ...after.keys()])]
+		.filter((name) => before.get(name) !== after.get(name))
+		.map(
+			(name) =>
+				`${name}: ${before.get(name) ?? "none"} -> ${after.get(name) ?? "none"}`,
+		);
+	return changes.join("; ").slice(0, 200) || "unknown";
+}
+
+async function collectDecoderLines(
+	stream: AsyncIterable<Uint8Array>,
+	lines: string[],
+	onLine: () => void,
+): Promise<void> {
+	const decoder = new TextDecoder();
+	let pending = "";
+	const take = (line: string) => {
+		const trimmed = line.trim();
+		if (!trimmed) return;
+		lines.push(trimmed);
+		if (!trimmed.startsWith("#")) onLine();
+	};
+	for await (const chunk of stream) {
+		pending += decoder.decode(chunk, { stream: true });
+		let newline = pending.indexOf("\n");
+		while (newline !== -1) {
+			if (newline > MAX_OUTPUT_LINE_LENGTH) {
+				throw new Error("Recording decoder output exceeded its limit");
+			}
+			take(pending.slice(0, newline));
+			pending = pending.slice(newline + 1);
+			newline = pending.indexOf("\n");
+		}
+		if (pending.length > MAX_OUTPUT_LINE_LENGTH) {
+			throw new Error("Recording decoder output exceeded its limit");
+		}
+	}
+	take(pending + decoder.decode());
+}
+
+async function concatFiles(
+	paths: string[],
+	target: string,
+	signal?: AbortSignal,
+): Promise<void> {
+	const output = await open(target, "w");
+	try {
+		for (const path of paths) {
+			signal?.throwIfAborted();
+			for await (const chunk of createReadStream(path, { signal })) {
+				for (let offset = 0; offset < chunk.byteLength; ) {
+					const { bytesWritten } = await output.write(
+						chunk,
+						offset,
+						chunk.byteLength - offset,
+					);
+					if (bytesWritten <= 0)
+						throw new Error(
+							"Recording verification chunk could not be written",
+						);
+					offset += bytesWritten;
+				}
+			}
+		}
+	} finally {
+		await output.close();
+	}
+}
+
+const KEYFRAME_SEARCH_SEGMENTS = 8;
+
+async function countOutputLines(
+	command: string,
+	args: string[],
+	pattern: RegExp,
+	signal?: AbortSignal,
+): Promise<number | null> {
+	const child = spawn(command, args, {
+		stdio: ["ignore", "pipe", "ignore"],
+		signal,
+		timeout: 60_000,
+	});
+	let count = 0;
+	let pending = "";
+	child.stdout.setEncoding("utf8");
+	child.stdout.on("data", (text: string) => {
+		pending += text;
+		const lines = pending.split("\n");
+		pending = lines.pop() ?? "";
+		for (const line of lines) if (pattern.test(line)) count++;
+	});
+	const code = await new Promise<number | null>((resolve) => {
+		child.once("error", () => resolve(null));
+		child.once("close", resolve);
+	});
+	if (pattern.test(pending)) count++;
+	return code === 0 ? count : null;
+}
+
+// A fragment can open with a sync sample the decoder still cannot start from
+// cleanly, so prove it: decoding it alone must yield a frame for every packet.
+async function decodesCleanlyFromStart(
+	init: string,
+	segment: string,
+	signal?: AbortSignal,
+): Promise<boolean> {
+	const input = `concat:${init}|${segment}`;
+	const [packets, frames] = await Promise.all([
+		countOutputLines(
+			"ffprobe",
+			[
+				"-v",
+				"error",
+				"-protocol_whitelist",
+				"file,concat",
+				"-select_streams",
+				"v:0",
+				"-show_entries",
+				"packet=flags",
+				"-of",
+				"csv=p=0",
+				input,
+			],
+			/^\S/,
+			signal,
+		),
+		countOutputLines(
+			"ffmpeg",
+			[
+				"-hide_banner",
+				"-nostdin",
+				"-copyts",
+				"-v",
+				"error",
+				"-xerror",
+				"-err_detect",
+				"explode+crccheck",
+				"-threads",
+				"1",
+				"-protocol_whitelist",
+				"file,concat",
+				"-f",
+				"mov",
+				"-i",
+				input,
+				"-map",
+				"0:v:0",
+				"-fps_mode",
+				"passthrough",
+				"-enc_time_base:v",
+				"-1",
+				"-c:v",
+				"wrapped_avframe",
+				"-bsf:v",
+				"setts=pts=N:dts=N:duration=1",
+				"-f",
+				"framecrc",
+				"pipe:1",
+			],
+			/^0,/,
+			signal,
+		),
+	]);
+	return packets !== null && packets > 0 && frames === packets;
+}
+
+// Splits only where a fragment decodes cleanly on its own, searching a few
+// fragments past each even split point and merging runs when none does.
+async function keyframeAlignedGroups(
+	source: RecordingVideoChunkSource,
+	chunkCount: number,
+	signal?: AbortSignal,
+): Promise<string[][]> {
+	const total = source.segments.length;
+	const per = Math.ceil(total / chunkCount);
+	const targets = Array.from(
+		{ length: chunkCount - 1 },
+		(_, index) => (index + 1) * per,
+	).filter((target) => target < total);
+	const found = await Promise.all(
+		targets.map(async (target) => {
+			for (
+				let index = target;
+				index < Math.min(total, target + KEYFRAME_SEARCH_SEGMENTS);
+				index++
+			) {
+				if (
+					await decodesCleanlyFromStart(
+						source.init,
+						source.segments[index],
+						signal,
+					)
+				)
+					return index;
+			}
+			return undefined;
+		}),
+	);
+	const boundaries = [0];
+	for (const index of found) {
+		if (index !== undefined && index > boundaries[boundaries.length - 1])
+			boundaries.push(index);
+	}
+	return boundaries.map((start, position) =>
+		source.segments.slice(start, boundaries[position + 1] ?? total),
+	);
+}
+
+const CHUNK_DECODE_BASE_ARGS = [
+	"-hide_banner",
+	"-nostdin",
+	"-copyts",
+	"-v",
+	"error",
+	"-xerror",
+	"-err_detect",
+	"explode+crccheck",
+	"-filter_threads",
+	"1",
+	"-filter_complex_threads",
+	"1",
+];
+
+function videoChunkDecodeArgs(path: string, threads: string) {
+	return [
+		...CHUNK_DECODE_BASE_ARGS,
+		"-threads",
+		threads,
+		"-protocol_whitelist",
+		"file",
+		"-f",
+		"mov",
+		"-i",
+		path,
+		"-map",
+		"0:v:0",
+		"-fps_mode",
+		"passthrough",
+		"-enc_time_base:v",
+		"-1",
+		"-c:v",
+		"wrapped_avframe",
+		"-bsf:v",
+		"setts=pts=N:dts=N:duration=1",
+		"-max_interleave_delta",
+		"1",
+		"-f",
+		"framecrc",
+		"pipe:1",
+	];
+}
+
+// Frame lines of whole fragments that were decoded during the recording, as one chunk of this decoder
+// would print them; the caller has matched each fragment's content identity to this recording's source.
+export interface PreverifiedVideoRun {
+	segments: number;
+	lines: string[];
+}
+
+// Decodes one run of fragments exactly as a chunk of the final verification would. Returns null when the
+// run cannot stand alone or the decoder complains, so the final verification decodes those fragments itself.
+export async function decodePreverifiedRun(
+	init: string,
+	segments: string[],
+	directory: string,
+	signal?: AbortSignal,
+): Promise<string[] | null> {
+	const first = segments[0];
+	if (!first || !(await decodesCleanlyFromStart(init, first, signal)))
+		return null;
+	const chunkPath = join(directory, "preverify-run.mp4");
+	await concatFiles([init, ...segments], chunkPath, signal);
+	const decoder = registerSubprocess(
+		await spawnRecordingDecoder(videoChunkDecodeArgs(chunkPath, "2"), 0),
+	);
+	const kill = () => {
+		if (decoder.exitCode === null) decoder.kill("SIGKILL");
+	};
+	signal?.addEventListener("abort", kill, { once: true });
+	const lines: string[] = [];
+	try {
+		const [exit, , stderr] = await Promise.all([
+			decoder.exited,
+			collectDecoderLines(decoder.stdout, lines, () => {}),
+			readDecoderErrors(decoder.stderr, chunkPath),
+		]);
+		signal?.throwIfAborted();
+		if (exit !== 0 || stderr.error || decoder.signalCode) return null;
+		return lines.some((line) => !line.startsWith("#")) ? lines : null;
+	} finally {
+		signal?.removeEventListener("abort", kill);
+		kill();
+		unregisterSubprocess(decoder);
+		await rm(chunkPath, { force: true });
+	}
+}
+
+// Decodes the packet-proven video as independent runs of whole fragments in
+// parallel, then replays their frame lines through the same parser and evidence
+// checks as one decode. Any decoder complaint falls back to the single decode,
+// which stays the judge of whether a recording is corrupt.
+async function decodePacketProvenChunks(
+	outputPath: string,
+	source: RecordingVideoChunkSource,
+	chunkCount: number,
+	options: RecordingVerificationOptions,
+	packetProof: Awaited<ReturnType<typeof proveRecordingPackets>>,
+	preverified: PreverifiedVideoRun[] = [],
+): Promise<RecordingVerificationResult> {
+	const cached = [...preverified];
+	let covered = cached.reduce((total, run) => total + run.segments, 0);
+	if (covered > source.segments.length)
+		throw new ChunkedDecodeUnavailable("preverified runs exceed the source");
+	// The fragments after the cached runs are decoded from their first one, so it has to decode on its own.
+	while (
+		cached.length > 0 &&
+		covered < source.segments.length &&
+		!(await decodesCleanlyFromStart(
+			source.init,
+			source.segments[covered],
+			options.abortSignal,
+		))
+	)
+		covered -= cached.pop()?.segments ?? 0;
+	const remaining = source.segments.slice(covered);
+	const groups =
+		remaining.length === 0
+			? []
+			: await keyframeAlignedGroups(
+					{ init: source.init, segments: remaining },
+					chunkCount,
+					options.abortSignal,
+				);
+	if (cached.length === 0 && groups.length < 2)
+		throw new ChunkedDecodeUnavailable("no cleanly decodable fragment runs");
+	const directory = dirname(outputPath);
+	const chunkPaths = groups.map((_, index) =>
+		join(directory, `verify-chunk-${index}.mp4`),
+	);
+	const configuredThreads = Number(
+		decodeThreadsFromEnv("MEDIA_SERVER_VERIFY_DECODE_THREADS", 0),
+	);
+	const threads = String(
+		Math.max(
+			1,
+			Math.floor(
+				(configuredThreads > 0 ? configuredThreads : availableParallelism()) /
+					Math.max(1, groups.length),
+			),
+		),
+	);
+	const base = CHUNK_DECODE_BASE_ARGS;
+	const decoders: Awaited<ReturnType<typeof spawnRecordingDecoder>>[] = [];
+	const outputs: string[][] = [];
+	const readers: Promise<unknown>[] = [];
+	let failure: Error | undefined;
+	let decodedFrames = 0;
+	let lastAdvance = performance.now();
+	let lastReport = 0;
+	const stopAll = () => {
+		for (const decoder of decoders) {
+			if (decoder.exitCode === null) {
+				try {
+					decoder.kill("SIGKILL");
+				} catch {
+					failure ??= new Error("Recording decoder termination failed");
+				}
+			}
+		}
+	};
+	const cancel = () => {
+		failure ??= new Error("Recording verification was cancelled");
+		stopAll();
+	};
+	options.abortSignal?.addEventListener("abort", cancel, { once: true });
+	const timeout = setTimeout(() => {
+		failure ??= new RecordingVerificationError(
+			"Recording verification timed out",
+			true,
+		);
+		stopAll();
+	}, options.timeoutMs ?? MAX_LOCAL_VERIFICATION_MS);
+	const stall = setInterval(() => {
+		if (performance.now() - lastAdvance > DECODER_STALL_MS) {
+			failure ??= new RecordingVerificationError(
+				"Recording decoder stopped making progress",
+				true,
+			);
+			stopAll();
+		}
+	}, 1000);
+	const onFrame = () => {
+		decodedFrames++;
+		lastAdvance = performance.now();
+		if (performance.now() - lastReport >= 1000) {
+			lastReport = performance.now();
+			options.onProgress?.({
+				frames: decodedFrames,
+				totalFrames: packetProof.videoPackets,
+			});
+		}
+	};
+	try {
+		await Promise.all(
+			groups.map((group, index) =>
+				concatFiles(
+					[source.init, ...group],
+					chunkPaths[index],
+					options.abortSignal,
+				),
+			),
+		);
+		const jobs = [
+			...chunkPaths.map((path) => videoChunkDecodeArgs(path, threads)),
+			...(packetProof.hasAudio
+				? [
+						[
+							...base,
+							"-threads",
+							"1",
+							"-protocol_whitelist",
+							"file",
+							"-f",
+							"mov",
+							"-i",
+							outputPath,
+							"-map",
+							"0:a:0",
+							"-c:a",
+							"pcm_f64le",
+							"-threads",
+							"1",
+							"-max_interleave_delta",
+							"1",
+							"-f",
+							"framecrc",
+							"pipe:1",
+						],
+					]
+				: []),
+		];
+		const errors: Promise<{ error: string }>[] = [];
+		// A chunk's header describes its first decoded frame, so a mismatch is known
+		// as soon as each chunk emits one frame; stop then instead of decoding everything first.
+		const headers = new Map<number, string>();
+		const checkHeader = (index: number, lines: string[]) => {
+			if (headers.has(index)) return;
+			headers.set(index, metadataOf(lines));
+			const first = headers.get(0);
+			if (first === undefined) return;
+			for (const [other, header] of headers) {
+				if (other === 0 || header === first) continue;
+				failure ??= new ChunkedDecodeUnavailable(
+					`chunk stream parameters differ (${describeHeaderChange(first, header)})`,
+				);
+				stopAll();
+				return;
+			}
+		};
+		for (const [index, args] of jobs.entries()) {
+			options.abortSignal?.throwIfAborted();
+			const decoder = registerSubprocess(await spawnRecordingDecoder(args, 0));
+			decoders.push(decoder);
+			const lines: string[] = [];
+			outputs.push(lines);
+			const frames = collectDecoderLines(
+				decoder.stdout,
+				lines,
+				index < chunkPaths.length
+					? () => {
+							checkHeader(index, lines);
+							onFrame();
+						}
+					: onFrame,
+			);
+			const stderr = readDecoderErrors(decoder.stderr, outputPath);
+			frames.catch(stopAll);
+			stderr.catch(stopAll);
+			readers.push(frames, stderr);
+			errors.push(stderr);
+		}
+		const exits = await Promise.all(decoders.map((decoder) => decoder.exited));
+		await Promise.all(readers);
+		if (failure) throw failure;
+		const stderr = await Promise.all(errors);
+		for (const [index, decoder] of decoders.entries()) {
+			if (exits[index] !== 0 || stderr[index].error || decoder.signalCode)
+				throw new ChunkedDecodeUnavailable(
+					stderr[index].error || `decoder exited with ${exits[index]}`,
+				);
+		}
+		const streams = new Map<number, DecodedStream>();
+		const videoOutputs = [
+			...cached.map((run) => run.lines),
+			...outputs.slice(0, chunkPaths.length),
+		];
+		const videoMetadata = metadataOf(videoOutputs[0] ?? []);
+		let offset = 0;
+		for (const [index, lines] of videoOutputs.entries()) {
+			const metadata = metadataOf(lines);
+			if (index > 0 && metadata !== videoMetadata)
+				throw new ChunkedDecodeUnavailable(
+					`chunk stream parameters differ (${describeHeaderChange(videoMetadata, metadata)})`,
+				);
+			let frames = 0;
+			for (const line of lines) {
+				if (line.startsWith("#")) {
+					if (index === 0) decodeLine(line, streams, true);
+					continue;
+				}
+				const columns = line.split(",").map((value) => value.trim());
+				if (columns[0] !== "0")
+					throw new ChunkedDecodeUnavailable("unexpected chunk stream");
+				const dts = Number(columns[1]);
+				const pts = Number(columns[2]);
+				if (dts !== frames || pts !== frames)
+					throw new ChunkedDecodeUnavailable("chunk frames are not contiguous");
+				columns[1] = String(dts + offset);
+				columns[2] = String(pts + offset);
+				decodeLine(columns.join(", "), streams, true);
+				frames++;
+			}
+			offset += frames;
+		}
+		// A decoder silently skips frames until a keyframe, so a short count is a split problem, not proof.
+		if (offset !== packetProof.videoPackets)
+			throw new ChunkedDecodeUnavailable("chunk frame count differs");
+		if (packetProof.hasAudio) {
+			for (const line of outputs[chunkPaths.length]) {
+				if (line.startsWith("#")) {
+					const metadata = line.match(DECODED_STREAM_METADATA);
+					if (metadata?.[2] === "0")
+						decodeLine(line.replace(/^(#\w+) 0:/, "$1 1:"), streams, true);
+					continue;
+				}
+				if (!line.startsWith("0,"))
+					throw new ChunkedDecodeUnavailable("unexpected audio stream");
+				decodeLine(`1${line.slice(1)}`, streams, true);
+			}
+		}
+		return validateEvidence(
+			streams,
+			options,
+			true,
+			packetProof.outputTiming,
+			false,
+		);
+	} finally {
+		clearTimeout(timeout);
+		clearInterval(stall);
+		options.abortSignal?.removeEventListener("abort", cancel);
+		stopAll();
+		await Promise.allSettled([
+			...decoders.map((decoder) => decoder.exited),
+			...readers,
+		]);
+		for (const decoder of decoders) unregisterSubprocess(decoder);
+		await Promise.all(chunkPaths.map((path) => rm(path, { force: true })));
+	}
+}
+
 export async function verifyRemuxedRecording(
 	videoPath: string,
 	audioPath: string | null,
@@ -673,6 +1280,8 @@ export async function verifyRemuxedRecording(
 		RecordingVerificationOptions,
 		"requireAudio" | "abortSignal" | "timeoutMs" | "onProgress"
 	>,
+	videoChunks?: RecordingVideoChunkSource,
+	preverified: PreverifiedVideoRun[] = [],
 ): Promise<RecordingVerificationResult & { sourcePreserved: true }> {
 	const signal = AbortSignal.any([
 		...(options.abortSignal ? [options.abortSignal] : []),
@@ -705,9 +1314,46 @@ export async function verifyRemuxedRecording(
 			throw new Error("Recording source preservation was not verified");
 		return { ...result, sourcePreserved: true };
 	}
-	const result = await decodeRecording(
+	const decodeOptions = {
+		...options,
+		timeoutMs: options.timeoutMs ?? MAX_LOCAL_VERIFICATION_MS,
+	};
+	const chunkCount = verifyDecodeChunks();
+	let result: RecordingVerificationResult | undefined;
+	if (
+		videoChunks &&
+		(preverified.length > 0 ||
+			(chunkCount > 1 && videoChunks.segments.length >= chunkCount * 2))
+	) {
+		try {
+			result = await decodePacketProvenChunks(
+				outputPath,
+				videoChunks,
+				chunkCount,
+				decodeOptions,
+				proof,
+				preverified,
+			);
+		} catch (error) {
+			signal.throwIfAborted();
+			if (
+				error instanceof RecordingVerificationError &&
+				error.message === "Recording verification timed out"
+			)
+				throw error;
+			console.warn(
+				JSON.stringify({
+					event: "recording_chunked_decode_fallback",
+					reason: (error instanceof Error ? error.message : String(error))
+						.replace(/https?:\/\/\S+/g, "<url>")
+						.slice(0, 300),
+				}),
+			);
+		}
+	}
+	result ??= await decodeRecording(
 		outputPath,
-		{ ...options, timeoutMs: options.timeoutMs ?? MAX_LOCAL_VERIFICATION_MS },
+		decodeOptions,
 		undefined,
 		undefined,
 		proof,
@@ -846,8 +1492,11 @@ async function decodeRecording(
 				? Boolean(options.sourceEvidence.audio)
 				: options.hasAudio
 			: sourceAudioInput !== null;
+	const hashContent =
+		!packetProof &&
+		(options.hashDecodedContent !== false || Boolean(options.sourceEvidence));
 	const streamDecodedContent =
-		!packetProof && process.platform !== "win32" && knownAudio !== undefined;
+		hashContent && process.platform !== "win32" && knownAudio !== undefined;
 	if (streamDecodedContent && !Bun.semver.satisfies(Bun.version, ">=1.4.0")) {
 		throw new Error(
 			"Recording content verification requires Bun 1.4.0 or newer; upgrade the media-server runtime to avoid double-closing decoded-content pipes",
@@ -890,8 +1539,9 @@ async function decodeRecording(
 				"1",
 				"-filter_complex_threads",
 				"1",
+				// FFmpeg's H.264/HEVC decoders are bit-exact across thread counts, so decoded hashes do not depend on this.
 				"-threads",
-				"1",
+				decodeThreadsFromEnv("MEDIA_SERVER_VERIFY_DECODE_THREADS", 1),
 				"-protocol_whitelist",
 				remote ? "http,https,tcp,tls" : "file",
 				"-f",
@@ -958,7 +1608,7 @@ async function decodeRecording(
 									]
 								: []),
 						]
-					: packetProof
+					: !hashContent
 						? []
 						: [
 								...outputOptions,
@@ -1089,7 +1739,7 @@ async function decodeRecording(
 				}
 				stream.contentSha256 = digest.sha256;
 			}
-		} else if (!packetProof) {
+		} else if (hashContent) {
 			for (const digest of diagnostics.digests) decodeLine(digest, streams);
 		}
 		result = validateEvidence(
@@ -1097,7 +1747,7 @@ async function decodeRecording(
 			options,
 			sourceAudioInput !== undefined || packetProof !== undefined,
 			videoTiming,
-			!packetProof,
+			hashContent,
 		);
 	} catch (error) {
 		throw failure ?? error;
@@ -1181,12 +1831,168 @@ async function readRemoteIdentity(
 	}
 }
 
+const DEFAULT_RANGED_VERIFY_PART_MB = 16;
+
+export function verifyDownloadConcurrency(
+	env: Record<string, string | undefined> = process.env,
+): number {
+	const value = Number(env.MEDIA_SERVER_VERIFY_DOWNLOAD_CONCURRENCY?.trim());
+	return Number.isInteger(value) && value > 1 ? Math.min(value, 16) : 1;
+}
+
+export function verifyDownloadPartBytes(
+	env: Record<string, string | undefined> = process.env,
+): number {
+	const value = Number(env.MEDIA_SERVER_VERIFY_DOWNLOAD_PART_MB?.trim());
+	const megabytes =
+		Number.isInteger(value) && value >= 1 && value <= 64
+			? value
+			: DEFAULT_RANGED_VERIFY_PART_MB;
+	return megabytes * 1024 * 1024;
+}
+
+class RangedVerificationUnsupported extends Error {}
+
+// Same proof as the sequential read (every byte, hashed in order, pinned to one
+// ETag), fetched as concurrent ranges so large uploads re-read at network speed.
+async function hashRemoteRecordingRanged(
+	input: string,
+	objectIdentity: string,
+	fileSize: number,
+	abortSignal: AbortSignal,
+	concurrency: number,
+	partBytes: number,
+): Promise<string> {
+	const reads = new AbortController();
+	const signal = AbortSignal.any([abortSignal, reads.signal]);
+	const partCount = Math.ceil(fileSize / partBytes);
+	const readPart = async (index: number): Promise<Uint8Array> => {
+		const start = index * partBytes;
+		const end = Math.min(fileSize, start + partBytes) - 1;
+		for (let attempt = 0; ; attempt++) {
+			signal.throwIfAborted();
+			let response: Response | undefined;
+			try {
+				try {
+					response = await fetchMedia(input, {
+						headers: {
+							"If-Match": objectIdentity,
+							"X-Cap-Recording-Verification": "1",
+							Range: `bytes=${start}-${end}`,
+						},
+						signal,
+					});
+				} catch (error) {
+					if (error instanceof MediaTransferBudgetError) throw error;
+					throw new RecordingVerificationError(
+						"Recording bytes could not be read",
+						true,
+					);
+				}
+				if (response.status === 200) throw new RangedVerificationUnsupported();
+				if (response.status !== 206) {
+					throw new RecordingVerificationError(
+						`Recording byte verification failed: ${response.status}`,
+						response.status === 408 ||
+							response.status === 429 ||
+							response.status >= 500,
+					);
+				}
+				if (response.headers.get("etag") !== objectIdentity || !response.body)
+					throw new Error("Recording object changed during byte verification");
+				if (
+					response.headers.get("content-range") !==
+					`bytes ${start}-${end}/${fileSize}`
+				)
+					throw new Error(
+						"Recording byte resume range does not match the verified object",
+					);
+				const expected = end - start + 1;
+				const bytes = new Uint8Array(expected);
+				let received = 0;
+				try {
+					for await (const chunk of response.body) {
+						if (received + chunk.byteLength > expected)
+							throw new RecordingVerificationError(
+								"Recording object size changed during byte verification",
+								false,
+							);
+						bytes.set(chunk, received);
+						received += chunk.byteLength;
+					}
+				} catch (error) {
+					if (error instanceof RecordingVerificationError) throw error;
+					throw new RecordingVerificationError(
+						"Recording bytes could not be read completely",
+						true,
+					);
+				}
+				if (received !== expected)
+					throw new RecordingVerificationError(
+						"Recording bytes could not be read completely",
+						true,
+					);
+				return bytes;
+			} catch (error) {
+				signal.throwIfAborted();
+				if (
+					!(error instanceof RecordingVerificationError) ||
+					!error.retryable ||
+					attempt >= 3
+				)
+					throw error;
+			} finally {
+				if (!response?.body?.locked)
+					await response?.body?.cancel().catch(() => {});
+			}
+			await sleep(250 * 2 ** attempt, undefined, { signal });
+		}
+	};
+	const hash = createHash("sha256");
+	const inFlight = new Map<number, Promise<Uint8Array>>();
+	let requested = 0;
+	try {
+		for (let index = 0; index < partCount; index++) {
+			while (requested < partCount && requested < index + concurrency) {
+				const part = readPart(requested);
+				part.catch(() => {});
+				inFlight.set(requested, part);
+				requested++;
+			}
+			const bytes = await inFlight.get(index);
+			inFlight.delete(index);
+			if (!bytes) throw new Error("Recording byte range was not requested");
+			hash.update(bytes);
+		}
+		return hash.digest("hex");
+	} finally {
+		reads.abort();
+		await Promise.allSettled(inFlight.values());
+	}
+}
+
 async function hashRemoteRecording(
 	input: string,
 	objectIdentity: string,
 	fileSize: number,
 	abortSignal: AbortSignal,
 ): Promise<string> {
+	const concurrency = verifyDownloadConcurrency();
+	const partBytes = verifyDownloadPartBytes();
+	if (concurrency > 1 && fileSize > partBytes) {
+		try {
+			return await hashRemoteRecordingRanged(
+				input,
+				objectIdentity,
+				fileSize,
+				abortSignal,
+				concurrency,
+				partBytes,
+			);
+		} catch (error) {
+			if (!(error instanceof RangedVerificationUnsupported)) throw error;
+		}
+	}
 	const hash = createHash("sha256");
 	let bytesRead = 0;
 	for (let attempt = 0; ; attempt++) {

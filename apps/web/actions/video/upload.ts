@@ -16,6 +16,7 @@ import {
 import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { revalidatePath } from "next/cache";
+import { requirePersonalFolder } from "@/actions/folders/require-personal-folder";
 import { requireOrganizationAccess } from "@/actions/organization/authorization";
 import { runPromise } from "@/lib/server";
 
@@ -196,6 +197,7 @@ export async function createVideoAndGetUploadUrl({
 		}
 
 		const idToUse = Video.VideoId.make(videoId || nanoId());
+		if (folderId) await requirePersonalFolder(user.id, orgId, folderId);
 		const videoTitle = `Cap ${
 			isScreenshot ? "Screenshot" : isUpload ? "Upload" : "Recording"
 		} - ${formattedDate}`;
@@ -232,12 +234,14 @@ export async function createVideoAndGetUploadUrl({
 			...(folderId ? { folderId } : {}),
 		};
 
-		await db().insert(videos).values(videoData);
+		await db().transaction(async (tx) => {
+			await tx.insert(videos).values(videoData);
 
-		if (supportsUploadProgress)
-			await db().insert(videoUploads).values({
-				videoId: idToUse,
-			});
+			if (supportsUploadProgress)
+				await tx.insert(videoUploads).values({
+					videoId: idToUse,
+				});
+		});
 
 		revalidatePath("/dashboard/caps");
 		revalidatePath("/dashboard/folder");

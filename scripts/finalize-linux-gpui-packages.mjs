@@ -1,6 +1,8 @@
+import { createHash } from "node:crypto";
 import {
 	mkdir,
 	mkdtemp,
+	open,
 	readdir,
 	readFile,
 	rename,
@@ -12,10 +14,25 @@ import {
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
+	notifyStartupInDesktopEntries,
 	runCommand,
 	signUpdaterArtifact,
 	withoutUpdaterSecrets,
 } from "./finalize-linux-appimage.mjs";
+
+const DESKTOP_ENTRY = "usr/share/applications/Cap.desktop";
+
+export async function withUpdatedChecksums(md5sums, root, files) {
+	const lines = md5sums.split("\n");
+	for (const file of files) {
+		const digest = createHash("md5")
+			.update(await readFile(path.join(root, file)))
+			.digest("hex");
+		const index = lines.findIndex((line) => line.endsWith(`  ${file}`));
+		if (index >= 0) lines[index] = `${digest}  ${file}`;
+	}
+	return lines.join("\n");
+}
 
 export const webviewDebPackages = new Set([
 	"libwebkit2gtk-4.1-0",
@@ -221,6 +238,54 @@ const captured = (env) => ({
 	stdio: ["ignore", "pipe", "inherit"],
 });
 
+async function verifyDebGlibc(root, control, { env, run }) {
+	const dependencies = /^Depends:(.*(?:\n[ \t].*)*)/m
+		.exec(control)?.[1]
+		.replace(/\n[ \t]+/g, " ")
+		.split(",");
+	const minimum = dependencies
+		?.map((dependency) =>
+			/^\s*libc6\s*\(>=\s*(\d+(?:\.\d+)+)\)\s*$/.exec(dependency),
+		)
+		.find(Boolean)?.[1];
+	if (!minimum) {
+		throw new Error(
+			"The Cap deb must declare a versioned libc6 (>= version) dependency",
+		);
+	}
+	async function verifyDirectory(directory) {
+		for (const entry of await readdir(directory, { withFileTypes: true })) {
+			const filename = path.join(directory, entry.name);
+			if (entry.isDirectory()) {
+				await verifyDirectory(filename);
+			} else if (entry.isFile()) {
+				const file = await open(filename, "r");
+				const magic = Buffer.alloc(4);
+				try {
+					await file.read(magic, 0, 4, 0);
+				} finally {
+					await file.close();
+				}
+				if (!magic.equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46]))) continue;
+				const { stdout } = await run(
+					"readelf",
+					["--wide", "--version-info", filename],
+					captured(env),
+				);
+				const needs = stdout.split("Version needs section")[1] ?? "";
+				for (const match of needs.matchAll(/Name: GLIBC_(\d+(?:\.\d+)+)\b/g)) {
+					if (match[1].localeCompare(minimum, "en", { numeric: true }) > 0) {
+						throw new Error(
+							`${path.relative(root, filename)} requires GLIBC_${match[1]}, exceeding the declared libc6 (>= ${minimum}) dependency`,
+						);
+					}
+				}
+			}
+		}
+	}
+	await verifyDirectory(root);
+}
+
 async function recompressDebData(uncompressed, output, members, { env, run }) {
 	await mkdir(members);
 	const names = (await run("ar", ["t", uncompressed], captured(env))).stdout
@@ -266,7 +331,12 @@ export async function finalizeGpuiDeb(
 		const linked = await linkDuplicateLibraries(
 			path.join(root, "usr", "lib", "cap"),
 		);
+		const notified = await notifyStartupInDesktopEntries(root, [DESKTOP_ENTRY]);
 		const control = path.join(root, "DEBIAN", "control");
+		await verifyDebGlibc(root, await readFile(control, "utf8"), {
+			env: tools,
+			run,
+		});
 		await writeFile(
 			control,
 			withInstalledSize(
@@ -275,6 +345,16 @@ export async function finalizeGpuiDeb(
 			),
 		);
 		const md5sums = path.join(root, "DEBIAN", "md5sums");
+		if (notified.length > 0 && (await stat(md5sums).catch(() => null))) {
+			await writeFile(
+				md5sums,
+				await withUpdatedChecksums(
+					await readFile(md5sums, "utf8"),
+					root,
+					notified,
+				),
+			);
+		}
 		if (linked.length > 0 && (await stat(md5sums).catch(() => null))) {
 			await writeFile(
 				md5sums,
@@ -377,6 +457,7 @@ export async function finalizeGpuiRpm(
 			await mkdir(path.join(top, directory), { recursive: true });
 		}
 		await run("bsdtar", ["-xf", rpm, "-C", staging], { env: tools });
+		await notifyStartupInDesktopEntries(staging, [DESKTOP_ENTRY]);
 		const linked = new Set(
 			(
 				await linkDuplicateLibraries(path.join(staging, "usr", "lib", "cap"))

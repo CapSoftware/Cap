@@ -111,7 +111,9 @@ impl VoiceEnhancer {
             self.pending_start = self.next_input;
             self.pending.clear();
             self.previous.fill(0.0);
-            self.states = (0..channels).map(|_| DenoiseState::new()).collect();
+            if self.expected_start.is_some() {
+                self.states = (0..channels).map(|_| DenoiseState::new()).collect();
+            }
             self.speech_frames = 0;
             self.leveler = self.profile.and_then(|profile| {
                 VoiceFilter::new(channels as u16, &profile.filter(channels as u16))
@@ -284,6 +286,102 @@ mod tests {
                     (seed as f64 / u32::MAX as f64 * 0.16 - 0.08) as f32
                 })
                 .collect(),
+        }
+    }
+
+    /// Guard sentinel A09 (scripts/verify/guards.toml): a render that does
+    /// not continue the previous one must sound exactly like a render by a
+    /// new enhancer (the reset in `render`, and the editor cache that never
+    /// reuses an enhancer across a seek).
+    #[test]
+    fn guard_a09_render_after_a_seek_equals_a_fresh_enhancer() {
+        ffmpeg::init().unwrap();
+        // Voiced, syllable-modulated harmonics plus noise, so the render
+        // is not silence.
+        let mut source = signal(96_000 * 2, 2);
+        for (index, sample) in source.data.iter_mut().enumerate() {
+            let t = (index / 2) as f32 / 48_000.0;
+            let pitch = 140.0 + 30.0 * (t * 1.3).sin();
+            let voice: f32 = (1..6)
+                .map(|h| (std::f32::consts::TAU * pitch * h as f32 * t).sin() / h as f32)
+                .sum();
+            let syllables = (std::f32::consts::TAU * 4.0 * t).sin().max(0.0);
+            *sample += 0.25 * voice * syllables;
+        }
+        let mut reused = VoiceEnhancer::with_settings(2, 1.0, VoiceProfile::default());
+        let _ = reused.render(&source, 0, 9_600);
+        let _ = reused.render(&source, 9_600, 9_600);
+        let after_seek = reused.render(&source, 120_000, 9_600);
+        let fresh = VoiceEnhancer::with_settings(2, 1.0, VoiceProfile::default())
+            .render(&source, 120_000, 9_600);
+        assert!(
+            fresh.samples().iter().any(|v| v.abs() > 0.01),
+            "silent render"
+        );
+        assert_eq!(after_seek.samples(), fresh.samples());
+    }
+
+    #[test]
+    fn initial_state_reuse_matches_forced_reset_after_empty_reads_and_seeks() {
+        ffmpeg::init().unwrap();
+        for channels in [1, 2] {
+            let source = signal(96_001, channels);
+            for profile in [false, true] {
+                let create = || {
+                    if profile {
+                        VoiceEnhancer::with_settings(channels, 0.9, VoiceProfile::default())
+                    } else {
+                        VoiceEnhancer::new(channels)
+                    }
+                };
+                for start in [0, 27_017] {
+                    for count in [1, 4_096] {
+                        let mut actual = create();
+                        let mut reference = create();
+                        reference.expected_start = Some(usize::MAX);
+                        for empty_start in [0, 50_000] {
+                            assert!(actual.render(&source, empty_start, 0).samples().is_empty());
+                            assert!(
+                                reference
+                                    .render(&source, empty_start, 0)
+                                    .samples()
+                                    .is_empty()
+                            );
+                        }
+                        let first = actual.render(&source, start, count);
+                        let expected = reference.render(&source, start, count);
+                        assert_eq!(
+                            first
+                                .samples()
+                                .iter()
+                                .map(|value| value.to_bits())
+                                .collect::<Vec<_>>(),
+                            expected
+                                .samples()
+                                .iter()
+                                .map(|value| value.to_bits())
+                                .collect::<Vec<_>>()
+                        );
+                        assert_eq!(actual.speech_frames(), reference.speech_frames());
+                        let seek = actual.render(&source, 48_017, 997);
+                        let mut fresh = create();
+                        fresh.expected_start = Some(usize::MAX);
+                        let expected = fresh.render(&source, 48_017, 997);
+                        assert_eq!(
+                            seek.samples()
+                                .iter()
+                                .map(|value| value.to_bits())
+                                .collect::<Vec<_>>(),
+                            expected
+                                .samples()
+                                .iter()
+                                .map(|value| value.to_bits())
+                                .collect::<Vec<_>>()
+                        );
+                        assert_eq!(actual.speech_frames(), fresh.speech_frames());
+                    }
+                }
+            }
         }
     }
 

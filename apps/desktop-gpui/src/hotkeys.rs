@@ -51,26 +51,47 @@ pub enum HotkeyAction {
     ScreenshotArea,
 }
 
+const ACTION_KEYS: [(&str, HotkeyAction); 13] = [
+    ("startStudioRecording", HotkeyAction::StartStudioRecording),
+    ("startInstantRecording", HotkeyAction::StartInstantRecording),
+    ("stopRecording", HotkeyAction::StopRecording),
+    ("restartRecording", HotkeyAction::RestartRecording),
+    ("togglePauseRecording", HotkeyAction::TogglePauseRecording),
+    ("cycleRecordingMode", HotkeyAction::CycleRecordingMode),
+    ("openRecordingPicker", HotkeyAction::OpenRecordingPicker),
+    (
+        "openRecordingPickerDisplay",
+        HotkeyAction::OpenRecordingPickerDisplay,
+    ),
+    (
+        "openRecordingPickerWindow",
+        HotkeyAction::OpenRecordingPickerWindow,
+    ),
+    (
+        "openRecordingPickerArea",
+        HotkeyAction::OpenRecordingPickerArea,
+    ),
+    ("screenshotDisplay", HotkeyAction::ScreenshotDisplay),
+    ("screenshotWindow", HotkeyAction::ScreenshotWindow),
+    ("screenshotArea", HotkeyAction::ScreenshotArea),
+];
+
 impl HotkeyAction {
+    /// `#[serde(other)] Other` over there: a newer app's action survives in
+    /// the store and registers nothing here.
     fn from_store_key(key: &str) -> Option<Self> {
-        Some(match key {
-            "startStudioRecording" => Self::StartStudioRecording,
-            "startInstantRecording" => Self::StartInstantRecording,
-            "stopRecording" => Self::StopRecording,
-            "restartRecording" => Self::RestartRecording,
-            "togglePauseRecording" => Self::TogglePauseRecording,
-            "cycleRecordingMode" => Self::CycleRecordingMode,
-            "openRecordingPicker" => Self::OpenRecordingPicker,
-            "openRecordingPickerDisplay" => Self::OpenRecordingPickerDisplay,
-            "openRecordingPickerWindow" => Self::OpenRecordingPickerWindow,
-            "openRecordingPickerArea" => Self::OpenRecordingPickerArea,
-            "screenshotDisplay" => Self::ScreenshotDisplay,
-            "screenshotWindow" => Self::ScreenshotWindow,
-            "screenshotArea" => Self::ScreenshotArea,
-            // `#[serde(other)] Other` over there: a newer app's action
-            // survives in the store and registers nothing here.
-            _ => return None,
-        })
+        ACTION_KEYS
+            .iter()
+            .find(|(stored, _)| *stored == key)
+            .map(|(_, action)| *action)
+    }
+
+    fn store_key(self) -> &'static str {
+        ACTION_KEYS
+            .iter()
+            .find(|(_, action)| *action == self)
+            .map(|(key, _)| *key)
+            .unwrap_or_default()
     }
 }
 
@@ -80,6 +101,12 @@ struct Hotkeys {
     /// grabbed.
     manager: Option<GlobalHotKeyManager>,
     bindings: Vec<(HotKey, HotkeyAction)>,
+    /// Bindings the OS refused, usually because macOS or another app already
+    /// owns the combo. The Shortcuts page flags these rows.
+    unavailable: Vec<HotkeyAction>,
+    /// Set while the Shortcuts page records a new combo: a registered combo
+    /// would otherwise fire its action instead of reaching the page.
+    paused: bool,
     #[cfg(target_os = "linux")]
     capture_stop: Option<HotKey>,
 }
@@ -119,6 +146,8 @@ pub fn init(cx: &mut App) {
     cx.set_global(Hotkeys {
         manager: None,
         bindings: Vec::new(),
+        unavailable: Vec::new(),
+        paused: false,
         #[cfg(target_os = "linux")]
         capture_stop: None,
     });
@@ -157,13 +186,78 @@ pub fn init(cx: &mut App) {
 /// Re-read the store and swap every OS registration -- the settings page's
 /// commit seam (`commands.setHotkey` re-registers over there).
 pub fn reload(cx: &mut App) {
-    if !cx.has_global::<Hotkeys>() {
+    if !cx.has_global::<Hotkeys>() || cx.global::<Hotkeys>().paused {
         return;
     }
     #[cfg(target_os = "linux")]
     if cx.global::<Hotkeys>().capture_stop.is_some() {
         return;
     }
+    unregister_all(cx);
+    register_from_store(cx);
+}
+
+/// Drop every OS registration while the Shortcuts page records a combo, so
+/// pressing an already-bound combo reaches the page instead of firing.
+/// Returns false when the bindings cannot be released: on Linux a recording's
+/// temporary stop key holds the registrations until the recording ends.
+pub fn pause(cx: &mut App) -> bool {
+    if !cx.has_global::<Hotkeys>() || cx.global::<Hotkeys>().paused {
+        return true;
+    }
+    if editing_blocked(cx) {
+        return false;
+    }
+    unregister_all(cx);
+    let hotkeys = cx.global_mut::<Hotkeys>();
+    hotkeys.paused = true;
+    hotkeys.release_idle_manager();
+    tracing::info!("global hotkeys paused while a shortcut is recorded");
+    true
+}
+
+pub fn is_paused(cx: &App) -> bool {
+    cx.try_global::<Hotkeys>()
+        .is_some_and(|hotkeys| hotkeys.paused)
+}
+
+pub fn editing_blocked(cx: &App) -> bool {
+    #[cfg(target_os = "linux")]
+    if cx
+        .try_global::<Hotkeys>()
+        .is_some_and(|hotkeys| hotkeys.capture_stop.is_some())
+    {
+        return true;
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = cx;
+    false
+}
+
+/// End a [`pause`] and register the store's bindings again. Returns whether
+/// anything was paused; without a pause the registrations are left alone.
+pub fn resume(cx: &mut App) -> bool {
+    if !cx.has_global::<Hotkeys>() || !cx.global::<Hotkeys>().paused {
+        return false;
+    }
+    cx.global_mut::<Hotkeys>().paused = false;
+    reload(cx);
+    true
+}
+
+pub fn unavailable_actions(cx: &App) -> Vec<&'static str> {
+    cx.try_global::<Hotkeys>()
+        .map(|hotkeys| {
+            hotkeys
+                .unavailable
+                .iter()
+                .map(|action| action.store_key())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn unregister_all(cx: &mut App) {
     let hotkeys = cx.global_mut::<Hotkeys>();
     // Two actions on one combo share one OS registration, so unregister each
     // combo once.
@@ -179,7 +273,7 @@ pub fn reload(cx: &mut App) {
         tracing::warn!("unregistering global hotkeys failed: {error}");
     }
     hotkeys.bindings.clear();
-    register_from_store(cx);
+    hotkeys.unavailable.clear();
 }
 
 #[cfg(target_os = "linux")]
@@ -219,6 +313,73 @@ pub fn clean_capture_stop_message(cx: &App) -> String {
 }
 
 #[cfg(target_os = "linux")]
+fn clean_capture_shortcut_label(trigger: &str) -> String {
+    let trigger = readable_trigger(trigger);
+    format!(
+        "Press and release {trigger} to start. Use the same shortcut to stop. This temporary shortcut does not change your settings."
+    )
+}
+
+/// Portal backends describe triggers in their own words: GNOME says
+/// "Press <Shift><Control>F9", KDE "Ctrl+Shift+F9". Show one form.
+#[cfg(any(target_os = "linux", test))]
+fn readable_trigger(trigger: &str) -> String {
+    let trigger = trigger.trim();
+    let trigger = trigger
+        .get(..6)
+        .filter(|prefix| prefix.eq_ignore_ascii_case("press "))
+        .map_or(trigger, |_| trigger[6..].trim_start());
+    let mut readable = String::new();
+    let mut rest = trigger;
+    while let Some(open) = rest.strip_prefix('<') {
+        let Some(end) = open.find('>') else { break };
+        let modifier = match open[..end].to_ascii_lowercase().as_str() {
+            "control" | "ctrl" | "primary" => "Ctrl",
+            "shift" => "Shift",
+            "alt" | "mod1" => "Alt",
+            "super" | "meta" | "mod4" | "hyper" => "Super",
+            _ => &open[..end],
+        };
+        readable.push_str(modifier);
+        readable.push('+');
+        rest = &open[end + 1..];
+    }
+    readable.push_str(rest);
+    readable
+}
+
+#[cfg(any(target_os = "linux", test))]
+#[derive(Debug, PartialEq, Eq)]
+enum ShortcutChange {
+    Relabel(String),
+    Unchanged,
+    Removed,
+}
+
+/// `ShortcutsChanged` reports the session's registered shortcuts, and GNOME
+/// sends one right after every bind it approves. Activation is matched by
+/// shortcut id, so a new trigger only changes what the prompt should say. The
+/// Stop control is lost only when the portal lists shortcuts without this one;
+/// an empty list is ambiguous across backends and must not end a recording.
+#[cfg(any(target_os = "linux", test))]
+fn shortcut_change<'a>(
+    shortcuts: impl IntoIterator<Item = (&'a str, &'a str)>,
+    shortcut_id: &str,
+) -> ShortcutChange {
+    let mut listed = false;
+    let ours = shortcuts.into_iter().find(|(id, _)| {
+        listed = true;
+        *id == shortcut_id
+    });
+    match ours {
+        None if listed => ShortcutChange::Removed,
+        None => ShortcutChange::Unchanged,
+        Some((_, trigger)) if trigger.trim().is_empty() => ShortcutChange::Unchanged,
+        Some((_, trigger)) => ShortcutChange::Relabel(trigger.to_owned()),
+    }
+}
+
+#[cfg(target_os = "linux")]
 fn reserve_wayland_stop(generation: u64, cx: &mut App) -> anyhow::Result<()> {
     anyhow::ensure!(
         !cx.has_global::<WaylandStop>(),
@@ -248,6 +409,7 @@ fn reserve_wayland_stop(generation: u64, cx: &mut App) -> anyhow::Result<()> {
                 }
                 match event {
                     WaylandStopEvent::Ready(label) => {
+                        tracing::info!(%label, "recording Stop control ready");
                         stop.ready = true;
                         stop.label = label;
                         app_windows::notify_clean_capture_preflight(cx);
@@ -268,21 +430,26 @@ fn reserve_wayland_stop(generation: u64, cx: &mut App) -> anyhow::Result<()> {
                         );
                     }
                     WaylandStopEvent::Unavailable(error) => {
+                        let was_ready = stop.ready;
                         stop.ready = false;
-                        app_windows::clean_capture_stop_unavailable(generation, error, cx);
+                        app_windows::clean_capture_stop_unavailable(
+                            generation, error, was_ready, cx,
+                        );
                     }
                     _ => {}
                 }
             });
         }
         cx.update(|cx| {
-            if cx
+            if let Some(was_ready) = cx
                 .try_global::<WaylandStop>()
-                .is_some_and(|stop| stop.generation == generation && stop.cleanup.is_none())
+                .filter(|stop| stop.generation == generation && stop.cleanup.is_none())
+                .map(|stop| stop.ready)
             {
                 app_windows::clean_capture_stop_unavailable(
                     generation,
                     "The recording Stop worker ended".into(),
+                    was_ready,
                     cx,
                 );
             }
@@ -325,14 +492,36 @@ async fn run_wayland_stop(
     if let Err(error) = result {
         tracing::info!(%error, "Using the recording Stop tray instead of GlobalShortcuts");
     }
-    let result = run_tray_stop(generation, &cancel, &events)
-        .await
-        .map_err(|error| error.to_string());
-    if let Err(error) = &result {
-        let _ = events.send(WaylandStopEvent::Unavailable(error.clone()));
+    match run_tray_stop(generation, &cancel, &events).await {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            let _ = events.send(WaylandStopEvent::Unavailable(error.to_string()));
+            // A tray that never registered left nothing to clean up; failing
+            // here would block every later recording behind a cleanup error.
+            if error.is::<StopTrayNeverRegistered>() {
+                Ok(())
+            } else {
+                Err(error.to_string())
+            }
+        }
     }
-    result
 }
+
+/// The recording Stop tray could not register at all (no StatusNotifier
+/// watcher, as on GNOME without the AppIndicator extension).
+#[cfg(target_os = "linux")]
+#[derive(Debug)]
+struct StopTrayNeverRegistered(String);
+
+#[cfg(target_os = "linux")]
+impl std::fmt::Display for StopTrayNeverRegistered {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl std::error::Error for StopTrayNeverRegistered {}
 
 #[cfg(target_os = "linux")]
 fn wayland_stop_icon() -> anyhow::Result<cap_utils::linux_recording_stop::StopTrayIcon> {
@@ -364,10 +553,11 @@ async fn run_tray_stop(
     events: &flume::Sender<WaylandStopEvent>,
 ) -> anyhow::Result<()> {
     use cap_utils::linux_recording_stop::{StopTray, StopTrayEvent};
-    let icon = wayland_stop_icon()?;
+    let icon = wayland_stop_icon()
+        .map_err(|error| anyhow::Error::new(StopTrayNeverRegistered(error.to_string())))?;
     let tray = StopTray::open(generation, icon).await.map_err(|error| {
         if error.can_fallback() {
-            anyhow::Error::msg(error)
+            anyhow::Error::new(StopTrayNeverRegistered(error.to_string()))
         } else {
             anyhow::anyhow!("Recording Stop tray registration cleanup is unconfirmed: {error}")
         }
@@ -408,8 +598,8 @@ async fn run_portal_stop(
         portal.get_property::<u32>("version"),
     )
     .await??;
-    *fallback_safe = false;
     let session = tokio::time::timeout(Duration::from_secs(5), portal.create_session()).await??;
+    *fallback_safe = false;
     let outcome = async {
         let session_path = serde_json::to_value(&session)?.as_str().ok_or_else(|| anyhow::anyhow!("Invalid shortcut session identity"))?.to_owned();
         let shortcut_id = format!("cap-recording-stop-{generation}");
@@ -427,7 +617,7 @@ async fn run_portal_stop(
         let shortcut = response.shortcuts().iter().find(|shortcut| shortcut.id() == shortcut_id).ok_or_else(|| anyhow::anyhow!("The portal did not grant the recording Stop shortcut"))?;
         let label = shortcut.trigger_description();
         anyhow::ensure!(!label.trim().is_empty(), "The portal did not describe the granted Stop shortcut");
-        events.send(WaylandStopEvent::Ready(format!("Press and release {label} to start. Use the same shortcut to stop. This temporary shortcut does not change your settings.")))?;
+        events.send(WaylandStopEvent::Ready(clean_capture_shortcut_label(label)))?;
         *ready = true;
         loop {
             tokio::select! {
@@ -443,7 +633,13 @@ async fn run_portal_stop(
                 }
                 event = changed.next() => {
                     let event = event.ok_or_else(|| anyhow::anyhow!("Recording shortcut change stream closed"))?;
-                    if event.session_handle().as_str() == session_path { anyhow::bail!("The recording shortcut changed; recording must stop before proving the new shortcut"); }
+                    if event.session_handle().as_str() != session_path { continue; }
+                    let shortcuts = event.shortcuts().iter().map(|shortcut| (shortcut.id(), shortcut.trigger_description()));
+                    match shortcut_change(shortcuts, &shortcut_id) {
+                        ShortcutChange::Relabel(label) => events.send(WaylandStopEvent::Ready(clean_capture_shortcut_label(&label)))?,
+                        ShortcutChange::Unchanged => {}
+                        ShortcutChange::Removed => anyhow::bail!("The recording shortcut was removed. Recording has stopped."),
+                    }
                 }
                 _ = closed.next() => anyhow::bail!("The recording shortcut session closed"),
             }
@@ -598,7 +794,8 @@ fn register_from_store(cx: &mut App) {
         match registered {
             Ok(()) => hotkeys.bindings.push((hotkey, action)),
             Err(error) => {
-                tracing::warn!(?action, code = %binding.code, "registering global hotkey failed: {error}")
+                tracing::warn!(?action, code = %binding.code, "registering global hotkey failed: {error}");
+                hotkeys.unavailable.push(action);
             }
         }
     }
@@ -706,12 +903,22 @@ fn dispatch(action: HotkeyAction, cx: &mut App) {
     }
 }
 
+fn microphone_available(name: &str) -> bool {
+    use cap_recording::feeds::microphone::MicrophoneFeed;
+
+    if cfg!(target_os = "macos") {
+        MicrophoneFeed::list_names()
+            .iter()
+            .any(|device| device == name)
+    } else {
+        MicrophoneFeed::list().contains_key(name)
+    }
+}
+
 /// `start_recording_from_hotkey` + the `RequestStartRecording` listener
 /// (`hotkeys.rs:158-177`, `lib.rs:5529-5551` over there): confirm a start
-/// without a working microphone, then record the store's
-/// `recording_settings.target` -- whatever either app recorded last -- with
-/// the primary display as the fallback. Mic/camera come off the main window's
-/// current selections through its ordinary start path.
+/// without a working microphone, then record. Mic/camera come off the main
+/// window's current selections through its ordinary start path.
 ///
 /// The mode is set through [`app_windows::set_recording_mode`] first, so the
 /// pill, the tray tick and the shared store all follow the hotkey; the Tauri
@@ -721,44 +928,53 @@ fn dispatch(action: HotkeyAction, cx: &mut App) {
 /// worse mismatch.
 fn start_from_hotkey(mode: Mode, cx: &mut App) {
     app_windows::set_recording_mode(mode, cx);
-    let target = stored_target().unwrap_or_else(|| ScreenCaptureTarget::Display {
-        id: scap_targets::Display::primary().id(),
-    });
     let main = cx.global::<app_windows::AppWindows>().main;
+    let armed = main.read(cx).ok().and_then(|view| view.armed_target());
+    let stored = stored_target();
 
     // `is_recording_active_or_pending` (`hotkeys.rs:162-170` over there): an
     // active session skips the confirm -- the re-start is a no-op either way,
     // `start_recording_with_target`'s phase check here and `start_recording`'s
     // over there.
     let idle = RecordingSession::global(cx).read(cx).phase == Phase::Idle;
-    let confirm_enabled = store::GeneralSettings::load().confirm_without_microphone;
-    if !idle || !confirm_enabled {
-        start_now(main, target, cx);
-        return;
-    }
+    let confirm = idle && store::GeneralSettings::load().confirm_without_microphone;
     let mic_name = main.read(cx).ok().and_then(|view| {
         view.microphone_selection()
             .map(|microphone| microphone.name.clone())
     });
 
     cx.spawn(async move |cx| {
-        // `MicrophoneFeed::list().contains_key(name)` -- the exact
-        // availability probe the Tauri confirm runs (`hotkeys.rs:126-135`
-        // over there), on the background executor because it enumerates
-        // CoreAudio devices. No selection means no microphone, which needs no
-        // enumeration to know.
+        // Window and display lookups enumerate the system, so they run off
+        // the main thread along with the microphone probe below.
+        let target = cx
+            .background_executor()
+            .spawn(async move {
+                pick_hotkey_target(armed, stored, target_is_live, || {
+                    scap_targets::Display::get_containing_cursor()
+                        .unwrap_or_else(scap_targets::Display::primary)
+                        .id()
+                })
+            })
+            .await;
+        if !confirm {
+            cx.update(|cx| start_now(main, mode, target, cx));
+            return;
+        }
+        // The availability probe the Tauri confirm runs. On macOS that is a
+        // name match (`microphone_available_for_confirmation` over there):
+        // `MicrophoneFeed::list()` reads every input device's configuration,
+        // which held the hotkey start for over 100 ms. No selection means no
+        // microphone, which needs no enumeration to know.
         let available = match mic_name {
             Some(name) => {
                 cx.background_executor()
-                    .spawn(async move {
-                        cap_recording::feeds::microphone::MicrophoneFeed::list().contains_key(&name)
-                    })
+                    .spawn(async move { microphone_available(&name) })
                     .await
             }
             None => false,
         };
         if available {
-            cx.update(|cx| start_now(main, target, cx));
+            cx.update(|cx| start_now(main, mode, target, cx));
             return;
         }
         // The Tauri dialog, word for word
@@ -787,17 +1003,60 @@ fn start_from_hotkey(mode: Mode, cx: &mut App) {
         // `receiver.await.unwrap_or(false)`: a dismissed sheet records
         // nothing.
         if receiver.await == Ok(0) {
-            cx.update(|cx| start_now(main, target, cx));
+            cx.update(|cx| start_now(main, mode, target, cx));
         }
     })
     .detach();
 }
 
+/// What a Start shortcut records: the target selected in the main window,
+/// else the last recorded target, else the display under the pointer -- and
+/// only a candidate that still exists. The stored target can be whatever was
+/// recorded last, possibly by the Tauri app long ago, and a closed window or
+/// unplugged display used to fail the start with "target_display_crop:
+/// Display not found". A stored camera-only target is skipped: without a
+/// camera selected it cannot start, so only an explicit choice records it.
+fn pick_hotkey_target(
+    armed: Option<ScreenCaptureTarget>,
+    stored: Option<ScreenCaptureTarget>,
+    is_live: impl Fn(&ScreenCaptureTarget) -> bool,
+    fallback_display: impl FnOnce() -> scap_targets::DisplayId,
+) -> ScreenCaptureTarget {
+    let stored = stored.filter(|target| !matches!(target, ScreenCaptureTarget::CameraOnly));
+    [armed, stored]
+        .into_iter()
+        .flatten()
+        .find(|target| is_live(target))
+        .unwrap_or_else(|| ScreenCaptureTarget::Display {
+            id: fallback_display(),
+        })
+}
+
+fn target_is_live(target: &ScreenCaptureTarget) -> bool {
+    match target {
+        ScreenCaptureTarget::Display { id } => scap_targets::Display::from_id(id).is_some(),
+        ScreenCaptureTarget::Window { id } => {
+            scap_targets::Window::from_id(id).is_some_and(|window| window.display().is_some())
+        }
+        ScreenCaptureTarget::Area { screen, .. } => {
+            scap_targets::Display::from_id(screen).is_some()
+        }
+        ScreenCaptureTarget::CameraOnly => true,
+    }
+}
+
 fn start_now(
     main: gpui::WindowHandle<crate::main_window::MainWindow>,
+    mode: Mode,
     target: ScreenCaptureTarget,
     cx: &mut App,
 ) {
+    // The start waited on the target lookup (and maybe the microphone
+    // prompt); another Start or Cycle shortcut can change the mode meanwhile,
+    // and the start path reads the window's mode.
+    if RecordingSession::global(cx).read(cx).phase == Phase::Idle {
+        app_windows::set_recording_mode(mode, cx);
+    }
     main.update(cx, |view, window, cx| {
         view.start_recording_with_target(target, Vec::new(), window, cx)
     })
@@ -821,6 +1080,8 @@ mod tests {
         let mut hotkeys = Hotkeys {
             manager: None,
             bindings: Vec::new(),
+            unavailable: Vec::new(),
+            paused: false,
             #[cfg(target_os = "linux")]
             capture_stop: None,
         };
@@ -918,6 +1179,96 @@ mod tests {
             );
         }
         assert_eq!(HotkeyAction::from_store_key("someFutureAction"), None);
+        for (key, action) in ACTION_KEYS {
+            assert_eq!(action.store_key(), key);
+        }
+    }
+
+    fn window(id: &str) -> ScreenCaptureTarget {
+        serde_json::from_value(serde_json::json!({ "variant": "window", "id": id })).unwrap()
+    }
+
+    fn display(id: &str) -> ScreenCaptureTarget {
+        serde_json::from_value(serde_json::json!({ "variant": "display", "id": id })).unwrap()
+    }
+
+    fn display_id(id: &str) -> scap_targets::DisplayId {
+        id.parse().unwrap()
+    }
+
+    fn same(a: &ScreenCaptureTarget, b: &ScreenCaptureTarget) -> bool {
+        serde_json::to_value(a).unwrap() == serde_json::to_value(b).unwrap()
+    }
+
+    /// The store shape from the report: a Tauri-era window that no longer
+    /// exists. The start must fall through to the pointer's display.
+    #[test]
+    fn a_stale_stored_window_falls_back_to_the_pointer_display() {
+        let stored: ScreenCaptureTarget =
+            serde_json::from_str(r#"{ "id": "7022", "variant": "window" }"#).unwrap();
+        let picked = pick_hotkey_target(None, Some(stored), |_| false, || display_id("2"));
+        assert!(same(&picked, &display("2")));
+    }
+
+    #[test]
+    fn the_main_window_selection_wins_when_it_exists() {
+        let picked = pick_hotkey_target(
+            Some(window("11")),
+            Some(window("22")),
+            |_| true,
+            || display_id("1"),
+        );
+        assert!(same(&picked, &window("11")));
+
+        let picked = pick_hotkey_target(
+            Some(window("11")),
+            Some(window("22")),
+            |target| same(target, &window("22")),
+            || display_id("1"),
+        );
+        assert!(same(&picked, &window("22")));
+    }
+
+    #[test]
+    fn the_last_target_is_used_when_nothing_is_selected() {
+        let picked = pick_hotkey_target(None, Some(display("5")), |_| true, || display_id("1"));
+        assert!(same(&picked, &display("5")));
+    }
+
+    #[test]
+    fn a_stored_camera_only_target_never_starts_a_shortcut_recording() {
+        let picked = pick_hotkey_target(
+            None,
+            Some(ScreenCaptureTarget::CameraOnly),
+            |_| true,
+            || display_id("3"),
+        );
+        assert!(same(&picked, &display("3")));
+        let picked = pick_hotkey_target(
+            Some(ScreenCaptureTarget::CameraOnly),
+            None,
+            |_| true,
+            || display_id("3"),
+        );
+        assert!(matches!(picked, ScreenCaptureTarget::CameraOnly));
+    }
+
+    /// What the main window writes on every start is what the shortcut reads
+    /// back.
+    #[test]
+    fn the_saved_target_round_trips_through_the_store_shape() {
+        for target in [window("7022"), display("1")] {
+            let value = serde_json::to_value(&target).unwrap();
+            let back: ScreenCaptureTarget = serde_json::from_value(value).unwrap();
+            assert!(same(&back, &target));
+        }
+    }
+
+    /// Against the real system: a window id that cannot exist is never
+    /// treated as recordable.
+    #[test]
+    fn a_missing_window_is_not_live() {
+        assert!(!target_is_live(&window("4294967294")));
     }
 
     /// Two actions on the same combo both fire on one press -- the Tauri
@@ -942,6 +1293,41 @@ mod tests {
             actions_for(&bindings, pause.id()),
             vec![HotkeyAction::TogglePauseRecording]
         );
+    }
+
+    /// GNOME answers an approved bind with `ShortcutsChanged` carrying the
+    /// same shortcut; 0.6.1 treated that as a lost Stop control and blocked
+    /// every Wayland recording on GNOME 50.
+    #[test]
+    fn shortcuts_changed_after_bind_keeps_the_stop_control() {
+        let id = "cap-recording-stop-1";
+        assert_eq!(
+            shortcut_change([(id, "Shift+Ctrl+F9")], id),
+            ShortcutChange::Relabel("Shift+Ctrl+F9".into())
+        );
+        assert_eq!(shortcut_change([(id, "  ")], id), ShortcutChange::Unchanged);
+        assert_eq!(shortcut_change([], id), ShortcutChange::Unchanged);
+        assert_eq!(
+            shortcut_change([("cap-recording-stop-0", "F9")], id),
+            ShortcutChange::Removed
+        );
+        assert_eq!(
+            shortcut_change([("other", "F8"), (id, "F9")], id),
+            ShortcutChange::Relabel("F9".into())
+        );
+    }
+
+    #[test]
+    fn portal_trigger_descriptions_read_the_same_on_every_desktop() {
+        assert_eq!(
+            readable_trigger("Press <Shift><Control>F9"),
+            "Shift+Ctrl+F9"
+        );
+        assert_eq!(readable_trigger("<Primary><Alt>r"), "Ctrl+Alt+r");
+        assert_eq!(readable_trigger("Ctrl+Shift+F9"), "Ctrl+Shift+F9");
+        assert_eq!(readable_trigger("  press F9 "), "F9");
+        assert_eq!(readable_trigger("<Super"), "<Super");
+        assert_eq!(readable_trigger("Pressure"), "Pressure");
     }
 
     /// Why the Tauri handler's ⌘, special case is not reproduced (see

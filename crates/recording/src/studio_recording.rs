@@ -16,7 +16,7 @@ use crate::{
         CursorActor, CursorActorResponse, Cursors, IncrementalCaptureOutputs, spawn_cursor_recorder,
     },
     feeds::{camera::CameraFeedLock, microphone::MicrophoneFeedLock},
-    ffmpeg::{FragmentedAudioMuxer, FragmentedAudioMuxerConfig, OggMuxer},
+    ffmpeg::{FragmentedAudioMuxer, FragmentedAudioMuxerConfig, OggMuxer, OggMuxerConfig},
     output_pipeline::{
         AudioAnchor, AudioGapSummary, DoneFut, FinishedOutputPipeline, OutputPipeline,
         PipelineDoneError,
@@ -145,7 +145,9 @@ fn persist_segment_input_events(
             moves: response.moves,
         })
         .map_err(anyhow::Error::from)
-        .and_then(|events| std::fs::write(path, events).map_err(anyhow::Error::from))
+        .and_then(|events| {
+            crate::cursor::write_atomically(path, &[events.as_bytes()]).map_err(anyhow::Error::from)
+        })
         .with_context(|| format!("Could not save cursor events to {}", path.display()));
         accumulate_finalization_error(failure, result);
     }
@@ -156,8 +158,11 @@ fn persist_segment_input_events(
         let result = KeyboardEvents {
             presses: response.keyboard_presses,
         }
-        .write_to_file(path)
+        .to_bytes()
         .map_err(anyhow::Error::msg)
+        .and_then(|bytes| {
+            crate::cursor::write_atomically(path, &[&bytes]).map_err(anyhow::Error::from)
+        })
         .with_context(|| format!("Could not save keyboard events to {}", path.display()));
         accumulate_finalization_error(failure, result);
     }
@@ -1453,11 +1458,102 @@ fn write_recording_failure_diagnostics(
 
 impl Pipeline {
     fn epoch(&self) -> Timestamps {
-        self.start_gate
-            .as_ref()
-            .and_then(RecordingStartGate::armed_at)
-            .filter(|armed| armed.instant() > self.start_time.instant())
-            .unwrap_or(self.start_time)
+        pipeline_epoch(self.start_time, self.start_gate.as_ref())
+    }
+
+    /// Writes the tracks' start times beside the segment as soon as their
+    /// first frames arrive and again as more tracks start, so a crash keeps
+    /// the alignment a normal stop would persist.
+    fn spawn_start_time_persister(&self) {
+        let Some(segment_dir) = self.screen.path().parent().map(Path::to_path_buf) else {
+            return;
+        };
+        let start_time = self.start_time;
+        let start_gate = self.start_gate.clone();
+        let mut display = Some(self.screen.first_timestamp_watch());
+        let mut tracks = [
+            self.microphone.as_ref().map(|p| p.first_timestamp_watch()),
+            self.camera.as_ref().map(|p| p.first_timestamp_watch()),
+            self.system_audio
+                .as_ref()
+                .map(|p| p.first_timestamp_watch()),
+        ];
+        tokio::spawn(async move {
+            const WRITE_ATTEMPTS: u32 = 5;
+            let mut firsts: [Option<Timestamp>; 4] = [None; 4];
+            let mut written = None;
+            let mut failed_writes = 0;
+            loop {
+                if let Some(watch) = &mut display {
+                    firsts[0] = firsts[0].or(*watch.borrow_and_update());
+                }
+                for (first, watch) in firsts[1..].iter_mut().zip(tracks.iter_mut()) {
+                    if let Some(watch) = watch {
+                        *first = first.or(*watch.borrow_and_update());
+                    }
+                }
+                if let Some(display_first) = firsts[0] {
+                    let times = SegmentStartTimes::compute(
+                        pipeline_epoch(start_time, start_gate.as_ref()),
+                        display_first,
+                        firsts[1],
+                        firsts[2],
+                        firsts[3],
+                    );
+                    if written != Some(times) {
+                        // A blocking write and two fsyncs: keep them off the
+                        // runtime workers the capture pipelines run on.
+                        let dir = segment_dir.clone();
+                        let result = tokio::task::spawn_blocking(move || {
+                            write_segment_start_times(&dir, &times)
+                        })
+                        .await
+                        .unwrap_or_else(|error| Err(std::io::Error::other(error)));
+                        match result {
+                            Ok(()) => written = Some(times),
+                            Err(error) => {
+                                failed_writes += 1;
+                                warn!(%error, failed_writes, "Failed to persist segment start times");
+                                if failed_writes >= WRITE_ATTEMPTS {
+                                    return;
+                                }
+                                tokio::time::sleep(Duration::from_millis(200)).await;
+                                continue;
+                            }
+                        }
+                    }
+                }
+                let display_waiting = firsts[0].is_none() && display.is_some();
+                let tracks_waiting: [bool; 3] =
+                    std::array::from_fn(|i| firsts[i + 1].is_none() && tracks[i].is_some());
+                if !display_waiting && !tracks_waiting.contains(&true) {
+                    return;
+                }
+                let [mic, camera, system_audio] = &mut tracks;
+                tokio::select! {
+                    result = changed(&mut display), if display_waiting => {
+                        if result.is_err() {
+                            return;
+                        }
+                    }
+                    result = changed(mic), if tracks_waiting[0] => {
+                        if result.is_err() {
+                            *mic = None;
+                        }
+                    }
+                    result = changed(camera), if tracks_waiting[1] => {
+                        if result.is_err() {
+                            *camera = None;
+                        }
+                    }
+                    result = changed(system_audio), if tracks_waiting[2] => {
+                        if result.is_err() {
+                            *system_audio = None;
+                        }
+                    }
+                }
+            }
+        });
     }
 
     #[cfg(target_os = "linux")]
@@ -2541,6 +2637,55 @@ pub struct CompletedRecording {
     pub clean_stopped: Option<CleanStoppedStudio>,
 }
 
+/// Tracks starting within one audio output buffer of each other are treated
+/// as simultaneous.
+const CROSS_TRACK_SNAP_SECS: f64 =
+    cap_timestamp::AUDIO_OUTPUT_FRAMES as f64 / cap_timestamp::DEFAULT_SAMPLE_RATE as f64;
+
+/// Each track's start relative to the segment epoch, as persisted in the
+/// recording meta. Also written beside an in-progress segment
+/// (`crate::recovery::SEGMENT_START_TIMES_FILE`) so crash recovery aligns the
+/// tracks exactly like a normal stop.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SegmentStartTimes {
+    pub display: f64,
+    pub camera: Option<f64>,
+    pub mic: Option<f64>,
+    pub system_audio: Option<f64>,
+}
+
+impl SegmentStartTimes {
+    pub fn compute(
+        epoch: Timestamps,
+        display: Timestamp,
+        mic: Option<Timestamp>,
+        camera: Option<Timestamp>,
+        system_audio: Option<Timestamp>,
+    ) -> Self {
+        let to_start_time = |timestamp: Timestamp| timestamp.signed_duration_since_secs(epoch);
+        let mic = mic.map(to_start_time);
+        let camera = camera.map(|camera| {
+            snap_nearby_start_time(to_start_time(camera), mic, CROSS_TRACK_SNAP_SECS)
+        });
+        let raw_display = to_start_time(display);
+        let display = if camera.is_some() {
+            snap_nearby_start_time(raw_display, camera, CROSS_TRACK_SNAP_SECS)
+        } else {
+            snap_nearby_start_time(raw_display, mic, CROSS_TRACK_SNAP_SECS)
+        };
+        let system_audio = system_audio.map(|audio| {
+            let reference = mic.or(Some(display));
+            snap_nearby_start_time(to_start_time(audio), reference, CROSS_TRACK_SNAP_SECS)
+        });
+        Self {
+            display,
+            camera,
+            mic,
+            system_audio,
+        }
+    }
+}
+
 fn snap_nearby_start_time(
     raw_start: f64,
     reference_start: Option<f64>,
@@ -2563,11 +2708,8 @@ async fn stop_recording(
     known_failure: Option<String>,
 ) -> anyhow::Result<CompletedRecording> {
     use cap_project::*;
-    use cap_timestamp::{AUDIO_OUTPUT_FRAMES, DEFAULT_SAMPLE_RATE};
 
     const DEFAULT_FPS: u32 = 30;
-
-    const CROSS_TRACK_SNAP_SECS: f64 = AUDIO_OUTPUT_FRAMES as f64 / DEFAULT_SAMPLE_RATE as f64;
 
     let make_relative = |path: &PathBuf| -> RelativePathBuf {
         match path.strip_prefix(&recording_dir) {
@@ -2603,26 +2745,25 @@ async fn stop_recording(
         .into_iter()
         .enumerate()
         .map(|(segment_index, s)| {
-            let to_start_time =
-                |timestamp: Timestamp| timestamp.signed_duration_since_secs(s.pipeline.start_time);
-
-            let mic_start_time = s
-                .pipeline
-                .microphone
-                .as_ref()
-                .map(|mic| to_start_time(mic.first_timestamp));
-
-            let camera_start_time = s.pipeline.camera.as_ref().map(|camera| {
-                let raw_camera_start = to_start_time(camera.first_timestamp);
-                snap_nearby_start_time(raw_camera_start, mic_start_time, CROSS_TRACK_SNAP_SECS)
-            });
-
-            let raw_display_start = to_start_time(s.pipeline.screen.first_timestamp);
-            let display_start_time = if camera_start_time.is_some() {
-                snap_nearby_start_time(raw_display_start, camera_start_time, CROSS_TRACK_SNAP_SECS)
-            } else {
-                snap_nearby_start_time(raw_display_start, mic_start_time, CROSS_TRACK_SNAP_SECS)
-            };
+            let start_times = SegmentStartTimes::compute(
+                s.pipeline.start_time,
+                s.pipeline.screen.first_timestamp,
+                s.pipeline
+                    .microphone
+                    .as_ref()
+                    .map(|mic| mic.first_timestamp),
+                s.pipeline
+                    .camera
+                    .as_ref()
+                    .map(|camera| camera.first_timestamp),
+                s.pipeline
+                    .system_audio
+                    .as_ref()
+                    .map(|audio| audio.first_timestamp),
+            );
+            let mic_start_time = start_times.mic;
+            let camera_start_time = start_times.camera;
+            let display_start_time = start_times.display;
 
             let diagnostics =
                 (!s.pipeline.track_failures.is_empty()).then(|| SegmentFailureDiagnostics {
@@ -2702,28 +2843,14 @@ async fn stop_recording(
                         start_time: mic_start_time,
                         device_id: s.mic_device_id.clone(),
                         gap_summary: to_project_gap_summary(mic.audio_gap_summary),
+                        digital_silence_ms: mic.digital_silence_ms,
                     }),
-                    system_audio: s.pipeline.system_audio.map(|audio| {
-                        let raw_sys_start = to_start_time(audio.first_timestamp);
-                        let sys_start_time = if let Some(mic_start) = mic_start_time {
-                            snap_nearby_start_time(
-                                raw_sys_start,
-                                Some(mic_start),
-                                CROSS_TRACK_SNAP_SECS,
-                            )
-                        } else {
-                            snap_nearby_start_time(
-                                raw_sys_start,
-                                Some(display_start_time),
-                                CROSS_TRACK_SNAP_SECS,
-                            )
-                        };
-                        AudioMeta {
-                            path: make_relative(&audio.path),
-                            start_time: Some(sys_start_time),
-                            device_id: None,
-                            gap_summary: to_project_gap_summary(audio.audio_gap_summary),
-                        }
+                    system_audio: s.pipeline.system_audio.map(|audio| AudioMeta {
+                        path: make_relative(&audio.path),
+                        start_time: start_times.system_audio,
+                        device_id: None,
+                        gap_summary: to_project_gap_summary(audio.audio_gap_summary),
+                        digital_silence_ms: None,
                     }),
                     cursor: s
                         .pipeline
@@ -2997,6 +3124,7 @@ impl SegmentPipelineFactory {
     fn commit_next(&mut self, pipeline: &mut Pipeline) {
         self.index += 1;
         pipeline.spawn_watcher(self.completion_tx.clone());
+        pipeline.spawn_start_time_persister();
     }
 
     #[cfg(not(target_os = "linux"))]
@@ -3042,6 +3170,9 @@ impl SegmentPipelineFactory {
         self.index += 1;
 
         pipeline.spawn_watcher(self.completion_tx.clone());
+        if self.fragmented || cfg!(windows) {
+            pipeline.spawn_start_time_persister();
+        }
 
         Ok(pipeline)
     }
@@ -3203,6 +3334,7 @@ async fn create_segment_pipeline(
                 builder
                     .build::<crate::ffmpeg::SegmentedVideoMuxer>(
                         crate::ffmpeg::SegmentedVideoMuxerConfig {
+                            timed_fragments: true,
                             segment_duration: Duration::from_secs(2),
                             shared_pause_state: shared_pause_state.clone(),
                             ..Default::default()
@@ -3406,6 +3538,7 @@ async fn create_segment_pipeline(
                 .with_start_gate(start_gate.clone())
                 .build::<crate::ffmpeg::SegmentedVideoMuxer>(
                     crate::ffmpeg::SegmentedVideoMuxerConfig {
+                        timed_fragments: true,
                         segment_duration: Duration::from_secs(2),
                         shared_pause_state: shared_pause_state.clone(),
                         ..Default::default()
@@ -3436,6 +3569,7 @@ async fn create_segment_pipeline(
                 .with_start_gate(start_gate.clone())
                 .build::<FragmentedAudioMuxer>(FragmentedAudioMuxerConfig {
                     shared_pause_state: shared_pause_state.clone(),
+                    write_behind: cfg!(target_os = "macos"),
                 })
                 .instrument(error_span!("mic-out"))
                 .await
@@ -3444,7 +3578,9 @@ async fn create_segment_pipeline(
                 .with_audio_source::<sources::Microphone>(mic_feed)
                 .with_timestamps(start_time)
                 .with_start_gate(start_gate.clone())
-                .build::<OggMuxer>(())
+                .build::<OggMuxer>(OggMuxerConfig {
+                    write_behind: cfg!(target_os = "macos"),
+                })
                 .instrument(error_span!("mic-out"))
                 .await
         };
@@ -3468,6 +3604,7 @@ async fn create_segment_pipeline(
                 .with_audio_anchor(AudioAnchor::PipelineEpoch)
                 .build::<FragmentedAudioMuxer>(FragmentedAudioMuxerConfig {
                     shared_pause_state: shared_pause_state.clone(),
+                    write_behind: cfg!(target_os = "macos"),
                 })
                 .instrument(error_span!("system-audio-out"))
                 .await
@@ -3477,7 +3614,9 @@ async fn create_segment_pipeline(
                 .with_timestamps(start_time)
                 .with_start_gate(start_gate.clone())
                 .with_audio_anchor(AudioAnchor::PipelineEpoch)
-                .build::<OggMuxer>(())
+                .build::<OggMuxer>(OggMuxerConfig {
+                    write_behind: cfg!(target_os = "macos"),
+                })
                 .instrument(error_span!("system-audio-out"))
                 .await
         };
@@ -3527,6 +3666,7 @@ async fn create_segment_pipeline(
                         cursor: incremental_output,
                         keyboard: keyboard_incremental_output,
                     },
+                    keyboard_capture,
                 );
 
                 Ok::<_, CreateSegmentPipelineError>(CursorPipeline {
@@ -3603,6 +3743,39 @@ fn persist_final_recording_meta(
         .save_for_project()
         .context("persist final recording metadata")?;
     Ok(recording_meta)
+}
+
+async fn changed(
+    watch: &mut Option<tokio::sync::watch::Receiver<Option<Timestamp>>>,
+) -> Result<(), tokio::sync::watch::error::RecvError> {
+    match watch {
+        Some(watch) => watch.changed().await,
+        None => std::future::pending().await,
+    }
+}
+
+fn pipeline_epoch(start_time: Timestamps, start_gate: Option<&RecordingStartGate>) -> Timestamps {
+    start_gate
+        .and_then(RecordingStartGate::armed_at)
+        .filter(|armed| armed.instant() > start_time.instant())
+        .unwrap_or(start_time)
+}
+
+fn write_segment_start_times(segment_dir: &Path, times: &SegmentStartTimes) -> std::io::Result<()> {
+    use std::io::Write;
+    let path = segment_dir.join(crate::recovery::SEGMENT_START_TIMES_FILE);
+    let temp = path.with_extension("json.tmp");
+    let mut file = std::fs::File::create(&temp)?;
+    file.write_all(&serde_json::to_vec(times).map_err(std::io::Error::other)?)?;
+    file.sync_all()?;
+    drop(file);
+    std::fs::rename(&temp, &path)?;
+    if let Ok(dir) = std::fs::File::open(segment_dir)
+        && let Err(error) = dir.sync_all()
+    {
+        warn!(%error, "Directory fsync failed after persisting segment start times");
+    }
+    Ok(())
 }
 
 fn write_in_progress_meta(recording_dir: &Path) -> anyhow::Result<()> {
@@ -4448,6 +4621,7 @@ mod tests {
                         video_frame_count: 30,
                         video_timestamp_span: Some((Duration::ZERO, Duration::from_millis(967))),
                         audio_gap_summary: None,
+                        digital_silence_ms: None,
                     },
                     microphone: None,
                     camera: None,
@@ -5240,6 +5414,7 @@ mod tests {
             video_frame_count,
             video_timestamp_span: None,
             audio_gap_summary: None,
+            digital_silence_ms: None,
         }
     }
 
@@ -5347,6 +5522,166 @@ mod tests {
             }
             Ok(())
         }
+    }
+
+    #[tokio::test]
+    async fn in_progress_segments_persist_the_start_times_a_normal_stop_records() {
+        let temp = tempfile::tempdir().unwrap();
+        let segment_dir = temp.path().join("content/segments/segment-0");
+        std::fs::create_dir_all(&segment_dir).unwrap();
+        let timestamps = Timestamps::now();
+        let (screen_tx, screen_rx) = flume::bounded(4);
+        let screen = OutputPipeline::builder(segment_dir.join("display"))
+            .with_video::<ChannelVideoSource<TestVideoFrame>>(ChannelVideoSourceConfig::new(
+                test_video_info(),
+                screen_rx,
+            ))
+            .with_timestamps(timestamps)
+            .build::<SuccessfulVideoMuxer>(())
+            .await
+            .unwrap();
+        let (mut mic_tx, mic_rx) = futures::channel::mpsc::channel(16);
+        let microphone = OutputPipeline::builder(segment_dir.join("audio-input"))
+            .with_audio_source::<ChannelAudioSource>(ChannelAudioSourceConfig::new(
+                test_audio_info(),
+                mic_rx,
+            ))
+            .with_timestamps(timestamps)
+            .build::<SuccessfulVideoMuxer>(())
+            .await
+            .unwrap();
+        let pipeline = Pipeline {
+            start_time: timestamps,
+            start_gate: None,
+            screen,
+            microphone: Some(microphone),
+            camera: None,
+            system_audio: None,
+            cursor: None,
+            track_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
+            watcher_task: None,
+            #[cfg(any(target_os = "linux", windows))]
+            stopping: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        };
+        pipeline.spawn_start_time_persister();
+        let persisted = || -> Option<SegmentStartTimes> {
+            serde_json::from_slice(
+                &std::fs::read(segment_dir.join(crate::recovery::SEGMENT_START_TIMES_FILE)).ok()?,
+            )
+            .ok()
+        };
+
+        let base = timestamps.instant();
+        screen_tx
+            .send_async(TestVideoFrame {
+                timestamp: Timestamp::Instant(base + Duration::from_millis(200)),
+            })
+            .await
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while persisted().is_none() && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let display_only = persisted().expect("display start persisted before the mic starts");
+        assert_eq!(display_only.mic, None);
+
+        for k in 0..10u64 {
+            mic_tx
+                .try_send(crate::output_pipeline::AudioFrame::new(
+                    test_audio_info().empty_frame(960),
+                    Timestamp::Instant(base + Duration::from_millis(500 + k * 20)),
+                ))
+                .unwrap();
+        }
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while persisted().is_none_or(|times| times.mic.is_none()) && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let during = persisted().expect("start times persisted");
+
+        drop(screen_tx);
+        drop(mic_tx);
+        let finished = pipeline.stop().await.unwrap().pipeline;
+        let at_stop = SegmentStartTimes::compute(
+            finished.start_time,
+            finished.screen.first_timestamp,
+            finished.microphone.as_ref().map(|mic| mic.first_timestamp),
+            None,
+            None,
+        );
+        assert_eq!(during, at_stop);
+        assert!(during.mic.unwrap() > during.display);
+    }
+
+    #[tokio::test]
+    async fn a_track_that_ends_before_starting_does_not_stop_start_time_persistence() {
+        let temp = tempfile::tempdir().unwrap();
+        let segment_dir = temp.path().join("content/segments/segment-0");
+        std::fs::create_dir_all(&segment_dir).unwrap();
+        let timestamps = Timestamps::now();
+        let (screen_tx, screen_rx) = flume::bounded(4);
+        let screen = OutputPipeline::builder(segment_dir.join("display"))
+            .with_video::<ChannelVideoSource<TestVideoFrame>>(ChannelVideoSourceConfig::new(
+                test_video_info(),
+                screen_rx,
+            ))
+            .with_timestamps(timestamps)
+            .build::<SuccessfulVideoMuxer>(())
+            .await
+            .unwrap();
+        let (mic_tx, mic_rx) = futures::channel::mpsc::channel(16);
+        let microphone = OutputPipeline::builder(segment_dir.join("audio-input"))
+            .with_audio_source::<ChannelAudioSource>(ChannelAudioSourceConfig::new(
+                test_audio_info(),
+                mic_rx,
+            ))
+            .with_timestamps(timestamps)
+            .build::<SuccessfulVideoMuxer>(())
+            .await
+            .unwrap();
+        let microphone_watch = microphone.first_timestamp_watch();
+        let pipeline = Pipeline {
+            start_time: timestamps,
+            start_gate: None,
+            screen,
+            microphone: None,
+            camera: None,
+            system_audio: None,
+            cursor: None,
+            track_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
+            watcher_task: None,
+            #[cfg(any(target_os = "linux", windows))]
+            stopping: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        };
+        let pipeline = Pipeline {
+            microphone: Some(microphone),
+            ..pipeline
+        };
+        pipeline.spawn_start_time_persister();
+
+        drop(mic_tx);
+        let Pipeline {
+            microphone, screen, ..
+        } = pipeline;
+        let _ = microphone.unwrap().stop().await;
+        assert!(microphone_watch.borrow().is_none());
+
+        screen_tx
+            .send_async(TestVideoFrame {
+                timestamp: Timestamp::Instant(timestamps.instant() + Duration::from_millis(200)),
+            })
+            .await
+            .unwrap();
+        let path = segment_dir.join(crate::recovery::SEGMENT_START_TIMES_FILE);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !path.exists() && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let times: SegmentStartTimes =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(times.mic, None);
+        drop(screen_tx);
+        let _ = screen.stop().await;
     }
 
     fn test_video_info() -> VideoInfo {
