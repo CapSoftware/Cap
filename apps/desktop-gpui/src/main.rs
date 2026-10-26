@@ -325,9 +325,9 @@ fn main() {
     let _log_guard = init_logging();
     crash_capture::install(&diagnostics::logs_dir());
     #[cfg(target_os = "linux")]
-    if let Some(display) = stale_wayland_display {
+    if let Some(wayland_display) = stale_wayland_display {
         tracing::warn!(
-            display = %display.to_string_lossy(),
+            wayland_display = %wayland_display.to_string_lossy(),
             "WAYLAND_DISPLAY names no running compositor; using the X display"
         );
     }
