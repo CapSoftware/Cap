@@ -10,6 +10,11 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { withAuth } from "@/app/api/utils";
 import {
+	blockedS3EndpointMessage,
+	isDisallowedS3Endpoint,
+	publicOnlyS3Agents,
+} from "@/lib/s3-endpoint-policy";
+import {
 	getAccessibleOrganization,
 	getManagedOrganizationStorage,
 	getOrganizationS3Bucket,
@@ -57,6 +62,11 @@ const getS3ErrorMetadata = (error: unknown) => {
 	return error.$metadata as { httpStatusCode?: number } | undefined;
 };
 
+const blockedEndpointResponse = {
+	error: blockedS3EndpointMessage,
+	details: "The provided endpoint is not allowed.",
+};
+
 app.post(
 	"/",
 	zValidator(
@@ -73,6 +83,10 @@ app.post(
 	async (c) => {
 		const user = c.get("user");
 		const data = c.req.valid("json");
+
+		if (await isDisallowedS3Endpoint(data.endpoint)) {
+			return c.json(blockedEndpointResponse, { status: 400 });
+		}
 
 		try {
 			const encryptedConfig = {
@@ -227,6 +241,13 @@ app.post(
 		const TIMEOUT_MS = 5000; // 5 second timeout
 		const data = c.req.valid("json");
 
+		if (await isDisallowedS3Endpoint(data.endpoint)) {
+			return c.json(
+				{ ...blockedEndpointResponse, metadata: undefined },
+				{ status: 400 },
+			);
+		}
+
 		try {
 			const controller = new AbortController();
 			const timeoutId = setTimeout(() => {
@@ -240,7 +261,10 @@ app.post(
 					accessKeyId: data.accessKeyId,
 					secretAccessKey: data.secretAccessKey,
 				},
-				requestHandler: { abortSignal: controller.signal },
+				requestHandler: {
+					abortSignal: controller.signal,
+					...publicOnlyS3Agents(),
+				},
 			});
 
 			try {

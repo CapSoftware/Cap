@@ -139,7 +139,8 @@ impl RecordingHealthAccumulator {
             | PipelineHealthEvent::EncoderRebuilt { .. }
             | PipelineHealthEvent::SourceAudioReset { .. }
             | PipelineHealthEvent::RecoveryFragmentCorrupt { .. }
-            | PipelineHealthEvent::CaptureTargetLost { .. } => None,
+            | PipelineHealthEvent::CaptureTargetLost { .. }
+            | PipelineHealthEvent::MicrophoneDigitalSilence => None,
         }
     }
 

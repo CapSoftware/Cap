@@ -223,7 +223,7 @@ function slideBoundsIntoContainer(
 
 export type CropperRef = {
 	fill: () => void;
-	reset: () => void;
+	reset: (options?: { animate?: boolean }) => void;
 	setCropProperty: (field: keyof CropBounds, value: number) => void;
 	setCrop: (
 		value: CropBounds | ((b: CropBounds) => CropBounds),
@@ -617,9 +617,14 @@ export function Cropper(
 
 		if (props.ref) {
 			const cropperRef: CropperRef = {
-				reset: () => {
+				reset: (options) => {
 					const bounds = computeInitialBounds();
-					setRawBoundsAndAnimate(bounds);
+					if (options?.animate === false) {
+						stopAnimation();
+						setRawBoundsConstraining(bounds);
+					} else {
+						setRawBoundsAndAnimate(bounds);
+					}
 					setAspectState("snapped", null);
 				},
 				fill,

@@ -199,7 +199,10 @@ export function TimelineComposer({
 										if (!value.trim()) closeComposer();
 									}}
 									onKeyDown={(event) => {
-										if (event.key === "Enter") {
+										if (
+											event.key === "Enter" &&
+											!event.nativeEvent.isComposing
+										) {
 											event.preventDefault();
 											void submit();
 										}

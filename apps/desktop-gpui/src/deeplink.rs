@@ -559,7 +559,7 @@ impl DeepLinkAction {
                     RecordingMetaInner::Instant(_) => {
                         let mp4_path = project_path.join("content/output.mp4");
                         if mp4_path.exists() && mp4_path.is_file() {
-                            library::open_path(&mp4_path);
+                            library::open_with_system(&mp4_path, cx);
                             app_windows::hide_main_window(cx);
                         }
                     }
