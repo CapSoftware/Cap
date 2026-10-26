@@ -3,7 +3,7 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import moment from "moment";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { memo, useState } from "react";
 import { toast } from "sonner";
 import { editDate } from "@/actions/videos/edit-date";
 import { editTitle } from "@/actions/videos/edit-title";
@@ -19,20 +19,20 @@ interface CapContentProps {
 	setIsSharingDialogOpen: (isSharingDialogOpen: boolean) => void;
 }
 
-export const CapCardContent: React.FC<CapContentProps> = ({
+export const CapCardContent = memo(function CapCardContent({
 	cap,
 	userId,
 	sharedCapCard = false,
 	hideSharedStatus,
 	isOwner,
 	setIsSharingDialogOpen,
-}) => {
+}: CapContentProps) {
 	const router = useRouter();
 	const effectiveDate = cap.metadata?.customCreatedAt
 		? new Date(cap.metadata.customCreatedAt)
 		: cap.createdAt;
 
-	const [dateValue, setDateValue] = useState(
+	const [dateValue, setDateValue] = useState(() =>
 		moment(effectiveDate).format("YYYY-MM-DD HH:mm:ss"),
 	);
 	const [isDateEditing, setIsDateEditing] = useState(false);
@@ -227,4 +227,4 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 			</div>
 		</div>
 	);
-};
+});
