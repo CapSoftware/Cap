@@ -24,6 +24,11 @@ quit = "Cap से बाहर निकलें"
 services = "सेवाएँ"
 settings = "सेटिंग्स…"
 
+[menu.about]
+licensed = "AGPL-3.0 के अंतर्गत लाइसेंस प्राप्त"
+website = "वेबसाइट"
+commit = "कमिट"
+
 [menu.file]
 close_window = "विंडो बंद करें"
 title = "फ़ाइल"
@@ -52,6 +57,7 @@ zoom = "ज़ूम करें"
 
 [menu.help]
 title = "सहायता"
+feedback = "प्रतिक्रिया दें…"
 changelog = "चेंजलॉग"
 dashboard = "डैशबोर्ड"
 documentation = "दस्तावेज़ीकरण"

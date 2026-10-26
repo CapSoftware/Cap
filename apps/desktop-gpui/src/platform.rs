@@ -707,6 +707,8 @@ mod mac {
     const SETTINGS_ROW: isize = 3;
     const FILE_MENU: isize = 1;
     const OPEN_RECENT_ROW: isize = 1;
+    const HELP_MENU: isize = 5;
+    const FEEDBACK_ROW: isize = 0;
 
     /// `PredefinedMenuItem::about`, which on macOS is `orderFrontStandardAboutPanelWithOptions:`.
     /// Ordering a window front re-enters gpui's window callbacks, so call it
@@ -747,26 +749,37 @@ mod mac {
         }
     }
 
-    const ABOUT_CREDITS: &[(&str, Option<&str>)] = &[
-        ("Copyright \u{a9} 2023-present Cap Software, Inc.", None),
-        (
-            "Licensed under AGPL-3.0",
-            Some("https://github.com/CapSoftware/Cap/blob/main/LICENSE"),
-        ),
-        ("Website", Some("https://cap.so")),
-        ("Documentation", Some("https://cap.so/docs")),
-        ("Help Center", Some("https://help.cap.so/")),
-        ("Discord Community", Some("https://cap.link/discord")),
-        ("GitHub", Some("https://github.com/CapSoftware/Cap")),
-        (
-            "Report an Issue",
-            Some("https://github.com/CapSoftware/Cap/issues"),
-        ),
-    ];
+    /// Each entry is one centred line. A `Some` URL makes the line a link.
+    /// Kept short: a long credits block makes AppKit add a scroll view.
+    fn about_credit_lines() -> Vec<(String, Option<&'static str>)> {
+        use crate::i18n::tr;
+        vec![
+            (
+                "Copyright \u{a9} 2023-present Cap Software, Inc.".into(),
+                None,
+            ),
+            (
+                tr::menu::about::licensed().into(),
+                Some("https://github.com/CapSoftware/Cap/blob/main/LICENSE"),
+            ),
+            (tr::menu::about::website().into(), Some("https://cap.so")),
+        ]
+    }
+
+    const COMMIT_FONT_SIZE: f64 = 10.0;
+
+    /// The build's commit, when the build recorded one.
+    fn commit_line() -> Option<String> {
+        option_env!("CAP_BUILD_REVISION").map(|revision| {
+            let short = &revision[..revision.len().min(7)];
+            format!("{}: {short}", crate::i18n::tr::menu::about::commit())
+        })
+    }
 
     fn about_credits() -> Retained<objc2_foundation::NSMutableAttributedString> {
         use objc2::{AnyThread, ClassType};
         use objc2_app_kit::{
+            NSColor, NSFont, NSFontAttributeName, NSForegroundColorAttributeName,
             NSLinkAttributeName, NSMutableParagraphStyle, NSParagraphStyleAttributeName,
             NSTextAlignment,
         };
@@ -776,10 +789,20 @@ mod mac {
 
         let style = NSMutableParagraphStyle::new();
         style.setAlignment(NSTextAlignment::Center);
-        let paragraph: &AnyObject = style.as_super();
+        let centred: &AnyObject = style.as_super();
+
+        let spaced = NSMutableParagraphStyle::new();
+        spaced.setAlignment(NSTextAlignment::Center);
+        spaced.setParagraphSpacing(12.0);
+        let spaced: &AnyObject = spaced.as_super();
+
+        let commit_style = NSMutableParagraphStyle::new();
+        commit_style.setAlignment(NSTextAlignment::Center);
+        commit_style.setParagraphSpacingBefore(12.0);
+        let commit_style: &AnyObject = commit_style.as_super();
 
         let credits = NSMutableAttributedString::from_nsstring(&NSString::from_str(""));
-        for (text, link) in ABOUT_CREDITS {
+        let append = |text: &str, link: Option<&str>, paragraph: &AnyObject, subdued: bool| {
             let line_text = NSString::from_str(&format!("{text}\n"));
             let link = link.and_then(|url| NSURL::URLWithString(&NSString::from_str(url)));
 
@@ -788,6 +811,16 @@ mod mac {
             if let Some(link) = link.as_deref() {
                 keys.push(unsafe { NSLinkAttributeName });
                 values.push(link.as_super());
+            }
+            let color;
+            let font;
+            if subdued {
+                color = NSColor::tertiaryLabelColor();
+                font = NSFont::systemFontOfSize(COMMIT_FONT_SIZE);
+                keys.push(unsafe { NSForegroundColorAttributeName });
+                values.push(color.as_super());
+                keys.push(unsafe { NSFontAttributeName });
+                values.push(font.as_super());
             }
             let attributes = NSDictionary::from_slices(&keys, &values);
             let line = unsafe {
@@ -798,6 +831,15 @@ mod mac {
                 )
             };
             credits.appendAttributedString(&line);
+        };
+
+        let lines = about_credit_lines();
+        for (index, (text, link)) in lines.iter().enumerate() {
+            let paragraph = if index == 0 { spaced } else { centred };
+            append(text, *link, paragraph, false);
+        }
+        if let Some(commit) = commit_line() {
+            append(&commit, None, commit_style, true);
         }
         credits
     }
@@ -836,6 +878,14 @@ mod mac {
             if let Some(settings) = app_menu.itemAtIndex(SETTINGS_ROW) {
                 set_nsmenu_system_symbol(&settings, "gear");
                 set_nsmenu_item_prefers_visible_image(&settings);
+            }
+            if let Some(feedback) = main_menu
+                .itemAtIndex(HELP_MENU)
+                .and_then(|item| item.submenu())
+                .and_then(|menu| menu.itemAtIndex(FEEDBACK_ROW))
+            {
+                set_nsmenu_system_symbol(&feedback, "exclamationmark.bubble");
+                set_nsmenu_item_prefers_visible_image(&feedback);
             }
             if let Some(quit) = &app_menu
                 .numberOfItems()

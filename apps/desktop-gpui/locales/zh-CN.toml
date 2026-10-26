@@ -24,6 +24,11 @@ quit = "退出 Cap"
 services = "服务"
 settings = "设置…"
 
+[menu.about]
+licensed = "基于 AGPL-3.0 许可"
+website = "网站"
+commit = "提交"
+
 [menu.file]
 close_window = "关闭窗口"
 title = "文件"
@@ -52,6 +57,7 @@ zoom = "缩放"
 
 [menu.help]
 title = "帮助"
+feedback = "提供反馈…"
 changelog = "更新日志"
 dashboard = "仪表盘"
 documentation = "文档"

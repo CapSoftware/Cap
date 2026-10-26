@@ -24,6 +24,11 @@ quit = "Quitter Cap"
 services = "Services"
 settings = "Paramètres…"
 
+[menu.about]
+licensed = "Sous licence AGPL-3.0"
+website = "Site web"
+commit = "Commit"
+
 [menu.file]
 close_window = "Fermer la fenêtre"
 title = "Fichier"
@@ -52,6 +57,7 @@ zoom = "Réduire/agrandir"
 
 [menu.help]
 title = "Aide"
+feedback = "Donner son avis…"
 changelog = "Journal des modifications"
 dashboard = "Tableau de bord"
 documentation = "Documentation"

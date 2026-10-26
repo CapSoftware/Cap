@@ -24,6 +24,11 @@ quit = "Capを終了"
 services = "サービス"
 settings = "設定…"
 
+[menu.about]
+licensed = "AGPL-3.0ライセンス"
+website = "ウェブサイト"
+commit = "コミット"
+
 [menu.file]
 close_window = "ウィンドウを閉じる"
 title = "ファイル"
@@ -52,6 +57,7 @@ zoom = "拡大/縮小"
 
 [menu.help]
 title = "ヘルプ"
+feedback = "フィードバックを送る…"
 changelog = "変更履歴"
 dashboard = "ダッシュボード"
 documentation = "ドキュメント"

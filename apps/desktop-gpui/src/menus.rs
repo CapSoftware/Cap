@@ -150,6 +150,7 @@ actions!(
         HelpCenter,
         HelpStatus,
         HelpDiscord,
+        HelpFeedback,
         /// `PredefinedMenuItem::close_window` -- ⌘W. Present twice in the
         /// Tauri menu (File and Window), one action either way.
         CloseWindow,
@@ -217,6 +218,9 @@ pub fn init(cx: &mut App) {
     cx.on_action(|_: &HelpCenter, cx: &mut App| cx.open_url("https://help.cap.so/"));
     cx.on_action(|_: &HelpStatus, cx: &mut App| cx.open_url("https://cap.openstatus.dev/"));
     cx.on_action(|_: &HelpDiscord, cx: &mut App| cx.open_url("https://cap.link/discord"));
+    cx.on_action(|_: &HelpFeedback, cx: &mut App| {
+        app_windows::open_settings(crate::settings_window::Page::Feedback, cx)
+    });
     cx.on_action(|_: &CloseWindow, cx: &mut App| close_key_window(cx));
     cx.on_action(|_: &Minimize, cx: &mut App| with_key_native(cx, platform::minimize_native));
     cx.on_action(|_: &Zoom, cx: &mut App| with_key_native(cx, platform::zoom_native));
@@ -428,6 +432,8 @@ pub fn build_menus(update_status: &updates::UpdateStatus, settings_enabled: bool
             name: tr::menu::help::title().into(),
             disabled: false,
             items: vec![
+                MenuItem::action(tr::menu::help::feedback(), HelpFeedback),
+                MenuItem::separator(),
                 MenuItem::action(tr::menu::help::changelog(), Changelog),
                 MenuItem::separator(),
                 MenuItem::action(tr::menu::help::dashboard(), HelpDashboard),
@@ -1277,6 +1283,8 @@ mod tests {
                 (
                     "Help".into(),
                     vec![
+                        "Feedback".into(),
+                        "-".into(),
                         "Changelog".into(),
                         "-".into(),
                         "Dashboard".into(),
