@@ -498,9 +498,9 @@ fn horizontal_scalar(src: &[u8], src_w: usize, dst: &mut [u16]) {
 }
 
 fn vertical_scalar(a: &[u16], b: &[u16], dst: &mut [u8], w0: u16, w1: u16) {
-    for i in 0..a.len() {
-        let sum = u32::from(a[i]) * u32::from(w0) + u32::from(b[i]) * u32::from(w1);
-        dst[i] = ((sum + 8) / 16) as u8;
+    for ((&a, &b), dst) in a.iter().zip(b).zip(dst.iter_mut()) {
+        let sum = u32::from(a) * u32::from(w0) + u32::from(b) * u32::from(w1);
+        *dst = ((sum + 8) / 16) as u8;
     }
 }
 
