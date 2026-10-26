@@ -118,34 +118,49 @@ const withKeyLock = <T>(key: string, task: () => Promise<T>): Promise<T> => {
 	return run;
 };
 
+const storageCallback =
+	<T>(resolve: (value: T) => void, reject: (error: Error) => void) =>
+	(value: T) => {
+		const error = chrome.runtime.lastError;
+		if (error)
+			reject(new Error(error.message ?? "Chrome storage operation failed"));
+		else resolve(value);
+	};
+
 const getLocal = (keys: string[]) =>
-	new Promise<Record<string, unknown>>((resolve) => {
-		chrome.storage.local.get(keys, (items) => resolve(items));
+	new Promise<Record<string, unknown>>((resolve, reject) => {
+		chrome.storage.local.get(
+			keys,
+			storageCallback<Record<string, unknown>>(resolve, reject),
+		);
 	});
 
 const setLocal = (items: Record<string, unknown>) =>
-	new Promise<void>((resolve) => {
-		chrome.storage.local.set(items, resolve);
+	new Promise<void>((resolve, reject) => {
+		chrome.storage.local.set(items, storageCallback(resolve, reject));
 	});
 
 const removeLocal = (keys: string[] | string) =>
-	new Promise<void>((resolve) => {
-		chrome.storage.local.remove(keys, resolve);
+	new Promise<void>((resolve, reject) => {
+		chrome.storage.local.remove(keys, storageCallback(resolve, reject));
 	});
 
 const getSession = (keys: string[]) =>
-	new Promise<Record<string, unknown>>((resolve) => {
-		chrome.storage.session.get(keys, (items) => resolve(items));
+	new Promise<Record<string, unknown>>((resolve, reject) => {
+		chrome.storage.session.get(
+			keys,
+			storageCallback<Record<string, unknown>>(resolve, reject),
+		);
 	});
 
 const setSession = (items: Record<string, unknown>) =>
-	new Promise<void>((resolve) => {
-		chrome.storage.session.set(items, resolve);
+	new Promise<void>((resolve, reject) => {
+		chrome.storage.session.set(items, storageCallback(resolve, reject));
 	});
 
 const removeSession = (keys: string[] | string) =>
-	new Promise<void>((resolve) => {
-		chrome.storage.session.remove(keys, resolve);
+	new Promise<void>((resolve, reject) => {
+		chrome.storage.session.remove(keys, storageCallback(resolve, reject));
 	});
 
 export const loadSettings = async () => {
