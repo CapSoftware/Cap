@@ -78,19 +78,34 @@ export const SpeedController = () => {
 			fileSize: selectedFile.size,
 			fileType: selectedFile.type,
 		});
-
-		const videoElement = document.createElement("video");
-		videoElement.preload = "metadata";
-
-		videoElement.onloadedmetadata = () => {
-			URL.revokeObjectURL(videoElement.src);
-			const duration = videoElement.duration;
-			const dimensions = `${videoElement.videoWidth}x${videoElement.videoHeight}`;
-			setVideoInfo({ duration, dimensions });
-		};
-
-		videoElement.src = URL.createObjectURL(selectedFile);
 	};
+
+	useEffect(() => {
+		if (!file) return;
+		const videoElement = document.createElement("video");
+		const url = URL.createObjectURL(file);
+		let disposed = false;
+		const dispose = () => {
+			if (disposed) return;
+			disposed = true;
+			videoElement.onloadedmetadata = null;
+			videoElement.onerror = null;
+			videoElement.removeAttribute("src");
+			URL.revokeObjectURL(url);
+		};
+		videoElement.preload = "metadata";
+		videoElement.onloadedmetadata = () => {
+			if (disposed) return;
+			setVideoInfo({
+				duration: videoElement.duration,
+				dimensions: `${videoElement.videoWidth}x${videoElement.videoHeight}`,
+			});
+			dispose();
+		};
+		videoElement.onerror = dispose;
+		videoElement.src = url;
+		return dispose;
+	}, [file]);
 
 	const handleDragOver = (e: React.DragEvent) => {
 		e.preventDefault();
