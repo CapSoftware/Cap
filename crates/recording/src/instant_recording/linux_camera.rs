@@ -4854,6 +4854,23 @@ mod tests {
     }
 
     #[test]
+    fn mirrored_yuyv_row_keeps_distinct_luma_and_chroma() {
+        ffmpeg::init().expect("FFmpeg initializes");
+        let mut source = ffmpeg::frame::Video::new(Pixel::YUYV422, 4, 1);
+        // Hand-written mirror of distinct Y0/U/Y1/V macropixels. Deriving the
+        // expected bytes from `mirror_yuyv_row`, or repeating luma and chroma
+        // inside each pair, lets a missed luma swap or a U/V exchange pass.
+        let row = [0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80];
+        source.data_mut(0)[..row.len()].copy_from_slice(&row);
+        let frame = processed_to_ffmpeg(&yuyv_sample(&source, true)).expect("mirrored yuyv");
+        assert!(frame.inner.stride(0) >= row.len());
+        assert_eq!(
+            &frame.inner.data(0)[..row.len()],
+            &[0x70, 0x60, 0x50, 0x80, 0x30, 0x20, 0x10, 0x40]
+        );
+    }
+
+    #[test]
     fn yuyv_overlay_scales_without_expanding_to_bgra_and_mirrors_once() {
         ffmpeg::init().expect("FFmpeg initializes");
         let source = split_yuyv(8, 2);
