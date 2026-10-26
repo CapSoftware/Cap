@@ -51,6 +51,11 @@ the editor and presses the Image background's picker
 portal's file chooser through `mutter-keys.py --type` and presses Select.
 Mutter's RemoteDesktop drops the first key of each session, so `mutter-keys.py`
 leads every session with a Shift tap.
+`SCENARIO=screenshot` takes a screenshot of the display the way the
+screenshot mode does, with Cap focused as after a click, and allows it when
+the portal asks (GNOME Shell's question is answered from the Shell, so it needs
+`GNOME_UNSAFE=1`; elsewhere the permission is granted up front because the GTK
+portal's dialog aborts in the container). It checks a PNG of the display's size (`SCREEN`, 1920x1080) was saved.
 `SCENARIO=wallpaper` records a clip, opens it in the editor and imports the
 desktop's wallpaper as its background (`CAP_GPUI_AUTO_DESKTOP_BACKGROUND=1`).
 GNOME keeps its default JPEG XL wallpaper; `WALLPAPER=swaybg` starts swaybg
