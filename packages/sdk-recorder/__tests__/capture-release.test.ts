@@ -1,5 +1,6 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { CapRecorder } from "../src/index";
+import { MultipartClient } from "../src/upload/multipart-client";
 
 class Track {
 	readyState: MediaStreamTrackState = "live";
@@ -262,6 +263,165 @@ test.each(["explicit replacement", "source-ended replacement", "destroy only"])(
 			await stopping?.catch(() => {});
 			recorder.destroy();
 			await new Promise<void>((resolve) => setImmediate(resolve));
+		}
+	},
+);
+
+test.each([
+	["create", false],
+	["create", true],
+	["upload", false],
+	["upload", true],
+	["complete", false],
+	["complete", true],
+] as const)(
+	"a stale %s response (reject: %s) cannot replace or clean up a restarted recording",
+	async (stage, reject) => {
+		const oldCamera = new Track("video");
+		const camera = new Track("video");
+		const gate = Promise.withResolvers<void>();
+		const entered = Promise.withResolvers<void>();
+		const phases: string[] = [];
+		const errors: Error[] = [];
+		const completed: string[] = [];
+		let captures = 0;
+		let creations = 0;
+		const waitForOldResponse = async () => {
+			entered.resolve();
+			await gate.promise;
+			if (reject) throw new TypeError("Fixture request failed");
+		};
+		for (const [name, value] of Object.entries({
+			navigator: {
+				mediaDevices: {
+					getUserMedia: async () =>
+						new Stream([captures++ === 0 ? oldCamera : camera]),
+				},
+			},
+			fetch: async (input: string, init?: RequestInit) => {
+				const body =
+					init?.body && typeof init.body === "string"
+						? JSON.parse(init.body)
+						: {};
+				if (input.endsWith("/videos/create")) {
+					const videoId = creations++ === 0 ? "old" : "replacement";
+					if (videoId === "old" && stage === "create")
+						await waitForOldResponse();
+					return Response.json({
+						videoId,
+						shareUrl: `https://fixture.invalid/s/${videoId}`,
+						embedUrl: `https://fixture.invalid/embed/${videoId}`,
+					});
+				}
+				if (input.endsWith("/initiate"))
+					return Response.json({ uploadId: "upload" });
+				if (input.endsWith("/presign-part"))
+					return Response.json({
+						presignedUrl: `https://fixture.invalid/part/${body.videoId}`,
+					});
+				if (input.startsWith("https://fixture.invalid/part/")) {
+					if (input.endsWith("/old") && stage === "upload")
+						await waitForOldResponse();
+					return new Response(null, { headers: { ETag: "fixture-etag" } });
+				}
+				if (input.endsWith("/complete")) {
+					if (body.videoId === "old" && stage === "complete")
+						await waitForOldResponse();
+					return Response.json({ success: true });
+				}
+				if (input.endsWith("/abort")) return Response.json({ success: true });
+				throw new Error(`Unexpected request ${input}`);
+			},
+		}))
+			Object.defineProperty(globalThis, name, { configurable: true, value });
+		const recorder = new CapRecorder({
+			publicKey: "fixture",
+			mode: "camera",
+			microphone: { enabled: false },
+		});
+		recorder.on("phasechange", ({ phase }) => phases.push(phase));
+		recorder.on("error", ({ error }) => errors.push(error));
+		recorder.on("complete", ({ videoId }) => completed.push(videoId));
+		let oldStop: Promise<unknown> | undefined;
+		try {
+			await recorder.start();
+			oldStop = recorder.stop().catch((error: unknown) => error);
+			await entered.promise;
+			recorder.destroy();
+			await recorder.start();
+			const phasesBeforeResponse = [...phases];
+			const videoIdBeforeResponse = recorder.videoId;
+			gate.resolve();
+			expect(await oldStop).toMatchObject({ name: "AbortError" });
+			expect(recorder.phase).toBe("recording");
+			expect(recorder.videoId).toBe(videoIdBeforeResponse);
+			expect(camera.readyState).toBe("live");
+			expect(phases).toEqual(phasesBeforeResponse);
+			expect(completed).toEqual([]);
+			expect(errors).toEqual([]);
+			await expect(recorder.stop()).resolves.toMatchObject({
+				videoId: "replacement",
+			});
+			expect(completed).toEqual(["replacement"]);
+			expect(camera.readyState).toBe("ended");
+		} finally {
+			gate.resolve();
+			await oldStop;
+			recorder.destroy();
+		}
+	},
+);
+
+test.each(["complete", "error"] as const)(
+	"a restart from the %s callback retains its new capture",
+	async (event) => {
+		const cameras = [new Track("video"), new Track("video")];
+		let captures = 0;
+		Object.defineProperty(globalThis, "navigator", {
+			configurable: true,
+			value: {
+				mediaDevices: {
+					getUserMedia: async () => new Stream([cameras[captures++] as Track]),
+				},
+			},
+		});
+		const createVideo = spyOn(
+			MultipartClient.prototype,
+			"createVideo",
+		).mockResolvedValue({
+			videoId: "fixture",
+			s3Key: "fixture.mp4",
+			shareUrl: "https://fixture.invalid/s/fixture",
+			embedUrl: "https://fixture.invalid/embed/fixture",
+		});
+		const uploadBlob = spyOn(MultipartClient.prototype, "uploadBlob");
+		if (event === "complete") uploadBlob.mockResolvedValue(undefined);
+		else uploadBlob.mockRejectedValue(new Error("Fixture upload failed"));
+		const recorder = new CapRecorder({
+			publicKey: "fixture",
+			mode: "camera",
+			microphone: { enabled: false },
+		});
+		let restart: Promise<void> | undefined;
+		recorder.on(event, () => {
+			recorder.destroy();
+			restart = recorder.start();
+		});
+		try {
+			await recorder.start();
+			const stopped = await recorder.stop().catch((error: unknown) => error);
+			if (event === "complete")
+				expect(stopped).toMatchObject({ videoId: "fixture" });
+			else expect(stopped).toBeInstanceOf(Error);
+			expect(restart).toBeDefined();
+			await restart;
+			expect(recorder.phase).toBe("recording");
+			expect(cameras[0]?.readyState).toBe("ended");
+			expect(cameras[1]?.readyState).toBe("live");
+		} finally {
+			recorder.destroy();
+			createVideo.mockRestore();
+			uploadBlob.mockRestore();
 		}
 	},
 );
