@@ -352,7 +352,7 @@ jobs:
           test -n "$display"
           ls -la "$display"
           joined=$RUNNER_TEMP/joined.mp4
-          cat "$display"/init.mp4 $(ls "$display"/*.m4s | sort -V) > "$joined"
+          cat "$display"/init.mp4 "$display"/segment_*.m4s > "$joined"
           ffprobe -v error -show_entries format=duration -of csv=p=0 "$joined"
           ffmpeg -hide_banner -nostdin -i "$joined" -vf signalstats,metadata=print:key=lavfi.signalstats.SATMAX \
             -f null - 2>&1 | grep -o 'SATMAX=[0-9.]*' > "$RUNNER_TEMP/saturation.txt"
