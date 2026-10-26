@@ -27,7 +27,13 @@ export class MediaDownloads {
 		32 * 1024 ** 3,
 	);
 
-	constructor(signal?: AbortSignal) {
+	constructor(
+		signal?: AbortSignal,
+		private readonly fetcher: (
+			url: string,
+			init?: RequestInit,
+		) => Promise<Response> = fetchAllowed,
+	) {
 		this.signal = AbortSignal.any([
 			this.controller.signal,
 			...(signal ? [signal] : []),
@@ -57,7 +63,7 @@ export class MediaDownloads {
 		}
 	}
 
-	private countResource() {
+	protected countResource() {
 		this.signal.throwIfAborted();
 		if (++this.resources > this.maxResources)
 			throw new Error("Playlist resource count limit exceeded");
@@ -75,7 +81,7 @@ export class MediaDownloads {
 		label = "media manifest",
 	): Promise<{ content: string; url: string }> {
 		this.countResource();
-		const response = await fetchAllowed(url, {
+		const response = await this.fetcher(url, {
 			signal: AbortSignal.any([
 				this.signal,
 				AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
@@ -140,7 +146,7 @@ export class MediaDownloads {
 		else this.active++;
 		try {
 			this.signal.throwIfAborted();
-			const response = await fetchAllowed(url, {
+			const response = await this.fetcher(url, {
 				signal: AbortSignal.any([
 					this.signal,
 					AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),

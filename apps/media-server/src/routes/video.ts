@@ -107,7 +107,7 @@ import {
 import { getRuntimeReport } from "../lib/runtime-report";
 import type { TempFileHandle } from "../lib/temp-files";
 import { cleanupStaleTempFiles } from "../lib/temp-files";
-import { blockedUrlPayload } from "../lib/url-policy";
+import { blockedUrlPayload, fetchAllowed } from "../lib/url-policy";
 import {
 	getActiveDirectVideoProcessCount,
 	getMaxConcurrentDirectVideoProcesses,
@@ -2836,7 +2836,7 @@ async function loadPreverifiedRuns(
 				const url = urls[next++];
 				if (!url) return;
 				try {
-					const response = await fetch(url, { signal: budget });
+					const response = await fetchAllowed(url, { signal: budget });
 					const text = response.ok
 						? await readBoundedText(response, MAX_PREVERIFIED_RUN_BYTES)
 						: null;

@@ -685,6 +685,63 @@ describe("media routes real-world integration tests", () => {
 		}
 	}, 30_000);
 
+	test("blocks a private redirect while loading cached verification runs and still completes the recording", async () => {
+		const previousPrivate = process.env.MEDIA_SERVER_ALLOW_PRIVATE_URLS;
+		const previousHosts = process.env.MEDIA_SERVER_ALLOWED_HOSTS;
+		process.env.MEDIA_SERVER_ALLOW_PRIVATE_URLS = "false";
+		process.env.MEDIA_SERVER_ALLOWED_HOSTS = "127.0.0.1";
+		let targetHits = 0;
+		let firstHits = 0;
+		const target = Bun.serve({
+			hostname: "127.0.0.2",
+			port: 0,
+			fetch() {
+				targetHits++;
+				return new Response("private verification run");
+			},
+		});
+		const redirect = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch() {
+				firstHits++;
+				return Response.redirect(target.url.toString(), 302);
+			},
+		});
+		let jobId: string | undefined;
+		try {
+			const body = fencedMuxRequest("preverified-private-redirect");
+			const response = await app.fetch(
+				mediaPostRequest("/video/mux-segments", {
+					...body,
+					audioInitUrl: undefined,
+					audioSegmentUrls: undefined,
+					requiredAudio: false,
+					sourceObjects: body.sourceObjects.filter(({ url }) =>
+						url.includes("/video-"),
+					),
+					expectedDuration: 1,
+					preverifiedRunUrls: [redirect.url.toString()],
+				}),
+			);
+			expect(response.status).toBe(200);
+			jobId = ((await response.json()) as { jobId: string }).jobId;
+			expect((await waitForTerminalJob(jobId)).phase).toBe("complete");
+			expect(firstHits).toBe(1);
+			expect(targetHits).toBe(0);
+		} finally {
+			if (jobId) deleteJob(jobId);
+			redirect.stop(true);
+			target.stop(true);
+			if (previousPrivate === undefined)
+				delete process.env.MEDIA_SERVER_ALLOW_PRIVATE_URLS;
+			else process.env.MEDIA_SERVER_ALLOW_PRIVATE_URLS = previousPrivate;
+			if (previousHosts === undefined)
+				delete process.env.MEDIA_SERVER_ALLOWED_HOSTS;
+			else process.env.MEDIA_SERVER_ALLOWED_HOSTS = previousHosts;
+		}
+	}, 30_000);
+
 	test("uploads mux previews only after the recording output is verified", async () => {
 		const body = {
 			...fencedMuxRequest("mux-previews"),

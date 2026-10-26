@@ -1114,6 +1114,7 @@ export async function materializeStreamingInput(
 	videoUrl: string,
 	dirPath: string,
 	abortSignal?: AbortSignal,
+	downloads?: MediaDownloads,
 ): Promise<string> {
 	let inputPath: string;
 
@@ -1123,6 +1124,7 @@ export async function materializeStreamingInput(
 			dirPath,
 			undefined,
 			abortSignal,
+			downloads,
 		);
 	} else if (isMpdUrl(videoUrl)) {
 		try {
@@ -1130,10 +1132,16 @@ export async function materializeStreamingInput(
 				videoUrl,
 				dirPath,
 				abortSignal,
+				downloads,
 			);
 		} catch (err) {
 			if (!shouldFallbackToGenericMpd(err)) throw err;
-			inputPath = await materializeMpdManifest(videoUrl, dirPath, abortSignal);
+			inputPath = await materializeMpdManifest(
+				videoUrl,
+				dirPath,
+				abortSignal,
+				downloads,
+			);
 		}
 	} else {
 		return videoUrl;

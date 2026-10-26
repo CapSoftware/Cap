@@ -70,6 +70,23 @@ describe("assertUrlAllowed", () => {
 		);
 	});
 
+	test.each([
+		"http://[::ffff:127.0.0.1]/",
+		"http://[::ffff:7f00:1]/",
+		"http://[::ffff:169.254.169.254]/",
+		"http://[::ffff:a9fe:a9fe]/",
+	])("blocks canonicalized IPv4-mapped private URL %s", async (url) => {
+		await expect(assertUrlAllowed(url, open)).rejects.toThrow(
+			"private address",
+		);
+	});
+
+	test("allows IPv4-mapped public literals after URL canonicalization", async () => {
+		await expect(
+			assertUrlAllowed("https://[::ffff:8.8.8.8]/", open),
+		).resolves.toBeUndefined();
+	});
+
 	test("allows public hosts when no allow-list is configured", async () => {
 		await expect(
 			assertUrlAllowed(
@@ -148,13 +165,21 @@ describe("assertUrlAllowed", () => {
 });
 
 describe("redirect checks", () => {
-	test("does not follow a redirect to a private address", async () => {
+	test.each([
+		"http://169.254.169.254/latest/meta-data/",
+		"http://[::ffff:127.0.0.1]/",
+		"http://[::ffff:7f00:1]/",
+		"http://[::ffff:169.254.169.254]/",
+		"http://[::ffff:a9fe:a9fe]/",
+	])("does not follow a redirect to private URL %s", async (target) => {
 		const policy = getUrlPolicy({});
+		const requested: string[] = [];
 		const fetcher = async (input: string) => {
+			requested.push(input);
 			if (input === "https://93.184.216.34/v.mp4") {
 				return new Response(null, {
 					status: 302,
-					headers: { location: "http://169.254.169.254/latest/meta-data/" },
+					headers: { location: target },
 				});
 			}
 			return new Response("ok");
@@ -176,6 +201,10 @@ describe("redirect checks", () => {
 				fetcher,
 			),
 		).rejects.toThrow("private address");
+		expect(requested).toEqual([
+			"https://93.184.216.34/v.mp4",
+			"https://93.184.216.34/v.mp4",
+		]);
 	});
 });
 

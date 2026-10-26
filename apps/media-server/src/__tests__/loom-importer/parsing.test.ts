@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
 	assertAllowedSourceUrl,
+	createAllowedFetch,
 	LoomSourceRejectedError,
 	parseAllowedHosts,
 	Semaphore,
@@ -17,6 +18,36 @@ import {
 	selectHlsTracks,
 	UnsupportedStreamError,
 } from "../../loom-importer/streaming";
+
+test("the checked Loom fetch preserves a Request body and headers", async () => {
+	const server = Bun.serve({
+		hostname: "127.0.0.1",
+		port: 0,
+		async fetch(request) {
+			return Response.json({
+				method: request.method,
+				header: request.headers.get("x-source-header"),
+				body: await request.text(),
+			});
+		},
+	});
+	try {
+		const response = await createAllowedFetch(["127.0.0.1"])(
+			new Request(server.url, {
+				method: "POST",
+				headers: { "x-source-header": "source-header" },
+				body: "source-body",
+			}),
+		);
+		expect(await response.json()).toEqual({
+			method: "POST",
+			header: "source-header",
+			body: "source-body",
+		});
+	} finally {
+		server.stop(true);
+	}
+});
 
 describe("selectHlsTracks", () => {
 	const master = [
