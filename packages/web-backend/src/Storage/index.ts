@@ -439,6 +439,7 @@ const makeS3Access = (s3: S3BucketAccess) => ({
 				Contents: result.Contents?.map((object) => ({
 					Key: object.Key,
 					Size: object.Size,
+					ETag: object.ETag,
 					LastModified: object.LastModified,
 				})),
 				KeyCount: result.KeyCount,
@@ -462,6 +463,14 @@ const makeS3Access = (s3: S3BucketAccess) => ({
 		body: Parameters<S3BucketAccess["putObject"]>[1],
 		fields?: Parameters<S3BucketAccess["putObject"]>[2],
 	) => mapStorageError(s3.putObject(key, body, fields)).pipe(Effect.asVoid),
+	putObjectWithETag: (
+		key: string,
+		body: string,
+		fields?: Parameters<S3BucketAccess["putObject"]>[2],
+	) =>
+		mapStorageError(s3.putObject(key, body, fields)).pipe(
+			Effect.map((result) => ({ ETag: result.ETag })),
+		),
 	copyObject: (
 		source: string,
 		key: string,
@@ -924,6 +933,7 @@ const makeGoogleDriveAccess = ({
 						.map((object) => ({
 							Key: object.objectKey,
 							Size: object.contentLength ?? undefined,
+							ETag: undefined,
 							LastModified: object.updatedAt,
 						}));
 					return {
