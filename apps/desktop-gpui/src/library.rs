@@ -411,6 +411,53 @@ impl ScannedRecording {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// `recording-meta.json` parses on this test thread, so a repeat scan of
+    /// an unchanged bundle can be proven to reuse [`meta_cache`] instead of
+    /// re-reading and re-parsing the file.
+    static META_PARSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+type MetaCache = std::sync::Mutex<std::collections::HashMap<PathBuf, (u128, RecordingMeta)>>;
+
+/// Parsed `recording-meta.json`s, keyed by bundle path, valid as long as the
+/// file's own [`source_version`] (mtime plus length, not mtime alone --
+/// a status transition this cache must not miss, like Instant's
+/// `InProgress` to `Complete`, almost always changes the file's length even
+/// on a filesystem coarse enough to give both writes the same mtime) still
+/// matches. Four callers (the 2s recordings poll, startup, the tray's
+/// Previous menu, Recents) each re-run a full library scan; without this
+/// every one of those re-parses every bundle from scratch, changed or not.
+fn meta_cache() -> &'static MetaCache {
+    static CACHE: std::sync::OnceLock<MetaCache> = std::sync::OnceLock::new();
+    CACHE.get_or_init(Default::default)
+}
+
+/// `RecordingMeta::load_for_project`, through [`meta_cache`]. An unchanged
+/// bundle returns the cached value without touching the filesystem again.
+fn cached_recording_meta(path: &Path) -> Option<RecordingMeta> {
+    let version = source_version(&path.join("recording-meta.json"))?;
+    if let Some((cached_version, meta)) = meta_cache()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(path)
+        && *cached_version == version
+    {
+        return Some(meta.clone());
+    }
+
+    #[cfg(test)]
+    META_PARSES.with(|parses| parses.set(parses.get() + 1));
+
+    let meta = RecordingMeta::load_for_project(path).ok()?;
+    meta_cache()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(path.to_path_buf(), (version, meta.clone()));
+    Some(meta)
+}
+
 fn scanned_recordings_in(dirs: &[PathBuf]) -> impl Iterator<Item = ScannedRecording> {
     let mut paths = Vec::new();
     for dir in dirs {
@@ -427,8 +474,22 @@ fn scanned_recordings_in(dirs: &[PathBuf]) -> impl Iterator<Item = ScannedRecord
         }
     }
     paths.sort_by(|(_, a), (_, b)| b.total_cmp(a));
+    // A cached entry whose *parent* is one of `dirs` and did not turn up in
+    // this scan is deleted, and pruned. A cached entry under some other
+    // directory was never looked at this call, so it is left alone -- a
+    // narrower prune would wipe out a different caller's or test's cache
+    // entries every time this one scans a different subset of directories.
+    let dir_set: HashSet<&Path> = dirs.iter().map(PathBuf::as_path).collect();
+    let seen: HashSet<&Path> = paths.iter().map(|(path, _)| path.as_path()).collect();
+    meta_cache()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .retain(|path, _| {
+            !path.parent().is_some_and(|parent| dir_set.contains(parent))
+                || seen.contains(path.as_path())
+        });
     paths.into_iter().filter_map(|(path, sort_time_millis)| {
-        let meta = RecordingMeta::load_for_project(&path).ok()?;
+        let meta = cached_recording_meta(&path)?;
         Some(ScannedRecording {
             path,
             meta,
@@ -1820,6 +1881,166 @@ mod tests {
         assert_eq!(bounded[1].clip_count, 3);
         assert!(recording_items_in(&dirs).take(0).next().is_none());
         assert_eq!(recording_items_in(&dirs).take(20).collect::<Vec<_>>(), full);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unchanged_bundles_are_not_reparsed_on_a_repeat_scan() {
+        let root = temp_dir("unchanged-bundles-not-reparsed");
+        write_bundle(
+            &root,
+            "a",
+            r#"{"pretty_name":"A","sharing":null,"fps":30,"sample_rate":48000}"#,
+        );
+        write_bundle(
+            &root,
+            "b",
+            r#"{"pretty_name":"B","sharing":null,"fps":30,"sample_rate":48000}"#,
+        );
+        let dirs = [root.clone()];
+
+        let before = META_PARSES.with(std::cell::Cell::get);
+        let first = list_recordings_in(&dirs);
+        assert_eq!(META_PARSES.with(std::cell::Cell::get) - before, 2);
+
+        let before = META_PARSES.with(std::cell::Cell::get);
+        let second = list_recordings_in(&dirs);
+        assert_eq!(
+            META_PARSES.with(std::cell::Cell::get) - before,
+            0,
+            "an unchanged bundle must not be re-parsed"
+        );
+        assert_eq!(second, first);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_changed_bundle_is_reparsed_and_its_sibling_stays_cached() {
+        let root = temp_dir("changed-bundle-reparsed");
+        let changing = write_bundle(
+            &root,
+            "changing",
+            r#"{"pretty_name":"Before","sharing":null,"fps":30,"sample_rate":48000}"#,
+        );
+        write_bundle(
+            &root,
+            "stable",
+            r#"{"pretty_name":"Stable","sharing":null,"fps":30,"sample_rate":48000}"#,
+        );
+        let dirs = [root.clone()];
+        list_recordings_in(&dirs);
+
+        // A sleep-and-hope mtime bump can land on the same timestamp on a
+        // coarse filesystem clock; set one explicitly, strictly after the
+        // one the first scan cached.
+        let changing_meta = changing.join("recording-meta.json");
+        let original_modified = std::fs::metadata(&changing_meta)
+            .unwrap()
+            .modified()
+            .unwrap();
+        std::fs::write(
+            &changing_meta,
+            r#"{"pretty_name":"After","sharing":null,"fps":30,"sample_rate":48000}"#,
+        )
+        .unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&changing_meta)
+            .unwrap()
+            .set_times(
+                std::fs::FileTimes::new()
+                    .set_modified(original_modified + std::time::Duration::from_secs(1)),
+            )
+            .unwrap();
+
+        let before = META_PARSES.with(std::cell::Cell::get);
+        let items = list_recordings_in(&dirs);
+        assert_eq!(
+            META_PARSES.with(std::cell::Cell::get) - before,
+            1,
+            "only the changed bundle should be re-parsed"
+        );
+        assert!(items.iter().any(|item| item.pretty_name == "After"));
+        assert!(items.iter().any(|item| item.pretty_name == "Stable"));
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A finalized recording's `recording-meta.json` can land on the exact
+    /// mtime a coarser filesystem (a network drive, a FAT-formatted USB
+    /// drive) already gave its prior write, if the two writes are close
+    /// enough together -- plausible, since this app lets `recordingsPath`
+    /// point anywhere. mtime alone would then leave a completed recording
+    /// stuck showing its old status forever. [`source_version`] (the same
+    /// mtime-plus-length key the decode cache already uses, see
+    /// `a_same_mtime_length_change_misses_the_decode_cache`) catches it
+    /// because a real status transition changes the JSON's length too.
+    #[test]
+    fn a_same_mtime_length_change_misses_the_meta_cache() {
+        let root = temp_dir("same-mtime-meta-cache");
+        let bundle = write_bundle(
+            &root,
+            "finishing",
+            r#"{"pretty_name":"Finishing","sharing":null,"fps":30,"sample_rate":48000}"#,
+        );
+        let meta_path = bundle.join("recording-meta.json");
+        let modified = std::fs::metadata(&meta_path).unwrap().modified().unwrap();
+        let first_len = std::fs::metadata(&meta_path).unwrap().len();
+        let dirs = [root.clone()];
+        list_recordings_in(&dirs);
+
+        std::fs::write(
+            &meta_path,
+            r#"{"pretty_name":"Finished recording","sharing":null,"fps":30,"sample_rate":48000}"#,
+        )
+        .unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&meta_path)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+        assert_ne!(
+            std::fs::metadata(&meta_path).unwrap().len(),
+            first_len,
+            "the test needs a length change"
+        );
+
+        let before = META_PARSES.with(std::cell::Cell::get);
+        let items = list_recordings_in(&dirs);
+        assert_eq!(
+            META_PARSES.with(std::cell::Cell::get) - before,
+            1,
+            "a same-mtime length change must still invalidate the cache"
+        );
+        assert_eq!(items[0].pretty_name, "Finished recording");
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_deleted_bundle_is_pruned_from_the_cache() {
+        let root = temp_dir("deleted-bundle-pruned");
+        let gone = write_bundle(
+            &root,
+            "gone",
+            r#"{"pretty_name":"Gone","sharing":null,"fps":30,"sample_rate":48000}"#,
+        );
+        let dirs = [root.clone()];
+        list_recordings_in(&dirs);
+        assert!(
+            meta_cache().lock().unwrap().contains_key(&gone),
+            "the bundle should be cached after its first scan"
+        );
+
+        std::fs::remove_dir_all(&gone).unwrap();
+        list_recordings_in(&dirs);
+        assert!(
+            !meta_cache().lock().unwrap().contains_key(&gone),
+            "a deleted bundle must be pruned, not kept forever"
+        );
 
         std::fs::remove_dir_all(root).unwrap();
     }
