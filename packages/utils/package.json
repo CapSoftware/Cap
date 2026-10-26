@@ -1,6 +1,7 @@
 {
 	"name": "@cap/utils",
 	"type": "module",
+	"sideEffects": false,
 	"exports": {
 		".": "./src/index.ts",
 		"./helpers": "./src/helpers.ts"

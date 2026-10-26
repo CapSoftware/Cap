@@ -159,6 +159,8 @@ pub fn apply(preference: Preference, cx: &mut App) {
 }
 
 #[cfg(test)]
+mod settings_surface_tests;
+#[cfg(test)]
 mod surface_tests;
 #[cfg(test)]
 mod tests;

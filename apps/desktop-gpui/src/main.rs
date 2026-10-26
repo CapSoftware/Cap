@@ -47,6 +47,7 @@ mod i18n;
 mod import;
 mod installer;
 mod jpeg_thumbnail;
+mod library;
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 mod linux_dialog;
 #[cfg(target_os = "linux")]
@@ -55,7 +56,6 @@ mod linux_display;
 mod linux_portal_id;
 #[cfg(target_os = "linux")]
 mod linux_wallpaper;
-mod library;
 mod main_window;
 mod media_access;
 mod menus;
@@ -436,7 +436,7 @@ fn main() {
                         ..Default::default()
                     }),
                     #[cfg(target_os = "linux")]
-                    app_id: Some(crate::app_windows::APP_ID.into()),
+                    app_id: Some(crate::app_windows::app_id().into()),
                     #[cfg(target_os = "linux")]
                     window_min_size: Some(size(px(MAIN_WINDOW_WIDTH), px(MAIN_WINDOW_HEIGHT))),
                     #[cfg(target_os = "linux")]
@@ -893,8 +893,8 @@ mod runtime_tests {
 #[cfg(test)]
 mod logging_tests {
     use super::create_log_appender;
-    use tracing_subscriber::Layer as _;
     use std::{io::Write, path::PathBuf};
+    use tracing_subscriber::{Layer as _, layer::SubscriberExt as _};
 
     struct LogDirectory(PathBuf);
 
@@ -920,7 +920,6 @@ mod logging_tests {
     #[test]
     fn the_default_filter_drops_zbus_property_cache_warnings_only() {
         use std::sync::{Arc, Mutex};
-        use tracing_subscriber::layer::SubscriberExt as _;
 
         #[derive(Clone, Default)]
         struct Lines(Arc<Mutex<Vec<u8>>>);

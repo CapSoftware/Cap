@@ -582,6 +582,7 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
     cx.spawn(async move |cx| {
         while thumbnails.recv_async().await.is_ok() {
             cx.update(|cx| {
+                crate::tray::refresh_previous(cx);
                 refresh_library_after_delete(cx);
                 crate::menus::recheck_pending_quit(cx);
             });
@@ -1234,7 +1235,7 @@ pub fn open_settings(page: Page, cx: &mut App) {
     let handle = cx.open_window(
         WindowOptions {
             #[cfg(target_os = "linux")]
-            app_id: Some(crate::app_windows::APP_ID.into()),
+            app_id: Some(crate::app_windows::app_id().into()),
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             display_id,
             // A real titlebar this time, transparent with the buttons moved
@@ -1415,7 +1416,7 @@ pub fn open_onboarding(cx: &mut App) {
     let handle = cx.open_window(
         WindowOptions {
             #[cfg(target_os = "linux")]
-            app_id: Some(crate::app_windows::APP_ID.into()),
+            app_id: Some(crate::app_windows::app_id().into()),
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             display_id,
             titlebar: None,
@@ -1460,6 +1461,7 @@ pub fn open_onboarding(cx: &mut App) {
     .detach();
     hide_main_and_park_camera_preview(cx);
     crate::tray::refresh_menu(cx);
+    crate::menus::refresh(cx);
 }
 
 pub fn onboarding_finished(cx: &mut App) {
@@ -1470,6 +1472,7 @@ pub fn onboarding_finished(cx: &mut App) {
             .ok();
     }
     crate::tray::refresh_menu(cx);
+    crate::menus::refresh(cx);
     show_main_window(cx);
 }
 
@@ -1486,6 +1489,7 @@ pub fn onboarding_closed(cx: &mut App) {
     crate::permission_guide::stop(cx);
     cx.global_mut::<AppWindows>().onboarding.take();
     crate::tray::refresh_menu(cx);
+    crate::menus::refresh(cx);
     if !crate::store::should_show_onboarding() {
         show_main_window(cx);
     }
@@ -1568,7 +1572,7 @@ pub fn open_mode_select(cx: &mut App) -> bool {
     let handle = cx.open_window(
         WindowOptions {
             #[cfg(target_os = "linux")]
-            app_id: Some(crate::app_windows::APP_ID.into()),
+            app_id: Some(crate::app_windows::app_id().into()),
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             display_id,
             // `traffic_lights_position` has no ModeSelect arm, so it takes the
@@ -1690,7 +1694,7 @@ pub fn open_teleprompter(cx: &mut App) {
     let handle = cx.open_window(
         WindowOptions {
             #[cfg(target_os = "linux")]
-            app_id: Some(crate::app_windows::APP_ID.into()),
+            app_id: Some(crate::app_windows::app_id().into()),
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             display_id,
             // `decorations: true`, `titleBarStyle: "overlay"`, `hiddenTitle:
@@ -2521,7 +2525,7 @@ fn open_overlay(
     let handle = cx.open_window(
         WindowOptions {
             #[cfg(target_os = "linux")]
-            app_id: Some(crate::app_windows::APP_ID.into()),
+            app_id: Some(crate::app_windows::app_id().into()),
             // The origin is corrected right after opening -- gpui's own
             // window-origin math cannot express "cover this display" (see
             // `platform::set_window_frame_cg`). The size is honoured, and it is
@@ -2974,6 +2978,18 @@ pub fn restore_content_protection(cx: &mut App) {
 /// up as an unnamed "Unknown" app.
 #[cfg(target_os = "linux")]
 pub(crate) const APP_ID: &str = "Cap";
+
+/// The app id Cap's windows carry. GNOME Shell asks the portals' questions
+/// (screenshot access) only for the focused app, matched as the window's app
+/// id against the id Cap gave the portals, so a launch that named itself
+/// `so.cap.Cap` there names its windows the same.
+#[cfg(target_os = "linux")]
+pub(crate) fn app_id() -> &'static str {
+    if crate::linux_portal_id::windows_use_portal_app_id() {
+        return crate::linux_portal_id::PORTAL_APP_ID;
+    }
+    APP_ID
+}
 
 #[cfg(target_os = "linux")]
 fn clean_capture_supported(
@@ -4047,7 +4063,7 @@ pub fn open_camera_window(cx: &mut App) {
                 ..Default::default()
             }),
             #[cfg(target_os = "linux")]
-            app_id: Some(crate::app_windows::APP_ID.into()),
+            app_id: Some(crate::app_windows::app_id().into()),
             #[cfg(target_os = "linux")]
             window_decorations: Some(gpui::WindowDecorations::Client),
             // Non-activating panel, same as the bar: the bubble is clickable
@@ -4876,6 +4892,8 @@ fn open_editor_window(
         return None;
     }
 
+    cx.add_recent_document(&project_path);
+
     if let Some(window_id) = cx
         .global::<AppWindows>()
         .editors
@@ -4907,7 +4925,7 @@ fn open_editor_window(
     let handle = cx.open_window(
         WindowOptions {
             #[cfg(target_os = "linux")]
-            app_id: Some(crate::app_windows::APP_ID.into()),
+            app_id: Some(crate::app_windows::app_id().into()),
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             display_id,
             // Native traffic lights, inset to (20, 32):
@@ -6709,7 +6727,7 @@ fn open_controls(
     let handle = cx.open_window(
         WindowOptions {
             #[cfg(target_os = "linux")]
-            app_id: Some(crate::app_windows::APP_ID.into()),
+            app_id: Some(crate::app_windows::app_id().into()),
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             display_id,
             // No titlebar at all: with one, the panel still draws standard
@@ -6853,6 +6871,8 @@ pub fn open_screenshot_editor(path: PathBuf, cx: &mut App) {
     };
     let key = editor_key(&bundle);
 
+    cx.add_recent_document(&bundle);
+
     if let Some(handle) = cx
         .global::<AppWindows>()
         .screenshot_editors
@@ -6890,7 +6910,7 @@ pub fn open_screenshot_editor(path: PathBuf, cx: &mut App) {
     let handle = cx.open_window(
         WindowOptions {
             #[cfg(target_os = "linux")]
-            app_id: Some(crate::app_windows::APP_ID.into()),
+            app_id: Some(crate::app_windows::app_id().into()),
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             display_id,
             titlebar: Some(gpui::TitlebarOptions {
