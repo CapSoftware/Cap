@@ -3540,19 +3540,33 @@ mod pipewire_frame_tests {
                 Err(_) => std::thread::park_timeout(std::time::Duration::from_millis(10)),
             }
         }
+        // Borrowed DMA-BUF frames keep the producer buffer until the last
+        // reference drops. The capture thread waits for that before it
+        // destroys the stream, so copy the pixels and release the frames
+        // before joining it.
+        let mut samples = Vec::with_capacity(frames.len());
+        for frame in &frames {
+            let mut pixel = [0u8; 4];
+            let data = frame.data(0);
+            if data.len() >= 4 {
+                pixel.copy_from_slice(&data[..4]);
+            }
+            samples.push((frame.width(), frame.height(), pixel));
+        }
+        drop(frames);
+        drop(video_rx);
         stop.cancel();
         let result = capture.join().unwrap();
         drop(child);
         assert!(
-            frames.len() >= 10,
+            samples.len() >= 10,
             "captured {} frames; capture ended with {result:?}",
-            frames.len()
+            samples.len()
         );
         result.unwrap();
         let mut levels = std::collections::BTreeSet::new();
-        for frame in &frames {
-            assert_eq!((frame.width(), frame.height()), (640, 360));
-            let pixel = &frame.data(0)[..4];
+        for (width, height, pixel) in &samples {
+            assert_eq!((*width, *height), (640, 360));
             assert_eq!(&pixel[1..3], &[0x40, 0x80], "{pixel:?}");
             levels.insert(pixel[0]);
         }
