@@ -130,10 +130,10 @@ impl ControlsWindow {
         })
     }
 
-    /// `formatTime`: `M:SS`, hours folded into minutes the same way.
+    /// `formatTime`, through the editor clock's formatter, so a recording past
+    /// an hour reads `H:MM:SS` where the source folds the hours into minutes.
     fn format_elapsed(elapsed: Duration) -> String {
-        let total = elapsed.as_secs();
-        format!("{}:{:02}", total / 60, total % 60)
+        crate::editor_timeline::format_time(elapsed.as_secs_f64())
     }
 
     fn action_button(
@@ -607,6 +607,16 @@ mod repaint_tests {
             Duration::from_millis(20)
         );
         assert_eq!(until_next_second(Duration::ZERO), Duration::from_secs(1));
+    }
+
+    #[test]
+    fn the_timer_shows_hours_from_an_hour_on() {
+        let label = |seconds| ControlsWindow::format_elapsed(Duration::from_secs_f64(seconds));
+        assert_eq!(label(0.), "0:00");
+        assert_eq!(label(95.7), "1:35");
+        assert_eq!(label(3_599.9), "59:59");
+        assert_eq!(label(3_600.), "1:00:00");
+        assert_eq!(label(3_905.), "1:05:05");
     }
 
     #[test]

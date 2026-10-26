@@ -46,7 +46,7 @@ import { GlassSurface } from "@/components/GlassSurface";
 import { ReactionBar, type ReactionCount } from "@/components/ReactionBar";
 import { Screen } from "@/components/Screen";
 import { colors, fonts, radius, squircle } from "@/theme";
-import { formatRelativeDate } from "@/utils/format";
+import { formatChapterTime, formatRelativeDate } from "@/utils/format";
 
 const showPhotosSettingsAlert = () => {
 	if (Platform.OS === "ios") {
@@ -105,14 +105,6 @@ const sectionEntrance = (order: number) =>
 		.damping(18)
 		.stiffness(220)
 		.delay(order * 55);
-
-const formatChapterTime = (start: number) => {
-	const minutes = Math.floor(start / 60);
-	const seconds = Math.floor(start % 60)
-		.toString()
-		.padStart(2, "0");
-	return `${minutes}:${seconds}`;
-};
 
 type CapDetailOperation = "comment" | "safety" | "save" | "visibility";
 
@@ -1691,7 +1683,7 @@ const styles = StyleSheet.create({
 		borderColor: colors.gray5,
 	},
 	chapterTime: {
-		width: 44,
+		minWidth: 44,
 		fontFamily: fonts.medium,
 		fontSize: 13,
 		color: colors.blue11,
