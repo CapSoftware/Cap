@@ -47,7 +47,8 @@ describe("segment audio output errors", () => {
 	});
 
 	it("enforces a shared byte limit across parallel streams", async () => {
-		const fetchImpl = (async () => new Response(new Uint8Array(5))) as typeof fetch;
+		const fetchImpl = (async () =>
+			new Response(new Uint8Array(5))) as typeof fetch;
 		await expect(
 			downloadConcatenatedSegmentsToBuffer(["part-1", "part-2"], {
 				maxBytes: 8,
@@ -73,12 +74,16 @@ describe("segment audio output errors", () => {
 
 	it("preserves segment order and correct byte totals across parallel downloads", async () => {
 		const fetchImpl = (async (url) =>
-			new Response(String(url).endsWith("first") ? "first" : "second")) as typeof fetch;
+			new Response(
+				String(url).endsWith("first") ? "first" : "second",
+			)) as typeof fetch;
 		expect(
-			(await downloadConcatenatedSegmentsToBuffer(["first", "second"], {
-				concurrency: 2,
-				fetchImpl,
-			})).toString(),
+			(
+				await downloadConcatenatedSegmentsToBuffer(["first", "second"], {
+					concurrency: 2,
+					fetchImpl,
+				})
+			).toString(),
 		).toBe("firstsecond");
 	});
 
