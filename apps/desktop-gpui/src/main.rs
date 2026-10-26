@@ -893,9 +893,8 @@ mod runtime_tests {
 #[cfg(test)]
 mod logging_tests {
     use super::create_log_appender;
-    use tracing_subscriber::Layer as _;
     use std::{io::Write, path::PathBuf};
-    use tracing_subscriber::Layer as _;
+    use tracing_subscriber::{Layer as _, layer::SubscriberExt as _};
 
     struct LogDirectory(PathBuf);
 
