@@ -2736,6 +2736,7 @@ async fn confirm_export_resources(
     let result = async {
         let warning = check.map_err(|error| error.to_string())??;
         if let Some(message) = warning {
+            tracing::info!(%message, "export waits for the user to confirm its resources");
             #[cfg(target_os = "linux")]
             let confirmed = {
                 let response = loop {

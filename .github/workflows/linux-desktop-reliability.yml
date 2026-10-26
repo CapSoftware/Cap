@@ -123,6 +123,19 @@ jobs:
           bash scripts/linux-desktop-harness/dialog-x11.sh \
             apps/desktop-gpui/target/debug/cap-gpui target/native-deps/lib
 
+      - name: X11 display, area and window recordings, audio and a screenshot
+        run: |
+          sudo apt-get install -y -qq x11-utils pulseaudio pulseaudio-utils libasound2-plugins ffmpeg >/dev/null
+          bash scripts/linux-desktop-harness/x11-capture.sh \
+            apps/desktop-gpui/target/debug/cap-gpui target/native-deps/lib "$RUNNER_TEMP/out/x11-capture"
+
+      # A systemd user environment keeps WAYLAND_DISPLAY after a Wayland
+      # session ends.
+      - name: X11 launch with a stale WAYLAND_DISPLAY
+        run: |
+          bash scripts/linux-desktop-harness/x11-stale-wayland.sh \
+            apps/desktop-gpui/target/debug/cap-gpui target/native-deps/lib "$RUNNER_TEMP/out/x11-stale-wayland"
+
       - name: Fetch the Cap package for desktop integration
         run: |
           curl --fail --location --retry 3 -o "$RUNNER_TEMP/cap.deb" "$CAP_DEB_URL"
@@ -268,6 +281,32 @@ jobs:
             grep -qx "$line" "$RUNNER_TEMP/out/gnome-screenshot/result.txt"
           done
 
+      - name: GNOME 50 area recording (portal stream cropped to the area)
+        env:
+          DEV_BIN: ${{ github.workspace }}/apps/desktop-gpui/target/debug/cap-gpui
+          DEV_LIBS: ${{ github.workspace }}/target/native-deps/lib
+        run: |
+          sudo -E bash scripts/linux-desktop-harness/run-desktop.sh gnome "$RUNNER_TEMP/cap.deb" \
+            "$RUNNER_TEMP/out/gnome-area" LAUNCH=dock APPROVE_SHORTCUT_AFTER=6 AREA=200,150,800,450
+          cat "$RUNNER_TEMP/out/gnome-area/result.txt"
+          for line in attempt1_finished=yes area_video=yes panics=0; do
+            grep -qx "$line" "$RUNNER_TEMP/out/gnome-area/result.txt"
+          done
+
+      - name: GNOME 50 editor export to MP4 and GIF
+        env:
+          DEV_BIN: ${{ github.workspace }}/apps/desktop-gpui/target/debug/cap-gpui
+          DEV_LIBS: ${{ github.workspace }}/target/native-deps/lib
+          SCENARIO: export
+        run: |
+          sudo -E bash scripts/linux-desktop-harness/run-desktop.sh gnome "$RUNNER_TEMP/cap.deb" \
+            "$RUNNER_TEMP/out/gnome-export" LAUNCH=dock APPROVE_SHORTCUT_AFTER=6
+          cat "$RUNNER_TEMP/out/gnome-export/result.txt"
+          for line in recorded=yes mp4_exported=yes mp4_has_video=yes mp4_cap_alive=yes gif_exported=yes \
+            gif_has_video=yes gif_cap_alive=yes; do
+            grep -qx "$line" "$RUNNER_TEMP/out/gnome-export/result.txt"
+          done
+
       - name: Check results
         run: |
           bash scripts/linux-desktop-harness/check-results.sh \
@@ -344,6 +383,28 @@ jobs:
           cat "$RUNNER_TEMP/out/hyprland-screenshot/result.txt"
           for line in screenshot_taken=yes screenshot_size=yes capture_failed=0 cap_alive=yes panics=0; do
             grep -qx "$line" "$RUNNER_TEMP/out/hyprland-screenshot/result.txt"
+          done
+
+      # The hosted runner can build v4l2loopback; Blacksmith's kernel cannot.
+      - name: Install Linux desktop dependencies
+        uses: ./.github/actions/install-desktop-deps
+
+      - name: X11 recording with a camera
+        run: |
+          sudo apt-get install -y -qq "linux-headers-$(uname -r)" v4l2loopback-dkms xvfb xdotool ffmpeg dbus >/dev/null
+          chmod +x "$RUNNER_TEMP/build/cap-gpui"
+          sudo install -d -o "$(id -u)" -g "$(id -g)" "$RUNNER_TEMP/out/x11-camera"
+          bash scripts/linux-desktop-harness/x11-camera.sh "$RUNNER_TEMP/build/cap-gpui" "$RUNNER_TEMP/build/libs" \
+            "$RUNNER_TEMP/out/x11-camera"
+
+      - name: Hyprland area recording
+        run: |
+          sudo -E env DEV_BIN="$RUNNER_TEMP/build/cap-gpui" DEV_LIBS="$RUNNER_TEMP/build/libs" \
+            bash scripts/linux-desktop-harness/run-desktop.sh hyprland "$RUNNER_TEMP/build/cap-gpui" \
+            "$RUNNER_TEMP/out/hyprland-area" LAUNCH=dock AREA=200,150,800,450
+          cat "$RUNNER_TEMP/out/hyprland-area/result.txt"
+          for line in attempt1_finished=yes area_video=yes panics=0; do
+            grep -qx "$line" "$RUNNER_TEMP/out/hyprland-area/result.txt"
           done
 
       - name: Hyprland clipboard (Ctrl+V into and Ctrl+C out of a text field)
