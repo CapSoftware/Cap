@@ -27,6 +27,7 @@ async function readBoundedSegment(
 		Number.isFinite(declaredSize) &&
 		declaredSize > budget.max - budget.used
 	) {
+		await response.body?.cancel().catch(() => undefined);
 		throw new Error(`Segment audio exceeds ${budget.max} bytes`);
 	}
 
