@@ -99,7 +99,9 @@ describe("loom-browser-conversion", () => {
 			</MPD>`,
 			"https://luna.loom.com/video/manifest.mpd?Policy=signed",
 		);
-		expect(result.videoRepresentations[0]?.segments.map((segment) => segment.url)).toEqual([
+		expect(
+			result.videoRepresentations[0]?.segments.map((segment) => segment.url),
+		).toEqual([
 			"https://luna.loom.com/video/chunk-0.webm?Policy=signed",
 			"https://luna.loom.com/video/chunk-2000.webm?Policy=signed",
 			"https://luna.loom.com/video/chunk-4000.webm?Policy=signed",
