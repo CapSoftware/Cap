@@ -173,6 +173,10 @@ pub fn init(cx: &mut App) {
     // `on_key_down` project-undo). A global binding here would shadow both.
     cx.bind_keys(bindings());
 
+    cx.on_action(|_: &About, cx: &mut App| {
+        cx.spawn(async move |_| platform::show_about_panel(APP_NAME, app_version()))
+            .detach();
+    });
     cx.on_action(|_: &CheckForUpdate, cx: &mut App| {
         updates::check_manually(cx);
     });

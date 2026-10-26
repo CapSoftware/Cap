@@ -708,6 +708,35 @@ mod mac {
     const FILE_MENU: isize = 1;
     const OPEN_RECENT_ROW: isize = 1;
 
+    /// `PredefinedMenuItem::about`, which on macOS is `orderFrontStandardAboutPanelWithOptions:`.
+    /// Ordering a window front re-enters gpui's window callbacks, so call it
+    /// from a task, never from inside an update.
+    pub fn show_about_panel(name: &str, version: &str) {
+        use objc2::{class, msg_send};
+        use objc2_foundation::{NSArray, NSString};
+
+        unsafe {
+            let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+            if app.is_null() {
+                return;
+            }
+            let values = NSArray::from_retained_slice(&[
+                NSString::from_str(name),
+                NSString::from_str(version),
+            ]);
+            let keys = NSArray::from_retained_slice(&[
+                NSString::from_str("ApplicationName"),
+                NSString::from_str("ApplicationVersion"),
+            ]);
+            let options: *mut AnyObject = msg_send![
+                class!(NSDictionary),
+                dictionaryWithObjects: &*values,
+                forKeys: &*keys,
+            ];
+            let _: () = msg_send![app, orderFrontStandardAboutPanelWithOptions: options];
+        }
+    }
+
     pub fn patch_standard_application_menu() {
         use objc2::{exception, msg_send, runtime::AnyObject, sel};
 
@@ -3040,6 +3069,7 @@ mod stub {
 
     pub fn close_native(_native: &NativeWindow) {}
     pub fn set_dock_icon(_png: &[u8]) {}
+    pub fn show_about_panel(_name: &str, _version: &str) {}
     pub fn escape_hotkey_events() -> flume::Receiver<()> {
         // A channel whose sender is dropped immediately: the drain task's
         // `recv` errors once and the task exits.

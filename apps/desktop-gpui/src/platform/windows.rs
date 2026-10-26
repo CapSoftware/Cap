@@ -699,6 +699,8 @@ pub fn activation_policy() -> isize {
     -1
 }
 
+pub fn show_about_panel(_name: &str, _version: &str) {}
+
 pub fn escape_hotkey_events() -> flume::Receiver<()> {
     flume::unbounded().1
 }
