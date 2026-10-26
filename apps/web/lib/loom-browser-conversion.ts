@@ -273,7 +273,10 @@ function expandDashSegments({
 	presentationTimeOffset: number;
 }) {
 	// Never allocate an unbounded list of URLs from untrusted MPD repeat values.
-	if (!Number.isSafeInteger(presentationTimeOffset) || presentationTimeOffset < 0)
+	if (
+		!Number.isSafeInteger(presentationTimeOffset) ||
+		presentationTimeOffset < 0
+	)
 		return [];
 	if (
 		!Number.isSafeInteger(startNumber) ||
