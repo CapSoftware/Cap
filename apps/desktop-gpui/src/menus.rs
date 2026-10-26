@@ -1287,7 +1287,7 @@ mod tests {
                 (
                     "Help".into(),
                     vec![
-                        "Feedback".into(),
+                        "Give Feedback…".into(),
                         "-".into(),
                         "Changelog".into(),
                         "-".into(),
