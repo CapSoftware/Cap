@@ -12,13 +12,14 @@ fn main() -> anyhow::Result<()> {
     use windows::Win32::{
         Graphics::{
             Direct3D11::{
-                D3D11_BIND_SHADER_RESOURCE, D3D11_SUBRESOURCE_DATA, D3D11_TEXTURE2D_DESC,
-                D3D11_USAGE_DEFAULT,
+                D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_SUBRESOURCE_DATA,
+                D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, ID3D11Resource,
             },
             Dxgi::Common::{DXGI_FORMAT_NV12, DXGI_SAMPLE_DESC},
         },
         Media::MediaFoundation::MFCreate2DMediaBuffer,
     };
+    use windows::core::Interface;
 
     const WIDTH: usize = 1920;
     const HEIGHT: usize = 1080;
@@ -110,6 +111,44 @@ fn main() -> anyhow::Result<()> {
     .expect("locked data")?;
     let uncached = start.elapsed();
 
+    let encoder_desc = D3D11_TEXTURE2D_DESC {
+        BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
+        ..texture_desc
+    };
+    let mut encoder_texture = None;
+    unsafe { device.CreateTexture2D(&encoder_desc, None, Some(&mut encoder_texture))? };
+    let encoder_texture = encoder_texture.expect("encoder input texture");
+    let encoder_resource = encoder_texture.cast::<ID3D11Resource>()?;
+    let context = unsafe { device.GetImmediateContext()? };
+
+    let mut direct_buffers = CameraBuffers::with_texture(encoder_texture);
+    for _ in 0..20 {
+        let texture = upload_mf_buffer_to_texture(&device, &frame, &mut direct_buffers)?;
+        std::hint::black_box(texture);
+    }
+
+    let start = Instant::now();
+    for _ in 0..ITERATIONS {
+        let texture = upload_mf_buffer_to_texture(&device, &frame, &mut direct_buffers)?;
+        std::hint::black_box(texture);
+    }
+    let direct = start.elapsed();
+
+    let mut copy_buffers = CameraBuffers::new();
+    for _ in 0..20 {
+        let texture = upload_mf_buffer_to_texture(&device, &frame, &mut copy_buffers)?;
+        let resource = texture.cast::<ID3D11Resource>()?;
+        unsafe { context.CopyResource(&encoder_resource, &resource) };
+    }
+
+    let start = Instant::now();
+    for _ in 0..ITERATIONS {
+        let texture = upload_mf_buffer_to_texture(&device, &frame, &mut copy_buffers)?;
+        let resource = texture.cast::<ID3D11Resource>()?;
+        unsafe { context.CopyResource(&encoder_resource, &resource) };
+    }
+    let cached_plus_copy = start.elapsed();
+
     println!(
         "cached upload:   {:.3} ms/frame ({:.1} fps)",
         elapsed.as_secs_f64() * 1000.0 / ITERATIONS as f64,
@@ -119,6 +158,16 @@ fn main() -> anyhow::Result<()> {
         "uncached upload: {:.3} ms/frame ({:.1} fps)",
         uncached.as_secs_f64() * 1000.0 / ITERATIONS as f64,
         ITERATIONS as f64 / uncached.as_secs_f64()
+    );
+    println!(
+        "direct upload:   {:.3} ms/frame ({:.1} fps)",
+        direct.as_secs_f64() * 1000.0 / ITERATIONS as f64,
+        ITERATIONS as f64 / direct.as_secs_f64()
+    );
+    println!(
+        "cached + copy:   {:.3} ms/frame ({:.1} fps)",
+        cached_plus_copy.as_secs_f64() * 1000.0 / ITERATIONS as f64,
+        ITERATIONS as f64 / cached_plus_copy.as_secs_f64()
     );
 
     Ok(())
