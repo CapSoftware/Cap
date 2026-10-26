@@ -31,6 +31,8 @@ use cap_project::{
     InstantRecordingMeta, ProjectConfiguration, RecordingMeta, RecordingMetaInner,
     StudioRecordingMeta, XY,
 };
+#[cfg(windows)]
+use cap_recording::CameraBuffer;
 use cap_recording::{
     NativeCameraFrame, RecordingDefaults, StudioQuality,
     feeds::{
@@ -1134,10 +1136,8 @@ fn camera_frame(slot: u32, capture: u64) -> Option<NativeCameraFrame> {
     let buffer = unsafe { MFCreateMemoryBuffer(nv12.len() as u32) }.ok()?;
     buffer.lock_for_write().ok()?.copy_from_slice(&nv12);
     unsafe { buffer.SetCurrentLength(nv12.len() as u32) }.ok()?;
-    #[allow(clippy::arc_with_non_send_sync)]
-    let buffer = Arc::new(std::sync::Mutex::new(buffer));
     Some(NativeCameraFrame {
-        buffer,
+        buffer: CameraBuffer::new(buffer),
         pixel_format: cap_camera_windows::PixelFormat::NV12,
         width: w as u32,
         height: h as u32,

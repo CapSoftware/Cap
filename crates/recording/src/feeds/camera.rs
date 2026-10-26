@@ -25,7 +25,7 @@ use tokio::{sync::oneshot, task::LocalSet};
 use tracing::{debug, error, trace, warn};
 
 use crate::ffmpeg::FFmpegVideoFrame;
-use crate::output_pipeline::{NativeCameraFrame, VideoFrame};
+use crate::output_pipeline::{CameraBuffer, NativeCameraFrame, VideoFrame};
 
 const CAMERA_INIT_TIMEOUT: Duration = Duration::from_secs(4);
 /// Outer deadline for camera readiness. Must cover both capture attempts on
@@ -1177,8 +1177,7 @@ async fn setup_camera(
                 use windows::Win32::Media::MediaFoundation::MFCreateMemoryBuffer;
 
                 let buffer = if let Some(buffer) = frame.native().media_buffer() {
-                    #[allow(clippy::arc_with_non_send_sync)]
-                    Some(std::sync::Arc::new(std::sync::Mutex::new(buffer)))
+                    Some(CameraBuffer::new(buffer))
                 } else if let Ok(bytes) = frame.native().bytes() {
                     let data_len = bytes.len();
                     unsafe { MFCreateMemoryBuffer(data_len as u32) }
@@ -1192,8 +1191,7 @@ async fn setup_camera(
                         })
                         .and_then(|buffer| {
                             unsafe { buffer.SetCurrentLength(data_len as u32) }.ok()?;
-                            #[allow(clippy::arc_with_non_send_sync)]
-                            Some(std::sync::Arc::new(std::sync::Mutex::new(buffer)))
+                            Some(CameraBuffer::new(buffer))
                         })
                 } else {
                     None
