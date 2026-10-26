@@ -4437,12 +4437,12 @@ impl SettingsWindow {
                         "update-download-policy",
                         vec![
                             ui::SegmentOption::new(
-                                tr::settings::general::updates::download_policy::manual(),
-                                current_policy == UpdateDownloadPolicy::Manual,
-                            ),
-                            ui::SegmentOption::new(
                                 tr::settings::general::updates::download_policy::auto(),
                                 current_policy == UpdateDownloadPolicy::Auto,
+                            ),
+                            ui::SegmentOption::new(
+                                tr::settings::general::updates::download_policy::manual(),
+                                current_policy == UpdateDownloadPolicy::Manual,
                             ),
                             ui::SegmentOption::new(
                                 tr::settings::general::updates::download_policy::never(),
@@ -4452,8 +4452,8 @@ impl SettingsWindow {
                         cx,
                         |this, index, cx| {
                             let value = match index {
-                                0 => UpdateDownloadPolicy::Manual,
-                                1 => UpdateDownloadPolicy::Auto,
+                                0 => UpdateDownloadPolicy::Auto,
+                                1 => UpdateDownloadPolicy::Manual,
                                 _ => UpdateDownloadPolicy::Never,
                             };
                             if this.settings.update_download_policy == value {

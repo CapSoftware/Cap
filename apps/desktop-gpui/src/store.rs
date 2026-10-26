@@ -852,7 +852,7 @@ settings_enum! {
         Auto = "auto", "Auto";
         Never = "never", "Never";
     }
-    default = Manual
+    default = Auto
 }
 
 settings_enum! {

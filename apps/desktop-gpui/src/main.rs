@@ -56,7 +56,6 @@ mod linux_display;
 mod linux_portal_id;
 #[cfg(target_os = "linux")]
 mod linux_wallpaper;
-mod library;
 mod main_window;
 mod media_access;
 mod menus;
@@ -922,7 +921,6 @@ mod logging_tests {
     #[test]
     fn the_default_filter_drops_zbus_property_cache_warnings_only() {
         use std::sync::{Arc, Mutex};
-        use tracing_subscriber::layer::SubscriberExt as _;
 
         #[derive(Clone, Default)]
         struct Lines(Arc<Mutex<Vec<u8>>>);
