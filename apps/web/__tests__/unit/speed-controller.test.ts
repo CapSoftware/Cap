@@ -43,8 +43,10 @@ let downloads: string[];
 let originalCreate: typeof URL.createObjectURL;
 let originalRevoke: typeof URL.revokeObjectURL;
 let captureDescriptor: PropertyDescriptor | undefined;
+let videoDuration: number;
 
 beforeEach(() => {
+	videoDuration = 3;
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", false);
 	vi.stubGlobal("MediaRecorder", Recorder);
 	vi.stubGlobal("requestAnimationFrame", () => 1);
@@ -61,7 +63,7 @@ beforeEach(() => {
 		const element = create(tag, options);
 		if (element instanceof HTMLVideoElement) {
 			Object.defineProperties(element, {
-				duration: { value: 3 },
+				duration: { value: videoDuration },
 				videoWidth: { value: 320 },
 				videoHeight: { value: 180 },
 			});
@@ -149,6 +151,16 @@ async function finishProcessing() {
 		{ timeout: 3000 },
 	);
 }
+
+it("shows hours for a video an hour or longer", async () => {
+	videoDuration = 5_400;
+	await selectFile();
+	videos[0]?.dispatchEvent(new Event("loadedmetadata"));
+	await vi.waitFor(() =>
+		expect(container.textContent).toContain("Duration: 1:30:00"),
+	);
+	expect(container.textContent).toContain("Estimated output duration: 1:00:00");
+});
 
 it("keeps the selected file and speed fixed while processing", async () => {
 	const input = await selectFile();
