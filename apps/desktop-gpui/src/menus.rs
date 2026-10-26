@@ -190,7 +190,7 @@ pub fn init(cx: &mut App) {
             files,
             directories,
             multiple: false,
-            prompt: Some("Open Recording".into()),
+            prompt: Some(tr::menu::file::open_prompt().into()),
         });
         cx.spawn(async move |cx| {
             if let Ok(Ok(Some(paths))) = paths.await
@@ -761,7 +761,7 @@ fn apply_quit_action(action: QuitAction, cx: &mut App) {
                     cx.global_mut::<QuitCoordinator>().gate.cancel_exit();
                     tracing::error!(%error, "quit canceled because editor changes could not be saved");
                     cx.spawn(async move |_| {
-                        platform::alert_dialog("Cap is still open", &error);
+                        platform::alert_dialog(tr::dialog::quit::still_open(), &error);
                     })
                     .detach();
                     return;
@@ -775,17 +775,19 @@ fn apply_quit_action(action: QuitAction, cx: &mut App) {
             cx.global_mut::<QuitCoordinator>().observer = None;
             let message = RecordingSession::global(cx).update(cx, |session, cx| {
                 let message = match session.error.as_deref() {
-                    Some(error) => format!("Quit canceled: {error}. Cap will stay open so you can finish or recover the recording."),
-                    None if action == QuitAction::TimedOut => "Quit canceled because recording shutdown is still pending. Cap will stay open. Use Stop once available, then try Quit again.".into(),
-                    None => "Quit canceled because recording shutdown could not be confirmed. Cap will stay open. Use Stop, then try Quit again.".into(),
+                    Some(error) => tr::dialog::quit::canceled(error),
+                    None if action == QuitAction::TimedOut => tr::dialog::quit::pending().into(),
+                    None => tr::dialog::quit::unconfirmed().into(),
                 };
                 session.error = Some(message.clone());
                 cx.notify();
                 message
             });
             tracing::warn!(%message);
-            cx.spawn(async move |_| platform::alert_dialog("Cap is still open", &message))
-                .detach();
+            cx.spawn(async move |_| {
+                platform::alert_dialog(tr::dialog::quit::still_open(), &message)
+            })
+            .detach();
         }
     }
 }

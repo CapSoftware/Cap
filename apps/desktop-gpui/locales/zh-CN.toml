@@ -30,6 +30,7 @@ website = "网站"
 commit = "提交"
 
 [menu.file]
+open_prompt = "打开录制"
 close_window = "关闭窗口"
 title = "文件"
 open_file = "打开文件…"
@@ -2875,3 +2876,28 @@ three_d = { other = "已选择 {count} 个 3D 分段" }
 zoom = { other = "已选择 {count} 个" }
 zoom_all = { other = "已选择全部 {count} 个" }
 zoom_some = { other = "已选择 {count}/{total} 个" }
+
+[dialog.quit]
+canceled = "已取消退出：{error}。Cap 将保持打开，以便你完成或恢复录制。"
+pending = "录制仍在停止中，已取消退出。Cap 将保持打开。请在可用时点按“停止”，然后再次尝试退出。"
+still_open = "Cap 仍在运行"
+unconfirmed = "无法确认录制已停止，已取消退出。Cap 将保持打开。请点按“停止”，然后再次尝试退出。"
+
+[dialog.update]
+already_getting = "Cap 已在准备版本 {version}。"
+available = "Cap {version} 版本现已推出。Cap 会在后台下载，并在可以安装时通知你。"
+busy = "请先完成录制、导出、上传、导入或转写任务，再更新 Cap。"
+busy_title = "Cap 正忙"
+check_failed = "无法检查更新：{error}"
+download = "下载"
+download_failed = "无法下载版本 {version}：{error}"
+failed = "{message}\n\n你随时可以从 Cap.so/download 下载最新版本。"
+install_failed = "无法安装版本 {version}：{error}"
+later = "稍后"
+no_update = "你使用的已是最新版 Cap。"
+no_update_title = "没有可用的更新"
+not_now = "以后再说"
+package_not_installed = "软件包未安装。请批准系统提示，或从 Cap.so/download 安装。"
+ready = "Cap {version} 已准备就绪。重新启动 Cap 以完成更新。"
+restart_now = "立即重新启动"
+title = "更新 Cap"

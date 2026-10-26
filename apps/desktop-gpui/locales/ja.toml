@@ -30,6 +30,7 @@ website = "ウェブサイト"
 commit = "コミット"
 
 [menu.file]
+open_prompt = "録画を開く"
 close_window = "ウィンドウを閉じる"
 title = "ファイル"
 open_file = "ファイルを開く…"
@@ -2875,3 +2876,28 @@ three_d = { other = "{count}個の3Dセグメントを選択中" }
 zoom = { other = "{count}個を選択中" }
 zoom_all = { other = "{count}個すべてを選択中" }
 zoom_some = { other = "{total}個中{count}個を選択中" }
+
+[dialog.quit]
+canceled = "終了をキャンセルしました：{error}。録画を完了または復元できるよう、Capは開いたままになります。"
+pending = "録画の停止処理がまだ終わっていないため、終了をキャンセルしました。Capは開いたままになります。「停止」が使えるようになったら停止してから、もう一度終了してください。"
+still_open = "Capはまだ開いています"
+unconfirmed = "録画の停止を確認できなかったため、終了をキャンセルしました。Capは開いたままになります。「停止」を使ってから、もう一度終了してください。"
+
+[dialog.update]
+already_getting = "Capはすでにバージョン{version}を準備しています。"
+available = "Capのバージョン{version}が利用可能です。バックグラウンドでダウンロードし、インストールの準備ができたらお知らせします。"
+busy = "Capをアップデートする前に、録画、書き出し、アップロード、読み込み、または文字起こしを完了してください。"
+busy_title = "Capは処理中です"
+check_failed = "アップデートを確認できませんでした：{error}"
+download = "ダウンロード"
+download_failed = "バージョン{version}をダウンロードできませんでした：{error}"
+failed = "{message}\n\n最新バージョンはいつでもCap.so/downloadからダウンロードできます。"
+install_failed = "バージョン{version}をインストールできませんでした：{error}"
+later = "後で"
+no_update = "Capはすでに最新バージョンです。"
+no_update_title = "アップデートはありません"
+not_now = "今はしない"
+package_not_installed = "パッケージはインストールされませんでした。システムの確認を承認するか、Cap.so/downloadからインストールしてください。"
+ready = "Cap {version}の準備ができました。アップデートを完了するにはCapを再起動してください。"
+restart_now = "今すぐ再起動"
+title = "Capをアップデート"

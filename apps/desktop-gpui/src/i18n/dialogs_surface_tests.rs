@@ -54,6 +54,14 @@ const FORMATTED: &[&str] = &[
     "transcription.download.failed",
     "transcription.download.file_progress",
     "transcription.download.progress",
+    "dialog.quit.canceled",
+    "dialog.update.already_getting",
+    "dialog.update.available",
+    "dialog.update.check_failed",
+    "dialog.update.download_failed",
+    "dialog.update.failed",
+    "dialog.update.install_failed",
+    "dialog.update.ready",
 ];
 
 #[test]
@@ -732,6 +740,34 @@ fn dialog_surfaces_match_the_literals_they_replaced() {
             tr::transcription::error::unsupported_language(),
             "The Recommended and High Accuracy models only transcribe English and 24 other European languages. Download the Small or Medium model to caption this language",
         ),
+        (tr::dialog::quit::still_open(), "Cap is still open"),
+        (
+            tr::dialog::quit::pending(),
+            "Quit canceled because recording shutdown is still pending. Cap will stay open. Use Stop once available, then try Quit again.",
+        ),
+        (
+            tr::dialog::quit::unconfirmed(),
+            "Quit canceled because recording shutdown could not be confirmed. Cap will stay open. Use Stop, then try Quit again.",
+        ),
+        (tr::dialog::update::title(), "Update Cap"),
+        (tr::dialog::update::busy_title(), "Cap is busy"),
+        (
+            tr::dialog::update::busy(),
+            "Finish your recording, export, upload, import, or transcription task before updating Cap.",
+        ),
+        (tr::dialog::update::no_update_title(), "No Update Available"),
+        (
+            tr::dialog::update::no_update(),
+            "You're already using the latest version of Cap.",
+        ),
+        (tr::dialog::update::download(), "Download"),
+        (tr::dialog::update::not_now(), "Not Now"),
+        (tr::dialog::update::restart_now(), "Restart Now"),
+        (tr::dialog::update::later(), "Later"),
+        (
+            tr::dialog::update::package_not_installed(),
+            "The package wasn't installed. Approve the system prompt, or install it from Cap.so/download.",
+        ),
     ];
     for (translated, literal) in pairs {
         assert_eq!(translated, literal);
@@ -992,5 +1028,52 @@ fn dialog_messages_format_like_the_code_they_replaced() {
             tr::overlay::area::too_small(width.round(), height.round()),
             format!("{} x {} is too small", width.round(), height.round())
         );
+    }
+}
+
+#[test]
+fn update_and_quit_messages_format_like_the_code_they_replaced() {
+    let error = "connection reset by peer";
+    let version = semver::Version::new(0, 6, 2);
+    let pairs: Vec<(String, String)> = vec![
+        (
+            tr::dialog::quit::canceled(error),
+            format!(
+                "Quit canceled: {error}. Cap will stay open so you can finish or recover the recording."
+            ),
+        ),
+        (
+            tr::dialog::update::already_getting(&version),
+            format!("Cap is already getting version {version} ready."),
+        ),
+        (
+            tr::dialog::update::available(&version),
+            format!(
+                "Version {version} of Cap is available. Cap will download it in the background and let you know when it's ready to install."
+            ),
+        ),
+        (
+            tr::dialog::update::check_failed(error),
+            format!("Couldn't check for updates: {error}"),
+        ),
+        (
+            tr::dialog::update::download_failed(&version, error),
+            format!("Couldn't download version {version}: {error}"),
+        ),
+        (
+            tr::dialog::update::install_failed(&version, error),
+            format!("Couldn't install version {version}: {error}"),
+        ),
+        (
+            tr::dialog::update::ready(&version),
+            format!("Cap {version} is ready. Restart Cap to finish updating."),
+        ),
+        (
+            tr::dialog::update::failed(error),
+            format!("{error}\n\nYou can always download the latest version from Cap.so/download."),
+        ),
+    ];
+    for (translated, literal) in pairs {
+        assert_eq!(translated, literal);
     }
 }

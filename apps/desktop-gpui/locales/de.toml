@@ -30,6 +30,7 @@ website = "Website"
 commit = "Commit"
 
 [menu.file]
+open_prompt = "Aufnahme öffnen"
 close_window = "Fenster schließen"
 title = "Ablage"
 open_file = "Datei öffnen…"
@@ -2875,3 +2876,28 @@ three_d = { one = "{count} 3D-Segment ausgewählt", other = "{count} 3D-Segmente
 zoom = { one = "{count} ausgewählt", other = "{count} ausgewählt" }
 zoom_all = { one = "Alle {count} ausgewählt", other = "Alle {count} ausgewählt" }
 zoom_some = { one = "{count} von {total} ausgewählt", other = "{count} von {total} ausgewählt" }
+
+[dialog.quit]
+canceled = "Beenden abgebrochen: {error}. Cap bleibt geöffnet, damit Sie die Aufnahme abschließen oder wiederherstellen können."
+pending = "Beenden abgebrochen, weil die Aufnahme noch nicht beendet ist. Cap bleibt geöffnet. Verwenden Sie „Stoppen“, sobald es verfügbar ist, und beenden Sie Cap dann erneut."
+still_open = "Cap ist noch geöffnet"
+unconfirmed = "Beenden abgebrochen, weil nicht bestätigt werden konnte, dass die Aufnahme beendet wurde. Cap bleibt geöffnet. Verwenden Sie „Stoppen“ und beenden Sie Cap dann erneut."
+
+[dialog.update]
+already_getting = "Cap bereitet Version {version} bereits vor."
+available = "Version {version} von Cap ist verfügbar. Cap lädt sie im Hintergrund herunter und informiert Sie, sobald sie installiert werden kann."
+busy = "Schließen Sie Ihre Aufnahme, Ihren Export, Upload, Import oder Ihre Transkription ab, bevor Sie Cap aktualisieren."
+busy_title = "Cap ist beschäftigt"
+check_failed = "Nach Updates konnte nicht gesucht werden: {error}"
+download = "Laden"
+download_failed = "Version {version} konnte nicht geladen werden: {error}"
+failed = "{message}\n\nSie können die neueste Version jederzeit unter Cap.so/download laden."
+install_failed = "Version {version} konnte nicht installiert werden: {error}"
+later = "Später"
+no_update = "Sie verwenden bereits die neueste Version von Cap."
+no_update_title = "Kein Update verfügbar"
+not_now = "Nicht jetzt"
+package_not_installed = "Das Paket wurde nicht installiert. Bestätigen Sie die Systemabfrage oder installieren Sie es über Cap.so/download."
+ready = "Cap {version} ist bereit. Starten Sie Cap neu, um das Update abzuschließen."
+restart_now = "Jetzt neu starten"
+title = "Cap aktualisieren"

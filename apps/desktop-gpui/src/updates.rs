@@ -5,6 +5,7 @@ use gpui::{App, Global};
 use semver::Version;
 
 use crate::{
+    i18n::tr,
     installer::{self, ArtifactKind, Release},
     session::RecordingSession,
     store::{GeneralSettings, UpdateChannel, UpdateDownloadPolicy},
@@ -14,8 +15,6 @@ const STABLE_FIRST_CHECK_DELAY: Duration = Duration::from_secs(10);
 const NIGHTLY_FIRST_CHECK_DELAY: Duration = Duration::from_secs(60);
 const NIGHTLY_CHECK_INTERVAL: Duration = Duration::from_secs(2 * 60 * 60);
 const BUSY_RETRY_DELAY: Duration = Duration::from_secs(5 * 60);
-const BUSY_MESSAGE: &str =
-    "Finish your recording, export, upload, import, or transcription task before updating Cap.";
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) enum UpdateStatus {
@@ -204,8 +203,8 @@ pub(crate) fn check_manually(cx: &mut App) {
             cx.spawn(async move |_| {
                 crate::platform::activate_app();
                 crate::platform::alert_dialog(
-                    "Update Cap",
-                    &format!("Cap is already getting version {version} ready."),
+                    tr::dialog::update::title(),
+                    &tr::dialog::update::already_getting(version),
                 );
             })
             .detach();
@@ -271,7 +270,7 @@ fn finish_manual_check(cx: &mut App, manual: bool) {
 fn busy_alert(cx: &mut App) {
     cx.spawn(async move |_| {
         crate::platform::activate_app();
-        crate::platform::alert_dialog("Cap is busy", BUSY_MESSAGE);
+        crate::platform::alert_dialog(tr::dialog::update::busy_title(), tr::dialog::update::busy());
     })
     .detach();
 }
@@ -392,8 +391,7 @@ pub(crate) fn schedule_startup_check(cx: &mut App) {
             .background_executor()
             .spawn(async { GeneralSettings::load().update_channel })
             .await;
-        let mut policy = cx
-            .update(|cx| cx.global::<UpdateScheduler>().download_policy);
+        let mut policy = cx.update(|cx| cx.global::<UpdateScheduler>().download_policy);
         let mut delay = if policy == UpdateDownloadPolicy::Never {
             None
         } else {
@@ -501,8 +499,8 @@ pub(crate) fn schedule_startup_check(cx: &mut App) {
                     if manual {
                         crate::platform::activate_app();
                         crate::platform::alert_dialog(
-                            "No Update Available",
-                            "You're already using the latest version of Cap.",
+                            tr::dialog::update::no_update_title(),
+                            tr::dialog::update::no_update(),
                         );
                         cx.update(|cx| finish_manual_check(cx, true));
                     }
@@ -514,8 +512,8 @@ pub(crate) fn schedule_startup_check(cx: &mut App) {
                     if manual {
                         crate::platform::activate_app();
                         crate::platform::alert_dialog(
-                            "Update Cap",
-                            &format!("Couldn't check for updates: {error}"),
+                            tr::dialog::update::title(),
+                            &tr::dialog::update::check_failed(error),
                         );
                         cx.update(|cx| finish_manual_check(cx, true));
                     }
@@ -544,9 +542,8 @@ pub(crate) fn schedule_startup_check(cx: &mut App) {
                 if let Either::Right((Err(_), _)) = select(timer, request).await {
                     return;
                 }
-                superseded = cx.update(|cx| {
-                    supersedes_held_prompt(&cx.global::<UpdateScheduler>().pending)
-                });
+                superseded =
+                    cx.update(|cx| supersedes_held_prompt(&cx.global::<UpdateScheduler>().pending));
                 if superseded {
                     break;
                 }
@@ -574,13 +571,10 @@ pub(crate) fn schedule_startup_check(cx: &mut App) {
 
             crate::platform::activate_app();
             let accepted = crate::platform::confirm_dialog(
-                "Update Cap",
-                &format!(
-                    "Version {} of Cap is available. Cap will download it in the background and let you know when it's ready to install.",
-                    release.version
-                ),
-                "Download",
-                "Not Now",
+                tr::dialog::update::title(),
+                &tr::dialog::update::available(&release.version),
+                tr::dialog::update::download(),
+                tr::dialog::update::not_now(),
                 false,
             );
             cx.update(|cx| finish_manual_check(cx, manual));
@@ -680,7 +674,7 @@ fn start_download(release: Release, cx: &mut App) {
                 }
                 Err(error) => {
                     tracing::warn!(%version, "update download failed: {error}");
-                    update_failed(&format!("Couldn't download version {version}: {error}"), cx);
+                    update_failed(&tr::dialog::update::download_failed(&version, error), cx);
                 }
             }
         });
@@ -690,11 +684,10 @@ fn start_download(release: Release, cx: &mut App) {
 
 fn update_failed(message: &str, cx: &mut App) {
     set_status(UpdateStatus::Idle, cx);
-    let message =
-        format!("{message}\n\nYou can always download the latest version from cap.so/download.");
+    let message = tr::dialog::update::failed(message);
     cx.spawn(async move |_| {
         crate::platform::activate_app();
-        crate::platform::alert_dialog("Update Cap", &message);
+        crate::platform::alert_dialog(tr::dialog::update::title(), &message);
     })
     .detach();
 }
@@ -717,10 +710,10 @@ fn prompt_restart(cx: &mut App) {
     cx.spawn(async move |cx| {
         crate::platform::activate_app();
         if crate::platform::confirm_dialog(
-            "Update Cap",
-            &format!("Cap {version} is ready. Restart Cap to finish updating."),
-            "Restart Now",
-            "Later",
+            tr::dialog::update::title(),
+            &tr::dialog::update::ready(&version),
+            tr::dialog::update::restart_now(),
+            tr::dialog::update::later(),
             false,
         ) {
             cx.update(install_and_relaunch);
@@ -746,7 +739,7 @@ pub(crate) fn install_and_relaunch(cx: &mut App) {
     }
     if let Err(error) = crate::app_windows::flush_pending_editor_saves(cx) {
         cx.spawn(async move |_| {
-            crate::platform::alert_dialog("Cap is still open", &error);
+            crate::platform::alert_dialog(tr::dialog::quit::still_open(), &error);
         })
         .detach();
         return;
@@ -791,7 +784,7 @@ pub(crate) fn install_and_relaunch(cx: &mut App) {
             Err(error) => {
                 tracing::error!(%version, "update install failed: {error}");
                 cx.global_mut::<UpdateScheduler>().staged = None;
-                update_failed(&format!("Couldn't install version {version}: {error}"), cx);
+                update_failed(&tr::dialog::update::install_failed(&version, error), cx);
             }
         });
     })

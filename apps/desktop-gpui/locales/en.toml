@@ -30,6 +30,7 @@ website = "Website"
 commit = "Commit"
 
 [menu.file]
+open_prompt = "Open Recording"
 close_window = "Close Window"
 title = "File"
 open_file = "Open File…"
@@ -2877,3 +2878,28 @@ three_d = { one = "{count} 3D segment selected", other = "{count} 3D segments se
 zoom = { one = "{count} selected", other = "{count} selected", context = "Zoom segments selected when the track has only one." }
 zoom_all = { one = "All {count} selected", other = "All {count} selected", context = "Every zoom segment on the track is selected; only shown for two or more." }
 zoom_some = { one = "{count} of {total} selected", other = "{count} of {total} selected", context = "Some of the zoom segments on the track are selected." }
+
+[dialog.quit]
+canceled = { text = "Quit canceled: {error}. Cap will stay open so you can finish or recover the recording.", context = "{error} explains why the recording could not stop." }
+pending = "Quit canceled because recording shutdown is still pending. Cap will stay open. Use Stop once available, then try Quit again."
+still_open = "Cap is still open"
+unconfirmed = "Quit canceled because recording shutdown could not be confirmed. Cap will stay open. Use Stop, then try Quit again."
+
+[dialog.update]
+already_getting = { text = "Cap is already getting version {version} ready.", context = "{version} is a version number such as 0.6.2." }
+available = { text = "Version {version} of Cap is available. Cap will download it in the background and let you know when it's ready to install.", context = "{version} is a version number such as 0.6.2." }
+busy = "Finish your recording, export, upload, import, or transcription task before updating Cap."
+busy_title = "Cap is busy"
+check_failed = { text = "Couldn't check for updates: {error}", context = "{error} is a technical reason, usually in English." }
+download = { text = "Download", context = "Button: download the update now." }
+download_failed = { text = "Couldn't download version {version}: {error}", context = "{error} is a technical reason, usually in English." }
+failed = { text = "{message}\n\nYou can always download the latest version from Cap.so/download.", context = "{message} is one of the other update error sentences." }
+install_failed = { text = "Couldn't install version {version}: {error}", context = "{error} is a technical reason, usually in English." }
+later = "Later"
+no_update = "You're already using the latest version of Cap."
+no_update_title = "No Update Available"
+not_now = "Not Now"
+package_not_installed = "The package wasn't installed. Approve the system prompt, or install it from Cap.so/download."
+ready = { text = "Cap {version} is ready. Restart Cap to finish updating.", context = "{version} is a version number such as 0.6.2." }
+restart_now = "Restart Now"
+title = { text = "Update Cap", context = "Title of every update dialog." }

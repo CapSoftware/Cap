@@ -30,6 +30,7 @@ website = "Sitio web"
 commit = "Commit"
 
 [menu.file]
+open_prompt = "Abrir grabación"
 close_window = "Cerrar ventana"
 title = "Archivo"
 open_file = "Abrir archivo…"
@@ -2875,3 +2876,28 @@ three_d = { one = "{count} segmento 3D seleccionado", other = "{count} segmentos
 zoom = { one = "{count} seleccionado", other = "{count} seleccionados" }
 zoom_all = { one = "{count} seleccionado", other = "Los {count} seleccionados" }
 zoom_some = { one = "{count} de {total} seleccionado", other = "{count} de {total} seleccionados" }
+
+[dialog.quit]
+canceled = "Se canceló la salida: {error}. Cap seguirá abierto para que puedas terminar o recuperar la grabación."
+pending = "Se canceló la salida porque la grabación todavía se está deteniendo. Cap seguirá abierto. Usa Detener cuando esté disponible y vuelve a intentar salir."
+still_open = "Cap sigue abierto"
+unconfirmed = "Se canceló la salida porque no se pudo confirmar que la grabación se detuviera. Cap seguirá abierto. Usa Detener y vuelve a intentar salir."
+
+[dialog.update]
+already_getting = "Cap ya está preparando la versión {version}."
+available = "La versión {version} de Cap está disponible. Cap la descargará en segundo plano y te avisará cuando esté lista para instalarse."
+busy = "Termina tu grabación, exportación, subida, importación o transcripción antes de actualizar Cap."
+busy_title = "Cap está ocupado"
+check_failed = "No se pudieron buscar actualizaciones: {error}"
+download = "Descargar"
+download_failed = "No se pudo descargar la versión {version}: {error}"
+failed = "{message}\n\nSiempre puedes descargar la última versión desde Cap.so/download."
+install_failed = "No se pudo instalar la versión {version}: {error}"
+later = "Más tarde"
+no_update = "Ya estás usando la última versión de Cap."
+no_update_title = "No hay actualizaciones disponibles"
+not_now = "Ahora no"
+package_not_installed = "No se instaló el paquete. Acepta el aviso del sistema o instálalo desde Cap.so/download."
+ready = "Cap {version} está listo. Reinicia Cap para terminar de actualizar."
+restart_now = "Reiniciar ahora"
+title = "Actualizar Cap"

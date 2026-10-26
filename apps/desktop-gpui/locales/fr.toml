@@ -30,6 +30,7 @@ website = "Site web"
 commit = "Commit"
 
 [menu.file]
+open_prompt = "Ouvrir l’enregistrement"
 close_window = "Fermer la fenêtre"
 title = "Fichier"
 open_file = "Ouvrir un fichier…"
@@ -2875,3 +2876,28 @@ three_d = { one = "{count} segment 3D sélectionné", other = "{count} segments 
 zoom = { one = "{count} sélectionné", other = "{count} sélectionnés" }
 zoom_all = { one = "{count} sélectionné", other = "Les {count} sélectionnés" }
 zoom_some = { one = "{count} sur {total} sélectionné", other = "{count} sur {total} sélectionnés" }
+
+[dialog.quit]
+canceled = "Fermeture annulée : {error}. Cap reste ouvert pour que vous puissiez terminer ou récupérer l’enregistrement."
+pending = "Fermeture annulée, car l’arrêt de l’enregistrement est toujours en cours. Cap reste ouvert. Utilisez Arrêter dès que possible, puis quittez à nouveau."
+still_open = "Cap est toujours ouvert"
+unconfirmed = "Fermeture annulée, car l’arrêt de l’enregistrement n’a pas pu être confirmé. Cap reste ouvert. Utilisez Arrêter, puis quittez à nouveau."
+
+[dialog.update]
+already_getting = "Cap prépare déjà la version {version}."
+available = "La version {version} de Cap est disponible. Cap la télécharge en arrière-plan et vous prévient quand elle est prête à être installée."
+busy = "Terminez votre enregistrement, exportation, mise en ligne, importation ou transcription avant de mettre à jour Cap."
+busy_title = "Cap est occupé"
+check_failed = "Impossible de rechercher des mises à jour : {error}"
+download = "Télécharger"
+download_failed = "Impossible de télécharger la version {version} : {error}"
+failed = "{message}\n\nVous pouvez toujours télécharger la dernière version sur Cap.so/download."
+install_failed = "Impossible d’installer la version {version} : {error}"
+later = "Plus tard"
+no_update = "Vous utilisez déjà la dernière version de Cap."
+no_update_title = "Aucune mise à jour disponible"
+not_now = "Plus tard"
+package_not_installed = "Le paquet n’a pas été installé. Acceptez la demande du système, ou installez-le depuis Cap.so/download."
+ready = "Cap {version} est prêt. Redémarrez Cap pour terminer la mise à jour."
+restart_now = "Redémarrer maintenant"
+title = "Mettre à jour Cap"
