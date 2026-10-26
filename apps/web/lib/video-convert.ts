@@ -48,24 +48,20 @@ function isMpdUrl(url: string): boolean {
 	return (url.split("?")[0] ?? "").toLowerCase().endsWith(".mpd");
 }
 
-function withQuery(url: string, query: string): string {
-	if (!query || url.includes("?")) {
-		return url;
-	}
-
-	return `${url}${query}`;
-}
-
 function resolveResourceUrl(
 	resource: string,
 	baseUrl: string,
 	query: string,
 ): string {
-	if (resource.startsWith("http://") || resource.startsWith("https://")) {
-		return withQuery(resource, query);
+	const base = new URL(baseUrl);
+	const url = new URL(resource, base);
+	// CloudFront Policy / Signature values belong to the playlist's host.
+	// An absolute or protocol-relative segment on another origin must not
+	// inherit those credentials, even when it has no query of its own.
+	if (!url.search && url.origin === base.origin) {
+		url.search = query;
 	}
-
-	return withQuery(new URL(resource, baseUrl).toString(), query);
+	return url.toString();
 }
 
 function escapeXmlAttribute(value: string): string {
