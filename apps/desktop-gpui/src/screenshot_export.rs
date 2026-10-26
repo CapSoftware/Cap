@@ -23,6 +23,7 @@ use std::sync::{Mutex, OnceLock};
 use cap_gpui_kernels::{codec, screenshot as pixels};
 use cap_project::{Annotation, AnnotationType, ProjectConfiguration};
 
+use crate::i18n::tr;
 use crate::screenshot_annotations::{self as annotations, Rect};
 use crate::screenshot_editor::has_no_visible_background;
 
@@ -226,8 +227,7 @@ pub fn flatten_onto_white(out: &Composited) -> Composited {
 /// frame straight to PNG" path, still callable through
 /// `screenshot_editor::render_export_png`.
 pub fn encode_rgba_png(rgba: &[u8], width: u32, height: u32) -> Result<Vec<u8>, String> {
-    codec::encode_png_rgba(rgba, width, height)
-        .map_err(|e| format!("Failed to encode screenshot export: {e}"))
+    codec::encode_png_rgba(rgba, width, height).map_err(tr::screenshot_editor::error::encode)
 }
 
 fn encode_png(out: &Composited) -> Result<Vec<u8>, String> {
@@ -240,7 +240,7 @@ fn encode_png(out: &Composited) -> Result<Vec<u8>, String> {
 fn encode_jpeg(out: &Composited) -> Result<Vec<u8>, String> {
     let rgb = codec::flatten_rgba_to_rgb_over_white(&out.rgba);
     codec::encode_jpeg_rgb(&rgb, out.width, out.height, 90)
-        .map_err(|e| format!("Failed to encode screenshot export: {e}"))
+        .map_err(tr::screenshot_editor::error::encode)
 }
 
 /// An encoded export, tagged with the content type the upload sends.
@@ -320,8 +320,7 @@ fn stable_value(value: &serde_json::Value) -> serde_json::Value {
 }
 
 fn stable_stringify(value: &serde_json::Value) -> Result<String, String> {
-    serde_json::to_string(&stable_value(value))
-        .map_err(|e| format!("Failed to serialize screenshot config: {e}"))
+    serde_json::to_string(&stable_value(value)).map_err(tr::screenshot_editor::error::serialize)
 }
 
 /// The content hash the share flow compares against `sharing.contentHash`:
@@ -330,8 +329,7 @@ fn stable_stringify(value: &serde_json::Value) -> Result<String, String> {
 /// simply misses and re-uploads against the same video id.
 pub fn content_hash(config: &ProjectConfiguration) -> Result<String, String> {
     use sha2::Digest as _;
-    let value = serde_json::to_value(config)
-        .map_err(|e| format!("Failed to serialize screenshot config: {e}"))?;
+    let value = serde_json::to_value(config).map_err(tr::screenshot_editor::error::serialize)?;
     let payload = stable_stringify(&value)?;
     let digest = sha2::Sha256::digest(payload.as_bytes());
     let mut hex = String::with_capacity(64);
