@@ -26,25 +26,145 @@ pub fn unpad_rgba_to_bgra(
         return Some(Vec::new());
     }
 
+    #[cfg(target_arch = "x86_64")]
+    {
+        // AVX2 implies SSSE3 on hardware; check the wider kernel first.
+        if is_x86_feature_detected!("avx2") {
+            // SAFETY: feature detected. Each source row has `stride` bytes
+            // (`stride * rows <= data.len()`), and `stride >= width * 4`.
+            return Some(unsafe { unpad_rgba_to_bgra_avx2(data, width, stride, rows, row_bytes) });
+        }
+        if is_x86_feature_detected!("ssse3") {
+            // SAFETY: same row bounds as the AVX2 path.
+            return Some(unsafe { unpad_rgba_to_bgra_ssse3(data, width, stride, rows, row_bytes) });
+        }
+    }
+
+    Some(unpad_rgba_to_bgra_scalar(
+        data, width, stride, rows, row_bytes,
+    ))
+}
+
+fn unpad_rgba_to_bgra_scalar(
+    data: &[u8],
+    width: usize,
+    stride: usize,
+    rows: usize,
+    row_bytes: usize,
+) -> Vec<u8> {
+    let output_len = row_bytes * rows;
     let mut tight = Vec::with_capacity(output_len);
     let dest: *mut u8 = tight.as_mut_ptr();
     // SAFETY: dest is unused spare capacity; every output byte is written before set_len.
     unsafe {
         for row in 0..rows {
-            let src = data.as_ptr().add(row * stride);
-            let dst = dest.add(row * row_bytes);
-            for col in 0..width {
-                let s = src.add(col * 4);
-                let d = dst.add(col * 4);
-                *d = *s.add(2);
-                *d.add(1) = *s.add(1);
-                *d.add(2) = *s;
-                *d.add(3) = *s.add(3);
-            }
+            swap_rgba_row_scalar(
+                data.as_ptr().add(row * stride),
+                dest.add(row * row_bytes),
+                0,
+                width,
+            );
         }
         tight.set_len(output_len);
     }
-    Some(tight)
+    tight
+}
+
+#[inline(always)]
+fn swap_rgba_row_scalar(src: *const u8, dst: *mut u8, start: usize, width: usize) {
+    for col in start..width {
+        // SAFETY: caller passes a pixel range inside both the source row and the dest row.
+        unsafe {
+            let s = src.add(col * 4);
+            let d = dst.add(col * 4);
+            *d = *s.add(2);
+            *d.add(1) = *s.add(1);
+            *d.add(2) = *s;
+            *d.add(3) = *s.add(3);
+        }
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn unpad_rgba_to_bgra_avx2(
+    data: &[u8],
+    width: usize,
+    stride: usize,
+    rows: usize,
+    row_bytes: usize,
+) -> Vec<u8> {
+    use std::arch::x86_64::*;
+
+    let output_len = row_bytes * rows;
+    let mut tight = Vec::with_capacity(output_len);
+    let dest: *mut u8 = tight.as_mut_ptr();
+    // vpshufb indexes each 16-byte lane separately, so the mask repeats.
+    let shuffle = _mm256_setr_epi8(
+        2, 1, 0, 3, 6, 5, 4, 7, 10, 9, 8, 11, 14, 13, 12, 15, 2, 1, 0, 3, 6, 5, 4, 7, 10, 9, 8, 11,
+        14, 13, 12, 15,
+    );
+    let simd_pixels = width & !7;
+    let simd_bytes = simd_pixels * 4;
+    for row in 0..rows {
+        // SAFETY: row * stride + simd_bytes <= row * stride + row_bytes <= stride * rows,
+        // which the caller checked against data.len(). Stores cover exactly row_bytes
+        // once the scalar tail finishes the leftover pixels. set_len is below.
+        unsafe {
+            let src = data.as_ptr().add(row * stride);
+            let dst = dest.add(row * row_bytes);
+            let mut offset = 0;
+            while offset < simd_bytes {
+                debug_assert!(offset + 32 <= row_bytes);
+                let loaded = _mm256_loadu_si256(src.add(offset).cast());
+                let shuffled = _mm256_shuffle_epi8(loaded, shuffle);
+                _mm256_storeu_si256(dst.add(offset).cast(), shuffled);
+                offset += 32;
+            }
+            swap_rgba_row_scalar(src, dst, simd_pixels, width);
+        }
+    }
+    // SAFETY: every output byte was written by the vector stores or the scalar tail.
+    unsafe { tight.set_len(output_len) };
+    tight
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "ssse3")]
+unsafe fn unpad_rgba_to_bgra_ssse3(
+    data: &[u8],
+    width: usize,
+    stride: usize,
+    rows: usize,
+    row_bytes: usize,
+) -> Vec<u8> {
+    use std::arch::x86_64::*;
+
+    let output_len = row_bytes * rows;
+    let mut tight = Vec::with_capacity(output_len);
+    let dest: *mut u8 = tight.as_mut_ptr();
+    let shuffle = _mm_setr_epi8(2, 1, 0, 3, 6, 5, 4, 7, 10, 9, 8, 11, 14, 13, 12, 15);
+    let simd_pixels = width & !3;
+    let simd_bytes = simd_pixels * 4;
+    for row in 0..rows {
+        // SAFETY: same bound as the AVX2 kernel, with 16-byte groups instead of 32.
+        unsafe {
+            let src = data.as_ptr().add(row * stride);
+            let dst = dest.add(row * row_bytes);
+            let mut offset = 0;
+            while offset < simd_bytes {
+                debug_assert!(offset + 16 <= row_bytes);
+                let loaded = _mm_loadu_si128(src.add(offset).cast());
+                let shuffled = _mm_shuffle_epi8(loaded, shuffle);
+                _mm_storeu_si128(dst.add(offset).cast(), shuffled);
+                offset += 16;
+            }
+            swap_rgba_row_scalar(src, dst, simd_pixels, width);
+        }
+    }
+    // SAFETY: every output byte was written by the vector stores or the scalar tail.
+    unsafe { tight.set_len(output_len) };
+    tight
 }
 
 pub fn swap_red_blue(pixels: &mut [u8]) {
@@ -335,6 +455,74 @@ mod tests {
     fn rejects_short_rows_and_zero_stride() {
         assert_eq!(unpad_rgba_to_bgra(&[0; 12], 4, 12, 1), None);
         assert_eq!(unpad_rgba_to_bgra(&[0; 16], 4, 0, 1), None);
+    }
+
+    fn swapped_copy(data: &[u8], width: usize, stride: usize, rows: usize) -> Vec<u8> {
+        let row_bytes = width * 4;
+        let mut out = vec![0u8; row_bytes * rows];
+        for row in 0..rows {
+            for col in 0..width {
+                let s = row * stride + col * 4;
+                let d = row * row_bytes + col * 4;
+                out[d] = data[s + 2];
+                out[d + 1] = data[s + 1];
+                out[d + 2] = data[s];
+                out[d + 3] = data[s + 3];
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn unpad_matches_an_independent_swap_across_tails_and_padding() {
+        let widths = [1usize, 3, 4, 7, 8, 9, 15, 16, 17, 31, 32, 33, 1080, 1248];
+        let rows = [1usize, 2, 3];
+        for width in widths {
+            for rows in rows {
+                let row_bytes = width * 4;
+                for stride in [row_bytes, row_bytes + 4, row_bytes.next_multiple_of(256)] {
+                    let mut data = vec![0xA5u8; stride * rows];
+                    for row in 0..rows {
+                        for byte in 0..row_bytes {
+                            data[row * stride + byte] = (row * 17 + byte * 3 + 1) as u8;
+                        }
+                    }
+                    let got = unpad_rgba_to_bgra(&data, width, stride, rows).unwrap();
+                    assert_eq!(
+                        got,
+                        swapped_copy(&data, width, stride, rows),
+                        "width {width} stride {stride} rows {rows}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn ssse3_and_avx2_unpad_match_scalar_on_the_preview_frame() {
+        let width = 1248usize;
+        let rows = 702usize;
+        let stride = (width * 4).next_multiple_of(256);
+        let mut data = vec![0xA5u8; stride * rows];
+        for row in 0..rows {
+            for byte in 0..width * 4 {
+                data[row * stride + byte] = (row.wrapping_mul(13) + byte) as u8;
+            }
+        }
+        let scalar = unpad_rgba_to_bgra_scalar(&data, width, stride, rows, width * 4);
+        if is_x86_feature_detected!("ssse3") {
+            let ssse3 = unsafe { unpad_rgba_to_bgra_ssse3(&data, width, stride, rows, width * 4) };
+            assert_eq!(ssse3, scalar);
+        }
+        if is_x86_feature_detected!("avx2") {
+            let avx2 = unsafe { unpad_rgba_to_bgra_avx2(&data, width, stride, rows, width * 4) };
+            assert_eq!(avx2, scalar);
+        }
+        assert_eq!(
+            unpad_rgba_to_bgra(&data, width, stride, rows).unwrap(),
+            scalar
+        );
     }
 
     #[test]
