@@ -819,7 +819,7 @@ index e41b097..dac72f9 100644
 +    }
  }
 diff --git a/crates/gpui_macos/src/metal_atlas.rs b/crates/gpui_macos/src/metal_atlas.rs
-index d007abb..007b965 100644
+index d007abb..65f38d5 100644
 --- a/crates/gpui_macos/src/metal_atlas.rs
 +++ b/crates/gpui_macos/src/metal_atlas.rs
 @@ -4,11 +4,21 @@ use derive_more::{Deref, DerefMut};
@@ -1131,7 +1131,7 @@ index d007abb..007b965 100644
  }
  
  struct MetalAtlasTexture {
-@@ -295,7 +518,7 @@ unsafe impl<T> Send for AssertSend<T> {}
+@@ -295,11 +518,20 @@ unsafe impl<T> Send for AssertSend<T> {}
  #[cfg(test)]
  mod tests {
      use super::*;
@@ -1139,8 +1139,22 @@ index d007abb..007b965 100644
 +    use gpui::{PlatformAtlas, StreamingImage};
      use std::borrow::Cow;
  
++    fn system_device() -> Option<metal::Device> {
++        let device = metal::Device::system_default();
++        assert!(
++            device.is_some() || std::env::var_os("GPUI_REQUIRE_TEST_DEVICE").is_none(),
++            "GPUI_REQUIRE_TEST_DEVICE is set but no Metal device is available"
++        );
++        device
++    }
++
      fn create_atlas() -> Option<MetalAtlas> {
-@@ -396,4 +619,365 @@ mod tests {
+-        let device = metal::Device::system_default()?;
++        let device = system_device()?;
+         Some(MetalAtlas::new(device, true))
+     }
+ 
+@@ -396,4 +628,365 @@ mod tests {
          let key = make_image_key(999, 0);
          atlas.remove(&key);
      }
@@ -1416,7 +1430,7 @@ index d007abb..007b965 100644
 +    }
 +
 +    fn assert_upload_waits_for_no_reader(is_apple_gpu: bool) {
-+        let Some(device) = metal::Device::system_default() else {
++        let Some(device) = system_device() else {
 +            return;
 +        };
 +        let atlas = MetalAtlas::new(device.clone(), is_apple_gpu);
@@ -1507,7 +1521,7 @@ index d007abb..007b965 100644
 +    }
  }
 diff --git a/crates/gpui_macos/src/metal_renderer.rs b/crates/gpui_macos/src/metal_renderer.rs
-index 1d35af1..57afb61 100644
+index 1d35af1..4be15aa 100644
 --- a/crates/gpui_macos/src/metal_renderer.rs
 +++ b/crates/gpui_macos/src/metal_renderer.rs
 @@ -1,4 +1,4 @@
@@ -1613,7 +1627,7 @@ index 1d35af1..57afb61 100644
          });
      }
  
-@@ -2748,3 +2766,144 @@ mod backdrop_blur_tests {
+@@ -2748,3 +2766,150 @@ mod backdrop_blur_tests {
          );
      }
  }
@@ -1633,7 +1647,13 @@ index 1d35af1..57afb61 100644
 +    const HEIGHT: i32 = 30;
 +
 +    fn new_renderer() -> Option<MetalRenderer> {
-+        metal::Device::system_default()?;
++        if metal::Device::system_default().is_none() {
++            assert!(
++                std::env::var_os("GPUI_REQUIRE_TEST_DEVICE").is_none(),
++                "GPUI_REQUIRE_TEST_DEVICE is set but no Metal device is available"
++            );
++            return None;
++        }
 +        Some(
 +            MetalRenderer::new_headless(Arc::new(Mutex::new(InstanceBufferPool::default())))
 +                .expect("failed to initialize headless renderer"),
@@ -1759,7 +1779,7 @@ index 1d35af1..57afb61 100644
 +    }
 +}
 diff --git a/crates/gpui_wgpu/src/wgpu_atlas.rs b/crates/gpui_wgpu/src/wgpu_atlas.rs
-index 3cf71ac..dc71046 100644
+index 3cf71ac..84c0043 100644
 --- a/crates/gpui_wgpu/src/wgpu_atlas.rs
 +++ b/crates/gpui_wgpu/src/wgpu_atlas.rs
 @@ -3,7 +3,7 @@ use collections::FxHashMap;
@@ -2085,7 +2105,7 @@ index 3cf71ac..dc71046 100644
              let (device, queue) = adapter
                  .request_device(&wgpu::DeviceDescriptor {
                      label: Some("wgpu_atlas_test_device"),
-@@ -507,6 +704,428 @@ mod tests {
+@@ -507,6 +704,432 @@ mod tests {
          Ok(())
      }
  
@@ -2099,6 +2119,10 @@ index 3cf71ac..dc71046 100644
 +        let (device, queue) = match test_device_and_queue() {
 +            Ok(device_and_queue) => device_and_queue,
 +            Err(error) => {
++                assert!(
++                    std::env::var_os("GPUI_REQUIRE_TEST_DEVICE").is_none(),
++                    "GPUI_REQUIRE_TEST_DEVICE is set but no wgpu device is available: {error}"
++                );
 +                eprintln!("skipping: {error}");
 +                return None;
 +            }
@@ -2548,7 +2572,7 @@ index 729a5c4..2bfbc4e 100644
          self.draw_instances_with_texture(
              data,
 diff --git a/crates/gpui_windows/src/directx_atlas.rs b/crates/gpui_windows/src/directx_atlas.rs
-index d49ec18..cea181d 100644
+index d49ec18..719fd3c 100644
 --- a/crates/gpui_windows/src/directx_atlas.rs
 +++ b/crates/gpui_windows/src/directx_atlas.rs
 @@ -11,9 +11,11 @@ use windows::Win32::Graphics::{
@@ -2782,7 +2806,7 @@ index d49ec18..cea181d 100644
      }
  }
  
-@@ -357,17 +510,26 @@ fn etagere_point_to_device(value: etagere::Point) -> Point<DevicePixels> {
+@@ -357,17 +510,31 @@ fn etagere_point_to_device(value: etagere::Point) -> Point<DevicePixels> {
  #[cfg(test)]
  mod tests {
      use super::*;
@@ -2803,7 +2827,12 @@ index d49ec18..cea181d 100644
      };
  
      fn create_atlas() -> Option<DirectXAtlas> {
-+        let (device, device_context) = create_device()?;
++        let device = create_device();
++        assert!(
++            device.is_some() || std::env::var_os("GPUI_REQUIRE_TEST_DEVICE").is_none(),
++            "GPUI_REQUIRE_TEST_DEVICE is set but no WARP device is available"
++        );
++        let (device, device_context) = device?;
 +        Some(DirectXAtlas::new(&device, &device_context))
 +    }
 +
@@ -2811,7 +2840,7 @@ index d49ec18..cea181d 100644
          let mut device: Option<ID3D11Device> = None;
          let mut device_context: Option<ID3D11DeviceContext> = None;
          unsafe {
-@@ -384,7 +546,7 @@ mod tests {
+@@ -384,7 +551,7 @@ mod tests {
              )
          }
          .ok()?;
@@ -2820,7 +2849,7 @@ index d49ec18..cea181d 100644
      }
  
      fn make_image_key(image_id: usize) -> AtlasKey {
-@@ -433,6 +595,264 @@ mod tests {
+@@ -433,6 +600,264 @@ mod tests {
          assert_eq!(tile_b.texture_id, keeper_tile.texture_id);
      }
  

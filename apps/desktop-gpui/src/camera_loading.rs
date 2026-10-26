@@ -1,10 +1,12 @@
 mod script_outline;
 
-use std::time::Instant;
+use std::cell::Cell;
+use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use gpui::{
-    Bounds, BoxShadow, ContentMask, Corners, Hsla, IntoElement, Pixels, Styled, Window, canvas,
-    fill, hsla, linear_color_stop, linear_gradient, point, px, size,
+    Bounds, BoxShadow, ContentMask, Corners, EntityId, Hsla, IntoElement, Pixels, Styled, Window,
+    canvas, fill, hsla, linear_color_stop, linear_gradient, point, px, size,
 };
 
 use script_outline::LOADING;
@@ -19,6 +21,8 @@ const SWEEP_PERIOD_SECONDS: f32 = 1.6;
 const SWEEP_HALF_WIDTH: f32 = 0.26;
 const SCRIPT_REST_ALPHA: f32 = 0.12;
 const SCRIPT_PEAK_ALPHA: f32 = 0.42;
+const MOTION_FPS: f32 = 60.;
+const DRIFT_FPS: f32 = 30.;
 
 struct Cloud {
     lightness: f32,
@@ -82,6 +86,7 @@ pub(crate) fn camera_loading(
     opacity: f32,
     animate: bool,
     show_script: bool,
+    redraw: LoadingRedraw,
 ) -> impl IntoElement {
     canvas(
         |_, _, _| {},
@@ -116,12 +121,64 @@ pub(crate) fn camera_loading(
                 }
             }
             if animate {
-                window.request_animation_frame();
+                let due = Instant::now() + frame_gap(elapsed, opacity, show_script);
+                let generation = redraw.begin();
+                redraw_when_due(window, window.current_view(), due, redraw, generation);
             }
         },
     )
     .absolute()
     .inset_0()
+}
+
+/// Fades and the script sweep redraw at 60 fps. Between sweeps only the
+/// clouds move, under a pixel per frame at 30 fps. The gap is a fifth short of
+/// the frame time so a display refresh landing just early still counts.
+fn frame_gap(elapsed: f32, opacity: f32, show_script: bool) -> Duration {
+    let fps = if opacity < 1. || (show_script && sweep_center(elapsed).is_some()) {
+        MOTION_FPS
+    } else {
+        DRIFT_FPS
+    };
+    Duration::from_secs_f32(0.8 / fps)
+}
+
+/// Each paint supersedes the redraw scheduled by the one before it, so extra
+/// paints (a resize, a chrome change) never leave several deadlines running.
+#[derive(Clone, Default)]
+pub(crate) struct LoadingRedraw(Rc<Cell<u64>>);
+
+impl LoadingRedraw {
+    fn begin(&self) -> u64 {
+        let generation = self.0.get().wrapping_add(1);
+        self.0.set(generation);
+        generation
+    }
+
+    fn is_current(&self, generation: u64) -> bool {
+        self.0.get() == generation
+    }
+}
+
+/// Checks on each display refresh and only re-renders the view once `due`
+/// has passed, so redraws never outpace the platform's own frames.
+fn redraw_when_due(
+    window: &Window,
+    view: EntityId,
+    due: Instant,
+    redraw: LoadingRedraw,
+    generation: u64,
+) {
+    window.on_next_frame(move |window, cx| {
+        if !redraw.is_current(generation) {
+            return;
+        }
+        if Instant::now() >= due {
+            cx.notify(view);
+        } else {
+            redraw_when_due(window, view, due, redraw, generation);
+        }
+    });
 }
 
 fn sweep_center(elapsed: f32) -> Option<f32> {
@@ -316,4 +373,88 @@ fn paint_glass(
             },
         ],
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn paints_in(start: f32, seconds: f32, refresh_hz: f32, opacity: f32, script: bool) -> usize {
+        let refresh = 1. / refresh_hz;
+        let mut due = 0.;
+        let mut paints = 0;
+        let mut frame = (start / refresh).ceil();
+        while frame * refresh < start + seconds {
+            let now = frame * refresh;
+            if now >= due {
+                paints += 1;
+                due = now + frame_gap(now, opacity, script).as_secs_f32();
+            }
+            frame += 1.;
+        }
+        paints
+    }
+
+    #[test]
+    fn loading_redraws_at_sixty_while_sweeping_and_thirty_between() {
+        let period_start = SWEEP_PERIOD_SECONDS - SWEEP_LEAD_SECONDS;
+        assert!(sweep_center(period_start + 0.01).is_some());
+        assert!(sweep_center(period_start + SWEEP_SECONDS + 0.01).is_none());
+        let resting_start = period_start + SWEEP_SECONDS;
+        let resting_seconds = SWEEP_PERIOD_SECONDS - SWEEP_SECONDS;
+
+        for refresh_hz in [60., 120.] {
+            let sweeping = paints_in(period_start, SWEEP_SECONDS, refresh_hz, 1., true);
+            assert!((59..=61).contains(&sweeping), "{refresh_hz} Hz: {sweeping}");
+            let resting = paints_in(resting_start, resting_seconds, refresh_hz, 1., true);
+            assert!((17..=19).contains(&resting), "{refresh_hz} Hz: {resting}");
+            let no_script = paints_in(period_start, SWEEP_PERIOD_SECONDS, refresh_hz, 1., false);
+            assert!(
+                (47..=49).contains(&no_script),
+                "{refresh_hz} Hz: {no_script}"
+            );
+            let fading = paints_in(0., FADE_IN_SECONDS, refresh_hz, 0.5, false);
+            assert!((17..=19).contains(&fading), "{refresh_hz} Hz: {fading}");
+        }
+        let slow_display = paints_in(period_start, SWEEP_SECONDS, 20., 1., true);
+        assert!((19..=21).contains(&slow_display), "{slow_display}");
+    }
+
+    #[test]
+    fn extra_paints_leave_one_pending_redraw() {
+        let refresh = 1. / 120.;
+        let start = SWEEP_PERIOD_SECONDS - SWEEP_LEAD_SECONDS + SWEEP_SECONDS;
+        let end = start + SWEEP_PERIOD_SECONDS - SWEEP_SECONDS;
+        let redraw = LoadingRedraw::default();
+        let mut pending: Vec<(u64, f32)> = Vec::new();
+        let paint = |now: f32, pending: &mut Vec<(u64, f32)>| {
+            pending.push((redraw.begin(), now + frame_gap(now, 1., true).as_secs_f32()));
+        };
+        paint(start, &mut pending);
+        paint(start + refresh, &mut pending);
+
+        let mut paints = 0;
+        let mut frame = (start / refresh).ceil() + 2.;
+        while frame * refresh < end {
+            let now = frame * refresh;
+            let mut due_paints = 0;
+            pending.retain(|&(generation, due)| {
+                if !redraw.is_current(generation) {
+                    return false;
+                }
+                if now >= due {
+                    due_paints += 1;
+                    return false;
+                }
+                true
+            });
+            for _ in 0..due_paints {
+                paints += 1;
+                paint(now, &mut pending);
+            }
+            assert!(pending.len() <= 1, "{} pending at {now}", pending.len());
+            frame += 1.;
+        }
+        assert!((17..=19).contains(&paints), "{paints}");
+    }
 }
