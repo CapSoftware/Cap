@@ -561,10 +561,10 @@ export const POST = async (req: Request) => {
 
 				if (!dbUser) {
 					console.log(
-						"No user found after all retries. Returning 202 to allow retry.",
+						"No user found after all retries. Returning 503 to allow retry.",
 					);
 					return new Response("User not found, webhook will be retried", {
-						status: 202,
+						status: 503,
 					});
 				}
 
@@ -713,18 +713,18 @@ export const POST = async (req: Request) => {
 				});
 
 				// BAA cleanup depends only on Stripe state, so it must run even
-				// when the customer cannot be mapped to a user; the 202 below is
-				// treated as delivered and the event is never redelivered.
+				// when the customer cannot be mapped to a user, before returning
+				// a retryable failure for the missing user mapping.
 				if (!hasEntitledProSubscription(subscriptions.data)) {
 					await cancelEntitledBaaSubscriptions(subscriptions.data, customer.id);
 				}
 
 				if (!dbUser) {
 					console.log(
-						"No user found after all retries. Returning 202 to allow retry.",
+						"No user found after all retries. Returning 503 to allow retry.",
 					);
 					return new Response("User not found, webhook will be retried", {
-						status: 202,
+						status: 503,
 					});
 				}
 

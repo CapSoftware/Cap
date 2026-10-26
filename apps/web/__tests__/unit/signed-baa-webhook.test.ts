@@ -499,7 +499,7 @@ describe("Stripe webhook — Signed BAA", () => {
 
 		const res = await POST(makeWebhookRequest());
 
-		expect(res.status).toBe(202);
+		expect(res.status).toBe(503);
 		expect(mockStripe.subscriptions.cancel).toHaveBeenCalledWith("sub_baa");
 	});
 
@@ -1028,6 +1028,60 @@ describe("Signed BAA Payment Link webhooks", () => {
 		expect(mockDbChain.where).not.toHaveBeenCalledWith({
 			eq: [signedBaas.stripeSubscriptionId, waivedSubscription.id],
 		});
+	});
+
+	it.each([
+		["checkout.session.completed", "missing"],
+		["checkout.session.completed", "unavailable"],
+		["customer.subscription.updated", "missing"],
+		["customer.subscription.updated", "unavailable"],
+	])("retries %s when the user is %s", async (eventType, lookupState) => {
+		vi.useFakeTimers();
+		try {
+			const pro = {
+				...proSubscription,
+				items: { data: [{ price: { id: "price_pro" }, quantity: 3 }] },
+			};
+			mockStripe.subscriptions.retrieve.mockResolvedValue(pro);
+			mockStripe.webhooks.constructEvent.mockReturnValue({
+				type: eventType,
+				data: {
+					object:
+						eventType === "checkout.session.completed"
+							? { ...session, subscription: "sub_pro", customer: "cus_pro" }
+							: pro,
+				},
+			});
+			mockStripe.customers.retrieve.mockResolvedValue({
+				id: "cus_pro",
+				email: owner.email,
+				metadata: { userId: owner.id },
+			});
+			mockStripe.subscriptions.list.mockResolvedValue({
+				data: [pro],
+			});
+			if (lookupState === "unavailable") {
+				mockDbChain.limit.mockRejectedValue(new Error("Database unavailable"));
+			}
+
+			const delivery = POST(makeWebhookRequest());
+			await vi.runAllTimersAsync();
+			expect((await delivery).status).toBe(503);
+			expect(mockDbChain.update).not.toHaveBeenCalledWith(users);
+
+			mockDbChain.limit.mockResolvedValue([owner]);
+			expect((await POST(makeWebhookRequest())).status).toBe(200);
+			expect(mockDbChain.set).toHaveBeenCalledWith(
+				expect.objectContaining({
+					stripeSubscriptionId: proSubscription.id,
+					stripeSubscriptionStatus: proSubscription.status,
+					stripeCustomerId: "cus_pro",
+					inviteQuota: 3,
+				}),
+			);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("preserves ordinary Pro checkout and its seat quota", async () => {
