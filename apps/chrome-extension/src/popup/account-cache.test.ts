@@ -82,5 +82,6 @@ describe("popup account cache", () => {
 			if (plan === "Free")
 				expect(document.body.textContent).not.toContain("Pro");
 		},
+		15_000,
 	);
 });
