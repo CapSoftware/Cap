@@ -2446,10 +2446,28 @@ pub struct CaptionsData {
     pub source_timed: bool,
 }
 
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum KeyboardStyle {
+    #[default]
+    Text,
+    Keycaps,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum KeycapTheme {
+    #[default]
+    Black,
+    White,
+}
+
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase", default)]
 pub struct KeyboardSettings {
     pub enabled: bool,
+    pub style: KeyboardStyle,
+    pub keycap_theme: KeycapTheme,
     pub font: String,
     pub size: u32,
     pub color: String,
@@ -2469,6 +2487,8 @@ impl Default for KeyboardSettings {
     fn default() -> Self {
         Self {
             enabled: false,
+            style: KeyboardStyle::default(),
+            keycap_theme: KeycapTheme::default(),
             font: "System Sans-Serif".to_string(),
             size: 50,
             color: "#FFFFFF".to_string(),

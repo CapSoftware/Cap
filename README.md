@@ -202,5 +202,6 @@ Cap is built in public. Issues, pull requests, design feedback, bug reports, doc
 Portions of this software are licensed as follows:
 
 - Code in the `cap-camera*` and `scap-*` crate families is licensed under the MIT License. See [licenses/LICENSE-MIT](https://github.com/CapSoftware/Cap/blob/main/licenses/LICENSE-MIT).
+- The keycap designs in `crates/rendering/src/layers/keycap.rs` and `crates/rendering/src/shaders/keycap.wgsl` are derived from Keyty and are licensed under the BSD 3-Clause License. See [licenses/LICENSE-KEYTY-BSD-3-CLAUSE](https://github.com/CapSoftware/Cap/blob/main/licenses/LICENSE-KEYTY-BSD-3-CLAUSE).
 - Third-party components are licensed under the original license provided by their owner.
 - All other content not mentioned above is available under the AGPLv3 license as defined in [LICENSE](https://github.com/CapSoftware/Cap/blob/main/LICENSE).
