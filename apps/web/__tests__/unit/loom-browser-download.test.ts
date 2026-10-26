@@ -23,6 +23,33 @@ describe("loom-browser-download", () => {
 		expect(extractLoomVideoId("https://example.com/share/not-loom")).toBeNull();
 	});
 
+	it.each([
+		"https://www.loom.com.evil.test/share/05f424bf8781404091f365c9f5231d86",
+		"https://notloom.com/share/05f424bf8781404091f365c9f5231d86",
+		"http://www.loom.com/share/05f424bf8781404091f365c9f5231d86",
+		"https://user:pass@www.loom.com/share/05f424bf8781404091f365c9f5231d86",
+		"https://www.loom.com/share/aaaaaaaaaa%2Fextra",
+		"https://www.loom.com/share/short",
+		"https://www.loom.com/share/aaaaaaaaaa?irrelevant=no#x",
+	])("rejects invalid Loom browser download URLs or keeps safe IDs: %s", async (url) => {
+		const valid = url.includes("aaaaaaaaaa?irrelevant");
+		expect(extractLoomVideoId(url)).toBe(valid ? "aaaaaaaaaa" : null);
+		if (!valid) {
+			await expect(resolveLoomBrowserDownload(url)).resolves.toMatchObject({
+				success: false,
+			});
+			expect(fetch).not.toHaveBeenCalled();
+		}
+	});
+
+	it("accepts real Loom subdomains with no credentials", () => {
+		expect(
+			extractLoomVideoId(
+				"https://loom.com/share/05f424bf8781404091f365c9f5231d86?sid=1",
+			),
+		).toBe("05f424bf8781404091f365c9f5231d86");
+	});
+
 	it("resolves direct MP4 downloads in the browser", async () => {
 		const fetchMock = vi.mocked(fetch);
 		fetchMock.mockImplementation(async (input) => {
