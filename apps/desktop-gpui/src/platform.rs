@@ -1085,21 +1085,15 @@ mod mac {
         // 16 })`. Tauri's `Effect.WindowBackground` is `NSVisualEffectMaterial`
         // `windowBackground` (12) blended behind the window; the radius is
         // already covered by the content-view squircle clip above.
-        let vibrancy = unsafe { NSVisualEffectView::initWithFrame(mtm.alloc(), bounds) };
-        unsafe {
-            vibrancy.setMaterial(NSVisualEffectMaterial::WindowBackground);
-            vibrancy.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
-            vibrancy.setState(NSVisualEffectState::FollowsWindowActiveState);
-            vibrancy.setAutoresizingMask(
-                NSAutoresizingMaskOptions::ViewWidthSizable
-                    | NSAutoresizingMaskOptions::ViewHeightSizable,
-            );
-            content_view.addSubview_positioned_relativeTo(
-                &vibrancy,
-                NSWindowOrderingMode::Below,
-                None,
-            );
-        }
+        let vibrancy = NSVisualEffectView::initWithFrame(mtm.alloc(), bounds);
+        vibrancy.setMaterial(NSVisualEffectMaterial::WindowBackground);
+        vibrancy.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
+        vibrancy.setState(NSVisualEffectState::FollowsWindowActiveState);
+        vibrancy.setAutoresizingMask(
+            NSAutoresizingMaskOptions::ViewWidthSizable
+                | NSAutoresizingMaskOptions::ViewHeightSizable,
+        );
+        content_view.addSubview_positioned_relativeTo(&vibrancy, NSWindowOrderingMode::Below, None);
         Some(MaterialKind::Vibrancy)
     }
 
@@ -1307,7 +1301,11 @@ mod mac {
     pub fn lock_borderless_style(native: &NativeWindow) {
         use objc2::{ffi, msg_send, runtime::AnyClass};
 
-        unsafe extern "C" fn guarded_set_style_mask(this: *mut AnyObject, sel: Sel, mask: usize) {
+        unsafe extern "C-unwind" fn guarded_set_style_mask(
+            this: *mut AnyObject,
+            sel: Sel,
+            mask: usize,
+        ) {
             let Some(&(_, imp)) = SET_STYLE_MASK_SUPER.get() else {
                 return;
             };
@@ -1320,7 +1318,7 @@ mod mac {
                 tracing::info!(mask, "kept the main window's borderless style mask");
                 BORDERLESS_STYLE_MASK
             };
-            let imp: unsafe extern "C" fn(*mut AnyObject, Sel, usize) =
+            let imp: unsafe extern "C-unwind" fn(*mut AnyObject, Sel, usize) =
                 unsafe { std::mem::transmute(imp) };
             unsafe { imp(this, sel, mask) };
         }
@@ -1330,25 +1328,27 @@ mod mac {
             let sel = objc2::sel!(setStyleMask:);
             let &(installed_on, _) = SET_STYLE_MASK_SUPER.get_or_init(|| {
                 let superclass = ffi::class_getSuperclass(class.cast());
-                let Some(imp) = ffi::method_getImplementation(ffi::class_getInstanceMethod(
-                    superclass,
-                    sel.as_ptr(),
-                )) else {
+                let Some(imp) =
+                    ffi::method_getImplementation(ffi::class_getInstanceMethod(superclass, sel))
+                else {
                     tracing::warn!(
                         "no inherited setStyleMask: for the main window style-mask lock"
                     );
                     return (0, 0);
                 };
+
                 let added = ffi::class_addMethod(
                     class.cast_mut().cast(),
-                    sel.as_ptr(),
-                    Some(std::mem::transmute::<
-                        unsafe extern "C" fn(*mut AnyObject, Sel, usize),
-                        unsafe extern "C" fn(),
-                    >(guarded_set_style_mask)),
-                    c"v@:Q".as_ptr(),
-                );
-                if !objc2::runtime::Bool::from_raw(added).as_bool() {
+                    sel,
+                    std::mem::transmute::<
+                        unsafe extern "C-unwind" fn(*mut AnyObject, Sel, usize),
+                        objc2::runtime::Imp,
+                    >(guarded_set_style_mask),
+                    c"v@:Q".as_ptr(), // (void)
+                )
+                .as_bool();
+
+                if !added {
                     tracing::warn!("could not install the main window style-mask lock");
                     return (0, 0);
                 }
@@ -1449,10 +1449,8 @@ mod mac {
         apply_fullscreen_overlay_behavior(ns_window);
         // `.shadow(false)` in the Tauri builder.
         ns_window.setHasShadow(false);
-        unsafe {
-            ns_window.setAnimationBehavior(objc2_app_kit::NSWindowAnimationBehavior::None);
-            ns_window.orderFrontRegardless();
-        }
+        ns_window.setAnimationBehavior(objc2_app_kit::NSWindowAnimationBehavior::None);
+        ns_window.orderFrontRegardless();
     }
 
     /// The window's raw AppKit frame (bottom-left origin). The dev-restore
@@ -1587,7 +1585,7 @@ mod mac {
     /// rebuild and must not steal focus from whatever the user is typing in.
     /// Same task-only rule as every other ordering call here.
     pub fn order_front_native(native: &NativeWindow) {
-        unsafe { native.0.orderFrontRegardless() };
+        native.0.orderFrontRegardless();
         rerun_occlusion_handler_after_show(&native.0);
     }
 

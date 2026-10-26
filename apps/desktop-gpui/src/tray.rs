@@ -988,7 +988,6 @@ mod mac {
         stop_recording,
     };
     use crate::main_window::{Mode, TargetType};
-    use crate::platform;
 
     /// `NSVariableStatusItemLength`.
     const NS_VARIABLE_STATUS_ITEM_LENGTH: f64 = -1.0;
@@ -1487,6 +1486,14 @@ mod mac {
     }
 
     pub(super) fn start_option_tracking() {
+        // Sync to the real modifier state first; the rows may have been stamped
+        // by a rebuild that ran while Option was still held.
+        let held = current_option();
+        OPTION_HELD.set(held);
+        if let Some(mode) = CURRENT_MODE.get() {
+            apply(mode, held);
+        }
+
         OPTION_TIMER.with(|slot| {
             if slot.borrow().is_some() {
                 return;
