@@ -428,7 +428,7 @@ fn english_matches_the_literals_it_replaced() {
         ),
         (
             tr::settings::general::updates::download_policy::manual(),
-            "Manual".into(),
+            "Ask first".into(),
         ),
         (
             tr::settings::general::updates::download_policy::auto(),
