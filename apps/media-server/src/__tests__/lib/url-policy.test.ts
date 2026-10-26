@@ -327,3 +327,88 @@ test("tries another checked address when a dual-stack media connection fails", a
 		"https://93.184.216.34/video.mp4",
 	]);
 });
+
+describe("upload connection fallback", () => {
+	test.each(["PUT", "POST"])(
+		"tries the next checked address after a refused %s connection",
+		async (method) => {
+			const seen: string[] = [];
+			const body =
+				method === "PUT" ? new Blob(["upload-content"]) : "upload-content";
+			const fetcher: NonNullable<Parameters<typeof fetchAllowed>[4]> = async (
+				input,
+				init,
+			) => {
+				seen.push(input);
+				expect(new Headers(init?.headers).get("host")).toBe("storage.example");
+				expect(init?.tls?.serverName).toBe("storage.example");
+				if (seen.length === 1)
+					throw Object.assign(new TypeError("Unable to connect"), {
+						code: "ConnectionRefused",
+					});
+				expect(await new Response(init?.body).text()).toBe("upload-content");
+				return new Response(null, { status: 204 });
+			};
+			const response = await fetchAllowed(
+				"https://storage.example/upload",
+				{ method, body },
+				getUrlPolicy({}),
+				resolveTo("2606:4700::6810:85e5", "93.184.216.34"),
+				fetcher,
+			);
+			expect(response.status).toBe(204);
+			expect(seen).toEqual([
+				"https://[2606:4700::6810:85e5]/upload",
+				"https://93.184.216.34/upload",
+			]);
+		},
+	);
+
+	test.each(["ECONNRESET", "EPIPE", "ETIMEDOUT", "ConnectionClosed"])(
+		"does not replay a POST after %s",
+		async (code) => {
+			let calls = 0;
+			const error = Object.assign(new TypeError("Request failed"), { code });
+			await expect(
+				fetchAllowed(
+					"https://storage.example/callback",
+					{ method: "POST", body: "recording-details" },
+					getUrlPolicy({}),
+					resolveTo("2606:4700::6810:85e5", "93.184.216.34"),
+					async () => {
+						calls++;
+						throw error;
+					},
+				),
+			).rejects.toBe(error);
+			expect(calls).toBe(1);
+		},
+	);
+
+	test("does not replay a stream body after a connection failure", async () => {
+		let calls = 0;
+		const error = Object.assign(new TypeError("Unable to connect"), {
+			code: "ConnectionRefused",
+		});
+		await expect(
+			fetchAllowed(
+				"https://storage.example/upload",
+				{
+					method: "PUT",
+					body: new ReadableStream({
+						start(controller) {
+							controller.close();
+						},
+					}),
+				},
+				getUrlPolicy({}),
+				resolveTo("2606:4700::6810:85e5", "93.184.216.34"),
+				async () => {
+					calls++;
+					throw error;
+				},
+			),
+		).rejects.toBe(error);
+		expect(calls).toBe(1);
+	});
+});

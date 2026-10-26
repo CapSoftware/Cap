@@ -119,7 +119,7 @@ If your storage lives on a private network (MinIO in Docker or on Railway's priv
 
 Remote media is connected to a checked IP address while preserving the original HTTP host and TLS server name. Untrusted downloads bypass HTTP proxy environment settings so a proxy cannot resolve the hostname again. Callback requests carrying the shared secret refuse redirects.
 
-HLS and DASH resources are cached by URL within each materialization. The default limits are 20,000 resources, 32 GiB of downloaded data, and 8 MiB per manifest. Set `MEDIA_SERVER_MAX_PLAYLIST_RESOURCES` and `MEDIA_SERVER_MAX_PLAYLIST_BYTES` on the media-server service to change the first two limits. Downloads also respect the enclosing job's transfer budget. A failed required resource cancels the remaining transfers before temporary files are removed.
+HLS and DASH resources are cached by URL within each materialization. The default limits are 20,000 resources, 32 GiB of downloaded data, and 8 MiB per manifest. Set `MEDIA_SERVER_MAX_PLAYLIST_RESOURCES` and `MEDIA_SERVER_MAX_PLAYLIST_BYTES` on the media-server service to change the first two limits. Ordinary remote audio inputs share the byte limit, including inputs without a Content-Length header. Downloads also respect the enclosing job's transfer budget. A failed required resource cancels the remaining transfers before temporary files are removed.
 
 ## Optional Features
 

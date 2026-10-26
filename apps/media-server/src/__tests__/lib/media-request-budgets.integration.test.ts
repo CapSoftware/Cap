@@ -3,6 +3,7 @@ import * as childProcess from "node:child_process";
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import app from "../../app";
+import { extractAudioStream } from "../../lib/media-audio";
 import { withMediaTransfers } from "../../lib/media-transfer";
 import { generateThumbnail } from "../../lib/media-video";
 import { verifyRecording } from "../../lib/recording-verification";
@@ -17,6 +18,7 @@ afterEach(() => {
 		"MEDIA_SERVER_WEBHOOK_SECRET",
 		"MEDIA_SERVER_ALLOW_PRIVATE_URLS",
 		"S3_INTERNAL_ENDPOINT",
+		"MEDIA_SERVER_MAX_PLAYLIST_BYTES",
 	]) {
 		if (originalEnv[key] === undefined) delete process.env[key];
 		else process.env[key] = originalEnv[key];
@@ -32,6 +34,48 @@ function startServer(
 }
 
 describe("media request budgets", () => {
+	test.each(["input limit", "transfer budget"])(
+		"bounds ordinary audio staging with the %s and removes partial files",
+		async (limit) => {
+			await ensureTempDir();
+			const before = await readdir(getTempDir());
+			let stagedPath = "";
+			let cancelled = false;
+			const server = startServer(async () => {
+				stagedPath =
+					(await readdir(getTempDir())).find(
+						(name) => name.startsWith("audio-input-") && !before.includes(name),
+					) ?? "";
+				return new Response(
+					new ReadableStream({
+						start(controller) {
+							controller.enqueue(new Uint8Array(2048));
+						},
+						cancel() {
+							cancelled = true;
+						},
+					}),
+				);
+			});
+			const run = () =>
+				extractAudioStream(new URL("audio.mp4", server.url).toString(), {
+					timeoutMs: 1000,
+				});
+			if (limit === "input limit") {
+				process.env.MEDIA_SERVER_MAX_PLAYLIST_BYTES = "1024";
+				await expect(run()).rejects.toThrow("download byte limit");
+			} else {
+				await expect(withMediaTransfers(1024, run)).rejects.toThrow(
+					"transfer budget",
+				);
+			}
+			expect(stagedPath).not.toBe("");
+			expect(await readdir(getTempDir())).not.toContain(stagedPath);
+			await Bun.sleep(10);
+			expect(cancelled).toBe(true);
+		},
+	);
+
 	test("applies the thumbnail deadline while downloading", async () => {
 		const timeout = AbortSignal.timeout.bind(AbortSignal);
 		const timer = spyOn(AbortSignal, "timeout").mockImplementation((ms) =>

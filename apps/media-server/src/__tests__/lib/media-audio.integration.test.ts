@@ -210,7 +210,7 @@ describe("mediaAudio integration tests", () => {
 			try {
 				await expect(
 					checkHasAudioTrack(`${server.url}video.mp4`),
-				).rejects.toThrow("Failed to fetch media: 503");
+				).rejects.toThrow("Failed to fetch media resource: 503");
 				await waitForAudioOperations(beforeCount);
 			} finally {
 				await server.stop(true);
@@ -322,7 +322,7 @@ describe("mediaAudio integration tests", () => {
 			try {
 				await expect(
 					extractAudioStream(`${server.url}clip.mp4`),
-				).rejects.toThrow("Failed to fetch media: 404");
+				).rejects.toThrow("Failed to fetch media resource: 404");
 				await waitForAudioOperations(beforeCount);
 			} finally {
 				await server.stop(true);

@@ -234,6 +234,25 @@ type PinnedRequestInit = RequestInit & {
 };
 type Fetcher = (input: string, init?: PinnedRequestInit) => Promise<Response>;
 
+function canRetryConnection(
+	error: unknown,
+	body: RequestInit["body"],
+): boolean {
+	const repeatable =
+		body == null ||
+		typeof body === "string" ||
+		body instanceof Blob ||
+		body instanceof ArrayBuffer ||
+		ArrayBuffer.isView(body) ||
+		body instanceof URLSearchParams ||
+		body instanceof FormData;
+	if (!repeatable || !error || typeof error !== "object" || !("code" in error))
+		return false;
+	// These connect failures precede request transmission. Resets and timeouts
+	// can occur after a write, so they must never replay a callback or upload.
+	return error.code === "ConnectionRefused" || error.code === "ECONNREFUSED";
+}
+
 async function fetchChecked(
 	input: string,
 	init: RequestInit,
@@ -250,12 +269,10 @@ async function fetchChecked(
 	headers.set("Host", origin.host);
 	// Dial only checked addresses. Keep the original authority for routing and
 	// TLS verification, and bypass proxies that could resolve the host again.
-	const candidates = ["GET", "HEAD"].includes(
+	const readOnly = ["GET", "HEAD"].includes(
 		(init.method ?? "GET").toUpperCase(),
-	)
-		? addresses
-		: addresses.slice(0, 1);
-	for (const [index, address] of candidates.entries()) {
+	);
+	for (const [index, address] of addresses.entries()) {
 		const pinned = new URL(origin);
 		pinned.hostname = isIP(address) === 6 ? `[${address}]` : address;
 		try {
@@ -274,7 +291,11 @@ async function fetchChecked(
 			return response;
 		} catch (error) {
 			init.signal?.throwIfAborted();
-			if (index === candidates.length - 1) throw error;
+			if (
+				index === addresses.length - 1 ||
+				(!readOnly && !canRetryConnection(error, init.body))
+			)
+				throw error;
 		}
 	}
 	throw new BlockedUrlError(input, "no connection address available");

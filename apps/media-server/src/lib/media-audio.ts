@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { type Subprocess, spawn } from "bun";
 import { z } from "zod";
 import { withTimeout } from "./media-common";
+import { MediaDownloads } from "./media-downloads";
 import {
 	canAcceptNewAudioOperation,
 	getActiveAudioOperationCount,
@@ -13,7 +14,6 @@ import {
 import { materializeStreamingInput } from "./media-video";
 import { registerSubprocess, terminateProcess } from "./subprocess";
 import { ensureTempDir, getTempDir } from "./temp-files";
-import { fetchAllowed } from "./url-policy";
 
 export interface AudioExtractionOptions {
 	format?: "mp3";
@@ -196,15 +196,10 @@ async function stageRemoteInput(
 				cleanup,
 			};
 		}
-		const response = await fetchAllowed(videoUrl, { signal: abortSignal });
-		if (!response.ok) {
-			throw new Error(
-				`Failed to fetch media: ${response.status} ${response.statusText}`,
-			);
-		}
-		const inputPath = join(dirPath, "input");
-		await Bun.write(inputPath, response);
-		return { inputPath, cleanup };
+		const filename = await new MediaDownloads(abortSignal).run((downloads) =>
+			downloads.download(videoUrl, dirPath),
+		);
+		return { inputPath: join(dirPath, filename), cleanup };
 	} catch (error) {
 		await cleanup();
 		throw error;
