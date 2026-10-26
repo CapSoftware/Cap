@@ -14,7 +14,6 @@ export function formatPlayerTime(totalSeconds: number): string {
 	return `${minutes.toString().padStart(2, "0")}:${paddedSeconds}`;
 }
 
-/** `M:SS`, or `H:MM:SS` once the time reaches an hour. */
 export function formatClock(seconds: number): string {
 	const total =
 		Number.isFinite(seconds) && seconds > 0 ? Math.floor(seconds) : 0;
@@ -27,7 +26,6 @@ export function formatClock(seconds: number): string {
 		: `${mins}:${pad(secs)}`;
 }
 
-/** `MM:SS.ss`, or `H:MM:SS.ss` once the time reaches an hour. */
 export function formatClockWithHundredths(seconds: number): string {
 	const safe = Math.max(0, seconds);
 	const hours = Math.floor(safe / 3600);
