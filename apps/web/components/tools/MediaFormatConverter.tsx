@@ -394,28 +394,57 @@ export const MediaFormatConverter = ({
 	};
 
 	const extractAudioFromVideo = async (inputFile: File): Promise<void> => {
+		let input: import("mediabunny").Input | undefined;
 		try {
-			const webcodecs = await import("@remotion/webcodecs");
+			const {
+				ALL_FORMATS,
+				BlobSource,
+				BufferTarget,
+				Conversion,
+				Input,
+				Mp3OutputFormat,
+				Output,
+				canEncodeAudio,
+			} = await import("mediabunny");
 
-			const _handleProgress = (progressEvent: { progress: number }) => {
-				setProgress(Math.min(Math.round(progressEvent.progress * 100), 99));
-			};
+			// Browsers can't encode MP3 through WebCodecs, so use LAME instead.
+			if (!(await canEncodeAudio("mp3"))) {
+				const { registerMp3Encoder } = await import("@mediabunny/mp3-encoder");
+				registerMp3Encoder();
+			}
 
-			const controller = webcodecs.webcodecsController();
-			parserControllerRef.current = controller;
-
-			const result = await webcodecs.convertMedia({
-				src: inputFile,
-				container: "wav",
-				onProgress: ({ overallProgress }) => {
-					if (overallProgress !== null) {
-						setProgress(Math.min(Math.round(overallProgress * 100), 99));
-					}
-				},
-				controller,
+			input = new Input({
+				source: new BlobSource(inputFile),
+				formats: ALL_FORMATS,
+			});
+			const target = new BufferTarget();
+			const conversion = await Conversion.init({
+				input,
+				output: new Output({ format: new Mp3OutputFormat(), target }),
+				video: { discard: true },
+				showWarnings: false,
 			});
 
-			const blob = await result.save();
+			if (!conversion.isValid) {
+				throw new Error(
+					(await input.getPrimaryAudioTrack())
+						? "Your browser can't decode this video's audio."
+						: "This video has no audio track.",
+				);
+			}
+
+			parserControllerRef.current = {
+				abort: () => {
+					void conversion.cancel();
+				},
+			};
+			conversion.onProgress = (progress) => {
+				setProgress(Math.min(Math.round(progress * 100), 99));
+			};
+			await conversion.execute();
+
+			if (!target.buffer) throw new Error("No audio was written.");
+			const blob = new Blob([target.buffer], { type: "audio/mpeg" });
 			const url = URL.createObjectURL(blob);
 			setOutputUrl(url);
 			setProgress(100);
@@ -429,6 +458,8 @@ export const MediaFormatConverter = ({
 		} catch (error) {
 			console.error("Error extracting audio:", error);
 			throw error;
+		} finally {
+			input?.dispose();
 		}
 	};
 

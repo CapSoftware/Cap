@@ -4,6 +4,7 @@ import { Blob, File } from "node:buffer";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parseMedia } from "@remotion/media-parser";
+import { ALL_FORMATS, BlobSource, Input, MP3 } from "mediabunny";
 import {
 	type ButtonHTMLAttributes,
 	createElement,
@@ -213,3 +214,65 @@ it.each([
 		expect(container.textContent).toContain("Download GIF");
 	},
 );
+
+const convertToMp3 = async (fixture: string) => {
+	const bytes = await readFile(join(__dirname, `../fixtures/${fixture}`));
+	root.render(
+		createElement(MediaFormatConverter, {
+			initialConversionPath: "mp4-to-mp3",
+		}),
+	);
+	await vi.waitFor(() =>
+		expect(container.querySelector("input[type=file]")).not.toBeNull(),
+	);
+	const input = container.querySelector("input[type=file]") as HTMLInputElement;
+	Object.defineProperty(input, "files", {
+		value: [new File([bytes], "clip.mp4", { type: "video/mp4" })],
+	});
+	input.dispatchEvent(new Event("change", { bubbles: true }));
+	await vi.waitFor(() => expect(container.textContent).toContain("clip.mp4"));
+	const convert = Array.from(container.querySelectorAll("button")).find(
+		(button) => button.textContent === "Convert to MP3",
+	);
+	if (!convert) throw new Error("Missing MP3 conversion action");
+	convert.click();
+};
+
+it("extracts an MP4's audio as an MP3", async () => {
+	await convertToMp3("converter-audio.mp4");
+
+	await vi.waitFor(
+		() => expect(container.textContent).toContain("Conversion complete!"),
+		{ timeout: 10_000 },
+	);
+	if (!(output instanceof globalThis.Blob)) {
+		throw new Error("No converted audio was saved");
+	}
+	expect(output.type).toBe("audio/mpeg");
+	const audio = new Input({
+		source: new BlobSource(output),
+		formats: ALL_FORMATS,
+	});
+	expect(await audio.getFormat()).toBe(MP3);
+	expect((await audio.getPrimaryAudioTrack())?.codec).toBe("mp3");
+	expect(await audio.computeDuration()).toBeCloseTo(0.25, 1);
+	let downloadedName: string | undefined;
+	vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
+		this: HTMLAnchorElement,
+	) {
+		downloadedName = this.download;
+	});
+	Array.from(container.querySelectorAll("button"))
+		.find((button) => button.textContent === "Download MP3")
+		?.click();
+	expect(downloadedName).toBe("clip.mp3");
+});
+
+it("says when an MP4 has no audio to extract", async () => {
+	await convertToMp3("gif-6s.mp4");
+
+	await vi.waitFor(() =>
+		expect(container.textContent).toContain("This video has no audio track."),
+	);
+	expect(output).toBeUndefined();
+});
