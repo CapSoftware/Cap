@@ -768,9 +768,9 @@ settings_enum! {
 settings_enum! {
     /// `StudioRecordingQuality`, whose Rust default is `balanced`.
     StudioQuality {
-        Compatibility = "compatibility", "Compatibility";
-        Balanced = "balanced", "Balanced";
-        Ultra = "ultra", "Ultra";
+        Compatibility = "compatibility", tr::settings::options::studio_quality::compatibility();
+        Balanced = "balanced", tr::settings::options::studio_quality::balanced();
+        Ultra = "ultra", tr::settings::options::studio_quality::ultra();
     }
     default = Balanced
 }
@@ -789,8 +789,8 @@ settings_enum! {
     /// `MainWindowRecordingStartBehaviour`. British spelling in both the JSON
     /// and the label, as shipped.
     MainWindowStartBehaviour {
-        Close = "close", "Close";
-        Minimise = "minimise", "Minimise";
+        Close = "close", tr::settings::options::main_window_start::close();
+        Minimise = "minimise", tr::settings::options::main_window_start::minimise();
     }
     default = Close
 }
@@ -798,9 +798,9 @@ settings_enum! {
 settings_enum! {
     /// `PostStudioRecordingBehaviour`.
     PostStudioBehaviour {
-        OpenEditor = "openEditor", "Open editor";
-        ShowOverlay = "showOverlay", "Show Cap";
-        DoNothing = "doNothing", "Do nothing";
+        OpenEditor = "openEditor", tr::settings::options::post_studio::open_editor();
+        ShowOverlay = "showOverlay", tr::settings::options::post_studio::show_cap();
+        DoNothing = "doNothing", tr::settings::options::post_studio::do_nothing();
     }
     default = OpenEditor
 }
@@ -809,10 +809,10 @@ settings_enum! {
     /// What a finished screenshot does next. GPUI-only: the Tauri app always
     /// opened the editor and never reads this key.
     PostScreenshotBehaviour {
-        OpenEditor = "openEditor", "Open editor";
-        Copy = "copy", "Copy to clipboard";
-        CopyAndOpenEditor = "copyAndOpenEditor", "Copy and open editor";
-        Save = "save", "Do nothing";
+        OpenEditor = "openEditor", tr::settings::options::post_screenshot::open_editor();
+        Copy = "copy", tr::settings::options::post_screenshot::copy();
+        CopyAndOpenEditor = "copyAndOpenEditor", tr::settings::options::post_screenshot::copy_and_open_editor();
+        Save = "save", tr::settings::options::post_screenshot::do_nothing();
     }
     default = OpenEditor
 }
@@ -830,8 +830,8 @@ impl PostScreenshotBehaviour {
 settings_enum! {
     /// `PostDeletionBehaviour`.
     PostDeletionBehaviour {
-        DoNothing = "doNothing", "Do nothing";
-        ReopenRecordingWindow = "reopenRecordingWindow", "Reopen recording window";
+        DoNothing = "doNothing", tr::settings::options::post_deletion::do_nothing();
+        ReopenRecordingWindow = "reopenRecordingWindow", tr::settings::options::post_deletion::reopen();
     }
     default = DoNothing
 }
@@ -856,9 +856,9 @@ settings_enum! {
 
 settings_enum! {
     EditorPreviewQuality {
-        Quarter = "quarter", "Quarter";
-        Half = "half", "Half";
-        Full = "full", "Full";
+        Quarter = "quarter", tr::settings::options::preview_quality::quarter();
+        Half = "half", tr::settings::options::preview_quality::half();
+        Full = "full", tr::settings::options::preview_quality::full();
     }
     default = Half
 }

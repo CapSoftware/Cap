@@ -257,6 +257,698 @@ title = "隐私"
 [settings.general.privacy.telemetry]
 description = "Cap 使用匿名遥测数据来提升稳定性并修复问题。我们绝不会收集录制内容、窗口标题、文件路径或任何个人信息。"
 label = "共享匿名遥测数据"
+[settings.prompt]
+ok = "好"
+
+[settings.sidebar]
+account = "账户"
+cancel_sign_in = "取消登录"
+check_for_updates = "检查更新"
+checking_for_updates = "正在检查更新…"
+click_to_sign_in = "点击登录"
+downloading = "正在下载 v{version}…"
+downloading_progress = "正在下载 v{version}… {percent}%"
+installing = "正在安装 v{version}…"
+previous_versions = "查看以前的版本"
+restart_to_update = "重新启动以更新到 v{version}"
+sign_in = "登录"
+sign_out = "退出登录"
+signed_in = "已登录"
+
+[settings.recordings]
+corrupted_body = "录制失败，因此此文件在编辑器中可能会出现问题！如果你在恢复文件时遇到问题，请联系支持团队！"
+corrupted_title = "录制可能已损坏"
+delete = "删除"
+description = "管理你的录制并执行操作。"
+edit = "编辑"
+empty_library = "未找到录制"
+failed = "录制失败"
+import = "导入"
+in_progress = "正在录制"
+load_more = "加载更多"
+open_bundle = "打开录制文件包"
+open_link = "打开链接"
+retry_upload = "重新上传"
+show_all = "全部显示"
+title = "录制"
+
+[settings.recordings.empty]
+all = "没有录制"
+all_matching = "没有匹配的录制"
+instant = "没有 Instant 录制"
+instant_matching = "没有匹配的 Instant 录制"
+studio = "没有 Studio 录制"
+studio_matching = "没有匹配的 Studio 录制"
+
+[settings.screenshots]
+copy = "复制到剪贴板"
+delete = "删除"
+description = "管理你的截图并执行操作。"
+empty = "没有截图"
+empty_library = "未找到截图"
+empty_matching = "没有匹配的截图"
+import = "导入图片"
+load_more = "加载更多"
+open_folder = "打开文件夹"
+save_as = "另存为"
+title = "截图"
+
+[settings.quality]
+save_failed = "无法保存你的录制设置，请重试。"
+
+[settings.quality.studio]
+balanced = "均衡"
+balanced_description = "细节清晰，文件大小适中。适合大多数录制。"
+compatibility = "更小的文件"
+compatibility_description = "节省磁盘空间。细节可能变得柔和，摄像头画面尤其明显。"
+description = "保存到你的电脑上以便编辑。导出尺寸稍后在编辑器中选择。"
+recommended = "推荐"
+title = "Studio 录制"
+ultra = "最高细节"
+ultra_description = "保留最多细节，适合大量编辑。占用的磁盘空间最多。"
+
+[settings.quality.instant]
+description = "录制时同步上传，停止录制时链接即可使用。如需最佳画质，请使用 Studio 模式：它会以屏幕支持的最高画质录制，并可导出最高 4K。"
+free_plan = "免费版为 720p。Cap Pro 最高可录制 4K。"
+max_resolution = "最高分辨率"
+res_1080p = "文字清晰，上传体积适中。"
+res_1440p = "为高分辨率大屏幕提供更多细节。"
+res_4k = "细节最丰富。最适合高速网络。"
+res_720p = "上传体积最小，链接最快可用。"
+title = "Instant 录制"
+
+[settings.quality.sharing]
+auto_open = "自动打开分享链接"
+auto_open_description = "上传完成后在浏览器中打开链接。"
+title = "分享"
+
+[settings.options.studio_quality]
+balanced = "均衡"
+compatibility = "兼容"
+ultra = "超高"
+
+[settings.options.main_window_start]
+close = "关闭"
+minimise = "最小化"
+
+[settings.options.post_studio]
+do_nothing = "不执行任何操作"
+open_editor = "打开编辑器"
+show_cap = "显示 Cap"
+
+[settings.options.post_screenshot]
+copy = "复制到剪贴板"
+copy_and_open_editor = "复制并打开编辑器"
+do_nothing = "不执行任何操作"
+open_editor = "打开编辑器"
+
+[settings.options.post_deletion]
+do_nothing = "不执行任何操作"
+reopen = "重新打开录制窗口"
+
+[settings.options.preview_quality]
+full = "完整"
+half = "一半"
+quarter = "四分之一"
+
+[settings.shortcuts]
+blocked_while_recording = "当前录制占用了停止键，无法更改快捷键。请先停止录制。"
+needs_modifier_macos = "请包含 ⌘、⌃ 或 ⌥，以免快捷键干扰输入。"
+needs_modifier_other = "请包含 Ctrl、Alt 或 Win，以免快捷键干扰输入。"
+record_shortcut = "录制快捷键"
+recording_description = "无需先打开 Cap 即可开始录制。"
+recording_hint = "按下你想使用的按键。按 Esc 取消，按 Delete 移除。"
+recording_title = "录制"
+saved = "已保存。在任意应用中按 {keys} 即可{effect}。"
+saved_moved = "已保存。在任意应用中按 {keys} 即可{effect}。已从“{shortcut}”中移除。"
+screenshots_description = "快捷键在任何应用中都可用。点击即可更改。"
+screenshots_title = "截图"
+type_shortcut = "输入快捷键…"
+unavailable = "其他应用或系统已在使用此快捷键。点击以选择其他快捷键。"
+unsupported_key = "该按键不能用于快捷键。请尝试字母、数字或功能键。"
+while_recording_title = "录制期间"
+
+[settings.shortcuts.after_screenshot]
+hint = "适用于每张截图，无论来自快捷键还是 Cap"
+title = "截图之后"
+
+[settings.shortcuts.after_studio]
+hint = "停止录制时"
+title = "Studio 录制之后"
+
+[settings.shortcuts.after_instant]
+hint = "分享链接总会被复制"
+title = "Instant 录制之后"
+
+[settings.shortcuts.outcome]
+instant_copy_link = "仅复制链接"
+instant_copy_link_hint = "不打开任何内容"
+instant_open_link = "打开链接"
+instant_open_link_hint = "在浏览器中"
+saved_to_library = "保存到资料库"
+screenshot_copy = "复制"
+screenshot_copy_and_edit = "复制并编辑"
+screenshot_copy_and_edit_hint = "两者兼顾"
+screenshot_copy_hint = "随处粘贴"
+screenshot_do_nothing = "不执行任何操作"
+screenshot_open_editor = "打开编辑器"
+screenshot_open_editor_hint = "先添加标注"
+studio_do_nothing = "不执行任何操作"
+studio_open_editor = "打开编辑器"
+studio_open_editor_hint = "立即编辑"
+studio_show_cap = "显示 Cap"
+studio_show_cap_hint = "回到录制器"
+
+[settings.shortcuts.label]
+cycle_mode = "切换录制模式"
+fallback = "快捷键"
+open_picker = "打开录制选择器"
+pause = "暂停或继续"
+record_area = "录制区域"
+record_display = "录制屏幕"
+record_window = "录制窗口"
+restart = "重新开始录制"
+screenshot_area = "截取区域"
+screenshot_display = "截取屏幕"
+screenshot_window = "截取窗口"
+start_instant = "开始 Instant 录制"
+start_studio = "开始 Studio 录制"
+stop = "停止录制"
+
+[settings.shortcuts.effect]
+cycle_mode = "在 Studio、Instant 和截图模式之间切换"
+instant_copy = "以 Instant 模式录制所选屏幕或窗口，停止后复制分享链接"
+instant_copy_and_open = "以 Instant 模式录制所选屏幕或窗口，停止后复制并打开分享链接"
+open_picker = "打开 Cap 以选择要录制的内容"
+pause = "暂停当前录制，或继续录制"
+picker_area_instant = "选择一个区域，然后以 Instant 模式录制"
+picker_area_screenshot = "选择一个区域，然后截图"
+picker_area_studio = "选择一个区域，然后以 Studio 模式录制"
+picker_display_instant = "选择一个屏幕，然后以 Instant 模式录制"
+picker_display_screenshot = "选择一个屏幕，然后截图"
+picker_display_studio = "选择一个屏幕，然后以 Studio 模式录制"
+picker_window_instant = "选择一个窗口，然后以 Instant 模式录制"
+picker_window_screenshot = "选择一个窗口，然后截图"
+picker_window_studio = "选择一个窗口，然后以 Studio 模式录制"
+restart = "丢弃当前这段并重新开始"
+screenshot_area_copy = "选择一个区域并复制到剪贴板"
+screenshot_area_copy_and_open_editor = "选择一个区域，复制后打开编辑器"
+screenshot_area_open_editor = "选择一个区域并在编辑器中打开"
+screenshot_area_save = "选择一个区域并保存到你的资料库，不打开任何内容"
+screenshot_display_copy = "截取指针所在的屏幕并复制到剪贴板"
+screenshot_display_copy_and_open_editor = "截取指针所在的屏幕，复制后打开编辑器"
+screenshot_display_open_editor = "截取指针所在的屏幕并在编辑器中打开"
+screenshot_display_save = "截取指针所在的屏幕并保存到你的资料库，不打开任何内容"
+screenshot_window_copy = "截取指针下方的窗口并复制到剪贴板"
+screenshot_window_copy_and_open_editor = "截取指针下方的窗口，复制后打开编辑器"
+screenshot_window_open_editor = "截取指针下方的窗口并在编辑器中打开"
+screenshot_window_save = "截取指针下方的窗口并保存到你的资料库，不打开任何内容"
+stop = "停止当前录制"
+studio = "以 Studio 模式录制所选屏幕或窗口"
+studio_open_editor = "以 Studio 模式录制所选屏幕或窗口，停止后打开编辑器"
+
+[settings.shortcuts.sentence]
+cycle_mode = "在 Studio、Instant 和截图模式之间切换。"
+instant_copy = "以 Instant 模式录制所选屏幕或窗口，停止后复制分享链接。"
+instant_copy_and_open = "以 Instant 模式录制所选屏幕或窗口，停止后复制并打开分享链接。"
+open_picker = "打开 Cap 以选择要录制的内容。"
+pause = "暂停当前录制，或继续录制。"
+picker_area_instant = "选择一个区域，然后以 Instant 模式录制。"
+picker_area_screenshot = "选择一个区域，然后截图。"
+picker_area_studio = "选择一个区域，然后以 Studio 模式录制。"
+picker_display_instant = "选择一个屏幕，然后以 Instant 模式录制。"
+picker_display_screenshot = "选择一个屏幕，然后截图。"
+picker_display_studio = "选择一个屏幕，然后以 Studio 模式录制。"
+picker_window_instant = "选择一个窗口，然后以 Instant 模式录制。"
+picker_window_screenshot = "选择一个窗口，然后截图。"
+picker_window_studio = "选择一个窗口，然后以 Studio 模式录制。"
+restart = "丢弃当前这段并重新开始。"
+screenshot_area_copy = "选择一个区域并复制到剪贴板。"
+screenshot_area_copy_and_open_editor = "选择一个区域，复制后打开编辑器。"
+screenshot_area_open_editor = "选择一个区域并在编辑器中打开。"
+screenshot_area_save = "选择一个区域并保存到你的资料库，不打开任何内容。"
+screenshot_display_copy = "截取指针所在的屏幕并复制到剪贴板。"
+screenshot_display_copy_and_open_editor = "截取指针所在的屏幕，复制后打开编辑器。"
+screenshot_display_open_editor = "截取指针所在的屏幕并在编辑器中打开。"
+screenshot_display_save = "截取指针所在的屏幕并保存到你的资料库，不打开任何内容。"
+screenshot_window_copy = "截取指针下方的窗口并复制到剪贴板。"
+screenshot_window_copy_and_open_editor = "截取指针下方的窗口，复制后打开编辑器。"
+screenshot_window_open_editor = "截取指针下方的窗口并在编辑器中打开。"
+screenshot_window_save = "截取指针下方的窗口并保存到你的资料库，不打开任何内容。"
+stop = "停止当前录制。"
+studio = "以 Studio 模式录制所选屏幕或窗口。"
+studio_open_editor = "以 Studio 模式录制所选屏幕或窗口，停止后打开编辑器。"
+
+[settings.cli]
+command = "命令"
+copy = "复制"
+description = "安装 Cap 命令，供终端、智能体、脚本和本地自动化使用。"
+install = "安装 CLI"
+installed = "已安装"
+installing = "正在安装..."
+installs_command = "桌面应用会安装一个本地\u00A0{command}\u00A0命令，它指向内置的 CLI。"
+load_failed = "无法加载 CLI 状态：{error}"
+not_installed = "未安装"
+path_configured = "已将 cap 添加到你的 PATH。重新启动终端即可使用，或现在运行："
+path_missing = "将 {path} 添加到你的 PATH，即可在新终端中使用 cap。"
+remove = "移除"
+removing = "正在移除..."
+repair = "修复"
+repairing = "正在修复..."
+retry = "重试"
+target = "目标"
+title = "命令行"
+
+[settings.transcription]
+active_title = "已启用的提示"
+applied_note = "在编辑器中生成字幕时会应用这些提示。"
+clear = "清除"
+count = { other = "{count} 项" }
+description = "添加生成字幕时需要注意的名称、拼写、域名和大小写偏好。"
+placeholder = "添加词语"
+saved = "已保存"
+saving = "正在保存..."
+terms_description = "每次添加一个词语，以减少错别字和格式错误。"
+terms_title = "记住的词语"
+title = "转写"
+
+[settings.experimental]
+developer = "开发者"
+developer_description = "仅在开发版本中显示。"
+muxer = "进程外混流器"
+muxer_description = "在独立的子进程中运行分段 MP4 混流器，混流器崩溃时不会影响你的录制。需要内置的 cap-muxer 程序。"
+native_app = "使用原生应用"
+native_app_description = "关闭后会退出此应用，并在开发环境中重新打开经典的 Tauri 应用。录制和设置是共享的。"
+reliability = "可靠性"
+
+[settings.experimental.switch]
+busy = "请先完成录制、导出、上传、导入或转写任务，再切换到经典版应用。"
+check_failed = "无法确认经典版 Cap 应用是否已打开：{error}"
+data_stays = "你的录制和设置会原样保留。"
+failed = "无法打开经典版 Cap 应用。"
+not_found = "找不到可以切换回去的经典版 Cap 应用。"
+open_failed = "无法打开经典版 Cap 应用：{error}"
+opening = "正在打开经典版 Cap 应用"
+opening_detail = "经典版 Cap 应用准备就绪后，此窗口将关闭。"
+save_failed = "无法保存你的应用偏好设置。Cap 仍保持打开。"
+switching = "正在切换回经典版 Cap 应用。"
+timed_out = "经典版应用尚未打开。请在开发终端中检查构建错误，然后重试。"
+
+[settings.feedback]
+app_version = "应用版本"
+capture_support = "捕获支持"
+capture_supported = "屏幕捕获：支持"
+capture_unsupported = "屏幕捕获：不支持"
+community_description = "有问题、想分享想法，或者只是想聊聊？加入 Cap 的 Discord 社区吧。"
+community_title = "加入社区"
+debug_description = "上传你的日志，帮助我们诊断 Cap 的问题。不包含任何个人信息。"
+debug_title = "调试信息"
+description = "提交反馈或报告问题，帮助我们改进 Cap。我们会尽快处理。"
+join_discord = "加入 Discord"
+operating_system = "操作系统"
+placeholder = "告诉我们你对 Cap 的看法..."
+submit = "提交反馈"
+submit_failed = "提交反馈失败"
+submitting = "正在提交..."
+system_loading = "正在加载系统信息..."
+system_title = "系统信息"
+thanks = "感谢你的反馈！"
+title = "反馈"
+upload_interrupted = "上传被中断"
+upload_logs = "上传日志"
+upload_sent = "已发送。谢谢，这能帮助我们找到问题。"
+uploading = "正在上传..."
+
+[settings.feedback.diagnostic]
+confirm_body = "Cap 将以闪烁图样占据你的屏幕，并在每条处理流程中播放约 {seconds} 秒的响亮提示音。请摘下耳机，保持音量可闻，并在完成前不要操作电脑。"
+confirm_title = "运行诊断？"
+description = "录制一段闪烁并发出提示音的简短测试图样，测量画面与声音的偏移程度，并记录你的显示器、摄像头、麦克风、磁盘空间和录制设置。在你选择发送之前，不会发送任何内容。"
+mic_description = "同时录制你的麦克风，检查它是否及时听到提示音。需要麦克风能实际听到的扬声器。"
+mic_label = "测试麦克风"
+mode_description = "要测试的处理流程。“两者”会先运行 Studio 部分，再运行 Instant 部分。"
+mode_label = "录制模式"
+no_cli = "未在此版本旁找到 Cap 命令行工具，因此报告只会包含你的环境信息。"
+no_cli_sync = "未在此版本旁找到 Cap 命令行工具，因此无法运行同步测试。"
+run = "运行诊断"
+run_again = "再次运行"
+send = "发送给 Cap"
+sending = "正在发送..."
+show_file = "显示文件"
+stop_recording_first = "请先停止当前录制，再运行诊断。"
+title = "诊断报告"
+try_again = "重试"
+warning_body = "一个全屏窗口会黑白闪烁，同时扬声器播放 1kHz 提示音，Cap 会录制下来并测量画面与声音的偏移程度。运行期间请不要操作电脑。两种模式加起来大约需要几分钟。"
+warning_title = "测试会占据你的屏幕并发出声音。"
+
+[settings.feedback.diagnostic.verdict]
+environment_only = "仅环境信息"
+fail = "未通过"
+inconclusive = "无法确定"
+pass = "通过"
+warn = "警告"
+
+[settings.sign_in_required]
+body = "请登录以继续。你也可以发送邮件至 hello@cap.so，或通过 cap.link/discord 加入我们的 Discord"
+title = "需要登录"
+
+[settings.changelog]
+fetch_failed = "获取更新日志失败"
+loading = "正在加载更新日志..."
+new = "新"
+version = "版本 {version} - {date}"
+
+[settings.license]
+activate = "激活许可证"
+activating = "正在激活..."
+active_title = "桌面许可证"
+checking = "正在检查…"
+deactivate = "停用许可证"
+description = "你的 Cap 套餐和桌面许可证，集中在一处。"
+desktop_description = "你的桌面许可证涵盖商用录制和编辑。Cap Pro 还提供云端分享和协作功能。"
+desktop_name = "桌面许可证"
+expires = "到期时间"
+explore_description = "在我们的网站上比较当前价格和所含的全部内容。"
+explore_desktop = "桌面许可证 · 可商用桌面录制器和编辑器。"
+explore_pro = "Cap Pro · 桌面许可证，另含云端分享、AI 功能和协作。"
+explore_title = "了解套餐"
+free_description = "可在本地录制和编辑，仅限个人使用。如需商用或更多云端功能，请选择付费套餐。"
+have_key = "已有许可证密钥？"
+key = "许可证密钥"
+no_instance = "未找到实例 ID"
+opens_pricing = "在浏览器中打开 cap.so/pricing。"
+placeholder = "许可证密钥"
+plan_title = "你的套餐"
+pro_description = "你的账户包含云端分享、Pro 功能以及可商用的桌面许可证。"
+refresh = "刷新套餐"
+refresh_failed = "无法刷新你的套餐，请重试。"
+save_failed = "保存许可证失败"
+sign_in_hint = "已有 Cap Pro？请在侧边栏中登录你的账户。"
+title = "套餐与许可证"
+view_pricing = "查看套餐和价格 ↗"
+
+[settings.integrations]
+configure = "配置"
+description = "配置集成以扩展 Cap 的功能，并连接第三方服务。"
+google_drive_description = "连接 Google Drive，用于上传新的分享链接视频。Cap 会将新视频存放在你 Drive 中的私有 Cap 文件夹，并在常规访问检查后继续通过 Cap 提供。"
+managed = "由你的组织管理"
+managed_by = "由你的组织管理：{organization}"
+request_timed_out = "请求超时"
+s3_description = "连接你自己的 S3 存储桶，完全掌控数据存储。所有新的分享链接上传都会自动上传到你配置的 S3 存储桶，确保你对内容拥有完整的所有权和控制权。非常适合需要数据主权和自定义存储策略的组织。"
+s3_name = "S3 配置"
+title = "集成"
+upgrade = "升级到 Pro"
+
+[settings.integrations.s3]
+access_key = "访问密钥 ID"
+bucket = "存储桶名称"
+configuration = "配置"
+delete_failed = "删除 S3 配置失败"
+deleted = "S3 配置已成功删除"
+endpoint = "端点"
+fetch_failed = "获取 S3 配置失败"
+guide = "存储配置指南"
+guide_intro = "设置存储桶并将其连接到 Cap 应该不到 10 分钟。查看\u00A0{guide}\u00A0即可开始。"
+other_provider = "其他兼容 S3 的服务"
+provider = "存储服务商"
+region = "区域"
+remove = "移除配置"
+removing = "正在移除..."
+save_failed = "保存 S3 配置失败"
+saved = "S3 配置已成功保存"
+saving = "正在保存..."
+secret_key = "秘密访问密钥"
+test = "测试连接"
+test_failed = "S3 连接测试失败。请检查你的配置和网络连接。"
+test_ok = "S3 配置测试成功！连接正常。"
+test_timeout = "连接测试在 5 秒后超时。请检查你的端点 URL 和网络连接。"
+testing = "正在测试..."
+
+[settings.integrations.gdrive]
+active = "已启用"
+active_for_uploads = "已用于新的上传"
+cached = "缓存于 {time}"
+connect = "连接 Google Drive"
+connect_failed = "无法开始连接 Google Drive"
+connected_inactive = "已连接但未启用"
+connection_description = "Google Drive 会将新的上传内容存放在你 Drive 中的私有 Cap 文件夹。已有的 Cap 托管视频和 S3 视频继续使用当前存储。"
+connection_title = "连接"
+disconnect = "断开连接"
+disconnect_failed = "无法断开 Google Drive 连接"
+disconnected = "已断开 Google Drive 连接"
+drive_files = "Drive 文件"
+finish_in_browser = "请在浏览器中完成 Google Drive 的连接，然后回到这里刷新。"
+not_connected = "未连接"
+opening = "正在打开..."
+refresh = "刷新"
+refreshing = "正在刷新..."
+remaining = "剩余"
+set_active_failed = "无法更新当前使用的存储服务商"
+storage = "存储空间"
+test = "测试"
+test_failed = "Google Drive 连接测试失败"
+testing = "正在测试..."
+trash = "回收站"
+updated = "更新于 {time}"
+use_drive = "使用 Google Drive"
+use_s3 = "使用 S3"
+used = "已使用 {usage}"
+used_of = "已使用 {usage}，共 {limit}"
+waiting = "正在等待..."
+working = "Google Drive 连接正常"
+working_for = "{email} 的 Google Drive 连接正常"
+
+[settings.automations]
+action_no_effect = "对所选触发器而言，此操作没有效果。"
+add_action = "添加操作"
+add_condition = "添加条件"
+auto_name_empty = "{trigger}自动化"
+browse = "浏览"
+check_compatibility = "检查兼容性"
+compatibility_checked = "已检查兼容性：此自动化暂时还不会在 Cap 中运行。已保存的规则仍可供 Cap CLI 使用。未执行任何操作。"
+condition_never_matches = "对所选触发器而言，此条件永远不会满足。"
+copy_link = "将链接复制到剪贴板"
+dangerous = "在 Cap CLI 中，此自动化会以你的权限运行命令或发送网络请求。请只使用你信任的值。"
+delete = "删除"
+description = "规则与 Cap CLI 共享。Cap 会保存这些规则，但暂时还不会运行自动化。"
+empty_description = "选择下方的模板一键开始，或从头创建你自己的自动化。"
+empty_title = "还没有自动化"
+enabled = "已启用"
+match_all = "全部满足"
+match_any = "满足任一"
+name = "名称"
+new = "新建自动化"
+no_presets = "还没有预设，请先在编辑器中创建一个。"
+only_if = "仅在以下情况下运行"
+open_in_browser = "在浏览器中打开"
+retry_save = "重新保存"
+run_through_shell = "通过 shell 运行"
+save_failed = "保存自动化失败。你的更改尚未保存。"
+start_from_scratch = "从头开始"
+summary_empty = "{trigger} → 还没有操作"
+templates_description = "一键添加现成的自动化，之后可随意调整。"
+templates_title = "模板"
+then = "然后执行"
+title = "自动化"
+when = "当发生以下情况时"
+
+[settings.automations.status]
+disabled_saved = "已停用 · 已保存"
+disabled_unsaved = "已停用 · 未保存"
+enabled_saved = "已启用 · 已保存"
+enabled_unsaved = "已启用 · 未保存"
+
+[settings.automations.field]
+arguments = "参数（以空格分隔）"
+body = "正文"
+body_template = "正文模板（可选）"
+compression = "压缩"
+destination = "目标文件夹（可选，留空 = 项目文件夹）"
+filename = "文件名模板（可选）"
+folder = "文件夹"
+format = "格式"
+frame_rate = "帧率"
+method = "方法"
+organization = "组织 ID（可选）"
+preset = "预设"
+program = "程序"
+resolution = "分辨率"
+source = "来源"
+title = "标题"
+url = "URL"
+
+[settings.automations.placeholder]
+organization_id = "组织 ID"
+project_folder = "项目文件夹"
+window_title = "例如 Slack"
+
+[settings.automations.clipboard]
+original = "原始捕获内容"
+rendered = "已编辑 / 已渲染"
+
+[settings.automations.target]
+area = "区域"
+display = "屏幕"
+window = "窗口"
+
+[settings.automations.compression]
+maximum = "最高"
+potato = "极低画质"
+social = "社交"
+web = "网页"
+
+[settings.automations.trigger.screenshot_taken]
+label = "截图完成时"
+noun = "截图"
+phrase = "截图完成"
+runs = "每次截图都会运行。"
+
+[settings.automations.trigger.studio_finished]
+label = "Studio 录制结束时"
+noun = "Studio 录制"
+phrase = "Studio 录制结束"
+runs = "每次 Studio 录制结束时都会运行。"
+
+[settings.automations.trigger.instant_finished]
+label = "Instant 录制结束时"
+noun = "Instant 录制"
+phrase = "Instant 录制结束"
+runs = "每次 Instant 录制结束时都会运行。"
+
+[settings.automations.trigger.recording_started]
+label = "录制开始时"
+noun = "录制开始"
+phrase = "录制开始"
+runs = "每次开始录制时都会运行。"
+
+[settings.automations.trigger.upload_completed]
+label = "上传完成时"
+noun = "上传"
+phrase = "上传完成"
+runs = "每次上传完成时都会运行。"
+
+[settings.automations.trigger.video_imported]
+label = "导入视频时"
+noun = "导入"
+phrase = "视频已导入"
+runs = "每次导入视频时都会运行。"
+
+[settings.automations.trigger.recording_deleted]
+label = "删除录制时"
+noun = "删除"
+phrase = "录制已删除"
+runs = "每次删除录制时都会运行。"
+
+[settings.automations.action.copy_to_clipboard]
+label = "复制到剪贴板"
+noun = "剪贴板"
+short = "复制到剪贴板"
+
+[settings.automations.action.save_to_location]
+label = "保存到指定位置"
+noun = "文件夹"
+short = "保存到文件夹"
+
+[settings.automations.action.export]
+label = "按配置导出"
+noun = "导出"
+short = "导出"
+
+[settings.automations.action.upload]
+label = "上传并复制链接"
+noun = "上传"
+short = "上传并复制链接"
+
+[settings.automations.action.reveal]
+label = "在文件管理器中显示"
+noun = "显示"
+short = "在文件管理器中显示"
+
+[settings.automations.action.open_file]
+label = "打开文件"
+noun = "打开"
+short = "打开文件"
+
+[settings.automations.action.ocr]
+label = "识别文字（OCR）到剪贴板"
+noun = "文字"
+short = "复制文字（OCR）"
+
+[settings.automations.action.notify]
+label = "显示通知"
+noun = "通知"
+short = "通知"
+
+[settings.automations.action.open_editor]
+label = "打开编辑器"
+noun = "编辑器"
+short = "打开编辑器"
+
+[settings.automations.action.skip_editor]
+label = "跳过编辑器（无界面）"
+noun = "跳过编辑器"
+short = "跳过编辑器"
+
+[settings.automations.action.apply_preset]
+label = "应用编辑器预设"
+noun = "预设"
+short = "应用预设"
+
+[settings.automations.action.run_command]
+label = "运行命令"
+noun = "命令"
+short = "运行命令"
+
+[settings.automations.action.webhook]
+label = "发送 Webhook"
+noun = "Webhook"
+short = "发送 Webhook"
+
+[settings.automations.action.delete_local_files]
+label = "删除本地文件"
+noun = "删除"
+short = "删除本地文件"
+
+[settings.automations.condition]
+capture_target = "捕获对象为"
+duration_at_least = "时长至少（秒）"
+duration_at_most = "时长至多（秒）"
+organization = "组织为"
+recording_mode = "录制模式为"
+window_title = "窗口标题包含"
+
+[settings.automations.template.copy_screenshot]
+description = "截图后即可直接粘贴。"
+name = "自动将新截图复制到剪贴板"
+
+[settings.automations.template.ocr_screenshot]
+description = "Cap 会识别截图中的文字并替你复制。"
+name = "从截图中提取文字"
+
+[settings.automations.template.save_screenshot]
+description = "将每张新截图直接保存到你选择的文件夹。"
+name = "把截图收进文件夹"
+
+[settings.automations.template.reveal_screenshot]
+description = "每张截图一拍下就在 Finder 中显示。"
+name = "跳转到每张新截图"
+
+[settings.automations.template.export_studio]
+description = "Studio 录制一结束就渲染出 MP4。"
+name = "录制结束后自动导出"
+
+[settings.automations.template.upload_share]
+description = "录制完成后，链接已在剪贴板中等你。"
+name = "上传并获取分享链接"
+
+[settings.automations.template.notify_upload]
+body = "你的录制已可以分享。"
+description = "录制可以分享时，桌面会轻轻提醒你。"
+name = "上传就绪时提醒我"
+
+[settings.automations.template.webhook_share]
+description = "将分享链接发送到 Slack、Discord 或你自己的 Webhook。"
+name = "分享内容时通知 Slack"
+
 
 [main]
 delete_recording_confirm = "确定要删除这段录制吗？"
