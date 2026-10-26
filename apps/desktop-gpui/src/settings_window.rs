@@ -2058,10 +2058,12 @@ impl SettingsWindow {
     fn render_account(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let (update_label, update_ready) = match crate::updates::status(cx) {
-            crate::updates::UpdateStatus::Idle => (
-                tr::settings::sidebar::check_for_updates().to_string(),
-                false,
-            ),
+            crate::updates::UpdateStatus::Idle | crate::updates::UpdateStatus::Available { .. } => {
+                (
+                    tr::settings::sidebar::check_for_updates().to_string(),
+                    false,
+                )
+            }
             crate::updates::UpdateStatus::Checking => (
                 tr::settings::sidebar::checking_for_updates().to_string(),
                 false,

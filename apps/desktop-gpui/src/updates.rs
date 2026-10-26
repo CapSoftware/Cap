@@ -21,6 +21,12 @@ pub(crate) enum UpdateStatus {
     #[default]
     Idle,
     Checking,
+    /// Only the debug update simulation waits here. A real check asks in a
+    /// dialog first, so a real update goes straight to `Downloading`.
+    #[cfg_attr(not(debug_assertions), allow(dead_code))]
+    Available {
+        version: Version,
+    },
     Downloading {
         version: Version,
         fraction: Option<f32>,
@@ -71,7 +77,6 @@ struct UpdateScheduler {
     manual_in_flight: bool,
     status: UpdateStatus,
     download_policy: UpdateDownloadPolicy,
-    simulation_version: Option<Version>,
     staged: Option<StagedUpdate>,
     download: Option<gpui::Task<()>>,
     download_epoch: u64,
@@ -188,14 +193,7 @@ pub(crate) fn check_manually(cx: &mut App) {
             prompt_restart(cx);
             return;
         }
-        UpdateStatus::Downloading {
-            version,
-            fraction: None,
-        } if cx
-            .try_global::<UpdateScheduler>()
-            .and_then(|scheduler| scheduler.simulation_version.as_ref())
-            == Some(&version) =>
-        {
+        UpdateStatus::Available { version } => {
             simulate_download(version, cx);
             return;
         }
@@ -235,7 +233,10 @@ pub(crate) fn update_channel_changed(channel: UpdateChannel, cx: &mut App) {
 fn channel_switch_drops_pending_package(status: &UpdateStatus) -> bool {
     matches!(
         status,
-        UpdateStatus::Checking | UpdateStatus::Downloading { .. } | UpdateStatus::Ready { .. }
+        UpdateStatus::Checking
+            | UpdateStatus::Available { .. }
+            | UpdateStatus::Downloading { .. }
+            | UpdateStatus::Ready { .. }
     )
 }
 
@@ -296,11 +297,9 @@ fn harness_update_version() -> Option<Version> {
 #[cfg(debug_assertions)]
 fn simulate_update(version: Version, cx: &mut App) {
     tracing::info!(%version, "CAP_GPUI_UPDATE_SIMULATION_VERSION: available");
-    cx.global_mut::<UpdateScheduler>().simulation_version = Some(version.clone());
     set_status(
-        UpdateStatus::Downloading {
+        UpdateStatus::Available {
             version: version.clone(),
-            fraction: None,
         },
         cx,
     );
@@ -325,7 +324,7 @@ fn simulate_update(version: Version, cx: &mut App) {
 
 #[cfg(debug_assertions)]
 fn simulate_download(version: Version, cx: &mut App) {
-    if !matches!(status(cx), UpdateStatus::Downloading { fraction: None, .. }) {
+    if !matches!(status(cx), UpdateStatus::Available { .. }) {
         return;
     }
     tracing::info!(%version, "CAP_GPUI_UPDATE_SIMULATION_VERSION: downloading");
@@ -370,7 +369,6 @@ pub(crate) fn schedule_startup_check(cx: &mut App) {
         manual_in_flight: false,
         status: UpdateStatus::Idle,
         download_policy: GeneralSettings::load().update_download_policy,
-        simulation_version: None,
         staged: None,
         download: None,
         download_epoch: 0,

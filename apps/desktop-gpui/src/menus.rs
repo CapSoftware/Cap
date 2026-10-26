@@ -65,7 +65,7 @@ impl UpdateRow {
         let title = match status {
             UpdateStatus::Idle => tr::menu::update::check(),
             UpdateStatus::Checking => tr::menu::update::checking(),
-            UpdateStatus::Downloading { fraction: None, .. } => tr::menu::update::download(),
+            UpdateStatus::Available { .. } => tr::menu::update::download(),
             UpdateStatus::Downloading { .. } | UpdateStatus::Installing { .. } => {
                 tr::menu::update::downloading()
             }
@@ -78,10 +78,7 @@ impl UpdateRow {
             enabled: !matches!(
                 status,
                 UpdateStatus::Checking
-                    | UpdateStatus::Downloading {
-                        fraction: Some(_),
-                        ..
-                    }
+                    | UpdateStatus::Downloading { .. }
                     | UpdateStatus::Installing { .. }
             ),
             badge: update_menu_badge(status),
@@ -101,7 +98,8 @@ fn update_menu_badge(status: &updates::UpdateStatus) -> Option<String> {
             version,
             (fraction * 100.0).round() as u32,
         )),
-        UpdateStatus::Downloading { version, .. }
+        UpdateStatus::Available { version }
+        | UpdateStatus::Downloading { version, .. }
         | UpdateStatus::Ready { version }
         | UpdateStatus::Installing { version }
         | UpdateStatus::Installed { version, .. } => Some(tr::menu::update::badge_version(version)),
@@ -1356,10 +1354,15 @@ mod tests {
             fraction,
         };
 
+        let available = UpdateRow::of(&UpdateStatus::Available {
+            version: version.clone(),
+        });
         let cold = UpdateRow::of(&downloading(None));
         let warm = UpdateRow::of(&downloading(Some(0.42)));
-        assert_eq!(cold.title, "Download update…");
-        assert!(cold.enabled);
+        assert_eq!(available.title, "Download update…");
+        assert!(available.enabled);
+        assert_eq!(cold.title, "Downloading update…");
+        assert!(!cold.enabled);
         assert_eq!(warm.title, "Downloading update…");
         assert!(!warm.enabled);
 
@@ -1390,6 +1393,12 @@ mod tests {
         let version = Version::parse("0.4.0").unwrap();
         let badge = |status| UpdateRow::of(&status).badge;
 
+        assert_eq!(
+            badge(UpdateStatus::Available {
+                version: version.clone(),
+            }),
+            Some("v0.4.0".to_string())
+        );
         assert_eq!(
             badge(UpdateStatus::Downloading {
                 version: version.clone(),
