@@ -47,6 +47,33 @@ describe("recording job completion reconciliation", () => {
 		expect(fetcher).toHaveBeenCalledTimes(1);
 	});
 
+	it("does not report delivery when a completed worker's webhook rejects a redirect", async () => {
+		const fetcher = vi
+			.fn()
+			.mockResolvedValueOnce(
+				Response.json({
+					jobId: "job",
+					videoId: "video",
+					phase: "complete",
+					generation: "generation",
+					attemptId: "attempt",
+					recordingWorker: { version: 1, action: "progress", sequence: 4 },
+				}),
+			)
+			.mockRejectedValueOnce(new TypeError("redirect mode is set to error"));
+		vi.stubGlobal("fetch", fetcher);
+		await expect(observeDesktopRecordingJob(input)).resolves.toEqual({
+			status: "unavailable",
+			delivered: false,
+		});
+		expect(fetcher).toHaveBeenCalledTimes(2);
+		expect(fetcher.mock.calls[1]?.[0]).toBe(input.webhookUrl);
+		for (const [, options] of fetcher.mock.calls) {
+			expect(options.redirect).toBe("error");
+			expect(options.headers["x-media-server-secret"]).toBe(input.secret);
+		}
+	});
+
 	it("does not treat a replica-local 404 as worker death", async () => {
 		const fetcher = vi
 			.fn()
