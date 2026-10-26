@@ -214,7 +214,6 @@ fn menu_icon(name: &str) -> Option<Vec<u8>> {
     ICONS.get(name).cloned()
 }
 
-/// The Cap icon for a mode, rasterised for the picker's image views.
 fn mode_picker_icon(mode: Mode) -> Option<Vec<u8>> {
     let source = match mode {
         Mode::Instant => include_bytes!("../assets/icons/instant.svg") as &[u8],
@@ -260,7 +259,6 @@ impl Entry {
         }
     }
 
-    /// An enabled row carrying one of the [`ROW_ICON_SOURCES`] glyphs.
     fn icon_item(title: impl Into<String>, item: TrayItem, icon: &str) -> Self {
         Self::Item {
             title: title.into(),

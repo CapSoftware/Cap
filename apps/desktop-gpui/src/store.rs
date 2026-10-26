@@ -846,7 +846,6 @@ settings_enum! {
 }
 
 settings_enum! {
-    /// How Cap reacts to an available update.
     UpdateDownloadPolicy {
         Manual = "manual", "Manual";
         Auto = "auto", "Auto";
