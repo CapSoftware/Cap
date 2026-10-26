@@ -282,6 +282,10 @@ describe("AuthProvider", () => {
 	it.each([
 		{ name: "a network error", error: new TypeError("Network request failed") },
 		{
+			name: "a request timeout",
+			error: new Error("Mobile API request timed out"),
+		},
+		{
 			name: "HTTP 429",
 			error: new MobileApiError("Rate limited", 429, null),
 		},
