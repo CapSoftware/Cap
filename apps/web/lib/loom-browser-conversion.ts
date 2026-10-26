@@ -271,7 +271,12 @@ function expandDashSegments({
 	periodDurationSeconds?: number;
 }) {
 	// Never allocate an unbounded list of URLs from untrusted MPD repeat values.
-	if (!Number.isSafeInteger(startNumber) || startNumber < 0 || timescale <= 0 || !Number.isFinite(timescale))
+	if (
+		!Number.isSafeInteger(startNumber) ||
+		startNumber < 0 ||
+		timescale <= 0 ||
+		!Number.isFinite(timescale)
+	)
 		return [];
 
 	const segments: LoomDashSegment[] = [];
@@ -281,7 +286,8 @@ function expandDashSegments({
 	for (const [position, segment] of segmentTimeline.entries()) {
 		const duration = parseOptionalNumber(segment.getAttribute("d"));
 		if (duration === undefined || duration <= 0) return [];
-		const startTime = parseOptionalNumber(segment.getAttribute("t")) ?? nextTime;
+		const startTime =
+			parseOptionalNumber(segment.getAttribute("t")) ?? nextTime;
 		if (!Number.isSafeInteger(startTime) || startTime < 0) return [];
 
 		const repeat = parseOptionalNumber(segment.getAttribute("r")) ?? 0;
@@ -301,7 +307,10 @@ function expandDashSegments({
 			count = repeat + 1;
 		}
 
-		if (!Number.isSafeInteger(count) || count > MAX_LOOM_DASH_SEGMENTS - segments.length)
+		if (
+			!Number.isSafeInteger(count) ||
+			count > MAX_LOOM_DASH_SEGMENTS - segments.length
+		)
 			return [];
 
 		for (let index = 0; index < count; index += 1) {
