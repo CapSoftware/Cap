@@ -188,6 +188,19 @@ describe("scheduler → storage → public API", () => {
 		}
 	});
 
+	test("does not let a future global checkpoint suppress monitoring indefinitely", async () => {
+		const now = Date.now();
+		values.set(
+			STATE_KEY,
+			JSON.stringify({
+				...emptyState(),
+				checkedAt: new Date(now + 30 * CHECK_INTERVAL_MS).toISOString(),
+			}),
+		);
+		expect((await collect(authorizedRequest())).status).toBe(200);
+		expect(probeCalls).toBe(6);
+	});
+
 	test("overlapping invocations perform a single collection", async () => {
 		const responses = await Promise.all([
 			collect(authorizedRequest()),
