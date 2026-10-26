@@ -990,9 +990,6 @@ impl RecordingSession {
             if let Some(previous) = previous {
                 let _ = previous.await;
             }
-            #[cfg(target_os = "linux")]
-            let discarded = active.cancel_preserving().await;
-            #[cfg(not(target_os = "linux"))]
             let discarded = active.discard_cancelled_start().await;
             match discarded {
                 Ok(()) => {

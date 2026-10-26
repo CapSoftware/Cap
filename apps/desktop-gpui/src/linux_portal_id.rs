@@ -15,6 +15,22 @@ use std::{
 };
 
 pub const PORTAL_APP_ID: &str = "so.cap.Cap";
+
+static REGISTERED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether Cap's windows take [`PORTAL_APP_ID`]: only after this launch
+/// registered it, and only on GNOME, the one desktop that matches windows to
+/// it. Elsewhere the windows keep their usual id, which window rules may name.
+pub fn windows_use_portal_app_id() -> bool {
+    REGISTERED.load(std::sync::atomic::Ordering::Acquire)
+        && is_gnome(&std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default())
+}
+
+fn is_gnome(current_desktop: &str) -> bool {
+    current_desktop
+        .split(':')
+        .any(|desktop| desktop.eq_ignore_ascii_case("gnome"))
+}
 const PACKAGED_APP_ID: &str = "Cap";
 
 /// The app id xdg-desktop-portal reads from a launcher's systemd unit:
@@ -172,6 +188,7 @@ pub async fn register() {
         .await
         {
             Ok(Ok(())) => {
+                REGISTERED.store(true, std::sync::atomic::Ordering::Release);
                 tracing::info!(
                     app_id = PORTAL_APP_ID,
                     attempt,
@@ -267,6 +284,17 @@ mod tests {
         // Without a home there is nowhere safe to write.
         assert!(application_dirs(None, None, None).is_none());
         assert!(application_dirs(Some("relative".into()), None, None).is_none());
+    }
+
+    #[test]
+    fn windows_follow_the_portal_id_only_on_gnome() {
+        assert!(is_gnome("ubuntu:GNOME"));
+        assert!(is_gnome("GNOME"));
+        assert!(is_gnome("GNOME-Classic:GNOME"));
+        assert!(!is_gnome("KDE"));
+        assert!(!is_gnome("Hyprland"));
+        assert!(!is_gnome("niri"));
+        assert!(!is_gnome(""));
     }
 
     #[test]
