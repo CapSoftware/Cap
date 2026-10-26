@@ -4744,6 +4744,28 @@ mod clean_studio_snapshot_tests {
         assert!(!project.join(OUTPUT).exists());
     }
 
+    #[test]
+    fn empty_orphan_segment_directory_recovers_every_real_frame() {
+        let directory = playable_studio_project(StudioRecordingStatus::InProgress);
+        let project = directory.path();
+        fs::create_dir_all(project.join("content/segments/segment-1")).unwrap();
+        let recording = RecoveryManager::inspect_recording(project).unwrap();
+        assert_eq!(recording.recoverable_segments.len(), 1);
+        let recovered = RecoveryManager::recover(&recording).unwrap();
+        validate_recovered_track(&project.join(OUTPUT), ffmpeg::media::Type::Video).unwrap();
+        assert_eq!(
+            ffmpeg::format::input(&project.join(OUTPUT))
+                .unwrap()
+                .packets()
+                .count(),
+            60
+        );
+        let StudioRecordingMeta::MultipleSegments { inner } = recovered.meta else {
+            panic!("Expected segmented Studio metadata");
+        };
+        assert_eq!(inner.segments.len(), 1);
+    }
+
     fn completed_preparing_fixture(project: &Path) -> CompletedRecording {
         use crate::studio_recording::CleanStoppedStudio;
 
