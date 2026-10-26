@@ -435,10 +435,6 @@ export function makeUseEffectMutation<R>(
 								)
 							: target.failureReason // if throwOnDefect is false then TExposedError is Cause<TError>, and base error is always Cause<TError>
 						: null;
-				} else if (prop === "mutate") {
-					return (variables: any, options: any) => {
-						return target.mutate(variables, options);
-					};
 				} else if (prop === "mutateAsync") {
 					return (variables: any, options: any) =>
 						target
