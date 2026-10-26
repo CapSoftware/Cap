@@ -914,6 +914,29 @@ mod tests {
         }
     }
 
+    fn reference_blend_pixel_over(dst: &mut [u8], src: [u8; 4]) {
+        if src[3] == 0 {
+            return;
+        }
+        if src[3] == 255 {
+            dst.copy_from_slice(&src);
+            return;
+        }
+        let sa = f32::from(src[3]) / 255.;
+        let da = f32::from(dst[3]) / 255.;
+        let oa = sa + da * (1. - sa);
+        if oa <= 0. {
+            dst.fill(0);
+            return;
+        }
+        for channel in 0..3 {
+            let s = f32::from(src[channel]);
+            let d = f32::from(dst[channel]);
+            dst[channel] = ((s * sa + d * da * (1. - sa)) / oa).round().clamp(0., 255.) as u8;
+        }
+        dst[3] = (oa * 255.).round() as u8;
+    }
+
     fn reference_blit(
         dst: &mut [u8],
         dst_size: (u32, u32),
@@ -930,7 +953,7 @@ mod tests {
                 }
                 let source = (y as usize * src_size.0 as usize + x as usize) * 4;
                 let target = (dy as usize * dst_size.0 as usize + dx as usize) * 4;
-                blend_pixel_over(
+                reference_blend_pixel_over(
                     &mut dst[target..target + 4],
                     src[source..source + 4].try_into().unwrap(),
                 );
