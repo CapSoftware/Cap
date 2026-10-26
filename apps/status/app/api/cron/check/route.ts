@@ -1,7 +1,7 @@
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { probe } from "../../../../lib/probe";
 import { SERVICES, serviceUrl } from "../../../../lib/services";
-import { applyResult, CHECK_INTERVAL_MS } from "../../../../lib/state";
+import { applyResult, CHECK_INTERVAL_MS, isStale } from "../../../../lib/state";
 import {
 	COMMIT_SCRIPT,
 	getRedis,
@@ -38,6 +38,7 @@ export async function GET(request: Request) {
 			const now = Date.now();
 			if (
 				state.checkedAt &&
+				!isStale(state.checkedAt, now) &&
 				Math.floor(Date.parse(state.checkedAt) / CHECK_INTERVAL_MS) >=
 					Math.floor(now / CHECK_INTERVAL_MS)
 			) {
