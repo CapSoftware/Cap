@@ -1430,6 +1430,7 @@ fn process_with_whisper(
     context: Arc<WhisperContext>,
     language: &str,
     transcription_hints: &[String],
+    segment_words: usize,
 ) -> Result<Vec<CaptionSegment>, String> {
     let mut params = FullParams::new(SamplingStrategy::BeamSearch {
         beam_size: 5,
@@ -1555,7 +1556,10 @@ fn process_with_whisper(
             continue;
         }
 
-        for (chunk_idx, chunk_words) in caption_word_chunks(&words).into_iter().enumerate() {
+        for (chunk_idx, chunk_words) in caption_word_chunks_with(&words, segment_words)
+            .into_iter()
+            .enumerate()
+        {
             let segment_text = caption_text_from_words(chunk_words);
             let segment_start = chunk_words
                 .first()
@@ -1623,6 +1627,7 @@ fn parakeet_chunk_ranges(samples: &[f32], sample_rate: usize) -> Vec<std::ops::R
 fn process_with_parakeet(
     audio_path: &Path,
     model_dir: &str,
+    segment_words: usize,
 ) -> Result<Vec<CaptionSegment>, String> {
     let cached_model = {
         let guard = PARAKEET_CONTEXT
@@ -1707,7 +1712,7 @@ fn process_with_parakeet(
 
     tracing::info!("Parakeet produced {} timed tokens", tokens.len());
 
-    caption_segments_from_tokens(tokens)
+    caption_segments_from_tokens(tokens, segment_words)
 }
 
 /// Parakeet's timed word tokens -> caption segments: drop empty tokens,
@@ -1715,6 +1720,7 @@ fn process_with_parakeet(
 #[cfg(any(test, not(all(target_os = "macos", target_arch = "x86_64"))))]
 fn caption_segments_from_tokens(
     tokens: impl IntoIterator<Item = CaptionWord>,
+    segment_words: usize,
 ) -> Result<Vec<CaptionSegment>, String> {
     let words = normalize_caption_words(
         tokens
@@ -1733,7 +1739,10 @@ fn caption_segments_from_tokens(
     }
 
     let mut segments = Vec::new();
-    for (chunk_idx, chunk) in caption_word_chunks(&words).into_iter().enumerate() {
+    for (chunk_idx, chunk) in caption_word_chunks_with(&words, segment_words)
+        .into_iter()
+        .enumerate()
+    {
         segments.push(CaptionSegment {
             id: format!("segment-{chunk_idx}"),
             start: chunk.first().map_or(0.0, |word| word.start),
@@ -1750,6 +1759,7 @@ fn caption_segments_from_tokens(
 fn process_with_parakeet(
     _audio_path: &Path,
     _model_dir: &str,
+    _segment_words: usize,
 ) -> Result<Vec<CaptionSegment>, String> {
     Err(PARAKEET_UNSUPPORTED_MESSAGE.to_string())
 }
@@ -1766,6 +1776,7 @@ pub fn transcribe_blocking(
     project_path: &Path,
     model: &str,
     language: &str,
+    segment_words: usize,
 ) -> Result<Vec<CaptionSegment>, String> {
     let requested = model;
     // A download writes straight to the model's final path, so a model still
@@ -1794,14 +1805,18 @@ pub fn transcribe_blocking(
         let _guard = lock_transcription_worker_slot();
         if is_parakeet_model(model) {
             tracing::info!("Using Parakeet TDT engine");
-            let result = process_with_parakeet(audio_path, model_file.to_string_lossy().as_ref());
+            let result = process_with_parakeet(
+                audio_path,
+                model_file.to_string_lossy().as_ref(),
+                segment_words,
+            );
             schedule_parakeet_release();
             result
         } else {
             tracing::info!("Using Whisper engine");
             let hints = transcription_hints();
             let context = get_whisper_context(model_file.to_string_lossy().as_ref())?;
-            let result = process_with_whisper(audio_path, context, language, &hints);
+            let result = process_with_whisper(audio_path, context, language, &hints, segment_words);
             release_whisper_context_after_transcription();
             result
         }
@@ -1856,9 +1871,10 @@ fn extract_audio_from_video(video_path: &Path, output_path: &Path) -> Result<(),
 // Caption words & chunking
 // ---------------------------------------------------------------------------
 
+#[cfg(test)]
+use cap_project::caption_words::{MAX_CAPTION_WORD_DURATION, caption_word_chunks};
 use cap_project::caption_words::{
-    caption_text_from_words, caption_word_chunks, normalize_caption_words,
-    MAX_CAPTION_WORD_DURATION,
+    caption_text_from_words, caption_word_chunks_with, normalize_caption_words,
 };
 
 // ---------------------------------------------------------------------------
@@ -2222,7 +2238,8 @@ mod tests {
         let wav =
             PathBuf::from(std::env::var("CAP_PARAKEET_BENCH_WAV").expect("CAP_PARAKEET_BENCH_WAV"));
         let started = std::time::Instant::now();
-        let result = process_with_parakeet(&wav, &model);
+        let result =
+            process_with_parakeet(&wav, &model, cap_project::TARGET_CAPTION_WORDS_PER_SEGMENT);
         let seconds = started.elapsed().as_secs_f64();
         match result {
             Ok(segments) => {

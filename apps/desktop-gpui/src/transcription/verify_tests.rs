@@ -337,7 +337,10 @@ fn check_project(case: &mut Case, project: &Path, takes: &Takes) {
     let mut tokens = Vec::new();
     let result = transcribe_project_with(project, |audio_path| {
         tokens = fake_tokens(audio_path)?;
-        caption_segments_from_tokens(tokens.clone())
+        caption_segments_from_tokens(
+            tokens.clone(),
+            cap_project::TARGET_CAPTION_WORDS_PER_SEGMENT,
+        )
     });
     let segments = match result {
         Ok(segments) => segments,
@@ -606,7 +609,10 @@ fn segmentation_case(id: &str, unicode: bool) {
             unicode,
         );
         let reference = reference_segments(&tokens);
-        match caption_segments_from_tokens(tokens.clone()) {
+        match caption_segments_from_tokens(
+            tokens.clone(),
+            cap_project::TARGET_CAPTION_WORDS_PER_SEGMENT,
+        ) {
             Err(e) if reference.is_empty() && e.contains("No speech") => empty += 1,
             Err(e) => {
                 failed += 1;

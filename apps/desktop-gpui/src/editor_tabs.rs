@@ -497,6 +497,7 @@ pub enum CaptionSlider {
     Size,
     BackgroundOpacity,
     FadeDuration,
+    SegmentWords,
     ManualX,
     ManualY,
 }
@@ -563,6 +564,8 @@ impl CaptionSlider {
     pub(crate) fn changes_timeline_model(self) -> bool {
         match self {
             Self::Size | Self::BackgroundOpacity | Self::FadeDuration => false,
+            // Only feeds the next caption generation, existing segments are untouched.
+            Self::SegmentWords => false,
             Self::ManualX | Self::ManualY => false,
         }
     }
@@ -573,6 +576,7 @@ impl CaptionSlider {
             Self::BackgroundOpacity => (0., 100., 1.),
             // `value={[getSetting("fadeDuration") * 100]}` over 0..50.
             Self::FadeDuration => (0., 50., 1.),
+            Self::SegmentWords => (1., 8., 1.),
             Self::ManualX | Self::ManualY => (0., 100., 1.),
         }
     }
@@ -583,6 +587,7 @@ impl CaptionSlider {
             Self::Size => settings.size as f32,
             Self::BackgroundOpacity => settings.background_opacity as f32,
             Self::FadeDuration => settings.fade_duration * 100.,
+            Self::SegmentWords => settings.segment_words as f32,
             Self::ManualX => caption_manual_center(&settings).0 * 100.,
             Self::ManualY => caption_manual_center(&settings).1 * 100.,
         }
@@ -1085,18 +1090,29 @@ impl EditorWindow {
         cx: &mut Context<Self>,
         change: impl FnOnce(&mut CaptionSettings),
     ) {
-        self.set_caption_setting_inner(true, reason, window, cx, change);
+        self.set_caption_setting_inner(true, false, reason, window, cx, change);
     }
 
     fn set_caption_setting_inner(
         &mut self,
         rebuild_timeline: bool,
+        seed_when_missing: bool,
         reason: &'static str,
         window: &mut Window,
         cx: &mut Context<Self>,
         change: impl FnOnce(&mut CaptionSettings),
     ) {
         let apply = |project: &mut ProjectConfiguration| {
+            if seed_when_missing {
+                // The segment size is picked before the first transcription,
+                // so that write seeds the captions block instead of no-oping
+                // like the style settings do.
+                let captions = project
+                    .captions
+                    .get_or_insert_with(cap_project::CaptionsData::default);
+                change(&mut captions.settings);
+                return true;
+            }
             with_caption_settings(project, |settings| {
                 change(settings);
                 // `STYLE_PRESET_KEYS` knocks the grade to "custom"
@@ -1260,6 +1276,7 @@ impl EditorWindow {
     ) {
         self.set_caption_setting_inner(
             slider.changes_timeline_model(),
+            matches!(slider, CaptionSlider::SegmentWords),
             "caption-slider",
             window,
             cx,
@@ -1269,6 +1286,9 @@ impl EditorWindow {
                     settings.background_opacity = value.round() as u32
                 }
                 CaptionSlider::FadeDuration => settings.fade_duration = value / 100.,
+                CaptionSlider::SegmentWords => {
+                    settings.segment_words = (value.round() as u32).max(1)
+                }
                 CaptionSlider::ManualX => set_caption_manual_center(settings, Some(value), None),
                 CaptionSlider::ManualY => set_caption_manual_center(settings, None, Some(value)),
             },
@@ -3085,6 +3105,12 @@ impl EditorWindow {
                             SliderKey::Caption(CaptionSlider::FadeDuration),
                             format!("{:.0}ms", settings.fade_duration * 1000.),
                             cx,
+                        ))
+                        .child(self.labelled_readout(
+                            "Words Per Caption",
+                            SliderKey::Caption(CaptionSlider::SegmentWords),
+                            format!("{:.0}", settings.segment_words),
+                            cx,
                         )),
                 ),
             )
@@ -3396,6 +3422,7 @@ impl EditorWindow {
         let project_path = self.project_path.clone();
         let model = self.selected_caption_model().name;
         let language = self.sidebar.caption_language;
+        let segment_words = caption_settings(&self.project).segment_words.max(1) as usize;
 
         if !transcription::begin_generation(&project_path) {
             return;
@@ -3406,7 +3433,7 @@ impl EditorWindow {
             let task_path = project_path.clone();
             let task = gpui_tokio::Tokio::spawn(cx, async move {
                 tokio::task::spawn_blocking(move || {
-                    transcription::transcribe_blocking(&task_path, model, language)
+                    transcription::transcribe_blocking(&task_path, model, language, segment_words)
                 })
                 .await
                 .map_err(|error| format!("Transcription task panicked: {error}"))?
