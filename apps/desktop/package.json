@@ -82,7 +82,7 @@
 		"@solid-devtools/overlay": "^0.33.5",
 		"@tailwindcss/postcss": "^4.2.2",
 		"@tailwindcss/typography": "^0.5.9",
-		"@tauri-apps/cli": "2.5.0",
+		"@tauri-apps/cli": "2.8.4",
 		"@total-typescript/ts-reset": "^0.6.1",
 		"@types/dom-webcodecs": "^0.1.11",
 		"@types/uuid": "^9.0.8",
