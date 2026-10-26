@@ -3,6 +3,7 @@ import {
 	getRecordingObjectIdentity,
 	type RecordingObjectHead,
 } from "@cap/web-backend/src/Storage/recording-object-identity";
+import type { Video } from "@cap/web-domain";
 import { z } from "zod";
 
 const positiveNumber = z.number().finite().positive();
@@ -105,6 +106,47 @@ export function readCompletedRecordingManifest(json: string) {
 		videoSegments: video,
 		audioSegments: audio,
 	};
+}
+
+function isContiguousSegmentList(
+	segments: Video.SegmentManifestType["video_segments"],
+) {
+	for (let position = 0; position < segments.length; position++) {
+		const entry = segments[position];
+		if (typeof entry === "number") {
+			if (entry !== position + 1) return false;
+			continue;
+		}
+		if (
+			typeof entry !== "object" ||
+			entry === null ||
+			entry.index !== position + 1 ||
+			typeof entry.duration !== "number" ||
+			!Number.isFinite(entry.duration) ||
+			entry.duration <= 0
+		) {
+			return false;
+		}
+	}
+	return true;
+}
+
+export function isCompletedRecordingManifest(
+	manifest: Video.SegmentManifestType,
+) {
+	return (
+		Number.isInteger(manifest.version) &&
+		manifest.version > 0 &&
+		manifest.video_init_uploaded === true &&
+		typeof manifest.audio_init_uploaded === "boolean" &&
+		manifest.is_complete === true &&
+		Array.isArray(manifest.video_segments) &&
+		Array.isArray(manifest.audio_segments) &&
+		manifest.video_segments.length > 0 &&
+		manifest.audio_init_uploaded === manifest.audio_segments.length > 0 &&
+		isContiguousSegmentList(manifest.video_segments) &&
+		isContiguousSegmentList(manifest.audio_segments)
+	);
 }
 
 export const recordingOutputSchema = z.object({
