@@ -10,8 +10,6 @@ use std::{
     path::{Path, PathBuf},
 };
 
-/// The socket a `WAYLAND_DISPLAY` value names: an absolute path, or a name in
-/// `XDG_RUNTIME_DIR`.
 fn socket_path(display: &OsStr, runtime_dir: Option<&OsStr>) -> Option<PathBuf> {
     let display = Path::new(display);
     if display.is_absolute() {
@@ -35,8 +33,6 @@ fn nothing_listens(path: &Path) -> bool {
     }
 }
 
-/// The `WAYLAND_DISPLAY` to drop, when nothing listens on it and `DISPLAY`
-/// names an X server to use instead.
 pub fn stale_wayland_display() -> Option<OsString> {
     if std::env::var_os("WAYLAND_SOCKET").is_some() {
         return None;
