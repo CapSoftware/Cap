@@ -1482,7 +1482,7 @@ mod mac {
         };
         image.setTemplate(true);
         item.setImage(Some(&image));
-        crate::platform::set_nsmenu_item_prefers_visible_image(&*item);
+        crate::platform::set_nsmenu_item_prefers_visible_image(item);
     }
 
     pub(super) fn start_option_tracking() {
@@ -1611,7 +1611,7 @@ mod mac {
                 if let Some(image) = image {
                     image.setTemplate(!photo);
                     menu_item.setImage(Some(&image));
-                    crate::platform::set_nsmenu_item_prefers_visible_image(&*menu_item);
+                    crate::platform::set_nsmenu_item_prefers_visible_image(&menu_item);
                 }
                 menu_item
             }

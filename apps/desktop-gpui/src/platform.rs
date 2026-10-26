@@ -691,7 +691,7 @@ mod mac {
         NSApplication, NSDocumentController, NSMenu, NSMenuItem, NSView, NSWindow,
         NSWindowCollectionBehavior,
     };
-    use objc2_foundation::{NSObjectNSKeyValueCoding, NSString, ns_string};
+    use objc2_foundation::{NSObjectNSKeyValueCoding, NSString};
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
     use super::{ForcedAppearance, MaterialKind, PanelBehavior};
@@ -2830,7 +2830,7 @@ mod mac {
     pub fn set_nsmenu_item_prefers_visible_image(item: &NSMenuItem) {
         if objc2::available!(macos = 27.0) {
             // NSMenuItemImageVisibility: automatic = 0, visible = 1, hidden = 2
-            let _: () = unsafe { objc2::msg_send![&*item, setPreferredImageVisibility: 1isize] };
+            let _: () = unsafe { objc2::msg_send![item, setPreferredImageVisibility: 1isize] };
         }
     }
 
