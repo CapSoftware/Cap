@@ -622,6 +622,92 @@ fn map_timeline_to_recording_secs(
     last.recording_start + (last.timeline_end - last.timeline_start) * last.timescale
 }
 
+/// When an auto zoom spans a timeline cut, returns the cursor moves the viewer
+/// actually sees during it and the recording range they cover.
+fn cursor_events_across_cut(
+    time_map: &[TimeMapSegment],
+    segment: &ZoomSegment,
+    recording_clip: Option<u32>,
+    cursor_events: &CursorEvents,
+) -> Option<(CursorEvents, f64, f64)> {
+    // A zoom ending exactly at a cut maps its end into the incoming range, so
+    // the span starting there still counts as a cut even though it adds no time.
+    let mut spans: Vec<_> = time_map
+        .iter()
+        .filter(|span| span.timeline_start <= segment.end && span.timeline_end > segment.start)
+        .collect();
+    let has_cut = spans.windows(2).any(|pair| {
+        pair[0].recording_clip != pair[1].recording_clip
+            || pair[0].recording_end != pair[1].recording_start
+    });
+    spans.retain(|span| {
+        span.timeline_start < segment.end
+            && recording_clip.is_none_or(|clip| span.recording_clip == clip)
+    });
+    if !has_cut || spans.is_empty() {
+        return None;
+    }
+    let ranges: Vec<_> = spans
+        .iter()
+        .map(|span| {
+            let to_recording_ms = |timeline_secs: f64| {
+                (span.recording_start + (timeline_secs - span.timeline_start) * span.timescale)
+                    * 1000.0
+            };
+            (
+                to_recording_ms(segment.start.max(span.timeline_start)),
+                to_recording_ms(segment.end.min(span.timeline_end)),
+            )
+        })
+        .collect();
+    let recording_start = ranges
+        .iter()
+        .map(|range| range.0)
+        .fold(f64::INFINITY, f64::min)
+        / 1000.0;
+    let recording_end = ranges
+        .iter()
+        .map(|range| range.1)
+        .fold(f64::NEG_INFINITY, f64::max)
+        / 1000.0;
+    let finite_moves = cursor_events
+        .moves
+        .iter()
+        .filter(|event| event.x.is_finite() && event.y.is_finite() && event.time_ms.is_finite());
+    // The cursor shown when a kept range starts is the last position before
+    // it, even if that move was cut out.
+    let carried = ranges.iter().filter_map(|&(start_ms, _)| {
+        finite_moves
+            .clone()
+            .filter(|event| event.time_ms <= start_ms)
+            .max_by(|a, b| a.time_ms.total_cmp(&b.time_ms))
+            .filter(|event| event.time_ms < start_ms)
+            .map(|event| cap_project::CursorMoveEvent {
+                time_ms: start_ms,
+                ..event.clone()
+            })
+    });
+    let mut moves: Vec<_> = finite_moves
+        .clone()
+        .filter(|event| {
+            ranges
+                .iter()
+                .any(|&(start_ms, end_ms)| event.time_ms >= start_ms && event.time_ms <= end_ms)
+        })
+        .cloned()
+        .chain(carried)
+        .collect();
+    moves.sort_by(|a, b| a.time_ms.total_cmp(&b.time_ms));
+    Some((
+        CursorEvents {
+            moves,
+            clicks: Vec::new(),
+        },
+        recording_start,
+        recording_end,
+    ))
+}
+
 /// One precomputed step. Sample times are implicit: `samples[i]` is the state
 /// at `i * STEP_MS`, so lookup is pure index math.
 #[derive(Clone, Copy, Debug)]
@@ -786,66 +872,28 @@ impl ZoomTransformTimeline {
             .iter()
             .map(|segment| match segment.mode {
                 ZoomMode::Auto => {
-                    let mut recording_start = map_timeline_to_recording_secs(
+                    let recording_start = map_timeline_to_recording_secs(
                         &time_map,
                         segment.start,
                         recording_clip,
                         prefer_outgoing,
                     );
-                    let mut recording_end = map_timeline_to_recording_secs(
+                    let recording_end = map_timeline_to_recording_secs(
                         &time_map,
                         segment.end,
                         recording_clip,
                         prefer_outgoing,
                     )
                     .max(recording_start);
-                    let mut spans: Vec<_> = time_map
-                        .iter()
-                        .filter(|span| {
-                            span.timeline_start < segment.end && span.timeline_end > segment.start
-                        })
-                        .collect();
-                    let has_cut = spans.windows(2).any(|pair| {
-                        pair[0].recording_clip != pair[1].recording_clip
-                            || pair[0].recording_end != pair[1].recording_start
-                    });
-                    spans.retain(|span| {
-                        recording_clip.is_none_or(|clip| span.recording_clip == clip)
-                    });
-                    let cut_cursor_events = if has_cut && !spans.is_empty() {
-                        recording_start = f64::INFINITY;
-                        recording_end = f64::NEG_INFINITY;
-                        for span in &spans {
-                            let start = segment.start.max(span.timeline_start);
-                            let end = segment.end.min(span.timeline_end);
-                            recording_start = recording_start.min(
-                                span.recording_start
-                                    + (start - span.timeline_start) * span.timescale,
-                            );
-                            recording_end = recording_end.max(
-                                span.recording_start + (end - span.timeline_start) * span.timescale,
-                            );
-                        }
-                        Some(CursorEvents {
-                            moves: cursor_events
-                                .moves
-                                .iter()
-                                .filter(|event| {
-                                    spans.iter().any(|span| {
-                                        event.time_ms >= span.recording_start * 1000.0
-                                            && event.time_ms < span.recording_end * 1000.0
-                                    })
-                                })
-                                .cloned()
-                                .collect(),
-                            clicks: Vec::new(),
-                        })
-                    } else {
-                        None
+                    let cut =
+                        cursor_events_across_cut(&time_map, segment, recording_clip, cursor_events);
+                    let (events, recording_start, recording_end) = match &cut {
+                        Some((events, start, end)) => (events, *start, *end),
+                        None => (cursor_events, recording_start, recording_end),
                     };
                     Some(ZoomClusters::new(
-                        cut_cursor_events.as_ref().unwrap_or(cursor_events),
-                        moves_time_ordered,
+                        events,
+                        moves_time_ordered || cut.is_some(),
                         recording_start,
                         recording_end,
                         segment,
@@ -2813,6 +2861,64 @@ mod tests {
                 }
             }
         }
+    }
+
+    fn cut_zoom_timeline(
+        zoom: ZoomSegment,
+        kept: [f64; 2],
+        moves: Vec<CursorMoveEvent>,
+    ) -> ZoomTransformTimeline {
+        let mut project = project_with_crop_styles(vec![zoom], Vec::new());
+        project.timeline.as_mut().unwrap().segments = kept
+            .into_iter()
+            .map(|start| TimelineSegment {
+                start,
+                end: start + 4.0,
+                timescale: 1.0,
+                ..Default::default()
+            })
+            .collect();
+        let mut timeline = ZoomTransformTimeline::from_project_for_clip(
+            &project,
+            &CursorEvents {
+                moves,
+                clicks: Vec::new(),
+            },
+            8.0,
+            XY::new(1920, 1080),
+            0,
+        );
+        timeline.precompute();
+        timeline
+    }
+
+    #[test]
+    fn auto_zoom_across_cut_keeps_cursor_carried_into_each_range() {
+        let timeline = cut_zoom_timeline(
+            auto_segment(0.5, 7.9, 2.0),
+            [10.0, 20.0],
+            vec![move_event(9000.0, 0.2, 0.2), move_event(19000.0, 0.8, 0.8)],
+        );
+        for (time, focus) in [(2.0, 0.2), (6.0, 0.8)] {
+            assert_eq!(
+                timeline.targets_at(time, XY::new(0.5, 0.5)).center,
+                follow_center((focus, focus))
+            );
+        }
+    }
+
+    #[test]
+    fn auto_zoom_ending_at_cut_ignores_cut_cursor_moves() {
+        let build = |moves| cut_zoom_timeline(auto_segment(0.5, 4.0, 2.0), [0.0, 10.0], moves);
+        let kept = vec![move_event(1000.0, 0.2, 0.2), move_event(11000.0, 0.8, 0.8)];
+        let mut with_cut_moves = kept.clone();
+        with_cut_moves.push(move_event(7000.0, 0.9, 0.9));
+        let expected = build(kept);
+        assert_samples_identical(&expected, &build(with_cut_moves));
+        assert_eq!(
+            expected.targets_at(2.0, XY::new(0.5, 0.5)).center,
+            follow_center((0.2, 0.2))
+        );
     }
 
     #[test]
