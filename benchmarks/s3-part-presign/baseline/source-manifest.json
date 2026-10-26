@@ -1,0 +1,22 @@
+{
+  "upload_source_sha256": "705b16ab96a638bd44235690c503810ffb82a98ee3e9a77f52fe3f1c2667b848",
+  "functions": [
+    "check_export_cancelled",
+    "checked_upload_step",
+    "upload_part_chunk",
+    "wait_for_export_cancel",
+    "upload_file_parts",
+    "put_presigned_part",
+    "send_upload_request",
+    "read_chunk",
+    "chunk_size_for",
+    "md5_base64",
+    "is_google_drive_resumable_url",
+    "upload_status_ok",
+    "is_network_error"
+  ],
+  "test_source_sha256": "a1d498ec3155edd912388a17d1b50e490f8f36039a2c713fd44850a09bf36002",
+  "description": "Production multipart functions/types/replacement guards, actual MD5/Drive identity helpers and multipart test module up to authentication-only tests; authenticated LivePartTransport is excluded from native harness and compiled in full GPUI checks.",
+  "baseline_commit": "fb453e3e3032f8b976378cd477e676eeb32f7bbc",
+  "candidate_commit": "375eeec6e"
+}

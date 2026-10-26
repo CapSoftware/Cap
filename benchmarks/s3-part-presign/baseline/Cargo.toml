@@ -1,0 +1,23 @@
+[package]
+name = "cap-upload-native-proof-baseline"
+version = "0.0.0"
+edition = "2024"
+[workspace]
+[dependencies]
+bytes = "1"
+base64 = "0.22"
+md-5 = "0.10"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+[profile.dev]
+debug = "line-tables-only"
+incremental = false
+[profile.dev.package."*"]
+opt-level = 2
+[profile.release]
+codegen-units = 1
+lto = "thin"
+strip = "symbols"
