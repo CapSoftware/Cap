@@ -1112,35 +1112,7 @@ fn append_resampled_frame(
 
 /// `normalize_audio_for_transcription` (`captions.rs:885-915`).
 fn normalize_audio_for_transcription(samples: &mut [f32]) -> f32 {
-    if samples.is_empty() {
-        return 1.0;
-    }
-
-    let peak = samples
-        .iter()
-        .fold(0.0_f32, |max, sample| max.max(sample.abs()));
-    if peak <= f32::EPSILON {
-        return 1.0;
-    }
-
-    let rms =
-        (samples.iter().map(|sample| sample * sample).sum::<f32>() / samples.len() as f32).sqrt();
-    if rms <= f32::EPSILON {
-        return 1.0;
-    }
-
-    let target_rms = 0.08_f32;
-    let desired_gain = (target_rms / rms).clamp(1.0, 8.0);
-    let peak_limited_gain = 0.98 / peak;
-    let gain = desired_gain.min(peak_limited_gain);
-
-    if (gain - 1.0).abs() > 0.01 {
-        for sample in samples {
-            *sample = (*sample * gain).clamp(-0.98, 0.98);
-        }
-    }
-
-    gain
+    cap_audio::normalize_for_transcription(samples)
 }
 
 /// The recording-directory arm of `extract_audio_from_video`
@@ -1262,6 +1234,14 @@ fn extract_project_audio(project_path: &Path, output_path: &Path) -> Result<(), 
 /// The WAV encode half of the recording-directory arm
 /// (`captions.rs:372-515`): 48kHz f32 mono in, 16kHz s16le mono WAV out.
 fn write_wav_16k_mono(mixed_samples: &[f32], output_path: &Path) -> Result<(), String> {
+    write_wav_16k_mono_chunked(mixed_samples, output_path, 16_384)
+}
+
+fn write_wav_16k_mono_chunked(
+    mixed_samples: &[f32],
+    output_path: &Path,
+    default_pcm_chunk: usize,
+) -> Result<(), String> {
     let mut output =
         avformat::output(&output_path).map_err(|e| format!("Failed to create output file: {e}"))?;
 
@@ -1302,7 +1282,11 @@ fn write_wav_16k_mono(mixed_samples: &[f32], output_path: &Path) -> Result<(), S
     .map_err(|e| format!("Failed to create resampler: {e}"))?;
 
     let frame_size = encoder.frame_size() as usize;
-    let frame_size = if frame_size == 0 { 1024 } else { frame_size };
+    let frame_size = if frame_size == 0 {
+        default_pcm_chunk
+    } else {
+        frame_size
+    };
 
     for chunk in mixed_samples.chunks(frame_size) {
         let mut input_frame = ffmpeg::frame::Audio::new(
@@ -1857,8 +1841,8 @@ fn extract_audio_from_video(video_path: &Path, output_path: &Path) -> Result<(),
 // ---------------------------------------------------------------------------
 
 use cap_project::caption_words::{
-    caption_text_from_words, caption_word_chunks, normalize_caption_words,
-    MAX_CAPTION_WORD_DURATION,
+    MAX_CAPTION_WORD_DURATION, caption_text_from_words, caption_word_chunks,
+    normalize_caption_words,
 };
 
 // ---------------------------------------------------------------------------
@@ -2769,5 +2753,32 @@ mod tests {
             "Caption model not found. Please download it first"
         );
         assert_eq!(caption_generation_error_message("boom"), "boom");
+    }
+    #[test]
+    fn transcription_pcm_chunking_preserves_legacy_wav_bytes() {
+        ffmpeg::init().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        for len in [
+            0, 1, 2, 3, 15, 16, 17, 1023, 1024, 1025, 16383, 16384, 16385, 32769,
+        ] {
+            let mut state = 0x1947_cdef_u32;
+            let samples: Vec<f32> = (0..len)
+                .map(|_| {
+                    state ^= state << 13;
+                    state ^= state >> 17;
+                    state ^= state << 5;
+                    state as i32 as f32 / i32::MAX as f32 * 0.8
+                })
+                .collect();
+            let reference = directory.path().join(format!("reference-{len}.wav"));
+            let actual = directory.path().join(format!("actual-{len}.wav"));
+            write_wav_16k_mono_chunked(&samples, &reference, 1024).unwrap();
+            write_wav_16k_mono(&samples, &actual).unwrap();
+            assert_eq!(
+                std::fs::read(&actual).unwrap(),
+                std::fs::read(&reference).unwrap(),
+                "{len} samples"
+            );
+        }
     }
 }
