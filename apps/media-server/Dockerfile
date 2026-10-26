@@ -1,4 +1,4 @@
-FROM oven/bun:1.4.0
+FROM oven/bun:1.4.4
 
 RUN apt-get update \
 	&& apt-get install -y --no-install-recommends ffmpeg \
@@ -25,6 +25,7 @@ RUN bun test src/__tests__/lib/audio-quality-policy.test.ts src/__tests__/lib/au
 	&& bun test src/__tests__/routes/video.test.ts \
 	&& bun test src/__tests__/lib/lifecycle.test.ts src/__tests__/lib/temp-files.test.ts \
 	&& bun test src/__tests__/routes/lifecycle.test.ts \
+	&& bun test src/__tests__/routes/peer-jobs.test.ts \
 	&& bun test src/__tests__/lib/media-routes-real-world.integration.test.ts \
 	&& bun test src/__tests__/lib/media-video.integration.test.ts
 

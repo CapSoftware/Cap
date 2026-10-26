@@ -45,7 +45,12 @@ const SEQUENTIAL_FRAME_CACHE_SIZE: usize = 8;
 // Paused recordings can contain hundreds of screen/camera pairs. AVAssetReader
 // starts decoding eagerly, so only requested tracks may hold native readers.
 const MAX_ACTIVE_READERS: usize = 16;
-const IDLE_READER_TIMEOUT: Duration = Duration::from_millis(250);
+// An idle reader keeps its native reader, cache and warm-ahead frames for
+// IDLE_READER_RETAIN, so a hover or Play shortly after a pause continues
+// from them. It releases them sooner, at the next IDLE_READER_POLL, when every
+// reader permit is taken and another track may be waiting for one.
+const IDLE_READER_POLL: Duration = Duration::from_millis(250);
+const IDLE_READER_RETAIN: Duration = Duration::from_secs(5);
 const MAX_CACHED_FRAMES_BELOW_REQUEST: u32 = 10;
 
 fn reader_capacity() -> &'static Arc<Semaphore> {
@@ -734,6 +739,7 @@ impl AVAssetReaderDecoder {
         }
 
         let mut deferred_requests = VecDeque::<PendingRequest>::new();
+        let mut idle_since = None::<std::time::Instant>;
 
         loop {
             let _autorelease_pool = cidre::objc::AutoreleasePoolPage::push();
@@ -759,14 +765,24 @@ impl AVAssetReaderDecoder {
                 }
             } else {
                 let received = if this.is_some() {
-                    rx.recv_timeout(IDLE_READER_TIMEOUT)
+                    rx.recv_timeout(IDLE_READER_POLL)
                 } else {
                     rx.recv().map_err(|_| mpsc::RecvTimeoutError::Disconnected)
                 };
                 let message = match received {
-                    Ok(message) => message,
+                    Ok(message) => {
+                        idle_since = None;
+                        message
+                    }
                     Err(mpsc::RecvTimeoutError::Disconnected) => break,
                     Err(mpsc::RecvTimeoutError::Timeout) => {
+                        let idle = *idle_since.get_or_insert_with(std::time::Instant::now);
+                        if idle.elapsed() < IDLE_READER_RETAIN
+                            && reader_capacity().available_permits() > 0
+                        {
+                            continue;
+                        }
+                        idle_since = None;
                         cache.clear();
                         cache_bytes = 0;
                         *last_sent_frame.borrow_mut() = None;

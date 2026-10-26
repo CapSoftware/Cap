@@ -164,7 +164,7 @@ impl MediaAccess {
 
 pub fn action_label(status: OSPermissionStatus) -> &'static str {
     match status {
-        OSPermissionStatus::Denied => "Turn on in Settings",
-        _ => "Allow access",
+        OSPermissionStatus::Denied => crate::i18n::tr::main::device::access::turn_on_in_settings(),
+        _ => crate::i18n::tr::main::device::access::allow_access(),
     }
 }

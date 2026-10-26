@@ -34,6 +34,7 @@ use std::{
     time::Duration,
 };
 
+use cap_audio::high_quality_resampler_options;
 use cap_editor::{TranscriptionAudioSource, TranscriptionAudioTake, append_transcription_audio};
 use cap_project::{
     CaptionSegment, CaptionSettings, CaptionTrackSegment, CaptionWord, CaptionsData,
@@ -81,6 +82,32 @@ pub fn supports_parakeet() -> bool {
 /// `PARAKEET_DIR_MODELS` (`captions.ts:26`).
 pub fn is_parakeet_model(model: &str) -> bool {
     matches!(model, "best" | "best-max")
+}
+
+/// The 25 languages parakeet-tdt-0.6b-v3 transcribes. It takes no language
+/// hint and its vocabulary has no other scripts, so any other language comes
+/// out as phonetic Latin text.
+const PARAKEET_LANGUAGES: [&str; 25] = [
+    "bg", "cs", "da", "de", "el", "en", "es", "et", "fi", "fr", "hr", "hu", "it", "lt", "lv", "mt",
+    "nl", "pl", "pt", "ro", "ru", "sk", "sl", "sv", "uk",
+];
+
+const PARAKEET_UNSUPPORTED_LANGUAGE: &str = "Parakeet cannot transcribe language";
+
+/// The model that transcribes `language`: a Parakeet model hands a language
+/// it cannot write to a downloaded Whisper model, larger first.
+fn transcription_model<'a>(
+    model: &'a str,
+    language: &str,
+    downloaded: impl Fn(&str) -> bool,
+) -> Result<&'a str, String> {
+    if !is_parakeet_model(model) || language == "auto" || PARAKEET_LANGUAGES.contains(&language) {
+        return Ok(model);
+    }
+    ["medium", "small"]
+        .into_iter()
+        .find(|whisper| downloaded(whisper))
+        .ok_or_else(|| format!("{PARAKEET_UNSUPPORTED_LANGUAGE} {language}"))
 }
 
 /// Tauri's `appLocalDataDir()` for the `so.cap.desktop` identifier: on macOS
@@ -158,6 +185,12 @@ struct Hub {
 }
 
 impl Hub {
+    fn downloading(&self, model: &str) -> bool {
+        self.download.as_ref().is_some_and(|download| {
+            download.model == model && download.state == DownloadState::Downloading
+        })
+    }
+
     fn work_in_flight(&self) -> bool {
         self.download
             .as_ref()
@@ -948,10 +981,6 @@ fn decode_audio_file(path: &Path) -> Result<(Vec<f32>, usize), String> {
 
     let target_channels: u16 = if source_channels <= 1 { 1 } else { 2 };
     let target_channel_layout = ChannelLayout::default(i32::from(target_channels));
-    let mut options = ffmpeg::Dictionary::new();
-    options.set("filter_size", "128");
-    options.set("cutoff", "0.97");
-
     let mut resampler = resampling::Context::get_with(
         decoder.format(),
         decoder.channel_layout(),
@@ -959,7 +988,7 @@ fn decode_audio_file(path: &Path) -> Result<(Vec<f32>, usize), String> {
         avformat::Sample::F32(avformat::sample::Type::Packed),
         target_channel_layout,
         DECODE_SAMPLE_RATE,
-        options,
+        high_quality_resampler_options(),
     )
     .map_err(|e| format!("Resampler / {e}"))?;
 
@@ -1738,6 +1767,15 @@ pub fn transcribe_blocking(
     model: &str,
     language: &str,
 ) -> Result<Vec<CaptionSegment>, String> {
+    let requested = model;
+    // A download writes straight to the model's final path, so a model still
+    // downloading looks present but cannot load yet.
+    let model = transcription_model(model, language, |model| {
+        model_files_present(model) && !hub().downloading(model)
+    })?;
+    if model != requested {
+        tracing::info!("{requested} cannot transcribe {language}; using the {model} Whisper model");
+    }
     let model_file = model_path(model);
     if !project_path.exists() {
         return Err(format!(
@@ -1818,167 +1856,10 @@ fn extract_audio_from_video(video_path: &Path, output_path: &Path) -> Result<(),
 // Caption words & chunking
 // ---------------------------------------------------------------------------
 
-/// `MAX_CAPTION_WORD_DURATION` (`captions.rs:75`): Whisper/Parakeet sometimes
-/// stretch a trailing word's end across a following silence, which leaves the
-/// rendered caption stuck on screen and duplicates the word across timeline
-/// cuts once projected.
-pub const MAX_CAPTION_WORD_DURATION: f32 = 2.5;
-/// `captions.rs:67-69`.
-const TARGET_CAPTION_WORDS_PER_SEGMENT: usize = 6;
-const MAX_CAPTION_WORDS_PER_SEGMENT: usize = 8;
-const MIN_FINAL_CAPTION_WORDS: usize = 3;
-
-/// `caption_char_attaches_to_previous` (`captions.rs:745-767`).
-fn caption_char_attaches_to_previous(value: char) -> bool {
-    matches!(
-        value,
-        ',' | '.'
-            | '!'
-            | '?'
-            | ';'
-            | ':'
-            | '%'
-            | ')'
-            | ']'
-            | '}'
-            | '\''
-            | '’'
-            | '、'
-            | '。'
-            | '！'
-            | '？'
-            | '；'
-            | '：'
-            | '，'
-    )
-}
-
-fn caption_token_attaches_to_previous(text: &str) -> bool {
-    text.trim()
-        .chars()
-        .next()
-        .is_some_and(caption_char_attaches_to_previous)
-}
-
-/// `caption_boundary_word_is_weak` (`captions.rs:769-801`).
-fn caption_boundary_word_is_weak(word: &CaptionWord) -> bool {
-    let normalized = word
-        .text
-        .trim()
-        .chars()
-        .filter(|c| c.is_alphanumeric())
-        .collect::<String>()
-        .to_lowercase();
-
-    normalized.chars().count() <= 1
-        || matches!(
-            normalized.as_str(),
-            "an" | "as"
-                | "at"
-                | "be"
-                | "by"
-                | "do"
-                | "he"
-                | "if"
-                | "in"
-                | "is"
-                | "it"
-                | "me"
-                | "my"
-                | "of"
-                | "on"
-                | "or"
-                | "so"
-                | "to"
-                | "up"
-                | "we"
-        )
-}
-
-/// `normalize_caption_words` (`captions.rs:803-831`).
-fn normalize_caption_words(words: Vec<CaptionWord>) -> Vec<CaptionWord> {
-    let mut normalized: Vec<CaptionWord> = Vec::with_capacity(words.len());
-
-    for word in words {
-        let text = word.text.trim();
-        if text.is_empty() {
-            continue;
-        }
-
-        if caption_token_attaches_to_previous(text)
-            && let Some(previous) = normalized.last_mut()
-        {
-            previous.text.push_str(text);
-            previous.end = word.end;
-        } else {
-            normalized.push(CaptionWord {
-                text: text.to_string(),
-                start: word.start,
-                end: word.end,
-            });
-        }
-    }
-
-    for word in &mut normalized {
-        word.end = word.end.min(word.start + MAX_CAPTION_WORD_DURATION);
-    }
-
-    normalized
-}
-
-/// `caption_text_from_words` (`captions.rs:833-849`).
-fn caption_text_from_words<'a>(words: impl IntoIterator<Item = &'a CaptionWord>) -> String {
-    let mut text = String::new();
-
-    for word in words {
-        let word_text = word.text.trim();
-        if word_text.is_empty() {
-            continue;
-        }
-
-        if !text.is_empty() && !caption_token_attaches_to_previous(word_text) {
-            text.push(' ');
-        }
-        text.push_str(word_text);
-    }
-
-    text
-}
-
-/// `caption_word_chunks` (`captions.rs:851-883`).
-fn caption_word_chunks(words: &[CaptionWord]) -> Vec<&[CaptionWord]> {
-    let mut chunks = Vec::new();
-    let mut start = 0;
-
-    while start < words.len() {
-        let remaining = words.len() - start;
-        if remaining <= TARGET_CAPTION_WORDS_PER_SEGMENT {
-            chunks.push(&words[start..]);
-            break;
-        }
-
-        let mut end = (start + TARGET_CAPTION_WORDS_PER_SEGMENT).min(words.len());
-        while end < words.len()
-            && caption_boundary_word_is_weak(&words[end - 1])
-            && end - start < MAX_CAPTION_WORDS_PER_SEGMENT
-        {
-            end += 1;
-        }
-
-        let remaining_after = words.len() - end;
-        if remaining_after > 0
-            && remaining_after < MIN_FINAL_CAPTION_WORDS
-            && caption_boundary_word_is_weak(&words[end])
-        {
-            end = words.len();
-        }
-
-        chunks.push(&words[start..end]);
-        start = end;
-    }
-
-    chunks
-}
+use cap_project::caption_words::{
+    caption_text_from_words, caption_word_chunks, normalize_caption_words,
+    MAX_CAPTION_WORD_DURATION,
+};
 
 // ---------------------------------------------------------------------------
 // Track derivation -- deriveCaptionTrackSegments, in Rust
@@ -2250,6 +2131,9 @@ pub fn caption_generation_error_message(message: &str) -> String {
     if message.contains("Failed to load Whisper model") {
         return "Failed to load the caption model. Try downloading it again".to_string();
     }
+    if message.contains(PARAKEET_UNSUPPORTED_LANGUAGE) {
+        return "The Recommended and High Accuracy models only transcribe English and 24 other European languages. Download the Small or Medium model to caption this language".to_string();
+    }
     if message.contains("Parakeet transcription is not available on Intel macOS") {
         return "Parakeet models are not available on Intel Macs. Use a Whisper model instead"
             .to_string();
@@ -2263,6 +2147,38 @@ mod verify_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parakeet_keeps_the_languages_it_can_write() {
+        for language in ["auto", "en", "de", "ru", "uk", "pl"] {
+            assert_eq!(transcription_model("best", language, |_| true), Ok("best"));
+            assert_eq!(
+                transcription_model("best-max", language, |_| true),
+                Ok("best-max")
+            );
+        }
+    }
+
+    #[test]
+    fn other_languages_move_to_a_downloaded_whisper_model() {
+        for language in ["zh", "ja", "ko", "ar", "hi", "tr", "he", "fa"] {
+            assert_eq!(
+                transcription_model("best", language, |_| true),
+                Ok("medium")
+            );
+            assert_eq!(
+                transcription_model("best-max", language, |model| model == "small"),
+                Ok("small")
+            );
+            assert_eq!(
+                transcription_model("best", language, |model| model != "medium"),
+                Ok("small")
+            );
+            let error = transcription_model("best", language, |_| false).unwrap_err();
+            assert!(caption_generation_error_message(&error).contains("Small or Medium"));
+        }
+        assert_eq!(transcription_model("small", "zh", |_| false), Ok("small"));
+    }
 
     #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
     #[test]
@@ -2577,6 +2493,22 @@ mod tests {
         assert_eq!(model_path("best-max"), base.join("parakeet-best-max"));
         assert_eq!(model_path("small"), base.join("small.bin"));
         assert_eq!(model_path("medium"), base.join("medium.bin"));
+    }
+
+    #[test]
+    fn only_the_model_being_downloaded_counts_as_downloading() {
+        let mut state = Hub::default();
+        assert!(!state.downloading("medium"));
+        state.download = Some(ModelDownload {
+            model: "medium".to_string(),
+            state: DownloadState::Downloading,
+            progress: 40.0,
+            message: "Downloading".to_string(),
+        });
+        assert!(state.downloading("medium"));
+        assert!(!state.downloading("small"));
+        state.download.as_mut().unwrap().state = DownloadState::Completed;
+        assert!(!state.downloading("medium"));
     }
 
     #[test]

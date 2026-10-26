@@ -207,6 +207,8 @@ struct MockState {
     next_id: u32,
     confirmations: Vec<Value>,
     deletes: u32,
+    created: Vec<String>,
+    deleted: Vec<String>,
     problems: Vec<String>,
 }
 
@@ -214,7 +216,7 @@ struct MockState {
 pub(super) struct Stats {
     /// HTTP requests that reached the mock (API calls and object PUTs).
     pub(super) requests: usize,
-    /// PUTs of media objects and multipart parts (manifests excluded).
+    /// PUTs of media objects and multipart parts (recording metadata excluded).
     pub(super) media_puts: usize,
     /// PUTs of `segments/manifest.json`.
     pub(super) manifest_puts: usize,
@@ -320,7 +322,7 @@ pub(super) mod budget {
 
     /// The relaunch session only: every segment and the thumbnail once.
     pub(in crate::upload) const QUEUE_RESUME_AFTER_QUIT_MID_TRANSFER: Budget =
-        budget(22, 15, 2, 1_795_340, 0, 12 + POOL_RACE);
+        budget(24, 15, 2, 1_795_340, 0, 12 + POOL_RACE);
     pub(in crate::upload) const QUEUE_RESUME_AFTER_QUIT_DURING_VERIFICATION: Budget =
         budget(1, 0, 0, 0, 0, 1);
 }
@@ -433,6 +435,14 @@ impl MockCap {
         self.lock().confirmations.clone()
     }
 
+    pub(super) fn created(&self) -> Vec<String> {
+        self.lock().created.clone()
+    }
+
+    pub(super) fn deleted(&self) -> Vec<String> {
+        self.lock().deleted.clone()
+    }
+
     pub(super) fn deletes(&self) -> u32 {
         self.lock().deletes
     }
@@ -489,8 +499,7 @@ impl MockCap {
     pub(super) fn stats(&self) -> Stats {
         let state = self.lock();
         let is_media = |path: &str| {
-            path.starts_with("/s3mp/")
-                || (path.starts_with("/s3/") && !path.ends_with("/manifest.json"))
+            path.starts_with("/s3mp/") || (path.starts_with("/s3/") && !is_metadata_object(path))
         };
         Stats {
             requests: state.requests.len(),
@@ -606,7 +615,7 @@ impl Server {
                 .unwrap_or(0);
             let media = head.method == "PUT"
                 && (head.path.starts_with("/s3mp/")
-                    || (head.path.starts_with("/s3/") && !head.path.ends_with("/manifest.json")));
+                    || (head.path.starts_with("/s3/") && !is_metadata_object(&head.path)));
             let fault = self.take_fault(&head.method, &head.path);
             let cut = match fault {
                 Some(Fault::Reset(at) | Fault::Outage(at, _) | Fault::Trip(at)) => {
@@ -792,6 +801,7 @@ impl Server {
                     state.next_id += 1;
                     format!("verifyvideo{:04}", state.next_id)
                 });
+                state.created.push(id.clone());
                 reply(200, json!({ "id": id }))
             }
             ("POST", "/api/upload/multipart/initiate") => {
@@ -924,6 +934,9 @@ impl Server {
             }
             ("DELETE", "/api/desktop/video/delete") => {
                 state.deletes += 1;
+                if let Some(id) = query.get("videoId") {
+                    state.deleted.push(id.clone());
+                }
                 reply(200, json!({ "success": true }))
             }
             _ => {
@@ -936,11 +949,15 @@ impl Server {
     }
 }
 
+fn is_metadata_object(path: &str) -> bool {
+    path.ends_with("/manifest.json") || path.ends_with("/recording.json")
+}
+
 impl MockState {
     fn useful_bytes(&self) -> u64 {
         self.objects
             .iter()
-            .filter(|(key, _)| !key.ends_with("/manifest.json"))
+            .filter(|(key, _)| !is_metadata_object(key))
             .map(|(_, object)| object.len() as u64)
             .sum()
     }

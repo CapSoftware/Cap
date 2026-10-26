@@ -321,6 +321,7 @@ export default function CapsScreen() {
 	const auth = useAuth();
 	const authStatus = auth.status;
 	const apiClient = auth.client;
+	const activeOrganizationId = auth.bootstrap?.activeOrganizationId;
 	const libraryRevision = useRecordingUploadLibraryRevision();
 	const [selectedSpaceId, setSelectedSpaceId] = useState<string | null>(null);
 	const [folder, setFolder] = useState<MobileFolder | null>(null);
@@ -377,7 +378,7 @@ export default function CapsScreen() {
 				if (requestId !== loadRequestId.current) return;
 				setLoadError(getCapsErrorMessage(error));
 			} finally {
-				if (showLoading && requestId === loadRequestId.current) {
+				if (requestId === loadRequestId.current) {
 					setLoading(false);
 				}
 			}
@@ -387,8 +388,9 @@ export default function CapsScreen() {
 
 	useFocusEffect(
 		useCallback(() => {
+			if (activeOrganizationId === undefined) return;
 			void load(libraryRevision === 0);
-		}, [libraryRevision, load]),
+		}, [activeOrganizationId, libraryRevision, load]),
 	);
 
 	const loadMore = useCallback(async () => {
@@ -593,7 +595,9 @@ export default function CapsScreen() {
 					public: isPublic,
 				});
 				setSettingsCap((current) =>
-					current?.id === updated.id ? updated : current,
+					current?.id === updated.id
+						? { ...current, public: updated.public }
+						: current,
 				);
 				await Promise.all([auth.refresh(), load()]);
 			} catch (error) {
@@ -640,7 +644,9 @@ export default function CapsScreen() {
 				client: auth.client,
 				onUpdated: async (updated) => {
 					setSettingsCap((current) =>
-						current?.id === updated.id ? updated : current,
+						current?.id === updated.id
+							? { ...current, protected: updated.protected }
+							: current,
 					);
 					await Promise.all([auth.refresh(), load()]);
 				},
@@ -657,7 +663,9 @@ export default function CapsScreen() {
 				client: auth.client,
 				onUpdated: async (updated) => {
 					setSettingsCap((current) =>
-						current?.id === updated.id ? updated : current,
+						current?.id === updated.id
+							? { ...current, title: updated.title }
+							: current,
 					);
 					await Promise.all([auth.refresh(), load()]);
 				},

@@ -379,6 +379,10 @@ impl Default for ClipsState {
 }
 
 impl ClipsState {
+    pub(crate) fn has_open_menu(&self) -> bool {
+        self.import_menu.is_some()
+    }
+
     pub(crate) fn is_importing(&self) -> bool {
         self.importing
     }
@@ -1932,6 +1936,7 @@ impl PreparedMp4Import {
             start_time: Some(0.0),
             device_id: None,
             gap_summary: None,
+            digital_silence_ms: None,
         });
         Ok(Self {
             target,

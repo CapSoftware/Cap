@@ -4,11 +4,17 @@ import type { VideoMetadata } from "@cap/database/types";
 import type { Storage } from "@cap/web-backend/src/Storage/index";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { Effect } from "effect";
+import {
+	LOOM_IMPORT_MAX_BYTES,
+	LOOM_IMPORT_PART_BYTES,
+} from "@/lib/loom-import-limits";
 import { isStorageObjectNotFound } from "@/lib/storage-not-found";
 import { runWorkflowPromise } from "@/lib/workflow-runtime";
 
-export const LOOM_IMPORT_MAX_BYTES = 10 * 1024 ** 3;
-export const LOOM_IMPORT_PART_BYTES = 64 * 1024 ** 2;
+export {
+	LOOM_IMPORT_MAX_BYTES,
+	LOOM_IMPORT_PART_BYTES,
+} from "@/lib/loom-import-limits";
 
 type Bucket = Effect.Effect.Success<
 	ReturnType<typeof Storage.getAccessForVideo>
@@ -104,7 +110,9 @@ export async function prepareLoomMultipartUploads({
 	const created: Array<{ key: string; uploadId: string }> = [];
 	const create = async (key: string) => {
 		const { UploadId: uploadId } = await bucket.multipart
-			.create(key, { ContentType: "video/mp4" })
+			.create(key, {
+				ContentType: key.endsWith(".webm") ? "video/webm" : "video/mp4",
+			})
 			.pipe(runWorkflowPromise);
 		if (!uploadId)
 			throw new Error("Storage did not return a multipart upload id");
