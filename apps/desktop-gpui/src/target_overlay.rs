@@ -37,6 +37,7 @@ use scap_targets::{
     bounds::{LogicalBounds, LogicalPosition, LogicalSize},
 };
 
+use crate::i18n::tr;
 use crate::theme::LocaleFont as _;
 use crate::{
     app_windows,
@@ -160,11 +161,11 @@ fn area_controls_position(crop: AreaRect, available: AreaRect, cluster_height: f
     )
 }
 
-const COUNTDOWN_OPTIONS: &[(u32, &str)] = &[
-    (0, "Off"),
-    (3, "3 seconds"),
-    (5, "5 seconds"),
-    (10, "10 seconds"),
+const COUNTDOWN_OPTIONS: &[(u32, fn() -> &'static str)] = &[
+    (0, tr::settings::general::recording::countdown::off),
+    (3, tr::settings::general::recording::countdown::seconds_3),
+    (5, tr::settings::general::recording::countdown::seconds_5),
+    (10, tr::settings::general::recording::countdown::seconds_10),
 ];
 
 const SELECTION_HINT_CYCLE: Duration = Duration::from_millis(2800);
@@ -867,16 +868,16 @@ struct OverlayDeviceMenu {
 /// `menuModes` (`target-select-overlay.tsx:2064-2090`): three check items, in
 /// this order, checked on the current mode. Picking one switches the mode and
 /// never starts a recording.
-const MODE_MENU: [(&str, Mode); 3] = [
-    ("Studio Mode", Mode::Studio),
-    ("Instant Mode", Mode::Instant),
-    ("Screenshot Mode", Mode::Screenshot),
+const MODE_MENU: [(fn() -> &'static str, Mode); 3] = [
+    (tr::main::mode::header::studio, Mode::Studio),
+    (tr::main::mode::header::instant, Mode::Instant),
+    (tr::main::mode::header::screenshot, Mode::Screenshot),
 ];
 
 fn mode_menu_items(current: Mode) -> Vec<crate::ui::MenuItem> {
     MODE_MENU
         .into_iter()
-        .map(|(label, mode)| crate::ui::MenuItem::new(label, mode == current))
+        .map(|(label, mode)| crate::ui::MenuItem::new(label(), mode == current))
         .collect()
 }
 
@@ -963,7 +964,7 @@ impl OverlayWindow {
             display_id: display.id(),
             display_name: display
                 .name()
-                .unwrap_or_else(|| format!("Display {}", display.id())),
+                .unwrap_or_else(|| tr::overlay::display_fallback(display.id())),
             display_size: logical,
             capture_scale,
             controls_work_area,
@@ -1361,10 +1362,10 @@ impl OverlayWindow {
                 access.read(cx).status(permission)
                     == crate::permissions::OSPermissionStatus::Denied,
             ) {
-                (true, true) => "Turn on camera access in Settings…",
-                (true, false) => "Allow camera access…",
-                (false, true) => "Turn on microphone access in Settings…",
-                (false, false) => "Allow microphone access…",
+                (true, true) => tr::overlay::device::camera_turn_on(),
+                (true, false) => tr::overlay::device::camera_allow(),
+                (false, true) => tr::overlay::device::microphone_turn_on(),
+                (false, false) => tr::overlay::device::microphone_allow(),
             };
             (
                 crate::ui::MenuItem::new(label, false),
@@ -1373,7 +1374,7 @@ impl OverlayWindow {
         });
         let (mut items, mut choices) = if camera {
             let mut items = vec![crate::ui::MenuItem::new(
-                "No Camera",
+                tr::main::device::no_camera(),
                 view.camera_selection().is_none(),
             )];
             let mut choices = vec![OverlayDeviceChoice::Camera(None)];
@@ -1388,7 +1389,7 @@ impl OverlayWindow {
             (items, choices)
         } else {
             let mut items = vec![crate::ui::MenuItem::new(
-                "No Microphone",
+                tr::main::device::no_microphone(),
                 view.microphone_selection().is_none(),
             )];
             let mut choices = vec![OverlayDeviceChoice::Microphone(None)];
@@ -1439,13 +1440,17 @@ impl OverlayWindow {
         let access = access.read(cx);
         let blocked = enabled && !access.allowed(permission);
         let pill_label = if !blocked {
-            if enabled { "On" } else { "Off" }
+            if enabled {
+                tr::main::device::pill::on()
+            } else {
+                tr::main::device::pill::off()
+            }
         } else if access.requesting(permission) {
-            "Asking…"
+            tr::main::device::pill::asking()
         } else if access.status(permission) == crate::permissions::OSPermissionStatus::Denied {
-            "Allow in Settings"
+            tr::main::device::pill::allow_in_settings()
         } else {
-            "Allow"
+            tr::main::device::pill::allow()
         };
         div()
             .id(if camera {
@@ -1496,7 +1501,12 @@ impl OverlayWindow {
                     .truncate()
                     .text_size(px(14.))
                     .child(selected.unwrap_or_else(|| {
-                        if camera { "No Camera" } else { "No Microphone" }.into()
+                        if camera {
+                            tr::main::device::no_camera()
+                        } else {
+                            tr::main::device::no_microphone()
+                        }
+                        .into()
                     })),
             )
             .child(
@@ -1584,7 +1594,7 @@ impl OverlayWindow {
             .unwrap_or(0);
         let items = COUNTDOWN_OPTIONS
             .iter()
-            .map(|(value, label)| crate::ui::MenuItem::new(*label, *value == current))
+            .map(|(value, label)| crate::ui::MenuItem::new(label(), *value == current))
             .collect();
         Some(
             crate::ui::Menu::plain(&self.theme, "overlay-countdown-menu", items, state)
@@ -1813,7 +1823,7 @@ impl OverlayWindow {
                         .text_size(px(14.))
                         .text_color(self.theme.gray_11)
                         .child(svg().path("icons/camera.svg").size(px(32.)))
-                        .child("Please select a camera"),
+                        .child(tr::overlay::camera_only::select_camera()),
                 )
                 .into_any_element()
         };
@@ -1840,13 +1850,13 @@ impl OverlayWindow {
                             // (`target-select-overlay.tsx:392`): renders 700,
                             // no 600 face loaded.
                             .font_weight(FontWeight::BOLD)
-                            .child("Camera Only"),
+                            .child(tr::main::target::camera_only()),
                     )
                     .child(
                         div()
                             .text_size(px(12.))
                             .text_color(self.theme.gray_11)
-                            .child("Record using only your camera and microphone"),
+                            .child(tr::overlay::camera_only::description()),
                     ),
             )
             .child(
@@ -2204,7 +2214,7 @@ impl OverlayWindow {
                         div()
                             .text_size(px(16.))
                             .font_weight(FontWeight::MEDIUM)
-                            .child("Click and drag to select an area"),
+                            .child(tr::overlay::area::hint()),
                     ),
             )
     }
@@ -2221,11 +2231,11 @@ impl OverlayWindow {
     ) -> impl IntoElement {
         let label = match crop.filter(|_| valid) {
             Some(crop) => format!("{} × {}", crop.width.round(), crop.height.round()),
-            None => "Draw an area".to_string(),
+            None => tr::overlay::area::draw().to_string(),
         };
         let ratio_label = match self.area_ratio {
             Some((width, height)) => format!("{width}:{height}"),
-            None => "Free".to_string(),
+            None => tr::overlay::area::free_ratio().to_string(),
         };
         let ratio = div()
             .id("area-aspect-ratio")
@@ -2347,11 +2357,10 @@ impl OverlayWindow {
                         .bg(self.theme.red_2)
                         .text_size(px(14.))
                         .text_color(self.theme.gray_12)
-                        .child(format!("Minimum size is {} x {}", min as u32, min as u32))
-                        .child(div().text_size(px(11.)).child(format!(
-                            "{} x {} is too small",
+                        .child(tr::overlay::area::minimum_size(min as u32, min as u32))
+                        .child(div().text_size(px(11.)).child(tr::overlay::area::too_small(
                             crop.width.round(),
-                            crop.height.round()
+                            crop.height.round(),
                         ))),
                 )
             })
@@ -2437,7 +2446,11 @@ impl OverlayWindow {
                                 )
                                 .hover(|style| style.opacity(0.8))
                                 .tooltip(move |_, cx| {
-                                    crate::ui::Tooltip::new(&theme, "Recording countdown").view(cx)
+                                    crate::ui::Tooltip::new(
+                                        &theme,
+                                        tr::overlay::countdown_tooltip(),
+                                    )
+                                    .view(cx)
                                 })
                                 .on_mouse_down(MouseButton::Left, |_, _, cx| {
                                     cx.stop_propagation();
@@ -2450,7 +2463,7 @@ impl OverlayWindow {
                                     let items = COUNTDOWN_OPTIONS
                                         .iter()
                                         .map(|(value, label)| {
-                                            crate::ui::MenuItem::new(*label, *value == current)
+                                            crate::ui::MenuItem::new(label(), *value == current)
                                         })
                                         .collect::<Vec<_>>();
                                     this.mode_menu = None;
@@ -2523,9 +2536,9 @@ impl OverlayWindow {
         };
         let needs_sign_in = self.needs_sign_in(mode, cx);
         let label = match mode {
-            Mode::Screenshot => "Take Screenshot",
-            _ if needs_sign_in => "Sign In To Use",
-            _ => "Start Recording",
+            Mode::Screenshot => tr::overlay::start::take_screenshot(),
+            _ if needs_sign_in => tr::overlay::start::sign_in(),
+            _ => tr::overlay::start::start_recording(),
         };
         let icon = match mode {
             Mode::Instant if needs_sign_in => "icons/user-round.svg",
@@ -2534,10 +2547,10 @@ impl OverlayWindow {
             Mode::Screenshot => "icons/camera.svg",
         };
         let mode_label = match mode {
-            Mode::Instant if needs_sign_in => "Instant Mode — Sign in to record instantly",
-            Mode::Instant => "Instant Mode — Record shareable link",
-            Mode::Studio => "Studio Mode — Record and edit locally",
-            Mode::Screenshot => "Screenshot Mode",
+            Mode::Instant if needs_sign_in => tr::overlay::start::instant_sign_in(),
+            Mode::Instant => tr::overlay::start::instant(),
+            Mode::Studio => tr::overlay::start::studio(),
+            Mode::Screenshot => tr::main::mode::header::screenshot(),
         };
         let _ = target;
 
@@ -2600,6 +2613,7 @@ impl OverlayWindow {
                                     // `text-[0.95rem] font-medium`.
                                     .text_size(px(15.2))
                                     .font_weight(FontWeight::MEDIUM)
+                                    .truncate()
                                     .child(label),
                             )
                             .child(
@@ -2666,7 +2680,7 @@ impl OverlayWindow {
                     .border_color(gpui::hsla(0., 0., 1., 0.2))
                     .bg(gpui::hsla(0., 0., 1., 0.05))
                     .tooltip(move |_, cx| {
-                        crate::ui::Tooltip::new(&theme, "Choose recording mode").view(cx)
+                        crate::ui::Tooltip::new(&theme, tr::overlay::choose_mode()).view(cx)
                     })
                     .child(
                         svg()

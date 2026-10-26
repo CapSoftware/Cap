@@ -1312,3 +1312,381 @@ description = "Wähle, ob Cap Updates automatisch herunterlädt."
 label = "Update-Downloads"
 manual = "Vorher fragen"
 never = "Nie"
+
+[auth]
+sign_in_failed = "Anmeldung fehlgeschlagen"
+
+[diagnostics]
+already_running = "Es läuft bereits eine Diagnose."
+mode_both = "Beide"
+
+[diagnostics.error]
+create_folder = "Der Diagnoseordner konnte nicht erstellt werden: {error}"
+exited = "Der Selbsttest wurde beendet mit {status}"
+no_output = "Der Selbsttest hat keine Ausgabe geliefert"
+serialize = "Der Bericht konnte nicht serialisiert werden: {error}"
+start_failed = "{program} konnte nicht gestartet werden: {error}"
+upload_logs = "Protokolle konnten nicht hochgeladen werden: {error}"
+upload_status = "Upload fehlgeschlagen mit Status: {status}"
+wait_failed = "Auf den Selbsttest konnte nicht gewartet werden: {error}"
+write_failed = "{path} konnte nicht geschrieben werden: {error}"
+
+[diagnostics.stage]
+analyzing = "Aufnahme wird analysiert..."
+analyzing_instant = "Instant-Aufnahme wird analysiert..."
+analyzing_studio = "Studio-Aufnahme wird analysiert..."
+cancelling = "Wird abgebrochen..."
+collecting = "Systeminformationen werden gesammelt..."
+done = "Synchronisationstest wird abgeschlossen..."
+exporting = "Aufnahme wird exportiert..."
+exporting_instant = "Instant-Aufnahme wird exportiert..."
+exporting_studio = "Studio-Aufnahme wird exportiert..."
+finalizing = "Aufnahme wird fertiggestellt..."
+finalizing_instant = "Instant-Aufnahme wird fertiggestellt..."
+finalizing_studio = "Studio-Aufnahme wird fertiggestellt..."
+pattern = "Testmuster wird abgespielt..."
+pattern_instant = "Testmuster wird abgespielt (Instant)..."
+pattern_studio = "Testmuster wird abgespielt (Studio)..."
+preparing = "Test wird vorbereitet..."
+preparing_instant = "Instant-Test wird vorbereitet..."
+preparing_studio = "Studio-Test wird vorbereitet..."
+recording = "Test wird aufgenommen..."
+recording_instant = "Instant-Test wird aufgenommen..."
+recording_studio = "Studio-Test wird aufgenommen..."
+starting = "Diagnose wird gestartet..."
+
+[dialog]
+no_microphone_body = "Diese Aufnahme enthält Ihre Stimme nicht."
+open_recording_failed = "Diese Aufnahme konnte nicht geöffnet werden: {error}"
+
+[dialog.capture]
+approve_shortcut = "Bestätigen Sie ein Aufnahmekürzel oder aktivieren Sie das Cap-Stopp-Symbol in der Taskleiste, sobald es erscheint. Die Aufnahme hat noch nicht begonnen."
+area_unavailable = "Der ausgewählte Bereich hat sich geändert oder ist nicht mehr verfügbar. Wählen Sie ihn erneut aus."
+camera_needs_x11 = "Instant-Kameraeinblendungen benötigen unter Linux einen X11-Desktop"
+camera_notice = "Cap blendet die Kameravorschau und die Aufnahmesteuerung aus. Eine ausgewählte Kamera wird weiterhin als separate, bearbeitbare Spur aufgenommen."
+camera_notice_instant = "Cap blendet Vorschau und Steuerung aus. Eine ausgewählte Kamera erscheint an der Position ihrer Vorschau, mit der gewählten Form und den gewählten Effekten. Halten Sie die gesamte Vorschau innerhalb des Aufnahmebereichs. Wenn Sie Cap öffnen, wird diese Instant-Aufnahme beendet, bevor die Steuerung erscheint."
+camera_outside_area = "Verschieben Sie die gesamte Kameravorschau in den Aufnahmebereich, bevor Sie die Instant-Aufnahme starten"
+camera_preview_closed = "Öffnen Sie die Vorschau der ausgewählten Kamera vor der Instant-Aufnahme"
+cleanup_incomplete = "Die Aufräumarbeiten der Aufnahme sind unvollständig: {error}. Eine neue Aufnahme ist gesperrt."
+devices_changed = "Die ausgewählten Geräte haben sich geändert. Starten Sie erneut, um die neuen Aufnahmequellen zu bestätigen."
+devices_changed_before_start = "Die ausgewählten Geräte haben sich vor Beginn der Aufnahme geändert. Starten Sie erneut, um die Quellen zu bestätigen."
+shortcut_conflict = "Ctrl+Shift+F9 ist einer anderen Cap-Aktion zugewiesen. Ändern Sie dieses Kürzel vor der Aufnahme."
+shortcut_description = "Diese Cap-Aufnahme starten oder beenden"
+shortcut_hint = "Drücken Sie {shortcut} und lassen Sie los, um zu starten. Mit demselben Kürzel beenden Sie die Aufnahme. Dieses vorübergehende Kürzel ändert Ihre Einstellungen nicht."
+tray_stop_hint = "Aktivieren Sie das Cap-Stopp-Symbol in der Taskleiste, um zu starten. Aktivieren Sie es erneut, um zu beenden. Die Aufnahme beginnt erst, wenn Sie dieses Steuerelement verwenden."
+window_unavailable = "Das ausgewählte Fenster ist nicht mehr verfügbar. Wählen Sie es erneut aus."
+
+[dialog.clipboard]
+copy_file = "Die Datei konnte nicht in die Zwischenablage kopiert werden: {error}"
+copy_file_failed = "Die Datei konnte nicht in die Zwischenablage kopiert werden"
+copy_image = "Das Bild konnte nicht in die Zwischenablage kopiert werden: {error}"
+copy_image_failed = "Das Bild konnte nicht in die Zwischenablage kopiert werden"
+not_a_file = "Nur Dateien können in die Zwischenablage kopiert werden"
+unavailable = "Zwischenablage nicht verfügbar"
+unavailable_error = "Zwischenablage nicht verfügbar: {error}"
+
+[dialog.delete_recording]
+already_deleting = "Diese Aufnahme wird bereits gelöscht."
+close_failed = "Der Editor konnte nicht geschlossen werden: {error}"
+editor_changed = "Der Editor hat sich während der Bestätigung geändert. Die Aufnahme wurde nicht gelöscht."
+editor_closed = "Der Editor wurde bereits geschlossen. Die Aufnahme wurde nicht gelöscht."
+failed = "Die Aufnahme konnte nicht gelöscht werden: {error}"
+failed_title = "Aufnahme konnte nicht gelöscht werden"
+finishing_body = "Cap wartet auf das Ende der Aufräumarbeiten, bevor das Löschen abgeschlossen wird."
+finishing_title = "Das Löschen läuft noch"
+in_use = "Diese Aufnahme wird noch verwendet. Schließen Sie den Upload ab oder brechen Sie ihn ab und versuchen Sie es erneut: {error}"
+outside_library = "Diese Aufnahme liegt außerhalb der Aufnahmebibliothek. Ihre Dateien wurden nicht geändert."
+recording_active = "Beenden oder verwerfen Sie die Aufnahme, bevor Sie dieses Projekt löschen."
+retained_title = "Aufnahme beibehalten"
+
+[dialog.file]
+audio_filter = "Audio"
+busy = "Ein Dateidialog ist bereits geöffnet. Schließen Sie ihn ab oder brechen Sie ihn ab, bevor Sie es erneut versuchen."
+export_filter = "Export"
+failed = "Der Dateidialog konnte nicht abgeschlossen werden: {error}"
+images_filter = "Bilder"
+unavailable_title = "Dateidialog nicht verfügbar"
+unconfirmed = "Cap konnte nicht bestätigen, dass der Dateidialog geschlossen wurde. Schließen Sie alle verbleibenden Dateidialoge und starten Sie Cap neu, bevor Sie es erneut versuchen."
+
+[dialog.mode_select]
+instant = "Sofort per Link teilen. Lädt während der Aufnahme hoch."
+screenshot = "Bildschirmfotos sofort aufnehmen und beschriften."
+studio = "Lokale Aufnahme in höchster Qualität zum späteren Bearbeiten."
+subtitle = "Wählen Sie, wie Sie Ihren Bildschirm aufnehmen möchten"
+title = "Aufnahmemodus wählen"
+
+[dialog.storage]
+stopped_kept = "Die Aufnahme wurde wegen wenig Speicherplatz beendet. Ihre Aufnahmedateien wurden behalten. Geben Sie Speicherplatz frei und stellen Sie die Aufnahme dann unten wieder her."
+stopped_saved = "Die Aufnahme wurde wegen wenig Speicherplatz beendet. Ihre Aufnahme wurde gespeichert."
+stopping = "Wenig Speicherplatz. Ihre Aufnahme wird beendet und gespeichert…"
+
+[dialog.teleprompter]
+cue_markers = "Cue-Marker"
+hidden = "Dieses Fenster ist in Cap-Aufnahmen ausgeblendet"
+mirror = "Text spiegeln"
+paused = "Scrollen mit der Aufnahme pausiert"
+placeholder = "Skript einfügen oder eingeben…"
+
+[import]
+error_title = "Importfehler"
+image_failed = "Bild konnte nicht importiert werden: {error}"
+unsupported = "Nicht unterstützte Mediendatei."
+video_failed = "Video konnte nicht importiert werden: {error}"
+
+[import.filter]
+image = "Bilddateien"
+media = "Mediendateien"
+video = "Videodateien"
+
+[import.progress]
+analyzing = "Videodatei wird analysiert..."
+complete = "Import abgeschlossen!"
+converting = "Video wird konvertiert... {percent} %"
+image = "Bild wird importiert..."
+metadata = "Projektmetadaten werden erstellt..."
+starting = "Konvertierung wird gestartet..."
+
+[overlay]
+choose_mode = "Aufnahmemodus wählen"
+countdown_tooltip = "Countdown vor der Aufnahme"
+display_fallback = "Bildschirm {id}"
+
+[overlay.area]
+draw = "Bereich aufziehen"
+free_ratio = "Frei"
+hint = "Klicken und ziehen Sie, um einen Bereich auszuwählen"
+minimum_size = "Die Mindestgröße beträgt {width} x {height}"
+too_small = "{width} x {height} ist zu klein"
+
+[overlay.camera_only]
+description = "Nur mit Kamera und Mikrofon aufnehmen"
+select_camera = "Bitte wählen Sie eine Kamera"
+
+[overlay.device]
+camera_allow = "Kamerazugriff erlauben…"
+camera_turn_on = "Kamerazugriff in den Einstellungen aktivieren…"
+microphone_allow = "Mikrofonzugriff erlauben…"
+microphone_turn_on = "Mikrofonzugriff in den Einstellungen aktivieren…"
+
+[overlay.start]
+instant = "Instant-Modus: Link zum Teilen aufnehmen"
+instant_sign_in = "Instant-Modus: Zum Aufnehmen anmelden"
+sign_in = "Zum Nutzen anmelden"
+start_recording = "Aufnahme starten"
+studio = "Studio-Modus: Lokal aufnehmen und bearbeiten"
+take_screenshot = "Bildschirmfoto aufnehmen"
+
+[permission.guide]
+accessibility_body = "Legen Sie es oben in der Liste „Bedienungshilfen“ ab und achten Sie darauf, dass der Schalter aktiviert ist."
+screen_body = "Legen Sie es oben in der Liste „Bildschirm- & Systemaudioaufnahme“ ab und achten Sie darauf, dass der Schalter aktiviert ist."
+title = "Ziehen Sie Cap in die Liste"
+
+[permission.name]
+accessibility = "Bedienungshilfen"
+camera = "Kamera"
+microphone = "Mikrofon"
+screen_recording = "Bildschirmaufnahme"
+
+[permission.onboarding]
+open_settings_again = "Systemeinstellungen erneut öffnen"
+skip = "Vorerst überspringen"
+switch_on_title = "Cap in den Systemeinstellungen aktivieren"
+
+[permission.onboarding.accessibility]
+allow = "Bedienungshilfen erlauben"
+body = "Mit Bedienungshilfen sieht Cap Ihre Klicks und Ihren Mauszeiger, nur auf diesem Mac, damit der automatische Zoom weiß, wohin er schauen soll."
+done_body = "Der automatische Zoom kann Ihren Klicks folgen."
+done_title = "Bedienungshilfen sind aktiviert"
+title = "Lassen Sie Cap Ihrem Mauszeiger folgen"
+
+[permission.onboarding.all_set]
+body = "Cap hat alles, was es braucht. Als Nächstes ein kurzer Blick darauf, was es kann."
+regained = "Danke. Cap kann wieder aufnehmen."
+title = "Alles bereit"
+
+[permission.onboarding.camera]
+allow = "Kamera erlauben"
+body = "Zeigen Sie sich in einer Ecke Ihrer Aufnahmen. Überspringen Sie dies, wenn Sie es nicht brauchen."
+done_body = "Sie können Ihre Kamera zu jeder Aufnahme hinzufügen."
+done_title = "Kamera ist aktiviert"
+title = "Lassen Sie Cap Sie sehen"
+
+[permission.onboarding.checklist]
+lede = "macOS bittet Sie zuerst, ein paar Dinge zu erlauben. Das dauert nur eine Minute."
+regained_lede = "In den Systemeinstellungen wurde etwas deaktiviert. Aktivieren Sie es wieder, um weiter aufzunehmen."
+regained_title = "Cap benötigt eine Berechtigung zurück"
+title = "Machen wir Cap startklar"
+
+[permission.onboarding.hint]
+drag_into_list = "Ziehen Sie Cap aus dem Feld unter den Systemeinstellungen in die Liste. Schon aufgeführt? Dann einfach aktivieren."
+find_in_list = "Suchen Sie Cap in der Liste und aktivieren Sie es. Wenn macOS zuerst gefragt hat, wählen Sie „Systemeinstellungen öffnen“."
+no_prompt = "Keine Abfrage erschienen? Aktivieren Sie Cap in den Systemeinstellungen."
+open_settings = "Öffnen Sie die Systemeinstellungen, suchen Sie Cap in der Liste und aktivieren Sie es."
+turned_off = "Dies wurde zuvor deaktiviert. Aktivieren Sie Cap daher in den Systemeinstellungen oder überspringen Sie es vorerst."
+
+[permission.onboarding.microphone]
+allow = "Mikrofon erlauben"
+body = "Fügen Sie Ihren Aufnahmen Ihre Stimme hinzu. Sie können dies überspringen und später aktivieren."
+done_body = "Ihre Stimme kann in Ihren Aufnahmen zu hören sein."
+done_title = "Mikrofon ist aktiviert"
+title = "Lassen Sie Cap Sie hören"
+
+[permission.onboarding.relaunch]
+body = "macOS aktiviert die Bildschirmaufnahme, sobald Cap neu startet. Sie machen genau hier weiter."
+button = "Neu starten"
+hint = "Aktiviert, aber es wartet noch? Starten Sie Cap neu, um es zu übernehmen."
+later = "macOS übernimmt dies nach einem Neustart von Cap. Das können Sie tun, sobald Sie hier fertig sind."
+title = "Ein Neustart, und alles ist bereit"
+
+[permission.onboarding.screen]
+allow = "Bildschirmaufnahme erlauben"
+body = "Mit der Bildschirmaufnahme kann Cap Ihre Bildschirme, Fenster und das Systemaudio aufnehmen."
+done_body = "Cap kann Ihren Bildschirm aufnehmen."
+done_title = "Bildschirmaufnahme ist aktiviert"
+title = "Lassen Sie Cap Ihren Bildschirm sehen"
+
+[permission.onboarding.status]
+allowed = "Erlaubt"
+off = "In den Systemeinstellungen deaktiviert"
+optional = "Optional"
+required = "Erforderlich"
+skipped = "Vorerst übersprungen"
+
+[permission.onboarding.waiting]
+prompt = "Wählen Sie „Erlauben“ in der macOS-Abfrage"
+system_settings = "Warten auf die Systemeinstellungen"
+
+[screenshot_editor]
+loading_preview = "Vorschau wird geladen..."
+zoom_in = "Vergrößern"
+zoom_out = "Verkleinern"
+
+[screenshot_editor.annotation]
+default_text = "Text"
+done = "Fertig"
+fill = "Füllung"
+intensity = "Stärke"
+mask_style = "Stil"
+pixelate = "Verpixeln"
+stroke = "Kontur"
+transparent = "Transparent"
+
+[screenshot_editor.aspect]
+auto = "Auto"
+classic = "Klassisch ⋅4:3"
+square = "Quadratisch ⋅1:1"
+tall = "Hoch ⋅3:4"
+vertical = "Vertikal ⋅9:16"
+wide = "Breit ⋅16:9"
+
+[screenshot_editor.background]
+animated_gradient = "Der animierte Verlauf wird bei Bildschirmfotos als Standbild dargestellt. Wählen Sie einen anderen Hintergrund, um ihn zu ersetzen."
+blur_title = "Hintergrundunschärfe"
+choose_image = "Klicken Sie zum Auswählen oder ziehen Sie ein Bild hierher"
+color = "Farbe"
+gradient = "Verlauf"
+image = "Bild"
+image_files = "Bild"
+image_title = "Hintergrundbild"
+wallpaper = "Wallpaper"
+
+[screenshot_editor.corner]
+rounded = "Abgerundet"
+squircle = "Squircle"
+style = "ECKENSTIL"
+
+[screenshot_editor.crop]
+full = "Ganz"
+loading_frame = "Bild wird geladen…"
+position = "Position"
+
+[screenshot_editor.error]
+encode = "Das exportierte Bildschirmfoto konnte nicht kodiert werden: {error}"
+load_meta = "Metadaten des Bildschirmfotos konnten nicht geladen werden: {error}"
+load_metadata = "Metadaten des Bildschirmfotos konnten nicht geladen werden: {error}"
+no_image = "Kein PNG in {path} gefunden"
+not_screenshot = "Kein Bildschirmfoto-Paket"
+open_image = "Bild konnte nicht geöffnet werden: {error}"
+renderer_failed = "Der GPU-Renderer konnte nicht starten: {error}"
+renderer_not_running = "Der Bildschirmfoto-Renderer läuft nicht"
+renderer_stopped = "Der Renderer wurde vor dem Ende des Exports beendet"
+save_project = "Fehler beim Speichern des Projekts: {error}"
+serialize = "Die Bildschirmfoto-Konfiguration konnte nicht serialisiert werden: {error}"
+sign_in_to_share = "Melden Sie sich im Browser bei Cap an und teilen Sie dann erneut"
+too_large = "Die Bildgröße überschreitet das Maximum: {width}x{height}"
+upgrade_required = "Für diese Funktion ist ein höherer Tarif erforderlich"
+upload_task = "Der Upload ist fehlgeschlagen: {error}"
+
+[screenshot_editor.header]
+aspect_ratio = "Seitenverhältnis"
+copy = "In die Zwischenablage kopieren"
+crop_image = "Bild zuschneiden"
+more_actions = "Weitere Aktionen"
+
+[screenshot_editor.layers]
+empty = "Noch keine Ebenen"
+empty_hint = "Fügen Sie mit den Werkzeugen oben Anmerkungen hinzu"
+reorder_hint = "Zum Sortieren ziehen • Oben = vorne"
+title = "Ebenen"
+
+[screenshot_editor.menu]
+delete = "Löschen"
+open_folder = "Ordner öffnen"
+
+[screenshot_editor.share]
+create_link = "Link zum Teilen erstellen"
+preparing = "Upload wird vorbereitet"
+rendering = "Bildschirmfoto wird gerendert"
+uploading = "Bildschirmfoto wird hochgeladen"
+
+[screenshot_editor.style]
+advanced_shadow = "Erweiterte Schatteneinstellungen"
+background = "Hintergrund"
+blur = "Unschärfe"
+border = "Rahmen"
+color = "Farbe"
+corner_rounding = "Eckenrundung"
+opacity = "Deckkraft"
+padding = "Innenabstand"
+rounding = "Rundung"
+shadow = "Schatten"
+size_label = "Größe"
+width = "Breite"
+
+[screenshot_editor.toast]
+copied = "Bildschirmfoto in die Zwischenablage kopiert!"
+link_copied = "Link zum Teilen in die Zwischenablage kopiert"
+saved = "Bildschirmfoto gespeichert!"
+
+[screenshot_editor.tool]
+arrow = "Pfeil"
+circle = "Kreis"
+draw = "Zeichnen"
+mask = "Maske"
+rectangle = "Rechteck"
+select = "Auswählen"
+text_label = "Text"
+
+[transcription.download]
+complete = "Download abgeschlossen"
+failed = "Download fehlgeschlagen: {error}"
+file_progress = "{file} wird geladen: {percent} %"
+preparing = "Modell-Download wird vorbereitet"
+progress = "Modell wird geladen: {percent} %"
+
+[transcription.error]
+intel_mac = "Parakeet-Modelle sind auf Intel-Macs nicht verfügbar. Verwenden Sie stattdessen ein Whisper-Modell"
+model_load = "Das Untertitelmodell konnte nicht geladen werden. Laden Sie es erneut herunter"
+model_missing = "Untertitelmodell nicht gefunden. Bitte laden Sie es zuerst herunter"
+no_audio = "Keine Audiospur in der Videodatei gefunden"
+unsupported_language = "Die Modelle „Empfohlen“ und „Hohe Genauigkeit“ transkribieren nur Englisch und 24 weitere europäische Sprachen. Laden Sie das Modell „Klein“ oder „Mittel“ herunter, um diese Sprache zu untertiteln"
+
+[upload.status]
+failed = "Upload benötigt Aufmerksamkeit"
+paused = "Upload pausiert"
+prepared = "Upload vorbereitet"
+processing = "Upload wird verarbeitet"
+retrying = "Upload wird wiederholt"
+sign_in = "Zum erneuten Hochladen anmelden"
+uploaded = "Hochgeladen"
+uploading = "Wird hochgeladen"

@@ -1312,3 +1312,381 @@ description = "Choisissez si Cap télécharge les mises à jour automatiquement.
 label = "Téléchargements de mises à jour"
 manual = "Demander d'abord"
 never = "Jamais"
+
+[auth]
+sign_in_failed = "Échec de la connexion"
+
+[diagnostics]
+already_running = "Un diagnostic est déjà en cours."
+mode_both = "Les deux"
+
+[diagnostics.error]
+create_folder = "Impossible de créer le dossier de diagnostic : {error}"
+exited = "L'autotest s'est arrêté avec {status}"
+no_output = "L'autotest n'a produit aucun flux de sortie"
+serialize = "Impossible de sérialiser le rapport : {error}"
+start_failed = "Impossible de lancer {program} : {error}"
+upload_logs = "Impossible d'envoyer les journaux : {error}"
+upload_status = "Échec de l'envoi, statut : {status}"
+wait_failed = "Impossible d'attendre la fin de l'autotest : {error}"
+write_failed = "Impossible d'écrire {path} : {error}"
+
+[diagnostics.stage]
+analyzing = "Analyse de l'enregistrement..."
+analyzing_instant = "Analyse de l'enregistrement Instant..."
+analyzing_studio = "Analyse de l'enregistrement Studio..."
+cancelling = "Annulation..."
+collecting = "Collecte des informations système..."
+done = "Finalisation du test de synchronisation..."
+exporting = "Export de l'enregistrement..."
+exporting_instant = "Export de l'enregistrement Instant..."
+exporting_studio = "Export de l'enregistrement Studio..."
+finalizing = "Finalisation de l'enregistrement..."
+finalizing_instant = "Finalisation de l'enregistrement Instant..."
+finalizing_studio = "Finalisation de l'enregistrement Studio..."
+pattern = "Lecture de la mire de test..."
+pattern_instant = "Lecture de la mire de test (Instant)..."
+pattern_studio = "Lecture de la mire de test (Studio)..."
+preparing = "Préparation du test..."
+preparing_instant = "Préparation du test Instant..."
+preparing_studio = "Préparation du test Studio..."
+recording = "Enregistrement du test..."
+recording_instant = "Enregistrement du test Instant..."
+recording_studio = "Enregistrement du test Studio..."
+starting = "Démarrage du diagnostic..."
+
+[dialog]
+no_microphone_body = "Cet enregistrement n'inclura pas votre voix."
+open_recording_failed = "Impossible d'ouvrir cet enregistrement : {error}"
+
+[dialog.capture]
+approve_shortcut = "Approuvez un raccourci d'enregistrement, ou activez l'icône d'arrêt de Cap dans la zone de notification lorsqu'elle apparaît. L'enregistrement n'a pas commencé."
+area_unavailable = "La zone sélectionnée a changé ou n'est plus disponible. Sélectionnez-la à nouveau."
+camera_needs_x11 = "Sous Linux, les incrustations de caméra en mode Instant nécessitent un bureau X11"
+camera_notice = "Cap masquera son aperçu de caméra et ses commandes d'enregistrement. La caméra sélectionnée continuera d'être enregistrée sur une piste distincte modifiable."
+camera_notice_instant = "Cap masquera son aperçu et ses commandes. La caméra sélectionnée apparaîtra à l'emplacement de son aperçu, avec la forme et les effets choisis. Gardez tout l'aperçu dans la zone de capture. Ouvrir Cap arrêtera cet enregistrement Instant avant d'afficher ses commandes."
+camera_outside_area = "Placez tout l'aperçu de la caméra dans la zone de capture avant de lancer l'enregistrement Instant"
+camera_preview_closed = "Ouvrez l'aperçu de la caméra sélectionnée avant l'enregistrement Instant"
+cleanup_incomplete = "Le nettoyage de l'enregistrement est incomplet : {error}. Un nouvel enregistrement est bloqué."
+devices_changed = "Les appareils sélectionnés ont changé. Recommencez pour confirmer les nouvelles entrées d'enregistrement."
+devices_changed_before_start = "Les appareils sélectionnés ont changé avant le début de l'enregistrement. Recommencez pour confirmer les entrées."
+shortcut_conflict = "Ctrl+Shift+F9 est attribué à une autre action de Cap. Modifiez ce raccourci avant d'enregistrer."
+shortcut_description = "Lancer ou arrêter cet enregistrement Cap"
+shortcut_hint = "Appuyez sur {shortcut} puis relâchez pour démarrer. Utilisez le même raccourci pour arrêter. Ce raccourci temporaire ne modifie pas vos réglages."
+tray_stop_hint = "Activez l'icône d'arrêt de Cap dans la zone de notification pour démarrer. Activez-la à nouveau pour arrêter. L'enregistrement ne commencera pas tant que vous n'aurez pas utilisé cette commande."
+window_unavailable = "La fenêtre sélectionnée n'est plus disponible. Sélectionnez-la à nouveau."
+
+[dialog.clipboard]
+copy_file = "Impossible de copier le fichier dans le presse-papiers : {error}"
+copy_file_failed = "Impossible de copier le fichier dans le presse-papiers"
+copy_image = "Impossible de copier l'image dans le presse-papiers : {error}"
+copy_image_failed = "Impossible de copier l'image dans le presse-papiers"
+not_a_file = "Seuls des fichiers peuvent être copiés dans le presse-papiers"
+unavailable = "Presse-papiers indisponible"
+unavailable_error = "Presse-papiers indisponible : {error}"
+
+[dialog.delete_recording]
+already_deleting = "Cet enregistrement est déjà en cours de suppression."
+close_failed = "Impossible de fermer l'éditeur : {error}"
+editor_changed = "L'éditeur a changé pendant la confirmation de la suppression. L'enregistrement n'a pas été supprimé."
+editor_closed = "L'éditeur est déjà fermé. L'enregistrement n'a pas été supprimé."
+failed = "La suppression de l'enregistrement a échoué : {error}"
+failed_title = "Impossible de supprimer l'enregistrement"
+finishing_body = "Cap attend la fin du nettoyage de l'enregistrement avant de terminer cette suppression."
+finishing_title = "La suppression est toujours en cours"
+in_use = "Cet enregistrement est encore utilisé. Terminez ou annulez son envoi, puis réessayez : {error}"
+outside_library = "Cet enregistrement se trouve hors de la bibliothèque d'enregistrements. Ses fichiers n'ont pas été modifiés."
+recording_active = "Terminez ou annulez l'enregistrement avant de supprimer ce projet."
+retained_title = "Enregistrement conservé"
+
+[dialog.file]
+audio_filter = "Audio"
+busy = "Une boîte de dialogue de fichier est déjà ouverte. Terminez-la ou annulez-la avant de réessayer."
+export_filter = "Export"
+failed = "La boîte de dialogue de fichier n'a pas pu aboutir : {error}"
+images_filter = "Images"
+unavailable_title = "Boîte de dialogue de fichier indisponible"
+unconfirmed = "Cap n'a pas pu confirmer la fermeture de la boîte de dialogue de fichier. Fermez toute boîte de dialogue restante et redémarrez Cap avant de réessayer."
+
+[dialog.mode_select]
+instant = "Partagez instantanément avec un lien. L'envoi se fait pendant l'enregistrement."
+screenshot = "Prenez et annotez des captures d'écran instantanément."
+studio = "Enregistrement local en qualité maximale, à modifier plus tard."
+subtitle = "Choisissez comment capturer votre écran"
+title = "Choisir le mode d'enregistrement"
+
+[dialog.storage]
+stopped_kept = "L'enregistrement s'est arrêté, car l'espace de stockage est faible. Vos fichiers ont été conservés. Libérez de l'espace, puis récupérez l'enregistrement ci-dessous."
+stopped_saved = "L'enregistrement s'est arrêté, car l'espace de stockage est faible. Votre enregistrement a été sauvegardé."
+stopping = "Espace de stockage faible. Arrêt et sauvegarde de votre enregistrement…"
+
+[dialog.teleprompter]
+cue_markers = "Repères"
+hidden = "Cette fenêtre est masquée dans les enregistrements Cap"
+mirror = "Texte en miroir"
+paused = "Défilement en pause avec l'enregistrement"
+placeholder = "Collez ou saisissez votre script…"
+
+[import]
+error_title = "Erreur d'importation"
+image_failed = "Impossible d'importer l'image : {error}"
+unsupported = "Fichier multimédia non pris en charge."
+video_failed = "Impossible d'importer la vidéo : {error}"
+
+[import.filter]
+image = "Fichiers image"
+media = "Fichiers multimédias"
+video = "Fichiers vidéo"
+
+[import.progress]
+analyzing = "Analyse du fichier vidéo..."
+complete = "Importation terminée !"
+converting = "Conversion de la vidéo... {percent} %"
+image = "Importation de l'image..."
+metadata = "Création des métadonnées du projet..."
+starting = "Démarrage de la conversion..."
+
+[overlay]
+choose_mode = "Choisir le mode d'enregistrement"
+countdown_tooltip = "Compte à rebours de l'enregistrement"
+display_fallback = "Écran {id}"
+
+[overlay.area]
+draw = "Dessinez une zone"
+free_ratio = "Libre"
+hint = "Cliquez et faites glisser pour sélectionner une zone"
+minimum_size = "La taille minimale est de {width} x {height}"
+too_small = "{width} x {height} est trop petit"
+
+[overlay.camera_only]
+description = "Enregistrez uniquement avec votre caméra et votre micro"
+select_camera = "Veuillez choisir une caméra"
+
+[overlay.device]
+camera_allow = "Autoriser l'accès à la caméra…"
+camera_turn_on = "Activer l'accès à la caméra dans les réglages…"
+microphone_allow = "Autoriser l'accès au micro…"
+microphone_turn_on = "Activer l'accès au micro dans les réglages…"
+
+[overlay.start]
+instant = "Mode Instant : enregistrer un lien de partage"
+instant_sign_in = "Mode Instant : connectez-vous pour enregistrer"
+sign_in = "Se connecter pour utiliser"
+start_recording = "Lancer l'enregistrement"
+studio = "Mode Studio : enregistrer et modifier en local"
+take_screenshot = "Prendre une capture d'écran"
+
+[permission.guide]
+accessibility_body = "Déposez-le dans la liste « Accessibilité » ci-dessus, puis vérifiez que son interrupteur est activé."
+screen_body = "Déposez-le dans la liste « Enregistrement de l'écran et de l'audio du système » ci-dessus, puis vérifiez que son interrupteur est activé."
+title = "Faites glisser Cap dans la liste"
+
+[permission.name]
+accessibility = "Accessibilité"
+camera = "Caméra"
+microphone = "Micro"
+screen_recording = "Enregistrement de l'écran"
+
+[permission.onboarding]
+open_settings_again = "Rouvrir Réglages Système"
+skip = "Ignorer pour l'instant"
+switch_on_title = "Activez Cap dans Réglages Système"
+
+[permission.onboarding.accessibility]
+allow = "Autoriser l'accessibilité"
+body = "L'accessibilité permet à Cap de voir vos clics et votre curseur, uniquement sur ce Mac, pour que le zoom automatique sache où regarder."
+done_body = "Le zoom automatique peut suivre vos clics."
+done_title = "L'accessibilité est activée"
+title = "Laissez Cap suivre votre curseur"
+
+[permission.onboarding.all_set]
+body = "Cap a tout ce qu'il lui faut. Voyons maintenant rapidement ce qu'il sait faire."
+regained = "Merci. Cap peut de nouveau enregistrer."
+title = "Tout est prêt"
+
+[permission.onboarding.camera]
+allow = "Autoriser la caméra"
+body = "Apparaissez dans un coin de vos enregistrements. Ignorez cette étape si vous n'en avez pas besoin."
+done_body = "Vous pouvez ajouter votre caméra à n'importe quel enregistrement."
+done_title = "La caméra est activée"
+title = "Laissez Cap vous voir"
+
+[permission.onboarding.checklist]
+lede = "macOS vous demande d'abord d'autoriser quelques éléments. Cela ne prend qu'une minute."
+regained_lede = "Un élément a été désactivé dans Réglages Système. Réactivez-le pour continuer à enregistrer."
+regained_title = "Cap a besoin de récupérer une autorisation"
+title = "Préparons Cap"
+
+[permission.onboarding.hint]
+drag_into_list = "Faites glisser Cap depuis le panneau sous Réglages Système vers la liste. Déjà dans la liste ? Activez-le simplement."
+find_in_list = "Trouvez Cap dans la liste et activez-le. Si macOS vous a d'abord posé la question, choisissez « Ouvrir Réglages Système »."
+no_prompt = "Aucune demande n'est apparue ? Activez Cap dans Réglages Système."
+open_settings = "Ouvrez Réglages Système, trouvez Cap dans la liste et activez-le."
+turned_off = "Cette autorisation a été désactivée auparavant : activez Cap dans Réglages Système, ou ignorez cette étape pour l'instant."
+
+[permission.onboarding.microphone]
+allow = "Autoriser le micro"
+body = "Ajoutez votre voix à vos enregistrements. Vous pouvez ignorer cette étape et l'activer plus tard."
+done_body = "Votre voix peut figurer dans vos enregistrements."
+done_title = "Le micro est activé"
+title = "Laissez Cap vous entendre"
+
+[permission.onboarding.relaunch]
+body = "macOS active l'enregistrement de l'écran une fois Cap redémarré. Vous reprendrez ici même."
+button = "Relancer"
+hint = "Activé mais toujours en attente ? Redémarrez Cap pour l'appliquer."
+later = "macOS l'applique après le redémarrage de Cap. Vous pourrez le faire une fois terminé ici."
+title = "Un redémarrage et c'est prêt"
+
+[permission.onboarding.screen]
+allow = "Autoriser l'enregistrement de l'écran"
+body = "L'enregistrement de l'écran permet à Cap de capturer vos écrans, vos fenêtres et l'audio du système."
+done_body = "Cap peut capturer votre écran."
+done_title = "L'enregistrement de l'écran est activé"
+title = "Laissez Cap voir votre écran"
+
+[permission.onboarding.status]
+allowed = "Autorisé"
+off = "Désactivé dans Réglages Système"
+optional = "Facultatif"
+required = "Obligatoire"
+skipped = "Ignoré pour l'instant"
+
+[permission.onboarding.waiting]
+prompt = "Choisissez « Autoriser » dans la demande de macOS"
+system_settings = "En attente de Réglages Système"
+
+[screenshot_editor]
+loading_preview = "Chargement de l'aperçu..."
+zoom_in = "Zoom avant"
+zoom_out = "Zoom arrière"
+
+[screenshot_editor.annotation]
+default_text = "Texte"
+done = "Terminé"
+fill = "Remplissage"
+intensity = "Intensité"
+mask_style = "Style"
+pixelate = "Pixeliser"
+stroke = "Contour"
+transparent = "Transparent"
+
+[screenshot_editor.aspect]
+auto = "Auto"
+classic = "Classique ⋅4:3"
+square = "Carré ⋅1:1"
+tall = "Haut ⋅3:4"
+vertical = "Vertical ⋅9:16"
+wide = "Large ⋅16:9"
+
+[screenshot_editor.background]
+animated_gradient = "Le dégradé animé est rendu comme une image fixe dans les captures d'écran. Choisissez un autre arrière-plan pour le remplacer."
+blur_title = "Flou de l'arrière-plan"
+choose_image = "Cliquez pour choisir ou glissez-déposez une image"
+color = "Couleur"
+gradient = "Dégradé"
+image = "Image"
+image_files = "Image"
+image_title = "Image d'arrière-plan"
+wallpaper = "Fond d'écran"
+
+[screenshot_editor.corner]
+rounded = "Arrondi"
+squircle = "Squircle"
+style = "STYLE DES COINS"
+
+[screenshot_editor.crop]
+full = "Entier"
+loading_frame = "Chargement de l'image…"
+position = "Position"
+
+[screenshot_editor.error]
+encode = "Impossible d'encoder l'export de la capture d'écran : {error}"
+load_meta = "Impossible de charger les métadonnées de la capture d'écran : {error}"
+load_metadata = "Impossible de charger les métadonnées de la capture d'écran : {error}"
+no_image = "Aucun PNG trouvé dans {path}"
+not_screenshot = "Ce n'est pas un dossier de capture d'écran"
+open_image = "Impossible d'ouvrir l'image : {error}"
+renderer_failed = "Le moteur de rendu GPU n'a pas pu démarrer : {error}"
+renderer_not_running = "Le moteur de rendu des captures d'écran n'est pas lancé"
+renderer_stopped = "Le moteur de rendu s'est arrêté avant la fin de l'export"
+save_project = "Erreur lors de l'enregistrement du projet : {error}"
+serialize = "Impossible de sérialiser la configuration de la capture d'écran : {error}"
+sign_in_to_share = "Connectez-vous à Cap dans votre navigateur, puis partagez à nouveau"
+too_large = "Les dimensions de l'image dépassent le maximum : {width}x{height}"
+upgrade_required = "Cette fonctionnalité nécessite une offre supérieure"
+upload_task = "La tâche d'envoi a échoué : {error}"
+
+[screenshot_editor.header]
+aspect_ratio = "Format"
+copy = "Copier dans le presse-papiers"
+crop_image = "Recadrer l'image"
+more_actions = "Plus d'actions"
+
+[screenshot_editor.layers]
+empty = "Aucun calque pour l'instant"
+empty_hint = "Utilisez les outils ci-dessus pour ajouter des annotations"
+reorder_hint = "Glissez pour réorganiser • Haut = premier plan"
+title = "Calques"
+
+[screenshot_editor.menu]
+delete = "Supprimer"
+open_folder = "Ouvrir le dossier"
+
+[screenshot_editor.share]
+create_link = "Créer un lien de partage"
+preparing = "Préparation de l'envoi"
+rendering = "Rendu de la capture d'écran"
+uploading = "Envoi de la capture d'écran"
+
+[screenshot_editor.style]
+advanced_shadow = "Réglages avancés de l'ombre"
+background = "Arrière-plan"
+blur = "Flou"
+border = "Bordure"
+color = "Couleur"
+corner_rounding = "Arrondi des coins"
+opacity = "Opacité"
+padding = "Marge"
+rounding = "Arrondi"
+shadow = "Ombre"
+size_label = "Taille"
+width = "Largeur"
+
+[screenshot_editor.toast]
+copied = "Capture d'écran copiée dans le presse-papiers !"
+link_copied = "Lien de partage copié dans le presse-papiers"
+saved = "Capture d'écran enregistrée !"
+
+[screenshot_editor.tool]
+arrow = "Flèche"
+circle = "Cercle"
+draw = "Dessin"
+mask = "Masque"
+rectangle = "Rectangle"
+select = "Sélection"
+text_label = "Texte"
+
+[transcription.download]
+complete = "Téléchargement terminé"
+failed = "Échec du téléchargement : {error}"
+file_progress = "Téléchargement de {file} : {percent} %"
+preparing = "Préparation du téléchargement du modèle"
+progress = "Téléchargement du modèle : {percent} %"
+
+[transcription.error]
+intel_mac = "Les modèles Parakeet ne sont pas disponibles sur les Mac Intel. Utilisez plutôt un modèle Whisper"
+model_load = "Impossible de charger le modèle de sous-titres. Essayez de le télécharger à nouveau"
+model_missing = "Modèle de sous-titres introuvable. Téléchargez-le d'abord"
+no_audio = "Aucun audio trouvé dans le fichier vidéo"
+unsupported_language = "Les modèles Recommandé et Haute précision ne transcrivent que l'anglais et 24 autres langues européennes. Téléchargez le modèle Petit ou Moyen pour sous-titrer cette langue"
+
+[upload.status]
+failed = "L'envoi nécessite votre attention"
+paused = "Envoi en pause"
+prepared = "Envoi préparé"
+processing = "Traitement de l'envoi"
+retrying = "L'envoi va être relancé"
+sign_in = "Connectez-vous pour relancer l'envoi"
+uploaded = "Envoyé"
+uploading = "Envoi en cours"

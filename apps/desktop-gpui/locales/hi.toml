@@ -1312,3 +1312,381 @@ description = "चुनें कि Cap अपडेट स्वचालि�
 label = "अपडेट डाउनलोड"
 manual = "पहले पूछें"
 never = "कभी नहीं"
+
+[auth]
+sign_in_failed = "साइन इन विफल रहा"
+
+[diagnostics]
+already_running = "एक डायग्नॉस्टिक पहले से चल रहा है।"
+mode_both = "दोनों"
+
+[diagnostics.error]
+create_folder = "डायग्नॉस्टिक फ़ोल्डर नहीं बन सका: {error}"
+exited = "सेल्फ़-टेस्ट {status} के साथ बंद हुआ"
+no_output = "सेल्फ़-टेस्ट से कोई आउटपुट स्ट्रीम नहीं मिली"
+serialize = "रिपोर्ट सीरियलाइज़ नहीं हो सकी: {error}"
+start_failed = "{program} शुरू नहीं हो सका: {error}"
+upload_logs = "लॉग अपलोड नहीं हो सके: {error}"
+upload_status = "अपलोड विफल, स्टेटस: {status}"
+wait_failed = "सेल्फ़-टेस्ट के पूरा होने का इंतज़ार नहीं हो सका: {error}"
+write_failed = "{path} नहीं लिखा जा सका: {error}"
+
+[diagnostics.stage]
+analyzing = "रिकॉर्डिंग का विश्लेषण हो रहा है..."
+analyzing_instant = "Instant रिकॉर्डिंग का विश्लेषण हो रहा है..."
+analyzing_studio = "Studio रिकॉर्डिंग का विश्लेषण हो रहा है..."
+cancelling = "रद्द हो रहा है..."
+collecting = "सिस्टम जानकारी इकट्ठा हो रही है..."
+done = "सिंक टेस्ट पूरा हो रहा है..."
+exporting = "रिकॉर्डिंग एक्सपोर्ट हो रही है..."
+exporting_instant = "Instant रिकॉर्डिंग एक्सपोर्ट हो रही है..."
+exporting_studio = "Studio रिकॉर्डिंग एक्सपोर्ट हो रही है..."
+finalizing = "रिकॉर्डिंग पूरी की जा रही है..."
+finalizing_instant = "Instant रिकॉर्डिंग पूरी की जा रही है..."
+finalizing_studio = "Studio रिकॉर्डिंग पूरी की जा रही है..."
+pattern = "टेस्ट पैटर्न चल रहा है..."
+pattern_instant = "टेस्ट पैटर्न चल रहा है (Instant)..."
+pattern_studio = "टेस्ट पैटर्न चल रहा है (Studio)..."
+preparing = "टेस्ट की तैयारी हो रही है..."
+preparing_instant = "Instant टेस्ट की तैयारी हो रही है..."
+preparing_studio = "Studio टेस्ट की तैयारी हो रही है..."
+recording = "टेस्ट रिकॉर्ड हो रहा है..."
+recording_instant = "Instant टेस्ट रिकॉर्ड हो रहा है..."
+recording_studio = "Studio टेस्ट रिकॉर्ड हो रहा है..."
+starting = "डायग्नॉस्टिक शुरू हो रहा है..."
+
+[dialog]
+no_microphone_body = "इस रिकॉर्डिंग में आपकी आवाज़ शामिल नहीं होगी।"
+open_recording_failed = "यह रिकॉर्डिंग नहीं खुल सकी: {error}"
+
+[dialog.capture]
+approve_shortcut = "रिकॉर्डिंग शॉर्टकट को मंज़ूरी दें, या Cap Stop ट्रे आइकन दिखने पर उसे सक्रिय करें। रिकॉर्डिंग अभी शुरू नहीं हुई है।"
+area_unavailable = "चुना गया क्षेत्र बदल गया है या अब उपलब्ध नहीं है। इसे फिर से चुनें।"
+camera_needs_x11 = "Linux पर Instant कैमरा ओवरले के लिए X11 डेस्कटॉप चाहिए"
+camera_notice = "Cap अपना कैमरा प्रीव्यू और रिकॉर्डिंग कंट्रोल छिपा देगा। चुना गया कैमरा एक अलग, एडिट करने लायक ट्रैक के रूप में रिकॉर्ड होता रहेगा।"
+camera_notice_instant = "Cap अपना प्रीव्यू और कंट्रोल छिपा देगा। चुना गया कैमरा चुने गए आकार और इफ़ेक्ट के साथ अपने प्रीव्यू की जगह पर दिखेगा। पूरा प्रीव्यू कैप्चर क्षेत्र के अंदर रखें। Cap खोलने पर कंट्रोल दिखाने से पहले यह Instant रिकॉर्डिंग रुक जाएगी।"
+camera_outside_area = "Instant रिकॉर्डिंग शुरू करने से पहले पूरा कैमरा प्रीव्यू कैप्चर क्षेत्र के अंदर ले जाएँ"
+camera_preview_closed = "Instant रिकॉर्डिंग से पहले चुने गए कैमरा का प्रीव्यू खोलें"
+cleanup_incomplete = "रिकॉर्डिंग की सफ़ाई अधूरी है: {error}। नई रिकॉर्डिंग रोकी गई है।"
+devices_changed = "चुने गए डिवाइस बदल गए। नए रिकॉर्डिंग इनपुट की पुष्टि के लिए फिर से शुरू करें।"
+devices_changed_before_start = "रिकॉर्डिंग शुरू होने से पहले चुने गए डिवाइस बदल गए। इनपुट की पुष्टि के लिए फिर से शुरू करें।"
+shortcut_conflict = "Ctrl+Shift+F9 किसी दूसरे Cap एक्शन को दिया गया है। रिकॉर्ड करने से पहले वह शॉर्टकट बदलें।"
+shortcut_description = "यह Cap रिकॉर्डिंग शुरू या बंद करें"
+shortcut_hint = "शुरू करने के लिए {shortcut} दबाकर छोड़ें। रोकने के लिए वही शॉर्टकट इस्तेमाल करें। यह अस्थायी शॉर्टकट आपकी सेटिंग्स नहीं बदलता।"
+tray_stop_hint = "शुरू करने के लिए Cap Stop ट्रे आइकन सक्रिय करें। रोकने के लिए वही आइकन फिर से सक्रिय करें। जब तक आप उस कंट्रोल का इस्तेमाल नहीं करते, रिकॉर्डिंग शुरू नहीं होगी।"
+window_unavailable = "चुनी गई विंडो अब उपलब्ध नहीं है। इसे फिर से चुनें।"
+
+[dialog.clipboard]
+copy_file = "फ़ाइल क्लिपबोर्ड पर कॉपी नहीं हो सकी: {error}"
+copy_file_failed = "फ़ाइल क्लिपबोर्ड पर कॉपी नहीं हो सकी"
+copy_image = "इमेज क्लिपबोर्ड पर कॉपी नहीं हो सकी: {error}"
+copy_image_failed = "इमेज क्लिपबोर्ड पर कॉपी नहीं हो सकी"
+not_a_file = "क्लिपबोर्ड पर सिर्फ़ फ़ाइलें कॉपी की जा सकती हैं"
+unavailable = "क्लिपबोर्ड उपलब्ध नहीं है"
+unavailable_error = "क्लिपबोर्ड उपलब्ध नहीं है: {error}"
+
+[dialog.delete_recording]
+already_deleting = "यह रिकॉर्डिंग पहले से डिलीट हो रही है।"
+close_failed = "एडिटर बंद नहीं हो सका: {error}"
+editor_changed = "डिलीट की पुष्टि के दौरान एडिटर बदल गया। रिकॉर्डिंग डिलीट नहीं हुई।"
+editor_closed = "एडिटर पहले ही बंद हो चुका है। रिकॉर्डिंग डिलीट नहीं हुई।"
+failed = "रिकॉर्डिंग डिलीट नहीं हो सकी: {error}"
+failed_title = "रिकॉर्डिंग डिलीट नहीं हो सकी"
+finishing_body = "यह डिलीट पूरा करने से पहले Cap रिकॉर्डिंग की सफ़ाई पूरी होने का इंतज़ार कर रहा है।"
+finishing_title = "डिलीट अभी पूरा हो रहा है"
+in_use = "यह रिकॉर्डिंग अभी इस्तेमाल में है। इसका अपलोड पूरा या रद्द करें और फिर कोशिश करें: {error}"
+outside_library = "यह रिकॉर्डिंग रिकॉर्डिंग लाइब्रेरी से बाहर है। इसकी फ़ाइलें नहीं बदली गईं।"
+recording_active = "यह प्रोजेक्ट डिलीट करने से पहले रिकॉर्डिंग पूरी या रद्द करें।"
+retained_title = "रिकॉर्डिंग रखी गई"
+
+[dialog.file]
+audio_filter = "ऑडियो"
+busy = "एक फ़ाइल डायलॉग पहले से खुला है। दोबारा कोशिश करने से पहले उसे पूरा या रद्द करें।"
+export_filter = "एक्सपोर्ट"
+failed = "फ़ाइल डायलॉग पूरा नहीं हो सका: {error}"
+images_filter = "इमेज"
+unavailable_title = "फ़ाइल डायलॉग उपलब्ध नहीं है"
+unconfirmed = "Cap पुष्टि नहीं कर सका कि फ़ाइल डायलॉग बंद हुआ। बचे हुए फ़ाइल डायलॉग बंद करें और दोबारा कोशिश करने से पहले Cap रीस्टार्ट करें।"
+
+[dialog.mode_select]
+instant = "लिंक से तुरंत शेयर करें। रिकॉर्ड करते समय ही अपलोड होता है।"
+screenshot = "तुरंत स्क्रीनशॉट लें और उन पर एनोटेशन जोड़ें।"
+studio = "बाद में एडिट करने के लिए सबसे अच्छी क्वालिटी में लोकल रिकॉर्डिंग।"
+subtitle = "चुनें कि आप अपनी स्क्रीन कैसे कैप्चर करना चाहते हैं"
+title = "रिकॉर्डिंग मोड चुनें"
+
+[dialog.storage]
+stopped_kept = "स्टोरेज कम होने की वजह से रिकॉर्डिंग रुक गई। आपकी रिकॉर्डिंग फ़ाइलें रखी गई हैं। जगह खाली करें, फिर नीचे रिकॉर्डिंग रिकवर करें।"
+stopped_saved = "स्टोरेज कम होने की वजह से रिकॉर्डिंग रुक गई। आपकी रिकॉर्डिंग सहेज ली गई है।"
+stopping = "स्टोरेज कम है। आपकी रिकॉर्डिंग रोककर सहेजी जा रही है…"
+
+[dialog.teleprompter]
+cue_markers = "क्यू मार्कर"
+hidden = "यह विंडो Cap रिकॉर्डिंग में नहीं दिखती"
+mirror = "टेक्स्ट मिरर करें"
+paused = "रिकॉर्डिंग के साथ स्क्रॉलिंग रुकी है"
+placeholder = "अपनी स्क्रिप्ट पेस्ट करें या लिखें…"
+
+[import]
+error_title = "इंपोर्ट त्रुटि"
+image_failed = "इमेज इंपोर्ट नहीं हो सकी: {error}"
+unsupported = "यह मीडिया फ़ाइल समर्थित नहीं है।"
+video_failed = "वीडियो इंपोर्ट नहीं हो सका: {error}"
+
+[import.filter]
+image = "इमेज फ़ाइलें"
+media = "मीडिया फ़ाइलें"
+video = "वीडियो फ़ाइलें"
+
+[import.progress]
+analyzing = "वीडियो फ़ाइल का विश्लेषण हो रहा है..."
+complete = "इंपोर्ट पूरा हुआ!"
+converting = "वीडियो कन्वर्ट हो रहा है... {percent}%"
+image = "इमेज इंपोर्ट हो रही है..."
+metadata = "प्रोजेक्ट मेटाडेटा बन रहा है..."
+starting = "कन्वर्ज़न शुरू हो रहा है..."
+
+[overlay]
+choose_mode = "रिकॉर्डिंग मोड चुनें"
+countdown_tooltip = "रिकॉर्डिंग काउंटडाउन"
+display_fallback = "डिस्प्ले {id}"
+
+[overlay.area]
+draw = "एक क्षेत्र बनाएँ"
+free_ratio = "फ़्री"
+hint = "क्षेत्र चुनने के लिए क्लिक करके खींचें"
+minimum_size = "न्यूनतम साइज़ {width} x {height} है"
+too_small = "{width} x {height} बहुत छोटा है"
+
+[overlay.camera_only]
+description = "सिर्फ़ अपने कैमरा और माइक्रोफ़ोन से रिकॉर्ड करें"
+select_camera = "कृपया एक कैमरा चुनें"
+
+[overlay.device]
+camera_allow = "कैमरा एक्सेस की अनुमति दें…"
+camera_turn_on = "सेटिंग्स में कैमरा एक्सेस चालू करें…"
+microphone_allow = "माइक्रोफ़ोन एक्सेस की अनुमति दें…"
+microphone_turn_on = "सेटिंग्स में माइक्रोफ़ोन एक्सेस चालू करें…"
+
+[overlay.start]
+instant = "Instant मोड: शेयर करने लायक लिंक रिकॉर्ड करें"
+instant_sign_in = "Instant मोड: तुरंत रिकॉर्ड करने के लिए साइन इन करें"
+sign_in = "इस्तेमाल के लिए साइन इन करें"
+start_recording = "रिकॉर्डिंग शुरू करें"
+studio = "Studio मोड: लोकल रूप से रिकॉर्ड और एडिट करें"
+take_screenshot = "स्क्रीनशॉट लें"
+
+[permission.guide]
+accessibility_body = "इसे ऊपर दी गई ऐक्सेसिबिलिटी लिस्ट में छोड़ें, फिर पक्का करें कि इसका स्विच चालू है।"
+screen_body = "इसे ऊपर दी गई स्क्रीन और सिस्टम ऑडियो रिकॉर्डिंग लिस्ट में छोड़ें, फिर पक्का करें कि इसका स्विच चालू है।"
+title = "Cap को लिस्ट में खींचें"
+
+[permission.name]
+accessibility = "ऐक्सेसिबिलिटी"
+camera = "कैमरा"
+microphone = "माइक्रोफ़ोन"
+screen_recording = "स्क्रीन रिकॉर्डिंग"
+
+[permission.onboarding]
+open_settings_again = "सिस्टम सेटिंग्स फिर से खोलें"
+skip = "अभी के लिए छोड़ें"
+switch_on_title = "सिस्टम सेटिंग्स में Cap चालू करें"
+
+[permission.onboarding.accessibility]
+allow = "ऐक्सेसिबिलिटी की अनुमति दें"
+body = "ऐक्सेसिबिलिटी से Cap सिर्फ़ इसी Mac पर आपके क्लिक और कर्सर देख पाता है, ताकि ऑटो ज़ूम को पता रहे कि कहाँ देखना है।"
+done_body = "ऑटो ज़ूम अब आपके क्लिक फ़ॉलो कर सकता है।"
+done_title = "ऐक्सेसिबिलिटी चालू है"
+title = "Cap को अपना कर्सर फ़ॉलो करने दें"
+
+[permission.onboarding.all_set]
+body = "Cap के पास ज़रूरत की हर चीज़ है। अब एक झलक देखें कि यह क्या-क्या कर सकता है।"
+regained = "धन्यवाद। Cap फिर से रिकॉर्ड कर सकता है।"
+title = "सब तैयार है"
+
+[permission.onboarding.camera]
+allow = "कैमरा की अनुमति दें"
+body = "अपनी रिकॉर्डिंग के एक कोने में खुद को दिखाएँ। ज़रूरत न हो तो इसे छोड़ दें।"
+done_body = "आप किसी भी रिकॉर्डिंग में अपना कैमरा जोड़ सकते हैं।"
+done_title = "कैमरा चालू है"
+title = "Cap को आपको देखने दें"
+
+[permission.onboarding.checklist]
+lede = "macOS पहले कुछ चीज़ों की अनुमति माँगता है। इसमें बस एक मिनट लगता है।"
+regained_lede = "सिस्टम सेटिंग्स में कुछ बंद कर दिया गया था। रिकॉर्डिंग जारी रखने के लिए इसे फिर से चालू करें।"
+regained_title = "Cap को एक अनुमति वापस चाहिए"
+title = "चलिए Cap को तैयार करें"
+
+[permission.onboarding.hint]
+drag_into_list = "सिस्टम सेटिंग्स के नीचे वाले पैनल से Cap को लिस्ट में खींचें। पहले से लिस्ट में है? बस उसे चालू कर दें।"
+find_in_list = "लिस्ट में Cap ढूँढें और उसे चालू करें। अगर macOS ने पहले पूछा था, तो ‘सिस्टम सेटिंग्स खोलें’ चुनें।"
+no_prompt = "कोई प्रॉम्प्ट नहीं दिखा? सिस्टम सेटिंग्स में Cap चालू करें।"
+open_settings = "सिस्टम सेटिंग्स खोलें, लिस्ट में Cap ढूँढें और उसे चालू करें।"
+turned_off = "इसे पहले बंद कर दिया गया था, इसलिए सिस्टम सेटिंग्स में Cap चालू करें। या अभी के लिए इसे छोड़ दें।"
+
+[permission.onboarding.microphone]
+allow = "माइक्रोफ़ोन की अनुमति दें"
+body = "अपनी रिकॉर्डिंग में अपनी आवाज़ जोड़ें। आप इसे अभी छोड़कर बाद में चालू कर सकते हैं।"
+done_body = "अब आपकी आवाज़ आपकी रिकॉर्डिंग में आ सकती है।"
+done_title = "माइक्रोफ़ोन चालू है"
+title = "Cap को आपको सुनने दें"
+
+[permission.onboarding.relaunch]
+body = "Cap के रीस्टार्ट होते ही macOS स्क्रीन रिकॉर्डिंग चालू कर देता है। आप यहीं से आगे बढ़ेंगे।"
+button = "रीलॉन्च"
+hint = "चालू कर दिया पर अब भी इंतज़ार? लागू करने के लिए Cap रीस्टार्ट करें।"
+later = "macOS इसे Cap के रीस्टार्ट होने के बाद लागू करता है। यहाँ का काम पूरा होने पर आप ऐसा कर सकते हैं।"
+title = "बस एक रीस्टार्ट और सब तैयार"
+
+[permission.onboarding.screen]
+allow = "स्क्रीन रिकॉर्डिंग की अनुमति दें"
+body = "स्क्रीन रिकॉर्डिंग से Cap आपके डिस्प्ले, विंडो और सिस्टम ऑडियो कैप्चर कर पाता है।"
+done_body = "Cap अब आपकी स्क्रीन कैप्चर कर सकता है।"
+done_title = "स्क्रीन रिकॉर्डिंग चालू है"
+title = "Cap को अपनी स्क्रीन देखने दें"
+
+[permission.onboarding.status]
+allowed = "अनुमति है"
+off = "सिस्टम सेटिंग्स में बंद"
+optional = "वैकल्पिक"
+required = "ज़रूरी"
+skipped = "अभी के लिए छोड़ा गया"
+
+[permission.onboarding.waiting]
+prompt = "macOS प्रॉम्प्ट में ‘अनुमति दें’ चुनें"
+system_settings = "सिस्टम सेटिंग्स का इंतज़ार है"
+
+[screenshot_editor]
+loading_preview = "प्रीव्यू लोड हो रहा है..."
+zoom_in = "ज़ूम इन"
+zoom_out = "ज़ूम आउट"
+
+[screenshot_editor.annotation]
+default_text = "टेक्स्ट"
+done = "हो गया"
+fill = "फ़िल"
+intensity = "तीव्रता"
+mask_style = "स्टाइल"
+pixelate = "पिक्सेलेट"
+stroke = "स्ट्रोक"
+transparent = "पारदर्शी"
+
+[screenshot_editor.aspect]
+auto = "ऑटो"
+classic = "क्लासिक ⋅4:3"
+square = "स्क्वेयर ⋅1:1"
+tall = "लंबा ⋅3:4"
+vertical = "वर्टिकल ⋅9:16"
+wide = "वाइड ⋅16:9"
+
+[screenshot_editor.background]
+animated_gradient = "स्क्रीनशॉट में एनिमेटेड ग्रेडिएंट एक स्थिर इमेज के रूप में दिखता है। इसे बदलने के लिए कोई दूसरा बैकग्राउंड चुनें।"
+blur_title = "बैकग्राउंड ब्लर"
+choose_image = "चुनने के लिए क्लिक करें या इमेज खींचकर छोड़ें"
+color = "रंग"
+gradient = "ग्रेडिएंट"
+image = "इमेज"
+image_files = "इमेज"
+image_title = "बैकग्राउंड इमेज"
+wallpaper = "वॉलपेपर"
+
+[screenshot_editor.corner]
+rounded = "गोल"
+squircle = "स्क्वर्कल"
+style = "कोने की स्टाइल"
+
+[screenshot_editor.crop]
+full = "पूरा"
+loading_frame = "फ़्रेम लोड हो रहा है…"
+position = "पोज़िशन"
+
+[screenshot_editor.error]
+encode = "स्क्रीनशॉट एक्सपोर्ट एनकोड नहीं हो सका: {error}"
+load_meta = "स्क्रीनशॉट मेटाडेटा लोड नहीं हो सका: {error}"
+load_metadata = "स्क्रीनशॉट मेटाडेटा लोड नहीं हो सका: {error}"
+no_image = "{path} में कोई PNG नहीं मिला"
+not_screenshot = "यह स्क्रीनशॉट बंडल नहीं है"
+open_image = "इमेज नहीं खुल सकी: {error}"
+renderer_failed = "GPU रेंडरर शुरू नहीं हो सका: {error}"
+renderer_not_running = "स्क्रीनशॉट रेंडरर नहीं चल रहा है"
+renderer_stopped = "एक्सपोर्ट पूरा होने से पहले रेंडरर रुक गया"
+save_project = "प्रोजेक्ट सहेजते समय त्रुटि: {error}"
+serialize = "स्क्रीनशॉट कॉन्फ़िग सीरियलाइज़ नहीं हो सका: {error}"
+sign_in_to_share = "अपने ब्राउज़र में Cap में साइन इन करें, फिर दोबारा शेयर करें"
+too_large = "इमेज का आकार सीमा से ज़्यादा है: {width}x{height}"
+upgrade_required = "इस फ़ीचर के लिए अपग्रेड किया गया प्लान चाहिए"
+upload_task = "अपलोड टास्क विफल रहा: {error}"
+
+[screenshot_editor.header]
+aspect_ratio = "आस्पेक्ट रेशियो"
+copy = "क्लिपबोर्ड पर कॉपी करें"
+crop_image = "इमेज क्रॉप करें"
+more_actions = "और कार्रवाइयाँ"
+
+[screenshot_editor.layers]
+empty = "अभी कोई लेयर नहीं"
+empty_hint = "एनोटेशन जोड़ने के लिए ऊपर दिए टूल इस्तेमाल करें"
+reorder_hint = "क्रम बदलने के लिए खींचें • ऊपर = सबसे आगे"
+title = "लेयर"
+
+[screenshot_editor.menu]
+delete = "डिलीट करें"
+open_folder = "फ़ोल्डर खोलें"
+
+[screenshot_editor.share]
+create_link = "शेयर करने लायक लिंक बनाएँ"
+preparing = "अपलोड की तैयारी हो रही है"
+rendering = "स्क्रीनशॉट रेंडर हो रहा है"
+uploading = "स्क्रीनशॉट अपलोड हो रहा है"
+
+[screenshot_editor.style]
+advanced_shadow = "एडवांस्ड शैडो सेटिंग्स"
+background = "बैकग्राउंड"
+blur = "ब्लर"
+border = "बॉर्डर"
+color = "रंग"
+corner_rounding = "कोनों की गोलाई"
+opacity = "अपारदर्शिता"
+padding = "पैडिंग"
+rounding = "गोलाई"
+shadow = "शैडो"
+size_label = "साइज़"
+width = "चौड़ाई"
+
+[screenshot_editor.toast]
+copied = "स्क्रीनशॉट क्लिपबोर्ड पर कॉपी हो गया!"
+link_copied = "शेयर लिंक क्लिपबोर्ड पर कॉपी हो गया"
+saved = "स्क्रीनशॉट सहेज लिया गया!"
+
+[screenshot_editor.tool]
+arrow = "ऐरो"
+circle = "सर्कल"
+draw = "ड्रॉ"
+mask = "मास्क"
+rectangle = "रेक्टेंगल"
+select = "चुनें"
+text_label = "टेक्स्ट"
+
+[transcription.download]
+complete = "डाउनलोड पूरा हुआ"
+failed = "डाउनलोड विफल: {error}"
+file_progress = "{file} डाउनलोड हो रहा है: {percent}%"
+preparing = "मॉडल डाउनलोड की तैयारी हो रही है"
+progress = "मॉडल डाउनलोड हो रहा है: {percent}%"
+
+[transcription.error]
+intel_mac = "Parakeet मॉडल Intel Mac पर उपलब्ध नहीं हैं। इसके बजाय Whisper मॉडल इस्तेमाल करें"
+model_load = "कैप्शन मॉडल लोड नहीं हो सका। इसे फिर से डाउनलोड करके देखें"
+model_missing = "कैप्शन मॉडल नहीं मिला। कृपया पहले इसे डाउनलोड करें"
+no_audio = "वीडियो फ़ाइल में कोई ऑडियो नहीं मिला"
+unsupported_language = "सुझाया गया और हाई एक्यूरेसी मॉडल सिर्फ़ अंग्रेज़ी और 24 दूसरी यूरोपीय भाषाएँ ट्रांसक्राइब करते हैं। इस भाषा के कैप्शन के लिए Small या Medium मॉडल डाउनलोड करें"
+
+[upload.status]
+failed = "अपलोड पर ध्यान देने की ज़रूरत है"
+paused = "अपलोड रुका हुआ है"
+prepared = "अपलोड तैयार है"
+processing = "अपलोड प्रोसेस हो रहा है"
+retrying = "अपलोड फिर से कोशिश करेगा"
+sign_in = "अपलोड दोबारा करने के लिए साइन इन करें"
+uploaded = "अपलोड हो गया"
+uploading = "अपलोड हो रहा है"
