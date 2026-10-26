@@ -262,6 +262,7 @@ function expandDashSegments({
 	timescale,
 	manifestUrl,
 	periodDurationSeconds,
+	presentationTimeOffset,
 }: {
 	mediaTemplate: string;
 	segmentTimeline: Element[];
@@ -269,8 +270,11 @@ function expandDashSegments({
 	timescale: number;
 	manifestUrl: string;
 	periodDurationSeconds?: number;
+	presentationTimeOffset: number;
 }) {
 	// Never allocate an unbounded list of URLs from untrusted MPD repeat values.
+	if (!Number.isSafeInteger(presentationTimeOffset) || presentationTimeOffset < 0)
+		return [];
 	if (
 		!Number.isSafeInteger(startNumber) ||
 		startNumber < 0 ||
@@ -285,7 +289,8 @@ function expandDashSegments({
 
 	for (const [position, segment] of segmentTimeline.entries()) {
 		const duration = parseOptionalNumber(segment.getAttribute("d"));
-		if (duration === undefined || duration <= 0) return [];
+		// A zero-length terminal entry has no media to fetch.
+		if (duration === undefined || duration <= 0) continue;
 		const startTime =
 			parseOptionalNumber(segment.getAttribute("t")) ?? nextTime;
 		if (!Number.isSafeInteger(startTime) || startTime < 0) return [];
@@ -299,7 +304,7 @@ function expandDashSegments({
 				parseOptionalNumber(nextElement?.getAttribute("t") ?? null) ??
 				(periodDurationSeconds === undefined
 					? undefined
-					: periodDurationSeconds * timescale);
+					: presentationTimeOffset + periodDurationSeconds * timescale);
 			if (endTime === undefined || endTime <= startTime) return [];
 			count = Math.ceil((endTime - startTime) / duration);
 		} else {
@@ -362,6 +367,8 @@ function parseDashRepresentation({
 		parseOptionalNumber(template.getAttribute("timescale")) ?? 1;
 	const startNumber =
 		parseOptionalNumber(template.getAttribute("startNumber")) ?? 1;
+	const presentationTimeOffset =
+		parseOptionalNumber(template.getAttribute("presentationTimeOffset")) ?? 0;
 	const segments = expandDashSegments({
 		mediaTemplate,
 		segmentTimeline,
@@ -369,6 +376,7 @@ function parseDashRepresentation({
 		timescale,
 		manifestUrl,
 		periodDurationSeconds,
+		presentationTimeOffset,
 	});
 	if (segments.length === 0) return null;
 
