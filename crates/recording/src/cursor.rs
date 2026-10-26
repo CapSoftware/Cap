@@ -1,7 +1,7 @@
 use crate::RecordingStartGate;
 use cap_cursor_capture::CursorCropBounds;
 use cap_cursor_info::CursorShape;
-use cap_project::{CursorClickEvent, CursorMoveEvent, KeyPressEvent, KeyboardEvents, XY};
+use cap_project::{CursorClickEvent, CursorMoveEvent, KeyPressEvent, KeyboardEventsEncoder, XY};
 use cap_timestamp::Timestamps;
 use futures::{FutureExt, future::Shared};
 use std::{
@@ -225,13 +225,14 @@ impl FlushedEvents {
 
 /// The incremental cursor and keyboard files, built up from deltas. Moves and
 /// clicks are kept serialized, so a flush serializes only its new events and
-/// writes the same compact JSON `serde_json::to_vec` gives for `CursorEvents`.
-/// A file is rewritten only when it has new events or its last write failed.
+/// writes the same compact JSON `serde_json::to_vec` gives for `CursorEvents`;
+/// key presses likewise give the bytes of `KeyboardEvents::to_bytes`. A file
+/// is rewritten only when it has new events or its last write failed.
 struct IncrementalFiles {
     outputs: IncrementalCaptureOutputs,
     clicks_json: Vec<u8>,
     moves_json: Vec<u8>,
-    keyboard: KeyboardEvents,
+    keyboard: KeyboardEventsEncoder,
     cursor_pending: bool,
     keyboard_pending: bool,
 }
@@ -242,7 +243,7 @@ impl IncrementalFiles {
             outputs,
             clicks_json: Vec::new(),
             moves_json: Vec::new(),
-            keyboard: KeyboardEvents::default(),
+            keyboard: KeyboardEventsEncoder::default(),
             cursor_pending: true,
             keyboard_pending: true,
         }
@@ -260,7 +261,11 @@ impl IncrementalFiles {
         }
         if self.outputs.keyboard.is_some() {
             self.keyboard_pending |= !delta.keyboard_presses.is_empty();
-            self.keyboard.presses.extend(delta.keyboard_presses);
+            for press in &delta.keyboard_presses {
+                if let Err(e) = self.keyboard.push(press) {
+                    tracing::error!("{e}");
+                }
+            }
         }
     }
 
@@ -285,11 +290,10 @@ impl IncrementalFiles {
         if let Some(path) = &self.outputs.keyboard
             && self.keyboard_pending
         {
-            match self
-                .keyboard
-                .to_bytes()
-                .and_then(|bytes| write_atomically(path, &[&bytes]).map_err(|e| e.to_string()))
-            {
+            match self.keyboard.header().and_then(|header| {
+                write_atomically(path, &[&header, self.keyboard.presses()])
+                    .map_err(|e| e.to_string())
+            }) {
                 Ok(()) => self.keyboard_pending = false,
                 Err(e) => {
                     tracing::error!("Failed to write keyboard data to {}: {}", path.display(), e)
@@ -1745,7 +1749,7 @@ mod input_epoch_tests {
 #[cfg(test)]
 mod incremental_writer_tests {
     use super::*;
-    use cap_project::CursorEvents;
+    use cap_project::{CursorEvents, KeyboardEvents};
     use std::sync::atomic::AtomicBool;
     use std::time::Duration;
 
