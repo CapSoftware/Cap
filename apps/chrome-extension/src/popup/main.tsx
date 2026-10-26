@@ -283,7 +283,11 @@ function App() {
 					if (disposed || !cachedAuth) return;
 					applySettings(cachedSettings);
 					setAuth(cachedAuth);
-					setBootstrap(cachedBootstrap);
+					setBootstrap(
+						cachedBootstrap?.user.id === cachedAuth.userId
+							? cachedBootstrap
+							: null,
+					);
 					setMediaAccess(cachedMediaAccess);
 					setBootstrapped(true);
 				},
