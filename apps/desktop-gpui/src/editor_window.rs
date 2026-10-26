@@ -2595,6 +2595,7 @@ impl EditorWindow {
         self.close_frame_controls(window, cx);
         self.end_field_edit(cx);
         self.close_color_picker(cx);
+        self.canvas_mouse_up(window, cx);
         let Some(config) = self.history.undo().cloned() else {
             return;
         };
@@ -2606,6 +2607,7 @@ impl EditorWindow {
         self.close_frame_controls(window, cx);
         self.end_field_edit(cx);
         self.close_color_picker(cx);
+        self.canvas_mouse_up(window, cx);
         let Some(config) = self.history.redo().cloned() else {
             return;
         };
@@ -2628,6 +2630,10 @@ impl EditorWindow {
         self.sidebar.image_asset_status = None;
         self.canvas_selection = None;
         self.canvas_drag = None;
+        self.canvas_drag_rect = None;
+        self.canvas_drag_camera_rect = None;
+        self.canvas_overlay_rect = None;
+        self.snap_guides.clear();
         let previous_animated_gradient = self.animated_gradient_config().cloned();
         let animated_background_changed = self.animated_gradient_config()
             != match &config.background.source {
@@ -12261,6 +12267,217 @@ fn hex_to_color(rgba: [u8; 4]) -> cap_project::Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    mod canvas_history {
+        use super::*;
+        use crate::editor_canvas::{
+            CanvasDrag, CanvasResize, CanvasSelection, GuideAxis, NormRect, SnapGuide,
+            SnapLineKind, SnapTargets,
+        };
+
+        struct HistoryView {
+            editor: Entity<EditorWindow>,
+            _project: tempfile::TempDir,
+        }
+
+        impl Render for HistoryView {
+            fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                self.editor.update(cx, |editor, cx| {
+                    div()
+                        .size_full()
+                        .track_focus(&editor.focus)
+                        .on_key_down(cx.listener(EditorWindow::on_ready_key))
+                })
+            }
+        }
+
+        fn fixture(
+            cx: &mut gpui::TestAppContext,
+        ) -> (Entity<EditorWindow>, &mut gpui::VisualTestContext) {
+            let project = tempfile::tempdir().unwrap();
+            let (view, cx) = cx.add_window_view(move |window, cx| {
+                let editor = cx.new(|cx| EditorWindow::new(project.path().into(), window, cx));
+                editor.update(cx, |editor, cx| window.focus(&editor.focus, cx));
+                HistoryView {
+                    editor,
+                    _project: project,
+                }
+            });
+            (view.read_with(cx, |view, _| view.editor.clone()), cx)
+        }
+
+        // Start from the active gesture's state without loading a recording or decoder.
+        fn active_drag(editor: &mut EditorWindow, moved: bool, resize: bool) {
+            let rect = NormRect {
+                x: 0.2,
+                y: 0.1,
+                w: 0.8,
+                h: 0.8,
+            };
+            editor.history.pause();
+            editor.canvas_selection = Some(CanvasSelection::Display);
+            editor.canvas_drag = Some(CanvasDrag {
+                element: CanvasSelection::Display,
+                start: rect,
+                targets: SnapTargets::default(),
+                down: point(px(100.), px(100.)),
+                moved,
+                resize: resize.then(|| CanvasResize {
+                    dir_x: 1,
+                    dir_y: 1,
+                    output_width: 1000.,
+                    output_height: 1000.,
+                    camera_manual: None,
+                    camera_x: editor.project.camera.position.x.clone(),
+                    camera_y: editor.project.camera.position.y.clone(),
+                    max_width: 1000.,
+                    padding_scale: 1.,
+                }),
+            });
+            editor.canvas_drag_rect = Some(rect);
+            editor.canvas_drag_camera_rect = Some(rect);
+            editor.canvas_overlay_rect = Some(rect);
+            editor.snap_guides = vec![SnapGuide {
+                axis: GuideAxis::V,
+                pos: 0.5,
+                start: 0.,
+                end: 1.,
+                kind: SnapLineKind::FrameCenter,
+            }];
+        }
+
+        fn assert_cleared(editor: &EditorWindow) {
+            assert!(editor.canvas_drag.is_none());
+            assert!(editor.canvas_drag_rect.is_none());
+            assert!(editor.canvas_drag_camera_rect.is_none());
+            assert!(editor.canvas_overlay_rect.is_none());
+            assert!(editor.snap_guides.is_empty());
+        }
+
+        #[gpui::test]
+        fn undo_the_first_active_canvas_edit(cx: &mut gpui::TestAppContext) {
+            let (editor, cx) = fixture(cx);
+            editor.update(cx, |editor, _| {
+                assert!(!editor.history.can_undo());
+                active_drag(editor, true, false);
+                editor.project.background.display_position = Some(XY::new(0.6, 0.5));
+                editor.history.record(&editor.project);
+            });
+            cx.simulate_keystrokes("ctrl-z");
+            editor.read_with(cx, |editor, _| {
+                assert!(editor.project.background.display_position.is_none());
+                assert!(editor.history.can_redo());
+                assert_cleared(editor);
+            });
+        }
+
+        #[gpui::test]
+        fn undo_active_canvas_gesture_preserves_the_previous_edit(cx: &mut gpui::TestAppContext) {
+            for resize in [false, true] {
+                let (editor, cx) = fixture(cx);
+                editor.update(cx, |editor, _| {
+                    editor.project.background.padding = 12.;
+                    editor.history.record(&editor.project);
+                    active_drag(editor, true, resize);
+                    editor.project.background.display_position = Some(XY::new(0.6, 0.5));
+                    editor.history.record(&editor.project);
+                });
+                cx.simulate_keystrokes("ctrl-z");
+                editor.read_with(cx, |editor, _| {
+                    assert_eq!(editor.project.background.padding, 12.);
+                    assert!(editor.project.background.display_position.is_none());
+                    assert!(editor.history.can_redo());
+                    assert_cleared(editor);
+                });
+                editor.update_in(cx, |editor, window, cx| editor.canvas_mouse_up(window, cx));
+                cx.simulate_keystrokes("ctrl-shift-z");
+                editor.read_with(cx, |editor, _| {
+                    assert_eq!(
+                        editor.project.background.display_position,
+                        Some(XY::new(0.6, 0.5))
+                    );
+                    assert_cleared(editor);
+                });
+                editor.update(cx, |editor, _| {
+                    editor.project.background.padding = 24.;
+                    editor.history.record(&editor.project);
+                });
+                cx.simulate_keystrokes("ctrl-z");
+                editor.read_with(cx, |editor, _| {
+                    assert_eq!(editor.project.background.padding, 12.);
+                    assert_eq!(
+                        editor.project.background.display_position,
+                        Some(XY::new(0.6, 0.5))
+                    );
+                });
+            }
+        }
+
+        #[gpui::test]
+        fn redo_after_a_noop_canvas_gesture_preserves_history(cx: &mut gpui::TestAppContext) {
+            for moved in [false, true] {
+                let (editor, cx) = fixture(cx);
+                editor.update(cx, |editor, _| {
+                    editor.project.background.padding = 12.;
+                    editor.history.record(&editor.project);
+                });
+                cx.simulate_keystrokes("cmd-z");
+                editor.update(cx, |editor, _| {
+                    active_drag(editor, moved, false);
+                    if moved {
+                        editor.history.record(&editor.project);
+                    }
+                });
+                cx.simulate_keystrokes("cmd-shift-z");
+                editor.read_with(cx, |editor, _| {
+                    assert_eq!(editor.project.background.padding, 12.);
+                    assert_cleared(editor);
+                });
+                editor.update_in(cx, |editor, window, cx| editor.canvas_mouse_up(window, cx));
+                editor.update(cx, |editor, _| {
+                    editor.project.background.padding = 24.;
+                    editor.history.record(&editor.project);
+                });
+                cx.simulate_keystrokes("cmd-z");
+                editor.read_with(cx, |editor, _| {
+                    assert_eq!(editor.project.background.padding, 12.)
+                });
+            }
+        }
+
+        #[gpui::test]
+        fn redo_during_a_changed_canvas_gesture_keeps_the_new_edit(cx: &mut gpui::TestAppContext) {
+            let (editor, cx) = fixture(cx);
+            let initial = editor.read_with(cx, |editor, _| editor.project.background.padding);
+            editor.update(cx, |editor, _| {
+                editor.project.background.padding = 12.;
+                editor.history.record(&editor.project);
+            });
+            cx.simulate_keystrokes("ctrl-z");
+            editor.update(cx, |editor, _| {
+                active_drag(editor, true, false);
+                editor.project.background.display_position = Some(XY::new(0.6, 0.5));
+                editor.history.record(&editor.project);
+            });
+            cx.simulate_keystrokes("ctrl-y");
+            editor.read_with(cx, |editor, _| {
+                assert_eq!(editor.project.background.padding, initial);
+                assert_eq!(
+                    editor.project.background.display_position,
+                    Some(XY::new(0.6, 0.5))
+                );
+                assert!(editor.canvas_drag.is_none());
+                assert!(!editor.history.can_redo());
+            });
+            cx.simulate_keystrokes("ctrl-z");
+            editor.read_with(cx, |editor, _| {
+                assert_eq!(editor.project.background.padding, initial);
+                assert!(editor.project.background.display_position.is_none());
+                assert_cleared(editor);
+            });
+        }
+    }
 
     /// A 0.6.1 log: the user deleted the clip under the playhead, the
     /// timeline shrank to before it, and every preview request past the new
