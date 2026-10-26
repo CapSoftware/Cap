@@ -2812,6 +2812,27 @@ impl ProjectStyleCache {
 }
 
 impl ProjectConfiguration {
+    pub fn with_preset(&self, mut preset: Self) -> Self {
+        let settings = preset.captions.take().map(|captions| captions.settings);
+        preset.captions = match (self.captions.clone(), settings) {
+            (Some(mut captions), settings) => {
+                captions.settings = settings.unwrap_or_default();
+                Some(captions)
+            }
+            (None, Some(settings)) => Some(CaptionsData {
+                settings,
+                ..Default::default()
+            }),
+            (None, None) => None,
+        };
+        preset.timeline = self.timeline.clone();
+        preset.text_size_version = self.text_size_version;
+        preset.text_anim_version = self.text_anim_version;
+        preset.overlay_order = self.overlay_order.clone();
+        preset.clips = self.clips.clone();
+        preset
+    }
+
     pub fn resolved_overlay_order(&self, available: &[OverlayTrack]) -> Vec<OverlayTrack> {
         let mut ordered = Vec::with_capacity(available.len());
         for track in available {

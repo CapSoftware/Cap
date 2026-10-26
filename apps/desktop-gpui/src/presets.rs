@@ -9,7 +9,7 @@
 //! *applied*, so a preset written by a newer Tauri build with fields this
 //! build has never heard of survives every rename/reorder untouched.
 
-use cap_project::{CaptionsData, ProjectConfiguration};
+use cap_project::ProjectConfiguration;
 use serde_json::{Map, Value, json};
 
 use crate::store::{set_store_setting, store_section};
@@ -133,7 +133,7 @@ pub fn default_project_config(current: &ProjectConfiguration) -> ProjectConfigur
         config.background.rounding = 7.5;
     }
     config.screen_movement_spring = cap_project::ScreenMovementSpring::default();
-    merge_preset(config, current)
+    current.with_preset(config)
 }
 
 /// Presets store styling without recording cuts, caption text or layer order.
@@ -159,31 +159,7 @@ pub fn apply_preset(
     current: &ProjectConfiguration,
 ) -> Option<ProjectConfiguration> {
     let next = serde_json::from_value(config.clone()).ok()?;
-    Some(merge_preset(next, current))
-}
-
-fn merge_preset(
-    mut next: ProjectConfiguration,
-    current: &ProjectConfiguration,
-) -> ProjectConfiguration {
-    let settings = next.captions.take().map(|captions| captions.settings);
-    next.captions = match (current.captions.clone(), settings) {
-        (Some(mut captions), settings) => {
-            captions.settings = settings.unwrap_or_default();
-            Some(captions)
-        }
-        (None, Some(settings)) => Some(CaptionsData {
-            settings,
-            ..Default::default()
-        }),
-        (None, None) => None,
-    };
-    next.timeline = current.timeline.clone();
-    next.text_size_version = current.text_size_version;
-    next.text_anim_version = current.text_anim_version;
-    next.overlay_order = current.overlay_order.clone();
-    next.clips = current.clips.clone();
-    next
+    Some(current.with_preset(next))
 }
 
 #[cfg(test)]
