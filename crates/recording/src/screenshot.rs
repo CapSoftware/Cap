@@ -1174,6 +1174,31 @@ pub fn uses_wayland_portal() -> bool {
     prefers_wayland_portal()
 }
 
+/// Asks the screenshot portal for one screenshot and throws it away. Before
+/// an app's first non-interactive screenshot the portal asks the user whether
+/// to allow it, and GNOME Shell only shows that question for the focused app,
+/// so this runs while Cap's picker still has focus, before it hides for the
+/// real capture.
+#[cfg(target_os = "linux")]
+pub async fn request_wayland_screenshot_permission() -> anyhow::Result<()> {
+    let screenshot = ashpd::desktop::screenshot::Screenshot::request()
+        .interactive(false)
+        .send()
+        .await
+        .context("Request Wayland screenshot from desktop portal")?
+        .response()
+        .context("The desktop did not allow Cap to take screenshots")?;
+    let uri = screenshot.uri();
+    if is_local_wayland_screenshot_uri(uri.scheme(), uri.host_str())
+        && let Ok(path) = uri.to_file_path()
+        && std::fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.file_type().is_file())
+        && let Err(error) = std::fs::remove_file(&path)
+    {
+        tracing::warn!(path = %path.display(), %error, "Could not remove the permission screenshot");
+    }
+    Ok(())
+}
+
 #[cfg(target_os = "linux")]
 async fn capture_screenshot_wayland(target: &ScreenCaptureTarget) -> anyhow::Result<RgbImage> {
     let display_id = wayland_screenshot_display_id(target)?;

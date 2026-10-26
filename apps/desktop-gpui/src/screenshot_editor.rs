@@ -1537,7 +1537,16 @@ impl ScreenshotEditorWindow {
 
     fn pick_background_image(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         cx.spawn_in(window, async move |this, cx| {
-            let Some(path) = crate::platform::open_image_panel(&BACKGROUND_IMAGE_EXTENSIONS) else {
+            #[cfg(target_os = "linux")]
+            let picked = crate::platform::open_file_panel_async(
+                &[("Image", &BACKGROUND_IMAGE_EXTENSIONS[..])],
+                None,
+                cx,
+            )
+            .await;
+            #[cfg(not(target_os = "linux"))]
+            let picked = crate::platform::open_image_panel(&BACKGROUND_IMAGE_EXTENSIONS);
+            let Some(path) = picked else {
                 return;
             };
             this.update_in(cx, |this, window, cx| {
@@ -4684,20 +4693,52 @@ fn slider_id(slider: StyleSlider) -> &'static str {
     }
 }
 
+fn decode_large_preview_jpeg(bytes: &[u8]) -> Option<(image::DynamicImage, u32, u32)> {
+    let mut decoder = jpeg_decoder::Decoder::new(bytes);
+    decoder.read_info().ok()?;
+    let info = decoder.info()?;
+    if info.width.max(info.height) <= 1536 {
+        return None;
+    }
+    crate::jpeg_thumbnail::decode_jpeg_thumbnail(bytes, |width, height| {
+        let scale = (768. / width.max(height) as f32).min(1.);
+        (
+            ((width as f32 * scale) as u32).max(1),
+            ((height as f32 * scale) as u32).max(1),
+        )
+    })
+}
+
 /// The Image tab's `h-48` preview, at 2x.
 fn decode_preview_image(path: &Path) -> Option<Arc<RenderImage>> {
     let bytes = std::fs::read(path).ok()?;
     let format = image::guess_format(&bytes).ok()?;
-    let decoded = image::load_from_memory_with_format(&bytes, format).ok()?;
-    let (width, height) = (decoded.width().max(1), decoded.height().max(1));
+    let scaled_jpeg = if format == image::ImageFormat::Jpeg {
+        decode_large_preview_jpeg(&bytes)
+    } else {
+        None
+    };
+    let has_scaled_jpeg = scaled_jpeg.is_some();
+    let (decoded, width, height) = scaled_jpeg.or_else(|| {
+        let decoded = image::load_from_memory_with_format(&bytes, format).ok()?;
+        let dimensions = (decoded.width().max(1), decoded.height().max(1));
+        Some((decoded, dimensions.0, dimensions.1))
+    })?;
     let scale = (768. / width.max(height) as f32).min(1.);
     let scaled = if scale < 1. {
-        decoded
-            .thumbnail(
-                ((width as f32 * scale) as u32).max(1),
-                ((height as f32 * scale) as u32).max(1),
-            )
-            .into_rgba8()
+        let target_width = ((width as f32 * scale) as u32).max(1);
+        let target_height = ((height as f32 * scale) as u32).max(1);
+        if has_scaled_jpeg {
+            decoded
+                .resize(
+                    target_width,
+                    target_height,
+                    image::imageops::FilterType::Triangle,
+                )
+                .into_rgba8()
+        } else {
+            decoded.thumbnail(target_width, target_height).into_rgba8()
+        }
     } else {
         decoded.into_rgba8()
     };
@@ -4867,6 +4908,111 @@ fn aspect_eq(a: &Option<cap_project::AspectRatio>, b: &Option<cap_project::Aspec
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn background_preview_jpeg_scaling_starts_above_the_size_boundary() {
+        let root = tempfile::tempdir().unwrap();
+        for (width, height, expected) in [
+            (768, 384, (768, 384)),
+            (1536, 768, (768, 384)),
+            (1537, 769, (767, 384)),
+            (769, 1537, (384, 767)),
+        ] {
+            let path = root.path().join("preview.bin");
+            image::RgbImage::from_pixel(width, height, image::Rgb([40, 120, 200]))
+                .save_with_format(&path, image::ImageFormat::Jpeg)
+                .unwrap();
+            let bytes = std::fs::read(&path).unwrap();
+            let scaled = decode_large_preview_jpeg(&bytes);
+            if width.max(height) <= 1536 {
+                assert!(scaled.is_none());
+            } else {
+                let (decoded, source_width, source_height) = scaled.unwrap();
+                assert_eq!((source_width, source_height), (width, height));
+                assert!(decoded.width() < width && decoded.height() < height);
+            }
+            let preview = decode_preview_image(&path).unwrap();
+            let size = preview.size(0);
+            assert_eq!(
+                size,
+                gpui::size(
+                    gpui::DevicePixels::from(expected.0),
+                    gpui::DevicePixels::from(expected.1)
+                )
+            );
+
+            for pixel in preview.as_bytes(0).unwrap().chunks_exact(4) {
+                assert!(pixel[0].abs_diff(200) <= 4);
+                assert!(pixel[1].abs_diff(120) <= 4);
+                assert!(pixel[2].abs_diff(40) <= 4);
+                assert_eq!(pixel[3], 255);
+            }
+        }
+    }
+
+    #[test]
+    fn background_preview_large_grayscale_jpeg_remains_opaque() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("preview.jpg");
+        image::GrayImage::from_pixel(2048, 1024, image::Luma([90]))
+            .save(&path)
+            .unwrap();
+        let preview = decode_preview_image(&path).unwrap();
+        for pixel in preview.as_bytes(0).unwrap().chunks_exact(4) {
+            assert!(pixel[..3].iter().all(|channel| channel.abs_diff(90) <= 1));
+            assert_eq!(pixel[3], 255);
+        }
+    }
+
+    #[test]
+    fn background_preview_fallback_matches_the_existing_decode_and_resize() {
+        let root = tempfile::tempdir().unwrap();
+        for (format, width) in [
+            (image::ImageFormat::Png, 1601),
+            (image::ImageFormat::Jpeg, 767),
+            (image::ImageFormat::Jpeg, 1536),
+        ] {
+            let path = root.path().join("preview.bin");
+            let original =
+                image::DynamicImage::ImageRgba8(image::RgbaImage::from_fn(width, 7, |x, y| {
+                    image::Rgba([(x % 256) as u8, (y * 20) as u8, 90, (x % 255) as u8])
+                }));
+            if format == image::ImageFormat::Jpeg {
+                original.to_rgb8().save_with_format(&path, format).unwrap();
+            } else {
+                original.save_with_format(&path, format).unwrap();
+            }
+            let decoded =
+                image::load_from_memory_with_format(&std::fs::read(&path).unwrap(), format)
+                    .unwrap();
+            let scale = (768. / width as f32).min(1.);
+            let mut expected = decoded
+                .thumbnail((width as f32 * scale) as u32, (7. * scale) as u32)
+                .into_rgba8();
+            let size = expected.dimensions();
+            cap_gpui_kernels::frame::swap_red_blue(&mut expected);
+            let preview = decode_preview_image(&path).unwrap();
+            assert_eq!(preview.as_bytes(0).unwrap(), expected.as_raw());
+            assert_eq!(
+                preview.size(0),
+                gpui::size(
+                    gpui::DevicePixels::from(size.0),
+                    gpui::DevicePixels::from(size.1)
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn background_preview_rejects_missing_and_malformed_images() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("preview.jpg");
+        assert!(decode_preview_image(&path).is_none());
+        for bytes in [b"not an image".as_slice(), &[0xff, 0xd8, 0xff, 0xd9]] {
+            std::fs::write(&path, bytes).unwrap();
+            assert!(decode_preview_image(&path).is_none());
+        }
+    }
 
     /// The checkerboard is one 240x240 tile of 10px cells -- an even number of
     /// cells per axis, so tiling it leaves no seam.

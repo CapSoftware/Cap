@@ -51,6 +51,8 @@ mod jpeg_thumbnail;
 mod linux_dialog;
 #[cfg(target_os = "linux")]
 mod linux_portal_id;
+#[cfg(target_os = "linux")]
+mod linux_wallpaper;
 mod library;
 mod main_window;
 mod media_access;
@@ -590,6 +592,14 @@ fn main() {
                 platform::native_window(window)
             })
             .expect("failed to start device enumeration");
+
+        // Before the launch thumbnail sweep can reach ReplayKit, which would
+        // otherwise add the standard titlebar buttons next to the hand-drawn
+        // close light (`platform::lock_borderless_style`).
+        #[cfg(target_os = "macos")]
+        if let Some(native) = &native_main {
+            platform::lock_borderless_style(native);
+        }
 
         // The native window material: `NSGlassEffectView` on macOS 26+,
         // `NSVisualEffectView` vibrancy below that -- what

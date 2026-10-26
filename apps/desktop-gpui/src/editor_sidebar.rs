@@ -2080,8 +2080,12 @@ fn write_desktop_background_snapshot(source: &Path, output: &Path) -> Result<(),
         }
     }
 
-    let decoded = cap_gpui_kernels::codec::decode_image_file(source)
-        .map_err(|err| format!("failed to decode desktop background: {err}"))?;
+    #[cfg(target_os = "linux")]
+    let decoded = crate::linux_wallpaper::decode_jpeg_xl(source)
+        .unwrap_or_else(|| cap_gpui_kernels::codec::decode_image_file(source));
+    #[cfg(not(target_os = "linux"))]
+    let decoded = cap_gpui_kernels::codec::decode_image_file(source);
+    let decoded = decoded.map_err(|err| format!("failed to decode desktop background: {err}"))?;
     let decoded = if decoded.width() > DESKTOP_BACKGROUND_MAX_DIMENSION
         || decoded.height() > DESKTOP_BACKGROUND_MAX_DIMENSION
     {
@@ -2423,7 +2427,7 @@ impl EditorWindow {
     /// goes through a task rather than the click's update, and the chosen file
     /// is copied into the app-data dir as `bg-<ts>-<name>` exactly as the
     /// `<input type="file">` handler does (`:2513-2541`).
-    fn pick_background_image(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn pick_background_image(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.sidebar.picking_image {
             return;
         }
@@ -2431,6 +2435,14 @@ impl EditorWindow {
         let style_target = self.sidebar.style_target;
         let style_fingerprint = self.style_target_fingerprint();
         self.sidebar.picker_task = Some(cx.spawn_in(window, async move |this, cx| {
+            #[cfg(target_os = "linux")]
+            let picked = crate::platform::open_file_panel_async(
+                &[("Image", &BACKGROUND_IMAGE_EXTENSIONS[..])],
+                None,
+                cx,
+            )
+            .await;
+            #[cfg(not(target_os = "linux"))]
             let picked = cx
                 .update(|_, _| crate::platform::open_image_panel(&BACKGROUND_IMAGE_EXTENSIONS))
                 .ok()
@@ -2478,6 +2490,7 @@ impl EditorWindow {
                 }
                 match stored {
                     Ok(path) => {
+                        tracing::info!(path = %path.display(), "background image chosen");
                         this.edit_background(
                             "image",
                             |project| {
@@ -2503,7 +2516,7 @@ impl EditorWindow {
     }
 
     /// `importDesktopBackground` (`:2033-2052`).
-    fn import_desktop_background(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn import_desktop_background(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.sidebar.importing_desktop {
             return;
         }
@@ -2527,6 +2540,7 @@ impl EditorWindow {
                 }
                 match imported {
                     Ok(path) => {
+                        tracing::info!(path = %path.display(), "desktop wallpaper imported");
                         this.sidebar.desktop_background = Some(path.clone());
                         this.sidebar.source_tab = SourceTab::Desktop;
                         this.ensure_background_presentation(from_none);

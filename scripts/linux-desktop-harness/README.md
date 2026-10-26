@@ -45,6 +45,24 @@ onboarding, or the main window with `RAISE_WINDOW=main`, to the front.
 window's own close button (GNOME draws no title bar for it). Clicks go through
 `mutter-pointer.py`, one virtual pointer that exists before Cap starts: gpui
 binds the seat's pointer once, so a pointer created per click never reaches it.
+`SCENARIO=pick-background` (with `GNOME_UNSAFE=1`) records a clip, opens it in
+the editor and presses the Image background's picker
+(`CAP_GPUI_AUTO_PICK_BACKGROUND=1`), then types a picture's path into the
+portal's file chooser through `mutter-keys.py --type` and presses Select.
+Mutter's RemoteDesktop drops the first key of each session, so `mutter-keys.py`
+leads every session with a Shift tap.
+`SCENARIO=screenshot` takes a screenshot of the display the way the
+screenshot mode does, with Cap focused as after a click, and allows it when
+the portal asks (GNOME Shell's question is answered from the Shell, so it needs
+`GNOME_UNSAFE=1`; elsewhere the permission is granted up front because the GTK
+portal's dialog aborts in the container). It checks a PNG of the display's size (`SCREEN`, 1920x1080) was saved.
+`SCENARIO=wallpaper` records a clip, opens it in the editor and imports the
+desktop's wallpaper as its background (`CAP_GPUI_AUTO_DESKTOP_BACKGROUND=1`).
+GNOME keeps its default JPEG XL wallpaper; `WALLPAPER=swaybg` starts swaybg
+with a PNG first, as Omarchy does on Hyprland.
+`SCENARIO=register` launches Cap from a shell `ROUNDS` times, each time once
+with its `so.cap.Cap.desktop` entry removed and once with it in place, and
+counts the launches that registered the app id with the portals.
 
 `report.sh <out-dir>` prints the results with Cap's own log lines. The
 Hyprland image needs `modprobe vkms` on the host. With `GNOME_UNSAFE=1`,
@@ -56,6 +74,15 @@ the GNOME session gets a target bound to `graphical-session.target`, which a
 real login activates.
 
 ## Checks without a desktop
+
+- `x11-camera.sh <cap-gpui> <ffmpeg lib dir> <out-dir>` records the display on
+  Xvfb (X11 capture, no portal) with a camera: a v4l2loopback device that
+  ffmpeg feeds a 1280x720 test pattern. Cap waits for the Stop shortcut to start
+  and to stop, pressed with real X input (xdotool), well before its 60 s
+  automatic stop. It checks the camera track is 1280x720 and as long as the
+  display track, about five seconds, and fails if any result is missing. It
+  needs root for modprobe, and runs in the Hyprland job, whose hosted runner
+  can build the module.
 
 - `niri-screencast/run.sh` records through Cap's PipeWire capture loop from a
   producer that negotiates and shares frames the way niri 26.04 does: a
