@@ -182,10 +182,9 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "import.svg",
     "edit.svg",
     "copy.svg",
+    "clipboard-paste.svg",
     "record-fill.svg",
     "warning-bold.svg",
-    // The main window's hand-drawn traffic lights: the x and expand glyphs
-    // `CaptionControlsMacOS.tsx` inlines, shown while the group is hovered.
     "traffic-close.svg",
     // The remaining settings pages (`settings_pages.rs`). `circle-check` is
     // Cap's own (`packages/ui-solid/icons/circle-check.svg`, hotkeys.tsx's

@@ -519,6 +519,7 @@ async fn run_preview(
         segments,
         cursor_assets,
     } = input;
+    let project = Arc::new(project);
     let metadata = recording_meta
         .studio_meta()
         .expect("Validated Studio metadata")

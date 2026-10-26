@@ -12,7 +12,7 @@ use gpui::{
     div, prelude::FluentBuilder, px, svg,
 };
 
-use super::menu::OpenHandler;
+use super::{keyboard_nav, menu::OpenHandler};
 use crate::theme::Theme;
 
 #[derive(IntoElement)]
@@ -126,7 +126,7 @@ impl Select {
 }
 
 impl RenderOnce for Select {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let Select {
             id,
             label,
@@ -148,8 +148,13 @@ impl RenderOnce for Select {
             on_open,
         } = self;
 
+        let interactive = !disabled && (on_click.is_some() || on_open.is_some());
         div()
             .id(id)
+            .when(
+                interactive && keyboard_nav::active(window, cx),
+                keyboard_nav::stop,
+            )
             .flex()
             .flex_row()
             .items_center()

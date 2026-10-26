@@ -1,0 +1,94 @@
+---
+title: Fully Native Cap, Faster Everything & Hundreds of Fixes
+app: Cap Desktop
+publishedAt: "2026-10-20"
+version: 0.6.1
+image:
+---
+
+Cap is now a fully native app. Compared with the Tauri app, editor playback uses 77% less CPU and 88% less memory, recording uses 46% less CPU and 87% less memory, and Linux downloads are up to 57% smaller. 0.6.1 also brings faster exports and more than 180 fixes and improvements across recording, editing and export.
+
+## The native app
+
+- **Native Cap is now the only Cap** - The GPUI app replaces the old Tauri app on every platform. 0.6.0 updates in place: recordings, settings and macOS permissions carry over, with nothing to reinstall.
+- **Lighter and faster than Tauri** - Editor playback holds a steady 60 fps (up from 56) with 77% less CPU and 88% less memory (440 MB vs 3.7 GB). Recording uses 46% less CPU and 87% less memory (256 MB vs 2 GB).
+- **Much smaller downloads** - Linux packages are less than half their old size (DEB 224 → 97 MB, AppImage 265 → 131 MB), and macOS and Windows downloads are smaller too.
+- **Signed native updater** - Updates are verified while they download, show progress in Settings and finish with a "Restart to update" prompt. Switching channels cancels any pending update from the old channel.
+- **New onboarding** - A welcome screen with an animated sky, then a step-by-step permissions checklist. On macOS, a drag-to-grant guide follows System Settings, and Cap relaunches itself when Screen Recording needs it.
+- **Native look and feel** - Uses the system font (SF Pro on macOS, Segoe UI on Windows), grouped settings, glass capture buttons and Control Center style camera and microphone lists.
+- **Editor window placement** - On macOS the editor opens at a size that fits your display and reopens where you left it on each display.
+- **Reduce Motion** - Animations follow the macOS Reduce Motion setting.
+
+## Features
+
+- **Shortcuts, rebuilt** - Shortcuts are grouped into Screenshots, Recording and While recording, and each row explains what it does. Start Studio and Start Instant recording can now be bound from this page.
+- **After-capture choices** - Choose what happens after a screenshot (open editor, copy, copy and edit, or do nothing) and after a Studio recording (open editor, show Cap, or do nothing).
+- **Better background removal** - On macOS, only the main person is kept, so people behind you are removed. Edges are sharper and steadier, and the live preview runs at 720p.
+- **Captions for long recordings** - Recordings longer than 6m40s can now be captioned with the Recommended model, and long transcriptions run up to 44% faster.
+- **Camera and microphone access** - The app shows clearly when camera or mic access is missing or pending instead of an endless spinner, and picks the device up again once access is granted.
+- **System audio remembered** - The system audio toggle keeps its setting between launches.
+
+## Recording and sync
+
+- **Audio and video stay in sync** - Fixed video drifting ahead of audio after dropped frames at recording start, frames stamped with their processing time instead of their capture time, and dropped audio samples when audio latency improved partway through a recording.
+- **Instant mode sync** - Microphone, system audio and screen now start together. System audio could start up to 60 ms off, and a slow mic up to a second early.
+- **Camera alignment** - The camera no longer plays ahead of the screen when it started recording first.
+- **Idle-screen frame rate** - Studio recordings of mostly static screens keep their real frame rate. Previously, exports dropped frames and sync drifted. Existing recordings are repaired when opened.
+- **Steadier camera** - Camera frames are kept through brief system stalls, and Windows no longer duplicates camera frames under normal timing jitter.
+- **Cursor through slow drives** - Cursor, click and key data keep recording when an SD card, external drive or network drive stalls.
+- **Crash recovery** - Recovered recordings keep their last finished fragment and their track timing. Static screens are flushed every 2 seconds, so a crash can no longer lose 10+ seconds. Footage is recovered after an early muxer restart.
+- **58 crash and hang fixes** - A new stress suite found and fixed crashes from mics that send empty buffers or change format during device switches, screen or camera buffers that change size mid-recording, and damaged project files.
+- **5K and 6K displays** - Studio recordings on displays over 4096 px wide are scaled by macOS during capture, so they are no longer resized afterwards.
+
+## Editing and export fixes
+
+- **True export colors** - Exports now use the BT.709 color standard they are tagged with, so backgrounds, captions and overlays match the colors you picked in the editor.
+- **Correct frames in playback and export** - Fixed decoders that sometimes showed the wrong frame on macOS (including a camera that could run far ahead in long exports), Windows and Linux. Also fixed stale frames in cross-fades and after seeks, and the frame-before-the-requested-one bug.
+- **Export under load** - Exports keep every frame in order even when the machine is busy.
+- **Windows export judder** - Exports no longer hold a frame too long and then jump ahead.
+- **Smaller macOS exports** - macOS exports could come out up to 3x larger than needed. They now use a 2 second keyframe interval and match the size estimate.
+- **Captions in exports** - Captions that appear in the editor now always appear in exports. Deleting a caption word no longer cuts footage. Unicode captions break correctly.
+- **Closing titles** - Fullscreen titles placed at the very end of a video now play and export.
+- **Audio editing** - Changing audio sync offsets updates playback immediately and moves the waveform with them. Trimming the start of an audio track keeps the remaining audio in place.
+- **Auto zoom** - Auto zooms land at the right time on multi-take, trimmed or speed-changed timelines, and frame an idle cursor before it moves.
+- **Mask timing** - Mask animations follow clip speed changes.
+- **Image backgrounds** - Image backgrounds are re-cropped when you change the aspect ratio.
+- **Adding clips** - Recording or importing a new clip keeps your place on the timeline. Imported videos keep their final frame.
+- **Odd-sized videos** - Videos with odd widths or heights keep correct colors at the edges.
+- **Cross-platform projects** - Projects recorded on Windows open on macOS and Linux, keyboard overlays included.
+- **MOV and GIF** - Full MOV exports from Automations and the CLI include the recording, not just the background. Cancelled GIF exports no longer leave a broken file.
+
+## App fixes
+
+- **Global shortcuts** - Shortcuts keep working after the first target picker opens. Screenshot shortcuts from another app bring the editor to the front. Recording shortcuts no longer fail on a window that no longer exists.
+- **Microphone released** - Cap releases the microphone when its main window is hidden, so the mic indicator turns off.
+- **Memory** - Closing the editor frees its memory (about 100 MB per open before). Fixed a camera blur and background removal leak of up to 1.4 GB per minute on macOS. The caption model no longer holds 2 GB after captions finish.
+- **Mac sleep** - An open, idle editor no longer keeps your Mac from sleeping.
+- **Sign-in** - Sign-in completes even when the browser responds slowly. Only one sign-in runs at a time, and signing out stays signed out.
+- **Screen Recording permission** - Stale permission grants after an update are detected, so Cap guides you through granting again instead of failing to record.
+- **Instant uploads** - Live uploads survive brief network failures, and quitting Cap no longer uses up upload retries.
+- **Settings saves** - Saving settings at the same moment as a background update no longer loses a change.
+- **Touch Bar Macs** - Fixed a crash when starting a recording on Intel MacBook Pros with a Touch Bar.
+- **No startup flash** - The main window no longer flashes before onboarding on first launch.
+- **Windows** - The ✕ button closes to the tray and releases the camera. Launching Cap again brings the running window back. Restarting or shutting down no longer triggers an "exited unexpectedly" warning. Overlays and recording controls now appear on the correct monitor when displays use different scaling. Updating from 0.6.0 asks you to close the old native app instead of failing.
+- **Linux** - Studio export and editor audio work with comma-decimal locales such as pt_BR. The tray can stop a recording when Wayland global shortcuts are unavailable (GNOME 50). Packages declare their glibc 2.39 requirement instead of failing on launch.
+- **CLI** - `cap record --mode instant` uses a start gate for proper sync and no longer locks the camera on macOS. `--json` returns JSON for validation errors.
+
+## Performance
+
+- **Faster exports** - macOS hardware exports are 18–27% faster, with about 11% less CPU. Export audio is encoded on its own thread (with AudioToolbox on macOS). ProRes MOV exports use every core, about 4x faster.
+- **Windows speed** - Editor playback decoding is about 3x faster, 1080p60 exports are 23% faster, and recording uses about 20% less CPU.
+- **Linux speed** - X11 recording at 1080p reaches about 59 fps (from 41). Instant camera overlays render 4–9x faster, and video decoding uses multiple threads.
+- **Faster editor opening** - The first frame of long projects appears up to 3.8x sooner. Recording details are read from file headers, and project files with long transcripts load about 2.5x faster.
+- **Smoother editing** - Scrubbing, live appearance edits and zoom changes on long recordings no longer slow down as the playhead moves later. Captions render up to 7.6x faster and keyboard overlays 2.8x faster. Long clip lists stay responsive.
+- **Faster Studio stop** - Finalization checks run in parallel, audio is validated during the remux, and the GPU device is ready before you stop.
+- **Camera effects** - Background blur and removal use less than half the CPU on macOS.
+- **Captions** - Preparing captions for long recordings uses hundreds of MB less memory.
+- **Imports and screenshots** - Video imports are up to 1.9x faster. Screenshots save faster by encoding PNGs on multiple cores. Copying unannotated screenshots is 8x faster, and the first text annotation export is 24x faster.
+- **Library** - Recordings and Recents load with 80% less scanning in large libraries, tray thumbnails load in 20 ms instead of 1.6 s, and settings thumbnails decode in parallel.
+- **Uploads** - Multipart uploads reuse connections, and Instant share links are confirmed sooner after you stop.
+- **Lower idle CPU** - Hidden windows and an idle target picker stop redrawing. The recording bar repaints only when it changes, and the mic meter runs off the main thread. Global shortcuts no longer wake Linux 20 times a second.
+
+## Thanks
+
+A huge thank you to everyone who contributed to this release: @yashranaway, @Hona, @AatmanAJ, @AksharP5, @tadhgdowdall, @jatmn, @celeroncoder, @YoavLevavi, @Theophilus2003, @viralcodex, @unhingedpanda, @notkainoa, @nikolas-sapa, @himanshu748, @dheeraj-juvvadi, @cesarfrancots, @x1xhlol, @wleeaf, @vagxrth, @shubhook, @qflen, @patrickballard, @mihir0209, @melcheikh, @maddiedreese, @hridaya423, @harshav167, @dennisimoo, @colinvkim, @cartesian-plane, @apoorvdarshan, @ajanraj, @Zingzy, @The-Best-Codes, @Supernova-45, @SoulSniper-V2, @OptimistOtaku, @JeffreyLin1, @Ehsan-hash, @EfeDurmaz16 and @Aqua-123.

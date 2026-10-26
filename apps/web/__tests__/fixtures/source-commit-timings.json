@@ -3,7 +3,7 @@
 		"name": "long-s3",
 		"terminalResult": "ready",
 		"baselineWallMs": 919500,
-		"expectedBatchedSteps": 31,
+		"expectedBatchedSteps": 11,
 		"pageDurationsMs": [
 			464, 462, 512, 404, 577, 373, 517, 384, 672, 368, 458, 340, 592, 372, 516,
 			422, 841, 477, 559, 358, 600, 423, 508, 369, 621, 353, 449, 384, 546, 694,
@@ -47,14 +47,14 @@
 		"name": "short-drive-first",
 		"terminalResult": "ready",
 		"baselineWallMs": 29925,
-		"expectedBatchedSteps": 2,
+		"expectedBatchedSteps": 1,
 		"pageDurationsMs": [4693, 2796, 10156, 1521, 8332]
 	},
 	{
 		"name": "short-drive-retry",
 		"terminalResult": "ready",
 		"baselineWallMs": 26610,
-		"expectedBatchedSteps": 2,
+		"expectedBatchedSteps": 1,
 		"pageDurationsMs": [4867, 2914, 8932, 2810, 4612]
 	},
 	{

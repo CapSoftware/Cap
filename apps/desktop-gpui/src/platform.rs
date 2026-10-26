@@ -558,10 +558,54 @@ fn clipboard_file_path(path: &std::path::Path) -> Result<std::path::PathBuf, Str
     Ok(path)
 }
 
-pub fn copy_image_to_clipboard(path: &std::path::Path, cx: &gpui::App) -> Result<(), String> {
-    let bytes = std::fs::read(path)
-        .map_err(|error| format!("Could not read the clipboard image: {error}"))?;
-    copy_image_bytes_to_clipboard(&bytes, cx)
+// Prepares finish in completion order, not click order, so only the newest
+// request may write: an older copy finishing late must not replace a newer one.
+struct ClipboardWrites {
+    latest: std::sync::atomic::AtomicU64,
+}
+
+impl ClipboardWrites {
+    const fn new() -> Self {
+        Self {
+            latest: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+
+    fn request(&self) -> u64 {
+        self.latest
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1
+    }
+
+    fn is_current(&self, id: u64) -> bool {
+        self.latest.load(std::sync::atomic::Ordering::SeqCst) == id
+    }
+}
+
+static CLIPBOARD_WRITES: ClipboardWrites = ClipboardWrites::new();
+
+pub fn copy_image_to_clipboard(
+    path: std::path::PathBuf,
+    cx: &gpui::App,
+) -> gpui::Task<Result<(), String>> {
+    let id = CLIPBOARD_WRITES.request();
+    cx.spawn(async move |cx| {
+        let image = cx
+            .background_executor()
+            .spawn(async move {
+                let bytes = std::fs::read(&path)
+                    .map_err(|error| format!("Could not read the clipboard image: {error}"))?;
+                prepare_clipboard_image(bytes)
+            })
+            .await?;
+        cx.update(|cx| {
+            if !CLIPBOARD_WRITES.is_current(id) {
+                tracing::debug!("skipping a superseded clipboard image write");
+                return Ok(());
+            }
+            write_clipboard_image(image, cx)
+        })
+    })
 }
 
 #[cfg(any(not(target_os = "macos"), test))]
@@ -1062,22 +1106,106 @@ mod mac {
     /// `titlebar: None`). During the recording flow -- after the hidden main
     /// window's `orderOut:` and the in-process ScreenCaptureKit start -- macOS
     /// 26 adds `NSMiniaturizableWindowMask` to the hidden window on its own
-    /// (no app or gpui code writes the mask; verified with a breakpoint on
-    /// `setStyleMask:` and a mask poll), which materializes all three standard
-    /// titlebar buttons on top of the hand-drawn lights. Setting the mask back
-    /// tears the buttons down. Same borrow rule as [`show_native`]: call from
-    /// a task, never inside a gpui update.
+    /// (no app or gpui code writes the mask), which materializes all three
+    /// standard titlebar buttons on top of the hand-drawn lights. Setting the
+    /// mask back tears the buttons down. [`lock_borderless_style`] refuses
+    /// the writes that go through `setStyleMask:`; this stays as the backstop
+    /// for any that don't. Same borrow rule as [`show_native`]: call from a
+    /// task, never inside a gpui update.
     pub fn restore_borderless_style(native: &NativeWindow) {
         use objc2::msg_send;
-        const TITLED: usize = 1 << 0;
-        const FULL_SIZE_CONTENT_VIEW: usize = 1 << 15;
-        let want = TITLED | FULL_SIZE_CONTENT_VIEW;
         unsafe {
             let mask: usize = msg_send![&*native.0, styleMask];
-            if mask != want {
+            if mask != BORDERLESS_STYLE_MASK {
                 tracing::info!(mask, "clearing foreign style-mask bits on the main window");
-                let _: () = msg_send![&*native.0, setStyleMask: want];
+                let _: () = msg_send![&*native.0, setStyleMask: BORDERLESS_STYLE_MASK];
             }
+        }
+    }
+
+    /// `NSTitledWindowMask | NSFullSizeContentViewWindowMask`: what gpui's
+    /// `titlebar: None` creates the main window with.
+    const BORDERLESS_STYLE_MASK: usize = (1 << 0) | (1 << 15);
+
+    static STYLE_MASK_LOCK_KEY: u8 = 0;
+    static SET_STYLE_MASK_SUPER: std::sync::OnceLock<(usize, usize)> = std::sync::OnceLock::new();
+
+    /// Pin the main window to its buttonless style mask by refusing every
+    /// later `setStyleMask:` that asks for something else.
+    ///
+    /// The thumbnail sweep's in-process ScreenCaptureKit capture at launch
+    /// makes ReplayKit run `-[RPScreenRecorder setWindowRotationLocked:]` on
+    /// the main queue, and that calls `setStyleMask:` on every app window to
+    /// add `NSResizableWindowMask` (`0x8001` -> `0x8009`, caught with a
+    /// `setStyleMask:` override logging `callStackSymbols`). AppKit then
+    /// materializes all three standard titlebar buttons next to the
+    /// hand-drawn close light until [`restore_borderless_style`] runs at the
+    /// end of the sweep. Rejecting the write here means the buttons are never
+    /// built.
+    ///
+    /// The override goes on the window's class, so it sees every
+    /// `GPUIPanel`; windows without the lock pass straight through to the
+    /// inherited implementation.
+    pub fn lock_borderless_style(native: &NativeWindow) {
+        use objc2::{ffi, msg_send, runtime::AnyClass};
+
+        unsafe extern "C" fn guarded_set_style_mask(this: *mut AnyObject, sel: Sel, mask: usize) {
+            let Some(&(_, imp)) = SET_STYLE_MASK_SUPER.get() else {
+                return;
+            };
+            let locked = unsafe {
+                ffi::objc_getAssociatedObject(this.cast(), (&raw const STYLE_MASK_LOCK_KEY).cast())
+            };
+            let mask = if locked.is_null() || mask == BORDERLESS_STYLE_MASK {
+                mask
+            } else {
+                tracing::info!(mask, "kept the main window's borderless style mask");
+                BORDERLESS_STYLE_MASK
+            };
+            let imp: unsafe extern "C" fn(*mut AnyObject, Sel, usize) =
+                unsafe { std::mem::transmute(imp) };
+            unsafe { imp(this, sel, mask) };
+        }
+
+        unsafe {
+            let class: *const AnyClass = msg_send![&*native.0, class];
+            let sel = objc2::sel!(setStyleMask:);
+            let &(installed_on, _) = SET_STYLE_MASK_SUPER.get_or_init(|| {
+                let superclass = ffi::class_getSuperclass(class.cast());
+                let Some(imp) = ffi::method_getImplementation(ffi::class_getInstanceMethod(
+                    superclass,
+                    sel.as_ptr(),
+                )) else {
+                    tracing::warn!(
+                        "no inherited setStyleMask: for the main window style-mask lock"
+                    );
+                    return (0, 0);
+                };
+                let added = ffi::class_addMethod(
+                    class.cast_mut().cast(),
+                    sel.as_ptr(),
+                    Some(std::mem::transmute::<
+                        unsafe extern "C" fn(*mut AnyObject, Sel, usize),
+                        unsafe extern "C" fn(),
+                    >(guarded_set_style_mask)),
+                    c"v@:Q".as_ptr(),
+                );
+                if !objc2::runtime::Bool::from_raw(added).as_bool() {
+                    tracing::warn!("could not install the main window style-mask lock");
+                    return (0, 0);
+                }
+                (class as usize, imp as usize)
+            });
+            if installed_on != class as usize {
+                return;
+            }
+            let marker: *mut AnyObject = msg_send![objc2::class!(NSNull), null];
+            ffi::objc_setAssociatedObject(
+                (&*native.0 as *const NSWindow).cast_mut().cast(),
+                (&raw const STYLE_MASK_LOCK_KEY).cast(),
+                marker.cast(),
+                ffi::OBJC_ASSOCIATION_RETAIN_NONATOMIC,
+            );
         }
     }
 
@@ -2102,7 +2230,13 @@ mod mac {
         })
     }
 
-    pub fn copy_image_bytes_to_clipboard(bytes: &[u8], _cx: &gpui::App) -> Result<(), String> {
+    pub struct ClipboardImage(Vec<u8>);
+
+    pub fn prepare_clipboard_image(bytes: Vec<u8>) -> Result<ClipboardImage, String> {
+        Ok(ClipboardImage(bytes))
+    }
+
+    pub fn write_clipboard_image(image: ClipboardImage, _cx: &gpui::App) -> Result<(), String> {
         use objc2::rc::autoreleasepool;
         use objc2::runtime::Bool;
         use objc2::{class, msg_send};
@@ -2113,7 +2247,7 @@ mod mac {
             if pasteboard.is_null() {
                 return Err("Clipboard unavailable".into());
             }
-            let data = NSData::with_bytes(bytes);
+            let data = NSData::with_bytes(&image.0);
             let image: *mut AnyObject = msg_send![class!(NSImage), alloc];
             let image: *mut AnyObject = msg_send![image, initWithData: &*data];
             let image = Id::from_raw(image).ok_or("Failed to load image")?;
@@ -2527,6 +2661,41 @@ mod mac {
         }
     }
 
+    /// `NSApp.windowsMenu` and `NSApp.helpMenu`, looked up by the titles the
+    /// menu bar was just built with. `None` clears the Help menu.
+    pub fn register_system_menus(window_title: &str, help_title: Option<&str>) {
+        use objc2::{class, msg_send};
+        use objc2_foundation::NSString;
+
+        unsafe fn submenu(bar: *mut AnyObject, title: &str) -> *mut AnyObject {
+            unsafe {
+                let item: *mut AnyObject =
+                    msg_send![bar, itemWithTitle: &*NSString::from_str(title)];
+                if item.is_null() {
+                    return std::ptr::null_mut();
+                }
+                msg_send![item, submenu]
+            }
+        }
+
+        unsafe {
+            let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+            if app.is_null() {
+                return;
+            }
+            let bar: *mut AnyObject = msg_send![app, mainMenu];
+            if bar.is_null() {
+                return;
+            }
+            let windows = submenu(bar, window_title);
+            if !windows.is_null() {
+                let _: () = msg_send![app, setWindowsMenu: windows];
+            }
+            let help = help_title.map_or(std::ptr::null_mut(), |title| submenu(bar, title));
+            let _: () = msg_send![app, setHelpMenu: help];
+        }
+    }
+
     /// One-line diagnostic of everything AppKit weighs into occlusion
     /// visibility -- how the macOS 26 display-link failure was diagnosed; keep
     /// it for the next platform mystery.
@@ -2765,9 +2934,6 @@ mod stub {
     pub fn open_image_panel(_extensions: &[&str]) -> Option<std::path::PathBuf> {
         None
     }
-    pub fn open_audio_panel() -> Option<std::path::PathBuf> {
-        None
-    }
     pub fn confirm_dialog(
         title: &str,
         message: &str,
@@ -2775,6 +2941,16 @@ mod stub {
         cancel: &str,
         warning: bool,
     ) -> bool {
+        if !crate::linux_dialog::zenity_available()
+            && let Some(accepted) = crate::linux_dialog::show(&crate::linux_dialog::Request {
+                title: title.to_string(),
+                message: message.to_string(),
+                accept: accept.to_string(),
+                cancel: Some(cancel.to_string()),
+            })
+        {
+            return accepted;
+        }
         let level = if warning {
             rfd::MessageLevel::Warning
         } else {
@@ -2793,6 +2969,17 @@ mod stub {
     }
 
     pub fn alert_dialog(title: &str, message: &str) {
+        if !crate::linux_dialog::zenity_available()
+            && crate::linux_dialog::show(&crate::linux_dialog::Request {
+                title: title.to_string(),
+                message: message.to_string(),
+                accept: "OK".to_string(),
+                cancel: None,
+            })
+            .is_some()
+        {
+            return;
+        }
         let _ = rfd::MessageDialog::new()
             .set_title(title)
             .set_description(message)
@@ -2820,8 +3007,10 @@ mod stub {
         .map_err(|error| format!("Could not copy the file to the clipboard: {error}"))
     }
 
-    pub fn copy_image_bytes_to_clipboard(bytes: &[u8], cx: &gpui::App) -> Result<(), String> {
-        let format = match image::guess_format(bytes).map_err(|error| error.to_string())? {
+    pub struct ClipboardImage(gpui::ClipboardItem);
+
+    pub fn prepare_clipboard_image(bytes: Vec<u8>) -> Result<ClipboardImage, String> {
+        let format = match image::guess_format(&bytes).map_err(|error| error.to_string())? {
             image::ImageFormat::Png => gpui::ImageFormat::Png,
             image::ImageFormat::Jpeg => gpui::ImageFormat::Jpeg,
             image::ImageFormat::WebP => gpui::ImageFormat::Webp,
@@ -2830,12 +3019,25 @@ mod stub {
             image::ImageFormat::Tiff => gpui::ImageFormat::Tiff,
             _ => return Err("Unsupported clipboard image format".into()),
         };
-        let image = gpui::Image::from_bytes(format, bytes.to_vec());
-        cx.try_write_to_clipboard(gpui::ClipboardItem::new_image(&image))
+        let image = gpui::Image::from_bytes(format, bytes);
+        Ok(ClipboardImage(gpui::ClipboardItem {
+            entries: vec![gpui::ClipboardEntry::Image(image)],
+        }))
+    }
+
+    pub fn write_clipboard_image(image: ClipboardImage, cx: &gpui::App) -> Result<(), String> {
+        cx.try_write_to_clipboard(image.0)
             .map_err(|error| format!("Could not copy the image to the clipboard: {error}"))
     }
     pub fn desktop_picture_path() -> Option<std::path::PathBuf> {
-        None
+        #[cfg(target_os = "linux")]
+        {
+            crate::linux_wallpaper::current()
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            None
+        }
     }
     pub fn set_activation_policy(_regular: bool) -> bool {
         false
@@ -2932,6 +3134,52 @@ mod tests {
         let (requests, receiver) = super::NativeQuitRequests::new();
         drop(receiver);
         assert!(!requests.request());
+    }
+
+    #[test]
+    fn newest_clipboard_request_wins() {
+        let writes = super::ClipboardWrites::new();
+        let a = writes.request();
+        let b = writes.request();
+        assert!(!writes.is_current(a));
+        assert!(writes.is_current(b));
+    }
+
+    #[test]
+    fn completed_clipboard_write_does_not_invalidate_a_later_request() {
+        let writes = super::ClipboardWrites::new();
+        let a = writes.request();
+        assert!(writes.is_current(a));
+        let b = writes.request();
+        assert!(writes.is_current(b));
+        assert!(!writes.is_current(a));
+    }
+
+    #[test]
+    fn concurrent_clipboard_requests_get_distinct_ids_and_only_the_newest_is_current() {
+        let writes = std::sync::Arc::new(super::ClipboardWrites::new());
+        let threads: Vec<_> = (0..8)
+            .map(|_| {
+                let writes = writes.clone();
+                std::thread::spawn(move || writes.request())
+            })
+            .collect();
+        let mut ids: Vec<u64> = threads
+            .into_iter()
+            .map(|thread| thread.join().unwrap())
+            .collect();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids, (1..=8).collect::<Vec<_>>());
+        let current: Vec<_> = ids.iter().filter(|id| writes.is_current(**id)).collect();
+        assert_eq!(current, [&8]);
+    }
+
+    #[test]
+    fn clipboard_request_ids_increase_from_one() {
+        let writes = super::ClipboardWrites::new();
+        let ids: Vec<_> = (0..4).map(|_| writes.request()).collect();
+        assert_eq!(ids, [1, 2, 3, 4]);
     }
 
     #[test]

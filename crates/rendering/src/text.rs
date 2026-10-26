@@ -5,7 +5,7 @@ use cap_project::{TextAlign, TextAnimation, TextBackgroundStyle, TextSegment, XY
 /// export resolution. `size` only positions and wraps the text — it never
 /// affects glyph size (that coupling is baked away by the config migration
 /// in cap_project).
-const REFERENCE_HEIGHT: f32 = 1080.0;
+pub(crate) const REFERENCE_HEIGHT: f32 = 1080.0;
 pub const MIN_FONT_SIZE: f32 = 8.0;
 pub const MAX_FONT_SIZE: f32 = 480.0;
 
@@ -318,17 +318,17 @@ pub fn prepare_texts(
         output_size.y as f32 / REFERENCE_HEIGHT
     };
 
-    let mut ordered = segments.iter().enumerate().collect::<Vec<_>>();
+    let mut ordered = segments
+        .iter()
+        .enumerate()
+        .filter(|(index, segment)| {
+            segment.enabled
+                && !hidden_indices.contains(index)
+                && !(frame_time < segment.start || frame_time > segment.end)
+        })
+        .collect::<Vec<_>>();
     ordered.sort_by_key(|(index, segment)| (segment.track, *index));
-    for (i, segment) in ordered {
-        if !segment.enabled || hidden_indices.contains(&i) {
-            continue;
-        }
-
-        if frame_time < segment.start || frame_time > segment.end {
-            continue;
-        }
-
+    for (_, segment) in ordered {
         let center = XY::new(
             segment.center.x.clamp(0.0, 1.0),
             segment.center.y.clamp(0.0, 1.0),
@@ -463,6 +463,72 @@ mod tests {
         }
     }
 
+    #[test]
+    #[ignore]
+    fn benchmark_text_preparation() {
+        use std::{
+            hash::{DefaultHasher, Hash, Hasher},
+            hint::black_box,
+            time::Instant,
+        };
+
+        for (name, total, active, tracks) in [
+            ("empty", 0, 0, 1),
+            ("eight_all_active", 8, 8, 4),
+            ("64_one_active", 64, 1, 4),
+            ("256_four_active", 256, 4, 4),
+            ("1024_four_active", 1024, 4, 4),
+            ("256_all_active", 256, 256, 4),
+            ("256_four_active_single_track", 256, 4, 1),
+        ] {
+            let segments = (0..total)
+                .map(|index| {
+                    let mut seg = segment(TextAnimation::None, TextAnimation::None);
+                    seg.track = ((index * 97) % tracks) as u32;
+                    seg.content = format!("Overlay {index}: café 字");
+                    if (index * 97) % total >= active {
+                        seg.start = 20.0 + index as f64;
+                        seg.end = seg.start + 4.0;
+                    }
+                    seg
+                })
+                .collect::<Vec<_>>();
+            let prepare = || {
+                prepare_texts(
+                    black_box(XY::new(1920, 1080)),
+                    black_box(5.0),
+                    black_box(&segments),
+                    black_box(&[]),
+                )
+            };
+            let output = prepare();
+            assert_eq!(output.len(), active);
+            let mut hasher = DefaultHasher::new();
+            format!("{output:?}").hash(&mut hasher);
+            let fingerprint = hasher.finish();
+            let start = Instant::now();
+            for _ in 0..1000 {
+                black_box(prepare());
+            }
+            let ns_per_call = start.elapsed().as_nanos() as f64 / 1000.0;
+            let iterations = (20_000_000.0 / ns_per_call).clamp(100.0, 1_000_000.0) as usize;
+            for sample in 0..15 {
+                let start = Instant::now();
+                for _ in 0..iterations {
+                    black_box(prepare());
+                }
+                println!(
+                    "TEXT_BENCH {}",
+                    serde_json::json!({
+                        "case": name, "sample": sample, "iterations": iterations,
+                        "ns_per_call": start.elapsed().as_nanos() as f64 / iterations as f64,
+                        "fingerprint": fingerprint,
+                    })
+                );
+            }
+        }
+    }
+
     fn prepare_one(seg: TextSegment, time: f64) -> Option<PreparedText> {
         prepare_texts(XY::new(1920, 1080), time, &[seg], &[])
             .into_iter()
@@ -501,6 +567,62 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["Back", "Middle"]
         );
+    }
+
+    #[test]
+    fn filtering_preserves_original_indices_order_and_time_comparisons() {
+        let mut segments = (0..64)
+            .map(|index| {
+                let mut seg = segment(TextAnimation::None, TextAnimation::None);
+                seg.track = ((index * 11) % 7) as u32;
+                seg.content = format!("Text {index}: café 字");
+                seg.start = (index % 9) as f64 - 4.0;
+                seg.end = seg.start + 2.0;
+                seg.enabled = index % 5 != 0;
+                seg.uppercase = index % 3 == 0;
+                seg.center.x = index as f64 / 63.0;
+                seg.stroke_width = (index % 4) as f32;
+                seg
+            })
+            .collect::<Vec<_>>();
+        segments[7].start = f64::NAN;
+        segments[13].end = f64::NAN;
+        segments[19].end = segments[19].start - 1.0;
+        segments[31].end = f64::INFINITY;
+        segments[41].start = f64::NEG_INFINITY;
+        let hidden = [0, 1, 15, 60, 15, usize::MAX];
+        for time in [
+            f64::NEG_INFINITY,
+            -4.0,
+            -2.0,
+            0.0,
+            2.0,
+            4.0,
+            6.0,
+            f64::INFINITY,
+            f64::NAN,
+        ] {
+            for size in [XY::new(1920, 1080), XY::new(0, 0)] {
+                let mut ordered = segments.iter().enumerate().collect::<Vec<_>>();
+                ordered.sort_by_key(|(index, seg)| (seg.track, *index));
+                let mut expected = Vec::new();
+                for (index, seg) in ordered {
+                    if !seg.enabled || hidden.contains(&index) || time < seg.start || time > seg.end
+                    {
+                        continue;
+                    }
+                    let mut single = prepare_texts(size, time, std::slice::from_ref(seg), &[]);
+                    assert_eq!(single.len(), 1, "segment {index}, time {time}");
+                    expected.append(&mut single);
+                }
+                let actual = prepare_texts(size, time, &segments, &hidden);
+                assert_eq!(
+                    format!("{actual:?}"),
+                    format!("{expected:?}"),
+                    "time {time}"
+                );
+            }
+        }
     }
 
     #[test]
