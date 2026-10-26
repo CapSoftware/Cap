@@ -305,11 +305,16 @@ async fn real_app_instant_recording_uploads_and_verifies() {
 
 /// An Instant recording with the camera on uploads and verifies. On Linux the
 /// camera is drawn into the screen video, so a camera that stalls or sends a
-/// bad frame stops the recording. Needs a camera attached; the CI job feeds a
-/// virtual one and checks its picture reached the video.
+/// bad frame stops the recording. Runs only with `CAP_GPUI_REAL_APP_CAMERA=1`,
+/// since it needs a camera attached; the CI job feeds a virtual one and checks
+/// its picture reached the video.
 #[ignore]
 #[tokio::test(flavor = "multi_thread")]
 async fn real_app_instant_recording_with_camera_uploads_and_verifies() {
+    if std::env::var("CAP_GPUI_REAL_APP_CAMERA").is_err() {
+        eprintln!("skipped: set CAP_GPUI_REAL_APP_CAMERA=1 where a camera is attached");
+        return;
+    }
     let mock = MockCap::start(Vec::new()).await;
     let sandbox = Sandbox::new(&mock.url, 0);
     let app = sandbox.launch(

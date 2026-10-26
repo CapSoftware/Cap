@@ -313,8 +313,10 @@ jobs:
       - name: Instant with a camera on Xvfb
         run: |
           set -euo pipefail
-          sudo apt-get install -y -qq v4l2loopback-dkms xvfb x11-utils dbus ffmpeg \
-            pulseaudio pulseaudio-utils libasound2-plugins >/dev/null
+          sudo apt-get update -qq
+          # v4l2loopback needs videodev, which is in the extra kernel modules.
+          sudo apt-get install -y -qq "linux-modules-extra-$(uname -r)" v4l2loopback-dkms xvfb x11-utils \
+            dbus ffmpeg pulseaudio pulseaudio-utils libasound2-plugins >/dev/null
           chmod +x "$RUNNER_TEMP/build/cap-gpui" "$RUNNER_TEMP/build/real-app-tests"
           sudo modprobe v4l2loopback video_nr=42 card_label="Cap Test Camera" exclusive_caps=1
           sudo udevadm settle --timeout=10
@@ -336,7 +338,7 @@ jobs:
           env -u WAYLAND_DISPLAY DISPLAY=:78 XDG_SESSION_TYPE=x11 \
             LD_LIBRARY_PATH="$RUNNER_TEMP/build/libs" \
             CAP_GPUI_REAL_APP_BIN="$RUNNER_TEMP/build/cap-gpui" \
-            CAP_GPUI_REAL_APP_ARTIFACTS="$RUNNER_TEMP/real-app" \
+            CAP_GPUI_REAL_APP_ARTIFACTS="$RUNNER_TEMP/real-app" CAP_GPUI_REAL_APP_CAMERA=1 \
             CAP_GPUI_AUTO_OVERLAY=window CAP_GPUI_AUTO_WINDOW=xmessage \
             dbus-run-session -- "$RUNNER_TEMP/build/real-app-tests" --ignored --test-threads=1 --nocapture \
             real_app_instant_recording_with_camera_uploads_and_verifies
