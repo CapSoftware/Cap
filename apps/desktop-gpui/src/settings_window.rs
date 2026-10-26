@@ -3916,8 +3916,10 @@ impl SettingsWindow {
                 false,
                 cx,
                 |this, _window, cx| {
-                    this.settings.recordings_path = None;
-                    this.write("recordingsPath", Value::Null, cx);
+                    if store::set_recordings_path(None) {
+                        this.settings = GeneralSettings::load();
+                        cx.notify();
+                    }
                 },
             ));
         }
@@ -3945,8 +3947,10 @@ impl SettingsWindow {
                     };
                     this.update(cx, |this, cx| {
                         let path = path.to_string_lossy().to_string();
-                        this.settings.recordings_path = Some(path.clone());
-                        this.write("recordingsPath", Value::String(path), cx);
+                        if store::set_recordings_path(Some(&path)) {
+                            this.settings = GeneralSettings::load();
+                            cx.notify();
+                        }
                     })
                     .ok();
                 })
