@@ -428,9 +428,12 @@ pub(crate) fn schedule_startup_check(cx: &mut App) {
 
             let policy_now = cx.update(|cx| cx.global::<UpdateScheduler>().download_policy);
             if policy_now != policy {
+                let was_never = policy == UpdateDownloadPolicy::Never;
                 policy = policy_now;
                 delay = if policy == UpdateDownloadPolicy::Never {
                     None
+                } else if was_never {
+                    Some(first_check_delay(channel))
                 } else {
                     next_check_delay(channel)
                 };
@@ -545,10 +548,17 @@ pub(crate) fn schedule_startup_check(cx: &mut App) {
             }
             if superseded {
                 // Run the queued manual check or channel change straight away.
+                cx.update(|cx| set_status(UpdateStatus::Idle, cx));
                 delay = Some(Duration::ZERO);
                 continue;
             }
 
+            let policy = cx.update(|cx| cx.global::<UpdateScheduler>().download_policy);
+            if policy == UpdateDownloadPolicy::Never && !manual {
+                cx.update(|cx| set_status(UpdateStatus::Idle, cx));
+                delay = next_check_delay(channel);
+                continue;
+            }
             if policy == UpdateDownloadPolicy::Auto {
                 cx.update(|cx| finish_manual_check(cx, manual));
                 cx.update(|cx| start_download(release, cx));
