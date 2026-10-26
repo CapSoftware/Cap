@@ -20,6 +20,15 @@ if [[ $XDG_CURRENT_DESKTOP != *GNOME* ]]; then
   done
 fi
 
+# PRELAUNCH=1 runs Cap once first, as on a system Cap has run on: a shell
+# launch writes so.cap.Cap.desktop, which GNOME reads a few seconds later.
+if [[ ${PRELAUNCH:-} == 1 ]]; then
+  first=$(bash "$here/launch-cap.sh" first)
+  sleep 8
+  kill "$first" 2>/dev/null
+  sleep 3
+fi
+
 # LAUNCH=dock starts Cap in the unit GNOME's app grid gives it, as
 # scenario-start-stop.sh does; LAUNCH=terminal from a shell.
 if [[ ${LAUNCH:-dock} == dock ]]; then
@@ -32,7 +41,7 @@ pid=$(bash "$here/launch-cap.sh" cap CAP_GPUI_AUTO_RECORD=screenshot CAP_GPUI_AU
 focus_cap() {
   if [[ $XDG_CURRENT_DESKTOP == *GNOME* ]]; then
     gdbus call --session --dest org.gnome.Shell --object-path /org/gnome/Shell --method org.gnome.Shell.Eval \
-      "global.display.list_all_windows().filter(w => w.get_wm_class() === 'Cap' && w.showing_on_its_workspace()).forEach(w => w.activate(global.display.get_current_time_roundtrip()))" \
+      "global.display.list_all_windows().filter(w => /^(Cap|so\.cap\.Cap)$/.test(w.get_wm_class() || '') && w.showing_on_its_workspace()).forEach(w => w.activate(global.display.get_current_time_roundtrip()))" \
       >/dev/null 2>&1
   elif [[ -n ${HYPRLAND_INSTANCE_SIGNATURE:-} ]]; then
     hyprctl dispatch focuswindow class:Cap >/dev/null 2>&1
