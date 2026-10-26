@@ -117,6 +117,12 @@ label = "Dock-Symbol immer anzeigen"
 description = "Mitteilungen für Kopien in die Zwischenablage, gespeicherte Dateien und mehr anzeigen. Eventuell müssen Sie Cap in den Mitteilungseinstellungen Ihres Systems erlauben."
 label = "Systemmitteilungen"
 
+[settings.general.app.open_file]
+description = "Legen Sie fest, ob „Datei öffnen“ einen Export öffnet oder im Ordner anzeigt."
+label = "Schaltfläche „Datei öffnen“"
+open = "Datei öffnen"
+show_in_folder = "Im Ordner anzeigen"
+
 [settings.general.recording]
 description = "Verhalten während und nach der Aufnahme."
 title = "Aufnahme"

@@ -117,6 +117,12 @@ label = "Dockアイコンを常に表示"
 description = "クリップボードへのコピーやファイルの保存などを通知します。システムの通知設定でCapを許可する必要がある場合があります。"
 label = "システム通知"
 
+[settings.general.app.open_file]
+description = "「ファイルを開く」で書き出したファイルを開くか、フォルダ内に表示するかを選びます。"
+label = "「ファイルを開く」ボタン"
+open = "ファイルを開く"
+show_in_folder = "フォルダに表示"
+
 [settings.general.recording]
 description = "録画中と録画停止後の動作。"
 title = "録画"

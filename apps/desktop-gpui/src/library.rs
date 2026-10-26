@@ -669,6 +669,13 @@ pub fn reveal_path(path: &Path, cx: &App) {
     cx.reveal_path(dunce::simplified(path));
 }
 
+pub fn open_output(path: &Path, cx: &App) {
+    match crate::store::GeneralSettings::load().open_file_behaviour {
+        crate::store::OpenFileBehaviour::OpenFile => open_with_system(path, cx),
+        crate::store::OpenFileBehaviour::ShowInFolder => reveal_path(path, cx),
+    }
+}
+
 pub fn open_with_system(path: &Path, cx: &App) {
     cx.open_with_system(dunce::simplified(path));
 }

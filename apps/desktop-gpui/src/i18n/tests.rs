@@ -121,6 +121,22 @@ fn english_matches_the_literals_it_replaced() {
             "System notifications".into(),
         ),
         (
+            tr::settings::general::app::open_file::description(),
+            "Choose whether Open File opens an export or shows it in its folder.".into(),
+        ),
+        (
+            tr::settings::general::app::open_file::label(),
+            "Open File button".into(),
+        ),
+        (
+            tr::settings::general::app::open_file::open(),
+            "Open the file".into(),
+        ),
+        (
+            tr::settings::general::app::open_file::show_in_folder(),
+            "Show in folder".into(),
+        ),
+        (
             tr::settings::general::recording::description(),
             "Behaviour while you record and after you stop.".into(),
         ),
