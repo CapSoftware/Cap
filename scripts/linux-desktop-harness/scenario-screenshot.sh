@@ -20,6 +20,15 @@ if [[ $XDG_CURRENT_DESKTOP != *GNOME* ]]; then
   done
 fi
 
+# PRELAUNCH=1 runs Cap once first, as on a system Cap has run on: a shell
+# launch writes so.cap.Cap.desktop, which GNOME reads a few seconds later.
+if [[ ${PRELAUNCH:-} == 1 ]]; then
+  first=$(bash "$here/launch-cap.sh" first)
+  sleep 8
+  kill "$first" 2>/dev/null
+  sleep 3
+fi
+
 # LAUNCH=dock starts Cap in the unit GNOME's app grid gives it, as
 # scenario-start-stop.sh does; LAUNCH=terminal from a shell.
 if [[ ${LAUNCH:-dock} == dock ]]; then
