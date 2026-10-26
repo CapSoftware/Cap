@@ -303,6 +303,53 @@ async fn real_app_instant_recording_uploads_and_verifies() {
     assert!(sandbox.journal().is_empty(), "{:?}", sandbox.journal());
 }
 
+/// An Instant recording with the camera on uploads and verifies. On Linux the
+/// camera is drawn into the screen video, so a camera that stalls or sends a
+/// bad frame stops the recording. Needs a camera attached; the CI job feeds a
+/// virtual one and checks its picture reached the video.
+#[ignore]
+#[tokio::test(flavor = "multi_thread")]
+async fn real_app_instant_recording_with_camera_uploads_and_verifies() {
+    let mock = MockCap::start(Vec::new()).await;
+    let sandbox = Sandbox::new(&mock.url, 0);
+    let app = sandbox.launch(
+        "camera",
+        &[
+            ("CAP_GPUI_AUTO_CAMERA", "1"),
+            ("CAP_GPUI_AUTO_RECORD", "instant:8"),
+        ],
+    );
+    wait_for_app(
+        &sandbox,
+        &app,
+        "a verified upload",
+        Duration::from_secs(180),
+        || {
+            sandbox
+                .projects()
+                .first()
+                .and_then(|project| state(project))
+                .is_some_and(|state| state["phase"] == "Verified")
+        },
+    )
+    .await;
+    kill(app);
+    let log = sandbox.log("camera");
+    assert!(log.contains("auto-selecting camera"), "no camera selected");
+    let video = mock.created();
+    assert_eq!(video.len(), 1, "{video:?}");
+    assert!(
+        mock.confirmations()
+            .iter()
+            .any(|confirmation| confirmation["videoId"] == video[0].as_str())
+    );
+    let project = sandbox.projects().remove(0);
+    assert!(finished_segments(&project) >= 3, "{}", project.display());
+    assert!(mock.deleted().is_empty(), "{:?}", mock.deleted());
+    assert!(sandbox.journal().is_empty(), "{:?}", sandbox.journal());
+    assert!(!log.contains("panicked at"), "the app panicked");
+}
+
 /// Kills the app at points from the server video's creation through the
 /// first seconds of capture, then relaunches long after. Each recording's state
 /// is noted right after its kill, before anything else runs: a recording that
