@@ -19,14 +19,15 @@
 //! Metrics are transcribed from the TSX with the Tailwind class quoted next to
 //! them, the same convention `main_window.rs` uses.
 
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use cap_recording::sources::screen_capture::ScreenCaptureTarget;
 use gpui::{
-    Animation, AnimationExt as _, App, AppContext as _, Context, Entity, FontWeight, Global, Hsla,
-    ImageFormat, InteractiveElement as _, IntoElement, MouseButton, MouseMoveEvent, MouseUpEvent,
+    App, AppContext as _, Context, Entity, FontWeight, Global, Hsla, ImageFormat,
+    InteractiveElement as _, IntoElement, MouseButton, MouseMoveEvent, MouseUpEvent,
     ParentElement as _, Pixels, Point, Render, SharedString, StatefulInteractiveElement as _,
     Styled, Window, div, img, linear_color_stop, linear_gradient, prelude::FluentBuilder as _, px,
     rgb, svg,
@@ -36,6 +37,7 @@ use scap_targets::{
     bounds::{LogicalBounds, LogicalPosition, LogicalSize},
 };
 
+use crate::theme::LocaleFont as _;
 use crate::{
     app_windows,
     editor_canvas::{
@@ -80,12 +82,38 @@ fn overlay_display_is_active(
     cursor_display.map_or(only_overlay || window_hovered, |cursor| cursor == display)
 }
 
+/// Whether a new mic level should repaint an overlay: only when it drew the
+/// meter and the fill moves by a device pixel. The cluster's width bounds the
+/// meter's.
+fn overlay_meter_moved(drawn: Option<f32>, next: f32, scale: f32) -> bool {
+    drawn.is_some_and(|drawn| crate::ui::moves_a_device_pixel(drawn, next, CLUSTER_WIDTH * scale))
+}
+
 fn overlay_viewport_size(viewport: (f32, f32), previous: (f32, f32)) -> (f32, f32) {
     if viewport.0.is_finite() && viewport.1.is_finite() && viewport.0 > 0. && viewport.1 > 0. {
         viewport
     } else {
         previous
     }
+}
+
+pub(crate) fn capture_scale_factor(window: &Window) -> f32 {
+    #[cfg(target_os = "linux")]
+    {
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+        if HasWindowHandle::window_handle(window).is_ok_and(|handle| {
+            matches!(
+                handle.as_raw(),
+                RawWindowHandle::Xlib(_) | RawWindowHandle::Xcb(_)
+            )
+        }) {
+            // X11 capture bounds are physical pixels, even when scap calls them logical.
+            return window.scale_factor();
+        }
+    }
+    let _ = window;
+    1.
 }
 
 fn recording_devices_available(cx: &App) -> bool {
@@ -140,6 +168,16 @@ const COUNTDOWN_OPTIONS: &[(u32, &str)] = &[
 ];
 
 const SELECTION_HINT_CYCLE: Duration = Duration::from_millis(2800);
+
+/// The hint redraws on a 30 fps timer rather than every display refresh: it
+/// is a small illustration, but each frame repaints a full-screen overlay.
+const SELECTION_HINT_FRAME: Duration = Duration::from_nanos(1_000_000_000 / 30);
+
+/// Where the hint is in its cycle, the way gpui's repeating `Animation`
+/// computes it: linear time since it first drew, wrapped to `0..1`.
+fn selection_hint_progress(elapsed: Duration) -> f32 {
+    (elapsed.as_secs_f32() / SELECTION_HINT_CYCLE.as_secs_f32()) % 1.
+}
 
 fn material_ease(progress: f32) -> f32 {
     let progress = progress.clamp(0., 1.);
@@ -223,8 +261,8 @@ pub struct HoveredWindow {
     pub id: WindowId,
     pub app_name: String,
     pub display_id: DisplayId,
-    /// Bounds relative to the display's top-left, in logical points -- exactly
-    /// what the overlay window's own coordinate space is. Carried as our own
+    /// Bounds relative to the display's top-left in capture coordinates;
+    /// X11 overlays convert these physical pixels to logical points. Carried as our own
     /// rect rather than `LogicalBounds` so the poll can compare frames for
     /// equality (`scap_targets`' bounds are not `PartialEq`).
     pub bounds: AreaRect,
@@ -368,28 +406,32 @@ impl TargetSelect {
                     })
                     .await;
 
-                let Ok((icon_wanted, active, changed)) = this.update(cx, |this: &mut Self, cx| {
-                    let (display, window) = probe;
-                    let microphone_fill =
-                        crate::ui::MicrophoneLevel::fill(crate::feeds::Feeds::global(cx).read(cx));
-                    let changed = this.cursor_display != display
-                        || this.hovered_window != window
-                        || this.microphone_fill != microphone_fill;
-                    this.microphone_fill = microphone_fill;
-                    this.cursor_display = display;
-                    this.hovered_window = window;
-                    if changed {
-                        cx.notify();
-                    }
+                let Ok((icon_wanted, active, changed, microphone_changed)) =
+                    this.update(cx, |this: &mut Self, cx| {
+                        let (display, window) = probe;
+                        let microphone_fill = crate::ui::MicrophoneLevel::capture_fill(cx);
+                        // The mic level stays out of `changed`: only the overlays
+                        // drawing the meter repaint for it, below.
+                        let changed =
+                            this.cursor_display != display || this.hovered_window != window;
+                        let microphone_changed = this.microphone_fill != microphone_fill;
+                        this.microphone_fill = microphone_fill;
+                        this.cursor_display = display;
+                        this.hovered_window = window;
+                        if changed {
+                            cx.notify();
+                        }
 
-                    (
-                        this.active_window()
-                            .map(|window| window.id.clone())
-                            .filter(|id| !this.icons.contains_key(&id.to_string())),
-                        this.active_window().cloned(),
-                        changed,
-                    )
-                }) else {
+                        (
+                            this.active_window()
+                                .map(|window| window.id.clone())
+                                .filter(|id| !this.icons.contains_key(&id.to_string())),
+                            this.active_window().cloned(),
+                            changed,
+                            microphone_changed,
+                        )
+                    })
+                else {
                     return;
                 };
                 let fetched_icon = icon_wanted.is_some();
@@ -409,6 +451,8 @@ impl TargetSelect {
                 // that changed nothing they draw has nothing to repaint.
                 if changed || fetched_icon {
                     cx.update(app_windows::refresh_target_overlays);
+                } else if microphone_changed {
+                    cx.update(app_windows::refresh_microphone_overlays);
                 }
                 cx.background_executor().timer(POLL_INTERVAL).await;
             }
@@ -435,6 +479,180 @@ impl TargetSelect {
         })
         .ok();
     }
+}
+
+/// The aspect ratios the area toolbar cycles through, `None` first for a free
+/// selection. The 0.6.0 picker offered the same set (`COMMON_RATIOS`).
+const AREA_RATIOS: [Option<(u32, u32)>; 9] = [
+    None,
+    Some((16, 9)),
+    Some((4, 3)),
+    Some((1, 1)),
+    Some((9, 16)),
+    Some((16, 10)),
+    Some((21, 9)),
+    Some((3, 2)),
+    Some((2, 1)),
+];
+
+const AREA_SELECTION_STORE: &str = "gpui_area_selection";
+
+fn stored_area_ratio() -> Option<(u32, u32)> {
+    let section = crate::store::store_section(AREA_SELECTION_STORE);
+    let ratio = section.get("aspectRatio")?.as_array()?;
+    let [width, height] = ratio.as_slice() else {
+        return None;
+    };
+    let ratio = (width.as_u64()? as u32, height.as_u64()? as u32);
+    AREA_RATIOS.contains(&Some(ratio)).then_some(ratio)
+}
+
+fn store_area_ratio(ratio: Option<(u32, u32)>) {
+    crate::store::update_store_section(AREA_SELECTION_STORE, |section| {
+        section.insert(
+            "aspectRatio".into(),
+            ratio.map_or(serde_json::Value::Null, |(width, height)| {
+                serde_json::json!([width, height])
+            }),
+        );
+        true
+    });
+}
+
+fn next_area_ratio(current: Option<(u32, u32)>) -> Option<(u32, u32)> {
+    let index = AREA_RATIOS
+        .iter()
+        .position(|ratio| *ratio == current)
+        .unwrap_or(0);
+    AREA_RATIOS[(index + 1) % AREA_RATIOS.len()]
+}
+
+fn ratio_value((width, height): (u32, u32)) -> f32 {
+    width as f32 / height.max(1) as f32
+}
+
+/// An area at `ratio` (width over height) spanning from the fixed `anchor`
+/// towards `pointer`: the longer span wins, and the area shrinks to stay on
+/// the display.
+fn area_from_anchor_with_ratio(
+    anchor: (f32, f32),
+    pointer: (f32, f32),
+    ratio: f32,
+    display: (f32, f32),
+) -> AreaRect {
+    let (dx, dy) = (pointer.0 - anchor.0, pointer.1 - anchor.1);
+    let (mut width, mut height) = (dx.abs(), dy.abs());
+    if width / ratio >= height {
+        height = width / ratio;
+    } else {
+        width = height * ratio;
+    }
+    let room_x = if dx >= 0. {
+        display.0 - anchor.0
+    } else {
+        anchor.0
+    };
+    let room_y = if dy >= 0. {
+        display.1 - anchor.1
+    } else {
+        anchor.1
+    };
+    let fit = [
+        1.,
+        room_x / width.max(f32::EPSILON),
+        room_y / height.max(f32::EPSILON),
+    ]
+    .into_iter()
+    .fold(f32::INFINITY, f32::min)
+    .max(0.);
+    width *= fit;
+    height *= fit;
+    AreaRect {
+        x: if dx >= 0. { anchor.0 } else { anchor.0 - width },
+        y: if dy >= 0. {
+            anchor.1
+        } else {
+            anchor.1 - height
+        },
+        width,
+        height,
+    }
+}
+
+/// An edge-handle resize at `ratio`: the opposite edge stays put, the dragged
+/// edge follows the pointer to whichever side of it the pointer is, and the
+/// other span grows around the area's centre line, shrinking to stay on the
+/// display.
+fn area_edge_resize_with_ratio(
+    handle: AreaHandle,
+    start: AreaRect,
+    pointer: (f32, f32),
+    ratio: f32,
+    display: (f32, f32),
+) -> AreaRect {
+    let (center_x, center_y) = (start.x + start.width / 2., start.y + start.height / 2.);
+    if handle.east() || handle.west() {
+        let anchor = if handle.west() {
+            start.right()
+        } else {
+            start.x
+        };
+        let before = pointer.0 < anchor;
+        let room_x = if before { anchor } else { display.0 - anchor };
+        let room_y = 2. * center_y.min(display.1 - center_y);
+        let width = (pointer.0 - anchor)
+            .abs()
+            .min(room_x)
+            .min(room_y * ratio)
+            .max(0.);
+        let height = width / ratio;
+        AreaRect {
+            x: if before { anchor - width } else { anchor },
+            y: center_y - height / 2.,
+            width,
+            height,
+        }
+    } else {
+        let anchor = if handle.north() {
+            start.bottom()
+        } else {
+            start.y
+        };
+        let before = pointer.1 < anchor;
+        let room_y = if before { anchor } else { display.1 - anchor };
+        let room_x = 2. * center_x.min(display.0 - center_x);
+        let height = (pointer.1 - anchor)
+            .abs()
+            .min(room_y)
+            .min(room_x / ratio)
+            .max(0.);
+        let width = height * ratio;
+        AreaRect {
+            x: center_x - width / 2.,
+            y: if before { anchor - height } else { anchor },
+            width,
+            height,
+        }
+    }
+}
+
+/// An existing area brought to `ratio` around its centre, keeping its width
+/// unless that would not fit the display.
+fn area_with_ratio(area: AreaRect, ratio: f32, display: (f32, f32)) -> AreaRect {
+    let (center_x, center_y) = (area.x + area.width / 2., area.y + area.height / 2.);
+    let mut width = area.width.min(display.0);
+    let mut height = width / ratio;
+    if height > display.1 {
+        height = display.1;
+        width = height * ratio;
+    }
+    AreaRect {
+        x: center_x - width / 2.,
+        y: center_y - height / 2.,
+        width,
+        height,
+    }
+    .clamped(display)
 }
 
 /// A rectangle in the overlay's own coordinate space: display-relative logical
@@ -486,6 +704,15 @@ impl AreaRect {
             width,
             height,
         })
+    }
+
+    fn scaled(self, scale: f32) -> Self {
+        Self {
+            x: self.x * scale,
+            y: self.y * scale,
+            width: self.width * scale,
+            height: self.height * scale,
+        }
     }
 
     fn to_bounds(self) -> LogicalBounds {
@@ -592,6 +819,7 @@ pub struct OverlayWindow {
     /// Logical size, which is this window's size and the space every
     /// coordinate here lives in.
     display_size: (f32, f32),
+    capture_scale: f32,
     controls_work_area: AreaRect,
     /// Physical pixels, for the `1920x1080 · 60FPS` line.
     physical_size: Option<(u32, u32)>,
@@ -600,6 +828,8 @@ pub struct OverlayWindow {
     crop: Option<AreaRect>,
     drag: Option<AreaDrag>,
     snap_guides: Vec<SnapGuide>,
+    /// The aspect ratio a drawn or resized area keeps, `None` for free.
+    area_ratio: Option<(u32, u32)>,
     recording_area: bool,
     /// The mode menu the start pill's caret drops down -- `menuModes()`
     /// popped up at the event location (`target-select-overlay.tsx:2064-2090,
@@ -613,6 +843,11 @@ pub struct OverlayWindow {
     /// Cached off the store so the start pill does not re-read the settings
     /// file every frame; refreshed whenever the shared sign-in reports.
     signed_in: bool,
+    /// The mic fill the last render drew, `None` when it drew no meter.
+    drawn_microphone_fill: Cell<Option<f32>>,
+    /// When the area hint first drew since it was last hidden.
+    selection_hint_started: Option<Instant>,
+    selection_hint_redraw: Option<gpui::Task<()>>,
     _main_subscription: Option<gpui::Subscription>,
 }
 
@@ -693,9 +928,15 @@ impl OverlayWindow {
         )
         .detach();
 
+        let capture_scale = capture_scale_factor(window);
         let logical = display
             .logical_size()
-            .map(|size| (size.width() as f32, size.height() as f32))
+            .map(|size| {
+                (
+                    size.width() as f32 / capture_scale,
+                    size.height() as f32 / capture_scale,
+                )
+            })
             .unwrap_or((1920., 1080.));
 
         let controls_work_area = display
@@ -703,8 +944,8 @@ impl OverlayWindow {
             .logical_bounds()
             .zip(app_windows::display_work_area(Some(display), cx))
             .map(|(bounds, available)| AreaRect {
-                x: f32::from(available.origin.x) - bounds.position().x() as f32,
-                y: f32::from(available.origin.y) - bounds.position().y() as f32,
+                x: f32::from(available.origin.x) - bounds.position().x() as f32 / capture_scale,
+                y: f32::from(available.origin.y) - bounds.position().y() as f32 / capture_scale,
                 width: f32::from(available.size.width),
                 height: f32::from(available.size.height),
             })
@@ -724,6 +965,7 @@ impl OverlayWindow {
                 .name()
                 .unwrap_or_else(|| format!("Display {}", display.id())),
             display_size: logical,
+            capture_scale,
             controls_work_area,
             physical_size: display
                 .physical_size()
@@ -733,6 +975,7 @@ impl OverlayWindow {
             crop: None,
             drag: None,
             snap_guides: Vec::new(),
+            area_ratio: stored_area_ratio(),
             recording_area: false,
             mode_menu: None,
             countdown_menu: None,
@@ -741,6 +984,9 @@ impl OverlayWindow {
             empty_camera_state: crate::store::load().camera_window.unwrap_or_default(),
             device_menu: None,
             signed_in: crate::store::auth_snapshot().signed_in(),
+            drawn_microphone_fill: Cell::new(None),
+            selection_hint_started: None,
+            selection_hint_redraw: None,
             _main_subscription: main_subscription,
         }
     }
@@ -784,7 +1030,7 @@ impl OverlayWindow {
         if self.recording_area {
             return self.crop.map(|crop| ScreenCaptureTarget::Area {
                 screen: self.display_id.clone(),
-                bounds: crop.to_bounds(),
+                bounds: crop.scaled(self.capture_scale).to_bounds(),
             });
         }
         let select = self.select.read(cx);
@@ -803,7 +1049,7 @@ impl OverlayWindow {
             TargetType::Area => self.crop.filter(|crop| crop.is_valid_for(min)).map(|crop| {
                 ScreenCaptureTarget::Area {
                     screen: self.display_id.clone(),
-                    bounds: crop.to_bounds(),
+                    bounds: crop.scaled(self.capture_scale).to_bounds(),
                 }
             }),
             TargetType::CameraOnly => Some(ScreenCaptureTarget::CameraOnly),
@@ -917,6 +1163,14 @@ impl OverlayWindow {
         });
     }
 
+    pub fn microphone_level_moved(&self, window: &Window, cx: &App) -> bool {
+        overlay_meter_moved(
+            self.drawn_microphone_fill.get(),
+            self.select.read(cx).microphone_fill,
+            window.scale_factor(),
+        )
+    }
+
     /// True when the cursor is on this overlay's display -- `data-over` in the
     /// display variant, `isActiveDisplay` in the area variant.
     fn is_active_display(&self, window: &Window, cx: &App) -> bool {
@@ -946,6 +1200,7 @@ impl Render for OverlayWindow {
             self.sync_area_camera(cx);
         }
         let mode = self.select.read(cx).mode;
+        self.drawn_microphone_fill.set(None);
 
         let root = div()
             .id("overlay-root")
@@ -999,6 +1254,7 @@ impl Render for OverlayWindow {
             .size_full()
             .relative()
             .font_family(crate::theme::UI_FONT)
+            .locale_font()
             // `body { font-weight: 500 }` (`ui-solid/src/main.css:189-192`).
             .font_weight(FontWeight::MEDIUM)
             .text_color(gpui::white());
@@ -1166,7 +1422,8 @@ impl OverlayWindow {
             return div().into_any_element();
         };
         let selected = if camera {
-            view.camera_selection().map(|camera| camera.label.clone())
+            view.camera_selection()
+                .map(|camera| crate::main_window::camera_label(&camera.label))
         } else {
             view.microphone_selection().map(|mic| mic.name.clone())
         };
@@ -1212,14 +1469,13 @@ impl OverlayWindow {
             .overflow_hidden()
             .when(disabled, |row| row.opacity(0.7))
             .when(!camera && enabled && !disabled, |row| {
+                let fill = self.select.read(cx).microphone_fill;
+                self.drawn_microphone_fill.set(Some(fill));
                 row.child(
-                    crate::ui::MicrophoneLevel::snapshot(
-                        self.select.read(cx).microphone_fill,
-                        theme.blue_9.into(),
-                    )
-                    .absolute()
-                    .top_0()
-                    .left_0(),
+                    crate::ui::MicrophoneLevel::snapshot(fill, theme.blue_9.into())
+                        .absolute()
+                        .top_0()
+                        .left_0(),
                 )
             })
             .child(
@@ -1459,7 +1715,7 @@ impl OverlayWindow {
         let Some(active) = active else {
             return div().size_full().into_any_element();
         };
-        let bounds = active.bounds;
+        let bounds = active.bounds.scaled(1. / self.capture_scale);
         let width = bounds.width;
         let height = bounds.height;
 
@@ -1511,12 +1767,10 @@ impl OverlayWindow {
                                     .font_weight(FontWeight::BOLD)
                                     .child(SharedString::from(active.app_name.clone())),
                             )
-                            .child(
-                                div()
-                                    .mb(px(8.))
-                                    .text_size(px(12.))
-                                    .child(format!("{}x{}", width as u32, height as u32)),
-                            ),
+                            .child(div().mb(px(8.)).text_size(px(12.)).child(format!(
+                                "{}x{}",
+                                active.bounds.width as u32, active.bounds.height as u32
+                            ))),
                     )
                     .child(self.render_controls_cluster(self.target(cx), false, cx)),
             )
@@ -1611,10 +1865,13 @@ impl OverlayWindow {
     /// region with eight handles, a size readout on top and the start cluster
     /// placed against the crop.
     fn render_area_variant(
-        &self,
-        window: &Window,
+        &mut self,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
+        // Taken so the hint restarts whenever a render leaves it out, as a
+        // gpui animation's element state would.
+        let hint_started = self.selection_hint_started.take();
         let interacting = self.drag.is_some();
         // `shouldShowOverlay = isInteracting() || isActiveDisplay()`.
         let visible = self.recording_area || interacting || self.is_active_display(window, cx);
@@ -1704,9 +1961,9 @@ impl OverlayWindow {
             return root;
         }
         if crop.is_none() && !interacting {
-            root = root.child(self.render_selection_hint());
+            root = root.child(self.render_selection_hint(hint_started, window, cx));
         }
-        root = root.child(self.render_area_toolbar(crop, valid));
+        root = root.child(self.render_area_toolbar(crop, valid, cx));
         if crop.is_some() {
             root.child(self.render_area_controls(crop, valid, cx))
         } else {
@@ -1838,13 +2095,36 @@ impl OverlayWindow {
             .collect()
     }
 
-    fn render_selection_hint(&self) -> impl IntoElement {
+    fn render_selection_hint(
+        &mut self,
+        started: Option<Instant>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
         let cursor_path = if cfg!(target_os = "windows") {
             "onboarding/cursor-windows.svg"
         } else {
             "onboarding/cursor-macos.svg"
         };
-        let animation = || Animation::new(SELECTION_HINT_CYCLE).repeat();
+        let started = started.unwrap_or_else(Instant::now);
+        self.selection_hint_started = Some(started);
+        // Reduced motion holds the first frame, as gpui's animations do.
+        let progress = if cx.reduce_motion() {
+            0.
+        } else {
+            if self.selection_hint_redraw.is_none() {
+                self.selection_hint_redraw = Some(cx.spawn_in(window, async move |this, cx| {
+                    cx.background_executor().timer(SELECTION_HINT_FRAME).await;
+                    this.update_in(cx, |this, window, cx| {
+                        this.selection_hint_redraw = None;
+                        repaint(window, cx);
+                    })
+                    .ok();
+                }));
+            }
+            selection_hint_progress(started.elapsed())
+        };
+        let drag = selection_drag_progress(progress);
         let selection = div()
             .absolute()
             .left(px(41.))
@@ -1856,55 +2136,37 @@ impl OverlayWindow {
                 linear_color_stop(gpui::hsla(0.55, 1., 0.72, 0.4), 0.),
                 linear_color_stop(gpui::hsla(0.62, 1., 0.59, 0.2), 1.),
             ))
-            .with_animation("area-selection-hint-box", animation(), |this, progress| {
-                let progress = selection_drag_progress(progress);
-                this.w(px(10. + 58. * progress)).h(px(8. + 44. * progress))
-            });
+            .w(px(10. + 58. * drag))
+            .h(px(8. + 44. * drag));
         let cursor = img(cursor_path)
             .absolute()
-            .left(px(41.))
-            .top(px(26.))
+            .left(px(41. + 68. * drag))
+            .top(px(26. + 52. * drag))
             .w(px(18.))
-            .h(px(26.))
-            .with_animation(
-                "area-selection-hint-cursor",
-                animation(),
-                |this, progress| {
-                    let progress = selection_drag_progress(progress);
-                    this.left(px(41. + 68. * progress))
-                        .top(px(26. + 52. * progress))
-                },
-            );
+            .h(px(26.));
+        let (scale, opacity) = if (0.1..0.12).contains(&progress) {
+            (
+                (progress - 0.1) / 0.02 * 0.2,
+                (progress - 0.1) / 0.02 * 0.95,
+            )
+        } else if (0.12..0.18).contains(&progress) {
+            (
+                0.2 + (progress - 0.12) / 0.06 * 0.65,
+                0.95 * (1. - (progress - 0.12) / 0.06),
+            )
+        } else {
+            (0., 0.)
+        };
+        let size = 20. * scale;
         let click = div()
             .absolute()
             .rounded_full()
             .border_2()
             .border_color(gpui::hsla(0., 0., 1., 0.85))
-            .with_animation(
-                "area-selection-hint-click",
-                animation(),
-                |this, progress| {
-                    let (scale, opacity) = if (0.1..0.12).contains(&progress) {
-                        (
-                            (progress - 0.1) / 0.02 * 0.2,
-                            (progress - 0.1) / 0.02 * 0.95,
-                        )
-                    } else if (0.12..0.18).contains(&progress) {
-                        (
-                            0.2 + (progress - 0.12) / 0.06 * 0.65,
-                            0.95 * (1. - (progress - 0.12) / 0.06),
-                        )
-                    } else {
-                        (0., 0.)
-                    };
-                    let drag = selection_drag_progress(progress);
-                    let size = 20. * scale;
-                    this.left(px(41. + 68. * drag + 9. - size / 2.))
-                        .top(px(26. + 52. * drag + 14.3 - size / 2.))
-                        .size(px(size))
-                        .opacity(opacity)
-                },
-            );
+            .left(px(41. + 68. * drag + 9. - size / 2.))
+            .top(px(26. + 52. * drag + 14.3 - size / 2.))
+            .size(px(size))
+            .opacity(opacity);
 
         div()
             .absolute()
@@ -1948,21 +2210,52 @@ impl OverlayWindow {
     }
 
     /// The floating readout: `top-12 left-1/2 -translate-x-1/2` over the
-    /// liquid-glass surface, `min-w-28 px-2 text-base tabular-nums`. The
-    /// aspect-ratio, reset, fill and lock controls that share this bar in the
-    /// TSX are deferred (README).
-    fn render_area_toolbar(&self, crop: Option<AreaRect>, valid: bool) -> impl IntoElement {
+    /// liquid-glass surface, `min-w-28 px-2 text-base tabular-nums`, and the
+    /// aspect-ratio control beside it. The reset, fill and lock controls that
+    /// share this bar in the TSX are deferred (README).
+    fn render_area_toolbar(
+        &self,
+        crop: Option<AreaRect>,
+        valid: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let label = match crop.filter(|_| valid) {
             Some(crop) => format!("{} × {}", crop.width.round(), crop.height.round()),
             None => "Draw an area".to_string(),
         };
+        let ratio_label = match self.area_ratio {
+            Some((width, height)) => format!("{width}:{height}"),
+            None => "Free".to_string(),
+        };
+        let ratio = div()
+            .id("area-aspect-ratio")
+            .h(px(36.))
+            .min_w(px(56.))
+            .px(px(10.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(10.))
+            .cursor_pointer()
+            .text_size(px(14.))
+            .font_weight(FontWeight::MEDIUM)
+            .bg(self.theme.gray_3)
+            .hover({
+                let hover = self.theme.gray_4;
+                move |style| style.bg(hover)
+            })
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.set_area_ratio(next_area_ratio(this.area_ratio), cx);
+            }))
+            .child(ratio_label);
 
         div()
             .absolute()
             // `top-12` on macOS, centred by hand: gpui has no translate.
             .top(px(48.))
-            .left(px((self.display_size.0 - 200.) / 2.))
-            .w(px(200.))
+            .left(px((self.display_size.0 - 280.) / 2.))
+            .w(px(280.))
             .flex()
             .justify_center()
             .child(
@@ -1985,8 +2278,21 @@ impl OverlayWindow {
                             // that the window root carries Medium.
                             .font_weight(FontWeight::NORMAL)
                             .child(label),
-                    ),
+                    )
+                    .child(ratio),
             )
+    }
+
+    /// Locks drawn and resized areas to `ratio`, reshaping the current one
+    /// around its centre, and remembers the choice for the next picker.
+    fn set_area_ratio(&mut self, ratio: Option<(u32, u32)>, cx: &mut Context<Self>) {
+        self.area_ratio = ratio;
+        if let (Some(ratio), Some(crop)) = (ratio, self.crop) {
+            self.crop = Some(area_with_ratio(crop, ratio_value(ratio), self.display_size));
+            self.sync_area_camera(cx);
+        }
+        store_area_ratio(ratio);
+        cx.notify();
     }
 
     /// The controls cluster, placed against the crop the way `controlsStyle`
@@ -2460,8 +2766,33 @@ impl OverlayWindow {
         let x = f32::from(position.x).clamp(0., self.display_size.0);
         let y = f32::from(position.y).clamp(0., self.display_size.1);
 
-        let (next, guides) = match drag {
-            AreaDrag::Draw { anchor } => {
+        let ratio = self.area_ratio.map(ratio_value);
+        let (next, guides) = match (drag, ratio) {
+            (AreaDrag::Draw { anchor }, Some(ratio)) => (
+                area_from_anchor_with_ratio(*anchor, (x, y), ratio, self.display_size),
+                Vec::new(),
+            ),
+            (AreaDrag::Resize { handle, start }, Some(ratio)) => (
+                if handle.east() != handle.west() && handle.north() != handle.south() {
+                    let anchor = (
+                        if handle.west() {
+                            start.right()
+                        } else {
+                            start.x
+                        },
+                        if handle.north() {
+                            start.bottom()
+                        } else {
+                            start.y
+                        },
+                    );
+                    area_from_anchor_with_ratio(anchor, (x, y), ratio, self.display_size)
+                } else {
+                    area_edge_resize_with_ratio(*handle, *start, (x, y), ratio, self.display_size)
+                },
+                Vec::new(),
+            ),
+            (AreaDrag::Draw { anchor }, None) => {
                 let ((x, y), guides) = snap_area_point((x, y), self.display_size);
                 (
                     AreaRect {
@@ -2473,7 +2804,7 @@ impl OverlayWindow {
                     guides,
                 )
             }
-            AreaDrag::Move { grab, start } => snap_area_rect(
+            (AreaDrag::Move { grab, start }, _) => snap_area_rect(
                 AreaRect {
                     x: start.x + (x - grab.0),
                     y: start.y + (y - grab.1),
@@ -2481,7 +2812,7 @@ impl OverlayWindow {
                 },
                 self.display_size,
             ),
-            AreaDrag::Resize { handle, start } => {
+            (AreaDrag::Resize { handle, start }, None) => {
                 let mut left = start.x;
                 let mut top = start.y;
                 let mut right = start.right();
@@ -2572,6 +2903,114 @@ fn request_media_access(permission: crate::permissions::OSPermission, cx: &mut A
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ratio_of(area: AreaRect) -> f32 {
+        area.width / area.height
+    }
+
+    fn inside(area: AreaRect, display: (f32, f32)) -> bool {
+        area.x >= -0.01
+            && area.y >= -0.01
+            && area.right() <= display.0 + 0.01
+            && area.bottom() <= display.1 + 0.01
+    }
+
+    /// A 0.6.1 report: the 0.6.0 picker could hold an area at 16:9, and the
+    /// new one could not. Drawing with a ratio keeps it from any direction.
+    #[test]
+    fn a_drawn_area_keeps_the_chosen_aspect_ratio() {
+        let display = (1920., 1080.);
+        let ratio = ratio_value((16, 9));
+        for pointer in [(900., 300.), (100., 900.), (1500., 1000.), (120., 140.)] {
+            let area = area_from_anchor_with_ratio((800., 500.), pointer, ratio, display);
+            assert!(
+                (ratio_of(area) - ratio).abs() < 0.001,
+                "{pointer:?}: {area:?}"
+            );
+            assert!(inside(area, display), "{pointer:?}: {area:?}");
+        }
+        // The longer span wins: a wide drag sets the width.
+        let wide = area_from_anchor_with_ratio((100., 100.), (900., 300.), ratio, display);
+        assert_eq!((wide.x, wide.y, wide.width), (100., 100., 800.));
+        assert!((wide.height - 450.).abs() < 0.01);
+        // A drag that would leave the display shrinks to fit instead.
+        let edge = area_from_anchor_with_ratio((1800., 100.), (1900., 1000.), ratio, display);
+        assert!(inside(edge, display) && (ratio_of(edge) - ratio).abs() < 0.001);
+    }
+
+    #[test]
+    fn resizing_an_area_keeps_the_chosen_aspect_ratio() {
+        let display = (1920., 1080.);
+        let ratio = ratio_value((1, 1));
+        let start = AreaRect {
+            x: 400.,
+            y: 300.,
+            width: 400.,
+            height: 400.,
+        };
+        for handle in AreaHandle::ALL {
+            for pointer in [(1000., 900.), (100., 50.), (650., 520.)] {
+                let area = if handle.east() != handle.west() && handle.north() != handle.south() {
+                    let anchor = (
+                        if handle.west() {
+                            start.right()
+                        } else {
+                            start.x
+                        },
+                        if handle.north() {
+                            start.bottom()
+                        } else {
+                            start.y
+                        },
+                    );
+                    area_from_anchor_with_ratio(anchor, pointer, ratio, display)
+                } else {
+                    area_edge_resize_with_ratio(handle, start, pointer, ratio, display)
+                };
+                assert!(
+                    area.height == 0. || (ratio_of(area) - ratio).abs() < 0.001,
+                    "{handle:?} {pointer:?}: {area:?}"
+                );
+                assert!(inside(area, display), "{handle:?} {pointer:?}: {area:?}");
+            }
+        }
+        // An east edge drag keeps the west edge and the centre line.
+        let east =
+            area_edge_resize_with_ratio(AreaHandle::East, start, (1000., 0.), ratio, display);
+        assert_eq!((east.x, east.width), (400., 600.));
+        assert_eq!(east.y + east.height / 2., 500.);
+        // Past the opposite edge, the selection follows the pointer over it.
+        let crossed =
+            area_edge_resize_with_ratio(AreaHandle::East, start, (300., 0.), ratio, display);
+        assert_eq!((crossed.x, crossed.width), (300., 100.));
+        let crossed =
+            area_edge_resize_with_ratio(AreaHandle::South, start, (0., 200.), ratio, display);
+        assert_eq!((crossed.y, crossed.height), (200., 100.));
+        let crossed =
+            area_edge_resize_with_ratio(AreaHandle::West, start, (900., 0.), ratio, display);
+        assert_eq!((crossed.x, crossed.width), (800., 100.));
+    }
+
+    #[test]
+    fn choosing_a_ratio_reshapes_the_area_around_its_centre() {
+        let display = (1920., 1080.);
+        let area = area_with_ratio(
+            AreaRect {
+                x: 100.,
+                y: 300.,
+                width: 800.,
+                height: 200.,
+            },
+            ratio_value((16, 9)),
+            display,
+        );
+        assert_eq!((area.x, area.width), (100., 800.));
+        assert!((area.height - 450.).abs() < 0.01);
+        assert!((area.y + area.height / 2. - 400.).abs() < 0.01);
+        assert!(inside(area, display));
+        assert_eq!(next_area_ratio(None), Some((16, 9)));
+        assert_eq!(next_area_ratio(Some((2, 1))), None);
+    }
 
     #[test]
     fn a_single_overlay_remains_interactive_without_a_global_cursor_probe() {
@@ -2744,6 +3183,24 @@ mod tests {
     }
 
     #[test]
+    fn scaled_overlay_selections_preserve_the_physical_capture_region() {
+        let capture = rect(300., 240., 900., 600.);
+        for (scale, expected) in [
+            (1., rect(300., 240., 900., 600.)),
+            (1.5, rect(200., 160., 600., 400.)),
+            (2., rect(150., 120., 450., 300.)),
+        ] {
+            let overlay = capture.scaled(1. / scale);
+            assert_eq!(overlay, expected);
+            let bounds = overlay.scaled(scale).to_bounds();
+            assert_eq!(bounds.position().x(), 300.);
+            assert_eq!(bounds.position().y(), 240.);
+            assert_eq!(bounds.size().width(), 900.);
+            assert_eq!(bounds.size().height(), 600.);
+        }
+    }
+
+    #[test]
     fn moving_area_snaps_to_display_centres_and_edges() {
         let display = (1000., 800.);
         let (centered, center_guides) = snap_area_rect(rect(446., 180., 100., 120.), display);
@@ -2782,6 +3239,42 @@ mod tests {
         let (unsnapped, guides) = snap_area_point((490., 390.), display);
         assert_eq!(unsnapped, (490., 390.));
         assert!(guides.is_empty());
+    }
+
+    #[test]
+    fn only_an_overlay_drawing_the_meter_repaints_for_the_level() {
+        assert!(!overlay_meter_moved(None, 0.8, 2.));
+        assert!(overlay_meter_moved(Some(0.), 0.8, 2.));
+        assert!(overlay_meter_moved(
+            Some(0.5),
+            0.5 + 1. / (CLUSTER_WIDTH * 2.),
+            2.
+        ));
+        assert!(!overlay_meter_moved(
+            Some(0.5),
+            0.5 + 0.4 / (CLUSTER_WIDTH * 2.),
+            2.
+        ));
+        assert!(!overlay_meter_moved(Some(0.), 0., 1.));
+    }
+
+    #[test]
+    fn selection_hint_progress_repeats_like_a_gpui_animation() {
+        let at = |ms| selection_hint_progress(Duration::from_millis(ms));
+        assert_eq!(at(0), 0.);
+        assert!((at(1400) - 0.5).abs() < 1e-4);
+        assert!((at(2800 + 700) - 0.25).abs() < 1e-4);
+        assert!((at(5 * 2800 + 1400) - 0.5).abs() < 1e-3);
+        assert!(at(2799) < 1.);
+    }
+
+    #[test]
+    fn selection_hint_paces_to_thirty_frames_a_second() {
+        let frames = SELECTION_HINT_CYCLE.as_secs_f32() / SELECTION_HINT_FRAME.as_secs_f32();
+        assert!((83.9..84.1).contains(&frames), "{frames}");
+        // The click ring (`0.1..0.18` of the cycle) still gets several frames.
+        let ring = 0.08 * SELECTION_HINT_CYCLE.as_secs_f32() / SELECTION_HINT_FRAME.as_secs_f32();
+        assert!(ring >= 6., "{ring}");
     }
 
     #[test]

@@ -30,6 +30,7 @@ describe("raw recording input validation", () => {
 	const corrupt = join(directory, "corrupt.webm");
 	const cleanIvf = join(directory, "clean.ivf");
 	const cleanMp4 = join(directory, "clean.mp4");
+	const truncated = join(directory, "truncated.webm");
 
 	beforeAll(() => {
 		execFileSync("ffmpeg", [
@@ -90,6 +91,11 @@ describe("raw recording input validation", () => {
 				output,
 			]);
 		}
+		const cleanBytes = readFileSync(clean);
+		writeFileSync(
+			truncated,
+			cleanBytes.subarray(0, Math.floor(cleanBytes.length / 2)),
+		);
 		execFileSync("ffmpeg", [
 			"-v",
 			"error",
@@ -119,10 +125,26 @@ describe("raw recording input validation", () => {
 		expect(readFileSync(corrupt).length).toBeGreaterThan(0);
 	});
 
-	for (const [name, source, expectedPhase, extension] of [
-		["clean", clean, "complete", ".webm"],
-		["damaged", corrupt, "error", ".webm"],
-		["fragmented-mp4", cleanMp4, "complete", ".mp4"],
+	for (const [
+		name,
+		source,
+		expectedPhase,
+		extension,
+		importedOriginal,
+		expectedError,
+	] of [
+		["clean", clean, "complete", ".webm", false, null],
+		["damaged", corrupt, "error", ".webm", false, "damaged or unreadable"],
+		["imported-damaged", corrupt, "complete", ".webm", true, null],
+		[
+			"imported-truncated",
+			truncated,
+			"error",
+			".webm",
+			true,
+			"could not be fully recovered",
+		],
+		["fragmented-mp4", cleanMp4, "complete", ".mp4", false, null],
 	] as const) {
 		test(`processing route handles ${name} source before conversion`, async () => {
 			spyOn(jobManager, "canAcceptNewVideoProcess").mockReturnValue(true);
@@ -155,6 +177,7 @@ describe("raw recording input validation", () => {
 							outputPresignedUrl: "https://example.com/result.mp4",
 							inputExtension: extension,
 							preset: "ultrafast",
+							...(importedOriginal ? { importedOriginal } : {}),
 						}),
 					}),
 				);
@@ -169,9 +192,9 @@ describe("raw recording input validation", () => {
 					await Bun.sleep(10);
 				}
 				expect(getJob(jobId)?.phase).toBe(expectedPhase);
-				if (expectedPhase === "error") {
-					expect(getJob(jobId)?.error).toContain("damaged or unreadable");
-					expect(process).not.toHaveBeenCalled();
+				if (expectedError) {
+					expect(getJob(jobId)?.error).toContain(expectedError);
+					expect(process).toHaveBeenCalledTimes(importedOriginal ? 1 : 0);
 					expect(upload).not.toHaveBeenCalled();
 				} else {
 					expect(process).toHaveBeenCalledTimes(1);

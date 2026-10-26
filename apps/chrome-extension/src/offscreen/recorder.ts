@@ -95,6 +95,7 @@ type ActiveRecording = {
 	recorder: MediaRecorder;
 	stopPromise: Promise<void>;
 	streams: MediaStream[];
+	microphoneTracks: MediaStreamTrack[];
 	recordingStream: MediaStream;
 	statusTimer: number | null;
 	spool: RecordingSpool;
@@ -620,10 +621,10 @@ const addAudioTracks = ({
 	const audioContext = new AudioContext();
 	const destination = audioContext.createMediaStreamDestination();
 
-	streamsWithAudio.forEach((stream, index) => {
+	streamsWithAudio.forEach((stream) => {
 		const source = audioContext.createMediaStreamSource(stream);
 		source.connect(destination);
-		if (routeFirstStreamToSpeakers && index === 0) {
+		if (routeFirstStreamToSpeakers && stream === streams[0]) {
 			source.connect(audioContext.destination);
 		}
 	});
@@ -999,6 +1000,10 @@ const startRecording = async (request: StartRecordingRequest) => {
 			recorder,
 			stopPromise: Promise.resolve(),
 			streams,
+			microphoneTracks:
+				request.mode === "camera"
+					? mainStream.getAudioTracks()
+					: (microphoneStream?.getAudioTracks() ?? []),
 			recordingStream,
 			statusTimer: null,
 			spool,
@@ -1029,11 +1034,6 @@ const startRecording = async (request: StartRecordingRequest) => {
 
 		ownedRecording = recording;
 		activeRecording = recording;
-		for (const track of mainStream.getVideoTracks()) {
-			track.addEventListener("ended", stopRecordingFromTrackEnd, {
-				once: true,
-			});
-		}
 		// A crash from here on strands the spool; persisting the recording's
 		// identity alongside it lets the startup sweep surface a retryable
 		// failed-recording entry (videoId, subpath) instead of download-only.
@@ -1114,6 +1114,18 @@ const startRecording = async (request: StartRecordingRequest) => {
 			}
 		};
 
+		if (videoTracks.some((track) => track.readyState === "ended")) {
+			throw new DOMException(
+				"Recording source ended before recording started",
+				"AbortError",
+			);
+		}
+		for (const track of videoTracks) {
+			track.addEventListener("ended", stopRecordingFromTrackEnd, {
+				once: true,
+			});
+		}
+
 		status = {
 			phase: "recording",
 			videoId: creation.id,
@@ -1174,9 +1186,12 @@ const startRecording = async (request: StartRecordingRequest) => {
 			);
 			await ownedSpool.dispose().catch(() => undefined);
 		}
-		// Reset the "creating" status so later status syncs do not report a
-		// phantom in-progress recording.
-		if (status.phase === "creating") {
+		// Reset the status this attempt set so later status syncs do not report
+		// a phantom in-progress recording. "recording" is already set before
+		// recorder.start(), so a throw there would otherwise leave a capture
+		// phase with no session behind it: stop becomes a no-op and the idle
+		// self-close never fires.
+		if (status.phase === "creating" || status.phase === "recording") {
 			status = isUserCancellationError(error)
 				? { phase: "idle" }
 				: {
@@ -1773,12 +1788,7 @@ const handleRequest = async (
 	if (message.type === "toggle-microphone-mute") {
 		const recording = activeRecording;
 		if (recording) {
-			for (const stream of recording.streams) {
-				for (const track of stream.getAudioTracks()) {
-					track.enabled = !message.muted;
-				}
-			}
-			for (const track of recording.recordingStream.getAudioTracks()) {
+			for (const track of recording.microphoneTracks) {
 				track.enabled = !message.muted;
 			}
 		}

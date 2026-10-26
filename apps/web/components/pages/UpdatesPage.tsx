@@ -8,7 +8,7 @@ import {
 } from "@/utils/blog-registry";
 import { generateGradientFromSlug } from "@/utils/gradients";
 
-const FEATURED_SLUGS = ["cap-v06"];
+const FEATURED_SLUGS = ["rebuilding-cap-in-gpui"];
 
 export const UpdatesPage = () => {
 	const allUpdates = getBlogPosts() as BlogPost[];
@@ -56,12 +56,42 @@ export const UpdatesPage = () => {
 								className="overflow-hidden w-full rounded-xl border transition-shadow bg-gray-1 border-gray-5 hover:shadow-md"
 							>
 								<Link href={`/blog/${post.slug}`}>
-									{post.metadata.image ? (
+									{"video" in post.metadata && post.metadata.video ? (
+										<div className="w-full border-b bg-black">
+											{/* The animated cover from og:video. Its first frame is
+											saved next to it as the poster. */}
+											<video
+												src={post.metadata.video}
+												poster={post.metadata.video.replace(
+													/\.mp4$/,
+													"-poster.jpg",
+												)}
+												autoPlay
+												muted
+												loop
+												playsInline
+												preload="auto"
+												aria-label={post.metadata.title}
+												className="block aspect-[40/21] w-full object-cover motion-reduce:hidden"
+											/>
+											{post.metadata.image && (
+												<Image
+													src={post.metadata.image}
+													width={2000}
+													height={1000}
+													sizes="(min-width: 1100px) 1024px, 100vw"
+													alt={post.metadata.title}
+													className={`${featuredImageClassName} hidden motion-reduce:block`}
+												/>
+											)}
+										</div>
+									) : post.metadata.image ? (
 										<div className="w-full border-b">
 											<Image
 												src={post.metadata.image}
-												width={900}
-												height={400}
+												width={2000}
+												height={1000}
+												sizes="(min-width: 1100px) 1024px, 100vw"
 												objectFit="cover"
 												alt={post.metadata.title}
 												className={featuredImageClassName}

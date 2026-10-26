@@ -7,6 +7,7 @@ mod app_sounds;
 mod app_windows;
 mod assets;
 mod auth;
+mod blur_recovery;
 #[cfg(target_os = "macos")]
 mod camera_bench;
 #[cfg(target_os = "macos")]
@@ -16,6 +17,7 @@ mod camera_blur_portable;
 mod camera_loading;
 mod camera_window;
 mod controls_window;
+mod crash_capture;
 mod deeplink;
 mod dev_restore;
 mod devices;
@@ -41,8 +43,18 @@ mod editor_timeline;
 mod editor_window;
 mod feeds;
 mod hotkeys;
+mod i18n;
 mod import;
 mod installer;
+mod jpeg_thumbnail;
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+mod linux_dialog;
+#[cfg(target_os = "linux")]
+mod linux_display;
+#[cfg(target_os = "linux")]
+mod linux_portal_id;
+#[cfg(target_os = "linux")]
+mod linux_wallpaper;
 mod library;
 mod main_window;
 mod media_access;
@@ -144,6 +156,20 @@ fn resolve_auto_screenshot_editor(target: &str) -> Option<std::path::PathBuf> {
         .map(|item| item.bundle)
 }
 
+/// Windows ends the process at logoff or shutdown without running
+/// `on_app_quit`, so both markers that mean "this session crashed" clear here.
+#[cfg(target_os = "windows")]
+fn end_windows_session() {
+    crate::store::clear_handoff_marker();
+    crash_capture::mark_clean_exit();
+}
+
+/// zbus warns whenever a portal request object is gone before its
+/// properties are cached, which every finished portal request is; at `warn`
+/// that filled each Linux log with lines that say nothing.
+const DEFAULT_LOG_FILTER: &str =
+    "warn,cap_gpui=info,wgpu_core=error,wgpu_hal=error,zbus::proxy=error";
+
 /// stdout, plus a rolling daily file the Feedback page can upload.
 ///
 /// Mirrors `src-tauri/src/main.rs`: `tracing_appender::rolling::daily` into
@@ -159,7 +185,7 @@ fn init_logging() -> Option<tracing_appender::non_blocking::WorkerGuard> {
     // matches nothing.
     let filter = || {
         tracing_subscriber::EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| "warn,cap_gpui=info,wgpu_core=error,wgpu_hal=error".into())
+            .unwrap_or_else(|_| DEFAULT_LOG_FILTER.into())
     };
 
     let file = create_log_appender(&diagnostics::logs_dir(), diagnostics::LOG_FILE_PREFIX).map(
@@ -269,6 +295,17 @@ fn main() {
         }
     }
 
+    #[cfg(target_os = "linux")]
+    let stale_wayland_display = linux_display::stale_wayland_display();
+    #[cfg(target_os = "linux")]
+    if stale_wayland_display.is_some() {
+        // gpui and screen capture both choose Wayland from this variable; drop
+        // it before logging starts threads.
+        unsafe {
+            std::env::remove_var("WAYLAND_DISPLAY");
+        }
+    }
+
     // The AppImage CLI launcher re-enters the AppImage with `--cap-cli`; hand
     // it to the bundled CLI before logging, single-instance or the GUI start.
     #[cfg(target_os = "linux")]
@@ -277,9 +314,27 @@ fn main() {
         std::process::exit(1);
     }
 
+    // A confirmation or alert shown for the running app on a desktop without
+    // zenity (`linux_dialog`): not a second Cap, so before logging and the
+    // single-instance check.
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    if let Some(status) = linux_dialog::run_from_args() {
+        std::process::exit(status);
+    }
+
     let _log_guard = init_logging();
+    crash_capture::install(&diagnostics::logs_dir());
+    #[cfg(target_os = "linux")]
+    if let Some(wayland_display) = stale_wayland_display {
+        tracing::warn!(
+            wayland_display = %wayland_display.to_string_lossy(),
+            "WAYLAND_DISPLAY names no running compositor; using the X display"
+        );
+    }
 
     single_instance::acquire();
+    let previous_session = crash_capture::begin_session(&diagnostics::logs_dir());
+    blur_recovery::configure(previous_session);
     if cfg!(debug_assertions) {
         store::mark_handoff_session();
     }
@@ -293,6 +348,12 @@ fn main() {
         }
     }
 
+    let runtime = app_runtime();
+    // Before gpui exists: its appearance read is a portal call, and the
+    // portals only take an app id before the first one.
+    #[cfg(target_os = "linux")]
+    runtime.block_on(linux_portal_id::register());
+
     let app = gpui_platform::application().with_assets(Assets);
     // `RunEvent::Reopen`: the dock icon clicked while the app runs. Must be
     // registered on the builder -- gpui exposes it nowhere else -- with the
@@ -304,7 +365,6 @@ fn main() {
             crate::deeplink::submit_deep_link(&url);
         }
     });
-    let runtime = app_runtime();
     let runtime_handle = runtime.handle().clone();
 
     app.run(move |cx: &mut App| {
@@ -327,7 +387,9 @@ fn main() {
         // binding consumes the keystroke before any `on_key_down` listener on
         // the path runs (`gpui/src/window.rs:5280-5296`).
         ui::bind_text_input_keys(cx);
-        crate::theme::init(cx);
+        let general_settings = crate::store::GeneralSettings::load();
+        crate::i18n::init(general_settings.ui_language.as_deref());
+        crate::theme::init(general_settings.theme, cx);
         platform::follow_system_reduce_motion(cx);
 
         let session = RecordingSession::init(cx);
@@ -374,7 +436,7 @@ fn main() {
                         ..Default::default()
                     }),
                     #[cfg(target_os = "linux")]
-                    app_id: Some("Cap".into()),
+                    app_id: Some(crate::app_windows::app_id().into()),
                     #[cfg(target_os = "linux")]
                     window_min_size: Some(size(px(MAIN_WINDOW_WIDTH), px(MAIN_WINDOW_HEIGHT))),
                     #[cfg(target_os = "linux")]
@@ -415,6 +477,10 @@ fn main() {
             })
             .detach();
         }
+        cx.on_app_quit(|_| async {
+            crash_capture::mark_clean_exit();
+        })
+        .detach();
 
         app_windows::init(window_handle, session, cx);
         #[cfg(target_os = "macos")]
@@ -436,7 +502,9 @@ fn main() {
         #[cfg(target_os = "linux")]
         single_instance::init_linux_reopen(cx);
         updates::schedule_startup_check(cx);
+        app_windows::schedule_launch_render_warmup(cx);
         upload::queue::init(cx);
+        upload::instant_cleanup::init(cx);
 
         // The app menu (and with it ⌘W/⌘M/⌘Q) and the status-bar item. Both
         // reach into the window registry, so they come after it -- and the menu
@@ -545,6 +613,14 @@ fn main() {
             })
             .expect("failed to start device enumeration");
 
+        // Before the launch thumbnail sweep can reach ReplayKit, which would
+        // otherwise add the standard titlebar buttons next to the hand-drawn
+        // close light (`platform::lock_borderless_style`).
+        #[cfg(target_os = "macos")]
+        if let Some(native) = &native_main {
+            platform::lock_borderless_style(native);
+        }
+
         // The native window material: `NSGlassEffectView` on macOS 26+,
         // `NSVisualEffectView` vibrancy below that -- what
         // `applyMacOSWindowMaterial("panel")` does in the Tauri app. Nothing
@@ -577,8 +653,7 @@ fn main() {
             if let Err(error) = platform::install_main_window_frame_policy(&native) {
                 tracing::warn!(%error, "could not install Main window frame policy");
             }
-            if let Err(error) =
-                platform::install_session_end_handler(&native, crate::store::clear_handoff_marker)
+            if let Err(error) = platform::install_session_end_handler(&native, end_windows_session)
             {
                 tracing::warn!(%error, "could not install the Windows session end handler");
             }
@@ -818,6 +893,7 @@ mod runtime_tests {
 #[cfg(test)]
 mod logging_tests {
     use super::create_log_appender;
+    use tracing_subscriber::Layer as _;
     use std::{io::Write, path::PathBuf};
 
     struct LogDirectory(PathBuf);
@@ -839,6 +915,44 @@ mod logging_tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn the_default_filter_drops_zbus_property_cache_warnings_only() {
+        use std::sync::{Arc, Mutex};
+        use tracing_subscriber::layer::SubscriberExt as _;
+
+        #[derive(Clone, Default)]
+        struct Lines(Arc<Mutex<Vec<u8>>>);
+        impl Write for Lines {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let lines = Lines::default();
+        let writer = lines.clone();
+        let subscriber = tracing_subscriber::registry().with(
+            tracing_subscriber::fmt::layer()
+                .with_ansi(false)
+                .with_writer(move || writer.clone())
+                .with_filter(tracing_subscriber::EnvFilter::new(super::DEFAULT_LOG_FILTER)),
+        );
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::warn!(target: "zbus::proxy", "Failed to populate properties cache");
+            tracing::error!(target: "zbus::proxy", "a zbus error still shows");
+            tracing::warn!(target: "zbus::connection", "other zbus warnings still show");
+            tracing::info!(target: "cap_gpui::session", "recording started");
+        });
+        let logged = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
+        assert!(!logged.contains("Failed to populate properties cache"), "{logged}");
+        assert!(logged.contains("a zbus error still shows"), "{logged}");
+        assert!(logged.contains("other zbus warnings still show"), "{logged}");
+        assert!(logged.contains("recording started"), "{logged}");
     }
 
     #[test]

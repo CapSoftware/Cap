@@ -385,18 +385,26 @@ const parseJob = (value: unknown): RecordingUploadJob | null => {
 		serverPhase !== null && typeof value.uploadedBytes === "number"
 			? Math.min(value.totalBytes, Math.max(0, value.uploadedBytes))
 			: segmentUploadedBytes;
+	const resumeCompletion =
+		uploadOwner === "app" &&
+		durationSeconds !== null &&
+		status !== "complete" &&
+		(status === "processing" || serverPhase === "uploading") &&
+		(serverPhase === null || serverPhase === "uploading") &&
+		parsedSegments.length > 0 &&
+		parsedSegments.every((segment) => segment.uploaded);
 
 	return {
 		id: value.id,
 		shareUrl: value.shareUrl,
 		createdAt: value.createdAt,
-		status,
+		status: resumeCompletion ? "uploading" : status,
 		durationSeconds,
 		totalBytes: value.totalBytes,
 		uploadedBytes,
 		segments: parsedSegments,
 		uploadOwner,
-		serverPhase,
+		serverPhase: resumeCompletion ? null : serverPhase,
 		processingProgress:
 			typeof value.processingProgress === "number"
 				? Math.min(100, Math.max(0, value.processingProgress))

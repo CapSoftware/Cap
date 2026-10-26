@@ -11,6 +11,8 @@ use anyhow::anyhow;
 use image::{DynamicImage, RgbImage, RgbaImage};
 #[cfg(target_os = "macos")]
 use scap_ffmpeg::AsFFmpeg;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+use std::cell::RefCell;
 #[cfg(not(target_os = "linux"))]
 use std::sync::{Arc, Mutex};
 #[cfg(not(target_os = "linux"))]
@@ -53,15 +55,15 @@ fn unsupported_error() -> anyhow::Error {
     anyhow!(WINDOWS_CAPTURE_UNSUPPORTED)
 }
 
-#[cfg(not(target_os = "linux"))]
-#[derive(Clone, Copy)]
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+#[derive(Clone, Copy, Debug)]
 enum ChannelOrder {
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     Rgba,
     Bgra,
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 fn rgb_from_rgba(
     data: &[u8],
     width: usize,
@@ -80,31 +82,266 @@ fn rgb_from_rgba(
     }
 
     let width_stride = width.checked_mul(3)?;
-    let rgb_len = height.checked_mul(width_stride)?;
-    let mut rgb = vec![0u8; rgb_len];
+
+    #[cfg(target_arch = "aarch64")]
+    {
+        // SAFETY: reorder_rgb_row_neon initializes every element of each destination row.
+        let rgb = unsafe {
+            pack_rows_uninit(
+                data,
+                height,
+                bytes_per_row,
+                row_bytes,
+                width_stride,
+                |src_row, dst_row| reorder_rgb_row_neon(src_row, dst_row, order),
+            )?
+        };
+        RgbImage::from_raw(width as u32, height as u32, rgb)
+    }
+
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        let rgb_len = height.checked_mul(width_stride)?;
+        let mut rgb = vec![0u8; rgb_len];
+
+        #[cfg(target_arch = "x86_64")]
+        {
+            if std::is_x86_feature_detected!("ssse3") {
+                for y in 0..height {
+                    let (src_row, dst_row) =
+                        rgb_row_pair(data, &mut rgb, y, bytes_per_row, row_bytes, width_stride)?;
+                    unsafe {
+                        reorder_rgb_row_ssse3(src_row, dst_row, order);
+                    }
+                }
+                return RgbImage::from_raw(width as u32, height as u32, rgb);
+            }
+        }
+
+        for y in 0..height {
+            let (src_row, dst_row) =
+                rgb_row_pair(data, &mut rgb, y, bytes_per_row, row_bytes, width_stride)?;
+            reorder_rgb_row_scalar(src_row, dst_row, order);
+        }
+
+        RgbImage::from_raw(width as u32, height as u32, rgb)
+    }
+}
+
+/// # Safety
+///
+/// `write_row` must initialize every element of the destination slice it receives.
+#[cfg(all(target_arch = "aarch64", any(not(target_os = "linux"), test)))]
+unsafe fn pack_rows_uninit(
+    data: &[u8],
+    height: usize,
+    bytes_per_row: usize,
+    row_bytes: usize,
+    dst_stride: usize,
+    mut write_row: impl FnMut(&[u8], &mut [std::mem::MaybeUninit<u8>]),
+) -> Option<Vec<u8>> {
+    let dst_len = height.checked_mul(dst_stride)?;
+    let mut out = Vec::<u8>::with_capacity(dst_len);
+    let spare = out.spare_capacity_mut().get_mut(..dst_len)?;
 
     for y in 0..height {
         let src_start = y.checked_mul(bytes_per_row)?;
-        let src_end = src_start.checked_add(row_bytes)?;
-        let dst_start = y.checked_mul(width_stride)?;
-        let dst_end = dst_start.checked_add(width_stride)?;
+        let src_row = data.get(src_start..src_start.checked_add(row_bytes)?)?;
+        let dst_start = y.checked_mul(dst_stride)?;
+        let dst_row = spare.get_mut(dst_start..dst_start.checked_add(dst_stride)?)?;
+        write_row(src_row, dst_row);
+    }
 
-        let src_row = data.get(src_start..src_end)?;
-        let dst_row = rgb.get_mut(dst_start..dst_end)?;
+    // SAFETY: the rows 0..height tile 0..dst_len exactly, and the caller guarantees write_row
+    // initialized every byte of each row. dst_len <= capacity.
+    unsafe { out.set_len(dst_len) };
+    Some(out)
+}
 
-        for (src, dst) in src_row.chunks_exact(4).zip(dst_row.chunks_exact_mut(3)) {
-            let (r, b) = match order {
-                ChannelOrder::Rgba => (src[0], src[2]),
-                ChannelOrder::Bgra => (src[2], src[0]),
+#[cfg(all(
+    any(target_os = "macos", target_os = "windows", test),
+    target_arch = "aarch64"
+))]
+fn reorder_rgb_row_neon(src: &[u8], dst: &mut [std::mem::MaybeUninit<u8>], order: ChannelOrder) {
+    use std::arch::aarch64::*;
+
+    assert_eq!(
+        dst.len() % 3,
+        0,
+        "rgb row length must be a whole number of pixels"
+    );
+    let pixels = dst.len() / 3;
+    let src = &src[..pixels * 4];
+    let swap = matches!(order, ChannelOrder::Bgra);
+    let simd_pixels = pixels & !15;
+
+    for i in (0..simd_pixels).step_by(16) {
+        // SAFETY: i + 16 <= simd_pixels <= pixels, so the 64 byte load at i * 4 is inside src
+        // (pixels * 4 bytes) and the 48 byte store at i * 3 is inside dst (pixels * 3 bytes).
+        // NEON is part of the aarch64 baseline, and both intrinsics accept unaligned pointers.
+        unsafe {
+            let px = vld4q_u8(src.as_ptr().add(i * 4));
+            let rgb = if swap {
+                uint8x16x3_t(px.2, px.1, px.0)
+            } else {
+                uint8x16x3_t(px.0, px.1, px.2)
             };
-
-            dst[0] = r;
-            dst[1] = src[1];
-            dst[2] = b;
+            vst3q_u8(dst.as_mut_ptr().add(i * 3).cast::<u8>(), rgb);
         }
     }
 
-    RgbImage::from_raw(width as u32, height as u32, rgb)
+    for (s, d) in src[simd_pixels * 4..]
+        .chunks_exact(4)
+        .zip(dst[simd_pixels * 3..].chunks_exact_mut(3))
+    {
+        let (r, b) = if swap { (s[2], s[0]) } else { (s[0], s[2]) };
+        d[0].write(r);
+        d[1].write(s[1]);
+        d[2].write(b);
+    }
+}
+
+#[cfg(all(not(target_os = "linux"), target_arch = "aarch64"))]
+fn reorder_rgba_row_neon(src: &[u8], dst: &mut [std::mem::MaybeUninit<u8>], order: ChannelOrder) {
+    use std::arch::aarch64::*;
+
+    assert_eq!(
+        dst.len() % 4,
+        0,
+        "rgba row length must be a whole number of pixels"
+    );
+    let pixels = dst.len() / 4;
+    let src = &src[..pixels * 4];
+    let swap = matches!(order, ChannelOrder::Bgra);
+    let simd_pixels = pixels & !15;
+
+    for i in (0..simd_pixels).step_by(16) {
+        // SAFETY: i + 16 <= simd_pixels <= pixels, so the 64 byte load and the 64 byte store at
+        // i * 4 are inside src and dst (both pixels * 4 bytes). NEON is part of the aarch64
+        // baseline, and both intrinsics accept unaligned pointers.
+        unsafe {
+            let px = vld4q_u8(src.as_ptr().add(i * 4));
+            let rgba = if swap {
+                uint8x16x4_t(px.2, px.1, px.0, px.3)
+            } else {
+                px
+            };
+            vst4q_u8(dst.as_mut_ptr().add(i * 4).cast::<u8>(), rgba);
+        }
+    }
+
+    for (s, d) in src[simd_pixels * 4..]
+        .chunks_exact(4)
+        .zip(dst[simd_pixels * 4..].chunks_exact_mut(4))
+    {
+        let (r, b) = if swap { (s[2], s[0]) } else { (s[0], s[2]) };
+        d[0].write(r);
+        d[1].write(s[1]);
+        d[2].write(b);
+        d[3].write(s[3]);
+    }
+}
+
+#[cfg(any(
+    all(
+        any(target_os = "macos", target_os = "windows"),
+        not(target_arch = "aarch64")
+    ),
+    test
+))]
+fn rgb_row_pair<'a>(
+    data: &'a [u8],
+    rgb: &'a mut [u8],
+    y: usize,
+    bytes_per_row: usize,
+    row_bytes: usize,
+    width_stride: usize,
+) -> Option<(&'a [u8], &'a mut [u8])> {
+    let src_start = y.checked_mul(bytes_per_row)?;
+    let src_end = src_start.checked_add(row_bytes)?;
+    let dst_start = y.checked_mul(width_stride)?;
+    let dst_end = dst_start.checked_add(width_stride)?;
+    let src_row = data.get(src_start..src_end)?;
+    let dst_row = rgb.get_mut(dst_start..dst_end)?;
+    Some((src_row, dst_row))
+}
+
+#[cfg(any(
+    all(
+        any(target_os = "macos", target_os = "windows"),
+        not(target_arch = "aarch64")
+    ),
+    test
+))]
+fn reorder_rgb_row_scalar(src: &[u8], dst: &mut [u8], order: ChannelOrder) {
+    match order {
+        ChannelOrder::Rgba => rgba_to_rgb_scalar(src, dst),
+        ChannelOrder::Bgra => bgra_to_rgb_scalar(src, dst),
+    }
+}
+
+#[cfg(any(
+    all(
+        any(target_os = "macos", target_os = "windows"),
+        not(target_arch = "aarch64")
+    ),
+    test
+))]
+fn rgba_to_rgb_scalar(src: &[u8], dst: &mut [u8]) {
+    for (src, dst) in src.chunks_exact(4).zip(dst.chunks_exact_mut(3)) {
+        dst[0] = src[0];
+        dst[1] = src[1];
+        dst[2] = src[2];
+    }
+}
+
+#[cfg(any(
+    all(
+        any(target_os = "macos", target_os = "windows"),
+        not(target_arch = "aarch64")
+    ),
+    test
+))]
+fn bgra_to_rgb_scalar(src: &[u8], dst: &mut [u8]) {
+    for (src, dst) in src.chunks_exact(4).zip(dst.chunks_exact_mut(3)) {
+        dst[0] = src[2];
+        dst[1] = src[1];
+        dst[2] = src[0];
+    }
+}
+
+#[cfg(all(
+    any(target_os = "macos", target_os = "windows", test),
+    target_arch = "x86_64"
+))]
+#[target_feature(enable = "ssse3")]
+unsafe fn reorder_rgb_row_ssse3(src: &[u8], dst: &mut [u8], order: ChannelOrder) {
+    use std::arch::x86_64::*;
+
+    unsafe {
+        let mask = match order {
+            ChannelOrder::Rgba => {
+                _mm_setr_epi8(0, 1, 2, 4, 5, 6, 8, 9, 10, 12, 13, 14, -1, -1, -1, -1)
+            }
+            ChannelOrder::Bgra => {
+                _mm_setr_epi8(2, 1, 0, 6, 5, 4, 10, 9, 8, 14, 13, 12, -1, -1, -1, -1)
+            }
+        };
+
+        let pixels = (src.len() / 4).min(dst.len() / 3);
+        let simd_pixels = pixels & !3;
+        for i in (0..simd_pixels).step_by(4) {
+            let v = _mm_loadu_si128(src.as_ptr().add(i * 4) as *const __m128i);
+            let shuffled = _mm_shuffle_epi8(v, mask);
+            let dst_ptr = dst.as_mut_ptr().add(i * 3);
+            let lo = _mm_cvtsi128_si64(shuffled);
+            let hi = _mm_cvtsi128_si32(_mm_srli_si128(shuffled, 8));
+            std::ptr::write_unaligned(dst_ptr.cast::<i64>(), lo);
+            std::ptr::write_unaligned(dst_ptr.add(8).cast::<i32>(), hi);
+        }
+
+        reorder_rgb_row_scalar(&src[simd_pixels * 4..], &mut dst[simd_pixels * 3..], order);
+    }
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -126,58 +363,160 @@ fn rgba_from_raw(
     }
 
     let width_stride = width.checked_mul(4)?;
-    let rgba_len = height.checked_mul(width_stride)?;
-    let mut rgba = vec![0u8; rgba_len];
 
-    for y in 0..height {
-        let src_start = y.checked_mul(bytes_per_row)?;
-        let src_end = src_start.checked_add(row_bytes)?;
-        let dst_start = y.checked_mul(width_stride)?;
-        let dst_end = dst_start.checked_add(width_stride)?;
-
-        let src_row = data.get(src_start..src_end)?;
-        let dst_row = rgba.get_mut(dst_start..dst_end)?;
-
-        for (src, dst) in src_row.chunks_exact(4).zip(dst_row.chunks_exact_mut(4)) {
-            let (r, b) = match order {
-                ChannelOrder::Rgba => (src[0], src[2]),
-                ChannelOrder::Bgra => (src[2], src[0]),
-            };
-
-            dst[0] = r;
-            dst[1] = src[1];
-            dst[2] = b;
-            dst[3] = src[3];
-        }
+    #[cfg(target_arch = "aarch64")]
+    {
+        // SAFETY: reorder_rgba_row_neon initializes every element of each destination row.
+        let rgba = unsafe {
+            pack_rows_uninit(
+                data,
+                height,
+                bytes_per_row,
+                row_bytes,
+                width_stride,
+                |src_row, dst_row| reorder_rgba_row_neon(src_row, dst_row, order),
+            )?
+        };
+        RgbaImage::from_raw(width as u32, height as u32, rgba)
     }
 
-    RgbaImage::from_raw(width as u32, height as u32, rgba)
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        let rgba_len = height.checked_mul(width_stride)?;
+        let mut rgba = vec![0u8; rgba_len];
+
+        for y in 0..height {
+            let src_start = y.checked_mul(bytes_per_row)?;
+            let src_end = src_start.checked_add(row_bytes)?;
+            let dst_start = y.checked_mul(width_stride)?;
+            let dst_end = dst_start.checked_add(width_stride)?;
+
+            let src_row = data.get(src_start..src_end)?;
+            let dst_row = rgba.get_mut(dst_start..dst_end)?;
+
+            for (src, dst) in src_row.chunks_exact(4).zip(dst_row.chunks_exact_mut(4)) {
+                let (r, b) = match order {
+                    ChannelOrder::Rgba => (src[0], src[2]),
+                    ChannelOrder::Bgra => (src[2], src[0]),
+                };
+
+                dst[0] = r;
+                dst[1] = src[1];
+                dst[2] = b;
+                dst[3] = src[3];
+            }
+        }
+
+        RgbaImage::from_raw(width as u32, height as u32, rgba)
+    }
 }
 
 fn apply_window_rounded_corners(image: RgbImage, target: &ScreenCaptureTarget) -> RgbaImage {
+    round_rgb_corners(image, window_corner_radius_px(target))
+}
+
+fn round_rgb_corners(image: RgbImage, corner_radius: f32) -> RgbaImage {
     let width = image.width();
     let height = image.height();
-
-    let corner_radius = window_corner_radius_px(target);
 
     if corner_radius <= 0.0 {
         return image::buffer::ConvertBuffer::convert(&image);
     }
 
-    let fw = width as f32;
-    let fh = height as f32;
+    let geom = CornerGeom {
+        fw: width as f32,
+        fh: height as f32,
+        radius: corner_radius,
+    };
+    let corner_x = corner_band_px(corner_radius, width) as usize;
+    let corner_y = corner_band_px(corner_radius, height) as usize;
+    let width_us = width as usize;
+    let height_us = height as usize;
+    let src = image.into_raw();
     let mut rgba = RgbaImage::new(width, height);
+    let dst = rgba.as_mut();
+    let src_stride = width_us * 3;
+    let dst_stride = width_us * 4;
+    let right = width_us.saturating_sub(corner_x);
+    let x_covers_row = corner_x >= right;
 
-    for (x, y, rgb_pixel) in image.enumerate_pixels() {
-        let alpha = rounded_corner_alpha(x as f32 + 0.5, y as f32 + 0.5, fw, fh, corner_radius);
-        rgba.put_pixel(
-            x,
-            y,
-            image::Rgba([rgb_pixel[0], rgb_pixel[1], rgb_pixel[2], alpha]),
+    for y in 0..height_us {
+        let src_off = y * src_stride;
+        let dst_off = y * dst_stride;
+        let src_row = &src[src_off..src_off + src_stride];
+        let dst_row = &mut dst[dst_off..dst_off + dst_stride];
+        let y_in_band = y < corner_y || y.saturating_add(corner_y) >= height_us;
+
+        if !y_in_band || corner_x == 0 {
+            copy_rgb_opaque(src_row, dst_row);
+            continue;
+        }
+
+        if x_covers_row {
+            fill_corner_span(src_row, dst_row, 0, width_us, y, geom);
+            continue;
+        }
+
+        fill_corner_span(src_row, dst_row, 0, corner_x, y, geom);
+        copy_rgb_opaque(
+            &src_row[corner_x * 3..right * 3],
+            &mut dst_row[corner_x * 4..right * 4],
         );
+        fill_corner_span(src_row, dst_row, right, width_us, y, geom);
     }
 
     rgba
+}
+
+#[derive(Clone, Copy)]
+struct CornerGeom {
+    fw: f32,
+    fh: f32,
+    radius: f32,
+}
+
+fn corner_band_px(radius: f32, extent: u32) -> u32 {
+    if extent == 0 {
+        return 0;
+    }
+
+    let rounded = radius.ceil();
+    if !rounded.is_finite() || rounded >= extent as f32 {
+        extent
+    } else if rounded <= 0.0 {
+        0
+    } else {
+        rounded as u32
+    }
+}
+
+fn copy_rgb_opaque(src: &[u8], dst: &mut [u8]) {
+    for (src_px, dst_px) in src.chunks_exact(3).zip(dst.chunks_exact_mut(4)) {
+        dst_px[0] = src_px[0];
+        dst_px[1] = src_px[1];
+        dst_px[2] = src_px[2];
+        dst_px[3] = 255;
+    }
+}
+
+fn fill_corner_span(
+    src_row: &[u8],
+    dst_row: &mut [u8],
+    x_start: usize,
+    x_end: usize,
+    y: usize,
+    geom: CornerGeom,
+) {
+    let y_center = y as f32 + 0.5;
+    for x in x_start..x_end {
+        let src_i = x * 3;
+        let dst_i = x * 4;
+        let alpha = rounded_corner_alpha(x as f32 + 0.5, y_center, geom.fw, geom.fh, geom.radius);
+        dst_row[dst_i] = src_row[src_i];
+        dst_row[dst_i + 1] = src_row[src_i + 1];
+        dst_row[dst_i + 2] = src_row[src_i + 2];
+        dst_row[dst_i + 3] = alpha;
+    }
 }
 
 fn window_corner_radius_px(target: &ScreenCaptureTarget) -> f32 {
@@ -835,6 +1174,31 @@ pub fn uses_wayland_portal() -> bool {
     prefers_wayland_portal()
 }
 
+/// Asks the screenshot portal for one screenshot and throws it away. Before
+/// an app's first non-interactive screenshot the portal asks the user whether
+/// to allow it, and GNOME Shell only shows that question for the focused app,
+/// so this runs while Cap's picker still has focus, before it hides for the
+/// real capture.
+#[cfg(target_os = "linux")]
+pub async fn request_wayland_screenshot_permission() -> anyhow::Result<()> {
+    let screenshot = ashpd::desktop::screenshot::Screenshot::request()
+        .interactive(false)
+        .send()
+        .await
+        .context("Request Wayland screenshot from desktop portal")?
+        .response()
+        .context("The desktop did not allow Cap to take screenshots")?;
+    let uri = screenshot.uri();
+    if is_local_wayland_screenshot_uri(uri.scheme(), uri.host_str())
+        && let Ok(path) = uri.to_file_path()
+        && std::fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.file_type().is_file())
+        && let Err(error) = std::fs::remove_file(&path)
+    {
+        tracing::warn!(path = %path.display(), %error, "Could not remove the permission screenshot");
+    }
+    Ok(())
+}
+
 #[cfg(target_os = "linux")]
 async fn capture_screenshot_wayland(target: &ScreenCaptureTarget) -> anyhow::Result<RgbImage> {
     let display_id = wayland_screenshot_display_id(target)?;
@@ -1386,48 +1750,359 @@ fn crop_area_if_needed(
     Ok(image)
 }
 
+/// `Video::alloc` asks swscale for 32-byte lines. A row that is already a multiple
+/// of that is tightly packed, matching the buffer swscale would allocate itself.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+const SCREENSHOT_RGB_STRIDE_ALIGN: usize = 32;
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+struct ScreenshotScaler {
+    context: ffmpeg::software::scaling::context::Context,
+    src_format: ffmpeg::format::Pixel,
+    src_width: u32,
+    src_height: u32,
+    dst_format: ffmpeg::format::Pixel,
+    dst_width: u32,
+    dst_height: u32,
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+impl ScreenshotScaler {
+    fn matches(&self, frame: &ffmpeg::frame::Video) -> bool {
+        self.src_format == frame.format()
+            && self.src_width == frame.width()
+            && self.src_height == frame.height()
+            && self.dst_format == ffmpeg::format::Pixel::RGB24
+            && self.dst_width == frame.width()
+            && self.dst_height == frame.height()
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+struct ScreenshotScalerSlot {
+    scaler: Option<ScreenshotScaler>,
+    #[cfg(test)]
+    builds: u64,
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+thread_local! {
+    static SCREENSHOT_SCALER: RefCell<ScreenshotScalerSlot> = const {
+        RefCell::new(ScreenshotScalerSlot {
+            scaler: None,
+            #[cfg(test)]
+            builds: 0,
+        })
+    };
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn with_screenshot_scaler<R>(
+    frame: &ffmpeg::frame::Video,
+    body: impl FnOnce(&mut ffmpeg::software::scaling::context::Context) -> R,
+) -> anyhow::Result<R> {
+    SCREENSHOT_SCALER.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        if slot
+            .scaler
+            .as_ref()
+            .is_none_or(|scaler| !scaler.matches(frame))
+        {
+            let context = ffmpeg::software::scaling::context::Context::get(
+                frame.format(),
+                frame.width(),
+                frame.height(),
+                ffmpeg::format::Pixel::RGB24,
+                frame.width(),
+                frame.height(),
+                ffmpeg::software::scaling::flag::Flags::BILINEAR,
+            )
+            .context("Failed to create scaler")?;
+            slot.scaler = Some(ScreenshotScaler {
+                context,
+                src_format: frame.format(),
+                src_width: frame.width(),
+                src_height: frame.height(),
+                dst_format: ffmpeg::format::Pixel::RGB24,
+                dst_width: frame.width(),
+                dst_height: frame.height(),
+            });
+            #[cfg(test)]
+            {
+                slot.builds = slot.builds.saturating_add(1);
+            }
+        }
+        let scaler = slot
+            .scaler
+            .as_mut()
+            .expect("screenshot scaler is inserted before use");
+        Ok(body(&mut scaler.context))
+    })
+}
+
+#[cfg(test)]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn clear_screenshot_scaler_cache() {
+    SCREENSHOT_SCALER.with(|slot| {
+        *slot.borrow_mut() = ScreenshotScalerSlot {
+            scaler: None,
+            builds: 0,
+        };
+    });
+}
+
+#[cfg(test)]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn screenshot_scaler_builds() -> u64 {
+    SCREENSHOT_SCALER.with(|slot| slot.borrow().builds)
+}
+
+/// Returns `None` when the geometry is unusable or SSSE3 is unavailable, so the
+/// caller can fall back to swscale.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn bgrx_plane_to_rgb24(
+    src: &[u8],
+    src_stride: usize,
+    width: usize,
+    height: usize,
+) -> Option<Vec<u8>> {
+    if width == 0 || height == 0 {
+        return None;
+    }
+    let row_bytes = width.checked_mul(4)?;
+    let dst_stride = width.checked_mul(3)?;
+    if src_stride < row_bytes {
+        return None;
+    }
+    let src_needed = (height - 1)
+        .checked_mul(src_stride)?
+        .checked_add(row_bytes)?;
+    if src.len() < src_needed {
+        return None;
+    }
+    if !std::is_x86_feature_detected!("ssse3") {
+        return None;
+    }
+    let dst_len = height.checked_mul(dst_stride)?;
+    let mut dst = vec![0u8; dst_len];
+    // SAFETY: the checks above keep every source row's `width * 4` bytes and every
+    // destination row's `width * 3` bytes inside the two buffers, and SSSE3 is present.
+    unsafe { bgrx_plane_to_rgb24_ssse3(src, src_stride, &mut dst, width, height) };
+    Some(dst)
+}
+
+/// # Safety
+///
+/// `src` holds at least `(height - 1) * src_stride + width * 4` bytes, `src_stride >= width * 4`,
+/// and `dst` holds `height * width * 3` bytes. Those products do not overflow. SSSE3 is enabled.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[target_feature(enable = "ssse3")]
+unsafe fn bgrx_plane_to_rgb24_ssse3(
+    src: &[u8],
+    src_stride: usize,
+    dst: &mut [u8],
+    width: usize,
+    height: usize,
+) {
+    use std::arch::x86_64::*;
+
+    unsafe {
+        // B,G,R,x → R,G,B. The control bytes with the high bit set zero the hole
+        // after each group of four pixels (12 RGB bytes in a 16-byte register).
+        let mask = _mm_setr_epi8(2, 1, 0, 6, 5, 4, 10, 9, 8, 14, 13, 12, -1, -1, -1, -1);
+        let dst_stride = width * 3;
+        for y in 0..height {
+            let srow = src.as_ptr().add(y * src_stride);
+            let drow = dst.as_mut_ptr().add(y * dst_stride);
+            let simd = width & !15;
+            let mut x = 0;
+            while x < simd {
+                let s0 = _mm_shuffle_epi8(_mm_loadu_si128(srow.add(x * 4) as *const __m128i), mask);
+                let s1 = _mm_shuffle_epi8(
+                    _mm_loadu_si128(srow.add(x * 4 + 16) as *const __m128i),
+                    mask,
+                );
+                let s2 = _mm_shuffle_epi8(
+                    _mm_loadu_si128(srow.add(x * 4 + 32) as *const __m128i),
+                    mask,
+                );
+                let s3 = _mm_shuffle_epi8(
+                    _mm_loadu_si128(srow.add(x * 4 + 48) as *const __m128i),
+                    mask,
+                );
+                // Each shuffle leaves a 4-byte hole. Slide the next group's bytes
+                // into that hole so the store is 16 packed RGB bytes, not 12.
+                let out = drow.add(x * 3);
+                let out0 = _mm_or_si128(s0, _mm_slli_si128(s1, 12));
+                let out1 = _mm_or_si128(_mm_srli_si128(s1, 4), _mm_slli_si128(s2, 8));
+                let out2 = _mm_or_si128(_mm_srli_si128(s2, 8), _mm_slli_si128(s3, 4));
+                _mm_storeu_si128(out as *mut __m128i, out0);
+                _mm_storeu_si128(out.add(16) as *mut __m128i, out1);
+                _mm_storeu_si128(out.add(32) as *mut __m128i, out2);
+                x += 16;
+            }
+            for i in simd..width {
+                let s = srow.add(i * 4);
+                let d = drow.add(i * 3);
+                *d = *s.add(2);
+                *d.add(1) = *s.add(1);
+                *d.add(2) = *s;
+            }
+        }
+    }
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn try_convert_bgrx_screenshot_ssse3(
+    frame: &ffmpeg::frame::Video,
+) -> anyhow::Result<Option<RgbImage>> {
+    if !matches!(
+        frame.format(),
+        ffmpeg::format::Pixel::BGRZ | ffmpeg::format::Pixel::BGRA
+    ) {
+        return Ok(None);
+    }
+    let width = frame.width() as usize;
+    let height = frame.height() as usize;
+    if width == 0 || height == 0 {
+        return Ok(None);
+    }
+    // `Video::stride` casts linesize to usize. A bottom-up (negative) stride would
+    // wrap and `data()` would build a slice past the plane, so read the sign first.
+    // SAFETY: `frame` points at a live AVFrame for this call.
+    let (linesize, data_ptr) = unsafe {
+        let raw = frame.as_ptr();
+        ((*raw).linesize[0], (*raw).data[0])
+    };
+    if linesize <= 0 || data_ptr.is_null() {
+        return Ok(None);
+    }
+    let src_stride = linesize as usize;
+    if src_stride.checked_mul(height).is_none() {
+        return Ok(None);
+    }
+    let Some(rgb) = bgrx_plane_to_rgb24(frame.data(0), src_stride, width, height) else {
+        return Ok(None);
+    };
+    RgbImage::from_raw(frame.width(), frame.height(), rgb)
+        .map(Some)
+        .ok_or_else(|| anyhow!("Failed to create image buffer"))
+}
+
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 fn convert_ffmpeg_frame_to_image(frame: &ffmpeg::frame::Video) -> anyhow::Result<RgbImage> {
-    let mut scaler = ffmpeg::software::scaling::context::Context::get(
-        frame.format(),
-        frame.width(),
-        frame.height(),
-        ffmpeg::format::Pixel::RGB24,
-        frame.width(),
-        frame.height(),
-        ffmpeg::software::scaling::flag::Flags::BILINEAR,
-    )
-    .context("Failed to create scaler")?;
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    if let Some(image) = try_convert_bgrx_screenshot_ssse3(frame)? {
+        return Ok(image);
+    }
+    convert_ffmpeg_frame_via_swscale(frame)
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn convert_ffmpeg_frame_via_swscale(frame: &ffmpeg::frame::Video) -> anyhow::Result<RgbImage> {
+    let width = frame.width() as usize;
+    let height = frame.height() as usize;
+    let row_bytes = width
+        .checked_mul(3)
+        .context("screenshot dimensions overflow")?;
+    let image_bytes = height
+        .checked_mul(row_bytes)
+        .context("screenshot dimensions overflow")?;
+    if width == 0 || height == 0 {
+        return RgbImage::from_raw(frame.width(), frame.height(), Vec::new())
+            .ok_or_else(|| anyhow!("Failed to create image buffer"));
+    }
+
+    if row_bytes % SCREENSHOT_RGB_STRIDE_ALIGN == 0
+        && let Some(image) = scale_screenshot_into_tight_rgb(frame, row_bytes, image_bytes)?
+    {
+        return Ok(image);
+    }
 
     let mut rgb_frame = ffmpeg::frame::Video::empty();
-    scaler
-        .run(frame, &mut rgb_frame)
+    with_screenshot_scaler(frame, |scaler| scaler.run(frame, &mut rgb_frame))?
+        .context("Failed to scale frame")?;
+    pack_rgb_frame(&rgb_frame)
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn scale_screenshot_into_tight_rgb(
+    frame: &ffmpeg::frame::Video,
+    row_bytes: usize,
+    image_bytes: usize,
+) -> anyhow::Result<Option<RgbImage>> {
+    let mut image = vec![0u8; image_bytes];
+    let mut rgb_frame = ffmpeg::frame::Video::empty();
+    rgb_frame.set_format(ffmpeg::format::Pixel::RGB24);
+    rgb_frame.set_width(frame.width());
+    rgb_frame.set_height(frame.height());
+    let linesize = libc::c_int::try_from(row_bytes).context("screenshot stride exceeds c_int")?;
+    // SAFETY: plane 0 aliases `image` and the frame does not own it (`buf[0]` stays
+    // null, so av_frame_free will not release it). `image` outlives `rgb_frame`.
+    // The stride equals width*3 and is a multiple of Video::alloc's 32-byte
+    // alignment, so this is the same layout swscale uses for its own buffer.
+    unsafe {
+        let raw = rgb_frame.as_mut_ptr();
+        (*raw).data[0] = image.as_mut_ptr();
+        (*raw).linesize[0] = linesize;
+    }
+
+    with_screenshot_scaler(frame, |scaler| scaler.run(frame, &mut rgb_frame))?
         .context("Failed to scale frame")?;
 
+    let stride = rgb_frame.stride(0);
+    let same_buffer = std::ptr::eq(rgb_frame.data(0).as_ptr(), image.as_ptr());
+    drop(rgb_frame);
+    if stride != row_bytes || !same_buffer {
+        return Ok(None);
+    }
+
+    RgbImage::from_raw(frame.width(), frame.height(), image)
+        .map(Some)
+        .ok_or_else(|| anyhow!("Failed to create image buffer"))
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn pack_rgb_frame(rgb_frame: &ffmpeg::frame::Video) -> anyhow::Result<RgbImage> {
     let width = rgb_frame.width() as usize;
     let height = rgb_frame.height() as usize;
-    let dst_stride = width * 3;
+    let dst_stride = width
+        .checked_mul(3)
+        .context("screenshot dimensions overflow")?;
     let src_stride = rgb_frame.stride(0);
 
     if src_stride < dst_stride {
         return Err(anyhow!(
-            "Source stride ({}) is less than destination stride ({}); width={}, height={}",
-            src_stride,
-            dst_stride,
-            width,
-            height
+            "Source stride ({src_stride}) is less than destination stride ({dst_stride}); width={width}, height={height}"
         ));
     }
 
-    let mut img_buffer = vec![0u8; height * dst_stride];
-
-    for y in 0..height {
-        let src_slice = &rgb_frame.data(0)[y * src_stride..y * src_stride + dst_stride];
-        let dst_slice = &mut img_buffer[y * dst_stride..(y + 1) * dst_stride];
-        dst_slice.copy_from_slice(src_slice);
+    let buf_len = height
+        .checked_mul(dst_stride)
+        .context("screenshot dimensions overflow")?;
+    let mut img_buffer = vec![0u8; buf_len];
+    let src = rgb_frame.data(0);
+    if src_stride == dst_stride {
+        let copy_len = height
+            .checked_mul(src_stride)
+            .context("screenshot dimensions overflow")?;
+        let src = src
+            .get(..copy_len)
+            .ok_or_else(|| anyhow!("Failed to create image buffer"))?;
+        img_buffer.copy_from_slice(src);
+    } else {
+        for y in 0..height {
+            let start = y * src_stride;
+            let end = start + dst_stride;
+            let dst_start = y * dst_stride;
+            let src_row = src
+                .get(start..end)
+                .ok_or_else(|| anyhow!("Failed to create image buffer"))?;
+            img_buffer[dst_start..dst_start + dst_stride].copy_from_slice(src_row);
+        }
     }
 
-    RgbImage::from_raw(width as u32, height as u32, img_buffer)
+    RgbImage::from_raw(rgb_frame.width(), rgb_frame.height(), img_buffer)
         .ok_or_else(|| anyhow!("Failed to create image buffer"))
 }
 
@@ -1671,5 +2346,873 @@ mod wayland_screenshot_tests {
     #[test]
     fn wayland_camera_only_screenshots_are_rejected_before_portal_capture() {
         assert!(wayland_screenshot_display_id(&ScreenCaptureTarget::CameraOnly).is_err());
+    }
+}
+
+#[cfg(test)]
+mod screenshot_pixel_tests {
+    use super::*;
+
+    fn paint(len: usize, seed: u32) -> Vec<u8> {
+        let mut state = seed;
+        let mut out = vec![0u8; len];
+        for byte in &mut out {
+            state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+            *byte = (state >> 16) as u8;
+        }
+        out
+    }
+
+    fn assert_bytes_eq(got: &[u8], expected: &[u8], label: &str) {
+        assert_eq!(got.len(), expected.len(), "{label} length");
+        let mismatch = got
+            .iter()
+            .zip(expected.iter())
+            .position(|(got_byte, expected_byte)| got_byte != expected_byte);
+        if let Some(index) = mismatch {
+            panic!(
+                "{label} mismatch at {index}: got {:02x} expected {:02x}",
+                got[index], expected[index]
+            );
+        }
+    }
+
+    fn reference_rgb(
+        data: &[u8],
+        width: usize,
+        height: usize,
+        bytes_per_row: usize,
+        order: ChannelOrder,
+    ) -> Option<Vec<u8>> {
+        let row_bytes = width.checked_mul(4)?;
+        if bytes_per_row < row_bytes {
+            return None;
+        }
+
+        let required_len = height.checked_mul(bytes_per_row)?;
+        if data.len() < required_len {
+            return None;
+        }
+
+        let width_stride = width.checked_mul(3)?;
+        let rgb_len = height.checked_mul(width_stride)?;
+        let mut rgb = vec![0u8; rgb_len];
+
+        for y in 0..height {
+            let src_start = y.checked_mul(bytes_per_row)?;
+            let src_end = src_start.checked_add(row_bytes)?;
+            let dst_start = y.checked_mul(width_stride)?;
+            let dst_end = dst_start.checked_add(width_stride)?;
+            let src_row = data.get(src_start..src_end)?;
+            let dst_row = rgb.get_mut(dst_start..dst_end)?;
+
+            for (src, dst) in src_row.chunks_exact(4).zip(dst_row.chunks_exact_mut(3)) {
+                let (r, b) = match order {
+                    ChannelOrder::Rgba => (src[0], src[2]),
+                    ChannelOrder::Bgra => (src[2], src[0]),
+                };
+                dst[0] = r;
+                dst[1] = src[1];
+                dst[2] = b;
+            }
+        }
+
+        Some(rgb)
+    }
+
+    fn scalar_rgb(
+        data: &[u8],
+        width: usize,
+        height: usize,
+        bytes_per_row: usize,
+        order: ChannelOrder,
+    ) -> Option<Vec<u8>> {
+        let row_bytes = width.checked_mul(4)?;
+        if bytes_per_row < row_bytes {
+            return None;
+        }
+        let required_len = height.checked_mul(bytes_per_row)?;
+        if data.len() < required_len {
+            return None;
+        }
+        let width_stride = width.checked_mul(3)?;
+        let rgb_len = height.checked_mul(width_stride)?;
+        let mut rgb = vec![0u8; rgb_len];
+        for y in 0..height {
+            let (src_row, dst_row) =
+                rgb_row_pair(data, &mut rgb, y, bytes_per_row, row_bytes, width_stride)?;
+            reorder_rgb_row_scalar(src_row, dst_row, order);
+        }
+        Some(rgb)
+    }
+
+    fn rgb_cases() -> Vec<(usize, usize, usize)> {
+        let mut cases = Vec::new();
+        let widths = [
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 15, 16, 17, 31, 32, 33, 47, 48, 49, 63, 64, 65, 191,
+            1920, 1921, 2879,
+        ];
+        let heights = [0, 1, 2, 3, 5, 7];
+        let pads = [0usize, 1, 7, 32];
+        for width in widths {
+            for height in heights {
+                for pad in pads {
+                    cases.push((width, height, pad));
+                }
+            }
+        }
+        cases.push((1920, 1080, 0));
+        cases.push((1920, 1080, 64));
+        cases.push((1919, 17, 3));
+        cases.push((1, 1080, 0));
+        cases
+    }
+
+    fn assert_rgb_path_matches_original(
+        path: &str,
+        packed: Option<Vec<u8>>,
+        expected: &Option<Vec<u8>>,
+        label: &str,
+    ) {
+        match (packed.as_deref(), expected.as_deref()) {
+            (Some(got), Some(expected)) => {
+                assert_bytes_eq(got, expected, &format!("{path} {label}"));
+            }
+            (None, None) => {}
+            _ => panic!(
+                "{path} {label} presence got {} expected {}",
+                packed.is_some(),
+                expected.is_some()
+            ),
+        }
+    }
+
+    #[test]
+    fn rgb_dispatch_matches_original_for_both_channel_orders() {
+        for (width, height, pad) in rgb_cases() {
+            let stride = width * 4 + pad;
+            let data = paint(
+                height * stride + 8,
+                (width as u32).wrapping_mul(19).wrapping_add(height as u32),
+            );
+            for order in [ChannelOrder::Rgba, ChannelOrder::Bgra] {
+                let label = format!("{width}x{height} stride {stride} {order:?}");
+                let expected = reference_rgb(&data, width, height, stride, order);
+                let got = rgb_from_rgba(&data, width, height, stride, order)
+                    .map(|image| image.into_raw());
+                assert_rgb_path_matches_original("dispatch", got, &expected, &label);
+            }
+        }
+    }
+
+    #[test]
+    fn rgb_scalar_fallback_matches_original_for_both_channel_orders() {
+        for (width, height, pad) in rgb_cases() {
+            let stride = width * 4 + pad;
+            let data = paint(
+                height * stride + 8,
+                (width as u32).wrapping_mul(23).wrapping_add(pad as u32),
+            );
+            for order in [ChannelOrder::Rgba, ChannelOrder::Bgra] {
+                let label = format!("{width}x{height} stride {stride} {order:?}");
+                let expected = reference_rgb(&data, width, height, stride, order);
+                let got = scalar_rgb(&data, width, height, stride, order);
+                assert_rgb_path_matches_original("scalar", got, &expected, &label);
+            }
+        }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    fn ssse3_rgb(
+        data: &[u8],
+        width: usize,
+        height: usize,
+        bytes_per_row: usize,
+        order: ChannelOrder,
+    ) -> Option<Vec<u8>> {
+        let row_bytes = width.checked_mul(4)?;
+        if bytes_per_row < row_bytes {
+            return None;
+        }
+        let required_len = height.checked_mul(bytes_per_row)?;
+        if data.len() < required_len {
+            return None;
+        }
+        let width_stride = width.checked_mul(3)?;
+        let rgb_len = height.checked_mul(width_stride)?;
+        let mut rgb = vec![0u8; rgb_len];
+        for y in 0..height {
+            let (src_row, dst_row) =
+                rgb_row_pair(data, &mut rgb, y, bytes_per_row, row_bytes, width_stride)?;
+            unsafe {
+                reorder_rgb_row_ssse3(src_row, dst_row, order);
+            }
+        }
+        Some(rgb)
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn rgb_ssse3_matches_original_including_scalar_tail() {
+        if !std::is_x86_feature_detected!("ssse3") {
+            eprintln!("ssse3 unavailable, skipping shuffled rgb path");
+            return;
+        }
+        for (width, height, pad) in rgb_cases() {
+            let stride = width * 4 + pad;
+            let data = paint(
+                height * stride + 8,
+                (width as u32).wrapping_mul(29).wrapping_add(height as u32),
+            );
+            for order in [ChannelOrder::Rgba, ChannelOrder::Bgra] {
+                let label = format!("{width}x{height} stride {stride} {order:?}");
+                let expected = reference_rgb(&data, width, height, stride, order);
+                let got = ssse3_rgb(&data, width, height, stride, order);
+                assert_rgb_path_matches_original("ssse3", got, &expected, &label);
+            }
+        }
+    }
+
+    #[test]
+    fn rgb_packing_rejects_undersized_input() {
+        assert!(rgb_from_rgba(&[0, 1, 2, 3], 2, 1, 4, ChannelOrder::Rgba).is_none());
+        assert!(rgb_from_rgba(&[0, 1, 2, 3], 1, 2, 4, ChannelOrder::Bgra).is_none());
+        assert!(rgb_from_rgba(&[0, 1, 2, 3, 4, 5, 6], 1, 1, 8, ChannelOrder::Rgba).is_none());
+        let image = rgb_from_rgba(&[10, 20, 30, 40, 1, 2, 3, 4], 1, 1, 8, ChannelOrder::Bgra)
+            .expect("padded row");
+        assert_eq!(image.as_raw(), &[30, 20, 10]);
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    #[test]
+    fn rgb_neon_matches_scalar_including_tail() {
+        for (width, height, pad) in rgb_cases() {
+            let stride = width * 4 + pad;
+            let data = paint(
+                height * stride + 8,
+                (width as u32).wrapping_mul(31).wrapping_add(pad as u32),
+            );
+            for order in [ChannelOrder::Rgba, ChannelOrder::Bgra] {
+                let label = format!("{width}x{height} stride {stride} {order:?}");
+                let expected = scalar_rgb(&data, width, height, stride, order);
+                let got = rgb_from_rgba(&data, width, height, stride, order)
+                    .map(|image| image.into_raw());
+                assert_rgb_path_matches_original("neon", got, &expected, &label);
+            }
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn reference_rgba(
+        data: &[u8],
+        width: usize,
+        height: usize,
+        bytes_per_row: usize,
+        order: ChannelOrder,
+    ) -> Option<Vec<u8>> {
+        let row_bytes = width.checked_mul(4)?;
+        if bytes_per_row < row_bytes {
+            return None;
+        }
+        let required_len = height.checked_mul(bytes_per_row)?;
+        if data.len() < required_len {
+            return None;
+        }
+        let mut rgba = vec![0u8; height.checked_mul(row_bytes)?];
+        for y in 0..height {
+            let src_row = data.get(y * bytes_per_row..y * bytes_per_row + row_bytes)?;
+            let dst_row = rgba.get_mut(y * row_bytes..(y + 1) * row_bytes)?;
+            for (src, dst) in src_row.chunks_exact(4).zip(dst_row.chunks_exact_mut(4)) {
+                let (r, b) = match order {
+                    ChannelOrder::Rgba => (src[0], src[2]),
+                    ChannelOrder::Bgra => (src[2], src[0]),
+                };
+                dst[0] = r;
+                dst[1] = src[1];
+                dst[2] = b;
+                dst[3] = src[3];
+            }
+        }
+        Some(rgba)
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn rgba_dispatch_matches_original_for_both_channel_orders() {
+        for (width, height, pad) in rgb_cases() {
+            let stride = width * 4 + pad;
+            let data = paint(
+                height * stride + 8,
+                (width as u32).wrapping_mul(37).wrapping_add(height as u32),
+            );
+            for order in [ChannelOrder::Rgba, ChannelOrder::Bgra] {
+                let label = format!("{width}x{height} stride {stride} {order:?}");
+                let expected = reference_rgba(&data, width, height, stride, order);
+                let got = rgba_from_raw(&data, width, height, stride, order)
+                    .map(|image| image.into_raw());
+                assert_rgb_path_matches_original("rgba", got, &expected, &label);
+            }
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn rgba_packing_rejects_undersized_input() {
+        assert!(rgba_from_raw(&[0, 1, 2, 3], 2, 1, 4, ChannelOrder::Rgba).is_none());
+        assert!(rgba_from_raw(&[0, 1, 2, 3], 1, 2, 4, ChannelOrder::Bgra).is_none());
+        assert!(rgba_from_raw(&[0, 1, 2, 3, 4, 5, 6], 1, 1, 8, ChannelOrder::Rgba).is_none());
+        let image = rgba_from_raw(&[10, 20, 30, 40, 1, 2, 3, 4], 1, 1, 8, ChannelOrder::Bgra)
+            .expect("padded row");
+        assert_eq!(image.as_raw(), &[30, 20, 10, 40]);
+        let empty = rgba_from_raw(&[], 0, 0, 0, ChannelOrder::Bgra).expect("empty image");
+        assert!(empty.as_raw().is_empty());
+    }
+
+    fn rgb_image(width: u32, height: u32, seed: u32) -> RgbImage {
+        let buf = paint((width as usize) * (height as usize) * 3, seed);
+        RgbImage::from_raw(width, height, buf).expect("rgb image")
+    }
+
+    fn reference_round(image: &RgbImage, radius: f32) -> RgbaImage {
+        if radius <= 0.0 {
+            return image::buffer::ConvertBuffer::convert(image);
+        }
+
+        let width = image.width();
+        let height = image.height();
+        let fw = width as f32;
+        let fh = height as f32;
+        let mut rgba = RgbaImage::new(width, height);
+        for (x, y, rgb_pixel) in image.enumerate_pixels() {
+            let alpha = rounded_corner_alpha(x as f32 + 0.5, y as f32 + 0.5, fw, fh, radius);
+            rgba.put_pixel(
+                x,
+                y,
+                image::Rgba([rgb_pixel[0], rgb_pixel[1], rgb_pixel[2], alpha]),
+            );
+        }
+        rgba
+    }
+
+    fn assert_corners(width: u32, height: u32, radius: f32) {
+        let image = rgb_image(width, height, width.wrapping_mul(17).wrapping_add(height));
+        let expected = reference_round(&image, radius);
+        let got = round_rgb_corners(image, radius);
+        assert_bytes_eq(
+            got.as_raw(),
+            expected.as_raw(),
+            &format!("corners {width}x{height} radius {radius}"),
+        );
+    }
+
+    #[test]
+    fn rounded_corners_match_original_for_varied_sizes() {
+        let sizes = [
+            (0, 0),
+            (0, 4),
+            (4, 0),
+            (1, 1),
+            (1, 2),
+            (2, 1),
+            (2, 2),
+            (3, 3),
+            (3, 5),
+            (5, 3),
+            (7, 9),
+            (8, 8),
+            (15, 17),
+            (16, 9),
+            (31, 20),
+            (64, 63),
+            (100, 50),
+            (127, 13),
+            (320, 180),
+        ];
+        let base_radii = [-1.0, 0.0, 0.25, 0.5, 1.0, 1.5, 2.2, 8.0, 10.5, 12.0];
+        for (width, height) in sizes {
+            for radius in base_radii {
+                assert_corners(width, height, radius);
+            }
+            let min_dim = width.min(height) as f32;
+            let max_dim = width.max(height) as f32;
+            assert_corners(width, height, min_dim / 2.0);
+            assert_corners(width, height, min_dim / 2.0 + 0.5);
+            assert_corners(width, height, max_dim + 10.0);
+        }
+        assert_corners(1920, 1080, 0.0);
+        assert_corners(1920, 1080, 12.0);
+        assert_corners(1919, 17, 6.5);
+    }
+
+    #[test]
+    fn rounded_corners_match_original_for_non_finite_radius() {
+        for (width, height) in [(1, 1), (2, 3), (8, 5), (17, 9)] {
+            assert_corners(width, height, f32::INFINITY);
+            assert_corners(width, height, f32::NAN);
+            assert_corners(width, height, f32::MIN_POSITIVE);
+        }
+    }
+
+    #[test]
+    fn non_window_screenshot_keeps_opaque_alpha() {
+        let image = rgb_image(13, 9, 99);
+        let expected: RgbaImage = image::buffer::ConvertBuffer::convert(&image);
+        let got = apply_window_rounded_corners(image, &ScreenCaptureTarget::CameraOnly);
+        assert_bytes_eq(got.as_raw(), expected.as_raw(), "camera only");
+    }
+}
+
+#[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
+mod screenshot_swscale_cache_tests {
+    use super::{
+        clear_screenshot_scaler_cache, convert_ffmpeg_frame_to_image,
+        convert_ffmpeg_frame_via_swscale, screenshot_scaler_builds,
+    };
+    use anyhow::Context;
+    use image::RgbImage;
+    use std::time::{Duration, Instant};
+
+    fn filled_bgrx(format: ffmpeg::format::Pixel, width: u32, height: u32) -> ffmpeg::frame::Video {
+        let mut frame = ffmpeg::frame::Video::new(format, width, height);
+        let stride = frame.stride(0);
+        let data = frame.data_mut(0);
+        for y in 0..height as usize {
+            for x in 0..width as usize {
+                let i = y * stride + x * 4;
+                data[i] = (x.wrapping_mul(3).wrapping_add(y)) as u8;
+                data[i + 1] = (x.wrapping_mul(5).wrapping_add(7)) as u8;
+                data[i + 2] = (x.wrapping_mul(11).wrapping_add(y.wrapping_mul(2))) as u8;
+                data[i + 3] = 0xA5;
+            }
+        }
+        frame
+    }
+
+    fn shift_bgrx_pixels(frame: &mut ffmpeg::frame::Video, bias: u8) {
+        let width = frame.width() as usize;
+        let height = frame.height() as usize;
+        let stride = frame.stride(0);
+        let data = frame.data_mut(0);
+        for row in data.chunks_mut(stride).take(height) {
+            for pixel in row.chunks_mut(4).take(width) {
+                pixel[0] = pixel[0].wrapping_add(bias);
+                pixel[1] = pixel[1].wrapping_add(bias);
+                pixel[2] = pixel[2].wrapping_add(bias);
+            }
+        }
+    }
+
+    fn expected_bgrx_rgb(frame: &ffmpeg::frame::Video) -> Vec<u8> {
+        let width = frame.width() as usize;
+        let height = frame.height() as usize;
+        let stride = frame.stride(0);
+        let src = frame.data(0);
+        let mut rgb = vec![0u8; width * height * 3];
+        for y in 0..height {
+            for x in 0..width {
+                let s = y * stride + x * 4;
+                let d = (y * width + x) * 3;
+                rgb[d] = src[s + 2];
+                rgb[d + 1] = src[s + 1];
+                rgb[d + 2] = src[s];
+            }
+        }
+        rgb
+    }
+
+    fn bgrx_ssse3_screenshot() -> bool {
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        {
+            std::is_x86_feature_detected!("ssse3")
+        }
+        #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+        {
+            false
+        }
+    }
+
+    fn assert_scaler_builds(when_swscale: u64) {
+        let builds = screenshot_scaler_builds();
+        if bgrx_ssse3_screenshot() {
+            assert_eq!(builds, 0);
+        } else {
+            assert_eq!(builds, when_swscale);
+        }
+    }
+
+    /// The pre-cache conversion: a new swscale context and a row pack every call.
+    fn uncached_packed_rgb(frame: &ffmpeg::frame::Video) -> anyhow::Result<RgbImage> {
+        let mut scaler = ffmpeg::software::scaling::context::Context::get(
+            frame.format(),
+            frame.width(),
+            frame.height(),
+            ffmpeg::format::Pixel::RGB24,
+            frame.width(),
+            frame.height(),
+            ffmpeg::software::scaling::flag::Flags::BILINEAR,
+        )
+        .context("Failed to create scaler")?;
+        let mut rgb_frame = ffmpeg::frame::Video::empty();
+        scaler
+            .run(frame, &mut rgb_frame)
+            .context("Failed to scale frame")?;
+        let width = rgb_frame.width() as usize;
+        let height = rgb_frame.height() as usize;
+        let dst_stride = width * 3;
+        let src_stride = rgb_frame.stride(0);
+        anyhow::ensure!(
+            src_stride >= dst_stride,
+            "Source stride ({src_stride}) is less than destination stride ({dst_stride})"
+        );
+        let mut img_buffer = vec![0u8; height * dst_stride];
+        for y in 0..height {
+            let src_slice = &rgb_frame.data(0)[y * src_stride..y * src_stride + dst_stride];
+            img_buffer[y * dst_stride..(y + 1) * dst_stride].copy_from_slice(src_slice);
+        }
+        RgbImage::from_raw(rgb_frame.width(), rgb_frame.height(), img_buffer)
+            .ok_or_else(|| anyhow::anyhow!("Failed to create image buffer"))
+    }
+
+    #[test]
+    fn bgrx_screenshot_matches_channel_swap() {
+        ffmpeg::init().expect("ffmpeg");
+        clear_screenshot_scaler_cache();
+
+        let aligned = filled_bgrx(ffmpeg::format::Pixel::BGRZ, 3840, 2);
+        let image = convert_ffmpeg_frame_to_image(&aligned).expect("aligned convert");
+        assert_eq!(image.as_raw(), expected_bgrx_rgb(&aligned).as_slice());
+        assert_eq!(
+            image.as_raw(),
+            uncached_packed_rgb(&aligned)
+                .expect("aligned reference")
+                .as_raw()
+        );
+        assert_scaler_builds(1);
+        let again = convert_ffmpeg_frame_to_image(&aligned).expect("aligned reuse");
+        assert_eq!(again.as_raw(), image.as_raw());
+        assert_scaler_builds(1);
+
+        let mut aligned_changed = filled_bgrx(ffmpeg::format::Pixel::BGRZ, 3840, 2);
+        shift_bgrx_pixels(&mut aligned_changed, 17);
+        let aligned_changed_image =
+            convert_ffmpeg_frame_to_image(&aligned_changed).expect("aligned pixel change");
+        assert_eq!(
+            aligned_changed_image.as_raw(),
+            uncached_packed_rgb(&aligned_changed)
+                .expect("aligned pixel change reference")
+                .as_raw()
+        );
+        assert_ne!(aligned_changed_image.as_raw(), image.as_raw());
+        assert_scaler_builds(1);
+
+        let padded = filled_bgrx(ffmpeg::format::Pixel::BGRZ, 17, 3);
+        let padded_image = convert_ffmpeg_frame_to_image(&padded).expect("padded convert");
+        assert_eq!(padded_image.as_raw(), expected_bgrx_rgb(&padded).as_slice());
+        assert_eq!(
+            padded_image.as_raw(),
+            uncached_packed_rgb(&padded)
+                .expect("padded reference")
+                .as_raw()
+        );
+        assert_scaler_builds(2);
+        convert_ffmpeg_frame_to_image(&padded).expect("padded reuse");
+        assert_scaler_builds(2);
+
+        let mut padded_changed = filled_bgrx(ffmpeg::format::Pixel::BGRZ, 17, 3);
+        shift_bgrx_pixels(&mut padded_changed, 17);
+        let padded_changed_image =
+            convert_ffmpeg_frame_to_image(&padded_changed).expect("padded pixel change");
+        assert_eq!(
+            padded_changed_image.as_raw(),
+            uncached_packed_rgb(&padded_changed)
+                .expect("padded pixel change reference")
+                .as_raw()
+        );
+        assert_ne!(padded_changed_image.as_raw(), padded_image.as_raw());
+        assert_scaler_builds(2);
+
+        let bgra = filled_bgrx(ffmpeg::format::Pixel::BGRA, 32, 2);
+        let bgra_image = convert_ffmpeg_frame_to_image(&bgra).expect("bgra convert");
+        assert_eq!(bgra_image.as_raw(), expected_bgrx_rgb(&bgra).as_slice());
+        assert_scaler_builds(3);
+
+        convert_ffmpeg_frame_to_image(&aligned).expect("return to aligned");
+        assert_scaler_builds(4);
+
+        let tiny = filled_bgrx(ffmpeg::format::Pixel::BGRZ, 1, 1);
+        let tiny_image = convert_ffmpeg_frame_to_image(&tiny).expect("tiny convert");
+        assert_eq!(
+            tiny_image.as_raw(),
+            &[tiny.data(0)[2], tiny.data(0)[1], tiny.data(0)[0]]
+        );
+    }
+
+    #[test]
+    fn rgbz_screenshot_keeps_byte_order_and_uses_swscale() {
+        ffmpeg::init().expect("ffmpeg");
+        clear_screenshot_scaler_cache();
+        let frame = filled_bgrx(ffmpeg::format::Pixel::RGBZ, 32, 2);
+        let image = convert_ffmpeg_frame_to_image(&frame).expect("rgbz convert");
+        assert_eq!(screenshot_scaler_builds(), 1);
+        let src = frame.data(0);
+        assert_eq!(image.as_raw()[..3], [src[0], src[1], src[2]]);
+        assert_eq!(
+            image.as_raw(),
+            uncached_packed_rgb(&frame)
+                .expect("rgbz reference")
+                .as_raw()
+        );
+        convert_ffmpeg_frame_to_image(&frame).expect("rgbz reuse");
+        assert_eq!(screenshot_scaler_builds(), 1);
+    }
+
+    #[test]
+    fn bgrx_fast_path_leaves_swscale_cache_intact() {
+        ffmpeg::init().expect("ffmpeg");
+        clear_screenshot_scaler_cache();
+        let rgba = filled_bgrx(ffmpeg::format::Pixel::RGBA, 64, 2);
+        let first = convert_ffmpeg_frame_to_image(&rgba).expect("rgba convert");
+        assert_eq!(screenshot_scaler_builds(), 1);
+        assert_eq!(
+            first.as_raw(),
+            uncached_packed_rgb(&rgba).expect("rgba reference").as_raw()
+        );
+
+        let bgrz = filled_bgrx(ffmpeg::format::Pixel::BGRZ, 64, 2);
+        let bgrz_image = convert_ffmpeg_frame_to_image(&bgrz).expect("bgrz convert");
+        assert_eq!(bgrz_image.as_raw(), expected_bgrx_rgb(&bgrz).as_slice());
+        if bgrx_ssse3_screenshot() {
+            assert_eq!(screenshot_scaler_builds(), 1);
+        } else {
+            assert_eq!(screenshot_scaler_builds(), 2);
+        }
+
+        let again = convert_ffmpeg_frame_to_image(&rgba).expect("rgba reuse");
+        assert_eq!(again.as_raw(), first.as_raw());
+        if bgrx_ssse3_screenshot() {
+            assert_eq!(screenshot_scaler_builds(), 1);
+        } else {
+            assert_eq!(screenshot_scaler_builds(), 3);
+        }
+    }
+
+    fn thread_cpu_time() -> Duration {
+        let mut ts = libc::timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        };
+        let rc = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut ts) };
+        assert_eq!(rc, 0);
+        Duration::new(ts.tv_sec as u64, ts.tv_nsec as u32)
+    }
+
+    fn summarize(samples: &mut [Duration]) -> (Duration, Duration, Duration) {
+        samples.sort_unstable();
+        let min = samples[0];
+        let sum = samples.iter().copied().sum::<Duration>();
+        let mean = sum / u32::try_from(samples.len()).expect("sample count");
+        let mid = samples.len() / 2;
+        let median = if samples.len().is_multiple_of(2) {
+            (samples[mid - 1] + samples[mid]) / 2
+        } else {
+            samples[mid]
+        };
+        (min, median, mean)
+    }
+
+    fn time_convert(
+        frame: &ffmpeg::frame::Video,
+        runs: usize,
+        convert: impl Fn(&ffmpeg::frame::Video) -> RgbImage,
+    ) -> (Vec<Duration>, Vec<Duration>) {
+        let mut wall = Vec::with_capacity(runs);
+        let mut cpu = Vec::with_capacity(runs);
+        for _ in 0..runs {
+            let cpu_start = thread_cpu_time();
+            let start = Instant::now();
+            let image = convert(std::hint::black_box(frame));
+            std::hint::black_box(&image);
+            let elapsed = start.elapsed();
+            let cpu_elapsed = thread_cpu_time().saturating_sub(cpu_start);
+            wall.push(elapsed);
+            cpu.push(cpu_elapsed);
+        }
+        (wall, cpu)
+    }
+
+    fn host_model() -> String {
+        let Ok(cpuinfo) = std::fs::read_to_string("/proc/cpuinfo") else {
+            return "unknown".to_string();
+        };
+        cpuinfo
+            .lines()
+            .find_map(|line| {
+                let rest = line.strip_prefix("model name")?;
+                Some(rest.trim_start_matches(['\t', ':', ' ']).to_string())
+            })
+            .unwrap_or_else(|| "unknown".to_string())
+    }
+
+    #[test]
+    #[ignore = "manual 4K BGRZ screenshot conversion benchmark"]
+    fn bench_bgrz_screenshot_conversion() {
+        ffmpeg::init().expect("ffmpeg");
+        const WARMUP: usize = 10;
+        const RUNS: usize = 51;
+        println!(
+            "host={} ssse3_path={} warmup={WARMUP} runs={RUNS} profile=release opt-level=s lto=thin codegen-units=1",
+            host_model(),
+            bgrx_ssse3_screenshot()
+        );
+        for (width, height) in [(3840, 2160), (1920, 1080), (1366, 768)] {
+            let frame = filled_bgrx(ffmpeg::format::Pixel::BGRZ, width, height);
+            let scalar = expected_bgrx_rgb(&frame);
+            let uncached = uncached_packed_rgb(&frame).expect("uncached");
+            clear_screenshot_scaler_cache();
+            let swscale = convert_ffmpeg_frame_via_swscale(&frame).expect("swscale");
+            let screenshot = convert_ffmpeg_frame_to_image(&frame).expect("screenshot");
+            assert_eq!(scalar.as_slice(), swscale.as_raw());
+            assert_eq!(swscale.as_raw(), screenshot.as_raw());
+            assert_eq!(uncached.as_raw(), screenshot.as_raw());
+
+            for _ in 0..WARMUP {
+                std::hint::black_box(uncached_packed_rgb(&frame).expect("warmup uncached"));
+            }
+            let (mut uncached_wall, mut uncached_cpu) = time_convert(&frame, RUNS, |frame| {
+                uncached_packed_rgb(frame).expect("uncached")
+            });
+
+            clear_screenshot_scaler_cache();
+            for _ in 0..WARMUP {
+                std::hint::black_box(
+                    convert_ffmpeg_frame_via_swscale(&frame).expect("warmup swscale"),
+                );
+            }
+            let (mut swscale_wall, mut swscale_cpu) = time_convert(&frame, RUNS, |frame| {
+                convert_ffmpeg_frame_via_swscale(frame).expect("swscale")
+            });
+
+            for _ in 0..WARMUP {
+                std::hint::black_box(
+                    convert_ffmpeg_frame_to_image(&frame).expect("warmup screenshot"),
+                );
+            }
+            let builds_before = screenshot_scaler_builds();
+            let (mut screenshot_wall, mut screenshot_cpu) = time_convert(&frame, RUNS, |frame| {
+                convert_ffmpeg_frame_to_image(frame).expect("screenshot")
+            });
+            let builds_during = screenshot_scaler_builds() - builds_before;
+
+            let (uncached_wall_min, uncached_wall_med, uncached_wall_mean) =
+                summarize(&mut uncached_wall);
+            let (uncached_cpu_min, uncached_cpu_med, uncached_cpu_mean) =
+                summarize(&mut uncached_cpu);
+            let (swscale_wall_min, swscale_wall_med, swscale_wall_mean) =
+                summarize(&mut swscale_wall);
+            let (swscale_cpu_min, swscale_cpu_med, swscale_cpu_mean) = summarize(&mut swscale_cpu);
+            let (screenshot_wall_min, screenshot_wall_med, screenshot_wall_mean) =
+                summarize(&mut screenshot_wall);
+            let (screenshot_cpu_min, screenshot_cpu_med, screenshot_cpu_mean) =
+                summarize(&mut screenshot_cpu);
+            println!(
+                "size={width}x{height} screenshot_scaler_builds_during_timed_runs={builds_during}"
+            );
+            println!(
+                "swscale_uncached wall min={uncached_wall_min:?} median={uncached_wall_med:?} mean={uncached_wall_mean:?} cpu min={uncached_cpu_min:?} median={uncached_cpu_med:?} mean={uncached_cpu_mean:?}"
+            );
+            println!(
+                "swscale_cached   wall min={swscale_wall_min:?} median={swscale_wall_med:?} mean={swscale_wall_mean:?} cpu min={swscale_cpu_min:?} median={swscale_cpu_med:?} mean={swscale_cpu_mean:?}"
+            );
+            println!(
+                "screenshot       wall min={screenshot_wall_min:?} median={screenshot_wall_med:?} mean={screenshot_wall_mean:?} cpu min={screenshot_cpu_min:?} median={screenshot_cpu_med:?} mean={screenshot_cpu_mean:?}"
+            );
+        }
+    }
+}
+
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+mod bgrx_ssse3_tests {
+    use super::bgrx_plane_to_rgb24;
+
+    fn scalar_bgrx(src: &[u8], stride: usize, width: usize, height: usize) -> Vec<u8> {
+        let mut rgb = vec![0u8; width * height * 3];
+        for (src_row, dst_row) in src
+            .chunks(stride)
+            .zip(rgb.chunks_mut(width * 3))
+            .take(height)
+        {
+            for (src_px, dst_px) in src_row
+                .chunks_exact(4)
+                .take(width)
+                .zip(dst_row.chunks_exact_mut(3))
+            {
+                dst_px[0] = src_px[2];
+                dst_px[1] = src_px[1];
+                dst_px[2] = src_px[0];
+            }
+        }
+        rgb
+    }
+
+    fn fill_bgrx(width: usize, height: usize, stride: usize) -> Vec<u8> {
+        let mut src = vec![0x5Au8; stride * height];
+        for y in 0..height {
+            for x in 0..width {
+                let i = y * stride + x * 4;
+                src[i] = x.wrapping_mul(3).wrapping_add(y) as u8;
+                src[i + 1] = x.wrapping_mul(5).wrapping_add(7) as u8;
+                src[i + 2] = x.wrapping_mul(11).wrapping_add(y.wrapping_mul(2)) as u8;
+                src[i + 3] = 0xA5;
+            }
+        }
+        src
+    }
+
+    #[test]
+    fn rejects_empty_and_short_planes() {
+        assert!(bgrx_plane_to_rgb24(&[], 0, 0, 1).is_none());
+        assert!(bgrx_plane_to_rgb24(&[0; 4], 4, 1, 0).is_none());
+        assert!(bgrx_plane_to_rgb24(&[0; 3], 3, 1, 1).is_none());
+        assert!(bgrx_plane_to_rgb24(&[0; 4], 8, 1, 2).is_none());
+    }
+
+    #[test]
+    fn matches_scalar_reference_including_tails_and_padding() {
+        if !std::is_x86_feature_detected!("ssse3") {
+            eprintln!("ssse3 unavailable, skipping bgrx plane check");
+            return;
+        }
+        let widths = [
+            1, 2, 3, 4, 5, 7, 8, 15, 16, 17, 31, 32, 33, 47, 48, 63, 64, 127, 128, 191, 192, 1366,
+            1919, 1920, 3839, 3840,
+        ];
+        for width in widths {
+            for height in [1usize, 2, 3] {
+                for pad in [0usize, 3, 17] {
+                    if width >= 1366 && !(height == 2 && pad == 0) {
+                        continue;
+                    }
+                    let stride = width * 4 + pad;
+                    let src = fill_bgrx(width, height, stride);
+                    let got = bgrx_plane_to_rgb24(&src, stride, width, height)
+                        .expect("ssse3 plane conversion");
+                    let expected = scalar_bgrx(&src, stride, width, height);
+                    assert_eq!(got, expected, "w={width} h={height} pad={pad}");
+                }
+            }
+        }
+
+        let stride = 80;
+        let width = 16;
+        let height = 2;
+        let mut exact = fill_bgrx(width, height, stride);
+        exact.truncate((height - 1) * stride + width * 4);
+        let got = bgrx_plane_to_rgb24(&exact, stride, width, height).expect("exact tail");
+        assert_eq!(got, scalar_bgrx(&exact, stride, width, height));
+
+        let mut unaligned = vec![0x5Au8; 1 + stride * height];
+        unaligned[1..].copy_from_slice(&fill_bgrx(width, height, stride));
+        let got = bgrx_plane_to_rgb24(&unaligned[1..], stride, width, height).expect("unaligned");
+        assert_eq!(got, scalar_bgrx(&unaligned[1..], stride, width, height));
     }
 }
