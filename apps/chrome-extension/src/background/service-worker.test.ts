@@ -1,5 +1,6 @@
 import type { VideoId } from "@cap/recorder-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { AUTH_KEY } from "../shared/storage";
 import { RECORDING_STATE_KEY } from "../shared/storage-keys";
 import type {
 	OffscreenResponse,
@@ -35,10 +36,30 @@ beforeEach(async () => {
 			Object.assign(stored, items);
 			callback();
 		},
+		remove: (keys: string | string[], callback: () => void) => {
+			for (const key of Array.isArray(keys) ? keys : [keys]) {
+				delete stored[key];
+			}
+			callback();
+		},
 		setAccessLevel: vi.fn(),
 	};
 	vi.stubGlobal("chrome", {
 		storage: { local: storage, session: storage },
+		identity: {
+			getRedirectURL: () => "https://extension.chromiumapp.org/",
+			launchWebAuthFlow: vi.fn(
+				(
+					options: { url: string },
+					callback: (url: string) => void,
+				) => {
+					const state = new URL(options.url).searchParams.get("state");
+					callback(
+					`https://extension.chromiumapp.org/#state=${state}&authApiKey=new_key&userId=new_user`,
+					);
+				},
+			),
+		},
 		runtime: {
 			getURL: (path: string) => `chrome-extension://test/${path}`,
 			ContextType: { OFFSCREEN_DOCUMENT: "OFFSCREEN_DOCUMENT" },
@@ -172,6 +193,120 @@ describe("recording status synchronization", () => {
 		});
 		expect(stored[RECORDING_STATE_KEY]).toMatchObject({
 			status: { phase: "idle" },
+		});
+	});
+});
+
+const BOOTSTRAP_CACHE_KEY = "cap-extension-bootstrap-cache";
+
+const bootstrapFor = (account: string, maxRecordingSeconds: number) => ({
+	user: { id: account, email: `${account}@cap.test` },
+	organization: { id: `org_${account}`, name: account },
+	plan: { isPro: maxRecordingSeconds === 0, maxRecordingSeconds },
+});
+
+const requestWorker = (type: "bootstrap" | "auth-revoke" | "auth-start") =>
+	new Promise<ServiceWorkerResponse>((resolve) => {
+		onMessage({ target: "service-worker", type }, {}, resolve);
+	});
+
+const resolveBootstrapContext = async () => {
+	await vi.waitFor(() => expect(contextReplies).toHaveLength(1));
+	answerContexts(false);
+};
+
+describe("bootstrap session ownership", () => {
+	it("does not repopulate the previous account's cache after sign-out", async () => {
+		stored[AUTH_KEY] = { authApiKey: "old_key", userId: "old_user" };
+		stored[BOOTSTRAP_CACHE_KEY] = {
+			bootstrap: bootstrapFor("old_user", 300),
+			cachedAt: Date.now(),
+		};
+		let finishOldBootstrap!: (response: Response) => void;
+		const oldBootstrapResponse = new Promise<Response>((resolve) => {
+			finishOldBootstrap = resolve;
+		});
+		const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) =>
+			init?.method === "POST"
+				? Promise.resolve(Response.json({ success: true }))
+				: oldBootstrapResponse,
+		);
+		vi.stubGlobal("fetch", fetchMock);
+
+		const initial = requestWorker("bootstrap");
+		await resolveBootstrapContext();
+		expect(await initial).toMatchObject({
+			ok: true,
+			bootstrap: { organization: { id: "org_old_user" } },
+		});
+
+		expect(await requestWorker("auth-revoke")).toMatchObject({
+			ok: true,
+			auth: null,
+		});
+		finishOldBootstrap(Response.json(bootstrapFor("old_user", 300)));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(stored[AUTH_KEY]).toBeUndefined();
+		expect(stored[BOOTSTRAP_CACHE_KEY]).toBeUndefined();
+	});
+
+	it("loads a new account while the previous account's refresh is pending", async () => {
+		stored[AUTH_KEY] = { authApiKey: "old_key", userId: "old_user" };
+		stored[BOOTSTRAP_CACHE_KEY] = {
+			bootstrap: bootstrapFor("old_user", 300),
+			cachedAt: Date.now(),
+		};
+		let finishOldBootstrap!: (response: Response) => void;
+		const oldBootstrapResponse = new Promise<Response>((resolve) => {
+			finishOldBootstrap = resolve;
+		});
+		const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+			if (init?.redirect === "manual") {
+				return Promise.resolve(new Response(null, { status: 302 }));
+			}
+			if (init?.method === "POST") {
+				return Promise.resolve(Response.json({ success: true }));
+			}
+			const token = new Headers(init?.headers).get("Authorization");
+			return token === "Bearer old_key"
+				? oldBootstrapResponse
+				: Promise.resolve(Response.json(bootstrapFor("new_user", 0)));
+		});
+		vi.stubGlobal("fetch", fetchMock);
+
+		const initial = requestWorker("bootstrap");
+		await resolveBootstrapContext();
+		expect(await initial).toMatchObject({
+			ok: true,
+			bootstrap: { organization: { id: "org_old_user" } },
+		});
+
+		expect(await requestWorker("auth-start")).toMatchObject({
+			ok: true,
+			authPending: true,
+		});
+		await vi.waitFor(() => {
+			expect(stored[AUTH_KEY]).toMatchObject({
+				authApiKey: "new_key",
+				userId: "new_user",
+			});
+			expect(stored[BOOTSTRAP_CACHE_KEY]).toMatchObject({
+				bootstrap: { organization: { id: "org_new_user" } },
+			});
+		});
+		finishOldBootstrap(Response.json(bootstrapFor("old_user", 300)));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(stored[BOOTSTRAP_CACHE_KEY]).toMatchObject({
+			bootstrap: { organization: { id: "org_new_user" } },
+		});
+		const current = requestWorker("bootstrap");
+		await resolveBootstrapContext();
+		expect(await current).toMatchObject({
+			ok: true,
+			auth: { authApiKey: "new_key", userId: "new_user" },
+			bootstrap: { organization: { id: "org_new_user" } },
 		});
 	});
 });
