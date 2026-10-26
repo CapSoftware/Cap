@@ -968,8 +968,8 @@ fn decode_transcription_source(
     let source_end = (end + offset).max(0) as usize;
     let decoded = cap_audio::AudioData::from_file_range(path, source_start, source_end)?;
     Ok(TranscriptionAudioSource {
-        samples: decoded.samples().to_vec(),
         channels: usize::from(decoded.channels()),
+        samples: decoded.into_samples(),
         offset_secs: (start + offset - source_start as i64) as f64 / rate,
     })
 }
