@@ -164,6 +164,7 @@ jobs:
           __tests__/unit/sso-login-pages.test.ts
           __tests__/unit/timeline-paused-window.test.ts
           __tests__/unit/toggle-pro-seat.test.ts
+          __tests__/unit/transcript-arrow-text.test.ts
           __tests__/unit/transcript-hours.test.ts
           __tests__/unit/transcript-numbers.test.ts
           __tests__/unit/video-analytics-access.test.ts
