@@ -79,6 +79,9 @@ recording engine, which stays in English.
 | segment (of a recording) | 分段 | セグメント | segment | segmento | Segment | सेगमेंट |
 | recover / discard | 恢复 / 丢弃 | 復元 / 破棄 | récupérer / supprimer | recuperar / descartar | wiederherstellen / verwerfen | रिकवर करें / हटाएँ |
 | Personal / Commercial plan | 个人版 / 商业版 | 個人 / 商用 | Personnel / Commercial | Personal / Comercial | Privat / Kommerziell | पर्सनल / कमर्शियल |
+| caption (subtitle) | 字幕 | 字幕 | sous-titre | subtítulo | Untertitel | कैप्शन |
+| track (timeline) | 轨道 | トラック | piste | pista | Spur | ट्रैक |
+| preset | 预设 | プリセット | préréglage | preajuste | Vorlage | प्रीसेट |
 
 ## Fitting the UI
 
