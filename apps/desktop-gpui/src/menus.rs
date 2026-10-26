@@ -320,7 +320,15 @@ fn install_menus(cx: &mut App) {
     let settings_enabled = !crate::app_windows::onboarding_is_open(cx);
     cx.set_menus(build_menus(&update_status, settings_enabled));
     #[cfg(target_os = "macos")]
-    platform::patch_standard_application_menu();
+    {
+        platform::patch_standard_application_menu();
+        // The badge lives only on the native item, so a rebuilt menu bar
+        // (a language change, onboarding finishing) needs it put back.
+        let row = UpdateRow::of(&update_status);
+        if row.badge.is_some() {
+            platform::set_update_menu_item(row.title, row.badge.as_deref(), row.enabled);
+        }
+    }
 }
 
 pub(crate) fn bindings() -> Vec<KeyBinding> {
