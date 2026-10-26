@@ -15,8 +15,8 @@ import {
 import {
 	createMobileApiClient,
 	createSessionRequestUrl,
-	MobileApiError,
 	type MobileApiClient,
+	MobileApiError,
 	type MobileAuthConfigResponse,
 	type MobileBootstrapResponse,
 } from "@/api/mobile";
