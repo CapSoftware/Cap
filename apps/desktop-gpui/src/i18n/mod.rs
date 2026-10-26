@@ -161,6 +161,8 @@ pub fn apply(preference: Preference, cx: &mut App) {
 #[cfg(test)]
 mod dialogs_surface_tests;
 #[cfg(test)]
+mod editor_panels_surface_tests;
+#[cfg(test)]
 mod settings_surface_tests;
 #[cfg(test)]
 mod surface_tests;

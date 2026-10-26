@@ -1690,3 +1690,521 @@ retrying = "アップロードを再試行します"
 sign_in = "サインインしてアップロードを再試行"
 uploaded = "アップロード済み"
 uploading = "アップロード中"
+
+# Editor sidebar, segment panels, colour correction, audio library and crop dialog.
+
+[editor.audio.library]
+add_hint = "動画にオーディオや音楽などのサウンドを追加"
+add_title = "オーディオを追加"
+change_hint = "このセグメントに別のトラックを選ぶ"
+change_title = "オーディオを変更"
+done = "完了"
+import = "ファイルを読み込む"
+
+[editor.color]
+apply_to_cursor = "カーソルにも適用"
+fine_tune = "色を微調整"
+title = "色補正"
+
+[editor.color.preset.cinematic]
+description = "ティールの影とオレンジのハイライトに軽い粒子"
+name = "シネマティック"
+
+[editor.color.preset.dreamy]
+description = "黒を持ち上げた柔らかく軽やかなパステル"
+name = "ドリーミー"
+
+[editor.color.preset.frost]
+description = "落ち着いた色のクールで澄んだトーン"
+name = "フロスト"
+
+[editor.color.preset.golden]
+description = "暖かいゴールデンアワーの光"
+name = "ゴールデン"
+
+[editor.color.preset.midnight]
+description = "落ち着いた色合いの暗くムーディーなティール"
+name = "ミッドナイト"
+
+[editor.color.preset.noir]
+description = "強い粒子のハイコントラストな白黒"
+name = "ノワール"
+
+[editor.color.preset.none]
+description = "元の色のまま、補正なし"
+name = "なし"
+
+[editor.color.preset.vintage]
+description = "柔らかいコントラストの色あせた暖かいフィルム調"
+name = "ヴィンテージ"
+
+[editor.color.preset.vivid]
+description = "彩度とコントラストを力強く強調"
+name = "ビビッド"
+
+[editor.color.slider]
+contrast = "コントラスト"
+exposure = "露出"
+fade = "フェード"
+grain = "粒子"
+saturation = "彩度"
+split_tone = "スプリットトーン"
+strength = "強さ"
+temperature = "色温度"
+tint = "色かぶり"
+vignette = "周辺減光"
+
+[editor.crop]
+aspect_ratio = "縦横比"
+center = "中央"
+dimensions = "サイズ"
+editing_style = "スタイル{number}のみを編集中"
+editing_style_override = "スタイル{number}のみを編集中 · 保存すると背景の上書きがオンになります"
+free = "自由"
+full = "全体"
+hint = "ドラッグで移動 · 矢印キーで微調整 · {key}を押したままでスナップしない"
+loading_frame = "フレームを読み込み中…"
+position = "位置"
+preview = "プレビュー"
+rendering_preview = "プレビューを描画中…"
+snap_to_ratios = "比率にスナップ"
+style_changed = "切り抜き中にこのスタイルが変更されました。キャンセルして切り抜きを開き直してください。"
+title = "切り抜き"
+
+[editor.panel]
+delete = "削除"
+done = "完了"
+duration = "長さ"
+edge_in = "イン"
+edge_out = "アウト"
+enabled = "有効"
+fade_duration = "フェードの長さ"
+flip_horizontally = "左右反転"
+flip_vertically = "上下反転"
+name = "名前"
+opacity = "不透明度"
+
+[editor.panel.audio]
+change = "変更"
+change_hint = "タップしてトラックを変更"
+fade_in = "フェードイン"
+fade_out = "フェードアウト"
+fallback_name = "オーディオ"
+title = "オーディオ{number}"
+volume = "音量"
+
+[editor.panel.camera3d]
+already_still = "すでに静止ショットです"
+amount = "量"
+angles = "アングル"
+auto_scene = "自動シーン"
+auto_scene_tooltip = "トラック上のすべての3Dショットを作り直します"
+bokeh = "ボケ"
+camera = "カメラ"
+delete_tooltip = "このショットを削除"
+depth_blur = "被写界深度ぼかし"
+distance = "距離"
+drag_to_orbit = "ドラッグで回転"
+ease_in = "イーズイン"
+ease_out = "イーズアウト"
+end_same_as_start = "終了 · 開始と同じ"
+fine_tune = "微調整"
+focus = "フォーカス"
+header = "3Dショット · {look} · {duration}秒"
+hold_opening = "ショット全体で開始時のポーズを保持"
+lens = "レンズ"
+look_title = "ルック"
+motion_style = "動きのスタイル"
+moves = "動き"
+nothing_to_swap = "静止ショットでは入れ替えるものがありません"
+play_shot = "再生"
+play_shot_tooltip = "このショットを再生"
+pose_end = "終了 · {time}"
+pose_start = "開始 · {time}"
+reset_camera = "カメラをリセット"
+roll = "ロール"
+rotate_x = "回転X"
+rotate_y = "回転Y"
+shift_x = "シフトX"
+shift_y = "シフトY"
+shots = { other = "{count}ショット" }
+still_shot = "静止ショット"
+swap = "開始と終了を入れ替える"
+timing_advanced = "タイミングと詳細"
+timing_summary = "{easing} · レンズ{fov}"
+
+[editor.panel.camera3d.blur]
+angle = "角度"
+falloff = "減衰"
+focus_size = "焦点サイズ"
+focus_x = "焦点X"
+focus_y = "焦点Y"
+position = "位置"
+scan = "スキャン"
+strength = "強さ"
+
+[editor.panel.camera3d.easing]
+ease_in = "イーズイン"
+ease_out = "イーズアウト"
+linear = "リニア"
+smooth = "スムーズ"
+
+[editor.panel.camera3d.focus_mode]
+directional = "方向"
+radial = "放射"
+tilt_shift = "ティルトシフト"
+
+[editor.panel.camera3d.look]
+center = "中央"
+close_up = "クローズアップ"
+drift_down = "ゆっくり下降"
+glide_across = "横に滑る"
+low_angle = "ローアングル"
+perspective = "パース"
+pull_back = "引き"
+rising_sweep = "上昇スイープ"
+slide_by = "スライド"
+spotlight = "スポットライト"
+tilt_away = "傾けて離す"
+top_down = "真上から"
+unfold = "展開"
+
+[editor.panel.camera3d.sequence]
+product_tour = "製品ツアー"
+punch_in = "パンチイン"
+showcase = "ショーケース"
+
+[editor.panel.camera3d.shot]
+custom = "カスタムの動き"
+still = "静止ショット"
+
+[editor.panel.caption]
+title = "字幕{number}"
+
+[editor.panel.font]
+system_mono = "システムMono"
+system_sans = "システムSans"
+system_serif = "システムSerif"
+
+[editor.panel.font_weight]
+black = "ブラック"
+bold = "太字"
+custom = "カスタム（{weight}）"
+extra_bold = "極太"
+light = "細字"
+medium = "中字"
+regular = "標準"
+semibold = "やや太字"
+
+[editor.panel.image]
+arrange = "キャンバス上で配置"
+arrange_help = "画像をドラッグして移動します。角を引っ張るとサイズを変更でき、下の回転コントロールで回転できます。"
+center = "キャンバスの中央に配置"
+lock_aspect = "縦横比を固定"
+missing = "画像ファイルが見つかりません。置き換えると、タイミングと変形を保ったままこのセグメントを復元できます。"
+replace = "画像を置き換え"
+rotation = "回転"
+rounding = "角丸"
+
+[editor.panel.keyboard]
+title = "キーボード{number}"
+
+[editor.panel.mask]
+blur = "ぼかし"
+effect = "エフェクト"
+highlight = "強調"
+outside_darkness = "外側の暗さ"
+pixel_size = "ピクセルサイズ"
+pixelate = "モザイク"
+sensitive = "機密"
+title = "マスク{number}"
+
+[editor.panel.scene]
+camera_layout = "カメラのレイアウト"
+camera_position = "カメラの位置"
+camera_zoom = "カメラのズーム"
+screen_position = "画面の位置"
+screen_zoom = "画面のズーム"
+transition = "トランジション"
+
+[editor.panel.scene.description]
+camera_only = "カメラの映像のみを表示"
+default = "画面とカメラの両方を表示"
+floating = "画面とカメラが角丸のカードとして背景の上に並んで浮かびます"
+hide_camera = "画面の録画のみを表示"
+split_screen = "画面とカメラを横に並べて表示（縦向きでは自動で縦に並びます）"
+
+[editor.panel.scene.mode]
+camera_only = "カメラのみ"
+default = "デフォルト"
+floating = "フローティング"
+hide_camera = "カメラを隠す"
+split_screen = "分割画面"
+
+[editor.panel.style]
+camera_only_background = "カメラのみの背景"
+camera_only_help = "カメラのみのシーンを使ってください。余白を付けるとカメラの周りに背景が見えます。"
+camera_only_padding = "カメラのみの余白"
+crop_height = "高さ"
+crop_left = "左"
+crop_title = "画面の切り抜き（元のピクセル）"
+crop_top = "上"
+crop_width = "幅"
+edit_background = "背景とフレームを編集"
+edit_camera = "カメラを編集"
+edit_cursor = "カーソルを編集"
+help = "上書きはこのセグメントの間だけ適用されます。グループをオンにすると全体設定がコピーされます。"
+reset_crop = "切り抜きをリセット"
+
+[editor.panel.text_animation]
+bounce = "バウンス"
+fade = "フェード"
+letters = "文字ごと"
+none = "なし"
+pop = "ポップ"
+slide_down = "下へスライド"
+slide_left = "左へスライド"
+slide_right = "右へスライド"
+slide_up = "上へスライド"
+tracking = "字間"
+typewriter = "タイプライター"
+wipe = "ワイプ"
+words = "単語ごと"
+zoom = "ズーム"
+
+[editor.panel.text_background]
+box_shape = "ボックス"
+highlight = "ハイライト"
+none = "なし"
+pill = "ピル"
+
+[editor.panel.text_layout]
+fullscreen = "全画面"
+overlay = "オーバーレイ"
+
+[editor.panel.text_preset.group]
+all = "すべて"
+callouts = "コールアウト"
+code = "コード"
+lower_thirds = "テロップ"
+statements = "ステートメント"
+titles = "タイトル"
+
+[editor.panel.text_preset.name]
+caption = "キャプション"
+cinematic = "シネマティック"
+code = "コード"
+gradient = "グラデーション"
+headline = "見出し"
+highlight = "ハイライト"
+kicker = "キッカー"
+label = "ラベル"
+lower_third = "テロップ"
+name_tag = "名札"
+neon = "ネオン"
+quote = "引用"
+stat = "大きな数字"
+sticker = "ステッカー"
+title = "タイトル"
+typewriter = "タイプライター"
+
+[editor.panel.text_preset.sample]
+caption = "Capで録画"
+cinematic = "第一章"
+gradient = "美しいテキスト"
+headline = "もっと速くリリース"
+highlight = "大事なところ"
+kicker = "新機能"
+label = "プロのヒント"
+name_tag = "Richie · 創業者"
+neon = "グローアップ"
+quote = "「軽やかに感じさせて」"
+sticker = "ドーン！"
+title = "Capのご紹介"
+typewriter = "タイプ中…"
+
+[editor.panel.text_segment]
+animation = "アニメーション"
+background = "背景"
+color = "色"
+font = "フォント"
+font_size = "サイズ"
+fullscreen_help = "テキストの表示中は動画を一時停止し、その後止めた位置から再開します。"
+glow = "グロー"
+gradient = "グラデーション"
+layout = "レイアウト"
+letter_spacing = "字間"
+line_height = "行の高さ"
+look = "見た目"
+outline = "アウトライン"
+screen_transition = "画面の切り替え"
+shadow = "影"
+style = "スタイル"
+title = "テキスト{number}"
+
+[editor.panel.timing]
+end = "終了"
+start = "開始"
+title = "タイミング"
+to = "〜"
+
+[editor.panel.zoom]
+amount = "ズーム量"
+auto = "自動"
+auto_help = "自動ズームは画面上のカーソルを追いかけます。"
+auto_locked = "自動モードにはカーソルのキャプチャが必要です。「設定 → 一般」で「カーソルの個別キャプチャ（Studio）」をオンにしてください。"
+how_it_works = "仕組み"
+manual = "手動"
+manual_help = "手動ズームは下で選んだ位置に固定されます。"
+mixed = "混在"
+mode = "ズームモード"
+positions_mixed = "セグメントごとにズーム位置が異なります。ドラッグするとすべて同じ位置に移動します。"
+title = "ズーム{number}"
+
+[editor.sidebar]
+desktop_import_failed = "デスクトップの壁紙を読み込めませんでした"
+importing_image = "画像を読み込み中…"
+
+[editor.sidebar.animated_gradient]
+add_colour = "色を追加"
+colours = "色"
+delete = "削除"
+delete_failed = "このグラデーションを削除できませんでした。もう一度お試しください。"
+fine_tune = "微調整"
+limit_reached = { other = "保存できるグラデーションは{count}個までです。追加するには1つ削除してください。" }
+motion = "動き"
+name_placeholder = "このグラデーションの名前"
+name_required = "このグラデーションの名前を入力してください。"
+presets = "プリセット"
+randomize = "ランダム"
+remember_failed = "アニメーショングラデーションの設定を保存できませんでした。"
+remove_colour = "色を削除"
+reset_tooltip = "微調整をリセット"
+save_failed = "このグラデーションを保存できませんでした。もう一度お試しください。"
+save_tooltip = "現在のグラデーションを保存"
+saved = "保存済み"
+still = "静止"
+
+[editor.sidebar.animated_gradient.control]
+contrast = "コントラスト"
+curvature = "曲率"
+detail = "ディテール"
+direction = "方向"
+exposure = "露出"
+flow_scale = "流れの大きさ"
+flow_strength = "流れの強さ"
+grain_amount = "粒子の量"
+grain_size = "粒子の大きさ"
+highlights = "ハイライト"
+motion_speed = "動きの速さ"
+relief = "起伏"
+ripple_size = "波紋の大きさ"
+shading = "陰影"
+vibrance = "自然な彩度"
+
+[editor.sidebar.animated_gradient.group]
+animation = "アニメーション"
+colour = "色"
+flow = "流れ"
+lighting = "ライティング"
+texture = "テクスチャ"
+
+[editor.sidebar.background]
+title = "背景"
+
+[editor.sidebar.border]
+color = "枠線の色"
+opacity = "枠線の不透明度"
+title = "枠線"
+width = "枠線の太さ"
+
+[editor.sidebar.corner]
+rounded = "角丸"
+squircle = "スクワークル"
+title = "角のスタイル"
+
+[editor.sidebar.cursor]
+circle = "円"
+click_ripple = "クリックの波紋"
+color = "色"
+default = "デフォルト"
+description_circle = "すべてのカーソルを円に置き換えます。"
+description_default = "録画時のカーソルの形と見た目をそのまま使います。"
+description_macos = "従来のmacOSの見た目です。カスタムカーソルは録画時の形のままです。"
+description_tahoe = "macOS Tahoeの見た目です。カスタムカーソルは録画時の形のままです。"
+description_windows = "Windowsの見た目です。カスタムカーソルは録画時の形のままです。"
+duration = "長さ"
+recorded = "録画したカーソル"
+recorded_tooltip = "このカーソルで録画"
+ripple_size = "サイズ"
+strength = "強さ"
+
+[editor.sidebar.desktop]
+import = "デスクトップの背景を読み込む"
+importing = "読み込み中..."
+prompt = "デスクトップの壁紙を使う"
+reimport = "再読み込み"
+
+[editor.sidebar.gradient]
+angle = "角度"
+from = "開始"
+grain_scale = "粒子の大きさ"
+noise = "ノイズ"
+to = "終了"
+
+[editor.sidebar.image]
+prompt = "クリックして選択するか画像をドラッグ＆ドロップ"
+
+[editor.sidebar.layout]
+background_blur = "背景のぼかし"
+custom_position = "カスタムの画面位置（キャンバスでドラッグ）"
+motion_blur = "モーションブラー"
+padding = "余白"
+rounded_corners = "角丸"
+title = "レイアウト"
+
+[editor.sidebar.notch]
+description = "録画の上にMacBookのノッチを描きます。ノッチのあるMacで録画した場合はその寸法を使います。それ以外の場合は下のサイズから始めて、合うように調整してください。"
+height = "ノッチの高さ"
+position = "ノッチの位置"
+title = "MacBookのノッチ"
+width = "ノッチの幅"
+
+[editor.sidebar.shadow]
+advanced = "影の詳細設定"
+blur = "ぼかし"
+opacity = "不透明度"
+shadow_size = "サイズ"
+title = "影"
+
+[editor.sidebar.source]
+animated = "アニメ"
+color = "色"
+desktop = "デスクトップ"
+gradient = "グラデ"
+image = "画像"
+none = "なし"
+wallpaper = "壁紙"
+
+[editor.sidebar.style_group]
+back = "スタイルに戻る"
+background = "背景とフレーム"
+camera = "カメラ"
+cursor = "カーソル"
+editing_note = "このセグメントのみを編集しています。全体設定は変わりません。"
+title = "スタイル{number} · {group}"
+
+[editor.sidebar.tab]
+audio = "オーディオ"
+background = "背景"
+camera = "カメラ"
+captions = "字幕"
+cursor = "カーソル"
+keyboard = "キーボード"
+
+[editor.sidebar.wallpaper_theme]
+blue = "ブルー"
+cities = "都市"
+dark = "ダーク"
+orange = "オレンジ"
+purple = "パープル"

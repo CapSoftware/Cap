@@ -1690,3 +1690,521 @@ retrying = "将重试上传"
 sign_in = "登录以重试上传"
 uploaded = "已上传"
 uploading = "正在上传"
+
+# Editor sidebar, segment panels, colour correction, audio library and crop dialog.
+
+[editor.audio.library]
+add_hint = "为视频添加音频、音乐或其他声音"
+add_title = "添加音频"
+change_hint = "为此片段选择其他音轨"
+change_title = "更换音频"
+done = "完成"
+import = "导入文件"
+
+[editor.color]
+apply_to_cursor = "应用到光标"
+fine_tune = "微调颜色"
+title = "色彩校正"
+
+[editor.color.preset.cinematic]
+description = "青绿色阴影与橙色高光，带轻微颗粒"
+name = "电影感"
+
+[editor.color.preset.dreamy]
+description = "柔和轻盈的粉彩，黑色提亮"
+name = "梦幻"
+
+[editor.color.preset.frost]
+description = "清冷通透的色调，颜色柔和"
+name = "冰霜"
+
+[editor.color.preset.golden]
+description = "温暖的黄金时刻光晕"
+name = "金色"
+
+[editor.color.preset.midnight]
+description = "深沉忧郁的青绿色，颜色低调"
+name = "午夜"
+
+[editor.color.preset.noir]
+description = "高对比度黑白，带浓重颗粒"
+name = "黑色电影"
+
+[editor.color.preset.none]
+description = "原始颜色，未调色"
+name = "无"
+
+[editor.color.preset.vintage]
+description = "褪色暖调胶片感，对比柔和"
+name = "复古"
+
+[editor.color.preset.vivid]
+description = "饱和度与对比度大幅提升"
+name = "鲜艳"
+
+[editor.color.slider]
+contrast = "对比度"
+exposure = "曝光"
+fade = "褪色"
+grain = "颗粒"
+saturation = "饱和度"
+split_tone = "分离色调"
+strength = "强度"
+temperature = "色温"
+tint = "色调"
+vignette = "暗角"
+
+[editor.crop]
+aspect_ratio = "宽高比"
+center = "居中"
+dimensions = "大小"
+editing_style = "仅编辑样式 {number}"
+editing_style_override = "仅编辑样式 {number} · 保存后将启用其背景覆盖"
+free = "自由"
+full = "全部"
+hint = "拖动以移动 · 方向键微调 · 按住 {key} 跳过吸附"
+loading_frame = "正在加载画面…"
+position = "位置"
+preview = "预览"
+rendering_preview = "正在渲染预览…"
+snap_to_ratios = "吸附到比例"
+style_changed = "裁剪期间此样式已更改。请取消并重新打开裁剪。"
+title = "裁剪"
+
+[editor.panel]
+delete = "删除"
+done = "完成"
+duration = "时长"
+edge_in = "入场"
+edge_out = "出场"
+enabled = "已启用"
+fade_duration = "淡化时长"
+flip_horizontally = "水平翻转"
+flip_vertically = "垂直翻转"
+name = "名称"
+opacity = "不透明度"
+
+[editor.panel.audio]
+change = "更换"
+change_hint = "点按以更换音轨"
+fade_in = "淡入"
+fade_out = "淡出"
+fallback_name = "音频"
+title = "音频 {number}"
+volume = "音量"
+
+[editor.panel.camera3d]
+already_still = "已是静止镜头"
+amount = "强度"
+angles = "角度"
+auto_scene = "自动场景"
+auto_scene_tooltip = "重新生成轨道上的所有 3D 镜头"
+bokeh = "焦外光斑"
+camera = "摄像机"
+delete_tooltip = "删除此镜头"
+depth_blur = "景深模糊"
+distance = "距离"
+drag_to_orbit = "拖动以环绕"
+ease_in = "缓入"
+ease_out = "缓出"
+end_same_as_start = "结束 · 与开始相同"
+fine_tune = "微调"
+focus = "焦点"
+header = "3D 镜头 · {look} · {duration} 秒"
+hold_opening = "整个镜头保持起始姿态"
+lens = "焦距"
+look_title = "取景"
+motion_style = "运动方式"
+moves = "运镜"
+nothing_to_swap = "静止镜头无需交换"
+play_shot = "播放"
+play_shot_tooltip = "播放此镜头"
+pose_end = "结束 · {time}"
+pose_start = "开始 · {time}"
+reset_camera = "重置摄像机"
+roll = "滚转"
+rotate_x = "旋转 X"
+rotate_y = "旋转 Y"
+shift_x = "平移 X"
+shift_y = "平移 Y"
+shots = { other = "{count} 个镜头" }
+still_shot = "静止镜头"
+swap = "交换开始和结束"
+timing_advanced = "时间与高级"
+timing_summary = "{easing} · 焦距 {fov}"
+
+[editor.panel.camera3d.blur]
+angle = "角度"
+falloff = "衰减"
+focus_size = "焦点大小"
+focus_x = "焦点 X"
+focus_y = "焦点 Y"
+position = "位置"
+scan = "扫描"
+strength = "强度"
+
+[editor.panel.camera3d.easing]
+ease_in = "缓入"
+ease_out = "缓出"
+linear = "线性"
+smooth = "平滑"
+
+[editor.panel.camera3d.focus_mode]
+directional = "定向"
+radial = "径向"
+tilt_shift = "移轴"
+
+[editor.panel.camera3d.look]
+center = "居中"
+close_up = "特写"
+drift_down = "缓缓下移"
+glide_across = "横向滑过"
+low_angle = "低角度"
+perspective = "透视"
+pull_back = "后拉"
+rising_sweep = "上升扫过"
+slide_by = "滑过"
+spotlight = "聚光"
+tilt_away = "倾斜远离"
+top_down = "俯视"
+unfold = "展开"
+
+[editor.panel.camera3d.sequence]
+product_tour = "产品导览"
+punch_in = "推近"
+showcase = "展示"
+
+[editor.panel.camera3d.shot]
+custom = "自定义运镜"
+still = "静止镜头"
+
+[editor.panel.caption]
+title = "字幕 {number}"
+
+[editor.panel.font]
+system_mono = "系统等宽"
+system_sans = "系统无衬线"
+system_serif = "系统衬线"
+
+[editor.panel.font_weight]
+black = "特黑"
+bold = "粗体"
+custom = "自定义（{weight}）"
+extra_bold = "特粗"
+light = "细体"
+medium = "中等"
+regular = "常规"
+semibold = "半粗体"
+
+[editor.panel.image]
+arrange = "在画布上排列"
+arrange_help = "拖动图片即可移动。拖动角可调整大小，或使用下方的旋转控件进行旋转。"
+center = "在画布上居中"
+lock_aspect = "锁定宽高比"
+missing = "图片文件缺失。替换图片即可恢复此片段，并保留其时间和变换。"
+replace = "替换图片"
+rotation = "旋转"
+rounding = "圆角"
+
+[editor.panel.keyboard]
+title = "键盘 {number}"
+
+[editor.panel.mask]
+blur = "模糊"
+effect = "效果"
+highlight = "突出显示"
+outside_darkness = "外部暗度"
+pixel_size = "像素大小"
+pixelate = "像素化"
+sensitive = "敏感内容"
+title = "遮罩 {number}"
+
+[editor.panel.scene]
+camera_layout = "摄像头布局"
+camera_position = "摄像头位置"
+camera_zoom = "摄像头缩放"
+screen_position = "屏幕位置"
+screen_zoom = "屏幕缩放"
+transition = "过渡"
+
+[editor.panel.scene.description]
+camera_only = "仅显示摄像头画面"
+default = "同时显示屏幕和摄像头"
+floating = "屏幕和摄像头以圆角卡片的形式并排浮在背景上"
+hide_camera = "仅显示屏幕录制"
+split_screen = "屏幕和摄像头并排显示（竖屏时自动上下排列）"
+
+[editor.panel.scene.mode]
+camera_only = "仅摄像头"
+default = "默认"
+floating = "浮动"
+hide_camera = "隐藏摄像头"
+split_screen = "分屏"
+
+[editor.panel.style]
+camera_only_background = "仅摄像头背景"
+camera_only_help = "请使用仅摄像头场景。边距会显示摄像头周围的背景。"
+camera_only_padding = "仅摄像头边距"
+crop_height = "高度"
+crop_left = "左"
+crop_title = "屏幕裁剪（源像素）"
+crop_top = "上"
+crop_width = "宽度"
+edit_background = "编辑背景和边框"
+edit_camera = "编辑摄像头"
+edit_cursor = "编辑光标"
+help = "覆盖设置仅在此片段期间生效。启用一个分组即可复制其全局设置。"
+reset_crop = "重置裁剪"
+
+[editor.panel.text_animation]
+bounce = "弹跳"
+fade = "淡入淡出"
+letters = "逐字"
+none = "无"
+pop = "弹出"
+slide_down = "向下滑入"
+slide_left = "向左滑入"
+slide_right = "向右滑入"
+slide_up = "向上滑入"
+tracking = "字距"
+typewriter = "打字机"
+wipe = "擦除"
+words = "逐词"
+zoom = "缩放"
+
+[editor.panel.text_background]
+box_shape = "方框"
+highlight = "高亮"
+none = "无"
+pill = "胶囊"
+
+[editor.panel.text_layout]
+fullscreen = "全屏"
+overlay = "叠加"
+
+[editor.panel.text_preset.group]
+all = "全部"
+callouts = "标注"
+code = "代码"
+lower_thirds = "字幕条"
+statements = "要点"
+titles = "标题"
+
+[editor.panel.text_preset.name]
+caption = "说明文字"
+cinematic = "电影感"
+code = "代码"
+gradient = "渐变"
+headline = "大标题"
+highlight = "高亮"
+kicker = "引题"
+label = "标签"
+lower_third = "字幕条"
+name_tag = "姓名牌"
+neon = "霓虹"
+quote = "引言"
+stat = "大数字"
+sticker = "贴纸"
+title = "标题"
+typewriter = "打字机"
+
+[editor.panel.text_preset.sample]
+caption = "使用 Cap 录制"
+cinematic = "第一章"
+gradient = "精美文字"
+headline = "更快发布"
+highlight = "重点在这里"
+kicker = "新功能"
+label = "小贴士"
+name_tag = "Richie · 创始人"
+neon = "闪耀登场"
+quote = "“让一切毫不费力”"
+sticker = "砰！"
+title = "隆重推出 Cap"
+typewriter = "逐字输入中…"
+
+[editor.panel.text_segment]
+animation = "动画"
+background = "背景"
+color = "颜色"
+font = "字体"
+font_size = "大小"
+fullscreen_help = "显示文字时暂停视频，之后从暂停处继续播放。"
+glow = "发光"
+gradient = "渐变"
+layout = "布局"
+letter_spacing = "字间距"
+line_height = "行高"
+look = "外观"
+outline = "描边"
+screen_transition = "屏幕过渡"
+shadow = "阴影"
+style = "样式"
+title = "文本 {number}"
+
+[editor.panel.timing]
+end = "结束"
+start = "开始"
+title = "时间"
+to = "至"
+
+[editor.panel.zoom]
+amount = "缩放倍数"
+auto = "自动"
+auto_help = "自动缩放会跟随光标在屏幕上移动。"
+auto_locked = "自动模式需要捕获光标。请在“设置 → 通用”中开启“单独捕获光标（Studio）”。"
+how_it_works = "这是如何工作的？"
+manual = "手动"
+manual_help = "手动缩放会固定在你在下方选择的位置。"
+mixed = "不一致"
+mode = "缩放模式"
+positions_mixed = "这些片段缩放到不同位置。拖动可将它们全部移到同一位置。"
+title = "缩放 {number}"
+
+[editor.sidebar]
+desktop_import_failed = "无法导入桌面壁纸"
+importing_image = "正在导入图片…"
+
+[editor.sidebar.animated_gradient]
+add_colour = "添加颜色"
+colours = "颜色"
+delete = "删除"
+delete_failed = "无法删除此渐变。请重试。"
+fine_tune = "微调"
+limit_reached = { other = "最多可保存 {count} 个渐变。请删除一个后再添加。" }
+motion = "运动"
+name_placeholder = "为此渐变命名"
+name_required = "请输入此渐变的名称。"
+presets = "预设"
+randomize = "随机"
+remember_failed = "无法记住你的动态渐变设置。"
+remove_colour = "移除颜色"
+reset_tooltip = "重置微调设置"
+save_failed = "无法保存此渐变。请重试。"
+save_tooltip = "保存当前渐变"
+saved = "已保存"
+still = "静止"
+
+[editor.sidebar.animated_gradient.control]
+contrast = "对比度"
+curvature = "弯曲度"
+detail = "细节"
+direction = "方向"
+exposure = "曝光"
+flow_scale = "流动尺度"
+flow_strength = "流动强度"
+grain_amount = "颗粒数量"
+grain_size = "颗粒大小"
+highlights = "高光"
+motion_speed = "运动速度"
+relief = "浮雕"
+ripple_size = "波纹大小"
+shading = "阴影"
+vibrance = "自然饱和度"
+
+[editor.sidebar.animated_gradient.group]
+animation = "动画"
+colour = "颜色"
+flow = "流动"
+lighting = "光照"
+texture = "纹理"
+
+[editor.sidebar.background]
+title = "背景"
+
+[editor.sidebar.border]
+color = "边框颜色"
+opacity = "边框不透明度"
+title = "边框"
+width = "边框宽度"
+
+[editor.sidebar.corner]
+rounded = "圆角"
+squircle = "超椭圆"
+title = "圆角样式"
+
+[editor.sidebar.cursor]
+circle = "圆形"
+click_ripple = "点击波纹"
+color = "颜色"
+default = "默认"
+description_circle = "将所有光标形状替换为圆形。"
+description_default = "保留录制时的光标形状和外观。"
+description_macos = "经典 macOS 外观。自定义光标保留录制时的形状。"
+description_tahoe = "macOS Tahoe 外观。自定义光标保留录制时的形状。"
+description_windows = "Windows 外观。自定义光标保留录制时的形状。"
+duration = "时长"
+recorded = "录制时的光标"
+recorded_tooltip = "使用此光标录制"
+ripple_size = "大小"
+strength = "强度"
+
+[editor.sidebar.desktop]
+import = "导入桌面背景"
+importing = "正在导入..."
+prompt = "使用桌面上的壁纸"
+reimport = "重新导入"
+
+[editor.sidebar.gradient]
+angle = "角度"
+from = "起始"
+grain_scale = "颗粒大小"
+noise = "噪点"
+to = "结束"
+
+[editor.sidebar.image]
+prompt = "点击选择或拖放图片"
+
+[editor.sidebar.layout]
+background_blur = "背景模糊"
+custom_position = "自定义屏幕位置（在画布上拖动）"
+motion_blur = "运动模糊"
+padding = "边距"
+rounded_corners = "圆角"
+title = "布局"
+
+[editor.sidebar.notch]
+description = "在录制画面上绘制 MacBook 刘海。在带刘海的 Mac 上录制的内容会使用其自身的尺寸；否则请从下方的尺寸开始，再调整到匹配为止。"
+height = "刘海高度"
+position = "刘海位置"
+title = "MacBook 刘海"
+width = "刘海宽度"
+
+[editor.sidebar.shadow]
+advanced = "高级阴影设置"
+blur = "模糊"
+opacity = "不透明度"
+shadow_size = "大小"
+title = "阴影"
+
+[editor.sidebar.source]
+animated = "动态"
+color = "颜色"
+desktop = "桌面"
+gradient = "渐变"
+image = "图片"
+none = "无"
+wallpaper = "壁纸"
+
+[editor.sidebar.style_group]
+back = "返回样式"
+background = "背景和边框"
+camera = "摄像头"
+cursor = "光标"
+editing_note = "仅编辑此片段。全局设置不变。"
+title = "样式 {number} · {group}"
+
+[editor.sidebar.tab]
+audio = "音频"
+background = "背景"
+camera = "摄像头"
+captions = "字幕"
+cursor = "光标"
+keyboard = "键盘"
+
+[editor.sidebar.wallpaper_theme]
+blue = "蓝色"
+cities = "城市"
+dark = "深色"
+orange = "橙色"
+purple = "紫色"
