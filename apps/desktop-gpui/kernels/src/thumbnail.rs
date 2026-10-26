@@ -621,7 +621,7 @@ mod tests {
 
     fn checker(width: u32, height: u32, period: u32) -> RgbaImage {
         RgbaImage::from_fn(width, height, |x, y| {
-            let value = if (x / period + y / period) % 2 == 0 {
+            let value = if (x / period + y / period).is_multiple_of(2) {
                 0
             } else {
                 255
@@ -725,7 +725,7 @@ mod tests {
         let below = rgba.get_pixel(6, 4).0;
         for channel in 0..4 {
             let sum = u32::from(corner[channel]) + u32::from(below[channel]);
-            assert_eq!(u32::from(reduced.get_pixel(2, 1)[channel]), (sum + 1) / 2);
+            assert_eq!(u32::from(reduced.get_pixel(2, 1)[channel]), sum.div_ceil(2));
         }
     }
 
