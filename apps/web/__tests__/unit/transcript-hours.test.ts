@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseTranscriptVTT } from "@/app/s/[videoId]/_components/utils/parse-transcript-vtt";
+import { formatTime } from "@/app/s/[videoId]/_components/utils/transcript-utils";
 import { formatToWebVTT } from "@/lib/transcribe-utils";
 
 describe("transcript timestamp labels", () => {
@@ -20,4 +21,18 @@ describe("transcript timestamp labels", () => {
 			]);
 		},
 	);
+});
+
+describe("subtitle timestamps", () => {
+	it.each([
+		[0, "00:00:00.000"],
+		[1.001, "00:00:01.001"],
+		[5.009, "00:00:05.009"],
+		[59.9996, "00:01:00.000"],
+		[3599.9996, "01:00:00.000"],
+		[3601.001, "01:00:01.001"],
+		[360000.001, "100:00:00.001"],
+	])("formats %s seconds as %s", (seconds, expected) => {
+		expect(formatTime(seconds)).toBe(expected);
+	});
 });
