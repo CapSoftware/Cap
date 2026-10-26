@@ -8,6 +8,28 @@ export type CreatePreset = {
 	default: boolean;
 };
 
+type PresetCaptions = ProjectConfiguration["captions"];
+
+/**
+ * A preset carries caption *styling*, not the transcript: `segments` name the
+ * recording they were transcribed from and `sourceTimed` describes how they
+ * are stored. Keep both with the recording, take only `settings` from the
+ * preset, and leave the recording's own captions alone when the preset has
+ * none (the built-in Default preset stores no captions).
+ */
+export function keptCaptions(
+	preset: PresetCaptions | undefined,
+	current: PresetCaptions,
+): PresetCaptions {
+	if (!current) return null;
+	if (!preset) return current;
+	return {
+		...preset,
+		segments: current.segments,
+		sourceTimed: current.sourceTimed,
+	};
+}
+
 export function createPresets() {
 	const query = presetsStore.createQuery();
 
@@ -33,6 +55,11 @@ export function createPresets() {
 				timeline: null,
 				overlayOrder: [],
 				clips: [],
+				// The transcript belongs to this recording, not to the preset:
+				// keep the styling and drop the words.
+				captions: preset.config.captions
+					? { ...preset.config.captions, segments: [], sourceTimed: false }
+					: null,
 			};
 
 			await updatePresets((store) => {

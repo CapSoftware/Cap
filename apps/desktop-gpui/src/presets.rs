@@ -136,22 +136,29 @@ pub fn default_project_config() -> ProjectConfiguration {
     config
 }
 
-/// What a preset stores: the whole project config with `timeline: null` and
-/// `clips: []` -- presets style a project, they never carry its cuts
-/// (`createPresets.ts:31-35`).
+/// What a preset stores: the whole project config with `timeline: null`,
+/// `clips: []` and the caption transcript dropped -- presets style a project,
+/// they never carry its cuts or its words (`createPresets.ts:31-35`).
 pub fn preset_config(project: &ProjectConfiguration) -> Value {
     let mut value = serde_json::to_value(project).unwrap_or(Value::Null);
     if let Some(map) = value.as_object_mut() {
         map.insert("timeline".into(), Value::Null);
         map.insert("clips".into(), Value::Array(Vec::new()));
         map.remove("overlayOrder");
+        // Caption segments name the recording they were transcribed from;
+        // carrying them into a preset overwrites the next recording's transcript.
+        // Only the styling is a project-wide setting worth saving.
+        if let Some(captions) = map.get_mut("captions").and_then(Value::as_object_mut) {
+            captions.insert("segments".into(), Value::Array(Vec::new()));
+            captions.remove("sourceTimed");
+        }
     }
     value
 }
 
 /// `applyPreset`'s merge (`PresetsDropdown.tsx`): the preset's config with the
-/// *current* timeline and clips kept in place. `None` when the stored JSON no
-/// longer deserializes.
+/// *current* timeline, clips and captions kept in place. `None` when the stored
+/// JSON no longer deserializes.
 pub fn apply_preset(
     config: &Value,
     current: &ProjectConfiguration,
@@ -162,7 +169,31 @@ pub fn apply_preset(
     next.text_anim_version = current.text_anim_version;
     next.overlay_order = current.overlay_order.clone();
     next.clips = current.clips.clone();
+    let captions = kept_captions(next.captions.as_ref(), current.captions.as_ref());
+    next.captions = captions;
     Some(next)
+}
+
+/// Captions are two things at once: styling that belongs to the project, and a
+/// transcript that belongs to the recording. A preset may only replace the
+/// first, so applying one keeps the current segments, word timings and
+/// source-timing mode, and a preset saved without captions leaves the
+/// recording's captions untouched instead of clearing them.
+fn kept_captions(
+    preset: Option<&cap_project::CaptionsData>,
+    current: Option<&cap_project::CaptionsData>,
+) -> Option<cap_project::CaptionsData> {
+    match (current, preset) {
+        (Some(current), Some(preset)) => Some(cap_project::CaptionsData {
+            segments: current.segments.clone(),
+            settings: preset.settings.clone(),
+            source_timed: current.source_timed,
+        }),
+        (Some(current), None) => Some(current.clone()),
+        // Nothing to keep: a preset must not graft another recording's words
+        // onto a project that has none.
+        (None, _) => None,
+    }
 }
 
 #[cfg(test)]
@@ -231,6 +262,86 @@ mod tests {
         let config = preset_config(&ProjectConfiguration::default());
         assert_eq!(config["timeline"], Value::Null);
         assert_eq!(config["clips"], json!([]));
+    }
+
+    fn transcript(text: &str) -> cap_project::CaptionsData {
+        cap_project::CaptionsData {
+            segments: vec![cap_project::CaptionSegment {
+                id: "cap-1".into(),
+                start: 0.,
+                end: 1.5,
+                text: text.into(),
+                words: Vec::new(),
+            }],
+            settings: cap_project::CaptionSettings {
+                size: 48,
+                ..Default::default()
+            },
+            source_timed: true,
+        }
+    }
+
+    #[test]
+    fn saving_a_preset_keeps_the_caption_styling_but_not_the_transcript() {
+        let project = ProjectConfiguration {
+            captions: Some(transcript("words from this recording")),
+            ..Default::default()
+        };
+
+        let config = preset_config(&project);
+        assert_eq!(config["captions"]["segments"], json!([]));
+
+        let stored: cap_project::CaptionsData =
+            serde_json::from_value(config["captions"].clone()).expect("captions deserialize");
+        assert_eq!(stored.settings.size, 48, "styling is part of the preset");
+        assert!(stored.segments.is_empty(), "the transcript stays behind");
+    }
+
+    #[test]
+    fn applying_a_preset_keeps_the_current_transcript_and_takes_its_styling() {
+        let current = ProjectConfiguration {
+            captions: Some(transcript("words from this recording")),
+            ..Default::default()
+        };
+        let preset_source = ProjectConfiguration {
+            captions: Some(cap_project::CaptionsData {
+                settings: cap_project::CaptionSettings {
+                    size: 72,
+                    ..Default::default()
+                },
+                ..transcript("words from another recording")
+            }),
+            ..Default::default()
+        };
+
+        let applied = apply_preset(&preset_config(&preset_source), &current)
+            .expect("preset deserializes");
+        let captions = applied.captions.expect("captions survive the preset");
+
+        assert_eq!(captions.segments.len(), 1);
+        assert_eq!(captions.segments[0].text, "words from this recording");
+        assert!(captions.source_timed, "source timing belongs to the recording");
+        assert_eq!(captions.settings.size, 72, "styling comes from the preset");
+    }
+
+    #[test]
+    fn applying_a_preset_without_captions_keeps_the_current_captions() {
+        let current = ProjectConfiguration {
+            captions: Some(transcript("words from this recording")),
+            ..Default::default()
+        };
+        let preset = preset_config(&ProjectConfiguration {
+            captions: None,
+            ..Default::default()
+        });
+
+        let applied = apply_preset(&preset, &current).expect("preset deserializes");
+        let captions = applied.captions.expect("the preset must not clear them");
+
+        assert_eq!(captions.segments.len(), 1);
+        assert_eq!(captions.segments[0].text, "words from this recording");
+        assert!(captions.source_timed);
+        assert_eq!(captions.settings.size, 48);
     }
 
     #[test]

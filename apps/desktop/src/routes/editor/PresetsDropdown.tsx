@@ -3,6 +3,7 @@ import { cx } from "cva";
 import { For, Show, Suspense } from "solid-js";
 import { reconcile } from "solid-js/store";
 import toast from "solid-toast";
+import { keptCaptions } from "~/utils/createPresets";
 import { commands } from "~/utils/tauri";
 import { normalizeProject, useEditorContext } from "./context";
 import {
@@ -105,6 +106,7 @@ export function PresetsDropdown() {
 											timeline: project.timeline ?? null,
 											overlayOrder: project.overlayOrder ?? [],
 											clips: project.clips,
+											captions: keptCaptions(preset.config.captions, project.captions),
 										});
 										setProject(reconcile(normalizedConfig));
 									}
