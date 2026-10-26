@@ -60,6 +60,7 @@ in_app() {
     osascript -e "tell application \"System Events\" to tell (first process whose unix id is $APP_PID) to $1" 2>&1
 }
 
+if [ -z "${UI_SMOKE_ONLY_CONTROLS:-}" ]; then
 # Menus and tray, with a simulated update so the update row shows its badge.
 launch menus CAP_GPUI_UPDATE_SIMULATION_VERSION=9.9.9 CAP_GPUI_TRAY_DUMP="$OUT/tray-dump.txt"
 sleep 12
@@ -87,6 +88,8 @@ sleep 0.5
 [ -s "$OUT/tray-dump.txt" ] && result tray_dump "written" || result tray_dump "missing"
 grep -E "update|Update" "$OUT/menus.log" | tail -5 > "$OUT/update-log.txt"
 quit_app
+
+fi
 
 # Click-through: a click target fills the screen under the recording controls.
 "$TOOLS/click-target" "$OUT/clicks.txt" &
@@ -124,11 +127,23 @@ else
     cliclick "m:$tx,$((ty + 5))" && sleep 0.4 && cliclick "c:$tx,$((ty + 5))" && sleep 0.6
     clicked "$tx" "$((ty + 5))" && result transparent_area_after_bar yes || result transparent_area_after_bar no
     shot record-01-after-clicks
+
+    for wait in 1 10 20; do
+        taken=0
+        for trial in $(seq 1 10); do
+            ty2=$((y + 10 + trial))
+            cliclick "m:$((x + 20)),$ty2" && sleep 0.3
+            cliclick -w "$wait" "m:$hx,$((hy - trial % 3))" "c:$hx,$((hy - trial % 3))" && sleep 0.4
+            clicked "$hx" "$((hy - trial % 3))" || taken=$((taken + 1))
+        done
+        result "jump_and_click_wait_${wait}ms_taken_by_bar" "$taken/10"
+    done
 fi
 quit_app
 kill "$TARGET_PID" 2>/dev/null
 
 # Languages: main window plus the General settings page.
+[ -n "${UI_SMOKE_ONLY_CONTROLS:-}" ] && UI_SMOKE_LOCALES=" "
 for locale in ${UI_SMOKE_LOCALES:-en de ja hi}; do
     launch "locale-$locale" CAP_GPUI_LOCALE="$locale" CAP_GPUI_LANGUAGE_PICKER=1 CAP_GPUI_AUTO_SETTINGS=general
     sleep 10

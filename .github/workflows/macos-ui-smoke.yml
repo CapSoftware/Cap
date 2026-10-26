@@ -30,6 +30,8 @@ jobs:
     env:
       CARGO_PROFILE_DEV_DEBUG: "0"
       TARGET: aarch64-apple-darwin
+      UI_SMOKE_BASE: 4eceec81d
+      UI_SMOKE_ONLY_CONTROLS: "1"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -78,7 +80,7 @@ jobs:
           }
           build "$GITHUB_WORKSPACE"
           keep branch
-          git worktree add --detach "$RUNNER_TEMP/base" origin/main
+          git worktree add --detach "$RUNNER_TEMP/base" "${UI_SMOKE_BASE:-origin/main}"
           build "$RUNNER_TEMP/base"
           keep main
 
