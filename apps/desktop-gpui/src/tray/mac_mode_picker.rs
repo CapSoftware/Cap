@@ -100,6 +100,7 @@ struct PickerIvars {
     selected: Cell<usize>,
     focused: Cell<Option<usize>>,
     flash: Cell<bool>,
+    pressed: Cell<bool>,
     /// `actions` index of the first pill; pill `i` posts `tag_base + i`.
     tag_base: isize,
     capsule: RefCell<Option<Retained<CALayer>>>,
@@ -107,12 +108,6 @@ struct PickerIvars {
     icons: RefCell<Vec<Retained<NSImageView>>>,
     tracking: RefCell<Option<Retained<NSTrackingArea>>>,
     accessibility_children: RefCell<Vec<Retained<PillAccessibilityElement>>>,
-}
-
-impl Drop for PickerIvars {
-    fn drop(&mut self) {
-        tracing::info!("mode picker view deallocated");
-    }
 }
 
 define_class!(
@@ -148,8 +143,10 @@ define_class!(
             }
             if let Some(window) = self.window() {
                 window.setAcceptsMouseMovedEvents(true);
+                self.install_tracking_area();
             }
             self.sync();
+            self.hover_from_pointer();
         }
 
         #[unsafe(method(viewDidChangeEffectiveAppearance))]
@@ -162,28 +159,37 @@ define_class!(
 
         #[unsafe(method(mouseMoved:))]
         fn mouse_moved(&self, event: &NSEvent) {
-            let hit = self.pill_at(event);
-            if self.ivars().focused.get() != hit {
-                self.ivars().focused.set(hit);
-                self.refresh();
-            }
+            self.update_focus(self.pill_at(event));
         }
 
         #[unsafe(method(mouseExited:))]
         fn mouse_exited(&self, _event: &NSEvent) {
+            if self.ivars().pressed.get() {
+                return;
+            }
             self.ivars().focused.set(None);
             self.refresh();
         }
 
         #[unsafe(method(mouseDown:))]
-        fn mouse_down(&self, _event: &NSEvent) {}
+        fn mouse_down(&self, event: &NSEvent) {
+            self.ivars().pressed.set(true);
+            self.update_focus(self.pill_at(event));
+        }
+
+        #[unsafe(method(mouseDragged:))]
+        fn mouse_dragged(&self, event: &NSEvent) {
+            self.update_focus(self.pill_at(event));
+        }
 
         #[unsafe(method(mouseUp:))]
         fn mouse_up(&self, event: &NSEvent) {
+            self.ivars().pressed.set(false);
             // The release point chooses the pill; a release outside the menu
             // changes nothing, so the shown and applied modes stay in sync.
-            if let Some(i) = self.pill_at(event) {
-                self.choose(i);
+            match self.pill_at(event) {
+                Some(i) => self.choose(i),
+                None => self.update_focus(None),
             }
         }
 
@@ -191,7 +197,6 @@ define_class!(
         fn draw_rect(&self, _dirty: NSRect) {
             self.draw_text();
         }
-
     }
 );
 
@@ -201,6 +206,7 @@ impl ModePickerView {
             selected: Cell::new(selected),
             focused: Cell::new(None),
             flash: Cell::new(false),
+            pressed: Cell::new(false),
             tag_base,
             capsule: RefCell::new(None),
             pills: RefCell::new(Vec::new()),
@@ -250,22 +256,6 @@ impl ModePickerView {
             this.ivars().icons.borrow_mut().push(view);
         }
 
-        let options = NSTrackingAreaOptions::MouseMoved
-            | NSTrackingAreaOptions::MouseEnteredAndExited
-            | NSTrackingAreaOptions::ActiveAlways
-            | NSTrackingAreaOptions::InVisibleRect;
-        let area = unsafe {
-            NSTrackingArea::initWithRect_options_owner_userInfo(
-                NSTrackingArea::alloc(),
-                NSRect::ZERO,
-                options,
-                Some(&this),
-                None,
-            )
-        };
-        this.addTrackingArea(&area);
-        *this.ivars().tracking.borrow_mut() = Some(area);
-
         this.setAccessibilityRole(Some(unsafe { NSAccessibilityRadioGroupRole }));
         this.setAccessibilityLabel(Some(&NSString::from_str(tr::tray::recording_mode())));
         let children: Vec<Retained<AnyObject>> = PICKER_MODES
@@ -285,6 +275,41 @@ impl ModePickerView {
 
         this.sync();
         this
+    }
+
+    fn install_tracking_area(&self) {
+        if self.ivars().tracking.borrow().is_some() {
+            return;
+        }
+        let options = NSTrackingAreaOptions::MouseMoved
+            | NSTrackingAreaOptions::MouseEnteredAndExited
+            | NSTrackingAreaOptions::ActiveAlways
+            | NSTrackingAreaOptions::InVisibleRect;
+        let area = unsafe {
+            NSTrackingArea::initWithRect_options_owner_userInfo(
+                NSTrackingArea::alloc(),
+                NSRect::ZERO,
+                options,
+                Some(self),
+                None,
+            )
+        };
+        self.addTrackingArea(&area);
+        *self.ivars().tracking.borrow_mut() = Some(area);
+    }
+
+    fn update_focus(&self, hit: Option<usize>) {
+        if self.ivars().focused.get() != hit {
+            self.ivars().focused.set(hit);
+            self.refresh();
+        }
+    }
+
+    fn clear_focus(&self) {
+        if self.ivars().pressed.get() {
+            return;
+        }
+        self.update_focus(None);
     }
 
     // -- geometry ----------------------------------------------------------
@@ -519,12 +544,6 @@ impl ModePickerView {
         }
     }
 
-    fn clear_focus(&self) {
-        if self.ivars().focused.replace(None).is_some() {
-            self.refresh();
-        }
-    }
-
     /// Moves keyboard focus one pill. Returns false at either end, so the key falls
     /// through to the menu and moves to the neighbouring tray menu.
     fn move_focus(&self, delta: isize) -> bool {
@@ -616,6 +635,7 @@ pub(super) fn append_mode_picker(
         .iter()
         .position(|(m, _)| *m == selected)
         .unwrap_or(0);
+
     let view = ModePickerView::new(mtm, index, tag_base);
 
     let item = NSMenuItem::new(mtm);
