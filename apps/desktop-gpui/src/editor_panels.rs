@@ -2097,9 +2097,8 @@ pub fn apply_camera3d_shots_to_range(
 /// `DEFAULT_SHOT_DURATION`: the length a new 3D shot opens at.
 pub const CAMERA3D_DEFAULT_SHOT_DURATION: f64 = 4.;
 
-/// The move a brand-new shot is born with, and what the ghost calls it.
+/// The move a brand-new shot is born with.
 pub const CAMERA3D_DEFAULT_LOOK: &str = "glide-across";
-pub const CAMERA3D_DEFAULT_LOOK_NAME: &str = "Glide across";
 
 /// Where a new shot lands, given the shots already on the track.
 ///

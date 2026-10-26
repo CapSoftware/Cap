@@ -2501,7 +2501,7 @@ pub fn new_camera3d_ghost(model: &TimelineModel, preview: f64) -> Option<(f64, f
 fn camera3d_ghost_label(width: f32, duration: f64) -> Option<String> {
     if width >= 208. {
         Some(tr::editor::timeline::add_shot_with_look(
-            crate::editor_panels::CAMERA3D_DEFAULT_LOOK_NAME,
+            tr::editor::panel::camera3d::look::glide_across(),
             format!("{duration:.1}"),
         ))
     } else if width >= 84. {
