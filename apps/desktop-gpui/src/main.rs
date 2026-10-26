@@ -56,6 +56,7 @@ mod linux_display;
 mod linux_portal_id;
 #[cfg(target_os = "linux")]
 mod linux_wallpaper;
+mod library;
 mod main_window;
 mod media_access;
 mod menus;
@@ -893,6 +894,7 @@ mod runtime_tests {
 #[cfg(test)]
 mod logging_tests {
     use super::create_log_appender;
+    use tracing_subscriber::Layer as _;
     use std::{io::Write, path::PathBuf};
     use tracing_subscriber::Layer as _;
 
@@ -940,9 +942,7 @@ mod logging_tests {
             tracing_subscriber::fmt::layer()
                 .with_ansi(false)
                 .with_writer(move || writer.clone())
-                .with_filter(tracing_subscriber::EnvFilter::new(
-                    super::DEFAULT_LOG_FILTER,
-                )),
+                .with_filter(tracing_subscriber::EnvFilter::new(super::DEFAULT_LOG_FILTER)),
         );
         tracing::subscriber::with_default(subscriber, || {
             tracing::warn!(target: "zbus::proxy", "Failed to populate properties cache");
@@ -951,15 +951,9 @@ mod logging_tests {
             tracing::info!(target: "cap_gpui::session", "recording started");
         });
         let logged = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
-        assert!(
-            !logged.contains("Failed to populate properties cache"),
-            "{logged}"
-        );
+        assert!(!logged.contains("Failed to populate properties cache"), "{logged}");
         assert!(logged.contains("a zbus error still shows"), "{logged}");
-        assert!(
-            logged.contains("other zbus warnings still show"),
-            "{logged}"
-        );
+        assert!(logged.contains("other zbus warnings still show"), "{logged}");
         assert!(logged.contains("recording started"), "{logged}");
     }
 
