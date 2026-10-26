@@ -28,6 +28,7 @@ export async function generateMetadata(
 	// meaningless share card — present the landing page as the docs home.
 	const isDocsHome = slug === "introduction";
 	const pageTitle = isDocsHome ? "Cap Documentation" : `${title} - Cap Docs`;
+	const docPath = isDocsHome ? "/docs" : `/docs/${slug}`;
 	const description = summary || title;
 	const ogImage = image
 		? `${buildEnv.NEXT_PUBLIC_WEB_URL}${image}`
@@ -42,11 +43,12 @@ export async function generateMetadata(
 	return {
 		title: pageTitle,
 		description,
+		alternates: { canonical: `https://cap.so${docPath}` },
 		openGraph: {
 			title: pageTitle,
 			description,
 			type: "article",
-			url: `${buildEnv.NEXT_PUBLIC_WEB_URL}/docs/${slug}`,
+			url: `${buildEnv.NEXT_PUBLIC_WEB_URL}${docPath}`,
 			images: [{ url: ogImage, width: 1200, height: 630, alt: pageTitle }],
 		},
 		twitter: {
