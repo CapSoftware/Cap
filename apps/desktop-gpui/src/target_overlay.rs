@@ -519,6 +519,57 @@ fn store_area_ratio(ratio: Option<(u32, u32)>) {
     });
 }
 
+fn remembered_recording_area(
+    section: &serde_json::Map<String, serde_json::Value>,
+    display: &str,
+    display_size: (f32, f32),
+    capture_scale: f32,
+    mode: Mode,
+) -> Option<AreaRect> {
+    if mode == Mode::Screenshot || !capture_scale.is_finite() || capture_scale <= 0. {
+        return None;
+    }
+    let remembered = section.get("recordingBounds")?;
+    if remembered.get("displayId")?.as_str()? != display {
+        return None;
+    }
+    let bounds = remembered.get("bounds")?.as_array()?;
+    let [x, y, width, height] = bounds.as_slice() else {
+        return None;
+    };
+    let crop = AreaRect {
+        x: x.as_f64()? as f32,
+        y: y.as_f64()? as f32,
+        width: width.as_f64()? as f32,
+        height: height.as_f64()? as f32,
+    }
+    .scaled(1. / capture_scale);
+    if ![crop.x, crop.y, crop.width, crop.height]
+        .into_iter()
+        .all(f32::is_finite)
+    {
+        return None;
+    }
+    let crop = crop.clamped(display_size);
+    crop.is_valid_for(area_min_size(mode)).then_some(crop)
+}
+
+fn remember_recording_area(
+    section: &mut serde_json::Map<String, serde_json::Value>,
+    display: &str,
+    crop: AreaRect,
+    capture_scale: f32,
+) {
+    let crop = crop.scaled(capture_scale);
+    section.insert(
+        "recordingBounds".into(),
+        serde_json::json!({
+            "displayId": display,
+            "bounds": [crop.x, crop.y, crop.width, crop.height],
+        }),
+    );
+}
+
 fn next_area_ratio(current: Option<(u32, u32)>) -> Option<(u32, u32)> {
     let index = AREA_RATIOS
         .iter()
@@ -957,7 +1008,25 @@ impl OverlayWindow {
             })
             .clamped(logical);
 
-        Self {
+        let area_ratio = stored_area_ratio();
+        let crop = (select.read(cx).mode == Some(TargetType::Area))
+            .then(|| {
+                remembered_recording_area(
+                    &crate::store::store_section(AREA_SELECTION_STORE),
+                    &display.id().to_string(),
+                    logical,
+                    capture_scale,
+                    select.read(cx).recording_mode,
+                )
+            })
+            .flatten()
+            .map(|crop| {
+                area_ratio.map_or(crop, |ratio| {
+                    area_with_ratio(crop, ratio_value(ratio), logical)
+                })
+            });
+
+        let view = Self {
             theme,
             select,
             display_id: display.id(),
@@ -972,10 +1041,10 @@ impl OverlayWindow {
                 .map(|size| (size.width() as u32, size.height() as u32)),
             refresh_rate: display.refresh_rate(),
             focus: cx.focus_handle(),
-            crop: None,
+            crop,
             drag: None,
             snap_guides: Vec::new(),
-            area_ratio: stored_area_ratio(),
+            area_ratio,
             recording_area: false,
             mode_menu: None,
             countdown_menu: None,
@@ -988,7 +1057,11 @@ impl OverlayWindow {
             selection_hint_started: None,
             selection_hint_redraw: None,
             _main_subscription: main_subscription,
+        };
+        if view.crop.is_some() {
+            view.sync_area_camera(cx);
         }
+        view
     }
 
     pub fn focus_handle(&self) -> gpui::FocusHandle {
@@ -1098,6 +1171,20 @@ impl OverlayWindow {
             // `target-select-overlay.tsx:1995`).
             cx.defer(move |cx: &mut App| crate::screenshot::take_screenshot(target, cx));
             return;
+        }
+        if matches!(target, ScreenCaptureTarget::Area { .. })
+            && let Some(crop) = self.crop
+            && !crate::store::update_store_section(AREA_SELECTION_STORE, |section| {
+                remember_recording_area(
+                    section,
+                    &self.display_id.to_string(),
+                    crop,
+                    self.capture_scale,
+                );
+                true
+            })
+        {
+            tracing::warn!("could not save the recording area selection");
         }
         // Deferred: this runs inside the overlay's own window update and the
         // orchestrator closes that very window.
@@ -2903,6 +2990,107 @@ fn request_media_access(permission: crate::permissions::OSPermission, cx: &mut A
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_recording_area_survives_reopening_and_capture_scale_changes() {
+        let mut section = serde_json::Map::new();
+        section.insert("aspectRatio".into(), serde_json::json!([16, 9]));
+        section.insert("otherPreference".into(), serde_json::json!(true));
+        let crop = rect(120., 80., 640., 360.);
+        remember_recording_area(&mut section, "display-one", crop, 1.25);
+        let encoded = serde_json::to_vec(&section).unwrap();
+        let reopened = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(
+            remembered_recording_area(&reopened, "display-one", (1600., 900.), 1.25, Mode::Studio),
+            Some(crop)
+        );
+        assert_eq!(
+            remembered_recording_area(&reopened, "display-one", (2000., 1200.), 1., Mode::Instant),
+            Some(rect(150., 100., 800., 450.))
+        );
+        assert_eq!(
+            section.get("aspectRatio"),
+            Some(&serde_json::json!([16, 9]))
+        );
+        assert_eq!(
+            section.get("otherPreference"),
+            Some(&serde_json::json!(true))
+        );
+    }
+
+    #[test]
+    fn screenshots_and_other_displays_start_without_a_remembered_area() {
+        let mut section = serde_json::Map::new();
+        remember_recording_area(
+            &mut section,
+            "display-one",
+            rect(100., 100., 640., 360.),
+            1.,
+        );
+        assert_eq!(
+            remembered_recording_area(
+                &section,
+                "display-one",
+                (1920., 1080.),
+                1.,
+                Mode::Screenshot
+            ),
+            None
+        );
+        assert_eq!(
+            remembered_recording_area(&section, "display-two", (1920., 1080.), 1., Mode::Studio),
+            None
+        );
+        remember_recording_area(&mut section, "display-two", rect(20., 40., 800., 600.), 1.);
+        assert_eq!(
+            remembered_recording_area(&section, "display-one", (1920., 1080.), 1., Mode::Studio),
+            None
+        );
+    }
+
+    #[test]
+    fn a_remembered_recording_area_fits_a_smaller_display() {
+        let mut section = serde_json::Map::new();
+        remember_recording_area(
+            &mut section,
+            "display-one",
+            rect(900., 700., 800., 600.),
+            1.,
+        );
+        assert_eq!(
+            remembered_recording_area(&section, "display-one", (640., 480.), 1., Mode::Studio),
+            Some(rect(0., 0., 640., 480.))
+        );
+        assert_eq!(
+            remembered_recording_area(&section, "display-one", (1., 1.), 1., Mode::Studio),
+            None
+        );
+    }
+
+    #[test]
+    fn malformed_remembered_recording_areas_are_ignored() {
+        for bounds in [
+            serde_json::Value::Null,
+            serde_json::json!([0, 0, 640]),
+            serde_json::json!([0, 0, -640, 360]),
+            serde_json::json!([0, 0, "wide", 360]),
+            serde_json::json!([1e100, 0, 640, 360]),
+        ] {
+            let section = serde_json::json!({
+                "recordingBounds": {"displayId": "display-one", "bounds": bounds},
+            });
+            assert_eq!(
+                remembered_recording_area(
+                    section.as_object().unwrap(),
+                    "display-one",
+                    (1920., 1080.),
+                    1.,
+                    Mode::Studio,
+                ),
+                None
+            );
+        }
+    }
 
     fn ratio_of(area: AreaRect) -> f32 {
         area.width / area.height
