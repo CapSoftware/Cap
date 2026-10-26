@@ -4549,14 +4549,11 @@ impl MainWindow {
                 }
             }
             (LibraryKind::Screenshots, Some(LibraryItems::Screenshots(rows))) => {
-                for (index, row) in rows.iter().enumerate() {
+                for row in rows {
                     if !self.matches_search(&row.item.pretty_name) {
                         continue;
                     }
-                    cards.push(
-                        self.render_screenshot_card(index, row, cx)
-                            .into_any_element(),
-                    );
+                    cards.push(self.render_screenshot_card(row, cx).into_any_element());
                 }
             }
             _ => {}
@@ -4868,16 +4865,15 @@ impl MainWindow {
 
     fn render_screenshot_card(
         &self,
-        index: usize,
         row: &LibraryRow<ScreenshotItem>,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = self.theme;
         let item = &row.item;
         let png = item.path.clone();
-        let actions = self.render_screenshot_card_actions(index, item, cx);
+        let actions = self.render_screenshot_card_actions(item, cx);
         self.library_card(
-            ("library-screenshot", index),
+            gpui::ElementId::Path(item.path.as_path().into()),
             row.thumbnail.clone(),
             "icons/image.svg",
             item.pretty_name.clone(),
@@ -4894,7 +4890,6 @@ impl MainWindow {
 
     fn render_screenshot_card_actions(
         &self,
-        index: usize,
         item: &ScreenshotItem,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
@@ -4909,39 +4904,35 @@ impl MainWindow {
             .px(px(8.))
             .pb(px(6.))
             .gap(px(4.))
-            .child(
-                self.library_action(("lib-ss-copy", index), "icons/copy.svg", {
-                    let png = png.clone();
-                    move |_, _, cx| {
-                        let copied = crate::platform::copy_image_to_clipboard(png.clone(), cx);
-                        cx.spawn(async move |_| {
-                            if let Err(error) = copied.await {
-                                tracing::warn!("copying screenshot failed: {error}");
-                                crate::platform::alert_dialog(
-                                    tr::main::library::copy_screenshot_failed(),
-                                    &error,
-                                );
-                            }
-                        })
-                        .detach();
-                    }
-                }),
-            )
+            .child(self.library_action("lib-ss-copy", "icons/copy.svg", {
+                let png = png.clone();
+                move |_, _, cx| {
+                    let copied = crate::platform::copy_image_to_clipboard(png.clone(), cx);
+                    cx.spawn(async move |_| {
+                        if let Err(error) = copied.await {
+                            tracing::warn!("copying screenshot failed: {error}");
+                            crate::platform::alert_dialog(
+                                tr::main::library::copy_screenshot_failed(),
+                                &error,
+                            );
+                        }
+                    })
+                    .detach();
+                }
+            }))
             .child(self.library_action(
-                ("lib-ss-save", index),
+                "lib-ss-save",
                 "icons/download.svg",
                 cx.listener(move |this, _, window, cx| {
                     this.save_screenshot(png.clone(), name.clone(), window, cx);
                 }),
             ))
-            .child(
-                self.library_action(("lib-ss-open", index), "icons/folder.svg", {
-                    let bundle = bundle.clone();
-                    move |_, _, cx| library::reveal_path(&bundle, cx)
-                }),
-            )
+            .child(self.library_action("lib-ss-open", "icons/folder.svg", {
+                let bundle = bundle.clone();
+                move |_, _, cx| library::reveal_path(&bundle, cx)
+            }))
             .child(self.library_action(
-                ("lib-ss-delete", index),
+                "lib-ss-delete",
                 "icons/trash.svg",
                 cx.listener(move |this, _, window, cx| {
                     this.delete_library_screenshot(bundle.clone(), window, cx);

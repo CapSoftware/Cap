@@ -2511,7 +2511,7 @@ impl SettingsWindow {
         let mut items = Vec::with_capacity(visible);
         for (index, row) in indices.into_iter().map(|row| &rows[row]).enumerate() {
             items.push(
-                self.render_screenshot_row(index, row, index + 1 == visible, cx)
+                self.render_screenshot_row(row, index + 1 == visible, cx)
                     .into_any_element(),
             );
         }
@@ -2562,7 +2562,6 @@ impl SettingsWindow {
 
     fn render_screenshot_row(
         &self,
-        index: usize,
         row: &ScreenshotRow,
         last: bool,
         cx: &mut Context<Self>,
@@ -2614,7 +2613,7 @@ impl SettingsWindow {
             .items_center()
             .gap(px(8.))
             .child(self.row_button(
-                ("screenshot-copy", index),
+                "screenshot-copy",
                 "icons/copy.svg",
                 "Copy to clipboard",
                 false,
@@ -2634,7 +2633,7 @@ impl SettingsWindow {
                 },
             ))
             .child(self.row_button(
-                ("screenshot-save", index),
+                "screenshot-save",
                 "icons/download.svg",
                 "Save as",
                 false,
@@ -2644,7 +2643,7 @@ impl SettingsWindow {
                 },
             ))
             .child(self.row_button(
-                ("screenshot-folder", index),
+                "screenshot-folder",
                 "icons/folder.svg",
                 "Open folder",
                 false,
@@ -2652,7 +2651,7 @@ impl SettingsWindow {
                 move |_this, _window, cx| library::reveal_path(&bundle, cx),
             ))
             .child(self.row_button(
-                ("screenshot-delete", index),
+                "screenshot-delete",
                 "icons/trash.svg",
                 "Delete",
                 false,
@@ -2664,7 +2663,7 @@ impl SettingsWindow {
             ));
 
         div()
-            .id(("screenshot-row", index))
+            .id(gpui::ElementId::Path(item.path.as_path().into()))
             .flex()
             .flex_row()
             .justify_between()
