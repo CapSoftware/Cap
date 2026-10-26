@@ -490,6 +490,7 @@ fn english_matches_the_literals_it_replaced() {
                 && !super::settings_surface_tests::is_settings_surface_key(key)
                 && !super::dialogs_surface_tests::is_dialogs_surface_key(key)
                 && !super::editor_panels_surface_tests::is_editor_panels_surface_key(key)
+                && !super::editor_shell_surface_tests::is_editor_shell_surface_key(key)
         })
         .count()
         // `tray.version`, `excluded_windows.missing_body`, `self_host.confirm_change`,

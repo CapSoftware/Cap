@@ -2210,3 +2210,670 @@ cities = "Cities"
 dark = "Dark"
 orange = "Orange"
 purple = "Purple"
+
+[editor.canvas]
+camera = "Camera"
+camera_follows_zoom = "Camera size follows the zoom — drag to move"
+edit_zoom = "Edit zoom"
+image = "Image"
+mask = "Mask"
+screen = "Screen"
+screen_locked = "Screen is locked while a zoom is active"
+text_item = "Text"
+
+[editor.clips]
+append_error = { text = "Failed to add clip: {message}", context = "{message} explains why." }
+append_error_title = "Recording Error"
+back = "Back to editor"
+cap_filter = { text = "Cap Recording", context = "File type filter name for .cap recordings in the file picker." }
+clip = { text = "Clip {number}", context = "Default clip name; {number} starts at 1." }
+empty_description = "Record or import a clip and it will show up here."
+empty_title = "No clips yet"
+import = "Import"
+import_error = { text = "Failed to import clip: {message}", context = "{message} explains why." }
+import_error_title = "Import Error"
+import_existing = "Existing recording"
+import_mp4 = "MP4 Video…"
+importing = "Importing…"
+mp4_filter = { text = "MP4 Video", context = "File type filter name in the file picker." }
+prepare_controls_failed = "Could not prepare the recording controls: {error}"
+record_new = "Record a new clip"
+save_before_recording_failed = "Could not save the current project before recording: {error}"
+split = { text = "Split {number}", context = "Default name of a later piece cut from the same clip; {number} starts at 1." }
+title = "Clips"
+
+[editor.clips.error]
+cancelled = "Import cancelled"
+cannot_decode = "Cannot decode video {path}: {error}"
+in_use = "Cannot import while this recording is in use: {error}"
+instant_source = "Instant recordings can't be imported into a project yet"
+instant_target = "Instant mode recordings cannot be edited"
+into_itself = "Cannot import a recording into itself"
+missing_video = "Missing video file: {path}"
+no_duration = "Imported video has no valid duration"
+not_a_project = "Select a Cap project folder"
+source_empty = "Source Cap project has no recording segments"
+source_failed = "Source Cap project failed: {error}"
+source_recording = "Source Cap project is still recording"
+source_unimportable = "Source Cap project has no importable recording segments"
+unfinished_target = "Finish or recover this recording before importing a clip"
+unsupported_video = "Unsupported video file: {path}"
+
+[editor.export]
+back = "Back to editor"
+existing_link_description = "Reupload replaces the video at this link with your latest edit. Everyone with the link will see the updated version."
+existing_link_title = "Update your existing link"
+failed = "Export failed"
+fps = { text = "{fps} FPS", context = "Frame rate option, for example 30 FPS." }
+frames = { one = "{rendered} / {count} frame", other = "{rendered} / {count} frames", context = "Export progress: {rendered} frames done out of {count}." }
+generating_preview = "Generating preview…"
+link_unavailable_cursor = "Cursor-only exports can only be saved to a file or clipboard."
+link_unavailable_transparent = "Transparent exports can only be saved to a file or clipboard."
+organization = "Organization"
+preview = "Preview"
+preview_info = "This is a rendered frame from your video. Adjust the settings to see the quality of the final export."
+preview_unavailable = "Preview unavailable"
+reupload = "Reupload"
+reupload_tooltip = "Upload your latest edit to the same link"
+reupload_transparent = "Share links require a background without transparency"
+sign_in_required = "You need to sign in to share recordings"
+task_failed = "Export task failed"
+title = "Export"
+upgrade_message = "This feature requires an upgraded plan"
+upgrade_title = "Upgrade required"
+upload_failed = "Failed to upload recording"
+
+[editor.export.advanced]
+bits_per_pixel = "Bits per pixel"
+cursor_only = "Export cursor only"
+cursor_only_description = "Keeps the same cursor motion and clicks on a transparent background"
+custom_bitrate = "Using a custom bitrate"
+force_ffmpeg = "Force FFmpeg decoder"
+force_ffmpeg_description = "Skip hardware decoder (auto-fallback enabled)"
+title = "Advanced"
+transparent_mov = "Exports as a transparent MOV. Files are large and best for compositing or editing."
+
+[editor.export.cta]
+cancel_sign_in = "Cancel Sign In"
+clipboard = "Export to Clipboard"
+create_link = "Create shareable link"
+file = "Export to File"
+reupload = "Reupload to same link"
+sign_in = "Sign in to share"
+
+[editor.export.destination]
+clipboard = { text = "Clipboard", context = "Export destination." }
+file = { text = "File", context = "Export destination." }
+link = { text = "Shareable Link", context = "Export destination." }
+
+[editor.export.done]
+copy_link = "Copy link"
+instant_hint = "Use Instant Mode for your next recording if you want a link the moment you stop."
+link_copied = "Link copied"
+open_file = "Open File"
+open_link = "Open link"
+retry_copy = "Retry Copy"
+reuploaded = "Your latest edit is ready at the same link"
+uploaded = "Your Cap has been uploaded successfully"
+
+[editor.export.estimate]
+gigabytes = "~{value} GB"
+gigabytes_range = "~{lower}–{upper} GB"
+hours = "~{value} hr"
+hours_range = "~{lower}–{upper} hr"
+megabytes = "~{value} MB"
+megabytes_range = "~{lower}–{upper} MB"
+minutes = "~{value} min"
+minutes_range = "~{lower}–{upper} min"
+seconds = "~{value} s"
+seconds_range = "~{lower}–{upper} s"
+under_megabyte = "< 1 MB"
+under_second = "< 1s"
+
+[editor.export.optimize]
+description = "Re-encodes with software for much smaller files (slower)"
+title = "Optimize file size"
+
+[editor.export.phase]
+clipboard_failed = "Export complete; clipboard copy failed"
+complete = "Export complete"
+copied = "Copied to clipboard"
+copying_to_clipboard = "Copying to clipboard"
+rendering_cursor = "Rendering cursor track"
+rendering_gif = "Rendering GIF"
+rendering_video = "Rendering video"
+reupload_complete = "Reupload complete"
+reuploading = "Reuploading to your link"
+saving_to_file = "Saving to file"
+starting = "Preparing export"
+upload_complete = "Upload complete"
+uploading = "Creating shareable link"
+
+[editor.export.quality]
+larger = "Larger file"
+maximum = { text = "Maximum", context = "Export quality preset." }
+potato = { text = "Potato", context = "Export quality preset: the lowest quality, said playfully." }
+smaller = "Smaller file"
+social = { text = "Social", context = "Export quality preset for social media." }
+web = { text = "Web", context = "Export quality preset for the web." }
+
+[editor.export.resources]
+proceed = "Proceed anyway"
+title = "Check export resources"
+
+[editor.export.section]
+destination = "Destination"
+format = "Format"
+frame_rate = "Frame rate"
+quality = "Quality"
+resolution = "Resolution"
+
+[editor.export.stats]
+calculating = "Calculating…"
+duration = "Duration"
+estimated_size = "Estimated size"
+export_time = "Export time"
+output = "Output"
+output_value = { text = "{width}×{height} · {fps} fps", context = "Output size and frame rate, for example 1920×1080 · 30 fps." }
+refining_size = "Refining size…"
+refining_time = "Refining time…"
+unavailable = "Unavailable"
+
+[editor.modal]
+cancel_export = "Cancel export"
+cancel_export_message = "Are you sure you want to cancel the export?"
+cancel_export_title = "Cancel export?"
+keep_exporting = "Keep exporting"
+recording_retained = "Recording retained"
+
+[editor.tabs.audio]
+isolation_balanced = "Balanced"
+isolation_balanced_description = "Clearer isolation with natural voice detail."
+isolation_light = "Light"
+isolation_light_description = "Keep more of your original voice and room sound."
+isolation_strong = "Strong"
+isolation_strong_description = "More isolation for noisy spaces. May change voice texture."
+mic_volume = "Microphone Volume"
+mute = "Mute Audio"
+stereo_mode = "Microphone Stereo Mode"
+studio_sound_description = "Reduces background noise and balances your voice level."
+studio_sound_save_failed = "Could not save the Studio Sound default"
+system_volume = "System Audio Volume"
+title = "Audio Controls"
+use_for_new = "Use for new recordings"
+
+[editor.tabs.audio.stereo]
+mono_left = "Mono L"
+mono_right = "Mono R"
+stereo = "Stereo"
+
+[editor.tabs.camera]
+advanced_shadow = "Advanced shadow settings"
+background = "Background"
+corner_style = "Corner Style"
+custom_position = "Custom position (dragged on canvas)"
+hide = "Hide Camera"
+keep_size_during_zoom = "Keep original size during zoom"
+mirror = "Mirror Camera"
+position = "Position"
+reset = "Reset"
+rounded_corners = "Rounded Corners"
+shadow = "Shadow"
+shadow_blur = "Blur"
+shadow_opacity = "Opacity"
+shape_label = "Shape"
+size_during_zoom = "Size During Zoom"
+size_label = "Size"
+title = "Camera"
+
+[editor.tabs.camera.blur]
+heavy = "Heavy Blur"
+light = "Light Blur"
+off = "Off"
+remove = "Remove Background"
+
+[editor.tabs.camera.shape]
+source = { text = "Source", context = "Camera shape that keeps the camera's own aspect ratio." }
+square = "Square"
+
+[editor.tabs.captions]
+active_word_highlight = "Active Word Highlight"
+animation_section = "Animation"
+animation_style = "Animation Style"
+background_color = "Background Color"
+background_opacity = "Background Opacity"
+background_settings = "Background Settings"
+beta = "Beta"
+delete = "Delete"
+deleting = "Deleting..."
+download = "Download {model} Model"
+download_note = "One time download to your system. All captions are stored locally."
+downloading = "Downloading {model}... {percent}%"
+fade_duration = "Fade Duration"
+font_family = "Font Family"
+font_settings = "Font Settings"
+font_weight = "Font Weight"
+generate = "Generate Captions"
+generate_failed = "Failed to generate captions: {reason}"
+generating = "Generating..."
+highlight_color = "Highlight Color"
+highlight_note = "This is the first version of captions in Cap. Active word highlighting may be inaccurate in some situations. We're working on a fix for this and it will be released in upcoming versions."
+highlight_style = "Highlight Style"
+horizontal_position = "Horizontal Position"
+intel_unavailable = "Parakeet caption models are unavailable on Intel Macs. Whisper models remain available."
+keep_open = "Keep Cap open while the model downloads. Editor reloads will reconnect automatically."
+language_label = "Language"
+model_downloaded = "{model} model downloaded"
+model_label = "Model"
+position = "Position"
+regenerate = "Regenerate Captions"
+size_label = "Size"
+style = "Style"
+text_color = "Text Color"
+title = "Captions"
+uppercase = "Uppercase"
+vertical_position = "Vertical Position"
+
+[editor.tabs.captions.animation]
+bounce = "Bounce"
+none = "None"
+pop = "Pop"
+
+[editor.tabs.captions.highlight]
+color = "Color"
+pill = "Pill"
+
+[editor.tabs.captions.language]
+ar = "Arabic"
+auto = "Auto Detect"
+bn = "Bengali"
+de = "German"
+en = "English"
+es = "Spanish"
+fa = "Persian"
+fr = "French"
+gu = "Gujarati"
+he = "Hebrew"
+hi = "Hindi"
+it = "Italian"
+ja = "Japanese"
+ko = "Korean"
+mr = "Marathi"
+nl = "Dutch"
+pa = "Punjabi"
+pl = "Polish"
+pt = "Portuguese"
+ru = "Russian"
+sk = "Slovak"
+ta = "Tamil"
+te = "Telugu"
+tr = "Turkish"
+ur = "Urdu"
+zh = "Chinese"
+
+[editor.tabs.captions.model]
+high_accuracy = "High Accuracy"
+high_accuracy_description = "Larger download, higher accuracy"
+medium = { text = "Medium", context = "Caption model size." }
+medium_description = "Slower, more accurate"
+recommended = "Recommended"
+recommended_description = "Best balance for most recordings"
+small = { text = "Small", context = "Caption model size." }
+small_description = "Smallest download"
+
+[editor.tabs.captions.preset]
+classic = "Classic"
+classic_description = "Clean text on a solid rounded background."
+highlight = "Highlight"
+highlight_description = "Bold caps with a pill behind the active word."
+karaoke = "Karaoke"
+karaoke_description = "Words light up in sync with speech."
+minimal = "Minimal"
+minimal_description = "Subtle outlined text with no background."
+pop = "Pop"
+pop_description = "Playful caps that pop in with a vibrant accent."
+
+[editor.tabs.corner]
+rounded = "Rounded"
+squircle = "Squircle"
+
+[editor.tabs.cursor]
+friction = "Friction"
+hide_when_idle = "Hide When Idle"
+inactivity_delay = "Inactivity Delay"
+mass = "Mass"
+movement_style = "Cursor Movement Style"
+show = "Show cursor"
+size_label = "Size"
+smooth_movement = "Smooth Movement"
+style_label = "Cursor Style"
+svg_cursors = "High Quality SVG Cursors"
+tension = "Tension"
+tilt = "Tilt"
+
+[editor.tabs.cursor.style]
+fast = "Fast"
+fast_description = "Snappy, close tracking"
+mellow = "Mellow"
+mellow_description = "Balanced, natural movement"
+slow = "Slow"
+slow_description = "Long, drifting movement"
+smooth = "Smooth"
+smooth_description = "Soft, floaty movement"
+
+[editor.tabs.keyboard]
+animation = "Animation"
+background_color = "Background Color"
+background_opacity = "Background Opacity"
+background_settings = "Background Settings"
+behavior = "Behavior"
+beta = "Beta"
+changed_during_generation = "The timeline or keyboard settings changed during generation. Try again."
+empty_description = "Click \"Generate Keyboard Segments\" to create segments from recorded keyboard presses."
+empty_title = "No keyboard segments yet."
+fade_duration = "Fade Duration"
+font_family = "Font Family"
+font_settings = "Font Settings"
+font_weight = "Font Weight"
+generate = "Generate Keyboard Segments"
+generating = "Generating Keyboard Segments..."
+grouping_threshold = "Grouping Threshold"
+linger_duration = "Linger Duration"
+load_failed = "Failed to load recording data: {error}"
+no_presses = "No recorded keyboard presses were found."
+position = "Position"
+regenerate = "Regenerate Keyboard Segments"
+show_modifiers = "Show Modifiers"
+show_special_keys = "Show Special Keys"
+size_label = "Size"
+text_color = "Text Color"
+timeline_unavailable = "The project timeline is unavailable."
+timeline_unreadable = "The project timeline could not be read."
+title = "Show keyboard"
+uppercase = "Uppercase"
+
+[editor.tabs.position]
+bottom_center = "Bottom Center"
+bottom_left = "Bottom Left"
+bottom_right = "Bottom Right"
+manual = "Manual"
+top_center = "Top Center"
+top_left = "Top Left"
+top_right = "Top Right"
+
+[editor.tabs.sync]
+auto_description = "Cap calculated these offsets automatically to keep audio in sync with the video. Adjust them if anything still sounds off."
+auto_synced = "Auto-synced"
+camera = "Camera Offset"
+clip = "Clip {number}"
+description = "Fine-tune source offsets if audio or camera drifts out of sync with the screen recording."
+microphone = "Microphone Offset"
+system_audio = "System Audio Offset"
+title = "Sync"
+
+[editor.tabs.weight]
+bold = "Bold"
+medium = "Medium"
+normal = "Normal"
+
+[editor.timeline]
+add_shot = "Add shot"
+add_shot_with_look = { text = "Add shot · {look} · {seconds}s", context = "Ghost on the 3D track. {look} is the camera move name, {seconds} a length such as 2.5." }
+paused = "Paused"
+
+[editor.timeline.empty]
+add_audio = "Add audio"
+add_scene = "Add scene"
+audio = "Add background music or import your own audio"
+captions = "No captions"
+keyboard = "No keyboard events"
+scene = "Switch layouts between your screen and camera"
+
+[editor.timeline.picker]
+audio = "Add background music or import your own audio."
+caption = "Auto-transcribe your recording into on-screen subtitles."
+clip = "Your recorded screen footage."
+image = "Add an image to your recording."
+keyboard = "Display key presses on screen as you type."
+mask = "Blur or black out private areas of the screen."
+scene = "Switch layouts between your screen and camera."
+scene_unavailable = "Record with a camera to use scenes."
+style = "Change background, camera and cursor settings over time."
+text_overlay = "Add custom text overlays and titles to the canvas."
+three_d = "Tilt the scene in 3D perspective."
+zoom = "Smooth zoom-ins that follow the action."
+
+[editor.timeline.remove]
+audio = "Remove the Audio track."
+captions = "Remove the Captions track."
+clip = "Remove the Clip track."
+image = "Remove the Image track."
+keyboard = "Remove the Keyboard track."
+mask = "Remove the Mask track."
+scene = "Remove the Scene track."
+style = "Remove the Style track."
+text_track = "Remove the Text track."
+three_d = "Remove the 3D track."
+zoom = "Remove the Zoom track."
+
+[editor.timeline.scene]
+camera_only = "Camera Only"
+default = "Default"
+floating = "Floating"
+hide_camera = "Hide Camera"
+split_screen = "Split Screen"
+
+[editor.timeline.segment]
+audio = { text = "Audio", context = "Name of an audio segment that has none." }
+automatic_zoom = "Automatic Zoom"
+caption = { text = "Caption", context = "Caption segment with no text yet." }
+clip = "Clip"
+cursor_hidden = "Cursor hidden"
+highlight = { text = "Highlight", context = "Mask type that dims everything but the area." }
+label = { text = "Label", context = "Text segment with no text yet." }
+manual_zoom = "Manual Zoom"
+muted = "Muted"
+numbered_clip = { text = "Clip {number}", context = "{number} is the recording clip number, starting at 1." }
+sensitive = { text = "Sensitive", context = "Mask type that blurs a private area." }
+
+[editor.timeline.track]
+audio = "Audio"
+captions = "Captions"
+clip = { text = "Clip", context = "Track picker name for the video track." }
+image = "Image"
+keyboard = "Keyboard"
+mask = "Mask"
+scene = "Scene"
+style = "Style"
+text_track = "Text"
+video = { text = "Video", context = "Timeline gutter label of the recording's video track." }
+zoom = "Zoom"
+
+[editor.window]
+audio_filter = { text = "Audio", context = "File type filter name in the audio file picker." }
+audio_segment_changed = "This audio segment changed. Select it and choose a replacement again."
+crop = "Crop"
+crop_tooltip = "Crop Video"
+no_room_for_3d_shot = "No room for another 3D shot"
+redo = "Redo"
+save_failed = { text = "Could not save {path}. Keep the editor open and try again: {error}", context = "{path} is the recording's folder; {error} is a technical message that stays in English." }
+undo = "Undo"
+
+[editor.window.add_track]
+button = "Add track"
+hide_3d = "Hide the 3D track."
+hint = "Choose a track to add to your timeline."
+
+[editor.window.aspect]
+auto = "Auto"
+classic = "Classic"
+classic_ratio = "Classic ⋅4:3"
+square = "Square"
+square_ratio = "Square ⋅1:1"
+tall = "Tall"
+tall_ratio = "Tall ⋅3:4"
+tooltip = "Aspect Ratio"
+vertical = "Vertical"
+vertical_ratio = "Vertical ⋅9:16"
+wide = "Wide"
+wide_ratio = "Wide ⋅16:9"
+
+[editor.window.audio_import]
+copy_failed = "Failed to copy audio file: {error}"
+directory_failed = "Failed to create audio directory: {error}"
+no_extension = "Audio file has no extension"
+not_found = "Audio file not found: {path}"
+unsupported = { text = "Unsupported audio format: .{extension}", context = "{extension} is a file extension such as ogg." }
+
+[editor.window.busy]
+clip_import = "Wait for the clip import to finish before closing or deleting this recording."
+export = "Wait for the export or its cancellation to finish before closing or deleting this recording."
+opening = "Wait for the recording to finish opening before deleting it."
+save_before_delete_failed = "Could not save the recording before deleting it: {error}"
+
+[editor.window.camera3d_lane]
+add_shot = "+ Add shot"
+auto_scene = "Auto scene"
+how_many = "How many shots?"
+prompt = "Add cinematic 3D shots to your recording"
+
+[editor.window.clip_menu]
+audio = { text = "AUDIO", context = "Section heading in the clip menu, written in capitals." }
+cursor = { text = "CURSOR", context = "Section heading in the clip menu, written in capitals." }
+delete = "Delete clip"
+delete_only_clip = "Can't delete the only clip"
+hide_cursor = "Hide cursor"
+hide_cursor_description = "Fades out while this clip plays"
+keep_pitch = "Keep pitch"
+match_speed = "Match speed"
+merge_next = "Merge with next clip"
+merge_previous = "Merge with previous clip"
+mute = "Mute"
+mute_clip = "Mute clip"
+mute_clip_description = "Silence this clip's audio"
+rename = "Rename clip"
+speed = { text = "SPEED", context = "Section heading in the clip menu, written in capitals." }
+split = "Split at playhead"
+split_hint = "Move the playhead into this clip"
+volume = "Volume"
+
+[editor.window.frame]
+add_tooltip = "Add a frame"
+browser = { text = "Browser", context = "Frame style: browser chrome around the recording." }
+browser_description = "Browser chrome with address bar"
+button = { text = "Frame", context = "Toolbar button that opens the frame picker." }
+dark = "Dark"
+global = "Global frame · Applies wherever Style inherits background."
+heading = { text = "Frame", context = "Heading of the frame picker popover." }
+light = "Light"
+macbook_description = "Laptop bezel around the recording"
+macos_description = "Window chrome with traffic lights"
+none = { text = "None", context = "Frame style: no frame." }
+none_description = "Show the recording as-is"
+style_changed = "This Style changed. Close and reopen Frame."
+style_only = { text = "Style {index} only · Global settings stay unchanged.", context = "{index} is the number of a style segment on the timeline, starting at 1." }
+style_only_override = { text = "Style {index} only · Editing enables its background override.", context = "{index} is the number of a style segment on the timeline, starting at 1." }
+theme = "Theme"
+title = "Title"
+url = "URL"
+window_title_placeholder = "Window title"
+windows_description = "Title bar with window controls"
+
+[editor.window.header]
+captions = "Captions"
+delete_recording = "Delete recording"
+export = "Export"
+open_bundle = "Open recording bundle"
+presets = "Presets"
+
+[editor.window.image]
+changed = "This image changed while choosing a replacement. Select it and try again."
+filter = { text = "Images", context = "File type filter name in the image file picker." }
+recording_unavailable = "The recording is no longer available for this image. Please reopen the project."
+
+[editor.window.open]
+damaged = "This recording's video tracks could not be opened. The bundle looks damaged."
+failed = "This recording could not be opened"
+media_failed = "Failed to read this recording's media: {error}"
+meta_failed = "Failed to load recording meta: {error}"
+no_segments = "Recording has no segments. It may need to be recovered first."
+not_found = "Video path {path} not found!"
+not_studio = "Cannot edit non-studio recordings"
+
+[editor.window.presets]
+apply = "Apply"
+create = "Create"
+create_new = "Create new preset"
+create_title = "Create Preset"
+default = { text = "Default", context = "Name of the built-in preset." }
+default_badge = { text = "Default", context = "Badge on the preset used for new recordings." }
+delete = "Delete"
+delete_confirm = { text = "Are you sure you want to delete \"{name}\"?", context = "{name} is the preset's name." }
+delete_title = "Delete Preset"
+name_placeholder = "Preset name"
+none_saved = "No saved presets"
+rename = "Rename"
+rename_title = "Rename Preset"
+save_settings = "Save settings to preset"
+set_default = "Set as default"
+
+[editor.window.preview]
+full = { text = "Full", context = "Preview quality option." }
+half = { text = "Half", context = "Preview quality option." }
+label = { text = "Preview", context = "Label in front of the preview quality picker." }
+quarter = { text = "Quarter", context = "Preview quality option." }
+
+[editor.window.text_menu]
+copy_style = "Copy style"
+copy_style_first = "Copy a style first"
+delete_segment = "Delete text segment"
+delete_segments = "Delete text segments"
+paste_style = "Paste style"
+paste_style_all = "Paste style to all selected"
+segments = { one = "{count} text segment", other = "{count} text segments", context = "Title of the text menu; only shown for two or more." }
+untitled = { text = "Text", context = "Title of the text menu for a segment with no text." }
+
+[editor.window.title]
+not_saved = "Title not saved"
+not_saved_message = { text = "{error}\n\nYour title is still in the editor. Try saving it again.", context = "{error} is the reason, shown above." }
+read_failed = "Could not read the recording title for {path}: {error}"
+save_failed = "Could not save the recording title for {path}: {error}"
+
+[editor.window.track]
+clear_all = "Clear all"
+delete = "Delete"
+
+[editor.window.transport]
+done_splitting = "Done splitting"
+play_pause = "Play/Pause video"
+split = "Split"
+split_tooltip = "Click a segment to split. Esc to finish."
+zoom_in = "Zoom in"
+zoom_out = "Zoom out"
+
+[editor.window.zoom_lane]
+generate = "Generate"
+generating = "Generating…"
+no_clicks = "No clicks found to zoom into. Drag across the lane to add one."
+prompt = "Add zooms automatically"
+
+[ui]
+coming_soon = "Coming Soon"
+
+[ui.selection]
+audio = { one = "{count} audio segment selected", other = "{count} audio segments selected" }
+caption = { one = "{count} caption segment selected", other = "{count} caption segments selected" }
+delete = "Delete"
+done = "Done"
+image = { one = "{count} image segment selected", other = "{count} image segments selected" }
+keyboard = { one = "{count} keyboard segment selected", other = "{count} keyboard segments selected" }
+mask = { one = "{count} mask segment selected", other = "{count} mask segments selected" }
+scene = { one = "{count} scene segment selected", other = "{count} scene segments selected" }
+segments = { one = "{count} segment selected", other = "{count} segments selected" }
+select_all = "Select all"
+style = { one = "{count} style segment selected", other = "{count} style segments selected" }
+text_segments = { one = "{count} text segment selected", other = "{count} text segments selected" }
+three_d = { one = "{count} 3D segment selected", other = "{count} 3D segments selected" }
+zoom = { one = "{count} selected", other = "{count} selected", context = "Zoom segments selected when the track has only one." }
+zoom_all = { one = "All {count} selected", other = "All {count} selected", context = "Every zoom segment on the track is selected; only shown for two or more." }
+zoom_some = { one = "{count} of {total} selected", other = "{count} of {total} selected", context = "Some of the zoom segments on the track are selected." }

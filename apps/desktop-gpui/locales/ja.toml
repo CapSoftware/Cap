@@ -2208,3 +2208,670 @@ cities = "都市"
 dark = "ダーク"
 orange = "オレンジ"
 purple = "パープル"
+
+[editor.canvas]
+camera = "カメラ"
+camera_follows_zoom = "カメラのサイズはズームに合わせて変わります。ドラッグで移動できます"
+edit_zoom = "ズームを編集"
+image = "画像"
+mask = "マスク"
+screen = "画面"
+screen_locked = "ズームが有効な間は画面が固定されます"
+text_item = "テキスト"
+
+[editor.clips]
+append_error = "クリップを追加できませんでした：{message}"
+append_error_title = "録画エラー"
+back = "エディタに戻る"
+cap_filter = "Cap録画"
+clip = "クリップ{number}"
+empty_description = "クリップを録画するか読み込むと、ここに表示されます。"
+empty_title = "クリップはまだありません"
+import = "読み込む"
+import_error = "クリップを読み込めませんでした：{message}"
+import_error_title = "読み込みエラー"
+import_existing = "既存の録画"
+import_mp4 = "MP4ビデオ…"
+importing = "読み込み中…"
+mp4_filter = "MP4ビデオ"
+prepare_controls_failed = "録画コントロールを準備できませんでした：{error}"
+record_new = "新しいクリップを録画"
+save_before_recording_failed = "録画前に現在のプロジェクトを保存できませんでした：{error}"
+split = "分割{number}"
+title = "クリップ"
+
+[editor.clips.error]
+cancelled = "読み込みをキャンセルしました"
+cannot_decode = "ビデオ{path}をデコードできません：{error}"
+in_use = "この録画の使用中は読み込めません：{error}"
+instant_source = "Instant録画はまだプロジェクトに読み込めません"
+instant_target = "Instantモードの録画は編集できません"
+into_itself = "録画をそれ自体に読み込むことはできません"
+missing_video = "ビデオファイルがありません：{path}"
+no_duration = "読み込んだビデオに有効な長さがありません"
+not_a_project = "Capのプロジェクトフォルダを選択してください"
+source_empty = "読み込み元のCapプロジェクトに録画セグメントがありません"
+source_failed = "読み込み元のCapプロジェクトでエラーが発生しました：{error}"
+source_recording = "読み込み元のCapプロジェクトはまだ録画中です"
+source_unimportable = "読み込み元のCapプロジェクトに読み込める録画セグメントがありません"
+unfinished_target = "クリップを読み込む前に、この録画を完了するか復元してください"
+unsupported_video = "対応していないビデオファイルです：{path}"
+
+[editor.export]
+back = "エディタに戻る"
+existing_link_description = "再アップロードすると、このリンクのビデオが最新の編集内容に置き換わります。リンクを知っている全員に更新版が表示されます。"
+existing_link_title = "既存のリンクを更新"
+failed = "書き出しに失敗しました"
+fps = "{fps} FPS"
+frames = { other = "{rendered} / {count}フレーム" }
+generating_preview = "プレビューを生成中…"
+link_unavailable_cursor = "カーソルのみの書き出しは、ファイルかクリップボードにのみ保存できます。"
+link_unavailable_transparent = "透過の書き出しは、ファイルかクリップボードにのみ保存できます。"
+organization = "組織"
+preview = "プレビュー"
+preview_info = "ビデオからレンダリングしたフレームです。設定を調整すると、最終的な書き出しの品質を確認できます。"
+preview_unavailable = "プレビューを表示できません"
+reupload = "再アップロード"
+reupload_tooltip = "最新の編集内容を同じリンクにアップロード"
+reupload_transparent = "共有リンクには透過のない背景が必要です"
+sign_in_required = "録画を共有するにはサインインが必要です"
+task_failed = "書き出し処理に失敗しました"
+title = "書き出し"
+upgrade_message = "この機能を使うにはプランのアップグレードが必要です"
+upgrade_title = "アップグレードが必要です"
+upload_failed = "録画をアップロードできませんでした"
+
+[editor.export.advanced]
+bits_per_pixel = "ピクセルあたりのビット数"
+cursor_only = "カーソルのみを書き出す"
+cursor_only_description = "同じカーソルの動きとクリックを透過背景の上に保持します"
+custom_bitrate = "カスタムビットレートを使用中"
+force_ffmpeg = "FFmpegデコーダを強制"
+force_ffmpeg_description = "ハードウェアデコーダを使わない（自動フォールバック有効）"
+title = "詳細設定"
+transparent_mov = "透過MOVとして書き出します。ファイルが大きいため、合成や編集に適しています。"
+
+[editor.export.cta]
+cancel_sign_in = "サインインをキャンセル"
+clipboard = "クリップボードに書き出す"
+create_link = "共有リンクを作成"
+file = "ファイルに書き出す"
+reupload = "同じリンクに再アップロード"
+sign_in = "サインインして共有"
+
+[editor.export.destination]
+clipboard = "クリップボード"
+file = "ファイル"
+link = "共有リンク"
+
+[editor.export.done]
+copy_link = "リンクをコピー"
+instant_hint = "停止した瞬間にリンクが欲しい場合は、次の録画でInstantモードを使ってください。"
+link_copied = "リンクをコピーしました"
+open_file = "ファイルを開く"
+open_link = "リンクを開く"
+retry_copy = "コピーを再試行"
+reuploaded = "最新の編集内容が同じリンクで利用できます"
+uploaded = "Capのアップロードが完了しました"
+
+[editor.export.estimate]
+gigabytes = "約{value} GB"
+gigabytes_range = "約{lower}～{upper} GB"
+hours = "約{value}時間"
+hours_range = "約{lower}～{upper}時間"
+megabytes = "約{value} MB"
+megabytes_range = "約{lower}～{upper} MB"
+minutes = "約{value}分"
+minutes_range = "約{lower}～{upper}分"
+seconds = "約{value}秒"
+seconds_range = "約{lower}～{upper}秒"
+under_megabyte = "1 MB未満"
+under_second = "1秒未満"
+
+[editor.export.optimize]
+description = "ソフトウェアで再エンコードし、ファイルを大幅に小さくします（低速）"
+title = "ファイルサイズを最適化"
+
+[editor.export.phase]
+clipboard_failed = "書き出しは完了しましたが、クリップボードへのコピーに失敗しました"
+complete = "書き出しが完了しました"
+copied = "クリップボードにコピーしました"
+copying_to_clipboard = "クリップボードにコピー中"
+rendering_cursor = "カーソルトラックをレンダリング中"
+rendering_gif = "GIFをレンダリング中"
+rendering_video = "ビデオをレンダリング中"
+reupload_complete = "再アップロードが完了しました"
+reuploading = "リンクに再アップロード中"
+saving_to_file = "ファイルに保存中"
+starting = "書き出しを準備中"
+upload_complete = "アップロードが完了しました"
+uploading = "共有リンクを作成中"
+
+[editor.export.quality]
+larger = "大きいファイル"
+maximum = "最高"
+potato = "最低"
+smaller = "小さいファイル"
+social = "SNS"
+web = "Web"
+
+[editor.export.resources]
+proceed = "このまま続行"
+title = "書き出しのリソースを確認"
+
+[editor.export.section]
+destination = "書き出し先"
+format = "形式"
+frame_rate = "フレームレート"
+quality = "品質"
+resolution = "解像度"
+
+[editor.export.stats]
+calculating = "計算中…"
+duration = "長さ"
+estimated_size = "推定サイズ"
+export_time = "書き出し時間"
+output = "出力"
+output_value = "{width}×{height} · {fps} fps"
+refining_size = "サイズを精査中…"
+refining_time = "時間を精査中…"
+unavailable = "利用不可"
+
+[editor.modal]
+cancel_export = "書き出しをキャンセル"
+cancel_export_message = "書き出しをキャンセルしてもよろしいですか？"
+cancel_export_title = "書き出しをキャンセルしますか？"
+keep_exporting = "書き出しを続ける"
+recording_retained = "録画を保持しました"
+
+[editor.tabs.audio]
+isolation_balanced = "バランス"
+isolation_balanced_description = "自然な声の質感を保ちながら、よりはっきり分離します。"
+isolation_light = "弱"
+isolation_light_description = "元の声や部屋の響きをより多く残します。"
+isolation_strong = "強"
+isolation_strong_description = "騒がしい場所向けに強く分離します。声の質感が変わることがあります。"
+mic_volume = "マイクの音量"
+mute = "音声をミュート"
+stereo_mode = "マイクのステレオモード"
+studio_sound_description = "背景ノイズを抑え、声の音量を整えます。"
+studio_sound_save_failed = "Studio Soundのデフォルトを保存できませんでした"
+system_volume = "システム音声の音量"
+title = "音声コントロール"
+use_for_new = "新しい録画で使用"
+
+[editor.tabs.audio.stereo]
+mono_left = "モノラル L"
+mono_right = "モノラル R"
+stereo = "ステレオ"
+
+[editor.tabs.camera]
+advanced_shadow = "影の詳細設定"
+background = "背景"
+corner_style = "角のスタイル"
+custom_position = "カスタム位置（キャンバス上でドラッグ）"
+hide = "カメラを非表示"
+keep_size_during_zoom = "ズーム中も元のサイズを保つ"
+mirror = "カメラを反転"
+position = "位置"
+reset = "リセット"
+rounded_corners = "角の丸み"
+shadow = "影"
+shadow_blur = "ぼかし"
+shadow_opacity = "不透明度"
+shape_label = "形"
+size_during_zoom = "ズーム中のサイズ"
+size_label = "サイズ"
+title = "カメラ"
+
+[editor.tabs.camera.blur]
+heavy = "強いぼかし"
+light = "弱いぼかし"
+off = "オフ"
+remove = "背景を削除"
+
+[editor.tabs.camera.shape]
+source = "元の形"
+square = "正方形"
+
+[editor.tabs.captions]
+active_word_highlight = "話している単語をハイライト"
+animation_section = "アニメーション"
+animation_style = "アニメーションのスタイル"
+background_color = "背景色"
+background_opacity = "背景の不透明度"
+background_settings = "背景の設定"
+beta = "ベータ"
+delete = "削除"
+deleting = "削除中..."
+download = "{model}モデルをダウンロード"
+download_note = "システムへのダウンロードは1回だけです。字幕はすべてローカルに保存されます。"
+downloading = "{model}をダウンロード中... {percent}%"
+fade_duration = "フェード時間"
+font_family = "フォント"
+font_settings = "フォントの設定"
+font_weight = "フォントの太さ"
+generate = "字幕を生成"
+generate_failed = "字幕を生成できませんでした：{reason}"
+generating = "生成中..."
+highlight_color = "ハイライトの色"
+highlight_note = "これはCapの字幕機能の最初のバージョンです。話している単語のハイライトは、状況によって不正確になる場合があります。修正に取り組んでおり、今後のバージョンで公開する予定です。"
+highlight_style = "ハイライトのスタイル"
+horizontal_position = "水平位置"
+intel_unavailable = "IntelのMacではParakeetの字幕モデルを利用できません。Whisperモデルは引き続き利用できます。"
+keep_open = "モデルのダウンロード中はCapを開いたままにしてください。エディタを再読み込みしても自動的に再接続されます。"
+language_label = "言語"
+model_downloaded = "{model}モデルをダウンロード済み"
+model_label = "モデル"
+position = "位置"
+regenerate = "字幕を再生成"
+size_label = "サイズ"
+style = "スタイル"
+text_color = "テキストの色"
+title = "字幕"
+uppercase = "大文字"
+vertical_position = "垂直位置"
+
+[editor.tabs.captions.animation]
+bounce = "バウンス"
+none = "なし"
+pop = "ポップ"
+
+[editor.tabs.captions.highlight]
+color = "色"
+pill = "ピル"
+
+[editor.tabs.captions.language]
+ar = "アラビア語"
+auto = "自動検出"
+bn = "ベンガル語"
+de = "ドイツ語"
+en = "英語"
+es = "スペイン語"
+fa = "ペルシア語"
+fr = "フランス語"
+gu = "グジャラート語"
+he = "ヘブライ語"
+hi = "ヒンディー語"
+it = "イタリア語"
+ja = "日本語"
+ko = "韓国語"
+mr = "マラーティー語"
+nl = "オランダ語"
+pa = "パンジャブ語"
+pl = "ポーランド語"
+pt = "ポルトガル語"
+ru = "ロシア語"
+sk = "スロバキア語"
+ta = "タミル語"
+te = "テルグ語"
+tr = "トルコ語"
+ur = "ウルドゥー語"
+zh = "中国語"
+
+[editor.tabs.captions.model]
+high_accuracy = "高精度"
+high_accuracy_description = "ダウンロードは大きめ、精度は高め"
+medium = "中"
+medium_description = "低速だがより正確"
+recommended = "推奨"
+recommended_description = "ほとんどの録画に最適なバランス"
+small = "小"
+small_description = "最小のダウンロード"
+
+[editor.tabs.captions.preset]
+classic = "クラシック"
+classic_description = "角丸の単色背景にすっきりしたテキスト。"
+highlight = "ハイライト"
+highlight_description = "太字の大文字で、話している単語の後ろにピルを表示。"
+karaoke = "カラオケ"
+karaoke_description = "発話に合わせて単語が光ります。"
+minimal = "ミニマル"
+minimal_description = "背景なしの控えめな縁取りテキスト。"
+pop = "ポップ"
+pop_description = "鮮やかなアクセントで飛び出す遊び心のある大文字。"
+
+[editor.tabs.corner]
+rounded = "角丸"
+squircle = "スクワークル"
+
+[editor.tabs.cursor]
+friction = "摩擦"
+hide_when_idle = "操作がないときは非表示"
+inactivity_delay = "非表示までの時間"
+mass = "質量"
+movement_style = "カーソルの動きのスタイル"
+show = "カーソルを表示"
+size_label = "サイズ"
+smooth_movement = "なめらかな動き"
+style_label = "カーソルのスタイル"
+svg_cursors = "高品質なSVGカーソル"
+tension = "張力"
+tilt = "傾き"
+
+[editor.tabs.cursor.style]
+fast = "速い"
+fast_description = "きびきびと、ぴったり追従"
+mellow = "穏やか"
+mellow_description = "バランスの取れた自然な動き"
+slow = "遅い"
+slow_description = "長く漂うような動き"
+smooth = "なめらか"
+smooth_description = "柔らかく浮遊するような動き"
+
+[editor.tabs.keyboard]
+animation = "アニメーション"
+background_color = "背景色"
+background_opacity = "背景の不透明度"
+background_settings = "背景の設定"
+behavior = "動作"
+beta = "ベータ"
+changed_during_generation = "生成中にタイムラインまたはキーボードの設定が変更されました。もう一度お試しください。"
+empty_description = "「キーボードセグメントを生成」をクリックすると、記録されたキー入力からセグメントを作成します。"
+empty_title = "キーボードセグメントはまだありません。"
+fade_duration = "フェード時間"
+font_family = "フォント"
+font_settings = "フォントの設定"
+font_weight = "フォントの太さ"
+generate = "キーボードセグメントを生成"
+generating = "キーボードセグメントを生成中..."
+grouping_threshold = "グループ化のしきい値"
+linger_duration = "表示を残す時間"
+load_failed = "録画データを読み込めませんでした：{error}"
+no_presses = "記録されたキー入力が見つかりませんでした。"
+position = "位置"
+regenerate = "キーボードセグメントを再生成"
+show_modifiers = "修飾キーを表示"
+show_special_keys = "特殊キーを表示"
+size_label = "サイズ"
+text_color = "テキストの色"
+timeline_unavailable = "プロジェクトのタイムラインを利用できません。"
+timeline_unreadable = "プロジェクトのタイムラインを読み込めませんでした。"
+title = "キーボードを表示"
+uppercase = "大文字"
+
+[editor.tabs.position]
+bottom_center = "下中央"
+bottom_left = "左下"
+bottom_right = "右下"
+manual = "手動"
+top_center = "上中央"
+top_left = "左上"
+top_right = "右上"
+
+[editor.tabs.sync]
+auto_description = "Capは音声をビデオと同期させるため、これらのオフセットを自動で計算しました。まだずれて聞こえる場合は調整してください。"
+auto_synced = "自動同期済み"
+camera = "カメラのオフセット"
+clip = "クリップ{number}"
+description = "音声やカメラが画面録画とずれる場合は、ソースのオフセットを微調整してください。"
+microphone = "マイクのオフセット"
+system_audio = "システム音声のオフセット"
+title = "同期"
+
+[editor.tabs.weight]
+bold = "太字"
+medium = "中"
+normal = "標準"
+
+[editor.timeline]
+add_shot = "ショットを追加"
+add_shot_with_look = "ショットを追加 · {look} · {seconds}秒"
+paused = "一時停止中"
+
+[editor.timeline.empty]
+add_audio = "音声を追加"
+add_scene = "シーンを追加"
+audio = "BGMを追加するか、自分の音声を読み込みます"
+captions = "字幕なし"
+keyboard = "キーボードイベントなし"
+scene = "画面とカメラのレイアウトを切り替えます"
+
+[editor.timeline.picker]
+audio = "BGMを追加するか、自分の音声を読み込みます。"
+caption = "録画を自動で文字起こしし、画面上の字幕にします。"
+clip = "録画した画面の映像です。"
+image = "録画に画像を追加します。"
+keyboard = "入力中のキー操作を画面に表示します。"
+mask = "画面のプライベートな部分をぼかすか黒く塗りつぶします。"
+scene = "画面とカメラのレイアウトを切り替えます。"
+scene_unavailable = "シーンを使うにはカメラ付きで録画してください。"
+style = "背景、カメラ、カーソルの設定を時間に合わせて変更します。"
+text_overlay = "キャンバスにカスタムのテキストやタイトルを重ねます。"
+three_d = "シーンを3Dの遠近感で傾けます。"
+zoom = "動きに合わせたなめらかなズームイン。"
+
+[editor.timeline.remove]
+audio = "音声トラックを削除します。"
+captions = "字幕トラックを削除します。"
+clip = "クリップトラックを削除します。"
+image = "画像トラックを削除します。"
+keyboard = "キーボードトラックを削除します。"
+mask = "マスクトラックを削除します。"
+scene = "シーントラックを削除します。"
+style = "スタイルトラックを削除します。"
+text_track = "テキストトラックを削除します。"
+three_d = "3Dトラックを削除します。"
+zoom = "ズームトラックを削除します。"
+
+[editor.timeline.scene]
+camera_only = "カメラのみ"
+default = "デフォルト"
+floating = "フローティング"
+hide_camera = "カメラを非表示"
+split_screen = "分割画面"
+
+[editor.timeline.segment]
+audio = "音声"
+automatic_zoom = "自動ズーム"
+caption = "字幕"
+clip = "クリップ"
+cursor_hidden = "カーソル非表示"
+highlight = "強調"
+label = "ラベル"
+manual_zoom = "手動ズーム"
+muted = "ミュート"
+numbered_clip = "クリップ{number}"
+sensitive = "機密"
+
+[editor.timeline.track]
+audio = "音声"
+captions = "字幕"
+clip = "クリップ"
+image = "画像"
+keyboard = "キーボード"
+mask = "マスク"
+scene = "シーン"
+style = "スタイル"
+text_track = "テキスト"
+video = "ビデオ"
+zoom = "ズーム"
+
+[editor.window]
+audio_filter = "音声"
+audio_segment_changed = "この音声セグメントは変更されました。選択して、もう一度置き換えるファイルを選んでください。"
+crop = "切り抜き"
+crop_tooltip = "ビデオを切り抜く"
+no_room_for_3d_shot = "別の3Dショットを入れる余地がありません"
+redo = "やり直す"
+save_failed = "{path}を保存できませんでした。エディタを開いたまま、もう一度お試しください：{error}"
+undo = "取り消す"
+
+[editor.window.add_track]
+button = "トラックを追加"
+hide_3d = "3Dトラックを非表示にします。"
+hint = "タイムラインに追加するトラックを選んでください。"
+
+[editor.window.aspect]
+auto = "自動"
+classic = "クラシック"
+classic_ratio = "クラシック ⋅4:3"
+square = "正方形"
+square_ratio = "正方形 ⋅1:1"
+tall = "縦長"
+tall_ratio = "縦長 ⋅3:4"
+tooltip = "アスペクト比"
+vertical = "縦"
+vertical_ratio = "縦 ⋅9:16"
+wide = "ワイド"
+wide_ratio = "ワイド ⋅16:9"
+
+[editor.window.audio_import]
+copy_failed = "音声ファイルをコピーできませんでした：{error}"
+directory_failed = "音声フォルダを作成できませんでした：{error}"
+no_extension = "音声ファイルに拡張子がありません"
+not_found = "音声ファイルが見つかりません：{path}"
+unsupported = "対応していない音声形式です：.{extension}"
+
+[editor.window.busy]
+clip_import = "この録画を閉じるか削除する前に、クリップの読み込みが終わるまでお待ちください。"
+export = "この録画を閉じるか削除する前に、書き出しまたはそのキャンセルが終わるまでお待ちください。"
+opening = "削除する前に、録画が開き終わるまでお待ちください。"
+save_before_delete_failed = "削除前に録画を保存できませんでした：{error}"
+
+[editor.window.camera3d_lane]
+add_shot = "+ ショットを追加"
+auto_scene = "自動シーン"
+how_many = "ショットはいくつ？"
+prompt = "録画に映画のような3Dショットを追加"
+
+[editor.window.clip_menu]
+audio = "音声"
+cursor = "カーソル"
+delete = "クリップを削除"
+delete_only_clip = "唯一のクリップは削除できません"
+hide_cursor = "カーソルを非表示"
+hide_cursor_description = "このクリップの再生中はフェードアウトします"
+keep_pitch = "ピッチを保持"
+match_speed = "速度に合わせる"
+merge_next = "次のクリップと結合"
+merge_previous = "前のクリップと結合"
+mute = "ミュート"
+mute_clip = "クリップをミュート"
+mute_clip_description = "このクリップの音声を消します"
+rename = "クリップ名を変更"
+speed = "速度"
+split = "再生ヘッドで分割"
+split_hint = "再生ヘッドをこのクリップ内に移動してください"
+volume = "音量"
+
+[editor.window.frame]
+add_tooltip = "フレームを追加"
+browser = "ブラウザ"
+browser_description = "アドレスバー付きのブラウザ枠"
+button = "フレーム"
+dark = "ダーク"
+global = "グローバルフレーム · スタイルが背景を継承する箇所すべてに適用されます。"
+heading = "フレーム"
+light = "ライト"
+macbook_description = "録画の周りにノートパソコンのベゼル"
+macos_description = "信号ボタン付きのウィンドウ枠"
+none = "なし"
+none_description = "録画をそのまま表示"
+style_changed = "このスタイルは変更されました。フレームを閉じて開き直してください。"
+style_only = "スタイル{index}のみ · グローバル設定は変わりません。"
+style_only_override = "スタイル{index}のみ · 編集すると独自の背景設定が有効になります。"
+theme = "テーマ"
+title = "タイトル"
+url = "URL"
+window_title_placeholder = "ウィンドウタイトル"
+windows_description = "ウィンドウボタン付きのタイトルバー"
+
+[editor.window.header]
+captions = "字幕"
+delete_recording = "録画を削除"
+export = "書き出し"
+open_bundle = "録画バンドルを開く"
+presets = "プリセット"
+
+[editor.window.image]
+changed = "置き換えを選んでいる間にこの画像が変更されました。選択してもう一度お試しください。"
+filter = "画像"
+recording_unavailable = "この画像の録画は利用できなくなりました。プロジェクトを開き直してください。"
+
+[editor.window.open]
+damaged = "この録画のビデオトラックを開けませんでした。バンドルが破損しているようです。"
+failed = "この録画を開けませんでした"
+media_failed = "この録画のメディアを読み込めませんでした：{error}"
+meta_failed = "録画のメタデータを読み込めませんでした：{error}"
+no_segments = "録画にセグメントがありません。先に復元が必要な可能性があります。"
+not_found = "ビデオのパス{path}が見つかりません！"
+not_studio = "Studio以外の録画は編集できません"
+
+[editor.window.presets]
+apply = "適用"
+create = "作成"
+create_new = "新しいプリセットを作成"
+create_title = "プリセットを作成"
+default = "デフォルト"
+default_badge = "デフォルト"
+delete = "削除"
+delete_confirm = "「{name}」を削除してもよろしいですか？"
+delete_title = "プリセットを削除"
+name_placeholder = "プリセット名"
+none_saved = "保存済みのプリセットはありません"
+rename = "名前を変更"
+rename_title = "プリセット名を変更"
+save_settings = "設定をプリセットに保存"
+set_default = "デフォルトに設定"
+
+[editor.window.preview]
+full = "フル"
+half = "1/2"
+label = "プレビュー"
+quarter = "1/4"
+
+[editor.window.text_menu]
+copy_style = "スタイルをコピー"
+copy_style_first = "先にスタイルをコピーしてください"
+delete_segment = "テキストセグメントを削除"
+delete_segments = "テキストセグメントを削除"
+paste_style = "スタイルをペースト"
+paste_style_all = "選択したすべてにスタイルをペースト"
+segments = { other = "{count}個のテキストセグメント" }
+untitled = "テキスト"
+
+[editor.window.title]
+not_saved = "タイトルを保存できませんでした"
+not_saved_message = "{error}\n\nタイトルはエディタに残っています。もう一度保存してください。"
+read_failed = "{path}の録画タイトルを読み込めませんでした：{error}"
+save_failed = "{path}の録画タイトルを保存できませんでした：{error}"
+
+[editor.window.track]
+clear_all = "すべて消去"
+delete = "削除"
+
+[editor.window.transport]
+done_splitting = "分割を終了"
+play_pause = "ビデオを再生/一時停止"
+split = "分割"
+split_tooltip = "セグメントをクリックして分割します。Escで終了します。"
+zoom_in = "ズームイン"
+zoom_out = "ズームアウト"
+
+[editor.window.zoom_lane]
+generate = "生成"
+generating = "生成中…"
+no_clicks = "ズームするクリックが見つかりません。レーン上をドラッグして追加してください。"
+prompt = "ズームを自動で追加"
+
+[ui]
+coming_soon = "近日公開"
+
+[ui.selection]
+audio = { other = "{count}個の音声セグメントを選択中" }
+caption = { other = "{count}個の字幕セグメントを選択中" }
+delete = "削除"
+done = "完了"
+image = { other = "{count}個の画像セグメントを選択中" }
+keyboard = { other = "{count}個のキーボードセグメントを選択中" }
+mask = { other = "{count}個のマスクセグメントを選択中" }
+scene = { other = "{count}個のシーンセグメントを選択中" }
+segments = { other = "{count}個のセグメントを選択中" }
+select_all = "すべて選択"
+style = { other = "{count}個のスタイルセグメントを選択中" }
+text_segments = { other = "{count}個のテキストセグメントを選択中" }
+three_d = { other = "{count}個の3Dセグメントを選択中" }
+zoom = { other = "{count}個を選択中" }
+zoom_all = { other = "{count}個すべてを選択中" }
+zoom_some = { other = "{total}個中{count}個を選択中" }
