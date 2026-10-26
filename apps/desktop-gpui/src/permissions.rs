@@ -28,6 +28,8 @@
 //! actually failed -- the per-permission `attempted` flags in
 //! [`classify`] are this module's version of Tauri's `initial_check`.
 
+use crate::i18n::tr;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OSPermission {
     ScreenRecording,
@@ -50,6 +52,15 @@ impl OSPermission {
             Self::Accessibility => "Accessibility",
             Self::Microphone => "Microphone",
             Self::Camera => "Camera",
+        }
+    }
+
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Self::ScreenRecording => tr::permission::name::screen_recording(),
+            Self::Accessibility => tr::permission::name::accessibility(),
+            Self::Microphone => tr::permission::name::microphone(),
+            Self::Camera => tr::permission::name::camera(),
         }
     }
 

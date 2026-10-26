@@ -13,6 +13,7 @@ use gpui::{
     div, prelude::FluentBuilder, px, svg,
 };
 
+use crate::i18n::tr;
 use crate::theme::LocaleFont as _;
 use crate::{main_window::Mode, theme::Theme, ui::keyboard_nav};
 
@@ -31,9 +32,9 @@ impl Mode {
     /// app carries all three; so do we.
     fn card_description(self) -> &'static str {
         match self {
-            Self::Instant => "Share instantly with a link. Uploads as you record.",
-            Self::Studio => "Highest quality local recording for editing later.",
-            Self::Screenshot => "Capture and annotate screenshots instantly.",
+            Self::Instant => tr::dialog::mode_select::instant(),
+            Self::Studio => tr::dialog::mode_select::studio(),
+            Self::Screenshot => tr::dialog::mode_select::screenshot(),
         }
     }
 }
@@ -292,14 +293,14 @@ impl Render for ModeSelectWindow {
                                     .text_size(px(20.))
                                     .font_weight(FontWeight::BOLD)
                                     .text_color(Hsla::from(theme.gray_12))
-                                    .child("Choose Recording Mode"),
+                                    .child(tr::dialog::mode_select::title()),
                             )
                             .child(
                                 // `text-sm text-gray-11`
                                 div()
                                     .text_size(px(14.))
                                     .text_color(Hsla::from(theme.gray_11))
-                                    .child("Select how you want to capture your screen"),
+                                    .child(tr::dialog::mode_select::subtitle()),
                             ),
                     )
                     .child(

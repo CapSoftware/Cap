@@ -4069,7 +4069,7 @@ impl MainWindow {
                             .id("panel-back")
                             .when(self.keyboard_nav, ui::keyboard_nav::stop)
                             .role(gpui::Role::Button)
-                            .aria_label("Back")
+                            .aria_label(tr::common::back())
                             .flex()
                             .flex_row()
                             .items_center()

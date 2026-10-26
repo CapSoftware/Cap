@@ -558,14 +558,17 @@ pub fn window_number(window: &Window) -> Option<isize> {
 pub fn open_image_panel(extensions: &[&str]) -> Option<PathBuf> {
     let mut dialog = rfd::FileDialog::new();
     if !extensions.is_empty() {
-        dialog = dialog.add_filter("Images", extensions);
+        dialog = dialog.add_filter(crate::i18n::tr::dialog::file::images_filter(), extensions);
     }
     dialog.pick_file()
 }
 
 pub fn open_audio_panel() -> Option<PathBuf> {
     rfd::FileDialog::new()
-        .add_filter("Audio", &["mp3", "wav", "m4a", "ogg", "flac", "aac"])
+        .add_filter(
+            crate::i18n::tr::dialog::file::audio_filter(),
+            &["mp3", "wav", "m4a", "ogg", "flac", "aac"],
+        )
         .pick_file()
 }
 
@@ -629,7 +632,7 @@ pub fn set_dock_icon(_png: &[u8]) {}
 pub fn save_file_panel(suggested: &str, extensions: &[&str]) -> Option<PathBuf> {
     let mut dialog = rfd::FileDialog::new().set_file_name(suggested);
     if !extensions.is_empty() {
-        dialog = dialog.add_filter("Export", extensions);
+        dialog = dialog.add_filter(crate::i18n::tr::dialog::file::export_filter(), extensions);
     }
     dialog.save_file()
 }
@@ -642,9 +645,9 @@ pub fn copy_file_to_clipboard(path: &Path, _cx: &gpui::App) -> Result<(), String
         .to_str()
         .ok_or("The clipboard file path is not valid Unicode")?;
     ClipboardContext::new()
-        .map_err(|error| format!("Clipboard unavailable: {error}"))?
+        .map_err(crate::i18n::tr::dialog::clipboard::unavailable_error)?
         .set_files(vec![path.to_owned()])
-        .map_err(|error| format!("Could not copy the file to the clipboard: {error}"))
+        .map_err(crate::i18n::tr::dialog::clipboard::copy_file)
 }
 
 pub struct ClipboardImage(clipboard_rs::RustImageData);
@@ -662,9 +665,9 @@ pub fn write_clipboard_image(image: ClipboardImage, _cx: &gpui::App) -> Result<(
     use clipboard_rs::{Clipboard, ClipboardContext};
 
     ClipboardContext::new()
-        .map_err(|error| format!("Clipboard unavailable: {error}"))?
+        .map_err(crate::i18n::tr::dialog::clipboard::unavailable_error)?
         .set_image(image.0)
-        .map_err(|error| format!("Could not copy the image to the clipboard: {error}"))
+        .map_err(crate::i18n::tr::dialog::clipboard::copy_image)
 }
 
 pub fn desktop_picture_path() -> Option<PathBuf> {

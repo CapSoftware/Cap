@@ -15,6 +15,7 @@ use cap_utils::disk_space::{DiskSpaceStatus, RecordingStorageMonitor};
 use gpui::{App, AppContext as _, Context, Entity, Global, Task};
 
 use crate::app_sounds::AppSound;
+use crate::i18n::tr;
 use crate::recording::{self, ActiveRecording, StartConfig};
 
 /// `Idle -> Starting -> Recording -> Stopping -> Idle`; pause is a flag on
@@ -1077,8 +1078,7 @@ impl RecordingSession {
                             DiskSpaceStatus::Exhausted => {
                                 this.storage_warning = true;
                                 this.stopped_for_low_storage = true;
-                                this.storage_notice =
-                                    Some("Low storage. Stopping and saving your recording…".into());
+                                this.storage_notice = Some(tr::dialog::storage::stopping().into());
                                 this.stop(cx);
                                 false
                             }
@@ -1366,7 +1366,7 @@ impl RecordingSession {
                         tracing::info!(dir = %project_dir.display(), "recording finished");
                         stop_sound.call_once(|| AppSound::StopRecording.play());
                         if low_storage {
-                            this.storage_notice = Some("Recording stopped because storage is low. Your recording was saved.".into());
+                            this.storage_notice = Some(tr::dialog::storage::stopped_saved().into());
                         }
                         if this.mode() == Some(crate::recording::RecordingMode::Studio) && !low_storage {
                             this.finished_studio = Some(project_dir);
@@ -1383,12 +1383,12 @@ impl RecordingSession {
                     }
                     Ok(Err(error)) => {
                         tracing::error!("recording failed to stop cleanly: {error:#}");
-                        this.storage_notice = low_storage.then(|| "Recording stopped because storage is low. Your recording files were kept. Free up space, then recover the recording below.".into());
+                        this.storage_notice = low_storage.then(|| tr::dialog::storage::stopped_kept().into());
                         this.error = Some(format!("{error:#}"));
                     }
                     Err(join_error) => {
                         tracing::error!("recording stop task died: {join_error}");
-                        this.storage_notice = low_storage.then(|| "Recording stopped because storage is low. Your recording files were kept. Free up space, then recover the recording below.".into());
+                        this.storage_notice = low_storage.then(|| tr::dialog::storage::stopped_kept().into());
                         this.error = Some("Stop task failed.".into());
                     }
                 }
