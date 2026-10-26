@@ -44,11 +44,7 @@ def find(scope_re, button_re):
                 name = node.get_name() or ""
             except Exception:
                 continue
-            # Qt reports its buttons with the plain "button" role.
-            is_button = role in (Atspi.Role.PUSH_BUTTON, Atspi.Role.TOGGLE_BUTTON) or (
-                node.get_role_name() == "button"
-            )
-            if is_button and button_re.search(name):
+            if role in (Atspi.Role.PUSH_BUTTON, Atspi.Role.TOGGLE_BUTTON) and button_re.search(name):
                 return node
     return None
 

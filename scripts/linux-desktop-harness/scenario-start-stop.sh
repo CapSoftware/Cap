@@ -122,13 +122,9 @@ attempt() {
   result "attempt${n}_control" "$control"
   [[ $control == tray || $control == shortcut ]] && use_control "$control"
   # The screen-share dialog: a person picks the screen and presses Share.
-  # GNOME's portal draws this dialog on GNOME, and on niri, which uses it;
-  # KDE's portal on Plasma.
+  # GNOME's portal draws this dialog on GNOME, and on niri, which uses it.
   if [[ ${DESKTOP:-gnome} == gnome || $DESKTOP == niri ]] && ! wait_log "recording started" 4 "$started_before"; then
     use_control approve "Share Screen|xdg-desktop-portal-gnome" "^Share$"
-  elif [[ $DESKTOP == kde ]] && ! wait_log "recording started" 4 "$started_before"; then
-    # KDE's dialog lists each screen as a button that shares it.
-    use_control approve "xdg-desktop-portal-kde" "^Virtual-0$"
   fi
   if wait_log "recording started" 30 "$started_before"; then
     result "attempt${n}_started" yes

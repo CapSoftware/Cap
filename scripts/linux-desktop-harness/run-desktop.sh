@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Host side: one fresh desktop container, one Cap package, one scenario.
-# Usage: run-desktop.sh <gnome|kde|hyprland|niri|sway> <package.deb|.AppImage|any file with DEV_BIN> <out-dir> [ENV=VALUE...]
+# Usage: run-desktop.sh <gnome|hyprland|niri|sway> <package.deb|.AppImage|any file with DEV_BIN> <out-dir> [ENV=VALUE...]
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 desktop=$1
@@ -14,7 +14,6 @@ case "$desktop" in
   # on the vgem/vkms faux devices this harness renders with; real GPUs are not
   # affected, so the harness (not Cap) turns that layer off.
   hyprland|niri|sway) image=cap-harness-arch dockerfile=arch.Dockerfile up=arch-up.sh extra_env=(-e VK_LOADER_LAYERS_DISABLE=VK_LAYER_MESA_device_select) ;;
-  kde) image=cap-harness-kde dockerfile=kde.Dockerfile up=kde-up.sh ;;
   *) echo "unknown desktop $desktop" >&2; exit 2 ;;
 esac
 name=cap-$desktop-$$
