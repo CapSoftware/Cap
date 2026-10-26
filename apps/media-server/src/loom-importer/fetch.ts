@@ -2,6 +2,12 @@ import { open, rename, rm } from "node:fs/promises";
 
 export class LoomSourceRejectedError extends Error {}
 
+export class LoomSegmentStatusError extends Error {
+	constructor(readonly status: number) {
+		super(`Loom segment request failed with ${status}`);
+	}
+}
+
 export class Semaphore {
 	private available: number;
 	private readonly waiters: Array<() => void> = [];
@@ -127,9 +133,7 @@ export async function downloadToFile(
 			});
 			if (!response.ok) {
 				await response.body?.cancel().catch(() => {});
-				const error = new Error(
-					`Loom segment request failed with ${response.status}`,
-				);
+				const error = new LoomSegmentStatusError(response.status);
 				if (!RETRYABLE_STATUS.has(response.status)) {
 					permanentFailures++;
 					if (permanentFailures >= PERMANENT_STATUS_ATTEMPTS) throw error;

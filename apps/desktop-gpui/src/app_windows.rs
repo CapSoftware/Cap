@@ -89,11 +89,13 @@ fn platform_display_for_capture(
     cx: &App,
 ) -> Option<std::rc::Rc<dyn gpui::PlatformDisplay>> {
     #[cfg(target_os = "linux")]
-    if let Some(uuid) = target.raw_handle().wayland_uuid() {
-        return cx
+    if let Some(uuid) = target.raw_handle().wayland_uuid()
+        && let Some(display) = cx
             .displays()
             .into_iter()
-            .find(|display| display.uuid().is_ok_and(|candidate| candidate == uuid));
+            .find(|display| display.uuid().is_ok_and(|candidate| candidate == uuid))
+    {
+        return Some(display);
     }
     #[cfg(target_os = "windows")]
     if let Ok(id) = target.id().to_string().parse::<u64>()
@@ -101,17 +103,45 @@ fn platform_display_for_capture(
     {
         return Some(display);
     }
-    let bounds = capture_display_bounds(target)?;
-    let mut matching = cx
-        .displays()
-        .into_iter()
-        .filter(|display| display.bounds().contains(&bounds.center()));
-    let display = matching.next()?;
+    let displays = cx.displays();
+    // A named output that matched nothing is not matched by position either.
     #[cfg(target_os = "linux")]
-    if uses_wayland() && matching.next().is_some() {
-        return None;
+    let named = target.raw_handle().wayland_uuid().is_some();
+    #[cfg(not(target_os = "linux"))]
+    let named = false;
+    let bounds = capture_display_bounds(target).filter(|_| !named);
+    let mut matching = displays
+        .iter()
+        .filter(|display| bounds.is_some_and(|bounds| display.bounds().contains(&bounds.center())));
+    let found = matching.next().cloned();
+    #[cfg(target_os = "linux")]
+    let found = found.filter(|_| !(uses_wayland() && matching.next().is_some()));
+    #[cfg(target_os = "linux")]
+    if found.is_none() && uses_wayland() {
+        // One output on each side cannot be the wrong one, whatever its name
+        // or position (a compositor may report neither the same way to both).
+        if displays.len() == 1 && scap_targets::Display::list().len() == 1 {
+            return displays.into_iter().next();
+        }
+        tracing::warn!(
+            uuid = ?target.raw_handle().wayland_uuid(),
+            ?bounds,
+            candidates = ?displays
+                .iter()
+                .map(|display| {
+                    (
+                        display
+                            .uuid()
+                            .map(|uuid| uuid.to_string())
+                            .unwrap_or_else(|error| error.to_string()),
+                        display.bounds(),
+                    )
+                })
+                .collect::<Vec<_>>(),
+            "no Wayland output matches the capture display"
+        );
     }
-    Some(display)
+    found
 }
 
 fn gpui_display_id(target: Option<&scap_targets::Display>, cx: &App) -> Option<gpui::DisplayId> {
@@ -279,6 +309,9 @@ struct CleanCaptureUi {
     retained_windows: Vec<(gpui::AnyWindowHandle, bool)>,
     restoring: bool,
     restoration_error: Option<String>,
+    /// A start that had no Stop control to hide behind: it runs with Cap's
+    /// controls visible once the windows this lease hid are back.
+    visible_fallback: Option<StartConfig>,
 }
 
 #[cfg(target_os = "linux")]
@@ -549,7 +582,6 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
     cx.spawn(async move |cx| {
         while thumbnails.recv_async().await.is_ok() {
             cx.update(|cx| {
-                crate::tray::refresh_previous(cx);
                 refresh_library_after_delete(cx);
                 crate::menus::recheck_pending_quit(cx);
             });
@@ -1201,6 +1233,8 @@ pub fn open_settings(page: Page, cx: &mut App) {
 
     let handle = cx.open_window(
         WindowOptions {
+            #[cfg(target_os = "linux")]
+            app_id: Some(crate::app_windows::app_id().into()),
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             display_id,
             // A real titlebar this time, transparent with the buttons moved
@@ -1380,6 +1414,8 @@ pub fn open_onboarding(cx: &mut App) {
 
     let handle = cx.open_window(
         WindowOptions {
+            #[cfg(target_os = "linux")]
+            app_id: Some(crate::app_windows::app_id().into()),
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             display_id,
             titlebar: None,
@@ -1531,6 +1567,8 @@ pub fn open_mode_select(cx: &mut App) -> bool {
 
     let handle = cx.open_window(
         WindowOptions {
+            #[cfg(target_os = "linux")]
+            app_id: Some(crate::app_windows::app_id().into()),
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             display_id,
             // `traffic_lights_position` has no ModeSelect arm, so it takes the
@@ -1651,6 +1689,8 @@ pub fn open_teleprompter(cx: &mut App) {
 
     let handle = cx.open_window(
         WindowOptions {
+            #[cfg(target_os = "linux")]
+            app_id: Some(crate::app_windows::app_id().into()),
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             display_id,
             // `decorations: true`, `titleBarStyle: "overlay"`, `hiddenTitle:
@@ -2480,6 +2520,8 @@ fn open_overlay(
 
     let handle = cx.open_window(
         WindowOptions {
+            #[cfg(target_os = "linux")]
+            app_id: Some(crate::app_windows::app_id().into()),
             // The origin is corrected right after opening -- gpui's own
             // window-origin math cannot express "cover this display" (see
             // `platform::set_window_frame_cg`). The size is honoured, and it is
@@ -2834,7 +2876,13 @@ fn append_own_excluded_window_ids(
             continue;
         }
         let Some(number) = window.number else {
-            tracing::warn!(title, "excluded Cap window has no native window id");
+            // Wayland gives clients no window ids, so every Cap window lands
+            // here on every Linux Wayland recording.
+            if cfg!(target_os = "linux") {
+                tracing::debug!(title, "excluded Cap window has no native window id");
+            } else {
+                tracing::warn!(title, "excluded Cap window has no native window id");
+            }
             continue;
         };
         let Ok(id) = number.to_string().parse::<scap_targets::WindowId>() else {
@@ -2918,6 +2966,25 @@ fn apply_content_protection(
 pub fn restore_content_protection(cx: &mut App) {
     let windows = own_windows(cx);
     apply_content_protection(windows, |_| false, cx);
+}
+
+/// The Wayland app id and X11 class of every Cap window. It names the
+/// installed `Cap.desktop`, which is how GNOME, KDE and Hyprland attach a
+/// window to its launcher entry, icon and dock item; a window without it shows
+/// up as an unnamed "Unknown" app.
+#[cfg(target_os = "linux")]
+pub(crate) const APP_ID: &str = "Cap";
+
+/// The app id Cap's windows carry. GNOME Shell asks the portals' questions
+/// (screenshot access) only for the focused app, matched as the window's app
+/// id against the id Cap gave the portals, so a launch that named itself
+/// `so.cap.Cap` there names its windows the same.
+#[cfg(target_os = "linux")]
+pub(crate) fn app_id() -> &'static str {
+    if crate::linux_portal_id::windows_use_portal_app_id() {
+        return crate::linux_portal_id::PORTAL_APP_ID;
+    }
+    APP_ID
 }
 
 #[cfg(target_os = "linux")]
@@ -3194,7 +3261,12 @@ pub fn handle_owned_clean_capture_shortcut(
 }
 
 #[cfg(target_os = "linux")]
-pub fn clean_capture_stop_unavailable(generation: u64, error: String, cx: &mut App) {
+pub fn clean_capture_stop_unavailable(
+    generation: u64,
+    error: String,
+    stop_was_ready: bool,
+    cx: &mut App,
+) {
     if !clean_capture_generation_matches(generation, cx) {
         return;
     }
@@ -3208,6 +3280,29 @@ pub fn clean_capture_stop_unavailable(generation: u64, error: String, cx: &mut A
     }
     let session = RecordingSession::global(cx);
     if session.read(cx).phase == Phase::Idle {
+        if let Some(config) = visible_fallback_start(&error, stop_was_ready, cx) {
+            // Without a tray or a granted shortcut, nothing could stop a
+            // recording that hides Cap. Record with the controls on screen
+            // instead of not at all.
+            tracing::warn!(%error, "no recording Stop control is available; recording with Cap's controls visible");
+            let wayland = cx
+                .global::<AppWindows>()
+                .clean_capture
+                .as_ref()
+                .is_some_and(|lease| lease.wayland);
+            if wayland {
+                if let Some(lease) = cx.global_mut::<AppWindows>().clean_capture.as_mut() {
+                    lease.visible_fallback = Some(config);
+                }
+                cancel_clean_capture(cx);
+            } else {
+                cancel_clean_capture(cx);
+                if cx.global::<AppWindows>().clean_capture.is_none() {
+                    begin_recording_after_preflight(config, cx);
+                }
+            }
+            return;
+        }
         cancel_clean_capture(cx);
         report_clean_capture_error(anyhow::Error::msg(error), cx);
     } else {
@@ -3216,6 +3311,32 @@ pub fn clean_capture_stop_unavailable(generation: u64, error: String, cx: &mut A
             session.stop(cx);
         });
     }
+}
+
+/// The start a Stop control failure can still record, with visible controls:
+/// only before the control ever worked, when its registration was cleaned up,
+/// and not for a recording appended to an open editor.
+#[cfg(target_os = "linux")]
+fn visible_fallback_start(error: &str, stop_was_ready: bool, cx: &mut App) -> Option<StartConfig> {
+    if !visible_fallback_allowed(error, stop_was_ready)
+        || RecordingSession::global(cx)
+            .read(cx)
+            .editor_recording_target()
+            .is_some()
+    {
+        return None;
+    }
+    cx.global_mut::<AppWindows>()
+        .clean_capture
+        .as_mut()
+        .and_then(|lease| lease.config.take())
+}
+
+#[cfg(target_os = "linux")]
+fn visible_fallback_allowed(error: &str, stop_was_ready: bool) -> bool {
+    !stop_was_ready
+        && !error.contains("could not be cleaned up safely")
+        && !error.contains("cleanup is unconfirmed")
 }
 
 #[cfg(target_os = "linux")]
@@ -3286,6 +3407,7 @@ fn prepare_clean_capture(config: StartConfig, cx: &mut App) -> anyhow::Result<()
         wayland,
         restoring: false,
         restoration_error: None,
+        visible_fallback: None,
         retained_windows: if wayland {
             vec![(main.into(), main_was_visible)]
         } else {
@@ -3336,6 +3458,11 @@ fn report_clean_capture_error(error: anyhow::Error, cx: &mut App) {
 #[cfg(target_os = "linux")]
 pub type CleanVisibility = futures_util::future::BoxFuture<'static, anyhow::Result<()>>;
 
+/// The gpui fork's error for a retained visibility request replaced by a newer
+/// one (`apps/desktop-gpui/patches/zed-linux.patch`).
+#[cfg(target_os = "linux")]
+const VISIBILITY_SUPERSEDED: &str = "Window visibility request superseded";
+
 #[cfg(target_os = "linux")]
 fn observe_visibility<F, E>(receipt: F, visible: bool, cx: &mut App)
 where
@@ -3357,6 +3484,11 @@ where
             .map_err(|error| error.to_string())
             .and_then(|result| result.map_err(|error| error.to_string()))
         {
+            // A newer show or hide replaced this one and reports for itself.
+            if error == VISIBILITY_SUPERSEDED {
+                tracing::debug!(visible, "retained window visibility request superseded");
+                return;
+            }
             tracing::error!(%error, "Could not restore retained window visibility");
         }
     })
@@ -3545,14 +3677,21 @@ fn begin_retained_capture_restore(cx: &mut App) {
             if !clean_capture_generation_matches(generation, cx) { return; }
             match result {
                 Ok(()) => {
+                    tracing::info!("recording UI restored after a clean capture");
                     crate::hotkeys::complete_clean_capture_stop(generation, cx);
-                    let _restored = cx.global_mut::<AppWindows>().clean_capture.take();
+                    let restored = cx.global_mut::<AppWindows>().clean_capture.take();
                     update_camera_presentation(true, cx);
                     RecordingSession::global(cx).update(cx, |_, cx| cx.notify());
+                    if let Some(config) = restored.and_then(|lease| lease.visible_fallback) {
+                        begin_recording_after_preflight(config, cx);
+                    }
                 }
                 Err(error) => {
                     if let Some(lease) = cx.global_mut::<AppWindows>().clean_capture.as_mut() {
                         lease.restoration_error = Some(error.clone());
+                        // A later retry only brings the windows back; it does
+                        // not start a recording nobody is asking for any more.
+                        lease.visible_fallback = None;
                     }
                     tracing::error!(%error, "Recording UI restoration or Stop cleanup is unconfirmed");
                     RecordingSession::global(cx).update(cx, |session, cx| {
@@ -3612,6 +3751,7 @@ fn restore_clean_capture_ui(cx: &mut App) -> bool {
         tracing::warn!(%error, "could not restore the main window");
     }
     update_camera_presentation(true, cx);
+    tracing::info!("recording UI restored after a clean capture");
     true
 }
 
@@ -3900,7 +4040,7 @@ pub fn open_camera_window(cx: &mut App) {
         })
         .or_else(scap_targets::Display::get_containing_cursor)
         .unwrap_or_else(scap_targets::Display::primary);
-    let (x, y) = camera_window::opening_position(&display);
+    let (x, y) = camera_window::opening_position(&display, (width, height));
     let display_id = gpui_display_id(Some(&display), cx);
 
     let inline = camera_preview_is_inline(cx);
@@ -3919,7 +4059,7 @@ pub fn open_camera_window(cx: &mut App) {
                 ..Default::default()
             }),
             #[cfg(target_os = "linux")]
-            app_id: Some("Cap".into()),
+            app_id: Some(crate::app_windows::app_id().into()),
             #[cfg(target_os = "linux")]
             window_decorations: Some(gpui::WindowDecorations::Client),
             // Non-activating panel, same as the bar: the bubble is clickable
@@ -4778,6 +4918,8 @@ fn open_editor_window(
 
     let handle = cx.open_window(
         WindowOptions {
+            #[cfg(target_os = "linux")]
+            app_id: Some(crate::app_windows::app_id().into()),
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             display_id,
             // Native traffic lights, inset to (20, 32):
@@ -5670,6 +5812,10 @@ async fn drive_auto_sidebar(handle: WindowHandle<EditorWindow>, cx: &mut gpui::A
     let add_track = std::env::var("CAP_GPUI_AUTO_ADD_TRACK").ok();
     let generate_zoom =
         std::env::var("CAP_GPUI_AUTO_GENERATE_ZOOM").is_ok_and(|value| value == "1");
+    let pick_background =
+        std::env::var("CAP_GPUI_AUTO_PICK_BACKGROUND").is_ok_and(|value| value == "1");
+    let desktop_background =
+        std::env::var("CAP_GPUI_AUTO_DESKTOP_BACKGROUND").is_ok_and(|value| value == "1");
     if tab.is_none()
         && select.is_none()
         && canvas.is_none()
@@ -5678,12 +5824,22 @@ async fn drive_auto_sidebar(handle: WindowHandle<EditorWindow>, cx: &mut gpui::A
         && camera3d.is_none()
         && add_track.is_none()
         && !generate_zoom
+        && !pick_background
+        && !desktop_background
     {
         return;
     }
     cx.background_executor()
         .timer(std::time::Duration::from_millis(1200))
         .await;
+
+    if desktop_background {
+        handle
+            .update(cx, |view, window, cx| {
+                view.import_desktop_background(window, cx)
+            })
+            .ok();
+    }
 
     if let Some(spec) = tab {
         let (name, scroll) = match spec.split_once(':') {
@@ -5709,6 +5865,14 @@ async fn drive_auto_sidebar(handle: WindowHandle<EditorWindow>, cx: &mut gpui::A
     if generate_zoom {
         handle
             .update(cx, |view, window, cx| view.generate_auto_zoom(window, cx))
+            .ok();
+    }
+
+    if pick_background {
+        handle
+            .update(cx, |view, window, cx| {
+                view.pick_background_image(window, cx)
+            })
             .ok();
     }
 
@@ -6556,6 +6720,8 @@ fn open_controls(
 
     let handle = cx.open_window(
         WindowOptions {
+            #[cfg(target_os = "linux")]
+            app_id: Some(crate::app_windows::app_id().into()),
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             display_id,
             // No titlebar at all: with one, the panel still draws standard
@@ -6735,6 +6901,8 @@ pub fn open_screenshot_editor(path: PathBuf, cx: &mut App) {
 
     let handle = cx.open_window(
         WindowOptions {
+            #[cfg(target_os = "linux")]
+            app_id: Some(crate::app_windows::app_id().into()),
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             display_id,
             titlebar: Some(gpui::TitlebarOptions {
@@ -6883,6 +7051,7 @@ pub fn refresh_library_after_delete(cx: &mut App) {
             .update(cx, |view, window, cx| view.refresh_recordings(window, cx))
             .ok();
     }
+    crate::tray::refresh_previous(cx);
 }
 
 fn close_controls(session: &Entity<RecordingSession>, cx: &mut App) {
@@ -6899,6 +7068,33 @@ mod tests {
     use super::*;
     use crate::store::{DEFAULT_EXCLUDED_WINDOW_TITLES, WindowExclusion, default_excluded_windows};
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_start_without_any_stop_control_records_with_visible_controls() {
+        // No tray watcher and no granted shortcut, before either ever worked.
+        assert!(visible_fallback_allowed(
+            "Portal request failed: org.freedesktop.portal.Error.NotAllowed: An app id is required",
+            false,
+        ));
+        assert!(visible_fallback_allowed(
+            "The recording Stop worker ended",
+            false
+        ));
+        // A control that worked and then vanished keeps the existing stop.
+        assert!(!visible_fallback_allowed(
+            "The recording Stop tray is no longer available",
+            true
+        ));
+        // A registration that may still be live is not left behind.
+        assert!(!visible_fallback_allowed(
+            "The recording shortcut registration could not be cleaned up safely: timeout",
+            false,
+        ));
+        assert!(!visible_fallback_allowed(
+            "Recording Stop tray registration cleanup is unconfirmed: timeout",
+            false,
+        ));
+    }
     #[test]
     fn small_display_keeps_editor_and_minimum_size_inside_the_work_area() {
         let available = inset_work_area(Bounds {
@@ -7175,6 +7371,7 @@ mod tests {
             retained_windows: Vec::new(),
             restoring: false,
             restoration_error: None,
+            visible_fallback: None,
         }
     }
 

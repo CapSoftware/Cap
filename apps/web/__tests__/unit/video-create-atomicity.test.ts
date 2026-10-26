@@ -1,4 +1,4 @@
-import { Organisation, User, Video } from "@cap/web-domain";
+import { Folder, Organisation, User, Video } from "@cap/web-domain";
 import { Effect, Option } from "effect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -7,15 +7,18 @@ import {
 } from "../../../../packages/web-backend/src/Videos/VideosRepo";
 
 type Row = Record<string, unknown>;
+type Predicate = (row: Row) => boolean;
 type Store = {
 	videos: Map<string, Row>;
 	uploads: Map<string, Row>;
+	folders: Map<string, Row>;
 };
 
 const mocks = vi.hoisted(() => ({
 	store: {
 		videos: new Map<string, Row>(),
 		uploads: new Map<string, Row>(),
+		folders: new Map<string, Row>(),
 	} as Store,
 	rejectUpload: false,
 	transactionCalls: 0,
@@ -27,11 +30,13 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@cap/database", () => {
-	type Table = { name: "video" | "upload" };
+	type Table = { name: "video" | "upload" | "folder" };
 	type Client = {
 		insert: (table: Table) => { values: (row: Row | Row[]) => Promise<void> };
 		select: () => {
-			from: (table: Table) => { where: () => Promise<Row[]> };
+			from: (table: Table) => {
+				where: (predicate: Predicate) => Promise<Row[]>;
+			};
 		};
 		transaction: (run: (tx: Client) => Promise<unknown>) => Promise<unknown>;
 	};
@@ -51,8 +56,10 @@ vi.mock("@cap/database", () => {
 			}),
 			select: () => ({
 				from: (table) => ({
-					where: async () =>
-						table.name === "video" ? [...store.videos.values()] : [],
+					where: async (predicate) => {
+						const rows = table.name === "folder" ? store.folders : store.videos;
+						return [...rows.values()].filter(predicate);
+					},
 				}),
 			}),
 			transaction: async (run) => {
@@ -60,6 +67,7 @@ vi.mock("@cap/database", () => {
 				const candidate = {
 					videos: new Map(store.videos),
 					uploads: new Map(store.uploads),
+					folders: new Map(store.folders),
 				};
 				const result = await run(makeClient(candidate));
 				mocks.store = candidate;
@@ -77,6 +85,13 @@ vi.mock("@cap/database/auth/session", () => ({
 vi.mock("@cap/database/helpers", () => ({ nanoId: () => "fixture-video" }));
 vi.mock("@cap/database/schema", () => ({
 	videos: { name: "video", id: "id" },
+	folders: {
+		name: "folder",
+		id: "id",
+		organizationId: "organizationId",
+		createdById: "createdById",
+		spaceId: "spaceId",
+	},
 	videoUploads: { name: "upload", videoId: "videoId" },
 }));
 // The real lookup reads `organizations`, which this transaction mock does not
@@ -102,7 +117,18 @@ vi.mock("@/lib/server", async () => ({
 }));
 vi.mock("next/cache", () => ({ revalidatePath: mocks.revalidatePath }));
 vi.mock("drizzle-orm", () => ({
-	eq: (_field: unknown, value: unknown) => value,
+	eq:
+		(field: string, value: unknown): Predicate =>
+		(row) =>
+			row[field] === value,
+	and:
+		(...predicates: Predicate[]): Predicate =>
+		(row) =>
+			predicates.every((predicate) => predicate(row)),
+	isNull:
+		(field: string): Predicate =>
+		(row) =>
+			row[field] === null,
 }));
 
 import { createVideoForServerProcessing } from "@/actions/video/create-for-processing";
@@ -145,7 +171,7 @@ function createRepoVideo(initialUpload?: {
 }
 
 beforeEach(() => {
-	mocks.store = { videos: new Map(), uploads: new Map() };
+	mocks.store = { videos: new Map(), uploads: new Map(), folders: new Map() };
 	mocks.rejectUpload = false;
 	mocks.transactionCalls = 0;
 	mocks.currentUser.mockResolvedValue({ id: "fixture-user" });
@@ -286,5 +312,84 @@ describe("VideosRepo.create", () => {
 		expect(mocks.transactionCalls).toBe(1);
 		expect(mocks.store.videos.get(id)?.id).toBe(id);
 		expect(mocks.store.uploads.size).toBe(0);
+	});
+});
+
+describe.each([
+	{
+		name: "video file import",
+		create: (folderId?: Folder.FolderId) =>
+			createVideoForServerProcessing({ orgId, folderId }),
+	},
+	{
+		name: "image file import",
+		create: (folderId?: Folder.FolderId) =>
+			createVideoAndGetUploadUrl({
+				orgId,
+				folderId,
+				isUpload: true,
+				isScreenshot: true,
+			}),
+	},
+])("$name destination", ({ create }) => {
+	const folderId = Folder.FolderId.make("fixture-folder");
+	const personalFolder = {
+		id: folderId,
+		organizationId: orgId,
+		createdById: "fixture-user",
+		spaceId: null,
+	};
+
+	it.each([
+		{ name: "missing folder", folder: undefined },
+		{
+			name: "a different folder",
+			folder: { ...personalFolder, id: "different-folder" },
+		},
+		{
+			name: "another user's personal folder",
+			folder: { ...personalFolder, createdById: "other-user" },
+		},
+		{
+			name: "own folder in another organization",
+			folder: { ...personalFolder, organizationId: "other-org" },
+		},
+		{
+			name: "space folder",
+			folder: { ...personalFolder, spaceId: "fixture-space" },
+		},
+		{
+			name: "organization folder",
+			folder: { ...personalFolder, spaceId: orgId },
+		},
+	])(
+		"rejects $name before signing or creating an upload",
+		async ({ folder }) => {
+			if (folder) mocks.store.folders.set(folderId, folder);
+
+			await expect(create(folderId)).rejects.toThrow("Folder not found");
+
+			expect(mocks.createUploadTargetForUser).not.toHaveBeenCalled();
+			expect(mocks.store.videos.size).toBe(0);
+			expect(mocks.store.uploads.size).toBe(0);
+			expect(mocks.transactionCalls).toBe(0);
+			expect(mocks.revalidatePath).not.toHaveBeenCalled();
+		},
+	);
+
+	it("accepts an owned personal folder in the selected organization", async () => {
+		mocks.store.folders.set(folderId, personalFolder);
+
+		const result = await create(folderId);
+
+		expect(mocks.store.videos.get(result.id)?.folderId).toBe(folderId);
+		expect(mocks.createUploadTargetForUser).toHaveBeenCalledOnce();
+	});
+
+	it("accepts an import without a folder", async () => {
+		const result = await create();
+
+		expect(mocks.store.videos.get(result.id)?.folderId).toBeUndefined();
+		expect(mocks.createUploadTargetForUser).toHaveBeenCalledOnce();
 	});
 });

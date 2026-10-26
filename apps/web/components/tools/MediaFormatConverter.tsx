@@ -251,8 +251,15 @@ export const MediaFormatConverter = ({
 	};
 
 	const validateAndSetFile = (selectedFile: File) => {
+		if (isConverting) return;
+
 		setError(null);
+		setFile(null);
+		if (outputUrl) {
+			URL.revokeObjectURL(outputUrl);
+		}
 		setOutputUrl(null);
+		recordedChunksRef.current = [];
 
 		const expectedMimeType = getMimeType(currentSourceFormat);
 
@@ -712,7 +719,7 @@ export const MediaFormatConverter = ({
 		const fileExtension = `.${currentSourceFormat}`;
 		const newExtension = `.${actualExtension}`;
 		const downloadFileName = file.name.replace(
-			new RegExp(`${fileExtension}$`),
+			new RegExp(`${fileExtension}$`, "i"),
 			newExtension,
 		);
 
@@ -974,6 +981,7 @@ export const MediaFormatConverter = ({
 				<input
 					type="file"
 					accept={getAcceptAttribute(currentSourceFormat)}
+					disabled={isConverting}
 					className="hidden"
 					onChange={handleFileChange}
 					ref={fileInputRef}
