@@ -64,6 +64,11 @@ with a PNG first, as Omarchy does on Hyprland.
 `SCENARIO=register` launches Cap from a shell `ROUNDS` times, each time once
 with its `so.cap.Cap.desktop` entry removed and once with it in place, and
 counts the launches that registered the app id with the portals.
+`AREA=x,y,width,height` makes the start-stop scenario record that area of the
+display and check the video is its size.
+`SCENARIO=export` records a clip, opens it in the editor and exports it to an
+MP4 and to a GIF (`CAP_GPUI_AUTO_EXPORT`), checking the length each file
+declares.
 
 `report.sh <out-dir>` prints the results with Cap's own log lines. The
 Hyprland image needs `modprobe vkms` on the host. With `GNOME_UNSAFE=1`,
@@ -84,6 +89,13 @@ real login activates.
   display track, about five seconds, and fails if any result is missing. It
   needs root for modprobe, and runs in the Hyprland job, whose hosted runner
   can build the module.
+- `x11-capture.sh <cap-gpui> <ffmpeg lib dir> <out-dir>` records the display,
+  an area and another app's window on Xvfb (MIT-SHM capture, no portal),
+  pressing the Stop shortcut with real X input where Cap waits for it, records
+  the microphone and system audio from a tone a private PulseAudio plays, takes
+  a screenshot, and checks the size, length and loudness of each result. It also
+  checks the window picker offers the other app's window rather than one of
+  Cap's own.
 
 - `niri-screencast/run.sh` records through Cap's PipeWire capture loop from a
   producer that negotiates and shares frames the way niri 26.04 does: a

@@ -6,7 +6,7 @@
 #
 # Env: HARNESS_OUT, LAUNCH (dock|terminal), RECORD_MODE (studio|instant),
 #      PRESS_AFTER (seconds; with no tray item by then, press the shortcut),
-#      TRAY_CLICK (host|pointer).
+#      TRAY_CLICK (host|pointer), AREA (x,y,width,height).
 set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 export XDG_RUNTIME_DIR=/run/user/$(id -u)
@@ -174,7 +174,9 @@ if [[ ${TRAY_CLICK:-host} == pointer || ${GNOME_TRAY:-1} == 0 ]]; then
   read -r -t 10 ready <&"${POINTER[0]}"
   echo "$ready" >>"$out/actions.log"
 fi
-pid=$("$here/launch-cap.sh" cap CAP_GPUI_AUTO_RECORD="$mode:${AUTO_STOP_SECS:-900}" CAP_GPUI_AUTO_OVERLAY=display)
+target=(CAP_GPUI_AUTO_OVERLAY=display)
+[[ -n ${AREA:-} ]] && target=(CAP_GPUI_AUTO_OVERLAY=area CAP_GPUI_AUTO_AREA="$AREA")
+pid=$("$here/launch-cap.sh" cap CAP_GPUI_AUTO_RECORD="$mode:${AUTO_STOP_SECS:-900}" "${target[@]}")
 attempt 1
 
 result cap_alive "$(kill -0 "$pid" 2>/dev/null && echo yes || echo no)"
@@ -190,6 +192,23 @@ result pipeline_failed "$(count 'recording pipeline failed')"
 crashes="$out/profile/logs/cap-gpui.log.crashes"
 result panics "$(( $(count 'panicked at\|cap_desktop_panic\|panic location') + $(grep -E 'panic thread=|native crash' "$crashes" 2>/dev/null | wc -l) ))"
 result projects "$(find "$out/profile/recordings" -maxdepth 1 -name '*.cap' | wc -l)"
+if [[ -n ${AREA:-} ]]; then
+  video=$(find "$out/profile/recordings" -path "*segment-0/display.mp4" | head -1)
+  size=""
+  [[ -n $video ]] && size=$(python3 -c 'import struct, sys
+data = open(sys.argv[1], "rb").read()
+at = data.find(b"tkhd")
+while at != -1:
+    body = at + 4
+    width, height = struct.unpack(">II", data[body + (88 if data[body] == 1 else 76) :][:8])
+    if width and height:
+        print(width >> 16, height >> 16)
+        break
+    at = data.find(b"tkhd", at + 4)' "$video")
+  echo "area video: ${video:-none} ${size:-}" >>"$out/actions.log"
+  IFS=, read -r _ _ area_width area_height <<<"$AREA"
+  result area_video "$([[ $size == "$area_width $area_height" ]] && echo yes || echo no)"
+fi
 kill "$pid" 2>/dev/null
 sleep 1
 cat "$out/result.txt"
