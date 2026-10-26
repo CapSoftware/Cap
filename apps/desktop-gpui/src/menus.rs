@@ -317,7 +317,8 @@ pub(crate) fn reapply_update_row(cx: &mut App) {
 
 fn install_menus(cx: &mut App) {
     let update_status = updates::status(cx);
-    cx.set_menus(build_menus(&update_status));
+    let settings_enabled = !crate::app_windows::onboarding_is_open(cx);
+    cx.set_menus(build_menus(&update_status, settings_enabled));
     #[cfg(target_os = "macos")]
     platform::patch_standard_application_menu();
 }
@@ -342,7 +343,7 @@ fn settings_shortcut_allowed(idle: bool, onboarding_open: bool, hotkeys_paused: 
 ///
 /// One-to-one with `build_macos_app_menu`, including the empty Help submenu
 /// (`Submenu::with_id_and_items(.., HELP_SUBMENU_ID, "Help", true, &[])`).
-pub fn build_menus(update_status: &updates::UpdateStatus) -> Vec<Menu> {
+pub fn build_menus(update_status: &updates::UpdateStatus, settings_enabled: bool) -> Vec<Menu> {
     let update_row = UpdateRow::of(update_status);
 
     vec![
@@ -353,7 +354,8 @@ pub fn build_menus(update_status: &updates::UpdateStatus) -> Vec<Menu> {
                 MenuItem::action(tr::menu::app::about(), About),
                 MenuItem::action(update_row.title, CheckForUpdate).disabled(!update_row.enabled),
                 MenuItem::separator(),
-                MenuItem::action(tr::menu::app::settings(), OpenSettings),
+                MenuItem::action(tr::menu::app::settings(), OpenSettings)
+                    .disabled(!settings_enabled),
                 MenuItem::separator(),
                 MenuItem::os_submenu(tr::menu::app::services(), SystemMenuType::Services),
                 MenuItem::separator(),
@@ -1220,7 +1222,7 @@ mod tests {
 
     #[test]
     fn menu_bar_includes_native_and_cap_destinations() {
-        let menus: Vec<_> = build_menus(&updates::UpdateStatus::Idle)
+        let menus: Vec<_> = build_menus(&updates::UpdateStatus::Idle, true)
             .iter()
             .map(describe)
             .collect();
@@ -1296,7 +1298,7 @@ mod tests {
     #[test]
     fn the_update_row_greys_out_while_busy() {
         fn row(status: &updates::UpdateStatus) -> (String, bool) {
-            let menus = build_menus(status);
+            let menus = build_menus(status, true);
             match &menus[0].items[1] {
                 MenuItem::Action { name, disabled, .. } => (name.to_string(), *disabled),
                 _ => panic!("the update row is an action"),

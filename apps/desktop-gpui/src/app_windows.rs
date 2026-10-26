@@ -1461,6 +1461,7 @@ pub fn open_onboarding(cx: &mut App) {
     .detach();
     hide_main_and_park_camera_preview(cx);
     crate::tray::refresh_menu(cx);
+    crate::menus::refresh(cx);
 }
 
 pub fn onboarding_finished(cx: &mut App) {
@@ -1471,6 +1472,7 @@ pub fn onboarding_finished(cx: &mut App) {
             .ok();
     }
     crate::tray::refresh_menu(cx);
+    crate::menus::refresh(cx);
     show_main_window(cx);
 }
 
@@ -1487,6 +1489,7 @@ pub fn onboarding_closed(cx: &mut App) {
     crate::permission_guide::stop(cx);
     cx.global_mut::<AppWindows>().onboarding.take();
     crate::tray::refresh_menu(cx);
+    crate::menus::refresh(cx);
     if !crate::store::should_show_onboarding() {
         show_main_window(cx);
     }
