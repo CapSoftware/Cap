@@ -346,6 +346,18 @@ jobs:
             grep -qx "$line" "$RUNNER_TEMP/out/hyprland-screenshot/result.txt"
           done
 
+      # The hosted runner can build v4l2loopback; Blacksmith's kernel cannot.
+      - name: Install Linux desktop dependencies
+        uses: ./.github/actions/install-desktop-deps
+
+      - name: X11 recording with a camera
+        run: |
+          sudo apt-get install -y -qq "linux-headers-$(uname -r)" v4l2loopback-dkms xvfb xdotool ffmpeg dbus >/dev/null
+          chmod +x "$RUNNER_TEMP/build/cap-gpui"
+          sudo install -d -o "$(id -u)" -g "$(id -g)" "$RUNNER_TEMP/out/x11-camera"
+          bash scripts/linux-desktop-harness/x11-camera.sh "$RUNNER_TEMP/build/cap-gpui" "$RUNNER_TEMP/build/libs" \
+            "$RUNNER_TEMP/out/x11-camera"
+
       - name: Hyprland clipboard (Ctrl+V into and Ctrl+C out of a text field)
         env:
           SCENARIO: clipboard
