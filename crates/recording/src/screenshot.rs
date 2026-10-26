@@ -1857,8 +1857,6 @@ fn screenshot_scaler_builds() -> u64 {
     SCREENSHOT_SCALER.with(|slot| slot.borrow().builds)
 }
 
-/// Pack one BGRZ/BGRA plane into tightly packed RGB24.
-///
 /// Returns `None` when the geometry is unusable or SSSE3 is unavailable, so the
 /// caller can fall back to swscale.
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
