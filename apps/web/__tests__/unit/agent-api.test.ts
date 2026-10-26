@@ -79,13 +79,13 @@ describe("agent API normalization", () => {
 
 	it("preserves spoken arrows inside cue text and stops only at actual time boundaries", () => {
 		const cues = parseAgentVtt(
-			"WEBVTT\\n\\n00:00:01.000 --> 00:00:02.000\\nThe message says --> continue\\nA -> B, not a timing cue\\n00:00:02.000 --> 00:00:03.500\\nNext sentence\\n",
+			"WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nThe message says --> continue\nA -> B, not a timing cue\n00:00:02.000 --> 00:00:03.500\nNext sentence\n",
 		);
 		expect(cues).toEqual([
 			{
 				startMs: 1_000,
 				endMs: 2_000,
-				text: "The message says --> continue\\nA -> B, not a timing cue",
+				text: "The message says --> continue\nA -> B, not a timing cue",
 			},
 			{ startMs: 2_000, endMs: 3_500, text: "Next sentence" },
 		]);
