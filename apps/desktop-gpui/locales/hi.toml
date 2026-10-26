@@ -111,7 +111,10 @@ system_default = "सिस्टम डिफ़ॉल्ट ({language})"
 title = "भाषा"
 
 [settings.general.appearance]
+dark = "डार्क"
 description = "Cap को अपने सिस्टम की थीम के अनुसार रखें या एक तय रूप चुनें।"
+light = "लाइट"
+system = "सिस्टम"
 title = "रूप"
 
 [settings.general.app]

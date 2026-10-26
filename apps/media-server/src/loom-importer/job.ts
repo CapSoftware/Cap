@@ -27,6 +27,7 @@ import {
 	type Semaphore,
 } from "./fetch";
 import {
+	buildAudioOnlyArgs,
 	buildRemuxArgs,
 	chooseContainer,
 	PLAYLIST_INPUT_ARGS,
@@ -175,6 +176,7 @@ function progressUpdate(
 interface PreparedSource {
 	input: string;
 	inputArgs: string[];
+	skippedSeconds: number;
 }
 
 async function prepareSource(
@@ -202,7 +204,7 @@ async function prepareSource(
 		);
 		if (result.bytes > maxBytes)
 			throw new Error("Loom imports are limited to 10 GB");
-		return { input: sourcePath, inputArgs: [] };
+		return { input: sourcePath, inputArgs: [], skippedSeconds: 0 };
 	}
 	const manifestDir = join(workDir, "manifest");
 	const segmentDir = join(workDir, "segments");
@@ -242,6 +244,7 @@ async function prepareSource(
 	return {
 		input: prefetched.masterPath,
 		inputArgs: PLAYLIST_INPUT_ARGS(await getFfmpegHlsCapabilities()),
+		skippedSeconds: prefetched.skippedSeconds,
 	};
 }
 
@@ -345,7 +348,10 @@ export async function runLoomImport(
 				signal,
 			);
 			const codecs = await probeCodecs(source.inputArgs, source.input, signal);
-			const container = chooseContainer(codecs);
+			const container =
+				codecs.video === null && codecs.audio !== null
+					? "audio-only"
+					: chooseContainer(codecs);
 			if (!container)
 				throw new UnsupportedStreamError(
 					`Loom source codecs are not supported (${codecs.video ?? "none"}/${codecs.audio ?? "none"})`,
@@ -357,16 +363,26 @@ export async function runLoomImport(
 			progressUpdate(job.jobId, "processing", 65, "Packaging video...");
 			outputPath = join(
 				workDir,
-				container === "mp4" ? "result.mp4" : "original.webm",
+				container === "webm" ? "original.webm" : "result.mp4",
 			);
 			await runCommand(
-				buildRemuxArgs(
-					source.inputArgs,
-					source.input,
-					outputPath,
-					container,
-					codecs.audio !== null,
-				),
+				container === "audio-only" && codecs.audio
+					? buildAudioOnlyArgs(
+							source.inputArgs,
+							source.input,
+							outputPath,
+							codecs.audio,
+							codecs.duration === null
+								? null
+								: codecs.duration + source.skippedSeconds,
+						)
+					: buildRemuxArgs(
+							source.inputArgs,
+							source.input,
+							outputPath,
+							container === "webm" ? "webm" : "mp4",
+							codecs.audio !== null,
+						),
 				settings.remuxTimeoutMs,
 				signal,
 			);

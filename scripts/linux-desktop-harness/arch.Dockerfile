@@ -8,7 +8,7 @@ RUN pacman -Syu --noconfirm --needed \
       systemd dbus seatd sway hyprland niri waybar \
       xdg-desktop-portal xdg-desktop-portal-hyprland xdg-desktop-portal-gnome xdg-desktop-portal-wlr \
       pipewire wireplumber pipewire-pulse mesa vulkan-swrast vulkan-icd-loader \
-      python python-gobject glib2 procps-ng psmisc fuse2 ttf-dejavu \
+      python python-gobject glib2 procps-ng psmisc fuse2 ttf-dejavu wtype wl-clipboard swaybg \
     && pacman -Scc --noconfirm
 RUN useradd -m -u 1001 -G seat,video,render tester \
     && mkdir -p /var/lib/systemd/linger && touch /var/lib/systemd/linger/tester \

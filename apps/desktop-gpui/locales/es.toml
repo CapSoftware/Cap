@@ -111,7 +111,10 @@ system_default = "Predeterminado del sistema ({language})"
 title = "Idioma"
 
 [settings.general.appearance]
+dark = "Oscuro"
 description = "Adapta Cap al tema de tu sistema o elige un aspecto fijo."
+light = "Claro"
+system = "Sistema"
 title = "Apariencia"
 
 [settings.general.app]

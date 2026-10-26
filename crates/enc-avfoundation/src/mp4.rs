@@ -4347,6 +4347,72 @@ mod tests {
             assert!(packets >= 88, "{format:?}: {packets} of 90 frames written");
         }
     }
+
+    /// A virtual camera that delivers another size than it negotiated from
+    /// its very first frame (GitHub #2724: 1280x720 advertised, 3840x2160
+    /// delivered, and the reverse). Every frame was dropped, nothing was ever
+    /// written, and the camera track failed at stop with NotWriting.
+    #[test]
+    fn camera_frames_of_another_size_from_the_first_frame_are_kept() {
+        for ((writer_width, writer_height), (frame_width, frame_height)) in
+            [((1280, 720), (3840, 2160)), ((3840, 2160), (1280, 720))]
+        {
+            for format in [
+                cidre::cv::PixelFormat::_32_BGRA,
+                cidre::cv::PixelFormat::_2VUY,
+                cidre::cv::PixelFormat::_420V,
+            ] {
+                let case = format!(
+                    "{writer_width}x{writer_height} writer, {frame_width}x{frame_height} {format:?} frames"
+                );
+                let output = test_output_path("camera_size_from_first_frame");
+                let pixel = if format == cidre::cv::PixelFormat::_32_BGRA {
+                    ffmpeg::format::Pixel::BGRA
+                } else if format == cidre::cv::PixelFormat::_2VUY {
+                    ffmpeg::format::Pixel::UYVY422
+                } else {
+                    ffmpeg::format::Pixel::NV12
+                };
+                let config = VideoInfo::from_raw_ffmpeg(pixel, writer_width, writer_height, 30);
+                let mut encoder = MP4Encoder::init(output.clone(), config, None, None).unwrap();
+                let pool = create_pixel_buffer_pool_with_format(
+                    frame_width as usize,
+                    frame_height as usize,
+                    format,
+                );
+                for index in 0..30i64 {
+                    let frame = create_test_video_frame(&pool, index * 33_333, 33_333);
+                    queue_video_frame_with_retry(
+                        &mut encoder,
+                        frame,
+                        Duration::from_micros(index as u64 * 33_333),
+                    )
+                    .unwrap();
+                }
+                encoder
+                    .finish(Some(Duration::from_micros(30 * 33_333)))
+                    .unwrap_or_else(|error| panic!("{case}: finish failed: {error:?}"));
+
+                let mut input = ffmpeg::format::input(&output).unwrap();
+                let stream = input.streams().best(ffmpeg::media::Type::Video).unwrap();
+                let index = stream.index();
+                let decoder = ffmpeg::codec::Context::from_parameters(stream.parameters())
+                    .unwrap()
+                    .decoder()
+                    .video()
+                    .unwrap();
+                let size = (decoder.width(), decoder.height());
+                let packets = input
+                    .packets()
+                    .filter(|(stream, _)| stream.index() == index)
+                    .count();
+                let _ = std::fs::remove_file(&output);
+
+                assert_eq!(size, (writer_width, writer_height), "{case}");
+                assert!(packets >= 28, "{case}: {packets} of 30 frames written");
+            }
+        }
+    }
 }
 
 trait SampleBufExt {

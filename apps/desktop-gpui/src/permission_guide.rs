@@ -113,7 +113,7 @@ pub fn start(permission: OSPermission, cx: &mut App) {
     let opened = cx.open_window(
         WindowOptions {
             #[cfg(target_os = "linux")]
-            app_id: Some(crate::app_windows::APP_ID.into()),
+            app_id: Some(crate::app_windows::app_id().into()),
             window_bounds: Some(WindowBounds::Windowed(Bounds {
                 origin: point(px(0.), px(0.)),
                 size: size(px(PANEL_W), px(PANEL_H)),

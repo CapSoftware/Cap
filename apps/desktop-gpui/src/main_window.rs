@@ -2001,6 +2001,9 @@ impl MainWindow {
             self.set_microphone_selection(None, cx);
         }
         let required_window = auto_window_title();
+        // Pause and stop go to the session: on Linux the main window is not
+        // there while a window or Instant recording runs.
+        let session = self.session.clone();
 
         cx.spawn_in(window, async move |this, cx| {
             // Give enumeration and the first paint a moment; the recorder
@@ -2126,18 +2129,14 @@ impl MainWindow {
             }
 
             let third = std::time::Duration::from_secs(record_secs.div_ceil(3));
-            let toggle = |this: &gpui::WeakEntity<Self>, cx: &mut gpui::AsyncWindowContext| {
-                this.update_in(cx, |this, _, cx| {
-                    this.session
-                        .update(cx, |session, cx| session.toggle_pause(cx));
-                })
-                .ok();
+            let toggle = |cx: &gpui::AsyncApp| {
+                cx.update(|cx| session.update(cx, |session, cx| session.toggle_pause(cx)));
             };
             if pause_wiggle {
                 cx.background_executor().timer(third).await;
-                toggle(&this, cx);
+                toggle(cx);
                 cx.background_executor().timer(third).await;
-                toggle(&this, cx);
+                toggle(cx);
                 cx.background_executor().timer(third).await;
             } else {
                 cx.background_executor()
@@ -2145,10 +2144,8 @@ impl MainWindow {
                     .await;
             }
             tracing::info!("auto-record stop requested");
-            this.update_in(cx, |this, _, cx| {
-                this.session.update(cx, |session, cx| session.stop(cx));
-            })
-            .ok();
+            let app: &gpui::AsyncApp = cx;
+            app.update(|cx| session.update(cx, |session, cx| session.stop(cx)));
         })
         .detach();
     }
@@ -4786,7 +4783,7 @@ impl MainWindow {
                 } else if !studio && let Some(url) = &sharing {
                     cx.open_url(url);
                 } else if !studio {
-                    library::open_recording_folder(&path, mode);
+                    library::open_recording_folder(&path, mode, cx);
                 }
             }),
             actions,
@@ -4863,7 +4860,7 @@ impl MainWindow {
         row = row.child(self.library_action(
             ("lib-rec-folder", index),
             "icons/folder.svg",
-            move |_, _, _| library::open_recording_folder(&folder, mode),
+            move |_, _, cx| library::open_recording_folder(&folder, mode, cx),
         ));
         row.child(self.library_action(
             ("lib-rec-delete", index),
@@ -4945,7 +4942,7 @@ impl MainWindow {
             .child(
                 self.library_action(("lib-ss-open", index), "icons/folder.svg", {
                     let bundle = bundle.clone();
-                    move |_, _, _| library::reveal_in_folder(&bundle)
+                    move |_, _, cx| library::reveal_path(&bundle, cx)
                 }),
             )
             .child(self.library_action(

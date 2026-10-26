@@ -2649,9 +2649,9 @@ impl EditorWindow {
                                 ui::ButtonSize::Md,
                             )
                             .label("Open File")
-                            .on_click(move |_, _, _| {
+                            .on_click(move |_, _, cx| {
                                 if let Some(path) = &path {
-                                    library::open_path(path);
+                                    library::open_with_system(path, cx);
                                 }
                             }),
                         )
@@ -2736,6 +2736,7 @@ async fn confirm_export_resources(
     let result = async {
         let warning = check.map_err(|error| error.to_string())??;
         if let Some(message) = warning {
+            tracing::info!(%message, "export waits for the user to confirm its resources");
             #[cfg(target_os = "linux")]
             let confirmed = {
                 let response = loop {

@@ -113,7 +113,10 @@ system_default = { text = "System default ({language})", context = "{language} i
 title = "Language"
 
 [settings.general.appearance]
+dark = "Dark"
 description = "Match Cap to your system theme or pick a fixed look."
+light = "Light"
+system = "System"
 title = "Appearance"
 
 [settings.general.app]

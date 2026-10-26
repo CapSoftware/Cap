@@ -114,6 +114,9 @@ fn english_matches_the_literals_it_replaced() {
             tr::settings::general::appearance::title(),
             "Appearance".into(),
         ),
+        (tr::settings::general::appearance::system(), "System".into()),
+        (tr::settings::general::appearance::light(), "Light".into()),
+        (tr::settings::general::appearance::dark(), "Dark".into()),
         (
             tr::settings::general::app::description(),
             "Choose how Cap shows up on your system.".into(),
@@ -490,6 +493,54 @@ fn english_matches_the_literals_it_replaced() {
 }
 
 const NEW_IN_THE_LANGUAGE_PICKER: &str = "settings.general.language.";
+
+#[test]
+fn appearance_labels_follow_language_changes_without_changing_saved_values() {
+    use crate::store::{AppTheme, SettingsEnum};
+
+    const CHILD: &str = "CAP_GPUI_TEST_APPEARANCE_LABELS";
+    if std::env::var_os(CHILD).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "i18n::tests::appearance_labels_follow_language_changes_without_changing_saved_values",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .env_remove(LOCALE_ENV)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+
+    for (locale, labels) in [
+        (Locale::En, ["System", "Light", "Dark"]),
+        (Locale::ZhCn, ["跟随系统", "浅色", "深色"]),
+        (Locale::Ja, ["システム", "ライト", "ダーク"]),
+        (Locale::Fr, ["Système", "Clair", "Sombre"]),
+        (Locale::Es, ["Sistema", "Claro", "Oscuro"]),
+        (Locale::De, ["System", "Hell", "Dunkel"]),
+        (Locale::Hi, ["सिस्टम", "लाइट", "डार्क"]),
+        (Locale::En, ["System", "Light", "Dark"]),
+    ] {
+        init(Some(locale.code()));
+        for ((theme, label), saved) in AppTheme::ALL
+            .iter()
+            .zip(labels)
+            .zip(["system", "light", "dark"])
+        {
+            assert_eq!(theme.label(), label, "{} {saved}", locale.code());
+            assert_eq!(theme.as_json(), saved);
+            assert_eq!(AppTheme::from_json(saved), Some(*theme));
+        }
+    }
+}
 
 #[test]
 fn language_picker_english() {
