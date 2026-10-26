@@ -293,29 +293,32 @@ describe("AuthProvider", () => {
 			name: "an invalid HTTP response",
 			error: new MobileApiError("Invalid response", 502, null),
 		},
-	])("preserves a saved session after $name during bootstrap", async ({ error }) => {
-		secureStoreMock.getItemAsync.mockImplementation((key: string) => {
-			if (key === "cap.mobile.apiKey") return Promise.resolve("key_123");
-			if (key === "cap.mobile.userId") return Promise.resolve("user_123");
-			return Promise.resolve(null);
-		});
-		apiMock.bootstrap.mockRejectedValueOnce(error);
+	])(
+		"preserves a saved session after $name during bootstrap",
+		async ({ error }) => {
+			secureStoreMock.getItemAsync.mockImplementation((key: string) => {
+				if (key === "cap.mobile.apiKey") return Promise.resolve("key_123");
+				if (key === "cap.mobile.userId") return Promise.resolve("user_123");
+				return Promise.resolve(null);
+			});
+			apiMock.bootstrap.mockRejectedValueOnce(error);
 
-		await act(async () => {
-			TestRenderer.create(
-				React.createElement(AuthProvider, null, React.createElement(Probe)),
-			);
-			await flushMicrotasks();
-		});
+			await act(async () => {
+				TestRenderer.create(
+					React.createElement(AuthProvider, null, React.createElement(Probe)),
+				);
+				await flushMicrotasks();
+			});
 
-		expect(states.at(-1)).toMatchObject({
-			apiKey: "key_123",
-			status: "signedIn",
-			userId: "user_123",
-		});
-		expect(latestAuth?.bootstrap).toBeNull();
-		expect(secureStoreMock.deleteItemAsync).not.toHaveBeenCalled();
-	});
+			expect(states.at(-1)).toMatchObject({
+				apiKey: "key_123",
+				status: "signedIn",
+				userId: "user_123",
+			});
+			expect(latestAuth?.bootstrap).toBeNull();
+			expect(secureStoreMock.deleteItemAsync).not.toHaveBeenCalled();
+		},
+	);
 
 	it("does not restore account data when a refresh finishes after sign-out", async () => {
 		secureStoreMock.getItemAsync.mockImplementation((key: string) =>
