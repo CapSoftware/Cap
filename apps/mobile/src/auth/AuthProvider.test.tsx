@@ -1,6 +1,7 @@
 import React, { type ReactNode } from "react";
 import TestRenderer, { act } from "react-test-renderer";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MobileApiError } from "@/api/mobile";
 import { AuthProvider, useAuth } from "./AuthContext";
 
 type HostProps = {
@@ -66,9 +67,12 @@ vi.mock("expo-linking", () => ({
 
 vi.mock("expo-secure-store", () => secureStoreMock);
 
+vi.mock("expo-file-system/legacy", () => ({}));
+
 vi.mock("expo-web-browser", () => webBrowserMock);
 
-vi.mock("@/api/mobile", () => ({
+vi.mock("@/api/mobile", async (importOriginal) => ({
+	...(await importOriginal<{ MobileApiError: typeof MobileApiError }>()),
 	createMobileApiClient: vi.fn(() => ({
 		bootstrap: apiMock.bootstrap,
 		getAuthConfig: apiMock.getAuthConfig,
@@ -239,13 +243,15 @@ describe("AuthProvider", () => {
 		);
 	});
 
-	it("clears the stored user id when bootstrapping a stored session fails", async () => {
+	it("clears the stored session when the server rejects its credentials", async () => {
 		secureStoreMock.getItemAsync.mockImplementation((key: string) => {
 			if (key === "cap.mobile.apiKey") return Promise.resolve("key_123");
 			if (key === "cap.mobile.userId") return Promise.resolve("user_123");
 			return Promise.resolve(null);
 		});
-		apiMock.bootstrap.mockRejectedValueOnce(new Error("Session expired"));
+		apiMock.bootstrap.mockRejectedValueOnce(
+			new MobileApiError("Session expired", 401, null),
+		);
 
 		await act(async () => {
 			TestRenderer.create(
@@ -266,6 +272,40 @@ describe("AuthProvider", () => {
 			"cap.mobile.userId",
 		);
 	});
+
+	it.each([
+		new TypeError("Network request failed"),
+		new MobileApiError("Service unavailable", 503, null),
+		new MobileApiError("Too many requests", 429, null),
+	])(
+		"keeps the stored session after a temporary bootstrap failure: %s",
+		async (error) => {
+			secureStoreMock.getItemAsync.mockImplementation((key: string) =>
+				Promise.resolve(key === "cap.mobile.apiKey" ? "key_123" : "user_123"),
+			);
+			apiMock.bootstrap.mockRejectedValueOnce(error);
+			let renderer: ReturnType<typeof TestRenderer.create> | undefined;
+			await act(async () => {
+				renderer = TestRenderer.create(
+					React.createElement(AuthProvider, null, React.createElement(Probe)),
+				);
+				await flushMicrotasks();
+			});
+
+			expect(states.at(-1)).toMatchObject({
+				apiKey: "key_123",
+				status: "signedIn",
+				userId: "user_123",
+			});
+			expect(secureStoreMock.deleteItemAsync).not.toHaveBeenCalled();
+
+			await act(async () => {
+				await latestAuth?.refresh();
+			});
+			expect(latestAuth?.bootstrap?.user.email).toBe("richie@cap.so");
+			await act(async () => renderer?.unmount());
+		},
+	);
 
 	it("does not restore account data when a refresh finishes after sign-out", async () => {
 		secureStoreMock.getItemAsync.mockImplementation((key: string) =>
@@ -388,7 +428,7 @@ describe("AuthProvider", () => {
 		expect(latestAuth?.bootstrap?.user.email).toBe("new@cap.so");
 
 		await act(async () => {
-			oldBootstrap.reject(new Error("Old session expired"));
+			oldBootstrap.reject(new MobileApiError("Old session expired", 401, null));
 			await flushMicrotasks();
 		});
 		expect(latestAuth?.status).toBe("signedIn");
