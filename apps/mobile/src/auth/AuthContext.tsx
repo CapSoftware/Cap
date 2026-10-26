@@ -74,6 +74,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 	const [loading, setLoading] = useState(true);
 	const sessionRevision = useRef(0);
 	const bootstrapRevision = useRef(0);
+	const refreshSequence = useRef({ started: 0, applied: 0 });
 	const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const clearBootstrapRetry = useCallback(() => {
 		if (retryTimer.current !== null) {
@@ -102,20 +103,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 	const refresh = useCallback(async () => {
 		const revision = sessionRevision.current;
 		const requestRevision = bootstrapRevision.current;
+		const sequence = ++refreshSequence.current.started;
 		try {
 			const response = await client.bootstrap();
 			if (
 				revision !== sessionRevision.current ||
-				requestRevision !== bootstrapRevision.current
+				requestRevision !== bootstrapRevision.current ||
+				sequence < refreshSequence.current.applied
 			)
 				return;
-			bootstrapRevision.current += 1;
+			refreshSequence.current.applied = sequence;
 			clearBootstrapRetry();
 			setBootstrap(response);
 		} catch (error) {
 			if (
 				revision === sessionRevision.current &&
-				requestRevision === bootstrapRevision.current
+				requestRevision === bootstrapRevision.current &&
+				sequence >= refreshSequence.current.applied
 			)
 				throw error;
 		}
@@ -160,11 +164,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 		const attemptBootstrap = () => {
 			retryTimer.current = null;
 			const requestRevision = bootstrapRevision.current;
+			const sequence = refreshSequence.current.started + 1;
 			void refresh().catch((error: unknown) => {
 				if (
 					cancelled ||
 					revision !== sessionRevision.current ||
-					requestRevision !== bootstrapRevision.current
+					requestRevision !== bootstrapRevision.current ||
+					sequence < refreshSequence.current.applied
 				)
 					return;
 				if (error instanceof MobileApiError && error.status === 401) {

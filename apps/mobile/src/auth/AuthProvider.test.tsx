@@ -447,6 +447,61 @@ describe("AuthProvider", () => {
 		},
 	);
 
+	it.each(["older first", "newer first"])(
+		"keeps the newest overlapping refresh when responses finish %s",
+		async (order) => {
+			secureStoreMock.getItemAsync.mockImplementation((key: string) =>
+				Promise.resolve(key === "cap.mobile.apiKey" ? "key_123" : "user_123"),
+			);
+			const older = createDeferred<{
+				activeOrganizationId: string;
+				user: { email: string; name: string };
+			}>();
+			const newer = createDeferred<{
+				activeOrganizationId: string;
+				user: { email: string; name: string };
+			}>();
+			let renderer: ReturnType<typeof TestRenderer.create> | null = null;
+			try {
+				await act(async () => {
+					renderer = TestRenderer.create(
+						React.createElement(AuthProvider, null, React.createElement(Probe)),
+					);
+					await flushMicrotasks();
+				});
+				apiMock.bootstrap.mockReturnValueOnce(older.promise);
+				apiMock.bootstrap.mockReturnValueOnce(newer.promise);
+				const first = latestAuth?.refresh();
+				const second = latestAuth?.refresh();
+				const finishOlder = async () => {
+					older.resolve({
+						activeOrganizationId: "org_123",
+						user: { email: "richie@cap.so", name: "Before save" },
+					});
+					await first;
+				};
+				const finishNewer = async () => {
+					newer.resolve({
+						activeOrganizationId: "org_123",
+						user: { email: "richie@cap.so", name: "After save" },
+					});
+					await second;
+				};
+				if (order === "older first") {
+					await act(finishOlder);
+					expect(latestAuth?.bootstrap?.user.name).toBe("Before save");
+					await act(finishNewer);
+				} else {
+					await act(finishNewer);
+					await act(finishOlder);
+				}
+				expect(latestAuth?.bootstrap?.user.name).toBe("After save");
+			} finally {
+				await act(async () => renderer?.unmount());
+			}
+		},
+	);
+
 	it("does not retry a transient failure after explicit sign-out", async () => {
 		secureStoreMock.getItemAsync.mockImplementation((key: string) =>
 			Promise.resolve(key === "cap.mobile.apiKey" ? "key_123" : "user_123"),
