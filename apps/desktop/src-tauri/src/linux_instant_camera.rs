@@ -463,8 +463,8 @@ mod producer {
         feeds::camera::{self, CameraFeed, CameraFeedLock},
         instant_recording::{
             LINUX_CAMERA_MAX_MASK_AGE, LinuxCameraBlur, LinuxCameraMaskReceipt, LinuxCameraPixels,
-            LinuxCameraProcessing, LinuxCameraPublisher, LinuxProcessedCameraFrame,
-            LinuxProcessedCameraSource,
+            LinuxCameraProcessing, LinuxCameraPublisher, LinuxCameraSampleFormat,
+            LinuxProcessedCameraFrame, LinuxProcessedCameraSource,
         },
     };
     use cap_timestamp::Timestamp;
@@ -765,7 +765,8 @@ mod producer {
             }
         }
         Ok(Some(LinuxProcessedCameraFrame {
-            bgra: LinuxCameraPixels::new(bgra),
+            pixels: LinuxCameraPixels::new(bgra),
+            format: LinuxCameraSampleFormat::Bgra,
             dimensions: receipt.dimensions,
             stride: row,
             timestamp: receipt.timestamp,
@@ -784,7 +785,9 @@ pub(crate) use producer::{FrameReceipt, RecordingWork, channel as processing_cha
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
-    use cap_recording::instant_recording::{LinuxCameraBlur, LinuxCameraProcessing};
+    use cap_recording::instant_recording::{
+        LinuxCameraBlur, LinuxCameraProcessing, LinuxCameraSampleFormat,
+    };
     use cap_timestamp::Timestamp;
 
     fn input() -> CameraPresentationInput {
@@ -944,7 +947,8 @@ mod tests {
         )
         .unwrap()
         .unwrap();
-        assert_eq!(&*frame.bgra, &[6, 5, 4, 128, 3, 2, 1, 255]);
+        assert_eq!(&*frame.pixels, &[6, 5, 4, 128, 3, 2, 1, 255]);
+        assert_eq!(frame.format, LinuxCameraSampleFormat::Bgra);
         assert_eq!(frame.generation, 3);
         assert_eq!(frame.dimensions, (2, 1));
     }

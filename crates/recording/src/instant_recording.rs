@@ -7,8 +7,8 @@ mod linux_camera;
 pub use linux_camera::{
     LINUX_CAMERA_MAX_MASK_AGE, LinuxCameraBlur, LinuxCameraEffect, LinuxCameraMaskReceipt,
     LinuxCameraPixels, LinuxCameraPresentation, LinuxCameraPresentationError,
-    LinuxCameraProcessing, LinuxCameraPublisher, LinuxCameraRect, LinuxCameraShape,
-    LinuxProcessedCameraFrame, LinuxProcessedCameraSource,
+    LinuxCameraProcessing, LinuxCameraPublisher, LinuxCameraRect, LinuxCameraSampleFormat,
+    LinuxCameraShape, LinuxProcessedCameraFrame, LinuxProcessedCameraSource,
 };
 
 use crate::{
