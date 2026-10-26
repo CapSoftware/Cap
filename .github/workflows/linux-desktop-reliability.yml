@@ -11,6 +11,8 @@ on:
     paths:
       - "apps/desktop-gpui/**"
       - "crates/recording/**"
+      - "crates/camera/**"
+      - "crates/camera-ffmpeg/**"
       - "crates/utils/**"
       - "crates/scap-targets/**"
       - "scripts/linux-desktop-harness/**"
@@ -60,7 +62,7 @@ jobs:
             echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
           gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --paginate --jq '.[].filename' > "$RUNNER_TEMP/changed.txt"
-          if grep -qE '^(apps/desktop-gpui/|crates/(recording|utils|scap-targets)/|scripts/(prepare-gpui-dependency\.sh|finalize-linux-appimage\.mjs)$)' "$RUNNER_TEMP/changed.txt"; then
+          if grep -qE '^(apps/desktop-gpui/|crates/(recording|camera|camera-ffmpeg|utils|scap-targets)/|scripts/(prepare-gpui-dependency\.sh|finalize-linux-appimage\.mjs)$)' "$RUNNER_TEMP/changed.txt"; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
