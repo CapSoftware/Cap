@@ -114,7 +114,7 @@ describe("video-convert", () => {
 			vi.fn(async () => ({
 				ok: true,
 				text: async () =>
-					'#EXTM3U\\n#EXT-X-KEY:METHOD=AES-128,URI="https://keys.example/key"\\n#EXTINF:1,\\nchunk.ts\\n#EXTINF:1,\\nhttps://cdn.other.example/external.ts\\n#EXTINF:1,\\n//cdn.other.example/another.ts?token=own',
+					'#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI="https://keys.example/key"\n#EXTINF:1,\nchunk.ts\n#EXTINF:1,\nhttps://cdn.other.example/external.ts\n#EXTINF:1,\n//cdn.other.example/another.ts?token=own',
 			})),
 		);
 		const { convertRemoteVideoToMp4Buffer } = await import(
