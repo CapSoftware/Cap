@@ -3,10 +3,10 @@ use cap_rendering::{ProjectUniforms, RenderSegment, RenderedFrame};
 use futures::FutureExt;
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 use tracing::trace;
 
-use crate::{ExportError, ExporterBase};
+use crate::{ExportError, ExporterBase, prepare_new_output};
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Type)]
 pub struct GifQuality {
@@ -109,8 +109,11 @@ impl GifExportSettings {
             })
             .unwrap_or_default();
 
+        let temporary_output = prepare_new_output(&gif_output_path)?;
         let mut gif_encoder = cap_enc_gif::GifEncoderWrapper::new_with_quality(
-            &gif_output_path,
+            temporary_output
+                .as_ref()
+                .map_or(gif_output_path.as_path(), AsRef::as_ref),
             output_size.0,
             output_size.1,
             fps,
@@ -127,9 +130,15 @@ impl GifExportSettings {
                     return Err(ExportError::Other("Export cancelled".to_string()));
                 }
 
-                if let Err(e) =
-                    gif_encoder.add_frame(&frame.data, frame.padded_bytes_per_row as usize)
-                {
+                let add_result = match Arc::try_unwrap(frame.data) {
+                    Ok(data) => {
+                        gif_encoder.add_frame_owned(data, frame.padded_bytes_per_row as usize)
+                    }
+                    Err(shared) => {
+                        gif_encoder.add_frame(&shared, frame.padded_bytes_per_row as usize)
+                    }
+                };
+                if let Err(e) = add_result {
                     return Err(ExportError::Other(format!(
                         "Failed to add frame to GIF: {e}"
                     )));
@@ -151,7 +160,7 @@ impl GifExportSettings {
                 return Err(ExportError::Other(format!("Failed to finish GIF: {e}")));
             }
 
-            Ok(gif_output_path)
+            Ok(())
         })
         .then(|f| async {
             f.map_err(|e| e.to_string())
@@ -177,12 +186,17 @@ impl GifExportSettings {
             self.resolution_base,
             &base.recordings,
             base.sample_windows.clone(),
+            true,
         )
         .then(|f| async { f.map_err(|v| v.to_string()) });
 
-        let (output_path, _) =
-            tokio::try_join!(encoder_thread, render_video_task).map_err(|e| e.to_string())?;
+        tokio::try_join!(encoder_thread, render_video_task)?;
+        if let Some(temporary_output) = temporary_output {
+            temporary_output
+                .persist_noclobber(&gif_output_path)
+                .map_err(|e| e.to_string())?;
+        }
 
-        Ok(output_path)
+        Ok(gif_output_path)
     }
 }

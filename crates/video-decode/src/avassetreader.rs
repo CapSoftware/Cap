@@ -14,6 +14,7 @@ use tokio::runtime::Handle as TokioHandle;
 #[derive(Clone)]
 pub struct KeyframeIndex {
     keyframes: Vec<(u32, f64)>,
+    time_base: ffmpeg::Rational,
     fps: f64,
     duration_secs: f64,
     pixel_format: Option<cv::PixelFormat>,
@@ -196,6 +197,11 @@ fn scan_keyframes(
 
 impl KeyframeIndex {
     pub fn build(path: &Path) -> Result<Self, String> {
+        #[cfg(feature = "scripted")]
+        if let Some(state) = crate::scripted::lookup(path) {
+            return Ok(Self::from_script(&state.script));
+        }
+
         let build_start = std::time::Instant::now();
 
         let mut input = avformat::input(path)
@@ -271,12 +277,36 @@ impl KeyframeIndex {
 
         Ok(Self {
             keyframes,
+            time_base,
             fps,
             duration_secs,
             pixel_format,
             width,
             height,
         })
+    }
+
+    #[cfg(feature = "scripted")]
+    fn from_script(script: &crate::scripted::Script) -> Self {
+        let fps = script.avg_fps();
+        let keyframes = script
+            .frames
+            .iter()
+            .filter(|frame| frame.keyframe)
+            .map(|frame| {
+                let secs = script.secs(frame.pts);
+                ((secs * fps).round() as u32, secs)
+            })
+            .collect();
+        Self {
+            keyframes,
+            time_base: ffmpeg::Rational::new(script.time_base.0, script.time_base.1),
+            fps,
+            duration_secs: script.duration_secs(),
+            pixel_format: Some(cv::PixelFormat::_420V),
+            width: crate::scripted::FRAME_WIDTH,
+            height: crate::scripted::FRAME_HEIGHT,
+        }
     }
 
     pub fn nearest_keyframe_before(&self, target_frame: u32) -> Option<(u32, f64)> {
@@ -374,28 +404,51 @@ impl KeyframeIndex {
     pub fn cached_video_info(&self) -> Option<(cv::PixelFormat, u32, u32)> {
         self.pixel_format.map(|pf| (pf, self.width, self.height))
     }
+
+    // The reader decodes from the sync sample at or before its start time, so
+    // a start rounded to just below a keyframe decodes the whole previous GOP
+    // and vends its last frame retimed to the start. Starting on the exact
+    // stream tick keeps the decode on the requested keyframe.
+    fn exact_time(&self, secs: f64) -> cm::Time {
+        let numerator = i64::from(self.time_base.numerator());
+        let denominator = self.time_base.denominator();
+        if numerator <= 0 || denominator <= 0 {
+            return cm::Time::with_secs(secs, 100);
+        }
+        let ticks = (secs * f64::from(denominator) / numerator as f64).round() as i64;
+        cm::Time::new(ticks * numerator, denominator)
+    }
+}
+
+fn seek_keyframe_time(keyframe_index: &KeyframeIndex, requested_time: f32) -> Option<f64> {
+    let keyframes = keyframe_index.keyframes();
+    // Rounded frame numbers can alias keyframes across a VFR gap and seek
+    // past the image that should still be held at the requested time.
+    let after_request = keyframes.partition_point(|(_, time)| *time <= f64::from(requested_time));
+    keyframes
+        .get(after_request.saturating_sub(1))
+        .map(|(_, time)| *time)
 }
 
 fn compute_seek_time(keyframe_index: Option<&Arc<KeyframeIndex>>, requested_time: f32) -> f32 {
-    if let Some(kf_index) = keyframe_index {
-        let keyframes = kf_index.keyframes();
-        // Rounded frame numbers can alias keyframes across a VFR gap and seek
-        // past the image that should still be held at the requested time.
-        let after_request =
-            keyframes.partition_point(|(_, time)| *time <= f64::from(requested_time));
-        if let Some((_, keyframe_time)) = keyframes.get(after_request.saturating_sub(1)) {
-            return *keyframe_time as f32;
-        }
-    }
-    requested_time
+    keyframe_index
+        .and_then(|index| seek_keyframe_time(index, requested_time))
+        .map_or(requested_time, |time| time as f32)
+}
+
+fn reader_start_time(keyframe_index: Option<&Arc<KeyframeIndex>>, requested_time: f32) -> cm::Time {
+    keyframe_index
+        .and_then(|index| {
+            seek_keyframe_time(index, requested_time).map(|time| index.exact_time(time))
+        })
+        .unwrap_or_else(|| cm::Time::with_secs(requested_time as f64, 100))
 }
 
 pub struct AVAssetReaderDecoder {
     path: PathBuf,
     pixel_format: cv::PixelFormat,
     tokio_handle: TokioHandle,
-    track_output: R<av::AssetReaderTrackOutput>,
-    reader: R<av::AssetReader>,
+    source: ReaderSource,
     width: u32,
     height: u32,
     keyframe_index: Option<Arc<KeyframeIndex>>,
@@ -462,9 +515,9 @@ impl AVAssetReaderDecoder {
 
         let seek_time = compute_seek_time(keyframe_index.as_ref(), start_time);
 
-        let (track_output, reader) = Self::get_reader_track_output(
+        let source = Self::get_reader_track_output(
             &path,
-            seek_time,
+            reader_start_time(keyframe_index.as_ref(), start_time),
             &tokio_handle,
             pixel_format,
             width,
@@ -475,8 +528,7 @@ impl AVAssetReaderDecoder {
             path,
             pixel_format,
             tokio_handle,
-            track_output,
-            reader,
+            source,
             width,
             height,
             keyframe_index,
@@ -485,13 +537,13 @@ impl AVAssetReaderDecoder {
     }
 
     pub fn reset(&mut self, requested_time: f32) -> Result<(), String> {
-        self.reader.cancel_reading();
+        self.source.cancel_reading();
 
         let seek_time = compute_seek_time(self.keyframe_index.as_ref(), requested_time);
 
-        (self.track_output, self.reader) = Self::get_reader_track_output(
+        self.source = Self::get_reader_track_output(
             &self.path,
-            seek_time,
+            reader_start_time(self.keyframe_index.as_ref(), requested_time),
             &self.tokio_handle,
             self.pixel_format,
             self.width,
@@ -533,12 +585,25 @@ impl AVAssetReaderDecoder {
 
     fn get_reader_track_output(
         path: &Path,
-        time: f32,
+        start: cm::Time,
         handle: &TokioHandle,
         pixel_format: cv::PixelFormat,
         width: u32,
         height: u32,
-    ) -> Result<(R<av::AssetReaderTrackOutput>, R<av::AssetReader>), String> {
+    ) -> Result<ReaderSource, String> {
+        let time_range = cm::TimeRange {
+            start,
+            duration: cm::Time::infinity(),
+        };
+
+        #[cfg(feature = "scripted")]
+        if let Some(state) = crate::scripted::lookup(path) {
+            return Ok(ReaderSource::Scripted(crate::scripted::AvfReader::start(
+                state,
+                time_range.start,
+            )));
+        }
+
         let asset = av::UrlAsset::with_url(
             &ns::Url::with_fs_path_str(
                 path.to_str()
@@ -551,11 +616,6 @@ impl AVAssetReaderDecoder {
 
         let mut reader = av::AssetReader::with_asset(&asset)
             .map_err(|e| format!("AssetReader::with_asset: {e}"))?;
-
-        let time_range = cm::TimeRange {
-            start: cm::Time::with_secs(time as f64, 100),
-            duration: cm::Time::infinity(),
-        };
 
         reader.set_time_range(time_range);
 
@@ -592,12 +652,34 @@ impl AVAssetReaderDecoder {
             .start_reading()
             .map_err(|e| format!("reader.start_reading: {e}"))?;
 
-        Ok((reader_track_output, reader))
+        Ok(ReaderSource::Native {
+            track_output: reader_track_output,
+            reader,
+        })
     }
 
     pub fn frames(&mut self) -> FramesIter<'_> {
         FramesIter {
-            track_output: &mut self.track_output,
+            source: &mut self.source,
+        }
+    }
+
+    /// Why the reader stopped vending, when it failed instead of reaching the
+    /// end of its range. A failed reader never vends again.
+    pub fn failure(&self) -> Option<String> {
+        match &self.source {
+            ReaderSource::Native { reader, .. } => {
+                (reader.status() == av::AssetReaderStatus::Failed).then(|| {
+                    reader.error().map_or_else(
+                        || "unknown error".to_string(),
+                        |error| format!("{} ({})", error.localized_description(), error.code()),
+                    )
+                })
+            }
+            #[cfg(feature = "scripted")]
+            ReaderSource::Scripted(reader) => reader
+                .failed()
+                .then(|| "scripted decode failure".to_string()),
         }
     }
 
@@ -610,13 +692,32 @@ impl AVAssetReaderDecoder {
     }
 }
 
+enum ReaderSource {
+    Native {
+        track_output: R<av::AssetReaderTrackOutput>,
+        reader: R<av::AssetReader>,
+    },
+    #[cfg(feature = "scripted")]
+    Scripted(crate::scripted::AvfReader),
+}
+
+impl ReaderSource {
+    fn cancel_reading(&mut self) {
+        match self {
+            Self::Native { reader, .. } => reader.cancel_reading(),
+            #[cfg(feature = "scripted")]
+            Self::Scripted(_) => {}
+        }
+    }
+}
+
 pub struct FramesIter<'a> {
-    track_output: &'a mut av::AssetReaderTrackOutput,
+    source: &'a mut ReaderSource,
 }
 
 impl Drop for AVAssetReaderDecoder {
     fn drop(&mut self) {
-        self.reader.cancel_reading();
+        self.source.cancel_reading();
     }
 }
 
@@ -624,7 +725,11 @@ impl<'a> Iterator for FramesIter<'a> {
     type Item = ns::ExResult<'static, arc::R<cm::SampleBuf>>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.track_output.next_sample_buf().transpose()
+        match self.source {
+            ReaderSource::Native { track_output, .. } => track_output.next_sample_buf().transpose(),
+            #[cfg(feature = "scripted")]
+            ReaderSource::Scripted(reader) => reader.next_sample_buf().map(Ok),
+        }
     }
 }
 
@@ -664,6 +769,7 @@ mod tests {
     fn seek_index(keyframes: Keyframes) -> Arc<KeyframeIndex> {
         Arc::new(KeyframeIndex {
             keyframes,
+            time_base: ffmpeg::Rational::new(1, 600),
             fps: 2.0,
             duration_secs: 8.0,
             pixel_format: None,
@@ -694,6 +800,17 @@ mod tests {
         assert_eq!(compute_seek_time(Some(&index), 8.0), 1.0);
         assert_eq!(compute_seek_time(Some(&seek_index(Vec::new())), 3.0), 3.0);
         assert_eq!(compute_seek_time(None, 3.0), 3.0);
+    }
+
+    #[test]
+    fn reader_starts_on_the_exact_keyframe_tick() {
+        let index = seek_index(vec![(0, 0.0), (1, 577.0 / 600.0), (3, 1147.0 / 600.0)]);
+        let start = reader_start_time(Some(&index), 1.5);
+        assert_eq!((start.value, start.scale), (577, 600));
+        let start = reader_start_time(Some(&index), 1.92);
+        assert_eq!((start.value, start.scale), (1147, 600));
+        let start = reader_start_time(None, 1.5);
+        assert_eq!((start.value, start.scale), (150, 100));
     }
 
     fn both_indexes(path: &Path) -> Option<(Option<Keyframes>, Keyframes)> {

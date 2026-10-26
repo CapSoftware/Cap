@@ -21,9 +21,11 @@ import { Effect, Option } from "effect";
 import { Hono } from "hono";
 import { after } from "next/server";
 import { z } from "zod";
+import { readInstantCleanupReport } from "@/lib/desktop-instant-cleanup";
 import { invalidateGoogleDriveStorageQuotaCache } from "@/lib/google-drive-storage-quota";
 import { maybeStartLiveTranscription } from "@/lib/live-transcribe";
 import { runPromise } from "@/lib/server";
+import { trackServerEvent } from "@/lib/server-analytics";
 import {
 	GOOGLE_DRIVE_UPLOAD_FEATURE,
 	hasDesktopFeature,
@@ -304,9 +306,13 @@ app.get(
 				: Storage.getS3WritableAccessForUser(user.id, videoOrgId)
 			).pipe(runPromise);
 
-			await db()
-				.insert(videos)
-				.values({
+			const clientSupportsUploadProgress = isFromDesktopSemver(
+				c.req,
+				UPLOAD_PROGRESS_VERSION,
+			);
+
+			await db().transaction(async (tx) => {
+				await tx.insert(videos).values({
 					id: idToUse,
 					name: videoName,
 					ownerId: user.id,
@@ -330,16 +336,12 @@ app.get(
 					...(metadata ? { metadata } : {}),
 				});
 
-			const clientSupportsUploadProgress = isFromDesktopSemver(
-				c.req,
-				UPLOAD_PROGRESS_VERSION,
-			);
-
-			if (clientSupportsUploadProgress && !isScreenshot)
-				await db().insert(videoUploads).values({
-					videoId: idToUse,
-					mode: "singlepart",
-				});
+				if (clientSupportsUploadProgress && !isScreenshot)
+					await tx.insert(videoUploads).values({
+						videoId: idToUse,
+						mode: "singlepart",
+					});
+			});
 
 			if (recordingMode === "desktopSegments" && !isScreenshot) {
 				// Off the response path: this endpoint gates recording start on the
@@ -442,6 +444,17 @@ app.delete(
 			await invalidateGoogleDriveStorageQuotaCache(
 				result.video.storageIntegrationId,
 			);
+
+			const cleanup = readInstantCleanupReport(
+				c.req.query("reason"),
+				c.req.query("cause"),
+				hasDesktopFeature(c.req, "gpui"),
+			);
+			if (cleanup)
+				trackServerEvent(user.id, "desktop_instant_cleanup", {
+					...cleanup,
+					sourceType: result.video.source?.type ?? null,
+				});
 
 			return c.json(true);
 		} catch (error) {

@@ -400,13 +400,14 @@ impl DeepLinkAction {
                         let _ = main.update(cx, |view, _, _| view.finish_deep_link_start(&permit));
                         return;
                     }
-                    let (camera_feed, mic_feed, input_readiness, device_settings) = {
+                    let (camera_feed, mic_feed, mic_meter, input_readiness, device_settings) = {
                         let feeds = Feeds::global(cx);
                         feeds.update(cx, |feeds, cx| feeds.resume_camera_preview(cx));
                         let feeds = feeds.read(cx);
                         (
                             feeds.camera_actor(),
                             feeds.mic_actor(),
+                            feeds.mic_meter(),
                             feeds.input_readiness(),
                             feeds.requested_device_settings(),
                         )
@@ -425,6 +426,7 @@ impl DeepLinkAction {
                                     excluded_windows: Vec::new(),
                                     camera_feed,
                                     mic_feed,
+                                    mic_meter,
                                     #[cfg(target_os = "linux")]
                                     linux_instant_camera: None,
                                     start_gate: None,
@@ -538,6 +540,11 @@ impl DeepLinkAction {
             DeepLinkAction::OpenEditor { project_path } => {
                 use cap_project::{RecordingMeta, RecordingMetaInner, StudioRecordingStatus};
 
+                if crate::library::is_screenshot_bundle(&project_path) {
+                    cx.defer(move |cx| app_windows::open_screenshot_editor(project_path, cx));
+                    return Ok(());
+                }
+
                 let meta =
                     RecordingMeta::load_for_project(&project_path).map_err(|v| v.to_string())?;
                 match &meta.inner {
@@ -556,7 +563,7 @@ impl DeepLinkAction {
                     RecordingMetaInner::Instant(_) => {
                         let mp4_path = project_path.join("content/output.mp4");
                         if mp4_path.exists() && mp4_path.is_file() {
-                            library::open_path(&mp4_path);
+                            library::open_with_system(&mp4_path, cx);
                             app_windows::hide_main_window(cx);
                         }
                     }

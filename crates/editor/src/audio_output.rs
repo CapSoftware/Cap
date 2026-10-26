@@ -33,7 +33,7 @@ use cpal::{
 use tokio::sync::watch;
 use tracing::{error, info};
 
-use crate::audio::{AudioSegment, MusicTracks, PrerenderedAudioBuffer};
+use crate::audio::{AudioSegment, MusicTracks, PlaybackAudioCache, PrerenderedAudioBuffer};
 use crate::preparing_audio::{
     PreparingAudioBuffer, PreparingAudioOutputHandle, PreparingAudioOutputSnapshot,
     PreparingAudioSources,
@@ -875,6 +875,23 @@ fn drain_source_commands<T: FromSampleBytes + cpal::FromSample<f32>>(
     }
 }
 
+/// Re-anchors the audio on the video playhead when they drift apart.
+fn sync_video_playhead<T: FromSampleBytes + cpal::FromSample<f32>>(
+    audio: &mut PrerenderedAudioBuffer<T>,
+    playhead_rx: &mut watch::Receiver<f64>,
+    latency_secs: f64,
+) {
+    if playhead_rx.has_changed().unwrap_or(false) {
+        let video_playhead = *playhead_rx.borrow_and_update();
+        let audible_playhead = audio.current_audible_playhead(latency_secs);
+        let drift = (video_playhead - audible_playhead).abs();
+
+        if drift > 0.04 {
+            audio.set_playhead(video_playhead + latency_secs);
+        }
+    }
+}
+
 /// Renders one output block from the active source: applies the video
 /// playhead sync policy, fills the buffer and acknowledges the first
 /// consumed block. Shared by the live cpal callback and the headless sink so
@@ -894,15 +911,7 @@ fn render_source_block<T: FromSampleBytes + cpal::FromSample<f32>>(
     }
     match &mut source.buffer {
         ActiveSourceBuffer::Ordinary(audio) => {
-            if source.playhead_rx.has_changed().unwrap_or(false) {
-                let video_playhead = *source.playhead_rx.borrow_and_update();
-                let audible_playhead = audio.current_audible_playhead(latency_secs);
-                let drift = (video_playhead - audible_playhead).abs();
-
-                if drift > 0.04 {
-                    audio.set_playhead(video_playhead + latency_secs);
-                }
-            }
+            sync_video_playhead(audio, &mut source.playhead_rx, latency_secs);
             audio.fill(buffer);
         }
         ActiveSourceBuffer::Preparing(audio) => {
@@ -941,6 +950,7 @@ fn install_source<T: FromSampleBytes + cpal::FromSample<f32>>(
     output_info: AudioInfo,
     use_device_latency_hint: bool,
     install_tx: &std_mpsc::Sender<SourceCommand<T>>,
+    cache: &PlaybackAudioCache,
 ) -> Result<(), String> {
     let preparing_request = ack.preparing_request();
     if preparing_request
@@ -1000,13 +1010,14 @@ fn install_source<T: FromSampleBytes + cpal::FromSample<f32>>(
     let mut buffer = if matches!(ack, SourceAcknowledgement::Refresh(..)) {
         PrerenderedAudioBuffer::<T>::bounded(segments, music, &project, output_info, start_playhead)
     } else {
-        PrerenderedAudioBuffer::<T>::new(
+        PrerenderedAudioBuffer::<T>::new_cached(
             segments,
             music,
             &project,
             output_info,
             duration_secs,
             start_playhead,
+            cache,
         )
     };
     if !matches!(ack, SourceAcknowledgement::Refresh(..)) {
@@ -1125,6 +1136,7 @@ fn control_thread_headless(control_rx: std_mpsc::Receiver<ControlMsg>, mut tap: 
 
     let (source_tx, source_rx) = std_mpsc::channel::<SourceCommand<f32>>();
     let stop = Arc::new(AtomicBool::new(false));
+    let cache = PlaybackAudioCache::default();
 
     let pump = {
         let stop = stop.clone();
@@ -1182,6 +1194,7 @@ fn control_thread_headless(control_rx: std_mpsc::Receiver<ControlMsg>, mut tap: 
                     output_info,
                     false,
                     &source_tx,
+                    &cache,
                 ) {
                     error!(%error, "Could not update headless audio playback");
                 }
@@ -1201,6 +1214,7 @@ fn control_thread_headless(control_rx: std_mpsc::Receiver<ControlMsg>, mut tap: 
                         output_info,
                         false,
                         &source_tx,
+                        &cache,
                     ) {
                         Ok(()) => ack_rx.recv_timeout(SOURCE_ACK_TIMEOUT).is_ok(),
                         Err(e) => {
@@ -1226,6 +1240,7 @@ fn control_thread_headless(control_rx: std_mpsc::Receiver<ControlMsg>, mut tap: 
                     output_info,
                     false,
                     &source_tx,
+                    &cache,
                 ) {
                     error!("Failed to install preparing headless audio source: {error}");
                     request.complete(false);
@@ -1272,6 +1287,132 @@ fn control_thread_headless(control_rx: std_mpsc::Receiver<ControlMsg>, mut tap: 
     }
 
     info!("Headless audio output thread finished");
+}
+
+/// A sink with no device and no clock, for verification harnesses: the
+/// caller pulls every block, and each pull first waits until the samples it
+/// reads are rendered, so the PCM depends only on the sequence of plays,
+/// seeks and pulls, never on render speed. Sources are built by the same
+/// `install_source` as the device and headless sinks.
+#[cfg(feature = "test-hooks")]
+pub struct OfflineAudioSink {
+    source_rx: std_mpsc::Receiver<SourceCommand<f32>>,
+    active: Option<ActiveSource<f32>>,
+}
+
+#[cfg(feature = "test-hooks")]
+impl AudioOutput {
+    /// Output at [`HEADLESS_SAMPLE_RATE`] / [`HEADLESS_CHANNELS`] whose blocks
+    /// are pulled through the returned sink. `play` returns once the source
+    /// is installed.
+    pub fn new_offline() -> (Self, OfflineAudioSink) {
+        let (control_tx, control_rx) = std_mpsc::channel();
+        let (source_tx, source_rx) = std_mpsc::channel();
+        if let Err(e) = std::thread::Builder::new()
+            .name("cap-audio-offline".into())
+            .spawn(move || control_thread_offline(control_rx, source_tx))
+        {
+            error!("Failed to spawn offline audio output thread: {e}");
+        }
+        (
+            Self {
+                control_tx,
+                next_generation: AtomicU64::new(0),
+            },
+            OfflineAudioSink {
+                source_rx,
+                active: None,
+            },
+        )
+    }
+}
+
+#[cfg(feature = "test-hooks")]
+impl OfflineAudioSink {
+    /// Renders the next interleaved block. Returns false (and silence) when
+    /// no source is installed or its samples did not render within
+    /// `timeout`.
+    pub fn pull(&mut self, block: &mut [f32], timeout: Duration) -> bool {
+        drain_source_commands(&mut self.active, &self.source_rx);
+        let Some(source) = self.active.as_mut() else {
+            block.fill(0.0);
+            return false;
+        };
+        let mut rendered = true;
+        if let ActiveSourceBuffer::Ordinary(audio) = &mut source.buffer {
+            sync_video_playhead(audio, &mut source.playhead_rx, 0.0);
+            rendered = audio.wait_until_rendered(block.len(), timeout);
+        }
+        render_source_block(source, block, 0.0);
+        rendered
+    }
+}
+
+#[cfg(feature = "test-hooks")]
+fn control_thread_offline(
+    control_rx: std_mpsc::Receiver<ControlMsg>,
+    source_tx: std_mpsc::Sender<SourceCommand<f32>>,
+) {
+    let output_info = AudioInfo::new_raw(
+        AudioData::SAMPLE_FORMAT,
+        HEADLESS_SAMPLE_RATE,
+        HEADLESS_CHANNELS,
+    );
+    let cache = PlaybackAudioCache::default();
+    while let Ok(msg) = control_rx.recv() {
+        match msg {
+            ControlMsg::Refresh {
+                spec,
+                generation,
+                revision,
+                retire_tx,
+            } => {
+                if let Err(error) = install_source::<f32>(
+                    spec,
+                    generation,
+                    SourceAcknowledgement::Refresh(retire_tx, revision),
+                    output_info,
+                    false,
+                    &source_tx,
+                    &cache,
+                ) {
+                    error!(%error, "Could not update offline audio playback");
+                }
+            }
+            ControlMsg::Play {
+                spec,
+                generation,
+                result_tx,
+            } => {
+                let (ack_tx, _ack_rx) = std_mpsc::channel();
+                let ok = install_source::<f32>(
+                    spec,
+                    generation,
+                    SourceAcknowledgement::Ordinary(ack_tx),
+                    output_info,
+                    false,
+                    &source_tx,
+                    &cache,
+                )
+                .inspect_err(|e| error!("Failed to install offline audio source: {e}"))
+                .is_ok();
+                let _ = result_tx.send(ok);
+            }
+            ControlMsg::PreparePlayback { request, .. } => request.complete(false),
+            ControlMsg::PrepareProgressivePlayback { installation, .. } => {
+                installation.request.complete(false)
+            }
+            ControlMsg::StopPlayback { generation } => {
+                let _ = source_tx.send(SourceCommand::Remove {
+                    generation: Some(generation),
+                });
+            }
+            ControlMsg::EnsureStream | ControlMsg::HoldAwake | ControlMsg::ReleaseAwake => {}
+            ControlMsg::Retire(source) => drop(source),
+            ControlMsg::Realign(realign) => realign(),
+            ControlMsg::Shutdown => break,
+        }
+    }
 }
 
 fn handle_play(state: &mut Option<StreamState>, spec: Box<PlaySpec>, generation: u64) -> bool {
@@ -1434,9 +1575,18 @@ where
         .map_err(|e| format!("Failed to start audio output stream: {e}"))?;
 
     let install_tx = source_tx.clone();
+    let cache = PlaybackAudioCache::default();
     let install = Box::new(
         move |spec: Box<PlaySpec>, generation: u64, ack: SourceAcknowledgement| {
-            install_source::<T>(spec, generation, ack, output_info, true, &install_tx)
+            install_source::<T>(
+                spec,
+                generation,
+                ack,
+                output_info,
+                true,
+                &install_tx,
+                &cache,
+            )
         },
     );
 
@@ -1504,6 +1654,7 @@ mod tests {
             output_info,
             use_device_latency_hint,
             &install_tx,
+            &PlaybackAudioCache::default(),
         )
         .unwrap();
         let SourceCommand::Install(source) = install_rx.recv().unwrap() else {

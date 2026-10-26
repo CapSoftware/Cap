@@ -37,15 +37,6 @@ fn offset_samples(offset_secs: f64, sample_rate: u32) -> Result<isize, String> {
     Ok(samples.round() as isize)
 }
 
-fn try_zeroed<T: Clone>(len: usize, value: T, label: &str) -> Result<Vec<T>, String> {
-    let mut values = Vec::new();
-    values
-        .try_reserve_exact(len)
-        .map_err(|_| format!("{label} is too large"))?;
-    values.resize(len, value);
-    Ok(values)
-}
-
 pub fn assemble_transcription_audio(
     takes: &[TranscriptionAudioTake],
     sample_rate: u32,
@@ -80,41 +71,61 @@ pub fn append_transcription_audio(
     output
         .try_reserve_exact(frames)
         .map_err(|_| "Transcription audio is too large".to_string())?;
-    let mut sums = try_zeroed(frames, 0.0_f32, "Transcription audio")?;
-    let mut counts = try_zeroed(frames, 0_u32, "Transcription audio")?;
+    let mut boundaries = Vec::new();
+    boundaries
+        .try_reserve_exact(take.sources.len() * 2)
+        .map_err(|_| "Transcription audio is too large".to_string())?;
+    let start = output.len();
+    output.resize(start + frames, 0.0);
+    let sums = &mut output[start..];
 
     for source in &take.sources {
         let offset = offset_samples(source.offset_secs, sample_rate)?;
         let source_frames = source.samples.len() / source.channels;
-        for source_frame in 0..source_frames {
-            let destination = source_frame as i128 - offset as i128;
-            if destination < 0 || destination >= frames as i128 {
-                continue;
-            }
-
-            let first_sample = source_frame * source.channels;
-            let mono = source.samples[first_sample..first_sample + source.channels]
-                .iter()
-                .copied()
-                .sum::<f32>()
-                / source.channels as f32;
-            let destination = destination as usize;
-            sums[destination] += mono;
-            counts[destination] += 1;
+        let first = (-(offset as i128)).clamp(0, frames as i128) as usize;
+        let end = (source_frames as i128 - offset as i128).clamp(0, frames as i128) as usize;
+        if first == end {
+            continue;
+        }
+        boundaries.push((first, true));
+        boundaries.push((end, false));
+        let source_start = (first as i128 + offset as i128) as usize;
+        for (sum, frame) in sums[first..end].iter_mut().zip(
+            source
+                .samples
+                .chunks_exact(source.channels)
+                .skip(source_start),
+        ) {
+            *sum += frame.iter().copied().sum::<f32>() / source.channels as f32;
         }
     }
 
-    output.extend(
-        sums.into_iter()
-            .zip(counts)
-            .map(|(sum, count)| if count == 0 { 0.0 } else { sum / count as f32 }),
-    );
+    // Each source covers one interval; its contribution count only changes at the ends.
+    boundaries.sort_unstable_by_key(|(position, _)| *position);
+    let mut count = 0_u32;
+    let mut start = 0;
+    for (end, starting) in boundaries {
+        if count > 1 {
+            for sample in &mut sums[start..end] {
+                *sample /= count as f32;
+            }
+        }
+        if starting {
+            count += 1;
+        } else {
+            count -= 1;
+        }
+        start = end;
+    }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{TranscriptionAudioSource, TranscriptionAudioTake, assemble_transcription_audio};
+    use super::{
+        TranscriptionAudioSource, TranscriptionAudioTake, append_transcription_audio,
+        assemble_transcription_audio, offset_samples, sample_count,
+    };
 
     fn take(duration: f64, sources: Vec<TranscriptionAudioSource>) -> TranscriptionAudioTake {
         TranscriptionAudioTake {
@@ -189,11 +200,210 @@ mod tests {
     }
 
     #[test]
+    fn appending_audio_preserves_previous_takes() {
+        let mut output = vec![0.25, -0.5];
+        let mixed = take(
+            2.0,
+            vec![
+                source(vec![1.0, 3.0, 3.0, 5.0], 2, -0.5),
+                source(vec![2.0, 4.0, 6.0], 1, 0.0),
+            ],
+        );
+
+        append_transcription_audio(&mut output, &mixed, 2).unwrap();
+        append_transcription_audio(&mut output, &take(1.0, Vec::new()), 2).unwrap();
+
+        assert_eq!(output, vec![0.25, -0.5, 2.0, 3.0, 5.0, 0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn failed_append_preserves_existing_audio() {
+        for (take, sample_rate) in [
+            (take(1.0, Vec::new()), 0),
+            (take(f64::NAN, Vec::new()), 2),
+            (take(usize::MAX as f64, Vec::new()), 1),
+            (take(1.0, vec![source(vec![1.0], 0, 0.0)]), 2),
+            (take(1.0, vec![source(vec![1.0], 2, 0.0)]), 2),
+            (take(1.0, vec![source(vec![1.0], 1, f64::INFINITY)]), 2),
+        ] {
+            let mut output = vec![0.25, -0.5];
+
+            assert!(append_transcription_audio(&mut output, &take, sample_rate).is_err());
+            assert_eq!(output, vec![0.25, -0.5]);
+        }
+    }
+
+    #[test]
     fn invalid_timing_is_rejected_before_allocation() {
         let invalid_duration = [take(f64::NAN, Vec::new())];
         let invalid_offset = [take(1.0, vec![source(vec![1.0], 1, f64::INFINITY)])];
 
         assert!(assemble_transcription_audio(&invalid_duration, 48_000).is_err());
         assert!(assemble_transcription_audio(&invalid_offset, 48_000).is_err());
+    }
+
+    fn reference(take: &TranscriptionAudioTake, rate: u32) -> Vec<f32> {
+        let frames = sample_count(take.display_duration_secs, rate, "Display duration").unwrap();
+        let mut sums = vec![0.0_f32; frames];
+        let mut counts = vec![0_u32; frames];
+        for source in &take.sources {
+            let offset = offset_samples(source.offset_secs, rate).unwrap();
+            for source_frame in 0..source.samples.len() / source.channels {
+                let destination = source_frame as i128 - offset as i128;
+                if destination < 0 || destination >= frames as i128 {
+                    continue;
+                }
+                let first = source_frame * source.channels;
+                sums[destination as usize] += source.samples[first..first + source.channels]
+                    .iter()
+                    .copied()
+                    .sum::<f32>()
+                    / source.channels as f32;
+                counts[destination as usize] += 1;
+            }
+        }
+        sums.into_iter()
+            .zip(counts)
+            .map(|(sum, count)| if count == 0 { 0.0 } else { sum / count as f32 })
+            .collect()
+    }
+
+    fn bits(samples: &[f32]) -> Vec<u32> {
+        samples.iter().map(|sample| sample.to_bits()).collect()
+    }
+
+    #[test]
+    fn interval_counts_match_per_sample_counts_and_preserve_previous_takes() {
+        let values = [
+            0.0,
+            -0.0,
+            0.5,
+            -0.25,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::NAN,
+        ];
+        for channels in [1, 2, 3, 6] {
+            for frames in [0, 1, 9, 32] {
+                for offset in [-2.0, -0.5, 0.0, 0.25, 1.0, 4.0] {
+                    for source_count in 0..=3 {
+                        let take = take(
+                            frames as f64 / 8.0,
+                            (0..source_count)
+                                .map(|index| {
+                                    source(
+                                        (0..(frames + index) * channels)
+                                            .map(|i| values[(i + index) % values.len()])
+                                            .collect(),
+                                        channels,
+                                        offset + index as f64 / 8.0,
+                                    )
+                                })
+                                .collect(),
+                        );
+                        let mut expected = vec![13.0, -0.0, f32::from_bits(0x7fc0_1234)];
+                        let mut actual = expected.clone();
+                        for _ in 0..3 {
+                            expected.extend(reference(&take, 8));
+                            append_transcription_audio(&mut actual, &take, 8).unwrap();
+                            assert_eq!(actual.len(), expected.len());
+                            assert_eq!(bits(&actual[..3]), bits(&expected[..3]));
+                            for (actual, expected) in actual[3..].iter().zip(&expected[3..]) {
+                                if expected.is_nan() {
+                                    assert!(actual.is_nan());
+                                } else {
+                                    assert_eq!(actual.to_bits(), expected.to_bits());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn single_source_intervals_preserve_special_samples_and_existing_output() {
+        let values = [
+            0.0,
+            -0.0,
+            f32::from_bits(1),
+            -f32::from_bits(1),
+            f32::MIN_POSITIVE,
+            f32::MAX,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::from_bits(0x7fc0_1234),
+            f32::from_bits(0x7f80_1234),
+        ];
+        for channels in [1, 2, 6] {
+            let samples: Vec<_> = values.into_iter().cycle().take(20 * channels).collect();
+            for offset in [-3.0, -1.25, 0.0, 0.5, 2.0] {
+                let take = take(
+                    10.0,
+                    vec![
+                        source(samples.clone(), channels, offset),
+                        source(samples.clone(), channels, -6.0),
+                    ],
+                );
+                let mut actual = vec![-0.0, f32::from_bits(0x7fc0_4321)];
+                let prefix = bits(&actual);
+                append_transcription_audio(&mut actual, &take, 4).unwrap();
+                assert_eq!(bits(&actual[..2]), prefix);
+                let expected = reference(&take, 4);
+                assert_eq!(actual.len() - 2, expected.len());
+                for (actual, expected) in actual[2..].iter().zip(expected) {
+                    if expected.is_nan() {
+                        assert!(actual.is_nan());
+                    } else {
+                        assert_eq!(actual.to_bits(), expected.to_bits());
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn adjacent_overlapping_and_disjoint_source_boundaries_keep_exact_averages() {
+        let take = take(
+            10.0,
+            vec![
+                source(vec![1.0; 4], 1, 0.0),
+                source(vec![3.0; 4], 1, -2.0),
+                source(vec![5.0; 2], 1, -4.0),
+                source(vec![7.0; 1], 1, -8.0),
+                source(Vec::new(), 1, -4.0),
+                source(vec![9.0; 2], 1, 3.0),
+            ],
+        );
+        let expected = vec![1.0, 1.0, 2.0, 2.0, 4.0, 4.0, 0.0, 0.0, 7.0, 0.0];
+        assert_eq!(assemble_transcription_audio(&[take], 1).unwrap(), expected);
+    }
+
+    #[test]
+    fn invalid_append_leaves_existing_samples_unchanged() {
+        for (duration, channels, offset, rate, samples) in [
+            (1.0, 1, 0.0, 0, vec![1.0]),
+            (-1.0, 1, 0.0, 8, vec![1.0]),
+            (f64::NAN, 1, 0.0, 8, vec![1.0]),
+            (f64::MAX, 1, 0.0, 8, vec![1.0]),
+            (1.0, 0, 0.0, 8, vec![1.0]),
+            (1.0, 2, 0.0, 8, vec![1.0]),
+            (1.0, 1, f64::NAN, 8, vec![1.0]),
+            (1.0, 1, f64::INFINITY, 8, vec![1.0]),
+            (1.0, 1, f64::MAX, 8, vec![1.0]),
+        ] {
+            let mut output = vec![0.25, -0.0];
+            let expected = bits(&output);
+            let take = take(
+                duration,
+                vec![
+                    source(vec![1.0; 8], 1, 0.0),
+                    source(samples, channels, offset),
+                ],
+            );
+            assert!(append_transcription_audio(&mut output, &take, rate).is_err());
+            assert_eq!(bits(&output), expected);
+        }
     }
 }

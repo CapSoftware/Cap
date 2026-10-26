@@ -3076,6 +3076,162 @@ impl Message<Unlock> for MicrophoneFeed {
     }
 }
 
+/// Test-only microphone feeds driven by a synthetic device instead of
+/// hardware, so recording tests exercise the real feed, lock and pipeline
+/// paths with samples whose capture times are known exactly.
+#[cfg(any(test, feature = "test-utils"))]
+pub mod synthetic {
+    use super::*;
+
+    const STREAM_ID: u32 = 1;
+
+    /// cpal has no public constructor for `InputCallbackInfo`, and a
+    /// synthetic device has no device callback. Consumers time samples from
+    /// `MicrophoneSamples::timestamp`; this info reads as stream instant 0.
+    fn zero_callback_info() -> InputCallbackInfo {
+        // SAFETY: `InputCallbackInfo` (cpal pinned by git rev) holds two
+        // `StreamInstant { secs: i64, nanos: u32 }` values and nothing else,
+        // so the all-zero bit pattern is a valid value (instant 0) whatever
+        // the field layout.
+        unsafe { std::mem::zeroed() }
+    }
+
+    impl Message<crate::feeds::Stall> for MicrophoneFeed {
+        type Reply = ();
+
+        async fn handle(
+            &mut self,
+            msg: crate::feeds::Stall,
+            _: &mut Context<Self, Self::Reply>,
+        ) -> Self::Reply {
+            tokio::time::sleep(msg.0).await;
+        }
+    }
+
+    pub struct SyntheticMicrophone {
+        feed: ActorRef<MicrophoneFeed>,
+        sample_rate: u32,
+        channels: u16,
+        _done_rx: std::sync::Mutex<mpsc::Receiver<()>>,
+    }
+
+    impl SyntheticMicrophone {
+        /// A feed attached to an f32 input device named `name`.
+        pub fn spawn(name: &str, sample_rate: u32, channels: u16) -> Self {
+            let (done_tx, done_rx) = mpsc::sync_channel(1);
+            let (error_tx, _) = flume::unbounded();
+            let mut feed = MicrophoneFeed::new(error_tx);
+            feed.input_id_counter = STREAM_ID;
+            feed.state = State::Open(OpenState {
+                connecting: None,
+                attached: Some(AttachedState {
+                    id: STREAM_ID,
+                    label: name.to_string(),
+                    config: SupportedStreamConfig::new(
+                        channels,
+                        cpal::SampleRate(sample_rate),
+                        cpal::SupportedBufferSize::Unknown,
+                        SampleFormat::F32,
+                    ),
+                    buffer_size_frames: None,
+                    done_tx,
+                }),
+            });
+            // A recording subscription attaches to the input's stream
+            // health, which opening a real input registers.
+            #[cfg(any(target_os = "linux", windows))]
+            let _ = feed
+                .stream_health
+                .insert(STREAM_ID, Arc::new(StreamHealth::new(STREAM_ID)));
+            Self {
+                feed: MicrophoneFeed::spawn(feed),
+                sample_rate,
+                channels,
+                _done_rx: std::sync::Mutex::new(done_rx),
+            }
+        }
+
+        pub async fn lock(&self) -> anyhow::Result<MicrophoneFeedLock> {
+            self.feed
+                .ask(Lock)
+                .await
+                .map_err(|error| anyhow::anyhow!("synthetic microphone lock: {error}"))
+        }
+
+        /// Takes the device away the way the app does when it disappears or
+        /// is deselected (`RemoveInput`); a locked feed defers it.
+        pub async fn remove_input(&self) {
+            let _ = self.feed.ask(RemoveInput).await;
+        }
+
+        /// Delivers interleaved f32 samples whose first frame was captured at
+        /// `timestamp`.
+        pub async fn push(&self, samples: &[f32], timestamp: Timestamp) {
+            let data = samples.iter().flat_map(|s| s.to_ne_bytes()).collect();
+            let _ = self
+                .feed
+                .tell(MicrophoneSamples {
+                    stream_id: STREAM_ID,
+                    data,
+                    format: SampleFormat::F32,
+                    sample_rate: self.sample_rate,
+                    channels: self.channels,
+                    info: zero_callback_info(),
+                    timestamp,
+                })
+                .await;
+        }
+
+        /// Delivers one raw callback buffer as a device would, in any sample
+        /// format, rate and channel count, whatever the feed was opened with.
+        pub async fn push_raw(
+            &self,
+            data: Vec<u8>,
+            format: SampleFormat,
+            sample_rate: u32,
+            channels: u16,
+            timestamp: Timestamp,
+        ) {
+            let _ = self
+                .feed
+                .tell(MicrophoneSamples {
+                    stream_id: STREAM_ID,
+                    data,
+                    format,
+                    sample_rate,
+                    channels,
+                    info: zero_callback_info(),
+                    timestamp,
+                })
+                .await;
+        }
+
+        /// Hands samples over the way the capture callback does
+        /// (`enqueue_microphone_samples`: `try_send`, never waiting).
+        pub fn try_push(&self, samples: &[f32], timestamp: Timestamp) -> crate::feeds::Admission {
+            let data = samples.iter().flat_map(|s| s.to_ne_bytes()).collect();
+            crate::feeds::Admission::of(
+                self.feed
+                    .tell(MicrophoneSamples {
+                        stream_id: STREAM_ID,
+                        data,
+                        format: SampleFormat::F32,
+                        sample_rate: self.sample_rate,
+                        channels: self.channels,
+                        info: zero_callback_info(),
+                        timestamp,
+                    })
+                    .try_send(),
+            )
+        }
+
+        /// Blocks the feed actor for `duration` (scripted slow consumer).
+        pub fn stall(&self, duration: Duration) -> crate::feeds::Admission {
+            crate::feeds::Admission::of(self.feed.tell(crate::feeds::Stall(duration)).try_send())
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1000,7 +1000,7 @@ diff --git a/crates/gpui_linux/src/linux/wayland/window.rs b/crates/gpui_linux/s
                      // Limit interactive resizes to once per vblank
                      if configure.resizing && state.resize_throttle {
                          state.surface_state.ack_configure(serial);
-@@ -945,6 +1313,43 @@
+@@ -945,6 +1313,47 @@
                  window_geometry.size.height,
              );
 
@@ -1028,7 +1028,11 @@ diff --git a/crates/gpui_linux/src/linux/wayland/window.rs b/crates/gpui_linux/s
 +                            let config = WgpuSurfaceConfig {
 +                                size: state.renderer.viewport_size(),
 +                                transparent: state.is_transparent(),
-+                                preferred_present_mode: Some(wgpu::PresentMode::Mailbox),
++                                // Keep the present mode chosen from this surface's
++                                // capabilities when the window was created: GL
++                                // surfaces have no Mailbox, and a configure they
++                                // refuse leaves the next frame to panic.
++                                preferred_present_mode: None,
 +                            };
 +                            state.renderer.replace_surface(&raw, config, &gpu.instance)
 +                        })
@@ -1044,7 +1048,7 @@ diff --git a/crates/gpui_linux/src/linux/wayland/window.rs b/crates/gpui_linux/s
              let request_frame_callback = !state.acknowledged_first_configure;
              if request_frame_callback {
                  state.acknowledged_first_configure = true;
-@@ -958,7 +1363,11 @@
+@@ -958,7 +1367,11 @@
          if let zxdg_toplevel_decoration_v1::Event::Configure { mode } = event {
              match mode {
                  WEnum::Value(zxdg_toplevel_decoration_v1::Mode::ServerSide) => {
@@ -1057,7 +1061,7 @@ diff --git a/crates/gpui_linux/src/linux/wayland/window.rs b/crates/gpui_linux/s
                      let callback = self.callbacks.borrow_mut().appearance_changed.take();
                      if let Some(mut fun) = callback {
                          fun();
-@@ -966,7 +1375,11 @@
+@@ -966,7 +1379,11 @@
                      }
                  }
                  WEnum::Value(zxdg_toplevel_decoration_v1::Mode::ClientSide) => {
@@ -1070,7 +1074,7 @@ diff --git a/crates/gpui_linux/src/linux/wayland/window.rs b/crates/gpui_linux/s
                      // Update background to be transparent
                      let callback = self.callbacks.borrow_mut().appearance_changed.take();
                      if let Some(mut fun) = callback {
-@@ -1271,6 +1684,7 @@
+@@ -1271,6 +1688,7 @@
              }
              if let Some(scale) = scale {
                  state.scale = scale;
@@ -1078,7 +1082,7 @@ diff --git a/crates/gpui_linux/src/linux/wayland/window.rs b/crates/gpui_linux/s
              }
              let device_bounds = state.bounds.to_device_pixels(state.scale);
              state.renderer.update_drawable_size(device_bounds.size);
-@@ -1428,6 +1842,10 @@
+@@ -1428,6 +1846,10 @@
  }
 
  impl PlatformWindow for WaylandWindow {
@@ -1089,7 +1093,7 @@ diff --git a/crates/gpui_linux/src/linux/wayland/window.rs b/crates/gpui_linux/s
      fn bounds(&self) -> Bounds<Pixels> {
          self.borrow().bounds
      }
-@@ -1466,7 +1884,7 @@
+@@ -1466,7 +1888,7 @@
      }
 
      fn resize(&mut self, size: Size<Pixels>) {
@@ -1098,7 +1102,7 @@ diff --git a/crates/gpui_linux/src/linux/wayland/window.rs b/crates/gpui_linux/s
          let state_ptr = self.0.clone();
 
          // A popup's placement is the compositor's, so a resize re-runs the positioner and the
-@@ -1486,6 +1904,11 @@
+@@ -1486,6 +1908,11 @@
              return;
          }
 
@@ -1110,7 +1114,7 @@ diff --git a/crates/gpui_linux/src/linux/wayland/window.rs b/crates/gpui_linux/s
          // Keep window geometry consistent with configure handling. On Wayland, window geometry is
          // surface-local: resizing should not attempt to translate the window; the compositor
          // controls placement. We also account for client-side decoration insets and tiling.
-@@ -1566,6 +1989,20 @@
+@@ -1566,6 +1993,20 @@
          _answers: &[PromptButton],
      ) -> Option<Receiver<usize>> {
          None
@@ -1131,7 +1135,7 @@ diff --git a/crates/gpui_linux/src/linux/wayland/window.rs b/crates/gpui_linux/s
      }
 
      fn activate(&self) {
-@@ -1596,7 +2033,9 @@
+@@ -1596,7 +2037,9 @@
      }
 
      fn set_title(&mut self, title: &str) {
@@ -1142,7 +1146,7 @@ diff --git a/crates/gpui_linux/src/linux/wayland/window.rs b/crates/gpui_linux/s
              toplevel.set_title(title.to_string());
          }
      }
-@@ -1650,7 +2089,7 @@
+@@ -1650,7 +2093,7 @@
          let state = self.borrow();
          if let Some(toplevel) = state.surface_state.toplevel() {
              if !state.fullscreen {
@@ -1151,7 +1155,7 @@ diff --git a/crates/gpui_linux/src/linux/wayland/window.rs b/crates/gpui_linux/s
              } else {
                  toplevel.unset_fullscreen();
              }
-@@ -1706,6 +2145,13 @@
+@@ -1706,6 +2149,13 @@
 
      fn draw(&self, scene: &Scene) {
          let mut state = self.borrow_mut();
@@ -1165,7 +1169,7 @@ diff --git a/crates/gpui_linux/src/linux/wayland/window.rs b/crates/gpui_linux/s
 
          if state.renderer.device_lost() {
              let raw_window = RawWindow {
-@@ -1730,6 +2176,12 @@
+@@ -1730,6 +2180,12 @@
          }
 
          state.renderer_presented = state.renderer.draw(scene);
@@ -1178,7 +1182,7 @@ diff --git a/crates/gpui_linux/src/linux/wayland/window.rs b/crates/gpui_linux/s
 
          if state.renderer.needs_redraw() {
              state.force_render_after_recovery = true;
-@@ -1738,6 +2190,13 @@
+@@ -1738,6 +2194,13 @@
 
      fn completed_frame(&self) {
          let mut state = self.borrow_mut();
@@ -1192,7 +1196,7 @@ diff --git a/crates/gpui_linux/src/linux/wayland/window.rs b/crates/gpui_linux/s
 
          // Work around a bug in old versions of wlroots where committing without a buffer attached
          // can cause invalid synchronization that leads to graphical corruption.
-@@ -1776,6 +2235,9 @@
+@@ -1776,6 +2239,9 @@
 
      fn start_window_resize(&self, edge: gpui::ResizeEdge) {
          let state = self.borrow();
@@ -1202,7 +1206,7 @@ diff --git a/crates/gpui_linux/src/linux/wayland/window.rs b/crates/gpui_linux/s
          if let Some(toplevel) = state.surface_state.toplevel() {
              toplevel.resize(
                  &state.globals.seat,
-@@ -1835,7 +2297,13 @@
+@@ -1835,7 +2301,13 @@
          // Commit so the new input region applies immediately. Otherwise it
          // waits for the next frame, which could be the very click we want to
          // allow passing through.
@@ -1217,7 +1221,7 @@ diff --git a/crates/gpui_linux/src/linux/wayland/window.rs b/crates/gpui_linux/s
      }
 
      fn window_decorations(&self) -> Decorations {
-@@ -1854,6 +2322,7 @@
+@@ -1854,6 +2326,7 @@
              Some(decoration) => {
                  decoration.set_mode(decorations.to_xdg());
                  state.decorations = decorations;
@@ -1225,7 +1229,7 @@ diff --git a/crates/gpui_linux/src/linux/wayland/window.rs b/crates/gpui_linux/s
                  update_window(state);
              }
              None => {
-@@ -1863,6 +2332,7 @@
+@@ -1863,6 +2336,7 @@
                      );
                  }
                  state.decorations = WindowDecorations::Client;
@@ -1233,7 +1237,7 @@ diff --git a/crates/gpui_linux/src/linux/wayland/window.rs b/crates/gpui_linux/s
                  update_window(state);
              }
          }
-@@ -1876,6 +2346,7 @@
+@@ -1876,6 +2350,7 @@
          let mut state = self.borrow_mut();
          if Some(inset) != state.client_inset {
              state.client_inset = Some(inset);
@@ -1241,7 +1245,7 @@ diff --git a/crates/gpui_linux/src/linux/wayland/window.rs b/crates/gpui_linux/s
              update_window(state);
          }
      }
-@@ -2082,3 +2553,337 @@
+@@ -2082,3 +2557,337 @@
 
      bounds
  }

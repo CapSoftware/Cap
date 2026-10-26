@@ -20,8 +20,8 @@ use ringbuf::{
 use std::{
     collections::{HashMap, VecDeque},
     sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering},
+        Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak,
+        atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering},
     },
 };
 use tracing::{info, warn};
@@ -124,6 +124,15 @@ impl AudioSegmentTrack {
 
     pub fn offset(&self, offsets: &ClipOffsets) -> f32 {
         (self.get_offset)(offsets) + self.timing_offset_secs
+    }
+
+    fn same_source(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.data, &other.data)
+            && std::ptr::fn_addr_eq(self.get_gain, other.get_gain)
+            && std::ptr::fn_addr_eq(self.get_stereo_mode, other.get_stereo_mode)
+            && std::ptr::fn_addr_eq(self.get_offset, other.get_offset)
+            && self.timing_offset_secs.to_bits() == other.timing_offset_secs.to_bits()
+            && self.is_microphone == other.is_microphone
     }
 }
 
@@ -1305,6 +1314,7 @@ fn mix_music(
     let sample_rate = AudioData::SAMPLE_RATE as f64;
     let frame_start = frame_start as i64;
     let frame_end = frame_start + samples as i64;
+    let mut mixed = vec![false; samples];
 
     for segment in &timeline.audio_segments {
         if !segment.enabled || segment.end <= segment.start {
@@ -1375,9 +1385,23 @@ fn mix_music(
                 (*l, *r)
             };
 
-            let out_index = ((out_sample - frame_start) as usize) * 2;
-            out[out_index] = (out[out_index] + l * g).clamp(-1.0, 1.0);
-            out[out_index + 1] = (out[out_index + 1] + r * g).clamp(-1.0, 1.0);
+            let frame = (out_sample - frame_start) as usize;
+            out[frame * 2] += l * g;
+            out[frame * 2 + 1] += r * g;
+            mixed[frame] = true;
+        }
+    }
+
+    // Only frames that received music are clipped: recording audio can sit
+    // above 1.0 (clip volume goes to 2x) and must not change because music
+    // plays elsewhere on the timeline.
+    for (frame, _) in out[..samples * 2]
+        .chunks_exact_mut(2)
+        .zip(&mixed)
+        .filter(|(_, mixed)| **mixed)
+    {
+        for sample in frame {
+            *sample = sample.clamp(-1.0, 1.0);
         }
     }
 }
@@ -1452,6 +1476,10 @@ fn silent_audio_frame(samples: usize) -> FFAudio {
     frame
 }
 
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
 /// Shared state between the background render thread and the audio callback.
 ///
 /// The timeline mix is rendered progressively into `samples` (f32 bit
@@ -1472,9 +1500,55 @@ struct ProgressiveTimeline {
     /// Tells the producer to bail out early (playback stopped).
     stop: AtomicBool,
     complete: AtomicBool,
+    /// Pass 1 has written everything it ever will.
+    pass1_done: AtomicBool,
+    /// A playback cache keeps this render once its readers are gone.
+    retained: AtomicBool,
+    retain_slot: Mutex<RetainSlot>,
+    readers: AtomicUsize,
+    wake: Mutex<u64>,
+    woken: Condvar,
+    created: std::time::Instant,
+    paused_at_nanos: AtomicU64,
+    retired: Mutex<Retired>,
+}
+
+/// A replaced cached render, released only once this render stops working
+/// (finished, stopped or parked), so freeing its buffer never competes with
+/// the start of playback.
+#[derive(Default)]
+struct Retired {
+    idle: bool,
+    render: Option<CachedProgressiveRender>,
+}
+
+#[derive(Default)]
+struct RetainSlot {
+    release: Option<CacheRelease>,
+    exited: bool,
 }
 
 impl ProgressiveTimeline {
+    fn new(len: usize, primary_start: usize) -> Self {
+        Self {
+            samples: Self::allocate_samples(len),
+            primary_start,
+            primary_end: AtomicUsize::new(primary_start),
+            wrap_end: AtomicUsize::new(0),
+            stop: AtomicBool::new(false),
+            complete: AtomicBool::new(false),
+            pass1_done: AtomicBool::new(false),
+            retained: AtomicBool::new(false),
+            retain_slot: Mutex::default(),
+            readers: AtomicUsize::new(1),
+            wake: Mutex::new(0),
+            woken: Condvar::new(),
+            created: std::time::Instant::now(),
+            paused_at_nanos: AtomicU64::new(0),
+            retired: Mutex::default(),
+        }
+    }
+
     /// `AtomicU32` has the same size, alignment and bit validity as `u32`
     /// (documented guarantee), so a zeroed `u32` allocation — which the
     /// allocator can hand out as untouched zero pages, unlike constructing
@@ -1482,6 +1556,107 @@ impl ProgressiveTimeline {
     fn allocate_samples(len: usize) -> Box<[AtomicU32]> {
         let raw = vec![0u32; len].into_boxed_slice();
         unsafe { Box::from_raw(Box::into_raw(raw) as *mut [AtomicU32]) }
+    }
+
+    /// Whether every sample in `[from, to)` is already rendered (or will
+    /// never be written, so it reads as silence either way).
+    fn covers(&self, from: usize, to: usize) -> bool {
+        let to = to.min(self.samples.len());
+        if from >= to || self.complete.load(Ordering::Acquire) {
+            return true;
+        }
+        let primary = to <= self.primary_start
+            || self.pass1_done.load(Ordering::Acquire)
+            || self.primary_end.load(Ordering::Acquire) >= to;
+        let wrap = from >= self.primary_start
+            || self.wrap_end.load(Ordering::Acquire) >= to.min(self.primary_start);
+        primary && wrap
+    }
+
+    /// Hands the render to a playback cache. Fails once the render thread
+    /// has exited, since nothing would release it then.
+    fn retain(&self, release: CacheRelease) -> bool {
+        let mut slot = lock(&self.retain_slot);
+        if slot.exited {
+            return false;
+        }
+        slot.release = Some(release);
+        self.retained.store(true, Ordering::Release);
+        true
+    }
+
+    fn retire(&self, previous: Option<CachedProgressiveRender>) {
+        let mut retired = lock(&self.retired);
+        if retired.idle {
+            drop(retired);
+            drop(previous);
+        } else {
+            retired.render = previous;
+        }
+    }
+
+    /// Releases the retired render. `idle` marks a render that will not
+    /// resume, so later retirements are released at once.
+    fn release_retired(&self, idle: bool) {
+        let previous = {
+            let mut retired = lock(&self.retired);
+            retired.idle |= idle;
+            retired.render.take()
+        };
+        drop(previous);
+    }
+
+    fn attach_reader(&self) {
+        self.readers.fetch_add(1, Ordering::AcqRel);
+        self.notify();
+    }
+
+    fn notify(&self) {
+        *lock(&self.wake) += 1;
+        self.woken.notify_all();
+    }
+
+    fn wake_generation(&self) -> u64 {
+        *lock(&self.wake)
+    }
+
+    /// Parks the render thread until a `notify` after `seen` was read, or
+    /// the timeout. Callers read `seen` before checking the conditions they
+    /// wait on, so a notify racing those checks is never missed.
+    fn wait(&self, seen: u64, timeout: std::time::Duration) {
+        let deadline = std::time::Instant::now() + timeout;
+        let mut wake = lock(&self.wake);
+        while *wake == seen {
+            let now = std::time::Instant::now();
+            if now >= deadline {
+                return;
+            }
+            wake = self
+                .woken
+                .wait_timeout(wake, deadline - now)
+                .unwrap_or_else(PoisonError::into_inner)
+                .0;
+        }
+    }
+
+    fn detach_reader(&self) {
+        if self.readers.fetch_sub(1, Ordering::AcqRel) == 1 {
+            self.paused_at_nanos
+                .store(self.created.elapsed().as_nanos() as u64, Ordering::Release);
+        }
+    }
+
+    fn paused_for(&self) -> std::time::Duration {
+        self.created
+            .elapsed()
+            .saturating_sub(std::time::Duration::from_nanos(
+                self.paused_at_nanos.load(Ordering::Acquire),
+            ))
+    }
+
+    fn shut_down(&self) {
+        self.stop.store(true, Ordering::Release);
+        self.notify();
     }
 }
 
@@ -1573,6 +1748,326 @@ pub(crate) fn preparing_audio_output_policy(
     })
 }
 
+const PLAYBACK_AUDIO_IDLE_RELEASE: std::time::Duration = std::time::Duration::from_secs(120);
+
+type CacheEntry = Arc<Mutex<Option<CachedProgressiveRender>>>;
+
+static PLAYBACK_AUDIO_CACHES: Mutex<Vec<Weak<Mutex<Option<CachedProgressiveRender>>>>> =
+    Mutex::new(Vec::new());
+
+/// Drops every cached playback render in the process, so memory returns to
+/// what it is on main while paused. Called before exports and on memory
+/// pressure.
+pub fn release_playback_audio_caches() {
+    let caches = lock(&PLAYBACK_AUDIO_CACHES)
+        .iter()
+        .filter_map(Weak::upgrade)
+        .collect::<Vec<_>>();
+    for cache in caches {
+        *lock(&cache) = None;
+    }
+}
+
+#[derive(Clone)]
+pub struct PlaybackAudioCache {
+    entry: CacheEntry,
+    idle_release: std::time::Duration,
+}
+
+impl Default for PlaybackAudioCache {
+    fn default() -> Self {
+        Self::with_idle_release(PLAYBACK_AUDIO_IDLE_RELEASE)
+    }
+}
+
+impl PlaybackAudioCache {
+    fn with_idle_release(idle_release: std::time::Duration) -> Self {
+        #[cfg(target_os = "macos")]
+        memory_pressure::watch();
+        let entry = CacheEntry::default();
+        let mut caches = lock(&PLAYBACK_AUDIO_CACHES);
+        caches.retain(|cache| cache.strong_count() > 0);
+        caches.push(Arc::downgrade(&entry));
+        Self {
+            entry,
+            idle_release,
+        }
+    }
+
+    pub fn clear(&self) {
+        *lock(&self.entry) = None;
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod memory_pressure {
+    use std::ffi::c_void;
+
+    #[repr(C)]
+    struct DispatchSourceType {
+        _private: [u8; 0],
+    }
+
+    const DISPATCH_MEMORYPRESSURE_WARN: usize = 0x02;
+    const DISPATCH_MEMORYPRESSURE_CRITICAL: usize = 0x04;
+    const QOS_CLASS_UTILITY: isize = 0x11;
+
+    unsafe extern "C" {
+        static _dispatch_source_type_memorypressure: DispatchSourceType;
+        fn dispatch_get_global_queue(identifier: isize, flags: usize) -> *mut c_void;
+        fn dispatch_source_create(
+            kind: *const DispatchSourceType,
+            handle: usize,
+            mask: usize,
+            queue: *mut c_void,
+        ) -> *mut c_void;
+        fn dispatch_source_set_event_handler_f(
+            source: *mut c_void,
+            handler: extern "C" fn(*mut c_void),
+        );
+        fn dispatch_resume(object: *mut c_void);
+    }
+
+    pub(super) extern "C" fn on_memory_pressure(_context: *mut c_void) {
+        super::release_playback_audio_caches();
+    }
+
+    /// Installs one process-wide memory pressure source. It lives for the
+    /// rest of the process, so it is never released.
+    ///
+    /// Not installed in unit tests: a real pressure event on the host would
+    /// release the caches of every test running in the process at once.
+    /// Tests drive `on_memory_pressure` directly instead.
+    pub(super) fn watch() {
+        if cfg!(test) {
+            return;
+        }
+        static WATCH: std::sync::Once = std::sync::Once::new();
+        WATCH.call_once(|| unsafe {
+            let source = dispatch_source_create(
+                &_dispatch_source_type_memorypressure,
+                0,
+                DISPATCH_MEMORYPRESSURE_WARN | DISPATCH_MEMORYPRESSURE_CRITICAL,
+                dispatch_get_global_queue(QOS_CLASS_UTILITY, 0),
+            );
+            if source.is_null() {
+                return;
+            }
+            dispatch_source_set_event_handler_f(source, on_memory_pressure);
+            dispatch_resume(source);
+        });
+    }
+}
+
+struct CachePlan {
+    key: ProgressiveRenderKey,
+    shift_from: usize,
+    shift: usize,
+    ready_at: usize,
+    rate: u32,
+    channels: usize,
+}
+
+struct CachedProgressiveRender {
+    key: ProgressiveRenderKey,
+    render: Arc<ProgressiveRender>,
+}
+
+struct ProgressiveRenderKey {
+    segments: Vec<AudioSegment>,
+    music: Vec<(String, Arc<AudioData>)>,
+    project: Vec<u8>,
+    duration_bits: u64,
+    sample_rate: u32,
+    channels: usize,
+}
+
+impl ProgressiveRenderKey {
+    fn new(
+        segments: Vec<AudioSegment>,
+        music: &MusicTracks,
+        project: &ProjectConfiguration,
+        duration_secs: f64,
+        output_info: AudioInfo,
+    ) -> Option<Self> {
+        let mut music = music
+            .iter()
+            .map(|(path, data)| (path.clone(), data.clone()))
+            .collect::<Vec<_>>();
+        music.sort_by(|a, b| a.0.cmp(&b.0));
+        Some(Self {
+            segments,
+            music,
+            project: audio_project_key(project)?,
+            duration_bits: duration_secs.to_bits(),
+            sample_rate: output_info.sample_rate,
+            channels: output_info.channels,
+        })
+    }
+}
+
+impl PartialEq for ProgressiveRenderKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.project == other.project
+            && self.duration_bits == other.duration_bits
+            && self.sample_rate == other.sample_rate
+            && self.channels == other.channels
+            && self.music.len() == other.music.len()
+            && self
+                .music
+                .iter()
+                .zip(&other.music)
+                .all(|(a, b)| a.0 == b.0 && Arc::ptr_eq(&a.1, &b.1))
+            && self.segments.len() == other.segments.len()
+            && self.segments.iter().zip(&other.segments).all(|(a, b)| {
+                a.tracks.len() == b.tracks.len()
+                    && a.tracks
+                        .iter()
+                        .zip(&b.tracks)
+                        .all(|(a, b)| a.same_source(b))
+            })
+    }
+}
+
+/// Serializes everything the audio renderer reads from a project. Both
+/// structs are destructured without `..`, so a new field fails to compile
+/// here until someone decides whether it changes playback audio. Fields
+/// below `segments`, `clips` and `audio` are kept whole, so new nested
+/// fields change the key on their own.
+fn audio_project_key(project: &ProjectConfiguration) -> Option<Vec<u8>> {
+    let ProjectConfiguration {
+        aspect_ratio: _,
+        background: _,
+        camera: _,
+        audio,
+        cursor: _,
+        hotkeys: _,
+        timeline,
+        overlay_order: _,
+        captions: _,
+        keyboard: _,
+        clips,
+        annotations: _,
+        hidden_text_segments: _,
+        screen_motion_blur: _,
+        screen_movement_spring: _,
+        color_correction: _,
+        text_size_version: _,
+        text_anim_version: _,
+    } = project;
+    let timeline = timeline.as_ref().map(|timeline| {
+        let TimelineConfiguration {
+            segments,
+            transitions,
+            zoom_segments: _,
+            scene_segments: _,
+            mask_segments: _,
+            text_segments: _,
+            caption_segments: _,
+            keyboard_segments: _,
+            audio_segments,
+            style_segments: _,
+            image_segments: _,
+            camera3d_segments: _,
+        } = timeline;
+        let segments = segments
+            .iter()
+            .map(|segment| cap_project::TimelineSegment {
+                name: None,
+                hide_cursor: None,
+                ..segment.clone()
+            })
+            .collect::<Vec<_>>();
+        (
+            segments,
+            transitions,
+            audio_segments,
+            timeline.hold_windows(),
+        )
+    });
+    serde_json::to_vec(&(audio, clips, timeline)).ok()
+}
+
+/// Owner handle of a progressive render. Dropping the last one (readers and
+/// the cache) stops its render thread.
+struct ProgressiveRender {
+    timeline: Arc<ProgressiveTimeline>,
+}
+
+impl Drop for ProgressiveRender {
+    fn drop(&mut self) {
+        self.timeline.shut_down();
+    }
+}
+
+/// Whether every sample of a progressive render is a pure function of its
+/// timeline position, so a render started anywhere holds the same samples a
+/// render started at another playhead would. Studio Sound, retimed audio,
+/// transitions, text holds and resampling all carry state from wherever the
+/// render began, so any of them rules reuse out.
+fn render_is_origin_independent(
+    project: &ProjectConfiguration,
+    output_info: AudioInfo,
+    duration_secs: f64,
+) -> bool {
+    if output_info.sample_rate != AudioData::SAMPLE_RATE
+        || output_info.channels != usize::from(AudioRenderer::CHANNELS)
+        || (project.audio.improve && !project.audio.mute)
+    {
+        return false;
+    }
+    let Some(timeline) = &project.timeline else {
+        return false;
+    };
+    if !timeline.transitions.is_empty() || !timeline.hold_windows().is_empty() {
+        return false;
+    }
+    let rate = AudioData::SAMPLE_RATE as f64;
+    let mut content_end = 0.0;
+    let segments_stateless = timeline.segments.iter().all(|segment| {
+        content_end += segment.duration();
+        if segment.speed_audio_mode == Some(ClipSpeedAudioMode::Mute) {
+            return true;
+        }
+        let start = segment.start * rate;
+        segment.timescale == 1.0 && (start - start.floor() - 0.5).abs() > 1e-4
+    });
+    segments_stateless
+        && duration_secs.to_bits() == timeline.duration().to_bits()
+        && (content_end * rate).round() as usize <= (duration_secs * rate) as usize
+}
+
+/// Frames between the slot pass 1 starts writing at and the source sample it
+/// starts rendering from. The two round differently, so a render begun at
+/// `pass1_start_secs` holds the origin independent samples shifted by this
+/// many frames from its first slot on.
+fn origin_shift(pass1_start_secs: f64) -> Option<usize> {
+    let slot = output_sample_index(pass1_start_secs, AudioData::SAMPLE_RATE, 1, usize::MAX);
+    let source = (pass1_start_secs * AudioData::SAMPLE_RATE as f64).round() as usize;
+    source.checked_sub(slot).filter(|shift| *shift <= 1)
+}
+
+struct CacheRelease {
+    cache: Weak<Mutex<Option<CachedProgressiveRender>>>,
+    idle_release: std::time::Duration,
+}
+
+impl CacheRelease {
+    fn release(self, timeline: &Arc<ProgressiveTimeline>) {
+        timeline.retained.store(false, Ordering::Release);
+        let Some(cache) = self.cache.upgrade() else {
+            return;
+        };
+        let mut entry = lock(&cache);
+        if entry
+            .as_ref()
+            .is_some_and(|cached| Arc::ptr_eq(&cached.render.timeline, timeline))
+        {
+            *entry = None;
+        }
+    }
+}
+
 enum PrerenderedAudioBufferMode<T: FromSampleBytes> {
     Progressive(ProgressiveAudioBuffer<T>),
     Streaming(Box<StreamingAudioBuffer<T>>),
@@ -1591,8 +2086,13 @@ pub struct PrerenderedAudioBuffer<T: FromSampleBytes> {
 }
 
 struct ProgressiveAudioBuffer<T: FromSampleBytes> {
-    timeline: Arc<ProgressiveTimeline>,
-    ready_rx: std::sync::mpsc::Receiver<()>,
+    render: Arc<ProgressiveRender>,
+    ready_rx: Option<std::sync::mpsc::Receiver<()>>,
+    /// A reader replaying a cached render reads slot `index + shift` from
+    /// `shift_from` on, which is where its own fresh render would have put
+    /// each sample.
+    shift_from: usize,
+    shift: usize,
     read_position: usize,
     sample_rate: u32,
     channels: usize,
@@ -1601,18 +2101,63 @@ struct ProgressiveAudioBuffer<T: FromSampleBytes> {
 
 impl<T: FromSampleBytes> Drop for ProgressiveAudioBuffer<T> {
     fn drop(&mut self) {
-        self.timeline.stop.store(true, Ordering::Release);
+        self.render.timeline.detach_reader();
     }
 }
 
 impl<T: FromSampleBytes + cpal::FromSample<f32>> PrerenderedAudioBuffer<T> {
-    pub fn new(
+    #[cfg(test)]
+    fn new(
         segments: Vec<AudioSegment>,
         music: MusicTracks,
         project: &ProjectConfiguration,
         output_info: AudioInfo,
         duration_secs: f64,
         start_playhead_secs: f64,
+    ) -> Self {
+        Self::create(
+            segments,
+            music,
+            project,
+            output_info,
+            duration_secs,
+            start_playhead_secs,
+            None,
+        )
+    }
+
+    /// Like [`Self::new`], but replays the cache's render when it provably
+    /// holds the same samples a fresh render would, and otherwise keeps the
+    /// fresh render for the next play when it can be replayed later.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_cached(
+        segments: Vec<AudioSegment>,
+        music: MusicTracks,
+        project: &ProjectConfiguration,
+        output_info: AudioInfo,
+        duration_secs: f64,
+        start_playhead_secs: f64,
+        cache: &PlaybackAudioCache,
+    ) -> Self {
+        Self::create(
+            segments,
+            music,
+            project,
+            output_info,
+            duration_secs,
+            start_playhead_secs,
+            Some(cache),
+        )
+    }
+
+    fn create(
+        segments: Vec<AudioSegment>,
+        music: MusicTracks,
+        project: &ProjectConfiguration,
+        output_info: AudioInfo,
+        duration_secs: f64,
+        start_playhead_secs: f64,
+        cache: Option<&PlaybackAudioCache>,
     ) -> Self {
         let output_info = output_info.for_ffmpeg_output();
         let estimated_output_samples = progressive_buffer_samples(
@@ -1623,16 +2168,42 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> PrerenderedAudioBuffer<T> {
         let estimated_memory_bytes = progressive_buffer_bytes(estimated_output_samples);
 
         let mode = if estimated_memory_bytes <= MAX_PROGRESSIVE_BUFFER_BYTES {
-            PrerenderedAudioBufferMode::Progressive(ProgressiveAudioBuffer::new(
-                segments,
-                music,
-                project,
-                output_info,
-                duration_secs,
-                start_playhead_secs,
-                estimated_output_samples,
-            ))
+            let plan = cache.and_then(|_| {
+                ProgressiveAudioBuffer::<T>::cache_plan(
+                    segments.clone(),
+                    &music,
+                    project,
+                    output_info,
+                    duration_secs,
+                    start_playhead_secs,
+                    estimated_output_samples,
+                )
+            });
+            let cached = cache
+                .zip(plan.as_ref())
+                .and_then(|(cache, plan)| ProgressiveAudioBuffer::from_cache(cache, plan));
+            PrerenderedAudioBufferMode::Progressive(match cached {
+                Some(cached) => cached,
+                None => {
+                    let fresh = ProgressiveAudioBuffer::new(
+                        segments,
+                        music,
+                        project,
+                        output_info,
+                        duration_secs,
+                        start_playhead_secs,
+                        cache.filter(|_| plan.as_ref().is_some_and(|plan| plan.shift == 0)),
+                    );
+                    match cache {
+                        Some(cache) => fresh.publish_in_cache(cache, plan),
+                        None => fresh,
+                    }
+                }
+            })
         } else {
+            if let Some(cache) = cache {
+                cache.clear();
+            }
             info!(
                 duration_secs = duration_secs,
                 estimated_memory_mb = estimated_memory_bytes / (1024 * 1024),
@@ -1684,6 +2255,26 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> PrerenderedAudioBuffer<T> {
         match &self.mode {
             PrerenderedAudioBufferMode::Progressive(buffer) => buffer.wait_until_fully_rendered(),
             PrerenderedAudioBufferMode::Streaming(_) => {}
+        }
+    }
+
+    /// Blocks until the next `samples` reads are rendered (or the render
+    /// finished or failed). Returns false on timeout or failure.
+    #[cfg(feature = "test-hooks")]
+    pub(crate) fn wait_until_rendered(&self, samples: usize, timeout: std::time::Duration) -> bool {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            let ready = match &self.mode {
+                PrerenderedAudioBufferMode::Progressive(buffer) => buffer.rendered(samples),
+                PrerenderedAudioBufferMode::Streaming(buffer) => buffer.rendered(samples),
+            };
+            match ready {
+                Some(ready) if !ready && std::time::Instant::now() < deadline => {
+                    std::thread::sleep(std::time::Duration::from_micros(200));
+                }
+                Some(ready) => return ready,
+                None => return false,
+            }
         }
     }
 
@@ -1748,10 +2339,15 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> ProgressiveAudioBuffer<T> {
         output_info: AudioInfo,
         duration_secs: f64,
         start_playhead_secs: f64,
-        estimated_output_samples: usize,
+        cache: Option<&PlaybackAudioCache>,
     ) -> Self {
         // Clamp output info for FFmpeg compatibility (max 8 channels)
         let output_info = output_info.for_ffmpeg_output();
+        let estimated_output_samples = progressive_buffer_samples(
+            duration_secs,
+            output_info.sample_rate,
+            output_info.channels,
+        );
         // The producer renders f32 at the device rate/channel count; the
         // callback converts to the device sample format on the fly.
         let render_info = AudioInfo::new_raw(
@@ -1768,9 +2364,7 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> ProgressiveAudioBuffer<T> {
             "Starting progressive audio pre-render"
         );
 
-        let pass1_start_secs = (start_playhead_secs - Self::START_PREROLL_SECS)
-            .max(0.0)
-            .min(duration_secs);
+        let pass1_start_secs = Self::pass1_start_secs(start_playhead_secs, duration_secs);
         let primary_start = output_sample_index(
             pass1_start_secs,
             output_info.sample_rate,
@@ -1786,26 +2380,24 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> ProgressiveAudioBuffer<T> {
             output_info.channels,
             estimated_output_samples,
         );
-        let ready_window_samples = output_sample_index(
-            Self::READY_WINDOW_SECS,
-            output_info.sample_rate,
-            output_info.channels,
-            usize::MAX,
-        );
-        let ready_at_index = start_index.saturating_add(ready_window_samples);
+        let ready_at_index = start_index.saturating_add(Self::ready_window_samples(output_info));
 
-        let timeline = Arc::new(ProgressiveTimeline {
-            samples: ProgressiveTimeline::allocate_samples(estimated_output_samples),
+        let timeline = Arc::new(ProgressiveTimeline::new(
+            estimated_output_samples,
             primary_start,
-            primary_end: AtomicUsize::new(primary_start),
-            wrap_end: AtomicUsize::new(0),
-            stop: AtomicBool::new(false),
-            complete: AtomicBool::new(false),
-        });
+        ));
 
         let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        // A fast worker may finish before publication, so give it its retention owner first.
+        if let Some(cache) = cache {
+            let retained = timeline.retain(CacheRelease {
+                cache: Arc::downgrade(&cache.entry),
+                idle_release: cache.idle_release,
+            });
+            debug_assert!(retained);
+        }
 
-        spawn_progressive_render(
+        if !spawn_progressive_render(
             timeline.clone(),
             segments,
             music,
@@ -1815,11 +2407,18 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> ProgressiveAudioBuffer<T> {
             pass1_start_secs,
             ready_at_index,
             ready_tx,
-        );
+        ) {
+            let mut slot = lock(&timeline.retain_slot);
+            slot.exited = true;
+            slot.release = None;
+            timeline.retained.store(false, Ordering::Release);
+        }
 
         Self {
-            timeline,
-            ready_rx,
+            render: Arc::new(ProgressiveRender { timeline }),
+            ready_rx: Some(ready_rx),
+            shift_from: usize::MAX,
+            shift: 0,
             read_position: 0,
             sample_rate: output_info.sample_rate,
             channels: output_info.channels,
@@ -1827,16 +2426,122 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> ProgressiveAudioBuffer<T> {
         }
     }
 
+    fn pass1_start_secs(start_playhead_secs: f64, duration_secs: f64) -> f64 {
+        (start_playhead_secs - Self::START_PREROLL_SECS)
+            .max(0.0)
+            .min(duration_secs)
+    }
+
+    fn ready_window_samples(output_info: AudioInfo) -> usize {
+        output_sample_index(
+            Self::READY_WINDOW_SECS,
+            output_info.sample_rate,
+            output_info.channels,
+            usize::MAX,
+        )
+    }
+
+    /// Runs after this fresh render is already on its way, so a play that
+    /// misses the cache starts exactly like an uncached one. Replays the
+    /// cached render when it holds this play's samples and has rendered at
+    /// least what the fresh render would have by now; otherwise keeps the
+    /// fresh render for later plays when its samples are origin independent.
+    #[allow(clippy::too_many_arguments)]
+    /// The cache key and sample offsets a render starting at
+    /// `start_playhead_secs` would use, when its output can be shared.
+    fn cache_plan(
+        segments: Vec<AudioSegment>,
+        music: &MusicTracks,
+        project: &ProjectConfiguration,
+        output_info: AudioInfo,
+        duration_secs: f64,
+        start_playhead_secs: f64,
+        len: usize,
+    ) -> Option<CachePlan> {
+        let pass1_start_secs = Self::pass1_start_secs(start_playhead_secs, duration_secs);
+        let shift = origin_shift(pass1_start_secs)?;
+        let key = render_is_origin_independent(project, output_info, duration_secs)
+            .then(|| {
+                ProgressiveRenderKey::new(segments, music, project, duration_secs, output_info)
+            })
+            .flatten()?;
+        let (rate, channels) = (output_info.sample_rate, output_info.channels);
+        Some(CachePlan {
+            key,
+            shift_from: output_sample_index(pass1_start_secs, rate, channels, len),
+            shift: shift * channels,
+            ready_at: output_sample_index(start_playhead_secs, rate, channels, len)
+                .saturating_add(Self::ready_window_samples(output_info)),
+            rate,
+            channels,
+        })
+    }
+
+    /// A reader over the cached render when it matches `plan` and already
+    /// covers the start window. Checked before a fresh render is built, so a
+    /// replay never allocates a second full-timeline buffer.
+    fn from_cache(cache: &PlaybackAudioCache, plan: &CachePlan) -> Option<Self> {
+        let entry = lock(&cache.entry);
+        let cached = entry.as_ref()?;
+        if cached.key != plan.key
+            || cached.render.timeline.stop.load(Ordering::Acquire)
+            || !cached.render.timeline.covers(
+                plan.shift_from + plan.shift,
+                plan.ready_at.saturating_add(plan.shift),
+            )
+        {
+            return None;
+        }
+        let render = cached.render.clone();
+        drop(entry);
+        render.timeline.attach_reader();
+        info!("Reusing rendered playback audio");
+        Some(Self {
+            render,
+            ready_rx: None,
+            shift_from: plan.shift_from,
+            shift: plan.shift,
+            read_position: 0,
+            sample_rate: plan.rate,
+            channels: plan.channels,
+            _format: std::marker::PhantomData,
+        })
+    }
+
+    fn publish_in_cache(self, cache: &PlaybackAudioCache, plan: Option<CachePlan>) -> Self {
+        let Some(plan) = plan else {
+            let previous = lock(&cache.entry).take();
+            self.render.timeline.retire(previous);
+            return self;
+        };
+        let mut entry = lock(&cache.entry);
+        let previous = if plan.shift == 0 && self.render.timeline.retained.load(Ordering::Acquire) {
+            entry.replace(CachedProgressiveRender {
+                key: plan.key,
+                render: self.render.clone(),
+            })
+        } else if entry.as_ref().is_some_and(|cached| cached.key != plan.key) {
+            entry.take()
+        } else {
+            None
+        };
+        drop(entry);
+        self.render.timeline.retire(previous);
+        self
+    }
+
     /// Blocks until the initial window around the start position is rendered
     /// (or the timeout elapses; unrendered reads are silence, never garbage).
     pub fn wait_until_ready(&self, timeout: std::time::Duration) {
-        let _ = self.ready_rx.recv_timeout(timeout);
+        if let Some(ready_rx) = &self.ready_rx {
+            let _ = ready_rx.recv_timeout(timeout);
+        }
     }
 
     #[cfg(test)]
     fn wait_until_fully_rendered(&self) {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        while !self.timeline.complete.load(Ordering::Acquire) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while !self.render.timeline.complete.load(Ordering::Acquire) {
             assert!(
                 std::time::Instant::now() < deadline,
                 "progressive audio render did not complete in time"
@@ -1845,9 +2550,38 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> ProgressiveAudioBuffer<T> {
         }
     }
 
+    /// Whether the next `samples` reads are rendered; `None` once the
+    /// render can no longer produce them.
+    #[cfg(feature = "test-hooks")]
+    fn rendered(&self, samples: usize) -> Option<bool> {
+        let timeline = &self.render.timeline;
+        let start = self.read_position.min(timeline.samples.len());
+        let end = (self.read_position + samples).min(timeline.samples.len());
+        if start >= end || timeline.complete.load(Ordering::Acquire) {
+            return Some(true);
+        }
+        let primary_end = timeline.primary_end.load(Ordering::Acquire);
+        let wrap_end = timeline.wrap_end.load(Ordering::Acquire);
+        let primary = timeline.primary_start;
+        let covered = if start >= primary {
+            primary_end >= end
+        } else if end <= primary {
+            wrap_end >= end
+        } else {
+            wrap_end >= primary && primary_end >= end
+        };
+        if covered {
+            Some(true)
+        } else if timeline.stop.load(Ordering::Acquire) {
+            None
+        } else {
+            Some(false)
+        }
+    }
+
     pub fn set_playhead(&mut self, playhead_secs: f64) {
         let sample_position = (playhead_secs * self.sample_rate as f64) as usize * self.channels;
-        self.read_position = sample_position.min(self.timeline.samples.len());
+        self.read_position = sample_position.min(self.render.timeline.samples.len());
     }
 
     pub fn current_audible_playhead(&self, device_latency_secs: f64) -> f64 {
@@ -1861,22 +2595,27 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> ProgressiveAudioBuffer<T> {
     }
 
     pub fn fill(&mut self, buffer: &mut [T]) {
-        let samples = &self.timeline.samples;
+        let timeline = &self.render.timeline;
+        let samples = &timeline.samples;
         let available = samples.len().saturating_sub(self.read_position);
         let to_copy = buffer.len().min(available);
 
         if to_copy > 0 {
-            let primary_start = self.timeline.primary_start;
-            let primary_end = self.timeline.primary_end.load(Ordering::Acquire);
-            let wrap_end = self.timeline.wrap_end.load(Ordering::Acquire);
+            let primary_start = timeline.primary_start;
+            let primary_end = timeline.primary_end.load(Ordering::Acquire);
+            let wrap_end = timeline.wrap_end.load(Ordering::Acquire);
 
             for (i, slot) in buffer[..to_copy].iter_mut().enumerate() {
-                let idx = self.read_position + i;
-                let rendered = if idx >= primary_start {
-                    idx < primary_end
-                } else {
-                    idx < wrap_end
-                };
+                let mut idx = self.read_position + i;
+                if idx >= self.shift_from {
+                    idx += self.shift;
+                }
+                let rendered = idx < samples.len()
+                    && if idx >= primary_start {
+                        idx < primary_end
+                    } else {
+                        idx < wrap_end
+                    };
                 *slot = if rendered {
                     <T as cpal::Sample>::from_sample(f32::from_bits(
                         samples[idx].load(Ordering::Relaxed),
@@ -2054,6 +2793,18 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> StreamingAudioBuffer<T> {
                 return false;
             }
         }
+    }
+
+    #[cfg(feature = "test-hooks")]
+    fn rendered(&self, samples: usize) -> Option<bool> {
+        if self.timeline.failed.load(Ordering::Acquire) {
+            return None;
+        }
+        Some(
+            self.timeline.published_generation.load(Ordering::Acquire) == self.generation
+                && self.timeline.published_end.load(Ordering::Acquire)
+                    >= self.read_position + samples,
+        )
     }
 
     fn set_playhead(&mut self, playhead_secs: f64) {
@@ -2305,11 +3056,16 @@ fn spawn_progressive_render(
     pass1_start_secs: f64,
     ready_at_index: usize,
     ready_tx: std::sync::mpsc::Sender<()>,
-) {
+) -> bool {
     let spawn_result = std::thread::Builder::new()
         .name("cap-audio-prerender".into())
         .spawn(move || {
             let render_start = std::time::Instant::now();
+            let mut control = RenderControl {
+                timeline: timeline.clone(),
+                release: None,
+                adopted: false,
+            };
             let mut renderer = AudioRenderer::new(segments).with_music(music);
 
             let chunk_size = 1024usize;
@@ -2330,6 +3086,7 @@ fn spawn_progressive_render(
             // original blocking pre-render loop chunk for chunk so the sample
             // values are identical.
             let render_pass = |renderer: &mut AudioRenderer,
+                               control: &mut RenderControl,
                                start_secs: f64,
                                from_source: usize,
                                to_source: usize,
@@ -2347,7 +3104,7 @@ fn spawn_progressive_render(
                 let mut rendered_source = from_source;
 
                 while rendered_source < to_source {
-                    if timeline.stop.load(Ordering::Acquire) {
+                    if !control.should_continue() {
                         return false;
                     }
 
@@ -2392,6 +3149,7 @@ fn spawn_progressive_render(
             // Pass 1: playhead (minus pre-roll) to the end of the timeline.
             let pass1_ok = render_pass(
                 &mut renderer,
+                &mut control,
                 pass1_start_secs,
                 pass1_source_start,
                 total_source_samples,
@@ -2402,10 +3160,15 @@ fn spawn_progressive_render(
                 &mut ready_sent,
             );
 
+            if pass1_ok {
+                timeline.pass1_done.store(true, Ordering::Release);
+            }
+
             // Pass 2: wrap around to cover [0, playhead) for backwards seeks.
             let pass2_ok = if pass1_ok && pass1_source_start > 0 {
                 render_pass(
                     &mut renderer,
+                    &mut control,
                     0.0,
                     0,
                     pass1_source_start,
@@ -2421,7 +3184,8 @@ fn spawn_progressive_render(
 
             send_ready(&mut ready_sent);
 
-            if pass1_ok && pass2_ok {
+            let completed = pass1_ok && pass2_ok;
+            if completed {
                 timeline.complete.store(true, Ordering::Release);
                 info!(
                     total_samples = buffer_len,
@@ -2430,10 +3194,106 @@ fn spawn_progressive_render(
                     "Progressive audio pre-render complete"
                 );
             }
+            drop(renderer);
+            timeline.release_retired(true);
+            control.finish(completed);
         });
 
-    if let Err(e) = spawn_result {
+    if let Err(e) = &spawn_result {
         tracing::error!("Failed to spawn audio pre-render thread: {e}");
+    }
+    spawn_result.is_ok()
+}
+
+/// Lets a cached render outlive its readers: it parks while nobody is
+/// playing, resumes when a replay attaches, and frees itself once the editor
+/// stays paused for the idle timeout.
+struct RenderControl {
+    timeline: Arc<ProgressiveTimeline>,
+    release: Option<CacheRelease>,
+    adopted: bool,
+}
+
+impl RenderControl {
+    fn should_continue(&mut self) -> bool {
+        loop {
+            let seen = self.timeline.wake_generation();
+            if self.timeline.stop.load(Ordering::Acquire) {
+                return false;
+            }
+            if !self.timeline.retained.load(Ordering::Acquire) {
+                return true;
+            }
+            self.adopt_release();
+            if self.release_if_idle() {
+                continue;
+            }
+            if self.timeline.readers.load(Ordering::Acquire) > 0 {
+                return true;
+            }
+            self.timeline.release_retired(false);
+            self.wait_for_wake(seen);
+        }
+    }
+
+    fn adopt_release(&mut self) {
+        if !self.adopted {
+            self.adopted = true;
+            self.release = lock(&self.timeline.retain_slot).release.take();
+        }
+    }
+
+    fn finish(mut self, completed: bool) {
+        {
+            let mut slot = lock(&self.timeline.retain_slot);
+            slot.exited = true;
+            if !self.adopted {
+                self.adopted = true;
+                self.release = slot.release.take();
+            }
+        }
+        if completed {
+            loop {
+                let seen = self.timeline.wake_generation();
+                if self.release.is_none() || self.timeline.stop.load(Ordering::Acquire) {
+                    break;
+                }
+                if self.release_if_idle() {
+                    return;
+                }
+                self.wait_for_wake(seen);
+            }
+        }
+        if let Some(release) = self.release.take() {
+            release.release(&self.timeline);
+        }
+    }
+
+    fn release_if_idle(&mut self) -> bool {
+        let Some(release) = &self.release else {
+            return false;
+        };
+        if self.timeline.readers.load(Ordering::Acquire) == 0
+            && self.timeline.paused_for() >= release.idle_release
+            && let Some(release) = self.release.take()
+        {
+            release.release(&self.timeline);
+            return true;
+        }
+        false
+    }
+
+    fn wait_for_wake(&self, seen: u64) {
+        let idle_release = self
+            .release
+            .as_ref()
+            .map_or(PLAYBACK_AUDIO_IDLE_RELEASE, |release| release.idle_release);
+        let timeout = if self.timeline.readers.load(Ordering::Acquire) > 0 {
+            idle_release
+        } else {
+            idle_release.saturating_sub(self.timeline.paused_for())
+        };
+        self.timeline.wait(seen, timeout);
     }
 }
 
@@ -2441,8 +3301,8 @@ fn spawn_progressive_render(
 mod tests {
     use super::*;
     use cap_project::{
-        ClipConfiguration, ClipTransition, ProjectConfiguration, TimelineConfiguration,
-        TimelineSegment,
+        ClipConfiguration, ClipTransition, ClipTransitionType, ProjectConfiguration,
+        TimelineConfiguration, TimelineSegment,
     };
     use std::{path::Path, sync::Arc};
     use tempfile::TempDir;
@@ -3615,6 +4475,69 @@ mod tests {
         }
     }
 
+    #[test]
+    fn music_mixing_leaves_recording_only_frames_unclipped() {
+        let music: MusicTracks = [(
+            "a.wav".to_string(),
+            Arc::new(AudioData::from_raw_f32(vec![0.25, 0.25, 0.25, 0.25], 2)),
+        )]
+        .into_iter()
+        .collect();
+        let project = music_project(vec![music_track_segment("a.wav", 0.0, 3.0, 0.0, 0.0)]);
+        let mut out = [1.5, -1.5].repeat(4);
+        mix_music(&music, project.timeline.as_ref().unwrap(), 0, 4, &mut out);
+        assert_eq!(out, [1.0, -1.0, 1.0, -1.0, 1.5, -1.5, 1.5, -1.5]);
+    }
+
+    #[test]
+    fn overlapping_music_clips_only_after_all_tracks_are_mixed() {
+        let music: MusicTracks = [
+            ("a.wav", vec![0.75, -0.75, 0.75, -0.75]),
+            ("b.wav", vec![0.75, -0.75, 0.75, -0.75]),
+            ("c.wav", vec![-0.75, 0.75, 0.75, -0.75]),
+        ]
+        .into_iter()
+        .map(|(path, samples)| {
+            (
+                path.to_string(),
+                Arc::new(AudioData::from_raw_f32(samples, 2)),
+            )
+        })
+        .collect();
+        for paths in [
+            ["a.wav", "b.wav", "c.wav"],
+            ["a.wav", "c.wav", "b.wav"],
+            ["c.wav", "a.wav", "b.wav"],
+        ] {
+            let project = music_project(
+                paths
+                    .map(|path| music_track_segment(path, 0.0, 3.0, 0.0, 0.0))
+                    .to_vec(),
+            );
+            for block in [1, 2] {
+                let recording = AudioSegment {
+                    tracks: vec![AudioSegmentTrack::new(
+                        Arc::new(AudioData::from_raw_f32(
+                            vec![0.125, -0.125, 0.125, -0.125],
+                            2,
+                        )),
+                        gain,
+                        stereo,
+                        no_offset,
+                    )],
+                };
+                let mut renderer = AudioRenderer::new(vec![recording]).with_music(music.clone());
+                let mut output = Vec::new();
+                for _ in 0..2 / block {
+                    let (written, chunk) = renderer.render_frame_raw(block, &project).unwrap();
+                    assert_eq!(written, block);
+                    output.extend(chunk);
+                }
+                assert_eq!(output, [0.875, -0.875, 1.0, -1.0], "{paths:?}, {block}");
+            }
+        }
+    }
+
     // Timeline music must be mixed on top of the recording even when the
     // recording itself carries no audio (empty renderer `data`).
     #[test]
@@ -3815,5 +4738,877 @@ mod tests {
         let stream = render_export_audio(&mut renderer, &project, 30, 2 * 30);
         assert!((left_at_second(&stream, 0) - expected(4_000)).abs() < 0.02);
         assert!((left_at_second(&stream, 1) - expected(10_000)).abs() < 0.02);
+    }
+
+    #[test]
+    fn parallel_music_load_matches_serial_mix_and_preserves_failed_cache_entries() {
+        ffmpeg::init().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let mut segments = Vec::new();
+        for (index, values) in [
+            [2_000, -4_000, 6_000],
+            [-3_000, 5_000, -7_000],
+            [1_000, 8_000, -2_000],
+        ]
+        .iter()
+        .enumerate()
+        {
+            let path = format!("music-{index}.wav");
+            write_step_wav(&dir.path().join(&path), values);
+            let mut segment = music_track_segment(&path, 0.0, 1.5, 0.125, 0.25);
+            segment.trim_start = 0.5;
+            segments.push(segment);
+        }
+        let project = music_project(segments.clone());
+        let mut reference = MusicTracks::new();
+        for segment in &segments {
+            reference.extend(crate::load_music_tracks_uncached(
+                &music_project(vec![segment.clone()]),
+                dir.path(),
+            ));
+        }
+        let mut cache = MusicTracks::new();
+        let actual = crate::load_music_tracks(&project, dir.path(), &mut cache);
+        assert_eq!(actual.len(), 3);
+        let repeated = crate::load_music_tracks(&project, dir.path(), &mut cache);
+        for (path, data) in &actual {
+            assert!(Arc::ptr_eq(data, &repeated[path]));
+        }
+        let render = |tracks| {
+            let mut renderer = AudioRenderer::new(vec![]).with_music(tracks);
+            render_export_audio(&mut renderer, &project, 30, 45)
+                .into_iter()
+                .map(f32::to_bits)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(render(actual.clone()), render(reference));
+        for retained in [1, 2] {
+            let mut partial = actual
+                .iter()
+                .take(retained)
+                .map(|(path, data)| (path.clone(), Arc::clone(data)))
+                .collect::<MusicTracks>();
+            let retained_entries = partial.clone();
+            let loaded = crate::load_music_tracks(&project, dir.path(), &mut partial);
+            assert_eq!(render(loaded), render(actual.clone()));
+            for (path, data) in &retained_entries {
+                assert!(Arc::ptr_eq(data, &partial[path]));
+            }
+        }
+        let corrupt_path = "corrupt.wav";
+        std::fs::write(dir.path().join(corrupt_path), b"invalid audio").unwrap();
+        let mut corrupt_segments = segments.clone();
+        corrupt_segments.push(music_track_segment(corrupt_path, 0.0, 1.5, 0.0, 0.0));
+        let mut corrupt_cache = MusicTracks::new();
+        let surviving = crate::load_music_tracks(
+            &music_project(corrupt_segments),
+            dir.path(),
+            &mut corrupt_cache,
+        );
+        assert_eq!(surviving.len(), 3);
+        assert!(!corrupt_cache.contains_key(corrupt_path));
+        assert_eq!(render(surviving), render(actual.clone()));
+        for segment in &mut segments {
+            std::fs::remove_file(dir.path().join(&segment.path)).unwrap();
+            segment.trim_start = 0.0;
+        }
+        let failed = crate::load_music_tracks(&music_project(segments), dir.path(), &mut cache);
+        assert!(failed.is_empty());
+        for (path, data) in &actual {
+            assert!(Arc::ptr_eq(data, &cache[path]));
+        }
+        let restored = crate::load_music_tracks(&project, dir.path(), &mut cache);
+        for (path, data) in &actual {
+            assert!(Arc::ptr_eq(data, &restored[path]));
+        }
+    }
+
+    static CACHE_RELEASE: std::sync::RwLock<()> = std::sync::RwLock::new(());
+
+    struct ProgressiveFixture {
+        _dir: TempDir,
+        segments: Vec<AudioSegment>,
+        music: MusicTracks,
+        music_path: String,
+        project: ProjectConfiguration,
+    }
+
+    impl ProgressiveFixture {
+        fn new() -> Self {
+            let _ = ffmpeg::init();
+            let dir = tempfile::tempdir().unwrap();
+            let mic_path = dir.path().join("mic.wav");
+            let system_path = dir.path().join("system.wav");
+            let music_path = dir.path().join("music.wav");
+            write_sine_wav(&mic_path, 440.0, 8.0);
+            write_sine_wav(&system_path, 220.0, 8.0);
+            write_step_wav(&music_path, &[3_000, 6_000]);
+            let load = |path: &Path| {
+                Arc::new(DecodedAudio::from(Arc::new(
+                    AudioData::from_file(path).unwrap(),
+                )))
+            };
+            let segments = vec![crate::segments::audio_segment_from_decoded(
+                Some(load(&mic_path)),
+                Some(load(&system_path)),
+                crate::SegmentAudioTimingRepair::default(),
+            )];
+            let mut quiet = segment(0, 6.0, 8.0, 1.0);
+            quiet.volume = Some(0.5);
+            let music_path = music_path.to_string_lossy().into_owned();
+            let project = ProjectConfiguration {
+                timeline: Some(TimelineConfiguration {
+                    segments: vec![segment(0, 0.0, 3.0, 1.0), segment(0, 3.5, 6.0, 1.0), quiet],
+                    transitions: Vec::new(),
+                    zoom_segments: Vec::new(),
+                    scene_segments: Vec::new(),
+                    style_segments: Vec::new(),
+                    image_segments: Vec::new(),
+                    mask_segments: Vec::new(),
+                    text_segments: Vec::new(),
+                    caption_segments: Vec::new(),
+                    keyboard_segments: Vec::new(),
+                    audio_segments: vec![music_track_segment(&music_path, 0.5, 4.0, 0.3, 0.4)],
+                    camera3d_segments: Vec::new(),
+                }),
+                clips: vec![ClipConfiguration {
+                    index: 0,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            };
+            let mut music = MusicTracks::new();
+            music.insert(
+                music_path.clone(),
+                Arc::new(AudioData::from_file(&music_path).unwrap()),
+            );
+            Self {
+                _dir: dir,
+                segments,
+                music,
+                music_path,
+                project,
+            }
+        }
+
+        fn timeline(&mut self) -> &mut TimelineConfiguration {
+            self.project.timeline.as_mut().unwrap()
+        }
+
+        fn duration(&self) -> f64 {
+            self.project.timeline.as_ref().unwrap().duration()
+        }
+
+        fn buffer(&self, output_info: AudioInfo, start: f64) -> PrerenderedAudioBuffer<f32> {
+            PrerenderedAudioBuffer::new(
+                self.segments.clone(),
+                self.music.clone(),
+                &self.project,
+                output_info,
+                self.duration(),
+                start,
+            )
+        }
+
+        fn cached(
+            &self,
+            cache: &PlaybackAudioCache,
+            output_info: AudioInfo,
+            start: f64,
+        ) -> PrerenderedAudioBuffer<f32> {
+            PrerenderedAudioBuffer::new_cached(
+                self.segments.clone(),
+                self.music.clone(),
+                &self.project,
+                output_info,
+                self.duration(),
+                start,
+                cache,
+            )
+        }
+
+        fn reference(&self, output_info: AudioInfo, start: f64) -> Vec<f32> {
+            reference_progressive_render(
+                self.segments.clone(),
+                self.music.clone(),
+                &self.project,
+                output_info,
+                self.duration(),
+                start,
+            )
+        }
+    }
+
+    type FixtureEdit = fn(&mut ProgressiveFixture);
+
+    fn stateful_edits() -> [(&'static str, FixtureEdit); 5] {
+        [
+            ("studio sound", |f| f.project.audio.improve = true),
+            ("speed", |f| f.timeline().segments[1].timescale = 1.5),
+            ("transition", |f| {
+                f.timeline().transitions = vec![ClipTransition {
+                    segment_index: 1,
+                    kind: ClipTransitionType::CrossFade,
+                    duration: 0.5,
+                }]
+            }),
+            ("text hold", |f| {
+                let mut text: cap_project::TextSegment =
+                    serde_json::from_value(serde_json::json!({ "start": 2.0, "end": 3.0 }))
+                        .unwrap();
+                text.enabled = true;
+                text.layout = cap_project::TextLayout::Fullscreen;
+                f.timeline().text_segments = vec![text];
+            }),
+            ("segment start on a sample tie", |f| {
+                f.timeline().segments[1].start = 3.5 + 0.5 / AudioData::SAMPLE_RATE as f64
+            }),
+        ]
+    }
+
+    fn stereo_48k() -> AudioInfo {
+        AudioInfo::new_raw(AudioData::SAMPLE_FORMAT, 48_000, 2)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn reference_pass(
+        out: &mut [f32],
+        renderer: &mut AudioRenderer,
+        project: &ProjectConfiguration,
+        render_info: AudioInfo,
+        start_secs: f64,
+        from_source: usize,
+        to_source: usize,
+        mut out_idx: usize,
+        out_limit: usize,
+    ) {
+        let mut resampler = AudioResampler::new(render_info).unwrap();
+        renderer.set_playhead(start_secs, project);
+        let mut store = |bytes: &[u8], out_idx: &mut usize| {
+            for chunk in bytes.chunks_exact(f32::BYTE_SIZE) {
+                if *out_idx >= out_limit {
+                    break;
+                }
+                out[*out_idx] = f32::from_bytes(chunk);
+                *out_idx += 1;
+            }
+        };
+        let mut rendered = from_source;
+        while rendered < to_source {
+            let frame = match renderer.render_frame(1024, project) {
+                Some(frame) => frame,
+                None => silent_audio_frame(1024),
+            };
+            store(resampler.queue_and_process_frame(&frame), &mut out_idx);
+            rendered += 1024;
+        }
+        while let Some(flushed) = resampler.flush_frame() {
+            if flushed.is_empty() || out_idx >= out_limit {
+                break;
+            }
+            store(flushed, &mut out_idx);
+        }
+    }
+
+    fn reference_progressive_render(
+        segments: Vec<AudioSegment>,
+        music: MusicTracks,
+        project: &ProjectConfiguration,
+        output_info: AudioInfo,
+        duration: f64,
+        start: f64,
+    ) -> Vec<f32> {
+        let output_info = output_info.for_ffmpeg_output();
+        let (rate, channels) = (output_info.sample_rate, output_info.channels);
+        let render_info = AudioInfo::new_raw(AudioData::SAMPLE_FORMAT, rate, channels as u16);
+        let len = progressive_buffer_samples(duration, rate, channels);
+        let mut out = vec![0.0f32; len];
+        let mut renderer = AudioRenderer::new(segments).with_music(music);
+        let pass1_start = (start - 1.0).max(0.0).min(duration);
+        let primary_start = output_sample_index(pass1_start, rate, channels, len);
+        let total = (duration * AudioData::SAMPLE_RATE as f64) as usize;
+        let pass1_source = (pass1_start * AudioData::SAMPLE_RATE as f64) as usize;
+        reference_pass(
+            &mut out,
+            &mut renderer,
+            project,
+            render_info,
+            pass1_start,
+            pass1_source,
+            total,
+            primary_start,
+            len,
+        );
+        if pass1_source > 0 {
+            reference_pass(
+                &mut out,
+                &mut renderer,
+                project,
+                render_info,
+                0.0,
+                0,
+                pass1_source,
+                0,
+                primary_start,
+            );
+        }
+        out
+    }
+
+    fn progressive_timeline(buffer: &PrerenderedAudioBuffer<f32>) -> Arc<ProgressiveTimeline> {
+        let PrerenderedAudioBufferMode::Progressive(progressive) = &buffer.mode else {
+            panic!("expected a progressive buffer");
+        };
+        progressive.render.timeline.clone()
+    }
+
+    fn read_everything(buffer: &mut PrerenderedAudioBuffer<f32>) -> Vec<f32> {
+        buffer.wait_until_fully_rendered();
+        let len = progressive_timeline(buffer).samples.len();
+        buffer.set_playhead(0.0);
+        let mut out = vec![1.0f32; len];
+        buffer.fill(&mut out);
+        out
+    }
+
+    fn assert_bit_identical(actual: &[f32], expected: &[f32], context: &str) {
+        assert_eq!(actual.len(), expected.len(), "{context}");
+        if let Some(index) = actual
+            .iter()
+            .zip(expected)
+            .position(|(a, b)| a.to_bits() != b.to_bits())
+        {
+            panic!(
+                "{context}: sample {index} differs: {} vs {}",
+                actual[index], expected[index]
+            );
+        }
+    }
+
+    fn wait_until_released(timeline: Weak<ProgressiveTimeline>, within: std::time::Duration) {
+        let deadline = std::time::Instant::now() + within;
+        while timeline.strong_count() > 0 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "cached render was not released"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+
+    #[test]
+    fn origin_shift_matches_the_render_rounding() {
+        let rate = AudioData::SAMPLE_RATE as f64;
+        assert_eq!(origin_shift(0.0), Some(0));
+        assert_eq!(origin_shift(1.0), Some(0));
+        assert_eq!(origin_shift(2.0 + 0.4 / rate), Some(0));
+        assert_eq!(origin_shift(2.0 + 0.6 / rate), Some(1));
+        for frame in 0..2_000u32 {
+            let secs = (f64::from(frame) / 30.0 + 0.0123 - 1.0).max(0.0);
+            let slot = output_sample_index(secs, AudioData::SAMPLE_RATE, 1, usize::MAX);
+            let source = (secs * rate).round() as usize;
+            assert_eq!(origin_shift(secs), Some(source - slot));
+        }
+    }
+
+    #[test]
+    fn uncached_progressive_playback_is_one_uninterrupted_render() {
+        let mut fixture = ProgressiveFixture::new();
+        for improve in [false, true] {
+            fixture.project.audio.improve = improve;
+            for output_info in [
+                stereo_48k(),
+                AudioInfo::new_raw(AudioData::SAMPLE_FORMAT, 44_100, 2),
+            ] {
+                for start in [0.0, 2.7] {
+                    let context = format!(
+                        "improve {improve}, {} Hz, start {start}",
+                        output_info.sample_rate
+                    );
+                    let mut buffer = fixture.buffer(output_info, start);
+                    buffer.set_playhead(start);
+                    assert!(buffer.wait_until_ready(std::time::Duration::from_secs(30)));
+                    assert_bit_identical(
+                        &read_everything(&mut buffer),
+                        &fixture.reference(output_info, start),
+                        &context,
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn replays_from_any_start_match_a_fresh_render_from_that_start() {
+        let _reuse = CACHE_RELEASE.read().unwrap_or_else(PoisonError::into_inner);
+        let fixture = ProgressiveFixture::new();
+        let output_info = stereo_48k();
+        let rate = AudioData::SAMPLE_RATE as f64;
+        let cache = PlaybackAudioCache::default();
+        let first = fixture.cached(&cache, output_info, 1.0);
+        first.wait_until_fully_rendered();
+        let timeline = progressive_timeline(&first);
+        drop(first);
+
+        let mut shifts = [0usize; 2];
+        let starts = [
+            0.0,
+            0.4,
+            2.7,
+            3.0 + 1.0 / 3.0,
+            4.0 + 0.6 / rate,
+            5.0 + 0.4 / rate,
+            6.123_456_789,
+            7.4,
+            7.5,
+            9.0,
+        ]
+        .into_iter()
+        .chain((0..40).map(|frame| f64::from(frame) * 0.187 + 0.0213));
+        for start in starts {
+            let context = format!("start {start}");
+            shifts[origin_shift((start - 1.0).clamp(0.0, fixture.duration())).unwrap()] += 1;
+            let mut replay = fixture.cached(&cache, output_info, start);
+            assert!(
+                Arc::ptr_eq(&timeline, &progressive_timeline(&replay)),
+                "{context}: must replay the cached render"
+            );
+            replay.set_playhead(start);
+            assert!(replay.wait_until_ready(std::time::Duration::from_secs(1)));
+            let replayed = read_everything(&mut replay);
+            drop(replay);
+            assert_bit_identical(&replayed, &fixture.reference(output_info, start), &context);
+            let mut fresh = fixture.buffer(output_info, start);
+            assert_bit_identical(&replayed, &read_everything(&mut fresh), &context);
+        }
+        assert!(shifts.iter().all(|count| *count > 0), "{shifts:?}");
+    }
+
+    #[test]
+    fn stateful_audio_and_resampled_output_never_replay() {
+        let _reuse = CACHE_RELEASE.read().unwrap_or_else(PoisonError::into_inner);
+        let mut cases: Vec<(String, ProgressiveFixture, AudioInfo)> = stateful_edits()
+            .into_iter()
+            .map(|(name, edit)| {
+                let mut fixture = ProgressiveFixture::new();
+                edit(&mut fixture);
+                (name.to_string(), fixture, stereo_48k())
+            })
+            .collect();
+        for (rate, channels) in [(44_100, 2), (96_000, 2), (48_000, 1), (48_000, 6)] {
+            cases.push((
+                format!("{rate} Hz x{channels}"),
+                ProgressiveFixture::new(),
+                AudioInfo::new_raw(AudioData::SAMPLE_FORMAT, rate, channels),
+            ));
+        }
+        for (name, fixture, output_info) in cases {
+            let cache = PlaybackAudioCache::default();
+            let first = fixture.cached(&cache, output_info, 1.0);
+            first.wait_until_fully_rendered();
+            let timeline = progressive_timeline(&first);
+            drop(first);
+            assert!(lock(&cache.entry).is_none(), "{name} must not be cached");
+            for start in [1.0, 3.3] {
+                let mut replay = fixture.cached(&cache, output_info, start);
+                assert!(
+                    !Arc::ptr_eq(&timeline, &progressive_timeline(&replay)),
+                    "{name} must render fresh"
+                );
+                assert_bit_identical(
+                    &read_everything(&mut replay),
+                    &fixture.reference(output_info, start),
+                    &name,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn an_unrendered_start_renders_fresh() {
+        let fixture = ProgressiveFixture::new();
+        let output_info = stereo_48k();
+        let len = progressive_buffer_samples(fixture.duration(), 48_000, 2);
+        let primary_start = output_sample_index(4.0, 48_000, 2, len);
+        let timeline = ProgressiveTimeline::new(len, primary_start);
+        timeline
+            .primary_end
+            .store(primary_start + 1_000, Ordering::Release);
+        assert!(timeline.covers(primary_start, primary_start + 1_000));
+        assert!(!timeline.covers(primary_start, primary_start + 1_001));
+        assert!(!timeline.covers(primary_start - 2, primary_start + 10));
+        timeline.wrap_end.store(primary_start, Ordering::Release);
+        assert!(timeline.covers(0, primary_start + 1_000));
+        timeline.pass1_done.store(true, Ordering::Release);
+        assert!(timeline.covers(0, len + 10));
+
+        let _reuse = CACHE_RELEASE.read().unwrap_or_else(PoisonError::into_inner);
+        let cache = PlaybackAudioCache::default();
+        let parked = fixture.cached(&cache, output_info, 0.0);
+        let cached = progressive_timeline(&parked);
+        cached.stop.store(true, Ordering::Release);
+        drop(parked);
+        let replay = fixture.cached(&cache, output_info, 0.0);
+        assert!(!Arc::ptr_eq(&cached, &progressive_timeline(&replay)));
+    }
+
+    #[test]
+    fn every_audio_change_renders_fresh_and_visual_changes_reuse() {
+        let _reuse = CACHE_RELEASE.read().unwrap_or_else(PoisonError::into_inner);
+        let audio_edits: [(&str, FixtureEdit); 11] = [
+            ("mic volume", |f| f.project.audio.mic_volume_db = -6.0),
+            ("system volume", |f| f.project.audio.system_volume_db = -6.0),
+            ("mute", |f| f.project.audio.mute = true),
+            ("stereo mode", |f| {
+                f.project.audio.mic_stereo_mode = cap_project::StereoMode::MonoL;
+                f.project.audio.mic_volume_db = -1.0;
+            }),
+            ("clip volume", |f| {
+                f.timeline().segments[0].volume = Some(0.25)
+            }),
+            ("muted speed", |f| {
+                let segment = &mut f.timeline().segments[1];
+                segment.timescale = 1.5;
+                segment.speed_audio_mode = Some(ClipSpeedAudioMode::Mute);
+            }),
+            ("trim", |f| f.timeline().segments[2].end = 7.0),
+            ("clip offset", |f| f.project.clips[0].offsets.mic = 0.2),
+            ("music volume", |f| {
+                f.timeline().audio_segments[0].volume_db = -9.0
+            }),
+            ("music", |f| {
+                let path = f.music_path.clone();
+                f.timeline()
+                    .audio_segments
+                    .push(music_track_segment(&path, 5.0, 6.0, 0.0, 0.0))
+            }),
+            ("split", |f| {
+                let timeline = f.timeline();
+                let mut second = timeline.segments[0].clone();
+                timeline.segments[0].end = 1.5;
+                second.start = 1.5;
+                timeline.segments.insert(1, second);
+            }),
+        ];
+        let visual_edits: [(&str, FixtureEdit); 4] = [
+            ("zoom", |f| {
+                f.timeline().zoom_segments = vec![cap_project::ZoomSegment {
+                    start: 1.0,
+                    end: 2.0,
+                    amount: 2.0,
+                    mode: cap_project::ZoomMode::Auto,
+                    glide_direction: Default::default(),
+                    glide_speed: 1.0,
+                    instant_animation: false,
+                    edge_snap_ratio: 0.1,
+                }]
+            }),
+            ("motion blur", |f| f.project.screen_motion_blur = 0.9),
+            ("clip name", |f| {
+                f.timeline().segments[0].name = Some("Intro".into())
+            }),
+            ("hide cursor", |f| {
+                f.timeline().segments[0].hide_cursor = Some(true)
+            }),
+        ];
+        let output_info = stereo_48k();
+
+        for (name, edit) in audio_edits.into_iter().chain(stateful_edits()) {
+            let mut fixture = ProgressiveFixture::new();
+            let cache = PlaybackAudioCache::default();
+            let mut before = fixture.cached(&cache, output_info, 0.0);
+            let before_audio = read_everything(&mut before);
+            let before_timeline = progressive_timeline(&before);
+            drop(before);
+            edit(&mut fixture);
+            let mut after = fixture.cached(&cache, output_info, 0.0);
+            assert!(
+                !Arc::ptr_eq(&before_timeline, &progressive_timeline(&after)),
+                "{name} must not reuse the cached render"
+            );
+            let after_audio = read_everything(&mut after);
+            assert_bit_identical(&after_audio, &fixture.reference(output_info, 0.0), name);
+            assert!(
+                name == "split"
+                    || before_audio.len() != after_audio.len()
+                    || before_audio
+                        .iter()
+                        .zip(&after_audio)
+                        .any(|(a, b)| a.to_bits() != b.to_bits()),
+                "{name} must change the rendered audio"
+            );
+        }
+
+        for (name, edit) in visual_edits {
+            let mut fixture = ProgressiveFixture::new();
+            let cache = PlaybackAudioCache::default();
+            let before = fixture.cached(&cache, output_info, 0.0);
+            before.wait_until_fully_rendered();
+            let before_timeline = progressive_timeline(&before);
+            drop(before);
+            edit(&mut fixture);
+            let after = fixture.cached(&cache, output_info, 0.0);
+            assert!(
+                Arc::ptr_eq(&before_timeline, &progressive_timeline(&after)),
+                "{name} must reuse the cached render"
+            );
+        }
+    }
+
+    #[test]
+    fn a_stale_render_is_released_once_the_next_render_finishes() {
+        let _reuse = CACHE_RELEASE.read().unwrap_or_else(PoisonError::into_inner);
+        let mut fixture = ProgressiveFixture::new();
+        let output_info = stereo_48k();
+        let within = std::time::Duration::from_secs(10);
+
+        let cache = PlaybackAudioCache::default();
+        let mut playing = fixture.cached(&cache, output_info, 0.0);
+        read_everything(&mut playing);
+        let stale = Arc::downgrade(&progressive_timeline(&playing));
+        drop(playing);
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert!(stale.strong_count() > 0, "a paused render stays cached");
+
+        fixture.project.audio.mic_volume_db = -12.0;
+        let mut edited = fixture.cached(&cache, output_info, 2.0);
+        let fresh = progressive_timeline(&edited);
+        assert!(!Arc::ptr_eq(&fresh, &stale.upgrade().unwrap()));
+        edited.set_playhead(2.0);
+        assert!(edited.wait_until_ready(std::time::Duration::from_secs(30)));
+        wait_until_released(stale, within);
+        assert!(
+            lock(&cache.entry)
+                .as_ref()
+                .is_some_and(|cached| Arc::ptr_eq(&cached.render.timeline, &fresh))
+        );
+        drop(fresh);
+        read_everything(&mut edited);
+        let kept = Arc::downgrade(&progressive_timeline(&edited));
+        drop(edited);
+
+        fixture.project.audio.improve = true;
+        let mut stateful = fixture.cached(&cache, output_info, 2.0);
+        stateful.set_playhead(2.0);
+        assert!(stateful.wait_until_ready(std::time::Duration::from_secs(30)));
+        wait_until_released(kept, within);
+        assert!(lock(&cache.entry).is_none());
+        drop(stateful);
+
+        fixture.project.audio.improve = false;
+        let closed = fixture.cached(&cache, output_info, 0.0);
+        let timeline = Arc::downgrade(&progressive_timeline(&closed));
+        drop(closed);
+        drop(cache);
+        wait_until_released(timeline, within);
+    }
+
+    #[test]
+    fn cache_key_changes_with_every_audio_input_and_ignores_visual_fields() {
+        let fixture = ProgressiveFixture::new();
+        let original = audio_project_key(&fixture.project).unwrap();
+        let key = |edit: FixtureEdit| {
+            let mut edited = ProgressiveFixture::new();
+            edited.project = fixture.project.clone();
+            edit(&mut edited);
+            audio_project_key(&edited.project).unwrap()
+        };
+
+        let audio: [(&str, FixtureEdit); 9] = [
+            ("audio", |f| f.project.audio.system_volume_db = -3.0),
+            ("clip offsets", |f| {
+                f.project.clips[0].offsets.system_audio = 0.1
+            }),
+            ("segment", |f| f.timeline().segments[0].end = 2.5),
+            ("segment volume", |f| {
+                f.timeline().segments[0].volume = Some(0.8)
+            }),
+            ("speed mode", |f| {
+                f.timeline().segments[0].speed_audio_mode = Some(ClipSpeedAudioMode::Mute)
+            }),
+            ("music", |f| f.timeline().audio_segments[0].fade_in = 0.1),
+            ("transition", |f| {
+                f.timeline().transitions = vec![ClipTransition {
+                    segment_index: 1,
+                    kind: ClipTransitionType::CrossFade,
+                    duration: 0.25,
+                }]
+            }),
+            ("text hold", stateful_edits()[3].1),
+            ("no timeline", |f| f.project.timeline = None),
+        ];
+        for (name, edit) in audio {
+            assert_ne!(key(edit), original, "{name} must change the key");
+        }
+
+        let visual: [(&str, FixtureEdit); 6] = [
+            ("background", |f| f.project.background.padding = 12.5),
+            ("cursor", |f| f.project.cursor.size = 150),
+            ("motion blur", |f| f.project.screen_motion_blur = 0.9),
+            ("clip name", |f| {
+                f.timeline().segments[0].name = Some("Intro".into())
+            }),
+            ("hide cursor", |f| {
+                f.timeline().segments[0].hide_cursor = Some(true)
+            }),
+            ("overlay text", |f| {
+                let mut text: cap_project::TextSegment =
+                    serde_json::from_value(serde_json::json!({ "start": 2.0, "end": 3.0 }))
+                        .unwrap();
+                text.enabled = true;
+                f.timeline().text_segments = vec![text];
+            }),
+        ];
+        for (name, edit) in visual {
+            assert_eq!(key(edit), original, "{name} must keep the key");
+        }
+    }
+
+    #[test]
+    fn a_render_completed_before_cache_publication_is_reused() {
+        let _reuse = CACHE_RELEASE.read().unwrap_or_else(PoisonError::into_inner);
+        let fixture = ProgressiveFixture::new();
+        let output_info = stereo_48k();
+        let cache = PlaybackAudioCache::default();
+        let plan = ProgressiveAudioBuffer::<f32>::cache_plan(
+            fixture.segments.clone(),
+            &fixture.music,
+            &fixture.project,
+            output_info,
+            fixture.duration(),
+            0.0,
+            progressive_buffer_samples(
+                fixture.duration(),
+                output_info.sample_rate,
+                output_info.channels,
+            ),
+        )
+        .unwrap();
+        assert_eq!(plan.shift, 0);
+        let fresh = ProgressiveAudioBuffer::<f32>::new(
+            fixture.segments.clone(),
+            fixture.music.clone(),
+            &fixture.project,
+            output_info,
+            fixture.duration(),
+            0.0,
+            Some(&cache),
+        );
+        fresh.wait_until_fully_rendered();
+        let timeline = fresh.render.timeline.clone();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !lock(&timeline.retain_slot).exited {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(lock(&cache.entry).is_none());
+        let fresh = fresh.publish_in_cache(&cache, Some(plan));
+        assert!(
+            lock(&cache.entry)
+                .as_ref()
+                .is_some_and(|cached| Arc::ptr_eq(&cached.render.timeline, &timeline))
+        );
+        drop(fresh);
+        let mut replay = fixture.cached(&cache, output_info, 0.0);
+        assert!(Arc::ptr_eq(&timeline, &progressive_timeline(&replay)));
+        assert_bit_identical(
+            &read_everything(&mut replay),
+            &fixture.reference(output_info, 0.0),
+            "render completed before publication",
+        );
+    }
+
+    #[test]
+    fn a_replay_resumes_a_parked_render() {
+        let _reuse = CACHE_RELEASE.read().unwrap_or_else(PoisonError::into_inner);
+        let fixture = ProgressiveFixture::new();
+        let output_info = stereo_48k();
+        for _ in 0..20 {
+            let cache = PlaybackAudioCache::default();
+            let mut first = fixture.cached(&cache, output_info, 0.0);
+            let timeline = progressive_timeline(&first);
+            assert!(timeline.retained.load(Ordering::Acquire));
+            assert!(
+                lock(&cache.entry)
+                    .as_ref()
+                    .is_some_and(|cached| Arc::ptr_eq(&cached.render.timeline, &timeline))
+            );
+            first.set_playhead(0.0);
+            assert!(first.wait_until_ready(std::time::Duration::from_secs(30)));
+            drop(first);
+            let mut replay = fixture.cached(&cache, output_info, 0.0);
+            assert!(Arc::ptr_eq(&timeline, &progressive_timeline(&replay)));
+            assert_bit_identical(
+                &read_everything(&mut replay),
+                &fixture.reference(output_info, 0.0),
+                "resumed render",
+            );
+        }
+    }
+
+    #[test]
+    fn idle_pause_releases_the_cached_render() {
+        let _reuse = CACHE_RELEASE.read().unwrap_or_else(PoisonError::into_inner);
+        let fixture = ProgressiveFixture::new();
+        let output_info = stereo_48k();
+        let idle = std::time::Duration::from_millis(300);
+
+        for complete in [true, false] {
+            let cache = PlaybackAudioCache::with_idle_release(idle);
+            let mut playing = fixture.cached(&cache, output_info, 0.0);
+            if complete {
+                read_everything(&mut playing);
+            }
+            std::thread::sleep(idle * 2);
+            assert!(
+                lock(&cache.entry).is_some(),
+                "a playing render must stay cached"
+            );
+            let timeline = Arc::downgrade(&progressive_timeline(&playing));
+            let paused = std::time::Instant::now();
+            drop(playing);
+            wait_until_released(timeline, std::time::Duration::from_secs(10));
+            assert!(paused.elapsed() >= idle);
+            assert!(lock(&cache.entry).is_none());
+        }
+    }
+
+    #[test]
+    fn export_and_memory_pressure_release_every_cached_render() {
+        let _release = CACHE_RELEASE
+            .write()
+            .unwrap_or_else(PoisonError::into_inner);
+        let fixture = ProgressiveFixture::new();
+        let output_info = stereo_48k();
+        type Release = fn();
+        let releases: Vec<(&str, Release)> = vec![
+            ("export", release_playback_audio_caches),
+            #[cfg(target_os = "macos")]
+            ("memory pressure", || {
+                memory_pressure::on_memory_pressure(std::ptr::null_mut())
+            }),
+        ];
+        for (name, release) in releases {
+            let caches = [PlaybackAudioCache::default(), PlaybackAudioCache::default()];
+            let timelines = caches
+                .iter()
+                .map(|cache| {
+                    let paused = fixture.cached(cache, output_info, 0.0);
+                    Arc::downgrade(&progressive_timeline(&paused))
+                })
+                .collect::<Vec<_>>();
+            assert!(
+                caches.iter().all(|cache| lock(&cache.entry).is_some()),
+                "{name}"
+            );
+            release();
+            for timeline in timelines {
+                wait_until_released(timeline, std::time::Duration::from_secs(10));
+            }
+            assert!(
+                caches.iter().all(|cache| lock(&cache.entry).is_none()),
+                "{name}"
+            );
+        }
     }
 }

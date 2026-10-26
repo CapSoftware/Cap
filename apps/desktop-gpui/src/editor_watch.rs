@@ -332,7 +332,7 @@ impl EditorWindow {
         self.end_field_edit(cx);
         self.close_color_picker(cx);
         self.dismiss_frame_controls(cx);
-        self.dismiss_transient_menus();
+        self.dismiss_watch_preview_menus();
         window.focus(&self.focus, cx);
 
         self.watch_preview_open = true;

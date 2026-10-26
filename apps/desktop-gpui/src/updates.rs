@@ -7,7 +7,7 @@ use semver::Version;
 use crate::{
     installer::{self, ArtifactKind, Release},
     session::RecordingSession,
-    store::{GeneralSettings, UpdateChannel},
+    store::{GeneralSettings, UpdateChannel, UpdateDownloadPolicy},
 };
 
 const STABLE_FIRST_CHECK_DELAY: Duration = Duration::from_secs(10);
@@ -21,6 +21,7 @@ const BUSY_MESSAGE: &str =
 pub(crate) enum UpdateStatus {
     #[default]
     Idle,
+    Checking,
     Downloading {
         version: Version,
         fraction: Option<f32>,
@@ -70,6 +71,8 @@ struct UpdateScheduler {
     pending: PendingUpdateRequests,
     manual_in_flight: bool,
     status: UpdateStatus,
+    download_policy: UpdateDownloadPolicy,
+    simulation_version: Option<Version>,
     staged: Option<StagedUpdate>,
     download: Option<gpui::Task<()>>,
     download_epoch: u64,
@@ -89,6 +92,18 @@ fn qualifies(
             && !current.pre.is_empty()
             && remote.pre.is_empty()
             && remote != current)
+}
+
+/// A check the user asked for answers now; a scheduled one waits for the
+/// work in flight to finish before showing its modal prompt.
+fn holds_scheduled_prompt(manual: bool, busy: bool) -> bool {
+    !manual && busy
+}
+
+/// A manual check or a channel change queued while an automatic prompt waits
+/// replaces it, so neither has to wait for the work in flight to finish.
+fn supersedes_held_prompt(pending: &PendingUpdateRequests) -> bool {
+    pending.manual || pending.channel.is_some()
 }
 
 fn current_version() -> Result<Version, String> {
@@ -161,6 +176,7 @@ fn set_status(status: UpdateStatus, cx: &mut App) {
     }
     scheduler.status = status;
     crate::app_windows::refresh_settings(cx);
+    crate::menus::refresh_update_menu(cx);
 }
 
 pub(crate) fn check_manually(cx: &mut App) {
@@ -171,6 +187,17 @@ pub(crate) fn check_manually(cx: &mut App) {
     match status(cx) {
         UpdateStatus::Ready { .. } | UpdateStatus::Installed { .. } => {
             prompt_restart(cx);
+            return;
+        }
+        UpdateStatus::Downloading {
+            version,
+            fraction: None,
+        } if cx
+            .try_global::<UpdateScheduler>()
+            .and_then(|scheduler| scheduler.simulation_version.as_ref())
+            == Some(&version) =>
+        {
+            simulate_download(version, cx);
             return;
         }
         UpdateStatus::Downloading { version, .. } | UpdateStatus::Installing { version } => {
@@ -184,7 +211,7 @@ pub(crate) fn check_manually(cx: &mut App) {
             .detach();
             return;
         }
-        UpdateStatus::Idle => {}
+        UpdateStatus::Idle | UpdateStatus::Checking => {}
     }
 
     let scheduler = cx.global_mut::<UpdateScheduler>();
@@ -209,7 +236,7 @@ pub(crate) fn update_channel_changed(channel: UpdateChannel, cx: &mut App) {
 fn channel_switch_drops_pending_package(status: &UpdateStatus) -> bool {
     matches!(
         status,
-        UpdateStatus::Downloading { .. } | UpdateStatus::Ready { .. }
+        UpdateStatus::Checking | UpdateStatus::Downloading { .. } | UpdateStatus::Ready { .. }
     )
 }
 
@@ -249,6 +276,93 @@ fn busy_alert(cx: &mut App) {
     .detach();
 }
 
+/// `CAP_GPUI_UPDATE_SIMULATION_VERSION=<version>` (debug builds only): skip
+/// the network check, announce a newer version, play a fake download, then
+/// stop at Ready without installing anything.
+#[cfg(debug_assertions)]
+fn harness_update_version() -> Option<Version> {
+    let value = std::env::var("CAP_GPUI_UPDATE_SIMULATION_VERSION").ok()?;
+    let version = Version::parse(&value).ok()?;
+    if current_version().is_ok_and(|current| version > current) {
+        Some(version)
+    } else {
+        tracing::warn!(
+            version = %version,
+            "CAP_GPUI_UPDATE_SIMULATION_VERSION must be newer than the running version"
+        );
+        None
+    }
+}
+
+#[cfg(debug_assertions)]
+fn simulate_update(version: Version, cx: &mut App) {
+    tracing::info!(%version, "CAP_GPUI_UPDATE_SIMULATION_VERSION: available");
+    cx.global_mut::<UpdateScheduler>().simulation_version = Some(version.clone());
+    set_status(
+        UpdateStatus::Downloading {
+            version: version.clone(),
+            fraction: None,
+        },
+        cx,
+    );
+    cx.spawn(async move |cx| {
+        cx.background_executor()
+            .timer(Duration::from_millis(400))
+            .await;
+        cx.update(crate::menus::reapply_update_row);
+    })
+    .detach();
+
+    if GeneralSettings::load().update_download_policy != UpdateDownloadPolicy::Auto {
+        tracing::info!("CAP_GPUI_UPDATE_SIMULATION_VERSION: manual policy, waiting");
+        return;
+    }
+    cx.spawn(async move |cx| {
+        cx.background_executor().timer(Duration::from_secs(3)).await;
+        cx.update(|cx| simulate_download(version, cx));
+    })
+    .detach();
+}
+
+#[cfg(debug_assertions)]
+fn simulate_download(version: Version, cx: &mut App) {
+    if !matches!(status(cx), UpdateStatus::Downloading { fraction: None, .. }) {
+        return;
+    }
+    tracing::info!(%version, "CAP_GPUI_UPDATE_SIMULATION_VERSION: downloading");
+    set_status(
+        UpdateStatus::Downloading {
+            version: version.clone(),
+            fraction: Some(0.0),
+        },
+        cx,
+    );
+    cx.spawn(async move |cx| {
+        for step in 1..=10u8 {
+            cx.background_executor()
+                .timer(Duration::from_millis(800))
+                .await;
+            cx.update(|cx| {
+                set_status(
+                    UpdateStatus::Downloading {
+                        version: version.clone(),
+                        fraction: Some(step as f32 / 10.0),
+                    },
+                    cx,
+                );
+            });
+        }
+        cx.update(|cx| {
+            tracing::info!(%version, "CAP_GPUI_UPDATE_SIMULATION_VERSION: ready");
+            set_status(UpdateStatus::Ready { version }, cx);
+        });
+    })
+    .detach();
+}
+
+#[cfg(not(debug_assertions))]
+fn simulate_download(_version: Version, _cx: &mut App) {}
+
 pub(crate) fn schedule_startup_check(cx: &mut App) {
     let (wake, requests) = flume::bounded(1);
     cx.set_global(UpdateScheduler {
@@ -256,17 +370,35 @@ pub(crate) fn schedule_startup_check(cx: &mut App) {
         pending: PendingUpdateRequests::default(),
         manual_in_flight: false,
         status: UpdateStatus::Idle,
+        download_policy: GeneralSettings::load().update_download_policy,
+        simulation_version: None,
         staged: None,
         download: None,
         download_epoch: 0,
     });
+
+    #[cfg(debug_assertions)]
+    if let Some(version) = harness_update_version() {
+        simulate_update(version, cx);
+        return;
+    }
+    #[cfg(not(debug_assertions))]
+    if std::env::var_os("CAP_GPUI_UPDATE_SIMULATION_VERSION").is_some() {
+        tracing::warn!("CAP_GPUI_UPDATE_SIMULATION_VERSION is ignored in release builds");
+    }
 
     cx.spawn(async move |cx| {
         let mut channel = cx
             .background_executor()
             .spawn(async { GeneralSettings::load().update_channel })
             .await;
-        let mut delay = (!cfg!(debug_assertions)).then(|| first_check_delay(channel));
+        let mut policy = cx
+            .update(|cx| cx.global::<UpdateScheduler>().download_policy);
+        let mut delay = if policy == UpdateDownloadPolicy::Never {
+            None
+        } else {
+            (!cfg!(debug_assertions)).then(|| first_check_delay(channel))
+        };
         let mut ignored_version: Option<Version> = None;
 
         loop {
@@ -294,6 +426,19 @@ pub(crate) fn schedule_startup_check(cx: &mut App) {
                 std::mem::take(&mut scheduler.pending)
             });
 
+            let policy_now = cx.update(|cx| cx.global::<UpdateScheduler>().download_policy);
+            if policy_now != policy {
+                let was_never = policy == UpdateDownloadPolicy::Never;
+                policy = policy_now;
+                // Moving between Ask first and Auto keeps the schedule, so a
+                // switch before the first check does not cancel it.
+                if policy == UpdateDownloadPolicy::Never {
+                    delay = None;
+                } else if was_never {
+                    delay = Some(first_check_delay(channel));
+                }
+            }
+
             if signaled && request == PendingUpdateRequests::default() {
                 continue;
             }
@@ -301,10 +446,14 @@ pub(crate) fn schedule_startup_check(cx: &mut App) {
             if let Some(next_channel) = request.channel {
                 channel = next_channel;
                 ignored_version = None;
-                let _ = cx.update(drop_pending_update_from_previous_channel);
+                cx.update(drop_pending_update_from_previous_channel);
             }
 
             let manual = request.manual;
+            if policy == UpdateDownloadPolicy::Never && !manual {
+                delay = None;
+                continue;
+            }
             if cfg!(debug_assertions) && !manual {
                 delay = None;
                 continue;
@@ -320,6 +469,8 @@ pub(crate) fn schedule_startup_check(cx: &mut App) {
                 cx.update(|cx| finish_manual_check(cx, manual));
                 continue;
             }
+
+            cx.update(|cx| set_status(UpdateStatus::Checking, cx));
 
             let result = match cx
                 .update(|cx| gpui_tokio::Tokio::spawn(cx, available_release(channel)))
@@ -339,12 +490,14 @@ pub(crate) fn schedule_startup_check(cx: &mut App) {
                 channel_changed || (!manual && scheduler.pending.manual)
             });
             if superseded {
+                cx.update(|cx| set_status(UpdateStatus::Idle, cx));
                 continue;
             }
 
             let release = match result {
                 Ok(Some(release)) => release,
                 Ok(None) => {
+                    cx.update(|cx| set_status(UpdateStatus::Idle, cx));
                     if manual {
                         crate::platform::activate_app();
                         crate::platform::alert_dialog(
@@ -356,6 +509,7 @@ pub(crate) fn schedule_startup_check(cx: &mut App) {
                     continue;
                 }
                 Err(error) => {
+                    cx.update(|cx| set_status(UpdateStatus::Idle, cx));
                     tracing::warn!("update check failed: {error}");
                     if manual {
                         crate::platform::activate_app();
@@ -370,8 +524,53 @@ pub(crate) fn schedule_startup_check(cx: &mut App) {
             };
 
             if !manual && ignored_version.as_ref() == Some(&release.version) {
+                cx.update(|cx| set_status(UpdateStatus::Idle, cx));
                 continue;
             }
+
+            // The prompt is modal and brings Cap forward, so an automatic
+            // check holds it until a recording, export, import or
+            // transcription has finished rather than interrupting it.
+            let mut superseded = false;
+            if holds_scheduled_prompt(manual, cx.update(work_in_flight)) {
+                // Leave the menu's Check for Update row usable for the length
+                // of a recording; a manual check replaces the held prompt.
+                cx.update(|cx| set_status(UpdateStatus::Idle, cx));
+            }
+            while holds_scheduled_prompt(manual, cx.update(work_in_flight)) {
+                let timer = cx.background_executor().timer(BUSY_RETRY_DELAY);
+                let request = requests.recv_async();
+                futures_util::pin_mut!(timer, request);
+                if let Either::Right((Err(_), _)) = select(timer, request).await {
+                    return;
+                }
+                superseded = cx.update(|cx| {
+                    supersedes_held_prompt(&cx.global::<UpdateScheduler>().pending)
+                });
+                if superseded {
+                    break;
+                }
+            }
+            if superseded {
+                // Run the queued manual check or channel change straight away.
+                cx.update(|cx| set_status(UpdateStatus::Idle, cx));
+                delay = Some(Duration::ZERO);
+                continue;
+            }
+
+            let policy = cx.update(|cx| cx.global::<UpdateScheduler>().download_policy);
+            if policy == UpdateDownloadPolicy::Never && !manual {
+                cx.update(|cx| set_status(UpdateStatus::Idle, cx));
+                delay = next_check_delay(channel);
+                continue;
+            }
+            if policy == UpdateDownloadPolicy::Auto {
+                cx.update(|cx| finish_manual_check(cx, manual));
+                cx.update(|cx| start_download(release, cx));
+                continue;
+            }
+
+            cx.update(|cx| set_status(UpdateStatus::Idle, cx));
 
             crate::platform::activate_app();
             let accepted = crate::platform::confirm_dialog(
@@ -393,6 +592,14 @@ pub(crate) fn schedule_startup_check(cx: &mut App) {
         }
     })
     .detach();
+}
+
+pub(crate) fn update_download_policy_changed(policy: UpdateDownloadPolicy, cx: &mut App) {
+    if !cx.has_global::<UpdateScheduler>() {
+        return;
+    }
+    cx.global_mut::<UpdateScheduler>().download_policy = policy;
+    let _ = cx.global::<UpdateScheduler>().wake.try_send(());
 }
 
 fn start_download(release: Release, cx: &mut App) {
@@ -698,6 +905,27 @@ mod tests {
             signature: "c2ln".to_string(),
             notes: None,
         }
+    }
+
+    #[test]
+    fn only_scheduled_checks_wait_for_work_in_flight() {
+        assert!(holds_scheduled_prompt(false, true));
+        assert!(!holds_scheduled_prompt(false, false));
+        assert!(!holds_scheduled_prompt(true, true));
+        assert!(!holds_scheduled_prompt(true, false));
+    }
+
+    #[test]
+    fn queued_manual_checks_and_channel_changes_replace_a_held_prompt() {
+        assert!(!supersedes_held_prompt(&PendingUpdateRequests::default()));
+        assert!(supersedes_held_prompt(&PendingUpdateRequests {
+            manual: true,
+            ..PendingUpdateRequests::default()
+        }));
+        assert!(supersedes_held_prompt(&PendingUpdateRequests {
+            channel: Some(UpdateChannel::Nightly),
+            ..PendingUpdateRequests::default()
+        }));
     }
 
     #[test]

@@ -6,6 +6,9 @@ pub const KEYBOARD_EVENTS_FILE_NAME: &str = "keyboard.bin";
 pub const LEGACY_KEYBOARD_EVENTS_FILE_NAME: &str = "keyboard.json";
 const KEYBOARD_EVENTS_MAGIC: &[u8; 6] = b"CPKB01";
 
+#[cfg(test)]
+mod projection_tests;
+
 #[derive(Serialize, Deserialize, Clone, Type, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct KeyPressEvent {
@@ -56,18 +59,22 @@ impl KeyboardEvents {
             .map_err(|e| format!("Failed to parse keyboard events legacy JSON: {e}"))
     }
 
-    pub fn write_to_file(&self, path: &Path) -> Result<(), String> {
+    pub fn to_bytes(&self) -> Result<Vec<u8>, String> {
         let mut bytes = KEYBOARD_EVENTS_MAGIC.to_vec();
-        let payload = bincode::serde::encode_to_vec(self, bincode::config::standard())
+        bincode::serde::encode_into_std_write(self, &mut bytes, bincode::config::standard())
             .map_err(|e| format!("Failed to serialize keyboard events: {e}"))?;
-        bytes.extend(payload);
-        std::fs::write(path, bytes)
+        Ok(bytes)
+    }
+
+    pub fn write_to_file(&self, path: &Path) -> Result<(), String> {
+        std::fs::write(path, self.to_bytes()?)
             .map_err(|e| format!("Failed to write keyboard events file: {e}"))
     }
 }
 
 const MODIFIER_KEYS: &[&str] = &[
-    "LShift", "RShift", "LControl", "RControl", "LAlt", "RAlt", "LMeta", "RMeta", "Meta", "Command",
+    "LShift", "RShift", "LControl", "RControl", "LAlt", "RAlt", "LOption", "ROption", "LMeta",
+    "RMeta", "Meta", "Command", "RCommand",
 ];
 
 const SPECIAL_KEY_SYMBOLS: &[(&str, &str)] = &[
@@ -120,17 +127,17 @@ fn modifier_prefix(active_modifiers: &[String]) -> String {
 
     let has = |names: &[&str]| active_modifiers.iter().any(|m| names.contains(&m.as_str()));
 
-    if has(&["LMeta", "RMeta", "Meta", "Command"]) {
-        parts.push("⌘");
-    }
     if has(&["LControl", "RControl"]) {
         parts.push("⌃");
     }
-    if has(&["LAlt", "RAlt"]) {
+    if has(&["LAlt", "RAlt", "LOption", "ROption"]) {
         parts.push("⌥");
     }
     if has(&["LShift", "RShift"]) {
         parts.push("⇧");
+    }
+    if has(&["LMeta", "RMeta", "Meta", "Command", "RCommand"]) {
+        parts.push("⌘");
     }
 
     if parts.is_empty() {
@@ -585,6 +592,75 @@ pub fn synchronize_legacy_keyboard(
     timeline.keyboard_segments = generated;
 }
 
+struct PreparedKeyboardEvents<'a> {
+    ordered: Vec<&'a KeyPressEvent>,
+    modifiers: Option<[Vec<usize>; MODIFIER_KEYS.len()]>,
+    indexed_until: usize,
+}
+
+impl<'a> PreparedKeyboardEvents<'a> {
+    fn new(events: &'a KeyboardEvents) -> Self {
+        let mut ordered: Vec<_> = events
+            .presses
+            .iter()
+            .filter(|event| event.time_ms.is_finite())
+            .collect();
+        ordered.sort_by(|a, b| a.time_ms.total_cmp(&b.time_ms));
+        Self {
+            ordered,
+            modifiers: None,
+            indexed_until: 0,
+        }
+    }
+
+    fn for_clip(
+        &mut self,
+        source_start: f64,
+        source_end: f64,
+    ) -> impl Iterator<Item = (&KeyPressEvent, bool)> {
+        let first = self
+            .ordered
+            .partition_point(|event| event.time_ms / 1000.0 < source_start);
+        let last = self
+            .ordered
+            .partition_point(|event| event.time_ms / 1000.0 < source_end)
+            .max(first);
+        let mut held = [None; MODIFIER_KEYS.len()];
+        if first > 0 && first < last {
+            let modifiers = self
+                .modifiers
+                .get_or_insert_with(|| std::array::from_fn(|_| Vec::new()));
+            for (index, event) in self
+                .ordered
+                .iter()
+                .enumerate()
+                .take(first)
+                .skip(self.indexed_until)
+            {
+                if let Some(modifier) = MODIFIER_KEYS.iter().position(|key| *key == event.key) {
+                    modifiers[modifier].push(index);
+                }
+            }
+            self.indexed_until = self.indexed_until.max(first);
+            for (history, held) in modifiers.iter().zip(&mut held) {
+                if let Some(previous) = history
+                    .partition_point(|index| *index < first)
+                    .checked_sub(1)
+                {
+                    let index = history[previous];
+                    *held = self.ordered[index].down.then_some(index);
+                }
+            }
+            held.sort_unstable();
+        }
+        let ordered = &self.ordered;
+        held.into_iter()
+            .flatten()
+            .map(|index| (ordered[index], true))
+            .chain(ordered[first..last].iter().map(|event| (*event, false)))
+    }
+}
+
 fn project_keyboard_events(
     takes: &[(KeyboardEvents, f64)],
     timeline: &crate::TimelineConfiguration,
@@ -604,7 +680,8 @@ fn project_keyboard_events(
     };
     let mut edited_start = 0.0;
     let mut result = Vec::new();
-    let mut prepared: Vec<Option<Vec<&KeyPressEvent>>> = (0..takes.len()).map(|_| None).collect();
+    let mut prepared: Vec<Option<PreparedKeyboardEvents>> =
+        (0..takes.len()).map(|_| None).collect();
     for (index, clip) in timeline.segments.iter().enumerate() {
         if !clip.start.is_finite()
             || !clip.end.is_finite()
@@ -624,41 +701,16 @@ fn project_keyboard_events(
             let source_start = clip.start + capture_offset;
             let source_end = clip.end + capture_offset;
             let mut presses = Vec::new();
-            let mut modifiers = Vec::new();
-            let ordered = prepared[clip.recording_clip as usize].get_or_insert_with(|| {
-                let mut ordered: Vec<_> = events
-                    .presses
-                    .iter()
-                    .filter(|event| event.time_ms.is_finite())
-                    .collect();
-                ordered.sort_by(|a, b| a.time_ms.total_cmp(&b.time_ms));
-                ordered
-            });
-            for event in ordered {
-                let source = event.time_ms / 1000.0;
-                if source < source_start {
-                    if is_modifier_key(&event.key) {
-                        modifiers.retain(|key: &KeyPressEvent| key.key != event.key);
-                        if event.down {
-                            modifiers.push(event.clone());
-                        }
-                    }
-                    continue;
-                }
-                if source >= source_end {
-                    break;
-                }
-                if presses.is_empty() {
-                    for mut modifier in modifiers.drain(..) {
-                        modifier.time_ms = output_time(edited_start, false) * 1000.0;
-                        presses.push(modifier);
-                    }
-                }
+            let ordered = prepared[clip.recording_clip as usize]
+                .get_or_insert_with(|| PreparedKeyboardEvents::new(events));
+            for (event, held) in ordered.for_clip(source_start, source_end) {
                 let mut projected = event.clone();
-                projected.time_ms = output_time(
-                    edited_start + (source - source_start) / clip.timescale,
-                    false,
-                ) * 1000.0;
+                let time = if held {
+                    edited_start
+                } else {
+                    edited_start + (event.time_ms / 1000.0 - source_start) / clip.timescale
+                };
+                projected.time_ms = output_time(time, false) * 1000.0;
                 presses.push(projected);
             }
             let mut grouped = group_key_events(
@@ -762,7 +814,7 @@ pub fn group_key_events(
                         start: start / 1000.0,
                         end: (event.time_ms + linger_duration_ms) / 1000.0,
                         display_text: current_display.clone(),
-                        keys: current_keys.clone(),
+                        keys: take_group_keys(&mut current_keys),
                         fade_duration_override: None,
                         position_override: None,
                         color_override: None,
@@ -787,7 +839,7 @@ pub fn group_key_events(
                     start: start / 1000.0,
                     end: (last_key_time + linger_duration_ms) / 1000.0,
                     display_text: current_display.clone(),
-                    keys: current_keys.clone(),
+                    keys: take_group_keys(&mut current_keys),
                     fade_duration_override: None,
                     position_override: None,
                     color_override: None,
@@ -836,7 +888,7 @@ pub fn group_key_events(
                     start: start / 1000.0,
                     end: (last_key_time + linger_duration_ms) / 1000.0,
                     display_text: current_display.clone(),
-                    keys: current_keys.clone(),
+                    keys: take_group_keys(&mut current_keys),
                     fade_duration_override: None,
                     position_override: None,
                     color_override: None,
@@ -867,6 +919,10 @@ pub fn group_key_events(
 
         if event.key == "Backspace" && !current_display.is_empty() {
             current_display.pop();
+            let _ = current_keys.pop();
+            if current_display.is_empty() {
+                current_group_start = None;
+            }
             last_key_time = event.time_ms;
             continue;
         }
@@ -875,7 +931,7 @@ pub fn group_key_events(
         let has_command_mod = active_mods.iter().any(|m| {
             matches!(
                 m.as_str(),
-                "LMeta" | "RMeta" | "Meta" | "Command" | "LControl" | "RControl"
+                "LMeta" | "RMeta" | "Meta" | "Command" | "RCommand" | "LControl" | "RControl"
             )
         });
 
@@ -946,6 +1002,12 @@ pub fn group_key_events(
     segments
 }
 
+fn take_group_keys(keys: &mut Vec<KeyPressDisplay>) -> Vec<KeyPressDisplay> {
+    let mut completed = Vec::with_capacity(keys.len());
+    completed.append(keys);
+    completed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -965,6 +1027,41 @@ mod tests {
             key_code: key.to_string(),
             time_ms,
             down: false,
+        }
+    }
+
+    #[test]
+    fn completed_groups_preserve_text_keys_and_times_after_reusing_the_accumulator() {
+        for (terminator, time, end) in [
+            ("Space", 300.0, 0.8),
+            ("Space", 1000.0, 0.7),
+            ("x", 1000.0, 0.7),
+            ("LShift", 300.0, 0.7),
+        ] {
+            let events = KeyboardEvents {
+                presses: vec![
+                    key_down("h", 100.0),
+                    key_down("i", 200.0),
+                    key_down(terminator, time),
+                    key_down("a", time + 100.0),
+                    key_down("Space", time + 200.0),
+                    key_down("z", time + 300.0),
+                ],
+            };
+            let before = events.to_bytes().unwrap();
+            let grouped = group_key_events(&events, 300.0, 500.0, true, true);
+            assert_eq!(
+                serde_json::to_value(&grouped[0]).unwrap(),
+                serde_json::json!({
+                    "id": "kb-1", "start": 0.1, "end": end, "displayText": "hi",
+                    "keys": [{"key": "h", "timeOffset": 0.0}, {"key": "i", "timeOffset": 100.0}],
+                    "fadeDurationOverride": null, "positionOverride": null, "colorOverride": null,
+                    "backgroundColorOverride": null, "fontSizeOverride": null, "uppercaseOverride": null
+                }),
+                "{terminator} at {time}"
+            );
+            assert_eq!(grouped.last().unwrap().display_text, "z");
+            assert_eq!(events.to_bytes().unwrap(), before);
         }
     }
 
@@ -1035,6 +1132,27 @@ mod tests {
     }
 
     #[test]
+    fn backspace_keeps_display_and_key_timing_aligned() {
+        let events = KeyboardEvents {
+            presses: vec![
+                key_down("h", 100.0),
+                key_down("e", 200.0),
+                key_down("Backspace", 300.0),
+                key_down("a", 400.0),
+            ],
+        };
+
+        let segments = group_key_events(&events, 300.0, 500.0, true, true);
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].display_text, "ha");
+        assert_eq!(segments[0].keys.len(), 2);
+        assert_eq!(segments[0].keys[0].key, "h");
+        assert_eq!(segments[0].keys[1].key, "a");
+        assert_eq!(segments[0].keys[1].time_offset, 300.0);
+        assert!(segments[0].split_at(0.35).is_some());
+    }
+
+    #[test]
     fn backspace_to_empty_does_not_emit_blank_segment() {
         let events = KeyboardEvents {
             presses: vec![
@@ -1053,6 +1171,25 @@ mod tests {
     }
 
     #[test]
+    fn backspace_to_empty_rebases_the_next_character() {
+        let events = KeyboardEvents {
+            presses: vec![
+                key_down("a", 100.0),
+                key_down("Backspace", 200.0),
+                key_down("x", 250.0),
+            ],
+        };
+
+        let segments = group_key_events(&events, 300.0, 500.0, true, true);
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].start, 0.25);
+        assert_eq!(segments[0].display_text, "x");
+        assert_eq!(segments[0].keys.len(), 1);
+        assert_eq!(segments[0].keys[0].key, "x");
+        assert_eq!(segments[0].keys[0].time_offset, 0.0);
+    }
+
+    #[test]
     fn empty_events_returns_empty() {
         let events = KeyboardEvents { presses: vec![] };
         let segments = group_key_events(&events, 300.0, 500.0, true, true);
@@ -1068,6 +1205,52 @@ mod tests {
         let segments = group_key_events(&events, 300.0, 500.0, true, true);
         assert_eq!(segments.len(), 1);
         assert_eq!(segments[0].display_text, "⏎");
+    }
+
+    #[test]
+    fn keyboard_encoding_matches_the_original_payload_copy() {
+        for count in [0, 1, 250, 251, 65_535, 65_536] {
+            let events = KeyboardEvents {
+                presses: (0..count)
+                    .map(|index| KeyPressEvent {
+                        key: ["", "a", "文字🖱", "LControl"][index % 4].into(),
+                        key_code: "KeyA".into(),
+                        time_ms: [
+                            f64::NEG_INFINITY,
+                            -0.0,
+                            f64::from_bits(0x7ff8_0000_0000_1234),
+                            1.25,
+                            f64::INFINITY,
+                        ][index % 5],
+                        down: index % 2 == 0,
+                    })
+                    .collect(),
+            };
+            let mut expected = KEYBOARD_EVENTS_MAGIC.to_vec();
+            expected.extend(
+                bincode::serde::encode_to_vec(&events, bincode::config::standard()).unwrap(),
+            );
+            let actual = events.to_bytes().unwrap();
+            assert_eq!(actual, expected, "{count} events");
+            let decoded = KeyboardEvents::from_bytes(&actual, Path::new("keyboard.bin")).unwrap();
+            assert_eq!(decoded.presses.len(), events.presses.len());
+            for (decoded, source) in decoded.presses.iter().zip(&events.presses) {
+                assert_eq!(decoded.key, source.key);
+                assert_eq!(decoded.key_code, source.key_code);
+                assert_eq!(decoded.time_ms.to_bits(), source.time_ms.to_bits());
+                assert_eq!(decoded.down, source.down);
+            }
+        }
+        for length in [0, 1, 250, 251, 65_535, 65_536] {
+            let events = KeyboardEvents {
+                presses: vec![key_down(&"x".repeat(length), 1.25)],
+            };
+            let mut expected = KEYBOARD_EVENTS_MAGIC.to_vec();
+            expected.extend(
+                bincode::serde::encode_to_vec(&events, bincode::config::standard()).unwrap(),
+            );
+            assert_eq!(events.to_bytes().unwrap(), expected, "key length {length}");
+        }
     }
 
     #[test]
@@ -1316,6 +1499,39 @@ mod tests {
         let segments = group_key_events(&events, 300.0, 500.0, true, true);
         assert_eq!(segments.len(), 1);
         assert_eq!(segments[0].display_text, "⌘W");
+    }
+
+    #[test]
+    fn macos_option_and_right_command_count_as_modifiers() {
+        for (presses, expected) in [
+            (
+                vec![
+                    key_down("Command", 100.0),
+                    key_down("LOption", 110.0),
+                    key_down("Left", 150.0),
+                ],
+                vec!["⌘", "⌥⌘←"],
+            ),
+            (
+                vec![
+                    key_down("RCommand", 100.0),
+                    key_down("ROption", 110.0),
+                    key_down("LShift", 120.0),
+                    key_down("LControl", 130.0),
+                    key_down("z", 150.0),
+                ],
+                vec!["⌘", "⌥⌘", "⌥⇧⌘", "⌃⌥⇧⌘Z"],
+            ),
+        ] {
+            let segments = group_key_events(&KeyboardEvents { presses }, 300.0, 500.0, true, true);
+            assert_eq!(
+                segments
+                    .iter()
+                    .map(|segment| segment.display_text.as_str())
+                    .collect::<Vec<_>>(),
+                expected
+            );
+        }
     }
 
     #[test]

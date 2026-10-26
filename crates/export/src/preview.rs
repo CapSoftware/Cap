@@ -1,11 +1,12 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use cap_editor::EditorInstance;
 use cap_project::{CursorEvents, ProjectConfiguration, RecordingMeta, TimelineFrameMapping, XY};
 use cap_rendering::{
-    FrameRenderer, ProjectUniforms, RecordingSegmentDecoders, RenderVideoConstants, RenderedFrame,
-    RendererLayers, TransitionRenderInput, ZoomTransformTimeline,
+    FrameRenderer, PrecomputedCursorTimeline, ProjectUniforms, RecordingSegmentDecoders,
+    RenderVideoConstants, RenderedFrame, RendererLayers, TransitionRenderInput,
+    ZoomTransformTimeline,
 };
 use image::{
     Rgba,
@@ -100,6 +101,7 @@ struct PreviewSource<'a> {
     render_constants: &'a RenderVideoConstants,
     segments: Vec<PreviewSegment<'a>>,
     total_duration: f64,
+    layers_cache: Option<&'a std::sync::Mutex<Option<RendererLayers>>>,
 }
 
 struct PreviewSegment<'a> {
@@ -130,6 +132,7 @@ async fn render_preview_with_base(
             })
             .collect(),
         total_duration,
+        layers_cache: None,
     };
     render_preview_frame(source, frame_time, settings).await
 }
@@ -184,6 +187,7 @@ pub async fn render_preview_with_editor(
             })
             .collect(),
         total_duration,
+        layers_cache: Some(&editor.preview_layers),
     };
     render_preview_frame(source, frame_time, settings).await
 }
@@ -219,7 +223,9 @@ async fn render_preview_frame(
         render_constants,
         segments,
         total_duration,
+        layers_cache,
     } = source;
+    let project_config = &Arc::new(project_config.clone());
     let transition_mapping = project_config.timeline.as_ref().and_then(|timeline| {
         if timeline.transitions.is_empty() {
             return None;
@@ -272,7 +278,9 @@ async fn render_preview_frame(
     );
     zoom_timeline.ensure_precomputed_until((frame_number as f32 + 1.0) / settings.fps as f32);
 
-    let uniforms = ProjectUniforms::new(
+    let cursor_timeline =
+        PrecomputedCursorTimeline::from_project(segment_media.cursor, project_config);
+    let uniforms = ProjectUniforms::new_with_precomputed_cursor(
         render_constants,
         project_config,
         frame_number,
@@ -282,14 +290,26 @@ async fn render_preview_frame(
         &segment_frames,
         total_duration,
         &zoom_timeline,
+        &cursor_timeline,
     );
 
     let mut frame_renderer = FrameRenderer::new(render_constants);
-    let mut layers = RendererLayers::new_with_options(
-        &render_constants.device,
-        &render_constants.queue,
-        render_constants.is_software_adapter,
-    );
+    let mut layers = layers_cache
+        .and_then(|cache| {
+            let mut guard = cache.lock().ok()?;
+            guard.take()
+        })
+        .map(|mut cached| {
+            cached.reset_frame_state();
+            cached
+        })
+        .unwrap_or_else(|| {
+            RendererLayers::new_with_options(
+                &render_constants.device,
+                &render_constants.queue,
+                render_constants.is_software_adapter,
+            )
+        });
 
     let frame = if let Some((outgoing, kind, progress)) = transition_mapping {
         let outgoing_media = segments
@@ -303,8 +323,12 @@ async fn render_preview_frame(
             .find(|clip| clip.index == outgoing.segment.recording_clip)
             .map(|clip| clip.offsets)
             .unwrap_or_default();
-        let outgoing_frames = outgoing_media
-            .decoders
+        let outgoing_decoders = if outgoing.segment.recording_clip == segment.recording_clip {
+            outgoing_media.decoders.transition_side().await
+        } else {
+            outgoing_media.decoders
+        };
+        let outgoing_frames = outgoing_decoders
             .get_frames(
                 outgoing.source_time as f32,
                 project_config.requires_camera() && !settings.cursor_only,
@@ -321,7 +345,16 @@ async fn render_preview_frame(
             outgoing.segment.recording_clip,
         );
         outgoing_zoom.ensure_precomputed_until((frame_number as f32 + 1.0) / settings.fps as f32);
-        let outgoing_uniforms = ProjectUniforms::new(
+        let outgoing_cursor_timeline = if outgoing.segment.recording_clip == segment.recording_clip
+        {
+            None
+        } else {
+            Some(PrecomputedCursorTimeline::from_project(
+                outgoing_media.cursor,
+                project_config,
+            ))
+        };
+        let outgoing_uniforms = ProjectUniforms::new_with_precomputed_cursor(
             render_constants,
             project_config,
             frame_number,
@@ -331,6 +364,9 @@ async fn render_preview_frame(
             &outgoing_frames,
             total_duration,
             &outgoing_zoom,
+            outgoing_cursor_timeline
+                .as_ref()
+                .unwrap_or(&cursor_timeline),
         );
 
         frame_renderer
@@ -386,6 +422,12 @@ async fn render_preview_frame(
         let encoder_efficiency = 0.5;
         (total_bitrate * encoder_efficiency * duration_seconds) / (8.0 * 1024.0 * 1024.0)
     };
+
+    if let Some(cache) = layers_cache
+        && let Ok(mut guard) = cache.lock()
+    {
+        *guard = Some(layers);
+    }
 
     Ok(ExportPreviewResult {
         jpeg_base64: STANDARD.encode(&jpeg_buffer),
@@ -461,8 +503,6 @@ fn encode_preview_jpeg(frame: &RenderedFrame, quality: u8) -> Result<Vec<u8>, Ex
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use super::*;
 
     fn frame(width: u32, height: u32, stride: usize, mut state: u64) -> RenderedFrame {

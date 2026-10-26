@@ -1,0 +1,1314 @@
+[common]
+add = "जोड़ें"
+back = "वापस"
+cancel = "रद्द करें"
+choose_allow_prompt = "macOS के संकेत में “अनुमति दें” चुनें।"
+close = "बंद करें"
+copied = "कॉपी हो गया"
+dismiss = "बंद करें"
+go_back = "वापस जाएँ"
+loading = "लोड हो रहा है..."
+no = "नहीं"
+ok = "ठीक है"
+reset = "रीसेट करें"
+reset_to_default = "डिफ़ॉल्ट पर रीसेट करें"
+save = "सहेजें"
+search = "खोजें"
+yes = "हाँ"
+
+[menu.app]
+about = "Cap के बारे में"
+hide = "Cap छिपाएँ"
+hide_others = "अन्य छिपाएँ"
+quit = "Cap से बाहर निकलें"
+services = "सेवाएँ"
+settings = "सेटिंग्स…"
+
+[menu.about]
+licensed = "AGPL-3.0 के अंतर्गत लाइसेंस प्राप्त"
+website = "वेबसाइट"
+commit = "कमिट"
+
+[menu.file]
+close_window = "विंडो बंद करें"
+title = "फ़ाइल"
+open_file = "फ़ाइल खोलें…"
+open_recent = "हाल ही में खोलें"
+import_media = "मीडिया इम्पोर्ट करें…"
+
+[menu.edit]
+copy = "कॉपी करें"
+cut = "कट करें"
+paste = "पेस्ट करें"
+redo = "फिर से करें"
+select_all = "सभी चुनें"
+title = "संपादित करें"
+undo = "पहले जैसा करें"
+
+[menu.view]
+enter_full_screen = "पूर्ण स्क्रीन में जाएँ"
+title = "देखें"
+
+[menu.window]
+close_window = "विंडो बंद करें"
+minimize = "छोटा करें"
+title = "विंडो"
+zoom = "ज़ूम करें"
+
+[menu.help]
+title = "सहायता"
+feedback = "प्रतिक्रिया दें…"
+changelog = "चेंजलॉग"
+dashboard = "डैशबोर्ड"
+documentation = "दस्तावेज़ीकरण"
+faq = "सामान्य प्रश्न"
+self_hosting = "सेल्फ-होस्टिंग"
+help_center = "सहायता केंद्र"
+system_status = "सिस्टम स्थिति"
+discord = "Discord समुदाय से जुड़ें"
+
+[tray]
+import_media = "मीडिया इम्पोर्ट करें..."
+no_recent_items = "कोई हालिया आइटम नहीं"
+open_main_window = "मुख्य विंडो खोलें"
+previous = "हाल के आइटम"
+recording_mode = "रिकॉर्डिंग मोड"
+quit = "Cap से बाहर निकलें"
+record_area = "क्षेत्र रिकॉर्ड करें"
+record_display = "डिस्प्ले रिकॉर्ड करें"
+record_window = "विंडो रिकॉर्ड करें"
+request_permissions = "अनुमतियाँ माँगें"
+screenshot_area = "क्षेत्र का स्क्रीनशॉट"
+screenshot_display = "डिस्प्ले का स्क्रीनशॉट"
+screenshot_window = "विंडो का स्क्रीनशॉट"
+select_mode = "मोड चुनें"
+settings = "सेटिंग्स"
+take_screenshot = "स्क्रीनशॉट लें"
+tooltip_recording = "Cap - रिकॉर्डिंग रोकें"
+upload_logs = "लॉग अपलोड करें"
+version = "Cap v{version}"
+view_all_recordings = "सभी रिकॉर्डिंग देखें"
+view_all_screenshots = "सभी स्क्रीनशॉट देखें"
+
+[tray.mode]
+instant = "Instant"
+screenshot = "स्क्रीनशॉट"
+studio = "Studio"
+
+[settings.nav]
+automations = "ऑटोमेशन"
+changelog = "बदलावों की सूची"
+cli = "CLI"
+experimental = "प्रायोगिक"
+feedback = "फ़ीडबैक"
+general = "सामान्य"
+integrations = "इंटीग्रेशन"
+license = "प्लान और लाइसेंस"
+quality = "रिकॉर्डिंग क्वालिटी"
+recordings = "रिकॉर्डिंग"
+screenshots = "स्क्रीनशॉट"
+shortcuts = "शॉर्टकट"
+transcription = "ट्रांसक्रिप्शन"
+
+[settings.general.language]
+description = "वह भाषा चुनें जिसमें Cap दिखाई दे।"
+label = "ऐप की भाषा"
+system_default = "सिस्टम डिफ़ॉल्ट ({language})"
+title = "भाषा"
+
+[settings.general.appearance]
+dark = "डार्क"
+description = "Cap को अपने सिस्टम की थीम के अनुसार रखें या एक तय रूप चुनें।"
+light = "लाइट"
+system = "सिस्टम"
+title = "रूप"
+
+[settings.general.app]
+description = "चुनें कि Cap आपके सिस्टम पर कैसे दिखे।"
+title = "ऐप"
+
+[settings.general.app.dock_icon]
+description = "कोई विंडो खुली न होने पर भी Cap को Dock में रखें।"
+label = "Dock आइकन हमेशा दिखाएँ"
+
+[settings.general.app.notifications]
+description = "क्लिपबोर्ड पर कॉपी करने, फ़ाइलें सहेजने और अन्य कामों के लिए सूचनाएँ दिखाएँ। आपको अपने सिस्टम की सूचना सेटिंग्स में Cap को अनुमति देनी पड़ सकती है।"
+label = "सिस्टम सूचनाएँ"
+
+[settings.general.recording]
+description = "रिकॉर्ड करते समय और रोकने के बाद का व्यवहार।"
+title = "रिकॉर्डिंग"
+
+[settings.general.recording.countdown]
+description = "रिकॉर्डिंग शुरू होने से पहले रुकें।"
+label = "काउंटडाउन"
+off = "बंद"
+seconds_10 = "10 सेकंड"
+seconds_3 = "3 सेकंड"
+seconds_5 = "5 सेकंड"
+
+[settings.general.recording.confirm_without_mic]
+description = "जब कोई माइक्रोफ़ोन चुना न हो या चुना गया माइक्रोफ़ोन उपलब्ध न हो, तब पुष्टि माँगें।"
+label = "बिना माइक्रोफ़ोन रिकॉर्ड करने से पहले पुष्टि करें"
+
+[settings.general.recording.studio_sound]
+description = "माइक्रोफ़ोन ऑडियो को अपने-आप साफ़ करें। आप एडिटर में किसी भी रिकॉर्डिंग के लिए इसे बंद कर सकते हैं।"
+label = "नई रिकॉर्डिंग में Studio Sound"
+
+[settings.general.recording.main_window_start]
+description = "रिकॉर्डिंग शुरू होने पर मुख्य विंडो के साथ क्या होता है।"
+label = "रिकॉर्डिंग शुरू होने पर मुख्य विंडो"
+
+[settings.general.recording.post_deletion]
+description = "क्या रिकॉर्डिंग विंडो फिर से खुलनी चाहिए।"
+label = "रिकॉर्डिंग हटाने के बाद"
+
+[settings.general.recording.delete_after_upload]
+description = "सफलतापूर्वक अपलोड होने के बाद Cap लोकल फ़ाइल हटा देता है।"
+label = "अपलोड के बाद Instant रिकॉर्डिंग हटाएँ"
+
+[settings.general.recording.crash_recovery]
+description = "ऐसे हिस्सों में रिकॉर्ड करें जिन्हें क्रैश या बिजली जाने के बाद वापस पाया जा सके। कैप्चर के दौरान फ़ाइलें थोड़ी बड़ी होती हैं।"
+label = "क्रैश के बाद वापस पाई जा सकने वाली रिकॉर्डिंग"
+
+[settings.general.recording.custom_cursor]
+description = "कर्सर की स्थिति अलग से कैप्चर करें, ताकि आप एडिटर में उसका आकार और स्मूदिंग बदल सकें।"
+label = "कर्सर को अलग से कैप्चर करें (Studio)"
+
+[settings.general.recording.auto_zoom]
+description = "Studio रिकॉर्डिंग में माउस क्लिक के आसपास अपने-आप ज़ूम सेगमेंट जोड़ें।"
+label = "क्लिक पर ऑटो ज़ूम"
+
+[settings.general.recording.default_zoom]
+description = "नए बनाए गए और अपने-आप बने ज़ूम सेगमेंट का ज़ूम स्तर।"
+label = "डिफ़ॉल्ट ज़ूम स्तर"
+
+[settings.general.recording.capture_keyboard]
+description = "की प्रेस रिकॉर्ड करें, ताकि आप एडिटर में कीबोर्ड ओवरले जोड़ सकें।"
+label = "कीबोर्ड प्रेस कैप्चर करें"
+
+[settings.general.recording.notch_overlay]
+description = "जब चुने गए क्षेत्र में पूरा नॉच शामिल हो, तो नई स्क्रीन और क्षेत्र रिकॉर्डिंग में नॉच अपने-आप वापस जोड़ें। बाहरी डिस्प्ले, आंशिक क्षेत्र और विंडो रिकॉर्डिंग पर इसका असर नहीं पड़ता। हर रिकॉर्डिंग एडिटर में इसे बदल सकती है।"
+label = "स्क्रीन रिकॉर्डिंग पर MacBook का नॉच दिखाएँ"
+
+[settings.general.recording.max_fps]
+description = "स्क्रीन कैप्चर का अधिकतम फ़्रेम रेट।"
+description_high = "स्क्रीन कैप्चर का अधिकतम फ़्रेम रेट। ज़्यादा मान रखने पर कुछ सिस्टम पर फ़्रेम छूट सकते हैं या CPU का उपयोग बढ़ सकता है।"
+fps_120 = "120 FPS"
+fps_24 = "24 FPS"
+fps_25 = "25 FPS"
+fps_30 = "30 FPS"
+fps_60 = "60 FPS (सुझाया गया)"
+label = "अधिकतम कैप्चर फ़्रेम रेट"
+
+[settings.general.storage]
+choose_folder = "फ़ोल्डर चुनें"
+default_location = "डिफ़ॉल्ट (Application Support)"
+description = "Cap आपकी रिकॉर्डिंग कहाँ सहेजता है।"
+title = "स्टोरेज"
+
+[settings.general.project_name]
+available_placeholders = "उपलब्ध प्लेसहोल्डर"
+description = "नई रिकॉर्डिंग और एक्सपोर्ट की गई फ़ाइलों के लिए टेम्पलेट।"
+title = "डिफ़ॉल्ट प्रोजेक्ट नाम"
+
+[settings.general.project_name.placeholders]
+date_time = "तारीख और समय"
+date_values = "रिकॉर्डिंग की तारीख"
+mode_values = "\"studio\", \"instant\" या \"screenshot\""
+random = "रैंडम"
+random_values = "फ़ाइल नाम के लिए सुरक्षित 10 हेक्साडेसिमल अक्षर; 1–32 के लिए {{random:N}} का उपयोग करें।"
+recording_mode = "रिकॉर्डिंग मोड"
+recording_mode_values = "\"Studio\", \"Instant\" या \"Screenshot\""
+target = "लक्ष्य"
+target_kind_values = "\"Display\", \"Window\" या \"Area\""
+target_name_values = "मॉनिटर का नाम या विंडो का शीर्षक।"
+time_values = "रिकॉर्डिंग का समय"
+
+[settings.general.excluded_windows]
+description = "रिकॉर्डिंग में विंडो छिपाएँ।"
+empty = "अभी कोई विंडो बाहर नहीं रखी गई है।"
+missing_body = "कैमरा, सेटिंग्स या रिकॉर्डिंग विंडो स्क्रीन रिकॉर्डिंग में काले बॉक्स के रूप में दिख सकती हैं। छूटी हुई: {names}।"
+missing_title = "सुझाई गई Cap विंडो बाहर नहीं रखी गई हैं"
+restore = "वापस लाएँ"
+title = "बाहर रखी गई विंडो"
+
+[settings.general.updates]
+description = "चुनें कि आपको Cap के कौन-से बिल्ड मिलें।"
+nightly_description = "सबसे नए बिल्ड, जो रिकॉर्डिंग या एक्सपोर्ट न करते समय बैकग्राउंड में अपने-आप अपडेट होते हैं। ये अस्थिर हो सकते हैं।"
+nightly_switch_back = "Stable पर वापस जाने से आपको नवीनतम स्थिर वर्ज़न मिलेगा, जो आपके मौजूदा बिल्ड से पुराना हो सकता है।"
+stable_description = "वर्ज़न वाली रिलीज़ (सुझाई गई)"
+title = "अपडेट"
+
+[settings.general.updates.channel]
+description = "वह रिलीज़ चैनल जिससे Cap अपडेट होता है।"
+label = "अपडेट चैनल"
+
+[settings.general.self_host]
+confirm_change = "क्या आप वाकई सर्वर URL को '{origin}' में बदलना चाहते हैं? आपको फिर से साइन इन करना होगा।"
+description = "इसे तभी बदलें जब आप Cap Web का अपना इंस्टेंस चला रहे हों।"
+server_url = "Cap सर्वर URL"
+title = "सेल्फ़-होस्ट"
+update = "अपडेट करें"
+
+[settings.general.privacy]
+title = "गोपनीयता"
+
+[settings.general.privacy.telemetry]
+description = "Cap विश्वसनीयता बेहतर करने और गड़बड़ियाँ ठीक करने के लिए अनाम टेलीमेट्री का उपयोग करता है। हम रिकॉर्डिंग की सामग्री, विंडो के शीर्षक, फ़ाइल पाथ या निजी जानकारी कभी इकट्ठा नहीं करते।"
+label = "अनाम टेलीमेट्री साझा करें"
+[settings.prompt]
+ok = "ठीक है"
+
+[settings.sidebar]
+account = "खाता"
+cancel_sign_in = "साइन इन रद्द करें"
+check_for_updates = "अपडेट देखें"
+checking_for_updates = "अपडेट देखे जा रहे हैं…"
+click_to_sign_in = "साइन इन करने के लिए क्लिक करें"
+downloading = "v{version} डाउनलोड हो रहा है…"
+downloading_progress = "v{version} डाउनलोड हो रहा है… {percent}%"
+installing = "v{version} इंस्टॉल हो रहा है…"
+previous_versions = "पिछले वर्शन देखें"
+restart_to_update = "v{version} पर अपडेट करने के लिए रीस्टार्ट करें"
+sign_in = "साइन इन करें"
+sign_out = "साइन आउट करें"
+signed_in = "साइन इन है"
+
+[settings.recordings]
+corrupted_body = "रिकॉर्डिंग विफल रही, इसलिए एडिटर में इस फ़ाइल के साथ समस्याएँ हो सकती हैं! अगर फ़ाइल रिकवर करने में दिक्कत हो, तो कृपया सपोर्ट से संपर्क करें!"
+corrupted_title = "रिकॉर्डिंग शायद खराब हो गई है"
+delete = "डिलीट करें"
+description = "अपनी रिकॉर्डिंग मैनेज करें और उन पर कार्रवाई करें।"
+edit = "एडिट करें"
+empty_library = "कोई रिकॉर्डिंग नहीं मिली"
+failed = "रिकॉर्डिंग विफल रही"
+import = "इम्पोर्ट करें"
+in_progress = "रिकॉर्डिंग जारी है"
+load_more = "और लोड करें"
+open_bundle = "रिकॉर्डिंग बंडल खोलें"
+open_link = "लिंक खोलें"
+retry_upload = "अपलोड फिर से करें"
+show_all = "सभी दिखाएँ"
+title = "रिकॉर्डिंग"
+
+[settings.recordings.empty]
+all = "कोई रिकॉर्डिंग नहीं"
+all_matching = "कोई मिलती-जुलती रिकॉर्डिंग नहीं"
+instant = "कोई Instant रिकॉर्डिंग नहीं"
+instant_matching = "कोई मिलती-जुलती Instant रिकॉर्डिंग नहीं"
+studio = "कोई Studio रिकॉर्डिंग नहीं"
+studio_matching = "कोई मिलती-जुलती Studio रिकॉर्डिंग नहीं"
+
+[settings.screenshots]
+copy = "क्लिपबोर्ड पर कॉपी करें"
+delete = "डिलीट करें"
+description = "अपने स्क्रीनशॉट मैनेज करें और उन पर कार्रवाई करें।"
+empty = "कोई स्क्रीनशॉट नहीं"
+empty_library = "कोई स्क्रीनशॉट नहीं मिला"
+empty_matching = "कोई मिलता-जुलता स्क्रीनशॉट नहीं"
+import = "इमेज इम्पोर्ट करें"
+load_more = "और लोड करें"
+open_folder = "फ़ोल्डर खोलें"
+save_as = "इस रूप में सेव करें"
+title = "स्क्रीनशॉट"
+
+[settings.quality]
+save_failed = "आपकी रिकॉर्डिंग सेटिंग्स सेव नहीं हो सकीं। कृपया फिर से कोशिश करें।"
+
+[settings.quality.studio]
+balanced = "संतुलित"
+balanced_description = "उचित फ़ाइल साइज़ में साफ़ डिटेल। ज़्यादातर रिकॉर्डिंग के लिए सही।"
+compatibility = "छोटी फ़ाइलें"
+compatibility_description = "डिस्क स्पेस बचाता है। बारीक डिटेल थोड़ी धुंधली हो सकती है, ख़ासकर कैमरा में।"
+description = "एडिटिंग के लिए आपके कंप्यूटर पर सेव होती हैं। एक्सपोर्ट का साइज़ आप बाद में एडिटर में चुनते हैं।"
+recommended = "सुझाया गया"
+title = "Studio रिकॉर्डिंग"
+ultra = "अधिकतम डिटेल"
+ultra_description = "ज़्यादा एडिटिंग के लिए सबसे ज़्यादा डिटेल रखता है। सबसे ज़्यादा डिस्क स्पेस लेता है।"
+
+[settings.quality.instant]
+description = "रिकॉर्ड करते समय ही अपलोड होती है, इसलिए रोकते ही लिंक तैयार रहता है। सबसे अच्छी क्वालिटी के लिए Studio मोड इस्तेमाल करें: यह आपकी स्क्रीन की अधिकतम क्वालिटी में रिकॉर्ड करता है, और आप 4K तक एक्सपोर्ट कर सकते हैं।"
+free_plan = "फ़्री प्लान पर 720p। Cap Pro 4K तक रिकॉर्ड करता है।"
+max_resolution = "अधिकतम रेज़ोल्यूशन"
+res_1080p = "व्यावहारिक अपलोड साइज़ पर साफ़ टेक्स्ट।"
+res_1440p = "बड़ी, हाई-रेज़ोल्यूशन स्क्रीन के लिए ज़्यादा डिटेल।"
+res_4k = "सबसे ज़्यादा डिटेल। तेज़ कनेक्शन पर सबसे अच्छा।"
+res_720p = "सबसे छोटे अपलोड, इसलिए लिंक सबसे जल्दी तैयार होते हैं।"
+title = "Instant रिकॉर्डिंग"
+
+[settings.quality.sharing]
+auto_open = "शेयर लिंक अपने आप खोलें"
+auto_open_description = "अपलोड पूरा होने पर लिंक आपके ब्राउज़र में खोलें।"
+title = "शेयरिंग"
+
+[settings.options.studio_quality]
+balanced = "संतुलित"
+compatibility = "कम्पैटिबिलिटी"
+ultra = "अल्ट्रा"
+
+[settings.options.main_window_start]
+close = "बंद करें"
+minimise = "छोटा करें"
+
+[settings.options.post_studio]
+do_nothing = "कुछ न करें"
+open_editor = "एडिटर खोलें"
+show_cap = "Cap दिखाएँ"
+
+[settings.options.post_screenshot]
+copy = "क्लिपबोर्ड पर कॉपी करें"
+copy_and_open_editor = "कॉपी करके एडिटर खोलें"
+do_nothing = "कुछ न करें"
+open_editor = "एडिटर खोलें"
+
+[settings.options.post_deletion]
+do_nothing = "कुछ न करें"
+reopen = "रिकॉर्डर फिर से खोलें"
+
+[settings.options.preview_quality]
+full = "पूरा"
+half = "आधा"
+quarter = "एक-चौथाई"
+
+[settings.shortcuts]
+blocked_while_recording = "जब तक यह रिकॉर्डिंग अपनी स्टॉप की इस्तेमाल कर रही है, शॉर्टकट नहीं बदले जा सकते। पहले रिकॉर्डिंग रोकें।"
+needs_modifier_macos = "⌘, ⌃ या ⌥ शामिल करें ताकि शॉर्टकट टाइपिंग में बाधा न बने।"
+needs_modifier_other = "Ctrl, Alt या Win शामिल करें ताकि शॉर्टकट टाइपिंग में बाधा न बने।"
+record_shortcut = "शॉर्टकट सेट करें"
+recording_description = "पहले Cap खोले बिना रिकॉर्डिंग शुरू करें।"
+recording_hint = "जिन कीज़ का इस्तेमाल करना है उन्हें दबाएँ। Esc रद्द करता है, Delete इसे हटाता है।"
+recording_title = "रिकॉर्डिंग"
+saved = "सेव हो गया। किसी भी ऐप में {keys} दबाएँ और {effect}।"
+saved_moved = "सेव हो गया। किसी भी ऐप में {keys} दबाएँ और {effect}। “{shortcut}” से हटा दिया गया।"
+screenshots_description = "शॉर्टकट किसी भी ऐप में काम करते हैं। बदलने के लिए किसी पर क्लिक करें।"
+screenshots_title = "स्क्रीनशॉट"
+type_shortcut = "शॉर्टकट दबाएँ…"
+unavailable = "कोई दूसरा ऐप या सिस्टम पहले से यह शॉर्टकट इस्तेमाल कर रहा है। कोई दूसरा चुनने के लिए क्लिक करें।"
+unsupported_key = "यह की शॉर्टकट में इस्तेमाल नहीं हो सकती। कोई अक्षर, संख्या या F-की आज़माएँ।"
+while_recording_title = "रिकॉर्डिंग के दौरान"
+
+[settings.shortcuts.after_screenshot]
+hint = "हर स्क्रीनशॉट के लिए, शॉर्टकट से या Cap से"
+title = "स्क्रीनशॉट के बाद"
+
+[settings.shortcuts.after_studio]
+hint = "रोकने पर"
+title = "Studio रिकॉर्डिंग के बाद"
+
+[settings.shortcuts.after_instant]
+hint = "शेयर लिंक हमेशा कॉपी होता है"
+title = "Instant रिकॉर्डिंग के बाद"
+
+[settings.shortcuts.outcome]
+instant_copy_link = "सिर्फ़ लिंक कॉपी करें"
+instant_copy_link_hint = "कुछ नहीं खुलता"
+instant_open_link = "लिंक खोलें"
+instant_open_link_hint = "आपके ब्राउज़र में"
+saved_to_library = "लाइब्रेरी में सेव"
+screenshot_copy = "कॉपी करें"
+screenshot_copy_and_edit = "कॉपी और एडिट"
+screenshot_copy_and_edit_hint = "दोनों एक साथ"
+screenshot_copy_hint = "कहीं भी पेस्ट करें"
+screenshot_do_nothing = "कुछ न करें"
+screenshot_open_editor = "एडिटर खोलें"
+screenshot_open_editor_hint = "पहले एनोटेट करें"
+studio_do_nothing = "कुछ न करें"
+studio_open_editor = "एडिटर खोलें"
+studio_open_editor_hint = "तुरंत एडिट करें"
+studio_show_cap = "Cap दिखाएँ"
+studio_show_cap_hint = "रिकॉर्डर पर वापस"
+
+[settings.shortcuts.label]
+cycle_mode = "रिकॉर्डिंग मोड बदलें"
+fallback = "शॉर्टकट"
+open_picker = "रिकॉर्डिंग पिकर खोलें"
+pause = "पॉज़ या फिर से शुरू करें"
+record_area = "क्षेत्र रिकॉर्ड करें"
+record_display = "डिस्प्ले रिकॉर्ड करें"
+record_window = "विंडो रिकॉर्ड करें"
+restart = "रिकॉर्डिंग फिर से शुरू करें"
+screenshot_area = "क्षेत्र का स्क्रीनशॉट"
+screenshot_display = "डिस्प्ले का स्क्रीनशॉट"
+screenshot_window = "विंडो का स्क्रीनशॉट"
+start_instant = "Instant रिकॉर्डिंग शुरू करें"
+start_studio = "Studio रिकॉर्डिंग शुरू करें"
+stop = "रिकॉर्डिंग रोकें"
+
+[settings.shortcuts.effect]
+cycle_mode = "Studio, Instant और स्क्रीनशॉट मोड के बीच बदलें"
+instant_copy = "चुनी गई स्क्रीन या विंडो को Instant मोड में रिकॉर्ड करें, फिर रोकने पर शेयर लिंक कॉपी करें"
+instant_copy_and_open = "चुनी गई स्क्रीन या विंडो को Instant मोड में रिकॉर्ड करें, फिर रोकने पर शेयर लिंक कॉपी करके खोलें"
+open_picker = "Cap खोलकर चुनें कि क्या रिकॉर्ड करना है"
+pause = "मौजूदा रिकॉर्डिंग पॉज़ करें या फिर से शुरू करें"
+picker_area_instant = "क्षेत्र चुनकर उसे Instant मोड में रिकॉर्ड करें"
+picker_area_screenshot = "क्षेत्र चुनकर उसका स्क्रीनशॉट लें"
+picker_area_studio = "क्षेत्र चुनकर उसे Studio मोड में रिकॉर्ड करें"
+picker_display_instant = "डिस्प्ले चुनकर उसे Instant मोड में रिकॉर्ड करें"
+picker_display_screenshot = "डिस्प्ले चुनकर उसका स्क्रीनशॉट लें"
+picker_display_studio = "डिस्प्ले चुनकर उसे Studio मोड में रिकॉर्ड करें"
+picker_window_instant = "विंडो चुनकर उसे Instant मोड में रिकॉर्ड करें"
+picker_window_screenshot = "विंडो चुनकर उसका स्क्रीनशॉट लें"
+picker_window_studio = "विंडो चुनकर उसे Studio मोड में रिकॉर्ड करें"
+restart = "मौजूदा टेक हटाकर फिर से शुरू करें"
+screenshot_area_copy = "क्षेत्र चुनकर स्क्रीनशॉट को क्लिपबोर्ड पर कॉपी करें"
+screenshot_area_copy_and_open_editor = "क्षेत्र चुनकर स्क्रीनशॉट कॉपी करें और एडिटर खोलें"
+screenshot_area_open_editor = "क्षेत्र चुनकर स्क्रीनशॉट को एडिटर में खोलें"
+screenshot_area_save = "क्षेत्र चुनकर कुछ खोले बिना स्क्रीनशॉट को अपनी लाइब्रेरी में सेव करें"
+screenshot_display_copy = "पॉइंटर वाला डिस्प्ले कैप्चर करके स्क्रीनशॉट को क्लिपबोर्ड पर कॉपी करें"
+screenshot_display_copy_and_open_editor = "पॉइंटर वाला डिस्प्ले कैप्चर करके स्क्रीनशॉट कॉपी करें और एडिटर खोलें"
+screenshot_display_open_editor = "पॉइंटर वाला डिस्प्ले कैप्चर करके स्क्रीनशॉट को एडिटर में खोलें"
+screenshot_display_save = "पॉइंटर वाला डिस्प्ले कैप्चर करके कुछ खोले बिना स्क्रीनशॉट को अपनी लाइब्रेरी में सेव करें"
+screenshot_window_copy = "पॉइंटर के नीचे की विंडो कैप्चर करके स्क्रीनशॉट को क्लिपबोर्ड पर कॉपी करें"
+screenshot_window_copy_and_open_editor = "पॉइंटर के नीचे की विंडो कैप्चर करके स्क्रीनशॉट कॉपी करें और एडिटर खोलें"
+screenshot_window_open_editor = "पॉइंटर के नीचे की विंडो कैप्चर करके स्क्रीनशॉट को एडिटर में खोलें"
+screenshot_window_save = "पॉइंटर के नीचे की विंडो कैप्चर करके कुछ खोले बिना स्क्रीनशॉट को अपनी लाइब्रेरी में सेव करें"
+stop = "मौजूदा रिकॉर्डिंग रोकें"
+studio = "चुनी गई स्क्रीन या विंडो को Studio मोड में रिकॉर्ड करें"
+studio_open_editor = "चुनी गई स्क्रीन या विंडो को Studio मोड में रिकॉर्ड करें, फिर रोकने पर एडिटर खोलें"
+
+[settings.shortcuts.sentence]
+cycle_mode = "Studio, Instant और स्क्रीनशॉट मोड के बीच बदलें।"
+instant_copy = "चुनी गई स्क्रीन या विंडो को Instant मोड में रिकॉर्ड करें, फिर रोकने पर शेयर लिंक कॉपी करें।"
+instant_copy_and_open = "चुनी गई स्क्रीन या विंडो को Instant मोड में रिकॉर्ड करें, फिर रोकने पर शेयर लिंक कॉपी करके खोलें।"
+open_picker = "Cap खोलकर चुनें कि क्या रिकॉर्ड करना है।"
+pause = "मौजूदा रिकॉर्डिंग पॉज़ करें या फिर से शुरू करें।"
+picker_area_instant = "क्षेत्र चुनकर उसे Instant मोड में रिकॉर्ड करें।"
+picker_area_screenshot = "क्षेत्र चुनकर उसका स्क्रीनशॉट लें।"
+picker_area_studio = "क्षेत्र चुनकर उसे Studio मोड में रिकॉर्ड करें।"
+picker_display_instant = "डिस्प्ले चुनकर उसे Instant मोड में रिकॉर्ड करें।"
+picker_display_screenshot = "डिस्प्ले चुनकर उसका स्क्रीनशॉट लें।"
+picker_display_studio = "डिस्प्ले चुनकर उसे Studio मोड में रिकॉर्ड करें।"
+picker_window_instant = "विंडो चुनकर उसे Instant मोड में रिकॉर्ड करें।"
+picker_window_screenshot = "विंडो चुनकर उसका स्क्रीनशॉट लें।"
+picker_window_studio = "विंडो चुनकर उसे Studio मोड में रिकॉर्ड करें।"
+restart = "मौजूदा टेक हटाकर फिर से शुरू करें।"
+screenshot_area_copy = "क्षेत्र चुनकर स्क्रीनशॉट को क्लिपबोर्ड पर कॉपी करें।"
+screenshot_area_copy_and_open_editor = "क्षेत्र चुनकर स्क्रीनशॉट कॉपी करें और एडिटर खोलें।"
+screenshot_area_open_editor = "क्षेत्र चुनकर स्क्रीनशॉट को एडिटर में खोलें।"
+screenshot_area_save = "क्षेत्र चुनकर कुछ खोले बिना स्क्रीनशॉट को अपनी लाइब्रेरी में सेव करें।"
+screenshot_display_copy = "पॉइंटर वाला डिस्प्ले कैप्चर करके स्क्रीनशॉट को क्लिपबोर्ड पर कॉपी करें।"
+screenshot_display_copy_and_open_editor = "पॉइंटर वाला डिस्प्ले कैप्चर करके स्क्रीनशॉट कॉपी करें और एडिटर खोलें।"
+screenshot_display_open_editor = "पॉइंटर वाला डिस्प्ले कैप्चर करके स्क्रीनशॉट को एडिटर में खोलें।"
+screenshot_display_save = "पॉइंटर वाला डिस्प्ले कैप्चर करके कुछ खोले बिना स्क्रीनशॉट को अपनी लाइब्रेरी में सेव करें।"
+screenshot_window_copy = "पॉइंटर के नीचे की विंडो कैप्चर करके स्क्रीनशॉट को क्लिपबोर्ड पर कॉपी करें।"
+screenshot_window_copy_and_open_editor = "पॉइंटर के नीचे की विंडो कैप्चर करके स्क्रीनशॉट कॉपी करें और एडिटर खोलें।"
+screenshot_window_open_editor = "पॉइंटर के नीचे की विंडो कैप्चर करके स्क्रीनशॉट को एडिटर में खोलें।"
+screenshot_window_save = "पॉइंटर के नीचे की विंडो कैप्चर करके कुछ खोले बिना स्क्रीनशॉट को अपनी लाइब्रेरी में सेव करें।"
+stop = "मौजूदा रिकॉर्डिंग रोकें।"
+studio = "चुनी गई स्क्रीन या विंडो को Studio मोड में रिकॉर्ड करें।"
+studio_open_editor = "चुनी गई स्क्रीन या विंडो को Studio मोड में रिकॉर्ड करें, फिर रोकने पर एडिटर खोलें।"
+
+[settings.cli]
+command = "कमांड"
+copy = "कॉपी करें"
+description = "टर्मिनल, एजेंट, स्क्रिप्ट और लोकल ऑटोमेशन के लिए Cap कमांड इंस्टॉल करें।"
+install = "CLI इंस्टॉल करें"
+installed = "इंस्टॉल है"
+installing = "इंस्टॉल हो रहा है..."
+installs_command = "डेस्कटॉप ऐप एक लोकल\u00A0{command}\u00A0कमांड इंस्टॉल करता है जो बंडल की गई CLI की ओर इशारा करता है।"
+load_failed = "CLI की स्थिति लोड नहीं हो सकी: {error}"
+not_installed = "इंस्टॉल नहीं है"
+path_configured = "cap को आपके PATH में जोड़ दिया गया है। इस्तेमाल करने के लिए टर्मिनल रीस्टार्ट करें, या अभी यह चलाएँ:"
+path_missing = "नए टर्मिनल से cap इस्तेमाल करने के लिए {path} को अपने PATH में जोड़ें।"
+remove = "हटाएँ"
+removing = "हटाया जा रहा है..."
+repair = "ठीक करें"
+repairing = "ठीक किया जा रहा है..."
+retry = "फिर से कोशिश करें"
+target = "टारगेट"
+title = "कमांड लाइन"
+
+[settings.transcription]
+active_title = "सक्रिय संकेत"
+applied_note = "जब आप एडिटर में कैप्शन बनाते हैं, तब ये संकेत लागू होते हैं।"
+clear = "साफ़ करें"
+count = { one = "{count} आइटम", other = "{count} आइटम" }
+description = "वे नाम, स्पेलिंग, डोमेन और कैपिटलाइज़ेशन की पसंद जोड़ें जिनका कैप्शन बनाते समय ध्यान रखा जाना चाहिए।"
+placeholder = "शब्द जोड़ें"
+saved = "सेव हो गया"
+saving = "सेव हो रहा है..."
+terms_description = "टाइपो और फ़ॉर्मैटिंग की गलतियाँ कम करने के लिए एक बार में एक शब्द जोड़ें।"
+terms_title = "याद रखे गए शब्द"
+title = "ट्रांसक्रिप्शन"
+
+[settings.experimental]
+developer = "डेवलपर"
+developer_description = "सिर्फ़ डेवलपमेंट बिल्ड में दिखता है।"
+muxer = "अलग प्रोसेस में मक्सर"
+muxer_description = "फ़्रैगमेंटेड-MP4 मक्सर को अलग सबप्रोसेस में चलाता है ताकि मक्सर क्रैश होने से आपकी रिकॉर्डिंग न रुके। इसके लिए बंडल की गई cap-muxer बाइनरी ज़रूरी है।"
+native_app = "नेटिव ऐप इस्तेमाल करें"
+native_app_description = "बंद करने पर यह ऐप बंद होगा और डेवलपमेंट हार्नेस में क्लासिक Tauri ऐप फिर से खुलेगा। रिकॉर्डिंग और सेटिंग्स साझा रहती हैं।"
+reliability = "विश्वसनीयता"
+
+[settings.experimental.switch]
+busy = "क्लासिक ऐप पर जाने से पहले अपनी रिकॉर्डिंग, एक्सपोर्ट, अपलोड, इम्पोर्ट या ट्रांसक्रिप्शन का काम पूरा करें।"
+check_failed = "यह जाँच नहीं हो सकी कि क्लासिक Cap ऐप खुला या नहीं: {error}"
+data_stays = "आपकी रिकॉर्डिंग और सेटिंग्स ठीक वहीं रहती हैं जहाँ वे हैं।"
+failed = "क्लासिक Cap ऐप नहीं खुल सका।"
+not_found = "वापस जाने के लिए क्लासिक Cap ऐप नहीं मिला।"
+open_failed = "क्लासिक Cap ऐप नहीं खुल सका: {error}"
+opening = "क्लासिक Cap ऐप खुल रहा है"
+opening_detail = "क्लासिक Cap ऐप तैयार होने पर यह विंडो बंद हो जाएगी।"
+save_failed = "आपकी ऐप पसंद सेव नहीं हो सकी। Cap अभी भी खुला है।"
+switching = "क्लासिक Cap ऐप पर वापस जा रहे हैं।"
+timed_out = "क्लासिक ऐप नहीं खुला। डेव टर्मिनल में बिल्ड की गड़बड़ियाँ देखें, फिर से कोशिश करें।"
+
+[settings.feedback]
+app_version = "ऐप वर्शन"
+capture_support = "कैप्चर सपोर्ट"
+capture_supported = "स्क्रीन कैप्चर: सपोर्टेड"
+capture_unsupported = "स्क्रीन कैप्चर: सपोर्टेड नहीं"
+community_description = "कोई सवाल है, आइडिया शेयर करना है, या बस बातचीत करनी है? Cap की Discord कम्युनिटी से जुड़ें।"
+community_title = "कम्युनिटी से जुड़ें"
+debug_description = "Cap की समस्याएँ पहचानने में हमारी मदद के लिए अपने लॉग अपलोड करें। इसमें कोई निजी जानकारी शामिल नहीं होती।"
+debug_title = "डीबग जानकारी"
+description = "फ़ीडबैक भेजकर या बग रिपोर्ट करके Cap को बेहतर बनाने में हमारी मदद करें। हम तुरंत इस पर काम करेंगे।"
+join_discord = "Discord से जुड़ें"
+operating_system = "ऑपरेटिंग सिस्टम"
+placeholder = "हमें बताएँ कि आप Cap के बारे में क्या सोचते हैं..."
+submit = "फ़ीडबैक सबमिट करें"
+submit_failed = "फ़ीडबैक सबमिट नहीं हो सका"
+submitting = "सबमिट हो रहा है..."
+system_loading = "सिस्टम जानकारी लोड हो रही है..."
+system_title = "सिस्टम जानकारी"
+thanks = "आपके फ़ीडबैक के लिए धन्यवाद!"
+title = "फ़ीडबैक"
+upload_interrupted = "अपलोड बीच में रुक गया"
+upload_logs = "लॉग अपलोड करें"
+upload_sent = "भेज दिया गया। धन्यवाद, इससे हमें समस्या ढूँढने में मदद मिलती है।"
+uploading = "अपलोड हो रहा है..."
+
+[settings.feedback.diagnostic]
+confirm_body = "Cap आपकी स्क्रीन पर चमकता पैटर्न दिखाएगा और हर पाइपलाइन के लिए लगभग {seconds} सेकंड तक तेज़ बीप बजाएगा। हेडफ़ोन उतार दें, आवाज़ सुनाई देने लायक रखें, और पूरा होने तक कंप्यूटर को न छुएँ।"
+confirm_title = "डायग्नोस्टिक चलाएँ?"
+description = "एक छोटा चमकता/बीप करता टेस्ट पैटर्न रिकॉर्ड करता है, मापता है कि तस्वीर और आवाज़ कितनी अलग हो जाती हैं, और आपके डिस्प्ले, कैमरा, माइक्रोफ़ोन, डिस्क स्पेस और रिकॉर्डिंग सेटिंग्स का स्नैपशॉट लेता है। जब तक आप भेजना न चुनें, कुछ भी कहीं नहीं भेजा जाता।"
+mic_description = "आपका माइक्रोफ़ोन भी रिकॉर्ड करता है और जाँचता है कि वह बीप को सही समय पर सुनता है या नहीं। ऐसे स्पीकर चाहिए जिन्हें माइक सच में सुन सके।"
+mic_label = "माइक्रोफ़ोन टेस्ट करें"
+mode_description = "कौन-सी पाइपलाइन टेस्ट करनी है। दोनों चुनने पर पहले Studio और फिर Instant हिस्सा चलता है।"
+mode_label = "रिकॉर्डिंग मोड"
+no_cli = "इस बिल्ड के साथ Cap कमांड-लाइन टूल नहीं मिला, इसलिए रिपोर्ट में सिर्फ़ आपके एनवायरनमेंट की जानकारी होगी।"
+no_cli_sync = "इस बिल्ड के साथ Cap कमांड-लाइन टूल नहीं मिला, इसलिए सिंक टेस्ट नहीं चल सका।"
+run = "डायग्नोस्टिक चलाएँ"
+run_again = "फिर से चलाएँ"
+send = "Cap को भेजें"
+sending = "भेजा जा रहा है..."
+show_file = "फ़ाइल दिखाएँ"
+stop_recording_first = "डायग्नोस्टिक चलाने से पहले मौजूदा रिकॉर्डिंग रोकें।"
+title = "डायग्नोस्टिक रिपोर्ट"
+try_again = "फिर से कोशिश करें"
+warning_body = "एक फ़ुलस्क्रीन विंडो काले और सफ़ेद रंग में चमकती है जबकि आपके स्पीकर से 1kHz की बीप बजती है, और Cap इसे रिकॉर्ड करके मापता है कि तस्वीर और आवाज़ कितनी अलग हो गई हैं। चलते समय कंप्यूटर को न छुएँ। दोनों मोड मिलाकर कुछ मिनट लगते हैं।"
+warning_title = "टेस्ट आपकी पूरी स्क्रीन लेता है और आवाज़ करता है।"
+
+[settings.feedback.diagnostic.verdict]
+environment_only = "सिर्फ़ एनवायरनमेंट"
+fail = "फ़ेल"
+inconclusive = "अनिर्णायक"
+pass = "पास"
+warn = "चेतावनी"
+
+[settings.sign_in_required]
+body = "जारी रखने के लिए कृपया साइन इन करें। या hello@cap.so पर ईमेल करें या cap.link/discord पर हमारे Discord से जुड़ें"
+title = "साइन इन ज़रूरी है"
+
+[settings.changelog]
+fetch_failed = "चेंजलॉग नहीं मिल सका"
+loading = "चेंजलॉग लोड हो रहा है..."
+new = "नया"
+version = "वर्शन {version} - {date}"
+
+[settings.license]
+activate = "लाइसेंस सक्रिय करें"
+activating = "सक्रिय हो रहा है..."
+active_title = "डेस्कटॉप लाइसेंस"
+checking = "जाँच हो रही है…"
+deactivate = "लाइसेंस निष्क्रिय करें"
+description = "आपका Cap प्लान और डेस्कटॉप लाइसेंस, एक ही जगह।"
+desktop_description = "आपका डेस्कटॉप लाइसेंस कमर्शियल रिकॉर्डिंग और एडिटिंग को कवर करता है। Cap Pro इसमें क्लाउड शेयरिंग और कोलैबोरेशन फ़ीचर जोड़ता है।"
+desktop_name = "डेस्कटॉप लाइसेंस"
+expires = "समाप्ति"
+explore_description = "हमारी वेबसाइट पर मौजूदा कीमतें और उनमें शामिल सब कुछ तुलना करें।"
+explore_desktop = "डेस्कटॉप लाइसेंस · डेस्कटॉप रिकॉर्डर और एडिटर का कमर्शियल इस्तेमाल।"
+explore_pro = "Cap Pro · डेस्कटॉप लाइसेंस, साथ में क्लाउड शेयरिंग, AI फ़ीचर और कोलैबोरेशन।"
+explore_title = "प्लान देखें"
+free_description = "निजी इस्तेमाल के लिए लोकल रूप से रिकॉर्ड और एडिट करें। कमर्शियल इस्तेमाल या ज़्यादा क्लाउड फ़ीचर के लिए पेड प्लान चुनें।"
+have_key = "क्या आपके पास लाइसेंस की है?"
+key = "लाइसेंस की"
+no_instance = "कोई इंस्टेंस ID नहीं मिली"
+opens_pricing = "आपके ब्राउज़र में cap.so/pricing खोलता है।"
+placeholder = "लाइसेंस की"
+plan_title = "आपका प्लान"
+pro_description = "आपके खाते में क्लाउड शेयरिंग, Pro फ़ीचर और कमर्शियल इस्तेमाल के लिए डेस्कटॉप लाइसेंस शामिल है।"
+refresh = "प्लान रीफ़्रेश करें"
+refresh_failed = "आपका प्लान रीफ़्रेश नहीं हो सका। कृपया फिर से कोशिश करें।"
+save_failed = "लाइसेंस सेव नहीं हो सका"
+sign_in_hint = "पहले से Cap Pro है? साइडबार से अपने खाते से साइन इन करें।"
+title = "प्लान और लाइसेंस"
+view_pricing = "प्लान और कीमतें देखें ↗"
+
+[settings.integrations]
+configure = "कॉन्फ़िगर करें"
+description = "Cap की क्षमताएँ बढ़ाने और थर्ड-पार्टी सेवाओं से जुड़ने के लिए इंटीग्रेशन कॉन्फ़िगर करें।"
+google_drive_description = "नए शेयर करने लायक लिंक वाले अपलोड के लिए Google Drive कनेक्ट करें। Cap नए वीडियो आपके Drive में एक निजी Cap फ़ोल्डर में रखता है और सामान्य एक्सेस जाँच के बाद उन्हें Cap के ज़रिए दिखाता रहता है।"
+managed = "आपके संगठन द्वारा मैनेज किया जाता है"
+managed_by = "आपके संगठन द्वारा मैनेज किया जाता है: {organization}"
+request_timed_out = "अनुरोध का समय समाप्त हो गया"
+s3_description = "अपने डेटा स्टोरेज पर पूरा नियंत्रण पाने के लिए अपना S3 बकेट कनेक्ट करें। सभी नए शेयर करने लायक लिंक वाले अपलोड अपने आप आपके कॉन्फ़िगर किए गए S3 बकेट में अपलोड होंगे, ताकि आपकी सामग्री पर पूरा स्वामित्व और नियंत्रण आपके पास रहे। डेटा संप्रभुता और कस्टम स्टोरेज नीतियों की ज़रूरत वाले संगठनों के लिए बढ़िया।"
+s3_name = "S3 कॉन्फ़िग"
+title = "इंटीग्रेशन"
+upgrade = "Pro में अपग्रेड करें"
+
+[settings.integrations.s3]
+access_key = "एक्सेस की ID"
+bucket = "बकेट का नाम"
+configuration = "कॉन्फ़िगरेशन"
+delete_failed = "S3 कॉन्फ़िग डिलीट नहीं हो सका"
+deleted = "S3 कॉन्फ़िगरेशन डिलीट हो गया"
+endpoint = "एंडपॉइंट"
+fetch_failed = "S3 कॉन्फ़िग नहीं मिल सका"
+guide = "स्टोरेज कॉन्फ़िग गाइड"
+guide_intro = "अपना स्टोरेज बकेट सेट अप करके Cap से कनेक्ट करने में 10 मिनट से कम लगने चाहिए। शुरू करने के लिए\u00A0{guide}\u00A0देखें।"
+other_provider = "अन्य S3-कम्पैटिबल"
+provider = "स्टोरेज प्रोवाइडर"
+region = "रीजन"
+remove = "कॉन्फ़िग हटाएँ"
+removing = "हटाया जा रहा है..."
+save_failed = "S3 कॉन्फ़िग सेव नहीं हो सका"
+saved = "S3 कॉन्फ़िगरेशन सेव हो गया"
+saving = "सेव हो रहा है..."
+secret_key = "सीक्रेट एक्सेस की"
+test = "कनेक्शन टेस्ट करें"
+test_failed = "S3 कनेक्शन टेस्ट विफल रहा। अपना कॉन्फ़िग और नेटवर्क कनेक्शन जाँचें।"
+test_ok = "S3 कॉन्फ़िगरेशन टेस्ट सफल रहा! कनेक्शन काम कर रहा है।"
+test_timeout = "कनेक्शन टेस्ट 5 सेकंड बाद टाइम आउट हो गया। कृपया अपना एंडपॉइंट URL और नेटवर्क कनेक्शन जाँचें।"
+testing = "टेस्ट हो रहा है..."
+
+[settings.integrations.gdrive]
+active = "सक्रिय"
+active_for_uploads = "नए अपलोड के लिए सक्रिय"
+cached = "{time} का कैश"
+connect = "Google Drive कनेक्ट करें"
+connect_failed = "Google Drive कनेक्शन शुरू नहीं हो सका"
+connected_inactive = "कनेक्टेड है पर सक्रिय नहीं"
+connection_description = "Google Drive नए अपलोड आपके Drive में एक निजी Cap फ़ोल्डर में रखता है। Cap पर होस्ट किए गए और S3 के मौजूदा वीडियो अपने मौजूदा स्टोरेज का ही इस्तेमाल करते रहते हैं।"
+connection_title = "कनेक्शन"
+disconnect = "डिस्कनेक्ट करें"
+disconnect_failed = "Google Drive डिस्कनेक्ट नहीं हो सका"
+disconnected = "Google Drive डिस्कनेक्ट हो गया"
+drive_files = "Drive फ़ाइलें"
+finish_in_browser = "अपने ब्राउज़र में Google Drive कनेक्ट करना पूरा करें, फिर यहाँ लौटकर रीफ़्रेश करें।"
+not_connected = "कनेक्ट नहीं है"
+opening = "खुल रहा है..."
+refresh = "रीफ़्रेश करें"
+refreshing = "रीफ़्रेश हो रहा है..."
+remaining = "बाकी"
+set_active_failed = "सक्रिय स्टोरेज प्रोवाइडर अपडेट नहीं हो सका"
+storage = "स्टोरेज"
+test = "टेस्ट करें"
+test_failed = "Google Drive कनेक्शन टेस्ट विफल रहा"
+testing = "टेस्ट हो रहा है..."
+trash = "ट्रैश"
+updated = "{time} को अपडेट हुआ"
+use_drive = "Google Drive इस्तेमाल करें"
+use_s3 = "S3 इस्तेमाल करें"
+used = "{usage} इस्तेमाल हुआ"
+used_of = "{limit} में से {usage} इस्तेमाल हुआ"
+waiting = "इंतज़ार हो रहा है..."
+working = "Google Drive कनेक्शन काम कर रहा है"
+working_for = "{email} के लिए Google Drive कनेक्शन काम कर रहा है"
+
+[settings.automations]
+action_no_effect = "चुने गए ट्रिगर के लिए इस कार्रवाई का कोई असर नहीं होता।"
+add_action = "कार्रवाई जोड़ें"
+add_condition = "शर्त जोड़ें"
+auto_name_empty = "{trigger} ऑटोमेशन"
+browse = "ब्राउज़ करें"
+check_compatibility = "कम्पैटिबिलिटी जाँचें"
+compatibility_checked = "कम्पैटिबिलिटी जाँची गई: यह ऑटोमेशन अभी Cap में नहीं चलता। सेव किए गए नियम Cap CLI के लिए उपलब्ध रहते हैं। कोई कार्रवाई नहीं चलाई गई।"
+condition_never_matches = "चुने गए ट्रिगर के लिए यह शर्त कभी पूरी नहीं होती।"
+copy_link = "लिंक क्लिपबोर्ड पर कॉपी करें"
+dangerous = "Cap CLI में यह ऑटोमेशन आपकी अनुमतियों से कमांड चलाता है या नेटवर्क अनुरोध भेजता है। सिर्फ़ भरोसेमंद वैल्यू इस्तेमाल करें।"
+delete = "डिलीट करें"
+description = "नियम Cap CLI के साथ साझा होते हैं। Cap इन नियमों को सेव करता है, लेकिन अभी ऑटोमेशन नहीं चलाता।"
+empty_description = "एक क्लिक में शुरू करने के लिए नीचे कोई टेम्पलेट चुनें, या शुरुआत से अपना बनाएँ।"
+empty_title = "अभी कोई ऑटोमेशन नहीं"
+enabled = "चालू"
+match_all = "सभी मिलें"
+match_any = "कोई भी मिले"
+name = "नाम"
+new = "नया ऑटोमेशन"
+no_presets = "अभी कोई प्रीसेट नहीं है, पहले एडिटर में एक बनाएँ।"
+only_if = "सिर्फ़ तब चलाएँ जब"
+open_in_browser = "ब्राउज़र में खोलें"
+retry_save = "फिर से सेव करें"
+run_through_shell = "शेल के ज़रिए चलाएँ"
+save_failed = "ऑटोमेशन सेव नहीं हो सके। आपके बदलाव सेव नहीं हुए हैं।"
+start_from_scratch = "शुरुआत से बनाएँ"
+summary_empty = "{trigger} → अभी कोई कार्रवाई नहीं"
+templates_description = "एक क्लिक में तैयार ऑटोमेशन जोड़ें। बाद में कुछ भी बदलें।"
+templates_title = "टेम्पलेट"
+then = "फिर यह करें"
+title = "ऑटोमेशन"
+when = "जब यह हो"
+
+[settings.automations.status]
+disabled_saved = "बंद · सेव है"
+disabled_unsaved = "बंद · सेव नहीं है"
+enabled_saved = "चालू · सेव है"
+enabled_unsaved = "चालू · सेव नहीं है"
+
+[settings.automations.field]
+arguments = "आर्ग्युमेंट (स्पेस से अलग)"
+body = "मुख्य भाग"
+body_template = "बॉडी टेम्पलेट (वैकल्पिक)"
+compression = "कम्प्रेशन"
+destination = "डेस्टिनेशन फ़ोल्डर (वैकल्पिक, खाली = प्रोजेक्ट फ़ोल्डर)"
+filename = "फ़ाइल नाम टेम्पलेट (वैकल्पिक)"
+folder = "फ़ोल्डर"
+format = "फ़ॉर्मैट"
+frame_rate = "फ़्रेम रेट"
+method = "मेथड"
+organization = "संगठन ID (वैकल्पिक)"
+preset = "प्रीसेट"
+program = "प्रोग्राम"
+resolution = "रेज़ोल्यूशन"
+source = "सोर्स"
+title = "शीर्षक"
+url = "URL"
+
+[settings.automations.placeholder]
+organization_id = "संगठन ID"
+project_folder = "प्रोजेक्ट फ़ोल्डर"
+window_title = "जैसे Slack"
+
+[settings.automations.clipboard]
+original = "ओरिजिनल कैप्चर"
+rendered = "एडिट की गई / रेंडर की गई"
+
+[settings.automations.target]
+area = "क्षेत्र"
+display = "डिस्प्ले"
+window = "विंडो"
+
+[settings.automations.compression]
+maximum = "अधिकतम"
+potato = "सबसे कम"
+social = "सोशल"
+web = "वेब"
+
+[settings.automations.trigger.screenshot_taken]
+label = "स्क्रीनशॉट लेने पर"
+noun = "स्क्रीनशॉट"
+phrase = "स्क्रीनशॉट लिया गया"
+runs = "हर स्क्रीनशॉट पर चलता है।"
+
+[settings.automations.trigger.studio_finished]
+label = "Studio रिकॉर्डिंग खत्म होने पर"
+noun = "Studio रिकॉर्डिंग"
+phrase = "Studio रिकॉर्डिंग खत्म हुई"
+runs = "हर Studio रिकॉर्डिंग खत्म होने पर चलता है।"
+
+[settings.automations.trigger.instant_finished]
+label = "Instant रिकॉर्डिंग खत्म होने पर"
+noun = "Instant रिकॉर्डिंग"
+phrase = "Instant रिकॉर्डिंग खत्म हुई"
+runs = "हर Instant रिकॉर्डिंग खत्म होने पर चलता है।"
+
+[settings.automations.trigger.recording_started]
+label = "रिकॉर्डिंग शुरू होने पर"
+noun = "रिकॉर्डिंग शुरू"
+phrase = "रिकॉर्डिंग शुरू हुई"
+runs = "हर रिकॉर्डिंग शुरू होने पर चलता है।"
+
+[settings.automations.trigger.upload_completed]
+label = "अपलोड पूरा होने पर"
+noun = "अपलोड"
+phrase = "अपलोड पूरा हुआ"
+runs = "हर अपलोड पूरा होने पर चलता है।"
+
+[settings.automations.trigger.video_imported]
+label = "वीडियो इम्पोर्ट होने पर"
+noun = "इम्पोर्ट"
+phrase = "वीडियो इम्पोर्ट हुआ"
+runs = "हर वीडियो इम्पोर्ट होने पर चलता है।"
+
+[settings.automations.trigger.recording_deleted]
+label = "रिकॉर्डिंग डिलीट होने पर"
+noun = "डिलीट"
+phrase = "रिकॉर्डिंग डिलीट हुई"
+runs = "हर रिकॉर्डिंग डिलीट होने पर चलता है।"
+
+[settings.automations.action.copy_to_clipboard]
+label = "क्लिपबोर्ड पर कॉपी करें"
+noun = "क्लिपबोर्ड"
+short = "क्लिपबोर्ड पर कॉपी"
+
+[settings.automations.action.save_to_location]
+label = "किसी जगह पर सेव करें"
+noun = "फ़ोल्डर"
+short = "फ़ोल्डर में सेव"
+
+[settings.automations.action.export]
+label = "प्रोफ़ाइल के साथ एक्सपोर्ट करें"
+noun = "एक्सपोर्ट"
+short = "एक्सपोर्ट"
+
+[settings.automations.action.upload]
+label = "अपलोड + लिंक कॉपी करें"
+noun = "अपलोड"
+short = "अपलोड और लिंक कॉपी"
+
+[settings.automations.action.reveal]
+label = "फ़ाइल मैनेजर में दिखाएँ"
+noun = "दिखाएँ"
+short = "फ़ाइल मैनेजर में दिखाएँ"
+
+[settings.automations.action.open_file]
+label = "फ़ाइल खोलें"
+noun = "खोलें"
+short = "फ़ाइल खोलें"
+
+[settings.automations.action.ocr]
+label = "टेक्स्ट पहचानकर (OCR) क्लिपबोर्ड पर"
+noun = "टेक्स्ट"
+short = "टेक्स्ट कॉपी (OCR)"
+
+[settings.automations.action.notify]
+label = "नोटिफ़िकेशन दिखाएँ"
+noun = "सूचना"
+short = "सूचित करें"
+
+[settings.automations.action.open_editor]
+label = "एडिटर खोलें"
+noun = "एडिटर"
+short = "एडिटर खोलें"
+
+[settings.automations.action.skip_editor]
+label = "एडिटर छोड़ें (हेडलेस)"
+noun = "एडिटर छोड़ें"
+short = "एडिटर छोड़ें"
+
+[settings.automations.action.apply_preset]
+label = "एडिटर प्रीसेट लागू करें"
+noun = "प्रीसेट"
+short = "प्रीसेट लागू करें"
+
+[settings.automations.action.run_command]
+label = "कमांड चलाएँ"
+noun = "कमांड"
+short = "कमांड चलाएँ"
+
+[settings.automations.action.webhook]
+label = "वेबहुक भेजें"
+noun = "वेबहुक"
+short = "वेबहुक भेजें"
+
+[settings.automations.action.delete_local_files]
+label = "लोकल फ़ाइलें डिलीट करें"
+noun = "डिलीट"
+short = "लोकल फ़ाइलें डिलीट करें"
+
+[settings.automations.condition]
+capture_target = "कैप्चर टारगेट है"
+duration_at_least = "अवधि कम से कम (सेकंड)"
+duration_at_most = "अवधि ज़्यादा से ज़्यादा (सेकंड)"
+organization = "संगठन है"
+recording_mode = "रिकॉर्डिंग मोड है"
+window_title = "विंडो के शीर्षक में शामिल है"
+
+[settings.automations.template.copy_screenshot]
+description = "स्क्रीनशॉट लें और वह तुरंत पेस्ट करने के लिए तैयार है।"
+name = "नए स्क्रीनशॉट अपने आप क्लिपबोर्ड पर कॉपी करें"
+
+[settings.automations.template.ocr_screenshot]
+description = "Cap आपके स्क्रीनशॉट का टेक्स्ट पढ़कर आपके लिए कॉपी कर देता है।"
+name = "स्क्रीनशॉट से टेक्स्ट निकालें"
+
+[settings.automations.template.save_screenshot]
+description = "हर नया स्क्रीनशॉट सीधे आपके चुने फ़ोल्डर में भेजें।"
+name = "स्क्रीनशॉट एक फ़ोल्डर में रखें"
+
+[settings.automations.template.reveal_screenshot]
+description = "स्क्रीनशॉट लेते ही उसे Finder में खोलें।"
+name = "हर नए स्क्रीनशॉट पर जाएँ"
+
+[settings.automations.template.export_studio]
+description = "Studio रिकॉर्डिंग खत्म होते ही MP4 रेंडर करें।"
+name = "रिकॉर्डिंग खत्म होते ही अपने आप एक्सपोर्ट करें"
+
+[settings.automations.template.upload_share]
+description = "रिकॉर्डिंग खत्म करें और लिंक आपके क्लिपबोर्ड पर तैयार मिलेगा।"
+name = "अपलोड करें और शेयर लिंक पाएँ"
+
+[settings.automations.template.notify_upload]
+body = "आपकी रिकॉर्डिंग शेयर करने के लिए तैयार है।"
+description = "रिकॉर्डिंग शेयर करने लायक होते ही डेस्कटॉप पर हल्का-सा संकेत पाएँ।"
+name = "अपलोड तैयार होने पर मुझे बताएँ"
+
+[settings.automations.template.webhook_share]
+description = "शेयर लिंक Slack, Discord या अपने वेबहुक पर भेजें।"
+name = "कुछ शेयर करने पर Slack को बताएँ"
+
+
+[main]
+delete_recording_confirm = "क्या आप वाकई यह रिकॉर्डिंग हटाना चाहते हैं?"
+delete_screenshot_confirm = "क्या आप वाकई यह स्क्रीनशॉट हटाना चाहते हैं?"
+
+[main.clean_capture]
+title = "अपना कैप्चर साफ़ रखें"
+
+[main.clip]
+add_to_project = "अपने मौजूदा प्रोजेक्ट में जोड़ें"
+record_new = "नई क्लिप रिकॉर्ड करें"
+
+[main.device]
+camera = "कैमरा"
+fallback_camera = "कैमरा"
+heading = "अपना कैमरा और माइक्रोफ़ोन चुनें"
+microphone = "माइक्रोफ़ोन"
+no_camera = "कोई कैमरा नहीं"
+no_cameras = "कोई कैमरा नहीं मिला"
+no_matching_cameras = "कोई मिलता-जुलता कैमरा नहीं"
+no_matching_microphones = "कोई मिलता-जुलता माइक्रोफ़ोन नहीं"
+no_microphone = "कोई माइक्रोफ़ोन नहीं"
+no_microphones = "कोई माइक्रोफ़ोन नहीं मिला"
+system_audio_off = "सिस्टम ऑडियो नहीं"
+system_audio_on = "सिस्टम ऑडियो रिकॉर्ड करें"
+
+[main.device.access]
+allow_access = "एक्सेस दें"
+camera_denied = "Cap आपका कैमरा इस्तेमाल नहीं कर सकता। इसे सिस्टम सेटिंग्स में चालू करें।"
+camera_needed = "आपका कैमरा इस्तेमाल करने के लिए Cap को आपकी अनुमति चाहिए।"
+microphone_denied = "Cap आपका माइक्रोफ़ोन इस्तेमाल नहीं कर सकता। इसे सिस्टम सेटिंग्स में चालू करें।"
+microphone_needed = "आपका माइक्रोफ़ोन इस्तेमाल करने के लिए Cap को आपकी अनुमति चाहिए।"
+open_system_settings = "सिस्टम सेटिंग्स खोलें"
+turn_on_in_settings = "सेटिंग्स में चालू करें"
+
+[main.device.format]
+apply_failed = "डिवाइस फ़ॉर्मैट लागू नहीं हो सका: {error}"
+applying = "फ़ॉर्मैट लागू हो रहा है..."
+available = "उपलब्ध: {format}"
+camera_changed = "कैमरा बदल गया या डिस्कनेक्ट हो गया। इसकी फ़ॉर्मैट सेटिंग्स फिर से खोलें।"
+channels = { one = "{count} चैनल", other = "{count} चैनल" }
+current = "मौजूदा: {format}"
+default = "डिफ़ॉल्ट"
+loading = "फ़ॉर्मैट लोड हो रहे हैं..."
+mono = "मोनो"
+preferred = "पसंदीदा फ़ॉर्मैट"
+save_failed = "पसंदीदा डिवाइस फ़ॉर्मैट सहेजा नहीं जा सका। फिर से कोशिश करें।"
+stereo = "स्टीरियो"
+
+[main.device.pill]
+allow = "अनुमति दें"
+allow_in_settings = "सेटिंग्स में अनुमति दें"
+asking = "पूछ रहा है…"
+not_connected = "कनेक्ट नहीं है"
+off = "बंद"
+on = "चालू"
+
+[main.error]
+camera_only_needs_camera = "सिर्फ़ कैमरा रिकॉर्डिंग के लिए कोई कैमरा चुना होना ज़रूरी है।"
+copy = "त्रुटि कॉपी करें"
+devices_not_ready = "रिकॉर्डिंग डिवाइस तैयार नहीं हैं। रिकॉर्डर खोलें और फिर से कोशिश करें।"
+title = "कुछ गड़बड़ हो गई"
+
+[main.header]
+changelog = "बदलावों की सूची"
+help = "सहायता और टूर"
+recordings = "रिकॉर्डिंग"
+screenshots = "स्क्रीनशॉट"
+settings = "सेटिंग्स"
+teleprompter = "टेलीप्रॉम्प्टर"
+
+[main.library]
+clips = { one = "{count} क्लिप", other = "{count} क्लिप" }
+copy_screenshot_failed = "स्क्रीनशॉट कॉपी नहीं हो सका"
+import_recordings = "इम्पोर्ट करें"
+import_screenshots = "इमेज इम्पोर्ट करें"
+importing = "इम्पोर्ट हो रहा है"
+no_matching_recordings = "कोई मिलती-जुलती रिकॉर्डिंग नहीं"
+no_matching_screenshots = "कोई मिलता-जुलता स्क्रीनशॉट नहीं"
+no_recordings = "अभी कोई रिकॉर्डिंग नहीं"
+no_screenshots = "अभी कोई स्क्रीनशॉट नहीं"
+recordings_description = "आपकी स्क्रीन रिकॉर्डिंग यहाँ दिखेंगी। शुरू करने के लिए रिकॉर्डिंग शुरू करें!"
+screenshots_description = "आपके स्क्रीनशॉट यहाँ दिखेंगे। शुरू करने के लिए एक स्क्रीनशॉट लें!"
+view_all_recordings = "सभी रिकॉर्डिंग देखें"
+view_all_screenshots = "सभी स्क्रीनशॉट देखें"
+
+[main.mic_warning]
+body = "इस रिकॉर्डिंग में आपकी आवाज़ शामिल नहीं होगी। कोई माइक्रोफ़ोन चुनें, या उसके बिना जारी रखें।"
+dont_show_again = "दोबारा न दिखाएँ"
+record_without = "बिना माइक्रोफ़ोन के रिकॉर्ड करें"
+save_failed = "आपकी पसंद सहेजी नहीं जा सकी। फिर से कोशिश करें या बॉक्स को अनचेक रहने दें।"
+title = "कोई माइक्रोफ़ोन नहीं मिला"
+
+[main.mode]
+info_tooltip = "रिकॉर्डिंग मोड की जानकारी"
+
+[main.mode.header]
+instant = "Instant मोड"
+screenshot = "स्क्रीनशॉट मोड"
+studio = "Studio मोड"
+
+[main.mode.hover]
+instant = "Instant मोड"
+instant_description = "रेंडरिंग की ज़रूरत नहीं: रिकॉर्ड करते-करते अपलोड होता है, ताकि रोकते ही आप लिंक शेयर कर सकें।"
+quality_settings = "क्वालिटी सेटिंग्स"
+screenshot = "स्क्रीनशॉट मोड"
+screenshot_description = "स्टिल इमेज कैप्चर करें और उन पर नोट्स जोड़ें।"
+studio = "Studio मोड"
+studio_description = "आपके कंप्यूटर पर सहेजता है और रोकने पर एडिटर खोलता है। रिकॉर्डिंग क्वालिटी सेटिंग्स में चुनें।"
+
+[main.mode.info]
+instant = "लिंक के साथ तुरंत शेयर करें। आपकी रिकॉर्डिंग रिकॉर्ड करते-करते अपलोड होती है, ताकि पूरा होते ही आप उसे शेयर कर सकें।"
+screenshot = "तुरंत स्क्रीनशॉट लें और उन पर नोट्स जोड़ें। झटपट कैप्चर, बग रिपोर्ट और विज़ुअल बातचीत के लिए बढ़िया।"
+studio = "बाद में एडिट करने के लिए सबसे अच्छी क्वालिटी में लोकल रिकॉर्ड करें। इफ़ेक्ट और ट्रांज़िशन के साथ बढ़िया कंटेंट बनाने के लिए एकदम सही।"
+title = "रिकॉर्डिंग मोड"
+
+[main.mode.name]
+instant = "Instant"
+screenshot = "स्क्रीनशॉट"
+studio = "Studio"
+
+[main.plan]
+commercial = "कमर्शियल"
+personal = "पर्सनल"
+
+[main.recording]
+cancel = "रिकॉर्डिंग रद्द करें"
+paused_notice = "रिकॉर्डिंग रुकी हुई है। फिर से शुरू करने से पहले Cap छिप जाएगा।"
+resume = "फिर से शुरू करें"
+starting = "शुरू हो रहा है..."
+starts_in = "रिकॉर्डिंग {remaining} सेकंड में शुरू होगी"
+stop = "रिकॉर्डिंग रोकें"
+stopping = "रोका जा रहा है..."
+
+[main.recovery]
+discard = "हटाएँ"
+duration_minutes = "~{minutes} मिनट"
+duration_minutes_seconds = "~{minutes} मिनट {seconds} सेकंड"
+duration_seconds = "~{seconds} सेकंड"
+recover = "रिकवर करें"
+segments = { one = "{count} सेगमेंट", other = "{count} सेगमेंट" }
+segments_with_duration = { one = "{count} सेगमेंट · {duration}", other = "{count} सेगमेंट · {duration}" }
+title = "अधूरी रिकॉर्डिंग"
+
+[main.sign_in]
+message = "Instant मोड रिकॉर्ड करते-करते अपलोड करता है, ताकि रोकते ही आपका शेयर करने लायक लिंक तैयार हो।"
+not_now = "अभी नहीं"
+open_browser_again = "ब्राउज़र फिर से खोलें"
+pending_message = "अपने ब्राउज़र में Cap में साइन इन पूरा करें। पूरा होने पर Cap यहाँ लौटकर रिकॉर्डर खोल देगा।"
+sign_in = "साइन इन करें"
+timed_out = "साइन इन का समय खत्म हो गया। फिर से कोशिश करें।"
+title = "Instant मोड इस्तेमाल करने के लिए साइन इन करें"
+use_studio = "Studio इस्तेमाल करें"
+waiting = "आपके ब्राउज़र का इंतज़ार है"
+
+[main.storage]
+blocked = "आपकी रिकॉर्डिंग ड्राइव पर सिर्फ़ {available} GB खाली है। रिकॉर्ड करने से पहले जगह खाली करें, ताकि कम से कम 512 MB उपलब्ध हो।"
+can_start = "आपकी रिकॉर्डिंग ड्राइव पर सिर्फ़ {available} GB खाली है। स्टोरेज बहुत कम होने पर Cap आपकी रिकॉर्डिंग सुरक्षित रखते हुए अपने-आप रुक जाएगा।"
+check_failed = "रिकॉर्डिंग स्टोरेज की जाँच नहीं हो सकी: {error}"
+record_anyway = "फिर भी रिकॉर्ड करें"
+title = "स्टोरेज कम है"
+
+[main.target]
+area = "क्षेत्र"
+camera_only = "सिर्फ़ कैमरा"
+choose_display = "डिस्प्ले चुनें"
+choose_window = "विंडो चुनें"
+display = "डिस्प्ले"
+heading = "कैप्चर का स्रोत चुनें"
+no_displays = "कोई डिस्प्ले नहीं मिला"
+no_matching_displays = "कोई मिलता-जुलता डिस्प्ले नहीं"
+no_matching_windows = "कोई मिलती-जुलती विंडो नहीं"
+no_windows = "कोई विंडो नहीं मिली"
+window = "विंडो"
+
+[controls]
+disk_full_resume = "फिर से शुरू करने के लिए डिस्क में जगह कम है। जगह खाली करके फिर कोशिश करें, या सहेजने के लिए रोकें दबाएँ।"
+low_storage = "स्टोरेज कम है। आपकी रिकॉर्डिंग सहेजने के लिए Cap जल्द ही रुक जाएगा।"
+
+[controls.confirm]
+delete = "हटाएँ"
+delete_message = "क्या आप वाकई रिकॉर्डिंग हटाना चाहते हैं?"
+delete_title = "हटाने की पुष्टि करें"
+restart = "फिर से शुरू करें"
+restart_message = "क्या आप वाकई रिकॉर्डिंग फिर से शुरू करना चाहते हैं? मौजूदा रिकॉर्डिंग हटा दी जाएगी।"
+restart_title = "फिर से शुरू करने की पुष्टि करें"
+
+[controls.pause]
+pause = "रिकॉर्डिंग पॉज़ करें"
+pausing = "रिकॉर्डिंग पॉज़ हो रही है…"
+resume = "रिकॉर्डिंग फिर से शुरू करें"
+resuming = "रिकॉर्डिंग फिर से शुरू हो रही है…"
+unconfirmed = "कैप्चर की स्थिति पक्की नहीं है। रोकें इस्तेमाल करें।"
+
+[controls.stop]
+error = "त्रुटि"
+paused = "पॉज़"
+pausing = "पॉज़…"
+resuming = "फिर शुरू…"
+saving = "सहेज रहा…"
+starting = "शुरू हो रहा"
+
+[camera]
+waiting_title = "कैमरा एक्सेस का इंतज़ार है"
+
+[camera.effects]
+blur_message = "आपका कैमरा धुंधला नहीं किया गया है।"
+blur_title = "बैकग्राउंड ब्लर उपलब्ध नहीं"
+both_message = "आपका कैमरा न धुंधला है, न मिरर किया गया है।"
+both_title = "कैमरा इफ़ेक्ट उपलब्ध नहीं"
+mirror_message = "आपके कैमरे का प्रीव्यू मिरर नहीं किया गया है।"
+mirror_title = "मिरर उपलब्ध नहीं"
+
+[camera.issue]
+access_message = "सिस्टम सेटिंग्स में Cap को अपना कैमरा इस्तेमाल करने देने के लिए क्लिक करें।"
+access_title = "कैमरा एक्सेस ज़रूरी है"
+generic = "चुना गया कैमरा शुरू नहीं हो सका। कोई दूसरा कैमरा चुनें या इसे फिर से कनेक्ट करें।"
+invalid_format = "इस कैमरे ने कोई इस्तेमाल लायक कैप्चर फ़ॉर्मैट नहीं बताया।"
+not_found = "यह कैमरा अब उपलब्ध नहीं है। जाँचें कि यह कनेक्ट है और सिस्टम की अनुमतियों में इसकी अनुमति है।"
+start_failed = "सिस्टम यह कैमरा शुरू नहीं कर सका। हो सकता है यह उपलब्ध न हो या कोई दूसरा ऐप इसे इस्तेमाल कर रहा हो।"
+timeout = "इस कैमरे से कोई फ़्रेम नहीं मिला। हो सकता है यह बंद, डिस्कनेक्ट या ढका हुआ हो, या कोई दूसरा ऐप इसे इस्तेमाल कर रहा हो।"
+unavailable_title = "कैमरा उपलब्ध नहीं"
+
+[onboarding.customize]
+footer = "इनमें से कुछ भी आप कभी भी सेटिंग्स में बदल सकते हैं"
+subtitle = "कीबोर्ड शॉर्टकट से लेकर स्टोरेज तक, सब कुछ अपने हिसाब से बदलें। Cap आपके काम करने के तरीके के अनुसार ढल जाता है।"
+title = "Cap को अपना बनाएँ"
+
+[onboarding.customize.domain]
+description = "शेयर करने लायक लिंक के लिए cap.so की जगह अपना डोमेन इस्तेमाल करें"
+title = "कस्टम डोमेन"
+
+[onboarding.customize.preferences]
+description = "FPS, क्वालिटी, काउंटडाउन टाइमर, कर्सर इफ़ेक्ट और बहुत कुछ"
+title = "रिकॉर्डिंग की पसंद"
+
+[onboarding.customize.s3]
+description = "अपनी रिकॉर्डिंग पर पूरे नियंत्रण के लिए अपना S3-कम्पैटिबल बकेट जोड़ें"
+title = "कस्टम S3 स्टोरेज"
+
+[onboarding.customize.shortcuts]
+description = "रिकॉर्डिंग, स्क्रीनशॉट और मोड बदलने के लिए ग्लोबल हॉटकी"
+title = "कीबोर्ड शॉर्टकट"
+
+[onboarding.demo]
+background = "बैकग्राउंड"
+copied = "कॉपी हो गया!"
+copied_to_clipboard = "क्लिपबोर्ड पर कॉपी हो गया"
+copy = "कॉपी करें"
+editor = "Cap एडिटर"
+export = "एक्सपोर्ट करें"
+export_complete = "एक्सपोर्ट पूरा हुआ!"
+exporting = "एक्सपोर्ट हो रहा है..."
+link_ready = "लिंक शेयर करने के लिए तैयार है!"
+save = "सहेजें"
+start_recording = "रिकॉर्डिंग शुरू करें"
+stopped = "रुका"
+style = "स्टाइल"
+
+[onboarding.demo.steps]
+beautify = "सजाएँ"
+edit = "एडिट करें"
+record = "रिकॉर्ड करें"
+select_area = "क्षेत्र चुनें"
+share_link = "लिंक शेयर करें"
+stop = "रोकें"
+
+[onboarding.error]
+save_progress = "ऑनबोर्डिंग की प्रगति सहेजी नहीं जा सकी। कृपया फिर से कोशिश करें।"
+save_sound = "साउंड की पसंद सहेजी नहीं जा सकी।"
+
+[onboarding.faq]
+pricing = "प्राइसिंग प्लान देखें"
+pricing_link = "प्राइसिंग प्लान देखें ↗"
+subtitle = "शुरू करने के लिए जो कुछ जानना ज़रूरी है।"
+title = "अक्सर पूछे जाने वाले सवाल"
+
+[onboarding.faq.free]
+answer = "Cap निजी इस्तेमाल के लिए मुफ़्त है। टीम और कमर्शियल इस्तेमाल के लिए हमारे प्राइसिंग प्लान देखें।"
+question = "क्या Cap मुफ़्त है?"
+
+[onboarding.faq.instant_vs_studio]
+answer = "Instant मोड रिकॉर्ड करते-करते अपलोड करता है: रिकॉर्डिंग रोकते ही आपके पास शेयर करने लायक लिंक होगा। Studio मोड पूरी क्वालिटी में लोकल रिकॉर्ड करता है, ताकि शेयर करने से पहले आप बैकग्राउंड, इफ़ेक्ट और बहुत कुछ के साथ एडिट कर सकें।"
+question = "Instant और Studio में क्या अंतर है?"
+
+[onboarding.faq.sharing]
+answer = "Instant मोड में रिकॉर्डिंग रोकते ही आपको अपने-आप शेयर करने लायक लिंक मिल जाता है। Studio मोड में अपना एडिट किया हुआ वीडियो एक्सपोर्ट करें और Cap के क्लाउड से शेयर करें या लोकल सहेजें।"
+question = "शेयर करना कैसे काम करता है?"
+
+[onboarding.faq.shortcuts]
+answer = "अपने सभी कीबोर्ड शॉर्टकट बदलने के लिए कभी भी सेटिंग्स → शॉर्टकट पर जाएँ।"
+question = "क्या मैं बाद में अपने शॉर्टकट बदल सकता हूँ?"
+
+[onboarding.faq.storage]
+answer = "सभी रिकॉर्डिंग आपके कंप्यूटर पर लोकल सहेजी जाती हैं। Instant मोड में आसानी से शेयर करने के लिए वे Cap के क्लाउड पर भी अपलोड होती हैं। आप सेटिंग्स में स्टोरेज मैनेज कर सकते हैं।"
+question = "मेरी रिकॉर्डिंग कहाँ सहेजी जाती हैं?"
+
+[onboarding.modes.instant]
+description = "आपकी रिकॉर्डिंग कैप्चर के साथ-साथ अपलोड होती है। रिकॉर्डिंग रोकें और बिना इंतज़ार तुरंत शेयर करने लायक लिंक पाएँ।"
+feature_1 = "तुरंत शेयर करने लायक लिंक"
+feature_2 = "बैकग्राउंड में अपलोड"
+feature_3 = "AI ट्रांसक्रिप्शन और सारांश"
+feature_4 = "ब्राउज़र में प्लेबैक"
+tagline = "सेकंडों में रिकॉर्ड करें और शेयर करें"
+title = "Instant मोड"
+
+[onboarding.modes.screenshot]
+description = "एक ही हॉटकी से स्क्रीनशॉट लें, नोट्स और सुंदर बैकग्राउंड जोड़ें, फिर तुरंत शेयर या कॉपी करें।"
+feature_1 = "हॉटकी से तुरंत कैप्चर"
+feature_2 = "नोट्स और ड्रॉइंग टूल"
+feature_3 = "सुंदर बैकग्राउंड"
+feature_4 = "कॉपी करें, सहेजें या शेयर करें"
+tagline = "तुरंत कैप्चर करें और सजाएँ"
+title = "स्क्रीनशॉट मोड"
+
+[onboarding.modes.studio]
+description = "पूरी क्वालिटी में लोकल रिकॉर्ड करें, फिर बिल्ट-इन एडिटर से बैकग्राउंड, पैडिंग, कर्सर इफ़ेक्ट और बहुत कुछ जोड़ें।"
+feature_1 = "पूरी क्वालिटी में लोकल रिकॉर्डिंग"
+feature_2 = "बिल्ट-इन एडिटर और इफ़ेक्ट"
+feature_3 = "कस्टम बैकग्राउंड और पैडिंग"
+feature_4 = "तैयार होने पर एक्सपोर्ट या शेयर करें"
+tagline = "प्रोफ़ेशनल एडिटिंग टूल"
+title = "Studio मोड"
+
+[onboarding.nav]
+back = "←  वापस"
+continue_to_cap = "Cap पर जारी रखें"
+keyboard_hint = "Enter ↵ दबाएँ या ← → ऐरो की इस्तेमाल करें"
+next = "जारी रखें"
+permissions_needed = "जारी रखने के लिए ज़रूरी अनुमतियाँ दें"
+relaunch = "Cap फिर से खोलें"
+skip = "टूर छोड़ें"
+start = "Cap इस्तेमाल करना शुरू करें"
+
+[onboarding.overview]
+subtitle = "चाहे आपको रफ़्तार चाहिए, स्टूडियो जैसी क्वालिटी या झटपट स्क्रीनशॉट, Cap में हर ज़रूरत के लिए एक मोड है।"
+title = "एक ऐप, हर काम के लिए"
+
+[onboarding.toggle]
+subtitle = "Cap की मुख्य विंडो से एक क्लिक में मोड बदलें।"
+title = "कभी भी मोड बदलें"
+
+[onboarding.welcome]
+click_or_press = "यहाँ क्लिक करें, या दबाएँ"
+get_started = "शुरू करें"
+space_key = "स्पेस"
+tagline = "सबके लिए ओपन सोर्स स्क्रीन शेयरिंग ऐप।"
+
+[menu.update]
+badge_progress = "v{version} · {percent}%"
+badge_version = "v{version}"
+check = "अपडेट जाँचें"
+download = "अपडेट डाउनलोड करें…"
+checking = "अपडेट जाँच रहे हैं…"
+downloading = "अपडेट डाउनलोड हो रहा है…"
+restart = "अपडेट करने के लिए फिर से शुरू करें…"
+
+[settings.general.updates.download_policy]
+auto = "स्वचालित"
+description = "चुनें कि Cap अपडेट स्वचालित रूप से डाउनलोड करे या नहीं।"
+label = "अपडेट डाउनलोड"
+manual = "पहले पूछें"
+never = "कभी नहीं"

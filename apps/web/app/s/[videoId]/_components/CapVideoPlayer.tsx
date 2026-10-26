@@ -30,6 +30,7 @@ import {
 	resolvePlaybackSource,
 	shouldFallbackToRawPlaybackSource,
 } from "./playback-source";
+import { replayMissedMediaEvents } from "./replay-missed-media-events";
 import {
 	canRetryFailedProcessing,
 	getUploadFailureMessage,
@@ -97,6 +98,9 @@ interface CaptionOption {
 interface Props {
 	videoSrc: string;
 	initialPlaybackUrl?: Promise<string | null>;
+	// The same signed MP4 URL, resolved on the server so the <video> is in the
+	// HTML and loads before hydration. Only set for Cap's own CDN.
+	serverPlaybackUrl?: string | null;
 	rawFallbackSrc?: string;
 	videoId: Video.VideoId;
 	chaptersSrc: string;
@@ -148,6 +152,7 @@ interface Props {
 export function CapVideoPlayer({
 	videoSrc,
 	initialPlaybackUrl,
+	serverPlaybackUrl = null,
 	rawFallbackSrc,
 	videoId,
 	chaptersSrc,
@@ -192,6 +197,10 @@ export function CapVideoPlayer({
 	const [hasPlayedOnce, setHasPlayedOnce] = useState(false);
 	const [isMobile, setIsMobile] = useState(false);
 	const [hasError, setHasError] = useState(false);
+	const [
+		isRefreshingInitialPlaybackSource,
+		setIsRefreshingInitialPlaybackSource,
+	] = useState(false);
 	const [isRetryingProcessing, setIsRetryingProcessing] = useState(false);
 	const [playerDuration, setPlayerDuration] = useState(fallbackDuration ?? 0);
 	const [preferredSource, setPreferredSource] = useState<"mp4" | "raw">("mp4");
@@ -200,9 +209,18 @@ export function CapVideoPlayer({
 		null,
 	);
 	const queryClient = useQueryClient();
+	// A server-rendered source has already used the initial URL, so a refetch
+	// after a media error goes straight to the playlist route and raw fallback.
 	const initialPlaybackUrlUsed = useRef<Promise<string | null> | undefined>(
-		undefined,
+		serverPlaybackUrl ? initialPlaybackUrl : undefined,
 	);
+	const hasRetriedInitialPlaybackSource = useRef(false);
+	const initialPlaybackSourceRetryPending = useRef(false);
+	const playbackToRestore = useRef<{
+		sourceUrl: string;
+		time: number;
+		wasPlaying: boolean;
+	} | null>(null);
 
 	useEffect(() => {
 		const checkMobile = () => {
@@ -268,6 +286,16 @@ export function CapVideoPlayer({
 						preferredSource,
 					});
 				},
+		initialData:
+			serverPlaybackUrl && preferredSource === "mp4"
+				? {
+						url: serverPlaybackUrl,
+						type: "mp4",
+						supportsCrossOrigin: enableCrossOrigin,
+						fromInitialUrl: true,
+						fromServer: true,
+					}
+				: undefined,
 		refetchOnWindowFocus: false,
 		staleTime: Number.POSITIVE_INFINITY,
 		retry: false,
@@ -281,6 +309,10 @@ export function CapVideoPlayer({
 		setShowPlayButton(false);
 		setPreferredSource("mp4");
 		setHasTriedRawFallback(false);
+		hasRetriedInitialPlaybackSource.current = false;
+		initialPlaybackSourceRetryPending.current = false;
+		playbackToRestore.current = null;
+		setIsRefreshingInitialPlaybackSource(false);
 	}, [videoSrc, rawFallbackSrc]);
 
 	useEffect(() => {
@@ -428,6 +460,18 @@ export function CapVideoPlayer({
 		if (!video || resolvedSrc.isPending) return;
 
 		const handleLoadedData = () => {
+			if (isRefreshingInitialPlaybackSource) {
+				const restore = playbackToRestore.current;
+				if (
+					restore &&
+					resolvedSrc.data?.url !== restore.sourceUrl &&
+					!video.seeking &&
+					Math.abs(video.currentTime - restore.time) < 0.25
+				) {
+					finishPlaybackSourceRestore();
+				}
+				return;
+			}
 			setVideoLoaded(true);
 			setHasError(false);
 			if (!hasPlayedOnce) {
@@ -436,6 +480,10 @@ export function CapVideoPlayer({
 		};
 
 		const handleCanPlay = () => {
+			if (isRefreshingInitialPlaybackSource) {
+				handleLoadedData();
+				return;
+			}
 			setVideoLoaded(true);
 			setHasError(false);
 			if (!hasPlayedOnce) {
@@ -448,6 +496,63 @@ export function CapVideoPlayer({
 		};
 
 		const handleError = () => {
+			if (initialPlaybackSourceRetryPending.current) return;
+			// A server-rendered source never ran the client probe, so its failure
+			// takes the path a failed probe would: playlist route, then raw.
+			if (
+				(!rawFallbackSrc || resolvedSrc.data?.fromServer) &&
+				resolvedSrc.data?.fromInitialUrl &&
+				!hasRetriedInitialPlaybackSource.current
+			) {
+				hasRetriedInitialPlaybackSource.current = true;
+				initialPlaybackSourceRetryPending.current = true;
+				playbackToRestore.current = {
+					sourceUrl: resolvedSrc.data.url,
+					time: Number.isFinite(video.currentTime) ? video.currentTime : 0,
+					wasPlaying: !video.paused && !video.ended,
+				};
+				setIsRefreshingInitialPlaybackSource(true);
+				setVideoLoaded(false);
+				setHasError(false);
+				setShowPlayButton(false);
+				// Only a server-rendered source reaches here with a raw fallback. The
+				// playlist route can sign the same URL again within a second, so a
+				// retry that changes nothing moves on to the raw upload.
+				const stopRetrying = () => {
+					playbackToRestore.current = null;
+					setIsRefreshingInitialPlaybackSource(false);
+					if (
+						shouldFallbackToRawPlaybackSource(
+							"mp4",
+							rawFallbackSrc,
+							hasTriedRawFallback,
+						)
+					) {
+						setHasTriedRawFallback(true);
+						setPreferredSource("raw");
+						setVideoLoaded(false);
+						setHasError(false);
+						setShowPlayButton(false);
+						return;
+					}
+					setHasError(true);
+				};
+				void resolvedSrc
+					.refetch()
+					.then((result) => {
+						if (
+							!result.data ||
+							result.data.url === playbackToRestore.current?.sourceUrl
+						) {
+							stopRetrying();
+						}
+					})
+					.catch(stopRetrying)
+					.finally(() => {
+						initialPlaybackSourceRetryPending.current = false;
+					});
+				return;
+			}
 			if (
 				shouldFallbackToRawPlaybackSource(
 					resolvedSrc.data?.type,
@@ -463,22 +568,68 @@ export function CapVideoPlayer({
 				return;
 			}
 
+			playbackToRestore.current = null;
+			setIsRefreshingInitialPlaybackSource(false);
 			setHasError(true);
 		};
 
 		const cleanupCaptionTracks = bindCaptionTrackCueText(video, setCurrentCue);
+		const finishPlaybackSourceRestore = () => {
+			const restore = playbackToRestore.current;
+			if (!restore) return;
+			playbackToRestore.current = null;
+			setIsRefreshingInitialPlaybackSource(false);
+			setVideoLoaded(true);
+			setHasError(false);
+			if (restore.wasPlaying) void video.play().catch(() => undefined);
+		};
 
 		const handleLoadedMetadataWithTracks = () => {
+			const restore = playbackToRestore.current;
+			if (
+				isRefreshingInitialPlaybackSource &&
+				restore &&
+				resolvedSrc.data?.url !== restore.sourceUrl
+			) {
+				const duration = video.duration;
+				const time = Number.isFinite(duration)
+					? Math.min(restore.time, Math.max(0, duration - 0.1))
+					: restore.time;
+				restore.time = time;
+				if (time > 0) {
+					try {
+						video.currentTime = time;
+						return;
+					} catch {
+						finishPlaybackSourceRestore();
+						return;
+					}
+				}
+				finishPlaybackSourceRestore();
+				return;
+			}
+			if (isRefreshingInitialPlaybackSource) return;
 			setVideoLoaded(true);
 			setHasError(false);
 			if (!hasPlayedOnce) {
 				setShowPlayButton(true);
 			}
 		};
+		const handleSeeked = () => {
+			const restore = playbackToRestore.current;
+			if (
+				isRefreshingInitialPlaybackSource &&
+				restore &&
+				resolvedSrc.data?.url !== restore.sourceUrl
+			) {
+				finishPlaybackSourceRestore();
+			}
+		};
 
 		video.addEventListener("loadeddata", handleLoadedData);
 		video.addEventListener("canplay", handleCanPlay);
 		video.addEventListener("loadedmetadata", handleLoadedMetadataWithTracks);
+		video.addEventListener("seeked", handleSeeked);
 		video.addEventListener("play", handlePlay);
 		video.addEventListener("error", handleError as EventListener);
 
@@ -491,6 +642,7 @@ export function CapVideoPlayer({
 			video.removeEventListener("canplay", handleCanPlay);
 			video.removeEventListener("play", handlePlay);
 			video.removeEventListener("error", handleError as EventListener);
+			video.removeEventListener("seeked", handleSeeked);
 			video.removeEventListener(
 				"loadedmetadata",
 				handleLoadedMetadataWithTracks,
@@ -500,11 +652,23 @@ export function CapVideoPlayer({
 	}, [
 		hasPlayedOnce,
 		hasTriedRawFallback,
+		isRefreshingInitialPlaybackSource,
 		rawFallbackSrc,
+		resolvedSrc.data?.fromInitialUrl,
+		resolvedSrc.data?.fromServer,
 		resolvedSrc.data?.type,
+		resolvedSrc.data?.url,
+		resolvedSrc.refetch,
 		resolvedSrc.isPending,
 		videoRef.current,
 	]);
+
+	const isServerRenderedSource = Boolean(resolvedSrc.data?.fromServer);
+	useEffect(() => {
+		const video = videoRef.current;
+		if (!video || !isServerRenderedSource) return;
+		return replayMissedMediaEvents(video);
+	}, [isServerRenderedSource, videoRef]);
 
 	// The seek tooltip asks for a thumbnail on every render while the pointer is
 	// over the bar (per animation frame). The capture snapshots the *displayed*
@@ -740,7 +904,7 @@ export function CapVideoPlayer({
 					src={iosLevelPatchedUrl ?? resolvedSrc.data.url}
 					ref={videoRef}
 					onLoadedData={() => {
-						setVideoLoaded(true);
+						if (!isRefreshingInitialPlaybackSource) setVideoLoaded(true);
 					}}
 					onPlay={() => {
 						setShowPlayButton(false);
@@ -886,6 +1050,7 @@ export function CapVideoPlayer({
 			)}
 			<MediaPlayerLoading />
 			{!isUploading &&
+				!isRefreshingInitialPlaybackSource &&
 				!showUploadFailureOverlay &&
 				!showPlaybackResolutionError && <MediaPlayerError />}
 			<MediaPlayerVolumeIndicator />

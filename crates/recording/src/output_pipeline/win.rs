@@ -1,6 +1,10 @@
 use crate::{
     AudioFrame, AudioMuxer, Muxer, TaskPool, VideoFrame, VideoMuxer,
-    output_pipeline::{HealthSender, PipelineHealthEvent, emit_health},
+    output_pipeline::{
+        HealthSender, PipelineHealthEvent, emit_health,
+        frame_pacing::{FramePacer, Paced},
+        mjpeg::MjpegDecoder,
+    },
     screen_capture,
 };
 use anyhow::{Context, anyhow};
@@ -12,8 +16,8 @@ use std::{
     path::PathBuf,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
-        mpsc::{RecvTimeoutError, SyncSender, TrySendError, sync_channel},
+        atomic::AtomicBool,
+        mpsc::{SyncSender, TrySendError, sync_channel},
     },
     time::Duration,
 };
@@ -337,70 +341,43 @@ impl Muxer for WindowsMuxer {
                 match encoder {
                     either::Left((mut encoder, mut muxer)) => {
                         trace!("Running native encoder with frame pacing");
-                        let frame_interval = Duration::from_secs_f64(1.0 / config.frame_rate as f64);
+                        let mut pacer = FramePacer::new(config.frame_rate);
                         let mut last_texture: Option<windows::Win32::Graphics::Direct3D11::ID3D11Texture2D> = None;
                         let mut first_timestamp: Option<Duration> = None;
-                        let mut last_timestamp: Option<Duration> = None;
                         let mut frame_count: u64 = 0;
                         let mut frames_reused: u64 = 0;
 
                         let result = encoder.run(
                             Arc::new(AtomicBool::default()),
-                            || {
-                                loop {
-                                    match video_rx.recv_timeout(frame_interval) {
-                                        Ok(Some((frame, timestamp))) => {
-                                            last_texture = Some(frame.texture().clone());
-                                            last_timestamp = Some(timestamp);
-                                        }
-                                        Ok(None) => {
-                                            trace!("End of stream signal received");
-                                            return Ok(None);
-                                        }
-                                        Err(RecvTimeoutError::Timeout) => {
-                                            if pause_flag.load(Ordering::Acquire) {
-                                                last_timestamp = None;
-                                                continue;
-                                            } else if let Some(last_ts) = last_timestamp {
-                                                let new_ts = last_ts.saturating_add(frame_interval);
-                                                last_timestamp = Some(new_ts);
-                                                frames_reused += 1;
-                                                if frames_reused.is_multiple_of(30) {
-                                                    debug!(
-                                                        frames_reused = frames_reused,
-                                                        frame_count = frame_count,
-                                                        "Frame pacing: reusing frames due to slow capture"
-                                                    );
-                                                }
-                                            }
-                                        }
-                                        Err(RecvTimeoutError::Disconnected) => {
-                                            trace!("Channel disconnected");
-                                            return Ok(None);
-                                        }
+                            || loop {
+                                let (texture, timestamp) = match pacer.next(&video_rx, &pause_flag) {
+                                    Paced::Frame(frame, timestamp) => {
+                                        let texture = frame.texture().clone();
+                                        last_texture = Some(texture.clone());
+                                        (texture, timestamp)
                                     }
-
-                                    if let (Some(texture), Some(ts)) = (&last_texture, last_timestamp) {
-                                        let normalized_ts = normalize_timestamp(ts, &mut first_timestamp);
-                                        frame_count += 1;
-                                        let frame_time = duration_to_timespan(normalized_ts);
-                                        return Ok(Some((texture.clone(), frame_time)));
-                                    } else {
-                                        match video_rx.recv() {
-                                            Ok(Some((frame, timestamp))) => {
-                                                let texture = frame.texture().clone();
-                                                last_texture = Some(texture.clone());
-                                                last_timestamp = Some(timestamp);
-                                                let normalized_ts =
-                                                    normalize_timestamp(timestamp, &mut first_timestamp);
-                                                frame_count = 1;
-                                                let frame_time = duration_to_timespan(normalized_ts);
-                                                return Ok(Some((texture, frame_time)));
-                                            }
-                                            Ok(None) | Err(_) => return Ok(None),
+                                    Paced::Repeat(timestamp) => {
+                                        let Some(texture) = &last_texture else {
+                                            continue;
+                                        };
+                                        frames_reused += 1;
+                                        if frames_reused.is_multiple_of(30) {
+                                            debug!(
+                                                frames_reused = frames_reused,
+                                                frame_count = frame_count,
+                                                "Frame pacing: reusing frames due to slow capture"
+                                            );
                                         }
+                                        (texture.clone(), timestamp)
                                     }
-                                }
+                                    Paced::End => {
+                                        trace!("End of stream signal received");
+                                        return Ok(None);
+                                    }
+                                };
+                                let normalized_ts = normalize_timestamp(timestamp, &mut first_timestamp);
+                                frame_count += 1;
+                                return Ok(Some((texture, duration_to_timespan(normalized_ts))));
                             },
                             |output_sample| {
                                 let Ok(mut output) = output.lock() else {
@@ -438,63 +415,33 @@ impl Muxer for WindowsMuxer {
                     }
                     either::Right(mut encoder) => {
                         trace!("Running FFmpeg encoder with frame pacing");
-                        let frame_interval = Duration::from_secs_f64(1.0 / config.frame_rate as f64);
+                        let mut pacer = FramePacer::new(config.frame_rate);
                         let mut last_ffmpeg_frame: Option<ffmpeg::frame::Video> = None;
                         let mut first_timestamp: Option<Duration> = None;
-                        let mut last_timestamp: Option<Duration> = None;
 
                         loop {
-                            let (ffmpeg_frame, ts) = match video_rx.recv_timeout(frame_interval) {
-                                Ok(Some((frame, timestamp))) => {
-                                    last_timestamp = Some(timestamp);
-                                    match frame.as_ffmpeg() {
-                                        Ok(f) => {
-                                            last_ffmpeg_frame = Some(reference_video_frame(&f));
-                                            (Some(f), timestamp)
-                                        }
-                                        Err(e) => {
-                                            warn!("Failed to convert frame: {e:?}");
-                                            (
-                                                last_ffmpeg_frame
-                                                    .as_ref()
-                                                    .map(reference_video_frame),
-                                                timestamp,
-                                            )
-                                        }
+                            let (ffmpeg_frame, ts) = match pacer.next(&video_rx, &pause_flag) {
+                                Paced::Frame(frame, timestamp) => match frame.as_ffmpeg() {
+                                    Ok(f) => {
+                                        last_ffmpeg_frame = Some(reference_video_frame(&f));
+                                        (Some(f), timestamp)
                                     }
-                                }
-                                Ok(None) => break,
-                                Err(RecvTimeoutError::Timeout) => {
-                                    if pause_flag.load(Ordering::Acquire) {
-                                        last_timestamp = None;
-                                        continue;
-                                    }
-                                    if let Some(last_ts) = last_timestamp {
-                                        let new_ts = last_ts.saturating_add(frame_interval);
-                                        last_timestamp = Some(new_ts);
+                                    Err(e) => {
+                                        warn!("Failed to convert frame: {e:?}");
                                         (
-                                            last_ffmpeg_frame
-                                                .as_ref()
-                                                .map(reference_video_frame),
-                                            new_ts,
+                                            last_ffmpeg_frame.as_ref().map(reference_video_frame),
+                                            timestamp,
                                         )
-                                    } else {
-                                        continue;
                                     }
-                                }
-                                Err(RecvTimeoutError::Disconnected) => break,
+                                },
+                                Paced::Repeat(timestamp) => (
+                                    last_ffmpeg_frame.as_ref().map(reference_video_frame),
+                                    timestamp,
+                                ),
+                                Paced::End => break,
                             };
 
                             let Some(ffmpeg_frame) = ffmpeg_frame else {
-                                match video_rx.recv() {
-                                    Ok(Some((frame, timestamp))) => {
-                                        last_timestamp = Some(timestamp);
-                                        if let Ok(f) = frame.as_ffmpeg() {
-                                            last_ffmpeg_frame = Some(f);
-                                        }
-                                    }
-                                    Ok(None) | Err(_) => break,
-                                }
                                 continue;
                             };
 
@@ -927,75 +874,38 @@ impl Muxer for WindowsCameraMuxer {
                             frame_rate
                         );
 
-                        let frame_interval = Duration::from_secs_f64(1.0 / frame_rate as f64);
+                        let mut pacer = FramePacer::new(frame_rate);
                         let mut last_frame: Option<NativeCameraFrame> = None;
                         let mut first_timestamp: Option<Duration> = None;
-                        let mut last_timestamp: Option<Duration> = None;
                         let mut frame_count = 0u64;
                         let mut camera_buffers = CameraBuffers::new();
 
                         let result = encoder.run(
                             Arc::new(AtomicBool::default()),
-                            || {
-                                loop {
-                                    match video_rx.recv_timeout(frame_interval) {
-                                        Ok(Some((frame, timestamp))) => {
-                                            last_frame = Some(frame);
-                                            last_timestamp = Some(timestamp);
-                                        }
-                                        Ok(None) => {
-                                            trace!("End of camera stream signal received");
-                                            return Ok(None);
-                                        }
-                                        Err(RecvTimeoutError::Timeout) => {
-                                            if pause_flag.load(Ordering::Acquire) {
-                                                last_timestamp = None;
-                                                continue;
-                                            } else if let Some(last_ts) = last_timestamp {
-                                                let new_ts = last_ts.saturating_add(frame_interval);
-                                                last_timestamp = Some(new_ts);
-                                            }
-                                        }
-                                        Err(RecvTimeoutError::Disconnected) => {
-                                            trace!("Camera channel disconnected");
-                                            return Ok(None);
-                                        }
+                            || loop {
+                                let timestamp = match pacer.next(&video_rx, &pause_flag) {
+                                    Paced::Frame(frame, timestamp) => {
+                                        last_frame = Some(frame);
+                                        timestamp
                                     }
-
-                                    if let (Some(frame), Some(ts)) = (&last_frame, last_timestamp) {
-                                        let normalized_ts =
-                                            normalize_camera_timestamp(ts, &mut first_timestamp);
-                                        frame_count += 1;
-                                        if frame_count.is_multiple_of(30) {
-                                            debug!(
-                                                "Windows camera encoder: processed {} frames",
-                                                frame_count
-                                            );
-                                        }
-                                        let texture =
-                                            upload_mf_buffer_to_texture(&d3d_device, frame, &mut camera_buffers)?;
-                                        return Ok(Some((texture, duration_to_timespan(normalized_ts))));
-                                    } else {
-                                        match video_rx.recv() {
-                                            Ok(Some((frame, timestamp))) => {
-                                                last_frame = Some(frame.clone());
-                                                last_timestamp = Some(timestamp);
-                                                let normalized_ts = normalize_camera_timestamp(
-                                                    timestamp,
-                                                    &mut first_timestamp,
-                                                );
-                                                frame_count = 1;
-                                                let texture = upload_mf_buffer_to_texture(
-                                                    &d3d_device,
-                                                    &frame,
-                                                    &mut camera_buffers,
-                                                )?;
-                                                return Ok(Some((texture, duration_to_timespan(normalized_ts))));
-                                            }
-                                            Ok(None) | Err(_) => return Ok(None),
-                                        }
+                                    Paced::Repeat(timestamp) => timestamp,
+                                    Paced::End => {
+                                        trace!("End of camera stream signal received");
+                                        return Ok(None);
                                     }
+                                };
+                                let Some(frame) = &last_frame else {
+                                    continue;
+                                };
+                                let normalized_ts =
+                                    normalize_camera_timestamp(timestamp, &mut first_timestamp);
+                                frame_count += 1;
+                                if frame_count.is_multiple_of(30) {
+                                    debug!("Windows camera encoder: processed {} frames", frame_count);
                                 }
+                                let texture =
+                                    upload_mf_buffer_to_texture(&d3d_device, frame, &mut camera_buffers)?;
+                                return Ok(Some((texture, duration_to_timespan(normalized_ts))));
                             },
                             |output_sample| {
                                 let mut output = match output.lock() {
@@ -1047,50 +957,28 @@ impl Muxer for WindowsCameraMuxer {
                             frame_rate
                         );
 
-                        let frame_interval = Duration::from_secs_f64(1.0 / frame_rate as f64);
+                        let mut pacer = FramePacer::new(frame_rate);
                         let mut last_frame: Option<NativeCameraFrame> = None;
                         let mut first_timestamp: Option<Duration> = None;
-                        let mut last_timestamp: Option<Duration> = None;
                         let mut frame_count = 0u64;
+                        let mut mjpeg_decoder = MjpegDecoder::default();
 
                         loop {
-                            let (frame_to_encode, ts) = match video_rx.recv_timeout(frame_interval) {
-                                Ok(Some((frame, timestamp))) => {
-                                    last_frame = Some(frame.clone());
-                                    last_timestamp = Some(timestamp);
-                                    (Some(frame), timestamp)
+                            let ts = match pacer.next(&video_rx, &pause_flag) {
+                                Paced::Frame(frame, timestamp) => {
+                                    last_frame = Some(frame);
+                                    timestamp
                                 }
-                                Ok(None) => break,
-                                Err(RecvTimeoutError::Timeout) => {
-                                    if pause_flag.load(Ordering::Acquire) {
-                                        last_timestamp = None;
-                                        continue;
-                                    }
-                                    if let Some(last_ts) = last_timestamp {
-                                        let new_ts = last_ts.saturating_add(frame_interval);
-                                        last_timestamp = Some(new_ts);
-                                        (last_frame.clone(), new_ts)
-                                    } else {
-                                        continue;
-                                    }
-                                }
-                                Err(RecvTimeoutError::Disconnected) => break,
+                                Paced::Repeat(timestamp) => timestamp,
+                                Paced::End => break,
                             };
-
-                            let Some(frame) = frame_to_encode else {
-                                match video_rx.recv() {
-                                    Ok(Some((frame, timestamp))) => {
-                                        last_frame = Some(frame.clone());
-                                        last_timestamp = Some(timestamp);
-                                    }
-                                    Ok(None) | Err(_) => break,
-                                }
+                            let Some(frame) = last_frame.clone() else {
                                 continue;
                             };
 
                             let normalized_ts = normalize_camera_timestamp(ts, &mut first_timestamp);
 
-                            let ffmpeg_frame = match camera_frame_to_ffmpeg(&frame) {
+                            let ffmpeg_frame = match camera_frame_to_ffmpeg(&frame, &mut mjpeg_decoder) {
                                 Ok(f) => f,
                                 Err(e) => {
                                     error!("Failed to convert camera frame: {e}");
@@ -1459,11 +1347,14 @@ fn convert_uyvy_to_yuyv(
     dst
 }
 
-pub fn camera_frame_to_ffmpeg(frame: &NativeCameraFrame) -> anyhow::Result<ffmpeg::frame::Video> {
+pub(crate) fn camera_frame_to_ffmpeg(
+    frame: &NativeCameraFrame,
+    mjpeg_decoder: &mut MjpegDecoder,
+) -> anyhow::Result<ffmpeg::frame::Video> {
     use cap_mediafoundation_utils::IMFMediaBufferExt;
 
     if frame.pixel_format == cap_camera_windows::PixelFormat::MJPEG {
-        return decode_mjpeg_frame(frame);
+        return decode_mjpeg_frame(frame, mjpeg_decoder);
     }
 
     let ffmpeg_format = match frame.pixel_format {
@@ -1739,7 +1630,10 @@ fn copy_plane(
     }
 }
 
-fn decode_mjpeg_frame(frame: &NativeCameraFrame) -> anyhow::Result<ffmpeg::frame::Video> {
+fn decode_mjpeg_frame(
+    frame: &NativeCameraFrame,
+    mjpeg_decoder: &mut MjpegDecoder,
+) -> anyhow::Result<ffmpeg::frame::Video> {
     use cap_mediafoundation_utils::IMFMediaBufferExt;
 
     let buffer_guard = frame
@@ -1751,26 +1645,7 @@ fn decode_mjpeg_frame(frame: &NativeCameraFrame) -> anyhow::Result<ffmpeg::frame
         .map_err(|e| anyhow!("Failed to lock MF buffer: {:?}", e))?;
     let data = &*lock;
 
-    let codec = ffmpeg::codec::decoder::find(ffmpeg::codec::Id::MJPEG)
-        .ok_or_else(|| anyhow!("MJPEG codec not found"))?;
-
-    let decoder_context = ffmpeg::codec::context::Context::new_with_codec(codec);
-    let mut decoder = decoder_context
-        .decoder()
-        .video()
-        .map_err(|e| anyhow!("Failed to create MJPEG decoder: {e}"))?;
-
-    let packet = ffmpeg::Packet::copy(data);
-    decoder
-        .send_packet(&packet)
-        .map_err(|e| anyhow!("Failed to send MJPEG packet: {e}"))?;
-
-    let mut decoded_frame = ffmpeg::frame::Video::empty();
-    decoder
-        .receive_frame(&mut decoded_frame)
-        .map_err(|e| anyhow!("Failed to decode MJPEG frame: {e}"))?;
-
-    Ok(decoded_frame)
+    mjpeg_decoder.decode(data)
 }
 
 fn flip_buffer_size(

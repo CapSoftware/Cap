@@ -1,0 +1,148 @@
+name: Perf budget
+
+# Head and base are built and timed on one machine, interleaved, because
+# Blacksmith VMs have no hardware instruction counters and machine state
+# drifts between jobs. "Perf budget" is the job to require.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      base:
+        description: "Ref to compare against (default: the merge base with main)"
+        default: ""
+
+concurrency:
+  group: perf-budget-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  scope:
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    outputs:
+      run: ${{ steps.scope.outputs.run }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Test performance report isolation
+        run: python3 -B scripts/verify/test-perf-ab.py
+      - name: Scope
+        id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          PR: ${{ github.event.pull_request.number }}
+          DRAFT: ${{ github.event.pull_request.draft }}
+          SAME_REPO: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+          RUSTUP_TOOLCHAIN: stable
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT" == workflow_dispatch ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if [[ "$DRAFT" == true ]]; then
+            echo "Draft: the perf budget runs once the pull request is ready." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "run=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --paginate --jq '.[].filename' > "$RUNNER_TEMP/changed.txt"
+          python3 scripts/verify/plan.py risk --files "$RUNNER_TEMP/changed.txt" --output "$RUNNER_TEMP/risk.txt"
+          # A change to the budget itself is measured only from this
+          # repository's branches, so a fork cannot queue the macOS job by
+          # editing these files.
+          own_files=false
+          if [[ "$SAME_REPO" == true ]] && grep -qE '^(\.github/workflows/perf-budget\.yml|scripts/verify/perf-(ab|build)\.py)$' "$RUNNER_TEMP/changed.txt"; then
+            own_files=true
+          fi
+          if grep -qx 'escalate=true' "$RUNNER_TEMP/risk.txt" || grep -qx 'engine=true' "$RUNNER_TEMP/risk.txt" || [[ "$own_files" == true ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No engine or high-risk code changed: nothing to time." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  measure:
+    needs: scope
+    if: needs.scope.outputs.run == 'true'
+    runs-on: blacksmith-6vcpu-macos-26
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Setup
+        uses: ./.github/actions/engine-verify-setup
+        with:
+          target: aarch64-apple-darwin
+          tier: fast
+
+      - name: Perf build cache
+        uses: actions/cache@v4
+        with:
+          path: target/perf-verify/
+          key: perf-verify-v1-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}-${{ github.run_id }}
+          restore-keys: |
+            perf-verify-v1-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}-
+            perf-verify-v1-
+
+      - name: Base worktree
+        env:
+          BASE_INPUT: ${{ inputs.base }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          base="${BASE_INPUT:-}"
+          if [[ -z "$base" ]]; then
+            base="$(git merge-base HEAD "${PR_BASE:-origin/main}")"
+          fi
+          echo "Comparing $(git rev-parse --short HEAD) with base $(git rev-parse --short "$base")" | tee -a "$GITHUB_STEP_SUMMARY"
+          git worktree add --detach "$RUNNER_TEMP/base" "$base"
+          # The base builds against the head's native dependencies: the same
+          # target dir and the FFMPEG_DIR that scripts/setup.js writes to the
+          # (git-ignored) .cargo/config.toml.
+          ln -s "$GITHUB_WORKSPACE/target" "$RUNNER_TEMP/base/target"
+          mkdir -p "$RUNNER_TEMP/base/.cargo"
+          cp .cargo/config.toml "$RUNNER_TEMP/base/.cargo/config.toml"
+
+      - name: Build head
+        run: python3 scripts/verify/perf-build.py . "$RUNNER_TEMP/perf/head"
+
+      - name: Build base
+        run: python3 scripts/verify/perf-build.py "$RUNNER_TEMP/base" "$RUNNER_TEMP/perf/base"
+
+      - name: Measure
+        run: |
+          python3 scripts/verify/perf-ab.py \
+            --base "$RUNNER_TEMP/perf/base/binaries.json" \
+            --head "$RUNNER_TEMP/perf/head/binaries.json" \
+            --fixtures "$RUNNER_TEMP/perf/fixtures" \
+            --out "$RUNNER_TEMP/perf/runs" \
+            --summary "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: perf-budget
+          path: ${{ runner.temp }}/perf/runs/**/perf-budget.md
+          if-no-files-found: ignore
+
+  verdict:
+    name: Perf budget
+    needs: [scope, measure]
+    if: always()
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    steps:
+      - env:
+          RUN: ${{ needs.scope.outputs.run }}
+          SCOPE: ${{ needs.scope.result }}
+          MEASURE: ${{ needs.measure.result }}
+        run: |
+          if [[ "$SCOPE" != success ]]; then echo "scope failed"; exit 1; fi
+          if [[ "$RUN" != true ]]; then echo "not measured"; exit 0; fi
+          [[ "$MEASURE" == success ]]

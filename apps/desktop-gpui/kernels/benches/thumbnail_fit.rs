@@ -25,6 +25,11 @@ fn main() {
         ("upscale", 160, 90, false),
         ("downscale", 640, 360, false),
         ("downscale-1080p", 1920, 1080, false),
+        ("window-1600x1000", 1600, 1000, false),
+        ("display-1440p", 2560, 1440, false),
+        ("display-ultrawide", 3440, 1440, false),
+        ("display-4k", 3840, 2160, false),
+        ("display-4k-alpha", 3840, 2160, true),
     ] {
         let rgba = RgbaImage::from_fn(width, height, |x, y| {
             image::Rgba([

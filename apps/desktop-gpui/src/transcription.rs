@@ -26,6 +26,7 @@ use std::{
     collections::{HashMap, HashSet},
     fs::File,
     io::{Read, Write},
+    ops::Range,
     path::{Path, PathBuf},
     sync::{
         Arc, LazyLock, Mutex, PoisonError,
@@ -40,7 +41,6 @@ use cap_project::{
     ProjectConfiguration, RecordingMeta, StudioRecordingMeta, TimelineConfiguration,
     TimelineSegment,
 };
-use cap_rendering::Video;
 use ffmpeg::{
     ChannelLayout, codec as avcodec,
     format::{self as avformat},
@@ -81,6 +81,32 @@ pub fn supports_parakeet() -> bool {
 /// `PARAKEET_DIR_MODELS` (`captions.ts:26`).
 pub fn is_parakeet_model(model: &str) -> bool {
     matches!(model, "best" | "best-max")
+}
+
+/// The 25 languages parakeet-tdt-0.6b-v3 transcribes. It takes no language
+/// hint and its vocabulary has no other scripts, so any other language comes
+/// out as phonetic Latin text.
+const PARAKEET_LANGUAGES: [&str; 25] = [
+    "bg", "cs", "da", "de", "el", "en", "es", "et", "fi", "fr", "hr", "hu", "it", "lt", "lv", "mt",
+    "nl", "pl", "pt", "ro", "ru", "sk", "sl", "sv", "uk",
+];
+
+const PARAKEET_UNSUPPORTED_LANGUAGE: &str = "Parakeet cannot transcribe language";
+
+/// The model that transcribes `language`: a Parakeet model hands a language
+/// it cannot write to a downloaded Whisper model, larger first.
+fn transcription_model<'a>(
+    model: &'a str,
+    language: &str,
+    downloaded: impl Fn(&str) -> bool,
+) -> Result<&'a str, String> {
+    if !is_parakeet_model(model) || language == "auto" || PARAKEET_LANGUAGES.contains(&language) {
+        return Ok(model);
+    }
+    ["medium", "small"]
+        .into_iter()
+        .find(|whisper| downloaded(whisper))
+        .ok_or_else(|| format!("{PARAKEET_UNSUPPORTED_LANGUAGE} {language}"))
 }
 
 /// Tauri's `appLocalDataDir()` for the `so.cap.desktop` identifier: on macOS
@@ -158,6 +184,12 @@ struct Hub {
 }
 
 impl Hub {
+    fn downloading(&self, model: &str) -> bool {
+        self.download.as_ref().is_some_and(|download| {
+            download.model == model && download.state == DownloadState::Downloading
+        })
+    }
+
     fn work_in_flight(&self) -> bool {
         self.download
             .as_ref()
@@ -379,9 +411,9 @@ async fn download_whisper_model(model: &str) -> Result<(), String> {
 
     let result = write_whisper_parts(model, model_parts, &path, total_size).await;
     if result.is_err() {
-        // Unlike the Tauri version, drop the half-written file: it lives at
-        // the final path, and a later existence check would call it a model.
-        let _ = std::fs::remove_file(&path);
+        // An interrupted process can leave this file behind without making
+        // an incomplete download look installed on the next disk scan.
+        let _ = std::fs::remove_file(staging_path(&path));
     }
     result
 }
@@ -392,7 +424,8 @@ async fn write_whisper_parts(
     path: &Path,
     total_size: u64,
 ) -> Result<(), String> {
-    let mut file = File::create(path).map_err(|e| format!("Failed to create file: {e}"))?;
+    let staging = staging_path(path);
+    let mut file = File::create(&staging).map_err(|e| format!("Failed to create file: {e}"))?;
 
     let mut downloaded: u64 = 0;
     let part_count = model_parts.len() as f64;
@@ -441,7 +474,15 @@ async fn write_whisper_parts(
     }
 
     file.flush()
-        .map_err(|e| format!("Failed to flush file: {e}"))
+        .map_err(|e| format!("Failed to flush file: {e}"))?;
+    drop(file);
+    std::fs::rename(&staging, path).map_err(|e| format!("Failed to install model: {e}"))
+}
+
+/// Downloads land here and are renamed into place once complete, so a
+/// half-written file never sits at the path that marks a model installed.
+fn staging_path(path: &Path) -> PathBuf {
+    path.with_extension("bin.downloading")
 }
 
 /// `total_content_length` (`captions.rs:2198-2218`).
@@ -923,162 +964,23 @@ const DECODE_SAMPLE_RATE: u32 = 48_000;
 /// `WHISPER_SAMPLE_RATE` (`captions.rs:66`).
 const WHISPER_SAMPLE_RATE: u32 = 16_000;
 
-/// `AudioData::from_file` (`crates/audio/src/audio_data.rs:22-95`) transcribed
-/// against the same ffmpeg fork: any input decoded to packed f32 at 48kHz,
-/// mono stays mono, everything else downmixes to stereo.
-fn decode_audio_file(path: &Path) -> Result<(Vec<f32>, usize), String> {
-    let mut input_ctx = avformat::input(&path).map_err(|e| format!("Input Open / {e}"))?;
-    let input_stream = input_ctx
-        .streams()
-        .best(ffmpeg::media::Type::Audio)
-        .ok_or_else(|| "No Stream".to_string())?;
-
-    let decoder_ctx = avcodec::Context::from_parameters(input_stream.parameters())
-        .map_err(|e| format!("Decoder Parameters / {e}"))?;
-    let mut decoder = decoder_ctx
-        .decoder()
-        .audio()
-        .map_err(|e| format!("Set Parameters / {e}"))?;
-
-    let source_channels = decoder.channels().max(1);
-    if decoder.channel_layout().is_empty() {
-        decoder.set_channel_layout(ChannelLayout::default(i32::from(source_channels)));
-    }
-    decoder.set_packet_time_base(input_stream.time_base());
-
-    let target_channels: u16 = if source_channels <= 1 { 1 } else { 2 };
-    let target_channel_layout = ChannelLayout::default(i32::from(target_channels));
-    let mut options = ffmpeg::Dictionary::new();
-    options.set("filter_size", "128");
-    options.set("cutoff", "0.97");
-
-    let mut resampler = resampling::Context::get_with(
-        decoder.format(),
-        decoder.channel_layout(),
-        decoder.rate(),
-        avformat::Sample::F32(avformat::sample::Type::Packed),
-        target_channel_layout,
-        DECODE_SAMPLE_RATE,
-        options,
-    )
-    .map_err(|e| format!("Resampler / {e}"))?;
-
-    let index = input_stream.index();
-
-    let mut decoded_frame = ffmpeg::frame::Audio::empty();
-    let mut samples: Vec<f32> = Vec::new();
-
-    for (stream, packet) in input_ctx.packets() {
-        if stream.index() != index {
-            continue;
-        }
-
-        decoder
-            .send_packet(&packet)
-            .map_err(|e| format!("Send Packet / {e}"))?;
-
-        while decoder.receive_frame(&mut decoded_frame).is_ok() {
-            run_decode_resampler(&mut resampler, &decoded_frame, &mut samples)?;
-        }
-    }
-
-    decoder.send_eof().map_err(|e| format!("Send EOF / {e}"))?;
-
-    while decoder.receive_frame(&mut decoded_frame).is_ok() {
-        run_decode_resampler(&mut resampler, &decoded_frame, &mut samples)?;
-    }
-
-    flush_decode_resampler(&mut resampler, &mut samples)?;
-
-    Ok((samples, usize::from(target_channels)))
-}
-
-fn run_decode_resampler(
-    resampler: &mut resampling::Context,
-    decoded_frame: &ffmpeg::frame::Audio,
-    samples: &mut Vec<f32>,
-) -> Result<(), String> {
-    let target = *resampler.output();
-    let capacity = decode_resample_capacity(resampler, decoded_frame.samples());
-    let mut resampled_frame =
-        ffmpeg::frame::Audio::new(target.format, capacity, target.channel_layout);
-
-    resampler
-        .run(decoded_frame, &mut resampled_frame)
-        .map_err(|e| format!("Run Resampler / {e}"))?;
-
-    append_resampled_frame(samples, &resampled_frame)
-}
-
-fn flush_decode_resampler(
-    resampler: &mut resampling::Context,
-    samples: &mut Vec<f32>,
-) -> Result<(), String> {
-    for _ in 0..64 {
-        let Some(delay) = resampler.delay() else {
-            break;
-        };
-        let target = *resampler.output();
-        let capacity = delay
-            .output
-            .max(1)
-            .saturating_add(16)
-            .min(i64::from(i32::MAX)) as usize;
-        let mut resampled_frame =
-            ffmpeg::frame::Audio::new(target.format, capacity, target.channel_layout);
-        let remaining = resampler
-            .flush(&mut resampled_frame)
-            .map_err(|e| format!("Flush Resampler / {e}"))?;
-
-        let output_samples = resampled_frame.samples();
-        append_resampled_frame(samples, &resampled_frame)?;
-
-        if remaining.is_none() || output_samples == 0 {
-            break;
-        }
-    }
-    Ok(())
-}
-
-fn decode_resample_capacity(resampler: &resampling::Context, input_samples: usize) -> usize {
-    let src_rate = u64::from(resampler.input().rate.max(1));
-    let dst_rate = u64::from(resampler.output().rate.max(1));
-    let pending_output_samples = resampler
-        .delay()
-        .map(|d| d.output.max(0) as u64)
-        .unwrap_or(0);
-    let resampled_from_input = (input_samples as u64)
-        .saturating_mul(dst_rate)
-        .div_ceil(src_rate);
-
-    pending_output_samples
-        .saturating_add(resampled_from_input)
-        .saturating_add(16)
-        .min(i32::MAX as u64) as usize
-}
-
-fn append_resampled_frame(
-    samples: &mut Vec<f32>,
-    frame: &ffmpeg::frame::Audio,
-) -> Result<(), String> {
-    if frame.samples() == 0 {
-        return Ok(());
-    }
-
-    let byte_len = frame
-        .samples()
-        .saturating_mul(frame.channels() as usize)
-        .saturating_mul(std::mem::size_of::<f32>());
-    let data = frame
-        .data(0)
-        .get(..byte_len)
-        .ok_or_else(|| "Resampled frame data shorter than expected".to_string())?;
-
-    // SAFETY: ffmpeg's frame buffers are allocated with av_malloc alignment,
-    // and the slice length is a whole number of f32s by construction.
-    samples
-        .extend(unsafe { std::slice::from_raw_parts(data.as_ptr() as *const f32, byte_len / 4) });
-    Ok(())
+fn decode_transcription_source(
+    path: &Path,
+    offset_secs: f64,
+    range: Range<f64>,
+) -> Result<TranscriptionAudioSource, String> {
+    let rate = f64::from(DECODE_SAMPLE_RATE);
+    let start = (range.start * rate).round() as i64;
+    let end = (range.end * rate).round() as i64;
+    let offset = (offset_secs * rate).round() as i64;
+    let source_start = (start + offset).max(0) as usize;
+    let source_end = (end + offset).max(0) as usize;
+    let decoded = cap_audio::AudioData::from_file_range(path, source_start, source_end)?;
+    Ok(TranscriptionAudioSource {
+        channels: usize::from(decoded.channels()),
+        samples: decoded.into_samples(),
+        offset_secs: (start + offset - source_start as i64) as f64 / rate,
+    })
 }
 
 /// `normalize_audio_for_transcription` (`captions.rs:885-915`).
@@ -1114,120 +1016,76 @@ fn normalize_audio_for_transcription(samples: &mut [f32]) -> f32 {
     gain
 }
 
-/// The recording-directory arm of `extract_audio_from_video`
-/// (`captions.rs:250-517`): per segment, decode system audio then mic
-/// (`captions.rs:281-283`), downmix each to mono, average them together,
-/// concatenate the segments, normalize, and write a 16kHz mono s16le WAV.
-fn extract_project_audio(project_path: &Path, output_path: &Path) -> Result<(), String> {
-    ffmpeg::init().map_err(|e| format!("Failed to initialise ffmpeg: {e}"))?;
-
-    let meta = RecordingMeta::load_for_project(project_path)
-        .map_err(|e| format!("Failed to read recording metadata: {e}"))?;
-    let Some(studio) = meta.studio_meta() else {
-        return Err("Only studio recordings can be transcribed".to_string());
-    };
-
-    studio.ensure_ordinary_media_access(&meta.project_path)?;
-    let mut final_samples = Vec::new();
-    let mut any_audio = false;
-    match studio {
+fn extract_project_audio(
+    meta: &RecordingMeta,
+    studio: &StudioRecordingMeta,
+    recording_durations: &[f64],
+    range: Range<f64>,
+    final_samples: &mut Vec<f32>,
+) -> Result<bool, String> {
+    let tracks: Vec<Vec<(&cap_project::AudioMeta, f64)>> = match studio {
         StudioRecordingMeta::SingleSegment { segment } => {
-            let display_duration = Video::new(
-                segment.display.path.to_path(&meta.project_path),
-                segment.display.start_time.unwrap_or_default(),
-            )
-            .map_err(|error| format!("Failed to read display video: {error}"))?
-            .duration;
-            let mut sources = Vec::new();
-            if let Some(audio) = &segment.audio {
-                let path = meta.path(&audio.path);
-                if path.exists() {
-                    match decode_audio_file(&path) {
-                        Ok((samples, channels)) => {
-                            any_audio = true;
-                            sources.push(TranscriptionAudioSource {
-                                samples,
-                                channels,
-                                offset_secs: 0.0,
-                            });
-                        }
-                        Err(error) => tracing::warn!(
-                            path = %path.display(),
-                            "Failed to process audio source: {error}"
-                        ),
-                    }
-                }
-            }
-            let take = TranscriptionAudioTake {
-                display_duration_secs: display_duration,
-                sources,
-            };
-            append_transcription_audio(&mut final_samples, &take, DECODE_SAMPLE_RATE)
-                .map_err(|error| format!("Failed to assemble transcription audio: {error}"))?;
+            vec![segment.audio.iter().map(|audio| (audio, 0.0)).collect()]
         }
-        StudioRecordingMeta::MultipleSegments { inner } => {
-            for (segment_idx, segment) in inner.segments.iter().enumerate() {
-                let display_duration = Video::new(
-                    segment.display.path.to_path(&meta.project_path),
-                    segment.display.start_time.unwrap_or_default(),
-                )
-                .map_err(|error| {
-                    format!("Failed to read display video for segment {segment_idx}: {error}")
-                })?
-                .duration;
+        StudioRecordingMeta::MultipleSegments { inner } => inner
+            .segments
+            .iter()
+            .map(|segment| {
                 let offsets = segment.calculate_audio_offsets();
-                let mut sources = Vec::new();
-                let mut push_source = |audio: &cap_project::AudioMeta, offset_secs: f64| {
-                    let path = meta.path(&audio.path);
-                    if !path.exists() {
-                        return;
-                    }
-                    match decode_audio_file(&path) {
-                        Ok((samples, channels)) => {
-                            any_audio = true;
-                            sources.push(TranscriptionAudioSource {
-                                samples,
-                                channels,
-                                offset_secs,
-                            });
-                        }
-                        Err(error) => tracing::warn!(
-                            path = %path.display(),
-                            "Failed to process audio source: {error}"
-                        ),
-                    }
-                };
-
-                if let Some(system_audio) = &segment.system_audio {
-                    push_source(system_audio, f64::from(offsets.system_audio));
+                [
+                    (
+                        segment.system_audio.as_ref(),
+                        f64::from(offsets.system_audio),
+                    ),
+                    (segment.mic.as_ref(), f64::from(offsets.mic)),
+                ]
+                .into_iter()
+                .filter_map(|(audio, offset)| Some((audio?, offset)))
+                .collect()
+            })
+            .collect(),
+    };
+    if tracks.len() != recording_durations.len() {
+        return Err("Recording durations do not match the recording metadata".to_string());
+    }
+    let initial_len = final_samples.len();
+    let mut any_audio = false;
+    let mut take_start = 0.0;
+    for (tracks, duration) in tracks.into_iter().zip(recording_durations) {
+        let start = (range.start - take_start).max(0.0);
+        let end = (range.end - take_start).min(*duration);
+        take_start += duration;
+        if start >= end {
+            continue;
+        }
+        let mut sources = Vec::new();
+        for (audio, offset) in tracks {
+            let path = meta.path(&audio.path);
+            if !path.exists() {
+                continue;
+            }
+            match decode_transcription_source(&path, offset, start..end) {
+                Ok(source) => {
+                    any_audio = true;
+                    sources.push(source);
                 }
-                if let Some(mic) = &segment.mic {
-                    push_source(mic, f64::from(offsets.mic));
-                }
-                let take = TranscriptionAudioTake {
-                    display_duration_secs: display_duration,
-                    sources,
-                };
-                append_transcription_audio(&mut final_samples, &take, DECODE_SAMPLE_RATE)
-                    .map_err(|error| format!("Failed to assemble transcription audio: {error}"))?;
+                Err(error) => tracing::warn!(
+                    path = %path.display(),
+                    "Failed to process audio source: {error}"
+                ),
             }
         }
+        let take = TranscriptionAudioTake {
+            display_duration_secs: end - start,
+            sources,
+        };
+        append_transcription_audio(final_samples, &take, DECODE_SAMPLE_RATE)
+            .map_err(|error| format!("Failed to assemble transcription audio: {error}"))?;
     }
-
     if !any_audio {
-        return Err("No audio sources found in the recording metadata".to_string());
+        final_samples.truncate(initial_len);
     }
-
-    if final_samples.is_empty() {
-        return Err("Failed to process any audio sources".to_string());
-    }
-
-    let gain = normalize_audio_for_transcription(&mut final_samples);
-    if (gain - 1.0).abs() > 0.01 {
-        tracing::info!("Applied transcription audio gain: {gain:.2}x");
-    }
-
-    write_wav_16k_mono(&final_samples, output_path)
+    Ok(any_audio)
 }
 
 /// The WAV encode half of the recording-directory arm
@@ -1557,6 +1415,38 @@ fn process_with_whisper(
 // Parakeet
 // ---------------------------------------------------------------------------
 
+/// Parakeet's encoder fails with an ONNX broadcast error past 400 s of audio
+/// (5,000 frames of 80 ms), and below that its time and memory per second of
+/// audio grow with the input's length. Minute-long windows, cut at the quietest
+/// 100 ms near each boundary so words stay whole, keep cost linear in the
+/// recording's length and lift the 400 s cap.
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+const PARAKEET_CHUNK_SECONDS: usize = 60;
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+const PARAKEET_CUT_SEARCH_SECONDS: usize = 5;
+
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+fn parakeet_chunk_ranges(samples: &[f32], sample_rate: usize) -> Vec<std::ops::Range<usize>> {
+    let target = PARAKEET_CHUNK_SECONDS * sample_rate;
+    let search = PARAKEET_CUT_SEARCH_SECONDS * sample_rate;
+    let window = sample_rate / 10;
+    let energy = |at: usize| -> f32 { samples[at..at + window].iter().map(|s| s * s).sum() };
+    let mut ranges = Vec::new();
+    let mut start = 0;
+    while samples.len() - start > target {
+        let end = start + target;
+        let quietest = (end - search..=end - window)
+            .step_by(sample_rate / 100)
+            .min_by(|a, b| energy(*a).total_cmp(&energy(*b)))
+            .unwrap_or(end - window);
+        let cut = quietest + window / 2;
+        ranges.push(start..cut);
+        start = cut;
+    }
+    ranges.push(start..samples.len());
+    ranges
+}
+
 /// `process_with_parakeet` (`captions.rs:1202-1302`).
 #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
 fn process_with_parakeet(
@@ -1602,21 +1492,62 @@ fn process_with_parakeet(
         }
     };
 
-    let result = {
+    let mut reader = hound::WavReader::open(audio_path)
+        .map_err(|e| format!("Failed to open audio file: {e} at path: {audio_path:?}"))?;
+    let spec = reader.spec();
+    if spec.channels != 1 || spec.sample_rate != WHISPER_SAMPLE_RATE {
+        return Err(format!(
+            "Expected 16 kHz mono audio, got {} Hz with {} channels",
+            spec.sample_rate, spec.channels
+        ));
+    }
+    let sample_rate = spec.sample_rate;
+    let samples = reader
+        .samples::<i16>()
+        .map(|sample| sample.map(|sample| f32::from(sample) / 32768.0))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("Failed to read audio file: {e}"))?;
+    if samples.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut tokens = Vec::new();
+    {
         let mut parakeet = model_arc
             .lock()
             .map_err(|e| format!("Failed to lock Parakeet model: {e}"))?;
-        parakeet
-            .transcribe_file(audio_path, Some(TimestampMode::Words))
-            .map_err(|e| format!("Parakeet transcription failed: {e}"))?
-    };
+        for range in parakeet_chunk_ranges(&samples, sample_rate as usize) {
+            let offset = range.start as f32 / sample_rate as f32;
+            let result = parakeet
+                .transcribe_samples(
+                    samples[range].to_vec(),
+                    sample_rate,
+                    1,
+                    Some(TimestampMode::Words),
+                )
+                .map_err(|e| format!("Parakeet transcription failed: {e}"))?;
+            tokens.extend(result.tokens.into_iter().map(|token| CaptionWord {
+                text: token.text,
+                start: token.start + offset,
+                end: token.end + offset,
+            }));
+        }
+    }
 
-    tracing::info!("Parakeet produced {} timed tokens", result.tokens.len());
+    tracing::info!("Parakeet produced {} timed tokens", tokens.len());
 
+    Ok(caption_segments_from_tokens(tokens))
+}
+
+/// Parakeet's timed word tokens -> caption segments: drop empty tokens,
+/// normalize the words and chunk them.
+#[cfg(any(test, not(all(target_os = "macos", target_arch = "x86_64"))))]
+fn caption_segments_from_tokens(
+    tokens: impl IntoIterator<Item = CaptionWord>,
+) -> Vec<CaptionSegment> {
     let words = normalize_caption_words(
-        result
-            .tokens
-            .iter()
+        tokens
+            .into_iter()
             .filter(|token| !token.text.trim().is_empty())
             .map(|token| CaptionWord {
                 text: token.text.trim().to_string(),
@@ -1625,10 +1556,6 @@ fn process_with_parakeet(
             })
             .collect(),
     );
-
-    if words.is_empty() {
-        return Err("No speech detected in the audio".to_string());
-    }
 
     let mut segments = Vec::new();
     for (chunk_idx, chunk) in caption_word_chunks(&words).into_iter().enumerate() {
@@ -1641,7 +1568,7 @@ fn process_with_parakeet(
         });
     }
 
-    Ok(segments)
+    segments
 }
 
 #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
@@ -1658,13 +1585,81 @@ fn process_with_parakeet(
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+struct TranscriptionAudioOffset {
+    concatenated_start: f64,
+    source_start: f64,
+    length: f64,
+}
+
+fn restore_source_timestamps(
+    segments: Vec<CaptionSegment>,
+    offsets: &[TranscriptionAudioOffset],
+) -> Vec<CaptionSegment> {
+    let map_times = |start: f32, end: f32| {
+        let start = f64::from(start);
+        let index = offsets
+            .partition_point(|offset| offset.concatenated_start <= start)
+            .checked_sub(1)?;
+        let offset = &offsets[index];
+        let local_start = start - offset.concatenated_start;
+        if local_start >= offset.length {
+            return None;
+        }
+        let local_end =
+            (f64::from(end) - offset.concatenated_start).clamp(local_start, offset.length);
+        Some((
+            (offset.source_start + local_start) as f32,
+            (offset.source_start + local_end) as f32,
+        ))
+    };
+    segments
+        .into_iter()
+        .filter_map(|mut segment| {
+            let word_count = segment.words.len();
+            segment.words = segment
+                .words
+                .into_iter()
+                .filter_map(|mut word| {
+                    (word.start, word.end) = map_times(word.start, word.end)?;
+                    Some(word)
+                })
+                .collect();
+            if word_count != segment.words.len() {
+                segment.text = caption_text_from_words(&segment.words);
+            }
+            (segment.start, segment.end) = match (segment.words.first(), segment.words.last()) {
+                (Some(first), Some(last)) => (first.start, last.end),
+                _ if word_count == 0 => map_times(segment.start, segment.end)?,
+                _ => return None,
+            };
+            Some(segment)
+        })
+        .enumerate()
+        .map(|(index, mut segment)| {
+            segment.id = format!("segment-{index}");
+            segment
+        })
+        .collect()
+}
+
 /// `transcribe_audio` (`captions.rs:1315-1439`), minus the Tauri command
 /// plumbing. Blocking -- run it on the tokio blocking pool.
 pub fn transcribe_blocking(
     project_path: &Path,
     model: &str,
     language: &str,
+    timeline: Option<&TimelineConfiguration>,
+    recording_durations: &[f64],
 ) -> Result<Vec<CaptionSegment>, String> {
+    let requested = model;
+    // A model being downloaded should not be selected as a fallback, even
+    // if an older copy still exists at its final path.
+    let model = transcription_model(model, language, |model| {
+        model_files_present(model) && !hub().downloading(model)
+    })?;
+    if model != requested {
+        tracing::info!("{requested} cannot transcribe {language}; using the {model} Whisper model");
+    }
     let model_file = model_path(model);
     if !project_path.exists() {
         return Err(format!(
@@ -1679,6 +1674,42 @@ pub fn transcribe_blocking(
         ));
     }
 
+    let _guard = lock_transcription_worker_slot();
+    let result =
+        transcribe_project_with(project_path, timeline, recording_durations, |audio_path| {
+            if is_parakeet_model(model) {
+                tracing::info!("Using Parakeet TDT engine");
+                process_with_parakeet(audio_path, model_file.to_string_lossy().as_ref())
+            } else {
+                tracing::info!("Using Whisper engine");
+                let hints = transcription_hints();
+                let context = get_whisper_context(model_file.to_string_lossy().as_ref())?;
+                process_with_whisper(audio_path, context, language, &hints)
+            }
+        });
+    if is_parakeet_model(model) {
+        schedule_parakeet_release();
+    } else {
+        release_whisper_context_after_transcription();
+    }
+    result
+}
+
+/// Extracts the project's transcription audio to a temporary 16 kHz mono WAV
+/// and runs `engine` on it.
+fn transcribe_project_with(
+    project_path: &Path,
+    timeline: Option<&TimelineConfiguration>,
+    recording_durations: &[f64],
+    engine: impl FnOnce(&Path) -> Result<Vec<CaptionSegment>, String>,
+) -> Result<Vec<CaptionSegment>, String> {
+    ffmpeg::init().map_err(|e| format!("Failed to initialise ffmpeg: {e}"))?;
+    let meta = RecordingMeta::load_for_project(project_path)
+        .map_err(|e| format!("Failed to read recording metadata: {e}"))?;
+    let Some(studio) = meta.studio_meta() else {
+        return Err("Only studio recordings can be transcribed".to_string());
+    };
+    studio.ensure_ordinary_media_access(&meta.project_path)?;
     let temp_dir = std::env::temp_dir().join(format!(
         "cap-gpui-transcription-{}-{}",
         std::process::id(),
@@ -1689,22 +1720,35 @@ pub fn transcribe_blocking(
     let audio_path = temp_dir.join("audio.wav");
 
     let result = (|| {
-        extract_audio_from_video(project_path, &audio_path)?;
-
-        let _guard = lock_transcription_worker_slot();
-        if is_parakeet_model(model) {
-            tracing::info!("Using Parakeet TDT engine");
-            let result = process_with_parakeet(&audio_path, model_file.to_string_lossy().as_ref());
-            schedule_parakeet_release();
-            result
-        } else {
-            tracing::info!("Using Whisper engine");
-            let hints = transcription_hints();
-            let context = get_whisper_context(model_file.to_string_lossy().as_ref())?;
-            let result = process_with_whisper(&audio_path, context, language, &hints);
-            release_whisper_context_after_transcription();
-            result
+        let mut samples = Vec::new();
+        let mut offsets = Vec::new();
+        for range in cap_project::transcription_source_ranges(timeline, recording_durations) {
+            let start = samples.len();
+            if !extract_project_audio(
+                &meta,
+                studio,
+                recording_durations,
+                range.clone(),
+                &mut samples,
+            )? {
+                continue;
+            }
+            offsets.push(TranscriptionAudioOffset {
+                concatenated_start: start as f64 / f64::from(DECODE_SAMPLE_RATE),
+                source_start: range.start,
+                length: (samples.len() - start) as f64 / f64::from(DECODE_SAMPLE_RATE),
+            });
         }
+        if offsets.is_empty() {
+            return Err("No audio sources found in the selected timeline".to_string());
+        }
+        let gain = normalize_audio_for_transcription(&mut samples);
+        if (gain - 1.0).abs() > 0.01 {
+            tracing::info!("Applied transcription audio gain: {gain:.2}x");
+        }
+        write_wav_16k_mono(&samples, &audio_path)?;
+        drop(samples);
+        Ok(restore_source_timestamps(engine(&audio_path)?, &offsets))
     })();
 
     let _ = std::fs::remove_dir_all(&temp_dir);
@@ -1716,186 +1760,14 @@ pub fn transcribe_blocking(
     Ok(segments)
 }
 
-/// `resolve_audio_extraction_source` (`captions.rs:221-243`), directory arm
-/// only -- the gpui editor always opens `.cap` bundles, so a plain media file
-/// is refused rather than decoded.
-fn extract_audio_from_video(video_path: &Path, output_path: &Path) -> Result<(), String> {
-    let metadata = std::fs::metadata(video_path)
-        .map_err(|e| format!("Failed to read video path metadata: {e}"))?;
-    if !metadata.is_dir() {
-        return Err("Video path is not a recording directory".to_string());
-    }
-    if !video_path.join("recording-meta.json").is_file() {
-        return Err("Recording directory is missing recording-meta.json".to_string());
-    }
-    extract_project_audio(video_path, output_path)
-}
-
 // ---------------------------------------------------------------------------
 // Caption words & chunking
 // ---------------------------------------------------------------------------
 
-/// `MAX_CAPTION_WORD_DURATION` (`captions.rs:75`): Whisper/Parakeet sometimes
-/// stretch a trailing word's end across a following silence, which leaves the
-/// rendered caption stuck on screen and duplicates the word across timeline
-/// cuts once projected.
-pub const MAX_CAPTION_WORD_DURATION: f32 = 2.5;
-/// `captions.rs:67-69`.
-const TARGET_CAPTION_WORDS_PER_SEGMENT: usize = 6;
-const MAX_CAPTION_WORDS_PER_SEGMENT: usize = 8;
-const MIN_FINAL_CAPTION_WORDS: usize = 3;
-
-/// `caption_char_attaches_to_previous` (`captions.rs:745-767`).
-fn caption_char_attaches_to_previous(value: char) -> bool {
-    matches!(
-        value,
-        ',' | '.'
-            | '!'
-            | '?'
-            | ';'
-            | ':'
-            | '%'
-            | ')'
-            | ']'
-            | '}'
-            | '\''
-            | '’'
-            | '、'
-            | '。'
-            | '！'
-            | '？'
-            | '；'
-            | '：'
-            | '，'
-    )
-}
-
-fn caption_token_attaches_to_previous(text: &str) -> bool {
-    text.trim()
-        .chars()
-        .next()
-        .is_some_and(caption_char_attaches_to_previous)
-}
-
-/// `caption_boundary_word_is_weak` (`captions.rs:769-801`).
-fn caption_boundary_word_is_weak(word: &CaptionWord) -> bool {
-    let normalized = word
-        .text
-        .trim()
-        .chars()
-        .filter(|c| c.is_alphanumeric())
-        .collect::<String>()
-        .to_lowercase();
-
-    normalized.len() <= 1
-        || matches!(
-            normalized.as_str(),
-            "an" | "as"
-                | "at"
-                | "be"
-                | "by"
-                | "do"
-                | "he"
-                | "if"
-                | "in"
-                | "is"
-                | "it"
-                | "me"
-                | "my"
-                | "of"
-                | "on"
-                | "or"
-                | "so"
-                | "to"
-                | "up"
-                | "we"
-        )
-}
-
-/// `normalize_caption_words` (`captions.rs:803-831`).
-fn normalize_caption_words(words: Vec<CaptionWord>) -> Vec<CaptionWord> {
-    let mut normalized: Vec<CaptionWord> = Vec::with_capacity(words.len());
-
-    for word in words {
-        let text = word.text.trim();
-        if text.is_empty() {
-            continue;
-        }
-
-        if caption_token_attaches_to_previous(text)
-            && let Some(previous) = normalized.last_mut()
-        {
-            previous.text.push_str(text);
-            previous.end = word.end;
-        } else {
-            normalized.push(CaptionWord {
-                text: text.to_string(),
-                start: word.start,
-                end: word.end,
-            });
-        }
-    }
-
-    for word in &mut normalized {
-        word.end = word.end.min(word.start + MAX_CAPTION_WORD_DURATION);
-    }
-
-    normalized
-}
-
-/// `caption_text_from_words` (`captions.rs:833-849`).
-fn caption_text_from_words<'a>(words: impl IntoIterator<Item = &'a CaptionWord>) -> String {
-    let mut text = String::new();
-
-    for word in words {
-        let word_text = word.text.trim();
-        if word_text.is_empty() {
-            continue;
-        }
-
-        if !text.is_empty() && !caption_token_attaches_to_previous(word_text) {
-            text.push(' ');
-        }
-        text.push_str(word_text);
-    }
-
-    text
-}
-
-/// `caption_word_chunks` (`captions.rs:851-883`).
-fn caption_word_chunks(words: &[CaptionWord]) -> Vec<&[CaptionWord]> {
-    let mut chunks = Vec::new();
-    let mut start = 0;
-
-    while start < words.len() {
-        let remaining = words.len() - start;
-        if remaining <= TARGET_CAPTION_WORDS_PER_SEGMENT {
-            chunks.push(&words[start..]);
-            break;
-        }
-
-        let mut end = (start + TARGET_CAPTION_WORDS_PER_SEGMENT).min(words.len());
-        while end < words.len()
-            && caption_boundary_word_is_weak(&words[end - 1])
-            && end - start < MAX_CAPTION_WORDS_PER_SEGMENT
-        {
-            end += 1;
-        }
-
-        let remaining_after = words.len() - end;
-        if remaining_after > 0
-            && remaining_after < MIN_FINAL_CAPTION_WORDS
-            && caption_boundary_word_is_weak(&words[end])
-        {
-            end = words.len();
-        }
-
-        chunks.push(&words[start..end]);
-        start = end;
-    }
-
-    chunks
-}
+use cap_project::caption_words::{
+    caption_text_from_words, caption_word_chunks, normalize_caption_words,
+    MAX_CAPTION_WORD_DURATION,
+};
 
 // ---------------------------------------------------------------------------
 // Track derivation -- deriveCaptionTrackSegments, in Rust
@@ -2025,7 +1897,6 @@ pub fn sync_caption_words_with_text(
         .iter()
         .enumerate()
         .map(|(index, token)| {
-            let source = existing.get(index);
             let word_start = start + step * index as f64;
             let word_end = if index == tokens.len() - 1 {
                 end
@@ -2034,8 +1905,8 @@ pub fn sync_caption_words_with_text(
             };
             CaptionWord {
                 text: (*token).to_string(),
-                start: source.map_or(word_start as f32, |word| word.start),
-                end: source.map_or(word_end as f32, |word| word.end),
+                start: word_start as f32,
+                end: word_end as f32,
             }
         })
         .collect()
@@ -2168,6 +2039,9 @@ pub fn caption_generation_error_message(message: &str) -> String {
     if message.contains("Failed to load Whisper model") {
         return "Failed to load the caption model. Try downloading it again".to_string();
     }
+    if message.contains(PARAKEET_UNSUPPORTED_LANGUAGE) {
+        return "The Recommended and High Accuracy models only transcribe English and 24 other European languages. Download the Small or Medium model to caption this language".to_string();
+    }
     if message.contains("Parakeet transcription is not available on Intel macOS") {
         return "Parakeet models are not available on Intel Macs. Use a Whisper model instead"
             .to_string();
@@ -2176,8 +2050,105 @@ pub fn caption_generation_error_message(message: &str) -> String {
 }
 
 #[cfg(test)]
+mod download_tests;
+#[cfg(test)]
+mod verify_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parakeet_keeps_the_languages_it_can_write() {
+        for language in ["auto", "en", "de", "ru", "uk", "pl"] {
+            assert_eq!(transcription_model("best", language, |_| true), Ok("best"));
+            assert_eq!(
+                transcription_model("best-max", language, |_| true),
+                Ok("best-max")
+            );
+        }
+    }
+
+    #[test]
+    fn other_languages_move_to_a_downloaded_whisper_model() {
+        for language in ["zh", "ja", "ko", "ar", "hi", "tr", "he", "fa"] {
+            assert_eq!(
+                transcription_model("best", language, |_| true),
+                Ok("medium")
+            );
+            assert_eq!(
+                transcription_model("best-max", language, |model| model == "small"),
+                Ok("small")
+            );
+            assert_eq!(
+                transcription_model("best", language, |model| model != "medium"),
+                Ok("small")
+            );
+            let error = transcription_model("best", language, |_| false).unwrap_err();
+            assert!(caption_generation_error_message(&error).contains("Small or Medium"));
+        }
+        assert_eq!(transcription_model("small", "zh", |_| false), Ok("small"));
+    }
+
+    #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+    #[test]
+    fn parakeet_chunks_cut_in_the_quiet_gap_and_cover_every_sample() {
+        let rate = 16_000;
+        let mut samples: Vec<f32> = (0..rate * 150).map(|i| (i as f32 * 0.05).sin()).collect();
+        samples[rate * 57..rate * 57 + rate / 2].fill(0.0);
+
+        let ranges = parakeet_chunk_ranges(&samples, rate);
+
+        assert_eq!(ranges.len(), 3);
+        assert!((rate * 57..rate * 57 + rate / 2).contains(&ranges[0].end));
+        assert_eq!(ranges[0].start, 0);
+        assert_eq!(ranges.last().unwrap().end, samples.len());
+        for pair in ranges.windows(2) {
+            assert_eq!(pair[0].end, pair[1].start);
+        }
+        assert!(
+            ranges
+                .iter()
+                .all(|r| r.len() <= rate * PARAKEET_CHUNK_SECONDS)
+        );
+    }
+
+    #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+    #[test]
+    fn parakeet_keeps_a_one_minute_recording_in_one_chunk() {
+        let samples = vec![0.5; 16_000 * PARAKEET_CHUNK_SECONDS];
+
+        assert_eq!(
+            parakeet_chunk_ranges(&samples, 16_000),
+            vec![0..samples.len()]
+        );
+    }
+
+    #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+    #[test]
+    #[ignore = "needs CAP_PARAKEET_BENCH_MODEL and CAP_PARAKEET_BENCH_WAV"]
+    fn benchmark_parakeet_transcription() {
+        let model = std::env::var("CAP_PARAKEET_BENCH_MODEL").expect("CAP_PARAKEET_BENCH_MODEL");
+        let wav =
+            PathBuf::from(std::env::var("CAP_PARAKEET_BENCH_WAV").expect("CAP_PARAKEET_BENCH_WAV"));
+        let started = std::time::Instant::now();
+        let result = process_with_parakeet(&wav, &model);
+        let seconds = started.elapsed().as_secs_f64();
+        match result {
+            Ok(segments) => {
+                let words: Vec<&CaptionWord> = segments.iter().flat_map(|s| &s.words).collect();
+                println!("parakeet_seconds={seconds:.2} words={}", words.len());
+                if let Ok(path) = std::env::var("CAP_PARAKEET_BENCH_WORDS") {
+                    let dump: String = words
+                        .iter()
+                        .map(|w| format!("{}\t{:.2}\t{:.2}\n", w.text, w.start, w.end))
+                        .collect();
+                    std::fs::write(path, dump).expect("write words");
+                }
+            }
+            Err(error) => panic!("parakeet_seconds={seconds:.2} error={error}"),
+        }
+    }
 
     fn word(text: &str, index: usize) -> CaptionWord {
         CaptionWord {
@@ -2206,6 +2177,100 @@ mod tests {
             end,
             text: caption_text_from_words(&words),
             words,
+        }
+    }
+
+    #[test]
+    fn caption_text_edits_redistribute_timings_when_word_count_changes() {
+        let existing = caption(
+            "caption",
+            1.0,
+            4.0,
+            &[("hello", 1.0, 1.5), ("world", 1.5, 4.0)],
+        );
+
+        for text in ["hello", "hello new world"] {
+            let words = sync_caption_words_with_text(text, &existing.words, 1.0, 4.0);
+            assert_eq!(caption_text_from_words(&words), text);
+            assert_eq!(words.first().unwrap().start, 1.0);
+            assert_eq!(words.last().unwrap().end, 4.0);
+            assert!(words.iter().all(|word| word.start < word.end));
+            assert!(words.windows(2).all(|pair| pair[0].end <= pair[1].start));
+        }
+    }
+
+    #[test]
+    fn caption_spelling_edits_preserve_timings_and_empty_text_clears_words() {
+        let existing = caption(
+            "caption",
+            1.0,
+            4.0,
+            &[("hello", 1.0, 1.5), ("world", 2.0, 4.0)],
+        );
+        let words = sync_caption_words_with_text("Hello world!", &existing.words, 1.0, 4.0);
+        assert_eq!(caption_text_from_words(&words), "Hello world!");
+        for (word, original) in words.iter().zip(&existing.words) {
+            assert_eq!((word.start, word.end), (original.start, original.end));
+        }
+        assert!(sync_caption_words_with_text(" \n\t", &existing.words, 1.0, 4.0).is_empty());
+    }
+
+    #[test]
+    fn caption_text_edits_survive_source_write_and_reload() {
+        for text in ["hello new world", "hello"] {
+            let mut project = ProjectConfiguration {
+                timeline: Some(timeline(serde_json::json!({
+                    "segments": [
+                        { "recordingSegment": 1, "timescale": 2.0, "start": 1.0, "end": 6.0 }
+                    ],
+                    "zoomSegments": [],
+                    "textSegments": [
+                        { "start": 0.5, "end": 1.5, "layout": "fullscreen" }
+                    ]
+                }))),
+                captions: Some(CaptionsData {
+                    segments: vec![caption(
+                        "caption",
+                        11.0,
+                        13.0,
+                        &[("hello", 11.0, 11.5), ("world", 11.5, 13.0)],
+                    )],
+                    source_timed: true,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            let durations = [10.0, 10.0];
+            cap_project::synchronize_captions(&mut project, &durations);
+            project.timeline.as_mut().unwrap().caption_segments[0].text = text.into();
+
+            write_caption_edit_to_source(&mut project, 0, &durations);
+            cap_project::synchronize_captions(&mut project, &durations);
+            let dir = tempfile::tempdir().unwrap();
+            project.write(dir.path()).unwrap();
+            let mut loaded = ProjectConfiguration::load(dir.path()).unwrap();
+            cap_project::synchronize_captions(&mut loaded, &durations);
+
+            let source = &loaded.captions.as_ref().unwrap().segments[0];
+            assert_eq!(source.text, text);
+            assert_eq!(source.words.first().unwrap().start, 11.0);
+            assert_eq!(source.words.last().unwrap().end, 13.0);
+            assert!(
+                source
+                    .words
+                    .windows(2)
+                    .all(|pair| pair[0].end <= pair[1].start)
+            );
+            let track = &loaded.timeline.as_ref().unwrap().caption_segments[0];
+            assert_eq!(track.text, text);
+            assert_eq!((track.start, track.end), (0.0, 2.0));
+            assert_eq!(track.words.len(), text.split_whitespace().count());
+            assert!(
+                track
+                    .words
+                    .windows(2)
+                    .all(|pair| pair[0].end <= pair[1].start)
+            );
         }
     }
 
@@ -2288,21 +2353,44 @@ mod tests {
 
     #[test]
     fn caption_word_chunks_do_not_end_on_short_connector_when_more_words_follow() {
-        let words = [
-            "This", "is", "where", "we", "record", "I", "want", "clean", "captions",
-        ]
-        .iter()
-        .enumerate()
-        .map(|(index, text)| word(text, index))
-        .collect::<Vec<_>>();
+        for connector in ["I", "à", "à,", "a\u{300}", "日"] {
+            let words = [
+                "This", "is", "where", "we", "record", connector, "want", "clean", "captions",
+            ]
+            .iter()
+            .enumerate()
+            .map(|(index, text)| word(text, index))
+            .collect::<Vec<_>>();
 
-        let chunks = caption_word_chunks(&words);
+            let chunks = caption_word_chunks(&words);
 
-        assert_eq!(
-            caption_text_from_words(chunks[0]),
-            "This is where we record I want"
-        );
-        assert_eq!(caption_text_from_words(chunks[1]), "clean captions");
+            assert_eq!(
+                caption_text_from_words(chunks[0]),
+                format!("This is where we record {connector} want")
+            );
+            assert_eq!(caption_text_from_words(chunks[1]), "clean captions");
+        }
+    }
+
+    #[test]
+    fn caption_word_chunks_merge_short_tail_starting_with_connector() {
+        for connector in ["I", "à", "à,", "a\u{300}", "日"] {
+            let words = [
+                "These", "captions", "should", "stay", "grouped", "together", connector, "Paris",
+            ]
+            .iter()
+            .enumerate()
+            .map(|(index, text)| word(text, index))
+            .collect::<Vec<_>>();
+
+            let chunks = caption_word_chunks(&words);
+
+            assert_eq!(chunks.len(), 1, "connector {connector}");
+            assert_eq!(
+                caption_text_from_words(chunks[0]),
+                format!("These captions should stay grouped together {connector} Paris")
+            );
+        }
     }
 
     // -- Model paths ----------------------------------------------------------
@@ -2315,6 +2403,22 @@ mod tests {
         assert_eq!(model_path("best-max"), base.join("parakeet-best-max"));
         assert_eq!(model_path("small"), base.join("small.bin"));
         assert_eq!(model_path("medium"), base.join("medium.bin"));
+    }
+
+    #[test]
+    fn only_the_model_being_downloaded_counts_as_downloading() {
+        let mut state = Hub::default();
+        assert!(!state.downloading("medium"));
+        state.download = Some(ModelDownload {
+            model: "medium".to_string(),
+            state: DownloadState::Downloading,
+            progress: 40.0,
+            message: "Downloading".to_string(),
+        });
+        assert!(state.downloading("medium"));
+        assert!(!state.downloading("small"));
+        state.download.as_mut().unwrap().state = DownloadState::Completed;
+        assert!(!state.downloading("medium"));
     }
 
     #[test]

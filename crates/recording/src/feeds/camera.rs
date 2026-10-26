@@ -25,7 +25,7 @@ use tokio::{sync::oneshot, task::LocalSet};
 use tracing::{debug, error, trace, warn};
 
 use crate::ffmpeg::FFmpegVideoFrame;
-use crate::output_pipeline::NativeCameraFrame;
+use crate::output_pipeline::{NativeCameraFrame, VideoFrame};
 
 const CAMERA_INIT_TIMEOUT: Duration = Duration::from_secs(4);
 /// Outer deadline for camera readiness. Must cover both capture attempts on
@@ -53,10 +53,107 @@ pub struct CameraFeed {
     state: State,
     senders: Vec<flume::Sender<FFmpegVideoFrame>>,
     ffmpeg_sender_count: Arc<std::sync::atomic::AtomicUsize>,
-    native_senders: Vec<flume::Sender<NativeCameraFrame>>,
-    native_sender_count: Arc<std::sync::atomic::AtomicUsize>,
+    native_senders: Vec<CountedSender<NativeCameraFrame>>,
+    native_ingress: Arc<NativeCameraIngress>,
+    native_fanout_full: u64,
+    native_fanout_log: DropLog,
+    ffmpeg_fanout_full: u64,
+    ffmpeg_fanout_log: DropLog,
     on_ready: Vec<oneshot::Sender<()>>,
     on_disconnect: Vec<Box<dyn Fn() + Send>>,
+}
+
+/// Shared between the camera feed and its capture callback, which runs on a
+/// capture thread and must never wait for the feed.
+#[derive(Debug, Default)]
+pub struct NativeCameraIngress {
+    senders: std::sync::atomic::AtomicUsize,
+    mailbox_full: std::sync::atomic::AtomicU64,
+}
+
+impl NativeCameraIngress {
+    /// Frames the capture callback could not hand to the feed because its
+    /// mailbox was full. Monotonic over the feed's lifetime.
+    pub fn mailbox_full(&self) -> u64 {
+        self.mailbox_full.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub fn record_mailbox_full(&self) {
+        self.mailbox_full
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// A fan-out target. Senders attached with a counter (recordings) count the
+/// frames the feed could not deliver to them; previews attach without one.
+struct CountedSender<T> {
+    tx: flume::Sender<T>,
+    dropped: Option<Arc<std::sync::atomic::AtomicU64>>,
+}
+
+trait FanoutTarget<T> {
+    fn channel(&self) -> &flume::Sender<T>;
+    fn record_drop(&self) {}
+}
+
+impl<T> FanoutTarget<T> for flume::Sender<T> {
+    fn channel(&self) -> &flume::Sender<T> {
+        self
+    }
+}
+
+impl<T> FanoutTarget<T> for CountedSender<T> {
+    fn channel(&self) -> &flume::Sender<T> {
+        &self.tx
+    }
+
+    fn record_drop(&self) {
+        if let Some(dropped) = &self.dropped {
+            dropped.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+}
+
+trait FanoutFrame {
+    fn share(&self) -> Self;
+}
+
+impl FanoutFrame for FFmpegVideoFrame {
+    fn share(&self) -> Self {
+        self.duplicate().unwrap_or_else(|| self.clone())
+    }
+}
+
+impl FanoutFrame for NativeCameraFrame {
+    fn share(&self) -> Self {
+        self.clone()
+    }
+}
+
+/// Rate limit for drop warnings: the first drop is reported at once, later
+/// drops at most once per interval with the count since the last report, so
+/// an isolated loss is never hidden and a sustained loss cannot flood the log.
+#[derive(Debug, Default)]
+pub(crate) struct DropLog {
+    last_report: Option<std::time::Instant>,
+    unreported: u64,
+}
+
+impl DropLog {
+    pub(crate) const INTERVAL: Duration = Duration::from_secs(5);
+
+    pub(crate) fn record(&mut self, count: u64, now: std::time::Instant) -> Option<u64> {
+        self.unreported = self.unreported.saturating_add(count);
+        if self.unreported == 0
+            || self
+                .last_report
+                .is_some_and(|last| now.duration_since(last) < Self::INTERVAL)
+        {
+            return None;
+        }
+        self.last_report = Some(now);
+        Some(std::mem::take(&mut self.unreported))
+    }
 }
 
 enum State {
@@ -210,7 +307,11 @@ impl Default for CameraFeed {
             senders: Vec::new(),
             ffmpeg_sender_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             native_senders: Vec::new(),
-            native_sender_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            native_ingress: Arc::new(NativeCameraIngress::default()),
+            native_fanout_full: 0,
+            native_fanout_log: DropLog::default(),
+            ffmpeg_fanout_full: 0,
+            ffmpeg_fanout_log: DropLog::default(),
             on_ready: Vec::new(),
             on_disconnect: Vec::new(),
         }
@@ -229,11 +330,16 @@ pub struct CameraFeedLock {
     actor: ActorRef<CameraFeed>,
     camera_info: cap_camera::CameraInfo,
     video_info: VideoInfo,
+    native_ingress: Arc<NativeCameraIngress>,
     drop_tx: Option<oneshot::Sender<()>>,
     _token: Arc<()>,
 }
 
 impl CameraFeedLock {
+    pub fn native_ingress(&self) -> &Arc<NativeCameraIngress> {
+        &self.native_ingress
+    }
+
     pub fn camera_info(&self) -> &cap_camera::CameraInfo {
         &self.camera_info
     }
@@ -300,6 +406,13 @@ pub struct RemoveInput;
 pub struct AddSender(pub flume::Sender<FFmpegVideoFrame>);
 
 pub struct AddNativeSender(pub flume::Sender<NativeCameraFrame>);
+
+/// Attaches a recording's native queue; every frame the feed cannot deliver
+/// to it is added to the counter.
+pub struct AddCountedNativeSender(
+    pub flume::Sender<NativeCameraFrame>,
+    pub Arc<std::sync::atomic::AtomicU64>,
+);
 
 pub struct RemoveSender(pub flume::Sender<FFmpegVideoFrame>);
 
@@ -369,7 +482,7 @@ struct CameraSetupArgs {
     new_frame_recipient: Recipient<NewFrame>,
     native_frame_recipient: Recipient<NewNativeFrame>,
     ffmpeg_sender_count: Arc<std::sync::atomic::AtomicUsize>,
-    native_sender_count: Arc<std::sync::atomic::AtomicUsize>,
+    native_ingress: Arc<NativeCameraIngress>,
     flow: CameraSetupFlow,
 }
 
@@ -432,7 +545,7 @@ fn spawn_camera_setup(args: CameraSetupArgs) -> (ReadyFuture, SyncSender<()>) {
         new_frame_recipient,
         native_frame_recipient,
         ffmpeg_sender_count,
-        native_sender_count,
+        native_ingress,
         flow,
     } = args;
 
@@ -498,7 +611,7 @@ fn spawn_camera_setup(args: CameraSetupArgs) -> (ReadyFuture, SyncSender<()>) {
                     new_frame_recipient,
                     native_frame_recipient,
                     ffmpeg_sender_count,
-                    native_sender_count,
+                    native_ingress,
                     &done_rx_thread,
                 )
                 .await;
@@ -857,7 +970,7 @@ async fn setup_camera(
     recipient: Recipient<NewFrame>,
     native_recipient: Recipient<NewNativeFrame>,
     ffmpeg_sender_count: Arc<std::sync::atomic::AtomicUsize>,
-    native_sender_count: Arc<std::sync::atomic::AtomicUsize>,
+    native_ingress: Arc<NativeCameraIngress>,
     cancel_rx: &mpsc::Receiver<()>,
 ) -> Result<SetupCameraResult, SetInputError> {
     let camera = find_camera(id).ok_or(SetInputError::DeviceNotFound)?;
@@ -882,7 +995,7 @@ async fn setup_camera(
         recipient.clone(),
         native_recipient.clone(),
         ffmpeg_sender_count.clone(),
-        native_sender_count.clone(),
+        native_ingress.clone(),
     )
     .await;
 
@@ -910,7 +1023,7 @@ async fn setup_camera(
                 recipient,
                 native_recipient,
                 ffmpeg_sender_count,
-                native_sender_count,
+                native_ingress,
             )
             .await
             .inspect(|_| {
@@ -918,6 +1031,21 @@ async fn setup_camera(
             })
         }
         Err(err) => Err(err),
+    }
+}
+
+/// The capture callback's hand-over to the feed: never waits for mailbox
+/// capacity; a full mailbox loses the frame and counts it.
+#[cfg(any(target_os = "macos", windows))]
+fn hand_native_frame_to_feed(
+    recipient: &Recipient<NewNativeFrame>,
+    ingress: &NativeCameraIngress,
+    frame: NativeCameraFrame,
+) {
+    if let Err(kameo::error::SendError::MailboxFull(_)) =
+        recipient.tell(NewNativeFrame(frame)).try_send()
+    {
+        ingress.record_mailbox_full();
     }
 }
 
@@ -929,7 +1057,7 @@ async fn start_camera_capture_attempt(
     recipient: Recipient<NewFrame>,
     native_recipient: Recipient<NewNativeFrame>,
     ffmpeg_sender_count: Arc<std::sync::atomic::AtomicUsize>,
-    native_sender_count: Arc<std::sync::atomic::AtomicUsize>,
+    native_ingress: Arc<NativeCameraIngress>,
 ) -> Result<SetupCameraResult, SetInputError> {
     let frame_rate = format.frame_rate().round().max(1.0) as u32;
 
@@ -945,13 +1073,19 @@ async fn start_camera_capture_attempt(
                 cidre::cm::Clock::convert_host_time_to_sys_units(frame.native().sample_buf().pts()),
             ));
 
-            if native_sender_count.load(std::sync::atomic::Ordering::Relaxed) > 0 {
-                let _ = native_recipient
-                    .tell(NewNativeFrame(NativeCameraFrame {
+            if native_ingress
+                .senders
+                .load(std::sync::atomic::Ordering::Relaxed)
+                > 0
+            {
+                hand_native_frame_to_feed(
+                    &native_recipient,
+                    &native_ingress,
+                    NativeCameraFrame {
                         sample_buf: frame.native().sample_buf().clone(),
                         timestamp,
-                    }))
-                    .try_send();
+                    },
+                );
             }
 
             // Until the ready signal fires the first frame must still be
@@ -1015,7 +1149,7 @@ async fn setup_camera(
     recipient: Recipient<NewFrame>,
     native_recipient: Recipient<NewNativeFrame>,
     ffmpeg_sender_count: Arc<std::sync::atomic::AtomicUsize>,
-    native_sender_count: Arc<std::sync::atomic::AtomicUsize>,
+    native_ingress: Arc<NativeCameraIngress>,
     _cancel_rx: &mpsc::Receiver<()>,
 ) -> Result<SetupCameraResult, SetInputError> {
     let camera = find_camera(id).ok_or(SetInputError::DeviceNotFound)?;
@@ -1034,7 +1168,10 @@ async fn setup_camera(
                 cap_timestamp::PerformanceCounterTimestamp::new(frame.native().perf_counter),
             );
 
-            if native_sender_count.load(std::sync::atomic::Ordering::Relaxed) > 0
+            if native_ingress
+                .senders
+                .load(std::sync::atomic::Ordering::Relaxed)
+                > 0
                 && let Ok(bytes) = frame.native().bytes()
             {
                 use cap_mediafoundation_utils::IMFMediaBufferExt;
@@ -1056,16 +1193,18 @@ async fn setup_camera(
 
                         #[allow(clippy::arc_with_non_send_sync)]
                         let buffer = std::sync::Arc::new(std::sync::Mutex::new(buffer));
-                        let _ = native_recipient
-                            .tell(NewNativeFrame(NativeCameraFrame {
+                        hand_native_frame_to_feed(
+                            &native_recipient,
+                            &native_ingress,
+                            NativeCameraFrame {
                                 buffer,
                                 pixel_format: frame.native().pixel_format,
                                 width: frame.native().width as u32,
                                 height: frame.native().height as u32,
                                 is_bottom_up: frame.native().is_bottom_up,
                                 timestamp,
-                            }))
-                            .try_send();
+                            },
+                        );
                     }
                 }
             }
@@ -1131,7 +1270,7 @@ async fn setup_camera(
     recipient: Recipient<NewFrame>,
     _native_recipient: Recipient<NewNativeFrame>,
     _ffmpeg_sender_count: Arc<std::sync::atomic::AtomicUsize>,
-    _native_sender_count: Arc<std::sync::atomic::AtomicUsize>,
+    _native_ingress: Arc<NativeCameraIngress>,
     _cancel_rx: &mpsc::Receiver<()>,
 ) -> Result<SetupCameraResult, SetInputError> {
     let camera = find_camera(id).ok_or(SetInputError::DeviceNotFound)?;
@@ -1267,7 +1406,7 @@ impl Message<SetInput> for CameraFeed {
                     new_frame_recipient,
                     native_frame_recipient,
                     ffmpeg_sender_count: self.ffmpeg_sender_count.clone(),
-                    native_sender_count: self.native_sender_count.clone(),
+                    native_ingress: self.native_ingress.clone(),
                     flow: CameraSetupFlow::Open,
                 });
 
@@ -1295,7 +1434,7 @@ impl Message<SetInput> for CameraFeed {
                     new_frame_recipient,
                     native_frame_recipient,
                     ffmpeg_sender_count: self.ffmpeg_sender_count.clone(),
-                    native_sender_count: self.native_sender_count.clone(),
+                    native_ingress: self.native_ingress.clone(),
                     flow: CameraSetupFlow::Locked {
                         lock_generation: self.lock_generation,
                     },
@@ -1329,7 +1468,8 @@ impl Message<RemoveInput> for CameraFeed {
         self.ffmpeg_sender_count
             .store(0, std::sync::atomic::Ordering::Release);
         self.native_senders.clear();
-        self.native_sender_count
+        self.native_ingress
+            .senders
             .store(0, std::sync::atomic::Ordering::Release);
 
         for cb in &self.on_disconnect {
@@ -1359,6 +1499,29 @@ impl Message<AddSender> for CameraFeed {
     }
 }
 
+impl CameraFeed {
+    fn add_native_sender(
+        &mut self,
+        tx: flume::Sender<NativeCameraFrame>,
+        dropped: Option<Arc<std::sync::atomic::AtomicU64>>,
+    ) {
+        if self
+            .native_senders
+            .iter()
+            .any(|sender| sender.tx.same_channel(&tx))
+        {
+            return;
+        }
+
+        debug!("CameraFeed: Adding new native sender");
+        self.native_senders.push(CountedSender { tx, dropped });
+        self.native_ingress.senders.store(
+            self.native_senders.len(),
+            std::sync::atomic::Ordering::Release,
+        );
+    }
+}
+
 impl Message<AddNativeSender> for CameraFeed {
     type Reply = ();
 
@@ -1367,20 +1530,19 @@ impl Message<AddNativeSender> for CameraFeed {
         msg: AddNativeSender,
         _: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        if self
-            .native_senders
-            .iter()
-            .any(|sender| sender.same_channel(&msg.0))
-        {
-            return;
-        }
+        self.add_native_sender(msg.0, None);
+    }
+}
 
-        debug!("CameraFeed: Adding new native sender");
-        self.native_senders.push(msg.0);
-        self.native_sender_count.store(
-            self.native_senders.len(),
-            std::sync::atomic::Ordering::Release,
-        );
+impl Message<AddCountedNativeSender> for CameraFeed {
+    type Reply = ();
+
+    async fn handle(
+        &mut self,
+        msg: AddCountedNativeSender,
+        _: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.add_native_sender(msg.0, Some(msg.1));
     }
 }
 
@@ -1407,8 +1569,8 @@ impl Message<RemoveNativeSender> for CameraFeed {
         _: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.native_senders
-            .retain(|sender| !sender.same_channel(&msg.0));
-        self.native_sender_count.store(
+            .retain(|sender| !sender.tx.same_channel(&msg.0));
+        self.native_ingress.senders.store(
             self.native_senders.len(),
             std::sync::atomic::Ordering::Release,
         );
@@ -1451,16 +1613,39 @@ impl Message<OnFeedDisconnect> for CameraFeed {
 
 static CAMERA_FRAME_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-fn send_frame_to_camera_senders<T: Clone>(
-    senders: &mut Vec<flume::Sender<T>>,
+/// Frames a fan-out could not deliver: one per sender whose queue was full.
+struct FanoutDrops<'a> {
+    total: &'a mut u64,
+    log: &'a mut DropLog,
+}
+
+impl FanoutDrops<'_> {
+    fn record(&mut self, count: u64, frame_num: u64, sender_label: &str) {
+        if count == 0 {
+            return;
+        }
+        *self.total = self.total.saturating_add(count);
+        let total = *self.total;
+        if let Some(dropped) = self.log.record(count, std::time::Instant::now()) {
+            warn!(
+                dropped,
+                total, frame_num, "{sender_label} ingress queue full, frames dropped"
+            );
+        }
+    }
+}
+
+fn send_frame_to_camera_senders<T: FanoutFrame, S: FanoutTarget<T>>(
+    senders: &mut Vec<S>,
     frame: T,
     frame_num: u64,
     sender_label: &str,
+    mut drops: FanoutDrops<'_>,
 ) -> bool {
     // A disconnected sender whose queue is still full would otherwise never be
     // try_send'd again, leaving it (and its queued frames) retained forever.
     let len_before_retain = senders.len();
-    senders.retain(|sender| !sender.is_disconnected());
+    senders.retain(|sender| !sender.channel().is_disconnected());
     let removed_disconnected = senders.len() != len_before_retain;
     if removed_disconnected {
         debug!(
@@ -1470,54 +1655,41 @@ fn send_frame_to_camera_senders<T: Clone>(
         );
     }
 
-    let mut last_ready_sender = None;
-
-    for (i, sender) in senders.iter().enumerate() {
-        if sender.is_full() {
-            if frame_num.is_multiple_of(30) {
-                warn!(
-                    "{} sender {} channel full at frame {}, dropping frame",
-                    sender_label, i, frame_num
-                );
-            }
-        } else {
-            last_ready_sender = Some(i);
-        }
-    }
-
-    let Some(last_ready_sender) = last_ready_sender else {
-        return removed_disconnected;
-    };
+    // The last sender with room takes the frame itself; the others share its
+    // pixel storage.
+    let last_ready_sender = senders
+        .iter()
+        .rposition(|sender| !sender.channel().is_full());
 
     let mut frame = Some(frame);
+    let mut skipped = 0;
     let mut to_remove = vec![];
 
-    for (i, sender) in senders.iter().enumerate().take(last_ready_sender + 1) {
-        if sender.is_full() {
+    for (i, sender) in senders.iter().enumerate() {
+        let ready = last_ready_sender.is_some_and(|last| i <= last);
+        if !ready || sender.channel().is_full() {
+            sender.record_drop();
+            skipped += 1;
             continue;
         }
 
-        let send_result = if i == last_ready_sender {
+        let send_result = if Some(i) == last_ready_sender {
             let Some(frame) = frame.take() else {
                 break;
             };
-            sender.try_send(frame)
+            sender.channel().try_send(frame)
         } else {
             let Some(frame) = frame.as_ref() else {
                 break;
             };
-            sender.try_send((*frame).clone())
+            sender.channel().try_send(frame.share())
         };
 
         match send_result {
             Ok(()) => {}
             Err(flume::TrySendError::Full(_)) => {
-                if frame_num.is_multiple_of(30) {
-                    warn!(
-                        "{} sender {} channel full at frame {}, dropping frame",
-                        sender_label, i, frame_num
-                    );
-                }
+                sender.record_drop();
+                skipped += 1;
             }
             Err(flume::TrySendError::Disconnected(_)) => {
                 debug!(
@@ -1528,6 +1700,8 @@ fn send_frame_to_camera_senders<T: Clone>(
             }
         }
     }
+
+    drops.record(skipped, frame_num, sender_label);
 
     if to_remove.is_empty() {
         return removed_disconnected;
@@ -1557,7 +1731,16 @@ impl Message<NewFrame> for CameraFeed {
         }
         let frame_num = CAMERA_FRAME_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-        if send_frame_to_camera_senders(&mut self.senders, msg.0, frame_num, "Camera") {
+        if send_frame_to_camera_senders(
+            &mut self.senders,
+            msg.0,
+            frame_num,
+            "Camera",
+            FanoutDrops {
+                total: &mut self.ffmpeg_fanout_full,
+                log: &mut self.ffmpeg_fanout_log,
+            },
+        ) {
             self.ffmpeg_sender_count
                 .store(self.senders.len(), std::sync::atomic::Ordering::Release);
         }
@@ -1585,9 +1768,17 @@ impl Message<NewNativeFrame> for CameraFeed {
         let frame_num =
             NATIVE_CAMERA_FRAME_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-        if send_frame_to_camera_senders(&mut self.native_senders, msg.0, frame_num, "Native camera")
-        {
-            self.native_sender_count.store(
+        if send_frame_to_camera_senders(
+            &mut self.native_senders,
+            msg.0,
+            frame_num,
+            "Native camera",
+            FanoutDrops {
+                total: &mut self.native_fanout_full,
+                log: &mut self.native_fanout_log,
+            },
+        ) {
+            self.native_ingress.senders.store(
                 self.native_senders.len(),
                 std::sync::atomic::Ordering::Release,
             );
@@ -1666,6 +1857,7 @@ impl Message<Lock> for CameraFeed {
         Ok(CameraFeedLock {
             camera_info,
             video_info,
+            native_ingress: self.native_ingress.clone(),
             actor: ctx.actor_ref(),
             drop_tx: Some(drop_tx),
             _token: token,
@@ -1825,6 +2017,97 @@ impl Message<Unlock> for CameraFeed {
                 state
             }
         });
+    }
+}
+
+/// Test-only camera feeds driven by a synthetic device instead of hardware,
+/// so recording tests exercise the real feed, lock and pipeline paths.
+#[cfg(feature = "test-utils")]
+pub mod synthetic {
+    use super::*;
+
+    impl Message<crate::feeds::Stall> for CameraFeed {
+        type Reply = ();
+
+        async fn handle(
+            &mut self,
+            msg: crate::feeds::Stall,
+            _: &mut Context<Self, Self::Reply>,
+        ) -> Self::Reply {
+            tokio::time::sleep(msg.0).await;
+        }
+    }
+
+    pub struct SyntheticCamera {
+        feed: ActorRef<CameraFeed>,
+        _done_rx: std::sync::Mutex<mpsc::Receiver<()>>,
+    }
+
+    impl SyntheticCamera {
+        pub fn spawn(name: &str, video_info: VideoInfo) -> Self {
+            let (done_tx, done_rx) = mpsc::sync_channel(1);
+            let id = DeviceOrModelID::DeviceID(name.to_string());
+            let camera_info = serde_json::from_value(serde_json::json!({
+                "device_id": name,
+                "model_id": null,
+                "display_name": name
+            }))
+            .expect("synthetic camera info");
+            let attached = AttachedState::new(
+                id.clone(),
+                InputConnected {
+                    generation: 0,
+                    id,
+                    done_tx,
+                    camera_info,
+                    video_info,
+                    settings: None,
+                },
+            );
+            let feed = CameraFeed::spawn(CameraFeed {
+                state: State::Open(OpenState {
+                    connecting: None,
+                    attached: Some(attached),
+                }),
+                ..CameraFeed::default()
+            });
+            Self {
+                feed,
+                _done_rx: std::sync::Mutex::new(done_rx),
+            }
+        }
+
+        pub async fn lock(&self) -> anyhow::Result<CameraFeedLock> {
+            self.feed
+                .ask(Lock)
+                .await
+                .map_err(|error| anyhow::anyhow!("synthetic camera lock: {error}"))
+        }
+
+        /// Takes the device away the way the app does when it disappears or
+        /// is deselected (`RemoveInput`); a locked feed defers it.
+        pub async fn remove_input(&self) {
+            let _ = self.feed.ask(RemoveInput).await;
+        }
+
+        pub async fn push_native(&self, frame: NativeCameraFrame) {
+            let _ = self.feed.tell(NewNativeFrame(frame)).await;
+        }
+
+        /// Hands a frame over the way the macOS capture callback does
+        /// (`try_send`, never waiting for mailbox capacity).
+        pub fn try_push_native(&self, frame: NativeCameraFrame) -> crate::feeds::Admission {
+            crate::feeds::Admission::of(self.feed.tell(NewNativeFrame(frame)).try_send())
+        }
+
+        /// Blocks the feed actor for `duration` (scripted slow consumer).
+        pub fn stall(&self, duration: Duration) -> crate::feeds::Admission {
+            crate::feeds::Admission::of(self.feed.tell(crate::feeds::Stall(duration)).try_send())
+        }
+
+        pub async fn push(&self, frame: FFmpegVideoFrame) {
+            let _ = self.feed.tell(NewFrame(frame)).await;
+        }
     }
 }
 
@@ -2481,5 +2764,356 @@ mod tests {
             result.is_ok(),
             "camera readiness was not delivered: {result:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod ingress_tests {
+    use super::*;
+    use crate::sources::native_camera::native_ingress_capacity;
+    use cap_media_info::RawVideoFormat;
+    use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+
+    type Output = (flume::Receiver<u32>, Arc<AtomicU64>);
+
+    impl FanoutFrame for u32 {
+        fn share(&self) -> Self {
+            *self
+        }
+    }
+
+    struct Fanout {
+        senders: Vec<CountedSender<u32>>,
+        total: u64,
+        log: DropLog,
+    }
+
+    impl Fanout {
+        fn new(capacities: &[usize]) -> (Self, Vec<Output>) {
+            let mut senders = vec![];
+            let mut outputs = vec![];
+            for &capacity in capacities {
+                let (tx, rx) = flume::bounded(capacity);
+                let dropped = Arc::new(AtomicU64::new(0));
+                senders.push(CountedSender {
+                    tx,
+                    dropped: Some(dropped.clone()),
+                });
+                outputs.push((rx, dropped));
+            }
+            let fanout = Self {
+                senders,
+                total: 0,
+                log: DropLog::default(),
+            };
+            (fanout, outputs)
+        }
+
+        fn send(&mut self, frame: u32) {
+            send_frame_to_camera_senders(
+                &mut self.senders,
+                frame,
+                u64::from(frame),
+                "Native camera",
+                FanoutDrops {
+                    total: &mut self.total,
+                    log: &mut self.log,
+                },
+            );
+        }
+    }
+
+    fn hd30() -> VideoInfo {
+        VideoInfo::from_raw(RawVideoFormat::Nv12, 1280, 720, 30)
+    }
+
+    #[test]
+    fn burst_after_a_two_second_stall_fits_the_ingress_queue() {
+        let (mut fanout, outputs) = Fanout::new(&[native_ingress_capacity(&hd30())]);
+        // The consumer is stalled for 2 s at 30 fps; the feed then hands the
+        // whole backlog over at once.
+        for frame in 0..60 {
+            fanout.send(frame);
+        }
+        let (rx, dropped) = &outputs[0];
+        assert_eq!(dropped.load(Relaxed), 0);
+        assert_eq!(fanout.total, 0);
+        assert_eq!(rx.drain().collect::<Vec<_>>(), (0..60).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn frames_past_the_ingress_bound_are_counted_and_reported() {
+        let capacity = native_ingress_capacity(&hd30());
+        let (mut fanout, outputs) = Fanout::new(&[capacity]);
+        for frame in 0..capacity as u32 + 5 {
+            fanout.send(frame);
+        }
+        assert_eq!(outputs[0].1.load(Relaxed), 5);
+        assert_eq!(outputs[0].0.len(), capacity);
+        assert_eq!(fanout.total, 5);
+        // The first drop was reported at once; the other four wait for the
+        // next report window.
+        let now = std::time::Instant::now();
+        assert_eq!(fanout.log.record(0, now), None);
+        assert_eq!(fanout.log.record(0, now + DropLog::INTERVAL), Some(4));
+    }
+
+    #[test]
+    fn previous_eight_frame_queue_lost_most_of_the_same_burst() {
+        let (mut fanout, outputs) = Fanout::new(&[8]);
+        for frame in 0..60 {
+            fanout.send(frame);
+        }
+        assert_eq!(outputs[0].1.load(Relaxed), 52);
+        assert_eq!(outputs[0].0.len(), 8);
+    }
+
+    /// A full preview queue is not a recording loss: each attached queue
+    /// counts only the frames it did not receive.
+    #[test]
+    fn losses_are_counted_per_attached_queue() {
+        let (mut fanout, outputs) = Fanout::new(&[4, 64, 2]);
+        for frame in 0..10 {
+            fanout.send(frame);
+        }
+        let counts: Vec<_> = outputs
+            .iter()
+            .map(|(rx, dropped)| (rx.len(), dropped.load(Relaxed)))
+            .collect();
+        assert_eq!(counts, [(4, 6), (10, 0), (2, 8)]);
+        assert_eq!(fanout.total, 14);
+    }
+
+    #[test]
+    fn camera_fanout_delivers_identical_pixels_without_copying() {
+        let mut inner = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::NV12, 64, 48);
+        for plane in 0..inner.planes() {
+            for (index, byte) in inner.data_mut(plane).iter_mut().enumerate() {
+                *byte = (index * 7 + plane * 31) as u8;
+            }
+        }
+        inner.set_pts(Some(1234));
+        let expected: Vec<_> = (0..inner.planes())
+            .map(|plane| (inner.stride(plane), inner.data(plane).to_vec()))
+            .collect();
+        let pixels = inner.data(0).as_ptr();
+        let captured_at = std::time::Instant::now();
+        let (mut senders, receivers): (Vec<_>, Vec<_>) = (0..3).map(|_| flume::bounded(1)).unzip();
+        let mut total = 0;
+        let mut log = DropLog::default();
+
+        send_frame_to_camera_senders(
+            &mut senders,
+            FFmpegVideoFrame {
+                inner,
+                timestamp: Timestamp::Instant(captured_at),
+            },
+            0,
+            "Camera",
+            FanoutDrops {
+                total: &mut total,
+                log: &mut log,
+            },
+        );
+
+        let frames: Vec<FFmpegVideoFrame> = receivers
+            .iter()
+            .map(|rx| rx.try_recv().expect("fanned-out frame"))
+            .collect();
+        for frame in &frames {
+            assert_eq!(frame.inner.data(0).as_ptr(), pixels);
+            assert_eq!(frame.inner.format(), ffmpeg::format::Pixel::NV12);
+            assert_eq!((frame.inner.width(), frame.inner.height()), (64, 48));
+            assert_eq!(frame.inner.pts(), Some(1234));
+            assert!(matches!(frame.timestamp, Timestamp::Instant(value) if value == captured_at));
+            for (plane, (stride, bytes)) in expected.iter().enumerate() {
+                assert_eq!(frame.inner.stride(plane), *stride);
+                assert_eq!(frame.inner.data(plane), bytes.as_slice());
+            }
+        }
+        let buffer = unsafe { (*frames[0].inner.as_ptr()).buf[0] };
+        assert_eq!(unsafe { ffmpeg::ffi::av_buffer_get_ref_count(buffer) }, 3);
+        assert_eq!(total, 0);
+    }
+
+    /// Consumers draining concurrently with the fan-out: every frame is
+    /// either received or counted as dropped for each queue, never both.
+    #[test]
+    fn received_plus_dropped_is_every_frame_per_queue() {
+        const FRAMES: u32 = 20_000;
+        let (mut fanout, outputs) = Fanout::new(&[1, 2, 1]);
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let drains: Vec<_> = outputs
+            .iter()
+            .enumerate()
+            .map(|(i, (rx, _))| {
+                let rx = rx.clone();
+                let stop = stop.clone();
+                std::thread::spawn(move || {
+                    let mut received = 0_u64;
+                    while !stop.load(Relaxed) || !rx.is_empty() {
+                        if rx.try_recv().is_ok() {
+                            received += 1;
+                        }
+                        if i == 1 {
+                            std::thread::yield_now();
+                        }
+                    }
+                    received
+                })
+            })
+            .collect();
+        for frame in 0..FRAMES {
+            fanout.send(frame);
+        }
+        stop.store(true, Relaxed);
+        let mut total_dropped = 0;
+        for ((_, dropped), drain) in outputs.iter().zip(drains) {
+            let received = drain.join().unwrap();
+            let dropped = dropped.load(Relaxed);
+            assert_eq!(received + dropped, u64::from(FRAMES));
+            total_dropped += dropped;
+        }
+        assert_eq!(fanout.total, total_dropped);
+    }
+
+    #[test]
+    fn drop_log_reports_the_first_drop_then_rate_limits() {
+        let mut log = DropLog::default();
+        let start = std::time::Instant::now();
+        assert_eq!(log.record(0, start), None);
+        assert_eq!(log.record(1, start), Some(1));
+        assert_eq!(log.record(3, start + Duration::from_secs(1)), None);
+        assert_eq!(log.record(1, start + Duration::from_secs(4)), None);
+        assert_eq!(log.record(2, start + DropLog::INTERVAL), Some(6));
+        assert_eq!(log.record(0, start + DropLog::INTERVAL * 3), None);
+    }
+
+    #[cfg(target_os = "macos")]
+    mod actor {
+        use super::*;
+
+        /// Scripted runtime stall: the feed actor handles nothing else.
+        struct Hold(Duration, oneshot::Sender<()>);
+
+        impl Message<Hold> for CameraFeed {
+            type Reply = ();
+
+            async fn handle(&mut self, msg: Hold, _: &mut Context<Self, Self::Reply>) {
+                let _ = msg.1.send(());
+                tokio::time::sleep(msg.0).await;
+            }
+        }
+
+        fn frame(index: i64) -> NativeCameraFrame {
+            use cidre::{cm, cv};
+            let buf = cv::PixelBuf::new(16, 16, cv::PixelFormat::_420V, None).unwrap();
+            let desc = cm::VideoFormatDesc::with_image_buf(&buf).unwrap();
+            let timing = cm::SampleTimingInfo {
+                duration: cm::Time::new(1, 30),
+                pts: cm::Time::new(index, 30),
+                dts: cm::Time::invalid(),
+            };
+            let sample_buf =
+                cm::SampleBuf::with_image_buf(&buf, true, None, std::ptr::null(), &desc, &timing)
+                    .unwrap();
+            NativeCameraFrame {
+                sample_buf,
+                timestamp: Timestamp::MachAbsoluteTime(cap_timestamp::MachAbsoluteTimestamp::new(
+                    index as u64,
+                )),
+            }
+        }
+
+        async fn eventually(what: &str, check: impl Fn() -> bool) {
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            while !check() {
+                assert!(std::time::Instant::now() < deadline, "timed out: {what}");
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        }
+
+        struct StalledFeed {
+            feed: ActorRef<CameraFeed>,
+            ingress: Arc<NativeCameraIngress>,
+            dropped: Arc<AtomicU64>,
+            rx: flume::Receiver<NativeCameraFrame>,
+        }
+
+        async fn stalled_feed(capacity: usize, hold: Duration) -> StalledFeed {
+            let ingress = Arc::new(NativeCameraIngress::default());
+            let feed = CameraFeed::spawn(CameraFeed {
+                native_ingress: ingress.clone(),
+                ..CameraFeed::default()
+            });
+            let (tx, rx) = flume::bounded(capacity);
+            let dropped = Arc::new(AtomicU64::new(0));
+            feed.ask(AddCountedNativeSender(tx, dropped.clone()))
+                .await
+                .unwrap();
+            let (held_tx, held_rx) = oneshot::channel();
+            feed.tell(Hold(hold, held_tx)).await.unwrap();
+            held_rx.await.unwrap();
+            StalledFeed {
+                feed,
+                ingress,
+                dropped,
+                rx,
+            }
+        }
+
+        /// The capture callback keeps delivering while the feed is stalled;
+        /// after the stall the feed fans the backlog out in one burst and the
+        /// recording receives every frame, in order.
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn stall_then_burst_keeps_every_frame() {
+            let capacity = native_ingress_capacity(&hd30());
+            let f = stalled_feed(capacity, Duration::from_millis(1500)).await;
+            let recipient = f.feed.clone().recipient::<NewNativeFrame>();
+            let frames: Vec<_> = (0..45).map(frame).collect();
+            for frame in frames {
+                hand_native_frame_to_feed(&recipient, &f.ingress, frame);
+            }
+            eventually("burst delivered", || f.rx.len() == 45).await;
+            assert_eq!(f.ingress.mailbox_full(), 0);
+            assert_eq!(f.dropped.load(Relaxed), 0);
+            let pts: Vec<_> =
+                f.rx.drain()
+                    .map(|frame| frame.sample_buf.pts().value)
+                    .collect();
+            assert_eq!(pts, (0..45).collect::<Vec<_>>());
+        }
+
+        /// Past the mailbox and the ingress queue every lost frame is
+        /// counted, and the callback's hand-over never waits for the stalled
+        /// feed.
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn losses_past_the_bound_are_counted_without_blocking_the_callback() {
+            let capacity = native_ingress_capacity(&hd30());
+            let f = stalled_feed(capacity, Duration::from_millis(1000)).await;
+            let recipient = f.feed.clone().recipient::<NewNativeFrame>();
+            let frames: Vec<_> = (0..70).map(frame).collect();
+            let mut slowest = Duration::ZERO;
+            for frame in frames {
+                let start = std::time::Instant::now();
+                hand_native_frame_to_feed(&recipient, &f.ingress, frame);
+                slowest = slowest.max(start.elapsed());
+            }
+            assert!(
+                slowest < Duration::from_millis(50),
+                "callback hand-over waited {slowest:?}"
+            );
+            // The mailbox holds 64 frames; the other six are lost and counted.
+            assert_eq!(f.ingress.mailbox_full(), 6);
+            eventually("backlog delivered", || f.rx.len() == capacity).await;
+            assert_eq!(f.dropped.load(Relaxed), 0);
+            // The recording still does not drain: the next frames overflow
+            // its ingress queue and are counted.
+            for frame in (70..73).map(frame) {
+                hand_native_frame_to_feed(&recipient, &f.ingress, frame);
+            }
+            eventually("overflow counted", || f.dropped.load(Relaxed) == 3).await;
+            assert_eq!(f.rx.len(), capacity);
+        }
     }
 }

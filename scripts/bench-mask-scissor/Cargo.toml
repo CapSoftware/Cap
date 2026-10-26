@@ -1,0 +1,12 @@
+[package]
+name = "bench-mask-scissor"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+bytemuck = { version = "1.7", features = ["derive"] }
+pollster = "0.4.0"
+wgpu = { version = "25.0.0", features = ["wgpu-core"] }

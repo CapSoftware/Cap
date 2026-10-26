@@ -219,6 +219,43 @@ fn subprocess_exits_after_finish_or_abort_without_waiting_for_stdin_eof() {
 
 #[cfg(unix)]
 #[test]
+fn finish_waits_for_a_muxer_that_takes_more_than_five_seconds_to_exit() {
+    use cap_muxer_protocol::{Frame, read_frame};
+    use std::io::Cursor;
+    use std::os::unix::fs::PermissionsExt;
+    use std::time::{Duration, Instant};
+
+    let directory = TempDir::new().unwrap();
+    let binary = directory.path().join("slow-exit-muxer");
+    std::fs::write(&binary, "#!/bin/sh\ncat > \"$0.received\"\nsleep 6\n").unwrap();
+    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let config = minimal_video_config(&directory.path().join("video"), Vec::new());
+    let mut subprocess = MuxerSubprocess::spawn(binary, config, None).unwrap();
+    let payload = vec![42; 128 * 1024];
+    subprocess
+        .write_video_packet(0, 0, 1, true, &payload)
+        .unwrap();
+    let started = Instant::now();
+    let report = subprocess.finish().unwrap();
+    assert_eq!(report.exit_code, Some(0));
+    assert!(started.elapsed() >= Duration::from_secs(5));
+
+    let received = std::fs::read(directory.path().join("slow-exit-muxer.received")).unwrap();
+    let mut reader = Cursor::new(received.as_slice());
+    assert!(matches!(
+        read_frame(&mut reader).unwrap(),
+        Frame::InitVideo(_)
+    ));
+    assert!(matches!(read_frame(&mut reader).unwrap(), Frame::Start(_)));
+    let Frame::Packet(packet) = read_frame(&mut reader).unwrap() else {
+        panic!("expected the video packet");
+    };
+    assert_eq!(packet.data, payload);
+    assert!(matches!(read_frame(&mut reader).unwrap(), Frame::Finish));
+}
+
+#[cfg(unix)]
+#[test]
 fn finish_preserves_packets_when_a_slow_muxer_takes_more_than_five_seconds() {
     use cap_muxer_protocol::{Frame, read_frame};
     use std::io::Cursor;
@@ -232,10 +269,10 @@ fn finish_preserves_packets_when_a_slow_muxer_takes_more_than_five_seconds() {
     let config = minimal_video_config(&directory.path().join("video"), Vec::new());
     let mut subprocess = MuxerSubprocess::spawn(binary, config, None).unwrap();
     let payload = vec![42; 128 * 1024];
+    let started = Instant::now();
     subprocess
         .write_video_packet(0, 0, 1, true, &payload)
         .unwrap();
-    let started = Instant::now();
     let report = subprocess.finish().unwrap();
     assert_eq!(report.exit_code, Some(0));
     assert!(started.elapsed() >= Duration::from_secs(5));

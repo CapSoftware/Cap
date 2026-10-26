@@ -134,6 +134,7 @@ fn imported_video_meta(
                         start_time: Some(0.0),
                         device_id: None,
                         gap_summary: None,
+                        digital_silence_ms: None,
                     }),
                     cursor: None,
                     keyboard: None,
@@ -256,9 +257,9 @@ fn apply_progress(update: ImportProgress, cx: &mut App) {
     repaint_main_window(cx);
 }
 
-/// The refresh seam a finished import rides: the Recents carousel and the
-/// settings Recordings page (`refresh_library_after_delete`), the open library
-/// panel, and the tray's Previous submenu.
+/// The refresh seam a finished import rides: the Recents carousel, the
+/// settings Recordings page and the tray's Previous submenu
+/// (`refresh_library_after_delete`), and the open library panel.
 fn refresh_libraries(cx: &mut App) {
     if !cx.has_global::<crate::app_windows::AppWindows>() {
         return;
@@ -267,7 +268,6 @@ fn refresh_libraries(cx: &mut App) {
     let main = cx.global::<crate::app_windows::AppWindows>().main;
     main.update(cx, |view, window, cx| view.refresh_open_library(window, cx))
         .ok();
-    crate::tray::refresh_previous(cx);
 }
 
 /// The main window is rarely the active window while an import ticks, and an
@@ -834,6 +834,12 @@ fn h264_bitrate(width: u32, height: u32, frame_rate: f32) -> usize {
     (area * frame_rate_multiplier * 0.3) as usize
 }
 
+fn frame_duration_ticks(time_base: ffmpeg::Rational, fps: u32) -> i64 {
+    let ticks = f64::from(time_base.denominator())
+        / (f64::from(time_base.numerator().max(1)) * f64::from(fps.max(1)));
+    (ticks.round() as i64).max(1)
+}
+
 fn import_decode_threads() -> usize {
     std::thread::available_parallelism().map_or(1, |count| count.get().min(8))
 }
@@ -1301,6 +1307,7 @@ struct H264Output {
     stream_index: usize,
     pixel_format: avformat::Pixel,
     packet: ffmpeg::Packet,
+    frame_duration: i64,
     first_pts: Option<i64>,
     last_frame_pts: Option<i64>,
     last_written_dts: Option<i64>,
@@ -1364,12 +1371,14 @@ fn open_h264_encoder(
                     fps,
                     "import H264 encoder ready"
                 );
+                let frame_duration = frame_duration_ticks(encoder.time_base(), fps);
                 return Ok(H264Output {
                     strict: false,
                     encoder,
                     stream_index,
                     pixel_format,
                     packet: ffmpeg::Packet::empty(),
+                    frame_duration,
                     first_pts: None,
                     last_frame_pts: None,
                     last_written_dts: None,
@@ -1493,6 +1502,12 @@ impl H264Output {
             "Video encode",
         )? {
             self.packet.set_stream(self.stream_index);
+            // Encoders leave this at 0, and the mp4 muxer then gives the last
+            // sample no duration, so the edit list ends one frame early and
+            // players discard the final frame.
+            if self.packet.duration() <= 0 {
+                self.packet.set_duration(self.frame_duration);
+            }
             self.packet.rescale_ts(
                 self.encoder.time_base(),
                 output.stream(self.stream_index).unwrap().time_base(),
@@ -2109,6 +2124,32 @@ mod tests {
             .count()
     }
 
+    fn decoded_video_frames(path: &Path) -> usize {
+        let mut input = avformat::input(path).unwrap();
+        let stream = input.streams().best(ffmpeg::media::Type::Video).unwrap();
+        let index = stream.index();
+        let mut decoder = avcodec::Context::from_parameters(stream.parameters())
+            .unwrap()
+            .decoder()
+            .video()
+            .unwrap();
+        let mut frame = ffmpeg::frame::Video::empty();
+        let mut frames = 0;
+        for (stream, packet) in input.packets() {
+            if stream.index() == index {
+                decoder.send_packet(&packet).unwrap();
+                while decoder.receive_frame(&mut frame).is_ok() {
+                    frames += 1;
+                }
+            }
+        }
+        decoder.send_eof().unwrap();
+        while decoder.receive_frame(&mut frame).is_ok() {
+            frames += 1;
+        }
+        frames
+    }
+
     fn decoded_audio_seconds(path: &Path) -> f64 {
         let mut input = avformat::input(path).unwrap();
         let stream = input.streams().best(ffmpeg::media::Type::Audio).unwrap();
@@ -2156,6 +2197,9 @@ mod tests {
         assert!(sample_rate.is_some());
         assert_eq!(count_video_packets(&source), 25);
         assert_eq!(count_video_packets(&output), 25);
+        assert_eq!(decoded_video_frames(&output), 25);
+        let duration = media_duration(&output).unwrap().as_secs_f64();
+        assert!((duration - 1.0).abs() < 0.01, "{duration}");
         let audio_seconds = decoded_audio_seconds(&audio);
         assert!((0.9..=1.1).contains(&audio_seconds), "{audio_seconds}");
         std::fs::remove_dir_all(root).unwrap();

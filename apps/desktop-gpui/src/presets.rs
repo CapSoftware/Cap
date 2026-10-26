@@ -124,7 +124,7 @@ impl PresetsStore {
 /// presentation defaults the recorder applies (`recording.rs`
 /// `apply_screen_recording_presentation_defaults`): 10% padding, 7.5%
 /// rounding and the default screen-movement spring.
-pub fn default_project_config() -> ProjectConfiguration {
+pub fn default_project_config(current: &ProjectConfiguration) -> ProjectConfiguration {
     let mut config = ProjectConfiguration::default();
     if config.background.padding <= f64::EPSILON {
         config.background.padding = 10.0;
@@ -133,34 +133,33 @@ pub fn default_project_config() -> ProjectConfiguration {
         config.background.rounding = 7.5;
     }
     config.screen_movement_spring = cap_project::ScreenMovementSpring::default();
-    config
+    current.with_preset(config)
 }
 
-/// What a preset stores: the whole project config with `timeline: null` and
-/// `clips: []` -- presets style a project, they never carry its cuts
-/// (`createPresets.ts:31-35`).
+/// Presets store styling without recording cuts, caption text or layer order.
 pub fn preset_config(project: &ProjectConfiguration) -> Value {
     let mut value = serde_json::to_value(project).unwrap_or(Value::Null);
     if let Some(map) = value.as_object_mut() {
         map.insert("timeline".into(), Value::Null);
         map.insert("clips".into(), Value::Array(Vec::new()));
         map.remove("overlayOrder");
+        if let Some(captions) = map.get_mut("captions").and_then(Value::as_object_mut) {
+            captions.insert("segments".into(), Value::Array(Vec::new()));
+            captions.remove("sourceTimed");
+        }
     }
     value
 }
 
 /// `applyPreset`'s merge (`PresetsDropdown.tsx`): the preset's config with the
-/// *current* timeline and clips kept in place. `None` when the stored JSON no
-/// longer deserializes.
+/// *current* timeline, clips and caption source kept in place. `None` when the
+/// stored JSON no longer deserializes.
 pub fn apply_preset(
     config: &Value,
     current: &ProjectConfiguration,
 ) -> Option<ProjectConfiguration> {
-    let mut next: ProjectConfiguration = serde_json::from_value(config.clone()).ok()?;
-    next.timeline = current.timeline.clone();
-    next.overlay_order = current.overlay_order.clone();
-    next.clips = current.clips.clone();
-    Some(next)
+    let next = serde_json::from_value(config.clone()).ok()?;
+    Some(current.with_preset(next))
 }
 
 #[cfg(test)]
@@ -262,6 +261,174 @@ mod tests {
         assert_eq!(applied.background.blur, 42.);
         assert_eq!(applied.overlay_order, current.overlay_order);
         assert!(applied.timeline.is_some(), "current timeline is kept");
+    }
+
+    #[test]
+    fn applying_a_legacy_tauri_preset_keeps_text_unchanged_after_reopening() {
+        let store: Value = serde_json::from_str(
+            r#"{
+                "presets": {
+                    "default": 0,
+                    "presets": [{
+                        "name": "Legacy Tauri preset",
+                        "config": {
+                            "background": { "padding": 24.0 },
+                            "camera": { "size": 45.0, "zoom_size": 65.0 },
+                            "timeline": null,
+                            "clips": []
+                        }
+                    }]
+                }
+            }"#,
+        )
+        .unwrap();
+        let presets = PresetsStore::from_section(store["presets"].as_object().unwrap().clone());
+        let current: ProjectConfiguration = serde_json::from_str(
+            r#"{
+                "textSizeVersion": 1,
+                "textAnimVersion": 1,
+                "timeline": {
+                    "segments": [{ "recordingSegment": 0, "start": 0.0, "end": 5.0, "timescale": 1.0 }],
+                    "zoomSegments": [],
+                    "textSegments": [{
+                        "start": 1.0,
+                        "end": 4.0,
+                        "content": "Keep this title",
+                        "size": { "x": 0.6, "y": 0.4 },
+                        "fontSize": 48.0,
+                        "fadeDuration": 0.15,
+                        "animationIn": "slideUp",
+                        "animationOut": "slideDown",
+                        "animationInDuration": 0.4,
+                        "animationOutDuration": 0.6
+                    }]
+                },
+                "clips": [{ "index": 0, "offsets": { "mic": -0.125 } }]
+            }"#,
+        )
+        .unwrap();
+        let applied = apply_preset(&presets.presets[0].config, &current).unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        applied.write(directory.path()).unwrap();
+        let reopened = ProjectConfiguration::load(directory.path()).unwrap();
+
+        assert_eq!(reopened.background.padding, 24.0);
+        assert_eq!(reopened.camera.size, 45.0);
+        assert_eq!(reopened.camera.zoom_size, Some(65.0));
+        assert_eq!(
+            serde_json::to_value(&reopened.timeline).unwrap(),
+            serde_json::to_value(&current.timeline).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_value(&reopened.clips).unwrap(),
+            serde_json::to_value(&current.clips).unwrap()
+        );
+    }
+
+    fn captioned_project(text: &str, source_timed: bool) -> ProjectConfiguration {
+        serde_json::from_value(json!({
+            "timeline": {
+                "segments": [{ "start": 0.0, "end": 10.0, "timescale": 1.0 }],
+                "zoomSegments": [],
+                "captionSegments": [{
+                    "id": "spoken", "start": 2.0, "end": 3.0, "text": text,
+                    "words": [{ "text": text, "start": 2.0, "end": 3.0 }],
+                    "colorOverride": "#123456", "positionOverride": "top-center"
+                }]
+            },
+            "captions": {
+                "segments": [{
+                    "id": "spoken", "start": 2.0, "end": 3.0, "text": text,
+                    "words": [{ "text": text, "start": 2.0, "end": 3.0 }]
+                }],
+                "settings": { "enabled": true, "size": 32 },
+                "sourceTimed": source_timed
+            }
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn saving_a_preset_keeps_caption_settings_without_the_transcript() {
+        let source = captioned_project("Other recording", true);
+        let preset = preset_config(&source);
+        let captions = &preset["captions"];
+        assert_eq!(captions["segments"], json!([]));
+        assert_eq!(captions["settings"]["size"], 32);
+        assert!(captions.get("sourceTimed").is_none());
+        assert!(
+            !serde_json::to_string(&preset)
+                .unwrap()
+                .contains("Other recording")
+        );
+    }
+
+    #[test]
+    fn applying_a_preset_keeps_source_captions_and_timeline_overrides() {
+        let preset = serde_json::to_value(captioned_project("Other recording", false)).unwrap();
+        for source_timed in [false, true] {
+            let current = captioned_project("Current recording", source_timed);
+            let mut preset = preset.clone();
+            preset["captions"]["settings"]["size"] = json!(72);
+            let mut applied = apply_preset(&preset, &current).unwrap();
+            let captions = applied.captions.as_ref().unwrap();
+            assert_eq!(captions.segments[0].text, "Current recording");
+            assert_eq!(captions.source_timed, source_timed);
+            assert_eq!(captions.settings.size, 72);
+            assert!(captions.settings.enabled);
+            cap_project::synchronize_captions(&mut applied, &[10.0]);
+            let track = &applied.timeline.as_ref().unwrap().caption_segments[0];
+            assert_eq!(track.text, "Current recording");
+            assert_eq!((track.start, track.end), (2.0, 3.0));
+            assert_eq!(track.color_override.as_deref(), Some("#123456"));
+            assert_eq!(track.position_override.as_deref(), Some("top-center"));
+            let directory = tempfile::tempdir().unwrap();
+            applied.write(directory.path()).unwrap();
+            let mut reopened = ProjectConfiguration::load(directory.path()).unwrap();
+            cap_project::synchronize_captions(&mut reopened, &[10.0]);
+            assert_eq!(
+                reopened.captions.as_ref().unwrap().segments[0].text,
+                "Current recording"
+            );
+            assert_eq!(
+                reopened.timeline.as_ref().unwrap().caption_segments[0].text,
+                "Current recording"
+            );
+        }
+    }
+
+    #[test]
+    fn applying_default_caption_settings_keeps_the_current_transcript() {
+        let current = captioned_project("Current recording", true);
+        let preset = preset_config(&ProjectConfiguration::default());
+        for applied in [
+            apply_preset(&preset, &current).unwrap(),
+            default_project_config(&current),
+        ] {
+            let captions = applied.captions.as_ref().unwrap();
+            assert_eq!(captions.segments[0].text, "Current recording");
+            assert!(captions.source_timed);
+            assert_eq!(
+                captions.settings.size,
+                cap_project::CaptionSettings::default().size
+            );
+            assert!(!captions.settings.enabled);
+        }
+    }
+
+    #[test]
+    fn applying_a_preset_to_an_uncaptioned_project_keeps_only_its_settings() {
+        let source = captioned_project("Other recording", true);
+        let preset = serde_json::to_value(&source).unwrap();
+        let current = ProjectConfiguration::default();
+        let applied = apply_preset(&preset, &current).unwrap();
+        let captions = applied.captions.as_ref().unwrap();
+        assert!(captions.segments.is_empty());
+        assert_eq!(captions.settings.size, 32);
+        assert!(captions.settings.enabled);
+        let preset = preset_config(&current);
+        assert!(apply_preset(&preset, &current).unwrap().captions.is_none());
+        assert!(default_project_config(&current).captions.is_none());
     }
 
     #[test]

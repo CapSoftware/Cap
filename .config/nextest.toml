@@ -1,0 +1,71 @@
+# cargo-nextest settings. The engine verification suite (scripts/verify/run.sh)
+# runs with the `default` profile locally and `ci` in engine-verify.yml.
+
+[profile.default]
+retries = 0
+fail-fast = false
+slow-timeout = { period = "60s" }
+
+# The decoder model fuzzers run 3 to 4 worker threads each.
+[[profile.default.overrides]]
+filter = 'binary_id(cap-rendering) and test(/^decoder::model::/)'
+threads-required = 3
+
+# Wall-clock tests run first and alone. crash_safety hands frames to a
+# real-time VideoToolbox session on a 30 fps schedule, and realtime_loop
+# counts the frames playback presents against the clock. Sharing the runner
+# with the seek storms, chaos and export tests starves them. On macOS,
+# crash/equality lost 3 to 7 frames in 6 shared runs and passed in all 6
+# solo reruns; realtime30 presented 65% of its frames shared and passed solo.
+[[profile.default.overrides]]
+filter = '(binary_id(cap-verify::crash) and test(=crash_safety)) or (binary_id(cap-verify::playback) and test(=realtime_loop))'
+threads-required = "num-test-threads"
+priority = 100
+
+[profile.ci]
+# No retries: a flaky case is a bug. run.sh reruns failures once afterwards
+# only to label them flaky in the job summary; the job still fails.
+retries = 0
+fail-fast = false
+failure-output = "immediate-final"
+success-output = "never"
+status-level = "pass"
+final-status-level = "slow"
+slow-timeout = { period = "60s", terminate-after = 15 }
+
+[profile.ci.junit]
+path = "junit.xml"
+store-success-output = false
+store-failure-output = true
+
+[[profile.ci.overrides]]
+filter = 'binary_id(cap-rendering) and test(/^decoder::model::/)'
+threads-required = 3
+
+# Wall-clock tests run first and alone, as in the default profile.
+[[profile.ci.overrides]]
+filter = '(binary_id(cap-verify::crash) and test(=crash_safety)) or (binary_id(cap-verify::playback) and test(=realtime_loop))'
+threads-required = "num-test-threads"
+priority = 100
+
+# Playback and seek ask for each frame with a deadline (2 s, 10 s for a
+# seek's first frame). On the blacksmith macOS VMs, Apple's video decoding
+# stalls once every core is busy: a standalone AVAssetReader read went from
+# 0.4 ms to 55-77 ms a frame with all 6 cores loaded, and stayed under 1 ms
+# with half of them loaded (a real Mac and the hosted macos-15 VM are
+# unaffected). Shared with the export and chaos tests, frames then missed
+# their deadline ("decoders returned no frame"), so on macOS these run alone,
+# after the wall-clock tests.
+[[profile.ci.overrides]]
+platform = 'cfg(target_os = "macos")'
+filter = '(binary_id(cap-verify::playback) and not test(=realtime_loop)) or binary_id(cap-verify::seek)'
+threads-required = "num-test-threads"
+priority = 90
+
+# The FULL-tier seek storms (3000 seeks per decoder) are the slowest tests:
+# on the macos-15 runner one storm fixture takes 240 to 570 s per decoder,
+# up to about 900 s for both decoders on one shard. Twice that, so a real
+# hang still fails.
+[[profile.ci.overrides]]
+filter = 'binary_id(cap-verify::seek) and test(/^storm_/)'
+slow-timeout = { period = "60s", terminate-after = 30 }

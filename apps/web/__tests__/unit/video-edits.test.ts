@@ -224,6 +224,79 @@ describe("timeline editing", () => {
 		expect(mapTimelineDisplayTimeToSourceTime(deleted, 3)).toBe(3);
 	});
 
+	it("preserves display offsets and split indices across trimmed deletions", () => {
+		const state = {
+			...createTimelineState(20),
+			trimStart: 2,
+			trimEnd: 18,
+			splitPoints: [17, 14, 12, 10, 9, 8, 7, 6, 4, 3],
+			deletedRanges: [
+				{ start: 17, end: 19 },
+				{ start: 10, end: 12 },
+				{ start: 6, end: 8 },
+				{ start: 1, end: 3 },
+			],
+			selectedSegmentId: "8:9",
+		};
+
+		expect(
+			getTimelineDisplaySegments(state).map(
+				({ start, end, displayStart, displayEnd, selected }) => ({
+					start,
+					end,
+					displayStart,
+					displayEnd,
+					selected,
+				}),
+			),
+		).toEqual([
+			{ start: 3, end: 4, displayStart: 1, displayEnd: 2, selected: false },
+			{ start: 4, end: 6, displayStart: 2, displayEnd: 4, selected: false },
+			{ start: 8, end: 9, displayStart: 4, displayEnd: 5, selected: true },
+			{ start: 9, end: 10, displayStart: 5, displayEnd: 6, selected: false },
+			{ start: 12, end: 14, displayStart: 6, displayEnd: 8, selected: false },
+			{ start: 14, end: 17, displayStart: 8, displayEnd: 11, selected: false },
+		]);
+		expect(
+			getTimelineDisplaySplitPoints(state).map(
+				({ time, sourceTimes, splitIndices }) => ({
+					time,
+					sourceTimes,
+					splitIndices,
+				}),
+			),
+		).toEqual([
+			{ time: 2, sourceTimes: [4], splitIndices: [1] },
+			{ time: 4, sourceTimes: [6, 8], splitIndices: [2, 3] },
+			{ time: 5, sourceTimes: [9], splitIndices: [4] },
+			{ time: 6, sourceTimes: [10, 12], splitIndices: [5, 6] },
+			{ time: 8, sourceTimes: [14], splitIndices: [7] },
+		]);
+	});
+
+	it("retains nearby split indices when a subminimum segment is omitted", () => {
+		const state = {
+			...createTimelineState(10),
+			splitPoints: [1, 1.001, 2, 3, 7, 8],
+			deletedRanges: [{ start: 3, end: 7 }],
+		};
+
+		expect(
+			getTimelineDisplaySplitPoints(state).map(
+				({ time, sourceTimes, splitIndices }) => ({
+					time,
+					sourceTimes,
+					splitIndices,
+				}),
+			),
+		).toEqual([
+			{ time: 1, sourceTimes: [1], splitIndices: [0, 1] },
+			{ time: 2, sourceTimes: [2], splitIndices: [2] },
+			{ time: 3, sourceTimes: [3, 7], splitIndices: [3, 4] },
+			{ time: 4, sourceTimes: [8], splitIndices: [5] },
+		]);
+	});
+
 	it("removes a collapsed display split by restoring the deleted segment", () => {
 		const splitState = splitTimelineAt(
 			splitTimelineAt(createTimelineState(10), 3),
