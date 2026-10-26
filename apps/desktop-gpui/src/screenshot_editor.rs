@@ -2522,7 +2522,7 @@ impl ScreenshotEditorWindow {
             }
             MenuKind::CornerStyle => {
                 self.menu = None;
-                let Some((style, _)) = Self::CORNER_STYLES.get(index) else {
+                let Some(style) = Self::CORNER_STYLES.get(index) else {
                     return;
                 };
                 let style = *style;
