@@ -622,8 +622,6 @@ fn map_timeline_to_recording_secs(
     last.recording_start + (last.timeline_end - last.timeline_start) * last.timescale
 }
 
-/// When an auto zoom spans a timeline cut, returns the cursor moves the viewer
-/// actually sees during it and the recording range they cover.
 fn cursor_events_across_cut(
     time_map: &[TimeMapSegment],
     segment: &ZoomSegment,
