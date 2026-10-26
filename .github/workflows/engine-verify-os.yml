@@ -264,6 +264,7 @@ jobs:
           fi
 
       - name: Print Windows crash stacks
+        id: windows-crash-dumps
         if: failure() && inputs.platform == 'windows'
         continue-on-error: true
         shell: bash
@@ -276,10 +277,11 @@ jobs:
             "$cdb" -z "$(cygpath -w "$dump")" -y "$symbols" -c ".ecxr; kn 40; q" 2>&1 |
               grep -E 'Access violation|code [0-9a-f]{8} |^[^ ]+![^ ]+.*:$|^ # Child-SP|^[0-9a-f]{2} ' | head -60
             echo "::endgroup::"
+            echo "collected=true" >> "$GITHUB_OUTPUT"
           done
 
       - name: Upload report
-        if: always() && (steps.test.outcome != 'skipped' || steps.crash-reports.outputs.collected == 'true')
+        if: always() && (steps.test.outcome != 'skipped' || steps.crash-reports.outputs.collected == 'true' || steps.windows-crash-dumps.outputs.collected == 'true')
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: verify-report-${{ inputs.platform }}-${{ inputs.tier }}-${{ matrix.shard }}
