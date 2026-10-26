@@ -59,6 +59,8 @@ pub enum ExporterBuildError {
     MediaLoad(String),
     #[error("IO error at path '{0}': {1}")]
     IO(PathBuf, std::io::Error),
+    #[error("There is nothing to export: the timeline is empty")]
+    NothingToExport,
 }
 
 pub struct ExporterBuilder {
@@ -85,14 +87,18 @@ impl ExporterBuilder {
     }
 
     pub async fn build(self) -> Result<ExporterBase, ExporterBuildError> {
-        self.build_inner(None).await
+        self.build_inner(None, true).await
+    }
+
+    pub async fn build_video_only(self) -> Result<ExporterBase, ExporterBuildError> {
+        self.build_inner(None, false).await
     }
 
     pub async fn build_for_mp4(
         self,
         cancellation: Arc<AtomicBool>,
     ) -> Result<Mp4ExporterBase, ExporterBuildError> {
-        self.build_inner(Some(cancellation))
+        self.build_inner(Some(cancellation), true)
             .await
             .map(Mp4ExporterBase)
     }
@@ -110,9 +116,11 @@ impl ExporterBuilder {
     async fn build_inner(
         mut self,
         cancellation: Option<Arc<AtomicBool>>,
+        include_audio: bool,
     ) -> Result<ExporterBase, ExporterBuildError> {
         type Error = ExporterBuildError;
 
+        cap_editor::release_playback_audio_caches();
         let mut project_config = self.load_project_config()?;
 
         let recording_meta =
@@ -127,7 +135,20 @@ impl ExporterBuilder {
         );
 
         synthesize_default_timeline(&mut project_config, &recordings);
+        fill_clip_offsets(
+            &mut project_config,
+            &recording_meta.project_path,
+            studio_meta,
+        );
 
+        cap_project::clamp_timeline_to_sources(
+            &mut project_config,
+            &recordings
+                .segments
+                .iter()
+                .map(|segment| segment.display.duration)
+                .collect::<Vec<_>>(),
+        );
         cap_project::synchronize_legacy_keyboard(&recording_meta, &mut project_config);
         cap_project::synchronize_captions(
             &mut project_config,
@@ -138,9 +159,21 @@ impl ExporterBuilder {
                 .collect::<Vec<_>>(),
         );
 
+        let duration =
+            cap_rendering::get_duration(&recordings, &recording_meta, studio_meta, &project_config);
+        if duration.is_nan() || duration <= 0.0 {
+            return Err(Error::NothingToExport);
+        }
+
         let output_path = self
             .output_path
             .unwrap_or_else(|| recording_meta.output_path());
+
+        if let Some(parent) = output_path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| ExporterBuildError::IO(parent.to_path_buf(), e))?;
+        }
+
         let streaming_output = prepare_streaming_output(
             &output_path,
             cancellation.is_some() && ExportAudioRenderer::eligible(&project_config, studio_meta),
@@ -179,6 +212,15 @@ impl ExporterBuilder {
             let (segments, audio) =
                 finish_audio_preparation(segments, preparation, &control.stop).await?;
             (segments, Some(audio))
+        } else if !include_audio {
+            let segments = cap_editor::create_segments_without_audio(
+                &recording_meta,
+                studio_meta,
+                self.force_ffmpeg_decoder,
+            )
+            .await
+            .map_err(Error::MediaLoad)?;
+            (segments, None)
         } else {
             let segments = cap_editor::create_segments(
                 &recording_meta,
@@ -200,11 +242,6 @@ impl ExporterBuilder {
             }
         }
 
-        if let Some(parent) = output_path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| ExporterBuildError::IO(parent.to_path_buf(), e))?;
-        }
-
         Ok(ExporterBase {
             output_path,
             studio_meta: studio_meta.clone(),
@@ -219,6 +256,8 @@ impl ExporterBuilder {
             audio_cancellation,
             sample_windows: None,
             sample_timing: None,
+            #[cfg(feature = "test-hooks")]
+            video_encoder_failure_at: None,
         })
     }
 }
@@ -356,14 +395,23 @@ pub fn make_cursor_only_project(mut project_config: ProjectConfiguration) -> Pro
 fn prepare_streaming_output(
     output: &std::path::Path,
     eligible: bool,
-) -> Option<mp4::TemporaryMp4Output> {
-    if !eligible
-        || output.extension().and_then(|extension| extension.to_str()) != Some("mp4")
-        || !matches!(std::fs::symlink_metadata(output), Err(error) if error.kind() == std::io::ErrorKind::NotFound)
-    {
+) -> Option<mp4::TemporaryExportOutput> {
+    if !eligible || output.extension().and_then(|extension| extension.to_str()) != Some("mp4") {
         return None;
     }
-    mp4::temporary_mp4_output(output).ok()
+    prepare_new_output(output).ok().flatten()
+}
+
+/// Stages a new export beside its destination so a failed or cancelled export
+/// never leaves a partial file there. Existing destinations are written in place.
+fn prepare_new_output(
+    output: &std::path::Path,
+) -> Result<Option<mp4::TemporaryExportOutput>, String> {
+    if !matches!(std::fs::symlink_metadata(output), Err(error) if error.kind() == std::io::ErrorKind::NotFound)
+    {
+        return Ok(None);
+    }
+    mp4::temporary_export_output(output).map(Some)
 }
 
 struct ExportAudioCancellation {
@@ -396,6 +444,11 @@ impl Mp4ExporterBase {
     pub fn uses_streaming_audio(&self) -> bool {
         self.0.streaming_audio.is_some()
     }
+
+    #[cfg(feature = "test-hooks")]
+    pub fn fail_video_encoder_at(&mut self, frames: u32) {
+        self.0.fail_video_encoder_at(frames);
+    }
 }
 
 pub struct ExporterBase {
@@ -408,13 +461,59 @@ pub struct ExporterBase {
     segments: Vec<SegmentMedia>,
     output_path: PathBuf,
     streaming_audio: Option<ExportAudioRenderer>,
-    streaming_output: Option<mp4::TemporaryMp4Output>,
+    streaming_output: Option<mp4::TemporaryExportOutput>,
     audio_cancellation: Option<ExportAudioCancellation>,
     sample_windows: Option<cap_rendering::FrameWindows>,
     sample_timing: Option<Arc<estimates::SampleTiming>>,
+    #[cfg(feature = "test-hooks")]
+    video_encoder_failure_at: Option<u32>,
 }
 
 impl ExporterBase {
+    /// Makes the MP4 export's video encoder fail after `frames` frames the
+    /// way a hardware encoder does at runtime, once, so the software
+    /// encoder fallback runs on every machine.
+    #[cfg(feature = "test-hooks")]
+    pub fn fail_video_encoder_at(&mut self, frames: u32) {
+        self.video_encoder_failure_at = Some(frames);
+    }
+
+    /// Reopens what an MP4 export consumes (the staged output and the
+    /// streaming audio with its cancellation) so the export can start over.
+    async fn reopen_streaming(
+        &mut self,
+        user_cancellation: Option<Arc<AtomicBool>>,
+    ) -> Result<(), String> {
+        let Some(user) = user_cancellation else {
+            return Ok(());
+        };
+        let control = ExportAudioCancellation::new(user);
+        let recording = self.recording_meta.clone();
+        let studio = self.studio_meta.clone();
+        let cancellation = control.user.clone();
+        let abort = control.stop.clone();
+        let preparation = tokio::task::spawn_blocking(move || {
+            ExportAudioPreparation::open(&recording, &studio, cancellation, abort)
+        })
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())?;
+        self.streaming_audio = Some(
+            preparation
+                .finish(&self.segments)
+                .map_err(|error| error.to_string())?,
+        );
+        // The first attempt staged its output, so the restart must too: if
+        // something created the destination meanwhile, writing in place
+        // would truncate it.
+        self.streaming_output = Some(
+            prepare_streaming_output(&self.output_path, true)
+                .ok_or("Could not stage the export output to restart on the software encoder")?,
+        );
+        self.audio_cancellation = Some(control);
+        Ok(())
+    }
+
     pub fn total_frames(&self, fps: u32) -> u32 {
         let duration = cap_rendering::get_duration(
             &self.recordings,
@@ -634,6 +733,23 @@ mod cancellation_tests {
     }
 
     #[test]
+    fn new_gif_destinations_are_staged_beside_the_output() {
+        let directory = tempfile::tempdir().unwrap();
+        let output = directory.path().join("export.gif");
+        let staged = prepare_new_output(&output).unwrap().unwrap();
+        let staged_path = staged.to_path_buf();
+        assert_eq!(staged_path.parent(), Some(directory.path()));
+        assert_eq!(staged_path.extension(), output.extension());
+        assert!(!output.exists());
+        staged.persist_noclobber(&output).unwrap();
+        assert!(output.exists());
+        assert!(!staged_path.exists());
+
+        assert!(prepare_new_output(&output).unwrap().is_none());
+        assert!(prepare_new_output(&directory.path().join("missing/export.gif")).is_err());
+    }
+
+    #[test]
     fn prepared_destination_is_removed_when_preparation_is_dropped() {
         let directory = tempfile::tempdir().unwrap();
         let output = directory.path().join("export.mp4");
@@ -700,6 +816,97 @@ mod forward_read_tests {
             "transitions": [{ "segmentIndex": 1, "type": "cross-fade", "duration": 0.5 }],
             "zoomSegments": []
         }))));
+    }
+}
+
+/// A Studio recording with a camera is saved without clip offsets: the
+/// editor fills them in from the tracks' start times (and the devices'
+/// calibration) when it first opens the project. An export of a project the
+/// editor never opened would otherwise play every audio track from its own
+/// start, late against the screen by how much earlier it started.
+fn fill_clip_offsets(
+    config: &mut ProjectConfiguration,
+    project_path: &std::path::Path,
+    studio_meta: &StudioRecordingMeta,
+) {
+    if config.clips.is_empty() {
+        config.clips = cap_editor::initial_clip_configuration(project_path, studio_meta);
+    }
+}
+
+#[cfg(test)]
+mod clip_offset_tests {
+    use super::*;
+    use cap_project::{
+        AudioMeta, ClipConfiguration, ClipOffsets, Cursors, MultipleSegment, MultipleSegments,
+        VideoMeta,
+    };
+
+    fn camera_recording() -> StudioRecordingMeta {
+        let video = |path: &str, start: f64| VideoMeta {
+            path: path.into(),
+            fps: 30,
+            start_time: Some(start),
+            device_id: None,
+        };
+        let audio = |path: &str, start: f64| AudioMeta {
+            path: path.into(),
+            start_time: Some(start),
+            device_id: None,
+            gap_summary: None,
+            digital_silence_ms: None,
+        };
+        StudioRecordingMeta::MultipleSegments {
+            inner: MultipleSegments {
+                segments: vec![MultipleSegment {
+                    display: video("display.mp4", 0.2026),
+                    camera: Some(video("camera.mp4", 0.0331)),
+                    mic: Some(audio("audio-input.ogg", 0.0331)),
+                    system_audio: Some(audio("system_audio.ogg", 0.0)),
+                    cursor: None,
+                    keyboard: None,
+                    display_notch: None,
+                }],
+                cursors: Cursors::default(),
+                status: None,
+            },
+        }
+    }
+
+    #[test]
+    fn a_project_without_clip_offsets_gets_the_editors() {
+        let dir = tempfile::tempdir().unwrap();
+        let meta = camera_recording();
+        let mut config = ProjectConfiguration::default();
+        assert!(config.clips.is_empty());
+        fill_clip_offsets(&mut config, dir.path(), &meta);
+        let offsets = config.clips[0].offsets;
+        assert!((offsets.mic - 0.1695).abs() < 1e-4, "mic {}", offsets.mic);
+        assert!(
+            (offsets.system_audio - 0.2026).abs() < 1e-4,
+            "system {}",
+            offsets.system_audio
+        );
+        assert_eq!(offsets.camera, 0.0);
+    }
+
+    #[test]
+    fn saved_clip_offsets_are_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = ProjectConfiguration {
+            clips: vec![ClipConfiguration {
+                index: 0,
+                offsets: ClipOffsets {
+                    camera: 0.0,
+                    mic: 0.5,
+                    system_audio: 0.0,
+                },
+                offsets_auto_calculated: false,
+            }],
+            ..Default::default()
+        };
+        fill_clip_offsets(&mut config, dir.path(), &camera_recording());
+        assert_eq!(config.clips[0].offsets.mic, 0.5);
     }
 }
 

@@ -6,9 +6,9 @@ mod linux_camera;
 #[cfg(target_os = "linux")]
 pub use linux_camera::{
     LINUX_CAMERA_MAX_MASK_AGE, LinuxCameraBlur, LinuxCameraEffect, LinuxCameraMaskReceipt,
-    LinuxCameraPresentation, LinuxCameraPresentationError, LinuxCameraProcessing,
-    LinuxCameraPublisher, LinuxCameraRect, LinuxCameraShape, LinuxProcessedCameraFrame,
-    LinuxProcessedCameraSource,
+    LinuxCameraPixels, LinuxCameraPresentation, LinuxCameraPresentationError,
+    LinuxCameraProcessing, LinuxCameraPublisher, LinuxCameraRect, LinuxCameraShape,
+    LinuxProcessedCameraFrame, LinuxProcessedCameraSource,
 };
 
 use crate::{
@@ -710,6 +710,11 @@ async fn create_pipeline(
     start_time: Timestamps,
     start_gate: Option<RecordingStartGate>,
 ) -> anyhow::Result<Pipeline> {
+    // Instant merges its screen and audio tracks by timestamp, and gated
+    // audio starts at the arm point, so the screen must start there too.
+    if let Some(gate) = &start_gate {
+        gate.set_video_origin_at_arm();
+    }
     let ScreenPipelineInput {
         source: screen_capture,
         info: screen_info,
@@ -817,6 +822,7 @@ async fn create_pipeline(
                 output_pipeline::DashSegmentedAudioMuxerConfig {
                     shared_pause_state: None,
                     segment_tx: segment_tx_for_audio,
+                    write_behind: cfg!(target_os = "macos"),
                     ..Default::default()
                 },
             )

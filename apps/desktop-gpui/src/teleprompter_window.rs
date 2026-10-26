@@ -29,6 +29,7 @@ use gpui::{
     prelude::FluentBuilder, px, svg,
 };
 
+use crate::theme::LocaleFont as _;
 use crate::{
     platform,
     session::{Phase, RecordingSession},
@@ -593,6 +594,7 @@ impl Render for TeleprompterWindow {
                 this.border_1().border_color(color)
             })
             .font_family(crate::theme::UI_FONT)
+            .locale_font()
             // `body { font-weight: 500 }` (`ui-solid/src/main.css:189-192`).
             .font_weight(FontWeight::MEDIUM)
             .text_color(Hsla::from(theme.gray_12))

@@ -1,10 +1,14 @@
 mod async_camera;
 mod core;
 pub mod ffmpeg;
+#[cfg(any(windows, test))]
+mod frame_pacing;
 #[cfg(target_os = "macos")]
 mod macos_fragmented_m4s;
 #[cfg(target_os = "macos")]
 mod macos_frame_convert;
+#[cfg(any(windows, test))]
+mod mjpeg;
 #[cfg(target_os = "macos")]
 mod oop_fragmented_m4s;
 pub mod oop_muxer;

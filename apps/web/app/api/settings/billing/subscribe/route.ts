@@ -1,21 +1,42 @@
 import { db } from "@cap/database";
+import { isCrossSiteCookieWrite } from "@cap/database/auth/request-site";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { users } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
-import { stripe, userIsPro } from "@cap/utils";
+import { isValidStripePlanPriceId, stripe, userIsPro } from "@cap/utils";
 import { eq } from "drizzle-orm";
 import type { NextRequest } from "next/server";
 import type Stripe from "stripe";
+import { parseCheckoutQuantity } from "@/lib/checkout-quantity";
 import { trackServerEvent } from "@/lib/server-analytics";
 
 export async function POST(request: NextRequest) {
-	const user = await getCurrentUser();
+	const user = isCrossSiteCookieWrite(request) ? null : await getCurrentUser();
 	let customerId = user?.stripeCustomerId;
 	const { priceId, quantity, isOnBoarding } = await request.json();
 
-	if (!priceId) {
-		console.error("Price ID not found");
-		return Response.json({ error: true }, { status: 400 });
+	const environment =
+		serverEnv().VERCEL_ENV === "production" ? "production" : "development";
+
+	if (
+		!priceId ||
+		typeof priceId !== "string" ||
+		!isValidStripePlanPriceId(priceId, environment)
+	) {
+		console.error("Invalid or missing priceId");
+		return Response.json(
+			{ error: true, message: "Invalid priceId" },
+			{ status: 400 },
+		);
+	}
+
+	const safeQuantity = parseCheckoutQuantity(quantity);
+	if (safeQuantity === null) {
+		console.error("Invalid quantity");
+		return Response.json(
+			{ error: true, message: "Invalid quantity" },
+			{ status: 400 },
+		);
 	}
 
 	if (!user) {
@@ -65,7 +86,7 @@ export async function POST(request: NextRequest) {
 
 		const checkoutSession = await stripe().checkout.sessions.create({
 			customer: customerId as string,
-			line_items: [{ price: priceId, quantity: quantity }],
+			line_items: [{ price: priceId, quantity: safeQuantity }],
 			mode: "subscription",
 			success_url: isOnBoarding
 				? `${serverEnv().WEB_URL}/dashboard/settings/organization?upgrade=true&session_id={CHECKOUT_SESSION_ID}`
@@ -84,7 +105,7 @@ export async function POST(request: NextRequest) {
 		if (checkoutSession.url) {
 			trackServerEvent(user.id, "checkout_started", {
 				price_id: priceId,
-				quantity: quantity,
+				quantity: safeQuantity,
 				platform: "web",
 			});
 

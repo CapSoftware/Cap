@@ -1,5 +1,6 @@
 import { Comment, User, Video } from "@cap/web-domain";
 import React, { type ReactElement, type ReactNode } from "react";
+import { ActionSheetIOS, Alert } from "react-native";
 import TestRenderer, {
 	act,
 	type ReactTestRenderer,
@@ -32,6 +33,8 @@ type AuthStub = {
 		blockUser: ReturnType<typeof vi.fn>;
 		reportCap: ReturnType<typeof vi.fn>;
 		updateCapSharing: ReturnType<typeof vi.fn>;
+		updateCapTitle: ReturnType<typeof vi.fn>;
+		updateCapPassword: ReturnType<typeof vi.fn>;
 	};
 	refresh: ReturnType<typeof vi.fn>;
 };
@@ -172,6 +175,8 @@ const createAuth = (): AuthStub => ({
 		blockUser: vi.fn(() => Promise.resolve({ success: true })),
 		reportCap: vi.fn(() => Promise.resolve({ success: true })),
 		updateCapSharing: vi.fn(),
+		updateCapTitle: vi.fn(),
+		updateCapPassword: vi.fn(),
 	},
 	refresh: vi.fn(() => Promise.resolve()),
 });
@@ -187,6 +192,7 @@ vi.mock("react-native", async () => {
 		ActionSheetIOS: actionSheet,
 		Alert: {
 			alert: vi.fn(),
+			prompt: vi.fn(),
 		},
 		ActivityIndicator: createHost("ActivityIndicator"),
 		Linking: {
@@ -337,17 +343,9 @@ vi.mock("@/caps/CapSettingsSheet", async () => {
 	};
 });
 
-vi.mock("@/caps/passwordActions", () => ({
-	showCapPasswordActions: vi.fn(),
-}));
-
 vi.mock("@/caps/saveCapVideo", () => ({
 	PhotosPermissionDeniedError: class PhotosPermissionDeniedError extends Error {},
 	saveCapVideoToPhotos: vi.fn(),
-}));
-
-vi.mock("@/caps/titleActions", () => ({
-	showCapTitleActions: vi.fn(),
 }));
 
 vi.mock("@/components/ActionButton", async () => {
@@ -1049,5 +1047,138 @@ describe("Cap detail screen", () => {
 			sharingDeferred.resolve({ ...detail.cap, public: false });
 			await sharingDeferred.promise;
 		});
+	});
+});
+
+describe("overlapping Cap settings changes", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+	});
+	it("keeps a removed password after an earlier rename response arrives", async () => {
+		const rename = createDeferred<MobileCapDetail["cap"]>();
+		const auth = createAuth();
+		auth.client.updateCapTitle.mockReturnValueOnce(rename.promise);
+		auth.client.updateCapPassword.mockResolvedValueOnce({
+			...detail.cap,
+			title: "Roadmap review",
+			protected: false,
+		});
+		authState.value = auth;
+		const renderer = await renderComponent(
+			React.createElement(CapDetailScreen),
+		);
+		const sheet = () =>
+			renderer.root.findByProps({ testID: "cap-settings-sheet" });
+
+		await act(async () => {
+			sheet().props.onRename();
+			const buttons = vi.mocked(Alert.prompt).mock.calls.at(-1)?.[2];
+			if (!Array.isArray(buttons)) throw new Error("Rename prompt missing");
+			expect(vi.mocked(Alert.prompt).mock.calls.at(-1)?.[3]).toBe("plain-text");
+			const save = buttons[1]?.onPress as ((value: string) => void) | undefined;
+			save?.("Roadmap review");
+		});
+		expect(auth.client.updateCapTitle).toHaveBeenCalledWith("video_123", {
+			title: "Roadmap review",
+		});
+
+		await act(async () => {
+			sheet().props.onPassword();
+			const callback = vi
+				.mocked(ActionSheetIOS.showActionSheetWithOptions)
+				.mock.calls.at(-1)?.[1];
+			if (!callback) throw new Error("Password actions missing");
+			callback(1);
+		});
+		expect(auth.client.updateCapPassword).toHaveBeenCalledWith("video_123", {
+			password: null,
+		});
+		expect(sheet().props.cap.protected).toBe(false);
+
+		await act(async () => {
+			rename.resolve({ ...detail.cap, title: "Roadmap review" });
+			await rename.promise;
+		});
+		expect(sheet().props.cap.title).toBe("Roadmap review");
+		expect(sheet().props.cap.protected).toBe(false);
+		await act(async () => renderer.unmount());
+	});
+
+	it("keeps a new title after an earlier password response arrives", async () => {
+		const password = createDeferred<MobileCapDetail["cap"]>();
+		const auth = createAuth();
+		auth.client.updateCapPassword.mockReturnValueOnce(password.promise);
+		auth.client.updateCapTitle.mockResolvedValueOnce({
+			...detail.cap,
+			title: "Roadmap review",
+			protected: false,
+		});
+		authState.value = auth;
+		const renderer = await renderComponent(
+			React.createElement(CapDetailScreen),
+		);
+		const sheet = () =>
+			renderer.root.findByProps({ testID: "cap-settings-sheet" });
+
+		await act(async () => {
+			sheet().props.onPassword();
+			const callback = vi
+				.mocked(ActionSheetIOS.showActionSheetWithOptions)
+				.mock.calls.at(-1)?.[1];
+			if (!callback) throw new Error("Password actions missing");
+			callback(1);
+		});
+		await act(async () => {
+			sheet().props.onRename();
+			const buttons = vi.mocked(Alert.prompt).mock.calls.at(-1)?.[2];
+			if (!Array.isArray(buttons)) throw new Error("Rename prompt missing");
+			expect(vi.mocked(Alert.prompt).mock.calls.at(-1)?.[3]).toBe("plain-text");
+			const save = buttons[1]?.onPress as ((value: string) => void) | undefined;
+			save?.("Roadmap review");
+		});
+		expect(sheet().props.cap.title).toBe("Roadmap review");
+
+		await act(async () => {
+			password.resolve({ ...detail.cap, protected: false });
+			await password.promise;
+		});
+		expect(sheet().props.cap.protected).toBe(false);
+		expect(sheet().props.cap.title).toBe("Roadmap review");
+		await act(async () => renderer.unmount());
+	});
+
+	it("keeps a new title after an earlier sharing response arrives", async () => {
+		const sharing = createDeferred<MobileCapDetail["cap"]>();
+		const auth = createAuth();
+		auth.client.updateCapSharing.mockReturnValueOnce(sharing.promise);
+		auth.client.updateCapTitle.mockResolvedValueOnce({
+			...detail.cap,
+			title: "Roadmap review",
+			public: false,
+		});
+		authState.value = auth;
+		const renderer = await renderComponent(
+			React.createElement(CapDetailScreen),
+		);
+		const sheet = () =>
+			renderer.root.findByProps({ testID: "cap-settings-sheet" });
+
+		await act(async () => sheet().props.onVisibilityChange(detail.cap, false));
+		await act(async () => {
+			sheet().props.onRename();
+			const buttons = vi.mocked(Alert.prompt).mock.calls.at(-1)?.[2];
+			if (!Array.isArray(buttons)) throw new Error("Rename prompt missing");
+			expect(vi.mocked(Alert.prompt).mock.calls.at(-1)?.[3]).toBe("plain-text");
+			const save = buttons[1]?.onPress as ((value: string) => void) | undefined;
+			save?.("Roadmap review");
+		});
+		expect(sheet().props.cap.title).toBe("Roadmap review");
+		await act(async () => {
+			sharing.resolve({ ...detail.cap, public: false });
+			await sharing.promise;
+		});
+		expect(sheet().props.cap.public).toBe(false);
+		expect(sheet().props.cap.title).toBe("Roadmap review");
+		await act(async () => renderer.unmount());
 	});
 });

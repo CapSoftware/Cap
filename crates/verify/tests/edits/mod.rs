@@ -18,7 +18,9 @@
 //!   - enabled fullscreen text segments are holds: the recording clock
 //!     pauses for their output-time window (overlapping or touching windows
 //!     merge), showing the frame at the hold start; the timeline grows by the
-//!     held time.
+//!     held time. A hold starting at the clips' end (a closing title) shows
+//!     the last clip's final frame; a hold starting past it is never reached
+//!     and is left out, so the timeline does not grow by it.
 
 #![allow(dead_code)]
 
@@ -494,7 +496,20 @@ impl TimeModel {
                 _ => holds.push(w),
             }
         }
-        Self { segments, holds }
+        let mut model = Self {
+            segments,
+            holds: Vec::new(),
+        };
+        let clips_end = model.base_duration();
+        let mut held = 0.0;
+        for (a, b) in holds {
+            if a - held > clips_end + 1e-9 {
+                break;
+            }
+            held += b - a;
+            model.holds.push((a, b));
+        }
+        model
     }
 
     /// Output duration without holds.
@@ -592,7 +607,22 @@ impl TimeModel {
 
     pub fn map(&self, o: f64) -> Option<Mapping> {
         if let Some(&(a, b)) = self.holds.iter().find(|&&(a, b)| o >= a && o < b) {
-            let source = self.base_map(a - self.held_before(a))?.shown();
+            let e = a - self.held_before(a);
+            let source = match self.base_map(e) {
+                Some(mapping) => mapping.shown(),
+                None if (e - self.base_duration()).abs() <= 1e-9 => {
+                    let (segment, s) = self
+                        .segments
+                        .iter()
+                        .enumerate()
+                        .rfind(|(_, s)| s.duration > 0.0)?;
+                    Source {
+                        segment,
+                        time: s.end,
+                    }
+                }
+                None => return None,
+            };
             return Some(Mapping::Hold {
                 source,
                 output_end: b,

@@ -31,6 +31,10 @@ use edits::{Mapping, Op, OpMix, TimeModel};
 const TOLERANCE: f64 = 1e-9;
 const EDGE_EPSILON: f64 = 1e-6;
 
+// At 320x180, lossy compression can turn a camera crossfade's tiny marker
+// cells into a different valid index. Keep this timing oracle's signal readable.
+const MARKER_EXPORT_BPP: f32 = 1.0;
+
 /// Output times to probe: a 1/60 s grid, random times and both sides of
 /// every edge.
 fn probe_times(model: &TimeModel, rng: &mut Rng) -> Vec<f64> {
@@ -106,7 +110,9 @@ fn check_config(
             model.duration()
         ));
     }
-    let core = if model.holds.is_empty() {
+    // The core reference model leaves projects with text unchecked, holds
+    // past the end of the clips included.
+    let core = if !timeline.text_segments.iter().any(|t| t.enabled) {
         let (meta, truth) = edits::synthetic_meta(durations);
         Some(ReferenceModel::new(&meta, config, truth).expect("core model"))
     } else {
@@ -291,9 +297,10 @@ fn mapping_all() {
     );
 }
 
-/// Fullscreen text holds left past the end of the clips (place a text card,
-/// then trim or delete clips) still count towards `duration()`, but those
-/// output times have no source frame, so renders stop early.
+/// Every output time inside `duration()` maps to a source frame, including
+/// after edits that leave a fullscreen text hold past the end of the clips
+/// (place a text card, then trim or delete clips): such a hold is never
+/// reached, so it must not count towards the duration.
 #[test]
 fn mapping_duration_covered() {
     mapping_case(
@@ -348,6 +355,7 @@ fn export_cases(spec: cap_verify::fixture::FixtureSpec, seeds: u64) -> Vec<Strin
         let model = project.model(&config);
         let dir = common::scratch_dir(&id);
         let run = ExportRun {
+            custom_bpp: Some(MARKER_EXPORT_BPP),
             fps,
             resolution: (320, 180),
             format: Format::Mp4,
@@ -412,6 +420,7 @@ fn same_clip_transition_export() {
             let mut case = Case::new(&id);
             let dir = common::scratch_dir(&id);
             let run = ExportRun {
+                custom_bpp: Some(MARKER_EXPORT_BPP),
                 fps,
                 resolution: (320, 180),
                 format: Format::Mp4,
@@ -436,8 +445,9 @@ fn same_clip_transition_export() {
 }
 
 /// Deterministic repro for `editing/mapping/duration-covered`: a 1 s
-/// fullscreen text card at 5.4 s, then the clip trimmed to 3.2 s. The
-/// timeline reports 4.2 s; the export must have as many frames.
+/// fullscreen text card at 5.4 s, then the clip trimmed to 3.2 s. The card
+/// is past the end, so the timeline is 3.2 s and the export must have as
+/// many frames.
 #[test]
 fn hold_past_end_export() {
     let id = "editing/export/hold-past-end";
@@ -456,6 +466,7 @@ fn hold_past_end_export() {
     let mut case = Case::new(id);
     let dir = common::scratch_dir(id);
     let run = ExportRun {
+        custom_bpp: Some(MARKER_EXPORT_BPP),
         fps,
         resolution: (320, 180),
         format: Format::Mp4,

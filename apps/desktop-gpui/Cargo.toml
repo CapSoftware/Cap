@@ -5,7 +5,7 @@
 # wgpu-hal, tao) that only exist for the Tauri app.
 [workspace]
 resolver = "2"
-members = [".", "kernels"]
+members = [".", "kernels", "i18n-build"]
 
 [package]
 name = "cap-desktop-gpui"
@@ -25,6 +25,7 @@ path = "../../crates/recording/examples/studio-finalization-benchmark.rs"
 
 [dependencies]
 cap-audio = { path = "../../crates/audio" }
+cap-cli-install = { path = "../../crates/cli-install" }
 cap-gpui-kernels = { path = "kernels" }
 # gpui — the wingleeio/zed fork Comet ships. The pinned rev carries f596cde
 # ("destination alpha on transparent windows: Porter-Duff OVER, not additive"),
@@ -102,6 +103,9 @@ ffmpeg = { package = "ffmpeg-next", git = "https://github.com/CapSoftware/rust-f
 image = { version = "0.25.1", default-features = false, features = ["jpeg", "png", "webp"] }
 jpeg-decoder = "0.3"
 smallvec = "1"
+# The OS language list the UI language follows when set to System default.
+# Already in this lockfile through cosmic-text.
+sys-locale = "0.3"
 # Grapheme boundaries for `ui::TextInput`: Backspace deletes a user-perceived
 # character, not a `char`, so a flag emoji or a combining accent goes in one
 # press. gpui's own input example uses the same crate and it is already in this
@@ -116,6 +120,8 @@ global-hotkey = "0.7.0"
 # cap-recording's actor system; version must match its `kameo = "0.17.2"`.
 kameo = "0.17.2"
 flume = "0.11.0"
+# Round caps and joins for the onboarding doodles; already in the tree via gpui.
+lyon_tessellation = "1.0"
 anyhow = "1"
 chrono = "0.4"
 # Read the Tauri app's settings store so both apps share one recordings library.
@@ -156,15 +162,19 @@ reqwest = { version = "0.12", default-features = false, features = [
 ] }
 futures-util = "0.3"
 dirs = "6"
+dunce = "1.0.5"
 # Caption transcription (`src/transcription.rs`): the exact engine pin the
 # Tauri app carries (`apps/desktop/src-tauri/Cargo.toml:75`), so a model file
 # downloaded by either app loads identically in both.
 whisper-rs = "0.11.0"
 
 [build-dependencies]
+cap-i18n-build = { path = "i18n-build" }
+cc = "1.4"
 tauri-winres = "0.3.5"
 
 [dev-dependencies]
+gpui = { git = "https://github.com/wingleeio/zed", rev = "5d1f83d9f27a19bec1fb241dc33b42238af9cf8d", features = ["test-support"] }
 # The editor smoke (`tests/editor_frame0.rs`) drives `EditorInstance`, whose
 # decoders, renderer and preview tasks are all tokio-spawned -- a current-thread
 # runtime would deadlock the moment the test thread blocks on a frame. Kept in
@@ -184,8 +194,13 @@ raw-window-handle = "0.6"
 tray-icon = { version = "0.21.1", default-features = false }
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
-    "Win32_Media",
     "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_IO",
+    "Win32_System_Kernel",
+    "Win32_System_LibraryLoader",
     "Win32_System_Registry",
     "Win32_System_SystemInformation",
     "Win32_System_Threading",
@@ -195,6 +210,8 @@ windows-sys = { version = "0.59", features = [
 
 [target.'cfg(target_os = "linux")'.dependencies]
 ashpd = { version = "0.11", default-features = false, features = ["tokio"] }
+# GNOME's wallpapers are JPEG XL, which `image` cannot read.
+jxl-oxide = { version = "0.12", features = ["image"] }
 wayland-client = "0.31"
 
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
@@ -207,10 +224,11 @@ x11rb = "0.13"
 objc2 = "0.5.2"
 # `NSVisualEffectView` is the pre-macOS-26 window-material fallback. Features
 # only -- the versions stay pinned, or a second objc2 universe gets built.
-objc2-app-kit = { version = "0.2.2", features = ["NSAppearance", "NSWindow", "NSView", "NSResponder", "NSGraphics", "NSPasteboard", "NSVisualEffectView"] }
+objc2-app-kit = { version = "0.2.2", features = ["NSAppearance", "NSWindow", "NSView", "NSResponder", "NSGraphics", "NSPasteboard", "NSVisualEffectView", "NSWorkspace", "NSAccessibility"] }
 # NSRect/NSPoint/NSSize for `setFrame:display:`. Already in the tree as
 # objc2-app-kit's own dependency, so this adds nothing to the build.
-objc2-foundation = "0.2.2"
+objc2-foundation = { version = "0.2.2", features = ["NSNotification", "NSOperation", "NSString", "block2"] }
+block2 = "0.5.1"
 raw-window-handle = "0.6"
 core-foundation = "0.10"
 core-video = { version = "0.5.2", features = ["metal"] }
@@ -238,6 +256,7 @@ cidre = { git = "https://github.com/CapSoftware/cidre", rev = "bf84b67079a8", fe
 # Whisper caption models only.
 [target.'cfg(not(all(target_os = "macos", target_arch = "x86_64")))'.dependencies]
 parakeet-rs = "0.3.4"
+hound = "3.5"
 
 # Mirror of the root workspace patch: cap-recording's converter stack is built
 # and tested against the vendored wgpu-hal, not the crates.io release.

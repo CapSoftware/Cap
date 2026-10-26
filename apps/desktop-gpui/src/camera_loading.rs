@@ -1,15 +1,15 @@
 mod script_outline;
 
-use std::cell::RefCell;
-use std::time::Instant;
+use std::cell::Cell;
+use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use gpui::{
-    Bounds, BoxShadow, ContentMask, Corners, FillOptions, FillRule, Hsla, IntoElement, Path,
-    PathBuilder, PathStyle, Pixels, Styled, Window, canvas, fill, hsla, linear_color_stop,
-    linear_gradient, point, px, size,
+    Bounds, BoxShadow, ContentMask, Corners, EntityId, Hsla, IntoElement, Pixels, Styled, Window,
+    canvas, fill, hsla, linear_color_stop, linear_gradient, point, px, size,
 };
 
-use script_outline::{SCRIPT_BOUNDS, SCRIPT_OUTLINE};
+use script_outline::LOADING;
 
 const STATIC_PHASE_SECONDS: f32 = 3.;
 const FADE_IN_SECONDS: f32 = 0.3;
@@ -21,13 +21,8 @@ const SWEEP_PERIOD_SECONDS: f32 = 1.6;
 const SWEEP_HALF_WIDTH: f32 = 0.26;
 const SCRIPT_REST_ALPHA: f32 = 0.12;
 const SCRIPT_PEAK_ALPHA: f32 = 0.42;
-
-enum Segment {
-    Move(f32, f32),
-    Line(f32, f32),
-    Quad(f32, f32, f32, f32),
-    Close,
-}
+const MOTION_FPS: f32 = 60.;
+const DRIFT_FPS: f32 = 30.;
 
 struct Cloud {
     lightness: f32,
@@ -91,6 +86,7 @@ pub(crate) fn camera_loading(
     opacity: f32,
     animate: bool,
     show_script: bool,
+    redraw: LoadingRedraw,
 ) -> impl IntoElement {
     canvas(
         |_, _, _| {},
@@ -125,12 +121,64 @@ pub(crate) fn camera_loading(
                 }
             }
             if animate {
-                window.request_animation_frame();
+                let due = Instant::now() + frame_gap(elapsed, opacity, show_script);
+                let generation = redraw.begin();
+                redraw_when_due(window, window.current_view(), due, redraw, generation);
             }
         },
     )
     .absolute()
     .inset_0()
+}
+
+/// Fades and the script sweep redraw at 60 fps. Between sweeps only the
+/// clouds move, under a pixel per frame at 30 fps. The gap is a fifth short of
+/// the frame time so a display refresh landing just early still counts.
+fn frame_gap(elapsed: f32, opacity: f32, show_script: bool) -> Duration {
+    let fps = if opacity < 1. || (show_script && sweep_center(elapsed).is_some()) {
+        MOTION_FPS
+    } else {
+        DRIFT_FPS
+    };
+    Duration::from_secs_f32(0.8 / fps)
+}
+
+/// Each paint supersedes the redraw scheduled by the one before it, so extra
+/// paints (a resize, a chrome change) never leave several deadlines running.
+#[derive(Clone, Default)]
+pub(crate) struct LoadingRedraw(Rc<Cell<u64>>);
+
+impl LoadingRedraw {
+    fn begin(&self) -> u64 {
+        let generation = self.0.get().wrapping_add(1);
+        self.0.set(generation);
+        generation
+    }
+
+    fn is_current(&self, generation: u64) -> bool {
+        self.0.get() == generation
+    }
+}
+
+/// Checks on each display refresh and only re-renders the view once `due`
+/// has passed, so redraws never outpace the platform's own frames.
+fn redraw_when_due(
+    window: &Window,
+    view: EntityId,
+    due: Instant,
+    redraw: LoadingRedraw,
+    generation: u64,
+) {
+    window.on_next_frame(move |window, cx| {
+        if !redraw.is_current(generation) {
+            return;
+        }
+        if Instant::now() >= due {
+            cx.notify(view);
+        } else {
+            redraw_when_due(window, view, due, redraw, generation);
+        }
+    });
 }
 
 fn sweep_center(elapsed: f32) -> Option<f32> {
@@ -148,53 +196,14 @@ fn sweep_alpha(position: f32, center: f32) -> f32 {
     ease_in_out(1. - (position - center).abs() / SWEEP_HALF_WIDTH)
 }
 
-/// The glyph contours overlap where the letters join; a non-zero fill
-/// tessellates them as one union, so the translucent word never doubles up.
-fn script_path(origin: (f32, f32), scale: f32) -> Option<Path<Pixels>> {
-    thread_local! {
-        static CACHE: RefCell<Option<([u32; 3], Path<Pixels>)>> = const { RefCell::new(None) };
-    }
-    let key = [origin.0.to_bits(), origin.1.to_bits(), scale.to_bits()];
-    CACHE.with_borrow_mut(|cache| {
-        if let Some((cached, path)) = cache.as_ref()
-            && *cached == key
-        {
-            return Some(path.clone());
-        }
-        let place = |x: f32, y: f32| point(px(origin.0 + x * scale), px(origin.1 - y * scale));
-        let mut builder = PathBuilder::fill().with_style(PathStyle::Fill(
-            FillOptions::default()
-                .with_fill_rule(FillRule::NonZero)
-                .with_tolerance(0.02),
-        ));
-        for segment in SCRIPT_OUTLINE {
-            match *segment {
-                Segment::Move(x, y) => builder.move_to(place(x, y)),
-                Segment::Line(x, y) => builder.line_to(place(x, y)),
-                Segment::Quad(cx, cy, x, y) => builder.curve_to(place(x, y), place(cx, cy)),
-                Segment::Close => builder.close(),
-            }
-        }
-        let path = builder.build().ok()?;
-        *cache = Some((key, path.clone()));
-        Some(path)
-    })
-}
-
 fn paint_script(area: Bounds<Pixels>, elapsed: f32, opacity: f32, window: &mut Window) {
-    let ((min_x, min_y), (max_x, max_y)) = SCRIPT_BOUNDS;
-    let word_width = max_x - min_x;
-    let word_height = max_y - min_y;
-    let scale =
-        (f32::from(area.size.width) / word_width).min(f32::from(area.size.height) / word_height);
-    if scale <= 0. || opacity <= 0. {
+    if opacity <= 0. {
         return;
     }
-    let origin = (
-        f32::from(area.center().x) - (min_x + word_width / 2.) * scale,
-        f32::from(area.center().y) + (min_y + word_height / 2.) * scale,
-    );
-    let Some(path) = script_path(origin, scale) else {
+    let Some((origin, scale)) = LOADING.fit(area) else {
+        return;
+    };
+    let Some(path) = LOADING.path(origin, scale) else {
         return;
     };
     window.paint_path(path.clone(), hsla(0., 0., 1., SCRIPT_REST_ALPHA * opacity));
@@ -364,4 +373,88 @@ fn paint_glass(
             },
         ],
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn paints_in(start: f32, seconds: f32, refresh_hz: f32, opacity: f32, script: bool) -> usize {
+        let refresh = 1. / refresh_hz;
+        let mut due = 0.;
+        let mut paints = 0;
+        let mut frame = (start / refresh).ceil();
+        while frame * refresh < start + seconds {
+            let now = frame * refresh;
+            if now >= due {
+                paints += 1;
+                due = now + frame_gap(now, opacity, script).as_secs_f32();
+            }
+            frame += 1.;
+        }
+        paints
+    }
+
+    #[test]
+    fn loading_redraws_at_sixty_while_sweeping_and_thirty_between() {
+        let period_start = SWEEP_PERIOD_SECONDS - SWEEP_LEAD_SECONDS;
+        assert!(sweep_center(period_start + 0.01).is_some());
+        assert!(sweep_center(period_start + SWEEP_SECONDS + 0.01).is_none());
+        let resting_start = period_start + SWEEP_SECONDS;
+        let resting_seconds = SWEEP_PERIOD_SECONDS - SWEEP_SECONDS;
+
+        for refresh_hz in [60., 120.] {
+            let sweeping = paints_in(period_start, SWEEP_SECONDS, refresh_hz, 1., true);
+            assert!((59..=61).contains(&sweeping), "{refresh_hz} Hz: {sweeping}");
+            let resting = paints_in(resting_start, resting_seconds, refresh_hz, 1., true);
+            assert!((17..=19).contains(&resting), "{refresh_hz} Hz: {resting}");
+            let no_script = paints_in(period_start, SWEEP_PERIOD_SECONDS, refresh_hz, 1., false);
+            assert!(
+                (47..=49).contains(&no_script),
+                "{refresh_hz} Hz: {no_script}"
+            );
+            let fading = paints_in(0., FADE_IN_SECONDS, refresh_hz, 0.5, false);
+            assert!((17..=19).contains(&fading), "{refresh_hz} Hz: {fading}");
+        }
+        let slow_display = paints_in(period_start, SWEEP_SECONDS, 20., 1., true);
+        assert!((19..=21).contains(&slow_display), "{slow_display}");
+    }
+
+    #[test]
+    fn extra_paints_leave_one_pending_redraw() {
+        let refresh = 1. / 120.;
+        let start = SWEEP_PERIOD_SECONDS - SWEEP_LEAD_SECONDS + SWEEP_SECONDS;
+        let end = start + SWEEP_PERIOD_SECONDS - SWEEP_SECONDS;
+        let redraw = LoadingRedraw::default();
+        let mut pending: Vec<(u64, f32)> = Vec::new();
+        let paint = |now: f32, pending: &mut Vec<(u64, f32)>| {
+            pending.push((redraw.begin(), now + frame_gap(now, 1., true).as_secs_f32()));
+        };
+        paint(start, &mut pending);
+        paint(start + refresh, &mut pending);
+
+        let mut paints = 0;
+        let mut frame = (start / refresh).ceil() + 2.;
+        while frame * refresh < end {
+            let now = frame * refresh;
+            let mut due_paints = 0;
+            pending.retain(|&(generation, due)| {
+                if !redraw.is_current(generation) {
+                    return false;
+                }
+                if now >= due {
+                    due_paints += 1;
+                    return false;
+                }
+                true
+            });
+            for _ in 0..due_paints {
+                paints += 1;
+                paint(now, &mut pending);
+            }
+            assert!(pending.len() <= 1, "{} pending at {now}", pending.len());
+            frame += 1.;
+        }
+        assert!((17..=19).contains(&paints), "{paints}");
+    }
 }

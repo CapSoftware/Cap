@@ -1799,13 +1799,19 @@ export const [EditorContextProvider, useBaseEditorContext] =
 					: undefined,
 			);
 
-			const totalDuration = () =>
-				project.timeline
-					? clipTimelineDuration(
-							project.timeline.segments,
-							project.timeline.transitions ?? [],
-						) + totalHeldDuration(holdWindows(project.timeline.textSegments))
-					: props.editorInstance.recordingDuration;
+			const totalDuration = () => {
+				if (!project.timeline) return props.editorInstance.recordingDuration;
+				const clipsEnd = clipTimelineDuration(
+					project.timeline.segments,
+					project.timeline.transitions ?? [],
+				);
+				return (
+					clipsEnd +
+					totalHeldDuration(
+						holdWindows(project.timeline.textSegments, clipsEnd),
+					)
+				);
+			};
 
 			type State = {
 				zoom: number;
@@ -1823,7 +1829,10 @@ export const [EditorContextProvider, useBaseEditorContext] =
 
 				const visibleOrigin = origin - state.position;
 
-				const originPercentage = Math.min(1, visibleOrigin / state.zoom);
+				const originPercentage = Math.min(
+					1,
+					Math.max(0, visibleOrigin / state.zoom),
+				);
 
 				const newVisibleOrigin = zoom * originPercentage;
 				const newPosition = origin - newVisibleOrigin;

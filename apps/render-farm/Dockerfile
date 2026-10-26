@@ -22,7 +22,7 @@ ENV CARGO_PROFILE_RELEASE_LTO=false \
 RUN cargo build --release --locked -p cap-render-farm \
 	&& install -Dm755 target/release/cap-render-farm /out/cap-render-farm
 
-FROM oven/bun:1.4.0 AS bun
+FROM oven/bun:1.4.4 AS bun
 
 FROM debian:trixie-slim
 RUN apt-get update \
