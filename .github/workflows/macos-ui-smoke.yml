@@ -1,0 +1,139 @@
+name: macOS UI smoke (real app)
+
+# Runs scripts/ui-smoke/macos.sh against this branch's app and main's, on a
+# runner with a logged-in desktop: menus, tray, recording controls
+# click-through and localized windows. Screenshots are uploaded for review.
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/macos-ui-smoke.yml"
+      - "scripts/ui-smoke/**"
+  workflow_dispatch:
+    inputs:
+      keep_alive_minutes:
+        description: Minutes to keep the runner up afterwards for SSH
+        default: "0"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-ui-smoke-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: macOS UI smoke
+    runs-on: blacksmith-6vcpu-macos-15
+    timeout-minutes: 90
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      TARGET: aarch64-apple-darwin
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Rust setup
+        uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: aarch64-apple-darwin
+
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: aarch64-apple-darwin
+          prefix-key: v1-rust-gpui
+          save-cache: "false"
+          workspaces: apps/desktop-gpui -> target
+
+      - name: Build this branch and main
+        run: |
+          set -euo pipefail
+          target_dir="$GITHUB_WORKSPACE/apps/desktop-gpui/target"
+          build() {
+            local root=$1
+            (
+              cd "$root"
+              RUST_TARGET_TRIPLE=$TARGET node scripts/setup.js
+              node scripts/sync-desktop-versions.mjs
+              ./scripts/prepare-gpui-dependency.sh
+              for frameworks in "$target_dir/$TARGET/debug/Frameworks" "$target_dir/$TARGET/Frameworks"; do
+                mkdir -p "$frameworks"
+                ln -sfn "$root/target/Frameworks/Spacedrive.framework" "$frameworks/Spacedrive.framework"
+              done
+              cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --locked \
+                --target "$TARGET" --target-dir "$target_dir" --bin cap-gpui
+            )
+          }
+          # Each copy keeps the debug/ + Frameworks layout the binary's
+          # rpaths expect.
+          keep() {
+            local app="$RUNNER_TEMP/app-$1"
+            mkdir -p "$app/debug/Frameworks" "$app/Frameworks"
+            cp "$target_dir/$TARGET/debug/cap-gpui" "$app/debug/cap-gpui"
+            ln -sfn "$GITHUB_WORKSPACE/target/Frameworks/Spacedrive.framework" "$app/debug/Frameworks/Spacedrive.framework"
+            ln -sfn "$GITHUB_WORKSPACE/target/Frameworks/Spacedrive.framework" "$app/Frameworks/Spacedrive.framework"
+          }
+          build "$GITHUB_WORKSPACE"
+          keep branch
+          git worktree add --detach "$RUNNER_TEMP/base" origin/main
+          build "$RUNNER_TEMP/base"
+          keep main
+
+      - name: Desktop permissions and tools
+        run: |
+          set -euo pipefail
+          sudo pmset -a displaysleep 0 sleep 0 disksleep 0
+          caffeinate -u -t 2
+          nohup caffeinate -dimsu > /dev/null 2>&1 &
+          brew install cliclick
+          clients="$RUNNER_TEMP/clients"
+          printf '%s\n' "$RUNNER_TEMP/app-branch/debug/cap-gpui" "$RUNNER_TEMP/app-main/debug/cap-gpui" \
+            /usr/bin/osascript /usr/sbin/screencapture "$(command -v cliclick)" /bin/bash /bin/zsh > "$clients"
+          p=$$
+          while [ "$p" -gt 1 ]; do
+            ps -o comm= -p "$p"
+            p=$(ps -o ppid= -p "$p" | tr -d ' ')
+          done >> "$clients"
+          db="/Library/Application Support/com.apple.TCC/TCC.db"
+          user_db="$HOME/Library/Application Support/com.apple.TCC/TCC.db"
+          approvals="$HOME/Library/Group Containers/group.com.apple.replayd/ScreenCaptureApprovals.plist"
+          mkdir -p "$(dirname "$approvals")"
+          now=$(date +%s)
+          until=$(date -u -v+1y '+%a %b %d %H:%M:%S GMT %Y')
+          sort -u "$clients" | grep '^/' | while read -r client; do
+            for service in kTCCServiceScreenCapture kTCCServiceMicrophone kTCCServiceAccessibility kTCCServicePostEvent; do
+              row="INSERT OR REPLACE INTO access (service,client,client_type,auth_value,auth_reason,auth_version,indirect_object_identifier,flags,last_modified) VALUES ('$service','$client',1,2,4,1,'UNUSED',0,$now);"
+              sudo sqlite3 "$db" "$row"
+              sqlite3 "$user_db" "$row"
+            done
+            events="INSERT OR REPLACE INTO access (service,client,client_type,auth_value,auth_reason,auth_version,indirect_object_identifier_type,indirect_object_identifier,flags,last_modified) VALUES ('kTCCServiceAppleEvents','$client',1,2,4,1,0,'com.apple.systemevents',0,$now);"
+            sudo sqlite3 "$db" "$events" || true
+            sqlite3 "$user_db" "$events" || true
+            /usr/libexec/PlistBuddy -c "Add :$client date $until" "$approvals" >/dev/null 2>&1 || true
+            echo "granted $client"
+          done
+          killall tccd || true
+          sudo killall tccd || true
+          sleep 2
+
+      - name: UI smoke
+        run: |
+          export UI_SMOKE_TOOLS="$RUNNER_TEMP/smoke/tools"
+          bash scripts/ui-smoke/macos.sh "$RUNNER_TEMP/app-main/debug/cap-gpui" "$RUNNER_TEMP/smoke/main" main
+          bash scripts/ui-smoke/macos.sh "$RUNNER_TEMP/app-branch/debug/cap-gpui" "$RUNNER_TEMP/smoke/branch" branch
+          cat "$RUNNER_TEMP/smoke/main/results.txt" "$RUNNER_TEMP/smoke/branch/results.txt" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload screenshots and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-ui-smoke
+          path: ${{ runner.temp }}/smoke
+          retention-days: 7
+
+      - name: Keep the runner up for SSH
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.keep_alive_minutes != '0'
+        run: sleep $(( ${{ inputs.keep_alive_minutes }} * 60 ))
