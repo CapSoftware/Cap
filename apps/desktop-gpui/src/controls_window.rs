@@ -118,35 +118,43 @@ impl ControlsWindow {
     /// The window is taller than the bar so the issue banner and tooltips
     /// have room above it. A transparent window still takes every click in
     /// its frame, so it ignores mouse events unless the pointer is over the
-    /// banner or the bar. An ignoring window gets no mouse moves, hence the
-    /// poll of the global pointer.
+    /// banner or the bar. An ignoring window gets no mouse moves, so a global
+    /// move monitor re-checks as AppKit delivers each move, before a click
+    /// that follows it, and a poll catches the pointer leaving the bar.
     #[cfg(target_os = "macos")]
     fn spawn_click_through(window: &mut Window, cx: &mut Context<Self>) -> gpui::Task<()> {
         cx.spawn_in(window, async move |this, cx| {
-            let mut native = None;
-            let mut click_through = None;
-            loop {
-                let Ok(region) = this.update_in(cx, |this, window, _| {
-                    if native.is_none() {
-                        native = crate::platform::native_window(window);
-                    }
-                    this.visible_region.get()
+            let (native, region) = loop {
+                let Ok((native, region)) = this.update_in(cx, |this, window, _| {
+                    (
+                        crate::platform::native_window(window),
+                        this.visible_region.clone(),
+                    )
                 }) else {
                     return;
                 };
-                if let Some(native) = native.as_ref() {
-                    let wanted = !region.is_some_and(|region| {
-                        crate::platform::pointer_in_window_region(
-                            native,
-                            region.dilate(POINTER_HALO),
-                        )
-                    });
-                    if click_through != Some(wanted)
-                        && crate::platform::set_window_click_through(native, wanted)
-                    {
-                        click_through = Some(wanted);
-                    }
+                if let Some(native) = native {
+                    break (native, region);
                 }
+                cx.background_executor().timer(POINTER_POLL_INTERVAL).await;
+            };
+            let click_through = std::cell::Cell::new(None);
+            let apply = std::rc::Rc::new(move || {
+                let wanted = !region.get().is_some_and(|region| {
+                    crate::platform::pointer_in_window_region(&native, region.dilate(POINTER_HALO))
+                });
+                if click_through.get() != Some(wanted)
+                    && crate::platform::set_window_click_through(&native, wanted)
+                {
+                    click_through.set(Some(wanted));
+                }
+            });
+            let _monitor = crate::platform::monitor_pointer_moves({
+                let apply = apply.clone();
+                move || apply()
+            });
+            while this.update(cx, |_, _| ()).is_ok() {
+                apply();
                 cx.background_executor().timer(POINTER_POLL_INTERVAL).await;
             }
         })

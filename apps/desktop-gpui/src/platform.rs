@@ -1858,6 +1858,40 @@ mod mac {
         region.contains(&gpui::point(gpui::px(x as f32), gpui::px(y as f32)))
     }
 
+    /// Removes its `NSEvent` monitor when dropped.
+    pub struct PointerMoveMonitor(Retained<AnyObject>);
+
+    impl Drop for PointerMoveMonitor {
+        fn drop(&mut self) {
+            unsafe {
+                let _: () = objc2::msg_send![objc2::class!(NSEvent), removeMonitor: &*self.0];
+            }
+        }
+    }
+
+    /// Calls `on_move` on the main thread each time the pointer moves over
+    /// another app's windows, which includes a window of ours that ignores
+    /// mouse events. AppKit runs it while delivering the move, before any
+    /// click that follows. Mouse monitors need no accessibility permission.
+    pub fn monitor_pointer_moves(on_move: impl Fn() + 'static) -> Option<PointerMoveMonitor> {
+        const MOUSE_MOVED: u64 = 1 << 5;
+        const LEFT_MOUSE_DRAGGED: u64 = 1 << 6;
+        const RIGHT_MOUSE_DRAGGED: u64 = 1 << 7;
+        const OTHER_MOUSE_DRAGGED: u64 = 1 << 27;
+        let block = block2::RcBlock::new(move |_: std::ptr::NonNull<AnyObject>| on_move());
+        let monitor: Option<Retained<AnyObject>> = unsafe {
+            objc2::msg_send![
+                objc2::class!(NSEvent),
+                addGlobalMonitorForEventsMatchingMask: MOUSE_MOVED
+                    | LEFT_MOUSE_DRAGGED
+                    | RIGHT_MOUSE_DRAGGED
+                    | OTHER_MOUSE_DRAGGED,
+                handler: &*block
+            ]
+        };
+        monitor.map(PointerMoveMonitor)
+    }
+
     /// `orderOut:` -- hide without closing, the way the Tauri main window
     /// hides while the recording controls bar is up. Takes the retained
     /// handle for the same reason [`place_overlay_panel`] does: ordering a
