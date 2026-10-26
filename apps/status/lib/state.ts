@@ -39,7 +39,14 @@ export function dates(now: number): string[] {
 }
 
 export function isStale(checkedAt: string | null, now: number): boolean {
-	return !checkedAt || now - Date.parse(checkedAt) > STALE_AFTER_MS;
+	if (!checkedAt) return true;
+	const timestamp = Date.parse(checkedAt);
+	// A corrupt or far-future checkpoint must never pin a stale healthy status.
+	return (
+		!Number.isFinite(timestamp) ||
+		timestamp > now + CHECK_INTERVAL_MS ||
+		now - timestamp > STALE_AFTER_MS
+	);
 }
 
 export function dayStatus(day: Day): Health {
@@ -80,6 +87,7 @@ export function applyResult(
 	}
 	if (
 		previous.checkedAt &&
+		!isStale(previous.checkedAt, now) &&
 		Math.floor(Date.parse(previous.checkedAt) / CHECK_INTERVAL_MS) >=
 			Math.floor(now / CHECK_INTERVAL_MS)
 	)
