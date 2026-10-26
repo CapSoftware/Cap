@@ -55,6 +55,10 @@ struct DisplayGeometry {
 }
 
 fn native_handle(window: &Window) -> Option<isize> {
+    // gpui's test windows panic instead of erroring when asked for a handle.
+    if cfg!(test) {
+        return None;
+    }
     let handle = HasWindowHandle::window_handle(window).ok()?;
     let RawWindowHandle::Win32(handle) = handle.as_raw() else {
         return None;

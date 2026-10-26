@@ -405,11 +405,15 @@ struct Recordings {
     search: String,
     /// `visibleCount`, reset to `PAGE_SIZE` by a tab or search change.
     visible_count: usize,
+    list: gpui::ListState,
+    header_focus: FocusHandle,
+    footer_focus: FocusHandle,
+    has_footer: Cell<bool>,
     /// The scan task. Dropping it cancels, so a refresh that arrives mid-scan
     /// replaces the old one rather than racing it.
     scan: Option<gpui::Task<()>>,
-    /// The thumbnail decode for the rows on screen, replaced whenever more of
-    /// them come into view.
+    /// The thumbnail decode for the selected page, replaced whenever more rows
+    /// are included by pagination or search.
     decode: Option<gpui::Task<()>>,
     /// The 2s poll, armed only while something in the list is still being
     /// written (`refetchInterval`).
@@ -417,13 +421,21 @@ struct Recordings {
 }
 
 impl Recordings {
-    fn new(search_input: Entity<ui::TextInputState>) -> Self {
+    fn new(
+        search_input: Entity<ui::TextInputState>,
+        header_focus: FocusHandle,
+        footer_focus: FocusHandle,
+    ) -> Self {
         Self {
             items: None,
             tab: RecordingsTab::All,
             search_input,
             search: String::new(),
             visible_count: RECORDINGS_PAGE_SIZE,
+            list: gpui::ListState::new(0, gpui::ListAlignment::Top, px(100.)),
+            header_focus,
+            footer_focus,
+            has_footer: Cell::new(false),
             scan: None,
             decode: None,
             tick: None,
@@ -527,8 +539,8 @@ impl Screenshots {
     }
 }
 
-/// The rows a list paints, as indices into the unfiltered scan, so the list and
-/// its thumbnail decode agree on what is on screen.
+/// Indices into the full scan after filtering and pagination. Thumbnail decoding
+/// follows this selection even when the list only mounts rows in the viewport.
 struct VisibleRows {
     indices: Vec<usize>,
     /// `filteredRecordings().length`, which the empty state and "Load more"
@@ -895,7 +907,7 @@ impl SettingsWindow {
             project_name_input,
             server_url_input,
             _field_events: field_events,
-            recordings: Recordings::new(recordings_search),
+            recordings: Recordings::new(recordings_search, cx.focus_handle(), cx.focus_handle()),
             screenshots: Screenshots::new(screenshots_search),
             placeholders: ui::CollapsibleState::new(false),
             placeholders_task: None,
@@ -940,6 +952,7 @@ impl SettingsWindow {
     /// page } })` navigates a live one.
     pub fn set_page(&mut self, page: Page, window: &mut Window, cx: &mut Context<Self>) {
         if self.page != page {
+            self.recordings.list.reset(0);
             self.page_scroll = ScrollHandle::new();
             self.instant_quality_anchor = ScrollAnchor::for_handle(self.page_scroll.clone());
             self.studio_quality_anchor = ScrollAnchor::for_handle(self.page_scroll.clone());
@@ -2349,15 +2362,14 @@ impl SettingsWindow {
                     .flex_col()
                     .flex_1()
                     .min_h_0()
-                    .overflow_y_scroll()
-                    .track_scroll(&self.page_scroll)
-                    // `.cap-settings-page > .px-6 { max-width: none; padding:
-                    //  18px var(--macos-settings-content-padding-x) 28px }`,
-                    //  and `space-y-7` between sections.
-                    .pt(px(18.))
-                    .px(px(CONTENT_PADDING_X))
-                    .pb(px(28.))
-                    .gap(px(28.))
+                    .when(self.page != Page::Recordings, |this| {
+                        this.overflow_y_scroll()
+                            .track_scroll(&self.page_scroll)
+                            .pt(px(18.))
+                            .px(px(CONTENT_PADDING_X))
+                            .pb(px(28.))
+                            .gap(px(28.))
+                    })
                     .children(match self.page {
                         Page::General => self.render_general(window, cx),
                         Page::Quality => self.render_recording_quality(cx),
@@ -2377,59 +2389,6 @@ impl SettingsWindow {
     }
 
     // -- The Recordings page -----------------------------------------------
-
-    /// `settings/recordings.tsx`.
-    ///
-    /// The header is a `<Section>` with an Import button; below it a filter bar
-    /// (three tab pills and the search field) and the bordered list, which is
-    /// replaced wholesale by "No recordings found" when the library is empty.
-    fn render_recordings(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
-        // `variant="gray" size="sm" class="h-[36px] px-3 gap-1.5"` --
-        // `importVideoFromPicker` (`recordings.tsx:192-215`), through this
-        // build's own remux pipeline.
-        let import = self
-            .button(
-                "recordings-import",
-                (ui::ButtonVariant::Gray, Some("icons/import.svg")),
-                "Import",
-                false,
-                cx,
-                |_, _, cx| crate::import::pick_and_import_video(cx),
-            )
-            .height(px(36.))
-            .into_any_element();
-
-        // `when={recordings.data && recordings.data.length > 0}`: an empty
-        // library and a scan still in flight take the same branch, because the
-        // route has no loading state of its own.
-        let empty_library = self
-            .recordings
-            .items
-            .as_ref()
-            .is_none_or(|items| items.is_empty());
-
-        let children = if empty_library {
-            vec![
-                self.recordings_message("No recordings found")
-                    .into_any_element(),
-            ]
-        } else {
-            vec![
-                self.render_recordings_filters(cx).into_any_element(),
-                self.render_recordings_list(cx).into_any_element(),
-            ]
-        };
-
-        vec![
-            self.section(
-                "Recordings",
-                Some("Manage your recordings and perform actions."),
-                Some(import),
-                children,
-            )
-            .into_any_element(),
-        ]
-    }
 
     fn render_screenshots(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
         // `importImageFromPicker` (`screenshots.tsx:154-177`).
@@ -2788,76 +2747,6 @@ impl SettingsWindow {
             .border_color(theme.settings_border())
             .child(tabs)
             .child(search)
-    }
-
-    /// The list: `flex relative flex-col flex-1 rounded-xl border bg-gray-2
-    /// border-gray-3`, with the "Load more" footer under it.
-    fn render_recordings_list(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = self.theme;
-        let rows = self.recordings.items.as_deref().unwrap_or_default();
-        let VisibleRows {
-            indices,
-            matching: total,
-        } = self.recordings.visible_rows();
-        let has_search = !self.recordings.trimmed_search().is_empty();
-        let visible = indices.len();
-        let more = has_more_recordings(total, has_search, self.recordings.visible_count);
-
-        // Built up front rather than in a `.children(map(..))`: the closure
-        // would have to hold `cx` across every row, which it cannot.
-        let mut items = Vec::with_capacity(visible);
-        for (index, row) in indices.into_iter().map(|row| &rows[row]).enumerate() {
-            // `not-last:border-b` counts the *rendered* rows, so the border
-            // stops at the last visible one rather than the last matching one.
-            items.push(
-                self.render_recording_row(index, row, index + 1 == visible, cx)
-                    .into_any_element(),
-            );
-        }
-
-        div()
-            .flex()
-            .flex_col()
-            .relative()
-            // `rounded-xl`, which the settings material takes to 10px.
-            .rounded(px(10.))
-            .border_1()
-            .border_color(theme.settings_border())
-            .bg(theme.settings_card_bg())
-            .overflow_hidden()
-            .when(total == 0, |this| {
-                this.child(self.recordings_message(recordings_empty_message(
-                    self.recordings.tab,
-                    self.recordings.trimmed_search(),
-                )))
-            })
-            .child(div().flex().flex_col().w_full().children(items))
-            .when(more, |this| {
-                this.child(
-                    // `flex justify-center p-3 border-t border-gray-3`
-                    div()
-                        .flex()
-                        .flex_row()
-                        .justify_center()
-                        .p(px(12.))
-                        .border_t_1()
-                        .border_color(theme.settings_border())
-                        .child(self.button(
-                            "recordings-load-more",
-                            (ui::ButtonVariant::Gray, None),
-                            "Load more",
-                            false,
-                            cx,
-                            |this, window, cx| {
-                                let total = this.recordings.visible_rows().matching;
-                                this.recordings.visible_count =
-                                    load_more_count(this.recordings.visible_count, total);
-                                this.decode_visible_recordings(window, cx);
-                                cx.notify();
-                            },
-                        )),
-                )
-            })
     }
 
     /// One `<RecordingItem>`: `flex flex-row justify-between p-3 items-center
@@ -5349,3 +5238,8 @@ mod tests {
         assert_eq!(format_project_name("{nope}"), "{nope}");
     }
 }
+
+#[cfg(test)]
+mod render_bench;
+
+mod recordings_list;
