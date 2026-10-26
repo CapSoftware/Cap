@@ -191,7 +191,7 @@ export const recordScreenWindowsContent = {
 	relatedLinks: [
 		{
 			text: "Record Screen Mac System Audio",
-			url: "/record-screen-mac-system-audio",
+			url: "/blog/record-screen-mac-system-audio",
 		},
 		{
 			text: "Video Trimmer Tool",
@@ -199,7 +199,7 @@ export const recordScreenWindowsContent = {
 		},
 		{
 			text: "Speed Controller Tool",
-			url: "/tools/speed",
+			url: "/tools/video-speed-controller",
 		},
 	],
 };
