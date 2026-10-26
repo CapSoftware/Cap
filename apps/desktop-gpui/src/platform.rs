@@ -655,8 +655,7 @@ mod mac {
         use objc2_foundation::{NSNotification, NSOperationQueue};
 
         let reduce_motion = || {
-            let reduce =
-                unsafe { NSWorkspace::sharedWorkspace().accessibilityDisplayShouldReduceMotion() };
+            let reduce = NSWorkspace::sharedWorkspace().accessibilityDisplayShouldReduceMotion();
             tracing::debug!(reduce, "system reduce motion");
             reduce
         };
@@ -1089,9 +1088,7 @@ mod mac {
                 NSAppearance::appearanceNamed(unsafe { NSAppearanceNameDarkAqua })
             }
         };
-        unsafe {
-            NSAppearanceCustomization::setAppearance(&*native.0, named.as_deref());
-        }
+        NSAppearanceCustomization::setAppearance(&*native.0, named.as_deref());
     }
 
     pub fn window_is_dark(window: &Window) -> Option<bool> {
@@ -1102,8 +1099,8 @@ mod mac {
         };
 
         let ns = ns_window(window)?;
-        let effective = unsafe { NSAppearanceCustomization::effectiveAppearance(&*ns) };
-        let name = unsafe { effective.name() };
+        let effective = NSAppearanceCustomization::effectiveAppearance(&*ns);
+        let name = effective.name();
         Some(unsafe {
             name.isEqualToString(NSAppearanceNameDarkAqua)
                 || name.isEqualToString(NSAppearanceNameVibrantDark)

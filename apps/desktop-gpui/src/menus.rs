@@ -127,7 +127,6 @@ actions!(
     [
         /// `PredefinedMenuItem::about` -- `orderFrontStandardAboutPanel`.
         About,
-        /// Manually check for or install a Cap update.
         CheckForUpdate,
         /// `PredefinedMenuItem::hide` -- ⌘H.
         HideSelf,
@@ -137,11 +136,8 @@ actions!(
         Quit,
         /// Settings… -- ⌘, on macOS, Ctrl+, on Windows and Linux.
         OpenSettings,
-        /// Choose a Cap recording to open.
         OpenFile,
-        /// Import a video or image into the library.
         ImportMedia,
-        /// Open the Changelog from the Help menu.
         Changelog,
         HelpDashboard,
         HelpDocs,

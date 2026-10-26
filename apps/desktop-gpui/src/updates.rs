@@ -532,6 +532,11 @@ pub(crate) fn schedule_startup_check(cx: &mut App) {
             // check holds it until a recording, export, import or
             // transcription has finished rather than interrupting it.
             let mut superseded = false;
+            if holds_scheduled_prompt(manual, cx.update(work_in_flight)) {
+                // Leave the menu's Check for Update row usable for the length
+                // of a recording; a manual check replaces the held prompt.
+                cx.update(|cx| set_status(UpdateStatus::Idle, cx));
+            }
             while holds_scheduled_prompt(manual, cx.update(work_in_flight)) {
                 let timer = cx.background_executor().timer(BUSY_RETRY_DELAY);
                 let request = requests.recv_async();
