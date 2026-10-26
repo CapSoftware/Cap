@@ -159,9 +159,14 @@ export async function getLoomImporterJobState({
 		}
 		const status = (await response.json()) as { jobs?: ImporterJob[] };
 		if (!Array.isArray(status.jobs)) return "unknown";
-		return status.jobs.some((job) => job.videoId === videoId)
-			? "running"
-			: "missing";
+		const matches = status.jobs.filter((job) => job.videoId === videoId);
+		if (matches.length === 0) return "missing";
+		// The worker may retain completed jobs while an import retries.
+		// Do not mistake terminal records for active processing.
+		const terminal = new Set(["complete", "error", "cancelled"]);
+		if (matches.some((job) => !terminal.has(String(job.phase))))
+			return "running";
+		return "finished";
 	} catch {
 		return "unknown";
 	}
