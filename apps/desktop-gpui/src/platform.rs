@@ -1843,6 +1843,21 @@ mod mac {
         native.0.ignoresMouseEvents() == click_through
     }
 
+    /// Whether the pointer is inside `region`, given in the window's own
+    /// top-left points. Reads the global pointer, so it keeps working while
+    /// the window ignores mouse events.
+    pub fn pointer_in_window_region(
+        native: &NativeWindow,
+        region: gpui::Bounds<gpui::Pixels>,
+    ) -> bool {
+        let frame = native.0.frame();
+        let pointer: objc2_foundation::NSPoint =
+            unsafe { objc2::msg_send![objc2::class!(NSEvent), mouseLocation] };
+        let x = pointer.x - frame.origin.x;
+        let y = frame.origin.y + frame.size.height - pointer.y;
+        region.contains(&gpui::point(gpui::px(x as f32), gpui::px(y as f32)))
+    }
+
     /// `orderOut:` -- hide without closing, the way the Tauri main window
     /// hides while the recording controls bar is up. Takes the retained
     /// handle for the same reason [`place_overlay_panel`] does: ordering a
