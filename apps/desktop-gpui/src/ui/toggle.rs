@@ -6,9 +6,11 @@
 
 use gpui::{
     App, ClickEvent, ElementId, Hsla, InteractiveElement, IntoElement, ParentElement, Pixels,
-    RenderOnce, StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder, px,
+    RenderOnce, SharedString, StatefulInteractiveElement, Styled, Window, div,
+    prelude::FluentBuilder, px,
 };
 
+use super::keyboard_nav;
 use crate::theme::Theme;
 
 /// `cva` sizes. `lg` is `w-14 h-7 p-0.75` with a `size-6` thumb; no window
@@ -54,6 +56,7 @@ pub struct Toggle {
     /// `bg-white` -- the thumb is white on every surface.
     thumb: Hsla,
     disabled: bool,
+    label: Option<SharedString>,
     on_click: Option<crate::ui::button::ClickHandler>,
 }
 
@@ -68,6 +71,7 @@ impl Toggle {
             on_fill: Hsla::from(theme.editor.accent),
             thumb: gpui::white(),
             disabled: false,
+            label: None,
             on_click: None,
         }
     }
@@ -115,6 +119,11 @@ impl Toggle {
         self
     }
 
+    pub fn label(mut self, label: impl Into<SharedString>) -> Self {
+        self.label = Some(label.into());
+        self
+    }
+
     pub fn on_click(
         mut self,
         handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
@@ -125,7 +134,7 @@ impl Toggle {
 }
 
 impl RenderOnce for Toggle {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let Toggle {
             id,
             checked,
@@ -134,12 +143,24 @@ impl RenderOnce for Toggle {
             on_fill,
             thumb,
             disabled,
+            label,
             on_click,
         } = self;
         let (width, height, padding) = size.track();
 
         div()
             .id(id)
+            .when(
+                keyboard_nav::active(window, cx) && !disabled,
+                keyboard_nav::stop,
+            )
+            .role(gpui::Role::Switch)
+            .aria_toggled(if checked {
+                gpui::Toggled::True
+            } else {
+                gpui::Toggled::False
+            })
+            .when_some(label, |this, label| this.aria_label(label))
             .w(width)
             .h(height)
             .p(padding)

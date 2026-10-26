@@ -12,7 +12,7 @@ use tray_icon::{
 use super::{
     Entry, PreviousItem, TrayItem, current_menu_entries, handle_item, scan_previous, stop_recording,
 };
-use crate::main_window::Mode;
+use crate::{i18n::tr, main_window::Mode};
 
 const TRAY_ID: &str = "cap-gpui-tray";
 const DEFAULT_ICON: &[u8] =
@@ -222,7 +222,7 @@ pub fn set_recording(recording: bool, cx: &mut App) {
         Err(error) => tracing::warn!("failed to decode the Windows tray icon: {error:#}"),
     }
     let tooltip = if recording {
-        "Cap - Stop Recording"
+        tr::tray::tooltip_recording()
     } else {
         "Cap"
     };

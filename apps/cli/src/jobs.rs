@@ -60,46 +60,51 @@ pub async fn wait_operation(
         ));
     }
     let operation_id = opaque_id(operation_id, "Operation ID")?;
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout);
-    let mut attempt = 0_u32;
-    loop {
-        let operation = client
-            .get_json(&format!("/operations/{operation_id}"))
-            .await?;
-        match operation.get("state").and_then(Value::as_str) {
-            Some("succeeded") => return Ok(operation),
-            Some("failed") => {
-                let message = operation
-                    .get("error")
-                    .and_then(|error| error.get("message"))
-                    .and_then(Value::as_str)
-                    .unwrap_or("Cap operation failed");
-                return Err(local_error("OPERATION_FAILED", message));
+    let mut request_id = None;
+    let wait = async {
+        let mut attempt = 0_u32;
+        loop {
+            let operation = client
+                .get_json(&format!("/operations/{operation_id}"))
+                .await?;
+            request_id = operation
+                .get("requestId")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            match operation.get("state").and_then(Value::as_str) {
+                Some("succeeded") => return Ok(operation),
+                Some("failed") => {
+                    let message = operation
+                        .get("error")
+                        .and_then(|error| error.get("message"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("Cap operation failed");
+                    return Err(local_error("OPERATION_FAILED", message));
+                }
+                Some("queued" | "running") => {}
+                _ => {
+                    return Err(local_error(
+                        "TEMPORARY_UNAVAILABLE",
+                        "Cap returned an invalid operation state",
+                    ));
+                }
             }
-            Some("queued" | "running") => {}
-            _ => {
-                return Err(local_error(
-                    "TEMPORARY_UNAVAILABLE",
-                    "Cap returned an invalid operation state",
-                ));
-            }
+            let delay = 500_u64.saturating_mul(1_u64 << attempt.min(4));
+            tokio::time::sleep(Duration::from_millis(delay.min(10_000))).await;
+            attempt = attempt.saturating_add(1);
         }
-        if tokio::time::Instant::now() >= deadline {
-            return Err(AgentApiError {
+    };
+    tokio::time::timeout(Duration::from_secs(timeout), wait)
+        .await
+        .unwrap_or_else(|_| {
+            Err(AgentApiError {
                 code: "NOT_READY".to_string(),
                 message: "Timed out waiting for the Cap operation".to_string(),
                 retryable: true,
                 retry_after_ms: Some(2_000),
-                request_id: operation
-                    .get("requestId")
-                    .and_then(Value::as_str)
-                    .map(str::to_string),
-            });
-        }
-        let delay = 500_u64.saturating_mul(1_u64 << attempt.min(4));
-        tokio::time::sleep(Duration::from_millis(delay.min(10_000))).await;
-        attempt = attempt.saturating_add(1);
-    }
+                request_id,
+            })
+        })
 }
 
 impl JobsArgs {

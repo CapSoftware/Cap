@@ -652,7 +652,7 @@ export function RecordingUploadProvider({ children }: { children: ReactNode }) {
 					);
 				}
 
-				apply({ type: "processing", id: job.id });
+				flushPersist();
 				await authClient.completeRecording(job.id, {
 					durationSeconds: job.durationSeconds,
 					totalBytes: job.totalBytes,
@@ -665,6 +665,7 @@ export function RecordingUploadProvider({ children }: { children: ReactNode }) {
 						duration: segment.durationSeconds,
 					})),
 				});
+				apply({ type: "processing", id: job.id });
 				notifyLibraryChanged();
 				await refreshAuth().catch(() => undefined);
 				const directory = recordingDirectoryFromSegment(job.segments[0]);
