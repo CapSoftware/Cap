@@ -63,10 +63,6 @@ fn dialog_surfaces_match_the_literals_they_replaced() {
             tr::diagnostics::already_running(),
             "A diagnostic is already running.",
         ),
-        (
-            tr::diagnostics::cancelled(),
-            "The diagnostic was cancelled.",
-        ),
         (tr::diagnostics::mode_both(), "Both"),
         (
             tr::diagnostics::error::no_output(),

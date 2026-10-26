@@ -592,7 +592,6 @@ sign_in_failed = "登录失败"
 
 [diagnostics]
 already_running = "已有一项诊断正在运行。"
-cancelled = "诊断已取消。"
 mode_both = "两者"
 
 [diagnostics.error]

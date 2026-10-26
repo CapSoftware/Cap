@@ -592,7 +592,6 @@ sign_in_failed = "No se pudo iniciar sesión"
 
 [diagnostics]
 already_running = "Ya hay un diagnóstico en curso."
-cancelled = "Se canceló el diagnóstico."
 mode_both = "Ambos"
 
 [diagnostics.error]

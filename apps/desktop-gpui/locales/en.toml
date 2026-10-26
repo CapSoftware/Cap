@@ -594,7 +594,6 @@ sign_in_failed = "Sign in failed"
 
 [diagnostics]
 already_running = "A diagnostic is already running."
-cancelled = "The diagnostic was cancelled."
 mode_both = { text = "Both", context = "Segment beside Studio and Instant: run the sync test in both modes." }
 
 [diagnostics.error]

@@ -592,7 +592,6 @@ sign_in_failed = "Anmeldung fehlgeschlagen"
 
 [diagnostics]
 already_running = "Es läuft bereits eine Diagnose."
-cancelled = "Die Diagnose wurde abgebrochen."
 mode_both = "Beide"
 
 [diagnostics.error]

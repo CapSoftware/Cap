@@ -592,7 +592,6 @@ sign_in_failed = "サインインに失敗しました"
 
 [diagnostics]
 already_running = "診断はすでに実行中です。"
-cancelled = "診断はキャンセルされました。"
 mode_both = "両方"
 
 [diagnostics.error]

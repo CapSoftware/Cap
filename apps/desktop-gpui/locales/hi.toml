@@ -592,7 +592,6 @@ sign_in_failed = "साइन इन विफल रहा"
 
 [diagnostics]
 already_running = "एक डायग्नॉस्टिक पहले से चल रहा है।"
-cancelled = "डायग्नॉस्टिक रद्द कर दिया गया।"
 mode_both = "दोनों"
 
 [diagnostics.error]

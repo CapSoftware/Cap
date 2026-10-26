@@ -592,7 +592,6 @@ sign_in_failed = "Échec de la connexion"
 
 [diagnostics]
 already_running = "Un diagnostic est déjà en cours."
-cancelled = "Le diagnostic a été annulé."
 mode_both = "Les deux"
 
 [diagnostics.error]

@@ -489,7 +489,7 @@ pub fn run_sync_test(
     mut on_stage: impl FnMut(Stage),
 ) -> Result<Value, String> {
     if cancel.load(Ordering::Relaxed) {
-        return Err(tr::diagnostics::cancelled().to_string());
+        return Err(CANCELLED.to_string());
     }
 
     // Wrapped before anything else can fail: every early return from here on
@@ -568,7 +568,7 @@ pub fn run_sync_test(
         .and_then(|mut child| child.0.wait().map_err(|error| error.to_string()));
 
     if cancel.load(Ordering::Relaxed) {
-        return Err(tr::diagnostics::cancelled().to_string());
+        return Err(CANCELLED.to_string());
     }
     if let Some(report) = report {
         return Ok(report);
@@ -590,6 +590,8 @@ pub fn run_sync_test(
             .join("\n"),
     )
 }
+
+pub const CANCELLED: &str = "The diagnostic was cancelled.";
 
 // ---------------------------------------------------------------------------
 // The environment report
