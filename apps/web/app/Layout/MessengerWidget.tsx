@@ -409,6 +409,7 @@ function ChatView({
 	useEffect(() => {
 		let active = true;
 		let pollVersion = 0;
+		let appliedPollVersion = 0;
 		const interval = setInterval(async () => {
 			if (isSendingRef.current) return;
 			const requestVersion = ++pollVersion;
@@ -420,10 +421,11 @@ function ChatView({
 				!active ||
 				!data ||
 				isSendingRef.current ||
-				requestVersion !== pollVersion ||
+				requestVersion <= appliedPollVersion ||
 				messageVersion !== messageVersionRef.current
 			)
 				return;
+			appliedPollVersion = requestVersion;
 
 			const newAgentCount = data.messages.filter(
 				(m) => m.role === "agent" || m.role === "admin",

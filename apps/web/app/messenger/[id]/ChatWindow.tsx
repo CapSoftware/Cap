@@ -182,6 +182,7 @@ export function ChatWindow({
 	useEffect(() => {
 		let active = true;
 		let pollVersion = 0;
+		let appliedPollVersion = 0;
 		const interval = setInterval(async () => {
 			if (isSendingRef.current) return;
 			const requestVersion = ++pollVersion;
@@ -193,10 +194,11 @@ export function ChatWindow({
 				!active ||
 				!data ||
 				isSendingRef.current ||
-				requestVersion !== pollVersion ||
+				requestVersion <= appliedPollVersion ||
 				messageVersion !== messageVersionRef.current
 			)
 				return;
+			appliedPollVersion = requestVersion;
 			setMessages(data.messages);
 			setConversation(data.conversation);
 		}, FULLPAGE_POLL_MS);

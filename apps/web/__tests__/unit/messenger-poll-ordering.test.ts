@@ -110,6 +110,21 @@ async function send() {
 }
 
 describe.each(["page", "widget"] as const)("%s polling ownership", (kind) => {
+	it("keeps applying replies when every response finishes after the following poll starts", async () => {
+		await mount(kind);
+		const requests = Array.from({ length: 4 }, () => deferred<Data>());
+		for (const request of requests)
+			actions.fetchMessengerConversation.mockReturnValueOnce(request.promise);
+		await tick();
+		for (let index = 0; index < requests.length - 1; index++) {
+			await tick();
+			await act(async () => requests[index]?.resolve(data(`Reply ${index}`)));
+			expect(container.textContent).toContain(`Reply ${index}`);
+		}
+		await act(async () => requests.at(-1)?.resolve(data("Final reply")));
+		expect(container.textContent).toContain("Final reply");
+	});
+
 	it("retains the latest snapshot when older polls finish last", async () => {
 		await mount(kind);
 		const older = deferred<Data>();
@@ -140,7 +155,7 @@ describe.each(["page", "widget"] as const)("%s polling ownership", (kind) => {
 		expect(container.textContent).toContain("Sent message");
 	});
 
-	it("does not apply an old snapshot after the newer poll fails, and can refresh again", async () => {
+	it("allows a successful response when a newer poll fails, and can refresh again", async () => {
 		await mount(kind);
 		const older = deferred<Data>();
 		const newer = deferred<Data>();
@@ -151,8 +166,8 @@ describe.each(["page", "widget"] as const)("%s polling ownership", (kind) => {
 		await tick();
 		await tick();
 		await act(async () => newer.reject(new Error("Offline")));
-		await act(async () => older.resolve(data("Superseded reply")));
-		expect(container.textContent).not.toContain("Superseded reply");
+		await act(async () => older.resolve(data("Available reply")));
+		expect(container.textContent).toContain("Available reply");
 		await tick();
 		expect(container.textContent).toContain("Recovered reply");
 	});
