@@ -1,5 +1,6 @@
 use super::cadence::FrameCadenceGate;
 use super::linux_dmabuf_import;
+use super::linux_pipewire_frames::{self, LinearGeometry, PipewireFrames, SourcePlane};
 use super::linux_shm::{self, ShmSegment};
 use super::*;
 use crate::feeds::microphone::{self, MicrophoneFeed, MicrophoneFeedLock};
@@ -301,7 +302,8 @@ struct PipewireCaptureState {
     scaler: Option<FrameScaler>,
     video_info: VideoInfo,
     crop_bounds: Option<CropBounds>,
-    video_tx: mpsc::Sender<FFmpegVideoFrame>,
+    video_tx: Arc<parking_lot::Mutex<Option<mpsc::Sender<FFmpegVideoFrame>>>>,
+    frames: PipewireFrames,
     health_tx: output_pipeline::HealthSender,
     stop_requested: Arc<AtomicBool>,
     fatal_error: Arc<parking_lot::Mutex<Option<String>>>,
@@ -551,12 +553,17 @@ fn capture_pipewire_node(
         .map(|importer| pipewire_imported_format_params(input.fps, importer))
         .unwrap_or_default();
 
+    let frames = PipewireFrames::new();
+    let video_tx = Arc::new(parking_lot::Mutex::new(Some(video_tx)));
+    let frames_shutdown = frames.clone();
+    let video_tx_shutdown = video_tx.clone();
     let state = PipewireCaptureState {
         format: Default::default(),
         scaler: None,
         video_info,
         crop_bounds: input.crop_bounds,
         video_tx,
+        frames,
         health_tx,
         stop_requested: stop_requested.clone(),
         fatal_error: fatal_error.clone(),
@@ -580,6 +587,14 @@ fn capture_pipewire_node(
     )
     .context("create PipeWire screen capture stream")?;
 
+    let (release_tx, release_rx) = pw::channel::channel();
+    frames_shutdown.set_requeue_sender(release_tx);
+    frames_shutdown.set_stream(stream.as_raw_ptr());
+    let _release_rx = release_rx.attach(thread_loop.loop_(), {
+        let frames = frames_shutdown.clone();
+        move |buffer| frames.queue_released_buffer(buffer)
+    });
+
     let _listener = stream
         .add_local_listener_with_user_data(state)
         .state_changed(|_, state, _, new| {
@@ -591,14 +606,30 @@ fn capture_pipewire_node(
             match update_pipewire_format(state, id, param) {
                 Ok(PipewireFormatChange::DmaBuf) => {
                     // A compositor that only shares DMA-BUFs (niri) still has to
-                    // be told the consumer takes them.
-                    if let Err(error) = request_dmabuf_buffers(stream) {
+                    // be told the consumer takes them. Ask for a pool large
+                    // enough that one buffer can stay borrowed by the encoder.
+                    if let Err(error) =
+                        request_capture_buffers(stream, 1 << spa::buffer::DataType::DmaBuf.as_raw())
+                    {
                         state.set_fatal_error(error.to_string());
                     }
                 }
-                Ok(PipewireFormatChange::None | PipewireFormatChange::Memory) => {}
+                Ok(PipewireFormatChange::Memory) => {
+                    let memory = (1 << spa::buffer::DataType::MemFd.as_raw())
+                        | (1 << spa::buffer::DataType::MemPtr.as_raw());
+                    if let Err(error) = request_capture_buffers(stream, memory) {
+                        state.set_fatal_error(error.to_string());
+                    }
+                }
+                Ok(PipewireFormatChange::None) => {}
                 Err(error) => state.set_fatal_error(error.to_string()),
             }
+        })
+        .add_buffer(|_, state, _buffer| {
+            state.frames.add_pool_buffer();
+        })
+        .remove_buffer(|_, state, buffer| {
+            state.frames.remove_pool_buffer(buffer);
         })
         .process(|stream, state| {
             if state.stop_requested.load(Ordering::Relaxed) {
@@ -660,6 +691,14 @@ fn capture_pipewire_node(
 
     stop_requested.store(true, Ordering::Relaxed);
     thread_loop.stop();
+    // The muxer holds the latest frame until the next one replaces it, so an
+    // alias can outlive this thread. Drop the sender to let that drain finish,
+    // then destroy the stream only after the last reference is gone.
+    // `pw_stream_queue_buffer` is single-producer on this loop; a late release
+    // only posts the buffer address here. Destroying the stream earlier would
+    // unmap memory the encoder is still reading.
+    video_tx_shutdown.lock().take();
+    let idle = frames_shutdown.wait_idle(Duration::from_secs(30));
 
     let error = fatal_error.lock().take();
     tracing::info!(
@@ -669,6 +708,17 @@ fn capture_pipewire_node(
         elapsed_ms = started.elapsed().as_millis() as u64,
         "Linux Wayland PipeWire capture stopped"
     );
+
+    if !idle {
+        tracing::error!("PipeWire screen capture stopped while a frame was still borrowed");
+        std::mem::forget(_release_rx);
+        std::mem::forget(_listener);
+        std::mem::forget(stream);
+        std::mem::forget(core);
+        std::mem::forget(context);
+        std::mem::forget(thread_loop);
+        bail!("PipeWire screen capture stopped while a frame was still borrowed");
+    }
 
     if let Some(error) = error {
         Err(anyhow!(error))
@@ -715,6 +765,7 @@ fn update_pipewire_format(
         )
     })?;
     state.format = format;
+    state.frames.retire_all();
 
     let dmabuf = param.as_object().is_ok_and(|object| {
         object
@@ -737,18 +788,28 @@ fn update_pipewire_format(
     })
 }
 
-fn request_dmabuf_buffers(stream: &pw::stream::Stream) -> anyhow::Result<()> {
-    let dmabuf = 1 << spa::buffer::DataType::DmaBuf.as_raw();
+fn request_capture_buffers(stream: &pw::stream::Stream, data_type: i32) -> anyhow::Result<()> {
     let object = spa::pod::object!(
         spa::utils::SpaTypes::ObjectParamBuffers,
         spa::param::ParamType::Buffers,
+        spa::pod::Property::new(
+            spa::sys::SPA_PARAM_BUFFERS_buffers,
+            spa::pod::Value::Choice(spa::pod::ChoiceValue::Int(spa::utils::Choice(
+                spa::utils::ChoiceFlags::empty(),
+                spa::utils::ChoiceEnum::Range {
+                    default: 8,
+                    min: 1,
+                    max: 32,
+                },
+            ))),
+        ),
         spa::pod::Property::new(
             spa::sys::SPA_PARAM_BUFFERS_dataType,
             spa::pod::Value::Choice(spa::pod::ChoiceValue::Int(spa::utils::Choice(
                 spa::utils::ChoiceFlags::empty(),
                 spa::utils::ChoiceEnum::Flags {
-                    default: dmabuf,
-                    flags: vec![dmabuf],
+                    default: data_type,
+                    flags: vec![data_type],
                 },
             ))),
         )
@@ -758,89 +819,7 @@ fn request_dmabuf_buffers(stream: &pw::stream::Stream) -> anyhow::Result<()> {
         .ok_or_else(|| anyhow!("create PipeWire buffers parameter"))?;
     stream
         .update_params(&mut [pod])
-        .context("ask PipeWire for DMA-BUF screen capture buffers")
-}
-
-/// A DMA-BUF the producer did not map, mapped for reading one frame. LINEAR
-/// buffers are plain rows a CPU can read once the kernel syncs the buffer.
-struct DmaBufMapping {
-    fd: std::os::fd::RawFd,
-    pointer: *mut libc::c_void,
-    len: usize,
-}
-
-const DMA_BUF_IOCTL_SYNC: libc::c_ulong = 0x4008_6200;
-const DMA_BUF_SYNC_READ: u64 = 1;
-const DMA_BUF_SYNC_END: u64 = 1 << 2;
-
-impl DmaBufMapping {
-    fn map(fd: std::os::fd::RawFd, minimum_len: usize) -> anyhow::Result<Self> {
-        if fd < 0 {
-            bail!("PipeWire screen capture DMA-BUF had no file descriptor");
-        }
-        let size = unsafe { libc::lseek(fd, 0, libc::SEEK_END) };
-        let len = usize::try_from(size)
-            .ok()
-            .filter(|len| *len > 0)
-            .unwrap_or(minimum_len);
-        if len < minimum_len {
-            bail!(
-                "PipeWire screen capture DMA-BUF holds {len} bytes, the frame needs {minimum_len}"
-            );
-        }
-        let pointer = unsafe {
-            libc::mmap(
-                std::ptr::null_mut(),
-                len,
-                libc::PROT_READ,
-                libc::MAP_SHARED,
-                fd,
-                0,
-            )
-        };
-        if pointer == libc::MAP_FAILED {
-            return Err(std::io::Error::last_os_error())
-                .context("map the PipeWire screen capture DMA-BUF");
-        }
-        let mapping = Self { fd, pointer, len };
-        mapping
-            .sync(DMA_BUF_SYNC_READ)
-            .context("sync the PipeWire screen capture DMA-BUF for reading")?;
-        Ok(mapping)
-    }
-
-    /// The kernel's DMA-BUF read fence. A buffer that is not a DMA-BUF (a
-    /// memfd standing in for one) has none and answers ENOTTY.
-    fn sync(&self, flags: u64) -> std::io::Result<()> {
-        let sync = flags;
-        loop {
-            let result = unsafe { libc::ioctl(self.fd, DMA_BUF_IOCTL_SYNC, &sync as *const u64) };
-            if result == 0 {
-                return Ok(());
-            }
-            let error = std::io::Error::last_os_error();
-            match error.raw_os_error() {
-                Some(libc::EINTR | libc::EAGAIN) => continue,
-                Some(libc::ENOTTY) => return Ok(()),
-                _ => return Err(error),
-            }
-        }
-    }
-
-    fn bytes(&self) -> &[u8] {
-        unsafe { std::slice::from_raw_parts(self.pointer as *const u8, self.len) }
-    }
-}
-
-impl Drop for DmaBufMapping {
-    fn drop(&mut self) {
-        if let Err(error) = self.sync(DMA_BUF_SYNC_READ | DMA_BUF_SYNC_END) {
-            tracing::warn!(%error, "ending the PipeWire screen capture DMA-BUF read failed");
-        }
-        unsafe {
-            libc::munmap(self.pointer, self.len);
-        }
-    }
+        .context("ask PipeWire for screen capture buffers")
 }
 
 fn serialize_pod(object: spa::pod::Object, what: &str) -> anyhow::Result<Vec<u8>> {
@@ -853,14 +832,50 @@ fn serialize_pod(object: spa::pod::Object, what: &str) -> anyhow::Result<Vec<u8>
     .into_inner())
 }
 
+struct HeldBuffer<'a> {
+    stream: &'a pw::stream::Stream,
+    buffer: *mut pw::sys::pw_buffer,
+    leased: bool,
+}
+
+impl Drop for HeldBuffer<'_> {
+    fn drop(&mut self) {
+        if self.leased || self.buffer.is_null() {
+            return;
+        }
+        unsafe {
+            self.stream.queue_raw_buffer(self.buffer);
+        }
+    }
+}
+
+unsafe fn pw_buffer_datas(buffer: *mut pw::sys::pw_buffer) -> &'static mut [spa::buffer::Data] {
+    unsafe {
+        if buffer.is_null() {
+            return &mut [];
+        }
+        let spa = (*buffer).buffer;
+        if spa.is_null() || (*spa).datas.is_null() || (*spa).n_datas == 0 {
+            return &mut [];
+        }
+        std::slice::from_raw_parts_mut((*spa).datas.cast(), (*spa).n_datas as usize)
+    }
+}
+
 fn process_pipewire_frame(
     stream: &pw::stream::Stream,
     state: &mut PipewireCaptureState,
 ) -> anyhow::Result<Option<StallSendOutcome>> {
-    let Some(mut buffer) = stream.dequeue_buffer() else {
+    let buffer = unsafe { stream.dequeue_raw_buffer() };
+    if buffer.is_null() {
         return Ok(None);
+    }
+    let mut held = HeldBuffer {
+        stream,
+        buffer,
+        leased: false,
     };
-    let datas = buffer.datas_mut();
+    let datas = unsafe { pw_buffer_datas(buffer) };
     if datas.is_empty() {
         return Ok(None);
     }
@@ -892,17 +907,30 @@ fn process_pipewire_frame(
             importer,
             &mut state.imported,
         )?
+        .map(|frame| (frame, false))
     } else {
-        frame_from_pipewire_data(&mut datas[0], state.format, state.crop_bounds)?
+        frame_from_pipewire_data(
+            &mut datas[0],
+            state.format,
+            state.crop_bounds,
+            &state.frames,
+            buffer as usize,
+            state.frames.can_lease(),
+        )?
     };
-    let Some(raw_frame) = raw_frame else {
+    let Some((raw_frame, leased)) = raw_frame else {
         return Ok(Some(StallSendOutcome::StalledAndDropped { waited_ms: 0 }));
     };
+    held.leased = leased;
     let frame = prepare_pipewire_frame(raw_frame, &mut state.scaler, state.video_info)?;
     let timestamp = Timestamp::Instant(captured_at);
 
+    let mut video_tx = state.video_tx.lock();
+    let Some(video_tx) = video_tx.as_mut() else {
+        return Ok(Some(StallSendOutcome::Disconnected));
+    };
     Ok(Some(send_with_stall_budget_futures(
-        &mut state.video_tx,
+        video_tx,
         FFmpegVideoFrame {
             inner: frame,
             timestamp,
@@ -943,7 +971,10 @@ fn frame_from_pipewire_data(
     data: &mut spa::buffer::Data,
     format: spa::param::video::VideoInfoRaw,
     crop_bounds: Option<CropBounds>,
-) -> anyhow::Result<Option<ffmpeg::frame::Video>> {
+    frames: &PipewireFrames,
+    pw_buffer: usize,
+    lease: bool,
+) -> anyhow::Result<Option<(ffmpeg::frame::Video, bool)>> {
     let (pixel_format, bytes_per_pixel) =
         pipewire_pixel_format(format.format()).ok_or_else(|| {
             anyhow!(
@@ -978,59 +1009,55 @@ fn frame_from_pipewire_data(
     let (crop_x, crop_y, crop_width, crop_height) =
         pipewire_crop(source_width, source_height, crop_bounds)?;
     let offset = chunk_offset as usize;
-    let dmabuf_fd = (data.type_() == spa::buffer::DataType::DmaBuf).then(|| data.fd() as i32);
-    let mapping;
-    let source: &[u8] = match data.data() {
-        Some(source) => source,
-        None => {
-            let Some(fd) = dmabuf_fd else {
-                bail!("PipeWire screen capture buffer was not memory-mapped");
-            };
-            mapping = DmaBufMapping::map(fd, offset + source_stride * source_height)?;
-            mapping.bytes()
+    let data_type = data.type_();
+    let fd = data.fd();
+    let dmabuf = data_type == spa::buffer::DataType::DmaBuf;
+    let memfd = data_type == spa::buffer::DataType::MemFd;
+    let plane = if (dmabuf || memfd) && fd >= 0 {
+        SourcePlane {
+            data: std::ptr::null_mut(),
+            data_len: 0,
+            fd,
+            sync_dma_buf: dmabuf,
+            pw_buffer,
         }
+    } else if let Some(mapped) = data.data() {
+        let data_len = mapped.len();
+        let data = mapped.as_mut_ptr();
+        SourcePlane {
+            data,
+            data_len,
+            fd: -1,
+            sync_dma_buf: false,
+            pw_buffer,
+        }
+    } else {
+        bail!("PipeWire screen capture buffer was not memory-mapped");
     };
     // DMA-BUF producers may leave the chunk size unset (the PipeWire DMA-BUF
     // docs tell consumers to ignore it), so the mapping bounds the frame.
-    let source_limit = if chunk_size > 0 && dmabuf_fd.is_none() {
-        offset
-            .checked_add(chunk_size as usize)
-            .map(|limit| limit.min(source.len()))
-            .ok_or_else(|| anyhow!("PipeWire screen capture frame size overflowed"))?
+    let limit = if chunk_size > 0 && !dmabuf {
+        Some(
+            offset
+                .checked_add(chunk_size as usize)
+                .ok_or_else(|| anyhow!("PipeWire screen capture frame size overflowed"))?,
+        )
     } else {
-        source.len()
+        None
     };
-    let row_bytes = crop_width * bytes_per_pixel;
-
-    let mut frame = ffmpeg::frame::Video::new(pixel_format, crop_width as u32, crop_height as u32);
-    let target_stride = frame.stride(0);
-    if target_stride < row_bytes {
-        bail!(
-            "PipeWire target frame stride was too small: {} for {}x{}",
-            target_stride,
-            crop_width,
-            crop_height
-        );
-    }
-
-    for y in 0..crop_height {
-        let source_start = offset + (crop_y + y) * source_stride + crop_x * bytes_per_pixel;
-        let source_end = source_start + row_bytes;
-        if source_end > source_limit {
-            bail!(
-                "PipeWire screen capture frame was too small: {} bytes for {}x{}",
-                source.len(),
-                source_width,
-                source_height
-            );
-        }
-
-        let target_start = y * target_stride;
-        frame.data_mut(0)[target_start..target_start + row_bytes]
-            .copy_from_slice(&source[source_start..source_end]);
-    }
-
-    Ok(Some(frame))
+    let geometry = LinearGeometry {
+        pixel_format,
+        bytes_per_pixel,
+        source_stride,
+        crop_x,
+        crop_y,
+        crop_width,
+        crop_height,
+        offset,
+        limit,
+    };
+    let (frame, leased) = linux_pipewire_frames::linear_frame(frames, &plane, &geometry, lease)?;
+    Ok(Some((frame, leased)))
 }
 
 /// A frame with a GPU-tiled modifier, read back through EGL as RGBA.
@@ -3421,10 +3448,10 @@ mod system_audio_tests {
 #[cfg(test)]
 mod pipewire_frame_tests {
     use super::{
-        FrameScaler, LinuxCaptureSource, PipewireNodeInput, VideoInfo, capture_pipewire_node,
-        frame_from_pipewire_data, pipewire_dmabuf_format_param, pipewire_format_param,
-        prefers_wayland_environment, prepare_pipewire_frame, spa, wayland_area_matches_display,
-        wayland_video_info,
+        FrameScaler, LinuxCaptureSource, PipewireFrames, PipewireNodeInput, VideoInfo,
+        capture_pipewire_node, frame_from_pipewire_data, pipewire_dmabuf_format_param,
+        pipewire_format_param, prefers_wayland_environment, prepare_pipewire_frame, spa,
+        wayland_area_matches_display, wayland_video_info,
     };
     use std::os::fd::AsRawFd;
 
@@ -3567,9 +3594,11 @@ mod pipewire_frame_tests {
             height: height as u32,
         });
         format.set_modifier(0);
-        let frame = frame_from_pipewire_data(data, format, None)
+        let frames = PipewireFrames::new();
+        let (frame, leased) = frame_from_pipewire_data(data, format, None, &frames, 0, true)
             .unwrap()
             .expect("a frame");
+        assert!(leased);
         assert_eq!((frame.width(), frame.height()), (4, 3));
         assert_eq!(frame.format(), ffmpeg::format::Pixel::BGRZ);
         for y in 0..height {
