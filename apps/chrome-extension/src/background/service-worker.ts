@@ -1028,26 +1028,55 @@ const openRecordingDestination = (status: RecordingStatus) => {
 	return run;
 };
 
-let bootstrapRefreshInFlight = false;
+let bootstrapGeneration = 0;
+let bootstrapRefreshInFlight: Promise<BootstrapData> | null = null;
+let bootstrapCacheReset: Promise<void> = Promise.resolve();
 
-const refreshBootstrapInBackground = (
-	settings: ExtensionSettings,
-	auth: ExtensionAuth,
-) => {
-	if (bootstrapRefreshInFlight) return;
-	bootstrapRefreshInFlight = true;
-	fetchBootstrap(settings, auth)
-		.then((bootstrap) => {
+const resetBootstrapCache = () => {
+	bootstrapGeneration++;
+	bootstrapCache = null;
+	bootstrapRefreshInFlight = null;
+	bootstrapCacheReset = clearCachedBootstrap();
+	return bootstrapCacheReset;
+};
+
+const requireBootstrapGeneration = (generation: number) => {
+	if (generation !== bootstrapGeneration) {
+		throw new Error("Sign-in changed. Please try again.");
+	}
+};
+
+const refreshBootstrap = (settings: ExtensionSettings, auth: ExtensionAuth) => {
+	if (bootstrapRefreshInFlight) return bootstrapRefreshInFlight;
+	const generation = bootstrapGeneration;
+	const refresh = fetchBootstrap(settings, auth)
+		.then(async (bootstrap) => {
+			requireBootstrapGeneration(generation);
 			bootstrapCache = bootstrap;
-			return saveCachedBootstrap(bootstrap);
+			await saveCachedBootstrap(bootstrap);
+			requireBootstrapGeneration(generation);
+			return bootstrap;
 		})
-		.catch(() => undefined)
 		.finally(() => {
-			bootstrapRefreshInFlight = false;
+			if (bootstrapRefreshInFlight === refresh) {
+				bootstrapRefreshInFlight = null;
+			}
 		});
+	bootstrapRefreshInFlight = refresh;
+	return refresh;
+};
+
+const loadBootstrapCache = async (auth: ExtensionAuth) => {
+	const generation = bootstrapGeneration;
+	await bootstrapCacheReset;
+	const cached = bootstrapCache ?? (await loadCachedBootstrap());
+	requireBootstrapGeneration(generation);
+	bootstrapCache = cached?.user.id === auth.userId ? cached : null;
+	return bootstrapCache;
 };
 
 const loadSignedInState = async () => {
+	const generation = bootstrapGeneration;
 	const [settings, auth, pendingAuth, authError] = await Promise.all([
 		loadSettings(),
 		loadAuth(),
@@ -1059,18 +1088,18 @@ const loadSignedInState = async () => {
 	if (pendingAuth && !authPending) {
 		await clearPendingAuth();
 	}
+	requireBootstrapGeneration(generation);
 	if (!auth) {
 		return { settings, auth: null, bootstrap: null, authPending, authError };
 	}
 
-	if (!bootstrapCache) {
-		bootstrapCache = await loadCachedBootstrap();
-	}
+	await loadBootstrapCache(auth);
+	requireBootstrapGeneration(generation);
 
 	// Serve the cached bootstrap immediately so the popup opens without waiting
 	// on the network, and refresh it in the background.
 	if (bootstrapCache) {
-		refreshBootstrapInBackground(settings, auth);
+		void refreshBootstrap(settings, auth).catch(() => undefined);
 		return {
 			settings,
 			auth,
@@ -1080,12 +1109,11 @@ const loadSignedInState = async () => {
 		};
 	}
 
-	bootstrapCache = await fetchBootstrap(settings, auth);
-	await saveCachedBootstrap(bootstrapCache);
+	const bootstrap = await refreshBootstrap(settings, auth);
 	return {
 		settings,
 		auth,
-		bootstrap: bootstrapCache,
+		bootstrap,
 		authPending: false,
 		authError: null,
 	};
@@ -1411,8 +1439,8 @@ const beginAuthFlow = async (settings: ExtensionSettings) => {
 				await revokeAuth(settings, previousAuth).catch(() => undefined);
 			}
 			await saveAuth(auth);
-			bootstrapCache = null;
-			refreshBootstrapInBackground(settings, auth);
+			await resetBootstrapCache();
+			void refreshBootstrap(settings, auth).catch(() => undefined);
 		})
 		.catch(async (error: unknown) => {
 			// This rejection has no open message channel to land in; persist it
@@ -1511,15 +1539,16 @@ const handleRequest = async (
 			}
 		}
 		await clearAuth();
+		await resetBootstrapCache();
 		await clearPendingAuth();
-		await clearCachedBootstrap();
-		bootstrapCache = null;
 		return { ok: true, auth: null, settings };
 	}
 
 	if (message.type === "bootstrap") {
+		const generation = bootstrapGeneration;
 		const state = await loadSignedInState();
 		await syncRecordingStatus().catch(() => recordingStatus);
+		requireBootstrapGeneration(generation);
 		return {
 			ok: true,
 			auth: state.auth,
@@ -1620,7 +1649,10 @@ const handleRequest = async (
 			() => recordingStatus,
 		);
 		if (!bootstrapCache) {
-			bootstrapCache = await loadCachedBootstrap();
+			const generation = bootstrapGeneration;
+			const auth = await loadAuth();
+			requireBootstrapGeneration(generation);
+			if (auth) await loadBootstrapCache(auth);
 		}
 		return {
 			ok: true,
