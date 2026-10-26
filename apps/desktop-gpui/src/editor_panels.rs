@@ -186,7 +186,6 @@ pub struct TextPresetStyle {
 /// placement, and it is the one field that moves the box.
 pub struct TextPreset {
     pub id: &'static str,
-    /// Which [`TEXT_PRESET_GROUPS`] chip shows it, by that chip's id.
     pub group: &'static str,
     pub name: fn() -> &'static str,
     pub sample: fn() -> &'static str,

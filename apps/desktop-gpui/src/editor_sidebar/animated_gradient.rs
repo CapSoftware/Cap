@@ -107,8 +107,7 @@ impl AnimatedGradientState {
     }
 }
 
-/// A control's label in the current language. The catalog's own label is the
-/// English one the Tauri app shares.
+/// The catalog's own labels are the English ones the Tauri app shares.
 fn control_label(control: &AnimatedGradientControl) -> SharedString {
     SharedString::new_static(match control.key {
         AnimatedGradientParameter::Direction => {
@@ -159,8 +158,6 @@ fn control_label(control: &AnimatedGradientControl) -> SharedString {
     })
 }
 
-/// A control group's tab label in the current language, by the catalog's
-/// English group name.
 fn group_label(name: &str) -> SharedString {
     match name {
         "Flow" => SharedString::new_static(tr::editor::sidebar::animated_gradient::group::flow()),

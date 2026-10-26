@@ -139,7 +139,6 @@ pub const BACKGROUND_THEMES: [(&str, &str); 6] = [
     ("orange", "Orange"),
 ];
 
-/// A [`BACKGROUND_THEMES`] tab's label in the current language.
 pub fn background_theme_label(id: &str) -> &'static str {
     match id {
         "dark" => tr::editor::sidebar::wallpaper_theme::dark(),
@@ -279,7 +278,6 @@ impl SidebarTab {
         }
     }
 
-    /// What the rail's tooltip calls the tab, in the current language.
     pub fn title(self) -> &'static str {
         match self {
             Self::Background => tr::editor::sidebar::tab::background(),
