@@ -1,4 +1,4 @@
-use std::{cell::RefCell, collections::VecDeque, ffi::c_void, ptr, sync::Arc};
+use std::{cell::RefCell, collections::VecDeque, ffi::c_void, ptr};
 
 use cap_camera::CapturedFrame;
 use cap_camera_windows::PixelFormat;
@@ -242,6 +242,35 @@ struct MfPlane {
     stride: usize,
 }
 
+struct MfPlanes {
+    planes: [MfPlane; 3],
+    len: usize,
+}
+
+impl MfPlanes {
+    fn new() -> Self {
+        Self {
+            planes: [MfPlane {
+                ptr: ptr::null_mut(),
+                len: 0,
+                stride: 0,
+            }; 3],
+            len: 0,
+        }
+    }
+
+    fn push(&mut self, plane: MfPlane) {
+        if self.len < self.planes.len() {
+            self.planes[self.len] = plane;
+            self.len += 1;
+        }
+    }
+
+    fn as_slice(&self) -> &[MfPlane] {
+        &self.planes[..self.len]
+    }
+}
+
 enum MfLock {
     TwoD2(IMF2DBuffer2),
     TwoD(IMF2DBuffer),
@@ -276,7 +305,7 @@ impl Drop for WrappedMfBuffer {
 
 unsafe extern "C" fn release_wrapped_mf_buffer(opaque: *mut c_void, _data: *mut u8) {
     if !opaque.is_null() {
-        drop(unsafe { Box::from_raw(opaque as *mut Arc<WrappedMfBuffer>) });
+        drop(unsafe { Box::from_raw(opaque as *mut WrappedMfBuffer) });
     }
 }
 
@@ -319,7 +348,7 @@ fn mf_planes(
     data: *mut u8,
     len: usize,
     stride: usize,
-) -> Option<Vec<MfPlane>> {
+) -> Option<MfPlanes> {
     let row_bytes = mf_row_bytes(format, width)?;
     if stride < row_bytes || height == 0 {
         return None;
@@ -327,27 +356,17 @@ fn mf_planes(
 
     let plane = |ptr: *mut u8, len: usize| MfPlane { ptr, len, stride };
     let y_len = stride.checked_mul(height)?;
+    let mut planes = MfPlanes::new();
 
     match format {
-        PixelFormat::NV12 | PixelFormat::NV21 => {
+        PixelFormat::NV12 | PixelFormat::NV21 | PixelFormat::P010 => {
             let uv_len = stride.checked_mul(height / 2)?;
             if len < y_len.checked_add(uv_len)? {
                 return None;
             }
-            Some(vec![
-                plane(data, y_len),
-                plane(unsafe { data.add(y_len) }, uv_len),
-            ])
-        }
-        PixelFormat::P010 => {
-            let uv_len = stride.checked_mul(height / 2)?;
-            if len < y_len.checked_add(uv_len)? {
-                return None;
-            }
-            Some(vec![
-                plane(data, y_len),
-                plane(unsafe { data.add(y_len) }, uv_len),
-            ])
+            planes.push(plane(data, y_len));
+            planes.push(plane(unsafe { data.add(y_len) }, uv_len));
+            Some(planes)
         }
         PixelFormat::YUYV422
         | PixelFormat::UYVY422
@@ -361,7 +380,8 @@ fn mf_planes(
             if len < y_len {
                 return None;
             }
-            Some(vec![plane(data, y_len)])
+            planes.push(plane(data, y_len));
+            Some(planes)
         }
         PixelFormat::YUV420P | PixelFormat::YV12 | PixelFormat::MJPEG | PixelFormat::H264 => None,
     }
@@ -372,7 +392,7 @@ fn lock_mf_buffer(
     format: PixelFormat,
     width: usize,
     height: usize,
-) -> Option<(WrappedMfBuffer, Vec<MfPlane>)> {
+) -> Option<(WrappedMfBuffer, MfPlanes)> {
     unsafe {
         if let Ok(buffer_2d) = buffer.cast::<IMF2DBuffer2>() {
             let mut scanline = ptr::null_mut();
@@ -475,7 +495,7 @@ pub fn media_buffer_as_ffmpeg(
 
     let pixel = mf_pixel_format(format)?;
     let (owner, planes) = lock_mf_buffer(buffer, format, width, height)?;
-    wrap_mf_frame(&planes, pixel, width as u32, height as u32, Arc::new(owner))
+    wrap_mf_frame(&planes, pixel, width as u32, height as u32, owner)
 }
 
 // UYVY and NV21 use the format-converting copy paths, which lock with
@@ -499,6 +519,7 @@ pub fn with_media_buffer_data<R>(
     }
 
     let (owner, planes) = lock_mf_buffer(buffer, format, width, height)?;
+    let planes = planes.as_slice();
     let total_len = planes.iter().map(|plane| plane.len).sum::<usize>();
     let data = unsafe { std::slice::from_raw_parts(planes[0].ptr, total_len) };
     let primary_stride = planes[0].stride;
@@ -521,6 +542,7 @@ pub fn copy_media_buffer_to_ffmpeg(
     let pixel = mf_pixel_format(format)?;
     let row_bytes = mf_row_bytes(format, width)?;
     let (owner, planes) = lock_mf_buffer(buffer, format, width, height)?;
+    let planes = planes.as_slice();
     let mut frame = FFVideo::new(pixel, width as u32, height as u32);
 
     for (index, plane) in planes.iter().enumerate() {
@@ -541,12 +563,32 @@ pub fn copy_media_buffer_to_ffmpeg(
 }
 
 fn wrap_mf_frame(
-    planes: &[MfPlane],
+    planes: &MfPlanes,
     pixel: Pixel,
     width: u32,
     height: u32,
-    owner: Arc<WrappedMfBuffer>,
+    owner: WrappedMfBuffer,
 ) -> Option<FFVideo> {
+    let planes = planes.as_slice();
+    let total_len = planes.iter().map(|plane| plane.len).sum::<usize>();
+    let opaque = Box::into_raw(Box::new(owner)) as *mut c_void;
+    let buffer = unsafe {
+        ffi::av_buffer_create(
+            planes[0].ptr,
+            total_len,
+            Some(release_wrapped_mf_buffer),
+            opaque,
+            ffi::AV_BUFFER_FLAG_READONLY,
+        )
+    };
+
+    if buffer.is_null() {
+        unsafe {
+            drop(Box::from_raw(opaque as *mut WrappedMfBuffer));
+        }
+        return None;
+    }
+
     let mut frame = FFVideo::empty();
     let ptr = unsafe { frame.as_mut_ptr() };
     let format: ffi::AVPixelFormat = pixel.into();
@@ -554,37 +596,8 @@ fn wrap_mf_frame(
         (*ptr).format = format as i32;
         (*ptr).width = width as i32;
         (*ptr).height = height as i32;
-    }
-
-    let mut buffers = Vec::with_capacity(planes.len());
-    for plane in planes {
-        let opaque = Box::into_raw(Box::new(Arc::clone(&owner))) as *mut c_void;
-        let buffer = unsafe {
-            ffi::av_buffer_create(
-                plane.ptr,
-                plane.len,
-                Some(release_wrapped_mf_buffer),
-                opaque,
-                ffi::AV_BUFFER_FLAG_READONLY,
-            )
-        };
-
-        if buffer.is_null() {
-            unsafe {
-                drop(Box::from_raw(opaque as *mut Arc<WrappedMfBuffer>));
-                for mut buffer in buffers {
-                    ffi::av_buffer_unref(&mut buffer);
-                }
-            }
-            return None;
-        }
-
-        buffers.push(buffer);
-    }
-
-    for (index, (buffer, plane)) in buffers.into_iter().zip(planes).enumerate() {
-        unsafe {
-            (*ptr).buf[index] = buffer;
+        (*ptr).buf[0] = buffer;
+        for (index, plane) in planes.iter().enumerate() {
             (*ptr).data[index] = plane.ptr;
             (*ptr).linesize[index] = plane.stride as i32;
         }

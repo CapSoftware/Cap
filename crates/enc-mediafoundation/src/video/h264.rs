@@ -234,6 +234,10 @@ impl From<windows::core::Error> for EncoderRuntimeError {
 unsafe impl Send for H264Encoder {}
 
 impl H264Encoder {
+    pub fn input_texture(&self) -> &ID3D11Texture2D {
+        self.video_processor.input_texture()
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn new_with_scaled_output_with_flags(
         d3d_device: &ID3D11Device,
@@ -592,7 +596,12 @@ impl H264Encoder {
                             }
 
                             let process_result = (|| -> windows::core::Result<()> {
-                                self.video_processor.process_texture(&texture)?;
+                                if texture.as_raw() != self.video_processor.input_texture().as_raw()
+                                {
+                                    self.video_processor.process_texture(&texture)?;
+                                } else {
+                                    self.video_processor.process_input_texture()?;
+                                }
                                 let input_buffer = MFCreateDXGISurfaceBuffer(
                                     &ID3D11Texture2D::IID,
                                     self.video_processor.output_texture(),
