@@ -321,9 +321,45 @@ async fn real_app_instant_recording_with_camera_uploads_and_verifies() {
         "camera",
         &[
             ("CAP_GPUI_AUTO_CAMERA", "1"),
-            ("CAP_GPUI_AUTO_RECORD", "instant:8"),
+            ("CAP_GPUI_AUTO_RECORD", "instant:60"),
         ],
     );
+    // On X11 a window recorded with the camera hides Cap's controls, and the
+    // recording waits for the Stop shortcut to start; the same shortcut stops
+    // it, well before the automatic stop.
+    #[cfg(target_os = "linux")]
+    {
+        let press = || {
+            let status = Command::new("xdotool")
+                .args(["key", "ctrl+shift+F9"])
+                .status()
+                .expect("install xdotool");
+            assert!(status.success());
+        };
+        let sandbox = &sandbox;
+        let logged = |line: &'static str| move || sandbox.log("camera").contains(line);
+        let start = Duration::from_secs(60);
+        wait_for_app(
+            sandbox,
+            &app,
+            "the start press",
+            start,
+            logged("overlay start pressed"),
+        )
+        .await;
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        press();
+        wait_for_app(
+            sandbox,
+            &app,
+            "the recording to start",
+            start,
+            logged("recording started"),
+        )
+        .await;
+        tokio::time::sleep(Duration::from_secs(8)).await;
+        press();
+    }
     wait_for_app(
         &sandbox,
         &app,
