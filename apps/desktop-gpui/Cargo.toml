@@ -162,6 +162,7 @@ reqwest = { version = "0.12", default-features = false, features = [
 ] }
 futures-util = "0.3"
 dirs = "6"
+dunce = "1.0.5"
 # Caption transcription (`src/transcription.rs`): the exact engine pin the
 # Tauri app carries (`apps/desktop/src-tauri/Cargo.toml:75`), so a model file
 # downloaded by either app loads identically in both.
@@ -194,6 +195,12 @@ tray-icon = { version = "0.21.1", default-features = false }
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_IO",
+    "Win32_System_Kernel",
+    "Win32_System_LibraryLoader",
     "Win32_System_Registry",
     "Win32_System_SystemInformation",
     "Win32_System_Threading",
@@ -203,6 +210,8 @@ windows-sys = { version = "0.59", features = [
 
 [target.'cfg(target_os = "linux")'.dependencies]
 ashpd = { version = "0.11", default-features = false, features = ["tokio"] }
+# GNOME's wallpapers are JPEG XL, which `image` cannot read.
+jxl-oxide = { version = "0.12", features = ["image"] }
 wayland-client = "0.31"
 
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]

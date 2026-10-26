@@ -6,6 +6,7 @@ import { Video } from "@cap/web-domain";
 import { and, eq, sql } from "drizzle-orm";
 import { Effect } from "effect";
 import {
+	createHook,
 	FatalError,
 	getWorkflowMetadata,
 	RetryableError,
@@ -17,6 +18,7 @@ import {
 	LoomDownloadTemporaryError,
 } from "@/lib/loom-download-url";
 import { cleanupLoomFileSource } from "@/lib/loom-file-cleanup";
+import { getLoomImportSignalToken } from "@/lib/loom-import-signal-token";
 import {
 	LOOM_IMPORT_MAX_BYTES,
 	type LoomMultipartUploadTarget,
@@ -35,7 +37,7 @@ import { runWorkflowPromise } from "@/lib/workflow-runtime";
 import {
 	type ProcessedVideoMetadata,
 	VideoProcessingFailedError,
-	waitForVideoProcessing,
+	waitForSignalledVideoProcessing,
 } from "./video-processing-status";
 
 interface ImportLoomPayload {
@@ -48,6 +50,7 @@ interface ImportLoomPayload {
 	agentOperationId?: string;
 	reuseExistingRawUpload?: boolean;
 	cleanupRawUpload?: boolean;
+	importPriority?: "customer" | "bulk";
 }
 
 const MINIMUM_VIDEO_SIZE = 1024;
@@ -243,57 +246,70 @@ export async function importLoomVideoWorkflow(
 
 		let metadata: ProcessedVideoMetadata;
 		for (let processingAttempt = 0; ; processingAttempt++) {
-			let mediaJob: { jobId: string; worker: LoomWorker };
-			let capacityRetryCount = 0;
-			let previousSourceUrl =
-				processingAttempt === 0 ? payload.loomDownloadUrl : undefined;
-			while (true) {
+			const finished = createHook<{ phase: string }>({
+				token: getLoomImportSignalToken(
+					payload.videoId,
+					`${workflowRunId}:${processingAttempt}`,
+				),
+			});
+			try {
+				let mediaJob: { jobId: string; worker: LoomWorker };
+				let capacityRetryCount = 0;
+				let previousSourceUrl =
+					processingAttempt === 0 ? payload.loomDownloadUrl : undefined;
+				while (true) {
+					try {
+						const loomSourceUrl = processingInput.importFromLoom
+							? await fetchFreshLoomDownloadUrl(
+									payload.loomVideoId,
+									previousSourceUrl,
+								)
+							: undefined;
+						previousSourceUrl = loomSourceUrl;
+						mediaJob = await processVideoOnMediaServer(
+							payload,
+							loomSourceUrl,
+							`${workflowRunId}:${processingAttempt}`,
+							workflowRunId,
+						);
+						break;
+					} catch (error) {
+						if (!isMediaServerCapacityError(error)) throw error;
+						await markLoomImportWaitingForCapacity(payload.videoId);
+						await sleep(`${Math.min(180, 30 + capacityRetryCount * 15)}s`);
+						capacityRetryCount++;
+					}
+				}
 				try {
-					const loomSourceUrl = processingInput.importFromLoom
-						? await fetchFreshLoomDownloadUrl(
-								payload.loomVideoId,
-								previousSourceUrl,
-							)
-						: undefined;
-					previousSourceUrl = loomSourceUrl;
-					mediaJob = await processVideoOnMediaServer(
-						payload,
-						loomSourceUrl,
-						`${workflowRunId}:${processingAttempt}`,
-						workflowRunId,
+					metadata = await waitForSignalledVideoProcessing(
+						payload.videoId,
+						finished,
 					);
 					break;
 				} catch (error) {
-					if (!isMediaServerCapacityError(error)) throw error;
+					if (
+						!(error instanceof VideoProcessingFailedError) ||
+						processingAttempt >= 2
+					) {
+						throw error;
+					}
+					if (
+						!(await confirmLoomMediaJobFailure(
+							mediaJob.jobId,
+							payload.videoId,
+							mediaJob.worker,
+						))
+					) {
+						throw new FatalError(
+							"The previous Loom worker must be reconciled before retrying",
+						);
+					}
 					await markLoomImportWaitingForCapacity(payload.videoId);
-					await sleep(`${Math.min(180, 30 + capacityRetryCount * 15)}s`);
-					capacityRetryCount++;
+					if (await hasExistingLoomUpload(payload)) processingInput = {};
+					await sleep(15_000 * (processingAttempt + 1));
 				}
-			}
-			try {
-				metadata = await waitForVideoProcessing(payload.videoId);
-				break;
-			} catch (error) {
-				if (
-					!(error instanceof VideoProcessingFailedError) ||
-					processingAttempt >= 2
-				) {
-					throw error;
-				}
-				if (
-					!(await confirmLoomMediaJobFailure(
-						mediaJob.jobId,
-						payload.videoId,
-						mediaJob.worker,
-					))
-				) {
-					throw new FatalError(
-						"The previous Loom worker must be reconciled before retrying",
-					);
-				}
-				await markLoomImportWaitingForCapacity(payload.videoId);
-				if (await hasExistingLoomUpload(payload)) processingInput = {};
-				await sleep(15_000 * (processingAttempt + 1));
+			} finally {
+				finished.dispose();
 			}
 		}
 		await saveMetadataAndComplete(payload.videoId, metadata);
@@ -412,6 +428,7 @@ async function startMediaServerProcessJob(
 		webhookSecret?: string;
 		inputExtension?: string;
 		priority: "bulk";
+		importPriority?: "customer" | "bulk";
 	},
 	recordDispatch: (
 		state: "accepted" | "rejected" | "uncertain",
@@ -654,7 +671,7 @@ async function processVideoOnMediaServer(
 		};
 	}).pipe(runWorkflowPromise);
 
-	const webhookUrl = `${webhookBaseUrl}/api/webhooks/media-server/progress?retryable=true${worker === "importer" ? "&transcription=on-view&preview=on-view" : ""}`;
+	const webhookUrl = `${webhookBaseUrl}/api/webhooks/media-server/progress?retryable=true&signal=${encodeURIComponent(getLoomImportSignalToken(videoId, attemptId))}${worker === "importer" ? "&transcription=on-view&preview=on-view" : ""}`;
 	const webhookSecret = serverEnv().MEDIA_SERVER_WEBHOOK_SECRET;
 
 	try {
@@ -694,6 +711,10 @@ async function processVideoOnMediaServer(
 				webhookSecret: webhookSecret || undefined,
 				inputExtension: getInputExtension(rawVideoUrl),
 				priority: "bulk",
+				importPriority:
+					worker === "importer"
+						? (payload.importPriority ?? "customer")
+						: undefined,
 			},
 			(state, jobId) =>
 				recordLoomMediaDispatch({
@@ -703,6 +724,7 @@ async function processVideoOnMediaServer(
 					attemptId,
 					state,
 					jobId,
+					worker,
 				}),
 			worker === "importer",
 		);

@@ -161,6 +161,7 @@ impl MovExportSettings {
             self.resolution_base,
             &base.recordings,
             base.sample_windows.clone(),
+            false,
         )
         .then(|f| async { f.map_err(|v| v.to_string()) });
 

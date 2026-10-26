@@ -220,6 +220,7 @@ pub(crate) enum MenuKind {
 
 struct OpenMenu {
     kind: MenuKind,
+    return_focus: Option<FocusHandle>,
     /// Anchor, row count and keyboard highlight. `Menu.popup()` with no
     /// position argument opens at the pointer, so the origin is the faithful
     /// anchor; the highlight is what makes arrows and Enter work.
@@ -1195,7 +1196,7 @@ impl SettingsWindow {
     /// thread, which is where `NSAlert` has to run, so the task is both the
     /// right thread and the right borrow state.
     fn delete_recording(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        cx.spawn_in(window, async move |this, cx| {
+        cx.spawn_in(window, async move |_, cx| {
             let confirmed = crate::platform::confirm_dialog(
                 "Cap",
                 "Are you sure you want to delete this recording?",
@@ -1219,7 +1220,7 @@ impl SettingsWindow {
             }
             tracing::info!(path = %path.display(), "deleted a recording");
 
-            this.update_in(cx, |this, window, cx| this.refresh_recordings(window, cx))
+            cx.update(|_, cx| cx.defer(crate::app_windows::refresh_library_after_delete))
                 .ok();
         })
         .detach();
@@ -1501,11 +1502,15 @@ impl SettingsWindow {
         // them first -- its bindings sit deeper in the dispatch path. Opening
         // a menu therefore takes focus back, which is also what clicking a
         // `<button>` does to a focused `<input>` in the webview.
+        let return_focus = ui::keyboard_nav::active(window, cx)
+            .then(|| window.focused(cx))
+            .flatten();
         let focus = self.focus.clone();
         window.focus(&focus, cx);
         let items = self.menu_items(kind);
         self.menu = Some(OpenMenu {
             kind,
+            return_focus,
             state: ui::MenuState::new(origin, &items),
         });
         cx.notify();
@@ -1528,11 +1533,21 @@ impl SettingsWindow {
                 true
             }
             ui::MenuKey::Dismiss => {
-                self.menu = None;
+                self.close_menu(window, cx);
                 cx.notify();
                 true
             }
             ui::MenuKey::Ignored => false,
+        }
+    }
+
+    fn close_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(menu) = self.menu.take()
+            && ui::keyboard_nav::active(window, cx)
+            && self.focus.is_focused(window)
+            && let Some(focus) = menu.return_focus
+        {
+            window.focus(&focus, cx);
         }
     }
 
@@ -1576,7 +1591,7 @@ impl SettingsWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.menu = None;
+        self.close_menu(window, cx);
         match kind {
             MenuKind::Countdown => {
                 if let Some((value, _)) = COUNTDOWN_OPTIONS.get(index) {
@@ -1765,7 +1780,13 @@ impl Render for SettingsWindow {
                 if this.shortcuts_capture_key(keystroke, cx) {
                     return;
                 }
-                if keystroke.modifiers.platform && keystroke.key == "w" {
+                // Ctrl+W on Linux, where the platform modifier is Super.
+                let close = if cfg!(target_os = "linux") {
+                    keystroke.modifiers.control
+                } else {
+                    keystroke.modifiers.platform
+                };
+                if close && keystroke.key == "w" {
                     cx.defer(crate::app_windows::close_settings);
                 }
             }))
@@ -1824,6 +1845,14 @@ impl Render for SettingsWindow {
             .child(self.render_sidebar(cx))
             .child(self.render_content(window, cx));
 
+        // GNOME and other compositors without server-side decorations leave
+        // the frame to the app; without this the window had no way to close.
+        #[cfg(target_os = "linux")]
+        let shell = shell.when(
+            matches!(window.window_decorations(), gpui::Decorations::Client { .. }),
+            |shell| shell.child(linux_close_button(theme)),
+        );
+
         shell
             // Painted last so it lands over the page: the select menus, and
             // the drag layer the zoom slider needs while the button is held.
@@ -1833,6 +1862,31 @@ impl Render for SettingsWindow {
             // hand-back takes the whole window while it counts down.
             .children(self.render_switch_overlay(cx))
     }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_close_button(theme: Theme) -> impl IntoElement {
+    div()
+        .id("settings-close")
+        .absolute()
+        .top(px(10.))
+        .right(px(10.))
+        .size(px(28.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(6.))
+        .cursor_pointer()
+        .occlude()
+        .hover(move |style| style.bg(theme.settings_sidebar_bg()))
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .on_click(|_, _, cx| cx.defer(crate::app_windows::close_settings))
+        .child(
+            svg()
+                .path("icons/x.svg")
+                .size(px(14.))
+                .text_color(theme.settings_text()),
+        )
 }
 
 impl SettingsWindow {
@@ -2595,7 +2649,7 @@ impl SettingsWindow {
                 "Open folder",
                 false,
                 cx,
-                move |_this, _window, _cx| library::reveal_in_folder(&bundle),
+                move |_this, _window, cx| library::reveal_path(&bundle, cx),
             ))
             .child(self.row_button(
                 ("screenshot-delete", index),
@@ -3084,7 +3138,7 @@ impl SettingsWindow {
             "Open recording bundle",
             false,
             cx,
-            move |_this, _window, _cx| library::open_recording_folder(&folder_path, mode),
+            move |_this, _window, cx| library::open_recording_folder(&folder_path, mode, cx),
         ));
         actions.child(self.row_button(
             ("recording-delete", index),

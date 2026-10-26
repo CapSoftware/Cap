@@ -553,6 +553,28 @@ fn build_time_map(timeline: Option<&TimelineConfiguration>) -> Vec<TimeMapSegmen
     out
 }
 
+fn ordered_time_map(map: &[TimeMapSegment]) -> bool {
+    map.iter()
+        .all(|segment| segment.timeline_start.is_finite() && segment.timeline_end.is_finite())
+        && map.windows(2).all(|pair| {
+            pair[0].timeline_start <= pair[1].timeline_start
+                && pair[0].timeline_end <= pair[1].timeline_end
+        })
+}
+
+fn time_map_at(map: &[TimeMapSegment], time: f64, ordered: bool) -> &[TimeMapSegment] {
+    if !ordered || !time.is_finite() {
+        return map;
+    }
+    let first = map.partition_point(|segment| segment.timeline_end <= time);
+    let end = map.partition_point(|segment| segment.timeline_start <= time);
+    if first < end && time > map[first].timeline_start {
+        &map[first..end]
+    } else {
+        map
+    }
+}
+
 /// Maps a timeline timestamp to recording seconds. Identity when no timeline
 /// is configured; clamps to the nearest edit boundary outside the timeline.
 fn map_timeline_to_recording_secs(
@@ -688,6 +710,7 @@ pub struct ZoomTransformTimeline {
     /// Auto segments, `None` for Manual ones.
     clusters: Vec<Option<ZoomClusters>>,
     time_map: Vec<TimeMapSegment>,
+    time_map_ordered: bool,
     recording_clip: Option<u32>,
     prefer_outgoing: bool,
     /// Total number of samples covering [0, duration] plus one lerp partner.
@@ -753,6 +776,7 @@ impl ZoomTransformTimeline {
         } else {
             build_time_map(timeline)
         };
+        let time_map_ordered = ordered_time_map(&time_map);
         let clusters = zoom_segments
             .iter()
             .map(|segment| match segment.mode {
@@ -799,6 +823,7 @@ impl ZoomTransformTimeline {
                 segment_index,
                 clusters,
                 time_map,
+                time_map_ordered,
                 recording_clip,
                 prefer_outgoing,
                 total_samples: 1,
@@ -818,6 +843,7 @@ impl ZoomTransformTimeline {
             segment_index,
             clusters,
             time_map,
+            time_map_ordered,
             recording_clip,
             prefer_outgoing,
             total_samples,
@@ -1132,7 +1158,7 @@ impl ZoomTransformTimeline {
                     }
                     ZoomMode::Auto => {
                         let recording_ms = map_timeline_to_recording_secs(
-                            &self.time_map,
+                            time_map_at(&self.time_map, timeline_secs, self.time_map_ordered),
                             timeline_secs,
                             self.recording_clip,
                             self.prefer_outgoing,
@@ -1327,6 +1353,124 @@ mod tests {
     }
 
     #[test]
+    fn narrowed_time_maps_match_full_scans_at_boundaries_and_overlaps() {
+        let span = |start, end, clip| TimeMapSegment {
+            timeline_start: start,
+            timeline_end: end,
+            recording_start: -0.0,
+            timescale: 1.5,
+            recording_clip: clip,
+        };
+        for map in [
+            vec![],
+            vec![span(0.0, 2.0, 0)],
+            vec![span(0.0, 4.0, 0), span(3.0, 7.0, 1), span(6.0, 10.0, 0)],
+            vec![span(0.0, 10.0, 0), span(1.0, 3.0, 1)],
+            vec![span(3.0, 5.0, 1), span(0.0, 4.0, 0)],
+            vec![span(0.0, 3.0, 0), span(0.0, 4.0, 1)],
+            vec![span(0.0, 2.0, 0), span(3.0, 4.0, 1)],
+            vec![
+                span(0.0, 2.0, 0),
+                TimeMapSegment {
+                    timescale: 0.0,
+                    ..span(2.0, 4.0, 0)
+                },
+                span(4.0, 6.0, 1),
+            ],
+            vec![span(0.0, f64::INFINITY, 0)],
+            vec![span(f64::NAN, 4.0, 0)],
+        ] {
+            let ordered = ordered_time_map(&map);
+            let mut queries = vec![
+                f64::NEG_INFINITY,
+                -1.0,
+                -0.0,
+                0.0,
+                1.5,
+                3.5,
+                8.0,
+                20.0,
+                f64::INFINITY,
+                f64::NAN,
+            ];
+            for segment in &map {
+                for boundary in [segment.timeline_start, segment.timeline_end] {
+                    queries.extend([boundary.next_down(), boundary, boundary.next_up()]);
+                }
+            }
+            for query in queries {
+                let selected = time_map_at(&map, query, ordered);
+                if !ordered || !query.is_finite() {
+                    assert!(std::ptr::eq(selected, map.as_slice()));
+                }
+                for clip in [None, Some(0), Some(1), Some(99)] {
+                    for outgoing in [false, true] {
+                        let expected = map_timeline_to_recording_secs(&map, query, clip, outgoing);
+                        let actual =
+                            map_timeline_to_recording_secs(selected, query, clip, outgoing);
+                        if expected.is_nan() {
+                            assert!(actual.is_nan());
+                        } else {
+                            assert_eq!(
+                                actual.to_bits(),
+                                expected.to_bits(),
+                                "query {query}, clip {clip:?}, outgoing {outgoing}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        let map = [span(0.0, 2.0, 0), span(2.0, 4.0, 1), span(4.0, 6.0, 0)];
+        assert_eq!(time_map_at(&map, 3.0, ordered_time_map(&map)).len(), 1);
+    }
+
+    #[test]
+    fn indexed_mapping_preserves_complete_zoom_simulation_samples() {
+        let project = project_for_zoom_reuse();
+        let duration = project.timeline.as_ref().unwrap().duration();
+        let cursor = CursorEvents {
+            moves: vec![
+                move_event(0.0, 0.1, 0.2),
+                move_event(5000.0, 0.4, 0.8),
+                move_event(10000.0, 0.8, 0.3),
+                move_event(20000.0, 0.2, 0.6),
+            ],
+            clicks: vec![click_event(4500.0), click_event(11000.0)],
+        };
+        for clip in [0, 1] {
+            for outgoing in [false, true] {
+                let build = || {
+                    if outgoing {
+                        ZoomTransformTimeline::from_project_for_outgoing_clip(
+                            &project,
+                            &cursor,
+                            duration,
+                            XY::new(1920, 1080),
+                            clip,
+                        )
+                    } else {
+                        ZoomTransformTimeline::from_project_for_clip(
+                            &project,
+                            &cursor,
+                            duration,
+                            XY::new(1920, 1080),
+                            clip,
+                        )
+                    }
+                };
+                let mut expected = build();
+                expected.time_map_ordered = false;
+                let mut actual = build();
+                assert!(actual.time_map_ordered);
+                expected.precompute();
+                actual.precompute();
+                assert_samples_identical(&expected, &actual);
+            }
+        }
+    }
+
+    #[test]
     fn unrelated_project_edits_preserve_incoming_and_outgoing_zoom_samples() {
         let project = project_for_zoom_reuse();
         let mut edited = project.clone();
@@ -1417,7 +1561,7 @@ mod tests {
             |project| {
                 project.timeline.as_mut().unwrap().text_segments.push(
                     serde_json::from_value(serde_json::json!({
-                        "start": 50.0, "end": 52.0, "layout": "fullscreen"
+                        "start": 12.0, "end": 14.0, "layout": "fullscreen"
                     }))
                     .unwrap(),
                 );

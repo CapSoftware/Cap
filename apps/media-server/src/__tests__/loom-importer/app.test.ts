@@ -95,6 +95,20 @@ describe("Loom importer API", () => {
 			videoId: "second",
 			phase: "queued",
 		});
+		const listing = (await (
+			await app.request("/loom-importer/video/status", {
+				headers: { "x-media-server-secret": "importer-secret" },
+			})
+		).json()) as {
+			jobs: Array<{ jobId: string; videoId: string; phase: string }>;
+		};
+		expect(listing.jobs).toContainEqual(
+			expect.objectContaining({
+				jobId: second.jobId,
+				videoId: "second",
+				phase: "queued",
+			}),
+		);
 		const full = await post(app, body("third"));
 		expect(full.status).toBe(503);
 		expect(await full.json()).toMatchObject({ code: "SERVER_BUSY" });

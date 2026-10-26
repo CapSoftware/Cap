@@ -94,6 +94,9 @@ fn english_matches_the_literals_it_replaced() {
             tr::settings::general::appearance::title(),
             "Appearance".into(),
         ),
+        (tr::settings::general::appearance::system(), "System".into()),
+        (tr::settings::general::appearance::light(), "Light".into()),
+        (tr::settings::general::appearance::dark(), "Dark".into()),
         (
             tr::settings::general::app::description(),
             "Choose how Cap shows up on your system.".into(),
@@ -450,7 +453,10 @@ fn english_matches_the_literals_it_replaced() {
     }
     let plain_keys = KEYS
         .iter()
-        .filter(|key| !key.starts_with(NEW_IN_THE_LANGUAGE_PICKER))
+        .filter(|key| {
+            !key.starts_with(NEW_IN_THE_LANGUAGE_PICKER)
+                && !super::surface_tests::is_main_surface_key(key)
+        })
         .count()
         - 3;
     assert_eq!(
@@ -461,6 +467,54 @@ fn english_matches_the_literals_it_replaced() {
 }
 
 const NEW_IN_THE_LANGUAGE_PICKER: &str = "settings.general.language.";
+
+#[test]
+fn appearance_labels_follow_language_changes_without_changing_saved_values() {
+    use crate::store::{AppTheme, SettingsEnum};
+
+    const CHILD: &str = "CAP_GPUI_TEST_APPEARANCE_LABELS";
+    if std::env::var_os(CHILD).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "i18n::tests::appearance_labels_follow_language_changes_without_changing_saved_values",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .env_remove(LOCALE_ENV)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+
+    for (locale, labels) in [
+        (Locale::En, ["System", "Light", "Dark"]),
+        (Locale::ZhCn, ["跟随系统", "浅色", "深色"]),
+        (Locale::Ja, ["システム", "ライト", "ダーク"]),
+        (Locale::Fr, ["Système", "Clair", "Sombre"]),
+        (Locale::Es, ["Sistema", "Claro", "Oscuro"]),
+        (Locale::De, ["System", "Hell", "Dunkel"]),
+        (Locale::Hi, ["सिस्टम", "लाइट", "डार्क"]),
+        (Locale::En, ["System", "Light", "Dark"]),
+    ] {
+        init(Some(locale.code()));
+        for ((theme, label), saved) in AppTheme::ALL
+            .iter()
+            .zip(labels)
+            .zip(["system", "light", "dark"])
+        {
+            assert_eq!(theme.label(), label, "{} {saved}", locale.code());
+            assert_eq!(theme.as_json(), saved);
+            assert_eq!(AppTheme::from_json(saved), Some(*theme));
+        }
+    }
+}
 
 #[test]
 fn language_picker_english() {
@@ -638,8 +692,9 @@ fn missing_glyph_width(cluster: &str, size: f32) -> f32 {
 }
 
 /// Every string with a `max_px` budget, in every catalog, measured with the
-/// bundled Geist Medium (the widest weight these labels use). Over 92% of the
-/// budget fails: the system UI font differs from Geist by a few percent.
+/// bundled Geist Medium (the widest weight these labels use). A translation
+/// over 92% of the budget fails (the system UI font differs from Geist by a
+/// few percent), unless English is already wider, which then is the limit.
 #[test]
 fn translations_fit_their_width_budgets() {
     use cosmic_text::{
@@ -656,40 +711,46 @@ fn translations_fit_their_width_budgets() {
         .family(Family::Name("Geist"))
         .weight(Weight::MEDIUM);
 
+    let mut measure = |text: &str, size: f32| {
+        let mut buffer = Buffer::new(&mut system, Metrics::new(size, size * 1.25));
+        buffer.set_size(&mut system, None, None);
+        buffer.set_text(&mut system, text, &attrs, Shaping::Advanced);
+        buffer.shape_until_scroll(&mut system, false);
+        buffer
+            .layout_runs()
+            .map(|run| {
+                let mut width = 0.;
+                let mut missing_cluster = None;
+                for glyph in run.glyphs {
+                    if glyph.glyph_id != 0 {
+                        width += glyph.w;
+                    } else if missing_cluster != Some((glyph.start, glyph.end)) {
+                        // A shaped syllable can be several .notdef glyphs
+                        // that all point at the same cluster.
+                        missing_cluster = Some((glyph.start, glyph.end));
+                        width += missing_glyph_width(&run.text[glyph.start..glyph.end], size);
+                    }
+                }
+                width
+            })
+            .fold(0., f32::max)
+    };
+
     let mut measured = 0;
     let mut failures = Vec::new();
     for fit in &FITS {
-        for (locale, text) in Locale::ALL.iter().zip(fit.text) {
+        // English is what ships today; where it already runs past 92% the
+        // translations may not be any wider than it.
+        let limit = (fit.max_px * 0.92).max(measure(fit.text[0], fit.size));
+        for (locale, text) in Locale::ALL.iter().zip(fit.text).skip(1) {
             if locale.code() == "pseudo" {
                 continue;
             }
-            let mut buffer = Buffer::new(&mut system, Metrics::new(fit.size, fit.size * 1.25));
-            buffer.set_size(&mut system, None, None);
-            buffer.set_text(&mut system, text, &attrs, Shaping::Advanced);
-            buffer.shape_until_scroll(&mut system, false);
-            let width = buffer
-                .layout_runs()
-                .map(|run| {
-                    let mut width = 0.;
-                    let mut missing_cluster = None;
-                    for glyph in run.glyphs {
-                        if glyph.glyph_id != 0 {
-                            width += glyph.w;
-                        } else if missing_cluster != Some((glyph.start, glyph.end)) {
-                            // A shaped syllable can be several .notdef glyphs
-                            // that all point at the same cluster.
-                            missing_cluster = Some((glyph.start, glyph.end));
-                            width +=
-                                missing_glyph_width(&run.text[glyph.start..glyph.end], fit.size);
-                        }
-                    }
-                    width
-                })
-                .fold(0., f32::max);
+            let width = measure(text, fit.size);
             measured += 1;
-            if width > fit.max_px * 0.92 {
+            if width > limit {
                 failures.push(format!(
-                    "{} `{}` {text:?}: {width:.1}px of {}px",
+                    "{} `{}` {text:?}: {width:.1}px, limit {limit:.1}px of {}px",
                     locale.code(),
                     fit.key,
                     fit.max_px

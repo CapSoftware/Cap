@@ -1106,22 +1106,106 @@ mod mac {
     /// `titlebar: None`). During the recording flow -- after the hidden main
     /// window's `orderOut:` and the in-process ScreenCaptureKit start -- macOS
     /// 26 adds `NSMiniaturizableWindowMask` to the hidden window on its own
-    /// (no app or gpui code writes the mask; verified with a breakpoint on
-    /// `setStyleMask:` and a mask poll), which materializes all three standard
-    /// titlebar buttons on top of the hand-drawn lights. Setting the mask back
-    /// tears the buttons down. Same borrow rule as [`show_native`]: call from
-    /// a task, never inside a gpui update.
+    /// (no app or gpui code writes the mask), which materializes all three
+    /// standard titlebar buttons on top of the hand-drawn lights. Setting the
+    /// mask back tears the buttons down. [`lock_borderless_style`] refuses
+    /// the writes that go through `setStyleMask:`; this stays as the backstop
+    /// for any that don't. Same borrow rule as [`show_native`]: call from a
+    /// task, never inside a gpui update.
     pub fn restore_borderless_style(native: &NativeWindow) {
         use objc2::msg_send;
-        const TITLED: usize = 1 << 0;
-        const FULL_SIZE_CONTENT_VIEW: usize = 1 << 15;
-        let want = TITLED | FULL_SIZE_CONTENT_VIEW;
         unsafe {
             let mask: usize = msg_send![&*native.0, styleMask];
-            if mask != want {
+            if mask != BORDERLESS_STYLE_MASK {
                 tracing::info!(mask, "clearing foreign style-mask bits on the main window");
-                let _: () = msg_send![&*native.0, setStyleMask: want];
+                let _: () = msg_send![&*native.0, setStyleMask: BORDERLESS_STYLE_MASK];
             }
+        }
+    }
+
+    /// `NSTitledWindowMask | NSFullSizeContentViewWindowMask`: what gpui's
+    /// `titlebar: None` creates the main window with.
+    const BORDERLESS_STYLE_MASK: usize = (1 << 0) | (1 << 15);
+
+    static STYLE_MASK_LOCK_KEY: u8 = 0;
+    static SET_STYLE_MASK_SUPER: std::sync::OnceLock<(usize, usize)> = std::sync::OnceLock::new();
+
+    /// Pin the main window to its buttonless style mask by refusing every
+    /// later `setStyleMask:` that asks for something else.
+    ///
+    /// The thumbnail sweep's in-process ScreenCaptureKit capture at launch
+    /// makes ReplayKit run `-[RPScreenRecorder setWindowRotationLocked:]` on
+    /// the main queue, and that calls `setStyleMask:` on every app window to
+    /// add `NSResizableWindowMask` (`0x8001` -> `0x8009`, caught with a
+    /// `setStyleMask:` override logging `callStackSymbols`). AppKit then
+    /// materializes all three standard titlebar buttons next to the
+    /// hand-drawn close light until [`restore_borderless_style`] runs at the
+    /// end of the sweep. Rejecting the write here means the buttons are never
+    /// built.
+    ///
+    /// The override goes on the window's class, so it sees every
+    /// `GPUIPanel`; windows without the lock pass straight through to the
+    /// inherited implementation.
+    pub fn lock_borderless_style(native: &NativeWindow) {
+        use objc2::{ffi, msg_send, runtime::AnyClass};
+
+        unsafe extern "C" fn guarded_set_style_mask(this: *mut AnyObject, sel: Sel, mask: usize) {
+            let Some(&(_, imp)) = SET_STYLE_MASK_SUPER.get() else {
+                return;
+            };
+            let locked = unsafe {
+                ffi::objc_getAssociatedObject(this.cast(), (&raw const STYLE_MASK_LOCK_KEY).cast())
+            };
+            let mask = if locked.is_null() || mask == BORDERLESS_STYLE_MASK {
+                mask
+            } else {
+                tracing::info!(mask, "kept the main window's borderless style mask");
+                BORDERLESS_STYLE_MASK
+            };
+            let imp: unsafe extern "C" fn(*mut AnyObject, Sel, usize) =
+                unsafe { std::mem::transmute(imp) };
+            unsafe { imp(this, sel, mask) };
+        }
+
+        unsafe {
+            let class: *const AnyClass = msg_send![&*native.0, class];
+            let sel = objc2::sel!(setStyleMask:);
+            let &(installed_on, _) = SET_STYLE_MASK_SUPER.get_or_init(|| {
+                let superclass = ffi::class_getSuperclass(class.cast());
+                let Some(imp) = ffi::method_getImplementation(ffi::class_getInstanceMethod(
+                    superclass,
+                    sel.as_ptr(),
+                )) else {
+                    tracing::warn!(
+                        "no inherited setStyleMask: for the main window style-mask lock"
+                    );
+                    return (0, 0);
+                };
+                let added = ffi::class_addMethod(
+                    class.cast_mut().cast(),
+                    sel.as_ptr(),
+                    Some(std::mem::transmute::<
+                        unsafe extern "C" fn(*mut AnyObject, Sel, usize),
+                        unsafe extern "C" fn(),
+                    >(guarded_set_style_mask)),
+                    c"v@:Q".as_ptr(),
+                );
+                if !objc2::runtime::Bool::from_raw(added).as_bool() {
+                    tracing::warn!("could not install the main window style-mask lock");
+                    return (0, 0);
+                }
+                (class as usize, imp as usize)
+            });
+            if installed_on != class as usize {
+                return;
+            }
+            let marker: *mut AnyObject = msg_send![objc2::class!(NSNull), null];
+            ffi::objc_setAssociatedObject(
+                (&*native.0 as *const NSWindow).cast_mut().cast(),
+                (&raw const STYLE_MASK_LOCK_KEY).cast(),
+                marker.cast(),
+                ffi::OBJC_ASSOCIATION_RETAIN_NONATOMIC,
+            );
         }
     }
 
@@ -2857,6 +2941,16 @@ mod stub {
         cancel: &str,
         warning: bool,
     ) -> bool {
+        if !crate::linux_dialog::zenity_available()
+            && let Some(accepted) = crate::linux_dialog::show(&crate::linux_dialog::Request {
+                title: title.to_string(),
+                message: message.to_string(),
+                accept: accept.to_string(),
+                cancel: Some(cancel.to_string()),
+            })
+        {
+            return accepted;
+        }
         let level = if warning {
             rfd::MessageLevel::Warning
         } else {
@@ -2875,6 +2969,17 @@ mod stub {
     }
 
     pub fn alert_dialog(title: &str, message: &str) {
+        if !crate::linux_dialog::zenity_available()
+            && crate::linux_dialog::show(&crate::linux_dialog::Request {
+                title: title.to_string(),
+                message: message.to_string(),
+                accept: "OK".to_string(),
+                cancel: None,
+            })
+            .is_some()
+        {
+            return;
+        }
         let _ = rfd::MessageDialog::new()
             .set_title(title)
             .set_description(message)
@@ -2925,7 +3030,14 @@ mod stub {
             .map_err(|error| format!("Could not copy the image to the clipboard: {error}"))
     }
     pub fn desktop_picture_path() -> Option<std::path::PathBuf> {
-        None
+        #[cfg(target_os = "linux")]
+        {
+            crate::linux_wallpaper::current()
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            None
+        }
     }
     pub fn set_activation_policy(_regular: bool) -> bool {
         false

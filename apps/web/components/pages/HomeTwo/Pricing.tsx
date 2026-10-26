@@ -6,17 +6,12 @@ import Link from "next/link";
 import { useState } from "react";
 import { trackEvent } from "@/app/utils/analytics";
 import { homepageCopy } from "@/data/homepage-copy";
-import { Eyebrow } from "./Eyebrow";
 import {
-	BAND,
 	BODY_TEXT,
 	BTN_PRIMARY,
 	BTN_SECONDARY,
-	CARD_BG,
-	grainBg,
 	H_SECTION,
 	MODE_THEME,
-	MONO,
 	type ModeTheme,
 } from "./theme";
 
@@ -60,18 +55,12 @@ const PlanCard = ({
 	primary?: boolean;
 	theme: ModeTheme;
 }) => (
-	<div
-		className="flex flex-col rounded-[14px] p-7 lg:p-8"
-		style={grainBg(CARD_BG)}
-	>
+	<div className="flex flex-col rounded-[20px] bg-white p-7 shadow-[0_0_0_1px_rgba(17,17,17,0.06),0_1px_2px_rgba(17,17,17,0.03)] lg:p-8">
 		<div className="flex items-center gap-2.5">
 			<span className="text-[15px] font-medium text-[#111111]">{name}</span>
 			{badge ? (
 				<span
-					className={classNames(
-						MONO,
-						"rounded-full px-2.5 py-1 text-[10.5px] uppercase leading-none tracking-[0.05em]",
-					)}
+					className="rounded-full px-2.5 py-1 text-[12px] leading-none"
 					style={{ background: theme.chip, color: theme.glyph }}
 				>
 					{badge}
@@ -89,9 +78,9 @@ const PlanCard = ({
 			<span className="text-[46px] font-normal leading-none tracking-[-0.03em] text-[#111111]">
 				{price}
 			</span>
-			<span className="text-[14px] text-[rgba(17,17,17,0.5)]">{cadence}</span>
+			<span className="text-[14px] text-[rgba(17,17,17,0.64)]">{cadence}</span>
 		</div>
-		<p className="mt-2 text-[13.5px] text-[rgba(17,17,17,0.5)]">{note}</p>
+		<p className="mt-2 text-[13.5px] text-[rgba(17,17,17,0.64)]">{note}</p>
 
 		<Link
 			href={href}
@@ -127,19 +116,18 @@ export const Pricing = () => {
 		<section className="px-5 py-20 lg:py-28">
 			<div className="mx-auto max-w-[1060px]">
 				<div className="mx-auto flex max-w-[760px] flex-col items-center text-center">
-					<Eyebrow accent={MODE_THEME.instant.accent}>Pricing</Eyebrow>
 					<h2
-						className={`${H_SECTION} mt-6 text-balance text-[clamp(38px,5vw,56px)]`}
+						className={`${H_SECTION} text-balance text-[clamp(34px,4.6vw,54px)] leading-[1.02]`}
 					>
 						Simple, honest pricing
 					</h2>
 					<p
-						className={`${BODY_TEXT} mt-6 max-w-[560px] text-balance text-[16.5px] leading-[1.5] text-[rgba(17,17,17,0.78)] sm:text-[17.5px]`}
+						className={`${BODY_TEXT} mt-5 max-w-[560px] text-balance text-[17px] leading-[1.5] text-[rgba(17,17,17,0.64)] sm:text-[18px]`}
 					>
 						{subtitle}
 					</p>
 
-					<div className="mt-8 flex items-center gap-1 rounded-full border border-[#DDE4EB] bg-white/70 p-1">
+					<div className="mt-8 flex items-center gap-0.5 rounded-full bg-[#EEF1F5] p-1 shadow-[inset_0_0_0_1px_rgba(17,17,17,0.04)]">
 						{(["annual", "monthly"] as const).map((option) => {
 							const active = billing === option;
 							return (
@@ -151,27 +139,21 @@ export const Pricing = () => {
 									className={classNames(
 										"h-8 rounded-full px-4 text-[13px] font-medium transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#111111] focus-visible:ring-offset-1 focus-visible:ring-offset-white",
 										active
-											? "text-[#111111]"
-											: "text-[rgba(17,17,17,0.5)] hover:bg-[#EDF1F6] hover:text-[#111111]",
+											? "bg-white text-[#111111] shadow-[0_1px_2px_rgba(17,17,17,0.08),0_0_0_1px_rgba(17,17,17,0.06)]"
+											: "text-[rgba(17,17,17,0.64)] hover:text-[#111111]",
 									)}
-									style={
-										active ? { background: MODE_THEME.instant.chip } : undefined
-									}
 								>
 									{option === "annual" ? "Annual" : "Monthly"}
 								</button>
 							);
 						})}
 					</div>
-					<p className="mt-4 text-[13.5px] text-[rgba(17,17,17,0.5)]">
+					<p className="mt-4 text-[13.5px] text-[rgba(17,17,17,0.64)]">
 						{lovedBy}
 					</p>
 				</div>
 
-				<div
-					className="mt-14 grid gap-3 rounded-[20px] p-3 lg:grid-cols-2 lg:gap-4 lg:p-4"
-					style={grainBg(BAND)}
-				>
+				<div className="mt-14 grid gap-3 lg:grid-cols-2">
 					<PlanCard
 						name={commercial.title}
 						blurb={BLURB.commercial}

@@ -30,6 +30,7 @@ import {
 } from "@/lib/video-status-query";
 import { CaptionProvider } from "./_components/CaptionContext";
 import { DashboardBackLink } from "./_components/DashboardBackLink";
+import { seekLength } from "./_components/early-length";
 import { PlaybackProvider } from "./_components/playback/PlaybackContext";
 import { ShareVideo } from "./_components/ShareVideo";
 import { type ShareView, ShareViewToggle } from "./_components/ShareViewToggle";
@@ -185,6 +186,7 @@ type TranscriptionStatus =
 interface ShareProps {
 	data: VideoData;
 	initialPlaybackUrl?: Promise<string | null>;
+	serverPlaybackUrl?: string | null;
 	comments: MaybePromise<CommentWithAuthor[]>;
 	views: MaybePromise<number>;
 	screenshotImageUrl?: string | null;
@@ -195,6 +197,7 @@ interface ShareProps {
 	viewerId?: string | null;
 	isEditProcessing: boolean;
 	recordingStopped?: boolean;
+	earlySegmentPlayback?: boolean;
 	defaultPlaybackSpeed?: number;
 	initialAiData?: {
 		title?: string | null;
@@ -319,6 +322,7 @@ const useVideoStatus = (
 export const Share = ({
 	data,
 	initialPlaybackUrl,
+	serverPlaybackUrl = null,
 	comments,
 	views,
 	screenshotImageUrl,
@@ -327,6 +331,7 @@ export const Share = ({
 	viewerId,
 	isEditProcessing,
 	recordingStopped = false,
+	earlySegmentPlayback = false,
 	defaultPlaybackSpeed,
 	aiGenerationAvailable,
 	transcriptionGenerationAvailable,
@@ -494,8 +499,8 @@ export const Share = ({
 			return;
 		}
 		const seekOnce = (t: number) => {
-			const dur =
-				Number.isFinite(v.duration) && v.duration > 0 ? v.duration : null;
+			const length = seekLength(v, v.duration);
+			const dur = Number.isFinite(length) && length > 0 ? length : null;
 			const clamped = dur ? Math.max(0, Math.min(dur - 0.001, t)) : t;
 			try {
 				v.currentTime = clamped;
@@ -959,6 +964,7 @@ export const Share = ({
 												) : (
 													<ShareVideo
 														initialPlaybackUrl={initialPlaybackUrl}
+														serverPlaybackUrl={serverPlaybackUrl}
 														data={shareVideoData}
 														comments={comments}
 														areChaptersDisabled={areChaptersDisabled}
@@ -993,6 +999,7 @@ export const Share = ({
 														showPlaybackStatusBadge={viewerId === data.owner.id}
 														isEditProcessing={isEditProcessing}
 														recordingStopped={recordingStopped}
+														earlySegmentPlayback={earlySegmentPlayback}
 														defaultPlaybackSpeed={defaultPlaybackSpeed}
 														viewerIsOwner={viewerId === data.owner.id}
 														callToAction={data.callToAction}

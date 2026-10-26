@@ -24,6 +24,8 @@ use std::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+use crate::i18n::tr;
+
 /// `CameraPreviewShape` in the web app.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -756,9 +758,9 @@ settings_enum! {
     /// `AppTheme`. The previews are labelled System/Light/Dark in
     /// `AppearanceSection`.
     AppTheme {
-        System = "system", "System";
-        Light = "light", "Light";
-        Dark = "dark", "Dark";
+        System = "system", tr::settings::general::appearance::system();
+        Light = "light", tr::settings::general::appearance::light();
+        Dark = "dark", tr::settings::general::appearance::dark();
     }
     default = System
 }
