@@ -302,14 +302,19 @@ describe("durable recording job ownership", () => {
 		expect(rows.jobs?.[0]?.attemptCount).toBe(1);
 	});
 
-	it("returns a live attempt to the caller that claimed it under the same id", async () => {
+	const stepIds = (attemptCount: number) => `step-attempt-${attemptCount}`;
+
+	it("returns a live attempt to the caller that named it", async () => {
 		const { job } = await ensureSegmentProcessingJob({ videoId, userId });
 		const first = await claimProcessingAttempt({
 			videoId,
 			generation: job.generation,
-			attemptId: "step-attempt",
+			attemptIdFor: stepIds,
 		});
-		expect(first).toMatchObject({ attemptId: "step-attempt", attemptCount: 1 });
+		expect(first).toMatchObject({
+			attemptId: "step-attempt-1",
+			attemptCount: 1,
+		});
 		const output = {
 			kind: "desktop-recording-source-commit",
 			revision: 3,
@@ -318,10 +323,10 @@ describe("durable recording job ownership", () => {
 		const resumed = await claimProcessingAttempt({
 			videoId,
 			generation: job.generation,
-			attemptId: "step-attempt",
+			attemptIdFor: stepIds,
 		});
 		expect(resumed).toMatchObject({
-			attemptId: "step-attempt",
+			attemptId: "step-attempt-1",
 			attemptCount: 1,
 			output,
 		});
@@ -329,7 +334,7 @@ describe("durable recording job ownership", () => {
 			await claimProcessingAttempt({
 				videoId,
 				generation: job.generation,
-				attemptId: "other-step",
+				attemptIdFor: (attemptCount) => `other-step-${attemptCount}`,
 			}),
 		).toBeNull();
 		expect(
@@ -338,22 +343,33 @@ describe("durable recording job ownership", () => {
 		expect(rows.jobs?.[0]?.attemptCount).toBe(1);
 	});
 
-	it("claims a fresh id when the caller's own attempt has expired", async () => {
+	it("names a replacement for an expired attempt so a later retry still recognises it", async () => {
 		const { job } = await ensureSegmentProcessingJob({ videoId, userId });
 		await claimProcessingAttempt({
 			videoId,
 			generation: job.generation,
-			attemptId: "step-attempt",
+			attemptIdFor: stepIds,
 		});
 		vi.setSystemTime(new Date(now.getTime() + 6 * 60_000));
-		const next = await claimProcessingAttempt({
+		const replacement = await claimProcessingAttempt({
 			videoId,
 			generation: job.generation,
-			attemptId: "step-attempt",
+			attemptIdFor: stepIds,
 		});
-		expect(next?.attemptId).toBeTruthy();
-		expect(next?.attemptId).not.toBe("step-attempt");
-		expect(next?.attemptCount).toBe(2);
+		expect(replacement).toMatchObject({
+			attemptId: "step-attempt-2",
+			attemptCount: 2,
+		});
+		const retried = await claimProcessingAttempt({
+			videoId,
+			generation: job.generation,
+			attemptIdFor: stepIds,
+		});
+		expect(retried).toMatchObject({
+			attemptId: "step-attempt-2",
+			attemptCount: 2,
+		});
+		expect(rows.jobs?.[0]?.attemptCount).toBe(2);
 	});
 
 	it("does not resume a finished attempt under its old id", async () => {
@@ -361,7 +377,7 @@ describe("durable recording job ownership", () => {
 		const first = await claimProcessingAttempt({
 			videoId,
 			generation: job.generation,
-			attemptId: "step-attempt",
+			attemptIdFor: stepIds,
 		});
 		if (!first) throw new Error("Fixture attempt was not claimed");
 		Object.assign(rows.jobs?.[0] ?? {}, { state: "verified" });
@@ -369,7 +385,7 @@ describe("durable recording job ownership", () => {
 			await claimProcessingAttempt({
 				videoId,
 				generation: job.generation,
-				attemptId: "step-attempt",
+				attemptIdFor: stepIds,
 			}),
 		).toBeNull();
 	});

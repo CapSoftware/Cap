@@ -1179,7 +1179,37 @@ describe("source commitment and media request compatibility", () => {
 });
 
 describe("first attempt step", () => {
+	// Claims the way the database does: a live attempt named for its number is handed back to its caller.
+	function claimByName() {
+		mocks.claim.mockImplementation(
+			async ({
+				attemptIdFor,
+			}: {
+				attemptIdFor?: (attemptCount: number) => string;
+			}) => {
+				if (!current) return null;
+				if (
+					attemptIdFor &&
+					current.attemptId === attemptIdFor(current.attemptCount) &&
+					current.leaseExpiresAt &&
+					current.leaseExpiresAt > new Date()
+				)
+					return current;
+				const attemptCount = current.attemptCount + 1;
+				withCurrent({
+					state: current.source ? "processing" : "committing",
+					attemptId: attemptIdFor?.(attemptCount) ?? `attempt-${attemptCount}`,
+					attemptCount,
+					leaseExpiresAt: new Date(Date.now() + 5 * 60_000),
+					remoteJobId: null,
+				});
+				return current;
+			},
+		);
+	}
+
 	it("claims, commits and dispatches the first attempt in one step", async () => {
+		claimByName();
 		withCurrent({
 			state: "committing",
 			source: null,
@@ -1193,66 +1223,18 @@ describe("first attempt step", () => {
 		});
 		expect(result).toMatchObject({
 			status: "attempt",
-			started: { committed: "ready", dispatched: true, started: "remote-job" },
-		});
-		expect(mocks.claim).toHaveBeenCalledWith(
-			expect.objectContaining({
+			attempt: {
 				attemptId: expect.stringMatching(
 					/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
 				),
-			}),
-		);
+			},
+			started: { committed: "ready", dispatched: true, started: "remote-job" },
+		});
 		expect(mocks.fetch).toHaveBeenCalledOnce();
 	});
 
-	it("derives the same attempt id when the step is retried", async () => {
-		withCurrent({ state: "committing", source: null, leaseExpiresAt: null });
-		await acquireAndStartDesktopRecordingAttempt({
-			videoId,
-			userId,
-			generation: fixture.generation,
-		});
-		const first = mocks.claim.mock.calls[0]?.[0].attemptId;
-		withCurrent({ attemptId: first });
-		await acquireAndStartDesktopRecordingAttempt({
-			videoId,
-			userId,
-			generation: fixture.generation,
-		});
-		expect(mocks.claim.mock.calls[1]?.[0].attemptId).toBe(first);
-	});
-
-	it("resumes its own live attempt instead of reporting it as already processing", async () => {
-		withCurrent({ state: "committing", source: null, leaseExpiresAt: null });
-		await acquireAndStartDesktopRecordingAttempt({
-			videoId,
-			userId,
-			generation: fixture.generation,
-		});
-		const own = mocks.claim.mock.calls[0]?.[0].attemptId;
-		withCurrent({
-			attemptId: own,
-			leaseExpiresAt: new Date(Date.now() + 60_000),
-			nextRetryAt: new Date(Date.now() + 60_000),
-		});
-		mocks.claim.mockImplementationOnce(async () => current);
-		const retried = await acquireAndStartDesktopRecordingAttempt({
-			videoId,
-			userId,
-			generation: fixture.generation,
-		});
-		expect(retried.status).toBe("attempt");
-		withCurrent({ attemptId: "someone-else" });
-		expect(
-			await acquireAndStartDesktopRecordingAttempt({
-				videoId,
-				userId,
-				generation: fixture.generation,
-			}),
-		).toEqual({ status: "already-processing" });
-	});
-
 	it("rethrows an early failure so the step retry resumes the same attempt", async () => {
+		claimByName();
 		withCurrent({ state: "committing", source: null, leaseExpiresAt: null });
 		mocks.stepMetadata.mockReturnValue({ stepId: "step_retry", attempt: 1 });
 		mocks.commitSource.mockRejectedValueOnce(new Error("storage blip"));
@@ -1263,9 +1245,7 @@ describe("first attempt step", () => {
 				generation: fixture.generation,
 			}),
 		).rejects.toThrow("storage blip");
-		const claimed = mocks.claim.mock.calls[0]?.[0].attemptId;
-		withCurrent({ attemptId: claimed });
-		mocks.claim.mockImplementationOnce(async () => current);
+		const claimed = current?.attemptId;
 		mocks.stepMetadata.mockReturnValue({ stepId: "step_retry", attempt: 2 });
 		expect(
 			await acquireAndStartDesktopRecordingAttempt({
@@ -1275,11 +1255,64 @@ describe("first attempt step", () => {
 			}),
 		).toMatchObject({
 			status: "attempt",
-			attempt: { attemptId: claimed },
+			attempt: { attemptId: claimed, attemptCount: 2 },
 			started: { committed: "ready", dispatched: true, started: "remote-job" },
 		});
-		expect(mocks.claim.mock.calls[1]?.[0].attemptId).toBe(claimed);
 		expect(mocks.fetch).toHaveBeenCalledOnce();
+	});
+
+	it("keeps resuming a replacement claimed after its earlier attempt's lease expired", async () => {
+		claimByName();
+		withCurrent({ state: "committing", source: null, leaseExpiresAt: null });
+		mocks.stepMetadata.mockReturnValue({ stepId: "step_slow", attempt: 1 });
+		mocks.commitSource.mockRejectedValueOnce(new Error("storage blip"));
+		await expect(
+			acquireAndStartDesktopRecordingAttempt({
+				videoId,
+				userId,
+				generation: fixture.generation,
+			}),
+		).rejects.toThrow("storage blip");
+		const first = current?.attemptId;
+		vi.setSystemTime(new Date(Date.now() + 6 * 60_000));
+		mocks.stepMetadata.mockReturnValue({ stepId: "step_slow", attempt: 2 });
+		mocks.commitSource.mockRejectedValueOnce(new Error("storage blip again"));
+		await expect(
+			acquireAndStartDesktopRecordingAttempt({
+				videoId,
+				userId,
+				generation: fixture.generation,
+			}),
+		).rejects.toThrow("storage blip again");
+		const replacement = current?.attemptId;
+		expect(replacement).not.toBe(first);
+		mocks.stepMetadata.mockReturnValue({ stepId: "step_slow", attempt: 3 });
+		expect(
+			await acquireAndStartDesktopRecordingAttempt({
+				videoId,
+				userId,
+				generation: fixture.generation,
+			}),
+		).toMatchObject({
+			status: "attempt",
+			attempt: { attemptId: replacement },
+			started: { committed: "ready", dispatched: true },
+		});
+	});
+
+	it("leaves another workflow's live attempt alone", async () => {
+		withCurrent({
+			attemptId: "someone-else",
+			leaseExpiresAt: new Date(Date.now() + 60_000),
+		});
+		expect(
+			await acquireAndStartDesktopRecordingAttempt({
+				videoId,
+				userId,
+				generation: fixture.generation,
+			}),
+		).toEqual({ status: "already-processing" });
+		expect(mocks.claim).not.toHaveBeenCalled();
 	});
 
 	it("returns a failure after the last try as data for the workflow to retry", async () => {

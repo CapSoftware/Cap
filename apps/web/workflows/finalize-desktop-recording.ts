@@ -255,12 +255,12 @@ async function acquireAttempt({
 	videoId,
 	userId,
 	generation,
-	attemptId,
+	attemptIdFor,
 }: {
 	videoId: string;
 	userId: User.UserId;
 	generation: string;
-	attemptId?: string;
+	attemptIdFor?: (attemptCount: number) => string;
 }): Promise<AttemptAcquisition> {
 	const id = Video.VideoId.make(videoId);
 	const job = await getProcessingState({ videoId: id, generation });
@@ -268,16 +268,18 @@ async function acquireAttempt({
 	if (job.state === "verified") return { status: "verified" };
 	if (job.state === "source-blocked") return { status: "source-blocked" };
 	const now = new Date();
-	const own = attemptId !== undefined && job.attemptId === attemptId;
-	if (!own && job.leaseExpiresAt && job.leaseExpiresAt > now) {
-		return { status: "already-processing" };
-	}
-	if (!own && job.nextRetryAt > now)
+	const live = Boolean(job.leaseExpiresAt && job.leaseExpiresAt > now);
+	const ownLive =
+		live &&
+		attemptIdFor !== undefined &&
+		job.attemptId === attemptIdFor(job.attemptCount);
+	if (live && !ownLive) return { status: "already-processing" };
+	if (!ownLive && job.nextRetryAt > now)
 		return { status: "wait", until: job.nextRetryAt };
 	const attempt = await claimProcessingAttempt({
 		videoId: id,
 		generation,
-		attemptId,
+		attemptIdFor,
 		now,
 	});
 	return attempt
@@ -294,9 +296,12 @@ class AttemptStepFailure extends Error {
 	}
 }
 
-// A retried step keeps its step id, so an attempt id derived from it lets the retry resume its own claim.
-function stepAttemptId(stepId: string) {
-	const digest = createHash("sha256").update(stepId).digest("hex");
+// A retried step keeps its step id, so ids derived from it and the attempt number let the retry recognise
+// its own claim, including a replacement claimed after its earlier attempt's lease expired.
+function stepAttemptId(stepId: string, attemptCount: number) {
+	const digest = createHash("sha256")
+		.update(`${stepId}:${attemptCount}`)
+		.digest("hex");
 	const variant = (8 + (Number.parseInt(digest.charAt(16), 16) % 4)).toString(
 		16,
 	);
@@ -326,9 +331,10 @@ export async function acquireAndStartDesktopRecordingAttempt(input: {
 > {
 	"use step";
 
+	const { stepId } = getStepMetadata();
 	const acquired = await acquireAttempt({
 		...input,
-		attemptId: stepAttemptId(getStepMetadata().stepId),
+		attemptIdFor: (attemptCount) => stepAttemptId(stepId, attemptCount),
 	});
 	if (acquired.status !== "attempt") return acquired;
 	try {
