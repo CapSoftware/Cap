@@ -1858,38 +1858,58 @@ mod mac {
         region.contains(&gpui::point(gpui::px(x as f32), gpui::px(y as f32)))
     }
 
-    /// Removes its `NSEvent` monitor when dropped.
-    pub struct PointerMoveMonitor(Retained<AnyObject>);
+    /// Removes its `NSEvent` monitors when dropped.
+    pub struct PointerMoveMonitor(Vec<Retained<AnyObject>>);
 
     impl Drop for PointerMoveMonitor {
         fn drop(&mut self) {
-            unsafe {
-                let _: () = objc2::msg_send![objc2::class!(NSEvent), removeMonitor: &*self.0];
+            for monitor in &self.0 {
+                unsafe {
+                    let _: () = objc2::msg_send![objc2::class!(NSEvent), removeMonitor: &**monitor];
+                }
             }
         }
     }
 
-    /// Calls `on_move` on the main thread each time the pointer moves over
-    /// another app's windows, which includes a window of ours that ignores
-    /// mouse events. AppKit runs it while delivering the move, before any
-    /// click that follows. Mouse monitors need no accessibility permission.
+    /// Calls `on_move` on the main thread each time the pointer moves. The
+    /// global monitor sees moves AppKit sends to other apps, which includes a
+    /// window of ours that ignores mouse events; the local one sees moves sent
+    /// to Cap's own windows, such as a camera bubble under the bar or the
+    /// controls window itself. AppKit runs both while delivering the move,
+    /// before any click that follows. Mouse monitors need no accessibility
+    /// permission.
     pub fn monitor_pointer_moves(on_move: impl Fn() + 'static) -> Option<PointerMoveMonitor> {
         const MOUSE_MOVED: u64 = 1 << 5;
         const LEFT_MOUSE_DRAGGED: u64 = 1 << 6;
         const RIGHT_MOUSE_DRAGGED: u64 = 1 << 7;
         const OTHER_MOUSE_DRAGGED: u64 = 1 << 27;
-        let block = block2::RcBlock::new(move |_: std::ptr::NonNull<AnyObject>| on_move());
-        let monitor: Option<Retained<AnyObject>> = unsafe {
+        const MASK: u64 =
+            MOUSE_MOVED | LEFT_MOUSE_DRAGGED | RIGHT_MOUSE_DRAGGED | OTHER_MOUSE_DRAGGED;
+        let on_move = std::rc::Rc::new(on_move);
+        let global = block2::RcBlock::new({
+            let on_move = on_move.clone();
+            move |_: std::ptr::NonNull<AnyObject>| on_move()
+        });
+        let local = block2::RcBlock::new(move |event: std::ptr::NonNull<AnyObject>| {
+            on_move();
+            event.as_ptr()
+        });
+        let global: Option<Retained<AnyObject>> = unsafe {
             objc2::msg_send![
                 objc2::class!(NSEvent),
-                addGlobalMonitorForEventsMatchingMask: MOUSE_MOVED
-                    | LEFT_MOUSE_DRAGGED
-                    | RIGHT_MOUSE_DRAGGED
-                    | OTHER_MOUSE_DRAGGED,
-                handler: &*block
+                addGlobalMonitorForEventsMatchingMask: MASK,
+                handler: &*global
             ]
         };
-        monitor.map(PointerMoveMonitor)
+        let local: Option<Retained<AnyObject>> = unsafe {
+            objc2::msg_send![
+                objc2::class!(NSEvent),
+                addLocalMonitorForEventsMatchingMask: MASK,
+                handler: &*local
+            ]
+        };
+        let monitors = global.into_iter().chain(local).collect::<Vec<_>>();
+        (!monitors.is_empty()).then_some(PointerMoveMonitor(monitors))
     }
 
     /// `orderOut:` -- hide without closing, the way the Tauri main window
