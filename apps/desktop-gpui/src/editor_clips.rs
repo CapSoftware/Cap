@@ -214,34 +214,97 @@ pub(crate) fn drop_clip_transition(
             .retain(|candidate| candidate.segment_index as usize != segment_index);
         return false;
     };
+    let boundary = transition_boundary(timeline, segment_index, effective.duration);
+    timeline
+        .transitions
+        .retain(|candidate| candidate.segment_index as usize != segment_index);
+    ripple_every_track(timeline, boundary, effective.duration);
+    true
+}
+
+/// `setClipTransition` (`ED/context.ts`): puts a `kind` transition on
+/// `segment_index`'s leading boundary, `duration` long within the limits of
+/// half the shorter clip (`clampTransitionDuration`), and ripples every other
+/// track past the boundary by the overlap it gained or gave back. Returns
+/// false when the boundary does not exist or the clips are too short for one.
+pub(crate) fn set_clip_transition(
+    timeline: &mut TimelineConfiguration,
+    segment_index: usize,
+    kind: cap_project::ClipTransitionType,
+    duration: f64,
+) -> bool {
+    if segment_index == 0 || segment_index >= timeline.segments.len() {
+        return false;
+    }
+    let maximum = max_transition_duration(timeline, segment_index);
+    if !maximum.is_finite() || maximum < cap_project::MIN_CLIP_TRANSITION_DURATION {
+        return false;
+    }
+    let duration = duration.clamp(cap_project::MIN_CLIP_TRANSITION_DURATION, maximum);
+    let old = timeline
+        .effective_transition(segment_index)
+        .map_or(0.0, |transition| transition.duration);
+    let boundary = transition_boundary(timeline, segment_index, old);
+    timeline
+        .transitions
+        .retain(|candidate| candidate.segment_index as usize != segment_index);
+    timeline.transitions.push(ClipTransition {
+        segment_index: segment_index as u32,
+        kind,
+        duration,
+    });
+    timeline
+        .transitions
+        .sort_by_key(|transition| transition.segment_index);
+    let shift = old - duration;
+    if shift != 0.0 {
+        ripple_every_track(timeline, boundary, shift);
+    }
+    true
+}
+
+/// `maxTransitionDuration`: half the shorter of the two clips a boundary joins.
+pub(crate) fn max_transition_duration(
+    timeline: &TimelineConfiguration,
+    segment_index: usize,
+) -> f64 {
+    match (
+        segment_index
+            .checked_sub(1)
+            .and_then(|previous| timeline.segments.get(previous)),
+        timeline.segments.get(segment_index),
+    ) {
+        (Some(previous), Some(current)) => previous.duration().min(current.duration()) / 2.0,
+        _ => 0.0,
+    }
+}
+
+/// Where the other tracks start to feel a transition on `segment_index`'s
+/// boundary that currently overlaps the clips by `overlap`.
+fn transition_boundary(
+    timeline: &TimelineConfiguration,
+    segment_index: usize,
+    overlap: f64,
+) -> f64 {
     let boundary = clip_timeline_offsets(timeline)
         .get(segment_index)
         .copied()
         .unwrap_or(0.)
-        + effective.duration;
-    let boundary = edits::effective_to_output(&timeline.hold_windows(), boundary);
-    timeline
-        .transitions
-        .retain(|candidate| candidate.segment_index as usize != segment_index);
-    ripple_track(&mut timeline.style_segments, boundary, effective.duration);
-    ripple_track(&mut timeline.image_segments, boundary, effective.duration);
-    ripple_track(&mut timeline.zoom_segments, boundary, effective.duration);
-    ripple_track(&mut timeline.scene_segments, boundary, effective.duration);
-    ripple_track(&mut timeline.mask_segments, boundary, effective.duration);
-    ripple_track(&mut timeline.text_segments, boundary, effective.duration);
-    ripple_track(&mut timeline.caption_segments, boundary, effective.duration);
-    ripple_track(
-        &mut timeline.camera3d_segments,
-        boundary,
-        effective.duration,
-    );
-    ripple_keyboard_track(
-        &mut timeline.keyboard_segments,
-        boundary,
-        effective.duration,
-    );
-    ripple_track(&mut timeline.audio_segments, boundary, effective.duration);
-    true
+        + overlap;
+    edits::effective_to_output(&timeline.hold_windows(), boundary)
+}
+
+fn ripple_every_track(timeline: &mut TimelineConfiguration, boundary: f64, shift: f64) {
+    ripple_track(&mut timeline.style_segments, boundary, shift);
+    ripple_track(&mut timeline.image_segments, boundary, shift);
+    ripple_track(&mut timeline.zoom_segments, boundary, shift);
+    ripple_track(&mut timeline.scene_segments, boundary, shift);
+    ripple_track(&mut timeline.mask_segments, boundary, shift);
+    ripple_track(&mut timeline.text_segments, boundary, shift);
+    ripple_track(&mut timeline.caption_segments, boundary, shift);
+    ripple_track(&mut timeline.camera3d_segments, boundary, shift);
+    ripple_keyboard_track(&mut timeline.keyboard_segments, boundary, shift);
+    ripple_track(&mut timeline.audio_segments, boundary, shift);
 }
 
 /// `moveClip` (`ClipsSidebar.tsx:639-690`): reorder `timeline.segments`,
@@ -3987,6 +4050,95 @@ mod tests {
     /// The dropped transition's overlap is given back: every later segment on
     /// the other tracks shifts right by its effective duration
     /// (`ClipsSidebar.tsx:656-683`).
+    fn zoom_at(start: f64, end: f64) -> cap_project::ZoomSegment {
+        cap_project::ZoomSegment {
+            start,
+            end,
+            amount: 1.5,
+            mode: cap_project::ZoomMode::Auto,
+            glide_direction: Default::default(),
+            glide_speed: 0.5,
+            instant_animation: false,
+            edge_snap_ratio: 0.25,
+        }
+    }
+
+    #[test]
+    fn adding_a_transition_overlaps_the_clips_and_ripples_the_other_tracks() {
+        let mut config = timeline(vec![segment(0, 0.0, 10.0), segment(1, 0.0, 10.0)]);
+        // A zoom on the second clip, past the boundary at 10s.
+        config.zoom_segments = vec![zoom_at(15.0, 18.0)];
+
+        assert!(set_clip_transition(
+            &mut config,
+            1,
+            cap_project::ClipTransitionType::CrossFade,
+            0.5
+        ));
+        let added = config.effective_transition(1).unwrap();
+        assert_eq!(added.duration, 0.5);
+        assert_eq!(added.kind, cap_project::ClipTransitionType::CrossFade);
+        // The second clip now starts half a second earlier, and so does the
+        // zoom that sits on it.
+        assert_eq!(config.zoom_segments[0].start, 14.5);
+        assert_eq!(config.zoom_segments[0].end, 17.5);
+
+        // Lengthening it ripples by the difference only, and the kind changes.
+        assert!(set_clip_transition(
+            &mut config,
+            1,
+            cap_project::ClipTransitionType::FadeThroughBlack,
+            1.0
+        ));
+        assert_eq!(config.transitions.len(), 1);
+        let changed = config.effective_transition(1).unwrap();
+        assert_eq!(changed.duration, 1.0);
+        assert_eq!(
+            changed.kind,
+            cap_project::ClipTransitionType::FadeThroughBlack
+        );
+        assert_eq!(config.zoom_segments[0].start, 14.0);
+
+        // Removing it puts everything back where it began.
+        assert!(drop_clip_transition(&mut config, 1));
+        assert!(config.transitions.is_empty());
+        assert_eq!(config.zoom_segments[0].start, 15.0);
+        assert_eq!(config.zoom_segments[0].end, 18.0);
+    }
+
+    #[test]
+    fn a_transition_is_held_to_half_the_shorter_clip() {
+        let mut config = timeline(vec![segment(0, 0.0, 10.0), segment(1, 0.0, 3.0)]);
+        assert_eq!(max_transition_duration(&config, 1), 1.5);
+        assert!(set_clip_transition(
+            &mut config,
+            1,
+            cap_project::ClipTransitionType::CrossFade,
+            5.0
+        ));
+        assert_eq!(config.effective_transition(1).unwrap().duration, 1.5);
+        assert!(set_clip_transition(
+            &mut config,
+            1,
+            cap_project::ClipTransitionType::CrossFade,
+            0.0
+        ));
+        assert_eq!(
+            config.effective_transition(1).unwrap().duration,
+            cap_project::MIN_CLIP_TRANSITION_DURATION
+        );
+    }
+
+    #[test]
+    fn the_first_clip_and_clips_too_short_take_no_transition() {
+        let mut config = timeline(vec![segment(0, 0.0, 10.0), segment(1, 0.0, 0.08)]);
+        let kind = cap_project::ClipTransitionType::CrossFade;
+        assert!(!set_clip_transition(&mut config, 0, kind, 0.5));
+        assert!(!set_clip_transition(&mut config, 1, kind, 0.5));
+        assert!(!set_clip_transition(&mut config, 2, kind, 0.5));
+        assert!(config.transitions.is_empty());
+    }
+
     #[test]
     fn a_dropped_transition_ripples_the_other_tracks() {
         let mut config = timeline(vec![

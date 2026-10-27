@@ -1673,6 +1673,11 @@ fn add_track_tile_progress(delta: f32, index: usize) -> f32 {
 }
 
 const CLIP_MENU_WIDTH: f32 = 300.;
+/// `DEFAULT_CLIP_TRANSITION_DURATION` (`ED/clip-transitions.ts`).
+const DEFAULT_CLIP_TRANSITION_DURATION: f64 = 0.5;
+/// The clip menu's transition lengths, longest last; ones longer than half the
+/// shorter clip are left out.
+const CLIP_TRANSITION_DURATIONS: [f64; 4] = [0.25, 0.5, 1.0, 1.5];
 const TEXT_MENU_WIDTH: f32 = 250.;
 /// Roughly the menu's laid-out height; only decides which side of its anchor
 /// the card opens on.
@@ -8368,6 +8373,32 @@ impl EditorWindow {
         self.note_edit("clip-hide-cursor", Some(TrackKind::Clip));
     }
 
+    /// The clip menu's transition chips (`setClipTransition`,
+    /// `TL/ClipTrack.tsx`): a `kind` transition `duration` long on clip
+    /// `index`'s leading boundary, or, with `None`, no transition.
+    fn set_clip_transition(
+        &mut self,
+        index: usize,
+        transition: Option<(cap_project::ClipTransitionType, f64)>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(timeline) = self.project.timeline.as_mut() else {
+            return;
+        };
+        let changed = match transition {
+            Some((kind, duration)) => {
+                crate::editor_clips::set_clip_transition(timeline, index, kind, duration)
+            }
+            None => crate::editor_clips::drop_clip_transition(timeline, index),
+        };
+        if !changed {
+            return;
+        }
+        self.project_changed(window, cx);
+        self.note_edit("clip-transition", Some(TrackKind::Clip));
+    }
+
     fn merge_clip(
         &mut self,
         index: usize,
@@ -8529,6 +8560,10 @@ impl EditorWindow {
         let merge_next =
             edits::clip_merge_blocker(&timeline.segments, index, edits::ClipMergeDirection::Next);
         let can_delete = timeline.segments.len() > 1;
+        // The transition into this clip from the one before it.
+        let transition = timeline.effective_transition(index);
+        let transition_room = crate::editor_clips::max_transition_duration(timeline, index);
+        let can_transition = transition_room >= cap_project::MIN_CLIP_TRANSITION_DURATION;
         let rename_input = self
             .clips
             .rename_in_progress()
@@ -8715,6 +8750,69 @@ impl EditorWindow {
                         )),
                     ),
             )
+            .when(index > 0 && can_transition, |card| {
+                use cap_project::ClipTransitionType;
+                let duration =
+                    transition.map_or(DEFAULT_CLIP_TRANSITION_DURATION, |current| current.duration);
+                let kinds = [
+                    ("None", None),
+                    ("Crossfade", Some(ClipTransitionType::CrossFade)),
+                    ("Fade", Some(ClipTransitionType::FadeThroughBlack)),
+                ];
+                card.child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(4.))
+                        .child(clip_menu_section(&theme, "TRANSITION"))
+                        .child(chip_row().children(kinds.into_iter().map(|(label, kind)| {
+                            let selected = transition.map(|current| current.kind) == kind;
+                            chip(
+                                SharedString::from(format!("clip-transition-{label}")),
+                                selected,
+                                label.to_string(),
+                            )
+                            .on_click(cx.listener(
+                                move |this, _, window, cx| {
+                                    this.set_clip_transition(
+                                        index,
+                                        kind.map(|kind| (kind, duration)),
+                                        window,
+                                        cx,
+                                    );
+                                },
+                            ))
+                        })))
+                        .when_some(transition, |section, current| {
+                            section.child(
+                                chip_row().children(
+                                    CLIP_TRANSITION_DURATIONS
+                                        .into_iter()
+                                        .filter(|seconds| *seconds <= transition_room + 1e-9)
+                                        .map(|seconds| {
+                                            chip(
+                                                SharedString::from(format!(
+                                                    "clip-transition-{seconds}s"
+                                                )),
+                                                (current.duration - seconds).abs() < 1e-3,
+                                                format!("{seconds}s"),
+                                            )
+                                            .on_click(
+                                                cx.listener(move |this, _, window, cx| {
+                                                    this.set_clip_transition(
+                                                        index,
+                                                        Some((current.kind, seconds)),
+                                                        window,
+                                                        cx,
+                                                    );
+                                                }),
+                                            )
+                                        }),
+                                ),
+                            )
+                        }),
+                )
+            })
             .child(divider())
             .child(
                 div()
