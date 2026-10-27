@@ -29,7 +29,7 @@ pub fn run(cx: &mut App) {
         tracing::error!(%error, "glass probe: cannot create its output directory");
         return;
     }
-    // An X11 window capture reads whatever is on screen over the window.
+    // An area capture reads whatever is on screen over the window.
     crate::app_windows::hide_main_window(cx);
     let handle = cx.open_window(
         WindowOptions {
@@ -233,7 +233,7 @@ fn glass_mask(scale: f32, width: usize, height: usize) -> Vec<bool> {
         .collect()
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "macos")]
 fn window_target(window: &Window) -> Option<ScreenCaptureTarget> {
     let number = crate::platform::window_number(window)?;
     Some(ScreenCaptureTarget::Window {
@@ -241,9 +241,10 @@ fn window_target(window: &Window) -> Option<ScreenCaptureTarget> {
     })
 }
 
-/// Cap's own windows are not in its X11 window list, so the probe captures
-/// the window's area of the display; it hides every other Cap window first.
-#[cfg(target_os = "linux")]
+/// Cap's own windows are not in its X11 window list, and hosted Windows
+/// runners have no window capture, so the probe captures the window's area
+/// of the display; it hides every other Cap window first.
+#[cfg(not(target_os = "macos"))]
 fn window_target(window: &Window) -> Option<ScreenCaptureTarget> {
     use scap_targets::bounds::{LogicalBounds, LogicalPosition, LogicalSize};
 
