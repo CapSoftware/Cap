@@ -81,6 +81,7 @@ function validateArguments(target, args, platform) {
 			valid =
 				/^--(?:config|bundles)=.+/.test(argument) ||
 				argument === "--verbose" ||
+				argument === "--debug" ||
 				/^-v{1,2}$/.test(argument);
 		}
 	}

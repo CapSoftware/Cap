@@ -58,6 +58,8 @@ jobs:
               - 'scripts/build-linux-packages.mjs'
               - 'scripts/build-macos-packages*'
               - 'scripts/bundle-gpui*'
+              - 'scripts/build-macos-bundles*'
+              - 'apps/macos-bundles/**'
               - 'scripts/finalize-linux-*'
               - 'scripts/finalize-macos-*'
               - 'scripts/linux-bundle-config*'
@@ -364,7 +366,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Test desktop build preparation
-        run: node --test scripts/prepare-gpui-dependency.test.mjs scripts/build-macos-packages.test.mjs scripts/bundle-gpui.test.mjs scripts/finalize-macos-packages.test.mjs
+        run: node --test scripts/prepare-gpui-dependency.test.mjs scripts/build-macos-packages.test.mjs scripts/bundle-gpui.test.mjs scripts/build-macos-bundles.test.mjs scripts/finalize-macos-packages.test.mjs
 
       - name: Test Linux packaging
         if: ${{ runner.os == 'Linux' }}

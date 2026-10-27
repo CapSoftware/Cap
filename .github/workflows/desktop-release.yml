@@ -231,7 +231,7 @@ jobs:
         run: node --test scripts/prepare-gpui-dependency.test.mjs
 
       - name: Test desktop packaging scripts
-        run: node --test scripts/build-macos-packages.test.mjs scripts/bundle-gpui.test.mjs scripts/finalize-macos-packages.test.mjs
+        run: node --test scripts/build-macos-packages.test.mjs scripts/bundle-gpui.test.mjs scripts/build-macos-bundles.test.mjs scripts/finalize-macos-packages.test.mjs
 
       - name: Install Linux desktop dependencies
         if: ${{ runner.os == 'Linux' }}
