@@ -21,6 +21,20 @@ pub fn run(main: WindowHandle<MainWindow>, cx: &mut App) {
         // `CAP_PICKER_PROBE_HOLD=window` (or `display`, `area`) arms that
         // picker and leaves it up, for a script to drive the pointer over it.
         if let Ok(hold) = std::env::var("CAP_PICKER_PROBE_HOLD") {
+            // `main` leaves the main window as it opened; `settings:<n>` opens
+            // settings page n, for screenshots of the rest of the app.
+            if hold == "main" {
+                return;
+            }
+            if let Some(page) = hold.strip_prefix("settings:") {
+                let page = page.parse::<usize>().unwrap_or(0);
+                let page = crate::settings_window::Page::ALL
+                    .get(page)
+                    .copied()
+                    .unwrap_or(crate::settings_window::Page::General);
+                cx.update(|cx| app_windows::open_settings(page, cx));
+                return;
+            }
             let kind = match hold.as_str() {
                 "display" => TargetType::Display,
                 "area" => TargetType::Area,
