@@ -213,16 +213,28 @@ export function useVoiceRecorder(options: {
 			}, LEVEL_SAMPLE_MS);
 		}
 
-		recorder.start(1000);
+		try {
+			recorder.start(1000);
+		} catch {
+			resetRecorder();
+			cleanupStreams();
+			clearTimer();
+			resetTimer();
+			updatePhase("denied");
+			return;
+		}
 		startTimer();
 		updatePhase("recording");
 	}, [
 		attachMeter,
 		cleanupStreams,
+		clearTimer,
 		mediaRecorderRef,
 		onRecorderDataAvailable,
 		onRecorderError,
 		onRecorderStop,
+		resetRecorder,
+		resetTimer,
 		setLocalRecordingStrategy,
 		startTimer,
 		updatePhase,
@@ -302,7 +314,16 @@ export function useVoiceRecorder(options: {
 		next.onerror = onRecorderError;
 		mediaRecorderRef.current = next;
 		peaksRef.current = new LivePeaksAccumulator();
-		next.start(1000);
+		try {
+			next.start(1000);
+		} catch {
+			resetRecorder();
+			cleanupStreams();
+			clearTimer();
+			resetTimer();
+			updatePhase("denied");
+			return;
+		}
 		startTimer();
 		updatePhase("recording");
 	}, [

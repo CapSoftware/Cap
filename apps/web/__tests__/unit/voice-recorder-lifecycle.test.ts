@@ -50,12 +50,14 @@ class Stream {
 }
 class Recorder {
 	static isTypeSupported = () => true;
+	static startError: Error | null = null;
 	state: RecordingState = "inactive";
 	mimeType = "audio/webm";
 	ondataavailable: ((event: BlobEvent) => void) | null = null;
 	onstop: ((event: Event) => void) | null = null;
 	onerror: ((event: Event) => void) | null = null;
 	start() {
+		if (Recorder.startError) throw Recorder.startError;
 		this.state = "recording";
 	}
 	stop() {
@@ -84,6 +86,7 @@ function mixer(stream = new Stream()) {
 	};
 }
 beforeEach(async () => {
+	Recorder.startError = null;
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 	vi.stubGlobal("MediaRecorder", Recorder);
 	onFinish.mockReset();
@@ -208,3 +211,23 @@ it("releases a microphone granted after startup was cancelled", async () => {
 	expect(onFinish).not.toHaveBeenCalled();
 	expect(recorder.phase).toBe("idle");
 });
+
+it.each(["start", "restart"])(
+	"releases capture when recorder %s throws",
+	async (operation) => {
+		const stream = new Stream();
+		const activeMixer = mixer();
+		mocks.mic.mockResolvedValueOnce(stream);
+		mocks.mixer.mockResolvedValueOnce(activeMixer);
+		if (operation === "restart") await act(async () => recorder.start());
+		Recorder.startError = new Error("Encoder unavailable");
+		await act(async () => {
+			if (operation === "start") await recorder.start();
+			else recorder.restart();
+		});
+		expect(recorder.phase).toBe("denied");
+		expect(stream.track.stop).toHaveBeenCalled();
+		expect(activeMixer.close).toHaveBeenCalled();
+		expect(onFinish).not.toHaveBeenCalled();
+	},
+);
