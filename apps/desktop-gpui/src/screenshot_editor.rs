@@ -4448,7 +4448,9 @@ impl Render for ScreenshotEditorWindow {
             .key_context("ScreenshotEditor")
             .on_action(
                 cx.listener(|this, _: &crate::menus::ExportEditor, window, cx| {
-                    this.export_image(ExportDestination::File, window, cx);
+                    if this.crop.is_none() {
+                        this.export_image(ExportDestination::File, window, cx);
+                    }
                 }),
             )
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
