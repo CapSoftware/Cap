@@ -41,6 +41,12 @@ jobs:
             sudo sqlite3 "$db" "INSERT OR REPLACE INTO access (service,client,client_type,auth_value,auth_reason,auth_version,indirect_object_identifier,flags,last_modified) VALUES ('kTCCServiceScreenCapture','$client',1,2,4,1,'UNUSED',0,$now);" || true
           done
           sudo killall tccd || true
+          defaults read com.apple.universalaccess 2>/dev/null || true
+          for key in reduceTransparency increaseContrast reduceMotion; do
+            defaults write com.apple.universalaccess "$key" -bool false || true
+            sudo defaults write com.apple.universalaccess "$key" -bool false || true
+          done
+          killall cfprefsd || true
           sleep 2
           sw_vers
           system_profiler SPDisplaysDataType | grep -E "Resolution|Chipset|Metal" || true

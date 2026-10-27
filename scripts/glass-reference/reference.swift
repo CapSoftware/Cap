@@ -7,6 +7,7 @@
 //
 // Needs Screen Recording for the calling process (screencapture -l).
 import AppKit
+import Metal
 
 let canvas = NSSize(width: 960, height: 600)
 
@@ -204,6 +205,9 @@ let manifest: [String: Any] = [
     "canvas": [canvas.width, canvas.height],
     "scale": scale,
     "os": ProcessInfo.processInfo.operatingSystemVersionString,
+    "reduceTransparency": NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency,
+    "increaseContrast": NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast,
+    "gpu": MTLCreateSystemDefaultDevice()?.name ?? "none",
     "shapes": shapes.map { ["name": $0.name, "rect": [$0.rect.minX, $0.rect.minY, $0.rect.width, $0.rect.height], "radius": $0.radius] },
     "tints": ["blue": [0.0, 0.533, 1.0, 0.6]],
     "cases": cases,
