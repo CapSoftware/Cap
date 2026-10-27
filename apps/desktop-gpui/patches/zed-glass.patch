@@ -569,7 +569,7 @@ index e087c0d..de1333f 100644
 +  return mix(under, float4(glass * alpha, alpha), coverage);
  }
 diff --git a/crates/gpui_wgpu/src/shaders.wgsl b/crates/gpui_wgpu/src/shaders.wgsl
-index 011be71..bf2175c 100644
+index 011be71..5c7194d 100644
 --- a/crates/gpui_wgpu/src/shaders.wgsl
 +++ b/crates/gpui_wgpu/src/shaders.wgsl
 @@ -1399,3 +1399,195 @@ fn fs_surface(input: SurfaceVarying) -> @location(0) vec4<f32> {
@@ -609,10 +609,10 @@ index 011be71..bf2175c 100644
 +// For the downsample and blur passes `source_rect` is the texel rect of the
 +// source texture being read and `params` is (direction x, direction y,
 +// sigma in source texels or the downsample factor, unused). For the glass
-+// pass `source_rect` is the drawable rect that was blurred, `params.x` the
-+// factor it was blurred at (the blurred texture holds it from texel 0,
-+// scaled down by that factor), and `sharp_texture_size` the size of the
-+// drawable-sized unblurred copy.
++// pass `source_rect` is the drawable rect that was blurred, `params.xy` how
++// far it was scaled down on each axis (the blurred texture holds it from
++// texel 0), and `sharp_texture_size` the size of the drawable-sized
++// unblurred copy.
 +struct BackdropParams {
 +    source_rect: vec4<f32>,
 +    params: vec4<f32>,
@@ -705,8 +705,8 @@ index 011be71..bf2175c 100644
 +// Clamped to the blurred region: texels beyond it hold an older pass.
 +fn backdrop_blurred_uv(position: vec2<f32>) -> vec2<f32> {
 +    let rect = backdrop_params.source_rect;
-+    let factor = backdrop_params.params.x;
-+    let texel = clamp((position - rect.xy) / factor, vec2<f32>(0.5), rect.zw / factor - 0.5);
++    let scale = backdrop_params.params.xy;
++    let texel = clamp((position - rect.xy) / scale, vec2<f32>(0.5), rect.zw / scale - 0.5);
 +    return texel / backdrop_params.source_texture_size;
 +}
 +
@@ -769,7 +769,7 @@ index 011be71..bf2175c 100644
 +    return mix(under, vec4<f32>(color * alpha, alpha), coverage);
 +}
 diff --git a/crates/gpui_wgpu/src/wgpu_renderer.rs b/crates/gpui_wgpu/src/wgpu_renderer.rs
-index 2bfbc4e..f60b1af 100644
+index 2bfbc4e..72ce028 100644
 --- a/crates/gpui_wgpu/src/wgpu_renderer.rs
 +++ b/crates/gpui_wgpu/src/wgpu_renderer.rs
 @@ -2,7 +2,8 @@ use crate::surface_frame::SurfaceFrame;
@@ -1072,7 +1072,7 @@ index 2bfbc4e..f60b1af 100644
              }
  
              if overflow {
-@@ -1365,6 +1539,276 @@ impl WgpuRenderer {
+@@ -1365,6 +1539,279 @@ impl WgpuRenderer {
          )
      }
  
@@ -1172,6 +1172,9 @@ index 2bfbc4e..f60b1af 100644
 +        let factor = (sigma / 4.).floor().clamp(1., 8.);
 +        let region = [x0 as f32, y0 as f32, (x1 - x0) as f32, (y1 - y0) as f32];
 +        let reduced = [(region[2] / factor).ceil(), (region[3] / factor).ceil()];
++        // The downsample stretches the region across `reduced` texels, so a
++        // side that `factor` does not divide shrinks by a little less.
++        let scale = [region[2] / reduced[0], region[3] / reduced[1]];
 +        let full = [targets.width as f32, targets.height as f32];
 +
 +        encoder.copy_texture_to_texture(
@@ -1278,7 +1281,7 @@ index 2bfbc4e..f60b1af 100644
 +            &targets.ping_view,
 +            BackdropParams {
 +                source_rect: blur_source_rect,
-+                params: [1., 0., sigma / factor, 0.],
++                params: [1., 0., sigma / scale[0], 0.],
 +                source_texture_size: full,
 +                sharp_texture_size: full,
 +            },
@@ -1288,7 +1291,7 @@ index 2bfbc4e..f60b1af 100644
 +            &targets.pong_view,
 +            BackdropParams {
 +                source_rect: reduced_rect,
-+                params: [0., 1., sigma / factor, 0.],
++                params: [0., 1., sigma / scale[1], 0.],
 +                source_texture_size: full,
 +                sharp_texture_size: full,
 +            },
@@ -1298,7 +1301,7 @@ index 2bfbc4e..f60b1af 100644
 +
 +        let params = BackdropParams {
 +            source_rect: region,
-+            params: [factor, 0., 0., 0.],
++            params: [scale[0], scale[1], 0., 0.],
 +            source_texture_size: full,
 +            sharp_texture_size: full,
 +        };
@@ -1349,7 +1352,7 @@ index 2bfbc4e..f60b1af 100644
      fn draw_shadows(
          &self,
          shadows: &[Shadow],
-@@ -1937,3 +2381,22 @@ impl RenderingParameters {
+@@ -1937,3 +2384,22 @@ impl RenderingParameters {
          }
      }
  }
@@ -1387,7 +1390,7 @@ index 1db9571..0a6b4a0 100644
  
          let rust_binding_path = format!("{}/shaders_bytes.rs", out_dir);
 diff --git a/crates/gpui_windows/src/directx_renderer.rs b/crates/gpui_windows/src/directx_renderer.rs
-index e4b605b..1a88981 100644
+index e4b605b..89f3cbb 100644
 --- a/crates/gpui_windows/src/directx_renderer.rs
 +++ b/crates/gpui_windows/src/directx_renderer.rs
 @@ -53,6 +53,34 @@ pub(crate) struct DirectXRenderer {
@@ -1490,7 +1493,7 @@ index e4b605b..1a88981 100644
              let _annotation = annotation
                  .as_ref()
                  .map(|annotation| Annotation::new(annotation, HSTRING::from(batch.label())));
-@@ -380,9 +434,222 @@ impl DirectXRenderer {
+@@ -380,9 +434,225 @@ impl DirectXRenderer {
                  )
              })?;
          }
@@ -1574,6 +1577,9 @@ index e4b605b..1a88981 100644
 +        let factor = (sigma / 4.).floor().clamp(1., 8.);
 +        let region = [x0 as f32, y0 as f32, (x1 - x0) as f32, (y1 - y0) as f32];
 +        let reduced = [(region[2] / factor).ceil(), (region[3] / factor).ceil()];
++        // The downsample stretches the region across `reduced` texels, so a
++        // side that `factor` does not divide shrinks by a little less.
++        let scale = [region[2] / reduced[0], region[3] / reduced[1]];
 +        let full = [self.width as f32, self.height as f32];
 +
 +        let devices = self.devices.as_ref().context("devices missing")?;
@@ -1664,7 +1670,7 @@ index e4b605b..1a88981 100644
 +            &textures.ping.0,
 +            BackdropParams {
 +                source_rect: blur_source.1,
-+                params: [1., 0., sigma / factor, 0.],
++                params: [1., 0., sigma / scale[0], 0.],
 +                source_texture_size: full,
 +                sharp_texture_size: full,
 +            },
@@ -1675,7 +1681,7 @@ index e4b605b..1a88981 100644
 +            &textures.pong.0,
 +            BackdropParams {
 +                source_rect: reduced_rect,
-+                params: [0., 1., sigma / factor, 0.],
++                params: [0., 1., sigma / scale[1], 0.],
 +                source_texture_size: full,
 +                sharp_texture_size: full,
 +            },
@@ -1683,7 +1689,7 @@ index e4b605b..1a88981 100644
 +
 +        set_params(BackdropParams {
 +            source_rect: region,
-+            params: [factor, 0., 0., 0.],
++            params: [scale[0], scale[1], 0., 0.],
 +            source_texture_size: full,
 +            sharp_texture_size: full,
 +        })?;
@@ -1713,7 +1719,7 @@ index e4b605b..1a88981 100644
      pub(crate) fn resize(&mut self, new_size: Size<DevicePixels>) -> Result<()> {
          let width = new_size.width.0.max(1) as u32;
          let height = new_size.height.0.max(1) as u32;
-@@ -917,6 +1184,22 @@ impl DirectXRenderPipelines {
+@@ -917,6 +1187,22 @@ impl DirectXRenderPipelines {
              create_blend_state(device)?,
          )?;
  
@@ -1736,7 +1742,7 @@ index e4b605b..1a88981 100644
          Ok(Self {
              shadow_pipeline,
              quad_pipeline,
-@@ -926,6 +1209,9 @@ impl DirectXRenderPipelines {
+@@ -926,6 +1212,9 @@ impl DirectXRenderPipelines {
              mono_sprites,
              subpixel_sprites,
              poly_sprites,
@@ -1746,7 +1752,7 @@ index e4b605b..1a88981 100644
          })
      }
  }
-@@ -986,9 +1272,41 @@ impl DirectXGlobalElements {
+@@ -986,9 +1275,41 @@ impl DirectXGlobalElements {
              output
          };
  
@@ -1788,7 +1794,7 @@ index e4b605b..1a88981 100644
          })
      }
  }
-@@ -1432,6 +1750,18 @@ fn create_blend_state(device: &ID3D11Device) -> Result<ID3D11BlendState> {
+@@ -1432,6 +1753,18 @@ fn create_blend_state(device: &ID3D11Device) -> Result<ID3D11BlendState> {
      }
  }
  
@@ -1807,7 +1813,7 @@ index e4b605b..1a88981 100644
  #[inline]
  fn create_blend_state_for_subpixel_rendering(device: &ID3D11Device) -> Result<ID3D11BlendState> {
      let mut desc = D3D11_BLEND_DESC::default();
-@@ -1614,6 +1944,25 @@ fn report_live_objects(device: &ID3D11Device) -> Result<()> {
+@@ -1614,6 +1947,25 @@ fn report_live_objects(device: &ID3D11Device) -> Result<()> {
      Ok(())
  }
  
@@ -1833,7 +1839,7 @@ index e4b605b..1a88981 100644
  const BUFFER_COUNT: usize = 3;
  
  pub(crate) mod shader_resources {
-@@ -1639,6 +1988,9 @@ pub(crate) mod shader_resources {
+@@ -1639,6 +1991,9 @@ pub(crate) mod shader_resources {
          SubpixelSprite,
          PolychromeSprite,
          EmojiRasterization,
@@ -1843,7 +1849,7 @@ index e4b605b..1a88981 100644
      }
  
      #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-@@ -1716,6 +2068,18 @@ pub(crate) mod shader_resources {
+@@ -1716,6 +2071,18 @@ pub(crate) mod shader_resources {
                      ShaderTarget::Vertex => EMOJI_RASTERIZATION_VERTEX_BYTES,
                      ShaderTarget::Fragment => EMOJI_RASTERIZATION_FRAGMENT_BYTES,
                  },
@@ -1862,7 +1868,7 @@ index e4b605b..1a88981 100644
              };
              Self { inner: bytes }
          }
-@@ -1803,6 +2167,9 @@ pub(crate) mod shader_resources {
+@@ -1803,6 +2170,9 @@ pub(crate) mod shader_resources {
                  ShaderModule::SubpixelSprite => "subpixel_sprite",
                  ShaderModule::PolychromeSprite => "polychrome_sprite",
                  ShaderModule::EmojiRasterization => "emoji_rasterization",
@@ -1873,7 +1879,7 @@ index e4b605b..1a88981 100644
          }
      }
 diff --git a/crates/gpui_windows/src/shaders.hlsl b/crates/gpui_windows/src/shaders.hlsl
-index 78b1ada..11465d8 100644
+index 78b1ada..5ae5ab5 100644
 --- a/crates/gpui_windows/src/shaders.hlsl
 +++ b/crates/gpui_windows/src/shaders.hlsl
 @@ -1289,3 +1289,200 @@ float4 polychrome_sprite_fragment(PolychromeSpriteFragmentInput input): SV_Targe
@@ -1920,9 +1926,9 @@ index 78b1ada..11465d8 100644
 +// blur passes `source_rect` is the texel rect of the source texture being
 +// read and `params` is (direction x, direction y, sigma in source texels or
 +// the downsample factor, unused). For the glass pass `source_rect` is the
-+// drawable rect that was blurred, `params.x` the factor it was blurred at
-+// (the blurred texture holds it from texel 0, scaled down by that factor),
-+// and `sharp_texture_size` the size of the drawable-sized unblurred copy.
++// drawable rect that was blurred, `params.xy` how far it was scaled down on
++// each axis (the blurred texture holds it from texel 0), and
++// `sharp_texture_size` the size of the drawable-sized unblurred copy.
 +cbuffer BackdropParams: register(b1) {
 +    float4 source_rect;
 +    float4 params;
@@ -2016,8 +2022,8 @@ index 78b1ada..11465d8 100644
 +
 +// Clamped to the blurred region: texels beyond it hold an older pass.
 +float2 backdrop_blurred_uv(float2 position) {
-+    float2 texel = (position - source_rect.xy) / params.x;
-+    texel = clamp(texel, 0.5, source_rect.zw / params.x - 0.5);
++    float2 texel = (position - source_rect.xy) / params.xy;
++    texel = clamp(texel, 0.5, source_rect.zw / params.xy - 0.5);
 +    return texel / source_texture_size;
 +}
 +

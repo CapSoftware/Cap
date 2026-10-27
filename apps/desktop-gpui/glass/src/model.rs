@@ -122,9 +122,9 @@ impl GlassMaterial {
 
     pub fn resolve(&self, width: f32, height: f32) -> PaneStyle {
         let shorter = width.min(height).max(1.);
-        let lens_rim = (self.rim_k * shorter).min(self.rim_max).max(0.5);
+        let lens_rim = (self.rim_k * shorter).clamp(0.5, self.rim_max.max(0.5));
         PaneStyle {
-            blur: (self.blur_k * shorter).min(self.blur_max).max(0.),
+            blur: (self.blur_k * shorter).clamp(0., self.blur_max.max(0.)),
             lens_rim,
             lens_curve: self.lens_curve,
             rim_bend: self.bend * lens_rim,
