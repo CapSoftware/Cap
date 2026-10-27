@@ -10901,7 +10901,8 @@ impl EditorWindow {
                 Some(crate::editor_audio::AudioPicker::Add { lane }) => Some(lane),
                 _ => None,
             },
-            hovering_generate_zoom: self.hovering_generate_zoom,
+            // No create ghost while a generated set is on its way either.
+            hovering_generate_zoom: self.hovering_generate_zoom || self.generating_auto_zoom,
             scene_preview_time: self.scene_preview_time,
             camera3d_preview: &camera3d_preview,
             camera3d_editing_end: self.sidebar.editing_end_pose,
@@ -11128,24 +11129,33 @@ impl EditorWindow {
                         let hovering = self.hovering_generate_zoom;
                         div()
                             .id("zoom-generate-prompt")
+                            .debug_selector(|| "zoom-generate-prompt".into())
                             .absolute()
                             .left(px(timeline::TRACK_GUTTER))
                             .right_0()
                             .top_0()
                             .bottom_0()
+                            // Only the copy and its buttons take the press;
+                            // the rest of the lane still creates a zoom
+                            // (`TL/ZoomTrack.tsx:308-313`). While generating,
+                            // the whole lane holds still: the result replaces
+                            // every zoom, so one made meanwhile would vanish.
+                            .when(generating, |lane| {
+                                lane.on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|_, _, _, cx| cx.stop_propagation()),
+                                )
+                            })
                             .child(
                                 div()
-                                    .id("zoom-generate-hit")
                                     .absolute()
                                     .inset_0()
                                     .flex()
                                     .flex_row()
                                     .items_center()
                                     .justify_center()
-                                    .gap(px(10.))
                                     .pl(px(10.))
                                     .pr(px(32.))
-                                    .rounded(px(8.))
                                     .text_size(px(12.))
                                     .line_height(px(16.))
                                     .text_color(Hsla::from(if hovering {
@@ -11153,42 +11163,58 @@ impl EditorWindow {
                                     } else {
                                         theme.editor.text_3
                                     }))
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(|_, _, _, cx| cx.stop_propagation()),
-                                    )
-                                    .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
-                                        if this.hovering_generate_zoom != *hovered {
-                                            this.hovering_generate_zoom = *hovered;
-                                            cx.notify();
-                                        }
-                                    }))
-                                    .child(div().min_w_0().truncate().child(
-                                        self.auto_zoom_message.unwrap_or("Add zooms automatically"),
-                                    ))
                                     .child(
-                                        ui::Button::plain(
-                                            &theme,
-                                            "zoom-generate-button",
-                                            ui::ButtonVariant::Primary,
-                                            ui::ButtonSize::Sm,
-                                        )
-                                        .label(if generating {
-                                            "Generating…"
-                                        } else {
-                                            "Generate"
-                                        })
-                                        .radius(px(7.))
-                                        .disabled(generating)
-                                        .on_click(
-                                            cx.listener(|this, _, window, cx| {
-                                                this.generate_auto_zoom(window, cx);
-                                            }),
-                                        ),
+                                        div()
+                                            .id("zoom-generate-hit")
+                                            .debug_selector(|| "zoom-generate-hit".into())
+                                            .min_w_0()
+                                            .flex()
+                                            .flex_row()
+                                            .items_center()
+                                            .gap(px(10.))
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|_, _, _, cx| cx.stop_propagation()),
+                                            )
+                                            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                                                if this.hovering_generate_zoom != *hovered {
+                                                    this.hovering_generate_zoom = *hovered;
+                                                    cx.notify();
+                                                }
+                                            }))
+                                            .child(
+                                                div().min_w_0().truncate().child(
+                                                    self.auto_zoom_message
+                                                        .unwrap_or("Add zooms automatically"),
+                                                ),
+                                            )
+                                            .child(
+                                                ui::Button::plain(
+                                                    &theme,
+                                                    "zoom-generate-button",
+                                                    ui::ButtonVariant::Primary,
+                                                    ui::ButtonSize::Sm,
+                                                )
+                                                .label(if generating {
+                                                    "Generating…"
+                                                } else {
+                                                    "Generate"
+                                                })
+                                                .radius(px(7.))
+                                                .disabled(generating)
+                                                .on_click(cx.listener(|this, _, window, cx| {
+                                                    this.generate_auto_zoom(window, cx);
+                                                })),
+                                            ),
                                     ),
                             )
                             .child(
                                 div()
+                                    .id("zoom-generate-dismiss-hit")
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|_, _, _, cx| cx.stop_propagation()),
+                                    )
                                     .absolute()
                                     .top(px((model.track_height() - 20.) / 2.))
                                     .right(px(6.))
@@ -13543,6 +13569,131 @@ mod tests {
         ] {
             let keystroke = gpui::Keystroke::parse(key).unwrap();
             assert!(!is_playback_shortcut(&keystroke, false, false), "{key}");
+        }
+    }
+
+    // gpui's test windows have no platform window handle on macOS or Windows, which the editor needs.
+    #[cfg(target_os = "linux")]
+    mod empty_zoom_lane {
+        use super::*;
+
+        struct LaneView {
+            editor: Entity<EditorWindow>,
+            _driver: TransportDriver,
+            _project: tempfile::TempDir,
+        }
+
+        impl Render for LaneView {
+            fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                let viewport_width = f32::from(window.viewport_size().width);
+                self.editor.update(cx, |editor, cx| {
+                    // A column, as in the editor: the body is `flex_1` over an
+                    // absolute scroller, so anything else lays it out zero tall.
+                    div()
+                        .size_full()
+                        .flex()
+                        .flex_col()
+                        .child(editor.render_timeline_body(viewport_width, cx))
+                })
+            }
+        }
+
+        // A loaded studio project with recorded cursor data and no zooms yet,
+        // which is when the lane shows its Generate prompt.
+        fn fixture(
+            cx: &mut gpui::TestAppContext,
+        ) -> (Entity<EditorWindow>, &mut gpui::VisualTestContext) {
+            let project = tempfile::tempdir().unwrap();
+            let (handle, driver, _) = transport();
+            let (view, cx) = cx.add_window_view(move |window, cx| {
+                let editor = cx.new(|cx| EditorWindow::new(project.path().into(), window, cx));
+                editor.update(cx, |editor, cx| {
+                    let config: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+                        "timeline": {
+                            "segments": [{ "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 30.0 }],
+                            "zoomSegments": []
+                        }
+                    }))
+                    .unwrap();
+                    editor.set_summary(
+                        ProjectSummary {
+                            recordings: Arc::new(ProjectRecordingsMeta {
+                                segments: Vec::new(),
+                            }),
+                            pretty_name: "Recording".into(),
+                            timeline: TimelineModel::build(&config, false, false),
+                            duration: 30.,
+                            has_camera: false,
+                            has_cursor_data: true,
+                            recorded_cursor_family: None,
+                            clip_display_durations: vec![30.],
+                            recording_duration: 30.,
+                            multiple_clips: false,
+                            has_microphone: false,
+                            has_system_audio: false,
+                            mic_channels: None,
+                            recording_clips: 1,
+                        },
+                        window,
+                        cx,
+                    );
+                    editor.set_project(config, window, cx);
+                    editor.transport = Some(handle);
+                });
+                LaneView {
+                    editor,
+                    _driver: driver,
+                    _project: project,
+                }
+            });
+            (view.read_with(cx, |view, _| view.editor.clone()), cx)
+        }
+
+        fn press(cx: &mut gpui::VisualTestContext, position: Point<Pixels>) {
+            cx.simulate_mouse_move(position, None, gpui::Modifiers::default());
+            cx.simulate_mouse_down(position, MouseButton::Left, gpui::Modifiers::default());
+        }
+
+        #[gpui::test]
+        fn a_press_beside_the_generate_prompt_starts_a_new_zoom(cx: &mut gpui::TestAppContext) {
+            let (editor, cx) = fixture(cx);
+            let lane = cx.debug_bounds("zoom-generate-prompt").unwrap();
+            let prompt = cx.debug_bounds("zoom-generate-hit").unwrap();
+            let beside = point(lane.left() + px(24.), lane.center().y);
+            assert!(!prompt.contains(&beside));
+            press(cx, beside);
+            editor.read_with(cx, |editor, _| {
+                assert!(matches!(
+                    editor.drag.as_ref().map(|drag| &drag.kind),
+                    Some(DragKind::CreateZoom { .. })
+                ));
+            });
+        }
+
+        #[gpui::test]
+        fn a_press_on_the_generate_prompt_copy_does_not_start_a_zoom(
+            cx: &mut gpui::TestAppContext,
+        ) {
+            let (editor, cx) = fixture(cx);
+            let prompt = cx.debug_bounds("zoom-generate-hit").unwrap();
+            press(cx, point(prompt.left() + px(4.), prompt.center().y));
+            editor.read_with(cx, |editor, _| assert!(editor.drag.is_none()));
+        }
+
+        #[gpui::test]
+        fn a_press_beside_the_prompt_while_generating_does_not_start_a_zoom(
+            cx: &mut gpui::TestAppContext,
+        ) {
+            let (editor, cx) = fixture(cx);
+            editor.update(cx, |editor, cx| {
+                editor.generating_auto_zoom = true;
+                cx.notify();
+            });
+            cx.update(|window, _| window.refresh());
+            cx.run_until_parked();
+            let lane = cx.debug_bounds("zoom-generate-prompt").unwrap();
+            press(cx, point(lane.left() + px(24.), lane.center().y));
+            editor.read_with(cx, |editor, _| assert!(editor.drag.is_none()));
         }
     }
 
