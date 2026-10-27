@@ -99,6 +99,8 @@ mod tray;
 mod ui;
 mod updates;
 mod upload;
+mod foreign_window;
+mod window_arrange;
 
 use gpui::{App, AppContext as _, Bounds, WindowBounds, WindowOptions, px, size};
 

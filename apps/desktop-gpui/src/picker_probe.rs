@@ -26,6 +26,7 @@ pub fn run(main: WindowHandle<MainWindow>, cx: &mut App) {
         sleep(cx, 800).await;
 
         let mut modes = Vec::new();
+        let mut window_arrangement = None;
         for (label, kind) in [
             ("display", TargetType::Display),
             ("window", TargetType::Window),
@@ -58,14 +59,25 @@ pub fn run(main: WindowHandle<MainWindow>, cx: &mut App) {
             sleep(cx, 800).await;
             modes.push(cx.update(|cx| probe_mode(label, cx)));
             screenshot(&output, label, cx).await;
+            if kind == TargetType::Window {
+                window_arrangement = Some(probe_window_arrangement(&output, cx).await);
+            }
             cx.update(app_windows::dismiss_target_overlays);
             sleep(cx, 400).await;
         }
 
-        let passed = modes
-            .iter()
-            .all(|mode| mode["cameraAboveOverlays"].as_bool() == Some(true));
-        let report = serde_json::json!({ "passed": passed, "modes": modes });
+        let arrangement_passed = window_arrangement
+            .as_ref()
+            .is_none_or(|report: &serde_json::Value| report["passed"].as_bool() != Some(false));
+        let passed = arrangement_passed
+            && modes
+                .iter()
+                .all(|mode| mode["cameraAboveOverlays"].as_bool() == Some(true));
+        let report = serde_json::json!({
+            "passed": passed,
+            "modes": modes,
+            "windowArrangement": window_arrangement,
+        });
         if let Err(error) = std::fs::write(output, report.to_string()) {
             tracing::error!(%error, "Could not write picker probe results");
         }
@@ -77,6 +89,107 @@ pub fn run(main: WindowHandle<MainWindow>, cx: &mut App) {
 struct StackEntry {
     id: isize,
     level: Option<i64>,
+}
+
+fn read_window(id: &scap_targets::WindowId) -> Option<crate::target_overlay::AreaRect> {
+    let window = scap_targets::Window::from_id(id)?;
+    crate::target_overlay::HoveredWindow::from_window(&window).map(|window| window.bounds)
+}
+
+fn rect_json(rect: Option<AreaRect>) -> serde_json::Value {
+    rect.map_or(serde_json::Value::Null, |rect| {
+        serde_json::json!([rect.x, rect.y, rect.width, rect.height])
+    })
+}
+
+/// Drive the picked window through the overlay the way its menu and Focus
+/// toggle do: 16:9, Focus on, then dismiss. Skipped where Cap cannot shape
+/// other apps' windows (Wayland, or macOS without Accessibility).
+async fn probe_window_arrangement(
+    output: &std::ffi::OsStr,
+    cx: &mut AsyncApp,
+) -> serde_json::Value {
+    if !crate::foreign_window::can_arrange() {
+        return serde_json::json!({ "skipped": "cannot arrange other apps' windows here" });
+    }
+    let picked = cx.update(|cx| {
+        crate::target_overlay::TargetSelect::global(cx)
+            .read(cx)
+            .active_window()
+            .cloned()
+    });
+    let Some(picked) = picked else {
+        return serde_json::json!({ "passed": false, "error": "no window to arrange" });
+    };
+    let overlay = cx.update(|cx| {
+        cx.global::<app_windows::AppWindows>()
+            .overlays
+            .iter()
+            .find(|(display, _)| *display == picked.display_id)
+            .map(|(_, overlay)| *overlay)
+    });
+    let Some(overlay) = overlay else {
+        return serde_json::json!({ "passed": false, "error": "no overlay on the window's display" });
+    };
+    let display = scap_targets::Display::from_id(&picked.display_id);
+    let display_size = display
+        .as_ref()
+        .and_then(|display| display.raw_handle().logical_bounds())
+        .map(|bounds| (bounds.size().width() as f32, bounds.size().height() as f32));
+    let before = Some(picked.bounds);
+
+    // `window_arrange::RATIOS` lists 16:9 second.
+    overlay
+        .update(cx, |view, _, cx| view.choose_window_size(1, cx))
+        .ok();
+    sleep(cx, 1500).await;
+    let shaped = read_window(&picked.id);
+    let ratio_ok =
+        shaped.is_some_and(|rect| (rect.width / rect.height / (16. / 9.) - 1.).abs() < 0.04);
+    let inside = |rect: Option<AreaRect>| {
+        rect.zip(display_size)
+            .is_some_and(|(rect, (width, height))| {
+                rect.x >= -1.
+                    && rect.y >= -1.
+                    && rect.x + rect.width <= width + 1.
+                    && rect.y + rect.height <= height + 1.
+            })
+    };
+    screenshot(output, "window-16x9", cx).await;
+
+    overlay
+        .update(cx, |view, _, cx| view.set_focus(true, cx))
+        .ok();
+    sleep(cx, 1500).await;
+    let focused = read_window(&picked.id);
+    let centred = focused.zip(display_size).is_some_and(|(rect, (width, _))| {
+        (rect.x + rect.width / 2. - width / 2.).abs() < width * 0.04
+    });
+    screenshot(output, "window-focus", cx).await;
+    overlay
+        .update(cx, |view, _, cx| view.set_focus(false, cx))
+        .ok();
+    sleep(cx, 600).await;
+
+    cx.update(app_windows::dismiss_target_overlays);
+    sleep(cx, 1500).await;
+    let restored = read_window(&picked.id);
+    let restored_ok = restored.zip(before).is_some_and(|(now, then)| {
+        (now.x - then.x).abs() < 6.
+            && (now.y - then.y).abs() < 6.
+            && (now.width - then.width).abs() < 6.
+            && (now.height - then.height).abs() < 6.
+    });
+    serde_json::json!({
+        "passed": ratio_ok && inside(shaped) && centred && inside(focused) && restored_ok,
+        "before": rect_json(before),
+        "sixteenByNine": rect_json(shaped),
+        "ratioOk": ratio_ok,
+        "focused": rect_json(focused),
+        "centred": centred,
+        "restored": rect_json(restored),
+        "restoredOk": restored_ok,
+    })
 }
 
 /// Save what the primary display shows next to the report, for review.

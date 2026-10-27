@@ -2120,7 +2120,24 @@ fn open_overlays_core(request: OverlayRequest, cx: &mut App) -> bool {
 /// A "cancelled" dismissal in the Tauri vocabulary, which is the kind that
 /// reveals the main window again (`dismissalReveals`,
 /// `new-main/index.tsx:2047-2058`).
+/// Put back every window the picker moved or resized. Off the main thread:
+/// `SetWindowPos` waits on the target app, which may be busy.
+fn restore_arranged_windows(cx: &mut App) {
+    let arranged = TargetSelect::global(cx).update(cx, |select, _| select.take_arranged());
+    if arranged.is_empty() {
+        return;
+    }
+    cx.background_executor()
+        .spawn(async move {
+            for window in arranged {
+                crate::foreign_window::arrange(&window.id, &window.display_id, window.bounds);
+            }
+        })
+        .detach();
+}
+
 pub fn dismiss_target_overlays(cx: &mut App) {
+    restore_arranged_windows(cx);
     if RecordingSession::global(cx).read(cx).phase == Phase::Idle
         && RecordingSession::global(cx)
             .read(cx)
@@ -2395,6 +2412,10 @@ pub fn start_recording_from_overlay(target: ScreenCaptureTarget, cx: &mut App) {
     {
         return;
     }
+    // The user shaped the window to record it: it stays where it is.
+    TargetSelect::global(cx).update(cx, |select, _| {
+        select.take_arranged();
+    });
     // Collected before the windows go away: the capture starts a beat after
     // this, and an overlay that has not finished closing must not end up in
     // the recording.
