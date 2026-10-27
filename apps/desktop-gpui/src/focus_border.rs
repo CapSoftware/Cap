@@ -9,9 +9,8 @@
 use std::time::Duration;
 
 use gpui::{
-    App, AppContext as _, BoxShadow, Context, Global, IntoElement, ParentElement as _, Render,
-    Styled as _, Task, Window, WindowBounds, WindowHandle, WindowKind, WindowOptions, div, point,
-    px, size,
+    App, AppContext as _, Context, Global, IntoElement, ParentElement as _, Render, Styled as _,
+    Task, Window, WindowBounds, WindowHandle, WindowKind, WindowOptions, div, point, px, size,
 };
 use scap_targets::{DisplayId, WindowId};
 
@@ -41,25 +40,28 @@ const WINDOW_RADIUS: f32 = if cfg!(target_os = "macos") {
     10.
 };
 
-/// The ring around `window`, positioned in the same space as `window`.
+/// The ring around `window`, positioned in the same space as `window`: a
+/// crisp line with two fainter ones outside it for a glow. Borders only, since
+/// gpui paints a box shadow under the whole element and would tint the window.
 pub fn ring(window: AreaRect, theme: &Theme) -> impl IntoElement {
     let color = gpui::Hsla::from(theme.blue_9);
+    let band = |outset: f32, alpha: f32| {
+        div()
+            .absolute()
+            .left(px(window.x - outset))
+            .top(px(window.y - outset))
+            .w(px(window.width + 2. * outset))
+            .h(px(window.height + 2. * outset))
+            .rounded(px(WINDOW_RADIUS + outset))
+            .border(px(WIDTH))
+            .border_color(color.opacity(alpha))
+    };
     div()
         .absolute()
-        .left(px(window.x - OUTSET))
-        .top(px(window.y - OUTSET))
-        .w(px(window.width + 2. * OUTSET))
-        .h(px(window.height + 2. * OUTSET))
-        .rounded(px(WINDOW_RADIUS + OUTSET))
-        .border(px(WIDTH))
-        .border_color(color.opacity(0.85))
-        .shadow(vec![BoxShadow {
-            color: color.opacity(0.35),
-            offset: point(px(0.), px(0.)),
-            blur_radius: px(14.),
-            spread_radius: px(0.),
-            inset: false,
-        }])
+        .size_full()
+        .child(band(OUTSET + 2. * WIDTH, 0.1))
+        .child(band(OUTSET + WIDTH, 0.28))
+        .child(band(OUTSET, 0.9))
 }
 
 struct FocusBorderWindow(WindowHandle<FocusBorder>);
