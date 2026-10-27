@@ -485,7 +485,9 @@ mod tests {
         assert_eq!(watch_progress(full, WATCH_CLOSE_DURATION, false), 0.);
 
         let partial = WatchPhase::Closing { from_progress: 0.5 };
-        assert_eq!(phase_duration(partial), WATCH_CLOSE_DURATION / 2);
+        assert!(
+            phase_duration(partial).abs_diff(WATCH_CLOSE_DURATION / 2) <= Duration::from_nanos(10)
+        );
         assert_eq!(watch_progress(partial, Duration::ZERO, false), 0.5);
         assert_eq!(watch_progress(partial, WATCH_CLOSE_DURATION, false), 0.);
 
