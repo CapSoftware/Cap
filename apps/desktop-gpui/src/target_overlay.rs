@@ -2014,7 +2014,12 @@ impl OverlayWindow {
             .when(arrangeable, |chip| {
                 chip.cursor_pointer()
                     .hover(|style| style.bg(gpui::hsla(0., 0., 0., 0.4)))
-                    .child(svg().path("icons/chevron-down.svg").size(px(12.)))
+                    .child(
+                        svg()
+                            .path("icons/chevron-down.svg")
+                            .size(px(12.))
+                            .text_color(theme.gray_12),
+                    )
                     .on_click(cx.listener(|this, event: &gpui::ClickEvent, _, cx| {
                         cx.stop_propagation();
                         this.open_window_menu(event.position(), cx);
