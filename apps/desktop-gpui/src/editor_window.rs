@@ -12728,6 +12728,18 @@ mod tests {
 
         #[gpui::test]
         fn clip_preview_renders_rows_and_speed_controls(cx: &mut gpui::TestAppContext) {
+            struct PreviewView(Entity<EditorWindow>);
+
+            impl Render for PreviewView {
+                fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                    self.0.update(cx, |editor, cx| {
+                        div()
+                            .size_full()
+                            .child(editor.render_timeline_body(800., cx))
+                    })
+                }
+            }
+
             let (editor, cx) = fixture(cx);
             editor.update(cx, |editor, _| {
                 seed(editor, 3, 3);
@@ -12743,16 +12755,11 @@ mod tests {
                     zoom: 40.,
                 };
             });
+            let preview = cx.new(|_| PreviewView(editor.clone()));
             cx.draw(
                 point(px(0.), px(0.)),
                 gpui::size(px(800.), px(800.)),
-                |_, cx| {
-                    editor.update(cx, |editor, cx| {
-                        div()
-                            .size_full()
-                            .child(editor.render_timeline_body(800., cx))
-                    })
-                },
+                |_, _| preview.clone().into_any_element(),
             );
             editor.read_with(cx, |editor, _| assert_preview(editor, Instant::now()));
         }
