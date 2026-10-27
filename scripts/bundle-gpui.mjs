@@ -82,6 +82,10 @@ export function gpuiPlatformConfig(
 	return null;
 }
 
+export function profileArguments(profile) {
+	return profile === "debug" ? ["--debug"] : [];
+}
+
 export function bundleArguments(target, args) {
 	return ["tauri", "bundle", "--target", target, ...args];
 }
@@ -195,10 +199,11 @@ export async function bundleGpui(target, args, { env = process.env } = {}) {
 			});
 	}
 
+	const profileArgs = profileArguments(profile);
 	if (platform === "darwin") {
 		const result = await buildMacosPackages(
 			target,
-			[...bundleArgs, ...(profile === "debug" ? ["--debug"] : [])],
+			[...bundleArgs, ...profileArgs],
 			{
 				bundleOnly: true,
 				env: bundleEnvironment(env),
@@ -212,10 +217,14 @@ export async function bundleGpui(target, args, { env = process.env } = {}) {
 		return;
 	}
 
-	run("bun", ["run", ...bundleArguments(target, bundleArgs)], {
-		cwd: desktopDirectory,
-		env: bundleEnvironment({ ...env, RUST_TARGET_TRIPLE: target }),
-	});
+	run(
+		"bun",
+		["run", ...bundleArguments(target, [...bundleArgs, ...profileArgs])],
+		{
+			cwd: desktopDirectory,
+			env: bundleEnvironment({ ...env, RUST_TARGET_TRIPLE: target }),
+		},
+	);
 }
 
 if (

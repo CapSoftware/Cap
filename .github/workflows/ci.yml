@@ -59,6 +59,7 @@ jobs:
               - 'scripts/build-macos-packages*'
               - 'scripts/bundle-gpui*'
               - 'scripts/build-macos-bundles*'
+              - 'scripts/build-macos-icon*'
               - 'apps/macos-bundles/**'
               - 'scripts/finalize-linux-*'
               - 'scripts/finalize-macos-*'
@@ -366,7 +367,11 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Test desktop build preparation
-        run: node --test scripts/prepare-gpui-dependency.test.mjs scripts/build-macos-packages.test.mjs scripts/bundle-gpui.test.mjs scripts/build-macos-bundles.test.mjs scripts/finalize-macos-packages.test.mjs
+        run: node --test scripts/prepare-gpui-dependency.test.mjs scripts/build-macos-packages.test.mjs scripts/bundle-gpui.test.mjs scripts/build-macos-bundles.test.mjs scripts/build-macos-icon.test.mjs scripts/finalize-macos-packages.test.mjs
+
+      - name: Compile macOS Quick Look bundles
+        if: ${{ runner.os == 'macOS' }}
+        run: swift build -c release --package-path apps/macos-bundles
 
       - name: Test Linux packaging
         if: ${{ runner.os == 'Linux' }}
