@@ -992,6 +992,43 @@ fn wait_complete(status: &Value, wait_for: WaitFor) -> Result<bool, AgentApiErro
     }
 }
 
+async fn wait_for_processing(
+    client: &AgentClient,
+    id: &str,
+    wait_for: WaitFor,
+    timeout: u64,
+) -> Result<Value, AgentApiError> {
+    let mut request_id = None;
+    let wait = async {
+        let mut attempt = 0_u32;
+        loop {
+            let value = client.get_json(&format!("/caps/{id}/status")).await?;
+            request_id = value
+                .get("requestId")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            if wait_complete(&value, wait_for)? {
+                return Ok(value);
+            }
+            let base = 500_u64.saturating_mul(1_u64 << attempt.min(4));
+            let jitter = u64::from(uuid::Uuid::new_v4().as_bytes()[0]);
+            tokio::time::sleep(Duration::from_millis((base + jitter).min(10_000))).await;
+            attempt = attempt.saturating_add(1);
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(timeout), wait)
+        .await
+        .unwrap_or_else(|_| {
+            Err(AgentApiError {
+                code: "NOT_READY".to_string(),
+                message: "Timed out waiting for Cap processing".to_string(),
+                retryable: true,
+                retry_after_ms: Some(2_000),
+                request_id,
+            })
+        })
+}
+
 pub fn opaque_id(value: &str, field: &str) -> Result<String, AgentApiError> {
     if value.is_empty()
         || value.len() > 128
@@ -1223,34 +1260,9 @@ impl CapsArgs {
                     ));
                 }
                 let id = cap_id(&args.cap)?;
-                let started = tokio::time::Instant::now();
-                let deadline = started + Duration::from_secs(args.timeout);
-                let mut attempt = 0_u32;
-                loop {
-                    let value = client.get_json(&format!("/caps/{id}/status")).await?;
-                    if wait_complete(&value, args.r#for)? {
-                        return print_value(&value, resolve_format(global_json, args.format))
-                            .map_err(|message| {
-                                AgentApiError::local("TEMPORARY_UNAVAILABLE", message)
-                            });
-                    }
-                    if tokio::time::Instant::now() >= deadline {
-                        return Err(AgentApiError {
-                            code: "NOT_READY".to_string(),
-                            message: "Timed out waiting for Cap processing".to_string(),
-                            retryable: true,
-                            retry_after_ms: Some(2_000),
-                            request_id: value
-                                .get("requestId")
-                                .and_then(Value::as_str)
-                                .map(str::to_string),
-                        });
-                    }
-                    let base = 500_u64.saturating_mul(1_u64 << attempt.min(4));
-                    let jitter = u64::from(uuid::Uuid::new_v4().as_bytes()[0]);
-                    tokio::time::sleep(Duration::from_millis((base + jitter).min(10_000))).await;
-                    attempt = attempt.saturating_add(1);
-                }
+                let value = wait_for_processing(&client, &id, args.r#for, args.timeout).await?;
+                print_value(&value, resolve_format(global_json, args.format))
+                    .map_err(|message| AgentApiError::local("TEMPORARY_UNAVAILABLE", message))
             }
             CapsCommands::Process(args) => {
                 let id = cap_id(&args.cap)?;
@@ -1868,6 +1880,61 @@ mod tests {
             wait_complete(&json!({"ai":{"status":"processing"}}), WaitFor::Ai)
                 .is_ok_and(|done| !done)
         );
+    }
+
+    #[tokio::test]
+    async fn processing_wait_bounds_a_stalled_first_request() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            read_request(&mut stream).await;
+            tokio::time::sleep(Duration::from_secs(3)).await;
+        });
+        let client = AgentClient::new(format!("http://{address}"), "token".to_string()).unwrap();
+        let result = tokio::time::timeout(
+            Duration::from_millis(1_400),
+            wait_for_processing(&client, "cap_test", WaitFor::All, 1),
+        )
+        .await;
+        server.abort();
+        let error = result
+            .expect("processing wait exceeded its deadline")
+            .unwrap_err();
+        assert_eq!(error.code, "NOT_READY");
+        assert_eq!(error.request_id, None);
+    }
+
+    #[tokio::test]
+    async fn processing_wait_keeps_last_request_id_when_poll_stalls() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            read_request(&mut stream).await;
+            mock_response(
+                &mut stream,
+                "200 OK",
+                r#"{"transcript":{"status":"processing"},"ai":{"status":"processing"},"requestId":"request_1"}"#,
+            )
+            .await;
+            drop(stream);
+            let (mut stream, _) = listener.accept().await.unwrap();
+            read_request(&mut stream).await;
+            tokio::time::sleep(Duration::from_secs(3)).await;
+        });
+        let client = AgentClient::new(format!("http://{address}"), "token".to_string()).unwrap();
+        let result = tokio::time::timeout(
+            Duration::from_millis(1_400),
+            wait_for_processing(&client, "cap_test", WaitFor::All, 1),
+        )
+        .await;
+        server.abort();
+        let error = result
+            .expect("processing wait exceeded its deadline")
+            .unwrap_err();
+        assert_eq!(error.code, "NOT_READY");
+        assert_eq!(error.request_id.as_deref(), Some("request_1"));
     }
 
     #[tokio::test]
