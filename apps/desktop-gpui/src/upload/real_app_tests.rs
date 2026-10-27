@@ -66,6 +66,13 @@ impl Sandbox {
         Self { root }
     }
 
+    fn set_general(&self, key: &str, value: Value) {
+        let path = self.root.path().join("store");
+        let mut store: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        store["general_settings"][key] = value;
+        std::fs::write(path, serde_json::to_vec(&store).unwrap()).unwrap();
+    }
+
     fn launch(&self, name: &str, env: &[(&str, &str)]) -> App {
         let binary = std::env::var("CAP_GPUI_REAL_APP_BIN")
             .expect("set CAP_GPUI_REAL_APP_BIN to the built cap-gpui binary");
@@ -301,6 +308,63 @@ async fn real_app_instant_recording_uploads_and_verifies() {
     );
     assert!(mock.deleted().is_empty(), "{:?}", mock.deleted());
     assert!(sandbox.journal().is_empty(), "{:?}", sandbox.journal());
+}
+
+/// The After an Instant recording outcome decides whether the main window,
+/// hidden at start, comes back once the recording finishes: only Show Cap
+/// brings it back, so opening the link never leaves it on screen behind the
+/// browser. Linux restores the window through its clean-capture lease
+/// instead, so the check is macOS only.
+#[cfg(target_os = "macos")]
+#[ignore]
+#[tokio::test(flavor = "multi_thread")]
+async fn real_app_instant_outcome_decides_whether_main_window_returns() {
+    for (name, disable_open, show_main, returns) in [
+        ("open-link", false, false, false),
+        ("show-cap", true, true, true),
+        ("copy-link", true, false, false),
+    ] {
+        let mock = MockCap::start(Vec::new()).await;
+        let sandbox = Sandbox::new(&mock.url, 0);
+        sandbox.set_general("disableAutoOpenLinks", json!(disable_open));
+        sandbox.set_general("showMainWindowAfterInstantRecording", json!(show_main));
+        let app = sandbox.launch(name, &[("CAP_GPUI_AUTO_RECORD", "instant:3")]);
+        let after_finish = || {
+            let log = without_ansi(&sandbox.log(name));
+            log.split_once("recording finished")
+                .map(|(_, after)| after.to_string())
+        };
+        wait_for_app(
+            &sandbox,
+            &app,
+            "a verified upload",
+            Duration::from_secs(180),
+            || {
+                sandbox
+                    .projects()
+                    .first()
+                    .and_then(|project| state(project))
+                    .is_some_and(|state| state["phase"] == "Verified")
+            },
+        )
+        .await;
+        if returns {
+            wait_for_app(
+                &sandbox,
+                &app,
+                "the main window",
+                Duration::from_secs(10),
+                || after_finish().is_some_and(|after| after.contains("main window shown")),
+            )
+            .await;
+        } else {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            let after = after_finish().expect("the recording finished");
+            assert!(!after.contains("main window shown"), "{name}: {after}");
+        }
+        kill(app);
+        assert_eq!(mock.created().len(), 1, "{name}");
+    }
 }
 
 /// Kills the app at points from the server video's creation through the
