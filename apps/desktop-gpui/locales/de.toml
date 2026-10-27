@@ -35,6 +35,7 @@ title = "Ablage"
 open_file = "Datei öffnen…"
 open_recent = "Zuletzt geöffnet"
 import_media = "Medien importieren…"
+export = "Exportieren…"
 
 [menu.edit]
 copy = "Kopieren"

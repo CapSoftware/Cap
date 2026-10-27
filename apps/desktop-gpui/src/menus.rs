@@ -138,6 +138,9 @@ actions!(
         OpenSettings,
         OpenFile,
         ImportMedia,
+        /// File > Export… -- ⇧⌘E. Only an open editor handles it, so the item is
+        /// disabled everywhere else.
+        ExportEditor,
         Changelog,
         HelpDashboard,
         HelpDocs,
@@ -340,6 +343,7 @@ pub(crate) fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-m", Minimize, None),
         KeyBinding::new("ctrl-cmd-f", ToggleFullscreen, None),
         KeyBinding::new("secondary-,", OpenSettings, None),
+        KeyBinding::new("shift-cmd-e", ExportEditor, None),
     ]
 }
 
@@ -379,6 +383,8 @@ pub fn build_menus(update_status: &updates::UpdateStatus, settings_enabled: bool
             items: vec![
                 MenuItem::action(tr::menu::file::open_file(), OpenFile),
                 MenuItem::action(tr::menu::file::import_media(), ImportMedia),
+                MenuItem::separator(),
+                MenuItem::action(tr::menu::file::export(), ExportEditor),
                 MenuItem::separator(),
                 MenuItem::action(tr::menu::file::close_window(), CloseWindow),
             ],
@@ -1193,6 +1199,7 @@ mod tests {
             ("cmd-m", &Minimize),
             ("ctrl-cmd-f", &ToggleFullscreen),
             (settings, &OpenSettings),
+            ("shift-cmd-e", &ExportEditor),
         ];
         let bindings = bindings();
         assert_eq!(bindings.len(), expected.len());
@@ -1239,6 +1246,8 @@ mod tests {
         let expected_file_items = vec![
             "Open File…".into(),
             "Import Media…".into(),
+            "-".into(),
+            "Export…".into(),
             "-".into(),
             "Close Window".into(),
         ];

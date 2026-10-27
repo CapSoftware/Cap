@@ -35,6 +35,7 @@ title = "文件"
 open_file = "打开文件…"
 open_recent = "打开最近使用"
 import_media = "导入媒体…"
+export = "导出…"
 
 [menu.edit]
 copy = "拷贝"

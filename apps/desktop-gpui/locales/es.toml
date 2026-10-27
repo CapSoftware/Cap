@@ -35,6 +35,7 @@ title = "Archivo"
 open_file = "Abrir archivo…"
 open_recent = "Abrir reciente"
 import_media = "Importar contenido…"
+export = "Exportar…"
 
 [menu.edit]
 copy = "Copiar"

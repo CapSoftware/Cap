@@ -11657,6 +11657,13 @@ impl Render for EditorWindow {
             .bg(self.root_bg())
             .text_color(Hsla::from(theme.gray_12))
             .track_focus(&self.focus)
+            .on_action(
+                cx.listener(|this, _: &crate::menus::ExportEditor, window, cx| {
+                    if this.project_ready() {
+                        this.open_export(window, cx);
+                    }
+                }),
+            )
             .capture_key_down(cx.listener(Self::capture_playback_key))
             .on_key_down(cx.listener(Self::on_key))
             // Only the cropper needs key-*up*: its nudge loop runs until every
