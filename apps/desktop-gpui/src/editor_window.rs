@@ -211,7 +211,6 @@ impl EditorVerticalLayout {
     }
 }
 
-/// The History dropdown's width.
 const HISTORY_MENU_WIDTH: f32 = 256.;
 const PRESETS_MENU_WIDTH: f32 = 288.;
 const PRESET_SUBMENU_WIDTH: f32 = 208.;
@@ -1658,7 +1657,6 @@ pub struct EditorWindow {
     /// of its three dialogs is up. The dialog closes the menu when it opens,
     /// exactly as the Solid dialogs replace the dropdown.
     presets_menu: Option<PresetsMenu>,
-    /// The header's History dropdown: where it opens.
     history_menu: Option<HistoryMenu>,
     preset_dialog: Option<PresetDialog>,
     style_presets: style_preset_ui::StylePresetsState,
@@ -1674,8 +1672,6 @@ pub struct EditorWindow {
     pub(crate) panel: crate::editor_side_panel::PanelState,
 }
 
-/// The header's History dropdown, with the step labels worked out when it
-/// opened.
 struct HistoryMenu {
     origin: gpui::Point<Pixels>,
     scroll: gpui::ScrollHandle,
@@ -2979,7 +2975,6 @@ impl EditorWindow {
         self.note_edit("redo", None);
     }
 
-    /// A History menu row: walk the undo stack straight to step `index`.
     fn jump_to_history(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         self.history_menu = None;
         self.close_frame_controls(window, cx);
@@ -10112,8 +10107,6 @@ impl EditorWindow {
         cx.notify();
     }
 
-    /// The History dropdown: every undo step, newest first. Steps after the
-    /// current one (undone, still redoable) are dimmed.
     fn render_history_menu(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         let HistoryMenu {
             origin,
