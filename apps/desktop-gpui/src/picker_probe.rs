@@ -48,15 +48,31 @@ pub fn run(main: WindowHandle<MainWindow>, cx: &mut App) {
                     )
                 });
             }
+            // Opening an overlay already raises the camera, so hand focus to
+            // the main window first: the activation below then has to raise
+            // it again by itself.
+            main.update(cx, |_, window, _| window.activate_window())
+                .ok();
+            sleep(cx, 600).await;
+            let overlays = cx.update(|cx| cx.global::<app_windows::AppWindows>().overlays.clone());
+            let inactive_before = cx.update(|cx| {
+                overlays.iter().all(|(_, overlay)| {
+                    overlay
+                        .update(cx, |_, window, _| !window.is_window_active())
+                        .unwrap_or(true)
+                })
+            });
             cx.update(|cx| {
-                for (_, overlay) in cx.global::<app_windows::AppWindows>().overlays.clone() {
+                for (_, overlay) in &overlays {
                     overlay
                         .update(cx, |_, window, _| window.activate_window())
                         .ok();
                 }
             });
             sleep(cx, 800).await;
-            modes.push(cx.update(|cx| probe_mode(label, cx)));
+            let mut mode = cx.update(|cx| probe_mode(label, cx));
+            mode["overlayInactiveBeforeActivation"] = inactive_before.into();
+            modes.push(mode);
             cx.update(app_windows::dismiss_target_overlays);
             sleep(cx, 400).await;
         }

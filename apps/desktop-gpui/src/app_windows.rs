@@ -2606,7 +2606,7 @@ fn open_overlay(
                         window.refresh();
                     })
                     .ok();
-                cx.update(raise_camera_above_overlays);
+                raise_camera_above_overlays(cx);
             })
             .detach();
         }
@@ -4334,24 +4334,32 @@ pub(crate) fn studio_camera_snapshot(
 /// Keep the camera bubble above the picker overlays. Not filtered on
 /// `window_is_visible` off macOS: Windows' camera is shown asynchronously and
 /// X11 has no visibility probe, and neither raise path shows a hidden window.
-pub(crate) fn raise_camera_above_overlays(cx: &mut App) {
-    if camera_preview_is_inline(cx) {
-        return;
-    }
-    #[cfg(target_os = "linux")]
-    if clean_capture_active(cx) {
-        return;
-    }
-    let Some(camera) = camera_frame(cx) else {
+/// Lift the camera preview back over the picker overlays. The raise runs
+/// outside any gpui update: ordering a window front calls straight back into
+/// gpui, which drops those callbacks while the app is borrowed.
+pub(crate) fn raise_camera_above_overlays(cx: &mut gpui::AsyncApp) {
+    let Some(camera) = cx.update(camera_to_raise) else {
         return;
     };
-    #[cfg(target_os = "macos")]
-    if !camera.visible {
-        return;
-    }
     if let Err(error) = camera.raise() {
         tracing::warn!(%error, "could not raise the camera above the target picker");
     }
+}
+
+fn camera_to_raise(cx: &mut App) -> Option<CameraFrame> {
+    if camera_preview_is_inline(cx) {
+        return None;
+    }
+    #[cfg(target_os = "linux")]
+    if clean_capture_active(cx) {
+        return None;
+    }
+    let camera = camera_frame(cx)?;
+    #[cfg(target_os = "macos")]
+    if !camera.visible {
+        return None;
+    }
+    Some(camera)
 }
 
 fn camera_snapshot(cx: &mut App) -> Option<CameraSnapshot> {

@@ -903,7 +903,8 @@ impl OverlayWindow {
         // lifts it to the top of its band on Windows and X11, over the camera.
         cx.observe_window_activation(window, |_, window, cx| {
             if window.is_window_active() {
-                cx.defer(app_windows::raise_camera_above_overlays);
+                cx.spawn(async move |_, cx| app_windows::raise_camera_above_overlays(cx))
+                    .detach();
             }
         })
         .detach();
