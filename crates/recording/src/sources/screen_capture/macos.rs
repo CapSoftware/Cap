@@ -49,16 +49,9 @@ fn capturable_window<'a>(
     Some(window_id)
 }
 
-/// The window alone, as a crop of `display` that leaves out every window in
-/// front of it (and the ones the recording excludes anyway). Filters that
-/// target the window itself, desktop-independent or display-including, make
-/// macOS badge it as shared: its traffic lights become a purple capture
-/// symbol, which would be in the recording.
 fn window_content_filter(
     window_id: &WindowId,
-    display: &Display,
     content: &sc::ShareableContent,
-    excluded_windows: &[WindowId],
     capture_phase: &'static str,
 ) -> Option<arc::R<sc::ContentFilter>> {
     let Ok(native_id) = window_id.to_string().parse::<u32>() else {
@@ -67,34 +60,33 @@ fn window_content_filter(
     };
 
     let windows = content.windows();
-    if !windows.iter().any(|window| window.id() == native_id) {
+    let Some(window) = windows.iter().find(|window| window.id() == native_id) else {
         warn!(
             %window_id,
             capture_phase,
             "Capture window missing from ScreenCaptureKit shareable content"
         );
         return None;
-    }
+    };
 
-    let in_front = Window::from_id_direct(window_id)
-        .map(|window| window.raw_handle().windows_in_front())
-        .unwrap_or_default();
-    let mut left_out =
-        excluded_shareable_windows(excluded_windows, &content.retained(), capture_phase);
-    left_out.extend(
-        windows
-            .iter()
-            .filter(|window| in_front.contains(&window.id()))
-            .map(|window| window.retained()),
-    );
-    info!(
-        capture_phase,
-        in_front = in_front.len(),
-        "Capturing the window as a display crop without what is in front of it"
-    );
-    display
-        .raw_handle()
-        .as_content_filter_excluding_windows(content.retained(), left_out)
+    Some(sc::ContentFilter::with_desktop_independent_window(window))
+}
+
+/// What the stream reads. A display capture crops to `crop_bounds`; a window
+/// capture reads the window itself, inside its rounded corners, where
+/// `crop_bounds` is the window already trimmed by `WINDOW_CORNER_TRIM`.
+fn source_rect(captures_window: bool, crop_bounds: super::CropBounds) -> cg::Rect {
+    let (x, y) = if captures_window {
+        (super::WINDOW_CORNER_TRIM, super::WINDOW_CORNER_TRIM)
+    } else {
+        (crop_bounds.position().x(), crop_bounds.position().y())
+    };
+    cg::Rect::new(
+        x,
+        y,
+        crop_bounds.size().width(),
+        crop_bounds.size().height(),
+    )
 }
 
 fn excluded_shareable_windows(
@@ -294,16 +286,11 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
 
         let window_filter = capturable_window(&self.config, &self.excluded_windows, "initial")
             .map(|id| {
-                window_content_filter(
-                    id,
-                    &display,
-                    &self.shareable_content,
-                    &self.excluded_windows,
-                    "initial",
-                )
-                .ok_or_else(|| SourceError::WindowGone(id.clone()))
+                window_content_filter(id, &self.shareable_content, "initial")
+                    .ok_or_else(|| SourceError::WindowGone(id.clone()))
             })
             .transpose()?;
+        let captures_window = window_filter.is_some();
 
         let content_filter = match window_filter {
             Some(filter) => filter,
@@ -353,12 +340,7 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
 
         if let Some(crop_bounds) = self.config.crop_bounds {
             debug!("crop bounds: {:?}", crop_bounds);
-            settings.set_src_rect(cg::Rect::new(
-                crop_bounds.position().x(),
-                crop_bounds.position().y(),
-                crop_bounds.size().width(),
-                crop_bounds.size().height(),
-            ));
+            settings.set_src_rect(source_rect(captures_window, crop_bounds));
         }
         cap_fail::fail_err!(
             "macos::ScreenCaptureActor::new",
@@ -1044,16 +1026,12 @@ async fn rebuild_capturer(params: &CapturerRebuildParams) -> anyhow::Result<Capt
 
     let window_filter = capturable_window(&params.config, &params.excluded_windows, "restart")
         .map(|id| {
-            window_content_filter(
-                id,
-                &display,
-                &shareable_content,
-                &params.excluded_windows,
-                "restart",
-            )
-            .ok_or_else(|| anyhow!("Capture window {id} is gone; not falling back to the display"))
+            window_content_filter(id, &shareable_content, "restart").ok_or_else(|| {
+                anyhow!("Capture window {id} is gone; not falling back to the display")
+            })
         })
         .transpose()?;
+    let captures_window = window_filter.is_some();
 
     let content_filter = match window_filter {
         Some(filter) => filter,
@@ -1090,12 +1068,7 @@ async fn rebuild_capturer(params: &CapturerRebuildParams) -> anyhow::Result<Capt
     settings.set_color_space_name(cg::color_space::names::srgb());
 
     if let Some(crop_bounds) = params.config.crop_bounds {
-        settings.set_src_rect(cg::Rect::new(
-            crop_bounds.position().x(),
-            crop_bounds.position().y(),
-            crop_bounds.size().width(),
-            crop_bounds.size().height(),
-        ));
+        settings.set_src_rect(source_rect(captures_window, crop_bounds));
     }
 
     let expected_width = params.video_info.width as usize;
