@@ -1193,9 +1193,10 @@ pub enum SegmentDetail {
         /// Held (paused) windows inside this clip's on-screen box, in output
         /// time (`TL/ClipTrack.tsx:658-666`).
         holds: Arc<[(f64, f64)]>,
-        /// The transition into this clip from the one before it: its length
-        /// in seconds, and whether it fades through black rather than
-        /// crossfading. It overlaps the clip's leading edge.
+        /// The transition into this clip from the one before it: how long
+        /// its overlap is on screen, in output seconds (holds inside it
+        /// stretch it), and whether it fades through black rather than
+        /// crossfading.
         transition_in: Option<(f64, bool)>,
     },
     /// `TL/ZoomTrack.tsx:343-349`.
@@ -1723,7 +1724,7 @@ fn clip_rows(
                     holds: inner_holds,
                     transition_in: timeline.effective_transition(index).map(|transition| {
                         (
-                            transition.duration,
+                            effective_to_output(holds, previous + transition.duration) - start,
                             transition.kind == cap_project::ClipTransitionType::FadeThroughBlack,
                         )
                     }),
@@ -2674,11 +2675,6 @@ fn render_empty_track(
     ))
 }
 
-/// `SegmentRoot` (`TL/Track.tsx:100-137`): the positioned box, its tinted fill
-/// and inset ring, the accent bar flush against its left edge, the label at
-/// whatever tier its visible width allows, and the two trim handles.
-/// The overlap a clip transition takes at the clip's leading edge: an accent
-/// band, edged on both sides, with a diagonal sheen.
 fn render_transition_in(theme: &Theme, overlap_width: f32, clip_width: f32) -> AnyElement {
     let accent = Hsla::from(theme.editor.accent);
     let band_width = overlap_width.min(clip_width).max(3.);
@@ -2699,6 +2695,9 @@ fn render_transition_in(theme: &Theme, overlap_width: f32, clip_width: f32) -> A
         .into_any_element()
 }
 
+/// `SegmentRoot` (`TL/Track.tsx:100-137`): the positioned box, its tinted fill
+/// and inset ring, the accent bar flush against its left edge, the label at
+/// whatever tier its visible width allows, and the two trim handles.
 #[allow(clippy::too_many_arguments)]
 fn render_segment(
     theme: &Theme,
@@ -2795,8 +2794,6 @@ fn render_segment(
         }
     }
 
-    // The transition into the clip, over the stretch where it overlaps the
-    // clip before (`TL/ClipTrack.tsx`'s transition trigger).
     if let SegmentDetail::Clip {
         transition_in: Some((seconds, _)),
         ..

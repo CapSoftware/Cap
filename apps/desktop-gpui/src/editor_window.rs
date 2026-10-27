@@ -1675,8 +1675,7 @@ fn add_track_tile_progress(delta: f32, index: usize) -> f32 {
 const CLIP_MENU_WIDTH: f32 = 300.;
 /// `DEFAULT_CLIP_TRANSITION_DURATION` (`ED/clip-transitions.ts`).
 const DEFAULT_CLIP_TRANSITION_DURATION: f64 = 0.5;
-/// The clip menu's transition lengths, longest last; ones longer than half the
-/// shorter clip are left out.
+/// Lengths longer than half the shorter clip are left out of the menu.
 const CLIP_TRANSITION_DURATIONS: [f64; 4] = [0.25, 0.5, 1.0, 1.5];
 const TEXT_MENU_WIDTH: f32 = 250.;
 /// Roughly the menu's laid-out height; only decides which side of its anchor
@@ -8560,7 +8559,6 @@ impl EditorWindow {
         let merge_next =
             edits::clip_merge_blocker(&timeline.segments, index, edits::ClipMergeDirection::Next);
         let can_delete = timeline.segments.len() > 1;
-        // The transition into this clip from the one before it.
         let transition = timeline.effective_transition(index);
         let transition_room = crate::editor_clips::max_transition_duration(timeline, index);
         let can_transition = transition_room >= cap_project::MIN_CLIP_TRANSITION_DURATION;
