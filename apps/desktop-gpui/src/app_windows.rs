@@ -278,6 +278,11 @@ pub struct AppWindows {
     /// copy/save screenshot finish reads it; the cancel reveal keeps the
     /// Tauri behaviour above.
     pub main_visible_before_picker: bool,
+    /// [`hide_main_window`] put the main window away and
+    /// [`show_main_window_after_capture_pause`] has not brought it back since.
+    /// State the app owns, unlike a visibility probe that also reads a
+    /// minimized window or a hidden app as gone.
+    pub main_hidden_by_app: bool,
     /// `hiddenForPicker` in the editor's record modal
     /// (`ClipsSidebar.tsx:311-341, 413-426`): the editor window that hid
     /// itself for an editor-owned target picker ("Record a new clip"). A
@@ -554,6 +559,7 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
         screenshot_editors: Vec::new(),
         main_hidden_for_picker: false,
         main_visible_before_picker: false,
+        main_hidden_by_app: false,
         editor_hidden_for_picker: None,
         camera_park: CameraPark::default(),
         #[cfg(target_os = "linux")]
@@ -666,12 +672,13 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
                 let behaviour = settings.post_studio_recording_behaviour;
                 // Linux restores the main window through the clean-capture
                 // lease before this runs, so it keeps reshowing as before. A
-                // main window reopened mid-recording is already on screen, so
-                // it takes the reshow too, which resumes its inputs.
+                // main window reopened mid-recording (even if minimized since)
+                // takes the reshow too, which resumes its inputs.
                 let keep_hidden_after_instant = cfg!(not(target_os = "linux"))
                     && finished_instant
                     && settings.post_instant_behaviour()
                         != crate::store::PostInstantBehaviour::ShowCap
+                    && cx.global::<AppWindows>().main_hidden_by_app
                     && !main
                         .update(cx, |_, window, _| platform::window_is_visible(window))
                         .unwrap_or(true);
@@ -891,10 +898,12 @@ pub(crate) fn show_main_window_after_capture_pause(cx: &mut App) {
             return;
         }
     }
+    tracing::info!("showing the main window");
     if crate::store::should_show_onboarding() {
         open_onboarding(cx);
         return;
     }
+    cx.global_mut::<AppWindows>().main_hidden_by_app = false;
     let resume_inputs = RecordingSession::global(cx).read(cx).phase == Phase::Idle;
     if resume_inputs {
         crate::feeds::Feeds::global(cx).update(cx, |feeds, cx| feeds.resume_camera_preview(cx));
@@ -1000,6 +1009,7 @@ pub fn heal_main_window_style(cx: &mut App) {
 
 /// `getCurrentWindow().hide()` -- same rule, same reason.
 pub fn hide_main_window(cx: &mut App) {
+    cx.global_mut::<AppWindows>().main_hidden_by_app = true;
     let main = cx.global::<AppWindows>().main;
     let native = main
         .update(cx, |_, window, cx| {
@@ -2842,6 +2852,7 @@ fn own_windows(cx: &mut App) -> Vec<OwnWindowHandle> {
         screenshot_editors,
         main_hidden_for_picker: _,
         main_visible_before_picker: _,
+        main_hidden_by_app: _,
         editor_hidden_for_picker: _,
         camera_park: _,
         #[cfg(target_os = "linux")]
