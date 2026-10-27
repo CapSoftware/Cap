@@ -13587,8 +13587,12 @@ mod tests {
             fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
                 let viewport_width = f32::from(window.viewport_size().width);
                 self.editor.update(cx, |editor, cx| {
+                    // A column, as in the editor: the body is `flex_1` over an
+                    // absolute scroller, so anything else lays it out zero tall.
                     div()
                         .size_full()
+                        .flex()
+                        .flex_col()
                         .child(editor.render_timeline_body(viewport_width, cx))
                 })
             }
