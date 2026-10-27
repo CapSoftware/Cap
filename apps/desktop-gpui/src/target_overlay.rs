@@ -598,8 +598,6 @@ fn store_area_ratio(ratio: Option<(u32, u32)>) {
     });
 }
 
-/// One-click chips in the area toolbar; the rest of `AREA_RATIOS` sits
-/// behind its More button.
 const QUICK_AREA_RATIOS: [Option<(u32, u32)>; 5] = [
     None,
     Some((16, 9)),
@@ -643,8 +641,6 @@ fn area_fill(display: (f32, f32), ratio: Option<f32>) -> AreaRect {
     }
 }
 
-/// `from` moved `t` of the way to `to`, on a curve that starts fast and
-/// settles gently, so the reshape reads as one motion.
 fn area_between(from: AreaRect, to: AreaRect, t: f32) -> AreaRect {
     let t = 1. - (1. - t.clamp(0., 1.)).powi(3);
     let mix = |a: f32, b: f32| a + (b - a) * t;
@@ -2372,29 +2368,24 @@ impl OverlayWindow {
         let requested = id.clone();
         let select = self.select.clone();
         cx.spawn(async move |this, cx| {
-            let moved = cx
-                .background_executor()
-                .spawn(async move {
-                    let arranged = match arrangement {
-                        Arrangement::Frame(frame) => crate::foreign_window::arrange(
-                            &id,
-                            &display,
-                            frame.scaled(capture_scale),
-                        ),
-                        Arrangement::PutBack(original) => {
-                            crate::foreign_window::put_back(&original)
-                        }
-                    };
-                    if raise {
-                        crate::foreign_window::raise(&id);
+            let moved = crate::foreign_window::in_order(move || {
+                let arranged = match arrangement {
+                    Arrangement::Frame(frame) => {
+                        crate::foreign_window::arrange(&id, &display, frame.scaled(capture_scale))
                     }
-                    let window = scap_targets::Window::from_id(&id);
-                    (
-                        arranged,
-                        window.as_ref().and_then(HoveredWindow::from_window),
-                    )
-                })
-                .await;
+                    Arrangement::PutBack(original) => crate::foreign_window::put_back(&original),
+                };
+                if raise {
+                    crate::foreign_window::raise(&id);
+                }
+                let window = scap_targets::Window::from_id(&id);
+                (
+                    arranged,
+                    window.as_ref().and_then(HoveredWindow::from_window),
+                )
+            })
+            .await
+            .unwrap_or((false, None));
             let (arranged, fresh) = moved;
             if !arranged {
                 tracing::warn!("the picked window could not be arranged");
@@ -3044,7 +3035,6 @@ impl OverlayWindow {
         }
     }
 
-    /// The selection as drawn this frame: mid-reshape, the way there.
     fn displayed_crop(&mut self, window: &Window) -> Option<AreaRect> {
         let crop = self.crop?;
         let Some((from, started)) = self.reshape else {
@@ -3059,7 +3049,6 @@ impl OverlayWindow {
         Some(area_between(from, crop, t))
     }
 
-    /// Move the selection to `to`, animating from wherever it is drawn now.
     fn reshape_area(&mut self, to: AreaRect, cx: &mut Context<Self>) {
         let from = match (self.crop, self.reshape) {
             (Some(crop), Some((from, started))) => area_between(

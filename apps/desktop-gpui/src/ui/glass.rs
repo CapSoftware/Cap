@@ -81,7 +81,6 @@ pub fn gpui_style(style: &PaneStyle) -> gpui::GlassStyle {
     }
 }
 
-/// Paint one glass pane over whatever the window already holds at `bounds`.
 pub fn paint(window: &mut Window, bounds: Bounds<Pixels>, radius: f32, material: &GlassMaterial) {
     let (width, height) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
     if width <= 0. || height <= 0. {

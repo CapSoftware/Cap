@@ -80,7 +80,6 @@ impl Rgba {
         })
     }
 
-    /// Gaussian blur of every channel with clamped edges.
     pub fn blurred(&self, sigma: f32) -> Self {
         if sigma < 0.5 {
             return self.clone();
@@ -127,7 +126,6 @@ impl Shape {
         outside + qx.max(qy).min(0.) - radius
     }
 
-    /// Unit outward normal of the distance field.
     pub fn normal(&self, px: f32, py: f32) -> (f32, f32) {
         let e = 0.5;
         let dx = self.sdf(px + e, py) - self.sdf(px - e, py);
