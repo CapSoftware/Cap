@@ -1245,6 +1245,9 @@ pub(crate) async fn delete_recording(project: PathBuf) -> Result<(), String> {
 mod verify_resume_tests;
 
 #[cfg(test)]
+mod stop_tail_bench;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::atomic::AtomicUsize;
