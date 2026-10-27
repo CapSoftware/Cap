@@ -1334,9 +1334,15 @@ fn mcp_waits_respect_deadlines_during_requests_and_backoff() {
                 .env("CAP_SERVER_URL", server_url)
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
-                .stderr(Stdio::null())
+                .stderr(Stdio::piped())
                 .spawn()
                 .unwrap();
+            let mut stderr = child.stderr.take().unwrap();
+            let stderr_reader = thread::spawn(move || {
+                let mut output = String::new();
+                let _ = stderr.read_to_string(&mut output);
+                output
+            });
             let stdout = child.stdout.take().unwrap();
             let (sender, receiver) = mpsc::channel();
             thread::spawn(move || {
@@ -1368,13 +1374,20 @@ fn mcp_waits_respect_deadlines_during_requests_and_backoff() {
             let elapsed = start.elapsed();
             let _ = child.kill();
             let _ = child.wait();
+            let stderr = stderr_reader.join().unwrap();
             running.store(false, Ordering::SeqCst);
             if !stalled {
                 server.join().unwrap();
             }
             let initialized: Value = serde_json::from_str(&initialized.unwrap().unwrap()).unwrap();
             assert_eq!(initialized["id"], 1);
-            let response: Value = serde_json::from_str(&response.unwrap().unwrap()).unwrap();
+            let response = response.unwrap_or_else(|error| {
+                panic!(
+                    "{tool} did not respond (stalled={stalled}, requests={}): {error}; stderr: {stderr}",
+                    requests.load(Ordering::SeqCst)
+                )
+            });
+            let response: Value = serde_json::from_str(&response.unwrap()).unwrap();
             assert_eq!(response["id"], 3);
             assert!(response.to_string().contains("NOT_READY"), "{response}");
             assert!(
