@@ -397,6 +397,20 @@ pub type CropBounds = LogicalBounds;
 #[cfg(target_os = "macos")]
 pub const WINDOW_CORNER_TRIM: f64 = 8.0;
 
+/// `bounds` shrunk to whole, even pixel dimensions at `scale`. The encoder
+/// needs even frames; a region an odd number of pixels across would be read
+/// whole and squeezed a pixel smaller, resampling, and so softening, every
+/// line of text. Reading the even region instead copies pixels one to one.
+#[cfg(target_os = "macos")]
+pub fn even_pixel_crop(bounds: CropBounds, scale: f64) -> CropBounds {
+    let size = bounds.size();
+    let pixels = |points: f64| ensure_even((points * scale).floor() as u32) as f64 / scale;
+    LogicalBounds::new(
+        bounds.position(),
+        LogicalSize::new(pixels(size.width()), pixels(size.height())),
+    )
+}
+
 /// `bounds` with [`WINDOW_CORNER_TRIM`] taken off every side, or as it was
 /// when the window is too small to trim.
 #[cfg(target_os = "macos")]
@@ -517,6 +531,10 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureConfig<TCaptureFormat> {
             Some(_) => crop_bounds.map(trim_window_corners),
             None => crop_bounds,
         };
+        // Read exactly as many pixels as the frame holds (see `even_pixel_crop`).
+        #[cfg(target_os = "macos")]
+        let crop_bounds = crop_bounds
+            .map(|bounds| even_pixel_crop(bounds, display.raw_handle().scale().unwrap_or(1.0)));
 
         let native_output_size: PhysicalSize = {
             #[cfg(target_os = "macos")]
@@ -524,8 +542,8 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureConfig<TCaptureFormat> {
                 crop_bounds.and_then(|b| {
                     let logical_size = b.size();
                     let scale = display.raw_handle().scale()?;
-                    let width = ensure_even((logical_size.width() * scale) as u32) as f64;
-                    let height = ensure_even((logical_size.height() * scale) as u32) as f64;
+                    let width = ensure_even((logical_size.width() * scale).round() as u32) as f64;
+                    let height = ensure_even((logical_size.height() * scale).round() as u32) as f64;
                     Some(PhysicalSize::new(width, height))
                 })
             }
@@ -1163,6 +1181,22 @@ mod window_corner_tests {
         assert_eq!(trimmed.position().y(), 58.);
         assert_eq!(trimmed.size().width(), 904.);
         assert_eq!(trimmed.size().height(), 420.);
+    }
+
+    #[test]
+    fn crops_read_whole_even_pixels() {
+        let odd = LogicalBounds::new(LogicalPosition::new(8., 8.), LogicalSize::new(1690., 753.));
+        let even = even_pixel_crop(odd, 1.0);
+        assert_eq!(even.size().width(), 1690.);
+        assert_eq!(even.size().height(), 752.);
+        assert_eq!(even.position().x(), 8.);
+        // At 2x, a half point is a whole pixel: 753.5 pt is 1507 px, read as 1506.
+        let retina = even_pixel_crop(
+            LogicalBounds::new(LogicalPosition::new(0., 0.), LogicalSize::new(845., 753.5)),
+            2.0,
+        );
+        assert_eq!(retina.size().width() * 2.0, 1690.);
+        assert_eq!(retina.size().height() * 2.0, 1506.);
     }
 
     #[test]
