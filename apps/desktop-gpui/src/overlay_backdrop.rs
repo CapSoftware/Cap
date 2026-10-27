@@ -30,6 +30,13 @@ pub const SETTLE: Duration = Duration::from_millis(400);
 /// The longest a capture may take before the panes give up on it.
 const TIMEOUT: Duration = Duration::from_millis(1500);
 
+/// How long the main thread runs between leaving the overlay out of captures
+/// and capturing. The window server only learns of the change once the run
+/// loop turns over: a capture started straight away held the overlay every
+/// time on macOS 27, and painted its dimming back under itself. One frame was
+/// enough there; this leaves margin.
+const EXCLUDE_SETTLE: Duration = Duration::from_millis(40);
+
 pub const SUPPORTED: bool = cfg!(any(target_os = "macos", windows));
 
 /// Set by the picker probe to measure the picker without captures.
@@ -99,6 +106,7 @@ pub async fn capture(
         for window in &above {
             set_capture_hidden(window, true);
         }
+        cx.background_executor().timer(EXCLUDE_SETTLE).await;
         let started = std::time::Instant::now();
         let image = capture_bgra(display, cx).await;
         set_capture_hidden(&window, false);
