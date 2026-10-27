@@ -73,6 +73,11 @@ pub fn run(main: WindowHandle<MainWindow>, cx: &mut App) {
     .detach();
 }
 
+struct StackEntry {
+    id: isize,
+    level: Option<i64>,
+}
+
 async fn sleep(cx: &mut AsyncApp, millis: u64) {
     cx.background_executor()
         .timer(Duration::from_millis(millis))
@@ -98,8 +103,12 @@ fn probe_mode(label: &str, cx: &mut App) -> serde_json::Value {
                 .flatten()
         })
         .collect();
-    let stacking = own_window_stacking();
-    let position = |id: isize| stacking.iter().position(|current| *current == id);
+    let ours: Vec<isize> = camera_id
+        .into_iter()
+        .chain(overlay_ids.iter().copied())
+        .collect();
+    let stacking = own_window_stacking(&ours);
+    let position = |id: isize| stacking.iter().position(|entry| entry.id == id);
     let camera_position = camera_id.and_then(position);
     let overlay_positions: Vec<Option<usize>> =
         overlay_ids.iter().map(|id| position(*id)).collect();
@@ -113,7 +122,10 @@ fn probe_mode(label: &str, cx: &mut App) -> serde_json::Value {
         "mode": label,
         "camera": camera_id,
         "overlays": overlay_ids,
-        "stackingFrontToBack": stacking,
+        "stackingFrontToBack": stacking
+            .iter()
+            .map(|entry| serde_json::json!({ "id": entry.id, "level": entry.level }))
+            .collect::<Vec<_>>(),
         "cameraAboveOverlays": camera_above,
     })
 }
@@ -140,7 +152,7 @@ fn native_id(window: &gpui::Window) -> Option<isize> {
 }
 
 #[cfg(target_os = "macos")]
-fn own_window_stacking() -> Vec<isize> {
+fn own_window_stacking(_ours: &[isize]) -> Vec<StackEntry> {
     use core_foundation::array::{CFArray, CFArrayRef};
     use core_foundation::base::{CFType, TCFType};
     use core_foundation::dictionary::CFDictionary;
@@ -152,6 +164,7 @@ fn own_window_stacking() -> Vec<isize> {
         fn CGWindowListCopyWindowInfo(option: u32, relative_to: u32) -> CFArrayRef;
         static kCGWindowOwnerPID: CFStringRef;
         static kCGWindowNumber: CFStringRef;
+        static kCGWindowLayer: CFStringRef;
     }
     const ON_SCREEN_ONLY: u32 = 1 << 0;
 
@@ -162,10 +175,11 @@ fn own_window_stacking() -> Vec<isize> {
         }
         CFArray::<CFDictionary<CFString, CFType>>::wrap_under_create_rule(raw)
     };
-    let (owner_key, number_key) = unsafe {
+    let (owner_key, number_key, layer_key) = unsafe {
         (
             CFString::wrap_under_get_rule(kCGWindowOwnerPID),
             CFString::wrap_under_get_rule(kCGWindowNumber),
+            CFString::wrap_under_get_rule(kCGWindowLayer),
         )
     };
     let pid = i64::from(std::process::id());
@@ -173,13 +187,16 @@ fn own_window_stacking() -> Vec<isize> {
         .filter_map(|window| {
             let field = |key: &CFString| window.find(key)?.downcast::<CFNumber>()?.to_i64();
             (field(&owner_key)? == pid).then_some(())?;
-            isize::try_from(field(&number_key)?).ok()
+            Some(StackEntry {
+                id: isize::try_from(field(&number_key)?).ok()?,
+                level: field(&layer_key),
+            })
         })
         .collect()
 }
 
 #[cfg(target_os = "windows")]
-fn own_window_stacking() -> Vec<isize> {
+fn own_window_stacking(_ours: &[isize]) -> Vec<StackEntry> {
     use windows_sys::Win32::{
         Foundation::{BOOL, HWND, LPARAM, TRUE},
         UI::WindowsAndMessaging::{EnumWindows, GetWindowThreadProcessId, IsWindowVisible},
@@ -195,47 +212,55 @@ fn own_window_stacking() -> Vec<isize> {
         TRUE
     }
 
-    let mut windows = Vec::new();
+    let mut windows: Vec<isize> = Vec::new();
     unsafe {
         EnumWindows(Some(collect), std::ptr::addr_of_mut!(windows) as isize);
     }
     windows
+        .into_iter()
+        .map(|id| StackEntry { id, level: None })
+        .collect()
 }
 
+/// Override-redirect windows (the camera and the overlays) never appear in
+/// the window manager's client list, so this walks the real stacking order:
+/// the root's children bottom to top, each one standing for whichever of our
+/// windows it is or frames.
 #[cfg(target_os = "linux")]
-fn own_window_stacking() -> Vec<isize> {
+fn own_window_stacking(ours: &[isize]) -> Vec<StackEntry> {
     use x11rb::connection::Connection as _;
-    use x11rb::protocol::xproto::{AtomEnum, ConnectionExt as _};
+    use x11rb::protocol::xproto::ConnectionExt as _;
 
     let Ok((connection, screen)) = x11rb::connect(None) else {
         return Vec::new();
     };
     let root = connection.setup().roots[screen].root;
-    let stacking = connection
-        .intern_atom(false, b"_NET_CLIENT_LIST_STACKING")
-        .ok()
-        .and_then(|cookie| cookie.reply().ok())
-        .and_then(|atom| {
-            connection
-                .get_property(false, root, atom.atom, AtomEnum::WINDOW, 0, u32::MAX)
-                .ok()?
-                .reply()
-                .ok()
-        })
-        .and_then(|reply| reply.value32().map(|values| values.collect::<Vec<u32>>()))
-        .filter(|values| !values.is_empty());
-    let bottom_to_top = match stacking {
-        Some(values) => values,
-        None => connection
-            .query_tree(root)
+    let children = |window: u32| -> Vec<u32> {
+        connection
+            .query_tree(window)
             .ok()
             .and_then(|cookie| cookie.reply().ok())
             .map(|tree| tree.children)
-            .unwrap_or_default(),
+            .unwrap_or_default()
     };
-    bottom_to_top
-        .into_iter()
-        .rev()
-        .filter_map(|window| isize::try_from(window).ok())
-        .collect()
+    let is_ours = |window: u32| ours.contains(&(window as isize));
+    let mut stacking = Vec::new();
+    for top_level in children(root).into_iter().rev() {
+        let mut found = is_ours(top_level).then_some(top_level);
+        let mut frontier = vec![top_level];
+        for _ in 0..3 {
+            if found.is_some() {
+                break;
+            }
+            frontier = frontier.into_iter().flat_map(&children).collect();
+            found = frontier.iter().copied().find(|window| is_ours(*window));
+        }
+        if let Some(window) = found {
+            stacking.push(StackEntry {
+                id: window as isize,
+                level: None,
+            });
+        }
+    }
+    stacking
 }
