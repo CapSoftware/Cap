@@ -179,3 +179,29 @@ jobs:
           name: glass-probe-${{ matrix.settings.slug }}
           path: ${{ runner.temp }}/glass-probe
           retention-days: 7
+
+      # The probed build itself, so the same binary can run on machines with
+      # real GPUs (the hosted runners draw on WARP and lavapipe).
+      - name: Stage the build
+        if: ${{ success() && runner.os != 'macOS' }}
+        shell: bash
+        run: |
+          out="$RUNNER_TEMP/cap-gpui-build"
+          mkdir -p "$out"
+          bin="$GITHUB_WORKSPACE/apps/desktop-gpui/target/${{ matrix.settings.target }}/debug/cap-gpui"
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            cp "$bin.exe" "$out/"
+            cp "$GITHUB_WORKSPACE"/target/debug/*.dll "$out/" 2>/dev/null || true
+          else
+            cp "$bin" "$out/"
+            cp -r "$GITHUB_WORKSPACE/target/native-deps/lib" "$out/lib" 2>/dev/null || true
+          fi
+
+      - name: Upload the build
+        if: ${{ success() && runner.os != 'macOS' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: cap-gpui-debug-${{ matrix.settings.slug }}
+          path: ${{ runner.temp }}/cap-gpui-build
+          if-no-files-found: ignore
+          retention-days: 3
