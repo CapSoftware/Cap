@@ -4765,12 +4765,11 @@ pub fn carry_camera_with_window(before: &HoveredWindow, after: &HoveredWindow, c
     }
     let right_gap = old.x + old.width - (bubble.x + bubble.width);
     let bottom_gap = old.y + old.height - (bubble.y + bubble.height);
-    let x = (new.x + new.width - bubble.width - right_gap)
-        .min(new.x + new.width - bubble.width - CAMERA_PARK_PADDING)
-        .max(new.x + CAMERA_PARK_PADDING);
-    let y = (new.y + new.height - bubble.height - bottom_gap)
-        .min(new.y + new.height - bubble.height - CAMERA_PARK_PADDING)
-        .max(new.y + CAMERA_PARK_PADDING);
+    let (min_x, min_y) = (new.x + CAMERA_PARK_PADDING, new.y + CAMERA_PARK_PADDING);
+    let max_x = (new.x + new.width - bubble.width - CAMERA_PARK_PADDING).max(min_x);
+    let max_y = (new.y + new.height - bubble.height - CAMERA_PARK_PADDING).max(min_y);
+    let x = (new.x + new.width - bubble.width - right_gap).clamp(min_x, max_x);
+    let y = (new.y + new.height - bubble.height - bottom_gap).clamp(min_y, max_y);
     cx.global_mut::<AppWindows>().camera_park.last_window = Some(after.id.clone());
     queue_camera_placement(
         CameraPlacement {

@@ -348,17 +348,20 @@ async fn probe_backdrop(
     if !crate::overlay_backdrop::SUPPORTED {
         return serde_json::json!({ "skipped": "no capture without the overlay here" });
     }
+    // The overlay over the display `screen` shows, so the two compare the
+    // same desktop.
+    let primary = scap_targets::Display::primary().id();
     let image = cx.update(|cx| {
-        cx.global::<app_windows::AppWindows>()
+        let overlay = cx
+            .global::<app_windows::AppWindows>()
             .overlays
-            .clone()
-            .into_iter()
-            .find_map(|(_, overlay)| {
-                overlay
-                    .update(cx, |view, _, _| view.backdrop_image())
-                    .ok()
-                    .flatten()
-            })
+            .iter()
+            .find(|(display, _)| *display == primary)
+            .map(|(_, overlay)| *overlay)?;
+        overlay
+            .update(cx, |view, _, _| view.backdrop_image())
+            .ok()
+            .flatten()
     });
     let Some(image) = image else {
         return serde_json::json!({ "present": false, "passed": false });

@@ -84,25 +84,38 @@ impl FocusBorder {
                 let Ok(id) = this.read_with(cx, |this, _| this.window.clone()) else {
                     return;
                 };
+                let lookup = id.clone();
                 let found = cx
                     .background_executor()
                     .spawn(async move {
-                        scap_targets::Window::from_id(&id)
+                        scap_targets::Window::from_id(&lookup)
                             .as_ref()
                             .and_then(HoveredWindow::from_window)
                     })
                     .await;
                 let updated = this.update(cx, |this, cx| {
-                    let bounds = found
-                        .filter(|found| found.display_id == this.display)
-                        .map(|found| found.bounds);
+                    if found
+                        .as_ref()
+                        .is_some_and(|found| found.display_id != this.display)
+                    {
+                        return true;
+                    }
+                    let bounds = found.map(|found| found.bounds);
                     if this.bounds != bounds {
                         this.bounds = bounds;
                         cx.notify();
                     }
+                    false
                 });
-                if updated.is_err() {
-                    return;
+                match updated {
+                    Ok(false) => {}
+                    // The window went to another display: the ring's panel
+                    // covers one display, so a new one opens over the other.
+                    Ok(true) => {
+                        cx.update(|cx| cx.defer(move |cx| reopen(&id, cx)));
+                        return;
+                    }
+                    Err(_) => return,
                 }
             }
         });
@@ -122,6 +135,12 @@ impl Render for FocusBorder {
             .size_full()
             .relative()
             .children(self.bounds.map(|bounds| ring(bounds, &self.theme)))
+    }
+}
+
+fn reopen(target: &WindowId, cx: &mut App) {
+    if cx.has_global::<FocusBorderWindow>() {
+        open(target, cx);
     }
 }
 
