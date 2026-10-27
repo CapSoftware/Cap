@@ -1892,11 +1892,30 @@ impl ScreenshotEditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        self.finish_annotation_gesture(true, window, cx)
+    }
+
+    pub(crate) fn finish_annotation_history_edit(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.end_annotation_slider(cx);
+        self.finish_annotation_gesture(false, window, cx);
+        self.finish_reorder(window, cx);
+    }
+
+    fn finish_annotation_gesture(
+        &mut self,
+        edit_text: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let Some(gesture) = self.annotation_state.gesture.take() else {
             return false;
         };
         match gesture {
-            Gesture::Create(creating) => self.finish_create(creating, window, cx),
+            Gesture::Create(creating) => self.finish_create(creating, edit_text, window, cx),
             Gesture::Move(dragging) | Gesture::Resize(dragging) => {
                 self.finish_drag(dragging, window, cx)
             }
@@ -1904,7 +1923,13 @@ impl ScreenshotEditorWindow {
         true
     }
 
-    fn finish_create(&mut self, creating: Creating, window: &mut Window, cx: &mut Context<Self>) {
+    fn finish_create(
+        &mut self,
+        creating: Creating,
+        edit_text: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let mut annotation = creating.temp;
 
         if annotation.annotation_type == AnnotationType::Draw {
@@ -1980,7 +2005,7 @@ impl ScreenshotEditorWindow {
         self.selected_annotation = Some(id.clone());
         self.commit_annotations(window, cx);
 
-        if is_text {
+        if is_text && edit_text {
             self.begin_text_edit(id, window, cx);
         }
     }
@@ -4829,5 +4854,314 @@ mod tests {
         assert!(!geometry_changed(&before, &after));
         after.x = 1.;
         assert!(geometry_changed(&before, &after));
+    }
+
+    #[cfg(target_os = "linux")]
+    mod history_interruption {
+        use super::*;
+        use crate::editor_edits::ProjectHistory;
+        use gpui::{Render, point, size};
+
+        struct HistoryView {
+            editor: Entity<ScreenshotEditorWindow>,
+            _project: tempfile::TempDir,
+        }
+
+        impl Render for HistoryView {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div().size_full().child(self.editor.clone())
+            }
+        }
+
+        fn fixture(
+            cx: &mut gpui::TestAppContext,
+            annotations: Vec<Annotation>,
+        ) -> (Entity<ScreenshotEditorWindow>, &mut gpui::VisualTestContext) {
+            let project = tempfile::tempdir().unwrap();
+            let (view, cx) = cx.add_window_view(move |window, cx| {
+                let editor =
+                    cx.new(|cx| ScreenshotEditorWindow::new(project.path().into(), window, cx));
+                editor.update(cx, |editor, cx| {
+                    editor.project = cap_project::ProjectConfiguration {
+                        annotations,
+                        background: cap_project::BackgroundConfiguration {
+                            padding: 0.,
+                            rounding: 0.,
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    };
+                    editor.history = ProjectHistory::new(editor.project.clone());
+                    editor.frame_size = (800., 600.);
+                    editor.image_size = Some((800, 600));
+                    window.focus(&editor.focus, cx);
+                });
+                HistoryView {
+                    editor,
+                    _project: project,
+                }
+            });
+            (view.read_with(cx, |view, _| view.editor.clone()), cx)
+        }
+
+        fn rectangle() -> Annotation {
+            shape(AnnotationType::Rectangle, 100., 100., 50., 30.)
+        }
+
+        fn active_drag(editor: &mut ScreenshotEditorWindow, resize: bool, offset: f64) {
+            let mut drag = Dragging {
+                id: "a".into(),
+                handle: resize.then_some(Handle::E),
+                start: (100., 100.),
+                original: editor.project.annotations[0].clone(),
+                moved: false,
+            };
+            if resize {
+                editor.drag_resize(&drag, (100. + offset, 100.), false);
+                editor.annotation_state.gesture = Some(Gesture::Resize(drag));
+            } else {
+                editor.drag_move(&mut drag, (100. + offset, 100.));
+                editor.annotation_state.gesture = Some(Gesture::Move(drag));
+            }
+        }
+
+        fn geometry(editor: &ScreenshotEditorWindow) -> (f64, f64) {
+            let annotation = &editor.project.annotations[0];
+            (annotation.x, annotation.width)
+        }
+
+        #[gpui::test]
+        fn active_move_and_resize_undo_before_prior_history(cx: &mut gpui::TestAppContext) {
+            for resize in [false, true] {
+                for prior in [false, true] {
+                    let (editor, cx) = fixture(cx, vec![rectangle()]);
+                    editor.update(cx, |editor, _| {
+                        if prior {
+                            editor.project.background.rounding = 12.;
+                            editor.history.record(&editor.project);
+                        }
+                        active_drag(editor, resize, 30.);
+                    });
+                    cx.simulate_keystrokes("ctrl-z");
+                    editor.read_with(cx, |editor, _| {
+                        assert_eq!(
+                            editor.project.background.rounding,
+                            if prior { 12. } else { 0. }
+                        );
+                        assert_eq!(geometry(editor), (100., 50.));
+                        assert!(editor.annotation_state.gesture.is_none());
+                        assert!(editor.history.can_redo());
+                    });
+                    editor.update_in(cx, |editor, window, cx| {
+                        assert!(!editor.annotation_mouse_move(
+                            point(px(200.), px(100.)),
+                            window,
+                            cx
+                        ));
+                        assert!(!editor.annotation_mouse_up(window, cx));
+                    });
+                    cx.simulate_keystrokes("ctrl-shift-z");
+                    editor.read_with(cx, |editor, _| {
+                        assert_eq!(
+                            geometry(editor),
+                            if resize { (100., 80.) } else { (130., 50.) }
+                        );
+                    });
+                }
+            }
+        }
+
+        #[gpui::test]
+        fn redo_distinguishes_changed_and_noop_annotation_drags(cx: &mut gpui::TestAppContext) {
+            for resize in [false, true] {
+                for changed in [false, true] {
+                    let (editor, cx) = fixture(cx, vec![rectangle()]);
+                    editor.update(cx, |editor, _| {
+                        editor.project.background.rounding = 12.;
+                        editor.history.record(&editor.project);
+                    });
+                    cx.simulate_keystrokes("cmd-z");
+                    editor.update(cx, |editor, _| {
+                        active_drag(editor, resize, if changed { 30. } else { 0. });
+                    });
+                    cx.simulate_keystrokes("cmd-y");
+                    editor.read_with(cx, |editor, _| {
+                        assert_eq!(
+                            editor.project.background.rounding,
+                            if changed { 0. } else { 12. }
+                        );
+                        assert!(editor.annotation_state.gesture.is_none());
+                        assert!(!editor.history.can_redo());
+                        assert_eq!(
+                            geometry(editor),
+                            if changed && resize {
+                                (100., 80.)
+                            } else if changed {
+                                (130., 50.)
+                            } else {
+                                (100., 50.)
+                            }
+                        );
+                    });
+                    editor.update_in(cx, |editor, window, cx| {
+                        assert!(!editor.annotation_mouse_up(window, cx));
+                    });
+                }
+            }
+        }
+
+        #[gpui::test]
+        fn creation_undo_consumes_preview_and_does_not_focus_undone_text(
+            cx: &mut gpui::TestAppContext,
+        ) {
+            for tool in [
+                Tool::Arrow,
+                Tool::Rectangle,
+                Tool::Circle,
+                Tool::Draw,
+                Tool::Mask,
+                Tool::Text,
+            ] {
+                let (editor, cx) = fixture(cx, Vec::new());
+                editor.update(cx, |editor, cx| {
+                    editor.begin_create(tool, (100., 100.), cx);
+                    let Some(Gesture::Create(creating)) = editor.annotation_state.gesture.take()
+                    else {
+                        panic!("expected creation gesture");
+                    };
+                    editor.annotation_state.gesture = Some(Gesture::Create(editor.drag_create(
+                        creating,
+                        (150., 130.),
+                        false,
+                    )));
+                });
+                cx.simulate_keystrokes("ctrl-z");
+                cx.run_until_parked();
+                editor.update_in(cx, |editor, window, cx| {
+                    assert!(editor.project.annotations.is_empty());
+                    assert!(editor.annotation_state.gesture.is_none());
+                    assert!(editor.annotation_state.editing.is_none());
+                    assert!(editor.focus.is_focused(window));
+                    assert!(editor.history.can_redo());
+                    assert!(!editor.annotation_mouse_up(window, cx));
+                });
+                cx.simulate_keystrokes("ctrl-shift-z");
+                editor.read_with(cx, |editor, _| {
+                    assert_eq!(editor.project.annotations.len(), 1);
+                    assert!(editor.annotation_state.editing.is_none());
+                });
+            }
+        }
+
+        #[gpui::test]
+        fn tiny_creation_does_not_discard_redo_or_commit_on_late_release(
+            cx: &mut gpui::TestAppContext,
+        ) {
+            for tool in [Tool::Rectangle, Tool::Circle, Tool::Draw, Tool::Mask] {
+                let (editor, cx) = fixture(cx, Vec::new());
+                editor.update(cx, |editor, _| {
+                    editor.project.background.rounding = 12.;
+                    editor.history.record(&editor.project);
+                });
+                cx.simulate_keystrokes("ctrl-z");
+                editor.update(cx, |editor, cx| editor.begin_create(tool, (100., 100.), cx));
+                cx.simulate_keystrokes("ctrl-y");
+                editor.update_in(cx, |editor, window, cx| {
+                    assert_eq!(editor.project.background.rounding, 12.);
+                    assert!(editor.project.annotations.is_empty());
+                    assert!(editor.annotation_state.gesture.is_none());
+                    assert!(!editor.annotation_mouse_up(window, cx));
+                });
+            }
+        }
+
+        #[gpui::test]
+        fn reorder_undo_and_noop_redo_consume_the_pending_drop(cx: &mut gpui::TestAppContext) {
+            let mut second = rectangle();
+            second.id = "b".into();
+            let (editor, cx) = fixture(cx, vec![rectangle(), second]);
+            editor.update(cx, |editor, cx| {
+                editor.project.background.rounding = 12.;
+                editor.history.record(&editor.project);
+                editor.begin_reorder("a".into(), cx);
+                editor.annotation_state.reorder.as_mut().unwrap().target = Some(0);
+            });
+            cx.simulate_keystrokes("ctrl-z");
+            editor.update_in(cx, |editor, window, cx| {
+                assert_eq!(editor.project.background.rounding, 12.);
+                assert_eq!(editor.project.annotations[0].id, "a");
+                assert!(editor.annotation_state.reorder.is_none());
+                editor.finish_reorder(window, cx);
+                editor.begin_reorder("a".into(), cx);
+                editor.annotation_state.reorder.as_mut().unwrap().target = Some(2);
+            });
+            cx.simulate_keystrokes("ctrl-y");
+            editor.read_with(cx, |editor, _| {
+                assert_eq!(editor.project.annotations[0].id, "b");
+                assert!(editor.annotation_state.reorder.is_none());
+            });
+        }
+
+        #[gpui::test]
+        fn annotation_slider_history_releases_pause_and_preserves_redo_rules(
+            cx: &mut gpui::TestAppContext,
+        ) {
+            for changed in [false, true] {
+                let (editor, cx) = fixture(cx, vec![rectangle()]);
+                editor.update_in(cx, |editor, window, cx| {
+                    editor.selected_annotation = Some("a".into());
+                    editor.annotation_state.slider_tracks[&AnnotationSlider::Width].set(Some(
+                        Bounds {
+                            origin: point(px(0.), px(0.)),
+                            size: size(px(100.), px(4.)),
+                        },
+                    ));
+                    editor.begin_annotation_slider(
+                        AnnotationSlider::Width,
+                        point(px(0.), px(0.)),
+                        window,
+                        cx,
+                    );
+                });
+                cx.simulate_keystrokes("ctrl-z");
+                editor.update_in(cx, |editor, window, cx| {
+                    assert_eq!(editor.project.annotations[0].stroke_width, 4.);
+                    assert!(editor.annotation_state.active_slider.is_none());
+                    editor.end_annotation_slider(cx);
+                    let x = if changed { 100. } else { 300. / 19. };
+                    editor.begin_annotation_slider(
+                        AnnotationSlider::Width,
+                        point(px(x), px(0.)),
+                        window,
+                        cx,
+                    );
+                });
+                cx.simulate_keystrokes("ctrl-shift-z");
+                editor.update_in(cx, |editor, window, cx| {
+                    assert_eq!(
+                        editor.project.annotations[0].stroke_width,
+                        if changed { 20. } else { 1. }
+                    );
+                    assert!(editor.annotation_state.active_slider.is_none());
+                    editor.end_annotation_slider(cx);
+                    editor.edit_project(
+                        |project| {
+                            project.background.rounding = 12.;
+                            true
+                        },
+                        window,
+                        cx,
+                    );
+                });
+                cx.simulate_keystrokes("ctrl-z");
+                editor.read_with(cx, |editor, _| {
+                    assert_eq!(editor.project.background.rounding, 0.);
+                    assert_eq!(
+                        editor.project.annotations[0].stroke_width,
+                        if changed { 20. } else { 1. }
+                    );
+                });
+            }
+        }
     }
 }

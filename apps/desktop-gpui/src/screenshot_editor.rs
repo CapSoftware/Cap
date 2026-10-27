@@ -1237,6 +1237,8 @@ impl ScreenshotEditorWindow {
     // -- History ---------------------------------------------------------------
 
     fn undo(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.end_slider(cx);
+        self.finish_annotation_history_edit(window, cx);
         let Some(config) = self.history.undo().cloned() else {
             return;
         };
@@ -1244,6 +1246,8 @@ impl ScreenshotEditorWindow {
     }
 
     fn redo(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.end_slider(cx);
+        self.finish_annotation_history_edit(window, cx);
         let Some(config) = self.history.redo().cloned() else {
             return;
         };
@@ -5462,6 +5466,202 @@ mod tests {
                     median(&mut result.render_ms),
                 );
             }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    mod history_interruption {
+        use super::*;
+        use gpui::point;
+
+        struct HistoryView {
+            editor: Entity<ScreenshotEditorWindow>,
+            _project: tempfile::TempDir,
+        }
+
+        impl Render for HistoryView {
+            fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                self.editor.update(cx, |editor, cx| {
+                    div()
+                        .size_full()
+                        .track_focus(&editor.focus)
+                        .on_key_down(cx.listener(ScreenshotEditorWindow::on_key))
+                })
+            }
+        }
+
+        fn fixture(
+            cx: &mut gpui::TestAppContext,
+        ) -> (
+            Entity<ScreenshotEditorWindow>,
+            tokio::sync::watch::Receiver<ConfigUpdate>,
+            &mut gpui::VisualTestContext,
+        ) {
+            let project = tempfile::tempdir().unwrap();
+            let config = ProjectConfiguration {
+                background: cap_project::BackgroundConfiguration {
+                    source: BackgroundSource::Color {
+                        value: [255, 255, 255],
+                        alpha: 255,
+                    },
+                    rounding: 0.,
+                    blur: 0.,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let (config_tx, config_rx) = tokio::sync::watch::channel(ConfigUpdate {
+                revision: 0,
+                config: config.clone(),
+            });
+            let (view, cx) = cx.add_window_view(move |window, cx| {
+                let editor =
+                    cx.new(|cx| ScreenshotEditorWindow::new(project.path().into(), window, cx));
+                editor.update(cx, |editor, cx| {
+                    editor.history = ProjectHistory::new(config.clone());
+                    editor.project = config;
+                    editor.render_gate = RenderInputGate::published(&mut editor.project);
+                    editor.config_tx = Some(config_tx);
+                    editor.track(StyleSlider::Rounding).set(Some(Bounds {
+                        origin: point(px(0.), px(0.)),
+                        size: gpui::size(px(100.), px(4.)),
+                    }));
+                    window.focus(&editor.focus, cx);
+                });
+                HistoryView {
+                    editor,
+                    _project: project,
+                }
+            });
+            (
+                view.read_with(cx, |view, _| view.editor.clone()),
+                config_rx,
+                cx,
+            )
+        }
+
+        fn assert_synchronized(
+            editor: &ScreenshotEditorWindow,
+            updates: &tokio::sync::watch::Receiver<ConfigUpdate>,
+        ) {
+            assert!(editor.active_slider.is_none());
+            let expected = serde_json::to_value(&editor.project).unwrap();
+            let pending = editor.pending_save.borrow();
+            assert_eq!(
+                serde_json::to_value(pending.config.as_ref().unwrap()).unwrap(),
+                expected
+            );
+            let published = updates.borrow();
+            assert_eq!(published.revision, editor.revision);
+            assert!(published.revision > 0);
+            assert_eq!(serde_json::to_value(&published.config).unwrap(), expected);
+        }
+
+        #[gpui::test]
+        fn first_active_style_edit_undo_redo_updates_save_and_renderer(
+            cx: &mut gpui::TestAppContext,
+        ) {
+            for (undo, redo) in [("ctrl-z", "ctrl-shift-z"), ("cmd-z", "cmd-y")] {
+                let (editor, updates, cx) = fixture(cx);
+                editor.update_in(cx, |editor, window, cx| {
+                    editor.begin_slider(StyleSlider::Rounding, point(px(30.), px(0.)), window, cx);
+                    editor.apply_slider(StyleSlider::Rounding, point(px(50.), px(0.)), window, cx);
+                    assert!(!editor.history.can_undo());
+                });
+                cx.simulate_keystrokes(undo);
+                editor.read_with(cx, |editor, _| {
+                    assert_eq!(editor.project.background.rounding, 0.);
+                    assert!(editor.history.can_redo());
+                    assert_synchronized(editor, &updates);
+                });
+                editor.update(cx, |editor, cx| editor.end_slider(cx));
+                cx.simulate_keystrokes(redo);
+                editor.read_with(cx, |editor, _| {
+                    assert_eq!(editor.project.background.rounding, 50.);
+                    assert!(!editor.history.can_redo());
+                    assert_synchronized(editor, &updates);
+                });
+            }
+        }
+
+        #[gpui::test]
+        fn active_style_undo_preserves_prior_edit_and_noop_redo(cx: &mut gpui::TestAppContext) {
+            for return_to_origin in [false, true] {
+                let (editor, updates, cx) = fixture(cx);
+                editor.update_in(cx, |editor, window, cx| {
+                    editor.edit_project(
+                        |project| StyleSlider::Rounding.apply(project, 20.),
+                        window,
+                        cx,
+                    );
+                    editor.begin_slider(StyleSlider::Rounding, point(px(60.), px(0.)), window, cx);
+                });
+                cx.simulate_keystrokes("ctrl-z");
+                editor.read_with(cx, |editor, _| {
+                    assert_eq!(editor.project.background.rounding, 20.);
+                    assert!(editor.history.can_redo());
+                    assert_synchronized(editor, &updates);
+                });
+                editor.update_in(cx, |editor, window, cx| {
+                    let start = if return_to_origin { 40. } else { 20. };
+                    editor.begin_slider(
+                        StyleSlider::Rounding,
+                        point(px(start), px(0.)),
+                        window,
+                        cx,
+                    );
+                    editor.apply_slider(StyleSlider::Rounding, point(px(20.), px(0.)), window, cx);
+                });
+                cx.simulate_keystrokes("ctrl-y");
+                editor.read_with(cx, |editor, _| {
+                    assert_eq!(editor.project.background.rounding, 60.);
+                    assert_synchronized(editor, &updates);
+                });
+                editor.update_in(cx, |editor, window, cx| {
+                    editor.end_slider(cx);
+                    editor.end_slider(cx);
+                    editor.edit_project(
+                        |project| StyleSlider::Blur.apply(project, 12.),
+                        window,
+                        cx,
+                    );
+                });
+                cx.simulate_keystrokes("ctrl-z");
+                editor.read_with(cx, |editor, _| {
+                    assert_eq!(editor.project.background.rounding, 60.);
+                    assert_eq!(editor.project.background.blur, 0.);
+                    assert_synchronized(editor, &updates);
+                });
+            }
+        }
+
+        #[gpui::test]
+        fn changed_active_style_edit_replaces_the_redo_branch(cx: &mut gpui::TestAppContext) {
+            let (editor, updates, cx) = fixture(cx);
+            editor.update_in(cx, |editor, window, cx| {
+                editor.edit_project(
+                    |project| StyleSlider::Rounding.apply(project, 20.),
+                    window,
+                    cx,
+                );
+            });
+            cx.simulate_keystrokes("ctrl-z");
+            editor.update_in(cx, |editor, window, cx| {
+                editor.begin_slider(StyleSlider::Rounding, point(px(40.), px(0.)), window, cx);
+            });
+            cx.simulate_keystrokes("ctrl-shift-z");
+            editor.read_with(cx, |editor, _| {
+                assert_eq!(editor.project.background.rounding, 40.);
+                assert!(!editor.history.can_redo());
+                assert_synchronized(editor, &updates);
+            });
+            editor.update(cx, |editor, cx| editor.end_slider(cx));
+            cx.simulate_keystrokes("ctrl-z");
+            editor.read_with(cx, |editor, _| {
+                assert_eq!(editor.project.background.rounding, 0.);
+                assert!(editor.history.can_redo());
+                assert_synchronized(editor, &updates);
+            });
         }
     }
 }
