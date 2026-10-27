@@ -5,7 +5,7 @@ use std::{
     process::{Command, Output, Stdio},
     sync::{
         Arc,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         mpsc,
     },
     thread,
@@ -1278,68 +1278,115 @@ fn mcp_cancellation_stops_wait_polling() {
 }
 
 #[test]
-fn mcp_waits_time_out_during_stalled_http_requests() {
+fn mcp_waits_respect_deadlines_during_requests_and_backoff() {
     for (tool, arguments) in [
         (
             "caps_wait",
-            serde_json::json!({"cap": "cap_synthetic", "timeout_seconds": 1}),
+            serde_json::json!({"cap": "cap_synthetic", "timeout_seconds": 2}),
         ),
         (
             "operations_wait",
-            serde_json::json!({"operation_id": "op_synthetic", "timeout_seconds": 1}),
+            serde_json::json!({"operation_id": "op_synthetic", "timeout_seconds": 2}),
         ),
     ] {
-        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-        let server_url = format!("http://{}", listener.local_addr().unwrap());
-        thread::spawn(move || {
-            if let Ok((mut stream, _)) = listener.accept() {
-                let mut request = [0_u8; 4096];
-                let _ = stream.read(&mut request);
-                thread::sleep(Duration::from_secs(4));
-            }
-        });
-
-        let mut child = cap()
-            .args(["mcp", "serve"])
-            .env("CAP_AGENT_TOKEN", "cap_cli_synthetic_test_token")
-            .env("CAP_SERVER_URL", server_url)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap();
-        let stdout = child.stdout.take().unwrap();
-        let (sender, receiver) = mpsc::channel();
-        thread::spawn(move || {
-            for line in BufReader::new(stdout).lines() {
-                if sender.send(line).is_err() {
-                    break;
+        for stalled in [true, false] {
+            let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let server_url = format!("http://{}", listener.local_addr().unwrap());
+            let running = Arc::new(AtomicBool::new(true));
+            let requests = Arc::new(AtomicUsize::new(0));
+            let server_running = running.clone();
+            let server_requests = requests.clone();
+            let server = thread::spawn(move || {
+                while server_running.load(Ordering::SeqCst) {
+                    match listener.accept() {
+                        Ok((mut stream, _)) => {
+                            stream
+                                .set_read_timeout(Some(Duration::from_secs(2)))
+                                .unwrap();
+                            let mut request = [0_u8; 4096];
+                            if stream.read(&mut request).unwrap_or(0) == 0 {
+                                continue;
+                            }
+                            server_requests.fetch_add(1, Ordering::SeqCst);
+                            if stalled {
+                                thread::sleep(Duration::from_secs(5));
+                                break;
+                            }
+                            let body = r#"{"transcript":{"status":"processing"},"ai":{"status":"processing"},"state":"running"}"#;
+                            let _ = write!(
+                                stream,
+                                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                                body.len(),
+                                body
+                            );
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            thread::sleep(Duration::from_millis(5))
+                        }
+                        Err(_) => break,
+                    }
                 }
+            });
+            let mut child = cap()
+                .args(["mcp", "serve"])
+                .env("CAP_AGENT_TOKEN", "cap_cli_synthetic_test_token")
+                .env("CAP_SERVER_URL", server_url)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap();
+            let stdout = child.stdout.take().unwrap();
+            let (sender, receiver) = mpsc::channel();
+            thread::spawn(move || {
+                for line in BufReader::new(stdout).lines() {
+                    if sender.send(line).is_err() {
+                        break;
+                    }
+                }
+            });
+            let mut stdin = child.stdin.take().unwrap();
+            for message in [
+                serde_json::json!({"jsonrpc":"2.0", "id":1, "method":"initialize", "params": {
+                    "protocolVersion":"2025-03-26", "capabilities":{},
+                    "clientInfo":{"name":"cap-test", "version":"1"}
+                }}),
+                serde_json::json!({"jsonrpc":"2.0", "method":"notifications/initialized", "params":{}}),
+            ] {
+                writeln!(stdin, "{message}").unwrap();
             }
-        });
-        let mut stdin = child.stdin.take().unwrap();
-        for message in [
-            serde_json::json!({"jsonrpc":"2.0", "id":1, "method":"initialize", "params": {
-                "protocolVersion":"2025-03-26", "capabilities":{},
-                "clientInfo":{"name":"cap-test", "version":"1"}
-            }}),
-            serde_json::json!({"jsonrpc":"2.0", "method":"notifications/initialized", "params":{}}),
-            serde_json::json!({"jsonrpc":"2.0", "id":3, "method":"tools/call", "params": {
+            stdin.flush().unwrap();
+            let initialized = receiver.recv_timeout(Duration::from_secs(5));
+            let start = std::time::Instant::now();
+            let call = serde_json::json!({"jsonrpc":"2.0", "id":3, "method":"tools/call", "params": {
                 "name":tool, "arguments":arguments
-            }}),
-        ] {
-            writeln!(stdin, "{message}").unwrap();
+            }});
+            writeln!(stdin, "{call}").unwrap();
+            stdin.flush().unwrap();
+            let response = receiver.recv_timeout(Duration::from_secs(4));
+            let elapsed = start.elapsed();
+            let _ = child.kill();
+            let _ = child.wait();
+            running.store(false, Ordering::SeqCst);
+            if !stalled {
+                server.join().unwrap();
+            }
+            let initialized: Value = serde_json::from_str(&initialized.unwrap().unwrap()).unwrap();
+            assert_eq!(initialized["id"], 1);
+            let response: Value = serde_json::from_str(&response.unwrap().unwrap()).unwrap();
+            assert_eq!(response["id"], 3);
+            assert!(response.to_string().contains("NOT_READY"), "{response}");
+            assert!(
+                elapsed < Duration::from_secs(3),
+                "{tool} exceeded its deadline: {elapsed:?}, stalled={stalled}"
+            );
+            let request_count = requests.load(Ordering::SeqCst);
+            assert!(
+                (1..=3).contains(&request_count),
+                "{tool} made {request_count} requests, stalled={stalled}"
+            );
         }
-        stdin.flush().unwrap();
-        let initialized = receiver.recv_timeout(Duration::from_secs(3));
-        let response = receiver.recv_timeout(Duration::from_secs(3));
-        let _ = child.kill();
-        let _ = child.wait();
-        let initialized: Value = serde_json::from_str(&initialized.unwrap().unwrap()).unwrap();
-        assert_eq!(initialized["id"], 1);
-        let response: Value = serde_json::from_str(&response.unwrap().unwrap()).unwrap();
-        assert_eq!(response["id"], 3);
-        assert!(response.to_string().contains("NOT_READY"), "{response}");
     }
 }
 
