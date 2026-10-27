@@ -11,6 +11,7 @@ on:
       - "apps/desktop-gpui/src/app_windows.rs"
       - "apps/desktop-gpui/src/camera_window.rs"
       - "apps/desktop-gpui/src/picker_probe.rs"
+      - "apps/desktop-gpui/src/main_window.rs"
       - "apps/desktop-gpui/src/platform.rs"
       - "apps/desktop-gpui/src/platform/**"
       - "scripts/picker-smoke/**"
@@ -95,6 +96,19 @@ jobs:
               ln -sfn "$GITHUB_WORKSPACE/target/Frameworks/Spacedrive.framework" "$frameworks/Spacedrive.framework"
             done
           fi
+
+      - name: Screen capture permission
+        if: ${{ runner.os == 'macOS' }}
+        run: |
+          set -euo pipefail
+          app="$GITHUB_WORKSPACE/apps/desktop-gpui/target/${{ matrix.settings.target }}/debug/cap-gpui"
+          db="/Library/Application Support/com.apple.TCC/TCC.db"
+          now=$(date +%s)
+          for client in "$app" /bin/bash /Users/runner/bin/Runner.Worker /Users/runner/bin/Runner.Listener; do
+            sudo sqlite3 "$db" "INSERT OR REPLACE INTO access (service,client,client_type,auth_value,auth_reason,auth_version,indirect_object_identifier,flags,last_modified) VALUES ('kTCCServiceScreenCapture','$client',1,2,4,1,'UNUSED',0,$now);"
+          done
+          sudo killall tccd || true
+          sleep 2
 
       - name: Picker probe
         shell: bash
