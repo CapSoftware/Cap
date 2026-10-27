@@ -49,5 +49,11 @@
 			</dict>
 		</dict>
 	</array>
+	<key>CFBundleIconFile</key>
+	<string>icon.icns</string>
+	<key>CFBundleIconName</key>
+	<string>cap-solarium</string>
+	<key>NSAccentColorName</key>
+	<string>AccentColor</string>
 </dict>
 </plist>

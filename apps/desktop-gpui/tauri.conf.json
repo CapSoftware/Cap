@@ -27,11 +27,11 @@
 			"../desktop/src-tauri/binaries/cap-cli"
 		],
 		"icon": [
-			"../desktop/src-tauri/icons/32x32.png",
-			"../desktop/src-tauri/icons/128x128.png",
-			"../desktop/src-tauri/icons/128x128@2x.png",
-			"../desktop/src-tauri/icons/macos/icon.icns",
-			"../desktop/src-tauri/icons/icon.ico"
+			"icons/32x32.png",
+			"icons/128x128.png",
+			"icons/128x128@2x.png",
+			"icons/icon.icns",
+			"icons/icon.png"
 		],
 		"resources": {
 			"../desktop/src-tauri/assets/backgrounds/macOS/*": "assets/backgrounds/macOS/",
@@ -70,7 +70,7 @@
 			"nsis": {
 				"headerImage": "../desktop/src-tauri/assets/nsis-header.bmp",
 				"sidebarImage": "../desktop/src-tauri/assets/nsis-sidebar.bmp",
-				"installerIcon": "../desktop/src-tauri/icons/icon.ico",
+				"installerIcon": "icons/icon.ico",
 				"installerHooks": "packaging/windows/installer-hooks.nsh",
 				"compression": "lzma"
 			},

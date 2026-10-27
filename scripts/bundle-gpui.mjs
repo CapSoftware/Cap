@@ -4,6 +4,7 @@ import * as fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildMacosBundles } from "./build-macos-bundles.mjs";
+import { buildMacosIcon } from "./build-macos-icon.mjs";
 import { buildMacosPackages } from "./build-macos-packages.mjs";
 
 const repoRoot = path.resolve(
@@ -42,21 +43,25 @@ export function gpuiBinaryPath(target, profile = "release") {
 	);
 }
 
-export function gpuiPlatformConfig(platform, { appexBundles = [] } = {}) {
+export function gpuiPlatformConfig(
+	platform,
+	{ appexBundles = [], icon = null } = {},
+) {
 	if (platform === "darwin") {
-		const files = Object.fromEntries(
-			appexBundles.map((bundle) => [
+		const files = Object.fromEntries([
+			...appexBundles.map((bundle) => [
 				`PlugIns/${path.basename(bundle)}`,
 				bundle,
 			]),
-		);
+			...(icon ? [["Resources/Assets.car", icon.assets]] : []),
+		]);
 		return {
 			bundle: {
 				resources: {
 					"../../target/native-deps/onnxruntime/lib/libonnxruntime.dylib":
 						"onnxruntime/lib/libonnxruntime.dylib",
 				},
-				...(appexBundles.length > 0 && {
+				...(Object.keys(files).length > 0 && {
 					macOS: { files },
 				}),
 			},
@@ -167,7 +172,19 @@ export async function bundleGpui(target, args, { env = process.env } = {}) {
 	if (noBundle) return;
 	const appexBundles =
 		platform === "darwin" ? await buildMacosBundles(target, { env }) : [];
-	await writePlatformConfig(platform, { appexBundles });
+	const icon =
+		platform === "darwin"
+			? await buildMacosIcon({
+					outputDirectory: path.join(
+						gpuiDirectory,
+						"target",
+						target,
+						profile,
+						"icon",
+					),
+				})
+			: null;
+	await writePlatformConfig(platform, { appexBundles, icon });
 	if (platform === "linux") {
 		await fs
 			.access(path.join(gpuiDirectory, platformConfigNames.linux))
