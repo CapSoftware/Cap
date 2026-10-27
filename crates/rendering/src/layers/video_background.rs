@@ -145,6 +145,8 @@ struct Reader {
     last_time: Option<f64>,
     last_served: f64,
     unreachable_anchor: Option<f64>,
+    #[cfg(test)]
+    seeks: usize,
 }
 
 fn hardware_device() -> Option<ffmpeg::sys::AVHWDeviceType> {
@@ -236,6 +238,8 @@ impl Reader {
             last_time: None,
             last_served: 0.0,
             unreachable_anchor: None,
+            #[cfg(test)]
+            seeks: 0,
         };
         reader.fill_head(head_budget_bytes)?;
         Ok(reader)
@@ -312,9 +316,16 @@ impl Reader {
             return Some(frame.clone());
         }
 
-        let close_ahead = self.ring.back().is_some_and(|last| {
-            !self.at_end && time > last.time && time - last.time < SEEK_THRESHOLD_SECS
-        });
+        // A request on the newest frame isn't covered until the frame after it
+        // is decoded, so it counts as ahead rather than as a reason to seek.
+        let close_ahead = match (self.ring.front(), self.ring.back()) {
+            (Some(first), Some(last)) => {
+                !self.at_end
+                    && time + TIME_EPSILON >= first.time
+                    && time - last.time < SEEK_THRESHOLD_SECS
+            }
+            _ => false,
+        };
         if !close_ahead {
             self.seek(time);
         }
@@ -395,6 +406,10 @@ impl Reader {
     }
 
     fn seek(&mut self, time: f64) {
+        #[cfg(test)]
+        {
+            self.seeks += 1;
+        }
         self.ring.clear();
         self.at_end = false;
         self.last_time = None;
@@ -646,6 +661,22 @@ mod tests {
                 assert_eq!(colour_index(&frame), expected, "at {seconds}s");
             }
         });
+    }
+
+    #[test]
+    fn playing_forward_without_read_ahead_never_seeks() {
+        ffmpeg::init().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("forward.gif");
+        write_gif(&path, 96, 48, 10);
+
+        let mut reader = Reader::open(path, 64, 64 * 32 * 4 * 5).unwrap();
+        for frame in 0..40 {
+            let seconds = frame as f64 / 10.0;
+            let served = reader.frame_at(seconds).unwrap();
+            assert_eq!(colour_index(&served), frame / 10, "at {seconds}s");
+        }
+        assert_eq!(reader.seeks, 0);
     }
 
     #[test]
