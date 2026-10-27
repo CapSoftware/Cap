@@ -2518,6 +2518,9 @@ impl OverlayWindow {
                 return;
             }
             if let Some(fresh) = fresh {
+                // The camera bubble rides along, as it does to a newly
+                // picked window.
+                cx.update(|cx| app_windows::carry_camera_with_window(&window, &fresh, cx));
                 select.update(cx, |select, cx| select.set_pinned(fresh, cx));
             }
             this.update(cx, |this, cx| {
