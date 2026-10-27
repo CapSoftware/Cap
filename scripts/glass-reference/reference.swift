@@ -8,6 +8,7 @@
 // Needs Screen Recording for the calling process (screencapture -l).
 import AppKit
 import Metal
+import SwiftUI
 
 let canvas = NSSize(width: 960, height: 600)
 
@@ -106,11 +107,48 @@ func drawScene(_ name: String, in ctx: CGContext, size: NSSize) {
             let gradient = CGGradient(colorsSpace: CGColorSpace(name: CGColorSpace.sRGB), colors: [color, clear] as CFArray, locations: [0, 1])!
             ctx.drawRadialGradient(gradient, startCenter: center, startRadius: 0, endCenter: center, endRadius: radius, options: [])
         }
+    case "uv":
+        // R and G encode the sampled point, so a capture reads back where
+        // each glass pixel's light came from.
+        let width = Int(size.width), height = Int(size.height)
+        for row in 0..<height {
+            for col in 0..<width {
+                ctx.setFillColor(CGColor(srgbRed: CGFloat(col) / CGFloat(width - 1),
+                                         green: CGFloat(row) / CGFloat(height - 1), blue: 0.5, alpha: 1))
+                ctx.fill(CGRect(x: col, y: row, width: 1, height: 1))
+            }
+        }
+    case "uvfine":
+        let width = Int(size.width), height = Int(size.height)
+        for row in 0..<height {
+            for col in 0..<width {
+                ctx.setFillColor(CGColor(srgbRed: CGFloat(col % 32) / 31, green: CGFloat(row % 32) / 31, blue: 0.5, alpha: 1))
+                ctx.fill(CGRect(x: col, y: row, width: 1, height: 1))
+            }
+        }
+    case "split":
+        fill(0, 0, 0)
+        ctx.setFillColor(CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: size.width, height: size.height / 2))
+        ctx.fill(CGRect(x: 0, y: 0, width: 170, height: size.height))
+        ctx.fill(CGRect(x: 670, y: 0, width: size.width - 670, height: size.height))
+    case "dots":
+        fill(0, 0, 0)
+        ctx.setFillColor(CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 1))
+        var y: CGFloat = 12
+        while y < size.height {
+            var x: CGFloat = 12
+            while x < size.width {
+                ctx.fill(CGRect(x: x, y: y, width: 2, height: 2))
+                x += 40
+            }
+            y += 40
+        }
     default: fill(1, 0, 1)
     }
 }
 
-let scenes = ["white", "black", "gray", "text", "darktext", "stripes", "grid", "checker", "hues", "blobs"]
+let scenes = ["white", "black", "gray", "text", "darktext", "stripes", "grid", "checker", "hues", "blobs", "uv", "uvfine", "split", "dots"]
 let styles: [(String, NSGlassEffectView.Style)] = [("regular", .regular), ("clear", .clear)]
 let appearances: [(String, NSAppearance.Name)] = [("light", .aqua), ("dark", .darkAqua)]
 let tints: [(String, NSColor?)] = [("none", nil), ("blue", NSColor.systemBlue.withAlphaComponent(0.6))]
@@ -134,6 +172,52 @@ func writePNG(_ image: CGImage, to url: URL) {
     try! rep.representation(using: .png, properties: [:])!.write(to: url)
 }
 
+func capture(_ window: NSWindow, to url: URL) {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+    process.arguments = ["-x", "-o", "-l\(window.windowNumber)", url.path]
+    try! process.run()
+    process.waitUntilExit()
+    let convert = Process()
+    convert.executableURL = URL(fileURLWithPath: "/usr/bin/sips")
+    convert.arguments = ["--matchTo", "/System/Library/ColorSync/Profiles/sRGB Profile.icc", url.path]
+    convert.standardOutput = FileHandle.nullDevice
+    try! convert.run()
+    convert.waitUntilExit()
+}
+
+struct ControlsPanel: View {
+    @State var on = true
+    @State var off = false
+    @State var level = 0.35
+    @State var choice = 1
+    var body: some View {
+        VStack(alignment: .leading, spacing: 28) {
+            HStack(spacing: 28) {
+                Toggle("", isOn: $on).toggleStyle(.switch).labelsHidden()
+                Toggle("", isOn: $off).toggleStyle(.switch).labelsHidden()
+                Toggle("", isOn: $on).toggleStyle(.switch).labelsHidden().controlSize(.large)
+            }
+            Slider(value: $level).frame(width: 320)
+            Picker("", selection: $choice) {
+                Text("Free").tag(0)
+                Text("16:9").tag(1)
+                Text("4:3").tag(2)
+                Text("1:1").tag(3)
+            }
+            .pickerStyle(.segmented).labelsHidden().frame(width: 320)
+            HStack(spacing: 20) {
+                Button("Glass") {}.buttonStyle(.glass)
+                Button("Prominent") {}.buttonStyle(.glassProminent)
+                Button("Large") {}.buttonStyle(.glass).controlSize(.large)
+                Button {} label: { Image(systemName: "xmark") }.buttonStyle(.glass).buttonBorderShape(.circle)
+            }
+        }
+        .padding(48)
+        .frame(width: 960, height: 600, alignment: .topLeading)
+    }
+}
+
 func pump(_ seconds: TimeInterval) {
     RunLoop.current.run(until: Date().addingTimeInterval(seconds))
 }
@@ -141,6 +225,8 @@ func pump(_ seconds: TimeInterval) {
 let out = URL(fileURLWithPath: CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "glass-reference")
 try FileManager.default.createDirectory(at: out.appendingPathComponent("scenes"), withIntermediateDirectories: true)
 try FileManager.default.createDirectory(at: out.appendingPathComponent("apple"), withIntermediateDirectories: true)
+try FileManager.default.createDirectory(at: out.appendingPathComponent("bare"), withIntermediateDirectories: true)
+try FileManager.default.createDirectory(at: out.appendingPathComponent("controls"), withIntermediateDirectories: true)
 
 let app = NSApplication.shared
 app.setActivationPolicy(.regular)
@@ -149,6 +235,7 @@ app.finishLaunching()
 let window = NSWindow(contentRect: NSRect(origin: NSPoint(x: 80, y: 80), size: canvas),
                       styleMask: [.borderless], backing: .buffered, defer: false)
 window.isOpaque = true
+window.colorSpace = .sRGB
 window.hasShadow = false
 window.level = .floating
 let root = FlippedView(frame: NSRect(origin: .zero, size: canvas))
@@ -167,6 +254,9 @@ for scene in scenes {
     let image = renderScene(scene, scale: scale)
     writePNG(image, to: out.appendingPathComponent("scenes/\(scene).png"))
     backdrop.image = NSImage(cgImage: image, size: canvas)
+    window.appearance = NSAppearance(named: .aqua)
+    pump(0.4)
+    capture(window, to: out.appendingPathComponent("bare/\(scene).png"))
     for (styleName, style) in styles {
         for (appearanceName, appearance) in appearances {
             for (tintName, tint) in tints {
@@ -185,12 +275,7 @@ for scene in scenes {
                 }
                 pump(0.6)
                 let name = "\(scene)-\(styleName)-\(appearanceName)-\(tintName)"
-                let path = out.appendingPathComponent("apple/\(name).png").path
-                let capture = Process()
-                capture.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
-                capture.arguments = ["-x", "-o", "-l\(window.windowNumber)", path]
-                try capture.run()
-                capture.waitUntilExit()
+                capture(window, to: out.appendingPathComponent("apple/\(name).png"))
                 cases.append([
                     "name": name, "scene": scene, "style": styleName,
                     "appearance": appearanceName, "tint": tintName,
@@ -201,7 +286,24 @@ for scene in scenes {
     }
 }
 
+var controlCases: [String] = []
+for scene in ["blobs", "white", "darktext"] {
+    backdrop.image = NSImage(cgImage: renderScene(scene, scale: scale), size: canvas)
+    for (appearanceName, appearance) in appearances {
+        window.appearance = NSAppearance(named: appearance)
+        let host = NSHostingView(rootView: ControlsPanel())
+        host.frame = root.bounds
+        root.addSubview(host)
+        pump(0.8)
+        let name = "\(scene)-\(appearanceName)"
+        capture(window, to: out.appendingPathComponent("controls/\(name).png"))
+        controlCases.append(name)
+        host.removeFromSuperview()
+    }
+}
+
 let manifest: [String: Any] = [
+    "controls": controlCases,
     "canvas": [canvas.width, canvas.height],
     "scale": scale,
     "os": ProcessInfo.processInfo.operatingSystemVersionString,

@@ -69,6 +69,8 @@ mod permissions_ui;
 #[cfg(test)]
 mod picker_benchmark;
 #[cfg(debug_assertions)]
+mod glass_probe;
+#[cfg(debug_assertions)]
 mod picker_ui_benchmark;
 mod platform;
 mod presets;
@@ -806,6 +808,8 @@ fn main() {
         // synthetic clicks are dropped.
         #[cfg(debug_assertions)]
         picker_ui_benchmark::run(window_handle, cx);
+        #[cfg(debug_assertions)]
+        glass_probe::run(cx);
         if let Ok(auto) = std::env::var("CAP_GPUI_AUTO_RECORD")
             && let Some((mode, secs)) = parse_auto_record(&auto)
         {
