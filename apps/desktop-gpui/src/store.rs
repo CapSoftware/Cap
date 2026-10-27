@@ -1019,9 +1019,9 @@ pub struct GeneralSettings {
     pub disable_auto_open_links: bool,
     /// GPUI-only `showMainWindowAfterInstantRecording`: whether the main
     /// window comes back after an Instant recording whose link did not open.
-    /// Absent, it follows `disableAutoOpenLinks`, which is what "copy link
-    /// only" did before the key existed. See [`Self::post_instant_behaviour`].
-    pub show_main_window_after_instant: bool,
+    /// Kept as stored, absent included, so every reader resolves it the same
+    /// way in [`Self::post_instant_behaviour`].
+    pub show_main_window_after_instant: Option<bool>,
     pub studio_recording_quality: StudioQuality,
     pub recording_countdown: Option<u32>,
     pub main_window_recording_start_behaviour: MainWindowStartBehaviour,
@@ -1392,7 +1392,9 @@ impl GeneralSettings {
     pub fn post_instant_behaviour(&self) -> PostInstantBehaviour {
         if !self.disable_auto_open_links {
             PostInstantBehaviour::OpenLink
-        } else if self.show_main_window_after_instant {
+        } else if self.show_main_window_after_instant.unwrap_or(true) {
+            // Absent: "copy link only" brought the main window back before
+            // the key existed, so a store that never set it keeps doing that.
             PostInstantBehaviour::ShowCap
         } else {
             PostInstantBehaviour::CopyLink
@@ -1422,11 +1424,9 @@ impl GeneralSettings {
             enable_notifications: bool_at(general, "enableNotifications", true),
             instant_mode_max_resolution: u32_at(general, "instantModeMaxResolution", 1920),
             disable_auto_open_links: bool_at(general, "disableAutoOpenLinks", false),
-            show_main_window_after_instant: bool_at(
-                general,
-                SHOW_MAIN_WINDOW_AFTER_INSTANT_KEY,
-                bool_at(general, "disableAutoOpenLinks", false),
-            ),
+            show_main_window_after_instant: general
+                .get(SHOW_MAIN_WINDOW_AFTER_INSTANT_KEY)
+                .and_then(Value::as_bool),
             studio_recording_quality: enum_at(general, "studioRecordingQuality"),
             recording_countdown: opt_u32_at(general, "recordingCountdown"),
             main_window_recording_start_behaviour: enum_at(
@@ -3431,6 +3431,16 @@ mod tests {
                 (SHOW_MAIN_WINDOW_AFTER_INSTANT_KEY, true)
             ]),
             PostInstantBehaviour::OpenLink
+        );
+        // The Quality page's auto-open toggle writes only
+        // `disableAutoOpenLinks`; the open window and a reload must agree.
+        let toggled = GeneralSettings {
+            disable_auto_open_links: true,
+            ..GeneralSettings::default()
+        };
+        assert_eq!(
+            toggled.post_instant_behaviour(),
+            settings(&[("disableAutoOpenLinks", true)])
         );
         for behaviour in [
             PostInstantBehaviour::OpenLink,

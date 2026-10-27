@@ -1646,7 +1646,7 @@ impl SettingsWindow {
                     if let Some((value, _)) = INSTANT_OUTCOMES.get(index) {
                         let (disable_open, show_main) = value.store_values();
                         this.settings.disable_auto_open_links = disable_open;
-                        this.settings.show_main_window_after_instant = show_main;
+                        this.settings.show_main_window_after_instant = Some(show_main);
                         this.write_bool("disableAutoOpenLinks", disable_open, cx);
                         this.write_bool(store::SHOW_MAIN_WINDOW_AFTER_INSTANT_KEY, show_main, cx);
                     }
