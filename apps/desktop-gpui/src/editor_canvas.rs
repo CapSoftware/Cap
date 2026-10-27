@@ -1123,6 +1123,14 @@ impl EditorWindow {
         self.snap_guides.clear();
         self.canvas_overlay_rect = None;
         if drag.moved {
+            // Live drag writes skip the timeline rebuild, and a drag over an
+            // animated overlay can add keys whose marks the model carries.
+            if matches!(
+                drag.element,
+                CanvasSelection::Text(_) | CanvasSelection::Image(_)
+            ) {
+                self.rebuild_timeline();
+            }
             self.schedule_save(window, cx);
             match drag.element {
                 CanvasSelection::Display => tracing::info!(
@@ -1238,6 +1246,7 @@ impl EditorWindow {
             | CanvasSelection::Shape(_) => {
                 self.canvas_overlay_rect = Some(optimistic);
                 self.write_overlay_rect(selected, optimistic, cx);
+                self.rebuild_timeline();
             }
             CanvasSelection::Captions => self.write_caption_center(center, cx),
         }
