@@ -3667,7 +3667,7 @@ async fn create_segment_pipeline(
                         display: cursor_display,
                         #[cfg(target_os = "linux")]
                         window: base_inputs.capture_target.window(),
-                        #[cfg(windows)]
+                        #[cfg(not(target_os = "linux"))]
                         window: crate::window_only_target(
                             &base_inputs.capture_target,
                             base_inputs.window_only,

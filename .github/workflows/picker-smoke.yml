@@ -1,7 +1,4 @@
 name: Picker smoke (real app)
-# Opens the real GPUI app's target picker on macOS, Windows and Linux (X11
-# with a window manager) through `CAP_PICKER_PROBE_OUTPUT` and checks how the
-# picker's windows stack against the camera bubble.
 
 on:
   pull_request:
