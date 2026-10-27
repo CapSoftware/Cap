@@ -18,7 +18,6 @@ use std::{
     time::Duration,
 };
 
-use cap_recording::sources::screen_capture::ScreenCaptureTarget;
 use gpui::{AsyncApp, RenderImage, Window};
 use scap_targets::DisplayId;
 
@@ -28,7 +27,6 @@ pub const STALE_AFTER: Duration = Duration::from_secs(3);
 /// The longest a capture may take before the panes give up on it.
 const TIMEOUT: Duration = Duration::from_millis(1500);
 
-/// Whether this platform can capture the desktop without the overlay.
 pub const SUPPORTED: bool = cfg!(any(target_os = "macos", windows));
 
 /// Set by the picker probe to measure the picker without captures.
@@ -37,7 +35,6 @@ static DISABLED: AtomicBool = AtomicBool::new(false);
 /// How long the last capture took, start to GPU-ready image, for the probe.
 static LAST_CAPTURE_MS: AtomicU64 = AtomicU64::new(0);
 
-/// Whether overlays capture the desktop for their glass.
 pub fn enabled() -> bool {
     SUPPORTED && !DISABLED.load(Ordering::Relaxed)
 }
@@ -87,36 +84,11 @@ pub async fn capture(
             return None;
         }
         let started = std::time::Instant::now();
-        let captured = gpui_tokio::Tokio::spawn(cx, async move {
-            tokio::time::timeout(
-                TIMEOUT,
-                cap_recording::screenshot::capture_screenshot(ScreenCaptureTarget::Display {
-                    id: display,
-                }),
-            )
-            .await
-        })
-        .await;
+        let image = capture_bgra(display, cx).await;
         set_capture_hidden(&window, false);
-        let image = match captured {
-            Ok(Ok(Ok(image))) => image,
-            Ok(Ok(Err(error))) => {
-                tracing::debug!("overlay backdrop: capture failed: {error:#}");
-                return None;
-            }
-            Ok(Err(_)) => {
-                tracing::debug!("overlay backdrop: capture timed out");
-                return None;
-            }
-            Err(error) => {
-                tracing::debug!(%error, "overlay backdrop: capture task failed");
-                return None;
-            }
-        };
-        let image = cx
-            .background_executor()
-            .spawn(async move { crate::library::rgba_to_render_image(image.into_rgba8()) })
-            .await;
+        let image = Arc::new(RenderImage::new(smallvec::smallvec![image::Frame::new(
+            image?
+        )]));
         let elapsed_ms = started.elapsed().as_millis() as u64;
         LAST_CAPTURE_MS.store(elapsed_ms, Ordering::Relaxed);
         tracing::debug!(elapsed_ms, "overlay backdrop captured");
@@ -126,6 +98,118 @@ pub async fn capture(
     {
         let _ = (window, display, cx);
         None
+    }
+}
+
+/// The display's pixels in gpui's BGRA order. macOS hands them over in
+/// that order already; elsewhere the shared screenshot path is RGB.
+#[cfg(target_os = "macos")]
+async fn capture_bgra(display: DisplayId, cx: &mut AsyncApp) -> Option<image::RgbaImage> {
+    let captured = cx
+        .background_executor()
+        .spawn(async move { mac::display_bgra(&display) });
+    let timeout = cx.background_executor().timer(TIMEOUT);
+    match futures_util::future::select(std::pin::pin!(captured), std::pin::pin!(timeout)).await {
+        futures_util::future::Either::Left((image, _)) => image,
+        futures_util::future::Either::Right(_) => {
+            tracing::debug!("overlay backdrop: capture timed out");
+            None
+        }
+    }
+}
+
+#[cfg(windows)]
+async fn capture_bgra(display: DisplayId, cx: &mut AsyncApp) -> Option<image::RgbaImage> {
+    let captured = gpui_tokio::Tokio::spawn(cx, async move {
+        tokio::time::timeout(
+            TIMEOUT,
+            cap_recording::screenshot::capture_screenshot(
+                cap_recording::sources::screen_capture::ScreenCaptureTarget::Display {
+                    id: display,
+                },
+            ),
+        )
+        .await
+    })
+    .await;
+    let image = match captured {
+        Ok(Ok(Ok(image))) => image,
+        Ok(Ok(Err(error))) => {
+            tracing::debug!("overlay backdrop: capture failed: {error:#}");
+            return None;
+        }
+        Ok(Err(_)) => {
+            tracing::debug!("overlay backdrop: capture timed out");
+            return None;
+        }
+        Err(error) => {
+            tracing::debug!(%error, "overlay backdrop: capture task failed");
+            return None;
+        }
+    };
+    cx.background_executor()
+        .spawn(async move {
+            let mut image = image.into_rgba8();
+            cap_gpui_kernels::frame::swap_red_blue(&mut image);
+            image
+        })
+        .await
+        .into()
+}
+
+#[cfg(target_os = "macos")]
+mod mac {
+    use std::ffi::c_void;
+
+    use core_foundation::base::TCFType;
+    use core_foundation::data::{CFData, CFDataRef};
+    use scap_targets::DisplayId;
+
+    type CGImageRef = *const c_void;
+
+    #[link(name = "CoreGraphics", kind = "framework")]
+    unsafe extern "C" {
+        fn CGDisplayCreateImage(display: u32) -> CGImageRef;
+        fn CGImageGetWidth(image: CGImageRef) -> usize;
+        fn CGImageGetHeight(image: CGImageRef) -> usize;
+        fn CGImageGetBytesPerRow(image: CGImageRef) -> usize;
+        fn CGImageGetBitsPerPixel(image: CGImageRef) -> usize;
+        fn CGImageGetDataProvider(image: CGImageRef) -> *const c_void;
+        fn CGDataProviderCopyData(provider: *const c_void) -> CFDataRef;
+        fn CGImageRelease(image: CGImageRef);
+    }
+
+    /// Display images are 32-bit little-endian with the alpha byte skipped,
+    /// so in memory they are BGRX: one copy per row, and alpha set opaque.
+    pub fn display_bgra(display: &DisplayId) -> Option<image::RgbaImage> {
+        let display = scap_targets::Display::from_id(display)?;
+        let image = unsafe { CGDisplayCreateImage(display.raw_handle().inner().id) };
+        if image.is_null() {
+            return None;
+        }
+        let pixels = unsafe {
+            let (width, height) = (CGImageGetWidth(image), CGImageGetHeight(image));
+            let stride = CGImageGetBytesPerRow(image);
+            let data = (CGImageGetBitsPerPixel(image) == 32)
+                .then(|| CGDataProviderCopyData(CGImageGetDataProvider(image)))
+                .filter(|data| !data.is_null())
+                .map(|data| CFData::wrap_under_create_rule(data));
+            CGImageRelease(image);
+            let data = data?;
+            let bytes = data.bytes();
+            if width == 0 || height == 0 || stride < width * 4 || bytes.len() < stride * height {
+                return None;
+            }
+            let mut pixels = Vec::with_capacity(width * height * 4);
+            for row in bytes.chunks_exact(stride).take(height) {
+                pixels.extend_from_slice(&row[..width * 4]);
+            }
+            for pixel in pixels.chunks_exact_mut(4) {
+                pixel[3] = 255;
+            }
+            image::RgbaImage::from_raw(width as u32, height as u32, pixels)
+        };
+        pixels
     }
 }
 

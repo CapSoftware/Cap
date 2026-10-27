@@ -151,7 +151,7 @@ impl Window {
     /// searching `list()`. Prefer it when the window was already chosen and
     /// only needs to still exist: enumeration drops minimized windows, so
     /// `from_id` reports a minimized target as gone.
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     pub fn from_id_direct(id: &WindowId) -> Option<Self> {
         WindowImpl::from_id_direct(&id.0).map(Self)
     }

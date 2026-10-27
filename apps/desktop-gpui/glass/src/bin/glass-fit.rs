@@ -20,6 +20,24 @@ use cap_glass::{
 struct Manifest {
     shapes: Vec<ManifestShape>,
     cases: Vec<Case>,
+    /// Image pixels per point: the captures are at the display's backing
+    /// scale, the shapes in points.
+    #[serde(default = "one")]
+    scale: f32,
+}
+
+fn one() -> f32 {
+    1.
+}
+
+static SCALE: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
+
+/// A shape's material in image pixels: the material's laws are in points.
+fn style_for(material: &GlassMaterial, shape: &Shape) -> model::PaneStyle {
+    let scale = *SCALE.get().unwrap_or(&1.);
+    material
+        .resolve(shape.width / scale, shape.height / scale)
+        .scaled(scale)
 }
 
 #[derive(serde::Deserialize)]
@@ -57,15 +75,17 @@ fn main() {
     std::fs::create_dir_all(out.join("renders")).unwrap();
     let manifest: Manifest =
         serde_json::from_slice(&std::fs::read(reference.join("manifest.json")).unwrap()).unwrap();
+    let scale = manifest.scale;
+    SCALE.set(scale).unwrap();
     let shapes: Vec<Shape> = manifest
         .shapes
         .iter()
         .map(|shape| Shape {
-            x: shape.rect[0],
-            y: shape.rect[1],
-            width: shape.rect[2],
-            height: shape.rect[3],
-            radius: shape.radius,
+            x: shape.rect[0] * scale,
+            y: shape.rect[1] * scale,
+            width: shape.rect[2] * scale,
+            height: shape.rect[3] * scale,
+            radius: shape.radius * scale,
         })
         .collect();
     let presets: Vec<String> = if args.len() > 3 {
@@ -199,8 +219,8 @@ fn prepare(samples: &mut [Sample], shapes: &[Shape], material: &GlassMaterial) {
                 sample.crops = shapes
                     .iter()
                     .map(|shape| {
-                        let blur = material.resolve(shape.width, shape.height).blur;
-                        let pad = PAD + blur * 3.;
+                        let blur = style_for(material, shape).blur;
+                        let pad = PAD * SCALE.get().unwrap_or(&1.) + blur * 3.;
                         let x0 = (shape.x - pad).max(0.) as usize;
                         let y0 = (shape.y - pad).max(0.) as usize;
                         let x1 = ((shape.x + shape.width + pad) as usize).min(sample.backdrop.width);
@@ -224,7 +244,7 @@ fn for_each_glass_pixel(
     mut visit: impl FnMut(&model::GlassSample, &model::PaneStyle, usize, usize, f64),
 ) {
     for (shape, (ox, oy, blurred)) in shapes.iter().zip(&sample.crops) {
-        let style = material.resolve(shape.width, shape.height);
+        let style = style_for(material, shape);
         let local = Shape {
             x: shape.x - *ox as f32,
             y: shape.y - *oy as f32,

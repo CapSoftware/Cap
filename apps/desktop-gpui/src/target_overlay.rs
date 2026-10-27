@@ -303,8 +303,29 @@ pub struct TargetSelect {
     /// Windows the picker moved or resized, keyed by id, with where they
     /// were: dismissing the picker puts them back, starting a recording
     /// keeps them where the user shaped them.
-    arranged: HashMap<String, HoveredWindow>,
+    arranged: HashMap<String, ArrangedWindow>,
+    /// Focus, shared by every display's overlay because the recording reads
+    /// the one setting it mirrors.
+    pub focus_window: bool,
     _poll: Option<gpui::Task<()>>,
+}
+
+/// A window the picker moved, as the picker found it.
+#[derive(Clone)]
+pub struct ArrangedWindow {
+    pub window: HoveredWindow,
+    /// Set when its bounds alone cannot put it back (a maximized window).
+    pub placement: Option<crate::foreign_window::Placement>,
+}
+
+enum Arrangement {
+    Frame(AreaRect),
+    PutBack(ArrangedWindow),
+}
+
+fn saved_focus() -> bool {
+    crate::store::GeneralSettings::load().window_capture_style
+        == crate::store::WindowCaptureStyle::FocusedWindow
 }
 
 struct TargetSelectGlobal(Entity<TargetSelect>);
@@ -321,6 +342,7 @@ impl TargetSelect {
             microphone_fill: 0.,
             icons: HashMap::new(),
             arranged: HashMap::new(),
+            focus_window: saved_focus(),
             _poll: None,
         });
         cx.set_global(TargetSelectGlobal(select.clone()));
@@ -343,6 +365,7 @@ impl TargetSelect {
         self.pinned_window = pinned_window;
         if self.mode.is_none() && mode.is_some() {
             self.arranged.clear();
+            self.focus_window = saved_focus();
         }
         if self.mode == mode {
             cx.notify();
@@ -381,16 +404,19 @@ impl TargetSelect {
     pub fn remember_arranged(&mut self, window: &HoveredWindow) {
         self.arranged
             .entry(window.id.to_string())
-            .or_insert_with(|| window.clone());
+            .or_insert_with(|| ArrangedWindow {
+                window: window.clone(),
+                placement: crate::foreign_window::placement(&window.id),
+            });
     }
 
     /// Where the picker found window `id`, if it has moved it since.
-    pub fn arranged_original(&self, id: &WindowId) -> Option<&HoveredWindow> {
+    pub fn arranged_original(&self, id: &WindowId) -> Option<&ArrangedWindow> {
         self.arranged.get(&id.to_string())
     }
 
     /// Every window the picker moved, with where it was, forgetting them.
-    pub fn take_arranged(&mut self) -> Vec<HoveredWindow> {
+    pub fn take_arranged(&mut self) -> Vec<ArrangedWindow> {
         self.arranged.drain().map(|(_, window)| window).collect()
     }
 
@@ -402,14 +428,16 @@ impl TargetSelect {
     }
 
     /// Lock the highlight onto whatever the cursor is over -- the TSX's
-    /// click-anywhere-to-select behavior.
-    fn pin_hovered(&mut self, cx: &mut Context<Self>) {
+    /// click-anywhere-to-select behavior. True when that picked a new window.
+    fn pin_hovered(&mut self, cx: &mut Context<Self>) -> bool {
         if let Some(hovered) = self.hovered_window.clone()
             && self.pinned_window.as_ref().map(|window| &window.id) != Some(&hovered.id)
         {
             self.pinned_window = Some(hovered);
             cx.notify();
+            return true;
         }
+        false
     }
 
     fn start_polling(&mut self, cx: &mut Context<Self>) {
@@ -589,7 +617,6 @@ fn more_area_ratios() -> Vec<(u32, u32)> {
         .collect()
 }
 
-/// How long the selection takes to settle into a new ratio, fill or reset.
 const AREA_RESHAPE: Duration = Duration::from_millis(240);
 
 /// What the picker's glass sits on when there is no capture of the desktop
@@ -602,7 +629,6 @@ fn fallback_fill(theme: &Theme) -> Hsla {
     }
 }
 
-/// The whole display, or the largest centred area of `ratio` inside it.
 fn area_fill(display: (f32, f32), ratio: Option<f32>) -> AreaRect {
     let (width, height) = match ratio {
         Some(ratio) if display.0 / display.1 > ratio => (display.1 * ratio, display.1),
@@ -950,9 +976,6 @@ pub struct OverlayWindow {
     window_reshape: Option<(AreaRect, Instant)>,
     /// Where the window highlight was last drawn, for a move to start from.
     window_drawn: Cell<Option<AreaRect>>,
-    /// Focus: centre the picked window and record it by itself. Mirrors the
-    /// window capture style setting, which it writes.
-    focus_window: bool,
     /// The desktop under this overlay, for its glass panes to read.
     backdrop: crate::ui::glass::Backdrop,
     /// When the backdrop was captured, and whether a capture is running.
@@ -1115,8 +1138,6 @@ impl OverlayWindow {
             window_menu: None,
             window_reshape: None,
             window_drawn: Cell::new(None),
-            focus_window: crate::store::GeneralSettings::load().window_capture_style
-                == crate::store::WindowCaptureStyle::FocusedWindow,
             backdrop: crate::ui::glass::Backdrop::new(fallback_fill(&theme)),
             backdrop_at: None,
             backdrop_capturing: false,
@@ -2012,7 +2033,10 @@ impl OverlayWindow {
             // cursor, exactly as the TSX's two click handlers add up to.
             .on_click(cx.listener(|this, _, _window, cx| {
                 this.window_menu = None;
-                this.select.update(cx, |select, cx| select.pin_hovered(cx));
+                let picked = this.select.update(cx, |select, cx| select.pin_hovered(cx));
+                if picked && this.select.read(cx).focus_window {
+                    this.set_focus(true, cx);
+                }
                 // `setOriginalCameraBounds(null)` on the first click
                 // (`target-select-overlay.tsx:609-617`): committing a pick
                 // leaves the camera bubble parked in the picked window.
@@ -2116,6 +2140,7 @@ impl OverlayWindow {
             return None;
         }
         let theme = self.theme;
+        let focus = self.select.read(cx).focus_window;
         Some(
             self.glass_capsule(32.)
                 .id("window-focus")
@@ -2140,15 +2165,12 @@ impl OverlayWindow {
                         .child("Focus"),
                 )
                 .child(
-                    crate::ui::GlassSwitch::new(
-                        "window-focus-toggle",
-                        self.focus_window,
-                        theme.is_dark(),
-                    )
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        cx.stop_propagation();
-                        this.set_focus(!this.focus_window, cx);
-                    })),
+                    crate::ui::GlassSwitch::new("window-focus-toggle", focus, theme.is_dark())
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            cx.stop_propagation();
+                            let focus = this.select.read(cx).focus_window;
+                            this.set_focus(!focus, cx);
+                        })),
                 ),
         )
     }
@@ -2197,6 +2219,12 @@ impl OverlayWindow {
         let Some(window) = self.active_window_logical(cx) else {
             return;
         };
+        // The menu acts on this window until it closes, whatever the
+        // pointer passes over on the way to a row.
+        if let Some(active) = self.select.read(cx).active_window().cloned() {
+            self.select
+                .update(cx, |select, cx| select.set_pinned(active, cx));
+        }
         let items: Vec<crate::ui::MenuItem> = self
             .window_menu_entries(window)
             .into_iter()
@@ -2238,7 +2266,7 @@ impl OverlayWindow {
             .and_then(|window| self.window_menu_entries(window).into_iter().nth(index))
             .map(|(_, _, frame)| frame);
         match frame {
-            Some(frame) => self.arrange_active_window(frame, false, cx),
+            Some(frame) => self.arrange_active_window(Arrangement::Frame(frame), false, cx),
             None => cx.notify(),
         }
     }
@@ -2246,7 +2274,10 @@ impl OverlayWindow {
     /// Focus on: centre the window, bring it forward, record it by itself.
     /// Focus off: put it back where the picker found it, record the region.
     pub(crate) fn set_focus(&mut self, focus: bool, cx: &mut Context<Self>) {
-        self.focus_window = focus;
+        self.select.update(cx, |select, cx| {
+            select.focus_window = focus;
+            cx.notify();
+        });
         let style = if focus {
             crate::store::WindowCaptureStyle::FocusedWindow
         } else {
@@ -2265,24 +2296,31 @@ impl OverlayWindow {
         };
         if focus {
             let centred = crate::window_arrange::centre(window, self.controls_work_area);
-            self.arrange_active_window(centred, true, cx);
+            self.arrange_active_window(Arrangement::Frame(centred), true, cx);
         } else {
-            let original = self.select.read(cx).active_window().and_then(|active| {
-                self.select
-                    .read(cx)
-                    .arranged_original(&active.id)
-                    .map(|original| original.bounds.scaled(1. / self.capture_scale))
-            });
+            let original = self
+                .select
+                .read(cx)
+                .active_window()
+                .and_then(|active| self.select.read(cx).arranged_original(&active.id).cloned());
             match original {
-                Some(original) => self.arrange_active_window(original, false, cx),
+                Some(original) => {
+                    self.arrange_active_window(Arrangement::PutBack(original), false, cx)
+                }
                 None => cx.notify(),
             }
         }
     }
 
-    /// Move the picked window to `frame` (this overlay's logical points),
-    /// then follow wherever its app actually put it.
-    fn arrange_active_window(&mut self, frame: AreaRect, raise: bool, cx: &mut Context<Self>) {
+    /// Move the picked window (`Frame` in this overlay's logical points, or
+    /// back where the picker found it), then follow wherever its app
+    /// actually put it.
+    fn arrange_active_window(
+        &mut self,
+        arrangement: Arrangement,
+        raise: bool,
+        cx: &mut Context<Self>,
+    ) {
         let Some(window) = self.select.read(cx).active_window().cloned() else {
             return;
         };
@@ -2294,14 +2332,24 @@ impl OverlayWindow {
             select.remember_arranged(&window);
             select.set_pinned(window.clone(), cx);
         });
-        let frame = frame.scaled(self.capture_scale);
+        let capture_scale = self.capture_scale;
         let (id, display) = (window.id.clone(), window.display_id.clone());
+        let requested = id.clone();
         let select = self.select.clone();
         cx.spawn(async move |this, cx| {
             let moved = cx
                 .background_executor()
                 .spawn(async move {
-                    let arranged = crate::foreign_window::arrange(&id, &display, frame);
+                    let arranged = match arrangement {
+                        Arrangement::Frame(frame) => crate::foreign_window::arrange(
+                            &id,
+                            &display,
+                            frame.scaled(capture_scale),
+                        ),
+                        Arrangement::PutBack(original) => {
+                            crate::foreign_window::put_back(&original)
+                        }
+                    };
                     if raise {
                         crate::foreign_window::raise(&id);
                     }
@@ -2315,6 +2363,19 @@ impl OverlayWindow {
             let (arranged, fresh) = moved;
             if !arranged {
                 tracing::warn!("the picked window could not be arranged");
+            }
+            // Only while this picker is still up with the same window picked:
+            // a slow move must not replace a newer choice.
+            let still_picked = this
+                .update(cx, |_, cx| {
+                    select
+                        .read(cx)
+                        .active_window()
+                        .is_some_and(|window| window.id == requested)
+                })
+                .unwrap_or(false);
+            if !still_picked {
+                return;
             }
             if let Some(fresh) = fresh {
                 select.update(cx, |select, cx| select.set_pinned(fresh, cx));
@@ -3432,7 +3493,15 @@ impl OverlayWindow {
         }
         let point = (f32::from(position.x), f32::from(position.y));
         self.snap_guides.clear();
-        self.reshape = None;
+        // Mid-reshape, `crop` is where the selection is going, not where it
+        // is drawn; a grab has to land on what the user sees.
+        if let (Some(crop), Some((from, started))) = (self.crop, self.reshape.take()) {
+            self.crop = Some(area_between(
+                from,
+                crop,
+                started.elapsed().as_secs_f32() / AREA_RESHAPE.as_secs_f32(),
+            ));
+        }
         self.aspect_menu = None;
 
         self.drag = match self.area_zone_at(point) {

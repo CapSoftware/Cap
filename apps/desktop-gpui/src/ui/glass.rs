@@ -164,8 +164,9 @@ struct BackdropState {
 }
 
 /// Extra room around each pane's sampled region, so a pane that moves a
-/// little between frames (a dragged area's toolbar) stays on the capture.
-const SLACK: f32 = 48.;
+/// little between frames (a dragged area's controls) stays on the capture.
+/// Kept small: outside a pane the capture stands in for the live desktop.
+const SLACK: f32 = 24.;
 
 impl Backdrop {
     pub fn new(fallback: Hsla) -> Self {
@@ -191,7 +192,6 @@ impl Backdrop {
         self.0.borrow().image.clone()
     }
 
-    /// Show `image` (the desktop under the window) at `bounds`, or nothing.
     pub fn set_image(&self, image: Option<Arc<RenderImage>>, bounds: Bounds<Pixels>) {
         let mut state = self.0.borrow_mut();
         if let Some(old) = std::mem::replace(&mut state.image, image) {

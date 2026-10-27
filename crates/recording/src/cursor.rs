@@ -51,8 +51,27 @@ pub struct IncrementalCaptureOutputs {
 pub struct CursorCaptureTarget {
     pub crop_bounds: CursorCropBounds,
     pub display: scap_targets::Display,
-    #[cfg(any(target_os = "linux", windows))]
     pub window: Option<scap_targets::WindowId>,
+}
+
+#[cfg(target_os = "macos")]
+fn macos_window_crop(
+    window: &scap_targets::WindowId,
+    display: &scap_targets::Display,
+) -> Option<CursorCropBounds> {
+    use scap_targets::bounds::{LogicalBounds, LogicalPosition};
+
+    let window_bounds = scap_targets::Window::from_id_direct(window)?
+        .raw_handle()
+        .logical_bounds()?;
+    let display_position = display.raw_handle().logical_position();
+    Some(CursorCropBounds::new_macos(LogicalBounds::new(
+        LogicalPosition::new(
+            window_bounds.position().x() - display_position.x(),
+            window_bounds.position().y() - display_position.y(),
+        ),
+        window_bounds.size(),
+    )))
 }
 
 #[cfg(windows)]
@@ -688,7 +707,7 @@ pub fn spawn_cursor_recorder(
         });
         #[cfg(target_os = "linux")]
         let mut last_window_position = None;
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "macos"))]
         let mut last_window_crop: Option<CursorCropBounds> = None;
         let device_state = DeviceState::new();
         // Reading the held keys asks the OS about every key it knows (two
@@ -777,16 +796,21 @@ pub fn spawn_cursor_recorder(
                 .window
                 .as_ref()
                 .and_then(|window| windows_window_crop(window, &display));
-            #[cfg(windows)]
+            #[cfg(target_os = "macos")]
+            let window_crop = target
+                .window
+                .as_ref()
+                .and_then(|window| macos_window_crop(window, &display));
+            #[cfg(any(windows, target_os = "macos"))]
             let position_changed =
                 position_changed || (window_crop.is_some() && window_crop != last_window_crop);
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "macos"))]
             {
                 if window_crop.is_some() {
                     last_window_crop = window_crop;
                 }
             }
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "macos"))]
             let crop_bounds = last_window_crop.unwrap_or(crop_bounds);
 
             // The cursor image only labels this tick's move and click events,

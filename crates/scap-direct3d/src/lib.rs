@@ -355,6 +355,50 @@ fn create_copy_texture(
     texture.ok_or_else(windows::core::Error::from_win32)
 }
 
+/// Textures for frames trimmed down from their surface. A frame hands its
+/// texture back when it is dropped, so a texture is only written again once
+/// no queued frame still reads it.
+#[derive(Default)]
+struct TrimPool {
+    free: Mutex<Vec<(ID3D11Texture2D, u32, u32)>>,
+}
+
+/// Enough for frames waiting on the encoder; more are dropped when returned.
+const TRIM_POOL_SIZE: usize = 8;
+
+impl TrimPool {
+    fn take(
+        &self,
+        d3d_device: &ID3D11Device,
+        width: u32,
+        height: u32,
+        pixel_format: PixelFormat,
+    ) -> windows::core::Result<ID3D11Texture2D> {
+        let reused = {
+            let mut free = self
+                .free
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            free.retain(|(_, w, h)| (*w, *h) == (width, height));
+            free.pop()
+        };
+        match reused {
+            Some((texture, _, _)) => Ok(texture),
+            None => create_copy_texture(d3d_device, width, height, pixel_format),
+        }
+    }
+
+    fn give(&self, texture: ID3D11Texture2D, width: u32, height: u32) {
+        let mut free = self
+            .free
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if free.len() < TRIM_POOL_SIZE {
+            free.push((texture, width, height));
+        }
+    }
+}
+
 #[derive(Clone, Default, Debug)]
 pub struct Settings {
     pub is_border_required: Option<bool>,
@@ -590,11 +634,10 @@ impl Capturer {
             })
             .transpose()?;
 
-        // Allocated on the first frame whose size differs from its surface
-        // (odd-sized, or smaller than the pool's surface) and again whenever
-        // that size changes, so a capture that matches its surface never pays
-        // for the copy.
-        let trim = Mutex::new(None::<(ID3D11Texture2D, u32, u32)>);
+        // Only used by frames whose size differs from their surface (odd-sized,
+        // or smaller than the pool's surface), so a capture that matches its
+        // surface never pays for the copy.
+        let trim = Arc::new(TrimPool::default());
 
         let frame_arrived_token = frame_pool
             .FrameArrived(
@@ -729,6 +772,7 @@ impl Capturer {
                                 d3d_context: d3d_context.clone(),
                                 d3d_device: d3d_device.clone(),
                                 staging_pool: staging_pool.clone(),
+                                recycle: None,
                             }
                         } else {
                             // The frame is the content bounded by its surface,
@@ -759,28 +803,11 @@ impl Capturer {
                                     d3d_context: d3d_context.clone(),
                                     d3d_device: d3d_device.clone(),
                                     staging_pool: staging_pool.clone(),
+                                    recycle: None,
                                 }
                             } else {
-                                let trimmed_texture = {
-                                    let mut trim = trim
-                                        .lock()
-                                        .unwrap_or_else(|poisoned| poisoned.into_inner());
-                                    match trim.as_ref() {
-                                        Some((texture, w, h)) if (*w, *h) == (width, height) => {
-                                            texture.clone()
-                                        }
-                                        _ => {
-                                            let texture = create_copy_texture(
-                                                &d3d_device,
-                                                width,
-                                                height,
-                                                pixel_format,
-                                            )?;
-                                            *trim = Some((texture.clone(), width, height));
-                                            texture
-                                        }
-                                    }
-                                };
+                                let trimmed_texture =
+                                    trim.take(&d3d_device, width, height, pixel_format)?;
 
                                 unsafe {
                                     d3d_context.CopySubresourceRegion(
@@ -811,6 +838,7 @@ impl Capturer {
                                     d3d_context: d3d_context.clone(),
                                     d3d_device: d3d_device.clone(),
                                     staging_pool: staging_pool.clone(),
+                                    recycle: Some(trim.clone()),
                                 }
                             }
                         };
@@ -911,6 +939,16 @@ pub struct Frame {
     d3d_device: ID3D11Device,
     d3d_context: ID3D11DeviceContext,
     staging_pool: Arc<StagingTexturePool>,
+    /// Where a trimmed frame's texture goes back to once the frame is done.
+    recycle: Option<Arc<TrimPool>>,
+}
+
+impl Drop for Frame {
+    fn drop(&mut self) {
+        if let Some(pool) = self.recycle.take() {
+            pool.give(self.texture.clone(), self.width, self.height);
+        }
+    }
 }
 
 impl std::fmt::Debug for Frame {

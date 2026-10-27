@@ -6,13 +6,10 @@ use crate::target_overlay::AreaRect;
 /// Kept clear between a moved window and the edge of the usable area.
 pub const MARGIN: f32 = 16.;
 
-/// The smallest window the picker will shape, on either side.
 pub const MIN_SIDE: f32 = 160.;
 
-/// The ratios offered for a window, widest first.
 pub const RATIOS: [(u32, u32); 6] = [(21, 9), (16, 9), (16, 10), (4, 3), (1, 1), (9, 16)];
 
-/// Exact sizes offered, in pixels as recorded.
 pub const SIZES: [(&str, u32, u32); 4] = [
     ("720p", 1280, 720),
     ("1080p", 1920, 1080),
@@ -31,7 +28,6 @@ fn inset(area: AreaRect) -> AreaRect {
     }
 }
 
-/// `size` centred on (`cx`, `cy`), then pushed back inside `area`.
 fn place(width: f32, height: f32, cx: f32, cy: f32, area: AreaRect) -> AreaRect {
     let x = (cx - width / 2.).clamp(area.x, (area.x + area.width - width).max(area.x));
     let y = (cy - height / 2.).clamp(area.y, (area.y + area.height - height).max(area.y));
@@ -43,7 +39,6 @@ fn place(width: f32, height: f32, cx: f32, cy: f32, area: AreaRect) -> AreaRect 
     }
 }
 
-/// `width` x `height` scaled down, keeping its ratio, until it fits `area`.
 fn fit_inside(width: f32, height: f32, area: AreaRect) -> (f32, f32) {
     let scale = (area.width / width).min(area.height / height).min(1.);
     (width * scale, height * scale)
@@ -92,7 +87,6 @@ pub fn fit_to_size(
     })
 }
 
-/// The window centred in the usable area, shrunk to fit if it is larger.
 pub fn centre(window: AreaRect, work_area: AreaRect) -> AreaRect {
     let area = inset(work_area);
     let (width, height) = fit_inside(window.width, window.height, area);

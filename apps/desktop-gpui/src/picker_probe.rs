@@ -8,10 +8,6 @@ use crate::{
     target_overlay::AreaRect,
 };
 
-/// `CAP_PICKER_PROBE_OUTPUT=<path>`: open the camera bubble, arm each picker
-/// mode, activate an overlay the way a click does, and write the native
-/// front-to-back order of Cap's windows so CI can check the camera stays on
-/// top.
 pub fn run(main: WindowHandle<MainWindow>, cx: &mut App) {
     let Some(output) = std::env::var_os("CAP_PICKER_PROBE_OUTPUT") else {
         return;
@@ -96,12 +92,16 @@ pub fn run(main: WindowHandle<MainWindow>, cx: &mut App) {
                     && mode["backdrop"]["passed"].as_bool() != Some(false)
             });
         let report = serde_json::json!({
-            "passed": passed,
             "modes": modes,
             "windowArrangement": window_arrangement,
             "perf": perf,
         });
-        if let Err(error) = std::fs::write(output, report.to_string()) {
+        // The verdict leads so `run.sh` can read it without parsing JSON:
+        // nested checks carry `passed` keys of their own.
+        if let Err(error) = std::fs::write(
+            output,
+            format!("{{\"passed\":{passed},{}", &report.to_string()[1..]),
+        ) {
             tracing::error!(%error, "Could not write picker probe results");
         }
         cx.update(|cx| cx.quit());
@@ -215,7 +215,6 @@ async fn probe_window_arrangement(
     })
 }
 
-/// Save what the primary display shows next to the report, for review.
 async fn screenshot(
     output: &std::ffi::OsStr,
     label: &str,
@@ -248,18 +247,29 @@ async fn screenshot(
     }
 }
 
-fn mean_luma(pixels: impl Iterator<Item = [u8; 3]>) -> f64 {
-    let (mut sum, mut count) = (0f64, 0u64);
-    for [r, g, b] in pixels {
-        sum += 0.2126 * f64::from(r) + 0.7152 * f64::from(g) + 0.0722 * f64::from(b);
-        count += 1;
+/// The mean per-channel difference between two captures of one display.
+fn mean_difference(
+    backdrop: &[u8],
+    width: u32,
+    height: u32,
+    screen: &image::RgbImage,
+) -> Option<f64> {
+    if (screen.width(), screen.height()) != (width, height) {
+        return None;
     }
-    if count == 0 { 0. } else { sum / count as f64 }
+    let (mut sum, mut count) = (0u64, 0u64);
+    for (bgra, rgb) in backdrop.chunks_exact(4).zip(screen.pixels()) {
+        for (a, b) in [bgra[2], bgra[1], bgra[0]].into_iter().zip(rgb.0) {
+            sum += u64::from(a.abs_diff(b));
+            count += 1;
+        }
+    }
+    (count > 0).then(|| sum as f64 / count as f64)
 }
 
 /// Check the capture under the overlay's glass is of the desktop and not of
-/// the overlay: the overlay dims the display, so a capture that left it out
-/// is clearly brighter than the screenshot that has it.
+/// the overlay: the overlay dims and tints the whole display, so a capture
+/// that left it out differs clearly from a screenshot that has it.
 async fn probe_backdrop(
     output: &std::ffi::OsStr,
     label: &str,
@@ -287,7 +297,6 @@ async fn probe_backdrop(
     let size = image.size(0);
     let (width, height) = (size.width.0 as u32, size.height.0 as u32);
     let bgra = image.as_bytes(0).unwrap_or_default();
-    let backdrop = mean_luma(bgra.chunks_exact(4).map(|px| [px[2], px[1], px[0]]));
     if let Some(directory) = std::path::Path::new(output).parent() {
         let rgba: Vec<u8> = bgra
             .chunks_exact(4)
@@ -297,15 +306,13 @@ async fn probe_backdrop(
             let _ = image.save(directory.join(format!("{label}-backdrop.png")));
         }
     }
-    let screen = screen.map(|screen| mean_luma(screen.to_rgb8().pixels().map(|pixel| pixel.0)));
-    // A near-black desktop cannot tell the two apart.
-    let passed = backdrop < 24. || screen.is_none_or(|screen| backdrop > screen * 1.2);
+    let difference =
+        screen.and_then(|screen| mean_difference(bgra, width, height, &screen.to_rgb8()));
     serde_json::json!({
         "present": true,
         "size": [width, height],
-        "meanLuma": backdrop,
-        "screenMeanLuma": screen,
-        "passed": passed,
+        "meanDifference": difference,
+        "passed": difference.is_some_and(|difference| difference > 6.),
     })
 }
 
