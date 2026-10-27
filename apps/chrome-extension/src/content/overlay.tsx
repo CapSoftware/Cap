@@ -7,6 +7,7 @@ import {
 	useState,
 } from "react";
 import { createRoot } from "react-dom/client";
+import { connectCameraPreview } from "../shared/camera-preview-connection";
 import { isOverlayMessage } from "../shared/messages";
 import { sendServiceWorkerMessage } from "../shared/runtime";
 import {
@@ -35,10 +36,6 @@ import type {
 	WebcamSettings,
 	WebcamShape,
 } from "../shared/types";
-import {
-	toSessionDescriptionInit,
-	waitForIceGatheringComplete,
-} from "../shared/webrtc";
 import { ConfirmOverlay } from "./confirm-overlay";
 import { CountdownOverlay } from "./countdown-overlay";
 import overlayCss from "./overlay.css?inline";
@@ -245,73 +242,11 @@ const isSameWebcamSettings = (
 	current.shape === next.shape &&
 	current.mirror === next.mirror;
 
-const waitForRemoteStream = (peer: RTCPeerConnection) =>
-	new Promise<MediaStream>((resolve, reject) => {
-		let settled = false;
-		const timeout = window.setTimeout(() => {
-			if (settled) return;
-			settled = true;
-			reject(new Error("Camera preview timed out."));
-		}, 10000);
-
-		const finish = (stream: MediaStream) => {
-			if (settled) return;
-			settled = true;
-			window.clearTimeout(timeout);
-			resolve(stream);
-		};
-
-		peer.addEventListener("track", (event) => {
-			finish(event.streams[0] ?? new MediaStream([event.track]));
-		});
-
-		peer.addEventListener("connectionstatechange", () => {
-			if (
-				settled ||
-				(peer.connectionState !== "failed" && peer.connectionState !== "closed")
-			) {
-				return;
-			}
-			settled = true;
-			window.clearTimeout(timeout);
-			reject(new Error("Camera preview connection failed."));
-		});
-	});
-
 const stopStream = (stream: MediaStream | null) => {
 	if (!stream) return;
 	for (const track of stream.getTracks()) {
 		track.stop();
 	}
-};
-
-const connectCameraPreview = async (
-	settings: WebcamSettings,
-	sessionId: string,
-) => {
-	const peer = new RTCPeerConnection();
-	peer.addTransceiver("video", { direction: "recvonly" });
-	const remoteStreamPromise = waitForRemoteStream(peer);
-	await peer.setLocalDescription(await peer.createOffer());
-	await waitForIceGatheringComplete(peer);
-
-	const response = await sendServiceWorkerMessage({
-		target: "service-worker",
-		type: "connect-camera-preview",
-		sessionId,
-		settings,
-		offer: toSessionDescriptionInit(peer.localDescription),
-	});
-
-	if (!response.ok || !response.answer) {
-		peer.close();
-		throw new Error(response.ok ? "Missing camera answer" : response.error);
-	}
-	await peer.setRemoteDescription(response.answer);
-	return {
-		peer,
-		stream: await remoteStreamPromise,
-	};
 };
 
 function OverlayApp() {
