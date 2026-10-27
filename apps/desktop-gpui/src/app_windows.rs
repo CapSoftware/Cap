@@ -2162,7 +2162,7 @@ fn restore_arranged_windows(cx: &mut App) {
     cx.background_executor()
         .spawn(async move {
             for window in arranged {
-                crate::foreign_window::arrange(&window.id, &window.display_id, window.bounds);
+                crate::foreign_window::put_back(&window);
             }
         })
         .detach();
