@@ -2028,6 +2028,21 @@ impl OverlayWindow {
         }
         let theme = self.theme;
         let focus = self.select.read(cx).focus_window;
+        // Instant records the camera bubble off the screen, so with a camera
+        // it keeps the screen region (see `instant_capture_window`).
+        let camera = cx
+            .global::<app_windows::AppWindows>()
+            .main
+            .read(cx)
+            .is_ok_and(|view| view.camera_selection().is_some());
+        let tooltip = if cfg!(any(target_os = "macos", windows))
+            && self.select.read(cx).recording_mode == Mode::Instant
+            && camera
+        {
+            "Centre this window. With a camera, Instant mode still records the screen region, so the camera stays in the video"
+        } else {
+            "Centre this window and record only it, nothing in front of it"
+        };
         Some(
             div()
                 .id("window-focus")
@@ -2040,13 +2055,7 @@ impl OverlayWindow {
                 .gap(px(10.))
                 .rounded_full()
                 .bg(gpui::hsla(0., 0., 0., 0.28))
-                .tooltip(move |_, cx| {
-                    crate::ui::Tooltip::new(
-                        &theme,
-                        "Centre this window and record only it, nothing in front of it",
-                    )
-                    .view(cx)
-                })
+                .tooltip(move |_, cx| crate::ui::Tooltip::new(&theme, tooltip).view(cx))
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .child(
                     div()
