@@ -40,7 +40,6 @@ impl ToggleSize {
         }
     }
 
-    /// The knob's width and height: round, or the mini switch's capsule.
     fn thumb(self) -> (Pixels, Pixels) {
         match self {
             ToggleSize::Sm => (px(16.), px(16.)),

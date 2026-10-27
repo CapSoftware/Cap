@@ -37,8 +37,6 @@ pub struct Select {
     /// `gap-1.5` on the settings row, `gap-2` on the editor's trigger.
     gap: Pixels,
     stretch: bool,
-    /// The system pop-up's look: the value as plain text, then an up-down
-    /// chevron in a round chip of this fill.
     chip: Option<Hsla>,
     disabled: bool,
     on_click: Option<crate::ui::button::ClickHandler>,
