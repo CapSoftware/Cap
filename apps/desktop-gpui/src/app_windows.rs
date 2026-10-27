@@ -684,6 +684,7 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
                         crate::menus::schedule_dock_sync(cx);
                     }
                     (None, _) if keep_hidden_after_instant => {
+                        tracing::info!("main window kept hidden after the Instant recording");
                         park_idle_camera_preview(cx);
                         crate::menus::schedule_dock_sync(cx);
                     }

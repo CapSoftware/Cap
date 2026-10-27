@@ -312,9 +312,11 @@ async fn real_app_instant_recording_uploads_and_verifies() {
 
 /// The After an Instant recording outcome decides whether the main window,
 /// hidden at start, comes back once the recording finishes: only Show Cap
-/// brings it back, so opening the link never leaves it on screen behind the
-/// browser. Linux restores the window through its clean-capture lease
-/// instead, so the check is macOS only.
+/// takes the reshow, so opening the link never leaves it on screen behind the
+/// browser. The reshow itself lands on onboarding here (the runner grants no
+/// Accessibility), so the check reads the decision the app logs. Linux
+/// restores the window through its clean-capture lease instead, so the check
+/// is macOS only.
 #[cfg(target_os = "macos")]
 #[ignore]
 #[tokio::test(flavor = "multi_thread")]
@@ -329,11 +331,6 @@ async fn real_app_instant_outcome_decides_whether_main_window_returns() {
         sandbox.set_general("disableAutoOpenLinks", json!(disable_open));
         sandbox.set_general("showMainWindowAfterInstantRecording", json!(show_main));
         let app = sandbox.launch(name, &[("CAP_GPUI_AUTO_RECORD", "instant:3")]);
-        let after_finish = || {
-            let log = without_ansi(&sandbox.log(name));
-            log.split_once("recording finished")
-                .map(|(_, after)| after.to_string())
-        };
         wait_for_app(
             &sandbox,
             &app,
@@ -348,21 +345,17 @@ async fn real_app_instant_outcome_decides_whether_main_window_returns() {
             },
         )
         .await;
-        if returns {
-            wait_for_app(
-                &sandbox,
-                &app,
-                "the main window",
-                Duration::from_secs(10),
-                || after_finish().is_some_and(|after| after.contains("main window shown")),
-            )
-            .await;
-        } else {
-            tokio::time::sleep(Duration::from_secs(2)).await;
-            let after = after_finish().expect("the recording finished");
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        kill(app);
+        let log = without_ansi(&sandbox.log(name));
+        let (_, after) = log
+            .split_once("recording finished")
+            .expect("the recording finished");
+        let kept_hidden = after.contains("main window kept hidden after the Instant recording");
+        assert_eq!(kept_hidden, !returns, "{name}: {after}");
+        if !returns {
             assert!(!after.contains("main window shown"), "{name}: {after}");
         }
-        kill(app);
         assert_eq!(mock.created().len(), 1, "{name}");
     }
 }
