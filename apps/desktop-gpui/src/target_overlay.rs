@@ -365,7 +365,9 @@ impl TargetSelect {
         self.recording_mode = recording_mode;
         self.pinned_window = pinned_window;
         if self.mode.is_none() && mode.is_some() {
-            self.arranged.clear();
+            // Left over from a picker that closed some way that neither put
+            // them back nor recorded them.
+            crate::foreign_window::put_back_all(self.take_arranged(), cx.background_executor());
             self.focus_window = saved_focus();
         }
         if self.mode == mode {
@@ -414,6 +416,10 @@ impl TargetSelect {
     /// Where the picker found window `id`, if it has moved it since.
     pub fn arranged_original(&self, id: &WindowId) -> Option<&ArrangedWindow> {
         self.arranged.get(&id.to_string())
+    }
+
+    pub fn has_arranged(&self) -> bool {
+        !self.arranged.is_empty()
     }
 
     /// Every window the picker moved, with where it was, forgetting them.
