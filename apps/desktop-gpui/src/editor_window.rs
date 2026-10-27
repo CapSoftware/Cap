@@ -7390,16 +7390,21 @@ impl EditorWindow {
         let name = self.track_name_input.read(cx).text().trim().to_string();
         let key = timeline::track_name_key(row);
         let default = name.is_empty() || name == row.kind.label();
-        self.edit_project("track-rename", window, cx, move |project| {
-            if default {
-                project.track_names.remove(&key).is_some()
-            } else if project.track_names.get(&key) == Some(&name) {
-                false
-            } else {
-                project.track_names.insert(key, name);
-                true
-            }
-        });
+        // Written straight to the project: `edit_project` goes through an
+        // open style group's apply path, which keeps only style settings.
+        let track_names = &mut self.project.track_names;
+        let changed = if default {
+            track_names.remove(&key).is_some()
+        } else if track_names.get(&key) == Some(&name) {
+            false
+        } else {
+            track_names.insert(key, name);
+            true
+        };
+        if changed && self.project_ready() {
+            self.project_changed(window, cx);
+            self.note_project_edit("track-rename");
+        }
         let focus = self.focus.clone();
         window.focus(&focus, cx);
         cx.notify();
