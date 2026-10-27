@@ -389,10 +389,6 @@ impl TargetSelect {
         self.arranged.get(&id.to_string())
     }
 
-    pub fn forget_arranged(&mut self, id: &WindowId) {
-        self.arranged.remove(&id.to_string());
-    }
-
     /// Every window the picker moved, with where it was, forgetting them.
     pub fn take_arranged(&mut self) -> Vec<HoveredWindow> {
         self.arranged.drain().map(|(_, window)| window).collect()
