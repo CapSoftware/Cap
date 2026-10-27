@@ -5,10 +5,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use cap_export::estimates::{ExportEstimates, estimate_export};
+use cap_export::estimates::{ExportEstimates, estimate_export, estimate_turbo_export};
 use cap_export::gif::GifExportSettings;
 use cap_export::mov::MovExportSettings;
-use cap_export::mp4::{ExportCompression, Mp4ExportSettings};
+use cap_export::mp4::{ExportCompression, Mp4ExportSettings, turbo::TurboOptions};
 use cap_export::preview::{
     ExportPreviewSettings, render_preview_with_config, render_preview_with_editor,
 };
@@ -189,6 +189,7 @@ pub struct ExportUi {
     pub fps: u32,
     pub compression: ExportCompression,
     pub optimize_filesize: bool,
+    pub turbo: bool,
     pub cursor_only: bool,
     pub custom_bpp: Option<f32>,
     pub force_ffmpeg: bool,
@@ -262,6 +263,7 @@ impl ExportUi {
             force_ffmpeg_decoder: false,
             advanced_open: false,
             organization_id: None,
+            turbo: false,
         });
         Self::from_preferences(prefs)
     }
@@ -279,6 +281,7 @@ impl ExportUi {
                 _ => ExportCompression::Maximum,
             },
             optimize_filesize: prefs.optimize_filesize,
+            turbo: prefs.turbo && turbo_available(),
             cursor_only: prefs.cursor_only,
             custom_bpp: prefs.custom_bpp,
             force_ffmpeg: prefs.force_ffmpeg_decoder,
@@ -332,6 +335,7 @@ impl ExportUi {
             force_ffmpeg_decoder: self.force_ffmpeg,
             advanced_open: self.advanced_open,
             organization_id: self.organization_id.clone(),
+            turbo: self.turbo,
         };
         store::update(|state| state.export = Some(prefs));
     }
@@ -662,6 +666,7 @@ impl EditorWindow {
         ui.preview_stats = None;
         let estimate_cancel = ui.estimate_cancel.clone();
         let estimate_settings = ui.estimate_settings();
+        let estimate_turbo = ui.turbo;
         let estimate_instance = instance.clone();
         let estimate_project = project.clone();
         let (width, height) = ui.resolution.size();
@@ -735,16 +740,28 @@ impl EditorWindow {
             let result = if let Some(instance) = estimate_instance {
                 let (estimate_tx, estimate_rx) = flume::unbounded();
                 let estimate_task = gpui_tokio::Tokio::spawn(cx, async move {
-                    estimate_export(
-                        instance,
-                        estimate_project,
-                        estimate_settings,
-                        estimate_cancel,
-                        move |estimate| {
-                            let _ = estimate_tx.send(estimate);
-                        },
-                    )
-                    .await
+                    let on_estimate = move |estimate| {
+                        let _ = estimate_tx.send(estimate);
+                    };
+                    if estimate_turbo {
+                        estimate_turbo_export(
+                            instance,
+                            estimate_project,
+                            estimate_settings,
+                            estimate_cancel,
+                            on_estimate,
+                        )
+                        .await
+                    } else {
+                        estimate_export(
+                            instance,
+                            estimate_project,
+                            estimate_settings,
+                            estimate_cancel,
+                            on_estimate,
+                        )
+                        .await
+                    }
                 });
                 while let Ok(estimate) = estimate_rx.recv_async().await {
                     let _ = this.update(cx, |this, cx| {
@@ -821,6 +838,7 @@ impl EditorWindow {
         let compression = ui.compression;
         let custom_bpp = ui.custom_bpp;
         let optimize = ui.optimize_filesize;
+        let turbo = ui.turbo;
         let force = ui.force_ffmpeg;
         let project_path = self.project_path.clone();
         let project = self.project.clone();
@@ -935,6 +953,7 @@ impl EditorWindow {
                     compression,
                     custom_bpp,
                     optimize,
+                    turbo,
                     force,
                     save_path.clone(),
                     progress_tx,
@@ -1109,6 +1128,7 @@ impl EditorWindow {
         let compression = ui.compression;
         let custom_bpp = ui.custom_bpp;
         let optimize = ui.optimize_filesize;
+        let turbo = ui.turbo;
         let force = ui.force_ffmpeg;
         let project_path = self.project_path.clone();
         let project = self.project.clone();
@@ -1178,6 +1198,7 @@ impl EditorWindow {
                             compression,
                             custom_bpp,
                             optimize,
+                            turbo,
                             force,
                             save_path.clone(),
                             progress_tx,
@@ -2147,6 +2168,9 @@ impl EditorWindow {
                     .child("Larger file"),
             )
             .child(self.export_optimize_row(ui, cx))
+            .when(turbo_available(), |this| {
+                this.child(self.export_turbo_row(ui, cx))
+            })
     }
 
     fn export_toggle_row(
@@ -2204,6 +2228,59 @@ impl EditorWindow {
                 cx.notify();
             }),
         )
+    }
+
+    fn export_turbo_row(&self, ui: &ExportUi, cx: &mut Context<Self>) -> impl IntoElement {
+        let editor = self.theme.editor;
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(4.))
+            .child(self.export_toggle_row(
+                "export-turbo",
+                "Turbo export",
+                "Exports much faster using every CPU core and the GPU",
+                ui.turbo,
+                cx.listener(|this, _, window, cx| {
+                    if let Some(ui) = this.export.as_mut() {
+                        ui.turbo = !ui.turbo;
+                        ui.persist();
+                    }
+                    this.refresh_export_preview(window, cx);
+                    cx.notify();
+                }),
+            ))
+            .when(ui.turbo, |this| {
+                this.child(
+                    div()
+                        .p(px(12.))
+                        .rounded(px(10.))
+                        .bg(Hsla::from(editor.card_2))
+                        .flex()
+                        .flex_row()
+                        .items_start()
+                        .gap(px(8.))
+                        .child(
+                            svg()
+                                .path("icons/triangle-alert.svg")
+                                .size(px(14.))
+                                .flex_shrink_0()
+                                .mt(px(1.))
+                                .text_color(Hsla::from(editor.text_2)),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_size(px(11.5))
+                                .line_height(px(15.))
+                                .text_color(Hsla::from(editor.text_2))
+                                .child(
+                                    "Uses all of your CPU, the GPU and several times more memory until the export finishes. Other apps may slow down, and your computer may get warm and loud.",
+                                ),
+                        ),
+                )
+            })
     }
 
     fn export_advanced(&self, ui: &ExportUi, cx: &mut Context<Self>) -> impl IntoElement {
@@ -2896,6 +2973,13 @@ fn export_stat(
         })
 }
 
+/// Turbo trades the hardware encoder for libx264 on every core, which is
+/// only measured faster on macOS so far.
+fn turbo_available() -> bool {
+    cfg!(target_os = "macos")
+        && std::thread::available_parallelism().is_ok_and(|cores| cores.get() >= 8)
+}
+
 fn matches_compression(current: ExportCompression, expected: ExportCompression) -> bool {
     std::mem::discriminant(&current) == std::mem::discriminant(&expected)
 }
@@ -2912,6 +2996,7 @@ async fn run_export(
     compression: ExportCompression,
     custom_bpp: Option<f32>,
     optimize: bool,
+    turbo: bool,
     force: bool,
     save_path: Option<PathBuf>,
     progress_tx: flume::Sender<(u32, u32)>,
@@ -2985,16 +3070,21 @@ async fn run_export(
             .await
         }
         PreparedBase::Mp4(base) => {
-            Mp4ExportSettings {
+            let settings = Mp4ExportSettings {
                 fps,
                 resolution_base: resolution,
                 compression,
                 custom_bpp,
                 force_ffmpeg_decoder: force,
                 optimize_filesize: optimize,
+            };
+            if turbo {
+                settings
+                    .export_prepared_turbo(base, TurboOptions::default(), progress)
+                    .await
+            } else {
+                settings.export_prepared(base, progress).await
             }
-            .export_prepared(base, progress)
-            .await
         }
     }
 }
@@ -3024,6 +3114,7 @@ mod tests {
             force_ffmpeg_decoder: false,
             advanced_open: false,
             organization_id: None,
+            turbo: false,
         })
     }
 
