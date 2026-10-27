@@ -337,3 +337,81 @@ fn saved_instant_upload_quit_during_verification_confirms_without_reupload() {
         );
     });
 }
+
+fn last_success(mock: &MockCap, method: &str, fragment: &str) -> Duration {
+    mock.responses(method, fragment)
+        .into_iter()
+        .filter(|(status, _)| *status == 200)
+        .map(|(_, at)| at)
+        .max()
+        .unwrap_or_else(|| panic!("no successful {method} {fragment}:\n{}", mock.timeline()))
+}
+
+/// A slow thumbnail no longer holds back the final manifest that makes the
+/// recording playable in full; the completion signal still waits for both.
+#[test]
+fn saved_instant_upload_publishes_its_manifest_while_the_thumbnail_uploads() {
+    let _shared_client = crate::auth::SHARED_API_CLIENT_TEST_LOCK.blocking_lock();
+    let scratch = Scratch::new("queue_thumbnail_alongside_manifest");
+    virtual_time(async {
+        let mock = MockCap::start(vec![rule(
+            Route::Object("screenshot/"),
+            Fault::Delay(Duration::from_secs(20)),
+        )])
+        .await;
+        scratch.sign_in(&mock.url);
+        let (project, video, audio) = saved_instant_project(&scratch.0, &mock.url);
+        let manager = Arc::new(Manager::new(LiveBackend, CONFIRMATION_TIMEOUT));
+        launch(&manager, &project).await;
+        settle(&manager).await;
+        assert_verified(&mock, &project, &video, &audio);
+        assert_eq!(mock.confirmations().len(), 1);
+        let manifest = last_success(&mock, "PUT", "segments/manifest.json");
+        let thumbnail = last_success(&mock, "PUT", "screenshot/screen-capture.jpg");
+        let confirmed = last_success(&mock, "POST", "/api/upload/recording-complete");
+        assert!(
+            manifest + Duration::from_secs(10) < thumbnail,
+            "final manifest waited for the thumbnail:\n{}",
+            mock.timeline()
+        );
+        assert!(confirmed >= thumbnail, "{}", mock.timeline());
+    });
+}
+
+/// A thumbnail that fails still fails the attempt and sends no completion
+/// signal, as before; the next attempt uploads it and verifies the same video.
+#[test]
+fn failed_thumbnail_fails_the_attempt_and_the_retry_verifies() {
+    let _shared_client = crate::auth::SHARED_API_CLIENT_TEST_LOCK.blocking_lock();
+    let scratch = Scratch::new("queue_thumbnail_failure");
+    virtual_time(async {
+        let mock =
+            MockCap::start(vec![rule(Route::Object("screenshot/"), Fault::Status(403))]).await;
+        scratch.sign_in(&mock.url);
+        let (project, video, audio) = saved_instant_project(&scratch.0, &mock.url);
+        let first = Arc::new(Manager::new(LiveBackend, CONFIRMATION_TIMEOUT));
+        launch(&first, &project).await;
+        settle(&first).await;
+        let mut state = read_state(&project).unwrap().unwrap();
+        assert_eq!(state.phase, UploadPhase::Retrying, "{state:?}");
+        assert!(
+            state
+                .last_error
+                .as_deref()
+                .is_some_and(|error| error.contains("thumbnail")),
+            "{state:?}"
+        );
+        assert_eq!(state.video_id, VIDEO_ID);
+        assert!(mock.confirmations().is_empty());
+
+        state.next_retry_at = Some(0);
+        write_state(&project, &state).unwrap();
+        mock.new_session();
+        crate::auth::reset_shared_api_client();
+        let retried = Arc::new(Manager::new(LiveBackend, CONFIRMATION_TIMEOUT));
+        launch(&retried, &project).await;
+        settle(&retried).await;
+        assert_verified(&mock, &project, &video, &audio);
+        assert_eq!(mock.confirmations().len(), 1);
+    });
+}

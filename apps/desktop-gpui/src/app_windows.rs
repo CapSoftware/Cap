@@ -278,6 +278,11 @@ pub struct AppWindows {
     /// copy/save screenshot finish reads it; the cancel reveal keeps the
     /// Tauri behaviour above.
     pub main_visible_before_picker: bool,
+    /// [`hide_main_window`] put the main window away and
+    /// [`show_main_window_after_capture_pause`] has not brought it back since.
+    /// State the app owns, unlike a visibility probe that also reads a
+    /// minimized window or a hidden app as gone.
+    pub main_hidden_by_app: bool,
     /// `hiddenForPicker` in the editor's record modal
     /// (`ClipsSidebar.tsx:311-341, 413-426`): the editor window that hid
     /// itself for an editor-owned target picker ("Record a new clip"). A
@@ -554,6 +559,7 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
         screenshot_editors: Vec::new(),
         main_hidden_for_picker: false,
         main_visible_before_picker: false,
+        main_hidden_by_app: false,
         editor_hidden_for_picker: None,
         camera_park: CameraPark::default(),
         #[cfg(target_os = "linux")]
@@ -582,6 +588,7 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
     cx.spawn(async move |cx| {
         while thumbnails.recv_async().await.is_ok() {
             cx.update(|cx| {
+                crate::tray::refresh_previous(cx);
                 refresh_library_after_delete(cx);
                 crate::menus::recheck_pending_quit(cx);
             });
@@ -612,12 +619,14 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
             if !restore_clean_capture_ui(cx) {
                 return;
             }
-            let (finished_studio, preparing_editor) = session.update(cx, |session, _| {
-                (
-                    session.finished_studio.take(),
-                    session.take_preparing_studio_editor(),
-                )
-            });
+            let (finished_studio, preparing_editor, finished_instant) =
+                session.update(cx, |session, _| {
+                    (
+                        session.finished_studio.take(),
+                        session.take_preparing_studio_editor(),
+                        std::mem::take(&mut session.finished_instant),
+                    )
+                });
             // The in-editor re-record target is consumed first, before
             // `postStudioRecordingBehaviour` is even consulted -- the order
             // `apply_post_studio_editor_behaviour` checks them
@@ -656,13 +665,33 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
                 // away. `doNothing` leaves it in the library with Cap out of
                 // the way. Every other path (instant, failures, `showOverlay`
                 // until an overlay exists) reshows the main window as before.
-                let behaviour =
-                    crate::store::GeneralSettings::load().post_studio_recording_behaviour;
+                // A clean instant recording reshows it only for "Show Cap";
+                // otherwise the browser tab, or the copied link alone, is
+                // the completion and Cap stays out of the way.
+                let settings = crate::store::GeneralSettings::load();
+                let behaviour = settings.post_studio_recording_behaviour;
+                // Linux restores the main window through the clean-capture
+                // lease before this runs, so it keeps reshowing as before. A
+                // main window reopened mid-recording (even if minimized since)
+                // takes the reshow too, which resumes its inputs.
+                let keep_hidden_after_instant = cfg!(not(target_os = "linux"))
+                    && finished_instant
+                    && settings.post_instant_behaviour()
+                        != crate::store::PostInstantBehaviour::ShowCap
+                    && cx.global::<AppWindows>().main_hidden_by_app
+                    && !main
+                        .update(cx, |_, window, _| platform::window_is_visible(window))
+                        .unwrap_or(true);
                 match (finished_studio, behaviour) {
                     (Some(project_dir), crate::store::PostStudioBehaviour::OpenEditor) => {
                         open_editor(project_dir, cx)
                     }
                     (Some(_), crate::store::PostStudioBehaviour::DoNothing) => {
+                        park_idle_camera_preview(cx);
+                        crate::menus::schedule_dock_sync(cx);
+                    }
+                    (None, _) if keep_hidden_after_instant => {
+                        tracing::info!("main window kept hidden after the Instant recording");
                         park_idle_camera_preview(cx);
                         crate::menus::schedule_dock_sync(cx);
                     }
@@ -869,10 +898,12 @@ pub(crate) fn show_main_window_after_capture_pause(cx: &mut App) {
             return;
         }
     }
+    tracing::info!("showing the main window");
     if crate::store::should_show_onboarding() {
         open_onboarding(cx);
         return;
     }
+    cx.global_mut::<AppWindows>().main_hidden_by_app = false;
     let resume_inputs = RecordingSession::global(cx).read(cx).phase == Phase::Idle;
     if resume_inputs {
         crate::feeds::Feeds::global(cx).update(cx, |feeds, cx| feeds.resume_camera_preview(cx));
@@ -919,6 +950,7 @@ pub(crate) fn show_main_window_after_capture_pause(cx: &mut App) {
             // before the window is visible again.
             platform::restore_borderless_style(native);
             platform::show_native(native);
+            tracing::info!("main window shown");
         }
         // The unit-3 macOS 26 display-link repair, and the reason a window
         // hidden before its FIRST paint reshows as nothing at all: AppKit
@@ -977,6 +1009,7 @@ pub fn heal_main_window_style(cx: &mut App) {
 
 /// `getCurrentWindow().hide()` -- same rule, same reason.
 pub fn hide_main_window(cx: &mut App) {
+    cx.global_mut::<AppWindows>().main_hidden_by_app = true;
     let main = cx.global::<AppWindows>().main;
     let native = main
         .update(cx, |_, window, cx| {
@@ -1460,6 +1493,7 @@ pub fn open_onboarding(cx: &mut App) {
     .detach();
     hide_main_and_park_camera_preview(cx);
     crate::tray::refresh_menu(cx);
+    crate::menus::refresh(cx);
 }
 
 pub fn onboarding_finished(cx: &mut App) {
@@ -1470,6 +1504,7 @@ pub fn onboarding_finished(cx: &mut App) {
             .ok();
     }
     crate::tray::refresh_menu(cx);
+    crate::menus::refresh(cx);
     show_main_window(cx);
 }
 
@@ -1486,6 +1521,7 @@ pub fn onboarding_closed(cx: &mut App) {
     crate::permission_guide::stop(cx);
     cx.global_mut::<AppWindows>().onboarding.take();
     crate::tray::refresh_menu(cx);
+    crate::menus::refresh(cx);
     if !crate::store::should_show_onboarding() {
         show_main_window(cx);
     }
@@ -2816,6 +2852,7 @@ fn own_windows(cx: &mut App) -> Vec<OwnWindowHandle> {
         screenshot_editors,
         main_hidden_for_picker: _,
         main_visible_before_picker: _,
+        main_hidden_by_app: _,
         editor_hidden_for_picker: _,
         camera_park: _,
         #[cfg(target_os = "linux")]
@@ -4888,6 +4925,8 @@ fn open_editor_window(
         return None;
     }
 
+    cx.add_recent_document(&project_path);
+
     if let Some(window_id) = cx
         .global::<AppWindows>()
         .editors
@@ -6864,6 +6903,8 @@ pub fn open_screenshot_editor(path: PathBuf, cx: &mut App) {
         return;
     };
     let key = editor_key(&bundle);
+
+    cx.add_recent_document(&bundle);
 
     if let Some(handle) = cx
         .global::<AppWindows>()

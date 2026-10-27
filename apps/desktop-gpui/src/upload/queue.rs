@@ -435,11 +435,7 @@ impl UploadBackend for LiveBackend {
                 let recorded_length = recorded_length_json(&manifest).map(|bytes| {
                     publish_recorded_length(upload.video.id.clone(), bytes, upload.cancel.clone())
                 });
-                let finish = async {
-                    upload.finish_screenshot(project).await?;
-                    upload.authorize_manifest(manifest)?;
-                    upload.finish_segments().await
-                };
+                let finish = upload.finish_with_screenshot(project, manifest);
                 match recorded_length {
                     Some(recorded_length) => alongside(finish, recorded_length).await?,
                     None => finish.await?,
@@ -1229,10 +1225,16 @@ pub(crate) async fn delete_recording(project: PathBuf) -> Result<(), String> {
     let canonical = project.canonicalize().map_err(|error| error.to_string())?;
     manager().cancel(&canonical).await;
     let _ownership = UploadLock::acquire(&canonical).map_err(|error| error.to_string())?;
-    if let Some(mut state) = read_state(&canonical)? {
-        manager().forget_pending_rechecks(&state.video_id);
-        state.phase = UploadPhase::Cancelled;
-        write_state(&canonical, &state)?;
+    match read_state(&canonical) {
+        Ok(Some(mut state)) => {
+            manager().forget_pending_rechecks(&state.video_id);
+            state.phase = UploadPhase::Cancelled;
+            write_state(&canonical, &state)?;
+        }
+        Ok(None) => {}
+        Err(error) => {
+            tracing::warn!(path = %canonical.display(), %error, "Deleting local recording with unreadable upload state");
+        }
     }
     tokio::task::spawn_blocking(move || crate::library::delete_recording_directory(&project))
         .await
@@ -1241,6 +1243,9 @@ pub(crate) async fn delete_recording(project: PathBuf) -> Result<(), String> {
 
 #[cfg(test)]
 mod verify_resume_tests;
+
+#[cfg(test)]
+mod stop_tail_bench;
 
 #[cfg(test)]
 mod tests {
@@ -1981,6 +1986,70 @@ mod tests {
         );
         assert_eq!(next.backend.transfers.load(Ordering::Acquire), 0);
         fixture.assert_retained();
+    }
+
+    #[test]
+    fn damaged_upload_state_does_not_prevent_local_deletion() {
+        for damage in ["truncated", "unsupported", "oversized"] {
+            let fixture = Fixture::new();
+            let path = fixture.project().join(STATE_FILE);
+            match damage {
+                "truncated" => std::fs::write(&path, b"{\"version\":").unwrap(),
+                "unsupported" => {
+                    let mut state = fixture.state();
+                    state.version = 2;
+                    write_state(&fixture.project(), &state).unwrap();
+                }
+                "oversized" => {
+                    std::fs::write(&path, vec![b' '; MAX_STATE_BYTES as usize + 1]).unwrap();
+                }
+                _ => unreachable!(),
+            }
+            assert!(read_state(&fixture.project()).is_err());
+            let store = fixture.0.join("store");
+            std::fs::write(
+                &store,
+                serde_json::to_vec(&json!({
+                    "general_settings": { "recordingsPath": fixture.0.join("library") }
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            let worker_store = store.clone();
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .on_thread_start(move || {
+                    crate::store::set_test_tauri_store_path(Some(worker_store.clone()));
+                })
+                .build()
+                .unwrap();
+            let ownership = UploadLock::acquire(&fixture.project()).unwrap();
+            assert_eq!(
+                runtime
+                    .block_on(delete_recording(fixture.project()))
+                    .unwrap_err(),
+                UploadLockError::Busy.to_string()
+            );
+            assert!(fixture.project().join("content/output.mp4").is_file());
+            drop(ownership);
+            assert_eq!(
+                runtime.block_on(delete_recording(fixture.project())),
+                Err("Path is not inside a recordings directory".to_string())
+            );
+            fixture.assert_retained();
+            std::fs::write(
+                &store,
+                serde_json::to_vec(&json!({
+                    "general_settings": { "recordingsPath": fixture.0 }
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            runtime
+                .block_on(delete_recording(fixture.project()))
+                .unwrap();
+            assert!(!fixture.project().exists(), "{damage}");
+        }
     }
 
     #[test]

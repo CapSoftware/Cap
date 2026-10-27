@@ -213,6 +213,7 @@ pub fn pause(cx: &mut App) -> bool {
     hotkeys.paused = true;
     hotkeys.release_idle_manager();
     tracing::info!("global hotkeys paused while a shortcut is recorded");
+    crate::tray::refresh_menu(cx);
     true
 }
 
@@ -243,6 +244,16 @@ pub fn resume(cx: &mut App) -> bool {
     cx.global_mut::<Hotkeys>().paused = false;
     reload(cx);
     true
+}
+
+/// The registered combo for an action, or `None` when nothing is bound. The
+/// tray menu renders it as the row's accelerator.
+pub(crate) fn accelerator(action: HotkeyAction, cx: &App) -> Option<HotKey> {
+    cx.try_global::<Hotkeys>()?
+        .bindings
+        .iter()
+        .find(|(_, bound)| *bound == action)
+        .map(|(hotkey, _)| *hotkey)
 }
 
 pub fn unavailable_actions(cx: &App) -> Vec<&'static str> {
@@ -801,6 +812,7 @@ fn register_from_store(cx: &mut App) {
     }
     hotkeys.release_idle_manager();
     tracing::info!(count = hotkeys.bindings.len(), "global hotkeys registered");
+    crate::tray::refresh_menu(cx);
 }
 
 /// `CAP_GPUI_AUTO_HOTKEY=<store key>`: run an action's dispatch arm without

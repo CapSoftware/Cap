@@ -66,6 +66,13 @@ impl Sandbox {
         Self { root }
     }
 
+    fn set_general(&self, key: &str, value: Value) {
+        let path = self.root.path().join("store");
+        let mut store: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        store["general_settings"][key] = value;
+        std::fs::write(path, serde_json::to_vec(&store).unwrap()).unwrap();
+    }
+
     fn launch(&self, name: &str, env: &[(&str, &str)]) -> App {
         let binary = std::env::var("CAP_GPUI_REAL_APP_BIN")
             .expect("set CAP_GPUI_REAL_APP_BIN to the built cap-gpui binary");
@@ -389,6 +396,55 @@ async fn real_app_instant_recording_with_camera_uploads_and_verifies() {
     assert!(mock.deleted().is_empty(), "{:?}", mock.deleted());
     assert!(sandbox.journal().is_empty(), "{:?}", sandbox.journal());
     assert!(!log.contains("panicked at"), "the app panicked");
+}
+
+/// The After an Instant recording outcome decides whether the main window,
+/// hidden at start, comes back once the recording finishes: only Show Cap
+/// takes the reshow, so opening the link never leaves it on screen behind the
+/// browser. The reshow itself lands on onboarding here (the runner grants no
+/// Accessibility), so the check reads the decisions the app logs. Linux
+/// restores the window through its clean-capture lease instead, so the check
+/// is macOS only.
+#[cfg(target_os = "macos")]
+#[ignore]
+#[tokio::test(flavor = "multi_thread")]
+async fn real_app_instant_outcome_decides_whether_main_window_returns() {
+    for (name, disable_open, show_main, returns) in [
+        ("open-link", false, false, false),
+        ("show-cap", true, true, true),
+        ("copy-link", true, false, false),
+    ] {
+        let mock = MockCap::start(Vec::new()).await;
+        let sandbox = Sandbox::new(&mock.url, 0);
+        sandbox.set_general("disableAutoOpenLinks", json!(disable_open));
+        sandbox.set_general("showMainWindowAfterInstantRecording", json!(show_main));
+        let app = sandbox.launch(name, &[("CAP_GPUI_AUTO_RECORD", "instant:3")]);
+        wait_for_app(
+            &sandbox,
+            &app,
+            "a verified upload",
+            Duration::from_secs(180),
+            || {
+                sandbox
+                    .projects()
+                    .first()
+                    .and_then(|project| state(project))
+                    .is_some_and(|state| state["phase"] == "Verified")
+            },
+        )
+        .await;
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        kill(app);
+        let log = without_ansi(&sandbox.log(name));
+        let (_, after) = log
+            .split_once("recording finished")
+            .expect("the recording finished");
+        let kept_hidden = after.contains("main window kept hidden after the Instant recording");
+        let reshown = after.contains("showing the main window");
+        assert_eq!(kept_hidden, !returns, "{name}: {after}");
+        assert_eq!(reshown, returns, "{name}: {after}");
+        assert_eq!(mock.created().len(), 1, "{name}");
+    }
 }
 
 /// Kills the app at points from the server video's creation through the

@@ -5,6 +5,7 @@ export type ResolvedPlaybackSource = {
 	type: "mp4" | "raw";
 	supportsCrossOrigin: boolean;
 	fromInitialUrl?: true;
+	fromServer?: true;
 };
 
 type ProbeResult = {
