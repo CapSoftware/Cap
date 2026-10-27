@@ -72,6 +72,23 @@ fn window_content_filter(
     Some(sc::ContentFilter::with_desktop_independent_window(window))
 }
 
+/// What the stream reads. A display capture crops to `crop_bounds`; a window
+/// capture reads the window itself, inside its rounded corners, where
+/// `crop_bounds` is the window already trimmed by `WINDOW_CORNER_TRIM`.
+fn source_rect(captures_window: bool, crop_bounds: super::CropBounds) -> cg::Rect {
+    let (x, y) = if captures_window {
+        (super::WINDOW_CORNER_TRIM, super::WINDOW_CORNER_TRIM)
+    } else {
+        (crop_bounds.position().x(), crop_bounds.position().y())
+    };
+    cg::Rect::new(
+        x,
+        y,
+        crop_bounds.size().width(),
+        crop_bounds.size().height(),
+    )
+}
+
 fn excluded_shareable_windows(
     excluded_windows: &[WindowId],
     content: &sc::ShareableContent,
@@ -321,14 +338,9 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
         settings.set_pixel_format(cv::PixelFormat::_420V);
         settings.set_color_space_name(cg::color_space::names::srgb());
 
-        if !captures_window && let Some(crop_bounds) = self.config.crop_bounds {
+        if let Some(crop_bounds) = self.config.crop_bounds {
             debug!("crop bounds: {:?}", crop_bounds);
-            settings.set_src_rect(cg::Rect::new(
-                crop_bounds.position().x(),
-                crop_bounds.position().y(),
-                crop_bounds.size().width(),
-                crop_bounds.size().height(),
-            ));
+            settings.set_src_rect(source_rect(captures_window, crop_bounds));
         }
         cap_fail::fail_err!(
             "macos::ScreenCaptureActor::new",
@@ -1055,13 +1067,8 @@ async fn rebuild_capturer(params: &CapturerRebuildParams) -> anyhow::Result<Capt
     settings.set_pixel_format(cv::PixelFormat::_420V);
     settings.set_color_space_name(cg::color_space::names::srgb());
 
-    if !captures_window && let Some(crop_bounds) = params.config.crop_bounds {
-        settings.set_src_rect(cg::Rect::new(
-            crop_bounds.position().x(),
-            crop_bounds.position().y(),
-            crop_bounds.size().width(),
-            crop_bounds.size().height(),
-        ));
+    if let Some(crop_bounds) = params.config.crop_bounds {
+        settings.set_src_rect(source_rect(captures_window, crop_bounds));
     }
 
     let expected_width = params.video_info.width as usize;
