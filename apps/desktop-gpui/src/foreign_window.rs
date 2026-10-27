@@ -68,6 +68,24 @@ pub fn placement(id: &WindowId) -> Option<Placement> {
     imp::placement(id).map(Placement)
 }
 
+/// Put `windows` back off the main thread (a move waits on the target app),
+/// queued behind any move still running so it cannot land after them.
+pub fn put_back_all(
+    windows: Vec<crate::target_overlay::ArrangedWindow>,
+    executor: &gpui::BackgroundExecutor,
+) {
+    if windows.is_empty() {
+        return;
+    }
+    executor
+        .spawn(in_order(move || {
+            for window in windows {
+                put_back(&window);
+            }
+        }))
+        .detach();
+}
+
 pub fn put_back(original: &crate::target_overlay::ArrangedWindow) -> bool {
     let window = &original.window;
     if let Some(placement) = original.placement
