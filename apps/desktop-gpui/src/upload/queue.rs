@@ -435,11 +435,7 @@ impl UploadBackend for LiveBackend {
                 let recorded_length = recorded_length_json(&manifest).map(|bytes| {
                     publish_recorded_length(upload.video.id.clone(), bytes, upload.cancel.clone())
                 });
-                let finish = async {
-                    upload.finish_screenshot(project).await?;
-                    upload.authorize_manifest(manifest)?;
-                    upload.finish_segments().await
-                };
+                let finish = upload.finish_with_screenshot(project, manifest);
                 match recorded_length {
                     Some(recorded_length) => alongside(finish, recorded_length).await?,
                     None => finish.await?,

@@ -459,6 +459,15 @@ impl MockCap {
             .count()
     }
 
+    pub(super) fn responses(&self, method: &str, fragment: &str) -> Vec<(u16, Duration)> {
+        self.lock()
+            .requests
+            .iter()
+            .filter(|(m, path, ..)| m == method && path.contains(fragment))
+            .map(|(_, _, status, at)| (*status, *at))
+            .collect()
+    }
+
     pub(super) fn timeline(&self) -> String {
         self.lock()
             .requests

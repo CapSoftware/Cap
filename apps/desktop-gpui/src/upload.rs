@@ -497,21 +497,33 @@ impl InstantUpload {
         Ok(())
     }
 
-    pub async fn finish_screenshot(&self, project_path: &Path) -> Result<(), String> {
+    fn screenshot_upload(
+        &self,
+        project_path: &Path,
+    ) -> impl Future<Output = Result<(), String>> + Send + use<> {
+        let video_id = self.video.id.clone();
+        let path = project_path.join("screenshots/display.jpg");
         #[cfg(target_os = "linux")]
-        let result = upload_screenshot_with_cancel(
-            &self.video.id,
-            &project_path.join("screenshots/display.jpg"),
-            &self.cancel,
-        )
-        .await;
-        #[cfg(not(target_os = "linux"))]
-        let result = upload_screenshot(
-            &self.video.id,
-            &project_path.join("screenshots/display.jpg"),
-        )
-        .await;
-        result.map_err(|error| format!("Instant recording thumbnail upload failed: {error}"))
+        let cancel = self.cancel.clone();
+        async move {
+            #[cfg(target_os = "linux")]
+            let result = upload_screenshot_with_cancel(&video_id, &path, &cancel).await;
+            #[cfg(not(target_os = "linux"))]
+            let result = upload_screenshot(&video_id, &path).await;
+            result.map_err(|error| format!("Instant recording thumbnail upload failed: {error}"))
+        }
+    }
+
+    async fn finish_with_screenshot(
+        &mut self,
+        project_path: &Path,
+        manifest: SegmentUploadManifest,
+    ) -> Result<(), String> {
+        let screenshot = self.screenshot_upload(project_path);
+        self.authorize_manifest(manifest)?;
+        let (screenshot, segments) = tokio::join!(screenshot, self.finish_segments());
+        screenshot?;
+        segments
     }
 
     pub async fn cancel(&mut self, query: Option<&str>) -> Result<(), String> {
@@ -2315,26 +2327,35 @@ async fn put_presigned_part(
     }
 }
 
+const SCREENSHOT_SUBPATH: &str = "screenshot/screen-capture.jpg";
+
 async fn upload_screenshot_with_cancel(
     video_id: &str,
     path: &Path,
     cancel: &AtomicBool,
 ) -> Result<(), AuthApiError> {
     check_export_cancelled(cancel)?;
-    let bytes = compress_image(path)?;
-    presigned_put_bytes_inner(
-        video_id,
-        "screenshot/screen-capture.jpg",
-        bytes,
-        Some(cancel),
-    )
-    .await
+    let (bytes, target) = tokio::try_join!(
+        compress_screenshot(path),
+        presign_put_target(video_id, SCREENSHOT_SUBPATH, Some(cancel)),
+    )?;
+    upload_signed_bytes_inner(target, SCREENSHOT_SUBPATH, bytes, Some(cancel)).await
 }
 
 #[cfg(not(target_os = "linux"))]
 async fn upload_screenshot(video_id: &str, path: &Path) -> Result<(), AuthApiError> {
-    let bytes = compress_image(path)?;
-    presigned_put_bytes(video_id, "screenshot/screen-capture.jpg", bytes).await
+    let (bytes, target) = tokio::try_join!(
+        compress_screenshot(path),
+        presign_put_target(video_id, SCREENSHOT_SUBPATH, None),
+    )?;
+    upload_signed_bytes_inner(target, SCREENSHOT_SUBPATH, bytes, None).await
+}
+
+async fn compress_screenshot(path: &Path) -> Result<Vec<u8>, AuthApiError> {
+    let path = path.to_path_buf();
+    tracked_upload_read(move || compress_image(&path))
+        .await
+        .map_err(|error| AuthApiError::Other(format!("Failed to compress image: {error}")))?
 }
 
 /// One presigned single-part PUT under a video's subpath -- `/api/upload/
@@ -3510,7 +3531,7 @@ mod tests {
         control.deny();
         assert!(
             upload
-                .finish_screenshot(Path::new("/not-a-recording/cancelled.cap"))
+                .screenshot_upload(Path::new("/not-a-recording/cancelled.cap"))
                 .await
                 .unwrap_err()
                 .contains("Export cancelled")
