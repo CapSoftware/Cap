@@ -26,6 +26,9 @@ vi.mock("mediabunny", () => {
 		StreamTarget: Empty,
 		Input: class {
 			dispose = mocks.dispose;
+			async getPrimaryAudioTrack() {
+				return null;
+			}
 		},
 		Output: class {
 			cancel = mocks.cancel;

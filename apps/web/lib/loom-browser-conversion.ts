@@ -858,6 +858,7 @@ export async function saveLoomStreamAsMp4({
 			formats: ALL_FORMATS,
 		});
 
+		if (signal?.aborted) throw createAbortError();
 		const output = new Output({
 			format: new Mp4OutputFormat({ fastStart: false }),
 			target: conversionTarget.target,
