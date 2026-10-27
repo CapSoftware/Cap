@@ -72,6 +72,21 @@ fn window_content_filter(
     Some(sc::ContentFilter::with_desktop_independent_window(window))
 }
 
+/// A single window at the display's full pixel density, filling the frame.
+/// Left to themselves, window captures pick their resolution automatically,
+/// which can read a Retina window at 1x and upscale it, and do not scale the
+/// window to the output, leaving it in a corner of a larger frame.
+fn configure_window_capture(settings: &mut sc::StreamCfg) {
+    settings.set_scales_to_fit(true);
+    // Both arrived in macOS 14; Cap runs from 12.3.
+    if cidre::api::macos_available("14.0") {
+        unsafe {
+            settings.set_capture_resolution(sc::CaptureResolution::Best);
+            settings.set_preserves_aspect_ratio(true);
+        }
+    }
+}
+
 /// What the stream reads. A display capture crops to `crop_bounds`; a window
 /// capture reads the window itself, inside its rounded corners, where
 /// `crop_bounds` is the window already trimmed by `WINDOW_CORNER_TRIM`.
@@ -337,6 +352,9 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
 
         settings.set_pixel_format(cv::PixelFormat::_420V);
         settings.set_color_space_name(cg::color_space::names::srgb());
+        if captures_window {
+            configure_window_capture(&mut settings);
+        }
 
         if let Some(crop_bounds) = self.config.crop_bounds {
             debug!("crop bounds: {:?}", crop_bounds);
@@ -1066,6 +1084,9 @@ async fn rebuild_capturer(params: &CapturerRebuildParams) -> anyhow::Result<Capt
 
     settings.set_pixel_format(cv::PixelFormat::_420V);
     settings.set_color_space_name(cg::color_space::names::srgb());
+    if captures_window {
+        configure_window_capture(&mut settings);
+    }
 
     if let Some(crop_bounds) = params.config.crop_bounds {
         settings.set_src_rect(source_rect(captures_window, crop_bounds));
