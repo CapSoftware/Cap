@@ -260,12 +260,10 @@ impl ProjectHistory {
             .collect()
     }
 
-    /// Index (into [`Self::labels`]) of the entry the project is at now.
     pub fn cursor(&self) -> usize {
         self.entries.len() - self.count - 1
     }
 
-    /// Walk straight to entry `index` and hand back the state there.
     pub fn jump_to(&mut self, index: usize) -> Option<&ProjectConfiguration> {
         if index >= self.entries.len() || index == self.cursor() {
             return None;
