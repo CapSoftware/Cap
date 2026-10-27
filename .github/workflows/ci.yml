@@ -147,6 +147,7 @@ jobs:
           __tests__/unit/media-player-store-refs.test.ts
           __tests__/unit/mobile-caps-list.test.ts
           __tests__/unit/notification-read-state.test.ts
+          __tests__/unit/organization-settings-ownership.test.ts
           __tests__/unit/playback-store.test.ts
           __tests__/unit/remove-organization-member.test.ts
           __tests__/unit/reply-notification.test.ts
