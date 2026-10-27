@@ -1,0 +1,82 @@
+name: Perf hunt finalize bench
+
+on:
+  push:
+    branches:
+      - perfhunt/finalize-bench*
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - blacksmith-8vcpu-windows-2025
+          - windows-2022
+          - blacksmith-8vcpu-ubuntu-2404
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 150
+    env:
+      CAP_FINALIZE_BENCH_DIR: ${{ github.workspace }}/../finalize-bench
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - name: Install desktop dependencies
+        uses: ./.github/actions/install-desktop-deps
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.13"
+      - name: Native dependencies
+        env:
+          RUST_TARGET_TRIPLE: ${{ runner.os == 'Windows' && 'x86_64-pc-windows-msvc' || 'x86_64-unknown-linux-gnu' }}
+        run: node scripts/setup.js
+      - name: Add FFmpeg DLLs to PATH
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Add-Content -Path $env:GITHUB_PATH -Value "${{ github.workspace }}\\target\\ffmpeg\\bin"
+      - name: Build head and base
+        shell: bash
+        run: |
+          build() {
+            cargo test --release --locked -p cap-recording --lib instant_finalize --no-run --message-format=json \
+              | python -c "import json,sys; print([m['executable'] for m in map(json.loads, sys.stdin) if m.get('reason')=='compiler-artifact' and m.get('executable') and m['target']['name']=='cap_recording'][-1])"
+          }
+          mkdir -p ../bins
+          cp "$(build)" ../bins/head.bin
+          git show HEAD~1:crates/recording/src/recovery.rs > crates/recording/src/recovery.rs
+          python - <<'PY'
+          import re
+          p = "crates/recording/src/recovery.rs"
+          s = open(p).read()
+          s = s.replace("mod retirement;\n", "mod retirement;\n#[cfg(test)]\nmod instant_finalize_bench;\n", 1)
+          open(p, "w").write(s)
+          p = "crates/recording/src/recovery/instant_finalize_bench.rs"
+          s = open(p).read()
+          open(p, "w").write(s[: s.index("fn timed<T>")])
+          PY
+          cp "$(build)" ../bins/base.bin
+      - name: Fixtures
+        shell: bash
+        env:
+          CAP_FINALIZE_BENCH_SECONDS: "60,300,1800"
+          CAP_FINALIZE_BENCH_RUNS: "1"
+        run: ../bins/head.bin instant_finalize_benchmark --ignored --nocapture 2>&1 | grep -E "^fixture|panicked"
+      - name: A/B
+        shell: bash
+        env:
+          CAP_FINALIZE_BENCH_SECONDS: "60,300,1800"
+          CAP_FINALIZE_BENCH_RUNS: "1"
+        run: |
+          for round in 1 2 3; do
+            for side in base head; do
+              ../bins/$side.bin instant_finalize_benchmark --ignored --nocapture 2>&1 | grep -E "^instant-finalize|panicked" | sed "s/^/$side round $round: /"
+            done
+          done

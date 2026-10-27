@@ -24,6 +24,8 @@ use tracing::{debug, warn};
 use crate::output_pipeline::{HealthSender, PipelineHealthEvent, emit_health};
 use crate::studio_recording::CompletedRecording;
 
+#[cfg(test)]
+mod instant_finalize_bench;
 mod prefix;
 mod preparing_observer;
 mod preparing_projection;
@@ -2235,19 +2237,20 @@ impl RecoveryManager {
 
         let result = (|| {
             let finalize_audio = || {
-                let validated = validate_recovery_track_inputs(
+                let validated = validate_audio_inputs_with_digest(
                     &audio_info.fragments,
                     audio_info.init_segment.as_deref(),
                     parent,
-                    ffmpeg::media::Type::Audio,
-                    VideoValidation::Full,
                 );
-                validated.map(|()| {
-                    Self::finalize_audio_fragments_to_progressive_mp4(
-                        &audio_info.fragments,
-                        audio_info.init_segment.as_deref(),
-                        &audio_output,
-                        "audio",
+                validated.map(|digest| {
+                    (
+                        Self::finalize_audio_fragments_to_progressive_mp4(
+                            &audio_info.fragments,
+                            audio_info.init_segment.as_deref(),
+                            &audio_output,
+                            "audio",
+                        ),
+                        digest,
                     )
                 })
             };
@@ -2274,7 +2277,7 @@ impl RecoveryManager {
                 };
                 (audio, video)
             });
-            let audio_concat = audio?;
+            let (audio_concat, input_audio) = audio?;
             video?;
             audio_concat?;
             merge_video_audio(&video_output, &audio_output, &merged_output)
@@ -2286,7 +2289,7 @@ impl RecoveryManager {
                             .name("instant-audio-validate".into())
                             .stack_size(AUDIO_FINALIZE_STACK_SIZE)
                             .spawn_scoped(scope, || {
-                                validate_recovered_track(&merged_output, ffmpeg::media::Type::Audio)
+                                validate_merged_audio(&merged_output, input_audio)
                             })
                             .ok()
                     })
@@ -3112,6 +3115,148 @@ fn validate_recovery_track_inputs(
         }
     }
     Ok(())
+}
+
+// Hashes what an audio decoder's output depends on: the codec parameters and,
+// in order, every packet's bytes, flags and side data. Merging stream-copies
+// the audio, so when the merged track hashes the same as the inputs that were
+// just decoded in full, decoding it again cannot find anything new.
+fn digest_track_parameters(digest: &mut sha2::Sha256, parameters: &ffmpeg::codec::Parameters) {
+    use sha2::Digest;
+    let parameters = unsafe { &*parameters.as_ptr() };
+    let extradata = if parameters.extradata.is_null() || parameters.extradata_size <= 0 {
+        &[][..]
+    } else {
+        unsafe {
+            std::slice::from_raw_parts(parameters.extradata, parameters.extradata_size as usize)
+        }
+    };
+    for value in [
+        parameters.codec_type as i64,
+        parameters.codec_id as i64,
+        i64::from(parameters.format),
+        i64::from(parameters.profile),
+        i64::from(parameters.sample_rate),
+        i64::from(parameters.ch_layout.nb_channels),
+        i64::from(parameters.ch_layout.order as i32),
+        i64::from(parameters.frame_size),
+        i64::from(parameters.initial_padding),
+        i64::from(parameters.trailing_padding),
+        i64::from(parameters.seek_preroll),
+        i64::from(parameters.block_align),
+        i64::from(parameters.bits_per_coded_sample),
+        extradata.len() as i64,
+    ] {
+        digest.update(value.to_le_bytes());
+    }
+    digest.update(extradata);
+}
+
+fn digest_track_packet(digest: &mut sha2::Sha256, packet: &ffmpeg::Packet) {
+    use sha2::Digest;
+    let data = packet.data().unwrap_or_default();
+    digest.update((data.len() as u64).to_le_bytes());
+    digest.update(data);
+    digest.update(packet.flags().bits().to_le_bytes());
+    let raw = unsafe { &*ffmpeg::packet::Ref::as_ptr(packet) };
+    let side_data = if raw.side_data.is_null() || raw.side_data_elems <= 0 {
+        &[][..]
+    } else {
+        unsafe { std::slice::from_raw_parts(raw.side_data, raw.side_data_elems as usize) }
+    };
+    digest.update((side_data.len() as u64).to_le_bytes());
+    for entry in side_data {
+        let bytes = if entry.data.is_null() {
+            &[][..]
+        } else {
+            unsafe { std::slice::from_raw_parts(entry.data, entry.size) }
+        };
+        digest.update((entry.type_ as i64).to_le_bytes());
+        digest.update((bytes.len() as u64).to_le_bytes());
+        digest.update(bytes);
+    }
+}
+
+fn validate_audio_inputs_with_digest(
+    fragments: &[PathBuf],
+    init: Option<&Path>,
+    workspace: &Path,
+) -> Result<Option<[u8; 32]>, RecoveryError> {
+    use sha2::Digest;
+    let Some(init) = init else {
+        validate_recovery_track_inputs(
+            fragments,
+            None,
+            workspace,
+            ffmpeg::media::Type::Audio,
+            VideoValidation::Full,
+        )?;
+        return Ok(None);
+    };
+    if fragments.is_empty() {
+        return Err(RecoveryError::NoRecoverableSegments);
+    }
+    let path = workspace.join(format!(".validate-{}.mp4", uuid::Uuid::new_v4()));
+    let mut output = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)?;
+    for source in std::iter::once(init).chain(fragments.iter().map(PathBuf::as_path)) {
+        std::io::copy(&mut std::fs::File::open(source)?, &mut output)?;
+    }
+    output.sync_all()?;
+    drop(output);
+    let mut digest = sha2::Sha256::new();
+    validate_recovery_track_with_digest(
+        &path,
+        ffmpeg::media::Type::Audio,
+        VideoValidation::Full,
+        Some(&mut digest),
+    )?;
+    std::fs::remove_file(path)?;
+    Ok(Some(digest.finalize().into()))
+}
+
+fn audio_packet_digest(path: &Path) -> Result<[u8; 32], String> {
+    use sha2::Digest;
+    let mut input = ffmpeg::format::input(path).map_err(|error| error.to_string())?;
+    let stream = input
+        .streams()
+        .best(ffmpeg::media::Type::Audio)
+        .ok_or("Missing audio stream")?;
+    let index = stream.index();
+    let mut digest = sha2::Sha256::new();
+    digest_track_parameters(&mut digest, &stream.parameters());
+    for mut other in input.streams_mut().filter(|stream| stream.index() != index) {
+        unsafe { (*other.as_mut_ptr()).discard = ffmpeg::ffi::AVDiscard::AVDISCARD_ALL };
+    }
+    loop {
+        let mut packet = ffmpeg::Packet::empty();
+        match packet.read(&mut input) {
+            Ok(()) => {}
+            Err(ffmpeg::Error::Eof) => break,
+            Err(error) => return Err(error.to_string()),
+        }
+        if packet.stream() == index {
+            digest_track_packet(&mut digest, &packet);
+        }
+    }
+    Ok(digest.finalize().into())
+}
+
+fn validate_merged_audio(path: &Path, inputs: Option<[u8; 32]>) -> Result<(), RecoveryError> {
+    if let Some(inputs) = inputs {
+        match audio_packet_digest(path) {
+            Ok(merged) if merged == inputs => return Ok(()),
+            Ok(_) => {
+                debug!(path = %path.display(), "Merged audio differs from its inputs; decoding it")
+            }
+            Err(error) => {
+                debug!(path = %path.display(), %error, "Merged audio could not be compared; decoding it")
+            }
+        }
+    }
+    validate_recovered_track(path, ffmpeg::media::Type::Audio)
 }
 
 const RECOVERY_INPUTS: [&str; 4] = [
@@ -4192,13 +4337,25 @@ fn validate_recovery_track(
     kind: ffmpeg::media::Type,
     video_validation: VideoValidation,
 ) -> Result<(), RecoveryError> {
-    let validate = || -> Result<(), String> {
+    validate_recovery_track_with_digest(path, kind, video_validation, None)
+}
+
+fn validate_recovery_track_with_digest(
+    path: &Path,
+    kind: ffmpeg::media::Type,
+    video_validation: VideoValidation,
+    mut digest: Option<&mut sha2::Sha256>,
+) -> Result<(), RecoveryError> {
+    let mut validate = || -> Result<(), String> {
         let mut input = ffmpeg::format::input(path).map_err(|error| error.to_string())?;
         let stream = input
             .streams()
             .best(kind)
             .ok_or_else(|| format!("Missing {kind:?} stream"))?;
         let index = stream.index();
+        if let Some(digest) = digest.as_deref_mut() {
+            digest_track_parameters(digest, &stream.parameters());
+        }
         let mut context = ffmpeg::codec::Context::from_parameters(stream.parameters())
             .map_err(|error| error.to_string())?;
         if kind == ffmpeg::media::Type::Video && video_validation == VideoValidation::Full {
@@ -4226,6 +4383,9 @@ fn validate_recovery_track(
             }
             if packet.is_corrupt() {
                 return Err("Corrupt packet".into());
+            }
+            if let Some(digest) = digest.as_deref_mut() {
+                digest_track_packet(digest, &packet);
             }
             if decoded
                 && kind == ffmpeg::media::Type::Video
@@ -7923,5 +8083,146 @@ mod timed_fragment_tests {
         );
         assert_eq!(std::fs::read(output).unwrap(), b"existing");
         assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 3);
+    }
+}
+
+#[cfg(test)]
+mod merged_audio_digest_tests {
+    use super::*;
+    use cap_enc_ffmpeg::{
+        dash_audio::{DashAudioSegmentEncoder, DashAudioSegmentEncoderConfig},
+        segmented_stream::{SegmentedVideoEncoder, SegmentedVideoEncoderConfig},
+    };
+
+    fn instant_tracks(content: &Path, seconds: u64) {
+        let mut video = SegmentedVideoEncoder::init(
+            content.join("display"),
+            cap_media_info::VideoInfo {
+                pixel_format: cap_media_info::Pixel::NV12,
+                width: 320,
+                height: 240,
+                time_base: ffmpeg::Rational(1, 1_000_000),
+                frame_rate: ffmpeg::Rational(30, 1),
+            },
+            SegmentedVideoEncoderConfig {
+                segment_duration: Duration::from_secs(1),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        for index in 0..seconds * 30 {
+            let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::NV12, 320, 240);
+            frame.data_mut(0).fill((index % 200) as u8);
+            frame.data_mut(1).fill(128);
+            video
+                .queue_frame(frame, Duration::from_micros(index * 1_000_000 / 30))
+                .unwrap();
+        }
+        video.finish().unwrap();
+
+        let mut audio = DashAudioSegmentEncoder::init(
+            content.join("audio"),
+            cap_media_info::AudioInfo {
+                sample_format: ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Planar),
+                sample_rate: 48_000,
+                channels: 1,
+                time_base: ffmpeg::Rational(1, 48_000),
+                buffer_size: 1024,
+                is_wireless_transport: false,
+            },
+            DashAudioSegmentEncoderConfig {
+                segment_duration: Duration::from_secs(1),
+            },
+        )
+        .unwrap();
+        let mut offset = 0u64;
+        while offset < seconds * 48_000 {
+            let mut frame = ffmpeg::frame::Audio::new(
+                ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Planar),
+                1024,
+                ffmpeg::ChannelLayout::MONO,
+            );
+            frame.set_rate(48_000);
+            frame.set_pts(Some(offset as i64));
+            for (i, chunk) in frame.data_mut(0).chunks_exact_mut(4).enumerate() {
+                let t = (offset as f32 + i as f32) / 48_000.0;
+                chunk.copy_from_slice(
+                    &((t * 440.0 * std::f32::consts::TAU).sin() * 0.3).to_ne_bytes(),
+                );
+            }
+            audio
+                .queue_frame(frame, Duration::from_micros(offset * 1_000_000 / 48_000))
+                .unwrap();
+            offset += 1024;
+        }
+        audio.finish().unwrap();
+    }
+
+    struct Merged {
+        _directory: tempfile::TempDir,
+        merged: PathBuf,
+        video_only: PathBuf,
+        inputs: Option<[u8; 32]>,
+    }
+
+    fn merged_instant_output() -> Merged {
+        ffmpeg::init().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let content = directory.path().join("content");
+        instant_tracks(&content, 3);
+        let audio = RecoveryManager::find_complete_fragments_with_init(&content.join("audio"));
+        let inputs = validate_audio_inputs_with_digest(
+            &audio.fragments,
+            audio.init_segment.as_deref(),
+            &content,
+        )
+        .unwrap();
+        let video_only = content.join("video.mp4");
+        RecoveryManager::finalize_to_progressive_mp4_with_validation(
+            &content.join("display"),
+            &video_only,
+            None,
+            VideoValidation::Bounded,
+            false,
+        )
+        .unwrap();
+        let audio_only = content.join("audio.mp4");
+        RecoveryManager::finalize_audio_fragments_to_progressive_mp4(
+            &audio.fragments,
+            audio.init_segment.as_deref(),
+            &audio_only,
+            "audio",
+        )
+        .unwrap();
+        let merged = content.join("merged.mp4");
+        merge_video_audio(&video_only, &audio_only, &merged).unwrap();
+        Merged {
+            _directory: directory,
+            merged,
+            video_only,
+            inputs,
+        }
+    }
+
+    #[test]
+    fn merged_instant_audio_hashes_the_same_as_its_decoded_inputs() {
+        let output = merged_instant_output();
+        let inputs = output
+            .inputs
+            .expect("audio with an init segment has a digest");
+        assert_eq!(audio_packet_digest(&output.merged).unwrap(), inputs);
+        validate_merged_audio(&output.merged, Some(inputs)).unwrap();
+    }
+
+    #[test]
+    fn merged_audio_that_differs_from_its_inputs_is_decoded_in_full() {
+        let output = merged_instant_output();
+        validate_merged_audio(&output.merged, Some([0; 32])).unwrap();
+        validate_merged_audio(&output.merged, None).unwrap();
+        let missing = validate_merged_audio(&output.video_only, output.inputs).unwrap_err();
+        assert!(
+            missing.to_string().contains("Missing Audio stream"),
+            "{missing}"
+        );
     }
 }
