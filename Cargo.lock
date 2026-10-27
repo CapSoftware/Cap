@@ -1292,6 +1292,7 @@ dependencies = [
  "reqwest",
  "rmcp",
  "rpassword",
+ "same-file",
  "scap-screencapturekit",
  "scap-targets",
  "serde",

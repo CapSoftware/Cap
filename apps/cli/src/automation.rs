@@ -96,6 +96,12 @@ impl AutomationHost for CliAutomationHost {
         if let Some(parent) = dst.parent() {
             std::fs::create_dir_all(parent).map_err(|e| format!("Failed to create dir: {e}"))?;
         }
+        if dst.exists()
+            && is_same_file(src, &dst)
+                .map_err(|e| format!("Failed to compare source and destination: {e}"))?
+        {
+            return Ok(());
+        }
         std::fs::copy(src, &dst).map_err(|e| format!("Failed to copy file: {e}"))?;
         tracing::info!(dst = %dst.display(), "automation: saved file");
         Ok(())
@@ -382,6 +388,22 @@ impl AutomationHost for CliAutomationHost {
     }
 }
 
+fn is_same_file(source: &Path, destination: &Path) -> std::io::Result<bool> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+
+        // Metadata preserves support for write-only destinations.
+        let source = source.metadata()?;
+        let destination = destination.metadata()?;
+        Ok(source.dev() == destination.dev() && source.ino() == destination.ino())
+    }
+    #[cfg(not(unix))]
+    {
+        same_file::is_same_file(source, destination)
+    }
+}
+
 fn map_compression(
     compression: Option<AutomationExportCompression>,
 ) -> cap_export::mp4::ExportCompression {
@@ -581,6 +603,76 @@ pub fn list(format: crate::OutputFormat) -> Result<(), String> {
 mod tests {
     use super::*;
     use cap_automation::{Action, AutomationRule, MatchMode};
+
+    #[tokio::test]
+    async fn cli_save_to_location_preserves_a_screenshot_already_at_the_destination() {
+        for filename_template in [None, Some("capture.png"), Some("capture-link.png")] {
+            let temp = tempfile::tempdir().unwrap();
+            let source = temp.path().join("capture.png");
+            let contents = b"owned screenshot must survive";
+            std::fs::write(&source, contents).unwrap();
+            std::fs::hard_link(&source, temp.path().join("capture-link.png")).unwrap();
+            let ctx = TriggerContext::new().with_image_path(source.clone());
+
+            CliAutomationHost
+                .save_to_location(&ctx, temp.path().to_str().unwrap(), filename_template)
+                .await
+                .unwrap();
+
+            assert_eq!(std::fs::read(&source).unwrap(), contents);
+            assert_eq!(
+                std::fs::read(temp.path().join("capture-link.png")).unwrap(),
+                contents
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn cli_save_to_location_copies_and_replaces_a_distinct_destination() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("capture.png");
+        let destination = temp.path().join("saved");
+        let ctx = TriggerContext::new()
+            .with_image_path(source.clone())
+            .with_window_title("Capture".to_string());
+
+        for contents in [b"original screenshot", b"updated screenshot!"] {
+            std::fs::write(&source, contents).unwrap();
+            CliAutomationHost
+                .save_to_location(&ctx, destination.to_str().unwrap(), Some("{window}.png"))
+                .await
+                .unwrap();
+
+            assert_eq!(std::fs::read(&source).unwrap(), contents);
+            assert_eq!(
+                std::fs::read(destination.join("Capture.png")).unwrap(),
+                contents
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cli_save_to_location_overwrites_a_write_only_destination() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("capture.png");
+        let destination = temp.path().join("saved.png");
+        std::fs::write(&source, b"new screenshot").unwrap();
+        std::fs::write(&destination, b"previous screenshot").unwrap();
+        std::fs::set_permissions(&destination, std::fs::Permissions::from_mode(0o200)).unwrap();
+        let ctx = TriggerContext::new().with_image_path(source.clone());
+
+        let result = CliAutomationHost
+            .save_to_location(&ctx, temp.path().to_str().unwrap(), Some("saved.png"))
+            .await;
+        std::fs::set_permissions(&destination, std::fs::Permissions::from_mode(0o600)).unwrap();
+        result.unwrap();
+
+        assert_eq!(std::fs::read(source).unwrap(), b"new screenshot");
+        assert_eq!(std::fs::read(destination).unwrap(), b"new screenshot");
+    }
 
     #[test]
     fn cli_presets_keep_caption_source_and_edits_after_reopening() {
