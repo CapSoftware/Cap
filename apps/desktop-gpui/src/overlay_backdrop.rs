@@ -24,6 +24,9 @@ use scap_targets::DisplayId;
 /// A capture older than this is retaken the next time the overlay draws.
 pub const STALE_AFTER: Duration = Duration::from_secs(3);
 
+/// How long the panels must hold still before a stale capture is retaken.
+pub const SETTLE: Duration = Duration::from_millis(400);
+
 /// The longest a capture may take before the panes give up on it.
 const TIMEOUT: Duration = Duration::from_millis(1500);
 

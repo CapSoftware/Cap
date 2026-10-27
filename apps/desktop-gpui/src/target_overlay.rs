@@ -981,6 +981,11 @@ pub struct OverlayWindow {
     /// When the backdrop was captured, and whether a capture is running.
     backdrop_at: Option<Instant>,
     backdrop_capturing: bool,
+    /// The area as the last render drew it, and when it last changed: a
+    /// capture waits for the panels to stop moving.
+    backdrop_crop: Option<AreaRect>,
+    crop_moved_at: Option<Instant>,
+    backdrop_wake_pending: bool,
     inline_camera: Option<Entity<crate::camera_window::CameraWindow>>,
     inline_camera_subscription: Option<gpui::Subscription>,
     empty_camera_state: crate::store::CameraWindowState,
@@ -1141,6 +1146,9 @@ impl OverlayWindow {
             backdrop: crate::ui::glass::Backdrop::new(fallback_fill(&theme)),
             backdrop_at: None,
             backdrop_capturing: false,
+            backdrop_crop: None,
+            crop_moved_at: None,
+            backdrop_wake_pending: false,
             inline_camera: None,
             inline_camera_subscription: None,
             empty_camera_state: crate::store::load().camera_window.unwrap_or_default(),
@@ -1314,11 +1322,38 @@ impl OverlayWindow {
             }
             return;
         }
+        if self.backdrop_crop != self.crop {
+            self.backdrop_crop = self.crop;
+            self.crop_moved_at = Some(Instant::now());
+        }
         if self.backdrop_capturing
             || self
                 .backdrop_at
                 .is_some_and(|at| at.elapsed() < crate::overlay_backdrop::STALE_AFTER)
         {
+            return;
+        }
+        // While the panels move with a dragged area the old capture holds:
+        // retake it once they settle rather than mid-drag.
+        let settling = self.backdrop.has_image()
+            && self
+                .crop_moved_at
+                .is_some_and(|at| at.elapsed() < crate::overlay_backdrop::SETTLE);
+        if settling {
+            if !self.backdrop_wake_pending {
+                self.backdrop_wake_pending = true;
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor()
+                        .timer(crate::overlay_backdrop::SETTLE)
+                        .await;
+                    this.update(cx, |this, cx| {
+                        this.backdrop_wake_pending = false;
+                        cx.notify();
+                    })
+                    .ok();
+                })
+                .detach();
+            }
             return;
         }
         self.backdrop_capturing = true;
