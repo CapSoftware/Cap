@@ -1,0 +1,47 @@
+name: Perf hunt finalize bench
+
+on:
+  push:
+    branches:
+      - perfhunt/finalize-bench
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - blacksmith-8vcpu-windows-2025
+          - windows-2022
+          - blacksmith-8vcpu-ubuntu-2404
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - name: Install desktop dependencies
+        uses: ./.github/actions/install-desktop-deps
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Native dependencies
+        env:
+          RUST_TARGET_TRIPLE: ${{ runner.os == 'Windows' && 'x86_64-pc-windows-msvc' || 'x86_64-unknown-linux-gnu' }}
+        run: node scripts/setup.js
+      - name: Add FFmpeg DLLs to PATH
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Add-Content -Path $env:GITHUB_PATH -Value "${{ github.workspace }}\\target\\ffmpeg\\bin"
+      - name: Build
+        shell: bash
+        run: cargo test --release --locked -p cap-recording --lib instant_finalize_benchmark --no-run
+      - name: Bench
+        shell: bash
+        env:
+          CAP_FINALIZE_BENCH_DIR: ${{ runner.temp }}/finalize-bench
+          CAP_FINALIZE_BENCH_SECONDS: "60,300,1800"
+          CAP_FINALIZE_BENCH_RUNS: "3"
+        run: cargo test --release --locked -p cap-recording --lib instant_finalize_benchmark -- --ignored --nocapture 2>&1 | grep -E "^fixture|^instant-finalize|panicked|error"

@@ -28,6 +28,8 @@ mod prefix;
 mod preparing_observer;
 mod preparing_projection;
 mod retirement;
+#[cfg(test)]
+mod instant_finalize_bench;
 
 type PreparingRecoveryLock = retirement::RecoveryLease;
 
