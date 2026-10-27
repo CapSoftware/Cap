@@ -10,7 +10,13 @@
 //! Linux has no way to leave a window out of a capture short of unmapping
 //! it, so its panes keep the plain fallback fill.
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
+    time::Duration,
+};
 
 use cap_recording::sources::screen_capture::ScreenCaptureTarget;
 use gpui::{AsyncApp, RenderImage, Window};
@@ -24,6 +30,27 @@ const TIMEOUT: Duration = Duration::from_millis(1500);
 
 /// Whether this platform can capture the desktop without the overlay.
 pub const SUPPORTED: bool = cfg!(any(target_os = "macos", windows));
+
+/// Set by the picker probe to measure the picker without captures.
+static DISABLED: AtomicBool = AtomicBool::new(false);
+
+/// How long the last capture took, start to GPU-ready image, for the probe.
+static LAST_CAPTURE_MS: AtomicU64 = AtomicU64::new(0);
+
+/// Whether overlays capture the desktop for their glass.
+pub fn enabled() -> bool {
+    SUPPORTED && !DISABLED.load(Ordering::Relaxed)
+}
+
+#[cfg(debug_assertions)]
+pub fn set_disabled(disabled: bool) {
+    DISABLED.store(disabled, Ordering::Relaxed);
+}
+
+#[cfg(debug_assertions)]
+pub fn last_capture_ms() -> u64 {
+    LAST_CAPTURE_MS.load(Ordering::Relaxed)
+}
 
 #[cfg(target_os = "macos")]
 const CAPTURE_HIDDEN: usize = 0;
@@ -90,10 +117,9 @@ pub async fn capture(
             .background_executor()
             .spawn(async move { crate::library::rgba_to_render_image(image.into_rgba8()) })
             .await;
-        tracing::debug!(
-            elapsed_ms = started.elapsed().as_millis() as u64,
-            "overlay backdrop captured"
-        );
+        let elapsed_ms = started.elapsed().as_millis() as u64;
+        LAST_CAPTURE_MS.store(elapsed_ms, Ordering::Relaxed);
+        tracing::debug!(elapsed_ms, "overlay backdrop captured");
         Some(image)
     }
     #[cfg(not(any(target_os = "macos", windows)))]

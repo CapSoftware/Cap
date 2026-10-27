@@ -1282,10 +1282,8 @@ impl OverlayWindow {
     /// shows controls, and let it go when it does not. A capture is taken
     /// only when the overlay draws, so a picker left alone takes none.
     fn sync_backdrop(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !crate::overlay_backdrop::SUPPORTED {
-            return;
-        }
-        let showing = !self.recording_area
+        let showing = crate::overlay_backdrop::enabled()
+            && !self.recording_area
             && self.select.read(cx).mode.is_some()
             && self.is_active_display(window, cx);
         if !showing {
@@ -1335,6 +1333,25 @@ impl OverlayWindow {
     #[cfg(debug_assertions)]
     pub(crate) fn backdrop_image(&self) -> Option<Arc<gpui::RenderImage>> {
         self.backdrop.image()
+    }
+
+    /// Move the drawn area `offset` points right, the way a drag would, for
+    /// the picker probe's timing.
+    #[cfg(debug_assertions)]
+    pub(crate) fn probe_offset_area(
+        &mut self,
+        base: AreaRect,
+        offset: f32,
+        cx: &mut Context<Self>,
+    ) {
+        self.crop = Some(
+            AreaRect {
+                x: base.x + offset,
+                ..base
+            }
+            .clamped(self.display_size),
+        );
+        cx.notify();
     }
 
     /// Retake the backdrop once a moved window has settled.

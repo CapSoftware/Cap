@@ -27,6 +27,7 @@ pub fn run(main: WindowHandle<MainWindow>, cx: &mut App) {
 
         let mut modes = Vec::new();
         let mut window_arrangement = None;
+        let mut perf = None;
         for (label, kind) in [
             ("display", TargetType::Display),
             ("window", TargetType::Window),
@@ -79,6 +80,9 @@ pub fn run(main: WindowHandle<MainWindow>, cx: &mut App) {
             if kind == TargetType::Window {
                 window_arrangement = Some(probe_window_arrangement(&output, cx).await);
             }
+            if kind == TargetType::Area {
+                perf = Some(probe_perf(cx).await);
+            }
             cx.update(app_windows::dismiss_target_overlays);
             sleep(cx, 400).await;
         }
@@ -95,6 +99,7 @@ pub fn run(main: WindowHandle<MainWindow>, cx: &mut App) {
             "passed": passed,
             "modes": modes,
             "windowArrangement": window_arrangement,
+            "perf": perf,
         });
         if let Err(error) = std::fs::write(output, report.to_string()) {
             tracing::error!(%error, "Could not write picker probe results");
@@ -489,4 +494,101 @@ fn own_window_stacking(ours: &[isize]) -> Vec<StackEntry> {
         }
     }
     stacking
+}
+
+#[cfg(unix)]
+fn cpu_secs() -> f64 {
+    let mut usage = std::mem::MaybeUninit::<libc::rusage>::zeroed();
+    unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) };
+    let usage = unsafe { usage.assume_init() };
+    let secs = |time: libc::timeval| time.tv_sec as f64 + time.tv_usec as f64 / 1_000_000.0;
+    secs(usage.ru_utime) + secs(usage.ru_stime)
+}
+
+#[cfg(windows)]
+fn cpu_secs() -> f64 {
+    use windows_sys::Win32::{
+        Foundation::FILETIME,
+        System::Threading::{GetCurrentProcess, GetProcessTimes},
+    };
+
+    let empty = FILETIME {
+        dwLowDateTime: 0,
+        dwHighDateTime: 0,
+    };
+    let (mut creation, mut exit, mut kernel, mut user) = (empty, empty, empty, empty);
+    unsafe {
+        GetProcessTimes(
+            GetCurrentProcess(),
+            &mut creation,
+            &mut exit,
+            &mut kernel,
+            &mut user,
+        )
+    };
+    let secs = |time: FILETIME| {
+        ((u64::from(time.dwHighDateTime) << 32) | u64::from(time.dwLowDateTime)) as f64
+            / 10_000_000.0
+    };
+    secs(kernel) + secs(user)
+}
+
+fn cpu_percent_since(cpu: f64, wall: std::time::Instant) -> f64 {
+    (cpu_secs() - cpu) / wall.elapsed().as_secs_f64() * 100.
+}
+
+/// Slide the drawn area back and forth for `millis`, the way a drag moves
+/// the picker's panels, and return the process's CPU use meanwhile, as a
+/// percentage of one core.
+async fn drag_cpu(
+    overlays: &[(
+        scap_targets::DisplayId,
+        WindowHandle<crate::target_overlay::OverlayWindow>,
+    )],
+    base: AreaRect,
+    millis: u64,
+    cx: &mut AsyncApp,
+) -> f64 {
+    let (cpu, wall) = (cpu_secs(), std::time::Instant::now());
+    let mut step = 0u32;
+    while wall.elapsed() < Duration::from_millis(millis) {
+        let offset = 240. * (step as f32 * 0.05).sin();
+        cx.update(|cx| {
+            for (_, overlay) in overlays {
+                overlay
+                    .update(cx, |view, _, cx| view.probe_offset_area(base, offset, cx))
+                    .ok();
+            }
+        });
+        sleep(cx, 8).await;
+        step += 1;
+    }
+    cpu_percent_since(cpu, wall)
+}
+
+/// What the picker costs: the process's CPU use with the area picker left
+/// alone, and while its panels move, with and without the desktop capture
+/// under their glass, measured back to back in one process.
+async fn probe_perf(cx: &mut AsyncApp) -> serde_json::Value {
+    let overlays = cx.update(|cx| cx.global::<app_windows::AppWindows>().overlays.clone());
+    let base = AreaRect {
+        x: 200.,
+        y: 200.,
+        width: 640.,
+        height: 360.,
+    };
+    let (cpu, wall) = (cpu_secs(), std::time::Instant::now());
+    sleep(cx, 3000).await;
+    let idle = cpu_percent_since(cpu, wall);
+    let dragging = drag_cpu(&overlays, base, 6000, cx).await;
+    let capture_ms = crate::overlay_backdrop::last_capture_ms();
+    crate::overlay_backdrop::set_disabled(true);
+    let dragging_without_backdrop = drag_cpu(&overlays, base, 6000, cx).await;
+    crate::overlay_backdrop::set_disabled(false);
+    serde_json::json!({
+        "idleCpuPercent": idle,
+        "dragCpuPercent": dragging,
+        "dragCpuPercentWithoutBackdrop": dragging_without_backdrop,
+        "backdropCaptureMs": capture_ms,
+    })
 }
