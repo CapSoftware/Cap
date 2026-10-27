@@ -143,8 +143,8 @@ pub fn place(
         top + f32::from(control.size.height),
     );
     let (mid_x, mid_y) = ((left + right) / 2., (top + bottom) / 2.);
-    let clamp_x = |x: f32| x.min(win_w - MARGIN - w).max(MARGIN);
-    let clamp_y = |y: f32| y.min(win_h - MARGIN - h).max(MARGIN);
+    let clamp_x = |x: f32| x.clamp(MARGIN, (win_w - MARGIN - w).max(MARGIN));
+    let clamp_y = |y: f32| y.clamp(MARGIN, (win_h - MARGIN - h).max(MARGIN));
 
     let candidate = |side: Side| -> (f32, f32) {
         match side {
@@ -379,21 +379,17 @@ impl Hints {
         let arrow_at = f32::from(placed.arrow_at);
         // The arrow overlaps the bubble's border by a pixel so the two read
         // as one shape; the edge-coloured arrow behind it draws its outline.
-        let (arrow_w, arrow_h) = match placed.side {
-            Side::Above | Side::Below => (ARROW_BASE, ARROW),
-            Side::Right | Side::Left => (ARROW, ARROW_BASE),
-        };
         let arrow = |grow: f32, color: Hsla| {
-            let (aw, ah) = (arrow_w + grow * 2., arrow_h + grow);
+            let (base, depth) = (ARROW_BASE + grow * 2., ARROW + grow);
+            let (aw, ah) = match placed.side {
+                Side::Above | Side::Below => (base, depth),
+                Side::Right | Side::Left => (depth, base),
+            };
             let (left, top) = match placed.side {
                 Side::Above => (arrow_at - aw / 2., h - 1.),
                 Side::Below => (arrow_at - aw / 2., 1. - ah),
                 Side::Right => (1. - aw, arrow_at - ah / 2.),
                 Side::Left => (w - 1., arrow_at - ah / 2.),
-            };
-            let (aw, ah) = match placed.side {
-                Side::Above | Side::Below => (aw, ah),
-                Side::Right | Side::Left => (ah, aw),
             };
             svg()
                 .path(placed.side.arrow_icon())

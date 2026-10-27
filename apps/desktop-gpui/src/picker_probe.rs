@@ -238,27 +238,47 @@ async fn probe_window_arrangement(
         (rect.x + rect.width / 2. - width / 2.).abs() < width * 0.04
     });
     screenshot(output, "window-focus", cx).await;
+    let near = |a: Option<AreaRect>, b: Option<AreaRect>| {
+        a.zip(b).is_some_and(|(a, b)| {
+            (a.x - b.x).abs() < 6.
+                && (a.y - b.y).abs() < 6.
+                && (a.width - b.width).abs() < 6.
+                && (a.height - b.height).abs() < 6.
+        })
+    };
     overlay
         .update(cx, |view, _, cx| view.set_focus(false, cx))
         .ok();
-    sleep(cx, 600).await;
+    sleep(cx, 1500).await;
+    let unfocused = read_window(&picked.id);
+    let unfocused_ok = !near(unfocused, focused) || near(focused, before);
 
+    // Dismissed with the window still moved: only the dismissal can put it
+    // back.
+    overlay
+        .update(cx, |view, _, cx| view.set_focus(true, cx))
+        .ok();
+    sleep(cx, 1500).await;
+    let moved = !near(read_window(&picked.id), before);
     cx.update(app_windows::dismiss_target_overlays);
     sleep(cx, 1500).await;
     let restored = read_window(&picked.id);
-    let restored_ok = restored.zip(before).is_some_and(|(now, then)| {
-        (now.x - then.x).abs() < 6.
-            && (now.y - then.y).abs() < 6.
-            && (now.width - then.width).abs() < 6.
-            && (now.height - then.height).abs() < 6.
-    });
+    let restored_ok = moved && near(restored, before);
     serde_json::json!({
-        "passed": ratio_ok && inside(shaped) && centred && inside(focused) && restored_ok,
+        "passed": ratio_ok
+            && inside(shaped)
+            && centred
+            && inside(focused)
+            && unfocused_ok
+            && restored_ok,
         "before": rect_json(before),
         "sixteenByNine": rect_json(shaped),
         "ratioOk": ratio_ok,
         "focused": rect_json(focused),
         "centred": centred,
+        "unfocused": rect_json(unfocused),
+        "unfocusedOk": unfocused_ok,
+        "movedBeforeDismiss": moved,
         "restored": rect_json(restored),
         "restoredOk": restored_ok,
     })
@@ -328,17 +348,20 @@ async fn probe_backdrop(
     if !crate::overlay_backdrop::SUPPORTED {
         return serde_json::json!({ "skipped": "no capture without the overlay here" });
     }
+    // The overlay over the display `screen` shows, so the two compare the
+    // same desktop.
+    let primary = scap_targets::Display::primary().id();
     let image = cx.update(|cx| {
-        cx.global::<app_windows::AppWindows>()
+        let overlay = cx
+            .global::<app_windows::AppWindows>()
             .overlays
-            .clone()
-            .into_iter()
-            .find_map(|(_, overlay)| {
-                overlay
-                    .update(cx, |view, _, _| view.backdrop_image())
-                    .ok()
-                    .flatten()
-            })
+            .iter()
+            .find(|(display, _)| *display == primary)
+            .map(|(_, overlay)| *overlay)?;
+        overlay
+            .update(cx, |view, _, _| view.backdrop_image())
+            .ok()
+            .flatten()
     });
     let Some(image) = image else {
         return serde_json::json!({ "present": false, "passed": false });
