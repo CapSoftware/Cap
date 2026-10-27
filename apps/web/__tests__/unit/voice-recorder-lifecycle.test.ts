@@ -51,6 +51,7 @@ class Stream {
 class Recorder {
 	static isTypeSupported = () => true;
 	static startError: Error | null = null;
+	static pendingStops: Array<() => void> | null = null;
 	state: RecordingState = "inactive";
 	mimeType = "audio/webm";
 	ondataavailable: ((event: BlobEvent) => void) | null = null;
@@ -62,14 +63,19 @@ class Recorder {
 	}
 	stop() {
 		this.state = "inactive";
-		queueMicrotask(() => {
+		const finish = () => {
 			const event = new Event("dataavailable");
+			Object.defineProperty(event, "target", { value: this });
 			Object.defineProperty(event, "data", {
 				value: new Blob(["audio"], { type: "audio/webm" }),
 			});
 			this.ondataavailable?.(event as BlobEvent);
-			this.onstop?.(new Event("stop"));
-		});
+			const stopped = new Event("stop");
+			Object.defineProperty(stopped, "target", { value: this });
+			this.onstop?.(stopped);
+		};
+		if (Recorder.pendingStops) Recorder.pendingStops.push(finish);
+		else queueMicrotask(finish);
 	}
 }
 let root: Root;
@@ -87,6 +93,7 @@ function mixer(stream = new Stream()) {
 }
 beforeEach(async () => {
 	Recorder.startError = null;
+	Recorder.pendingStops = null;
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 	vi.stubGlobal("MediaRecorder", Recorder);
 	onFinish.mockReset();
@@ -231,3 +238,27 @@ it.each(["start", "restart"])(
 		expect(onFinish).not.toHaveBeenCalled();
 	},
 );
+
+it("keeps a replacement take when the previous stop event arrives late", async () => {
+	await act(async () => recorder.start());
+	Recorder.pendingStops = [];
+	let oldStop!: Promise<void>;
+	let newStart!: Promise<void>;
+	await act(async () => {
+		oldStop = recorder.stop();
+		recorder.cancel();
+		newStart = recorder.start();
+		await newStart;
+		await oldStop;
+	});
+	expect(recorder.phase).toBe("recording");
+	const pending = Recorder.pendingStops;
+	Recorder.pendingStops = null;
+	await act(async () => {
+		for (const finish of pending ?? []) finish();
+	});
+	expect(recorder.phase).toBe("recording");
+	await act(async () => recorder.stop());
+	expect(onFinish).toHaveBeenCalledTimes(1);
+	expect(recorder.phase).toBe("idle");
+});
