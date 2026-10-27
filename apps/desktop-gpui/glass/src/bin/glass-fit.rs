@@ -47,6 +47,9 @@ struct Sample {
 
 const PAD: f32 = 110.;
 
+/// How much more the black, grey and white scenes count in the colour fit.
+const NEUTRAL_WEIGHT: f64 = 12.;
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let reference = PathBuf::from(&args[1]);
@@ -99,6 +102,14 @@ fn main() {
             .as_ref()
             .and_then(|all| serde_json::from_value::<GlassMaterial>(all.get(&preset)?.clone()).ok())
         {
+            // `GLASS_RESOLVE=1`: keep the given blur, lensing and lighting but
+            // solve the colour transform again.
+            Some(material) if std::env::var_os("GLASS_RESOLVE").is_some() => {
+                prepare(&mut samples, &shapes, &material);
+                let (loss, material) = evaluate(&material, &shapes, &samples);
+                eprintln!("{preset}: re-solved colour, loss {loss:.2}");
+                material
+            }
             Some(material) => material,
             None => fit(&preset, &mut samples, &shapes),
         };
@@ -358,7 +369,15 @@ fn normal_equations(material: &GlassMaterial, shapes: &[Shape], samples: &[Sampl
             .map(|sample| {
                 scope.spawn(move || {
                     let mut normal = Normal::new();
+                    // Flat backdrops pin the grey axis, where any error shows
+                    // most; a handful of colourful scenes would otherwise
+                    // outvote them.
+                    let neutral = ["white-", "black-", "gray-"]
+                        .iter()
+                        .any(|prefix| sample.name.starts_with(prefix));
+                    let scene_weight = if neutral { NEUTRAL_WEIGHT } else { 1. };
                     for_each_glass_pixel(material, shapes, sample, true, |glass, _, x, y, weight| {
+                        let weight = weight * scene_weight;
                         let under = sample.backdrop.get(x, y);
                         let under = model::under_with_hairline(
                             glass,
@@ -374,9 +393,9 @@ fn normal_equations(material: &GlassMaterial, shapes: &[Shape], samples: &[Sampl
                             return;
                         }
                         let features = model::poly_features(glass.source);
-                        let weight = (glass.coverage * glass.scale) as f64;
+                        let scale = (glass.coverage * glass.scale) as f64;
                         let row: [f64; POLY_TERMS] =
-                            std::array::from_fn(|i| features[i] as f64 * weight);
+                            std::array::from_fn(|i| features[i] as f64 * scale);
                         for i in 0..POLY_TERMS {
                             for j in i..POLY_TERMS {
                                 normal.ata[i][j] += weight * row[i] * row[j];
