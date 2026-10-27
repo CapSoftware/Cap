@@ -86,11 +86,15 @@ pub fn run(main: WindowHandle<MainWindow>, cx: &mut App) {
                 .iter()
                 .all(|mode| mode["cameraAboveOverlays"].as_bool() == Some(true));
         let report = serde_json::json!({
-            "passed": passed,
             "modes": modes,
             "windowArrangement": window_arrangement,
         });
-        if let Err(error) = std::fs::write(output, report.to_string()) {
+        // The verdict leads so `run.sh` can read it without parsing JSON:
+        // nested checks carry `passed` keys of their own.
+        if let Err(error) = std::fs::write(
+            output,
+            format!("{{\"passed\":{passed},{}", &report.to_string()[1..]),
+        ) {
             tracing::error!(%error, "Could not write picker probe results");
         }
         cx.update(|cx| cx.quit());
