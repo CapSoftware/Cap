@@ -2124,6 +2124,18 @@ pub fn clip_roll_bounds(
         .min((right.end - right_min - right.start) / right.timescale);
     let min =
         ((left.start + left_min - left.end) / left.timescale).max(-right.start / right.timescale);
+    // A transition is capped at half its shorter clip, so a clip may not
+    // shrink below twice the transitions on its sides: a grown transition
+    // would overlap more and shorten the video.
+    let transition_floor = |indices: [usize; 2]| {
+        indices
+            .iter()
+            .filter_map(|&index| timeline.effective_transition(index))
+            .map(|transition| transition.duration * 2.)
+            .fold(0., f64::max)
+    };
+    let max = max.min(right.duration() - transition_floor([edge + 1, edge + 2]));
+    let min = min.max(transition_floor([edge, edge + 1]) - left.duration());
     Some((min.min(0.), max.max(0.)))
 }
 
@@ -2138,6 +2150,20 @@ pub fn apply_clip_roll(
 ) -> bool {
     if edge + 1 >= timeline.segments.len() {
         return false;
+    }
+    // Pin the transitions around both clips to the lengths they play at now,
+    // so a capped one does not grow as a clip lengthens.
+    for index in edge..=edge + 2 {
+        let Some(effective) = timeline.effective_transition(index) else {
+            continue;
+        };
+        if let Some(transition) = timeline
+            .transitions
+            .iter_mut()
+            .find(|transition| transition.segment_index as usize == index)
+        {
+            transition.duration = effective.duration;
+        }
     }
     let left_scale = timeline.segments[edge].timescale;
     let right_scale = timeline.segments[edge + 1].timescale;
@@ -3026,6 +3052,28 @@ mod tests {
         // Right clip can open back to 0s (10 output secs at 2x); left keeps 0.1s
         assert!((min + 9.9).abs() < 1e-9, "min {min}");
         assert!(clip_roll_bounds(timeline, 1, 0.001, &[50.0]).is_none());
+    }
+
+    #[test]
+    fn rolling_keeps_capped_transitions_and_the_project_length() {
+        let mut project = config(serde_json::json!({
+            "timeline": {
+                "segments": [
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 2.0 },
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 10.0, "end": 20.0 }
+                ],
+                "zoomSegments": [],
+                "transitions": [{ "segmentIndex": 1, "type": "cross-fade", "duration": 4.0 }]
+            }
+        }));
+        let timeline = project.timeline.as_mut().unwrap();
+        let before = timeline.duration();
+        let (min, max) = clip_roll_bounds(timeline, 0, 0.001, &[50.0]).unwrap();
+        assert!((min - 0.).abs() < 1e-9, "min {min}");
+        assert!(max >= 2.0, "max {max}");
+        assert!(apply_clip_roll(timeline, 0, 2.0, 10.0, 2.0));
+        assert!((timeline.duration() - before).abs() < 1e-9);
+        assert_eq!(timeline.effective_transition(1).unwrap().duration, 1.0);
     }
 
     // -- Selection ----------------------------------------------------------
