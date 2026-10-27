@@ -899,6 +899,14 @@ impl OverlayWindow {
         let theme = Theme::for_window(window, cx, false);
         cx.observe_in(&select, window, |_, _, window, cx| repaint(window, cx))
             .detach();
+        // Activating an overlay (a click, or the focus hand-off when it opens)
+        // lifts it to the top of its band on Windows and X11, over the camera.
+        cx.observe_window_activation(window, |_, window, cx| {
+            if window.is_window_active() {
+                cx.defer(app_windows::raise_camera_above_overlays);
+            }
+        })
+        .detach();
         let session = crate::session::RecordingSession::global(cx);
         let mut drawn_phase = session.read(cx).phase;
         cx.observe_in(&session, window, move |_, session, window, cx| {
