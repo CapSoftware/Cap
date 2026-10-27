@@ -1,7 +1,7 @@
 use cap_project::{CameraShape, CursorEvents, ProjectConfiguration, RecordingMeta, XY};
 use cap_rendering::{
     DecodedFrame, DecodedSegmentFrames, FrameRenderer, ProjectUniforms, RenderOptions,
-    RenderVideoConstants, RendererLayers, ZoomTransformTimeline,
+    RenderVideoConstants, RendererLayers, RenderingError, ZoomTransformTimeline,
 };
 
 const QUADRANTS: [[u8; 3]; 4] = [[255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 255]];
@@ -50,7 +50,7 @@ async fn rotated_and_mirrored_cameras_land_each_quadrant_in_the_right_corner() {
     let studio = metadata.studio_meta().unwrap().clone();
     let screen_size = XY::new(160, 90);
     let camera_size = XY::new(80, 60);
-    let Ok(constants) = RenderVideoConstants::new_with_options(
+    let constants = match RenderVideoConstants::new_with_options(
         RenderOptions {
             screen_size,
             camera_size: Some(camera_size),
@@ -60,9 +60,13 @@ async fn rotated_and_mirrored_cameras_land_each_quadrant_in_the_right_corner() {
         studio,
     )
     .await
-    else {
-        eprintln!("no GPU adapter available, skipping camera rotation pixels");
-        return;
+    {
+        Ok(constants) => constants,
+        Err(RenderingError::NoAdapter) => {
+            eprintln!("no GPU adapter available, skipping camera rotation pixels");
+            return;
+        }
+        Err(error) => panic!("render setup failed: {error}"),
     };
     let cursor = CursorEvents::default();
     let camera = image::RgbaImage::from_fn(camera_size.x, camera_size.y, |x, y| {
