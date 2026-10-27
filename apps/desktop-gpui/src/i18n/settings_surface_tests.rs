@@ -364,6 +364,14 @@ fn settings_surfaces_match_the_literals_they_replaced() {
             "In your browser",
         ),
         (
+            tr::settings::shortcuts::outcome::instant_show_cap(),
+            "Show Cap",
+        ),
+        (
+            tr::settings::shortcuts::outcome::instant_show_cap_hint(),
+            "Back to the recorder",
+        ),
+        (
             tr::settings::shortcuts::outcome::instant_copy_link(),
             "Copy link only",
         ),
