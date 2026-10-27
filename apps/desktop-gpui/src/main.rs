@@ -42,6 +42,7 @@ mod editor_tabs;
 mod editor_timeline;
 mod editor_window;
 mod feeds;
+mod focus_border;
 mod hotkeys;
 mod i18n;
 mod import;

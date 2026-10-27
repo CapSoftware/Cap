@@ -18,6 +18,27 @@ pub fn run(main: WindowHandle<MainWindow>, cx: &mut App) {
             .and_then(|delay| delay.parse().ok())
             .unwrap_or(2000);
         sleep(cx, delay).await;
+        // `CAP_PICKER_PROBE_HOLD=window` (or `display`, `area`) arms that
+        // picker and leaves it up, for a script to drive the pointer over it.
+        if let Ok(hold) = std::env::var("CAP_PICKER_PROBE_HOLD") {
+            let kind = match hold.as_str() {
+                "display" => TargetType::Display,
+                "area" => TargetType::Area,
+                _ => TargetType::Window,
+            };
+            main.update(cx, |view, _, cx| view.arm_overlay(kind, cx))
+                .ok();
+            sleep(cx, 800).await;
+            cx.update(|cx| {
+                let overlays = cx.global::<app_windows::AppWindows>().overlays.clone();
+                for (_, overlay) in overlays {
+                    overlay
+                        .update(cx, |_, window, _| window.activate_window())
+                        .ok();
+                }
+            });
+            return;
+        }
         cx.update(app_windows::open_camera_window);
         sleep(cx, 800).await;
 

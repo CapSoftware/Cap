@@ -47,6 +47,7 @@ mod editor_button;
 mod field;
 pub mod glass;
 mod glass_switch;
+mod hint;
 mod kbd;
 pub mod keyboard_nav;
 mod menu;
@@ -89,6 +90,8 @@ pub use editor_button::{EditorButton, EditorButtonVariant};
 #[allow(unused_imports)]
 pub use field::{Field, Subfield};
 #[allow(unused_imports)]
+pub use hint::{Hint, Hints};
+
 pub use kbd::{KbdChip, KbdSize, kbd_symbol};
 #[allow(unused_imports)]
 pub use menu::{Menu, MenuItem, MenuKey, MenuState};
