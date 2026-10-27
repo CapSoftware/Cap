@@ -1,5 +1,5 @@
 diff --git a/crates/gpui/src/scene.rs b/crates/gpui/src/scene.rs
-index 6cc3562..6ea0576 100644
+index 6cc3562..c49648d 100644
 --- a/crates/gpui/src/scene.rs
 +++ b/crates/gpui/src/scene.rs
 @@ -52,7 +52,7 @@ pub struct Scene {
@@ -22,7 +22,7 @@ index 6cc3562..6ea0576 100644
  #[derive(Debug, Copy, Clone)]
  #[repr(C)]
  #[expect(missing_docs)]
-@@ -624,6 +624,53 @@ pub struct BackdropBlur {
+@@ -624,6 +624,78 @@ pub struct BackdropBlur {
      pub bounds: Bounds<ScaledPixels>,
      pub content_mask: ContentMask<ScaledPixels>,
      pub corner_radii: Corners<ScaledPixels>,
@@ -35,16 +35,16 @@ index 6cc3562..6ea0576 100644
 +///
 +/// Per pixel: the blurred backdrop is sampled along the edge normal by
 +/// `rim_bend` within the `lens_rim`-wide rim (falling off with
-+/// `lens_curve`) and transformed by a second-order polynomial: each output
-+/// channel `c` is `poly[c * 10..]` dotted with `r, g, b, r², g², b², rg, gb,
-+/// rb, 1`. An edge line then scales the colour by `1 + line + line_lit`
++/// `lens_curve`) and transformed by a cubic polynomial: each output channel
++/// `c` is `poly[c * 13..]` dotted with `r, g, b, r², g², b², rg, gb, rb, r³,
++/// g³, b³, 1`. An edge line then scales the colour by `1 + line + line_lit`
 +/// times how much the edge faces `light_x`/`light_y` (decaying over
 +/// `line_width`), and an inner glow adds `glow` (decaying over
 +/// `glow_width`). Over a transparent backdrop the glass is `opacity` opaque.
 +/// The pixel ring just outside the edge gets a hairline,
 +/// `clamp(min(under, a * under + b), 0, 1)`, with `a` and `b` blended from
 +/// `hairline[0..2]` on vertical edges to `hairline[2..4]` on horizontal ones.
-+#[derive(Debug, Default, Copy, Clone, PartialEq)]
++#[derive(Debug, Copy, Clone, PartialEq)]
 +#[repr(C)]
 +#[expect(missing_docs)]
 +pub struct GlassStyle {
@@ -52,7 +52,7 @@ index 6cc3562..6ea0576 100644
 +    pub lens_rim: f32,
 +    pub lens_curve: f32,
 +    pub rim_bend: f32,
-+    pub poly: [f32; 30],
++    pub poly: [f32; 39],
 +    pub opacity: f32,
 +    pub line: f32,
 +    pub line_lit: f32,
@@ -62,6 +62,31 @@ index 6cc3562..6ea0576 100644
 +    pub glow: f32,
 +    pub glow_width: f32,
 +    pub hairline: [f32; 4],
++    /// Keeps the struct a multiple of 8 bytes, which WGSL's storage layout
++    /// requires of `BackdropBlur`.
++    pub pad: f32,
++}
++
++impl Default for GlassStyle {
++    fn default() -> Self {
++        Self {
++            enabled: 0,
++            lens_rim: 0.,
++            lens_curve: 0.,
++            rim_bend: 0.,
++            poly: [0.; 39],
++            opacity: 0.,
++            line: 0.,
++            line_lit: 0.,
++            line_width: 0.,
++            light_x: 0.,
++            light_y: 0.,
++            glow: 0.,
++            glow_width: 0.,
++            hairline: [0.; 4],
++            pad: 0.,
++        }
++    }
 +}
 +
 +impl GlassStyle {
@@ -148,7 +173,7 @@ index 70e9a0b..79415df 100644
              "Underline".into(),
              "UnderlineInputIndex".into(),
 diff --git a/crates/gpui_macos/src/metal_renderer.rs b/crates/gpui_macos/src/metal_renderer.rs
-index 4be15aa..f4c608d 100644
+index 4be15aa..56248f3 100644
 --- a/crates/gpui_macos/src/metal_renderer.rs
 +++ b/crates/gpui_macos/src/metal_renderer.rs
 @@ -979,7 +979,7 @@ impl MetalRenderer {
@@ -213,7 +238,7 @@ index 4be15aa..f4c608d 100644
          });
          scene.pop_layer();
      }
-@@ -2741,6 +2750,197 @@ mod backdrop_blur_tests {
+@@ -2741,6 +2750,215 @@ mod backdrop_blur_tests {
          );
      }
  
@@ -228,10 +253,16 @@ index 4be15aa..f4c608d 100644
 +    }
 +
 +    fn test_glass() -> GlassStyle {
-+        let mut poly = [0.; 30];
-+        poly[..10].copy_from_slice(&[0.6, 0.15, 0.05, -0.2, 0.1, 0.0, 0.05, 0.0, 0.02, 0.22]);
-+        poly[10..20].copy_from_slice(&[0.05, 0.5, 0.1, 0.0, -0.15, 0.05, 0.0, 0.04, 0.0, 0.2]);
-+        poly[20..].copy_from_slice(&[0.12, 0.05, 0.55, 0.0, 0.0, -0.1, 0.02, 0.0, 0.03, 0.18]);
++        let mut poly = [0.; 39];
++        poly[..13].copy_from_slice(&[
++            0.6, 0.15, 0.05, -0.2, 0.1, 0.0, 0.05, 0.0, 0.02, 0.1, 0.0, -0.02, 0.22,
++        ]);
++        poly[13..26].copy_from_slice(&[
++            0.05, 0.5, 0.1, 0.0, -0.15, 0.05, 0.0, 0.04, 0.0, 0.0, 0.08, 0.0, 0.2,
++        ]);
++        poly[26..].copy_from_slice(&[
++            0.12, 0.05, 0.55, 0.0, 0.0, -0.1, 0.02, 0.0, 0.03, -0.03, 0.0, 0.06, 0.18,
++        ]);
 +        GlassStyle {
 +            enabled: 1,
 +            lens_rim: 28.,
@@ -247,6 +278,7 @@ index 4be15aa..f4c608d 100644
 +            glow: 0.04,
 +            glow_width: 6.,
 +            hairline: [0.86, -0.12, 0.92, -0.08],
++            pad: 0.,
 +        }
 +    }
 +
@@ -384,14 +416,25 @@ index 4be15aa..f4c608d 100644
 +                    let s = sample(px + nx * glass.rim_bend * rim, py + ny * glass.rim_bend * rim);
 +                    let c = [s[0] / 255., s[1] / 255., s[2] / 255.];
 +                    let features = [
-+                        c[0], c[1], c[2], c[0] * c[0], c[1] * c[1], c[2] * c[2], c[0] * c[1],
-+                        c[1] * c[2], c[0] * c[2], 1.,
++                        c[0],
++                        c[1],
++                        c[2],
++                        c[0] * c[0],
++                        c[1] * c[1],
++                        c[2] * c[2],
++                        c[0] * c[1],
++                        c[1] * c[2],
++                        c[0] * c[2],
++                        c[0] * c[0] * c[0],
++                        c[1] * c[1] * c[1],
++                        c[2] * c[2] * c[2],
++                        1.,
 +                    ];
 +                    let facing = nx * glass.light_x + ny * glass.light_y;
 +                    let line = (-edge / glass.line_width).exp() * (glass.line + glass.line_lit * facing);
 +                    let glow = (-edge / glass.glow_width).exp() * glass.glow;
 +                    std::array::from_fn(|i| {
-+                        let value: f32 = (0..10).map(|t| glass.poly[i * 10 + t] * features[t]).sum();
++                        let value: f32 = (0..13).map(|t| glass.poly[i * 13 + t] * features[t]).sum();
 +                        let value = (value * (1. + line) + glow).clamp(0., 1.) * 255.;
 +                        under[i] + (value - under[i]) * coverage
 +                    })
@@ -412,7 +455,7 @@ index 4be15aa..f4c608d 100644
      fn two_blurs_of_different_sizes_in_one_frame() {
          if metal::Device::system_default().is_none() {
 diff --git a/crates/gpui_macos/src/shaders.metal b/crates/gpui_macos/src/shaders.metal
-index e087c0d..40c50bd 100644
+index e087c0d..de1333f 100644
 --- a/crates/gpui_macos/src/shaders.metal
 +++ b/crates/gpui_macos/src/shaders.metal
 @@ -1354,9 +1354,17 @@ vertex BackdropBlurVertexOutput backdrop_blur_vertex(
@@ -435,17 +478,18 @@ index e087c0d..40c50bd 100644
                                                   blur.content_mask.bounds);
    return BackdropBlurVertexOutput{
        device_position,
-@@ -1364,26 +1372,77 @@ vertex BackdropBlurVertexOutput backdrop_blur_vertex(
+@@ -1364,26 +1372,78 @@ vertex BackdropBlurVertexOutput backdrop_blur_vertex(
        {clip_distance.x, clip_distance.y, clip_distance.z, clip_distance.w}};
  }
  
 +float3 glass_shade(GlassStyle glass, float3 c, float edge, float2 normal) {
-+  float features[10] = {c.r, c.g, c.b, c.r * c.r, c.g * c.g, c.b * c.b,
-+                        c.r * c.g, c.g * c.b, c.r * c.b, 1.};
++  float features[13] = {c.r, c.g, c.b, c.r * c.r, c.g * c.g, c.b * c.b,
++                        c.r * c.g, c.g * c.b, c.r * c.b, c.r * c.r * c.r,
++                        c.g * c.g * c.g, c.b * c.b * c.b, 1.};
 +  float3 color = float3(0.);
-+  for (int term = 0; term < 10; term++) {
++  for (int term = 0; term < 13; term++) {
 +    color += features[term] *
-+             float3(glass.poly[term], glass.poly[10 + term], glass.poly[20 + term]);
++             float3(glass.poly[term], glass.poly[13 + term], glass.poly[26 + term]);
 +  }
 +  float facing = dot(normal, float2(glass.light_x, glass.light_y));
 +  float line = exp(-edge / glass.line_width) * (glass.line + glass.line_lit * facing);
@@ -525,10 +569,10 @@ index e087c0d..40c50bd 100644
 +  return mix(under, float4(glass * alpha, alpha), coverage);
  }
 diff --git a/crates/gpui_wgpu/src/shaders.wgsl b/crates/gpui_wgpu/src/shaders.wgsl
-index 011be71..47a16cd 100644
+index 011be71..bf2175c 100644
 --- a/crates/gpui_wgpu/src/shaders.wgsl
 +++ b/crates/gpui_wgpu/src/shaders.wgsl
-@@ -1399,3 +1399,194 @@ fn fs_surface(input: SurfaceVarying) -> @location(0) vec4<f32> {
+@@ -1399,3 +1399,195 @@ fn fs_surface(input: SurfaceVarying) -> @location(0) vec4<f32> {
  
      return ycbcr_to_RGB * y_cb_cr;
  }
@@ -540,7 +584,7 @@ index 011be71..47a16cd 100644
 +    lens_rim: f32,
 +    lens_curve: f32,
 +    rim_bend: f32,
-+    poly: array<f32, 30>,
++    poly: array<f32, 39>,
 +    opacity: f32,
 +    line_strength: f32,
 +    line_lit: f32,
@@ -550,6 +594,7 @@ index 011be71..47a16cd 100644
 +    glow: f32,
 +    glow_width: f32,
 +    hairline: array<f32, 4>,
++    pad: f32,
 +}
 +
 +struct BackdropBlur {
@@ -710,11 +755,11 @@ index 011be71..47a16cd 100644
 +    let alpha = mix(backdrop.a, 1.0, glass.opacity);
 +
 +    let c = color;
-+    let features = array<f32, 10>(c.r, c.g, c.b, c.r * c.r, c.g * c.g, c.b * c.b,
-+        c.r * c.g, c.g * c.b, c.r * c.b, 1.0);
++    let features = array<f32, 13>(c.r, c.g, c.b, c.r * c.r, c.g * c.g, c.b * c.b,
++        c.r * c.g, c.g * c.b, c.r * c.b, c.r * c.r * c.r, c.g * c.g * c.g, c.b * c.b * c.b, 1.0);
 +    color = vec3<f32>(0.0);
-+    for (var term = 0; term < 10; term++) {
-+        color += features[term] * vec3<f32>(glass.poly[term], glass.poly[10 + term], glass.poly[20 + term]);
++    for (var term = 0; term < 13; term++) {
++        color += features[term] * vec3<f32>(glass.poly[term], glass.poly[13 + term], glass.poly[26 + term]);
 +    }
 +    let facing = dot(normal, vec2<f32>(glass.light_x, glass.light_y));
 +    let line_term = exp(-edge / glass.line_width) * (glass.line_strength + glass.line_lit * facing);
@@ -1828,10 +1873,10 @@ index e4b605b..1a88981 100644
          }
      }
 diff --git a/crates/gpui_windows/src/shaders.hlsl b/crates/gpui_windows/src/shaders.hlsl
-index 78b1ada..24bd265 100644
+index 78b1ada..11465d8 100644
 --- a/crates/gpui_windows/src/shaders.hlsl
 +++ b/crates/gpui_windows/src/shaders.hlsl
-@@ -1289,3 +1289,198 @@ float4 polychrome_sprite_fragment(PolychromeSpriteFragmentInput input): SV_Targe
+@@ -1289,3 +1289,200 @@ float4 polychrome_sprite_fragment(PolychromeSpriteFragmentInput input): SV_Targe
      color.a *= sprite.opacity * saturate(0.5 - distance) * edge_fade_alpha(input.position.xy, sprite.fade);
      return color;
  }
@@ -1849,7 +1894,7 @@ index 78b1ada..24bd265 100644
 +    float lens_rim;
 +    float lens_curve;
 +    float rim_bend;
-+    float poly[30];
++    float poly[39];
 +    float opacity;
 +    float line_strength;
 +    float line_lit;
@@ -1859,6 +1904,7 @@ index 78b1ada..24bd265 100644
 +    float glow;
 +    float glow_width;
 +    float hairline[4];
++    float pad;
 +};
 +
 +struct BackdropBlur {
@@ -2015,13 +2061,14 @@ index 78b1ada..24bd265 100644
 +    float3 color = backdrop.a > 0. ? backdrop.rgb / backdrop.a : float3(0., 0., 0.);
 +    float alpha = lerp(backdrop.a, 1., glass.opacity);
 +
-+    float features[10] = {color.r, color.g, color.b, color.r * color.r, color.g * color.g,
++    float features[13] = {color.r, color.g, color.b, color.r * color.r, color.g * color.g,
 +                          color.b * color.b, color.r * color.g, color.g * color.b,
-+                          color.r * color.b, 1.};
++                          color.r * color.b, color.r * color.r * color.r,
++                          color.g * color.g * color.g, color.b * color.b * color.b, 1.};
 +    color = float3(0., 0., 0.);
 +    [unroll]
-+    for (int term = 0; term < 10; term++) {
-+        color += features[term] * float3(glass.poly[term], glass.poly[10 + term], glass.poly[20 + term]);
++    for (int term = 0; term < 13; term++) {
++        color += features[term] * float3(glass.poly[term], glass.poly[13 + term], glass.poly[26 + term]);
 +    }
 +    float facing = dot(normal, float2(glass.light_x, glass.light_y));
 +    float line_term = exp(-edge / glass.line_width) * (glass.line_strength + glass.line_lit * facing);

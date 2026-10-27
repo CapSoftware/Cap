@@ -70,6 +70,7 @@ pub fn gpui_style(style: &PaneStyle) -> gpui::GlassStyle {
         glow: style.glow,
         glow_width: style.glow_width,
         hairline: style.hairline,
+        pad: 0.,
     }
 }
 

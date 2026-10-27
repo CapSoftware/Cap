@@ -1,12 +1,28 @@
 use crate::{Rgba, Shape};
 
 /// Terms of the colour transform, per output channel:
-/// `r, g, b, r², g², b², rg, gb, rb, 1` of the blurred backdrop (0-1 sRGB).
-pub const POLY_TERMS: usize = 10;
+/// `r, g, b, r², g², b², rg, gb, rb, r³, g³, b³, 1` of the blurred backdrop
+/// (0-1 sRGB). The cubes let it follow Apple's tone curve along the grey
+/// axis, which a quadratic misses by several levels at mid grey.
+pub const POLY_TERMS: usize = 13;
 
 pub fn poly_features(c: [f32; 3]) -> [f32; POLY_TERMS] {
     let [r, g, b] = c;
-    [r, g, b, r * r, g * g, b * b, r * g, g * b, r * b, 1.]
+    [
+        r,
+        g,
+        b,
+        r * r,
+        g * g,
+        b * b,
+        r * g,
+        g * b,
+        r * b,
+        r * r * r,
+        g * g * g,
+        b * b * b,
+        1.,
+    ]
 }
 
 /// A glass material, fitted against Apple's glass. Blur and lensing scale
@@ -62,7 +78,7 @@ mod serde_poly {
         let values = Vec::<f32>::deserialize(d)?;
         values
             .try_into()
-            .map_err(|_| serde::de::Error::custom("poly needs 30 coefficients"))
+            .map_err(|_| serde::de::Error::custom("poly needs 39 coefficients"))
     }
 }
 
