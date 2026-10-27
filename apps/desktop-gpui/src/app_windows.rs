@@ -2606,11 +2606,7 @@ fn open_overlay(
                         window.refresh();
                     })
                     .ok();
-                if let Some(camera) = cx.update(visible_camera_frame)
-                    && let Err(error) = camera.raise()
-                {
-                    tracing::warn!(%error, "could not raise the camera above the target picker");
-                }
+                cx.update(raise_camera_above_overlays);
             })
             .detach();
         }
@@ -4335,15 +4331,27 @@ pub(crate) fn studio_camera_snapshot(
         .ok()
 }
 
-fn visible_camera_frame(cx: &mut App) -> Option<CameraFrame> {
+/// Keep the camera bubble above the picker overlays. Not filtered on
+/// `window_is_visible` off macOS: Windows' camera is shown asynchronously and
+/// X11 has no visibility probe, and neither raise path shows a hidden window.
+pub(crate) fn raise_camera_above_overlays(cx: &mut App) {
     if camera_preview_is_inline(cx) {
-        return None;
+        return;
     }
     #[cfg(target_os = "linux")]
     if clean_capture_active(cx) {
-        return None;
+        return;
     }
-    camera_frame(cx).filter(|camera| camera.visible)
+    let Some(camera) = camera_frame(cx) else {
+        return;
+    };
+    #[cfg(target_os = "macos")]
+    if !camera.visible {
+        return;
+    }
+    if let Err(error) = camera.raise() {
+        tracing::warn!(%error, "could not raise the camera above the target picker");
+    }
 }
 
 fn camera_snapshot(cx: &mut App) -> Option<CameraSnapshot> {
@@ -4363,9 +4371,13 @@ impl CameraFrame {
     fn raise(&self) -> anyhow::Result<()> {
         match &self.native {
             #[cfg(target_os = "macos")]
-            CameraNativeFrame::Mac { native, .. } => platform::order_front_native(native),
+            CameraNativeFrame::Mac { native, .. } => {
+                platform::raise_panel_native(native, platform::recording_controls_level())
+            }
             #[cfg(target_os = "windows")]
-            CameraNativeFrame::Windows(native) => platform::order_front_native(native),
+            CameraNativeFrame::Windows(native) => {
+                platform::raise_panel_native(native, platform::recording_controls_level())
+            }
             #[cfg(target_os = "linux")]
             CameraNativeFrame::X11 { window_id, .. } => {
                 use x11rb::connection::Connection as _;

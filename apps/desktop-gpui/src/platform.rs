@@ -1586,8 +1586,8 @@ mod mac {
             NSRect::new(NSPoint::new(x, appkit_y), NSSize::new(width, height)),
             true,
         );
-        ns_window.setLevel(level);
         apply_fullscreen_overlay_behavior(ns_window);
+        ns_window.setLevel(level);
         // `.shadow(false)` in the Tauri builder.
         ns_window.setHasShadow(false);
         ns_window.setAnimationBehavior(objc2_app_kit::NSWindowAnimationBehavior::None);
@@ -1730,6 +1730,15 @@ mod mac {
         rerun_occlusion_handler_after_show(&native.0);
     }
 
+    /// Lift a floating panel to the front of its level, first restoring the
+    /// level if anything lowered it below `level`.
+    pub fn raise_panel_native(native: &NativeWindow, level: isize) {
+        if native.0.level() < level {
+            native.0.setLevel(level);
+        }
+        native.0.orderFrontRegardless();
+    }
+
     /// The `NSWindow` behind a gpui window.
     pub fn ns_window(window: &Window) -> Option<Retained<NSWindow>> {
         // Fully qualified: `Window` also has an inherent `window_handle()`
@@ -1753,15 +1762,17 @@ mod mac {
             tracing::error!("no NSWindow behind gpui window; panel behavior not applied");
             return;
         };
+        // Before the level: `setFloatingPanel:` resets it to
+        // `NSFloatingWindowLevel`.
+        if behavior.join_all_spaces {
+            apply_fullscreen_overlay_behavior(&ns_window);
+        }
         ns_window.setLevel(behavior.level);
         tracing::debug!(
             requested = behavior.level,
             actual = ns_window.level(),
             "panel level applied"
         );
-        if behavior.join_all_spaces {
-            apply_fullscreen_overlay_behavior(&ns_window);
-        }
         ns_window.setHasShadow(behavior.shadow);
     }
 
@@ -3175,6 +3186,7 @@ mod stub {
     }
     pub fn set_window_frame(_native: &NativeWindow, _x: f64, _y: f64, _width: f64, _height: f64) {}
     pub fn order_front_native(_native: &NativeWindow) {}
+    pub fn raise_panel_native(_native: &NativeWindow, _level: isize) {}
     pub fn frame_is_on_screen(_x: f64, _y: f64, _width: f64, _height: f64) -> bool {
         true
     }
