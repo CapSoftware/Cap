@@ -21,6 +21,8 @@ on:
       - "apps/desktop-gpui/src/main_window.rs"
       - "apps/desktop-gpui/src/auth.rs"
       - "apps/desktop-gpui/src/store.rs"
+      - "apps/desktop-gpui/src/feeds.rs"
+      - "apps/desktop-gpui/src/camera_window.rs"
       - "crates/recording/src/upload_resume.rs"
       - "crates/recording/src/upload_verification.rs"
       - "crates/recording/src/instant_recording.rs"
@@ -67,7 +69,7 @@ jobs:
             echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
           gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --paginate --jq '.[].filename' > "$RUNNER_TEMP/changed.txt"
-          instant='^(apps/desktop-gpui/src/(upload\.rs|upload/.*|recording\.rs|session\.rs|library\.rs|main_window\.rs|auth\.rs|store\.rs)|crates/recording/src/(upload_resume|upload_verification|instant_recording|recovery)\.rs|crates/recording/src/instant_recording/.*|crates/camera(-ffmpeg)?/.*|crates/enc-ffmpeg/src/mux/(segmented_stream|dash_audio)\.rs)$'
+          instant='^(apps/desktop-gpui/src/(upload\.rs|upload/.*|recording\.rs|session\.rs|library\.rs|main_window\.rs|auth\.rs|store\.rs|feeds\.rs|camera_window\.rs)|crates/recording/src/(upload_resume|upload_verification|instant_recording|recovery)\.rs|crates/recording/src/instant_recording/.*|crates/camera(-ffmpeg)?/.*|crates/enc-ffmpeg/src/mux/(segmented_stream|dash_audio)\.rs)$'
           if grep -qE "$instant" "$RUNNER_TEMP/changed.txt"; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
