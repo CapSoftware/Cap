@@ -613,12 +613,14 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
             if !restore_clean_capture_ui(cx) {
                 return;
             }
-            let (finished_studio, preparing_editor) = session.update(cx, |session, _| {
-                (
-                    session.finished_studio.take(),
-                    session.take_preparing_studio_editor(),
-                )
-            });
+            let (finished_studio, preparing_editor, finished_instant) =
+                session.update(cx, |session, _| {
+                    (
+                        session.finished_studio.take(),
+                        session.take_preparing_studio_editor(),
+                        std::mem::take(&mut session.finished_instant),
+                    )
+                });
             // The in-editor re-record target is consumed first, before
             // `postStudioRecordingBehaviour` is even consulted -- the order
             // `apply_post_studio_editor_behaviour` checks them
@@ -657,13 +659,23 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
                 // away. `doNothing` leaves it in the library with Cap out of
                 // the way. Every other path (instant, failures, `showOverlay`
                 // until an overlay exists) reshows the main window as before.
-                let behaviour =
-                    crate::store::GeneralSettings::load().post_studio_recording_behaviour;
+                // A clean instant recording reshows it only for "Show Cap";
+                // otherwise the browser tab, or the copied link alone, is
+                // the completion and Cap stays out of the way.
+                let settings = crate::store::GeneralSettings::load();
+                let behaviour = settings.post_studio_recording_behaviour;
+                let keep_hidden_after_instant = finished_instant
+                    && settings.post_instant_behaviour()
+                        != crate::store::PostInstantBehaviour::ShowCap;
                 match (finished_studio, behaviour) {
                     (Some(project_dir), crate::store::PostStudioBehaviour::OpenEditor) => {
                         open_editor(project_dir, cx)
                     }
                     (Some(_), crate::store::PostStudioBehaviour::DoNothing) => {
+                        park_idle_camera_preview(cx);
+                        crate::menus::schedule_dock_sync(cx);
+                    }
+                    (None, _) if keep_hidden_after_instant => {
                         park_idle_camera_preview(cx);
                         crate::menus::schedule_dock_sync(cx);
                     }
@@ -920,6 +932,7 @@ pub(crate) fn show_main_window_after_capture_pause(cx: &mut App) {
             // before the window is visible again.
             platform::restore_borderless_style(native);
             platform::show_native(native);
+            tracing::info!("main window shown");
         }
         // The unit-3 macOS 26 display-link repair, and the reason a window
         // hidden before its FIRST paint reshows as nothing at all: AppKit
