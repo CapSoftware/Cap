@@ -8,10 +8,6 @@ use crate::{
     target_overlay::AreaRect,
 };
 
-/// `CAP_PICKER_PROBE_OUTPUT=<path>`: open the camera bubble, arm each picker
-/// mode, activate an overlay the way a click does, and write the native
-/// front-to-back order of Cap's windows so CI can check the camera stays on
-/// top.
 pub fn run(main: WindowHandle<MainWindow>, cx: &mut App) {
     let Some(output) = std::env::var_os("CAP_PICKER_PROBE_OUTPUT") else {
         return;
@@ -95,7 +91,6 @@ struct StackEntry {
     level: Option<i64>,
 }
 
-/// Save what the primary display shows next to the report, for review.
 async fn screenshot(output: &std::ffi::OsStr, label: &str, cx: &mut AsyncApp) {
     let Some(directory) = std::path::Path::new(output).parent() else {
         return;
