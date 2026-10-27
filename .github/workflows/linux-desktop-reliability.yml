@@ -366,9 +366,13 @@ jobs:
 
       - name: Virtual display devices
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq "linux-modules-extra-$(uname -r)"
-          sudo modprobe vkms
+          # Newer runner kernels ship vkms in the base modules package and
+          # have no linux-modules-extra package at all.
+          if ! sudo modprobe vkms 2>/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq "linux-modules-extra-$(uname -r)"
+            sudo modprobe vkms
+          fi
           ls -la /dev/dri
 
       - name: Hyprland (portal refuses host apps, tray Stop control)
@@ -530,9 +534,13 @@ jobs:
 
       - name: Virtual display devices
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq "linux-modules-extra-$(uname -r)"
-          sudo modprobe vkms
+          # Newer runner kernels ship vkms in the base modules package and
+          # have no linux-modules-extra package at all.
+          if ! sudo modprobe vkms 2>/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq "linux-modules-extra-$(uname -r)"
+            sudo modprobe vkms
+          fi
           ls -la /dev/dri
 
       - name: Build niri

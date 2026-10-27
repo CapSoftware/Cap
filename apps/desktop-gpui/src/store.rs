@@ -148,6 +148,8 @@ pub struct ExportPrefs {
     pub advanced_open: bool,
     #[serde(default)]
     pub organization_id: Option<String>,
+    #[serde(default)]
+    pub turbo: bool,
 }
 
 /// `so.cap.desktop`'s app-data dir -- where both stores live.
