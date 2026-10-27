@@ -148,6 +148,8 @@ pub struct ExportPrefs {
     pub advanced_open: bool,
     #[serde(default)]
     pub organization_id: Option<String>,
+    #[serde(default)]
+    pub turbo: bool,
 }
 
 /// `so.cap.desktop`'s app-data dir -- where both stores live.
@@ -768,9 +770,9 @@ settings_enum! {
 settings_enum! {
     /// `StudioRecordingQuality`, whose Rust default is `balanced`.
     StudioQuality {
-        Compatibility = "compatibility", "Compatibility";
-        Balanced = "balanced", "Balanced";
-        Ultra = "ultra", "Ultra";
+        Compatibility = "compatibility", tr::settings::options::studio_quality::compatibility();
+        Balanced = "balanced", tr::settings::options::studio_quality::balanced();
+        Ultra = "ultra", tr::settings::options::studio_quality::ultra();
     }
     default = Balanced
 }
@@ -789,8 +791,8 @@ settings_enum! {
     /// `MainWindowRecordingStartBehaviour`. British spelling in both the JSON
     /// and the label, as shipped.
     MainWindowStartBehaviour {
-        Close = "close", "Close";
-        Minimise = "minimise", "Minimise";
+        Close = "close", tr::settings::options::main_window_start::close();
+        Minimise = "minimise", tr::settings::options::main_window_start::minimise();
     }
     default = Close
 }
@@ -798,9 +800,9 @@ settings_enum! {
 settings_enum! {
     /// `PostStudioRecordingBehaviour`.
     PostStudioBehaviour {
-        OpenEditor = "openEditor", "Open editor";
-        ShowOverlay = "showOverlay", "Show Cap";
-        DoNothing = "doNothing", "Do nothing";
+        OpenEditor = "openEditor", tr::settings::options::post_studio::open_editor();
+        ShowOverlay = "showOverlay", tr::settings::options::post_studio::show_cap();
+        DoNothing = "doNothing", tr::settings::options::post_studio::do_nothing();
     }
     default = OpenEditor
 }
@@ -809,10 +811,10 @@ settings_enum! {
     /// What a finished screenshot does next. GPUI-only: the Tauri app always
     /// opened the editor and never reads this key.
     PostScreenshotBehaviour {
-        OpenEditor = "openEditor", "Open editor";
-        Copy = "copy", "Copy to clipboard";
-        CopyAndOpenEditor = "copyAndOpenEditor", "Copy and open editor";
-        Save = "save", "Do nothing";
+        OpenEditor = "openEditor", tr::settings::options::post_screenshot::open_editor();
+        Copy = "copy", tr::settings::options::post_screenshot::copy();
+        CopyAndOpenEditor = "copyAndOpenEditor", tr::settings::options::post_screenshot::copy_and_open_editor();
+        Save = "save", tr::settings::options::post_screenshot::do_nothing();
     }
     default = OpenEditor
 }
@@ -830,8 +832,8 @@ impl PostScreenshotBehaviour {
 settings_enum! {
     /// `PostDeletionBehaviour`.
     PostDeletionBehaviour {
-        DoNothing = "doNothing", "Do nothing";
-        ReopenRecordingWindow = "reopenRecordingWindow", "Reopen recording window";
+        DoNothing = "doNothing", tr::settings::options::post_deletion::do_nothing();
+        ReopenRecordingWindow = "reopenRecordingWindow", tr::settings::options::post_deletion::reopen();
     }
     default = DoNothing
 }
@@ -856,9 +858,9 @@ settings_enum! {
 
 settings_enum! {
     EditorPreviewQuality {
-        Quarter = "quarter", "Quarter";
-        Half = "half", "Half";
-        Full = "full", "Full";
+        Quarter = "quarter", tr::settings::options::preview_quality::quarter();
+        Half = "half", tr::settings::options::preview_quality::half();
+        Full = "full", tr::settings::options::preview_quality::full();
     }
     default = Half
 }
@@ -1017,6 +1019,11 @@ pub struct GeneralSettings {
     pub enable_notifications: bool,
     pub instant_mode_max_resolution: u32,
     pub disable_auto_open_links: bool,
+    /// GPUI-only `showMainWindowAfterInstantRecording`: whether the main
+    /// window comes back after an Instant recording whose link did not open.
+    /// Kept as stored, absent included, so every reader resolves it the same
+    /// way in [`Self::post_instant_behaviour`].
+    pub show_main_window_after_instant: Option<bool>,
     pub studio_recording_quality: StudioQuality,
     pub recording_countdown: Option<u32>,
     pub main_window_recording_start_behaviour: MainWindowStartBehaviour,
@@ -1057,6 +1064,30 @@ pub struct GeneralSettings {
     /// Also outside `general_settings`: the `audio_enhancement` section's
     /// `enabledByDefault`, rendered in the Recording card next to it.
     pub studio_sound_by_default: bool,
+}
+
+pub const SHOW_MAIN_WINDOW_AFTER_INSTANT_KEY: &str = "showMainWindowAfterInstantRecording";
+
+/// What follows a cleanly stopped Instant recording, the link always copied.
+/// Not one key: `disableAutoOpenLinks` (shared with the Tauri app) decides
+/// whether the link opens, `showMainWindowAfterInstantRecording` whether the
+/// main window comes back when it does not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PostInstantBehaviour {
+    OpenLink,
+    ShowCap,
+    CopyLink,
+}
+
+impl PostInstantBehaviour {
+    /// `(disableAutoOpenLinks, showMainWindowAfterInstantRecording)`.
+    pub fn store_values(self) -> (bool, bool) {
+        match self {
+            Self::OpenLink => (false, false),
+            Self::ShowCap => (true, true),
+            Self::CopyLink => (true, false),
+        }
+    }
 }
 
 /// The section names, so the write calls read as the store keys they are.
@@ -1360,6 +1391,18 @@ impl Default for GeneralSettings {
 }
 
 impl GeneralSettings {
+    pub fn post_instant_behaviour(&self) -> PostInstantBehaviour {
+        if !self.disable_auto_open_links {
+            PostInstantBehaviour::OpenLink
+        } else if self.show_main_window_after_instant.unwrap_or(true) {
+            // Absent: "copy link only" brought the main window back before
+            // the key existed, so a store that never set it keeps doing that.
+            PostInstantBehaviour::ShowCap
+        } else {
+            PostInstantBehaviour::CopyLink
+        }
+    }
+
     pub fn load() -> Self {
         let store = cached_store(&tauri_store_path()).unwrap_or_default();
         let empty = Map::new();
@@ -1383,6 +1426,9 @@ impl GeneralSettings {
             enable_notifications: bool_at(general, "enableNotifications", true),
             instant_mode_max_resolution: u32_at(general, "instantModeMaxResolution", 1920),
             disable_auto_open_links: bool_at(general, "disableAutoOpenLinks", false),
+            show_main_window_after_instant: general
+                .get(SHOW_MAIN_WINDOW_AFTER_INSTANT_KEY)
+                .and_then(Value::as_bool),
             studio_recording_quality: enum_at(general, "studioRecordingQuality"),
             recording_countdown: opt_u32_at(general, "recordingCountdown"),
             main_window_recording_start_behaviour: enum_at(
@@ -3357,5 +3403,60 @@ mod tests {
         general.insert("excludedWindows".to_string(), Value::Array(Vec::new()));
         let cleared = GeneralSettings::from_sections(&general, &Map::new(), &Map::new());
         assert!(cleared.excluded_windows.is_empty());
+    }
+
+    /// A store written before `showMainWindowAfterInstantRecording` keeps
+    /// what it did: "copy link only" brought the main window back, so it reads
+    /// as Show Cap; every outcome round-trips through its two keys.
+    #[test]
+    fn post_instant_behaviour_reads_old_stores_and_round_trips() {
+        let settings = |pairs: &[(&str, bool)]| {
+            let general = pairs
+                .iter()
+                .map(|(key, value)| (key.to_string(), Value::Bool(*value)))
+                .collect::<Map<_, _>>();
+            GeneralSettings::from_sections(&general, &Map::new(), &Map::new())
+                .post_instant_behaviour()
+        };
+        assert_eq!(settings(&[]), PostInstantBehaviour::OpenLink);
+        assert_eq!(
+            settings(&[("disableAutoOpenLinks", false)]),
+            PostInstantBehaviour::OpenLink
+        );
+        assert_eq!(
+            settings(&[("disableAutoOpenLinks", true)]),
+            PostInstantBehaviour::ShowCap
+        );
+        assert_eq!(
+            settings(&[
+                ("disableAutoOpenLinks", false),
+                (SHOW_MAIN_WINDOW_AFTER_INSTANT_KEY, true)
+            ]),
+            PostInstantBehaviour::OpenLink
+        );
+        // The Quality page's auto-open toggle writes only
+        // `disableAutoOpenLinks`; the open window and a reload must agree.
+        let toggled = GeneralSettings {
+            disable_auto_open_links: true,
+            ..GeneralSettings::default()
+        };
+        assert_eq!(
+            toggled.post_instant_behaviour(),
+            settings(&[("disableAutoOpenLinks", true)])
+        );
+        for behaviour in [
+            PostInstantBehaviour::OpenLink,
+            PostInstantBehaviour::ShowCap,
+            PostInstantBehaviour::CopyLink,
+        ] {
+            let (disable_open, show_main) = behaviour.store_values();
+            assert_eq!(
+                settings(&[
+                    ("disableAutoOpenLinks", disable_open),
+                    (SHOW_MAIN_WINDOW_AFTER_INSTANT_KEY, show_main),
+                ]),
+                behaviour
+            );
+        }
     }
 }
