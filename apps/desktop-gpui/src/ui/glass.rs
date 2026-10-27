@@ -37,8 +37,8 @@ struct Presets {
 fn presets() -> &'static Presets {
     static PRESETS: OnceLock<Presets> = OnceLock::new();
     PRESETS.get_or_init(|| {
-        let all: serde_json::Value = serde_json::from_str(cap_glass::PRESETS_JSON)
-            .expect("glass presets are valid JSON");
+        let all: serde_json::Value =
+            serde_json::from_str(cap_glass::PRESETS_JSON).expect("glass presets are valid JSON");
         let get = |name: &str| -> GlassMaterial {
             serde_json::from_value(all[name].clone()).expect("glass preset is complete")
         };
@@ -77,16 +77,32 @@ pub fn gpui_style(style: &PaneStyle) -> gpui::GlassStyle {
         glow: style.glow,
         glow_width: style.glow_width,
         hairline: style.hairline,
+        tint_scale: style.tint.scale,
+        tint_luma: style.tint.luma,
+        tint_offset: style.tint.offset,
         pad: 0.,
     }
 }
 
-pub fn paint(window: &mut Window, bounds: Bounds<Pixels>, radius: f32, material: &GlassMaterial) {
+/// A tint for a pane, sRGB with alpha, as SwiftUI's `.tint` takes it:
+/// Regular glass reads only its alpha, Clear glass its colour too.
+pub type Tint = gpui::Rgba;
+
+pub fn paint(
+    window: &mut Window,
+    bounds: Bounds<Pixels>,
+    radius: f32,
+    material: &GlassMaterial,
+    tint: Option<Tint>,
+) {
     let (width, height) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
     if width <= 0. || height <= 0. {
         return;
     }
-    let style = material.resolve(width, height);
+    let mut style = material.resolve(width, height);
+    if let Some(tint) = tint {
+        style.tint = material.tint_matrix([tint.r, tint.g, tint.b], tint.a);
+    }
     let radius = radius.min(width / 2.).min(height / 2.);
     window.paint_glass(
         bounds,
@@ -106,16 +122,27 @@ fn sample_reach(style: &PaneStyle) -> f32 {
 /// everything added after it paints on the glass. `radius` is clamped to the
 /// pane like CSS clamps `border-radius`.
 pub fn pane(kind: GlassKind, dark: bool, radius: f32) -> Div {
-    pane_with(kind, dark, radius, None)
+    pane_with(kind, dark, radius, None, None)
+}
+
+/// [`pane`] with a tint.
+pub fn pane_tinted(kind: GlassKind, dark: bool, radius: f32, tint: Tint) -> Div {
+    pane_with(kind, dark, radius, None, Some(tint))
 }
 
 /// [`pane`] on a transparent window, reading `backdrop` instead of the
 /// window's own (mostly empty) pixels.
 pub fn pane_over(kind: GlassKind, dark: bool, radius: f32, backdrop: &Backdrop) -> Div {
-    pane_with(kind, dark, radius, Some(backdrop.clone()))
+    pane_with(kind, dark, radius, Some(backdrop.clone()), None)
 }
 
-fn pane_with(kind: GlassKind, dark: bool, radius: f32, backdrop: Option<Backdrop>) -> Div {
+fn pane_with(
+    kind: GlassKind,
+    dark: bool,
+    radius: f32,
+    backdrop: Option<Backdrop>,
+    tint: Option<Tint>,
+) -> Div {
     let material = *material(kind, dark);
     div().relative().rounded(px(radius)).child(
         canvas(
@@ -124,7 +151,7 @@ fn pane_with(kind: GlassKind, dark: bool, radius: f32, backdrop: Option<Backdrop
                 if let Some(backdrop) = &backdrop {
                     backdrop.prepare(window, bounds, radius, &material);
                 }
-                paint(window, bounds, radius, &material);
+                paint(window, bounds, radius, &material, tint);
             },
         )
         .absolute()
