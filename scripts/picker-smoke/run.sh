@@ -33,4 +33,4 @@ if [ ! -s "$report" ]; then
 fi
 cat "$report"
 echo
-grep -q '"passed":true' "$report"
+grep -q '^{"passed":true,' "$report"
