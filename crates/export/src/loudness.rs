@@ -498,7 +498,7 @@ fn render_at_target(
     gain: &mut f32,
     cancel: &AtomicBool,
 ) -> Result<bool, LoudnessError> {
-    for _ in 0..MAX_PASSES {
+    for pass in 1..=MAX_PASSES {
         check_cancel(cancel)?;
         if !encode_audio(source, audio, *gain, cancel)? {
             return Ok(false);
@@ -511,7 +511,11 @@ fn render_at_target(
             -MAX_GAIN_DB - LIMITER_HEADROOM_DB,
             MAX_GAIN_DB + LIMITER_HEADROOM_DB,
         );
-        if shortfall.abs() < MIN_ADJUSTMENT_DB || (next - *gain).abs() < f32::EPSILON {
+        // `gain` must stay the one the saved audio was rendered with.
+        if pass == MAX_PASSES
+            || shortfall.abs() < MIN_ADJUSTMENT_DB
+            || (next - *gain).abs() < f32::EPSILON
+        {
             return Ok(true);
         }
         *gain = next;
