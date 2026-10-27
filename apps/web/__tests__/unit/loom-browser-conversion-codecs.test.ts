@@ -5,6 +5,7 @@ import { saveLoomStreamAsMp4 } from "@/lib/loom-browser-conversion";
 
 const mocks = vi.hoisted(() => ({
 	hasAudio: false,
+	noHardware: false,
 	canEncodeVideo: vi.fn(),
 	canEncodeAudio: vi.fn(),
 	dispose: vi.fn(),
@@ -12,8 +13,19 @@ const mocks = vi.hoisted(() => ({
 	execute: vi.fn(),
 }));
 vi.mock("mediabunny", () => {
+	const validateVideoConfig = (options?: { hardwareAcceleration?: string }) => {
+		if (
+			mocks.noHardware &&
+			options?.hardwareAcceleration === "prefer-hardware"
+		) {
+			throw new Error("Hardware H.264 configuration is unsupported");
+		}
+	};
 	class Source {}
 	class SampleSource {
+		constructor(options?: { hardwareAcceleration?: string }) {
+			validateVideoConfig(options);
+		}
 		async add() {}
 		close() {}
 	}
@@ -59,12 +71,15 @@ vi.mock("mediabunny", () => {
 		VideoSampleSink: SampleSink,
 		AudioSampleSink: SampleSink,
 		Conversion: {
-			init: async () => ({
-				isValid: true,
-				discardedTracks: [],
-				execute: mocks.execute,
-				output: { cancel: mocks.cancel },
-			}),
+			init: async (options: { video?: { hardwareAcceleration?: string } }) => {
+				validateVideoConfig(options.video);
+				return {
+					isValid: true,
+					discardedTracks: [],
+					execute: mocks.execute,
+					output: { cancel: mocks.cancel },
+				};
+			},
 		},
 	};
 });
@@ -79,6 +94,7 @@ beforeEach(() => {
 		vi.stubGlobal(key, class {});
 	vi.stubGlobal("showSaveFilePicker", undefined);
 	mocks.hasAudio = false;
+	mocks.noHardware = false;
 	mocks.canEncodeVideo.mockReset().mockResolvedValue(true);
 	mocks.canEncodeAudio.mockReset().mockResolvedValue(false);
 	mocks.dispose.mockClear();
@@ -117,6 +133,13 @@ describe.each(["video.webm", "manifest.mpd"])(
 			expect(mocks.dispose).toHaveBeenCalled();
 		});
 
+		it("completes when the browser has software AVC but no hardware encoder", async () => {
+			mocks.noHardware = true;
+			const result = await convert();
+			expect(result?.type).toBe("video/mp4");
+			expect(result?.size).toBe(3);
+		});
+
 		it("still rejects an audio source when AAC encoding is unavailable", async () => {
 			mocks.hasAudio = true;
 			await expect(convert()).rejects.toThrow("latest desktop Chrome or Edge");
@@ -144,4 +167,19 @@ it("rejects unsupported AVC before fetching media", async () => {
 		}),
 	).rejects.toThrow("latest desktop Chrome or Edge");
 	expect(fetch).not.toHaveBeenCalled();
+});
+
+it("rejects unsupported DASH audio before downloading track payloads", async () => {
+	mocks.hasAudio = true;
+	await expect(
+		saveLoomStreamAsMp4({
+			url: "https://cdn.example/manifest.mpd",
+			filename: "video.mp4",
+		}),
+	).rejects.toThrow("latest desktop Chrome or Edge");
+	expect(fetch).toHaveBeenCalledTimes(1);
+	expect(fetch).toHaveBeenCalledWith(
+		"https://cdn.example/manifest.mpd",
+		expect.any(Object),
+	);
 });

@@ -585,6 +585,9 @@ async function convertDashWebmManifestToMp4({
 		const audioRepresentation = selectAudioRepresentation(
 			manifest.audioRepresentations,
 		);
+		if (audioRepresentation) {
+			await assertAacEncodingSupported(mediabunny.canEncodeAudio);
+		}
 		const totalResources =
 			1 +
 			videoRepresentation.segments.length +
@@ -639,9 +642,6 @@ async function convertDashWebmManifestToMp4({
 			: null;
 		if (!videoTrack) {
 			throw new LoomBrowserConversionError(UNREADABLE_STREAM_MESSAGE);
-		}
-		if (audioTrack) {
-			await assertAacEncodingSupported(mediabunny.canEncodeAudio);
 		}
 
 		output = new mediabunny.Output({
