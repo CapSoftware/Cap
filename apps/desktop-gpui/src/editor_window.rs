@@ -5188,18 +5188,15 @@ impl EditorWindow {
         Some((boxes, gap))
     }
 
-    /// The model the timeline should *draw* this frame: the real one, or a
-    /// clone with the clip boxes replaced by the ghost layout (mid-drag) or
-    /// the release animation's eased positions.
-    fn display_timeline_model(&self) -> Option<timeline::TimelineModel> {
+    fn display_clip_preview(&self, now: impl FnOnce() -> Instant) -> Option<timeline::ClipPreview> {
         if let Some(draft) = self.clip_draft {
             let (boxes, gap) = self.ghost_clip_boxes()?;
-            let mut model = self.timeline.clone();
-            for (clip, (start, end)) in model.clips.iter_mut().zip(&boxes) {
+            let mut clips = self.timeline.clips.clone();
+            for (clip, (start, end)) in clips.iter_mut().zip(&boxes) {
                 clip.start = *start;
                 clip.end = *end;
             }
-            if let Some(clip) = model.clips.get_mut(draft.index)
+            if let Some(clip) = clips.get_mut(draft.index)
                 && let timeline::SegmentDetail::Clip {
                     source_start,
                     source_duration,
@@ -5209,26 +5206,31 @@ impl EditorWindow {
                 *source_start = draft.start;
                 *source_duration = draft.end - draft.start;
             }
-            model.clip_ghost_gap = gap;
-            return Some(model);
+            return Some(timeline::ClipPreview {
+                clips,
+                ghost_gap: gap,
+            });
         }
         let anim = self.clip_anim.as_ref()?;
         if anim.from.len() != self.timeline.clips.len() {
             return None;
         }
-        let progress = (anim.started.elapsed().as_secs_f64()
+        let progress = (now().saturating_duration_since(anim.started).as_secs_f64()
             / CLIP_RESIZE_ANIM_DURATION.as_secs_f64())
         .clamp(0., 1.);
         if progress >= 1. {
             return None;
         }
         let eased = 1. - (1. - progress).powi(5);
-        let mut model = self.timeline.clone();
-        for (clip, (from_start, from_end)) in model.clips.iter_mut().zip(&anim.from) {
+        let mut clips = self.timeline.clips.clone();
+        for (clip, (from_start, from_end)) in clips.iter_mut().zip(&anim.from) {
             clip.start = from_start + (clip.start - from_start) * eased;
             clip.end = from_end + (clip.end - from_end) * eased;
         }
-        Some(model)
+        Some(timeline::ClipPreview {
+            clips,
+            ghost_gap: None,
+        })
     }
 
     /// Commit the ghost draft once, then glide every box from where the drag
@@ -8416,7 +8418,7 @@ impl EditorWindow {
 
     fn render_clip_speed_overlays(
         &self,
-        model: &timeline::TimelineModel,
+        clips: &[timeline::Segment],
         viewport_width: f32,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
@@ -8434,7 +8436,7 @@ impl EditorWindow {
             .top_0()
             .bottom_0()
             .overflow_hidden();
-        for (index, segment) in model.clips.iter().enumerate() {
+        for (index, segment) in clips.iter().enumerate() {
             if !self
                 .view
                 .transform
@@ -10892,7 +10894,9 @@ impl EditorWindow {
     ) -> impl IntoElement {
         let theme = self.theme;
         let camera3d_preview = self.camera3d_auto_preview();
+        let clip_preview = self.display_clip_preview(Instant::now);
         let ui = timeline::SegmentUi {
+            clip_preview: clip_preview.as_ref(),
             selection: self.selection.as_ref(),
             split_mode: self.split_mode,
             hovered: self.hovered_segment,
@@ -10906,10 +10910,14 @@ impl EditorWindow {
             camera3d_preview: &camera3d_preview,
             camera3d_editing_end: self.sidebar.editing_end_pose,
         };
-        // The ghost trim and its release animation draw from a patched copy
-        // of the model; everything else draws the real one.
-        let display = self.display_timeline_model();
-        let model = display.as_ref().unwrap_or(&self.timeline);
+        let model = &self.timeline;
+        let clips = ui.segments_for(
+            model,
+            timeline::TrackRow {
+                kind: TrackKind::Clip,
+                lane: 0,
+            },
+        );
         let mut rows = div()
             .flex()
             .flex_col()
@@ -11119,7 +11127,7 @@ impl EditorWindow {
                     // session-dismiss X, shown while cursor data exists.
                     .children(
                         (kind == TrackKind::Clip)
-                            .then(|| self.render_clip_speed_overlays(model, viewport_width, cx)),
+                            .then(|| self.render_clip_speed_overlays(clips, viewport_width, cx)),
                     )
                     // The empty zoom lane's prompt, as the same dashed row
                     // every other empty lane draws.
@@ -12264,6 +12272,539 @@ fn hex_to_color(rgba: [u8; 4]) -> cap_project::Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    mod clip_preview {
+        use super::*;
+        use timeline::{SegmentDetail, SegmentUi, TrackRow};
+
+        const KINDS: [TrackKind; 11] = [
+            TrackKind::Style,
+            TrackKind::Image,
+            TrackKind::Clip,
+            TrackKind::Caption,
+            TrackKind::Keyboard,
+            TrackKind::Text,
+            TrackKind::Mask,
+            TrackKind::Audio,
+            TrackKind::Zoom,
+            TrackKind::ThreeD,
+            TrackKind::Scene,
+        ];
+
+        fn fixture(
+            cx: &mut gpui::TestAppContext,
+        ) -> (Entity<EditorWindow>, &mut gpui::VisualTestContext) {
+            let project = tempfile::tempdir().unwrap();
+            let path = project.path().to_path_buf();
+            cx.add_window_view(move |window, cx| EditorWindow::new(path, window, cx))
+        }
+
+        fn preview_label(kind: &str, index: usize) -> gpui::SharedString {
+            match kind {
+                "static" => gpui::SharedString::new_static(
+                    "A representative label with static backing storage",
+                ),
+                "short" => gpui::SharedString::new(format!("Label {index}")),
+                "owned" => gpui::SharedString::new(format!(
+                    "A representative owned caption or overlay label number {index}"
+                )),
+                _ => unreachable!(),
+            }
+        }
+        fn preview_segment(detail: timeline::SegmentDetail, index: usize) -> timeline::Segment {
+            timeline::Segment {
+                start: index as f64 * 2.,
+                end: index as f64 * 2. + 1.5,
+                lane: 0,
+                detail,
+            }
+        }
+        // Synthetic preview data keeps model construction outside the timed preparation path.
+        fn preview_project(
+            clips: usize,
+            captions: usize,
+            labels: &str,
+        ) -> (cap_project::ProjectConfiguration, timeline::TimelineModel) {
+            use timeline::{SegmentDetail as D, TrackKind as K};
+            let project = cap_project::ProjectConfiguration {
+                timeline: Some(serde_json::from_value(serde_json::json!({
+                    "segments": (0..clips).map(|i| serde_json::json!({"start":i as f64*12.,"end":i as f64*12.+12.,"timescale":1.,"recordingSegment":0})).collect::<Vec<_>>(),
+                    "zoomSegments": []
+                })).unwrap()),
+                ..Default::default()
+            };
+            let clip_segments: Vec<timeline::Segment> = (0..clips)
+                .map(|i| timeline::Segment {
+                    start: i as f64 * 12.,
+                    end: i as f64 * 12. + 12.,
+                    lane: 0,
+                    detail: D::Clip {
+                        name: preview_label(labels, i),
+                        source_start: i as f64 * 12.,
+                        source_duration: 12.,
+                        timescale: 1.,
+                        muted: false,
+                        cursor_hidden: false,
+                        volume: 1.,
+                        recording_clip: 0,
+                        holds: Arc::from([(i as f64 * 12. + 2., i as f64 * 12. + 3.)]),
+                    },
+                })
+                .collect();
+            let mut model = timeline::TimelineModel {
+                clip_boundaries: clip_segments.iter().map(|clip| clip.start).collect(),
+                clips: clip_segments,
+                total_duration: clips as f64 * 12.,
+                mic_volume_db: -2.,
+                system_volume_db: -5.,
+                rows: vec![
+                    timeline::TrackRow {
+                        kind: K::Clip,
+                        lane: 0,
+                    },
+                    timeline::TrackRow {
+                        kind: K::Zoom,
+                        lane: 0,
+                    },
+                ],
+                mic_waveforms: vec![Arc::new(vec![0.3; 1000])],
+                system_waveforms: vec![Arc::new(vec![0.1; 1000])],
+                caption: (0..captions)
+                    .map(|i| {
+                        preview_segment(
+                            D::Caption {
+                                text: preview_label(labels, i),
+                            },
+                            i,
+                        )
+                    })
+                    .collect(),
+                keyboard: (0..captions / 4)
+                    .map(|i| {
+                        preview_segment(
+                            D::Keyboard {
+                                text: preview_label(labels, i),
+                            },
+                            i,
+                        )
+                    })
+                    .collect(),
+                ..Default::default()
+            };
+            for i in 0..captions / 100 {
+                model.text.push(preview_segment(
+                    D::Text {
+                        content: preview_label(labels, i),
+                        color: gpui::Hsla {
+                            h: 0.,
+                            s: 0.,
+                            l: 0.5,
+                            a: 1.,
+                        },
+                        italic: false,
+                        bold: true,
+                        fullscreen: false,
+                        enabled: true,
+                    },
+                    i,
+                ));
+                model.image.push(preview_segment(
+                    D::Image {
+                        name: preview_label(labels, i),
+                        enabled: true,
+                    },
+                    i,
+                ));
+                model.style.push(preview_segment(
+                    D::Style {
+                        name: preview_label(labels, i),
+                        enabled: true,
+                    },
+                    i,
+                ));
+                model
+                    .mask
+                    .push(preview_segment(D::Mask { label: "Sensitive" }, i));
+                model.audio.push(preview_segment(
+                    D::Audio {
+                        name: preview_label(labels, i),
+                        enabled: true,
+                        fade_in: 0.1,
+                        fade_out: 0.1,
+                    },
+                    i,
+                ));
+            }
+            if captions > 0 {
+                model.zoom.push(preview_segment(
+                    D::Zoom {
+                        amount: 1.5,
+                        automatic: true,
+                    },
+                    0,
+                ));
+                model.scene.push(preview_segment(
+                    D::Scene {
+                        mode: cap_project::SceneMode::Default,
+                    },
+                    0,
+                ));
+                model.three_d.push(preview_segment(
+                    D::ThreeD {
+                        look: "Gentle push",
+                    },
+                    0,
+                ));
+                model.rows.extend(
+                    [
+                        K::Caption,
+                        K::Keyboard,
+                        K::Text,
+                        K::Image,
+                        K::Style,
+                        K::Mask,
+                        K::Audio,
+                        K::Scene,
+                        K::ThreeD,
+                    ]
+                    .map(|kind| timeline::TrackRow { kind, lane: 0 }),
+                );
+            }
+            for segments in [
+                &mut model.caption,
+                &mut model.keyboard,
+                &mut model.text,
+                &mut model.image,
+                &mut model.style,
+                &mut model.mask,
+                &mut model.audio,
+                &mut model.zoom,
+                &mut model.scene,
+                &mut model.three_d,
+            ] {
+                let step = model.total_duration / (segments.len() + 1) as f64;
+                for (index, segment) in segments.iter_mut().enumerate() {
+                    segment.start = index as f64 * step;
+                    segment.end = segment.start + step * 0.8;
+                }
+            }
+            (project, model)
+        }
+
+        fn seed(editor: &mut EditorWindow, clips: usize, captions: usize) {
+            (editor.project, editor.timeline) = preview_project(clips, captions, "owned");
+        }
+
+        // Keep the previous whole-model preparation as an independent oracle and benchmark baseline.
+        type LegacyPreview = (TimelineModel, Option<(f64, f64)>);
+
+        fn legacy_preview(editor: &EditorWindow, now: Instant) -> Option<LegacyPreview> {
+            if let Some(draft) = editor.clip_draft {
+                let (boxes, gap) = editor.ghost_clip_boxes()?;
+                let mut model = editor.timeline.clone();
+                for (clip, (start, end)) in model.clips.iter_mut().zip(&boxes) {
+                    clip.start = *start;
+                    clip.end = *end;
+                }
+                if let Some(clip) = model.clips.get_mut(draft.index)
+                    && let SegmentDetail::Clip {
+                        source_start,
+                        source_duration,
+                        ..
+                    } = &mut clip.detail
+                {
+                    *source_start = draft.start;
+                    *source_duration = draft.end - draft.start;
+                }
+                return Some((model, gap));
+            }
+            let anim = editor.clip_anim.as_ref()?;
+            if anim.from.len() != editor.timeline.clips.len() {
+                return None;
+            }
+            let progress = (now.saturating_duration_since(anim.started).as_secs_f64()
+                / CLIP_RESIZE_ANIM_DURATION.as_secs_f64())
+            .clamp(0., 1.);
+            if progress >= 1. {
+                return None;
+            }
+            let eased = 1. - (1. - progress).powi(5);
+            let mut model = editor.timeline.clone();
+            for (clip, (from_start, from_end)) in model.clips.iter_mut().zip(&anim.from) {
+                clip.start = from_start + (clip.start - from_start) * eased;
+                clip.end = from_end + (clip.end - from_end) * eased;
+            }
+            Some((model, None))
+        }
+
+        fn assert_preview(editor: &EditorWindow, now: Instant) {
+            let before = format!("{:?}", editor.timeline);
+            let expected = legacy_preview(editor, now);
+            let actual = editor.display_clip_preview(|| now);
+            assert_eq!(actual.is_some(), expected.is_some());
+            if let (Some(actual), Some((expected, gap))) = (actual, expected) {
+                assert_eq!(actual.ghost_gap, gap);
+                let ui = SegmentUi {
+                    clip_preview: Some(&actual),
+                    ..Default::default()
+                };
+                for kind in KINDS {
+                    let displayed = ui.segments_for(&editor.timeline, TrackRow { kind, lane: 0 });
+                    assert_eq!(
+                        format!("{displayed:?}"),
+                        format!("{:?}", expected.segments(kind))
+                    );
+                    if kind != TrackKind::Clip {
+                        assert!(std::ptr::eq(displayed, editor.timeline.segments(kind)));
+                    }
+                }
+                for ((actual, expected), original) in actual
+                    .clips
+                    .iter()
+                    .zip(&expected.clips)
+                    .zip(&editor.timeline.clips)
+                {
+                    assert_eq!(actual.start.to_bits(), expected.start.to_bits());
+                    assert_eq!(actual.end.to_bits(), expected.end.to_bits());
+                    let (
+                        SegmentDetail::Clip { holds, .. },
+                        SegmentDetail::Clip {
+                            holds: original_holds,
+                            ..
+                        },
+                    ) = (&actual.detail, &original.detail)
+                    else {
+                        panic!("expected clips")
+                    };
+                    assert!(Arc::ptr_eq(holds, original_holds));
+                }
+                assert_eq!(expected.rows, editor.timeline.rows);
+                assert_eq!(expected.clip_boundaries, editor.timeline.clip_boundaries);
+                assert_eq!(
+                    expected.total_duration.to_bits(),
+                    editor.timeline.total_duration.to_bits()
+                );
+                assert!(Arc::ptr_eq(
+                    &expected.waveform_paths,
+                    &editor.timeline.waveform_paths
+                ));
+                for (before, after) in expected
+                    .mic_waveforms
+                    .iter()
+                    .zip(&editor.timeline.mic_waveforms)
+                    .chain(
+                        expected
+                            .system_waveforms
+                            .iter()
+                            .zip(&editor.timeline.system_waveforms),
+                    )
+                {
+                    assert!(Arc::ptr_eq(before, after));
+                }
+            }
+            assert_eq!(format!("{:?}", editor.timeline), before);
+        }
+
+        #[gpui::test]
+        fn clip_drafts_preserve_the_complete_timeline_view(cx: &mut gpui::TestAppContext) {
+            let (editor, cx) = fixture(cx);
+            editor.update(cx, |editor, _| {
+                for annotations in [0, 1000] {
+                    seed(editor, 3, annotations);
+                    let config = editor.project.timeline.as_mut().unwrap();
+                    for (index, clip) in config.segments.iter_mut().enumerate() {
+                        clip.timescale = [0.5, 2., 1.25][index];
+                    }
+                    config.transitions.push(cap_project::ClipTransition {
+                        segment_index: 1,
+                        kind: cap_project::ClipTransitionType::CrossFade,
+                        duration: 0.5,
+                    });
+                    config.text_segments.push(
+                        serde_json::from_value(serde_json::json!({
+                            "start": 3., "end": 4., "content": "Title", "layout": "fullscreen"
+                        }))
+                        .unwrap(),
+                    );
+                    let model = TimelineModel::build(&editor.project, true, true);
+                    editor.timeline.clips = model.clips;
+                    editor.timeline.clip_boundaries = model.clip_boundaries;
+                    editor.timeline.total_duration = model.total_duration;
+                    for index in [0, 1, 2] {
+                        let source = &editor.project.timeline.as_ref().unwrap().segments[index];
+                        let (start, end) = (source.start, source.end);
+                        for start_edge in [false, true] {
+                            for delta in [-4., 0., 4.] {
+                                editor.clip_draft = Some(ClipDraft {
+                                    index,
+                                    start_edge,
+                                    start: start + if start_edge { delta } else { 0. },
+                                    end: end + if start_edge { 0. } else { delta },
+                                });
+                                assert_preview(editor, Instant::now());
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        #[gpui::test]
+        fn clip_animation_preserves_the_complete_timeline_view(cx: &mut gpui::TestAppContext) {
+            let (editor, cx) = fixture(cx);
+            editor.update(cx, |editor, _| {
+                seed(editor, 3, 1000);
+                let started = Instant::now();
+                editor.clip_anim = Some(ClipReleaseAnim {
+                    from: editor
+                        .timeline
+                        .clips
+                        .iter()
+                        .map(|clip| (clip.start + 2., clip.end + 3.))
+                        .collect(),
+                    started,
+                    generation: 1,
+                });
+                for millis in [0, 45, 90, 179, 180, 181] {
+                    assert_preview(editor, started + Duration::from_millis(millis));
+                }
+                assert!(
+                    editor
+                        .display_clip_preview(|| started + CLIP_RESIZE_ANIM_DURATION)
+                        .is_none()
+                );
+                editor.clip_anim.as_mut().unwrap().from.truncate(2);
+                assert_preview(editor, started);
+                assert!(
+                    editor
+                        .display_clip_preview(|| panic!("mismatched animation read the clock"))
+                        .is_none()
+                );
+            });
+        }
+
+        #[gpui::test]
+        fn missing_clip_preview_inputs_leave_the_base_model_in_use(cx: &mut gpui::TestAppContext) {
+            let (editor, cx) = fixture(cx);
+            editor.update(cx, |editor, _| {
+                seed(editor, 3, 0);
+                assert_preview(editor, Instant::now());
+                assert!(
+                    editor
+                        .display_clip_preview(|| panic!("idle preview read the clock"))
+                        .is_none()
+                );
+                editor.clip_draft = Some(ClipDraft {
+                    index: 0,
+                    start_edge: false,
+                    start: 0.,
+                    end: 9.,
+                });
+                assert!(
+                    editor
+                        .display_clip_preview(|| panic!("draft preview read the clock"))
+                        .is_some()
+                );
+                editor.clip_draft = Some(ClipDraft {
+                    index: 3,
+                    start_edge: true,
+                    start: 4.,
+                    end: 24.,
+                });
+                assert_preview(editor, Instant::now());
+                editor.clip_draft.as_mut().unwrap().index = 0;
+                editor.project.timeline = None;
+                assert_preview(editor, Instant::now());
+                for kind in KINDS {
+                    assert!(std::ptr::eq(
+                        SegmentUi::default()
+                            .segments_for(&editor.timeline, TrackRow { kind, lane: 0 }),
+                        editor.timeline.segments(kind)
+                    ));
+                }
+            });
+        }
+
+        #[gpui::test]
+        fn clip_preview_renders_rows_and_speed_controls(cx: &mut gpui::TestAppContext) {
+            let (editor, cx) = fixture(cx);
+            editor.update(cx, |editor, _| {
+                seed(editor, 3, 3);
+                editor.clip_draft = Some(ClipDraft {
+                    index: 1,
+                    start_edge: true,
+                    start: 8.,
+                    end: 24.,
+                });
+                editor.hovered_segment = Some((TrackKind::Clip, 0, 1));
+                editor.view.transform = timeline::Transform {
+                    position: 0.,
+                    zoom: 40.,
+                };
+            });
+            cx.draw(
+                point(px(0.), px(0.)),
+                gpui::size(px(800.), px(800.)),
+                |_, cx| {
+                    editor.update(cx, |editor, cx| {
+                        div()
+                            .size_full()
+                            .child(editor.render_timeline_body(800., cx))
+                    })
+                },
+            );
+            editor.read_with(cx, |editor, _| assert_preview(editor, Instant::now()));
+        }
+
+        #[gpui::test]
+        #[ignore = "manual clip preview preparation benchmark"]
+        fn benchmark_clip_preview_preparation(cx: &mut gpui::TestAppContext) {
+            let (editor, cx) = fixture(cx);
+            editor.update(cx, |editor, _| {
+                for clips in [1, 24, 200] {
+                    for captions in [0, 1000, 10000] {
+                        for labels in ["static", "short", "owned"] {
+                            for mode in ["draft", "animation", "idle"] {
+                                (editor.project, editor.timeline) = preview_project(clips, captions, labels);
+                                let now = Instant::now();
+                                let index = clips / 2;
+                                editor.clip_draft = (mode == "draft").then_some(ClipDraft {
+                                    index, start_edge: false, start: index as f64 * 12., end: index as f64 * 12. + 9.,
+                                });
+                                editor.clip_anim = (mode == "animation").then(|| ClipReleaseAnim {
+                                    from: editor.timeline.clips.iter().map(|clip| (clip.start + 1., clip.end + 2.)).collect(),
+                                    started: now.checked_sub(Duration::from_millis(90)).unwrap(), generation: 1,
+                                });
+                                let batch = if captions == 10000 { 16 } else { 128 };
+                                let mut old = Vec::new();
+                                let mut new = Vec::new();
+                                for sample in 0..41 {
+                                    for candidate in if sample % 2 == 0 { [false, true] } else { [true, false] } {
+                                        let started = Instant::now();
+                                        for _ in 0..batch {
+                                            if candidate {
+                                                drop(std::hint::black_box(std::hint::black_box(&*editor).display_clip_preview(|| std::hint::black_box(now))));
+                                            } else {
+                                                drop(std::hint::black_box(legacy_preview(std::hint::black_box(&*editor), std::hint::black_box(now))));
+                                            }
+                                        }
+                                        let elapsed = started.elapsed().as_secs_f64() * 1_000_000. / batch as f64;
+                                        if sample >= 10 {
+                                            if candidate { new.push(elapsed); } else { old.push(elapsed); }
+                                        }
+                                    }
+                                }
+                                old.sort_by(f64::total_cmp);
+                                new.sort_by(f64::total_cmp);
+                                println!("clips={clips} captions={captions} keyboard={} each_overlay={} labels={labels} mode={mode} samples=31 batch={batch} baseline_us={:.3} clip_preview_us={:.3}", captions / 4, captions / 100, old[old.len() / 2], new[new.len() / 2]);
+                            }
+                        }
+                    }
+                }
+            });
+        }
+    }
 
     #[cfg(target_os = "linux")]
     mod canvas_history {
