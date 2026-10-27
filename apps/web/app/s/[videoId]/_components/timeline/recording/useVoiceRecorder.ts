@@ -169,7 +169,7 @@ export function useVoiceRecorder(options: {
 		}
 		if (runId !== runIdRef.current || discardRef.current) {
 			if (mixer) void mixer.close();
-			cleanupStreams();
+			for (const track of stream.getTracks()) track.stop();
 			return;
 		}
 		mixerRef.current = mixer;
@@ -367,6 +367,7 @@ export function useVoiceRecorder(options: {
 	const stop = useCallback(async () => {
 		if (phaseRef.current !== "recording" && phaseRef.current !== "paused")
 			return;
+		const runId = runIdRef.current;
 		// Pause accounting folds any open pause in, so this is active time only.
 		const recordedMs = syncDurationFromClock();
 		const mime =
@@ -381,6 +382,7 @@ export function useVoiceRecorder(options: {
 		} catch (cause) {
 			console.error("Failed to finalize voice note", cause);
 		}
+		if (runId !== runIdRef.current) return;
 		const livePeaks = peaksRef.current?.finish();
 		peaksRef.current = null;
 		resetRecorder();
@@ -393,6 +395,7 @@ export function useVoiceRecorder(options: {
 
 		const typedBlob = blob.type ? blob : new Blob([blob], { type: mime });
 		const waveform = livePeaks ?? (await decodeToPeaks(typedBlob));
+		if (runId !== runIdRef.current || discardRef.current) return;
 		optionsRef.current.onFinish({
 			blob: typedBlob,
 			mime,
