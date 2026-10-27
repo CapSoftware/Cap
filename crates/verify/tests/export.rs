@@ -355,8 +355,9 @@ fn turbo_spool_files() -> Vec<std::path::PathBuf> {
 
 /// Stopping a turbo export from the progress callback or the user's cancel
 /// flag ends every chunk, leaves no output and removes the chunk spools. A
-/// destination that appears while turbo runs is left alone: the export fails
-/// rather than falling back to a standard export that would overwrite it.
+/// destination that appears while turbo runs is left alone, whether turbo
+/// then finishes or fails: the export fails rather than falling back to a
+/// standard export that would overwrite it.
 fn turbo_cancellation() -> Vec<String> {
     use std::sync::{
         Arc,
@@ -369,7 +370,7 @@ fn turbo_cancellation() -> Vec<String> {
         Decoder::Default
     };
     let mut failures = Vec::new();
-    for mode in ["progress", "flag", "taken"] {
+    for mode in ["progress", "flag", "taken", "taken-failed"] {
         let id = format!(
             "export/{}/turbo-cancel-{mode}/{}",
             spec.name,
@@ -389,13 +390,16 @@ fn turbo_cancellation() -> Vec<String> {
         let flag = cancel.clone();
         let taken = out.clone();
         let result = common::runtime().block_on(async {
-            let base = cap_export::ExporterBase::builder(project.path.clone())
+            let mut base = cap_export::ExporterBase::builder(project.path.clone())
                 .with_config(project.config())
                 .with_force_ffmpeg_decoder(decoder == Decoder::Ffmpeg)
                 .with_output_path(out.clone())
                 .build_for_mp4(cancel)
                 .await
                 .map_err(|e| format!("exporter build: {e}"))?;
+            if mode == "taken-failed" {
+                base.fail_turbo_chunk(2);
+            }
             cap_export::mp4::Mp4ExportSettings {
                 fps: 60,
                 resolution_base: XY::new(RES.0, RES.1),
@@ -408,30 +412,28 @@ fn turbo_cancellation() -> Vec<String> {
                 base,
                 cap_export::mp4::turbo::TurboOptions {
                     chunks: Some(3),
-                    strict: mode != "taken",
+                    strict: !mode.starts_with("taken"),
                 },
                 move |frame| {
+                    if mode.starts_with("taken") {
+                        if !taken.exists() {
+                            let _ = std::fs::write(&taken, "taken");
+                        }
+                        return true;
+                    }
                     if frame < 60 {
                         return true;
                     }
-                    match mode {
-                        "flag" => {
-                            flag.store(true, Ordering::Relaxed);
-                            true
-                        }
-                        "taken" => {
-                            if frame == 60 {
-                                let _ = std::fs::write(&taken, "taken");
-                            }
-                            true
-                        }
-                        _ => false,
+                    if mode == "flag" {
+                        flag.store(true, Ordering::Relaxed);
+                        return true;
                     }
+                    false
                 },
             )
             .await
         });
-        if mode == "taken" {
+        if mode.starts_with("taken") {
             if result.is_ok() || result.as_ref().map_err(String::as_str) == Err("Export cancelled")
             {
                 case.problem("error", format!("taken destination returned {result:?}"));
