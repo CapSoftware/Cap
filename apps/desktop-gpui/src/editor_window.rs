@@ -10901,7 +10901,8 @@ impl EditorWindow {
                 Some(crate::editor_audio::AudioPicker::Add { lane }) => Some(lane),
                 _ => None,
             },
-            hovering_generate_zoom: self.hovering_generate_zoom,
+            // No create ghost while a generated set is on its way either.
+            hovering_generate_zoom: self.hovering_generate_zoom || self.generating_auto_zoom,
             scene_preview_time: self.scene_preview_time,
             camera3d_preview: &camera3d_preview,
             camera3d_editing_end: self.sidebar.editing_end_pose,
@@ -11136,7 +11137,15 @@ impl EditorWindow {
                             .bottom_0()
                             // Only the copy and its buttons take the press;
                             // the rest of the lane still creates a zoom
-                            // (`TL/ZoomTrack.tsx:308-313`).
+                            // (`TL/ZoomTrack.tsx:308-313`). While generating,
+                            // the whole lane holds still: the result replaces
+                            // every zoom, so one made meanwhile would vanish.
+                            .when(generating, |lane| {
+                                lane.on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|_, _, _, cx| cx.stop_propagation()),
+                                )
+                            })
                             .child(
                                 div()
                                     .absolute()
@@ -13663,6 +13672,22 @@ mod tests {
             let (editor, cx) = fixture(cx);
             let prompt = cx.debug_bounds("zoom-generate-hit").unwrap();
             press(cx, point(prompt.left() + px(4.), prompt.center().y));
+            editor.read_with(cx, |editor, _| assert!(editor.drag.is_none()));
+        }
+
+        #[gpui::test]
+        fn a_press_beside_the_prompt_while_generating_does_not_start_a_zoom(
+            cx: &mut gpui::TestAppContext,
+        ) {
+            let (editor, cx) = fixture(cx);
+            editor.update(cx, |editor, cx| {
+                editor.generating_auto_zoom = true;
+                cx.notify();
+            });
+            cx.update(|window, _| window.refresh());
+            cx.run_until_parked();
+            let lane = cx.debug_bounds("zoom-generate-prompt").unwrap();
+            press(cx, point(lane.left() + px(24.), lane.center().y));
             editor.read_with(cx, |editor, _| assert!(editor.drag.is_none()));
         }
     }
