@@ -878,25 +878,31 @@ impl EditorInstance {
         let segments = crate::get_audio_segments(&self.segment_medias).await;
         let music = self.load_music_tracks().await;
         let project = self.project_config.1.borrow().clone();
-        let mut renderer = crate::AudioRenderer::new(segments).with_music(music);
-        renderer.set_playhead(time.max(0.0), &project);
-        let frames =
-            (secs.clamp(0.01, 0.5) * f64::from(crate::AudioRenderer::SAMPLE_RATE)) as usize;
-        let Some((_, mut samples)) = renderer.render_frame_raw(frames, &project) else {
-            return Vec::new();
-        };
-        let channels = usize::from(crate::AudioRenderer::CHANNELS);
-        let total = samples.len() / channels;
-        let fade = (crate::AudioRenderer::SAMPLE_RATE as usize / 200)
-            .min(total / 2)
-            .max(1);
-        for frame in 0..total {
-            let gain = (frame.min(total - 1 - frame) as f32 / fade as f32).min(1.0);
-            for sample in &mut samples[frame * channels..(frame + 1) * channels] {
-                *sample *= gain;
+        // Rendering speed-changed clips builds audio filters, so it runs off
+        // the async workers.
+        tokio::task::spawn_blocking(move || {
+            let mut renderer = crate::AudioRenderer::new(segments).with_music(music);
+            renderer.set_playhead(time.max(0.0), &project);
+            let frames =
+                (secs.clamp(0.01, 0.5) * f64::from(crate::AudioRenderer::SAMPLE_RATE)) as usize;
+            let Some((_, mut samples)) = renderer.render_frame_raw(frames, &project) else {
+                return Vec::new();
+            };
+            let channels = usize::from(crate::AudioRenderer::CHANNELS);
+            let total = samples.len() / channels;
+            let fade = (crate::AudioRenderer::SAMPLE_RATE as usize / 200)
+                .min(total / 2)
+                .max(1);
+            for frame in 0..total {
+                let gain = (frame.min(total - 1 - frame) as f32 / fade as f32).min(1.0);
+                for sample in &mut samples[frame * channels..(frame + 1) * channels] {
+                    *sample *= gain;
+                }
             }
-        }
-        samples
+            samples
+        })
+        .await
+        .unwrap_or_default()
     }
 
     /// Decodes (and caches) the music tracks referenced by the current project

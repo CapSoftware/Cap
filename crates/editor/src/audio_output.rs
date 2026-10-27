@@ -30,6 +30,10 @@ use cpal::{
     SampleFormat,
     traits::{DeviceTrait, HostTrait, StreamTrait},
 };
+use ringbuf::{
+    HeapProd, HeapRb,
+    traits::{Consumer, Observer, Producer, Split},
+};
 use tokio::sync::watch;
 use tracing::{error, info};
 
@@ -1574,9 +1578,10 @@ where
 
     let mut active: Option<ActiveSource<T>> = None;
     // Scrub slices arrive already in the device's format; played-out buffers
-    // go back to the output thread so the callback never frees memory.
-    let (snippet_tx, snippet_rx) = std_mpsc::channel::<Vec<T>>();
-    let (spent_tx, spent_rx) = std_mpsc::channel::<Vec<T>>();
+    // go back to the output thread so the callback never frees memory. Both
+    // rings are preallocated, so neither side allocates to hand one over.
+    let (snippet_tx, mut snippet_rx) = HeapRb::<Vec<T>>::new(SCRUB_QUEUE).split();
+    let (mut spent_tx, spent_rx) = HeapRb::<Vec<T>>::new(SCRUB_QUEUE * 2).split();
     let mut snippet: Option<(Vec<T>, usize)> = None;
     let callback_source_active = source_active.clone();
     let stream = device
@@ -1584,15 +1589,14 @@ where
             &config,
             move |buffer: &mut [T], info| {
                 drain_source_commands(&mut active, &source_rx);
-                while let Ok(next) = snippet_rx.try_recv() {
-                    if let Some((spent, _)) = snippet.replace((next, 0)) {
-                        let _ = spent_tx.send(spent);
-                    }
-                }
-                if active.is_some()
-                    && let Some((spent, _)) = snippet.take()
+                while spent_tx.vacant_len() > usize::from(snippet.is_some())
+                    && let Some(next) = snippet_rx.try_pop()
                 {
-                    let _ = spent_tx.send(spent);
+                    retire_snippet(&mut spent_tx, &mut snippet);
+                    snippet = Some((next, 0));
+                }
+                if active.is_some() {
+                    retire_snippet(&mut spent_tx, &mut snippet);
                 }
                 callback_source_active
                     .store(active.is_some() || snippet.is_some(), Ordering::Release);
@@ -1606,10 +1610,8 @@ where
                     buffer[..count].copy_from_slice(&samples[*position..*position + count]);
                     buffer[count..].fill(T::EQUILIBRIUM);
                     *position += count;
-                    if *position >= samples.len()
-                        && let Some((spent, _)) = snippet.take()
-                    {
-                        let _ = spent_tx.send(spent);
+                    if *position >= samples.len() {
+                        retire_snippet(&mut spent_tx, &mut snippet);
                     }
                     return;
                 };
@@ -1674,9 +1676,11 @@ where
         let _ = source_tx.send(SourceCommand::Remove { generation });
     });
 
+    let spent_rx = std::cell::RefCell::new(spent_rx);
+    let snippet_tx = std::cell::RefCell::new(snippet_tx);
     let play_snippet = Box::new(move |samples: Vec<f32>| {
-        while spent_rx.try_recv().is_ok() {}
-        let _ = snippet_tx.send(convert_snippet::<T>(
+        spent_rx.borrow_mut().clear();
+        let _ = snippet_tx.borrow_mut().try_push(convert_snippet::<T>(
             &samples,
             crate::AudioRenderer::SAMPLE_RATE,
             output_info.sample_rate,
@@ -1693,6 +1697,20 @@ where
         play_snippet,
     })
 }
+
+/// Hands a scrub slice back to the output thread. It is only let go when the
+/// spent ring has room, otherwise it stays (finished, so silent) until there
+/// is, so the audio callback never frees it.
+fn retire_snippet<T>(spent: &mut HeapProd<Vec<T>>, slot: &mut Option<(Vec<T>, usize)>) {
+    if !spent.is_full()
+        && let Some((samples, _)) = slot.take()
+    {
+        let _ = spent.try_push(samples);
+    }
+}
+
+/// Scrub slices waiting for the callback; a drag sends one every ~100 ms.
+const SCRUB_QUEUE: usize = 4;
 
 /// How long scrub slices are dropped after the stream fails to open.
 const SCRUB_RETRY_AFTER_FAILURE: Duration = Duration::from_secs(2);
@@ -1745,7 +1763,18 @@ mod native_tests;
 
 #[cfg(test)]
 mod scrub_snippet_tests {
-    use super::convert_snippet;
+    use super::{HeapRb, Split, convert_snippet, retire_snippet};
+
+    #[test]
+    fn a_full_spent_ring_keeps_the_slice_instead_of_freeing_it() {
+        let (mut spent, _rx) = HeapRb::<Vec<f32>>::new(1).split();
+        let mut slot = Some((vec![1.0], 1));
+        retire_snippet(&mut spent, &mut slot);
+        assert!(slot.is_none());
+        let mut slot = Some((vec![2.0], 1));
+        retire_snippet(&mut spent, &mut slot);
+        assert_eq!(slot, Some((vec![2.0], 1)));
+    }
 
     #[test]
     fn snippets_are_resampled_and_mapped_to_the_device_layout() {
