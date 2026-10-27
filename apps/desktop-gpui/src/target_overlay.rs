@@ -2104,7 +2104,7 @@ impl OverlayWindow {
                 .id("window-focus")
                 .mb(px(8.))
                 .pl(px(12.))
-                .pr(px(6.))
+                .pr(px(4.))
                 .flex()
                 .items_center()
                 .gap(px(10.))
@@ -2123,11 +2123,15 @@ impl OverlayWindow {
                         .child("Focus"),
                 )
                 .child(
-                    crate::ui::Toggle::glass(&theme, "window-focus-toggle", self.focus_window)
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            cx.stop_propagation();
-                            this.set_focus(!this.focus_window, cx);
-                        })),
+                    crate::ui::GlassSwitch::new(
+                        "window-focus-toggle",
+                        self.focus_window,
+                        theme.is_dark(),
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.set_focus(!this.focus_window, cx);
+                    })),
                 ),
         )
     }
