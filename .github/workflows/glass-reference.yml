@@ -1,0 +1,58 @@
+name: Glass reference (Apple)
+# Captures Apple's NSGlassEffectView over the fixed backdrops in
+# scripts/glass-reference so Cap's glass renderer can be compared against it.
+
+on:
+  pull_request:
+    paths:
+      - "scripts/glass-reference/**"
+      - ".github/workflows/glass-reference.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: glass-reference-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  capture:
+    name: Apple glass reference (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-26, blacksmith-6vcpu-macos-26]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Screen capture permission
+        run: |
+          set -euo pipefail
+          sudo pmset -a displaysleep 0 sleep 0 || true
+          caffeinate -u -t 2
+          swiftc -O scripts/glass-reference/reference.swift -o "$RUNNER_TEMP/reference"
+          db="/Library/Application Support/com.apple.TCC/TCC.db"
+          now=$(date +%s)
+          for client in "$RUNNER_TEMP/reference" /usr/sbin/screencapture /bin/bash /Users/runner/bin/Runner.Worker /Users/runner/bin/Runner.Listener; do
+            sudo sqlite3 "$db" "INSERT OR REPLACE INTO access (service,client,client_type,auth_value,auth_reason,auth_version,indirect_object_identifier,flags,last_modified) VALUES ('kTCCServiceScreenCapture','$client',1,2,4,1,'UNUSED',0,$now);" || true
+          done
+          sudo killall tccd || true
+          sleep 2
+          sw_vers
+          system_profiler SPDisplaysDataType | grep -E "Resolution|Chipset|Metal" || true
+
+      - name: Capture
+        run: |
+          "$RUNNER_TEMP/reference" "$RUNNER_TEMP/glass-reference"
+          ls "$RUNNER_TEMP/glass-reference/apple" | head
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: glass-reference-${{ matrix.runner }}
+          path: ${{ runner.temp }}/glass-reference
+          retention-days: 30
