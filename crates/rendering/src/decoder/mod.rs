@@ -21,6 +21,7 @@ use std::sync::{
 mod avassetreader;
 mod ffmpeg;
 mod frame_converter;
+pub(crate) use frame_converter::use_bt709_source;
 #[cfg(target_os = "windows")]
 mod media_foundation;
 #[cfg(test)]

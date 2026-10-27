@@ -185,7 +185,7 @@ impl FrameConverter {
 
 /// swscale converts YUV with BT.601 unless told otherwise: switch the source
 /// matrix to BT.709 and keep the ranges and adjustments it chose.
-fn use_bt709_source(context: &mut software::scaling::Context) {
+pub(crate) fn use_bt709_source(context: &mut software::scaling::Context) {
     unsafe {
         let mut inv_table = std::ptr::null_mut();
         let mut table = std::ptr::null_mut();

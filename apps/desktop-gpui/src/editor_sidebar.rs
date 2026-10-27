@@ -192,6 +192,11 @@ pub const DEFAULT_BACKGROUND_ROUNDING: f64 = 7.5;
 pub const DEFAULT_NOISE_SCALE: f32 = 3.;
 /// `BACKGROUND_IMAGE_EXTENSIONS` (`:250-257`).
 pub const BACKGROUND_IMAGE_EXTENSIONS: [&str; 6] = ["jpg", "jpeg", "png", "gif", "webp", "bmp"];
+/// What the recording editor's image pane accepts: the images above plus
+/// videos, which loop behind the recording.
+pub const BACKGROUND_MEDIA_EXTENSIONS: [&str; 10] = [
+    "jpg", "jpeg", "png", "gif", "webp", "bmp", "mp4", "mov", "m4v", "webm",
+];
 /// `CURRENT_DESKTOP_BACKGROUND_BASENAME` (`:350`, and `recording.rs:91`).
 pub const CURRENT_DESKTOP_BACKGROUND_BASENAME: &str = "current-desktop-background";
 /// `recording.rs:92-93`.
@@ -1972,6 +1977,10 @@ impl EditorWindow {
 /// side. The same rule as `library::decode_thumbnail`: the atlas would
 /// otherwise hold a multi-megapixel original per tile.
 fn decode_scaled_rgba(path: &Path, max: u32) -> Option<image::RgbaImage> {
+    if is_background_video(path) {
+        let (pixels, width, height) = cap_rendering::video_background_poster(path, max)?;
+        return image::RgbaImage::from_raw(width, height, pixels);
+    }
     let bytes = std::fs::read(path).ok()?;
     let format = image::guess_format(&bytes).ok()?;
     let (decoded, width, height) = if format == image::ImageFormat::Jpeg {
@@ -2007,6 +2016,12 @@ fn decode_scaled_rgba(path: &Path, max: u32) -> Option<image::RgbaImage> {
     } else {
         decoded.into_rgba8()
     })
+}
+
+/// GIFs decode as images here; only the first frame is needed for a tile.
+fn is_background_video(path: &Path) -> bool {
+    let path = path.to_string_lossy();
+    cap_rendering::is_video_background(&path) && !path.to_lowercase().ends_with(".gif")
 }
 
 fn decode_jpeg_thumbnail(bytes: &[u8], max: u32) -> Option<(image::DynamicImage, u32, u32)> {
@@ -2437,14 +2452,14 @@ impl EditorWindow {
         self.sidebar.picker_task = Some(cx.spawn_in(window, async move |this, cx| {
             #[cfg(target_os = "linux")]
             let picked = crate::platform::open_file_panel_async(
-                &[("Image", &BACKGROUND_IMAGE_EXTENSIONS[..])],
+                &[("Image or video", &BACKGROUND_MEDIA_EXTENSIONS[..])],
                 None,
                 cx,
             )
             .await;
             #[cfg(not(target_os = "linux"))]
             let picked = cx
-                .update(|_, _| crate::platform::open_image_panel(&BACKGROUND_IMAGE_EXTENSIONS))
+                .update(|_, _| crate::platform::open_image_panel(&BACKGROUND_MEDIA_EXTENSIONS))
                 .ok()
                 .flatten();
 
@@ -2457,9 +2472,9 @@ impl EditorWindow {
                                 .and_then(|extension| extension.to_str())
                                 .map(str::to_lowercase);
                             if !extension.is_some_and(|extension| {
-                                BACKGROUND_IMAGE_EXTENSIONS.contains(&extension.as_str())
+                                BACKGROUND_MEDIA_EXTENSIONS.contains(&extension.as_str())
                             }) {
-                                return Err("Invalid image file type".to_string());
+                                return Err("Invalid image or video file type".to_string());
                             }
                             let timestamp = std::time::SystemTime::now()
                                 .duration_since(std::time::UNIX_EPOCH)
@@ -3134,7 +3149,7 @@ impl EditorWindow {
                 .child(
                     div()
                         .text_color(Hsla::from(theme.editor.text_1))
-                        .child("Click to select or drag and drop image"),
+                        .child("Click to select an image, GIF or video"),
                 )
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.pick_background_image(window, cx);
@@ -4283,6 +4298,17 @@ mod tests {
         assert!(pixel[0].abs_diff(40) <= 3);
         assert!(pixel[1].abs_diff(120) <= 3);
         assert!(pixel[2].abs_diff(200) <= 3);
+    }
+
+    #[test]
+    fn videos_get_a_poster_while_gifs_decode_as_images() {
+        assert!(is_background_video(Path::new("/bg/loop.mp4")));
+        assert!(is_background_video(Path::new("/bg/loop.MOV")));
+        assert!(!is_background_video(Path::new("/bg/loop.gif")));
+        assert!(!is_background_video(Path::new("/bg/still.png")));
+        for extension in BACKGROUND_IMAGE_EXTENSIONS {
+            assert!(BACKGROUND_MEDIA_EXTENSIONS.contains(&extension));
+        }
     }
 
     #[test]

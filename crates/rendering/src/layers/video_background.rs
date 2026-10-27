@@ -1,0 +1,678 @@
+use std::{
+    collections::VecDeque,
+    path::{Path, PathBuf},
+    sync::{Arc, mpsc},
+    time::Duration,
+};
+
+use ffmpeg::{format, frame, software};
+use tokio::sync::oneshot;
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+use ffmpeg::sys::AVHWDeviceType;
+
+const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mov", "m4v", "webm", "mkv", "gif"];
+
+/// Frames from the start of the clip stay decoded so a loop restarts
+/// without a seek. Short clips and most GIFs fit entirely.
+const HEAD_BUDGET_BYTES: usize = 32 * 1024 * 1024;
+const MIN_HEAD_FRAMES: usize = 2;
+const PREFETCH_FRAMES: usize = 3;
+/// A request this far past the decoded frames seeks instead of decoding
+/// through everything in between.
+const SEEK_THRESHOLD_SECS: f64 = 1.5;
+const TIME_EPSILON: f64 = 1e-4;
+const OPEN_TIMEOUT: Duration = Duration::from_secs(15);
+const FRAME_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_DECODE_ERRORS: usize = 16;
+
+pub fn is_video_background(path: &str) -> bool {
+    Path::new(path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            VIDEO_EXTENSIONS
+                .iter()
+                .any(|video| extension.eq_ignore_ascii_case(video))
+        })
+}
+
+/// Picks the decode size from a few fixed steps, so resizing the preview
+/// only reopens the video when the output crosses a step.
+pub fn video_background_max_dimension(output_size: (u32, u32), device_limit: u32) -> u32 {
+    let longest = output_size.0.max(output_size.1);
+    [640, 960, 1280, 1920]
+        .into_iter()
+        .find(|step| *step >= longest)
+        .unwrap_or(1920)
+        .min(device_limit)
+}
+
+/// The first frame of a background video as tightly packed RGBA, for
+/// thumbnails.
+pub fn video_background_poster(path: &Path, max_dimension: u32) -> Option<(Vec<u8>, u32, u32)> {
+    let reader = Reader::open(path.to_path_buf(), max_dimension, 0)
+        .inspect_err(|error| tracing::warn!("Failed to read background video poster: {error}"))
+        .ok()?;
+    let frame = reader.head.first()?;
+    Some((frame.data.clone(), frame.width, frame.height))
+}
+
+pub struct VideoBackgroundFrame {
+    pub data: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+    time: f64,
+}
+
+struct FrameRequest {
+    seconds: f64,
+    reply: oneshot::Sender<Option<Arc<VideoBackgroundFrame>>>,
+}
+
+/// A looping video or GIF decoded on its own thread. Frames come back as
+/// RGBA scaled to fit `max_dimension`, and the thread reads ahead between
+/// requests so playback and export rarely wait on a decode.
+pub struct VideoBackgroundSource {
+    requests: mpsc::Sender<FrameRequest>,
+}
+
+impl VideoBackgroundSource {
+    pub async fn open(path: PathBuf, max_dimension: u32) -> Result<Self, String> {
+        Self::open_with_head_budget(path, max_dimension, HEAD_BUDGET_BYTES).await
+    }
+
+    async fn open_with_head_budget(
+        path: PathBuf,
+        max_dimension: u32,
+        head_budget_bytes: usize,
+    ) -> Result<Self, String> {
+        let (ready_tx, ready_rx) = oneshot::channel();
+        let (requests, receiver) = mpsc::channel();
+
+        std::thread::Builder::new()
+            .name("video-background".to_string())
+            .spawn(
+                move || match Reader::open(path, max_dimension, head_budget_bytes) {
+                    Ok(reader) => {
+                        let _ = ready_tx.send(Ok(()));
+                        reader.run(receiver);
+                    }
+                    Err(error) => {
+                        let _ = ready_tx.send(Err(error));
+                    }
+                },
+            )
+            .map_err(|error| format!("spawn video background thread / {error}"))?;
+
+        tokio::time::timeout(OPEN_TIMEOUT, ready_rx)
+            .await
+            .map_err(|_| "timed out opening video background".to_string())?
+            .map_err(|_| "video background thread exited".to_string())??;
+
+        Ok(Self { requests })
+    }
+
+    pub async fn frame_at(&self, seconds: f64) -> Option<Arc<VideoBackgroundFrame>> {
+        let (reply, response) = oneshot::channel();
+        self.requests.send(FrameRequest { seconds, reply }).ok()?;
+        tokio::time::timeout(FRAME_TIMEOUT, response)
+            .await
+            .ok()?
+            .ok()?
+    }
+}
+
+struct Scaler {
+    context: software::scaling::Context,
+    input: (format::Pixel, u32, u32),
+    output: frame::Video,
+}
+
+struct Reader {
+    path: PathBuf,
+    max_dimension: u32,
+    decoder: cap_video_decode::FFmpegDecoder,
+    seconds_per_tick: f64,
+    start_ticks: i64,
+    frame_interval: f64,
+    duration: f64,
+    scaler: Option<Scaler>,
+    head: Vec<Arc<VideoBackgroundFrame>>,
+    head_is_whole_clip: bool,
+    ring: VecDeque<Arc<VideoBackgroundFrame>>,
+    at_end: bool,
+    last_time: Option<f64>,
+    last_served: f64,
+    unreachable_anchor: Option<f64>,
+}
+
+fn hardware_device() -> Option<ffmpeg::sys::AVHWDeviceType> {
+    #[cfg(target_os = "windows")]
+    {
+        Some(AVHWDeviceType::AV_HWDEVICE_TYPE_D3D11VA)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Some(AVHWDeviceType::AV_HWDEVICE_TYPE_VIDEOTOOLBOX)
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        None
+    }
+}
+
+fn open_decoder(path: &Path) -> Result<cap_video_decode::FFmpegDecoder, String> {
+    let is_gif = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("gif"));
+    let hardware = if is_gif { None } else { hardware_device() };
+    cap_video_decode::FFmpegDecoder::new(path, hardware)
+}
+
+fn covering_frame<'a>(
+    frames: impl IntoIterator<Item = &'a Arc<VideoBackgroundFrame>>,
+    time: f64,
+    reaches_end: bool,
+) -> Option<&'a Arc<VideoBackgroundFrame>> {
+    let mut frames = frames.into_iter().peekable();
+    let first = frames.peek()?;
+    if first.time > time + TIME_EPSILON {
+        return None;
+    }
+    while let Some(frame) = frames.next() {
+        match frames.peek() {
+            Some(next) if next.time <= time + TIME_EPSILON => continue,
+            Some(_) => return Some(frame),
+            None => return reaches_end.then_some(frame),
+        }
+    }
+    None
+}
+
+impl Reader {
+    fn open(path: PathBuf, max_dimension: u32, head_budget_bytes: usize) -> Result<Self, String> {
+        let probe = format::input(&path).map_err(|error| format!("open video / {error}"))?;
+        let stream = probe
+            .streams()
+            .best(ffmpeg::media::Type::Video)
+            .ok_or_else(|| "no video stream".to_string())?;
+        let time_base = stream.time_base();
+        let seconds_per_tick =
+            f64::from(time_base.numerator()) / f64::from(time_base.denominator().max(1));
+        let rate = stream.avg_frame_rate();
+        let frame_interval = if rate.numerator() > 0 && rate.denominator() > 0 {
+            f64::from(rate.denominator()) / f64::from(rate.numerator())
+        } else {
+            1.0 / 30.0
+        };
+        let duration = if stream.duration() > 0 {
+            stream.duration() as f64 * seconds_per_tick
+        } else if probe.duration() > 0 {
+            probe.duration() as f64 / f64::from(ffmpeg::ffi::AV_TIME_BASE)
+        } else {
+            0.0
+        };
+        let start_ticks = match stream.start_time() {
+            ffmpeg::ffi::AV_NOPTS_VALUE => 0,
+            start => start,
+        };
+        drop(probe);
+
+        let mut reader = Self {
+            decoder: open_decoder(&path)?,
+            path,
+            max_dimension: max_dimension.max(2),
+            seconds_per_tick,
+            start_ticks,
+            frame_interval,
+            duration,
+            scaler: None,
+            head: Vec::new(),
+            head_is_whole_clip: false,
+            ring: VecDeque::new(),
+            at_end: false,
+            last_time: None,
+            last_served: 0.0,
+            unreachable_anchor: None,
+        };
+        reader.fill_head(head_budget_bytes)?;
+        Ok(reader)
+    }
+
+    fn fill_head(&mut self, budget_bytes: usize) -> Result<(), String> {
+        let mut bytes = 0;
+        while self.head.len() < MIN_HEAD_FRAMES || bytes < budget_bytes {
+            let Some(frame) = self.decode_next() else {
+                self.head_is_whole_clip = true;
+                break;
+            };
+            bytes += frame.data.len();
+            self.head.push(frame);
+        }
+        let Some(last) = self.head.last() else {
+            return Err("video has no frames".to_string());
+        };
+        self.ring.push_back(last.clone());
+        Ok(())
+    }
+
+    fn run(mut self, requests: mpsc::Receiver<FrameRequest>) {
+        loop {
+            let request = if self.wants_prefetch() {
+                match requests.try_recv() {
+                    Ok(request) => Some(request),
+                    Err(mpsc::TryRecvError::Empty) => None,
+                    Err(mpsc::TryRecvError::Disconnected) => return,
+                }
+            } else {
+                match requests.recv() {
+                    Ok(request) => Some(request),
+                    Err(_) => return,
+                }
+            };
+
+            match request {
+                Some(request) => {
+                    let frame = self.frame_at(request.seconds);
+                    let _ = request.reply.send(frame);
+                }
+                None => self.prefetch(),
+            }
+        }
+    }
+
+    fn clip_time(&self, seconds: f64) -> f64 {
+        if !seconds.is_finite() || seconds <= 0.0 {
+            0.0
+        } else if self.duration > 0.0 {
+            seconds.rem_euclid(self.duration)
+        } else {
+            seconds
+        }
+    }
+
+    fn frame_at(&mut self, seconds: f64) -> Option<Arc<VideoBackgroundFrame>> {
+        let time = self.clip_time(seconds);
+        self.last_served = time;
+
+        if self.head_is_whole_clip {
+            return covering_frame(&self.head, time, true)
+                .or_else(|| self.head.first())
+                .cloned();
+        }
+        if let Some(frame) = covering_frame(&self.head, time, false) {
+            return Some(frame.clone());
+        }
+        if time < self.head[0].time {
+            return Some(self.head[0].clone());
+        }
+        if let Some(frame) = covering_frame(&self.ring, time, self.at_end) {
+            return Some(frame.clone());
+        }
+
+        let close_ahead = self.ring.back().is_some_and(|last| {
+            !self.at_end && time > last.time && time - last.time < SEEK_THRESHOLD_SECS
+        });
+        if !close_ahead {
+            self.seek(time);
+        }
+        self.decode_until(time)
+    }
+
+    fn decode_until(&mut self, time: f64) -> Option<Arc<VideoBackgroundFrame>> {
+        loop {
+            self.trim_before(time);
+            if let Some(frame) = covering_frame(&self.ring, time, self.at_end) {
+                return Some(frame.clone());
+            }
+            if self.at_end {
+                return self.ring.back().cloned();
+            }
+            match self.decode_next() {
+                Some(frame) => self.ring.push_back(frame),
+                None => self.at_end = true,
+            }
+        }
+    }
+
+    fn trim_before(&mut self, time: f64) {
+        while self.ring.len() >= 2 && self.ring[1].time <= time + TIME_EPSILON {
+            self.ring.pop_front();
+        }
+    }
+
+    /// Where reading ahead continues from: just after the cached head while
+    /// the head is playing, otherwise the last frame handed out.
+    fn prefetch_anchor(&self) -> f64 {
+        let head_end = self.head.last().map_or(0.0, |frame| frame.time);
+        self.last_served.max(head_end)
+    }
+
+    fn ring_is_positioned(&self, anchor: f64) -> bool {
+        match (self.ring.front(), self.ring.back()) {
+            (Some(first), Some(last)) => {
+                first.time <= anchor + TIME_EPSILON
+                    && (self.at_end || anchor - last.time < SEEK_THRESHOLD_SECS)
+            }
+            _ => false,
+        }
+    }
+
+    fn wants_prefetch(&self) -> bool {
+        if self.head_is_whole_clip {
+            return false;
+        }
+        let anchor = self.prefetch_anchor();
+        if !self.ring_is_positioned(anchor) {
+            return self.unreachable_anchor != Some(anchor);
+        }
+        !self.at_end
+            && self
+                .ring
+                .iter()
+                .filter(|frame| frame.time > anchor + TIME_EPSILON)
+                .count()
+                < PREFETCH_FRAMES
+    }
+
+    fn prefetch(&mut self) {
+        let anchor = self.prefetch_anchor();
+        if !self.ring_is_positioned(anchor) {
+            self.seek(anchor);
+            self.decode_until(anchor);
+            if !self.ring_is_positioned(anchor) {
+                self.unreachable_anchor = Some(anchor);
+            }
+            return;
+        }
+        self.trim_before(anchor);
+        match self.decode_next() {
+            Some(frame) => self.ring.push_back(frame),
+            None => self.at_end = true,
+        }
+    }
+
+    fn seek(&mut self, time: f64) {
+        self.ring.clear();
+        self.at_end = false;
+        self.last_time = None;
+        let target = time + self.start_ticks as f64 * self.seconds_per_tick;
+        if time <= TIME_EPSILON || self.decoder.reset(target as f32).is_err() {
+            match open_decoder(&self.path) {
+                Ok(decoder) => self.decoder = decoder,
+                Err(error) => {
+                    tracing::warn!("Failed to reopen video background: {error}");
+                    self.at_end = true;
+                }
+            }
+        }
+    }
+
+    fn decode_next(&mut self) -> Option<Arc<VideoBackgroundFrame>> {
+        let mut errors = 0;
+        loop {
+            let decoded = match self.decoder.frames().next() {
+                Some(Ok(decoded)) => decoded,
+                Some(Err(error)) => {
+                    errors += 1;
+                    if errors >= MAX_DECODE_ERRORS {
+                        tracing::warn!("Video background decode failed: {error}");
+                        return self.reached_end();
+                    }
+                    continue;
+                }
+                None => return self.reached_end(),
+            };
+
+            let time = match decoded.timestamp().or(decoded.pts()) {
+                Some(ticks) => (ticks - self.start_ticks) as f64 * self.seconds_per_tick,
+                None => self
+                    .last_time
+                    .map_or(0.0, |last| last + self.frame_interval),
+            };
+            if let Some(last) = self.last_time
+                && time > last
+            {
+                self.frame_interval = time - last;
+            }
+            self.last_time = Some(time);
+
+            let Some((data, width, height)) = self.scale(&decoded) else {
+                errors += 1;
+                if errors >= MAX_DECODE_ERRORS {
+                    return self.reached_end();
+                }
+                continue;
+            };
+            return Some(Arc::new(VideoBackgroundFrame {
+                data,
+                width,
+                height,
+                time: time.max(0.0),
+            }));
+        }
+    }
+
+    fn reached_end(&mut self) -> Option<Arc<VideoBackgroundFrame>> {
+        if let Some(last) = self.last_time {
+            let end = last + self.frame_interval;
+            if end > 0.0 {
+                self.duration = end;
+            }
+        }
+        None
+    }
+
+    fn output_size(&self, width: u32, height: u32) -> (u32, u32) {
+        let longest = width.max(height).max(1);
+        let scale = (f64::from(self.max_dimension) / f64::from(longest)).min(1.0);
+        let even = |value: u32| ((f64::from(value) * scale).round() as u32).max(2) & !1;
+        (even(width), even(height))
+    }
+
+    fn scale(&mut self, decoded: &frame::Video) -> Option<(Vec<u8>, u32, u32)> {
+        let input = (decoded.format(), decoded.width(), decoded.height());
+        if input.1 == 0 || input.2 == 0 {
+            return None;
+        }
+
+        if self
+            .scaler
+            .as_ref()
+            .is_none_or(|scaler| scaler.input != input)
+        {
+            let (width, height) = self.output_size(input.1, input.2);
+            let flags = if width < input.1 {
+                software::scaling::Flags::AREA
+            } else {
+                software::scaling::Flags::BILINEAR
+            };
+            let mut context = software::scaling::Context::get(
+                input.0,
+                input.1,
+                input.2,
+                format::Pixel::RGBA,
+                width,
+                height,
+                flags,
+            )
+            .ok()?;
+            if decoded.color_space() == ffmpeg::util::color::Space::BT709 {
+                crate::decoder::use_bt709_source(&mut context);
+            }
+            self.scaler = Some(Scaler {
+                context,
+                input,
+                output: frame::Video::new(format::Pixel::RGBA, width, height),
+            });
+        }
+
+        let scaler = self.scaler.as_mut()?;
+        scaler.context.run(decoded, &mut scaler.output).ok()?;
+
+        let width = scaler.output.width();
+        let height = scaler.output.height();
+        let row_bytes = width as usize * 4;
+        let stride = scaler.output.stride(0);
+        let source = scaler.output.data(0);
+        let mut data = Vec::with_capacity(row_bytes * height as usize);
+        for row in 0..height as usize {
+            let start = row * stride;
+            data.extend_from_slice(&source[start..start + row_bytes]);
+        }
+        Some((data, width, height))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use image::{Delay, Frame, Rgba, RgbaImage, codecs::gif::GifEncoder};
+
+    const COLOURS: [[u8; 3]; 4] = [[255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 0]];
+
+    fn write_gif(path: &Path, width: u32, height: u32, frames_per_colour: usize) {
+        let file = std::fs::File::create(path).unwrap();
+        let mut encoder = GifEncoder::new(file);
+        encoder
+            .set_repeat(image::codecs::gif::Repeat::Infinite)
+            .unwrap();
+        for colour in COLOURS {
+            for _ in 0..frames_per_colour {
+                let image = RgbaImage::from_pixel(
+                    width,
+                    height,
+                    Rgba([colour[0], colour[1], colour[2], 255]),
+                );
+                encoder
+                    .encode_frame(Frame::from_parts(
+                        image,
+                        0,
+                        0,
+                        Delay::from_numer_denom_ms(100, 1),
+                    ))
+                    .unwrap();
+            }
+        }
+    }
+
+    fn colour_index(frame: &VideoBackgroundFrame) -> usize {
+        let pixel = &frame.data[..3];
+        COLOURS
+            .iter()
+            .position(|colour| {
+                colour
+                    .iter()
+                    .zip(pixel)
+                    .all(|(expected, actual)| expected.abs_diff(*actual) < 40)
+            })
+            .unwrap_or_else(|| panic!("unexpected colour {pixel:?}"))
+    }
+
+    fn runtime() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn recognises_video_and_gif_paths() {
+        assert!(is_video_background("/a/b/clip.MP4"));
+        assert!(is_video_background("loop.gif"));
+        assert!(is_video_background("c.webm"));
+        assert!(!is_video_background("wallpaper.jpg"));
+        assert!(!is_video_background("no-extension"));
+    }
+
+    #[test]
+    fn decode_size_steps_with_the_output() {
+        assert_eq!(video_background_max_dimension((600, 400), 8192), 640);
+        assert_eq!(video_background_max_dimension((1280, 720), 8192), 1280);
+        assert_eq!(video_background_max_dimension((3840, 2160), 8192), 1920);
+        assert_eq!(video_background_max_dimension((3840, 2160), 1024), 1024);
+    }
+
+    #[test]
+    fn small_gif_plays_and_loops_from_memory() {
+        ffmpeg::init().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("loop.gif");
+        write_gif(&path, 64, 32, 1);
+
+        runtime().block_on(async {
+            let source = VideoBackgroundSource::open(path, 1920).await.unwrap();
+            for (seconds, expected) in [
+                (0.0, 0),
+                (0.05, 0),
+                (0.15, 1),
+                (0.25, 2),
+                (0.35, 3),
+                (0.45, 0),
+                (1.05, 2),
+                (0.15, 1),
+            ] {
+                let frame = source.frame_at(seconds).await.unwrap();
+                assert_eq!((frame.width, frame.height), (64, 32));
+                assert_eq!(colour_index(&frame), expected, "at {seconds}s");
+            }
+        });
+    }
+
+    #[test]
+    fn long_clip_streams_seeks_and_loops() {
+        ffmpeg::init().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("long.gif");
+        write_gif(&path, 96, 48, 10);
+
+        runtime().block_on(async {
+            let frame_bytes = 64 * 32 * 4;
+            let source = VideoBackgroundSource::open_with_head_budget(path, 64, frame_bytes * 5)
+                .await
+                .unwrap();
+            let mut seconds = 0.0;
+            while seconds < 9.0 {
+                let frame = source.frame_at(seconds).await.unwrap();
+                assert_eq!((frame.width, frame.height), (64, 32));
+                let expected = ((seconds % 4.0) / 1.0) as usize;
+                assert_eq!(colour_index(&frame), expected, "at {seconds}s");
+                seconds += 0.25;
+            }
+            for (seconds, expected) in [(3.5, 3), (0.5, 0), (2.5, 2), (1.5, 1), (5.5, 1)] {
+                let frame = source.frame_at(seconds).await.unwrap();
+                assert_eq!(colour_index(&frame), expected, "at {seconds}s");
+            }
+        });
+    }
+
+    #[test]
+    fn poster_is_the_first_frame_scaled_down() {
+        ffmpeg::init().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("poster.gif");
+        write_gif(&path, 96, 48, 1);
+
+        let (data, width, height) = video_background_poster(&path, 48).unwrap();
+        assert_eq!((width, height), (48, 24));
+        let frame = VideoBackgroundFrame {
+            data,
+            width,
+            height,
+            time: 0.0,
+        };
+        assert_eq!(colour_index(&frame), 0);
+    }
+
+    #[test]
+    fn missing_file_fails_to_open() {
+        ffmpeg::init().unwrap();
+        let result = runtime().block_on(VideoBackgroundSource::open(
+            PathBuf::from("/definitely/not/here.mp4"),
+            640,
+        ));
+        assert!(result.is_err());
+    }
+}
