@@ -304,14 +304,16 @@ fn transition_edges(
     }
 }
 
-/// Everything at or past the boundary moves by `shift`, and so does anything
-/// that starts with the incoming clip inside the overlap: an effect laid on a
-/// clip's first frame stays on it as the overlap grows, shrinks or goes, so
-/// adding and then removing a transition puts it back where it was.
+/// Everything at or past the boundary moves by `shift`, and so does an effect
+/// that starts with the incoming clip and runs on past the outgoing clip's end:
+/// one laid on a clip's first frame stays on it as the overlap grows, shrinks
+/// or goes. The project does not record which clip an effect belongs to, so
+/// one that starts there but ends inside the overlap is left with the
+/// outgoing clip, which it may equally belong to.
 fn ripple_every_track(timeline: &mut TimelineConfiguration, edges: TransitionEdges, shift: f64) {
     fn ripple<T: TrackSegmentOps>(track: &mut [T], edges: TransitionEdges, shift: f64) {
         for item in track {
-            let boundary = edges.boundary_for(item.start());
+            let boundary = edges.boundary_for(item.start(), item.end());
             ripple_track(std::slice::from_mut(item), boundary, shift);
         }
     }
@@ -324,15 +326,15 @@ fn ripple_every_track(timeline: &mut TimelineConfiguration, edges: TransitionEdg
     ripple(&mut timeline.caption_segments, edges, shift);
     ripple(&mut timeline.camera3d_segments, edges, shift);
     for segment in &mut timeline.keyboard_segments {
-        let boundary = edges.boundary_for(segment.start);
+        let boundary = edges.boundary_for(segment.start, segment.end);
         ripple_keyboard_track(std::slice::from_mut(segment), boundary, shift);
     }
     ripple(&mut timeline.audio_segments, edges, shift);
 }
 
 impl TransitionEdges {
-    fn boundary_for(self, start: f64) -> f64 {
-        if (start - self.incoming).abs() < 1e-6 {
+    fn boundary_for(self, start: f64, end: f64) -> f64 {
+        if (start - self.incoming).abs() < 1e-6 && end > self.boundary + 1e-6 {
             start
         } else {
             self.boundary
@@ -4157,6 +4159,24 @@ mod tests {
         assert_eq!(zooms(&config), [(9.75, 11.75), (8.0, 9.8)]);
         assert!(drop_clip_transition(&mut config, 1));
         assert_eq!(zooms(&config), [(10.0, 12.0), (8.0, 9.8)]);
+    }
+
+    #[test]
+    fn an_effect_ending_inside_the_new_overlap_keeps_its_timing() {
+        let mut config = timeline(vec![segment(0, 0.0, 10.0), segment(1, 0.0, 10.0)]);
+        config.zoom_segments = vec![zoom_at(9.0, 9.8)];
+        let kind = cap_project::ClipTransitionType::CrossFade;
+
+        assert!(set_clip_transition(&mut config, 1, kind, 1.0));
+        assert_eq!(
+            (config.zoom_segments[0].start, config.zoom_segments[0].end),
+            (9.0, 9.8)
+        );
+        assert!(drop_clip_transition(&mut config, 1));
+        assert_eq!(
+            (config.zoom_segments[0].start, config.zoom_segments[0].end),
+            (9.0, 9.8)
+        );
     }
 
     #[test]
