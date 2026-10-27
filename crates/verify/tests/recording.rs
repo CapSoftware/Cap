@@ -136,6 +136,18 @@ mod platform {
         use cpal::traits::HostTrait;
         cpal::default_host().default_output_device().is_some()
     }
+
+    /// What Cap's manifest declares: window bounds are read in physical
+    /// pixels only by a per-monitor DPI aware process, and a window target
+    /// has none otherwise.
+    pub fn declare_dpi_awareness() {
+        const PROCESS_PER_MONITOR_DPI_AWARE: i32 = 2;
+        #[link(name = "shcore")]
+        unsafe extern "system" {
+            fn SetProcessDpiAwareness(value: i32) -> i32;
+        }
+        unsafe { SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE) };
+    }
 }
 
 static ATTEMPT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -537,6 +549,8 @@ fn runtime() -> tokio::runtime::Runtime {
 }
 
 fn init() {
+    #[cfg(windows)]
+    platform::declare_dpi_awareness();
     media::init();
     if std::env::var_os("RUST_LOG").is_some() {
         let _ = tracing_subscriber::fmt()
