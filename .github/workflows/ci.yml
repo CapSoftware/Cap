@@ -144,6 +144,7 @@ jobs:
           __tests__/unit/media-comment-playback-cleanup.test.ts
           __tests__/unit/media-format-converter-selection.test.ts
           __tests__/unit/media-format-converter.test.ts
+          __tests__/unit/gif-video-errors.test.ts
           __tests__/unit/media-player-store-refs.test.ts
           __tests__/unit/mobile-caps-list.test.ts
           __tests__/unit/notification-read-state.test.ts
