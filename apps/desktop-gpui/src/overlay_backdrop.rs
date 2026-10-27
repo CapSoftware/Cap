@@ -70,8 +70,14 @@ fn set_capture_hidden(window: &crate::platform::NativeWindow, hidden: bool) -> b
 /// Capture `display` with `window` (the overlay on it) left out, at the
 /// display's full resolution, ready for the GPU. `None` when the platform
 /// cannot leave the overlay out or the capture fails.
+///
+/// `above` are Cap windows that sit over the overlay (the camera bubble):
+/// they are left out too, or the capture would keep them where they were
+/// and show them there after they move. One already left out (a Studio
+/// camera is) stays that way.
 pub async fn capture(
     window: Option<crate::platform::NativeWindow>,
+    above: Vec<crate::platform::NativeWindow>,
     display: DisplayId,
     cx: &mut AsyncApp,
 ) -> Option<Arc<RenderImage>> {
@@ -86,9 +92,19 @@ pub async fn capture(
             tracing::debug!("overlay backdrop: this session keeps windows in captures");
             return None;
         }
+        let above: Vec<_> = above
+            .into_iter()
+            .filter(|window| !crate::platform::window_capture_hidden(window))
+            .collect();
+        for window in &above {
+            set_capture_hidden(window, true);
+        }
         let started = std::time::Instant::now();
         let image = capture_bgra(display, cx).await;
         set_capture_hidden(&window, false);
+        for window in &above {
+            set_capture_hidden(window, false);
+        }
         let image = Arc::new(RenderImage::new(smallvec::smallvec![image::Frame::new(
             image?
         )]));
@@ -99,7 +115,7 @@ pub async fn capture(
     }
     #[cfg(not(any(target_os = "macos", windows)))]
     {
-        let _ = (window, display, cx);
+        let _ = (window, above, display, cx);
         None
     }
 }

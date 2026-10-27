@@ -1322,10 +1322,17 @@ impl OverlayWindow {
             self.backdrop_crop = self.crop;
             self.crop_moved_at = Some(Instant::now());
         }
+        // A drawn area moves the camera into it, so a capture from before the
+        // area last changed is stale however recent it is.
+        let moved_since = self
+            .crop_moved_at
+            .zip(self.backdrop_at)
+            .is_some_and(|(moved, captured)| moved > captured);
         if self.backdrop_capturing
-            || self
-                .backdrop_at
-                .is_some_and(|at| at.elapsed() < crate::overlay_backdrop::STALE_AFTER)
+            || (!moved_since
+                && self
+                    .backdrop_at
+                    .is_some_and(|at| at.elapsed() < crate::overlay_backdrop::STALE_AFTER))
         {
             return;
         }
@@ -1355,11 +1362,24 @@ impl OverlayWindow {
         self.backdrop_capturing = true;
         let native = crate::overlay_backdrop::native(window);
         let display = self.display_id.clone();
+        let started = Instant::now();
         cx.spawn(async move |this, cx| {
-            let image = crate::overlay_backdrop::capture(native, display, cx).await;
+            let camera = cx.update(|cx| {
+                cx.global::<app_windows::AppWindows>()
+                    .camera
+                    .and_then(|camera| {
+                        camera
+                            .update(cx, |_, window, _| crate::overlay_backdrop::native(window))
+                            .ok()
+                            .flatten()
+                    })
+            });
+            let image =
+                crate::overlay_backdrop::capture(native, camera.into_iter().collect(), display, cx)
+                    .await;
             this.update(cx, |this, cx| {
                 this.backdrop_capturing = false;
-                this.backdrop_at = Some(Instant::now());
+                this.backdrop_at = Some(started);
                 let size = this.display_size;
                 let image = image.filter(|image| {
                     let pixels = image.size(0);
@@ -2158,7 +2178,12 @@ impl OverlayWindow {
             .when(arrangeable, |chip| {
                 chip.cursor_pointer()
                     .hover(move |style| style.bg(Theme::with_alpha(theme.gray_12, 0.08)))
-                    .child(svg().path("icons/chevron-down.svg").size(px(12.)))
+                    .child(
+                        svg()
+                            .path("icons/chevron-down.svg")
+                            .size(px(12.))
+                            .text_color(theme.gray_12),
+                    )
                     .on_click(cx.listener(|this, event: &gpui::ClickEvent, _, cx| {
                         cx.stop_propagation();
                         this.open_window_menu(event.position(), cx);
@@ -2886,15 +2911,18 @@ impl OverlayWindow {
                 .justify_center()
                 .rounded(px(12.))
                 .cursor_pointer()
-                .text_color(theme.gray_11)
-                .hover(move |style| {
-                    style
-                        .bg(Theme::with_alpha(theme.gray_12, 0.08))
-                        .text_color(theme.gray_12)
-                })
+                .group(id)
+                .hover(move |style| style.bg(Theme::with_alpha(theme.gray_12, 0.08)))
                 .tooltip(move |_, cx| crate::ui::Tooltip::new(&theme, tooltip).view(cx))
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .child(svg().path(icon).size(px(16.)))
+                // An svg takes its own text colour, not its parent's.
+                .child(
+                    svg()
+                        .path(icon)
+                        .size(px(16.))
+                        .text_color(theme.gray_11)
+                        .group_hover(id, move |style| style.text_color(theme.gray_12)),
+                )
         };
         let in_more = self
             .area_ratio
@@ -2972,9 +3000,7 @@ impl OverlayWindow {
                     .child(
                         icon_button("area-ratio-more", "icons/ratio.svg", "More aspect ratios")
                             .when(in_more, |button| {
-                                button
-                                    .bg(Theme::with_alpha(theme.gray_12, 0.12))
-                                    .text_color(theme.gray_12)
+                                button.bg(Theme::with_alpha(theme.gray_12, 0.12))
                             })
                             .on_click(cx.listener(|this, event: &gpui::ClickEvent, _, cx| {
                                 cx.stop_propagation();
