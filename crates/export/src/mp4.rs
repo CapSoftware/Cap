@@ -226,6 +226,13 @@ impl Mp4ExportSettings {
             .audio_cancellation
             .as_ref()
             .map(|control| control.user.clone());
+        let destination_exists = |path: &std::path::Path| {
+            std::fs::symlink_metadata(path).map_or_else(
+                |error| error.kind() != std::io::ErrorKind::NotFound,
+                |_| true,
+            )
+        };
+        let destination_was_free = !destination_exists(&base.output_path);
         match turbo::export(self, &mut base, options, on_progress.clone()).await {
             Ok(path) => Ok(path),
             Err(turbo::TurboError::Cancelled) => Err("Export cancelled".to_string()),
@@ -234,6 +241,15 @@ impl Mp4ExportSettings {
             Err(turbo::TurboError::Failed(error)) => {
                 warn!(%error, "Turbo export failed, exporting with the standard pipeline");
                 base.reopen_streaming(user_cancellation).await?;
+                // Turbo staged its output, but a standard export that is not
+                // staged writes in place and would truncate a file created
+                // at the destination meanwhile.
+                if destination_was_free
+                    && base.streaming_output.is_none()
+                    && destination_exists(&base.output_path)
+                {
+                    return Err(error);
+                }
                 let output_size = ProjectUniforms::get_output_size(
                     &base.render_constants.options,
                     &base.project_config,
