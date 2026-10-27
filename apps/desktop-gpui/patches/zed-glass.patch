@@ -77,7 +77,7 @@ index 6cc3562..6ea0576 100644
  
  #[derive(Debug, Copy, Clone)]
 diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
-index 4299e15..91bee9f 100644
+index 4299e15..82cdc92 100644
 --- a/crates/gpui/src/window.rs
 +++ b/crates/gpui/src/window.rs
 @@ -13,7 +13,7 @@ use crate::{
@@ -89,7 +89,7 @@ index 4299e15..91bee9f 100644
      StrikethroughStyle, Style, SubpixelSprite, SubscriberSet, Subscription, SystemWindowTab,
      SystemWindowTabController, TabStopMap, TaffyLayoutEngine, Task, TextRenderingMode, TextStyle,
      TextStyleRefinement, ThermalState, TransformationMatrix, Underline, UnderlineStyle,
-@@ -4186,6 +4186,19 @@ impl Window {
+@@ -4186,10 +4186,29 @@ impl Window {
          bounds: Bounds<Pixels>,
          corner_radii: Corners<Pixels>,
          blur_radius: Pixels,
@@ -109,7 +109,17 @@ index 4299e15..91bee9f 100644
      ) {
          self.invalidator.debug_assert_paint();
          let scale_factor = self.scale_factor();
-@@ -4210,6 +4223,13 @@ impl Window {
+         let content_mask = self.content_mask().scale(scale_factor);
++        // One layer gives the splitter and the blur the same order, so the
++        // renderer paints the blur before the splitter's batch even when
++        // nothing else is painted above it. The extra 2px covers glass's
++        // hairline.
++        let layer_bounds = bounds.scale(scale_factor).dilate(ScaledPixels(2.));
++        self.next_frame.scene.push_layer(layer_bounds);
+         // Invisible splitter primitive: forces a batch boundary at this order
+         // so the renderer can break its render pass exactly here.
+         self.next_frame.scene.insert_primitive(Shadow {
+@@ -4210,7 +4229,15 @@ impl Window {
              bounds: bounds.scale(scale_factor),
              content_mask,
              corner_radii: corner_radii.scale(scale_factor),
@@ -121,8 +131,10 @@ index 4299e15..91bee9f 100644
 +                ..glass
 +            },
          });
++        self.next_frame.scene.pop_layer();
      }
  
+     /// Paint one or more quads into the scene for the next frame at the current stacking context.
 diff --git a/crates/gpui_macos/build.rs b/crates/gpui_macos/build.rs
 index 70e9a0b..79415df 100644
 --- a/crates/gpui_macos/build.rs

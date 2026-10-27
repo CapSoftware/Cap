@@ -241,16 +241,26 @@ fn window_target(window: &Window) -> Option<ScreenCaptureTarget> {
     })
 }
 
+/// Cap's own windows are not in its X11 window list, so the probe captures
+/// the window's area of the display; it hides every other Cap window first.
 #[cfg(target_os = "linux")]
 fn window_target(window: &Window) -> Option<ScreenCaptureTarget> {
-    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use scap_targets::bounds::{LogicalBounds, LogicalPosition, LogicalSize};
 
-    let number = match HasWindowHandle::window_handle(window).ok()?.as_raw() {
-        RawWindowHandle::Xlib(handle) => handle.window as u64,
-        RawWindowHandle::Xcb(handle) => u64::from(handle.window.get()),
-        _ => return None,
-    };
-    Some(ScreenCaptureTarget::Window {
-        id: number.to_string().parse().ok()?,
+    let display = scap_targets::Display::primary();
+    let bounds = window.bounds();
+    let origin = display.raw_handle().logical_bounds()?.position();
+    Some(ScreenCaptureTarget::Area {
+        screen: display.id(),
+        bounds: LogicalBounds::new(
+            LogicalPosition::new(
+                f64::from(f32::from(bounds.origin.x)) - origin.x(),
+                f64::from(f32::from(bounds.origin.y)) - origin.y(),
+            ),
+            LogicalSize::new(
+                f64::from(f32::from(bounds.size.width)),
+                f64::from(f32::from(bounds.size.height)),
+            ),
+        ),
     })
 }

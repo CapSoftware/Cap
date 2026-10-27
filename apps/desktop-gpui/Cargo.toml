@@ -333,6 +333,10 @@ debug = "line-tables-only"
 [profile.dev.package.cap-gpui-kernels]
 opt-level = 3
 
+# The glass probe renders the CPU model of every scene it captures.
+[profile.dev.package.cap-glass]
+opt-level = 3
+
 # Incremental halves a one-line rebuild for about 2 GB of cache, and line tables
 # cut its codegen and link time; breakpoints and backtraces keep their lines.
 [profile.dev.package.cap-desktop-gpui]

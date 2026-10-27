@@ -25,7 +25,7 @@ env CAP_GPUI_APP_DATA_DIR="$OUT/profile" \
     "$APP" > "$OUT/app.log" 2>&1 &
 pid=$!
 
-for _ in $(seq 1 600); do
+for _ in $(seq 1 1200); do
     [ -s "$report" ] && break
     kill -0 "$pid" 2>/dev/null || break
     sleep 0.5
