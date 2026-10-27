@@ -37,7 +37,9 @@ if [ ! -s "$report" ]; then
     tail -n 80 "$OUT/app.log" >&2 || true
     exit 1
 fi
-python3 - "$report" <<'PY'
+# Windows images ship `python`, not `python3`.
+PYTHON=$(command -v python3 || command -v python)
+"$PYTHON" - "$report" <<'PY'
 import json, sys
 report = json.load(open(sys.argv[1]))
 print(f"scale {report.get('scale')}  passed {report['passed']}")
