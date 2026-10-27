@@ -1222,9 +1222,16 @@ async fn upload_segment_manifest(
                 transport.keep_manifest_target(Some(reusable));
                 return Ok(());
             }
-            Err(error) => {
+            Err(error @ AuthApiError::Status(..)) => {
                 check_segment_cancelled(cancel)?;
-                tracing::debug!("Reused instant manifest URL failed; signing a new one: {error}");
+                tracing::debug!(
+                    "Reused instant manifest URL was rejected; signing a new one: {error}"
+                );
+            }
+            Err(error) => {
+                return Err(format!(
+                    "Failed to upload instant recording manifest: {error}"
+                ));
             }
         }
     }

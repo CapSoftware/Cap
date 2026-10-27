@@ -1660,6 +1660,39 @@ fn instant_live_manifest_signs_a_new_url_when_the_reused_one_fails() {
     );
 }
 
+/// A reused URL that times out is not retried at once with a fresh one: the
+/// attempt fails and the manifest retry loop backs off first, so a hung
+/// network costs one request timeout per attempt, as before.
+#[test]
+fn instant_live_manifest_timeout_on_the_reused_url_backs_off_before_resigning() {
+    instant_case(
+        "instant_live_manifest_reuse_timeout",
+        vec![rule(Route::Object("segments/manifest.json"), Fault::Hang)],
+        budget::INSTANT_LIVE_MANIFEST_403,
+        |mock, run| {
+            assert_instant_complete(mock, &run);
+            let hung = mock
+                .responses("PUT", "segments/manifest.json")
+                .into_iter()
+                .find(|(status, _)| *status == 0)
+                .map(|(_, at)| at)
+                .expect("no hung manifest PUT");
+            let resigned = mock
+                .responses("POST", "/api/upload/signed")
+                .into_iter()
+                .filter(|(_, at)| *at > hung)
+                .map(|(_, at)| at)
+                .min()
+                .unwrap_or_else(|| panic!("manifest was never re-signed:\n{}", mock.timeline()));
+            assert!(
+                resigned >= hung + Duration::from_secs(5 * 60) + Duration::from_millis(200),
+                "re-signed without backing off:\n{}",
+                mock.timeline()
+            );
+        },
+    );
+}
+
 #[test]
 fn instant_live_manifest_url_is_resigned_before_it_can_expire() {
     let scratch = Scratch::new("instant_live_manifest_url_expiry");
