@@ -141,6 +141,7 @@ jobs:
           __tests__/unit/invite-decline.test.ts
           __tests__/unit/linkified-text.test.ts
           __tests__/unit/loom-import-ui.test.ts
+          __tests__/unit/download-architecture.test.ts
           __tests__/unit/media-comment-playback-cleanup.test.ts
           __tests__/unit/media-format-converter-selection.test.ts
           __tests__/unit/media-format-converter.test.ts
