@@ -926,6 +926,9 @@ impl SettingsWindow {
             self.page_scroll = ScrollHandle::new();
             self.instant_quality_anchor = ScrollAnchor::for_handle(self.page_scroll.clone());
             self.studio_quality_anchor = ScrollAnchor::for_handle(self.page_scroll.clone());
+            if page == Page::Changelog {
+                self.reset_changelog_scroll();
+            }
         }
         self.quality_scroll_request = None;
         self.instant_quality_notice = None;
@@ -2346,14 +2349,17 @@ impl SettingsWindow {
                     .flex_col()
                     .flex_1()
                     .min_h_0()
-                    .overflow_y_scroll()
-                    .track_scroll(&self.page_scroll)
+                    .when(self.page == Page::Changelog, |this| this.overflow_hidden())
+                    .when(self.page != Page::Changelog, |this| {
+                        this.overflow_y_scroll()
+                            .track_scroll(&self.page_scroll)
+                            .pt(px(18.))
+                            .pb(px(28.))
+                    })
                     // `.cap-settings-page > .px-6 { max-width: none; padding:
                     //  18px var(--macos-settings-content-padding-x) 28px }`,
                     //  and `space-y-7` between sections.
-                    .pt(px(18.))
                     .px(px(CONTENT_PADDING_X))
-                    .pb(px(28.))
                     .gap(px(28.))
                     .children(match self.page {
                         Page::General => self.render_general(window, cx),
