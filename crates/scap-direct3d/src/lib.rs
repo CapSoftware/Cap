@@ -328,6 +328,77 @@ fn create_d3d_device_with_warp_fallback() -> windows::core::Result<(ID3D11Device
     }
 }
 
+fn create_copy_texture(
+    d3d_device: &ID3D11Device,
+    width: u32,
+    height: u32,
+    pixel_format: PixelFormat,
+) -> windows::core::Result<ID3D11Texture2D> {
+    let desc = D3D11_TEXTURE2D_DESC {
+        Width: width,
+        Height: height,
+        MipLevels: 1,
+        ArraySize: 1,
+        Format: pixel_format.as_dxgi(),
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        Usage: D3D11_USAGE_DEFAULT,
+        BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
+        CPUAccessFlags: 0,
+        MiscFlags: 0,
+    };
+
+    let mut texture = None;
+    unsafe { d3d_device.CreateTexture2D(&desc, None, Some(&mut texture)) }?;
+    texture.ok_or_else(windows::core::Error::from_win32)
+}
+
+/// Textures for frames trimmed down from their surface. A frame hands its
+/// texture back when it is dropped, so a texture is only written again once
+/// no queued frame still reads it.
+#[derive(Default)]
+struct TrimPool {
+    free: Mutex<Vec<(ID3D11Texture2D, u32, u32)>>,
+}
+
+/// Enough for frames waiting on the encoder; more are dropped when returned.
+const TRIM_POOL_SIZE: usize = 8;
+
+impl TrimPool {
+    fn take(
+        &self,
+        d3d_device: &ID3D11Device,
+        width: u32,
+        height: u32,
+        pixel_format: PixelFormat,
+    ) -> windows::core::Result<ID3D11Texture2D> {
+        let reused = {
+            let mut free = self
+                .free
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            free.retain(|(_, w, h)| (*w, *h) == (width, height));
+            free.pop()
+        };
+        match reused {
+            Some((texture, _, _)) => Ok(texture),
+            None => create_copy_texture(d3d_device, width, height, pixel_format),
+        }
+    }
+
+    fn give(&self, texture: ID3D11Texture2D, width: u32, height: u32) {
+        let mut free = self
+            .free
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if free.len() < TRIM_POOL_SIZE {
+            free.push((texture, width, height));
+        }
+    }
+}
+
 #[derive(Clone, Default, Debug)]
 pub struct Settings {
     pub is_border_required: Option<bool>,
@@ -336,6 +407,14 @@ pub struct Settings {
     pub pixel_format: PixelFormat,
     pub crop: Option<D3D11_BOX>,
     pub fps: Option<u32>,
+    /// Trim an odd-sized frame to the even size below it on the GPU, so a
+    /// consumer that encodes at even dimensions receives frames it can take as
+    /// they are. Ignored when `crop` is set.
+    pub even_dimensions: bool,
+    /// Follow the capture item when it changes size: recreate the frame pool
+    /// at the new size, and drop frames a `crop` box no longer fits inside.
+    /// Off by default so display and area captures behave as they always have.
+    pub follow_item_size: bool,
 }
 
 impl Settings {
@@ -506,13 +585,17 @@ impl Capturer {
             .map(|fps| ((fps as f32 / 30.0 * 2.0).ceil() as i32).clamp(2, 4))
             .unwrap_or(2);
 
+        let item_size = item.Size().map_err(NewCapturerError::ItemSize)?;
+
         let frame_pool = Direct3D11CaptureFramePool::CreateFreeThreaded(
             &direct3d_device,
             settings.pixel_format.as_directx(),
             frame_pool_size,
-            item.Size().map_err(NewCapturerError::ItemSize)?,
+            item_size,
         )
         .map_err(NewCapturerError::FramePool)?;
+
+        let pool_size = Arc::new(Mutex::new((item_size.Width, item_size.Height)));
 
         let session = frame_pool
             .CreateCaptureSession(&item)
@@ -539,33 +622,22 @@ impl Capturer {
         let crop_data = settings
             .crop
             .map(|crop| {
-                let desc = D3D11_TEXTURE2D_DESC {
-                    Width: (crop.right - crop.left),
-                    Height: (crop.bottom - crop.top),
-                    MipLevels: 1,
-                    ArraySize: 1,
-                    Format: settings.pixel_format.as_dxgi(),
-                    SampleDesc: DXGI_SAMPLE_DESC {
-                        Count: 1,
-                        Quality: 0,
-                    },
-                    Usage: D3D11_USAGE_DEFAULT,
-                    BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
-                    CPUAccessFlags: 0,
-                    MiscFlags: 0,
-                };
-
-                let mut texture = None;
-                unsafe { d3d_device.CreateTexture2D(&desc, None, Some(&mut texture)) }
-                    .map_err(NewCapturerError::CropTexture)?;
-
-                let texture = texture.ok_or_else(|| {
-                    NewCapturerError::CropTexture(windows::core::Error::from_win32())
-                })?;
+                let texture = create_copy_texture(
+                    &d3d_device,
+                    crop.right - crop.left,
+                    crop.bottom - crop.top,
+                    settings.pixel_format,
+                )
+                .map_err(NewCapturerError::CropTexture)?;
 
                 Ok::<_, NewCapturerError>((texture, crop))
             })
             .transpose()?;
+
+        // Only used by frames whose size differs from their surface (odd-sized,
+        // or smaller than the pool's surface), so a capture that matches its
+        // surface never pays for the copy.
+        let trim = Arc::new(TrimPool::default());
 
         let frame_arrived_token = frame_pool
             .FrameArrived(
@@ -575,6 +647,10 @@ impl Capturer {
                     let stop_flag = stop_flag.clone();
                     let staging_pool = staging_pool.clone();
                     let callback_activity = callback_activity.clone();
+                    let pixel_format = settings.pixel_format;
+                    let pool_size = pool_size.clone();
+                    let even_dimensions = settings.even_dimensions && settings.crop.is_none();
+                    let follow_item_size = settings.follow_item_size;
 
                     move |frame_pool, _| {
                         let _activity_guard = callback_activity.enter();
@@ -591,11 +667,89 @@ impl Capturer {
 
                         let size = frame.ContentSize()?;
 
+                        // The item can change size mid-capture (a recorded
+                        // window is resized, or the display's resolution
+                        // changes). The pool keeps handing out surfaces at its
+                        // creation size, so the frame's own ContentSize stops
+                        // describing its texture and every later frame reads
+                        // back as black. Recreate the pool for the new size and
+                        // skip this frame; the next one arrives correctly sized.
+                        if follow_item_size {
+                            let mut pool_size = pool_size
+                                .lock()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner());
+                            if (size.Width, size.Height) != *pool_size {
+                                drop(frame);
+                                // Windows.Graphics.Capture fails fast, on a
+                                // thread nothing here can catch, once its device
+                                // is removed. Do not hand it the removed device
+                                // again; report the removal instead.
+                                if let Err(error) = unsafe { d3d_device.GetDeviceRemovedReason() } {
+                                    tracing::error!(
+                                        %error,
+                                        "scap-direct3d: capture device removed, not recreating the frame pool"
+                                    );
+                                    return Err(error);
+                                }
+                                // IDirect3DDevice is not Send, so it is rebuilt
+                                // here from the capture device rather than held
+                                // across the event handler.
+                                let dxgi_device = d3d_device.cast::<IDXGIDevice>()?;
+                                let direct3d_device =
+                                    unsafe { CreateDirect3D11DeviceFromDXGIDevice(&dxgi_device) }?
+                                        .cast::<IDirect3DDevice>()?;
+                                frame_pool.Recreate(
+                                    &direct3d_device,
+                                    pixel_format.as_directx(),
+                                    frame_pool_size,
+                                    size,
+                                )?;
+                                *pool_size = (size.Width, size.Height);
+                                return Ok(());
+                            }
+                        }
+
                         let surface = frame.Surface()?;
                         let dxgi_interface = surface.cast::<IDirect3DDxgiInterfaceAccess>()?;
                         let texture = unsafe { dxgi_interface.GetInterface::<ID3D11Texture2D>() }?;
 
+                        // ContentSize is the item's size when the frame was
+                        // captured, not the size of the surface it was written
+                        // to: it runs ahead of the surface whenever the item
+                        // grows before the pool is recreated, including frames
+                        // the old pool had already queued when `Recreate` ran.
+                        // Copies are bounded by the surface itself, because a
+                        // source box past its edge is undefined behaviour that
+                        // a hardware driver ignores but WARP answers by removing
+                        // the device, and Windows.Graphics.Capture then fails
+                        // fast on its next use of it.
+                        let mut surface_desc = D3D11_TEXTURE2D_DESC::default();
+                        unsafe { texture.GetDesc(&mut surface_desc) };
+                        let content_width = size.Width.max(0) as u32;
+                        let content_height = size.Height.max(0) as u32;
+
+                        // A frame queued before the pool was recreated: its
+                        // surface is the old size, and the next frame is not.
+                        if follow_item_size
+                            && (surface_desc.Width, surface_desc.Height)
+                                != (content_width, content_height)
+                        {
+                            return Ok(());
+                        }
+
                         let frame = if let Some((cropped_texture, crop)) = crop_data.clone() {
+                            // A shrunk item leaves the crop box hanging off the
+                            // edge of the source texture, which copies nothing
+                            // and would vend a stale surface as if it were live.
+                            if crop.right > surface_desc.Width
+                                || crop.bottom > surface_desc.Height
+                                || (follow_item_size
+                                    && (crop.right > content_width
+                                        || crop.bottom > content_height))
+                            {
+                                return Ok(());
+                            }
+
                             unsafe {
                                 d3d_context.CopySubresourceRegion(
                                     &cropped_texture,
@@ -618,17 +772,74 @@ impl Capturer {
                                 d3d_context: d3d_context.clone(),
                                 d3d_device: d3d_device.clone(),
                                 staging_pool: staging_pool.clone(),
+                                recycle: None,
                             }
                         } else {
-                            Frame {
-                                width: size.Width as u32,
-                                height: size.Height as u32,
-                                pixel_format: settings.pixel_format,
-                                inner: frame,
-                                texture,
-                                d3d_context: d3d_context.clone(),
-                                d3d_device: d3d_device.clone(),
-                                staging_pool: staging_pool.clone(),
+                            // The frame is the content bounded by its surface,
+                            // floored to even when asked. A surface larger than
+                            // the content (a window item whose pool surface
+                            // includes the invisible resize borders) is copied
+                            // down to it: handing the whole surface over under
+                            // the content's size makes `as_buffer`'s
+                            // `CopyResource` a copy between different sizes,
+                            // which D3D11 drops, so the readback is all zeros.
+                            let mut width = content_width.min(surface_desc.Width);
+                            let mut height = content_height.min(surface_desc.Height);
+                            if even_dimensions {
+                                width &= !1;
+                                height &= !1;
+                            }
+                            if width == 0 || height == 0 {
+                                return Ok(());
+                            }
+
+                            if (width, height) == (surface_desc.Width, surface_desc.Height) {
+                                Frame {
+                                    width,
+                                    height,
+                                    pixel_format: settings.pixel_format,
+                                    inner: frame,
+                                    texture,
+                                    d3d_context: d3d_context.clone(),
+                                    d3d_device: d3d_device.clone(),
+                                    staging_pool: staging_pool.clone(),
+                                    recycle: None,
+                                }
+                            } else {
+                                let trimmed_texture =
+                                    trim.take(&d3d_device, width, height, pixel_format)?;
+
+                                unsafe {
+                                    d3d_context.CopySubresourceRegion(
+                                        &trimmed_texture,
+                                        0,
+                                        0,
+                                        0,
+                                        0,
+                                        &texture,
+                                        0,
+                                        Some(&D3D11_BOX {
+                                            left: 0,
+                                            top: 0,
+                                            front: 0,
+                                            right: width,
+                                            bottom: height,
+                                            back: 1,
+                                        }),
+                                    );
+                                }
+
+                                Frame {
+                                    width,
+                                    height,
+                                    pixel_format: settings.pixel_format,
+                                    inner: frame,
+                                    texture: trimmed_texture,
+                                    d3d_context: d3d_context.clone(),
+                                    d3d_device: d3d_device.clone(),
+                                    staging_pool: staging_pool.clone(),
+                                    recycle: Some(trim.clone()),
+                                }
                             }
                         };
 
@@ -728,6 +939,16 @@ pub struct Frame {
     d3d_device: ID3D11Device,
     d3d_context: ID3D11DeviceContext,
     staging_pool: Arc<StagingTexturePool>,
+    /// Where a trimmed frame's texture goes back to once the frame is done.
+    recycle: Option<Arc<TrimPool>>,
+}
+
+impl Drop for Frame {
+    fn drop(&mut self) {
+        if let Some(pool) = self.recycle.take() {
+            pool.give(self.texture.clone(), self.width, self.height);
+        }
+    }
 }
 
 impl std::fmt::Debug for Frame {
