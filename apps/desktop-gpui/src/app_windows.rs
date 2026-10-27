@@ -665,11 +665,16 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
                 let settings = crate::store::GeneralSettings::load();
                 let behaviour = settings.post_studio_recording_behaviour;
                 // Linux restores the main window through the clean-capture
-                // lease before this runs, so it keeps reshowing as before.
+                // lease before this runs, so it keeps reshowing as before. A
+                // main window reopened mid-recording is already on screen, so
+                // it takes the reshow too, which resumes its inputs.
                 let keep_hidden_after_instant = cfg!(not(target_os = "linux"))
                     && finished_instant
                     && settings.post_instant_behaviour()
-                        != crate::store::PostInstantBehaviour::ShowCap;
+                        != crate::store::PostInstantBehaviour::ShowCap
+                    && !main
+                        .update(cx, |_, window, _| platform::window_is_visible(window))
+                        .unwrap_or(true);
                 match (finished_studio, behaviour) {
                     (Some(project_dir), crate::store::PostStudioBehaviour::OpenEditor) => {
                         open_editor(project_dir, cx)
