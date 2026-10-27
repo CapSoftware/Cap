@@ -73,8 +73,9 @@ pub fn run(main: WindowHandle<MainWindow>, cx: &mut App) {
             sleep(cx, 800).await;
             let mut mode = cx.update(|cx| probe_mode(label, cx));
             mode["overlayInactiveBeforeActivation"] = inactive_before.into();
+            let screen = screenshot(&output, label, cx).await;
+            mode["backdrop"] = probe_backdrop(&output, label, screen.as_ref(), cx).await;
             modes.push(mode);
-            screenshot(&output, label, cx).await;
             if kind == TargetType::Window {
                 window_arrangement = Some(probe_window_arrangement(&output, cx).await);
             }
@@ -86,9 +87,10 @@ pub fn run(main: WindowHandle<MainWindow>, cx: &mut App) {
             .as_ref()
             .is_none_or(|report: &serde_json::Value| report["passed"].as_bool() != Some(false));
         let passed = arrangement_passed
-            && modes
-                .iter()
-                .all(|mode| mode["cameraAboveOverlays"].as_bool() == Some(true));
+            && modes.iter().all(|mode| {
+                mode["cameraAboveOverlays"].as_bool() == Some(true)
+                    && mode["backdrop"]["passed"].as_bool() != Some(false)
+            });
         let report = serde_json::json!({
             "passed": passed,
             "modes": modes,
@@ -209,10 +211,12 @@ async fn probe_window_arrangement(
 }
 
 /// Save what the primary display shows next to the report, for review.
-async fn screenshot(output: &std::ffi::OsStr, label: &str, cx: &mut AsyncApp) {
-    let Some(directory) = std::path::Path::new(output).parent() else {
-        return;
-    };
+async fn screenshot(
+    output: &std::ffi::OsStr,
+    label: &str,
+    cx: &mut AsyncApp,
+) -> Option<image::DynamicImage> {
+    let directory = std::path::Path::new(output).parent()?;
     let path = directory.join(format!("{label}.png"));
     let target = cap_recording::sources::screen_capture::ScreenCaptureTarget::Display {
         id: scap_targets::Display::primary().id(),
@@ -226,10 +230,78 @@ async fn screenshot(output: &std::ffi::OsStr, label: &str, cx: &mut AsyncApp) {
             if let Err(error) = image.save(&path) {
                 tracing::warn!(%error, "picker probe: could not save {label} screenshot");
             }
+            Some(image)
         }
-        Ok(Err(error)) => tracing::warn!("picker probe: {label} screenshot failed: {error:#}"),
-        Err(error) => tracing::warn!(%error, "picker probe: {label} screenshot task failed"),
+        Ok(Err(error)) => {
+            tracing::warn!("picker probe: {label} screenshot failed: {error:#}");
+            None
+        }
+        Err(error) => {
+            tracing::warn!(%error, "picker probe: {label} screenshot task failed");
+            None
+        }
     }
+}
+
+fn mean_luma(pixels: impl Iterator<Item = [u8; 3]>) -> f64 {
+    let (mut sum, mut count) = (0f64, 0u64);
+    for [r, g, b] in pixels {
+        sum += 0.2126 * f64::from(r) + 0.7152 * f64::from(g) + 0.0722 * f64::from(b);
+        count += 1;
+    }
+    if count == 0 { 0. } else { sum / count as f64 }
+}
+
+/// Check the capture under the overlay's glass is of the desktop and not of
+/// the overlay: the overlay dims the display, so a capture that left it out
+/// is clearly brighter than the screenshot that has it.
+async fn probe_backdrop(
+    output: &std::ffi::OsStr,
+    label: &str,
+    screen: Option<&image::DynamicImage>,
+    cx: &mut AsyncApp,
+) -> serde_json::Value {
+    if !crate::overlay_backdrop::SUPPORTED {
+        return serde_json::json!({ "skipped": "no capture without the overlay here" });
+    }
+    let image = cx.update(|cx| {
+        cx.global::<app_windows::AppWindows>()
+            .overlays
+            .clone()
+            .into_iter()
+            .find_map(|(_, overlay)| {
+                overlay
+                    .update(cx, |view, _, _| view.backdrop_image())
+                    .ok()
+                    .flatten()
+            })
+    });
+    let Some(image) = image else {
+        return serde_json::json!({ "present": false, "passed": false });
+    };
+    let size = image.size(0);
+    let (width, height) = (size.width.0 as u32, size.height.0 as u32);
+    let bgra = image.as_bytes(0).unwrap_or_default();
+    let backdrop = mean_luma(bgra.chunks_exact(4).map(|px| [px[2], px[1], px[0]]));
+    if let Some(directory) = std::path::Path::new(output).parent() {
+        let rgba: Vec<u8> = bgra
+            .chunks_exact(4)
+            .flat_map(|px| [px[2], px[1], px[0], px[3]])
+            .collect();
+        if let Some(image) = image::RgbaImage::from_raw(width, height, rgba) {
+            let _ = image.save(directory.join(format!("{label}-backdrop.png")));
+        }
+    }
+    let screen = screen.map(|screen| mean_luma(screen.to_rgb8().pixels().map(|pixel| pixel.0)));
+    // A near-black desktop cannot tell the two apart.
+    let passed = backdrop < 24. || screen.is_none_or(|screen| backdrop > screen * 1.2);
+    serde_json::json!({
+        "present": true,
+        "size": [width, height],
+        "meanLuma": backdrop,
+        "screenMeanLuma": screen,
+        "passed": passed,
+    })
 }
 
 async fn sleep(cx: &mut AsyncApp, millis: u64) {

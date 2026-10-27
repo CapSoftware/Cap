@@ -63,6 +63,7 @@ mod mode_select_window;
 mod onboarding_audio;
 mod onboarding_doodles;
 mod onboarding_window;
+mod overlay_backdrop;
 mod permission_guide;
 mod permissions;
 mod permissions_ui;

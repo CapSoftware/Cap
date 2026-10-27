@@ -7,10 +7,17 @@
 //! window: on a transparent window, paint the backdrop it should show (the
 //! picker paints the captured desktop) before the pane.
 
-use std::sync::OnceLock;
+use std::{
+    cell::RefCell,
+    rc::Rc,
+    sync::{Arc, OnceLock},
+};
 
 use cap_glass::model::{GlassMaterial, PaneStyle};
-use gpui::{Bounds, Corners, Div, ParentElement, Pixels, Styled, Window, canvas, div, px};
+use gpui::{
+    Bounds, ContentMask, Corners, Div, Hsla, IntoElement, ParentElement, Pixels, RenderImage,
+    Styled, Window, canvas, div, fill, px,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GlassKind {
@@ -90,19 +97,190 @@ pub fn paint(window: &mut Window, bounds: Bounds<Pixels>, radius: f32, material:
     );
 }
 
+/// How far past its bounds a pane's glass reads what lies beneath it: the
+/// blur's reach (three sigma), the rim's lensing, and a pixel of slack.
+fn sample_reach(style: &PaneStyle) -> f32 {
+    style.blur * 3. + style.rim_bend.abs() + style.lens_rim + 4.
+}
+
 /// A rounded glass pane: a `Div` whose first child is the glass layer, so
 /// everything added after it paints on the glass. `radius` is clamped to the
 /// pane like CSS clamps `border-radius`.
 pub fn pane(kind: GlassKind, dark: bool, radius: f32) -> Div {
+    pane_with(kind, dark, radius, None)
+}
+
+/// [`pane`] on a transparent window, reading `backdrop` instead of the
+/// window's own (mostly empty) pixels.
+pub fn pane_over(kind: GlassKind, dark: bool, radius: f32, backdrop: &Backdrop) -> Div {
+    pane_with(kind, dark, radius, Some(backdrop.clone()))
+}
+
+fn pane_with(kind: GlassKind, dark: bool, radius: f32, backdrop: Option<Backdrop>) -> Div {
     let material = *material(kind, dark);
     div().relative().rounded(px(radius)).child(
         canvas(
             |_, _, _| {},
-            move |bounds, _, window, _| paint(window, bounds, radius, &material),
+            move |bounds, _, window, _| {
+                if let Some(backdrop) = &backdrop {
+                    backdrop.prepare(window, bounds, radius, &material);
+                }
+                paint(window, bounds, radius, &material);
+            },
         )
         .absolute()
         .top_0()
         .left_0()
         .size_full(),
     )
+}
+
+/// What a transparent window's glass panes show through them: a capture of
+/// the desktop beneath the window, painted under the panes before anything
+/// else the window draws, so whatever the window paints over the desktop
+/// (dimming, highlights) lands on it exactly as it lands on the real one.
+///
+/// The window cannot know where its panes go until layout, and the capture
+/// has to be painted before everything else, so [`Backdrop::layer`] paints
+/// under the panes where the previous frame put them, a little wider so a
+/// moving pane stays covered, and asks for another frame when one moved
+/// outside that.
+///
+/// Without a capture (none yet, or none possible) panes sit on `fallback`.
+#[derive(Clone)]
+pub struct Backdrop(Rc<RefCell<BackdropState>>);
+
+struct BackdropState {
+    image: Option<Arc<RenderImage>>,
+    /// Where `image` goes, in window coordinates.
+    image_bounds: Bounds<Pixels>,
+    fallback: Hsla,
+    /// What the panes asked for while painting this frame.
+    asked: Vec<Bounds<Pixels>>,
+    /// What the layer painted at the start of this frame.
+    painted: Vec<Bounds<Pixels>>,
+    /// Images replaced or dropped, for the window's atlas to free.
+    retired: Vec<Arc<RenderImage>>,
+}
+
+/// Extra room around each pane's sampled region, so a pane that moves a
+/// little between frames (a dragged area's toolbar) stays on the capture.
+const SLACK: f32 = 48.;
+
+impl Backdrop {
+    pub fn new(fallback: Hsla) -> Self {
+        Self(Rc::new(RefCell::new(BackdropState {
+            image: None,
+            image_bounds: Bounds::default(),
+            fallback,
+            asked: Vec::new(),
+            painted: Vec::new(),
+            retired: Vec::new(),
+        })))
+    }
+
+    pub fn set_fallback(&self, fallback: Hsla) {
+        self.0.borrow_mut().fallback = fallback;
+    }
+
+    pub fn has_image(&self) -> bool {
+        self.0.borrow().image.is_some()
+    }
+
+    pub fn image(&self) -> Option<Arc<RenderImage>> {
+        self.0.borrow().image.clone()
+    }
+
+    /// Show `image` (the desktop under the window) at `bounds`, or nothing.
+    pub fn set_image(&self, image: Option<Arc<RenderImage>>, bounds: Bounds<Pixels>) {
+        let mut state = self.0.borrow_mut();
+        if let Some(old) = std::mem::replace(&mut state.image, image) {
+            state.retired.push(old);
+        }
+        state.image_bounds = bounds;
+    }
+
+    /// The window's first child: paints the capture under last frame's panes.
+    pub fn layer(&self) -> impl IntoElement {
+        let backdrop = self.clone();
+        canvas(
+            |_, _, _| {},
+            move |_, _, window, _| {
+                let mut state = backdrop.0.borrow_mut();
+                for image in state.retired.drain(..) {
+                    let _ = window.drop_image(image);
+                }
+                let asked = std::mem::take(&mut state.asked);
+                state.painted = asked;
+                let Some(image) = state.image.clone() else {
+                    return;
+                };
+                let image_bounds = state.image_bounds;
+                for region in &state.painted {
+                    let Some(visible) = clip(region.dilate(px(SLACK)), image_bounds) else {
+                        continue;
+                    };
+                    window.with_content_mask(Some(ContentMask { bounds: visible }), |window| {
+                        let _ = window.paint_image_fitted(
+                            visible,
+                            image_bounds,
+                            Corners::default(),
+                            image.clone(),
+                            0,
+                            false,
+                        );
+                    });
+                }
+            },
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+    }
+
+    /// A pane at `bounds` is about to paint its glass: record what it reads,
+    /// and give it something to read if the capture is not under it.
+    fn prepare(
+        &self,
+        window: &mut Window,
+        bounds: Bounds<Pixels>,
+        radius: f32,
+        material: &GlassMaterial,
+    ) {
+        let (width, height) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
+        if width <= 0. || height <= 0. {
+            return;
+        }
+        let reach = sample_reach(&material.resolve(width, height));
+        let region = bounds.dilate(px(reach));
+        let mut state = self.0.borrow_mut();
+        state.asked.push(region);
+        let covered = state.image.is_some()
+            && state
+                .painted
+                .iter()
+                .any(|painted| contains(painted.dilate(px(SLACK)), region));
+        if covered {
+            return;
+        }
+        if state.image.is_some() {
+            // Moved off last frame's capture: correct on the next one.
+            window.request_animation_frame();
+        }
+        let radius = radius.min(width / 2.).min(height / 2.);
+        window.paint_quad(fill(bounds, state.fallback).corner_radii(px(radius)));
+    }
+}
+
+fn contains(outer: Bounds<Pixels>, inner: Bounds<Pixels>) -> bool {
+    outer.origin.x <= inner.origin.x
+        && outer.origin.y <= inner.origin.y
+        && outer.bottom_right().x >= inner.bottom_right().x
+        && outer.bottom_right().y >= inner.bottom_right().y
+}
+
+fn clip(region: Bounds<Pixels>, to: Bounds<Pixels>) -> Option<Bounds<Pixels>> {
+    let clipped = region.intersect(&to);
+    (clipped.size.width > px(0.) && clipped.size.height > px(0.)).then_some(clipped)
 }

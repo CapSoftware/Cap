@@ -592,6 +592,16 @@ fn more_area_ratios() -> Vec<(u32, u32)> {
 /// How long the selection takes to settle into a new ratio, fill or reset.
 const AREA_RESHAPE: Duration = Duration::from_millis(240);
 
+/// What the picker's glass sits on when there is no capture of the desktop
+/// beneath it: the panel fill the picker had before it had glass.
+fn fallback_fill(theme: &Theme) -> Hsla {
+    if theme.is_dark() {
+        Theme::with_alpha(theme.gray_2, 0.82)
+    } else {
+        Theme::with_alpha(theme.gray_1, 0.82)
+    }
+}
+
 /// The whole display, or the largest centred area of `ratio` inside it.
 fn area_fill(display: (f32, f32), ratio: Option<f32>) -> AreaRect {
     let (width, height) = match ratio {
@@ -943,6 +953,11 @@ pub struct OverlayWindow {
     /// Focus: centre the picked window and record it by itself. Mirrors the
     /// window capture style setting, which it writes.
     focus_window: bool,
+    /// The desktop under this overlay, for its glass panes to read.
+    backdrop: crate::ui::glass::Backdrop,
+    /// When the backdrop was captured, and whether a capture is running.
+    backdrop_at: Option<Instant>,
+    backdrop_capturing: bool,
     inline_camera: Option<Entity<crate::camera_window::CameraWindow>>,
     inline_camera_subscription: Option<gpui::Subscription>,
     empty_camera_state: crate::store::CameraWindowState,
@@ -1102,6 +1117,9 @@ impl OverlayWindow {
             window_drawn: Cell::new(None),
             focus_window: crate::store::GeneralSettings::load().window_capture_style
                 == crate::store::WindowCaptureStyle::FocusedWindow,
+            backdrop: crate::ui::glass::Backdrop::new(fallback_fill(&theme)),
+            backdrop_at: None,
+            backdrop_capturing: false,
             inline_camera: None,
             inline_camera_subscription: None,
             empty_camera_state: crate::store::load().camera_window.unwrap_or_default(),
@@ -1257,6 +1275,81 @@ impl OverlayWindow {
 
     fn sync_appearance(&mut self, window: &Window, cx: &gpui::App) {
         self.theme.refresh(window, cx, false);
+        self.backdrop.set_fallback(fallback_fill(&self.theme));
+    }
+
+    /// Keep the capture under this overlay's glass current while the overlay
+    /// shows controls, and let it go when it does not. A capture is taken
+    /// only when the overlay draws, so a picker left alone takes none.
+    fn sync_backdrop(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !crate::overlay_backdrop::SUPPORTED {
+            return;
+        }
+        let showing = !self.recording_area
+            && self.select.read(cx).mode.is_some()
+            && self.is_active_display(window, cx);
+        if !showing {
+            if self.backdrop.has_image() {
+                self.backdrop.set_image(None, gpui::Bounds::default());
+                self.backdrop_at = None;
+            }
+            return;
+        }
+        if self.backdrop_capturing
+            || self
+                .backdrop_at
+                .is_some_and(|at| at.elapsed() < crate::overlay_backdrop::STALE_AFTER)
+        {
+            return;
+        }
+        self.backdrop_capturing = true;
+        let native = crate::overlay_backdrop::native(window);
+        let display = self.display_id.clone();
+        cx.spawn(async move |this, cx| {
+            let image = crate::overlay_backdrop::capture(native, display, cx).await;
+            this.update(cx, |this, cx| {
+                this.backdrop_capturing = false;
+                this.backdrop_at = Some(Instant::now());
+                let size = this.display_size;
+                let image = image.filter(|image| {
+                    let pixels = image.size(0);
+                    crate::overlay_backdrop::fits(
+                        (pixels.width.0 as u32, pixels.height.0 as u32),
+                        size,
+                    )
+                });
+                this.backdrop.set_image(
+                    image,
+                    gpui::Bounds::new(
+                        gpui::point(px(0.), px(0.)),
+                        gpui::size(px(size.0), px(size.1)),
+                    ),
+                );
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    #[cfg(debug_assertions)]
+    pub(crate) fn backdrop_image(&self) -> Option<Arc<gpui::RenderImage>> {
+        self.backdrop.image()
+    }
+
+    /// Retake the backdrop once a moved window has settled.
+    fn retake_backdrop_soon(&mut self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(350))
+                .await;
+            this.update(cx, |this, cx| {
+                this.backdrop_at = None;
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn sync_inline_camera(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1312,6 +1405,7 @@ impl Render for OverlayWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_appearance(window, cx);
         self.sync_inline_camera(window, cx);
+        self.sync_backdrop(window, cx);
         let viewport = window.viewport_size();
         let display_size = overlay_viewport_size(
             (f32::from(viewport.width), f32::from(viewport.height)),
@@ -1408,7 +1502,8 @@ impl Render for OverlayWindow {
             .locale_font()
             // `body { font-weight: 500 }` (`ui-solid/src/main.css:189-192`).
             .font_weight(FontWeight::MEDIUM)
-            .text_color(gpui::white());
+            .text_color(gpui::white())
+            .child(self.backdrop.layer());
 
         let root = if self.recording_area {
             root.child(self.render_area_variant(window, cx))
@@ -1976,24 +2071,21 @@ impl OverlayWindow {
         } else {
             "Resizing other apps' windows isn't possible on Wayland"
         };
-        div()
+        self.glass_capsule(28.)
             .id("window-size")
             .mb(px(8.))
-            .h(px(28.))
             .px(px(10.))
             .flex()
             .items_center()
             .gap(px(6.))
-            .rounded_full()
             .text_size(px(12.))
             .text_color(theme.gray_12)
-            .bg(gpui::hsla(0., 0., 0., 0.28))
             .tooltip(move |_, cx| crate::ui::Tooltip::new(&theme, tooltip).view(cx))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(label)
             .when(arrangeable, |chip| {
                 chip.cursor_pointer()
-                    .hover(|style| style.bg(gpui::hsla(0., 0., 0., 0.4)))
+                    .hover(move |style| style.bg(Theme::with_alpha(theme.gray_12, 0.08)))
                     .child(svg().path("icons/chevron-down.svg").size(px(12.)))
                     .on_click(cx.listener(|this, event: &gpui::ClickEvent, _, cx| {
                         cx.stop_propagation();
@@ -2008,17 +2100,14 @@ impl OverlayWindow {
         }
         let theme = self.theme;
         Some(
-            div()
+            self.glass_capsule(32.)
                 .id("window-focus")
                 .mb(px(8.))
-                .h(px(32.))
                 .pl(px(12.))
                 .pr(px(6.))
                 .flex()
                 .items_center()
                 .gap(px(10.))
-                .rounded_full()
-                .bg(gpui::hsla(0., 0., 0., 0.28))
                 .tooltip(move |_, cx| {
                     crate::ui::Tooltip::new(
                         &theme,
@@ -2211,6 +2300,7 @@ impl OverlayWindow {
             }
             this.update(cx, |this, cx| {
                 this.window_reshape = Some((from, Instant::now()));
+                this.retake_backdrop_soon(cx);
                 cx.notify();
             })
             .ok();
@@ -2958,32 +3048,40 @@ impl OverlayWindow {
             })
     }
 
-    /// `LIQUID_GLASS_SURFACE_CLASS`: `rounded-2xl border border-gray-12/10
-    /// bg-gray-1/82 shadow-xl shadow-black/20 dark:border-white/10
-    /// dark:bg-gray-2/82`. The `backdrop-blur-xl` is dropped -- this gpui rev
-    /// has no per-element backdrop blur (same gap the recording overlay has).
+    /// The picker's panels: Regular glass over the desktop beneath.
     fn glass_surface(&self) -> gpui::Div {
-        let theme = self.theme;
-        div()
-            .rounded(px(16.))
-            .border_1()
-            .border_color(if theme.is_dark() {
-                gpui::hsla(0., 0., 1., 0.1)
-            } else {
-                Theme::with_alpha(theme.gray_12, 0.1)
-            })
-            .bg(if theme.is_dark() {
-                Theme::with_alpha(theme.gray_2, 0.82)
-            } else {
-                Theme::with_alpha(theme.gray_1, 0.82)
-            })
-            .shadow(vec![gpui::BoxShadow {
-                color: gpui::hsla(0., 0., 0., 0.2),
-                offset: gpui::point(px(0.), px(8.)),
-                blur_radius: px(10.),
-                spread_radius: px(-6.),
-                inset: false,
-            }])
+        crate::ui::glass::pane_over(
+            crate::ui::glass::GlassKind::Regular,
+            self.theme.is_dark(),
+            16.,
+            &self.backdrop,
+        )
+    }
+
+    /// A round Clear glass button, for controls floating on a panel.
+    fn glass_button(&self, size: f32) -> gpui::Div {
+        crate::ui::glass::pane_over(
+            crate::ui::glass::GlassKind::Clear,
+            self.theme.is_dark(),
+            size / 2.,
+            &self.backdrop,
+        )
+        .size(px(size))
+        .flex_shrink_0()
+        .flex()
+        .justify_center()
+        .items_center()
+    }
+
+    /// A Clear glass capsule `height` tall, for the chips over a window.
+    fn glass_capsule(&self, height: f32) -> gpui::Div {
+        crate::ui::glass::pane_over(
+            crate::ui::glass::GlassKind::Clear,
+            self.theme.is_dark(),
+            height / 2.,
+            &self.backdrop,
+        )
+        .h(px(height))
     }
 
     /// `RecordingControls`: the close button, the gradient start pill with its
@@ -3019,17 +3117,8 @@ impl OverlayWindow {
                         .child(self.render_close_button(cx))
                         .child(self.render_start_button(target, disabled, mode, cx))
                         .child(
-                            div()
+                            self.glass_button(36.)
                                 .id("overlay-countdown")
-                                .flex()
-                                .justify_center()
-                                .items_center()
-                                .size(px(36.))
-                                .flex_shrink_0()
-                                .rounded_full()
-                                .border_1()
-                                .border_color(theme.gray_5)
-                                .bg(theme.gray_6)
                                 .child(
                                     svg()
                                         .path("icons/gear.svg")
@@ -3083,24 +3172,14 @@ impl OverlayWindow {
     fn render_close_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
 
-        div()
+        self.glass_button(36.)
             .id("overlay-close")
-            .flex()
-            .justify_center()
-            .items_center()
-            .size(px(36.))
-            .flex_shrink_0()
-            .rounded_full()
-            .bg(theme.gray_12)
             .hover(|style| style.opacity(0.8))
             .child(
                 svg()
                     .path("icons/x.svg")
-                    // `invert dark:invert-0` on a black glyph: white on the
-                    // light theme's dark circle, black on the dark theme's
-                    // light one.
                     .size(px(12.))
-                    .text_color(theme.gray_1),
+                    .text_color(theme.gray_12),
             )
             .on_click(cx.listener(|this, _, _window, cx| {
                 cx.stop_propagation();
