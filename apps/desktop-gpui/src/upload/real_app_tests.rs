@@ -314,7 +314,7 @@ async fn real_app_instant_recording_uploads_and_verifies() {
 /// hidden at start, comes back once the recording finishes: only Show Cap
 /// takes the reshow, so opening the link never leaves it on screen behind the
 /// browser. The reshow itself lands on onboarding here (the runner grants no
-/// Accessibility), so the check reads the decision the app logs. Linux
+/// Accessibility), so the check reads the decisions the app logs. Linux
 /// restores the window through its clean-capture lease instead, so the check
 /// is macOS only.
 #[cfg(target_os = "macos")]
@@ -352,10 +352,9 @@ async fn real_app_instant_outcome_decides_whether_main_window_returns() {
             .split_once("recording finished")
             .expect("the recording finished");
         let kept_hidden = after.contains("main window kept hidden after the Instant recording");
+        let reshown = after.contains("showing the main window");
         assert_eq!(kept_hidden, !returns, "{name}: {after}");
-        if !returns {
-            assert!(!after.contains("main window shown"), "{name}: {after}");
-        }
+        assert_eq!(reshown, returns, "{name}: {after}");
         assert_eq!(mock.created().len(), 1, "{name}");
     }
 }
