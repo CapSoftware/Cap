@@ -2160,12 +2160,14 @@ fn restore_arranged_windows(cx: &mut App) {
         return;
     }
     // Queued behind any move still running, which would otherwise land
-    // after the restore. The job runs whether or not this is awaited.
-    let _ = crate::foreign_window::in_order(move || {
-        for window in arranged {
-            crate::foreign_window::put_back(&window);
-        }
-    });
+    // after the restore.
+    cx.background_executor()
+        .spawn(crate::foreign_window::in_order(move || {
+            for window in arranged {
+                crate::foreign_window::put_back(&window);
+            }
+        }))
+        .detach();
 }
 
 pub fn dismiss_target_overlays(cx: &mut App) {
