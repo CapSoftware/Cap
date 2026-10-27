@@ -2159,13 +2159,13 @@ fn restore_arranged_windows(cx: &mut App) {
     if arranged.is_empty() {
         return;
     }
-    cx.background_executor()
-        .spawn(async move {
-            for window in arranged {
-                crate::foreign_window::put_back(&window);
-            }
-        })
-        .detach();
+    // Queued behind any move still running, which would otherwise land
+    // after the restore. The job runs whether or not this is awaited.
+    let _ = crate::foreign_window::in_order(move || {
+        for window in arranged {
+            crate::foreign_window::put_back(&window);
+        }
+    });
 }
 
 pub fn dismiss_target_overlays(cx: &mut App) {

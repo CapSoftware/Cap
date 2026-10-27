@@ -2232,29 +2232,24 @@ impl OverlayWindow {
         let requested = id.clone();
         let select = self.select.clone();
         cx.spawn(async move |this, cx| {
-            let moved = cx
-                .background_executor()
-                .spawn(async move {
-                    let arranged = match arrangement {
-                        Arrangement::Frame(frame) => crate::foreign_window::arrange(
-                            &id,
-                            &display,
-                            frame.scaled(capture_scale),
-                        ),
-                        Arrangement::PutBack(original) => {
-                            crate::foreign_window::put_back(&original)
-                        }
-                    };
-                    if raise {
-                        crate::foreign_window::raise(&id);
+            let moved = crate::foreign_window::in_order(move || {
+                let arranged = match arrangement {
+                    Arrangement::Frame(frame) => {
+                        crate::foreign_window::arrange(&id, &display, frame.scaled(capture_scale))
                     }
-                    let window = scap_targets::Window::from_id(&id);
-                    (
-                        arranged,
-                        window.as_ref().and_then(HoveredWindow::from_window),
-                    )
-                })
-                .await;
+                    Arrangement::PutBack(original) => crate::foreign_window::put_back(&original),
+                };
+                if raise {
+                    crate::foreign_window::raise(&id);
+                }
+                let window = scap_targets::Window::from_id(&id);
+                (
+                    arranged,
+                    window.as_ref().and_then(HoveredWindow::from_window),
+                )
+            })
+            .await
+            .unwrap_or((false, None));
             let (arranged, fresh) = moved;
             if !arranged {
                 tracing::warn!("the picked window could not be arranged");
