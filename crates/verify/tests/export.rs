@@ -354,25 +354,32 @@ fn turbo_spool_files() -> Vec<std::path::PathBuf> {
 }
 
 /// Stopping a turbo export from the progress callback or the user's cancel
-/// flag ends every chunk, leaves no output and removes the chunk spools.
+/// flag ends every chunk, leaves no output and removes the chunk spools. A
+/// destination that appears while turbo runs is left alone: the export fails
+/// rather than falling back to a standard export that would overwrite it.
 fn turbo_cancellation() -> Vec<String> {
     use std::sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
     };
     let spec = catalog::vfr_holds(report::tier());
+    let decoder = if cfg!(target_os = "windows") {
+        Decoder::Ffmpeg
+    } else {
+        Decoder::Default
+    };
     let mut failures = Vec::new();
-    for by_flag in [false, true] {
+    for mode in ["progress", "flag", "taken"] {
         let id = format!(
-            "export/{}/turbo-cancel-{}",
+            "export/{}/turbo-cancel-{mode}/{}",
             spec.name,
-            if by_flag { "flag" } else { "progress" }
+            decoder.label()
         );
         if !report::selected(&id) {
             continue;
         }
         let project = common::project(&spec);
-        let Some(mut case) = common::begin(&id, &project, Decoder::Default) else {
+        let Some(mut case) = common::begin(&id, &project, decoder) else {
             continue;
         };
         let dir = common::scratch_dir(&id);
@@ -380,9 +387,11 @@ fn turbo_cancellation() -> Vec<String> {
         let spools_before = turbo_spool_files();
         let cancel = Arc::new(AtomicBool::new(false));
         let flag = cancel.clone();
+        let taken = out.clone();
         let result = common::runtime().block_on(async {
             let base = cap_export::ExporterBase::builder(project.path.clone())
                 .with_config(project.config())
+                .with_force_ffmpeg_decoder(decoder == Decoder::Ffmpeg)
                 .with_output_path(out.clone())
                 .build_for_mp4(cancel)
                 .await
@@ -392,34 +401,51 @@ fn turbo_cancellation() -> Vec<String> {
                 resolution_base: XY::new(RES.0, RES.1),
                 compression: cap_export::mp4::ExportCompression::Social,
                 custom_bpp: None,
-                force_ffmpeg_decoder: false,
+                force_ffmpeg_decoder: decoder == Decoder::Ffmpeg,
                 optimize_filesize: false,
             }
             .export_prepared_turbo(
                 base,
                 cap_export::mp4::turbo::TurboOptions {
                     chunks: Some(3),
-                    strict: true,
+                    strict: mode != "taken",
                 },
                 move |frame| {
                     if frame < 60 {
                         return true;
                     }
-                    if by_flag {
-                        flag.store(true, Ordering::Relaxed);
-                        true
-                    } else {
-                        false
+                    match mode {
+                        "flag" => {
+                            flag.store(true, Ordering::Relaxed);
+                            true
+                        }
+                        "taken" => {
+                            if frame == 60 {
+                                let _ = std::fs::write(&taken, "taken");
+                            }
+                            true
+                        }
+                        _ => false,
                     }
                 },
             )
             .await
         });
-        if result.as_ref().map_err(String::as_str) != Err("Export cancelled") {
-            case.problem("error", format!("cancelled export returned {result:?}"));
-        }
-        if out.exists() {
-            case.problem("error", "cancelled export left an output file");
+        if mode == "taken" {
+            if result.is_ok() || result.as_ref().map_err(String::as_str) == Err("Export cancelled")
+            {
+                case.problem("error", format!("taken destination returned {result:?}"));
+            }
+            if std::fs::read(&out).ok().as_deref() != Some(&b"taken"[..]) {
+                case.problem("error", "export overwrote a destination created meanwhile");
+            }
+        } else {
+            if result.as_ref().map_err(String::as_str) != Err("Export cancelled") {
+                case.problem("error", format!("cancelled export returned {result:?}"));
+            }
+            if out.exists() {
+                case.problem("error", "cancelled export left an output file");
+            }
         }
         let leftover: Vec<_> = turbo_spool_files()
             .into_iter()
