@@ -2238,21 +2238,76 @@ impl OverlayWindow {
         } else {
             "Centres this window and records only it. Anything that moves in front of it stays out of the video."
         };
-        let capsule = self.glass_capsule(32.).id("window-focus");
+        // Regular, as the controls below it are: it carries text.
+        let card = self.glass_surface().id("window-focus");
+        let hint = Hint::new(title).body(body).side(crate::ui::HintSide::Below);
+        let accent = Hsla::from(theme.blue_9);
         Some(
-            self.hinted(capsule, "window-focus", Hint::new(title).body(body), cx)
-                .mb(px(8.))
-                .pl(px(12.))
-                .pr(px(4.))
+            self.hinted(card, "window-focus", hint, cx)
+                .mb(px(10.))
+                .h(px(52.))
+                .pl(px(10.))
+                .pr(px(6.))
                 .flex()
                 .items_center()
                 .gap(px(10.))
+                .cursor_pointer()
+                .when(focus, |card| {
+                    card.border_1().border_color(accent.opacity(0.7))
+                })
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                // The whole card is the switch's label, as a macOS form row is.
+                .on_click(cx.listener(|this, _, _, cx| {
+                    cx.stop_propagation();
+                    let focus = this.select.read(cx).focus_window;
+                    this.set_focus(!focus, cx);
+                }))
                 .child(
                     div()
-                        .text_size(px(13.))
-                        .text_color(theme.gray_12)
-                        .child("Focus"),
+                        .size(px(32.))
+                        .flex_shrink_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(9.))
+                        .bg(if focus {
+                            accent
+                        } else {
+                            Theme::with_alpha(theme.gray_12, 0.08)
+                        })
+                        .child(svg().path("icons/box-select.svg").size(px(17.)).text_color(
+                            if focus {
+                                gpui::white().into()
+                            } else {
+                                Hsla::from(theme.gray_12)
+                            },
+                        )),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .pr(px(14.))
+                        .child(
+                            div()
+                                .text_size(px(13.))
+                                .line_height(px(17.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(theme.gray_12)
+                                .child("Focus mode"),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(11.5))
+                                .line_height(px(15.))
+                                .font_weight(FontWeight::NORMAL)
+                                .text_color(theme.gray_11)
+                                .child(if focus {
+                                    "Recording only this window"
+                                } else {
+                                    "Record only this window"
+                                }),
+                        ),
                 )
                 .child(
                     crate::ui::GlassSwitch::new("window-focus-toggle", focus, theme.is_dark())

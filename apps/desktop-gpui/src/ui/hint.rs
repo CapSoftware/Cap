@@ -60,6 +60,9 @@ const CURSOR: (f32, f32, f32, f32) = (-2., -2., 16., 24.);
 pub struct Hint {
     pub title: SharedString,
     pub body: Option<SharedString>,
+    /// The side to try first, for a control whose neighbours a hint above
+    /// would cover.
+    pub side: Option<Side>,
 }
 
 impl Hint {
@@ -67,7 +70,13 @@ impl Hint {
         Self {
             title: title.into(),
             body: None,
+            side: None,
         }
+    }
+
+    pub fn side(mut self, side: Side) -> Self {
+        self.side = Some(side);
+        self
     }
 
     pub fn body(mut self, body: impl Into<SharedString>) -> Self {
@@ -205,6 +214,8 @@ struct Active {
     phase: Phase,
     /// Counts showings, so each one plays its own fade.
     showing: u64,
+    /// Taken over straight from another hint, so it appears at once.
+    instant: bool,
 }
 
 #[derive(Default)]
@@ -264,14 +275,17 @@ impl Hints {
                 .as_ref()
                 .is_some_and(|active| active.phase != Phase::Waiting);
             if up {
-                self.show(id);
+                self.show(id, true);
             } else {
                 self.active = Some(Active {
                     id,
                     phase: Phase::Waiting,
                     showing: 0,
+                    instant: false,
                 });
-                later(SHOW_DELAY, serial, cx, hints, move |hints| hints.show(id));
+                later(SHOW_DELAY, serial, cx, hints, move |hints| {
+                    hints.show(id, false)
+                });
             }
             cx.notify();
             return;
@@ -296,13 +310,14 @@ impl Hints {
         self.active = None;
     }
 
-    fn show(&mut self, id: &'static str) {
+    fn show(&mut self, id: &'static str, instant: bool) {
         self.showings += 1;
         self.side.set(None);
         self.active = Some(Active {
             id,
             phase: Phase::Shown,
             showing: self.showings,
+            instant,
         });
     }
 
@@ -353,7 +368,7 @@ impl Hints {
             bubble,
             window.mouse_position(),
             window.viewport_size(),
-            self.side.get(),
+            self.side.get().or(hint.side),
         );
         self.side.set(Some(placed.side));
 
@@ -455,16 +470,22 @@ impl Hints {
         } else {
             Animation::new(FADE_IN).with_easing(gpui::ease_out_quint())
         };
+        let bubble = div()
+            .absolute()
+            .left(px(x))
+            .top(px(y))
+            .w(px(w))
+            .h(px(h))
+            .child(arrow(1., edge))
+            .child(body)
+            .child(arrow(0., fill));
+        // Moving from one control straight to the next swaps the hint at
+        // once, as macOS does; fading it in again would blink.
+        if active.instant && !leaving {
+            return Some(bubble.into_any_element());
+        }
         Some(
-            div()
-                .absolute()
-                .left(px(x))
-                .top(px(y))
-                .w(px(w))
-                .h(px(h))
-                .child(arrow(1., edge))
-                .child(body)
-                .child(arrow(0., fill))
+            bubble
                 .with_animation(id, animation, move |element, delta| {
                     let shown = if leaving { 1. - delta } else { delta };
                     let offset = (1. - shown) * slide;

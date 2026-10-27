@@ -90,7 +90,7 @@ pub use editor_button::{EditorButton, EditorButtonVariant};
 #[allow(unused_imports)]
 pub use field::{Field, Subfield};
 #[allow(unused_imports)]
-pub use hint::{Hint, Hints};
+pub use hint::{Hint, Hints, Side as HintSide};
 
 pub use kbd::{KbdChip, KbdSize, kbd_symbol};
 #[allow(unused_imports)]
