@@ -203,6 +203,11 @@ impl Button {
             (gpui::hsla(0., 0., 0., 0.06), gpui::hsla(0., 0., 0., 0.1))
         };
         let accent: Hsla = gpui::rgb(Theme::SETTINGS_ACCENT).into();
+        let edge = if theme.is_dark() {
+            gpui::hsla(0., 0., 1., 0.08)
+        } else {
+            gpui::hsla(0., 0., 0., 0.07)
+        };
         let paint = match variant {
             ButtonVariant::Gray
             | ButtonVariant::White
@@ -212,7 +217,7 @@ impl Button {
                 hover_bg: Some(hover),
                 text: theme.settings_text(),
                 hover_text: None,
-                border: None,
+                border: Some(edge),
                 hover_border: None,
             },
             ButtonVariant::Destructive => ButtonPaint {

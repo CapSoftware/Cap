@@ -243,7 +243,14 @@ fn glass_button<E: Styled>(element: E, theme: Theme, selected: bool) -> E {
         (true, false) => Theme::with_alpha(theme.blue_9, 0.14),
         (true, true) => Theme::with_alpha(theme.blue_9, 0.28),
     };
-    element.bg(fill)
+    // A hairline so the control holds its shape over whatever shows through
+    // the window's glass, light or dark.
+    let edge = if theme.is_dark() {
+        gpui::hsla(0., 0., 1., 0.1)
+    } else {
+        gpui::hsla(0., 0., 0., 0.08)
+    };
+    element.bg(fill).border_1().border_color(edge)
 }
 
 fn capture_hover_fill(theme: Theme, selected: bool) -> Hsla {
@@ -6571,6 +6578,12 @@ impl MainWindow {
                 } else {
                     Some(target)
                 };
+                // The tile picks by hovering: a window chosen from its
+                // dropdown earlier would otherwise stay locked in, and the
+                // highlight would ignore the window under the pointer.
+                if target == TargetType::Window {
+                    this.selected_window = None;
+                }
                 this.sync_overlays(cx);
                 cx.notify();
             }));

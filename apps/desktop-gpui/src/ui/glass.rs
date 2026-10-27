@@ -122,18 +122,20 @@ fn sample_reach(style: &PaneStyle) -> f32 {
 /// everything added after it paints on the glass. `radius` is clamped to the
 /// pane like CSS clamps `border-radius`.
 pub fn pane(kind: GlassKind, dark: bool, radius: f32) -> Div {
-    pane_with(kind, dark, radius, None, None)
+    pane_with(kind, dark, radius, None, None, false)
 }
 
 /// [`pane`] with a tint.
 pub fn pane_tinted(kind: GlassKind, dark: bool, radius: f32, tint: Tint) -> Div {
-    pane_with(kind, dark, radius, None, Some(tint))
+    pane_with(kind, dark, radius, None, Some(tint), false)
 }
 
 /// [`pane`] on a transparent window, reading `backdrop` instead of the
-/// window's own (mostly empty) pixels.
+/// window's own (mostly empty) pixels, with an edge so a control holds its
+/// shape over whatever the desktop shows. [`pane`] alone stays exactly the
+/// system material, which the glass probe measures against.
 pub fn pane_over(kind: GlassKind, dark: bool, radius: f32, backdrop: &Backdrop) -> Div {
-    pane_with(kind, dark, radius, Some(backdrop.clone()), None)
+    pane_with(kind, dark, radius, Some(backdrop.clone()), None, true)
 }
 
 fn pane_with(
@@ -142,9 +144,11 @@ fn pane_with(
     radius: f32,
     backdrop: Option<Backdrop>,
     tint: Option<Tint>,
+    edge: bool,
 ) -> Div {
     let material = *material(kind, dark);
-    div().relative().rounded(px(radius)).child(
+    let (outer, inner) = edge_lines(dark);
+    let pane = div().relative().rounded(px(radius)).child(
         canvas(
             |_, _, _| {},
             move |bounds, _, window, _| {
@@ -158,7 +162,44 @@ fn pane_with(
         .top_0()
         .left_0()
         .size_full(),
+    );
+    if !edge {
+        return pane;
+    }
+    // The pane's edge, so it holds its shape on any backdrop: a faint dark
+    // line that shows on light content and a faint light one just inside it
+    // that shows on dark. Drawn over the glass rather than as a border so the
+    // glass still reaches the pane's edge.
+    pane.child(
+        div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .rounded(px(radius))
+            .border_1()
+            .border_color(outer),
     )
+    .child(
+        div()
+            .absolute()
+            .top(px(1.))
+            .left(px(1.))
+            .right(px(1.))
+            .bottom(px(1.))
+            .rounded(px((radius - 1.).max(0.)))
+            .border_1()
+            .border_color(inner),
+    )
+}
+
+/// The two hairlines around a pane's edge: dark outside, light inside.
+fn edge_lines(dark: bool) -> (Hsla, Hsla) {
+    if dark {
+        (gpui::hsla(0., 0., 0., 0.28), gpui::hsla(0., 0., 1., 0.14))
+    } else {
+        (gpui::hsla(0., 0., 0., 0.1), gpui::hsla(0., 0., 1., 0.45))
+    }
 }
 
 /// What a transparent window's glass panes show through them: a capture of
