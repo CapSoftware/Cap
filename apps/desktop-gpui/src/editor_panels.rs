@@ -5684,9 +5684,6 @@ impl EditorWindow {
             .into_any_element()
     }
 
-    /// The Keyframes section of the text and image panels: add a key at the
-    /// playhead, then any move, resize or opacity change at another time adds
-    /// or edits a key there. Each key is a chip: click to jump, × to remove.
     fn render_overlay_keyframes(
         &self,
         target: KeyframeTarget,
@@ -9216,7 +9213,6 @@ pub enum ImageProperty {
     Rounding,
 }
 
-/// Which overlay a Keyframes section edits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum KeyframeTarget {
     Text(usize),
@@ -9225,9 +9221,8 @@ enum KeyframeTarget {
 
 #[derive(Debug, Clone, Copy)]
 enum KeyframeAction {
-    /// Key the overlay's current look at this output time.
     Add(f64),
-    /// Remove the keys at this segment-relative time.
+    /// Segment-relative time.
     Remove(f64),
     Clear,
 }

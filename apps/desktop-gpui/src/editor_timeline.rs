@@ -127,7 +127,6 @@ const SEGMENT_PADDING_RIGHT: f32 = 10.;
 /// handles still own the outer pixels.
 pub const CAMERA3D_POSE_DOT: f32 = 6.;
 pub const CAMERA3D_POSE_DOT_INSET: f32 = 5.;
-/// Side of the keyframe marks drawn on text and image boxes.
 const KEYFRAME_MARK: f32 = 4.;
 /// The waveform's ceiling inside a row, so it never climbs into the labels.
 const WAVEFORM_MAX_HEIGHT: f32 = 18.;
@@ -2800,13 +2799,17 @@ fn render_segment(
         }
     }
 
-    // Overlay keyframes: small diamonds along the bottom of the box.
     if let SegmentDetail::Text { keyframes, .. } | SegmentDetail::Image { keyframes, .. } =
         &segment.detail
     {
         let duration = (segment.end - segment.start).max(0.0001);
-        for time in keyframes.iter() {
-            let x = ((time / duration).clamp(0., 1.) as f32) * width;
+        // Trims and splits keep keys outside the segment so the animation
+        // holds; those play no part in what is shown, so they get no mark.
+        for time in keyframes
+            .iter()
+            .filter(|time| (0.0..=duration).contains(*time))
+        {
+            let x = ((time / duration) as f32) * width;
             fill = fill.child(
                 div()
                     .absolute()

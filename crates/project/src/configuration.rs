@@ -1286,7 +1286,6 @@ impl OverlayKeyframes {
         }
     }
 
-    /// Removes every property's key at `time`.
     pub fn remove_at(&mut self, time: f64) {
         let keep = |t: f64| (t - time).abs() > OVERLAY_KEYFRAME_MATCH_SECS;
         self.position.retain(|k| keep(k.time));
@@ -1311,24 +1310,26 @@ impl OverlayKeyframes {
     }
 }
 
+// Sampled for every property on every frame, so this scans the keys rather
+// than sorting a copy. Ties resolve as a stable sort by time would.
 fn keyframe_span<T>(keys: &[T], time: f64, key_time: impl Fn(&T) -> f64) -> Option<(&T, &T, f64)> {
-    let mut sorted: Vec<&T> = keys.iter().filter(|k| key_time(k).is_finite()).collect();
-    sorted.sort_by(|a, b| key_time(a).total_cmp(&key_time(b)));
-    let first = *sorted.first()?;
+    let finite = || keys.iter().filter(|k| key_time(k).is_finite());
+    let by_time = |a: &&T, b: &&T| key_time(a).total_cmp(&key_time(b));
+    let first = finite().min_by(by_time)?;
     if time <= key_time(first) {
         return Some((first, first, 0.0));
     }
-    for pair in sorted.windows(2) {
-        let (prev, next) = (pair[0], pair[1]);
-        if time <= key_time(next) {
-            let span = (key_time(next) - key_time(prev)).max(1e-6);
-            // Ease in and out between keys so motion starts and stops softly
-            let t = ((time - key_time(prev)) / span).clamp(0.0, 1.0);
-            return Some((prev, next, t * t * (3.0 - 2.0 * t)));
-        }
-    }
-    let last = *sorted.last()?;
-    Some((last, last, 0.0))
+    let Some(next) = finite().filter(|k| time <= key_time(k)).min_by(by_time) else {
+        let last = finite().max_by(by_time)?;
+        return Some((last, last, 0.0));
+    };
+    let prev = finite()
+        .filter(|k| key_time(k) < key_time(next))
+        .max_by(by_time)?;
+    let span = (key_time(next) - key_time(prev)).max(1e-6);
+    // Ease in and out between keys so motion starts and stops softly
+    let t = ((time - key_time(prev)) / span).clamp(0.0, 1.0);
+    Some((prev, next, t * t * (3.0 - 2.0 * t)))
 }
 
 fn upsert_vector_key(keys: &mut Vec<MaskVectorKeyframe>, time: f64, value: XY<f64>) {
@@ -1446,7 +1447,6 @@ impl TextSegment {
         (time - self.start).clamp(0., (self.end - self.start).max(0.))
     }
 
-    /// Opacity at output `time`, keyframes applied.
     pub fn opacity_at(&self, time: f64) -> f64 {
         self.keyframes
             .sample(
@@ -1469,7 +1469,6 @@ impl TextSegment {
         }
     }
 
-    /// Records the current position and opacity as a keyframe at `time`.
     /// Text size is not keyed: its box follows the font size.
     pub fn add_keyframe_at(&mut self, time: f64) {
         let (center, _, opacity) = self.keyframes.sample(
@@ -1985,7 +1984,6 @@ impl ImageSegment {
         (time - self.start).clamp(0., (self.end - self.start).max(0.))
     }
 
-    /// Opacity at output `time`, keyframes applied.
     pub fn opacity_at(&self, time: f64) -> f64 {
         self.keyframes
             .sample(
@@ -2008,7 +2006,6 @@ impl ImageSegment {
         }
     }
 
-    /// Records the current position, size and opacity as a keyframe at `time`.
     pub fn add_keyframe_at(&mut self, time: f64) {
         let (center, size, opacity) = self.keyframes.sample(
             self.center,

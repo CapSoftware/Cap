@@ -2275,7 +2275,7 @@ impl EditorWindow {
     /// Re-derive the drawn model from the live config. Runs after every edit;
     /// the waveforms arrive separately and later, so whatever has landed is
     /// carried across.
-    fn rebuild_timeline(&mut self) {
+    pub(crate) fn rebuild_timeline(&mut self) {
         self.dismiss_transient_menus();
         let mic = std::mem::take(&mut self.timeline.mic_waveforms);
         let system = std::mem::take(&mut self.timeline.system_waveforms);
