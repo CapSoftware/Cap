@@ -44,6 +44,9 @@ pub struct TurboOptions {
 pub(crate) enum TurboError {
     Cancelled,
     Failed(String),
+    /// The export finished but could not be moved to its destination, which
+    /// something else created meanwhile. Exporting again would overwrite it.
+    Publish(String),
 }
 
 impl From<String> for TurboError {
@@ -162,7 +165,6 @@ impl<F: FnMut(u32) -> bool> Progress<F> {
     }
 }
 
-/// Everything a chunk's render loop reads, shared by all chunks.
 #[derive(Clone)]
 struct RenderShared {
     constants: Arc<RenderVideoConstants>,
@@ -262,7 +264,6 @@ fn render_chunk<F: FnMut(u32) -> bool + Send + 'static>(
         })
 }
 
-/// Copies a rendered frame into the encoder's NV12 input frame.
 fn fill_input(
     input: &ExportFrame,
     frame: &mut ffmpeg::frame::Video,
@@ -392,7 +393,6 @@ fn read_spooled_packets(
     }
 }
 
-/// Encodes a chunk into its spool.
 fn encode_chunk<F: FnMut(u32) -> bool>(
     frames: mpsc::Receiver<ExportFrame>,
     settings: EncoderSettings,
@@ -645,6 +645,10 @@ fn stitch<F: FnMut(u32) -> bool>(
                             .is_some_and(|user| user.load(Ordering::Relaxed))
                 },
             )?;
+            // Audio runs ahead of the video on purpose: later chunks' spools
+            // append far faster than they encode, so audio rendered while
+            // chunk 0 encodes keeps them from waiting on it. The queued AAC
+            // packets cost at most 40 KB per second of timeline.
             if !sampled {
                 for frame in 0..total_frames {
                     worker.request(frame, frame);
@@ -735,7 +739,7 @@ fn stitch<F: FnMut(u32) -> bool>(
         })
         .map_err(|error| match error {
             TurboError::Cancelled => Mp4PipelineError::Interrupted,
-            TurboError::Failed(error) => failure(error),
+            TurboError::Failed(error) | TurboError::Publish(error) => failure(error),
         })?;
     }
     if !sampled && written != total_frames {
@@ -778,7 +782,7 @@ pub(crate) async fn export_sampled(
     {
         Ok(path) => Ok(path),
         Err(TurboError::Cancelled) => Err(STOPPED.to_string()),
-        Err(TurboError::Failed(error)) => Err(error),
+        Err(TurboError::Failed(error) | TurboError::Publish(error)) => Err(error),
     }
 }
 
@@ -852,7 +856,8 @@ pub(crate) async fn export<F: FnMut(u32) -> bool + Send + 'static>(
     let temporary_output = match base.streaming_output.take() {
         Some(staged) => Some(staged),
         None => crate::prepare_new_output(&base.output_path).ok().flatten(),
-    };
+    }
+    .map(Arc::new);
     let user_cancellation = base.user_cancellation.clone();
     let stop = audio_control
         .as_ref()
@@ -1004,7 +1009,9 @@ pub(crate) async fn export<F: FnMut(u32) -> bool + Send + 'static>(
         sample_timing: base.sample_timing.clone(),
     };
     let stitch_progress = progress.clone();
+    let stitch_temporary_output = temporary_output.clone();
     let result = tokio::task::spawn_blocking(move || {
+        let _temporary_output_guard = stitch_temporary_output;
         let stitched = stitch(stitch_input, &stitch_progress);
         if let Err(
             Mp4PipelineError::Failure(error)
@@ -1067,9 +1074,10 @@ pub(crate) async fn export<F: FnMut(u32) -> bool + Send + 'static>(
         ));
     }
     if let Some(temporary_output) = temporary_output {
-        temporary_output
+        Arc::try_unwrap(temporary_output)
+            .map_err(|_| TurboError::Failed("Export output is still in use".to_string()))?
             .persist_noclobber(&output_path)
-            .map_err(|error| TurboError::Failed(error.to_string()))?;
+            .map_err(|error| TurboError::Publish(error.to_string()))?;
     }
     drop(audio_control);
     Ok(output_path)

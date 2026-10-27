@@ -212,7 +212,8 @@ impl Mp4ExportSettings {
     }
 
     /// Exports with every core: see [`turbo`]. Falls back to the standard
-    /// export when the turbo pipeline fails for any reason but cancellation.
+    /// export when the turbo pipeline fails, unless it was cancelled or its
+    /// destination appeared while it ran.
     pub async fn export_prepared_turbo(
         self,
         base: Mp4ExporterBase,
@@ -228,6 +229,7 @@ impl Mp4ExportSettings {
         match turbo::export(self, &mut base, options, on_progress.clone()).await {
             Ok(path) => Ok(path),
             Err(turbo::TurboError::Cancelled) => Err("Export cancelled".to_string()),
+            Err(turbo::TurboError::Publish(error)) => Err(error),
             Err(turbo::TurboError::Failed(error)) if options.strict => Err(error),
             Err(turbo::TurboError::Failed(error)) => {
                 warn!(%error, "Turbo export failed, exporting with the standard pipeline");
