@@ -1023,10 +1023,10 @@ const STUDIO_OUTCOMES: [(store::PostStudioBehaviour, OutcomeOption); 3] = [
     ),
 ];
 
-/// `disableAutoOpenLinks`, phrased as what an Instant recording does.
-const INSTANT_OUTCOMES: [(bool, OutcomeOption); 2] = [
+/// [`store::PostInstantBehaviour`], phrased as what an Instant recording does.
+const INSTANT_OUTCOMES: [(store::PostInstantBehaviour, OutcomeOption); 3] = [
     (
-        false,
+        store::PostInstantBehaviour::OpenLink,
         OutcomeOption {
             icon: "icons/globe.svg",
             label: tr::settings::shortcuts::outcome::instant_open_link,
@@ -1034,7 +1034,15 @@ const INSTANT_OUTCOMES: [(bool, OutcomeOption); 2] = [
         },
     ),
     (
-        true,
+        store::PostInstantBehaviour::ShowCap,
+        OutcomeOption {
+            icon: "icons/app-window.svg",
+            label: tr::settings::shortcuts::outcome::instant_show_cap,
+            hint: tr::settings::shortcuts::outcome::instant_show_cap_hint,
+        },
+    ),
+    (
+        store::PostInstantBehaviour::CopyLink,
         OutcomeOption {
             icon: "icons/link.svg",
             label: tr::settings::shortcuts::outcome::instant_copy_link,
@@ -1630,14 +1638,17 @@ impl SettingsWindow {
                 tr::settings::shortcuts::after_instant::hint(),
                 &INSTANT_OUTCOMES
                     .iter()
-                    .map(|(disabled, option)| {
-                        (*option, *disabled == self.settings.disable_auto_open_links)
+                    .map(|(value, option)| {
+                        (*option, *value == self.settings.post_instant_behaviour())
                     })
                     .collect::<Vec<_>>(),
                 |this, index, cx| {
-                    if let Some((disabled, _)) = INSTANT_OUTCOMES.get(index) {
-                        this.settings.disable_auto_open_links = *disabled;
-                        this.write_bool("disableAutoOpenLinks", *disabled, cx);
+                    if let Some((value, _)) = INSTANT_OUTCOMES.get(index) {
+                        let (disable_open, show_main) = value.store_values();
+                        this.settings.disable_auto_open_links = disable_open;
+                        this.settings.show_main_window_after_instant = Some(show_main);
+                        this.write_bool("disableAutoOpenLinks", disable_open, cx);
+                        this.write_bool(store::SHOW_MAIN_WINDOW_AFTER_INSTANT_KEY, show_main, cx);
                     }
                 },
                 cx,
@@ -8547,12 +8558,13 @@ mod tests {
                 1
             );
         }
-        for disabled in [false, true] {
+        for value in [
+            store::PostInstantBehaviour::OpenLink,
+            store::PostInstantBehaviour::ShowCap,
+            store::PostInstantBehaviour::CopyLink,
+        ] {
             assert_eq!(
-                INSTANT_OUTCOMES
-                    .iter()
-                    .filter(|(v, _)| *v == disabled)
-                    .count(),
+                INSTANT_OUTCOMES.iter().filter(|(v, _)| *v == value).count(),
                 1
             );
         }
