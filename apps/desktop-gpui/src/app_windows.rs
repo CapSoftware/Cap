@@ -664,7 +664,10 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
                 // the completion and Cap stays out of the way.
                 let settings = crate::store::GeneralSettings::load();
                 let behaviour = settings.post_studio_recording_behaviour;
-                let keep_hidden_after_instant = finished_instant
+                // Linux restores the main window through the clean-capture
+                // lease before this runs, so it keeps reshowing as before.
+                let keep_hidden_after_instant = cfg!(not(target_os = "linux"))
+                    && finished_instant
                     && settings.post_instant_behaviour()
                         != crate::store::PostInstantBehaviour::ShowCap;
                 match (finished_studio, behaviour) {
