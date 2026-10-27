@@ -64,7 +64,7 @@ fn window_content_filter(
         warn!(
             %window_id,
             capture_phase,
-            "Capture window missing from ScreenCaptureKit shareable content, falling back to display crop"
+            "Capture window missing from ScreenCaptureKit shareable content"
         );
         return None;
     };
@@ -222,6 +222,10 @@ pub enum SourceError {
     NoDisplay(DisplayId),
     #[error("AsContentFilter")]
     AsContentFilter,
+    /// A window-only capture whose window is gone. A display crop would
+    /// record whatever now covers the window's rectangle.
+    #[error("WindowGone: Id '{0}'")]
+    WindowGone(WindowId),
 }
 
 pub struct VideoFrame {
@@ -264,7 +268,11 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
             .ok_or_else(|| SourceError::NoDisplay(self.config.display.clone()))?;
 
         let window_filter = capturable_window(&self.config, &self.excluded_windows, "initial")
-            .and_then(|id| window_content_filter(id, &self.shareable_content, "initial"));
+            .map(|id| {
+                window_content_filter(id, &self.shareable_content, "initial")
+                    .ok_or_else(|| SourceError::WindowGone(id.clone()))
+            })
+            .transpose()?;
         let captures_window = window_filter.is_some();
 
         let content_filter = match window_filter {
@@ -1005,7 +1013,12 @@ async fn rebuild_capturer(params: &CapturerRebuildParams) -> anyhow::Result<Capt
         .ok_or_else(|| anyhow!("Display not found during restart: {:?}", params.display_id))?;
 
     let window_filter = capturable_window(&params.config, &params.excluded_windows, "restart")
-        .and_then(|id| window_content_filter(id, &shareable_content, "restart"));
+        .map(|id| {
+            window_content_filter(id, &shareable_content, "restart").ok_or_else(|| {
+                anyhow!("Capture window {id} is gone; not falling back to the display")
+            })
+        })
+        .transpose()?;
     let captures_window = window_filter.is_some();
 
     let content_filter = match window_filter {

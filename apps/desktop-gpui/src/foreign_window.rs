@@ -22,9 +22,27 @@ pub fn arrange(id: &WindowId, display: &DisplayId, frame: AreaRect) -> bool {
     imp::arrange(id, &display, frame)
 }
 
-/// Bring window `id` and its app to the front.
 pub fn raise(id: &WindowId) -> bool {
     imp::raise(id)
+}
+
+/// How a window sits beyond its bounds (maximized), where bounds alone
+/// cannot put it back.
+#[derive(Clone, Copy)]
+pub struct Placement(imp::RawPlacement);
+
+pub fn placement(id: &WindowId) -> Option<Placement> {
+    imp::placement(id).map(Placement)
+}
+
+pub fn put_back(original: &crate::target_overlay::ArrangedWindow) -> bool {
+    let window = &original.window;
+    if let Some(placement) = original.placement
+        && imp::restore_placement(&window.id, &placement.0)
+    {
+        return true;
+    }
+    arrange(&window.id, &window.display_id, window.bounds)
 }
 
 #[cfg(target_os = "macos")]
@@ -80,6 +98,16 @@ mod imp {
 
     pub fn can_arrange() -> bool {
         unsafe { AXIsProcessTrusted() }
+    }
+
+    pub type RawPlacement = std::convert::Infallible;
+
+    pub fn placement(_: &WindowId) -> Option<RawPlacement> {
+        None
+    }
+
+    pub fn restore_placement(_: &WindowId, placement: &RawPlacement) -> bool {
+        match *placement {}
     }
 
     /// The AX element of window `id`, owned by the returned `CFType`.
@@ -172,8 +200,8 @@ mod imp {
         Foundation::{HWND, RECT},
         Graphics::Dwm::{DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute},
         UI::WindowsAndMessaging::{
-            GetWindowRect, IsZoomed, SW_RESTORE, SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos,
-            ShowWindow,
+            GetWindowPlacement, GetWindowRect, IsZoomed, SW_RESTORE, SWP_NOACTIVATE, SWP_NOZORDER,
+            SetWindowPlacement, SetWindowPos, ShowWindow, WINDOWPLACEMENT,
         },
     };
 
@@ -181,6 +209,29 @@ mod imp {
 
     pub fn can_arrange() -> bool {
         true
+    }
+
+    pub type RawPlacement = WINDOWPLACEMENT;
+
+    /// Only a maximized window needs its placement: resizing restores it,
+    /// and its bounds then put it back as a large normal window.
+    pub fn placement(id: &WindowId) -> Option<RawPlacement> {
+        let hwnd = hwnd(id)?;
+        unsafe {
+            if IsZoomed(hwnd) == 0 {
+                return None;
+            }
+            let mut placement: WINDOWPLACEMENT = std::mem::zeroed();
+            placement.length = std::mem::size_of::<WINDOWPLACEMENT>() as u32;
+            (GetWindowPlacement(hwnd, &mut placement) != 0).then_some(placement)
+        }
+    }
+
+    pub fn restore_placement(id: &WindowId, placement: &RawPlacement) -> bool {
+        let Some(hwnd) = hwnd(id) else {
+            return false;
+        };
+        unsafe { SetWindowPlacement(hwnd, placement) != 0 }
     }
 
     fn hwnd(id: &WindowId) -> Option<HWND> {
@@ -256,6 +307,16 @@ mod imp {
 
     pub fn can_arrange() -> bool {
         !cap_recording::screenshot::uses_wayland_portal()
+    }
+
+    pub type RawPlacement = std::convert::Infallible;
+
+    pub fn placement(_: &WindowId) -> Option<RawPlacement> {
+        None
+    }
+
+    pub fn restore_placement(_: &WindowId, placement: &RawPlacement) -> bool {
+        match *placement {}
     }
 
     fn send(window: u32, message: &[u8], data: [u32; 5]) -> anyhow::Result<()> {
