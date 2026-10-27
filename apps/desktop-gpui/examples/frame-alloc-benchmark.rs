@@ -30,7 +30,7 @@ fn main() {
             assert!(!readback.is_null() && !converted.is_null());
             readback.write_bytes(0x40, padded.size());
             converted.copy_from_nonoverlapping(readback, tight.size());
-            black_box(converted.read_volatile());
+            black_box(std::slice::from_raw_parts(converted, tight.size()));
             allocator.dealloc(readback, padded);
             allocator.dealloc(converted, tight);
         }
