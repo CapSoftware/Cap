@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { type ButtonHTMLAttributes, createElement } from "react";
+import { act, type ButtonHTMLAttributes, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { TrimmingTool } from "@/components/tools/TrimmingTool";
@@ -82,6 +82,7 @@ beforeEach(() => {
 	root.render(createElement(TrimmingTool));
 });
 afterEach(() => {
+	vi.useRealTimers();
 	root.unmount();
 	container.remove();
 	URL.createObjectURL = originalCreate;
@@ -94,7 +95,7 @@ const button = (label: string) =>
 	Array.from(container.querySelectorAll("button")).find(
 		(element) => element.textContent === label,
 	);
-async function startTrim() {
+async function startTrim(useFakeClock = false) {
 	await vi.waitFor(() =>
 		expect(container.querySelector("input[type=file]")).not.toBeNull(),
 	);
@@ -107,8 +108,14 @@ async function startTrim() {
 	await vi.waitFor(() => expect(video.getAttribute("src")).toBe("blob:input"));
 	video.dispatchEvent(new Event("loadedmetadata"));
 	await vi.waitFor(() => expect(button("Trim Video")).toBeDefined());
-	button("Trim Video")?.click();
-	await vi.waitFor(() => expect(Recorder.instances).toHaveLength(1));
+	if (useFakeClock) {
+		vi.useFakeTimers();
+		await act(async () => button("Trim Video")?.click());
+		expect(Recorder.instances).toHaveLength(1);
+	} else {
+		button("Trim Video")?.click();
+		await vi.waitFor(() => expect(Recorder.instances).toHaveLength(1));
+	}
 	return video;
 }
 it("discards a failed playback recording and allows retry", async () => {
@@ -196,4 +203,19 @@ it("cleans up if starting the recorder throws", async () => {
 	);
 	expect(stopTrack).toHaveBeenCalledOnce();
 	expect(madeUrls).not.toContain("blob:output");
+});
+it("discards a timed-out recording even if its stop callback arrives late", async () => {
+	await startTrim(true);
+	const recorder = Recorder.instances[0];
+	if (!recorder) throw new Error("Missing recorder");
+	const lateStop = recorder.onstop;
+	await act(async () => {
+		await vi.advanceTimersByTimeAsync(16_000);
+		lateStop?.();
+	});
+	expect(container.textContent).toContain("Video processing timed out");
+	expect(recorder.state).toBe("inactive");
+	expect(stopTrack).toHaveBeenCalledOnce();
+	expect(madeUrls).not.toContain("blob:output");
+	expect(button("Download Trimmed Video")).toBeUndefined();
 });
