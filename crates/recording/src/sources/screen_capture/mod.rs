@@ -380,6 +380,8 @@ pub struct Config {
     crop_bounds: Option<CropBounds>,
     fps: u32,
     show_cursor: bool,
+    #[cfg(windows)]
+    window: Option<WindowId>,
     #[cfg(target_os = "linux")]
     linux_source: LinuxCaptureSource,
 }
@@ -473,6 +475,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureConfig<TCaptureFormat> {
         max_capture_size: Option<(u32, u32)>,
         start_time: SystemTime,
         system_audio: bool,
+        #[cfg(windows)] window: Option<WindowId>,
         #[cfg(target_os = "linux")] linux_source: LinuxCaptureSource,
         #[cfg(windows)] d3d_device: ::windows::Win32::Graphics::Direct3D11::ID3D11Device,
         #[cfg(target_os = "macos")] shareable_content: SendableShareableContent,
@@ -497,7 +500,10 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureConfig<TCaptureFormat> {
 
             #[cfg(target_os = "windows")]
             {
-                crop_bounds.map(|b| b.size().map(|v| (v / 2.0).floor() * 2.0))
+                window
+                    .as_ref()
+                    .and_then(window_capture_size)
+                    .or_else(|| crop_bounds.map(|b| b.size().map(|v| (v / 2.0).floor() * 2.0)))
             }
 
             #[cfg(target_os = "linux")]
@@ -533,6 +539,8 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureConfig<TCaptureFormat> {
                 crop_bounds,
                 fps,
                 show_cursor,
+                #[cfg(windows)]
+                window,
                 #[cfg(target_os = "linux")]
                 linux_source,
             },
