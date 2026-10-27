@@ -349,6 +349,7 @@ mod tests {
         include_str!("ui/selection_header.rs"),
         include_str!("ui/radio_cards.rs"),
         include_str!("ui/windows_caption.rs"),
+        include_str!("ui/hint.rs"),
         // The onboarding window's welcome cards and permissions surface; the
         // per-permission row glyphs are named on `OSPermission::icon`.
         include_str!("onboarding_window.rs"),
