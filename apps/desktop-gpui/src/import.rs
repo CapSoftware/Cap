@@ -972,7 +972,8 @@ fn transcode_video(
         let stream = input
             .stream(video_stream_index)
             .ok_or("No video stream found in file")?;
-        h264_stream_copy_eligible(source_path, &stream, fps).then(|| stream.parameters())
+        h264_stream_copy_eligible(source_path, &stream, fps, project_path, cancelled)
+            .then(|| stream.parameters())
     };
 
     let mut video_decoder = avcodec::Context::from_parameters(
@@ -1116,6 +1117,9 @@ fn transcode_video(
         if stream_index == video_stream_index {
             let video_encoder = match &mut video_output {
                 ImportVideoOutput::Copy(copy) => {
+                    if strict {
+                        validate_copied_video(&mut video_decoder, Some(&packet), &mut video_frame)?;
+                    }
                     copy.write(&mut packet, &mut output)?;
                     frames_processed += 1;
                     report_import_progress(
@@ -1183,6 +1187,9 @@ fn transcode_video(
     }
 
     check_editor_import_cancelled(project_path, cancelled)?;
+    if strict && matches!(video_output, ImportVideoOutput::Copy(_)) {
+        validate_copied_video(&mut video_decoder, None, &mut video_frame)?;
+    }
     if let ImportVideoOutput::Encode(video_encoder) = &mut video_output {
         video_decoder
             .send_eof()
@@ -1614,6 +1621,26 @@ fn report_import_progress(
     Ok(())
 }
 
+// Strict (editor) imports reject damaged video that the container doesn't flag;
+// copying skips the encoder, so the packets are still decoded to catch it.
+fn validate_copied_video(
+    decoder: &mut ffmpeg::codec::decoder::Video,
+    packet: Option<&ffmpeg::Packet>,
+    frame: &mut ffmpeg::frame::Video,
+) -> Result<(), String> {
+    match packet {
+        Some(packet) => decoder.send_packet(packet),
+        None => decoder.send_eof(),
+    }
+    .map_err(|e| format!("Transcoding failed: {e}"))?;
+    while receive_import_output(decoder.receive_frame(frame), true, "Video decode")? {
+        if frame.is_corrupt() {
+            return Err("Imported video contains a corrupt frame".to_string());
+        }
+    }
+    Ok(())
+}
+
 enum ImportVideoOutput {
     Encode(H264Output),
     Copy(CopiedH264),
@@ -1621,13 +1648,16 @@ enum ImportVideoOutput {
 
 /// Whether the source's H264 stream can go into the project as-is, giving the
 /// editor the same kind of stream the transcode would: 8-bit 4:2:0, even
-/// dimensions, constant frame rate, no B-frames or rotation, BT.709 (or
-/// untagged) colour, and a keyframe at least every `KEYFRAME_INTERVAL_SECS`
-/// so seeking stays as cheap as in an encoded import.
+/// dimensions, constant frame rate, no B-frames or rotation, BT.709 colour,
+/// and a keyframe at least every `KEYFRAME_INTERVAL_SECS` so seeking stays as
+/// cheap as in an encoded import. Untagged sources are re-encoded: the editor
+/// reads an unspecified matrix as BT.601, while the encode tags BT.709.
 fn h264_stream_copy_eligible(
     source_path: &Path,
     stream: &ffmpeg::format::stream::Stream,
     fps: u32,
+    project_path: &Path,
+    cancelled: Option<&AtomicBool>,
 ) -> bool {
     let parameters = stream.parameters();
     if parameters.id() != avcodec::Id::H264 {
@@ -1652,17 +1682,6 @@ fn h264_stream_copy_eligible(
             }),
         )
     };
-    let bt709_or_untagged = |primaries, space| {
-        matches!(
-            primaries,
-            ffmpeg::ffi::AVColorPrimaries::AVCOL_PRI_BT709
-                | ffmpeg::ffi::AVColorPrimaries::AVCOL_PRI_UNSPECIFIED
-        ) && matches!(
-            space,
-            ffmpeg::ffi::AVColorSpace::AVCOL_SPC_BT709
-                | ffmpeg::ffi::AVColorSpace::AVCOL_SPC_UNSPECIFIED
-        )
-    };
     let average_rate = stream.avg_frame_rate();
     let base_rate = stream.rate();
     format == ffmpeg::ffi::AVPixelFormat::AV_PIX_FMT_YUV420P as i32
@@ -1672,7 +1691,8 @@ fn h264_stream_copy_eligible(
         && height % 2 == 0
         && video_delay == 0
         && !rotated
-        && bt709_or_untagged(primaries, space)
+        && primaries == ffmpeg::ffi::AVColorPrimaries::AVCOL_PRI_BT709
+        && space == ffmpeg::ffi::AVColorSpace::AVCOL_SPC_BT709
         && average_rate.denominator() > 0
         && average_rate == base_rate
         && keyframes_within(
@@ -1680,6 +1700,8 @@ fn h264_stream_copy_eligible(
             stream.index(),
             stream.time_base(),
             f64::from(KEYFRAME_INTERVAL_SECS) + 1.0 / f64::from(fps.max(1)),
+            project_path,
+            cancelled,
         )
 }
 
@@ -1688,8 +1710,16 @@ fn keyframes_within(
     stream_index: usize,
     time_base: ffmpeg::Rational,
     max_gap_secs: f64,
+    project_path: &Path,
+    cancelled: Option<&AtomicBool>,
 ) -> bool {
-    let Ok(mut input) = avformat::input(source_path) else {
+    let input = match cancelled {
+        Some(cancelled) => {
+            avformat::input_with_interrupt(source_path, || cancelled.load(Ordering::Acquire))
+        }
+        None => avformat::input(source_path),
+    };
+    let Ok(mut input) = input else {
         return false;
     };
     let seconds = |ticks: i64| {
@@ -1698,6 +1728,9 @@ fn keyframes_within(
     let mut last_keyframe = None;
     let mut end = None;
     for (stream, packet) in input.packets() {
+        if check_editor_import_cancelled(project_path, cancelled).is_err() {
+            return false;
+        }
         if stream.index() != stream_index {
             continue;
         }
@@ -1722,8 +1755,6 @@ fn keyframes_within(
     )
 }
 
-/// The source H264 stream muxed unchanged, with timestamps moved to start at
-/// zero like an encoded import's.
 struct CopiedH264 {
     stream_index: usize,
     input_time_base: ffmpeg::Rational,
@@ -2442,7 +2473,7 @@ mod tests {
     fn stream_copy_eligible(path: &Path, fps: u32) -> bool {
         let input = avformat::input(path).unwrap();
         let stream = input.streams().best(ffmpeg::media::Type::Video).unwrap();
-        h264_stream_copy_eligible(path, &stream, fps)
+        h264_stream_copy_eligible(path, &stream, fps, path, None)
     }
 
     fn video_packet_data(path: &Path) -> Vec<Vec<u8>> {
@@ -2459,57 +2490,115 @@ mod tests {
             .collect()
     }
 
+    /// A 64x64, 25 fps BT.709 H264 file written with libx264 directly, so the
+    /// copy-path tests see the same source on every platform (macOS imports
+    /// encode with VideoToolbox, whose output these tests must not depend on).
+    fn write_h264_source(path: &Path, frames: i64, gop: u32, b_frames: u32) {
+        ffmpeg::init().unwrap();
+        let codec = ffmpeg::encoder::find_by_name("libx264").unwrap();
+        let mut output = avformat::output(path).unwrap();
+        let mut context = avcodec::Context::new_with_codec(codec)
+            .encoder()
+            .video()
+            .unwrap();
+        context.set_width(64);
+        context.set_height(64);
+        context.set_format(avformat::Pixel::YUV420P);
+        context.set_time_base((1, 25));
+        context.set_frame_rate(Some((25, 1)));
+        context.set_colorspace(ffmpeg::color::Space::BT709);
+        context.set_color_range(ffmpeg::color::Range::MPEG);
+        unsafe {
+            (*context.as_mut_ptr()).color_primaries =
+                ffmpeg::ffi::AVColorPrimaries::AVCOL_PRI_BT709;
+            (*context.as_mut_ptr()).color_trc =
+                ffmpeg::ffi::AVColorTransferCharacteristic::AVCOL_TRC_BT709;
+        }
+        let mut options = ffmpeg::Dictionary::new();
+        options.set("preset", "ultrafast");
+        options.set("g", &gop.to_string());
+        options.set("keyint_min", &gop.to_string());
+        options.set("bf", &b_frames.to_string());
+        let mut encoder = context.open_as_with(codec, options).unwrap();
+        let mut stream = output.add_stream(codec).unwrap();
+        stream.set_time_base((1, 25));
+        stream.set_parameters(&encoder);
+        let index = stream.index();
+        output.write_header().unwrap();
+        let stream_time_base = output.stream(index).unwrap().time_base();
+
+        let mut packet = ffmpeg::Packet::empty();
+        let mut drain = |encoder: &mut ffmpeg::codec::encoder::Video,
+                         output: &mut avformat::context::Output| {
+            while encoder.receive_packet(&mut packet).is_ok() {
+                packet.set_stream(index);
+                packet.set_duration(1);
+                packet.rescale_ts((1, 25), stream_time_base);
+                packet.write_interleaved(output).unwrap();
+            }
+        };
+        for index in 0..frames {
+            let mut frame = ffmpeg::frame::Video::new(avformat::Pixel::YUV420P, 64, 64);
+            frame.data_mut(0).fill((index * 5 % 220) as u8 + 16);
+            frame.data_mut(1).fill(128);
+            frame.data_mut(2).fill(128);
+            frame.set_pts(Some(index));
+            encoder.send_frame(&frame).unwrap();
+            drain(&mut encoder, &mut output);
+        }
+        encoder.send_eof().unwrap();
+        drain(&mut encoder, &mut output);
+        output.write_trailer().unwrap();
+    }
+
     #[test]
     fn a_qualifying_h264_source_is_copied_without_re_encoding() {
-        ffmpeg::init().unwrap();
         let root = temp_dir("stream-copy");
         let source = root.join("source.mp4");
-        std::fs::write(
-            &source,
-            include_bytes!("../../media-server/src/__tests__/fixtures/test-with-audio.mp4"),
-        )
-        .unwrap();
+        write_h264_source(&source, 50, 25, 0);
         std::fs::write(root.join("recording-meta.json"), b"{}").unwrap();
-        let encoded = root.join("encoded.mp4");
-        transcode_video(&source, &encoded, None, &root, &|_| {}, None).unwrap();
-
-        // The fixture has B-frames, so it was re-encoded; the import's own
-        // output is exactly the kind of stream the copy path accepts.
-        assert!(!stream_copy_eligible(&source, 25));
-        assert!(stream_copy_eligible(&encoded, 25));
+        assert!(stream_copy_eligible(&source, 25));
 
         let copied = root.join("display.mp4");
-        let (fps, _) = transcode_video(&encoded, &copied, None, &root, &|_| {}, None).unwrap();
+        let (fps, _) = transcode_video(&source, &copied, None, &root, &|_| {}, None).unwrap();
 
         assert_eq!(fps, 25);
-        assert_eq!(video_packet_data(&copied), video_packet_data(&encoded));
-        assert_eq!(decoded_video_frames(&copied), 25);
+        assert_eq!(video_packet_data(&copied), video_packet_data(&source));
+        assert_eq!(decoded_video_frames(&copied), 50);
+
+        let strict_copy = root.join("strict.mp4");
+        let not_cancelled = AtomicBool::new(false);
+        transcode_video(
+            &source,
+            &strict_copy,
+            None,
+            &root,
+            &|_| {},
+            Some(&not_cancelled),
+        )
+        .unwrap();
+        assert_eq!(video_packet_data(&strict_copy), video_packet_data(&source));
         let duration = media_duration(&copied).unwrap().as_secs_f64();
-        assert!((duration - 1.0).abs() < 0.01, "{duration}");
+        assert!((duration - 2.0).abs() < 0.01, "{duration}");
         std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
-    fn sources_with_sparse_keyframes_are_re_encoded() {
-        ffmpeg::init().unwrap();
-        let root = temp_dir("sparse-keyframes");
-        let source = root.join("source.mp4");
-        std::fs::write(
-            &source,
-            include_bytes!("../../media-server/src/__tests__/fixtures/test-with-audio.mp4"),
-        )
-        .unwrap();
+    fn sources_with_b_frames_or_sparse_keyframes_are_re_encoded() {
+        let root = temp_dir("not-copied");
+        let b_frames = root.join("b-frames.mp4");
+        write_h264_source(&b_frames, 50, 25, 2);
+        let sparse = root.join("sparse.mp4");
+        write_h264_source(&sparse, 100, 100, 0);
         std::fs::write(root.join("recording-meta.json"), b"{}").unwrap();
-        let encoded = root.join("encoded.mp4");
-        transcode_video(&source, &encoded, None, &root, &|_| {}, None).unwrap();
 
-        let input = avformat::input(&encoded).unwrap();
-        let stream = input.streams().best(ffmpeg::media::Type::Video).unwrap();
-        let (index, time_base) = (stream.index(), stream.time_base());
-        drop(input);
+        assert!(!stream_copy_eligible(&b_frames, 25));
+        assert!(!stream_copy_eligible(&sparse, 25));
 
-        assert!(keyframes_within(&encoded, index, time_base, 1.1));
-        assert!(!keyframes_within(&encoded, index, time_base, 0.5));
+        let output = root.join("display.mp4");
+        transcode_video(&sparse, &output, None, &root, &|_| {}, None).unwrap();
+        assert_ne!(video_packet_data(&output), video_packet_data(&sparse));
+        assert_eq!(decoded_video_frames(&output), 100);
         std::fs::remove_dir_all(root).unwrap();
     }
 
