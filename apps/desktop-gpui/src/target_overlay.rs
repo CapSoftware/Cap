@@ -598,8 +598,6 @@ fn store_area_ratio(ratio: Option<(u32, u32)>) {
     });
 }
 
-/// One-click chips in the area toolbar; the rest of `AREA_RATIOS` sits
-/// behind its More button.
 const QUICK_AREA_RATIOS: [Option<(u32, u32)>; 5] = [
     None,
     Some((16, 9)),
@@ -633,8 +631,6 @@ fn area_fill(display: (f32, f32), ratio: Option<f32>) -> AreaRect {
     }
 }
 
-/// `from` moved `t` of the way to `to`, on a curve that starts fast and
-/// settles gently, so the reshape reads as one motion.
 fn area_between(from: AreaRect, to: AreaRect, t: f32) -> AreaRect {
     let t = 1. - (1. - t.clamp(0., 1.)).powi(3);
     let mix = |a: f32, b: f32| a + (b - a) * t;
@@ -2898,7 +2894,6 @@ impl OverlayWindow {
         }
     }
 
-    /// The selection as drawn this frame: mid-reshape, the way there.
     fn displayed_crop(&mut self, window: &Window) -> Option<AreaRect> {
         let crop = self.crop?;
         let Some((from, started)) = self.reshape else {
@@ -2913,7 +2908,6 @@ impl OverlayWindow {
         Some(area_between(from, crop, t))
     }
 
-    /// Move the selection to `to`, animating from wherever it is drawn now.
     fn reshape_area(&mut self, to: AreaRect, cx: &mut Context<Self>) {
         let from = match (self.crop, self.reshape) {
             (Some(crop), Some((from, started))) => area_between(
