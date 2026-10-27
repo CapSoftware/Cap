@@ -1045,6 +1045,12 @@ async fn run_cap_operation(
     deleting: bool,
     global_json: bool,
 ) -> Result<(), AgentApiError> {
+    if args.wait && (args.timeout == 0 || args.timeout > 86_400) {
+        return Err(AgentApiError::local(
+            "INVALID_REQUEST",
+            "--timeout must be between 1 and 86400 seconds",
+        ));
+    }
     let id = cap_id(&args.cap)?;
     confirmation::require(
         args.yes,
@@ -1841,6 +1847,73 @@ mod tests {
             )
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn cap_operations_validate_wait_timeouts_before_submitting() {
+        for deleting in [false, true] {
+            for (wait, timeout, expected_requests) in [
+                (true, 0, 0),
+                (true, 86_401, 0),
+                (true, 86_400, 2),
+                (false, 0, 1),
+            ] {
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let address = listener.local_addr().unwrap();
+                let (requests, mut received) = tokio::sync::mpsc::unbounded_channel();
+                let server = tokio::spawn(async move {
+                    loop {
+                        let (mut stream, _) = listener.accept().await.unwrap();
+                        let request = read_request(&mut stream).await;
+                        let state = if request.starts_with("GET ") {
+                            "succeeded"
+                        } else {
+                            "queued"
+                        };
+                        requests.send(request).unwrap();
+                        mock_response(
+                            &mut stream,
+                            "200 OK",
+                            &json!({ "id": "op_test", "state": state }).to_string(),
+                        )
+                        .await;
+                    }
+                });
+                let client =
+                    AgentClient::new(format!("http://{address}"), "token".to_string()).unwrap();
+                let result = run_cap_operation(
+                    &client,
+                    CapOperationArgs {
+                        cap: "cap_test".to_string(),
+                        wait,
+                        timeout,
+                        yes: true,
+                        format: OutputFormat::Json,
+                    },
+                    deleting,
+                    true,
+                )
+                .await;
+                server.abort();
+                assert!(server.await.unwrap_err().is_cancelled());
+
+                if expected_requests == 0 {
+                    let error = result.unwrap_err();
+                    assert_eq!(error.code, "INVALID_REQUEST");
+                    assert_eq!(
+                        error.message,
+                        "--timeout must be between 1 and 86400 seconds"
+                    );
+                } else {
+                    result.unwrap();
+                }
+                let sent = std::iter::from_fn(|| received.try_recv().ok()).count();
+                assert_eq!(
+                    sent, expected_requests,
+                    "deleting={deleting}, timeout={timeout}, wait={wait}"
+                );
+            }
+        }
     }
 
     #[test]
