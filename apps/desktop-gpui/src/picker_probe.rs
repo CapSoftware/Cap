@@ -128,11 +128,25 @@ async fn probe_window_arrangement(
     if !crate::foreign_window::can_arrange() {
         return serde_json::json!({ "skipped": "cannot arrange other apps' windows here" });
     }
+    // The workflow opens one of these; pick it outright rather than relying
+    // on where the runner left the cursor.
+    let test_window = scap_targets::Window::list().into_iter().find(|window| {
+        window.owner_name().is_some_and(|owner| {
+            let owner = owner.to_lowercase();
+            ["textedit", "notepad", "xterm"]
+                .iter()
+                .any(|name| owner.contains(name))
+        })
+    });
     let picked = cx.update(|cx| {
-        crate::target_overlay::TargetSelect::global(cx)
-            .read(cx)
-            .active_window()
-            .cloned()
+        let select = crate::target_overlay::TargetSelect::global(cx);
+        if let Some(window) = test_window
+            .as_ref()
+            .and_then(crate::target_overlay::HoveredWindow::from_window)
+        {
+            select.update(cx, |select, cx| select.set_pinned(window, cx));
+        }
+        select.read(cx).active_window().cloned()
     });
     let Some(picked) = picked else {
         return serde_json::json!({ "passed": false, "error": "no window to arrange" });

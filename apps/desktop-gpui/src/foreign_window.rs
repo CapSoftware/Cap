@@ -26,6 +26,39 @@ pub fn raise(id: &WindowId) -> bool {
     imp::raise(id)
 }
 
+type Job = Box<dyn FnOnce() + Send>;
+
+/// Run `job` after every job queued before it, on one worker thread. Moves
+/// and restores go through here so a cancel's restore can never land before
+/// a move the user started first.
+pub fn in_order<T: Send + 'static>(
+    job: impl FnOnce() -> T + Send + 'static,
+) -> impl std::future::Future<Output = Option<T>> {
+    static QUEUE: std::sync::OnceLock<flume::Sender<Job>> = std::sync::OnceLock::new();
+    let queue = QUEUE.get_or_init(|| {
+        let (sender, receiver) = flume::unbounded::<Job>();
+        let spawned = std::thread::Builder::new()
+            .name("cap-window-arrange".into())
+            .spawn(move || {
+                for job in receiver.iter() {
+                    job();
+                }
+            });
+        if let Err(error) = spawned {
+            tracing::error!(%error, "could not start the window arrange thread");
+        }
+        sender
+    });
+    let (done, result) = flume::bounded(1);
+    let queued = queue.send(Box::new(move || {
+        let _ = done.send(job());
+    }));
+    async move {
+        queued.ok()?;
+        result.recv_async().await.ok()
+    }
+}
+
 /// How a window sits beyond its bounds (maximized), where bounds alone
 /// cannot put it back.
 #[derive(Clone, Copy)]
@@ -371,5 +404,28 @@ mod imp {
             return false;
         };
         send(window, b"_NET_ACTIVE_WINDOW", [2, 0, 0, 0, 0]).is_ok()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn queued_jobs_run_in_the_order_they_were_queued() {
+        let order = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let slow = order.clone();
+        let first = super::in_order(move || {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            slow.lock().unwrap().push("move");
+        });
+        let fast = order.clone();
+        let second = super::in_order(move || fast.lock().unwrap().push("restore"));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            assert_eq!(second.await, Some(()));
+            assert_eq!(first.await, Some(()));
+        });
+        assert_eq!(*order.lock().unwrap(), ["move", "restore"]);
     }
 }
