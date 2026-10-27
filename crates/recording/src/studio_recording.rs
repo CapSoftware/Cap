@@ -3426,6 +3426,8 @@ async fn create_segment_pipeline(
                 .ok_or_else(|| anyhow!("Missing shareable content"))?,
             #[cfg(target_os = "macos")]
             base_inputs.excluded_windows.clone(),
+            #[cfg(target_os = "macos")]
+            capture_target.window(),
         )
         .await
         .context("screen capture init")?;

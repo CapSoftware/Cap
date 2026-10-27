@@ -384,6 +384,8 @@ pub struct Config {
     window: Option<WindowId>,
     #[cfg(target_os = "linux")]
     linux_source: LinuxCaptureSource,
+    #[cfg(target_os = "macos")]
+    window: Option<WindowId>,
 }
 
 #[cfg(target_os = "macos")]
@@ -480,6 +482,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureConfig<TCaptureFormat> {
         #[cfg(windows)] d3d_device: ::windows::Win32::Graphics::Direct3D11::ID3D11Device,
         #[cfg(target_os = "macos")] shareable_content: SendableShareableContent,
         #[cfg(target_os = "macos")] excluded_windows: Vec<WindowId>,
+        #[cfg(target_os = "macos")] window: Option<WindowId>,
     ) -> Result<Self, ScreenCaptureInitError> {
         cap_fail::fail!("ScreenCaptureSource::init");
 
@@ -543,6 +546,8 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureConfig<TCaptureFormat> {
                 window,
                 #[cfg(target_os = "linux")]
                 linux_source,
+                #[cfg(target_os = "macos")]
+                window,
             },
             video_info: VideoInfo::from_raw_ffmpeg(
                 TCaptureFormat::pixel_format(),
