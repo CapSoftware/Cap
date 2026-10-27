@@ -10,6 +10,7 @@ import {
 	gpuiPlatformConfig,
 	mainBinaryName,
 	parseOptions,
+	profileArguments,
 	targetPlatform,
 } from "./bundle-gpui.mjs";
 
@@ -198,6 +199,27 @@ test("signing builds can stop before bundling and rebundle without rebuilding", 
 		profile: "release",
 		bundleArgs: ["--bundles", "nsis"],
 	});
+});
+
+test("the debug profile reaches Tauri on every platform, not only macOS", () => {
+	assert.deepEqual(profileArguments("debug"), ["--debug"]);
+	assert.deepEqual(profileArguments("release"), []);
+	assert.deepEqual(
+		bundleArguments("x86_64-pc-windows-msvc", [
+			"--bundles",
+			"nsis",
+			...profileArguments("debug"),
+		]),
+		[
+			"tauri",
+			"bundle",
+			"--target",
+			"x86_64-pc-windows-msvc",
+			"--bundles",
+			"nsis",
+			"--debug",
+		],
+	);
 });
 
 test("a local debug bundle is opt-in and never reaches the release path", () => {
