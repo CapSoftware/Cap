@@ -89,9 +89,11 @@ jobs:
           cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --locked \
             --target ${{ matrix.settings.target }} --bin cap-gpui
           if [[ "$RUNNER_OS" == "macOS" ]]; then
-            frameworks="$GITHUB_WORKSPACE/apps/desktop-gpui/target/${{ matrix.settings.target }}/debug/Frameworks"
-            mkdir -p "$frameworks"
-            ln -sfn "$GITHUB_WORKSPACE/target/Frameworks/Spacedrive.framework" "$frameworks/Spacedrive.framework"
+            for frameworks in "$GITHUB_WORKSPACE/apps/desktop-gpui/target/${{ matrix.settings.target }}/debug/Frameworks" \
+              "$GITHUB_WORKSPACE/apps/desktop-gpui/target/${{ matrix.settings.target }}/Frameworks"; do
+              mkdir -p "$frameworks"
+              ln -sfn "$GITHUB_WORKSPACE/target/Frameworks/Spacedrive.framework" "$frameworks/Spacedrive.framework"
+            done
           fi
 
       - name: Picker probe
