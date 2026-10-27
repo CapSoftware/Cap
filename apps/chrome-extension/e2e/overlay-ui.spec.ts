@@ -198,8 +198,20 @@ const createMockCapServer = async (
 	};
 };
 
-const launchExtensionContext = async () => {
+// answerCapturePicker: false leaves the screen-share picker open and
+// unanswered, like one that opened behind another window.
+const launchExtensionContext = async (
+	options: { answerCapturePicker?: boolean } = {},
+) => {
 	const userDataDir = await mkdtemp(path.join(tmpdir(), "cap-close-e2e-"));
+	const pickerArgs =
+		options.answerCapturePicker === false
+			? []
+			: [
+					"--auto-select-tab-capture-source-by-title=Cap Close UI Target",
+					"--auto-select-desktop-capture-source=Cap Close UI Target",
+					"--use-fake-ui-for-media-stream",
+				];
 	const context = await chromium.launchPersistentContext(userDataDir, {
 		channel: "chromium",
 		headless: true,
@@ -207,12 +219,10 @@ const launchExtensionContext = async () => {
 			`--disable-extensions-except=${extensionPath}`,
 			`--load-extension=${extensionPath}`,
 			"--allow-http-screen-capture",
-			"--auto-select-tab-capture-source-by-title=Cap Close UI Target",
-			"--auto-select-desktop-capture-source=Cap Close UI Target",
 			"--enable-usermedia-screen-capturing",
 			"--autoplay-policy=no-user-gesture-required",
 			"--use-fake-device-for-media-stream",
-			"--use-fake-ui-for-media-stream",
+			...pickerArgs,
 		],
 	});
 	const cleanup = async () => {
@@ -235,7 +245,11 @@ const getServiceWorker = async (context: BrowserContext) => {
 const configureExtension = async (
 	worker: Awaited<ReturnType<typeof getServiceWorker>>,
 	apiBaseUrl: string,
-	options: { countdownEnabled?: boolean; webcamEnabled?: boolean } = {},
+	options: {
+		countdownEnabled?: boolean;
+		webcamEnabled?: boolean;
+		microphoneWarningEnabled?: boolean;
+	} = {},
 ) => {
 	await worker.evaluate(
 		async ({ authKey, bootstrapKey, settingsKey, apiBaseUrl, options }) => {
@@ -278,7 +292,9 @@ const configureExtension = async (
 								enabled: options.countdownEnabled ?? false,
 								seconds: 3,
 							},
-							microphoneWarning: { enabled: false },
+							microphoneWarning: {
+								enabled: options.microphoneWarningEnabled ?? false,
+							},
 						},
 					},
 					() => resolve(),
@@ -1144,6 +1160,133 @@ test("recording controls stay stable and the camera resizes directly", async () 
 				timeout: 5_000,
 			})
 			.toBe(true);
+	} finally {
+		await extension.cleanup();
+		await mockServer.close();
+	}
+});
+
+const clickClosedShadowElement = async (
+	page: Page,
+	session: CDPSession,
+	classToken: string,
+) => {
+	const box = await getClosedShadowElementBox(session, "class", classToken);
+	if (!box) throw new Error(`.${classToken} is not on the page`);
+	await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+};
+
+// Regression: the start used to pick "the active tab of the last-focused
+// window", so with another window focused the no-mic warning opened there,
+// out of sight, and the start hung on it with the bar stuck on Ready.
+test("the mic warning opens in the tab where Start was clicked", async () => {
+	test.setTimeout(120_000);
+	const mockServer = await createMockCapServer();
+	const extension = await launchExtensionContext();
+
+	try {
+		const worker = await getServiceWorker(extension.context);
+		await configureExtension(worker, mockServer.origin, {
+			webcamEnabled: false,
+			microphoneWarningEnabled: true,
+		});
+		const messengerPage = await extension.context.newPage();
+		await messengerPage.goto(
+			`chrome-extension://${new URL(worker.url()).host}/popup.html`,
+		);
+		const targetPage = await extension.context.newPage();
+		await targetPage.goto(`${mockServer.origin}/capture.html`);
+		await targetPage.bringToFront();
+		await sendServiceWorkerMessage(messengerPage, {
+			target: "service-worker",
+			type: "open-recorder-panel",
+		});
+		const devtools = await extension.context.newCDPSession(targetPage);
+		await expect
+			.poll(() => getClosedShadowElementBox(devtools, "class", "is-start"))
+			.not.toBeNull();
+
+		await worker.evaluate(async (url) => {
+			const chromeApi = (globalThis as ChromeGlobal).chrome as unknown as {
+				windows: {
+					create(options: object): Promise<{ id: number }>;
+					update(id: number, options: object): Promise<unknown>;
+				};
+			};
+			const created = await chromeApi.windows.create({ url, focused: true });
+			await chromeApi.windows.update(created.id, { focused: true });
+		}, `${mockServer.origin}/capture.html?other-window`);
+
+		await clickClosedShadowElement(targetPage, devtools, "is-start");
+		await expect
+			.poll(() =>
+				getClosedShadowElementBox(
+					devtools,
+					"class",
+					"cap-extension-confirm-card",
+				),
+			)
+			.not.toBeNull();
+
+		await clickClosedShadowElement(targetPage, devtools, "is-primary");
+		await expect
+			.poll(() => readSessionRecordingPhase(worker), { timeout: 20_000 })
+			.toBe("recording");
+		await sendServiceWorkerMessage(messengerPage, {
+			target: "service-worker",
+			type: "stop-recording",
+		});
+	} finally {
+		await extension.cleanup();
+		await mockServer.close();
+	}
+});
+
+// Regression: a start waiting on a capture picker nobody answers used to sit
+// in "creating" forever, with nothing on screen saying so and every later
+// Start click joining the same stuck attempt.
+test("cancel on the starting bar abandons a start stuck on the picker", async () => {
+	test.setTimeout(120_000);
+	const mockServer = await createMockCapServer();
+	const extension = await launchExtensionContext({
+		answerCapturePicker: false,
+	});
+
+	try {
+		const worker = await getServiceWorker(extension.context);
+		await configureExtension(worker, mockServer.origin, {
+			webcamEnabled: false,
+		});
+		const messengerPage = await extension.context.newPage();
+		await messengerPage.goto(
+			`chrome-extension://${new URL(worker.url()).host}/popup.html`,
+		);
+		const targetPage = await extension.context.newPage();
+		await targetPage.goto(`${mockServer.origin}/capture.html`);
+		await targetPage.bringToFront();
+		const devtools = await extension.context.newCDPSession(targetPage);
+
+		for (let attempt = 1; attempt <= 2; attempt += 1) {
+			await sendServiceWorkerMessage(messengerPage, {
+				target: "service-worker",
+				type: "open-recorder-panel",
+			});
+			await expect
+				.poll(() => getClosedShadowElementBox(devtools, "class", "is-start"))
+				.not.toBeNull();
+			await clickClosedShadowElement(targetPage, devtools, "is-start");
+			await expect
+				.poll(() => readSessionRecordingPhase(worker))
+				.toBe("creating");
+			await expect
+				.poll(() => getClosedShadowElementBox(devtools, "class", "is-cancel"))
+				.not.toBeNull();
+
+			await clickClosedShadowElement(targetPage, devtools, "is-cancel");
+			await expect
+				.poll(() => readSessionRecordingPhase(worker), { timeout: 10_000 })
+				.toBe("idle");
+		}
 	} finally {
 		await extension.cleanup();
 		await mockServer.close();

@@ -240,6 +240,14 @@ const ensureOffscreenDocument = async () => {
 	await offscreenDocumentCreation;
 };
 
+const closeOffscreenDocument = () =>
+	new Promise<void>((resolve) => {
+		chrome.offscreen.closeDocument(() => {
+			void chrome.runtime.lastError;
+			resolve();
+		});
+	});
+
 const wait = (durationMs: number) =>
 	new Promise<void>((resolve) => {
 		globalThis.setTimeout(resolve, durationMs);
@@ -1180,7 +1188,87 @@ const resolveMicWarning = async (
 	return null;
 };
 
-const performRecordingStart = async (mode: RecordingMode) => {
+// How long a start may sit in "creating" before it is abandoned. Nearly all
+// of that time is the capture picker waiting on the user; one that was never
+// answered (opened behind another window, on another Space) would otherwise
+// hold the start, and every later Start click that joins it, forever.
+const RECORDING_START_TIMEOUT_MS = 2 * 60 * 1000;
+const RECORDING_START_CANCEL_GRACE_MS = 2_000;
+const RECORDING_START_TIMEOUT_MESSAGE = "Nothing was chosen to share.";
+
+let abandonPendingRecordingStart:
+	| ((reason: "canceled" | "timeout") => void)
+	| null = null;
+
+// Asks the recorder to cancel, which unwinds a start that is past the picker
+// (server round-trips, countdown). A getDisplayMedia call still waiting on the
+// capture picker cannot be aborted from script, so if the start has not
+// settled after a grace period, close the offscreen document: that destroys
+// the pending request together with its picker, and the next start gets a
+// fresh recorder.
+const abandonOffscreenStart = async (offscreenStart: Promise<unknown>) => {
+	await sendOffscreen(
+		{ target: "offscreen", type: "stop-recording" },
+		{ createIfMissing: false },
+	).catch(() => undefined);
+	const settled = await Promise.race([
+		offscreenStart.then(
+			() => true,
+			() => true,
+		),
+		wait(RECORDING_START_CANCEL_GRACE_MS).then(() => false),
+	]);
+	if (!settled) await closeOffscreenDocument();
+};
+
+// Resolves with the recorder's start response, unless the start is abandoned
+// first by the timeout or a cancel from the floating bar. Once abandoned, the
+// recorder's own (late) reply is ignored: closing its document rejects it with
+// a port error that would otherwise surface as a bogus failure.
+const raceRecordingStart = (offscreenStart: Promise<OffscreenResponse>) =>
+	new Promise<OffscreenResponse>((resolve, reject) => {
+		let abandoned = false;
+		const release = () => {
+			globalThis.clearTimeout(timer);
+			if (abandonPendingRecordingStart === abandon) {
+				abandonPendingRecordingStart = null;
+			}
+		};
+		const abandon = (reason: "canceled" | "timeout") => {
+			if (abandoned) return;
+			abandoned = true;
+			release();
+			void abandonOffscreenStart(offscreenStart).finally(() =>
+				resolve(
+					reason === "canceled"
+						? { ok: false, canceled: true, error: "Recording canceled" }
+						: { ok: false, error: RECORDING_START_TIMEOUT_MESSAGE },
+				),
+			);
+		};
+		const timer = globalThis.setTimeout(
+			() => abandon("timeout"),
+			RECORDING_START_TIMEOUT_MS,
+		);
+		abandonPendingRecordingStart = abandon;
+		offscreenStart.then(
+			(response) => {
+				if (abandoned) return;
+				release();
+				resolve(response);
+			},
+			(error: unknown) => {
+				if (abandoned) return;
+				release();
+				reject(error);
+			},
+		);
+	});
+
+const performRecordingStart = async (
+	mode: RecordingMode,
+	sourceTab?: chrome.tabs.Tab,
+) => {
 	const { settings, auth, bootstrap } = await requireSignedInState();
 	externalCaptureAutoPipPending = false;
 	const recordingSettings =
@@ -1196,7 +1284,15 @@ const performRecordingStart = async (mode: RecordingMode) => {
 	if (isWebcamPreviewEnabled(recordingSettings)) {
 		await saveWebcamPreviewDismissed(false);
 	}
-	const tab = await getActiveTab();
+	// A start from the embedded panel or the floating bar names the tab it was
+	// clicked in, which is the page the user is looking at. getActiveTab
+	// resolves against the last-focused window instead, which can be a
+	// different window entirely (a second window, DevTools, a picture-in-
+	// picture window); the mic warning then opens there, out of sight, while
+	// the start waits on it. The standalone popup window's own tab is an
+	// extension page, so it still falls back to the active tab.
+	const tab =
+		sourceTab && canInjectIntoTab(sourceTab) ? sourceTab : await getActiveTab();
 	const tabId = tab?.id;
 
 	// Shared mic gate: every start path (panel button and the floating bar)
@@ -1228,16 +1324,18 @@ const performRecordingStart = async (mode: RecordingMode) => {
 	// no blanket re-injection is needed here; sendOverlay still injects
 	// per-tab on demand and the bootstrap lazy-loads the overlay UI.
 	try {
-		return await sendOffscreen({
-			target: "offscreen",
-			type: "start-recording",
-			mode,
-			settings: recordingSettings,
-			auth,
-			bootstrap,
-			tabId,
-			tabStreamId,
-		});
+		return await raceRecordingStart(
+			sendOffscreen({
+				target: "offscreen",
+				type: "start-recording",
+				mode,
+				settings: recordingSettings,
+				auth,
+				bootstrap,
+				tabId,
+				tabStreamId,
+			}),
+		);
 	} catch (error) {
 		// The recorder panel closes as soon as the status leaves "idle", so a
 		// silent reset would leave the user with no feedback at all. Broadcast
@@ -1251,9 +1349,9 @@ const performRecordingStart = async (mode: RecordingMode) => {
 	}
 };
 
-const startRecording = (mode: RecordingMode) => {
+const startRecording = (mode: RecordingMode, sourceTab?: chrome.tabs.Tab) => {
 	if (recordingStartInFlight) return recordingStartInFlight;
-	const pending = performRecordingStart(mode);
+	const pending = performRecordingStart(mode, sourceTab);
 	const tracked = pending.finally(() => {
 		if (recordingStartInFlight === tracked) {
 			recordingStartInFlight = null;
@@ -1567,7 +1665,7 @@ const handleRequest = async (
 	}
 
 	if (message.type === "start-recording") {
-		const response = await startRecording(message.mode);
+		const response = await startRecording(message.mode, sender.tab);
 		if (response.ok && response.status) {
 			setRecordingStatusAndBroadcast(response.status);
 			if (isRecordingPreviewStatus(response.status)) {
@@ -1592,6 +1690,11 @@ const handleRequest = async (
 		return response.ok
 			? { ok: true, status: response.status }
 			: { ok: false, error: response.error, canceled: response.canceled };
+	}
+
+	if (message.type === "cancel-recording-start") {
+		abandonPendingRecordingStart?.("canceled");
+		return { ok: true, status: recordingStatus };
 	}
 
 	if (message.type === "stop-recording") {
