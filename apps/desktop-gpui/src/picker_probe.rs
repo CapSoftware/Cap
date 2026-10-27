@@ -91,7 +91,6 @@ struct StackEntry {
     level: Option<i64>,
 }
 
-/// Save what the primary display shows next to the report, for review.
 async fn screenshot(output: &std::ffi::OsStr, label: &str, cx: &mut AsyncApp) {
     let Some(directory) = std::path::Path::new(output).parent() else {
         return;

@@ -538,10 +538,8 @@ fn more_area_ratios() -> Vec<(u32, u32)> {
         .collect()
 }
 
-/// How long the selection takes to settle into a new ratio, fill or reset.
 const AREA_RESHAPE: Duration = Duration::from_millis(240);
 
-/// The whole display, or the largest centred area of `ratio` inside it.
 fn area_fill(display: (f32, f32), ratio: Option<f32>) -> AreaRect {
     let (width, height) = match ratio {
         Some(ratio) if display.0 / display.1 > ratio => (display.1 * ratio, display.1),
@@ -2961,7 +2959,15 @@ impl OverlayWindow {
         }
         let point = (f32::from(position.x), f32::from(position.y));
         self.snap_guides.clear();
-        self.reshape = None;
+        // Mid-reshape, `crop` is where the selection is going, not where it
+        // is drawn; a grab has to land on what the user sees.
+        if let (Some(crop), Some((from, started))) = (self.crop, self.reshape.take()) {
+            self.crop = Some(area_between(
+                from,
+                crop,
+                started.elapsed().as_secs_f32() / AREA_RESHAPE.as_secs_f32(),
+            ));
+        }
         self.aspect_menu = None;
 
         self.drag = match self.area_zone_at(point) {
