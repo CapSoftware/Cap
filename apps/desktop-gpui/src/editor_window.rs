@@ -13606,7 +13606,8 @@ mod tests {
                 editor.update(cx, |editor, cx| {
                     let config: ProjectConfiguration = serde_json::from_value(serde_json::json!({
                         "timeline": {
-                            "segments": [{ "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 30.0 }]
+                            "segments": [{ "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 30.0 }],
+                            "zoomSegments": []
                         }
                     }))
                     .unwrap();
