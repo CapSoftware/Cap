@@ -232,50 +232,18 @@ fn shadow(color: Hsla, y: f32, blur: f32, spread: f32, inset: bool) -> gpui::Box
     }
 }
 
-/// Drawn in gpui rather than with an `NSGlassEffectView` per button, which
-/// would have to track gpui's layout under the Metal layer. Two shadows, one
-/// unblurred, keep it cheap on a window that repaints with the mic meter.
+/// A control on the main window's glass, as macOS draws one inside a glass
+/// window (`scripts/glass-reference/gallery.swift`): a flat, soft fill with
+/// no outline, gradient or lift, since glass does not stack on glass. The
+/// selected card takes the accent as a tint.
 fn glass_button<E: Styled>(element: E, theme: Theme, selected: bool) -> E {
-    let dark = theme.is_dark();
-    let (top, bottom, rim) = match (selected, dark) {
-        (false, false) => (
-            gpui::hsla(0., 0., 1., 0.7),
-            gpui::hsla(0., 0., 1., 0.58),
-            gpui::hsla(0., 0., 0., 0.08),
-        ),
-        (false, true) => (
-            gpui::hsla(0., 0., 1., 0.085),
-            gpui::hsla(0., 0., 1., 0.06),
-            gpui::hsla(0., 0., 1., 0.07),
-        ),
-        (true, false) => (
-            Theme::with_alpha(theme.blue_3, 0.9),
-            Theme::with_alpha(theme.blue_3, 0.75),
-            Theme::with_alpha(theme.blue_8, 0.4),
-        ),
-        (true, true) => (
-            Theme::with_alpha(theme.blue_9, 0.24),
-            Theme::with_alpha(theme.blue_9, 0.18),
-            Theme::with_alpha(theme.blue_9, 0.3),
-        ),
+    let fill = match (selected, theme.is_dark()) {
+        (false, false) => gpui::hsla(0., 0., 0., 0.05),
+        (false, true) => gpui::hsla(0., 0., 1., 0.08),
+        (true, false) => Theme::with_alpha(theme.blue_9, 0.14),
+        (true, true) => Theme::with_alpha(theme.blue_9, 0.28),
     };
-    let (highlight, lift) = if dark {
-        (gpui::hsla(0., 0., 1., 0.07), gpui::hsla(0., 0., 0., 0.2))
-    } else {
-        (gpui::hsla(0., 0., 1., 0.8), gpui::hsla(0., 0., 0., 0.04))
-    };
-    element
-        .bg(gpui::linear_gradient(
-            180.,
-            gpui::linear_color_stop(top, 0.),
-            gpui::linear_color_stop(bottom, 1.),
-        ))
-        .border_1()
-        .border_color(rim)
-        .shadow(vec![
-            shadow(highlight, 1., 0., 0., true),
-            shadow(lift, 1., 2., 0., false),
-        ])
+    element.bg(fill)
 }
 
 fn capture_hover_fill(theme: Theme, selected: bool) -> Hsla {
@@ -6340,24 +6308,21 @@ impl MainWindow {
                 .flex()
                 .items_center()
                 .justify_center()
-                .size(px(28.))
+                .w(px(34.))
+                .h(px(28.))
                 .rounded_full()
-                .bg(if selected {
-                    Hsla::from(theme.gray_7)
-                } else {
-                    theme.body_fill(3)
-                })
+                // A segmented control's selected segment, as macOS raises
+                // it: a lifted capsule over the track.
                 .when(selected, |this| {
-                    // `ring-2 ring-blue-500 ring-offset-1 ring-offset-gray-1`.
-                    this.border_2()
-                        .border_color(theme.blue_500)
-                        .shadow(vec![gpui::BoxShadow {
-                            color: theme.ring_offset(),
-                            offset: gpui::point(px(0.), px(0.)),
-                            blur_radius: px(0.),
-                            spread_radius: px(1.),
-                            inset: false,
-                        }])
+                    this.bg(if theme.is_dark() {
+                        gpui::hsla(0., 0., 1., 0.24)
+                    } else {
+                        gpui::white()
+                    })
+                    .shadow(vec![
+                        shadow(gpui::hsla(0., 0., 0., 0.12), 1., 3., 0., false),
+                        shadow(gpui::hsla(0., 0., 0., 0.06), 0., 0., 0.5, false),
+                    ])
                 })
                 .child(
                     gpui::canvas(move |value, _, _| bounds.set(Some(value)), |_, _, _, _| {})
@@ -6370,7 +6335,9 @@ impl MainWindow {
                         .size(px(mode.icon_size()))
                         .text_color(theme.gray_12),
                 )
-                .hover(|style| style.bg(theme.body_hover_fill(7)))
+                .when(!selected, |this| {
+                    this.hover(move |style| style.bg(glass_tint(theme, 0.05, 0.07)))
+                })
                 .on_click(cx.listener(move |this, _, _window, cx| {
                     if this.session.read(cx).editor_recording_target().is_some() {
                         return;
@@ -6385,12 +6352,10 @@ impl MainWindow {
             .flex()
             .flex_row()
             .items_center()
-            .gap(px(8.))
-            .p(px(6.))
+            .gap(px(2.))
+            .p(px(3.))
             .rounded_full()
-            .border_1()
-            .border_color(theme.body_border(5))
-            .bg(theme.body_fill(3))
+            .bg(glass_tint(theme, 0.06, 0.09))
             .child(button(Mode::Instant, "mode-instant", 0))
             .child(button(Mode::Studio, "mode-studio", 1))
             .child(button(Mode::Screenshot, "mode-screenshot", 2))
