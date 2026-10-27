@@ -1045,11 +1045,8 @@ async fn run_cap_operation(
     deleting: bool,
     global_json: bool,
 ) -> Result<(), AgentApiError> {
-    if args.wait && (args.timeout == 0 || args.timeout > 86_400) {
-        return Err(AgentApiError::local(
-            "INVALID_REQUEST",
-            "--timeout must be between 1 and 86400 seconds",
-        ));
+    if args.wait {
+        crate::jobs::validate_wait_timeout(args.timeout)?;
     }
     let id = cap_id(&args.cap)?;
     confirmation::require(
