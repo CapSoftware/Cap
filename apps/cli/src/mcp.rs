@@ -738,6 +738,8 @@ impl CapMcpServer {
         let mut attempt = 0_u32;
         loop {
             let status = tokio::select! {
+                biased;
+                _ = tokio::time::sleep_until(deadline) => return Err(wait_timeout_error("Timed out waiting for Cap processing")),
                 _ = context.ct.cancelled() => return Err(AgentApiError {
                     code: "TEMPORARY_UNAVAILABLE".to_string(),
                     message: "The MCP request was cancelled".to_string(),
@@ -782,16 +784,12 @@ impl CapMcpServer {
                 return Ok(status);
             }
             if tokio::time::Instant::now() >= deadline {
-                return Err(AgentApiError {
-                    code: "NOT_READY".to_string(),
-                    message: "Timed out waiting for Cap processing".to_string(),
-                    retryable: true,
-                    retry_after_ms: Some(2_000),
-                    request_id: None,
-                });
+                return Err(wait_timeout_error("Timed out waiting for Cap processing"));
             }
             let delay = 500_u64.saturating_mul(1_u64 << attempt.min(4));
             tokio::select! {
+                biased;
+                _ = tokio::time::sleep_until(deadline) => return Err(wait_timeout_error("Timed out waiting for Cap processing")),
                 _ = context.ct.cancelled() => return Err(AgentApiError {
                     code: "TEMPORARY_UNAVAILABLE".to_string(),
                     message: "The MCP request was cancelled".to_string(),
@@ -820,6 +818,8 @@ impl CapMcpServer {
         let mut attempt = 0_u32;
         loop {
             let operation = tokio::select! {
+                biased;
+                _ = tokio::time::sleep_until(deadline) => return Err(wait_timeout_error("Timed out waiting for the Cap operation")),
                 _ = context.ct.cancelled() => return Err(Self::invalid("The MCP request was cancelled")),
                 result = self.client.get_json(&path) => result?,
             };
@@ -846,21 +846,29 @@ impl CapMcpServer {
                 _ => return Err(Self::invalid("Cap returned an invalid operation state")),
             }
             if tokio::time::Instant::now() >= deadline {
-                return Err(AgentApiError {
-                    code: "NOT_READY".to_string(),
-                    message: "Timed out waiting for the Cap operation".to_string(),
-                    retryable: true,
-                    retry_after_ms: Some(2_000),
-                    request_id: None,
-                });
+                return Err(wait_timeout_error(
+                    "Timed out waiting for the Cap operation",
+                ));
             }
             let delay = 500_u64.saturating_mul(1_u64 << attempt.min(4));
             tokio::select! {
+                biased;
+                _ = tokio::time::sleep_until(deadline) => return Err(wait_timeout_error("Timed out waiting for the Cap operation")),
                 _ = context.ct.cancelled() => return Err(Self::invalid("The MCP request was cancelled")),
                 () = tokio::time::sleep(Duration::from_millis(delay.min(10_000))) => {}
             }
             attempt = attempt.saturating_add(1);
         }
+    }
+}
+
+fn wait_timeout_error(message: &str) -> AgentApiError {
+    AgentApiError {
+        code: "NOT_READY".to_string(),
+        message: message.to_string(),
+        retryable: true,
+        retry_after_ms: Some(2_000),
+        request_id: None,
     }
 }
 

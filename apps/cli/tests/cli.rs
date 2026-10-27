@@ -1278,6 +1278,72 @@ fn mcp_cancellation_stops_wait_polling() {
 }
 
 #[test]
+fn mcp_waits_time_out_during_stalled_http_requests() {
+    for (tool, arguments) in [
+        (
+            "caps_wait",
+            serde_json::json!({"cap": "cap_synthetic", "timeout_seconds": 1}),
+        ),
+        (
+            "operations_wait",
+            serde_json::json!({"operation_id": "op_synthetic", "timeout_seconds": 1}),
+        ),
+    ] {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let server_url = format!("http://{}", listener.local_addr().unwrap());
+        thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut request = [0_u8; 4096];
+                let _ = stream.read(&mut request);
+                thread::sleep(Duration::from_secs(4));
+            }
+        });
+
+        let mut child = cap()
+            .args(["mcp", "serve"])
+            .env("CAP_AGENT_TOKEN", "cap_cli_synthetic_test_token")
+            .env("CAP_SERVER_URL", server_url)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let (sender, receiver) = mpsc::channel();
+        thread::spawn(move || {
+            for line in BufReader::new(stdout).lines() {
+                if sender.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+        let mut stdin = child.stdin.take().unwrap();
+        for message in [
+            serde_json::json!({"jsonrpc":"2.0", "id":1, "method":"initialize", "params": {
+                "protocolVersion":"2025-03-26", "capabilities":{},
+                "clientInfo":{"name":"cap-test", "version":"1"}
+            }}),
+            serde_json::json!({"jsonrpc":"2.0", "method":"notifications/initialized", "params":{}}),
+            serde_json::json!({"jsonrpc":"2.0", "id":3, "method":"tools/call", "params": {
+                "name":tool, "arguments":arguments
+            }}),
+        ] {
+            writeln!(stdin, "{message}").unwrap();
+        }
+        stdin.flush().unwrap();
+        let initialized = receiver.recv_timeout(Duration::from_secs(3));
+        let response = receiver.recv_timeout(Duration::from_secs(3));
+        let _ = child.kill();
+        let _ = child.wait();
+        let initialized: Value = serde_json::from_str(&initialized.unwrap().unwrap()).unwrap();
+        assert_eq!(initialized["id"], 1);
+        let response: Value = serde_json::from_str(&response.unwrap().unwrap()).unwrap();
+        assert_eq!(response["id"], 3);
+        assert!(response.to_string().contains("NOT_READY"), "{response}");
+    }
+}
+
+#[test]
 fn record_status_empty_is_json_array() {
     let output = run(&["record", "status", "--json"]);
     assert!(output.status.success(), "stderr: {}", stderr(&output));
