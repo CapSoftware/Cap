@@ -17,14 +17,48 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 concurrency:
   group: picker-smoke-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
+  # A pull request from a fork that changes only this workflow or the smoke's
+  # scripts does not queue the three-runner matrix; one that also changes the
+  # app does, and so does any change from this repository.
+  scope:
+    name: Scope
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.scope.outputs.run }}
+    steps:
+      - name: Scope
+        id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          PR: ${{ github.event.pull_request.number }}
+          SAME_REPO: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT" != pull_request || "$SAME_REPO" == true ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --paginate --jq '.[].filename' > "$RUNNER_TEMP/changed.txt"
+          app='^apps/desktop-gpui/src/'
+          if grep -qE "$app" "$RUNNER_TEMP/changed.txt"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "A fork pull request that changes no app code does not run the picker smoke." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
   smoke:
     name: Picker smoke (${{ matrix.settings.name }})
+    needs: scope
+    if: needs.scope.outputs.run == 'true'
     timeout-minutes: 60
     strategy:
       fail-fast: false
