@@ -159,6 +159,10 @@ label = "Studio Sound en las grabaciones nuevas"
 description = "Qué ocurre con la ventana principal cuando empieza una grabación."
 label = "Ventana principal al empezar a grabar"
 
+[settings.general.recording.window_capture]
+description = "Cómo captura una grabación de ventana la ventana que eliges. Ventana enfocada graba solo esa ventana, centrada y siguiéndola si se mueve; Región de pantalla graba el área de la pantalla que ocupa."
+label = "Captura de ventanas"
+
 [settings.general.recording.post_deletion]
 description = "Si la ventana de grabación debe volver a abrirse."
 label = "Después de eliminar una grabación"
@@ -350,6 +354,10 @@ ultra = "Ultra"
 [settings.options.main_window_start]
 close = "Cerrar"
 minimise = "Minimizar"
+
+[settings.options.window_capture]
+focused_window = "Ventana enfocada"
+screen_region = "Región de pantalla"
 
 [settings.options.post_studio]
 do_nothing = "No hacer nada"

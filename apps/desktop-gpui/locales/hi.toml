@@ -159,6 +159,10 @@ label = "नई रिकॉर्डिंग में Studio Sound"
 description = "रिकॉर्डिंग शुरू होने पर मुख्य विंडो के साथ क्या होता है।"
 label = "रिकॉर्डिंग शुरू होने पर मुख्य विंडो"
 
+[settings.general.recording.window_capture]
+description = "विंडो रिकॉर्डिंग आपकी चुनी हुई विंडो को कैसे कैप्चर करती है। फ़ोकस की गई विंडो केवल उसी विंडो को रिकॉर्ड करती है, बीच में रखकर और हिलने पर उसका पीछा करते हुए; स्क्रीन क्षेत्र स्क्रीन का वह हिस्सा रिकॉर्ड करता है जिसे वह ढकती है।"
+label = "विंडो कैप्चर शैली"
+
 [settings.general.recording.post_deletion]
 description = "क्या रिकॉर्डिंग विंडो फिर से खुलनी चाहिए।"
 label = "रिकॉर्डिंग हटाने के बाद"
@@ -350,6 +354,10 @@ ultra = "अल्ट्रा"
 [settings.options.main_window_start]
 close = "बंद करें"
 minimise = "छोटा करें"
+
+[settings.options.window_capture]
+focused_window = "फ़ोकस की गई विंडो"
+screen_region = "स्क्रीन क्षेत्र"
 
 [settings.options.post_studio]
 do_nothing = "कुछ न करें"

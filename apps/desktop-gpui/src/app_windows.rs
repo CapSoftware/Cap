@@ -2120,7 +2120,24 @@ fn open_overlays_core(request: OverlayRequest, cx: &mut App) -> bool {
 /// A "cancelled" dismissal in the Tauri vocabulary, which is the kind that
 /// reveals the main window again (`dismissalReveals`,
 /// `new-main/index.tsx:2047-2058`).
+/// Put back every window the picker moved or resized. Off the main thread:
+/// `SetWindowPos` waits on the target app, which may be busy.
+fn restore_arranged_windows(cx: &mut App) {
+    let arranged = TargetSelect::global(cx).update(cx, |select, _| select.take_arranged());
+    if arranged.is_empty() {
+        return;
+    }
+    cx.background_executor()
+        .spawn(async move {
+            for window in arranged {
+                crate::foreign_window::arrange(&window.id, &window.display_id, window.bounds);
+            }
+        })
+        .detach();
+}
+
 pub fn dismiss_target_overlays(cx: &mut App) {
+    restore_arranged_windows(cx);
     if RecordingSession::global(cx).read(cx).phase == Phase::Idle
         && RecordingSession::global(cx)
             .read(cx)
@@ -2395,6 +2412,10 @@ pub fn start_recording_from_overlay(target: ScreenCaptureTarget, cx: &mut App) {
     {
         return;
     }
+    // The user shaped the window to record it: it stays where it is.
+    TargetSelect::global(cx).update(cx, |select, _| {
+        select.take_arranged();
+    });
     // Collected before the windows go away: the capture starts a beat after
     // this, and an overlay that has not finished closing must not end up in
     // the recording.
@@ -2606,11 +2627,7 @@ fn open_overlay(
                         window.refresh();
                     })
                     .ok();
-                if let Some(camera) = cx.update(visible_camera_frame)
-                    && let Err(error) = camera.raise()
-                {
-                    tracing::warn!(%error, "could not raise the camera above the target picker");
-                }
+                cx.update(raise_camera_above_overlays);
             })
             .detach();
         }
@@ -4335,15 +4352,27 @@ pub(crate) fn studio_camera_snapshot(
         .ok()
 }
 
-fn visible_camera_frame(cx: &mut App) -> Option<CameraFrame> {
+/// Keep the camera bubble above the picker overlays. Not filtered on
+/// `window_is_visible` off macOS: Windows' camera is shown asynchronously and
+/// X11 has no visibility probe, and neither raise path shows a hidden window.
+pub(crate) fn raise_camera_above_overlays(cx: &mut App) {
     if camera_preview_is_inline(cx) {
-        return None;
+        return;
     }
     #[cfg(target_os = "linux")]
     if clean_capture_active(cx) {
-        return None;
+        return;
     }
-    camera_frame(cx).filter(|camera| camera.visible)
+    let Some(camera) = camera_frame(cx) else {
+        return;
+    };
+    #[cfg(target_os = "macos")]
+    if !camera.visible {
+        return;
+    }
+    if let Err(error) = camera.raise() {
+        tracing::warn!(%error, "could not raise the camera above the target picker");
+    }
 }
 
 fn camera_snapshot(cx: &mut App) -> Option<CameraSnapshot> {
@@ -4363,9 +4392,13 @@ impl CameraFrame {
     fn raise(&self) -> anyhow::Result<()> {
         match &self.native {
             #[cfg(target_os = "macos")]
-            CameraNativeFrame::Mac { native, .. } => platform::order_front_native(native),
+            CameraNativeFrame::Mac { native, .. } => {
+                platform::raise_panel_native(native, platform::recording_controls_level())
+            }
             #[cfg(target_os = "windows")]
-            CameraNativeFrame::Windows(native) => platform::order_front_native(native),
+            CameraNativeFrame::Windows(native) => {
+                platform::raise_panel_native(native, platform::recording_controls_level())
+            }
             #[cfg(target_os = "linux")]
             CameraNativeFrame::X11 { window_id, .. } => {
                 use x11rb::connection::Connection as _;

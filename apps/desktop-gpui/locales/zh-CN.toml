@@ -159,6 +159,10 @@ label = "新录制默认开启 Studio Sound"
 description = "录制开始后主窗口的处理方式。"
 label = "开始录制时的主窗口"
 
+[settings.general.recording.window_capture]
+description = "窗口录制如何捕获你选择的窗口。“聚焦窗口”只录制该窗口，将其居中并在移动时跟随；“屏幕区域”录制它所覆盖的屏幕区域。"
+label = "窗口捕获方式"
+
 [settings.general.recording.post_deletion]
 description = "是否重新打开录制窗口。"
 label = "删除录制后"
@@ -350,6 +354,10 @@ ultra = "超高"
 [settings.options.main_window_start]
 close = "关闭"
 minimise = "最小化"
+
+[settings.options.window_capture]
+focused_window = "聚焦窗口"
+screen_region = "屏幕区域"
 
 [settings.options.post_studio]
 do_nothing = "不执行任何操作"

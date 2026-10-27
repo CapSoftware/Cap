@@ -300,6 +300,10 @@ pub struct TargetSelect {
     microphone_fill: f32,
     /// App icons by window id, fetched once per window.
     icons: HashMap<String, Arc<gpui::Image>>,
+    /// Windows the picker moved or resized, keyed by id, with where they
+    /// were: dismissing the picker puts them back, starting a recording
+    /// keeps them where the user shaped them.
+    arranged: HashMap<String, HoveredWindow>,
     _poll: Option<gpui::Task<()>>,
 }
 
@@ -316,6 +320,7 @@ impl TargetSelect {
             pinned_window: None,
             microphone_fill: 0.,
             icons: HashMap::new(),
+            arranged: HashMap::new(),
             _poll: None,
         });
         cx.set_global(TargetSelectGlobal(select.clone()));
@@ -336,6 +341,9 @@ impl TargetSelect {
     ) {
         self.recording_mode = recording_mode;
         self.pinned_window = pinned_window;
+        if self.mode.is_none() && mode.is_some() {
+            self.arranged.clear();
+        }
         if self.mode == mode {
             cx.notify();
             return;
@@ -369,6 +377,34 @@ impl TargetSelect {
         self.icons.get(&id.to_string()).cloned()
     }
 
+    /// Remember where `window` was before the picker first moves it.
+    pub fn remember_arranged(&mut self, window: &HoveredWindow) {
+        self.arranged
+            .entry(window.id.to_string())
+            .or_insert_with(|| window.clone());
+    }
+
+    /// Where the picker found window `id`, if it has moved it since.
+    pub fn arranged_original(&self, id: &WindowId) -> Option<&HoveredWindow> {
+        self.arranged.get(&id.to_string())
+    }
+
+    pub fn forget_arranged(&mut self, id: &WindowId) {
+        self.arranged.remove(&id.to_string());
+    }
+
+    /// Every window the picker moved, with where it was, forgetting them.
+    pub fn take_arranged(&mut self) -> Vec<HoveredWindow> {
+        self.arranged.drain().map(|(_, window)| window).collect()
+    }
+
+    pub fn set_pinned(&mut self, window: HoveredWindow, cx: &mut Context<Self>) {
+        if self.pinned_window.as_ref() != Some(&window) {
+            self.pinned_window = Some(window);
+            cx.notify();
+        }
+    }
+
     /// Lock the highlight onto whatever the cursor is over -- the TSX's
     /// click-anywhere-to-select behavior.
     fn pin_hovered(&mut self, cx: &mut Context<Self>) {
@@ -386,9 +422,12 @@ impl TargetSelect {
                 // Only the window variant needs the (much more expensive)
                 // window probe; the others just want to know which display the
                 // cursor is on.
-                let Ok(want_window) =
-                    this.read_with(cx, |this, _| this.mode == Some(TargetType::Window))
-                else {
+                let Ok((want_window, pinned)) = this.read_with(cx, |this, _| {
+                    (
+                        this.mode == Some(TargetType::Window),
+                        this.pinned_window.as_ref().map(|window| window.id.clone()),
+                    )
+                }) else {
                     return;
                 };
 
@@ -402,18 +441,34 @@ impl TargetSelect {
                             .flatten()
                             .as_ref()
                             .and_then(HoveredWindow::from_window);
-                        (display, window)
+                        // The pinned window is re-read too: it may have been
+                        // moved or resized, by the picker or by its app.
+                        let pinned = pinned
+                            .filter(|_| want_window)
+                            .and_then(|id| scap_targets::Window::from_id(&id))
+                            .as_ref()
+                            .and_then(HoveredWindow::from_window);
+                        (display, window, pinned)
                     })
                     .await;
 
                 let Ok((icon_wanted, active, changed, microphone_changed)) =
                     this.update(cx, |this: &mut Self, cx| {
-                        let (display, window) = probe;
+                        let (display, window, pinned) = probe;
+                        let pinned_moved = pinned.as_ref().is_some_and(|pinned| {
+                            this.pinned_window
+                                .as_ref()
+                                .is_some_and(|current| current.id == pinned.id && current != pinned)
+                        });
+                        if pinned_moved {
+                            this.pinned_window = pinned;
+                        }
                         let microphone_fill = crate::ui::MicrophoneLevel::capture_fill(cx);
                         // The mic level stays out of `changed`: only the overlays
                         // drawing the meter repaint for it, below.
-                        let changed =
-                            this.cursor_display != display || this.hovered_window != window;
+                        let changed = pinned_moved
+                            || this.cursor_display != display
+                            || this.hovered_window != window;
                         let microphone_changed = this.microphone_fill != microphone_fill;
                         this.microphone_fill = microphone_fill;
                         this.cursor_display = display;
@@ -519,12 +574,54 @@ fn store_area_ratio(ratio: Option<(u32, u32)>) {
     });
 }
 
-fn next_area_ratio(current: Option<(u32, u32)>) -> Option<(u32, u32)> {
-    let index = AREA_RATIOS
+/// One-click chips in the area toolbar; the rest of `AREA_RATIOS` sits
+/// behind its More button.
+const QUICK_AREA_RATIOS: [Option<(u32, u32)>; 5] = [
+    None,
+    Some((16, 9)),
+    Some((4, 3)),
+    Some((1, 1)),
+    Some((9, 16)),
+];
+
+fn more_area_ratios() -> Vec<(u32, u32)> {
+    AREA_RATIOS
         .iter()
-        .position(|ratio| *ratio == current)
-        .unwrap_or(0);
-    AREA_RATIOS[(index + 1) % AREA_RATIOS.len()]
+        .flatten()
+        .copied()
+        .filter(|ratio| !QUICK_AREA_RATIOS.contains(&Some(*ratio)))
+        .collect()
+}
+
+/// How long the selection takes to settle into a new ratio, fill or reset.
+const AREA_RESHAPE: Duration = Duration::from_millis(240);
+
+/// The whole display, or the largest centred area of `ratio` inside it.
+fn area_fill(display: (f32, f32), ratio: Option<f32>) -> AreaRect {
+    let (width, height) = match ratio {
+        Some(ratio) if display.0 / display.1 > ratio => (display.1 * ratio, display.1),
+        Some(ratio) => (display.0, display.0 / ratio),
+        None => display,
+    };
+    AreaRect {
+        x: (display.0 - width) / 2.,
+        y: (display.1 - height) / 2.,
+        width,
+        height,
+    }
+}
+
+/// `from` moved `t` of the way to `to`, on a curve that starts fast and
+/// settles gently, so the reshape reads as one motion.
+fn area_between(from: AreaRect, to: AreaRect, t: f32) -> AreaRect {
+    let t = 1. - (1. - t.clamp(0., 1.)).powi(3);
+    let mix = |a: f32, b: f32| a + (b - a) * t;
+    AreaRect {
+        x: mix(from.x, to.x),
+        y: mix(from.y, to.y),
+        width: mix(from.width, to.width),
+        height: mix(from.height, to.height),
+    }
 }
 
 fn ratio_value((width, height): (u32, u32)) -> f32 {
@@ -836,6 +933,20 @@ pub struct OverlayWindow {
     /// 2206-2210`). `Some` while it is open.
     mode_menu: Option<crate::ui::MenuState>,
     countdown_menu: Option<crate::ui::MenuState>,
+    aspect_menu: Option<crate::ui::MenuState>,
+    /// The selection drawn mid-reshape: where it started and when. `crop`
+    /// already holds where it is going.
+    reshape: Option<(AreaRect, Instant)>,
+    /// The picked window's size and ratio menu.
+    window_menu: Option<crate::ui::MenuState>,
+    /// The window highlight mid-move, the way `reshape` is for an area:
+    /// where it was drawn and when the window started moving.
+    window_reshape: Option<(AreaRect, Instant)>,
+    /// Where the window highlight was last drawn, for a move to start from.
+    window_drawn: Cell<Option<AreaRect>>,
+    /// Focus: centre the picked window and record it by itself. Mirrors the
+    /// window capture style setting, which it writes.
+    focus_window: bool,
     inline_camera: Option<Entity<crate::camera_window::CameraWindow>>,
     inline_camera_subscription: Option<gpui::Subscription>,
     empty_camera_state: crate::store::CameraWindowState,
@@ -899,6 +1010,14 @@ impl OverlayWindow {
         let theme = Theme::for_window(window, cx, false);
         cx.observe_in(&select, window, |_, _, window, cx| repaint(window, cx))
             .detach();
+        // Activating an overlay (a click, or the focus hand-off when it opens)
+        // lifts it to the top of its band on Windows and X11, over the camera.
+        cx.observe_window_activation(window, |_, window, cx| {
+            if window.is_window_active() {
+                cx.defer(app_windows::raise_camera_above_overlays);
+            }
+        })
+        .detach();
         let session = crate::session::RecordingSession::global(cx);
         let mut drawn_phase = session.read(cx).phase;
         cx.observe_in(&session, window, move |_, session, window, cx| {
@@ -979,6 +1098,13 @@ impl OverlayWindow {
             recording_area: false,
             mode_menu: None,
             countdown_menu: None,
+            aspect_menu: None,
+            reshape: None,
+            window_menu: None,
+            window_reshape: None,
+            window_drawn: Cell::new(None),
+            focus_window: crate::store::GeneralSettings::load().window_capture_style
+                == crate::store::WindowCaptureStyle::FocusedWindow,
             inline_camera: None,
             inline_camera_subscription: None,
             empty_camera_state: crate::store::load().camera_window.unwrap_or_default(),
@@ -1016,6 +1142,8 @@ impl OverlayWindow {
         self.mode_menu = None;
         self.countdown_menu = None;
         self.device_menu = None;
+        self.aspect_menu = None;
+        self.reshape = None;
         cx.notify();
         true
     }
@@ -1221,6 +1349,32 @@ impl Render for OverlayWindow {
                         cx.stop_propagation();
                         return;
                     }
+                    if let Some(menu) = &mut this.window_menu {
+                        match menu.on_key(&event.keystroke.key) {
+                            crate::ui::MenuKey::Commit(index) => this.choose_window_size(index, cx),
+                            crate::ui::MenuKey::Dismiss => {
+                                this.window_menu = None;
+                                cx.notify();
+                            }
+                            crate::ui::MenuKey::Moved => cx.notify(),
+                            crate::ui::MenuKey::Ignored => return,
+                        }
+                        cx.stop_propagation();
+                        return;
+                    }
+                    if let Some(menu) = &mut this.aspect_menu {
+                        match menu.on_key(&event.keystroke.key) {
+                            crate::ui::MenuKey::Commit(index) => this.choose_aspect(index, cx),
+                            crate::ui::MenuKey::Dismiss => {
+                                this.aspect_menu = None;
+                                cx.notify();
+                            }
+                            crate::ui::MenuKey::Moved => cx.notify(),
+                            crate::ui::MenuKey::Ignored => return,
+                        }
+                        cx.stop_propagation();
+                        return;
+                    }
                     if let Some(menu) = &mut this.device_menu {
                         match menu.state.on_key(&event.keystroke.key) {
                             crate::ui::MenuKey::Commit(index) => this.choose_device(index, cx),
@@ -1264,7 +1418,7 @@ impl Render for OverlayWindow {
         } else {
             match mode {
                 Some(TargetType::Display) => root.child(self.render_display_variant(window, cx)),
-                Some(TargetType::Window) => root.child(self.render_window_variant(cx)),
+                Some(TargetType::Window) => root.child(self.render_window_variant(window, cx)),
                 Some(TargetType::Area) => root.child(self.render_area_variant(window, cx)),
                 Some(TargetType::CameraOnly) => root.child(self.render_camera_variant(cx)),
                 None => root,
@@ -1274,6 +1428,8 @@ impl Render for OverlayWindow {
         // cluster it drops from.
         root.children(self.render_mode_menu(cx))
             .children(self.render_countdown_menu(cx))
+            .children(self.render_aspect_menu(cx))
+            .children(self.render_window_menu(cx))
             .children(self.render_device_menu(cx))
             .into_any_element()
     }
@@ -1408,6 +1564,8 @@ impl OverlayWindow {
         }
         self.mode_menu = None;
         self.countdown_menu = None;
+        self.aspect_menu = None;
+        self.window_menu = None;
         self.device_menu = Some(OverlayDeviceMenu {
             state: crate::ui::MenuState::new(position, &items),
             items,
@@ -1702,7 +1860,11 @@ impl OverlayWindow {
     ///
     /// Like the TSX, the whole variant only draws on the display the cursor is
     /// on -- the other overlays stay empty and transparent.
-    fn render_window_variant(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+    fn render_window_variant(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
         let select = self.select.read(cx);
         let active = select
             .active_window()
@@ -1713,11 +1875,24 @@ impl OverlayWindow {
             .and_then(|window| select.icon_for(&window.id));
 
         let Some(active) = active else {
+            self.window_drawn.set(None);
             return div().size_full().into_any_element();
         };
-        let bounds = active.bounds.scaled(1. / self.capture_scale);
-        let width = bounds.width;
-        let height = bounds.height;
+        let target = active.bounds.scaled(1. / self.capture_scale);
+        let bounds = match self.window_reshape {
+            Some((from, started)) => {
+                let t = started.elapsed().as_secs_f32() / AREA_RESHAPE.as_secs_f32();
+                if t >= 1. {
+                    self.window_reshape = None;
+                    target
+                } else {
+                    window.request_animation_frame();
+                    area_between(from, target, t)
+                }
+            }
+            None => target,
+        };
+        self.window_drawn.set(Some(bounds));
 
         div()
             .size_full()
@@ -1727,6 +1902,7 @@ impl OverlayWindow {
             // Clicking anywhere locks the highlight onto whatever is under the
             // cursor, exactly as the TSX's two click handlers add up to.
             .on_click(cx.listener(|this, _, _window, cx| {
+                this.window_menu = None;
                 this.select.update(cx, |select, cx| select.pin_hovered(cx));
                 // `setOriginalCameraBounds(null)` on the first click
                 // (`target-select-overlay.tsx:609-617`): committing a pick
@@ -1738,8 +1914,8 @@ impl OverlayWindow {
                     .absolute()
                     .left(px(bounds.x))
                     .top(px(bounds.y))
-                    .w(px(width))
-                    .h(px(height))
+                    .w(px(bounds.width))
+                    .h(px(bounds.height))
                     .flex()
                     .flex_col()
                     .justify_center()
@@ -1767,14 +1943,283 @@ impl OverlayWindow {
                                     .font_weight(FontWeight::BOLD)
                                     .child(SharedString::from(active.app_name.clone())),
                             )
-                            .child(div().mb(px(8.)).text_size(px(12.)).child(format!(
-                                "{}x{}",
-                                active.bounds.width as u32, active.bounds.height as u32
-                            ))),
+                            .child(self.render_window_size(target, cx))
+                            .children(self.render_focus_toggle(cx)),
                     )
                     .child(self.render_controls_cluster(self.target(cx), false, cx)),
             )
             .into_any_element()
+    }
+
+    /// Recorded pixels per logical point of this display.
+    fn pixels_per_point(&self) -> f32 {
+        self.physical_size
+            .map(|(width, _)| width as f32 / self.display_size.0.max(1.))
+            .unwrap_or(1.)
+    }
+
+    /// The picked window's size as it will record, which opens the ratio and
+    /// size menu where Cap can shape other apps' windows.
+    fn render_window_size(&self, window: AreaRect, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        let scale = self.pixels_per_point();
+        let mut label = format!(
+            "{} × {}",
+            (window.width * scale).round(),
+            (window.height * scale).round()
+        );
+        if let Some((w, h)) = crate::window_arrange::matching_ratio(window) {
+            label.push_str(&format!("  ·  {w}:{h}"));
+        }
+        let arrangeable = crate::foreign_window::can_arrange();
+        let tooltip = if arrangeable {
+            "Change the window's size"
+        } else if cfg!(target_os = "macos") {
+            "Turn on Accessibility for Cap to resize other apps' windows"
+        } else {
+            "Resizing other apps' windows isn't possible on Wayland"
+        };
+        div()
+            .id("window-size")
+            .mb(px(8.))
+            .h(px(28.))
+            .px(px(10.))
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .rounded_full()
+            .text_size(px(12.))
+            .text_color(theme.gray_12)
+            .bg(gpui::hsla(0., 0., 0., 0.28))
+            .tooltip(move |_, cx| crate::ui::Tooltip::new(&theme, tooltip).view(cx))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(label)
+            .when(arrangeable, |chip| {
+                chip.cursor_pointer()
+                    .hover(|style| style.bg(gpui::hsla(0., 0., 0., 0.4)))
+                    .child(svg().path("icons/chevron-down.svg").size(px(12.)))
+                    .on_click(cx.listener(|this, event: &gpui::ClickEvent, _, cx| {
+                        cx.stop_propagation();
+                        this.open_window_menu(event.position(), cx);
+                    }))
+            })
+    }
+
+    fn render_focus_toggle(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        if !crate::foreign_window::can_arrange() {
+            return None;
+        }
+        let theme = self.theme;
+        Some(
+            div()
+                .id("window-focus")
+                .mb(px(8.))
+                .h(px(32.))
+                .pl(px(12.))
+                .pr(px(6.))
+                .flex()
+                .items_center()
+                .gap(px(10.))
+                .rounded_full()
+                .bg(gpui::hsla(0., 0., 0., 0.28))
+                .tooltip(move |_, cx| {
+                    crate::ui::Tooltip::new(
+                        &theme,
+                        "Centre this window and record only it, nothing in front of it",
+                    )
+                    .view(cx)
+                })
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(
+                    div()
+                        .text_size(px(13.))
+                        .text_color(theme.gray_12)
+                        .child("Focus"),
+                )
+                .child(
+                    crate::ui::Toggle::glass(&theme, "window-focus-toggle", self.focus_window)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.set_focus(!this.focus_window, cx);
+                        })),
+                ),
+        )
+    }
+
+    /// What each row of the window menu does.
+    fn window_menu_entries(&self, window: AreaRect) -> Vec<(String, bool, AreaRect)> {
+        use crate::window_arrange::{RATIOS, SIZES, fit_to_ratio, fit_to_size, matching_ratio};
+        let work_area = self.controls_work_area;
+        let scale = self.pixels_per_point();
+        let current = matching_ratio(window);
+        let recorded = (
+            (window.width * scale).round() as u32,
+            (window.height * scale).round() as u32,
+        );
+        let mut entries: Vec<(String, bool, AreaRect)> = RATIOS
+            .into_iter()
+            .map(|ratio| {
+                (
+                    format!("{}:{}", ratio.0, ratio.1),
+                    current == Some(ratio),
+                    fit_to_ratio(window, ratio, work_area),
+                )
+            })
+            .collect();
+        entries.extend(SIZES.into_iter().filter_map(|(name, width, height)| {
+            fit_to_size(window, (width, height), scale, work_area).map(|frame| {
+                (
+                    format!("{name}  ·  {width} × {height}"),
+                    recorded == (width, height),
+                    frame,
+                )
+            })
+        }));
+        entries
+    }
+
+    fn active_window_logical(&self, cx: &App) -> Option<AreaRect> {
+        self.select
+            .read(cx)
+            .active_window()
+            .filter(|window| window.display_id == self.display_id)
+            .map(|window| window.bounds.scaled(1. / self.capture_scale))
+    }
+
+    fn open_window_menu(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let Some(window) = self.active_window_logical(cx) else {
+            return;
+        };
+        let items: Vec<crate::ui::MenuItem> = self
+            .window_menu_entries(window)
+            .into_iter()
+            .map(|(label, checked, _)| crate::ui::MenuItem::new(label, checked))
+            .collect();
+        self.mode_menu = None;
+        self.countdown_menu = None;
+        self.device_menu = None;
+        self.aspect_menu = None;
+        self.window_menu = Some(crate::ui::MenuState::new(position, &items));
+        cx.notify();
+    }
+
+    fn render_window_menu(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let state = self.window_menu.as_ref()?;
+        let window = self.active_window_logical(cx)?;
+        let items = self
+            .window_menu_entries(window)
+            .into_iter()
+            .map(|(label, checked, _)| crate::ui::MenuItem::new(label, checked))
+            .collect();
+        Some(
+            crate::ui::Menu::plain(&self.theme, "overlay-window-menu", items, state)
+                .on_select(cx.listener(|this, index: &usize, _, cx| {
+                    this.choose_window_size(*index, cx);
+                }))
+                .on_dismiss(cx.listener(|this, _, _, cx| {
+                    this.window_menu = None;
+                    cx.notify();
+                }))
+                .into_any_element(),
+        )
+    }
+
+    pub(crate) fn choose_window_size(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.window_menu = None;
+        let frame = self
+            .active_window_logical(cx)
+            .and_then(|window| self.window_menu_entries(window).into_iter().nth(index))
+            .map(|(_, _, frame)| frame);
+        match frame {
+            Some(frame) => self.arrange_active_window(frame, false, cx),
+            None => cx.notify(),
+        }
+    }
+
+    /// Focus on: centre the window, bring it forward, record it by itself.
+    /// Focus off: put it back where the picker found it, record the region.
+    pub(crate) fn set_focus(&mut self, focus: bool, cx: &mut Context<Self>) {
+        self.focus_window = focus;
+        let style = if focus {
+            crate::store::WindowCaptureStyle::FocusedWindow
+        } else {
+            crate::store::WindowCaptureStyle::ScreenRegion
+        };
+        if !crate::store::set_store_setting(
+            crate::store::GENERAL_SETTINGS,
+            "windowCaptureStyle",
+            serde_json::Value::from(crate::store::SettingsEnum::as_json(style)),
+        ) {
+            tracing::warn!("could not save the window capture style");
+        }
+        let Some(window) = self.active_window_logical(cx) else {
+            cx.notify();
+            return;
+        };
+        if focus {
+            let centred = crate::window_arrange::centre(window, self.controls_work_area);
+            self.arrange_active_window(centred, true, cx);
+        } else {
+            let original = self.select.read(cx).active_window().and_then(|active| {
+                self.select
+                    .read(cx)
+                    .arranged_original(&active.id)
+                    .map(|original| original.bounds.scaled(1. / self.capture_scale))
+            });
+            match original {
+                Some(original) => self.arrange_active_window(original, false, cx),
+                None => cx.notify(),
+            }
+        }
+    }
+
+    /// Move the picked window to `frame` (this overlay's logical points),
+    /// then follow wherever its app actually put it.
+    fn arrange_active_window(&mut self, frame: AreaRect, raise: bool, cx: &mut Context<Self>) {
+        let Some(window) = self.select.read(cx).active_window().cloned() else {
+            return;
+        };
+        let from = self
+            .window_drawn
+            .get()
+            .unwrap_or(window.bounds.scaled(1. / self.capture_scale));
+        self.select.update(cx, |select, cx| {
+            select.remember_arranged(&window);
+            select.set_pinned(window.clone(), cx);
+        });
+        let frame = frame.scaled(self.capture_scale);
+        let (id, display) = (window.id.clone(), window.display_id.clone());
+        let select = self.select.clone();
+        cx.spawn(async move |this, cx| {
+            let moved = cx
+                .background_executor()
+                .spawn(async move {
+                    let arranged = crate::foreign_window::arrange(&id, &display, frame);
+                    if raise {
+                        crate::foreign_window::raise(&id);
+                    }
+                    let window = scap_targets::Window::from_id(&id);
+                    (
+                        arranged,
+                        window.as_ref().and_then(HoveredWindow::from_window),
+                    )
+                })
+                .await;
+            let (arranged, fresh) = moved;
+            if !arranged {
+                tracing::warn!("the picked window could not be arranged");
+            }
+            if let Some(fresh) = fresh {
+                select.update(cx, |select, cx| select.set_pinned(fresh, cx));
+            }
+            this.update(cx, |this, cx| {
+                this.window_reshape = Some((from, Instant::now()));
+                cx.notify();
+            })
+            .ok();
+            cx.update(app_windows::refresh_target_overlays);
+        })
+        .detach();
     }
 
     fn render_camera_variant(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1876,6 +2321,7 @@ impl OverlayWindow {
         // `shouldShowOverlay = isInteracting() || isActiveDisplay()`.
         let visible = self.recording_area || interacting || self.is_active_display(window, cx);
         let crop = self.crop;
+        let shown = self.displayed_crop(window);
         let min = area_min_size(self.select.read(cx).recording_mode);
         let valid = crop.is_some_and(|crop| crop.is_valid_for(min));
         let interactive = !self.recording_area;
@@ -1911,7 +2357,7 @@ impl OverlayWindow {
         // The occluder: four `bg-black/45` rectangles around the crop (one
         // full-screen rectangle while nothing is drawn).
         let dim: Hsla = gpui::hsla(0., 0., 0., 0.45);
-        root = match crop {
+        root = match shown {
             None => root.child(div().absolute().inset_0().bg(dim)),
             Some(crop) => root
                 .child(
@@ -1952,8 +2398,8 @@ impl OverlayWindow {
                 ),
         };
 
-        if let Some(crop) = crop {
-            root = root.child(self.render_crop_region(crop, interactive));
+        if let Some(shown) = shown {
+            root = root.child(self.render_crop_region(shown, interactive));
         }
 
         root = root.children(self.render_snap_guides());
@@ -1965,7 +2411,7 @@ impl OverlayWindow {
         }
         root = root.child(self.render_area_toolbar(crop, valid, cx));
         if crop.is_some() {
-            root.child(self.render_area_controls(crop, valid, cx))
+            root.child(self.render_area_controls(shown, valid, cx))
         } else {
             root
         }
@@ -2219,53 +2665,82 @@ impl OverlayWindow {
         valid: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        const WIDTH: f32 = 520.;
+        let theme = self.theme;
         let label = match crop.filter(|_| valid) {
             Some(crop) => format!("{} × {}", crop.width.round(), crop.height.round()),
             None => "Draw an area".to_string(),
         };
-        let ratio_label = match self.area_ratio {
-            Some((width, height)) => format!("{width}:{height}"),
-            None => "Free".to_string(),
+        let divider = || div().h(px(24.)).w(px(1.)).flex_shrink_0().bg(theme.gray_5);
+        let icon_button = |id: &'static str, icon: &'static str, tooltip: &'static str| {
+            div()
+                .id(id)
+                .size(px(36.))
+                .flex_shrink_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(12.))
+                .cursor_pointer()
+                .text_color(theme.gray_11)
+                .hover(move |style| {
+                    style
+                        .bg(Theme::with_alpha(theme.gray_12, 0.08))
+                        .text_color(theme.gray_12)
+                })
+                .tooltip(move |_, cx| crate::ui::Tooltip::new(&theme, tooltip).view(cx))
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(svg().path(icon).size(px(16.)))
         };
-        let ratio = div()
-            .id("area-aspect-ratio")
-            .h(px(36.))
-            .min_w(px(56.))
-            .px(px(10.))
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded(px(10.))
-            .cursor_pointer()
-            .text_size(px(14.))
-            .font_weight(FontWeight::MEDIUM)
-            .bg(self.theme.gray_3)
-            .hover({
-                let hover = self.theme.gray_4;
-                move |style| style.bg(hover)
-            })
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.set_area_ratio(next_area_ratio(this.area_ratio), cx);
-            }))
-            .child(ratio_label);
+        let in_more = self
+            .area_ratio
+            .is_some_and(|ratio| !QUICK_AREA_RATIOS.contains(&Some(ratio)));
+        let chips = QUICK_AREA_RATIOS.iter().enumerate().map(|(index, ratio)| {
+            let selected = self.area_ratio == *ratio;
+            let ratio = *ratio;
+            div()
+                .id(("area-ratio", index))
+                .h(px(32.))
+                .px(px(8.))
+                .flex()
+                .items_center()
+                .rounded(px(8.))
+                .cursor_pointer()
+                .text_size(px(12.))
+                .font_weight(FontWeight::NORMAL)
+                .when(selected, |chip| {
+                    chip.bg(Theme::with_alpha(theme.gray_12, 0.12))
+                        .text_color(theme.gray_12)
+                })
+                .when(!selected, |chip| {
+                    chip.text_color(theme.gray_11)
+                        .hover(move |style| style.bg(Theme::with_alpha(theme.gray_12, 0.08)))
+                })
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(cx.listener(move |this, _, _, cx| this.set_area_ratio(ratio, cx)))
+                .child(match ratio {
+                    Some((width, height)) => format!("{width}:{height}"),
+                    None => "Free".to_string(),
+                })
+        });
 
         div()
             .absolute()
             // `top-12` on macOS, centred by hand: gpui has no translate.
             .top(px(48.))
-            .left(px((self.display_size.0 - 280.) / 2.))
-            .w(px(280.))
+            .left(px((self.display_size.0 - WIDTH) / 2.))
+            .w(px(WIDTH))
             .flex()
             .justify_center()
             .child(
                 self.glass_surface()
+                    .occlude()
                     .h(px(48.))
                     .flex()
                     .items_center()
                     .gap(px(6.))
                     .p(px(6.))
-                    .text_color(self.theme.gray_12)
+                    .text_color(theme.gray_12)
                     .child(
                         div()
                             .min_w(px(112.))
@@ -2279,20 +2754,149 @@ impl OverlayWindow {
                             .font_weight(FontWeight::NORMAL)
                             .child(label),
                     )
-                    .child(ratio),
+                    .child(divider())
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(2.))
+                            .p(px(2.))
+                            .rounded(px(12.))
+                            .bg(Theme::with_alpha(theme.gray_12, 0.06))
+                            .children(chips),
+                    )
+                    .child(
+                        icon_button("area-ratio-more", "icons/ratio.svg", "More aspect ratios")
+                            .when(in_more, |button| {
+                                button
+                                    .bg(Theme::with_alpha(theme.gray_12, 0.12))
+                                    .text_color(theme.gray_12)
+                            })
+                            .on_click(cx.listener(|this, event: &gpui::ClickEvent, _, cx| {
+                                cx.stop_propagation();
+                                this.open_aspect_menu(event.position(), cx);
+                            })),
+                    )
+                    .child(divider())
+                    .child(
+                        icon_button("area-reset", "icons/rotate-ccw.svg", "Reset selection")
+                            .on_click(cx.listener(|this, _, _, cx| this.reset_area(cx))),
+                    )
+                    .child(
+                        icon_button("area-fill", "icons/maximize.svg", "Fill display")
+                            .on_click(cx.listener(|this, _, _, cx| this.fill_area(cx))),
+                    ),
             )
+    }
+
+    fn open_aspect_menu(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let items = self.aspect_menu_items();
+        self.mode_menu = None;
+        self.countdown_menu = None;
+        self.device_menu = None;
+        self.window_menu = None;
+        self.aspect_menu = Some(crate::ui::MenuState::new(position, &items));
+        cx.notify();
+    }
+
+    fn aspect_menu_items(&self) -> Vec<crate::ui::MenuItem> {
+        more_area_ratios()
+            .into_iter()
+            .map(|ratio| {
+                crate::ui::MenuItem::new(
+                    format!("{}:{}", ratio.0, ratio.1),
+                    self.area_ratio == Some(ratio),
+                )
+            })
+            .collect()
+    }
+
+    fn render_aspect_menu(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let state = self.aspect_menu.as_ref()?;
+        Some(
+            crate::ui::Menu::plain(
+                &self.theme,
+                "overlay-aspect-menu",
+                self.aspect_menu_items(),
+                state,
+            )
+            .on_select(cx.listener(|this, index: &usize, _, cx| {
+                this.choose_aspect(*index, cx);
+            }))
+            .on_dismiss(cx.listener(|this, _, _, cx| {
+                this.aspect_menu = None;
+                cx.notify();
+            }))
+            .into_any_element(),
+        )
+    }
+
+    fn choose_aspect(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.aspect_menu = None;
+        if let Some(ratio) = more_area_ratios().get(index) {
+            self.set_area_ratio(Some(*ratio), cx);
+        } else {
+            cx.notify();
+        }
+    }
+
+    /// The selection as drawn this frame: mid-reshape, the way there.
+    fn displayed_crop(&mut self, window: &Window) -> Option<AreaRect> {
+        let crop = self.crop?;
+        let Some((from, started)) = self.reshape else {
+            return Some(crop);
+        };
+        let t = started.elapsed().as_secs_f32() / AREA_RESHAPE.as_secs_f32();
+        if t >= 1. {
+            self.reshape = None;
+            return Some(crop);
+        }
+        window.request_animation_frame();
+        Some(area_between(from, crop, t))
+    }
+
+    /// Move the selection to `to`, animating from wherever it is drawn now.
+    fn reshape_area(&mut self, to: AreaRect, cx: &mut Context<Self>) {
+        let from = match (self.crop, self.reshape) {
+            (Some(crop), Some((from, started))) => area_between(
+                from,
+                crop,
+                started.elapsed().as_secs_f32() / AREA_RESHAPE.as_secs_f32(),
+            ),
+            (Some(crop), None) => crop,
+            (None, _) => area_fill(self.display_size, None),
+        };
+        self.reshape = Some((from, Instant::now()));
+        self.crop = Some(to.clamped(self.display_size));
+        self.sync_area_camera(cx);
+        cx.notify();
+    }
+
+    fn fill_area(&mut self, cx: &mut Context<Self>) {
+        let to = area_fill(self.display_size, self.area_ratio.map(ratio_value));
+        self.reshape_area(to, cx);
+    }
+
+    fn reset_area(&mut self, cx: &mut Context<Self>) {
+        self.reshape = None;
+        self.crop = None;
+        self.sync_area_camera(cx);
+        cx.notify();
     }
 
     /// Locks drawn and resized areas to `ratio`, reshaping the current one
     /// around its centre, and remembers the choice for the next picker.
     fn set_area_ratio(&mut self, ratio: Option<(u32, u32)>, cx: &mut Context<Self>) {
         self.area_ratio = ratio;
-        if let (Some(ratio), Some(crop)) = (ratio, self.crop) {
-            self.crop = Some(area_with_ratio(crop, ratio_value(ratio), self.display_size));
-            self.sync_area_camera(cx);
-        }
         store_area_ratio(ratio);
-        cx.notify();
+        if let (Some(ratio), Some(crop)) = (ratio, self.crop) {
+            self.reshape_area(
+                area_with_ratio(crop, ratio_value(ratio), self.display_size),
+                cx,
+            );
+        } else {
+            cx.notify();
+        }
     }
 
     /// The controls cluster, placed against the crop the way `controlsStyle`
@@ -2455,6 +3059,8 @@ impl OverlayWindow {
                                         .collect::<Vec<_>>();
                                     this.mode_menu = None;
                                     this.device_menu = None;
+                                    this.aspect_menu = None;
+                                    this.window_menu = None;
                                     this.countdown_menu =
                                         Some(crate::ui::MenuState::new(event.position(), &items));
                                     cx.notify();
@@ -2646,6 +3252,8 @@ impl OverlayWindow {
                             let current = this.select.read(cx).recording_mode;
                             this.device_menu = None;
                             this.countdown_menu = None;
+                            this.aspect_menu = None;
+                            this.window_menu = None;
                             this.mode_menu = Some(crate::ui::MenuState::new(
                                 event.position,
                                 &mode_menu_items(current),
@@ -2727,6 +3335,8 @@ impl OverlayWindow {
         }
         let point = (f32::from(position.x), f32::from(position.y));
         self.snap_guides.clear();
+        self.reshape = None;
+        self.aspect_menu = None;
 
         self.drag = match self.area_zone_at(point) {
             Some(AreaZone::Handle(handle)) => Some(AreaDrag::Resize {
@@ -2992,6 +3602,52 @@ mod tests {
     }
 
     #[test]
+    fn quick_and_more_ratios_cover_every_ratio_once() {
+        let more = more_area_ratios();
+        assert_eq!(more, vec![(16, 10), (21, 9), (3, 2), (2, 1)]);
+        let mut all: Vec<Option<(u32, u32)>> = QUICK_AREA_RATIOS.to_vec();
+        all.extend(more.into_iter().map(Some));
+        all.sort();
+        let mut expected = AREA_RATIOS.to_vec();
+        expected.sort();
+        assert_eq!(all, expected);
+    }
+
+    #[test]
+    fn fill_takes_the_display_or_the_largest_centred_area_of_the_ratio() {
+        let display = (1512., 982.);
+        let free = area_fill(display, None);
+        assert_eq!(
+            (free.x, free.y, free.width, free.height),
+            (0., 0., 1512., 982.)
+        );
+        let wide = area_fill(display, Some(16. / 9.));
+        assert_eq!((wide.x, wide.width), (0., 1512.));
+        assert!((wide.height - 850.5).abs() < 0.01);
+        assert!((wide.y - (982. - wide.height) / 2.).abs() < 0.01);
+        let tall = area_fill(display, Some(9. / 16.));
+        assert_eq!((tall.y, tall.height), (0., 982.));
+        assert!((tall.width - 552.375).abs() < 0.01);
+        assert!((tall.x - (1512. - tall.width) / 2.).abs() < 0.01);
+    }
+
+    #[test]
+    fn a_reshape_starts_and_ends_exactly_and_moves_monotonically() {
+        let from = rect(10., 20., 300., 200.);
+        let to = rect(100., 50., 640., 360.);
+        assert_eq!(area_between(from, to, 0.), from);
+        assert_eq!(area_between(from, to, 1.), to);
+        assert_eq!(area_between(from, to, 3.), to);
+        let mut previous = from.width;
+        for step in 1..=20 {
+            let width = area_between(from, to, step as f32 / 20.).width;
+            assert!(width >= previous);
+            previous = width;
+        }
+        assert!(area_between(from, to, 0.5).width > (from.width + to.width) / 2.);
+    }
+
+    #[test]
     fn choosing_a_ratio_reshapes_the_area_around_its_centre() {
         let display = (1920., 1080.);
         let area = area_with_ratio(
@@ -3008,8 +3664,6 @@ mod tests {
         assert!((area.height - 450.).abs() < 0.01);
         assert!((area.y + area.height / 2. - 400.).abs() < 0.01);
         assert!(inside(area, display));
-        assert_eq!(next_area_ratio(None), Some((16, 9)));
-        assert_eq!(next_area_ratio(Some((2, 1))), None);
     }
 
     #[test]
