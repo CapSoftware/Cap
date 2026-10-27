@@ -318,6 +318,34 @@ impl WindowImpl {
         ret
     }
 
+    /// The window numbers of the on-screen windows in front of this one,
+    /// frontmost first: what a capture of this window alone leaves out.
+    pub fn windows_in_front(&self) -> Vec<u32> {
+        use core_graphics::window::{
+            kCGWindowListExcludeDesktopElements, kCGWindowListOptionOnScreenAboveWindow,
+        };
+
+        let Some(windows) = core_graphics::window::copy_window_info(
+            kCGWindowListExcludeDesktopElements | kCGWindowListOptionOnScreenAboveWindow,
+            self.0,
+        ) else {
+            return vec![];
+        };
+        windows
+            .iter()
+            .filter_map(|window| {
+                let window_dict =
+                    unsafe { CFDictionary::<CFString, *const c_void>::from_void(*window) };
+                unsafe {
+                    window_dict
+                        .find(kCGWindowNumber)
+                        .and_then(|v| CFNumber::from_void(*v).to_i64().map(|v| v as u32))
+                }
+            })
+            .filter(|number| *number != self.0)
+            .collect()
+    }
+
     pub fn list_containing_cursor() -> Vec<Self> {
         let Some(cursor) = get_cursor_position() else {
             return vec![];
