@@ -2745,15 +2745,18 @@ impl OverlayWindow {
                 .justify_center()
                 .rounded(px(12.))
                 .cursor_pointer()
-                .text_color(theme.gray_11)
-                .hover(move |style| {
-                    style
-                        .bg(Theme::with_alpha(theme.gray_12, 0.08))
-                        .text_color(theme.gray_12)
-                })
+                .group(id)
+                .hover(move |style| style.bg(Theme::with_alpha(theme.gray_12, 0.08)))
                 .tooltip(move |_, cx| crate::ui::Tooltip::new(&theme, tooltip).view(cx))
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .child(svg().path(icon).size(px(16.)))
+                // An svg takes its own text colour, not its parent's.
+                .child(
+                    svg()
+                        .path(icon)
+                        .size(px(16.))
+                        .text_color(theme.gray_11)
+                        .group_hover(id, move |style| style.text_color(theme.gray_12)),
+                )
         };
         let in_more = self
             .area_ratio
@@ -2831,9 +2834,7 @@ impl OverlayWindow {
                     .child(
                         icon_button("area-ratio-more", "icons/ratio.svg", "More aspect ratios")
                             .when(in_more, |button| {
-                                button
-                                    .bg(Theme::with_alpha(theme.gray_12, 0.12))
-                                    .text_color(theme.gray_12)
+                                button.bg(Theme::with_alpha(theme.gray_12, 0.12))
                             })
                             .on_click(cx.listener(|this, event: &gpui::ClickEvent, _, cx| {
                                 cx.stop_propagation();
