@@ -389,10 +389,6 @@ impl TargetSelect {
         self.arranged.get(&id.to_string())
     }
 
-    pub fn forget_arranged(&mut self, id: &WindowId) {
-        self.arranged.remove(&id.to_string());
-    }
-
     /// Every window the picker moved, with where it was, forgetting them.
     pub fn take_arranged(&mut self) -> Vec<HoveredWindow> {
         self.arranged.drain().map(|(_, window)| window).collect()
@@ -1014,7 +1010,8 @@ impl OverlayWindow {
         // lifts it to the top of its band on Windows and X11, over the camera.
         cx.observe_window_activation(window, |_, window, cx| {
             if window.is_window_active() {
-                cx.defer(app_windows::raise_camera_above_overlays);
+                cx.spawn(async move |_, cx| app_windows::raise_camera_above_overlays(cx))
+                    .detach();
             }
         })
         .detach();

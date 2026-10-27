@@ -1,8 +1,4 @@
 #!/usr/bin/env bash
-# Runs cap-gpui's picker probe (src/picker_probe.rs) in a throwaway profile and
-# fails unless every check in its report passed.
-#
-#   scripts/picker-smoke/run.sh <cap-gpui binary> <out dir>
 set -euo pipefail
 
 APP=$1
