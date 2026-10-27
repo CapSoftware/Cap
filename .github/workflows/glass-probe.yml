@@ -18,14 +18,48 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 concurrency:
   group: glass-probe-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
+  # A pull request from a fork that changes only this workflow or the probe's
+  # scripts does not queue the three-runner matrix; one that also changes the
+  # glass itself does, and so does any change from this repository.
+  scope:
+    name: Scope
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.scope.outputs.run }}
+    steps:
+      - name: Scope
+        id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          PR: ${{ github.event.pull_request.number }}
+          SAME_REPO: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT" != pull_request || "$SAME_REPO" == true ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --paginate --jq '.[].filename' > "$RUNNER_TEMP/changed.txt"
+          glass='^apps/desktop-gpui/(glass/.*|patches/zed-glass\.patch|src/ui/glass\.rs|src/glass_probe\.rs)$'
+          if grep -qE "$glass" "$RUNNER_TEMP/changed.txt"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "A fork pull request that changes no glass code does not run the glass probe." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
   probe:
     name: Glass probe (${{ matrix.settings.name }})
+    needs: scope
+    if: needs.scope.outputs.run == 'true'
     timeout-minutes: 75
     strategy:
       fail-fast: false
