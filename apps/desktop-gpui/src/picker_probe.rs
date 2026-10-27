@@ -69,6 +69,7 @@ pub fn run(main: WindowHandle<MainWindow>, cx: &mut App) {
             let mut mode = cx.update(|cx| probe_mode(label, cx));
             mode["overlayInactiveBeforeActivation"] = inactive_before.into();
             modes.push(mode);
+            screenshot(&output, label, cx).await;
             cx.update(app_windows::dismiss_target_overlays);
             sleep(cx, 400).await;
         }
@@ -93,6 +94,29 @@ pub fn run(main: WindowHandle<MainWindow>, cx: &mut App) {
 struct StackEntry {
     id: isize,
     level: Option<i64>,
+}
+
+async fn screenshot(output: &std::ffi::OsStr, label: &str, cx: &mut AsyncApp) {
+    let Some(directory) = std::path::Path::new(output).parent() else {
+        return;
+    };
+    let path = directory.join(format!("{label}.png"));
+    let target = cap_recording::sources::screen_capture::ScreenCaptureTarget::Display {
+        id: scap_targets::Display::primary().id(),
+    };
+    let image = gpui_tokio::Tokio::spawn(cx, async move {
+        cap_recording::screenshot::capture_screenshot(target).await
+    })
+    .await;
+    match image {
+        Ok(Ok(image)) => {
+            if let Err(error) = image.save(&path) {
+                tracing::warn!(%error, "picker probe: could not save {label} screenshot");
+            }
+        }
+        Ok(Err(error)) => tracing::warn!("picker probe: {label} screenshot failed: {error:#}"),
+        Err(error) => tracing::warn!(%error, "picker probe: {label} screenshot task failed"),
+    }
 }
 
 async fn sleep(cx: &mut AsyncApp, millis: u64) {
