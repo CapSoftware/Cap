@@ -806,11 +806,11 @@ fn store_locked_area(locked: Option<(&DisplayId, AreaRect)>) {
 
 /// The locked area for a display, fitted to its current size, if it is still
 /// big enough to record.
-fn locked_area_for(display: &DisplayId, display_size: (f32, f32)) -> Option<AreaRect> {
+fn locked_area_for(display: &DisplayId, display_size: (f32, f32), min: f32) -> Option<AreaRect> {
     let (locked_display, bounds) = stored_locked_area()?;
     (locked_display == display.to_string())
         .then(|| bounds.clamped(display_size))
-        .filter(|bounds| bounds.is_valid_for(AREA_MIN_SIZE))
+        .filter(|bounds| bounds.is_valid_for(min))
 }
 
 const QUICK_AREA_RATIOS: [Option<(u32, u32)>; 5] = [
@@ -1350,7 +1350,11 @@ impl OverlayWindow {
                 height: logical.1,
             })
             .clamped(logical);
-        let locked_area = locked_area_for(&display.id(), logical);
+        let locked_area = locked_area_for(
+            &display.id(),
+            logical,
+            area_min_size(select.read(cx).recording_mode),
+        );
 
         Self {
             theme,
@@ -1666,13 +1670,18 @@ impl OverlayWindow {
         step: ProbeDrag,
         point: (f32, f32),
         cx: &mut Context<Self>,
-    ) {
+    ) -> bool {
         let position = gpui::point(px(point.0), px(point.1));
         match step {
-            ProbeDrag::Press => self.area_mouse_down(position, cx),
+            ProbeDrag::Press => {
+                // A lock saved on this display would hold the area still.
+                self.area_locked = false;
+                self.area_mouse_down(position, cx);
+            }
             ProbeDrag::Move => self.area_mouse_move(position, false, cx),
             ProbeDrag::Release => self.area_mouse_up(position, false, cx),
         }
+        self.drag.is_some()
     }
 
     /// Move the drawn area `offset` points right, the way a drag would, for
@@ -3706,7 +3715,6 @@ impl OverlayWindow {
             )
     }
 
-    /// Lock the area (kept for next time, and held still) or unlock it.
     fn toggle_area_lock(&mut self, cx: &mut Context<Self>) {
         if self.area_locked {
             self.area_locked = false;
@@ -3763,53 +3771,37 @@ impl OverlayWindow {
         .detach();
     }
 
-    /// A click with no drag fits the area to the window under it.
     fn fit_area_to_window_at(&mut self, point: (f32, f32), cx: &mut Context<Self>) {
-        let display = self.display_id.clone();
-        let scale = self.capture_scale;
-        cx.spawn(async move |this, cx| {
-            let window = cx
-                .background_executor()
-                .spawn(async move {
-                    crate::devices::topmost_foreign_window_at_cursor()
-                        .as_ref()
-                        .and_then(HoveredWindow::from_window)
-                })
-                .await;
-            let fitted = this
-                .update(cx, |this, cx| {
-                    let window = window.filter(|window| window.display_id == display)?;
-                    // A drag or a lock since the click wins.
-                    if this.crop.is_some() || this.drag.is_some() || this.area_locked {
-                        return None;
-                    }
-                    let mut bounds = window
-                        .bounds
-                        .scaled(1. / scale)
-                        .intersected(this.display_size)?;
-                    if let Some(ratio) = this.area_ratio {
-                        bounds = area_with_ratio(bounds, ratio_value(ratio), this.display_size);
-                    }
-                    let min = area_min_size(this.select.read(cx).recording_mode);
-                    if !bounds.is_valid_for(min) {
-                        return None;
-                    }
-                    this.crop = Some(AreaRect {
-                        x: point.0,
-                        y: point.1,
-                        width: 0.,
-                        height: 0.,
-                    });
-                    this.reshape_area(bounds, cx);
-                    Some(())
-                })
-                .ok()
-                .flatten();
-            if fitted.is_some() {
-                cx.update(app_windows::refresh_target_overlays);
-            }
-        })
-        .detach();
+        // Looked up during the release, while the pointer is still where it
+        // clicked: a lookup that ran later would find whatever window the
+        // pointer had moved over since.
+        let Some(window) = crate::devices::topmost_foreign_window_at_cursor()
+            .as_ref()
+            .and_then(HoveredWindow::from_window)
+            .filter(|window| window.display_id == self.display_id)
+        else {
+            return;
+        };
+        let Some(mut bounds) = window
+            .bounds
+            .scaled(1. / self.capture_scale)
+            .intersected(self.display_size)
+        else {
+            return;
+        };
+        if let Some(ratio) = self.area_ratio {
+            bounds = area_with_ratio(bounds, ratio_value(ratio), self.display_size);
+        }
+        if !bounds.is_valid_for(area_min_size(self.select.read(cx).recording_mode)) {
+            return;
+        }
+        self.crop = Some(AreaRect {
+            x: point.0,
+            y: point.1,
+            width: 0.,
+            height: 0.,
+        });
+        self.reshape_area(bounds, cx);
     }
 
     /// The area's keys: arrows nudge it (Shift for 10 points), Return starts,
@@ -4407,8 +4399,6 @@ enum AreaZone {
 }
 
 impl OverlayWindow {
-    /// Track which part of the area the pointer is over, so the handles and
-    /// the move cue answer before a press.
     fn area_hover_at(
         &mut self,
         position: Point<Pixels>,
@@ -4625,12 +4615,21 @@ impl OverlayWindow {
             return;
         };
         self.snap_guides.clear();
+        // Measured from the pointer, not the crop: snapping can stretch a
+        // stationary click into a few points of selection.
+        let clicked = match drag {
+            AreaDrag::Draw { anchor } => {
+                (f32::from(position.x) - anchor.0).abs() < 3.
+                    && (f32::from(position.y) - anchor.1).abs() < 3.
+            }
+            _ => false,
+        };
         if let Some(crop) = self.crop {
             // A click with no drag is not a selection: it fits the area to
             // the window under it instead.
-            if crop.width < 2. || crop.height < 2. {
+            if clicked || crop.width < 2. || crop.height < 2. {
                 self.crop = None;
-                if matches!(drag, AreaDrag::Draw { .. }) {
+                if clicked {
                     self.fit_area_to_window_at((f32::from(position.x), f32::from(position.y)), cx);
                 }
             } else {
@@ -4642,7 +4641,10 @@ impl OverlayWindow {
         // the screenshot area picker has no confirm step
         // (`target-select-overlay.tsx`'s area mouse-up). Move/resize grabs
         // keep the crop for the Start button, same as recording mode.
+        // A click fitted to a window waits for the button instead, so a stray
+        // click never takes a screenshot.
         if matches!(drag, AreaDrag::Draw { .. })
+            && !clicked
             && self.select.read(cx).recording_mode == Mode::Screenshot
             && let Some(target) = self.target(cx)
         {

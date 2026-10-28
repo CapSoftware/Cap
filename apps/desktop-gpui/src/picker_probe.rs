@@ -710,8 +710,8 @@ async fn drag_frames(
         cx.update(|cx| {
             overlay
                 .update(cx, |view, _, cx| view.probe_drag(step, point, cx))
-                .ok();
-        });
+                .unwrap_or(false)
+        })
     };
     cx.update(|cx| {
         overlay
@@ -719,7 +719,7 @@ async fn drag_frames(
             .ok();
     });
     sleep(cx, 300).await;
-    drag(ProbeDrag::Press, grab, cx);
+    let started = drag(ProbeDrag::Press, grab, cx);
     probe_frames::begin();
     let (cpu, wall) = (cpu_secs(), std::time::Instant::now());
     let mut events = 0u32;
@@ -739,7 +739,7 @@ async fn drag_frames(
     drag(ProbeDrag::Release, grab, cx);
     let mut gaps: Vec<f64> = frames
         .windows(2)
-        .map(|pair| (pair[1] - pair[0]).as_secs_f64() * 1000.)
+        .map(|pair| pair[1].saturating_duration_since(pair[0]).as_secs_f64() * 1000.)
         .collect();
     gaps.sort_by(f64::total_cmp);
     let percentile = |p: f64| {
@@ -747,6 +747,7 @@ async fn drag_frames(
             .copied()
     };
     serde_json::json!({
+        "dragStarted": started,
         "cpuPercent": cpu,
         "fps": frames.len() as f64 / seconds,
         "mouseEvents": events,
