@@ -968,6 +968,8 @@ pub struct MainWindow {
     panel: Option<Panel>,
     mode_info_opened_at: std::time::Instant,
     mode_info_preview: Option<Mode>,
+    mode_info_focus: [gpui::FocusHandle; 3],
+    mode_info_focused: Option<Mode>,
     /// Live filter text for the device and target panels -- a mirror of
     /// `search_input`'s value, kept as a plain `String` because every list in
     /// the panel filters against it from a `&self` method.
@@ -1266,6 +1268,8 @@ impl MainWindow {
             panel: None,
             mode_info_opened_at: std::time::Instant::now(),
             mode_info_preview: None,
+            mode_info_focus: std::array::from_fn(|_| cx.focus_handle().tab_stop(true)),
+            mode_info_focused: None,
             search: String::new(),
             search_input,
             _search_events: search_events,
@@ -2940,6 +2944,11 @@ impl Render for MainWindow {
             ui::keyboard_nav::leave(window, cx);
         }
         self.keyboard_nav = ui::keyboard_nav::active(window, cx);
+        self.mode_info_focused = [Mode::Instant, Mode::Studio, Mode::Screenshot]
+            .into_iter()
+            .zip(&self.mode_info_focus)
+            .find(|(_, focus)| self.keyboard_nav && focus.is_focused(window))
+            .map(|(mode, _)| mode);
         let theme = self.theme;
         let meter_active = self.panel.is_none()
             && self.microphone.is_some()
@@ -6119,7 +6128,10 @@ impl MainWindow {
         let locked = self.session.read(cx).editor_recording_target().is_some();
         let opened_at = self.mode_info_opened_at;
         let still = cx.reduce_motion() || opened_at.elapsed() >= MODE_INFO_DRAW_DURATION;
-        let shown = self.mode_info_preview.unwrap_or(effective_mode);
+        let shown = self
+            .mode_info_focused
+            .or(self.mode_info_preview)
+            .unwrap_or(effective_mode);
         let detail = crate::onboarding_window::mode_detail(shown);
 
         let cards = div().flex().flex_row().gap(px(6.)).w_full().children(
@@ -6137,7 +6149,9 @@ impl MainWindow {
 
                     div()
                         .id(SharedString::from(mode.panel_title()))
-                        .when(self.keyboard_nav, ui::keyboard_nav::stop)
+                        .when(self.keyboard_nav, |this| {
+                            ui::keyboard_nav::stop(this.track_focus(&self.mode_info_focus[index]))
+                        })
                         .role(gpui::Role::Button)
                         .aria_label(mode.display_name())
                         .aria_selected(selected)
