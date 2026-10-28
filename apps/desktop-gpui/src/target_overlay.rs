@@ -1137,6 +1137,8 @@ enum AreaDrag {
     /// Drawing a fresh selection from an anchor point.
     Draw {
         anchor: (f32, f32),
+        /// The area the press replaced, for Escape to bring back.
+        previous: Option<AreaRect>,
     },
     /// Dragging the whole selection.
     Move {
@@ -3688,10 +3690,33 @@ impl OverlayWindow {
             )
     }
 
+    /// Put the area back where the drag found it. False when nothing was
+    /// being dragged, so Escape can go on to close the picker.
+    pub fn cancel_area_drag(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(drag) = self.drag.take() else {
+            return false;
+        };
+        self.crop = match drag {
+            AreaDrag::Draw { previous, .. } => previous,
+            AreaDrag::Move { start, .. } | AreaDrag::Resize { start, .. } => Some(start),
+        };
+        self.snap_guides.clear();
+        self.sync_area_camera(cx);
+        cx.notify();
+        true
+    }
+
+    /// Only the display the saved lock belongs to clears it.
+    fn unlock_area(&mut self) {
+        self.area_locked = false;
+        if stored_locked_area().is_some_and(|(display, _)| display == self.display_id.to_string()) {
+            store_locked_area(None);
+        }
+    }
+
     fn toggle_area_lock(&mut self, cx: &mut Context<Self>) {
         if self.area_locked {
-            self.area_locked = false;
-            store_locked_area(None);
+            self.unlock_area();
         } else {
             let min = area_min_size(self.select.read(cx).recording_mode);
             let Some(crop) = self.crop.filter(|crop| crop.is_valid_for(min)) else {
@@ -3701,8 +3726,18 @@ impl OverlayWindow {
             self.drag = None;
             self.snap_guides.clear();
             store_locked_area(Some((&self.display_id, crop)));
+            // One lock is saved: another display's lock is replaced.
+            let display = self.display_id.clone();
+            cx.defer(move |cx| app_windows::release_other_area_locks(&display, cx));
         }
         cx.notify();
+    }
+
+    pub fn release_area_lock(&mut self, cx: &mut Context<Self>) {
+        if self.area_locked {
+            self.area_locked = false;
+            cx.notify();
+        }
     }
 
     /// Keep a locked area's stored bounds in step with a toolbar change. Only
@@ -3785,16 +3820,7 @@ impl OverlayWindow {
             return false;
         }
         let key = keystroke.key.as_str();
-        if key == "escape"
-            && let Some(drag) = self.drag.take()
-        {
-            self.crop = match drag {
-                AreaDrag::Draw { .. } => None,
-                AreaDrag::Move { start, .. } | AreaDrag::Resize { start, .. } => Some(start),
-            };
-            self.snap_guides.clear();
-            self.sync_area_camera(cx);
-            cx.notify();
+        if key == "escape" && self.cancel_area_drag(cx) {
             return true;
         }
         if key == "enter" && self.drag.is_none() && self.target(cx).is_some() {
@@ -3918,8 +3944,7 @@ impl OverlayWindow {
 
     fn reset_area(&mut self, cx: &mut Context<Self>) {
         if self.area_locked {
-            self.area_locked = false;
-            store_locked_area(None);
+            self.unlock_area();
         }
         self.reshape = None;
         self.crop = None;
@@ -4451,13 +4476,16 @@ impl OverlayWindow {
             None => {
                 // A press outside the selection starts a fresh one, the way the
                 // Cropper's full-screen "Start selection" button does.
-                self.crop = Some(AreaRect {
+                let previous = self.crop.replace(AreaRect {
                     x: point.0,
                     y: point.1,
                     width: 0.,
                     height: 0.,
                 });
-                Some(AreaDrag::Draw { anchor: point })
+                Some(AreaDrag::Draw {
+                    anchor: point,
+                    previous,
+                })
             }
         };
         self.sync_area_camera(cx);
@@ -4474,7 +4502,7 @@ impl OverlayWindow {
 
         let ratio = self.area_ratio.map(ratio_value);
         let (next, guides) = match (drag, ratio) {
-            (AreaDrag::Draw { anchor }, Some(ratio)) => (
+            (AreaDrag::Draw { anchor, .. }, Some(ratio)) => (
                 area_from_anchor_with_ratio(*anchor, (x, y), ratio, self.display_size),
                 Vec::new(),
             ),
@@ -4498,7 +4526,7 @@ impl OverlayWindow {
                 },
                 Vec::new(),
             ),
-            (AreaDrag::Draw { anchor }, None) => {
+            (AreaDrag::Draw { anchor, .. }, None) => {
                 let ((x, y), guides) = if free {
                     ((x, y), Vec::new())
                 } else {
@@ -4586,7 +4614,7 @@ impl OverlayWindow {
         // Measured from the pointer, not the crop: snapping can stretch a
         // stationary click into a few points of selection.
         let clicked = match drag {
-            AreaDrag::Draw { anchor } => {
+            AreaDrag::Draw { anchor, .. } => {
                 (f32::from(position.x) - anchor.0).abs() < 3.
                     && (f32::from(position.y) - anchor.1).abs() < 3.
             }

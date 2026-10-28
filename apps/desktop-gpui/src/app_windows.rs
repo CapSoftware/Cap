@@ -581,7 +581,7 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
     cx.spawn(async move |cx| {
         while escape.recv_async().await.is_ok() {
             cx.update(|cx| {
-                if TargetSelect::global(cx).read(cx).mode.is_some() {
+                if TargetSelect::global(cx).read(cx).mode.is_some() && !cancel_area_drags(cx) {
                     dismiss_target_overlays(cx);
                 }
             });
@@ -2551,6 +2551,30 @@ fn start_recording_from_overlay_now(target: ScreenCaptureTarget, cx: &mut App) {
     } else if !retained_area {
         cx.global_mut::<AppWindows>().main_hidden_for_picker = false;
         cx.global_mut::<AppWindows>().editor_hidden_for_picker = None;
+    }
+}
+
+/// Escape mid-drag puts the area back rather than closing the picker. True
+/// when an overlay had a drag to cancel.
+fn cancel_area_drags(cx: &mut App) -> bool {
+    let overlays = cx.global::<AppWindows>().overlays.clone();
+    let mut cancelled = false;
+    for (_, overlay) in overlays {
+        cancelled |= overlay
+            .update(cx, |view, _, cx| view.cancel_area_drag(cx))
+            .unwrap_or(false);
+    }
+    cancelled
+}
+
+pub fn release_other_area_locks(display: &DisplayId, cx: &mut App) {
+    let overlays = cx.global::<AppWindows>().overlays.clone();
+    for (id, overlay) in overlays {
+        if &id != display {
+            overlay
+                .update(cx, |view, _, cx| view.release_area_lock(cx))
+                .ok();
+        }
     }
 }
 
