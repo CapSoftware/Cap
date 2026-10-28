@@ -182,7 +182,7 @@ index 70e9a0b..79415df 100644
              "Underline".into(),
              "UnderlineInputIndex".into(),
 diff --git a/crates/gpui_macos/src/metal_renderer.rs b/crates/gpui_macos/src/metal_renderer.rs
-index 4be15aa..c90a8ab 100644
+index 4be15aa..0285c9e 100644
 --- a/crates/gpui_macos/src/metal_renderer.rs
 +++ b/crates/gpui_macos/src/metal_renderer.rs
 @@ -25,10 +25,8 @@ use metal::{
@@ -197,7 +197,7 @@ index 4be15aa..c90a8ab 100644
  use parking_lot::Mutex;
  
  use std::{cell::Cell, ffi::c_void, mem, ptr, sync::Arc};
-@@ -153,15 +151,24 @@ pub(crate) struct MetalRenderer {
+@@ -153,15 +151,23 @@ pub(crate) struct MetalRenderer {
      path_sprites_pipeline_state: metal::RenderPipelineState,
      shadows_pipeline_state: metal::RenderPipelineState,
      backdrop_blur_pipeline_state: metal::RenderPipelineState,
@@ -207,7 +207,6 @@ index 4be15aa..c90a8ab 100644
 +    backdrop_copy_pipeline_state: metal::RenderPipelineState,
 +    /// The gaussian's horizontal pass, into the half-float `backdrop_temp`.
 +    backdrop_gaussian_wide_pipeline_state: metal::RenderPipelineState,
-+    /// The vertical pass, into `backdrop_blurred`.
 +    backdrop_gaussian_pipeline_state: metal::RenderPipelineState,
      /// Framebuffer snapshot (blit dst / gaussian src) + the blurred result the
      /// draw samples from. Sized to the padded blur region (not the drawable),
@@ -225,7 +224,7 @@ index 4be15aa..c90a8ab 100644
      /// Consecutive frames rendered without any backdrop blur / any path.
      blur_free_frames: u32,
      path_free_frames: u32,
-@@ -190,8 +197,6 @@ pub(crate) struct MetalRenderer {
+@@ -190,8 +196,6 @@ pub(crate) struct MetalRenderer {
  
  impl Drop for MetalRenderer {
      fn drop(&mut self) {
@@ -234,7 +233,7 @@ index 4be15aa..c90a8ab 100644
          self.release_backdrop_resources();
      }
  }
-@@ -219,8 +224,7 @@ impl MetalRenderer {
+@@ -219,8 +223,7 @@ impl MetalRenderer {
          // https://developer.apple.com/documentation/metal/managing-your-game-window-for-metal-in-macos
          layer.set_opaque(!transparent);
          layer.set_maximum_drawable_count(3);
@@ -244,7 +243,7 @@ index 4be15aa..c90a8ab 100644
          layer.set_framebuffer_only(false);
          unsafe {
              let _: () = msg_send![&*layer, setAllowsNextDrawableTimeout: NO];
-@@ -343,6 +347,30 @@ impl MetalRenderer {
+@@ -343,6 +346,30 @@ impl MetalRenderer {
              "backdrop_blur_fragment",
              MTLPixelFormat::BGRA8Unorm,
          )?;
@@ -275,7 +274,7 @@ index 4be15aa..c90a8ab 100644
          let quads_pipeline_state = build_pipeline_state(
              &device,
              &library,
-@@ -411,9 +439,12 @@ impl MetalRenderer {
+@@ -411,9 +438,12 @@ impl MetalRenderer {
              path_sprites_pipeline_state,
              shadows_pipeline_state,
              backdrop_blur_pipeline_state,
@@ -289,7 +288,7 @@ index 4be15aa..c90a8ab 100644
              blur_free_frames: 0,
              path_free_frames: 0,
              stats_last_log: None,
-@@ -979,7 +1010,7 @@ impl MetalRenderer {
+@@ -979,7 +1009,7 @@ impl MetalRenderer {
                  // so snapshot just that padded region instead of the whole
                  // drawable (popovers are small; this is a 10-20x reduction).
                  let sigma = blur.blur_radius.0.max(1.0);
@@ -298,7 +297,7 @@ index 4be15aa..c90a8ab 100644
                  let visible = blur.bounds.intersect(&blur.content_mask.bounds);
                  let drawable_width = texture.width() as i64;
                  let drawable_height = texture.height() as i64;
-@@ -994,7 +1025,7 @@ impl MetalRenderer {
+@@ -994,7 +1024,7 @@ impl MetalRenderer {
                      continue;
                  }
                  command_encoder.end_encoding();
@@ -307,7 +306,7 @@ index 4be15aa..c90a8ab 100644
                      (x1 - x0) as u64,
                      (y1 - y0) as u64,
                      drawable_width as u64,
-@@ -1010,39 +1041,15 @@ impl MetalRenderer {
+@@ -1010,39 +1040,15 @@ impl MetalRenderer {
                  // region is clamped against it).
                  let copy_x = x0.min(drawable_width - scratch.width() as i64).max(0) as u64;
                  let copy_y = y0.min(drawable_height - scratch.height() as i64).max(0) as u64;
@@ -353,7 +352,7 @@ index 4be15aa..c90a8ab 100644
                  command_encoder = new_command_encoder_for_texture(
                      command_buffer,
                      texture,
-@@ -1064,6 +1071,7 @@ impl MetalRenderer {
+@@ -1064,6 +1070,7 @@ impl MetalRenderer {
                      &mut instance_offset,
                      viewport_size,
                      &blurred,
@@ -361,7 +360,7 @@ index 4be15aa..c90a8ab 100644
                      command_encoder,
                  ) {
                      command_encoder.end_encoding();
-@@ -1341,7 +1349,7 @@ impl MetalRenderer {
+@@ -1341,7 +1348,7 @@ impl MetalRenderer {
          drawable_width: u64,
          drawable_height: u64,
          format: MTLPixelFormat,
@@ -370,7 +369,7 @@ index 4be15aa..c90a8ab 100644
          let reusable = self.backdrop_scratch.as_ref().is_some_and(|scratch| {
              scratch.pixel_format() == format
                  && scratch.width() >= needed_width
-@@ -1360,17 +1368,18 @@ impl MetalRenderer {
+@@ -1360,17 +1367,18 @@ impl MetalRenderer {
              descriptor.set_pixel_format(format);
              descriptor.set_width(width);
              descriptor.set_height(height);
@@ -394,7 +393,7 @@ index 4be15aa..c90a8ab 100644
              self.backdrop_blurred.clone().unwrap(),
          )
      }
-@@ -1380,39 +1389,102 @@ impl MetalRenderer {
+@@ -1380,39 +1388,102 @@ impl MetalRenderer {
      fn release_backdrop_resources(&mut self) {
          self.backdrop_scratch = None;
          self.backdrop_blurred = None;
@@ -527,7 +526,7 @@ index 4be15aa..c90a8ab 100644
      }
  
      fn draw_backdrop_blurs(
-@@ -1425,6 +1497,7 @@ impl MetalRenderer {
+@@ -1425,6 +1496,7 @@ impl MetalRenderer {
          instance_offset: &mut usize,
          viewport_size: Size<DevicePixels>,
          source_texture: &metal::TextureRef,
@@ -535,7 +534,7 @@ index 4be15aa..c90a8ab 100644
          command_encoder: &metal::RenderCommandEncoderRef,
      ) -> bool {
          if blurs.is_empty() {
-@@ -1462,6 +1535,10 @@ impl MetalRenderer {
+@@ -1462,6 +1534,10 @@ impl MetalRenderer {
              BackdropBlurInputIndex::SourceTexture as u64,
              Some(source_texture),
          );
@@ -546,7 +545,7 @@ index 4be15aa..c90a8ab 100644
  
          let blur_bytes_len = mem::size_of_val(blurs);
          let buffer_contents =
-@@ -2397,6 +2474,8 @@ enum BackdropBlurInputIndex {
+@@ -2397,6 +2473,8 @@ enum BackdropBlurInputIndex {
      /// Drawable rect the snapshot covers (x, y, w, h in device px) — the
      /// fragment shader maps frag position → snapshot UV through it.
      SourceRect = 4,
@@ -555,7 +554,7 @@ index 4be15aa..c90a8ab 100644
  }
  
  #[repr(C)]
-@@ -2568,7 +2647,7 @@ mod renderer_hardening_tests {
+@@ -2568,7 +2646,7 @@ mod renderer_hardening_tests {
  #[cfg(test)]
  mod backdrop_blur_tests {
      use super::*;
@@ -564,7 +563,7 @@ index 4be15aa..c90a8ab 100644
      use image::RgbaImage;
  
      const VIEW_W: i32 = 640;
-@@ -2645,6 +2724,7 @@ mod backdrop_blur_tests {
+@@ -2645,6 +2723,7 @@ mod backdrop_blur_tests {
              bounds: blur_bounds,
              content_mask: ContentMask { bounds: viewport() },
              corner_radii: Corners::default(),
@@ -572,7 +571,7 @@ index 4be15aa..c90a8ab 100644
          });
          scene.pop_layer();
      }
-@@ -2741,6 +2821,249 @@ mod backdrop_blur_tests {
+@@ -2741,6 +2820,249 @@ mod backdrop_blur_tests {
          );
      }
  
@@ -823,10 +822,10 @@ index 4be15aa..c90a8ab 100644
      fn two_blurs_of_different_sizes_in_one_frame() {
          if metal::Device::system_default().is_none() {
 diff --git a/crates/gpui_macos/src/shaders.metal b/crates/gpui_macos/src/shaders.metal
-index e087c0d..493ab9f 100644
+index e087c0d..4692c8f 100644
 --- a/crates/gpui_macos/src/shaders.metal
 +++ b/crates/gpui_macos/src/shaders.metal
-@@ -1335,6 +1335,49 @@ float4 fill_color(Background background,
+@@ -1335,6 +1335,48 @@ float4 fill_color(Background background,
    return color;
  }
  
@@ -834,7 +833,6 @@ index e087c0d..493ab9f 100644
 +  float4 position [[position]];
 +};
 +
-+// One triangle over the whole target, for the snapshot passes below.
 +vertex BackdropPassOutput backdrop_pass_vertex(uint vertex_id [[vertex_id]]) {
 +  float2 uv = float2((vertex_id << 1) & 2, vertex_id & 2);
 +  return BackdropPassOutput{float4(uv * 2. - 1., 0., 1.)};
@@ -876,7 +874,7 @@ index e087c0d..493ab9f 100644
  struct BackdropBlurVertexOutput {
    float4 position [[position]];
    uint blur_id [[flat]];
-@@ -1354,9 +1397,17 @@ vertex BackdropBlurVertexOutput backdrop_blur_vertex(
+@@ -1354,9 +1396,17 @@ vertex BackdropBlurVertexOutput backdrop_blur_vertex(
      [[buffer(BackdropBlurInputIndex_ViewportSize)]]) {
    float2 unit_vertex = unit_vertices[unit_vertex_id];
    BackdropBlur blur = blurs[blur_id];
@@ -896,7 +894,7 @@ index e087c0d..493ab9f 100644
                                                   blur.content_mask.bounds);
    return BackdropBlurVertexOutput{
        device_position,
-@@ -1364,26 +1415,88 @@ vertex BackdropBlurVertexOutput backdrop_blur_vertex(
+@@ -1364,26 +1414,88 @@ vertex BackdropBlurVertexOutput backdrop_blur_vertex(
        {clip_distance.x, clip_distance.y, clip_distance.z, clip_distance.w}};
  }
  
