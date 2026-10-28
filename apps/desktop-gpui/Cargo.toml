@@ -5,7 +5,7 @@
 # wgpu-hal, tao) that only exist for the Tauri app.
 [workspace]
 resolver = "2"
-members = [".", "kernels", "i18n-build"]
+members = [".", "kernels", "i18n-build", "glass"]
 
 [package]
 name = "cap-desktop-gpui"
@@ -27,6 +27,7 @@ path = "../../crates/recording/examples/studio-finalization-benchmark.rs"
 cap-audio = { path = "../../crates/audio" }
 cap-cli-install = { path = "../../crates/cli-install" }
 cap-gpui-kernels = { path = "kernels" }
+cap-glass = { path = "glass" }
 # gpui — the wingleeio/zed fork Comet ships. The pinned rev carries f596cde
 # ("destination alpha on transparent windows: Porter-Duff OVER, not additive"),
 # which our transparent rounded main-window shell depends on.
@@ -211,6 +212,7 @@ raw-window-handle = "0.6"
 tray-icon = { version = "0.21.1", default-features = false }
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
+    "Win32_Graphics_Dwm",
     "Win32_Security",
     "Win32_Storage_FileSystem",
     "Win32_System_Console",
@@ -330,6 +332,10 @@ debug = "line-tables-only"
 # unoptimized against 1.0ms here, and optimizing the whole app crate instead
 # turns a one-line edit into a 6-minute rebuild.
 [profile.dev.package.cap-gpui-kernels]
+opt-level = 3
+
+# The glass probe renders the CPU model of every scene it captures.
+[profile.dev.package.cap-glass]
 opt-level = 3
 
 # Incremental halves a one-line rebuild for about 2 GB of cache, and line tables

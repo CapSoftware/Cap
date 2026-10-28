@@ -2497,11 +2497,17 @@ async fn start_attempt_with_upload(
         excluded
     };
     let mut instant_upload = None;
+    // Focus in the picker and the window capture style setting are the same
+    // stored choice; recording reads it here, as it starts.
+    let window_only = matches!(config.target, ScreenCaptureTarget::Window { .. })
+        && crate::store::GeneralSettings::load().window_capture_style
+            == crate::store::WindowCaptureStyle::FocusedWindow;
     let handle = match config.mode {
         RecordingMode::Studio => {
             let mut builder = defaults.apply_to_studio_builder(
                 studio_recording::Actor::builder(project_dir.clone(), config.target.clone())
-                    .with_system_audio(config.system_audio),
+                    .with_system_audio(config.system_audio)
+                    .with_window_only(window_only),
                 camera_lock.is_some(),
                 None,
             );
@@ -2532,6 +2538,7 @@ async fn start_attempt_with_upload(
             let mut builder =
                 instant_recording::Actor::builder(project_dir.clone(), config.target.clone())
                     .with_system_audio(config.system_audio)
+                    .with_window_only(window_only)
                     .with_max_output_size(instant_max_resolution);
             if let Some(gate) = config.start_gate.clone() {
                 builder = builder.with_start_gate(gate);

@@ -38,7 +38,8 @@ use crate::{
     store::{
         self, AppTheme, DEFAULT_PROJECT_NAME_TEMPLATE, DEFAULT_SERVER_URL, GENERAL_SETTINGS,
         GeneralSettings, MainWindowStartBehaviour, PostDeletionBehaviour, RECORDING_START_SAFETY,
-        SettingsEnum, StudioQuality, UpdateChannel, UpdateDownloadPolicy, WindowExclusion,
+        SettingsEnum, StudioQuality, UpdateChannel, UpdateDownloadPolicy, WindowCaptureStyle,
+        WindowExclusion,
     },
     theme::Theme,
     ui,
@@ -195,6 +196,7 @@ impl Page {
 pub(crate) enum MenuKind {
     Countdown,
     MainWindowStart,
+    WindowCapture,
     PostDeletion,
     MaxFps,
     Language,
@@ -1556,6 +1558,7 @@ impl SettingsWindow {
             MenuKind::MainWindowStart => {
                 enum_items(self.settings.main_window_recording_start_behaviour)
             }
+            MenuKind::WindowCapture => enum_items(self.settings.window_capture_style),
             MenuKind::PostDeletion => enum_items(self.settings.post_deletion_behaviour),
             MenuKind::AddWindow => self
                 .available_windows()
@@ -1599,6 +1602,12 @@ impl SettingsWindow {
                 if let Some(value) = MainWindowStartBehaviour::ALL.get(index) {
                     self.settings.main_window_recording_start_behaviour = *value;
                     self.write_enum("mainWindowRecordingStartBehaviour", *value, cx);
+                }
+            }
+            MenuKind::WindowCapture => {
+                if let Some(value) = WindowCaptureStyle::ALL.get(index) {
+                    self.settings.window_capture_style = *value;
+                    self.write_enum("windowCaptureStyle", *value, cx);
                 }
             }
             MenuKind::PostDeletion => {
@@ -3745,6 +3754,17 @@ impl SettingsWindow {
                             "main-window-start",
                             settings.main_window_recording_start_behaviour.label(),
                             MenuKind::MainWindowStart,
+                            cx,
+                        )
+                        .into_any_element(),
+                    ),
+                    self.setting_row(
+                        tr::settings::general::recording::window_capture::label(),
+                        Some(tr::settings::general::recording::window_capture::description()),
+                        self.select(
+                            "window-capture-style",
+                            settings.window_capture_style.label(),
+                            MenuKind::WindowCapture,
                             cx,
                         )
                         .into_any_element(),

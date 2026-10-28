@@ -2144,6 +2144,7 @@ pub struct ActorBuilder {
     lifetime: StudioLifetimeOwner,
     output_path: PathBuf,
     capture_target: screen_capture::ScreenCaptureTarget,
+    window_only: bool,
     system_audio: bool,
     mic_feed: Option<Arc<MicrophoneFeedLock>>,
     camera_feed: Option<Arc<CameraFeedLock>>,
@@ -2168,6 +2169,7 @@ impl ActorBuilder {
             },
             output_path: output,
             capture_target,
+            window_only: false,
             system_audio: false,
             mic_feed: None,
             camera_feed: None,
@@ -2185,6 +2187,12 @@ impl ActorBuilder {
 
     pub fn with_system_audio(mut self, system_audio: bool) -> Self {
         self.system_audio = system_audio;
+        self
+    }
+
+    /// Record only the target window, following it, on macOS and Windows.
+    pub fn with_window_only(mut self, window_only: bool) -> Self {
+        self.window_only = window_only;
         self
     }
 
@@ -2265,6 +2273,7 @@ impl ActorBuilder {
             self.output_path,
             RecordingBaseInputs {
                 capture_target: self.capture_target,
+                window_only: self.window_only,
                 capture_system_audio: self.system_audio,
                 mic_feed: self.mic_feed,
                 camera_feed: self.camera_feed,
@@ -3413,6 +3422,8 @@ async fn create_segment_pipeline(
             max_capture_size,
             start_time.system_time(),
             base_inputs.capture_system_audio,
+            #[cfg(any(target_os = "macos", windows))]
+            crate::window_only_target(&capture_target, base_inputs.window_only),
             #[cfg(target_os = "linux")]
             sources::screen_capture::LinuxCaptureSource::from_target(&capture_target),
             #[cfg(windows)]
@@ -3656,6 +3667,11 @@ async fn create_segment_pipeline(
                         display: cursor_display,
                         #[cfg(target_os = "linux")]
                         window: base_inputs.capture_target.window(),
+                        #[cfg(not(target_os = "linux"))]
+                        window: crate::window_only_target(
+                            &base_inputs.capture_target,
+                            base_inputs.window_only,
+                        ),
                     },
                     cursors_dir.to_path_buf(),
                     prev_cursors,
@@ -3987,6 +4003,7 @@ mod tests {
                     root.join("content/cursors"),
                     RecordingBaseInputs {
                         capture_target: screen_capture::ScreenCaptureTarget::CameraOnly,
+                        window_only: false,
                         capture_system_audio: false,
                         mic_feed: None,
                         camera_feed: None,
@@ -4097,6 +4114,7 @@ mod tests {
             path.join("content/cursors"),
             RecordingBaseInputs {
                 capture_target: target.clone(),
+                window_only: false,
                 capture_system_audio: false,
                 mic_feed: None,
                 camera_feed: None,
@@ -4195,6 +4213,7 @@ mod tests {
             path.join("content/cursors"),
             RecordingBaseInputs {
                 capture_target: target.clone(),
+                window_only: false,
                 capture_system_audio: false,
                 mic_feed: None,
                 camera_feed: None,
@@ -4332,6 +4351,7 @@ mod tests {
                 path.join("content/cursors"),
                 RecordingBaseInputs {
                     capture_target: target.clone(),
+                    window_only: false,
                     capture_system_audio: false,
                     mic_feed: None,
                     camera_feed: None,
@@ -4576,6 +4596,7 @@ mod tests {
                 path.join("content/cursors"),
                 RecordingBaseInputs {
                     capture_target: target.clone(),
+                    window_only: false,
                     capture_system_audio: false,
                     mic_feed: None,
                     camera_feed: None,
@@ -6255,6 +6276,7 @@ mod tests {
             recording_dir.join("content/cursors"),
             RecordingBaseInputs {
                 capture_target: screen_capture::ScreenCaptureTarget::CameraOnly,
+                window_only: false,
                 capture_system_audio: false,
                 mic_feed: None,
                 camera_feed: None,
@@ -6502,6 +6524,7 @@ mod windows_cancel_tests {
             PathBuf::new(),
             RecordingBaseInputs {
                 capture_target: screen_capture::ScreenCaptureTarget::CameraOnly,
+                window_only: false,
                 capture_system_audio: false,
                 mic_feed: None,
                 camera_feed: None,
