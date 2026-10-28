@@ -319,6 +319,9 @@ const renderRetryFailure = (message: string) => {
 };
 
 const renderStatus = (status: RecordingStatus) => {
+	if (urlVideoId && (!("videoId" in status) || status.videoId !== urlVideoId)) {
+		return;
+	}
 	if (retryPendingFreshStatus) {
 		// The stale pre-retry error keeps echoing from session storage and the
 		// status polls until the retry publishes its first status; anything
