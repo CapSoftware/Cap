@@ -281,29 +281,47 @@ describe("share transcript rendering", () => {
 		expect(mocks.edit).not.toHaveBeenCalled();
 	});
 
-	it("keeps save and cancel disabled until a pending save completes", async () => {
-		mocks.content = transcript(3);
-		let finish!: (result: { success: boolean }) => void;
-		mocks.edit.mockImplementation(
-			() =>
-				new Promise((resolve) => {
-					finish = resolve;
-				}),
-		);
-		await render();
-		await editCue(2);
-		await type("Saved after waiting");
-		await click(button("Save"));
-		expect(button("Save").disabled).toBe(true);
-		expect(button("Cancel").disabled).toBe(true);
-		await editCue(3);
-		expect(container.querySelector("textarea")?.value).toMatch(/^Cue 3:/);
-		expect(button("Save").disabled).toBe(true);
-		expect(button("Cancel").disabled).toBe(true);
-		await act(async () => finish({ success: true }));
-		expect(container.querySelector("textarea")).toBeNull();
-		expect(container.textContent).toContain("Saved after waiting");
-	});
+	it.each([true, false])(
+		"locks transcript editing until a pending save settles, success: %s",
+		async (success) => {
+			mocks.content = transcript(3);
+			vi.spyOn(console, "error").mockImplementation(() => {});
+			let finish!: (result: { success: boolean }) => void;
+			mocks.edit.mockImplementation(
+				() =>
+					new Promise((resolve) => {
+						finish = resolve;
+					}),
+			);
+			await render();
+			await editCue(2);
+			await type("Saved after waiting");
+			await click(button("Save"));
+			expect(button("Save").disabled).toBe(true);
+			expect(button("Cancel").disabled).toBe(true);
+			expect(container.querySelector("textarea")?.disabled).toBe(true);
+			await editCue(3);
+			expect(container.querySelector("textarea")?.value).toBe(
+				"Saved after waiting",
+			);
+			await act(async () => finish({ success }));
+			if (success) {
+				expect(container.querySelector("textarea")).toBeNull();
+				expect(container.textContent).toContain("Saved after waiting");
+			} else {
+				expect(container.querySelector("textarea")?.value).toBe(
+					"Saved after waiting",
+				);
+				expect(container.querySelector("textarea")?.disabled).toBe(false);
+				expect(button("Save").disabled).toBe(false);
+				expect(button("Cancel").disabled).toBe(false);
+				await click(button("Cancel"));
+			}
+			await editCue(3);
+			expect(container.querySelector("textarea")?.value).toMatch(/^Cue 3:/);
+			expect(container.querySelector("textarea")?.disabled).toBe(false);
+		},
+	);
 
 	it("keeps an empty transcript empty", async () => {
 		mocks.content = "WEBVTT\n\n";
