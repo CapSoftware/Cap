@@ -2624,6 +2624,7 @@ impl OverlayWindow {
         });
         let capture_scale = self.capture_scale;
         let (id, display) = (window.id.clone(), window.display_id.clone());
+        let before = window.bounds;
         let requested = id.clone();
         let select = self.select.clone();
         cx.spawn(async move |this, cx| {
@@ -2637,11 +2638,23 @@ impl OverlayWindow {
                 if raise {
                     crate::foreign_window::raise(&id);
                 }
-                let window = scap_targets::Window::from_id(&id);
-                (
-                    arranged,
-                    window.as_ref().and_then(HoveredWindow::from_window),
-                )
+                // The window list lags the move by a few frames: wait for the
+                // new frame to show up, or the camera would see no move.
+                let read = || {
+                    scap_targets::Window::from_id(&id)
+                        .as_ref()
+                        .and_then(HoveredWindow::from_window)
+                };
+                let mut fresh = read();
+                let deadline = Instant::now() + Duration::from_millis(500);
+                while arranged
+                    && fresh.as_ref().is_some_and(|fresh| fresh.bounds == before)
+                    && Instant::now() < deadline
+                {
+                    std::thread::sleep(Duration::from_millis(16));
+                    fresh = read();
+                }
+                (arranged, fresh)
             })
             .await
             .unwrap_or((false, None));
@@ -3573,19 +3586,35 @@ impl OverlayWindow {
     fn render_close_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
 
-        self.glass_button(36.)
-            .id("overlay-close")
-            .hover(|style| style.opacity(0.8))
-            .child(
-                svg()
-                    .path("icons/x.svg")
-                    .size(px(12.))
-                    .text_color(theme.gray_12),
-            )
-            .on_click(cx.listener(|this, _, _window, cx| {
-                cx.stop_propagation();
-                this.dismiss(cx);
-            }))
+        // Red-tinted glass, so cancelling reads apart from the controls.
+        let tint = gpui::Rgba {
+            a: 0.55,
+            ..theme.red_9
+        };
+        crate::ui::glass::pane_over_tinted(
+            crate::ui::glass::GlassKind::Clear,
+            theme.is_dark(),
+            18.,
+            &self.backdrop,
+            tint,
+        )
+        .size(px(36.))
+        .flex_shrink_0()
+        .flex()
+        .justify_center()
+        .items_center()
+        .id("overlay-close")
+        .hover(|style| style.opacity(0.8))
+        .child(
+            svg()
+                .path("icons/x.svg")
+                .size(px(12.))
+                .text_color(gpui::white()),
+        )
+        .on_click(cx.listener(|this, _, _window, cx| {
+            cx.stop_propagation();
+            this.dismiss(cx);
+        }))
     }
 
     /// The start affordance: `h-11 rounded-full bg-linear-to-r from-blue-10 to

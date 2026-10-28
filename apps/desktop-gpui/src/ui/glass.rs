@@ -138,6 +138,17 @@ pub fn pane_over(kind: GlassKind, dark: bool, radius: f32, backdrop: &Backdrop) 
     pane_with(kind, dark, radius, Some(backdrop.clone()), None, true)
 }
 
+/// [`pane_over`] with a tint.
+pub fn pane_over_tinted(
+    kind: GlassKind,
+    dark: bool,
+    radius: f32,
+    backdrop: &Backdrop,
+    tint: Tint,
+) -> Div {
+    pane_with(kind, dark, radius, Some(backdrop.clone()), Some(tint), true)
+}
+
 fn pane_with(
     kind: GlassKind,
     dark: bool,
