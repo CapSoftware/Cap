@@ -2,7 +2,7 @@
 add = "Ajouter"
 back = "Retour"
 cancel = "Annuler"
-choose_allow_prompt = "Choisissez Autoriser dans la fenêtre de macOS."
+choose_allow_prompt = "Choisissez « Autoriser » dans la demande de macOS."
 close = "Fermer"
 copied = "Copié"
 dismiss = "Fermer"
@@ -22,7 +22,7 @@ hide = "Masquer Cap"
 hide_others = "Masquer les autres"
 quit = "Quitter Cap"
 services = "Services"
-settings = "Paramètres…"
+settings = "Réglages…"
 
 [menu.about]
 licensed = "Sous licence AGPL-3.0"
@@ -30,11 +30,11 @@ website = "Site web"
 commit = "Commit"
 
 [menu.file]
-open_prompt = "Ouvrir l’enregistrement"
+open_prompt = "Ouvrir l'enregistrement"
 close_window = "Fermer la fenêtre"
 title = "Fichier"
 open_file = "Ouvrir un fichier…"
-open_recent = "Ouvrir récent"
+open_recent = "Ouvrir l'élément récent"
 import_media = "Importer des médias…"
 
 [menu.edit]
@@ -59,7 +59,7 @@ zoom = "Réduire/agrandir"
 [menu.help]
 title = "Aide"
 feedback = "Donner son avis…"
-changelog = "Journal des modifications"
+changelog = "Nouveautés"
 dashboard = "Tableau de bord"
 documentation = "Documentation"
 faq = "FAQ"
@@ -104,7 +104,7 @@ experimental = "Expérimental"
 feedback = "Commentaires"
 general = "Général"
 integrations = "Intégrations"
-license = "Forfait et licence"
+license = "Offre et licence"
 quality = "Qualité d'enregistrement"
 recordings = "Enregistrements"
 screenshots = "Captures d'écran"
@@ -153,7 +153,7 @@ description = "Demander une confirmation si aucun micro n'est sélectionné ou s
 label = "Confirmer avant d'enregistrer sans micro"
 
 [settings.general.recording.studio_sound]
-description = "Nettoie automatiquement l'audio du micro. Vous pouvez toujours le désactiver pour un enregistrement dans l'éditeur."
+description = "Nettoie automatiquement l'audio du micro. Vous pouvez toujours le désactiver pour n'importe quel enregistrement dans l'éditeur."
 label = "Studio Sound sur les nouveaux enregistrements"
 
 [settings.general.recording.main_window_start]
@@ -161,7 +161,7 @@ description = "Ce que devient la fenêtre principale lorsqu'un enregistrement co
 label = "Fenêtre principale au début de l'enregistrement"
 
 [settings.general.recording.window_capture]
-description = "La façon dont un enregistrement de fenêtre capture la fenêtre choisie. Fenêtre ciblée enregistre uniquement cette fenêtre, centrée et suivie si elle bouge ; Zone de l’écran enregistre la zone de l’écran qu’elle couvre."
+description = "La façon dont un enregistrement de fenêtre capture la fenêtre choisie. « Fenêtre ciblée » enregistre uniquement cette fenêtre, centrée et suivie si elle bouge ; « Zone de l'écran » enregistre la zone de l'écran qu'elle couvre."
 label = "Capture de fenêtre"
 
 [settings.general.recording.post_deletion]
@@ -199,11 +199,11 @@ label = "Afficher l'encoche du MacBook dans les enregistrements d'écran"
 [settings.general.recording.max_fps]
 description = "Fréquence d'images maximale de la capture d'écran."
 description_high = "Fréquence d'images maximale de la capture d'écran. Des valeurs plus élevées peuvent provoquer des pertes d'images ou une hausse de l'utilisation du processeur sur certains systèmes."
-fps_120 = "120 FPS"
-fps_24 = "24 FPS"
-fps_25 = "25 FPS"
-fps_30 = "30 FPS"
-fps_60 = "60 FPS (recommandé)"
+fps_120 = "120 i/s"
+fps_24 = "24 i/s"
+fps_25 = "25 i/s"
+fps_30 = "30 i/s"
+fps_60 = "60 i/s (recommandé)"
 label = "Fréquence d'images maximale"
 
 [settings.general.storage]
@@ -319,14 +319,14 @@ save_as = "Enregistrer sous"
 title = "Captures d'écran"
 
 [settings.quality]
-save_failed = "Impossible d'enregistrer vos paramètres d'enregistrement. Veuillez réessayer."
+save_failed = "Impossible de sauvegarder vos paramètres d'enregistrement. Veuillez réessayer."
 
 [settings.quality.studio]
 balanced = "Équilibré"
 balanced_description = "Des détails nets pour une taille de fichier raisonnable. Idéal pour la plupart des enregistrements."
 compatibility = "Fichiers plus légers"
 compatibility_description = "Économise de l'espace disque. Les détails fins peuvent s'adoucir, surtout sur la caméra."
-description = "Enregistrés sur votre ordinateur pour être modifiés. Vous choisirez la taille d'export plus tard, dans l'éditeur."
+description = "Enregistrés sur votre ordinateur pour être modifiés. Vous choisirez la taille d'exportation plus tard, dans l'éditeur."
 recommended = "Recommandé"
 title = "Enregistrements Studio"
 ultra = "Détail maximal"
@@ -358,7 +358,7 @@ minimise = "Réduire"
 
 [settings.options.window_capture]
 focused_window = "Fenêtre ciblée"
-screen_region = "Zone de l’écran"
+screen_region = "Zone de l'écran"
 
 [settings.options.post_studio]
 do_nothing = "Ne rien faire"
@@ -376,7 +376,7 @@ do_nothing = "Ne rien faire"
 reopen = "Rouvrir l'enregistreur"
 
 [settings.options.preview_quality]
-full = "Complète"
+full = "Pleine"
 half = "Moitié"
 quarter = "Quart"
 
@@ -434,7 +434,7 @@ studio_show_cap_hint = "Retour à l'enregistreur"
 cycle_mode = "Changer de mode d'enregistrement"
 fallback = "Raccourci"
 open_picker = "Ouvrir le sélecteur d'enregistrement"
-pause = "Pause ou reprise"
+pause = "Mettre en pause ou reprendre"
 record_area = "Enregistrer une zone"
 record_display = "Enregistrer un écran"
 record_window = "Enregistrer une fenêtre"
@@ -553,7 +553,7 @@ native_app_description = "Désactivez pour fermer cette app et rouvrir l'app Tau
 reliability = "Fiabilité"
 
 [settings.experimental.switch]
-busy = "Terminez votre enregistrement, export, mise en ligne, import ou transcription avant de passer à l'app classique."
+busy = "Terminez votre enregistrement, exportation, mise en ligne, importation ou transcription avant de passer à l'app classique."
 check_failed = "Impossible de vérifier si l'app Cap classique s'est ouverte : {error}"
 data_stays = "Vos enregistrements et vos paramètres restent exactement où ils sont."
 failed = "Impossible d'ouvrir l'app Cap classique."
@@ -596,7 +596,7 @@ confirm_title = "Lancer le diagnostic ?"
 description = "Enregistre une courte mire clignotante et sonore, mesure le décalage entre l'image et le son, et relève vos écrans, caméras, micros, espace disque et paramètres d'enregistrement. Rien n'est envoyé tant que vous ne le décidez pas."
 mic_description = "Enregistre aussi votre micro et vérifie qu'il capte les bips à temps. Nécessite des haut-parleurs que le micro peut réellement entendre."
 mic_label = "Tester le micro"
-mode_description = "La chaîne de traitement à tester. Les deux exécute d'abord la partie Studio, puis la partie Instant."
+mode_description = "La chaîne de traitement à tester. « Les deux » exécute d'abord la partie Studio, puis la partie Instant."
 mode_label = "Mode d'enregistrement"
 no_cli = "L'outil en ligne de commande Cap est introuvable à côté de cette version, le rapport ne couvrira donc que votre environnement."
 no_cli_sync = "L'outil en ligne de commande Cap est introuvable à côté de cette version, le test de synchronisation n'a donc pas pu s'exécuter."
@@ -790,7 +790,7 @@ url = "URL"
 [settings.automations.placeholder]
 organization_id = "ID de l'organisation"
 project_folder = "Dossier du projet"
-window_title = "ex. Slack"
+window_title = "ex. : Slack"
 
 [settings.automations.clipboard]
 original = "Capture d'origine"
@@ -880,7 +880,7 @@ noun = "Ouverture"
 short = "Ouvrir le fichier"
 
 [settings.automations.action.ocr]
-label = "Reconnaître le texte (OCR) vers le presse-papiers"
+label = "Copier le texte reconnu (OCR) dans le presse-papiers"
 noun = "Texte"
 short = "Copier le texte (OCR)"
 
@@ -1160,7 +1160,7 @@ paused = "En pause"
 pausing = "Pause…"
 resuming = "Reprise…"
 saving = "Arrêt…"
-starting = "Début…"
+starting = "Début"
 
 [camera]
 waiting_title = "En attente de l'accès à la caméra"
@@ -1232,13 +1232,13 @@ save_progress = "Impossible d'enregistrer votre progression. Veuillez réessayer
 save_sound = "Impossible d'enregistrer la préférence de son."
 
 [onboarding.faq]
-pricing = "Voir les forfaits"
-pricing_link = "Voir les forfaits ↗"
+pricing = "Voir les offres"
+pricing_link = "Voir les offres ↗"
 subtitle = "Tout ce qu'il faut savoir pour bien démarrer."
 title = "Questions fréquentes"
 
 [onboarding.faq.free]
-answer = "Cap est gratuit pour un usage personnel. Pour les équipes et un usage commercial, consultez nos forfaits."
+answer = "Cap est gratuit pour un usage personnel. Pour les équipes et un usage commercial, consultez nos offres."
 question = "Cap est-il gratuit ?"
 
 [onboarding.faq.instant_vs_studio]
@@ -1349,9 +1349,9 @@ analyzing_studio = "Analyse de l'enregistrement Studio..."
 cancelling = "Annulation..."
 collecting = "Collecte des informations système..."
 done = "Finalisation du test de synchronisation..."
-exporting = "Export de l'enregistrement..."
-exporting_instant = "Export de l'enregistrement Instant..."
-exporting_studio = "Export de l'enregistrement Studio..."
+exporting = "Exportation de l'enregistrement..."
+exporting_instant = "Exportation de l'enregistrement Instant..."
+exporting_studio = "Exportation de l'enregistrement Studio..."
 finalizing = "Finalisation de l'enregistrement..."
 finalizing_instant = "Finalisation de l'enregistrement Instant..."
 finalizing_studio = "Finalisation de l'enregistrement Studio..."
@@ -1475,9 +1475,9 @@ select_camera = "Veuillez choisir une caméra"
 
 [overlay.device]
 camera_allow = "Autoriser l'accès à la caméra…"
-camera_turn_on = "Activer l'accès à la caméra dans les réglages…"
+camera_turn_on = "Activer l'accès à la caméra dans Réglages Système…"
 microphone_allow = "Autoriser l'accès au micro…"
-microphone_turn_on = "Activer l'accès au micro dans les réglages…"
+microphone_turn_on = "Activer l'accès au micro dans Réglages Système…"
 
 [overlay.start]
 instant = "Mode Instant : enregistrer un lien de partage"
@@ -1489,7 +1489,7 @@ take_screenshot = "Prendre une capture d'écran"
 
 [permission.guide]
 accessibility_body = "Déposez-le dans la liste « Accessibilité » ci-dessus, puis vérifiez que son interrupteur est activé."
-screen_body = "Déposez-le dans la liste « Enregistrement de l'écran et de l'audio du système » ci-dessus, puis vérifiez que son interrupteur est activé."
+screen_body = "Déposez-le dans la liste « Enregistrement de l'écran et des sons du système » ci-dessus, puis vérifiez que son interrupteur est activé."
 title = "Faites glisser Cap dans la liste"
 
 [permission.name]
@@ -1586,7 +1586,7 @@ transparent = "Transparent"
 auto = "Auto"
 classic = "Classique ⋅4:3"
 square = "Carré ⋅1:1"
-tall = "Haut ⋅3:4"
+tall = "Portrait ⋅3:4"
 vertical = "Vertical ⋅9:16"
 wide = "Large ⋅16:9"
 
@@ -1620,7 +1620,7 @@ not_screenshot = "Ce n'est pas un dossier de capture d'écran"
 open_image = "Impossible d'ouvrir l'image : {error}"
 renderer_failed = "Le moteur de rendu GPU n'a pas pu démarrer : {error}"
 renderer_not_running = "Le moteur de rendu des captures d'écran n'est pas lancé"
-renderer_stopped = "Le moteur de rendu s'est arrêté avant la fin de l'export"
+renderer_stopped = "Le moteur de rendu s'est arrêté avant la fin de l'exportation"
 save_project = "Erreur lors de l'enregistrement du projet : {error}"
 serialize = "Impossible de sérialiser la configuration de la capture d'écran : {error}"
 sign_in_to_share = "Connectez-vous à Cap dans votre navigateur, puis partagez à nouveau"
@@ -1629,7 +1629,7 @@ upgrade_required = "Cette fonctionnalité nécessite une offre supérieure"
 upload_task = "La tâche d'envoi a échoué : {error}"
 
 [screenshot_editor.header]
-aspect_ratio = "Format"
+aspect_ratio = "Format d'image"
 copy = "Copier dans le presse-papiers"
 crop_image = "Recadrer l'image"
 more_actions = "Plus d'actions"
@@ -1766,14 +1766,14 @@ tint = "Teinte"
 vignette = "Vignettage"
 
 [editor.crop]
-aspect_ratio = "Proportions"
+aspect_ratio = "Format d'image"
 center = "Centrer"
 dimensions = "Taille"
 editing_style = "Modification du style {number} uniquement"
 editing_style_override = "Modification du style {number} uniquement · L'enregistrement active son arrière-plan personnalisé"
 free = "Libre"
 full = "Entier"
-hint = "Glisser pour déplacer · Flèches pour ajuster · Maintenez {key} pour ne pas aligner"
+hint = "Faites glisser pour déplacer · Flèches pour ajuster · Maintenez {key} pour désactiver l'aimantation"
 loading_frame = "Chargement de l'image…"
 position = "Position"
 preview = "Aperçu"
@@ -1797,7 +1797,7 @@ opacity = "Opacité"
 
 [editor.panel.audio]
 change = "Changer"
-change_hint = "Touchez pour changer de piste"
+change_hint = "Cliquez pour changer de piste"
 fade_in = "Fondu d'entrée"
 fade_out = "Fondu de sortie"
 fallback_name = "Audio"
@@ -1836,8 +1836,8 @@ reset_camera = "Réinitialiser la caméra"
 roll = "Roulis"
 rotate_x = "Rotation X"
 rotate_y = "Rotation Y"
-shift_x = "Pan X"
-shift_y = "Pan Y"
+shift_x = "Décalage X"
+shift_y = "Décalage Y"
 shots = { one = "{count} plan", other = "{count} plans" }
 still_shot = "Plan fixe"
 swap = "Inverser le début et la fin"
@@ -1847,7 +1847,7 @@ timing_summary = "{easing} · Objectif {fov}"
 [editor.panel.camera3d.blur]
 angle = "Angle"
 falloff = "Fondu"
-focus_size = "Netteté"
+focus_size = "Zone nette"
 focus_x = "Point X"
 focus_y = "Point Y"
 position = "Position"
@@ -1878,7 +1878,7 @@ slide_by = "Passage"
 spotlight = "Projecteur"
 tilt_away = "Bascule"
 top_down = "Plongée"
-unfold = "Dépli"
+unfold = "Déploiement"
 
 [editor.panel.camera3d.sequence]
 product_tour = "Visite produit"
@@ -1894,7 +1894,7 @@ title = "Sous-titre {number}"
 
 [editor.panel.font]
 system_mono = "Mono système"
-system_sans = "Sans système"
+system_sans = "Sans-serif système"
 system_serif = "Serif système"
 
 [editor.panel.font_weight]
@@ -1923,7 +1923,7 @@ title = "Clavier {number}"
 [editor.panel.mask]
 blur = "Flou"
 effect = "Effet"
-highlight = "Mise en avant"
+highlight = "Mise en valeur"
 outside_darkness = "Assombrissement extérieur"
 pixel_size = "Taille des pixels"
 pixelate = "Pixeliser"
@@ -1987,7 +1987,7 @@ zoom = "Zoom"
 box_shape = "Boîte"
 highlight = "Surligné"
 none = "Aucun"
-pill = "Pilule"
+pill = "Pastille"
 
 [editor.panel.text_layout]
 fullscreen = "Plein écran"
@@ -2067,7 +2067,7 @@ auto_locked = "Le mode auto nécessite la capture du curseur. Activez « Capture
 how_it_works = "Comment ça marche ?"
 manual = "Manuel"
 manual_help = "Le zoom manuel reste sur le point fixe que vous choisissez ci-dessous."
-mixed = "Variable"
+mixed = "Mixte"
 mode = "Mode de zoom"
 positions_mixed = "Les segments zooment sur des points différents. Faites glisser pour tous les placer au même endroit."
 title = "Zoom {number}"
@@ -2247,7 +2247,7 @@ importing = "Importation…"
 mp4_filter = "Vidéo MP4"
 prepare_controls_failed = "Impossible de préparer les commandes d'enregistrement : {error}"
 record_new = "Enregistrer un nouveau clip"
-save_before_recording_failed = "Impossible d'enregistrer le projet actuel avant l'enregistrement : {error}"
+save_before_recording_failed = "Impossible de sauvegarder le projet actuel avant l'enregistrement : {error}"
 split = "Partie {number}"
 title = "Clips"
 
@@ -2288,7 +2288,7 @@ reupload_transparent = "Les liens de partage nécessitent un arrière-plan sans 
 sign_in_required = "Vous devez vous connecter pour partager des enregistrements"
 task_failed = "Échec de la tâche d'exportation"
 title = "Exporter"
-upgrade_message = "Cette fonctionnalité nécessite une formule supérieure"
+upgrade_message = "Cette fonctionnalité nécessite une offre supérieure"
 upgrade_title = "Mise à niveau requise"
 upload_failed = "Impossible de mettre en ligne l'enregistrement"
 
@@ -2417,7 +2417,7 @@ mono_right = "Mono D"
 stereo = "Stéréo"
 
 [editor.tabs.camera]
-advanced_shadow = "Paramètres d'ombre avancés"
+advanced_shadow = "Réglages avancés de l'ombre"
 background = "Arrière-plan"
 corner_style = "Style des coins"
 custom_position = "Position personnalisée (déplacée sur le canevas)"
@@ -2668,7 +2668,7 @@ zoom = "Supprimer la piste Zoom."
 [editor.timeline.scene]
 camera_only = "Caméra seule"
 default = "Par défaut"
-floating = "Flottante"
+floating = "Flottant"
 hide_camera = "Masquer la caméra"
 split_screen = "Écran partagé"
 
@@ -2719,8 +2719,8 @@ classic = "Classique"
 classic_ratio = "Classique ⋅4:3"
 square = "Carré"
 square_ratio = "Carré ⋅1:1"
-tall = "Haut"
-tall_ratio = "Haut ⋅3:4"
+tall = "Portrait"
+tall_ratio = "Portrait ⋅3:4"
 tooltip = "Format d'image"
 vertical = "Vertical"
 vertical_ratio = "Vertical ⋅9:16"
@@ -2738,7 +2738,7 @@ unsupported = "Format audio non pris en charge : .{extension}"
 clip_import = "Attendez la fin de l'importation du clip avant de fermer ou de supprimer cet enregistrement."
 export = "Attendez la fin de l'exportation ou de son annulation avant de fermer ou de supprimer cet enregistrement."
 opening = "Attendez que l'enregistrement soit ouvert avant de le supprimer."
-save_before_delete_failed = "Impossible d'enregistrer l'enregistrement avant de le supprimer : {error}"
+save_before_delete_failed = "Impossible de sauvegarder l'enregistrement avant de le supprimer : {error}"
 
 [editor.window.camera3d_lane]
 add_shot = "+ Ajouter un plan"
@@ -2753,7 +2753,7 @@ delete = "Supprimer le clip"
 delete_only_clip = "Impossible de supprimer le seul clip"
 hide_cursor = "Masquer le curseur"
 hide_cursor_description = "Disparaît pendant la lecture de ce clip"
-keep_pitch = "Garder la hauteur"
+keep_pitch = "Conserver la tonalité"
 match_speed = "Suivre la vitesse"
 merge_next = "Fusionner avec le clip suivant"
 merge_previous = "Fusionner avec le clip précédent"
@@ -2884,14 +2884,14 @@ style = { one = "{count} segment de style sélectionné", other = "{count} segme
 text_segments = { one = "{count} segment de texte sélectionné", other = "{count} segments de texte sélectionnés" }
 three_d = { one = "{count} segment 3D sélectionné", other = "{count} segments 3D sélectionnés" }
 zoom = { one = "{count} sélectionné", other = "{count} sélectionnés" }
-zoom_all = { one = "{count} sélectionné", other = "Les {count} sélectionnés" }
+zoom_all = { one = "{count} sélectionné", other = "Tous sélectionnés ({count})" }
 zoom_some = { one = "{count} sur {total} sélectionné", other = "{count} sur {total} sélectionnés" }
 
 [dialog.quit]
-canceled = "Fermeture annulée : {error}. Cap reste ouvert pour que vous puissiez terminer ou récupérer l’enregistrement."
-pending = "Fermeture annulée, car l’arrêt de l’enregistrement est toujours en cours. Cap reste ouvert. Utilisez Arrêter dès que possible, puis quittez à nouveau."
+canceled = "Fermeture annulée : {error}. Cap reste ouvert pour que vous puissiez terminer ou récupérer l'enregistrement."
+pending = "Fermeture annulée, car l'arrêt de l'enregistrement est toujours en cours. Cap reste ouvert. Utilisez Arrêter dès que possible, puis quittez à nouveau."
 still_open = "Cap est toujours ouvert"
-unconfirmed = "Fermeture annulée, car l’arrêt de l’enregistrement n’a pas pu être confirmé. Cap reste ouvert. Utilisez Arrêter, puis quittez à nouveau."
+unconfirmed = "Fermeture annulée, car l'arrêt de l'enregistrement n'a pas pu être confirmé. Cap reste ouvert. Utilisez Arrêter, puis quittez à nouveau."
 
 [dialog.update]
 already_getting = "Cap prépare déjà la version {version}."
@@ -2902,12 +2902,12 @@ check_failed = "Impossible de rechercher des mises à jour : {error}"
 download = "Télécharger"
 download_failed = "Impossible de télécharger la version {version} : {error}"
 failed = "{message}\n\nVous pouvez toujours télécharger la dernière version sur Cap.so/download."
-install_failed = "Impossible d’installer la version {version} : {error}"
+install_failed = "Impossible d'installer la version {version} : {error}"
 later = "Plus tard"
 no_update = "Vous utilisez déjà la dernière version de Cap."
 no_update_title = "Aucune mise à jour disponible"
 not_now = "Plus tard"
-package_not_installed = "Le paquet n’a pas été installé. Acceptez la demande du système, ou installez-le depuis Cap.so/download."
+package_not_installed = "Le paquet n'a pas été installé. Acceptez la demande du système, ou installez-le depuis Cap.so/download."
 ready = "Cap {version} est prêt. Redémarrez Cap pour terminer la mise à jour."
 restart_now = "Redémarrer maintenant"
 title = "Mettre à jour Cap"

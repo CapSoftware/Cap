@@ -25,7 +25,7 @@ services = "Servicios"
 settings = "Ajustes…"
 
 [menu.about]
-licensed = "Licenciado bajo AGPL-3.0"
+licensed = "Con licencia AGPL-3.0"
 website = "Sitio web"
 commit = "Commit"
 
@@ -34,7 +34,7 @@ open_prompt = "Abrir grabación"
 close_window = "Cerrar ventana"
 title = "Archivo"
 open_file = "Abrir archivo…"
-open_recent = "Abrir reciente"
+open_recent = "Abrir recientes"
 import_media = "Importar contenido…"
 
 [menu.edit]
@@ -47,7 +47,7 @@ title = "Edición"
 undo = "Deshacer"
 
 [menu.view]
-enter_full_screen = "Entrar en pantalla completa"
+enter_full_screen = "Usar pantalla completa"
 title = "Visualización"
 
 [menu.window]
@@ -58,12 +58,12 @@ zoom = "Zoom"
 
 [menu.help]
 title = "Ayuda"
-feedback = "Dar comentarios…"
+feedback = "Enviar comentarios…"
 changelog = "Registro de cambios"
 dashboard = "Panel"
 documentation = "Documentación"
 faq = "Preguntas frecuentes"
-self_hosting = "Autoalojamiento"
+self_hosting = "Alojamiento propio"
 help_center = "Centro de ayuda"
 system_status = "Estado del sistema"
 discord = "Unirse a la comunidad de Discord"
@@ -267,7 +267,7 @@ ok = "Aceptar"
 
 [settings.sidebar]
 account = "Cuenta"
-cancel_sign_in = "Cancelar acceso"
+cancel_sign_in = "Cancelar inicio de sesión"
 check_for_updates = "Buscar actualizaciones"
 checking_for_updates = "Buscando actualizaciones…"
 click_to_sign_in = "Haz clic para iniciar sesión"
@@ -384,7 +384,7 @@ quarter = "Un cuarto"
 blocked_while_recording = "No se pueden cambiar los atajos mientras esta grabación usa su tecla de detener. Detén la grabación primero."
 needs_modifier_macos = "Incluye ⌘, ⌃ o ⌥ para que el atajo no interfiera al escribir."
 needs_modifier_other = "Incluye Ctrl, Alt o Win para que el atajo no interfiera al escribir."
-record_shortcut = "Grabar atajo"
+record_shortcut = "Asignar atajo"
 recording_description = "Empieza a grabar sin abrir Cap primero."
 recording_hint = "Pulsa las teclas que quieras usar. Esc cancela y Supr lo quita."
 recording_title = "Grabación"
@@ -531,8 +531,8 @@ target = "Destino"
 title = "Línea de comandos"
 
 [settings.transcription]
-active_title = "Pistas activas"
-applied_note = "Estas pistas se aplican cuando generas subtítulos en el editor."
+active_title = "Términos activos"
+applied_note = "Estos términos se aplican cuando generas subtítulos en el editor."
 clear = "Borrar"
 count = { one = "{count} elemento", many = "{count} de elementos", other = "{count} elementos" }
 description = "Añade nombres, grafías, dominios y preferencias de mayúsculas que la generación de subtítulos debe tener en cuenta."
@@ -596,7 +596,7 @@ confirm_title = "¿Ejecutar el diagnóstico?"
 description = "Graba un breve patrón de prueba con destellos y pitidos, mide cuánto se desfasan la imagen y el sonido, y registra tus pantallas, cámaras, micrófonos, espacio en disco y ajustes de grabación. No se envía nada hasta que tú decidas enviarlo."
 mic_description = "También graba tu micrófono y comprueba que capta los pitidos a tiempo. Necesita altavoces que el micrófono pueda oír."
 mic_label = "Probar el micrófono"
-mode_description = "Qué proceso probar. Ambos ejecuta primero la parte Studio y luego la Instant."
+mode_description = "Qué proceso probar. «Ambos» ejecuta primero la parte Studio y luego la Instant."
 mode_label = "Modo de grabación"
 no_cli = "No se encontró la herramienta de línea de comandos de Cap junto a esta compilación, así que el informe solo cubrirá tu entorno."
 no_cli_sync = "No se encontró la herramienta de línea de comandos de Cap junto a esta compilación, así que no se pudo ejecutar la prueba de sincronización."
@@ -732,7 +732,7 @@ working_for = "La conexión de Google Drive funciona para {email}"
 action_no_effect = "Esta acción no tiene efecto con el disparador seleccionado."
 add_action = "Añadir acción"
 add_condition = "Añadir condición"
-auto_name_empty = "Automatización de {trigger}"
+auto_name_empty = "Automatización: {trigger}"
 browse = "Examinar"
 check_compatibility = "Comprobar compatibilidad"
 compatibility_checked = "Compatibilidad comprobada: esta automatización todavía no se ejecuta en Cap. Las reglas guardadas siguen disponibles para la CLI de Cap. No se ejecutó ninguna acción."
@@ -748,7 +748,7 @@ match_all = "Cumplir todas"
 match_any = "Cumplir alguna"
 name = "Nombre"
 new = "Nueva automatización"
-no_presets = "Aún no hay ajustes preestablecidos; crea uno primero en el editor."
+no_presets = "Aún no hay preajustes; crea uno primero en el editor."
 only_if = "SOLO SI"
 open_in_browser = "Abrir en el navegador"
 retry_save = "Reintentar guardar"
@@ -780,7 +780,7 @@ format = "Formato"
 frame_rate = "Velocidad de fotogramas"
 method = "Método"
 organization = "ID de la organización (opcional)"
-preset = "Ajuste preestablecido"
+preset = "Preajuste"
 program = "Programa"
 resolution = "Resolución"
 source = "Origen"
@@ -804,48 +804,48 @@ window = "Ventana"
 [settings.automations.compression]
 maximum = "Máxima"
 potato = "Patata"
-social = "Redes sociales"
+social = "Redes"
 web = "Web"
 
 [settings.automations.trigger.screenshot_taken]
 label = "Al hacer una captura de pantalla"
-noun = "captura de pantalla"
+noun = "Captura de pantalla"
 phrase = "Captura de pantalla hecha"
 runs = "Se ejecuta con cada captura de pantalla."
 
 [settings.automations.trigger.studio_finished]
 label = "Al terminar una grabación Studio"
-noun = "grabación Studio"
+noun = "Grabación Studio"
 phrase = "Termina una grabación Studio"
 runs = "Se ejecuta al terminar cada grabación Studio."
 
 [settings.automations.trigger.instant_finished]
 label = "Al terminar una grabación Instant"
-noun = "grabación Instant"
+noun = "Grabación Instant"
 phrase = "Termina una grabación Instant"
 runs = "Se ejecuta al terminar cada grabación Instant."
 
 [settings.automations.trigger.recording_started]
 label = "Al empezar una grabación"
-noun = "inicio de grabación"
+noun = "Inicio de grabación"
 phrase = "Empieza una grabación"
 runs = "Se ejecuta al empezar cada grabación."
 
 [settings.automations.trigger.upload_completed]
 label = "Al completarse una subida"
-noun = "subida"
+noun = "Subida"
 phrase = "Se completa una subida"
 runs = "Se ejecuta al completarse cada subida."
 
 [settings.automations.trigger.video_imported]
 label = "Al importar un vídeo"
-noun = "importación"
+noun = "Importación"
 phrase = "Vídeo importado"
 runs = "Se ejecuta con cada vídeo importado."
 
 [settings.automations.trigger.recording_deleted]
 label = "Al eliminar una grabación"
-noun = "eliminación"
+noun = "Eliminación"
 phrase = "Grabación eliminada"
 runs = "Se ejecuta con cada grabación eliminada."
 
@@ -900,9 +900,9 @@ noun = "Sin editor"
 short = "Omitir el editor"
 
 [settings.automations.action.apply_preset]
-label = "Aplicar un ajuste del editor"
-noun = "Ajuste"
-short = "Aplicar ajuste"
+label = "Aplicar un preajuste del editor"
+noun = "Preajuste"
+short = "Aplicar preajuste"
 
 [settings.automations.action.run_command]
 label = "Ejecutar comando"
@@ -1068,11 +1068,11 @@ quality_settings = "Ajustes de calidad"
 screenshot = "Modo Captura de pantalla"
 screenshot_description = "Captura y anota imágenes fijas."
 studio = "Modo Studio"
-studio_description = "Guarda en tu ordenador y abre el editor al detener. Elige la calidad de grabación en los ajustes."
+studio_description = "Se guarda en tu ordenador y abre el editor al terminar. Elige la calidad de grabación en los ajustes."
 
 [main.mode.info]
 instant = "Comparte al instante con un enlace. Tu grabación se sube mientras grabas, así que puedes compartirla en cuanto termines."
-screenshot = "Captura y anota capturas de pantalla al instante. Ideal para capturas rápidas, informes de errores y comunicación visual."
+screenshot = "Haz y anota capturas de pantalla al instante. Ideal para capturas rápidas, informes de errores y comunicación visual."
 studio = "Graba localmente con la máxima calidad para editar después. Perfecto para crear contenido pulido con efectos y transiciones."
 title = "Modos de grabación"
 
@@ -1105,7 +1105,7 @@ segments_with_duration = { one = "{count} segmento · {duration}", many = "{coun
 title = "Grabación incompleta"
 
 [main.sign_in]
-message = "El modo Instant sube mientras grabas, así que tu enlace para compartir está listo en cuanto te detienes."
+message = "Con el modo Instant, la grabación se sube mientras grabas, así que tu enlace para compartir está listo en cuanto te detienes."
 not_now = "Ahora no"
 open_browser_again = "Volver a abrir el navegador"
 pending_message = "Termina de iniciar sesión en Cap en tu navegador. Cap volverá aquí y abrirá la grabadora cuando acabes."
@@ -1166,9 +1166,9 @@ starting = "Iniciando"
 waiting_title = "Esperando acceso a la cámara"
 
 [camera.effects]
-blur_message = "Tu cámara no está desenfocada."
+blur_message = "Tu cámara se muestra sin desenfoque de fondo."
 blur_title = "Desenfoque de fondo no disponible"
-both_message = "Tu cámara no está desenfocada ni en espejo."
+both_message = "Tu cámara se muestra sin desenfoque de fondo y sin efecto espejo."
 both_title = "Efectos de cámara no disponibles"
 mirror_message = "La vista previa de tu cámara no está en espejo."
 mirror_title = "Espejo no disponible"
@@ -1189,7 +1189,7 @@ subtitle = "Personaliza todo, desde los atajos de teclado hasta el almacenamient
 title = "Haz que Cap sea tuyo"
 
 [onboarding.customize.domain]
-description = "Usa tu propio dominio para los enlaces compartidos en lugar de cap.so"
+description = "Usa tu propio dominio en los enlaces para compartir en lugar de cap.so"
 title = "Dominio personalizado"
 
 [onboarding.customize.preferences]
@@ -1242,7 +1242,7 @@ answer = "Cap es gratis para uso personal. Para equipos y uso comercial, consult
 question = "¿Cap es gratis?"
 
 [onboarding.faq.instant_vs_studio]
-answer = "El modo Instant sube mientras grabas: detén la grabación y tendrás un enlace para compartir al momento. El modo Studio graba localmente con calidad completa para que puedas editar con fondos, efectos y más antes de compartir."
+answer = "Con el modo Instant, la grabación se sube mientras grabas: detén la grabación y tendrás un enlace para compartir al momento. El modo Studio graba localmente con calidad completa para que puedas editar con fondos, efectos y más antes de compartir."
 question = "¿Qué diferencia hay entre Instant y Studio?"
 
 [onboarding.faq.sharing]
@@ -1295,7 +1295,7 @@ skip = "Omitir el recorrido"
 start = "Empezar a usar Cap"
 
 [onboarding.overview]
-subtitle = "Tanto si buscas rapidez, calidad de estudio o una captura rápida, Cap tiene un modo para ello."
+subtitle = "Ya busques rapidez, calidad de estudio o una captura rápida, Cap tiene un modo para ello."
 title = "Una app para cada forma de trabajar"
 
 [onboarding.toggle]
@@ -1378,7 +1378,7 @@ camera_notice = "Cap ocultará la vista previa de la cámara y los controles de 
 camera_notice_instant = "Cap ocultará su vista previa y sus controles. La cámara seleccionada aparecerá en la posición de su vista previa con la forma y los efectos elegidos. Mantén toda la vista previa dentro del área de captura. Abrir Cap detendrá esta grabación Instant antes de mostrar sus controles."
 camera_outside_area = "Mueve toda la vista previa de la cámara dentro del área de captura antes de iniciar la grabación Instant"
 camera_preview_closed = "Abre la vista previa de la cámara seleccionada antes de grabar en Instant"
-cleanup_incomplete = "La limpieza de la grabación no se completó: {error}. Se bloqueó una nueva grabación."
+cleanup_incomplete = "La limpieza de la grabación no se completó: {error}. No se puede iniciar una nueva grabación."
 devices_changed = "Los dispositivos seleccionados cambiaron. Vuelve a empezar para confirmar las nuevas entradas de grabación."
 devices_changed_before_start = "Los dispositivos seleccionados cambiaron antes de empezar la grabación. Vuelve a empezar para confirmar las entradas."
 shortcut_conflict = "Ctrl+Shift+F9 está asignado a otra acción de Cap. Cambia ese atajo antes de grabar."
@@ -1442,17 +1442,17 @@ placeholder = "Pega o escribe tu guion…"
 error_title = "Error de importación"
 image_failed = "No se pudo importar la imagen: {error}"
 unsupported = "Archivo multimedia no compatible."
-video_failed = "No se pudo importar el video: {error}"
+video_failed = "No se pudo importar el vídeo: {error}"
 
 [import.filter]
 image = "Archivos de imagen"
 media = "Archivos multimedia"
-video = "Archivos de video"
+video = "Archivos de vídeo"
 
 [import.progress]
-analyzing = "Analizando el archivo de video..."
+analyzing = "Analizando el archivo de vídeo..."
 complete = "¡Importación completada!"
-converting = "Convirtiendo el video... {percent} %"
+converting = "Convirtiendo el vídeo... {percent} %"
 image = "Importando la imagen..."
 metadata = "Creando los metadatos del proyecto..."
 starting = "Iniciando la conversión..."
@@ -1689,7 +1689,7 @@ progress = "Descargando el modelo: {percent} %"
 intel_mac = "Los modelos Parakeet no están disponibles en Mac con Intel. Usa un modelo Whisper"
 model_load = "No se pudo cargar el modelo de subtítulos. Intenta descargarlo de nuevo"
 model_missing = "No se encontró el modelo de subtítulos. Descárgalo primero"
-no_audio = "No se encontró audio en el archivo de video"
+no_audio = "No se encontró audio en el archivo de vídeo"
 unsupported_language = "Los modelos Recomendado y Alta precisión solo transcriben inglés y otros 24 idiomas europeos. Descarga el modelo Pequeño o Mediano para subtitular este idioma"
 
 [upload.status]
@@ -1773,7 +1773,7 @@ editing_style = "Editando solo el estilo {number}"
 editing_style_override = "Editando solo el estilo {number} · Al guardar se activa su fondo propio"
 free = "Libre"
 full = "Completo"
-hint = "Arrastra para mover · Flechas para ajustar · Mantén {key} para no ajustar"
+hint = "Arrastra para mover · Flechas para desplazar · Mantén {key} para no ajustar"
 loading_frame = "Cargando fotograma…"
 position = "Posición"
 preview = "Vista previa"
@@ -1797,7 +1797,7 @@ opacity = "Opacidad"
 
 [editor.panel.audio]
 change = "Cambiar"
-change_hint = "Toca para cambiar de pista"
+change_hint = "Haz clic para cambiar de pista"
 fade_in = "Fundido de entrada"
 fade_out = "Fundido de salida"
 fallback_name = "Audio"
@@ -1847,7 +1847,7 @@ timing_summary = "{easing} · Lente {fov}"
 [editor.panel.camera3d.blur]
 angle = "Ángulo"
 falloff = "Caída"
-focus_size = "Área foco"
+focus_size = "Tamaño del foco"
 focus_x = "Foco X"
 focus_y = "Foco Y"
 position = "Posición"
@@ -1964,7 +1964,7 @@ crop_width = "Ancho"
 edit_background = "Editar fondo y marco"
 edit_camera = "Editar cámara"
 edit_cursor = "Editar cursor"
-help = "Los cambios solo se aplican durante este segmento. Activa un grupo para copiar sus ajustes generales."
+help = "Los cambios solo se aplican durante este segmento. Activa un grupo para copiar sus ajustes globales."
 reset_crop = "Restablecer recorte"
 
 [editor.panel.text_animation]
@@ -1984,7 +1984,7 @@ words = "Palabras"
 zoom = "Zoom"
 
 [editor.panel.text_background]
-box_shape = "Caja"
+box_shape = "Recuadro"
 highlight = "Resaltado"
 none = "Ninguno"
 pill = "Píldora"
@@ -2011,7 +2011,7 @@ highlight = "Resaltado"
 kicker = "Antetítulo"
 label = "Etiqueta"
 lower_third = "Rótulo"
-name_tag = "Etiqueta"
+name_tag = "Nombre y cargo"
 neon = "Neón"
 quote = "Cita"
 stat = "Cifra grande"
@@ -2086,7 +2086,7 @@ limit_reached = { one = "Puedes guardar hasta {count} degradado. Elimina uno par
 motion = "Movimiento"
 name_placeholder = "Ponle nombre a este degradado"
 name_required = "Escribe un nombre para este degradado."
-presets = "Ajustes predefinidos"
+presets = "Preajustes"
 randomize = "Aleatorio"
 remember_failed = "No se pudieron recordar tus ajustes de degradado animado."
 remove_colour = "Quitar color"
@@ -2202,7 +2202,7 @@ back = "Volver al estilo"
 background = "Fondo y marco"
 camera = "Cámara"
 cursor = "Cursor"
-editing_note = "Solo se edita este segmento. Los ajustes generales no cambian."
+editing_note = "Solo se edita este segmento. Los ajustes globales no cambian."
 title = "Estilo {number} · {group}"
 
 [editor.sidebar.tab]
@@ -2289,7 +2289,7 @@ sign_in_required = "Tienes que iniciar sesión para compartir grabaciones"
 task_failed = "Falló la tarea de exportación"
 title = "Exportar"
 upgrade_message = "Esta función requiere un plan superior"
-upgrade_title = "Se requiere una mejora"
+upgrade_title = "Se requiere un plan superior"
 upload_failed = "No se pudo subir la grabación"
 
 [editor.export.advanced]
@@ -2457,7 +2457,7 @@ delete = "Eliminar"
 deleting = "Eliminando..."
 download = "Descargar modelo {model}"
 download_note = "Descarga única en tu sistema. Todos los subtítulos se guardan localmente."
-downloading = "Descargando {model}... {percent}%"
+downloading = "Descargando {model}... {percent} %"
 fade_duration = "Duración del fundido"
 font_family = "Fuente"
 font_settings = "Ajustes de fuente"
@@ -2626,8 +2626,8 @@ medium = "Media"
 normal = "Normal"
 
 [editor.timeline]
-add_shot = "Añadir plano"
-add_shot_with_look = "Añadir plano · {look} · {seconds} s"
+add_shot = "Añadir toma"
+add_shot_with_look = "Añadir toma · {look} · {seconds} s"
 paused = "En pausa"
 
 [editor.timeline.empty]
@@ -2678,7 +2678,7 @@ automatic_zoom = "Zoom automático"
 caption = "Subtítulo"
 clip = "Clip"
 cursor_hidden = "Cursor oculto"
-highlight = "Destacar"
+highlight = "Resaltar"
 label = "Etiqueta"
 manual_zoom = "Zoom manual"
 muted = "Silenciado"
@@ -2703,7 +2703,7 @@ audio_filter = "Audio"
 audio_segment_changed = "Este segmento de audio cambió. Selecciónalo y vuelve a elegir un reemplazo."
 crop = "Recortar"
 crop_tooltip = "Recortar vídeo"
-no_room_for_3d_shot = "No hay espacio para otro plano 3D"
+no_room_for_3d_shot = "No hay espacio para otra toma 3D"
 redo = "Rehacer"
 save_failed = "No se pudo guardar {path}. Mantén el editor abierto e inténtalo de nuevo: {error}"
 undo = "Deshacer"
@@ -2741,10 +2741,10 @@ opening = "Espera a que la grabación termine de abrirse antes de eliminarla."
 save_before_delete_failed = "No se pudo guardar la grabación antes de eliminarla: {error}"
 
 [editor.window.camera3d_lane]
-add_shot = "+ Añadir plano"
+add_shot = "+ Añadir toma"
 auto_scene = "Escena automática"
-how_many = "¿Cuántos planos?"
-prompt = "Añade planos 3D cinematográficos a tu grabación"
+how_many = "¿Cuántas tomas?"
+prompt = "Añade tomas 3D cinematográficas a tu grabación"
 
 [editor.window.clip_menu]
 audio = "AUDIO"
@@ -2807,7 +2807,7 @@ media_failed = "No se pudieron leer los archivos de esta grabación: {error}"
 meta_failed = "No se pudieron cargar los metadatos de la grabación: {error}"
 no_segments = "La grabación no tiene segmentos. Puede que primero haya que recuperarla."
 not_found = "¡No se encontró la ruta de vídeo {path}!"
-not_studio = "Solo se pueden editar grabaciones de Studio"
+not_studio = "Solo se pueden editar grabaciones Studio"
 
 [editor.window.presets]
 apply = "Aplicar"
@@ -2830,7 +2830,7 @@ set_default = "Establecer como predeterminado"
 full = "Completa"
 half = "Mitad"
 label = "Vista previa"
-quarter = "Cuarto"
+quarter = "Un cuarto"
 
 [editor.window.text_menu]
 copy_style = "Copiar estilo"
