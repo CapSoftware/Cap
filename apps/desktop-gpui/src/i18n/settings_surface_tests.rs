@@ -39,8 +39,6 @@ const FORMATTED: &[&str] = &[
     "settings.cli.installs_command",
     "settings.cli.path_missing",
     "settings.transcription.count",
-    "settings.experimental.switch.open_failed",
-    "settings.experimental.switch.check_failed",
     "settings.feedback.diagnostic.confirm_body",
     "settings.changelog.version",
     "settings.integrations.managed_by",
