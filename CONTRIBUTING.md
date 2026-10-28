@@ -36,8 +36,10 @@ Before anything else, make sure you have the following installed:
 Keep the root `react` and `react-dom` development dependencies aligned with `apps/mobile`. They keep Expo native dependencies deduplicated under Bun’s hoisted linker, while the web app retains its separately resolved React version.
 
 Run `bun install`, then run `bun run env-setup` to generate a `.env` file configured for your environment.
-It will ask you which apps you intend to run, whether you'd like to use Docker to run S3 (MinIO) and MySQL locally,
+It will ask you which apps you intend to run, whether you'd like to use Docker to run S3 (RustFS) and MySQL locally,
 and allow you to provide overrides as needed.
+
+For an existing Docker development environment, rerun `bun run env-setup` or add `AWS_REQUEST_CHECKSUM_CALCULATION=WHEN_REQUIRED` to `.env` so presigned multipart uploads work with RustFS.
 
 Then run `bun run cap-setup` to install native dependencies such as FFmpeg.
 
@@ -62,5 +64,5 @@ and `%programfiles%/so.cap.desktop.dev/recordings` on Windows.
 
 ### `@cap/web` (cap.so website)
 
-When running `bun run dev` or `bun run dev:web`, a MySQL database and MinIO S3 server will also be using Docker.
+When running `bun run dev` or `bun run dev:web`, a MySQL database and RustFS S3 server will also be using Docker.
 If you want to _only_ run the `@cap/web` NextJS app, `cd` into `./apps/web` and run `bun run dev`.

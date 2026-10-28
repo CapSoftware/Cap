@@ -9,6 +9,9 @@ services:
     container_name: cap-web
     image: ghcr.io/capsoftware/cap-web:latest
     restart: unless-stopped
+    depends_on:
+      rustfs-setup:
+        condition: service_completed_successfully
     environment:
       DATABASE_URL: 'mysql://root:@ps-mysql:3306/planetscale?ssl={"rejectUnauthorized":false}'
       WEB_URL: http://localhost:3000
@@ -16,13 +19,16 @@ services:
       # CHANGE THESE TO YOUR OWN VALUES
       DATABASE_ENCRYPTION_KEY: c7a1e98e1e5e4cec5a3fbf5eaf502d262fb99807ae2be8ee70537409e29cb6f9
       NEXTAUTH_SECRET: c7a1e98e1e5e4cec5a3fbf5eaf502d262fb99807ae2be8ee70537409e29cb6f9
-      # CHANGE THESE TO MATCH YOUR MINIO or S3 STORAGE SETUP
+      # CHANGE THESE TO MATCH YOUR RUSTFS or S3 STORAGE SETUP
       CAP_AWS_ACCESS_KEY: capS3root
       CAP_AWS_SECRET_KEY: capS3root
       CAP_AWS_BUCKET: capso
       CAP_AWS_REGION: us-east-1
       S3_PUBLIC_ENDPOINT: http://localhost:3902
-      S3_INTERNAL_ENDPOINT: http://minio:3902
+      S3_INTERNAL_ENDPOINT: http://rustfs:9000
+      S3_PATH_STYLE: "true"
+      # Presigning has no part body; avoid checksums for an empty payload.
+      AWS_REQUEST_CHECKSUM_CALCULATION: WHEN_REQUIRED
       MEDIA_SERVER_URL: http://cap-media-server:3456
       # CHANGE THESE TO YOUR OWN VALUES
       MEDIA_SERVER_WEBHOOK_SECRET: fe337b52749070bb7b5d2c78cff9948439ea73cbc1869ba39d350e6c24db53b1
@@ -67,25 +73,47 @@ services:
       retries: 3
       start_period: 10s
 
-  # Local S3 Strorage
-  minio:
-    container_name: cap-minio-storage
-    image: "bitnami/minio:latest"
+  # Local S3 storage
+  rustfs:
+    container_name: cap-rustfs-storage
+    image: rustfs/rustfs:1.0.3@sha256:9ca9559533b537d10482fe923288b676ad08f92a7069d9a17327fbae3cab688b
     restart: unless-stopped
+    command: /data
     ports:
-      - "3902:3902"
-      - "3903:3903"
+      - "3902:9000"
+      - "3903:9001"
     environment:
-      - MINIO_API_PORT_NUMBER=3902
-      - MINIO_CONSOLE_PORT_NUMBER=3903
       # CHANGE THESE TO YOUR OWN VALUES
-      - MINIO_ROOT_USER=capS3root
-      - MINIO_ROOT_PASSWORD=capS3root
+      RUSTFS_ACCESS_KEY: capS3root
+      RUSTFS_SECRET_KEY: capS3root
+      RUSTFS_CONSOLE_ENABLE: "true"
+      # Presigned uploads also originate from desktop and embedded SDK clients.
+      RUSTFS_CORS_ALLOWED_ORIGINS: "*"
     volumes:
-      - minio-data:/bitnami/minio/data
-      - minio-certs:/certs
+      - rustfs-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:9000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  rustfs-setup:
+    image: pgsty/mc:RELEASE.2026-09-16T00-00-00Z@sha256:cfc83108c3abb371f8fb84d99c1fdc88f8c237e022409b0081fb7c0a3be634dd
+    depends_on:
+      rustfs:
+        condition: service_healthy
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        mc alias set caprustfs http://rustfs:9000 "$${RUSTFS_ACCESS_KEY}" "$${RUSTFS_SECRET_KEY}"
+        mc mb caprustfs/capso --ignore-existing
+    environment:
+      RUSTFS_ACCESS_KEY: capS3root
+      RUSTFS_SECRET_KEY: capS3root
+
 volumes:
   ps-mysql:
-  # REMOVE THESE IF YOU ARE NOT USING MINIO VIA THIS DOCKER COMPOSE FILE
-  minio-data:
-  minio-certs:
+  # REMOVE THIS IF YOU ARE NOT USING RUSTFS VIA THIS DOCKER COMPOSE FILE
+  rustfs-data:
