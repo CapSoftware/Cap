@@ -5,13 +5,18 @@ export const MAX_LOOM_CSV_IMPORT_ROWS = 3000;
 function detectLoomCsvDelimiter(input: string) {
 	let commas = 0;
 	let semicolons = 0;
+	let hasContent = false;
 	let inQuotes = false;
 	for (const char of input) {
 		if (char === "\u0022") inQuotes = !inQuotes;
-		else if (inQuotes) continue;
-		else if (char === "\n" || char === "\r") break;
-		else if (char === ",") commas += 1;
+		else if (inQuotes) hasContent ||= char.trim().length > 0;
+		else if (char === "\n" || char === "\r") {
+			if (hasContent) break;
+			commas = 0;
+			semicolons = 0;
+		} else if (char === ",") commas += 1;
 		else if (char === ";") semicolons += 1;
+		else hasContent ||= char.trim().length > 0;
 	}
 	return semicolons > commas ? ";" : ",";
 }

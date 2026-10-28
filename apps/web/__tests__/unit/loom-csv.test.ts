@@ -49,7 +49,9 @@ describe("Loom CSV delimiters", () => {
 	it("keeps quoted commas inside semicolon separated cells", () => {
 		const rows = parseConciergeLoomCsv(
 			"loom_video_url;user_email;space_name\n" +
-				'https://www.loom.com/share/0123456789abcdef;owner@example.com;"Sales, Europe"\n',
+				"https://www.loom.com/share/0123456789abcdef;owner@example.com;" +
+				JSON.stringify("Sales, Europe") +
+				"\n",
 		);
 		expect(rows[0]?.spaceName).toBe("Sales, Europe");
 		expect(rows[0]?.userEmail).toBe("owner@example.com");
@@ -58,12 +60,29 @@ describe("Loom CSV delimiters", () => {
 	it("keeps comma files that have semicolons in their values", () => {
 		expect(
 			parseLoomCsvRecords(
-				'url,"Folder; Archive",title\n' +
+				"url," +
+					JSON.stringify("Folder; Archive") +
+					",title\n" +
 					"https://www.loom.com/share/0123456789abcdef,a;b;c,Demo; take 2\n",
 			),
 		).toEqual([
 			["url", "Folder; Archive", "title"],
 			["https://www.loom.com/share/0123456789abcdef", "a;b;c", "Demo; take 2"],
+		]);
+	});
+
+	it("finds the delimiter after leading blank lines", () => {
+		const rows = parseConciergeLoomCsv(
+			"\r\n;;\n  \nloom_video_url;user_email\n" +
+				"https://www.loom.com/share/0123456789abcdef;owner@example.com\n",
+		);
+		expect(rows).toEqual([
+			{
+				rowNumber: 2,
+				loomUrl: "https://www.loom.com/share/0123456789abcdef",
+				userEmail: "owner@example.com",
+				spaceName: undefined,
+			},
 		]);
 	});
 
