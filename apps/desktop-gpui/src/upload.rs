@@ -1635,11 +1635,8 @@ async fn create_or_get_video_with_mode(
         .map_err(|_| AuthApiError::Other("Invalid video creation response".into()))
 }
 
-/// A video created through `/api/desktop/video/create`.
 struct CreatedVideo {
     config: S3UploadMeta,
-    /// The share link on the organization's verified custom domain, when the
-    /// server sent a valid one.
     share_url: Option<String>,
 }
 
@@ -1669,7 +1666,6 @@ fn parse_created_video(body: &str) -> Result<CreatedVideo, serde_json::Error> {
     })
 }
 
-/// Only trusts a server link that is an https share page for this video.
 fn is_share_url_for(share_url: &str, video_id: &str) -> bool {
     reqwest::Url::parse(share_url).is_ok_and(|url| {
         url.scheme() == "https"
