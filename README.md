@@ -123,7 +123,7 @@ Requirements:
 - Node.js 24 or newer
 - Bun 1.4.4
 - Rust 1.88 or newer
-- Docker for MySQL, MinIO, and local services
+- Docker for MySQL, RustFS, and local services
 
 Install and set up the repo:
 

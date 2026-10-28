@@ -41,7 +41,7 @@ Best for VPS, home servers, or any Docker-capable host.
 - Cap Web application
 - Media server (FFmpeg processing)
 - MySQL database
-- MinIO (S3-compatible storage)
+- RustFS (S3-compatible storage)
 
 **Steps:**
 1. Clone the repository
@@ -63,12 +63,20 @@ S3_PUBLIC_URL=https://s3.yourdomain.com
 
 # Optional: Custom ports
 CAP_PORT=3000
-MINIO_PORT=9000
+RUSTFS_PORT=9000
+RUSTFS_CONSOLE_PORT=9001
 
-# Optional: Custom passwords (auto-generated if not set)
+# Replace the built-in credentials before deploying publicly
 MYSQL_PASSWORD=your-secure-password
-MINIO_ROOT_PASSWORD=your-minio-password
+RUSTFS_ACCESS_KEY=cap-admin
+RUSTFS_SECRET_KEY=your-rustfs-password
 ```
+
+RustFS serves the S3 API on port `9000` and its console on port `9001`. Point `S3_PUBLIC_URL` at the S3 API; browsers and desktop clients must be able to reach it. Cap uses `http://rustfs:9000` inside Docker and path-style S3 URLs. The `cap` bucket is created before Cap Web starts. If you change the public ports, update `CAP_URL` and `S3_PUBLIC_URL` as well.
+
+The default `RUSTFS_CORS_ALLOWED_ORIGINS=*` supports presigned uploads and playback from Cap Web, desktop apps, and embedded SDKs. To restrict browser origins, set a comma-separated list containing every client origin (scheme, hostname, and port, without a trailing slash). See the [RustFS CORS documentation](https://docs.rustfs.com/en/administration/cors).
+
+The Compose files set `AWS_REQUEST_CHECKSUM_CALCULATION=WHEN_REQUIRED` for Cap Web. This prevents the AWS SDK from adding an empty-body CRC32 checksum when signing a multipart upload before the part's bytes are available; RustFS correctly rejects that checksum for a nonempty part with `BadDigest`. Explicitly supplied checksums are still validated.
 
 ### Option 2: Railway (One-Click)
 
@@ -87,7 +95,15 @@ For Coolify users, use `docker-compose.coolify.yml` which includes environment v
 4. Configure environment variables in Coolify's UI
 5. Deploy
 
-> **Note:** The Coolify compose file uses slightly different environment variable names: `WEB_URL` instead of `CAP_URL`, and `S3_PUBLIC_ENDPOINT` instead of `S3_PUBLIC_URL`.
+> **Note:** Coolify supplies `SERVICE_URL_CAP_WEB` for Cap and `SERVICE_URL_RUSTFS` for the RustFS S3 API on port `9000`. Its `SERVICE_PASSWORD_RUSTFS` value is shared by Cap, RustFS, and the bucket setup service. `RUSTFS_CORS_ALLOWED_ORIGINS` works the same way as in the main Compose file.
+
+## Existing MinIO Deployments
+
+The RustFS defaults use new data volumes (`cap-rustfs-data` for self-hosting and `rustfs-data` for local development). Existing MinIO volumes and the development directory `~/minio/data` are not reused or migrated automatically. Do not mount an old MinIO data directory directly into RustFS.
+
+Before switching an existing deployment, back up the data, pause uploads, and copy the objects through the S3 API into RustFS, preserving bucket names and object keys. Verify uploads and playback before retiring MinIO. The existing `mc` setup client is retained because its bucket operations use the S3 API.
+
+For the main Compose file, replace `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` with `RUSTFS_ACCESS_KEY` / `RUSTFS_SECRET_KEY`, and `MINIO_PORT` / `MINIO_CONSOLE_PORT` with `RUSTFS_PORT` / `RUSTFS_CONSOLE_PORT`. For Coolify, update `SERVICE_URL_MINIO` and `SERVICE_PASSWORD_MINIO` to their `RUSTFS` equivalents. Update reverse-proxy targets from the `minio` service to `rustfs`.
 
 ## Connecting Cap Desktop
 
@@ -217,13 +233,13 @@ Run this command three times to generate values for:
 
 **Full production checklist:**
 
-- [ ] Set secure passwords: `MYSQL_PASSWORD`, `MINIO_ROOT_PASSWORD`
+- [ ] Set secure credentials: `MYSQL_PASSWORD`, `RUSTFS_ACCESS_KEY`, `RUSTFS_SECRET_KEY`
 - [ ] Set secure secrets: `DATABASE_ENCRYPTION_KEY`, `NEXTAUTH_SECRET`, `MEDIA_SERVER_WEBHOOK_SECRET`
 - [ ] Set `CAP_URL` to your public URL
-- [ ] Set `S3_PUBLIC_URL` to your MinIO/S3 public URL
+- [ ] Set `S3_PUBLIC_URL` to your RustFS/S3 public URL
 - [ ] Configure a reverse proxy (nginx, Caddy, Traefik) with SSL
 - [ ] Set up email with Resend
-- [ ] Configure backups for MySQL and MinIO volumes
+- [ ] Configure backups for MySQL and RustFS volumes
 
 ## Architecture
 
@@ -236,7 +252,7 @@ Run this command three times to generate values for:
                     ┌────────────┼────────────┐
                     ▼            ▼            ▼
              ┌──────────┐ ┌──────────┐ ┌──────────┐
-             │  MySQL   │ │  MinIO   │ │  Media   │
+             │  MySQL   │ │  RustFS  │ │  Media   │
              │ (3306)   │ │ (9000)   │ │  Server  │
              └──────────┘ └──────────┘ └──────────┘
 ```
