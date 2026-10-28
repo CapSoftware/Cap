@@ -20,9 +20,10 @@
 //!
 //! Windows: `node scripts/setup.js` first, then put `target\ffmpeg\bin` on `PATH`
 //! so the example can load the shared FFmpeg the desktop app is built against.
-//! The command is unchanged. `CAP_CAMERA_BGRA_SIMD=portable`, `sse4.1`, or `avx2`
-//! selects the kernel. The CSV reports median, p90, and spread for mirrored and
-//! unmirrored frames. No display and no GPU.
+//! The command is unchanged. `CAP_CAMERA_BGRA_SIMD=portable`, `sse4.1`, `avx2`, or
+//! `swscale` selects the kernel. `swscale` skips it and times only the swscale
+//! columns. The CSV reports median, p90, and spread for mirrored and unmirrored
+//! frames. No display and no GPU.
 
 #[cfg(not(target_os = "macos"))]
 fn main() {
@@ -265,7 +266,7 @@ mod macos {
 /// Linux and Windows. Each column is timed alone. `sws_convert` is `scaler.run`
 /// into a reused BGRA frame (plus a reused-buffer mirror when `mirrored=1`).
 /// `sws_app` is the old preview: `Video::empty` plus `copy_rows` every frame.
-/// `CAP_CAMERA_BGRA_SIMD=portable`, `sse4.1`, or `avx2`.
+/// `CAP_CAMERA_BGRA_SIMD=portable`, `sse4.1`, `avx2`, or `swscale`.
 #[cfg(not(target_os = "macos"))]
 mod portable {
     use std::{hint::black_box, time::Instant};
@@ -358,13 +359,15 @@ mod portable {
         scaler.run(&frame, &mut reused).expect("swscale");
         blit(&reused, &mut tight, mirrored);
         let kernel_frame = kernel_bgra(&frame, mirrored);
-        assert_eq!(tight.len(), kernel_frame.len());
-        let max_abs_diff = tight
-            .iter()
-            .zip(&kernel_frame)
-            .map(|(before, after)| before.abs_diff(*after))
-            .max()
-            .unwrap_or(0);
+        let max_abs_diff = kernel_frame.as_ref().map(|kernel_frame| {
+            assert_eq!(tight.len(), kernel_frame.len());
+            tight
+                .iter()
+                .zip(kernel_frame)
+                .map(|(before, after)| before.abs_diff(*after))
+                .max()
+                .unwrap_or(0)
+        });
 
         let convert_stats = time_path(|| {
             scaler.run(&frame, &mut reused).expect("swscale");
@@ -378,10 +381,22 @@ mod portable {
         let app_stats = time_path(|| {
             black_box(swscale_app(&mut scaler, &frame, mirrored));
         });
+        let flag = u8::from(mirrored);
+        let Some(max_abs_diff) = max_abs_diff else {
+            println!(
+                "{name},{width},{height},{flag},{REPS},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},fallback,fallback,fallback,,,",
+                convert_stats.median,
+                convert_stats.p90,
+                convert_stats.spread,
+                app_stats.median,
+                app_stats.p90,
+                app_stats.spread,
+            );
+            return;
+        };
         let kernel_stats = time_path(|| {
             black_box(kernel_bgra(&frame, mirrored));
         });
-        let flag = u8::from(mirrored);
         println!(
             "{name},{width},{height},{flag},{REPS},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.2},{:.2},{max_abs_diff}",
             convert_stats.median,
@@ -484,7 +499,7 @@ mod portable {
         .expect("tight bgra rows")
     }
 
-    fn kernel_bgra(frame: &ffmpeg::frame::Video, mirrored: bool) -> Vec<u8> {
+    fn kernel_bgra(frame: &ffmpeg::frame::Video, mirrored: bool) -> Option<Vec<u8>> {
         let width = frame.width() as usize;
         let height = frame.height() as usize;
         match frame.format() {
@@ -513,8 +528,7 @@ mod portable {
                 frame.stride(1),
                 mirrored,
             ),
-            _ => unreachable!("benchmark formats are YUYV, UYVY, and NV12"),
+            _ => None,
         }
-        .expect("kernel conversion")
     }
 }

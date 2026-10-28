@@ -7,6 +7,7 @@
 //! autovectorized (SSE4.1 or AVX2 on x86, NEON on aarch64). x86 without SSE4.1
 //! stays on swscale: its SSE2 loop loses to swscale on 720p NV12.
 
+use std::mem::MaybeUninit;
 use std::sync::OnceLock;
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -114,7 +115,7 @@ struct Nv12Planes<'a> {
 
 fn dispatch_packed(
     data: &[u8],
-    pixels: &mut [u8],
+    pixels: &mut [MaybeUninit<u8>],
     width: usize,
     height: usize,
     stride: usize,
@@ -140,7 +141,7 @@ fn dispatch_packed(
 
 fn dispatch_nv12(
     planes: Nv12Planes<'_>,
-    pixels: &mut [u8],
+    pixels: &mut [MaybeUninit<u8>],
     width: usize,
     height: usize,
     mirrored: bool,
@@ -183,6 +184,8 @@ fn detect() -> Level {
         match choice.as_str() {
             "portable" | "sse2" => return Level::Portable,
             #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            "swscale" => return Level::Swscale,
+            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
             "sse4.1" | "sse41" if is_x86_feature_detected!("sse4.1") => return Level::Sse41,
             #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
             "avx2" if is_x86_feature_detected!("avx2") => return Level::Avx2,
@@ -203,18 +206,11 @@ fn detect() -> Level {
     Level::Portable
 }
 
-fn alloc_filled(output_len: usize, fill: impl FnOnce(&mut [u8])) -> Vec<u8> {
+fn alloc_filled(output_len: usize, fill: impl FnOnce(&mut [MaybeUninit<u8>])) -> Vec<u8> {
     let mut pixels = Vec::with_capacity(output_len);
-    let spare = &mut pixels.spare_capacity_mut()[..output_len];
-    // SAFETY: `MaybeUninit<u8>` has the same layout as `u8`. `fill` writes every
-    // byte of `spare` before `set_len`, so the `Vec<u8>` is initialized.
-    unsafe {
-        fill(std::slice::from_raw_parts_mut(
-            spare.as_mut_ptr().cast::<u8>(),
-            output_len,
-        ));
-        pixels.set_len(output_len);
-    }
+    fill(&mut pixels.spare_capacity_mut()[..output_len]);
+    // SAFETY: `fill` writes every element of this spare prefix before `set_len`.
+    unsafe { pixels.set_len(output_len) }
     pixels
 }
 
@@ -222,7 +218,7 @@ fn alloc_filled(output_len: usize, fill: impl FnOnce(&mut [u8])) -> Vec<u8> {
 #[target_feature(enable = "sse4.1")]
 unsafe fn write_packed_sse41(
     data: &[u8],
-    pixels: &mut [u8],
+    pixels: &mut [MaybeUninit<u8>],
     width: usize,
     height: usize,
     stride: usize,
@@ -236,7 +232,7 @@ unsafe fn write_packed_sse41(
 #[target_feature(enable = "sse4.1")]
 unsafe fn write_nv12_sse41(
     planes: Nv12Planes<'_>,
-    pixels: &mut [u8],
+    pixels: &mut [MaybeUninit<u8>],
     width: usize,
     height: usize,
     mirrored: bool,
@@ -248,7 +244,7 @@ unsafe fn write_nv12_sse41(
 #[target_feature(enable = "avx2")]
 unsafe fn write_packed_avx2(
     data: &[u8],
-    pixels: &mut [u8],
+    pixels: &mut [MaybeUninit<u8>],
     width: usize,
     height: usize,
     stride: usize,
@@ -262,7 +258,7 @@ unsafe fn write_packed_avx2(
 #[target_feature(enable = "avx2")]
 unsafe fn write_nv12_avx2(
     planes: Nv12Planes<'_>,
-    pixels: &mut [u8],
+    pixels: &mut [MaybeUninit<u8>],
     width: usize,
     height: usize,
     mirrored: bool,
@@ -273,7 +269,7 @@ unsafe fn write_nv12_avx2(
 #[inline(always)]
 fn write_packed_rows(
     data: &[u8],
-    pixels: &mut [u8],
+    pixels: &mut [MaybeUninit<u8>],
     width: usize,
     height: usize,
     stride: usize,
@@ -297,7 +293,7 @@ fn write_packed_rows(
 #[inline(always)]
 fn write_nv12_rows(
     planes: Nv12Planes<'_>,
-    pixels: &mut [u8],
+    pixels: &mut [MaybeUninit<u8>],
     width: usize,
     height: usize,
     mirrored: bool,
@@ -330,7 +326,7 @@ fn write_nv12_rows(
 }
 
 #[inline(always)]
-fn packed_pairs<const YUYV: bool, const MIRROR: bool>(src: &[u8], dst: &mut [u8]) {
+fn packed_pairs<const YUYV: bool, const MIRROR: bool>(src: &[u8], dst: &mut [MaybeUninit<u8>]) {
     debug_assert!(src.len().is_multiple_of(4));
     debug_assert_eq!(dst.len(), src.len() * 2);
     let (src_pairs, _) = src.as_chunks::<4>();
@@ -347,7 +343,10 @@ fn packed_pairs<const YUYV: bool, const MIRROR: bool>(src: &[u8], dst: &mut [u8]
 }
 
 #[inline(always)]
-fn write_packed_pair<const YUYV: bool, const MIRROR: bool>(sample: &[u8; 4], pixel: &mut [u8; 8]) {
+fn write_packed_pair<const YUYV: bool, const MIRROR: bool>(
+    sample: &[u8; 4],
+    pixel: &mut [MaybeUninit<u8>; 8],
+) {
     let (y0, cb, y1, cr) = if YUYV {
         (sample[0], sample[1], sample[2], sample[3])
     } else {
@@ -369,7 +368,7 @@ fn nv12_pairs<const BLEND: bool, const MIRROR: bool>(
     y: &[u8],
     uv0: &[u8],
     uv1: &[u8],
-    dst: &mut [u8],
+    dst: &mut [MaybeUninit<u8>],
 ) {
     debug_assert!(y.len().is_multiple_of(2));
     debug_assert!(uv0.len() >= y.len());
@@ -400,7 +399,7 @@ fn write_nv12_pair<const BLEND: bool, const MIRROR: bool>(
     luma: &[u8; 2],
     chroma0: &[u8; 2],
     chroma1: &[u8; 2],
-    pixel: &mut [u8; 8],
+    pixel: &mut [MaybeUninit<u8>; 8],
 ) {
     let (cb, cr) = if BLEND {
         (
@@ -420,20 +419,27 @@ fn write_nv12_pair<const BLEND: bool, const MIRROR: bool>(
 }
 
 #[inline(always)]
-fn store_bgra(pixel: &mut [u8], l0: i32, l1: i32, cb: i32, cr: i32) {
-    pixel[0] = clamp8((l0 + 516 * cb + 128) >> 8);
-    pixel[1] = clamp8((l0 - 100 * cb - 208 * cr + 128) >> 8);
-    pixel[2] = clamp8((l0 + 409 * cr + 128) >> 8);
-    pixel[3] = 255;
-    pixel[4] = clamp8((l1 + 516 * cb + 128) >> 8);
-    pixel[5] = clamp8((l1 - 100 * cb - 208 * cr + 128) >> 8);
-    pixel[6] = clamp8((l1 + 409 * cr + 128) >> 8);
-    pixel[7] = 255;
+fn store_bgra(pixel: &mut [MaybeUninit<u8>; 8], l0: i32, l1: i32, cb: i32, cr: i32) {
+    let bytes = [
+        clamp8((l0 + 516 * cb + 128) >> 8),
+        clamp8((l0 - 100 * cb - 208 * cr + 128) >> 8),
+        clamp8((l0 + 409 * cr + 128) >> 8),
+        255,
+        clamp8((l1 + 516 * cb + 128) >> 8),
+        clamp8((l1 - 100 * cb - 208 * cr + 128) >> 8),
+        clamp8((l1 + 409 * cr + 128) >> 8),
+        255,
+    ];
+    // SAFETY: `pixel` is eight bytes. `bytes` is initialized, so this store
+    // initializes the whole array. The caller `set_len`s only after every pixel.
+    unsafe {
+        pixel.as_mut_ptr().cast::<[u8; 8]>().write(bytes);
+    }
 }
 
 #[cfg(test)]
 fn bt601_bgra(y: u8, cb: u8, cr: u8) -> [u8; 4] {
-    let mut pixel = [0u8; 8];
+    let mut pixel = [MaybeUninit::uninit(); 8];
     let luma = 298 * (i32::from(y) - 16);
     store_bgra(
         &mut pixel,
@@ -442,6 +448,8 @@ fn bt601_bgra(y: u8, cb: u8, cr: u8) -> [u8; 4] {
         i32::from(cb) - 128,
         i32::from(cr) - 128,
     );
+    // SAFETY: `store_bgra` writes all eight elements.
+    let pixel = unsafe { pixel.map(|byte| byte.assume_init()) };
     [pixel[0], pixel[1], pixel[2], pixel[3]]
 }
 
@@ -460,7 +468,7 @@ fn avg_u8(a: u8, b: u8) -> u8 {
 fn vertical_tap(y: usize, height: usize) -> (usize, bool) {
     let src_h = height.div_ceil(2);
     let x_inc = (((src_h as u64) << 16) + ((height as u64) >> 1)) / (height as u64);
-    let filter_size = 3.min(src_h.saturating_sub(2)).max(1);
+    let filter_size = src_h.saturating_sub(2).clamp(1, 3);
     let x = (x_inc as i64 - 65_536) + (y as i64) * (2 * x_inc as i64);
     let mut pos = (x - (filter_size as i64 - 2) * 65_536) / (1 << 17);
     let mut coeffs = [0i64; 3];
@@ -576,27 +584,25 @@ mod tests {
         mirrored: bool,
         level: Level,
     ) -> Vec<u8> {
-        let mut pixels = vec![0u8; width * 4 * height];
-        match level {
+        alloc_filled(width * 4 * height, |pixels| match level {
             Level::Portable => {
-                write_packed_rows(data, &mut pixels, width, height, stride, format, mirrored);
+                write_packed_rows(data, pixels, width, height, stride, format, mirrored);
             }
             #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
             Level::Sse41 => unsafe {
                 // SAFETY: `levels` only yields `Sse41` after `is_x86_feature_detected!("sse4.1")`.
-                write_packed_sse41(data, &mut pixels, width, height, stride, format, mirrored);
+                write_packed_sse41(data, pixels, width, height, stride, format, mirrored);
             },
             #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
             Level::Avx2 => unsafe {
                 // SAFETY: `levels` only yields `Avx2` after `is_x86_feature_detected!("avx2")`.
-                write_packed_avx2(data, &mut pixels, width, height, stride, format, mirrored);
+                write_packed_avx2(data, pixels, width, height, stride, format, mirrored);
             },
             #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
             Level::Swscale => {
-                write_packed_rows(data, &mut pixels, width, height, stride, format, mirrored);
+                write_packed_rows(data, pixels, width, height, stride, format, mirrored);
             }
-        }
-        pixels
+        })
     }
 
     fn convert_nv12(
@@ -608,29 +614,29 @@ mod tests {
         level: Level,
         mirrored: bool,
     ) -> Vec<u8> {
-        let mut pixels = vec![0u8; width * 4 * height];
-        let planes = Nv12Planes {
-            y,
-            uv,
-            y_stride: strides.0,
-            uv_stride: strides.1,
-        };
-        match level {
-            Level::Portable => write_nv12_rows(planes, &mut pixels, width, height, mirrored),
-            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-            Level::Sse41 => unsafe {
-                // SAFETY: `levels` only yields `Sse41` after `is_x86_feature_detected!("sse4.1")`.
-                write_nv12_sse41(planes, &mut pixels, width, height, mirrored);
-            },
-            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-            Level::Avx2 => unsafe {
-                // SAFETY: `levels` only yields `Avx2` after `is_x86_feature_detected!("avx2")`.
-                write_nv12_avx2(planes, &mut pixels, width, height, mirrored);
-            },
-            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-            Level::Swscale => write_nv12_rows(planes, &mut pixels, width, height, mirrored),
-        }
-        pixels
+        alloc_filled(width * 4 * height, |pixels| {
+            let planes = Nv12Planes {
+                y,
+                uv,
+                y_stride: strides.0,
+                uv_stride: strides.1,
+            };
+            match level {
+                Level::Portable => write_nv12_rows(planes, pixels, width, height, mirrored),
+                #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+                Level::Sse41 => unsafe {
+                    // SAFETY: `levels` only yields `Sse41` after `is_x86_feature_detected!("sse4.1")`.
+                    write_nv12_sse41(planes, pixels, width, height, mirrored);
+                },
+                #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+                Level::Avx2 => unsafe {
+                    // SAFETY: `levels` only yields `Avx2` after `is_x86_feature_detected!("avx2")`.
+                    write_nv12_avx2(planes, pixels, width, height, mirrored);
+                },
+                #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+                Level::Swscale => write_nv12_rows(planes, pixels, width, height, mirrored),
+            }
+        })
     }
 
     fn mirror_rows(pixels: &mut [u8], width: usize) {
@@ -653,12 +659,17 @@ mod tests {
             mirror_rows(&mut expected, width);
             assert_eq!(mirrored, expected, "{format:?} mirrored {level:?}");
         }
-        let straight = packed422_to_bgra(&data, width, height, stride, format, false).unwrap();
-        assert_eq!(straight, portable);
-        let mirrored = packed422_to_bgra(&data, width, height, stride, format, true).unwrap();
-        let mut expected = portable;
-        mirror_rows(&mut expected, width);
-        assert_eq!(mirrored, expected);
+        let straight = packed422_to_bgra(&data, width, height, stride, format, false);
+        let mirrored = packed422_to_bgra(&data, width, height, stride, format, true);
+        if simd_path() == "swscale" {
+            assert!(straight.is_none());
+            assert!(mirrored.is_none());
+        } else {
+            assert_eq!(straight.unwrap(), portable);
+            let mut expected = portable;
+            mirror_rows(&mut expected, width);
+            assert_eq!(mirrored.unwrap(), expected);
+        }
     }
 
     fn assert_nv12(width: usize, height: usize, y_stride: usize, uv_stride: usize) {
@@ -675,12 +686,17 @@ mod tests {
             mirror_rows(&mut expected, width);
             assert_eq!(mirrored, expected, "nv12 mirrored {level:?}");
         }
-        let public = nv12_to_bgra(&y, &uv, width, height, y_stride, uv_stride, false).unwrap();
-        assert_eq!(public, portable);
-        let mirrored = nv12_to_bgra(&y, &uv, width, height, y_stride, uv_stride, true).unwrap();
-        let mut expected = portable;
-        mirror_rows(&mut expected, width);
-        assert_eq!(mirrored, expected);
+        let public = nv12_to_bgra(&y, &uv, width, height, y_stride, uv_stride, false);
+        let mirrored = nv12_to_bgra(&y, &uv, width, height, y_stride, uv_stride, true);
+        if simd_path() == "swscale" {
+            assert!(public.is_none());
+            assert!(mirrored.is_none());
+        } else {
+            assert_eq!(public.unwrap(), portable);
+            let mut expected = portable;
+            mirror_rows(&mut expected, width);
+            assert_eq!(mirrored.unwrap(), expected);
+        }
     }
 
     #[test]
@@ -776,7 +792,13 @@ mod tests {
         let pure_b = [255, 178, 0, 255];
         let mixed = [130, 130, 130, 255];
         let (y, uv) = vstep_planes(16, 8);
-        let pixels = nv12_to_bgra(&y, &uv, 16, 8, 16, 16, false).unwrap();
+        let public = nv12_to_bgra(&y, &uv, 16, 8, 16, 16, false);
+        let pixels = if simd_path() == "swscale" {
+            assert!(public.is_none());
+            convert_nv12(&y, &uv, 16, 8, (16, 16), Level::Portable, false)
+        } else {
+            public.unwrap()
+        };
         for (row, color) in [pure_a, pure_a, mixed, pure_b, mixed, pure_a, mixed, mixed]
             .into_iter()
             .enumerate()
@@ -789,7 +811,13 @@ mod tests {
         }
 
         let (y, uv) = vstep_planes(8, 6);
-        let nearest = nv12_to_bgra(&y, &uv, 8, 6, 8, 8, false).unwrap();
+        let public = nv12_to_bgra(&y, &uv, 8, 6, 8, 8, false);
+        let nearest = if simd_path() == "swscale" {
+            assert!(public.is_none());
+            convert_nv12(&y, &uv, 8, 6, (8, 8), Level::Portable, false)
+        } else {
+            public.unwrap()
+        };
         for (row, color) in [pure_a, pure_a, pure_b, pure_b, pure_a, pure_a]
             .into_iter()
             .enumerate()
@@ -798,11 +826,21 @@ mod tests {
         }
 
         let (y, uv) = vstep_planes(8, 9);
-        let odd_height = nv12_to_bgra(&y, &uv, 8, 9, 8, 8, true).unwrap();
-        let straight = nv12_to_bgra(&y, &uv, 8, 9, 8, 8, false).unwrap();
-        let mut expected = straight;
-        mirror_rows(&mut expected, 8);
-        assert_eq!(odd_height, expected);
+        let odd_height = nv12_to_bgra(&y, &uv, 8, 9, 8, 8, true);
+        let straight = nv12_to_bgra(&y, &uv, 8, 9, 8, 8, false);
+        if simd_path() == "swscale" {
+            assert!(odd_height.is_none());
+            assert!(straight.is_none());
+            let straight = convert_nv12(&y, &uv, 8, 9, (8, 8), Level::Portable, false);
+            let odd_height = convert_nv12(&y, &uv, 8, 9, (8, 8), Level::Portable, true);
+            let mut expected = straight;
+            mirror_rows(&mut expected, 8);
+            assert_eq!(odd_height, expected);
+        } else {
+            let mut expected = straight.unwrap();
+            mirror_rows(&mut expected, 8);
+            assert_eq!(odd_height.unwrap(), expected);
+        }
     }
 
     #[test]
@@ -825,12 +863,29 @@ mod tests {
 
     #[test]
     fn padding_bytes_do_not_change_active_pixels() {
-        let tight =
-            packed422_to_bgra(&[16, 128, 235, 128], 2, 1, 4, Packed422::Yuyv, false).unwrap();
+        let tight_data = [16, 128, 235, 128];
         let mut padded = vec![0xA5; 16];
-        padded[..4].copy_from_slice(&[16, 128, 235, 128]);
-        let wide = packed422_to_bgra(&padded, 2, 1, 16, Packed422::Yuyv, false).unwrap();
+        padded[..4].copy_from_slice(&tight_data);
+        let tight = convert_packed(
+            &tight_data,
+            2,
+            1,
+            4,
+            Packed422::Yuyv,
+            false,
+            Level::Portable,
+        );
+        let wide = convert_packed(&padded, 2, 1, 16, Packed422::Yuyv, false, Level::Portable);
         assert_eq!(tight, [0, 0, 0, 255, 255, 255, 255, 255]);
         assert_eq!(wide, tight);
+        let public_tight = packed422_to_bgra(&tight_data, 2, 1, 4, Packed422::Yuyv, false);
+        let public_wide = packed422_to_bgra(&padded, 2, 1, 16, Packed422::Yuyv, false);
+        if simd_path() == "swscale" {
+            assert!(public_tight.is_none());
+            assert!(public_wide.is_none());
+        } else {
+            assert_eq!(public_tight.unwrap(), tight);
+            assert_eq!(public_wide.unwrap(), tight);
+        }
     }
 }
