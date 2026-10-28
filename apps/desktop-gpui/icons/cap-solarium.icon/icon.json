@@ -1,6 +1,7 @@
 {
   "features" : [
-    "refractivity"
+    "refractivity",
+    "specular-location"
   ],
   "fill-specializations" : [
     {
@@ -42,7 +43,7 @@
             }
           ],
           "glass" : true,
-          "hidden" : false,
+          "hidden" : true,
           "image-name" : "FullRing.svg",
           "name" : "FullRing",
           "position" : {
@@ -75,6 +76,169 @@
       "translucency" : {
         "enabled" : true,
         "value" : 0.4
+      }
+    },
+    {
+      "blur-material" : null,
+      "layers" : [
+        {
+          "image-name" : "FullRingsSeaGlass2.png",
+          "name" : "FullRingsSeaGlass2",
+          "position-specializations" : [
+            {
+              "idiom" : "square",
+              "value" : {
+                "scale" : 0.65,
+                "translation-in-points" : [
+                  0,
+                  0
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "lighting" : "individual",
+      "refractivity-specializations" : [
+        {
+          "value" : {
+            "depth" : 0.5054296875,
+            "enabled" : true,
+            "strength" : 0.34328125
+          }
+        },
+        {
+          "appearance" : "dark",
+          "value" : {
+            "depth" : 0.511875,
+            "enabled" : true,
+            "strength" : 0.4355078125
+          }
+        }
+      ],
+      "shadow-specializations" : [
+        {
+          "value" : {
+            "kind" : "layer-color",
+            "opacity" : 0.5
+          }
+        },
+        {
+          "appearance" : "dark",
+          "value" : {
+            "kind" : "layer-color",
+            "opacity" : 0.5
+          }
+        }
+      ],
+      "specular-specializations" : [
+        {
+          "value" : "inside"
+        },
+        {
+          "appearance" : "dark",
+          "value" : "inside"
+        }
+      ],
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.25
+      }
+    },
+    {
+      "blur-material" : null,
+      "layers" : [
+        {
+          "blend-mode-specializations" : [
+            {
+              "appearance" : "dark",
+              "value" : "normal"
+            }
+          ],
+          "fill-specializations" : [
+            {
+              "appearance" : "dark",
+              "value" : "none"
+            }
+          ],
+          "glass" : false,
+          "hidden-specializations" : [
+            {
+              "idiom" : "square",
+              "value" : false
+            }
+          ],
+          "image-name" : "FullRingsSeaGlass-Shadow.png",
+          "name" : "FullRingsSeaGlass-Shadow",
+          "opacity-specializations" : [
+            {
+              "appearance" : "dark",
+              "value" : 0
+            },
+            {
+              "appearance" : "tinted",
+              "value" : 0
+            }
+          ],
+          "position-specializations" : [
+            {
+              "idiom" : "square",
+              "value" : {
+                "scale" : 0.65,
+                "translation-in-points" : [
+                  0,
+                  0
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "lighting" : "individual",
+      "refractivity-specializations" : [
+        {
+          "value" : {
+            "depth" : 0.5054296875,
+            "enabled" : true,
+            "strength" : 0.34328125
+          }
+        },
+        {
+          "appearance" : "dark",
+          "value" : {
+            "depth" : 0.511875,
+            "enabled" : true,
+            "strength" : 0.4355078125
+          }
+        }
+      ],
+      "shadow-specializations" : [
+        {
+          "value" : {
+            "kind" : "layer-color",
+            "opacity" : 0.5
+          }
+        },
+        {
+          "appearance" : "dark",
+          "value" : {
+            "kind" : "layer-color",
+            "opacity" : 0.5
+          }
+        }
+      ],
+      "specular-specializations" : [
+        {
+          "value" : "outside"
+        },
+        {
+          "appearance" : "dark",
+          "value" : "inside"
+        }
+      ],
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.3
       }
     }
   ],
