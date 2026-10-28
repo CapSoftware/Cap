@@ -80,6 +80,7 @@ vi.mock("@/lib/loom-media-dispatch", () => ({
 	isLoomMediaJobFailed: mocks.mediaJobFailed,
 }));
 
+import { transcribeVideo } from "@/lib/transcribe";
 import { importLoomVideoWorkflow } from "@/workflows/import-loom-video";
 import { processVideoWorkflow } from "@/workflows/process-video";
 
@@ -193,6 +194,56 @@ describe("media processing workflows", () => {
 		expect(mocks.fetch).toHaveBeenCalledOnce();
 		expect(mocks.sleep.mock.calls).toEqual([[5_000], [10_000]]);
 		expect(mocks.remove).toHaveBeenCalledWith(payload.rawFileKey);
+	});
+
+	describe("transcription after processing", () => {
+		const owner = {
+			id: "owner",
+			stripeSubscriptionStatus: null,
+			thirdPartyStripeSubscriptionId: null,
+		};
+		const processedRows = () => [
+			[video],
+			[{ ...pending, rawFileKey: payload.rawFileKey }],
+			[video],
+			[pending],
+			[pending],
+			[],
+			[metadata],
+			[video],
+			[owner],
+		];
+
+		beforeEach(() => {
+			vi.mocked(transcribeVideo)
+				.mockReset()
+				.mockResolvedValue({ success: true, message: "started" });
+		});
+
+		it("queues transcription when a provider is configured", async () => {
+			mocks.env = { ASSEMBLY_API_KEY: "assembly-test" };
+			mocks.rows = processedRows();
+
+			await expect(processVideoWorkflow(payload)).resolves.toMatchObject({
+				success: true,
+			});
+			expect(transcribeVideo).toHaveBeenCalledWith("video", "owner", false);
+		});
+
+		it("skips transcription without a provider instead of logging a failure", async () => {
+			const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+			mocks.rows = processedRows();
+
+			await expect(processVideoWorkflow(payload)).resolves.toMatchObject({
+				success: true,
+			});
+			expect(transcribeVideo).not.toHaveBeenCalled();
+			expect(warn).not.toHaveBeenCalledWith(
+				"[process-video] Failed to queue transcription",
+				expect.anything(),
+			);
+			warn.mockRestore();
+		});
 	});
 
 	it("marks deferred Loom originals so the worker accepts their decoder glitches", async () => {

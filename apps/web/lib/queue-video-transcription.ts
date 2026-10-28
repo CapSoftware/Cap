@@ -1,5 +1,6 @@
 import { db } from "@cap/database";
 import { users, videos } from "@cap/database/schema";
+import { serverEnv } from "@cap/env";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { isAiGenerationEnabledForUser } from "@/lib/ai-generation-entitlement";
@@ -37,6 +38,10 @@ export function shouldQueueTranscriptionAfterMultipartComplete(
 export async function queueVideoTranscription(
 	videoId: Video.VideoId,
 ): Promise<QueueVideoTranscriptionResult> {
+	if (!serverEnv().ASSEMBLY_API_KEY) {
+		return { success: true, message: "Transcription is not configured" };
+	}
+
 	const [owner] = await db()
 		.select({
 			id: videos.ownerId,
