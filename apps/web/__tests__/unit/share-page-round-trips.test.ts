@@ -5,7 +5,10 @@ import { Context, Effect } from "effect";
 import { type ComponentProps, isValidElement, type ReactElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({ query: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+	query: vi.fn(),
+	env: {} as Record<string, string>,
+}));
 
 vi.mock("server-only", () => ({}));
 vi.mock("@cap/database", async () => {
@@ -18,7 +21,7 @@ vi.mock("@cap/database/auth/session", () => ({
 }));
 vi.mock("@cap/env", () => ({
 	buildEnv: { NEXT_PUBLIC_WEB_URL: "https://cap.so" },
-	serverEnv: () => ({}),
+	serverEnv: () => mocks.env,
 }));
 vi.mock("@cap/ui", () => ({ Logo: () => null }));
 vi.mock("@cap/utils", () => ({ userIsPro: () => true }));
@@ -257,7 +260,10 @@ async function loadPage() {
 	};
 }
 
-beforeEach(() => mocks.query.mockReset());
+beforeEach(() => {
+	mocks.query.mockReset();
+	mocks.env = {};
+});
 
 describe("share page database round trips", () => {
 	it("keeps download permission and edit checks within the existing page load", async () => {
@@ -295,6 +301,19 @@ describe("share page database round trips", () => {
 			roundTrips: 4,
 			queries: 20,
 		});
+	});
+
+	it.each([
+		[{}, false],
+		[{ ASSEMBLY_API_KEY: "assembly-key" }, true],
+		[{ STT_BASE_URL: "http://whisper:9000/v1" }, true],
+	])("offers transcript generation with %o: %s", async (env, available) => {
+		mocks.env = env;
+		mocks.query.mockImplementation(async (query: string) => ({
+			rows: rowsFor(query),
+		}));
+		const result = await loadPage();
+		expect(result.transcriptionGenerationAvailable).toBe(available);
 	});
 
 	it.skipIf(!process.env.CAP_SHARE_PAGE_BENCH)(

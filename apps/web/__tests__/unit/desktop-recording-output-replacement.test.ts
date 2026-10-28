@@ -81,8 +81,10 @@ import {
 	createDesktopReuploadToken,
 	decodeDesktopReuploadToken,
 } from "@/lib/desktop-reupload-token";
+import { transcribeVideo } from "@/lib/transcribe";
 import { saveMetadataAndComplete } from "@/workflows/admin-reprocess-video";
 import {
+	queueTranscriptionRegeneration,
 	saveEditResultAndComplete,
 	startMediaServerEditJob,
 	verifyRenderedEditOutput,
@@ -742,5 +744,17 @@ describe("edit dispatch acceptance", () => {
 		await expect(
 			startMediaServerEditJob("https://media.test", { videoId: "video" }),
 		).resolves.toEqual({ status: "accepted", jobId: "worker-1" });
+	});
+});
+
+describe("edit transcription regeneration", () => {
+	it("regenerates the transcript with only an STT endpoint configured", async () => {
+		mocks.env.mockReturnValue({ STT_BASE_URL: "http://whisper:9000/v1" });
+		vi.mocked(transcribeVideo).mockResolvedValue({
+			success: true,
+			message: "started",
+		});
+		await queueTranscriptionRegeneration("video", "user", true);
+		expect(transcribeVideo).toHaveBeenCalledWith("video", "user", true);
 	});
 });

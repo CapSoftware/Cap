@@ -101,6 +101,21 @@ describe("transcribeVideo", () => {
 			expect(result.message).toContain("environment variables");
 		});
 
+		it("accepts an STT endpoint without ASSEMBLY_API_KEY", async () => {
+			const { serverEnv } = await import("@cap/env");
+			vi.mocked(serverEnv).mockReturnValueOnce({
+				ASSEMBLY_API_KEY: undefined,
+				STT_BASE_URL: "http://whisper:9000/v1",
+			} as ReturnType<typeof serverEnv>);
+
+			const result = await transcribeVideo(
+				"video-123" as Video.VideoId,
+				"user-456",
+			);
+
+			expect(result.message).not.toContain("environment variables");
+		});
+
 		it("rejects empty videoId", async () => {
 			const result = await transcribeVideo("" as Video.VideoId, "user-456");
 

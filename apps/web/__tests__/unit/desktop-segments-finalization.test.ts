@@ -1,5 +1,5 @@
 import type { User, Video } from "@cap/web-domain";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
 	ensure: vi.fn(),
@@ -13,6 +13,10 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@cap/database", () => ({
 	db: () => ({ select: () => ({ from: () => ({ where: async () => [] }) }) }),
 }));
+vi.mock("@cap/env", () => {
+	const env: Record<string, string | undefined> = {};
+	return { serverEnv: () => env };
+});
 vi.mock("@cap/database/schema", () => ({ users: {}, videos: {} }));
 vi.mock("drizzle-orm", () => ({ eq: vi.fn() }));
 vi.mock("workflow/api", () => ({ start: mocks.start }));
@@ -40,6 +44,7 @@ vi.mock("@/lib/desktop-recording-jobs", () => ({
 	},
 }));
 
+import { serverEnv } from "@cap/env";
 import {
 	DesktopRecordingSourceBlockedError,
 	SourceCommitPendingError,
@@ -174,5 +179,28 @@ describe("durable finalization acknowledgement", () => {
 		await queueDesktopSegmentsFinalization({ ...input, verification });
 		expect(mocks.ensure).toHaveBeenCalledWith({ ...input, verification });
 		expect(mocks.start).not.toHaveBeenCalled();
+	});
+
+	it("queues early transcription with only an STT endpoint configured", async () => {
+		const env = serverEnv();
+		const { ASSEMBLY_API_KEY, STT_BASE_URL } = env;
+		onTestFinished(() => {
+			Object.assign(env, { ASSEMBLY_API_KEY, STT_BASE_URL });
+		});
+		Object.assign(env, {
+			STT_BASE_URL: "http://whisper:9000/v1",
+			ASSEMBLY_API_KEY: undefined,
+		});
+		mocks.ensure.mockResolvedValue({ job: committed, created: true });
+		mocks.state.mockResolvedValue(committed);
+		await expect(queueDesktopSegmentsFinalization(input)).resolves.toBe(
+			"queued",
+		);
+		expect(mocks.transcribe).toHaveBeenCalledWith(
+			input.videoId,
+			input.userId,
+			false,
+			{ earlyFromSegments: true },
+		);
 	});
 });

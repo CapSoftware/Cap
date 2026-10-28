@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 
 const mockDb = vi.hoisted(() => vi.fn());
 const mockTranscribeVideo = vi.hoisted(() => vi.fn());
@@ -17,6 +17,10 @@ const schemaMocks = vi.hoisted(() => ({
 	},
 }));
 
+vi.mock("@cap/env", () => {
+	const env: Record<string, string | undefined> = {};
+	return { serverEnv: () => env };
+});
 vi.mock("@cap/database", () => ({ db: mockDb }));
 vi.mock("@cap/database/schema", () => schemaMocks);
 vi.mock("drizzle-orm", () => ({
@@ -29,6 +33,7 @@ vi.mock("@/lib/transcribe", () => ({
 	transcribeVideo: mockTranscribeVideo,
 }));
 
+import { serverEnv } from "@cap/env";
 import type { Video } from "@cap/web-domain";
 import {
 	queueVideoTranscription,
@@ -109,6 +114,36 @@ describe("queueVideoTranscription", () => {
 		expect(result).toEqual({
 			success: false,
 			message: "Video owner does not exist",
+		});
+	});
+
+	it("queues transcription with only an STT endpoint configured", async () => {
+		const env = serverEnv();
+		const { ASSEMBLY_API_KEY, STT_BASE_URL } = env;
+		onTestFinished(() => {
+			Object.assign(env, { ASSEMBLY_API_KEY, STT_BASE_URL });
+		});
+		Object.assign(env, {
+			STT_BASE_URL: "http://whisper:9000/v1",
+			ASSEMBLY_API_KEY: undefined,
+		});
+		mockDb.mockReturnValue(
+			makeSelectChain([
+				{
+					id: "user-1",
+					isScreenshot: false,
+					stripeSubscriptionStatus: null,
+					thirdPartyStripeSubscriptionId: null,
+				},
+			]),
+		);
+
+		const result = await queueVideoTranscription("video-1" as Video.VideoId);
+
+		expect(mockTranscribeVideo).toHaveBeenCalledWith("video-1", "user-1", true);
+		expect(result).toEqual({
+			success: true,
+			message: "Transcription workflow started",
 		});
 	});
 });
