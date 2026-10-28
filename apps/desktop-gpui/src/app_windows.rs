@@ -42,6 +42,11 @@ use crate::{
 /// `fake_window.rs` position math.
 pub const CONTROLS_WIDTH: f32 = 320.;
 pub const CONTROLS_HEIGHT: f32 = 150.;
+/// The bar alone, with its padding. A transparent window takes every click
+/// inside its frame, so without an issue to show the window is only this
+/// tall and the app under the empty space above the bar stays clickable.
+pub const CONTROLS_BAR_HEIGHT: f32 = 64.;
+const CONTROLS_FIT_TO_ISSUE: bool = cfg!(any(target_os = "macos", windows));
 const CONTROLS_BOTTOM_OFFSET: f64 = 120.;
 const TARGET_CONTROLS_OFFSET_Y: f64 = 48.;
 
@@ -6885,6 +6890,35 @@ fn controls_origin(config: &StartConfig) -> (f64, f64) {
     }
 }
 
+/// Grow the bar's window upward to make room for an issue card above the
+/// bar, or shrink it back to the bar alone, leaving the bar where it is.
+/// `setFrame` re-enters gpui, so call this from a task.
+pub(crate) fn fit_controls_to_issue(native: &platform::NativeWindow, issue: bool, scale: f32) {
+    let height = f64::from(if issue {
+        CONTROLS_HEIGHT
+    } else {
+        CONTROLS_BAR_HEIGHT
+    });
+    let (x, y, width, current) = platform::window_frame(native);
+    if width <= 0. {
+        return;
+    }
+    // AppKit frames have a bottom-left origin: a new height keeps the bottom.
+    #[cfg(target_os = "macos")]
+    {
+        let _ = (current, scale);
+        platform::set_window_frame(native, x, y, width, height);
+    }
+    // Windows frames are physical pixels from the top-left.
+    #[cfg(windows)]
+    {
+        let height = height * f64::from(scale);
+        platform::set_window_frame(native, x, y + current - height, width, height);
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
+    let _ = (native, x, y, current, height, scale);
+}
+
 /// Open the bar. Returns the native window number for capture exclusion.
 fn open_controls(
     config: &StartConfig,
@@ -6896,9 +6930,14 @@ fn open_controls(
         return None;
     }
     let (x, y) = controls_origin(config);
+    let height = if CONTROLS_FIT_TO_ISSUE {
+        CONTROLS_BAR_HEIGHT
+    } else {
+        CONTROLS_HEIGHT
+    };
     let bounds = Bounds {
-        origin: point(px(x as f32), px(y as f32)),
-        size: size(px(CONTROLS_WIDTH), px(CONTROLS_HEIGHT)),
+        origin: point(px(x as f32), px(y as f32 + CONTROLS_HEIGHT - height)),
+        size: size(px(CONTROLS_WIDTH), px(height)),
     };
     let display = config
         .target

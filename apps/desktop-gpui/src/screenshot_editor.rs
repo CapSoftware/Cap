@@ -4487,7 +4487,7 @@ impl ScreenshotEditorWindow {
                         .child(div().w(px(80.)).h(px(8.)).rounded_full().bg(theme.gray_4))
                         .child(block(36.)),
                 )
-                .child(spinning_logo(&theme)),
+                .child(spinning_logo()),
         )
     }
 }
@@ -4675,23 +4675,14 @@ fn mini_checker() -> Vec<AnyElement> {
     .collect()
 }
 
-/// The skeleton's `<div class="animate-spin"><IconCapLogo /></div>`. The app
-/// has no bare logo glyph -- only the full lockup -- so the wordmark would spin
-/// with it; the lockup is drawn still instead, at the skeleton's opacity
-/// (README deviation).
-fn spinning_logo(theme: &Theme) -> impl IntoElement {
-    div().flex().items_center().justify_center().child(
-        svg()
-            .path(if theme.is_dark() {
-                "icons/logo-full-dark.svg"
-            } else {
-                "icons/logo-full.svg"
-            })
-            .w(px(103.))
-            .h(px(40.))
-            .opacity(0.5)
-            .text_color(theme.gray_8),
-    )
+/// The skeleton's `<div class="animate-spin"><IconCapLogo /></div>`: the glass
+/// mark at the skeleton's opacity, drawn still (README deviation).
+fn spinning_logo() -> impl IntoElement {
+    div()
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(img("icons/logo-mark.svg").size(px(40.)).opacity(0.5))
 }
 
 /// The preview's checkerboard: `background-color: white` under `#f0f0f0`

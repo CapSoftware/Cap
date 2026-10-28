@@ -1515,8 +1515,10 @@ focus_on = { text = "Recording only this window", context = "Subtitle under Focu
 focus_off = { text = "Record only this window", context = "Subtitle under Focus mode while it is off. 11.5px, one line." }
 focus_enable = "Enable Focus mode"
 focus_disable = "Turn off Focus mode"
-focus_body = "Centres this window and records only it. Anything that moves in front of it stays out of the video."
-focus_body_instant_camera = "Centres this window. With a camera, Instant still records the screen region so the camera stays in the video."
+focus_body = "Only what's inside this window is recorded. Other windows, even ones on top of it, and the rest of your screen stay out of the video."
+focus_body_instant_camera = "With a camera, Instant still records the screen region so the camera stays in the video."
+center_title = { text = "Center on screen", context = "Option under Focus mode in the window picker, with a switch." }
+center_description = { text = "Move the window to the middle when you pick it", context = "Subtitle under Center on screen." }
 
 [permission.guide]
 accessibility_body = { text = "Drop it on the Accessibility list above, then make sure its switch is on.", context = "Accessibility is the name of the macOS System Settings pane; use the name macOS shows in this language." }

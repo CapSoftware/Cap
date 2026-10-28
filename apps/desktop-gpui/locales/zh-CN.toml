@@ -1513,8 +1513,10 @@ focus_on = "将只录制此窗口"
 focus_off = "只录制此窗口"
 focus_enable = "开启聚焦模式"
 focus_disable = "关闭聚焦模式"
-focus_body = "将此窗口居中并只录制它。从它前面经过的任何内容都不会出现在视频中。"
-focus_body_instant_camera = "将此窗口居中。使用摄像头时，Instant 仍会录制屏幕区域，以便摄像头画面保留在视频中。"
+focus_body = "只录制此窗口内的内容。其他窗口（即使在它上方）和屏幕的其余部分都不会出现在视频中。"
+focus_body_instant_camera = "使用摄像头时，Instant 仍会录制屏幕区域，以便摄像头画面保留在视频中。"
+center_title = "在屏幕上居中"
+center_description = "选择窗口时将其移到屏幕中央"
 
 [permission.guide]
 accessibility_body = "将它拖放到上方的“辅助功能”列表中，然后确认它的开关已打开。"

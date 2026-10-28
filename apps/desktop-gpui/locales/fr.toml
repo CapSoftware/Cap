@@ -1513,8 +1513,10 @@ focus_on = "Seule cette fenêtre sera enregistrée"
 focus_off = "Enregistrer uniquement cette fenêtre"
 focus_enable = "Activer le mode focus"
 focus_disable = "Désactiver le mode focus"
-focus_body = "Centre cette fenêtre et n'enregistre qu'elle. Tout ce qui passe devant reste hors de la vidéo."
-focus_body_instant_camera = "Centre cette fenêtre. Avec une caméra, Instant enregistre quand même la zone de l'écran pour que la caméra reste dans la vidéo."
+focus_body = "Seul le contenu de cette fenêtre est enregistré. Les autres fenêtres, même celles placées devant, et le reste de l'écran restent hors de la vidéo."
+focus_body_instant_camera = "Avec une caméra, Instant enregistre quand même la zone de l'écran pour que la caméra reste dans la vidéo."
+center_title = "Centrer à l'écran"
+center_description = "Déplace la fenêtre au centre quand vous la choisissez"
 
 [permission.guide]
 accessibility_body = "Déposez-le dans la liste « Accessibilité » ci-dessus, puis vérifiez que son interrupteur est activé."

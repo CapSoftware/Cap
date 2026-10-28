@@ -380,11 +380,16 @@ fn dialog_surfaces_match_the_literals_they_replaced() {
         (tr::overlay::window::focus_disable(), "Turn off Focus mode"),
         (
             tr::overlay::window::focus_body(),
-            "Centres this window and records only it. Anything that moves in front of it stays out of the video.",
+            "Only what's inside this window is recorded. Other windows, even ones on top of it, and the rest of your screen stay out of the video.",
         ),
         (
             tr::overlay::window::focus_body_instant_camera(),
-            "Centres this window. With a camera, Instant still records the screen region so the camera stays in the video.",
+            "With a camera, Instant still records the screen region so the camera stays in the video.",
+        ),
+        (tr::overlay::window::center_title(), "Center on screen"),
+        (
+            tr::overlay::window::center_description(),
+            "Move the window to the middle when you pick it",
         ),
         (tr::overlay::area::draw(), "Draw an area"),
         (tr::overlay::area::free_ratio(), "Free"),

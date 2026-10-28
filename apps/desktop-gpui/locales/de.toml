@@ -1513,8 +1513,10 @@ focus_on = "Nur dieses Fenster wird aufgenommen"
 focus_off = "Nur dieses Fenster aufnehmen"
 focus_enable = "Fokusmodus aktivieren"
 focus_disable = "Fokusmodus deaktivieren"
-focus_body = "Zentriert dieses Fenster und nimmt nur dieses auf. Was sich davor bewegt, erscheint nicht im Video."
-focus_body_instant_camera = "Zentriert dieses Fenster. Mit Kamera nimmt Instant weiterhin den Bildschirmbereich auf, damit die Kamera im Video bleibt."
+focus_body = "Nur der Inhalt dieses Fensters wird aufgenommen. Andere Fenster, auch solche davor, und der Rest des Bildschirms erscheinen nicht im Video."
+focus_body_instant_camera = "Mit Kamera nimmt Instant weiterhin den Bildschirmbereich auf, damit die Kamera im Video bleibt."
+center_title = "Auf dem Bildschirm zentrieren"
+center_description = "Verschiebt das Fenster beim Auswählen in die Mitte"
 
 [permission.guide]
 accessibility_body = "Legen Sie es oben in der Liste „Bedienungshilfen“ ab und achten Sie darauf, dass der Schalter aktiviert ist."

@@ -309,6 +309,7 @@ pub struct TargetSelect {
     /// Focus, shared by every display's overlay because the recording reads
     /// the one setting it mirrors.
     pub focus_window: bool,
+    pub focus_center: bool,
     _poll: Option<gpui::Task<()>>,
 }
 
@@ -325,9 +326,13 @@ enum Arrangement {
     PutBack(ArrangedWindow),
 }
 
+/// Focus records a window by itself, which only macOS and Windows capture.
+const FOCUS_SUPPORTED: bool = cfg!(any(target_os = "macos", windows));
+
 fn saved_focus() -> bool {
-    crate::store::GeneralSettings::load().window_capture_style
-        == crate::store::WindowCaptureStyle::FocusedWindow
+    FOCUS_SUPPORTED
+        && crate::store::GeneralSettings::load().window_capture_style
+            == crate::store::WindowCaptureStyle::FocusedWindow
 }
 
 struct TargetSelectGlobal(Entity<TargetSelect>);
@@ -345,6 +350,7 @@ impl TargetSelect {
             icons: HashMap::new(),
             arranged: HashMap::new(),
             focus_window: saved_focus(),
+            focus_center: crate::store::GeneralSettings::load().focus_center,
             _poll: None,
         });
         cx.set_global(TargetSelectGlobal(select.clone()));
@@ -370,6 +376,7 @@ impl TargetSelect {
             // them back nor recorded them.
             crate::foreign_window::put_back_all(self.take_arranged(), cx.background_executor());
             self.focus_window = saved_focus();
+            self.focus_center = crate::store::GeneralSettings::load().focus_center;
         }
         if self.mode == mode {
             cx.notify();
@@ -2233,11 +2240,12 @@ impl OverlayWindow {
     }
 
     fn render_focus_toggle(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
-        if !crate::foreign_window::can_arrange() {
+        if !FOCUS_SUPPORTED || !crate::foreign_window::can_arrange() {
             return None;
         }
         let theme = self.theme;
-        let focus = self.select.read(cx).focus_window;
+        let select = self.select.read(cx);
+        let (focus, center) = (select.focus_window, select.focus_center);
         // Instant records the camera bubble off the screen, so with a camera
         // it keeps the screen region (see `instant_capture_window`).
         let camera = cx
@@ -2250,86 +2258,92 @@ impl OverlayWindow {
         } else {
             tr::overlay::window::focus_enable()
         };
-        let body = if cfg!(any(target_os = "macos", windows))
-            && self.select.read(cx).recording_mode == Mode::Instant
-            && camera
-        {
+        let explanation = if select.recording_mode == Mode::Instant && camera {
             tr::overlay::window::focus_body_instant_camera()
         } else {
             tr::overlay::window::focus_body()
         };
-        // Regular, as the controls below it are: it carries text.
         let card = self.glass_surface().id("window-focus");
-        let hint = Hint::new(title).body(body).side(crate::ui::HintSide::Below);
+        let hint = Hint::new(title)
+            .body(explanation)
+            .side(crate::ui::HintSide::Left);
         let accent = Hsla::from(theme.blue_9);
-        Some(
-            self.hinted(card, "window-focus", hint, cx)
-                .mb(px(10.))
-                .h(px(52.))
-                .pl(px(10.))
-                .pr(px(6.))
-                .flex()
-                .items_center()
-                .gap(px(10.))
-                .cursor_pointer()
-                .when(focus, |card| {
-                    card.border_1().border_color(accent.opacity(0.7))
-                })
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                // The whole card is the switch's label, as a macOS form row is.
-                .on_click(cx.listener(|this, _, _, cx| {
-                    cx.stop_propagation();
-                    let focus = this.select.read(cx).focus_window;
-                    this.set_focus(!focus, cx);
-                }))
-                .child(
-                    div()
-                        .size(px(32.))
-                        .flex_shrink_0()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(9.))
-                        .bg(if focus {
-                            accent
-                        } else {
-                            Theme::with_alpha(theme.gray_12, 0.08)
-                        })
-                        .child(svg().path("icons/box-select.svg").size(px(17.)).text_color(
-                            if focus {
+        // The hint belongs to the Focus row alone: Center on screen explains
+        // itself under its title.
+        let header = self
+            .hinted(
+                div().id("window-focus-header").relative(),
+                "window-focus",
+                hint,
+                cx,
+            )
+            .h(px(52.))
+            .pl(px(10.))
+            .pr(px(6.))
+            .flex()
+            .items_center()
+            .gap(px(10.))
+            .cursor_pointer()
+            // The whole row is the switch's label, as a macOS form row is.
+            .on_click(cx.listener(|this, _, _, cx| {
+                cx.stop_propagation();
+                let focus = this.select.read(cx).focus_window;
+                this.set_focus(!focus, cx);
+            }))
+            .child(
+                div()
+                    .size(px(32.))
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(9.))
+                    .bg(if focus {
+                        accent
+                    } else {
+                        Theme::with_alpha(theme.gray_12, 0.08)
+                    })
+                    .child(
+                        svg()
+                            .path("icons/box-select.svg")
+                            .size(px(17.))
+                            .text_color(if focus {
                                 gpui::white().into()
                             } else {
                                 Hsla::from(theme.gray_12)
-                            },
-                        )),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .pr(px(14.))
-                        .child(
-                            div()
-                                .text_size(px(13.))
-                                .line_height(px(17.))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(theme.gray_12)
-                                .child(tr::overlay::window::focus_title()),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(11.5))
-                                .line_height(px(15.))
-                                .font_weight(FontWeight::NORMAL)
-                                .text_color(theme.gray_11)
-                                .child(if focus {
-                                    tr::overlay::window::focus_on()
-                                } else {
-                                    tr::overlay::window::focus_off()
-                                }),
-                        ),
-                )
-                .child(
+                            }),
+                    ),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .pr(px(14.))
+                    .child(
+                        div()
+                            .text_size(px(13.))
+                            .line_height(px(17.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(theme.gray_12)
+                            .child(tr::overlay::window::focus_title()),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.5))
+                            .line_height(px(15.))
+                            .font_weight(FontWeight::NORMAL)
+                            .text_color(theme.gray_11)
+                            .child(if focus {
+                                tr::overlay::window::focus_on()
+                            } else {
+                                tr::overlay::window::focus_off()
+                            }),
+                    ),
+            )
+            .child(
+                div().flex_shrink_0().child(
                     crate::ui::GlassSwitch::new("window-focus-toggle", focus, theme.is_dark())
                         .on_click(cx.listener(|this, _, _, cx| {
                             cx.stop_propagation();
@@ -2337,6 +2351,86 @@ impl OverlayWindow {
                             this.set_focus(!focus, cx);
                         })),
                 ),
+            );
+        let details = focus.then(|| {
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(8.))
+                .px(px(12.))
+                .pt(px(2.))
+                .pb(px(10.))
+                .child(
+                    div()
+                        .text_size(px(11.5))
+                        .line_height(px(15.))
+                        .text_color(theme.gray_11)
+                        .child(explanation),
+                )
+                .child(div().h(px(1.)).bg(Theme::with_alpha(theme.gray_12, 0.08)))
+                .child(
+                    div()
+                        .id("window-focus-center")
+                        .flex()
+                        .items_center()
+                        .gap(px(10.))
+                        .cursor_pointer()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            cx.stop_propagation();
+                            let center = this.select.read(cx).focus_center;
+                            this.set_focus_center(!center, cx);
+                        }))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .flex()
+                                .flex_col()
+                                .child(
+                                    div()
+                                        .text_size(px(12.5))
+                                        .line_height(px(16.))
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(theme.gray_12)
+                                        .child(tr::overlay::window::center_title()),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(11.))
+                                        .line_height(px(14.))
+                                        .text_color(theme.gray_11)
+                                        .child(tr::overlay::window::center_description()),
+                                ),
+                        )
+                        .child(
+                            div().flex_shrink_0().child(
+                                crate::ui::GlassSwitch::new(
+                                    "window-focus-center-toggle",
+                                    center,
+                                    theme.is_dark(),
+                                )
+                                .on_click(cx.listener(
+                                    |this, _, _, cx| {
+                                        cx.stop_propagation();
+                                        let center = this.select.read(cx).focus_center;
+                                        this.set_focus_center(!center, cx);
+                                    },
+                                )),
+                            ),
+                        ),
+                )
+        });
+        Some(
+            card.mb(px(10.))
+                .w(px(300.))
+                .flex()
+                .flex_col()
+                .when(focus, |card| {
+                    card.border_1().border_color(accent.opacity(0.7))
+                })
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(header)
+                .children(details),
         )
     }
 
@@ -2436,8 +2530,6 @@ impl OverlayWindow {
         }
     }
 
-    /// Focus on: centre the window, bring it forward, record it by itself.
-    /// Focus off: put it back where the picker found it, record the region.
     pub(crate) fn set_focus(&mut self, focus: bool, cx: &mut Context<Self>) {
         self.select.update(cx, |select, cx| {
             select.focus_window = focus;
@@ -2460,8 +2552,12 @@ impl OverlayWindow {
             return;
         };
         if focus {
-            let centred = crate::window_arrange::centre(window, self.controls_work_area);
-            self.arrange_active_window(Arrangement::Frame(centred), true, cx);
+            if self.select.read(cx).focus_center {
+                let centred = crate::window_arrange::centre(window, self.controls_work_area);
+                self.arrange_active_window(Arrangement::Frame(centred), true, cx);
+            } else {
+                cx.notify();
+            }
         } else {
             let original = self
                 .select
@@ -2473,6 +2569,39 @@ impl OverlayWindow {
                     self.arrange_active_window(Arrangement::PutBack(original), false, cx)
                 }
                 None => cx.notify(),
+            }
+        }
+    }
+
+    pub(crate) fn set_focus_center(&mut self, center: bool, cx: &mut Context<Self>) {
+        self.select.update(cx, |select, cx| {
+            select.focus_center = center;
+            cx.notify();
+        });
+        if !crate::store::set_store_setting(
+            crate::store::GENERAL_SETTINGS,
+            "focusCenter",
+            serde_json::Value::Bool(center),
+        ) {
+            tracing::warn!("could not save Focus centering");
+        }
+        if !self.select.read(cx).focus_window {
+            return;
+        }
+        let Some(window) = self.active_window_logical(cx) else {
+            return;
+        };
+        if center {
+            let centred = crate::window_arrange::centre(window, self.controls_work_area);
+            self.arrange_active_window(Arrangement::Frame(centred), true, cx);
+        } else {
+            let original = self
+                .select
+                .read(cx)
+                .active_window()
+                .and_then(|active| self.select.read(cx).arranged_original(&active.id).cloned());
+            if let Some(original) = original {
+                self.arrange_active_window(Arrangement::PutBack(original), false, cx);
             }
         }
     }
@@ -2499,6 +2628,7 @@ impl OverlayWindow {
         });
         let capture_scale = self.capture_scale;
         let (id, display) = (window.id.clone(), window.display_id.clone());
+        let before = window.bounds;
         let requested = id.clone();
         let select = self.select.clone();
         cx.spawn(async move |this, cx| {
@@ -2512,11 +2642,23 @@ impl OverlayWindow {
                 if raise {
                     crate::foreign_window::raise(&id);
                 }
-                let window = scap_targets::Window::from_id(&id);
-                (
-                    arranged,
-                    window.as_ref().and_then(HoveredWindow::from_window),
-                )
+                // The window list lags the move by a few frames: wait for the
+                // new frame to show up, or the camera would see no move.
+                let read = || {
+                    scap_targets::Window::from_id(&id)
+                        .as_ref()
+                        .and_then(HoveredWindow::from_window)
+                };
+                let mut fresh = read();
+                let deadline = Instant::now() + Duration::from_millis(500);
+                while arranged
+                    && fresh.as_ref().is_some_and(|fresh| fresh.bounds == before)
+                    && Instant::now() < deadline
+                {
+                    std::thread::sleep(Duration::from_millis(16));
+                    fresh = read();
+                }
+                (arranged, fresh)
             })
             .await
             .unwrap_or((false, None));
@@ -3446,19 +3588,35 @@ impl OverlayWindow {
     fn render_close_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
 
-        self.glass_button(36.)
-            .id("overlay-close")
-            .hover(|style| style.opacity(0.8))
-            .child(
-                svg()
-                    .path("icons/x.svg")
-                    .size(px(12.))
-                    .text_color(theme.gray_12),
-            )
-            .on_click(cx.listener(|this, _, _window, cx| {
-                cx.stop_propagation();
-                this.dismiss(cx);
-            }))
+        // Red-tinted glass, so cancelling reads apart from the controls.
+        let tint = gpui::Rgba {
+            a: 0.55,
+            ..theme.red_9
+        };
+        crate::ui::glass::pane_over_tinted(
+            crate::ui::glass::GlassKind::Clear,
+            theme.is_dark(),
+            18.,
+            &self.backdrop,
+            tint,
+        )
+        .size(px(36.))
+        .flex_shrink_0()
+        .flex()
+        .justify_center()
+        .items_center()
+        .id("overlay-close")
+        .hover(|style| style.opacity(0.8))
+        .child(
+            svg()
+                .path("icons/x.svg")
+                .size(px(12.))
+                .text_color(gpui::white()),
+        )
+        .on_click(cx.listener(|this, _, _window, cx| {
+            cx.stop_propagation();
+            this.dismiss(cx);
+        }))
     }
 
     /// The start affordance: `h-11 rounded-full bg-linear-to-r from-blue-10 to
@@ -3499,6 +3657,8 @@ impl OverlayWindow {
 
         div()
             .id("overlay-start")
+            .relative()
+            .child(self.hints.keep_clear("overlay-start"))
             .flex()
             .flex_1()
             .min_w_0()

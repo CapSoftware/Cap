@@ -210,6 +210,16 @@ async fn probe_window_arrangement(
         .map(|bounds| (bounds.size().width() as f32, bounds.size().height() as f32));
     let before = Some(picked.bounds);
 
+    // Start from Focus off whatever the saved settings say: turning Center
+    // off later under a saved Focus would put back the pre-resize frame.
+    overlay
+        .update(cx, |view, _, cx| {
+            view.set_focus_center(false, cx);
+            view.set_focus(false, cx)
+        })
+        .ok();
+    sleep(cx, 500).await;
+
     // `window_arrange::RATIOS` lists 16:9 second.
     overlay
         .update(cx, |view, _, cx| view.choose_window_size(1, cx))
@@ -229,8 +239,22 @@ async fn probe_window_arrangement(
     };
     screenshot(output, "window-16x9", cx).await;
 
+    // Focus alone records the window where it is: only Center on screen
+    // moves it.
     overlay
         .update(cx, |view, _, cx| view.set_focus(true, cx))
+        .ok();
+    sleep(cx, 1500).await;
+    let unmoved = read_window(&picked.id);
+    let stayed = unmoved.zip(shaped).is_some_and(|(now, then)| {
+        (now.x - then.x).abs() < 6.
+            && (now.y - then.y).abs() < 6.
+            && (now.width - then.width).abs() < 6.
+            && (now.height - then.height).abs() < 6.
+    });
+
+    overlay
+        .update(cx, |view, _, cx| view.set_focus_center(true, cx))
         .ok();
     sleep(cx, 1500).await;
     let focused = read_window(&picked.id);
@@ -256,7 +280,10 @@ async fn probe_window_arrangement(
     // Dismissed with the window still moved: only the dismissal can put it
     // back.
     overlay
-        .update(cx, |view, _, cx| view.set_focus(true, cx))
+        .update(cx, |view, _, cx| {
+            view.set_focus_center(true, cx);
+            view.set_focus(true, cx)
+        })
         .ok();
     sleep(cx, 1500).await;
     let moved = !near(read_window(&picked.id), before);
@@ -267,12 +294,15 @@ async fn probe_window_arrangement(
     serde_json::json!({
         "passed": ratio_ok
             && inside(shaped)
+            && stayed
             && centred
             && inside(focused)
             && unfocused_ok
             && restored_ok,
         "before": rect_json(before),
         "sixteenByNine": rect_json(shaped),
+        "focusWithoutCenter": rect_json(unmoved),
+        "focusWithoutCenterStayed": stayed,
         "ratioOk": ratio_ok,
         "focused": rect_json(focused),
         "centred": centred,
