@@ -2481,6 +2481,10 @@ pub fn start_recording_from_overlay(target: ScreenCaptureTarget, cx: &mut App) {
             }
             if !settled {
                 tracing::warn!("a picked window is still moving; recording not started");
+                // The picker has nowhere to show the error: close it, which
+                // puts the windows back, and bring the main window forward.
+                dismiss_target_overlays(cx);
+                show_main_window(cx);
                 RecordingSession::global(cx).update(cx, |session, cx| {
                     session.error =
                         Some("The window is still being resized. Try starting again.".into());
