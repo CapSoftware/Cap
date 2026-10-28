@@ -2507,6 +2507,23 @@ mod tests {
         Some(gap_vs_swscale(&frame, &kernel, mirrored))
     }
 
+    // FFmpeg n7.1's aarch64 unscaled path installs `ff_nv12_to_bgra_neon` for
+    // even-height NV12→BGRA whose width is a multiple of 16, unless
+    // `SWS_ACCURATE_RND` is set. That converter repeats each chroma row across
+    // two luma rows, so `SWS_BILINEAR` never runs. The flag leaves the C
+    // bilinear converter in place and does not change its bytes.
+    fn bilinear_reference_flags() -> ffmpeg::software::scaling::Flags {
+        #[cfg(target_arch = "aarch64")]
+        {
+            ffmpeg::software::scaling::Flags::BILINEAR
+                | ffmpeg::software::scaling::Flags::ACCURATE_RND
+        }
+        #[cfg(not(target_arch = "aarch64"))]
+        {
+            ffmpeg::software::scaling::Flags::BILINEAR
+        }
+    }
+
     fn gap_vs_swscale(frame: &ffmpeg::frame::Video, kernel: &[u8], mirrored: bool) -> u8 {
         let mut scaler = ffmpeg::software::scaling::Context::get(
             frame.format(),
@@ -2515,7 +2532,7 @@ mod tests {
             ffmpeg::format::Pixel::BGRA,
             frame.width(),
             frame.height(),
-            ffmpeg::software::scaling::Flags::BILINEAR,
+            bilinear_reference_flags(),
         )
         .unwrap();
         let mut converted = ffmpeg::frame::Video::empty();
