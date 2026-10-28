@@ -871,7 +871,9 @@ impl TeleprompterWindow {
                             .text_right()
                             .text_size(px(10.))
                             .text_color(Hsla::from(theme.gray_9))
-                            .child(format!("{} wpm", self.state.words_per_minute)),
+                            .child(tr::dialog::teleprompter::words_per_minute(
+                                self.state.words_per_minute,
+                            )),
                     ),
             )
             .child(

@@ -1442,6 +1442,7 @@ hidden = "此窗口不会出现在 Cap 录制中"
 mirror = "镜像文字"
 paused = "滚动已随录制暂停"
 placeholder = "粘贴或输入你的脚本…"
+words_per_minute = "{wpm} 字/分钟"
 
 [import]
 error_title = "导入错误"
@@ -2658,6 +2659,11 @@ bold = "粗体"
 medium = "中等"
 normal = "常规"
 
+[editor.tabs.font]
+system_sans_serif = "系统无衬线"
+system_serif = "系统衬线"
+system_monospace = "系统等宽"
+
 [editor.timeline]
 add_shot = "添加镜头"
 add_shot_with_look = "添加镜头 · {look} · {seconds} 秒"
@@ -2804,6 +2810,12 @@ transition_none = "无"
 transition_crossfade = "交叉淡化"
 transition_fade = "淡入淡出"
 transition_seconds = "{seconds} 秒"
+
+[editor.window.clip_menu.merge_blocker]
+edge = "该侧没有片段"
+different_recording = "来自不同的录制"
+gap = "两者之间的素材已被剪掉"
+speed = "请先统一片段速度"
 
 [editor.window.frame]
 add_tooltip = "添加边框"
@@ -3009,3 +3021,6 @@ worker_failed = "上传进程失败；本地录制已保留"
 empty = "已保存的录制为空"
 no_resumable_state = "此录制没有可继续的上传状态"
 verification_failed = "录制验证失败：{status}"
+
+[message.cli]
+binary_missing = "未在 {path} 找到内置的 CLI 程序"

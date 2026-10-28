@@ -1442,6 +1442,7 @@ hidden = "यह विंडो Cap रिकॉर्डिंग में �
 mirror = "टेक्स्ट मिरर करें"
 paused = "रिकॉर्डिंग के साथ स्क्रॉलिंग रुकी है"
 placeholder = "अपनी स्क्रिप्ट पेस्ट करें या लिखें…"
+words_per_minute = "{wpm} शब्द/मिनट"
 
 [import]
 error_title = "इम्पोर्ट त्रुटि"
@@ -2658,6 +2659,11 @@ bold = "बोल्ड"
 medium = "मीडियम"
 normal = "सामान्य"
 
+[editor.tabs.font]
+system_sans_serif = "सिस्टम Sans-Serif"
+system_serif = "सिस्टम Serif"
+system_monospace = "सिस्टम Monospace"
+
 [editor.timeline]
 add_shot = "शॉट जोड़ें"
 add_shot_with_look = "शॉट जोड़ें · {look} · {seconds} सेकंड"
@@ -2804,6 +2810,12 @@ transition_none = "कोई नहीं"
 transition_crossfade = "क्रॉसफ़ेड"
 transition_fade = "फ़ेड"
 transition_seconds = "{seconds} सेकंड"
+
+[editor.window.clip_menu.merge_blocker]
+edge = "उस तरफ़ कोई क्लिप नहीं है"
+different_recording = "अलग रिकॉर्डिंग से है"
+gap = "इनके बीच की फ़ुटेज काटी गई है"
+speed = "पहले क्लिप की स्पीड एक जैसी करें"
 
 [editor.window.frame]
 add_tooltip = "फ़्रेम जोड़ें"
@@ -3009,3 +3021,6 @@ worker_failed = "अपलोड प्रक्रिया विफल हु
 empty = "सेव की गई रिकॉर्डिंग खाली है"
 no_resumable_state = "इस रिकॉर्डिंग का कोई ऐसा अपलोड नहीं है जिसे फिर से शुरू किया जा सके"
 verification_failed = "रिकॉर्डिंग की जाँच विफल हुई: {status}"
+
+[message.cli]
+binary_missing = "{path} पर बंडल की गई CLI नहीं मिली"

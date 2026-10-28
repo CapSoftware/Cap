@@ -1442,6 +1442,7 @@ hidden = "Cette fenêtre est masquée dans les enregistrements Cap"
 mirror = "Texte en miroir"
 paused = "Défilement en pause avec l'enregistrement"
 placeholder = "Collez ou saisissez votre script…"
+words_per_minute = "{wpm} mots/min"
 
 [import]
 error_title = "Erreur d'importation"
@@ -2658,6 +2659,11 @@ bold = "Gras"
 medium = "Moyen"
 normal = "Normal"
 
+[editor.tabs.font]
+system_sans_serif = "Sans-serif système"
+system_serif = "Serif système"
+system_monospace = "Monospace système"
+
 [editor.timeline]
 add_shot = "Ajouter un plan"
 add_shot_with_look = "Ajouter un plan · {look} · {seconds} s"
@@ -2804,6 +2810,12 @@ transition_none = "Aucune"
 transition_crossfade = "Fondu enchaîné"
 transition_fade = "Fondu"
 transition_seconds = "{seconds} s"
+
+[editor.window.clip_menu.merge_blocker]
+edge = "Aucun clip de ce côté"
+different_recording = "Autre enregistrement"
+gap = "Des images ont été coupées entre les deux"
+speed = "Harmonisez d'abord la vitesse des clips"
 
 [editor.window.frame]
 add_tooltip = "Ajouter un cadre"
@@ -3009,3 +3021,6 @@ worker_failed = "Le processus d'envoi a échoué ; l'enregistrement local est co
 empty = "L'enregistrement sauvegardé est vide"
 no_resumable_state = "Cet enregistrement n'a pas d'envoi pouvant reprendre"
 verification_failed = "La vérification de l'enregistrement a échoué : {status}"
+
+[message.cli]
+binary_missing = "CLI intégrée introuvable dans {path}"

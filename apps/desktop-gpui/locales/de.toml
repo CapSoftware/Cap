@@ -1442,6 +1442,7 @@ hidden = "Dieses Fenster ist in Cap-Aufnahmen ausgeblendet"
 mirror = "Text spiegeln"
 paused = "Scrollen zusammen mit der Aufnahme pausiert"
 placeholder = "Skript einfügen oder eingeben…"
+words_per_minute = "{wpm} Wörter/Min."
 
 [import]
 error_title = "Importfehler"
@@ -2658,6 +2659,11 @@ bold = "Fett"
 medium = "Mittel"
 normal = "Normal"
 
+[editor.tabs.font]
+system_sans_serif = "System-Sans-Serif"
+system_serif = "System-Serif"
+system_monospace = "System-Monospace"
+
 [editor.timeline]
 add_shot = "Einstellung hinzufügen"
 add_shot_with_look = "Einstellung hinzufügen · {look} · {seconds} s"
@@ -2804,6 +2810,12 @@ transition_none = "Keiner"
 transition_crossfade = "Überblendung"
 transition_fade = "Schwarzblende"
 transition_seconds = "{seconds} s"
+
+[editor.window.clip_menu.merge_blocker]
+edge = "Auf dieser Seite ist kein Clip"
+different_recording = "Andere Aufnahme"
+gap = "Dazwischen wurde Material herausgeschnitten"
+speed = "Gleichen Sie zuerst die Clip-Geschwindigkeiten an"
 
 [editor.window.frame]
 add_tooltip = "Rahmen hinzufügen"
@@ -3009,3 +3021,6 @@ worker_failed = "Der Upload-Vorgang ist fehlgeschlagen; die lokale Aufnahme blei
 empty = "Die gespeicherte Aufnahme ist leer"
 no_resumable_state = "Für diese Aufnahme gibt es keinen fortsetzbaren Upload"
 verification_failed = "Die Prüfung der Aufnahme ist fehlgeschlagen: {status}"
+
+[message.cli]
+binary_missing = "Mitgelieferte CLI unter {path} nicht gefunden"

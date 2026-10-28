@@ -1154,6 +1154,25 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         ),
         (tr::editor::window::clip_menu::transition_fade(), "Fade"),
         (tr::editor::timeline::title(), "Timeline"),
+        (
+            tr::editor::window::clip_menu::merge_blocker::edge(),
+            "No clip on that side",
+        ),
+        (
+            tr::editor::window::clip_menu::merge_blocker::different_recording(),
+            "Different recording",
+        ),
+        (
+            tr::editor::window::clip_menu::merge_blocker::gap(),
+            "Footage was cut between them",
+        ),
+        (
+            tr::editor::window::clip_menu::merge_blocker::speed(),
+            "Match the clip speeds first",
+        ),
+        (tr::editor::tabs::font::system_sans_serif(), "System Sans-Serif"),
+        (tr::editor::tabs::font::system_serif(), "System Serif"),
+        (tr::editor::tabs::font::system_monospace(), "System Monospace"),
         (tr::ui::selection::select_all(), "Select all"),
     ];
     for (translated, literal) in pairs {

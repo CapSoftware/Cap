@@ -1442,6 +1442,7 @@ hidden = "Esta ventana no aparece en las grabaciones de Cap"
 mirror = "Texto en espejo"
 paused = "Desplazamiento en pausa junto con la grabación"
 placeholder = "Pega o escribe tu guion…"
+words_per_minute = "{wpm} ppm"
 
 [import]
 error_title = "Error de importación"
@@ -2658,6 +2659,11 @@ bold = "Negrita"
 medium = "Media"
 normal = "Normal"
 
+[editor.tabs.font]
+system_sans_serif = "Sans-serif del sistema"
+system_serif = "Serif del sistema"
+system_monospace = "Monospace del sistema"
+
 [editor.timeline]
 add_shot = "Añadir toma"
 add_shot_with_look = "Añadir toma · {look} · {seconds} s"
@@ -2804,6 +2810,12 @@ transition_none = "Ninguna"
 transition_crossfade = "Fundido encadenado"
 transition_fade = "Fundido"
 transition_seconds = "{seconds} s"
+
+[editor.window.clip_menu.merge_blocker]
+edge = "No hay ningún clip a ese lado"
+different_recording = "Es de otra grabación"
+gap = "Se recortó metraje entre ellos"
+speed = "Iguala primero la velocidad de los clips"
 
 [editor.window.frame]
 add_tooltip = "Añadir un marco"
@@ -3009,3 +3021,6 @@ worker_failed = "El proceso de subida ha fallado; la grabación local se conserv
 empty = "La grabación guardada está vacía"
 no_resumable_state = "Esta grabación no tiene una subida que se pueda reanudar"
 verification_failed = "La verificación de la grabación ha fallado: {status}"
+
+[message.cli]
+binary_missing = "No se encontró la CLI incluida en {path}"

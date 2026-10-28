@@ -121,6 +121,16 @@ pub const CURSOR_STYLES: [(CursorAnimationStyle, Label, Label); 4] = [
 /// `FONT_OPTIONS` (`text-style.tsx:12-16`).
 pub const FONT_OPTIONS: [&str; 3] = ["System Sans-Serif", "System Serif", "System Monospace"];
 
+/// The project keeps the English `FONT_OPTIONS` value; menus show it translated.
+fn font_option_label(font: &str) -> SharedString {
+    match font {
+        "System Sans-Serif" => tr::editor::tabs::font::system_sans_serif().into(),
+        "System Serif" => tr::editor::tabs::font::system_serif().into(),
+        "System Monospace" => tr::editor::tabs::font::system_monospace().into(),
+        other => SharedString::from(other.to_string()),
+    }
+}
+
 /// `TEXT_WEIGHT_OPTIONS` (`text-style.tsx:36-40`).
 pub const TEXT_WEIGHTS: [(u32, Label); 3] = [
     (400, tr::editor::tabs::weight::normal),
@@ -812,7 +822,7 @@ impl EditorWindow {
                             SharedString::from(format!(
                                 "{} · {} · {}",
                                 (model.label)(),
-                                model.size,
+                                crate::i18n::decimal(model.size),
                                 (model.description)()
                             )),
                             model.name == selected,
@@ -828,7 +838,7 @@ impl EditorWindow {
                 .collect(),
             SidebarMenu::CaptionFont => FONT_OPTIONS
                 .iter()
-                .map(|font| ui::MenuItem::new(*font, *font == captions.font))
+                .map(|font| ui::MenuItem::new(font_option_label(font), *font == captions.font))
                 .collect(),
             SidebarMenu::CaptionHighlightStyle => CAPTION_HIGHLIGHT_STYLES
                 .iter()
@@ -850,7 +860,7 @@ impl EditorWindow {
                 .collect(),
             SidebarMenu::KeyboardFont => FONT_OPTIONS
                 .iter()
-                .map(|font| ui::MenuItem::new(*font, *font == keyboard.font))
+                .map(|font| ui::MenuItem::new(font_option_label(font), *font == keyboard.font))
                 .collect(),
             SidebarMenu::KeyboardPosition => KEYBOARD_POSITIONS
                 .iter()
@@ -2372,7 +2382,7 @@ impl EditorWindow {
             .timeline
             .as_ref()
             .is_some_and(|timeline| !timeline.keyboard_segments.is_empty());
-        let font_label = settings.font.clone();
+        let font_label = font_option_label(&settings.font);
         let position_label = KEYBOARD_POSITIONS
             .iter()
             .find(|(value, _)| *value == settings.position)
@@ -2698,7 +2708,7 @@ impl EditorWindow {
                 tr::editor::tabs::captions::language::auto(),
                 |(_, label)| label(),
             );
-        let font_label = settings.font.clone();
+        let font_label = font_option_label(&settings.font);
         let position_label = CAPTION_POSITIONS
             .iter()
             .find(|(value, _)| *value == settings.position)
@@ -2799,7 +2809,7 @@ impl EditorWindow {
                     .flex_shrink_0()
                     .text_size(px(10.))
                     .text_color(Hsla::from(theme.gray_10))
-                    .child(model.size),
+                    .child(crate::i18n::decimal(model.size)),
             )
             .child(
                 svg()
@@ -3964,6 +3974,10 @@ mod tests {
         assert_eq!(CAPTION_POSITIONS[0].0, "manual");
         assert_eq!(KEYBOARD_POSITIONS.len(), 6);
         assert_eq!(FONT_OPTIONS.len(), 3);
+        for font in FONT_OPTIONS {
+            assert_eq!(font_option_label(font).as_ref(), font);
+        }
+        assert_eq!(font_option_label("Inter").as_ref(), "Inter");
         assert_eq!(TEXT_WEIGHTS.len(), 3);
         assert_eq!(
             CAMERA_BLUR_MODES.len(),

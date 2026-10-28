@@ -1442,6 +1442,7 @@ hidden = "このウィンドウはCapの録画に映りません"
 mirror = "テキストを反転"
 paused = "録画に合わせてスクロールを一時停止中"
 placeholder = "台本を貼り付けるか入力してください…"
+words_per_minute = "{wpm}語/分"
 
 [import]
 error_title = "読み込みエラー"
@@ -2658,6 +2659,11 @@ bold = "太字"
 medium = "中"
 normal = "標準"
 
+[editor.tabs.font]
+system_sans_serif = "システムSans-Serif"
+system_serif = "システムSerif"
+system_monospace = "システムMonospace"
+
 [editor.timeline]
 add_shot = "ショットを追加"
 add_shot_with_look = "ショットを追加 · {look} · {seconds}秒"
@@ -2804,6 +2810,12 @@ transition_none = "なし"
 transition_crossfade = "クロスフェード"
 transition_fade = "フェード"
 transition_seconds = "{seconds}秒"
+
+[editor.window.clip_menu.merge_blocker]
+edge = "その側にクリップがありません"
+different_recording = "別の録画です"
+gap = "間の映像がカットされています"
+speed = "先にクリップの速度を揃えてください"
 
 [editor.window.frame]
 add_tooltip = "フレームを追加"
@@ -3009,3 +3021,6 @@ worker_failed = "アップロード処理が失敗しました。ローカルの
 empty = "保存された録画は空です"
 no_resumable_state = "この録画には再開できるアップロード状態がありません"
 verification_failed = "録画の確認に失敗しました：{status}"
+
+[message.cli]
+binary_missing = "{path}に同梱のCLIが見つかりません"

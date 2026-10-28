@@ -17,6 +17,7 @@ pub(super) fn is_dialogs_surface_key(key: &str) -> bool {
 }
 
 const FORMATTED: &[&str] = &[
+    "dialog.teleprompter.words_per_minute",
     "diagnostics.error.create_folder",
     "diagnostics.error.exited",
     "diagnostics.error.serialize",
@@ -1090,6 +1091,10 @@ fn dialog_messages_format_like_the_code_they_replaced() {
 
 #[test]
 fn update_and_quit_messages_format_like_the_code_they_replaced() {
+    assert_eq!(
+        tr::dialog::teleprompter::words_per_minute(150),
+        format!("{} wpm", 150)
+    );
     let error = "connection reset by peer";
     let version = semver::Version::new(0, 6, 2);
     let pairs: Vec<(String, String)> = vec![

@@ -217,6 +217,12 @@ const WRAPPED: &[Wrapped] = &[
         translate: |path| tr::message::recording::low_storage_preserved(path),
     },
     Wrapped {
+        prefix: "Bundled CLI binary not found at ",
+        suffix: "",
+        nested: false,
+        translate: |path| tr::message::cli::binary_missing(path),
+    },
+    Wrapped {
         prefix: "Recording verification failed: ",
         suffix: "",
         nested: false,

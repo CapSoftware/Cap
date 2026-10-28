@@ -1444,6 +1444,7 @@ hidden = "This window is hidden from Cap recordings"
 mirror = { text = "Mirror text", context = "Toggle in a 192px popover." }
 paused = "Scrolling paused with recording"
 placeholder = "Paste or type your script…"
+words_per_minute = { text = "{wpm} wpm", context = "Teleprompter scroll speed in words per minute; {wpm} is a number such as 150." }
 
 [import]
 error_title = "Import Error"
@@ -2660,6 +2661,11 @@ bold = "Bold"
 medium = "Medium"
 normal = "Normal"
 
+[editor.tabs.font]
+system_sans_serif = { text = "System Sans-Serif", context = "Font option for captions and keyboard overlays. Match editor.panel.font." }
+system_serif = { text = "System Serif", context = "Font option for captions and keyboard overlays. Match editor.panel.font." }
+system_monospace = { text = "System Monospace", context = "Font option for captions and keyboard overlays. Match editor.panel.font." }
+
 [editor.timeline]
 add_shot = "Add shot"
 add_shot_with_look = { text = "Add shot · {look} · {seconds}s", context = "Ghost on the 3D track. {look} is the camera move name, {seconds} a length such as 2.5." }
@@ -2806,6 +2812,12 @@ transition_none = { text = "None", context = "Transition chip: no transition bef
 transition_crossfade = { text = "Crossfade", context = "Transition chip: the previous clip dissolves into this one." }
 transition_fade = { text = "Fade", context = "Transition chip: fade through black into this clip." }
 transition_seconds = { text = "{seconds}s", context = "Transition length chip; {seconds} is a number such as 0.5." }
+
+[editor.window.clip_menu.merge_blocker]
+edge = { text = "No clip on that side", context = "Grey hint next to a disabled Merge with next/previous clip row." }
+different_recording = { text = "Different recording", context = "Grey hint next to a disabled merge row: the neighbouring clip comes from another recording." }
+gap = { text = "Footage was cut between them", context = "Grey hint next to a disabled merge row." }
+speed = { text = "Match the clip speeds first", context = "Grey hint next to a disabled merge row." }
 
 [editor.window.frame]
 add_tooltip = "Add a frame"
@@ -3011,3 +3023,6 @@ worker_failed = "The upload worker failed; the local recording is preserved"
 empty = "The saved recording is empty"
 no_resumable_state = "This recording has no resumable upload state"
 verification_failed = { text = "Recording verification failed: {status}", context = "{status} is a technical status, usually in English." }
+
+[message.cli]
+binary_missing = { text = "Bundled CLI binary not found at {path}", context = "{path} is a file path." }

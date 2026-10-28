@@ -36,6 +36,9 @@ fn every_message_is_still_written_by_the_app() {
             }
         }
     }
+    let cli_install = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../crates/cli-install/src/lib.rs");
+    sources.push_str(&std::fs::read_to_string(cli_install).unwrap());
     let texts = EXACT.iter().map(|(english, _)| *english).chain(
         WRAPPED
             .iter()
