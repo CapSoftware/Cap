@@ -1859,20 +1859,28 @@ fn clip_menu_row(
                 .flex_none()
                 .text_color(icon_color),
         )
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .overflow_hidden()
-                .whitespace_nowrap()
-                .text_ellipsis()
-                .child(label),
-        );
+        .overflow_hidden();
+    // A disabled row keeps its own label whole; the reason beside it wraps
+    // onto a second line instead, which longer translations need.
+    let hinted = matches!(trailing, ClipMenuTrailing::Hint(_)) && !enabled;
+    let row = row.child(
+        div()
+            .when(hinted, |label| label.flex_none())
+            .when(!hinted, |label| label.flex_1().min_w_0())
+            .overflow_hidden()
+            .whitespace_nowrap()
+            .text_ellipsis()
+            .child(label),
+    );
     match trailing {
         ClipMenuTrailing::Hint(hint) if !enabled => row.child(
             div()
-                .flex_none()
+                .flex_1()
+                .min_w_0()
+                .text_right()
                 .text_size(px(10.5))
+                .line_height(px(12.))
+                .line_clamp(2)
                 .text_color(Hsla::from(theme.editor.text_3))
                 .child(hint),
         ),
