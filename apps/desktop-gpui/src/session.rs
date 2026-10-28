@@ -435,6 +435,10 @@ pub struct RecordingSession {
     /// Taken by the phase observer to honour `postStudioRecordingBehaviour`
     /// (`openEditor` by default) the way the Tauri app does.
     pub finished_studio: Option<std::path::PathBuf>,
+    /// An instant recording stopped cleanly and its share link was handed
+    /// out. Taken by the phase observer, which brings the main window back
+    /// only for the "Show Cap" Instant outcome.
+    pub finished_instant: bool,
     preparing_studio_editor: Option<PreparingStudioEditor>,
     /// `EditorRecordingTarget` (`src-tauri/src/windows.rs:3679-3697`): the
     /// open editor project a "Record a new clip" capture must land back in.
@@ -498,6 +502,7 @@ impl RecordingSession {
             controls_open: false,
             mic_muted: false,
             finished_studio: None,
+            finished_instant: false,
             preparing_studio_editor: None,
             editor_recording_target: None,
             started_at: None,
@@ -1378,6 +1383,7 @@ impl RecordingSession {
                                 let separator = if link.contains('?') { '&' } else { '?' };
                                 cx.open_url(&format!("{link}{separator}recordingStopped=1"));
                             }
+                            this.finished_instant = !low_storage;
                             cx.write_to_clipboard(gpui::ClipboardItem::new_string(link));
                         }
                     }

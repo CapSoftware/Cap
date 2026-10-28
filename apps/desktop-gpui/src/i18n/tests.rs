@@ -209,6 +209,17 @@ fn english_matches_the_literals_it_replaced() {
             "Main window when recording starts".into(),
         ),
         (
+            tr::settings::general::recording::window_capture::description(),
+            "How a window recording captures the window you pick. Focused window records only \
+             that window, centred and followed if it moves; Screen region records the area of \
+             the screen it covers."
+                .into(),
+        ),
+        (
+            tr::settings::general::recording::window_capture::label(),
+            "Window capture style".into(),
+        ),
+        (
             tr::settings::general::recording::post_deletion::description(),
             "Whether the recording window should reopen.".into(),
         ),

@@ -34,11 +34,16 @@ const SEGMENT_RETRY_WINDOW: Duration = Duration::from_secs(5 * 60);
 const SEGMENT_RETRY_MIN_DELAY: Duration = Duration::from_secs(2);
 const SEGMENT_RETRY_MAX_DELAY: Duration = Duration::from_secs(30);
 const MANIFEST_UPLOAD_INTERVAL: Duration = Duration::from_secs(1);
+const MANIFEST_SUBPATH: &str = "segments/manifest.json";
+// Presigned S3 PUT URLs are signed for 30 minutes and accept repeated PUTs, so
+// the manifest reuses one well inside that window instead of signing a new URL
+// every second. Google Drive upload sessions are single use and never reused.
+const MANIFEST_URL_REUSE: Duration = Duration::from_secs(10 * 60);
 const UPLOAD_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const UPLOAD_TCP_KEEPALIVE: Duration = Duration::from_secs(30);
 const UPLOAD_POOL_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 struct SignedUploadTarget {
     url: String,
     #[serde(default)]
@@ -492,21 +497,33 @@ impl InstantUpload {
         Ok(())
     }
 
-    pub async fn finish_screenshot(&self, project_path: &Path) -> Result<(), String> {
+    fn screenshot_upload(
+        &self,
+        project_path: &Path,
+    ) -> impl Future<Output = Result<(), String>> + Send + use<> {
+        let video_id = self.video.id.clone();
+        let path = project_path.join("screenshots/display.jpg");
         #[cfg(target_os = "linux")]
-        let result = upload_screenshot_with_cancel(
-            &self.video.id,
-            &project_path.join("screenshots/display.jpg"),
-            &self.cancel,
-        )
-        .await;
-        #[cfg(not(target_os = "linux"))]
-        let result = upload_screenshot(
-            &self.video.id,
-            &project_path.join("screenshots/display.jpg"),
-        )
-        .await;
-        result.map_err(|error| format!("Instant recording thumbnail upload failed: {error}"))
+        let cancel = self.cancel.clone();
+        async move {
+            #[cfg(target_os = "linux")]
+            let result = upload_screenshot_with_cancel(&video_id, &path, &cancel).await;
+            #[cfg(not(target_os = "linux"))]
+            let result = upload_screenshot(&video_id, &path).await;
+            result.map_err(|error| format!("Instant recording thumbnail upload failed: {error}"))
+        }
+    }
+
+    async fn finish_with_screenshot(
+        &mut self,
+        project_path: &Path,
+        manifest: SegmentUploadManifest,
+    ) -> Result<(), String> {
+        let screenshot = self.screenshot_upload(project_path);
+        self.authorize_manifest(manifest)?;
+        let (screenshot, segments) = tokio::join!(screenshot, self.finish_segments());
+        screenshot?;
+        segments
     }
 
     pub async fn cancel(&mut self, query: Option<&str>) -> Result<(), String> {
@@ -572,7 +589,7 @@ async fn run_segment_upload(
     authorization: Option<CompletionRequirement>,
 ) -> Result<(), String> {
     let result = upload_segments(
-        &LiveSegmentTransport,
+        &LiveSegmentTransport::default(),
         &video.id,
         events,
         cancel.clone(),
@@ -676,7 +693,43 @@ trait SegmentTransport: Send + Sync {
     ) -> impl Future<Output = Result<(), String>> + Send;
 }
 
-struct LiveSegmentTransport;
+struct ReusableUploadTarget {
+    target: SignedUploadTarget,
+    signed_at: tokio::time::Instant,
+}
+
+impl ReusableUploadTarget {
+    fn new(target: SignedUploadTarget, signed_at: tokio::time::Instant) -> Option<Self> {
+        (!is_google_drive_resumable_url(&target.url)).then_some(Self { target, signed_at })
+    }
+
+    fn is_fresh(&self) -> bool {
+        self.signed_at.elapsed() < MANIFEST_URL_REUSE
+    }
+}
+
+#[derive(Default)]
+struct LiveSegmentTransport {
+    manifest_target: Mutex<Option<ReusableUploadTarget>>,
+}
+
+impl LiveSegmentTransport {
+    fn reusable_manifest_target(&self) -> Option<ReusableUploadTarget> {
+        self.manifest_target
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
+            .filter(ReusableUploadTarget::is_fresh)
+    }
+
+    fn keep_manifest_target(&self, target: Option<ReusableUploadTarget>) {
+        *self
+            .manifest_target
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = target;
+    }
+}
+
 impl SegmentTransport for LiveSegmentTransport {
     async fn prepare(
         &self,
@@ -719,9 +772,20 @@ impl SegmentTransport for LiveSegmentTransport {
         start: u32,
         count: u32,
     ) -> Result<HashMap<String, String>, String> {
-        prefetch_segment_urls(video_id, start, count)
+        let signed_at = tokio::time::Instant::now();
+        let mut urls = prefetch_segment_urls(video_id, start, count)
             .await
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string())?;
+        if let Some(url) = urls.remove(MANIFEST_SUBPATH) {
+            self.keep_manifest_target(ReusableUploadTarget::new(
+                SignedUploadTarget {
+                    url,
+                    headers: HashMap::new(),
+                },
+                signed_at,
+            ));
+        }
+        Ok(urls)
     }
     async fn segment(
         &self,
@@ -738,7 +802,7 @@ impl SegmentTransport for LiveSegmentTransport {
         manifest: &SegmentUploadManifest,
         cancel: &Arc<AtomicBool>,
     ) -> Result<(), String> {
-        upload_segment_manifest_with_retry(video_id, manifest, cancel).await
+        upload_segment_manifest_with_retry(self, video_id, manifest, cancel).await
     }
     async fn complete(&self, video_id: &str, cancel: &Arc<AtomicBool>) -> Result<(), String> {
         signal_recording_complete_with_retry(video_id, cancel).await
@@ -983,7 +1047,7 @@ fn prefetched_segment_paths(start: u32, count: u32) -> Vec<String> {
     if start == 1 {
         subpaths.push("segments/video/init.mp4".to_string());
         subpaths.push("segments/audio/init.mp4".to_string());
-        subpaths.push("segments/manifest.json".to_string());
+        subpaths.push(MANIFEST_SUBPATH.to_string());
     }
     for index in start..start.saturating_add(count) {
         subpaths.push(format!("segments/video/segment_{index:03}.m4s"));
@@ -1138,18 +1202,53 @@ fn segment_subpath(event: &SegmentCompletedEvent) -> String {
 }
 
 async fn upload_segment_manifest(
+    transport: &LiveSegmentTransport,
     video_id: &str,
     manifest: &SegmentUploadManifest,
     cancel: &AtomicBool,
 ) -> Result<(), String> {
     let bytes = serde_json::to_vec(manifest)
         .map_err(|error| format!("Failed to serialize instant upload manifest: {error}"))?;
-    presigned_put_bytes_inner(video_id, "segments/manifest.json", bytes, Some(cancel))
+    if let Some(reusable) = transport.reusable_manifest_target() {
+        match upload_signed_bytes_inner(
+            reusable.target.clone(),
+            MANIFEST_SUBPATH,
+            bytes.clone(),
+            Some(cancel),
+        )
         .await
-        .map_err(|error| format!("Failed to upload instant recording manifest: {error}"))
+        {
+            Ok(()) => {
+                transport.keep_manifest_target(Some(reusable));
+                return Ok(());
+            }
+            Err(error @ AuthApiError::Status(..)) => {
+                check_segment_cancelled(cancel)?;
+                tracing::debug!(
+                    "Reused instant manifest URL was rejected; signing a new one: {error}"
+                );
+            }
+            Err(error) => {
+                return Err(format!(
+                    "Failed to upload instant recording manifest: {error}"
+                ));
+            }
+        }
+    }
+    let signed_at = tokio::time::Instant::now();
+    let target = presign_put_target(video_id, MANIFEST_SUBPATH, Some(cancel))
+        .await
+        .map_err(|error| format!("Failed to upload instant recording manifest: {error}"))?;
+    let reusable = ReusableUploadTarget::new(target.clone(), signed_at);
+    upload_signed_bytes_inner(target, MANIFEST_SUBPATH, bytes, Some(cancel))
+        .await
+        .map_err(|error| format!("Failed to upload instant recording manifest: {error}"))?;
+    transport.keep_manifest_target(reusable);
+    Ok(())
 }
 
 async fn upload_segment_manifest_with_retry(
+    transport: &LiveSegmentTransport,
     video_id: &str,
     manifest: &SegmentUploadManifest,
     cancel: &AtomicBool,
@@ -1159,7 +1258,7 @@ async fn upload_segment_manifest_with_retry(
             return Err("Instant recording upload cancelled".to_string());
         }
         match checked_segment_step(cancel, || {
-            upload_segment_manifest(video_id, manifest, cancel)
+            upload_segment_manifest(transport, video_id, manifest, cancel)
         })
         .await
         {
@@ -2235,26 +2334,35 @@ async fn put_presigned_part(
     }
 }
 
+const SCREENSHOT_SUBPATH: &str = "screenshot/screen-capture.jpg";
+
 async fn upload_screenshot_with_cancel(
     video_id: &str,
     path: &Path,
     cancel: &AtomicBool,
 ) -> Result<(), AuthApiError> {
     check_export_cancelled(cancel)?;
-    let bytes = compress_image(path)?;
-    presigned_put_bytes_inner(
-        video_id,
-        "screenshot/screen-capture.jpg",
-        bytes,
-        Some(cancel),
-    )
-    .await
+    let (bytes, target) = tokio::try_join!(
+        compress_screenshot(path),
+        presign_put_target(video_id, SCREENSHOT_SUBPATH, Some(cancel)),
+    )?;
+    upload_signed_bytes_inner(target, SCREENSHOT_SUBPATH, bytes, Some(cancel)).await
 }
 
 #[cfg(not(target_os = "linux"))]
 async fn upload_screenshot(video_id: &str, path: &Path) -> Result<(), AuthApiError> {
-    let bytes = compress_image(path)?;
-    presigned_put_bytes(video_id, "screenshot/screen-capture.jpg", bytes).await
+    let (bytes, target) = tokio::try_join!(
+        compress_screenshot(path),
+        presign_put_target(video_id, SCREENSHOT_SUBPATH, None),
+    )?;
+    upload_signed_bytes_inner(target, SCREENSHOT_SUBPATH, bytes, None).await
+}
+
+async fn compress_screenshot(path: &Path) -> Result<Vec<u8>, AuthApiError> {
+    let path = path.to_path_buf();
+    tracked_upload_read(move || compress_image(&path))
+        .await
+        .map_err(|error| AuthApiError::Other(format!("Failed to compress image: {error}")))?
 }
 
 /// One presigned single-part PUT under a video's subpath -- `/api/upload/
@@ -2288,6 +2396,15 @@ async fn presigned_put_bytes_inner(
     bytes: Vec<u8>,
     cancel: Option<&AtomicBool>,
 ) -> Result<(), AuthApiError> {
+    let target = presign_put_target(video_id, subpath, cancel).await?;
+    upload_signed_bytes_inner(target, subpath, bytes, cancel).await
+}
+
+async fn presign_put_target(
+    video_id: &str,
+    subpath: &str,
+    cancel: Option<&AtomicBool>,
+) -> Result<SignedUploadTarget, AuthApiError> {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct Response {
@@ -2313,12 +2430,11 @@ async fn presigned_put_bytes_inner(
             format!("api/upload_signed/{}", status.as_u16()),
         ));
     }
-    let target = response
+    response
         .json::<Response>()
         .await
-        .map_err(|error| AuthApiError::Other(format!("api/upload_signed/response: {error}")))?
-        .presigned_put_data;
-    upload_signed_bytes_inner(target, subpath, bytes, cancel).await
+        .map(|response| response.presigned_put_data)
+        .map_err(|error| AuthApiError::Other(format!("api/upload_signed/response: {error}")))
 }
 
 async fn upload_signed_bytes_inner(
@@ -3422,7 +3538,7 @@ mod tests {
         control.deny();
         assert!(
             upload
-                .finish_screenshot(Path::new("/not-a-recording/cancelled.cap"))
+                .screenshot_upload(Path::new("/not-a-recording/cancelled.cap"))
                 .await
                 .unwrap_err()
                 .contains("Export cancelled")

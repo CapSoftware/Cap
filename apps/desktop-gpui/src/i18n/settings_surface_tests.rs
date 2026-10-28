@@ -233,6 +233,14 @@ fn settings_surfaces_match_the_literals_they_replaced() {
             "Minimise",
         ),
         (
+            tr::settings::options::window_capture::screen_region(),
+            "Screen region",
+        ),
+        (
+            tr::settings::options::window_capture::focused_window(),
+            "Focused window",
+        ),
+        (
             tr::settings::options::post_studio::open_editor(),
             "Open editor",
         ),
@@ -362,6 +370,14 @@ fn settings_surfaces_match_the_literals_they_replaced() {
         (
             tr::settings::shortcuts::outcome::instant_open_link_hint(),
             "In your browser",
+        ),
+        (
+            tr::settings::shortcuts::outcome::instant_show_cap(),
+            "Show Cap",
+        ),
+        (
+            tr::settings::shortcuts::outcome::instant_show_cap_hint(),
+            "Back to the recorder",
         ),
         (
             tr::settings::shortcuts::outcome::instant_copy_link(),

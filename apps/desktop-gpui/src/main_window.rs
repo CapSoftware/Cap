@@ -232,50 +232,25 @@ fn shadow(color: Hsla, y: f32, blur: f32, spread: f32, inset: bool) -> gpui::Box
     }
 }
 
-/// Drawn in gpui rather than with an `NSGlassEffectView` per button, which
-/// would have to track gpui's layout under the Metal layer. Two shadows, one
-/// unblurred, keep it cheap on a window that repaints with the mic meter.
+/// A control on the main window's glass, as macOS draws one inside a glass
+/// window (`scripts/glass-reference/gallery.swift`): a flat, soft fill with
+/// no outline, gradient or lift, since glass does not stack on glass. The
+/// selected card takes the accent as a tint.
 fn glass_button<E: Styled>(element: E, theme: Theme, selected: bool) -> E {
-    let dark = theme.is_dark();
-    let (top, bottom, rim) = match (selected, dark) {
-        (false, false) => (
-            gpui::hsla(0., 0., 1., 0.7),
-            gpui::hsla(0., 0., 1., 0.58),
-            gpui::hsla(0., 0., 0., 0.08),
-        ),
-        (false, true) => (
-            gpui::hsla(0., 0., 1., 0.085),
-            gpui::hsla(0., 0., 1., 0.06),
-            gpui::hsla(0., 0., 1., 0.07),
-        ),
-        (true, false) => (
-            Theme::with_alpha(theme.blue_3, 0.9),
-            Theme::with_alpha(theme.blue_3, 0.75),
-            Theme::with_alpha(theme.blue_8, 0.4),
-        ),
-        (true, true) => (
-            Theme::with_alpha(theme.blue_9, 0.24),
-            Theme::with_alpha(theme.blue_9, 0.18),
-            Theme::with_alpha(theme.blue_9, 0.3),
-        ),
+    let fill = match (selected, theme.is_dark()) {
+        (false, false) => gpui::hsla(0., 0., 0., 0.05),
+        (false, true) => gpui::hsla(0., 0., 1., 0.08),
+        (true, false) => Theme::with_alpha(theme.blue_9, 0.14),
+        (true, true) => Theme::with_alpha(theme.blue_9, 0.28),
     };
-    let (highlight, lift) = if dark {
-        (gpui::hsla(0., 0., 1., 0.07), gpui::hsla(0., 0., 0., 0.2))
+    // A hairline so the control holds its shape over whatever shows through
+    // the window's glass, light or dark.
+    let edge = if theme.is_dark() {
+        gpui::hsla(0., 0., 1., 0.1)
     } else {
-        (gpui::hsla(0., 0., 1., 0.8), gpui::hsla(0., 0., 0., 0.04))
+        gpui::hsla(0., 0., 0., 0.08)
     };
-    element
-        .bg(gpui::linear_gradient(
-            180.,
-            gpui::linear_color_stop(top, 0.),
-            gpui::linear_color_stop(bottom, 1.),
-        ))
-        .border_1()
-        .border_color(rim)
-        .shadow(vec![
-            shadow(highlight, 1., 0., 0., true),
-            shadow(lift, 1., 2., 0., false),
-        ])
+    element.bg(fill).border_1().border_color(edge)
 }
 
 fn capture_hover_fill(theme: Theme, selected: bool) -> Hsla {
@@ -1787,7 +1762,7 @@ impl MainWindow {
                         this.scan_incomplete_recordings(window, cx, std::time::Duration::ZERO);
                         if recover {
                             if project_path.join("content/output.mp4").is_file() {
-                                cx.reveal_path(&project_path.join("content/output.mp4"));
+                                library::reveal_path(&project_path.join("content/output.mp4"), cx);
                             } else {
                                 cx.defer(move |cx| app_windows::open_editor(project_path, cx));
                             }
@@ -2458,6 +2433,7 @@ impl MainWindow {
 
     fn dismiss_microphone_warning(&mut self, cx: &mut Context<Self>) {
         self.cancel_deep_link_start();
+        cx.defer(app_windows::restore_arranged_windows_if_idle);
         cx.notify();
     }
 
@@ -2503,6 +2479,7 @@ impl MainWindow {
                             return;
                         }
                         this.finish_recording_start(&permit);
+                        cx.defer(app_windows::restore_arranged_windows_if_idle);
                         this.session.update(cx, |session, cx| {
                             session.error = Some(tr::main::storage::check_failed(&error));
                             cx.notify();
@@ -2589,6 +2566,7 @@ impl MainWindow {
                     this.check_storage_before_start(config, true, permit, cx);
                 } else {
                     this.finish_recording_start(&permit);
+                    cx.defer(app_windows::restore_arranged_windows_if_idle);
                     if this.session.read(cx).editor_recording_target().is_some() {
                         cx.defer(app_windows::abort_editor_recording_flow);
                     }
@@ -4541,25 +4519,19 @@ impl MainWindow {
         }
         match (kind, &self.library) {
             (LibraryKind::Recordings, Some(LibraryItems::Recordings(rows))) => {
-                for (index, row) in rows.iter().enumerate() {
+                for row in rows {
                     if !self.matches_search(&row.item.pretty_name) {
                         continue;
                     }
-                    cards.push(
-                        self.render_recording_card(index, row, cx)
-                            .into_any_element(),
-                    );
+                    cards.push(self.render_recording_card(row, cx).into_any_element());
                 }
             }
             (LibraryKind::Screenshots, Some(LibraryItems::Screenshots(rows))) => {
-                for (index, row) in rows.iter().enumerate() {
+                for row in rows {
                     if !self.matches_search(&row.item.pretty_name) {
                         continue;
                     }
-                    cards.push(
-                        self.render_screenshot_card(index, row, cx)
-                            .into_any_element(),
-                    );
+                    cards.push(self.render_screenshot_card(row, cx).into_any_element());
                 }
             }
             _ => {}
@@ -4747,7 +4719,6 @@ impl MainWindow {
 
     fn render_recording_card(
         &self,
-        index: usize,
         row: &LibraryRow<RecordingItem>,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
@@ -4767,10 +4738,10 @@ impl MainWindow {
                     .unwrap_or_else(|| upload.label().to_string())
             },
         );
-        let actions = self.render_recording_card_actions(index, item, cx);
+        let actions = self.render_recording_card_actions(item, cx);
 
         self.library_card(
-            ("library-recording", index),
+            gpui::ElementId::Path(item.path.as_path().into()),
             row.thumbnail.clone(),
             "icons/square-play.svg",
             item.pretty_name.clone(),
@@ -4793,7 +4764,6 @@ impl MainWindow {
 
     fn render_recording_card_actions(
         &self,
-        index: usize,
         item: &RecordingItem,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
@@ -4811,7 +4781,7 @@ impl MainWindow {
         if item.opens_editor() {
             let editor = path.clone();
             row = row.child(self.library_action(
-                ("lib-rec-edit", index),
+                "lib-rec-edit",
                 "icons/edit.svg",
                 cx.listener(move |_, _, _window, cx| {
                     let editor = editor.clone();
@@ -4821,7 +4791,7 @@ impl MainWindow {
         }
         if let Some(url) = sharing {
             row = row.child(self.library_action(
-                ("lib-rec-link", index),
+                "lib-rec-link",
                 "icons/link.svg",
                 move |_, _, cx| cx.open_url(&url),
             ));
@@ -4833,7 +4803,7 @@ impl MainWindow {
         {
             let retry_path = path.clone();
             row = row.child(self.library_action(
-                ("lib-rec-retry", index),
+                "lib-rec-retry",
                 "icons/rotate-ccw.svg",
                 cx.listener(move |_, _, window, cx| {
                     let path = retry_path.clone();
@@ -4858,12 +4828,12 @@ impl MainWindow {
         }
         let folder = path.clone();
         row = row.child(self.library_action(
-            ("lib-rec-folder", index),
+            "lib-rec-folder",
             "icons/folder.svg",
             move |_, _, cx| library::open_recording_folder(&folder, mode, cx),
         ));
         row.child(self.library_action(
-            ("lib-rec-delete", index),
+            "lib-rec-delete",
             "icons/trash.svg",
             cx.listener(move |this, _, window, cx| {
                 this.delete_library_recording(path.clone(), window, cx);
@@ -4873,16 +4843,15 @@ impl MainWindow {
 
     fn render_screenshot_card(
         &self,
-        index: usize,
         row: &LibraryRow<ScreenshotItem>,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = self.theme;
         let item = &row.item;
         let png = item.path.clone();
-        let actions = self.render_screenshot_card_actions(index, item, cx);
+        let actions = self.render_screenshot_card_actions(item, cx);
         self.library_card(
-            ("library-screenshot", index),
+            gpui::ElementId::Path(item.path.as_path().into()),
             row.thumbnail.clone(),
             "icons/image.svg",
             item.pretty_name.clone(),
@@ -4899,7 +4868,6 @@ impl MainWindow {
 
     fn render_screenshot_card_actions(
         &self,
-        index: usize,
         item: &ScreenshotItem,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
@@ -4914,39 +4882,35 @@ impl MainWindow {
             .px(px(8.))
             .pb(px(6.))
             .gap(px(4.))
-            .child(
-                self.library_action(("lib-ss-copy", index), "icons/copy.svg", {
-                    let png = png.clone();
-                    move |_, _, cx| {
-                        let copied = crate::platform::copy_image_to_clipboard(png.clone(), cx);
-                        cx.spawn(async move |_| {
-                            if let Err(error) = copied.await {
-                                tracing::warn!("copying screenshot failed: {error}");
-                                crate::platform::alert_dialog(
-                                    tr::main::library::copy_screenshot_failed(),
-                                    &error,
-                                );
-                            }
-                        })
-                        .detach();
-                    }
-                }),
-            )
+            .child(self.library_action("lib-ss-copy", "icons/copy.svg", {
+                let png = png.clone();
+                move |_, _, cx| {
+                    let copied = crate::platform::copy_image_to_clipboard(png.clone(), cx);
+                    cx.spawn(async move |_| {
+                        if let Err(error) = copied.await {
+                            tracing::warn!("copying screenshot failed: {error}");
+                            crate::platform::alert_dialog(
+                                tr::main::library::copy_screenshot_failed(),
+                                &error,
+                            );
+                        }
+                    })
+                    .detach();
+                }
+            }))
             .child(self.library_action(
-                ("lib-ss-save", index),
+                "lib-ss-save",
                 "icons/download.svg",
                 cx.listener(move |this, _, window, cx| {
                     this.save_screenshot(png.clone(), name.clone(), window, cx);
                 }),
             ))
-            .child(
-                self.library_action(("lib-ss-open", index), "icons/folder.svg", {
-                    let bundle = bundle.clone();
-                    move |_, _, cx| library::reveal_path(&bundle, cx)
-                }),
-            )
+            .child(self.library_action("lib-ss-open", "icons/folder.svg", {
+                let bundle = bundle.clone();
+                move |_, _, cx| library::reveal_path(&bundle, cx)
+            }))
             .child(self.library_action(
-                ("lib-ss-delete", index),
+                "lib-ss-delete",
                 "icons/trash.svg",
                 cx.listener(move |this, _, window, cx| {
                     this.delete_library_screenshot(bundle.clone(), window, cx);
@@ -6354,24 +6318,21 @@ impl MainWindow {
                 .flex()
                 .items_center()
                 .justify_center()
-                .size(px(28.))
+                .w(px(34.))
+                .h(px(28.))
                 .rounded_full()
-                .bg(if selected {
-                    Hsla::from(theme.gray_7)
-                } else {
-                    theme.body_fill(3)
-                })
+                // A segmented control's selected segment, as macOS raises
+                // it: a lifted capsule over the track.
                 .when(selected, |this| {
-                    // `ring-2 ring-blue-500 ring-offset-1 ring-offset-gray-1`.
-                    this.border_2()
-                        .border_color(theme.blue_500)
-                        .shadow(vec![gpui::BoxShadow {
-                            color: theme.ring_offset(),
-                            offset: gpui::point(px(0.), px(0.)),
-                            blur_radius: px(0.),
-                            spread_radius: px(1.),
-                            inset: false,
-                        }])
+                    this.bg(if theme.is_dark() {
+                        gpui::hsla(0., 0., 1., 0.24)
+                    } else {
+                        gpui::white()
+                    })
+                    .shadow(vec![
+                        shadow(gpui::hsla(0., 0., 0., 0.12), 1., 3., 0., false),
+                        shadow(gpui::hsla(0., 0., 0., 0.06), 0., 0., 0.5, false),
+                    ])
                 })
                 .child(
                     gpui::canvas(move |value, _, _| bounds.set(Some(value)), |_, _, _, _| {})
@@ -6384,7 +6345,9 @@ impl MainWindow {
                         .size(px(mode.icon_size()))
                         .text_color(theme.gray_12),
                 )
-                .hover(|style| style.bg(theme.body_hover_fill(7)))
+                .when(!selected, |this| {
+                    this.hover(move |style| style.bg(glass_tint(theme, 0.05, 0.07)))
+                })
                 .on_click(cx.listener(move |this, _, _window, cx| {
                     if this.session.read(cx).editor_recording_target().is_some() {
                         return;
@@ -6399,12 +6362,10 @@ impl MainWindow {
             .flex()
             .flex_row()
             .items_center()
-            .gap(px(8.))
-            .p(px(6.))
+            .gap(px(2.))
+            .p(px(3.))
             .rounded_full()
-            .border_1()
-            .border_color(theme.body_border(5))
-            .bg(theme.body_fill(3))
+            .bg(glass_tint(theme, 0.06, 0.09))
             .child(button(Mode::Instant, "mode-instant", 0))
             .child(button(Mode::Studio, "mode-studio", 1))
             .child(button(Mode::Screenshot, "mode-screenshot", 2))
@@ -6620,6 +6581,12 @@ impl MainWindow {
                 } else {
                     Some(target)
                 };
+                // The tile picks by hovering: a window chosen from its
+                // dropdown earlier would otherwise stay locked in, and the
+                // highlight would ignore the window under the pointer.
+                if target == TargetType::Window {
+                    this.selected_window = None;
+                }
                 this.sync_overlays(cx);
                 cx.notify();
             }));

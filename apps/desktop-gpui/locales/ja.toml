@@ -160,6 +160,10 @@ label = "新しい録画でStudio Soundを使用"
 description = "録画が始まったときのメインウィンドウの動作。"
 label = "録画開始時のメインウィンドウ"
 
+[settings.general.recording.window_capture]
+description = "ウインドウ録画で選んだウインドウをどのようにキャプチャするか。「フォーカスしたウインドウ」はそのウインドウだけを中央に配置し、移動しても追従して録画します。「画面の範囲」はウインドウが覆う画面の範囲を録画します。"
+label = "ウインドウのキャプチャ方法"
+
 [settings.general.recording.post_deletion]
 description = "録画ウィンドウをもう一度開くかどうか。"
 label = "録画を削除した後"
@@ -352,6 +356,10 @@ ultra = "最高"
 close = "閉じる"
 minimise = "最小化"
 
+[settings.options.window_capture]
+focused_window = "フォーカスしたウインドウ"
+screen_region = "画面の範囲"
+
 [settings.options.post_studio]
 do_nothing = "何もしない"
 open_editor = "エディタを開く"
@@ -406,6 +414,8 @@ instant_copy_link = "リンクのコピーのみ"
 instant_copy_link_hint = "何も開きません"
 instant_open_link = "リンクを開く"
 instant_open_link_hint = "ブラウザで"
+instant_show_cap = "Capを表示"
+instant_show_cap_hint = "レコーダーに戻る"
 saved_to_library = "ライブラリに保存"
 screenshot_copy = "コピー"
 screenshot_copy_and_edit = "コピーして編集"

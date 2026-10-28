@@ -162,6 +162,10 @@ label = { text = "Studio Sound on new recordings", context = "Studio Sound is th
 description = "What happens to the main window once a recording begins."
 label = "Main window when recording starts"
 
+[settings.general.recording.window_capture]
+description = "How a window recording captures the window you pick. Focused window records only that window, centred and followed if it moves; Screen region records the area of the screen it covers."
+label = "Window capture style"
+
 [settings.general.recording.post_deletion]
 description = "Whether the recording window should reopen."
 label = "After deleting a recording"
@@ -354,6 +358,10 @@ ultra = "Ultra"
 close = { text = "Close", max_px = 180, size = 12 }
 minimise = { text = "Minimise", max_px = 180, size = 12 }
 
+[settings.options.window_capture]
+focused_window = { text = "Focused window", max_px = 180, size = 12 }
+screen_region = { text = "Screen region", max_px = 180, size = 12 }
+
 [settings.options.post_studio]
 do_nothing = "Do nothing"
 open_editor = "Open editor"
@@ -408,6 +416,8 @@ instant_copy_link = "Copy link only"
 instant_copy_link_hint = "Nothing opens"
 instant_open_link = "Open link"
 instant_open_link_hint = "In your browser"
+instant_show_cap = "Show Cap"
+instant_show_cap_hint = "Back to the recorder"
 saved_to_library = "Saved to library"
 screenshot_copy = "Copy"
 screenshot_copy_and_edit = "Copy and edit"
