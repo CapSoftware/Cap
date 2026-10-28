@@ -6112,9 +6112,6 @@ impl MainWindow {
             .on_click(on_click)
     }
 
-    /// The mode panel, drawn in the onboarding tour's hand: one doodle card
-    /// per mode, and below them the tagline and features of whichever card is
-    /// hovered, falling back to the current mode.
     fn render_mode_info(&self, cx: &mut Context<Self>) -> gpui::Div {
         let theme = self.theme;
         let paper = crate::onboarding_window::Paper::new(&theme);
