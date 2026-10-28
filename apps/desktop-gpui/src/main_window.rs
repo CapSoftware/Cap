@@ -6129,8 +6129,8 @@ impl MainWindow {
         let opened_at = self.mode_info_opened_at;
         let still = cx.reduce_motion() || opened_at.elapsed() >= MODE_INFO_DRAW_DURATION;
         let shown = self
-            .mode_info_focused
-            .or(self.mode_info_preview)
+            .mode_info_preview
+            .or(self.mode_info_focused)
             .unwrap_or(effective_mode);
         let detail = crate::onboarding_window::mode_detail(shown);
 
