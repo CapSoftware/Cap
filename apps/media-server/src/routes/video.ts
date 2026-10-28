@@ -1622,7 +1622,7 @@ async function processVideoAsync(
 			}
 		}
 		const rejectUnrecoverableSource = (error: unknown): never => {
-			if (recoveringDamagedSource && !signal.aborted)
+			if (recoveringDamagedSource && !signal.aborted && !isBusyError(error))
 				throw new Error(DAMAGED_INPUT_MESSAGE);
 			throw error;
 		};
@@ -1680,7 +1680,7 @@ async function processVideoAsync(
 		if (options.importedOriginal || recoveringDamagedSource) {
 			const recovered = await withJobHeartbeat(jobId, () =>
 				probeVideoFile(outputPath),
-			);
+			).catch(rejectUnrecoverableSource);
 			if (!isCompleteRecovery(recovered.duration, metadata.duration))
 				throw new Error(
 					options.importedOriginal
