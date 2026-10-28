@@ -1043,7 +1043,7 @@ export const ImportLoomPage = ({
 											/>
 										</div>
 										{selectedColumnsConflict && (
-											<p className="mt-3 text-sm text-red-10">
+											<p className="mt-3 text-sm text-red-600">
 												Choose different columns for each mapped field.
 											</p>
 										)}
@@ -1068,7 +1068,7 @@ export const ImportLoomPage = ({
 									</div>
 
 									{csvLimitExceeded && (
-										<div className="flex gap-3 items-start p-4 rounded-lg border bg-red-2 border-red-4 text-red-11">
+										<div className="flex gap-3 items-start p-4 rounded-lg border border-red-200 bg-red-50 text-red-700">
 											<FontAwesomeIcon
 												className="mt-0.5 size-4"
 												icon={faTriangleExclamation}
@@ -1079,7 +1079,7 @@ export const ImportLoomPage = ({
 													{MAX_LOOM_CSV_IMPORT_ROWS.toLocaleString("en-US")}{" "}
 													videos at a time.
 												</p>
-												<p className="mt-1 text-red-10">
+												<p className="mt-1 text-red-600">
 													{buildEnv.NEXT_PUBLIC_IS_CAP ? (
 														<>
 															For a library this size,{" "}
