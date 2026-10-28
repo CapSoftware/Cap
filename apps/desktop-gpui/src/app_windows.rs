@@ -2155,6 +2155,15 @@ fn restore_arranged_windows(cx: &mut App) {
     crate::foreign_window::put_back_all(arranged, cx.background_executor());
 }
 
+/// A start the user turned back from (a storage or microphone prompt): the
+/// windows the picker shaped go back. Never while a capture runs, which may be
+/// recording them.
+pub(crate) fn restore_arranged_windows_if_idle(cx: &mut App) {
+    if RecordingSession::global(cx).read(cx).phase == Phase::Idle {
+        restore_arranged_windows(cx);
+    }
+}
+
 /// A recording or screenshot is about to capture the windows the picker
 /// shaped, so they stay where they are.
 fn keep_arranged_windows(cx: &mut App) {
@@ -2406,6 +2415,14 @@ pub fn refresh_microphone_overlays(cx: &mut App) {
 }
 
 /// The overlays' native window numbers, for capture exclusion.
+fn overlay_handles(cx: &App) -> Vec<gpui::AnyWindowHandle> {
+    cx.global::<AppWindows>()
+        .overlays
+        .iter()
+        .map(|(_, handle)| (*handle).into())
+        .collect()
+}
+
 fn overlay_window_ids(cx: &mut App) -> Vec<scap_targets::WindowId> {
     let handles: Vec<_> = cx
         .global::<AppWindows>()
@@ -2437,8 +2454,9 @@ pub fn show_instant_sign_in(kind: crate::main_window::TargetType, cx: &mut App) 
 }
 
 /// How long Start waits for the picker's window moves to land. A move waits
-/// on the target app, and a hung app must not hold the recording forever.
-const ARRANGE_SETTLE_LIMIT: std::time::Duration = std::time::Duration::from_millis(1500);
+/// on the target app; one still pending after this does not start a
+/// recording of bounds that are about to change.
+const ARRANGE_SETTLE_LIMIT: std::time::Duration = std::time::Duration::from_secs(5);
 
 pub fn start_recording_from_overlay(target: ScreenCaptureTarget, cx: &mut App) {
     if !TargetSelect::global(cx).read(cx).has_arranged() {
@@ -2446,15 +2464,31 @@ pub fn start_recording_from_overlay(target: ScreenCaptureTarget, cx: &mut App) {
         return;
     }
     // A size the user just chose may still be on its way to the window, and
-    // the capture reads the window's bounds when it starts.
+    // the capture reads the window's bounds when it starts. The Start belongs
+    // to these overlays: dismissing them, or opening a new picker, drops it.
+    let overlays = overlay_handles(cx);
     let settled = crate::foreign_window::in_order(|| ());
     cx.spawn(async move |cx| {
         let limit = cx.background_executor().timer(ARRANGE_SETTLE_LIMIT);
-        futures_util::future::select(std::pin::pin!(settled), std::pin::pin!(limit)).await;
+        let settled = matches!(
+            futures_util::future::select(std::pin::pin!(settled), std::pin::pin!(limit)).await,
+            futures_util::future::Either::Left(_)
+        );
         cx.update(|cx| {
-            if !cx.global::<AppWindows>().overlays.is_empty() {
-                start_recording_from_overlay_now(target, cx);
+            let current = overlay_handles(cx);
+            if current.is_empty() || current != overlays {
+                return;
             }
+            if !settled {
+                tracing::warn!("a picked window is still moving; recording not started");
+                RecordingSession::global(cx).update(cx, |session, cx| {
+                    session.error =
+                        Some("The window is still being resized. Try starting again.".into());
+                    cx.notify();
+                });
+                return;
+            }
+            start_recording_from_overlay_now(target, cx);
         });
     })
     .detach();
@@ -2469,7 +2503,6 @@ fn start_recording_from_overlay_now(target: ScreenCaptureTarget, cx: &mut App) {
     {
         return;
     }
-    keep_arranged_windows(cx);
     // Collected before the windows go away: the capture starts a beat after
     // this, and an overlay that has not finished closing must not end up in
     // the recording.
