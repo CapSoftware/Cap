@@ -194,6 +194,7 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     // (gpui's `svg()` keeps only the alpha).
     "circle-check.svg",
     "lock.svg",
+    "smartphone.svg",
     // The screenshot editor's annotation toolbar, layers panel and header
     // (`AnnotationTools.tsx`, `LayersPanel.tsx`, `Header.tsx`). Lucide 24x24
     // originals, matching the `~icons/lucide/*` imports over there.
@@ -313,6 +314,7 @@ mod tests {
         include_str!("editor_window.rs"),
         include_str!("editor_window/frame.rs"),
         include_str!("editor_window/scenes.rs"),
+        include_str!("editor_window/safe_zones.rs"),
         // The timeline's nine track glyphs and its scene-mode icons are named
         // in the strip's own module, not in the window that hosts it.
         include_str!("editor_timeline.rs"),
