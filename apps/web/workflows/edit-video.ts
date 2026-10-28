@@ -572,7 +572,7 @@ async function queueAiGeneration(
 	}
 }
 
-async function queueTranscriptionRegeneration(
+export async function queueTranscriptionRegeneration(
 	videoId: string,
 	userId: string,
 	aiGenerationEnabled: boolean,

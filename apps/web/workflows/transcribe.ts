@@ -10,7 +10,6 @@ import {
 	videoUploads,
 } from "@cap/database/schema";
 import type { VideoEditSpec, VideoMetadata } from "@cap/database/types";
-import { serverEnv } from "@cap/env";
 import { Storage } from "@cap/web-backend/src/Storage/index";
 import {
 	type AiGenerationLanguage,
@@ -32,6 +31,7 @@ import {
 } from "@/lib/audio-enhance";
 import { checkHasAudioTrack, extractAudioFromUrl } from "@/lib/audio-extract";
 import {
+	type AssemblyAIEditResult,
 	createEditTranscript,
 	editTranscriptWordsToCaptionVtt,
 	getEditTranscriptBackfillStatus,
@@ -49,6 +49,11 @@ import {
 } from "@/lib/media-client";
 import { planSegmentsAudioExtraction } from "@/lib/segments-audio";
 import { downloadConcatenatedSegments } from "@/lib/segments-audio-download";
+import {
+	getTranscriptionProvider,
+	isTranscriptionConfigured,
+	transcribeWithOpenAICompatible,
+} from "@/lib/stt";
 import { decodeStorageVideo } from "@/lib/video-storage";
 import { runWorkflowPromise } from "@/lib/workflow-runtime";
 
@@ -155,7 +160,7 @@ export async function transcribeVideoWorkflow(
 			};
 		}
 
-		const transcription = await transcribeWithAssemblyAI(
+		const transcription = await transcribeAudio(
 			audioUrl,
 			videoData.aiGenerationLanguage,
 			videoDurationMs,
@@ -217,7 +222,7 @@ export async function backfillEditTranscriptWorkflow(
 			return { success: false };
 		}
 
-		const editTranscript = await transcribeEditTranscriptWithAssemblyAI(
+		const editTranscript = await transcribeEditTranscript(
 			audioUrl,
 			videoEdit ? videoEdit.editSpec.sourceDuration : (video.duration ?? 0),
 		);
@@ -257,8 +262,10 @@ export async function backfillEditTranscriptWorkflow(
 async function validateVideo(videoId: string): Promise<VideoData> {
 	"use step";
 
-	if (!serverEnv().ASSEMBLY_API_KEY) {
-		throw new FatalError("Missing ASSEMBLY_API_KEY");
+	if (!isTranscriptionConfigured()) {
+		throw new FatalError(
+			"No transcription provider configured: set STT_BASE_URL or ASSEMBLY_API_KEY",
+		);
 	}
 
 	const query = await db()
@@ -332,8 +339,10 @@ async function validateEditTranscriptBackfill(
 ) {
 	"use step";
 
-	if (!serverEnv().ASSEMBLY_API_KEY) {
-		throw new FatalError("Missing ASSEMBLY_API_KEY");
+	if (!isTranscriptionConfigured()) {
+		throw new FatalError(
+			"No transcription provider configured: set STT_BASE_URL or ASSEMBLY_API_KEY",
+		);
 	}
 
 	const [video] = await db()
@@ -736,7 +745,7 @@ async function extractAudioFromSegmentsImpl(
 			);
 
 			// The concatenated init + fragments form a valid fragmented MP4 that
-			// AssemblyAI ingests directly — no transcode, and no ffmpeg binary
+			// the transcription provider ingests directly — no transcode, and no ffmpeg binary
 			// (which is not available in the serverless runtime). The temp object
 			// keeps the same key regardless of container so cleanupTempAudio's
 			// contract is untouched.
@@ -769,13 +778,11 @@ async function extractAudioFromSegmentsImpl(
 	}
 }
 
-async function transcribeWithAssemblyAI(
+async function runTranscription(
 	audioUrl: string,
 	language: AiGenerationLanguage,
-	videoDurationMs: number,
-): Promise<TranscriptionArtifacts> {
-	"use step";
-
+	label: string,
+): Promise<{ result: AssemblyAIEditResult; audioDurationSeconds: number }> {
 	const audioResponse = await fetch(audioUrl);
 	if (!audioResponse.ok) {
 		throw new Error(
@@ -784,8 +791,27 @@ async function transcribeWithAssemblyAI(
 	}
 
 	const audioBuffer = Buffer.from(await audioResponse.arrayBuffer());
-	const client = createAssemblyAIClient();
 
+	if (getTranscriptionProvider() === "openai-compatible") {
+		const startedAt = Date.now();
+		const transcript = await transcribeWithOpenAICompatible(
+			audioBuffer,
+			audioResponse.headers.get("content-type") ?? "audio/mpeg",
+			language,
+		);
+		console.log(
+			`[transcribe] OpenAI-compatible ${label} finished in ${Date.now() - startedAt}ms, model=${transcript.speech_model_used}, words=${transcript.words?.length ?? 0}`,
+		);
+		if (!transcript.words?.length) {
+			throw new FatalError("No spoken audio detected by STT provider");
+		}
+		return {
+			result: transcript,
+			audioDurationSeconds: transcript.audio_duration ?? 0,
+		};
+	}
+
+	const client = createAssemblyAIClient();
 	const transcript = await client.transcripts.transcribe({
 		audio: audioBuffer,
 		...getAssemblyAITranscriptionOptions(language),
@@ -793,12 +819,12 @@ async function transcribeWithAssemblyAI(
 	});
 
 	console.log(
-		`[transcribe] AssemblyAI transcript ${transcript.id} finished with status=${transcript.status}, model=${transcript.speech_model_used ?? "unknown"}`,
+		`[transcribe] AssemblyAI ${label} ${transcript.id} finished with status=${transcript.status}, model=${transcript.speech_model_used ?? "unknown"}`,
 	);
 
 	if (transcript.status === "error") {
 		const transcriptError = transcript.error ?? "Unknown error";
-		const message = `AssemblyAI transcription failed (id=${transcript.id}, language=${language}): ${transcriptError}`;
+		const message = `AssemblyAI ${label} failed (id=${transcript.id}, language=${language}): ${transcriptError}`;
 
 		if (transcriptError.toLowerCase().includes("no spoken audio")) {
 			throw new FatalError(message);
@@ -807,13 +833,30 @@ async function transcribeWithAssemblyAI(
 		throw new Error(message);
 	}
 
-	// One paid pass produces both artifacts: the immutable word transcript (in
-	// the original media timeline) and the caption VTT derived from those words.
+	return {
+		result: transcript,
+		audioDurationSeconds: transcript.audio_duration ?? 0,
+	};
+}
+
+async function transcribeAudio(
+	audioUrl: string,
+	language: AiGenerationLanguage,
+	videoDurationMs: number,
+): Promise<TranscriptionArtifacts> {
+	"use step";
+
+	const { result, audioDurationSeconds } = await runTranscription(
+		audioUrl,
+		language,
+		"transcription",
+	);
+
+	// One pass produces both artifacts: the immutable word transcript (in the
+	// original media timeline) and the caption VTT derived from those words.
 	const durationMs =
-		videoDurationMs > 0
-			? videoDurationMs
-			: (transcript.audio_duration ?? 0) * 1000;
-	const editTranscript = createEditTranscript(transcript, durationMs);
+		videoDurationMs > 0 ? videoDurationMs : audioDurationSeconds * 1000;
+	const editTranscript = createEditTranscript(result, durationMs);
 
 	return {
 		vtt: editTranscriptWordsToCaptionVtt(editTranscript.words),
@@ -821,42 +864,23 @@ async function transcribeWithAssemblyAI(
 	};
 }
 
-async function transcribeEditTranscriptWithAssemblyAI(
+async function transcribeEditTranscript(
 	audioUrl: string,
 	videoDurationSeconds: number,
 ): Promise<string> {
 	"use step";
 
-	const audioResponse = await fetch(audioUrl);
-	if (!audioResponse.ok) {
-		throw new Error(
-			`Audio URL not accessible: ${audioResponse.status} ${audioResponse.statusText}`,
-		);
-	}
-
-	const audioBuffer = Buffer.from(await audioResponse.arrayBuffer());
-	const client = createAssemblyAIClient();
-	const transcript = await client.transcripts.transcribe({
-		audio: audioBuffer,
-		...getAssemblyAITranscriptionOptions("auto"),
-		disfluencies: true,
-	});
-
-	console.log(
-		`[transcribe] AssemblyAI editable transcript ${transcript.id} finished with status=${transcript.status}, model=${transcript.speech_model_used ?? "unknown"}`,
+	const { result, audioDurationSeconds } = await runTranscription(
+		audioUrl,
+		"auto",
+		"editable transcription",
 	);
-
-	if (transcript.status === "error") {
-		throw new Error(
-			`AssemblyAI editable transcription failed (id=${transcript.id}): ${transcript.error ?? "Unknown error"}`,
-		);
-	}
 
 	const durationMs =
 		videoDurationSeconds > 0
 			? videoDurationSeconds * 1000
-			: (transcript.audio_duration ?? 0) * 1000;
-	return serializeEditTranscript(createEditTranscript(transcript, durationMs));
+			: audioDurationSeconds * 1000;
+	return serializeEditTranscript(createEditTranscript(result, durationMs));
 }
 
 async function saveTranscription(

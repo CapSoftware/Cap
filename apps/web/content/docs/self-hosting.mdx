@@ -172,6 +172,84 @@ For the AssemblyAI EU gateway, set
 serves Claude and Gemini models, so you must also override `AI_MODEL` and
 `AI_STREAM_MODEL` (the defaults are OpenAI-family models that are US-only).
 
+#### Local Transcription
+
+To transcribe without AssemblyAI, point `STT_BASE_URL` at any OpenAI-compatible
+`/audio/transcriptions` endpoint that returns word timestamps
+(`response_format=verbose_json` with `timestamp_granularities[]=word`), such as
+[whisper.cpp](https://github.com/ggml-org/whisper.cpp) `whisper-server`,
+faster-whisper-server, or [speaches](https://speaches.ai). When set, it is used
+instead of `ASSEMBLY_API_KEY` for recorded videos and editable transcripts,
+with no fallback to AssemblyAI if the endpoint is down.
+
+```bash
+STT_BASE_URL=http://whisper:9000/v1
+STT_MODEL=large-v3-turbo     # Defaults to whisper-1
+STT_API_KEY=your-key         # If the endpoint requires one
+```
+
+For `whisper-server`, serve the OpenAI path, let it convert audio with ffmpeg,
+and enable voice activity detection so silent recordings are reported as having
+no audio instead of producing hallucinated text. `STT_MODEL` is ignored by
+`whisper-server`:
+
+```bash
+whisper-server -m ggml-large-v3-turbo.bin --host 0.0.0.0 --port 9000 \
+  --inference-path /v1/audio/transcriptions --convert -l auto \
+  --vad -vm ggml-silero-v5.1.2.bin
+```
+
+With `--vad`, `whisper-server` reports word times on the audio with the silence
+removed. Cap moves them back onto the recording's timeline per segment, but
+words right after a long pause can still land early. In a test with about
+8 seconds of silence between two sentences, the first words after the silence
+came out about 7.5 seconds early, so their captions started during the silence,
+before the speech.
+
+The server transcribes one recording at a time. On Apple Silicon, run it
+natively rather than in Docker so it can use the Metal GPU, and point Cap's
+container at the host with `STT_BASE_URL=http://host.docker.internal:9000/v1`.
+
+For faster-whisper through speaches, add it as a service in the same Compose
+file as `cap-web`, so Cap can reach it by its service name:
+
+```yaml
+services:
+  speaches:
+    image: ghcr.io/speaches-ai/speaches:latest-cpu
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - hf-hub-cache:/home/ubuntu/.cache/huggingface/hub
+    networks:
+      - cap-network
+
+volumes:
+  hf-hub-cache:
+```
+
+In `docker-compose.coolify.yml`, leave out `networks`: its services share the
+project's default network. Start it, download the model once from the host
+through the published port, then set `STT_MODEL` to its full id:
+
+```bash
+docker compose up -d speaches
+SPEACHES_BASE_URL=http://localhost:8000 \
+  uvx speaches-cli model download Systran/faster-whisper-large-v3
+```
+
+```bash
+STT_BASE_URL=http://speaches:8000/v1
+STT_MODEL=Systran/faster-whisper-large-v3
+```
+
+Live transcription while an instant recording uploads still uses AssemblyAI.
+If `ASSEMBLY_API_KEY` is also set, those recordings are sent to AssemblyAI
+during the upload and the live transcript can become the final one, so leave
+it unset to keep all audio on your own server. Titles, summaries, chapters and
+transcript translation still need an LLM provider (see `AI_PROVIDER` above).
+
 ### Google OAuth
 
 ```bash
