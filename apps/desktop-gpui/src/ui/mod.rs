@@ -45,6 +45,7 @@ mod collapsible;
 mod color_picker;
 mod editor_button;
 mod field;
+pub mod glass;
 mod kbd;
 pub mod keyboard_nav;
 mod menu;
