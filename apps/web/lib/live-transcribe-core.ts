@@ -350,13 +350,43 @@ export function liveTranscriptToEditTranscript(
 	artifact: LiveTranscriptArtifact,
 	speechModelUsed: string,
 ): EditTranscript {
+	const durationMs = Math.max(0, Math.round(artifact.transcribedDurationMs));
 	return {
 		version: EDIT_TRANSCRIPT_VERSION,
 		speechModelUsed,
-		durationMs: Math.max(0, Math.round(artifact.transcribedDurationMs)),
+		durationMs,
 		languageCode: artifact.languageCode,
-		words: artifact.words,
+		words: orderLiveTranscriptWords(artifact.words, durationMs),
 	};
+}
+
+/**
+ * parseEditTranscript rejects a transcript whose starts go backwards or whose
+ * words have no length, and both can come out of chunked transcription: two
+ * chunks time the same moment up to HANDOVER_MATCH_MS apart at a join, and a
+ * word clamped to a chunk's end is zero-length. Nudge such words into order
+ * instead of letting one make the whole promoted transcript unreadable.
+ */
+export function orderLiveTranscriptWords(
+	words: readonly EditTranscriptWord[],
+	durationMs: number,
+): EditTranscriptWord[] {
+	if (durationMs < 1) return [];
+	const result: EditTranscriptWord[] = [];
+	let previous: EditTranscriptWord | undefined;
+	for (const word of words) {
+		const startMs = Math.min(
+			Math.max(word.startMs, previous?.startMs ?? 0),
+			durationMs - 1,
+		);
+		let endMs = Math.min(Math.max(word.endMs, startMs + 1), durationMs);
+		if (previous && startMs === previous.startMs) {
+			endMs = Math.max(endMs, previous.endMs);
+		}
+		previous = { ...word, startMs, endMs };
+		result.push(previous);
+	}
+	return result;
 }
 
 const normalizeWordText = (text: string) =>
@@ -456,7 +486,7 @@ export function applyChunkToLiveTranscript(
 	const contextMs = chunk.contextMs ?? 0;
 	const handoverMs = chunkHandoverMs(chunk.startMs, contextMs);
 	const targetMs = chunk.startMs - handoverMs;
-	const words =
+	const joined =
 		handoverMs > 0
 			? joinAtHandover(
 					artifact.words,
@@ -475,6 +505,11 @@ export function applyChunkToLiveTranscript(
 					...artifact.words.filter((word) => word.startMs < chunk.startMs),
 					...chunk.words,
 				];
+	const transcribedDurationMs = Math.max(
+		artifact.transcribedDurationMs,
+		chunk.startMs + chunk.durationMs,
+	);
+	const words = orderLiveTranscriptWords(joined, transcribedDurationMs);
 
 	return {
 		...artifact,
@@ -483,10 +518,7 @@ export function applyChunkToLiveTranscript(
 			artifact.lastAudioSegmentIndex,
 			chunk.lastAudioSegmentIndex,
 		),
-		transcribedDurationMs: Math.max(
-			artifact.transcribedDurationMs,
-			chunk.startMs + chunk.durationMs,
-		),
+		transcribedDurationMs,
 		words,
 		vtt: editTranscriptWordsToCaptionVtt(words),
 		updatedAt: chunk.nowIso,

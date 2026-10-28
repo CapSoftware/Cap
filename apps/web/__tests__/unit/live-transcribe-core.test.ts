@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+	parseEditTranscript,
+	serializeEditTranscript,
+} from "@/lib/edit-transcript";
+import {
 	applyChunkToLiveTranscript,
 	canPromoteLiveTranscript,
 	createEmptyLiveTranscript,
@@ -592,6 +596,68 @@ describe("live chunks with context", () => {
 		}
 	});
 
+	it("keeps a promoted transcript readable when a join reorders word times", () => {
+		const first = firstChunk([
+			{ text: "the", start: 7850, end: 7990 },
+			{ text: "word", start: 8000, end: 8300 },
+		]);
+		const merged = applyChunkToLiveTranscript(
+			first,
+			contextChunk(10_000, [
+				{ text: "the", start: 7650, end: 7790 },
+				{ text: "word", start: 7800, end: 8100 },
+				{ text: "next", start: 11_000, end: 11_400 },
+			]),
+		);
+		expect(merged.words.map((word) => word.text)).toEqual([
+			"the",
+			"word",
+			"next",
+		]);
+		const starts = merged.words.map((word) => word.startMs);
+		expect(starts).toEqual([...starts].sort((a, b) => a - b));
+		expect(
+			parseEditTranscript(
+				serializeEditTranscript(
+					liveTranscriptToEditTranscript(merged, "universal-3-5-pro"),
+				),
+			),
+		).not.toBeNull();
+	});
+
+	it("gives words clamped to a chunk's end a length", () => {
+		const artifact = applyChunkToLiveTranscript(
+			createEmptyLiveTranscript("2026-10-28T00:00:00.000Z"),
+			{
+				startMs: 0,
+				durationMs: 4000,
+				lastAudioSegmentIndex: 2,
+				words: offsetChunkWords(
+					[
+						{ text: "last", start: 3900, end: 4000 },
+						{ text: "beyond", start: 4100, end: 4300 },
+					],
+					0,
+					4000,
+				),
+				languageCode: "en",
+				nowIso: "2026-10-28T00:00:05.000Z",
+			},
+		);
+		expect(artifact.words.map((word) => word.text)).toEqual(["last", "beyond"]);
+		for (const word of artifact.words) {
+			expect(word.endMs).toBeGreaterThan(word.startMs);
+			expect(word.endMs).toBeLessThanOrEqual(4000);
+		}
+		expect(
+			parseEditTranscript(
+				serializeEditTranscript(
+					liveTranscriptToEditTranscript(artifact, "universal-3-5-pro"),
+				),
+			),
+		).not.toBeNull();
+	});
+
 	it("cuts at the handover when the chunks share no word near it", () => {
 		const first = firstChunk([
 			{ text: "alpha", start: 6800, end: 7700 },
@@ -669,6 +735,13 @@ describe("live chunks with context", () => {
 				});
 				last = decision.entries.at(-1)?.index ?? last;
 			}
+			expect(
+				parseEditTranscript(
+					serializeEditTranscript(
+						liveTranscriptToEditTranscript(artifact, "universal-3-5-pro"),
+					),
+				),
+			).not.toBeNull();
 			return artifact.words;
 		};
 

@@ -19,6 +19,7 @@ import {
 } from "@/lib/assemblyai";
 import {
 	getEditTranscriptObjectKey,
+	parseEditTranscript,
 	serializeEditTranscript,
 } from "@/lib/edit-transcript";
 import { encryptEditTranscriptObject } from "@/lib/edit-transcript-storage";
@@ -647,6 +648,17 @@ async function promoteLiveTranscript(
 			return { promoted: false, reason: eligible.reason };
 		}
 
+		const editTranscript = serializeEditTranscript(
+			liveTranscriptToEditTranscript(artifact, ASSEMBLYAI_SPEECH_MODELS[0]),
+		);
+		if (!parseEditTranscript(editTranscript)) {
+			await queueFullPassFallback(videoId, userId);
+			return {
+				promoted: false,
+				reason: "live words are not a valid transcript",
+			};
+		}
+
 		const claim = await db()
 			.update(videos)
 			.set({ transcriptionStatus: "PROCESSING" })
@@ -682,16 +694,7 @@ async function promoteLiveTranscript(
 				await bucket
 					.putObject(
 						getEditTranscriptObjectKey(video.ownerId, videoId),
-						encryptEditTranscriptObject(
-							serializeEditTranscript(
-								liveTranscriptToEditTranscript(
-									artifact,
-									ASSEMBLYAI_SPEECH_MODELS[0],
-								),
-							),
-							video.ownerId,
-							videoId,
-						),
+						encryptEditTranscriptObject(editTranscript, video.ownerId, videoId),
 						{ contentType: "application/octet-stream" },
 					)
 					.pipe(runWorkflowPromise);
