@@ -501,6 +501,14 @@ jobs:
             cargo +1.95.0 test -p gpui_windows --lib directx_atlas
           fi
 
+      # Release macOS builds load gpui's precompiled metallib instead of compiling
+      # shaders at runtime; this compiles that path so a shader patch that only
+      # builds at runtime fails here rather than in the release job.
+      - name: Check release shader build
+        if: ${{ runner.os == 'macOS' }}
+        shell: bash
+        run: cargo +1.95.0 check --manifest-path apps/desktop-gpui/Cargo.toml --locked --target ${{ matrix.settings.target }} --bin cap-gpui --no-default-features
+
   tauri-plugins:
     name: Verify Tauri plugin versions
     runs-on: blacksmith-8vcpu-ubuntu-2404

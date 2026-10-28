@@ -23,6 +23,15 @@ path = "src/main.rs"
 name = "studio-finalization-benchmark"
 path = "../../crates/recording/examples/studio-finalization-benchmark.rs"
 
+[features]
+# Debug builds compile gpui's Metal shaders at runtime, so a Mac without Xcode's
+# Metal Toolchain can build. Release macOS builds pass --no-default-features when
+# the toolchain is installed and load the precompiled metallib instead, which
+# skips ~110-210 ms of shader compilation on the first window of a cold launch
+# (scripts/build-gpui-binary.sh).
+default = ["runtime-shaders"]
+runtime-shaders = ["gpui_platform/runtime_shaders"]
+
 [dependencies]
 cap-audio = { path = "../../crates/audio" }
 cap-cli-install = { path = "../../crates/cli-install" }
@@ -36,7 +45,6 @@ gpui_platform = { git = "https://github.com/wingleeio/zed", rev = "5d1f83d9f27a1
     "wayland",
     "x11",
     "font-kit",
-    "runtime_shaders",
 ] }
 gpui_tokio = { git = "https://github.com/wingleeio/zed", rev = "5d1f83d9f27a19bec1fb241dc33b42238af9cf8d" }
 
