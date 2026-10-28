@@ -1372,6 +1372,7 @@ impl OverlayWindow {
         let native = crate::overlay_backdrop::native(window);
         let display = self.display_id.clone();
         let started = Instant::now();
+        let overlay_window = window.window_handle();
         cx.spawn(async move |this, cx| {
             let camera = cx.update(|cx| {
                 cx.global::<app_windows::AppWindows>()
@@ -1407,6 +1408,10 @@ impl OverlayWindow {
                 cx.notify();
             })
             .ok();
+            // An inactive overlay (another display's) may not present on a bare
+            // notification; see `repaint`.
+            cx.update_window(overlay_window, |_, window, _| window.refresh())
+                .ok();
         })
         .detach();
     }
