@@ -2944,11 +2944,15 @@ impl Render for MainWindow {
             ui::keyboard_nav::leave(window, cx);
         }
         self.keyboard_nav = ui::keyboard_nav::active(window, cx);
-        self.mode_info_focused = [Mode::Instant, Mode::Studio, Mode::Screenshot]
+        let mode_info_focused = [Mode::Instant, Mode::Studio, Mode::Screenshot]
             .into_iter()
             .zip(&self.mode_info_focus)
             .find(|(_, focus)| self.keyboard_nav && focus.is_focused(window))
             .map(|(mode, _)| mode);
+        if mode_info_focused.is_some() && mode_info_focused != self.mode_info_focused {
+            self.mode_info_preview = None;
+        }
+        self.mode_info_focused = mode_info_focused;
         let theme = self.theme;
         let meter_active = self.panel.is_none()
             && self.microphone.is_some()
