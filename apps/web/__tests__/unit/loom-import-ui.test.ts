@@ -293,7 +293,7 @@ describe("Loom importer component", () => {
 		);
 	});
 	it("copies an agent migration prompt for this organization", async () => {
-		const writeText = vi.fn(async () => {});
+		const writeText = vi.fn(async (_text: string) => {});
 		Object.defineProperty(navigator, "clipboard", {
 			configurable: true,
 			value: { writeText },
@@ -308,7 +308,7 @@ describe("Loom importer component", () => {
 		});
 
 		expect(writeText).toHaveBeenCalledTimes(1);
-		const prompt = writeText.mock.calls[0]?.[0] as unknown as string;
+		const prompt = writeText.mock.calls[0]?.[0] ?? "";
 		expect(prompt).toContain("Cap organization: Team");
 		expect(prompt).toContain("--organization org ");
 		expect(prompt).toContain("My Cap account: owner@team.test");
