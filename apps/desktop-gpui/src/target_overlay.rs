@@ -308,6 +308,7 @@ pub struct TargetSelect {
     /// Focus, shared by every display's overlay because the recording reads
     /// the one setting it mirrors.
     pub focus_window: bool,
+    pub focus_center: bool,
     _poll: Option<gpui::Task<()>>,
 }
 
@@ -324,9 +325,13 @@ enum Arrangement {
     PutBack(ArrangedWindow),
 }
 
+/// Focus records a window by itself, which only macOS and Windows capture.
+const FOCUS_SUPPORTED: bool = cfg!(any(target_os = "macos", windows));
+
 fn saved_focus() -> bool {
-    crate::store::GeneralSettings::load().window_capture_style
-        == crate::store::WindowCaptureStyle::FocusedWindow
+    FOCUS_SUPPORTED
+        && crate::store::GeneralSettings::load().window_capture_style
+            == crate::store::WindowCaptureStyle::FocusedWindow
 }
 
 struct TargetSelectGlobal(Entity<TargetSelect>);
@@ -344,6 +349,7 @@ impl TargetSelect {
             icons: HashMap::new(),
             arranged: HashMap::new(),
             focus_window: saved_focus(),
+            focus_center: crate::store::GeneralSettings::load().focus_center,
             _poll: None,
         });
         cx.set_global(TargetSelectGlobal(select.clone()));
@@ -369,6 +375,7 @@ impl TargetSelect {
             // them back nor recorded them.
             crate::foreign_window::put_back_all(self.take_arranged(), cx.background_executor());
             self.focus_window = saved_focus();
+            self.focus_center = crate::store::GeneralSettings::load().focus_center;
         }
         if self.mode == mode {
             cx.notify();
@@ -2224,11 +2231,12 @@ impl OverlayWindow {
     }
 
     fn render_focus_toggle(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
-        if !crate::foreign_window::can_arrange() {
+        if !FOCUS_SUPPORTED || !crate::foreign_window::can_arrange() {
             return None;
         }
         let theme = self.theme;
-        let focus = self.select.read(cx).focus_window;
+        let select = self.select.read(cx);
+        let (focus, center) = (select.focus_window, select.focus_center);
         // Instant records the camera bubble off the screen, so with a camera
         // it keeps the screen region (see `instant_capture_window`).
         let camera = cx
@@ -2241,21 +2249,19 @@ impl OverlayWindow {
         } else {
             "Enable Focus mode"
         };
-        let body = if cfg!(any(target_os = "macos", windows))
-            && self.select.read(cx).recording_mode == Mode::Instant
-            && camera
-        {
-            "Centres this window. With a camera, Instant still records the screen region so the camera stays in the video."
+        let explanation = if select.recording_mode == Mode::Instant && camera {
+            "With a camera, Instant still records the screen region so the camera stays in the video."
         } else {
-            "Centres this window and records only it. Anything that moves in front of it stays out of the video."
+            "Only what's inside this window is recorded. Other windows, even ones on top of it, and the rest of your screen stay out of the video."
         };
-        // Regular, as the controls below it are: it carries text.
         let card = self.glass_surface().id("window-focus");
-        let hint = Hint::new(title).body(body).side(crate::ui::HintSide::Below);
+        let hint = Hint::new(title)
+            .body(explanation)
+            .side(crate::ui::HintSide::Below);
         let accent = Hsla::from(theme.blue_9);
-        Some(
-            self.hinted(card, "window-focus", hint, cx)
-                .mb(px(10.))
+        let header =
+            div()
+                .id("window-focus-header")
                 .h(px(52.))
                 .pl(px(10.))
                 .pr(px(6.))
@@ -2263,11 +2269,7 @@ impl OverlayWindow {
                 .items_center()
                 .gap(px(10.))
                 .cursor_pointer()
-                .when(focus, |card| {
-                    card.border_1().border_color(accent.opacity(0.7))
-                })
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                // The whole card is the switch's label, as a macOS form row is.
+                // The whole row is the switch's label, as a macOS form row is.
                 .on_click(cx.listener(|this, _, _, cx| {
                     cx.stop_propagation();
                     let focus = this.select.read(cx).focus_window;
@@ -2296,6 +2298,8 @@ impl OverlayWindow {
                 )
                 .child(
                     div()
+                        .flex_1()
+                        .min_w_0()
                         .flex()
                         .flex_col()
                         .pr(px(14.))
@@ -2321,13 +2325,95 @@ impl OverlayWindow {
                         ),
                 )
                 .child(
-                    crate::ui::GlassSwitch::new("window-focus-toggle", focus, theme.is_dark())
+                    div().flex_shrink_0().child(
+                        crate::ui::GlassSwitch::new("window-focus-toggle", focus, theme.is_dark())
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                cx.stop_propagation();
+                                let focus = this.select.read(cx).focus_window;
+                                this.set_focus(!focus, cx);
+                            })),
+                    ),
+                );
+        let details = focus.then(|| {
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(8.))
+                .px(px(12.))
+                .pt(px(2.))
+                .pb(px(10.))
+                .child(
+                    div()
+                        .text_size(px(11.5))
+                        .line_height(px(15.))
+                        .text_color(theme.gray_11)
+                        .child(explanation),
+                )
+                .child(div().h(px(1.)).bg(Theme::with_alpha(theme.gray_12, 0.08)))
+                .child(
+                    div()
+                        .id("window-focus-center")
+                        .flex()
+                        .items_center()
+                        .gap(px(10.))
+                        .cursor_pointer()
                         .on_click(cx.listener(|this, _, _, cx| {
                             cx.stop_propagation();
-                            let focus = this.select.read(cx).focus_window;
-                            this.set_focus(!focus, cx);
-                        })),
-                ),
+                            let center = this.select.read(cx).focus_center;
+                            this.set_focus_center(!center, cx);
+                        }))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .flex()
+                                .flex_col()
+                                .child(
+                                    div()
+                                        .text_size(px(12.5))
+                                        .line_height(px(16.))
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(theme.gray_12)
+                                        .child("Center on screen"),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(11.))
+                                        .line_height(px(14.))
+                                        .text_color(theme.gray_11)
+                                        .child("Move the window to the middle when you pick it"),
+                                ),
+                        )
+                        .child(
+                            div().flex_shrink_0().child(
+                                crate::ui::GlassSwitch::new(
+                                    "window-focus-center-toggle",
+                                    center,
+                                    theme.is_dark(),
+                                )
+                                .on_click(cx.listener(
+                                    |this, _, _, cx| {
+                                        cx.stop_propagation();
+                                        let center = this.select.read(cx).focus_center;
+                                        this.set_focus_center(!center, cx);
+                                    },
+                                )),
+                            ),
+                        ),
+                )
+        });
+        Some(
+            self.hinted(card, "window-focus", hint, cx)
+                .mb(px(10.))
+                .w(px(300.))
+                .flex()
+                .flex_col()
+                .when(focus, |card| {
+                    card.border_1().border_color(accent.opacity(0.7))
+                })
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(header)
+                .children(details),
         )
     }
 
@@ -2427,8 +2513,9 @@ impl OverlayWindow {
         }
     }
 
-    /// Focus on: centre the window, bring it forward, record it by itself.
-    /// Focus off: put it back where the picker found it, record the region.
+    /// Focus on: record the window by itself, centred and brought forward
+    /// with Center on screen. Focus off: put it back where the picker found
+    /// it, record the region.
     pub(crate) fn set_focus(&mut self, focus: bool, cx: &mut Context<Self>) {
         self.select.update(cx, |select, cx| {
             select.focus_window = focus;
@@ -2451,8 +2538,12 @@ impl OverlayWindow {
             return;
         };
         if focus {
-            let centred = crate::window_arrange::centre(window, self.controls_work_area);
-            self.arrange_active_window(Arrangement::Frame(centred), true, cx);
+            if self.select.read(cx).focus_center {
+                let centred = crate::window_arrange::centre(window, self.controls_work_area);
+                self.arrange_active_window(Arrangement::Frame(centred), true, cx);
+            } else {
+                cx.notify();
+            }
         } else {
             let original = self
                 .select
@@ -2464,6 +2555,41 @@ impl OverlayWindow {
                     self.arrange_active_window(Arrangement::PutBack(original), false, cx)
                 }
                 None => cx.notify(),
+            }
+        }
+    }
+
+    /// Center on screen, under Focus: centre the picked window now (and on
+    /// every later pick), or put it back where the picker found it.
+    pub(crate) fn set_focus_center(&mut self, center: bool, cx: &mut Context<Self>) {
+        self.select.update(cx, |select, cx| {
+            select.focus_center = center;
+            cx.notify();
+        });
+        if !crate::store::set_store_setting(
+            crate::store::GENERAL_SETTINGS,
+            "focusCenter",
+            serde_json::Value::Bool(center),
+        ) {
+            tracing::warn!("could not save Focus centering");
+        }
+        if !self.select.read(cx).focus_window {
+            return;
+        }
+        let Some(window) = self.active_window_logical(cx) else {
+            return;
+        };
+        if center {
+            let centred = crate::window_arrange::centre(window, self.controls_work_area);
+            self.arrange_active_window(Arrangement::Frame(centred), true, cx);
+        } else {
+            let original = self
+                .select
+                .read(cx)
+                .active_window()
+                .and_then(|active| self.select.read(cx).arranged_original(&active.id).cloned());
+            if let Some(original) = original {
+                self.arrange_active_window(Arrangement::PutBack(original), false, cx);
             }
         }
     }
