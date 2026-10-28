@@ -2437,22 +2437,26 @@ async fn presign_put_target(
         .map_err(|error| AuthApiError::Other(format!("api/upload_signed/response: {error}")))
 }
 
-async fn upload_signed_bytes_inner(
+fn signed_upload_request(
+    client: &reqwest::Client,
     target: SignedUploadTarget,
     subpath: &str,
     bytes: Vec<u8>,
-    cancel: Option<&AtomicBool>,
-) -> Result<(), AuthApiError> {
-    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-
+) -> reqwest::RequestBuilder {
     let length = bytes.len() as u64;
-    let mut request = CLIENT
-        .get_or_init(upload_client)
+    let mut request = client
         .put(&target.url)
         .header("Content-Length", length)
-        .header("Content-Type", upload_content_type(subpath))
         .timeout(Duration::from_secs(5 * 60))
         .body(bytes);
+    // reqwest appends headers; duplicating the signed Content-Type makes RustFS reject the PUT.
+    if !target
+        .headers
+        .keys()
+        .any(|name| name.eq_ignore_ascii_case("content-type"))
+    {
+        request = request.header("Content-Type", upload_content_type(subpath));
+    }
     if is_google_drive_resumable_url(&target.url) && length > 0 {
         request = request.header(
             "Content-Range",
@@ -2462,6 +2466,18 @@ async fn upload_signed_bytes_inner(
     for (name, value) in target.headers {
         request = request.header(name, value);
     }
+    request
+}
+
+async fn upload_signed_bytes_inner(
+    target: SignedUploadTarget,
+    subpath: &str,
+    bytes: Vec<u8>,
+    cancel: Option<&AtomicBool>,
+) -> Result<(), AuthApiError> {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+    let request = signed_upload_request(CLIENT.get_or_init(upload_client), target, subpath, bytes);
     let response = optional_upload_step(cancel, || async {
         send_upload_request(request).await.map_err(|error| {
             if error.is_timeout() {
@@ -2683,6 +2699,74 @@ fn urlencoding(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn signed_upload_request_sends_one_content_type() {
+        let client = reqwest::Client::new();
+        for (subpath, supplied_name, expected) in [
+            ("segments/manifest.json", None, "application/json"),
+            ("screenshot/screen-capture.jpg", None, "image/jpeg"),
+            ("segments/video/segment_001.m4s", None, "video/mp4"),
+            (
+                "segments/manifest.json",
+                Some("Content-Type"),
+                "application/json",
+            ),
+            (
+                "screenshot/screen-capture.jpg",
+                Some("content-type"),
+                "image/jpeg",
+            ),
+            (
+                "segments/manifest.json",
+                Some("cOnTeNt-TyPe"),
+                "application/custom+json",
+            ),
+        ] {
+            let mut headers = HashMap::from([("x-amz-meta-test".into(), "preserved".into())]);
+            if let Some(name) = supplied_name {
+                headers.insert(name.into(), expected.into());
+            }
+            let request = signed_upload_request(
+                &client,
+                SignedUploadTarget {
+                    url: "http://127.0.0.1/upload".into(),
+                    headers,
+                },
+                subpath,
+                vec![1, 2, 3],
+            )
+            .build()
+            .unwrap();
+
+            assert_eq!(request.headers().get_all("content-type").iter().count(), 1);
+            assert_eq!(request.headers()["content-type"], expected);
+            assert_eq!(request.headers()["content-length"], "3");
+            assert_eq!(request.headers()["x-amz-meta-test"], "preserved");
+            assert_eq!(
+                request.body().unwrap().as_bytes(),
+                Some([1, 2, 3].as_slice())
+            );
+        }
+    }
+
+    #[test]
+    fn signed_upload_request_preserves_drive_content_range() {
+        let request = signed_upload_request(
+            &reqwest::Client::new(),
+            SignedUploadTarget {
+                url: "https://www.googleapis.com/upload/drive/v3/files?upload_id=test".into(),
+                headers: HashMap::from([("Content-Type".into(), "image/png".into())]),
+            },
+            "screenshot/screen-capture.png",
+            vec![1, 2, 3],
+        )
+        .build()
+        .unwrap();
+
+        assert_eq!(request.headers()["content-range"], "bytes 0-2/3");
+        assert_eq!(request.headers().get_all("content-type").iter().count(), 1);
+    }
 
     #[tokio::test]
     async fn presigned_transfer_errors_never_expose_secret_urls() {
