@@ -2425,8 +2425,46 @@ mod tests {
     }
 
     fn expect_gap_at_most_3(gap: Option<u8>, what: &str) {
+        expect_gap_at_most(gap, 3, what);
+    }
+
+    fn expect_gap_at_most(gap: Option<u8>, limit: u8, what: &str) {
         let gap = gap.unwrap_or_else(|| panic!("{what}: kernel unavailable"));
-        assert!(gap <= 3, "{what} gap {gap}");
+        assert!(gap <= limit, "{what} gap {gap}");
+    }
+
+    /// `ff_nv12_to_bgra_neon` repeats each chroma row for two luma rows. With
+    /// the kernel's coefficients that is 41 codes on the Smooth pattern and 42
+    /// against `SWS_POINT` at 1920x8; a vertical gradient stays at 3. Packed
+    /// 4:2:2 is not that converter, and its bilinear gap is already 3.
+    #[cfg(target_arch = "aarch64")]
+    const NEON_SMOOTH_GAP: u8 = 42;
+
+    #[cfg(target_arch = "aarch64")]
+    #[test]
+    fn preview_stays_near_the_neon_swscale_path() {
+        expect_gap_at_most(
+            nv12_gap_vs_native_swscale(64, 32, false, Nv12Pattern::Smooth),
+            NEON_SMOOTH_GAP,
+            "nv12 64x32 smooth neon",
+        );
+        expect_gap_at_most(
+            nv12_gap_vs_native_swscale(1920, 8, false, Nv12Pattern::Smooth),
+            NEON_SMOOTH_GAP,
+            "nv12 1920x8 smooth neon",
+        );
+        expect_gap_at_most_3(
+            gradient_nv12_gap_vs_native_swscale(64, 32),
+            "nv12 64x32 gradient neon",
+        );
+        expect_gap_at_most_3(
+            packed_ramp_gap_vs_native_swscale(ffmpeg::format::Pixel::YUYV422, 128, 32),
+            "yuyv 128x32 ramp neon",
+        );
+        expect_gap_at_most_3(
+            packed_ramp_gap_vs_native_swscale(ffmpeg::format::Pixel::UYVY422, 64, 32),
+            "uyvy 64x32 ramp neon",
+        );
     }
 
     #[test]
@@ -2455,6 +2493,26 @@ mod tests {
         height: u32,
         mirrored: bool,
         pattern: Nv12Pattern,
+    ) -> Option<u8> {
+        nv12_gap(width, height, mirrored, pattern, false)
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    fn nv12_gap_vs_native_swscale(
+        width: u32,
+        height: u32,
+        mirrored: bool,
+        pattern: Nv12Pattern,
+    ) -> Option<u8> {
+        nv12_gap(width, height, mirrored, pattern, true)
+    }
+
+    fn nv12_gap(
+        width: u32,
+        height: u32,
+        mirrored: bool,
+        pattern: Nv12Pattern,
+        native_swscale: bool,
     ) -> Option<u8> {
         let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::NV12, width, height);
         let y_stride = frame.stride(0);
@@ -2509,7 +2567,71 @@ mod tests {
             uv_stride,
             mirrored,
         )?;
-        Some(gap_vs_swscale(&frame, &kernel, mirrored))
+        Some(if native_swscale {
+            gap_vs_native_swscale(&frame, &kernel, mirrored)
+        } else {
+            gap_vs_swscale(&frame, &kernel, mirrored)
+        })
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    fn gradient_nv12_gap_vs_native_swscale(width: u32, height: u32) -> Option<u8> {
+        let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::NV12, width, height);
+        let y_stride = frame.stride(0);
+        let uv_stride = frame.stride(1);
+        let height = height as usize;
+        let width = width as usize;
+        for row in 0..height {
+            for col in 0..width {
+                frame.data_mut(0)[row * y_stride + col] =
+                    (16 + (row * 180 / height.max(1)) + (col % 8)) as u8;
+            }
+        }
+        for row in 0..height.div_ceil(2) {
+            for col in (0..width).step_by(2) {
+                frame.data_mut(1)[row * uv_stride + col] = (48 + row * 3).min(224) as u8;
+                frame.data_mut(1)[row * uv_stride + col + 1] =
+                    u8::try_from(208u16.saturating_sub((row * 2) as u16)).unwrap_or(0);
+            }
+        }
+        let kernel = cap_gpui_kernels::camera_bgra::nv12_to_bgra(
+            frame.data(0),
+            frame.data(1),
+            width,
+            height,
+            y_stride,
+            uv_stride,
+            false,
+        )?;
+        Some(gap_vs_native_swscale(&frame, &kernel, false))
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    fn packed_ramp_gap_vs_native_swscale(
+        pixel: ffmpeg::format::Pixel,
+        width: u32,
+        height: u32,
+    ) -> Option<u8> {
+        use cap_gpui_kernels::camera_bgra::{self, Packed422};
+
+        let mut frame = ffmpeg::frame::Video::new(pixel, width, height);
+        for (index, byte) in frame.data_mut(0).iter_mut().enumerate() {
+            *byte = 16 + ((index / 4) % 200) as u8;
+        }
+        let format = if pixel == ffmpeg::format::Pixel::UYVY422 {
+            Packed422::Uyvy
+        } else {
+            Packed422::Yuyv
+        };
+        let kernel = camera_bgra::packed422_to_bgra(
+            frame.data(0),
+            width as usize,
+            height as usize,
+            frame.stride(0),
+            format,
+            false,
+        )?;
+        Some(gap_vs_native_swscale(&frame, &kernel, false))
     }
 
     fn packed_gap_vs_swscale(
@@ -2540,21 +2662,56 @@ mod tests {
         Some(gap_vs_swscale(&frame, &kernel, mirrored))
     }
 
-    // native-deps v0.25 is FFmpeg 7.1 with `--enable-neon`. `SWS_ACCURATE_RND`
-    // only skips `ff_nv12_to_bgra_neon`; the bilinear scaler still installs
-    // NEON `hscale` and `yuv2planeX`, which are not the C reference. Clearing
-    // the detected CPU flags makes this comparison use that C path. x86 already
-    // matches plain `SWS_BILINEAR`.
+    // FFmpeg 7.1's aarch64 bilinear scaler keeps NEON `hscale` / `yuv2planeX`
+    // after `SWS_ACCURATE_RND` has skipped `ff_nv12_to_bgra_neon`. The strict
+    // check wants the C filters instead. `av_force_cpu_flags` is process-global,
+    // so the mutex keeps parallel tests from observing flags mid-flip, and `-1`
+    // turns auto-detection back on before the guard drops.
     #[cfg(target_arch = "aarch64")]
     unsafe extern "C" {
         fn av_force_cpu_flags(flags: i32);
     }
 
-    fn gap_vs_swscale(frame: &ffmpeg::frame::Video, kernel: &[u8], mirrored: bool) -> u8 {
-        #[cfg(target_arch = "aarch64")]
-        unsafe {
-            av_force_cpu_flags(0);
+    #[cfg(target_arch = "aarch64")]
+    fn swscale_cpu_guard() -> std::sync::MutexGuard<'static, ()> {
+        static CPU: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        CPU.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    struct RestoreSwscaleCpu;
+
+    #[cfg(target_arch = "aarch64")]
+    impl Drop for RestoreSwscaleCpu {
+        fn drop(&mut self) {
+            unsafe { av_force_cpu_flags(-1) }
         }
+    }
+
+    fn gap_vs_swscale(frame: &ffmpeg::frame::Video, kernel: &[u8], mirrored: bool) -> u8 {
+        gap_vs_bilinear(frame, kernel, mirrored, true)
+    }
+
+    fn gap_vs_native_swscale(frame: &ffmpeg::frame::Video, kernel: &[u8], mirrored: bool) -> u8 {
+        gap_vs_bilinear(frame, kernel, mirrored, false)
+    }
+
+    fn gap_vs_bilinear(
+        frame: &ffmpeg::frame::Video,
+        kernel: &[u8],
+        mirrored: bool,
+        c_reference: bool,
+    ) -> u8 {
+        #[cfg(target_arch = "aarch64")]
+        let _guard = swscale_cpu_guard();
+        #[cfg(target_arch = "aarch64")]
+        let _restore = c_reference.then(|| {
+            unsafe { av_force_cpu_flags(0) }
+            RestoreSwscaleCpu
+        });
+        #[cfg(not(target_arch = "aarch64"))]
+        let _ = c_reference;
         let mut scaler = ffmpeg::software::scaling::Context::get(
             frame.format(),
             frame.width(),
