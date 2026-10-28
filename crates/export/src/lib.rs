@@ -120,6 +120,7 @@ impl ExporterBuilder {
     ) -> Result<ExporterBase, ExporterBuildError> {
         type Error = ExporterBuildError;
 
+        cap_editor::release_playback_audio_caches();
         let mut project_config = self.load_project_config()?;
 
         let recording_meta =
@@ -167,6 +168,12 @@ impl ExporterBuilder {
         let output_path = self
             .output_path
             .unwrap_or_else(|| recording_meta.output_path());
+
+        if let Some(parent) = output_path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| ExporterBuildError::IO(parent.to_path_buf(), e))?;
+        }
+
         let streaming_output = prepare_streaming_output(
             &output_path,
             cancellation.is_some() && ExportAudioRenderer::eligible(&project_config, studio_meta),
@@ -183,6 +190,7 @@ impl ExporterBuilder {
             .map_err(Error::RendererSetup)?,
         );
 
+        let user_cancellation = cancellation.clone();
         let audio_cancellation = if stream_audio {
             cancellation.map(ExportAudioCancellation::new)
         } else {
@@ -235,11 +243,6 @@ impl ExporterBuilder {
             }
         }
 
-        if let Some(parent) = output_path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| ExporterBuildError::IO(parent.to_path_buf(), e))?;
-        }
-
         Ok(ExporterBase {
             output_path,
             studio_meta: studio_meta.clone(),
@@ -252,8 +255,13 @@ impl ExporterBuilder {
             streaming_audio,
             streaming_output,
             audio_cancellation,
+            user_cancellation,
             sample_windows: None,
             sample_timing: None,
+            #[cfg(feature = "test-hooks")]
+            video_encoder_failure_at: None,
+            #[cfg(feature = "test-hooks")]
+            turbo_chunk_failure: None,
         })
     }
 }
@@ -440,6 +448,17 @@ impl Mp4ExporterBase {
     pub fn uses_streaming_audio(&self) -> bool {
         self.0.streaming_audio.is_some()
     }
+
+    #[cfg(feature = "test-hooks")]
+    pub fn fail_video_encoder_at(&mut self, frames: u32) {
+        self.0.fail_video_encoder_at(frames);
+    }
+
+    /// Makes this turbo chunk's encoder fail after a few frames.
+    #[cfg(feature = "test-hooks")]
+    pub fn fail_turbo_chunk(&mut self, chunk: usize) {
+        self.0.turbo_chunk_failure = Some(chunk);
+    }
 }
 
 pub struct ExporterBase {
@@ -454,11 +473,60 @@ pub struct ExporterBase {
     streaming_audio: Option<ExportAudioRenderer>,
     streaming_output: Option<mp4::TemporaryExportOutput>,
     audio_cancellation: Option<ExportAudioCancellation>,
+    user_cancellation: Option<Arc<AtomicBool>>,
     sample_windows: Option<cap_rendering::FrameWindows>,
     sample_timing: Option<Arc<estimates::SampleTiming>>,
+    #[cfg(feature = "test-hooks")]
+    video_encoder_failure_at: Option<u32>,
+    #[cfg(feature = "test-hooks")]
+    turbo_chunk_failure: Option<usize>,
 }
 
 impl ExporterBase {
+    /// Makes the MP4 export's video encoder fail after `frames` frames the
+    /// way a hardware encoder does at runtime, once, so the software
+    /// encoder fallback runs on every machine.
+    #[cfg(feature = "test-hooks")]
+    pub fn fail_video_encoder_at(&mut self, frames: u32) {
+        self.video_encoder_failure_at = Some(frames);
+    }
+
+    /// Reopens what an MP4 export consumes (the staged output and the
+    /// streaming audio with its cancellation) so the export can start over.
+    async fn reopen_streaming(
+        &mut self,
+        user_cancellation: Option<Arc<AtomicBool>>,
+    ) -> Result<(), String> {
+        let Some(user) = user_cancellation else {
+            return Ok(());
+        };
+        let control = ExportAudioCancellation::new(user);
+        let recording = self.recording_meta.clone();
+        let studio = self.studio_meta.clone();
+        let cancellation = control.user.clone();
+        let abort = control.stop.clone();
+        let preparation = tokio::task::spawn_blocking(move || {
+            ExportAudioPreparation::open(&recording, &studio, cancellation, abort)
+        })
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())?;
+        self.streaming_audio = Some(
+            preparation
+                .finish(&self.segments)
+                .map_err(|error| error.to_string())?,
+        );
+        // The first attempt staged its output, so the restart must too: if
+        // something created the destination meanwhile, writing in place
+        // would truncate it.
+        self.streaming_output = Some(
+            prepare_streaming_output(&self.output_path, true)
+                .ok_or("Could not stage the export output to restart on the software encoder")?,
+        );
+        self.audio_cancellation = Some(control);
+        Ok(())
+    }
+
     pub fn total_frames(&self, fps: u32) -> u32 {
         let duration = cap_rendering::get_duration(
             &self.recordings,
@@ -799,6 +867,7 @@ mod clip_offset_tests {
             start_time: Some(start),
             device_id: None,
             gap_summary: None,
+            digital_silence_ms: None,
         };
         StudioRecordingMeta::MultipleSegments {
             inner: MultipleSegments {

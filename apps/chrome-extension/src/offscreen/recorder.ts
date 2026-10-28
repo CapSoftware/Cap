@@ -95,6 +95,7 @@ type ActiveRecording = {
 	recorder: MediaRecorder;
 	stopPromise: Promise<void>;
 	streams: MediaStream[];
+	microphoneTracks: MediaStreamTrack[];
 	recordingStream: MediaStream;
 	statusTimer: number | null;
 	spool: RecordingSpool;
@@ -620,10 +621,10 @@ const addAudioTracks = ({
 	const audioContext = new AudioContext();
 	const destination = audioContext.createMediaStreamDestination();
 
-	streamsWithAudio.forEach((stream, index) => {
+	streamsWithAudio.forEach((stream) => {
 		const source = audioContext.createMediaStreamSource(stream);
 		source.connect(destination);
-		if (routeFirstStreamToSpeakers && index === 0) {
+		if (routeFirstStreamToSpeakers && stream === streams[0]) {
 			source.connect(audioContext.destination);
 		}
 	});
@@ -999,6 +1000,10 @@ const startRecording = async (request: StartRecordingRequest) => {
 			recorder,
 			stopPromise: Promise.resolve(),
 			streams,
+			microphoneTracks:
+				request.mode === "camera"
+					? mainStream.getAudioTracks()
+					: (microphoneStream?.getAudioTracks() ?? []),
 			recordingStream,
 			statusTimer: null,
 			spool,
@@ -1029,11 +1034,6 @@ const startRecording = async (request: StartRecordingRequest) => {
 
 		ownedRecording = recording;
 		activeRecording = recording;
-		for (const track of mainStream.getVideoTracks()) {
-			track.addEventListener("ended", stopRecordingFromTrackEnd, {
-				once: true,
-			});
-		}
 		// A crash from here on strands the spool; persisting the recording's
 		// identity alongside it lets the startup sweep surface a retryable
 		// failed-recording entry (videoId, subpath) instead of download-only.
@@ -1113,6 +1113,18 @@ const startRecording = async (request: StartRecordingRequest) => {
 				stopRecorderAfterError(recorder);
 			}
 		};
+
+		if (videoTracks.some((track) => track.readyState === "ended")) {
+			throw new DOMException(
+				"Recording source ended before recording started",
+				"AbortError",
+			);
+		}
+		for (const track of videoTracks) {
+			track.addEventListener("ended", stopRecordingFromTrackEnd, {
+				once: true,
+			});
+		}
 
 		status = {
 			phase: "recording",
@@ -1776,12 +1788,7 @@ const handleRequest = async (
 	if (message.type === "toggle-microphone-mute") {
 		const recording = activeRecording;
 		if (recording) {
-			for (const stream of recording.streams) {
-				for (const track of stream.getAudioTracks()) {
-					track.enabled = !message.muted;
-				}
-			}
-			for (const track of recording.recordingStream.getAudioTracks()) {
+			for (const track of recording.microphoneTracks) {
 				track.enabled = !message.muted;
 			}
 		}

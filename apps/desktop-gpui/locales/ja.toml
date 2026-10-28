@@ -1,0 +1,3034 @@
+[common]
+add = "追加"
+back = "戻る"
+cancel = "キャンセル"
+choose_allow_prompt = "macOSのダイアログで「許可」を選択してください。"
+close = "閉じる"
+copied = "コピーしました"
+dismiss = "閉じる"
+go_back = "戻る"
+loading = "読み込み中..."
+no = "いいえ"
+ok = "OK"
+reset = "リセット"
+reset_to_default = "デフォルトに戻す"
+save = "保存"
+search = "検索"
+yes = "はい"
+
+[menu.app]
+about = "Capについて"
+hide = "Capを非表示"
+hide_others = "ほかを非表示"
+quit = "Capを終了"
+services = "サービス"
+settings = "設定…"
+
+[menu.about]
+licensed = "AGPL-3.0ライセンス"
+website = "ウェブサイト"
+commit = "コミット"
+
+[menu.file]
+open_prompt = "録画を開く"
+close_window = "ウインドウを閉じる"
+title = "ファイル"
+open_file = "ファイルを開く…"
+open_recent = "最近使った項目を開く"
+import_media = "メディアを読み込む…"
+
+[menu.edit]
+copy = "コピー"
+cut = "カット"
+paste = "ペースト"
+redo = "やり直す"
+select_all = "すべてを選択"
+title = "編集"
+undo = "取り消す"
+
+[menu.view]
+enter_full_screen = "フルスクリーンにする"
+title = "表示"
+
+[menu.window]
+close_window = "ウインドウを閉じる"
+minimize = "しまう"
+title = "ウインドウ"
+zoom = "拡大/縮小"
+
+[menu.help]
+title = "ヘルプ"
+feedback = "フィードバックを送る…"
+changelog = "変更履歴"
+dashboard = "ダッシュボード"
+documentation = "ドキュメント"
+faq = "FAQ"
+self_hosting = "セルフホスティング"
+help_center = "ヘルプセンター"
+system_status = "システムステータス"
+discord = "Discordコミュニティに参加"
+
+[tray]
+import_media = "メディアを読み込む..."
+no_recent_items = "最近の項目はありません"
+open_main_window = "メインウィンドウを開く"
+previous = "最近の項目"
+recording_mode = "録画モード"
+quit = "Capを終了"
+record_area = "範囲を録画"
+record_display = "ディスプレイを録画"
+record_window = "ウィンドウを録画"
+request_permissions = "権限を要求"
+screenshot_area = "範囲のスクリーンショット"
+screenshot_display = "ディスプレイのスクリーンショット"
+screenshot_window = "ウィンドウのスクリーンショット"
+select_mode = "モードを選択"
+settings = "設定"
+take_screenshot = "スクリーンショットを撮る"
+tooltip_recording = "Cap - 録画を停止"
+upload_logs = "ログをアップロード"
+version = "Cap v{version}"
+view_all_recordings = "すべての録画を表示"
+view_all_screenshots = "すべてのスクリーンショットを表示"
+
+[tray.mode]
+instant = "Instant"
+screenshot = "スクリーンショット"
+studio = "Studio"
+
+[settings.nav]
+automations = "オートメーション"
+changelog = "変更履歴"
+cli = "CLI"
+experimental = "実験的機能"
+feedback = "フィードバック"
+general = "一般"
+integrations = "連携"
+license = "プランとライセンス"
+quality = "録画品質"
+recordings = "録画"
+screenshots = "スクリーンショット"
+shortcuts = "ショートカット"
+transcription = "文字起こし"
+
+[settings.general.language]
+description = "Capの表示言語を選択します。"
+label = "アプリの言語"
+system_default = "システムのデフォルト（{language}）"
+title = "言語"
+
+[settings.general.appearance]
+dark = "ダーク"
+description = "Capの外観をシステムのテーマに合わせるか、固定の外観を選択します。"
+light = "ライト"
+system = "システム"
+title = "外観"
+
+[settings.general.app]
+description = "システム上でのCapの表示方法を選択します。"
+title = "アプリ"
+
+[settings.general.app.dock_icon]
+description = "ウィンドウが開いていないときもCapをDockに表示します。"
+label = "Dockアイコンを常に表示"
+
+[settings.general.app.notifications]
+description = "クリップボードへのコピーやファイルの保存などを通知します。システムの通知設定でCapを許可する必要がある場合があります。"
+label = "システム通知"
+
+[settings.general.recording]
+description = "録画中と録画停止後の動作。"
+title = "録画"
+
+[settings.general.recording.countdown]
+description = "録画が始まるまでの待ち時間。"
+label = "カウントダウン"
+off = "オフ"
+seconds_10 = "10秒"
+seconds_3 = "3秒"
+seconds_5 = "5秒"
+
+[settings.general.recording.confirm_without_mic]
+description = "マイクが選択されていないとき、または選択したマイクが使用できないときに確認します。"
+label = "マイクなしで録画する前に確認"
+
+[settings.general.recording.studio_sound]
+description = "マイク音声を自動でクリーンアップします。エディタで録画ごとにオフにすることもできます。"
+label = "新しい録画でStudio Soundを使用"
+
+[settings.general.recording.main_window_start]
+description = "録画が始まったときのメインウィンドウの動作。"
+label = "録画開始時のメインウィンドウ"
+
+[settings.general.recording.window_capture]
+description = "ウィンドウ録画で選んだウィンドウをどのようにキャプチャするか。「フォーカスしたウィンドウ」はそのウィンドウだけを中央に配置し、移動しても追従して録画します。「画面の範囲」はウィンドウが覆う画面の範囲を録画します。"
+label = "ウィンドウのキャプチャ方法"
+
+[settings.general.recording.post_deletion]
+description = "録画ウィンドウをもう一度開くかどうか。"
+label = "録画を削除した後"
+
+[settings.general.recording.delete_after_upload]
+description = "アップロードが完了すると、Capはローカルのファイルを削除します。"
+label = "アップロード後にInstant録画を削除"
+
+[settings.general.recording.crash_recovery]
+description = "クラッシュや電源断の後でも復元できるよう、分割して録画します。録画中はファイルが少し大きくなります。"
+label = "クラッシュから復元できる録画"
+
+[settings.general.recording.custom_cursor]
+description = "カーソルの状態を個別に記録し、エディタでサイズやスムージングを調整できるようにします。"
+label = "カーソルの個別キャプチャ（Studio）"
+
+[settings.general.recording.auto_zoom]
+description = "Studio録画で、マウスクリックの位置に自動でズームセグメントを追加します。"
+label = "クリック時に自動ズーム"
+
+[settings.general.recording.default_zoom]
+description = "新しく作成したズームセグメントと自動生成されたズームセグメントの倍率。"
+label = "デフォルトのズーム倍率"
+
+[settings.general.recording.capture_keyboard]
+description = "キー入力を記録し、エディタでキーボードオーバーレイを追加できるようにします。"
+label = "キー入力を記録"
+
+[settings.general.recording.notch_overlay]
+description = "選択した範囲にノッチ全体が含まれる場合、新しい画面録画と範囲録画でノッチを自動的に復元します。外部ディスプレイ、部分的な範囲、ウィンドウ録画には適用されません。録画ごとにエディタで変更できます。"
+label = "画面録画にMacBookのノッチを描画"
+
+[settings.general.recording.max_fps]
+description = "画面キャプチャの最大フレームレート。"
+description_high = "画面キャプチャの最大フレームレート。値を高くすると、一部のシステムでフレーム落ちやCPU使用率の上昇が起こる場合があります。"
+fps_120 = "120 FPS"
+fps_24 = "24 FPS"
+fps_25 = "25 FPS"
+fps_30 = "30 FPS"
+fps_60 = "60 FPS（推奨）"
+label = "最大キャプチャフレームレート"
+
+[settings.general.storage]
+choose_folder = "フォルダを選択"
+default_location = "デフォルト（Application Support）"
+description = "Capが録画を保存する場所。"
+title = "保存先"
+
+[settings.general.project_name]
+available_placeholders = "使用できるプレースホルダ"
+description = "新しい録画と書き出したファイルに使うテンプレート。"
+title = "デフォルトのプロジェクト名"
+
+[settings.general.project_name.placeholders]
+date_time = "日付と時刻"
+date_values = "録画の日付"
+mode_values = "\"studio\"、\"instant\"、\"screenshot\"のいずれか"
+random = "ランダム"
+random_values = "ファイル名に使える16進数10文字。1–32文字にするには{{random:N}}を使用します。"
+recording_mode = "録画モード"
+recording_mode_values = "\"Studio\"、\"Instant\"、\"Screenshot\"のいずれか"
+target = "対象"
+target_kind_values = "\"Display\"、\"Window\"、\"Area\"のいずれか"
+target_name_values = "モニター名またはウィンドウのタイトル。"
+time_values = "録画の時刻"
+
+[settings.general.excluded_windows]
+description = "録画に映さないウィンドウ。"
+empty = "現在、除外されているウィンドウはありません。"
+missing_body = "カメラ、設定、録画のウィンドウが画面録画に黒い四角形として映ることがあります。除外されていないウィンドウ：{names}。"
+missing_title = "推奨されるCapのウィンドウが除外されていません"
+restore = "元に戻す"
+title = "除外するウィンドウ"
+
+[settings.general.updates]
+description = "受け取るCapのビルドを選択します。"
+nightly_description = "最新のビルドです。録画や書き出しをしていないときにバックグラウンドで自動的に更新されます。不安定な場合があります。"
+nightly_switch_back = "Stableに戻すと最新の安定版に切り替わります。現在のビルドより古い場合があります。"
+stable_description = "バージョン付きのリリース（推奨）"
+title = "アップデート"
+
+[settings.general.updates.channel]
+description = "Capのアップデートを受け取るリリースチャンネル。"
+label = "アップデートチャンネル"
+
+[settings.general.self_host]
+confirm_change = "サーバーURLを「{origin}」に変更してもよろしいですか？もう一度サインインする必要があります。"
+description = "独自のCap Webインスタンスを運用している場合にのみ変更してください。"
+server_url = "CapサーバーURL"
+title = "セルフホスト"
+update = "更新"
+
+[settings.general.privacy]
+title = "プライバシー"
+
+[settings.general.privacy.telemetry]
+description = "Capは信頼性の向上と不具合の修正のために匿名のテレメトリを使用します。録画の内容、ウィンドウのタイトル、ファイルパス、個人情報を収集することはありません。"
+label = "匿名のテレメトリを共有"
+[settings.prompt]
+ok = "OK"
+
+[settings.sidebar]
+account = "アカウント"
+cancel_sign_in = "サインインをキャンセル"
+check_for_updates = "アップデートを確認"
+checking_for_updates = "アップデートを確認中…"
+click_to_sign_in = "クリックしてサインイン"
+downloading = "v{version}をダウンロード中…"
+downloading_progress = "v{version}をダウンロード中… {percent}%"
+installing = "v{version}をインストール中…"
+previous_versions = "以前のバージョンを表示"
+restart_to_update = "再起動してv{version}にアップデート"
+sign_in = "サインイン"
+sign_out = "サインアウト"
+signed_in = "サインイン済み"
+
+[settings.recordings]
+corrupted_body = "録画に失敗したため、このファイルはエディタで問題が起きる可能性があります。ファイルを復元できない場合は、サポートにお問い合わせください。"
+corrupted_title = "録画が破損している可能性があります"
+delete = "削除"
+description = "録画を管理し、操作を行います。"
+edit = "編集"
+empty_library = "録画が見つかりません"
+failed = "録画に失敗しました"
+import = "読み込む"
+in_progress = "録画中"
+load_more = "さらに読み込む"
+open_bundle = "録画バンドルを開く"
+open_link = "リンクを開く"
+retry_upload = "アップロードを再試行"
+show_all = "すべて表示"
+title = "録画"
+
+[settings.recordings.empty]
+all = "録画はありません"
+all_matching = "一致する録画はありません"
+instant = "Instant録画はありません"
+instant_matching = "一致するInstant録画はありません"
+studio = "Studio録画はありません"
+studio_matching = "一致するStudio録画はありません"
+
+[settings.screenshots]
+copy = "クリップボードにコピー"
+delete = "削除"
+description = "スクリーンショットを管理し、操作を行います。"
+empty = "スクリーンショットはありません"
+empty_library = "スクリーンショットが見つかりません"
+empty_matching = "一致するスクリーンショットはありません"
+import = "画像を読み込む"
+load_more = "さらに読み込む"
+open_folder = "フォルダを開く"
+save_as = "名前を付けて保存"
+title = "スクリーンショット"
+
+[settings.quality]
+save_failed = "録画設定を保存できませんでした。もう一度お試しください。"
+
+[settings.quality.studio]
+balanced = "バランス"
+balanced_description = "適度なファイルサイズで鮮明なディテール。ほとんどの録画に最適です。"
+compatibility = "小さいファイル"
+compatibility_description = "ディスク容量を節約します。細部がやわらかくなることがあり、特にカメラ映像で目立ちます。"
+description = "編集用にコンピュータへ保存されます。書き出しサイズは後でエディタで選びます。"
+recommended = "推奨"
+title = "Studio録画"
+ultra = "最大限のディテール"
+ultra_description = "本格的な編集のためにディテールを最大限残します。ディスク容量を最も多く使います。"
+
+[settings.quality.instant]
+description = "録画しながらアップロードされるため、停止した瞬間にリンクが使えます。最高画質が必要な場合はStudioモードを使ってください。画面が許す最高画質で録画し、最大4Kで書き出せます。"
+free_plan = "無料プランでは720pです。Cap Proでは最大4Kで録画できます。"
+max_resolution = "最大解像度"
+res_1080p = "実用的なアップロードサイズで文字がくっきり。"
+res_1440p = "大きな高解像度画面向けのより細かいディテール。"
+res_4k = "最も細かいディテール。高速な回線向きです。"
+res_720p = "アップロードが最も小さく、リンクが最も早く使えます。"
+title = "Instant録画"
+
+[settings.quality.sharing]
+auto_open = "共有リンクを自動で開く"
+auto_open_description = "アップロードが完了したらブラウザでリンクを開きます。"
+title = "共有"
+
+[settings.options.studio_quality]
+balanced = "バランス"
+compatibility = "互換性重視"
+ultra = "最高"
+
+[settings.options.main_window_start]
+close = "閉じる"
+minimise = "最小化"
+
+[settings.options.window_capture]
+focused_window = "フォーカスしたウィンドウ"
+screen_region = "画面の範囲"
+
+[settings.options.post_studio]
+do_nothing = "何もしない"
+open_editor = "エディタを開く"
+show_cap = "Capを表示"
+
+[settings.options.post_screenshot]
+copy = "クリップボードにコピー"
+copy_and_open_editor = "コピーしてエディタを開く"
+do_nothing = "何もしない"
+open_editor = "エディタを開く"
+
+[settings.options.post_deletion]
+do_nothing = "何もしない"
+reopen = "録画ウィンドウを再表示"
+
+[settings.options.preview_quality]
+full = "フル"
+half = "1/2"
+quarter = "1/4"
+
+[settings.shortcuts]
+blocked_while_recording = "録画が停止キーを使用している間はショートカットを変更できません。先に録画を停止してください。"
+needs_modifier_macos = "入力の邪魔にならないよう、⌘、⌃、⌥のいずれかを含めてください。"
+needs_modifier_other = "入力の邪魔にならないよう、Ctrl、Alt、Winのいずれかを含めてください。"
+record_shortcut = "ショートカットを記録"
+recording_description = "Capを開かずに録画を開始できます。"
+recording_hint = "使いたいキーを押してください。Escでキャンセル、Deleteで削除します。"
+recording_title = "録画"
+saved = "保存しました。どのアプリでも{keys}を押すと{effect}。"
+saved_moved = "保存しました。どのアプリでも{keys}を押すと{effect}。「{shortcut}」からは削除しました。"
+screenshots_description = "ショートカットはどのアプリからでも使えます。クリックすると変更できます。"
+screenshots_title = "スクリーンショット"
+type_shortcut = "ショートカットを入力…"
+unavailable = "このショートカットは別のアプリまたはシステムがすでに使用しています。クリックして別のものを選んでください。"
+unsupported_key = "このキーはショートカットに使えません。文字、数字、ファンクションキーを試してください。"
+while_recording_title = "録画中"
+
+[settings.shortcuts.after_screenshot]
+hint = "ショートカットでもCapからでも、すべてのスクリーンショットに適用"
+title = "スクリーンショットの後"
+
+[settings.shortcuts.after_studio]
+hint = "停止したとき"
+title = "Studio録画の後"
+
+[settings.shortcuts.after_instant]
+hint = "共有リンクは常にコピーされます"
+title = "Instant録画の後"
+
+[settings.shortcuts.outcome]
+instant_copy_link = "リンクのコピーのみ"
+instant_copy_link_hint = "何も開きません"
+instant_open_link = "リンクを開く"
+instant_open_link_hint = "ブラウザで"
+instant_show_cap = "Capを表示"
+instant_show_cap_hint = "レコーダーに戻る"
+saved_to_library = "ライブラリに保存"
+screenshot_copy = "コピー"
+screenshot_copy_and_edit = "コピーして編集"
+screenshot_copy_and_edit_hint = "両方を同時に"
+screenshot_copy_hint = "どこにでも貼り付け"
+screenshot_do_nothing = "何もしない"
+screenshot_open_editor = "エディタを開く"
+screenshot_open_editor_hint = "先に注釈を付ける"
+studio_do_nothing = "何もしない"
+studio_open_editor = "エディタを開く"
+studio_open_editor_hint = "すぐに編集"
+studio_show_cap = "Capを表示"
+studio_show_cap_hint = "レコーダーに戻る"
+
+[settings.shortcuts.label]
+cycle_mode = "録画モードを切り替え"
+fallback = "ショートカット"
+open_picker = "録画ピッカーを開く"
+pause = "一時停止または再開"
+record_area = "範囲を録画"
+record_display = "ディスプレイを録画"
+record_window = "ウィンドウを録画"
+restart = "録画をやり直す"
+screenshot_area = "範囲のスクリーンショット"
+screenshot_display = "ディスプレイのスクリーンショット"
+screenshot_window = "ウィンドウのスクリーンショット"
+start_instant = "Instant録画を開始"
+start_studio = "Studio録画を開始"
+stop = "録画を停止"
+
+[settings.shortcuts.effect]
+cycle_mode = "Studio、Instant、スクリーンショットの各モードを切り替えます"
+instant_copy = "選択した画面またはウィンドウをInstantモードで録画し、停止すると共有リンクをコピーします"
+instant_copy_and_open = "選択した画面またはウィンドウをInstantモードで録画し、停止すると共有リンクをコピーして開きます"
+open_picker = "Capを開いて録画する対象を選びます"
+pause = "現在の録画を一時停止または再開します"
+picker_area_instant = "範囲を選択してInstantモードで録画します"
+picker_area_screenshot = "範囲を選択してスクリーンショットを撮ります"
+picker_area_studio = "範囲を選択してStudioモードで録画します"
+picker_display_instant = "ディスプレイを選んでInstantモードで録画します"
+picker_display_screenshot = "ディスプレイを選んでスクリーンショットを撮ります"
+picker_display_studio = "ディスプレイを選んでStudioモードで録画します"
+picker_window_instant = "ウィンドウを選んでInstantモードで録画します"
+picker_window_screenshot = "ウィンドウを選んでスクリーンショットを撮ります"
+picker_window_studio = "ウィンドウを選んでStudioモードで録画します"
+restart = "現在のテイクを破棄してやり直します"
+screenshot_area_copy = "範囲を選択してクリップボードにコピーします"
+screenshot_area_copy_and_open_editor = "範囲を選択してコピーし、エディタを開きます"
+screenshot_area_open_editor = "範囲を選択してエディタで開きます"
+screenshot_area_save = "範囲を選択し、何も開かずにライブラリに保存します"
+screenshot_display_copy = "ポインタのあるディスプレイをキャプチャしてクリップボードにコピーします"
+screenshot_display_copy_and_open_editor = "ポインタのあるディスプレイをキャプチャしてコピーし、エディタを開きます"
+screenshot_display_open_editor = "ポインタのあるディスプレイをキャプチャしてエディタで開きます"
+screenshot_display_save = "ポインタのあるディスプレイをキャプチャし、何も開かずにライブラリに保存します"
+screenshot_window_copy = "ポインタの下のウィンドウをキャプチャしてクリップボードにコピーします"
+screenshot_window_copy_and_open_editor = "ポインタの下のウィンドウをキャプチャしてコピーし、エディタを開きます"
+screenshot_window_open_editor = "ポインタの下のウィンドウをキャプチャしてエディタで開きます"
+screenshot_window_save = "ポインタの下のウィンドウをキャプチャし、何も開かずにライブラリに保存します"
+stop = "現在の録画を停止します"
+studio = "選択した画面またはウィンドウをStudioモードで録画します"
+studio_open_editor = "選択した画面またはウィンドウをStudioモードで録画し、停止するとエディタを開きます"
+
+[settings.shortcuts.sentence]
+cycle_mode = "Studio、Instant、スクリーンショットの各モードを切り替えます。"
+instant_copy = "選択した画面またはウィンドウをInstantモードで録画し、停止すると共有リンクをコピーします。"
+instant_copy_and_open = "選択した画面またはウィンドウをInstantモードで録画し、停止すると共有リンクをコピーして開きます。"
+open_picker = "Capを開いて録画する対象を選びます。"
+pause = "現在の録画を一時停止または再開します。"
+picker_area_instant = "範囲を選択してInstantモードで録画します。"
+picker_area_screenshot = "範囲を選択してスクリーンショットを撮ります。"
+picker_area_studio = "範囲を選択してStudioモードで録画します。"
+picker_display_instant = "ディスプレイを選んでInstantモードで録画します。"
+picker_display_screenshot = "ディスプレイを選んでスクリーンショットを撮ります。"
+picker_display_studio = "ディスプレイを選んでStudioモードで録画します。"
+picker_window_instant = "ウィンドウを選んでInstantモードで録画します。"
+picker_window_screenshot = "ウィンドウを選んでスクリーンショットを撮ります。"
+picker_window_studio = "ウィンドウを選んでStudioモードで録画します。"
+restart = "現在のテイクを破棄してやり直します。"
+screenshot_area_copy = "範囲を選択してクリップボードにコピーします。"
+screenshot_area_copy_and_open_editor = "範囲を選択してコピーし、エディタを開きます。"
+screenshot_area_open_editor = "範囲を選択してエディタで開きます。"
+screenshot_area_save = "範囲を選択し、何も開かずにライブラリに保存します。"
+screenshot_display_copy = "ポインタのあるディスプレイをキャプチャしてクリップボードにコピーします。"
+screenshot_display_copy_and_open_editor = "ポインタのあるディスプレイをキャプチャしてコピーし、エディタを開きます。"
+screenshot_display_open_editor = "ポインタのあるディスプレイをキャプチャしてエディタで開きます。"
+screenshot_display_save = "ポインタのあるディスプレイをキャプチャし、何も開かずにライブラリに保存します。"
+screenshot_window_copy = "ポインタの下のウィンドウをキャプチャしてクリップボードにコピーします。"
+screenshot_window_copy_and_open_editor = "ポインタの下のウィンドウをキャプチャしてコピーし、エディタを開きます。"
+screenshot_window_open_editor = "ポインタの下のウィンドウをキャプチャしてエディタで開きます。"
+screenshot_window_save = "ポインタの下のウィンドウをキャプチャし、何も開かずにライブラリに保存します。"
+stop = "現在の録画を停止します。"
+studio = "選択した画面またはウィンドウをStudioモードで録画します。"
+studio_open_editor = "選択した画面またはウィンドウをStudioモードで録画し、停止するとエディタを開きます。"
+
+[settings.cli]
+command = "コマンド"
+copy = "コピー"
+description = "ターミナル、エージェント、スクリプト、ローカル自動化で使えるCapコマンドをインストールします。"
+install = "CLIをインストール"
+installed = "インストール済み"
+installing = "インストール中..."
+installs_command = "デスクトップアプリは、同梱のCLIを指すローカルの\u00A0{command}\u00A0コマンドをインストールします。"
+load_failed = "CLIの状態を読み込めませんでした：{error}"
+not_installed = "未インストール"
+path_configured = "capをPATHに追加しました。使うにはターミナルを再起動するか、今すぐ次を実行してください："
+path_missing = "新しいターミナルでcapを使うには、{path}をPATHに追加してください。"
+remove = "削除"
+removing = "削除中..."
+repair = "修復"
+repairing = "修復中..."
+retry = "再試行"
+target = "参照先"
+title = "コマンドライン"
+
+[settings.transcription]
+active_title = "有効なヒント"
+applied_note = "これらのヒントは、エディタで字幕を生成するときに適用されます。"
+clear = "クリア"
+count = { other = "{count}件" }
+description = "字幕の生成時に考慮してほしい名前、表記、ドメイン、大文字小文字の使い分けを追加します。"
+placeholder = "用語を追加"
+saved = "保存しました"
+saving = "保存中..."
+terms_description = "誤字や書式の誤りを減らすため、用語は1つずつ追加してください。"
+terms_title = "登録した用語"
+title = "文字起こし"
+
+[settings.experimental]
+developer = "開発者"
+developer_description = "開発ビルドでのみ表示されます。"
+muxer = "別プロセスのマルチプレクサ"
+muxer_description = "フラグメント化MP4のマルチプレクサを独立したサブプロセスで実行し、マルチプレクサがクラッシュしても録画が失われないようにします。同梱のcap-muxerバイナリが必要です。"
+native_app = "ネイティブアプリを使う"
+native_app_description = "オフにするとこのアプリを閉じ、開発用ハーネスで従来のTauriアプリを開き直します。録画と設定は共有されます。"
+reliability = "信頼性"
+
+[settings.experimental.switch]
+busy = "従来のアプリに切り替える前に、録画、書き出し、アップロード、読み込み、文字起こしの作業を完了してください。"
+check_failed = "従来のCapアプリが開いたかどうか確認できませんでした：{error}"
+data_stays = "録画と設定はそのまま残ります。"
+failed = "従来のCapアプリを開けませんでした。"
+not_found = "切り替え先の従来のCapアプリが見つかりませんでした。"
+open_failed = "従来のCapアプリを開けませんでした：{error}"
+opening = "従来のCapアプリを開いています"
+opening_detail = "従来のCapアプリの準備ができると、このウィンドウは閉じます。"
+save_failed = "アプリの設定を保存できませんでした。Capは開いたままです。"
+switching = "従来のCapアプリに戻しています。"
+timed_out = "従来のアプリが開きません。開発用ターミナルでビルドエラーを確認してから、もう一度お試しください。"
+
+[settings.feedback]
+app_version = "アプリのバージョン"
+capture_support = "キャプチャ対応"
+capture_supported = "画面キャプチャ：対応"
+capture_unsupported = "画面キャプチャ：非対応"
+community_description = "質問やアイデアの共有、ちょっとした雑談に。CapのDiscordコミュニティに参加しましょう。"
+community_title = "コミュニティに参加"
+debug_description = "ログをアップロードして、Capの問題の診断にご協力ください。個人情報は含まれません。"
+debug_title = "デバッグ情報"
+description = "フィードバックやバグ報告を送って、Capの改善にご協力ください。すぐに対応します。"
+join_discord = "Discordに参加"
+operating_system = "OS"
+placeholder = "Capについてのご意見をお聞かせください..."
+submit = "フィードバックを送信"
+submit_failed = "フィードバックを送信できませんでした"
+submitting = "送信中..."
+system_loading = "システム情報を読み込み中..."
+system_title = "システム情報"
+thanks = "フィードバックをありがとうございます。"
+title = "フィードバック"
+upload_interrupted = "アップロードが中断されました"
+upload_logs = "ログをアップロード"
+upload_sent = "送信しました。ありがとうございます。問題の特定に役立てます。"
+uploading = "アップロード中..."
+
+[settings.feedback.diagnostic]
+confirm_body = "Capは画面全体に点滅パターンを表示し、処理ごとに約{seconds}秒間大きなビープ音を鳴らします。ヘッドフォンを外し、音が聞こえる音量にして、終わるまでコンピュータに触れないでください。"
+confirm_title = "診断を実行しますか？"
+description = "点滅とビープ音の短いテストパターンを録画し、映像と音声のずれを測定して、ディスプレイ、カメラ、マイク、ディスク容量、録画設定の状態を記録します。送信を選ぶまで、何も送信されません。"
+mic_description = "マイクも録音し、ビープ音を正しいタイミングで拾えているか確認します。マイクに実際に聞こえるスピーカーが必要です。"
+mic_label = "マイクをテスト"
+mode_description = "テストする処理を選びます。「両方」を選ぶと、Studioモードの後にInstantモードを実行します。"
+mode_label = "録画モード"
+no_cli = "このビルドの横にCapコマンドラインツールが見つからないため、レポートには環境情報のみが含まれます。"
+no_cli_sync = "このビルドの横にCapコマンドラインツールが見つからないため、同期テストを実行できませんでした。"
+run = "診断を実行"
+run_again = "もう一度実行"
+send = "Capに送信"
+sending = "送信中..."
+show_file = "ファイルを表示"
+stop_recording_first = "診断を実行する前に、現在の録画を停止してください。"
+title = "診断レポート"
+try_again = "再試行"
+warning_body = "全画面のウィンドウが白黒に点滅し、スピーカーから1kHzのビープ音が鳴ります。Capはそれを録画し、映像と音声のずれを測定します。実行中はコンピュータに触れないでください。両方のモードで数分かかります。"
+warning_title = "テスト中は画面全体が使われ、音が鳴ります。"
+
+[settings.feedback.diagnostic.verdict]
+environment_only = "環境情報のみ"
+fail = "不合格"
+inconclusive = "判定不能"
+pass = "合格"
+warn = "警告"
+
+[settings.sign_in_required]
+body = "続けるにはサインインしてください。または、hello@cap.soにメールするか、cap.link/discordからDiscordに参加してください"
+title = "サインインが必要です"
+
+[settings.changelog]
+fetch_failed = "変更履歴を取得できませんでした"
+loading = "変更履歴を読み込み中..."
+new = "NEW"
+version = "バージョン{version} - {date}"
+
+[settings.license]
+activate = "ライセンスを有効化"
+activating = "有効化中..."
+active_title = "デスクトップライセンス"
+checking = "確認中…"
+deactivate = "ライセンスを無効化"
+description = "Capのプランとデスクトップライセンスをまとめて確認できます。"
+desktop_description = "デスクトップライセンスで商用の録画と編集ができます。Cap Proではさらにクラウド共有とコラボレーション機能が使えます。"
+desktop_name = "デスクトップライセンス"
+expires = "有効期限"
+explore_description = "現在の料金と含まれる内容をウェブサイトで比較できます。"
+explore_desktop = "デスクトップライセンス · デスクトップのレコーダーとエディタを商用利用できます。"
+explore_pro = "Cap Pro · デスクトップライセンスに加え、クラウド共有、AI機能、コラボレーション。"
+explore_title = "プランを見る"
+free_description = "個人利用ならローカルで録画と編集ができます。商用利用やより多くのクラウド機能には有料プランを選んでください。"
+have_key = "ライセンスキーをお持ちですか？"
+key = "ライセンスキー"
+no_instance = "インスタンスIDが見つかりません"
+opens_pricing = "ブラウザでcap.so/pricingを開きます。"
+placeholder = "ライセンスキー"
+plan_title = "ご利用中のプラン"
+pro_description = "お使いのアカウントには、クラウド共有、Pro機能、商用利用できるデスクトップライセンスが含まれます。"
+refresh = "プラン情報を更新"
+refresh_failed = "プラン情報を更新できませんでした。もう一度お試しください。"
+save_failed = "ライセンスを保存できませんでした"
+sign_in_hint = "すでにCap Proをお持ちですか？サイドバーからアカウントでサインインしてください。"
+title = "プランとライセンス"
+view_pricing = "プランと料金を見る ↗"
+
+[settings.integrations]
+configure = "設定"
+description = "連携を設定して、Capの機能を拡張し、外部サービスと接続します。"
+google_drive_description = "Google Driveを接続して、新しい共有リンクのアップロード先として使用します。Capは新しい動画をDrive内の非公開のCapフォルダに保存し、通常のアクセス確認を行ったうえでCap経由で配信します。"
+managed = "組織が管理しています"
+managed_by = "組織が管理しています：{organization}"
+request_timed_out = "リクエストがタイムアウトしました"
+s3_description = "独自のS3バケットを接続して、データの保存を完全に管理できます。新しい共有リンクのアップロードはすべて設定したS3バケットに自動でアップロードされ、コンテンツの所有権と管理を完全に保てます。データ主権や独自の保存ポリシーが必要な組織に最適です。"
+s3_name = "S3設定"
+title = "連携"
+upgrade = "Proにアップグレード"
+
+[settings.integrations.s3]
+access_key = "アクセスキーID"
+bucket = "バケット名"
+configuration = "設定"
+delete_failed = "S3設定を削除できませんでした"
+deleted = "S3設定を削除しました"
+endpoint = "エンドポイント"
+fetch_failed = "S3設定を取得できませんでした"
+guide = "ストレージ設定ガイド"
+guide_intro = "ストレージバケットの設定とCapへの接続は10分以内で完了します。始めるには\u00A0{guide}\u00A0をご覧ください。"
+other_provider = "その他のS3互換"
+provider = "ストレージプロバイダ"
+region = "リージョン"
+remove = "設定を削除"
+removing = "削除中..."
+save_failed = "S3設定を保存できませんでした"
+saved = "S3設定を保存しました"
+saving = "保存中..."
+secret_key = "シークレットアクセスキー"
+test = "接続をテスト"
+test_failed = "S3の接続テストに失敗しました。設定とネットワーク接続を確認してください。"
+test_ok = "S3設定のテストに成功しました。接続は正常です。"
+test_timeout = "接続テストが5秒でタイムアウトしました。エンドポイントのURLとネットワーク接続を確認してください。"
+testing = "テスト中..."
+
+[settings.integrations.gdrive]
+active = "使用中"
+active_for_uploads = "新しいアップロードに使用中"
+cached = "{time}時点のキャッシュ"
+connect = "Google Driveを接続"
+connect_failed = "Google Driveの接続を開始できませんでした"
+connected_inactive = "接続済み（未使用）"
+connection_description = "Google Driveは新しいアップロードをDrive内の非公開のCapフォルダに保存します。既存のCapホストの動画とS3の動画は、現在の保存先を使い続けます。"
+connection_title = "接続"
+disconnect = "接続を解除"
+disconnect_failed = "Google Driveの接続を解除できませんでした"
+disconnected = "Google Driveの接続を解除しました"
+drive_files = "Driveのファイル"
+finish_in_browser = "ブラウザでGoogle Driveの接続を完了してから、ここに戻って更新してください。"
+not_connected = "未接続"
+opening = "開いています..."
+refresh = "更新"
+refreshing = "更新中..."
+remaining = "残り"
+set_active_failed = "使用するストレージプロバイダを更新できませんでした"
+storage = "ストレージ"
+test = "テスト"
+test_failed = "Google Driveの接続テストに失敗しました"
+testing = "テスト中..."
+trash = "ゴミ箱"
+updated = "{time}に更新"
+use_drive = "Google Driveを使う"
+use_s3 = "S3を使う"
+used = "{usage}使用"
+used_of = "{limit}中{usage}使用"
+waiting = "待機中..."
+working = "Google Driveの接続は正常です"
+working_for = "{email}のGoogle Drive接続は正常です"
+
+[settings.automations]
+action_no_effect = "このアクションは選択したトリガーでは効果がありません。"
+add_action = "アクションを追加"
+add_condition = "条件を追加"
+auto_name_empty = "{trigger}のオートメーション"
+browse = "参照"
+check_compatibility = "互換性を確認"
+compatibility_checked = "互換性を確認しました：このオートメーションはまだCapでは実行されません。保存したルールはCap CLIで引き続き使えます。アクションは実行されていません。"
+condition_never_matches = "この条件は選択したトリガーでは一致しません。"
+copy_link = "リンクをクリップボードにコピー"
+dangerous = "Cap CLIでは、このオートメーションはあなたの権限でコマンドを実行したりネットワークリクエストを送信したりします。信頼できる値だけを使ってください。"
+delete = "削除"
+description = "ルールはCap CLIと共有されます。Capはこれらのルールを保存しますが、オートメーションはまだ実行しません。"
+empty_description = "下のテンプレートを選べばワンクリックで始められます。一から自分で作ることもできます。"
+empty_title = "オートメーションはまだありません"
+enabled = "有効"
+match_all = "すべて一致"
+match_any = "いずれか一致"
+name = "名前"
+new = "新しいオートメーション"
+no_presets = "プリセットがまだありません。先にエディタで作成してください。"
+only_if = "実行する条件"
+open_in_browser = "ブラウザで開く"
+retry_save = "保存を再試行"
+run_through_shell = "シェル経由で実行"
+save_failed = "オートメーションを保存できませんでした。変更は保存されていません。"
+start_from_scratch = "一から作成"
+summary_empty = "{trigger} → アクションはまだありません"
+templates_description = "ワンクリックで既製のオートメーションを追加できます。後から自由に調整できます。"
+templates_title = "テンプレート"
+then = "実行する内容"
+title = "オートメーション"
+when = "実行するタイミング"
+
+[settings.automations.status]
+disabled_saved = "無効 · 保存済み"
+disabled_unsaved = "無効 · 未保存"
+enabled_saved = "有効 · 保存済み"
+enabled_unsaved = "有効 · 未保存"
+
+[settings.automations.field]
+arguments = "引数（スペース区切り）"
+body = "本文"
+body_template = "本文テンプレート（任意）"
+compression = "圧縮"
+destination = "保存先フォルダ（任意、空欄 = プロジェクトフォルダ）"
+filename = "ファイル名テンプレート（任意）"
+folder = "フォルダ"
+format = "形式"
+frame_rate = "フレームレート"
+method = "メソッド"
+organization = "組織ID（任意）"
+preset = "プリセット"
+program = "プログラム"
+resolution = "解像度"
+source = "ソース"
+title = "タイトル"
+url = "URL"
+
+[settings.automations.placeholder]
+organization_id = "組織ID"
+project_folder = "プロジェクトフォルダ"
+window_title = "例：Slack"
+
+[settings.automations.clipboard]
+original = "元のキャプチャ"
+rendered = "編集済み / レンダリング済み"
+
+[settings.automations.target]
+area = "範囲"
+display = "ディスプレイ"
+window = "ウィンドウ"
+
+[settings.automations.compression]
+maximum = "最高"
+potato = "最低"
+social = "SNS"
+web = "Web"
+
+[settings.automations.trigger.screenshot_taken]
+label = "スクリーンショットを撮ったとき"
+noun = "スクリーンショット"
+phrase = "スクリーンショット撮影"
+runs = "スクリーンショットを撮るたびに実行されます。"
+
+[settings.automations.trigger.studio_finished]
+label = "Studio録画が終了したとき"
+noun = "Studio録画"
+phrase = "Studio録画の終了"
+runs = "Studio録画が終了するたびに実行されます。"
+
+[settings.automations.trigger.instant_finished]
+label = "Instant録画が終了したとき"
+noun = "Instant録画"
+phrase = "Instant録画の終了"
+runs = "Instant録画が終了するたびに実行されます。"
+
+[settings.automations.trigger.recording_started]
+label = "録画を開始したとき"
+noun = "録画開始"
+phrase = "録画の開始"
+runs = "録画を開始するたびに実行されます。"
+
+[settings.automations.trigger.upload_completed]
+label = "アップロードが完了したとき"
+noun = "アップロード"
+phrase = "アップロードの完了"
+runs = "アップロードが完了するたびに実行されます。"
+
+[settings.automations.trigger.video_imported]
+label = "動画を読み込んだとき"
+noun = "読み込み"
+phrase = "動画の読み込み"
+runs = "動画を読み込むたびに実行されます。"
+
+[settings.automations.trigger.recording_deleted]
+label = "録画を削除したとき"
+noun = "削除"
+phrase = "録画の削除"
+runs = "録画を削除するたびに実行されます。"
+
+[settings.automations.action.copy_to_clipboard]
+label = "クリップボードにコピー"
+noun = "クリップボード"
+short = "クリップボードにコピー"
+
+[settings.automations.action.save_to_location]
+label = "指定の場所に保存"
+noun = "フォルダ"
+short = "フォルダに保存"
+
+[settings.automations.action.export]
+label = "プロファイルで書き出し"
+noun = "書き出し"
+short = "書き出し"
+
+[settings.automations.action.upload]
+label = "アップロードしてリンクをコピー"
+noun = "アップロード"
+short = "アップロードしてリンクをコピー"
+
+[settings.automations.action.reveal]
+label = "ファイルマネージャで表示"
+noun = "表示"
+short = "ファイルマネージャで表示"
+
+[settings.automations.action.open_file]
+label = "ファイルを開く"
+noun = "開く"
+short = "ファイルを開く"
+
+[settings.automations.action.ocr]
+label = "文字認識（OCR）してクリップボードへ"
+noun = "テキスト"
+short = "文字をコピー（OCR）"
+
+[settings.automations.action.notify]
+label = "通知を表示"
+noun = "通知"
+short = "通知"
+
+[settings.automations.action.open_editor]
+label = "エディタを開く"
+noun = "エディタ"
+short = "エディタを開く"
+
+[settings.automations.action.skip_editor]
+label = "エディタを省略（ヘッドレス）"
+noun = "エディタ省略"
+short = "エディタを省略"
+
+[settings.automations.action.apply_preset]
+label = "エディタのプリセットを適用"
+noun = "プリセット"
+short = "プリセットを適用"
+
+[settings.automations.action.run_command]
+label = "コマンドを実行"
+noun = "コマンド"
+short = "コマンドを実行"
+
+[settings.automations.action.webhook]
+label = "Webhookを送信"
+noun = "Webhook"
+short = "Webhookを送信"
+
+[settings.automations.action.delete_local_files]
+label = "ローカルファイルを削除"
+noun = "削除"
+short = "ローカルファイルを削除"
+
+[settings.automations.condition]
+capture_target = "キャプチャ対象が次と一致"
+duration_at_least = "長さが次以上（秒）"
+duration_at_most = "長さが次以下（秒）"
+organization = "組織が次と一致"
+recording_mode = "録画モードが次と一致"
+window_title = "ウィンドウタイトルに次を含む"
+
+[settings.automations.template.copy_screenshot]
+description = "スクリーンショットを撮ったら、すぐに貼り付けられます。"
+name = "新しいスクリーンショットを自動でクリップボードにコピー"
+
+[settings.automations.template.ocr_screenshot]
+description = "Capがスクリーンショット内の文字を読み取り、コピーします。"
+name = "スクリーンショットから文字を取り出す"
+
+[settings.automations.template.save_screenshot]
+description = "新しいスクリーンショットを、選んだフォルダに直接送ります。"
+name = "スクリーンショットをフォルダにまとめる"
+
+[settings.automations.template.reveal_screenshot]
+description = "スクリーンショットを撮った瞬間にFinderで表示します。"
+name = "新しいスクリーンショットをすぐに表示"
+
+[settings.automations.template.export_studio]
+description = "Studio録画が終わった瞬間にMP4を書き出します。"
+name = "録画終了時に自動で書き出す"
+
+[settings.automations.template.upload_share]
+description = "録画を終えると、リンクがクリップボードに入っています。"
+name = "アップロードして共有リンクを取得"
+
+[settings.automations.template.notify_upload]
+body = "録画を共有できるようになりました。"
+description = "録画を共有できるようになったら、デスクトップでそっとお知らせします。"
+name = "アップロードの準備ができたら通知"
+
+[settings.automations.template.webhook_share]
+description = "共有リンクをSlack、Discord、または独自のWebhookに送ります。"
+name = "共有したらSlackに知らせる"
+
+
+[main]
+delete_recording_confirm = "この録画を削除してもよろしいですか？"
+delete_screenshot_confirm = "このスクリーンショットを削除してもよろしいですか？"
+
+[main.clean_capture]
+title = "余計なものを映さずに録画"
+
+[main.clip]
+add_to_project = "現在のプロジェクトに追加"
+record_new = "新しいクリップを録画"
+
+[main.device]
+camera = "カメラ"
+fallback_camera = "カメラ"
+heading = "カメラとマイクを選択"
+microphone = "マイク"
+no_camera = "カメラなし"
+no_cameras = "カメラが見つかりません"
+no_matching_cameras = "一致するカメラはありません"
+no_matching_microphones = "一致するマイクはありません"
+no_microphone = "マイクなし"
+no_microphones = "マイクが見つかりません"
+system_audio_off = "システム音声なし"
+system_audio_on = "システム音声を録音"
+
+[main.device.access]
+allow_access = "アクセスを許可"
+camera_denied = "Capはカメラを使用できません。システム設定でオンにしてください。"
+camera_needed = "Capがカメラを使用するには許可が必要です。"
+microphone_denied = "Capはマイクを使用できません。システム設定でオンにしてください。"
+microphone_needed = "Capがマイクを使用するには許可が必要です。"
+open_system_settings = "システム設定を開く"
+turn_on_in_settings = "設定でオンにする"
+
+[main.device.format]
+apply_failed = "デバイスのフォーマットを適用できませんでした：{error}"
+applying = "フォーマットを適用中..."
+available = "利用可能：{format}"
+camera_changed = "カメラが変更されたか、接続が切れました。フォーマット設定を開き直してください。"
+channels = { other = "{count}チャンネル" }
+current = "現在：{format}"
+default = "デフォルト"
+loading = "フォーマットを読み込み中..."
+mono = "モノラル"
+preferred = "優先するフォーマット"
+save_failed = "デバイスの優先フォーマットを保存できませんでした。もう一度お試しください。"
+stereo = "ステレオ"
+
+[main.device.pill]
+allow = "許可"
+allow_in_settings = "設定で許可"
+asking = "確認中…"
+not_connected = "未接続"
+off = "オフ"
+on = "オン"
+
+[main.error]
+camera_only_needs_camera = "カメラのみの録画にはカメラを選択する必要があります。"
+copy = "エラーをコピー"
+devices_not_ready = "録画デバイスの準備ができていません。レコーダーを開いてもう一度お試しください。"
+title = "問題が発生しました"
+
+[main.header]
+changelog = "変更履歴"
+help = "ヘルプとツアー"
+recordings = "録画"
+screenshots = "スクリーンショット"
+settings = "設定"
+teleprompter = "テレプロンプター"
+
+[main.library]
+clips = { other = "{count}クリップ" }
+copy_screenshot_failed = "スクリーンショットをコピーできませんでした"
+import_recordings = "読み込む"
+import_screenshots = "画像を読み込む"
+importing = "読み込み中"
+no_matching_recordings = "一致する録画はありません"
+no_matching_screenshots = "一致するスクリーンショットはありません"
+no_recordings = "録画はまだありません"
+no_screenshots = "スクリーンショットはまだありません"
+recordings_description = "画面録画はここに表示されます。録画を始めてみましょう！"
+screenshots_description = "スクリーンショットはここに表示されます。スクリーンショットを撮ってみましょう！"
+view_all_recordings = "すべての録画を表示"
+view_all_screenshots = "すべてのスクリーンショットを表示"
+
+[main.mic_warning]
+body = "この録画には声が入りません。マイクを選択するか、マイクなしで続けてください。"
+dont_show_again = "今後表示しない"
+record_without = "マイクなしで録画"
+save_failed = "設定を保存できませんでした。もう一度試すか、チェックを外したままにしてください。"
+title = "マイクが検出されません"
+
+[main.mode]
+info_tooltip = "録画モードについて"
+
+[main.mode.header]
+instant = "Instantモード"
+screenshot = "スクリーンショットモード"
+studio = "Studioモード"
+
+[main.mode.hover]
+instant = "Instantモード"
+instant_description = "レンダリング不要。録画しながらアップロードするので、停止した瞬間にリンクを共有できます。"
+quality_settings = "画質設定"
+screenshot = "スクリーンショットモード"
+screenshot_description = "静止画を撮影して注釈を付けます。"
+studio = "Studioモード"
+studio_description = "コンピュータに保存し、停止するとエディタが開きます。録画品質は設定で選択できます。"
+
+[main.mode.info]
+current = "使用中"
+title = "録画モード"
+
+[main.mode.name]
+instant = "Instant"
+screenshot = "スクリーンショット"
+studio = "Studio"
+
+[main.plan]
+commercial = "商用"
+personal = "個人"
+
+[main.recording]
+cancel = "録画をキャンセル"
+paused_notice = "録画を一時停止しました。再開前にCapは非表示になります。"
+resume = "再開"
+starting = "開始しています..."
+starts_in = "{remaining}秒後に録画を開始します"
+stop = "録画を停止"
+stopping = "停止しています..."
+
+[main.recovery]
+discard = "破棄"
+duration_minutes = "約{minutes}分"
+duration_minutes_seconds = "約{minutes}分{seconds}秒"
+duration_seconds = "約{seconds}秒"
+recover = "復元"
+segments = { other = "{count}セグメント" }
+segments_with_duration = { other = "{count}セグメント · {duration}" }
+title = "未完了の録画"
+
+[main.sign_in]
+message = "Instantモードは録画しながらアップロードするので、停止した瞬間に共有リンクが用意されます。"
+not_now = "今はしない"
+open_browser_again = "ブラウザをもう一度開く"
+pending_message = "ブラウザでCapへのサインインを完了してください。完了するとCapがここに戻り、レコーダーを開きます。"
+sign_in = "サインイン"
+timed_out = "サインインがタイムアウトしました。もう一度お試しください。"
+title = "Instantモードを使うにはサインインしてください"
+use_studio = "Studioを使う"
+waiting = "ブラウザを待っています"
+
+[main.storage]
+blocked = "録画用ドライブの空き容量は{available} GBしかありません。録画する前に、512 MB以上の空きを確保してください。"
+can_start = "録画用ドライブの空き容量は{available} GBしかありません。容量が足りなくなるとCapは録画を保存して自動的に停止します。"
+check_failed = "録画用ストレージを確認できませんでした：{error}"
+record_anyway = "このまま録画"
+title = "空き容量が不足しています"
+
+[main.target]
+area = "範囲"
+camera_only = "カメラのみ"
+choose_display = "ディスプレイを選択"
+choose_window = "ウィンドウを選択"
+display = "ディスプレイ"
+heading = "キャプチャするソースを選択"
+no_displays = "ディスプレイが見つかりません"
+no_matching_displays = "一致するディスプレイはありません"
+no_matching_windows = "一致するウィンドウはありません"
+no_windows = "ウィンドウが見つかりません"
+window = "ウィンドウ"
+
+[controls]
+disk_full_resume = "再開するための空き容量が足りません。空きを確保してもう一度試すか、停止を押して保存してください。"
+low_storage = "空き容量が不足しています。録画を保存するため、Capはまもなく停止します。"
+
+[controls.confirm]
+delete = "削除"
+delete_message = "録画を削除してもよろしいですか？"
+delete_title = "削除の確認"
+restart = "やり直す"
+restart_message = "録画をやり直してもよろしいですか？現在の録画は破棄されます。"
+restart_title = "やり直しの確認"
+
+[controls.pause]
+pause = "録画を一時停止"
+pausing = "録画を一時停止しています…"
+resume = "録画を再開"
+resuming = "録画を再開しています…"
+unconfirmed = "キャプチャの状態を確認できません。停止を使ってください。"
+
+[controls.stop]
+error = "エラー"
+paused = "一時停止"
+pausing = "休止中…"
+resuming = "再開中…"
+saving = "保存中…"
+starting = "開始中"
+
+[camera]
+waiting_title = "カメラへのアクセスを待っています"
+
+[camera.effects]
+blur_message = "カメラはぼかされていません。"
+blur_title = "背景ぼかしを使用できません"
+both_message = "カメラはぼかしも反転もされていません。"
+both_title = "カメラエフェクトを使用できません"
+mirror_message = "カメラのプレビューは反転されていません。"
+mirror_title = "反転を使用できません"
+
+[camera.issue]
+access_message = "クリックして、システム設定でCapにカメラの使用を許可してください。"
+access_title = "カメラへのアクセスが必要です"
+generic = "選択したカメラを起動できませんでした。別のカメラを選ぶか、このカメラを接続し直してください。"
+invalid_format = "このカメラから使用可能なキャプチャフォーマットを取得できませんでした。"
+not_found = "このカメラは使用できなくなりました。接続されていて、システムの権限で許可されているか確認してください。"
+start_failed = "システムがこのカメラを起動できませんでした。使用できないか、ほかのアプリで使用中の可能性があります。"
+timeout = "このカメラから映像が届きませんでした。閉じている、接続が切れている、覆われている、またはほかのアプリで使用中の可能性があります。"
+unavailable_title = "カメラを使用できません"
+
+[camera.blur]
+light = "弱"
+heavy = "強"
+cutout = "切り抜き"
+
+[onboarding.customize]
+footer = "これらはすべて、いつでも設定で変更できます"
+subtitle = "キーボードショートカットから保存先まで、すべてをカスタマイズ。Capはあなたの作業スタイルに合わせます。"
+title = "Capを自分仕様に"
+
+[onboarding.customize.domain]
+description = "共有リンクにcap.soではなく独自ドメインを使えます"
+title = "カスタムドメイン"
+
+[onboarding.customize.preferences]
+description = "FPS、画質、カウントダウン、カーソルエフェクトなど"
+title = "録画の設定"
+
+[onboarding.customize.s3]
+description = "S3互換のバケットを接続して、録画を完全に管理できます"
+title = "カスタムS3ストレージ"
+
+[onboarding.customize.shortcuts]
+description = "録画、スクリーンショット、モード切り替えのためのグローバルショートカット"
+title = "キーボードショートカット"
+
+[onboarding.demo]
+background = "背景"
+copied = "コピーしました！"
+copied_to_clipboard = "クリップボードにコピーしました"
+copy = "コピー"
+editor = "Capエディタ"
+export = "書き出す"
+export_complete = "書き出しが完了しました！"
+exporting = "書き出し中..."
+link_ready = "共有リンクの準備ができました！"
+save = "保存"
+start_recording = "録画を開始"
+stopped = "停止"
+style = "スタイル"
+
+[onboarding.demo.steps]
+beautify = "仕上げる"
+edit = "編集"
+record = "録画"
+select_area = "範囲を選択"
+share_link = "リンクを共有"
+stop = "停止"
+
+[onboarding.error]
+save_progress = "進行状況を保存できませんでした。もう一度お試しください。"
+save_sound = "サウンドの設定を保存できませんでした。"
+
+[onboarding.faq]
+pricing = "料金プランを見る"
+pricing_link = "料金プランを見る ↗"
+subtitle = "使い始めるために知っておきたいことをまとめました。"
+title = "よくある質問"
+
+[onboarding.faq.free]
+answer = "Capは個人利用なら無料です。チームや商用での利用については料金プランをご覧ください。"
+question = "Capは無料で使えますか？"
+
+[onboarding.faq.instant_vs_studio]
+answer = "Instantモードは録画しながらアップロードするので、停止するとすぐに共有リンクが手に入ります。Studioモードはフル画質でローカルに録画し、共有前に背景やエフェクトなどを加えて編集できます。"
+question = "InstantとStudioの違いは何ですか？"
+
+[onboarding.faq.sharing]
+answer = "Instantモードでは、録画を停止すると自動的に共有リンクが作成されます。Studioモードでは、編集した動画を書き出して、Capのクラウドで共有するかローカルに保存します。"
+question = "共有はどのように行いますか？"
+
+[onboarding.faq.shortcuts]
+answer = "いつでも「設定」→「ショートカット」から、すべてのキーボードショートカットをカスタマイズできます。"
+question = "ショートカットはあとで変更できますか？"
+
+[onboarding.faq.storage]
+answer = "録画はすべてコンピュータにローカル保存されます。Instantモードでは、簡単に共有できるようにCapのクラウドにもアップロードされます。保存先の管理は設定から行えます。"
+question = "録画はどこに保存されますか？"
+
+[onboarding.modes.instant]
+description = "録画しながらアップロードします。録画を止めればすぐに共有リンクが手に入り、待つ必要はありません。"
+feature_1 = "すぐに使える共有リンク"
+feature_2 = "バックグラウンドでアップロード"
+feature_3 = "AIによる文字起こしと要約"
+feature_4 = "ブラウザで再生"
+tagline = "数秒で録画して共有"
+title = "Instantモード"
+
+[onboarding.modes.screenshot]
+description = "ひとつのショートカットでスクリーンショットを撮影し、注釈やきれいな背景を加えて、すぐに共有またはコピーできます。"
+feature_1 = "ショートカットですぐ撮影"
+feature_2 = "注釈と描画ツール"
+feature_3 = "きれいな背景"
+feature_4 = "コピー、保存、共有"
+tagline = "撮ってすぐに美しく"
+title = "スクリーンショットモード"
+
+[onboarding.modes.studio]
+description = "フル画質でローカルに録画し、内蔵エディタで背景、余白、カーソルエフェクトなどを追加できます。"
+feature_1 = "フル画質のローカル録画"
+feature_2 = "内蔵エディタとエフェクト"
+feature_3 = "カスタム背景と余白"
+feature_4 = "準備ができたら書き出しや共有"
+tagline = "プロ仕様の編集ツール"
+title = "Studioモード"
+
+[onboarding.nav]
+back = "←  戻る"
+continue_to_cap = "Capへ進む"
+keyboard_hint = "Enter ↵ を押すか、← → キーで移動"
+next = "続ける"
+permissions_needed = "続けるには必要な権限を許可してください"
+relaunch = "Capを再起動"
+skip = "ツアーをスキップ"
+start = "Capを使い始める"
+
+[onboarding.overview]
+subtitle = "スピード重視でも、スタジオ品質でも、手早いスクリーンショットでも。Capにはそれぞれに合ったモードがあります。"
+title = "ひとつのアプリで、あらゆる作業に"
+
+[onboarding.toggle]
+subtitle = "Capのメインウィンドウから、ワンクリックでモードを切り替えられます。"
+title = "モードはいつでも切り替え可能"
+
+[onboarding.welcome]
+click_or_press = "ここをクリックするか、次のキーを押す："
+get_started = "はじめる"
+space_key = "スペース"
+tagline = "誰もが使えるオープンソースの画面共有アプリ。"
+
+[menu.update]
+badge_progress = "v{version} · {percent}%"
+badge_version = "v{version}"
+check = "アップデートを確認"
+download = "アップデートをダウンロード…"
+checking = "アップデートを確認中…"
+downloading = "アップデートをダウンロード中…"
+restart = "再起動してアップデート…"
+
+[settings.general.updates.download_policy]
+auto = "自動"
+description = "Capがアップデートを自動でダウンロードするか選択します。"
+label = "アップデートのダウンロード"
+manual = "事前に確認"
+never = "しない"
+
+[auth]
+sign_in_failed = "サインインに失敗しました"
+
+[diagnostics]
+already_running = "診断はすでに実行中です。"
+mode_both = "両方"
+
+[diagnostics.error]
+create_folder = "診断フォルダを作成できませんでした：{error}"
+exited = "セルフテストが終了しました：{status}"
+no_output = "セルフテストから出力が得られませんでした"
+serialize = "レポートをシリアライズできませんでした：{error}"
+start_failed = "{program}を起動できませんでした：{error}"
+upload_logs = "ログをアップロードできませんでした：{error}"
+upload_status = "アップロードに失敗しました。ステータス：{status}"
+wait_failed = "セルフテストの終了を待てませんでした：{error}"
+write_failed = "{path}に書き込めませんでした：{error}"
+
+[diagnostics.stage]
+analyzing = "録画を分析中..."
+analyzing_instant = "Instant録画を分析中..."
+analyzing_studio = "Studio録画を分析中..."
+cancelling = "キャンセル中..."
+collecting = "システム情報を収集中..."
+done = "同期テストを仕上げ中..."
+exporting = "録画を書き出し中..."
+exporting_instant = "Instant録画を書き出し中..."
+exporting_studio = "Studio録画を書き出し中..."
+finalizing = "録画を仕上げ中..."
+finalizing_instant = "Instant録画を仕上げ中..."
+finalizing_studio = "Studio録画を仕上げ中..."
+pattern = "テストパターンを再生中..."
+pattern_instant = "テストパターンを再生中（Instant）..."
+pattern_studio = "テストパターンを再生中（Studio）..."
+preparing = "テストを準備中..."
+preparing_instant = "Instantテストを準備中..."
+preparing_studio = "Studioテストを準備中..."
+recording = "テストを録画中..."
+recording_instant = "Instantテストを録画中..."
+recording_studio = "Studioテストを録画中..."
+starting = "診断を開始中..."
+
+[dialog]
+no_microphone_body = "この録画にはあなたの声は入りません。"
+open_recording_failed = "この録画を開けませんでした：{error}"
+
+[dialog.capture]
+approve_shortcut = "録画用のショートカットを承認するか、Capの停止トレイアイコンが表示されたらそれをクリックしてください。録画はまだ始まっていません。"
+area_unavailable = "選択した範囲が変更されたか、使用できなくなりました。もう一度選択してください。"
+camera_needs_x11 = "LinuxでInstantのカメラオーバーレイを使うにはX11デスクトップが必要です"
+camera_notice = "Capはカメラのプレビューと録画コントロールを非表示にします。選択したカメラは、個別に編集できるトラックとして録画され続けます。"
+camera_notice_instant = "Capはプレビューとコントロールを非表示にします。選択したカメラは、選んだ形とエフェクトでプレビューの位置に表示されます。プレビュー全体をキャプチャ範囲内に収めてください。Capを開くと、コントロールを表示する前にこのInstant録画が停止します。"
+camera_outside_area = "Instant録画を始める前に、カメラのプレビュー全体をキャプチャ範囲内に移動してください"
+camera_preview_closed = "Instant録画の前に、選択したカメラのプレビューを開いてください"
+cleanup_incomplete = "録画のクリーンアップが完了していません：{error}。新しい録画は開始できません。"
+devices_changed = "選択したデバイスが変更されました。新しい録画の入力を確認するため、もう一度開始してください。"
+devices_changed_before_start = "録画の開始前に選択したデバイスが変更されました。入力を確認するため、もう一度開始してください。"
+shortcut_conflict = "Ctrl+Shift+F9はCapの別の操作に割り当てられています。録画の前にそのショートカットを変更してください。"
+shortcut_description = "このCap録画を開始または停止"
+shortcut_hint = "{shortcut}を押して離すと開始します。同じショートカットで停止できます。この一時的なショートカットは設定を変更しません。"
+tray_stop_hint = "Capの停止トレイアイコンをクリックすると開始します。同じアイコンをもう一度クリックすると停止します。このコントロールを使うまで録画は始まりません。"
+window_unavailable = "選択したウィンドウは使用できなくなりました。もう一度選択してください。"
+
+[dialog.clipboard]
+copy_file = "ファイルをクリップボードにコピーできませんでした：{error}"
+copy_file_failed = "ファイルをクリップボードにコピーできませんでした"
+copy_image = "画像をクリップボードにコピーできませんでした：{error}"
+copy_image_failed = "画像をクリップボードにコピーできませんでした"
+not_a_file = "クリップボードにコピーできるのはファイルだけです"
+unavailable = "クリップボードを使用できません"
+unavailable_error = "クリップボードを使用できません：{error}"
+
+[dialog.delete_recording]
+already_deleting = "この録画はすでに削除中です。"
+close_failed = "エディタを閉じられませんでした：{error}"
+editor_changed = "削除の確認中にエディタが変更されました。録画は削除されていません。"
+editor_closed = "エディタはすでに閉じられています。録画は削除されていません。"
+failed = "録画を削除できませんでした：{error}"
+failed_title = "録画を削除できませんでした"
+finishing_body = "Capは録画のクリーンアップが終わるのを待ってから、この削除を完了します。"
+finishing_title = "削除はまだ完了していません"
+in_use = "この録画はまだ使用中です。アップロードを完了またはキャンセルしてから、もう一度お試しください：{error}"
+outside_library = "この録画は録画ライブラリの外にあります。ファイルは変更されていません。"
+recording_active = "このプロジェクトを削除する前に、録画を終了またはキャンセルしてください。"
+retained_title = "録画は残されています"
+
+[dialog.file]
+audio_filter = "音声"
+busy = "ファイルダイアログがすでに開いています。完了するかキャンセルしてから、もう一度お試しください。"
+export_filter = "書き出し"
+failed = "ファイルダイアログを完了できませんでした：{error}"
+images_filter = "画像"
+unavailable_title = "ファイルダイアログを使用できません"
+unconfirmed = "Capはファイルダイアログが閉じたことを確認できませんでした。残っているファイルダイアログを閉じ、Capを再起動してからもう一度お試しください。"
+
+[dialog.mode_select]
+instant = "リンクですぐに共有。録画しながらアップロードします。"
+screenshot = "スクリーンショットを撮ってすぐに注釈を付けられます。"
+studio = "あとで編集するための最高画質のローカル録画です。"
+subtitle = "画面のキャプチャ方法を選んでください"
+title = "録画モードを選択"
+
+[dialog.storage]
+stopped_kept = "ストレージが不足しているため録画を停止しました。録画ファイルは残されています。空き容量を確保してから、下で録画を復元してください。"
+stopped_saved = "ストレージが不足しているため録画を停止しました。録画は保存されています。"
+stopping = "ストレージが不足しています。録画を停止して保存しています…"
+
+[dialog.teleprompter]
+cue_markers = "キューマーカー"
+hidden = "このウィンドウはCapの録画に映りません"
+mirror = "テキストを反転"
+paused = "録画に合わせてスクロールを一時停止中"
+placeholder = "台本を貼り付けるか入力してください…"
+words_per_minute = "{wpm}語/分"
+
+[import]
+error_title = "読み込みエラー"
+image_failed = "画像を読み込めませんでした：{error}"
+unsupported = "サポートされていないメディアファイルです。"
+video_failed = "動画を読み込めませんでした：{error}"
+
+[import.filter]
+image = "画像ファイル"
+media = "メディアファイル"
+video = "動画ファイル"
+
+[import.progress]
+analyzing = "動画ファイルを分析中..."
+complete = "読み込みが完了しました！"
+converting = "動画を変換中... {percent}%"
+image = "画像を読み込み中..."
+metadata = "プロジェクトのメタデータを作成中..."
+starting = "変換を開始しています..."
+
+[overlay]
+display_fallback = "ディスプレイ{id}"
+countdown_title = "録画のカウントダウン"
+countdown_body = "「録画を開始」を押してから、数秒待って録画を始めます。"
+mode_title = "録画モードを変更"
+mode_body = "Instantは録画を止めた瞬間に共有リンクを作成します。Studioは編集用にフル画質で録画します。"
+
+[overlay.area]
+draw = "範囲を描く"
+free_ratio = "自由"
+hint = "クリックしてドラッグし、範囲を選択"
+minimum_size = "最小サイズは{width} x {height}です"
+too_small = "{width} x {height}は小さすぎます"
+more_ratios_title = "その他のアスペクト比"
+more_ratios_body = "範囲を4:3、9:16、21:9などの比率に固定します。"
+reset_title = "選択範囲をリセット"
+reset_body = "範囲を消去して、新しく描き直せるようにします。"
+fill_title = "ディスプレイ全体に広げる"
+fill_body = "比率を保ったまま、範囲をディスプレイ全体に広げます。"
+fit_window_hint = "またはウィンドウをクリックして、範囲をそのウィンドウに合わせます"
+drag_to_move = "ドラッグして移動"
+locked = "ロック中"
+lock_title = "範囲をロック"
+lock_body = "この範囲を次回のために保持し、誤ってドラッグしても変わらないようにします。"
+lock_needs_area = "先に範囲を描いてから、ロックしてください。"
+unlock_title = "範囲のロックを解除"
+unlock_body = "範囲を再び移動、サイズ変更、描き直しできるようにします。"
+locked_title = "範囲はロックされています"
+locked_body = "クリックしてロックを解除すると、移動、サイズ変更、描き直しができます。"
+
+[overlay.camera_only]
+description = "カメラとマイクだけで録画します"
+select_camera = "カメラを選択してください"
+
+[overlay.device]
+camera_allow = "カメラへのアクセスを許可…"
+camera_turn_on = "設定でカメラへのアクセスをオンにする…"
+microphone_allow = "マイクへのアクセスを許可…"
+microphone_turn_on = "設定でマイクへのアクセスをオンにする…"
+
+[overlay.start]
+instant = "Instantモード：共有リンクを録画"
+instant_sign_in = "Instantモード：サインインしてすぐに録画"
+sign_in = "サインインして使用"
+start_recording = "録画を開始"
+studio = "Studioモード：ローカルで録画して編集"
+take_screenshot = "スクリーンショットを撮る"
+
+[overlay.window]
+size_title = "ウィンドウサイズを変更"
+size_body = "録画の前に、ウィンドウを特定の比率や正確なサイズに変更します。"
+size_needs_accessibility_title = "サイズ変更にはアクセシビリティが必要です"
+size_needs_accessibility_body = "ほかのアプリのウィンドウサイズを変更するには、システム設定でCapのアクセシビリティをオンにしてください。"
+size_unavailable_title = "サイズ変更は使用できません"
+size_unavailable_body = "Waylandでは、アプリがほかのアプリのウィンドウサイズを変更できません。"
+focus_title = "フォーカスモード"
+focus_on = "このウィンドウだけを録画します"
+focus_off = "このウィンドウだけを録画"
+focus_enable = "フォーカスモードをオンにする"
+focus_disable = "フォーカスモードをオフにする"
+focus_body = "このウィンドウ内の内容だけを録画します。ほかのウィンドウ（手前にあるものも含む）や画面のほかの部分は動画に映りません。"
+focus_body_instant_camera = "カメラを使う場合、カメラが動画に残るよう、Instantは引き続き画面の範囲を録画します。"
+center_title = "画面の中央に配置"
+center_description = "選んだときにウィンドウを画面の中央に移動します"
+
+[permission.guide]
+accessibility_body = "上の「アクセシビリティ」のリストにドロップし、スイッチがオンになっていることを確認してください。"
+screen_body = "上の「画面収録とシステムオーディオ録音」のリストにドロップし、スイッチがオンになっていることを確認してください。"
+title = "Capをリストにドラッグ"
+
+[permission.name]
+accessibility = "アクセシビリティ"
+camera = "カメラ"
+microphone = "マイク"
+screen_recording = "画面収録"
+
+[permission.onboarding]
+open_settings_again = "システム設定をもう一度開く"
+skip = "今はスキップ"
+switch_on_title = "システム設定でCapをオンにする"
+
+[permission.onboarding.accessibility]
+allow = "アクセシビリティを許可"
+body = "アクセシビリティを許可すると、CapがこのMac上だけでクリックとカーソルを把握し、自動ズームがどこを映すべきかわかるようになります。"
+done_body = "自動ズームがクリックを追えるようになりました。"
+done_title = "アクセシビリティはオンです"
+title = "Capがカーソルを追えるようにする"
+
+[permission.onboarding.all_set]
+body = "Capに必要なものはすべてそろいました。次は、できることをざっと見てみましょう。"
+regained = "ありがとうございます。Capで再び録画できます。"
+title = "準備完了です"
+
+[permission.onboarding.camera]
+allow = "カメラを許可"
+body = "録画の隅に自分を映せます。必要なければスキップしてください。"
+done_body = "どの録画にもカメラを追加できます。"
+done_title = "カメラはオンです"
+title = "Capがあなたを映せるようにする"
+
+[permission.onboarding.checklist]
+lede = "最初にmacOSがいくつかの許可を求めます。1分ほどで終わります。"
+regained_lede = "システム設定でオフにされた項目があります。録画を続けるにはオンに戻してください。"
+regained_title = "Capの権限をもう一度オンにしてください"
+title = "Capの準備をしましょう"
+
+[permission.onboarding.hint]
+drag_into_list = "システム設定の下にあるパネルからCapをリストにドラッグしてください。すでにリストにある場合は、オンにするだけです。"
+find_in_list = "リストでCapを見つけてオンにしてください。macOSから先に確認された場合は、「システム設定を開く」を選んでください。"
+no_prompt = "確認ダイアログが表示されませんか？システム設定でCapをオンにしてください。"
+open_settings = "システム設定を開き、リストでCapを見つけてオンにしてください。"
+turned_off = "以前オフにしたため、システム設定でCapをオンにしてください。今はスキップすることもできます。"
+
+[permission.onboarding.microphone]
+allow = "マイクを許可"
+body = "録画に声を入れられます。スキップして後でオンにすることもできます。"
+done_body = "録画に声を入れられるようになりました。"
+done_title = "マイクはオンです"
+title = "Capがあなたの声を聞けるようにする"
+
+[permission.onboarding.relaunch]
+body = "Capを再起動するとmacOSが画面収録をオンにします。この画面から続けられます。"
+button = "再起動"
+hint = "オンにしたのにまだ待機中ですか？Capを再起動すると反映されます。"
+later = "macOSはCapの再起動後にこれを反映します。ここでの設定が終わってから再起動できます。"
+title = "再起動すれば準備完了です"
+
+[permission.onboarding.screen]
+allow = "画面収録を許可"
+body = "画面収録を許可すると、Capがディスプレイ、ウィンドウ、システムオーディオをキャプチャできます。"
+done_body = "Capで画面をキャプチャできるようになりました。"
+done_title = "画面収録はオンです"
+title = "Capが画面を見られるようにする"
+
+[permission.onboarding.status]
+allowed = "許可済み"
+off = "システム設定でオフ"
+optional = "任意"
+required = "必須"
+skipped = "今はスキップ"
+
+[permission.onboarding.waiting]
+prompt = "macOSの確認ダイアログで「許可」を選択"
+system_settings = "システム設定を待っています"
+
+[screenshot_editor]
+loading_preview = "プレビューを読み込み中..."
+zoom_in = "拡大"
+zoom_out = "縮小"
+
+[screenshot_editor.annotation]
+default_text = "テキスト"
+done = "完了"
+fill = "塗りつぶし"
+intensity = "強さ"
+mask_style = "スタイル"
+pixelate = "モザイク"
+stroke = "線"
+transparent = "透明"
+
+[screenshot_editor.aspect]
+auto = "自動"
+classic = "クラシック ⋅4:3"
+square = "正方形 ⋅1:1"
+tall = "縦長 ⋅3:4"
+vertical = "縦 ⋅9:16"
+wide = "ワイド ⋅16:9"
+
+[screenshot_editor.background]
+animated_gradient = "スクリーンショットではアニメーショングラデーションは静止画として描画されます。置き換えるには別の背景を選んでください。"
+blur_title = "背景のぼかし"
+choose_image = "クリックして選択するか、画像をドラッグ＆ドロップ"
+color = "カラー"
+gradient = "グラデーション"
+image = "画像"
+image_files = "画像"
+image_title = "背景画像"
+wallpaper = "壁紙"
+
+[screenshot_editor.corner]
+rounded = "角丸"
+squircle = "スクワークル"
+style = "角のスタイル"
+
+[screenshot_editor.crop]
+full = "全体"
+loading_frame = "フレームを読み込み中…"
+position = "位置"
+
+[screenshot_editor.error]
+encode = "スクリーンショットの書き出しをエンコードできませんでした：{error}"
+load_meta = "スクリーンショットのメタデータを読み込めませんでした：{error}"
+load_metadata = "スクリーンショットのメタデータを読み込めませんでした：{error}"
+no_image = "{path}にPNGが見つかりません"
+not_screenshot = "スクリーンショットのバンドルではありません"
+open_image = "画像を開けませんでした：{error}"
+renderer_failed = "GPUレンダラーを起動できませんでした：{error}"
+renderer_not_running = "スクリーンショットのレンダラーが動作していません"
+renderer_stopped = "書き出しが終わる前にレンダラーが停止しました"
+save_project = "プロジェクトの保存中にエラーが発生しました：{error}"
+serialize = "スクリーンショットの設定をシリアライズできませんでした：{error}"
+sign_in_to_share = "ブラウザでCapにサインインしてから、もう一度共有してください"
+too_large = "画像サイズが上限を超えています：{width}x{height}"
+upgrade_required = "この機能を使うにはプランのアップグレードが必要です"
+upload_task = "アップロード処理に失敗しました：{error}"
+
+[screenshot_editor.header]
+aspect_ratio = "アスペクト比"
+copy = "クリップボードにコピー"
+crop_image = "画像を切り抜く"
+more_actions = "その他の操作"
+
+[screenshot_editor.layers]
+empty = "レイヤーはまだありません"
+empty_hint = "上のツールで注釈を追加できます"
+reorder_hint = "ドラッグで並べ替え • 上 = 最前面"
+title = "レイヤー"
+
+[screenshot_editor.menu]
+delete = "削除"
+open_folder = "フォルダを開く"
+
+[screenshot_editor.share]
+create_link = "共有リンクを作成"
+preparing = "アップロードを準備中"
+rendering = "スクリーンショットを描画中"
+uploading = "スクリーンショットをアップロード中"
+
+[screenshot_editor.style]
+advanced_shadow = "影の詳細設定"
+background = "背景"
+blur = "ぼかし"
+border = "枠線"
+color = "色"
+corner_rounding = "角の丸み"
+opacity = "不透明度"
+padding = "余白"
+rounding = "角の丸み"
+shadow = "影"
+size_label = "サイズ"
+width = "幅"
+
+[screenshot_editor.toast]
+copied = "スクリーンショットをクリップボードにコピーしました！"
+link_copied = "共有リンクをクリップボードにコピーしました"
+saved = "スクリーンショットを保存しました！"
+
+[screenshot_editor.tool]
+arrow = "矢印"
+circle = "円"
+draw = "描画"
+mask = "マスク"
+rectangle = "四角形"
+select = "選択"
+text_label = "テキスト"
+
+[transcription.download]
+complete = "ダウンロード完了"
+failed = "ダウンロードに失敗しました：{error}"
+file_progress = "{file}をダウンロード中：{percent}%"
+preparing = "モデルのダウンロードを準備中"
+progress = "モデルをダウンロード中：{percent}%"
+
+[transcription.error]
+intel_mac = "ParakeetモデルはIntel搭載のMacでは使えません。代わりにWhisperモデルを使ってください"
+model_load = "字幕モデルを読み込めませんでした。もう一度ダウンロードしてください"
+model_missing = "字幕モデルが見つかりません。先にダウンロードしてください"
+no_audio = "動画ファイルに音声がありません"
+unsupported_language = "「推奨」モデルと「高精度」モデルは英語とその他24のヨーロッパ言語のみ文字起こしできます。この言語の字幕を作るには「小」または「中」モデルをダウンロードしてください"
+
+[upload.status]
+failed = "アップロードに対応が必要です"
+paused = "アップロードを一時停止中"
+prepared = "アップロードの準備完了"
+processing = "アップロードを処理中"
+retrying = "アップロードを再試行します"
+sign_in = "サインインしてアップロードを再試行"
+uploaded = "アップロード済み"
+uploading = "アップロード中"
+
+[editor.audio.library]
+add_hint = "動画に音声や音楽などのサウンドを追加"
+add_title = "音声を追加"
+change_hint = "このセグメントに別のトラックを選ぶ"
+change_title = "音声を変更"
+done = "完了"
+import = "ファイルを読み込む"
+
+[editor.color]
+apply_to_cursor = "カーソルにも適用"
+fine_tune = "色を微調整"
+title = "色補正"
+
+[editor.color.preset.cinematic]
+description = "ティールの影とオレンジのハイライトに軽い粒子"
+name = "シネマティック"
+
+[editor.color.preset.dreamy]
+description = "黒を持ち上げた柔らかく軽やかなパステル"
+name = "ドリーミー"
+
+[editor.color.preset.frost]
+description = "落ち着いた色のクールで澄んだトーン"
+name = "フロスト"
+
+[editor.color.preset.golden]
+description = "暖かいゴールデンアワーの光"
+name = "ゴールデン"
+
+[editor.color.preset.midnight]
+description = "落ち着いた色合いの暗くムーディーなティール"
+name = "ミッドナイト"
+
+[editor.color.preset.noir]
+description = "強い粒子のハイコントラストな白黒"
+name = "ノワール"
+
+[editor.color.preset.none]
+description = "元の色のまま、補正なし"
+name = "なし"
+
+[editor.color.preset.vintage]
+description = "柔らかいコントラストの色あせた暖かいフィルム調"
+name = "ヴィンテージ"
+
+[editor.color.preset.vivid]
+description = "彩度とコントラストを力強く強調"
+name = "ビビッド"
+
+[editor.color.slider]
+contrast = "コントラスト"
+exposure = "露出"
+fade = "フェード"
+grain = "粒子"
+saturation = "彩度"
+split_tone = "スプリットトーン"
+strength = "強さ"
+temperature = "色温度"
+tint = "色合い"
+vignette = "周辺減光"
+
+[editor.crop]
+aspect_ratio = "アスペクト比"
+center = "中央"
+dimensions = "サイズ"
+editing_style = "スタイル{number}のみを編集中"
+editing_style_override = "スタイル{number}のみを編集中 · 保存すると背景の上書きがオンになります"
+free = "自由"
+full = "全体"
+hint = "ドラッグで移動 · 矢印キーで微調整 · {key}を押したままでスナップを無効化"
+loading_frame = "フレームを読み込み中…"
+position = "位置"
+preview = "プレビュー"
+rendering_preview = "プレビューを描画中…"
+snap_to_ratios = "比率にスナップ"
+style_changed = "切り抜き中にこのスタイルが変更されました。キャンセルして切り抜きを開き直してください。"
+title = "切り抜き"
+
+[editor.panel]
+delete = "削除"
+done = "完了"
+duration = "長さ"
+edge_in = "イン"
+edge_out = "アウト"
+enabled = "有効"
+fade_duration = "フェードの長さ"
+flip_horizontally = "左右反転"
+flip_vertically = "上下反転"
+name = "名前"
+opacity = "不透明度"
+
+[editor.panel.audio]
+change = "変更"
+change_hint = "クリックしてトラックを変更"
+fade_in = "フェードイン"
+fade_out = "フェードアウト"
+fallback_name = "音声"
+title = "音声{number}"
+volume = "音量"
+
+[editor.panel.camera3d]
+already_still = "すでに静止ショットです"
+amount = "量"
+angles = "アングル"
+auto_scene = "自動シーン"
+auto_scene_tooltip = "トラック上のすべての3Dショットを作り直します"
+bokeh = "ボケ"
+camera = "カメラ"
+delete_tooltip = "このショットを削除"
+depth_blur = "被写界深度ぼかし"
+distance = "距離"
+drag_to_orbit = "ドラッグで回転"
+ease_in = "イーズイン"
+ease_out = "イーズアウト"
+end_same_as_start = "終了 · 開始と同じ"
+fine_tune = "微調整"
+focus = "フォーカス"
+header = "3Dショット · {look} · {duration}秒"
+hold_opening = "ショット全体で開始時のポーズを保持"
+lens = "レンズ"
+look_title = "ルック"
+motion_style = "動きのスタイル"
+moves = "動き"
+nothing_to_swap = "静止ショットでは入れ替えるものがありません"
+play_shot = "再生"
+play_shot_tooltip = "このショットを再生"
+pose_end = "終了 · {time}"
+pose_start = "開始 · {time}"
+reset_camera = "カメラをリセット"
+roll = "ロール"
+rotate_x = "回転X"
+rotate_y = "回転Y"
+shift_x = "シフトX"
+shift_y = "シフトY"
+shots = { other = "{count}ショット" }
+still_shot = "静止ショット"
+swap = "開始と終了を入れ替える"
+timing_advanced = "タイミングと詳細"
+timing_summary = "{easing} · レンズ{fov}"
+
+[editor.panel.camera3d.blur]
+angle = "角度"
+falloff = "減衰"
+focus_size = "焦点サイズ"
+focus_x = "焦点X"
+focus_y = "焦点Y"
+position = "位置"
+scan = "スキャン"
+strength = "強さ"
+
+[editor.panel.camera3d.easing]
+ease_in = "イーズイン"
+ease_out = "イーズアウト"
+linear = "リニア"
+smooth = "スムーズ"
+
+[editor.panel.camera3d.focus_mode]
+directional = "方向"
+radial = "放射"
+tilt_shift = "ティルトシフト"
+
+[editor.panel.camera3d.look]
+center = "中央"
+close_up = "クローズアップ"
+drift_down = "ゆっくり下降"
+glide_across = "横に滑る"
+low_angle = "ローアングル"
+perspective = "パース"
+pull_back = "引き"
+rising_sweep = "上昇スイープ"
+slide_by = "スライド"
+spotlight = "スポットライト"
+tilt_away = "傾けながら離れる"
+top_down = "真上から"
+unfold = "展開"
+
+[editor.panel.camera3d.sequence]
+product_tour = "製品ツアー"
+punch_in = "パンチイン"
+showcase = "ショーケース"
+
+[editor.panel.camera3d.shot]
+custom = "カスタムの動き"
+still = "静止ショット"
+
+[editor.panel.caption]
+title = "字幕{number}"
+
+[editor.panel.font]
+system_mono = "システムMono"
+system_sans = "システムSans"
+system_serif = "システムSerif"
+
+[editor.panel.font_weight]
+black = "ブラック"
+bold = "太字"
+custom = "カスタム（{weight}）"
+extra_bold = "極太"
+light = "細字"
+medium = "中字"
+regular = "標準"
+semibold = "やや太字"
+
+[editor.panel.image]
+arrange = "キャンバス上で配置"
+arrange_help = "画像をドラッグして移動します。角を引っ張るとサイズを変更でき、下の回転コントロールで回転できます。"
+center = "キャンバスの中央に配置"
+lock_aspect = "アスペクト比を固定"
+missing = "画像ファイルが見つかりません。置き換えると、タイミングと変形を保ったままこのセグメントを復元できます。"
+replace = "画像を置き換え"
+rotation = "回転"
+rounding = "角丸"
+
+[editor.panel.keyboard]
+title = "キーボード{number}"
+
+[editor.panel.mask]
+blur = "ぼかし"
+effect = "エフェクト"
+highlight = "強調"
+outside_darkness = "外側の暗さ"
+pixel_size = "ピクセルサイズ"
+pixelate = "モザイク"
+sensitive = "機密"
+title = "マスク{number}"
+
+[editor.panel.scene]
+camera_layout = "カメラのレイアウト"
+camera_position = "カメラの位置"
+camera_zoom = "カメラのズーム"
+screen_position = "画面の位置"
+screen_zoom = "画面のズーム"
+transition = "トランジション"
+
+[editor.panel.scene.description]
+camera_only = "カメラの映像のみを表示"
+default = "画面とカメラの両方を表示"
+floating = "画面とカメラが角丸のカードとして背景の上に並んで浮かびます"
+hide_camera = "画面の録画のみを表示"
+split_screen = "画面とカメラを横に並べて表示（縦向きでは自動で縦に並びます）"
+
+[editor.panel.scene.mode]
+camera_only = "カメラのみ"
+default = "デフォルト"
+floating = "フローティング"
+hide_camera = "カメラを非表示"
+split_screen = "分割画面"
+
+[editor.panel.style]
+camera_only_background = "カメラのみの背景"
+camera_only_help = "カメラのみのシーンを使ってください。余白を付けるとカメラの周りに背景が見えます。"
+camera_only_padding = "カメラのみの余白"
+crop_height = "高さ"
+crop_left = "左"
+crop_title = "画面の切り抜き（元のピクセル）"
+crop_top = "上"
+crop_width = "幅"
+edit_background = "背景とフレームを編集"
+edit_camera = "カメラを編集"
+edit_cursor = "カーソルを編集"
+help = "上書きはこのセグメントの間だけ適用されます。グループをオンにすると全体設定がコピーされます。"
+reset_crop = "切り抜きをリセット"
+
+[editor.panel.text_animation]
+bounce = "バウンス"
+fade = "フェード"
+letters = "文字ごと"
+none = "なし"
+pop = "ポップ"
+slide_down = "下へスライド"
+slide_left = "左へスライド"
+slide_right = "右へスライド"
+slide_up = "上へスライド"
+tracking = "字間"
+typewriter = "タイプライター"
+wipe = "ワイプ"
+words = "単語ごと"
+zoom = "ズーム"
+
+[editor.panel.text_background]
+box_shape = "ボックス"
+highlight = "ハイライト"
+none = "なし"
+pill = "ピル"
+
+[editor.panel.text_layout]
+fullscreen = "全画面"
+overlay = "オーバーレイ"
+
+[editor.panel.text_preset.group]
+all = "すべて"
+callouts = "コールアウト"
+code = "コード"
+lower_thirds = "テロップ"
+statements = "ステートメント"
+titles = "タイトル"
+
+[editor.panel.text_preset.name]
+caption = "キャプション"
+cinematic = "シネマティック"
+code = "コード"
+gradient = "グラデーション"
+headline = "見出し"
+highlight = "ハイライト"
+kicker = "キッカー"
+label = "ラベル"
+lower_third = "テロップ"
+name_tag = "名札"
+neon = "ネオン"
+quote = "引用"
+stat = "大きな数字"
+sticker = "ステッカー"
+title = "タイトル"
+typewriter = "タイプライター"
+
+[editor.panel.text_preset.sample]
+caption = "Capで録画"
+cinematic = "第一章"
+gradient = "美しいテキスト"
+headline = "もっと速くリリース"
+highlight = "大事なところ"
+kicker = "新機能"
+label = "プロのヒント"
+name_tag = "Richie · 創業者"
+neon = "グローアップ"
+quote = "「軽やかに感じさせて」"
+sticker = "ドーン！"
+title = "Capのご紹介"
+typewriter = "タイプ中…"
+
+[editor.panel.text_segment]
+animation = "アニメーション"
+background = "背景"
+color = "色"
+font = "フォント"
+font_size = "サイズ"
+fullscreen_help = "テキストの表示中は動画を一時停止し、その後止めた位置から再開します。"
+glow = "グロー"
+gradient = "グラデーション"
+layout = "レイアウト"
+letter_spacing = "字間"
+line_height = "行の高さ"
+look = "見た目"
+outline = "アウトライン"
+screen_transition = "画面の切り替え"
+shadow = "影"
+style = "スタイル"
+title = "テキスト{number}"
+
+[editor.panel.timing]
+end = "終了"
+start = "開始"
+title = "タイミング"
+to = "〜"
+
+[editor.panel.zoom]
+amount = "ズーム量"
+auto = "自動"
+auto_help = "自動ズームは画面上のカーソルを追いかけます。"
+auto_locked = "自動モードにはカーソルのキャプチャが必要です。「設定 → 一般」で「カーソルの個別キャプチャ（Studio）」をオンにしてください。"
+how_it_works = "仕組み"
+manual = "手動"
+manual_help = "手動ズームは下で選んだ位置に固定されます。"
+mixed = "混在"
+mode = "ズームモード"
+positions_mixed = "セグメントごとにズーム位置が異なります。ドラッグするとすべて同じ位置に移動します。"
+title = "ズーム{number}"
+
+[editor.sidebar]
+desktop_import_failed = "デスクトップの壁紙を読み込めませんでした"
+importing_image = "画像を読み込み中…"
+
+[editor.sidebar.animated_gradient]
+add_colour = "色を追加"
+colours = "色"
+delete = "削除"
+delete_failed = "このグラデーションを削除できませんでした。もう一度お試しください。"
+fine_tune = "微調整"
+limit_reached = { other = "保存できるグラデーションは{count}個までです。追加するには1つ削除してください。" }
+motion = "動き"
+name_placeholder = "このグラデーションの名前"
+name_required = "このグラデーションの名前を入力してください。"
+presets = "プリセット"
+randomize = "ランダム"
+remember_failed = "アニメーショングラデーションの設定を保存できませんでした。"
+remove_colour = "色を削除"
+reset_tooltip = "微調整をリセット"
+save_failed = "このグラデーションを保存できませんでした。もう一度お試しください。"
+save_tooltip = "現在のグラデーションを保存"
+saved = "保存済み"
+still = "静止"
+
+[editor.sidebar.animated_gradient.control]
+contrast = "コントラスト"
+curvature = "曲率"
+detail = "ディテール"
+direction = "方向"
+exposure = "露出"
+flow_scale = "流れの大きさ"
+flow_strength = "流れの強さ"
+grain_amount = "粒子の量"
+grain_size = "粒子の大きさ"
+highlights = "ハイライト"
+motion_speed = "動きの速さ"
+relief = "起伏"
+ripple_size = "波紋の大きさ"
+shading = "陰影"
+vibrance = "自然な彩度"
+
+[editor.sidebar.animated_gradient.group]
+animation = "アニメーション"
+colour = "色"
+flow = "流れ"
+lighting = "ライティング"
+texture = "テクスチャ"
+
+[editor.sidebar.background]
+title = "背景"
+
+[editor.sidebar.border]
+color = "枠線の色"
+opacity = "枠線の不透明度"
+title = "枠線"
+width = "枠線の太さ"
+
+[editor.sidebar.corner]
+rounded = "角丸"
+squircle = "スクワークル"
+title = "角のスタイル"
+
+[editor.sidebar.cursor]
+circle = "円"
+click_ripple = "クリックの波紋"
+color = "色"
+default = "デフォルト"
+description_circle = "すべてのカーソルを円に置き換えます。"
+description_default = "録画時のカーソルの形と見た目をそのまま使います。"
+description_macos = "従来のmacOSの見た目です。カスタムカーソルは録画時の形のままです。"
+description_tahoe = "macOS Tahoeの見た目です。カスタムカーソルは録画時の形のままです。"
+description_windows = "Windowsの見た目です。カスタムカーソルは録画時の形のままです。"
+duration = "長さ"
+recorded = "録画したカーソル"
+recorded_tooltip = "このカーソルで録画されました"
+ripple_size = "サイズ"
+strength = "強さ"
+
+[editor.sidebar.desktop]
+import = "デスクトップの背景を読み込む"
+importing = "読み込み中..."
+prompt = "デスクトップの壁紙を使う"
+reimport = "再読み込み"
+
+[editor.sidebar.gradient]
+angle = "角度"
+from = "開始"
+grain_scale = "粒子の大きさ"
+noise = "ノイズ"
+to = "終了"
+
+[editor.sidebar.image]
+prompt = "クリックして選択するか、画像をドラッグ＆ドロップ"
+
+[editor.sidebar.layout]
+background_blur = "背景のぼかし"
+custom_position = "カスタムの画面位置（キャンバスでドラッグ）"
+motion_blur = "モーションブラー"
+padding = "余白"
+rounded_corners = "角丸"
+title = "レイアウト"
+
+[editor.sidebar.notch]
+description = "録画の上にMacBookのノッチを描きます。ノッチのあるMacで録画した場合はその寸法を使います。それ以外の場合は下のサイズから始めて、合うように調整してください。"
+height = "ノッチの高さ"
+position = "ノッチの位置"
+title = "MacBookのノッチ"
+width = "ノッチの幅"
+
+[editor.sidebar.shadow]
+advanced = "影の詳細設定"
+blur = "ぼかし"
+opacity = "不透明度"
+shadow_size = "サイズ"
+title = "影"
+
+[editor.sidebar.source]
+animated = "アニメ"
+color = "色"
+desktop = "デスクトップ"
+gradient = "グラデ"
+image = "画像"
+none = "なし"
+wallpaper = "壁紙"
+
+[editor.sidebar.style_group]
+back = "スタイルに戻る"
+background = "背景とフレーム"
+camera = "カメラ"
+cursor = "カーソル"
+editing_note = "このセグメントのみを編集しています。全体設定は変わりません。"
+title = "スタイル{number} · {group}"
+
+[editor.sidebar.tab]
+audio = "音声"
+background = "背景"
+camera = "カメラ"
+captions = "字幕"
+cursor = "カーソル"
+keyboard = "キーボード"
+
+[editor.sidebar.wallpaper_theme]
+blue = "ブルー"
+cities = "都市"
+dark = "ダーク"
+orange = "オレンジ"
+purple = "パープル"
+
+[editor.canvas]
+camera = "カメラ"
+camera_follows_zoom = "カメラのサイズはズームに合わせて変わります。ドラッグで移動できます"
+edit_zoom = "ズームを編集"
+image = "画像"
+mask = "マスク"
+screen = "画面"
+screen_locked = "ズームが有効な間は画面が固定されます"
+text_item = "テキスト"
+
+[editor.clips]
+append_error = "クリップを追加できませんでした：{message}"
+append_error_title = "録画エラー"
+back = "エディタに戻る"
+cap_filter = "Cap録画"
+clip = "クリップ{number}"
+empty_description = "クリップを録画するか読み込むと、ここに表示されます。"
+empty_title = "クリップはまだありません"
+import = "読み込む"
+import_error = "クリップを読み込めませんでした：{message}"
+import_error_title = "読み込みエラー"
+import_existing = "既存の録画"
+import_mp4 = "MP4動画…"
+importing = "読み込み中…"
+mp4_filter = "MP4動画"
+prepare_controls_failed = "録画コントロールを準備できませんでした：{error}"
+record_new = "新しいクリップを録画"
+save_before_recording_failed = "録画前に現在のプロジェクトを保存できませんでした：{error}"
+split = "分割{number}"
+title = "クリップ"
+
+[editor.clips.error]
+cancelled = "読み込みをキャンセルしました"
+cannot_decode = "動画{path}をデコードできません：{error}"
+in_use = "この録画の使用中は読み込めません：{error}"
+instant_source = "Instant録画はまだプロジェクトに読み込めません"
+instant_target = "Instantモードの録画は編集できません"
+into_itself = "録画をそれ自体に読み込むことはできません"
+missing_video = "動画ファイルがありません：{path}"
+no_duration = "読み込んだ動画に有効な長さがありません"
+not_a_project = "Capのプロジェクトフォルダを選択してください"
+source_empty = "読み込み元のCapプロジェクトに録画セグメントがありません"
+source_failed = "読み込み元のCapプロジェクトでエラーが発生しました：{error}"
+source_recording = "読み込み元のCapプロジェクトはまだ録画中です"
+source_unimportable = "読み込み元のCapプロジェクトに読み込める録画セグメントがありません"
+unfinished_target = "クリップを読み込む前に、この録画を完了するか復元してください"
+unsupported_video = "対応していない動画ファイルです：{path}"
+
+[editor.export]
+back = "エディタに戻る"
+existing_link_description = "再アップロードすると、このリンクの動画が最新の編集内容に置き換わります。リンクを知っている全員に更新版が表示されます。"
+existing_link_title = "既存のリンクを更新"
+failed = "書き出しに失敗しました"
+fps = "{fps} FPS"
+frames = { other = "{rendered} / {count}フレーム" }
+generating_preview = "プレビューを生成中…"
+link_unavailable_cursor = "カーソルのみの書き出しは、ファイルかクリップボードにのみ保存できます。"
+link_unavailable_transparent = "透過の書き出しは、ファイルかクリップボードにのみ保存できます。"
+organization = "組織"
+preview = "プレビュー"
+preview_info = "動画からレンダリングしたフレームです。設定を調整すると、最終的な書き出しの品質を確認できます。"
+preview_unavailable = "プレビューを表示できません"
+reupload = "再アップロード"
+reupload_tooltip = "最新の編集内容を同じリンクにアップロード"
+reupload_transparent = "共有リンクには透過のない背景が必要です"
+sign_in_required = "録画を共有するにはサインインが必要です"
+task_failed = "書き出し処理に失敗しました"
+title = "書き出し"
+upgrade_message = "この機能を使うにはプランのアップグレードが必要です"
+upgrade_title = "アップグレードが必要です"
+upload_failed = "録画をアップロードできませんでした"
+
+[editor.export.advanced]
+bits_per_pixel = "ピクセルあたりのビット数"
+cursor_only = "カーソルのみを書き出す"
+cursor_only_description = "カーソルの動きとクリックはそのままに、透過背景で書き出します"
+custom_bitrate = "カスタムビットレートを使用中"
+force_ffmpeg = "FFmpegデコーダを強制"
+force_ffmpeg_description = "ハードウェアデコーダを使わない（自動フォールバック有効）"
+title = "詳細設定"
+transparent_mov = "透過MOVとして書き出します。ファイルサイズは大きくなりますが、合成や編集に最適です。"
+
+[editor.export.cta]
+cancel_sign_in = "サインインをキャンセル"
+clipboard = "クリップボードに書き出す"
+create_link = "共有リンクを作成"
+file = "ファイルに書き出す"
+reupload = "同じリンクに再アップロード"
+sign_in = "サインインして共有"
+
+[editor.export.destination]
+clipboard = "クリップボード"
+file = "ファイル"
+link = "共有リンク"
+
+[editor.export.done]
+copy_link = "リンクをコピー"
+instant_hint = "停止した瞬間にリンクが欲しい場合は、次の録画でInstantモードを使ってください。"
+link_copied = "リンクをコピーしました"
+open_file = "ファイルを開く"
+open_link = "リンクを開く"
+retry_copy = "コピーを再試行"
+reuploaded = "最新の編集内容が同じリンクで利用できます"
+uploaded = "録画のアップロードが完了しました"
+
+[editor.export.estimate]
+gigabytes = "約{value} GB"
+gigabytes_range = "約{lower}～{upper} GB"
+hours = "約{value}時間"
+hours_range = "約{lower}～{upper}時間"
+megabytes = "約{value} MB"
+megabytes_range = "約{lower}～{upper} MB"
+minutes = "約{value}分"
+minutes_range = "約{lower}～{upper}分"
+seconds = "約{value}秒"
+seconds_range = "約{lower}～{upper}秒"
+under_megabyte = "1 MB未満"
+under_second = "1秒未満"
+
+[editor.export.optimize]
+description = "ソフトウェアで再エンコードし、ファイルを大幅に小さくします（低速）"
+title = "ファイルサイズを最適化"
+
+[editor.export.phase]
+clipboard_failed = "書き出しは完了しましたが、クリップボードへのコピーに失敗しました"
+complete = "書き出しが完了しました"
+copied = "クリップボードにコピーしました"
+copying_to_clipboard = "クリップボードにコピー中"
+rendering_cursor = "カーソルトラックをレンダリング中"
+rendering_gif = "GIFをレンダリング中"
+rendering_video = "動画をレンダリング中"
+reupload_complete = "再アップロードが完了しました"
+reuploading = "リンクに再アップロード中"
+saving_to_file = "ファイルに保存中"
+starting = "書き出しを準備中"
+upload_complete = "アップロードが完了しました"
+uploading = "共有リンクを作成中"
+
+[editor.export.quality]
+larger = "大きいファイル"
+maximum = "最高"
+potato = "最低"
+smaller = "小さいファイル"
+social = "SNS"
+web = "Web"
+
+[editor.export.resources]
+proceed = "このまま続行"
+title = "書き出しのリソースを確認"
+
+[editor.export.section]
+destination = "書き出し先"
+format = "形式"
+frame_rate = "フレームレート"
+quality = "品質"
+resolution = "解像度"
+
+[editor.export.stats]
+calculating = "計算中…"
+duration = "長さ"
+estimated_size = "推定サイズ"
+export_time = "書き出し時間"
+output = "出力"
+output_value = "{width}×{height} · {fps} fps"
+refining_size = "サイズを精査中…"
+refining_time = "時間を精査中…"
+unavailable = "利用不可"
+
+[editor.export.turbo]
+title = "ターボ書き出し"
+description = "すべてのCPUコアとGPUを使って、はるかに高速に書き出します"
+warning = "書き出しが終わるまで、CPUとGPUをすべて使い、メモリも数倍多く消費します。ほかのアプリの動作が遅くなったり、コンピュータが熱くなってファンの音が大きくなったりすることがあります。"
+
+[editor.modal]
+cancel_export = "書き出しをキャンセル"
+cancel_export_message = "書き出しをキャンセルしてもよろしいですか？"
+cancel_export_title = "書き出しをキャンセルしますか？"
+keep_exporting = "書き出しを続ける"
+recording_retained = "録画を保持しました"
+
+[editor.tabs.audio]
+isolation_balanced = "バランス"
+isolation_balanced_description = "自然な声の質感を保ちながら、よりはっきり分離します。"
+isolation_light = "弱"
+isolation_light_description = "元の声や部屋の響きをより多く残します。"
+isolation_strong = "強"
+isolation_strong_description = "騒がしい場所向けに強く分離します。声の質感が変わることがあります。"
+mic_volume = "マイクの音量"
+mute = "音声をミュート"
+stereo_mode = "マイクのステレオモード"
+studio_sound_description = "背景ノイズを抑え、声の音量を整えます。"
+studio_sound_save_failed = "Studio Soundのデフォルトを保存できませんでした"
+system_volume = "システム音声の音量"
+title = "音声コントロール"
+use_for_new = "新しい録画で使用"
+
+[editor.tabs.audio.stereo]
+mono_left = "モノラル（左）"
+mono_right = "モノラル（右）"
+stereo = "ステレオ"
+
+[editor.tabs.camera]
+advanced_shadow = "影の詳細設定"
+background = "背景"
+corner_style = "角のスタイル"
+custom_position = "カスタム位置（キャンバス上でドラッグ）"
+hide = "カメラを非表示"
+keep_size_during_zoom = "ズーム中も元のサイズを保つ"
+mirror = "カメラを反転"
+position = "位置"
+reset = "リセット"
+rounded_corners = "角の丸み"
+shadow = "影"
+shadow_blur = "ぼかし"
+shadow_opacity = "不透明度"
+shape_label = "形"
+size_during_zoom = "ズーム中のサイズ"
+size_label = "サイズ"
+title = "カメラ"
+
+[editor.tabs.camera.blur]
+heavy = "強いぼかし"
+light = "弱いぼかし"
+off = "オフ"
+remove = "背景を削除"
+
+[editor.tabs.camera.shape]
+source = "元の形"
+square = "正方形"
+
+[editor.tabs.captions]
+active_word_highlight = "話している単語をハイライト"
+animation_section = "アニメーション"
+animation_style = "アニメーションのスタイル"
+background_color = "背景色"
+background_opacity = "背景の不透明度"
+background_settings = "背景の設定"
+beta = "ベータ"
+delete = "削除"
+deleting = "削除中..."
+download = "{model}モデルをダウンロード"
+download_note = "システムへのダウンロードは1回だけです。字幕はすべてローカルに保存されます。"
+downloading = "{model}をダウンロード中... {percent}%"
+fade_duration = "フェード時間"
+font_family = "フォント"
+font_settings = "フォントの設定"
+font_weight = "フォントの太さ"
+generate = "字幕を生成"
+generate_failed = "字幕を生成できませんでした：{reason}"
+generating = "生成中..."
+highlight_color = "ハイライトの色"
+highlight_note = "これはCapの字幕機能の最初のバージョンです。話している単語のハイライトは、状況によって不正確になる場合があります。修正に取り組んでおり、今後のバージョンで公開する予定です。"
+highlight_style = "ハイライトのスタイル"
+horizontal_position = "水平位置"
+intel_unavailable = "Intel搭載のMacではParakeetの字幕モデルを利用できません。Whisperモデルは引き続き利用できます。"
+keep_open = "モデルのダウンロード中はCapを開いたままにしてください。エディタを再読み込みしても自動的に再接続されます。"
+language_label = "言語"
+model_downloaded = "{model}モデルをダウンロード済み"
+model_label = "モデル"
+position = "位置"
+regenerate = "字幕を再生成"
+size_label = "サイズ"
+style = "スタイル"
+text_color = "テキストの色"
+title = "字幕"
+uppercase = "大文字"
+vertical_position = "垂直位置"
+
+[editor.tabs.captions.animation]
+bounce = "バウンス"
+none = "なし"
+pop = "ポップ"
+
+[editor.tabs.captions.highlight]
+color = "色"
+pill = "ピル"
+
+[editor.tabs.captions.language]
+ar = "アラビア語"
+auto = "自動検出"
+bn = "ベンガル語"
+de = "ドイツ語"
+en = "英語"
+es = "スペイン語"
+fa = "ペルシア語"
+fr = "フランス語"
+gu = "グジャラート語"
+he = "ヘブライ語"
+hi = "ヒンディー語"
+it = "イタリア語"
+ja = "日本語"
+ko = "韓国語"
+mr = "マラーティー語"
+nl = "オランダ語"
+pa = "パンジャブ語"
+pl = "ポーランド語"
+pt = "ポルトガル語"
+ru = "ロシア語"
+sk = "スロバキア語"
+ta = "タミル語"
+te = "テルグ語"
+tr = "トルコ語"
+ur = "ウルドゥー語"
+zh = "中国語"
+
+[editor.tabs.captions.model]
+high_accuracy = "高精度"
+high_accuracy_description = "ダウンロードは大きめ、精度は高め"
+medium = "中"
+medium_description = "低速だがより正確"
+recommended = "推奨"
+recommended_description = "ほとんどの録画に最適なバランス"
+small = "小"
+small_description = "ダウンロードサイズが最小"
+
+[editor.tabs.captions.preset]
+classic = "クラシック"
+classic_description = "角丸の単色背景にすっきりしたテキスト。"
+highlight = "ハイライト"
+highlight_description = "太字の大文字で、話している単語の後ろにピルを表示。"
+karaoke = "カラオケ"
+karaoke_description = "発話に合わせて単語が光ります。"
+minimal = "ミニマル"
+minimal_description = "背景なしの控えめな縁取りテキスト。"
+pop = "ポップ"
+pop_description = "鮮やかなアクセントで飛び出す遊び心のある大文字。"
+
+[editor.tabs.corner]
+rounded = "角丸"
+squircle = "スクワークル"
+
+[editor.tabs.cursor]
+friction = "摩擦"
+hide_when_idle = "操作がないときは非表示"
+inactivity_delay = "非表示までの時間"
+mass = "質量"
+movement_style = "カーソルの動きのスタイル"
+show = "カーソルを表示"
+size_label = "サイズ"
+smooth_movement = "なめらかな動き"
+style_label = "カーソルのスタイル"
+svg_cursors = "高品質なSVGカーソル"
+tension = "張力"
+tilt = "傾き"
+
+[editor.tabs.cursor.style]
+fast = "速い"
+fast_description = "きびきびと、ぴったり追従"
+mellow = "穏やか"
+mellow_description = "バランスの取れた自然な動き"
+slow = "遅い"
+slow_description = "長く漂うような動き"
+smooth = "なめらか"
+smooth_description = "柔らかく浮遊するような動き"
+
+[editor.tabs.keyboard]
+animation = "アニメーション"
+background_color = "背景色"
+background_opacity = "背景の不透明度"
+background_settings = "背景の設定"
+behavior = "動作"
+beta = "ベータ"
+changed_during_generation = "生成中にタイムラインまたはキーボードの設定が変更されました。もう一度お試しください。"
+empty_description = "「キーボードセグメントを生成」をクリックすると、記録されたキー入力からセグメントを作成します。"
+empty_title = "キーボードセグメントはまだありません。"
+fade_duration = "フェード時間"
+font_family = "フォント"
+font_settings = "フォントの設定"
+font_weight = "フォントの太さ"
+generate = "キーボードセグメントを生成"
+generating = "キーボードセグメントを生成中..."
+grouping_threshold = "グループ化のしきい値"
+linger_duration = "表示を残す時間"
+load_failed = "録画データを読み込めませんでした：{error}"
+no_presses = "記録されたキー入力が見つかりませんでした。"
+position = "位置"
+regenerate = "キーボードセグメントを再生成"
+show_modifiers = "修飾キーを表示"
+show_special_keys = "特殊キーを表示"
+size_label = "サイズ"
+text_color = "テキストの色"
+timeline_unavailable = "プロジェクトのタイムラインを利用できません。"
+timeline_unreadable = "プロジェクトのタイムラインを読み込めませんでした。"
+title = "キーボードを表示"
+uppercase = "大文字"
+
+[editor.tabs.position]
+bottom_center = "下中央"
+bottom_left = "左下"
+bottom_right = "右下"
+manual = "手動"
+top_center = "上中央"
+top_left = "左上"
+top_right = "右上"
+
+[editor.tabs.sync]
+auto_description = "Capは音声を動画と同期させるため、これらのオフセットを自動で計算しました。まだずれて聞こえる場合は調整してください。"
+auto_synced = "自動同期済み"
+camera = "カメラのオフセット"
+clip = "クリップ{number}"
+description = "音声やカメラが画面録画とずれる場合は、ソースのオフセットを微調整してください。"
+microphone = "マイクのオフセット"
+system_audio = "システム音声のオフセット"
+title = "同期"
+
+[editor.tabs.weight]
+bold = "太字"
+medium = "中"
+normal = "標準"
+
+[editor.tabs.font]
+system_sans_serif = "システムSans-Serif"
+system_serif = "システムSerif"
+system_monospace = "システムMonospace"
+
+[editor.timeline]
+add_shot = "ショットを追加"
+add_shot_with_look = "ショットを追加 · {look} · {seconds}秒"
+paused = "一時停止中"
+title = "タイムライン"
+
+[editor.timeline.empty]
+add_audio = "音声を追加"
+add_scene = "シーンを追加"
+audio = "BGMを追加するか、自分の音声を読み込みます"
+captions = "字幕なし"
+keyboard = "キーボードイベントなし"
+scene = "画面とカメラのレイアウトを切り替えます"
+
+[editor.timeline.picker]
+audio = "BGMを追加するか、自分の音声を読み込みます。"
+caption = "録画を自動で文字起こしし、画面上の字幕にします。"
+clip = "録画した画面の映像です。"
+image = "録画に画像を追加します。"
+keyboard = "入力中のキー操作を画面に表示します。"
+mask = "画面のプライベートな部分をぼかすか黒く塗りつぶします。"
+scene = "画面とカメラのレイアウトを切り替えます。"
+scene_unavailable = "シーンを使うにはカメラ付きで録画してください。"
+style = "背景、カメラ、カーソルの設定を時間に合わせて変更します。"
+text_overlay = "キャンバスにカスタムのテキストやタイトルを重ねます。"
+three_d = "シーンを3Dの遠近感で傾けます。"
+zoom = "動きに合わせたなめらかなズームイン。"
+
+[editor.timeline.remove]
+audio = "音声トラックを削除します。"
+captions = "字幕トラックを削除します。"
+clip = "クリップトラックを削除します。"
+image = "画像トラックを削除します。"
+keyboard = "キーボードトラックを削除します。"
+mask = "マスクトラックを削除します。"
+scene = "シーントラックを削除します。"
+style = "スタイルトラックを削除します。"
+text_track = "テキストトラックを削除します。"
+three_d = "3Dトラックを削除します。"
+zoom = "ズームトラックを削除します。"
+
+[editor.timeline.scene]
+camera_only = "カメラのみ"
+default = "デフォルト"
+floating = "フローティング"
+hide_camera = "カメラを非表示"
+split_screen = "分割画面"
+
+[editor.timeline.segment]
+audio = "音声"
+automatic_zoom = "自動ズーム"
+caption = "字幕"
+clip = "クリップ"
+cursor_hidden = "カーソル非表示"
+highlight = "強調"
+label = "ラベル"
+manual_zoom = "手動ズーム"
+muted = "ミュート"
+numbered_clip = "クリップ{number}"
+sensitive = "機密"
+
+[editor.timeline.track]
+audio = "音声"
+captions = "字幕"
+clip = "クリップ"
+image = "画像"
+keyboard = "キーボード"
+mask = "マスク"
+scene = "シーン"
+style = "スタイル"
+text_track = "テキスト"
+video = "動画"
+zoom = "ズーム"
+
+[editor.window]
+audio_filter = "音声"
+audio_segment_changed = "この音声セグメントは変更されました。選択して、もう一度置き換えるファイルを選んでください。"
+crop = "切り抜き"
+crop_tooltip = "動画を切り抜く"
+no_room_for_3d_shot = "別の3Dショットを入れる余地がありません"
+redo = "やり直す"
+save_failed = "{path}を保存できませんでした。エディタを開いたまま、もう一度お試しください：{error}"
+undo = "取り消す"
+
+[editor.window.add_track]
+button = "トラックを追加"
+hide_3d = "3Dトラックを非表示にします。"
+hint = "タイムラインに追加するトラックを選んでください。"
+
+[editor.window.aspect]
+auto = "自動"
+classic = "クラシック"
+classic_ratio = "クラシック ⋅4:3"
+square = "正方形"
+square_ratio = "正方形 ⋅1:1"
+tall = "縦長"
+tall_ratio = "縦長 ⋅3:4"
+tooltip = "アスペクト比"
+vertical = "縦"
+vertical_ratio = "縦 ⋅9:16"
+wide = "ワイド"
+wide_ratio = "ワイド ⋅16:9"
+
+[editor.window.audio_import]
+copy_failed = "音声ファイルをコピーできませんでした：{error}"
+directory_failed = "音声フォルダを作成できませんでした：{error}"
+no_extension = "音声ファイルに拡張子がありません"
+not_found = "音声ファイルが見つかりません：{path}"
+unsupported = "対応していない音声形式です：.{extension}"
+
+[editor.window.busy]
+clip_import = "この録画を閉じるか削除する前に、クリップの読み込みが終わるまでお待ちください。"
+export = "この録画を閉じるか削除する前に、書き出しまたはそのキャンセルが終わるまでお待ちください。"
+opening = "削除する前に、録画が開き終わるまでお待ちください。"
+save_before_delete_failed = "削除前に録画を保存できませんでした：{error}"
+
+[editor.window.camera3d_lane]
+add_shot = "+ ショットを追加"
+auto_scene = "自動シーン"
+how_many = "ショットはいくつ？"
+prompt = "録画に映画のような3Dショットを追加"
+
+[editor.window.clip_menu]
+audio = "音声"
+cursor = "カーソル"
+delete = "クリップを削除"
+delete_only_clip = "唯一のクリップは削除できません"
+hide_cursor = "カーソルを非表示"
+hide_cursor_description = "このクリップの再生中はフェードアウトします"
+keep_pitch = "ピッチを保持"
+match_speed = "速度に合わせる"
+merge_next = "次のクリップと結合"
+merge_previous = "前のクリップと結合"
+mute = "ミュート"
+mute_clip = "クリップをミュート"
+mute_clip_description = "このクリップの音声を消します"
+rename = "クリップ名を変更"
+speed = "速度"
+split = "再生ヘッドで分割"
+split_hint = "再生ヘッドをこのクリップ内に移動してください"
+volume = "音量"
+transition = "トランジション"
+transition_none = "なし"
+transition_crossfade = "クロスフェード"
+transition_fade = "フェード"
+transition_seconds = "{seconds}秒"
+
+[editor.window.clip_menu.merge_blocker]
+edge = "その側にクリップがありません"
+different_recording = "別の録画です"
+gap = "間の映像がカットされています"
+speed = "先にクリップの速度を揃えてください"
+
+[editor.window.frame]
+add_tooltip = "フレームを追加"
+browser = "ブラウザ"
+browser_description = "アドレスバー付きのブラウザ枠"
+button = "フレーム"
+dark = "ダーク"
+global = "グローバルフレーム · スタイルが背景を継承する箇所すべてに適用されます。"
+heading = "フレーム"
+light = "ライト"
+macbook_description = "録画を囲むノートパソコンのベゼル"
+macos_description = "信号ボタン付きのウィンドウ枠"
+none = "なし"
+none_description = "録画をそのまま表示"
+style_changed = "このスタイルは変更されました。フレームを閉じて開き直してください。"
+style_only = "スタイル{index}のみ · 全体設定は変わりません。"
+style_only_override = "スタイル{index}のみ · 編集すると背景の上書きが有効になります。"
+theme = "テーマ"
+title = "タイトル"
+url = "URL"
+window_title_placeholder = "ウィンドウタイトル"
+windows_description = "ウィンドウボタン付きのタイトルバー"
+
+[editor.window.header]
+captions = "字幕"
+delete_recording = "録画を削除"
+export = "書き出し"
+open_bundle = "録画バンドルを開く"
+presets = "プリセット"
+
+[editor.window.image]
+changed = "置き換えを選んでいる間にこの画像が変更されました。選択してもう一度お試しください。"
+filter = "画像"
+recording_unavailable = "この画像の録画は利用できなくなりました。プロジェクトを開き直してください。"
+
+[editor.window.open]
+damaged = "この録画の動画トラックを開けませんでした。バンドルが破損しているようです。"
+failed = "この録画を開けませんでした"
+media_failed = "この録画のメディアを読み込めませんでした：{error}"
+meta_failed = "録画のメタデータを読み込めませんでした：{error}"
+no_segments = "録画にセグメントがありません。先に復元が必要な可能性があります。"
+not_found = "動画のパス{path}が見つかりません！"
+not_studio = "Studio以外の録画は編集できません"
+
+[editor.window.presets]
+apply = "適用"
+create = "作成"
+create_new = "新しいプリセットを作成"
+create_title = "プリセットを作成"
+default = "デフォルト"
+default_badge = "デフォルト"
+delete = "削除"
+delete_confirm = "「{name}」を削除してもよろしいですか？"
+delete_title = "プリセットを削除"
+name_placeholder = "プリセット名"
+none_saved = "保存済みのプリセットはありません"
+rename = "名前を変更"
+rename_title = "プリセット名を変更"
+save_settings = "設定をプリセットに保存"
+set_default = "デフォルトに設定"
+
+[editor.window.preview]
+full = "フル"
+half = "1/2"
+label = "プレビュー"
+quarter = "1/4"
+
+[editor.window.text_menu]
+copy_style = "スタイルをコピー"
+copy_style_first = "先にスタイルをコピーしてください"
+delete_segment = "テキストセグメントを削除"
+delete_segments = "テキストセグメントを削除"
+paste_style = "スタイルをペースト"
+paste_style_all = "選択したすべてにスタイルをペースト"
+segments = { other = "{count}個のテキストセグメント" }
+untitled = "テキスト"
+
+[editor.window.title]
+not_saved = "タイトルを保存できませんでした"
+not_saved_message = "{error}\n\nタイトルはエディタに残っています。もう一度保存してください。"
+read_failed = "{path}の録画タイトルを読み込めませんでした：{error}"
+save_failed = "{path}の録画タイトルを保存できませんでした：{error}"
+
+[editor.window.track]
+clear_all = "すべて消去"
+delete = "削除"
+
+[editor.window.transport]
+done_splitting = "分割を終了"
+play_pause = "動画を再生/一時停止"
+split = "分割"
+split_tooltip = "セグメントをクリックして分割します。Escで終了します。"
+zoom_in = "ズームイン"
+zoom_out = "ズームアウト"
+
+[editor.window.zoom_lane]
+generate = "生成"
+generating = "生成中…"
+no_clicks = "ズームするクリックが見つかりません。レーン上をドラッグして追加してください。"
+prompt = "ズームを自動で追加"
+
+[ui]
+coming_soon = "近日公開"
+
+[ui.selection]
+audio = { other = "{count}個の音声セグメントを選択中" }
+caption = { other = "{count}個の字幕セグメントを選択中" }
+delete = "削除"
+done = "完了"
+image = { other = "{count}個の画像セグメントを選択中" }
+keyboard = { other = "{count}個のキーボードセグメントを選択中" }
+mask = { other = "{count}個のマスクセグメントを選択中" }
+scene = { other = "{count}個のシーンセグメントを選択中" }
+segments = { other = "{count}個のセグメントを選択中" }
+select_all = "すべて選択"
+style = { other = "{count}個のスタイルセグメントを選択中" }
+text_segments = { other = "{count}個のテキストセグメントを選択中" }
+three_d = { other = "{count}個の3Dセグメントを選択中" }
+zoom = { other = "{count}個を選択中" }
+zoom_all = { other = "{count}個すべてを選択中" }
+zoom_some = { other = "{total}個中{count}個を選択中" }
+
+[dialog.quit]
+canceled = "終了をキャンセルしました：{error}。録画を完了または復元できるよう、Capは開いたままになります。"
+pending = "録画の停止処理がまだ終わっていないため、終了をキャンセルしました。Capは開いたままになります。「停止」が使えるようになったら停止してから、もう一度終了してください。"
+still_open = "Capはまだ開いています"
+unconfirmed = "録画の停止を確認できなかったため、終了をキャンセルしました。Capは開いたままになります。「停止」を使ってから、もう一度終了してください。"
+
+[dialog.update]
+already_getting = "Capはすでにバージョン{version}を準備しています。"
+available = "Capのバージョン{version}が利用可能です。バックグラウンドでダウンロードし、インストールの準備ができたらお知らせします。"
+busy = "Capをアップデートする前に、録画、書き出し、アップロード、読み込み、または文字起こしを完了してください。"
+busy_title = "Capは処理中です"
+check_failed = "アップデートを確認できませんでした：{error}"
+download = "ダウンロード"
+download_failed = "バージョン{version}をダウンロードできませんでした：{error}"
+failed = "{message}\n\n最新バージョンはいつでもCap.so/downloadからダウンロードできます。"
+install_failed = "バージョン{version}をインストールできませんでした：{error}"
+later = "後で"
+no_update = "Capはすでに最新バージョンです。"
+no_update_title = "アップデートはありません"
+not_now = "今はしない"
+package_not_installed = "パッケージはインストールされませんでした。システムの確認を承認するか、Cap.so/downloadからインストールしてください。"
+ready = "Cap {version}の準備ができました。アップデートを完了するにはCapを再起動してください。"
+restart_now = "今すぐ再起動"
+title = "Capをアップデート"
+
+[message.recording]
+task_failed = "録画タスクが失敗しました。"
+startup_failed = "録画を開始できませんでした"
+ended_unexpectedly = "録画が予期せず終了しました。"
+stop_task_failed_plain = "停止タスクが失敗しました。"
+stop_not_acknowledged = "キャプチャの停止が確認されませんでした"
+capture_state_timed_out = "キャプチャの状態の確認がタイムアウトしました"
+pause_not_acknowledged = "キャプチャが要求された一時停止状態を確認しませんでした"
+cleanup_unconfirmed_files_kept = "キャプチャの後処理を確認できません。ローカルファイルは保持されています。Ctrl+Shift+F9で停止をやり直してください。"
+cleanup_unconfirmed_retry = "キャプチャの後処理を確認できません。停止をやり直してください。"
+discard_not_acknowledged = "Studioの録画を破棄する際、キャプチャの停止が確認されませんでした。ローカルの録画は保持されています"
+window_still_resizing = "ウィンドウのサイズ変更がまだ終わっていません。もう一度開始してください。"
+startup_cancelled = "録画の開始がキャンセルされました。ローカルファイルは保持されています"
+instant_cleanup_unconfirmed = "Instantのキャプチャの後処理を確認できません。ローカルファイルは保持されています"
+finalization_no_result = "録画の仕上げが結果を返さずに終了しました。ファイルは保持されています。"
+stopped_metadata_unsaved = "キャプチャは停止しましたが、停止時のメタデータを保存できませんでした。ローカルファイルは保持されています"
+discard_stop_unconfirmed = "Studioの録画を破棄する際、キャプチャの停止を確認できません。ローカルファイルは保持されています"
+discard_unconfirmed = "Studioの破棄を確認できません。ローカルファイルは保持されています"
+crashed_before_capture = "この録画で何もキャプチャされないうちにCapが終了しました。"
+capture_state_failed = "キャプチャの状態を確認できませんでした：{error}"
+completion_task_failed = "録画の完了処理が失敗しました：{error}"
+stop_task_failed = "停止タスクが失敗しました：{error}"
+control_task_failed = "キャプチャの制御タスクが失敗しました：{error}"
+restart_hide_failed = "やり直し時にCapのウィンドウを非表示にできませんでした：{error}"
+discard_task_failed = "Studioの破棄タスクが失敗しました：{error}。後処理を確認できません"
+cancel_task_failed = "キャンセルタスクが失敗しました：{error}。後処理を確認できません。停止をやり直してください。"
+then_cleanup_unconfirmed_shortcut = "{error}。キャプチャの後処理を確認できません。Ctrl+Shift+F9で停止をやり直してください。"
+then_cleanup_unconfirmed_control = "{error}。キャプチャの後処理を確認できません。録画の停止コントロールでやり直してください。"
+then_shutdown_unconfirmed = "{error}。Studioの終了を確認できません。録画とファイルは保持されています。"
+then_use_stop_if_unsafe = "{error}。録画を安全に続けられない場合は、停止を使ってください。"
+then_use_stop_control = "{error}。録画を止めるには、録画の停止コントロールを使ってください。"
+then_discard_stopped = "{error}。破棄/やり直しを中止しました。ローカルの録画は保持されています"
+then_files_preserved = "{error}。失敗した録画のファイルは保持されています。"
+then_cleanup_retry = "{error}。後処理を確認できません。停止をやり直してください。"
+low_storage_preserved = "ストレージの空き容量が不足しています。録画ファイルは{path}に保持されています。空き容量を確保してから、Capで録画を復元してください。"
+
+[message.permission]
+unavailable = "{permission}へのアクセスを利用できません。「システム設定」>「プライバシーとセキュリティ」>「{permission}」でCapを許可してから、デバイスをもう一度選択してください。"
+
+[message.upload]
+offline = "オフライン"
+authentication_expired = "認証の有効期限が切れました"
+no_audio_intent_review = "この古い録画には音声の設定が保存されていません。再試行する前に確認してください"
+legacy_no_account = "この古いアップロードにはアカウントと音声の設定が保存されていません。ローカルの録画は保持されています。"
+verification_timed_out = "クラウドでの確認がタイムアウトしました。ローカルの録画は保持されています"
+verification_failed_retry = "クラウドでの確認に失敗しました。保存された録画をもう一度アップロードします"
+must_save_first = "アップロードを再開するには、先に録画をローカルに保存する必要があります"
+sign_in_original = "再試行するには、録画したときのアカウントとサーバーにサインインしてください"
+sign_in_again = "この録画をアップロードするには、もう一度サインインしてください"
+needs_upgrade = "Instant録画には上位プランが必要です"
+changed_during = "アップロード中にローカルの録画が変更されました"
+changed_after = "アップロード後にローカルの録画が変更されました。録画は保持されています"
+already_queued = "この録画はすでにアップロード待ちです"
+paused = "アップロードを一時停止しました。ローカルの録画は保持されています"
+worker_failed = "アップロード処理が失敗しました。ローカルの録画は保持されています"
+empty = "保存された録画は空です"
+no_resumable_state = "この録画には再開できるアップロード状態がありません"
+verification_failed = "録画の確認に失敗しました：{status}"
+
+[message.cli]
+binary_missing = "{path}に同梱のCLIが見つかりません"

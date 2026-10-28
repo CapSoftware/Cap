@@ -20,6 +20,7 @@ pub(crate) const EXPORT_AUDIO_BLOCK_SAMPLES: usize = 4_096;
 const MAX_PARALLEL_AUDIO_SOURCES: usize = 4;
 const MAX_ENHANCED_WINDOW_SAMPLES: usize =
     EXPORT_AUDIO_BLOCK_SAMPLES + VOICE_PREROLL_SAMPLES + VOICE_WINDOW_PADDING_SAMPLES;
+const STUDIO_SOUND_HISTORY_SAMPLES: usize = VOICE_PREROLL_SAMPLES + VOICE_WINDOW_PADDING_SAMPLES;
 
 #[derive(Clone, Debug)]
 pub enum ExportAudioError {
@@ -217,7 +218,7 @@ impl ExportAudioPreparation {
                     if let Some(audio) = &segment.mic {
                         inputs.push((index, recording.path(&audio.path), true));
                     }
-                    if let Some(audio) = &segment.system_audio {
+                    if let Some(audio) = segment.usable_system_audio() {
                         inputs.push((index, recording.path(&audio.path), false));
                     }
                 }
@@ -292,7 +293,8 @@ impl ExportAudioRenderer {
                 .segments
                 .iter()
                 .map(|segment| {
-                    usize::from(segment.mic.is_some()) + usize::from(segment.system_audio.is_some())
+                    usize::from(segment.mic.is_some())
+                        + usize::from(segment.usable_system_audio().is_some())
                 })
                 .sum(),
         };
@@ -324,17 +326,6 @@ impl ExportAudioRenderer {
         {
             return false;
         }
-        // Studio Sound re-reads up to VOICE_PREROLL_SAMPLES before each cut to warm up the
-        // enhancer. The streaming reader only moves forward, so a cut shorter than that
-        // within one clip has to use the in-memory export path instead. An exact split
-        // (nothing removed) keeps the enhancer contiguous and still streams.
-        let studio_sound =
-            project.audio.improve && !project.audio.mute && project.audio.mic_volume_db > -30.0;
-        let min_gap = if studio_sound {
-            (VOICE_PREROLL_SAMPLES + VOICE_WINDOW_PADDING_SAMPLES) as f64 / 48_000.0
-        } else {
-            0.0
-        };
         let mut ends = HashMap::new();
         let mut duration = holds.iter().map(|(start, end)| end - start).sum::<f64>();
         if !duration.is_finite() || duration * 48_000.0 >= isize::MAX as f64 / 2.0 {
@@ -355,11 +346,7 @@ impl ExportAudioRenderer {
                 return false;
             }
             if let Some(previous_end) = ends.insert(segment.recording_clip, segment.end)
-                && (!timeline.transitions.is_empty()
-                    || segment.start < previous_end
-                    || (min_gap > 0.0
-                        && segment.start > previous_end
-                        && segment.start < previous_end + min_gap))
+                && (!timeline.transitions.is_empty() || segment.start < previous_end)
             {
                 return false;
             }
@@ -531,12 +518,16 @@ impl ExportAudioSources {
                     )
                 });
                 let range = enhancer.source_range(start, end.saturating_sub(start));
-                track.prepare(range.start as i128, range.end as i128)?;
+                track.prepare(
+                    range.start as i128,
+                    range.end as i128,
+                    STUDIO_SOUND_HISTORY_SAMPLES,
+                )?;
                 track.enhanced =
                     Some(enhancer.render(&track.view(), start, end.saturating_sub(start)));
                 track.enhancer = Some(enhancer);
             } else {
-                track.prepare(start, end)?;
+                track.prepare(start, end, 0)?;
                 track.enhanced = None;
                 track.enhancer = None;
             }
@@ -656,20 +647,21 @@ impl ExportAudioTrack {
         ((offset + self.timing_offset_secs) * AudioRenderer::SAMPLE_RATE as f32).round() as isize
     }
 
-    fn prepare(&mut self, start: i128, end: i128) -> Result<(), ExportAudioError> {
+    fn prepare(&mut self, start: i128, end: i128, history: usize) -> Result<(), ExportAudioError> {
         let start = usize::try_from(start.max(0)).map_err(|_| ExportAudioError::InvalidWindow)?;
         let end = usize::try_from(end.max(0)).map_err(|_| ExportAudioError::InvalidWindow)?;
         if end < start || end - start > MAX_ENHANCED_WINDOW_SAMPLES || start < self.source_start {
             return Err(ExportAudioError::InvalidWindow);
         }
         let channels = self.source.channels() as usize;
-        let discard = start
+        let retained_start = start.saturating_sub(history).max(self.source_start);
+        let discard = retained_start
             .saturating_sub(self.source_start)
             .min(self.samples.len() / channels)
             * channels;
         self.samples.copy_within(discard.., 0);
         self.samples.truncate(self.samples.len() - discard);
-        self.source_start = start;
+        self.source_start = retained_start;
         while self.eof.is_none() && self.source.position() < end as u64 {
             let wanted = (end as u64 - self.source.position()).min(12_000) as usize;
             match self
@@ -683,7 +675,7 @@ impl ExportAudioTrack {
                 ChunkRead::Chunk(chunk) => {
                     let chunk_start = usize::try_from(chunk.source_start_sample)
                         .map_err(|_| ExportAudioError::InvalidWindow)?;
-                    let discard = start
+                    let discard = retained_start
                         .saturating_sub(chunk_start)
                         .min(chunk.samples.len() / channels)
                         * channels;
@@ -1239,7 +1231,7 @@ mod tests {
                 .unwrap(),
             );
             for track in candidate.sources.tracks.iter_mut().flatten() {
-                track.prepare(10, 100).unwrap();
+                track.prepare(10, 100, 0).unwrap();
             }
             let identity = |track: &ExportAudioTrack| {
                 (
@@ -1497,7 +1489,7 @@ mod tests {
     }
 
     #[test]
-    fn eligibility_rejects_studio_sound_cuts_shorter_than_voice_preroll() {
+    fn eligibility_accepts_studio_sound_short_forward_cuts() {
         let mut short_cut = project();
         short_cut
             .timeline
@@ -1507,7 +1499,7 @@ mod tests {
             .push(segment(0, 0.34, 0.36));
         assert!(ExportAudioRenderer::eligible_sources(&short_cut, 3));
         short_cut.audio.improve = true;
-        assert!(!ExportAudioRenderer::eligible_sources(&short_cut, 3));
+        assert!(ExportAudioRenderer::eligible_sources(&short_cut, 3));
         short_cut.audio.mute = true;
         assert!(ExportAudioRenderer::eligible_sources(&short_cut, 3));
 
@@ -1530,11 +1522,277 @@ mod tests {
             .segments
             .push(segment(0, 0.33, 0.9));
         assert!(ExportAudioRenderer::eligible_sources(&exact_split, 3));
+
+        short_cut.timeline.as_mut().unwrap().segments[2].start = 0.32;
+        assert!(!ExportAudioRenderer::eligible_sources(&short_cut, 3));
     }
 
     #[test]
     fn studio_sound_transition_with_single_sample_requests_keeps_lookahead() {
         assert_bounded_sink_variants([19], &[1]);
+    }
+
+    #[test]
+    fn short_studio_sound_cuts_match_preview_after_history_rolls() {
+        ffmpeg::init().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let paths =
+            ["mic.wav", "system.wav", "incoming.wav"].map(|name| directory.path().join(name));
+        for ((path, frames), channels) in
+            paths.iter().zip([144_013, 96_007, 168_013]).zip([1, 2, 2])
+        {
+            write_wav(path, frames, channels);
+        }
+        let data = paths
+            .iter()
+            .map(|path| Arc::new(AudioData::from_file(path).unwrap()))
+            .collect::<Vec<_>>();
+        for (tier, isolation) in [
+            cap_project::VoiceIsolation::Light,
+            cap_project::VoiceIsolation::Balanced,
+            cap_project::VoiceIsolation::Strong,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            for offset in [0, 1] {
+                let mut project = project();
+                project.audio.improve = true;
+                project.audio.isolation = isolation;
+                if offset == 1 {
+                    project.clips[0].offsets.mic = 0.137_125;
+                    project.clips[0].offsets.system_audio = -0.031_25;
+                    project.clips[1].offsets.mic = -0.117_125;
+                    project.audio.mic_stereo_mode = cap_project::StereoMode::MonoR;
+                }
+                project.timeline.as_mut().unwrap().segments = vec![
+                    segment(0, 0.001_01, 0.72),
+                    segment(0, 0.73, 0.8),
+                    segment(0, 0.800_02, 0.92),
+                    segment(0, 1.0, 1.63),
+                    segment(1, 0.35, 1.4),
+                    segment(1, 1.5, 2.2),
+                    segment(0, 1.8, 2.5),
+                    segment(0, 2.500_02, 3.05),
+                ];
+                let requests = [997, 4_096, 48_001]
+                    .into_iter()
+                    .chain((tier == 1 && offset == 0).then_some(1));
+                for request in requests {
+                    let (mut reference, mut candidate) = fixture(&paths, &data);
+                    reference.set_playhead(0.0, &project);
+                    loop {
+                        let expected = reference.render_frame_raw(request, &project);
+                        let mut actual = Vec::new();
+                        let written = candidate
+                            .render_chunks(request, &project, |offset, samples| {
+                                assert_eq!(offset * 2, actual.len());
+                                assert!(samples.len() <= EXPORT_AUDIO_BLOCK_SAMPLES * 2);
+                                actual.extend_from_slice(samples);
+                                Ok(())
+                            })
+                            .unwrap_or_else(|error| {
+                                panic!("{isolation:?}, offset {offset}, request {request}: {error}")
+                            });
+                        assert_eq!(written, expected.as_ref().map(|(count, _)| *count));
+                        let expected = expected.as_ref().map_or(&[][..], |(_, data)| data);
+                        assert_eq!(actual.len(), expected.len());
+                        assert!(
+                            actual
+                                .iter()
+                                .map(|sample| sample.to_bits())
+                                .eq(expected.iter().map(|sample| sample.to_bits())),
+                            "{isolation:?}, offset {offset}, request {request}"
+                        );
+                        for track in candidate.sources.tracks.iter().flatten() {
+                            let limit = if track.enhancer.is_some() {
+                                MAX_ENHANCED_WINDOW_SAMPLES
+                                    + VOICE_PREROLL_SAMPLES
+                                    + VOICE_WINDOW_PADDING_SAMPLES
+                            } else {
+                                EXPORT_AUDIO_BLOCK_SAMPLES
+                            };
+                            assert!(
+                                track.samples.len() <= limit * track.source.channels() as usize
+                            );
+                        }
+                        if written.is_none() {
+                            break;
+                        }
+                    }
+                    candidate.validate_to_end().unwrap();
+                }
+            }
+        }
+    }
+
+    fn write_voice_like_wav(path: &Path, frames: usize, channels: u16, seed: u64) {
+        let data_size = frames as u32 * u32::from(channels) * 2;
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"RIFF");
+        bytes.extend_from_slice(&(36 + data_size).to_le_bytes());
+        bytes.extend_from_slice(b"WAVEfmt ");
+        bytes.extend_from_slice(&16u32.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&channels.to_le_bytes());
+        bytes.extend_from_slice(&48_000u32.to_le_bytes());
+        bytes.extend_from_slice(&(48_000u32 * u32::from(channels) * 2).to_le_bytes());
+        bytes.extend_from_slice(&(channels * 2).to_le_bytes());
+        bytes.extend_from_slice(&16u16.to_le_bytes());
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&data_size.to_le_bytes());
+        let mut state = seed | 1;
+        for frame in 0..frames {
+            let t = frame as f64 / 48_000.0;
+            let envelope = ((t * 2.7).sin() * 0.5 + 0.5).powi(3)
+                * if (t * 0.9).fract() < 0.2 { 0.02 } else { 1.0 };
+            for _ in 0..channels {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                let noise = (state >> 40) as f64 / (1u64 << 24) as f64 - 0.5;
+                let voice =
+                    (t * 2.0 * std::f64::consts::PI * (140.0 + 40.0 * (t * 3.1).sin())).sin();
+                let value = (voice * 0.6 + noise * 0.4) * envelope * 30_000.0;
+                bytes.extend_from_slice(&(value as i16).to_le_bytes());
+            }
+        }
+        std::fs::write(path, bytes).unwrap();
+    }
+
+    #[test]
+    fn studio_sound_random_cuts_never_reject_the_export_window() {
+        ffmpeg::init().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let paths =
+            ["mic.wav", "system.wav", "incoming.wav"].map(|name| directory.path().join(name));
+        for (((path, frames), channels), seed) in paths
+            .iter()
+            .zip([300_013, 250_007, 280_013])
+            .zip([1, 2, 2])
+            .zip([11, 23, 37])
+        {
+            write_voice_like_wav(path, frames, channels, seed);
+        }
+        let data = paths
+            .iter()
+            .map(|path| Arc::new(AudioData::from_file(path).unwrap()))
+            .collect::<Vec<_>>();
+        let iterations = std::env::var("CAP_AUDIO_FUZZ_ITERATIONS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(12u64);
+        let mut state = std::env::var("CAP_AUDIO_FUZZ_SEED")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(0x9e37_79b9_7f4a_7c15u64);
+        let mut next = move |bound: u64| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state % bound.max(1)
+        };
+        let mut failures = Vec::new();
+        for iteration in 0..iterations {
+            let mut project = project();
+            project.audio.improve = true;
+            project.audio.isolation = [
+                cap_project::VoiceIsolation::Light,
+                cap_project::VoiceIsolation::Balanced,
+                cap_project::VoiceIsolation::Strong,
+            ][next(3) as usize];
+            for clip in &mut project.clips {
+                clip.offsets.mic = if next(2) == 0 {
+                    0.0
+                } else {
+                    (next(600_001) as f32 - 300_000.0) / 1_000_000.0
+                };
+                clip.offsets.system_audio = if next(2) == 0 {
+                    0.0
+                } else {
+                    (next(600_001) as f32 - 300_000.0) / 1_000_000.0
+                };
+            }
+            let mut cursors = [
+                next(48_000) as f64 / 48_000.0,
+                next(48_000) as f64 / 48_000.0,
+            ];
+            let mut segments = Vec::new();
+            while segments.len() < 14 {
+                let clip = next(2) as usize;
+                if cursors[clip] > 6.0 {
+                    if cursors.iter().all(|cursor| *cursor > 6.0) {
+                        break;
+                    }
+                    continue;
+                }
+                let gap = match next(5) {
+                    0 => 0,
+                    1 => 1 + next(480),
+                    2 => 480 + next(9_600),
+                    3 => 9_600 + next(40_000),
+                    _ => 40_000 + next(100_000),
+                } as f64
+                    / 48_000.0;
+                let start = cursors[clip] + gap;
+                let end = start + (24 + next(60_000)) as f64 / 48_000.0;
+                segments.push(segment(clip as u32, start, end));
+                cursors[clip] = end;
+            }
+            project.timeline.as_mut().unwrap().segments = segments;
+            if !ExportAudioRenderer::eligible_sources(&project, 3) {
+                continue;
+            }
+            let request = [1, 480, 997, 4_096, 4_097, 48_001][next(6) as usize];
+            let (mut reference, mut candidate) = fixture(&paths, &data);
+            reference.set_playhead(0.0, &project);
+            let mut position = 0;
+            loop {
+                let expected = reference.render_frame_raw(request, &project);
+                let mut actual = Vec::new();
+                let written = match candidate.render_chunks(request, &project, |_, samples| {
+                    actual.extend_from_slice(samples);
+                    Ok(())
+                }) {
+                    Ok(written) => written,
+                    Err(error) => {
+                        let segments = project
+                            .timeline
+                            .as_ref()
+                            .unwrap()
+                            .segments
+                            .iter()
+                            .map(|segment| (segment.recording_clip, segment.start, segment.end))
+                            .collect::<Vec<_>>();
+                        let offsets = project
+                            .clips
+                            .iter()
+                            .map(|clip| (clip.offsets.mic, clip.offsets.system_audio))
+                            .collect::<Vec<_>>();
+                        failures.push(format!(
+                            "iteration {iteration} request {request} at output sample {position}: {error}\n{:?} {offsets:?}\n{segments:?}",
+                            project.audio.isolation
+                        ));
+                        break;
+                    }
+                };
+                assert_eq!(
+                    written,
+                    expected.as_ref().map(|(count, _)| *count),
+                    "iteration {iteration} request {request} at output sample {position}"
+                );
+                assert_eq!(
+                    actual.len(),
+                    expected.as_ref().map_or(0, |(_, data)| data.len()),
+                    "iteration {iteration} request {request} at output sample {position}"
+                );
+                let Some(written) = written else {
+                    break;
+                };
+                position += written;
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n\n"));
     }
 
     #[test]
@@ -1803,7 +2061,7 @@ mod tests {
                         assert!(
                             track.samples.len()
                                 <= (if track.enhancer.is_some() {
-                                    MAX_ENHANCED_WINDOW_SAMPLES
+                                    MAX_ENHANCED_WINDOW_SAMPLES + STUDIO_SOUND_HISTORY_SAMPLES
                                 } else {
                                     EXPORT_AUDIO_BLOCK_SAMPLES
                                 }) * track.source.channels() as usize
@@ -2044,12 +2302,12 @@ mod tests {
         let cancellation = Arc::new(AtomicBool::new(false));
         let mut track =
             ExportAudioTrack::open(&path, 0, true, 0.0, &cancellation, &cancellation).unwrap();
-        track.prepare(8_000, 9_000).unwrap();
-        track.prepare(8_500, 9_501).unwrap();
+        track.prepare(8_000, 9_000, 0).unwrap();
+        track.prepare(8_500, 9_501, 0).unwrap();
         let full = AudioData::from_file(&path).unwrap();
         assert_eq!(track.samples, full.samples()[8_500 * 2..9_501 * 2]);
         assert!(matches!(
-            track.prepare(0, 1),
+            track.prepare(0, 1, 0),
             Err(ExportAudioError::InvalidWindow)
         ));
         let mut candidate = ExportAudioRenderer {
@@ -2074,6 +2332,55 @@ mod tests {
                 .to_string(),
             error
         );
+    }
+
+    #[test]
+    fn source_history_reuses_decoded_samples_and_stays_bounded() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("source.wav");
+        write_wav(&path, 144_013, 2);
+        let cancellation = Arc::new(AtomicBool::new(false));
+        let mut track =
+            ExportAudioTrack::open(&path, 0, true, 0.0, &cancellation, &cancellation).unwrap();
+        let full = AudioData::from_file(&path).unwrap();
+        track
+            .prepare(50_000, 52_000, STUDIO_SOUND_HISTORY_SAMPLES)
+            .unwrap();
+        let position = track.source.position();
+        let oldest = track.source_start;
+        track
+            .prepare(25_000, 27_000, STUDIO_SOUND_HISTORY_SAMPLES)
+            .unwrap();
+        assert_eq!(track.source.position(), position);
+        assert_eq!(track.source_start, oldest);
+        assert_eq!(
+            track.view().sample_slice(25_000 * 2..27_000 * 2).unwrap(),
+            &full.samples()[25_000 * 2..27_000 * 2]
+        );
+        assert!(matches!(
+            track.prepare(
+                oldest as i128 - 1,
+                oldest as i128,
+                STUDIO_SOUND_HISTORY_SAMPLES
+            ),
+            Err(ExportAudioError::InvalidWindow)
+        ));
+        for start in (60_000..150_000).step_by(997) {
+            track
+                .prepare(start, start + 1_632, STUDIO_SOUND_HISTORY_SAMPLES)
+                .unwrap();
+            let end = track.source.position() as usize;
+            assert_eq!(
+                track.samples,
+                full.samples()[track.source_start * 2..end * 2]
+            );
+            assert!(
+                track.samples.len()
+                    <= (MAX_ENHANCED_WINDOW_SAMPLES + STUDIO_SOUND_HISTORY_SAMPLES) * 2
+            );
+        }
+        track.prepare(144_013, 144_014, 0).unwrap();
+        assert!(track.samples.is_empty());
     }
 
     #[test]

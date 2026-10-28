@@ -1,9 +1,7 @@
 use crate::RecordingStartGate;
 use cap_cursor_capture::CursorCropBounds;
 use cap_cursor_info::CursorShape;
-use cap_project::{
-    CursorClickEvent, CursorEvents, CursorMoveEvent, KeyPressEvent, KeyboardEvents, XY,
-};
+use cap_project::{CursorClickEvent, CursorMoveEvent, KeyPressEvent, KeyboardEvents, XY};
 use cap_timestamp::Timestamps;
 use futures::{FutureExt, future::Shared};
 use std::{
@@ -11,7 +9,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicUsize, Ordering},
     },
     time::Instant,
 };
@@ -53,8 +51,59 @@ pub struct IncrementalCaptureOutputs {
 pub struct CursorCaptureTarget {
     pub crop_bounds: CursorCropBounds,
     pub display: scap_targets::Display,
-    #[cfg(target_os = "linux")]
     pub window: Option<scap_targets::WindowId>,
+}
+
+#[cfg(target_os = "macos")]
+fn macos_window_crop(
+    window: &scap_targets::WindowId,
+    display: &scap_targets::Display,
+) -> Option<CursorCropBounds> {
+    use scap_targets::bounds::{LogicalBounds, LogicalPosition};
+
+    let window_bounds = scap_targets::Window::from_id_direct(window)?
+        .raw_handle()
+        .logical_bounds()?;
+    let display_position = display.raw_handle().logical_position();
+    // The video reads the window inside its rounded corners; the cursor
+    // is placed against the same trimmed frame.
+    Some(CursorCropBounds::new_macos(
+        crate::sources::screen_capture::trim_window_corners(LogicalBounds::new(
+            LogicalPosition::new(
+                window_bounds.position().x() - display_position.x(),
+                window_bounds.position().y() - display_position.y(),
+            ),
+            window_bounds.size(),
+        )),
+    ))
+}
+
+#[cfg(windows)]
+fn windows_window_crop(
+    window: &scap_targets::WindowId,
+    display: &scap_targets::Display,
+) -> Option<CursorCropBounds> {
+    let window_bounds = scap_targets::Window::from_id_direct(window)?
+        .raw_handle()
+        .physical_bounds()?;
+    let display_bounds = display.raw_handle().physical_bounds()?;
+    Some(window_crop_on_display(window_bounds, display_bounds))
+}
+
+#[cfg(windows)]
+fn window_crop_on_display(
+    window_bounds: scap_targets::bounds::PhysicalBounds,
+    display_bounds: scap_targets::bounds::PhysicalBounds,
+) -> CursorCropBounds {
+    use scap_targets::bounds::{PhysicalBounds, PhysicalPosition};
+
+    CursorCropBounds::new_windows(PhysicalBounds::new(
+        PhysicalPosition::new(
+            window_bounds.position().x() - display_bounds.position().x(),
+            window_bounds.position().y() - display_bounds.position().y(),
+        ),
+        window_bounds.size(),
+    ))
 }
 
 #[cfg(target_os = "linux")]
@@ -110,6 +159,32 @@ fn normalized_window_cursor(x: i16, y: i16, width: u16, height: u16) -> Option<(
     })
 }
 
+#[cfg(all(test, windows))]
+mod windows_window_cursor_tests {
+    use super::window_crop_on_display;
+    use scap_targets::bounds::{PhysicalBounds, PhysicalPosition, PhysicalSize};
+
+    fn bounds(x: f64, y: f64, width: f64, height: f64) -> PhysicalBounds {
+        PhysicalBounds::new(
+            PhysicalPosition::new(x, y),
+            PhysicalSize::new(width, height),
+        )
+    }
+
+    #[test]
+    fn the_cursor_crop_follows_the_window_when_it_moves() {
+        let display = bounds(-1920.0, 0.0, 1920.0, 1080.0);
+        let started = window_crop_on_display(bounds(-1720.0, 200.0, 800.0, 600.0), display);
+        let moved = window_crop_on_display(bounds(-1320.0, 350.0, 800.0, 600.0), display);
+
+        assert_ne!(started, moved);
+        assert_eq!(
+            moved,
+            cap_cursor_capture::CursorCropBounds::new_windows(bounds(600.0, 350.0, 800.0, 600.0))
+        );
+    }
+}
+
 #[cfg(all(test, target_os = "linux"))]
 mod window_cursor_tests {
     use super::normalized_window_cursor;
@@ -162,48 +237,157 @@ fn prefers_wayland_portal_cursor() -> bool {
             .is_ok_and(|session| session.eq_ignore_ascii_case("wayland"))
 }
 
-fn flush_cursor_data(output_path: &Path, moves: &[CursorMoveEvent], clicks: &[CursorClickEvent]) {
-    let events = CursorEvents {
-        clicks: clicks.to_vec(),
-        moves: moves.to_vec(),
+/// Replaces `path` with `parts` through a temporary file and a rename, so a
+/// crash or kill mid-write leaves the previous complete file for recovery. A
+/// refused rename, such as a reader holding the file open on Windows, falls
+/// back to writing in place as before.
+pub(crate) fn write_atomically(path: &Path, parts: &[&[u8]]) -> std::io::Result<()> {
+    use std::io::Write;
+
+    let write = |path: &Path| {
+        let mut file = std::fs::File::create(path)?;
+        parts.iter().try_for_each(|part| file.write_all(part))
     };
-    if let Ok(json) = serde_json::to_string_pretty(&events)
-        && let Err(e) = std::fs::write(output_path, json)
-    {
-        tracing::error!(
-            "Failed to write cursor data to {}: {}",
-            output_path.display(),
-            e
-        );
+    let mut temp_path = path.as_os_str().to_owned();
+    temp_path.push(".tmp");
+    let temp_path = PathBuf::from(temp_path);
+    if let Err(error) = write(&temp_path) {
+        let _ = std::fs::remove_file(&temp_path);
+        return Err(error);
+    }
+    std::fs::rename(&temp_path, path).or_else(|error| {
+        let _ = std::fs::remove_file(&temp_path);
+        tracing::warn!(path = %path.display(), %error, "Atomic replace failed, writing in place");
+        write(path)
+    })
+}
+
+/// Events recorded since the previous periodic flush.
+#[derive(Default)]
+struct IncrementalDelta {
+    moves: Vec<CursorMoveEvent>,
+    clicks: Vec<CursorClickEvent>,
+    keyboard_presses: Vec<KeyPressEvent>,
+}
+
+/// How many of the recorder's events were already handed to the incremental
+/// files, so each flush clones only the newer ones on the sampling thread.
+#[derive(Default)]
+struct FlushedEvents {
+    moves: usize,
+    clicks: usize,
+    keyboard_presses: usize,
+}
+
+impl FlushedEvents {
+    fn take(
+        &mut self,
+        outputs: &IncrementalCaptureOutputs,
+        response: &CursorActorResponse,
+    ) -> IncrementalDelta {
+        let mut delta = IncrementalDelta::default();
+        if outputs.cursor.is_some() {
+            delta.moves = response.moves[self.moves..].to_vec();
+            delta.clicks = response.clicks[self.clicks..].to_vec();
+        }
+        if outputs.keyboard.is_some() {
+            delta.keyboard_presses = response.keyboard_presses[self.keyboard_presses..].to_vec();
+        }
+        self.moves = response.moves.len();
+        self.clicks = response.clicks.len();
+        self.keyboard_presses = response.keyboard_presses.len();
+        delta
     }
 }
 
-struct IncrementalSnapshot {
-    cursor: Option<(Vec<CursorMoveEvent>, Vec<CursorClickEvent>)>,
-    keyboard: Option<Vec<KeyPressEvent>>,
+/// The incremental cursor and keyboard files, built up from deltas. Moves and
+/// clicks are kept serialized, so a flush serializes only its new events and
+/// writes the same compact JSON `serde_json::to_vec` gives for `CursorEvents`.
+/// A file is rewritten only when it has new events or its last write failed.
+struct IncrementalFiles {
+    outputs: IncrementalCaptureOutputs,
+    clicks_json: Vec<u8>,
+    moves_json: Vec<u8>,
+    keyboard: KeyboardEvents,
+    cursor_pending: bool,
+    keyboard_pending: bool,
 }
 
-impl IncrementalSnapshot {
-    fn capture(outputs: &IncrementalCaptureOutputs, response: &CursorActorResponse) -> Self {
+impl IncrementalFiles {
+    fn new(outputs: IncrementalCaptureOutputs) -> Self {
         Self {
-            cursor: outputs
-                .cursor
-                .as_ref()
-                .map(|_| (response.moves.clone(), response.clicks.clone())),
-            keyboard: outputs
-                .keyboard
-                .as_ref()
-                .map(|_| response.keyboard_presses.clone()),
+            outputs,
+            clicks_json: Vec::new(),
+            moves_json: Vec::new(),
+            keyboard: KeyboardEvents::default(),
+            cursor_pending: true,
+            keyboard_pending: true,
         }
     }
 
-    fn write(self, outputs: &IncrementalCaptureOutputs) {
-        if let (Some(path), Some((moves, clicks))) = (&outputs.cursor, &self.cursor) {
-            flush_cursor_data(path, moves, clicks);
+    fn append(&mut self, delta: IncrementalDelta) {
+        if self.outputs.cursor.is_some() {
+            self.cursor_pending |= !delta.moves.is_empty() || !delta.clicks.is_empty();
+            for click in &delta.clicks {
+                append_json(&mut self.clicks_json, click);
+            }
+            for event in &delta.moves {
+                append_json(&mut self.moves_json, event);
+            }
         }
-        if let (Some(path), Some(presses)) = (&outputs.keyboard, &self.keyboard) {
-            flush_keyboard_data(path, presses);
+        if self.outputs.keyboard.is_some() {
+            self.keyboard_pending |= !delta.keyboard_presses.is_empty();
+            self.keyboard.presses.extend(delta.keyboard_presses);
         }
+    }
+
+    fn write(&mut self) {
+        if let Some(path) = &self.outputs.cursor
+            && self.cursor_pending
+        {
+            let parts: [&[u8]; 5] = [
+                b"{\"clicks\":[",
+                &self.clicks_json,
+                b"],\"moves\":[",
+                &self.moves_json,
+                b"]}",
+            ];
+            match write_atomically(path, &parts) {
+                Ok(()) => self.cursor_pending = false,
+                Err(e) => {
+                    tracing::error!("Failed to write cursor data to {}: {}", path.display(), e)
+                }
+            }
+        }
+        if let Some(path) = &self.outputs.keyboard
+            && self.keyboard_pending
+        {
+            match self
+                .keyboard
+                .to_bytes()
+                .and_then(|bytes| write_atomically(path, &[&bytes]).map_err(|e| e.to_string()))
+            {
+                Ok(()) => self.keyboard_pending = false,
+                Err(e) => {
+                    tracing::error!("Failed to write keyboard data to {}: {}", path.display(), e)
+                }
+            }
+        }
+    }
+
+    fn flush(&mut self, delta: IncrementalDelta) {
+        self.append(delta);
+        self.write();
+    }
+}
+
+fn append_json(buffer: &mut Vec<u8>, event: &impl serde::Serialize) {
+    let start = buffer.len();
+    if start > 0 {
+        buffer.push(b',');
+    }
+    if serde_json::to_writer(&mut *buffer, event).is_err() {
+        buffer.truncate(start);
     }
 }
 
@@ -212,19 +396,20 @@ enum WriterMessage {
         path: PathBuf,
         image: image::RgbaImage,
     },
-    Snapshot(IncrementalSnapshot),
+    Delta(IncrementalDelta),
 }
 
 /// Writes cursor images and the incremental cursor and keyboard files on a
 /// separate thread so a slow or stalled output volume cannot pause input
-/// sampling. At most one periodic snapshot waits while another is written; a
-/// flush that finds one already waiting is skipped, since the next one carries
-/// every event. Cursor images that fail to save are retried, and any still
-/// missing at the end are reported so the recorder can drop them, matching the
-/// old inline behaviour of only registering images that reached disk.
+/// sampling. The thread owns the accumulated files and receives only each
+/// flush's new events; deltas that queue up behind a slow write are folded
+/// into a single write. Cursor images that fail to save are retried, and any
+/// still missing at the end are reported so the recorder can drop them,
+/// matching the old inline behaviour of only registering images that reached
+/// disk.
 struct CursorFileWriter {
     tx: std::sync::mpsc::Sender<WriterMessage>,
-    snapshot_queued: Arc<AtomicBool>,
+    pending_deltas: Arc<AtomicUsize>,
     thread: std::thread::JoinHandle<Vec<PathBuf>>,
 }
 
@@ -233,11 +418,12 @@ const CURSOR_IMAGE_RETRY_INTERVAL: std::time::Duration = std::time::Duration::fr
 impl CursorFileWriter {
     fn spawn(outputs: IncrementalCaptureOutputs) -> std::io::Result<Self> {
         let (tx, rx) = std::sync::mpsc::channel::<WriterMessage>();
-        let snapshot_queued = Arc::new(AtomicBool::new(false));
-        let queued = snapshot_queued.clone();
+        let pending_deltas = Arc::new(AtomicUsize::new(0));
+        let pending = pending_deltas.clone();
         let thread = std::thread::Builder::new()
             .name("cursor-writer".to_string())
             .spawn(move || {
+                let mut files = IncrementalFiles::new(outputs);
                 let mut failed_images: Vec<(PathBuf, image::RgbaImage)> = Vec::new();
                 loop {
                     let message = if failed_images.is_empty() {
@@ -256,9 +442,11 @@ impl CursorFileWriter {
                                 failed_images.push((path, image));
                             }
                         }
-                        Some(WriterMessage::Snapshot(snapshot)) => {
-                            queued.store(false, Ordering::Release);
-                            snapshot.write(&outputs);
+                        Some(WriterMessage::Delta(delta)) => {
+                            files.append(delta);
+                            if pending.fetch_sub(1, Ordering::AcqRel) == 1 {
+                                files.write();
+                            }
                         }
                         None if !had_failures => break,
                         None => {}
@@ -272,7 +460,7 @@ impl CursorFileWriter {
             })?;
         Ok(Self {
             tx,
-            snapshot_queued,
+            pending_deltas,
             thread,
         })
     }
@@ -287,15 +475,14 @@ impl CursorFileWriter {
         }
     }
 
-    fn flush(&self, snapshot: impl FnOnce() -> IncrementalSnapshot) {
-        if !self.snapshot_queued.swap(true, Ordering::AcqRel) {
-            let _ = self.tx.send(WriterMessage::Snapshot(snapshot()));
-        }
+    fn flush(&self, delta: IncrementalDelta) {
+        self.pending_deltas.fetch_add(1, Ordering::AcqRel);
+        let _ = self.tx.send(WriterMessage::Delta(delta));
     }
 
-    fn finish(self, snapshot: Option<IncrementalSnapshot>) -> Vec<PathBuf> {
-        if let Some(snapshot) = snapshot {
-            let _ = self.tx.send(WriterMessage::Snapshot(snapshot));
+    fn finish(self, delta: Option<IncrementalDelta>) -> Vec<PathBuf> {
+        if let Some(delta) = delta {
+            self.flush(delta);
         }
         drop(self.tx);
         self.thread.join().unwrap_or_else(|_| {
@@ -315,19 +502,6 @@ fn save_cursor_image(path: &Path, image: &image::RgbaImage) -> bool {
             tracing::error!("Failed to save cursor image: {}", e);
             false
         }
-    }
-}
-
-fn flush_keyboard_data(output_path: &Path, presses: &[KeyPressEvent]) {
-    let events = KeyboardEvents {
-        presses: presses.to_vec(),
-    };
-    if let Err(e) = events.write_to_file(output_path) {
-        tracing::error!(
-            "Failed to write keyboard data to {}: {}",
-            output_path.display(),
-            e
-        );
     }
 }
 
@@ -438,6 +612,37 @@ fn keycode_to_string(key: &device_query::Keycode) -> (String, String) {
     (display.to_string(), code.to_string())
 }
 
+fn push_key_changes(
+    previous: &[device_query::Keycode],
+    current: &[device_query::Keycode],
+    time_ms: f64,
+    presses: &mut Vec<KeyPressEvent>,
+) {
+    for key in current {
+        if !previous.contains(key) {
+            let (display, code) = keycode_to_string(key);
+            presses.push(KeyPressEvent {
+                key: display,
+                key_code: code,
+                time_ms,
+                down: true,
+            });
+        }
+    }
+
+    for key in previous {
+        if !current.contains(key) {
+            let (display, code) = keycode_to_string(key);
+            presses.push(KeyPressEvent {
+                key: display,
+                key_code: code,
+                time_ms,
+                down: false,
+            });
+        }
+    }
+}
+
 /// Time zero for cursor, click and key events: the start gate's arm point
 /// when the pipeline was primed ahead of the recording, else the pipeline
 /// epoch. `None` while a primed recording is still waiting for its cue.
@@ -451,6 +656,7 @@ fn input_epoch(start_gate: Option<&RecordingStartGate>, start_time: Timestamps) 
 }
 
 #[tracing::instrument(name = "cursor", skip_all)]
+#[allow(clippy::too_many_arguments)]
 pub fn spawn_cursor_recorder(
     target: CursorCaptureTarget,
     cursors_dir: PathBuf,
@@ -459,6 +665,7 @@ pub fn spawn_cursor_recorder(
     start_time: Timestamps,
     start_gate: Option<RecordingStartGate>,
     incremental_outputs: IncrementalCaptureOutputs,
+    keyboard_capture: bool,
 ) -> CursorActor {
     #[cfg(target_os = "linux")]
     if prefers_wayland_portal_cursor() {
@@ -504,9 +711,21 @@ pub fn spawn_cursor_recorder(
         });
         #[cfg(target_os = "linux")]
         let mut last_window_position = None;
+        #[cfg(any(windows, target_os = "macos"))]
+        let mut last_window_crop: Option<CursorCropBounds> = None;
         let device_state = DeviceState::new();
+        // Reading the held keys asks the OS about every key it knows (two
+        // CoreGraphics queries per key on macOS, 256 GetAsyncKeyState calls
+        // on Windows), so skip it when the keys are not being recorded.
+        let held_keys = || {
+            if keyboard_capture {
+                device_state.get_keys()
+            } else {
+                Vec::new()
+            }
+        };
         let mut last_mouse_state = device_state.get_mouse();
-        let mut last_keys: Vec<device_query::Keycode> = device_state.get_keys();
+        let mut last_keys: Vec<device_query::Keycode> = held_keys();
 
         let mut last_position =
             cap_cursor_capture::RawCursorPosition::from_coords(last_mouse_state.coords);
@@ -526,6 +745,8 @@ pub fn spawn_cursor_recorder(
         let writer = CursorFileWriter::spawn(incremental_outputs.clone())
             .inspect_err(|e| error!("Failed to start cursor writer, writing inline: {e}"))
             .ok();
+        let mut inline_files = IncrementalFiles::new(incremental_outputs.clone());
+        let mut flushed = FlushedEvents::default();
         let mut last_flush = Instant::now();
         let flush_interval = Duration::from_secs(CURSOR_FLUSH_INTERVAL_SECS);
         let mut last_cursor_id: Option<String> = None;
@@ -549,7 +770,7 @@ pub fn spawn_cursor_recorder(
                 last_mouse_state = device_state.get_mouse();
                 last_position =
                     cap_cursor_capture::RawCursorPosition::from_coords(last_mouse_state.coords);
-                last_keys = device_state.get_keys();
+                last_keys = held_keys();
                 continue;
             };
             let elapsed = epoch.elapsed().as_secs_f64() * 1000.0;
@@ -572,6 +793,29 @@ pub fn spawn_cursor_recorder(
             {
                 last_window_position = window_position;
             }
+            // A window recording follows the window, so the cursor has to be
+            // placed against where the window is now, not where it started.
+            #[cfg(windows)]
+            let window_crop = target
+                .window
+                .as_ref()
+                .and_then(|window| windows_window_crop(window, &display));
+            #[cfg(target_os = "macos")]
+            let window_crop = target
+                .window
+                .as_ref()
+                .and_then(|window| macos_window_crop(window, &display));
+            #[cfg(any(windows, target_os = "macos"))]
+            let position_changed =
+                position_changed || (window_crop.is_some() && window_crop != last_window_crop);
+            #[cfg(any(windows, target_os = "macos"))]
+            {
+                if window_crop.is_some() {
+                    last_window_crop = window_crop;
+                }
+            }
+            #[cfg(any(windows, target_os = "macos"))]
+            let crop_bounds = last_window_crop.unwrap_or(crop_bounds);
 
             // The cursor image only labels this tick's move and click events,
             // and reading it builds a full TIFF of every representation
@@ -663,39 +907,20 @@ pub fn spawn_cursor_recorder(
 
             last_mouse_state = mouse_state;
 
-            let current_keys = device_state.get_keys();
-
-            for key in &current_keys {
-                if !last_keys.contains(key) {
-                    let (display, code) = keycode_to_string(key);
-                    response.keyboard_presses.push(KeyPressEvent {
-                        key: display,
-                        key_code: code,
-                        time_ms: elapsed,
-                        down: true,
-                    });
-                }
-            }
-
-            for key in &last_keys {
-                if !current_keys.contains(key) {
-                    let (display, code) = keycode_to_string(key);
-                    response.keyboard_presses.push(KeyPressEvent {
-                        key: display,
-                        key_code: code,
-                        time_ms: elapsed,
-                        down: false,
-                    });
-                }
-            }
-
+            let current_keys = held_keys();
+            push_key_changes(
+                &last_keys,
+                &current_keys,
+                elapsed,
+                &mut response.keyboard_presses,
+            );
             last_keys = current_keys;
 
             if has_incremental_outputs && last_flush.elapsed() >= flush_interval {
-                let snapshot = || IncrementalSnapshot::capture(&incremental_outputs, &response);
+                let delta = flushed.take(&incremental_outputs, &response);
                 match &writer {
-                    Some(writer) => writer.flush(snapshot),
-                    None => snapshot().write(&incremental_outputs),
+                    Some(writer) => writer.flush(delta),
+                    None => inline_files.flush(delta),
                 }
                 last_flush = Instant::now();
             }
@@ -703,18 +928,17 @@ pub fn spawn_cursor_recorder(
 
         info!("cursor recorder done");
 
-        let snapshot = has_incremental_outputs
-            .then(|| IncrementalSnapshot::capture(&incremental_outputs, &response));
+        let delta = has_incremental_outputs.then(|| flushed.take(&incremental_outputs, &response));
         match writer {
             Some(writer) => {
-                let unsaved = writer.finish(snapshot);
+                let unsaved = writer.finish(delta);
                 response.cursors.retain(|_, cursor| {
                     !unsaved.iter().any(|path| path.ends_with(&cursor.file_name))
                 });
             }
             None => {
-                if let Some(snapshot) = snapshot {
-                    snapshot.write(&incremental_outputs);
+                if let Some(delta) = delta {
+                    inline_files.flush(delta);
                 }
             }
         }
@@ -1545,6 +1769,53 @@ fn get_cursor_data() -> Option<CursorData> {
 }
 
 #[cfg(test)]
+mod key_change_tests {
+    use super::*;
+    use device_query::Keycode;
+
+    fn press(key: &str, key_code: &str, down: bool) -> KeyPressEvent {
+        KeyPressEvent {
+            key: key.to_string(),
+            key_code: key_code.to_string(),
+            time_ms: 32.0,
+            down,
+        }
+    }
+
+    #[test]
+    fn new_keys_go_down_in_held_order_before_released_keys_go_up() {
+        let mut presses = vec![];
+        push_key_changes(
+            &[Keycode::A, Keycode::LShift],
+            &[Keycode::LShift, Keycode::Space, Keycode::B],
+            32.0,
+            &mut presses,
+        );
+        assert_eq!(
+            presses,
+            vec![
+                press("Space", "Space", true),
+                press("b", "B", true),
+                press("a", "A", false),
+            ]
+        );
+    }
+
+    #[test]
+    fn held_or_absent_keys_record_nothing() {
+        let mut presses = vec![];
+        push_key_changes(
+            &[Keycode::LMeta, Keycode::A],
+            &[Keycode::LMeta, Keycode::A],
+            32.0,
+            &mut presses,
+        );
+        push_key_changes(&[], &[], 48.0, &mut presses);
+        assert!(presses.is_empty());
+    }
+}
+
+#[cfg(test)]
 mod input_epoch_tests {
     use super::*;
 
@@ -1576,36 +1847,40 @@ mod input_epoch_tests {
 #[cfg(test)]
 mod incremental_writer_tests {
     use super::*;
+    use cap_project::CursorEvents;
+    use std::sync::atomic::AtomicBool;
     use std::time::Duration;
 
-    fn response(events: usize) -> CursorActorResponse {
-        CursorActorResponse {
-            cursors: Cursors::default(),
-            next_cursor_id: 1,
-            moves: (0..events)
+    fn delta(events: std::ops::Range<usize>) -> IncrementalDelta {
+        IncrementalDelta {
+            moves: events
+                .clone()
                 .map(|i| CursorMoveEvent {
                     active_modifiers: vec![],
-                    cursor_id: "0".to_string(),
+                    cursor_id: (i / 100).to_string(),
                     time_ms: i as f64 * 16.0,
-                    x: i as f64 / events as f64,
+                    x: i as f64 / 997.0,
                     y: 0.5,
                 })
                 .collect(),
-            clicks: (0..events / 10)
+            clicks: events
+                .clone()
+                .filter(|i| i % 10 == 0)
                 .map(|i| CursorClickEvent {
                     active_modifiers: vec![],
                     cursor_num: 0,
                     cursor_id: "0".to_string(),
-                    time_ms: i as f64 * 160.0,
-                    down: i % 2 == 0,
+                    time_ms: i as f64 * 16.0,
+                    down: i % 20 == 0,
                 })
                 .collect(),
-            keyboard_presses: (0..events / 10)
+            keyboard_presses: events
+                .filter(|i| i % 10 == 5)
                 .map(|i| KeyPressEvent {
                     key: "a".to_string(),
                     key_code: "KeyA".to_string(),
-                    time_ms: i as f64 * 160.0,
-                    down: i % 2 == 0,
+                    time_ms: i as f64 * 16.0,
+                    down: i % 20 == 5,
                 })
                 .collect(),
         }
@@ -1618,18 +1893,142 @@ mod incremental_writer_tests {
         }
     }
 
+    /// Joins the writer, failing instead of hanging if it never finishes.
+    fn finish_writer(writer: CursorFileWriter, delta: Option<IncrementalDelta>) -> Vec<PathBuf> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(writer.finish(delta));
+        });
+        rx.recv_timeout(Duration::from_secs(30))
+            .expect("the cursor writer did not finish")
+    }
+
+    /// The files hold exactly the first `events` events, in the compact form
+    /// of a single `CursorEvents` serialization and the usual keyboard binary.
+    fn assert_files_hold(outputs: &IncrementalCaptureOutputs, events: usize) {
+        let expected = delta(0..events);
+        let cursor = outputs.cursor.as_ref().unwrap();
+        // Reading a FIFO left in place would block instead of failing.
+        assert!(std::fs::metadata(cursor).unwrap().is_file());
+        assert_eq!(
+            std::fs::read(cursor).unwrap(),
+            serde_json::to_vec(&CursorEvents {
+                clicks: expected.clicks.clone(),
+                moves: expected.moves.clone(),
+            })
+            .unwrap()
+        );
+        let loaded = CursorEvents::load_from_file(cursor).unwrap();
+        assert_eq!(loaded.moves, expected.moves);
+        assert_eq!(loaded.clicks, expected.clicks);
+        assert_eq!(
+            std::fs::read(outputs.keyboard.as_ref().unwrap()).unwrap(),
+            KeyboardEvents {
+                presses: expected.keyboard_presses,
+            }
+            .to_bytes()
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn flushed_events_hand_over_only_new_events() {
+        let outputs = outputs(Path::new("unused"), "delta");
+        let mut response = CursorActorResponse {
+            cursors: Cursors::default(),
+            next_cursor_id: 0,
+            moves: vec![],
+            clicks: vec![],
+            keyboard_presses: vec![],
+        };
+        let mut flushed = FlushedEvents::default();
+        let mut handed_over = IncrementalDelta::default();
+        for range in [0..30, 30..30, 30..95] {
+            let new = delta(range);
+            response.moves.extend(new.moves);
+            response.clicks.extend(new.clicks);
+            response.keyboard_presses.extend(new.keyboard_presses);
+            let taken = flushed.take(&outputs, &response);
+            handed_over.moves.extend(taken.moves);
+            handed_over.clicks.extend(taken.clicks);
+            handed_over.keyboard_presses.extend(taken.keyboard_presses);
+        }
+        let expected = delta(0..95);
+        assert_eq!(handed_over.moves, expected.moves);
+        assert_eq!(handed_over.clicks, expected.clicks);
+        assert_eq!(handed_over.keyboard_presses, expected.keyboard_presses);
+
+        let mut cursor_only = FlushedEvents::default();
+        let taken = cursor_only.take(
+            &IncrementalCaptureOutputs {
+                cursor: outputs.cursor.clone(),
+                keyboard: None,
+            },
+            &response,
+        );
+        assert_eq!(taken.moves.len(), 95);
+        assert!(taken.keyboard_presses.is_empty());
+    }
+
+    #[test]
+    fn deltas_produce_the_compact_files_of_the_whole_recording() {
+        let dir = tempfile::tempdir().unwrap();
+        let outputs = outputs(dir.path(), "deltas");
+        let mut files = IncrementalFiles::new(outputs.clone());
+
+        files.flush(IncrementalDelta::default());
+        assert_files_hold(&outputs, 0);
+        assert_eq!(
+            std::fs::read(outputs.cursor.as_ref().unwrap()).unwrap(),
+            b"{\"clicks\":[],\"moves\":[]}"
+        );
+
+        for range in [0..1, 1..40, 40..41, 41..400] {
+            files.flush(delta(range.clone()));
+            assert_files_hold(&outputs, range.end);
+        }
+        assert!(!dir.path().join("deltas-cursor.json.tmp").exists());
+        assert!(!dir.path().join("deltas-keyboard.bin.tmp").exists());
+    }
+
+    #[test]
+    fn idle_flushes_skip_the_rewrite_and_failed_writes_retry() {
+        let dir = tempfile::tempdir().unwrap();
+        let idle = outputs(dir.path(), "idle");
+        let mut files = IncrementalFiles::new(idle.clone());
+        files.flush(delta(0..50));
+        for path in [&idle.cursor, &idle.keyboard] {
+            std::fs::remove_file(path.as_ref().unwrap()).unwrap();
+        }
+        files.flush(IncrementalDelta::default());
+        assert!(!idle.cursor.as_ref().unwrap().exists());
+        assert!(!idle.keyboard.as_ref().unwrap().exists());
+        files.flush(delta(50..60));
+        assert_files_hold(&idle, 60);
+
+        let missing = dir.path().join("missing");
+        let retry = outputs(&missing, "retry");
+        let mut files = IncrementalFiles::new(retry.clone());
+        files.flush(delta(0..20));
+        assert!(!missing.exists());
+        std::fs::create_dir(&missing).unwrap();
+        files.flush(IncrementalDelta::default());
+        assert_files_hold(&retry, 20);
+    }
+
     #[test]
     fn writer_thread_produces_the_same_files_as_inline_flushes() {
         let dir = tempfile::tempdir().unwrap();
-        let full = response(500);
 
         let inline = outputs(dir.path(), "inline");
-        IncrementalSnapshot::capture(&inline, &full).write(&inline);
+        let mut files = IncrementalFiles::new(inline.clone());
+        files.flush(delta(0..10));
+        files.flush(delta(10..500));
 
         let threaded = outputs(dir.path(), "threaded");
         let writer = CursorFileWriter::spawn(threaded.clone()).unwrap();
-        writer.flush(|| IncrementalSnapshot::capture(&threaded, &response(10)));
-        writer.finish(Some(IncrementalSnapshot::capture(&threaded, &full)));
+        writer.flush(delta(0..10));
+        finish_writer(writer, Some(delta(10..500)));
 
         for (a, b) in [
             (&inline.cursor, &threaded.cursor),
@@ -1638,6 +2037,7 @@ mod incremental_writer_tests {
             let (a, b) = (a.as_ref().unwrap(), b.as_ref().unwrap());
             assert_eq!(std::fs::read(a).unwrap(), std::fs::read(b).unwrap());
         }
+        assert_files_hold(&threaded, 500);
     }
 
     #[cfg(unix)]
@@ -1649,20 +2049,20 @@ mod incremental_writer_tests {
         use std::os::unix::fs::OpenOptionsExt;
 
         let dir = tempfile::tempdir().unwrap();
-        let fifo = dir.path().join("cursor.json");
-        let fifo_c = CString::new(fifo.as_os_str().as_bytes()).unwrap();
-        assert_eq!(unsafe { libc::mkfifo(fifo_c.as_ptr(), 0o600) }, 0);
         let outputs = IncrementalCaptureOutputs {
-            cursor: Some(fifo.clone()),
+            cursor: Some(dir.path().join("cursor.json")),
             keyboard: Some(dir.path().join("keyboard.bin")),
         };
-
         // Opening a FIFO for writing blocks until a reader arrives, which
         // stands in for a stalled output volume.
+        let fifo = dir.path().join("cursor.json.tmp");
+        let fifo_c = CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(fifo_c.as_ptr(), 0o600) }, 0);
+
         let writer = CursorFileWriter::spawn(outputs.clone()).unwrap();
         let started = Instant::now();
-        for events in [10, 20, 30, 40] {
-            writer.flush(|| IncrementalSnapshot::capture(&outputs, &response(events)));
+        for range in [0..10, 10..20, 20..30, 30..40] {
+            writer.flush(delta(range));
         }
         assert!(writer.save_image(
             dir.path().join("cursor_0.png"),
@@ -1689,22 +2089,88 @@ mod incremental_writer_tests {
             })
         };
 
-        let final_response = response(50);
-        let unsaved = writer.finish(Some(IncrementalSnapshot::capture(
-            &outputs,
-            &final_response,
-        )));
+        // The writer may have folded every queued delta into its stalled write,
+        // which renames the FIFO itself into place once a reader arrives. Wait
+        // for that rename before the last flush, so the last write always
+        // replaces it with a regular file.
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !(outputs.cursor.as_ref().unwrap().exists() && !fifo.exists()) {
+            assert!(
+                Instant::now() < deadline,
+                "the stalled write never completed"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let unsaved = finish_writer(writer, Some(delta(40..50)));
         done.store(true, Ordering::Release);
         drainer.join().unwrap();
 
         assert!(unsaved.is_empty());
         assert!(dir.path().join("cursor_0.png").exists());
-        let expected = dir.path().join("expected-keyboard.bin");
-        flush_keyboard_data(&expected, &final_response.keyboard_presses);
-        assert_eq!(
-            std::fs::read(dir.path().join("keyboard.bin")).unwrap(),
-            std::fs::read(expected).unwrap()
-        );
+        assert_files_hold(&outputs, 50);
+    }
+
+    const KILL_CHILD_DIR: &str = "CAP_TEST_CURSOR_WRITER_KILL_DIR";
+    const KILL_CHILD_BATCH: usize = 5_000;
+
+    /// Rewrites the incremental files in a child process that is killed at
+    /// arbitrary points, and checks that every kill leaves files the editor
+    /// and recovery can read in full.
+    #[test]
+    fn a_writer_killed_mid_write_leaves_complete_files() {
+        if let Some(dir) = std::env::var_os(KILL_CHILD_DIR) {
+            let mut files = IncrementalFiles::new(outputs(Path::new(&dir), "killed"));
+            for batch in 0.. {
+                files.flush(delta(
+                    batch * KILL_CHILD_BATCH..(batch + 1) * KILL_CHILD_BATCH,
+                ));
+            }
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let outputs = outputs(dir.path(), "killed");
+        let cursor = outputs.cursor.as_ref().unwrap();
+        let keyboard = outputs.keyboard.as_ref().unwrap();
+        for round in 0..12_u64 {
+            let _ = std::fs::remove_file(cursor);
+            let _ = std::fs::remove_file(keyboard);
+            let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "cursor::incremental_writer_tests::a_writer_killed_mid_write_leaves_complete_files",
+                    "--test-threads=1",
+                ])
+                .env(KILL_CHILD_DIR, dir.path())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .unwrap();
+            // Wait for a few rewrites of over a megabyte, so the kill lands
+            // while a large file is being replaced.
+            let deadline = Instant::now() + Duration::from_secs(60);
+            while !std::fs::metadata(cursor).is_ok_and(|meta| meta.len() >= 2_000_000) {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    panic!("the child never wrote the cursor file");
+                }
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            std::thread::sleep(Duration::from_millis(round * 7 % 40));
+            child.kill().unwrap();
+            child.wait().unwrap();
+
+            let events = CursorEvents::load_from_file(cursor).unwrap();
+            assert_eq!(events.moves.len() % KILL_CHILD_BATCH, 0);
+            let expected = delta(0..events.moves.len());
+            assert_eq!(events.moves, expected.moves);
+            assert_eq!(events.clicks, expected.clicks);
+            // The keyboard file is replaced after the cursor file, so a kill
+            // between the two leaves it one flush behind.
+            let presses = KeyboardEvents::load_from_file(keyboard).unwrap().presses;
+            let behind = expected.keyboard_presses.len() - presses.len();
+            assert!(behind == 0 || behind == KILL_CHILD_BATCH / 10);
+            assert_eq!(presses[..], expected.keyboard_presses[..presses.len()]);
+        }
     }
 
     #[test]
@@ -1725,7 +2191,7 @@ mod incremental_writer_tests {
             saved.clone(),
             image::RgbaImage::from_pixel(8, 8, image::Rgba([20, 40, 80, 255])),
         ));
-        assert_eq!(writer.finish(None), vec![missing]);
+        assert_eq!(finish_writer(writer, None), vec![missing]);
         assert!(saved.exists());
     }
 
@@ -1751,7 +2217,7 @@ mod incremental_writer_tests {
             std::thread::sleep(Duration::from_millis(20));
         }
         assert!(path.exists());
-        assert!(writer.finish(None).is_empty());
+        assert!(finish_writer(writer, None).is_empty());
     }
 }
 

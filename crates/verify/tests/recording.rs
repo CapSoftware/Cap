@@ -52,7 +52,7 @@ use cap_verify::{
         SENTINEL_FILE, SentinelLog, StimulusEvent, StimulusProcess, StimulusSpec, host_add_secs,
         host_now, host_secs,
     },
-    video_code::{self, FrameMarker, Readout, StreamKind},
+    video_code::{self, FrameMarker, PixelSource as _, Readout, StreamKind},
 };
 
 use platform::{Shareable, host_timestamp};
@@ -136,6 +136,18 @@ mod platform {
         use cpal::traits::HostTrait;
         cpal::default_host().default_output_device().is_some()
     }
+
+    /// What Cap's manifest declares: window bounds are read in physical
+    /// pixels only by a per-monitor DPI aware process, and a window target
+    /// has none otherwise.
+    pub fn declare_dpi_awareness() {
+        const PROCESS_PER_MONITOR_DPI_AWARE: i32 = 2;
+        #[link(name = "shcore")]
+        unsafe extern "system" {
+            fn SetProcessDpiAwareness(value: i32) -> i32;
+        }
+        unsafe { SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE) };
+    }
 }
 
 static ATTEMPT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -198,10 +210,30 @@ struct Spec {
     mic_delay: f64,
     mic: bool,
     system_audio: bool,
+    /// Focus: record the stimulus window by itself (window-only capture)
+    /// with a magenta window in front of it, which must stay out.
+    focus: bool,
 }
 
 fn specs() -> Vec<Spec> {
     let mut specs = vec![
+        Spec {
+            id: "recording/studio-window/focus",
+            tier: Tier::Fast,
+            mode: Mode::Studio {
+                fragmented: true,
+                camera: false,
+            },
+            seconds: 6.0,
+            stimulus_fps: 20.0,
+            holds: vec![],
+            camera_drops_at: vec![],
+            gated: false,
+            mic_delay: 0.0,
+            mic: true,
+            system_audio: false,
+            focus: true,
+        },
         Spec {
             id: "recording/studio-screen/fragmented",
             tier: Tier::Fast,
@@ -217,6 +249,7 @@ fn specs() -> Vec<Spec> {
             mic_delay: 0.0,
             mic: true,
             system_audio: true,
+            focus: false,
         },
         Spec {
             id: "recording/studio-camera/startup-drops",
@@ -233,6 +266,7 @@ fn specs() -> Vec<Spec> {
             mic_delay: 0.0,
             mic: true,
             system_audio: true,
+            focus: false,
         },
         Spec {
             id: "recording/instant/screen-mic-system",
@@ -246,6 +280,7 @@ fn specs() -> Vec<Spec> {
             mic_delay: 0.0,
             mic: true,
             system_audio: true,
+            focus: false,
         },
         Spec {
             id: "recording/studio-screen/gated",
@@ -262,6 +297,7 @@ fn specs() -> Vec<Spec> {
             mic_delay: 0.0,
             mic: true,
             system_audio: true,
+            focus: false,
         },
         Spec {
             id: "recording/instant/gated",
@@ -275,6 +311,7 @@ fn specs() -> Vec<Spec> {
             mic_delay: 0.0,
             mic: true,
             system_audio: true,
+            focus: false,
         },
         Spec {
             id: "recording/instant/late-mic",
@@ -288,6 +325,7 @@ fn specs() -> Vec<Spec> {
             mic_delay: 1.0,
             mic: true,
             system_audio: false,
+            focus: false,
         },
         Spec {
             id: "recording/instant/system-only",
@@ -301,6 +339,7 @@ fn specs() -> Vec<Spec> {
             mic_delay: 0.0,
             mic: false,
             system_audio: true,
+            focus: false,
         },
         Spec {
             id: "recording/studio-screen/late-mic",
@@ -317,6 +356,7 @@ fn specs() -> Vec<Spec> {
             mic_delay: 0.3,
             mic: true,
             system_audio: true,
+            focus: false,
         },
         Spec {
             id: "recording/studio-recovery/crash",
@@ -330,6 +370,7 @@ fn specs() -> Vec<Spec> {
             mic_delay: 0.0,
             mic: true,
             system_audio: true,
+            focus: false,
         },
         Spec {
             id: "recording/studio-screen/mp4-holds",
@@ -346,6 +387,7 @@ fn specs() -> Vec<Spec> {
             mic_delay: 0.0,
             mic: true,
             system_audio: true,
+            focus: false,
         },
         Spec {
             id: "recording/studio-camera/long",
@@ -362,6 +404,7 @@ fn specs() -> Vec<Spec> {
             mic_delay: 0.0,
             mic: true,
             system_audio: true,
+            focus: false,
         },
         Spec {
             id: "recording/instant/long-holds",
@@ -375,6 +418,7 @@ fn specs() -> Vec<Spec> {
             mic_delay: 0.0,
             mic: true,
             system_audio: true,
+            focus: false,
         },
     ];
     specs.extend(soak_specs());
@@ -420,6 +464,7 @@ fn soak_specs() -> Vec<Spec> {
             mic_delay: 0.0,
             mic: true,
             system_audio: true,
+            focus: false,
         },
         Spec {
             id: "recording/soak/instant",
@@ -433,6 +478,7 @@ fn soak_specs() -> Vec<Spec> {
             mic_delay: 0.0,
             mic: true,
             system_audio: true,
+            focus: false,
         },
     ]
 }
@@ -503,6 +549,8 @@ fn runtime() -> tokio::runtime::Runtime {
 }
 
 fn init() {
+    #[cfg(windows)]
+    platform::declare_dpi_awareness();
     media::init();
     if std::env::var_os("RUST_LOG").is_some() {
         let _ = tracing_subscriber::fmt()
@@ -558,6 +606,7 @@ fn real_capture() {
             mic_delay: 0.0,
             mic: true,
             system_audio: true,
+            focus: false,
         };
         let mut case = Case::new(warmup.id);
         let started = std::time::Instant::now();
@@ -1300,6 +1349,8 @@ struct Recorded {
     /// Recovery after a crash may lose at most this many seconds before the
     /// crash (the in-flight fragment).
     loss_budget: Option<f64>,
+    /// A Focus case: the screen track must be the stimulus window alone.
+    focus: bool,
 }
 
 async fn run_case(
@@ -1807,6 +1858,68 @@ fn observer_silence_excuses_only_a_covered_window() {
     assert!(!check(Vec::new()).dropped_for_every_client(4));
 }
 
+#[test]
+fn post_hold_pictures_are_excused_only_when_the_reference_missed_them() {
+    // 20 fps pictures, held from 0.5 s to 1.5 s: picture 10 stays on screen
+    // and picture 31 is the first change after the hold.
+    let truth: Truth = (1..=10u32)
+        .chain(31..=50)
+        .map(|i| (i, f64::from(i - 1) * 0.05))
+        .collect();
+    let required = vec![(
+        31u32,
+        "first picture after the 1 s hold at 0.5 s".to_string(),
+    )];
+    let check = |observed: Vec<f64>| VideoCheck {
+        name: "screen",
+        kind: StreamKind::Screen,
+        truth: &truth,
+        not_sent: &[],
+        may_skip: Box::new(|_| false),
+        allow_duplicates: true,
+        required: required.clone(),
+        window: (0.0, 2.5),
+        observed,
+    };
+    let recorded_except = |lost: &'static [u32]| move |i: u32| !lost.contains(&i);
+    // The reference stream receives each picture 20 ms after it is presented
+    // and nothing during the hold, as on a quiet screen.
+    let prompt: Vec<f64> = truth.values().map(|t| t + 0.02).collect();
+    // The capture service resumes 70 ms after the hold: its first frame
+    // already shows picture 32, so picture 31 reached no client.
+    let late: Vec<f64> = prompt
+        .iter()
+        .map(|&t| if (1.51..1.53).contains(&t) { 1.57 } else { t })
+        .collect();
+
+    let resumed_late = check(late);
+    assert!(resumed_late.dropped_for_every_client(31));
+    let (missing, dropped) = resumed_late.missing_required(recorded_except(&[31]), 1, 50);
+    assert!(missing.is_empty(), "excused: {missing:?}");
+    assert_eq!(dropped, vec![31]);
+    // The first picture after the hold that reached the reference must be
+    // recorded in its place.
+    let (missing, _) = resumed_late.missing_required(recorded_except(&[31, 32]), 1, 50);
+    assert_eq!(missing.iter().map(|m| m.0).collect::<Vec<_>>(), vec![32]);
+
+    // The reference received picture 31: the recorder lost it.
+    let resumed_in_time = check(prompt);
+    assert!(!resumed_in_time.dropped_for_every_client(31));
+    let (missing, dropped) = resumed_in_time.missing_required(recorded_except(&[31]), 1, 50);
+    assert_eq!(missing.iter().map(|m| m.0).collect::<Vec<_>>(), vec![31]);
+    assert!(dropped.is_empty());
+    assert!(
+        resumed_in_time
+            .missing_required(recorded_except(&[]), 1, 50)
+            .0
+            .is_empty()
+    );
+
+    // Without a reference stream (Windows) nothing is excused.
+    let (missing, _) = check(Vec::new()).missing_required(recorded_except(&[31]), 1, 50);
+    assert_eq!(missing.iter().map(|m| m.0).collect::<Vec<_>>(), vec![31]);
+}
+
 fn test_trace(name: &'static str, handoffs: Vec<Handoff>) -> SourceTrace {
     let constraint = sched::Constraint {
         period_ms: 33.333,
@@ -2118,6 +2231,12 @@ async fn record(
     reference: u64,
     case: &mut Case,
 ) -> anyhow::Result<Recorded> {
+    // Focus records one window, whatever the host's default capture is.
+    let capture = if spec.focus {
+        CaptureMode::Window
+    } else {
+        capture
+    };
     let system_output = platform::system_audio_output();
     if spec.system_audio && require_system_audio() && !system_output {
         case.problem(
@@ -2141,6 +2260,9 @@ async fn record(
             CaptureMode::Display => None,
             CaptureMode::Window => Some((80, 120, 640, 400)),
         },
+        // Over the stimulus window's lower right, where a region capture
+        // would record it.
+        occluder: spec.focus.then_some((480, 320, 360, 260)),
     };
     let mut stimulus = tokio::task::block_in_place(|| {
         StimulusProcess::spawn(
@@ -2150,7 +2272,16 @@ async fn record(
         )
     })?;
     tokio::task::block_in_place(|| stimulus.wait_for("ready", Duration::from_secs(30)))?;
-    let (target, excluded, shareable) = capture_setup(capture).await?;
+    let (target, mut excluded, shareable) = capture_setup(capture).await?;
+    if spec.focus {
+        // Left in the picture on purpose: the window-only capture itself must
+        // keep it out, not the exclusion list a region capture relies on.
+        if let Some(occluder) = find_window(cap_verify::stimulus::OCCLUDER_TITLE) {
+            excluded.retain(|id| *id != occluder);
+        } else {
+            case.problem("missing", "focus: the occluder window never appeared");
+        }
+    }
 
     let camera = matches!(spec.mode, Mode::Studio { camera: true, .. });
     let feeds = start_feeds(
@@ -2188,7 +2319,11 @@ async fn record(
                 camera,
                 system_audio,
             );
-            let mut builder = builder;
+            // `CAP_VERIFY_FOCUS_OFF=1` records a Focus case as a region
+            // instead, which the Focus checks must catch: the control that
+            // shows they can fail.
+            let mut builder =
+                builder.with_window_only(spec.focus && !env_flag("CAP_VERIFY_FOCUS_OFF"));
             if spec.mic {
                 builder = builder.with_mic_feed(mic_lock.clone());
             }
@@ -2352,6 +2487,7 @@ async fn record(
         sources,
         sentinel,
         loss_budget,
+        focus: spec.focus,
     })
 }
 
@@ -2654,6 +2790,10 @@ enum Injection {
     TruncateEnd,
     /// The first second of the screen track is lost (a late start).
     LateStart,
+    /// The first picture after a scripted hold is lost although the
+    /// stimulus's own capture stream received it: a recorder drop, which
+    /// must fail even where the capture service resumes late after a hold.
+    DropAfterHold,
 }
 
 thread_local! {
@@ -2662,13 +2802,14 @@ thread_local! {
     static INJECTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-const INJECTIONS: [Injection; 6] = [
+const INJECTIONS: [Injection; 7] = [
     Injection::DropRun,
     Injection::Freeze,
     Injection::Stale,
     Injection::Late,
     Injection::TruncateEnd,
     Injection::LateStart,
+    Injection::DropAfterHold,
 ];
 const INJECTED_LATENESS: f64 = 0.15;
 
@@ -2681,6 +2822,7 @@ impl Injection {
             Injection::Late => "screen 150 ms late",
             Injection::TruncateEnd => "lose the last second",
             Injection::LateStart => "start one second late",
+            Injection::DropAfterHold => "lose a picture after a hold that reached the reference",
         }
     }
 
@@ -2691,12 +2833,15 @@ impl Injection {
             Injection::Stale => ("timestamps", "screen:"),
             Injection::Late => ("sync-screen-mic", "screen vs"),
             Injection::TruncateEnd | Injection::LateStart => ("coverage", "screen:"),
+            Injection::DropAfterHold => ("missing-after-hold", "screen:"),
         }
     }
 
     /// First of three consecutive presented indices, around 60 % of the
-    /// recording, that were all captured and each stayed on screen long
-    /// enough that the capture rate guarantees a sample.
+    /// recording, that were all captured, each stayed on screen long
+    /// enough that the capture rate guarantees a sample, and each reached
+    /// the stimulus's own capture stream (a picture that did not would be
+    /// excused as a capture-service drop once removed).
     fn target(frames: &[(f64, Readout)], check: &VideoCheck) -> Option<u32> {
         let mut seen: Vec<u32> = Vec::new();
         for (_, readout) in frames {
@@ -2713,15 +2858,65 @@ impl Injection {
             i > 1
                 && captured.contains(&(i - 1))
                 && (i..i + 3).all(|j| {
-                    captured.contains(&j) && check.truth.contains_key(&j) && !(check.may_skip)(j)
+                    captured.contains(&j)
+                        && check.truth.contains_key(&j)
+                        && !(check.may_skip)(j)
+                        && !check.dropped_for_every_client(j)
                 })
         })
     }
 
-    fn apply(self, frames: &mut Vec<(f64, Readout)>, check: &VideoCheck) {
+    fn apply(self, frames: &mut Vec<(f64, Readout)>, check: &mut VideoCheck) {
         let before = frames.clone();
-        self.mutate(frames, check);
-        INJECTED.set(*frames != before);
+        let observed = check.observed.len();
+        if self == Injection::DropAfterHold {
+            Self::drop_after_hold(frames, check);
+        } else {
+            self.mutate(frames, check);
+        }
+        INJECTED.set(*frames != before || check.observed.len() != observed);
+    }
+
+    /// Takes the first required picture after a hold that lies inside the
+    /// recording (one the recorder captured if there is one), removes it
+    /// from the recording and gives the stimulus's own capture stream a
+    /// frame while it was on screen.
+    fn drop_after_hold(frames: &mut Vec<(f64, Readout)>, check: &mut VideoCheck) {
+        let index_of = |r: &Readout| match r {
+            Readout::Marker { marker, .. } if marker.kind == StreamKind::Screen => {
+                Some(marker.index)
+            }
+            _ => None,
+        };
+        let recorded: std::collections::BTreeSet<u32> =
+            frames.iter().filter_map(|(_, r)| index_of(r)).collect();
+        let (Some(&lo), Some(&hi)) = (recorded.first(), recorded.last()) else {
+            return;
+        };
+        let inside: Vec<u32> = check
+            .required
+            .iter()
+            .map(|(index, _)| *index)
+            .filter(|index| *index > lo && *index < hi)
+            .collect();
+        let Some(index) = inside
+            .iter()
+            .copied()
+            .find(|index| recorded.contains(index))
+            .or_else(|| inside.first().copied())
+        else {
+            return;
+        };
+        let (Some(&shown), Some((_, &replaced))) = (
+            check.truth.get(&index),
+            check.truth.range(index + 1..).next(),
+        ) else {
+            return;
+        };
+        frames.retain(|(_, r)| index_of(r) != Some(index));
+        let at = (shown + replaced) / 2.0;
+        let position = check.observed.partition_point(|t| *t < at);
+        check.observed.insert(position, at);
     }
 
     fn mutate(self, frames: &mut Vec<(f64, Readout)>, check: &VideoCheck) {
@@ -2730,6 +2925,7 @@ impl Injection {
             _ => None,
         };
         match self {
+            Injection::DropAfterHold => {}
             Injection::Late => {
                 for (pts, _) in frames.iter_mut() {
                     *pts += INJECTED_LATENESS;
@@ -2813,6 +3009,9 @@ fn self_check(rec: &Recorded, reference: u64, case: &mut Case) -> anyhow::Result
             ));
             continue;
         }
+        if injection == Injection::DropAfterHold && rec.holds.is_empty() {
+            continue;
+        }
         if injection == Injection::Late && case.unobserved.contains_key(class) {
             caught.push(format!("{}: unobserved (track absent)", injection.label()));
             continue;
@@ -2838,8 +3037,13 @@ fn self_check(rec: &Recorded, reference: u64, case: &mut Case) -> anyhow::Result
             case.problem(
                 "oracle",
                 format!(
-                    "self-check: no frames to inject '{}' into: no 3 consecutive pictures the capture rate must sample",
-                    injection.label()
+                    "self-check: no frames to inject '{}' into: {}",
+                    injection.label(),
+                    if injection == Injection::DropAfterHold {
+                        "no picture after a hold inside the recording"
+                    } else {
+                        "no 3 consecutive pictures the capture rate must sample"
+                    }
                 ),
             );
         } else if probe.classes.contains(class) && !new.is_empty() {
@@ -2900,10 +3104,24 @@ struct VideoCheck<'a> {
 const OBSERVER_COVER_SECS: f64 = 0.5;
 
 impl VideoCheck<'_> {
+    /// Whether the stimulus's own capture stream received a frame while
+    /// `index` was on screen.
+    fn observed_while_shown(&self, index: u32) -> bool {
+        let (Some(&shown), Some((_, &replaced))) =
+            (self.truth.get(&index), self.truth.range(index + 1..).next())
+        else {
+            return false;
+        };
+        self.observed.iter().any(|&t| t >= shown && t <= replaced)
+    }
+
     /// A picture the capture service never delivered to any client: the
     /// stimulus's own capture stream received no frame while it was on
     /// screen, although that stream delivered frames on both sides of it
-    /// (so it covered exactly that window).
+    /// (so it covered exactly that window). The stream receives frames only
+    /// when the screen changes, so its frames before the picture are looked
+    /// for from the previous picture on: after a scripted hold that is when
+    /// the screen went static, and during the hold the stream is silent.
     fn dropped_for_every_client(&self, index: u32) -> bool {
         let Some(&shown) = self.truth.get(&index) else {
             return false;
@@ -2911,16 +3129,67 @@ impl VideoCheck<'_> {
         let Some((_, &replaced)) = self.truth.range(index + 1..).next() else {
             return false;
         };
+        let since = self
+            .truth
+            .range(..index)
+            .next_back()
+            .map_or(shown, |(_, &previous)| previous.min(shown));
         let before = self
             .observed
             .iter()
-            .any(|&t| t < shown && t >= shown - OBSERVER_COVER_SECS);
+            .any(|&t| t < shown && t >= since - OBSERVER_COVER_SECS);
         let after = self
             .observed
             .iter()
             .any(|&t| t > replaced && t <= replaced + OBSERVER_COVER_SECS);
-        let during = self.observed.iter().any(|&t| t >= shown && t <= replaced);
-        before && after && !during
+        before && after && !self.observed_while_shown(index)
+    }
+
+    /// Required pictures missing from the recording (indices strictly
+    /// between `lo` and `hi`, the first and last recorded), with their
+    /// description, and the required pictures excused because the capture
+    /// service dropped them for every client. An excused picture is
+    /// replaced by the first later one, within `OBSERVER_COVER_SECS`, that
+    /// the stimulus's own capture stream received while it was on screen
+    /// and that the capture rate must sample: the first change after the
+    /// hold that reached any client must be in the recording.
+    fn missing_required(
+        &self,
+        recorded: impl Fn(u32) -> bool,
+        lo: u32,
+        hi: u32,
+    ) -> (Vec<(u32, String)>, Vec<u32>) {
+        let mut missing = Vec::new();
+        let mut dropped = Vec::new();
+        for (index, what) in &self.required {
+            let index = *index;
+            let Some(&shown) = self.truth.get(&index) else {
+                continue;
+            };
+            if index <= lo || index >= hi || recorded(index) {
+                continue;
+            }
+            if !self.dropped_for_every_client(index) {
+                missing.push((index, what.clone()));
+                continue;
+            }
+            dropped.push(index);
+            let stand_in = self
+                .truth
+                .range(index + 1..hi)
+                .take_while(|(_, t)| **t <= shown + OBSERVER_COVER_SECS)
+                .map(|(i, _)| *i)
+                .find(|&i| self.observed_while_shown(i) && !(self.may_skip)(i));
+            if let Some(stand_in) = stand_in.filter(|&i| !recorded(i)) {
+                missing.push((
+                    stand_in,
+                    format!(
+                        "{what} to reach the stimulus's own capture stream (index {index} reached no client)"
+                    ),
+                ));
+            }
+        }
+        (missing, dropped)
     }
 }
 
@@ -2931,7 +3200,106 @@ impl VideoCheck<'_> {
 /// recorded picture is the first one presented, 9 to 69 ms after the start.
 const START_COVERAGE_SECS: f64 = 0.3;
 
-fn check_video(case: &mut Case, track: &Track, check: VideoCheck) -> anyhow::Result<Offsets> {
+/// A Focus recording's screen track is the stimulus window and nothing else:
+/// no magenta from the occluder in front of it (the screen key is blue, the
+/// noise grey, so strong positive Cr is the occluder alone), no black column
+/// or row along an edge (the window drawn smaller than its frame), and the
+/// window's own size, less the rounded corners macOS trims off.
+fn check_focus(case: &mut Case, track: &Track, stimulus: &[StimulusEvent]) -> anyhow::Result<()> {
+    let Some((width, height, scale)) = stimulus.iter().find_map(|event| match event {
+        StimulusEvent::Ready {
+            width,
+            height,
+            scale,
+            ..
+        } => Some((*width, *height, *scale)),
+        _ => None,
+    }) else {
+        case.problem("missing", "focus: the stimulus never reported its size");
+        return Ok(());
+    };
+    #[cfg(target_os = "macos")]
+    let trim =
+        2 * (cap_recording::sources::screen_capture::WINDOW_CORNER_TRIM * scale).round() as u32;
+    #[cfg(not(target_os = "macos"))]
+    let trim = {
+        let _ = scale;
+        0
+    };
+    let expected = (width.saturating_sub(trim), height.saturating_sub(trim));
+
+    let mut frames = 0usize;
+    let mut sizes = BTreeMap::new();
+    let mut leaks = Vec::new();
+    let mut edges = Vec::new();
+    media::decode_video(&track.path, |picture| {
+        let view = picture.view();
+        let (w, h) = (view.width(), view.height());
+        *sizes.entry((w, h)).or_insert(0usize) += 1;
+        frames += 1;
+        let mut magenta = 0usize;
+        for y in (0..h).step_by(2) {
+            for x in (0..w).step_by(2) {
+                let (cb, cr) = view.chroma(x, y);
+                if cr > 60.0 && cb > 30.0 {
+                    magenta += 1;
+                }
+            }
+        }
+        if magenta > 0 && leaks.len() < 3 {
+            leaks.push(format!("{:.3}s: {magenta} pixels", picture.pts_secs));
+        }
+        let black_column = |x: usize| (0..h).all(|y| view.luma(x, y) < 20.0);
+        let black_row = |y: usize| (0..w).all(|x| view.luma(x, y) < 20.0);
+        let empty = [
+            ("left", black_column(0)),
+            ("right", black_column(w - 1)),
+            ("top", black_row(0)),
+            ("bottom", black_row(h - 1)),
+        ];
+        if let Some((side, _)) = empty.iter().find(|(_, black)| *black)
+            && edges.len() < 3
+        {
+            edges.push(format!("{:.3}s: {side} edge", picture.pts_secs));
+        }
+    })?;
+
+    if frames == 0 {
+        case.problem("missing", "focus: no screen frames");
+        return Ok(());
+    }
+    if !leaks.is_empty() {
+        case.problem(
+            "focus-leak",
+            format!("the window in front was recorded: {}", leaks.join("; ")),
+        );
+    }
+    if !edges.is_empty() {
+        case.problem(
+            "focus-edge",
+            format!("an empty strip along the frame: {}", edges.join("; ")),
+        );
+    }
+    // Frame sizes are rounded to even dimensions for the encoder.
+    let near = |(w, h): (usize, usize)| {
+        (w as i64 - expected.0 as i64).abs() <= 2 && (h as i64 - expected.1 as i64).abs() <= 2
+    };
+    if !sizes.keys().all(|size| near(*size)) {
+        case.problem(
+            "focus-size",
+            format!(
+                "expected {}x{} (the window less {trim} px of corners), recorded {sizes:?}",
+                expected.0, expected.1
+            ),
+        );
+    }
+    case.note(format!(
+        "focus: {frames} frames at {sizes:?}, window {width}x{height} @{scale}x"
+    ));
+    Ok(())
+}
+
+fn check_video(case: &mut Case, track: &Track, mut check: VideoCheck) -> anyhow::Result<Offsets> {
     let mut frames: Vec<(f64, Readout)> = Vec::new();
     media::decode_video(&track.path, |picture| {
         let readout = video_code::read_stream(&picture.view(), check.kind);
@@ -2940,7 +3308,7 @@ fn check_video(case: &mut Case, track: &Track, check: VideoCheck) -> anyhow::Res
     if check.kind == StreamKind::Screen
         && let Some(injection) = INJECTION.get()
     {
-        injection.apply(&mut frames, &check);
+        injection.apply(&mut frames, &mut check);
     }
     let name = check.name;
     if frames.is_empty() {
@@ -3111,10 +3479,17 @@ fn check_video(case: &mut Case, track: &Track, check: VideoCheck) -> anyhow::Res
     }
     // Pictures the capture service dropped for every client (approved
     // policy): counted and reported, never a threshold change.
-    let (for_every_client, rest): (Vec<u32>, Vec<u32>) = skipped
+    // The first picture after a hold that reached no client counts here too
+    // (see `missing_required`).
+    let (mut for_every_client, rest): (Vec<u32>, Vec<u32>) = skipped
         .into_iter()
         .partition(|&index| check.dropped_for_every_client(index));
     skipped = rest;
+    let (missing_required, dropped_required) =
+        check.missing_required(|index| first_seen.contains_key(&index), lo, hi);
+    for_every_client.extend(dropped_required);
+    for_every_client.sort_unstable();
+    for_every_client.dedup();
     if !for_every_client.is_empty() {
         case.note(format!(
             "capture-service drops: {name}: {} missing pictures also never reached the stimulus's own capture stream, which covered their window: {:?}",
@@ -3152,19 +3527,13 @@ fn check_video(case: &mut Case, track: &Track, check: VideoCheck) -> anyhow::Res
             (best.max(run), run, Some(i))
         })
         .0;
-    for (index, what) in &check.required {
-        if check.truth.contains_key(index)
-            && *index > lo
-            && *index < hi
-            && !first_seen.contains_key(index)
-        {
-            case.count("missing-after-hold", &format!("{name}-pictures"), 1.0);
-            case.problem(
-                "missing-after-hold",
-                format!("{name}: {what} (index {index}) is missing from the recording"),
-            );
-            implicate(case, check.truth.get(index).copied());
-        }
+    for (index, what) in &missing_required {
+        case.count("missing-after-hold", &format!("{name}-pictures"), 1.0);
+        case.problem(
+            "missing-after-hold",
+            format!("{name}: {what} (index {index}) is missing from the recording"),
+        );
+        implicate(case, check.truth.get(index).copied());
     }
     if skipped.len() > budget || longest_run >= 3 {
         case.count("missing", &format!("{name}-frames"), skipped.len() as f64);
@@ -3537,6 +3906,9 @@ fn analyze(rec: &Recorded, reference: u64, case: &mut Case) -> anyhow::Result<()
             observed,
         },
     )?;
+    if rec.focus {
+        check_focus(case, &layout.display, &rec.stimulus)?;
+    }
     let camera = match (&layout.camera, &rec.camera) {
         (Some(track), Some((truth, dropped))) if track.path.is_file() => {
             case.note(format!("camera: dropped at source {dropped:?}"));

@@ -42,6 +42,7 @@ use crate::{
     editor_tabs::{OffsetKind, SidebarMenu},
     editor_timeline::TrackKind,
     editor_window::EditorWindow,
+    i18n::tr,
     ui,
 };
 
@@ -58,49 +59,88 @@ pub const MIN_VOLUME_DB: f32 = -30.;
 pub const MAX_VOLUME_DB: f32 = 12.;
 
 /// `TEXT_SEGMENT_WEIGHT_OPTIONS` (`text-style.tsx:42-50`).
-pub const TEXT_SEGMENT_WEIGHTS: [(f32, &str); 7] = [
-    (300., "Light"),
-    (400., "Regular"),
-    (500., "Medium"),
-    (600., "Semibold"),
-    (700., "Bold"),
-    (800., "Extra Bold"),
-    (900., "Black"),
+pub const TEXT_SEGMENT_WEIGHTS: [(f32, fn() -> &'static str); 7] = [
+    (300., tr::editor::panel::font_weight::light),
+    (400., tr::editor::panel::font_weight::regular),
+    (500., tr::editor::panel::font_weight::medium),
+    (600., tr::editor::panel::font_weight::semibold),
+    (700., tr::editor::panel::font_weight::bold),
+    (800., tr::editor::panel::font_weight::extra_bold),
+    (900., tr::editor::panel::font_weight::black),
 ];
 
 /// `TEXT_ANIMATION_OPTIONS` (`text-style.tsx:52-62`), in the renderer's own
 /// variant order.
-pub const TEXT_ANIMATIONS: [(TextAnimation, &str); 14] = [
-    (TextAnimation::None, "None"),
-    (TextAnimation::Fade, "Fade"),
-    (TextAnimation::SlideUp, "Slide up"),
-    (TextAnimation::SlideDown, "Slide down"),
-    (TextAnimation::SlideLeft, "Slide left"),
-    (TextAnimation::SlideRight, "Slide right"),
-    (TextAnimation::Pop, "Pop"),
-    (TextAnimation::Zoom, "Zoom"),
-    (TextAnimation::Bounce, "Bounce"),
-    (TextAnimation::Wipe, "Wipe"),
-    (TextAnimation::Words, "Words"),
-    (TextAnimation::Letters, "Letters"),
-    (TextAnimation::Tracking, "Tracking"),
-    (TextAnimation::Typewriter, "Typewriter"),
+pub const TEXT_ANIMATIONS: [(TextAnimation, fn() -> &'static str); 14] = [
+    (TextAnimation::None, tr::editor::panel::text_animation::none),
+    (TextAnimation::Fade, tr::editor::panel::text_animation::fade),
+    (
+        TextAnimation::SlideUp,
+        tr::editor::panel::text_animation::slide_up,
+    ),
+    (
+        TextAnimation::SlideDown,
+        tr::editor::panel::text_animation::slide_down,
+    ),
+    (
+        TextAnimation::SlideLeft,
+        tr::editor::panel::text_animation::slide_left,
+    ),
+    (
+        TextAnimation::SlideRight,
+        tr::editor::panel::text_animation::slide_right,
+    ),
+    (TextAnimation::Pop, tr::editor::panel::text_animation::pop),
+    (TextAnimation::Zoom, tr::editor::panel::text_animation::zoom),
+    (
+        TextAnimation::Bounce,
+        tr::editor::panel::text_animation::bounce,
+    ),
+    (TextAnimation::Wipe, tr::editor::panel::text_animation::wipe),
+    (
+        TextAnimation::Words,
+        tr::editor::panel::text_animation::words,
+    ),
+    (
+        TextAnimation::Letters,
+        tr::editor::panel::text_animation::letters,
+    ),
+    (
+        TextAnimation::Tracking,
+        tr::editor::panel::text_animation::tracking,
+    ),
+    (
+        TextAnimation::Typewriter,
+        tr::editor::panel::text_animation::typewriter,
+    ),
 ];
 
 /// `TEXT_BACKGROUND_STYLE_OPTIONS` (`text-style.tsx`). The panel's segmented
 /// control shows a fourth "None" ahead of these, which is `backgroundColor`
 /// cleared rather than a style of its own.
-pub const TEXT_BACKGROUND_STYLES: [(TextBackgroundStyle, &str); 3] = [
-    (TextBackgroundStyle::Box, "Box"),
-    (TextBackgroundStyle::Pill, "Pill"),
-    (TextBackgroundStyle::Highlight, "Highlight"),
+pub const TEXT_BACKGROUND_STYLES: [(TextBackgroundStyle, fn() -> &'static str); 3] = [
+    (
+        TextBackgroundStyle::Box,
+        tr::editor::panel::text_background::box_shape,
+    ),
+    (
+        TextBackgroundStyle::Pill,
+        tr::editor::panel::text_background::pill,
+    ),
+    (
+        TextBackgroundStyle::Highlight,
+        tr::editor::panel::text_background::highlight,
+    ),
 ];
 
 /// `TEXT_LAYOUT_OPTIONS` (`:3583-3590`): the renderer also has `splitLeft` /
 /// `splitRight`, and the source deliberately exposes only these two.
-pub const TEXT_LAYOUTS: [(TextLayout, &str); 2] = [
-    (TextLayout::Overlay, "Overlay"),
-    (TextLayout::Fullscreen, "Fullscreen"),
+pub const TEXT_LAYOUTS: [(TextLayout, fn() -> &'static str); 2] = [
+    (TextLayout::Overlay, tr::editor::panel::text_layout::overlay),
+    (
+        TextLayout::Fullscreen,
+        tr::editor::panel::text_layout::fullscreen,
+    ),
 ];
 
 /// `TEXT_ALIGN_OPTIONS` (`:3596-3600`).
@@ -147,8 +187,8 @@ pub struct TextPresetStyle {
 pub struct TextPreset {
     pub id: &'static str,
     pub group: &'static str,
-    pub name: &'static str,
-    pub sample: &'static str,
+    pub name: fn() -> &'static str,
+    pub sample: fn() -> &'static str,
     pub style: TextPresetStyle,
     pub center: Option<XY<f64>>,
 }
@@ -157,9 +197,21 @@ const SANS_STACK: &[&str] = &["Helvetica Neue", "Segoe UI", "Inter", "sans-serif
 const SERIF_STACK: &[&str] = &["Georgia", "Times New Roman", "serif"];
 const MONO_STACK: &[&str] = &["Menlo", "Consolas", "monospace"];
 
-/// The Style section's chip row, in order. The row draws "All" ahead of these.
-pub const TEXT_PRESET_GROUPS: [&str; 5] =
-    ["Titles", "Lower thirds", "Callouts", "Statements", "Code"];
+/// The Style section's chip row, in order, as `(id, label)`. The row draws
+/// "All" ahead of these.
+pub const TEXT_PRESET_GROUPS: [(&str, fn() -> &'static str); 5] = [
+    ("Titles", tr::editor::panel::text_preset::group::titles),
+    (
+        "Lower thirds",
+        tr::editor::panel::text_preset::group::lower_thirds,
+    ),
+    ("Callouts", tr::editor::panel::text_preset::group::callouts),
+    (
+        "Statements",
+        tr::editor::panel::text_preset::group::statements,
+    ),
+    ("Code", tr::editor::panel::text_preset::group::code),
+];
 
 /// The style every preset that does not draw an outline still carries.
 const PRESET_STROKE: &str = "#000000";
@@ -169,8 +221,8 @@ pub static TEXT_PRESETS: &[TextPreset] = &[
     TextPreset {
         id: "title",
         group: "Titles",
-        name: "Title",
-        sample: "Introducing Cap",
+        name: tr::editor::panel::text_preset::name::title,
+        sample: tr::editor::panel::text_preset::sample::title,
         center: None,
         style: TextPresetStyle {
             font_stack: SANS_STACK,
@@ -198,8 +250,8 @@ pub static TEXT_PRESETS: &[TextPreset] = &[
     TextPreset {
         id: "headline",
         group: "Titles",
-        name: "Headline",
-        sample: "Ship faster",
+        name: tr::editor::panel::text_preset::name::headline,
+        sample: tr::editor::panel::text_preset::sample::headline,
         center: None,
         style: TextPresetStyle {
             font_stack: SANS_STACK,
@@ -227,8 +279,8 @@ pub static TEXT_PRESETS: &[TextPreset] = &[
     TextPreset {
         id: "cinematic",
         group: "Titles",
-        name: "Cinematic",
-        sample: "Chapter one",
+        name: tr::editor::panel::text_preset::name::cinematic,
+        sample: tr::editor::panel::text_preset::sample::cinematic,
         center: None,
         style: TextPresetStyle {
             font_stack: SERIF_STACK,
@@ -256,8 +308,8 @@ pub static TEXT_PRESETS: &[TextPreset] = &[
     TextPreset {
         id: "gradient",
         group: "Titles",
-        name: "Gradient",
-        sample: "Beautiful text",
+        name: tr::editor::panel::text_preset::name::gradient,
+        sample: tr::editor::panel::text_preset::sample::gradient,
         center: None,
         style: TextPresetStyle {
             font_stack: SANS_STACK,
@@ -285,8 +337,8 @@ pub static TEXT_PRESETS: &[TextPreset] = &[
     TextPreset {
         id: "lower-third",
         group: "Lower thirds",
-        name: "Lower third",
-        sample: "Richie McIlroy",
+        name: tr::editor::panel::text_preset::name::lower_third,
+        sample: || "Richie McIlroy",
         center: Some(XY { x: 0.22, y: 0.85 }),
         style: TextPresetStyle {
             font_stack: SANS_STACK,
@@ -314,8 +366,8 @@ pub static TEXT_PRESETS: &[TextPreset] = &[
     TextPreset {
         id: "name-tag",
         group: "Lower thirds",
-        name: "Name tag",
-        sample: "Richie \u{b7} Founder",
+        name: tr::editor::panel::text_preset::name::name_tag,
+        sample: tr::editor::panel::text_preset::sample::name_tag,
         center: Some(XY { x: 0.2, y: 0.86 }),
         style: TextPresetStyle {
             font_stack: SANS_STACK,
@@ -343,8 +395,8 @@ pub static TEXT_PRESETS: &[TextPreset] = &[
     TextPreset {
         id: "caption",
         group: "Lower thirds",
-        name: "Caption",
-        sample: "Recorded with Cap",
+        name: tr::editor::panel::text_preset::name::caption,
+        sample: tr::editor::panel::text_preset::sample::caption,
         center: Some(XY { x: 0.5, y: 0.88 }),
         style: TextPresetStyle {
             font_stack: SANS_STACK,
@@ -372,8 +424,8 @@ pub static TEXT_PRESETS: &[TextPreset] = &[
     TextPreset {
         id: "kicker",
         group: "Callouts",
-        name: "Kicker",
-        sample: "New feature",
+        name: tr::editor::panel::text_preset::name::kicker,
+        sample: tr::editor::panel::text_preset::sample::kicker,
         center: None,
         style: TextPresetStyle {
             font_stack: SANS_STACK,
@@ -401,8 +453,8 @@ pub static TEXT_PRESETS: &[TextPreset] = &[
     TextPreset {
         id: "label",
         group: "Callouts",
-        name: "Label",
-        sample: "Pro tip",
+        name: tr::editor::panel::text_preset::name::label,
+        sample: tr::editor::panel::text_preset::sample::label,
         center: None,
         style: TextPresetStyle {
             font_stack: SANS_STACK,
@@ -430,8 +482,8 @@ pub static TEXT_PRESETS: &[TextPreset] = &[
     TextPreset {
         id: "highlight",
         group: "Callouts",
-        name: "Highlight",
-        sample: "the important part",
+        name: tr::editor::panel::text_preset::name::highlight,
+        sample: tr::editor::panel::text_preset::sample::highlight,
         center: None,
         style: TextPresetStyle {
             font_stack: SANS_STACK,
@@ -459,8 +511,8 @@ pub static TEXT_PRESETS: &[TextPreset] = &[
     TextPreset {
         id: "sticker",
         group: "Callouts",
-        name: "Sticker",
-        sample: "Boom!",
+        name: tr::editor::panel::text_preset::name::sticker,
+        sample: tr::editor::panel::text_preset::sample::sticker,
         center: None,
         style: TextPresetStyle {
             font_stack: SANS_STACK,
@@ -488,8 +540,8 @@ pub static TEXT_PRESETS: &[TextPreset] = &[
     TextPreset {
         id: "neon",
         group: "Callouts",
-        name: "Neon",
-        sample: "Glow up",
+        name: tr::editor::panel::text_preset::name::neon,
+        sample: tr::editor::panel::text_preset::sample::neon,
         center: None,
         style: TextPresetStyle {
             font_stack: SANS_STACK,
@@ -517,8 +569,8 @@ pub static TEXT_PRESETS: &[TextPreset] = &[
     TextPreset {
         id: "stat",
         group: "Statements",
-        name: "Big stat",
-        sample: "128%",
+        name: tr::editor::panel::text_preset::name::stat,
+        sample: || "128%",
         center: None,
         style: TextPresetStyle {
             font_stack: SANS_STACK,
@@ -546,8 +598,8 @@ pub static TEXT_PRESETS: &[TextPreset] = &[
     TextPreset {
         id: "quote",
         group: "Statements",
-        name: "Quote",
-        sample: "\u{201c}Make it feel effortless\u{201d}",
+        name: tr::editor::panel::text_preset::name::quote,
+        sample: tr::editor::panel::text_preset::sample::quote,
         center: None,
         style: TextPresetStyle {
             font_stack: SERIF_STACK,
@@ -575,8 +627,8 @@ pub static TEXT_PRESETS: &[TextPreset] = &[
     TextPreset {
         id: "code",
         group: "Code",
-        name: "Code",
-        sample: "$ cap record",
+        name: tr::editor::panel::text_preset::name::code,
+        sample: || "$ cap record",
         center: None,
         style: TextPresetStyle {
             font_stack: MONO_STACK,
@@ -604,8 +656,8 @@ pub static TEXT_PRESETS: &[TextPreset] = &[
     TextPreset {
         id: "typewriter",
         group: "Code",
-        name: "Typewriter",
-        sample: "typing it out\u{2026}",
+        name: tr::editor::panel::text_preset::name::typewriter,
+        sample: tr::editor::panel::text_preset::sample::typewriter,
         center: None,
         style: TextPresetStyle {
             font_stack: MONO_STACK,
@@ -634,10 +686,10 @@ pub static TEXT_PRESETS: &[TextPreset] = &[
 
 /// `GENERIC_FONT_OPTIONS` (`utils/fonts.ts:15-19`) -- the three families the
 /// renderer resolves itself, which head the font picker's list.
-pub const GENERIC_FONTS: [(&str, &str); 3] = [
-    ("sans-serif", "System Sans"),
-    ("serif", "System Serif"),
-    ("monospace", "System Mono"),
+pub const GENERIC_FONTS: [(&str, fn() -> &'static str); 3] = [
+    ("sans-serif", tr::editor::panel::font::system_sans),
+    ("serif", tr::editor::panel::font::system_serif),
+    ("monospace", tr::editor::panel::font::system_mono),
 ];
 
 /// `fontFamilyLabel` (`utils/fonts.ts:27-32`).
@@ -645,7 +697,7 @@ pub fn font_family_label(value: &str) -> String {
     GENERIC_FONTS
         .iter()
         .find(|(generic, _)| *generic == value.trim().to_ascii_lowercase())
-        .map_or_else(|| value.to_string(), |(_, label)| (*label).to_string())
+        .map_or_else(|| value.to_string(), |(_, label)| label().to_string())
 }
 
 /// `pickFontFamily` (`text-presets.ts:184-201`): the first family of the stack
@@ -668,14 +720,100 @@ pub fn pick_font_family(stack: &[&str], installed: &[String]) -> String {
         .map_or_else(|| "sans-serif".to_string(), |family| (*family).to_string())
 }
 
-/// `applyTextPreset` (`text-presets.ts:205-238`). Timing stays the user's, and
-/// so does the content unless it is still the placeholder a new segment is
-/// born with; the box is scaled with the font change about its **top** edge,
-/// exactly as the Size slider does.
-pub fn apply_text_preset(segment: &mut TextSegment, preset: &TextPreset, installed: &[String]) {
-    let style = &preset.style;
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextStyle {
+    pub font_family: String,
+    pub font_size: f32,
+    pub font_weight: f32,
+    pub italic: bool,
+    pub uppercase: bool,
+    pub align: TextAlign,
+    pub letter_spacing: f32,
+    pub line_height: f32,
+    pub opacity: f32,
+    pub shadow: f32,
+    pub glow: f32,
+    pub stroke_width: f32,
+    pub stroke_color: String,
+    pub background_style: TextBackgroundStyle,
+    pub background_color: Option<String>,
+    pub color: String,
+    pub gradient_color: Option<String>,
+    pub animation_in: TextAnimation,
+    pub animation_out: TextAnimation,
+    pub animation_in_duration: f64,
+    pub animation_out_duration: f64,
+    pub fade_duration: f64,
+}
+
+impl TextStyle {
+    pub fn of(segment: &TextSegment) -> Self {
+        Self {
+            font_family: segment.font_family.clone(),
+            font_size: segment.font_size,
+            font_weight: segment.font_weight,
+            italic: segment.italic,
+            uppercase: segment.uppercase,
+            align: segment.align,
+            letter_spacing: segment.letter_spacing,
+            line_height: segment.line_height,
+            opacity: segment.opacity,
+            shadow: segment.shadow,
+            glow: segment.glow,
+            stroke_width: segment.stroke_width,
+            stroke_color: segment.stroke_color.clone(),
+            background_style: segment.background_style,
+            background_color: segment.background_color.clone(),
+            color: segment.color.clone(),
+            gradient_color: segment.gradient_color.clone(),
+            animation_in: segment.animation_in,
+            animation_out: segment.animation_out,
+            animation_in_duration: segment.animation_in_duration,
+            animation_out_duration: segment.animation_out_duration,
+            fade_duration: segment.fade_duration,
+        }
+    }
+
+    pub fn apply_to(&self, segment: &mut TextSegment) -> bool {
+        let previous_style = Self::of(segment);
+        let previous_center = segment.center;
+        let previous_size = segment.size;
+        if segment.font_size != self.font_size {
+            scale_text_box(segment, self.font_size);
+        }
+        segment.font_family = self.font_family.clone();
+        segment.font_size = self.font_size;
+        segment.font_weight = self.font_weight;
+        segment.italic = self.italic;
+        segment.uppercase = self.uppercase;
+        segment.align = self.align;
+        segment.letter_spacing = self.letter_spacing;
+        segment.line_height = self.line_height;
+        segment.opacity = self.opacity;
+        segment.shadow = self.shadow;
+        segment.glow = self.glow;
+        segment.stroke_width = self.stroke_width;
+        segment.stroke_color = self.stroke_color.clone();
+        segment.background_style = self.background_style;
+        segment.background_color = self.background_color.clone();
+        segment.color = self.color.clone();
+        segment.gradient_color = self.gradient_color.clone();
+        segment.animation_in = self.animation_in;
+        segment.animation_out = self.animation_out;
+        segment.animation_in_duration = self.animation_in_duration;
+        segment.animation_out_duration = self.animation_out_duration;
+        segment.fade_duration = self.fade_duration;
+        previous_style != *self
+            || previous_center != segment.center
+            || previous_size != segment.size
+    }
+}
+
+/// Grows or shrinks the text box with a font-size change, top edge fixed,
+/// like the Size slider; the canvas overlay re-hugs the glyph bounds later.
+fn scale_text_box(segment: &mut TextSegment, font_size: f32) {
     let box_scale = f64::from(
-        style.font_size
+        font_size
             / if segment.font_size == 0. {
                 48.
             } else {
@@ -686,6 +824,15 @@ pub fn apply_text_preset(segment: &mut TextSegment, preset: &TextPreset, install
     segment.size.x = (segment.size.x * box_scale).min(1.);
     segment.size.y *= box_scale;
     segment.center.y = top_edge + segment.size.y / 2.;
+}
+
+/// `applyTextPreset` (`text-presets.ts:205-238`). Timing stays the user's, and
+/// so does the content unless it is still the placeholder a new segment is
+/// born with; the box is scaled with the font change about its **top** edge,
+/// exactly as the Size slider does.
+pub fn apply_text_preset(segment: &mut TextSegment, preset: &TextPreset, installed: &[String]) {
+    let style = &preset.style;
+    scale_text_box(segment, style.font_size);
 
     segment.font_family = pick_font_family(style.font_stack, installed);
     segment.font_size = style.font_size;
@@ -714,7 +861,7 @@ pub fn apply_text_preset(segment: &mut TextSegment, preset: &TextPreset, install
         .animation_in_duration
         .max(style.animation_out_duration);
     if matches!(segment.content.trim(), "" | "Text") {
-        segment.content = preset.sample.to_string();
+        segment.content = (preset.sample)().to_string();
     }
     if let Some(center) = preset.center {
         segment.center = center;
@@ -775,7 +922,7 @@ pub fn installed_fonts() -> &'static [String] {
 pub fn font_picker_options() -> Vec<(String, String)> {
     GENERIC_FONTS
         .iter()
-        .map(|(value, label)| ((*value).to_string(), (*label).to_string()))
+        .map(|(value, label)| ((*value).to_string(), label().to_string()))
         .chain(
             installed_fonts()
                 .iter()
@@ -810,73 +957,137 @@ pub fn warm_installed_fonts() {
 }
 
 /// The five scene modes and their descriptions (`:6295-6315`, `:6373-6404`).
-pub const SCENE_MODES: [(SceneMode, &str, &str, &str); 5] = [
+pub const SCENE_MODES: [(SceneMode, fn() -> &'static str, &str, fn() -> &'static str); 5] = [
     (
         SceneMode::Default,
-        "Default",
+        tr::editor::panel::scene::mode::default,
         "icons/monitor-outline.svg",
-        "Shows both screen and camera",
+        tr::editor::panel::scene::description::default,
     ),
     (
         SceneMode::CameraOnly,
-        "Camera Only",
+        tr::editor::panel::scene::mode::camera_only,
         "icons/video.svg",
-        "Shows only the camera feed",
+        tr::editor::panel::scene::description::camera_only,
     ),
     (
         SceneMode::HideCamera,
-        "Hide Camera",
+        tr::editor::panel::scene::mode::hide_camera,
         "icons/eye-off.svg",
-        "Shows only the screen recording",
+        tr::editor::panel::scene::description::hide_camera,
     ),
     (
         SceneMode::SplitScreen,
-        "Split Screen",
+        tr::editor::panel::scene::mode::split_screen,
         "icons/columns-2.svg",
-        "Screen and camera side by side (auto-stacks in portrait)",
+        tr::editor::panel::scene::description::split_screen,
     ),
     (
         SceneMode::Floating,
-        "Floating",
+        tr::editor::panel::scene::mode::floating,
         "icons/panel-right.svg",
-        "Screen and camera float side by side as rounded cards over the background",
+        tr::editor::panel::scene::description::floating,
     ),
 ];
 
 /// `CAMERA3D_BLUR_SLIDERS` (`:4577-4602`): each mode exposes only the
 /// parameters it reads, in display order.
-pub fn camera3d_blur_sliders(mode: Camera3DBlurMode) -> &'static [(Camera3DBlurKey, &'static str)] {
+pub fn camera3d_blur_sliders(
+    mode: Camera3DBlurMode,
+) -> &'static [(Camera3DBlurKey, fn() -> &'static str)] {
     match mode {
         Camera3DBlurMode::None => &[],
         Camera3DBlurMode::Radial => &[
-            (Camera3DBlurKey::Strength, "Strength"),
-            (Camera3DBlurKey::FocusX, "Focus X"),
-            (Camera3DBlurKey::FocusY, "Focus Y"),
-            (Camera3DBlurKey::FocusSize, "Focus size"),
-            (Camera3DBlurKey::Falloff, "Falloff"),
+            (
+                Camera3DBlurKey::Strength,
+                tr::editor::panel::camera3d::blur::strength,
+            ),
+            (
+                Camera3DBlurKey::FocusX,
+                tr::editor::panel::camera3d::blur::focus_x,
+            ),
+            (
+                Camera3DBlurKey::FocusY,
+                tr::editor::panel::camera3d::blur::focus_y,
+            ),
+            (
+                Camera3DBlurKey::FocusSize,
+                tr::editor::panel::camera3d::blur::focus_size,
+            ),
+            (
+                Camera3DBlurKey::Falloff,
+                tr::editor::panel::camera3d::blur::falloff,
+            ),
         ],
         Camera3DBlurMode::Directional => &[
-            (Camera3DBlurKey::Strength, "Strength"),
-            (Camera3DBlurKey::Angle, "Angle"),
-            (Camera3DBlurKey::DirPosition, "Position"),
-            (Camera3DBlurKey::Falloff, "Falloff"),
+            (
+                Camera3DBlurKey::Strength,
+                tr::editor::panel::camera3d::blur::strength,
+            ),
+            (
+                Camera3DBlurKey::Angle,
+                tr::editor::panel::camera3d::blur::angle,
+            ),
+            (
+                Camera3DBlurKey::DirPosition,
+                tr::editor::panel::camera3d::blur::position,
+            ),
+            (
+                Camera3DBlurKey::Falloff,
+                tr::editor::panel::camera3d::blur::falloff,
+            ),
         ],
         Camera3DBlurMode::TiltShift => &[
-            (Camera3DBlurKey::Strength, "Strength"),
-            (Camera3DBlurKey::FocusY, "Scan"),
-            (Camera3DBlurKey::FocusSize, "Focus size"),
-            (Camera3DBlurKey::Angle, "Angle"),
-            (Camera3DBlurKey::Falloff, "Falloff"),
+            (
+                Camera3DBlurKey::Strength,
+                tr::editor::panel::camera3d::blur::strength,
+            ),
+            (
+                Camera3DBlurKey::FocusY,
+                tr::editor::panel::camera3d::blur::scan,
+            ),
+            (
+                Camera3DBlurKey::FocusSize,
+                tr::editor::panel::camera3d::blur::focus_size,
+            ),
+            (
+                Camera3DBlurKey::Angle,
+                tr::editor::panel::camera3d::blur::angle,
+            ),
+            (
+                Camera3DBlurKey::Falloff,
+                tr::editor::panel::camera3d::blur::falloff,
+            ),
         ],
     }
 }
 
 /// `MOTION_EASINGS` (`three-d.ts:957-963`).
-pub const MOTION_EASINGS: [(&str, &str, [f64; 2], [f64; 2]); 4] = [
-    ("linear", "Linear", [0., 0.], [1., 1.]),
-    ("smooth", "Smooth", [0.65, 0.], [0.35, 1.]),
-    ("easeIn", "Ease in", [0.32, 0.], [1., 1.]),
-    ("easeOut", "Ease out", [0., 0.], [0.68, 1.]),
+pub const MOTION_EASINGS: [(&str, fn() -> &'static str, [f64; 2], [f64; 2]); 4] = [
+    (
+        "linear",
+        tr::editor::panel::camera3d::easing::linear,
+        [0., 0.],
+        [1., 1.],
+    ),
+    (
+        "smooth",
+        tr::editor::panel::camera3d::easing::smooth,
+        [0.65, 0.],
+        [0.35, 1.],
+    ),
+    (
+        "easeIn",
+        tr::editor::panel::camera3d::easing::ease_in,
+        [0.32, 0.],
+        [1., 1.],
+    ),
+    (
+        "easeOut",
+        tr::editor::panel::camera3d::easing::ease_out,
+        [0., 0.],
+        [0.68, 1.],
+    ),
 ];
 
 /// `CAMERA3D_RESET_POSE` (`three-d.ts:927-937`): a canonical long lens.
@@ -956,7 +1167,7 @@ fn overhead_blur() -> Camera3DBlur {
 /// drift it plays out over.
 pub struct AnglePreset {
     pub id: &'static str,
-    pub name: &'static str,
+    pub name: fn() -> &'static str,
     pub values: Camera3DProperties,
     /// The end pose. The source spells it as a partial `drift` merged onto the
     /// opening pose, which is the same thing written out.
@@ -968,7 +1179,7 @@ pub struct AnglePreset {
 pub static ANGLE_PRESETS: &[AnglePreset] = &[
     AnglePreset {
         id: "spotlight",
-        name: "Spotlight",
+        name: tr::editor::panel::camera3d::look::spotlight,
         values: Camera3DProperties {
             zoom: 1.35,
             pan_x: 0.39,
@@ -986,7 +1197,7 @@ pub static ANGLE_PRESETS: &[AnglePreset] = &[
     },
     AnglePreset {
         id: "perspective",
-        name: "Perspective",
+        name: tr::editor::panel::camera3d::look::perspective,
         values: Camera3DProperties {
             tilt_x: -28.,
             tilt_y: 26.,
@@ -1010,7 +1221,7 @@ pub static ANGLE_PRESETS: &[AnglePreset] = &[
     },
     AnglePreset {
         id: "center",
-        name: "Center",
+        name: tr::editor::panel::camera3d::look::center,
         values: Camera3DProperties {
             zoom: 2.,
             ..DEFAULT_POSE
@@ -1024,7 +1235,7 @@ pub static ANGLE_PRESETS: &[AnglePreset] = &[
     },
     AnglePreset {
         id: "low-angle",
-        name: "Low angle",
+        name: tr::editor::panel::camera3d::look::low_angle,
         values: Camera3DProperties {
             tilt_x: -50.,
             tilt_y: 1.,
@@ -1043,7 +1254,7 @@ pub static ANGLE_PRESETS: &[AnglePreset] = &[
     },
     AnglePreset {
         id: "close-up",
-        name: "Close up",
+        name: tr::editor::panel::camera3d::look::close_up,
         values: Camera3DProperties {
             tilt_x: 26.,
             tilt_y: -22.,
@@ -1072,7 +1283,7 @@ pub static ANGLE_PRESETS: &[AnglePreset] = &[
 /// template: clicking a card is a complete look, not a pose change.
 pub struct MotionTemplate {
     pub id: &'static str,
-    pub name: &'static str,
+    pub name: fn() -> &'static str,
     pub from: Camera3DProperties,
     pub to: Camera3DProperties,
     pub blur: fn() -> Camera3DBlur,
@@ -1082,7 +1293,7 @@ pub struct MotionTemplate {
 pub static MOTION_TEMPLATES: &[MotionTemplate] = &[
     MotionTemplate {
         id: "glide-across",
-        name: "Glide across",
+        name: tr::editor::panel::camera3d::look::glide_across,
         from: pose(Camera3DProperties {
             tilt_x: -46.65,
             tilt_y: 42.49,
@@ -1109,7 +1320,7 @@ pub static MOTION_TEMPLATES: &[MotionTemplate] = &[
     },
     MotionTemplate {
         id: "drift-down",
-        name: "Drift down",
+        name: tr::editor::panel::camera3d::look::drift_down,
         from: pose(Camera3DProperties {
             zoom: 0.8,
             pan_x: 0.536,
@@ -1126,7 +1337,7 @@ pub static MOTION_TEMPLATES: &[MotionTemplate] = &[
     },
     MotionTemplate {
         id: "rising-sweep",
-        name: "Rising sweep",
+        name: tr::editor::panel::camera3d::look::rising_sweep,
         from: pose(Camera3DProperties {
             tilt_x: -57.83,
             tilt_y: -8.7,
@@ -1151,7 +1362,7 @@ pub static MOTION_TEMPLATES: &[MotionTemplate] = &[
     },
     MotionTemplate {
         id: "pull-back",
-        name: "Pull back",
+        name: tr::editor::panel::camera3d::look::pull_back,
         from: pose(Camera3DProperties {
             rotate_x: -14.,
             zoom: 0.715,
@@ -1166,7 +1377,7 @@ pub static MOTION_TEMPLATES: &[MotionTemplate] = &[
     },
     MotionTemplate {
         id: "top-down",
-        name: "Top down",
+        name: tr::editor::panel::camera3d::look::top_down,
         from: pose(Camera3DProperties {
             tilt_x: 24.8,
             tilt_y: 17.04,
@@ -1194,7 +1405,7 @@ pub static MOTION_TEMPLATES: &[MotionTemplate] = &[
     },
     MotionTemplate {
         id: "tilt-away",
-        name: "Tilt away",
+        name: tr::editor::panel::camera3d::look::tilt_away,
         from: pose(Camera3DProperties {
             rotate_x: -5.,
             zoom: 0.5,
@@ -1209,7 +1420,7 @@ pub static MOTION_TEMPLATES: &[MotionTemplate] = &[
     },
     MotionTemplate {
         id: "unfold",
-        name: "Unfold",
+        name: tr::editor::panel::camera3d::look::unfold,
         from: pose(Camera3DProperties {
             rotate_x: -42.96,
             zoom: 2.05,
@@ -1227,7 +1438,7 @@ pub static MOTION_TEMPLATES: &[MotionTemplate] = &[
     },
     MotionTemplate {
         id: "slide-by",
-        name: "Slide by",
+        name: tr::editor::panel::camera3d::look::slide_by,
         from: pose(Camera3DProperties {
             tilt_x: -30.29,
             tilt_y: 60.,
@@ -1285,7 +1496,7 @@ pub struct SceneShot {
 
 pub struct Camera3DScene {
     pub id: &'static str,
-    pub name: &'static str,
+    pub name: fn() -> &'static str,
     pub shots: &'static [SceneShot],
 }
 
@@ -1310,7 +1521,7 @@ fn showcase_push_blur() -> Camera3DBlur {
 pub static CAMERA3D_SCENES: &[Camera3DScene] = &[
     Camera3DScene {
         id: "showcase",
-        name: "Showcase",
+        name: tr::editor::panel::camera3d::sequence::showcase,
         // Transcribed verbatim from the hand-built reference project: a tight
         // close-up truck, a fold-down overhead sweep, then a long push in.
         shots: &[
@@ -1380,7 +1591,7 @@ pub static CAMERA3D_SCENES: &[Camera3DScene] = &[
     },
     Camera3DScene {
         id: "product-tour",
-        name: "Product tour",
+        name: tr::editor::panel::camera3d::sequence::product_tour,
         // Reveal, orbit, settle: `unfold`, `perspective`, `center`.
         shots: &[
             SceneShot {
@@ -1438,7 +1649,7 @@ pub static CAMERA3D_SCENES: &[Camera3DScene] = &[
     },
     Camera3DScene {
         id: "punch-in",
-        name: "Punch in",
+        name: tr::editor::panel::camera3d::sequence::punch_in,
         // Push in, hold on the detail, then release: `spotlight`, `close-up`,
         // `pull-back`.
         shots: &[
@@ -1551,10 +1762,19 @@ const CAMERA3D_DEFAULT_BLUR_FALLOFF: f64 = 0.7;
 
 /// The Focus segmented control: the three real modes, in the order the source
 /// lists them. "None" is the toggle, not an option.
-const CAMERA3D_FOCUS_MODES: [(Camera3DBlurMode, &str); 3] = [
-    (Camera3DBlurMode::Radial, "Radial"),
-    (Camera3DBlurMode::Directional, "Directional"),
-    (Camera3DBlurMode::TiltShift, "Tilt shift"),
+const CAMERA3D_FOCUS_MODES: [(Camera3DBlurMode, fn() -> &'static str); 3] = [
+    (
+        Camera3DBlurMode::Radial,
+        tr::editor::panel::camera3d::focus_mode::radial,
+    ),
+    (
+        Camera3DBlurMode::Directional,
+        tr::editor::panel::camera3d::focus_mode::directional,
+    ),
+    (
+        Camera3DBlurMode::TiltShift,
+        tr::editor::panel::camera3d::focus_mode::tilt_shift,
+    ),
 ];
 
 // ---------------------------------------------------------------------------
@@ -1589,6 +1809,30 @@ pub fn camera3d_pose_seek_time(segment: &Camera3DSegment, end: bool, fps: u32) -
         return start_frame;
     }
     camera3d_frame_before(segment.end, fps).max(start_frame)
+}
+
+/// "The playhead is on this pose" is a frame's tolerance, which is as close
+/// as a seek can land.
+fn camera3d_pose_on(playhead: f64, time: f64, fps: u32) -> bool {
+    (playhead - time).abs() < 1. / f64::from(fps.max(1))
+}
+
+/// Every `(shot, end)` pose the playhead is on: what the 3D panel's pose cards
+/// mark, so a scrub can tell when the sidebar has to redraw.
+pub(crate) fn camera3d_poses_at(
+    segments: &[Camera3DSegment],
+    playhead: f64,
+    fps: u32,
+) -> Vec<(usize, bool)> {
+    let mut poses = Vec::new();
+    for (index, segment) in segments.iter().enumerate() {
+        for end in [false, true] {
+            if camera3d_pose_on(playhead, camera3d_pose_seek_time(segment, end, fps), fps) {
+                poses.push((index, end));
+            }
+        }
+    }
+    poses
 }
 
 /// How many shots the Auto scene picker offers.
@@ -1853,9 +2097,8 @@ pub fn apply_camera3d_shots_to_range(
 /// `DEFAULT_SHOT_DURATION`: the length a new 3D shot opens at.
 pub const CAMERA3D_DEFAULT_SHOT_DURATION: f64 = 4.;
 
-/// The move a brand-new shot is born with, and what the ghost calls it.
+/// The move a brand-new shot is born with.
 pub const CAMERA3D_DEFAULT_LOOK: &str = "glide-across";
-pub const CAMERA3D_DEFAULT_LOOK_NAME: &str = "Glide across";
 
 /// Where a new shot lands, given the shots already on the track.
 ///
@@ -1992,7 +2235,7 @@ pub fn match_camera3d_look(segment: &Camera3DSegment) -> Option<Look> {
         .map(|template| Look {
             kind: LookKind::Move,
             id: template.id,
-            name: template.name,
+            name: (template.name)(),
         })
         .or_else(|| {
             ANGLE_PRESETS
@@ -2004,7 +2247,7 @@ pub fn match_camera3d_look(segment: &Camera3DSegment) -> Option<Look> {
                 .map(|preset| Look {
                     kind: LookKind::Angle,
                     id: preset.id,
-                    name: preset.name,
+                    name: (preset.name)(),
                 })
         })
 }
@@ -2015,9 +2258,9 @@ pub fn camera3d_shot_label(segment: &Camera3DSegment) -> &'static str {
         return look.name;
     }
     if poses_equal(&start_pose(segment), &end_pose(segment)) {
-        "Still shot"
+        tr::editor::panel::camera3d::shot::still()
     } else {
-        "Custom move"
+        tr::editor::panel::camera3d::shot::custom()
     }
 }
 
@@ -2608,36 +2851,79 @@ impl EditorWindow {
         self.fields.insert(key, input);
     }
 
-    /// The `createWritableMemo` half: re-derive a field's text whenever the
-    /// value moves under it (an undo, a preset, a timeline drag), but never
-    /// while it has focus. Runs from `render`, like `sync_hex_inputs`, because
-    /// the focus test needs a `&Window`.
+    /// The all-fields path: every field ever created, whether the frame draws
+    /// it or not. Kept as the faithful "before" for the benchmark and the
+    /// equivalence tests; production renders go through
+    /// [`Self::sync_visible_fields`].
     pub(crate) fn sync_fields(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        for (key, input) in self.fields.clone() {
-            if input.read(cx).focus_handle().is_focused(window) {
-                continue;
-            }
-            let Some(value) = self.field_value(key) else {
-                continue;
-            };
-            if input.read(cx).text() != value {
-                input.update(cx, |input, cx| input.set_text(value, cx));
-            }
+        // The value is written into one reused buffer and only copied out
+        // when it moved.
+        let mut value = String::new();
+        for (key, input) in &self.fields {
+            self.sync_field(input, *key, &mut value, window, cx);
         }
     }
 
-    /// What a field should read when it is not being typed into.
-    fn field_value(&self, key: FieldKey) -> Option<String> {
+    /// The production path: only the fields [`Self::prepare_sidebar_fields`]
+    /// says the next frame draws. A field that is not listed keeps its old
+    /// text until a later frame lists it again -- that is how a hidden field
+    /// catches up when it becomes visible. Focused fields are never written,
+    /// exactly as on the all-fields path.
+    pub(crate) fn sync_visible_fields(
+        &mut self,
+        keys: &[FieldKey],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let mut value = String::new();
+        for key in keys {
+            let Some(input) = self.fields.get(key) else {
+                continue;
+            };
+            self.sync_field(input, *key, &mut value, window, cx);
+        }
+    }
+
+    /// One field, shared by both sync paths so the visible-only path cannot
+    /// drift from the all-fields one.
+    fn sync_field(
+        &self,
+        input: &Entity<ui::TextInputState>,
+        key: FieldKey,
+        value: &mut String,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        let state = input.read(cx);
+        if state.is_focused(window) {
+            return;
+        }
+        value.clear();
+        if self.write_field_value(key, value).is_none() {
+            return;
+        }
+        if state.text() != value {
+            let text = value.clone();
+            input.update(cx, |input, cx| input.set_text(text, cx));
+        }
+    }
+
+    /// What a field should read when it is not being typed into, appended to
+    /// `out`. `None` leaves the field alone.
+    fn write_field_value(&self, key: FieldKey, out: &mut String) -> Option<()> {
+        use std::fmt::Write as _;
+
         // The crop boxes read the open cropper, not the project: their value
         // is `crop()[props.field]`, i.e. `realBounds` (`Editor.tsx:1182`).
         if let FieldKey::Crop(field) = key {
             let state = self.crop.as_ref()?;
-            return Some(ui::format_number(field.read(state.real())));
+            out.push_str(&ui::format_number(field.read(state.real())));
+            return Some(());
         }
         let timeline = self.project.timeline.as_ref()?;
-        Some(match key {
-            FieldKey::StyleName(index) => timeline.style_segments.get(index)?.name.clone(),
-            FieldKey::ImageName(index) => timeline.image_segments.get(index)?.name.clone(),
+        match key {
+            FieldKey::StyleName(index) => out.push_str(&timeline.style_segments.get(index)?.name),
+            FieldKey::ImageName(index) => out.push_str(&timeline.image_segments.get(index)?.name),
             FieldKey::StyleCrop(index, axis) => {
                 let background = timeline
                     .style_segments
@@ -2650,37 +2936,40 @@ impl EditorWindow {
                     position: XY::new(0, 0),
                     size: XY::new(width, height),
                 });
-                match axis {
+                let value = match axis {
                     0 => crop.position.x,
                     1 => crop.position.y,
                     2 => crop.size.x,
                     _ => crop.size.y,
-                }
-                .to_string()
+                };
+                let _ = write!(out, "{value}");
             }
-            FieldKey::TextContent(index) => timeline.text_segments.get(index)?.content.clone(),
-            FieldKey::CaptionText(index) => timeline.caption_segments.get(index)?.text.clone(),
-            FieldKey::AudioName(index) => timeline
-                .audio_segments
-                .get(index)?
-                .name
-                .clone()
-                .unwrap_or_default(),
+            FieldKey::TextContent(index) => {
+                out.push_str(&timeline.text_segments.get(index)?.content)
+            }
+            FieldKey::CaptionText(index) => {
+                out.push_str(&timeline.caption_segments.get(index)?.text)
+            }
+            FieldKey::AudioName(index) => {
+                if let Some(name) = &timeline.audio_segments.get(index)?.name {
+                    out.push_str(name);
+                }
+            }
             FieldKey::KeyboardText(index) => {
-                timeline.keyboard_segments.get(index)?.display_text.clone()
+                out.push_str(&timeline.keyboard_segments.get(index)?.display_text)
             }
             // `value={props.segment.start.toFixed(2)}` on all four.
             FieldKey::CaptionStart(index) => {
-                format!("{:.2}", timeline.caption_segments.get(index)?.start)
+                let _ = write!(out, "{:.2}", timeline.caption_segments.get(index)?.start);
             }
             FieldKey::CaptionEnd(index) => {
-                format!("{:.2}", timeline.caption_segments.get(index)?.end)
+                let _ = write!(out, "{:.2}", timeline.caption_segments.get(index)?.end);
             }
             FieldKey::KeyboardStart(index) => {
-                format!("{:.2}", timeline.keyboard_segments.get(index)?.start)
+                let _ = write!(out, "{:.2}", timeline.keyboard_segments.get(index)?.start);
             }
             FieldKey::KeyboardEnd(index) => {
-                format!("{:.2}", timeline.keyboard_segments.get(index)?.end)
+                let _ = write!(out, "{:.2}", timeline.keyboard_segments.get(index)?.end);
             }
             // `Math.round((props.value ?? 0) * 1000)` -- the offset field is in
             // milliseconds (`:6182`).
@@ -2691,10 +2980,11 @@ impl EditorWindow {
                     .iter()
                     .find(|item| item.index as usize == clip)
                     .map_or(0., |item| kind.read(&item.offsets));
-                ui::format_number(f64::from((offset * 1000.).round()))
+                out.push_str(&ui::format_number(f64::from((offset * 1000.).round())));
             }
             _ => return None,
-        })
+        }
+        Some(())
     }
 
     /// A live keystroke in a segment field.
@@ -3528,7 +3818,7 @@ impl EditorWindow {
                 TEXT_SEGMENT_WEIGHTS
                     .iter()
                     .map(|(weight, label)| {
-                        ui::MenuItem::new(*label, (*weight - current).abs() < f32::EPSILON)
+                        ui::MenuItem::new(label(), (*weight - current).abs() < f32::EPSILON)
                     })
                     .collect()
             }
@@ -3540,7 +3830,7 @@ impl EditorWindow {
                 MOTION_EASINGS
                     .iter()
                     .enumerate()
-                    .map(|(index, (_, label, _, _))| ui::MenuItem::new(*label, index == current))
+                    .map(|(index, (_, label, _, _))| ui::MenuItem::new(label(), index == current))
                     .collect()
             }
             _ => Vec::new(),
@@ -4046,13 +4336,13 @@ impl EditorWindow {
             .flex_col()
             .gap(px(14.))
             .child(self.slider_field(
-                SharedString::from(format!("Zoom {}", index + 1)),
+                SharedString::from(tr::editor::panel::zoom::title(index + 1)),
                 SliderKey::Panel(PanelSlider::ZoomAmount, index),
                 "x",
                 cx,
             ))
             .child(
-                ui::Field::section(&theme, "Zoom Mode").child(
+                ui::Field::section(&theme, tr::editor::panel::zoom::mode()).child(
                     div()
                         .flex()
                         .flex_col()
@@ -4141,51 +4431,53 @@ impl EditorWindow {
                     .border_color(Hsla::from(theme.editor.line))
                     .child({
                         let mut field = self.slider_field(
-                            "Zoom Amount",
+                            tr::editor::panel::zoom::amount(),
                             SliderKey::Panel(PanelSlider::ZoomAmountAll, 0),
                             "x",
                             cx,
                         );
                         if mixed_amount {
-                            field = field.value(mixed_badge("Mixed"));
+                            field = field.value(mixed_badge(tr::editor::panel::zoom::mixed()));
                         }
                         field
                     })
                     .child({
-                        let mut field = ui::Field::section(&theme, "Zoom Mode").child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap(px(16.))
-                                .child(self.zoom_mode_tabs(
-                                    manual && !mixed_mode,
-                                    cx,
-                                    |this, want_manual, window, cx| {
-                                        this.set_all_zoom_modes(want_manual, window, cx);
-                                    },
-                                ))
-                                .children((!mixed_mode).then(|| self.zoom_mode_helper(manual, cx)))
-                                .children((manual && !mixed_mode).then(|| {
-                                    div()
-                                        .flex()
-                                        .flex_col()
-                                        .gap(px(6.))
-                                        .child(self.render_pad(PadKey::ZoomMulti, cx))
-                                        .children(positions_mixed.then(|| {
-                                            div()
-                                                .text_size(px(12.))
-                                                .text_color(Hsla::from(theme.gray_10))
-                                                .child(
-                                                    "Segments zoom into different spots. Drag \
-                                                         to move them all to the same one.",
-                                                )
-                                                .into_any_element()
-                                        }))
-                                        .into_any_element()
-                                })),
-                        );
+                        let mut field = ui::Field::section(&theme, tr::editor::panel::zoom::mode())
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(16.))
+                                    .child(self.zoom_mode_tabs(
+                                        manual && !mixed_mode,
+                                        cx,
+                                        |this, want_manual, window, cx| {
+                                            this.set_all_zoom_modes(want_manual, window, cx);
+                                        },
+                                    ))
+                                    .children(
+                                        (!mixed_mode).then(|| self.zoom_mode_helper(manual, cx)),
+                                    )
+                                    .children((manual && !mixed_mode).then(|| {
+                                        div()
+                                            .flex()
+                                            .flex_col()
+                                            .gap(px(6.))
+                                            .child(self.render_pad(PadKey::ZoomMulti, cx))
+                                            .children(positions_mixed.then(|| {
+                                                div()
+                                                    .text_size(px(12.))
+                                                    .text_color(Hsla::from(theme.gray_10))
+                                                    .child(
+                                                        tr::editor::panel::zoom::positions_mixed(),
+                                                    )
+                                                    .into_any_element()
+                                            }))
+                                            .into_any_element()
+                                    })),
+                            );
                         if mixed_mode {
-                            field = field.value(mixed_badge("Mixed"));
+                            field = field.value(mixed_badge(tr::editor::panel::zoom::mixed()));
                         }
                         field
                     }),
@@ -4215,7 +4507,9 @@ impl EditorWindow {
                                 div()
                                     .text_size(px(12.))
                                     .text_color(Hsla::from(theme.gray_11))
-                                    .child(SharedString::from(format!("Zoom {}", index + 1))),
+                                    .child(SharedString::from(tr::editor::panel::zoom::title(
+                                        index + 1,
+                                    ))),
                             )
                             .child(
                                 div()
@@ -4298,18 +4592,27 @@ impl EditorWindow {
                     .border_1()
                     .border_color(Hsla::from(theme.gray_12))
                     .p(px(1.))
-                    .child(tab("Auto", "zoom-mode-auto", !manual, false, auto_locked))
-                    .child(tab("Manual", "zoom-mode-manual", manual, true, false)),
+                    .child(tab(
+                        tr::editor::panel::zoom::auto(),
+                        "zoom-mode-auto",
+                        !manual,
+                        false,
+                        auto_locked,
+                    ))
+                    .child(tab(
+                        tr::editor::panel::zoom::manual(),
+                        "zoom-mode-manual",
+                        manual,
+                        true,
+                        false,
+                    )),
             )
             // The explainer under the tabs (`:5648-5653`, `:6024-6029`).
             .children(auto_locked.then(|| {
                 div()
                     .text_size(px(12.))
                     .text_color(Hsla::from(theme.gray_11))
-                    .child(
-                        "Auto mode needs cursor capture. Enable \"Custom cursor capture \
-                         (Studio)\" in Settings \u{2192} General.",
-                    )
+                    .child(tr::editor::panel::zoom::auto_locked())
             }))
             .into_any_element()
     }
@@ -4344,7 +4647,7 @@ impl EditorWindow {
                             .size(px(14.))
                             .text_color(Hsla::from(theme.gray_11)),
                     )
-                    .child("How does it work?")
+                    .child(tr::editor::panel::zoom::how_it_works())
                     .child(
                         div().ml_auto().child(
                             svg()
@@ -4414,9 +4717,9 @@ impl EditorWindow {
                             .text_size(px(12.))
                             .text_color(Hsla::from(theme.gray_11))
                             .child(if manual {
-                                "Manual zoom stays on a fixed spot you pick below."
+                                tr::editor::panel::zoom::manual_help()
                             } else {
-                                "Automatic zoom follows your cursor around the screen."
+                                tr::editor::panel::zoom::auto_help()
                             }),
                     )
                     .into_any_element(),
@@ -4783,9 +5086,9 @@ impl EditorWindow {
             let sample_size = (style.font_size * 0.2).clamp(11., 22.);
             let sample_color = style.color.and_then(hex_color).unwrap_or_else(gpui::white);
             let sample_text: SharedString = if style.uppercase {
-                SharedString::from(preset.sample.to_uppercase())
+                SharedString::from((preset.sample)().to_uppercase())
             } else {
-                SharedString::from(preset.sample)
+                SharedString::from((preset.sample)())
             };
             let run = div()
                 .max_w_full()
@@ -4861,7 +5164,8 @@ impl EditorWindow {
                         .text_size(px(10.))
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(with_alpha(gpui::white(), 0.55))
-                        .child(preset.name),
+                        .truncate()
+                        .child((preset.name)()),
                 )
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.apply_text_preset_to(index, id, window, cx);
@@ -4871,7 +5175,12 @@ impl EditorWindow {
 
         let shown: Vec<&'static TextPreset> = TEXT_PRESETS
             .iter()
-            .filter(|preset| group == 0 || TEXT_PRESET_GROUPS.get(group - 1) == Some(&preset.group))
+            .filter(|preset| {
+                group == 0
+                    || TEXT_PRESET_GROUPS
+                        .get(group - 1)
+                        .is_some_and(|(id, _)| *id == preset.group)
+            })
             .collect();
 
         div()
@@ -4885,12 +5194,12 @@ impl EditorWindow {
                     .flex_row()
                     .gap(px(4.))
                     .flex_wrap()
-                    .child(chip(0, "All", cx))
+                    .child(chip(0, tr::editor::panel::text_preset::group::all(), cx))
                     .children(
                         TEXT_PRESET_GROUPS
                             .iter()
                             .enumerate()
-                            .map(|(slot, label)| chip(slot + 1, label, cx)),
+                            .map(|(slot, (_, label))| chip(slot + 1, label(), cx)),
                     ),
             )
             .children(shown.chunks(2).map(|row| {
@@ -5048,6 +5357,8 @@ impl EditorWindow {
                 .child(text_animation_depiction(animation, color, accent))
                 .child(
                     div()
+                        .max_w_full()
+                        .truncate()
                         .text_size(px(10.5))
                         .font_weight(FontWeight::MEDIUM)
                         .child(label),
@@ -5084,7 +5395,7 @@ impl EditorWindow {
                             .iter()
                             .enumerate()
                             .map(|(column, (animation, label))| {
-                                tile(row * 3 + column, *animation, label, cx)
+                                tile(row * 3 + column, *animation, label(), cx)
                             }),
                     )
             }))
@@ -5117,8 +5428,8 @@ impl EditorWindow {
             .iter()
             .find(|(weight, _)| (*weight - segment.font_weight).abs() < f32::EPSILON)
             .map_or_else(
-                || SharedString::from(format!("Custom ({})", segment.font_weight)),
-                |(_, label)| SharedString::from(*label),
+                || SharedString::from(tr::editor::panel::font_weight::custom(segment.font_weight)),
+                |(_, label)| SharedString::from(label()),
             );
         let is_out = self.sidebar.text_anim_edge;
         let edge_animation = if is_out {
@@ -5141,109 +5452,109 @@ impl EditorWindow {
             .gap(px(16.))
             // -- A. Text ---------------------------------------------------
             .child(
-                ui::Field::section(&theme, SharedString::from(format!("Text {}", index + 1)))
-                    .value(
-                        ui::Toggle::plain(
-                            &theme,
-                            SharedString::from(format!("text-enabled-{index}")),
-                            enabled,
-                        )
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.edit_text_segment(
-                                "text-enabled",
-                                index,
-                                window,
-                                cx,
-                                move |segment| {
-                                    segment.enabled = !enabled;
-                                    true
-                                },
-                            );
-                        }))
-                        .into_any_element(),
+                ui::Field::section(
+                    &theme,
+                    SharedString::from(tr::editor::panel::text_segment::title(index + 1)),
+                )
+                .value(
+                    ui::Toggle::plain(
+                        &theme,
+                        SharedString::from(format!("text-enabled-{index}")),
+                        enabled,
                     )
-                    .child(self.render_text_content_input(index))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .gap(px(8.))
-                            .child(self.text_case_chip(
-                                SharedString::from(format!("text-italic-{index}")),
-                                "I",
-                                true,
-                                italic,
-                                cx.listener(move |this, _, window, cx| {
-                                    this.edit_text_segment(
-                                        "text-italic",
-                                        index,
-                                        window,
-                                        cx,
-                                        move |segment| {
-                                            segment.italic = !italic;
-                                            true
-                                        },
-                                    );
-                                }),
-                            ))
-                            .child(self.text_case_chip(
-                                SharedString::from(format!("text-uppercase-{index}")),
-                                "AA",
-                                false,
-                                uppercase,
-                                cx.listener(move |this, _, window, cx| {
-                                    this.edit_text_segment(
-                                        "text-uppercase",
-                                        index,
-                                        window,
-                                        cx,
-                                        move |segment| {
-                                            segment.uppercase = !uppercase;
-                                            true
-                                        },
-                                    );
-                                }),
-                            ))
-                            .child(
-                                div().ml_auto().child(
-                                    ui::SegmentedControl::editor(
-                                        &theme,
-                                        SharedString::from(format!("text-align-{index}")),
-                                        TEXT_ALIGNS
-                                            .iter()
-                                            .map(|(value, icon)| {
-                                                ui::SegmentOption::icon(*icon, *value == align)
-                                            })
-                                            .collect(),
-                                    )
-                                    .on_select(cx.listener(
-                                        move |this, choice: &usize, window, cx| {
-                                            let Some((value, _)) = TEXT_ALIGNS.get(*choice) else {
-                                                return;
-                                            };
-                                            let value = *value;
-                                            this.edit_text_segment(
-                                                "text-align",
-                                                index,
-                                                window,
-                                                cx,
-                                                move |segment| {
-                                                    segment.align = value;
-                                                    true
-                                                },
-                                            );
-                                        },
-                                    )),
-                                ),
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.edit_text_segment("text-enabled", index, window, cx, move |segment| {
+                            segment.enabled = !enabled;
+                            true
+                        });
+                    }))
+                    .into_any_element(),
+                )
+                .child(self.render_text_content_input(index))
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(8.))
+                        .child(self.text_case_chip(
+                            SharedString::from(format!("text-italic-{index}")),
+                            "I",
+                            true,
+                            italic,
+                            cx.listener(move |this, _, window, cx| {
+                                this.edit_text_segment(
+                                    "text-italic",
+                                    index,
+                                    window,
+                                    cx,
+                                    move |segment| {
+                                        segment.italic = !italic;
+                                        true
+                                    },
+                                );
+                            }),
+                        ))
+                        .child(self.text_case_chip(
+                            SharedString::from(format!("text-uppercase-{index}")),
+                            "AA",
+                            false,
+                            uppercase,
+                            cx.listener(move |this, _, window, cx| {
+                                this.edit_text_segment(
+                                    "text-uppercase",
+                                    index,
+                                    window,
+                                    cx,
+                                    move |segment| {
+                                        segment.uppercase = !uppercase;
+                                        true
+                                    },
+                                );
+                            }),
+                        ))
+                        .child(
+                            div().ml_auto().child(
+                                ui::SegmentedControl::editor(
+                                    &theme,
+                                    SharedString::from(format!("text-align-{index}")),
+                                    TEXT_ALIGNS
+                                        .iter()
+                                        .map(|(value, icon)| {
+                                            ui::SegmentOption::icon(*icon, *value == align)
+                                        })
+                                        .collect(),
+                                )
+                                .on_select(cx.listener(
+                                    move |this, choice: &usize, window, cx| {
+                                        let Some((value, _)) = TEXT_ALIGNS.get(*choice) else {
+                                            return;
+                                        };
+                                        let value = *value;
+                                        this.edit_text_segment(
+                                            "text-align",
+                                            index,
+                                            window,
+                                            cx,
+                                            move |segment| {
+                                                segment.align = value;
+                                                true
+                                            },
+                                        );
+                                    },
+                                )),
                             ),
-                    ),
+                        ),
+                ),
             )
             // -- B. Style --------------------------------------------------
-            .child(ui::Field::section(&theme, "Style").child(self.render_text_presets(index, cx)))
+            .child(
+                ui::Field::section(&theme, tr::editor::panel::text_segment::style())
+                    .child(self.render_text_presets(index, cx)),
+            )
             // -- C. Font ---------------------------------------------------
             .child(
-                ui::Field::section(&theme, "Font").child(
+                ui::Field::section(&theme, tr::editor::panel::text_segment::font()).child(
                     div()
                         .flex()
                         .flex_col()
@@ -5261,19 +5572,19 @@ impl EditorWindow {
                             cx,
                         ))
                         .child(self.slider_field(
-                            "Size",
+                            tr::editor::panel::text_segment::font_size(),
                             SliderKey::Panel(PanelSlider::TextFontSize, index),
                             "int",
                             cx,
                         ))
                         .child(self.slider_field(
-                            "Line height",
+                            tr::editor::panel::text_segment::line_height(),
                             SliderKey::Panel(PanelSlider::TextLineHeight, index),
                             "",
                             cx,
                         ))
                         .child(self.slider_field(
-                            "Letter spacing",
+                            tr::editor::panel::text_segment::letter_spacing(),
                             SliderKey::Panel(PanelSlider::TextLetterSpacing, index),
                             "px",
                             cx,
@@ -5282,61 +5593,67 @@ impl EditorWindow {
             )
             // -- D. Look ---------------------------------------------------
             .child(
-                ui::Field::section(&theme, "Look").child(
+                ui::Field::section(&theme, tr::editor::panel::text_segment::look()).child(
                     div()
                         .flex()
                         .flex_col()
                         .gap(px(8.))
                         .child(
-                            ui::Field::stacked(&theme, "Color").child(self.render_color_input(
-                                ColorTarget::TextColor(index),
-                                &color,
-                                cx,
-                            )),
+                            ui::Field::stacked(&theme, tr::editor::panel::text_segment::color())
+                                .child(self.render_color_input(
+                                    ColorTarget::TextColor(index),
+                                    &color,
+                                    cx,
+                                )),
                         )
                         .child(
-                            ui::Field::inline(&theme, "Gradient").child(
-                                ui::Toggle::plain(
-                                    &theme,
-                                    SharedString::from(format!("text-gradient-{index}")),
-                                    gradient_color.is_some(),
-                                )
-                                .on_click(cx.listener(
-                                    move |this, _, window, cx| {
-                                        this.edit_text_segment(
-                                            "text-gradient",
-                                            index,
-                                            window,
-                                            cx,
-                                            move |segment| {
-                                                segment.gradient_color =
-                                                    match segment.gradient_color.is_some() {
-                                                        true => None,
-                                                        false => Some("#7c9cff".to_string()),
-                                                    };
-                                                true
-                                            },
-                                        );
-                                    },
-                                )),
-                            ),
+                            ui::Field::inline(&theme, tr::editor::panel::text_segment::gradient())
+                                .child(
+                                    ui::Toggle::plain(
+                                        &theme,
+                                        SharedString::from(format!("text-gradient-{index}")),
+                                        gradient_color.is_some(),
+                                    )
+                                    .on_click(cx.listener(
+                                        move |this, _, window, cx| {
+                                            this.edit_text_segment(
+                                                "text-gradient",
+                                                index,
+                                                window,
+                                                cx,
+                                                move |segment| {
+                                                    segment.gradient_color =
+                                                        match segment.gradient_color.is_some() {
+                                                            true => None,
+                                                            false => Some("#7c9cff".to_string()),
+                                                        };
+                                                    true
+                                                },
+                                            );
+                                        },
+                                    )),
+                                ),
                         )
                         .children(gradient_color.map(|gradient| {
                             self.render_color_input(ColorTarget::TextGradient(index), &gradient, cx)
                         }))
                         .child(
-                            ui::Field::stacked(&theme, "Background").child(
+                            ui::Field::stacked(
+                                &theme,
+                                tr::editor::panel::text_segment::background(),
+                            )
+                            .child(
                                 ui::SegmentedControl::editor(
                                     &theme,
                                     SharedString::from(format!("text-background-{index}")),
                                     std::iter::once(ui::SegmentOption::new(
-                                        "None",
+                                        tr::editor::panel::text_background::none(),
                                         background_slot == 0,
                                     ))
                                     .chain(TEXT_BACKGROUND_STYLES.iter().enumerate().map(
                                         |(slot, (_, label))| {
                                             ui::SegmentOption::new(
-                                                *label,
+                                                label(),
                                                 background_slot == slot + 1,
                                             )
                                         },
@@ -5385,7 +5702,7 @@ impl EditorWindow {
                             )
                         }))
                         .child(self.slider_field(
-                            "Outline",
+                            tr::editor::panel::text_segment::outline(),
                             SliderKey::Panel(PanelSlider::TextStroke, index),
                             "px",
                             cx,
@@ -5398,19 +5715,19 @@ impl EditorWindow {
                             )
                         }))
                         .child(self.slider_field(
-                            "Shadow",
+                            tr::editor::panel::text_segment::shadow(),
                             SliderKey::Panel(PanelSlider::TextShadow, index),
                             "x100%",
                             cx,
                         ))
                         .child(self.slider_field(
-                            "Glow",
+                            tr::editor::panel::text_segment::glow(),
                             SliderKey::Panel(PanelSlider::TextGlow, index),
                             "x100%",
                             cx,
                         ))
                         .child(self.slider_field(
-                            "Opacity",
+                            tr::editor::panel::opacity(),
                             SliderKey::Panel(PanelSlider::TextOpacity, index),
                             "x100%",
                             cx,
@@ -5419,14 +5736,14 @@ impl EditorWindow {
             )
             // -- E. Animation ----------------------------------------------
             .child(
-                ui::Field::section(&theme, "Animation")
+                ui::Field::section(&theme, tr::editor::panel::text_segment::animation())
                     .value(
                         ui::SegmentedControl::editor(
                             &theme,
                             SharedString::from(format!("text-anim-edge-{index}")),
                             vec![
-                                ui::SegmentOption::new("In", !is_out),
-                                ui::SegmentOption::new("Out", is_out),
+                                ui::SegmentOption::new(tr::editor::panel::edge_in(), !is_out),
+                                ui::SegmentOption::new(tr::editor::panel::edge_out(), is_out),
                             ],
                         )
                         .on_select(cx.listener(move |this, choice: &usize, _window, cx| {
@@ -5443,7 +5760,7 @@ impl EditorWindow {
                             .child(self.render_text_animation_tiles(index, cx))
                             .children((edge_animation != TextAnimation::None).then(|| {
                                 self.slider_field(
-                                    "Duration",
+                                    tr::editor::panel::duration(),
                                     SliderKey::Panel(
                                         if is_out {
                                             PanelSlider::TextAnimOutDuration
@@ -5461,7 +5778,7 @@ impl EditorWindow {
             )
             // -- F. Layout -------------------------------------------------
             .child(
-                ui::Field::section(&theme, "Layout").child(
+                ui::Field::section(&theme, tr::editor::panel::text_segment::layout()).child(
                     div()
                         .flex()
                         .flex_col()
@@ -5473,7 +5790,7 @@ impl EditorWindow {
                                 TEXT_LAYOUTS
                                     .iter()
                                     .map(|(value, label)| {
-                                        ui::SegmentOption::new(*label, *value == layout)
+                                        ui::SegmentOption::new(label(), *value == layout)
                                     })
                                     .collect(),
                             )
@@ -5509,15 +5826,12 @@ impl EditorWindow {
                             div()
                                 .text_size(px(12.))
                                 .text_color(Hsla::from(theme.editor.text_3))
-                                .child(
-                                    "Pauses the video while the text is shown, then resumes \
-                                     where it left off.",
-                                )
+                                .child(tr::editor::panel::text_segment::fullscreen_help())
                                 .into_any_element()
                         }))
                         .children((layout != TextLayout::Overlay).then(|| {
                             self.slider_field(
-                                "Screen transition",
+                                tr::editor::panel::text_segment::screen_transition(),
                                 SliderKey::Panel(PanelSlider::TextLayoutTransition, index),
                                 "secs",
                                 cx,
@@ -5545,8 +5859,11 @@ impl EditorWindow {
             .flex_col()
             .gap(px(16.))
             .child(
-                ui::Field::section(&theme, SharedString::from(format!("Caption {}", index + 1)))
-                    .child(self.render_field_input(FieldKey::CaptionText(index), Some(96.))),
+                ui::Field::section(
+                    &theme,
+                    SharedString::from(tr::editor::panel::caption::title(index + 1)),
+                )
+                .child(self.render_field_input(FieldKey::CaptionText(index), Some(96.))),
             )
             .child(self.timing_field(
                 FieldKey::CaptionStart(index),
@@ -5576,7 +5893,7 @@ impl EditorWindow {
             .child(
                 ui::Field::section(
                     &theme,
-                    SharedString::from(format!("Keyboard {}", index + 1)),
+                    SharedString::from(tr::editor::panel::keyboard::title(index + 1)),
                 )
                 .child(self.render_field_input(FieldKey::KeyboardText(index), None)),
             )
@@ -5588,7 +5905,7 @@ impl EditorWindow {
                 cx,
             ))
             .child(self.slider_field(
-                "Fade Duration",
+                tr::editor::panel::fade_duration(),
                 SliderKey::Panel(PanelSlider::KeyboardFade, index),
                 "",
                 cx,
@@ -5633,7 +5950,7 @@ impl EditorWindow {
                 .child(self.render_field_input(key, None))
         };
 
-        ui::Field::section(&theme, "Timing")
+        ui::Field::section(&theme, tr::editor::panel::timing::title())
             .child(
                 div()
                     .flex()
@@ -5650,16 +5967,20 @@ impl EditorWindow {
                             .flex_row()
                             .gap(px(8.))
                             .items_start()
-                            .child(box_for("Start", start, start_key))
+                            .child(box_for(
+                                tr::editor::panel::timing::start(),
+                                start,
+                                start_key,
+                            ))
                             .child(
                                 div()
                                     .pt(px(40.))
                                     .text_size(px(12.))
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_color(Hsla::from(theme.gray_10))
-                                    .child("to"),
+                                    .child(tr::editor::panel::timing::to()),
                             )
-                            .child(box_for("End", end, end_key)),
+                            .child(box_for(tr::editor::panel::timing::end(), end, end_key)),
                     )
                     .child(
                         div()
@@ -5673,7 +5994,7 @@ impl EditorWindow {
                             .bg(crate::editor_sidebar::with_alpha(theme.gray_1, 0.7))
                             .text_size(px(12.))
                             .text_color(Hsla::from(theme.gray_11))
-                            .child("Duration")
+                            .child(tr::editor::panel::duration())
                             .child(
                                 div()
                                     .font_weight(FontWeight::MEDIUM)
@@ -5702,156 +6023,160 @@ impl EditorWindow {
             .name
             .clone()
             .filter(|name| !name.is_empty())
-            .unwrap_or_else(|| "Audio".to_string());
+            .unwrap_or_else(|| tr::editor::panel::audio::fallback_name().to_string());
 
         div()
             .flex()
             .flex_col()
             .gap(px(16.))
             .child(
-                ui::Field::section(&theme, SharedString::from(format!("Audio {}", index + 1)))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(12.))
-                            // The "Tap to change track" row opens the audio
-                            // library panel, which is not part of this rev --
-                            // see the README's deviation.
-                            .child(
-                                div()
-                                    .id(SharedString::from(format!("audio-replace-{index}")))
-                                    .flex()
-                                    .flex_row()
-                                    .gap(px(12.))
-                                    .items_center()
-                                    .p(px(8.))
-                                    .w_full()
-                                    .rounded(px(12.))
-                                    .border_1()
-                                    .border_color(Hsla::from(theme.editor.line))
-                                    .bg(Hsla::from(theme.gray_2))
-                                    .cursor_pointer()
-                                    .tab_index(0)
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.open_audio_replace(index, cx);
-                                    }))
-                                    .child(
-                                        div()
-                                            .size(px(40.))
-                                            .flex_none()
-                                            .rounded(px(8.))
-                                            .bg(TrackKind::Audio.color()),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .flex_col()
-                                            .flex_1()
-                                            .min_w_0()
-                                            .child(
-                                                div()
-                                                    .text_size(px(14.))
-                                                    .font_weight(FontWeight::MEDIUM)
-                                                    .truncate()
-                                                    .text_color(Hsla::from(theme.gray_12))
-                                                    .child(SharedString::from(name)),
-                                            )
-                                            .child(
-                                                div()
-                                                    .text_size(px(12.))
-                                                    .text_color(Hsla::from(theme.gray_10))
-                                                    .child("Tap to change track"),
-                                            ),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .flex_row()
-                                            .gap(px(4.))
-                                            .items_center()
-                                            .px(px(8.))
-                                            .h(px(28.))
-                                            .flex_none()
-                                            .rounded(px(8.))
-                                            .border_1()
-                                            .border_color(Hsla::from(theme.editor.line))
-                                            .bg(Hsla::from(theme.gray_1))
-                                            .text_size(px(12.))
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .text_color(Hsla::from(theme.gray_11))
-                                            .opacity(0.5)
-                                            .child(
-                                                svg()
-                                                    .path("icons/refresh-cw.svg")
-                                                    .size(px(14.))
-                                                    .text_color(Hsla::from(theme.gray_11)),
-                                            )
-                                            .child("Change"),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_row()
-                                    .gap(px(12.))
-                                    .items_center()
-                                    .child(div().flex_1().min_w_0().child(
-                                        self.render_field_input(FieldKey::AudioName(index), None),
-                                    ))
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .flex_col()
-                                            .items_center()
-                                            .gap(px(8.))
-                                            .child(
-                                                div()
-                                                    .text_size(px(12.))
-                                                    .text_color(Hsla::from(theme.gray_11))
-                                                    .child("Enabled"),
-                                            )
-                                            .child(
-                                                ui::Toggle::plain(
-                                                    &theme,
-                                                    SharedString::from(format!(
-                                                        "audio-enabled-{index}"
-                                                    )),
-                                                    enabled,
-                                                )
-                                                .on_click(cx.listener(
-                                                    move |this, _, window, cx| {
-                                                        this.edit_audio_segment(
-                                                            "audio-enabled",
-                                                            index,
-                                                            window,
-                                                            cx,
-                                                            move |segment| {
-                                                                segment.enabled = !enabled;
-                                                                true
-                                                            },
-                                                        );
-                                                    },
+                ui::Field::section(
+                    &theme,
+                    SharedString::from(tr::editor::panel::audio::title(index + 1)),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(12.))
+                        // The "Tap to change track" row opens the audio
+                        // library panel, which is not part of this rev --
+                        // see the README's deviation.
+                        .child(
+                            div()
+                                .id(SharedString::from(format!("audio-replace-{index}")))
+                                .flex()
+                                .flex_row()
+                                .gap(px(12.))
+                                .items_center()
+                                .p(px(8.))
+                                .w_full()
+                                .rounded(px(12.))
+                                .border_1()
+                                .border_color(Hsla::from(theme.editor.line))
+                                .bg(Hsla::from(theme.gray_2))
+                                .cursor_pointer()
+                                .tab_index(0)
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.open_audio_replace(index, cx);
+                                }))
+                                .child(
+                                    div()
+                                        .size(px(40.))
+                                        .flex_none()
+                                        .rounded(px(8.))
+                                        .bg(TrackKind::Audio.color()),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .child(
+                                            div()
+                                                .text_size(px(14.))
+                                                .font_weight(FontWeight::MEDIUM)
+                                                .truncate()
+                                                .text_color(Hsla::from(theme.gray_12))
+                                                .child(SharedString::from(name)),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(px(12.))
+                                                .truncate()
+                                                .text_color(Hsla::from(theme.gray_10))
+                                                .child(tr::editor::panel::audio::change_hint()),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_row()
+                                        .gap(px(4.))
+                                        .items_center()
+                                        .px(px(8.))
+                                        .h(px(28.))
+                                        .flex_none()
+                                        .rounded(px(8.))
+                                        .border_1()
+                                        .border_color(Hsla::from(theme.editor.line))
+                                        .bg(Hsla::from(theme.gray_1))
+                                        .text_size(px(12.))
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(Hsla::from(theme.gray_11))
+                                        .opacity(0.5)
+                                        .child(
+                                            svg()
+                                                .path("icons/refresh-cw.svg")
+                                                .size(px(14.))
+                                                .text_color(Hsla::from(theme.gray_11)),
+                                        )
+                                        .child(tr::editor::panel::audio::change()),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_row()
+                                .gap(px(12.))
+                                .items_center()
+                                .child(div().flex_1().min_w_0().child(
+                                    self.render_field_input(FieldKey::AudioName(index), None),
+                                ))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .items_center()
+                                        .gap(px(8.))
+                                        .child(
+                                            div()
+                                                .text_size(px(12.))
+                                                .text_color(Hsla::from(theme.gray_11))
+                                                .child(tr::editor::panel::enabled()),
+                                        )
+                                        .child(
+                                            ui::Toggle::plain(
+                                                &theme,
+                                                SharedString::from(format!(
+                                                    "audio-enabled-{index}"
                                                 )),
+                                                enabled,
+                                            )
+                                            .on_click(
+                                                cx.listener(move |this, _, window, cx| {
+                                                    this.edit_audio_segment(
+                                                        "audio-enabled",
+                                                        index,
+                                                        window,
+                                                        cx,
+                                                        move |segment| {
+                                                            segment.enabled = !enabled;
+                                                            true
+                                                        },
+                                                    );
+                                                }),
                                             ),
-                                    ),
-                            ),
-                    ),
+                                        ),
+                                ),
+                        ),
+                ),
             )
             .child(self.slider_field(
-                "Volume",
+                tr::editor::panel::audio::volume(),
                 SliderKey::Panel(PanelSlider::AudioVolume, index),
                 "db",
                 cx,
             ))
             .child(self.slider_field(
-                "Fade In",
+                tr::editor::panel::audio::fade_in(),
                 SliderKey::Panel(PanelSlider::AudioFadeIn, index),
                 "s",
                 cx,
             ))
             .child(self.slider_field(
-                "Fade Out",
+                tr::editor::panel::audio::fade_out(),
                 SliderKey::Panel(PanelSlider::AudioFadeOut, index),
                 "s",
                 cx,
@@ -5873,7 +6198,11 @@ impl EditorWindow {
         let effect = mask_effect(segment);
 
         let mut panel = div().flex().flex_col().gap(px(16.)).child(
-            ui::Field::section(&theme, SharedString::from(format!("Mask {}", index + 1))).child(
+            ui::Field::section(
+                &theme,
+                SharedString::from(tr::editor::panel::mask::title(index + 1)),
+            )
+            .child(
                 div()
                     .flex()
                     .flex_row()
@@ -5882,7 +6211,10 @@ impl EditorWindow {
                     .gap(px(16.))
                     .child(div().flex_1().min_w_0().child(self.radio_row(
                         SharedString::from(format!("mask-kind-{index}")),
-                        vec![("Sensitive", sensitive), ("Highlight", !sensitive)],
+                        vec![
+                            (tr::editor::panel::mask::sensitive(), sensitive),
+                            (tr::editor::panel::mask::highlight(), !sensitive),
+                        ],
                         cx.listener(move |this, choice: &usize, window, cx| {
                             let want_sensitive = *choice == 0;
                             this.edit_mask_segment(
@@ -5920,7 +6252,7 @@ impl EditorWindow {
                                 div()
                                     .text_size(px(12.))
                                     .text_color(Hsla::from(theme.gray_11))
-                                    .child("Enabled"),
+                                    .child(tr::editor::panel::enabled()),
                             )
                             .child(
                                 ui::Toggle::plain(
@@ -5949,32 +6281,45 @@ impl EditorWindow {
 
         if sensitive {
             panel = panel
-                .child(ui::Field::section(&theme, "Effect").child(self.radio_row(
-                    SharedString::from(format!("mask-effect-{index}")),
-                    vec![
-                        ("Blur", effect == MaskEffect::Blur),
-                        ("Pixelate", effect == MaskEffect::Pixelate),
-                    ],
-                    cx.listener(move |this, choice: &usize, window, cx| {
-                        let next = if *choice == 0 {
-                            MaskEffect::Blur
-                        } else {
-                            MaskEffect::Pixelate
-                        };
-                        this.edit_mask_segment("mask-effect", index, window, cx, move |segment| {
-                            let amount = mask_effect_amount(segment);
-                            segment.pixelation = encode_mask_effect(next, amount);
-                            segment.opacity = 1.;
-                            segment.keyframes.intensity.clear();
-                            true
-                        });
-                    }),
-                )))
+                .child(
+                    ui::Field::section(&theme, tr::editor::panel::mask::effect()).child(
+                        self.radio_row(
+                            SharedString::from(format!("mask-effect-{index}")),
+                            vec![
+                                (tr::editor::panel::mask::blur(), effect == MaskEffect::Blur),
+                                (
+                                    tr::editor::panel::mask::pixelate(),
+                                    effect == MaskEffect::Pixelate,
+                                ),
+                            ],
+                            cx.listener(move |this, choice: &usize, window, cx| {
+                                let next = if *choice == 0 {
+                                    MaskEffect::Blur
+                                } else {
+                                    MaskEffect::Pixelate
+                                };
+                                this.edit_mask_segment(
+                                    "mask-effect",
+                                    index,
+                                    window,
+                                    cx,
+                                    move |segment| {
+                                        let amount = mask_effect_amount(segment);
+                                        segment.pixelation = encode_mask_effect(next, amount);
+                                        segment.opacity = 1.;
+                                        segment.keyframes.intensity.clear();
+                                        true
+                                    },
+                                );
+                            }),
+                        ),
+                    ),
+                )
                 .child(self.slider_field(
                     if effect == MaskEffect::Blur {
-                        "Blur"
+                        tr::editor::panel::mask::blur()
                     } else {
-                        "Pixel Size"
+                        tr::editor::panel::mask::pixel_size()
                     },
                     SliderKey::Panel(PanelSlider::MaskAmount, index),
                     "px",
@@ -5983,13 +6328,13 @@ impl EditorWindow {
         } else {
             panel = panel
                 .child(self.slider_field(
-                    "Outside Darkness",
+                    tr::editor::panel::mask::outside_darkness(),
                     SliderKey::Panel(PanelSlider::MaskDarkness, index),
                     "",
                     cx,
                 ))
                 .child(self.slider_field(
-                    "Fade Duration",
+                    tr::editor::panel::fade_duration(),
                     SliderKey::Panel(PanelSlider::MaskFade, index),
                     "s",
                     cx,
@@ -6064,12 +6409,19 @@ impl EditorWindow {
     }
 }
 
-/// `formatTime` -- the `M:SS` clock the timing cards print.
+/// `formatTime` -- the `M:SS` clock the timing cards print, as `H:MM:SS` from
+/// an hour on.
 fn format_time(seconds: f64) -> String {
     let seconds = seconds.max(0.);
+    let hours = (seconds / 3600.).floor() as u32;
+    let seconds = seconds - f64::from(hours) * 3600.;
     let minutes = (seconds / 60.).floor() as u32;
     let rest = seconds - f64::from(minutes) * 60.;
-    format!("{minutes}:{rest:04.1}")
+    if hours > 0 {
+        format!("{hours}:{minutes:02}:{rest:04.1}")
+    } else {
+        format!("{minutes}:{rest:04.1}")
+    }
 }
 
 impl EditorWindow {
@@ -6092,7 +6444,10 @@ impl EditorWindow {
             .find(|(candidate, ..)| {
                 std::mem::discriminant(candidate) == std::mem::discriminant(&mode)
             })
-            .map_or("Shows both screen and camera", |(_, _, _, text)| *text);
+            .map_or(
+                tr::editor::panel::scene::description::default(),
+                |(_, _, _, text)| text(),
+            );
 
         let mut panel = div()
             .flex()
@@ -6108,7 +6463,7 @@ impl EditorWindow {
                     .child(
                         ui::EditorButton::plain(&theme, "scene-done")
                             .left_icon("icons/check.svg")
-                            .label("Done")
+                            .label(tr::editor::panel::done())
                             .on_click(
                                 cx.listener(|this, _, _window, cx| this.set_selection(None, cx)),
                             ),
@@ -6117,14 +6472,14 @@ impl EditorWindow {
                         ui::EditorButton::plain(&theme, "scene-delete")
                             .danger(&theme)
                             .left_icon("icons/trash.svg")
-                            .label("Delete")
+                            .label(tr::editor::panel::delete())
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.delete_selected_segments(window, cx)
                             })),
                     ),
             )
             .child(
-                ui::Field::section(&theme, "Camera Layout").child(
+                ui::Field::section(&theme, tr::editor::panel::scene::camera_layout()).child(
                     div()
                         .flex()
                         .flex_col()
@@ -6173,7 +6528,7 @@ impl EditorWindow {
                                                 Hsla::from(theme.gray_11)
                                             },
                                         ))
-                                        .child(*label)
+                                        .child(label())
                                         .when(!disabled, |this| {
                                             this.on_click(cx.listener(
                                                 move |this, _, window, cx| {
@@ -6203,25 +6558,29 @@ impl EditorWindow {
                 ),
             )
             .child(
-                ui::Field::section(&theme, "Transition").child(
+                ui::Field::section(&theme, tr::editor::panel::scene::transition()).child(
                     div()
                         .flex()
                         .flex_col()
                         .gap(px(12.))
-                        .child(ui::Subfield::plain(&theme, "In").child(
-                            div().flex_1().min_w_0().ml(px(16.)).child(self.slider_flex(
-                                SliderKey::Panel(PanelSlider::SceneTransitionIn, index),
-                                "s2",
-                                cx,
-                            )),
-                        ))
-                        .child(ui::Subfield::plain(&theme, "Out").child(
-                            div().flex_1().min_w_0().ml(px(16.)).child(self.slider_flex(
-                                SliderKey::Panel(PanelSlider::SceneTransitionOut, index),
-                                "s2",
-                                cx,
-                            )),
-                        )),
+                        .child(
+                            ui::Subfield::plain(&theme, tr::editor::panel::edge_in()).child(
+                                div().flex_1().min_w_0().ml(px(16.)).child(self.slider_flex(
+                                    SliderKey::Panel(PanelSlider::SceneTransitionIn, index),
+                                    "s2",
+                                    cx,
+                                )),
+                            ),
+                        )
+                        .child(
+                            ui::Subfield::plain(&theme, tr::editor::panel::edge_out()).child(
+                                div().flex_1().min_w_0().ml(px(16.)).child(self.slider_flex(
+                                    SliderKey::Panel(PanelSlider::SceneTransitionOut, index),
+                                    "s2",
+                                    cx,
+                                )),
+                            ),
+                        ),
                 ),
             );
 
@@ -6229,24 +6588,24 @@ impl EditorWindow {
             panel = panel
                 .child(dashed_divider(Hsla::from(theme.editor.line)))
                 .child(self.slider_field(
-                    "Screen Zoom",
+                    tr::editor::panel::scene::screen_zoom(),
                     SliderKey::Panel(PanelSlider::SceneScreenZoom, index),
                     "",
                     cx,
                 ))
                 .child(
-                    ui::Field::stacked(&theme, "Screen Position")
+                    ui::Field::stacked(&theme, tr::editor::panel::scene::screen_position())
                         .child(self.render_pad(PadKey::SceneScreen(index), cx)),
                 )
                 .child(dashed_divider(Hsla::from(theme.editor.line)))
                 .child(self.slider_field(
-                    "Camera Zoom",
+                    tr::editor::panel::scene::camera_zoom(),
                     SliderKey::Panel(PanelSlider::SceneCameraZoom, index),
                     "",
                     cx,
                 ))
                 .child(
-                    ui::Field::stacked(&theme, "Camera Position")
+                    ui::Field::stacked(&theme, tr::editor::panel::scene::camera_position())
                         .child(self.render_pad(PadKey::SceneCamera(index), cx)),
                 );
         }
@@ -6362,7 +6721,7 @@ impl EditorWindow {
     ) -> AnyElement {
         let theme = self.theme;
         let id = look.id;
-        let name = look.name;
+        let name = (look.name)();
         let pose = look.from;
         div()
             .id(SharedString::from(format!("c3d-look-{index}-{id}")))
@@ -6499,13 +6858,13 @@ impl EditorWindow {
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_color(Hsla::from(theme.editor.text_1))
                                 .truncate()
-                                .child(scene.name),
+                                .child((scene.name)()),
                         )
                         .child(
                             div()
                                 .text_size(px(10.))
                                 .text_color(Hsla::from(theme.editor.text_2))
-                                .child(format!("{shots} shots")),
+                                .child(tr::editor::panel::camera3d::shots(shots)),
                         )
                         .child(div().flex().flex_row().gap(px(3.)).pt(px(3.)).children(
                             (0..shots).map(|_| {
@@ -6525,23 +6884,32 @@ impl EditorWindow {
             .flex_col()
             .gap(px(10.))
             .child(
-                self.camera3d_group_label("Look").child(
-                    ui::SegmentedControl::editor(
-                        &theme,
-                        "camera3d-look-tab",
-                        vec![
-                            ui::SegmentOption::new("Moves", !angles),
-                            ui::SegmentOption::new("Angles", angles),
-                        ],
-                    )
-                    .text_size(px(11.))
-                    .item_height(px(21.))
-                    .item_padding(px(9.), px(0.))
-                    .on_select(cx.listener(|this, choice: &usize, _, cx| {
-                        this.sidebar.camera3d_angles = *choice == 1;
-                        cx.notify();
-                    })),
-                ),
+                self.camera3d_group_label(tr::editor::panel::camera3d::look_title())
+                    .child(
+                        ui::SegmentedControl::editor(
+                            &theme,
+                            "camera3d-look-tab",
+                            vec![
+                                ui::SegmentOption::new(
+                                    tr::editor::panel::camera3d::moves(),
+                                    !angles,
+                                ),
+                                ui::SegmentOption::new(
+                                    tr::editor::panel::camera3d::angles(),
+                                    angles,
+                                ),
+                            ],
+                        )
+                        .text_size(px(11.))
+                        .item_height(px(21.))
+                        .item_padding(px(9.), px(0.))
+                        .on_select(cx.listener(
+                            |this, choice: &usize, _, cx| {
+                                this.sidebar.camera3d_angles = *choice == 1;
+                                cx.notify();
+                            },
+                        )),
+                    ),
             )
             .child(grid)
             .child(sequences)
@@ -6631,7 +6999,7 @@ impl EditorWindow {
                     .text_center()
                     .text_size(px(10.))
                     .text_color(Hsla::from(theme.editor.text_2))
-                    .child("Drag to orbit"),
+                    .child(tr::editor::panel::camera3d::drag_to_orbit()),
             )
             .on_mouse_down(
                 gpui::MouseButton::Left,
@@ -6697,7 +7065,13 @@ impl EditorWindow {
             .gap(px(8.))
             .text_size(px(12.))
             .text_color(Hsla::from(theme.editor.text_2))
-            .child(div().w(px(CAMERA3D_ROW_LABEL)).flex_none().child(label))
+            .child(
+                div()
+                    .w(px(CAMERA3D_ROW_LABEL))
+                    .flex_none()
+                    .truncate()
+                    .child(label),
+            )
             .child(
                 div()
                     .flex_1()
@@ -6757,13 +7131,11 @@ impl EditorWindow {
         // the hold it is.
         let dim = still && end;
         let caption = if dim {
-            "End \u{b7} same as start".to_string()
+            tr::editor::panel::camera3d::end_same_as_start().to_string()
+        } else if end {
+            tr::editor::panel::camera3d::pose_end(format_time(time))
         } else {
-            format!(
-                "{} \u{b7} {}",
-                if end { "End" } else { "Start" },
-                format_time(time)
-            )
+            tr::editor::panel::camera3d::pose_start(format_time(time))
         };
 
         div()
@@ -6846,9 +7218,7 @@ impl EditorWindow {
         let fps = crate::editor_window::EDITOR_PREVIEW_FPS;
         let start_time = camera3d_pose_seek_time(segment, false, fps);
         let end_time = camera3d_pose_seek_time(segment, true, fps);
-        // "The playhead is on this pose" is a frame's tolerance, which is as
-        // close as a seek can land.
-        let on = |time: f64| (self.playhead_time() - time).abs() < 1. / f64::from(fps.max(1));
+        let on = |time: f64| camera3d_pose_on(self.playhead_time(), time, fps);
 
         div()
             .flex()
@@ -6882,9 +7252,9 @@ impl EditorWindow {
                                     "icons/arrow-left-right.svg",
                                     None,
                                     if still {
-                                        "Nothing to swap on a still shot"
+                                        tr::editor::panel::camera3d::nothing_to_swap()
                                     } else {
-                                        "Swap start and end"
+                                        tr::editor::panel::camera3d::swap()
                                     },
                                     false,
                                 )
@@ -6912,11 +7282,11 @@ impl EditorWindow {
                     self.camera3d_action(
                         "camera3d-still",
                         "icons/pause.svg",
-                        Some("Still shot"),
+                        Some(tr::editor::panel::camera3d::still_shot()),
                         if still {
-                            "Already a still shot"
+                            tr::editor::panel::camera3d::already_still()
                         } else {
-                            "Hold the opening pose for the whole shot"
+                            tr::editor::panel::camera3d::hold_opening()
                         },
                         still,
                     )
@@ -6951,14 +7321,15 @@ impl EditorWindow {
                         .text_size(px(12.))
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(Hsla::from(theme.editor.text_2))
-                        .child("Auto scene"),
+                        .child(tr::editor::panel::camera3d::auto_scene()),
                 )
                 .child(div().flex_1())
                 .child(self.render_camera3d_count_pills("panel", count, maximum, cx))
                 .id("camera3d-auto-row")
                 .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
                 .tooltip(move |_window, cx| {
-                    ui::Tooltip::new(&theme, "Rebuilds every 3D shot on the track").view(cx)
+                    ui::Tooltip::new(&theme, tr::editor::panel::camera3d::auto_scene_tooltip())
+                        .view(cx)
                 })
                 .into_any_element(),
         )
@@ -7036,7 +7407,7 @@ impl EditorWindow {
         let blur = segment.blur;
         let blur_on = blur.mode != Camera3DBlurMode::None;
         let easing_index = motion_easing(segment);
-        let easing_label = MOTION_EASINGS[easing_index].1;
+        let easing_label = (MOTION_EASINGS[easing_index].1)();
         let duration = segment.end - segment.start;
         let look = camera3d_shot_label(segment);
         let advanced = self.sidebar.section(PanelSection::Camera3DAdvanced);
@@ -7051,7 +7422,7 @@ impl EditorWindow {
             .child(
                 ui::EditorButton::plain(&theme, "camera3d-done")
                     .left_icon("icons/check.svg")
-                    .label("Done")
+                    .label(tr::editor::panel::done())
                     .text_size(px(12.))
                     .on_click(cx.listener(|this, _, _window, cx| this.set_selection(None, cx))),
             )
@@ -7062,15 +7433,18 @@ impl EditorWindow {
                     .truncate()
                     .text_size(px(12.))
                     .text_color(Hsla::from(theme.editor.text_2))
-                    .child(format!("3D shot \u{b7} {look} \u{b7} {duration:.1}s")),
+                    .child(tr::editor::panel::camera3d::header(
+                        look,
+                        crate::i18n::decimal(format!("{duration:.1}")),
+                    )),
             )
             .child(
                 ui::EditorButton::plain(&theme, "camera3d-play-shot")
                     .left_icon("icons/play.svg")
                     .icon_size(px(12.))
-                    .label("Play shot")
+                    .label(tr::editor::panel::camera3d::play_shot())
                     .text_size(px(12.))
-                    .tooltip(&theme, "Play this shot")
+                    .tooltip(&theme, tr::editor::panel::camera3d::play_shot_tooltip())
                     .on_click(cx.listener(move |this, _, _window, cx| {
                         this.play_camera3d_shot(index, cx);
                     })),
@@ -7080,9 +7454,9 @@ impl EditorWindow {
                     .danger(&theme)
                     .left_icon("icons/trash.svg")
                     .icon_size(px(13.))
-                    .label("Delete")
+                    .label(tr::editor::panel::delete())
                     .text_size(px(12.))
-                    .tooltip(&theme, "Delete this shot")
+                    .tooltip(&theme, tr::editor::panel::camera3d::delete_tooltip())
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.delete_selection(window, cx);
                     })),
@@ -7106,7 +7480,7 @@ impl EditorWindow {
                             .text_size(px(12.))
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(Hsla::from(theme.editor.text_2))
-                            .child("Camera"),
+                            .child(tr::editor::panel::camera3d::camera()),
                     )
                     .child(div().flex_1())
                     .child(
@@ -7114,7 +7488,7 @@ impl EditorWindow {
                             "camera3d-flip-h",
                             "icons/flip-horizontal-2.svg",
                             None,
-                            "Flip horizontally",
+                            tr::editor::panel::flip_horizontally(),
                             false,
                         )
                         .on_click(cx.listener(
@@ -7128,7 +7502,7 @@ impl EditorWindow {
                             "camera3d-flip-v",
                             "icons/flip-vertical-2.svg",
                             None,
-                            "Flip vertically",
+                            tr::editor::panel::flip_vertically(),
                             false,
                         )
                         .on_click(cx.listener(
@@ -7152,7 +7526,7 @@ impl EditorWindow {
                             .flex()
                             .flex_col()
                             .child(self.camera3d_slider_row(
-                                "Distance",
+                                tr::editor::panel::camera3d::distance(),
                                 SliderKey::Panel(
                                     PanelSlider::Camera3DPose(Camera3DProperty::Zoom),
                                     index,
@@ -7161,7 +7535,7 @@ impl EditorWindow {
                                 cx,
                             ))
                             .child(self.camera3d_slider_row(
-                                "Roll",
+                                tr::editor::panel::camera3d::roll(),
                                 SliderKey::Panel(
                                     PanelSlider::Camera3DPose(Camera3DProperty::Roll),
                                     index,
@@ -7170,7 +7544,7 @@ impl EditorWindow {
                                 cx,
                             ))
                             .child(self.camera3d_slider_row(
-                                "Shift X",
+                                tr::editor::panel::camera3d::shift_x(),
                                 SliderKey::Panel(
                                     PanelSlider::Camera3DPose(Camera3DProperty::PanX),
                                     index,
@@ -7179,7 +7553,7 @@ impl EditorWindow {
                                 cx,
                             ))
                             .child(self.camera3d_slider_row(
-                                "Shift Y",
+                                tr::editor::panel::camera3d::shift_y(),
                                 SliderKey::Panel(
                                     PanelSlider::Camera3DPose(Camera3DProperty::PanY),
                                     index,
@@ -7192,21 +7566,22 @@ impl EditorWindow {
 
         // -- Depth blur -------------------------------------------------------
         let mut depth = div().flex().flex_col().gap(px(6.)).child(
-            self.camera3d_group_label("Depth blur").child(
-                ui::Toggle::plain(
-                    &theme,
-                    SharedString::from(format!("camera3d-blur-{index}")),
-                    blur_on,
-                )
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.toggle_camera3d_blur(index, window, cx);
-                })),
-            ),
+            self.camera3d_group_label(tr::editor::panel::camera3d::depth_blur())
+                .child(
+                    ui::Toggle::plain(
+                        &theme,
+                        SharedString::from(format!("camera3d-blur-{index}")),
+                        blur_on,
+                    )
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.toggle_camera3d_blur(index, window, cx);
+                    })),
+                ),
         );
         if blur_on {
             depth = depth
                 .child(self.camera3d_slider_row(
-                    "Amount",
+                    tr::editor::panel::camera3d::amount(),
                     SliderKey::Panel(PanelSlider::Camera3DBlur(Camera3DBlurKey::Strength), index),
                     "int",
                     cx,
@@ -7220,7 +7595,13 @@ impl EditorWindow {
                         .gap(px(8.))
                         .text_size(px(12.))
                         .text_color(Hsla::from(theme.editor.text_2))
-                        .child(div().w(px(CAMERA3D_ROW_LABEL)).flex_none().child("Focus"))
+                        .child(
+                            div()
+                                .w(px(CAMERA3D_ROW_LABEL))
+                                .flex_none()
+                                .truncate()
+                                .child(tr::editor::panel::camera3d::focus()),
+                        )
                         .child(
                             div().flex_1().min_w_0().child(
                                 ui::SegmentedControl::editor(
@@ -7229,7 +7610,7 @@ impl EditorWindow {
                                     CAMERA3D_FOCUS_MODES
                                         .iter()
                                         .map(|(mode, label)| {
-                                            ui::SegmentOption::new(*label, blur.mode == *mode)
+                                            ui::SegmentOption::new(label(), blur.mode == *mode)
                                         })
                                         .collect(),
                                 )
@@ -7252,7 +7633,7 @@ impl EditorWindow {
                 .child(crate::editor_sidebar::disclosure_row(
                     &theme,
                     "camera3d-blur-tune",
-                    "Fine-tune",
+                    tr::editor::panel::camera3d::fine_tune(),
                     tune.is_open(),
                     cx.listener(|this, _, window, cx| {
                         this.sidebar
@@ -7272,7 +7653,7 @@ impl EditorWindow {
                                 .filter(|(key, _)| *key != Camera3DBlurKey::Strength)
                                 .map(|(key, label)| {
                                     self.camera3d_slider_row(
-                                        label,
+                                        label(),
                                         SliderKey::Panel(PanelSlider::Camera3DBlur(*key), index),
                                         if *key == Camera3DBlurKey::Angle {
                                             "deg"
@@ -7292,7 +7673,13 @@ impl EditorWindow {
                                 .gap(px(8.))
                                 .text_size(px(12.))
                                 .text_color(Hsla::from(theme.editor.text_2))
-                                .child(div().w(px(CAMERA3D_ROW_LABEL)).flex_none().child("Bokeh"))
+                                .child(
+                                    div()
+                                        .w(px(CAMERA3D_ROW_LABEL))
+                                        .flex_none()
+                                        .truncate()
+                                        .child(tr::editor::panel::camera3d::bokeh()),
+                                )
                                 .child(div().flex_1())
                                 .child(
                                     ui::Toggle::plain(
@@ -7331,15 +7718,21 @@ impl EditorWindow {
                     .text_size(px(12.))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(Hsla::from(theme.editor.text_1))
-                    .child("Timing & advanced")
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .child(tr::editor::panel::camera3d::timing_advanced()),
+                    )
                     .child(div().flex_1())
                     .child(
                         div()
+                            .flex_none()
                             .font_weight(FontWeight::NORMAL)
                             .text_color(Hsla::from(theme.editor.text_2))
-                            .child(format!(
-                                "{easing_label} \u{b7} Lens {}",
-                                start.fov.round() as i32
+                            .child(tr::editor::panel::camera3d::timing_summary(
+                                easing_label,
+                                start.fov.round() as i32,
                             )),
                     )
                     .child(
@@ -7369,42 +7762,43 @@ impl EditorWindow {
                     .flex_col()
                     .gap(px(2.))
                     .child(
-                        ui::Subfield::plain(&theme, "Motion style").child(
-                            div()
-                                .w(px(150.))
-                                // A still shot has no span to shape and nowhere
-                                // to store a curve (`:5357-5360`).
-                                .when(still, |this| this.opacity(0.5))
-                                .child(if still {
-                                    ui::Select::plain(&theme, "camera3d-easing", easing_label)
-                                        .stretch_label()
-                                        .disabled(true)
-                                        .into_any_element()
-                                } else {
-                                    self.easing_select(index, easing_index, cx)
-                                }),
-                        ),
+                        ui::Subfield::plain(&theme, tr::editor::panel::camera3d::motion_style())
+                            .child(
+                                div()
+                                    .w(px(150.))
+                                    // A still shot has no span to shape and nowhere
+                                    // to store a curve (`:5357-5360`).
+                                    .when(still, |this| this.opacity(0.5))
+                                    .child(if still {
+                                        ui::Select::plain(&theme, "camera3d-easing", easing_label)
+                                            .stretch_label()
+                                            .disabled(true)
+                                            .into_any_element()
+                                    } else {
+                                        self.easing_select(index, easing_index, cx)
+                                    }),
+                            ),
                     )
                     .child(self.camera3d_slider_row(
-                        "Ease in",
+                        tr::editor::panel::camera3d::ease_in(),
                         SliderKey::Panel(PanelSlider::Camera3DTransitionIn, index),
                         "secs",
                         cx,
                     ))
                     .child(self.camera3d_slider_row(
-                        "Ease out",
+                        tr::editor::panel::camera3d::ease_out(),
                         SliderKey::Panel(PanelSlider::Camera3DTransitionOut, index),
                         "secs",
                         cx,
                     ))
                     .child(self.camera3d_slider_row(
-                        "Lens",
+                        tr::editor::panel::camera3d::lens(),
                         SliderKey::Panel(PanelSlider::Camera3DPose(Camera3DProperty::Fov), index),
                         "deg",
                         cx,
                     ))
                     .child(self.camera3d_slider_row(
-                        "Rotate X",
+                        tr::editor::panel::camera3d::rotate_x(),
                         SliderKey::Panel(
                             PanelSlider::Camera3DPose(Camera3DProperty::RotateX),
                             index,
@@ -7413,7 +7807,7 @@ impl EditorWindow {
                         cx,
                     ))
                     .child(self.camera3d_slider_row(
-                        "Rotate Y",
+                        tr::editor::panel::camera3d::rotate_y(),
                         SliderKey::Panel(
                             PanelSlider::Camera3DPose(Camera3DProperty::RotateY),
                             index,
@@ -7425,7 +7819,7 @@ impl EditorWindow {
                         div().pt(px(4.)).pb(px(4.)).child(
                             ui::EditorButton::plain(&theme, "camera3d-reset")
                                 .left_icon("icons/rotate-ccw.svg")
-                                .label("Reset camera")
+                                .label(tr::editor::panel::camera3d::reset_camera())
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     this.reset_camera3d_pose(index, window, cx);
                                 })),
@@ -7665,7 +8059,7 @@ impl EditorWindow {
         self.menu_select(
             SidebarMenu::Camera3DEasing(index),
             "camera3d-easing",
-            MOTION_EASINGS[current].1,
+            (MOTION_EASINGS[current].1)(),
             cx,
         )
     }
@@ -7799,7 +8193,7 @@ impl EditorWindow {
 }
 
 impl EditorWindow {
-    /// Every text field the frame about to be built will draw.
+    /// Every text field the frame about to be built may draw.
     ///
     /// Creating one needs `&mut Window`, and the sidebar's render chain is
     /// threaded with `&self`, so the set is computed here from the same state
@@ -7811,9 +8205,8 @@ impl EditorWindow {
         let mut colors: Vec<ColorTarget> = Vec::new();
 
         // The crop dialog's four `BoundInput`s, while it is open. Created up
-        // front rather than pushed onto `fields`, because the match below
-        // bails early when the project has no timeline and the dialog is
-        // independent of it.
+        // front because the match below bails early when the project has no
+        // timeline and the dialog is independent of it.
         if self.crop.is_some() {
             use crate::editor_crop::CropField;
             for field in [
@@ -7822,7 +8215,9 @@ impl EditorWindow {
                 CropField::X,
                 CropField::Y,
             ] {
-                self.ensure_field(FieldKey::Crop(field), window, cx);
+                let key = FieldKey::Crop(field);
+                self.ensure_field(key, window, cx);
+                fields.push(key);
             }
         }
 
@@ -7835,6 +8230,9 @@ impl EditorWindow {
                     warm_installed_fonts();
                 }
                 let Some(timeline) = self.timeline() else {
+                    // The crop dialog does not need the timeline, and its
+                    // fields were already ensured above.
+                    self.sync_visible_fields(&fields, window, cx);
                     return;
                 };
                 let indices = |length: usize| -> Vec<usize> {
@@ -7937,13 +8335,13 @@ impl EditorWindow {
             },
         }
 
-        for key in fields {
+        for &key in &fields {
             self.ensure_field(key, window, cx);
         }
         for target in colors {
             self.ensure_hex_input(target, window, cx);
         }
-        self.sync_fields(window, cx);
+        self.sync_visible_fields(&fields, window, cx);
     }
 }
 
@@ -8028,6 +8426,91 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn pasting_a_text_style_keeps_content_timing_position_and_layout() {
+        let mut source = crate::editor_edits::default_text_segment(0., 2., 0);
+        source.content = "Hello".into();
+        source.font_family = "Georgia".into();
+        source.font_size = 96.;
+        source.font_weight = 400.;
+        source.italic = true;
+        source.uppercase = true;
+        source.letter_spacing = 3.;
+        source.color = "#ff0000".into();
+        source.background_color = Some("#00000080".into());
+        source.gradient_color = Some("#00ff00".into());
+        source.animation_in = TextAnimation::Pop;
+        source.animation_out = TextAnimation::Wipe;
+        source.animation_in_duration = 0.4;
+        source.animation_out_duration = 0.6;
+        source.center = XY::new(0.2, 0.2);
+        source.layout = TextLayout::Fullscreen;
+
+        let mut target = crate::editor_edits::default_text_segment(5., 8., 1);
+        target.content = "World".into();
+        target.center = XY::new(0.7, 0.8);
+        target.size = XY::new(0.2, 0.1);
+
+        assert!(TextStyle::of(&source).apply_to(&mut target));
+
+        assert_eq!(target.content, "World");
+        assert_eq!(target.start, 5.);
+        assert_eq!(target.end, 8.);
+        assert_eq!(target.track, 1);
+        assert_eq!(target.layout, TextLayout::Overlay);
+        assert_eq!(target.center.x, 0.7);
+        assert_eq!(target.font_family, "Georgia");
+        assert_eq!(target.font_size, 96.);
+        assert!(target.italic && target.uppercase);
+        assert_eq!(target.letter_spacing, 3.);
+        assert_eq!(target.color, "#ff0000");
+        assert_eq!(target.background_color.as_deref(), Some("#00000080"));
+        assert_eq!(target.gradient_color.as_deref(), Some("#00ff00"));
+        assert_eq!(target.animation_in, TextAnimation::Pop);
+        assert_eq!(target.animation_out, TextAnimation::Wipe);
+        assert_eq!(target.animation_in_duration, 0.4);
+        assert_eq!(target.animation_out_duration, 0.6);
+        assert_eq!(TextStyle::of(&target), TextStyle::of(&source));
+    }
+
+    #[test]
+    fn pasting_a_text_style_scales_the_box_from_its_top_edge() {
+        let mut source = crate::editor_edits::default_text_segment(0., 2., 0);
+        source.font_size = 96.;
+        let mut target = crate::editor_edits::default_text_segment(0., 2., 0);
+        target.font_size = 48.;
+        target.center = XY::new(0.5, 0.5);
+        target.size = XY::new(0.2, 0.1);
+
+        assert!(TextStyle::of(&source).apply_to(&mut target));
+
+        assert!((target.size.x - 0.4).abs() < 1e-9);
+        assert!((target.size.y - 0.2).abs() < 1e-9);
+        assert!((target.center.y - 0.55).abs() < 1e-9);
+        assert_eq!(target.center.x, 0.5);
+    }
+
+    #[test]
+    fn pasting_a_text_style_onto_its_own_source_changes_nothing() {
+        for (center, size) in [
+            (XY::new(0.3, 0.6), XY::new(0.25, 0.08)),
+            (XY::new(0.5, 0.9), XY::new(0.3, 0.4)),
+        ] {
+            let mut segment = crate::editor_edits::default_text_segment(0., 2., 0);
+            segment.color = "#ff0000".into();
+            segment.center = center;
+            segment.size = size;
+            let style = TextStyle::of(&segment);
+            let before = segment.clone();
+
+            assert!(!style.apply_to(&mut segment));
+
+            assert_eq!(TextStyle::of(&segment), style);
+            assert_eq!(segment.center, before.center);
+            assert_eq!(segment.size, before.size);
         }
     }
 
@@ -8167,6 +8650,9 @@ mod tests {
         assert_eq!(format_time(0.), "0:00.0");
         assert_eq!(format_time(9.25), "0:09.2");
         assert_eq!(format_time(75.5), "1:15.5");
+        assert_eq!(format_time(3599.5), "59:59.5");
+        assert_eq!(format_time(3600.), "1:00:00.0");
+        assert_eq!(format_time(3905.5), "1:05:05.5");
     }
 
     // -- Text presets ------------------------------------------------------
@@ -8229,7 +8715,7 @@ mod tests {
             );
             // Every preset is reachable from a chip.
             assert!(
-                TEXT_PRESET_GROUPS.contains(&preset.group),
+                TEXT_PRESET_GROUPS.iter().any(|(id, _)| *id == preset.group),
                 "{} is in {}",
                 preset.id,
                 preset.group
@@ -8239,7 +8725,7 @@ mod tests {
 
     #[test]
     fn the_animation_catalogue_is_the_renderers_own_order() {
-        let labels: Vec<_> = TEXT_ANIMATIONS.iter().map(|(_, label)| *label).collect();
+        let labels: Vec<_> = TEXT_ANIMATIONS.iter().map(|(_, label)| label()).collect();
         assert_eq!(
             labels,
             [
@@ -8644,7 +9130,7 @@ mod tests {
                 Some(Look {
                     kind: LookKind::Move,
                     id: template.id,
-                    name: template.name
+                    name: (template.name)()
                 }),
                 "{} did not match itself",
                 template.id
@@ -8658,7 +9144,7 @@ mod tests {
                 Some(Look {
                     kind: LookKind::Angle,
                     id: preset.id,
-                    name: preset.name
+                    name: (preset.name)()
                 }),
                 "{} did not match itself",
                 preset.id
@@ -8706,6 +9192,22 @@ mod tests {
             camera3d_pose_seek_time(&sliver, true, 30),
             camera3d_pose_seek_time(&sliver, false, 30)
         );
+    }
+
+    #[test]
+    fn a_paused_scrub_sees_the_poses_the_playhead_lands_on() {
+        // A paused scrub redraws the sidebar only when this list changes, and
+        // the pose cards mark exactly these poses.
+        let fps = 60;
+        let shots = [camera3d(1., 2.5), camera3d(4.02, 6.)];
+        assert_eq!(camera3d_poses_at(&shots, 1., fps), [(0, false)]);
+        assert_eq!(camera3d_poses_at(&shots, 149. / 60., fps), [(0, true)]);
+        assert_eq!(camera3d_poses_at(&shots, 242. / 60., fps), [(1, false)]);
+        assert_eq!(camera3d_poses_at(&shots, 359. / 60., fps), [(1, true)]);
+        for playhead in [0., 1.75, 3., 5., 7.] {
+            assert!(camera3d_poses_at(&shots, playhead, fps).is_empty());
+        }
+        assert!(camera3d_poses_at(&[], 1., fps).is_empty());
     }
 
     #[test]
@@ -8777,9 +9279,9 @@ pub enum ImageProperty {
 impl ImageProperty {
     fn label(self) -> &'static str {
         match self {
-            Self::Opacity => "Opacity",
-            Self::Rotation => "Rotation",
-            Self::Rounding => "Rounding",
+            Self::Opacity => tr::editor::panel::opacity(),
+            Self::Rotation => tr::editor::panel::image::rotation(),
+            Self::Rounding => tr::editor::panel::image::rounding(),
         }
     }
     fn limits(self) -> (f32, f32, f32) {
@@ -8822,7 +9324,7 @@ impl EditorWindow {
             .flex_col()
             .gap(px(16.))
             .child(self.labelled_small(
-                "Name",
+                tr::editor::panel::name(),
                 self.render_field_input(FieldKey::ImageName(index), None),
             ));
         panel = panel
@@ -8845,13 +9347,13 @@ impl EditorWindow {
                             .text_size(px(12.))
                             .font_weight(FontWeight::MEDIUM)
                             .child(svg().path("icons/move.svg").size(px(16.)))
-                            .child("Arrange on canvas"),
+                            .child(tr::editor::panel::image::arrange()),
                     )
                     .child(
                         div()
                             .text_size(px(12.))
                             .text_color(Hsla::from(self.theme.gray_10))
-                            .child("Drag the image to move it. Pull a corner to resize, or use the rotation control below to turn it."),
+                            .child(tr::editor::panel::image::arrange_help()),
                     )
                     .child(
                         ui::Button::plain(
@@ -8861,19 +9363,21 @@ impl EditorWindow {
                             ui::ButtonSize::Sm,
                         )
                         .icon("icons/move.svg")
-                        .label("Center on canvas")
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.edit_image_segment(
-                                "image-center",
-                                index,
-                                window,
-                                cx,
-                                |segment| {
-                                    segment.center = XY::new(0.5, 0.5);
-                                    true
-                                },
-                            );
-                        })),
+                        .label(tr::editor::panel::image::center())
+                        .on_click(cx.listener(
+                            move |this, _, window, cx| {
+                                this.edit_image_segment(
+                                    "image-center",
+                                    index,
+                                    window,
+                                    cx,
+                                    |segment| {
+                                        segment.center = XY::new(0.5, 0.5);
+                                        true
+                                    },
+                                );
+                            },
+                        )),
                     ),
             )
             .child(
@@ -8883,7 +9387,7 @@ impl EditorWindow {
                     ui::ButtonVariant::Gray,
                     ui::ButtonSize::Md,
                 )
-                .label("Replace image")
+                .label(tr::editor::panel::image::replace())
                 .disabled(self.sidebar.picking_image)
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.replace_timeline_image(index, window, cx)
@@ -8895,16 +9399,24 @@ impl EditorWindow {
             .as_ref()
             .is_some_and(|(path, present)| path == &segment.path && !present)
         {
-            panel = panel.child(div().text_size(px(12.)).child("Image file is missing. Replace it to restore this segment while keeping its timing and transforms."));
+            panel = panel.child(
+                div()
+                    .text_size(px(12.))
+                    .child(tr::editor::panel::image::missing()),
+            );
         }
         if let Some(error) = &self.sidebar.image_import_error {
             panel = panel.child(div().text_size(px(12.)).child(error.clone()));
         }
         for (key, label, value) in [
-            (0, "Enabled", segment.enabled),
-            (1, "Lock aspect ratio", segment.lock_aspect),
-            (2, "Flip horizontally", segment.flip_x),
-            (3, "Flip vertically", segment.flip_y),
+            (0, tr::editor::panel::enabled(), segment.enabled),
+            (
+                1,
+                tr::editor::panel::image::lock_aspect(),
+                segment.lock_aspect,
+            ),
+            (2, tr::editor::panel::flip_horizontally(), segment.flip_x),
+            (3, tr::editor::panel::flip_vertically(), segment.flip_y),
         ] {
             panel = panel.child(
                 ui::Subfield::plain(&self.theme, label).child(
@@ -8960,10 +9472,40 @@ impl EditorWindow {
             return div().into_any_element();
         };
         let enabled = segment.enabled;
-        let mut panel = div().flex().flex_col().gap(px(16.))
-            .child(div().text_size(px(12.)).child("Overrides apply only during this segment. Enable a group to copy its global settings."))
-            .child(self.labelled_small("Name", self.render_field_input(FieldKey::StyleName(index), None)))
-            .child(ui::Subfield::plain(&self.theme,"Enabled").child(ui::Toggle::plain(&self.theme,SharedString::from(format!("style-enabled-{index}")),enabled).on_click(cx.listener(move |this,_,window,cx| this.edit_style_segment("style-enabled",index,window,cx,move |segment| { segment.enabled = !enabled; true })))));
+        let mut panel = div()
+            .flex()
+            .flex_col()
+            .gap(px(16.))
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .child(tr::editor::panel::style::help()),
+            )
+            .child(self.labelled_small(
+                tr::editor::panel::name(),
+                self.render_field_input(FieldKey::StyleName(index), None),
+            ))
+            .child(
+                ui::Subfield::plain(&self.theme, tr::editor::panel::enabled()).child(
+                    ui::Toggle::plain(
+                        &self.theme,
+                        SharedString::from(format!("style-enabled-{index}")),
+                        enabled,
+                    )
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.edit_style_segment(
+                            "style-enabled",
+                            index,
+                            window,
+                            cx,
+                            move |segment| {
+                                segment.enabled = !enabled;
+                                true
+                            },
+                        )
+                    })),
+                ),
+            );
         for (group, active) in [
             (
                 StyleGroup::Background,
@@ -9034,7 +9576,17 @@ impl EditorWindow {
                                     .items_center()
                                     .gap(px(6.))
                                     .child(svg().path(group.icon()).size(px(14.)))
-                                    .child(format!("Edit {}", group.label())),
+                                    .child(match group {
+                                        StyleGroup::Background => {
+                                            tr::editor::panel::style::edit_background()
+                                        }
+                                        StyleGroup::Camera => {
+                                            tr::editor::panel::style::edit_camera()
+                                        }
+                                        StyleGroup::Cursor => {
+                                            tr::editor::panel::style::edit_cursor()
+                                        }
+                                    }),
                             )
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.open_style_group(index, group, window, cx)
@@ -9046,9 +9598,14 @@ impl EditorWindow {
             let mut crop = div().flex().flex_col().gap(px(8.)).child(
                 div()
                     .text_size(px(12.))
-                    .child("Screen crop (source pixels)"),
+                    .child(tr::editor::panel::style::crop_title()),
             );
-            for (axis, label) in [(0, "Left"), (1, "Top"), (2, "Width"), (3, "Height")] {
+            for (axis, label) in [
+                (0, tr::editor::panel::style::crop_left()),
+                (1, tr::editor::panel::style::crop_top()),
+                (2, tr::editor::panel::style::crop_width()),
+                (3, tr::editor::panel::style::crop_height()),
+            ] {
                 crop = crop.child(self.labelled_small(
                     label,
                     self.render_number_field(FieldKey::StyleCrop(index, axis), "px", 80.),
@@ -9058,7 +9615,7 @@ impl EditorWindow {
                 div()
                     .id(SharedString::from(format!("style-crop-reset-{index}")))
                     .cursor_pointer()
-                    .child("Reset crop")
+                    .child(tr::editor::panel::style::reset_crop())
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.edit_style_segment(
                             "style-crop-reset",
@@ -9080,7 +9637,11 @@ impl EditorWindow {
         }
         let padding = segment.overrides.camera_only_padding.is_some();
         panel = panel.child(
-            ui::Subfield::plain(&self.theme, "Camera Only background").child(
+            ui::Subfield::plain(
+                &self.theme,
+                tr::editor::panel::style::camera_only_background(),
+            )
+            .child(
                 ui::Toggle::plain(
                     &self.theme,
                     SharedString::from(format!("style-camera-only-{index}")),
@@ -9104,7 +9665,7 @@ impl EditorWindow {
             panel = panel
                 .child(
                     self.labelled_small(
-                        "Camera Only padding",
+                        tr::editor::panel::style::camera_only_padding(),
                         self.slider(
                             SliderKey::Panel(PanelSlider::StyleCameraOnlyPadding, index),
                             "%",
@@ -9113,9 +9674,11 @@ impl EditorWindow {
                         .into_any_element(),
                     ),
                 )
-                .child(div().text_size(px(11.)).child(
-                    "Use a Camera Only scene. Padding reveals the background around the camera.",
-                ));
+                .child(
+                    div()
+                        .text_size(px(11.))
+                        .child(tr::editor::panel::style::camera_only_help()),
+                );
         }
         panel.into_any_element()
     }

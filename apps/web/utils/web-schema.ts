@@ -7,8 +7,8 @@ export const createOrganizationSchema = () => ({
 	logo: {
 		"@type": "ImageObject",
 		url: "https://cap.so/cap-logo.png",
-		width: 512,
-		height: 512,
+		width: 1440,
+		height: 480,
 	},
 	description:
 		"Cap is the open source alternative to Loom. Lightweight, powerful, and cross-platform screen recorder.",

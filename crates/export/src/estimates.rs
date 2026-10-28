@@ -125,6 +125,31 @@ pub async fn estimate_export(
     project: ProjectConfiguration,
     settings: ExportSettings,
     cancel: Arc<AtomicBool>,
+    on_estimate: impl FnMut(ExportEstimates) + Send,
+) -> Result<ExportEstimates, String> {
+    estimate(editor, project, settings, false, cancel, on_estimate).await
+}
+
+/// [`estimate_export`] for an MP4 exported with
+/// [`crate::mp4::Mp4ExportSettings::export_prepared_turbo`]: the sample runs
+/// through the turbo encoder, so its size and pace are turbo's.
+pub async fn estimate_turbo_export(
+    editor: Arc<EditorInstance>,
+    project: ProjectConfiguration,
+    settings: ExportSettings,
+    cancel: Arc<AtomicBool>,
+    on_estimate: impl FnMut(ExportEstimates) + Send,
+) -> Result<ExportEstimates, String> {
+    let turbo = matches!(settings, ExportSettings::Mp4(_));
+    estimate(editor, project, settings, turbo, cancel, on_estimate).await
+}
+
+async fn estimate(
+    editor: Arc<EditorInstance>,
+    project: ProjectConfiguration,
+    settings: ExportSettings,
+    turbo: bool,
+    cancel: Arc<AtomicBool>,
     mut on_estimate: impl FnMut(ExportEstimates) + Send,
 ) -> Result<ExportEstimates, String> {
     if cancel.load(Ordering::Acquire) || editor.export_active.load(Ordering::Acquire) {
@@ -177,6 +202,9 @@ pub async fn estimate_export(
     serde_json::to_vec(&(&project, settings))
         .map_err(|error| error.to_string())?
         .hash(&mut hasher);
+    if turbo {
+        turbo.hash(&mut hasher);
+    }
     let key = hasher.finish();
     if let Ok(cache) = CACHE.lock()
         && let Some(cached) = cache
@@ -245,7 +273,11 @@ pub async fn estimate_export(
         return Err("Recording sources changed during export estimation".into());
     }
     let setup_seconds = setup_started.elapsed().as_secs_f64();
-    let plan = sample_plan(settings);
+    let plan = if turbo {
+        turbo_sample_plan(settings)
+    } else {
+        sample_plan(settings)
+    };
     let windows = sample_windows(
         total_frames,
         plan.window_frames,
@@ -287,8 +319,13 @@ pub async fn estimate_export(
         streaming_audio: None,
         streaming_output: None,
         audio_cancellation: None,
+        user_cancellation: None,
         sample_windows: Some(windows.clone()),
         sample_timing: Some(timing.clone()),
+        #[cfg(feature = "test-hooks")]
+        video_encoder_failure_at: None,
+        #[cfg(feature = "test-hooks")]
+        turbo_chunk_failure: None,
     };
     let progress_editor = editor.clone();
     let progress_cancel = cancel.clone();
@@ -300,6 +337,9 @@ pub async fn estimate_export(
     let started = Instant::now();
     let export = async {
         match settings {
+            ExportSettings::Mp4(settings) if turbo => {
+                crate::mp4::turbo::export_sampled(settings, base, on_progress).await
+            }
             ExportSettings::Mp4(settings) => settings.export(base, on_progress).await,
             ExportSettings::Gif(settings) => settings.export(base, on_progress).await,
             ExportSettings::Mov(settings) => settings.export(base, on_progress).await,
@@ -442,6 +482,19 @@ fn sample_plan(settings: ExportSettings) -> SamplePlan {
             timing: FrameTiming::Steady,
             keyframe_interval,
         },
+    }
+}
+
+/// The turbo encoder is libx264 whether or not the file size is optimized,
+/// so every turbo sample spans a GOP the way an optimized one does.
+fn turbo_sample_plan(settings: ExportSettings) -> SamplePlan {
+    let keyframe_interval = keyframe_interval_frames(settings);
+    SamplePlan {
+        windows: 3,
+        window_frames: keyframe_interval.unwrap_or(settings.fps() * 2) + X264_WARMUP_FRAMES as u32,
+        leading_window: false,
+        timing: FrameTiming::GopAmortized,
+        keyframe_interval,
     }
 }
 

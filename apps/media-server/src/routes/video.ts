@@ -42,6 +42,7 @@ import {
 	setRequestIdleTimeout,
 	trackBackgroundTask,
 } from "../lib/lifecycle";
+import { logReason } from "../lib/log-redaction";
 import { PROCESS_TIMEOUT_MS, UPLOAD_TIMEOUT_MS } from "../lib/media-common";
 import {
 	getTimeoutMs as getEditRenderTimeoutMs,
@@ -61,15 +62,19 @@ import {
 	withMediaTransfers,
 } from "../lib/media-transfer";
 import type {
+	PendingStorageUpload,
 	ResilientInputFlags,
+	StorageUploadReceipt,
 	StorageUploadTarget,
 } from "../lib/media-video";
 import {
 	abortStorageUploadTarget,
+	beginStorageUpload,
 	downloadVideoToTemp,
 	generatePreviewGif,
 	generateThumbnail,
 	getProcessTimeoutMs,
+	LOOM_IMPORT_MAX_BYTES,
 	muxMediaTracksToMp4,
 	processVideo,
 	repairContainer,
@@ -78,10 +83,23 @@ import {
 	uploadToS3,
 } from "../lib/media-video";
 import { encodeAttemptsBudgetMs } from "../lib/nvenc-encoder";
+import { findJobOnPeer, isPeerLookup } from "../lib/peer-jobs";
+import {
+	MAX_PREVERIFIED_RUN_BYTES,
+	type PreverifiedRunPayload,
+	readBoundedText,
+	readPreverifiedRun,
+	resolvePreverifiedRuns,
+	signPreverifiedRun,
+} from "../lib/recording-preverify";
 import { RecordingTimingError } from "../lib/recording-timing";
 import {
+	decodePreverifiedRun,
 	hashRecordingFile,
 	isRetryableRecordingVerificationError,
+	type PreverifiedVideoRun,
+	verifyDecodeChunks,
+	verifyRecording,
 	verifyRemoteRecording,
 	verifyRemoteRecordingBytes,
 	verifyRemuxedRecording,
@@ -109,6 +127,7 @@ const PROBE_ERROR_CODE = ["FF", "PROBE_ERROR"].join("");
 const VIDEO_BUSY_RETRY_AFTER_SECONDS = 15;
 const VIDEO_MEMORY_PRESSURE_ERROR =
 	"SERVER_BUSY: container memory pressure is too high";
+const MUX_FAILURE_LOG_LENGTH = 1_000;
 const SEGMENT_DOWNLOAD_MAX_ATTEMPTS = 3;
 const SEGMENT_DOWNLOAD_RETRY_BASE_MS = 250;
 const JOB_TRANSFER_ALLOWANCE_MS = 2 * UPLOAD_TIMEOUT_MS;
@@ -131,6 +150,31 @@ const convertSchema = z.object({
 	inputExtension: z.string().optional(),
 });
 
+const storageUploadSchema = z.discriminatedUnion("type", [
+	z.object({
+		type: z.literal("put"),
+		url: z.string().url(),
+		ifNoneMatch: z.literal("*").optional(),
+	}),
+	z.object({
+		type: z.literal("multipart"),
+		videoId: z.string(),
+		generation: z.string().min(1).max(200).optional(),
+		attemptId: z.string().min(1).max(200).optional(),
+		key: z.string().min(1),
+		uploadId: z.string().min(1),
+		partSize: z
+			.number()
+			.int()
+			.min(5 * 1024 * 1024),
+		signPartUrl: z.string().url(),
+		completeUrl: z.string().url(),
+		abortUrl: z.string().url(),
+		webhookSecret: z.string().optional(),
+		loomImportAttemptId: z.string().min(1).max(200).optional(),
+	}),
+]);
+
 const processSchema = z.object({
 	audioLevels: z.boolean().optional(),
 	videoId: z.string(),
@@ -138,6 +182,16 @@ const processSchema = z.object({
 	videoUrl: z.string().url(),
 	outputPresignedUrl: z.string().url(),
 	sourcePresignedUrl: z.string().url().optional(),
+	sourceUpload: storageUploadSchema.optional(),
+	outputUpload: storageUploadSchema.optional(),
+	existingOutput: z
+		.object({
+			url: z.string().url(),
+			objectIdentity: z.string().regex(/^"[^"\r\n]+"$/),
+			fileSize: z.number().int().positive().max(LOOM_IMPORT_MAX_BYTES),
+		})
+		.optional(),
+	maxImportBytes: z.literal(LOOM_IMPORT_MAX_BYTES).optional(),
 	thumbnailPresignedUrl: z.string().url().optional(),
 	previewGifPresignedUrl: z.string().url().optional(),
 	webhookUrl: z.string().url().optional(),
@@ -150,7 +204,15 @@ const processSchema = z.object({
 	preset: z.enum(["ultrafast", "fast", "medium", "slow"]).optional(),
 	remuxOnly: z.boolean().optional(),
 	normalizeH264Level: z.boolean().optional(),
+	importedOriginal: z.boolean().optional(),
 });
+
+export function isCompleteRecovery(
+	outputDuration: number,
+	inputDuration: number,
+): boolean {
+	return outputDuration >= inputDuration - Math.max(1, inputDuration * 0.01);
+}
 
 const editRangeSchema = z
 	.object({
@@ -427,6 +489,8 @@ video.get("/status", async (c) => {
 	return c.json({
 		instanceId: getInstanceId(),
 		pid: process.pid,
+		loomImportMaxBytes: LOOM_IMPORT_MAX_BYTES,
+		loomMultipartUploads: true,
 		activeVideoProcesses: getActiveVideoProcessCount(),
 		maxConcurrentVideoProcesses: getMaxConcurrentVideoProcesses(),
 		effectiveMaxVideoProcesses: resources.effectiveMax,
@@ -748,7 +812,10 @@ video.on("POST", ["/process", "/import"], async (c) => {
 	const body = await c.req.json();
 	const result = (
 		c.req.path.endsWith("/import")
-			? processSchema.extend({ sourcePresignedUrl: z.string().url() })
+			? processSchema.refine(
+					(input) => input.sourcePresignedUrl || input.sourceUpload,
+					{ message: "An original video upload target is required" },
+				)
 			: processSchema
 	).safeParse(body);
 
@@ -763,6 +830,21 @@ video.on("POST", ["/process", "/import"], async (c) => {
 		);
 	}
 
+	if (
+		result.data.existingOutput &&
+		(result.data.sourceUpload ||
+			result.data.sourcePresignedUrl ||
+			result.data.outputUpload ||
+			result.data.maxImportBytes !== LOOM_IMPORT_MAX_BYTES)
+	) {
+		return c.json(
+			{
+				error: "Existing output cannot be combined with upload targets",
+				code: "INVALID_REQUEST",
+			},
+			400,
+		);
+	}
 	const capacity = getVideoCapacitySnapshot();
 	if (isDraining()) {
 		c.header("Retry-After", VIDEO_BUSY_RETRY_AFTER_SECONDS.toString());
@@ -1136,15 +1218,30 @@ async function generateAndUploadPreviewGif(
 ): Promise<void> {
 	if (!previewGifPresignedUrl) return;
 
-	let previewGifFile: TempFileHandle | null = null;
-
+	const render = generatePreviewGif(inputPath, duration, {}, abortSignal);
 	try {
-		previewGifFile = await generatePreviewGif(
-			inputPath,
-			duration,
-			{},
+		await uploadRenderedPreviewGif(
+			render,
+			previewGifPresignedUrl,
 			abortSignal,
+			logPrefix,
 		);
+	} finally {
+		await render.then(
+			(gif) => gif.cleanup(),
+			() => {},
+		);
+	}
+}
+
+async function uploadRenderedPreviewGif(
+	render: Promise<TempFileHandle>,
+	previewGifPresignedUrl: string,
+	abortSignal: AbortSignal | undefined,
+	logPrefix: string,
+): Promise<void> {
+	try {
+		const previewGifFile = await render;
 		await uploadFileToS3(
 			previewGifFile.path,
 			previewGifPresignedUrl,
@@ -1158,8 +1255,6 @@ async function generateAndUploadPreviewGif(
 				: new Error("Preview GIF generation aborted");
 		}
 		console.warn(`[${logPrefix}] Preview GIF generation failed:`, previewErr);
-	} finally {
-		await previewGifFile?.cleanup();
 	}
 }
 
@@ -1433,6 +1528,21 @@ async function processVideoAsync(
 	let outputTempFile: TempFileHandle | null = null;
 	let repairedTempFile: TempFileHandle | null = null;
 	let lastResortRepairFile: TempFileHandle | null = null;
+	let sourceUploaded = false;
+	let outputUploaded = false;
+	const abortPendingUploads = async () => {
+		const targets = [
+			!sourceUploaded ? options.sourceUpload : undefined,
+			!outputUploaded ? options.outputUpload : undefined,
+		].filter((target): target is StorageUploadTarget => target !== undefined);
+		await Promise.all(
+			targets.map((target) =>
+				abortStorageUploadTarget(target).catch((error) => {
+					console.warn("Loom multipart cleanup failed", error);
+				}),
+			),
+		);
+	};
 
 	try {
 		updateJob(jobId, {
@@ -1440,25 +1550,61 @@ async function processVideoAsync(
 			progress: 0,
 			message: "Downloading video...",
 		});
-		await sendWebhook(job);
+		// Progress webhooks only update the upload row, so don't wait on cap.so between stages. sendWebhook keeps one
+		// delivery in flight per job and always sends the latest state, so the awaited terminal webhook still lands last.
+		void sendWebhook(job);
 
 		const input = await withJobHeartbeat(jobId, () =>
-			downloadVideoToTemp(videoUrl, options.inputExtension, signal),
+			downloadVideoToTemp(
+				options.existingOutput?.url ?? videoUrl,
+				options.inputExtension,
+				signal,
+				options.maxImportBytes,
+			),
 		);
 		inputTempFile = input;
 		updateJob(jobId, { inputTempFile: input });
+		if (options.existingOutput) {
+			const existing = options.existingOutput;
+			await withJobHeartbeat(jobId, async () => {
+				await verifyRecording(input.path, {
+					requireAudio: false,
+					allowObservedDuration: true,
+					abortSignal: signal,
+				});
+				await verifyRemoteRecordingBytes(existing.url, {
+					expectedObjectIdentity: existing.objectIdentity,
+					expectedFileSize: existing.fileSize,
+					expectedSha256: await hashRecordingFile(input.path, signal),
+					abortSignal: signal,
+				});
+			});
+		}
 
 		const sourcePresignedUrl = options.sourcePresignedUrl;
-		if (sourcePresignedUrl) {
+		if (sourcePresignedUrl || options.sourceUpload) {
 			updateJob(jobId, { message: "Saving original video..." });
-			await sendWebhook(job);
+			void sendWebhook(job);
 			await withJobHeartbeat(jobId, () =>
-				uploadFileToS3(input.path, sourcePresignedUrl, "video/mp4", signal),
+				options.sourceUpload
+					? uploadFileToStorage(
+							input.path,
+							options.sourceUpload,
+							"video/mp4",
+							signal,
+						)
+					: uploadFileToS3(
+							input.path,
+							sourcePresignedUrl as string,
+							"video/mp4",
+							signal,
+						),
 			);
+			sourceUploaded = true;
 		}
 
 		const isWebm = isWebmInput(options.inputExtension);
-		if (isWebm) {
+		if (isWebm && !options.importedOriginal) {
 			updateJob(jobId, { message: "Checking the original recording..." });
 			await withJobHeartbeat(jobId, () =>
 				validateVideoInput(input.path, signal),
@@ -1470,10 +1616,15 @@ async function processVideoAsync(
 			progress: 5,
 			message: "Analyzing video...",
 		});
-		await sendWebhook(job);
+		void sendWebhook(job);
 
 		const { metadata, repairedFile } = await withJobHeartbeat(jobId, () =>
-			probeWithRepairFallback(input.path, isWebm, signal),
+			options.existingOutput
+				? probeVideoFile(input.path).then((metadata) => ({
+						metadata,
+						repairedFile: null,
+					}))
+				: probeWithRepairFallback(input.path, isWebm, signal),
 		);
 		repairedTempFile = repairedFile;
 		signal.throwIfAborted();
@@ -1493,75 +1644,132 @@ async function processVideoAsync(
 				? "Processing repaired video..."
 				: "Processing video...",
 		});
-		await sendWebhook(job);
+		void sendWebhook(job);
 
-		const processed = await processWithResilientRetry(
-			processingInputPath,
-			input.path,
-			metadata,
-			options,
-			isWebm,
-			jobId,
-			signal,
-		);
+		const processed = options.existingOutput
+			? { outputFile: input, lastResortRepairFile: null }
+			: await processWithResilientRetry(
+					processingInputPath,
+					input.path,
+					metadata,
+					options,
+					isWebm,
+					jobId,
+					signal,
+				);
 		outputTempFile = processed.outputFile;
 		lastResortRepairFile = processed.lastResortRepairFile;
 		const outputPath = processed.outputFile.path;
 		updateJob(jobId, { outputTempFile: processed.outputFile });
+		if (options.importedOriginal) {
+			const recovered = await withJobHeartbeat(jobId, () =>
+				probeVideoFile(outputPath),
+			);
+			if (!isCompleteRecovery(recovered.duration, metadata.duration))
+				throw new Error(
+					"The imported original could not be fully recovered. The original has been preserved.",
+				);
+		}
+		if (
+			options.maxImportBytes &&
+			file(outputPath).size > options.maxImportBytes
+		) {
+			throw new Error("Loom imports are limited to 10 GB");
+		}
 
 		updateJob(jobId, {
 			phase: "uploading",
 			progress: 80,
 			message: "Uploading processed video...",
 		});
-		await sendWebhook(job);
+		void sendWebhook(job);
 
-		const uploadReceipt = await withJobHeartbeat(jobId, () =>
-			uploadFileToS3(outputPath, outputPresignedUrl, "video/mp4", signal),
-		);
+		// Previews only read the finished output, so render them while it uploads; they are still
+		// uploaded after the output, so a failed upload never leaves previews behind.
+		let uploadReceipt: StorageUploadReceipt;
+		const previewAbort = new AbortController();
+		const previewSignal = AbortSignal.any([signal, previewAbort.signal]);
+		const thumbnailRender = thumbnailPresignedUrl
+			? generateThumbnail(outputPath, metadata.duration, {}, previewSignal)
+			: undefined;
+		const previewGifRender = previewGifPresignedUrl
+			? generatePreviewGif(outputPath, metadata.duration, {}, previewSignal)
+			: undefined;
+		thumbnailRender?.catch(() => {});
+		previewGifRender?.catch(() => {});
+		try {
+			uploadReceipt = await withJobHeartbeat(jobId, async () =>
+				options.existingOutput
+					? { objectIdentity: options.existingOutput.objectIdentity }
+					: options.outputUpload
+						? uploadFileToStorage(
+								outputPath,
+								options.outputUpload,
+								"video/mp4",
+								signal,
+							)
+						: uploadFileToS3(
+								outputPath,
+								outputPresignedUrl,
+								"video/mp4",
+								signal,
+							),
+			);
+			outputUploaded = true;
 
-		if (thumbnailPresignedUrl || previewGifPresignedUrl) {
-			updateJob(jobId, {
-				phase: "generating_thumbnail",
-				progress: 90,
-				message: "Generating preview assets...",
-			});
-			await sendWebhook(job);
-		}
-
-		await withJobHeartbeat(jobId, async () => {
-			if (thumbnailPresignedUrl) {
-				// The uploaded MP4 has not been independently verified, so decode failures must still fail the job.
-				const thumbnailData = await generateThumbnail(
-					outputPath,
-					metadata.duration,
-					{},
-					signal,
-				);
-				try {
-					await uploadToS3(
-						thumbnailData,
-						thumbnailPresignedUrl,
-						"image/jpeg",
-						signal,
-					);
-				} catch (error) {
-					signal.throwIfAborted();
-					console.warn(
-						`[video/process] Thumbnail upload failed for ${jobId}:`,
-						error,
-					);
-				}
+			if (thumbnailPresignedUrl || previewGifPresignedUrl) {
+				updateJob(jobId, {
+					phase: "generating_thumbnail",
+					progress: 90,
+					message: "Generating preview assets...",
+				});
+				void sendWebhook(job);
 			}
 
-			await generateAndUploadPreviewGif(
-				outputPath,
-				metadata.duration,
-				previewGifPresignedUrl,
-				signal,
-				"video/process",
-			);
-		});
+			await withJobHeartbeat(jobId, async () => {
+				if (thumbnailRender && thumbnailPresignedUrl) {
+					// Only the fully verified reuse path can finish without a decoded preview.
+					const thumbnailData = await thumbnailRender.catch((error) => {
+						signal.throwIfAborted();
+						if (!options.existingOutput) throw error;
+						console.warn(
+							"Verified Loom output preview could not be generated",
+							error,
+						);
+						return undefined;
+					});
+					try {
+						if (thumbnailData)
+							await uploadToS3(
+								thumbnailData,
+								thumbnailPresignedUrl,
+								"image/jpeg",
+								signal,
+							);
+					} catch (error) {
+						signal.throwIfAborted();
+						console.warn(
+							`[video/process] Thumbnail upload failed for ${jobId}:`,
+							error,
+						);
+					}
+				}
+
+				if (previewGifRender && previewGifPresignedUrl)
+					await uploadRenderedPreviewGif(
+						previewGifRender,
+						previewGifPresignedUrl,
+						signal,
+						"video/process",
+					);
+			});
+		} finally {
+			previewAbort.abort();
+			await Promise.allSettled([
+				thumbnailRender,
+				previewGifRender?.then((gif) => gif.cleanup()),
+			]);
+		}
 		signal.throwIfAborted();
 
 		updateJob(jobId, {
@@ -1589,6 +1797,7 @@ async function processVideoAsync(
 
 		setTimeout(() => deleteJob(jobId), 5 * 60 * 1000);
 	} catch (err) {
+		await abortPendingUploads();
 		if (!signal.aborted) {
 			console.error(`[video/process] Error processing job ${jobId}:`, err);
 		}
@@ -1629,8 +1838,20 @@ video.get("/process/:jobId/status", async (c) => {
 	}
 	const jobId = c.req.param("jobId");
 	const job = getJob(jobId);
+	const accept = c.req.header("Accept");
 
 	if (!job) {
+		if (
+			hasMediaServerSecret(c) &&
+			!isPeerLookup(c.req.raw) &&
+			!accept?.includes("text/event-stream")
+		) {
+			const owner = await findJobOnPeer(
+				`/video/process/${encodeURIComponent(jobId)}/status`,
+				"GET",
+			);
+			if (owner) return owner;
+		}
 		return c.json(
 			{
 				error: "Job not found",
@@ -1641,8 +1862,6 @@ video.get("/process/:jobId/status", async (c) => {
 			404,
 		);
 	}
-
-	const accept = c.req.header("Accept");
 
 	if (accept?.includes("text/event-stream")) {
 		const stream = new ReadableStream({
@@ -1713,6 +1932,13 @@ video.post("/process/:jobId/cancel", async (c) => {
 	const job = getJob(jobId);
 
 	if (!job) {
+		if (!isPeerLookup(c.req.raw)) {
+			const owner = await findJobOnPeer(
+				`/video/process/${encodeURIComponent(jobId)}/cancel`,
+				"POST",
+			);
+			if (owner) return owner;
+		}
 		return c.json(
 			{
 				error: "Job not found",
@@ -1779,30 +2005,6 @@ video.post("/force-cleanup", (c) => {
 		message: `Force-cleaned ${cleaned} active jobs`,
 	});
 });
-
-const muxSegmentsOutputUploadSchema = z.discriminatedUnion("type", [
-	z.object({
-		type: z.literal("put"),
-		url: z.string().url(),
-		ifNoneMatch: z.literal("*").optional(),
-	}),
-	z.object({
-		type: z.literal("multipart"),
-		videoId: z.string(),
-		generation: z.string().min(1).max(200).optional(),
-		attemptId: z.string().min(1).max(200).optional(),
-		key: z.string().min(1),
-		uploadId: z.string().min(1),
-		partSize: z
-			.number()
-			.int()
-			.min(5 * 1024 * 1024),
-		signPartUrl: z.string().url(),
-		completeUrl: z.string().url(),
-		abortUrl: z.string().url(),
-		webhookSecret: z.string().optional(),
-	}),
-]);
 
 const strongObjectIdentitySchema = z
 	.string()
@@ -2029,10 +2231,20 @@ video.post("/verify-recording", async (c) => {
 				["complete", "error", "cancelled"].includes(current.phase)
 			)
 				return;
+			const errorCode = classifySourceError(error);
+			logVideoEvent("recording_verification_failed", {
+				jobId,
+				videoId: body.videoId,
+				phase: "error",
+				errorCode,
+				retryable: errorCode === "processing-unavailable",
+				stage: "transfer",
+				reason: logReason(error),
+			});
 			updateJob(jobId, {
 				phase: "error",
 				error: "Recording transfer could not complete",
-				errorCode: classifySourceError(error),
+				errorCode,
 			});
 			sendCurrentJobWebhook(jobId);
 		}),
@@ -2047,21 +2259,35 @@ async function verifyUploadedRecordingAsync(
 	const abortController = new AbortController();
 	if (!updateJob(jobId, { abortController, phase: "processing", progress: 0 }))
 		return;
+	let stage = "probe";
+	let cause: unknown;
+	let mismatch: Record<string, unknown> | undefined;
 	try {
 		const metadata = await probeVideo(body.videoUrl).catch((error: unknown) => {
 			if (error instanceof MediaTransferBudgetError) throw error;
+			cause = error;
 			throw new Error(RECORDING_VERIFICATION_RETRY_ERROR);
 		});
+		stage = "metadata";
 		if (
 			metadata.fileSize !== body.fileSize ||
 			(body.duration !== undefined &&
 				!isDurationClose(metadata.duration, body.duration)) ||
 			(body.requiredAudio && !metadata.audioCodec)
 		) {
+			mismatch = {
+				expectedFileSize: body.fileSize,
+				actualFileSize: metadata.fileSize,
+				expectedDuration: body.duration,
+				actualDuration: metadata.duration,
+				requiredAudio: body.requiredAudio,
+				audioCodec: metadata.audioCodec,
+			};
 			throw new Error(
 				"Uploaded recording does not match the completed local file",
 			);
 		}
+		stage = "decode";
 		if (
 			!beginRecordingVerification(
 				jobId,
@@ -2085,6 +2311,7 @@ async function verifyUploadedRecordingAsync(
 				}),
 			),
 		);
+		stage = "identity";
 		if (verified.fileSize !== body.fileSize)
 			throw new Error("Verified recording size does not match the local file");
 		if (body.generation && !verified.remoteSha256)
@@ -2122,15 +2349,27 @@ async function verifyUploadedRecordingAsync(
 			(error instanceof Error &&
 				(error.message === VIDEO_MEMORY_PRESSURE_ERROR ||
 					error.message === RECORDING_VERIFICATION_RETRY_ERROR));
+		const phase =
+			!retryable && abortController.signal.aborted ? "cancelled" : "error";
+		const errorCode = retryable
+			? "processing-unavailable"
+			: classifySourceError(error);
+		logVideoEvent("recording_verification_failed", {
+			jobId,
+			videoId: body.videoId,
+			phase,
+			errorCode,
+			retryable: errorCode === "processing-unavailable",
+			stage,
+			reason: logReason(cause ?? error),
+			...(mismatch && { mismatch }),
+		});
 		updateJob(jobId, {
-			phase:
-				!retryable && abortController.signal.aborted ? "cancelled" : "error",
+			phase,
 			error: retryable
 				? RECORDING_VERIFICATION_RETRY_ERROR
 				: "Uploaded recording content could not be verified; retain the local recording",
-			errorCode: retryable
-				? "processing-unavailable"
-				: classifySourceError(error),
+			errorCode,
 		});
 	}
 	const job = getJob(jobId);
@@ -2161,7 +2400,7 @@ const muxSegmentsSchema = z
 		videoId: z.string(),
 		userId: z.string(),
 		outputPresignedUrl: z.string().url().optional(),
-		outputUpload: muxSegmentsOutputUploadSchema.optional(),
+		outputUpload: storageUploadSchema.optional(),
 		thumbnailPresignedUrl: z.string().url().optional(),
 		previewGifPresignedUrl: z.string().url().optional(),
 		webhookUrl: z.string().url().optional(),
@@ -2170,6 +2409,7 @@ const muxSegmentsSchema = z
 		videoSegmentUrls: z.array(z.string().url()),
 		audioInitUrl: z.string().url().optional(),
 		audioSegmentUrls: z.array(z.string().url()).optional(),
+		preverifiedRunUrls: z.array(z.string().url()).max(4_096).optional(),
 	})
 	.refine((body) => body.outputPresignedUrl || body.outputUpload, {
 		message: "outputPresignedUrl or outputUpload is required",
@@ -2262,6 +2502,7 @@ type MuxContext = Pick<
 	| "sourceObjects"
 	| "requiredAudio"
 	| "audioLevels"
+	| "preverifiedRunUrls"
 >;
 
 function getMuxSegmentsOutputUpload(
@@ -2413,6 +2654,196 @@ video.post("/mux-segments", async (c) => {
 		videoId,
 	});
 });
+
+const preverifySourceSchema = z.object({
+	url: z.string().url(),
+	objectIdentity: strongObjectIdentitySchema,
+	size: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+});
+const preverifySchema = z.object({
+	videoId: z.string().min(1).max(200),
+	init: preverifySourceSchema,
+	segments: z.array(preverifySourceSchema).min(1).max(256),
+	resultUploadUrl: z.string().url(),
+});
+const MAX_ACTIVE_PREVERIFY_RUNS = 2;
+const PREVERIFIED_RUN_LOAD_BUDGET_MS = 10_000;
+const PREVERIFY_RUN_TIMEOUT_MS = 5 * 60 * 1000;
+let activePreverifyRuns = 0;
+
+// Decodes fragments while the recording is still going, so the final verification only decodes the tail.
+// The work is optional: a busy or draining server declines it and the final verification does it instead.
+video.post("/preverify-segments", async (c) => {
+	if (!validateMediaServerSecret(c)) {
+		return c.json({ error: "Unauthorized" }, 401);
+	}
+	const body = preverifySchema.safeParse(await c.req.json());
+	if (!body.success) {
+		return c.json(
+			{ error: "Invalid request", details: body.error.issues },
+			400,
+		);
+	}
+	const secret = process.env.MEDIA_SERVER_WEBHOOK_SECRET;
+	if (
+		!secret ||
+		isDraining() ||
+		activePreverifyRuns >= MAX_ACTIVE_PREVERIFY_RUNS
+	) {
+		return c.json({ error: "Server busy", code: "SERVER_BUSY" }, 503);
+	}
+	activePreverifyRuns++;
+	void trackBackgroundTask(
+		preverifySegments(body.data, secret)
+			.catch((error: unknown) => {
+				logVideoEvent("recording_preverify_failed", {
+					videoId: body.data.videoId,
+					segments: body.data.segments.length,
+					error: logReason(error, MUX_FAILURE_LOG_LENGTH),
+				});
+			})
+			.finally(() => {
+				activePreverifyRuns--;
+			}),
+	);
+	return c.json({ status: "queued" }, 202);
+});
+
+async function preverifySegments(
+	body: z.infer<typeof preverifySchema>,
+	secret: string,
+): Promise<void> {
+	const { ensureTempDir, getTempDir, retainTempPath } = await import(
+		"../lib/temp-files"
+	);
+	const { mkdir, rm } = await import("node:fs/promises");
+	const { join } = await import("node:path");
+	const startedAt = Date.now();
+	const signal = AbortSignal.timeout(PREVERIFY_RUN_TIMEOUT_MS);
+	await ensureTempDir();
+	const workDir = join(getTempDir(), `preverify-${randomUUID()}`);
+	const releaseWorkDir = retainTempPath(workDir);
+	try {
+		await mkdir(workDir, { recursive: true });
+		const initPath = join(workDir, "init.mp4");
+		const segmentPaths = body.segments.map((_, index) =>
+			join(workDir, `segment-${index}.m4s`),
+		);
+		const downloads = [
+			{ source: body.init, path: initPath },
+			...body.segments.map((source, index) => ({
+				source,
+				path: segmentPaths[index] as string,
+			})),
+		];
+		// One failed download stops the others, and the run only ends once none is still writing.
+		const downloadAbort = new AbortController();
+		const downloadSignal = AbortSignal.any([signal, downloadAbort.signal]);
+		let next = 0;
+		const workers = await Promise.allSettled(
+			Array.from({ length: Math.min(8, downloads.length) }, async () => {
+				while (next < downloads.length && !downloadSignal.aborted) {
+					const download = downloads[next++];
+					if (!download) return;
+					try {
+						await downloadUrlToFile(
+							download.source.url,
+							download.path,
+							downloadSignal,
+							download.source,
+						);
+					} catch (error) {
+						downloadAbort.abort();
+						throw error;
+					}
+				}
+			}),
+		);
+		const failed = workers.find((worker) => worker.status === "rejected");
+		if (failed?.status === "rejected") throw failed.reason;
+		const lines = await decodePreverifiedRun(
+			initPath,
+			segmentPaths,
+			workDir,
+			signal,
+		);
+		if (!lines) {
+			logVideoEvent("recording_preverify_skipped", {
+				videoId: body.videoId,
+				segments: body.segments.length,
+				durationMs: Date.now() - startedAt,
+			});
+			return;
+		}
+		const run = signPreverifiedRun(
+			{
+				version: 1,
+				init: {
+					objectIdentity: body.init.objectIdentity,
+					size: body.init.size,
+				},
+				segments: body.segments.map(({ objectIdentity, size }) => ({
+					objectIdentity,
+					size,
+				})),
+				lines,
+			},
+			secret,
+		);
+		await uploadToS3(
+			new TextEncoder().encode(run),
+			body.resultUploadUrl,
+			"application/json",
+			signal,
+		);
+		logVideoEvent("recording_preverify_complete", {
+			videoId: body.videoId,
+			segments: body.segments.length,
+			frames: lines.filter((line) => !line.startsWith("#")).length,
+			durationMs: Date.now() - startedAt,
+		});
+	} finally {
+		await rm(workDir, { recursive: true, force: true }).catch(() => {});
+		releaseWorkDir();
+	}
+}
+
+async function loadPreverifiedRuns(
+	urls: string[],
+	secret: string,
+	signal: AbortSignal,
+): Promise<PreverifiedRunPayload[]> {
+	const runs: PreverifiedRunPayload[] = [];
+	// Cached runs only save decoding, so loading them never holds a job back for long.
+	const budget = AbortSignal.any([
+		signal,
+		AbortSignal.timeout(PREVERIFIED_RUN_LOAD_BUDGET_MS),
+	]);
+	let next = 0;
+	await Promise.all(
+		Array.from({ length: Math.min(16, urls.length) }, async () => {
+			while (next < urls.length && !budget.aborted) {
+				const url = urls[next++];
+				if (!url) return;
+				try {
+					const response = await fetch(url, { signal: budget });
+					const text = response.ok
+						? await readBoundedText(response, MAX_PREVERIFIED_RUN_BYTES)
+						: null;
+					if (text === null) {
+						await response.body?.cancel().catch(() => {});
+						continue;
+					}
+					const run = readPreverifiedRun(text, secret);
+					if (run) runs.push(run);
+				} catch {
+					signal.throwIfAborted();
+				}
+			}
+		}),
+	);
+	return runs;
+}
 
 async function streamConcatFiles(
 	inputPaths: string[],
@@ -2637,40 +3068,68 @@ async function downloadUrlToFile(
 	throw lastError ?? new Error("Download failed");
 }
 
-async function downloadSegmentsBatchTracked(
-	urls: string[],
-	dir: string,
+// Storage that struggles with this many small concurrent reads can lower it through the env.
+const SEGMENT_DOWNLOAD_CONCURRENCY = 64;
+
+export function segmentDownloadConcurrencyFromEnv(
+	env: Record<string, string | undefined> = process.env,
+): number {
+	const value = Number.parseInt(
+		env.MEDIA_SERVER_SEGMENT_DOWNLOAD_CONCURRENCY ?? "",
+		10,
+	);
+	return Number.isFinite(value) && value > 0
+		? Math.min(value, SEGMENT_DOWNLOAD_CONCURRENCY)
+		: SEGMENT_DOWNLOAD_CONCURRENCY;
+}
+
+interface SegmentTrackDownload {
+	urls: string[];
+	dir: string;
+}
+
+// Recordings are thousands of small segments, so latency per request dominates; video and audio
+// share one pool so neither track waits for the other to finish.
+export async function downloadSegmentTracks(
+	tracks: SegmentTrackDownload[],
 	jobId: string,
 	progressBase: number,
 	progressRange: number,
 	abortSignal?: AbortSignal,
 	sources?: Map<string, MuxSourceObject>,
-): Promise<string[]> {
+): Promise<string[][]> {
 	const { join } = await import("node:path");
 	let completed = 0;
 	let fatalError: Error | undefined;
-	const total = urls.length;
-	const indexWidth = Math.max(3, String(total).length);
-	const outputPaths = new Array<string>(total);
-	const pending = [...urls.entries()];
+	const outputPaths = tracks.map(
+		(track) => new Array<string>(track.urls.length),
+	);
+	const pending = tracks.flatMap((track, trackIndex) => {
+		const indexWidth = Math.max(3, String(track.urls.length).length);
+		return track.urls.map((url, i) => ({
+			trackIndex,
+			i,
+			url,
+			outputPath: join(
+				track.dir,
+				`segment_${String(i + 1).padStart(indexWidth, "0")}.m4s`,
+			),
+		}));
+	});
+	const total = pending.length;
 	let pendingIndex = 0;
 	const batchAbortController = new AbortController();
 	const batchSignal = abortSignal
 		? AbortSignal.any([abortSignal, batchAbortController.signal])
 		: batchAbortController.signal;
-	const CONCURRENCY = 10;
 
 	async function worker() {
 		while (pendingIndex < pending.length && !fatalError) {
 			const entry = pending[pendingIndex++];
 			if (!entry) break;
-			const [i, url] = entry;
+			const { trackIndex, i, url, outputPath } = entry;
 			try {
-				const outputPath = join(
-					dir,
-					`segment_${String(i + 1).padStart(indexWidth, "0")}.m4s`,
-				);
-				outputPaths[i] = outputPath;
+				outputPaths[trackIndex][i] = outputPath;
 				await downloadUrlToFile(
 					url,
 					outputPath,
@@ -2683,7 +3142,7 @@ async function downloadSegmentsBatchTracked(
 					pendingIndex = pending.length;
 					batchAbortController.abort();
 					console.error(
-						`[mux-segments] Failed to download segment ${i + 1}/${total}:`,
+						`[mux-segments] Failed to download segment ${i + 1}/${tracks[trackIndex].urls.length}:`,
 						err instanceof Error ? err.message : err,
 					);
 				}
@@ -2701,10 +3160,29 @@ async function downloadSegmentsBatchTracked(
 	}
 
 	await Promise.all(
-		Array.from({ length: Math.min(CONCURRENCY, total) }, () => worker()),
+		Array.from(
+			{ length: Math.min(segmentDownloadConcurrencyFromEnv(), total) },
+			() => worker(),
+		),
 	);
 	if (fatalError) throw fatalError;
 	return outputPaths;
+}
+
+function muxFailureErrorCode(
+	error: unknown,
+	stageErrorCode: RecordingErrorCode,
+): RecordingErrorCode {
+	if (error instanceof MediaTransferBudgetError)
+		return "processing-budget-exhausted";
+	if (error instanceof MediaDownloadError) return error.errorCode;
+	if (
+		isRetryableRecordingVerificationError(error) ||
+		isBusyError(error) ||
+		isTimeoutError(error)
+	)
+		return "processing-unavailable";
+	return stageErrorCode;
 }
 
 function sendCurrentJobWebhook(jobId: string): void {
@@ -2740,12 +3218,18 @@ async function muxSegmentsAsync(
 	const abortController = new AbortController();
 	updateJob(jobId, { abortController });
 	let outputUploadStarted = false;
+	let pendingOutputUpload: PendingStorageUpload | undefined;
+	let pendingOutputHash:
+		| { promise: Promise<string>; abort: AbortController }
+		| undefined;
 	let processingTimeout: ReturnType<typeof setTimeout> | undefined;
 	let errorCode: RecordingErrorCode = "processing-unavailable";
 	const sources = context.sourceObjects
 		? new Map(context.sourceObjects.map((source) => [source.url, source]))
 		: undefined;
 	const startedAt = Date.now();
+	let previewAssets: Promise<PreviewAssets> | undefined;
+	const previewAbort = new AbortController();
 
 	try {
 		if (!beginRecordingProcessing(jobId, SEGMENTED_RECORDING_TIMEOUT_MS))
@@ -2765,6 +3249,15 @@ async function muxSegmentsAsync(
 		await ensureTempDir();
 		updateJob(jobId, { phase: "downloading", progress: 0 });
 		sendCurrentJobWebhook(jobId);
+		const webhookSecret = process.env.MEDIA_SERVER_WEBHOOK_SECRET;
+		const preverifiedRuns =
+			sources && webhookSecret && context.preverifiedRunUrls?.length
+				? loadPreverifiedRuns(
+						context.preverifiedRunUrls,
+						webhookSecret,
+						abortController.signal,
+					).catch((): PreverifiedRunPayload[] => [])
+				: Promise.resolve([]);
 
 		await mkdir(workDir, { recursive: true });
 		const videoDir = join(workDir, "video");
@@ -2772,49 +3265,62 @@ async function muxSegmentsAsync(
 		await mkdir(videoDir, { recursive: true });
 		await mkdir(audioDir, { recursive: true });
 
-		await downloadUrlToFile(
-			videoInitUrl,
-			join(videoDir, "init.mp4"),
-			abortController.signal,
-			sources?.get(videoInitUrl),
-		);
-		updateJob(jobId, { phase: "downloading", progress: 5 });
-		sendCurrentJobWebhook(jobId);
-
-		const videoSegmentFiles = await downloadSegmentsBatchTracked(
-			videoSegmentUrls,
-			videoDir,
-			jobId,
-			5,
-			45,
-			abortController.signal,
-			sources,
-		);
-
 		const audioInput =
 			audioInitUrl !== null &&
 			audioSegmentUrls !== null &&
 			audioSegmentUrls.length > 0
 				? { initUrl: audioInitUrl, segmentUrls: audioSegmentUrls }
 				: null;
-		let audioSegmentFiles: string[] = [];
-		if (audioInput) {
-			await downloadUrlToFile(
-				audioInput.initUrl,
-				join(audioDir, "init.mp4"),
-				abortController.signal,
-				sources?.get(audioInput.initUrl),
-			);
-			audioSegmentFiles = await downloadSegmentsBatchTracked(
-				audioInput.segmentUrls,
-				audioDir,
+		// Both init segments download together; a failure cancels the other and waits for it, so nothing
+		// keeps writing into the work directory after the job has failed.
+		const initAbort = new AbortController();
+		const initSignal = AbortSignal.any([
+			abortController.signal,
+			initAbort.signal,
+		]);
+		const initDownloads = [
+			downloadUrlToFile(
+				videoInitUrl,
+				join(videoDir, "init.mp4"),
+				initSignal,
+				sources?.get(videoInitUrl),
+			),
+			...(audioInput
+				? [
+						downloadUrlToFile(
+							audioInput.initUrl,
+							join(audioDir, "init.mp4"),
+							initSignal,
+							sources?.get(audioInput.initUrl),
+						),
+					]
+				: []),
+		];
+		let initFailure: { error: unknown } | undefined;
+		for (const download of initDownloads)
+			download.catch((error: unknown) => {
+				initFailure ??= { error };
+				initAbort.abort();
+			});
+		await Promise.allSettled(initDownloads);
+		if (initFailure) throw initFailure.error;
+		updateJob(jobId, { phase: "downloading", progress: 5 });
+		sendCurrentJobWebhook(jobId);
+
+		const [videoSegmentFiles, audioSegmentFiles = []] =
+			await downloadSegmentTracks(
+				[
+					{ urls: videoSegmentUrls, dir: videoDir },
+					...(audioInput
+						? [{ urls: audioInput.segmentUrls, dir: audioDir }]
+						: []),
+				],
 				jobId,
-				50,
-				10,
+				5,
+				55,
 				abortController.signal,
 				sources,
 			);
-		}
 
 		updateJob(jobId, {
 			phase: "processing",
@@ -2833,7 +3339,22 @@ async function muxSegmentsAsync(
 				abortController.signal,
 			),
 		);
-		await rm(videoDir, { recursive: true, force: true });
+		const initSource = sources?.get(videoInitUrl);
+		const segmentSources = videoSegmentUrls.map((url) => sources?.get(url));
+		const preverified: PreverifiedVideoRun[] =
+			initSource && segmentSources.every((source) => source !== undefined)
+				? resolvePreverifiedRuns(
+						await preverifiedRuns,
+						initSource,
+						segmentSources as MuxSourceObject[],
+					)
+				: [];
+		// Parallel verification decodes runs of these fragments; otherwise free them now.
+		const videoChunks =
+			verifyDecodeChunks() > 1 || preverified.length > 0
+				? { init: videoInitPath, segments: videoSegmentFiles }
+				: undefined;
+		if (!videoChunks) await rm(videoDir, { recursive: true, force: true });
 
 		let combinedAudioPath: string | null = null;
 
@@ -2885,6 +3406,21 @@ async function muxSegmentsAsync(
 		const beforeDecode = await lstat(resultPath, { bigint: true });
 		if (!beforeDecode.isFile())
 			throw new Error("Recording verification requires a local regular file");
+		// Hashing and multipart parts only read the finished file, so they run during the decode check; the
+		// upload is only completed (the object only exists) after everything below has passed.
+		pendingOutputUpload = beginStorageUpload(
+			resultPath,
+			outputUpload,
+			"video/mp4",
+			abortController.signal,
+		);
+		const hashAbort = new AbortController();
+		const outputHash = hashRecordingFile(
+			resultPath,
+			AbortSignal.any([abortController.signal, hashAbort.signal]),
+		);
+		outputHash.catch(() => {});
+		pendingOutputHash = { promise: outputHash, abort: hashAbort };
 		updateJob(jobId, {
 			progress: 70,
 			message: "Checking the processed recording...",
@@ -2909,13 +3445,20 @@ async function muxSegmentsAsync(
 							});
 						},
 					},
+					videoChunks,
+					preverified,
 				),
 			),
 		);
+		if (videoChunks) await rm(videoDir, { recursive: true, force: true });
 		logVideoEvent("video_mux_verification_complete", {
 			jobId,
 			videoId,
 			durationMs: Date.now() - verificationStartedAt,
+			preverifiedSegments: preverified.reduce(
+				(total, run) => total + run.segments,
+				0,
+			),
 			method: localVerified.integrity ? "decoded-source" : "encoded-packets",
 			frames: localVerified.video.frameCount,
 			recordingDuration: localVerified.video.duration,
@@ -2928,9 +3471,7 @@ async function muxSegmentsAsync(
 			message: "Verifying the recording file...",
 		});
 		sendCurrentJobWebhook(jobId);
-		const outputSha256 = await withJobHeartbeat(jobId, () =>
-			hashRecordingFile(resultPath, abortController.signal),
-		);
+		const outputSha256 = await withJobHeartbeat(jobId, () => outputHash);
 		const afterHash = await lstat(resultPath, { bigint: true });
 		if (
 			!afterHash.isFile() ||
@@ -2953,6 +3494,17 @@ async function muxSegmentsAsync(
 			durationMs: Date.now() - startedAt,
 			resources: getSystemResources(),
 		});
+		const outputReadyAt = Date.now();
+		// The result is final here, so render previews while the upload and its
+		// remote check run; they are still only uploaded once the recording passes.
+		previewAssets = renderPreviewAssets(
+			resultPath,
+			localVerified.video.duration,
+			Boolean(thumbnailPresignedUrl),
+			Boolean(previewGifPresignedUrl),
+			AbortSignal.any([abortController.signal, previewAbort.signal]),
+			videoId,
+		);
 
 		let metadata = await withJobHeartbeat(jobId, () =>
 			probeVideoFile(resultPath),
@@ -2982,13 +3534,11 @@ async function muxSegmentsAsync(
 
 		outputUploadStarted = true;
 		errorCode = "processing-unavailable";
+		const startedOutputUpload = pendingOutputUpload;
+		if (!startedOutputUpload)
+			throw new Error("Recording output upload was not started");
 		const uploadReceipt = await withJobHeartbeat(jobId, () =>
-			uploadFileToStorage(
-				resultPath,
-				outputUpload,
-				"video/mp4",
-				abortController.signal,
-			),
+			startedOutputUpload.finish(),
 		);
 		if (outputVerificationUrl) {
 			errorCode = "output-invalid";
@@ -3070,38 +3620,40 @@ async function muxSegmentsAsync(
 			sendCurrentJobWebhook(jobId);
 		}
 
-		const assetDuration = metadata?.duration ?? 0;
+		const uploadedAt = Date.now();
 		await withJobHeartbeat(jobId, async () => {
-			if (thumbnailPresignedUrl) {
-				try {
-					const thumbnailData = await generateThumbnail(
-						resultPath,
-						assetDuration,
-						{},
-						abortController.signal,
-					);
-					await uploadToS3(
-						thumbnailData,
-						thumbnailPresignedUrl,
-						"image/jpeg",
-						abortController.signal,
-					);
-				} catch (thumbErr) {
-					abortController.signal.throwIfAborted();
-					console.warn(
-						`[mux-segments] Thumbnail generation failed for ${videoId}:`,
-						thumbErr,
-					);
-				}
-			}
-
-			await generateAndUploadPreviewGif(
-				resultPath,
-				assetDuration,
-				previewGifPresignedUrl,
-				abortController.signal,
-				"mux-segments",
-			);
+			const assets = await previewAssets;
+			abortController.signal.throwIfAborted();
+			await Promise.all([
+				thumbnailPresignedUrl && assets?.thumbnail
+					? uploadToS3(
+							assets.thumbnail,
+							thumbnailPresignedUrl,
+							"image/jpeg",
+							abortController.signal,
+						).catch((thumbErr) => {
+							abortController.signal.throwIfAborted();
+							console.warn(
+								`[mux-segments] Thumbnail generation failed for ${videoId}:`,
+								thumbErr,
+							);
+						})
+					: undefined,
+				previewGifPresignedUrl && assets?.previewGif
+					? uploadFileToS3(
+							assets.previewGif.path,
+							previewGifPresignedUrl,
+							"image/gif",
+							abortController.signal,
+						).catch((previewErr) => {
+							abortController.signal.throwIfAborted();
+							console.warn(
+								"[mux-segments] Preview GIF generation failed:",
+								previewErr,
+							);
+						})
+					: undefined,
+			]);
 		});
 
 		abortController.signal.throwIfAborted();
@@ -3116,6 +3668,8 @@ async function muxSegmentsAsync(
 			jobId,
 			videoId,
 			durationMs: Date.now() - startedAt,
+			uploadMs: uploadedAt - outputReadyAt,
+			previewMs: Date.now() - uploadedAt,
 			metadata,
 			resources: getSystemResources(),
 		});
@@ -3146,10 +3700,16 @@ async function muxSegmentsAsync(
 			jobId,
 			videoId,
 			durationMs: Date.now() - startedAt,
-			error: error instanceof Error ? error.message : String(error),
+			errorCode: muxFailureErrorCode(error, errorCode),
+			error: logReason(error, MUX_FAILURE_LOG_LENGTH),
 			resources: getSystemResources(),
 		});
+		// Stop a hash still reading the output before the work directory is removed.
+		pendingOutputHash?.abort.abort();
+		await pendingOutputHash?.promise.catch(() => {});
 		if (!outputUploadStarted) {
+			// Parts still in flight could land after the abort, so let them settle first.
+			await pendingOutputUpload?.cancel();
 			await abortStorageUploadTarget(outputUpload).catch((abortError) => {
 				console.warn(
 					`[mux-segments] Failed to abort output upload for ${videoId}:`,
@@ -3163,16 +3723,7 @@ async function muxSegmentsAsync(
 				abortController.signal.aborted && !isBusyError(error)
 					? "cancelled"
 					: "error",
-			errorCode:
-				error instanceof MediaTransferBudgetError
-					? "processing-budget-exhausted"
-					: error instanceof MediaDownloadError
-						? error.errorCode
-						: isRetryableRecordingVerificationError(error) ||
-								isBusyError(error) ||
-								isTimeoutError(error)
-							? "processing-unavailable"
-							: errorCode,
+			errorCode: muxFailureErrorCode(error, errorCode),
 			error: isRetryableRecordingVerificationError(error)
 				? "Recording verification temporarily unavailable (503)"
 				: error instanceof Error
@@ -3182,9 +3733,48 @@ async function muxSegmentsAsync(
 		sendCurrentJobWebhook(jobId);
 	} finally {
 		if (processingTimeout) clearTimeout(processingTimeout);
+		// Previews still rendering here belong to a job that failed before using them.
+		previewAbort.abort();
+		await (await previewAssets)?.previewGif?.cleanup();
 		await rm(workDir, { recursive: true, force: true }).catch(() => {});
 		releaseWorkDir();
 	}
+}
+
+interface PreviewAssets {
+	thumbnail: Uint8Array | null;
+	previewGif: TempFileHandle | null;
+}
+
+// Never rejects: a failed preview only costs the asset, and the caller checks for abort.
+async function renderPreviewAssets(
+	resultPath: string,
+	duration: number,
+	thumbnail: boolean,
+	previewGif: boolean,
+	signal: AbortSignal,
+	videoId: string,
+): Promise<PreviewAssets> {
+	const [thumbnailResult, previewGifResult] = await Promise.allSettled([
+		thumbnail ? generateThumbnail(resultPath, duration, {}, signal) : null,
+		previewGif ? generatePreviewGif(resultPath, duration, {}, signal) : null,
+	]);
+	if (thumbnailResult.status === "rejected" && !signal.aborted)
+		console.warn(
+			`[mux-segments] Thumbnail generation failed for ${videoId}:`,
+			thumbnailResult.reason,
+		);
+	if (previewGifResult.status === "rejected" && !signal.aborted)
+		console.warn(
+			"[mux-segments] Preview GIF generation failed:",
+			previewGifResult.reason,
+		);
+	return {
+		thumbnail:
+			thumbnailResult.status === "fulfilled" ? thumbnailResult.value : null,
+		previewGif:
+			previewGifResult.status === "fulfilled" ? previewGifResult.value : null,
+	};
 }
 
 export default video;

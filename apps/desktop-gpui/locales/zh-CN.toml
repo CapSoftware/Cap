@@ -1,0 +1,3034 @@
+[common]
+add = "添加"
+back = "返回"
+cancel = "取消"
+choose_allow_prompt = "请在 macOS 提示中选择“允许”。"
+close = "关闭"
+copied = "已复制"
+dismiss = "关闭"
+go_back = "返回"
+loading = "正在加载..."
+no = "否"
+ok = "确定"
+reset = "重置"
+reset_to_default = "恢复默认"
+save = "保存"
+search = "搜索"
+yes = "是"
+
+[menu.app]
+about = "关于 Cap"
+hide = "隐藏 Cap"
+hide_others = "隐藏其他"
+quit = "退出 Cap"
+services = "服务"
+settings = "设置…"
+
+[menu.about]
+licensed = "基于 AGPL-3.0 许可"
+website = "网站"
+commit = "提交"
+
+[menu.file]
+open_prompt = "打开录制"
+close_window = "关闭窗口"
+title = "文件"
+open_file = "打开文件…"
+open_recent = "打开最近使用"
+import_media = "导入媒体…"
+
+[menu.edit]
+copy = "拷贝"
+cut = "剪切"
+paste = "粘贴"
+redo = "重做"
+select_all = "全选"
+title = "编辑"
+undo = "撤销"
+
+[menu.view]
+enter_full_screen = "进入全屏幕"
+title = "显示"
+
+[menu.window]
+close_window = "关闭窗口"
+minimize = "最小化"
+title = "窗口"
+zoom = "缩放"
+
+[menu.help]
+title = "帮助"
+feedback = "提供反馈…"
+changelog = "更新日志"
+dashboard = "仪表盘"
+documentation = "文档"
+faq = "常见问题"
+self_hosting = "自托管"
+help_center = "帮助中心"
+system_status = "系统状态"
+discord = "加入 Discord 社区"
+
+[tray]
+import_media = "导入媒体..."
+no_recent_items = "没有最近的项目"
+open_main_window = "打开主窗口"
+previous = "最近项目"
+recording_mode = "录制模式"
+quit = "退出 Cap"
+record_area = "录制区域"
+record_display = "录制屏幕"
+record_window = "录制窗口"
+request_permissions = "请求权限"
+screenshot_area = "截取区域"
+screenshot_display = "截取屏幕"
+screenshot_window = "截取窗口"
+select_mode = "选择模式"
+settings = "设置"
+take_screenshot = "截图"
+tooltip_recording = "Cap - 停止录制"
+upload_logs = "上传日志"
+version = "Cap v{version}"
+view_all_recordings = "查看所有录制"
+view_all_screenshots = "查看所有截图"
+
+[tray.mode]
+instant = "Instant"
+screenshot = "截图"
+studio = "Studio"
+
+[settings.nav]
+automations = "自动化"
+changelog = "更新日志"
+cli = "CLI"
+experimental = "实验性功能"
+feedback = "反馈"
+general = "通用"
+integrations = "集成"
+license = "套餐与许可证"
+quality = "录制质量"
+recordings = "录制"
+screenshots = "截图"
+shortcuts = "快捷键"
+transcription = "转写"
+
+[settings.general.language]
+description = "选择 Cap 的显示语言。"
+label = "应用语言"
+system_default = "跟随系统（{language}）"
+title = "语言"
+
+[settings.general.appearance]
+dark = "深色"
+description = "让 Cap 跟随系统主题，或选择固定外观。"
+light = "浅色"
+system = "跟随系统"
+title = "外观"
+
+[settings.general.app]
+description = "选择 Cap 在系统中的显示方式。"
+title = "应用"
+
+[settings.general.app.dock_icon]
+description = "即使没有打开的窗口，也在程序坞中保留 Cap。"
+label = "始终显示程序坞图标"
+
+[settings.general.app.notifications]
+description = "在复制到剪贴板、保存文件等操作后显示通知。你可能需要在系统的通知设置中允许 Cap。"
+label = "系统通知"
+
+[settings.general.recording]
+description = "录制期间及停止录制后的行为。"
+title = "录制"
+
+[settings.general.recording.countdown]
+description = "开始录制前的等待时间。"
+label = "倒计时"
+off = "关闭"
+seconds_10 = "10 秒"
+seconds_3 = "3 秒"
+seconds_5 = "5 秒"
+
+[settings.general.recording.confirm_without_mic]
+description = "未选择麦克风或所选麦克风不可用时，要求确认。"
+label = "无麦克风录制前确认"
+
+[settings.general.recording.studio_sound]
+description = "自动优化麦克风音频。你仍可在编辑器中为任意录制关闭此功能。"
+label = "新录制默认开启 Studio Sound"
+
+[settings.general.recording.main_window_start]
+description = "录制开始后主窗口的处理方式。"
+label = "开始录制时的主窗口"
+
+[settings.general.recording.window_capture]
+description = "窗口录制如何捕获你选择的窗口。“聚焦窗口”只录制该窗口，将其居中并在移动时跟随；“屏幕区域”录制它所覆盖的屏幕区域。"
+label = "窗口捕获方式"
+
+[settings.general.recording.post_deletion]
+description = "是否重新打开录制窗口。"
+label = "删除录制后"
+
+[settings.general.recording.delete_after_upload]
+description = "上传成功后，Cap 会删除本地文件。"
+label = "上传后删除 Instant 录制"
+
+[settings.general.recording.crash_recovery]
+description = "分段录制，在崩溃或断电后仍可恢复。录制期间文件会稍大。"
+label = "可在崩溃后恢复的录制"
+
+[settings.general.recording.custom_cursor]
+description = "单独捕获光标状态，以便在编辑器中调整光标大小和平滑度。"
+label = "单独捕获光标（Studio）"
+
+[settings.general.recording.auto_zoom]
+description = "在 Studio 录制中，自动在鼠标点击处添加缩放片段。"
+label = "点击时自动缩放"
+
+[settings.general.recording.default_zoom]
+description = "新建和自动生成的缩放片段所用的缩放倍数。"
+label = "默认缩放倍数"
+
+[settings.general.recording.capture_keyboard]
+description = "记录按键，以便在编辑器中添加键盘按键显示。"
+label = "记录键盘按键"
+
+[settings.general.recording.notch_overlay]
+description = "当所选区域包含完整的刘海时，自动在新的屏幕和区域录制中还原刘海。外接显示器、部分区域和窗口录制不受影响。每个录制都可以在编辑器中单独更改。"
+label = "在屏幕录制中绘制 MacBook 刘海"
+
+[settings.general.recording.max_fps]
+description = "屏幕捕获的最大帧率。"
+description_high = "屏幕捕获的最大帧率。较高的值可能会在某些系统上导致掉帧或 CPU 占用升高。"
+fps_120 = "120 FPS"
+fps_24 = "24 FPS"
+fps_25 = "25 FPS"
+fps_30 = "30 FPS"
+fps_60 = "60 FPS（推荐）"
+label = "最大捕获帧率"
+
+[settings.general.storage]
+choose_folder = "选择文件夹"
+default_location = "默认（Application Support）"
+description = "Cap 保存录制的位置。"
+title = "存储"
+
+[settings.general.project_name]
+available_placeholders = "可用占位符"
+description = "用于新录制和导出文件的模板。"
+title = "默认项目名称"
+
+[settings.general.project_name.placeholders]
+date_time = "日期和时间"
+date_values = "录制日期"
+mode_values = "“studio”、“instant” 或 “screenshot”"
+random = "随机"
+random_values = "10 个可用于文件名的十六进制字符；使用 {{random:N}} 指定 1–32 个。"
+recording_mode = "录制模式"
+recording_mode_values = "“Studio”、“Instant” 或 “Screenshot”"
+target = "目标"
+target_kind_values = "“Display”、“Window” 或 “Area”"
+target_name_values = "显示器名称或窗口标题。"
+time_values = "录制时间"
+
+[settings.general.excluded_windows]
+description = "在录制中隐藏窗口。"
+empty = "当前没有排除任何窗口。"
+missing_body = "摄像头、设置或录制窗口可能会在屏幕录制中显示为黑框。未排除：{names}。"
+missing_title = "部分推荐排除的 Cap 窗口尚未排除"
+restore = "恢复"
+title = "排除的窗口"
+
+[settings.general.updates]
+description = "选择你要接收的 Cap 版本。"
+nightly_description = "最新的构建版本，会在你未录制或导出时于后台自动更新。可能不稳定。"
+nightly_switch_back = "切换回 Stable 会回到最新的稳定版，它可能比你当前的版本更旧。"
+stable_description = "正式发布版本（推荐）"
+title = "更新"
+
+[settings.general.updates.channel]
+description = "Cap 获取更新的发布渠道。"
+label = "更新渠道"
+
+[settings.general.self_host]
+confirm_change = "确定要将服务器 URL 更改为“{origin}”吗？你需要重新登录。"
+description = "仅当你运行自己的 Cap Web 实例时才需要更改此项。"
+server_url = "Cap 服务器 URL"
+title = "自托管"
+update = "更新"
+
+[settings.general.privacy]
+title = "隐私"
+
+[settings.general.privacy.telemetry]
+description = "Cap 使用匿名遥测数据来提升稳定性并修复问题。我们绝不会收集录制内容、窗口标题、文件路径或任何个人信息。"
+label = "共享匿名遥测数据"
+[settings.prompt]
+ok = "确定"
+
+[settings.sidebar]
+account = "账户"
+cancel_sign_in = "取消登录"
+check_for_updates = "检查更新"
+checking_for_updates = "正在检查更新…"
+click_to_sign_in = "点击登录"
+downloading = "正在下载 v{version}…"
+downloading_progress = "正在下载 v{version}… {percent}%"
+installing = "正在安装 v{version}…"
+previous_versions = "查看以前的版本"
+restart_to_update = "重新启动以更新到 v{version}"
+sign_in = "登录"
+sign_out = "退出登录"
+signed_in = "已登录"
+
+[settings.recordings]
+corrupted_body = "录制失败，因此此文件在编辑器中可能会出现问题！如果你在恢复文件时遇到问题，请联系支持团队！"
+corrupted_title = "录制可能已损坏"
+delete = "删除"
+description = "管理你的录制并执行操作。"
+edit = "编辑"
+empty_library = "未找到录制"
+failed = "录制失败"
+import = "导入"
+in_progress = "正在录制"
+load_more = "加载更多"
+open_bundle = "打开录制包"
+open_link = "打开链接"
+retry_upload = "重新上传"
+show_all = "全部显示"
+title = "录制"
+
+[settings.recordings.empty]
+all = "没有录制"
+all_matching = "没有匹配的录制"
+instant = "没有 Instant 录制"
+instant_matching = "没有匹配的 Instant 录制"
+studio = "没有 Studio 录制"
+studio_matching = "没有匹配的 Studio 录制"
+
+[settings.screenshots]
+copy = "复制到剪贴板"
+delete = "删除"
+description = "管理你的截图并执行操作。"
+empty = "没有截图"
+empty_library = "未找到截图"
+empty_matching = "没有匹配的截图"
+import = "导入图片"
+load_more = "加载更多"
+open_folder = "打开文件夹"
+save_as = "另存为"
+title = "截图"
+
+[settings.quality]
+save_failed = "无法保存你的录制设置，请重试。"
+
+[settings.quality.studio]
+balanced = "均衡"
+balanced_description = "细节清晰，文件大小适中。适合大多数录制。"
+compatibility = "更小的文件"
+compatibility_description = "节省磁盘空间。细节可能变得柔和，摄像头画面尤其明显。"
+description = "保存到你的电脑上以便编辑。导出尺寸稍后在编辑器中选择。"
+recommended = "推荐"
+title = "Studio 录制"
+ultra = "最高细节"
+ultra_description = "保留最多细节，适合大量编辑。占用的磁盘空间最多。"
+
+[settings.quality.instant]
+description = "录制时同步上传，停止录制时链接即可使用。如需最佳画质，请使用 Studio 模式：它会以屏幕支持的最高画质录制，并可导出最高 4K。"
+free_plan = "免费版为 720p。Cap Pro 最高可录制 4K。"
+max_resolution = "最高分辨率"
+res_1080p = "文字清晰，上传体积适中。"
+res_1440p = "为高分辨率大屏幕提供更多细节。"
+res_4k = "细节最丰富。最适合高速网络。"
+res_720p = "上传体积最小，链接最快可用。"
+title = "Instant 录制"
+
+[settings.quality.sharing]
+auto_open = "自动打开分享链接"
+auto_open_description = "上传完成后在浏览器中打开链接。"
+title = "分享"
+
+[settings.options.studio_quality]
+balanced = "均衡"
+compatibility = "兼容"
+ultra = "超高"
+
+[settings.options.main_window_start]
+close = "关闭"
+minimise = "最小化"
+
+[settings.options.window_capture]
+focused_window = "聚焦窗口"
+screen_region = "屏幕区域"
+
+[settings.options.post_studio]
+do_nothing = "不执行任何操作"
+open_editor = "打开编辑器"
+show_cap = "显示 Cap"
+
+[settings.options.post_screenshot]
+copy = "复制到剪贴板"
+copy_and_open_editor = "复制并打开编辑器"
+do_nothing = "不执行任何操作"
+open_editor = "打开编辑器"
+
+[settings.options.post_deletion]
+do_nothing = "不执行任何操作"
+reopen = "重新打开录制窗口"
+
+[settings.options.preview_quality]
+full = "全尺寸"
+half = "1/2"
+quarter = "1/4"
+
+[settings.shortcuts]
+blocked_while_recording = "当前录制占用了停止键，无法更改快捷键。请先停止录制。"
+needs_modifier_macos = "请包含 ⌘、⌃ 或 ⌥，以免快捷键干扰输入。"
+needs_modifier_other = "请包含 Ctrl、Alt 或 Win，以免快捷键干扰输入。"
+record_shortcut = "录制快捷键"
+recording_description = "无需先打开 Cap 即可开始录制。"
+recording_hint = "按下你想使用的按键。按 Esc 取消，按 Delete 移除。"
+recording_title = "录制"
+saved = "已保存。在任意应用中按 {keys} 即可{effect}。"
+saved_moved = "已保存。在任意应用中按 {keys} 即可{effect}。已从“{shortcut}”中移除。"
+screenshots_description = "快捷键在任何应用中都可用。点击即可更改。"
+screenshots_title = "截图"
+type_shortcut = "输入快捷键…"
+unavailable = "其他应用或系统已在使用此快捷键。点击以选择其他快捷键。"
+unsupported_key = "该按键不能用于快捷键。请尝试字母、数字或功能键。"
+while_recording_title = "录制期间"
+
+[settings.shortcuts.after_screenshot]
+hint = "适用于每张截图，无论来自快捷键还是 Cap"
+title = "截图之后"
+
+[settings.shortcuts.after_studio]
+hint = "停止录制时"
+title = "Studio 录制之后"
+
+[settings.shortcuts.after_instant]
+hint = "始终会复制分享链接"
+title = "Instant 录制之后"
+
+[settings.shortcuts.outcome]
+instant_copy_link = "仅复制链接"
+instant_copy_link_hint = "不打开任何内容"
+instant_open_link = "打开链接"
+instant_open_link_hint = "在浏览器中"
+instant_show_cap = "显示 Cap"
+instant_show_cap_hint = "回到录制器"
+saved_to_library = "仅保存到资料库"
+screenshot_copy = "复制"
+screenshot_copy_and_edit = "复制并编辑"
+screenshot_copy_and_edit_hint = "两者兼顾"
+screenshot_copy_hint = "随处粘贴"
+screenshot_do_nothing = "不执行任何操作"
+screenshot_open_editor = "打开编辑器"
+screenshot_open_editor_hint = "先添加标注"
+studio_do_nothing = "不执行任何操作"
+studio_open_editor = "打开编辑器"
+studio_open_editor_hint = "立即编辑"
+studio_show_cap = "显示 Cap"
+studio_show_cap_hint = "回到录制器"
+
+[settings.shortcuts.label]
+cycle_mode = "切换录制模式"
+fallback = "快捷键"
+open_picker = "打开录制选择器"
+pause = "暂停或继续"
+record_area = "录制区域"
+record_display = "录制屏幕"
+record_window = "录制窗口"
+restart = "重新开始录制"
+screenshot_area = "截取区域"
+screenshot_display = "截取屏幕"
+screenshot_window = "截取窗口"
+start_instant = "开始 Instant 录制"
+start_studio = "开始 Studio 录制"
+stop = "停止录制"
+
+[settings.shortcuts.effect]
+cycle_mode = "在 Studio、Instant 和截图模式之间切换"
+instant_copy = "以 Instant 模式录制所选屏幕或窗口，停止后复制分享链接"
+instant_copy_and_open = "以 Instant 模式录制所选屏幕或窗口，停止后复制并打开分享链接"
+open_picker = "打开 Cap 以选择要录制的内容"
+pause = "暂停当前录制，或继续录制"
+picker_area_instant = "选择一个区域，然后以 Instant 模式录制"
+picker_area_screenshot = "选择一个区域，然后截图"
+picker_area_studio = "选择一个区域，然后以 Studio 模式录制"
+picker_display_instant = "选择一个屏幕，然后以 Instant 模式录制"
+picker_display_screenshot = "选择一个屏幕，然后截图"
+picker_display_studio = "选择一个屏幕，然后以 Studio 模式录制"
+picker_window_instant = "选择一个窗口，然后以 Instant 模式录制"
+picker_window_screenshot = "选择一个窗口，然后截图"
+picker_window_studio = "选择一个窗口，然后以 Studio 模式录制"
+restart = "丢弃当前录制并重新开始"
+screenshot_area_copy = "选择一个区域并复制到剪贴板"
+screenshot_area_copy_and_open_editor = "选择一个区域，复制后打开编辑器"
+screenshot_area_open_editor = "选择一个区域并在编辑器中打开"
+screenshot_area_save = "选择一个区域并保存到你的资料库，不打开任何内容"
+screenshot_display_copy = "截取指针所在的屏幕并复制到剪贴板"
+screenshot_display_copy_and_open_editor = "截取指针所在的屏幕，复制后打开编辑器"
+screenshot_display_open_editor = "截取指针所在的屏幕并在编辑器中打开"
+screenshot_display_save = "截取指针所在的屏幕并保存到你的资料库，不打开任何内容"
+screenshot_window_copy = "截取指针所在的窗口并复制到剪贴板"
+screenshot_window_copy_and_open_editor = "截取指针所在的窗口，复制后打开编辑器"
+screenshot_window_open_editor = "截取指针所在的窗口并在编辑器中打开"
+screenshot_window_save = "截取指针所在的窗口并保存到你的资料库，不打开任何内容"
+stop = "停止当前录制"
+studio = "以 Studio 模式录制所选屏幕或窗口"
+studio_open_editor = "以 Studio 模式录制所选屏幕或窗口，停止后打开编辑器"
+
+[settings.shortcuts.sentence]
+cycle_mode = "在 Studio、Instant 和截图模式之间切换。"
+instant_copy = "以 Instant 模式录制所选屏幕或窗口，停止后复制分享链接。"
+instant_copy_and_open = "以 Instant 模式录制所选屏幕或窗口，停止后复制并打开分享链接。"
+open_picker = "打开 Cap 以选择要录制的内容。"
+pause = "暂停当前录制，或继续录制。"
+picker_area_instant = "选择一个区域，然后以 Instant 模式录制。"
+picker_area_screenshot = "选择一个区域，然后截图。"
+picker_area_studio = "选择一个区域，然后以 Studio 模式录制。"
+picker_display_instant = "选择一个屏幕，然后以 Instant 模式录制。"
+picker_display_screenshot = "选择一个屏幕，然后截图。"
+picker_display_studio = "选择一个屏幕，然后以 Studio 模式录制。"
+picker_window_instant = "选择一个窗口，然后以 Instant 模式录制。"
+picker_window_screenshot = "选择一个窗口，然后截图。"
+picker_window_studio = "选择一个窗口，然后以 Studio 模式录制。"
+restart = "丢弃当前录制并重新开始。"
+screenshot_area_copy = "选择一个区域并复制到剪贴板。"
+screenshot_area_copy_and_open_editor = "选择一个区域，复制后打开编辑器。"
+screenshot_area_open_editor = "选择一个区域并在编辑器中打开。"
+screenshot_area_save = "选择一个区域并保存到你的资料库，不打开任何内容。"
+screenshot_display_copy = "截取指针所在的屏幕并复制到剪贴板。"
+screenshot_display_copy_and_open_editor = "截取指针所在的屏幕，复制后打开编辑器。"
+screenshot_display_open_editor = "截取指针所在的屏幕并在编辑器中打开。"
+screenshot_display_save = "截取指针所在的屏幕并保存到你的资料库，不打开任何内容。"
+screenshot_window_copy = "截取指针所在的窗口并复制到剪贴板。"
+screenshot_window_copy_and_open_editor = "截取指针所在的窗口，复制后打开编辑器。"
+screenshot_window_open_editor = "截取指针所在的窗口并在编辑器中打开。"
+screenshot_window_save = "截取指针所在的窗口并保存到你的资料库，不打开任何内容。"
+stop = "停止当前录制。"
+studio = "以 Studio 模式录制所选屏幕或窗口。"
+studio_open_editor = "以 Studio 模式录制所选屏幕或窗口，停止后打开编辑器。"
+
+[settings.cli]
+command = "命令"
+copy = "复制"
+description = "安装 Cap 命令，供终端、智能体、脚本和本地自动化使用。"
+install = "安装 CLI"
+installed = "已安装"
+installing = "正在安装..."
+installs_command = "桌面应用会安装一个本地\u00A0{command}\u00A0命令，它指向内置的 CLI。"
+load_failed = "无法加载 CLI 状态：{error}"
+not_installed = "未安装"
+path_configured = "已将 cap 添加到你的 PATH。重新启动终端即可使用，或现在运行："
+path_missing = "将 {path} 添加到你的 PATH，即可在新终端中使用 cap。"
+remove = "移除"
+removing = "正在移除..."
+repair = "修复"
+repairing = "正在修复..."
+retry = "重试"
+target = "目标"
+title = "命令行"
+
+[settings.transcription]
+active_title = "已启用的提示"
+applied_note = "在编辑器中生成字幕时会应用这些提示。"
+clear = "清除"
+count = { other = "{count} 项" }
+description = "添加生成字幕时需要注意的名称、拼写、域名和大小写偏好。"
+placeholder = "添加词语"
+saved = "已保存"
+saving = "正在保存..."
+terms_description = "每次添加一个词语，以减少错别字和格式错误。"
+terms_title = "记住的词语"
+title = "转写"
+
+[settings.experimental]
+developer = "开发者"
+developer_description = "仅在开发版本中显示。"
+muxer = "进程外混流器"
+muxer_description = "在独立的子进程中运行分段 MP4 混流器，混流器崩溃时不会影响你的录制。需要内置的 cap-muxer 程序。"
+native_app = "使用原生应用"
+native_app_description = "关闭后会退出此应用，并在开发环境中重新打开经典的 Tauri 应用。录制和设置是共享的。"
+reliability = "可靠性"
+
+[settings.experimental.switch]
+busy = "请先完成录制、导出、上传、导入或转写任务，再切换到经典版应用。"
+check_failed = "无法确认经典版 Cap 应用是否已打开：{error}"
+data_stays = "你的录制和设置会原样保留。"
+failed = "无法打开经典版 Cap 应用。"
+not_found = "找不到可以切换回去的经典版 Cap 应用。"
+open_failed = "无法打开经典版 Cap 应用：{error}"
+opening = "正在打开经典版 Cap 应用"
+opening_detail = "经典版 Cap 应用准备就绪后，此窗口将关闭。"
+save_failed = "无法保存你的应用偏好设置。Cap 仍保持打开。"
+switching = "正在切换回经典版 Cap 应用。"
+timed_out = "经典版应用尚未打开。请在开发终端中检查构建错误，然后重试。"
+
+[settings.feedback]
+app_version = "应用版本"
+capture_support = "捕获支持"
+capture_supported = "屏幕捕获：支持"
+capture_unsupported = "屏幕捕获：不支持"
+community_description = "有问题、想分享想法，或者只是想聊聊？加入 Cap 的 Discord 社区吧。"
+community_title = "加入社区"
+debug_description = "上传你的日志，帮助我们诊断 Cap 的问题。不包含任何个人信息。"
+debug_title = "调试信息"
+description = "提交反馈或报告问题，帮助我们改进 Cap。我们会尽快处理。"
+join_discord = "加入 Discord"
+operating_system = "操作系统"
+placeholder = "告诉我们你对 Cap 的看法..."
+submit = "提交反馈"
+submit_failed = "提交反馈失败"
+submitting = "正在提交..."
+system_loading = "正在加载系统信息..."
+system_title = "系统信息"
+thanks = "感谢你的反馈！"
+title = "反馈"
+upload_interrupted = "上传被中断"
+upload_logs = "上传日志"
+upload_sent = "已发送。谢谢，这能帮助我们找到问题。"
+uploading = "正在上传..."
+
+[settings.feedback.diagnostic]
+confirm_body = "Cap 将以闪烁图案占据你的屏幕并播放响亮的提示音，每条处理流程约 {seconds} 秒。请摘下耳机，不要静音，并在完成前不要操作电脑。"
+confirm_title = "运行诊断？"
+description = "录制一段闪烁并发出提示音的简短测试图案，测量画面与声音的偏移程度，并记录你的显示器、摄像头、麦克风、磁盘空间和录制设置。在你选择发送之前，不会发送任何内容。"
+mic_description = "同时录制你的麦克风，检查它是否及时听到提示音。扬声器的声音需要能被麦克风实际收到。"
+mic_label = "测试麦克风"
+mode_description = "要测试的处理流程。“两者”会先运行 Studio 部分，再运行 Instant 部分。"
+mode_label = "录制模式"
+no_cli = "未在此版本旁找到 Cap 命令行工具，因此报告只会包含你的环境信息。"
+no_cli_sync = "未在此版本旁找到 Cap 命令行工具，因此无法运行同步测试。"
+run = "运行诊断"
+run_again = "再次运行"
+send = "发送给 Cap"
+sending = "正在发送..."
+show_file = "显示文件"
+stop_recording_first = "请先停止当前录制，再运行诊断。"
+title = "诊断报告"
+try_again = "重试"
+warning_body = "一个全屏窗口会黑白闪烁，同时扬声器播放 1kHz 提示音，Cap 会录制下来并测量画面与声音的偏移程度。运行期间请不要操作电脑。两种模式加起来大约需要几分钟。"
+warning_title = "测试会占据你的屏幕并发出声音。"
+
+[settings.feedback.diagnostic.verdict]
+environment_only = "仅环境信息"
+fail = "未通过"
+inconclusive = "无法确定"
+pass = "通过"
+warn = "警告"
+
+[settings.sign_in_required]
+body = "请登录以继续。你也可以发送邮件至 hello@cap.so，或通过 cap.link/discord 加入我们的 Discord"
+title = "需要登录"
+
+[settings.changelog]
+fetch_failed = "获取更新日志失败"
+loading = "正在加载更新日志..."
+new = "新"
+version = "版本 {version} - {date}"
+
+[settings.license]
+activate = "激活许可证"
+activating = "正在激活..."
+active_title = "桌面许可证"
+checking = "正在检查…"
+deactivate = "停用许可证"
+description = "你的 Cap 套餐和桌面许可证，集中在一处。"
+desktop_description = "你的桌面许可证涵盖商用录制和编辑。Cap Pro 还提供云端分享和协作功能。"
+desktop_name = "桌面许可证"
+expires = "到期时间"
+explore_description = "在我们的网站上比较当前价格和所含的全部内容。"
+explore_desktop = "桌面许可证 · 可商用桌面录制器和编辑器。"
+explore_pro = "Cap Pro · 桌面许可证，另含云端分享、AI 功能和协作。"
+explore_title = "了解套餐"
+free_description = "可在本地录制和编辑，仅限个人使用。如需商用或更多云端功能，请选择付费套餐。"
+have_key = "已有许可证密钥？"
+key = "许可证密钥"
+no_instance = "未找到实例 ID"
+opens_pricing = "在浏览器中打开 cap.so/pricing。"
+placeholder = "许可证密钥"
+plan_title = "你的套餐"
+pro_description = "你的账户包含云端分享、Pro 功能以及可商用的桌面许可证。"
+refresh = "刷新套餐"
+refresh_failed = "无法刷新你的套餐，请重试。"
+save_failed = "保存许可证失败"
+sign_in_hint = "已有 Cap Pro？请在侧边栏中登录你的账户。"
+title = "套餐与许可证"
+view_pricing = "查看套餐和价格 ↗"
+
+[settings.integrations]
+configure = "配置"
+description = "配置集成以扩展 Cap 的功能，并连接第三方服务。"
+google_drive_description = "连接 Google Drive，用于上传新的分享链接视频。Cap 会将新视频存放在你 Drive 中的私有 Cap 文件夹，并在常规访问检查后继续通过 Cap 提供。"
+managed = "由你的组织管理"
+managed_by = "由你的组织管理：{organization}"
+request_timed_out = "请求超时"
+s3_description = "连接你自己的 S3 存储桶，完全掌控数据存储。所有新的分享链接上传都会自动上传到你配置的 S3 存储桶，确保你对内容拥有完整的所有权和控制权。非常适合需要数据主权和自定义存储策略的组织。"
+s3_name = "S3 配置"
+title = "集成"
+upgrade = "升级到 Pro"
+
+[settings.integrations.s3]
+access_key = "访问密钥 ID"
+bucket = "存储桶名称"
+configuration = "配置"
+delete_failed = "删除 S3 配置失败"
+deleted = "S3 配置已成功删除"
+endpoint = "端点"
+fetch_failed = "获取 S3 配置失败"
+guide = "存储配置指南"
+guide_intro = "设置存储桶并将其连接到 Cap 应该不到 10 分钟。查看\u00A0{guide}\u00A0即可开始。"
+other_provider = "其他兼容 S3 的服务"
+provider = "存储服务商"
+region = "区域"
+remove = "移除配置"
+removing = "正在移除..."
+save_failed = "保存 S3 配置失败"
+saved = "S3 配置已成功保存"
+saving = "正在保存..."
+secret_key = "秘密访问密钥"
+test = "测试连接"
+test_failed = "S3 连接测试失败。请检查你的配置和网络连接。"
+test_ok = "S3 配置测试成功！连接正常。"
+test_timeout = "连接测试在 5 秒后超时。请检查你的端点 URL 和网络连接。"
+testing = "正在测试..."
+
+[settings.integrations.gdrive]
+active = "已启用"
+active_for_uploads = "已用于新的上传"
+cached = "缓存于 {time}"
+connect = "连接 Google Drive"
+connect_failed = "无法开始连接 Google Drive"
+connected_inactive = "已连接但未启用"
+connection_description = "Google Drive 会将新的上传内容存放在你 Drive 中的私有 Cap 文件夹。已有的 Cap 托管视频和 S3 视频继续使用当前存储。"
+connection_title = "连接"
+disconnect = "断开连接"
+disconnect_failed = "无法断开 Google Drive 连接"
+disconnected = "已断开 Google Drive 连接"
+drive_files = "Drive 文件"
+finish_in_browser = "请在浏览器中完成 Google Drive 的连接，然后回到这里刷新。"
+not_connected = "未连接"
+opening = "正在打开..."
+refresh = "刷新"
+refreshing = "正在刷新..."
+remaining = "剩余"
+set_active_failed = "无法更新当前使用的存储服务商"
+storage = "存储空间"
+test = "测试"
+test_failed = "Google Drive 连接测试失败"
+testing = "正在测试..."
+trash = "回收站"
+updated = "更新于 {time}"
+use_drive = "使用 Google Drive"
+use_s3 = "使用 S3"
+used = "已使用 {usage}"
+used_of = "已使用 {usage}，共 {limit}"
+waiting = "正在等待..."
+working = "Google Drive 连接正常"
+working_for = "{email} 的 Google Drive 连接正常"
+
+[settings.automations]
+action_no_effect = "对所选触发器而言，此操作没有效果。"
+add_action = "添加操作"
+add_condition = "添加条件"
+auto_name_empty = "{trigger}自动化"
+browse = "浏览"
+check_compatibility = "检查兼容性"
+compatibility_checked = "已检查兼容性：此自动化暂时还不会在 Cap 中运行。已保存的规则仍可供 Cap CLI 使用。未执行任何操作。"
+condition_never_matches = "对所选触发器而言，此条件永远不会满足。"
+copy_link = "将链接复制到剪贴板"
+dangerous = "在 Cap CLI 中，此自动化会以你的权限运行命令或发送网络请求。请只使用你信任的值。"
+delete = "删除"
+description = "规则与 Cap CLI 共享。Cap 会保存这些规则，但暂时还不会运行自动化。"
+empty_description = "选择下方的模板一键开始，或从头创建你自己的自动化。"
+empty_title = "还没有自动化"
+enabled = "已启用"
+match_all = "全部满足"
+match_any = "满足任一"
+name = "名称"
+new = "新建自动化"
+no_presets = "还没有预设，请先在编辑器中创建一个。"
+only_if = "仅在以下情况下运行"
+open_in_browser = "在浏览器中打开"
+retry_save = "重新保存"
+run_through_shell = "通过 shell 运行"
+save_failed = "保存自动化失败。你的更改尚未保存。"
+start_from_scratch = "从头开始"
+summary_empty = "{trigger} → 还没有操作"
+templates_description = "一键添加现成的自动化，之后可随意调整。"
+templates_title = "模板"
+then = "然后执行"
+title = "自动化"
+when = "当发生以下情况时"
+
+[settings.automations.status]
+disabled_saved = "已停用 · 已保存"
+disabled_unsaved = "已停用 · 未保存"
+enabled_saved = "已启用 · 已保存"
+enabled_unsaved = "已启用 · 未保存"
+
+[settings.automations.field]
+arguments = "参数（以空格分隔）"
+body = "正文"
+body_template = "正文模板（可选）"
+compression = "压缩"
+destination = "目标文件夹（可选，留空 = 项目文件夹）"
+filename = "文件名模板（可选）"
+folder = "文件夹"
+format = "格式"
+frame_rate = "帧率"
+method = "方法"
+organization = "组织 ID（可选）"
+preset = "预设"
+program = "程序"
+resolution = "分辨率"
+source = "来源"
+title = "标题"
+url = "URL"
+
+[settings.automations.placeholder]
+organization_id = "组织 ID"
+project_folder = "项目文件夹"
+window_title = "例如 Slack"
+
+[settings.automations.clipboard]
+original = "原始捕获内容"
+rendered = "已编辑 / 已渲染"
+
+[settings.automations.target]
+area = "区域"
+display = "屏幕"
+window = "窗口"
+
+[settings.automations.compression]
+maximum = "最高"
+potato = "最低"
+social = "社交"
+web = "网页"
+
+[settings.automations.trigger.screenshot_taken]
+label = "截图完成时"
+noun = "截图"
+phrase = "截图完成"
+runs = "每次截图都会运行。"
+
+[settings.automations.trigger.studio_finished]
+label = "Studio 录制结束时"
+noun = "Studio 录制"
+phrase = "Studio 录制结束"
+runs = "每次 Studio 录制结束时都会运行。"
+
+[settings.automations.trigger.instant_finished]
+label = "Instant 录制结束时"
+noun = "Instant 录制"
+phrase = "Instant 录制结束"
+runs = "每次 Instant 录制结束时都会运行。"
+
+[settings.automations.trigger.recording_started]
+label = "录制开始时"
+noun = "录制开始"
+phrase = "录制开始"
+runs = "每次开始录制时都会运行。"
+
+[settings.automations.trigger.upload_completed]
+label = "上传完成时"
+noun = "上传"
+phrase = "上传完成"
+runs = "每次上传完成时都会运行。"
+
+[settings.automations.trigger.video_imported]
+label = "导入视频时"
+noun = "导入"
+phrase = "视频已导入"
+runs = "每次导入视频时都会运行。"
+
+[settings.automations.trigger.recording_deleted]
+label = "删除录制时"
+noun = "删除"
+phrase = "录制已删除"
+runs = "每次删除录制时都会运行。"
+
+[settings.automations.action.copy_to_clipboard]
+label = "复制到剪贴板"
+noun = "剪贴板"
+short = "复制到剪贴板"
+
+[settings.automations.action.save_to_location]
+label = "保存到指定位置"
+noun = "文件夹"
+short = "保存到文件夹"
+
+[settings.automations.action.export]
+label = "按配置导出"
+noun = "导出"
+short = "导出"
+
+[settings.automations.action.upload]
+label = "上传并复制链接"
+noun = "上传"
+short = "上传并复制链接"
+
+[settings.automations.action.reveal]
+label = "在文件管理器中显示"
+noun = "显示"
+short = "在文件管理器中显示"
+
+[settings.automations.action.open_file]
+label = "打开文件"
+noun = "打开"
+short = "打开文件"
+
+[settings.automations.action.ocr]
+label = "识别文字（OCR）到剪贴板"
+noun = "文字"
+short = "复制文字（OCR）"
+
+[settings.automations.action.notify]
+label = "显示通知"
+noun = "通知"
+short = "通知"
+
+[settings.automations.action.open_editor]
+label = "打开编辑器"
+noun = "编辑器"
+short = "打开编辑器"
+
+[settings.automations.action.skip_editor]
+label = "跳过编辑器（无界面）"
+noun = "跳过编辑器"
+short = "跳过编辑器"
+
+[settings.automations.action.apply_preset]
+label = "应用编辑器预设"
+noun = "预设"
+short = "应用预设"
+
+[settings.automations.action.run_command]
+label = "运行命令"
+noun = "命令"
+short = "运行命令"
+
+[settings.automations.action.webhook]
+label = "发送 Webhook"
+noun = "Webhook"
+short = "发送 Webhook"
+
+[settings.automations.action.delete_local_files]
+label = "删除本地文件"
+noun = "删除"
+short = "删除本地文件"
+
+[settings.automations.condition]
+capture_target = "捕获对象为"
+duration_at_least = "时长至少（秒）"
+duration_at_most = "时长至多（秒）"
+organization = "组织为"
+recording_mode = "录制模式为"
+window_title = "窗口标题包含"
+
+[settings.automations.template.copy_screenshot]
+description = "截图后即可直接粘贴。"
+name = "自动将新截图复制到剪贴板"
+
+[settings.automations.template.ocr_screenshot]
+description = "Cap 会识别截图中的文字并替你复制。"
+name = "从截图中提取文字"
+
+[settings.automations.template.save_screenshot]
+description = "将每张新截图直接保存到你选择的文件夹。"
+name = "把截图收进文件夹"
+
+[settings.automations.template.reveal_screenshot]
+description = "每张截图一拍下就在 Finder 中显示。"
+name = "跳转到每张新截图"
+
+[settings.automations.template.export_studio]
+description = "Studio 录制一结束就渲染出 MP4。"
+name = "录制结束后自动导出"
+
+[settings.automations.template.upload_share]
+description = "录制完成后，链接已在剪贴板中等你。"
+name = "上传并获取分享链接"
+
+[settings.automations.template.notify_upload]
+body = "你的录制已可以分享。"
+description = "录制可以分享时，桌面会轻轻提醒你。"
+name = "上传就绪时提醒我"
+
+[settings.automations.template.webhook_share]
+description = "将分享链接发送到 Slack、Discord 或你自己的 Webhook。"
+name = "分享内容时通知 Slack"
+
+
+[main]
+delete_recording_confirm = "确定要删除这段录制吗？"
+delete_screenshot_confirm = "确定要删除这张截图吗？"
+
+[main.clean_capture]
+title = "保持画面整洁"
+
+[main.clip]
+add_to_project = "添加到当前项目"
+record_new = "录制新片段"
+
+[main.device]
+camera = "摄像头"
+fallback_camera = "摄像头"
+heading = "选择摄像头和麦克风"
+microphone = "麦克风"
+no_camera = "无摄像头"
+no_cameras = "未找到摄像头"
+no_matching_cameras = "没有匹配的摄像头"
+no_matching_microphones = "没有匹配的麦克风"
+no_microphone = "无麦克风"
+no_microphones = "未找到麦克风"
+system_audio_off = "不录制系统音频"
+system_audio_on = "录制系统音频"
+
+[main.device.access]
+allow_access = "允许访问"
+camera_denied = "Cap 无法使用你的摄像头。请在系统设置中开启。"
+camera_needed = "Cap 需要你的同意才能使用摄像头。"
+microphone_denied = "Cap 无法使用你的麦克风。请在系统设置中开启。"
+microphone_needed = "Cap 需要你的同意才能使用麦克风。"
+open_system_settings = "打开系统设置"
+turn_on_in_settings = "在设置中开启"
+
+[main.device.format]
+apply_failed = "无法应用设备格式：{error}"
+applying = "正在应用格式..."
+available = "可用：{format}"
+camera_changed = "摄像头已更换或断开连接。请重新打开它的格式设置。"
+channels = { other = "{count} 声道" }
+current = "当前：{format}"
+default = "默认"
+loading = "正在加载格式..."
+mono = "单声道"
+preferred = "首选格式"
+save_failed = "无法保存设备首选格式。请重试。"
+stereo = "立体声"
+
+[main.device.pill]
+allow = "允许"
+allow_in_settings = "在设置中允许"
+asking = "正在请求…"
+not_connected = "未连接"
+off = "关"
+on = "开"
+
+[main.error]
+camera_only_needs_camera = "仅摄像头录制需要先选择摄像头。"
+copy = "复制错误信息"
+devices_not_ready = "录制设备尚未就绪。请打开录制器后重试。"
+title = "出了点问题"
+
+[main.header]
+changelog = "更新日志"
+help = "帮助与导览"
+recordings = "录制"
+screenshots = "截图"
+settings = "设置"
+teleprompter = "提词器"
+
+[main.library]
+clips = { other = "{count} 个片段" }
+copy_screenshot_failed = "无法复制截图"
+import_recordings = "导入"
+import_screenshots = "导入图片"
+importing = "正在导入"
+no_matching_recordings = "没有匹配的录制"
+no_matching_screenshots = "没有匹配的截图"
+no_recordings = "还没有录制"
+no_screenshots = "还没有截图"
+recordings_description = "你的屏幕录制会显示在这里。开始录制吧！"
+screenshots_description = "你的截图会显示在这里。截一张图开始吧！"
+view_all_recordings = "查看所有录制"
+view_all_screenshots = "查看所有截图"
+
+[main.mic_warning]
+body = "这段录制不会包含你的声音。请选择一个麦克风，或在没有麦克风的情况下继续。"
+dont_show_again = "不再显示"
+record_without = "不使用麦克风录制"
+save_failed = "无法保存你的偏好设置。请重试，或保持该选项未勾选。"
+title = "未检测到麦克风"
+
+[main.mode]
+info_tooltip = "录制模式说明"
+
+[main.mode.header]
+instant = "Instant 模式"
+screenshot = "截图模式"
+studio = "Studio 模式"
+
+[main.mode.hover]
+instant = "Instant 模式"
+instant_description = "无需渲染：边录边上传，停止的那一刻就能分享链接。"
+quality_settings = "画质设置"
+screenshot = "截图模式"
+screenshot_description = "截取静态图片并添加标注。"
+studio = "Studio 模式"
+studio_description = "保存到你的电脑，停止后打开编辑器。录制质量可在设置中选择。"
+
+[main.mode.info]
+current = "当前"
+title = "录制模式"
+
+[main.mode.name]
+instant = "Instant"
+screenshot = "截图"
+studio = "Studio"
+
+[main.plan]
+commercial = "商业版"
+personal = "个人版"
+
+[main.recording]
+cancel = "取消录制"
+paused_notice = "录制已暂停。继续录制前 Cap 会先隐藏。"
+resume = "继续"
+starting = "正在开始..."
+starts_in = "{remaining} 秒后开始录制"
+stop = "停止录制"
+stopping = "正在停止..."
+
+[main.recovery]
+discard = "丢弃"
+duration_minutes = "约 {minutes} 分钟"
+duration_minutes_seconds = "约 {minutes} 分 {seconds} 秒"
+duration_seconds = "约 {seconds} 秒"
+recover = "恢复"
+segments = { other = "{count} 个分段" }
+segments_with_duration = { other = "{count} 个分段 · {duration}" }
+title = "未完成的录制"
+
+[main.sign_in]
+message = "Instant 模式会边录边上传，停止的那一刻分享链接就已就绪。"
+not_now = "以后再说"
+open_browser_again = "重新打开浏览器"
+pending_message = "请在浏览器中完成 Cap 登录。完成后 Cap 会回到这里并打开录制器。"
+sign_in = "登录"
+timed_out = "登录超时。请重试。"
+title = "登录以使用 Instant 模式"
+use_studio = "使用 Studio"
+waiting = "正在等待浏览器"
+
+[main.storage]
+blocked = "录制所用磁盘仅剩 {available} GB 可用空间。请先释放空间，确保录制前至少有 512 MB 可用。"
+can_start = "录制所用磁盘仅剩 {available} GB 可用空间。如果空间过低，Cap 会自动停止并保留你的录制。"
+check_failed = "无法检查录制存储空间：{error}"
+record_anyway = "仍要录制"
+title = "存储空间不足"
+
+[main.target]
+area = "区域"
+camera_only = "仅摄像头"
+choose_display = "选择屏幕"
+choose_window = "选择窗口"
+display = "屏幕"
+heading = "选择捕获来源"
+no_displays = "未找到屏幕"
+no_matching_displays = "没有匹配的屏幕"
+no_matching_windows = "没有匹配的窗口"
+no_windows = "未找到窗口"
+window = "窗口"
+
+[controls]
+disk_full_resume = "磁盘空间不足，无法继续。请释放空间后重试，或按“停止”保存。"
+low_storage = "存储空间不足。Cap 即将停止以保存你的录制。"
+
+[controls.confirm]
+delete = "删除"
+delete_message = "确定要删除这段录制吗？"
+delete_title = "确认删除"
+restart = "重新开始"
+restart_message = "确定要重新开始录制吗？当前录制将被丢弃。"
+restart_title = "确认重新开始"
+
+[controls.pause]
+pause = "暂停录制"
+pausing = "正在暂停录制…"
+resume = "继续录制"
+resuming = "正在继续录制…"
+unconfirmed = "无法确认录制状态。请使用“停止”。"
+
+[controls.stop]
+error = "错误"
+paused = "已暂停"
+pausing = "暂停中…"
+resuming = "恢复中…"
+saving = "保存中…"
+starting = "正在开始"
+
+[camera]
+waiting_title = "正在等待摄像头权限"
+
+[camera.effects]
+blur_message = "你的摄像头画面未模糊。"
+blur_title = "背景模糊不可用"
+both_message = "你的摄像头画面未模糊，也未镜像。"
+both_title = "摄像头特效不可用"
+mirror_message = "你的摄像头预览未镜像。"
+mirror_title = "镜像不可用"
+
+[camera.issue]
+access_message = "点击以在系统设置中允许 Cap 使用你的摄像头。"
+access_title = "需要摄像头权限"
+generic = "无法启动所选摄像头。请选择其他摄像头，或重新连接此摄像头。"
+invalid_format = "此摄像头未提供可用的捕获格式。"
+not_found = "此摄像头已不可用。请检查它是否已连接，并已在系统权限中允许。"
+start_failed = "系统无法启动此摄像头。它可能不可用，或正被其他应用使用。"
+timeout = "未从此摄像头收到任何画面。它可能已关闭、断开连接、被遮挡，或正被其他应用使用。"
+unavailable_title = "摄像头不可用"
+
+[camera.blur]
+light = "轻"
+heavy = "强"
+cutout = "抠像"
+
+[onboarding.customize]
+footer = "以上内容都可以随时在设置中更改"
+subtitle = "从键盘快捷键到存储，一切皆可自定义。Cap 会适应你的工作方式。"
+title = "打造你的专属 Cap"
+
+[onboarding.customize.domain]
+description = "分享链接使用你自己的域名，而不是 cap.so"
+title = "自定义域名"
+
+[onboarding.customize.preferences]
+description = "帧率、画质、倒计时、光标特效等"
+title = "录制偏好"
+
+[onboarding.customize.s3]
+description = "连接你自己的 S3 兼容存储桶，完全掌控你的录制"
+title = "自定义 S3 存储"
+
+[onboarding.customize.shortcuts]
+description = "用于录制、截图和切换模式的全局快捷键"
+title = "键盘快捷键"
+
+[onboarding.demo]
+background = "背景"
+copied = "已复制！"
+copied_to_clipboard = "已复制到剪贴板"
+copy = "复制"
+editor = "Cap 编辑器"
+export = "导出"
+export_complete = "导出完成！"
+exporting = "正在导出..."
+link_ready = "链接已可分享！"
+save = "保存"
+start_recording = "开始录制"
+stopped = "已停止"
+style = "样式"
+
+[onboarding.demo.steps]
+beautify = "美化"
+edit = "编辑"
+record = "录制"
+select_area = "选择区域"
+share_link = "分享链接"
+stop = "停止"
+
+[onboarding.error]
+save_progress = "无法保存引导进度。请重试。"
+save_sound = "无法保存声音偏好设置。"
+
+[onboarding.faq]
+pricing = "查看套餐价格"
+pricing_link = "查看套餐价格 ↗"
+subtitle = "开始使用前需要了解的一切。"
+title = "常见问题"
+
+[onboarding.faq.free]
+answer = "Cap 个人使用免费。团队和商业用途请查看我们的付费套餐。"
+question = "Cap 可以免费使用吗？"
+
+[onboarding.faq.instant_vs_studio]
+answer = "Instant 模式边录边上传，停止录制后就能立即拿到分享链接。Studio 模式在本地以完整画质录制，分享前可以添加背景、特效等进行编辑。"
+question = "Instant 和 Studio 有什么区别？"
+
+[onboarding.faq.sharing]
+answer = "在 Instant 模式下，停止录制时会自动生成分享链接。在 Studio 模式下，导出编辑好的视频，然后通过 Cap 云分享或保存在本地。"
+question = "如何分享？"
+
+[onboarding.faq.shortcuts]
+answer = "随时前往“设置 → 快捷键”，自定义所有键盘快捷键。"
+question = "以后可以更改快捷键吗？"
+
+[onboarding.faq.storage]
+answer = "所有录制都保存在你电脑本地。在 Instant 模式下，它们还会上传到 Cap 云以便分享。你可以在设置中管理存储。"
+question = "我的录制保存在哪里？"
+
+[onboarding.modes.instant]
+description = "边录制边上传。停止录制即可立刻获得分享链接，无需等待。"
+feature_1 = "即时分享链接"
+feature_2 = "后台上传"
+feature_3 = "AI 转写与摘要"
+feature_4 = "浏览器播放"
+tagline = "几秒内录制并分享"
+title = "Instant 模式"
+
+[onboarding.modes.screenshot]
+description = "一个快捷键即可截图，添加标注和漂亮的背景，然后立即分享或复制。"
+feature_1 = "快捷键一键截图"
+feature_2 = "标注与绘图工具"
+feature_3 = "漂亮的背景"
+feature_4 = "复制、保存或分享"
+tagline = "即时截图与美化"
+title = "截图模式"
+
+[onboarding.modes.studio]
+description = "在本地以完整画质录制，然后用内置编辑器添加背景、边距、光标特效等。"
+feature_1 = "完整画质本地录制"
+feature_2 = "内置编辑器与特效"
+feature_3 = "自定义背景与边距"
+feature_4 = "准备好后导出或分享"
+tagline = "专业编辑工具"
+title = "Studio 模式"
+
+[onboarding.nav]
+back = "←  返回"
+continue_to_cap = "继续使用 Cap"
+keyboard_hint = "按 Enter ↵ 或使用 ← → 方向键"
+next = "继续"
+permissions_needed = "请授予所需权限以继续"
+relaunch = "重新启动 Cap"
+skip = "跳过导览"
+start = "开始使用 Cap"
+
+[onboarding.overview]
+subtitle = "无论你需要速度、专业画质，还是快速截图，Cap 都有对应的模式。"
+title = "一个应用，满足所有工作流"
+
+[onboarding.toggle]
+subtitle = "在 Cap 主窗口中单击即可切换模式。"
+title = "随时切换模式"
+
+[onboarding.welcome]
+click_or_press = "点击此处，或按下"
+get_started = "开始使用"
+space_key = "空格"
+tagline = "人人可用的开源屏幕分享应用。"
+
+[menu.update]
+badge_progress = "v{version} · {percent}%"
+badge_version = "v{version}"
+check = "检查更新"
+download = "下载更新…"
+checking = "正在检查更新…"
+downloading = "正在下载更新…"
+restart = "重新启动以更新…"
+
+[settings.general.updates.download_policy]
+auto = "自动"
+description = "选择 Cap 是否自动下载更新。"
+label = "更新下载"
+manual = "先询问"
+never = "从不"
+
+[auth]
+sign_in_failed = "登录失败"
+
+[diagnostics]
+already_running = "已有一项诊断正在运行。"
+mode_both = "两者"
+
+[diagnostics.error]
+create_folder = "无法创建诊断文件夹：{error}"
+exited = "自检已退出，状态：{status}"
+no_output = "自检没有产生输出流"
+serialize = "无法序列化报告：{error}"
+start_failed = "无法启动 {program}：{error}"
+upload_logs = "无法上传日志：{error}"
+upload_status = "上传失败，状态：{status}"
+wait_failed = "无法等待自检结束：{error}"
+write_failed = "无法写入 {path}：{error}"
+
+[diagnostics.stage]
+analyzing = "正在分析录制..."
+analyzing_instant = "正在分析 Instant 录制..."
+analyzing_studio = "正在分析 Studio 录制..."
+cancelling = "正在取消..."
+collecting = "正在收集系统信息..."
+done = "正在完成同步测试..."
+exporting = "正在导出录制..."
+exporting_instant = "正在导出 Instant 录制..."
+exporting_studio = "正在导出 Studio 录制..."
+finalizing = "正在完成录制..."
+finalizing_instant = "正在完成 Instant 录制..."
+finalizing_studio = "正在完成 Studio 录制..."
+pattern = "正在播放测试图案..."
+pattern_instant = "正在播放测试图案（Instant）..."
+pattern_studio = "正在播放测试图案（Studio）..."
+preparing = "正在准备测试..."
+preparing_instant = "正在准备 Instant 测试..."
+preparing_studio = "正在准备 Studio 测试..."
+recording = "正在录制测试..."
+recording_instant = "正在录制 Instant 测试..."
+recording_studio = "正在录制 Studio 测试..."
+starting = "正在启动诊断..."
+
+[dialog]
+no_microphone_body = "此录制将不包含你的声音。"
+open_recording_failed = "无法打开此录制：{error}"
+
+[dialog.capture]
+approve_shortcut = "请批准一个录制快捷键，或在 Cap 停止托盘图标出现时点击它。录制尚未开始。"
+area_unavailable = "所选区域已变化或不再可用。请重新选择。"
+camera_needs_x11 = "在 Linux 上，Instant 摄像头叠加层需要 X11 桌面"
+camera_notice = "Cap 将隐藏摄像头预览和录制控件。所选摄像头会继续作为单独的可编辑轨道录制。"
+camera_notice_instant = "Cap 将隐藏预览和控件。所选摄像头会以所选的形状和效果显示在其预览位置。请让整个预览保持在捕获区域内。打开 Cap 会先停止此 Instant 录制，然后再显示控件。"
+camera_outside_area = "开始 Instant 录制前，请将整个摄像头预览移到捕获区域内"
+camera_preview_closed = "Instant 录制前，请先打开所选摄像头的预览"
+cleanup_incomplete = "录制清理未完成：{error}。无法开始新的录制。"
+devices_changed = "所选设备已更改。请重新开始以确认新的录制输入。"
+devices_changed_before_start = "录制开始前所选设备已更改。请重新开始以确认输入。"
+shortcut_conflict = "Ctrl+Shift+F9 已分配给另一个 Cap 操作。请在录制前更改该快捷键。"
+shortcut_description = "开始或停止此 Cap 录制"
+shortcut_hint = "按下并松开 {shortcut} 开始录制。再次使用同一快捷键即可停止。此临时快捷键不会更改你的设置。"
+tray_stop_hint = "点击 Cap 的“停止”托盘图标即可开始。再次点击同一图标即可停止。在你使用该控件之前，录制不会开始。"
+window_unavailable = "所选窗口已不可用。请重新选择。"
+
+[dialog.clipboard]
+copy_file = "无法将文件复制到剪贴板：{error}"
+copy_file_failed = "无法将文件复制到剪贴板"
+copy_image = "无法将图像复制到剪贴板：{error}"
+copy_image_failed = "无法将图像复制到剪贴板"
+not_a_file = "只能将文件复制到剪贴板"
+unavailable = "剪贴板不可用"
+unavailable_error = "剪贴板不可用：{error}"
+
+[dialog.delete_recording]
+already_deleting = "此录制正在删除中。"
+close_failed = "无法关闭编辑器：{error}"
+editor_changed = "确认删除期间编辑器发生了变化。录制未被删除。"
+editor_closed = "编辑器已关闭。录制未被删除。"
+failed = "删除录制失败：{error}"
+failed_title = "无法删除录制"
+finishing_body = "Cap 正在等待录制清理完成，然后再完成此次删除。"
+finishing_title = "删除仍在进行中"
+in_use = "此录制仍在使用中。请完成或取消其上传后重试：{error}"
+outside_library = "此录制不在录制库中。其文件未被更改。"
+recording_active = "请先完成或取消录制，再删除此项目。"
+retained_title = "录制已保留"
+
+[dialog.file]
+audio_filter = "音频"
+busy = "已有一个文件对话框处于打开状态。请先完成或取消它，然后再试。"
+export_filter = "导出"
+failed = "文件对话框无法完成：{error}"
+images_filter = "图像"
+unavailable_title = "文件对话框不可用"
+unconfirmed = "Cap 无法确认文件对话框已关闭。请关闭所有剩余的文件对话框并重启 Cap，然后再试。"
+
+[dialog.mode_select]
+instant = "通过链接即时分享。边录边上传。"
+screenshot = "即时截图并添加标注。"
+studio = "最高画质的本地录制，便于稍后编辑。"
+subtitle = "选择你想如何捕获屏幕"
+title = "选择录制模式"
+
+[dialog.storage]
+stopped_kept = "存储空间不足，录制已停止。录制文件已保留。请释放空间，然后在下方恢复录制。"
+stopped_saved = "存储空间不足，录制已停止。你的录制已保存。"
+stopping = "存储空间不足。正在停止并保存你的录制…"
+
+[dialog.teleprompter]
+cue_markers = "提示标记"
+hidden = "此窗口不会出现在 Cap 录制中"
+mirror = "镜像文字"
+paused = "滚动已随录制暂停"
+placeholder = "粘贴或输入你的脚本…"
+words_per_minute = "{wpm} 字/分钟"
+
+[import]
+error_title = "导入错误"
+image_failed = "无法导入图像：{error}"
+unsupported = "不支持的媒体文件。"
+video_failed = "无法导入视频：{error}"
+
+[import.filter]
+image = "图像文件"
+media = "媒体文件"
+video = "视频文件"
+
+[import.progress]
+analyzing = "正在分析视频文件..."
+complete = "导入完成！"
+converting = "正在转换视频... {percent}%"
+image = "正在导入图像..."
+metadata = "正在创建项目元数据..."
+starting = "正在开始转换..."
+
+[overlay]
+display_fallback = "显示器 {id}"
+countdown_title = "录制倒计时"
+countdown_body = "按下“开始录制”后，等待几秒再开始录制。"
+mode_title = "更改录制模式"
+mode_body = "Instant 会在你停止录制的那一刻给你一个分享链接。Studio 以完整画质录制，方便后期编辑。"
+
+[overlay.area]
+draw = "绘制一个区域"
+free_ratio = "自由"
+hint = "点击并拖动以选择区域"
+minimum_size = "最小尺寸为 {width} x {height}"
+too_small = "{width} x {height} 太小"
+more_ratios_title = "更多宽高比"
+more_ratios_body = "将区域锁定为 4:3、9:16 或 21:9 等比例。"
+reset_title = "重置选区"
+reset_body = "清除该区域，以便重新绘制。"
+fill_title = "填满屏幕"
+fill_body = "保持比例，将区域扩大到整个屏幕。"
+fit_window_hint = "或点击一个窗口，让区域与其贴合"
+drag_to_move = "拖动以移动"
+locked = "已锁定"
+lock_title = "锁定区域"
+lock_body = "保留此区域供下次使用，并防止误拖动将其改变。"
+lock_needs_area = "请先绘制一个区域，然后再锁定。"
+unlock_title = "解锁区域"
+unlock_body = "允许再次移动、调整大小或重新绘制该区域。"
+locked_title = "区域已锁定"
+locked_body = "点击即可解锁，以便移动、调整大小或重新绘制。"
+
+[overlay.camera_only]
+description = "仅使用摄像头和麦克风录制"
+select_camera = "请选择一个摄像头"
+
+[overlay.device]
+camera_allow = "允许访问摄像头…"
+camera_turn_on = "在设置中开启摄像头访问…"
+microphone_allow = "允许访问麦克风…"
+microphone_turn_on = "在设置中开启麦克风访问…"
+
+[overlay.start]
+instant = "Instant 模式：录制分享链接"
+instant_sign_in = "Instant 模式：登录后即可即时录制"
+sign_in = "登录后使用"
+start_recording = "开始录制"
+studio = "Studio 模式：在本地录制和编辑"
+take_screenshot = "截图"
+
+[overlay.window]
+size_title = "更改窗口大小"
+size_body = "在录制前将窗口调整为某个比例或精确尺寸。"
+size_needs_accessibility_title = "调整大小需要辅助功能权限"
+size_needs_accessibility_body = "在系统设置中为 Cap 打开辅助功能，即可调整其他应用的窗口大小。"
+size_unavailable_title = "无法调整大小"
+size_unavailable_body = "Wayland 不允许应用调整其他应用的窗口大小。"
+focus_title = "聚焦模式"
+focus_on = "将只录制此窗口"
+focus_off = "只录制此窗口"
+focus_enable = "开启聚焦模式"
+focus_disable = "关闭聚焦模式"
+focus_body = "只录制此窗口内的内容。其他窗口（即使在它上方）和屏幕的其余部分都不会出现在视频中。"
+focus_body_instant_camera = "使用摄像头时，Instant 仍会录制屏幕区域，以便摄像头画面保留在视频中。"
+center_title = "在屏幕上居中"
+center_description = "选择窗口时将其移到屏幕中央"
+
+[permission.guide]
+accessibility_body = "将它拖放到上方的“辅助功能”列表中，然后确认它的开关已打开。"
+screen_body = "将它拖放到上方的“录屏与系统录音”列表中，然后确认它的开关已打开。"
+title = "将 Cap 拖到列表中"
+
+[permission.name]
+accessibility = "辅助功能"
+camera = "摄像头"
+microphone = "麦克风"
+screen_recording = "屏幕录制"
+
+[permission.onboarding]
+open_settings_again = "再次打开系统设置"
+skip = "暂时跳过"
+switch_on_title = "在系统设置中打开 Cap"
+
+[permission.onboarding.accessibility]
+allow = "允许辅助功能"
+body = "辅助功能让 Cap 能看到你的点击和光标（仅限这台 Mac），这样自动缩放就知道该看哪里。"
+done_body = "自动缩放可以跟随你的点击了。"
+done_title = "辅助功能已开启"
+title = "让 Cap 跟随你的光标"
+
+[permission.onboarding.all_set]
+body = "Cap 已获得所需的一切。接下来，快速了解它能做什么。"
+regained = "谢谢。Cap 可以再次录制了。"
+title = "一切就绪"
+
+[permission.onboarding.camera]
+allow = "允许摄像头"
+body = "在录制画面的一角显示你自己。不需要的话可以跳过。"
+done_body = "你可以在任何录制中加入摄像头画面。"
+done_title = "摄像头已开启"
+title = "让 Cap 看到你"
+
+[permission.onboarding.checklist]
+lede = "macOS 会先请你允许几项权限，只需一分钟。"
+regained_lede = "系统设置中有一项权限被关闭了。请重新开启以继续录制。"
+regained_title = "Cap 需要重新获得一项权限"
+title = "先来设置 Cap"
+
+[permission.onboarding.hint]
+drag_into_list = "将 Cap 从系统设置下方的面板拖到列表中。已经在列表里了？直接打开即可。"
+find_in_list = "在列表中找到 Cap 并打开。如果 macOS 先弹出了询问，请选择“打开系统设置”。"
+no_prompt = "没有出现提示？请在系统设置中打开 Cap。"
+open_settings = "打开系统设置，在列表中找到 Cap 并打开。"
+turned_off = "它之前被关闭了，请在系统设置中打开 Cap，或暂时跳过。"
+
+[permission.onboarding.microphone]
+allow = "允许麦克风"
+body = "在录制中加入你的声音。你可以先跳过，之后再开启。"
+done_body = "你的声音可以出现在录制中了。"
+done_title = "麦克风已开启"
+title = "让 Cap 听到你"
+
+[permission.onboarding.relaunch]
+body = "Cap 重启后，macOS 会开启屏幕录制。你会回到这里继续。"
+button = "重新启动"
+hint = "已经打开但仍在等待？重启 Cap 以生效。"
+later = "macOS 会在 Cap 重启后应用此设置。你可以在这里完成后再重启。"
+title = "重启一次就好"
+
+[permission.onboarding.screen]
+allow = "允许屏幕录制"
+body = "屏幕录制权限让 Cap 能捕获你的显示器、窗口和系统音频。"
+done_body = "Cap 可以捕获你的屏幕了。"
+done_title = "屏幕录制已开启"
+title = "让 Cap 看到你的屏幕"
+
+[permission.onboarding.status]
+allowed = "已允许"
+off = "已在系统设置中关闭"
+optional = "可选"
+required = "必需"
+skipped = "暂时跳过"
+
+[permission.onboarding.waiting]
+prompt = "在 macOS 提示中选择“允许”"
+system_settings = "正在等待系统设置"
+
+[screenshot_editor]
+loading_preview = "正在加载预览..."
+zoom_in = "放大"
+zoom_out = "缩小"
+
+[screenshot_editor.annotation]
+default_text = "文本"
+done = "完成"
+fill = "填充"
+intensity = "强度"
+mask_style = "样式"
+pixelate = "像素化"
+stroke = "描边"
+transparent = "透明"
+
+[screenshot_editor.aspect]
+auto = "自动"
+classic = "经典 ⋅4:3"
+square = "方形 ⋅1:1"
+tall = "竖版 ⋅3:4"
+vertical = "竖屏 ⋅9:16"
+wide = "宽屏 ⋅16:9"
+
+[screenshot_editor.background]
+animated_gradient = "截图中的动态渐变会渲染为静态图像。选择其他背景即可替换。"
+blur_title = "背景模糊"
+choose_image = "点击选择或拖放图像"
+color = "颜色"
+gradient = "渐变"
+image = "图像"
+image_files = "图像"
+image_title = "背景图像"
+wallpaper = "壁纸"
+
+[screenshot_editor.corner]
+rounded = "圆角"
+squircle = "超椭圆"
+style = "圆角样式"
+
+[screenshot_editor.crop]
+full = "全部"
+loading_frame = "正在加载画面…"
+position = "位置"
+
+[screenshot_editor.error]
+encode = "无法编码导出的截图：{error}"
+load_meta = "无法加载截图元数据：{error}"
+load_metadata = "无法加载截图元数据：{error}"
+no_image = "在 {path} 中找不到 PNG"
+not_screenshot = "这不是截图包"
+open_image = "无法打开图像：{error}"
+renderer_failed = "GPU 渲染器无法启动：{error}"
+renderer_not_running = "截图渲染器未运行"
+renderer_stopped = "渲染器在导出完成前停止了"
+save_project = "保存项目时出错：{error}"
+serialize = "无法序列化截图配置：{error}"
+sign_in_to_share = "请在浏览器中登录 Cap，然后再次分享"
+too_large = "图像尺寸超过上限：{width}x{height}"
+upgrade_required = "此功能需要升级套餐"
+upload_task = "上传任务失败：{error}"
+
+[screenshot_editor.header]
+aspect_ratio = "宽高比"
+copy = "复制到剪贴板"
+crop_image = "裁剪图像"
+more_actions = "更多操作"
+
+[screenshot_editor.layers]
+empty = "还没有图层"
+empty_hint = "使用上方的工具添加标注"
+reorder_hint = "拖动以重新排序 • 顶部 = 最前"
+title = "图层"
+
+[screenshot_editor.menu]
+delete = "删除"
+open_folder = "打开文件夹"
+
+[screenshot_editor.share]
+create_link = "创建分享链接"
+preparing = "正在准备上传"
+rendering = "正在渲染截图"
+uploading = "正在上传截图"
+
+[screenshot_editor.style]
+advanced_shadow = "高级阴影设置"
+background = "背景"
+blur = "模糊"
+border = "边框"
+color = "颜色"
+corner_rounding = "圆角"
+opacity = "不透明度"
+padding = "边距"
+rounding = "圆角"
+shadow = "阴影"
+size_label = "大小"
+width = "宽度"
+
+[screenshot_editor.toast]
+copied = "截图已复制到剪贴板！"
+link_copied = "分享链接已复制到剪贴板"
+saved = "截图已保存！"
+
+[screenshot_editor.tool]
+arrow = "箭头"
+circle = "圆形"
+draw = "绘制"
+mask = "遮罩"
+rectangle = "矩形"
+select = "选择"
+text_label = "文本"
+
+[transcription.download]
+complete = "下载完成"
+failed = "下载失败：{error}"
+file_progress = "正在下载 {file}：{percent}%"
+preparing = "正在准备下载模型"
+progress = "正在下载模型：{percent}%"
+
+[transcription.error]
+intel_mac = "Parakeet 模型不支持 Intel Mac。请改用 Whisper 模型"
+model_load = "无法加载字幕模型。请尝试重新下载"
+model_missing = "未找到字幕模型。请先下载"
+no_audio = "视频文件中没有音频"
+unsupported_language = "“推荐”和“高精度”模型只能转写英语和其他 24 种欧洲语言。要为此语言生成字幕，请下载“小”或“中”模型"
+
+[upload.status]
+failed = "上传需要处理"
+paused = "上传已暂停"
+prepared = "已准备上传"
+processing = "正在处理上传"
+retrying = "将重试上传"
+sign_in = "登录以重试上传"
+uploaded = "已上传"
+uploading = "正在上传"
+
+[editor.audio.library]
+add_hint = "为视频添加音频、音乐或其他声音"
+add_title = "添加音频"
+change_hint = "为此分段选择其他音轨"
+change_title = "更换音频"
+done = "完成"
+import = "导入文件"
+
+[editor.color]
+apply_to_cursor = "应用到光标"
+fine_tune = "微调颜色"
+title = "色彩校正"
+
+[editor.color.preset.cinematic]
+description = "青绿色阴影与橙色高光，带轻微颗粒"
+name = "电影感"
+
+[editor.color.preset.dreamy]
+description = "柔和轻盈的粉彩，黑色提亮"
+name = "梦幻"
+
+[editor.color.preset.frost]
+description = "清冷通透的色调，颜色柔和"
+name = "冰霜"
+
+[editor.color.preset.golden]
+description = "温暖的黄金时刻光晕"
+name = "金色"
+
+[editor.color.preset.midnight]
+description = "深沉忧郁的青绿色，颜色低调"
+name = "午夜"
+
+[editor.color.preset.noir]
+description = "高对比度黑白，带浓重颗粒"
+name = "黑色电影"
+
+[editor.color.preset.none]
+description = "原始颜色，未调色"
+name = "无"
+
+[editor.color.preset.vintage]
+description = "褪色暖调胶片感，对比柔和"
+name = "复古"
+
+[editor.color.preset.vivid]
+description = "饱和度与对比度大幅提升"
+name = "鲜艳"
+
+[editor.color.slider]
+contrast = "对比度"
+exposure = "曝光"
+fade = "褪色"
+grain = "颗粒"
+saturation = "饱和度"
+split_tone = "分离色调"
+strength = "强度"
+temperature = "色温"
+tint = "色调"
+vignette = "暗角"
+
+[editor.crop]
+aspect_ratio = "宽高比"
+center = "居中"
+dimensions = "大小"
+editing_style = "仅编辑样式 {number}"
+editing_style_override = "仅编辑样式 {number} · 保存后将启用其背景覆盖"
+free = "自由"
+full = "全部"
+hint = "拖动以移动 · 方向键微调 · 按住 {key} 跳过吸附"
+loading_frame = "正在加载画面…"
+position = "位置"
+preview = "预览"
+rendering_preview = "正在渲染预览…"
+snap_to_ratios = "吸附到比例"
+style_changed = "裁剪期间此样式已更改。请取消并重新打开裁剪。"
+title = "裁剪"
+
+[editor.panel]
+delete = "删除"
+done = "完成"
+duration = "时长"
+edge_in = "入场"
+edge_out = "出场"
+enabled = "已启用"
+fade_duration = "淡入淡出时长"
+flip_horizontally = "水平翻转"
+flip_vertically = "垂直翻转"
+name = "名称"
+opacity = "不透明度"
+
+[editor.panel.audio]
+change = "更换"
+change_hint = "点击以更换音轨"
+fade_in = "淡入"
+fade_out = "淡出"
+fallback_name = "音频"
+title = "音频 {number}"
+volume = "音量"
+
+[editor.panel.camera3d]
+already_still = "已是静止镜头"
+amount = "强度"
+angles = "角度"
+auto_scene = "自动场景"
+auto_scene_tooltip = "重新生成轨道上的所有 3D 镜头"
+bokeh = "焦外光斑"
+camera = "摄像机"
+delete_tooltip = "删除此镜头"
+depth_blur = "景深模糊"
+distance = "距离"
+drag_to_orbit = "拖动以环绕"
+ease_in = "缓入"
+ease_out = "缓出"
+end_same_as_start = "结束 · 与开始相同"
+fine_tune = "微调"
+focus = "焦点"
+header = "3D 镜头 · {look} · {duration} 秒"
+hold_opening = "整个镜头保持起始姿态"
+lens = "视角"
+look_title = "取景"
+motion_style = "运动方式"
+moves = "运镜"
+nothing_to_swap = "静止镜头无需交换"
+play_shot = "播放"
+play_shot_tooltip = "播放此镜头"
+pose_end = "结束 · {time}"
+pose_start = "开始 · {time}"
+reset_camera = "重置摄像机"
+roll = "滚转"
+rotate_x = "旋转 X"
+rotate_y = "旋转 Y"
+shift_x = "平移 X"
+shift_y = "平移 Y"
+shots = { other = "{count} 个镜头" }
+still_shot = "静止镜头"
+swap = "交换开始和结束"
+timing_advanced = "时间与高级"
+timing_summary = "{easing} · 视角 {fov}"
+
+[editor.panel.camera3d.blur]
+angle = "角度"
+falloff = "衰减"
+focus_size = "焦点大小"
+focus_x = "焦点 X"
+focus_y = "焦点 Y"
+position = "位置"
+scan = "扫描"
+strength = "强度"
+
+[editor.panel.camera3d.easing]
+ease_in = "缓入"
+ease_out = "缓出"
+linear = "线性"
+smooth = "平滑"
+
+[editor.panel.camera3d.focus_mode]
+directional = "定向"
+radial = "径向"
+tilt_shift = "移轴"
+
+[editor.panel.camera3d.look]
+center = "居中"
+close_up = "特写"
+drift_down = "缓缓下移"
+glide_across = "横向滑过"
+low_angle = "低角度"
+perspective = "透视"
+pull_back = "后拉"
+rising_sweep = "上升扫过"
+slide_by = "滑过"
+spotlight = "聚光"
+tilt_away = "倾斜远离"
+top_down = "俯视"
+unfold = "展开"
+
+[editor.panel.camera3d.sequence]
+product_tour = "产品导览"
+punch_in = "推近"
+showcase = "展示"
+
+[editor.panel.camera3d.shot]
+custom = "自定义运镜"
+still = "静止镜头"
+
+[editor.panel.caption]
+title = "字幕 {number}"
+
+[editor.panel.font]
+system_mono = "系统等宽"
+system_sans = "系统无衬线"
+system_serif = "系统衬线"
+
+[editor.panel.font_weight]
+black = "特黑"
+bold = "粗体"
+custom = "自定义（{weight}）"
+extra_bold = "特粗"
+light = "细体"
+medium = "中等"
+regular = "常规"
+semibold = "半粗体"
+
+[editor.panel.image]
+arrange = "在画布上排列"
+arrange_help = "拖动图片即可移动。拖动角可调整大小，或使用下方的旋转控件进行旋转。"
+center = "在画布上居中"
+lock_aspect = "锁定宽高比"
+missing = "图片文件缺失。替换图片即可恢复此分段，并保留其时间和变换。"
+replace = "替换图片"
+rotation = "旋转"
+rounding = "圆角"
+
+[editor.panel.keyboard]
+title = "键盘 {number}"
+
+[editor.panel.mask]
+blur = "模糊"
+effect = "效果"
+highlight = "突出显示"
+outside_darkness = "外部暗度"
+pixel_size = "像素大小"
+pixelate = "像素化"
+sensitive = "敏感内容"
+title = "遮罩 {number}"
+
+[editor.panel.scene]
+camera_layout = "摄像头布局"
+camera_position = "摄像头位置"
+camera_zoom = "摄像头缩放"
+screen_position = "屏幕位置"
+screen_zoom = "屏幕缩放"
+transition = "过渡"
+
+[editor.panel.scene.description]
+camera_only = "仅显示摄像头画面"
+default = "同时显示屏幕和摄像头"
+floating = "屏幕和摄像头以圆角卡片的形式并排浮在背景上"
+hide_camera = "仅显示屏幕录制"
+split_screen = "屏幕和摄像头并排显示（竖屏时自动上下排列）"
+
+[editor.panel.scene.mode]
+camera_only = "仅摄像头"
+default = "默认"
+floating = "悬浮"
+hide_camera = "隐藏摄像头"
+split_screen = "分屏"
+
+[editor.panel.style]
+camera_only_background = "仅摄像头背景"
+camera_only_help = "请使用仅摄像头场景。边距会显示摄像头周围的背景。"
+camera_only_padding = "仅摄像头边距"
+crop_height = "高度"
+crop_left = "左"
+crop_title = "屏幕裁剪（源像素）"
+crop_top = "上"
+crop_width = "宽度"
+edit_background = "编辑背景和边框"
+edit_camera = "编辑摄像头"
+edit_cursor = "编辑光标"
+help = "覆盖设置仅在此分段期间生效。启用一个分组即可复制其全局设置。"
+reset_crop = "重置裁剪"
+
+[editor.panel.text_animation]
+bounce = "弹跳"
+fade = "淡入淡出"
+letters = "逐字"
+none = "无"
+pop = "弹出"
+slide_down = "向下滑入"
+slide_left = "向左滑入"
+slide_right = "向右滑入"
+slide_up = "向上滑入"
+tracking = "字距"
+typewriter = "打字机"
+wipe = "擦除"
+words = "逐词"
+zoom = "缩放"
+
+[editor.panel.text_background]
+box_shape = "方框"
+highlight = "高亮"
+none = "无"
+pill = "胶囊"
+
+[editor.panel.text_layout]
+fullscreen = "全屏"
+overlay = "叠加"
+
+[editor.panel.text_preset.group]
+all = "全部"
+callouts = "标注"
+code = "代码"
+lower_thirds = "字幕条"
+statements = "要点"
+titles = "标题"
+
+[editor.panel.text_preset.name]
+caption = "说明文字"
+cinematic = "电影感"
+code = "代码"
+gradient = "渐变"
+headline = "大标题"
+highlight = "高亮"
+kicker = "引题"
+label = "标签"
+lower_third = "字幕条"
+name_tag = "姓名牌"
+neon = "霓虹"
+quote = "引言"
+stat = "大数字"
+sticker = "贴纸"
+title = "标题"
+typewriter = "打字机"
+
+[editor.panel.text_preset.sample]
+caption = "使用 Cap 录制"
+cinematic = "第一章"
+gradient = "精美文字"
+headline = "更快发布"
+highlight = "重点在这里"
+kicker = "新功能"
+label = "小贴士"
+name_tag = "Richie · 创始人"
+neon = "闪耀登场"
+quote = "“让一切毫不费力”"
+sticker = "砰！"
+title = "隆重推出 Cap"
+typewriter = "逐字输入中…"
+
+[editor.panel.text_segment]
+animation = "动画"
+background = "背景"
+color = "颜色"
+font = "字体"
+font_size = "大小"
+fullscreen_help = "显示文字时暂停视频，之后从暂停处继续播放。"
+glow = "发光"
+gradient = "渐变"
+layout = "布局"
+letter_spacing = "字间距"
+line_height = "行高"
+look = "外观"
+outline = "描边"
+screen_transition = "屏幕过渡"
+shadow = "阴影"
+style = "样式"
+title = "文本 {number}"
+
+[editor.panel.timing]
+end = "结束"
+start = "开始"
+title = "时间"
+to = "至"
+
+[editor.panel.zoom]
+amount = "缩放倍数"
+auto = "自动"
+auto_help = "自动缩放会跟随光标在屏幕上移动。"
+auto_locked = "自动模式需要捕获光标。请在“设置 → 通用”中开启“单独捕获光标（Studio）”。"
+how_it_works = "它是如何运作的？"
+manual = "手动"
+manual_help = "手动缩放会固定在你在下方选择的位置。"
+mixed = "不一致"
+mode = "缩放模式"
+positions_mixed = "这些片段缩放到不同位置。拖动可将它们全部移到同一位置。"
+title = "缩放 {number}"
+
+[editor.sidebar]
+desktop_import_failed = "无法导入桌面壁纸"
+importing_image = "正在导入图片…"
+
+[editor.sidebar.animated_gradient]
+add_colour = "添加颜色"
+colours = "颜色"
+delete = "删除"
+delete_failed = "无法删除此渐变。请重试。"
+fine_tune = "微调"
+limit_reached = { other = "最多可保存 {count} 个渐变。请删除一个后再添加。" }
+motion = "运动"
+name_placeholder = "为此渐变命名"
+name_required = "请输入此渐变的名称。"
+presets = "预设"
+randomize = "随机"
+remember_failed = "无法记住你的动态渐变设置。"
+remove_colour = "移除颜色"
+reset_tooltip = "重置微调设置"
+save_failed = "无法保存此渐变。请重试。"
+save_tooltip = "保存当前渐变"
+saved = "已保存"
+still = "静止"
+
+[editor.sidebar.animated_gradient.control]
+contrast = "对比度"
+curvature = "弯曲度"
+detail = "细节"
+direction = "方向"
+exposure = "曝光"
+flow_scale = "流动尺度"
+flow_strength = "流动强度"
+grain_amount = "颗粒数量"
+grain_size = "颗粒大小"
+highlights = "高光"
+motion_speed = "运动速度"
+relief = "浮雕"
+ripple_size = "波纹大小"
+shading = "明暗"
+vibrance = "自然饱和度"
+
+[editor.sidebar.animated_gradient.group]
+animation = "动画"
+colour = "颜色"
+flow = "流动"
+lighting = "光照"
+texture = "纹理"
+
+[editor.sidebar.background]
+title = "背景"
+
+[editor.sidebar.border]
+color = "边框颜色"
+opacity = "边框不透明度"
+title = "边框"
+width = "边框宽度"
+
+[editor.sidebar.corner]
+rounded = "圆角"
+squircle = "超椭圆"
+title = "圆角样式"
+
+[editor.sidebar.cursor]
+circle = "圆形"
+click_ripple = "点击波纹"
+color = "颜色"
+default = "默认"
+description_circle = "将所有光标形状替换为圆形。"
+description_default = "保留录制时的光标形状和外观。"
+description_macos = "经典 macOS 外观。自定义光标保留录制时的形状。"
+description_tahoe = "macOS Tahoe 外观。自定义光标保留录制时的形状。"
+description_windows = "Windows 外观。自定义光标保留录制时的形状。"
+duration = "时长"
+recorded = "录制时的光标"
+recorded_tooltip = "使用此光标录制"
+ripple_size = "大小"
+strength = "强度"
+
+[editor.sidebar.desktop]
+import = "导入桌面背景"
+importing = "正在导入..."
+prompt = "使用桌面上的壁纸"
+reimport = "重新导入"
+
+[editor.sidebar.gradient]
+angle = "角度"
+from = "起始"
+grain_scale = "颗粒大小"
+noise = "噪点"
+to = "结束"
+
+[editor.sidebar.image]
+prompt = "点击选择或拖放图片"
+
+[editor.sidebar.layout]
+background_blur = "背景模糊"
+custom_position = "自定义屏幕位置（在画布上拖动）"
+motion_blur = "运动模糊"
+padding = "边距"
+rounded_corners = "圆角"
+title = "布局"
+
+[editor.sidebar.notch]
+description = "在录制画面上绘制 MacBook 刘海。在带刘海的 Mac 上录制的内容会使用其自身的尺寸；否则请从下方的尺寸开始，再调整到匹配为止。"
+height = "刘海高度"
+position = "刘海位置"
+title = "MacBook 刘海"
+width = "刘海宽度"
+
+[editor.sidebar.shadow]
+advanced = "高级阴影设置"
+blur = "模糊"
+opacity = "不透明度"
+shadow_size = "大小"
+title = "阴影"
+
+[editor.sidebar.source]
+animated = "动态"
+color = "颜色"
+desktop = "桌面"
+gradient = "渐变"
+image = "图片"
+none = "无"
+wallpaper = "壁纸"
+
+[editor.sidebar.style_group]
+back = "返回样式"
+background = "背景和边框"
+camera = "摄像头"
+cursor = "光标"
+editing_note = "仅编辑此分段。全局设置不变。"
+title = "样式 {number} · {group}"
+
+[editor.sidebar.tab]
+audio = "音频"
+background = "背景"
+camera = "摄像头"
+captions = "字幕"
+cursor = "光标"
+keyboard = "键盘"
+
+[editor.sidebar.wallpaper_theme]
+blue = "蓝色"
+cities = "城市"
+dark = "深色"
+orange = "橙色"
+purple = "紫色"
+
+[editor.canvas]
+camera = "摄像头"
+camera_follows_zoom = "摄像头大小随缩放变化；拖动即可移动"
+edit_zoom = "编辑缩放"
+image = "图片"
+mask = "遮罩"
+screen = "屏幕"
+screen_locked = "缩放生效期间屏幕已锁定"
+text_item = "文字"
+
+[editor.clips]
+append_error = "无法添加片段：{message}"
+append_error_title = "录制错误"
+back = "返回编辑器"
+cap_filter = "Cap 录制"
+clip = "片段 {number}"
+empty_description = "录制或导入一个片段后，它会显示在这里。"
+empty_title = "还没有片段"
+import = "导入"
+import_error = "无法导入片段：{message}"
+import_error_title = "导入错误"
+import_existing = "已有的录制"
+import_mp4 = "MP4 视频…"
+importing = "正在导入…"
+mp4_filter = "MP4 视频"
+prepare_controls_failed = "无法准备录制控件：{error}"
+record_new = "录制新片段"
+save_before_recording_failed = "录制前无法保存当前项目：{error}"
+split = "拆分 {number}"
+title = "片段"
+
+[editor.clips.error]
+cancelled = "已取消导入"
+cannot_decode = "无法解码视频 {path}：{error}"
+in_use = "此录制正在使用中，无法导入：{error}"
+instant_source = "暂时无法将 Instant 录制导入项目"
+instant_target = "Instant 模式的录制无法编辑"
+into_itself = "无法将录制导入到它自身"
+missing_video = "缺少视频文件：{path}"
+no_duration = "导入的视频没有有效时长"
+not_a_project = "请选择一个 Cap 项目文件夹"
+source_empty = "源 Cap 项目没有录制分段"
+source_failed = "源 Cap 项目出错：{error}"
+source_recording = "源 Cap 项目仍在录制"
+source_unimportable = "源 Cap 项目没有可导入的录制分段"
+unfinished_target = "导入片段前，请先完成或恢复此录制"
+unsupported_video = "不支持的视频文件：{path}"
+
+[editor.export]
+back = "返回编辑器"
+existing_link_description = "重新上传会用你最新的编辑替换此链接中的视频。拥有链接的所有人都会看到更新后的版本。"
+existing_link_title = "更新现有链接"
+failed = "导出失败"
+fps = "{fps} FPS"
+frames = { other = "{rendered} / {count} 帧" }
+generating_preview = "正在生成预览…"
+link_unavailable_cursor = "仅导出光标时，只能保存到文件或剪贴板。"
+link_unavailable_transparent = "透明导出只能保存到文件或剪贴板。"
+organization = "组织"
+preview = "预览"
+preview_info = "这是从你的视频渲染出的一帧。调整设置即可查看最终导出的画质。"
+preview_unavailable = "预览不可用"
+reupload = "重新上传"
+reupload_tooltip = "将你最新的编辑上传到同一链接"
+reupload_transparent = "分享链接需要不透明的背景"
+sign_in_required = "你需要登录才能分享录制"
+task_failed = "导出任务失败"
+title = "导出"
+upgrade_message = "此功能需要升级套餐"
+upgrade_title = "需要升级"
+upload_failed = "无法上传录制"
+
+[editor.export.advanced]
+bits_per_pixel = "每像素比特数"
+cursor_only = "仅导出光标"
+cursor_only_description = "在透明背景上保留相同的光标移动和点击"
+custom_bitrate = "正在使用自定义码率"
+force_ffmpeg = "强制使用 FFmpeg 解码器"
+force_ffmpeg_description = "跳过硬件解码器（已启用自动回退）"
+title = "高级"
+transparent_mov = "导出为透明 MOV。文件较大，最适合合成或剪辑。"
+
+[editor.export.cta]
+cancel_sign_in = "取消登录"
+clipboard = "导出到剪贴板"
+create_link = "创建分享链接"
+file = "导出为文件"
+reupload = "重新上传到同一链接"
+sign_in = "登录以分享"
+
+[editor.export.destination]
+clipboard = "剪贴板"
+file = "文件"
+link = "分享链接"
+
+[editor.export.done]
+copy_link = "复制链接"
+instant_hint = "如果想在停止录制时立即获得链接，下次录制请使用 Instant 模式。"
+link_copied = "链接已复制"
+open_file = "打开文件"
+open_link = "打开链接"
+retry_copy = "重新复制"
+reuploaded = "你最新的编辑已在同一链接上就绪"
+uploaded = "你的录制已成功上传"
+
+[editor.export.estimate]
+gigabytes = "约 {value} GB"
+gigabytes_range = "约 {lower}–{upper} GB"
+hours = "约 {value} 小时"
+hours_range = "约 {lower}–{upper} 小时"
+megabytes = "约 {value} MB"
+megabytes_range = "约 {lower}–{upper} MB"
+minutes = "约 {value} 分钟"
+minutes_range = "约 {lower}–{upper} 分钟"
+seconds = "约 {value} 秒"
+seconds_range = "约 {lower}–{upper} 秒"
+under_megabyte = "< 1 MB"
+under_second = "< 1 秒"
+
+[editor.export.optimize]
+description = "用软件重新编码，文件小得多（较慢）"
+title = "优化文件大小"
+
+[editor.export.phase]
+clipboard_failed = "导出完成；复制到剪贴板失败"
+complete = "导出完成"
+copied = "已复制到剪贴板"
+copying_to_clipboard = "正在复制到剪贴板"
+rendering_cursor = "正在渲染光标轨道"
+rendering_gif = "正在渲染 GIF"
+rendering_video = "正在渲染视频"
+reupload_complete = "重新上传完成"
+reuploading = "正在重新上传到你的链接"
+saving_to_file = "正在保存到文件"
+starting = "正在准备导出"
+upload_complete = "上传完成"
+uploading = "正在创建分享链接"
+
+[editor.export.quality]
+larger = "文件更大"
+maximum = "最高"
+potato = "最低"
+smaller = "文件更小"
+social = "社交"
+web = "网页"
+
+[editor.export.resources]
+proceed = "仍然继续"
+title = "检查导出资源"
+
+[editor.export.section]
+destination = "目标"
+format = "格式"
+frame_rate = "帧率"
+quality = "画质"
+resolution = "分辨率"
+
+[editor.export.stats]
+calculating = "正在计算…"
+duration = "时长"
+estimated_size = "预计大小"
+export_time = "导出用时"
+output = "输出"
+output_value = "{width}×{height} · {fps} fps"
+refining_size = "正在精确估算大小…"
+refining_time = "正在精确估算用时…"
+unavailable = "不可用"
+
+[editor.export.turbo]
+title = "极速导出"
+description = "使用所有 CPU 核心和 GPU，大幅加快导出"
+warning = "导出完成前会占用全部 CPU、GPU 以及数倍的内存。其他应用可能会变慢，电脑也可能发热、风扇声变大。"
+
+[editor.modal]
+cancel_export = "取消导出"
+cancel_export_message = "确定要取消导出吗？"
+cancel_export_title = "取消导出？"
+keep_exporting = "继续导出"
+recording_retained = "录制已保留"
+
+[editor.tabs.audio]
+isolation_balanced = "均衡"
+isolation_balanced_description = "更清晰的人声分离，同时保留自然的声音细节。"
+isolation_light = "轻度"
+isolation_light_description = "保留更多原始人声和房间声音。"
+isolation_strong = "强力"
+isolation_strong_description = "为嘈杂环境提供更强分离。可能改变声音质感。"
+mic_volume = "麦克风音量"
+mute = "静音"
+stereo_mode = "麦克风立体声模式"
+studio_sound_description = "降低背景噪音并平衡你的音量。"
+studio_sound_save_failed = "无法保存 Studio Sound 默认设置"
+system_volume = "系统音频音量"
+title = "音频控制"
+use_for_new = "用于新的录制"
+
+[editor.tabs.audio.stereo]
+mono_left = "单声道 L"
+mono_right = "单声道 R"
+stereo = "立体声"
+
+[editor.tabs.camera]
+advanced_shadow = "高级阴影设置"
+background = "背景"
+corner_style = "圆角样式"
+custom_position = "自定义位置（在画布上拖动）"
+hide = "隐藏摄像头"
+keep_size_during_zoom = "缩放时保持原始大小"
+mirror = "镜像摄像头"
+position = "位置"
+reset = "重置"
+rounded_corners = "圆角"
+shadow = "阴影"
+shadow_blur = "模糊"
+shadow_opacity = "不透明度"
+shape_label = "形状"
+size_during_zoom = "缩放时的大小"
+size_label = "大小"
+title = "摄像头"
+
+[editor.tabs.camera.blur]
+heavy = "强模糊"
+light = "轻模糊"
+off = "关闭"
+remove = "移除背景"
+
+[editor.tabs.camera.shape]
+source = "原始"
+square = "方形"
+
+[editor.tabs.captions]
+active_word_highlight = "高亮当前单词"
+animation_section = "动画"
+animation_style = "动画样式"
+background_color = "背景颜色"
+background_opacity = "背景不透明度"
+background_settings = "背景设置"
+beta = "Beta"
+delete = "删除"
+deleting = "正在删除..."
+download = "下载“{model}”模型"
+download_note = "只需下载到你的系统一次。所有字幕都保存在本地。"
+downloading = "正在下载“{model}”模型... {percent}%"
+fade_duration = "淡入淡出时长"
+font_family = "字体"
+font_settings = "字体设置"
+font_weight = "字重"
+generate = "生成字幕"
+generate_failed = "无法生成字幕：{reason}"
+generating = "正在生成..."
+highlight_color = "高亮颜色"
+highlight_note = "这是 Cap 字幕的第一个版本。在某些情况下，当前单词高亮可能不准确。我们正在修复，修复会在后续版本中发布。"
+highlight_style = "高亮样式"
+horizontal_position = "水平位置"
+intel_unavailable = "Parakeet 字幕模型在 Intel Mac 上不可用。Whisper 模型仍可使用。"
+keep_open = "下载模型时请保持 Cap 打开。编辑器重新加载后会自动重新连接。"
+language_label = "语言"
+model_downloaded = "已下载“{model}”模型"
+model_label = "模型"
+position = "位置"
+regenerate = "重新生成字幕"
+size_label = "大小"
+style = "样式"
+text_color = "文字颜色"
+title = "字幕"
+uppercase = "大写"
+vertical_position = "垂直位置"
+
+[editor.tabs.captions.animation]
+bounce = "弹跳"
+none = "无"
+pop = "弹出"
+
+[editor.tabs.captions.highlight]
+color = "颜色"
+pill = "胶囊"
+
+[editor.tabs.captions.language]
+ar = "阿拉伯语"
+auto = "自动检测"
+bn = "孟加拉语"
+de = "德语"
+en = "英语"
+es = "西班牙语"
+fa = "波斯语"
+fr = "法语"
+gu = "古吉拉特语"
+he = "希伯来语"
+hi = "印地语"
+it = "意大利语"
+ja = "日语"
+ko = "韩语"
+mr = "马拉地语"
+nl = "荷兰语"
+pa = "旁遮普语"
+pl = "波兰语"
+pt = "葡萄牙语"
+ru = "俄语"
+sk = "斯洛伐克语"
+ta = "泰米尔语"
+te = "泰卢固语"
+tr = "土耳其语"
+ur = "乌尔都语"
+zh = "中文"
+
+[editor.tabs.captions.model]
+high_accuracy = "高精度"
+high_accuracy_description = "下载更大，精度更高"
+medium = "中"
+medium_description = "较慢，更准确"
+recommended = "推荐"
+recommended_description = "适合大多数录制的最佳平衡"
+small = "小"
+small_description = "下载最小"
+
+[editor.tabs.captions.preset]
+classic = "经典"
+classic_description = "圆角纯色背景上的清晰文字。"
+highlight = "高亮"
+highlight_description = "粗体大写，当前单词后有胶囊背景。"
+karaoke = "卡拉 OK"
+karaoke_description = "单词随语音同步亮起。"
+minimal = "极简"
+minimal_description = "无背景的低调描边文字。"
+pop = "跳跃"
+pop_description = "活泼的大写文字，以鲜艳的强调色弹出。"
+
+[editor.tabs.corner]
+rounded = "圆角"
+squircle = "超椭圆"
+
+[editor.tabs.cursor]
+friction = "摩擦"
+hide_when_idle = "空闲时隐藏"
+inactivity_delay = "空闲延迟"
+mass = "质量"
+movement_style = "光标移动样式"
+show = "显示光标"
+size_label = "大小"
+smooth_movement = "平滑移动"
+style_label = "光标样式"
+svg_cursors = "高质量 SVG 光标"
+tension = "张力"
+tilt = "倾斜"
+
+[editor.tabs.cursor.style]
+fast = "快速"
+fast_description = "灵敏，紧密跟随"
+mellow = "柔和"
+mellow_description = "均衡、自然的移动"
+slow = "缓慢"
+slow_description = "悠长、漂移的移动"
+smooth = "顺滑"
+smooth_description = "柔软、轻盈的移动"
+
+[editor.tabs.keyboard]
+animation = "动画"
+background_color = "背景颜色"
+background_opacity = "背景不透明度"
+background_settings = "背景设置"
+behavior = "行为"
+beta = "Beta"
+changed_during_generation = "生成过程中时间线或键盘设置发生了变化。请重试。"
+empty_description = "点击“生成键盘分段”，根据录制的按键创建分段。"
+empty_title = "还没有键盘分段。"
+fade_duration = "淡入淡出时长"
+font_family = "字体"
+font_settings = "字体设置"
+font_weight = "字重"
+generate = "生成键盘分段"
+generating = "正在生成键盘分段..."
+grouping_threshold = "分组阈值"
+linger_duration = "停留时长"
+load_failed = "无法加载录制数据：{error}"
+no_presses = "未找到录制的按键。"
+position = "位置"
+regenerate = "重新生成键盘分段"
+show_modifiers = "显示修饰键"
+show_special_keys = "显示特殊键"
+size_label = "大小"
+text_color = "文字颜色"
+timeline_unavailable = "项目时间线不可用。"
+timeline_unreadable = "无法读取项目时间线。"
+title = "显示键盘"
+uppercase = "大写"
+
+[editor.tabs.position]
+bottom_center = "底部居中"
+bottom_left = "左下"
+bottom_right = "右下"
+manual = "手动"
+top_center = "顶部居中"
+top_left = "左上"
+top_right = "右上"
+
+[editor.tabs.sync]
+auto_description = "Cap 已自动计算这些偏移，让音频与视频保持同步。如果听起来仍不对，请调整它们。"
+auto_synced = "已自动同步"
+camera = "摄像头偏移"
+clip = "片段 {number}"
+description = "如果音频或摄像头与屏幕录制不同步，可以微调各来源的偏移。"
+microphone = "麦克风偏移"
+system_audio = "系统音频偏移"
+title = "同步"
+
+[editor.tabs.weight]
+bold = "粗体"
+medium = "中等"
+normal = "常规"
+
+[editor.tabs.font]
+system_sans_serif = "系统无衬线"
+system_serif = "系统衬线"
+system_monospace = "系统等宽"
+
+[editor.timeline]
+add_shot = "添加镜头"
+add_shot_with_look = "添加镜头 · {look} · {seconds} 秒"
+paused = "已暂停"
+title = "时间线"
+
+[editor.timeline.empty]
+add_audio = "添加音频"
+add_scene = "添加场景"
+audio = "添加背景音乐或导入你自己的音频"
+captions = "没有字幕"
+keyboard = "没有键盘事件"
+scene = "在屏幕和摄像头之间切换布局"
+
+[editor.timeline.picker]
+audio = "添加背景音乐或导入你自己的音频。"
+caption = "自动转写你的录制，生成屏幕字幕。"
+clip = "你录制的屏幕画面。"
+image = "为你的录制添加图片。"
+keyboard = "输入时在屏幕上显示按键。"
+mask = "模糊或涂黑屏幕上的隐私区域。"
+scene = "在屏幕和摄像头之间切换布局。"
+scene_unavailable = "使用摄像头录制后才能使用场景。"
+style = "随时间改变背景、摄像头和光标设置。"
+text_overlay = "在画布上添加自定义文字叠加和标题。"
+three_d = "以 3D 透视倾斜场景。"
+zoom = "跟随动作的平滑放大。"
+
+[editor.timeline.remove]
+audio = "移除音频轨道。"
+captions = "移除字幕轨道。"
+clip = "移除片段轨道。"
+image = "移除图片轨道。"
+keyboard = "移除键盘轨道。"
+mask = "移除遮罩轨道。"
+scene = "移除场景轨道。"
+style = "移除样式轨道。"
+text_track = "移除文字轨道。"
+three_d = "移除 3D 轨道。"
+zoom = "移除缩放轨道。"
+
+[editor.timeline.scene]
+camera_only = "仅摄像头"
+default = "默认"
+floating = "悬浮"
+hide_camera = "隐藏摄像头"
+split_screen = "分屏"
+
+[editor.timeline.segment]
+audio = "音频"
+automatic_zoom = "自动缩放"
+caption = "字幕"
+clip = "片段"
+cursor_hidden = "已隐藏光标"
+highlight = "突出显示"
+label = "标签"
+manual_zoom = "手动缩放"
+muted = "已静音"
+numbered_clip = "片段 {number}"
+sensitive = "敏感内容"
+
+[editor.timeline.track]
+audio = "音频"
+captions = "字幕"
+clip = "片段"
+image = "图片"
+keyboard = "键盘"
+mask = "遮罩"
+scene = "场景"
+style = "样式"
+text_track = "文字"
+video = "视频"
+zoom = "缩放"
+
+[editor.window]
+audio_filter = "音频"
+audio_segment_changed = "此音频分段已更改。请选中它并重新选择替换文件。"
+crop = "裁剪"
+crop_tooltip = "裁剪视频"
+no_room_for_3d_shot = "没有空间再添加 3D 镜头"
+redo = "重做"
+save_failed = "无法保存 {path}。请保持编辑器打开并重试：{error}"
+undo = "撤销"
+
+[editor.window.add_track]
+button = "添加轨道"
+hide_3d = "隐藏 3D 轨道。"
+hint = "选择要添加到时间线的轨道。"
+
+[editor.window.aspect]
+auto = "自动"
+classic = "经典"
+classic_ratio = "经典 ⋅4:3"
+square = "方形"
+square_ratio = "方形 ⋅1:1"
+tall = "竖版"
+tall_ratio = "竖版 ⋅3:4"
+tooltip = "宽高比"
+vertical = "竖屏"
+vertical_ratio = "竖屏 ⋅9:16"
+wide = "宽屏"
+wide_ratio = "宽屏 ⋅16:9"
+
+[editor.window.audio_import]
+copy_failed = "无法复制音频文件：{error}"
+directory_failed = "无法创建音频文件夹：{error}"
+no_extension = "音频文件没有扩展名"
+not_found = "找不到音频文件：{path}"
+unsupported = "不支持的音频格式：.{extension}"
+
+[editor.window.busy]
+clip_import = "请等待片段导入完成后再关闭或删除此录制。"
+export = "请等待导出或取消导出完成后再关闭或删除此录制。"
+opening = "请等待录制打开完成后再删除。"
+save_before_delete_failed = "删除前无法保存录制：{error}"
+
+[editor.window.camera3d_lane]
+add_shot = "+ 添加镜头"
+auto_scene = "自动场景"
+how_many = "要几个镜头？"
+prompt = "为你的录制添加电影感 3D 镜头"
+
+[editor.window.clip_menu]
+audio = "音频"
+cursor = "光标"
+delete = "删除片段"
+delete_only_clip = "无法删除唯一的片段"
+hide_cursor = "隐藏光标"
+hide_cursor_description = "播放此片段时淡出"
+keep_pitch = "保持音调"
+match_speed = "匹配速度"
+merge_next = "与下一个片段合并"
+merge_previous = "与上一个片段合并"
+mute = "静音"
+mute_clip = "静音片段"
+mute_clip_description = "关闭此片段的声音"
+rename = "重命名片段"
+speed = "速度"
+split = "在播放头处拆分"
+split_hint = "将播放头移到此片段内"
+volume = "音量"
+transition = "转场"
+transition_none = "无"
+transition_crossfade = "交叉淡化"
+transition_fade = "淡入淡出"
+transition_seconds = "{seconds} 秒"
+
+[editor.window.clip_menu.merge_blocker]
+edge = "该侧没有片段"
+different_recording = "来自不同的录制"
+gap = "两者之间的素材已被剪掉"
+speed = "请先统一片段速度"
+
+[editor.window.frame]
+add_tooltip = "添加边框"
+browser = "浏览器"
+browser_description = "带地址栏的浏览器边框"
+button = "边框"
+dark = "深色"
+global = "全局边框 · 应用于所有继承背景的样式。"
+heading = "边框"
+light = "浅色"
+macbook_description = "录制画面外的笔记本边框"
+macos_description = "带红绿灯按钮的窗口边框"
+none = "无"
+none_description = "按原样显示录制"
+style_changed = "此样式已更改。请关闭并重新打开边框。"
+style_only = "仅样式 {index} · 全局设置保持不变。"
+style_only_override = "仅样式 {index} · 编辑会启用它自己的背景设置。"
+theme = "主题"
+title = "标题"
+url = "URL"
+window_title_placeholder = "窗口标题"
+windows_description = "带窗口控制按钮的标题栏"
+
+[editor.window.header]
+captions = "字幕"
+delete_recording = "删除录制"
+export = "导出"
+open_bundle = "打开录制包"
+presets = "预设"
+
+[editor.window.image]
+changed = "选择替换图片时此图片已更改。请选中它后重试。"
+filter = "图片"
+recording_unavailable = "此图片对应的录制已不可用。请重新打开项目。"
+
+[editor.window.open]
+damaged = "无法打开此录制的视频轨道。录制包似乎已损坏。"
+failed = "无法打开此录制"
+media_failed = "无法读取此录制的媒体：{error}"
+meta_failed = "无法加载录制元数据：{error}"
+no_segments = "录制没有分段。可能需要先恢复。"
+not_found = "找不到视频路径 {path}！"
+not_studio = "无法编辑非 Studio 录制"
+
+[editor.window.presets]
+apply = "应用"
+create = "创建"
+create_new = "创建新预设"
+create_title = "创建预设"
+default = "默认"
+default_badge = "默认"
+delete = "删除"
+delete_confirm = "确定要删除“{name}”吗？"
+delete_title = "删除预设"
+name_placeholder = "预设名称"
+none_saved = "没有已保存的预设"
+rename = "重命名"
+rename_title = "重命名预设"
+save_settings = "将设置保存到预设"
+set_default = "设为默认"
+
+[editor.window.preview]
+full = "全尺寸"
+half = "1/2"
+label = "预览"
+quarter = "1/4"
+
+[editor.window.text_menu]
+copy_style = "复制样式"
+copy_style_first = "请先复制一个样式"
+delete_segment = "删除文字分段"
+delete_segments = "删除文字分段"
+paste_style = "粘贴样式"
+paste_style_all = "将样式粘贴到所有选中项"
+segments = { other = "{count} 个文字分段" }
+untitled = "文字"
+
+[editor.window.title]
+not_saved = "标题未保存"
+not_saved_message = "{error}\n\n你的标题仍在编辑器中。请再次尝试保存。"
+read_failed = "无法读取 {path} 的录制标题：{error}"
+save_failed = "无法保存 {path} 的录制标题：{error}"
+
+[editor.window.track]
+clear_all = "全部清除"
+delete = "删除"
+
+[editor.window.transport]
+done_splitting = "完成拆分"
+play_pause = "播放/暂停视频"
+split = "拆分"
+split_tooltip = "点击一个分段进行拆分。按 Esc 结束。"
+zoom_in = "放大"
+zoom_out = "缩小"
+
+[editor.window.zoom_lane]
+generate = "生成"
+generating = "正在生成…"
+no_clicks = "未找到可缩放的点击。在轨道上拖动即可添加。"
+prompt = "自动添加缩放"
+
+[ui]
+coming_soon = "即将推出"
+
+[ui.selection]
+audio = { other = "已选择 {count} 个音频分段" }
+caption = { other = "已选择 {count} 个字幕分段" }
+delete = "删除"
+done = "完成"
+image = { other = "已选择 {count} 个图片分段" }
+keyboard = { other = "已选择 {count} 个键盘分段" }
+mask = { other = "已选择 {count} 个遮罩分段" }
+scene = { other = "已选择 {count} 个场景分段" }
+segments = { other = "已选择 {count} 个分段" }
+select_all = "全选"
+style = { other = "已选择 {count} 个样式分段" }
+text_segments = { other = "已选择 {count} 个文字分段" }
+three_d = { other = "已选择 {count} 个 3D 分段" }
+zoom = { other = "已选择 {count} 个" }
+zoom_all = { other = "已选择全部 {count} 个" }
+zoom_some = { other = "已选择 {count}/{total} 个" }
+
+[dialog.quit]
+canceled = "已取消退出：{error}。Cap 将保持打开，以便你完成或恢复录制。"
+pending = "录制仍在停止中，已取消退出。Cap 将保持打开。请在可用时点击“停止”，然后再次尝试退出。"
+still_open = "Cap 仍在运行"
+unconfirmed = "无法确认录制已停止，已取消退出。Cap 将保持打开。请点击“停止”，然后再次尝试退出。"
+
+[dialog.update]
+already_getting = "Cap 已在准备版本 {version}。"
+available = "Cap {version} 版本现已推出。Cap 会在后台下载，并在可以安装时通知你。"
+busy = "请先完成录制、导出、上传、导入或转写任务，再更新 Cap。"
+busy_title = "Cap 正忙"
+check_failed = "无法检查更新：{error}"
+download = "下载"
+download_failed = "无法下载版本 {version}：{error}"
+failed = "{message}\n\n你随时可以从 Cap.so/download 下载最新版本。"
+install_failed = "无法安装版本 {version}：{error}"
+later = "稍后"
+no_update = "你使用的已是最新版 Cap。"
+no_update_title = "没有可用的更新"
+not_now = "以后再说"
+package_not_installed = "软件包未安装。请批准系统提示，或从 Cap.so/download 安装。"
+ready = "Cap {version} 已准备就绪。重新启动 Cap 以完成更新。"
+restart_now = "立即重新启动"
+title = "更新 Cap"
+
+[message.recording]
+task_failed = "录制任务失败。"
+startup_failed = "录制启动失败"
+ended_unexpectedly = "录制意外结束。"
+stop_task_failed_plain = "停止任务失败。"
+stop_not_acknowledged = "未确认捕获已停止"
+capture_state_timed_out = "确认捕获状态超时"
+pause_not_acknowledged = "捕获未确认所请求的暂停状态"
+cleanup_unconfirmed_files_kept = "无法确认捕获清理已完成。本地文件已保留；请按 Ctrl+Shift+F9 重试停止。"
+cleanup_unconfirmed_retry = "无法确认捕获清理已完成；请重试停止。"
+discard_not_acknowledged = "丢弃 Studio 录制时未确认捕获已停止；本地录制已保留"
+window_still_resizing = "窗口仍在调整大小。请再次尝试开始录制。"
+startup_cancelled = "录制启动已取消；本地文件已保留"
+instant_cleanup_unconfirmed = "无法确认 Instant 捕获清理已完成；本地文件已保留"
+finalization_no_result = "录制收尾未返回结果。你的文件已保留。"
+stopped_metadata_unsaved = "捕获已停止，但无法保存停止信息；本地文件已保留"
+discard_stop_unconfirmed = "丢弃 Studio 录制时无法确认捕获已停止；本地文件已保留"
+discard_unconfirmed = "无法确认 Studio 丢弃已完成；本地文件已保留"
+crashed_before_capture = "Cap 在此录制捕获到任何内容之前就已关闭。"
+capture_state_failed = "无法确认捕获状态：{error}"
+completion_task_failed = "录制收尾任务失败：{error}"
+stop_task_failed = "停止任务失败：{error}"
+control_task_failed = "捕获控制任务失败：{error}"
+restart_hide_failed = "重新开始时无法隐藏 Cap 窗口：{error}"
+discard_task_failed = "Studio 丢弃任务失败：{error}；无法确认清理已完成"
+cancel_task_failed = "取消任务失败：{error}。无法确认清理已完成；请重试停止。"
+then_cleanup_unconfirmed_shortcut = "{error}。无法确认捕获清理已完成。请按 Ctrl+Shift+F9 重试停止。"
+then_cleanup_unconfirmed_control = "{error}。无法确认捕获清理已完成。请使用录制的停止控件重试。"
+then_shutdown_unconfirmed = "{error}。无法确认 Studio 已关闭；录制和文件已保留。"
+then_use_stop_if_unsafe = "{error}。如果录制无法安全继续，请使用“停止”。"
+then_use_stop_control = "{error}。请使用录制的停止控件来停止录制。"
+then_discard_stopped = "{error}；已中止丢弃/重新开始，本地录制已保留"
+then_files_preserved = "{error}。失败录制的文件已保留。"
+then_cleanup_retry = "{error}。无法确认清理已完成；请重试停止。"
+low_storage_preserved = "存储空间不足。你的录制文件已保留在 {path}。请释放空间，然后在 Cap 中恢复该录制。"
+
+[message.permission]
+unavailable = "无法访问{permission}。请在“系统设置”>“隐私与安全性”>“{permission}”中允许 Cap，然后重新选择该设备。"
+
+[message.upload]
+offline = "离线"
+authentication_expired = "登录已过期"
+no_audio_intent_review = "这个较早的录制没有保存音频设置；请先检查后再重试"
+legacy_no_account = "这个较早的上传没有保存账户和音频设置。其本地录制已保留。"
+verification_timed_out = "云端验证超时；本地录制已保留"
+verification_failed_retry = "云端验证失败；已保存的录制将重新上传"
+must_save_first = "录制必须先保存到本地，才能继续上传"
+sign_in_original = "请登录录制时使用的账户和服务器后重试"
+sign_in_again = "请重新登录以上传此录制"
+needs_upgrade = "Instant 录制需要升级套餐"
+changed_during = "本地录制在上传期间发生了变化"
+changed_after = "本地录制在上传后发生了变化；已将其保留"
+already_queued = "此录制已在上传队列中"
+paused = "上传已暂停；本地录制已保留"
+worker_failed = "上传进程失败；本地录制已保留"
+empty = "已保存的录制为空"
+no_resumable_state = "此录制没有可继续的上传状态"
+verification_failed = "录制验证失败：{status}"
+
+[message.cli]
+binary_missing = "未在 {path} 找到内置的 CLI 程序"

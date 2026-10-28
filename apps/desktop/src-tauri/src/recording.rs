@@ -2317,7 +2317,7 @@ async fn start_recording_prepared(
                 "desktopSegments"
             };
 
-            let s3_config = match crate::upload::create_or_get_video_with_mode(
+            let created = match crate::upload::create_or_get_video_with_mode(
                 &app,
                 false,
                 None,
@@ -2355,7 +2355,8 @@ async fn start_recording_prepared(
                 }
             };
 
-            let link = app.make_app_url(format!("/s/{}", s3_config.id)).await;
+            let link = created.link(&app).await;
+            let s3_config = created.config;
             info!("Pre-created shareable link: {}", link);
 
             (
@@ -3422,6 +3423,10 @@ async fn start_recording_prepared(
                         cap_recording::PipelineHealthEvent::CaptureTargetLost { target } => {
                             Some(format!("Capture target lost: {target}"))
                         }
+                        cap_recording::PipelineHealthEvent::MicrophoneDigitalSilence => Some(
+                            "Microphone is recording silence. Another app, like a call, may be using it."
+                                .to_string(),
+                        ),
                         cap_recording::PipelineHealthEvent::SourceRestarted => None,
                     };
 
