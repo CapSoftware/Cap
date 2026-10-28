@@ -40,13 +40,11 @@ use crate::{
 /// Matches the Tauri `InProgressRecording` window and
 /// `fake_window.rs` position math.
 pub const CONTROLS_WIDTH: f32 = 320.;
-/// The window's height with an issue card above the bar.
 pub const CONTROLS_HEIGHT: f32 = 150.;
 /// The bar alone, with its padding. A transparent window takes every click
 /// inside its frame, so without an issue to show the window is only this
 /// tall and the app under the empty space above the bar stays clickable.
 pub const CONTROLS_BAR_HEIGHT: f32 = 64.;
-/// Where the window can change height in place, keeping the bar still.
 const CONTROLS_FIT_TO_ISSUE: bool = cfg!(any(target_os = "macos", windows));
 const CONTROLS_BOTTOM_OFFSET: f64 = 120.;
 const TARGET_CONTROLS_OFFSET_Y: f64 = 48.;
