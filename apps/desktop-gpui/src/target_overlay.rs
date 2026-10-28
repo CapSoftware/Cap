@@ -2259,81 +2259,90 @@ impl OverlayWindow {
             .body(explanation)
             .side(crate::ui::HintSide::Left);
         let accent = Hsla::from(theme.blue_9);
-        let header =
-            div()
-                .id("window-focus-header")
-                .h(px(52.))
-                .pl(px(10.))
-                .pr(px(6.))
-                .flex()
-                .items_center()
-                .gap(px(10.))
-                .cursor_pointer()
-                // The whole row is the switch's label, as a macOS form row is.
-                .on_click(cx.listener(|this, _, _, cx| {
-                    cx.stop_propagation();
-                    let focus = this.select.read(cx).focus_window;
-                    this.set_focus(!focus, cx);
-                }))
-                .child(
-                    div()
-                        .size(px(32.))
-                        .flex_shrink_0()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(9.))
-                        .bg(if focus {
-                            accent
-                        } else {
-                            Theme::with_alpha(theme.gray_12, 0.08)
-                        })
-                        .child(svg().path("icons/box-select.svg").size(px(17.)).text_color(
-                            if focus {
+        // The hint belongs to the Focus row alone: Center on screen explains
+        // itself under its title.
+        let header = self
+            .hinted(
+                div().id("window-focus-header").relative(),
+                "window-focus",
+                hint,
+                cx,
+            )
+            .h(px(52.))
+            .pl(px(10.))
+            .pr(px(6.))
+            .flex()
+            .items_center()
+            .gap(px(10.))
+            .cursor_pointer()
+            // The whole row is the switch's label, as a macOS form row is.
+            .on_click(cx.listener(|this, _, _, cx| {
+                cx.stop_propagation();
+                let focus = this.select.read(cx).focus_window;
+                this.set_focus(!focus, cx);
+            }))
+            .child(
+                div()
+                    .size(px(32.))
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(9.))
+                    .bg(if focus {
+                        accent
+                    } else {
+                        Theme::with_alpha(theme.gray_12, 0.08)
+                    })
+                    .child(
+                        svg()
+                            .path("icons/box-select.svg")
+                            .size(px(17.))
+                            .text_color(if focus {
                                 gpui::white().into()
                             } else {
                                 Hsla::from(theme.gray_12)
-                            },
-                        )),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .flex()
-                        .flex_col()
-                        .pr(px(14.))
-                        .child(
-                            div()
-                                .text_size(px(13.))
-                                .line_height(px(17.))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(theme.gray_12)
-                                .child("Focus mode"),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(11.5))
-                                .line_height(px(15.))
-                                .font_weight(FontWeight::NORMAL)
-                                .text_color(theme.gray_11)
-                                .child(if focus {
-                                    "Recording only this window"
-                                } else {
-                                    "Record only this window"
-                                }),
-                        ),
-                )
-                .child(
-                    div().flex_shrink_0().child(
-                        crate::ui::GlassSwitch::new("window-focus-toggle", focus, theme.is_dark())
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                cx.stop_propagation();
-                                let focus = this.select.read(cx).focus_window;
-                                this.set_focus(!focus, cx);
-                            })),
+                            }),
                     ),
-                );
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .pr(px(14.))
+                    .child(
+                        div()
+                            .text_size(px(13.))
+                            .line_height(px(17.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(theme.gray_12)
+                            .child("Focus mode"),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.5))
+                            .line_height(px(15.))
+                            .font_weight(FontWeight::NORMAL)
+                            .text_color(theme.gray_11)
+                            .child(if focus {
+                                "Recording only this window"
+                            } else {
+                                "Record only this window"
+                            }),
+                    ),
+            )
+            .child(
+                div().flex_shrink_0().child(
+                    crate::ui::GlassSwitch::new("window-focus-toggle", focus, theme.is_dark())
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            cx.stop_propagation();
+                            let focus = this.select.read(cx).focus_window;
+                            this.set_focus(!focus, cx);
+                        })),
+                ),
+            );
         let details = focus.then(|| {
             div()
                 .flex()
@@ -2403,8 +2412,7 @@ impl OverlayWindow {
                 )
         });
         Some(
-            self.hinted(card, "window-focus", hint, cx)
-                .mb(px(10.))
+            card.mb(px(10.))
                 .w(px(300.))
                 .flex()
                 .flex_col()
