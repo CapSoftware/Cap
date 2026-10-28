@@ -1,6 +1,7 @@
 import { db } from "@cap/database";
 import { organizations } from "@cap/database/schema";
 import { buildEnv, NODE_ENV } from "@cap/env";
+import type { Organisation } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 
 /**
@@ -10,7 +11,7 @@ import { eq } from "drizzle-orm";
  * organization, or undefined so the desktop keeps its own link.
  */
 export async function getDesktopShareUrl(
-	organizationId: string,
+	organizationId: Organisation.OrganisationId,
 	videoId: string,
 ): Promise<string | undefined> {
 	if (buildEnv.NEXT_PUBLIC_IS_CAP !== "true" || NODE_ENV !== "production")

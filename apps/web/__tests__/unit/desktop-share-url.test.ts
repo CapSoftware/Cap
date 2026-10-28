@@ -1,4 +1,7 @@
+import { Organisation } from "@cap/web-domain";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const orgId = Organisation.OrganisationId.make("org-1");
 
 const env = vi.hoisted(() => ({
 	buildEnv: { NEXT_PUBLIC_IS_CAP: "true" as string | undefined },
@@ -59,7 +62,7 @@ describe("getDesktopShareUrl", () => {
 			{ customDomain: "videos.team.test", domainVerified: new Date() },
 		];
 
-		await expect(getDesktopShareUrl("org-1", "video-1")).resolves.toBe(
+		await expect(getDesktopShareUrl(orgId, "video-1")).resolves.toBe(
 			"https://videos.team.test/s/video-1",
 		);
 		expect(query.where).toHaveBeenCalledWith({
@@ -71,23 +74,17 @@ describe("getDesktopShareUrl", () => {
 	it("keeps the default link for an unverified domain", async () => {
 		query.rows = [{ customDomain: "videos.team.test", domainVerified: null }];
 
-		await expect(
-			getDesktopShareUrl("org-1", "video-1"),
-		).resolves.toBeUndefined();
+		await expect(getDesktopShareUrl(orgId, "video-1")).resolves.toBeUndefined();
 	});
 
 	it("keeps the default link without a custom domain", async () => {
 		query.rows = [{ customDomain: null, domainVerified: null }];
 
-		await expect(
-			getDesktopShareUrl("org-1", "video-1"),
-		).resolves.toBeUndefined();
+		await expect(getDesktopShareUrl(orgId, "video-1")).resolves.toBeUndefined();
 	});
 
 	it("keeps the default link for a missing organization", async () => {
-		await expect(
-			getDesktopShareUrl("org-1", "video-1"),
-		).resolves.toBeUndefined();
+		await expect(getDesktopShareUrl(orgId, "video-1")).resolves.toBeUndefined();
 	});
 
 	it("never uses a custom domain on a self-hosted server", async () => {
@@ -96,9 +93,7 @@ describe("getDesktopShareUrl", () => {
 			{ customDomain: "videos.team.test", domainVerified: new Date() },
 		];
 
-		await expect(
-			getDesktopShareUrl("org-1", "video-1"),
-		).resolves.toBeUndefined();
+		await expect(getDesktopShareUrl(orgId, "video-1")).resolves.toBeUndefined();
 		expect(query.where).not.toHaveBeenCalled();
 	});
 
@@ -108,17 +103,13 @@ describe("getDesktopShareUrl", () => {
 			{ customDomain: "videos.team.test", domainVerified: new Date() },
 		];
 
-		await expect(
-			getDesktopShareUrl("org-1", "video-1"),
-		).resolves.toBeUndefined();
+		await expect(getDesktopShareUrl(orgId, "video-1")).resolves.toBeUndefined();
 	});
 
 	it("keeps the default link when the lookup fails", async () => {
 		query.error = new Error("database unavailable");
 		vi.spyOn(console, "error").mockImplementationOnce(() => {});
 
-		await expect(
-			getDesktopShareUrl("org-1", "video-1"),
-		).resolves.toBeUndefined();
+		await expect(getDesktopShareUrl(orgId, "video-1")).resolves.toBeUndefined();
 	});
 });
