@@ -323,6 +323,9 @@ jobs:
       - name: Run setup
         run: node scripts/setup.js
 
+      - name: Test CLI Studio automation duration
+        run: cargo test --locked -p cap --bin cap automation::tests::studio_recording_duration_conditions_use_recorded_media
+
       - name: Test desktop regressions
         run: |
           cargo test --locked -p cap-utils -p cap-cli-install --lib
