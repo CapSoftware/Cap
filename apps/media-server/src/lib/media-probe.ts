@@ -141,6 +141,38 @@ export async function probeVideoFile(filePath: string): Promise<VideoMetadata> {
 	);
 }
 
+async function computeVideoTrackDuration(path: string): Promise<number> {
+	const input = createMediaInput(path);
+	try {
+		const videoTrack = await input.getPrimaryVideoTrack();
+		if (!videoTrack) {
+			throw new Error("No video stream found");
+		}
+		const [start, end] = await Promise.all([
+			videoTrack.getFirstTimestamp(),
+			videoTrack.computeDuration({ skipLiveWait: true }),
+		]);
+		return end - start;
+	} finally {
+		input.dispose();
+	}
+}
+
+export async function probeVideoTrackDuration(
+	filePath: string,
+): Promise<number> {
+	if (!canAcceptNewProbeOperation()) {
+		throw new Error("Server is busy, please try again later");
+	}
+
+	return await withMediaOperation("probe", () =>
+		withTimeout(
+			computeVideoTrackDuration(normalizeLocalPath(filePath)),
+			PROBE_TIMEOUT_MS,
+		),
+	);
+}
+
 export async function checkVideoAccessible(videoUrl: string): Promise<boolean> {
 	try {
 		const response = await probeFetch(videoUrl, {

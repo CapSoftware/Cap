@@ -53,6 +53,7 @@ import {
 	getActiveProbeOperationCount as getActiveProbeProcessCount,
 	probeVideo,
 	probeVideoFile,
+	probeVideoTrackDuration,
 } from "../lib/media-probe";
 import {
 	fetchMedia,
@@ -1687,6 +1688,19 @@ async function processVideoAsync(
 						? "The imported original could not be fully recovered. The original has been preserved."
 						: DAMAGED_INPUT_MESSAGE,
 				);
+		}
+		if (recoveringDamagedSource) {
+			// A full-length audio track keeps the container duration whole even when the
+			// recovered video stops early, so the video track is compared on its own.
+			const [sourceVideoDuration, recoveredVideoDuration] =
+				await withJobHeartbeat(jobId, () =>
+					Promise.all([
+						probeVideoTrackDuration(input.path),
+						probeVideoTrackDuration(outputPath),
+					]),
+				).catch(rejectUnrecoverableSource);
+			if (!isCompleteRecovery(recoveredVideoDuration, sourceVideoDuration))
+				throw new Error(DAMAGED_INPUT_MESSAGE);
 		}
 		if (
 			options.maxImportBytes &&
