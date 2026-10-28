@@ -35,8 +35,12 @@ describe("raw recording input validation", () => {
 	const damagedTruncated = join(directory, "damaged-truncated.webm");
 	const damagedStreamed = join(directory, "damaged-streamed.webm");
 	const audioOnly = join(directory, "audio-only.webm");
+	const damagedVideoFullAudio = join(
+		directory,
+		"damaged-video-full-audio.webm",
+	);
 
-	beforeAll(() => {
+	const encodeVp9Ivf = (output: string, keyframeInterval: number) =>
 		execFileSync("ffmpeg", [
 			"-hide_banner",
 			"-v",
@@ -54,32 +58,67 @@ describe("raw recording input validation", () => {
 			"-threads",
 			"2",
 			"-g",
-			"60",
+			String(keyframeInterval),
 			"-lag-in-frames",
 			"0",
 			"-auto-alt-ref",
 			"0",
 			"-f",
 			"ivf",
-			cleanIvf,
+			output,
 		]);
-		const bytes = readFileSync(cleanIvf);
-		let offset = 32;
-		for (let frame = 0; frame < 45; frame++)
-			offset += 12 + bytes.readUInt32LE(offset);
-		const packetSize = bytes.readUInt32LE(offset);
-		const header = Buffer.from(bytes.subarray(offset, offset + 12));
-		header.writeUInt32LE(32);
+	const breakIvfPackets = (
+		source: string,
+		output: string,
+		brokenFrames: (frame: number) => boolean,
+	) => {
+		const bytes = readFileSync(source);
+		const chunks = [bytes.subarray(0, 32)];
+		for (let offset = 32, frame = 0; offset < bytes.length; frame++) {
+			const packetSize = bytes.readUInt32LE(offset);
+			if (brokenFrames(frame)) {
+				const header = Buffer.from(bytes.subarray(offset, offset + 12));
+				header.writeUInt32LE(32);
+				chunks.push(header, bytes.subarray(offset + 12, offset + 44));
+			} else {
+				chunks.push(bytes.subarray(offset, offset + 12 + packetSize));
+			}
+			offset += 12 + packetSize;
+		}
+		writeFileSync(output, Buffer.concat(chunks));
+	};
+
+	beforeAll(() => {
+		encodeVp9Ivf(cleanIvf, 60);
 		const brokenIvf = join(directory, "corrupt.ivf");
-		writeFileSync(
-			brokenIvf,
-			Buffer.concat([
-				bytes.subarray(0, offset),
-				header,
-				bytes.subarray(offset + 12, offset + 44),
-				bytes.subarray(offset + 12 + packetSize),
-			]),
+		breakIvfPackets(cleanIvf, brokenIvf, (frame) => frame === 45);
+		const singleKeyframeIvf = join(directory, "single-keyframe.ivf");
+		const brokenSingleKeyframeIvf = join(
+			directory,
+			"single-keyframe-corrupt.ivf",
 		);
+		encodeVp9Ivf(singleKeyframeIvf, 300);
+		breakIvfPackets(
+			singleKeyframeIvf,
+			brokenSingleKeyframeIvf,
+			(frame) => frame >= 45,
+		);
+		execFileSync("ffmpeg", [
+			"-hide_banner",
+			"-v",
+			"error",
+			"-i",
+			brokenSingleKeyframeIvf,
+			"-f",
+			"lavfi",
+			"-i",
+			"sine=frequency=440:duration=4",
+			"-c:v",
+			"copy",
+			"-c:a",
+			"libopus",
+			damagedVideoFullAudio,
+		]);
 		for (const [source, output] of [
 			[cleanIvf, clean],
 			[brokenIvf, corrupt],
@@ -181,6 +220,15 @@ describe("raw recording input validation", () => {
 		["clean", clean, "complete", ".webm", false, null, 1],
 		["damaged", corrupt, "complete", ".webm", false, null, 1],
 		["damaged-streamed", damagedStreamed, "complete", ".webm", false, null, 1],
+		[
+			"damaged-video-full-audio",
+			damagedVideoFullAudio,
+			"error",
+			".webm",
+			false,
+			"damaged or unreadable",
+			1,
+		],
 		[
 			"damaged-busy-output-probe",
 			corrupt,
