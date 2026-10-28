@@ -675,7 +675,6 @@ async fn drag_cpu(
     cpu_percent_since(cpu, wall)
 }
 
-/// The process's memory footprint in MB, as Activity Monitor counts it.
 #[cfg(target_os = "macos")]
 fn footprint_mb() -> Option<f64> {
     let mut info = std::mem::MaybeUninit::<libc::rusage_info_v2>::zeroed();
@@ -694,10 +693,6 @@ fn footprint_mb() -> Option<f64> {
     None
 }
 
-/// Drag the area through its own mouse handlers (snapping, the camera, the
-/// panels following) for `millis`, with mouse events at 250 Hz, grabbing it at
-/// `grab`: the middle moves it, a corner resizes it. Reports the CPU use and
-/// how evenly frames came: their rate and the longest gaps between them.
 async fn drag_frames(
     overlay: &WindowHandle<crate::target_overlay::OverlayWindow>,
     base: AreaRect,
@@ -777,8 +772,6 @@ async fn probe_perf(cx: &mut AsyncApp) -> serde_json::Value {
     let dragging_without_backdrop = drag_cpu(&overlays, base, 6000, cx).await;
     crate::overlay_backdrop::set_disabled(false);
 
-    // A real drag through the handlers: moving, then resizing from a corner,
-    // then a long run of both to show whether memory creeps.
     let handler_drags = match overlays.first() {
         Some((_, overlay)) => {
             let middle = (base.x + base.width / 2., base.y + base.height / 2.);

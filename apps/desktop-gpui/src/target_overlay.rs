@@ -223,8 +223,6 @@ fn norm_area_rect(rect: AreaRect, display_size: (f32, f32)) -> NormRect {
     }
 }
 
-/// Snap a moving area to the display's edges and centre lines, and to the
-/// edges and centres of `others` (the work area and the windows on screen).
 fn snap_area_rect(
     rect: AreaRect,
     display_size: (f32, f32),
@@ -295,8 +293,6 @@ fn snap_resize_point(
 /// badge, and its edges would only get in the way.
 const AREA_SNAP_WINDOW_MIN: f32 = 48.;
 
-/// What an area snaps to besides the display: the work area (inside the menu
-/// bar, dock or taskbar) and the windows on this display, normalised to it.
 fn area_snap_rects(
     work_area: AreaRect,
     windows: &[AreaRect],
@@ -328,7 +324,6 @@ pub(crate) enum ProbeDrag {
     Release,
 }
 
-/// When each overlay frame rendered while the picker probe is timing a drag.
 #[cfg(debug_assertions)]
 pub(crate) mod probe_frames {
     use std::sync::Mutex;
@@ -359,8 +354,6 @@ pub(crate) mod probe_frames {
     }
 }
 
-/// Whether the held modifiers turn area snapping off: Command on macOS, Ctrl
-/// elsewhere.
 fn snap_off(modifiers: &gpui::Modifiers) -> bool {
     if cfg!(target_os = "macos") {
         modifiers.platform
@@ -369,7 +362,6 @@ fn snap_off(modifiers: &gpui::Modifiers) -> bool {
     }
 }
 
-/// A rule-of-thirds grid over the area while it is being drawn or dragged.
 fn render_thirds(crop: AreaRect) -> impl IntoElement {
     let line = gpui::hsla(0., 0., 1., 0.28);
     let mut grid = div()
@@ -758,8 +750,6 @@ fn store_area_ratio(ratio: Option<(u32, u32)>) {
     });
 }
 
-/// The locked area: the display it was drawn on and its bounds there, so the
-/// next picker opens with the same area.
 fn stored_locked_area() -> Option<(String, AreaRect)> {
     let section = crate::store::store_section(AREA_SELECTION_STORE);
     if !section.get("locked")?.as_bool()? {
@@ -804,8 +794,6 @@ fn store_locked_area(locked: Option<(&DisplayId, AreaRect)>) {
     });
 }
 
-/// The locked area for a display, fitted to its current size, if it is still
-/// big enough to record.
 fn locked_area_for(display: &DisplayId, display_size: (f32, f32), min: f32) -> Option<AreaRect> {
     let (locked_display, bounds) = stored_locked_area()?;
     (locked_display == display.to_string())
@@ -1018,7 +1006,6 @@ impl AreaRect {
         self.width >= min && self.height >= min
     }
 
-    /// The part of this rect on a `display`-sized screen, if any.
     fn intersected(self, display: (f32, f32)) -> Option<Self> {
         let (left, top) = (self.x.max(0.), self.y.max(0.));
         let (right, bottom) = (self.right().min(display.0), self.bottom().min(display.1));
@@ -1182,13 +1169,9 @@ pub struct OverlayWindow {
     snap_guides: Vec<SnapGuide>,
     /// The aspect ratio a drawn or resized area keeps, `None` for free.
     area_ratio: Option<(u32, u32)>,
-    /// A locked area is kept for the next picker and holds still: no drag
-    /// moves, resizes or redraws it until it is unlocked.
     area_locked: bool,
-    /// What an area snaps to besides the display, see [`area_snap_rects`].
     area_snap: Vec<NormRect>,
     area_windows_requested: bool,
-    /// The part of the area under the pointer, while nothing is dragged.
     area_hover: Option<AreaZone>,
     /// The camera still has to follow the area: after a drag step (so it
     /// moves once a frame) or a restored area.
@@ -1662,8 +1645,6 @@ impl OverlayWindow {
         self.backdrop.image()
     }
 
-    /// Drive the area's own mouse handlers, for the picker probe's drag
-    /// timing: press at `point`, move to it, or release there.
     #[cfg(debug_assertions)]
     pub(crate) fn probe_drag(
         &mut self,
@@ -3159,13 +3140,10 @@ impl OverlayWindow {
         }
     }
 
-    /// The selection's bounds and handles: a white border with a dark line
-    /// just outside it, so it shows over light and dark content alike; round
-    /// knobs on the corners and grips on the edges, each growing under the
-    /// pointer; and the eight resize zones. The zones carry only a cursor: the
-    /// drag itself is dispatched from the root's mouse-down through
-    /// [`Self::area_zone_at`], so a grab that starts a pixel outside the
-    /// handle still resizes.
+    /// The zones carry only a cursor: the drag itself is dispatched from the
+    /// root's mouse-down through [`Self::area_zone_at`], so a grab that starts
+    /// a pixel outside the handle still resizes. The dark line outside the
+    /// white border keeps the bounds visible over light content.
     fn render_crop_region(&self, crop: AreaRect, interactive: bool) -> impl IntoElement {
         let hover = self
             .area_hover
@@ -3204,7 +3182,6 @@ impl OverlayWindow {
                     .border_color(gpui::hsla(0., 0., 0., 0.45)),
             );
 
-        // Under the pointer, before any press: how to move it.
         if hover == Some(AreaZone::Inside) && crop.width >= 220. && crop.height >= 120. {
             region = region.child(
                 div()
@@ -3274,9 +3251,8 @@ impl OverlayWindow {
                 }
             };
 
-            // A knob on each corner, a grip on the middle of each edge (left
-            // off a side too short to hold one clear of the corners), both
-            // white with a dark rim and growing while hovered or dragged.
+            // Edge grips are left off a side too short to hold one clear of
+            // the corners.
             let hot = hover == Some(AreaZone::Handle(handle)) || resizing == Some(handle);
             let horizontal = handle.north() || handle.south();
             let side = if horizontal { crop.width } else { crop.height };
@@ -3648,9 +3624,6 @@ impl OverlayWindow {
             )
     }
 
-    /// Fit the size readout beside the area while it is being drawn or
-    /// dragged, where the eye already is: under its bottom-right corner, or
-    /// inside it when the screen runs out.
     fn render_area_size(&self, crop: AreaRect) -> impl IntoElement {
         const HEIGHT: f32 = 24.;
         const GAP: f32 = 8.;
@@ -3677,7 +3650,6 @@ impl OverlayWindow {
             .child(label)
     }
 
-    /// The badge on a locked area: says why it will not move, and unlocks it.
     fn render_locked_badge(&self, crop: AreaRect, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .absolute()
@@ -3745,8 +3717,6 @@ impl OverlayWindow {
         }
     }
 
-    /// The windows on this display, for the area to snap to. Read once per
-    /// picker, off the main thread.
     fn load_area_windows(&mut self, cx: &mut Context<Self>) {
         self.area_windows_requested = true;
         let display = self.display_id.clone();
@@ -3805,8 +3775,6 @@ impl OverlayWindow {
         self.reshape_area(bounds, cx);
     }
 
-    /// The area's keys: arrows nudge it (Shift for 10 points), Return starts,
-    /// and Escape mid-drag puts it back. True when the key was used.
     fn area_key(
         &mut self,
         keystroke: &gpui::Keystroke,
@@ -4496,7 +4464,6 @@ impl OverlayWindow {
         cx.notify();
     }
 
-    /// `free` (Command on macOS, Ctrl elsewhere, held) turns snapping off.
     fn area_mouse_move(&mut self, position: Point<Pixels>, free: bool, cx: &mut Context<Self>) {
         if self.recording_area {
             return;

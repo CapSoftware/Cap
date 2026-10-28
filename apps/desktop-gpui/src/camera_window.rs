@@ -173,11 +173,9 @@ fn normalized_size(state: &CameraWindowState) -> f32 {
     (clamp_size(state.size) - CAMERA_MIN_SIZE) / (CAMERA_MAX_SIZE - CAMERA_MIN_SIZE)
 }
 
-/// How the toolbar fits a preview `width` wide (`None` when the picker has
-/// not shrunk it): its scale and how many of its buttons show. Each button is
-/// a 22px icon in 8px padding, 4px apart, in a 4px-padded strip with a 1px
-/// border. A narrow preview drops the preview-only blur, then mirror, buttons
-/// before the rest get too small to hit, so the toolbar stays inside it.
+/// The fit uses each button's footprint (a 22px icon in 8px padding, 4px
+/// apart, in a 4px-padded strip with a 1px border). The preview-only blur,
+/// then mirror, buttons go first, before the rest get too small to hit.
 fn toolbar_fit(base_scale: f32, width: Option<f32>) -> (f32, usize) {
     const SMALLEST_COMFORTABLE: f32 = 0.6;
     const SMALLEST: f32 = 0.4;
