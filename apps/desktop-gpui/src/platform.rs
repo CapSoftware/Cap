@@ -1836,6 +1836,13 @@ mod mac {
     /// `setSharingType: None`/`ReadOnly`, so that is what this is.
     ///
     /// Returns the value AppKit reports back, for the probe log.
+    /// Whether the window is already left out of screen captures.
+    pub fn window_capture_hidden(native: &NativeWindow) -> bool {
+        use objc2::msg_send;
+        let sharing: usize = unsafe { msg_send![&*native.0, sharingType] };
+        sharing == NS_WINDOW_SHARING_NONE
+    }
+
     pub fn set_window_capture_hidden(native: &NativeWindow, hidden: bool) -> usize {
         use objc2::msg_send;
         let sharing = if hidden {
@@ -3027,6 +3034,9 @@ mod stub {
     pub struct NativeWindow;
     pub fn set_window_alpha(_native: &NativeWindow, _alpha: f64) -> f64 {
         1.
+    }
+    pub fn window_capture_hidden(_native: &NativeWindow) -> bool {
+        false
     }
     pub fn set_window_capture_hidden(_native: &NativeWindow, _hidden: bool) -> usize {
         0

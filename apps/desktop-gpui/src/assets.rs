@@ -73,6 +73,10 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "folder.svg",
     "gauge.svg",
     "gear.svg",
+    "hint-arrow-down.svg",
+    "hint-arrow-left.svg",
+    "hint-arrow-right.svg",
+    "hint-arrow-up.svg",
     // The config sidebar's field glyphs. Four are Cap's own
     // (`packages/ui-solid/icons/{padding,corners,shadow,bg-blur}.svg`); the
     // rest of the background section's are Lucide, drawn here from the same
@@ -344,6 +348,7 @@ mod tests {
         include_str!("ui/selection_header.rs"),
         include_str!("ui/radio_cards.rs"),
         include_str!("ui/windows_caption.rs"),
+        include_str!("ui/hint.rs"),
         // The onboarding window's welcome cards and permissions surface; the
         // per-permission row glyphs are named on `OSPermission::icon`.
         include_str!("onboarding_window.rs"),

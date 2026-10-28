@@ -4038,6 +4038,13 @@ fn begin_recording_after_preflight(config: StartConfig, cx: &mut App) {
 
     let mut excluded: Vec<scap_targets::WindowId> = config.excluded_windows.clone();
     excluded.extend(open_controls(&config, session.clone(), cx));
+    // Focus marks the window it records with a ring for the whole recording.
+    if let ScreenCaptureTarget::Window { id } = &config.target
+        && crate::store::GeneralSettings::load().window_capture_style
+            == crate::store::WindowCaptureStyle::FocusedWindow
+    {
+        excluded.extend(crate::focus_border::open(id, cx));
+    }
     // The camera bubble is excluded from studio captures (the camera is its own
     // track, composited in the editor) but *included* in instant captures --
     // `filter_for_instant_mode` in the Tauri app strips the camera exclusion
@@ -4755,6 +4762,64 @@ fn park_camera_in_window(target: &HoveredWindow, cx: &mut App) -> bool {
         cx,
     );
     true
+}
+
+/// The picker moved the picked window from `before` to `after` (Focus
+/// centring it, or the size menu): a camera bubble sitting on the window goes
+/// with it, keeping its place relative to the window's bottom-right corner,
+/// where a park puts it, and staying inside the window.
+pub fn carry_camera_with_window(before: &HoveredWindow, after: &HoveredWindow, cx: &mut App) {
+    let origin = |display: &DisplayId| {
+        let bounds = scap_targets::Display::from_id(display)?
+            .raw_handle()
+            .logical_bounds()?;
+        Some((bounds.position().x() as f32, bounds.position().y() as f32))
+    };
+    let (Some(from), Some(to)) = (origin(&before.display_id), origin(&after.display_id)) else {
+        return;
+    };
+    let Some(camera) = camera_snapshot(cx) else {
+        return;
+    };
+    let old = AreaRect {
+        x: before.bounds.x + from.0,
+        y: before.bounds.y + from.1,
+        ..before.bounds
+    };
+    let new = AreaRect {
+        x: after.bounds.x + to.0,
+        y: after.bounds.y + to.1,
+        ..after.bounds
+    };
+    let bubble = camera.bounds;
+    let centre = (bubble.x + bubble.width / 2., bubble.y + bubble.height / 2.);
+    let on_window = centre.0 >= old.x
+        && centre.0 <= old.x + old.width
+        && centre.1 >= old.y
+        && centre.1 <= old.y + old.height;
+    if !on_window || old == new {
+        return;
+    }
+    let right_gap = old.x + old.width - (bubble.x + bubble.width);
+    let bottom_gap = old.y + old.height - (bubble.y + bubble.height);
+    let (min_x, min_y) = (new.x + CAMERA_PARK_PADDING, new.y + CAMERA_PARK_PADDING);
+    let max_x = (new.x + new.width - bubble.width - CAMERA_PARK_PADDING).max(min_x);
+    let max_y = (new.y + new.height - bubble.height - CAMERA_PARK_PADDING).max(min_y);
+    let x = (new.x + new.width - bubble.width - right_gap).clamp(min_x, max_x);
+    let y = (new.y + new.height - bubble.height - bottom_gap).clamp(min_y, max_y);
+    cx.global_mut::<AppWindows>().camera_park.last_window = Some(after.id.clone());
+    queue_camera_placement(
+        CameraPlacement {
+            camera: camera.handle,
+            bounds: AreaRect {
+                x: x.round(),
+                y: y.round(),
+                ..bubble
+            },
+            size_override: CameraSizeOverride::Preserve,
+        },
+        cx,
+    );
 }
 
 fn camera_area_bounds(
@@ -7199,6 +7264,7 @@ pub fn refresh_library_after_delete(cx: &mut App) {
 }
 
 fn close_controls(session: &Entity<RecordingSession>, cx: &mut App) {
+    crate::focus_border::close(cx);
     if let Some(handle) = cx.global_mut::<AppWindows>().controls.take() {
         handle
             .update(cx, |_, window, _| window.remove_window())

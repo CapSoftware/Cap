@@ -151,6 +151,13 @@ pub fn set_window_alpha(_native: &NativeWindow, _alpha: f64) -> f64 {
     1.
 }
 
+/// Whether the window is already left out of screen captures.
+pub fn window_capture_hidden(native: &NativeWindow) -> bool {
+    let mut current = WDA_NONE;
+    let read = unsafe { GetWindowDisplayAffinity(native.hwnd(), &mut current) != 0 };
+    read && current == WDA_EXCLUDEFROMCAPTURE
+}
+
 pub fn set_window_capture_hidden(native: &NativeWindow, hidden: bool) -> usize {
     let streamed = hidden
         .then(capture_exclusion::streamed_display_reason)
