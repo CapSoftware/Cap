@@ -21,6 +21,7 @@ import { join } from "node:path";
 import app from "../../app";
 import * as jobManager from "../../lib/job-manager";
 import { deleteJob, getJob } from "../../lib/job-manager";
+import * as mediaProbe from "../../lib/media-probe";
 import * as mediaVideo from "../../lib/media-video";
 import { validateVideoInput } from "../../lib/video-input-validation";
 
@@ -32,6 +33,7 @@ describe("raw recording input validation", () => {
 	const cleanMp4 = join(directory, "clean.mp4");
 	const truncated = join(directory, "truncated.webm");
 	const damagedTruncated = join(directory, "damaged-truncated.webm");
+	const damagedStreamed = join(directory, "damaged-streamed.webm");
 	const audioOnly = join(directory, "audio-only.webm");
 
 	beforeAll(() => {
@@ -98,6 +100,25 @@ describe("raw recording input validation", () => {
 			truncated,
 			cleanBytes.subarray(0, Math.floor(cleanBytes.length / 2)),
 		);
+		writeFileSync(
+			damagedStreamed,
+			execFileSync(
+				"ffmpeg",
+				[
+					"-hide_banner",
+					"-v",
+					"error",
+					"-i",
+					corrupt,
+					"-c",
+					"copy",
+					"-f",
+					"webm",
+					"pipe:1",
+				],
+				{ maxBuffer: 64 * 1024 * 1024 },
+			),
+		);
 		const corruptBytes = readFileSync(corrupt);
 		writeFileSync(
 			damagedTruncated,
@@ -159,6 +180,16 @@ describe("raw recording input validation", () => {
 	] of [
 		["clean", clean, "complete", ".webm", false, null, 1],
 		["damaged", corrupt, "complete", ".webm", false, null, 1],
+		["damaged-streamed", damagedStreamed, "complete", ".webm", false, null, 1],
+		[
+			"damaged-busy-output-probe",
+			corrupt,
+			"error",
+			".webm",
+			false,
+			"Server is busy",
+			1,
+		],
 		[
 			"damaged-truncated",
 			damagedTruncated,
@@ -191,6 +222,16 @@ describe("raw recording input validation", () => {
 				cleanup: async () => rmSync(downloaded, { force: true }),
 			});
 			const process = spyOn(mediaVideo, "processVideo");
+			if (name === "damaged-busy-output-probe") {
+				const probe = mediaProbe.probeVideoFile;
+				spyOn(mediaProbe, "probeVideoFile").mockImplementation((path) =>
+					path.endsWith(".mp4")
+						? Promise.reject(
+								new Error("Server is busy, please try again later"),
+							)
+						: probe(path),
+				);
+			}
 			const upload = spyOn(mediaVideo, "uploadFileToS3").mockResolvedValue({});
 			const secret =
 				globalThis.process.env.MEDIA_SERVER_WEBHOOK_SECRET ?? "test-secret";
