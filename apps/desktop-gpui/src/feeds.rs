@@ -2294,6 +2294,33 @@ mod tests {
         assert_eq!(recapped, (16, 8));
     }
 
+    fn preview_uses_kernel() -> bool {
+        cap_gpui_kernels::camera_bgra::simd_path() != "swscale"
+    }
+
+    fn assert_preview_scaler(scaler: &Option<ffmpeg::software::scaling::Context>) {
+        if preview_uses_kernel() {
+            assert!(scaler.is_none());
+        } else {
+            assert!(scaler.is_some());
+        }
+    }
+
+    fn assert_preview_bytes(bytes: &[u8], expected: &[u8]) {
+        if preview_uses_kernel() {
+            assert_eq!(bytes, expected);
+            return;
+        }
+        assert_eq!(bytes.len(), expected.len());
+        let gap = bytes
+            .iter()
+            .zip(expected)
+            .map(|(got, expected)| got.abs_diff(*expected))
+            .max()
+            .unwrap_or(0);
+        assert!(gap <= 3, "{bytes:?}");
+    }
+
     #[test]
     fn camera_preview_converts_packed_422_and_nv12_without_swscale() {
         let mut yuyv = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::YUYV422, 2, 1);
@@ -2301,26 +2328,26 @@ mod tests {
         let mut scaler = None;
         let (image, dims) = camera_preview_image(&yuyv, &mut scaler, false, None).unwrap();
         assert_eq!(dims, (2, 1));
-        assert!(scaler.is_none());
-        assert_eq!(
+        assert_preview_scaler(&scaler);
+        assert_preview_bytes(
             image.as_bytes(0).unwrap(),
-            &[0, 0, 0, 255, 255, 255, 255, 255]
+            &[0, 0, 0, 255, 255, 255, 255, 255],
         );
 
         let (mirrored, _) = camera_preview_image(&yuyv, &mut scaler, true, None).unwrap();
-        assert!(scaler.is_none());
-        assert_eq!(
+        assert_preview_scaler(&scaler);
+        assert_preview_bytes(
             mirrored.as_bytes(0).unwrap(),
-            &[255, 255, 255, 255, 0, 0, 0, 255]
+            &[255, 255, 255, 255, 0, 0, 0, 255],
         );
 
         let mut uyvy = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::UYVY422, 2, 1);
         uyvy.data_mut(0)[..4].copy_from_slice(&[128, 16, 128, 235]);
         let (image, _) = camera_preview_image(&uyvy, &mut scaler, false, None).unwrap();
-        assert!(scaler.is_none());
-        assert_eq!(
+        assert_preview_scaler(&scaler);
+        assert_preview_bytes(
             image.as_bytes(0).unwrap(),
-            &[0, 0, 0, 255, 255, 255, 255, 255]
+            &[0, 0, 0, 255, 255, 255, 255, 255],
         );
 
         let mut nv12 = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::NV12, 2, 2);
@@ -2330,22 +2357,43 @@ mod tests {
         nv12.data_mut(1)[..2].copy_from_slice(&[128, 128]);
         let (image, dims) = camera_preview_image(&nv12, &mut scaler, false, None).unwrap();
         assert_eq!(dims, (2, 2));
-        assert!(scaler.is_none());
-        assert_eq!(image.as_bytes(0).unwrap(), &[130, 130, 130, 255].repeat(4));
+        assert_preview_scaler(&scaler);
+        assert_preview_bytes(image.as_bytes(0).unwrap(), &[130, 130, 130, 255].repeat(4));
     }
 
     #[test]
     fn preview_stays_within_three_codes_of_swscale_bilinear() {
-        assert!(nv12_gap_vs_swscale(128, 16, false, Nv12Pattern::HighFrequency) <= 3);
-        assert!(nv12_gap_vs_swscale(16, 8, false, Nv12Pattern::VerticalStep) <= 3);
-        assert!(nv12_gap_vs_swscale(64, 32, false, Nv12Pattern::Smooth) <= 3);
-        assert!(nv12_gap_vs_swscale(1920, 8, false, Nv12Pattern::HighFrequency) <= 3);
-        assert!(nv12_gap_vs_swscale(128, 15, false, Nv12Pattern::HighFrequency) <= 3);
-        assert!(nv12_gap_vs_swscale(64, 32, true, Nv12Pattern::HighFrequency) <= 3);
-        assert!(nv12_gap_vs_swscale(16, 9, true, Nv12Pattern::VerticalStep) <= 3);
-        assert!(packed_gap_vs_swscale(ffmpeg::format::Pixel::YUYV422, 128, 16, false) <= 3);
-        assert!(packed_gap_vs_swscale(ffmpeg::format::Pixel::YUYV422, 128, 15, true) <= 3);
-        assert!(packed_gap_vs_swscale(ffmpeg::format::Pixel::UYVY422, 64, 32, true) <= 3);
+        if !preview_uses_kernel() {
+            for pixel in [
+                ffmpeg::format::Pixel::YUYV422,
+                ffmpeg::format::Pixel::UYVY422,
+                ffmpeg::format::Pixel::NV12,
+            ] {
+                let frame = ffmpeg::frame::Video::new(pixel, 16, 8);
+                let mut scaler = None;
+                let (_, dims) = camera_preview_image(&frame, &mut scaler, false, None).unwrap();
+                assert_eq!(dims, (16, 8));
+                assert!(scaler.is_some(), "{pixel:?}");
+                let (_, mirrored) = camera_preview_image(&frame, &mut scaler, true, None).unwrap();
+                assert_eq!(mirrored, (16, 8));
+                assert!(scaler.is_some(), "{pixel:?} mirrored");
+            }
+            assert!(nv12_gap_vs_swscale(16, 8, false, Nv12Pattern::VerticalStep).is_none());
+            assert!(packed_gap_vs_swscale(ffmpeg::format::Pixel::YUYV422, 16, 8, false).is_none());
+            return;
+        }
+        assert!(nv12_gap_vs_swscale(128, 16, false, Nv12Pattern::HighFrequency).unwrap() <= 3);
+        assert!(nv12_gap_vs_swscale(16, 8, false, Nv12Pattern::VerticalStep).unwrap() <= 3);
+        assert!(nv12_gap_vs_swscale(64, 32, false, Nv12Pattern::Smooth).unwrap() <= 3);
+        assert!(nv12_gap_vs_swscale(1920, 8, false, Nv12Pattern::HighFrequency).unwrap() <= 3);
+        assert!(nv12_gap_vs_swscale(128, 15, false, Nv12Pattern::HighFrequency).unwrap() <= 3);
+        assert!(nv12_gap_vs_swscale(64, 32, true, Nv12Pattern::HighFrequency).unwrap() <= 3);
+        assert!(nv12_gap_vs_swscale(16, 9, true, Nv12Pattern::VerticalStep).unwrap() <= 3);
+        assert!(
+            packed_gap_vs_swscale(ffmpeg::format::Pixel::YUYV422, 128, 16, false).unwrap() <= 3
+        );
+        assert!(packed_gap_vs_swscale(ffmpeg::format::Pixel::YUYV422, 128, 15, true).unwrap() <= 3);
+        assert!(packed_gap_vs_swscale(ffmpeg::format::Pixel::UYVY422, 64, 32, true).unwrap() <= 3);
     }
 
     #[test]
@@ -2369,7 +2417,12 @@ mod tests {
         Smooth,
     }
 
-    fn nv12_gap_vs_swscale(width: u32, height: u32, mirrored: bool, pattern: Nv12Pattern) -> u8 {
+    fn nv12_gap_vs_swscale(
+        width: u32,
+        height: u32,
+        mirrored: bool,
+        pattern: Nv12Pattern,
+    ) -> Option<u8> {
         let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::NV12, width, height);
         let y_stride = frame.stride(0);
         let uv_stride = frame.stride(1);
@@ -2422,9 +2475,8 @@ mod tests {
             y_stride,
             uv_stride,
             mirrored,
-        )
-        .unwrap();
-        gap_vs_swscale(&frame, &kernel, mirrored)
+        )?;
+        Some(gap_vs_swscale(&frame, &kernel, mirrored))
     }
 
     fn packed_gap_vs_swscale(
@@ -2432,7 +2484,7 @@ mod tests {
         width: u32,
         height: u32,
         mirrored: bool,
-    ) -> u8 {
+    ) -> Option<u8> {
         use cap_gpui_kernels::camera_bgra::{self, Packed422};
 
         let mut frame = ffmpeg::frame::Video::new(pixel, width, height);
@@ -2451,9 +2503,8 @@ mod tests {
             frame.stride(0),
             format,
             mirrored,
-        )
-        .unwrap();
-        gap_vs_swscale(&frame, &kernel, mirrored)
+        )?;
+        Some(gap_vs_swscale(&frame, &kernel, mirrored))
     }
 
     fn gap_vs_swscale(frame: &ffmpeg::frame::Video, kernel: &[u8], mirrored: bool) -> u8 {
