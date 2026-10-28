@@ -133,6 +133,8 @@ export async function liveTranscribeWorkflow(
 				// leave a gap for the canonical transcription to fill.
 				skipPastFailedChunk:
 					failuresAtIndex >= LIVE_TRANSCRIBE.MAX_CHUNK_ATTEMPTS,
+				// A retry drops the context in case the earlier audio is what fails.
+				withContext: failuresAtIndex === 0,
 			});
 
 			if (result.outcome === "chunk") {
@@ -281,10 +283,12 @@ async function processNextLiveChunk(options: {
 	targetSeconds: number;
 	language: string;
 	skipPastFailedChunk: boolean;
+	withContext: boolean;
 }): Promise<ChunkStepResult> {
 	"use step";
 
 	const { videoId, userId, lastProcessedIndex, targetSeconds } = options;
+	const contextSeconds = options.withContext ? liveContextSeconds() : 0;
 
 	const [video] = await db()
 		.select()
@@ -340,6 +344,7 @@ async function processNextLiveChunk(options: {
 					manifest: decoded.right,
 					lastProcessedIndex,
 					targetSeconds,
+					contextSeconds,
 				});
 				if (next.action !== "wait") {
 					decision = next;
@@ -420,7 +425,7 @@ async function processNextLiveChunk(options: {
 			bucket
 				.getInternalSignedObjectUrl(segSource.getAudioInitKey())
 				.pipe(runWorkflowPromise),
-			...decision.entries.map((entry) =>
+			...[...decision.context, ...decision.entries].map((entry) =>
 				bucket
 					.getInternalSignedObjectUrl(segSource.getAudioSegmentKey(entry.index))
 					.pipe(runWorkflowPromise),
@@ -456,6 +461,7 @@ async function processNextLiveChunk(options: {
 					transcript.words,
 					decision.startMs,
 					decision.durationMs,
+					decision.contextMs,
 				);
 
 		const artifactKey = getLiveTranscriptObjectKey(video.ownerId, videoId);
@@ -470,6 +476,7 @@ async function processNextLiveChunk(options: {
 		const updated = applyChunkToLiveTranscript(artifact, {
 			startMs: decision.startMs,
 			durationMs: decision.durationMs,
+			contextMs: decision.contextMs,
 			lastAudioSegmentIndex: chunkEndIndex,
 			words,
 			languageCode:
@@ -515,7 +522,7 @@ async function processNextLiveChunk(options: {
 			: ({ action: "wait" } as const);
 
 		console.log(
-			`[liveTranscribe] ${videoId} chunk ${lastProcessedIndex + 1}..${chunkEndIndex} (${decision.durationMs}ms, ${words.length} words)`,
+			`[liveTranscribe] ${videoId} chunk ${lastProcessedIndex + 1}..${chunkEndIndex} (${decision.durationMs}ms + ${decision.contextMs}ms context, ${words.length} words)`,
 		);
 
 		return {
@@ -536,6 +543,11 @@ async function processNextLiveChunk(options: {
 			reason,
 		};
 	}
+}
+
+function liveContextSeconds() {
+	const value = Number(serverEnv().LIVE_TRANSCRIBE_CONTEXT_SECONDS ?? 0);
+	return Number.isFinite(value) ? Math.min(Math.max(value, 0), 60) : 0;
 }
 
 /**
