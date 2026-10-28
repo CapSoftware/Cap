@@ -51,8 +51,6 @@ pub fn video_background_max_dimension(output_size: (u32, u32), device_limit: u32
         .min(device_limit)
 }
 
-/// The first frame of a background video as tightly packed RGBA, for
-/// thumbnails.
 pub fn video_background_poster(path: &Path, max_dimension: u32) -> Option<(Vec<u8>, u32, u32)> {
     let reader = Reader::open(path.to_path_buf(), max_dimension, 0)
         .inspect_err(|error| tracing::warn!("Failed to read background video poster: {error}"))
@@ -66,6 +64,10 @@ pub struct VideoBackgroundFrame {
     pub width: u32,
     pub height: u32,
     time: f64,
+    /// When the next decoded frame starts. Frames skipped by read-ahead leave
+    /// gaps between cached frames, so coverage can't be taken from the next
+    /// cached frame.
+    end: f64,
 }
 
 struct FrameRequest {
@@ -73,9 +75,6 @@ struct FrameRequest {
     reply: oneshot::Sender<Option<Arc<VideoBackgroundFrame>>>,
 }
 
-/// A looping video or GIF decoded on its own thread. Frames come back as
-/// RGBA scaled to fit `max_dimension`, and the thread reads ahead between
-/// requests so playback and export rarely wait on a decode.
 pub struct VideoBackgroundSource {
     requests: mpsc::Sender<FrameRequest>,
 }
@@ -126,9 +125,8 @@ impl VideoBackgroundSource {
     }
 }
 
-/// Converts decoded frames to RGBA at the output size. Built through the raw
-/// swscale API because only a context configured before initialisation can
-/// spread the conversion over several threads.
+/// Built through the raw swscale API: only a context configured before
+/// initialisation can spread the conversion over several threads.
 struct Scaler {
     context: *mut ffmpeg::ffi::SwsContext,
     input: (format::Pixel, u32, u32),
@@ -224,12 +222,12 @@ struct Reader {
     at_end: bool,
     last_time: Option<f64>,
     last_served: f64,
-    /// Spacing of recent requests, when they come further apart than the
-    /// clip's frames (a 60 fps clip behind a 30 fps export).
+    /// Only set while requests come further apart than the clip's frames.
     request_interval: Option<f64>,
-    /// Decoded but not yet scaled: the frame after the newest one in `ring`,
-    /// held so a frame is only scaled once we know it will be shown.
     pending: Option<(f64, frame::Video)>,
+    last_frame_duration: Option<f64>,
+    quarter_turns: u32,
+    sample_aspect: (i32, i32),
     unreachable_anchor: Option<f64>,
     #[cfg(test)]
     seeks: usize,
@@ -264,21 +262,84 @@ fn open_decoder(path: &Path) -> Result<cap_video_decode::FFmpegDecoder, String> 
 fn covering_frame<'a>(
     frames: impl IntoIterator<Item = &'a Arc<VideoBackgroundFrame>>,
     time: f64,
-    reaches_end: bool,
 ) -> Option<&'a Arc<VideoBackgroundFrame>> {
-    let mut frames = frames.into_iter().peekable();
-    let first = frames.peek()?;
-    if first.time > time + TIME_EPSILON {
-        return None;
+    frames
+        .into_iter()
+        .take_while(|frame| frame.time <= time + TIME_EPSILON)
+        .last()
+        .filter(|frame| frame.end > time + TIME_EPSILON)
+}
+
+/// Phones store portrait video as landscape pixels plus a display matrix.
+fn display_quarter_turns(stream: &ffmpeg::format::stream::Stream) -> u32 {
+    unsafe {
+        let parameters = stream.parameters().as_ptr();
+        let side_data = ffmpeg::ffi::av_packet_side_data_get(
+            (*parameters).coded_side_data,
+            (*parameters).nb_coded_side_data,
+            ffmpeg::ffi::AVPacketSideDataType::AV_PKT_DATA_DISPLAYMATRIX,
+        );
+        if side_data.is_null() || (*side_data).size < 9 * 4 {
+            return 0;
+        }
+        quarter_turns_from_matrix(&*((*side_data).data as *const [i32; 9]))
     }
-    while let Some(frame) = frames.next() {
-        match frames.peek() {
-            Some(next) if next.time <= time + TIME_EPSILON => continue,
-            Some(_) => return Some(frame),
-            None => return reaches_end.then_some(frame),
+}
+
+fn quarter_turns_from_matrix(matrix: &[i32; 9]) -> u32 {
+    let counter_clockwise = unsafe { ffmpeg::ffi::av_display_rotation_get(matrix.as_ptr()) };
+    if !counter_clockwise.is_finite() {
+        return 0;
+    }
+    ((-counter_clockwise / 90.0).round() as i64).rem_euclid(4) as u32
+}
+
+fn rotate_rgba(data: &[u8], width: u32, height: u32, quarter_turns: u32) -> (Vec<u8>, u32, u32) {
+    let (width, height) = (width as usize, height as usize);
+    let (out_width, out_height) = if quarter_turns % 2 == 1 {
+        (height, width)
+    } else {
+        (width, height)
+    };
+    let mut out = vec![0u8; data.len()];
+    const TILE: usize = 64;
+    for tile_y in (0..height).step_by(TILE) {
+        for tile_x in (0..width).step_by(TILE) {
+            for y in tile_y..(tile_y + TILE).min(height) {
+                for x in tile_x..(tile_x + TILE).min(width) {
+                    let (to_x, to_y) = match quarter_turns {
+                        1 => (height - 1 - y, x),
+                        2 => (width - 1 - x, height - 1 - y),
+                        3 => (y, width - 1 - x),
+                        _ => (x, y),
+                    };
+                    let from = (y * width + x) * 4;
+                    let to = (to_y * out_width + to_x) * 4;
+                    out[to..to + 4].copy_from_slice(&data[from..from + 4]);
+                }
+            }
         }
     }
-    None
+    (out, out_width as u32, out_height as u32)
+}
+
+fn output_size(
+    width: u32,
+    height: u32,
+    sample_aspect: (i32, i32),
+    max_dimension: u32,
+) -> (u32, u32) {
+    let display_width = match sample_aspect {
+        (numerator, denominator) if numerator > 0 && denominator > 0 => {
+            f64::from(width) * f64::from(numerator) / f64::from(denominator)
+        }
+        _ => f64::from(width),
+    };
+    let height = f64::from(height);
+    let longest = display_width.max(height).max(1.0);
+    let scale = (f64::from(max_dimension) / longest).min(1.0);
+    let even = |value: f64| ((value * scale).round() as u32).max(2) & !1;
+    (even(display_width), even(height))
 }
 
 impl Reader {
@@ -304,6 +365,11 @@ impl Reader {
         } else {
             0.0
         };
+        let quarter_turns = display_quarter_turns(&stream);
+        let sample_aspect = unsafe {
+            let ratio = (*stream.parameters().as_ptr()).sample_aspect_ratio;
+            (ratio.num, ratio.den)
+        };
         let start_ticks = match stream.start_time() {
             ffmpeg::ffi::AV_NOPTS_VALUE => 0,
             start => start,
@@ -327,6 +393,9 @@ impl Reader {
             last_served: 0.0,
             request_interval: None,
             pending: None,
+            last_frame_duration: None,
+            quarter_turns,
+            sample_aspect,
             unreachable_anchor: None,
             #[cfg(test)]
             seeks: 0,
@@ -397,30 +466,27 @@ impl Reader {
         self.last_served = time;
 
         if self.head_is_whole_clip {
-            return covering_frame(&self.head, time, true)
+            return covering_frame(&self.head, time)
                 .or_else(|| self.head.first())
                 .cloned();
         }
-        if let Some(frame) = covering_frame(&self.head, time, false) {
+        if let Some(frame) = covering_frame(&self.head, time) {
             return Some(frame.clone());
         }
         if time < self.head[0].time {
             return Some(self.head[0].clone());
         }
-        if let Some(frame) = covering_frame(&self.ring, time, self.at_end) {
+        if let Some(frame) = covering_frame(&self.ring, time) {
             return Some(frame.clone());
         }
 
-        // A request on the newest frame isn't covered until the frame after it
-        // is decoded, so it counts as ahead rather than as a reason to seek.
-        let close_ahead = match (self.ring.front(), self.ring.back()) {
-            (Some(first), Some(last)) => {
-                !self.at_end
-                    && time + TIME_EPSILON >= first.time
-                    && time - last.time < SEEK_THRESHOLD_SECS
-            }
-            _ => false,
-        };
+        // Anything before the newest frame's end that isn't covered landed in
+        // a gap read-ahead skipped, and only a seek can go back for it.
+        let close_ahead = self.ring.back().is_some_and(|last| {
+            !self.at_end
+                && time + TIME_EPSILON >= last.end
+                && time - last.time < SEEK_THRESHOLD_SECS
+        });
         if !close_ahead {
             self.seek(time);
         }
@@ -430,8 +496,14 @@ impl Reader {
     fn decode_until(&mut self, time: f64) -> Option<Arc<VideoBackgroundFrame>> {
         loop {
             self.trim_before(time);
-            if let Some(frame) = covering_frame(&self.ring, time, self.at_end) {
+            if let Some(frame) = covering_frame(&self.ring, time) {
                 return Some(frame.clone());
+            }
+            // A seek can land after the target; decoding on would never come back.
+            if let Some(first) = self.ring.front()
+                && first.time > time + TIME_EPSILON
+            {
+                return Some(first.clone());
             }
             if self.at_end {
                 return self.ring.back().cloned();
@@ -528,17 +600,14 @@ impl Reader {
         }
     }
 
-    /// The next frame, decoded and scaled.
     fn decode_next(&mut self) -> Option<Arc<VideoBackgroundFrame>> {
         self.next_shown(|frame_time| frame_time)
     }
 
-    /// Decodes forward and returns the next frame that will actually be
-    /// shown. `first_request_at` maps a frame's time to the first request
-    /// expected at or after it; a frame whose successor starts by then is
-    /// never shown, so it's dropped without being scaled. That keeps seeks
-    /// (which decode forward from a keyframe) and clips with more frames than
-    /// the output from paying for conversions nobody sees.
+    /// A frame whose successor starts by `first_request_at(frame time)` is
+    /// never shown, so it's dropped unscaled: decoding forward from a keyframe
+    /// after a seek, or a clip with more frames than the output, would
+    /// otherwise pay for conversions nobody sees.
     fn next_shown(
         &mut self,
         first_request_at: impl Fn(f64) -> f64,
@@ -561,11 +630,16 @@ impl Reader {
             }
             match self.scale(&decoded) {
                 Some((data, width, height)) => {
+                    let end = self
+                        .pending
+                        .as_ref()
+                        .map_or(f64::INFINITY, |(next_time, _)| *next_time);
                     return Some(Arc::new(VideoBackgroundFrame {
                         data,
                         width,
                         height,
                         time,
+                        end,
                     }));
                 }
                 None => {
@@ -579,7 +653,6 @@ impl Reader {
         }
     }
 
-    /// The next decoded frame and its time in the clip, before scaling.
     fn decode_raw(&mut self) -> Option<(f64, frame::Video)> {
         let mut errors = 0;
         loop {
@@ -608,25 +681,27 @@ impl Reader {
                 self.frame_interval = time - last;
             }
             self.last_time = Some(time);
+            let ticks = unsafe { (*decoded.as_ptr()).duration };
+            self.last_frame_duration = (ticks > 0).then_some(ticks as f64 * self.seconds_per_tick);
             return Some((time.max(0.0), decoded));
         }
     }
 
+    /// Container durations can be missing or wrong, and a GIF can hold its
+    /// last frame far longer than the others, so the last frame's own
+    /// duration wins over both.
     fn reached_end<T>(&mut self) -> Option<T> {
         if let Some(last) = self.last_time {
-            let end = last + self.frame_interval;
+            let end = match self.last_frame_duration {
+                Some(duration) => last + duration,
+                None if self.duration > last + TIME_EPSILON => self.duration,
+                None => last + self.frame_interval,
+            };
             if end > 0.0 {
                 self.duration = end;
             }
         }
         None
-    }
-
-    fn output_size(&self, width: u32, height: u32) -> (u32, u32) {
-        let longest = width.max(height).max(1);
-        let scale = (f64::from(self.max_dimension) / f64::from(longest)).min(1.0);
-        let even = |value: u32| ((f64::from(value) * scale).round() as u32).max(2) & !1;
-        (even(width), even(height))
     }
 
     fn scale(&mut self, decoded: &frame::Video) -> Option<(Vec<u8>, u32, u32)> {
@@ -640,7 +715,14 @@ impl Reader {
             .as_ref()
             .is_none_or(|scaler| scaler.input != input)
         {
-            let size = self.output_size(input.1, input.2);
+            // Frames copied out of a hardware surface lose their aspect ratio.
+            let sample_aspect = match decoded.aspect_ratio() {
+                ratio if ratio.numerator() > 0 && ratio.denominator() > 0 => {
+                    (ratio.numerator(), ratio.denominator())
+                }
+                _ => self.sample_aspect,
+            };
+            let size = output_size(input.1, input.2, sample_aspect, self.max_dimension);
             let bt709 = decoded.color_space() == ffmpeg::util::color::Space::BT709;
             self.scaler = Some(Scaler::new(input, size, bt709)?);
         }
@@ -659,6 +741,9 @@ impl Reader {
         for row in 0..height as usize {
             let start = row * stride;
             data.extend_from_slice(&source[start..start + row_bytes]);
+        }
+        if self.quarter_turns != 0 {
+            return Some(rotate_rgba(&data, width, height, self.quarter_turns));
         }
         Some((data, width, height))
     }
@@ -886,6 +971,98 @@ mod tests {
         }
     }
 
+    fn write_gif_frames(path: &Path, frames: &[(usize, u32)]) {
+        let file = std::fs::File::create(path).unwrap();
+        let mut encoder = GifEncoder::new(file);
+        encoder
+            .set_repeat(image::codecs::gif::Repeat::Infinite)
+            .unwrap();
+        for &(colour, delay_ms) in frames {
+            let [r, g, b] = COLOURS[colour];
+            let image = RgbaImage::from_pixel(96, 48, Rgba([r, g, b, 255]));
+            encoder
+                .encode_frame(Frame::from_parts(
+                    image,
+                    0,
+                    0,
+                    Delay::from_numer_denom_ms(delay_ms, 1),
+                ))
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn request_in_a_gap_read_ahead_skipped_gets_its_own_frame() {
+        ffmpeg::init().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("gaps.gif");
+        let frames: Vec<_> = (0..40).map(|index| (index % 4, 100)).collect();
+        write_gif_frames(&path, &frames);
+
+        let mut reader = Reader::open(path, 64, 64 * 32 * 4 * 2).unwrap();
+        for seconds in [0.5, 1.0] {
+            reader.frame_at(seconds).unwrap();
+            while reader.wants_prefetch() {
+                reader.prefetch();
+            }
+        }
+        for (seconds, frame) in [(1.7, 17), (2.05, 20), (2.3, 23)] {
+            let served = reader.frame_at(seconds).unwrap();
+            assert_eq!(colour_index(&served), frame % 4, "at {seconds}s");
+        }
+    }
+
+    #[test]
+    fn gif_loops_after_its_last_frame_is_held() {
+        ffmpeg::init().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("held.gif");
+        write_gif_frames(&path, &[(0, 100), (1, 100), (2, 2000)]);
+
+        let mut reader = Reader::open(path, 64, HEAD_BUDGET_BYTES).unwrap();
+        for (seconds, expected) in [(0.05, 0), (0.15, 1), (1.0, 2), (2.1, 2), (2.25, 0)] {
+            let served = reader.frame_at(seconds).unwrap();
+            assert_eq!(colour_index(&served), expected, "at {seconds}s");
+        }
+    }
+
+    #[test]
+    fn display_matrix_turns_into_clockwise_quarter_turns() {
+        // av_display_rotation_set takes a clockwise angle; phones tag portrait
+        // video with a clockwise 90°.
+        for (clockwise, expected) in [(0.0, 0), (90.0, 1), (180.0, 2), (-90.0, 3)] {
+            let mut matrix = [0i32; 9];
+            unsafe { ffmpeg::ffi::av_display_rotation_set(matrix.as_mut_ptr(), clockwise) };
+            assert_eq!(quarter_turns_from_matrix(&matrix), expected, "{clockwise}°");
+        }
+    }
+
+    #[test]
+    fn rotation_moves_pixels_clockwise() {
+        let pixels: Vec<u8> = (0..6u8).flat_map(|value| [value; 4]).collect();
+        let at = |data: &[u8], width: u32, x: u32, y: u32| data[((y * width + x) * 4) as usize];
+
+        let (turned, width, height) = rotate_rgba(&pixels, 3, 2, 1);
+        assert_eq!((width, height), (2, 3));
+        assert_eq!([at(&turned, 2, 0, 0), at(&turned, 2, 1, 0)], [3, 0]);
+        assert_eq!([at(&turned, 2, 0, 2), at(&turned, 2, 1, 2)], [5, 2]);
+
+        let (flipped, width, _) = rotate_rgba(&pixels, 3, 2, 2);
+        assert_eq!(at(&flipped, width, 0, 0), 5);
+
+        let (back, width, height) = rotate_rgba(&pixels, 3, 2, 3);
+        assert_eq!((width, height), (2, 3));
+        assert_eq!([at(&back, 2, 0, 0), at(&back, 2, 1, 0)], [2, 5]);
+    }
+
+    #[test]
+    fn non_square_pixels_keep_their_display_shape() {
+        assert_eq!(output_size(720, 576, (64, 45), 1920), (1024, 576));
+        assert_eq!(output_size(1920, 1080, (1, 1), 960), (960, 540));
+        assert_eq!(output_size(1920, 1080, (0, 1), 960), (960, 540));
+        assert_eq!(output_size(1440, 1080, (4, 3), 1920), (1920, 1080));
+    }
+
     #[test]
     fn poster_is_the_first_frame_scaled_down() {
         ffmpeg::init().unwrap();
@@ -900,6 +1077,7 @@ mod tests {
             width,
             height,
             time: 0.0,
+            end: f64::INFINITY,
         };
         assert_eq!(colour_index(&frame), 0);
     }
