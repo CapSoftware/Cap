@@ -93,7 +93,7 @@ export const GlassMark = ({ ids: { id, url } }: { ids: GlassLogoIds }) => (
 			>
 				<stop offset="0" stopColor="#fff" stopOpacity="0" />
 				<stop offset="0.62" stopColor="#fff" stopOpacity="0" />
-				<stop offset="1" stopColor="#CCD5E5" stopOpacity="0.32" />
+				<stop offset="1" stopColor="#C4D6FA" stopOpacity="0.14" />
 			</radialGradient>
 			<linearGradient
 				id={id("top")}
