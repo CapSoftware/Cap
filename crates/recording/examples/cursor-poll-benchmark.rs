@@ -52,7 +52,6 @@ fn main() -> anyhow::Result<()> {
         CursorCaptureTarget {
             crop_bounds,
             display,
-            #[cfg(target_os = "linux")]
             window: None,
         },
         dir.path().join("cursors"),

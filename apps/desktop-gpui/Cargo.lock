@@ -1551,6 +1551,7 @@ dependencies = [
  "cap-editor",
  "cap-enc-ffmpeg",
  "cap-export",
+ "cap-glass",
  "cap-gpui-kernels",
  "cap-i18n-build",
  "cap-media-info",
@@ -1771,6 +1772,15 @@ dependencies = [
  "tracing",
  "windows 0.60.0",
  "workspace-hack",
+]
+
+[[package]]
+name = "cap-glass"
+version = "0.1.0"
+dependencies = [
+ "image 0.25.10",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
