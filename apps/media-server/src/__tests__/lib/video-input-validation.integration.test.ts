@@ -31,6 +31,8 @@ describe("raw recording input validation", () => {
 	const cleanIvf = join(directory, "clean.ivf");
 	const cleanMp4 = join(directory, "clean.mp4");
 	const truncated = join(directory, "truncated.webm");
+	const damagedTruncated = join(directory, "damaged-truncated.webm");
+	const audioOnly = join(directory, "audio-only.webm");
 
 	beforeAll(() => {
 		execFileSync("ffmpeg", [
@@ -96,6 +98,23 @@ describe("raw recording input validation", () => {
 			truncated,
 			cleanBytes.subarray(0, Math.floor(cleanBytes.length / 2)),
 		);
+		const corruptBytes = readFileSync(corrupt);
+		writeFileSync(
+			damagedTruncated,
+			corruptBytes.subarray(0, Math.floor(corruptBytes.length * 0.6)),
+		);
+		execFileSync("ffmpeg", [
+			"-hide_banner",
+			"-v",
+			"error",
+			"-f",
+			"lavfi",
+			"-i",
+			"sine=frequency=440:duration=2",
+			"-c:a",
+			"libopus",
+			audioOnly,
+		]);
 		execFileSync("ffmpeg", [
 			"-v",
 			"error",
@@ -115,14 +134,18 @@ describe("raw recording input validation", () => {
 	afterEach(() => mock.restore());
 
 	test("accepts a clean browser-compatible VP9 stream", async () => {
-		await expect(validateVideoInput(clean)).resolves.toBeUndefined();
+		await expect(validateVideoInput(clean)).resolves.toBe("clean");
 	});
 
-	test("rejects a damaged reference packet before conversion can hide it", async () => {
-		await expect(validateVideoInput(corrupt)).rejects.toThrow(
-			"original upload has been preserved",
-		);
+	test("reports a damaged reference packet so processing can recover around it", async () => {
+		await expect(validateVideoInput(corrupt)).resolves.toBe("damaged");
 		expect(readFileSync(corrupt).length).toBeGreaterThan(0);
+	});
+
+	test("rejects a recording without a video stream", async () => {
+		await expect(validateVideoInput(audioOnly)).rejects.toThrow(
+			"The recording has no video",
+		);
 	});
 
 	for (const [
@@ -132,10 +155,21 @@ describe("raw recording input validation", () => {
 		extension,
 		importedOriginal,
 		expectedError,
+		expectedProcessCalls,
 	] of [
-		["clean", clean, "complete", ".webm", false, null],
-		["damaged", corrupt, "error", ".webm", false, "damaged or unreadable"],
-		["imported-damaged", corrupt, "complete", ".webm", true, null],
+		["clean", clean, "complete", ".webm", false, null, 1],
+		["damaged", corrupt, "complete", ".webm", false, null, 1],
+		[
+			"damaged-truncated",
+			damagedTruncated,
+			"error",
+			".webm",
+			false,
+			"damaged or unreadable",
+			1,
+		],
+		["no-video", audioOnly, "error", ".webm", false, "has no video", 0],
+		["imported-damaged", corrupt, "complete", ".webm", true, null, 1],
 		[
 			"imported-truncated",
 			truncated,
@@ -143,8 +177,9 @@ describe("raw recording input validation", () => {
 			".webm",
 			true,
 			"could not be fully recovered",
+			1,
 		],
-		["fragmented-mp4", cleanMp4, "complete", ".mp4", false, null],
+		["fragmented-mp4", cleanMp4, "complete", ".mp4", false, null, 1],
 	] as const) {
 		test(`processing route handles ${name} source before conversion`, async () => {
 			spyOn(jobManager, "canAcceptNewVideoProcess").mockReturnValue(true);
@@ -192,12 +227,11 @@ describe("raw recording input validation", () => {
 					await Bun.sleep(10);
 				}
 				expect(getJob(jobId)?.phase).toBe(expectedPhase);
+				expect(process).toHaveBeenCalledTimes(expectedProcessCalls);
 				if (expectedError) {
 					expect(getJob(jobId)?.error).toContain(expectedError);
-					expect(process).toHaveBeenCalledTimes(importedOriginal ? 1 : 0);
 					expect(upload).not.toHaveBeenCalled();
 				} else {
-					expect(process).toHaveBeenCalledTimes(1);
 					expect(upload).toHaveBeenCalledTimes(1);
 				}
 				expect(readFileSync(source)).toEqual(original);
