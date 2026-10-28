@@ -76,7 +76,7 @@ const mocks = vi.hoisted(() => ({
 }));
 vi.mock("@/app/(org)/dashboard/Contexts", () => ({
 	useDashboardContext: () => ({
-		user: { id: "owner", isPro: true },
+		user: { id: "owner", email: "owner@team.test", isPro: true },
 		activeOrganization: {
 			organization: { id: "org", name: "Team", ownerId: "owner" },
 			members: [],
@@ -291,5 +291,66 @@ describe("Loom importer component", () => {
 		expect(mocks.push).toHaveBeenCalledWith(
 			"/dashboard/spaces/space/folder/child",
 		);
+	});
+	it("copies an agent migration prompt for this organization", async () => {
+		const writeText = vi.fn(async () => {});
+		Object.defineProperty(navigator, "clipboard", {
+			configurable: true,
+			value: { writeText },
+		});
+		await render();
+		await waitFor(() =>
+			expect(container.textContent).toContain("Hand it to your agent"),
+		);
+
+		await act(async () => {
+			fireEvent.click(getByRole(container, "button", { name: "Copy prompt" }));
+		});
+
+		expect(writeText).toHaveBeenCalledTimes(1);
+		const prompt = writeText.mock.calls[0]?.[0] as unknown as string;
+		expect(prompt).toContain("Cap organization: Team");
+		expect(prompt).toContain("--organization org ");
+		expect(prompt).toContain("My Cap account: owner@team.test");
+	});
+
+	it("sends CSV files over the import limit to a concierge migration", async () => {
+		await render();
+		await act(async () => {
+			fireEvent.click(getByRole(container, "button", { name: "Bulk Import" }));
+		});
+		const rows = Array.from(
+			{ length: 3001 },
+			(_, index) =>
+				`https://www.loom.com/share/${index.toString(16).padStart(32, "0")},user@team.test,`,
+		);
+		const csv = ["loom_video_url,user_email,space_name", ...rows].join("\n");
+		const file = new File([csv], "loom.csv", { type: "text/csv" });
+		Object.defineProperty(file, "text", { value: async () => csv });
+		const input =
+			container.querySelector<HTMLInputElement>('input[type="file"]');
+		if (!input) throw new Error("Missing CSV input");
+		Object.defineProperty(input, "files", { value: [file] });
+		await act(async () => {
+			input.dispatchEvent(new Event("change", { bubbles: true }));
+		});
+
+		await waitFor(() =>
+			expect(container.textContent).toContain(
+				"CSV imports are limited to 3,000 videos at a time.",
+			),
+		);
+		const conciergeLink = container.querySelector<HTMLAnchorElement>(
+			'a[href="#loom-concierge"]',
+		);
+		expect(conciergeLink?.textContent).toBe("request a concierge migration");
+		expect(container.querySelector("#loom-concierge")).not.toBeNull();
+		expect(
+			(
+				getByRole(container, "button", {
+					name: "Review Import",
+				}) as HTMLButtonElement
+			).disabled,
+		).toBe(true);
 	});
 });
