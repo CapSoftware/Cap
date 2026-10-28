@@ -527,7 +527,7 @@ async function AuthorizedContent({
 	const earlySegmentPlayback =
 		recordingStopped &&
 		video.source?.type === "desktopSegments" &&
-		isEarlyInstantPlaybackEnabled(video.owner.id);
+		isEarlyInstantPlaybackEnabled();
 
 	// Everything below is an independent round trip (DB or storage); each is
 	// started here and awaited together further down, so the page pays for the
