@@ -207,6 +207,7 @@ pub struct ExportUi {
     pub rendered: u32,
     pub total_frames: u32,
     pub output_path: Option<PathBuf>,
+    copied_file: Option<PathBuf>,
     pub error: Option<String>,
     pub cancel: Arc<AtomicBool>,
     pub export_task: Option<gpui::Task<()>>,
@@ -299,6 +300,7 @@ impl ExportUi {
             rendered: 0,
             total_frames: 0,
             output_path: None,
+            copied_file: None,
             error: None,
             cancel: Arc::new(AtomicBool::new(false)),
             export_task: None,
@@ -853,6 +855,7 @@ impl EditorWindow {
         ui.rendered = 0;
         ui.total_frames = 0;
         ui.output_path = None;
+        ui.copied_file = None;
         cx.notify();
 
         ui.export_task = Some(cx.spawn_in(window, async move |this, cx| {
@@ -1041,6 +1044,44 @@ impl EditorWindow {
                 this.finish_requested_export_close(window, cx)
             });
         }));
+    }
+
+    /// Runs in the `Copying` phase so closing the panel, starting another
+    /// export and installing an update all wait for the copy to finish.
+    fn duplicate_output(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(ui) = self
+            .export
+            .as_mut()
+            .filter(|ui| ui.phase == ExportPhase::Done)
+        else {
+            return;
+        };
+        let Some(source) = ui.output_path.clone() else {
+            return;
+        };
+        ui.phase = ExportPhase::Copying;
+        ui.copied_file = None;
+        ui.error = None;
+        cx.notify();
+        cx.spawn_in(window, async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { library::duplicate_file(&source) })
+                .await;
+            this.update_in(cx, |this, window, cx| {
+                if let Some(ui) = this.export.as_mut() {
+                    ui.phase = ExportPhase::Done;
+                    match result {
+                        Ok(path) => ui.copied_file = Some(path),
+                        Err(error) => ui.error = Some(error),
+                    }
+                }
+                cx.notify();
+                this.finish_requested_export_close(window, cx);
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn retry_clipboard_copy(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -2634,7 +2675,20 @@ impl EditorWindow {
                         .child(error),
                 )
             })
-            .when(ui.phase.is_busy(), |this| {
+            .when_some(
+                ui.copied_file.as_ref().and_then(|path| path.file_name()),
+                |this, name| {
+                    this.child(
+                        div()
+                            .max_w(px(360.))
+                            .text_size(px(12.))
+                            .text_color(Hsla::from(editor.text_2))
+                            .text_center()
+                            .child(format!("Saved a copy as {}", name.to_string_lossy())),
+                    )
+                },
+            )
+            .when(ui.phase.is_busy() && ui.phase != ExportPhase::Copying, |this| {
                 this.child(
                     ui::Button::plain(
                         &theme,
@@ -2732,6 +2786,21 @@ impl EditorWindow {
                                 }
                             }),
                         )
+                        .when(ui.phase == ExportPhase::Done, |this| {
+                            this.child(
+                                ui::Button::plain(
+                                    &theme,
+                                    "export-copy-file",
+                                    ui::ButtonVariant::Gray,
+                                    ui::ButtonSize::Md,
+                                )
+                                .icon("icons/copy.svg")
+                                .label("Copy File")
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.duplicate_output(window, cx);
+                                })),
+                            )
+                        })
                     },
                 )
                 .when(
