@@ -328,6 +328,7 @@ jobs:
           cargo test --locked -p cap-utils -p cap-cli-install --lib
           cargo test --locked -p cap --bin cap record::tests
           cargo test --locked -p cap --bin cap recordings::tests
+          cargo test --locked -p cap --bin cap automation::tests::cli_automation_command_preserves_status_and_stderr
           cargo test --locked -p cap --test cli recordings_list
           cargo test --locked -p cap --test cli project_config_get_without_file_returns_default
           cargo test --locked -p cap --test cli caps_json_errors_include_the_standard_error_field

@@ -372,9 +372,15 @@ impl AutomationHost for DesktopAutomationHost {
             cmd.env("CAP_SHARE_LINK", l);
         }
 
+        // Tokio's output() overrides stdio, so configure and spawn the child explicitly.
+        cmd.stdout(std::process::Stdio::null());
+        cmd.stderr(std::process::Stdio::piped());
         // Kill the child if the timeout drops the future, so a hung command can't outlive the run.
         cmd.kill_on_drop(true);
-        let output = tokio::time::timeout(COMMAND_TIMEOUT, cmd.output())
+        let child = cmd
+            .spawn()
+            .map_err(|e| format!("Failed to run command: {e}"))?;
+        let output = tokio::time::timeout(COMMAND_TIMEOUT, child.wait_with_output())
             .await
             .map_err(|_| format!("Command timed out after {}s", COMMAND_TIMEOUT.as_secs()))?
             .map_err(|e| format!("Failed to run command: {e}"))?;

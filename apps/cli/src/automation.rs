@@ -273,9 +273,15 @@ impl AutomationHost for CliAutomationHost {
             cmd.env(key, value);
         }
 
+        // Tokio's output() overrides stdio, so configure and spawn the child explicitly.
+        cmd.stdout(std::process::Stdio::null());
+        cmd.stderr(std::process::Stdio::piped());
         // Kill the child if the timeout drops the future, so a hung command can't outlive the run.
         cmd.kill_on_drop(true);
-        let output = tokio::time::timeout(COMMAND_TIMEOUT, cmd.output())
+        let child = cmd
+            .spawn()
+            .map_err(|e| format!("Failed to run command: {e}"))?;
+        let output = tokio::time::timeout(COMMAND_TIMEOUT, child.wait_with_output())
             .await
             .map_err(|_| format!("Command timed out after {}s", COMMAND_TIMEOUT.as_secs()))?
             .map_err(|e| format!("Failed to run command: {e}"))?;
@@ -581,6 +587,32 @@ pub fn list(format: crate::OutputFormat) -> Result<(), String> {
 mod tests {
     use super::*;
     use cap_automation::{Action, AutomationRule, MatchMode};
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cli_automation_command_preserves_status_and_stderr() {
+        let run = |script: &str| {
+            let args = vec!["-c".to_string(), script.to_string()];
+            async move {
+                CliAutomationHost
+                    .run_command(
+                        &TriggerContext::new(),
+                        "sh",
+                        &args,
+                        None,
+                        &HashMap::new(),
+                        false,
+                    )
+                    .await
+            }
+        };
+        run("printf 'ignored output'").await.unwrap();
+        let error = run("printf 'ignored output'; printf 'diagnostic' >&2; exit 7")
+            .await
+            .unwrap_err();
+        assert!(error.contains("diagnostic"), "{error}");
+        assert!(error.contains('7'), "{error}");
+    }
 
     #[test]
     fn cli_presets_keep_caption_source_and_edits_after_reopening() {
