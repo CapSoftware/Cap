@@ -1,5 +1,7 @@
 import type { LoomCsvImportRow } from "@/actions/loom";
 
+export const MAX_LOOM_CSV_IMPORT_ROWS = 3000;
+
 export function parseLoomCsvRecords(text: string) {
 	const records: string[][] = [];
 	let field = "";
