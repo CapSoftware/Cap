@@ -2521,8 +2521,6 @@ impl OverlayWindow {
         }
     }
 
-    /// Focus on: record the window by itself. Focus off: put it back where the
-    /// picker found it, record the region.
     pub(crate) fn set_focus(&mut self, focus: bool, cx: &mut Context<Self>) {
         self.select.update(cx, |select, cx| {
             select.focus_window = focus;
