@@ -3618,6 +3618,8 @@ impl OverlayWindow {
 
         div()
             .id("overlay-start")
+            .relative()
+            .child(self.hints.keep_clear("overlay-start"))
             .flex()
             .flex_1()
             .min_w_0()
