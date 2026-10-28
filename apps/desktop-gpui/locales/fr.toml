@@ -1465,7 +1465,7 @@ starting = "Démarrage de la conversion..."
 [overlay]
 display_fallback = "Écran {id}"
 countdown_title = "Compte à rebours de l'enregistrement"
-countdown_body = "Attendre quelques secondes entre le clic sur Lancer l'enregistrement et le début de l'enregistrement."
+countdown_body = "Laisser quelques secondes entre le clic sur Lancer l'enregistrement et le début de la capture."
 mode_title = "Changer de mode d'enregistrement"
 mode_body = "Instant vous donne un lien à partager dès que vous arrêtez. Studio enregistre en pleine qualité pour le montage."
 
@@ -2417,9 +2417,9 @@ refining_time = "Affinage de la durée…"
 unavailable = "Indisponible"
 
 [editor.export.turbo]
-title = "Export turbo"
+title = "Exportation turbo"
 description = "Exporte beaucoup plus vite en utilisant tous les cœurs du processeur et le GPU"
-warning = "Utilise tout votre processeur, le GPU et plusieurs fois plus de mémoire jusqu'à la fin de l'export. Les autres apps peuvent ralentir, et votre ordinateur peut chauffer et devenir bruyant."
+warning = "Utilise tout votre processeur, le GPU et plusieurs fois plus de mémoire jusqu'à la fin de l'exportation. Les autres apps peuvent ralentir, et votre ordinateur peut chauffer et devenir bruyant."
 
 [editor.modal]
 cancel_export = "Annuler l'exportation"
@@ -2961,13 +2961,13 @@ capture_state_timed_out = "Délai dépassé pour confirmer l'état de la capture
 pause_not_acknowledged = "La capture n'a pas confirmé l'état de pause demandé"
 cleanup_unconfirmed_files_kept = "Le nettoyage de la capture n'est pas confirmé. Les fichiers locaux sont conservés ; utilisez Ctrl+Shift+F9 pour relancer l'arrêt."
 cleanup_unconfirmed_retry = "Le nettoyage de la capture n'est pas confirmé ; relancez l'arrêt."
-discard_not_acknowledged = "L'arrêt de la suppression Studio n'a pas été confirmé ; l'enregistrement local est conservé"
+discard_not_acknowledged = "Lors de la suppression Studio, l'arrêt de la capture n'a pas été confirmé ; l'enregistrement local est conservé"
 window_still_resizing = "La fenêtre est encore en cours de redimensionnement. Réessayez de démarrer."
 startup_cancelled = "Démarrage de l'enregistrement annulé ; les fichiers locaux sont conservés"
 instant_cleanup_unconfirmed = "Le nettoyage de la capture Instant n'est pas confirmé ; les fichiers locaux sont conservés"
 finalization_no_result = "La finalisation de l'enregistrement s'est terminée sans résultat. Vos fichiers ont été conservés."
 stopped_metadata_unsaved = "La capture est arrêtée, mais ses métadonnées n'ont pas pu être enregistrées ; les fichiers locaux sont conservés"
-discard_stop_unconfirmed = "L'arrêt de la suppression Studio n'est pas confirmé ; les fichiers locaux sont conservés"
+discard_stop_unconfirmed = "Lors de la suppression Studio, l'arrêt de la capture n'est pas confirmé ; les fichiers locaux sont conservés"
 discard_unconfirmed = "La suppression Studio n'est pas confirmée ; les fichiers locaux sont conservés"
 crashed_before_capture = "Cap s'est fermé avant que cet enregistrement ne capture quoi que ce soit."
 capture_state_failed = "Impossible de confirmer l'état de la capture : {error}"
@@ -2983,7 +2983,7 @@ then_shutdown_unconfirmed = "{error}. L'arrêt de Studio n'est toujours pas conf
 then_use_stop_if_unsafe = "{error}. Utilisez Arrêter si l'enregistrement ne peut pas continuer en toute sécurité."
 then_use_stop_control = "{error}. Utilisez la commande Arrêter de l'enregistrement pour l'arrêter."
 then_discard_stopped = "{error} ; suppression/redémarrage interrompu, l'enregistrement local est conservé"
-then_files_preserved = "{error}. Les fichiers de l'enregistrement échoué ont été conservés."
+then_files_preserved = "{error}. Les fichiers de l'enregistrement ayant échoué ont été conservés."
 then_cleanup_retry = "{error}. Le nettoyage n'est pas confirmé ; relancez l'arrêt."
 low_storage_preserved = "Espace de stockage insuffisant. Vos fichiers d'enregistrement sont conservés dans {path}. Libérez de l'espace, puis récupérez l'enregistrement dans Cap."
 

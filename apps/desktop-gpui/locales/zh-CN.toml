@@ -1185,7 +1185,7 @@ unavailable_title = "摄像头不可用"
 
 [camera.blur]
 light = "轻"
-heavy = "重"
+heavy = "强"
 cutout = "抠像"
 
 [onboarding.customize]
@@ -2961,13 +2961,13 @@ capture_state_timed_out = "确认捕获状态超时"
 pause_not_acknowledged = "捕获未确认所请求的暂停状态"
 cleanup_unconfirmed_files_kept = "无法确认捕获清理已完成。本地文件已保留；请按 Ctrl+Shift+F9 重试停止。"
 cleanup_unconfirmed_retry = "无法确认捕获清理已完成；请重试停止。"
-discard_not_acknowledged = "未确认 Studio 丢弃已停止；本地录制已保留"
-window_still_resizing = "窗口仍在调整大小。请重新开始。"
+discard_not_acknowledged = "丢弃 Studio 录制时未确认捕获已停止；本地录制已保留"
+window_still_resizing = "窗口仍在调整大小。请再次尝试开始录制。"
 startup_cancelled = "录制启动已取消；本地文件已保留"
 instant_cleanup_unconfirmed = "无法确认 Instant 捕获清理已完成；本地文件已保留"
 finalization_no_result = "录制收尾未返回结果。你的文件已保留。"
 stopped_metadata_unsaved = "捕获已停止，但无法保存停止信息；本地文件已保留"
-discard_stop_unconfirmed = "无法确认 Studio 丢弃已停止；本地文件已保留"
+discard_stop_unconfirmed = "丢弃 Studio 录制时无法确认捕获已停止；本地文件已保留"
 discard_unconfirmed = "无法确认 Studio 丢弃已完成；本地文件已保留"
 crashed_before_capture = "Cap 在此录制捕获到任何内容之前就已关闭。"
 capture_state_failed = "无法确认捕获状态：{error}"
@@ -2982,13 +2982,13 @@ then_cleanup_unconfirmed_control = "{error}。无法确认捕获清理已完成�
 then_shutdown_unconfirmed = "{error}。无法确认 Studio 已关闭；录制和文件已保留。"
 then_use_stop_if_unsafe = "{error}。如果录制无法安全继续，请使用“停止”。"
 then_use_stop_control = "{error}。请使用录制的停止控件来停止录制。"
-then_discard_stopped = "{error}；丢弃/重新开始已停止，本地录制已保留"
+then_discard_stopped = "{error}；已中止丢弃/重新开始，本地录制已保留"
 then_files_preserved = "{error}。失败录制的文件已保留。"
 then_cleanup_retry = "{error}。无法确认清理已完成；请重试停止。"
 low_storage_preserved = "存储空间不足。你的录制文件已保留在 {path}。请释放空间，然后在 Cap 中恢复该录制。"
 
 [message.permission]
-unavailable = "无法使用{permission}权限。请在“系统设置”>“隐私与安全性”>“{permission}”中允许 Cap，然后重新选择该设备。"
+unavailable = "无法访问{permission}。请在“系统设置”>“隐私与安全性”>“{permission}”中允许 Cap，然后重新选择该设备。"
 
 [message.upload]
 offline = "离线"
