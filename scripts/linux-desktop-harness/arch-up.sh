@@ -40,16 +40,32 @@ CONF
       env "${common[@]}" AQ_DRM_DEVICES="$kms" XDG_CURRENT_DESKTOP=Hyprland Hyprland
     ;;
   niri)
-    # vkms has no render node of its own; niri needs one named.
-    render=$(ls /dev/dri/renderD* 2>/dev/null | head -1)
+    # vkms has no render node of its own; niri needs one named. On a host
+    # with no GPU, NIRI_RENDER_DEVICE=vkms renders on the vkms card itself,
+    # for a niri built to accept software rendering (niri-software.Dockerfile).
+    render=${NIRI_RENDER_DEVICE:-$(ls /dev/dri/renderD* 2>/dev/null | head -1)}
+    [[ $render == vkms ]] && render=$kms
     cat >"$HOME/.config/niri/config.kdl" <<KDL
 spawn-at-startup "sh" "-c" "$export_session; waybar"
 debug {
     render-drm-device "$render"
 }
 KDL
-    systemd-run --user --unit=desktop --collect -p StandardOutput=file:"$out/compositor.log" -p StandardError=inherit \
-      env "${common[@]}" XDG_CURRENT_DESKTOP=niri niri
+    # NIRI_OUTPUTS_OFF: outputs to switch off (a cloud GPU's EFI framebuffer),
+    # so the screen-share dialog has the one screen to pick.
+    for output in ${NIRI_OUTPUTS_OFF:-}; do
+      printf 'output "%s" {\n    off\n}\n' "$output" >>"$HOME/.config/niri/config.kdl"
+    done
+    # The packaged session unit, as niri-session starts it: it brings up
+    # graphical-session.target, which the GNOME portal backend (niri's
+    # ScreenCast portal) requires.
+    mkdir -p "$HOME/.config/systemd/user/niri.service.d"
+    printf '[Service]\nStandardOutput=file:%s\nStandardError=inherit\nEnvironment=LIBSEAT_BACKEND=seatd XDG_SESSION_TYPE=wayland XDG_CURRENT_DESKTOP=niri RUST_LOG=%s\n' \
+      "$out/compositor.log" "${NIRI_LOG:-niri=debug}" >"$HOME/.config/systemd/user/niri.service.d/harness.conf"
+    # GSK_RENDERER: the portal dialogs' GTK renderer (cairo on software GL).
+    [[ -n ${GSK_RENDERER:-} ]] && systemctl --user set-environment GSK_RENDERER="$GSK_RENDERER"
+    systemctl --user daemon-reload
+    systemctl --user start niri.service
     ;;
   sway)
     # xdg-desktop-portal-wlr: share the one output, as a person picks it.

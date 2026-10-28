@@ -91,6 +91,12 @@ pub fn render_audio<T: AudioSampleSource>(
             return samples;
         }
     }
+    if let [track] = tracks
+        && track.data.channels() == 1
+        && try_render_single_mono(track, offset, out)
+    {
+        return samples;
+    }
     out.fill(0.0);
 
     for track in tracks {
@@ -157,6 +163,37 @@ pub fn render_audio<T: AudioSampleSource>(
     }
 
     samples
+}
+
+#[inline(never)]
+fn try_render_single_mono<T: AudioSampleSource>(
+    track: &AudioRendererTrack<'_, T>,
+    offset: usize,
+    out: &mut [f32],
+) -> bool {
+    if track.gain <= -30.0 {
+        out.fill(0.0);
+        return true;
+    }
+    let Ok(first) = usize::try_from(offset as i128 + track.offset as i128) else {
+        return false;
+    };
+    let samples = out.len() / 2;
+    let Some(end) = first.checked_add(samples) else {
+        return false;
+    };
+    let Some(input) = track.data.sample_slice(first..end) else {
+        return false;
+    };
+    if input.len() != samples {
+        return false;
+    }
+    let gain = gain_for_db(track.gain);
+    for (sample, frame) in input.iter().zip(out.chunks_exact_mut(2)) {
+        let sample = (0.0 + sample * 0.707 * gain).clamp(-1.0, 1.0);
+        frame.fill(sample);
+    }
+    true
 }
 
 #[inline(always)]
@@ -281,8 +318,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn single_stereo_mixing_matches_indexed_samples_at_boundaries() {
+    fn assert_single_track_mixing_matches_indexed_samples(channels: u16) {
         let data = AudioData::from_raw_f32(
             vec![
                 0.0,
@@ -300,7 +336,7 @@ mod tests {
                 -1.0,
                 0.5,
             ],
-            2,
+            channels,
         );
         for gain in [
             f32::NEG_INFINITY,
@@ -354,6 +390,16 @@ mod tests {
     }
 
     #[test]
+    fn single_stereo_mixing_matches_indexed_samples_at_boundaries() {
+        assert_single_track_mixing_matches_indexed_samples(2);
+    }
+
+    #[test]
+    fn single_mono_mixing_matches_indexed_samples_at_boundaries() {
+        assert_single_track_mixing_matches_indexed_samples(1);
+    }
+
+    #[test]
     fn partial_stereo_slices_keep_the_unavailable_tail_silent() {
         struct PartialSlice;
         impl AudioSampleSource for PartialSlice {
@@ -387,11 +433,54 @@ mod tests {
     }
 
     #[test]
-    fn muted_stereo_tracks_do_not_read_samples() {
-        struct Muted;
+    fn partial_mono_slices_keep_the_unavailable_tail_silent() {
+        struct PartialSlice;
+        impl AudioSampleSource for PartialSlice {
+            fn channels(&self) -> u16 {
+                1
+            }
+            fn sample_count(&self) -> usize {
+                4
+            }
+            fn sample(&self, _index: usize) -> Option<&f32> {
+                None
+            }
+            fn sample_slice(&self, _range: Range<usize>) -> Option<&[f32]> {
+                Some(&[0.25, -0.5])
+            }
+        }
+        let tracks = [AudioRendererTrack {
+            data: &PartialSlice,
+            gain: 0.0,
+            offset: 0,
+            stereo_mode: StereoMode::Stereo,
+        }];
+        let mut output = [13.0_f32; 12];
+        assert_eq!(render_audio(&tracks, 0, 4, 2, &mut output), 4);
+        assert_eq!(
+            output,
+            [
+                13.0,
+                13.0,
+                0.25 * 0.707,
+                0.25 * 0.707,
+                -0.5 * 0.707,
+                -0.5 * 0.707,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                13.0,
+                13.0
+            ]
+        );
+    }
+
+    fn assert_muted_tracks_do_not_read_samples(channels: u16) {
+        struct Muted(u16);
         impl AudioSampleSource for Muted {
             fn channels(&self) -> u16 {
-                2
+                self.0
             }
             fn sample_count(&self) -> usize {
                 4
@@ -405,7 +494,7 @@ mod tests {
         }
         for gain in [f32::NEG_INFINITY, -31.0, -30.0] {
             let tracks = [AudioRendererTrack {
-                data: &Muted,
+                data: &Muted(channels),
                 gain,
                 offset: 0,
                 stereo_mode: StereoMode::Stereo,
@@ -419,6 +508,16 @@ mod tests {
                 ]
             );
         }
+    }
+
+    #[test]
+    fn muted_stereo_tracks_do_not_read_samples() {
+        assert_muted_tracks_do_not_read_samples(2);
+    }
+
+    #[test]
+    fn muted_mono_tracks_do_not_read_samples() {
+        assert_muted_tracks_do_not_read_samples(1);
     }
 
     #[test]

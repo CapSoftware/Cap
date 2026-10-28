@@ -24,9 +24,17 @@ quit = "Quit Cap"
 services = "Services"
 settings = "Settings…"
 
+[menu.about]
+licensed = "Licensed under AGPL-3.0"
+website = "Website"
+commit = "Commit"
+
 [menu.file]
 close_window = "Close Window"
 title = "File"
+open_file = "Open File…"
+open_recent = "Open Recent"
+import_media = "Import Media…"
 
 [menu.edit]
 copy = "Copy"
@@ -49,12 +57,22 @@ zoom = "Zoom"
 
 [menu.help]
 title = "Help"
+feedback = "Give Feedback…"
+changelog = "Changelog"
+dashboard = "Dashboard"
+documentation = "Documentation"
+faq = "FAQ"
+self_hosting = "Self-hosting"
+help_center = "Help Center"
+system_status = "System Status"
+discord = "Join Discord Community"
 
 [tray]
 import_media = "Import Media..."
 no_recent_items = "No recent items"
 open_main_window = "Open Main Window"
 previous = { text = "Previous", context = "Submenu listing the most recent recordings and screenshots." }
+recording_mode = "Recording Mode"
 quit = "Quit Cap"
 record_area = "Record Area"
 record_display = "Record Display"
@@ -142,6 +160,10 @@ label = { text = "Studio Sound on new recordings", context = "Studio Sound is th
 [settings.general.recording.main_window_start]
 description = "What happens to the main window once a recording begins."
 label = "Main window when recording starts"
+
+[settings.general.recording.window_capture]
+description = "How a window recording captures the window you pick. Focused window records only that window, centred and followed if it moves; Screen region records the area of the screen it covers."
+label = "Window capture style"
 
 [settings.general.recording.post_deletion]
 description = "Whether the recording window should reopen."
@@ -241,6 +263,704 @@ title = "Privacy"
 [settings.general.privacy.telemetry]
 description = "Cap uses anonymous telemetry to improve reliability and fix bugs. We never collect recording contents, window titles, file paths, or personal information."
 label = "Share anonymous telemetry"
+[settings.prompt]
+ok = { text = "Ok", context = "The only button of an informational dialog." }
+
+[settings.sidebar]
+account = "Account"
+cancel_sign_in = { text = "Cancel Sign In", max_px = 180, size = 13 }
+check_for_updates = "Check for updates"
+checking_for_updates = "Checking for updates…"
+click_to_sign_in = "Click to sign in"
+downloading = { text = "Downloading v{version}…", context = "{version} is a version number such as 0.6.2." }
+downloading_progress = { text = "Downloading v{version}… {percent}%", context = "{version} is a version number such as 0.6.2; {percent} is a whole number from 0 to 100." }
+installing = { text = "Installing v{version}…", context = "{version} is a version number such as 0.6.2." }
+previous_versions = "View previous versions"
+restart_to_update = { text = "Restart to update to v{version}", context = "{version} is a version number such as 0.6.2." }
+sign_in = { text = "Sign In", max_px = 180, size = 13 }
+sign_out = { text = "Sign Out", max_px = 180, size = 13 }
+signed_in = "Signed in"
+
+[settings.recordings]
+corrupted_body = { text = "The recording failed so this file may have issues in the editor! If your having issues recovering the file please reach out to support!", context = "Shown before opening a failed recording in the editor. The English has a typo (\"your\" for \"you're\"); translate the meaning." }
+corrupted_title = "Recording is potentially corrupted"
+delete = "Delete"
+description = "Manage your recordings and perform actions."
+edit = "Edit"
+empty_library = "No recordings found"
+failed = "Recording failed"
+import = "Import"
+in_progress = "Recording in progress"
+load_more = "Load more"
+open_bundle = "Open recording bundle"
+open_link = "Open link"
+retry_upload = "Retry upload"
+show_all = "Show all"
+title = "Recordings"
+
+[settings.recordings.empty]
+all = "No recordings"
+all_matching = "No matching recordings"
+instant = "No instant recordings"
+instant_matching = "No matching instant recordings"
+studio = "No studio recordings"
+studio_matching = "No matching studio recordings"
+
+[settings.screenshots]
+copy = "Copy to clipboard"
+delete = "Delete"
+description = "Manage your screenshots and perform actions."
+empty = "No screenshots"
+empty_library = "No screenshots found"
+empty_matching = "No matching screenshots"
+import = "Import image"
+load_more = "Load more"
+open_folder = "Open folder"
+save_as = "Save as"
+title = "Screenshots"
+
+[settings.quality]
+save_failed = "Couldn't save your recording settings. Please try again."
+
+[settings.quality.studio]
+balanced = "Balanced"
+balanced_description = "Sharp detail at a sensible file size. Right for most recordings."
+compatibility = "Smaller files"
+compatibility_description = "Saves disk space. Fine detail can soften, most of all on camera."
+description = "Saved to your computer for editing. You choose the export size later, in the editor."
+recommended = "Recommended"
+title = "Studio recordings"
+ultra = "Maximum detail"
+ultra_description = "Keeps the most detail for heavy editing. Uses the most disk space."
+
+[settings.quality.instant]
+description = "Uploaded while you record, so the link is ready the moment you stop. For the best quality, use Studio mode: it records at the highest quality your screen allows, and you can export up to 4K."
+free_plan = "720p on the free plan. Cap Pro records up to 4K."
+max_resolution = "Maximum resolution"
+res_1080p = "Sharp text at a practical upload size."
+res_1440p = "Extra detail for large, high-resolution screens."
+res_4k = "The most detail. Best on a fast connection."
+res_720p = "Smallest uploads, so links are ready fastest."
+title = "Instant recordings"
+
+[settings.quality.sharing]
+auto_open = "Open share links automatically"
+auto_open_description = "Open the link in your browser when an upload finishes."
+title = "Sharing"
+
+[settings.options.studio_quality]
+balanced = "Balanced"
+compatibility = "Compatibility"
+ultra = "Ultra"
+
+[settings.options.main_window_start]
+close = { text = "Close", max_px = 180, size = 12 }
+minimise = { text = "Minimise", max_px = 180, size = 12 }
+
+[settings.options.window_capture]
+focused_window = { text = "Focused window", max_px = 180, size = 12 }
+screen_region = { text = "Screen region", max_px = 180, size = 12 }
+
+[settings.options.post_studio]
+do_nothing = "Do nothing"
+open_editor = "Open editor"
+show_cap = "Show Cap"
+
+[settings.options.post_screenshot]
+copy = "Copy to clipboard"
+copy_and_open_editor = "Copy and open editor"
+do_nothing = "Do nothing"
+open_editor = "Open editor"
+
+[settings.options.post_deletion]
+do_nothing = { text = "Do nothing", max_px = 180, size = 12 }
+reopen = { text = "Reopen recording window", max_px = 180, size = 12 }
+
+[settings.options.preview_quality]
+full = "Full"
+half = "Half"
+quarter = "Quarter"
+
+[settings.shortcuts]
+blocked_while_recording = "Shortcuts can't be changed while this recording holds its stop key. Stop recording first."
+needs_modifier_macos = "Include ⌘, ⌃ or ⌥ so the shortcut doesn't get in the way of typing."
+needs_modifier_other = "Include Ctrl, Alt or Win so the shortcut doesn't get in the way of typing."
+record_shortcut = "Record shortcut"
+recording_description = "Start a recording without opening Cap first."
+recording_hint = "Press the keys you want to use. Esc cancels, Delete removes it."
+recording_title = "Recording"
+saved = { text = "Saved. Press {keys} in any app to {effect}.", context = "{keys} is the shortcut, such as ⌘⇧4. {effect} is one of the settings.shortcuts.effect messages and completes the sentence." }
+saved_moved = { text = "Saved. Press {keys} in any app to {effect}. Removed from {shortcut}.", context = "Like settings.shortcuts.saved; {shortcut} is the label of the shortcut that used these keys before, such as Record an area." }
+screenshots_description = "Shortcuts work from any app. Click one to change it."
+screenshots_title = "Screenshots"
+type_shortcut = "Type shortcut…"
+unavailable = "Another app or the system already uses this shortcut. Click to choose a different one."
+unsupported_key = "That key can't be used in a shortcut. Try a letter, number or F-key."
+while_recording_title = "While recording"
+
+[settings.shortcuts.after_screenshot]
+hint = "For every screenshot, from a shortcut or from Cap"
+title = "After a screenshot"
+
+[settings.shortcuts.after_studio]
+hint = "When you stop"
+title = "After a Studio recording"
+
+[settings.shortcuts.after_instant]
+hint = "The share link is always copied"
+title = "After an Instant recording"
+
+[settings.shortcuts.outcome]
+instant_copy_link = "Copy link only"
+instant_copy_link_hint = "Nothing opens"
+instant_open_link = "Open link"
+instant_open_link_hint = "In your browser"
+instant_show_cap = "Show Cap"
+instant_show_cap_hint = "Back to the recorder"
+saved_to_library = "Saved to library"
+screenshot_copy = "Copy"
+screenshot_copy_and_edit = "Copy and edit"
+screenshot_copy_and_edit_hint = "Both at once"
+screenshot_copy_hint = "Paste anywhere"
+screenshot_do_nothing = "Do nothing"
+screenshot_open_editor = "Open editor"
+screenshot_open_editor_hint = "Annotate first"
+studio_do_nothing = "Do nothing"
+studio_open_editor = "Open editor"
+studio_open_editor_hint = "Edit right away"
+studio_show_cap = "Show Cap"
+studio_show_cap_hint = "Back to the recorder"
+
+[settings.shortcuts.label]
+cycle_mode = "Cycle recording mode"
+fallback = "Shortcut"
+open_picker = "Open recording picker"
+pause = "Pause or resume"
+record_area = "Record an area"
+record_display = "Record a display"
+record_window = "Record a window"
+restart = "Restart recording"
+screenshot_area = "Screenshot an area"
+screenshot_display = "Screenshot the display"
+screenshot_window = "Screenshot a window"
+start_instant = "Start Instant recording"
+start_studio = "Start Studio recording"
+stop = "Stop recording"
+
+[settings.shortcuts.effect]
+cycle_mode = "switch between Studio, Instant and Screenshot mode"
+instant_copy = "record your selected screen or window in Instant mode, then copy its share link when you stop"
+instant_copy_and_open = "record your selected screen or window in Instant mode, then copy and open its share link when you stop"
+open_picker = "open Cap so you can choose what to record"
+pause = "pause the current recording, or resume it"
+picker_area_instant = "select an area, then record it in Instant mode"
+picker_area_screenshot = "select an area, then take a screenshot of it"
+picker_area_studio = "select an area, then record it in Studio mode"
+picker_display_instant = "choose a display, then record it in Instant mode"
+picker_display_screenshot = "choose a display, then take a screenshot of it"
+picker_display_studio = "choose a display, then record it in Studio mode"
+picker_window_instant = "choose a window, then record it in Instant mode"
+picker_window_screenshot = "choose a window, then take a screenshot of it"
+picker_window_studio = "choose a window, then record it in Studio mode"
+restart = "throw away the current take and start again"
+screenshot_area_copy = "select an area and copy it to your clipboard"
+screenshot_area_copy_and_open_editor = "select an area and copy it and open the editor"
+screenshot_area_open_editor = { text = "select an area and open it in the editor", context = "Completes settings.shortcuts.saved after \"to\"; written the way that message needs it." }
+screenshot_area_save = "select an area and save it to your library without opening anything"
+screenshot_display_copy = "capture the display under your pointer and copy it to your clipboard"
+screenshot_display_copy_and_open_editor = "capture the display under your pointer and copy it and open the editor"
+screenshot_display_open_editor = "capture the display under your pointer and open it in the editor"
+screenshot_display_save = "capture the display under your pointer and save it to your library without opening anything"
+screenshot_window_copy = "capture the window under your pointer and copy it to your clipboard"
+screenshot_window_copy_and_open_editor = "capture the window under your pointer and copy it and open the editor"
+screenshot_window_open_editor = "capture the window under your pointer and open it in the editor"
+screenshot_window_save = "capture the window under your pointer and save it to your library without opening anything"
+stop = "stop the current recording"
+studio = "record your selected screen or window in Studio mode"
+studio_open_editor = "record your selected screen or window in Studio mode, then open the editor when you stop"
+
+[settings.shortcuts.sentence]
+cycle_mode = "Switch between Studio, Instant and Screenshot mode."
+instant_copy = "Record your selected screen or window in Instant mode, then copy its share link when you stop."
+instant_copy_and_open = "Record your selected screen or window in Instant mode, then copy and open its share link when you stop."
+open_picker = "Open Cap so you can choose what to record."
+pause = "Pause the current recording, or resume it."
+picker_area_instant = "Select an area, then record it in Instant mode."
+picker_area_screenshot = "Select an area, then take a screenshot of it."
+picker_area_studio = "Select an area, then record it in Studio mode."
+picker_display_instant = "Choose a display, then record it in Instant mode."
+picker_display_screenshot = "Choose a display, then take a screenshot of it."
+picker_display_studio = "Choose a display, then record it in Studio mode."
+picker_window_instant = "Choose a window, then record it in Instant mode."
+picker_window_screenshot = "Choose a window, then take a screenshot of it."
+picker_window_studio = "Choose a window, then record it in Studio mode."
+restart = "Throw away the current take and start again."
+screenshot_area_copy = "Select an area and copy it to your clipboard."
+screenshot_area_copy_and_open_editor = "Select an area and copy it and open the editor."
+screenshot_area_open_editor = "Select an area and open it in the editor."
+screenshot_area_save = "Select an area and save it to your library without opening anything."
+screenshot_display_copy = "Capture the display under your pointer and copy it to your clipboard."
+screenshot_display_copy_and_open_editor = "Capture the display under your pointer and copy it and open the editor."
+screenshot_display_open_editor = "Capture the display under your pointer and open it in the editor."
+screenshot_display_save = "Capture the display under your pointer and save it to your library without opening anything."
+screenshot_window_copy = "Capture the window under your pointer and copy it to your clipboard."
+screenshot_window_copy_and_open_editor = "Capture the window under your pointer and copy it and open the editor."
+screenshot_window_open_editor = "Capture the window under your pointer and open it in the editor."
+screenshot_window_save = "Capture the window under your pointer and save it to your library without opening anything."
+stop = "Stop the current recording."
+studio = "Record your selected screen or window in Studio mode."
+studio_open_editor = "Record your selected screen or window in Studio mode, then open the editor when you stop."
+
+[settings.cli]
+command = "Command"
+copy = "Copy"
+description = "Install the Cap command for terminals, agents, scripts, and local automation."
+install = "Install CLI"
+installed = "Installed"
+installing = "Installing..."
+installs_command = { text = "The desktop app installs a local\u00A0{command}\u00A0command that points back to the bundled CLI.", context = "{command} is the command name cap, shown in a code font. Keep the non-breaking spaces around it." }
+load_failed = { text = "Couldn't load CLI status: {error}", context = "{error} is a technical error message, usually in English." }
+not_installed = "Not installed"
+path_configured = "Added cap to your PATH. Restart your terminal to use it, or run this now:"
+path_missing = { text = "Add {path} to your PATH to use cap from a new terminal.", context = "{path} is a folder such as ~/.local/bin." }
+remove = "Remove"
+removing = "Removing..."
+repair = "Repair"
+repairing = "Repairing..."
+retry = "Retry"
+target = "Target"
+title = "Command Line"
+
+[settings.transcription]
+active_title = "Active hints"
+applied_note = "These hints are applied when you generate captions in the editor."
+clear = "Clear"
+count = { one = "{count} item", other = "{count} items" }
+description = "Add names, spellings, domains, and capitalization preferences that caption generation should keep in mind."
+placeholder = "Add a term"
+saved = "Saved"
+saving = "Saving..."
+terms_description = "Add one term at a time to reduce typos and formatting mistakes."
+terms_title = "Remembered terms"
+title = "Transcription"
+
+[settings.experimental]
+developer = "Developer"
+developer_description = "Only shown in development builds."
+muxer = "Out-of-process muxer"
+muxer_description = "Run the fragmented-MP4 muxer in an isolated subprocess so muxer crashes can't take down your recording. Requires the bundled cap-muxer binary."
+native_app = "Use native app"
+native_app_description = "Turn off to close this app and reopen the classic Tauri app in the dev harness. Recordings and settings are shared."
+reliability = "Reliability"
+
+[settings.experimental.switch]
+busy = "Finish your recording, export, upload, import, or transcription task before switching to the classic app."
+check_failed = { text = "Couldn't check whether the classic Cap app opened: {error}", context = "{error} is a technical error message, usually in English." }
+data_stays = "Your recordings and settings stay exactly where they are."
+failed = "Couldn't open the classic Cap app."
+not_found = "Couldn't find the classic Cap app to switch back to."
+open_failed = { text = "Couldn't open the classic Cap app: {error}", context = "{error} is a technical error message, usually in English." }
+opening = "Opening the classic Cap app"
+opening_detail = "This window will close when the classic Cap app is ready."
+save_failed = "Couldn't save your app preference. Cap is still open."
+switching = "Switching back to the classic Cap app."
+timed_out = "The classic app hasn't opened. Check the dev terminal for build errors, then try again."
+
+[settings.feedback]
+app_version = "App Version"
+capture_support = "Capture Support"
+capture_supported = "Screen Capture: Supported"
+capture_unsupported = "Screen Capture: Not Supported"
+community_description = "Have questions, want to share ideas, or just hang out? Join the Cap Discord community."
+community_title = "Join the Community"
+debug_description = "Upload your logs to help us diagnose issues with Cap. No personal information is included."
+debug_title = "Debug Information"
+description = "Help us improve Cap by submitting feedback or reporting bugs. We'll get right on it."
+join_discord = "Join Discord"
+operating_system = "Operating System"
+placeholder = "Tell us what you think about Cap..."
+submit = "Submit Feedback"
+submit_failed = "Failed to submit feedback"
+submitting = "Submitting..."
+system_loading = "Loading system information..."
+system_title = "System Information"
+thanks = "Thank you for your feedback!"
+title = "Feedback"
+upload_interrupted = "The upload was interrupted"
+upload_logs = "Upload Logs"
+upload_sent = "Sent. Thank you -- this helps us find the problem."
+uploading = "Uploading..."
+
+[settings.feedback.diagnostic]
+confirm_body = { text = "Cap will take over your screen with a flashing pattern and play loud beeps for about {seconds} seconds per pipeline. Take your headphones off, leave the volume audible, and leave the machine alone until it finishes.", context = "{seconds} is a whole number of seconds." }
+confirm_title = "Run diagnostic?"
+description = "Records a short flashing/beeping test pattern, measures how far the picture and sound drift apart, and snapshots your displays, cameras, microphones, disk space and recording settings. Nothing is sent anywhere until you choose to send it."
+mic_description = "Also record your microphone and check that it hears the beeps in time. Needs speakers the mic can actually hear."
+mic_label = "Test microphone"
+mode_description = "Which pipeline to test. Both runs the studio leg and then the instant one."
+mode_label = "Recording mode"
+no_cli = "The Cap command-line tool was not found next to this build, so the report will cover your environment only."
+no_cli_sync = "The Cap command-line tool was not found next to this build, so the sync test could not run."
+run = "Run Diagnostic"
+run_again = "Run Again"
+send = "Send to Cap"
+sending = "Sending..."
+show_file = "Show File"
+stop_recording_first = "Stop the current recording before running a diagnostic."
+title = "Diagnostic Report"
+try_again = "Try Again"
+warning_body = "A fullscreen window flashes black and white while 1kHz beeps play through your speakers, and Cap records it and measures how far the picture and the sound have drifted apart. Leave the machine alone while it runs. Both modes together take a couple of minutes."
+warning_title = "The test takes over your screen and makes noise."
+
+[settings.feedback.diagnostic.verdict]
+environment_only = "ENVIRONMENT ONLY"
+fail = "FAIL"
+inconclusive = "INCONCLUSIVE"
+pass = "PASS"
+warn = "WARN"
+
+[settings.sign_in_required]
+body = "Please sign in to continue. Alternatively, email hello@cap.so or join our Discord at cap.link/discord"
+title = "Sign in required"
+
+[settings.changelog]
+fetch_failed = "Failed to fetch changelog"
+loading = "Loading changelog..."
+new = "NEW"
+version = { text = "Version {version} - {date}", context = "{version} is a version number such as 0.6.2; {date} is a date such as 8/17/2026." }
+
+[settings.license]
+activate = "Activate License"
+activating = "Activating..."
+active_title = "Desktop license"
+checking = "Checking…"
+deactivate = "Deactivate License"
+description = "Your Cap plan and desktop license, in one place."
+desktop_description = "Your desktop license covers commercial recording and editing. Cap Pro adds cloud sharing and collaboration features."
+desktop_name = "Desktop License"
+expires = "Expires"
+explore_description = "Compare current pricing and everything included on our website."
+explore_desktop = "Desktop License · Commercial use of the desktop recorder and editor."
+explore_pro = "Cap Pro · A desktop license, plus cloud sharing, AI features and collaboration."
+explore_title = "Explore plans"
+free_description = "Record and edit locally for personal use. Choose a paid plan for commercial use or more cloud features."
+have_key = "Have a license key?"
+key = "License Key"
+no_instance = "No instance ID found"
+opens_pricing = "Opens cap.so/pricing in your browser."
+placeholder = "License key"
+plan_title = "Your plan"
+pro_description = "Your account includes cloud sharing, Pro features and a desktop license for commercial use."
+refresh = "Refresh plan"
+refresh_failed = "Couldn't refresh your plan. Please try again."
+save_failed = "Failed to save the license"
+sign_in_hint = "Already have Cap Pro? Sign in with your account from the sidebar."
+title = "Plan & license"
+view_pricing = "View plans & pricing ↗"
+
+[settings.integrations]
+configure = "Configure"
+description = "Configure integrations to extend Cap's functionality and connect with third-party services."
+google_drive_description = "Connect Google Drive for new shareable link uploads. Cap stores new videos in a private Cap folder in your Drive and continues serving them through Cap after normal access checks."
+managed = "Managed by your organization"
+managed_by = { text = "Managed by your organization: {organization}", context = "{organization} is the name of the user's organization." }
+request_timed_out = "The request timed out"
+s3_description = "Connect your own S3 bucket for complete control over your data storage. All new shareable link uploads will be automatically uploaded to your configured S3 bucket, ensuring you maintain complete ownership and control over your content. Perfect for organizations requiring data sovereignty and custom storage policies."
+s3_name = "S3 Config"
+title = "Integrations"
+upgrade = "Upgrade to Pro"
+
+[settings.integrations.s3]
+access_key = "Access Key ID"
+bucket = "Bucket Name"
+configuration = "Configuration"
+delete_failed = "Failed to delete S3 config"
+deleted = "S3 configuration deleted successfully"
+endpoint = "Endpoint"
+fetch_failed = "Failed to fetch S3 config"
+guide = "Storage Config Guide"
+guide_intro = { text = "It should take under 10 minutes to set up and connect your storage bucket to Cap. View the\u00A0{guide}\u00A0to get started.", context = "{guide} is the link text settings.integrations.s3.guide. Keep the non-breaking spaces around it." }
+other_provider = "Other S3-Compatible"
+provider = "Storage Provider"
+region = "Region"
+remove = "Remove Config"
+removing = "Removing..."
+save_failed = "Failed to save S3 config"
+saved = "S3 configuration saved successfully"
+saving = "Saving..."
+secret_key = "Secret Access Key"
+test = "Test Connection"
+test_failed = "S3 connection test failed. Check your config and network connection."
+test_ok = "S3 configuration test successful! Connection is working."
+test_timeout = "Connection test timed out after 5 seconds. Please check your endpoint URL and network connection."
+testing = "Testing..."
+
+[settings.integrations.gdrive]
+active = "Active"
+active_for_uploads = "Active for new uploads"
+cached = { text = "Cached {time}", context = "{time} is a date and time such as Aug 17, 2026, 10:30 PM." }
+connect = "Connect Google Drive"
+connect_failed = "Failed to start Google Drive connection"
+connected_inactive = "Connected but not active"
+connection_description = "Google Drive stores new uploads in a private Cap folder in your Drive. Existing Cap-hosted and S3 videos keep using their current storage."
+connection_title = "Connection"
+disconnect = "Disconnect"
+disconnect_failed = "Failed to disconnect Google Drive"
+disconnected = "Google Drive disconnected"
+drive_files = "Drive files"
+finish_in_browser = "Finish connecting Google Drive in your browser, then return here and refresh."
+not_connected = "Not connected"
+opening = "Opening..."
+refresh = "Refresh"
+refreshing = "Refreshing..."
+remaining = "Remaining"
+set_active_failed = "Failed to update active storage provider"
+storage = "Storage"
+test = "Test"
+test_failed = "Google Drive connection test failed"
+testing = "Testing..."
+trash = "Trash"
+updated = { text = "Updated {time}", context = "{time} is a date and time such as Aug 17, 2026, 10:30 PM." }
+use_drive = "Use Google Drive"
+use_s3 = "Use S3"
+used = { text = "{usage} used", context = "{usage} is a size such as 2.0 GB." }
+used_of = { text = "{usage} of {limit} used", context = "{usage} and {limit} are sizes such as 2.0 GB." }
+waiting = "Waiting..."
+working = "Google Drive connection is working"
+working_for = { text = "Google Drive connection is working for {email}", context = "{email} is the Google account's email address." }
+
+[settings.automations]
+action_no_effect = "This action has no effect for the selected trigger."
+add_action = "Add action"
+add_condition = "Add condition"
+auto_name_empty = { text = "{trigger} automation", context = "{trigger} is a settings.automations.trigger.*.noun." }
+browse = "Browse"
+check_compatibility = "Check compatibility"
+compatibility_checked = "Compatibility checked: this automation doesn't run in Cap yet. Saved rules remain available to the Cap CLI. No actions were run."
+condition_never_matches = "This condition never matches for the selected trigger."
+copy_link = "Copy link to clipboard"
+dangerous = "In the Cap CLI, this automation runs commands or sends network requests with your permissions. Only use values you trust."
+delete = "Delete"
+description = "Rules are shared with the Cap CLI. Cap saves these rules but does not run automations yet."
+empty_description = "Pick a template below to get started in one click, or build your own from scratch."
+empty_title = "No automations yet"
+enabled = "Enabled"
+match_all = "Match all"
+match_any = "Match any"
+name = "Name"
+new = "New automation"
+no_presets = "No presets yet — create one in the editor first."
+only_if = { text = "ONLY RUN IF", context = "A small all-caps group label above the conditions." }
+open_in_browser = "Open in browser"
+retry_save = "Retry save"
+run_through_shell = "Run through shell"
+save_failed = "Failed to save automations. Your changes have not been saved."
+start_from_scratch = "Start from scratch"
+summary_empty = { text = "{trigger} → no actions yet", context = "{trigger} is a settings.automations.trigger.*.phrase." }
+templates_description = "One click to add a ready-made automation. Tweak anything afterwards."
+templates_title = "Templates"
+then = { text = "THEN DO THIS", context = "A small all-caps group label above the actions." }
+title = "Automations"
+when = { text = "WHEN THIS HAPPENS", context = "A small all-caps group label above the trigger select." }
+
+[settings.automations.status]
+disabled_saved = "Disabled · Saved"
+disabled_unsaved = "Disabled · Not saved"
+enabled_saved = "Enabled · Saved"
+enabled_unsaved = "Enabled · Not saved"
+
+[settings.automations.field]
+arguments = "Arguments (space-separated)"
+body = "Body"
+body_template = "Body template (optional)"
+compression = "Compression"
+destination = "Destination folder (optional, blank = project folder)"
+filename = "Filename template (optional)"
+folder = "Folder"
+format = "Format"
+frame_rate = "Frame rate"
+method = "Method"
+organization = "Organization ID (optional)"
+preset = "Preset"
+program = "Program"
+resolution = "Resolution"
+source = "Source"
+title = "Title"
+url = "URL"
+
+[settings.automations.placeholder]
+organization_id = "Organization ID"
+project_folder = "Project folder"
+window_title = { text = "e.g. Slack", context = "Placeholder in the window-title condition field; Slack is an app name." }
+
+[settings.automations.clipboard]
+original = "Original capture"
+rendered = "Edited / rendered"
+
+[settings.automations.target]
+area = "Area"
+display = "Display"
+window = "Window"
+
+[settings.automations.compression]
+maximum = "Maximum"
+potato = "Potato"
+social = "Social"
+web = "Web"
+
+[settings.automations.trigger.screenshot_taken]
+label = "On screenshot taken"
+noun = "Screenshot"
+phrase = "Screenshot taken"
+runs = "Runs for every screenshot taken."
+
+[settings.automations.trigger.studio_finished]
+label = "On studio recording finished"
+noun = "Studio recording"
+phrase = "Studio recording ends"
+runs = "Runs for every studio recording ends."
+
+[settings.automations.trigger.instant_finished]
+label = "On instant recording finished"
+noun = "Instant recording"
+phrase = "Instant recording ends"
+runs = "Runs for every instant recording ends."
+
+[settings.automations.trigger.recording_started]
+label = "On recording started"
+noun = "Recording start"
+phrase = "Recording starts"
+runs = "Runs for every recording starts."
+
+[settings.automations.trigger.upload_completed]
+label = "On upload completed"
+noun = "Upload"
+phrase = "Upload completes"
+runs = "Runs for every upload completes."
+
+[settings.automations.trigger.video_imported]
+label = "On video imported"
+noun = "Import"
+phrase = "Video imported"
+runs = "Runs for every video imported."
+
+[settings.automations.trigger.recording_deleted]
+label = "On recording deleted"
+noun = "Deletion"
+phrase = "Recording deleted"
+runs = "Runs for every recording deleted."
+
+[settings.automations.action.copy_to_clipboard]
+label = "Copy to clipboard"
+noun = "Clipboard"
+short = "Copy to clipboard"
+
+[settings.automations.action.save_to_location]
+label = "Save to location"
+noun = "Folder"
+short = "Save to folder"
+
+[settings.automations.action.export]
+label = "Export with profile"
+noun = "Export"
+short = "Export"
+
+[settings.automations.action.upload]
+label = "Upload + copy link"
+noun = "Upload"
+short = "Upload & copy link"
+
+[settings.automations.action.reveal]
+label = "Reveal in file manager"
+noun = "Reveal"
+short = "Reveal in file manager"
+
+[settings.automations.action.open_file]
+label = "Open file"
+noun = "Open"
+short = "Open file"
+
+[settings.automations.action.ocr]
+label = "Recognize text (OCR) to clipboard"
+noun = "Text"
+short = "Copy text (OCR)"
+
+[settings.automations.action.notify]
+label = "Show notification"
+noun = "Notify"
+short = "Notify"
+
+[settings.automations.action.open_editor]
+label = "Open editor"
+noun = "Editor"
+short = "Open editor"
+
+[settings.automations.action.skip_editor]
+label = "Skip editor (headless)"
+noun = "Skip editor"
+short = "Skip editor"
+
+[settings.automations.action.apply_preset]
+label = "Apply editor preset"
+noun = "Preset"
+short = "Apply preset"
+
+[settings.automations.action.run_command]
+label = "Run command"
+noun = "Command"
+short = "Run command"
+
+[settings.automations.action.webhook]
+label = "Send webhook"
+noun = "Webhook"
+short = "Send webhook"
+
+[settings.automations.action.delete_local_files]
+label = "Delete local files"
+noun = "Delete"
+short = "Delete local files"
+
+[settings.automations.condition]
+capture_target = "Capture target is"
+duration_at_least = "Duration at least (seconds)"
+duration_at_most = "Duration at most (seconds)"
+organization = "Organization is"
+recording_mode = "Recording mode is"
+window_title = "Window title contains"
+
+[settings.automations.template.copy_screenshot]
+description = "Snap a screenshot and it's right there, ready to paste."
+name = "Auto-copy new screenshots to clipboard"
+
+[settings.automations.template.ocr_screenshot]
+description = "Cap reads the text in your screenshot and copies it for you."
+name = "Pull the text out of screenshots"
+
+[settings.automations.template.save_screenshot]
+description = "Send every new screenshot straight to a folder you pick."
+name = "Tuck screenshots into a folder"
+
+[settings.automations.template.reveal_screenshot]
+description = "Pop open every screenshot in Finder the moment you take it."
+name = "Jump to each new screenshot"
+
+[settings.automations.template.export_studio]
+description = "Render an MP4 the second a Studio recording wraps up."
+name = "Auto-export when you finish recording"
+
+[settings.automations.template.upload_share]
+description = "Finish a recording and the link is waiting on your clipboard."
+name = "Upload and grab the share link"
+
+[settings.automations.template.notify_upload]
+body = { text = "Your recording is ready to share.", context = "The default text of the notification this template creates; the user can edit it." }
+description = "Get a gentle desktop nudge once your recording is shareable."
+name = "Ping me when an upload is ready"
+
+[settings.automations.template.webhook_share]
+description = "Send the share link to Slack, Discord, or your own webhook."
+name = "Tell Slack when you share something"
+
 
 [main]
 delete_recording_confirm = "Are you sure you want to delete this recording?"
@@ -588,3 +1308,19 @@ click_or_press = "Click here, or press"
 get_started = "Get Started"
 space_key = "Space"
 tagline = "The open source screen sharing app for everyone."
+
+[menu.update]
+badge_progress = "v{version} · {percent}%"
+badge_version = "v{version}"
+check = "Check for Update"
+download = "Download update…"
+checking = "Checking for Update…"
+downloading = "Downloading update…"
+restart = "Restart to update…"
+
+[settings.general.updates.download_policy]
+auto = "Auto"
+description = "Choose whether Cap downloads updates automatically."
+label = "Update downloads"
+manual = "Ask first"
+never = "Never"

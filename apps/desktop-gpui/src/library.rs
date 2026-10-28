@@ -28,7 +28,7 @@ use cap_project::{
     StudioRecordingStatus,
 };
 use cap_recording::{recovery::RecoveryManager, upload_resume::UploadLock};
-use gpui::RenderImage;
+use gpui::{App, RenderImage};
 
 /// `RECENT_MEDIA_LIMIT` in `new-main/index.tsx:129`.
 pub const RECENT_MEDIA_LIMIT: usize = 9;
@@ -279,20 +279,17 @@ impl RecordingItem {
     }
 }
 
-/// `RecordingMetaWithMetadata::new` (`lib.rs:3888-3925`).
-fn recording_item(path: PathBuf, meta: RecordingMeta, sort_time_millis: f64) -> RecordingItem {
-    let mode = match &meta.inner {
+/// `RecordingMetaWithMetadata::new`'s mode (`lib.rs:3888-3925`).
+fn recording_mode(meta: &RecordingMeta) -> RecordingMode {
+    match &meta.inner {
         RecordingMetaInner::Studio(_) => RecordingMode::Studio,
         RecordingMetaInner::Instant(_) => RecordingMode::Instant,
-    };
-    let clip_count = match &meta.inner {
-        RecordingMetaInner::Studio(studio) => match &**studio {
-            StudioRecordingMeta::MultipleSegments { inner } => inner.segments.len() as u32,
-            StudioRecordingMeta::SingleSegment { .. } => 1,
-        },
-        RecordingMetaInner::Instant(_) => 1,
-    };
-    let status = match &meta.inner {
+    }
+}
+
+/// `RecordingMetaWithMetadata::new`'s status (`lib.rs:3888-3925`).
+fn recording_status(meta: &RecordingMeta) -> RecordingStatus {
+    match &meta.inner {
         RecordingMetaInner::Studio(studio) => match &**studio {
             // A `MultipleSegments` meta with no `status` key at all is
             // Complete -- `.unwrap_or(StudioRecordingStatus::Complete)`.
@@ -320,7 +317,31 @@ fn recording_item(path: PathBuf, meta: RecordingMeta, sort_time_millis: f64) -> 
         RecordingMetaInner::Instant(InstantRecordingMeta::Complete { .. }) => {
             RecordingStatus::Complete
         }
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Full [`RecordingItem`]s built on this test thread. Recovery must stay on
+    /// [`ScannedRecording`], so its tests can pin that this does not move.
+    static RECORDING_ITEM_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// `RecordingMetaWithMetadata::new` (`lib.rs:3888-3925`), plus the filesystem
+/// lookups a card needs.
+fn recording_item(path: PathBuf, meta: RecordingMeta, sort_time_millis: f64) -> RecordingItem {
+    let mode = recording_mode(&meta);
+    let clip_count = match &meta.inner {
+        RecordingMetaInner::Studio(studio) => match &**studio {
+            StudioRecordingMeta::MultipleSegments { inner } => inner.segments.len() as u32,
+            StudioRecordingMeta::SingleSegment { .. } => 1,
+        },
+        RecordingMetaInner::Instant(_) => 1,
     };
+    let status = recording_status(&meta);
+
+    #[cfg(test)]
+    RECORDING_ITEM_BUILDS.with(|builds| builds.set(builds.get() + 1));
 
     let preview = path.join("screenshots/preview.jpg");
     let thumbnail = if preview.is_file() {
@@ -360,6 +381,37 @@ pub fn list_recordings_in(dirs: &[PathBuf]) -> Vec<RecordingItem> {
 }
 
 fn recording_items_in(dirs: &[PathBuf]) -> impl Iterator<Item = RecordingItem> {
+    scanned_recordings_in(dirs).map(ScannedRecording::into_item)
+}
+
+/// A recording directory after its metadata has been parsed, before the
+/// filesystem work a card needs (upload state, thumbnails, preview mtimes).
+///
+/// Both the library listing and the recovery scan walk every bundle, but
+/// recovery drops complete recordings before it needs any of those fields.
+/// Keeping this intermediate means the scan parses each `recording-meta.json`
+/// once and recovery only pays for recordings it can actually return.
+///
+/// Skipping the fields is state-neutral: `upload::queue::status` only reads the
+/// saved upload state (and settings for legacy records), and the thumbnail
+/// checks are `stat`s.
+struct ScannedRecording {
+    path: PathBuf,
+    meta: RecordingMeta,
+    sort_time_millis: f64,
+}
+
+impl ScannedRecording {
+    fn status(&self) -> RecordingStatus {
+        recording_status(&self.meta)
+    }
+
+    fn into_item(self) -> RecordingItem {
+        recording_item(self.path, self.meta, self.sort_time_millis)
+    }
+}
+
+fn scanned_recordings_in(dirs: &[PathBuf]) -> impl Iterator<Item = ScannedRecording> {
     let mut paths = Vec::new();
     for dir in dirs {
         let Ok(entries) = std::fs::read_dir(dir) else {
@@ -377,7 +429,11 @@ fn recording_items_in(dirs: &[PathBuf]) -> impl Iterator<Item = RecordingItem> {
     paths.sort_by(|(_, a), (_, b)| b.total_cmp(a));
     paths.into_iter().filter_map(|(path, sort_time_millis)| {
         let meta = RecordingMeta::load_for_project(&path).ok()?;
-        Some(recording_item(path, meta, sort_time_millis))
+        Some(ScannedRecording {
+            path,
+            meta,
+            sort_time_millis,
+        })
     })
 }
 
@@ -396,18 +452,21 @@ pub fn find_incomplete_recordings_in(
     dirs: &[PathBuf],
     active_recording: Option<&Path>,
 ) -> Vec<IncompleteRecordingItem> {
-    list_recordings_in(dirs)
-        .into_iter()
-        .filter(|item| {
+    scanned_recordings_in(dirs)
+        .filter(|recording| {
             matches!(
-                item.status,
+                recording.status(),
                 RecordingStatus::InProgress | RecordingStatus::NeedsRemux
-            ) && active_recording != Some(item.path.as_path())
-                && is_recording_after_recovery_cutoff(&item.pretty_name, item.sort_time_millis)
+            ) && active_recording != Some(recording.path.as_path())
+                && is_recording_after_recovery_cutoff(
+                    &recording.meta.pretty_name,
+                    recording.sort_time_millis,
+                )
         })
-        .filter_map(|item| {
-            if item.mode == RecordingMode::Instant {
-                let display = item.path.join("content/display");
+        .filter_map(|recording| {
+            let ScannedRecording { path, meta, .. } = recording;
+            if recording_mode(&meta) == RecordingMode::Instant {
+                let display = path.join("content/display");
                 if !display.join("init.mp4").is_file() {
                     return None;
                 }
@@ -417,16 +476,16 @@ pub fn find_incomplete_recordings_in(
                     .filter(|entry| RecoveryManager::is_m4s_complete(&entry.path()))
                     .count();
                 return (segment_count > 0).then_some(IncompleteRecordingItem {
-                    project_path: item.path,
-                    pretty_name: item.pretty_name,
+                    project_path: path,
+                    pretty_name: meta.pretty_name,
                     segment_count,
                     estimated_duration_secs: 0.0,
                 });
             }
-            let incomplete = RecoveryManager::inspect_recording(&item.path)?;
+            let incomplete = RecoveryManager::inspect_recording(&path)?;
             (!incomplete.recoverable_segments.is_empty()).then_some(IncompleteRecordingItem {
-                project_path: item.path,
-                pretty_name: item.pretty_name,
+                project_path: path,
+                pretty_name: meta.pretty_name,
                 segment_count: incomplete.recoverable_segments.len(),
                 estimated_duration_secs: incomplete.estimated_duration.as_secs_f64(),
             })
@@ -595,61 +654,23 @@ pub fn delete_recording_directory(path: &Path) -> Result<(), String> {
 /// An instant recording opens its `content` directory --
 /// `commands.openFilePath` is `open <dir>` on macOS -- and anything else, or a
 /// bundle with no `content` directory, is revealed in the file manager.
-pub fn open_recording_folder(path: &Path, mode: RecordingMode) {
+pub fn open_recording_folder(path: &Path, mode: RecordingMode, cx: &App) {
     let content = path.join("content");
     if mode == RecordingMode::Instant && content.is_dir() {
-        open_path(&content);
+        open_with_system(&content, cx);
     } else {
-        reveal_in_folder(path);
+        reveal_path(path, cx);
     }
 }
 
-pub fn open_path(path: &Path) {
-    let result = {
-        #[cfg(target_os = "macos")]
-        {
-            std::process::Command::new("open").arg(path).spawn()
-        }
-        #[cfg(target_os = "windows")]
-        {
-            std::process::Command::new("cmd")
-                .args(["/C", "start", "", &path.to_string_lossy()])
-                .spawn()
-        }
-        #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
-        {
-            std::process::Command::new("xdg-open").arg(path).spawn()
-        }
-    };
-    if let Err(error) = result {
-        tracing::warn!(path = %path.display(), "opening a path failed: {error}");
-    }
+// `std::fs::canonicalize` yields `\\?\` verbatim paths on Windows, which the
+// shell APIs behind GPUI's reveal and open reject with E_INVALIDARG.
+pub fn reveal_path(path: &Path, cx: &App) {
+    cx.reveal_path(dunce::simplified(path));
 }
 
-pub fn reveal_in_folder(path: &Path) {
-    let result = {
-        #[cfg(target_os = "macos")]
-        {
-            std::process::Command::new("open")
-                .arg("-R")
-                .arg(path)
-                .spawn()
-        }
-        #[cfg(target_os = "windows")]
-        {
-            std::process::Command::new("explorer")
-                .arg(format!("/select,{}", path.display()))
-                .spawn()
-        }
-        #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
-        {
-            let parent = path.parent().unwrap_or(path);
-            std::process::Command::new("xdg-open").arg(parent).spawn()
-        }
-    };
-    if let Err(error) = result {
-        tracing::warn!(path = %path.display(), "revealing a path failed: {error}");
-    }
+pub fn open_with_system(path: &Path, cx: &App) {
+    cx.open_with_system(dunce::simplified(path));
 }
 
 pub fn copy_file_to_path(src: &Path, dest: &Path) -> Result<(), String> {
@@ -731,6 +752,14 @@ fn screenshot_items_in(dir: &Path) -> impl Iterator<Item = ScreenshotItem> {
                 bundle,
             })
         })
+}
+
+/// Whether a `.cap` directory is a screenshot rather than a recording. The
+/// same rule `list_screenshots` uses, so the two never disagree on a bundle.
+pub fn is_screenshot_bundle(bundle: &Path) -> bool {
+    bundle.extension().and_then(|ext| ext.to_str()) == Some("cap")
+        && bundle.is_dir()
+        && screenshot_png(bundle).is_some()
 }
 
 fn screenshot_png(bundle: &Path) -> Option<(PathBuf, f64)> {
@@ -1398,6 +1427,13 @@ pub fn bundle_thumbnail_path(project_dir: &Path) -> PathBuf {
 mod tests {
     use super::*;
 
+    /// Wait long enough that the next file gets a later timestamp. Kernels
+    /// stamp files from a coarse clock (one 4 to 10 ms tick), so a shorter
+    /// sleep can leave two bundles tied and sorted in directory order.
+    fn next_timestamp() {
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+
     #[test]
     fn decode_jobs_stop_once_nobody_takes_the_results() {
         let (job_tx, job_rx) = flume::unbounded();
@@ -1649,7 +1685,7 @@ mod tests {
         // Twelve recordings, oldest first, so the newest nine are 3..=11.
         for i in 0..12 {
             write_studio_bundle(&recordings, &format!("rec-{i:02}"), 1);
-            std::thread::sleep(std::time::Duration::from_millis(6));
+            next_timestamp();
         }
 
         let items = recent_media_in(std::slice::from_ref(&recordings), &screenshots);
@@ -1678,9 +1714,9 @@ mod tests {
         std::fs::create_dir_all(&screenshots).unwrap();
 
         write_studio_bundle(&recordings, "old-recording", 1);
-        std::thread::sleep(std::time::Duration::from_millis(6));
+        next_timestamp();
         write_screenshot_bundle(&screenshots, "middle-screenshot");
-        std::thread::sleep(std::time::Duration::from_millis(6));
+        next_timestamp();
         write_studio_bundle(&recordings, "new-recording", 3);
 
         let items = recent_media_in(std::slice::from_ref(&recordings), &screenshots);
@@ -1777,15 +1813,15 @@ mod tests {
         std::fs::create_dir_all(&active).unwrap();
         std::fs::create_dir_all(&archived).unwrap();
         write_studio_bundle(&active, "old-studio", 1);
-        std::thread::sleep(std::time::Duration::from_millis(6));
+        next_timestamp();
         write_studio_bundle(&archived, "new-studio", 3);
-        std::thread::sleep(std::time::Duration::from_millis(6));
+        next_timestamp();
         write_bundle(
             &active,
             "instant",
             r#"{"pretty_name":"Instant","sharing":null,"fps":30,"sample_rate":48000}"#,
         );
-        std::thread::sleep(std::time::Duration::from_millis(6));
+        next_timestamp();
         std::fs::create_dir_all(archived.join("missing-meta")).unwrap();
         write_bundle(&active, "corrupt-meta", "{ not json ");
         std::fs::write(archived.join("loose.mp4"), b"").unwrap();
@@ -1858,16 +1894,16 @@ mod tests {
         std::fs::write(not_a_bundle.join("original.png"), b"png").unwrap();
         std::fs::write(root.join("loose.cap"), b"").unwrap();
         for i in 0..30 {
-            std::thread::sleep(std::time::Duration::from_millis(6));
+            next_timestamp();
             let bundle = write_shot(&root, &format!("shot-{:02}", (i * 7) % 30));
             std::fs::write(bundle.join("original.png"), b"png").unwrap();
         }
-        std::thread::sleep(std::time::Duration::from_millis(6));
+        next_timestamp();
         let tie_a = write_shot(&root, "tie-a");
         std::fs::write(tie_a.join("original.png"), b"png").unwrap();
         let tie_b = write_shot(&root, "tie-b");
         std::fs::hard_link(tie_a.join("original.png"), tie_b.join("original.png")).unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(6));
+        next_timestamp();
         let corrupt = write_bundle(&root, "corrupt", "{ not json ");
         std::fs::write(corrupt.join("original.png"), b"png").unwrap();
 
@@ -2004,6 +2040,232 @@ mod tests {
         );
     }
 
+    /// Same-process old vs new benchmark for the startup recovery scan.
+    ///
+    /// Old is the pre-change implementation: `list_recordings_in` (a full
+    /// `RecordingItem` per recording) followed by the recovery filter. New is
+    /// `find_incomplete_recordings_in`, which filters on parsed metadata first.
+    ///
+    /// Set `CAP_GPUI_RECOVERY_BENCH_DIR` to measure a real library. Without it
+    /// the benchmark generates 600 complete Studio + 300 complete Instant
+    /// recordings, with thumbnails and saved upload state where real ones have
+    /// them, plus four recoverable incomplete recordings, one pre-cutoff
+    /// recording, one corrupt meta and one missing meta: 907 directories,
+    /// 905 parsed recordings. Run with:
+    ///
+    /// `cargo test -p cap-desktop-gpui recovery_scan_benchmark -- --ignored --nocapture`
+    #[test]
+    #[ignore = "manual filesystem benchmark; set CAP_GPUI_RECOVERY_BENCH_DIR for a real library"]
+    fn recovery_scan_benchmark() {
+        fn write_complete_studio(recordings: &Path, index: usize) {
+            let bundle = recordings.join(format!("complete-studio-{index:04}.cap"));
+            std::fs::create_dir_all(&bundle).unwrap();
+            let segment_count = if index % 5 == 0 { 3 } else { 1 };
+            let segments: Vec<String> = (0..segment_count)
+                .map(|segment| {
+                    format!(
+                        r#"{{"display":{{"path":"content/segments/segment-{segment}/display.mp4","fps":30}}}}"#
+                    )
+                })
+                .collect();
+            let sharing = if index % 4 == 0 {
+                r#"{"id":"share","link":"https://cap.so/s/share"}"#
+            } else {
+                "null"
+            };
+            std::fs::write(
+                bundle.join("recording-meta.json"),
+                format!(
+                    r#"{{"pretty_name":"Studio {index}","sharing":{sharing},"segments":[{}]}}"#,
+                    segments.join(",")
+                ),
+            )
+            .unwrap();
+            if index % 3 == 0 {
+                let screenshots = bundle.join("screenshots");
+                std::fs::create_dir_all(&screenshots).unwrap();
+                std::fs::write(
+                    screenshots.join(if index % 6 == 0 {
+                        "preview.jpg"
+                    } else {
+                        "display.jpg"
+                    }),
+                    b"thumbnail",
+                )
+                .unwrap();
+            }
+        }
+
+        fn write_complete_instant(recordings: &Path, index: usize) {
+            let bundle = recordings.join(format!("complete-instant-{index:04}.cap"));
+            std::fs::create_dir_all(&bundle).unwrap();
+            std::fs::write(
+                bundle.join("recording-meta.json"),
+                format!(
+                    r#"{{"pretty_name":"Instant {index}","sharing":null,"fps":30,"sample_rate":48000}}"#
+                ),
+            )
+            .unwrap();
+            if index % 2 == 0 {
+                let state = serde_json::json!({
+                    "version": 1,
+                    "video_id": format!("bench-{index}"),
+                    "server_url": "https://cap.example.invalid",
+                    "owner_id": null,
+                    "kind": "Mp4",
+                    "requested_audio": null,
+                    "preserve_local": true,
+                    "phase": "Verified",
+                    "attempt_count": 0,
+                    "last_error": null,
+                    "next_retry_at": null,
+                    "verification": null,
+                    "receipt": null,
+                });
+                std::fs::write(
+                    bundle.join("instant-upload.json"),
+                    serde_json::to_vec(&state).unwrap(),
+                )
+                .unwrap();
+            }
+            if index % 3 == 1 {
+                let screenshots = bundle.join("screenshots");
+                std::fs::create_dir_all(&screenshots).unwrap();
+                std::fs::write(screenshots.join("display.jpg"), b"thumbnail").unwrap();
+            }
+        }
+
+        let from_env = std::env::var("CAP_GPUI_RECOVERY_BENCH_DIR").ok();
+        let generated = from_env.is_none().then(|| temp_dir("recovery-bench"));
+        let dirs = match (&from_env, &generated) {
+            (Some(dir), _) => vec![PathBuf::from(dir)],
+            (None, Some(root)) => {
+                let recordings = root.join("recordings");
+                std::fs::create_dir_all(&recordings).unwrap();
+                for index in 0..600 {
+                    write_complete_studio(&recordings, index);
+                }
+                for index in 0..300 {
+                    write_complete_instant(&recordings, index);
+                }
+                for index in 0..2 {
+                    write_incomplete_bundle(
+                        &recordings,
+                        &format!("incomplete-studio-{index}"),
+                        &format!("Cap 2026-02-0{index} at 10.00.00"),
+                        "InProgress",
+                        true,
+                    );
+                }
+                write_incomplete_bundle(
+                    &recordings,
+                    "remux-studio",
+                    "Cap 2026-02-03 at 10.00.00",
+                    "NeedsRemux",
+                    true,
+                );
+                write_incomplete_instant_bundle(
+                    &recordings,
+                    "incomplete-instant",
+                    "Cap 2026-02-04 at 10.00.00",
+                    false,
+                );
+                write_incomplete_bundle(
+                    &recordings,
+                    "pre-cutoff",
+                    "Cap 2025-12-31 at 10.00.00",
+                    "InProgress",
+                    true,
+                );
+                write_bundle(&recordings, "corrupt-meta", "{ not json ");
+                std::fs::create_dir_all(recordings.join("missing-meta")).unwrap();
+                assert_eq!(
+                    std::fs::read_dir(&recordings).unwrap().count(),
+                    907,
+                    "the generated fixture must keep its documented shape"
+                );
+                vec![recordings]
+            }
+            (None, None) => unreachable!(),
+        };
+
+        let expected = find_incomplete_recordings_in(&dirs, None);
+        if from_env.is_none() {
+            assert_eq!(
+                expected.len(),
+                4,
+                "the generated fixture has four recoverable recordings"
+            );
+        }
+        assert_eq!(
+            find_incomplete_recordings_by_full_listing(&dirs, None),
+            expected,
+            "both implementations must agree before timing"
+        );
+
+        let old = || find_incomplete_recordings_by_full_listing(&dirs, None);
+        let new = || find_incomplete_recordings_in(&dirs, None);
+        let time = |scan: &dyn Fn() -> Vec<IncompleteRecordingItem>| {
+            let started = std::time::Instant::now();
+            let items = std::hint::black_box(scan());
+            let millis = started.elapsed().as_secs_f64() * 1000.0;
+            assert_eq!(items, expected);
+            millis
+        };
+
+        for _ in 0..3 {
+            std::hint::black_box(old());
+            std::hint::black_box(new());
+        }
+        let mut old_samples = Vec::new();
+        let mut new_samples = Vec::new();
+        for sample in 0..15 {
+            // Alternate the order so neither side systematically warms the
+            // directory and metadata caches for the other.
+            let (old_ms, new_ms) = if sample % 2 == 0 {
+                (time(&old), time(&new))
+            } else {
+                let new_ms = time(&new);
+                let old_ms = time(&old);
+                (old_ms, new_ms)
+            };
+            old_samples.push(old_ms);
+            new_samples.push(new_ms);
+        }
+        old_samples.sort_by(f64::total_cmp);
+        new_samples.sort_by(f64::total_cmp);
+        let median = |samples: &[f64]| samples[samples.len() / 2];
+
+        let recordings = scanned_recordings_in(&dirs).count();
+        let complete = scanned_recordings_in(&dirs)
+            .filter(|recording| recording.status() == RecordingStatus::Complete)
+            .count();
+        if from_env.is_none() {
+            assert_eq!(recordings, 905, "the generated fixture parses 905 bundles");
+            assert_eq!(
+                complete, 900,
+                "the generated fixture has 900 complete bundles"
+            );
+        }
+        println!(
+            "{}",
+            serde_json::json!({
+                "fixture": if from_env.is_some() { "env" } else { "generated" },
+                "recordings": recordings,
+                "complete_recordings": complete,
+                "recovered_recordings": expected.len(),
+                "samples": old_samples.len(),
+                "old_median_ms": median(&old_samples),
+                "new_median_ms": median(&new_samples),
+                "speedup": median(&old_samples) / median(&new_samples),
+            })
+        );
+
+        if let Some(root) = generated {
+            std::fs::remove_dir_all(root).ok();
+        }
+    }
+
     /// `RecordingMetaWithMetadata::new`: the mode, the clip count and the
     /// status for each shape of meta the two recorders write.
     #[test]
@@ -2021,13 +2283,13 @@ mod tests {
                 r#"{{"pretty_name":"Studio multi","sharing":{{"id":"abc","link":"https://cap.so/s/abc"}},"segments":[{segment},{segment},{segment}]}}"#
             ),
         );
-        std::thread::sleep(std::time::Duration::from_millis(6));
+        next_timestamp();
         write_bundle(
             &recordings,
             "studio-single",
             r#"{"pretty_name":"Studio single","sharing":null,"display":{"path":"content/display.mp4","fps":30}}"#,
         );
-        std::thread::sleep(std::time::Duration::from_millis(6));
+        next_timestamp();
         write_bundle(
             &recordings,
             "studio-failed",
@@ -2035,7 +2297,7 @@ mod tests {
                 r#"{{"pretty_name":"Studio failed","sharing":null,"segments":[{segment}],"status":{{"status":"Failed","error":"encoder died"}}}}"#
             ),
         );
-        std::thread::sleep(std::time::Duration::from_millis(6));
+        next_timestamp();
         write_bundle(
             &recordings,
             "studio-remux",
@@ -2043,19 +2305,39 @@ mod tests {
                 r#"{{"pretty_name":"Studio remux","sharing":null,"segments":[{segment}],"status":{{"status":"NeedsRemux"}}}}"#
             ),
         );
-        std::thread::sleep(std::time::Duration::from_millis(6));
-        write_bundle(
+        next_timestamp();
+        let instant_complete = write_bundle(
             &recordings,
             "instant-complete",
             r#"{"pretty_name":"Instant complete","sharing":null,"fps":30,"sample_rate":48000}"#,
         );
-        std::thread::sleep(std::time::Duration::from_millis(6));
+        std::fs::write(
+            instant_complete.join("instant-upload.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "version": 1,
+                "video_id": "listing-instant",
+                "server_url": "https://cap.example.invalid",
+                "owner_id": null,
+                "kind": "Mp4",
+                "requested_audio": null,
+                "preserve_local": true,
+                "phase": "Verified",
+                "attempt_count": 0,
+                "last_error": null,
+                "next_retry_at": null,
+                "verification": null,
+                "receipt": null,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        next_timestamp();
         write_bundle(
             &recordings,
             "instant-progress",
             r#"{"pretty_name":"Instant in progress","sharing":null,"recording":true}"#,
         );
-        std::thread::sleep(std::time::Duration::from_millis(6));
+        next_timestamp();
         write_bundle(
             &recordings,
             "instant-failed",
@@ -2133,6 +2415,10 @@ mod tests {
         assert_eq!(complete.clip_count, 1, "an instant recording is one clip");
         assert_eq!(complete.status, RecordingStatus::Complete);
         assert!(
+            complete.upload.is_some(),
+            "the listing still reads saved instant upload state"
+        );
+        assert!(
             !complete.opens_editor(),
             "instant rows never open the editor, complete or not"
         );
@@ -2188,6 +2474,292 @@ mod tests {
             .unwrap();
         }
         bundle
+    }
+
+    fn write_incomplete_instant_bundle(
+        recordings: &Path,
+        name: &str,
+        pretty_name: &str,
+        recording: bool,
+    ) -> PathBuf {
+        let bundle = write_bundle(
+            recordings,
+            name,
+            &format!(r#"{{"pretty_name":"{pretty_name}","sharing":null,"recording":{recording}}}"#),
+        );
+        let display = bundle.join("content/display");
+        std::fs::create_dir_all(&display).unwrap();
+        std::fs::write(display.join("init.mp4"), [0; 8]).unwrap();
+        std::fs::write(display.join("segment_001.m4s"), complete_m4s_fragment()).unwrap();
+        bundle
+    }
+
+    /// The recovery scan before the lean path: list every recording (building
+    /// every `RecordingItem`), then filter. This is the reference implementation
+    /// production must agree with, and the "old" side of the benchmark.
+    fn find_incomplete_recordings_by_full_listing(
+        dirs: &[PathBuf],
+        active_recording: Option<&Path>,
+    ) -> Vec<IncompleteRecordingItem> {
+        list_recordings_in(dirs)
+            .into_iter()
+            .filter(|item| {
+                matches!(
+                    item.status,
+                    RecordingStatus::InProgress | RecordingStatus::NeedsRemux
+                ) && active_recording != Some(item.path.as_path())
+                    && is_recording_after_recovery_cutoff(&item.pretty_name, item.sort_time_millis)
+            })
+            .filter_map(|item| {
+                if item.mode == RecordingMode::Instant {
+                    let display = item.path.join("content/display");
+                    if !display.join("init.mp4").is_file() {
+                        return None;
+                    }
+                    let segment_count = std::fs::read_dir(display)
+                        .ok()?
+                        .filter_map(Result::ok)
+                        .filter(|entry| RecoveryManager::is_m4s_complete(&entry.path()))
+                        .count();
+                    return (segment_count > 0).then_some(IncompleteRecordingItem {
+                        project_path: item.path,
+                        pretty_name: item.pretty_name,
+                        segment_count,
+                        estimated_duration_secs: 0.0,
+                    });
+                }
+                let incomplete = RecoveryManager::inspect_recording(&item.path)?;
+                (!incomplete.recoverable_segments.is_empty()).then_some(IncompleteRecordingItem {
+                    project_path: item.path,
+                    pretty_name: item.pretty_name,
+                    segment_count: incomplete.recoverable_segments.len(),
+                    estimated_duration_secs: incomplete.estimated_duration.as_secs_f64(),
+                })
+            })
+            .collect()
+    }
+
+    fn recording_item_builds() -> usize {
+        RECORDING_ITEM_BUILDS.with(std::cell::Cell::get)
+    }
+
+    #[test]
+    fn lean_recovery_matches_the_full_listing_on_a_mixed_library() {
+        let root = temp_dir("recovery-equivalence");
+        let recordings = root.join("recordings");
+        std::fs::create_dir_all(&recordings).unwrap();
+
+        // Created oldest first; the recovery scan's order is creation order
+        // reversed, so the expected output below is the reverse of the
+        // recoverable fixtures' creation order.
+        let pre_cutoff = write_incomplete_bundle(
+            &recordings,
+            "pre-cutoff",
+            "Cap 2025-12-31 at 23.59.59",
+            "InProgress",
+            true,
+        );
+        next_timestamp();
+        let complete_studio = write_incomplete_bundle(
+            &recordings,
+            "complete-studio",
+            "Cap 2026-01-02 at 10.00.00",
+            "Complete",
+            true,
+        );
+        next_timestamp();
+        write_bundle(&recordings, "corrupt-meta", "{ not json ");
+        next_timestamp();
+        std::fs::create_dir_all(recordings.join("missing-meta")).unwrap();
+        next_timestamp();
+        let active = write_incomplete_bundle(
+            &recordings,
+            "active",
+            "Cap 2026-01-05 at 10.00.00",
+            "InProgress",
+            true,
+        );
+        next_timestamp();
+        let in_progress = write_incomplete_bundle(
+            &recordings,
+            "in-progress",
+            "Cap 2026-01-01 at 10.00.00",
+            "InProgress",
+            true,
+        );
+        next_timestamp();
+        let remux = write_incomplete_bundle(
+            &recordings,
+            "remux",
+            "Cap 2026-01-04 at 10.00.00",
+            "NeedsRemux",
+            true,
+        );
+        next_timestamp();
+        let instant = write_incomplete_instant_bundle(
+            &recordings,
+            "instant-incomplete",
+            "Cap 2026-01-03 at 10.00.00",
+            false,
+        );
+        next_timestamp();
+        let complete_instant = write_incomplete_instant_bundle(
+            &recordings,
+            "complete-instant",
+            "Cap 2026-01-06 at 10.00.00",
+            false,
+        );
+        // Complete status with fragments still on disk: recovery must trust
+        // the metadata and leave them alone.
+        std::fs::write(
+            complete_instant.join("recording-meta.json"),
+            r#"{"pretty_name":"Cap 2026-01-06 at 10.00.00","sharing":null,"fps":30,"sample_rate":48000}"#,
+        )
+        .unwrap();
+        next_timestamp();
+        let unrecoverable = write_incomplete_bundle(
+            &recordings,
+            "unrecoverable",
+            "Cap 2026-01-07 at 10.00.00",
+            "InProgress",
+            false,
+        );
+
+        let dirs = std::slice::from_ref(&recordings);
+        let found = find_incomplete_recordings_in(dirs, Some(active.as_path()));
+        let reference = find_incomplete_recordings_by_full_listing(dirs, Some(active.as_path()));
+        assert_eq!(
+            found, reference,
+            "the lean scan must stay byte-for-byte equivalent to listing everything"
+        );
+
+        let names: Vec<&str> = found.iter().map(|item| item.pretty_name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "Cap 2026-01-03 at 10.00.00",
+                "Cap 2026-01-04 at 10.00.00",
+                "Cap 2026-01-01 at 10.00.00",
+            ],
+            "newest first, with only the eligible recoverable recordings"
+        );
+        assert_eq!(
+            found
+                .iter()
+                .map(|item| (item.project_path.clone(), item.segment_count))
+                .collect::<Vec<_>>(),
+            [
+                (instant.clone(), 1),
+                (remux.clone(), 1),
+                (in_progress.clone(), 1),
+            ]
+        );
+        assert!(
+            found
+                .iter()
+                .find(|item| item.project_path == instant)
+                .is_some_and(|item| item.estimated_duration_secs == 0.0),
+            "an Instant recording reports its measured segment count and zero duration"
+        );
+        for excluded in [
+            &pre_cutoff,
+            &complete_studio,
+            &complete_instant,
+            &active,
+            &unrecoverable,
+        ] {
+            assert!(
+                !found.iter().any(|item| &item.project_path == excluded),
+                "{} must not be recoverable",
+                excluded.display()
+            );
+        }
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn recovery_cutoff_is_strictly_after_2025() {
+        assert!(!is_recording_after_recovery_cutoff(
+            "Cap 2025-12-31 at 23.59.59",
+            0.0
+        ));
+        assert!(is_recording_after_recovery_cutoff(
+            "Cap 2026-01-01 at 00.00.00",
+            0.0
+        ));
+        assert!(
+            !is_recording_after_recovery_cutoff("Custom instant recording", 0.0),
+            "a name without a date falls back to the sort time"
+        );
+    }
+
+    #[test]
+    fn recovery_skips_full_item_work_and_inspection_for_complete_recordings() {
+        let root = temp_dir("recovery-lean");
+        let recordings = root.join("recordings");
+        std::fs::create_dir_all(&recordings).unwrap();
+
+        // The complete Studio bundle contains exactly the fragments that make
+        // `inspect_recording` return a recoverable recording. The complete
+        // Instant bundle contains the init + m4s fragments the Instant path
+        // counts. Recovery must filter both out on metadata alone.
+        let complete_studio = write_incomplete_bundle(
+            &recordings,
+            "complete-studio",
+            "Cap 2026-01-10 at 10.00.00",
+            "Complete",
+            true,
+        );
+        let complete_instant = write_incomplete_instant_bundle(
+            &recordings,
+            "complete-instant",
+            "Cap 2026-01-11 at 10.00.00",
+            false,
+        );
+        std::fs::write(
+            complete_instant.join("recording-meta.json"),
+            r#"{"pretty_name":"Cap 2026-01-11 at 10.00.00","sharing":null,"fps":30,"sample_rate":48000}"#,
+        )
+        .unwrap();
+        let in_progress = write_incomplete_bundle(
+            &recordings,
+            "in-progress",
+            "Cap 2026-01-12 at 10.00.00",
+            "InProgress",
+            true,
+        );
+        let remux_instant = write_incomplete_instant_bundle(
+            &recordings,
+            "remux-instant",
+            "Cap 2026-01-13 at 10.00.00",
+            false,
+        );
+
+        let builds_before = recording_item_builds();
+        let found = find_incomplete_recordings_in(std::slice::from_ref(&recordings), None);
+        assert_eq!(
+            recording_item_builds(),
+            builds_before,
+            "recovery must not construct a full RecordingItem, even for complete recordings"
+        );
+
+        assert_eq!(found.len(), 2);
+        assert!(found.iter().any(|item| item.project_path == in_progress));
+        assert!(found.iter().any(|item| item.project_path == remux_instant));
+
+        // Behavior preservation: `inspect_recording` creates `.recovery.lock`
+        // in the bundle it examines (and leaves it there after unlocking), so
+        // a complete recording without one was never inspected.
+        assert!(in_progress.join(".recovery.lock").is_file());
+        assert!(!complete_studio.join(".recovery.lock").exists());
+        assert!(!complete_instant.join(".recovery.lock").exists());
+        assert!(
+            !remux_instant.join(".recovery.lock").exists(),
+            "instant recovery reads fragments directly and never calls inspect_recording"
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

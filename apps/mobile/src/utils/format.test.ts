@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { formatDuration, formatFileSize, formatRelativeDate } from "./format";
+import {
+	formatChapterTime,
+	formatDuration,
+	formatFileSize,
+	formatRelativeDate,
+} from "./format";
 
 describe("mobile formatters", () => {
 	it("formats card dates like Cap web", () => {
@@ -22,6 +27,14 @@ describe("mobile formatters", () => {
 		expect(formatDuration(61)).toBe("1 min");
 		expect(formatDuration(125)).toBe("2 mins");
 		expect(formatDuration(7200)).toBe("2 hrs");
+	});
+
+	it("formats chapter times with hours from an hour on", () => {
+		expect(formatChapterTime(0)).toBe("0:00");
+		expect(formatChapterTime(95.7)).toBe("1:35");
+		expect(formatChapterTime(3599.9)).toBe("59:59");
+		expect(formatChapterTime(3600)).toBe("1:00:00");
+		expect(formatChapterTime(3905)).toBe("1:05:05");
 	});
 
 	it("formats native upload file sizes", () => {
