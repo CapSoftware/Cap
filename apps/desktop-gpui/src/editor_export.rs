@@ -467,8 +467,8 @@ fn export_file_name(pretty_name: &str, extension: &str) -> String {
 }
 
 fn format_estimate_range(range: [f64; 2], time: bool) -> String {
-    type Single = fn(f64) -> String;
-    type Range = fn(f64, f64) -> String;
+    type Single = fn(String) -> String;
+    type Range = fn(String, String) -> String;
     if range[1] < 1.0 {
         return if time {
             tr::editor::export::estimate::under_second()
@@ -514,9 +514,9 @@ fn format_estimate_range(range: [f64; 2], time: bool) -> String {
     let lower = ((range[0] / scale * precision).round() / precision).max(1.0 / precision);
     let upper = ((range[1] / scale * precision).round() / precision).max(lower);
     if lower == upper {
-        single(lower)
+        single(crate::i18n::decimal(lower))
     } else {
-        range_of(lower, upper)
+        range_of(crate::i18n::decimal(lower), crate::i18n::decimal(upper))
     }
 }
 
@@ -2300,8 +2300,8 @@ impl EditorWindow {
             .gap(px(4.))
             .child(self.export_toggle_row(
                 "export-turbo",
-                "Turbo export",
-                "Exports much faster using every CPU core and the GPU",
+                tr::editor::export::turbo::title(),
+                tr::editor::export::turbo::description(),
                 ui.turbo,
                 cx.listener(|this, _, window, cx| {
                     if let Some(ui) = this.export.as_mut() {
@@ -2337,9 +2337,7 @@ impl EditorWindow {
                                 .text_size(px(11.5))
                                 .line_height(px(15.))
                                 .text_color(Hsla::from(editor.text_2))
-                                .child(
-                                    "Uses all of your CPU, the GPU and several times more memory until the export finishes. Other apps may slow down, and your computer may get warm and loud.",
-                                ),
+                                .child(tr::editor::export::turbo::warning()),
                         ),
                 )
             })

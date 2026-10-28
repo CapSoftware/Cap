@@ -2519,7 +2519,10 @@ impl MainWindow {
                 .ok();
                 return;
             }
-            let available = format!("{:.2}", storage.available_bytes as f64 / 1_073_741_824.0);
+            let available = crate::i18n::decimal(format!(
+                "{:.2}",
+                storage.available_bytes as f64 / 1_073_741_824.0
+            ));
             let detail = if can_start {
                 tr::main::storage::can_start(&available)
             } else {
@@ -3746,14 +3749,15 @@ impl MainWindow {
     fn render_idle_error(&self, error: String, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let copied = self.copied_error.as_deref() == Some(error.as_str());
-        let copy_error = error.clone();
+        let shown = crate::i18n::messages::localize(&error);
+        let copy_text = shown.clone();
 
         let body = div()
             .flex()
             .flex_col()
             .gap(px(14.))
             .child(
-                recording_error_text(error)
+                recording_error_text(shown)
                     .rounded(px(8.))
                     .bg(theme.gray_3)
                     .px(px(10.))
@@ -3788,9 +3792,9 @@ impl MainWindow {
                             .on_click(cx.listener(
                                 move |this, _, _, cx| {
                                     cx.write_to_clipboard(gpui::ClipboardItem::new_string(
-                                        copy_error.clone(),
+                                        copy_text.clone(),
                                     ));
-                                    this.copied_error = Some(copy_error.clone());
+                                    this.copied_error = Some(error.clone());
                                     cx.notify();
                                 },
                             )),
@@ -4732,10 +4736,10 @@ impl MainWindow {
         let subtitle = item.upload.as_ref().map_or_else(
             || item.mode.label().to_string(),
             |upload| {
-                upload
-                    .last_error
-                    .clone()
-                    .unwrap_or_else(|| upload.label().to_string())
+                upload.last_error.as_deref().map_or_else(
+                    || upload.label().to_string(),
+                    crate::i18n::messages::localize,
+                )
             },
         );
         let actions = self.render_recording_card_actions(item, cx);

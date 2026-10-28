@@ -7435,7 +7435,7 @@ impl EditorWindow {
                     .text_color(Hsla::from(theme.editor.text_2))
                     .child(tr::editor::panel::camera3d::header(
                         look,
-                        format!("{duration:.1}"),
+                        crate::i18n::decimal(format!("{duration:.1}")),
                     )),
             )
             .child(

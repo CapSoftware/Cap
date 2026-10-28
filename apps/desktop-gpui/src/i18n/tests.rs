@@ -503,6 +503,7 @@ fn english_matches_the_literals_it_replaced() {
                 && !super::dialogs_surface_tests::is_dialogs_surface_key(key)
                 && !super::editor_panels_surface_tests::is_editor_panels_surface_key(key)
                 && !super::editor_shell_surface_tests::is_editor_shell_surface_key(key)
+                && !key.starts_with(super::messages::KEY_PREFIX)
         })
         .count()
         // `tray.version`, `excluded_windows.missing_body`, `self_host.confirm_change`,
@@ -859,6 +860,7 @@ fn every_key_is_used_outside_the_catalog() {
             }
         }
     }
+    sources.push_str(&std::fs::read_to_string(i18n.join("messages.rs")).unwrap());
     let unused: Vec<&str> = KEYS
         .iter()
         .copied()

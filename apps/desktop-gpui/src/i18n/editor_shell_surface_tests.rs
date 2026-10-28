@@ -17,6 +17,7 @@ pub(super) fn is_editor_shell_surface_key(key: &str) -> bool {
 }
 
 const FORMATTED: &[&str] = &[
+    "editor.window.clip_menu.transition_seconds",
     "editor.clips.append_error",
     "editor.clips.clip",
     "editor.clips.error.cannot_decode",
@@ -1136,6 +1137,23 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         (tr::ui::coming_soon(), "Coming Soon"),
         (tr::ui::selection::delete(), "Delete"),
         (tr::ui::selection::done(), "Done"),
+        (tr::editor::export::turbo::title(), "Turbo export"),
+        (
+            tr::editor::export::turbo::description(),
+            "Exports much faster using every CPU core and the GPU",
+        ),
+        (
+            tr::editor::export::turbo::warning(),
+            "Uses all of your CPU, the GPU and several times more memory until the export finishes. Other apps may slow down, and your computer may get warm and loud.",
+        ),
+        (tr::editor::window::clip_menu::transition(), "TRANSITION"),
+        (tr::editor::window::clip_menu::transition_none(), "None"),
+        (
+            tr::editor::window::clip_menu::transition_crossfade(),
+            "Crossfade",
+        ),
+        (tr::editor::window::clip_menu::transition_fade(), "Fade"),
+        (tr::editor::timeline::title(), "Timeline"),
         (tr::ui::selection::select_all(), "Select all"),
     ];
     for (translated, literal) in pairs {
@@ -1196,6 +1214,12 @@ fn editor_shell_messages_format_like_the_code_they_replaced() {
     let path = std::path::Path::new("/tmp/Demo.cap");
     let message = "Source Cap project is still recording".to_string();
 
+    for seconds in [0.25, 0.5, 1.0] {
+        assert_eq!(
+            tr::editor::window::clip_menu::transition_seconds(seconds),
+            format!("{seconds}s")
+        );
+    }
     assert_eq!(
         tr::editor::clips::append_error(&message),
         format!("Failed to add clip: {message}")

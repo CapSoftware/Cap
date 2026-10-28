@@ -3018,8 +3018,8 @@ impl SettingsWindow {
                 let label = upload.label();
                 let message = upload
                     .last_error
-                    .clone()
-                    .unwrap_or_else(|| label.to_string());
+                    .as_deref()
+                    .map_or_else(|| label.to_string(), crate::i18n::messages::localize);
                 this.child(
                     pill(theme.settings_fill())
                         .id("recording-upload-status")

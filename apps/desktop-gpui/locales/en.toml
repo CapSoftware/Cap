@@ -1185,6 +1185,11 @@ start_failed = "The system could not start this camera. It may be unavailable or
 timeout = "No frames were received from this camera. It may be closed, disconnected, covered, or in use by another app."
 unavailable_title = "Camera unavailable"
 
+[camera.blur]
+light = { text = "Light", context = "Tiny 7px label under the background blur button in the camera preview. Keep it to one short word." }
+heavy = { text = "Heavy", context = "Tiny 7px label under the background blur button in the camera preview. Keep it to one short word." }
+cutout = { text = "Cutout", context = "Tiny 7px label under the background blur button: the background is removed. Keep it to one short word." }
+
 [onboarding.customize]
 footer = "Change any of these at any time in Settings"
 subtitle = "Customize everything from keyboard shortcuts to storage. Cap adapts to your workflow."
@@ -1460,9 +1465,11 @@ metadata = "Creating project metadata..."
 starting = "Starting conversion..."
 
 [overlay]
-choose_mode = "Choose recording mode"
-countdown_tooltip = "Recording countdown"
 display_fallback = { text = "Display {id}", context = "Name for a display the system does not name; {id} is a number." }
+countdown_title = { text = "Recording countdown", context = "Hint title over the countdown button in the recording picker." }
+countdown_body = { text = "Wait a few seconds after you press Start before recording begins.", context = "Hint body for the countdown button. Start is the Start Recording button." }
+mode_title = { text = "Change recording mode", context = "Hint title over the mode picker in the recording picker." }
+mode_body = "Instant gives you a link to share the moment you stop. Studio records in full quality for editing."
 
 [overlay.area]
 draw = "Draw an area"
@@ -1470,6 +1477,12 @@ free_ratio = { text = "Free", context = "Aspect ratio button with no ratio locke
 hint = "Click and drag to select an area"
 minimum_size = { text = "Minimum size is {width} x {height}", context = "{width} and {height} are pixel sizes." }
 too_small = { text = "{width} x {height} is too small", context = "{width} and {height} are pixel sizes." }
+more_ratios_title = "More aspect ratios"
+more_ratios_body = "Lock the area to a ratio such as 4:3, 9:16 or 21:9."
+reset_title = "Reset selection"
+reset_body = "Clear the area so you can draw a new one."
+fill_title = "Fill display"
+fill_body = "Grow the area to cover the display, keeping its ratio."
 
 [overlay.camera_only]
 description = "Record using only your camera and microphone"
@@ -1488,6 +1501,21 @@ sign_in = "Sign In To Use"
 start_recording = "Start Recording"
 studio = { text = "Studio Mode — Record and edit locally", context = "Second line of the start button, 11px, truncates." }
 take_screenshot = "Take Screenshot"
+
+[overlay.window]
+size_title = "Change window size"
+size_body = "Resize the window to a ratio or an exact size before you record."
+size_needs_accessibility_title = { text = "Resizing needs Accessibility", context = "Accessibility is the macOS System Settings pane; use the name macOS shows in this language." }
+size_needs_accessibility_body = { text = "Turn on Accessibility for Cap in System Settings to resize other apps' windows.", context = "Accessibility is the macOS System Settings pane; use the name macOS shows in this language." }
+size_unavailable_title = "Resizing isn't available"
+size_unavailable_body = "Wayland doesn't let apps resize other apps' windows."
+focus_title = { text = "Focus mode", context = "Card title above a switch in the window picker. Focus mode centres the picked window and records only it." }
+focus_on = { text = "Recording only this window", context = "Subtitle under Focus mode while it is on, before recording starts. 11.5px, one line." }
+focus_off = { text = "Record only this window", context = "Subtitle under Focus mode while it is off. 11.5px, one line." }
+focus_enable = "Enable Focus mode"
+focus_disable = "Turn off Focus mode"
+focus_body = "Centres this window and records only it. Anything that moves in front of it stays out of the video."
+focus_body_instant_camera = "Centres this window. With a camera, Instant still records the screen region so the camera stays in the video."
 
 [permission.guide]
 accessibility_body = { text = "Drop it on the Accessibility list above, then make sure its switch is on.", context = "Accessibility is the name of the macOS System Settings pane; use the name macOS shows in this language." }
@@ -2390,6 +2418,11 @@ refining_size = "Refining size…"
 refining_time = "Refining time…"
 unavailable = "Unavailable"
 
+[editor.export.turbo]
+title = "Turbo export"
+description = "Exports much faster using every CPU core and the GPU"
+warning = "Uses all of your CPU, the GPU and several times more memory until the export finishes. Other apps may slow down, and your computer may get warm and loud."
+
 [editor.modal]
 cancel_export = "Cancel export"
 cancel_export_message = "Are you sure you want to cancel the export?"
@@ -2631,6 +2664,7 @@ normal = "Normal"
 add_shot = "Add shot"
 add_shot_with_look = { text = "Add shot · {look} · {seconds}s", context = "Ghost on the 3D track. {look} is the camera move name, {seconds} a length such as 2.5." }
 paused = "Paused"
+title = { text = "Timeline", context = "Label above the timeline while the editor is still preparing the recording." }
 
 [editor.timeline.empty]
 add_audio = "Add audio"
@@ -2767,6 +2801,11 @@ speed = { text = "SPEED", context = "Section heading in the clip menu, written i
 split = "Split at playhead"
 split_hint = "Move the playhead into this clip"
 volume = "Volume"
+transition = { text = "TRANSITION", context = "Section heading in the clip menu, written in capitals." }
+transition_none = { text = "None", context = "Transition chip: no transition before this clip." }
+transition_crossfade = { text = "Crossfade", context = "Transition chip: the previous clip dissolves into this one." }
+transition_fade = { text = "Fade", context = "Transition chip: fade through black into this clip." }
+transition_seconds = { text = "{seconds}s", context = "Transition length chip; {seconds} is a number such as 0.5." }
 
 [editor.window.frame]
 add_tooltip = "Add a frame"
@@ -2913,3 +2952,62 @@ package_not_installed = "The package wasn't installed. Approve the system prompt
 ready = { text = "Cap {version} is ready. Restart Cap to finish updating.", context = "{version} is a version number such as 0.6.2." }
 restart_now = "Restart Now"
 title = { text = "Update Cap", context = "Title of every update dialog." }
+
+[message.recording]
+task_failed = "Recording task failed."
+startup_failed = "Recording startup failed"
+ended_unexpectedly = "Recording ended unexpectedly."
+stop_task_failed_plain = "Stop task failed."
+stop_not_acknowledged = "Capture stop was not acknowledged"
+capture_state_timed_out = "Timed out confirming capture state"
+pause_not_acknowledged = "Capture did not acknowledge the requested pause state"
+cleanup_unconfirmed_files_kept = { text = "Capture cleanup is unconfirmed. Local files are preserved; use Ctrl+Shift+F9 to retry Stop.", context = "Ctrl+Shift+F9 is a keyboard shortcut; keep it as written." }
+cleanup_unconfirmed_retry = "Capture cleanup is unconfirmed; retry Stop."
+discard_not_acknowledged = "Studio discard stop was not acknowledged; local recording retained"
+window_still_resizing = "The window is still being resized. Try starting again."
+startup_cancelled = "Recording startup cancelled; local files preserved"
+instant_cleanup_unconfirmed = "Instant capture cleanup is unconfirmed; local files preserved"
+finalization_no_result = "Recording finalization ended without a result. Your files were retained."
+stopped_metadata_unsaved = "Capture stopped, but stopped metadata could not be saved; local files preserved"
+discard_stop_unconfirmed = "Studio discard stop is unconfirmed; local files preserved"
+discard_unconfirmed = "Studio discard is unconfirmed; local files preserved"
+crashed_before_capture = "Cap closed before this recording captured anything."
+capture_state_failed = { text = "Could not confirm capture state: {error}", context = "{error} is a technical error message, usually in English." }
+completion_task_failed = { text = "Recording completion task failed: {error}", context = "{error} is a technical error message, usually in English." }
+stop_task_failed = { text = "Stop task failed: {error}", context = "{error} is a technical error message, usually in English." }
+control_task_failed = { text = "Capture control task failed: {error}", context = "{error} is a technical error message, usually in English." }
+restart_hide_failed = { text = "Restart could not hide Cap windows: {error}", context = "{error} is a technical error message, usually in English." }
+discard_task_failed = { text = "Studio discard task failed: {error}; cleanup is unconfirmed", context = "{error} is a technical error message, usually in English." }
+cancel_task_failed = { text = "Cancel task failed: {error}. Cleanup is unconfirmed; retry Stop.", context = "{error} is a technical error message, usually in English." }
+then_cleanup_unconfirmed_shortcut = { text = "{error}. Capture cleanup is unconfirmed. Use Ctrl+Shift+F9 to retry Stop.", context = "{error} is a technical error message, usually in English. Ctrl+Shift+F9 is a keyboard shortcut; keep it as written." }
+then_cleanup_unconfirmed_control = { text = "{error}. Capture cleanup is unconfirmed. Use your recording Stop control to retry.", context = "{error} is a technical error message, usually in English." }
+then_shutdown_unconfirmed = { text = "{error}. Studio shutdown remains unconfirmed; recording and files retained.", context = "{error} is a technical error message, usually in English." }
+then_use_stop_if_unsafe = { text = "{error}. Use Stop if recording cannot continue safely.", context = "{error} is a technical error message, usually in English." }
+then_use_stop_control = { text = "{error}. Use your recording Stop control to stop recording.", context = "{error} is a technical error message, usually in English." }
+then_discard_stopped = { text = "{error}; discard/restart stopped, local recording retained", context = "{error} is a technical error message, usually in English." }
+then_files_preserved = { text = "{error}. Failed recording files were preserved.", context = "{error} is a technical error message, usually in English." }
+then_cleanup_retry = { text = "{error}. Cleanup is unconfirmed; retry Stop.", context = "{error} is a technical error message, usually in English." }
+low_storage_preserved = { text = "Low storage. Your recording files are preserved at {path}. Free up space, then recover the recording in Cap.", context = "{path} is a folder path." }
+
+[message.permission]
+unavailable = { text = "{permission} access is unavailable. Allow Cap in System Settings > Privacy & Security > {permission}, then select the device again.", context = "{permission} is the macOS privacy pane name, such as Camera or Microphone, already translated." }
+
+[message.upload]
+offline = { text = "offline", context = "Shown under a recording whose upload is waiting for the network. Written in lowercase in English." }
+authentication_expired = "Authentication expired"
+no_audio_intent_review = "This older recording has no saved audio intent; review it before retrying"
+legacy_no_account = "This older upload has no saved account and audio intent. Its local recording is preserved."
+verification_timed_out = "Cloud verification timed out; the local recording is preserved"
+verification_failed_retry = "Cloud verification failed; the saved recording will upload again"
+must_save_first = "Recording must be saved locally before its upload can resume"
+sign_in_original = "Sign in to the original recording account and server to retry"
+sign_in_again = "Sign in again to upload this recording"
+needs_upgrade = "Instant recording requires an upgraded plan"
+changed_during = "The local recording changed during upload"
+changed_after = "The local recording changed after upload; it has been preserved"
+already_queued = "This recording is already queued for upload"
+paused = "Upload paused; the local recording is preserved"
+worker_failed = "The upload worker failed; the local recording is preserved"
+empty = "The saved recording is empty"
+no_resumable_state = "This recording has no resumable upload state"
+verification_failed = { text = "Recording verification failed: {status}", context = "{status} is a technical status, usually in English." }

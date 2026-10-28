@@ -2196,15 +2196,14 @@ impl OverlayWindow {
         }
         let arrangeable = crate::foreign_window::can_arrange();
         let hint = if arrangeable {
-            Hint::new("Change window size")
-                .body("Resize the window to a ratio or an exact size before you record.")
+            Hint::new(tr::overlay::window::size_title())
+                .body(tr::overlay::window::size_body())
         } else if cfg!(target_os = "macos") {
-            Hint::new("Resizing needs Accessibility").body(
-                "Turn on Accessibility for Cap in System Settings to resize other apps' windows.",
-            )
+            Hint::new(tr::overlay::window::size_needs_accessibility_title())
+                .body(tr::overlay::window::size_needs_accessibility_body())
         } else {
-            Hint::new("Resizing isn't available")
-                .body("Wayland doesn't let apps resize other apps' windows.")
+            Hint::new(tr::overlay::window::size_unavailable_title())
+                .body(tr::overlay::window::size_unavailable_body())
         };
         let chip = self.glass_capsule(28.).id("window-size");
         self.hinted(chip, "window-size", hint, cx)
@@ -2247,17 +2246,17 @@ impl OverlayWindow {
             .read(cx)
             .is_ok_and(|view| view.camera_selection().is_some());
         let title = if focus {
-            "Turn off Focus mode"
+            tr::overlay::window::focus_disable()
         } else {
-            "Enable Focus mode"
+            tr::overlay::window::focus_enable()
         };
         let body = if cfg!(any(target_os = "macos", windows))
             && self.select.read(cx).recording_mode == Mode::Instant
             && camera
         {
-            "Centres this window. With a camera, Instant still records the screen region so the camera stays in the video."
+            tr::overlay::window::focus_body_instant_camera()
         } else {
-            "Centres this window and records only it. Anything that moves in front of it stays out of the video."
+            tr::overlay::window::focus_body()
         };
         // Regular, as the controls below it are: it carries text.
         let card = self.glass_surface().id("window-focus");
@@ -2315,7 +2314,7 @@ impl OverlayWindow {
                                 .line_height(px(17.))
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(theme.gray_12)
-                                .child("Focus mode"),
+                                .child(tr::overlay::window::focus_title()),
                         )
                         .child(
                             div()
@@ -2324,9 +2323,9 @@ impl OverlayWindow {
                                 .font_weight(FontWeight::NORMAL)
                                 .text_color(theme.gray_11)
                                 .child(if focus {
-                                    "Recording only this window"
+                                    tr::overlay::window::focus_on()
                                 } else {
-                                    "Record only this window"
+                                    tr::overlay::window::focus_off()
                                 }),
                         ),
                 )
@@ -3111,8 +3110,8 @@ impl OverlayWindow {
                                     this.open_aspect_menu(event.position(), cx);
                                 })),
                             "area-ratio-more",
-                            Hint::new("More aspect ratios")
-                                .body("Lock the area to a ratio such as 4:3, 9:16 or 21:9."),
+                            Hint::new(tr::overlay::area::more_ratios_title())
+                                .body(tr::overlay::area::more_ratios_body()),
                             cx,
                         ),
                     )
@@ -3122,8 +3121,8 @@ impl OverlayWindow {
                             icon_button("area-reset", "icons/rotate-ccw.svg")
                                 .on_click(cx.listener(|this, _, _, cx| this.reset_area(cx))),
                             "area-reset",
-                            Hint::new("Reset selection")
-                                .body("Clear the area so you can draw a new one."),
+                            Hint::new(tr::overlay::area::reset_title())
+                                .body(tr::overlay::area::reset_body()),
                             cx,
                         ),
                     )
@@ -3132,8 +3131,8 @@ impl OverlayWindow {
                             icon_button("area-fill", "icons/maximize.svg")
                                 .on_click(cx.listener(|this, _, _, cx| this.fill_area(cx))),
                             "area-fill",
-                            Hint::new("Fill display")
-                                .body("Grow the area to cover the display, keeping its ratio."),
+                            Hint::new(tr::overlay::area::fill_title())
+                                .body(tr::overlay::area::fill_body()),
                             cx,
                         ),
                     ),
@@ -3381,9 +3380,8 @@ impl OverlayWindow {
                             self.hinted(
                                 self.glass_button(36.).id("overlay-countdown"),
                                 "overlay-countdown",
-                                Hint::new("Recording countdown").body(
-                                    "Wait a few seconds after you press Start before recording begins.",
-                                ),
+                                Hint::new(tr::overlay::countdown_title())
+                                    .body(tr::overlay::countdown_body()),
                                 cx,
                             )
                                 .child(
@@ -3591,9 +3589,7 @@ impl OverlayWindow {
                 self.hinted(
                     div().id("overlay-mode-picker"),
                     "overlay-mode-picker",
-                    Hint::new("Change recording mode").body(
-                        "Instant gives you a link to share the moment you stop. Studio records in full quality for editing.",
-                    ),
+                    Hint::new(tr::overlay::mode_title()).body(tr::overlay::mode_body()),
                     cx,
                 )
                     .on_mouse_down(

@@ -326,8 +326,65 @@ fn dialog_surfaces_match_the_literals_they_replaced() {
         (tr::upload::status::sign_in(), "Sign in to retry upload"),
         (tr::upload::status::uploaded(), "Uploaded"),
         (tr::upload::status::uploading(), "Uploading"),
-        (tr::overlay::choose_mode(), "Choose recording mode"),
-        (tr::overlay::countdown_tooltip(), "Recording countdown"),
+        (tr::overlay::mode_title(), "Change recording mode"),
+        (
+            tr::overlay::mode_body(),
+            "Instant gives you a link to share the moment you stop. Studio records in full quality for editing.",
+        ),
+        (tr::overlay::countdown_title(), "Recording countdown"),
+        (
+            tr::overlay::countdown_body(),
+            "Wait a few seconds after you press Start before recording begins.",
+        ),
+        (tr::overlay::area::more_ratios_title(), "More aspect ratios"),
+        (
+            tr::overlay::area::more_ratios_body(),
+            "Lock the area to a ratio such as 4:3, 9:16 or 21:9.",
+        ),
+        (tr::overlay::area::reset_title(), "Reset selection"),
+        (
+            tr::overlay::area::reset_body(),
+            "Clear the area so you can draw a new one.",
+        ),
+        (tr::overlay::area::fill_title(), "Fill display"),
+        (
+            tr::overlay::area::fill_body(),
+            "Grow the area to cover the display, keeping its ratio.",
+        ),
+        (tr::overlay::window::size_title(), "Change window size"),
+        (
+            tr::overlay::window::size_body(),
+            "Resize the window to a ratio or an exact size before you record.",
+        ),
+        (
+            tr::overlay::window::size_needs_accessibility_title(),
+            "Resizing needs Accessibility",
+        ),
+        (
+            tr::overlay::window::size_needs_accessibility_body(),
+            "Turn on Accessibility for Cap in System Settings to resize other apps' windows.",
+        ),
+        (
+            tr::overlay::window::size_unavailable_title(),
+            "Resizing isn't available",
+        ),
+        (
+            tr::overlay::window::size_unavailable_body(),
+            "Wayland doesn't let apps resize other apps' windows.",
+        ),
+        (tr::overlay::window::focus_title(), "Focus mode"),
+        (tr::overlay::window::focus_on(), "Recording only this window"),
+        (tr::overlay::window::focus_off(), "Record only this window"),
+        (tr::overlay::window::focus_enable(), "Enable Focus mode"),
+        (tr::overlay::window::focus_disable(), "Turn off Focus mode"),
+        (
+            tr::overlay::window::focus_body(),
+            "Centres this window and records only it. Anything that moves in front of it stays out of the video.",
+        ),
+        (
+            tr::overlay::window::focus_body_instant_camera(),
+            "Centres this window. With a camera, Instant still records the screen region so the camera stays in the video.",
+        ),
         (tr::overlay::area::draw(), "Draw an area"),
         (tr::overlay::area::free_ratio(), "Free"),
         (

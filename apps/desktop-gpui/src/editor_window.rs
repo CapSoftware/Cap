@@ -8808,20 +8808,31 @@ impl EditorWindow {
                 let duration =
                     transition.map_or(DEFAULT_CLIP_TRANSITION_DURATION, |current| current.duration);
                 let kinds = [
-                    ("None", None),
-                    ("Crossfade", Some(ClipTransitionType::CrossFade)),
-                    ("Fade", Some(ClipTransitionType::FadeThroughBlack)),
+                    ("None", tr::editor::window::clip_menu::transition_none(), None),
+                    (
+                        "Crossfade",
+                        tr::editor::window::clip_menu::transition_crossfade(),
+                        Some(ClipTransitionType::CrossFade),
+                    ),
+                    (
+                        "Fade",
+                        tr::editor::window::clip_menu::transition_fade(),
+                        Some(ClipTransitionType::FadeThroughBlack),
+                    ),
                 ];
                 card.child(
                     div()
                         .flex()
                         .flex_col()
                         .gap(px(4.))
-                        .child(clip_menu_section(&theme, "TRANSITION"))
-                        .child(chip_row().children(kinds.into_iter().map(|(label, kind)| {
+                        .child(clip_menu_section(
+                            &theme,
+                            tr::editor::window::clip_menu::transition(),
+                        ))
+                        .child(chip_row().children(kinds.into_iter().map(|(id, label, kind)| {
                             let selected = transition.map(|current| current.kind) == kind;
                             chip(
-                                SharedString::from(format!("clip-transition-{label}")),
+                                SharedString::from(format!("clip-transition-{id}")),
                                 selected,
                                 label.to_string(),
                             )
@@ -8848,7 +8859,9 @@ impl EditorWindow {
                                                     "clip-transition-{seconds}s"
                                                 )),
                                                 (current.duration - seconds).abs() < 1e-3,
-                                                format!("{seconds}s"),
+                                                tr::editor::window::clip_menu::transition_seconds(
+                                                    crate::i18n::decimal(seconds),
+                                                ),
                                             )
                                             .on_click(
                                                 cx.listener(move |this, _, window, cx| {

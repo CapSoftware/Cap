@@ -23,6 +23,16 @@ pub fn current() -> Locale {
     Locale::ALL[index()]
 }
 
+/// A number for a translated sentence, with the decimal comma French,
+/// Spanish and German write (`1,5 GB`).
+pub fn decimal(value: impl std::fmt::Display) -> String {
+    let text = value.to_string();
+    match current() {
+        Locale::Fr | Locale::Es | Locale::De => text.replace('.', ","),
+        _ => text,
+    }
+}
+
 /// What the language picker stores: follow the system, or one catalog.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Preference {
@@ -138,6 +148,8 @@ pub fn apply(preference: Preference, cx: &mut App) {
     crate::tray::refresh_menu(cx);
     cx.refresh_windows();
 }
+
+pub mod messages;
 
 #[cfg(test)]
 mod dialogs_surface_tests;

@@ -55,6 +55,16 @@ impl OSPermission {
         }
     }
 
+    /// English, like the other recording errors; `i18n::messages` translates
+    /// it where it is shown.
+    pub fn unavailable_message(self) -> String {
+        format!(
+            "{} access is unavailable. Allow Cap in System Settings > Privacy & Security > {}, then select the device again.",
+            self.label(),
+            self.label()
+        )
+    }
+
     pub fn display_name(self) -> &'static str {
         match self {
             Self::ScreenRecording => tr::permission::name::screen_recording(),
@@ -291,11 +301,7 @@ async fn media_permission_result(
         MediaAuthorization::NotDetermined if request.await? => Ok(()),
         MediaAuthorization::NotDetermined
         | MediaAuthorization::Denied
-        | MediaAuthorization::Restricted => Err(format!(
-            "{} access is unavailable. Allow Cap in System Settings > Privacy & Security > {}, then select the device again.",
-            permission.label(),
-            permission.label()
-        )),
+        | MediaAuthorization::Restricted => Err(permission.unavailable_message()),
     }
 }
 

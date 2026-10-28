@@ -63,9 +63,9 @@ impl BlurMode {
     pub fn label(self) -> Option<&'static str> {
         match self {
             Self::Off => None,
-            Self::Light => Some("Light"),
-            Self::Heavy => Some("Heavy"),
-            Self::Remove => Some("Cutout"),
+            Self::Light => Some(tr::camera::blur::light()),
+            Self::Heavy => Some(tr::camera::blur::heavy()),
+            Self::Remove => Some(tr::camera::blur::cutout()),
         }
     }
 }

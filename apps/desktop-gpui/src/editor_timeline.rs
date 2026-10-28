@@ -2513,7 +2513,7 @@ fn camera3d_ghost_label(width: f32, duration: f64) -> Option<String> {
     if width >= 208. {
         Some(tr::editor::timeline::add_shot_with_look(
             tr::editor::panel::camera3d::look::glide_across(),
-            format!("{duration:.1}"),
+            crate::i18n::decimal(format!("{duration:.1}")),
         ))
     } else if width >= 84. {
         Some(tr::editor::timeline::add_shot().to_string())
@@ -5602,7 +5602,7 @@ pub(crate) fn render_preparing_timeline(
                         .items_center()
                         .pl(px(10.))
                         .text_size(px(12.))
-                        .child("Clip"),
+                        .child(tr::editor::timeline::track::clip()),
                 )
                 .child(
                     div()
@@ -5643,7 +5643,7 @@ pub(crate) fn render_preparing_timeline(
                         .bottom_0()
                         .text_size(px(12.))
                         .text_color(Hsla::from(theme.editor.text_3))
-                        .child("Timeline"),
+                        .child(tr::editor::timeline::title()),
                 ),
         )
         .child(
