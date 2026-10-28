@@ -2,6 +2,20 @@ import type { LoomCsvImportRow } from "@/actions/loom";
 
 export const MAX_LOOM_CSV_IMPORT_ROWS = 3000;
 
+function detectLoomCsvDelimiter(input: string) {
+	let commas = 0;
+	let semicolons = 0;
+	let inQuotes = false;
+	for (const char of input) {
+		if (char === "\u0022") inQuotes = !inQuotes;
+		else if (inQuotes) continue;
+		else if (char === "\n" || char === "\r") break;
+		else if (char === ",") commas += 1;
+		else if (char === ";") semicolons += 1;
+	}
+	return semicolons > commas ? ";" : ",";
+}
+
 export function parseLoomCsvRecords(text: string) {
 	const records: string[][] = [];
 	let field = "";
@@ -9,6 +23,7 @@ export function parseLoomCsvRecords(text: string) {
 	let inQuotes = false;
 	const input = text.replace(/^\uFEFF/, "");
 	const quote = "\u0022";
+	const delimiter = detectLoomCsvDelimiter(input);
 
 	for (let index = 0; index < input.length; index += 1) {
 		const char = input.charAt(index);
@@ -24,7 +39,7 @@ export function parseLoomCsvRecords(text: string) {
 			continue;
 		}
 
-		if (char === "," && !inQuotes) {
+		if (char === delimiter && !inQuotes) {
 			row.push(field.trim());
 			field = "";
 			continue;
