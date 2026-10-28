@@ -1742,6 +1742,7 @@ dependencies = [
 name = "cap-export"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "base64 0.22.1",
  "cap-editor",
  "cap-enc-ffmpeg",
@@ -1761,6 +1762,7 @@ dependencies = [
  "image 0.25.8",
  "imgref",
  "inquire",
+ "libc",
  "mp4",
  "rgb",
  "serde",

@@ -464,6 +464,22 @@ pub fn order_front_native(native: &NativeWindow) {
     }
 }
 
+/// Synchronous on purpose: `order_front_native`'s posted `HWND_TOP` lands
+/// after an overlay's own activation and loses to it.
+pub fn raise_panel_native(native: &NativeWindow, _level: isize) {
+    unsafe {
+        SetWindowPos(
+            native.hwnd(),
+            HWND_TOPMOST,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
+    }
+}
+
 fn overlap_is_visible(first: Rect, second: Rect) -> bool {
     const MIN_VISIBLE: f64 = 80.;
     if !first.is_valid() || !second.is_valid() {

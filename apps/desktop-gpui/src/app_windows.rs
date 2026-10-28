@@ -2638,11 +2638,7 @@ fn open_overlay(
                         window.refresh();
                     })
                     .ok();
-                if let Some(camera) = cx.update(visible_camera_frame)
-                    && let Err(error) = camera.raise()
-                {
-                    tracing::warn!(%error, "could not raise the camera above the target picker");
-                }
+                raise_camera_above_overlays(cx);
             })
             .detach();
         }
@@ -4368,7 +4364,22 @@ pub(crate) fn studio_camera_snapshot(
         .ok()
 }
 
-fn visible_camera_frame(cx: &mut App) -> Option<CameraFrame> {
+/// Keep the camera bubble above the picker overlays. Not filtered on
+/// `window_is_visible` off macOS: Windows' camera is shown asynchronously and
+/// X11 has no visibility probe, and neither raise path shows a hidden window.
+/// Lift the camera preview back over the picker overlays. The raise runs
+/// outside any gpui update: ordering a window front calls straight back into
+/// gpui, which drops those callbacks while the app is borrowed.
+pub(crate) fn raise_camera_above_overlays(cx: &mut gpui::AsyncApp) {
+    let Some(camera) = cx.update(camera_to_raise) else {
+        return;
+    };
+    if let Err(error) = camera.raise() {
+        tracing::warn!(%error, "could not raise the camera above the target picker");
+    }
+}
+
+fn camera_to_raise(cx: &mut App) -> Option<CameraFrame> {
     if camera_preview_is_inline(cx) {
         return None;
     }
@@ -4376,7 +4387,12 @@ fn visible_camera_frame(cx: &mut App) -> Option<CameraFrame> {
     if clean_capture_active(cx) {
         return None;
     }
-    camera_frame(cx).filter(|camera| camera.visible)
+    let camera = camera_frame(cx)?;
+    #[cfg(target_os = "macos")]
+    if !camera.visible {
+        return None;
+    }
+    Some(camera)
 }
 
 fn camera_snapshot(cx: &mut App) -> Option<CameraSnapshot> {
@@ -4396,9 +4412,13 @@ impl CameraFrame {
     fn raise(&self) -> anyhow::Result<()> {
         match &self.native {
             #[cfg(target_os = "macos")]
-            CameraNativeFrame::Mac { native, .. } => platform::order_front_native(native),
+            CameraNativeFrame::Mac { native, .. } => {
+                platform::raise_panel_native(native, platform::recording_controls_level())
+            }
             #[cfg(target_os = "windows")]
-            CameraNativeFrame::Windows(native) => platform::order_front_native(native),
+            CameraNativeFrame::Windows(native) => {
+                platform::raise_panel_native(native, platform::recording_controls_level())
+            }
             #[cfg(target_os = "linux")]
             CameraNativeFrame::X11 { window_id, .. } => {
                 use x11rb::connection::Connection as _;
