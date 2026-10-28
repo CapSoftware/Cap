@@ -1071,9 +1071,7 @@ studio = "Mode Studio"
 studio_description = "Enregistre sur votre ordinateur et ouvre l'éditeur à l'arrêt. Choisissez la qualité d'enregistrement dans les paramètres."
 
 [main.mode.info]
-instant = "Partagez instantanément avec un lien. Votre enregistrement est mis en ligne pendant que vous enregistrez, pour le partager dès que vous avez terminé."
-screenshot = "Capturez et annotez des captures d'écran en un instant. Idéal pour les captures rapides, les rapports de bugs et la communication visuelle."
-studio = "Enregistrez localement dans la meilleure qualité pour monter plus tard. Parfait pour créer des contenus soignés avec effets et transitions."
+current = "Actuel"
 title = "Modes d'enregistrement"
 
 [main.mode.name]

@@ -1071,9 +1071,7 @@ studio = "Modo Studio"
 studio_description = "Se guarda en tu ordenador y abre el editor al terminar. Elige la calidad de grabación en los ajustes."
 
 [main.mode.info]
-instant = "Comparte al instante con un enlace. Tu grabación se sube mientras grabas, así que puedes compartirla en cuanto termines."
-screenshot = "Haz y anota capturas de pantalla al instante. Ideal para capturas rápidas, informes de errores y comunicación visual."
-studio = "Graba localmente con la máxima calidad para editar después. Perfecto para crear contenido pulido con efectos y transiciones."
+current = "Actual"
 title = "Modos de grabación"
 
 [main.mode.name]
