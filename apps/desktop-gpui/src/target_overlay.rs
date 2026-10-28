@@ -330,19 +330,24 @@ pub(crate) mod probe_frames {
     use std::sync::Mutex;
     use std::time::Instant;
 
-    static FRAMES: Mutex<Option<Vec<Instant>>> = Mutex::new(None);
+    use scap_targets::DisplayId;
 
-    pub(crate) fn rendered() {
+    /// Only the dragged display's overlay counts: another display repainting
+    /// for the mic meter would add frames it did not draw.
+    static FRAMES: Mutex<Option<(DisplayId, Vec<Instant>)>> = Mutex::new(None);
+
+    pub(crate) fn rendered(display: &DisplayId) {
         if let Ok(mut frames) = FRAMES.lock()
-            && let Some(frames) = frames.as_mut()
+            && let Some((measured, frames)) = frames.as_mut()
+            && measured == display
         {
             frames.push(Instant::now());
         }
     }
 
-    pub(crate) fn begin() {
+    pub(crate) fn begin(display: DisplayId) {
         if let Ok(mut frames) = FRAMES.lock() {
-            *frames = Some(Vec::with_capacity(4096));
+            *frames = Some((display, Vec::with_capacity(4096)));
         }
     }
 
@@ -351,6 +356,7 @@ pub(crate) mod probe_frames {
             .lock()
             .ok()
             .and_then(|mut frames| frames.take())
+            .map(|(_, frames)| frames)
             .unwrap_or_default()
     }
 }
@@ -1754,7 +1760,7 @@ impl OverlayWindow {
 impl Render for OverlayWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         #[cfg(debug_assertions)]
-        probe_frames::rendered();
+        probe_frames::rendered(&self.display_id);
         self.sync_appearance(window, cx);
         self.sync_inline_camera(window, cx);
         self.sync_backdrop(window, cx);

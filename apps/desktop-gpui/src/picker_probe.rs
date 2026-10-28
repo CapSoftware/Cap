@@ -694,6 +694,7 @@ fn footprint_mb() -> Option<f64> {
 }
 
 async fn drag_frames(
+    display: &scap_targets::DisplayId,
     overlay: &WindowHandle<crate::target_overlay::OverlayWindow>,
     base: AreaRect,
     grab: (f32, f32),
@@ -715,7 +716,7 @@ async fn drag_frames(
     });
     sleep(cx, 300).await;
     let started = drag(ProbeDrag::Press, grab, cx);
-    probe_frames::begin();
+    probe_frames::begin(display.clone());
     let (cpu, wall) = (cpu_secs(), std::time::Instant::now());
     let mut events = 0u32;
     while wall.elapsed() < Duration::from_millis(millis) {
@@ -773,15 +774,15 @@ async fn probe_perf(cx: &mut AsyncApp) -> serde_json::Value {
     crate::overlay_backdrop::set_disabled(false);
 
     let handler_drags = match overlays.first() {
-        Some((_, overlay)) => {
+        Some((display, overlay)) => {
             let middle = (base.x + base.width / 2., base.y + base.height / 2.);
             let corner = (base.x + base.width, base.y + base.height);
-            let moving = drag_frames(overlay, base, middle, 6000, cx).await;
-            let resizing = drag_frames(overlay, base, corner, 6000, cx).await;
+            let moving = drag_frames(display, overlay, base, middle, 6000, cx).await;
+            let resizing = drag_frames(display, overlay, base, corner, 6000, cx).await;
             let warm = footprint_mb();
             for _ in 0..3 {
-                drag_frames(overlay, base, middle, 5000, cx).await;
-                drag_frames(overlay, base, corner, 5000, cx).await;
+                drag_frames(display, overlay, base, middle, 5000, cx).await;
+                drag_frames(display, overlay, base, corner, 5000, cx).await;
             }
             let after = footprint_mb();
             serde_json::json!({
