@@ -22,7 +22,7 @@ interface PacketStream {
 const STREAM_FIELDS =
 	"index,start_pts,codec_type,codec_name,profile,level,codec_tag_string,width,height,sample_aspect_ratio,pix_fmt,color_range,color_space,color_transfer,color_primaries,chroma_location,field_order,refs,sample_fmt,sample_rate,channels,channel_layout,time_base,extradata_hash";
 
-async function runInspector(
+export async function runInspector(
 	command: string,
 	args: string[],
 	signal: AbortSignal,
@@ -245,7 +245,11 @@ class PacketLog {
 		this.pts[this.length] = seconds(pts);
 		this.dts[this.length] = seconds(dts);
 		this.sizes[this.length] = Number(size);
-		this.hashes[this.length] = Number.parseInt(dataHash.slice(7, 15), 16);
+		const digest = dataHash.indexOf(":") + 1;
+		this.hashes[this.length] = Number.parseInt(
+			dataHash.slice(digest, digest + 8),
+			16,
+		);
 		this.keyframes[this.length] =
 			(flags?.includes("K") ? 1 : 0) | (flags?.includes("D") ? 2 : 0);
 		this.length++;
@@ -516,6 +520,13 @@ async function readTrack(
 		);
 		hash.update("\n");
 	};
+	// Source and output packets are hashed by the same ffprobe and only compared with each other, to catch a
+	// remux that changed a packet; FFmpeg's SHA-256 made this read the slowest part of verifying a long video.
+	// Audio keeps SHA-256 because its tail is checked against a hash computed outside ffprobe.
+	const packetHash =
+		kind === "video"
+			? { name: "murmur3", pattern: /^murmur3:[a-f0-9]{32}$/ }
+			: { name: "sha256", pattern: /^SHA256:[a-f0-9]{64}$/ };
 	await probe(
 		path,
 		[
@@ -523,7 +534,7 @@ async function readTrack(
 			selection,
 			"-show_packets",
 			"-show_data_hash",
-			"sha256",
+			packetHash.name,
 			"-show_entries",
 			"packet=stream_index,pts,dts,duration,size,flags,data_hash:packet_side_data",
 			"-of",
@@ -547,7 +558,7 @@ async function readTrack(
 			if (
 				Number(fields.stream_index) !== index ||
 				!/^[1-9]\d*$/.test(fields.size ?? "") ||
-				!/^SHA256:[a-f0-9]{64}$/.test(fields.data_hash ?? "")
+				!packetHash.pattern.test(fields.data_hash ?? "")
 			)
 				throw new Error("Recording packet content is incomplete");
 			if (pendingPacket) commitPacket(pendingPacket, fields.dts);
