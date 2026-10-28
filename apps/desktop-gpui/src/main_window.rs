@@ -210,16 +210,36 @@ fn glass_tint(theme: Theme, light: f32, dark: f32) -> Hsla {
     }
 }
 
+fn grouped_list(theme: Theme, rows: Vec<gpui::AnyElement>, inset: f32) -> gpui::Div {
+    let count = rows.len();
+    let mut group = div()
+        .flex()
+        .flex_col()
+        .w_full()
+        .p(px(4.))
+        .rounded(px(10.))
+        .map(|this| glass_button(this, theme, false));
+    for (index, row) in rows.into_iter().enumerate() {
+        group = group.child(row);
+        if index + 1 < count {
+            group = group.child(
+                div()
+                    .h(px(1.))
+                    .ml(px(inset))
+                    .mr(px(8.))
+                    .bg(glass_tint(theme, 0.08, 0.1)),
+            );
+        }
+    }
+    group
+}
+
 fn glass_hover(theme: Theme) -> Hsla {
     glass_tint(theme, 0.06, 0.07)
 }
 
 fn glass_press(theme: Theme) -> Hsla {
     glass_tint(theme, 0.1, 0.11)
-}
-
-fn glass_selected(theme: Theme) -> Hsla {
-    glass_tint(theme, 0.08, 0.1)
 }
 
 fn shadow(color: Hsla, y: f32, blur: f32, spread: f32, inset: bool) -> gpui::BoxShadow {
@@ -251,6 +271,114 @@ fn glass_button<E: Styled>(element: E, theme: Theme, selected: bool) -> E {
         gpui::hsla(0., 0., 0., 0.08)
     };
     element.bg(fill).border_1().border_color(edge)
+}
+
+const LIBRARY_TILE_RADIUS: f32 = 12.;
+const LIBRARY_THUMB_RADIUS: f32 = 8.;
+const LIBRARY_THUMB_HEIGHT: f32 = 84.;
+
+fn library_tile(tile: gpui::Stateful<gpui::Div>, theme: Theme) -> gpui::Stateful<gpui::Div> {
+    tile.flex()
+        .flex_col()
+        .flex_1()
+        .min_w_0()
+        .gap(px(2.))
+        .p(px(4.))
+        .rounded(px(LIBRARY_TILE_RADIUS))
+        .map(|this| glass_button(this, theme, false))
+        .hover(move |style| style.bg(library_tile_hover(theme)))
+}
+
+fn library_tile_hover(theme: Theme) -> Hsla {
+    glass_tint(theme, 0.08, 0.12)
+}
+
+fn library_thumb_frame(theme: Theme) -> gpui::Div {
+    div()
+        .relative()
+        .w_full()
+        .h(px(LIBRARY_THUMB_HEIGHT))
+        .rounded(px(LIBRARY_THUMB_RADIUS))
+        .overflow_hidden()
+        .bg(glass_tint(theme, 0.04, 0.08))
+}
+
+/// A hairline over the preview's edge, drawn after it so a light or dark
+/// picture still reads as its own panel.
+fn library_thumb_rim(theme: Theme) -> gpui::Div {
+    div()
+        .absolute()
+        .inset_0()
+        .rounded(px(LIBRARY_THUMB_RADIUS))
+        .border_1()
+        .border_color(glass_tint(theme, 0.08, 0.1))
+}
+
+fn library_placeholder(theme: Theme, icon: &'static str) -> gpui::Div {
+    div()
+        .size_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .bg(gpui::linear_gradient(
+            160.,
+            gpui::linear_color_stop(glass_tint(theme, 0.02, 0.04), 0.),
+            gpui::linear_color_stop(glass_tint(theme, 0.07, 0.11), 1.),
+        ))
+        .child(
+            div()
+                .size(px(34.))
+                .rounded_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(glass_tint(theme, 0.05, 0.1))
+                .child(svg().path(icon).size(px(16.)).text_color(theme.gray_10)),
+        )
+}
+
+fn library_badge(label: impl Into<SharedString>) -> gpui::Div {
+    div()
+        .absolute()
+        .left(px(6.))
+        .top(px(6.))
+        .rounded_full()
+        .bg(black_alpha(0.5))
+        .px(px(7.))
+        .py(px(2.))
+        .text_size(px(10.))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(gpui::white())
+        .child(label.into())
+}
+
+fn library_caption(theme: Theme, label: String, subtitle: Option<String>) -> gpui::Div {
+    div()
+        .flex()
+        .flex_col()
+        .w_full()
+        .min_w_0()
+        .gap(px(1.))
+        .px(px(4.))
+        .pt(px(6.))
+        .pb(px(2.))
+        .child(
+            div()
+                .w_full()
+                .truncate()
+                .text_size(px(12.))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(theme.gray_12)
+                .child(label),
+        )
+        .children(subtitle.map(|subtitle| {
+            div()
+                .w_full()
+                .truncate()
+                .text_size(px(11.))
+                .text_color(theme.gray_10)
+                .child(subtitle)
+        }))
 }
 
 fn capture_hover_fill(theme: Theme, selected: bool) -> Hsla {
@@ -534,6 +662,31 @@ enum DeviceFormat {
 }
 
 impl DeviceFormat {
+    fn parts(self) -> (String, Option<String>) {
+        match self {
+            Self::Camera(settings) => {
+                match (settings.width, settings.height, settings.frame_rate) {
+                    (Some(width), Some(height), Some(rate)) => (
+                        format!("{width} × {height}"),
+                        Some(format!("{rate:.0} fps")),
+                    ),
+                    _ => (tr::main::device::format::default().into(), None),
+                }
+            }
+            Self::Microphone(settings) => match (settings.sample_rate, settings.channels) {
+                (Some(rate), Some(channels)) => {
+                    let channels: String = match channels {
+                        1 => tr::main::device::format::mono().into(),
+                        2 => tr::main::device::format::stereo().into(),
+                        count => tr::main::device::format::channels(usize::from(count)),
+                    };
+                    (format!("{} kHz", rate as f32 / 1000.), Some(channels))
+                }
+                _ => (tr::main::device::format::default().into(), None),
+            },
+        }
+    }
+
     fn label(self) -> String {
         match self {
             Self::Camera(settings) => {
@@ -1209,10 +1362,11 @@ impl MainWindow {
                         this.set_microphone_selection(Some(microphone), cx);
                     }
                 }
-                // `CAP_GPUI_AUTO_PANEL=display|window`: open that target
-                // picker panel the way the chevron click does. Same reason as
-                // `CAP_GPUI_AUTO_CAMERA` above -- the chrome screenshots need
-                // the card grid on screen and synthetic clicks are dropped.
+                // `CAP_GPUI_AUTO_PANEL=display|window|camera|microphone|
+                // recordings|screenshots`: open that panel the way a click
+                // does. Same reason as `CAP_GPUI_AUTO_CAMERA` above -- the
+                // chrome screenshots need the panel on screen and synthetic
+                // clicks are dropped.
                 match std::env::var("CAP_GPUI_AUTO_PANEL").as_deref() {
                     Ok("display") => {
                         this.open_panel(Panel::Target(TargetType::Display), window, cx)
@@ -1221,6 +1375,12 @@ impl MainWindow {
                     Ok("camera") => this.open_panel(Panel::Device(DeviceMenu::Camera), window, cx),
                     Ok("microphone") => {
                         this.open_panel(Panel::Device(DeviceMenu::Microphone), window, cx)
+                    }
+                    Ok("recordings") => {
+                        this.open_panel(Panel::Library(LibraryKind::Recordings), window, cx)
+                    }
+                    Ok("screenshots") => {
+                        this.open_panel(Panel::Library(LibraryKind::Screenshots), window, cx)
                     }
                     _ => {}
                 }
@@ -4551,20 +4711,36 @@ impl MainWindow {
             div()
                 .id("library-view-all")
                 .flex()
+                .flex_col()
                 .flex_1()
                 .min_w_0()
-                .h(px(76.))
+                .min_h(px(LIBRARY_THUMB_HEIGHT))
                 .items_center()
                 .justify_center()
-                .rounded(px(8.))
-                .border_1()
-                .border_color(theme.body_border(5))
-                .bg(theme.body_fill(3))
+                .gap(px(8.))
+                .rounded(px(LIBRARY_TILE_RADIUS))
+                .map(|this| glass_button(this, theme, false))
                 .text_size(px(12.))
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(theme.gray_12)
                 .cursor_pointer()
-                .hover(|style| style.bg(theme.body_hover_fill(4)))
+                .hover(move |style| style.bg(library_tile_hover(theme)))
+                .active(move |style| style.bg(glass_press(theme)))
+                .child(
+                    div()
+                        .size(px(30.))
+                        .rounded_full()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .bg(glass_tint(theme, 0.05, 0.1))
+                        .child(
+                            svg()
+                                .path("icons/chevron-right.svg")
+                                .size(px(14.))
+                                .text_color(theme.gray_11),
+                        ),
+                )
                 .child(view_all)
                 .on_click(cx.listener(move |_, _, _window, cx| {
                     cx.defer(move |cx| app_windows::open_settings(page, cx));
@@ -4657,68 +4833,22 @@ impl MainWindow {
             }
         };
 
-        div()
-            .id(("library-importing", index))
-            .flex()
-            .flex_col()
-            .flex_1()
-            .min_w_0()
-            .overflow_hidden()
-            .rounded(px(8.))
-            .bg(theme.body_fill(3))
+        library_tile(div().id(("library-importing", index)), theme)
             .child(
-                div()
-                    .relative()
-                    .w_full()
-                    .h(px(76.))
-                    .rounded_t(px(8.))
-                    .overflow_hidden()
-                    .bg(theme.body_fill(4))
+                library_thumb_frame(theme)
                     .flex()
                     .items_center()
                     .justify_center()
+                    .bg(glass_tint(theme, 0.03, 0.06))
                     .child(ring)
-                    .child(
-                        div()
-                            .absolute()
-                            .left(px(4.))
-                            .top(px(4.))
-                            .rounded_full()
-                            .bg(black_alpha(0.55))
-                            .px(px(6.))
-                            .py(px(2.))
-                            .text_size(px(10.))
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(gpui::white())
-                            .child(tr::main::library::importing()),
-                    ),
+                    .child(library_thumb_rim(theme))
+                    .child(library_badge(tr::main::library::importing())),
             )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .w_full()
-                    .min_w_0()
-                    .px(px(8.))
-                    .py(px(6.))
-                    .pb(px(10.))
-                    .text_size(px(11.))
-                    .child(
-                        div()
-                            .w_full()
-                            .truncate()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(theme.gray_12)
-                            .child(entry.pretty_name.clone()),
-                    )
-                    .child(
-                        div()
-                            .w_full()
-                            .truncate()
-                            .text_color(theme.gray_11)
-                            .child(entry.message.clone()),
-                    ),
-            )
+            .child(library_caption(
+                theme,
+                entry.pretty_name.clone(),
+                Some(entry.message.clone()),
+            ))
     }
 
     fn render_recording_card(
@@ -4779,14 +4909,13 @@ impl MainWindow {
             .flex_row()
             .items_center()
             .justify_between()
-            .px(px(8.))
-            .pb(px(6.))
-            .gap(px(4.));
+            .gap(px(2.));
         if item.opens_editor() {
             let editor = path.clone();
             row = row.child(self.library_action(
                 "lib-rec-edit",
                 "icons/edit.svg",
+                tr::settings::recordings::edit(),
                 cx.listener(move |_, _, _window, cx| {
                     let editor = editor.clone();
                     cx.defer(move |cx| app_windows::open_editor(editor, cx));
@@ -4797,6 +4926,7 @@ impl MainWindow {
             row = row.child(self.library_action(
                 "lib-rec-link",
                 "icons/link.svg",
+                tr::settings::recordings::open_link(),
                 move |_, _, cx| cx.open_url(&url),
             ));
         }
@@ -4809,6 +4939,7 @@ impl MainWindow {
             row = row.child(self.library_action(
                 "lib-rec-retry",
                 "icons/rotate-ccw.svg",
+                tr::settings::recordings::retry_upload(),
                 cx.listener(move |_, _, window, cx| {
                     let path = retry_path.clone();
                     cx.spawn_in(window, async move |this, cx| {
@@ -4834,11 +4965,13 @@ impl MainWindow {
         row = row.child(self.library_action(
             "lib-rec-folder",
             "icons/folder.svg",
+            tr::settings::screenshots::open_folder(),
             move |_, _, cx| library::open_recording_folder(&folder, mode, cx),
         ));
         row.child(self.library_action(
             "lib-rec-delete",
             "icons/trash.svg",
+            tr::settings::recordings::delete(),
             cx.listener(move |this, _, window, cx| {
                 this.delete_library_recording(path.clone(), window, cx);
             }),
@@ -4883,39 +5016,49 @@ impl MainWindow {
             .flex_row()
             .items_center()
             .justify_between()
-            .px(px(8.))
-            .pb(px(6.))
-            .gap(px(4.))
-            .child(self.library_action("lib-ss-copy", "icons/copy.svg", {
-                let png = png.clone();
-                move |_, _, cx| {
-                    let copied = crate::platform::copy_image_to_clipboard(png.clone(), cx);
-                    cx.spawn(async move |_| {
-                        if let Err(error) = copied.await {
-                            tracing::warn!("copying screenshot failed: {error}");
-                            crate::platform::alert_dialog(
-                                tr::main::library::copy_screenshot_failed(),
-                                &error,
-                            );
-                        }
-                    })
-                    .detach();
-                }
-            }))
+            .gap(px(2.))
+            .child(self.library_action(
+                "lib-ss-copy",
+                "icons/copy.svg",
+                tr::settings::screenshots::copy(),
+                {
+                    let png = png.clone();
+                    move |_, _, cx| {
+                        let copied = crate::platform::copy_image_to_clipboard(png.clone(), cx);
+                        cx.spawn(async move |_| {
+                            if let Err(error) = copied.await {
+                                tracing::warn!("copying screenshot failed: {error}");
+                                crate::platform::alert_dialog(
+                                    tr::main::library::copy_screenshot_failed(),
+                                    &error,
+                                );
+                            }
+                        })
+                        .detach();
+                    }
+                },
+            ))
             .child(self.library_action(
                 "lib-ss-save",
                 "icons/download.svg",
+                tr::settings::screenshots::save_as(),
                 cx.listener(move |this, _, window, cx| {
                     this.save_screenshot(png.clone(), name.clone(), window, cx);
                 }),
             ))
-            .child(self.library_action("lib-ss-open", "icons/folder.svg", {
-                let bundle = bundle.clone();
-                move |_, _, cx| library::reveal_path(&bundle, cx)
-            }))
+            .child(self.library_action(
+                "lib-ss-open",
+                "icons/folder.svg",
+                tr::settings::screenshots::open_folder(),
+                {
+                    let bundle = bundle.clone();
+                    move |_, _, cx| library::reveal_path(&bundle, cx)
+                },
+            ))
             .child(self.library_action(
                 "lib-ss-delete",
                 "icons/trash.svg",
+                tr::settings::screenshots::delete(),
                 cx.listener(move |this, _, window, cx| {
                     this.delete_library_screenshot(bundle.clone(), window, cx);
                 }),
@@ -4926,20 +5069,25 @@ impl MainWindow {
         &self,
         id: impl Into<gpui::ElementId>,
         icon: &'static str,
+        label: &'static str,
         on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
     ) -> impl IntoElement {
         let theme = self.theme;
         div()
             .id(id)
+            .role(gpui::Role::Button)
+            .aria_label(label)
+            .tooltip(move |_, cx| ui::Tooltip::new(&theme, label).view(cx))
+            .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
             .flex_1()
+            .h(px(26.))
             .flex()
             .items_center()
             .justify_center()
-            .p(px(4.))
-            .rounded(px(4.))
-            .text_color(theme.gray_11)
+            .rounded(px(8.))
             .cursor_pointer()
-            .hover(|style| style.bg(theme.body_hover_fill(5)).text_color(theme.gray_12))
+            .hover(move |style| style.bg(glass_hover(theme)))
+            .active(move |style| style.bg(glass_press(theme)))
             .child(svg().path(icon).size(px(14.)).text_color(theme.gray_11))
             .on_click(on_click)
     }
@@ -4962,86 +5110,31 @@ impl MainWindow {
                 use gpui::StyledImage as _;
                 img(image)
                     .size_full()
-                    .rounded_t(px(8.))
+                    .rounded(px(LIBRARY_THUMB_RADIUS))
                     .object_fit(gpui::ObjectFit::Cover)
                     .into_any_element()
             }
-            None => div()
-                .rounded_t(px(8.))
-                .flex()
-                .size_full()
-                .items_center()
-                .justify_center()
-                .bg(theme.body_fill(4))
-                .child(svg().path(fallback).size(px(24.)).text_color(theme.gray_9))
-                .into_any_element(),
+            None => library_placeholder(theme, fallback).into_any_element(),
         };
 
-        div()
-            .id(id)
-            .flex()
-            .flex_col()
-            .flex_1()
-            .min_w_0()
-            .overflow_hidden()
-            .rounded(px(8.))
-            .bg(theme.body_fill(3))
-            .hover(|style| style.bg(theme.body_hover_fill(4)))
+        library_tile(div().id(id), theme)
             .child(
                 div()
                     .id("library-card-open")
                     .cursor_pointer()
+                    .flex()
+                    .flex_col()
                     .child(
-                        div()
-                            .relative()
-                            .w_full()
-                            .h(px(76.))
-                            .rounded_t(px(8.))
-                            .overflow_hidden()
-                            .bg(theme.body_fill(4))
+                        library_thumb_frame(theme)
                             .child(thumb)
+                            .child(library_thumb_rim(theme))
                             .when(clip_count > 1, |this| {
-                                this.child(
-                                    div()
-                                        .absolute()
-                                        .left(px(4.))
-                                        .top(px(4.))
-                                        .rounded_full()
-                                        .bg(black_alpha(0.55))
-                                        .px(px(6.))
-                                        .py(px(2.))
-                                        .text_size(px(10.))
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .text_color(gpui::white())
-                                        .child(tr::main::library::clips(clip_count as usize)),
-                                )
+                                this.child(library_badge(tr::main::library::clips(
+                                    clip_count as usize,
+                                )))
                             }),
                     )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .w_full()
-                            .min_w_0()
-                            .px(px(8.))
-                            .py(px(6.))
-                            .text_size(px(11.))
-                            .child(
-                                div()
-                                    .w_full()
-                                    .truncate()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(theme.gray_12)
-                                    .child(label),
-                            )
-                            .children(subtitle.map(|subtitle| {
-                                div()
-                                    .w_full()
-                                    .truncate()
-                                    .text_color(theme.gray_11)
-                                    .child(subtitle)
-                            })),
-                    )
+                    .child(library_caption(theme, label, subtitle))
                     .on_click(on_click),
             )
             .child(actions)
@@ -5254,17 +5347,28 @@ impl MainWindow {
                                     SharedString::from(format!("camera-{}", camera.device_id)),
                                     menu.icon(),
                                     camera.label.clone(),
-                                    if selected {
-                                        Feeds::global(cx)
-                                            .read(cx)
-                                            .applied_device_settings()
-                                            .camera
-                                            .map(|settings| DeviceFormat::Camera(settings).label())
-                                    } else {
-                                        camera.best_format.map(|format| {
-                                            tr::main::device::format::available(format.describe())
+                                    // The applied format lands a moment after
+                                    // the camera opens; until then the row
+                                    // keeps its available line, so it never
+                                    // changes height.
+                                    selected
+                                        .then(|| {
+                                            Feeds::global(cx)
+                                                .read(cx)
+                                                .applied_device_settings()
+                                                .camera
+                                                .map(|settings| {
+                                                    DeviceFormat::Camera(settings).label()
+                                                })
                                         })
-                                    },
+                                        .flatten()
+                                        .or_else(|| {
+                                            camera.best_format.map(|format| {
+                                                tr::main::device::format::available(
+                                                    format.describe(),
+                                                )
+                                            })
+                                        }),
                                     selected,
                                     None,
                                     cx.listener(move |this, _, _window, cx| {
@@ -5312,17 +5416,20 @@ impl MainWindow {
                                     SharedString::from(format!("mic-{}", mic.name)),
                                     menu.icon(),
                                     mic.name.clone(),
-                                    if selected {
-                                        Feeds::global(cx)
-                                            .read(cx)
-                                            .applied_device_settings()
-                                            .microphone
-                                            .map(|settings| {
-                                                DeviceFormat::Microphone(settings).label()
-                                            })
-                                    } else {
-                                        mic.describe().map(tr::main::device::format::available)
-                                    },
+                                    selected
+                                        .then(|| {
+                                            Feeds::global(cx)
+                                                .read(cx)
+                                                .applied_device_settings()
+                                                .microphone
+                                                .map(|settings| {
+                                                    DeviceFormat::Microphone(settings).label()
+                                                })
+                                        })
+                                        .flatten()
+                                        .or_else(|| {
+                                            mic.describe().map(tr::main::device::format::available)
+                                        }),
                                     selected,
                                     selected.then(|| self.device_microphone_level.clone()),
                                     cx.listener(move |this, _, _window, cx| {
@@ -5347,11 +5454,12 @@ impl MainWindow {
             }
         }
 
+        let list = list.child(grouped_list(theme, rows, 34.));
         if matched == 0 {
-            rows.push(self.render_empty_state(menu.empty_message(!self.search.is_empty())));
+            list.child(self.render_empty_state(menu.empty_message(!self.search.is_empty())))
+        } else {
+            list
         }
-
-        list.children(rows)
     }
 
     fn open_device_formats(&mut self, target: DeviceFormatTarget, cx: &mut Context<Self>) {
@@ -5565,51 +5673,203 @@ impl MainWindow {
                     }
                 }
             });
-        let list = div()
+        let device = self
+            .device_format_target
+            .as_ref()
+            .map(|target| match target {
+                DeviceFormatTarget::Camera(camera) => camera_label(&camera.label),
+                DeviceFormatTarget::Microphone(name) => name.clone(),
+            });
+        let caption = |text: SharedString, color: Hsla| {
+            div()
+                .px(px(4.))
+                .text_size(px(12.))
+                .line_height(px(16.))
+                .text_color(color)
+                .child(text)
+        };
+
+        let rows: Vec<gpui::AnyElement> = match &self.device_formats {
+            // Placeholders the height of real rows, so the list does not jump
+            // when the formats arrive.
+            None => (0..3usize)
+                .map(|index| {
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .px(px(8.))
+                        .min_h(px(36.))
+                        .child(
+                            div()
+                                .w(px(88. - index as f32 * 12.))
+                                .h(px(10.))
+                                .rounded_full()
+                                .bg(glass_tint(theme, 0.08, 0.12)),
+                        )
+                        .child(
+                            div()
+                                .w(px(36.))
+                                .h(px(10.))
+                                .rounded_full()
+                                .bg(glass_tint(theme, 0.05, 0.08)),
+                        )
+                        .into_any_element()
+                })
+                .collect(),
+            Some(Err(_)) => Vec::new(),
+            Some(Ok(formats)) => formats
+                .iter()
+                .enumerate()
+                .map(|(index, format)| {
+                    let format = *format;
+                    self.render_device_format_row(
+                        index,
+                        format,
+                        self.device_format_value == Some(format),
+                        applied == Some(format),
+                        cx,
+                    )
+                    .into_any_element()
+                })
+                .collect(),
+        };
+
+        div()
             .flex()
             .flex_col()
-            .gap(px(4.))
+            .gap(px(8.))
             .w_full()
             .child(
                 div()
-                    .text_size(px(12.))
-                    .text_color(theme.gray_11)
-                    .pb(px(8.))
-                    .child(tr::main::device::format::preferred()),
-            )
-            .when_some(applied, |list, format| {
-                list.child(
-                    div()
-                        .text_size(px(12.))
-                        .text_color(theme.gray_11)
-                        .pb(px(8.))
-                        .child(tr::main::device::format::current(format.label())),
-                )
-            });
-        let list = match &self.device_formats {
-            None => list.child(self.render_empty_state(tr::main::device::format::loading())),
-            Some(Err(error)) => list.child(self.render_empty_state(error.clone())),
-            Some(Ok(formats)) => {
-                list.children(formats.iter().enumerate().map(|(index, format)| {
-                    let format = *format;
-                    self.render_device_list_row(
-                        SharedString::from(format!("device-format-{index}")),
-                        menu.icon(),
-                        format.label(),
-                        None,
-                        self.device_format_value == Some(format),
-                        None,
-                        cx.listener(move |this, _, _, cx| this.choose_device_format(format, cx)),
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(10.))
+                    .px(px(4.))
+                    .child(
+                        div()
+                            .size(px(32.))
+                            .flex_shrink_0()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(8.))
+                            .map(|this| glass_button(this, theme, false))
+                            .child(
+                                svg()
+                                    .path(menu.icon())
+                                    .size(px(16.))
+                                    .text_color(theme.gray_11),
+                            ),
                     )
-                }))
-            }
-        };
-        list.when(self.device_format_pending.is_some(), |list| {
-            list.child(self.render_empty_state(tr::main::device::format::applying()))
-        })
-        .when_some(self.device_format_notice.as_ref(), |list, notice| {
-            list.child(self.render_empty_state(notice.clone()))
-        })
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .min_w_0()
+                            .gap(px(1.))
+                            .children(device.map(|device| {
+                                div()
+                                    .truncate()
+                                    .text_size(px(13.))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(theme.gray_12)
+                                    .child(device)
+                            }))
+                            .child(
+                                div()
+                                    .truncate()
+                                    .text_size(px(11.))
+                                    .text_color(theme.gray_10)
+                                    .child(match (applied, &self.device_formats) {
+                                        (Some(format), _) => {
+                                            tr::main::device::format::current(format.label())
+                                        }
+                                        (None, None) => {
+                                            tr::main::device::format::loading().to_string()
+                                        }
+                                        (None, Some(_)) => {
+                                            tr::main::device::format::preferred().to_string()
+                                        }
+                                    }),
+                            ),
+                    ),
+            )
+            .when(!rows.is_empty(), |this| {
+                this.child(grouped_list(theme, rows, 8.))
+            })
+            .when_some(
+                self.device_formats
+                    .as_ref()
+                    .and_then(|formats| formats.as_ref().err()),
+                |this, error| this.child(caption(error.clone().into(), theme.amber_11.into())),
+            )
+            .when(self.device_format_pending.is_some(), |this| {
+                this.child(caption(
+                    tr::main::device::format::applying().into(),
+                    theme.gray_10.into(),
+                ))
+            })
+            .when_some(self.device_format_notice.as_ref(), |this, notice| {
+                this.child(caption(notice.clone().into(), theme.amber_11.into()))
+            })
+    }
+
+    fn render_device_format_row(
+        &self,
+        index: usize,
+        format: DeviceFormat,
+        chosen: bool,
+        applied: bool,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let theme = self.theme;
+        let (primary, secondary) = format.parts();
+        div()
+            .id(("device-format", index))
+            .when(self.keyboard_nav, ui::keyboard_nav::stop)
+            .role(gpui::Role::Button)
+            .aria_label(format.label())
+            .aria_selected(chosen)
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(8.))
+            .px(px(8.))
+            .min_h(px(36.))
+            .w_full()
+            .rounded(px(6.))
+            .cursor_pointer()
+            .hover(move |style| style.bg(glass_hover(theme)))
+            .active(move |style| style.bg(glass_press(theme)))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(px(13.))
+                    .text_color(theme.gray_12)
+                    .when(applied, |this| this.font_weight(FontWeight::MEDIUM))
+                    .child(primary),
+            )
+            .children(secondary.map(|secondary| {
+                div()
+                    .flex_shrink_0()
+                    .text_size(px(12.))
+                    .text_color(theme.gray_10)
+                    .child(secondary)
+            }))
+            .child(div().size(px(14.)).flex_shrink_0().when(chosen, |this| {
+                this.child(
+                    svg()
+                        .path("icons/check.svg")
+                        .size(px(14.))
+                        .text_color(theme.blue_500),
+                )
+            }))
+            .on_click(cx.listener(move |this, _, _, cx| this.choose_device_format(format, cx)))
     }
 
     fn render_device_format_button(
@@ -5630,7 +5890,7 @@ impl MainWindow {
             .justify_center()
             .w(px(32.))
             .flex_shrink_0()
-            .rounded(px(10.))
+            .rounded(px(9.))
             .when(enabled, |button| {
                 button
                     .cursor_pointer()
@@ -5812,49 +6072,31 @@ impl MainWindow {
             .w(px(self.target_card_width()))
             .flex_none()
             .min_w_0()
-            .overflow_hidden()
-            .rounded(px(8.))
-            .border_1()
-            .border_color(if selected {
-                Hsla::from(theme.blue_8)
-            } else {
-                gpui::transparent_black()
+            .gap(px(2.))
+            .p(px(4.))
+            .cursor_pointer()
+            .rounded(px(LIBRARY_TILE_RADIUS))
+            .map(|this| glass_button(this, theme, selected))
+            .when(selected, |this| this.border_color(theme.blue_8))
+            .hover(move |style| {
+                style.bg(if selected {
+                    Theme::with_alpha(theme.blue_9, 0.2)
+                } else {
+                    library_tile_hover(theme)
+                })
             })
-            .bg(theme.body_fill(3))
+            .active(move |style| style.bg(capture_press_fill(theme, selected)))
             .child(target_thumbnails::render_thumbnail_slot(thumb, icon, theme))
             .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .w_full()
-                    .min_w_0()
-                    .px(px(8.))
-                    .py(px(6.))
-                    .text_size(px(11.))
-                    .child(
-                        div()
-                            .w_full()
-                            .truncate()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(theme.gray_12)
-                            .child(label),
-                    )
-                    .children(subtitle.map(|subtitle| {
-                        div()
-                            .w_full()
-                            .truncate()
-                            .text_color(theme.gray_11)
-                            .child(subtitle)
-                    }))
-                    .children(metadata.map(|metadata| {
-                        div()
-                            .w_full()
-                            .truncate()
-                            .text_color(theme.gray_10)
-                            .child(metadata)
-                    })),
+                library_caption(theme, label, subtitle).children(metadata.map(|metadata| {
+                    div()
+                        .w_full()
+                        .truncate()
+                        .text_size(px(11.))
+                        .text_color(theme.gray_10)
+                        .child(metadata)
+                })),
             )
-            .hover(|style| style.bg(theme.body_hover_fill(4)))
             .on_click(on_click)
     }
 
@@ -6060,17 +6302,14 @@ impl MainWindow {
             .flex_row()
             .items_center()
             .gap(px(10.))
-            .px(px(10.))
-            .py(px(7.))
-            .min_h(px(40.))
+            .px(px(8.))
+            .py(px(6.))
+            .min_h(px(36.))
             .w_full()
-            .rounded(px(10.))
+            .rounded(px(6.))
             .cursor_pointer()
-            .when(selected, |this| this.bg(glass_selected(theme)))
-            .when(!selected, |this| {
-                this.hover(move |style| style.bg(glass_hover(theme)))
-                    .active(move |style| style.bg(glass_press(theme)))
-            })
+            .hover(move |style| style.bg(glass_hover(theme)))
+            .active(move |style| style.bg(glass_press(theme)))
             .child(
                 svg()
                     .path(icon)
