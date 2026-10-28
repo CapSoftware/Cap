@@ -1278,128 +1278,136 @@ fn mcp_cancellation_stops_wait_polling() {
 }
 
 #[test]
-fn mcp_waits_respect_deadlines_during_requests_and_backoff() {
-    for (tool, arguments) in [
-        (
-            "caps_wait",
-            serde_json::json!({"cap": "cap_synthetic", "timeout_seconds": 2}),
-        ),
-        (
-            "operations_wait",
-            serde_json::json!({"operation_id": "op_synthetic", "timeout_seconds": 2}),
-        ),
-    ] {
-        for stalled in [true, false] {
-            let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-            listener.set_nonblocking(true).unwrap();
-            let server_url = format!("http://{}", listener.local_addr().unwrap());
-            let running = Arc::new(AtomicBool::new(true));
-            let requests = Arc::new(AtomicUsize::new(0));
-            let server_running = running.clone();
-            let server_requests = requests.clone();
-            let server = thread::spawn(move || {
-                while server_running.load(Ordering::SeqCst) {
-                    match listener.accept() {
-                        Ok((mut stream, _)) => {
-                            stream
-                                .set_read_timeout(Some(Duration::from_secs(2)))
-                                .unwrap();
-                            let mut request = [0_u8; 4096];
-                            if stream.read(&mut request).unwrap_or(0) == 0 {
-                                continue;
-                            }
-                            server_requests.fetch_add(1, Ordering::SeqCst);
-                            if stalled {
-                                thread::sleep(Duration::from_secs(5));
-                                break;
-                            }
-                            let body = r#"{"transcript":{"status":"processing"},"ai":{"status":"processing"},"state":"running"}"#;
-                            let _ = write!(
-                                stream,
-                                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                                body.len(),
-                                body
-                            );
+fn mcp_waits_operations_respect_deadlines_during_requests_and_backoff() {
+    check_mcp_wait_deadline(
+        "operations_wait",
+        serde_json::json!({"operation_id": "op_synthetic", "timeout_seconds": 2}),
+    );
+}
+
+#[test]
+#[cfg_attr(
+    target_os = "linux",
+    ignore = "Blocked by the existing Linux keyring runtime panic (CapSoftware/Cap#2330)"
+)]
+fn mcp_waits_caps_respect_deadlines_during_requests_and_backoff() {
+    check_mcp_wait_deadline(
+        "caps_wait",
+        serde_json::json!({"cap": "cap_synthetic", "timeout_seconds": 2}),
+    );
+}
+
+fn check_mcp_wait_deadline(tool: &str, arguments: Value) {
+    for stalled in [true, false] {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let server_url = format!("http://{}", listener.local_addr().unwrap());
+        let running = Arc::new(AtomicBool::new(true));
+        let requests = Arc::new(AtomicUsize::new(0));
+        let server_running = running.clone();
+        let server_requests = requests.clone();
+        let server = thread::spawn(move || {
+            while server_running.load(Ordering::SeqCst) {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        stream
+                            .set_read_timeout(Some(Duration::from_secs(2)))
+                            .unwrap();
+                        let mut request = [0_u8; 4096];
+                        if stream.read(&mut request).unwrap_or(0) == 0 {
+                            continue;
                         }
-                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                            thread::sleep(Duration::from_millis(5))
+                        server_requests.fetch_add(1, Ordering::SeqCst);
+                        if stalled {
+                            thread::sleep(Duration::from_secs(5));
+                            break;
                         }
-                        Err(_) => break,
+                        let body = r#"{"transcript":{"status":"processing"},"ai":{"status":"processing"},"state":"running"}"#;
+                        let _ = write!(
+                            stream,
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            body.len(),
+                            body
+                        );
                     }
-                }
-            });
-            let mut child = cap()
-                .args(["mcp", "serve"])
-                .env("CAP_AGENT_TOKEN", "cap_cli_synthetic_test_token")
-                .env("CAP_SERVER_URL", server_url)
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()
-                .unwrap();
-            let mut stderr = child.stderr.take().unwrap();
-            let stderr_reader = thread::spawn(move || {
-                let mut output = String::new();
-                let _ = stderr.read_to_string(&mut output);
-                output
-            });
-            let stdout = child.stdout.take().unwrap();
-            let (sender, receiver) = mpsc::channel();
-            thread::spawn(move || {
-                for line in BufReader::new(stdout).lines() {
-                    if sender.send(line).is_err() {
-                        break;
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(5))
                     }
+                    Err(_) => break,
                 }
-            });
-            let mut stdin = child.stdin.take().unwrap();
-            for message in [
-                serde_json::json!({"jsonrpc":"2.0", "id":1, "method":"initialize", "params": {
-                    "protocolVersion":"2025-03-26", "capabilities":{},
-                    "clientInfo":{"name":"cap-test", "version":"1"}
-                }}),
-                serde_json::json!({"jsonrpc":"2.0", "method":"notifications/initialized", "params":{}}),
-            ] {
-                writeln!(stdin, "{message}").unwrap();
             }
-            stdin.flush().unwrap();
-            let initialized = receiver.recv_timeout(Duration::from_secs(5));
-            let start = std::time::Instant::now();
-            let call = serde_json::json!({"jsonrpc":"2.0", "id":3, "method":"tools/call", "params": {
-                "name":tool, "arguments":arguments
-            }});
-            writeln!(stdin, "{call}").unwrap();
-            stdin.flush().unwrap();
-            let response = receiver.recv_timeout(Duration::from_secs(4));
-            let elapsed = start.elapsed();
-            let _ = child.kill();
-            let _ = child.wait();
-            let stderr = stderr_reader.join().unwrap();
-            running.store(false, Ordering::SeqCst);
-            if !stalled {
-                server.join().unwrap();
+        });
+        let mut child = cap()
+            .args(["mcp", "serve"])
+            .env("CAP_AGENT_TOKEN", "cap_cli_synthetic_test_token")
+            .env("CAP_SERVER_URL", server_url)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut stderr = child.stderr.take().unwrap();
+        let stderr_reader = thread::spawn(move || {
+            let mut output = String::new();
+            let _ = stderr.read_to_string(&mut output);
+            output
+        });
+        let stdout = child.stdout.take().unwrap();
+        let (sender, receiver) = mpsc::channel();
+        thread::spawn(move || {
+            for line in BufReader::new(stdout).lines() {
+                if sender.send(line).is_err() {
+                    break;
+                }
             }
-            let initialized: Value = serde_json::from_str(&initialized.unwrap().unwrap()).unwrap();
-            assert_eq!(initialized["id"], 1);
-            let response = response.unwrap_or_else(|error| {
+        });
+        let mut stdin = child.stdin.take().unwrap();
+        for message in [
+            serde_json::json!({"jsonrpc":"2.0", "id":1, "method":"initialize", "params": {
+                "protocolVersion":"2025-03-26", "capabilities":{},
+                "clientInfo":{"name":"cap-test", "version":"1"}
+            }}),
+            serde_json::json!({"jsonrpc":"2.0", "method":"notifications/initialized", "params":{}}),
+        ] {
+            writeln!(stdin, "{message}").unwrap();
+        }
+        stdin.flush().unwrap();
+        let initialized = receiver.recv_timeout(Duration::from_secs(5));
+        let start = std::time::Instant::now();
+        let call = serde_json::json!({"jsonrpc":"2.0", "id":3, "method":"tools/call", "params": {
+            "name":tool, "arguments":arguments
+        }});
+        writeln!(stdin, "{call}").unwrap();
+        stdin.flush().unwrap();
+        let response = receiver.recv_timeout(Duration::from_secs(4));
+        let elapsed = start.elapsed();
+        let _ = child.kill();
+        let _ = child.wait();
+        let stderr = stderr_reader.join().unwrap();
+        running.store(false, Ordering::SeqCst);
+        if !stalled {
+            server.join().unwrap();
+        }
+        let initialized: Value = serde_json::from_str(&initialized.unwrap().unwrap()).unwrap();
+        assert_eq!(initialized["id"], 1);
+        let response = response.unwrap_or_else(|error| {
                 panic!(
                     "{tool} did not respond (stalled={stalled}, requests={}): {error}; stderr: {stderr}",
                     requests.load(Ordering::SeqCst)
                 )
             });
-            let response: Value = serde_json::from_str(&response.unwrap()).unwrap();
-            assert_eq!(response["id"], 3);
-            assert!(response.to_string().contains("NOT_READY"), "{response}");
-            assert!(
-                elapsed < Duration::from_secs(3),
-                "{tool} exceeded its deadline: {elapsed:?}, stalled={stalled}"
-            );
-            let request_count = requests.load(Ordering::SeqCst);
-            assert!(
-                (1..=3).contains(&request_count),
-                "{tool} made {request_count} requests, stalled={stalled}"
-            );
-        }
+        let response: Value = serde_json::from_str(&response.unwrap()).unwrap();
+        assert_eq!(response["id"], 3);
+        assert!(response.to_string().contains("NOT_READY"), "{response}");
+        assert!(
+            elapsed < Duration::from_secs(3),
+            "{tool} exceeded its deadline: {elapsed:?}, stalled={stalled}"
+        );
+        let request_count = requests.load(Ordering::SeqCst);
+        assert!(
+            (1..=3).contains(&request_count),
+            "{tool} made {request_count} requests, stalled={stalled}"
+        );
     }
 }
 

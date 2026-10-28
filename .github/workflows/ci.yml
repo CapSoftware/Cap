@@ -332,7 +332,7 @@ jobs:
           cargo test --locked -p cap --test cli recordings_list
           cargo test --locked -p cap --test cli project_config_get_without_file_returns_default
           cargo test --locked -p cap --test cli caps_json_errors_include_the_standard_error_field
-          cargo test --locked -p cap --test cli mcp_waits_respect_deadlines_during_requests_and_backoff
+          cargo test --locked -p cap --test cli mcp_waits_
           cargo test --locked -p cap-recording --lib -- --test-threads=1
           cargo test --locked -p cap-recording --test x11_shm_capture -- --test-threads=1
           cargo test --locked -p scap-targets --lib --test linux_targets
