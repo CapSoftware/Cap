@@ -3539,9 +3539,7 @@ mod tests {
 
     #[test]
     fn split_thumbnails_use_requested_time_inside_keyframe_interval() {
-        let fixture = ImportFixture::new(include_bytes!(
-            "../../desktop/src-tauri/test-data/clip-thumbnail-gop.mp4"
-        ));
+        let fixture = ImportFixture::new(include_bytes!("../tests/data/clip-thumbnail-gop.mp4"));
         for (time, expected_channel) in [(0.0, 2), (1.5, 1), (2.5, 0), (3.0, 0)] {
             let thumbnail = decode_thumbnail_frame(&fixture.source, time).unwrap();
             let data = thumbnail.as_bytes(0).unwrap();
@@ -3560,9 +3558,8 @@ mod tests {
 
     #[test]
     fn long_gop_thumbnails_reach_requested_time_and_preserve_eof_fallback() {
-        let fixture = ImportFixture::new(include_bytes!(
-            "../../desktop/src-tauri/test-data/clip-thumbnail-long-gop.mp4"
-        ));
+        let fixture =
+            ImportFixture::new(include_bytes!("../tests/data/clip-thumbnail-long-gop.mp4"));
         for time in [8.5, 10.0, 11.0] {
             let thumbnail = decode_thumbnail_frame(&fixture.source, time).unwrap();
             let data = thumbnail.as_bytes(0).unwrap();
@@ -3576,9 +3573,8 @@ mod tests {
 
     #[test]
     fn exhausted_decode_budget_does_not_return_partial_thumbnail() {
-        let fixture = ImportFixture::new(include_bytes!(
-            "../../desktop/src-tauri/test-data/clip-thumbnail-long-gop.mp4"
-        ));
+        let fixture =
+            ImportFixture::new(include_bytes!("../tests/data/clip-thumbnail-long-gop.mp4"));
         for (packet_limit, timeout, expected_error) in [
             (240, std::time::Duration::from_secs(2), "packet budget"),
             (

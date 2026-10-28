@@ -131,10 +131,7 @@ fn bundled_track_path_from(
         .iter()
         .map(|directory| directory.join("assets/music").join(&file))
         .collect::<Vec<_>>();
-    candidates.extend([
-        manifest.join("../desktop/src/assets/music").join(&file),
-        manifest.join("assets/music").join(&file),
-    ]);
+    candidates.push(manifest.join("assets/music").join(&file));
     candidates.into_iter().find(|path| path.is_file())
 }
 
