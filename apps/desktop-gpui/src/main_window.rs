@@ -1112,7 +1112,7 @@ impl MainWindow {
         Self {
             theme,
             // `rawOptions.mode` -- the recording mode is a persisted setting,
-            // and the tray's Select Mode submenu writes the same key, so the
+            // and the tray's mode picker writes the same key, so the
             // window has to start where the store left it rather than at a
             // hardcoded Instant.
             mode: Mode::from_store(),
@@ -1787,7 +1787,7 @@ impl MainWindow {
                         this.scan_incomplete_recordings(window, cx, std::time::Duration::ZERO);
                         if recover {
                             if project_path.join("content/output.mp4").is_file() {
-                                cx.reveal_path(&project_path.join("content/output.mp4"));
+                                library::reveal_path(&project_path.join("content/output.mp4"), cx);
                             } else {
                                 cx.defer(move |cx| app_windows::open_editor(project_path, cx));
                             }
@@ -1916,7 +1916,7 @@ impl MainWindow {
         // `RecordingSettingsStore::set_mode` plus the two tray refreshes it
         // triggers (`handle_mode_selection`). Every mode affordance -- the
         // pill, the info panel, the mode select window and the tray's own
-        // Select Mode submenu -- reaches this method, so this is the one place
+        // mode picker -- reaches this method, so this is the one place
         // the setting is written.
         // Written inline, like every other store write in this app (and like
         // `RecordingSettingsStore::set_mode` itself): a background write would
@@ -2001,6 +2001,9 @@ impl MainWindow {
             self.set_microphone_selection(None, cx);
         }
         let required_window = auto_window_title();
+        // Pause and stop go to the session: on Linux the main window is not
+        // there while a window or Instant recording runs.
+        let session = self.session.clone();
 
         cx.spawn_in(window, async move |this, cx| {
             // Give enumeration and the first paint a moment; the recorder
@@ -2126,18 +2129,14 @@ impl MainWindow {
             }
 
             let third = std::time::Duration::from_secs(record_secs.div_ceil(3));
-            let toggle = |this: &gpui::WeakEntity<Self>, cx: &mut gpui::AsyncWindowContext| {
-                this.update_in(cx, |this, _, cx| {
-                    this.session
-                        .update(cx, |session, cx| session.toggle_pause(cx));
-                })
-                .ok();
+            let toggle = |cx: &gpui::AsyncApp| {
+                cx.update(|cx| session.update(cx, |session, cx| session.toggle_pause(cx)));
             };
             if pause_wiggle {
                 cx.background_executor().timer(third).await;
-                toggle(&this, cx);
+                toggle(cx);
                 cx.background_executor().timer(third).await;
-                toggle(&this, cx);
+                toggle(cx);
                 cx.background_executor().timer(third).await;
             } else {
                 cx.background_executor()
@@ -2145,10 +2144,8 @@ impl MainWindow {
                     .await;
             }
             tracing::info!("auto-record stop requested");
-            this.update_in(cx, |this, _, cx| {
-                this.session.update(cx, |session, cx| session.stop(cx));
-            })
-            .ok();
+            let app: &gpui::AsyncApp = cx;
+            app.update(|cx| session.update(cx, |session, cx| session.stop(cx)));
         })
         .detach();
     }
@@ -2461,6 +2458,7 @@ impl MainWindow {
 
     fn dismiss_microphone_warning(&mut self, cx: &mut Context<Self>) {
         self.cancel_deep_link_start();
+        cx.defer(app_windows::restore_arranged_windows_if_idle);
         cx.notify();
     }
 
@@ -2506,6 +2504,7 @@ impl MainWindow {
                             return;
                         }
                         this.finish_recording_start(&permit);
+                        cx.defer(app_windows::restore_arranged_windows_if_idle);
                         this.session.update(cx, |session, cx| {
                             session.error = Some(tr::main::storage::check_failed(&error));
                             cx.notify();
@@ -2592,6 +2591,7 @@ impl MainWindow {
                     this.check_storage_before_start(config, true, permit, cx);
                 } else {
                     this.finish_recording_start(&permit);
+                    cx.defer(app_windows::restore_arranged_windows_if_idle);
                     if this.session.read(cx).editor_recording_target().is_some() {
                         cx.defer(app_windows::abort_editor_recording_flow);
                     }
@@ -4544,25 +4544,19 @@ impl MainWindow {
         }
         match (kind, &self.library) {
             (LibraryKind::Recordings, Some(LibraryItems::Recordings(rows))) => {
-                for (index, row) in rows.iter().enumerate() {
+                for row in rows {
                     if !self.matches_search(&row.item.pretty_name) {
                         continue;
                     }
-                    cards.push(
-                        self.render_recording_card(index, row, cx)
-                            .into_any_element(),
-                    );
+                    cards.push(self.render_recording_card(row, cx).into_any_element());
                 }
             }
             (LibraryKind::Screenshots, Some(LibraryItems::Screenshots(rows))) => {
-                for (index, row) in rows.iter().enumerate() {
+                for row in rows {
                     if !self.matches_search(&row.item.pretty_name) {
                         continue;
                     }
-                    cards.push(
-                        self.render_screenshot_card(index, row, cx)
-                            .into_any_element(),
-                    );
+                    cards.push(self.render_screenshot_card(row, cx).into_any_element());
                 }
             }
             _ => {}
@@ -4750,7 +4744,6 @@ impl MainWindow {
 
     fn render_recording_card(
         &self,
-        index: usize,
         row: &LibraryRow<RecordingItem>,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
@@ -4770,10 +4763,10 @@ impl MainWindow {
                     .unwrap_or_else(|| upload.label().to_string())
             },
         );
-        let actions = self.render_recording_card_actions(index, item, cx);
+        let actions = self.render_recording_card_actions(item, cx);
 
         self.library_card(
-            ("library-recording", index),
+            gpui::ElementId::Path(item.path.as_path().into()),
             row.thumbnail.clone(),
             "icons/square-play.svg",
             item.pretty_name.clone(),
@@ -4786,7 +4779,7 @@ impl MainWindow {
                 } else if !studio && let Some(url) = &sharing {
                     cx.open_url(url);
                 } else if !studio {
-                    library::open_recording_folder(&path, mode);
+                    library::open_recording_folder(&path, mode, cx);
                 }
             }),
             actions,
@@ -4796,7 +4789,6 @@ impl MainWindow {
 
     fn render_recording_card_actions(
         &self,
-        index: usize,
         item: &RecordingItem,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
@@ -4814,7 +4806,7 @@ impl MainWindow {
         if item.opens_editor() {
             let editor = path.clone();
             row = row.child(self.library_action(
-                ("lib-rec-edit", index),
+                "lib-rec-edit",
                 "icons/edit.svg",
                 cx.listener(move |_, _, _window, cx| {
                     let editor = editor.clone();
@@ -4824,7 +4816,7 @@ impl MainWindow {
         }
         if let Some(url) = sharing {
             row = row.child(self.library_action(
-                ("lib-rec-link", index),
+                "lib-rec-link",
                 "icons/link.svg",
                 move |_, _, cx| cx.open_url(&url),
             ));
@@ -4836,7 +4828,7 @@ impl MainWindow {
         {
             let retry_path = path.clone();
             row = row.child(self.library_action(
-                ("lib-rec-retry", index),
+                "lib-rec-retry",
                 "icons/rotate-ccw.svg",
                 cx.listener(move |_, _, window, cx| {
                     let path = retry_path.clone();
@@ -4861,12 +4853,12 @@ impl MainWindow {
         }
         let folder = path.clone();
         row = row.child(self.library_action(
-            ("lib-rec-folder", index),
+            "lib-rec-folder",
             "icons/folder.svg",
-            move |_, _, _| library::open_recording_folder(&folder, mode),
+            move |_, _, cx| library::open_recording_folder(&folder, mode, cx),
         ));
         row.child(self.library_action(
-            ("lib-rec-delete", index),
+            "lib-rec-delete",
             "icons/trash.svg",
             cx.listener(move |this, _, window, cx| {
                 this.delete_library_recording(path.clone(), window, cx);
@@ -4876,16 +4868,15 @@ impl MainWindow {
 
     fn render_screenshot_card(
         &self,
-        index: usize,
         row: &LibraryRow<ScreenshotItem>,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = self.theme;
         let item = &row.item;
         let png = item.path.clone();
-        let actions = self.render_screenshot_card_actions(index, item, cx);
+        let actions = self.render_screenshot_card_actions(item, cx);
         self.library_card(
-            ("library-screenshot", index),
+            gpui::ElementId::Path(item.path.as_path().into()),
             row.thumbnail.clone(),
             "icons/image.svg",
             item.pretty_name.clone(),
@@ -4902,7 +4893,6 @@ impl MainWindow {
 
     fn render_screenshot_card_actions(
         &self,
-        index: usize,
         item: &ScreenshotItem,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
@@ -4917,39 +4907,35 @@ impl MainWindow {
             .px(px(8.))
             .pb(px(6.))
             .gap(px(4.))
-            .child(
-                self.library_action(("lib-ss-copy", index), "icons/copy.svg", {
-                    let png = png.clone();
-                    move |_, _, cx| {
-                        let copied = crate::platform::copy_image_to_clipboard(png.clone(), cx);
-                        cx.spawn(async move |_| {
-                            if let Err(error) = copied.await {
-                                tracing::warn!("copying screenshot failed: {error}");
-                                crate::platform::alert_dialog(
-                                    tr::main::library::copy_screenshot_failed(),
-                                    &error,
-                                );
-                            }
-                        })
-                        .detach();
-                    }
-                }),
-            )
+            .child(self.library_action("lib-ss-copy", "icons/copy.svg", {
+                let png = png.clone();
+                move |_, _, cx| {
+                    let copied = crate::platform::copy_image_to_clipboard(png.clone(), cx);
+                    cx.spawn(async move |_| {
+                        if let Err(error) = copied.await {
+                            tracing::warn!("copying screenshot failed: {error}");
+                            crate::platform::alert_dialog(
+                                tr::main::library::copy_screenshot_failed(),
+                                &error,
+                            );
+                        }
+                    })
+                    .detach();
+                }
+            }))
             .child(self.library_action(
-                ("lib-ss-save", index),
+                "lib-ss-save",
                 "icons/download.svg",
                 cx.listener(move |this, _, window, cx| {
                     this.save_screenshot(png.clone(), name.clone(), window, cx);
                 }),
             ))
-            .child(
-                self.library_action(("lib-ss-open", index), "icons/folder.svg", {
-                    let bundle = bundle.clone();
-                    move |_, _, _| library::reveal_in_folder(&bundle)
-                }),
-            )
+            .child(self.library_action("lib-ss-open", "icons/folder.svg", {
+                let bundle = bundle.clone();
+                move |_, _, cx| library::reveal_path(&bundle, cx)
+            }))
             .child(self.library_action(
-                ("lib-ss-delete", index),
+                "lib-ss-delete",
                 "icons/trash.svg",
                 cx.listener(move |this, _, window, cx| {
                     this.delete_library_screenshot(bundle.clone(), window, cx);

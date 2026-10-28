@@ -25,8 +25,10 @@ import {
 	timingMetadataBudget,
 } from "../../lib/recording-timing";
 import {
+	decodePreverifiedRun,
 	inspectRecordingSources,
 	isRetryableRecordingVerificationError,
+	type PreverifiedVideoRun,
 	verifyRecording,
 	verifyRemoteRecording,
 	verifyRemoteRecordingBytes,
@@ -2970,6 +2972,184 @@ describe("chunked packet-proven verification", () => {
 		} finally {
 			delete process.env.MEDIA_SERVER_VERIFY_DECODE_CHUNKS;
 		}
+	});
+
+	async function preverify(
+		recording: { init: string; segments: string[] },
+		from: number,
+		to: number,
+	): Promise<PreverifiedVideoRun> {
+		const work = await mkdtemp(join(directory, "preverify-"));
+		const lines = await decodePreverifiedRun(
+			recording.init,
+			recording.segments.slice(from, to),
+			work,
+		);
+		if (!lines) throw new Error("Expected a decodable preverified run");
+		return { segments: to - from, lines };
+	}
+
+	async function withRuns(
+		recording: Awaited<ReturnType<typeof segmentedRecording>>,
+		runs: PreverifiedVideoRun[],
+		chunks?: string,
+	) {
+		if (chunks === undefined)
+			delete process.env.MEDIA_SERVER_VERIFY_DECODE_CHUNKS;
+		else process.env.MEDIA_SERVER_VERIFY_DECODE_CHUNKS = chunks;
+		const warn = spyOn(console, "warn");
+		try {
+			const result = await verifyRemuxedRecording(
+				recording.combined,
+				silent,
+				recording.output,
+				{ requireAudio: false },
+				{ init: recording.init, segments: recording.segments },
+				runs,
+			);
+			const fallbacks = warn.mock.calls.filter((call) =>
+				String(call[0]).includes("recording_chunked_decode_fallback"),
+			);
+			return { result, fallbacks };
+		} finally {
+			warn.mockRestore();
+			delete process.env.MEDIA_SERVER_VERIFY_DECODE_CHUNKS;
+		}
+	}
+
+	test.each([undefined, "3"])(
+		"returns the same evidence from preverified runs as one full decode (chunks %s)",
+		async (chunks) => {
+			const recording = await segmentedRecording("preverified-parity", 15);
+			expect(recording.segments.length).toBeGreaterThanOrEqual(6);
+			const { single } = await both(recording);
+			const runs = [
+				await preverify(recording, 0, 2),
+				await preverify(recording, 2, 4),
+			];
+			const { result, fallbacks } = await withRuns(recording, runs, chunks);
+			expect(fallbacks).toHaveLength(0);
+			expect(result).toEqual(single);
+			expect(result.video.frameCount).toBe(120);
+		},
+	);
+
+	test("accepts runs that cover every fragment", async () => {
+		const recording = await segmentedRecording("preverified-complete", 15);
+		const { single } = await both(recording);
+		const { result, fallbacks } = await withRuns(recording, [
+			await preverify(recording, 0, recording.segments.length),
+		]);
+		expect(fallbacks).toHaveLength(0);
+		expect(result).toEqual(single);
+	});
+
+	test.each([
+		"dropped frame",
+		"extra frame",
+		"shifted timestamps",
+		"changed header",
+	])(
+		"falls back to one full decode when a cached run has a %s",
+		async (defect) => {
+			const recording = await segmentedRecording(
+				`preverified-${defect.replaceAll(" ", "-")}`,
+				15,
+			);
+			const { single } = await both(recording);
+			const run = await preverify(recording, 0, 3);
+			const frames = run.lines.filter((line) => !line.startsWith("#"));
+			const header = run.lines.filter((line) => line.startsWith("#"));
+			const changed =
+				defect === "dropped frame"
+					? [...header, ...frames.slice(0, -1)]
+					: defect === "extra frame"
+						? [...header, ...frames, frames.at(-1) as string]
+						: defect === "shifted timestamps"
+							? [
+									...header,
+									...frames.map((line) =>
+										line.replace(
+											/^0,\s*(\d+),\s*(\d+)/,
+											(_, dts, pts) =>
+												`0, ${Number(dts) + 1}, ${Number(pts) + 1}`,
+										),
+									),
+								]
+							: [
+									...header.map((line) =>
+										line.replace(/^#dimensions 0: .*/, "#dimensions 0: 1x1"),
+									),
+									...frames,
+								];
+			const { result, fallbacks } = await withRuns(recording, [
+				{ segments: run.segments, lines: changed },
+			]);
+			expect(fallbacks).toHaveLength(1);
+			expect(result).toEqual(single);
+		},
+	);
+
+	test("drops a cached run whose next fragment cannot be decoded on its own", async () => {
+		const recording = await misalignedRecording("preverified-misaligned");
+		const { single } = await both(recording);
+		const work = await mkdtemp(join(directory, "preverify-misaligned-"));
+		const lines = await decodePreverifiedRun(
+			recording.init,
+			recording.segments.slice(0, 1),
+			work,
+		);
+		expect(lines).not.toBeNull();
+		const { result } = await withRuns(recording, [
+			{ segments: 1, lines: lines ?? [] },
+		]);
+		expect(result).toEqual(single);
+	});
+
+	test("does not preverify a run that does not start on a keyframe", async () => {
+		const recording = await misalignedRecording("preverified-unaligned-start");
+		const work = await mkdtemp(join(directory, "preverify-unaligned-"));
+		expect(
+			await decodePreverifiedRun(
+				recording.init,
+				recording.segments.slice(1, 3),
+				work,
+			),
+		).toBeNull();
+	});
+
+	test("does not preverify fragments that fail to decode", async () => {
+		const recording = await segmentedRecording("preverified-corrupt", 15);
+		const [first, second] = recording.segments;
+		if (!first || !second) throw new Error("Expected two fragments");
+		const packets = JSON.parse(
+			await run([
+				"ffprobe",
+				"-v",
+				"error",
+				"-protocol_whitelist",
+				"file,concat",
+				"-select_streams",
+				"v:0",
+				"-show_packets",
+				"-show_entries",
+				"packet=pos,size",
+				"-of",
+				"json",
+				`concat:${recording.init}|${second}`,
+			]),
+		) as { packets: { pos: string; size: string }[] };
+		const last = packets.packets.at(-1);
+		if (!last) throw new Error("Fragment has no video packet");
+		const offset = Number(last.pos) - (await readFile(recording.init)).length;
+		const bytes = Buffer.from(await readFile(second));
+		bytes.fill(0, offset, offset + Number(last.size));
+		const corrupt = join(directory, "preverified-corrupt-fragment.m4s");
+		await writeFile(corrupt, bytes);
+		const work = await mkdtemp(join(directory, "preverify-corrupt-"));
+		expect(
+			await decodePreverifiedRun(recording.init, [first, corrupt], work),
+		).toBeNull();
 	});
 });
 

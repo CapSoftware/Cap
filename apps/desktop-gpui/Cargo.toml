@@ -5,7 +5,7 @@
 # wgpu-hal, tao) that only exist for the Tauri app.
 [workspace]
 resolver = "2"
-members = [".", "kernels", "i18n-build"]
+members = [".", "kernels", "i18n-build", "glass"]
 
 [package]
 name = "cap-desktop-gpui"
@@ -27,6 +27,7 @@ path = "../../crates/recording/examples/studio-finalization-benchmark.rs"
 cap-audio = { path = "../../crates/audio" }
 cap-cli-install = { path = "../../crates/cli-install" }
 cap-gpui-kernels = { path = "kernels" }
+cap-glass = { path = "glass" }
 # gpui — the wingleeio/zed fork Comet ships. The pinned rev carries f596cde
 # ("destination alpha on transparent windows: Porter-Duff OVER, not additive"),
 # which our transparent rounded main-window shell depends on.
@@ -62,7 +63,10 @@ cap-project = { path = "../../crates/project" }
 # a `RenderImage` (`src/editor_sidebar/cursor.rs`).
 cap-cursor-info = { path = "../../crates/cursor-info" }
 resvg = "0.45"
-rodio = { version = "0.19.0", default-features = false, features = ["mp3", "vorbis"] }
+rodio = { version = "0.19.0", default-features = false, features = [
+    "mp3",
+    "vorbis",
+] }
 # The editor stack. `cap-rendering` is not a new subtree -- cap-recording
 # already depends on it, so wgpu 25 and its vendored wgpu-hal have been built
 # by this workspace since the recording unit; naming it here only makes the
@@ -100,7 +104,11 @@ ffmpeg = { package = "ffmpeg-next", git = "https://github.com/CapSoftware/rust-f
 # `webp` is the config sidebar's four background-source illustrations, which
 # the app ships as webp; features are additive, so enabling it here does not
 # move gpui's own pin.
-image = { version = "0.25.1", default-features = false, features = ["jpeg", "png", "webp"] }
+image = { version = "0.25.1", default-features = false, features = [
+    "jpeg",
+    "png",
+    "webp",
+] }
 jpeg-decoder = "0.3"
 smallvec = "1"
 # The OS language list the UI language follows when set to System default.
@@ -131,7 +139,10 @@ sanitize-filename = "0.6.0"
 semver = "1"
 base64 = "0.22"
 minisign-verify = "0.2.4"
-rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "tokio"] }
+rfd = { version = "0.15", default-features = false, features = [
+    "xdg-portal",
+    "tokio",
+] }
 # The screenshot export compositor (`src/screenshot_export.rs`): the canvas-2d
 # work `renderScreenshotExportCanvas` does in the webview -- shape rasterizing,
 # text, and the share fingerprint. All three are already in this lockfile
@@ -162,6 +173,7 @@ reqwest = { version = "0.12", default-features = false, features = [
 ] }
 futures-util = "0.3"
 dirs = "6"
+dunce = "1.0.5"
 # Caption transcription (`src/transcription.rs`): the exact engine pin the
 # Tauri app carries (`apps/desktop/src-tauri/Cargo.toml:75`), so a model file
 # downloaded by either app loads identically in both.
@@ -178,7 +190,14 @@ gpui = { git = "https://github.com/wingleeio/zed", rev = "5d1f83d9f27a19bec1fb24
 # decoders, renderer and preview tasks are all tokio-spawned -- a current-thread
 # runtime would deadlock the moment the test thread blocks on a frame. Kept in
 # dev-dependencies so the shipped binary's tokio features are unchanged.
-tokio = { version = "1", features = ["rt-multi-thread", "time", "test-util", "net", "io-util", "macros"] }
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "time",
+    "test-util",
+    "net",
+    "io-util",
+    "macros",
+] }
 # Caption oracles (`src/transcription/verify_tests.rs`): fixture projects and
 # audio markers for the fake transcriber.
 cap-verify = { path = "../../crates/verify" }
@@ -193,6 +212,7 @@ raw-window-handle = "0.6"
 tray-icon = { version = "0.21.1", default-features = false }
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
+    "Win32_Graphics_Dwm",
     "Win32_Security",
     "Win32_Storage_FileSystem",
     "Win32_System_Console",
@@ -209,6 +229,8 @@ windows-sys = { version = "0.59", features = [
 
 [target.'cfg(target_os = "linux")'.dependencies]
 ashpd = { version = "0.11", default-features = false, features = ["tokio"] }
+# GNOME's wallpapers are JPEG XL, which `image` cannot read.
+jxl-oxide = { version = "0.12", features = ["image"] }
 wayland-client = "0.31"
 
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
@@ -217,15 +239,37 @@ x11rb = "0.13"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Native window treatment (panel levels, Spaces) gpui does not expose. Same
-# versions gpui's own tree compiles, so no second objc2 universe gets built.
-objc2 = "0.5.2"
+# direct 0.6 line used by this app's class definitions and AppKit bindings.
+objc2 = { version = "0.6.5", features = ["exception"] }
 # `NSVisualEffectView` is the pre-macOS-26 window-material fallback. Features
 # only -- the versions stay pinned, or a second objc2 universe gets built.
-objc2-app-kit = { version = "0.2.2", features = ["NSAppearance", "NSWindow", "NSView", "NSResponder", "NSGraphics", "NSPasteboard", "NSVisualEffectView", "NSWorkspace", "NSAccessibility"] }
+objc2-app-kit = { version = "0.3.2", features = [
+    "NSAppearance",
+    "NSWindow",
+    "NSView",
+    "NSResponder",
+    "NSGraphics",
+    "NSPasteboard",
+    "NSMenuItemBadge",
+    "NSVisualEffectView",
+    "NSWorkspace",
+    "NSAccessibility",
+] }
+objc2-quartz-core = { version = "0.3.2", features = [
+    "CALayer",
+    "CATransaction",
+    "objc2-core-foundation",
+] }
+objc2-core-graphics = { version = "0.3.2", features = ["CGColor"] }
 # NSRect/NSPoint/NSSize for `setFrame:display:`. Already in the tree as
 # objc2-app-kit's own dependency, so this adds nothing to the build.
-objc2-foundation = { version = "0.2.2", features = ["NSNotification", "NSOperation", "NSString", "block2"] }
-block2 = "0.5.1"
+objc2-foundation = { version = "0.3.2", features = [
+    "NSNotification",
+    "NSOperation",
+    "NSString",
+    "block2",
+] }
+block2 = "0.6"
 raw-window-handle = "0.6"
 core-foundation = "0.10"
 core-video = { version = "0.5.2", features = ["metal"] }
@@ -288,6 +332,10 @@ debug = "line-tables-only"
 # unoptimized against 1.0ms here, and optimizing the whole app crate instead
 # turns a one-line edit into a 6-minute rebuild.
 [profile.dev.package.cap-gpui-kernels]
+opt-level = 3
+
+# The glass probe renders the CPU model of every scene it captures.
+[profile.dev.package.cap-glass]
 opt-level = 3
 
 # Incremental halves a one-line rebuild for about 2 GB of cache, and line tables

@@ -25,7 +25,7 @@ use cap_project::{
     BackgroundBlurConfig, BackgroundBlurMode, CameraShape, CameraXPosition, CameraYPosition,
     CaptionSegment, CaptionSettings, CornerStyle, CursorAnimationStyle, CursorRippleConfig,
     KeyboardData, KeyboardSettings, ProjectConfiguration, RecordingMeta, ShadowConfiguration,
-    StereoMode,
+    StereoMode, transcription_ranges_cover, transcription_source_ranges,
 };
 use gpui::{
     AnyElement, Bounds, Context, EntityId, FontWeight, Hsla, InteractiveElement, IntoElement,
@@ -358,6 +358,26 @@ pub enum CameraSlider {
 }
 
 impl CameraSlider {
+    /// Whether this slider writes a field
+    /// [`crate::editor_timeline::TimelineModel::build`] or
+    /// [`crate::editor_timeline::TrackLanes::from_project`] reads. The match
+    /// is exhaustive so a new slider has to make the choice explicitly.
+    pub(crate) fn changes_timeline_model(self) -> bool {
+        match self {
+            Self::Size
+            | Self::ZoomSize
+            | Self::Rounding
+            | Self::Shadow
+            | Self::ShadowSize
+            | Self::ShadowOpacity
+            | Self::ShadowBlur
+            | Self::CropLeft
+            | Self::CropTop
+            | Self::CropRight
+            | Self::CropBottom => false,
+        }
+    }
+
     pub fn limits(self) -> (f32, f32, f32) {
         match self {
             // `minValue={20} maxValue={80} step={0.1}` (`:3204-3206`).
@@ -394,6 +414,15 @@ pub enum AudioSlider {
 }
 
 impl AudioSlider {
+    /// Both audio sliders write levels [`TimelineModel::build`] reads; the
+    /// lanes do not read audio levels. The match is exhaustive so a new
+    /// slider has to make the choice explicitly.
+    pub(crate) fn changes_timeline_model(self) -> bool {
+        match self {
+            Self::MicVolume | Self::SystemVolume => true,
+        }
+    }
+
     /// `minValue={-30} maxValue={10} step={0.1}` on both (`:787-791`,
     /// `:806-810`).
     pub fn limits(self) -> (f32, f32, f32) {
@@ -422,6 +451,24 @@ pub enum CursorSlider {
 }
 
 impl CursorSlider {
+    /// Whether this slider writes a field
+    /// [`crate::editor_timeline::TimelineModel::build`] or
+    /// [`crate::editor_timeline::TrackLanes::from_project`] reads. The match
+    /// is exhaustive so a new slider has to make the choice explicitly.
+    pub(crate) fn changes_timeline_model(self) -> bool {
+        match self {
+            Self::Size
+            | Self::Tilt
+            | Self::IdleDelay
+            | Self::Tension
+            | Self::Friction
+            | Self::Mass
+            | Self::RippleStrength
+            | Self::RippleSize
+            | Self::RippleDuration => false,
+        }
+    }
+
     pub fn limits(self) -> (f32, f32, f32) {
         match self {
             Self::Size => (20., 300., 1.),
@@ -463,15 +510,83 @@ pub enum CaptionSlider {
     Size,
     BackgroundOpacity,
     FadeDuration,
+    ManualX,
+    ManualY,
+}
+
+/// Where Manual placement starts for a preset no caption was drawn at yet, as
+/// fractions of the frame (`captionPositionCenter`, `CaptionsTab.tsx:362-378`).
+pub fn caption_position_center(position: &str) -> (f32, f32) {
+    match position {
+        "top-left" => (0.05, 0.08),
+        "top-center" | "top" => (0.5, 0.08),
+        "top-right" => (0.95, 0.08),
+        "bottom-left" => (0.05, 0.85),
+        "bottom-right" => (0.95, 0.85),
+        _ => (0.5, 0.85),
+    }
+}
+
+pub fn caption_manual_center(settings: &CaptionSettings) -> (f32, f32) {
+    settings.manual_position.map_or_else(
+        || caption_position_center(&settings.position),
+        |xy| (xy.x, xy.y),
+    )
+}
+
+pub fn set_caption_manual_center(settings: &mut CaptionSettings, x: Option<f32>, y: Option<f32>) {
+    let (current_x, current_y) = caption_manual_center(settings);
+    let fraction = |value: f32| (value / 100.).clamp(0., 1.);
+    settings.position = "manual".to_string();
+    settings.manual_position = Some(cap_project::XY::new(
+        x.map_or(current_x, fraction),
+        y.map_or(current_y, fraction),
+    ));
+}
+
+/// Switching the caption position. Entering Manual from a preset seeds the
+/// manual centre from that preset (`updateCaptionPosition`,
+/// `CaptionsTab.tsx:380-394`); without it Manual drew bottom-centre and had
+/// nothing to adjust.
+pub fn set_caption_position(settings: &mut CaptionSettings, position: &str) {
+    set_caption_position_from(settings, position, cap_rendering::last_caption_center);
+}
+
+/// [`set_caption_position`] with the renderer's last drawn caption centre
+/// supplied: left and right presets align the box's edge to a margin, so
+/// only the drawn box says where its centre is.
+fn set_caption_position_from(
+    settings: &mut CaptionSettings,
+    position: &str,
+    drawn_center: impl FnOnce(&str) -> Option<(f32, f32)>,
+) {
+    if position == "manual" && settings.position != "manual" {
+        let (x, y) = drawn_center(&settings.position)
+            .unwrap_or_else(|| caption_position_center(&settings.position));
+        settings.manual_position = Some(cap_project::XY::new(x, y));
+    }
+    settings.position = position.to_string();
 }
 
 impl CaptionSlider {
+    /// Whether this slider writes a field
+    /// [`crate::editor_timeline::TimelineModel::build`] or
+    /// [`crate::editor_timeline::TrackLanes::from_project`] reads. The match
+    /// is exhaustive so a new slider has to make the choice explicitly.
+    pub(crate) fn changes_timeline_model(self) -> bool {
+        match self {
+            Self::Size | Self::BackgroundOpacity | Self::FadeDuration => false,
+            Self::ManualX | Self::ManualY => false,
+        }
+    }
+
     pub fn limits(self) -> (f32, f32, f32) {
         match self {
             Self::Size => (12., 100., 1.),
             Self::BackgroundOpacity => (0., 100., 1.),
             // `value={[getSetting("fadeDuration") * 100]}` over 0..50.
             Self::FadeDuration => (0., 50., 1.),
+            Self::ManualX | Self::ManualY => (0., 100., 1.),
         }
     }
 
@@ -481,6 +596,8 @@ impl CaptionSlider {
             Self::Size => settings.size as f32,
             Self::BackgroundOpacity => settings.background_opacity as f32,
             Self::FadeDuration => settings.fade_duration * 100.,
+            Self::ManualX => caption_manual_center(&settings).0 * 100.,
+            Self::ManualY => caption_manual_center(&settings).1 * 100.,
         }
     }
 }
@@ -495,6 +612,20 @@ pub enum KeyboardSlider {
 }
 
 impl KeyboardSlider {
+    /// Whether this slider writes a field
+    /// [`crate::editor_timeline::TimelineModel::build`] or
+    /// [`crate::editor_timeline::TrackLanes::from_project`] reads. The match
+    /// is exhaustive so a new slider has to make the choice explicitly.
+    pub(crate) fn changes_timeline_model(self) -> bool {
+        match self {
+            Self::Size
+            | Self::BackgroundOpacity
+            | Self::FadeDuration
+            | Self::LingerDuration
+            | Self::GroupingThreshold => false,
+        }
+    }
+
     pub fn limits(self) -> (f32, f32, f32) {
         match self {
             Self::Size => (12., 100., 1.),
@@ -903,9 +1034,8 @@ impl EditorWindow {
                 let Some((value, _)) = CAPTION_POSITIONS.get(index) else {
                     return;
                 };
-                let value = value.to_string();
                 self.set_caption_setting("caption-position", window, cx, move |settings| {
-                    settings.position = value
+                    set_caption_position(settings, value)
                 });
             }
             SidebarMenu::CaptionAnimation => {
@@ -968,7 +1098,18 @@ impl EditorWindow {
         cx: &mut Context<Self>,
         change: impl FnOnce(&mut CaptionSettings),
     ) {
-        self.edit_project(reason, window, cx, |project| {
+        self.set_caption_setting_inner(true, reason, window, cx, change);
+    }
+
+    fn set_caption_setting_inner(
+        &mut self,
+        rebuild_timeline: bool,
+        reason: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        change: impl FnOnce(&mut CaptionSettings),
+    ) {
+        let apply = |project: &mut ProjectConfiguration| {
             with_caption_settings(project, |settings| {
                 change(settings);
                 // `STYLE_PRESET_KEYS` knocks the grade to "custom"
@@ -979,7 +1120,12 @@ impl EditorWindow {
                     settings.preset = "custom".to_string();
                 }
             })
-        });
+        };
+        if rebuild_timeline {
+            self.edit_project(reason, window, cx, apply);
+        } else {
+            self.edit_project_without_timeline(reason, window, cx, apply);
+        }
     }
 
     pub(crate) fn set_keyboard_setting(
@@ -989,9 +1135,23 @@ impl EditorWindow {
         cx: &mut Context<Self>,
         change: impl FnOnce(&mut KeyboardSettings),
     ) {
-        self.edit_project(reason, window, cx, |project| {
-            with_keyboard_settings(project, change)
-        });
+        self.set_keyboard_setting_inner(true, reason, window, cx, change);
+    }
+
+    fn set_keyboard_setting_inner(
+        &mut self,
+        rebuild_timeline: bool,
+        reason: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        change: impl FnOnce(&mut KeyboardSettings),
+    ) {
+        let apply = |project: &mut ProjectConfiguration| with_keyboard_settings(project, change);
+        if rebuild_timeline {
+            self.edit_project(reason, window, cx, apply);
+        } else {
+            self.edit_project_without_timeline(reason, window, cx, apply);
+        }
     }
 }
 
@@ -1007,43 +1167,50 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.edit_project("camera-slider", window, cx, move |project| {
-            let camera = &mut project.camera;
-            match slider {
-                CameraSlider::Size => camera.size = value,
-                CameraSlider::ZoomSize => camera.scale_during_zoom = value / 100.,
-                CameraSlider::Rounding => camera.rounding = value,
-                CameraSlider::Shadow => camera.shadow = value,
-                // `...(project.camera.advancedShadow ?? {50, 18, 50})`
-                // (`:3253-3259`) -- the same UI fallback the background tab has.
-                CameraSlider::ShadowSize
-                | CameraSlider::ShadowOpacity
-                | CameraSlider::ShadowBlur => {
-                    let mut shadow = camera.advanced_shadow.clone().unwrap_or(UI_SHADOW_FALLBACK);
-                    match slider {
-                        CameraSlider::ShadowSize => shadow.size = value,
-                        CameraSlider::ShadowOpacity => shadow.opacity = value,
-                        _ => shadow.blur = value,
+        self.edit_project_with_rebuild(
+            slider.changes_timeline_model(),
+            "camera-slider",
+            window,
+            cx,
+            move |project| {
+                let camera = &mut project.camera;
+                match slider {
+                    CameraSlider::Size => camera.size = value,
+                    CameraSlider::ZoomSize => camera.scale_during_zoom = value / 100.,
+                    CameraSlider::Rounding => camera.rounding = value,
+                    CameraSlider::Shadow => camera.shadow = value,
+                    // `...(project.camera.advancedShadow ?? {50, 18, 50})`
+                    // (`:3253-3259`) -- the same UI fallback the background tab has.
+                    CameraSlider::ShadowSize
+                    | CameraSlider::ShadowOpacity
+                    | CameraSlider::ShadowBlur => {
+                        let mut shadow =
+                            camera.advanced_shadow.clone().unwrap_or(UI_SHADOW_FALLBACK);
+                        match slider {
+                            CameraSlider::ShadowSize => shadow.size = value,
+                            CameraSlider::ShadowOpacity => shadow.opacity = value,
+                            _ => shadow.blur = value,
+                        }
+                        camera.advanced_shadow = Some(shadow);
                     }
-                    camera.advanced_shadow = Some(shadow);
-                }
-                CameraSlider::CropLeft
-                | CameraSlider::CropTop
-                | CameraSlider::CropRight
-                | CameraSlider::CropBottom => {
-                    let mut crop = camera.crop.unwrap_or_default();
-                    let fraction = f64::from(value) / 100.;
-                    match slider {
-                        CameraSlider::CropLeft => crop.left = fraction,
-                        CameraSlider::CropTop => crop.top = fraction,
-                        CameraSlider::CropRight => crop.right = fraction,
-                        _ => crop.bottom = fraction,
+                    CameraSlider::CropLeft
+                    | CameraSlider::CropTop
+                    | CameraSlider::CropRight
+                    | CameraSlider::CropBottom => {
+                        let mut crop = camera.crop.unwrap_or_default();
+                        let fraction = f64::from(value) / 100.;
+                        match slider {
+                            CameraSlider::CropLeft => crop.left = fraction,
+                            CameraSlider::CropTop => crop.top = fraction,
+                            CameraSlider::CropRight => crop.right = fraction,
+                            _ => crop.bottom = fraction,
+                        }
+                        camera.crop = (crop != cap_project::CameraCrop::default()).then_some(crop);
                     }
-                    camera.crop = (crop != cap_project::CameraCrop::default()).then_some(crop);
                 }
-            }
-            true
-        });
+                true
+            },
+        );
     }
 
     pub(crate) fn apply_audio_slider(
@@ -1053,13 +1220,19 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.edit_project("audio-slider", window, cx, move |project| {
-            match slider {
-                AudioSlider::MicVolume => project.audio.mic_volume_db = value,
-                AudioSlider::SystemVolume => project.audio.system_volume_db = value,
-            }
-            true
-        });
+        self.edit_project_with_rebuild(
+            slider.changes_timeline_model(),
+            "audio-slider",
+            window,
+            cx,
+            move |project| {
+                match slider {
+                    AudioSlider::MicVolume => project.audio.mic_volume_db = value,
+                    AudioSlider::SystemVolume => project.audio.system_volume_db = value,
+                }
+                true
+            },
+        );
     }
 
     pub(crate) fn apply_cursor_slider(
@@ -1069,34 +1242,40 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.edit_project("cursor-slider", window, cx, move |project| {
-            let cursor = &mut project.cursor;
-            match slider {
-                CursorSlider::Size => cursor.size = value.round() as u32,
-                CursorSlider::Tilt => cursor.rotation_amount = value,
-                // `clampIdleDelay`: `round(min(5, max(0.5, v)) * 10) / 10`
-                // (`:525-526`).
-                CursorSlider::IdleDelay => {
-                    cursor.hide_when_idle_delay = (value.clamp(0.5, 5.) * 10.).round() / 10.
-                }
-                // `setCursorPhysics` (`:531-546`): write the field, then
-                // re-match the four presets and fall to `custom`.
-                CursorSlider::Tension | CursorSlider::Friction | CursorSlider::Mass => {
-                    match slider {
-                        CursorSlider::Tension => cursor.tension = value,
-                        CursorSlider::Friction => cursor.friction = value,
-                        _ => cursor.mass = value,
+        self.edit_project_with_rebuild(
+            slider.changes_timeline_model(),
+            "cursor-slider",
+            window,
+            cx,
+            move |project| {
+                let cursor = &mut project.cursor;
+                match slider {
+                    CursorSlider::Size => cursor.size = value.round() as u32,
+                    CursorSlider::Tilt => cursor.rotation_amount = value,
+                    // `clampIdleDelay`: `round(min(5, max(0.5, v)) * 10) / 10`
+                    // (`:525-526`).
+                    CursorSlider::IdleDelay => {
+                        cursor.hide_when_idle_delay = (value.clamp(0.5, 5.) * 10.).round() / 10.
                     }
-                    cursor.animation_style =
-                        match_cursor_preset(cursor.tension, cursor.mass, cursor.friction)
-                            .unwrap_or(CursorAnimationStyle::Custom);
+                    // `setCursorPhysics` (`:531-546`): write the field, then
+                    // re-match the four presets and fall to `custom`.
+                    CursorSlider::Tension | CursorSlider::Friction | CursorSlider::Mass => {
+                        match slider {
+                            CursorSlider::Tension => cursor.tension = value,
+                            CursorSlider::Friction => cursor.friction = value,
+                            _ => cursor.mass = value,
+                        }
+                        cursor.animation_style =
+                            match_cursor_preset(cursor.tension, cursor.mass, cursor.friction)
+                                .unwrap_or(CursorAnimationStyle::Custom);
+                    }
+                    CursorSlider::RippleStrength => cursor.ripple.strength = value / 100.,
+                    CursorSlider::RippleSize => cursor.ripple.size = value / 100.,
+                    CursorSlider::RippleDuration => cursor.ripple.duration = value,
                 }
-                CursorSlider::RippleStrength => cursor.ripple.strength = value / 100.,
-                CursorSlider::RippleSize => cursor.ripple.size = value / 100.,
-                CursorSlider::RippleDuration => cursor.ripple.duration = value,
-            }
-            true
-        });
+                true
+            },
+        );
     }
 
     pub(crate) fn apply_caption_slider(
@@ -1106,11 +1285,21 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.set_caption_setting("caption-slider", window, cx, move |settings| match slider {
-            CaptionSlider::Size => settings.size = value.round() as u32,
-            CaptionSlider::BackgroundOpacity => settings.background_opacity = value.round() as u32,
-            CaptionSlider::FadeDuration => settings.fade_duration = value / 100.,
-        });
+        self.set_caption_setting_inner(
+            slider.changes_timeline_model(),
+            "caption-slider",
+            window,
+            cx,
+            move |settings| match slider {
+                CaptionSlider::Size => settings.size = value.round() as u32,
+                CaptionSlider::BackgroundOpacity => {
+                    settings.background_opacity = value.round() as u32
+                }
+                CaptionSlider::FadeDuration => settings.fade_duration = value / 100.,
+                CaptionSlider::ManualX => set_caption_manual_center(settings, Some(value), None),
+                CaptionSlider::ManualY => set_caption_manual_center(settings, None, Some(value)),
+            },
+        );
     }
 
     pub(crate) fn apply_keyboard_slider(
@@ -1120,7 +1309,8 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.set_keyboard_setting(
+        self.set_keyboard_setting_inner(
+            slider.changes_timeline_model(),
             "keyboard-slider",
             window,
             cx,
@@ -2903,6 +3093,30 @@ impl EditorWindow {
                     cx,
                 )),
             )
+            .children((settings.position == "manual").then(|| {
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(12.))
+                    .child(
+                        self.slider_field(
+                            "Horizontal Position",
+                            SliderKey::Caption(CaptionSlider::ManualX),
+                            "%",
+                            cx,
+                        )
+                        .into_any_element(),
+                    )
+                    .child(
+                        self.slider_field(
+                            "Vertical Position",
+                            SliderKey::Caption(CaptionSlider::ManualY),
+                            "%",
+                            cx,
+                        )
+                        .into_any_element(),
+                    )
+            }))
             .child(
                 ui::Field::section(&theme, "Animation").child(
                     div()
@@ -3239,6 +3453,9 @@ impl EditorWindow {
         };
         let recording_durations = summary.clip_display_durations.clone();
         let recording_duration = summary.recording_duration;
+        let timeline = self.project.timeline.clone();
+        let transcribed_ranges =
+            transcription_source_ranges(timeline.as_ref(), &recording_durations);
         let project_path = self.project_path.clone();
         let model = self.selected_caption_model().name;
         let language = self.sidebar.caption_language;
@@ -3250,9 +3467,16 @@ impl EditorWindow {
 
         cx.spawn_in(window, async move |this, cx| {
             let task_path = project_path.clone();
+            let task_durations = recording_durations.clone();
             let task = gpui_tokio::Tokio::spawn(cx, async move {
                 tokio::task::spawn_blocking(move || {
-                    transcription::transcribe_blocking(&task_path, model, language)
+                    transcription::transcribe_blocking(
+                        &task_path,
+                        model,
+                        language,
+                        timeline.as_ref(),
+                        &task_durations,
+                    )
                 })
                 .await
                 .map_err(|error| format!("Transcription task panicked: {error}"))?
@@ -3262,10 +3486,19 @@ impl EditorWindow {
                 Err(error) => Err(format!("Transcription task failed: {error}")),
             };
 
-            match result {
-                Ok(segments) => {
-                    transcription::finish_generation(&project_path, None);
-                    let _ = this.update_in(cx, |this, window, cx| {
+            let result = match result {
+                Ok(segments) => this
+                    .update_in(cx, |this, window, cx| {
+                        let current_ranges = transcription_source_ranges(
+                            this.project.timeline.as_ref(),
+                            &recording_durations,
+                        );
+                        if !transcription_ranges_cover(&transcribed_ranges, &current_ranges) {
+                            return Err(
+                                "The timeline changed during generation. Generate captions again."
+                                    .to_string(),
+                            );
+                        }
                         this.apply_generated_captions(
                             segments,
                             &recording_durations,
@@ -3273,7 +3506,15 @@ impl EditorWindow {
                             window,
                             cx,
                         );
-                    });
+                        Ok(())
+                    })
+                    .unwrap_or(Ok(())),
+                Err(error) => Err(error),
+            };
+
+            match result {
+                Ok(()) => {
+                    transcription::finish_generation(&project_path, None);
                 }
                 Err(error) => {
                     tracing::error!("caption generation failed: {error}");
@@ -3533,6 +3774,85 @@ impl EditorWindow {
 mod tests {
     use super::*;
 
+    /// A left-aligned caption sits a margin in from the edge, its centre a
+    /// half box width further in. Manual starts at that drawn centre, so
+    /// switching does not move it.
+    #[test]
+    fn manual_caption_position_starts_at_the_drawn_caption() {
+        let mut settings = CaptionSettings {
+            position: "bottom-left".into(),
+            ..CaptionSettings::default()
+        };
+        set_caption_position_from(&mut settings, "manual", |position| {
+            (position == "bottom-left").then_some((0.16, 0.86))
+        });
+        assert_eq!(
+            settings.manual_position.map(|xy| (xy.x, xy.y)),
+            Some((0.16, 0.86))
+        );
+
+        // Nothing drawn yet: the preset's table entry.
+        let mut settings = CaptionSettings {
+            position: "top-right".into(),
+            ..CaptionSettings::default()
+        };
+        set_caption_position_from(&mut settings, "manual", |_| None);
+        assert_eq!(
+            settings.manual_position.map(|xy| (xy.x, xy.y)),
+            Some((0.95, 0.08))
+        );
+    }
+
+    /// A 0.6.1 report: with the caption position set to Manual, the captions
+    /// stayed bottom-centre and nothing could move them. Manual now starts
+    /// where the preset drew them and the sliders move it.
+    #[test]
+    fn manual_caption_position_starts_at_the_preset_and_moves() {
+        let mut settings = CaptionSettings {
+            position: "top-center".into(),
+            ..CaptionSettings::default()
+        };
+        set_caption_position_from(&mut settings, "manual", |_| None);
+        assert_eq!(settings.position, "manual");
+        assert_eq!(
+            settings.manual_position.map(|xy| (xy.x, xy.y)),
+            Some((0.5, 0.08))
+        );
+
+        set_caption_manual_center(&mut settings, Some(20.), None);
+        set_caption_manual_center(&mut settings, None, Some(130.));
+        assert_eq!(
+            settings.manual_position.map(|xy| (xy.x, xy.y)),
+            Some((0.2, 1.0))
+        );
+        let mut project = ProjectConfiguration::default();
+        project.captions = Some(CaptionsData {
+            settings: settings.clone(),
+            ..CaptionsData::default()
+        });
+        assert_eq!(CaptionSlider::ManualX.read(&project), 20.);
+        assert_eq!(CaptionSlider::ManualY.read(&project), 100.);
+
+        // Picking Manual again keeps the adjusted spot.
+        set_caption_position(&mut settings, "manual");
+        assert_eq!(
+            settings.manual_position.map(|xy| (xy.x, xy.y)),
+            Some((0.2, 1.0))
+        );
+
+        // A slider on a preset switches it to Manual from the preset's spot.
+        let mut preset = CaptionSettings {
+            position: "bottom-right".into(),
+            ..CaptionSettings::default()
+        };
+        set_caption_manual_center(&mut preset, None, Some(50.));
+        assert_eq!(preset.position, "manual");
+        assert_eq!(
+            preset.manual_position.map(|xy| (xy.x, xy.y)),
+            Some((0.95, 0.5))
+        );
+    }
+
     #[test]
     fn every_tab_slider_has_the_range_its_call_site_declares() {
         assert_eq!(CameraSlider::Size.limits(), (20., 80., 0.1));
@@ -3639,5 +3959,643 @@ mod tests {
         assert_eq!(keyboard_settings(&project).size, 72);
         // The rest of the defaults come along, not just the written key.
         assert_eq!(keyboard_settings(&project).position, "bottom-center");
+    }
+
+    fn slider_model_project(timeline_segments: usize) -> ProjectConfiguration {
+        let segments: Vec<serde_json::Value> = (0..timeline_segments)
+            .map(|index| {
+                serde_json::json!({
+                    "recordingSegment": 0,
+                    "timescale": 1.0,
+                    "start": index as f64,
+                    "end": index as f64 + 1.0,
+                })
+            })
+            .collect();
+        let config = serde_json::json!({
+            "timeline": {
+                "segments": segments,
+                "transitions": [
+                    {"segmentIndex": 1, "type": "cross-fade", "duration": 0.4}
+                ],
+                "zoomSegments": [
+                    {"start": 0.0, "end": 1.0, "amount": 1.5, "mode": "auto"}
+                ],
+                "sceneSegments": [{"start": 0.0, "end": 1.0}],
+                "maskSegments": [{
+                    "start": 0.0,
+                    "end": 1.0,
+                    "track": 0,
+                    "maskType": "sensitive",
+                    "center": {"x": 0.5, "y": 0.5},
+                    "size": {"x": 0.2, "y": 0.2}
+                }],
+                "textSegments": [{
+                    "start": 0.0,
+                    "end": 1.0,
+                    "track": 0,
+                    "content": "title"
+                }],
+                "captionSegments": [{
+                    "id": "caption",
+                    "start": 0.0,
+                    "end": 1.0,
+                    "text": "hi"
+                }],
+                "keyboardSegments": [{
+                    "id": "keyboard",
+                    "start": 0.0,
+                    "end": 1.0,
+                    "displayText": "A"
+                }],
+                "audioSegments": [{
+                    "start": 0.0,
+                    "end": 1.0,
+                    "track": 0,
+                    "path": "/tmp/none.mp3"
+                }],
+                "styleSegments": [{
+                    "start": 0.0,
+                    "end": 1.0,
+                    "track": 0,
+                    "enabled": true,
+                    "name": "Style",
+                    "overrides": {}
+                }],
+                "imageSegments": [{
+                    "start": 0.0,
+                    "end": 1.0,
+                    "track": 0,
+                    "enabled": true,
+                    "path": "/tmp/none.png"
+                }],
+                "camera3dSegments": [{"start": 0.0, "end": 1.0}]
+            },
+            "captions": {"settings": {"enabled": true}, "segments": []},
+            "keyboard": {"settings": {"enabled": true}}
+        });
+        serde_json::from_value(config).expect("the slider fixture parses")
+    }
+
+    fn animated_gradient_project() -> ProjectConfiguration {
+        let mut project = slider_model_project(64);
+        project.background.source = cap_project::BackgroundSource::AnimatedGradient {
+            config: cap_project::AnimatedGradientConfig::default(),
+        };
+        project
+    }
+
+    fn gradient_source() -> cap_project::BackgroundSource {
+        cap_project::BackgroundSource::Gradient {
+            from: [0, 0, 0],
+            to: [255, 255, 255],
+            angle: 90,
+            noise_intensity: Some(0.2),
+            noise_scale: Some(1.0),
+            animated: Some(false),
+            animation_speed: Some(1.0),
+        }
+    }
+
+    macro_rules! slider_case {
+        ($name:literal, |$project:ident| $body:block) => {
+            (
+                $name,
+                (|$project: &mut ProjectConfiguration| $body) as fn(&mut ProjectConfiguration),
+            )
+        };
+        ($name:literal, |$project:ident| $body:expr) => {
+            (
+                $name,
+                (|$project: &mut ProjectConfiguration| $body) as fn(&mut ProjectConfiguration),
+            )
+        };
+    }
+
+    fn slider_change_cases() -> Vec<(&'static str, fn(&mut ProjectConfiguration))> {
+        vec![
+            slider_case!("background.blur", |project| project.background.blur = 42.),
+            slider_case!("background.padding", |project| {
+                project.background.padding = 12.;
+                project.background.source = cap_project::BackgroundSource::Color {
+                    value: [255, 255, 255],
+                    alpha: 255,
+                };
+            }),
+            slider_case!("background.rounding", |project| {
+                project.background.rounding = 18.;
+                project.background.source = cap_project::BackgroundSource::Color {
+                    value: [0, 0, 0],
+                    alpha: 255,
+                };
+            }),
+            slider_case!("background.motion_blur", |project| {
+                project.cursor.motion_blur = 0.5;
+                project.screen_motion_blur = 0.5;
+            }),
+            slider_case!("background.border.width", |project| {
+                let mut border = project.background.border.clone().unwrap_or_default();
+                border.width = 8.;
+                project.background.border = Some(border);
+            }),
+            slider_case!("background.border.opacity", |project| {
+                let mut border = project.background.border.clone().unwrap_or_default();
+                border.opacity = 60.;
+                project.background.border = Some(border);
+            }),
+            slider_case!("background.notch.width", |project| {
+                let mut notch = project.background.notch.unwrap_or_default();
+                notch.enabled = true;
+                notch.width = Some(0.2);
+                project.background.notch = Some(notch);
+            }),
+            slider_case!("background.notch.height", |project| {
+                let mut notch = project.background.notch.unwrap_or_default();
+                notch.enabled = true;
+                notch.height = Some(0.05);
+                project.background.notch = Some(notch);
+            }),
+            slider_case!("background.notch.x", |project| {
+                let mut notch = project.background.notch.unwrap_or_default();
+                notch.enabled = true;
+                notch.x = Some(0.25);
+                project.background.notch = Some(notch);
+            }),
+            slider_case!("background.shadow", |project| project.background.shadow =
+                22.),
+            slider_case!("background.advanced_shadow.size", |project| {
+                project.background.advanced_shadow = Some(ShadowConfiguration {
+                    size: 22.,
+                    opacity: 50.,
+                    blur: 4.,
+                });
+            }),
+            slider_case!("background.advanced_shadow.opacity", |project| {
+                project.background.advanced_shadow = Some(ShadowConfiguration {
+                    size: 20.,
+                    opacity: 80.,
+                    blur: 4.,
+                });
+            }),
+            slider_case!("background.advanced_shadow.blur", |project| {
+                project.background.advanced_shadow = Some(ShadowConfiguration {
+                    size: 20.,
+                    opacity: 50.,
+                    blur: 12.,
+                });
+            }),
+            slider_case!("background.gradient.angle", |project| {
+                project.background.source = gradient_source();
+                if let cap_project::BackgroundSource::Gradient { angle, .. } =
+                    &mut project.background.source
+                {
+                    *angle = 45;
+                }
+            }),
+            slider_case!("background.gradient.noise_intensity", |project| {
+                project.background.source = gradient_source();
+                if let cap_project::BackgroundSource::Gradient {
+                    noise_intensity, ..
+                } = &mut project.background.source
+                {
+                    *noise_intensity = Some(0.8);
+                }
+            }),
+            slider_case!("background.gradient.noise_scale", |project| {
+                project.background.source = gradient_source();
+                if let cap_project::BackgroundSource::Gradient { noise_scale, .. } =
+                    &mut project.background.source
+                {
+                    *noise_scale = Some(2.0);
+                }
+            }),
+            slider_case!("camera.size", |project| project.camera.size = 55.),
+            slider_case!("camera.zoom_size", |project| project
+                .camera
+                .scale_during_zoom = 1.5),
+            slider_case!("camera.rounding", |project| project.camera.rounding = 18.),
+            slider_case!("camera.shadow", |project| project.camera.shadow = 30.),
+            slider_case!("camera.advanced_shadow.size", |project| {
+                project.camera.advanced_shadow = Some(ShadowConfiguration {
+                    size: 22.,
+                    opacity: 50.,
+                    blur: 4.,
+                });
+            }),
+            slider_case!("camera.advanced_shadow.opacity", |project| {
+                project.camera.advanced_shadow = Some(ShadowConfiguration {
+                    size: 20.,
+                    opacity: 80.,
+                    blur: 4.,
+                });
+            }),
+            slider_case!("camera.advanced_shadow.blur", |project| {
+                project.camera.advanced_shadow = Some(ShadowConfiguration {
+                    size: 20.,
+                    opacity: 50.,
+                    blur: 12.,
+                });
+            }),
+            slider_case!("cursor.size", |project| project.cursor.size = 2),
+            slider_case!("cursor.rotation_amount", |project| project
+                .cursor
+                .rotation_amount =
+                15.),
+            slider_case!("cursor.hide_when_idle_delay", |project| project
+                .cursor
+                .hide_when_idle_delay =
+                2.5),
+            slider_case!("cursor.tension", |project| project.cursor.tension = 45.),
+            slider_case!("cursor.friction", |project| project.cursor.friction = 45.),
+            slider_case!("cursor.mass", |project| project.cursor.mass = 1.5),
+            slider_case!("cursor.animation_style", |project| project
+                .cursor
+                .animation_style =
+                CursorAnimationStyle::Custom),
+            slider_case!("cursor.ripple.strength", |project| project
+                .cursor
+                .ripple
+                .strength = 45.),
+            slider_case!("cursor.ripple.size", |project| project.cursor.ripple.size =
+                45.),
+            slider_case!("cursor.ripple.duration", |project| project
+                .cursor
+                .ripple
+                .duration = 900.),
+            slider_case!("caption.size", |project| project
+                .captions
+                .as_mut()
+                .unwrap()
+                .settings
+                .size = 72),
+            slider_case!("caption.background_opacity", |project| project
+                .captions
+                .as_mut()
+                .unwrap()
+                .settings
+                .background_opacity =
+                80),
+            slider_case!("caption.fade_duration", |project| project
+                .captions
+                .as_mut()
+                .unwrap()
+                .settings
+                .fade_duration = 0.5),
+            slider_case!("caption.preset", |project| project
+                .captions
+                .as_mut()
+                .unwrap()
+                .settings
+                .preset = "custom".into()),
+            slider_case!("keyboard.size", |project| project
+                .keyboard
+                .as_mut()
+                .unwrap()
+                .settings
+                .size = 72),
+            slider_case!("keyboard.background_opacity", |project| project
+                .keyboard
+                .as_mut()
+                .unwrap()
+                .settings
+                .background_opacity =
+                80),
+            slider_case!("keyboard.fade_duration", |project| project
+                .keyboard
+                .as_mut()
+                .unwrap()
+                .settings
+                .fade_duration = 0.5),
+            slider_case!("keyboard.linger_duration", |project| project
+                .keyboard
+                .as_mut()
+                .unwrap()
+                .settings
+                .linger_duration =
+                1.5),
+            slider_case!("keyboard.grouping_threshold_ms", |project| project
+                .keyboard
+                .as_mut()
+                .unwrap()
+                .settings
+                .grouping_threshold_ms =
+                750.),
+        ]
+    }
+    fn assert_timeline_model_unchanged_in(
+        mut project: ProjectConfiguration,
+        name: &str,
+        change: impl FnOnce(&mut ProjectConfiguration),
+    ) {
+        use crate::editor_timeline::{TimelineModel, TrackLanes};
+
+        let lanes_before = TrackLanes::from_project(&project, true);
+        let before = TimelineModel::build_with_lanes(&project, true, true, &lanes_before);
+        change(&mut project);
+        let lanes_after = TrackLanes::from_project(&project, true);
+        assert_eq!(
+            lanes_before, lanes_after,
+            "{name} must not change the track lanes"
+        );
+        let after = TimelineModel::build_with_lanes(&project, true, true, &lanes_after);
+        assert_eq!(
+            format!("{before:?}"),
+            format!("{after:?}"),
+            "{name} must not change the timeline model"
+        );
+    }
+
+    fn assert_timeline_model_unchanged(name: &str, change: impl FnOnce(&mut ProjectConfiguration)) {
+        assert_timeline_model_unchanged_in(slider_model_project(64), name, change);
+    }
+
+    fn assert_timeline_model_changes_in(
+        mut project: ProjectConfiguration,
+        name: &str,
+        change: impl FnOnce(&mut ProjectConfiguration),
+    ) {
+        use crate::editor_timeline::TimelineModel;
+
+        let before = TimelineModel::build(&project, true, true);
+        change(&mut project);
+        let after = TimelineModel::build(&project, true, true);
+        assert_ne!(
+            format!("{before:?}"),
+            format!("{after:?}"),
+            "{name} must change the timeline model"
+        );
+    }
+
+    fn assert_timeline_model_changes(name: &str, change: impl FnOnce(&mut ProjectConfiguration)) {
+        assert_timeline_model_changes_in(slider_model_project(64), name, change);
+    }
+
+    #[test]
+    fn slider_edits_do_not_change_the_timeline_model() {
+        for (name, change) in slider_change_cases() {
+            assert_timeline_model_unchanged(name, change);
+        }
+
+        for target in [GradeTarget::Screen, GradeTarget::Camera] {
+            for slider in crate::editor_color::GradeSlider::ADJUST
+                .iter()
+                .copied()
+                .chain(std::iter::once(crate::editor_color::GradeSlider::Grain))
+            {
+                let target_name = match target {
+                    GradeTarget::Screen => "screen",
+                    GradeTarget::Camera => "camera",
+                };
+                let name = format!("grade.{target_name}.{}", slider.label());
+                assert_timeline_model_unchanged(&name, move |project| {
+                    let grade = match target {
+                        GradeTarget::Screen => &mut project.color_correction.screen,
+                        GradeTarget::Camera => &mut project.color_correction.camera,
+                    };
+                    slider.write(grade, 0.5);
+                    grade.preset = "custom".into();
+                });
+            }
+        }
+
+        for parameter in cap_project::AnimatedGradientParameter::ALL {
+            let name = format!("animated_gradient.{}", parameter.control().label);
+            assert_timeline_model_unchanged_in(
+                animated_gradient_project(),
+                &name,
+                move |project| {
+                    let current = {
+                        let cap_project::BackgroundSource::AnimatedGradient { config } =
+                            &project.background.source
+                        else {
+                            panic!("the fixture is an animated gradient");
+                        };
+                        parameter.get(config)
+                    };
+                    let control = parameter.control();
+                    let next = if current + control.step <= control.max {
+                        current + control.step
+                    } else {
+                        control.min + control.step
+                    };
+                    let cap_project::BackgroundSource::AnimatedGradient { config } =
+                        &mut project.background.source
+                    else {
+                        panic!("the fixture is an animated gradient");
+                    };
+                    parameter.set(config, next);
+                },
+            );
+        }
+
+        assert_timeline_model_unchanged_in(
+            animated_gradient_project(),
+            "animated_gradient.stop_position",
+            |project| {
+                let cap_project::BackgroundSource::AnimatedGradient { config } =
+                    &mut project.background.source
+                else {
+                    panic!("the fixture is an animated gradient");
+                };
+                config.color_stops[0].position = 75.0;
+            },
+        );
+    }
+
+    #[test]
+    fn audio_levels_still_change_the_timeline_model() {
+        assert_timeline_model_changes("audio.mic_volume_db", |project| {
+            project.audio.mic_volume_db = 1.5;
+        });
+        assert_timeline_model_changes("audio.system_volume_db", |project| {
+            project.audio.system_volume_db = 1.5;
+        });
+        let mut camera_project = slider_model_project(64);
+        camera_project
+            .timeline
+            .as_mut()
+            .unwrap()
+            .scene_segments
+            .clear();
+        assert_timeline_model_changes_in(camera_project, "camera.hide", |project| {
+            project.camera.hide = true;
+        });
+        assert_timeline_model_changes("captions.settings.enabled", |project| {
+            project.captions.as_mut().unwrap().settings.enabled = false;
+        });
+        assert_timeline_model_changes("keyboard.settings.enabled", |project| {
+            project.keyboard.as_mut().unwrap().settings.enabled = false;
+        });
+    }
+
+    /// Pin every variant's classification, not just the project fields the
+    /// slider happens to write. A new variant still fails to compile until it
+    /// picks a side; this catches flipping an existing variant without
+    /// updating the routing tests.
+    #[test]
+    fn slider_classification_is_pinned_per_variant() {
+        use crate::editor_color::GradeSlider;
+        use crate::editor_sidebar::BgSlider;
+
+        for slider in [
+            BgSlider::Blur,
+            BgSlider::Padding,
+            BgSlider::Rounding,
+            BgSlider::MotionBlur,
+            BgSlider::BorderWidth,
+            BgSlider::BorderOpacity,
+            BgSlider::NotchWidth,
+            BgSlider::NotchHeight,
+            BgSlider::NotchX,
+            BgSlider::Shadow,
+            BgSlider::ShadowSize,
+            BgSlider::ShadowOpacity,
+            BgSlider::ShadowBlur,
+            BgSlider::GradientAngle,
+            BgSlider::GradientNoise,
+            BgSlider::GradientGrain,
+        ] {
+            assert!(
+                !slider.changes_timeline_model(),
+                "background {slider:?} must not rebuild the timeline"
+            );
+        }
+
+        for slider in [
+            CameraSlider::Size,
+            CameraSlider::ZoomSize,
+            CameraSlider::Rounding,
+            CameraSlider::Shadow,
+            CameraSlider::ShadowSize,
+            CameraSlider::ShadowOpacity,
+            CameraSlider::ShadowBlur,
+        ] {
+            assert!(
+                !slider.changes_timeline_model(),
+                "camera {slider:?} must not rebuild the timeline"
+            );
+        }
+
+        for slider in [AudioSlider::MicVolume, AudioSlider::SystemVolume] {
+            assert!(
+                slider.changes_timeline_model(),
+                "audio {slider:?} must rebuild the timeline"
+            );
+        }
+
+        for slider in [
+            CursorSlider::Size,
+            CursorSlider::Tilt,
+            CursorSlider::IdleDelay,
+            CursorSlider::Tension,
+            CursorSlider::Friction,
+            CursorSlider::Mass,
+            CursorSlider::RippleStrength,
+            CursorSlider::RippleSize,
+            CursorSlider::RippleDuration,
+        ] {
+            assert!(
+                !slider.changes_timeline_model(),
+                "cursor {slider:?} must not rebuild the timeline"
+            );
+        }
+
+        for slider in [
+            CaptionSlider::Size,
+            CaptionSlider::BackgroundOpacity,
+            CaptionSlider::FadeDuration,
+            CaptionSlider::ManualX,
+            CaptionSlider::ManualY,
+        ] {
+            assert!(
+                !slider.changes_timeline_model(),
+                "caption {slider:?} must not rebuild the timeline"
+            );
+        }
+
+        for slider in [
+            KeyboardSlider::Size,
+            KeyboardSlider::BackgroundOpacity,
+            KeyboardSlider::FadeDuration,
+            KeyboardSlider::LingerDuration,
+            KeyboardSlider::GroupingThreshold,
+        ] {
+            assert!(
+                !slider.changes_timeline_model(),
+                "keyboard {slider:?} must not rebuild the timeline"
+            );
+        }
+
+        for slider in [
+            GradeSlider::Grain,
+            GradeSlider::Intensity,
+            GradeSlider::Exposure,
+            GradeSlider::Contrast,
+            GradeSlider::Saturation,
+            GradeSlider::Temperature,
+            GradeSlider::Tint,
+            GradeSlider::Fade,
+            GradeSlider::SplitTone,
+            GradeSlider::Vignette,
+        ] {
+            assert!(
+                !slider.changes_timeline_model(),
+                "grade {slider:?} must not rebuild the timeline"
+            );
+        }
+    }
+
+    /// Times the rebuild the new route skips; the rest of `project_changed`
+    /// (history, publish, save, notify) is unchanged and not measured here.
+    ///
+    /// The fixture is a synthetic stress case: 2,000 contiguous clips plus
+    /// every track kind, not a typical project. Quote these numbers only as
+    /// the cost of the skipped `TimelineModel::build_with_lanes`.
+    ///
+    /// `cargo test --release --manifest-path apps/desktop-gpui/Cargo.toml --bin cap-gpui -- --ignored benchmark_slider_edit_skips_timeline_rebuild --nocapture`
+    #[test]
+    #[ignore = "manual slider edit benchmark"]
+    fn benchmark_slider_edit_skips_timeline_rebuild() {
+        use std::{hint::black_box, time::Instant};
+
+        fn median(samples: &mut [f64]) -> f64 {
+            assert!(samples.len() > 1, "median needs more than one sample");
+            samples.sort_by(f64::total_cmp);
+            let middle = samples.len() / 2;
+            if samples.len() % 2 == 0 {
+                (samples[middle - 1] + samples[middle]) / 2.
+            } else {
+                samples[middle]
+            }
+        }
+
+        use crate::editor_timeline::{TimelineModel, TrackLanes};
+
+        let project = slider_model_project(2_000);
+        let lanes = TrackLanes::from_project(&project, true);
+
+        // Warm caches and the allocator before sampling.
+        for _ in 0..3 {
+            drop(black_box(TimelineModel::build_with_lanes(
+                &project, true, true, &lanes,
+            )));
+        }
+
+        let mut samples = Vec::new();
+        for _ in 0..10 {
+            let started = Instant::now();
+            for _ in 0..10 {
+                drop(black_box(TimelineModel::build_with_lanes(
+                    &project, true, true, &lanes,
+                )));
+            }
+            samples.push(started.elapsed().as_secs_f64() * 1_000_000. / 10.);
+        }
+
+        let skipped = median(&mut samples);
+        println!(
+            "slider_edit timeline_segments=2000 samples=10 iterations_per_sample=10 \
+             skipped_rebuild_us={skipped:.3}"
+        );
     }
 }

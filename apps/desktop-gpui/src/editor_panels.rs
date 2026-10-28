@@ -2727,27 +2727,60 @@ impl EditorWindow {
         self.fields.insert(key, input);
     }
 
-    /// The `createWritableMemo` half: re-derive a field's text whenever the
-    /// value moves under it (an undo, a preset, a timeline drag), but never
-    /// while it has focus. Runs from `render`, like `sync_hex_inputs`, because
-    /// the focus test needs a `&Window`.
+    /// The all-fields path: every field ever created, whether the frame draws
+    /// it or not. Kept as the faithful "before" for the benchmark and the
+    /// equivalence tests; production renders go through
+    /// [`Self::sync_visible_fields`].
     pub(crate) fn sync_fields(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // Every field ever created is checked on every render, so the value is
-        // written into one reused buffer and only copied out when it moved.
+        // The value is written into one reused buffer and only copied out
+        // when it moved.
         let mut value = String::new();
         for (key, input) in &self.fields {
-            let state = input.read(cx);
-            if state.is_focused(window) {
+            self.sync_field(input, *key, &mut value, window, cx);
+        }
+    }
+
+    /// The production path: only the fields [`Self::prepare_sidebar_fields`]
+    /// says the next frame draws. A field that is not listed keeps its old
+    /// text until a later frame lists it again -- that is how a hidden field
+    /// catches up when it becomes visible. Focused fields are never written,
+    /// exactly as on the all-fields path.
+    pub(crate) fn sync_visible_fields(
+        &mut self,
+        keys: &[FieldKey],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let mut value = String::new();
+        for key in keys {
+            let Some(input) = self.fields.get(key) else {
                 continue;
-            }
-            value.clear();
-            if self.write_field_value(*key, &mut value).is_none() {
-                continue;
-            }
-            if state.text() != value {
-                let text = value.clone();
-                input.update(cx, |input, cx| input.set_text(text, cx));
-            }
+            };
+            self.sync_field(input, *key, &mut value, window, cx);
+        }
+    }
+
+    /// One field, shared by both sync paths so the visible-only path cannot
+    /// drift from the all-fields one.
+    fn sync_field(
+        &self,
+        input: &Entity<ui::TextInputState>,
+        key: FieldKey,
+        value: &mut String,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        let state = input.read(cx);
+        if state.is_focused(window) {
+            return;
+        }
+        value.clear();
+        if self.write_field_value(key, value).is_none() {
+            return;
+        }
+        if state.text() != value {
+            let text = value.clone();
+            input.update(cx, |input, cx| input.set_text(text, cx));
         }
     }
 
@@ -6197,12 +6230,19 @@ impl EditorWindow {
     }
 }
 
-/// `formatTime` -- the `M:SS` clock the timing cards print.
+/// `formatTime` -- the `M:SS` clock the timing cards print, as `H:MM:SS` from
+/// an hour on.
 fn format_time(seconds: f64) -> String {
     let seconds = seconds.max(0.);
+    let hours = (seconds / 3600.).floor() as u32;
+    let seconds = seconds - f64::from(hours) * 3600.;
     let minutes = (seconds / 60.).floor() as u32;
     let rest = seconds - f64::from(minutes) * 60.;
-    format!("{minutes}:{rest:04.1}")
+    if hours > 0 {
+        format!("{hours}:{minutes:02}:{rest:04.1}")
+    } else {
+        format!("{minutes}:{rest:04.1}")
+    }
 }
 
 impl EditorWindow {
@@ -7930,7 +7970,7 @@ impl EditorWindow {
 }
 
 impl EditorWindow {
-    /// Every text field the frame about to be built will draw.
+    /// Every text field the frame about to be built may draw.
     ///
     /// Creating one needs `&mut Window`, and the sidebar's render chain is
     /// threaded with `&self`, so the set is computed here from the same state
@@ -7942,9 +7982,8 @@ impl EditorWindow {
         let mut colors: Vec<ColorTarget> = Vec::new();
 
         // The crop dialog's four `BoundInput`s, while it is open. Created up
-        // front rather than pushed onto `fields`, because the match below
-        // bails early when the project has no timeline and the dialog is
-        // independent of it.
+        // front because the match below bails early when the project has no
+        // timeline and the dialog is independent of it.
         if self.crop.is_some() {
             use crate::editor_crop::CropField;
             for field in [
@@ -7953,7 +7992,9 @@ impl EditorWindow {
                 CropField::X,
                 CropField::Y,
             ] {
-                self.ensure_field(FieldKey::Crop(field), window, cx);
+                let key = FieldKey::Crop(field);
+                self.ensure_field(key, window, cx);
+                fields.push(key);
             }
         }
 
@@ -7966,6 +8007,9 @@ impl EditorWindow {
                     warm_installed_fonts();
                 }
                 let Some(timeline) = self.timeline() else {
+                    // The crop dialog does not need the timeline, and its
+                    // fields were already ensured above.
+                    self.sync_visible_fields(&fields, window, cx);
                     return;
                 };
                 let indices = |length: usize| -> Vec<usize> {
@@ -8068,13 +8112,13 @@ impl EditorWindow {
             },
         }
 
-        for key in fields {
+        for &key in &fields {
             self.ensure_field(key, window, cx);
         }
         for target in colors {
             self.ensure_hex_input(target, window, cx);
         }
-        self.sync_fields(window, cx);
+        self.sync_visible_fields(&fields, window, cx);
     }
 }
 
@@ -8383,6 +8427,9 @@ mod tests {
         assert_eq!(format_time(0.), "0:00.0");
         assert_eq!(format_time(9.25), "0:09.2");
         assert_eq!(format_time(75.5), "1:15.5");
+        assert_eq!(format_time(3599.5), "59:59.5");
+        assert_eq!(format_time(3600.), "1:00:00.0");
+        assert_eq!(format_time(3905.5), "1:05:05.5");
     }
 
     // -- Text presets ------------------------------------------------------
