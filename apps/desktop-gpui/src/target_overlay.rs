@@ -1851,7 +1851,8 @@ impl Render for OverlayWindow {
                 // the overlays are up; here it is a plain key handler on the
                 // overlay that has focus (see the README deviation).
                 tracing::debug!(key = %event.keystroke.key, "overlay key");
-                if this.area_key(&event.keystroke, window, cx) {
+                // The mode menu takes its keys first, like the menus above.
+                if this.mode_menu.is_none() && this.area_key(&event.keystroke, window, cx) {
                     cx.stop_propagation();
                     return;
                 }
