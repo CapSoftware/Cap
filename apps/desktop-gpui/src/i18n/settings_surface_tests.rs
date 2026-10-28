@@ -233,6 +233,14 @@ fn settings_surfaces_match_the_literals_they_replaced() {
             "Minimise",
         ),
         (
+            tr::settings::options::window_capture::screen_region(),
+            "Screen region",
+        ),
+        (
+            tr::settings::options::window_capture::focused_window(),
+            "Focused window",
+        ),
+        (
             tr::settings::options::post_studio::open_editor(),
             "Open editor",
         ),

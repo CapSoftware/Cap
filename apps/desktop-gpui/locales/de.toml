@@ -159,6 +159,10 @@ label = "Studio Sound für neue Aufnahmen"
 description = "Was mit dem Hauptfenster passiert, sobald eine Aufnahme beginnt."
 label = "Hauptfenster beim Aufnahmestart"
 
+[settings.general.recording.window_capture]
+description = "Wie eine Fensteraufnahme das gewählte Fenster erfasst. „Fokussiertes Fenster“ nimmt nur dieses Fenster auf, zentriert und folgt ihm, wenn es verschoben wird; „Bildschirmbereich“ nimmt den Bereich des Bildschirms auf, den es abdeckt."
+label = "Fensteraufnahme"
+
 [settings.general.recording.post_deletion]
 description = "Ob das Aufnahmefenster wieder geöffnet werden soll."
 label = "Nach dem Löschen einer Aufnahme"
@@ -350,6 +354,10 @@ ultra = "Ultra"
 [settings.options.main_window_start]
 close = "Schließen"
 minimise = "Minimieren"
+
+[settings.options.window_capture]
+focused_window = "Fokussiertes Fenster"
+screen_region = "Bildschirmbereich"
 
 [settings.options.post_studio]
 do_nothing = "Nichts tun"

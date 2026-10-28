@@ -798,6 +798,17 @@ settings_enum! {
 }
 
 settings_enum! {
+    /// How a window recording captures the picked window: the region of the
+    /// screen it covers, or (Focused) the window by itself, centred by the
+    /// picker and followed if it moves.
+    WindowCaptureStyle {
+        ScreenRegion = "screenRegion", tr::settings::options::window_capture::screen_region();
+        FocusedWindow = "focusedWindow", tr::settings::options::window_capture::focused_window();
+    }
+    default = ScreenRegion
+}
+
+settings_enum! {
     /// `PostStudioRecordingBehaviour`.
     PostStudioBehaviour {
         OpenEditor = "openEditor", tr::settings::options::post_studio::open_editor();
@@ -1027,6 +1038,7 @@ pub struct GeneralSettings {
     pub studio_recording_quality: StudioQuality,
     pub recording_countdown: Option<u32>,
     pub main_window_recording_start_behaviour: MainWindowStartBehaviour,
+    pub window_capture_style: WindowCaptureStyle,
     pub post_studio_recording_behaviour: PostStudioBehaviour,
     pub post_screenshot_behaviour: PostScreenshotBehaviour,
     pub post_deletion_behaviour: PostDeletionBehaviour,
@@ -1435,6 +1447,7 @@ impl GeneralSettings {
                 general,
                 "mainWindowRecordingStartBehaviour",
             ),
+            window_capture_style: enum_at(general, "windowCaptureStyle"),
             post_studio_recording_behaviour: enum_at(general, "postStudioRecordingBehaviour"),
             post_screenshot_behaviour: enum_at(general, "postScreenshotBehaviour"),
             post_deletion_behaviour: enum_at(general, "postDeletionBehaviour"),
