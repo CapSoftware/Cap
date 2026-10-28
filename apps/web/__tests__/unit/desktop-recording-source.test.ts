@@ -2706,6 +2706,24 @@ describe("listed source commit on Cap's bucket", () => {
 		).toBeGreaterThan(0);
 	});
 
+	it("lists the snapshot once before verifying and once to verify it", async () => {
+		const storage = listedStorage();
+		seedRecording(storage, 20, 10);
+		const source = await commitDesktopRecordingSource(recording(), generation);
+		const listedPrefixes = storage.bucket.listObjects.mock.calls.map(
+			([input]) => input.prefix,
+		);
+		expect(
+			listedPrefixes.filter((prefix) => prefix?.endsWith("/segments/video/")),
+		).toHaveLength(2);
+		expect(
+			listedPrefixes.filter((prefix) => prefix?.endsWith("/segments/audio/")),
+		).toHaveLength(2);
+		const shape = inventoryShape(storage, source.inventoryKey);
+		expect(shape).toHaveLength(32);
+		expect(shape.every((entry) => entry.identityMatchesCopy)).toBe(true);
+	});
+
 	it("proves checkpoint writes by their ETag instead of reading them back", async () => {
 		const storage = listedStorage();
 		seedRecording(storage, 20, 10);
