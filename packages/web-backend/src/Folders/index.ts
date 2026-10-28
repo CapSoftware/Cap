@@ -72,7 +72,6 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 					yield* deleteFolder(child);
 				}
 
-				// Folders can't be both in the root and in a space
 				if (folder.spaceId === folder.organizationId) {
 					yield* db.use((db) =>
 						db
