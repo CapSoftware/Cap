@@ -2521,9 +2521,8 @@ impl OverlayWindow {
         }
     }
 
-    /// Focus on: record the window by itself, centred and brought forward
-    /// with Center on screen. Focus off: put it back where the picker found
-    /// it, record the region.
+    /// Focus on: record the window by itself. Focus off: put it back where the
+    /// picker found it, record the region.
     pub(crate) fn set_focus(&mut self, focus: bool, cx: &mut Context<Self>) {
         self.select.update(cx, |select, cx| {
             select.focus_window = focus;
@@ -2567,8 +2566,6 @@ impl OverlayWindow {
         }
     }
 
-    /// Center on screen, under Focus: centre the picked window now (and on
-    /// every later pick), or put it back where the picker found it.
     pub(crate) fn set_focus_center(&mut self, center: bool, cx: &mut Context<Self>) {
         self.select.update(cx, |select, cx| {
             select.focus_center = center;

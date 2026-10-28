@@ -210,6 +210,16 @@ async fn probe_window_arrangement(
         .map(|bounds| (bounds.size().width() as f32, bounds.size().height() as f32));
     let before = Some(picked.bounds);
 
+    // Start from Focus off whatever the saved settings say: turning Center
+    // off later under a saved Focus would put back the pre-resize frame.
+    overlay
+        .update(cx, |view, _, cx| {
+            view.set_focus_center(false, cx);
+            view.set_focus(false, cx)
+        })
+        .ok();
+    sleep(cx, 500).await;
+
     // `window_arrange::RATIOS` lists 16:9 second.
     overlay
         .update(cx, |view, _, cx| view.choose_window_size(1, cx))
@@ -232,10 +242,7 @@ async fn probe_window_arrangement(
     // Focus alone records the window where it is: only Center on screen
     // moves it.
     overlay
-        .update(cx, |view, _, cx| {
-            view.set_focus_center(false, cx);
-            view.set_focus(true, cx)
-        })
+        .update(cx, |view, _, cx| view.set_focus(true, cx))
         .ok();
     sleep(cx, 1500).await;
     let unmoved = read_window(&picked.id);
