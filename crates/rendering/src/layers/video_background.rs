@@ -24,6 +24,9 @@ const SEEK_THRESHOLD_SECS: f64 = 1.5;
 const TIME_EPSILON: f64 = 1e-4;
 const OPEN_TIMEOUT: Duration = Duration::from_secs(15);
 const FRAME_TIMEOUT: Duration = Duration::from_secs(5);
+/// Downscaling a 4K frame is the most expensive step; past four threads it
+/// stops paying off and starts competing with the recording's own decoders.
+const SCALER_THREADS: usize = 4;
 const MAX_DECODE_ERRORS: usize = 16;
 
 pub fn is_video_background(path: &str) -> bool {
@@ -123,10 +126,87 @@ impl VideoBackgroundSource {
     }
 }
 
+/// Converts decoded frames to RGBA at the output size. Built through the raw
+/// swscale API because only a context configured before initialisation can
+/// spread the conversion over several threads.
 struct Scaler {
-    context: software::scaling::Context,
+    context: *mut ffmpeg::ffi::SwsContext,
     input: (format::Pixel, u32, u32),
     output: frame::Video,
+}
+
+// SAFETY: the context is created, used and freed by the reader thread that
+// owns the scaler; nothing else holds the pointer.
+unsafe impl Send for Scaler {}
+
+impl Scaler {
+    fn new(
+        input: (format::Pixel, u32, u32),
+        (width, height): (u32, u32),
+        bt709: bool,
+    ) -> Option<Self> {
+        let flags = if width < input.1 {
+            software::scaling::Flags::AREA
+        } else {
+            software::scaling::Flags::BILINEAR
+        };
+        let source: ffmpeg::ffi::AVPixelFormat = input.0.into();
+        let threads = std::thread::available_parallelism()
+            .map_or(1, |count| count.get())
+            .min(SCALER_THREADS) as i64;
+        unsafe {
+            let context = ffmpeg::ffi::sws_alloc_context();
+            if context.is_null() {
+                return None;
+            }
+            let scaler = Self {
+                context,
+                input,
+                output: frame::Video::new(format::Pixel::RGBA, width, height),
+            };
+            let options = [
+                (c"srcw", i64::from(input.1)),
+                (c"srch", i64::from(input.2)),
+                (c"src_format", source as i64),
+                (c"dstw", i64::from(width)),
+                (c"dsth", i64::from(height)),
+                (
+                    c"dst_format",
+                    ffmpeg::ffi::AVPixelFormat::AV_PIX_FMT_RGBA as i64,
+                ),
+                (c"sws_flags", i64::from(flags.bits())),
+            ];
+            for (name, value) in options {
+                if ffmpeg::ffi::av_opt_set_int(context.cast(), name.as_ptr(), value, 0) < 0 {
+                    return None;
+                }
+            }
+            // Without threading support this stays a single-threaded scaler.
+            ffmpeg::ffi::av_opt_set_int(context.cast(), c"threads".as_ptr(), threads, 0);
+            if ffmpeg::ffi::sws_init_context(context, std::ptr::null_mut(), std::ptr::null_mut())
+                < 0
+            {
+                return None;
+            }
+            if bt709 {
+                crate::decoder::use_bt709_source_raw(context);
+            }
+            Some(scaler)
+        }
+    }
+
+    fn run(&mut self, decoded: &frame::Video) -> bool {
+        unsafe {
+            ffmpeg::ffi::sws_scale_frame(self.context, self.output.as_mut_ptr(), decoded.as_ptr())
+                >= 0
+        }
+    }
+}
+
+impl Drop for Scaler {
+    fn drop(&mut self) {
+        unsafe { ffmpeg::ffi::sws_freeContext(self.context) };
+    }
 }
 
 struct Reader {
@@ -144,9 +224,17 @@ struct Reader {
     at_end: bool,
     last_time: Option<f64>,
     last_served: f64,
+    /// Spacing of recent requests, when they come further apart than the
+    /// clip's frames (a 60 fps clip behind a 30 fps export).
+    request_interval: Option<f64>,
+    /// Decoded but not yet scaled: the frame after the newest one in `ring`,
+    /// held so a frame is only scaled once we know it will be shown.
+    pending: Option<(f64, frame::Video)>,
     unreachable_anchor: Option<f64>,
     #[cfg(test)]
     seeks: usize,
+    #[cfg(test)]
+    scaled: usize,
 }
 
 fn hardware_device() -> Option<ffmpeg::sys::AVHWDeviceType> {
@@ -237,9 +325,13 @@ impl Reader {
             at_end: false,
             last_time: None,
             last_served: 0.0,
+            request_interval: None,
+            pending: None,
             unreachable_anchor: None,
             #[cfg(test)]
             seeks: 0,
+            #[cfg(test)]
+            scaled: 0,
         };
         reader.fill_head(head_budget_bytes)?;
         Ok(reader)
@@ -299,6 +391,9 @@ impl Reader {
 
     fn frame_at(&mut self, seconds: f64) -> Option<Arc<VideoBackgroundFrame>> {
         let time = self.clip_time(seconds);
+        let step = time - self.last_served;
+        self.request_interval =
+            (step > self.frame_interval * 1.5 && step < SEEK_THRESHOLD_SECS).then_some(step);
         self.last_served = time;
 
         if self.head_is_whole_clip {
@@ -341,7 +436,7 @@ impl Reader {
             if self.at_end {
                 return self.ring.back().cloned();
             }
-            match self.decode_next() {
+            match self.next_shown(|frame_time| frame_time.max(time)) {
                 Some(frame) => self.ring.push_back(frame),
                 None => self.at_end = true,
             }
@@ -399,7 +494,14 @@ impl Reader {
             return;
         }
         self.trim_before(anchor);
-        match self.decode_next() {
+        let interval = self.request_interval;
+        let next = self.next_shown(|frame_time| match interval {
+            Some(interval) if frame_time > anchor => {
+                anchor + ((frame_time - anchor) / interval - TIME_EPSILON).ceil() * interval
+            }
+            _ => frame_time.max(anchor),
+        });
+        match next {
             Some(frame) => self.ring.push_back(frame),
             None => self.at_end = true,
         }
@@ -411,6 +513,7 @@ impl Reader {
             self.seeks += 1;
         }
         self.ring.clear();
+        self.pending = None;
         self.at_end = false;
         self.last_time = None;
         let target = time + self.start_ticks as f64 * self.seconds_per_tick;
@@ -425,7 +528,59 @@ impl Reader {
         }
     }
 
+    /// The next frame, decoded and scaled.
     fn decode_next(&mut self) -> Option<Arc<VideoBackgroundFrame>> {
+        self.next_shown(|frame_time| frame_time)
+    }
+
+    /// Decodes forward and returns the next frame that will actually be
+    /// shown. `first_request_at` maps a frame's time to the first request
+    /// expected at or after it; a frame whose successor starts by then is
+    /// never shown, so it's dropped without being scaled. That keeps seeks
+    /// (which decode forward from a keyframe) and clips with more frames than
+    /// the output from paying for conversions nobody sees.
+    fn next_shown(
+        &mut self,
+        first_request_at: impl Fn(f64) -> f64,
+    ) -> Option<Arc<VideoBackgroundFrame>> {
+        let mut errors = 0;
+        loop {
+            let (time, decoded) = match self.pending.take() {
+                Some(pending) => pending,
+                None => self.decode_raw()?,
+            };
+            self.pending = self.decode_raw();
+            if let Some((next_time, _)) = &self.pending
+                && *next_time <= first_request_at(time) + TIME_EPSILON
+            {
+                continue;
+            }
+            #[cfg(test)]
+            {
+                self.scaled += 1;
+            }
+            match self.scale(&decoded) {
+                Some((data, width, height)) => {
+                    return Some(Arc::new(VideoBackgroundFrame {
+                        data,
+                        width,
+                        height,
+                        time,
+                    }));
+                }
+                None => {
+                    errors += 1;
+                    if errors >= MAX_DECODE_ERRORS {
+                        self.pending = None;
+                        return self.reached_end();
+                    }
+                }
+            }
+        }
+    }
+
+    /// The next decoded frame and its time in the clip, before scaling.
+    fn decode_raw(&mut self) -> Option<(f64, frame::Video)> {
         let mut errors = 0;
         loop {
             let decoded = match self.decoder.frames().next() {
@@ -453,24 +608,11 @@ impl Reader {
                 self.frame_interval = time - last;
             }
             self.last_time = Some(time);
-
-            let Some((data, width, height)) = self.scale(&decoded) else {
-                errors += 1;
-                if errors >= MAX_DECODE_ERRORS {
-                    return self.reached_end();
-                }
-                continue;
-            };
-            return Some(Arc::new(VideoBackgroundFrame {
-                data,
-                width,
-                height,
-                time: time.max(0.0),
-            }));
+            return Some((time.max(0.0), decoded));
         }
     }
 
-    fn reached_end(&mut self) -> Option<Arc<VideoBackgroundFrame>> {
+    fn reached_end<T>(&mut self) -> Option<T> {
         if let Some(last) = self.last_time {
             let end = last + self.frame_interval;
             if end > 0.0 {
@@ -498,34 +640,15 @@ impl Reader {
             .as_ref()
             .is_none_or(|scaler| scaler.input != input)
         {
-            let (width, height) = self.output_size(input.1, input.2);
-            let flags = if width < input.1 {
-                software::scaling::Flags::AREA
-            } else {
-                software::scaling::Flags::BILINEAR
-            };
-            let mut context = software::scaling::Context::get(
-                input.0,
-                input.1,
-                input.2,
-                format::Pixel::RGBA,
-                width,
-                height,
-                flags,
-            )
-            .ok()?;
-            if decoded.color_space() == ffmpeg::util::color::Space::BT709 {
-                crate::decoder::use_bt709_source(&mut context);
-            }
-            self.scaler = Some(Scaler {
-                context,
-                input,
-                output: frame::Video::new(format::Pixel::RGBA, width, height),
-            });
+            let size = self.output_size(input.1, input.2);
+            let bt709 = decoded.color_space() == ffmpeg::util::color::Space::BT709;
+            self.scaler = Some(Scaler::new(input, size, bt709)?);
         }
 
         let scaler = self.scaler.as_mut()?;
-        scaler.context.run(decoded, &mut scaler.output).ok()?;
+        if !scaler.run(decoded) {
+            return None;
+        }
 
         let width = scaler.output.width();
         let height = scaler.output.height();
@@ -677,6 +800,90 @@ mod tests {
             assert_eq!(colour_index(&served), frame / 10, "at {seconds}s");
         }
         assert_eq!(reader.seeks, 0);
+    }
+
+    #[test]
+    fn seeking_scales_only_the_frame_it_lands_on() {
+        ffmpeg::init().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("seek.gif");
+        write_gif(&path, 96, 48, 10);
+
+        let mut reader = Reader::open(path, 64, 64 * 32 * 4 * 2).unwrap();
+        let after_head = reader.scaled;
+        let served = reader.frame_at(3.05).unwrap();
+        assert_eq!(colour_index(&served), 3);
+        assert_eq!(reader.seeks, 1);
+        assert!(
+            reader.scaled - after_head <= 2,
+            "scaled {} frames to show one",
+            reader.scaled - after_head
+        );
+    }
+
+    #[test]
+    fn sparse_requests_skip_frames_between_them() {
+        ffmpeg::init().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("sparse.gif");
+        write_gif(&path, 96, 48, 10);
+
+        let mut reader = Reader::open(path, 64, 64 * 32 * 4 * 2).unwrap();
+        let after_head = reader.scaled;
+        for request in 0..20 {
+            let seconds = request as f64 * 0.2;
+            let served = reader.frame_at(seconds).unwrap();
+            assert_eq!(colour_index(&served), request / 5, "at {seconds}s");
+            while reader.wants_prefetch() {
+                reader.prefetch();
+            }
+        }
+        assert_eq!(reader.seeks, 0);
+        let scaled = reader.scaled - after_head;
+        assert!(
+            scaled <= 24,
+            "scaled {scaled} frames for 20 requests over 40 frames"
+        );
+    }
+
+    #[test]
+    fn threaded_scaler_matches_a_single_threaded_one() {
+        ffmpeg::init().unwrap();
+        let (width, height) = (1280, 720);
+        let mut source = frame::Video::new(format::Pixel::NV12, width, height);
+        for plane in 0..2 {
+            let stride = source.stride(plane);
+            let rows = if plane == 0 { height } else { height / 2 } as usize;
+            let data = source.data_mut(plane);
+            for row in 0..rows {
+                for column in 0..width as usize {
+                    data[row * stride + column] = ((row * 7 + column * 3 + plane * 50) % 256) as u8;
+                }
+            }
+        }
+        let mut threaded =
+            Scaler::new((format::Pixel::NV12, width, height), (640, 360), true).unwrap();
+        assert!(threaded.run(&source));
+
+        let mut reference = software::scaling::Context::get(
+            format::Pixel::NV12,
+            width,
+            height,
+            format::Pixel::RGBA,
+            640,
+            360,
+            software::scaling::Flags::AREA,
+        )
+        .unwrap();
+        unsafe { crate::decoder::use_bt709_source_raw(reference.as_mut_ptr()) };
+        let mut expected = frame::Video::new(format::Pixel::RGBA, 640, 360);
+        reference.run(&source, &mut expected).unwrap();
+
+        for row in 0..360 {
+            let actual = &threaded.output.data(0)[row * threaded.output.stride(0)..][..640 * 4];
+            let wanted = &expected.data(0)[row * expected.stride(0)..][..640 * 4];
+            assert_eq!(actual, wanted, "row {row}");
+        }
     }
 
     #[test]
