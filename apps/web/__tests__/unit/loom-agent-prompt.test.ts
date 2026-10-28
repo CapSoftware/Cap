@@ -25,7 +25,11 @@ describe("buildLoomAgentMigrationPrompt", () => {
 			'cap caps import loom "<loom url>" --organization org1234567890ab --owner-email "<creator email>" --space "<folder>" --yes --format json',
 		);
 		expect(prompt).toContain("RATE_LIMITED or TEMPORARY_UNAVAILABLE");
-		expect(prompt).toContain("CONFLICT means the video is already in Cap");
+		expect(prompt).toContain(
+			"CONFLICT means Cap already has an import of that Loom video, but the earlier import may have failed.",
+		);
+		expect(prompt).toContain("cap caps status <cap id> --format json");
+		expect(prompt).not.toContain("Count it as done.");
 		expect(prompt).toContain("more than 3,000 videos");
 		expect(prompt).not.toContain("CAP_SERVER_URL");
 		expect(prompt).not.toContain("—");

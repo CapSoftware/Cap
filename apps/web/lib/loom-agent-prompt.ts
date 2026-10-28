@@ -52,11 +52,12 @@ Do the work yourself. Only stop when I need to sign in, export something from Lo
   cap caps import loom "<loom url>" --organization ${organizationId} --owner-email "<creator email>" --space "<folder>" --yes --format json
 - Run one video at a time with about 2 seconds between commands. Loom limits how quickly videos can be fetched.
 - If the error code is RATE_LIMITED or TEMPORARY_UNAVAILABLE, wait retryAfterMs (60 seconds when it is missing) and retry the same video. Double the wait each time it happens again in a row, up to 10 minutes.
-- CONFLICT means the video is already in Cap. Count it as done.
+- CONFLICT means Cap already has an import of that Loom video, but the earlier import may have failed. Record it as already in Cap, not as imported, and check it in step 5.
 - Any other error is permanent for that video. Record the message and move on.
 - Keep a progress file with one line per Loom URL and its result, and skip finished URLs when resuming, so the run can be stopped and restarted safely.
 
 5. Report back
 - Videos keep processing in Cap after each command returns.
-- When every video has been tried, tell me how many were imported, already in Cap, failed and skipped, and list each failed URL with its error.`;
+- For every video recorded as already in Cap, find it with \`cap caps list --organization ${organizationId} --search "<video name>" --format json\` and check it with \`cap caps status <cap id> --format json\`. Count it as done only if it finished processing. Otherwise list it as failed so I can delete it in Cap and run it again.
+- When every video has been tried and checked, tell me how many were imported, already in Cap, failed and skipped, and list each failed URL with its error.`;
 }
