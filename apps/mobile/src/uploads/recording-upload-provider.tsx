@@ -209,11 +209,12 @@ export function RecordingUploadProvider({ children }: { children: ReactNode }) {
 	const processJobRef = useRef<(id: string) => Promise<void>>(async () => {});
 	const hydrationResolve = useRef<(() => void) | null>(null);
 	const hydrationStarted = useRef(false);
-	const hydration = useRef(
-		new Promise<void>((resolve) => {
+	const hydration = useRef<Promise<void> | null>(null);
+	if (hydration.current === null) {
+		hydration.current = new Promise<void>((resolve) => {
 			hydrationResolve.current = resolve;
-		}),
-	);
+		});
+	}
 
 	const pendingPersistQueue = useRef<RecordingUploadQueue | null>(null);
 	const persistTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
