@@ -363,6 +363,28 @@ export function liveTranscriptToEditTranscript(
 const normalizeWordText = (text: string) =>
 	text.toLowerCase().replace(/[^\p{L}\p{N}']/gu, "");
 
+/** How many words agree around previous[a] and next[b], both directions. */
+function alignedRun(
+	previous: EditTranscriptWord[],
+	a: number,
+	next: EditTranscriptWord[],
+	b: number,
+) {
+	const same = (offset: number) => {
+		const left = previous[a + offset];
+		const right = next[b + offset];
+		return (
+			left !== undefined &&
+			right !== undefined &&
+			normalizeWordText(left.text) === normalizeWordText(right.text)
+		);
+	};
+	let run = 0;
+	for (let offset = -1; offset >= -8 && same(offset); offset--) run++;
+	for (let offset = 1; offset <= 8 && same(offset); offset++) run++;
+	return run;
+}
+
 /**
  * Join the previous words to a chunk sent with context. Both heard the audio
  * around `targetMs` but may time the same word slightly differently, so a
@@ -387,11 +409,10 @@ function joinAtHandover(
 	for (const { word, index } of anchors) {
 		const text = normalizeWordText(word.text);
 		if (!text) continue;
-		const before = normalizeWordText(next[index - 1]?.text ?? "");
-		// A repeated word ("no, no") has several nearby copies: prefer the one
-		// whose preceding word also matches, then the closest start.
+		// A repeated word ("no, no, no") has several nearby copies: take the one
+		// where the most surrounding words line up, then the closest start.
 		let match: number | undefined;
-		let best = { prefix: 2, distance: Number.POSITIVE_INFINITY };
+		let best = { run: 0, distance: Number.POSITIVE_INFINITY };
 		for (const [candidate, other] of previous.entries()) {
 			const distance = Math.abs(other.startMs - word.startMs);
 			if (
@@ -400,15 +421,9 @@ function joinAtHandover(
 			) {
 				continue;
 			}
-			const prefix =
-				normalizeWordText(previous[candidate - 1]?.text ?? "") === before
-					? 0
-					: 1;
-			if (
-				prefix < best.prefix ||
-				(prefix === best.prefix && distance < best.distance)
-			) {
-				best = { prefix, distance };
+			const run = alignedRun(previous, candidate, next, index);
+			if (run > best.run || (run === best.run && distance < best.distance)) {
+				best = { run, distance };
 				match = candidate;
 			}
 		}

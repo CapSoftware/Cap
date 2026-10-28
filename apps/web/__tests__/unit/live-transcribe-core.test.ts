@@ -563,6 +563,35 @@ describe("live chunks with context", () => {
 		}
 	});
 
+	it("keeps every copy of a word repeated several times across the handover", () => {
+		const said = [
+			{ text: "say", start: 7300, end: 7500 },
+			{ text: "no,", start: 7600, end: 7750 },
+			{ text: "no,", start: 7800, end: 7950 },
+			{ text: "no,", start: 8000, end: 8150 },
+			{ text: "no", start: 8200, end: 8350 },
+			{ text: "way", start: 8500, end: 8800 },
+		];
+		for (const shift of [0, 90, -90, 140, -140]) {
+			const first = firstChunk(said);
+			const merged = applyChunkToLiveTranscript(
+				first,
+				contextChunk(10_000, [
+					...said.map((word) => ({
+						...word,
+						start: word.start + shift,
+						end: word.end + shift,
+					})),
+					{ text: "next", start: 11_000, end: 11_400 },
+				]),
+			);
+			expect(merged.words.map((word) => word.text)).toEqual([
+				...said.map((word) => word.text),
+				"next",
+			]);
+		}
+	});
+
 	it("cuts at the handover when the chunks share no word near it", () => {
 		const first = firstChunk([
 			{ text: "alpha", start: 6800, end: 7700 },
