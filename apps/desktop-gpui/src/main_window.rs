@@ -210,8 +210,6 @@ fn glass_tint(theme: Theme, light: f32, dark: f32) -> Hsla {
     }
 }
 
-/// A grouped list, the way macOS lays out a choice: one panel, rows split by
-/// hairlines that start `inset` in, where the text does.
 fn grouped_list(theme: Theme, rows: Vec<gpui::AnyElement>, inset: f32) -> gpui::Div {
     let count = rows.len();
     let mut group = div()
@@ -279,8 +277,6 @@ const LIBRARY_TILE_RADIUS: f32 = 12.;
 const LIBRARY_THUMB_RADIUS: f32 = 8.;
 const LIBRARY_THUMB_HEIGHT: f32 = 84.;
 
-/// A recording or screenshot tile, in the capture tiles' glass: the same
-/// fill and hairline, with its preview inset in it like a framed picture.
 fn library_tile(tile: gpui::Stateful<gpui::Div>, theme: Theme) -> gpui::Stateful<gpui::Div> {
     tile.flex()
         .flex_col()
@@ -666,7 +662,6 @@ enum DeviceFormat {
 }
 
 impl DeviceFormat {
-    /// The label split for a list row: what it is, then its rate.
     fn parts(self) -> (String, Option<String>) {
         match self {
             Self::Camera(settings) => {
@@ -1368,9 +1363,10 @@ impl MainWindow {
                     }
                 }
                 // `CAP_GPUI_AUTO_PANEL=display|window|camera|microphone|
-                // recordings|screenshots`: open that panel the way a click does. Same reason as
-                // `CAP_GPUI_AUTO_CAMERA` above -- the chrome screenshots need
-                // the card grid on screen and synthetic clicks are dropped.
+                // recordings|screenshots`: open that panel the way a click
+                // does. Same reason as `CAP_GPUI_AUTO_CAMERA` above -- the
+                // chrome screenshots need the panel on screen and synthetic
+                // clicks are dropped.
                 match std::env::var("CAP_GPUI_AUTO_PANEL").as_deref() {
                     Ok("display") => {
                         this.open_panel(Panel::Target(TargetType::Display), window, cx)
@@ -5783,11 +5779,16 @@ impl MainWindow {
                                     .truncate()
                                     .text_size(px(11.))
                                     .text_color(theme.gray_10)
-                                    .child(match applied {
-                                        Some(format) => {
+                                    .child(match (applied, &self.device_formats) {
+                                        (Some(format), _) => {
                                             tr::main::device::format::current(format.label())
                                         }
-                                        None => tr::main::device::format::preferred().to_string(),
+                                        (None, None) => {
+                                            tr::main::device::format::loading().to_string()
+                                        }
+                                        (None, Some(_)) => {
+                                            tr::main::device::format::preferred().to_string()
+                                        }
                                     }),
                             ),
                     ),
@@ -5812,8 +5813,6 @@ impl MainWindow {
             })
     }
 
-    /// One format in the grouped list: its size or rate, the rest muted on
-    /// the right, and a check on the one chosen.
     fn render_device_format_row(
         &self,
         index: usize,

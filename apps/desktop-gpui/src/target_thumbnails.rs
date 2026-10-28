@@ -388,7 +388,6 @@ pub fn render_thumbnail_slot(
     };
 
     let black = |alpha: f32| hsla(0., 0., 0., alpha);
-    // Inset in its glass card like the library's previews.
     const RADIUS: f32 = 8.;
     let glass = |light: f32, dark: f32| {
         if theme.is_dark() {
