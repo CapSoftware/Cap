@@ -270,7 +270,7 @@ account = "Compte"
 cancel_sign_in = "Annuler la connexion"
 check_for_updates = "Rechercher des mises à jour"
 checking_for_updates = "Recherche de mises à jour…"
-click_to_sign_in = "Cliquez pour vous connecter"
+click_to_sign_in = "Connectez-vous"
 downloading = "Téléchargement de la v{version}…"
 downloading_progress = "Téléchargement de la v{version}… {percent} %"
 installing = "Installation de la v{version}…"
@@ -1014,8 +1014,8 @@ allow = "Autoriser"
 allow_in_settings = "Activer dans Réglages"
 asking = "Demande…"
 not_connected = "Déconnecté"
-off = "Désactivé"
-on = "Activé"
+off = "Non"
+on = "Oui"
 
 [main.error]
 camera_only_needs_camera = "L'enregistrement caméra seule nécessite une caméra sélectionnée."
@@ -1730,8 +1730,6 @@ retrying = "L'envoi va être relancé"
 sign_in = "Connectez-vous pour relancer l'envoi"
 uploaded = "Envoyé"
 uploading = "Envoi en cours"
-
-# Editor sidebar, segment panels, colour correction, audio library and crop dialog.
 
 [editor.audio.library]
 add_hint = "Ajoutez de l'audio, de la musique ou d'autres sons à votre vidéo"

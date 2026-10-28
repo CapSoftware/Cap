@@ -270,7 +270,7 @@ account = "Cuenta"
 cancel_sign_in = "Cancelar inicio de sesión"
 check_for_updates = "Buscar actualizaciones"
 checking_for_updates = "Buscando actualizaciones…"
-click_to_sign_in = "Haz clic para iniciar sesión"
+click_to_sign_in = "Inicia sesión"
 downloading = "Descargando v{version}…"
 downloading_progress = "Descargando v{version}… {percent} %"
 installing = "Instalando v{version}…"
@@ -1014,8 +1014,8 @@ allow = "Permitir"
 allow_in_settings = "Permitir en Ajustes"
 asking = "Solicitando…"
 not_connected = "Desconectado"
-off = "Desactivado"
-on = "Activado"
+off = "No"
+on = "Sí"
 
 [main.error]
 camera_only_needs_camera = "Para grabar solo con cámara hay que seleccionar una cámara."
@@ -1730,8 +1730,6 @@ retrying = "La subida se reintentará"
 sign_in = "Inicia sesión para reintentar la subida"
 uploaded = "Subido"
 uploading = "Subiendo"
-
-# Editor sidebar, segment panels, colour correction, audio library and crop dialog.
 
 [editor.audio.library]
 add_hint = "Añade audio, música u otros sonidos a tu vídeo"
