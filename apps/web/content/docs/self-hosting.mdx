@@ -70,6 +70,8 @@ MYSQL_PASSWORD=your-secure-password
 MINIO_ROOT_PASSWORD=your-minio-password
 ```
 
+Browsers upload recordings straight to the storage bucket. If you point Cap at your own S3-compatible bucket instead of the bundled MinIO, configure the bucket's CORS for your Cap URL and expose the `ETag` response header (see the CORS sections for [AWS S3](/docs/s3-config/aws-s3#configure-cors) and [Cloudflare R2](/docs/s3-config/cloudflare-r2#prepare-r2)). Without `ETag`, recordings from the web recorder and the Chrome extension fail to upload.
+
 ### Option 2: Railway (One-Click)
 
 [![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new/template/PwpGcf)
@@ -95,6 +97,36 @@ For Coolify users, use `docker-compose.coolify.yml` which includes environment v
 2. Set 'Cap Server URL' to your deployment URL (e.g., `https://cap.yourdomain.com`)
 3. Uploads will now go to your self-hosted instance
 
+## Connecting the Chrome Extension
+
+The Chrome Web Store extension signs in through your server. Outside of localhost development, Cap Web only hands an auth key to the extension ID set in `CAP_CHROME_EXTENSION_ID`, so set it to the Web Store extension's ID:
+
+```bash
+CAP_CHROME_EXTENSION_ID=fefjaffcodfiogbbngmjkcjpbpclbdcp
+```
+
+Without it, extension sign-in fails with a bad request. Then open the extension's options and set the Cap URL to your deployment URL.
+
+> **Note:** The compose files only pass a service the variables listed under its `environment`. If a variable from this page isn't listed there for the right service (`cap-web` or `media-server`), add it, not just to `.env`.
+
+## Restricting Who Can Sign In
+
+```bash
+# Only these domains can create an account
+CAP_ALLOWED_SIGNUP_DOMAINS=yourcompany.com,yourcompany.org
+
+# Domains or full addresses that can't sign in
+CAP_BLOCKED_SIGNUP_DOMAINS=former-partner.com,someone@yourcompany.com
+
+# New videos are private unless shared
+CAP_VIDEOS_DEFAULT_PUBLIC=false
+```
+
+- `CAP_ALLOWED_SIGNUP_DOMAINS` applies to **new** accounts only. Users who already have an account can still sign in from any domain.
+- `CAP_BLOCKED_SIGNUP_DOMAINS` applies to existing users too: a blocked address can't sign in, and its existing web sessions and Cap app sign-ins (desktop, Chrome extension) stop working.
+- Neither setting adds users to an organization. New users who weren't invited start in their own organization.
+- `CAP_VIDEOS_DEFAULT_PUBLIC` defaults to `true`. An organization whose default video visibility is set to private keeps new videos private either way.
+
 ## Email Configuration
 
 Email is optional. Without it, login codes are printed to the cap-web logs, the verify screen shows "Email (Resend) is not configured", and invite or notification emails are skipped (invite links still work). Cap only sends email when **both** variables below are set; if Resend rejects a message, the error is logged and the sign-in fails instead of claiming a code was sent. To send emails:
@@ -106,6 +138,19 @@ Email is optional. Without it, login codes are printed to the cap-web logs, the 
    RESEND_FROM_DOMAIN=yourdomain.com
    ```
 3. Verify the domain in Resend. Login emails are sent from `auth@RESEND_FROM_DOMAIN`.
+
+## Media Server Capacity
+
+The media server runs a limited number of video jobs at once. Unless you set a limit, it uses the smallest of 4 and half the CPUs, and, if the container has a memory limit, the memory limit × 0.85 ÷ 768 MB (at least 1). A media server with 2 CPUs therefore processes one video at a time.
+
+When it is full, it answers `503 Server is busy` and Cap Web keeps the video waiting and retries until a slot frees up. Videos queue behind each other instead of failing. To process more at once, set the limits on the **media server** container:
+
+```bash
+MEDIA_SERVER_MAX_CONCURRENT_VIDEO_PROCESSES=2   # Video jobs at once
+MEDIA_SERVER_MAX_CONCURRENT_DIRECT_CONVERSIONS=1 # Direct conversions at once (default 1)
+```
+
+Raise them only if the container has the memory for it: each job is budgeted 768 MB.
 
 ## Optional Features
 
@@ -253,12 +298,20 @@ docker compose logs cap-web
 ```
 
 **Database migration issues:**
-```bash
-docker compose down -v  # Warning: deletes data
-docker compose up -d
-```
 
-**Reset everything:**
+Don't delete volumes to fix a migration error: `docker compose down -v` deletes your MySQL and MinIO volumes, so every account and video is gone.
+
+1. Read the error: `docker compose logs cap-web`.
+2. Back up before changing anything:
+   ```bash
+   docker compose exec mysql sh -c 'mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" --single-transaction cap' > cap-backup.sql
+   ```
+   Also keep a copy of your MinIO data (or bucket) and of `DATABASE_ENCRYPTION_KEY`: encrypted fields in the backup can't be read without the same key.
+3. [Open a GitHub issue](https://github.com/CapSoftware/Cap/issues/new) with the log.
+
+**Reset everything (deletes all data):**
+
+Only for a test install you don't need anymore. This deletes every account, video and setting:
 ```bash
 docker compose down -v
 docker compose up -d
