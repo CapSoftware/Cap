@@ -31,36 +31,47 @@ services:
       PORT: 3456
       MEDIA_SERVER_WEBHOOK_SECRET: ${MEDIA_SERVER_WEBHOOK_SECRET:-local-media-server-secret}
 
-  # Local S3 Strorage
-  minio:
-    container_name: minio-storage
-    image: "pgsty/minio:RELEASE.2026-08-04T00-00-00Z@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372"
+  # Local S3 storage
+  rustfs:
+    container_name: rustfs-storage
+    image: "rustfs/rustfs:1.0.3@sha256:9ca9559533b537d10482fe923288b676ad08f92a7069d9a17327fbae3cab688b"
     restart: unless-stopped
     ports:
       - "9000:9000"
       - "9001:9001"
     environment:
-      MINIO_ROOT_USER: capS3root
-      MINIO_ROOT_PASSWORD: capS3root
+      RUSTFS_ACCESS_KEY: capS3root
+      RUSTFS_SECRET_KEY: capS3root
+      RUSTFS_CONSOLE_ENABLE: "true"
+      # Presigned uploads also originate from desktop and embedded SDK clients.
+      RUSTFS_CORS_ALLOWED_ORIGINS: ${RUSTFS_CORS_ALLOWED_ORIGINS:-*}
     volumes:
-      - ~/minio/data:/data
-    command: server /data --console-address ":9001"
+      - rustfs-data:/data
+    command: /data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:9000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
 
   createbuckets:
-    container_name: minio-bucket-creation
+    container_name: rustfs-bucket-creation
     image: pgsty/mc:RELEASE.2026-09-16T00-00-00Z@sha256:cfc83108c3abb371f8fb84d99c1fdc88f8c237e022409b0081fb7c0a3be634dd
     depends_on:
-      - minio
-    entrypoint: >
-      /bin/sh -c "
-      sleep 10;
-      /usr/bin/mc alias set myminio http://minio:9000 capS3root capS3root;
-      /usr/bin/mc mb myminio/capso;
-      echo '{\"Version\": \"2012-10-17\",\"Statement\": [{\"Effect\": \"Allow\",\"Principal\": {\"AWS\": [\"*\"]},\"Action\": [\"s3:GetObject\"],\"Resource\": [\"arn:aws:s3:::capso/*\"]}]}' > /tmp/policy.json;
-      /usr/bin/mc anonymous set-json /tmp/policy.json myminio/capso;
-      exit 0;
-      "
+      rustfs:
+        condition: service_healthy
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        mc alias set caprustfs http://rustfs:9000 "$${RUSTFS_ACCESS_KEY}" "$${RUSTFS_SECRET_KEY}"
+        mc mb caprustfs/capso --ignore-existing
+        echo '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":["*"]},"Action":["s3:GetObject"],"Resource":["arn:aws:s3:::capso/*"]}]}' > /tmp/policy.json
+        mc anonymous set-json /tmp/policy.json caprustfs/capso
+    environment:
+      RUSTFS_ACCESS_KEY: capS3root
+      RUSTFS_SECRET_KEY: capS3root
 volumes:
   ps-mysql:
-  minio-data:
-  minio-certs:
+  rustfs-data:

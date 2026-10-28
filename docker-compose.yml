@@ -8,8 +8,8 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
-      minio:
-        condition: service_healthy
+      rustfs-setup:
+        condition: service_completed_successfully
     environment:
       DATABASE_URL: mysql://cap:${MYSQL_PASSWORD:-cap-local-pwd-123}@mysql:3306/cap
       WEB_URL: ${CAP_URL:-http://localhost:3000}
@@ -17,13 +17,15 @@ services:
       DATABASE_ENCRYPTION_KEY: ${DATABASE_ENCRYPTION_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
       NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:-abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789}
       MEDIA_SERVER_WEBHOOK_SECRET: ${MEDIA_SERVER_WEBHOOK_SECRET:-fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210}
-      CAP_AWS_ACCESS_KEY: ${MINIO_ROOT_USER:-cap-admin}
-      CAP_AWS_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-cap-minio-pwd-456}
+      CAP_AWS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-cap-admin}
+      CAP_AWS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-cap-rustfs-pwd-456}
       CAP_AWS_BUCKET: cap
       CAP_AWS_REGION: us-east-1
       S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_URL:-http://localhost:9000}
-      S3_INTERNAL_ENDPOINT: http://minio:9000
+      S3_INTERNAL_ENDPOINT: http://rustfs:9000
       S3_PATH_STYLE: "true"
+      # Presigning has no part body; avoid checksums for an empty payload.
+      AWS_REQUEST_CHECKSUM_CALCULATION: WHEN_REQUIRED
       RESEND_API_KEY: ${RESEND_API_KEY:-}
       RESEND_FROM_DOMAIN: ${RESEND_FROM_DOMAIN:-}
       ASSEMBLY_API_KEY: ${ASSEMBLY_API_KEY:-}
@@ -88,21 +90,24 @@ services:
     networks:
       - cap-network
 
-  minio:
-    container_name: cap-minio
-    image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372
+  rustfs:
+    container_name: cap-rustfs
+    image: rustfs/rustfs:1.0.3@sha256:9ca9559533b537d10482fe923288b676ad08f92a7069d9a17327fbae3cab688b
     restart: unless-stopped
-    command: server /data --console-address ":9001"
+    command: /data
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-cap-admin}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-cap-minio-pwd-456}
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-cap-admin}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-cap-rustfs-pwd-456}
+      RUSTFS_CONSOLE_ENABLE: "true"
+      # Presigned uploads also originate from desktop and embedded SDK clients.
+      RUSTFS_CORS_ALLOWED_ORIGINS: ${RUSTFS_CORS_ALLOWED_ORIGINS:-*}
     ports:
-      - "${MINIO_PORT:-9000}:9000"
-      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+      - "${RUSTFS_PORT:-9000}:9000"
+      - "${RUSTFS_CONSOLE_PORT:-9001}:9001"
     volumes:
-      - cap-minio-data:/data
+      - cap-rustfs-data:/data
     healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:9000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -110,27 +115,27 @@ services:
     networks:
       - cap-network
 
-  minio-setup:
-    container_name: cap-minio-setup
+  rustfs-setup:
+    container_name: cap-rustfs-setup
     image: pgsty/mc:RELEASE.2026-09-16T00-00-00Z@sha256:cfc83108c3abb371f8fb84d99c1fdc88f8c237e022409b0081fb7c0a3be634dd
     depends_on:
-      minio:
+      rustfs:
         condition: service_healthy
-    entrypoint: >
-      /bin/sh -c "
-      mc alias set capminio http://minio:9000 $${MINIO_ROOT_USER:-cap-admin} $${MINIO_ROOT_PASSWORD:-cap-minio-pwd-456};
-      mc mb capminio/cap --ignore-existing;
-      exit 0;
-      "
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        mc alias set caprustfs http://rustfs:9000 "$${RUSTFS_ACCESS_KEY}" "$${RUSTFS_SECRET_KEY}"
+        mc mb caprustfs/cap --ignore-existing
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-cap-admin}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-cap-minio-pwd-456}
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-cap-admin}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-cap-rustfs-pwd-456}
     networks:
       - cap-network
 
 volumes:
   cap-mysql-data:
-  cap-minio-data:
+  cap-rustfs-data:
 
 networks:
   cap-network:

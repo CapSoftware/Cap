@@ -123,7 +123,7 @@ Requirements:
 - Node.js 24 or newer
 - Bun 1.4.4
 - Rust via [rustup](https://rustup.rs). The workspace pins 1.88; the desktop app pins its own toolchain, which rustup installs on first build.
-- Docker for MySQL, MinIO, and local services
+- Docker for MySQL, RustFS, and local services
 
 Install and set up the repo:
 
