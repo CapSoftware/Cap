@@ -825,6 +825,19 @@ fn more_area_ratios() -> Vec<(u32, u32)> {
         .collect()
 }
 
+/// Whether the picker captures the desktop under its glass in `mode`.
+/// Windows composites the display and window pickers' target fill opaque,
+/// so a capture under their panes showed through it as hard-edged blocks;
+/// there the panes sit on the fallback fill, as they do where no capture
+/// is possible.
+fn backdrop_suits(mode: Option<TargetType>) -> bool {
+    match mode {
+        None => false,
+        Some(TargetType::Display | TargetType::Window) => !cfg!(windows),
+        Some(TargetType::Area | TargetType::CameraOnly) => true,
+    }
+}
+
 const AREA_RESHAPE: Duration = Duration::from_millis(240);
 
 /// What the picker's glass sits on when there is no capture of the desktop
@@ -1551,7 +1564,7 @@ impl OverlayWindow {
     fn sync_backdrop(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let showing = crate::overlay_backdrop::enabled()
             && !self.recording_area
-            && self.select.read(cx).mode.is_some()
+            && backdrop_suits(self.select.read(cx).mode)
             && self.is_active_display(window, cx);
         if !showing {
             if self.backdrop.has_image() {
@@ -4687,6 +4700,15 @@ fn request_media_access(permission: crate::permissions::OSPermission, cx: &mut A
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windows_display_and_window_pickers_take_no_backdrop() {
+        assert!(!backdrop_suits(None));
+        assert!(backdrop_suits(Some(TargetType::Area)));
+        assert!(backdrop_suits(Some(TargetType::CameraOnly)));
+        assert_eq!(backdrop_suits(Some(TargetType::Display)), !cfg!(windows));
+        assert_eq!(backdrop_suits(Some(TargetType::Window)), !cfg!(windows));
+    }
 
     fn ratio_of(area: AreaRect) -> f32 {
         area.width / area.height
