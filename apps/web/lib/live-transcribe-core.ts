@@ -49,7 +49,6 @@ export const LIVE_TRANSCRIBE = {
 	HANDOVER_MATCH_MS: 300,
 } as const;
 
-/** How far before a chunk's start its words replace the previous chunk's. */
 export function chunkHandoverMs(chunkStartMs: number, contextMs: number) {
 	if (contextMs <= 0) return 0;
 	return Math.min(LIVE_TRANSCRIBE.CONTEXT_HANDOVER_MS, contextMs, chunkStartMs);
@@ -363,7 +362,6 @@ export function liveTranscriptToEditTranscript(
 const normalizeWordText = (text: string) =>
 	text.toLowerCase().replace(/[^\p{L}\p{N}']/gu, "");
 
-/** How many words agree around previous[a] and next[b], both directions. */
 function alignedRun(
 	previous: EditTranscriptWord[],
 	a: number,
