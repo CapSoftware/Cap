@@ -1731,8 +1731,6 @@ sign_in = "サインインしてアップロードを再試行"
 uploaded = "アップロード済み"
 uploading = "アップロード中"
 
-# Editor sidebar, segment panels, colour correction, audio library and crop dialog.
-
 [editor.audio.library]
 add_hint = "動画に音声や音楽などのサウンドを追加"
 add_title = "音声を追加"

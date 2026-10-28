@@ -1731,8 +1731,6 @@ sign_in = "अपलोड दोबारा करने के लिए स�
 uploaded = "अपलोड हो गया"
 uploading = "अपलोड हो रहा है"
 
-# Editor sidebar, segment panels, colour correction, audio library and crop dialog.
-
 [editor.audio.library]
 add_hint = "अपने वीडियो में ऑडियो, संगीत या दूसरी आवाज़ें जोड़ें"
 add_title = "ऑडियो जोड़ें"

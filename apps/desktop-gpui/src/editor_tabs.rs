@@ -48,7 +48,6 @@ use crate::{
 // Catalogues
 // ---------------------------------------------------------------------------
 
-/// A catalogue label, read in the current language each time it is drawn.
 pub type Label = fn() -> &'static str;
 
 /// `CAMERA_SHAPES` (`ConfigSidebar.tsx:381-391`).

@@ -1733,8 +1733,6 @@ sign_in = "Sign in to retry upload"
 uploaded = "Uploaded"
 uploading = "Uploading"
 
-# Editor sidebar, segment panels, colour correction, audio library and crop dialog.
-
 [editor.audio.library]
 add_hint = "Add audio, music or other sounds to your video"
 add_title = "Add audio"

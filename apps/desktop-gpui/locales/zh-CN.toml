@@ -1731,8 +1731,6 @@ sign_in = "登录以重试上传"
 uploaded = "已上传"
 uploading = "正在上传"
 
-# Editor sidebar, segment panels, colour correction, audio library and crop dialog.
-
 [editor.audio.library]
 add_hint = "为视频添加音频、音乐或其他声音"
 add_title = "添加音频"

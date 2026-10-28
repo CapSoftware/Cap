@@ -1731,8 +1731,6 @@ sign_in = "Zum erneuten Hochladen anmelden"
 uploaded = "Hochgeladen"
 uploading = "Wird hochgeladen"
 
-# Editor sidebar, segment panels, colour correction, audio library and crop dialog.
-
 [editor.audio.library]
 add_hint = "Fügen Sie Ihrem Video Audio, Musik oder andere Klänge hinzu"
 add_title = "Audio hinzufügen"

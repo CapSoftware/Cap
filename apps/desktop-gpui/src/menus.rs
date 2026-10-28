@@ -773,7 +773,9 @@ fn apply_quit_action(action: QuitAction, cx: &mut App) {
             cx.global_mut::<QuitCoordinator>().observer = None;
             let message = RecordingSession::global(cx).update(cx, |session, cx| {
                 let message = match session.error.as_deref() {
-                    Some(error) => tr::dialog::quit::canceled(error),
+                    Some(error) => {
+                        tr::dialog::quit::canceled(crate::i18n::messages::localize(error))
+                    }
                     None if action == QuitAction::TimedOut => tr::dialog::quit::pending().into(),
                     None => tr::dialog::quit::unconfirmed().into(),
                 };
