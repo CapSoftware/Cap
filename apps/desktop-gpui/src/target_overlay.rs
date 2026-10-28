@@ -2257,7 +2257,7 @@ impl OverlayWindow {
         let card = self.glass_surface().id("window-focus");
         let hint = Hint::new(title)
             .body(explanation)
-            .side(crate::ui::HintSide::Below);
+            .side(crate::ui::HintSide::Left);
         let accent = Hsla::from(theme.blue_9);
         let header =
             div()
