@@ -1,4 +1,4 @@
-import { GlassMark, useGlassLogoIds } from "./GlassLogo";
+import { GlassMark, useGlassLogoIds } from "./glass-logo";
 
 export const LogoBadge = ({ className }: { className: string }) => {
 	const ids = useGlassLogoIds();

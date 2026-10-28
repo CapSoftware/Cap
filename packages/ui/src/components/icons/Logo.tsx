@@ -1,4 +1,4 @@
-import { GlassMark, GlassWordmark, useGlassLogoIds } from "./GlassLogo";
+import { GlassMark, GlassWordmark, useGlassLogoIds } from "./glass-logo";
 
 export const Logo = ({
 	className,
