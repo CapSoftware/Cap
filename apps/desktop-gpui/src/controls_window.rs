@@ -598,7 +598,7 @@ fn recording_issue_text(error: String) -> impl IntoElement + Styled {
             {
                 tr::controls::disk_full_resume().to_owned()
             } else {
-                error
+                crate::i18n::messages::localize(&error)
             },
         )
 }

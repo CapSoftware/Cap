@@ -25,6 +25,7 @@ use crate::{
     controls_window::ControlsWindow,
     editor_timeline,
     editor_window::{self, EditorWindow},
+    i18n::tr,
     main_window::{MainWindow, Mode, TargetType},
     mode_select_window::{self, ModeSelectWindow},
     onboarding_window::{self, OnboardingWindow},
@@ -1960,7 +1961,7 @@ fn reopens_overlays(armed: Option<TargetType>, mode: TargetType, recording_mode:
 pub(crate) fn reject_unavailable_window(cx: &mut App) {
     dismiss_target_overlays(cx);
     RecordingSession::global(cx).update(cx, |session, cx| {
-        session.error = Some("The selected window is no longer available. Select it again.".into());
+        session.error = Some(tr::dialog::capture::window_unavailable().into());
         cx.notify();
     });
 }
@@ -2527,9 +2528,7 @@ fn start_recording_from_overlay_now(target: ScreenCaptureTarget, cx: &mut App) {
         let Some(handle) = handle else {
             dismiss_target_overlays(cx);
             RecordingSession::global(cx).update(cx, |session, cx| {
-                session.error = Some(
-                    "The selected area changed or is no longer available. Select it again.".into(),
-                );
+                session.error = Some(tr::dialog::capture::area_unavailable().into());
                 cx.notify();
             });
             return;
@@ -3211,7 +3210,7 @@ fn linux_camera_presentation(
             && y >= 0
             && x + i64::from(rect.width) <= i64::from(capture.width)
             && y + i64::from(rect.height) <= i64::from(capture.height),
-        "Move the whole camera preview inside the capture area before starting Instant recording"
+        tr::dialog::capture::camera_outside_area()
     );
     let radius = snapshot.corner_radius_pixels.round();
     anyhow::ensure!(
@@ -3265,11 +3264,12 @@ pub(crate) fn refresh_linux_instant_camera(
     }
     anyhow::ensure!(
         !cap_recording::screenshot::uses_wayland_portal(),
-        "Instant camera overlays require an X11 desktop on Linux"
+        tr::dialog::capture::camera_needs_x11()
     );
-    let camera = cx.global::<AppWindows>().camera.ok_or_else(|| {
-        anyhow::anyhow!("Open the selected camera preview before Instant recording")
-    })?;
+    let camera = cx
+        .global::<AppWindows>()
+        .camera
+        .ok_or_else(|| anyhow::anyhow!(tr::dialog::capture::camera_preview_closed()))?;
     let snapshot = camera.update(cx, |camera, window, _| camera.recording_snapshot(window))??;
     let capture = linux_capture_bounds(&config.target)?;
     let presentation = linux_camera_presentation(snapshot, capture)?;
@@ -3301,11 +3301,11 @@ pub(crate) fn clean_capture_camera_message(cx: &App) -> &'static str {
         .and_then(|lease| lease.config.as_ref())
         .is_some_and(|config| config.mode == RecordingMode::Instant)
     {
-        return "Cap will hide its preview and controls. Any selected camera will appear at its preview position with the selected shape and effects. Keep the whole preview inside the capture area. Opening Cap will stop this Instant recording before showing its controls.";
+        return tr::dialog::capture::camera_notice_instant();
     }
     #[cfg(not(target_os = "linux"))]
     let _ = cx;
-    "Cap will hide its camera preview and recording controls. Any selected camera will keep recording as a separate editable track."
+    tr::dialog::capture::camera_notice()
 }
 
 pub fn clean_capture_owned(cx: &App) -> bool {
@@ -3813,7 +3813,7 @@ fn begin_retained_capture_restore(cx: &mut App) {
                     }
                     tracing::error!(%error, "Recording UI restoration or Stop cleanup is unconfirmed");
                     RecordingSession::global(cx).update(cx, |session, cx| {
-                        session.error = Some(format!("Recording cleanup is incomplete: {error}. A new recording is blocked."));
+                        session.error = Some(tr::dialog::capture::cleanup_incomplete(error));
                         cx.notify();
                     });
                 }
@@ -3904,12 +3904,7 @@ pub fn handle_clean_capture_shortcut(state: global_hotkey::HotKeyState, cx: &mut
         .is_none_or(|lease| lease.requested_inputs != current_inputs)
     {
         restore_clean_capture_ui(cx);
-        report_clean_capture_error(
-            anyhow::anyhow!(
-                "Selected devices changed. Start again to confirm the new recording inputs."
-            ),
-            cx,
-        );
+        report_clean_capture_error(anyhow::anyhow!(tr::dialog::capture::devices_changed()), cx);
         return;
     }
     if let Err(error) = refresh_linux_instant_camera(&mut config, cx) {
@@ -3930,7 +3925,10 @@ pub fn handle_clean_capture_shortcut(state: global_hotkey::HotKeyState, cx: &mut
     };
     let visibility = gpui_tokio::Tokio::spawn(cx, visibility);
     cx.spawn(async move |cx| {
-        let result = visibility.await.map_err(anyhow::Error::from).and_then(|result| result);
+        let result = visibility
+            .await
+            .map_err(anyhow::Error::from)
+            .and_then(|result| result);
         if let Err(error) = result {
             cx.update(|cx| {
                 if clean_capture_generation_matches(generation, cx) {
@@ -3955,7 +3953,7 @@ pub fn handle_clean_capture_shortcut(state: global_hotkey::HotKeyState, cx: &mut
             {
                 restore_clean_capture_ui(cx);
                 report_clean_capture_error(
-                    anyhow::anyhow!("Selected devices changed before recording started. Start again to confirm the inputs."),
+                    anyhow::anyhow!(tr::dialog::capture::devices_changed_before_start()),
                     cx,
                 );
                 return;
@@ -3988,9 +3986,7 @@ pub fn begin_recording(mut config: StartConfig, cx: &mut App) {
         if let Some(lease) = cx.global::<AppWindows>().clean_capture.as_ref() {
             if let Some(error) = lease.restoration_error.clone() {
                 session.update(cx, |session, cx| {
-                    session.error = Some(format!(
-                        "Recording cleanup is incomplete: {error}. A new recording is blocked."
-                    ));
+                    session.error = Some(tr::dialog::capture::cleanup_incomplete(error));
                     cx.notify();
                 });
             }
@@ -5679,11 +5675,7 @@ fn load_editor_project_candidate(
             Err(join_error) => {
                 handle
                     .update(cx, |view, window, cx| {
-                        view.set_error(
-                            format!("Opening this recording failed: {join_error}"),
-                            window,
-                            cx,
-                        )
+                        view.set_error(tr::dialog::open_recording_failed(join_error), window, cx)
                     })
                     .ok();
                 return;
@@ -6465,34 +6457,29 @@ fn editor_deletion_allowed(
         root.canonicalize()
             .is_ok_and(|root| project_path != root && project_path.starts_with(root))
     }) {
-        return Err(
-            "This recording is outside the recordings library. Its files were not changed.".into(),
-        );
+        return Err(tr::dialog::delete_recording::outside_library().into());
     }
     let windows = cx.global::<AppWindows>();
     if windows.deleting_editors.contains(project_path) {
-        return Err("This recording is already being deleted.".into());
+        return Err(tr::dialog::delete_recording::already_deleting().into());
     }
     if !windows
         .editors
         .iter()
         .any(|(path, current)| path == project_path && *current == handle)
     {
-        return Err(
-            "The editor changed while deletion was being confirmed. The recording was not deleted."
-                .into(),
-        );
+        return Err(tr::dialog::delete_recording::editor_changed().into());
     }
     let session = RecordingSession::global(cx);
     if session.read(cx).phase != Phase::Idle
         || session.read(cx).editor_recording_target().is_some()
         || clean_capture_owned(cx)
     {
-        return Err("Finish or cancel the recording before deleting this project.".into());
+        return Err(tr::dialog::delete_recording::recording_active().into());
     }
     let editor = handle
         .read(cx)
-        .map_err(|_| "The editor has already closed. The recording was not deleted.")?;
+        .map_err(|_| tr::dialog::delete_recording::editor_closed())?;
     if let Some(reason) = editor.deletion_blocked_reason() {
         return Err(reason.into());
     }
@@ -6507,16 +6494,16 @@ pub(crate) fn request_editor_deletion(
     let key = editor_key(&project_path);
     cx.spawn(async move |cx| {
         if let Err(error) = cx.update(|cx| editor_deletion_allowed(&key, handle, cx)) {
-            platform::alert_dialog("Recording retained", &error);
+            platform::alert_dialog(tr::dialog::delete_recording::retained_title(), &error);
             return;
         }
-        if !platform::confirm_dialog("Cap", "Are you sure you want to delete this recording?", "Yes", "No", false) {
+        if !platform::confirm_dialog("Cap", tr::main::delete_recording_confirm(), tr::common::yes(), tr::common::no(), false) {
             return;
         }
         let prepared = cx.update(|cx| {
             editor_deletion_allowed(&key, handle, cx)?;
             let ownership = cap_recording::upload_resume::UploadLock::acquire(&key)
-                .map_err(|error| format!("This recording is still in use. Finish or cancel its upload and try again: {error}"))?;
+                .map_err(tr::dialog::delete_recording::in_use)?;
             let windows = cx.global_mut::<AppWindows>();
             windows.deleting_editors.insert(key.clone());
             windows.editors.retain(|(_, current)| *current != handle);
@@ -6538,14 +6525,14 @@ pub(crate) fn request_editor_deletion(
                 }
                 Err(error) => {
                     cx.global_mut::<AppWindows>().deleting_editors.remove(&key);
-                    Err(format!("Could not close the editor: {error}"))
+                    Err(tr::dialog::delete_recording::close_failed(error))
                 }
             }
         });
         let (instance, ownership) = match prepared {
             Ok(prepared) => prepared,
             Err(error) => {
-                platform::alert_dialog("Recording retained", &error);
+                platform::alert_dialog(tr::dialog::delete_recording::retained_title(), &error);
                 return;
             }
         };
@@ -6574,17 +6561,17 @@ pub(crate) fn request_editor_deletion(
         let result = match futures_util::future::select(&mut task, &mut notice).await {
             futures_util::future::Either::Left((result, _)) => result,
             futures_util::future::Either::Right(_) => {
-                platform::alert_dialog("Deletion is still finishing", "Cap is waiting for recording cleanup to finish before completing this deletion.");
+                platform::alert_dialog(tr::dialog::delete_recording::finishing_title(), tr::dialog::delete_recording::finishing_body());
                 task.await
             }
-        }.unwrap_or_else(|error| Err(format!("Recording deletion failed: {error}")));
+        }.unwrap_or_else(|error| Err(tr::dialog::delete_recording::failed(error)));
         cx.update(|cx| {
             cx.global_mut::<AppWindows>().deleting_editors.remove(&key);
             refresh_library_after_delete(cx);
         });
         if let Err(error) = result {
             tracing::error!(path = %key.display(), %error, "recording deletion failed");
-            platform::alert_dialog("Could not delete recording", &error);
+            platform::alert_dialog(tr::dialog::delete_recording::failed_title(), &error);
         }
     }).detach();
 }
