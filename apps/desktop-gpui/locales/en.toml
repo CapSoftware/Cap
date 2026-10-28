@@ -1484,6 +1484,16 @@ reset_title = "Reset selection"
 reset_body = "Clear the area so you can draw a new one."
 fill_title = "Fill display"
 fill_body = "Grow the area to cover the display, keeping its ratio."
+fit_window_hint = "Or click a window to fit the area to it"
+drag_to_move = { text = "Drag to move", context = "Pill in the middle of the selected area while the pointer is over it." }
+locked = { text = "Locked", context = "Badge on a locked area, about 60px wide; clicking it unlocks the area." }
+lock_title = "Lock area"
+lock_body = "Keep this area for next time, and stop a stray drag from changing it."
+lock_needs_area = "Draw an area first, then lock it."
+unlock_title = "Unlock area"
+unlock_body = "Let the area be moved, resized or drawn again."
+locked_title = "Area locked"
+locked_body = "Click to unlock it, so it can be moved, resized or drawn again."
 
 [overlay.camera_only]
 description = "Record using only your camera and microphone"

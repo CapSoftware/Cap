@@ -352,6 +352,31 @@ fn dialog_surfaces_match_the_literals_they_replaced() {
             tr::overlay::area::fill_body(),
             "Grow the area to cover the display, keeping its ratio.",
         ),
+        (
+            tr::overlay::area::fit_window_hint(),
+            "Or click a window to fit the area to it",
+        ),
+        (tr::overlay::area::drag_to_move(), "Drag to move"),
+        (tr::overlay::area::locked(), "Locked"),
+        (tr::overlay::area::lock_title(), "Lock area"),
+        (
+            tr::overlay::area::lock_body(),
+            "Keep this area for next time, and stop a stray drag from changing it.",
+        ),
+        (
+            tr::overlay::area::lock_needs_area(),
+            "Draw an area first, then lock it.",
+        ),
+        (tr::overlay::area::unlock_title(), "Unlock area"),
+        (
+            tr::overlay::area::unlock_body(),
+            "Let the area be moved, resized or drawn again.",
+        ),
+        (tr::overlay::area::locked_title(), "Area locked"),
+        (
+            tr::overlay::area::locked_body(),
+            "Click to unlock it, so it can be moved, resized or drawn again.",
+        ),
         (tr::overlay::window::size_title(), "Change window size"),
         (
             tr::overlay::window::size_body(),
@@ -374,7 +399,10 @@ fn dialog_surfaces_match_the_literals_they_replaced() {
             "Wayland doesn't let apps resize other apps' windows.",
         ),
         (tr::overlay::window::focus_title(), "Focus mode"),
-        (tr::overlay::window::focus_on(), "Recording only this window"),
+        (
+            tr::overlay::window::focus_on(),
+            "Recording only this window",
+        ),
         (tr::overlay::window::focus_off(), "Record only this window"),
         (tr::overlay::window::focus_enable(), "Enable Focus mode"),
         (tr::overlay::window::focus_disable(), "Turn off Focus mode"),
