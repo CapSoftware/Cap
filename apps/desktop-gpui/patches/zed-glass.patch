@@ -182,7 +182,7 @@ index 70e9a0b..79415df 100644
              "Underline".into(),
              "UnderlineInputIndex".into(),
 diff --git a/crates/gpui_macos/src/metal_renderer.rs b/crates/gpui_macos/src/metal_renderer.rs
-index 4be15aa..babc8da 100644
+index 4be15aa..c90a8ab 100644
 --- a/crates/gpui_macos/src/metal_renderer.rs
 +++ b/crates/gpui_macos/src/metal_renderer.rs
 @@ -25,10 +25,8 @@ use metal::{
@@ -394,7 +394,7 @@ index 4be15aa..babc8da 100644
              self.backdrop_blurred.clone().unwrap(),
          )
      }
-@@ -1380,39 +1389,84 @@ impl MetalRenderer {
+@@ -1380,39 +1389,102 @@ impl MetalRenderer {
      fn release_backdrop_resources(&mut self) {
          self.backdrop_scratch = None;
          self.backdrop_blurred = None;
@@ -446,14 +446,30 @@ index 4be15aa..babc8da 100644
 +    ) {
 +        #[repr(C)]
 +        struct Gaussian {
-+            sigma: f32,
-+            radius: i32,
 +            direction: [i32; 2],
++            radius: i32,
++            pad: i32,
 +        }
 +        let size: Size<DevicePixels> = size(
 +            (scratch.width() as i32).into(),
 +            (scratch.height() as i32).into(),
 +        );
++        let radius = (sigma * 3.).ceil().max(0.) as i32;
++        let mut weights: Vec<f32> = (0..=radius)
++            .map(|offset| (-((offset * offset) as f32) / (2. * sigma * sigma)).exp())
++            .collect();
++        let total = weights[0] + 2. * weights[1..].iter().sum::<f32>();
++        for weight in &mut weights {
++            *weight /= total;
++        }
++        let weight_bytes = unsafe {
++            std::slice::from_raw_parts(
++                weights.as_ptr() as *const u8,
++                mem::size_of_val(weights.as_slice()),
++            )
+         };
+-        self.backdrop_kernel = Some((sigma, kernel));
+-        kernel
 +        let pass = |target: &metal::TextureRef,
 +                    pipeline: &metal::RenderPipelineStateRef,
 +                    source: &metal::TextureRef,
@@ -465,6 +481,11 @@ index 4be15aa..babc8da 100644
 +            encoder.set_render_pipeline_state(pipeline);
 +            encoder.set_fragment_texture(0, Some(source));
 +            encoder.set_fragment_bytes(0, bytes.len() as u64, bytes.as_ptr() as *const c_void);
++            encoder.set_fragment_bytes(
++                1,
++                weight_bytes.len() as u64,
++                weight_bytes.as_ptr() as *const c_void,
++            );
 +            encoder.draw_primitives(metal::MTLPrimitiveType::Triangle, 0, 3);
 +            encoder.end_encoding();
 +        };
@@ -473,9 +494,7 @@ index 4be15aa..babc8da 100644
 +                value as *const Gaussian as *const u8,
 +                mem::size_of::<Gaussian>(),
 +            )
-         };
--        self.backdrop_kernel = Some((sigma, kernel));
--        kernel
++        };
 +        let origin_bytes = unsafe {
 +            std::slice::from_raw_parts(origin.as_ptr() as *const u8, mem::size_of_val(&origin))
 +        };
@@ -485,15 +504,14 @@ index 4be15aa..babc8da 100644
 +            drawable,
 +            origin_bytes,
 +        );
-+        let radius = (sigma * 3.).ceil() as i32;
 +        pass(
 +            temp,
 +            &self.backdrop_gaussian_wide_pipeline_state,
 +            scratch,
 +            as_bytes(&Gaussian {
-+                sigma,
-+                radius,
 +                direction: [1, 0],
++                radius,
++                pad: 0,
 +            }),
 +        );
 +        pass(
@@ -501,15 +519,15 @@ index 4be15aa..babc8da 100644
 +            &self.backdrop_gaussian_pipeline_state,
 +            temp,
 +            as_bytes(&Gaussian {
-+                sigma,
-+                radius,
 +                direction: [0, 1],
++                radius,
++                pad: 0,
 +            }),
 +        );
      }
  
      fn draw_backdrop_blurs(
-@@ -1425,6 +1479,7 @@ impl MetalRenderer {
+@@ -1425,6 +1497,7 @@ impl MetalRenderer {
          instance_offset: &mut usize,
          viewport_size: Size<DevicePixels>,
          source_texture: &metal::TextureRef,
@@ -517,7 +535,7 @@ index 4be15aa..babc8da 100644
          command_encoder: &metal::RenderCommandEncoderRef,
      ) -> bool {
          if blurs.is_empty() {
-@@ -1462,6 +1517,10 @@ impl MetalRenderer {
+@@ -1462,6 +1535,10 @@ impl MetalRenderer {
              BackdropBlurInputIndex::SourceTexture as u64,
              Some(source_texture),
          );
@@ -528,7 +546,7 @@ index 4be15aa..babc8da 100644
  
          let blur_bytes_len = mem::size_of_val(blurs);
          let buffer_contents =
-@@ -2397,6 +2456,8 @@ enum BackdropBlurInputIndex {
+@@ -2397,6 +2474,8 @@ enum BackdropBlurInputIndex {
      /// Drawable rect the snapshot covers (x, y, w, h in device px) — the
      /// fragment shader maps frag position → snapshot UV through it.
      SourceRect = 4,
@@ -537,7 +555,7 @@ index 4be15aa..babc8da 100644
  }
  
  #[repr(C)]
-@@ -2568,7 +2629,7 @@ mod renderer_hardening_tests {
+@@ -2568,7 +2647,7 @@ mod renderer_hardening_tests {
  #[cfg(test)]
  mod backdrop_blur_tests {
      use super::*;
@@ -546,7 +564,7 @@ index 4be15aa..babc8da 100644
      use image::RgbaImage;
  
      const VIEW_W: i32 = 640;
-@@ -2645,6 +2706,7 @@ mod backdrop_blur_tests {
+@@ -2645,6 +2724,7 @@ mod backdrop_blur_tests {
              bounds: blur_bounds,
              content_mask: ContentMask { bounds: viewport() },
              corner_radii: Corners::default(),
@@ -554,7 +572,7 @@ index 4be15aa..babc8da 100644
          });
          scene.pop_layer();
      }
-@@ -2741,6 +2803,249 @@ mod backdrop_blur_tests {
+@@ -2741,6 +2821,249 @@ mod backdrop_blur_tests {
          );
      }
  
@@ -805,10 +823,10 @@ index 4be15aa..babc8da 100644
      fn two_blurs_of_different_sizes_in_one_frame() {
          if metal::Device::system_default().is_none() {
 diff --git a/crates/gpui_macos/src/shaders.metal b/crates/gpui_macos/src/shaders.metal
-index e087c0d..74953c3 100644
+index e087c0d..493ab9f 100644
 --- a/crates/gpui_macos/src/shaders.metal
 +++ b/crates/gpui_macos/src/shaders.metal
-@@ -1335,6 +1335,48 @@ float4 fill_color(Background background,
+@@ -1335,6 +1335,49 @@ float4 fill_color(Background background,
    return color;
  }
  
@@ -829,35 +847,36 @@ index e087c0d..74953c3 100644
 +}
 +
 +struct BackdropGaussian {
-+  float sigma;
-+  int radius;
 +  int2 direction;
++  int radius;
++  int pad;
 +};
 +
 +// One direction of the separable gaussian, edges clamped:
 +// `cap_glass::metrics::separable_blur`.
++// `weights` holds the normalised kernel from the centre out, computed once
++// per blur rather than per pixel.
 +fragment float4 backdrop_gaussian_fragment(
 +    BackdropPassOutput input [[stage_in]],
 +    constant BackdropGaussian &gaussian [[buffer(0)]],
++    constant float *weights [[buffer(1)]],
 +    texture2d<float> source [[texture(0)]]) {
 +  int2 last = int2(source.get_width(), source.get_height()) - 1;
 +  int2 center = int2(input.position.xy);
-+  float falloff = -0.5 / (gaussian.sigma * gaussian.sigma);
-+  float4 sum = float4(0.);
-+  float total = 0.;
-+  for (int offset = -gaussian.radius; offset <= gaussian.radius; offset++) {
-+    int2 at = clamp(center + gaussian.direction * offset, int2(0), last);
-+    float weight = exp(float(offset * offset) * falloff);
-+    sum += weight * source.read(uint2(at));
-+    total += weight;
++  float4 sum = weights[0] * source.read(uint2(center));
++  for (int offset = 1; offset <= gaussian.radius; offset++) {
++    int2 step = gaussian.direction * offset;
++    sum += weights[offset] *
++           (source.read(uint2(clamp(center + step, int2(0), last))) +
++            source.read(uint2(clamp(center - step, int2(0), last))));
 +  }
-+  return sum / total;
++  return sum;
 +}
 +
  struct BackdropBlurVertexOutput {
    float4 position [[position]];
    uint blur_id [[flat]];
-@@ -1354,9 +1396,17 @@ vertex BackdropBlurVertexOutput backdrop_blur_vertex(
+@@ -1354,9 +1397,17 @@ vertex BackdropBlurVertexOutput backdrop_blur_vertex(
      [[buffer(BackdropBlurInputIndex_ViewportSize)]]) {
    float2 unit_vertex = unit_vertices[unit_vertex_id];
    BackdropBlur blur = blurs[blur_id];
@@ -877,7 +896,7 @@ index e087c0d..74953c3 100644
                                                   blur.content_mask.bounds);
    return BackdropBlurVertexOutput{
        device_position,
-@@ -1364,26 +1414,88 @@ vertex BackdropBlurVertexOutput backdrop_blur_vertex(
+@@ -1364,26 +1415,88 @@ vertex BackdropBlurVertexOutput backdrop_blur_vertex(
        {clip_distance.x, clip_distance.y, clip_distance.z, clip_distance.w}};
  }
  
