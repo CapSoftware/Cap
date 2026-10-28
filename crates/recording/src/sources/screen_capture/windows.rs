@@ -708,7 +708,16 @@ fn create_d3d_capturer(
         },
         Some(params.d3d_device.clone()),
     )
-    .map_err(|e| anyhow!("{e}"))
+    .map_err(|error| match &error {
+        scap_direct3d::NewCapturerError::CaptureSession(inner)
+            if inner.code() == windows::Win32::Foundation::E_ACCESSDENIED =>
+        {
+            anyhow!(
+                "Windows denied Cap access to screen capture. Check that screen capture is allowed for desktop apps in Windows privacy settings and that no security software is blocking it ({error})"
+            )
+        }
+        _ => anyhow!("{error}"),
+    })
 }
 
 impl output_pipeline::VideoSource for VideoSource {
@@ -808,6 +817,9 @@ impl output_pipeline::VideoSource for VideoSource {
                     }
                     Err(e) => {
                         error!("Failed to create D3D capturer: {}", e);
+                        // `start` reads why from here: its reply channel only
+                        // says the thread is gone.
+                        first_frame.complete(Err(format!("{e:#}")));
                         return Err(e);
                     }
                 };
@@ -1085,12 +1097,18 @@ impl output_pipeline::VideoSource for VideoSource {
         let first_frame = self.first_frame.take();
         async move {
             tokio::time::timeout(Duration::from_secs(5), async move {
-                rx.await??;
-                wait_for_first_screen_frame(
-                    first_frame.ok_or_else(|| anyhow!("Windows screen source already started"))?,
-                    Duration::from_secs(5),
-                )
-                .await
+                let first_frame =
+                    first_frame.ok_or_else(|| anyhow!("Windows screen source already started"))?;
+                match rx.await {
+                    Ok(started) => started?,
+                    Err(_) => {
+                        return Err(match first_frame.await {
+                            Ok(Err(reason)) => anyhow!(reason),
+                            _ => anyhow!("Windows screen capture stopped before it started"),
+                        });
+                    }
+                }
+                wait_for_first_screen_frame(first_frame, Duration::from_secs(5)).await
             })
             .await
             .map_err(|_| {

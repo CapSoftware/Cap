@@ -1787,7 +1787,7 @@ impl MainWindow {
                         this.scan_incomplete_recordings(window, cx, std::time::Duration::ZERO);
                         if recover {
                             if project_path.join("content/output.mp4").is_file() {
-                                cx.reveal_path(&project_path.join("content/output.mp4"));
+                                library::reveal_path(&project_path.join("content/output.mp4"), cx);
                             } else {
                                 cx.defer(move |cx| app_windows::open_editor(project_path, cx));
                             }
