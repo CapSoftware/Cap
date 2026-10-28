@@ -972,10 +972,8 @@ add_to_project = "अपने मौजूदा प्रोजेक्ट �
 record_new = "नई क्लिप रिकॉर्ड करें"
 
 [main.device]
-camera = "कैमरा"
 fallback_camera = "कैमरा"
 heading = "अपना कैमरा और माइक्रोफ़ोन चुनें"
-microphone = "माइक्रोफ़ोन"
 no_camera = "कोई कैमरा नहीं"
 no_cameras = "कोई कैमरा नहीं मिला"
 no_matching_cameras = "कोई मिलता-जुलता कैमरा नहीं"

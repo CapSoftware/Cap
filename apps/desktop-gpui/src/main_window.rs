@@ -609,18 +609,10 @@ impl DeviceMenu {
         }
     }
 
-    /// Element ids; [`Self::title`] is the label.
     fn id_name(self) -> &'static str {
         match self {
             Self::Camera => "Camera",
             Self::Microphone => "Microphone",
-        }
-    }
-
-    fn title(self) -> &'static str {
-        match self {
-            Self::Camera => tr::main::device::camera(),
-            Self::Microphone => tr::main::device::microphone(),
         }
     }
 

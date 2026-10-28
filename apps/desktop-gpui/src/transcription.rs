@@ -1766,7 +1766,6 @@ fn transcribe_project_with(
 
 use cap_project::caption_words::{
     caption_text_from_words, caption_word_chunks, normalize_caption_words,
-    MAX_CAPTION_WORD_DURATION,
 };
 
 // ---------------------------------------------------------------------------
@@ -2057,6 +2056,7 @@ mod verify_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cap_project::caption_words::MAX_CAPTION_WORD_DURATION;
 
     #[test]
     fn parakeet_keeps_the_languages_it_can_write() {

@@ -972,10 +972,8 @@ add_to_project = "添加到当前项目"
 record_new = "录制新片段"
 
 [main.device]
-camera = "摄像头"
 fallback_camera = "摄像头"
 heading = "选择摄像头和麦克风"
-microphone = "麦克风"
 no_camera = "无摄像头"
 no_cameras = "未找到摄像头"
 no_matching_cameras = "没有匹配的摄像头"
