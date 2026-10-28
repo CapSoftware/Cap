@@ -597,6 +597,40 @@ pub fn frame_image(frame: &RenderedFrame) -> Option<Arc<RenderImage>> {
     ])))
 }
 
+/// [`frame_image`] for an `EditorFrameOutput::Bgra` frame: the renderer has
+/// already swapped the channels on the GPU and dropped the row padding while
+/// copying out of the mapped readback, so the buffer moves into the image
+/// as-is.
+pub fn bgra_frame_image(frame: RenderedFrame) -> Option<Arc<RenderImage>> {
+    let row_bytes = (frame.width as usize).checked_mul(4)?;
+    if frame.padded_bytes_per_row as usize != row_bytes
+        || frame.data.len() != row_bytes.checked_mul(frame.height as usize)?
+    {
+        return None;
+    }
+    let pixels = Arc::try_unwrap(frame.data).unwrap_or_else(|shared| shared.as_ref().clone());
+    let buffer = image::RgbaImage::from_raw(frame.width, frame.height, pixels)?;
+    Some(Arc::new(RenderImage::new(smallvec::smallvec![
+        image::Frame::new(buffer)
+    ])))
+}
+
+/// The Windows/Linux preview format. Hardware adapters convert to BGRA on the
+/// GPU (`EditorFrameFormat::Bgra`). Software adapters (WARP, llvmpipe)
+/// rasterize that blit on the CPU, which made frames slower than the CPU
+/// swizzle it replaces in the CI A/B (PR #2807), so they keep `Rgba`, as does
+/// a renderer that has to create its own device.
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn cpu_preview_frame_format(
+    shared_device: Option<&cap_rendering::SharedWgpuDevice>,
+) -> cap_editor::EditorFrameFormat {
+    if shared_device.is_some_and(|device| !device.is_software_adapter) {
+        cap_editor::EditorFrameFormat::Bgra
+    } else {
+        cap_editor::EditorFrameFormat::Rgba
+    }
+}
+
 /// What the frame pump hands the window.
 #[derive(Clone)]
 pub(crate) enum EditorPreviewFrame {
@@ -828,8 +862,10 @@ pub struct EditorFrame {
 ///   `presented` (~1.65x during playback) and must never be reported as fps.
 ///   It is here to show the invalidation cost, and because a `painted` that
 ///   fell *below* `presented` would mean gpui was coalescing frames away.
-/// * `convert_nanos` / `convert_samples` -- the cost of [`frame_image`], which
-///   is the CPU-vs-zero-copy decision's evidence.
+/// * `convert_nanos` / `convert_samples` -- the cost of [`frame_image`] or
+///   [`bgra_frame_image`], which is the CPU-vs-zero-copy decision's evidence.
+///   The BGRA path's single copy out of the mapped readback happens on the
+///   renderer thread, so it is not in these numbers.
 #[derive(Default, Debug)]
 pub struct PumpStats {
     pub rendered: AtomicU64,
@@ -12368,8 +12404,19 @@ pub(crate) fn surface_preview_frame(frame: cap_rendering::SurfaceFrame) -> Edito
 /// [`frame_image`], timed. The pump calls this so the CPU conversion's cost is
 /// a number rather than a hunch.
 pub fn frame_image_timed(frame: &RenderedFrame, stats: &PumpStats) -> Option<Arc<RenderImage>> {
+    timed_conversion(stats, || frame_image(frame))
+}
+
+pub fn bgra_frame_image_timed(frame: RenderedFrame, stats: &PumpStats) -> Option<Arc<RenderImage>> {
+    timed_conversion(stats, || bgra_frame_image(frame))
+}
+
+fn timed_conversion(
+    stats: &PumpStats,
+    convert: impl FnOnce() -> Option<Arc<RenderImage>>,
+) -> Option<Arc<RenderImage>> {
     let started = Instant::now();
-    let image = frame_image(frame);
+    let image = convert();
     stats
         .convert_nanos
         .fetch_add(started.elapsed().as_nanos() as u64, Ordering::Relaxed);
@@ -14507,5 +14554,180 @@ mod tests {
         // BGRA out: the red and blue channels are swapped, no 99 anywhere.
         assert_eq!(&bytes[0..4], &[30, 20, 10, 255]);
         assert!(!bytes.contains(&99));
+    }
+
+    #[test]
+    fn bgra_frame_image_rejects_padded_or_short_frames() {
+        let frame = |padded_bytes_per_row: u32, len: usize| RenderedFrame {
+            data: Arc::new(vec![7; len]),
+            width: 3,
+            height: 2,
+            padded_bytes_per_row,
+            frame_number: 0,
+            target_time_ns: 0,
+        };
+        let image = bgra_frame_image(frame(12, 24)).expect("tight frame converts");
+        assert_eq!(image.as_bytes(0), Some(&[7u8; 24][..]));
+        assert!(bgra_frame_image(frame(16, 32)).is_none());
+        assert!(bgra_frame_image(frame(12, 20)).is_none());
+    }
+
+    fn synthetic_rgba(width: u32, height: u32) -> Vec<u8> {
+        let mut pixels = Vec::with_capacity(width as usize * height as usize * 4);
+        for y in 0..height {
+            for x in 0..width {
+                pixels.extend_from_slice(&[
+                    (x.wrapping_mul(7) ^ y.wrapping_mul(13)) as u8,
+                    (x.wrapping_mul(31) + y.wrapping_mul(3)) as u8,
+                    (x + y.wrapping_mul(5)).wrapping_mul(11) as u8,
+                    (x.wrapping_mul(3) + y.wrapping_mul(17)) as u8,
+                ]);
+            }
+        }
+        pixels
+    }
+
+    fn rgba_readback(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        texture: &wgpu::Texture,
+    ) -> RenderedFrame {
+        let (width, height) = (texture.width(), texture.height());
+        let padded_bytes_per_row = (width * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
+            * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let size = u64::from(padded_bytes_per_row) * u64::from(height);
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = device.create_command_encoder(&Default::default());
+        encoder.copy_texture_to_buffer(
+            texture.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded_bytes_per_row),
+                    rows_per_image: Some(height),
+                },
+            },
+            texture.size(),
+        );
+        queue.submit([encoder.finish()]);
+        buffer.slice(..).map_async(wgpu::MapMode::Read, |result| {
+            result.expect("RGBA readback maps");
+        });
+        device
+            .poll(wgpu::PollType::Wait)
+            .expect("RGBA readback completes");
+        let mapped = buffer.slice(..).get_mapped_range();
+        let mut data = Vec::with_capacity(mapped.len() + 24);
+        data.extend_from_slice(&mapped);
+        drop(mapped);
+        buffer.unmap();
+        RenderedFrame {
+            data: Arc::new(data),
+            width,
+            height,
+            padded_bytes_per_row,
+            frame_number: 0,
+            target_time_ns: 0,
+        }
+    }
+
+    /// The Windows/Linux preview path: the GPU BGRA blit plus the single
+    /// copy out of the mapped readback must give gpui exactly the bytes the
+    /// RGBA readback plus [`frame_image`]'s CPU un-pad and swizzle give, at
+    /// widths whose rows are and are not 256-byte aligned.
+    #[test]
+    fn bgra_readback_matches_the_rgba_frame_image() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
+        let Ok(shared) = runtime.block_on(cap_rendering::create_shared_device()) else {
+            eprintln!("skipping: no wgpu adapter");
+            return;
+        };
+        let info = shared.adapter.get_info();
+        eprintln!(
+            "bgra readback parity on {} ({:?}, {:?}, software={})",
+            info.name, info.backend, info.device_type, shared.is_software_adapter
+        );
+        if !cap_rendering::RgbaToBgraReadback::supported(&shared.adapter) {
+            eprintln!("skipping: the adapter cannot render Bgra8Unorm, so the preview stays RGBA");
+            return;
+        }
+        let (device, queue) = (&shared.device, &shared.queue);
+        let mut readback = cap_rendering::RgbaToBgraReadback::new(device);
+
+        for (width, height) in [
+            (1, 1),
+            (3, 2),
+            (17, 5),
+            (63, 3),
+            (64, 2),
+            (65, 3),
+            (641, 4),
+            (1248, 3),
+            (1920, 2),
+            (1248, 3),
+            (65, 3),
+        ] {
+            let pixels = synthetic_rgba(width, height);
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: None,
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::COPY_SRC
+                    | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            queue.write_texture(
+                texture.as_image_copy(),
+                &pixels,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(width * 4),
+                    rows_per_image: Some(height),
+                },
+                texture.size(),
+            );
+
+            let old =
+                frame_image(&rgba_readback(device, queue, &texture)).expect("RGBA frame converts");
+
+            let encoder = device.create_command_encoder(&Default::default());
+            let pending = readback
+                .submit(device, queue, encoder, &texture, 9, 60)
+                .expect("BGRA readback submits");
+            let frame = runtime
+                .block_on(pending.wait(device))
+                .expect("BGRA readback completes");
+            assert_eq!(frame.frame_number, 9);
+            assert_eq!((frame.width, frame.height), (width, height));
+            assert_eq!(frame.padded_bytes_per_row, width * 4);
+            let new = bgra_frame_image(frame).expect("BGRA frame converts");
+
+            assert_eq!(new.size(0), old.size(0), "{width}x{height}");
+            assert_eq!(new.as_bytes(0), old.as_bytes(0), "{width}x{height}");
+            let swapped: Vec<u8> = pixels
+                .chunks_exact(4)
+                .flat_map(|pixel| [pixel[2], pixel[1], pixel[0], pixel[3]])
+                .collect();
+            assert_eq!(new.as_bytes(0), Some(&swapped[..]), "{width}x{height}");
+        }
     }
 }

@@ -5422,6 +5422,14 @@ fn start_preparing_editor(
                     let Some(image) = image else { continue };
                     editor_window::EditorPreviewFrame::Image(image)
                 }
+                cap_editor::EditorFrameOutput::Bgra(frame) => {
+                    let image = cx
+                        .background_executor()
+                        .spawn(async move { editor_window::bgra_frame_image(frame) })
+                        .await;
+                    let Some(image) = image else { continue };
+                    editor_window::EditorPreviewFrame::Image(image)
+                }
                 #[cfg(target_os = "macos")]
                 cap_editor::EditorFrameOutput::Surface(surface) => {
                     editor_window::surface_preview_frame(surface)
@@ -5641,7 +5649,8 @@ fn load_editor_project_candidate(
                 #[cfg(target_os = "macos")]
                 let frame_format = cap_editor::EditorFrameFormat::BgraSurface;
                 #[cfg(not(target_os = "macos"))]
-                let frame_format = cap_editor::EditorFrameFormat::Rgba;
+                let frame_format =
+                    editor_window::cpu_preview_frame_format(shared_wgpu_device().await.as_ref());
                 if let Some(previous) = previous {
                     return previous
                         .recreate_preparing_candidate(state_cb, frame_cb, frame_format)
@@ -5742,6 +5751,23 @@ fn load_editor_project_candidate(
                                 .spawn(
                                     async move { editor_window::frame_image_timed(&rgba, &stats) },
                                 )
+                                .await;
+                            let Some(image) = image else {
+                                tracing::warn!(
+                                    "a rendered frame could not be converted for display"
+                                );
+                                continue;
+                            };
+                            (editor_window::EditorPreviewFrame::Image(image), number)
+                        }
+                        cap_editor::EditorFrameOutput::Bgra(bgra) => {
+                            let stats = stats.clone();
+                            let number = bgra.frame_number;
+                            let image = cx
+                                .background_executor()
+                                .spawn(async move {
+                                    editor_window::bgra_frame_image_timed(bgra, &stats)
+                                })
                                 .await;
                             let Some(image) = image else {
                                 tracing::warn!(
