@@ -329,6 +329,7 @@ jobs:
           cargo test --locked -p cap --bin cap record::tests
           cargo test --locked -p cap --bin cap recordings::tests
           cargo test --locked -p cap --bin cap automation::tests::cli_save_to_location
+          cargo test --locked -p cap --bin cap export::tests::instant_export_preserves_a_hard_link_to_the_recording
           cargo test --locked -p cap --test cli recordings_list
           cargo test --locked -p cap --test cli project_config_get_without_file_returns_default
           cargo test --locked -p cap --test cli caps_json_errors_include_the_standard_error_field

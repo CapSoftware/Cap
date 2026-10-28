@@ -97,7 +97,7 @@ impl AutomationHost for CliAutomationHost {
             std::fs::create_dir_all(parent).map_err(|e| format!("Failed to create dir: {e}"))?;
         }
         if dst.exists()
-            && is_same_file(src, &dst)
+            && crate::file_identity::is_same_file(src, &dst)
                 .map_err(|e| format!("Failed to compare source and destination: {e}"))?
         {
             return Ok(());
@@ -385,22 +385,6 @@ impl AutomationHost for CliAutomationHost {
             .as_ref()
             .ok_or("No project path for deletion")?;
         std::fs::remove_dir_all(path).map_err(|e| format!("Failed to delete: {e}"))
-    }
-}
-
-fn is_same_file(source: &Path, destination: &Path) -> std::io::Result<bool> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-
-        // Metadata preserves support for write-only destinations.
-        let source = source.metadata()?;
-        let destination = destination.metadata()?;
-        Ok(source.dev() == destination.dev() && source.ino() == destination.ino())
-    }
-    #[cfg(not(unix))]
-    {
-        same_file::is_same_file(source, destination)
     }
 }
 
