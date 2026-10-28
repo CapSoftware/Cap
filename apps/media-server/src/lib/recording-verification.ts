@@ -6,6 +6,8 @@ import { availableParallelism } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { Readable } from "node:stream";
 import { setTimeout as sleep } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
+import { z } from "zod";
 import { decodeThreadsFromEnv, PROCESS_TIMEOUT_MS } from "./media-common";
 import {
 	fetchMedia,
@@ -15,6 +17,7 @@ import {
 import {
 	proveRecordingPackets,
 	RecordingPacketMismatchError,
+	runInspector,
 } from "./recording-packet-proof";
 import {
 	RecordingTimingError,
@@ -22,6 +25,7 @@ import {
 	readRecordingVideoTiming,
 } from "./recording-timing";
 import { registerSubprocess, unregisterSubprocess } from "./subprocess";
+import { digestUploadFile } from "./upload-digest";
 
 const MAX_LOCAL_VERIFICATION_MS = 2 * 60 * 60_000;
 const DECODER_STALL_MS = 5 * 60_000;
@@ -119,6 +123,8 @@ export interface RemoteRecordingBytesOptions {
 	expectedFileSize: number;
 	abortSignal?: AbortSignal;
 	timeoutMs?: number;
+	// The ETag storage would return for the local file this server uploaded (see hashRecordingUpload).
+	uploadedContentIdentity?: string;
 }
 
 export interface RemoteRecordingBytesResult {
@@ -1017,9 +1023,17 @@ async function decodePacketProvenChunks(
 	source: RecordingVideoChunkSource,
 	chunkCount: number,
 	options: RecordingVerificationOptions,
-	packetProof: Awaited<ReturnType<typeof proveRecordingPackets>>,
+	hasAudio: boolean,
+	packetProofRead: Promise<Awaited<ReturnType<typeof proveRecordingPackets>>>,
 	preverified: PreverifiedVideoRun[] = [],
 ): Promise<RecordingVerificationResult> {
+	let knownVideoPackets: number | undefined;
+	packetProofRead.then(
+		(proof) => {
+			knownVideoPackets = proof.videoPackets;
+		},
+		() => {},
+	);
 	const cached = [...preverified];
 	let covered = cached.reduce((total, run) => total + run.segments, 0);
 	if (covered > source.segments.length)
@@ -1109,7 +1123,7 @@ async function decodePacketProvenChunks(
 			lastReport = performance.now();
 			options.onProgress?.({
 				frames: decodedFrames,
-				totalFrames: packetProof.videoPackets,
+				totalFrames: knownVideoPackets,
 			});
 		}
 	};
@@ -1125,7 +1139,7 @@ async function decodePacketProvenChunks(
 		);
 		const jobs = [
 			...chunkPaths.map((path) => videoChunkDecodeArgs(path, threads)),
-			...(packetProof.hasAudio
+			...(hasAudio
 				? [
 						[
 							...base,
@@ -1195,6 +1209,9 @@ async function decodePacketProvenChunks(
 		const exits = await Promise.all(decoders.map((decoder) => decoder.exited));
 		await Promise.all(readers);
 		if (failure) throw failure;
+		const packetProof = await packetProofRead;
+		if (packetProof.hasAudio !== hasAudio)
+			throw new ChunkedDecodeUnavailable("audio track presence differs");
 		const stderr = await Promise.all(errors);
 		for (const [index, decoder] of decoders.entries()) {
 			if (exits[index] !== 0 || stderr[index].error || decoder.signalCode)
@@ -1288,17 +1305,49 @@ export async function verifyRemuxedRecording(
 		AbortSignal.timeout(options.timeoutMs ?? MAX_LOCAL_VERIFICATION_MS),
 	]);
 	options = { ...options, abortSignal: signal };
-	let proof: Awaited<ReturnType<typeof proveRecordingPackets>>;
-	try {
-		proof = await proveRecordingPackets(
-			videoPath,
-			audioPath,
-			outputPath,
-			signal,
-		);
+	const proofRead = proveRecordingPackets(
+		videoPath,
+		audioPath,
+		outputPath,
+		signal,
+	).then((proof) => {
 		if (proof.outputTiming.terminalPacketCount !== 1)
 			throw new Error("Tied terminal samples require decoded source evidence");
+		return proof;
+	});
+	proofRead.catch(() => {});
+	const decodeOptions = {
+		...options,
+		timeoutMs: options.timeoutMs ?? MAX_LOCAL_VERIFICATION_MS,
+	};
+	const chunkCount = verifyDecodeChunks();
+	// The fragment decode only needs the packet proof for its final checks, so both run at once; nothing the
+	// decode finds counts unless the proof passes, and a failed proof stops the decoders.
+	const chunkAbort = new AbortController();
+	const chunked =
+		videoChunks &&
+		(preverified.length > 0 ||
+			(chunkCount > 1 && videoChunks.segments.length >= chunkCount * 2))
+			? decodePacketProvenChunks(
+					outputPath,
+					videoChunks,
+					chunkCount,
+					{
+						...decodeOptions,
+						abortSignal: AbortSignal.any([signal, chunkAbort.signal]),
+					},
+					Boolean(audioPath),
+					proofRead,
+					preverified,
+				)
+			: undefined;
+	chunked?.catch(() => {});
+	let proof: Awaited<ReturnType<typeof proveRecordingPackets>>;
+	try {
+		proof = await proofRead;
 	} catch (error) {
+		chunkAbort.abort();
+		await chunked?.catch(() => {});
 		signal.throwIfAborted();
 		if (error instanceof RecordingPacketMismatchError) throw error;
 		const sourceEvidence = await inspectRecordingSources(
@@ -1314,26 +1363,10 @@ export async function verifyRemuxedRecording(
 			throw new Error("Recording source preservation was not verified");
 		return { ...result, sourcePreserved: true };
 	}
-	const decodeOptions = {
-		...options,
-		timeoutMs: options.timeoutMs ?? MAX_LOCAL_VERIFICATION_MS,
-	};
-	const chunkCount = verifyDecodeChunks();
 	let result: RecordingVerificationResult | undefined;
-	if (
-		videoChunks &&
-		(preverified.length > 0 ||
-			(chunkCount > 1 && videoChunks.segments.length >= chunkCount * 2))
-	) {
+	if (chunked) {
 		try {
-			result = await decodePacketProvenChunks(
-				outputPath,
-				videoChunks,
-				chunkCount,
-				decodeOptions,
-				proof,
-				preverified,
-			);
+			result = await chunked;
 		} catch (error) {
 			signal.throwIfAborted();
 			if (
@@ -2229,6 +2262,14 @@ export async function verifyRemoteRecordingBytes(
 		if (before.fileSize !== options.expectedFileSize) {
 			throw new Error("Uploaded recording size does not match the muxed file");
 		}
+		if (
+			options.uploadedContentIdentity !== undefined &&
+			options.uploadedContentIdentity === before.objectIdentity
+		) {
+			if (signal.aborted)
+				throw new Error("Recording verification was cancelled");
+			return { ...before, remoteSha256: options.expectedSha256 };
+		}
 		const remoteSha256 = await hashRemoteRecording(
 			input,
 			before.objectIdentity,
@@ -2271,9 +2312,64 @@ export async function hashRecordingFile(
 	if (!isAbsolute(input) || !(await lstat(input)).isFile()) {
 		throw new Error("Recording hashing requires a local regular file");
 	}
-	const hash = createHash("sha256");
-	for await (const chunk of createReadStream(input, { signal: abortSignal })) {
-		hash.update(chunk);
+	return (await digestUploadFile(input, "none", abortSignal)).sha256;
+}
+
+const uploadDigestSchema = z.object({
+	sha256: z.string().regex(/^[a-f0-9]{64}$/),
+	contentIdentity: z
+		.string()
+		.regex(/^"[a-f0-9]{32}(-[1-9]\d*)?"$/)
+		.optional(),
+});
+
+// Hashes the output for its SHA-256 and the ETag storage should return for it. This runs beside the
+// verification decode, so it runs in its own process instead of taking turns with the decoder output on
+// this thread.
+export async function hashRecordingUpload(
+	input: string,
+	upload: { partSize?: number } | undefined,
+	abortSignal?: AbortSignal,
+): Promise<{ sha256: string; contentIdentity?: string }> {
+	if (!isAbsolute(input) || !(await lstat(input)).isFile()) {
+		throw new Error("Recording hashing requires a local regular file");
 	}
-	return hash.digest("hex");
+	const partSize =
+		upload?.partSize !== undefined &&
+		Number.isSafeInteger(upload.partSize) &&
+		upload.partSize > 0
+			? upload.partSize
+			: undefined;
+	const mode = !upload
+		? "none"
+		: partSize === undefined
+			? "whole"
+			: String(partSize);
+	let output = "";
+	const result = await runInspector(
+		process.execPath,
+		[
+			fileURLToPath(new URL("./upload-digest.ts", import.meta.url)),
+			input,
+			mode,
+		],
+		abortSignal ?? new AbortController().signal,
+		(line) => {
+			output += line;
+			if (output.length > 4096)
+				throw new Error("Recording hash output exceeds its bound");
+		},
+	);
+	const parsed = uploadDigestSchema.safeParse(
+		(() => {
+			try {
+				return JSON.parse(output);
+			} catch {
+				return undefined;
+			}
+		})(),
+	);
+	if (result.code !== 0 || !parsed.success)
+		throw new Error("Recording hashing failed");
+	return parsed.data;
 }
