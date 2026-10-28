@@ -36,7 +36,19 @@ pub struct ControlsWindow {
     _tick: gpui::Task<()>,
     ticking_live: bool,
     level_bar: Entity<ui::MicrophoneLevel>,
+    /// The banner and bar, in window points. On macOS the rest of the window
+    /// passes clicks through to the app underneath.
+    visible_region: std::rc::Rc<std::cell::Cell<Option<gpui::Bounds<gpui::Pixels>>>>,
+    #[cfg(target_os = "macos")]
+    _click_through: gpui::Task<()>,
 }
+
+#[cfg(target_os = "macos")]
+const POINTER_POLL_INTERVAL: Duration = Duration::from_millis(30);
+/// Starts taking clicks just before the pointer reaches the bar, so a quick
+/// move-and-click on Stop is not lost to the poll interval.
+#[cfg(target_os = "macos")]
+const POINTER_HALO: gpui::Pixels = px(4.);
 
 #[derive(Clone, Copy)]
 enum DestructiveAction {
@@ -90,10 +102,54 @@ impl ControlsWindow {
             _tick: gpui::Task::ready(()),
             ticking_live: false,
             level_bar,
+            visible_region: Default::default(),
+            #[cfg(target_os = "macos")]
+            _click_through: gpui::Task::ready(()),
         };
         this.ticking_live = this.timer_is_live(cx);
         this._tick = Self::spawn_tick(window, cx);
+        #[cfg(target_os = "macos")]
+        {
+            this._click_through = Self::spawn_click_through(window, cx);
+        }
         this
+    }
+
+    /// The window is taller than the bar so the issue banner and tooltips
+    /// have room above it. A transparent window still takes every click in
+    /// its frame, so it ignores mouse events unless the pointer is over the
+    /// banner or the bar. An ignoring window gets no mouse moves, hence the
+    /// poll of the global pointer.
+    #[cfg(target_os = "macos")]
+    fn spawn_click_through(window: &mut Window, cx: &mut Context<Self>) -> gpui::Task<()> {
+        cx.spawn_in(window, async move |this, cx| {
+            let mut native = None;
+            let mut click_through = None;
+            loop {
+                let Ok(region) = this.update_in(cx, |this, window, _| {
+                    if native.is_none() {
+                        native = crate::platform::native_window(window);
+                    }
+                    this.visible_region.get()
+                }) else {
+                    return;
+                };
+                if let Some(native) = native.as_ref() {
+                    let wanted = !region.is_some_and(|region| {
+                        crate::platform::pointer_in_window_region(
+                            native,
+                            region.dilate(POINTER_HALO),
+                        )
+                    });
+                    if click_through != Some(wanted)
+                        && crate::platform::set_window_click_through(native, wanted)
+                    {
+                        click_through = Some(wanted);
+                    }
+                }
+                cx.background_executor().timer(POINTER_POLL_INTERVAL).await;
+            }
+        })
     }
 
     fn timer_is_live(&self, cx: &gpui::App) -> bool {
@@ -511,6 +567,7 @@ impl ControlsWindow {
 impl Render for ControlsWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.theme.refresh(window, cx, false);
+        let region = self.visible_region.clone();
         let session = self.session.read(cx);
         let issue = session.error.clone().or_else(|| {
             session
@@ -528,33 +585,49 @@ impl Render for ControlsWindow {
             .locale_font()
             // `body { font-weight: 500 }` (`ui-solid/src/main.css:189-192`).
             .font_weight(FontWeight::MEDIUM)
-            .when_some(issue, |this, issue| {
-                this.child(
-                    div()
-                        .min_h_0()
-                        .w_full()
-                        .flex()
-                        .items_start()
-                        .gap(px(8.))
-                        .mb(px(8.))
-                        .rounded(px(12.))
-                        .border_1()
-                        .border_color(Theme::with_alpha(self.theme.red_9, 0.4))
-                        .bg(self.theme.gray_1)
-                        .p(px(8.))
-                        .text_size(px(12.))
-                        .text_color(self.theme.red_11)
-                        .child(
-                            svg()
-                                .path("icons/triangle-alert.svg")
-                                .size(px(20.))
-                                .flex_shrink_0()
-                                .text_color(self.theme.red_9),
+            .child(
+                div()
+                    .relative()
+                    .min_h_0()
+                    .w_full()
+                    .flex()
+                    .flex_col()
+                    .when_some(issue, |this, issue| {
+                        this.child(
+                            div()
+                                .min_h_0()
+                                .w_full()
+                                .flex()
+                                .items_start()
+                                .gap(px(8.))
+                                .mb(px(8.))
+                                .rounded(px(12.))
+                                .border_1()
+                                .border_color(Theme::with_alpha(self.theme.red_9, 0.4))
+                                .bg(self.theme.gray_1)
+                                .p(px(8.))
+                                .text_size(px(12.))
+                                .text_color(self.theme.red_11)
+                                .child(
+                                    svg()
+                                        .path("icons/triangle-alert.svg")
+                                        .size(px(20.))
+                                        .flex_shrink_0()
+                                        .text_color(self.theme.red_9),
+                                )
+                                .child(recording_issue_text(issue)),
                         )
-                        .child(recording_issue_text(issue)),
-                )
-            })
-            .child(self.render_bar(cx))
+                    })
+                    .child(self.render_bar(cx))
+                    .child(
+                        gpui::canvas(
+                            move |bounds, _, _| region.set(Some(bounds)),
+                            |_, _, _, _| {},
+                        )
+                        .absolute()
+                        .size_full(),
+                    ),
+            )
     }
 }
 
