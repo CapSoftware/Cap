@@ -1762,7 +1762,7 @@ impl MainWindow {
                         this.scan_incomplete_recordings(window, cx, std::time::Duration::ZERO);
                         if recover {
                             if project_path.join("content/output.mp4").is_file() {
-                                cx.reveal_path(&project_path.join("content/output.mp4"));
+                                library::reveal_path(&project_path.join("content/output.mp4"), cx);
                             } else {
                                 cx.defer(move |cx| app_windows::open_editor(project_path, cx));
                             }
@@ -2433,6 +2433,7 @@ impl MainWindow {
 
     fn dismiss_microphone_warning(&mut self, cx: &mut Context<Self>) {
         self.cancel_deep_link_start();
+        cx.defer(app_windows::restore_arranged_windows_if_idle);
         cx.notify();
     }
 
@@ -2478,6 +2479,7 @@ impl MainWindow {
                             return;
                         }
                         this.finish_recording_start(&permit);
+                        cx.defer(app_windows::restore_arranged_windows_if_idle);
                         this.session.update(cx, |session, cx| {
                             session.error = Some(tr::main::storage::check_failed(&error));
                             cx.notify();
@@ -2564,6 +2566,7 @@ impl MainWindow {
                     this.check_storage_before_start(config, true, permit, cx);
                 } else {
                     this.finish_recording_start(&permit);
+                    cx.defer(app_windows::restore_arranged_windows_if_idle);
                     if this.session.read(cx).editor_recording_target().is_some() {
                         cx.defer(app_windows::abort_editor_recording_flow);
                     }
