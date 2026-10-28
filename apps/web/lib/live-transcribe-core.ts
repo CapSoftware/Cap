@@ -39,7 +39,16 @@ export const LIVE_TRANSCRIBE = {
 	/** Attempts per chunk before it is skipped so one poison chunk can never
 	 * wedge the loop or burn retries forever. */
 	MAX_CHUNK_ATTEMPTS: 2,
+	/** Words starting this close before a chunk's cut belong to the next
+	 * chunk when it carries context: it hears them whole instead of cut. */
+	CONTEXT_HANDOVER_MS: 2_000,
 } as const;
+
+/** How far before a chunk's start its words replace the previous chunk's. */
+export function chunkHandoverMs(chunkStartMs: number, contextMs: number) {
+	if (contextMs <= 0) return 0;
+	return Math.min(LIVE_TRANSCRIBE.CONTEXT_HANDOVER_MS, contextMs, chunkStartMs);
+}
 
 export type LiveChunkDecision =
 	| { action: "wait" }
@@ -50,6 +59,10 @@ export type LiveChunkDecision =
 			entries: NormalizedSegmentEntry[];
 			startMs: number;
 			durationMs: number;
+			/** Already transcribed segments sent ahead of `entries` so the
+			 * chunk doesn't start mid-sentence with no left context. */
+			context: NormalizedSegmentEntry[];
+			contextMs: number;
 	  };
 
 /**
@@ -63,8 +76,10 @@ export function planNextLiveChunk(options: {
 	lastProcessedIndex: number;
 	targetSeconds: number;
 	maxTakeSeconds?: number;
+	contextSeconds?: number;
 }): LiveChunkDecision {
 	const { manifest, lastProcessedIndex, targetSeconds } = options;
+	const contextSeconds = options.contextSeconds ?? 0;
 	const maxTakeSeconds =
 		options.maxTakeSeconds ?? LIVE_TRANSCRIBE.MAX_CHUNK_TAKE_SECONDS;
 
@@ -79,6 +94,7 @@ export function planNextLiveChunk(options: {
 	}
 
 	let startMs = 0;
+	const processed: NormalizedSegmentEntry[] = [];
 	const pending: NormalizedSegmentEntry[] = [];
 	let expectedIndex = plan.entries[0]?.index === 0 ? 0 : 1;
 
@@ -88,6 +104,7 @@ export function planNextLiveChunk(options: {
 
 		if (entry.index <= lastProcessedIndex) {
 			startMs += entry.duration * 1000;
+			processed.push(entry);
 		} else {
 			pending.push(entry);
 		}
@@ -113,11 +130,22 @@ export function planNextLiveChunk(options: {
 		return { action: "wait" };
 	}
 
+	const context: NormalizedSegmentEntry[] = [];
+	let contextTaken = 0;
+	for (let i = processed.length - 1; i >= 0; i--) {
+		if (contextTaken >= contextSeconds) break;
+		const entry = processed[i] as NormalizedSegmentEntry;
+		context.unshift(entry);
+		contextTaken += entry.duration;
+	}
+
 	return {
 		action: "chunk",
 		entries: taken,
 		startMs: Math.round(startMs),
 		durationMs: Math.round(takenSeconds * 1000),
+		context,
+		contextMs: Math.round(contextTaken * 1000),
 	};
 }
 
@@ -129,14 +157,18 @@ export interface LiveChunkWordInput {
 	speaker?: unknown;
 }
 
-/** Place a chunk's AssemblyAI words (chunk-relative ms) on the recording
- * timeline. Words outside the chunk bounds are clamped, invalid ones dropped. */
+/** Place a chunk's AssemblyAI words (ms from the start of the sent audio,
+ * which begins with `contextMs` of context) on the recording timeline. Context
+ * words are dropped except those in the handover window before the cut. Words
+ * outside the chunk bounds are clamped, invalid ones dropped. */
 export function offsetChunkWords(
 	words: readonly LiveChunkWordInput[] | null | undefined,
 	chunkStartMs: number,
 	chunkDurationMs: number,
+	contextMs = 0,
 ): EditTranscriptWord[] {
 	const result: EditTranscriptWord[] = [];
+	const handoverMs = chunkHandoverMs(chunkStartMs, contextMs);
 
 	for (const [index, word] of (words ?? []).entries()) {
 		const text = typeof word.text === "string" ? word.text.trim() : "";
@@ -146,8 +178,13 @@ export function offsetChunkWords(
 			continue;
 		}
 
+		if (contextMs > 0 && start - contextMs < -handoverMs) continue;
+
 		const clamp = (value: number) =>
-			Math.min(Math.max(Math.round(value), 0), chunkDurationMs);
+			Math.min(
+				Math.max(Math.round(value - contextMs), -handoverMs),
+				chunkDurationMs,
+			);
 		const startMs = chunkStartMs + clamp(start);
 		const endMs = chunkStartMs + Math.max(clamp(end), clamp(start));
 
@@ -322,21 +359,25 @@ export function liveTranscriptToEditTranscript(
 
 /**
  * Merge one transcribed chunk into the artifact. Idempotent per chunk range:
- * a retried chunk first evicts any words at or after its start.
+ * a retried chunk first evicts any words at or after its start, or after its
+ * handover point when it was sent with context.
  */
 export function applyChunkToLiveTranscript(
 	artifact: LiveTranscriptArtifact,
 	chunk: {
 		startMs: number;
 		durationMs: number;
+		contextMs?: number;
 		lastAudioSegmentIndex: number;
 		words: EditTranscriptWord[];
 		languageCode: string | null;
 		nowIso: string;
 	},
 ): LiveTranscriptArtifact {
+	const ownedFromMs =
+		chunk.startMs - chunkHandoverMs(chunk.startMs, chunk.contextMs ?? 0);
 	const words = [
-		...artifact.words.filter((word) => word.startMs < chunk.startMs),
+		...artifact.words.filter((word) => word.startMs < ownedFromMs),
 		...chunk.words,
 	];
 
