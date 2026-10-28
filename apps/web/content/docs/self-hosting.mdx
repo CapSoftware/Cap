@@ -124,7 +124,7 @@ CAP_VIDEOS_DEFAULT_PUBLIC=false
 
 - `CAP_ALLOWED_SIGNUP_DOMAINS` applies to **new** accounts only. Users who already have an account can still sign in from any domain.
 - `CAP_BLOCKED_SIGNUP_DOMAINS` applies to existing users too: a blocked address can't sign in, and its existing web sessions and Cap app sign-ins (desktop, Chrome extension) stop working.
-- Neither setting adds users to an organization. New users who weren't invited start in their own organization.
+- Neither setting adds users to an organization. Unless WorkOS SSO adds them to its organization, new users who weren't invited start in their own organization.
 - `CAP_VIDEOS_DEFAULT_PUBLIC` defaults to `true`. An organization whose default video visibility is set to private keeps new videos private either way.
 
 ## Email Configuration
@@ -143,7 +143,7 @@ Email is optional. Without it, login codes are printed to the cap-web logs, the 
 
 The media server runs a limited number of video jobs at once. Unless you set a limit, it uses the smallest of 4 and half the CPUs, and, if the container has a memory limit, the memory limit × 0.85 ÷ 768 MB (at least 1). A media server with 2 CPUs therefore processes one video at a time.
 
-When it is full, it answers `503 Server is busy` and Cap Web keeps the video waiting and retries until a slot frees up. Videos queue behind each other instead of failing. To process more at once, set the limits on the **media server** container:
+When it is full, it answers `503 Server is busy`. Video processing waits and retries until a slot frees up, so videos queue behind each other instead of failing. The faststart rewrite requested right after a browser upload is the exception: it isn't retried, so it's skipped if the server is full at that moment. To process more at once, set the limits on the **media server** container:
 
 ```bash
 MEDIA_SERVER_MAX_CONCURRENT_VIDEO_PROCESSES=2   # Video jobs at once
