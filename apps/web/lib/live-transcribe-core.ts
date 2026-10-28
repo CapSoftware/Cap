@@ -39,9 +39,14 @@ export const LIVE_TRANSCRIBE = {
 	/** Attempts per chunk before it is skipped so one poison chunk can never
 	 * wedge the loop or burn retries forever. */
 	MAX_CHUNK_ATTEMPTS: 2,
-	/** Words starting this close before a chunk's cut belong to the next
-	 * chunk when it carries context: it hears them whole instead of cut. */
+	/** A chunk sent with context takes over from the previous chunk about
+	 * this far before its cut, so it hears the cut words whole. */
 	CONTEXT_HANDOVER_MS: 2_000,
+	/** The exact join may move this far either side of the handover point to
+	 * land on a word both chunks heard. */
+	HANDOVER_SEARCH_MS: 1_000,
+	/** Two chunks' copies of a word may disagree on its start by this much. */
+	HANDOVER_MATCH_MS: 300,
 } as const;
 
 /** How far before a chunk's start its words replace the previous chunk's. */
@@ -159,8 +164,9 @@ export interface LiveChunkWordInput {
 
 /** Place a chunk's AssemblyAI words (ms from the start of the sent audio,
  * which begins with `contextMs` of context) on the recording timeline. Context
- * words are dropped except those in the handover window before the cut. Words
- * outside the chunk bounds are clamped, invalid ones dropped. */
+ * words land before `chunkStartMs`; applyChunkToLiveTranscript decides which
+ * of them replace the previous chunk's. Words outside the audio bounds are
+ * clamped, invalid ones dropped. */
 export function offsetChunkWords(
 	words: readonly LiveChunkWordInput[] | null | undefined,
 	chunkStartMs: number,
@@ -168,7 +174,6 @@ export function offsetChunkWords(
 	contextMs = 0,
 ): EditTranscriptWord[] {
 	const result: EditTranscriptWord[] = [];
-	const handoverMs = chunkHandoverMs(chunkStartMs, contextMs);
 
 	for (const [index, word] of (words ?? []).entries()) {
 		const text = typeof word.text === "string" ? word.text.trim() : "";
@@ -178,11 +183,9 @@ export function offsetChunkWords(
 			continue;
 		}
 
-		if (contextMs > 0 && start - contextMs < -handoverMs) continue;
-
 		const clamp = (value: number) =>
 			Math.min(
-				Math.max(Math.round(value - contextMs), -handoverMs),
+				Math.max(Math.round(value - contextMs), -contextMs),
 				chunkDurationMs,
 			);
 		const startMs = chunkStartMs + clamp(start);
@@ -357,10 +360,54 @@ export function liveTranscriptToEditTranscript(
 	};
 }
 
+const normalizeWordText = (text: string) =>
+	text.toLowerCase().replace(/[^\p{L}\p{N}']/gu, "");
+
+/**
+ * Join the previous words to a chunk sent with context. Both heard the audio
+ * around `targetMs` but may time the same word slightly differently, so a
+ * fixed cut could keep both copies or neither. Join on the word both heard
+ * (same text, close start) nearest the target; if they share none, cut there.
+ */
+function joinAtHandover(
+	previous: EditTranscriptWord[],
+	next: EditTranscriptWord[],
+	targetMs: number,
+	minMs: number,
+	maxMs: number,
+): EditTranscriptWord[] {
+	const anchors = next
+		.map((word, index) => ({ word, index }))
+		.filter(({ word }) => word.startMs >= minMs && word.startMs <= maxMs)
+		.sort(
+			(a, b) =>
+				Math.abs(a.word.startMs - targetMs) -
+				Math.abs(b.word.startMs - targetMs),
+		);
+	for (const { word, index } of anchors) {
+		const text = normalizeWordText(word.text);
+		if (!text) continue;
+		const match = previous.findIndex(
+			(candidate) =>
+				Math.abs(candidate.startMs - word.startMs) <=
+					LIVE_TRANSCRIBE.HANDOVER_MATCH_MS &&
+				normalizeWordText(candidate.text) === text,
+		);
+		if (match !== -1) {
+			return [...previous.slice(0, match), ...next.slice(index)];
+		}
+	}
+
+	return [
+		...previous.filter((word) => word.startMs < targetMs),
+		...next.filter((word) => word.startMs >= targetMs),
+	];
+}
+
 /**
  * Merge one transcribed chunk into the artifact. Idempotent per chunk range:
- * a retried chunk first evicts any words at or after its start, or after its
- * handover point when it was sent with context.
+ * a retried chunk first evicts any words at or after its start, or past its
+ * join with the previous words when it was sent with context.
  */
 export function applyChunkToLiveTranscript(
 	artifact: LiveTranscriptArtifact,
@@ -374,12 +421,28 @@ export function applyChunkToLiveTranscript(
 		nowIso: string;
 	},
 ): LiveTranscriptArtifact {
-	const ownedFromMs =
-		chunk.startMs - chunkHandoverMs(chunk.startMs, chunk.contextMs ?? 0);
-	const words = [
-		...artifact.words.filter((word) => word.startMs < ownedFromMs),
-		...chunk.words,
-	];
+	const contextMs = chunk.contextMs ?? 0;
+	const handoverMs = chunkHandoverMs(chunk.startMs, contextMs);
+	const targetMs = chunk.startMs - handoverMs;
+	const words =
+		handoverMs > 0
+			? joinAtHandover(
+					artifact.words,
+					chunk.words,
+					targetMs,
+					Math.max(
+						targetMs - LIVE_TRANSCRIBE.HANDOVER_SEARCH_MS,
+						chunk.startMs - contextMs,
+					),
+					Math.min(
+						targetMs + LIVE_TRANSCRIBE.HANDOVER_SEARCH_MS,
+						chunk.startMs,
+					),
+				)
+			: [
+					...artifact.words.filter((word) => word.startMs < chunk.startMs),
+					...chunk.words,
+				];
 
 	return {
 		...artifact,

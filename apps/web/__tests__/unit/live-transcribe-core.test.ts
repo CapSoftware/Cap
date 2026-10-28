@@ -399,7 +399,7 @@ describe("live chunks with context", () => {
 		});
 	});
 
-	it("drops context words except the handover window before the cut", () => {
+	it("places context words before the chunk start", () => {
 		const words = offsetChunkWords(
 			[
 				{ text: "old", start: 1000, end: 1400 },
@@ -412,6 +412,8 @@ describe("live chunks with context", () => {
 			6000,
 		);
 		expect(words.map((word) => [word.text, word.startMs, word.endMs])).toEqual([
+			["old", 15_000, 15_400],
+			["edge", 17_900, 18_300],
 			["cut", 19_900, 20_300],
 			["new", 20_500, 20_900],
 		]);
@@ -480,9 +482,83 @@ describe("live chunks with context", () => {
 		expect(reapplied.transcribedDurationMs).toBe(20_000);
 	});
 
+	const contextChunk = (
+		startMs: number,
+		words: { text: string; start: number; end: number }[],
+	) => ({
+		startMs,
+		durationMs: 10_000,
+		contextMs: 10_000,
+		lastAudioSegmentIndex: 10,
+		words: offsetChunkWords(words, startMs, 10_000, 10_000),
+		languageCode: "en",
+		nowIso: "2026-10-28T00:00:20.000Z",
+	});
+	const firstChunk = (words: { text: string; start: number; end: number }[]) =>
+		applyChunkToLiveTranscript(
+			createEmptyLiveTranscript("2026-10-28T00:00:00.000Z"),
+			{
+				startMs: 0,
+				durationMs: 10_000,
+				lastAudioSegmentIndex: 5,
+				words: offsetChunkWords(words, 0, 10_000),
+				languageCode: "en",
+				nowIso: "2026-10-28T00:00:10.000Z",
+			},
+		);
+
+	it("keeps one copy of a word the two chunks time either side of the handover", () => {
+		for (const [previousStart, nextStart] of [
+			[7990, 8010],
+			[8010, 7990],
+		] as const) {
+			const first = firstChunk([
+				{ text: "before", start: 7400, end: 7800 },
+				{ text: "word", start: previousStart, end: previousStart + 300 },
+				{ text: "after,", start: 8500, end: 8900 },
+			]);
+			const merged = applyChunkToLiveTranscript(
+				first,
+				contextChunk(10_000, [
+					{ text: "before", start: 7410, end: 7810 },
+					{ text: "word", start: nextStart, end: nextStart + 300 },
+					{ text: "after", start: 8520, end: 8900 },
+					{ text: "next", start: 11_000, end: 11_400 },
+				]),
+			);
+			expect(merged.words.map((word) => word.text)).toEqual([
+				"before",
+				"word",
+				"after",
+				"next",
+			]);
+		}
+	});
+
+	it("cuts at the handover when the chunks share no word near it", () => {
+		const first = firstChunk([
+			{ text: "alpha", start: 6800, end: 7700 },
+			{ text: "garbled", start: 8100, end: 9900 },
+		]);
+		const merged = applyChunkToLiveTranscript(
+			first,
+			contextChunk(10_000, [
+				{ text: "alfa", start: 6850, end: 7650 },
+				{ text: "bravo", start: 8100, end: 8600 },
+				{ text: "charlie", start: 8700, end: 10_400 },
+			]),
+		);
+		expect(merged.words.map((word) => word.text)).toEqual([
+			"alpha",
+			"bravo",
+			"charlie",
+		]);
+	});
+
 	it("rebuilds a recording exactly when cut words are heard again with context", () => {
 		// A word every 400 ms; the provider garbles words cut by the audio's end
-		// and words in the first second of audio that starts mid-recording.
+		// and words in the first second of audio that starts mid-recording, and
+		// each call times words up to 150 ms differently.
 		const truth = Array.from({ length: 150 }, (_, i) => ({
 			text: `w${i}`,
 			start: i * 400 + 50,
@@ -493,6 +569,8 @@ describe("live chunks with context", () => {
 			audio_segments: Array.from({ length: 30 }, (_, i) => seg(i + 1, 2)),
 			is_complete: true,
 		};
+		const jitter = (startMs: number, fromMs: number) =>
+			((startMs * 7919 + fromMs * 104_729) % 301) - 150;
 		const transcribe = (fromMs: number, toMs: number) =>
 			truth
 				.filter((word) => word.start >= fromMs && word.start < toMs)
@@ -501,8 +579,8 @@ describe("live chunks with context", () => {
 						word.end > toMs || (fromMs > 0 && word.start < fromMs + 1000)
 							? "garbled"
 							: word.text,
-					start: word.start - fromMs,
-					end: Math.min(word.end, toMs) - fromMs,
+					start: word.start - fromMs + jitter(word.start, fromMs),
+					end: Math.min(word.end, toMs) - fromMs + jitter(word.start, fromMs),
 				}));
 
 		const run = (contextSeconds: number) => {
@@ -541,9 +619,11 @@ describe("live chunks with context", () => {
 		expect(withContext.map((word) => word.text)).toEqual(
 			truth.map((word) => word.text),
 		);
-		expect(withContext.map((word) => word.startMs)).toEqual(
-			truth.map((word) => word.start),
-		);
+		for (const [index, word] of withContext.entries()) {
+			expect(
+				Math.abs(word.startMs - (truth[index]?.start ?? 0)),
+			).toBeLessThanOrEqual(150);
+		}
 		expect(run(0).some((word) => word.text === "garbled")).toBe(true);
 	});
 });
