@@ -387,13 +387,32 @@ function joinAtHandover(
 	for (const { word, index } of anchors) {
 		const text = normalizeWordText(word.text);
 		if (!text) continue;
-		const match = previous.findIndex(
-			(candidate) =>
-				Math.abs(candidate.startMs - word.startMs) <=
-					LIVE_TRANSCRIBE.HANDOVER_MATCH_MS &&
-				normalizeWordText(candidate.text) === text,
-		);
-		if (match !== -1) {
+		const before = normalizeWordText(next[index - 1]?.text ?? "");
+		// A repeated word ("no, no") has several nearby copies: prefer the one
+		// whose preceding word also matches, then the closest start.
+		let match: number | undefined;
+		let best = { prefix: 2, distance: Number.POSITIVE_INFINITY };
+		for (const [candidate, other] of previous.entries()) {
+			const distance = Math.abs(other.startMs - word.startMs);
+			if (
+				distance > LIVE_TRANSCRIBE.HANDOVER_MATCH_MS ||
+				normalizeWordText(other.text) !== text
+			) {
+				continue;
+			}
+			const prefix =
+				normalizeWordText(previous[candidate - 1]?.text ?? "") === before
+					? 0
+					: 1;
+			if (
+				prefix < best.prefix ||
+				(prefix === best.prefix && distance < best.distance)
+			) {
+				best = { prefix, distance };
+				match = candidate;
+			}
+		}
+		if (match !== undefined) {
 			return [...previous.slice(0, match), ...next.slice(index)];
 		}
 	}
