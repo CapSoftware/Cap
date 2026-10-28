@@ -159,6 +159,10 @@ label = "Studio Sound sur les nouveaux enregistrements"
 description = "Ce que devient la fenêtre principale lorsqu'un enregistrement commence."
 label = "Fenêtre principale au début de l'enregistrement"
 
+[settings.general.recording.window_capture]
+description = "La façon dont un enregistrement de fenêtre capture la fenêtre choisie. Fenêtre ciblée enregistre uniquement cette fenêtre, centrée et suivie si elle bouge ; Zone de l’écran enregistre la zone de l’écran qu’elle couvre."
+label = "Capture de fenêtre"
+
 [settings.general.recording.post_deletion]
 description = "Indique si la fenêtre d'enregistrement doit se rouvrir."
 label = "Après la suppression d'un enregistrement"
@@ -350,6 +354,10 @@ ultra = "Ultra"
 [settings.options.main_window_start]
 close = "Fermer"
 minimise = "Réduire"
+
+[settings.options.window_capture]
+focused_window = "Fenêtre ciblée"
+screen_region = "Zone de l’écran"
 
 [settings.options.post_studio]
 do_nothing = "Ne rien faire"
