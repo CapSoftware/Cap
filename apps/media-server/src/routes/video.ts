@@ -96,6 +96,7 @@ import { RecordingTimingError } from "../lib/recording-timing";
 import {
 	decodePreverifiedRun,
 	hashRecordingFile,
+	hashRecordingUpload,
 	isRetryableRecordingVerificationError,
 	type PreverifiedVideoRun,
 	verifyDecodeChunks,
@@ -3203,7 +3204,10 @@ async function muxSegmentsAsync(
 	let outputUploadStarted = false;
 	let pendingOutputUpload: PendingStorageUpload | undefined;
 	let pendingOutputHash:
-		| { promise: Promise<string>; abort: AbortController }
+		| {
+				promise: Promise<{ sha256: string; contentIdentity?: string }>;
+				abort: AbortController;
+		  }
 		| undefined;
 	let processingTimeout: ReturnType<typeof setTimeout> | undefined;
 	let errorCode: RecordingErrorCode = "processing-unavailable";
@@ -3212,6 +3216,7 @@ async function muxSegmentsAsync(
 		: undefined;
 	const startedAt = Date.now();
 	let previewAssets: Promise<PreviewAssets> | undefined;
+	let previewUploads: Promise<void> | undefined;
 	const previewAbort = new AbortController();
 
 	try {
@@ -3398,8 +3403,11 @@ async function muxSegmentsAsync(
 			abortController.signal,
 		);
 		const hashAbort = new AbortController();
-		const outputHash = hashRecordingFile(
+		const outputHash = hashRecordingUpload(
 			resultPath,
+			outputUpload.type === "multipart"
+				? { partSize: Math.floor(outputUpload.partSize) }
+				: {},
 			AbortSignal.any([abortController.signal, hashAbort.signal]),
 		);
 		outputHash.catch(() => {});
@@ -3454,7 +3462,8 @@ async function muxSegmentsAsync(
 			message: "Verifying the recording file...",
 		});
 		sendCurrentJobWebhook(jobId);
-		const outputSha256 = await withJobHeartbeat(jobId, () => outputHash);
+		const { sha256: outputSha256, contentIdentity: outputContentIdentity } =
+			await withJobHeartbeat(jobId, () => outputHash);
 		const afterHash = await lstat(resultPath, { bigint: true });
 		if (
 			!afterHash.isFile() ||
@@ -3488,6 +3497,22 @@ async function muxSegmentsAsync(
 			AbortSignal.any([abortController.signal, previewAbort.signal]),
 			videoId,
 		);
+		// Previews go to this attempt's own keys, which nothing reads before the recording is published, so
+		// they upload while the recording uploads; the job still only completes once both are done.
+		const previewSignal = AbortSignal.any([
+			abortController.signal,
+			previewAbort.signal,
+		]);
+		previewUploads = previewAssets.then((assets) =>
+			uploadPreviewAssets(
+				assets,
+				thumbnailPresignedUrl,
+				previewGifPresignedUrl,
+				previewSignal,
+				videoId,
+			),
+		);
+		previewUploads.catch(() => {});
 
 		let metadata = await withJobHeartbeat(jobId, () =>
 			probeVideoFile(resultPath),
@@ -3545,6 +3570,7 @@ async function muxSegmentsAsync(
 					expectedSha256: outputSha256,
 					expectedFileSize: metadata.fileSize,
 					expectedObjectIdentity: uploadObjectIdentity,
+					uploadedContentIdentity: outputContentIdentity,
 					abortSignal: abortController.signal,
 				}),
 			);
@@ -3605,38 +3631,8 @@ async function muxSegmentsAsync(
 
 		const uploadedAt = Date.now();
 		await withJobHeartbeat(jobId, async () => {
-			const assets = await previewAssets;
+			await previewUploads;
 			abortController.signal.throwIfAborted();
-			await Promise.all([
-				thumbnailPresignedUrl && assets?.thumbnail
-					? uploadToS3(
-							assets.thumbnail,
-							thumbnailPresignedUrl,
-							"image/jpeg",
-							abortController.signal,
-						).catch((thumbErr) => {
-							abortController.signal.throwIfAborted();
-							console.warn(
-								`[mux-segments] Thumbnail generation failed for ${videoId}:`,
-								thumbErr,
-							);
-						})
-					: undefined,
-				previewGifPresignedUrl && assets?.previewGif
-					? uploadFileToS3(
-							assets.previewGif.path,
-							previewGifPresignedUrl,
-							"image/gif",
-							abortController.signal,
-						).catch((previewErr) => {
-							abortController.signal.throwIfAborted();
-							console.warn(
-								"[mux-segments] Preview GIF generation failed:",
-								previewErr,
-							);
-						})
-					: undefined,
-			]);
 		});
 
 		abortController.signal.throwIfAborted();
@@ -3716,8 +3712,9 @@ async function muxSegmentsAsync(
 		sendCurrentJobWebhook(jobId);
 	} finally {
 		if (processingTimeout) clearTimeout(processingTimeout);
-		// Previews still rendering here belong to a job that failed before using them.
+		// Previews still rendering or uploading here belong to a job that failed before using them.
 		previewAbort.abort();
+		await previewUploads?.catch(() => {});
 		await (await previewAssets)?.previewGif?.cleanup();
 		await rm(workDir, { recursive: true, force: true }).catch(() => {});
 		releaseWorkDir();
@@ -3727,6 +3724,47 @@ async function muxSegmentsAsync(
 interface PreviewAssets {
 	thumbnail: Uint8Array | null;
 	previewGif: TempFileHandle | null;
+}
+
+// A failed preview upload only costs the asset; an abort still fails the job.
+async function uploadPreviewAssets(
+	assets: PreviewAssets,
+	thumbnailPresignedUrl: string | undefined,
+	previewGifPresignedUrl: string | undefined,
+	signal: AbortSignal,
+	videoId: string,
+): Promise<void> {
+	signal.throwIfAborted();
+	await Promise.all([
+		thumbnailPresignedUrl && assets.thumbnail
+			? uploadToS3(
+					assets.thumbnail,
+					thumbnailPresignedUrl,
+					"image/jpeg",
+					signal,
+				).catch((thumbErr) => {
+					signal.throwIfAborted();
+					console.warn(
+						`[mux-segments] Thumbnail generation failed for ${videoId}:`,
+						thumbErr,
+					);
+				})
+			: undefined,
+		previewGifPresignedUrl && assets.previewGif
+			? uploadFileToS3(
+					assets.previewGif.path,
+					previewGifPresignedUrl,
+					"image/gif",
+					signal,
+				).catch((previewErr) => {
+					signal.throwIfAborted();
+					console.warn(
+						"[mux-segments] Preview GIF generation failed:",
+						previewErr,
+					);
+				})
+			: undefined,
+	]);
 }
 
 // Never rejects: a failed preview only costs the asset, and the caller checks for abort.
