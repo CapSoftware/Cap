@@ -6,7 +6,7 @@
     <radialGradient id="cap-td" cx="20" cy="6" r="34" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="#FFFFFF" stop-opacity="0"/>
       <stop offset="0.62" stop-color="#FFFFFF" stop-opacity="0"/>
-      <stop offset="1" stop-color="#CCD5E5" stop-opacity="0.32"/>
+      <stop offset="1" stop-color="#C4D6FA" stop-opacity="0.14"/>
     </radialGradient>
     <linearGradient id="cap-ttop" x1="20" y1="0" x2="20" y2="9" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="#FFFFFF" stop-opacity="1"/>
