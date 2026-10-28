@@ -1193,6 +1193,11 @@ pub enum SegmentDetail {
         /// Held (paused) windows inside this clip's on-screen box, in output
         /// time (`TL/ClipTrack.tsx:658-666`).
         holds: Arc<[(f64, f64)]>,
+        /// The transition into this clip from the one before it: how long
+        /// its overlap is on screen, in output seconds (holds inside it
+        /// stretch it), and whether it fades through black rather than
+        /// crossfading.
+        transition_in: Option<(f64, bool)>,
     },
     /// `TL/ZoomTrack.tsx:343-349`.
     Zoom {
@@ -1717,6 +1722,12 @@ fn clip_rows(
                     volume: segment.volume(),
                     recording_clip: segment.recording_clip,
                     holds: inner_holds,
+                    transition_in: timeline.effective_transition(index).map(|transition| {
+                        (
+                            effective_to_output(holds, previous + transition.duration) - start,
+                            transition.kind == cap_project::ClipTransitionType::FadeThroughBlack,
+                        )
+                    }),
                 },
             }
         })
@@ -2664,6 +2675,26 @@ fn render_empty_track(
     ))
 }
 
+fn render_transition_in(theme: &Theme, overlap_width: f32, clip_width: f32) -> AnyElement {
+    let accent = Hsla::from(theme.editor.accent);
+    let band_width = overlap_width.min(clip_width).max(3.);
+    let hatch = gpui::linear_gradient(
+        135.,
+        gpui::linear_color_stop(accent.opacity(0.18), 0.42),
+        gpui::linear_color_stop(accent.opacity(0.55), 0.5),
+    );
+    div()
+        .absolute()
+        .top_0()
+        .bottom_0()
+        .left_0()
+        .w(px(band_width))
+        .bg(hatch)
+        .border_x_1()
+        .border_color(accent.opacity(0.7))
+        .into_any_element()
+}
+
 /// `SegmentRoot` (`TL/Track.tsx:100-137`): the positioned box, its tinted fill
 /// and inset ring, the accent bar flush against its left edge, the label at
 /// whatever tier its visible width allows, and the two trim handles.
@@ -2761,6 +2792,18 @@ fn render_segment(
             let hold_width = ((hold_end - hold_start) / secs_per_pixel) as f32;
             fill = fill.child(render_hold(theme, color, hold_x, hold_width, width, height));
         }
+    }
+
+    if let SegmentDetail::Clip {
+        transition_in: Some((seconds, _)),
+        ..
+    } = &segment.detail
+    {
+        fill = fill.child(render_transition_in(
+            theme,
+            (*seconds / secs_per_pixel) as f32,
+            width,
+        ));
     }
 
     fill = fill.child(render_label(

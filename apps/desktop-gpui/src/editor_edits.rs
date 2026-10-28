@@ -3218,6 +3218,7 @@ mod tests {
                 volume: 1.,
                 recording_clip: 0,
                 holds: Arc::from(&[][..]),
+                transition_in: None,
             },
         };
         let clips = [clip(0., 10.), clip(10., 18.)];
