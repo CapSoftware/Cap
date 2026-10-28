@@ -2382,18 +2382,51 @@ mod tests {
             assert!(packed_gap_vs_swscale(ffmpeg::format::Pixel::YUYV422, 16, 8, false).is_none());
             return;
         }
-        assert!(nv12_gap_vs_swscale(128, 16, false, Nv12Pattern::HighFrequency).unwrap() <= 3);
-        assert!(nv12_gap_vs_swscale(16, 8, false, Nv12Pattern::VerticalStep).unwrap() <= 3);
-        assert!(nv12_gap_vs_swscale(64, 32, false, Nv12Pattern::Smooth).unwrap() <= 3);
-        assert!(nv12_gap_vs_swscale(1920, 8, false, Nv12Pattern::HighFrequency).unwrap() <= 3);
-        assert!(nv12_gap_vs_swscale(128, 15, false, Nv12Pattern::HighFrequency).unwrap() <= 3);
-        assert!(nv12_gap_vs_swscale(64, 32, true, Nv12Pattern::HighFrequency).unwrap() <= 3);
-        assert!(nv12_gap_vs_swscale(16, 9, true, Nv12Pattern::VerticalStep).unwrap() <= 3);
-        assert!(
-            packed_gap_vs_swscale(ffmpeg::format::Pixel::YUYV422, 128, 16, false).unwrap() <= 3
+        expect_gap_at_most_3(
+            nv12_gap_vs_swscale(128, 16, false, Nv12Pattern::HighFrequency),
+            "nv12 128x16 high frequency",
         );
-        assert!(packed_gap_vs_swscale(ffmpeg::format::Pixel::YUYV422, 128, 15, true).unwrap() <= 3);
-        assert!(packed_gap_vs_swscale(ffmpeg::format::Pixel::UYVY422, 64, 32, true).unwrap() <= 3);
+        expect_gap_at_most_3(
+            nv12_gap_vs_swscale(16, 8, false, Nv12Pattern::VerticalStep),
+            "nv12 16x8 vertical step",
+        );
+        expect_gap_at_most_3(
+            nv12_gap_vs_swscale(64, 32, false, Nv12Pattern::Smooth),
+            "nv12 64x32 smooth",
+        );
+        expect_gap_at_most_3(
+            nv12_gap_vs_swscale(1920, 8, false, Nv12Pattern::HighFrequency),
+            "nv12 1920x8 high frequency",
+        );
+        expect_gap_at_most_3(
+            nv12_gap_vs_swscale(128, 15, false, Nv12Pattern::HighFrequency),
+            "nv12 128x15 high frequency",
+        );
+        expect_gap_at_most_3(
+            nv12_gap_vs_swscale(64, 32, true, Nv12Pattern::HighFrequency),
+            "nv12 64x32 high frequency mirrored",
+        );
+        expect_gap_at_most_3(
+            nv12_gap_vs_swscale(16, 9, true, Nv12Pattern::VerticalStep),
+            "nv12 16x9 vertical step mirrored",
+        );
+        expect_gap_at_most_3(
+            packed_gap_vs_swscale(ffmpeg::format::Pixel::YUYV422, 128, 16, false),
+            "yuyv 128x16",
+        );
+        expect_gap_at_most_3(
+            packed_gap_vs_swscale(ffmpeg::format::Pixel::YUYV422, 128, 15, true),
+            "yuyv 128x15 mirrored",
+        );
+        expect_gap_at_most_3(
+            packed_gap_vs_swscale(ffmpeg::format::Pixel::UYVY422, 64, 32, true),
+            "uyvy 64x32 mirrored",
+        );
+    }
+
+    fn expect_gap_at_most_3(gap: Option<u8>, what: &str) {
+        let gap = gap.unwrap_or_else(|| panic!("{what}: kernel unavailable"));
+        assert!(gap <= 3, "{what} gap {gap}");
     }
 
     #[test]
@@ -2507,24 +2540,21 @@ mod tests {
         Some(gap_vs_swscale(&frame, &kernel, mirrored))
     }
 
-    // FFmpeg n7.1's aarch64 unscaled path installs `ff_nv12_to_bgra_neon` for
-    // even-height NV12→BGRA whose width is a multiple of 16, unless
-    // `SWS_ACCURATE_RND` is set. That converter repeats each chroma row across
-    // two luma rows, so `SWS_BILINEAR` never runs. The flag leaves the C
-    // bilinear converter in place and does not change its bytes.
-    fn bilinear_reference_flags() -> ffmpeg::software::scaling::Flags {
-        #[cfg(target_arch = "aarch64")]
-        {
-            ffmpeg::software::scaling::Flags::BILINEAR
-                | ffmpeg::software::scaling::Flags::ACCURATE_RND
-        }
-        #[cfg(not(target_arch = "aarch64"))]
-        {
-            ffmpeg::software::scaling::Flags::BILINEAR
-        }
+    // native-deps v0.25 is FFmpeg 7.1 with `--enable-neon`. `SWS_ACCURATE_RND`
+    // only skips `ff_nv12_to_bgra_neon`; the bilinear scaler still installs
+    // NEON `hscale` and `yuv2planeX`, which are not the C reference. Clearing
+    // the detected CPU flags makes this comparison use that C path. x86 already
+    // matches plain `SWS_BILINEAR`.
+    #[cfg(target_arch = "aarch64")]
+    unsafe extern "C" {
+        fn av_force_cpu_flags(flags: i32);
     }
 
     fn gap_vs_swscale(frame: &ffmpeg::frame::Video, kernel: &[u8], mirrored: bool) -> u8 {
+        #[cfg(target_arch = "aarch64")]
+        unsafe {
+            av_force_cpu_flags(0);
+        }
         let mut scaler = ffmpeg::software::scaling::Context::get(
             frame.format(),
             frame.width(),
@@ -2532,7 +2562,7 @@ mod tests {
             ffmpeg::format::Pixel::BGRA,
             frame.width(),
             frame.height(),
-            bilinear_reference_flags(),
+            ffmpeg::software::scaling::Flags::BILINEAR,
         )
         .unwrap();
         let mut converted = ffmpeg::frame::Video::empty();
