@@ -336,6 +336,9 @@ jobs:
           cargo test --locked -p scap-targets --lib --test linux_targets
           cargo test --locked -p cap-enc-ffmpeg
 
+      - name: Test automation command output
+        run: cargo test --locked -p cap --bin cap automation::tests::cli_automation_command_preserves_status_and_stderr
+
   build-gpui:
     name: Build GPUI Desktop
     needs: changes
