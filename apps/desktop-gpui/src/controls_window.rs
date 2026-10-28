@@ -36,7 +36,6 @@ pub struct ControlsWindow {
     _tick: gpui::Task<()>,
     ticking_live: bool,
     level_bar: Entity<ui::MicrophoneLevel>,
-    /// Whether the window is sized for the issue card.
     issue_room: bool,
 }
 
