@@ -1071,9 +1071,7 @@ studio = "Studio-Modus"
 studio_description = "Speichert auf Ihrem Computer und öffnet beim Stoppen den Editor. Die Aufnahmequalität wählen Sie in den Einstellungen."
 
 [main.mode.info]
-instant = "Sofort per Link teilen. Ihre Aufnahme wird schon während der Aufnahme hochgeladen, sodass Sie sie gleich nach dem Beenden teilen können."
-screenshot = "Bildschirmfotos sofort aufnehmen und beschriften. Ideal für schnelle Aufnahmen, Fehlerberichte und visuelle Kommunikation."
-studio = "Lokal in höchster Qualität aufnehmen und später bearbeiten. Perfekt für ausgefeilte Inhalte mit Effekten und Übergängen."
+current = "Aktuell"
 title = "Aufnahmemodi"
 
 [main.mode.name]

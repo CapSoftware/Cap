@@ -33,6 +33,10 @@ use crate::{
 };
 use gpui::{Entity, Task};
 
+/// How long the mode panel's doodles take to draw in. After this they render
+/// still, so an open panel stops asking for frames.
+const MODE_INFO_DRAW_DURATION: std::time::Duration = std::time::Duration::from_millis(1900);
+
 /// `h-9` on `.cap-window-header`.
 const HEADER_HEIGHT: f32 = 36.;
 
@@ -190,14 +194,6 @@ impl Mode {
             Self::Instant => tr::main::mode::header::instant(),
             Self::Studio => tr::main::mode::header::studio(),
             Self::Screenshot => tr::main::mode::header::screenshot(),
-        }
-    }
-
-    fn panel_description(self) -> &'static str {
-        match self {
-            Self::Instant => tr::main::mode::info::instant(),
-            Self::Studio => tr::main::mode::info::studio(),
-            Self::Screenshot => tr::main::mode::info::screenshot(),
         }
     }
 }
@@ -970,6 +966,8 @@ pub struct MainWindow {
     selected_display: Option<DisplayOption>,
     selected_window: Option<WindowOption>,
     panel: Option<Panel>,
+    mode_info_opened_at: std::time::Instant,
+    mode_info_preview: Option<Mode>,
     /// Live filter text for the device and target panels -- a mirror of
     /// `search_input`'s value, kept as a plain `String` because every list in
     /// the panel filters against it from a `&self` method.
@@ -1266,6 +1264,8 @@ impl MainWindow {
             selected_display: None,
             selected_window: None,
             panel: None,
+            mode_info_opened_at: std::time::Instant::now(),
+            mode_info_preview: None,
             search: String::new(),
             search_input,
             _search_events: search_events,
@@ -1363,7 +1363,7 @@ impl MainWindow {
                     }
                 }
                 // `CAP_GPUI_AUTO_PANEL=display|window|camera|microphone|
-                // recordings|screenshots`: open that panel the way a click
+                // recordings|screenshots|modes`: open that panel the way a click
                 // does. Same reason as `CAP_GPUI_AUTO_CAMERA` above -- the
                 // chrome screenshots need the panel on screen and synthetic
                 // clicks are dropped.
@@ -1382,6 +1382,7 @@ impl MainWindow {
                     Ok("screenshots") => {
                         this.open_panel(Panel::Library(LibraryKind::Screenshots), window, cx)
                     }
+                    Ok("modes") => this.open_panel(Panel::ModeInfo, window, cx),
                     _ => {}
                 }
                 // `if (!targetMode) scheduleTargetListPrewarm()` on
@@ -4368,6 +4369,17 @@ impl MainWindow {
         if let Panel::Device(menu) = panel {
             self.start_input_poll(menu, window, cx);
         }
+        if panel == Panel::ModeInfo {
+            self.mode_info_opened_at = std::time::Instant::now();
+            self.mode_info_preview = None;
+            cx.spawn(async move |this, cx| {
+                cx.background_executor()
+                    .timer(MODE_INFO_DRAW_DURATION)
+                    .await;
+                this.update(cx, |_, cx| cx.notify()).ok();
+            })
+            .detach();
+        }
         cx.notify();
     }
 
@@ -6100,90 +6112,175 @@ impl MainWindow {
             .on_click(on_click)
     }
 
-    /// `ModeInfoPanel`. Its copy is deliberately not the copy in `MODE_BUTTONS`
-    /// -- the hover cards and this panel describe the modes differently, so
-    /// both sets of strings are carried.
+    /// The mode panel, drawn in the onboarding tour's hand: one doodle card
+    /// per mode, and below them the tagline and features of whichever card is
+    /// hovered, falling back to the current mode.
     fn render_mode_info(&self, cx: &mut Context<Self>) -> gpui::Div {
         let theme = self.theme;
+        let paper = crate::onboarding_window::Paper::new(&theme);
         let effective_mode = self.effective_mode(cx);
         let locked = self.session.read(cx).editor_recording_target().is_some();
+        let opened_at = self.mode_info_opened_at;
+        let still = cx.reduce_motion() || opened_at.elapsed() >= MODE_INFO_DRAW_DURATION;
+        let shown = self.mode_info_preview.unwrap_or(effective_mode);
+        let detail = crate::onboarding_window::mode_detail(shown);
 
-        div().flex().flex_col().gap(px(8.)).w_full().children(
-            [Mode::Instant, Mode::Studio, Mode::Screenshot].map(|mode| {
-                let selected = mode == effective_mode;
+        let cards = div().flex().flex_row().gap(px(6.)).w_full().children(
+            [Mode::Instant, Mode::Studio, Mode::Screenshot]
+                .into_iter()
+                .enumerate()
+                .map(|(index, mode)| {
+                    let selected = mode == effective_mode;
+                    let hover_border: Hsla = if theme.is_dark() {
+                        theme.gray_8
+                    } else {
+                        theme.gray_7
+                    }
+                    .into();
 
-                div()
-                    .id(SharedString::from(mode.panel_title()))
-                    .when(locked && !selected, |this| this.opacity(0.5))
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap(px(12.))
-                    .p(px(12.))
-                    .w_full()
-                    .rounded(px(12.))
-                    .border_2()
-                    .border_color(if selected {
-                        Hsla::from(theme.blue_9)
-                    } else if theme.is_dark() {
-                        theme.body_border(5)
-                    } else {
-                        theme.body_border(4)
-                    })
-                    .bg(if selected {
-                        theme.tile_selected_bg()
-                    } else if theme.is_dark() {
-                        theme.body_fill(3)
-                    } else {
-                        theme.body_fill(2)
-                    })
-                    .child(
-                        svg()
-                            .path(mode.icon())
-                            .size(px(20.))
-                            .flex_shrink_0()
-                            .text_color(if selected {
-                                theme.blue_11
+                    div()
+                        .id(SharedString::from(mode.panel_title()))
+                        .when(self.keyboard_nav, ui::keyboard_nav::stop)
+                        .role(gpui::Role::Button)
+                        .aria_label(mode.display_name())
+                        .aria_selected(selected)
+                        .when(locked && !selected, |this| this.opacity(0.5))
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .flex_auto()
+                        .gap(px(2.))
+                        .pt(px(10.))
+                        .pb(px(12.))
+                        .px(px(4.))
+                        .rounded(px(16.))
+                        .border(px(1.5))
+                        .border_color(if selected { paper.accent } else { paper.track })
+                        .bg(paper.card)
+                        .when(!selected, |this| {
+                            this.hover(move |style| style.border_color(hover_border))
+                        })
+                        .child(crate::doodle::doodle(
+                            crate::onboarding_window::mode_doodle(mode),
+                            paper.palette(),
+                            opened_at + std::time::Duration::from_millis(index as u64 * 150),
+                            still,
+                            64.,
+                            56.,
+                        ))
+                        .child(
+                            div()
+                                .whitespace_nowrap()
+                                .text_size(px(12.5))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(paper.ink)
+                                .child(mode.display_name()),
+                        )
+                        .on_hover(cx.listener(move |this, hovered: &bool, _window, cx| {
+                            let preview = if *hovered {
+                                Some(mode)
+                            } else if this.mode_info_preview == Some(mode) {
+                                None
                             } else {
-                                theme.gray_12
-                            }),
-                    )
+                                return;
+                            };
+                            if this.mode_info_preview != preview {
+                                this.mode_info_preview = preview;
+                                cx.notify();
+                            }
+                        }))
+                        .on_click(cx.listener(move |this, _, _window, cx| {
+                            this.set_mode(mode, cx);
+                            this.close_panel(cx);
+                        }))
+                }),
+        );
+
+        let features =
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(9.))
+                .children(detail.features.iter().enumerate().map(|(index, feature)| {
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(9.))
+                        .child(crate::doodle::doodle(
+                            &crate::onboarding_doodles::TICK,
+                            paper.palette(),
+                            opened_at + std::time::Duration::from_millis(500 + index as u64 * 120),
+                            still,
+                            16.,
+                            16.,
+                        ))
+                        .child(
+                            div()
+                                .min_w_0()
+                                .truncate()
+                                .text_size(px(12.5))
+                                .text_color(paper.ink)
+                                .child(feature()),
+                        )
+                }));
+
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(20.))
+            .w_full()
+            .child(cards)
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(14.))
+                    .px(px(6.))
                     .child(
                         div()
                             .flex()
                             .flex_col()
-                            .gap(px(2.))
-                            .flex_1()
-                            .min_w_0()
+                            .gap(px(3.))
                             .child(
                                 div()
-                                    .text_size(px(14.))
-                                    // `text-sm font-semibold`
-                                    // (`ModeInfoPanel.tsx:106`). `font-semibold`
-                                    // renders 700: no 600 face is loaded over
-                                    // there (`ui-solid/vite.js:31-33`).
-                                    .font_weight(FontWeight::BOLD)
-                                    .text_color(if selected {
-                                        theme.blue_11
-                                    } else {
-                                        theme.gray_12
-                                    })
-                                    .child(mode.display_name()),
+                                    .flex()
+                                    .flex_row()
+                                    .items_center()
+                                    .gap(px(8.))
+                                    .child(
+                                        div()
+                                            .text_size(px(15.))
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(paper.ink)
+                                            .child((detail.title)()),
+                                    )
+                                    .when(shown == effective_mode, |this| {
+                                        this.child(
+                                            div()
+                                                .px(px(7.))
+                                                .py(px(1.))
+                                                .rounded_full()
+                                                .bg(Hsla {
+                                                    a: 0.12,
+                                                    ..paper.accent
+                                                })
+                                                .text_size(px(11.))
+                                                .font_weight(FontWeight::MEDIUM)
+                                                .text_color(paper.accent)
+                                                .child(tr::main::mode::info::current()),
+                                        )
+                                    }),
                             )
                             .child(
                                 div()
                                     .text_size(px(12.))
-                                    .text_color(theme.gray_11)
-                                    .child(mode.panel_description()),
+                                    .text_color(paper.soft)
+                                    .child((detail.tagline)()),
                             ),
                     )
-                    .hover(|style| style.bg(theme.body_hover_fill(4)))
-                    .on_click(cx.listener(move |this, _, _window, cx| {
-                        this.set_mode(mode, cx);
-                        this.close_panel(cx);
-                    }))
-            }),
-        )
+                    .child(features),
+            )
     }
 
     fn render_access_banner(

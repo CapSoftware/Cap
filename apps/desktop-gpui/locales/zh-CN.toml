@@ -1071,9 +1071,7 @@ studio = "Studio 模式"
 studio_description = "保存到你的电脑，停止后打开编辑器。录制质量可在设置中选择。"
 
 [main.mode.info]
-instant = "通过链接即时分享。录制内容会边录边上传，结束后即可立即分享。"
-screenshot = "即时截图并添加标注。非常适合快速截图、报告问题和视觉沟通。"
-studio = "以最高画质在本地录制，方便后期编辑。非常适合制作带特效和转场的精致内容。"
+current = "当前"
 title = "录制模式"
 
 [main.mode.name]

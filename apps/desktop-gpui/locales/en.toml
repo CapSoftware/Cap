@@ -1073,9 +1073,7 @@ studio = "Studio mode"
 studio_description = "Saves to your computer and opens the editor when you stop. Choose recording quality in settings."
 
 [main.mode.info]
-instant = "Share instantly with a link. Your recording uploads as you record, so you can share it immediately when you're done."
-screenshot = "Capture and annotate screenshots instantly. Great for quick captures, bug reports, and visual communication."
-studio = "Record locally in the highest quality for editing later. Perfect for creating polished content with effects and transitions."
+current = "Current"
 title = "Recording Modes"
 
 [main.mode.name]
