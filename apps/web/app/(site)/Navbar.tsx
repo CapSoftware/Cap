@@ -17,7 +17,6 @@ export const Navbar = ({ stars }: NavbarProps) => {
 					<Link passHref href="/home" className="shrink-0">
 						<Logo
 							className="transition-all duration-200 ease-out"
-							squaredMark
 							viewBoxDimensions="0 0 120 40"
 							style={{
 								width: 90,
