@@ -624,9 +624,8 @@ impl ExportAudioTrack {
         })
     }
 
-    /// Reads this block's source window and runs the microphone through the
-    /// clip's voice EQ and Studio Sound, in the order and with the windows the
-    /// playback renderer uses, so both produce the same samples.
+    /// Voice EQ and Studio Sound run in the order and with the windows the
+    /// playback renderer uses, so preview and export produce the same samples.
     fn render_voice(
         &mut self,
         project: &ProjectConfiguration,

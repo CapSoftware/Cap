@@ -187,8 +187,6 @@ struct SpeedAudioProcessor {
     voice_enhancement: VoiceEnhancementCache,
 }
 
-/// A recording's decoded tracks and the voice tone the clip being rendered
-/// applies to its microphone.
 #[derive(Clone, Copy)]
 struct ClipAudio<'a> {
     data: &'a [AudioSegment],
@@ -883,7 +881,6 @@ fn source_cursor(source: TimelineSource<'_>, samples: usize) -> AudioRendererCur
     }
 }
 
-/// The EQ curve `voice_eq` describes, whether or not it is switched on.
 pub fn voice_eq_filters(voice_eq: &cap_project::VoiceEq) -> [Option<ToneFilter>; 5] {
     let voice_eq = voice_eq.sanitized();
     let (low, low_mid, high_mid, high) = (
@@ -917,8 +914,6 @@ pub fn voice_eq_filters(voice_eq: &cap_project::VoiceEq) -> [Option<ToneFilter>;
     ]
 }
 
-/// The voice EQ and de-click a clip applies to its microphone, or `None` when
-/// they would leave the audio untouched.
 pub(crate) fn segment_voice_tone(segment: &TimelineSegment) -> Option<VoiceToneSettings> {
     let voice_eq = segment.active_voice_eq()?;
     let settings = VoiceToneSettings {
