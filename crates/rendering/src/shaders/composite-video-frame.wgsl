@@ -359,7 +359,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
 
         for (var i = 0; i <= 20; i = i + 1) {
             let sample_uv = target_uv + velocity_uv * (f32(i) / k);
-            var tap = sample_texture(sample_uv, crop_bounds_uv);
+            var tap = sample_texture_blur(sample_uv, crop_bounds_uv);
             tap = apply_rounded_corners(tap, sample_uv);
             accum += tap.rgb * tap.a;
             alpha_sum += tap.a;
@@ -399,7 +399,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         let weight = 4.0 * (percent - percent * percent);
         let sample_uv = target_uv + scaled_dir * percent;
 
-        var tap = sample_texture(sample_uv, crop_bounds_uv);
+        var tap = sample_texture_blur(sample_uv, crop_bounds_uv);
         tap = apply_rounded_corners(tap, sample_uv);
         accum += tap.rgb * tap.a * weight;
         alpha_sum += tap.a * weight;
@@ -419,21 +419,37 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     );
 }
 
+fn cropped_sample_uv(uv: vec2<f32>, crop_bounds_uv: vec4<f32>) -> vec2<f32> {
+    var sample_uv = uv;
+    if uniforms.mirror_x != 0.0 {
+        sample_uv.x = 1.0 - sample_uv.x;
+    }
+
+    let crop_size = crop_bounds_uv.zw - crop_bounds_uv.xy;
+    var cropped_uv = sample_uv * crop_size + crop_bounds_uv.xy;
+
+    let texel_offset = 1.0 / uniforms.frame_size;
+    let safe_min = crop_bounds_uv.xy + texel_offset;
+    let safe_max = crop_bounds_uv.zw - texel_offset;
+    return clamp(cropped_uv, safe_min, safe_max);
+}
+
+fn sample_texture_blur(uv: vec2<f32>, crop_bounds_uv: vec4<f32>) -> vec4<f32> {
+    if uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0 {
+        let cropped_uv = cropped_sample_uv(uv, crop_bounds_uv);
+        let center_sample = textureSample(frame_texture, frame_sampler, cropped_uv);
+        let out_alpha = select(1.0, center_sample.a, uniforms.preserve_source_alpha > 0.5);
+        return vec4(center_sample.rgb, out_alpha);
+    }
+
+    return vec4(0.0);
+}
+
 fn sample_texture(uv: vec2<f32>, crop_bounds_uv: vec4<f32>) -> vec4<f32> {
     if uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0 {
-        var sample_uv = uv;
-        if uniforms.mirror_x != 0.0 {
-            sample_uv.x = 1.0 - sample_uv.x;
-        }
+        let cropped_uv = cropped_sample_uv(uv, crop_bounds_uv);
 
         let crop_size = crop_bounds_uv.zw - crop_bounds_uv.xy;
-        var cropped_uv = sample_uv * crop_size + crop_bounds_uv.xy;
-
-        let texel_offset = 1.0 / uniforms.frame_size;
-        let safe_min = crop_bounds_uv.xy + texel_offset;
-        let safe_max = crop_bounds_uv.zw - texel_offset;
-        cropped_uv = clamp(cropped_uv, safe_min, safe_max);
-
         let source_size = uniforms.frame_size * crop_size;
         let target_size = uniforms.target_size;
         let scale_ratio = source_size / target_size;
