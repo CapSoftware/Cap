@@ -504,6 +504,7 @@ function OverlayApp() {
 	const previewOpenRef = useRef(false);
 	const livePreviewReadyRef = useRef(false);
 	const previewDismissedRef = useRef(false);
+	const previewVisibilityGenerationRef = useRef(0);
 	const lastFrameRef = useRef<WebcamPreviewFrame | null>(null);
 	const lastFrameSavedAtRef = useRef(0);
 	const startupReplayedRef = useRef(false);
@@ -883,6 +884,7 @@ function OverlayApp() {
 			}
 
 			if (message.type === "overlay-hide") {
+				previewVisibilityGenerationRef.current += 1;
 				recordingPreviewActiveRef.current = false;
 				setRecordingPreviewActive(false);
 				stopLocalPreview();
@@ -931,48 +933,61 @@ function OverlayApp() {
 
 			if (message.type !== "overlay-settings") return false;
 
-			if (previewDismissedRef.current) return false;
+			// The service worker clears the dismissed flag right before it pushes
+			// these settings, but this tab only hears about that through an async
+			// storage change. Re-read the flag so a reopened recorder is not
+			// dropped as still dismissed. A hide or newer push that lands while the
+			// read is pending wins.
+			previewVisibilityGenerationRef.current += 1;
+			const generation = previewVisibilityGenerationRef.current;
+			void loadWebcamPreviewDismissed()
+				.catch(() => previewDismissedRef.current)
+				.then((dismissed) => {
+					if (previewVisibilityGenerationRef.current !== generation) return;
+					previewDismissedRef.current = dismissed;
+					if (dismissed) return;
 
-			const webcamSettings = message.settings;
-			const sameLivePreview =
-				previewOpenRef.current &&
-				livePreviewReadyRef.current &&
-				isSameWebcamSettings(webcamRef.current, webcamSettings);
-			if (!sameLivePreview) {
-				setLivePreviewReady(false);
-			} else {
-				// A restarted service worker loses which tab owns the live preview,
-				// so re-announce readiness whenever it pushes the same settings.
-				void sendServiceWorkerMessage({
-					target: "service-worker",
-					type: "webcam-preview-ready",
-				}).catch(() => undefined);
-			}
-			setPreviewError(null);
-			setShowPreviewError(false);
-			setPreviewOpen(true);
-			recordingPreviewActiveRef.current = message.recording;
-			setRecordingPreviewActive(message.recording);
-			if (settingsRef.current) {
-				setExtensionSettings({
-					...settingsRef.current,
-					webcam: webcamSettings,
+					const webcamSettings = message.settings;
+					const sameLivePreview =
+						previewOpenRef.current &&
+						livePreviewReadyRef.current &&
+						isSameWebcamSettings(webcamRef.current, webcamSettings);
+					if (!sameLivePreview) {
+						setLivePreviewReady(false);
+					} else {
+						// A restarted service worker loses which tab owns the live preview,
+						// so re-announce readiness whenever it pushes the same settings.
+						void sendServiceWorkerMessage({
+							target: "service-worker",
+							type: "webcam-preview-ready",
+						}).catch(() => undefined);
+					}
+					setPreviewError(null);
+					setShowPreviewError(false);
+					setPreviewOpen(true);
+					recordingPreviewActiveRef.current = message.recording;
+					setRecordingPreviewActive(message.recording);
+					if (settingsRef.current) {
+						setExtensionSettings({
+							...settingsRef.current,
+							webcam: webcamSettings,
+						});
+					} else {
+						sendServiceWorkerMessage({
+							target: "service-worker",
+							type: "get-overlay-settings",
+						})
+							.then((response) => {
+								if (response.ok && response.settings) {
+									setExtensionSettings({
+										...response.settings,
+										webcam: webcamSettings,
+									});
+								}
+							})
+							.catch(() => undefined);
+					}
 				});
-			} else {
-				sendServiceWorkerMessage({
-					target: "service-worker",
-					type: "get-overlay-settings",
-				})
-					.then((response) => {
-						if (response.ok && response.settings) {
-							setExtensionSettings({
-								...response.settings,
-								webcam: webcamSettings,
-							});
-						}
-					})
-					.catch(() => undefined);
-			}
 			return false;
 		};
 
@@ -1550,6 +1565,7 @@ function OverlayApp() {
 	}, [endDrag, handlePointerMove, isDragging]);
 
 	const handleClose = useCallback(() => {
+		previewVisibilityGenerationRef.current += 1;
 		previewDismissedRef.current = true;
 		stopLocalPreview();
 		setRecordingPreviewActive(false);
@@ -1883,6 +1899,7 @@ function OverlayApp() {
 				onToggleWebcam={() => {
 					if (!webcam) return;
 					const nextEnabled = !webcam.enabled;
+					previewVisibilityGenerationRef.current += 1;
 					previewDismissedRef.current = !nextEnabled;
 					setRecordingPreviewActive(nextEnabled);
 					setPreviewOpen(nextEnabled);
