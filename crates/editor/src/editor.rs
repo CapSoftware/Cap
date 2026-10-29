@@ -6,7 +6,8 @@ use cap_project::{ClipTransitionType, CursorEvents, ProjectConfiguration};
 use cap_rendering::SurfaceFrame;
 use cap_rendering::{
     DecodedSegmentFrames, FrameLayout, FrameRenderStageTimings, FrameRenderer, Nv12RenderedFrame,
-    ProjectUniforms, RenderVideoConstants, RenderedFrame, RendererLayers, TransitionRenderInput,
+    ProjectUniforms, RenderVideoConstants, RenderedFrame, RendererLayers, RgbaToBgraReadback,
+    TransitionRenderInput,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -52,6 +53,8 @@ pub struct RendererTransitionInput {
 
 pub enum EditorFrameOutput {
     Rgba(RenderedFrame),
+    /// Tightly packed BGRA: `padded_bytes_per_row == width * 4`.
+    Bgra(RenderedFrame),
     Nv12(Nv12RenderedFrame),
     #[cfg(target_os = "macos")]
     Surface(SurfaceFrame),
@@ -61,8 +64,23 @@ pub enum EditorFrameOutput {
 pub enum EditorFrameFormat {
     #[default]
     Rgba,
+    Bgra,
     #[cfg(target_os = "macos")]
     BgraSurface,
+}
+
+/// `Bgra` needs the adapter to render to and copy from a `Bgra8Unorm`
+/// texture; where it cannot, the preview falls back to `Rgba` frames, which
+/// every consumer of `Bgra` also accepts.
+pub(crate) fn supported_frame_format(
+    format: EditorFrameFormat,
+    constants: &RenderVideoConstants,
+) -> EditorFrameFormat {
+    if format == EditorFrameFormat::Bgra && !RgbaToBgraReadback::supported(&constants._adapter) {
+        tracing::warn!("adapter cannot render BGRA readbacks; preview frames stay RGBA");
+        return EditorFrameFormat::Rgba;
+    }
+    format
 }
 
 pub type RendererLayersReceiver = oneshot::Receiver<RendererLayers>;
@@ -203,6 +221,7 @@ impl Renderer {
             output_format,
         } = self;
 
+        let output_format = supported_frame_format(output_format, &render_constants);
         let mut frame_renderer = FrameRenderer::new(&render_constants);
 
         let mut layers = match layers_rx.await {
@@ -426,6 +445,7 @@ impl Renderer {
             let flush_start = Instant::now();
             if drained_count > 0 {
                 let _ = frame_renderer.flush_pipeline().await;
+                let _ = frame_renderer.flush_pipeline_bgra().await;
             }
             let flush_duration = if drained_count > 0 {
                 flush_start.elapsed()
@@ -440,23 +460,47 @@ impl Renderer {
             let render_start = Instant::now();
             let input_frame_number = current.input.uniforms().frame_number;
             let frame_layout = current.input.uniforms().frame_layout();
+            let realtime = current.realtime;
             let render_result = match (output_format, current.input) {
-                (EditorFrameFormat::Rgba, PendingRenderInput::Single(input)) => frame_renderer
-                    .render_immediate_with_timings(
-                        input.segment_frames,
-                        input.uniforms,
-                        &input.cursor,
-                        true,
-                        &mut layers,
-                    )
-                    .await
-                    .map(|(frame, timings)| {
-                        (
-                            EditorFrameOutput::Rgba(frame),
-                            PlaybackRenderOutputFormat::Rgba,
-                            timings,
-                        )
-                    }),
+                (EditorFrameFormat::Rgba, PendingRenderInput::Single(input)) => {
+                    if realtime {
+                        frame_renderer
+                            .render_with_timings(
+                                input.segment_frames,
+                                input.uniforms,
+                                &input.cursor,
+                                true,
+                                &mut layers,
+                            )
+                            .await
+                            .map(|(frame, timings)| {
+                                frame.map(|frame| {
+                                    (
+                                        EditorFrameOutput::Rgba(frame),
+                                        PlaybackRenderOutputFormat::Rgba,
+                                        timings,
+                                    )
+                                })
+                            })
+                    } else {
+                        frame_renderer
+                            .render_immediate_with_timings(
+                                input.segment_frames,
+                                input.uniforms,
+                                &input.cursor,
+                                true,
+                                &mut layers,
+                            )
+                            .await
+                            .map(|(frame, timings)| {
+                                Some((
+                                    EditorFrameOutput::Rgba(frame),
+                                    PlaybackRenderOutputFormat::Rgba,
+                                    timings,
+                                ))
+                            })
+                    }
+                }
                 (
                     EditorFrameFormat::Rgba,
                     PendingRenderInput::Transition {
@@ -465,32 +509,122 @@ impl Renderer {
                         kind,
                         progress,
                     },
-                ) => frame_renderer
-                    .render_transition_immediate(
-                        TransitionRenderInput {
-                            segment_frames: outgoing.segment_frames,
-                            uniforms: outgoing.uniforms,
-                            cursor: &outgoing.cursor,
-                            render_display: true,
-                        },
-                        TransitionRenderInput {
-                            segment_frames: incoming.segment_frames,
-                            uniforms: incoming.uniforms,
-                            cursor: &incoming.cursor,
-                            render_display: true,
-                        },
+                ) => {
+                    let outgoing = TransitionRenderInput {
+                        segment_frames: outgoing.segment_frames,
+                        uniforms: outgoing.uniforms,
+                        cursor: &outgoing.cursor,
+                        render_display: true,
+                    };
+                    let incoming = TransitionRenderInput {
+                        segment_frames: incoming.segment_frames,
+                        uniforms: incoming.uniforms,
+                        cursor: &incoming.cursor,
+                        render_display: true,
+                    };
+                    if realtime {
+                        frame_renderer
+                            .render_transition(outgoing, incoming, kind, progress, &mut layers)
+                            .await
+                            .map(|frame| {
+                                frame.map(|frame| {
+                                    (
+                                        EditorFrameOutput::Rgba(frame),
+                                        PlaybackRenderOutputFormat::Rgba,
+                                        FrameRenderStageTimings::default(),
+                                    )
+                                })
+                            })
+                    } else {
+                        frame_renderer
+                            .render_transition_immediate(
+                                outgoing,
+                                incoming,
+                                kind,
+                                progress,
+                                &mut layers,
+                            )
+                            .await
+                            .map(|frame| {
+                                Some((
+                                    EditorFrameOutput::Rgba(frame),
+                                    PlaybackRenderOutputFormat::Rgba,
+                                    FrameRenderStageTimings::default(),
+                                ))
+                            })
+                    }
+                }
+                (EditorFrameFormat::Bgra, PendingRenderInput::Single(input)) => {
+                    if realtime {
+                        frame_renderer
+                            .render_bgra_with_timings(
+                                input.segment_frames,
+                                input.uniforms,
+                                &input.cursor,
+                                true,
+                                &mut layers,
+                            )
+                            .await
+                            .map(|(frame, timings)| {
+                                frame.map(|frame| {
+                                    (
+                                        EditorFrameOutput::Bgra(frame),
+                                        PlaybackRenderOutputFormat::Bgra,
+                                        timings,
+                                    )
+                                })
+                            })
+                    } else {
+                        frame_renderer
+                            .render_immediate_bgra_with_timings(
+                                input.segment_frames,
+                                input.uniforms,
+                                &input.cursor,
+                                true,
+                                &mut layers,
+                            )
+                            .await
+                            .map(|(frame, timings)| {
+                                Some((
+                                    EditorFrameOutput::Bgra(frame),
+                                    PlaybackRenderOutputFormat::Bgra,
+                                    timings,
+                                ))
+                            })
+                    }
+                }
+                (
+                    EditorFrameFormat::Bgra,
+                    PendingRenderInput::Transition {
+                        outgoing,
+                        incoming,
                         kind,
                         progress,
-                        &mut layers,
-                    )
-                    .await
-                    .map(|frame| {
-                        (
-                            EditorFrameOutput::Rgba(frame),
-                            PlaybackRenderOutputFormat::Rgba,
-                            FrameRenderStageTimings::default(),
-                        )
-                    }),
+                    },
+                ) => {
+                    let outgoing = TransitionRenderInput {
+                        segment_frames: outgoing.segment_frames,
+                        uniforms: outgoing.uniforms,
+                        cursor: &outgoing.cursor,
+                        render_display: true,
+                    };
+                    let incoming = TransitionRenderInput {
+                        segment_frames: incoming.segment_frames,
+                        uniforms: incoming.uniforms,
+                        cursor: &incoming.cursor,
+                        render_display: true,
+                    };
+                    frame_renderer
+                        .render_transition_bgra(outgoing, incoming, kind, progress, &mut layers)
+                        .await
+                        .map(|frame| {
+                            Some((
+                                EditorFrameOutput::Bgra(frame),
+                                PlaybackRenderOutputFormat::Bgra,
+                                FrameRenderStageTimings::default(),
+                            ))
+                        })
+                }
                 #[cfg(target_os = "macos")]
                 (EditorFrameFormat::BgraSurface, PendingRenderInput::Single(input)) => {
                     frame_renderer
@@ -503,11 +637,11 @@ impl Renderer {
                         )
                         .await
                         .map(|frame| {
-                            (
+                            Some((
                                 EditorFrameOutput::Surface(frame),
                                 PlaybackRenderOutputFormat::Bgra,
                                 FrameRenderStageTimings::default(),
-                            )
+                            ))
                         })
                 }
                 #[cfg(target_os = "macos")]
@@ -539,18 +673,20 @@ impl Renderer {
                     )
                     .await
                     .map(|frame| {
-                        (
+                        Some((
                             EditorFrameOutput::Surface(frame),
                             PlaybackRenderOutputFormat::Bgra,
                             FrameRenderStageTimings::default(),
-                        )
+                        ))
                     }),
             };
             match render_result {
-                Ok((frame, output_format, render_stage_timings)) => {
+                Ok(Some((frame, output_format, render_stage_timings))) => {
                     let render_duration = render_start.elapsed();
                     let frame_number = match &frame {
-                        EditorFrameOutput::Rgba(frame) => frame.frame_number,
+                        EditorFrameOutput::Rgba(frame) | EditorFrameOutput::Bgra(frame) => {
+                            frame.frame_number
+                        }
                         EditorFrameOutput::Nv12(frame) => frame.frame_number,
                         #[cfg(target_os = "macos")]
                         EditorFrameOutput::Surface(frame) => frame.frame_number,
@@ -572,6 +708,9 @@ impl Renderer {
                             output_format,
                         });
                     }
+                    let _ = current.finished.send(true);
+                }
+                Ok(None) => {
                     let _ = current.finished.send(true);
                 }
                 Err(e) => {

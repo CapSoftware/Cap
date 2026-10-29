@@ -582,6 +582,7 @@ async fn run_preview(
     );
     check_cursor_error(&constants)?;
     control.check()?;
+    let frame_format = crate::editor::supported_frame_format(options.frame_format, &constants);
     let mut renderer = FrameRenderer::new(&constants);
     let mut cursor_cache = PreviewCursorCache::default();
     let mut zoom_cache = VecDeque::new();
@@ -685,11 +686,21 @@ async fn run_preview(
                 )
             };
             let layout = uniforms.frame_layout();
-            let output = match options.frame_format {
+            let output = match frame_format {
                 EditorFrameFormat::Rgba => renderer
                     .render_immediate(frames, uniforms, &cursor, true, &mut layers)
                     .await
                     .map(EditorFrameOutput::Rgba),
+                EditorFrameFormat::Bgra => renderer
+                    .render_immediate_bgra_with_timings(
+                        frames,
+                        uniforms,
+                        &cursor,
+                        true,
+                        &mut layers,
+                    )
+                    .await
+                    .map(|(frame, _)| EditorFrameOutput::Bgra(frame)),
                 #[cfg(target_os = "macos")]
                 EditorFrameFormat::BgraSurface => renderer
                     .render_immediate_bgra_surface(frames, uniforms, &cursor, true, &mut layers)
@@ -802,7 +813,9 @@ fn validate_output(
     layout: FrameLayout,
 ) -> Result<(), PreparingPreviewError> {
     let (number, width, height) = match output {
-        EditorFrameOutput::Rgba(frame) => (frame.frame_number, frame.width, frame.height),
+        EditorFrameOutput::Rgba(frame) | EditorFrameOutput::Bgra(frame) => {
+            (frame.frame_number, frame.width, frame.height)
+        }
         EditorFrameOutput::Nv12(frame) => (frame.frame_number, frame.width, frame.height),
         #[cfg(target_os = "macos")]
         EditorFrameOutput::Surface(frame) => (frame.frame_number, frame.width, frame.height),

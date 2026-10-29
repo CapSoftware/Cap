@@ -268,6 +268,7 @@ mod tests {
         ffmpeg::init().unwrap();
         for format in [
             crate::EditorFrameFormat::Rgba,
+            crate::EditorFrameFormat::Bgra,
             #[cfg(target_os = "macos")]
             crate::EditorFrameFormat::BgraSurface,
         ] {

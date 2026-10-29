@@ -15,8 +15,8 @@ use decoder::{AsyncVideoDecoderHandle, spawn_decoder};
 #[cfg(target_os = "macos")]
 use frame_pipeline::finish_encoder_bgra_surface;
 use frame_pipeline::{
-    NV12BufferPool, RenderSession, finish_encoder_nv12_pooled, finish_encoder_timed,
-    flush_pending_readback,
+    NV12BufferPool, RenderSession, finish_encoder_bgra_readback, finish_encoder_nv12_pooled,
+    finish_encoder_timed, flush_pending_bgra_readback, flush_pending_readback,
 };
 use futures::future::OptionFuture;
 use layers::{
@@ -72,6 +72,7 @@ pub use frame_pipeline::Nv12Surface;
 #[cfg(target_os = "macos")]
 pub use frame_pipeline::SurfaceFrame;
 pub use frame_pipeline::{GpuOutputFormat, Nv12RenderedFrame, RenderedFrame, SharedNv12Buffer};
+pub use frame_pipeline::{PendingBgraReadback, RgbaToBgraReadback};
 #[cfg(target_os = "macos")]
 pub use frame_pipeline::{PendingSurface, RgbaToBgraSurfaceConverter};
 pub use frame_windows::FrameWindows;
@@ -7323,6 +7324,7 @@ pub struct FrameRenderer<'a> {
     nv12_surface_output: bool,
     #[cfg(target_os = "macos")]
     bgra_surface_converter: Option<RgbaToBgraSurfaceConverter>,
+    bgra_readback: Option<frame_pipeline::RgbaToBgraReadback>,
     nv12_buffer_pool: NV12BufferPool,
     transition_compositor: Option<TransitionCompositor>,
     export_deadlines: bool,
@@ -7342,6 +7344,7 @@ impl<'a> FrameRenderer<'a> {
             nv12_surface_output: false,
             #[cfg(target_os = "macos")]
             bgra_surface_converter: None,
+            bgra_readback: None,
             nv12_buffer_pool: NV12BufferPool::new(6),
             transition_compositor: None,
             export_deadlines: false,
@@ -7651,12 +7654,227 @@ impl<'a> FrameRenderer<'a> {
         Ok((frame, timings))
     }
 
+    /// [`Self::render_immediate_with_timings`], read back as tightly packed
+    /// BGRA (`padded_bytes_per_row == width * 4`) instead of padded RGBA.
+    pub async fn render_bgra_with_timings(
+        &mut self,
+        segment_frames: DecodedSegmentFrames,
+        uniforms: ProjectUniforms,
+        cursor: &CursorEvents,
+        render_display: bool,
+        layers: &mut RendererLayers,
+    ) -> Result<(Option<RenderedFrame>, FrameRenderStageTimings), RenderingError> {
+        let phase = std::mem::take(&mut self.readiness_first_render)
+            .then(|| readiness::Phase::start("frame.bgra_readback_first_render"));
+        let mut last_error = None;
+
+        for attempt in 0..Self::MAX_RENDER_RETRIES {
+            if attempt > 0 {
+                tracing::warn!(
+                    frame_number = uniforms.frame_number,
+                    attempt = attempt + 1,
+                    "Retrying BGRA readback frame render after GPU error"
+                );
+                self.reset_session();
+                self.bgra_readback = None;
+                tokio::time::sleep(std::time::Duration::from_millis(100 * (attempt as u64 + 1)))
+                    .await;
+            }
+
+            let readback = self.bgra_readback.get_or_insert_with(|| {
+                frame_pipeline::RgbaToBgraReadback::new(&self.constants.device)
+            });
+            let session = self.session.get_or_insert_with(|| {
+                RenderSession::new(
+                    &self.constants.device,
+                    uniforms.output_size.0,
+                    uniforms.output_size.1,
+                )
+                .with_export_deadlines(self.export_deadlines)
+            });
+            session.update_texture_size(
+                &self.constants.device,
+                uniforms.output_size.0,
+                uniforms.output_size.1,
+            );
+
+            let (encoder, mut timings) = encode_frame_with_timings(
+                self.constants,
+                &segment_frames,
+                &uniforms,
+                cursor,
+                render_display,
+                layers,
+                session,
+            )
+            .await?;
+
+            let finish_start = Instant::now();
+            match finish_encoder_bgra_readback(
+                session,
+                readback,
+                &self.constants.device,
+                &self.constants.queue,
+                &uniforms,
+                encoder,
+            )
+            .await
+            {
+                Ok(frame) => {
+                    timings.finish_duration = finish_start.elapsed();
+                    if let Some(phase) = phase {
+                        phase.finish("frame_ready");
+                    }
+                    return Ok((frame, timings));
+                }
+                Err(RenderingError::BufferMapWaitingFailed) => {
+                    tracing::warn!(
+                        frame_number = uniforms.frame_number,
+                        attempt = attempt + 1,
+                        "GPU buffer mapping failed, will retry"
+                    );
+                    last_error = Some(RenderingError::BufferMapWaitingFailed);
+                }
+                Err(RenderingError::BufferMapFailed(e)) => {
+                    tracing::warn!(
+                        frame_number = uniforms.frame_number,
+                        attempt = attempt + 1,
+                        error = %e,
+                        "GPU buffer async error, will retry"
+                    );
+                    last_error = Some(RenderingError::BufferMapFailed(e));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
+        Err(last_error.unwrap_or(RenderingError::BufferMapWaitingFailed))
+    }
+
+    pub async fn render_immediate_bgra_with_timings(
+        &mut self,
+        segment_frames: DecodedSegmentFrames,
+        uniforms: ProjectUniforms,
+        cursor: &CursorEvents,
+        render_display: bool,
+        layers: &mut RendererLayers,
+    ) -> Result<(RenderedFrame, FrameRenderStageTimings), RenderingError> {
+        let (frame, mut timings) = self
+            .render_bgra_with_timings(segment_frames, uniforms, cursor, render_display, layers)
+            .await?;
+        if let Some(frame) = frame {
+            return Ok((frame, timings));
+        }
+        let flush_start = Instant::now();
+        let frame = self
+            .flush_pipeline_bgra()
+            .await
+            .unwrap_or(Err(RenderingError::BufferMapWaitingFailed))?;
+        timings.immediate_flush_duration = flush_start.elapsed();
+        Ok((frame, timings))
+    }
+
+    /// [`Self::render_transition_immediate`], read back as tightly packed BGRA.
+    pub async fn render_transition_bgra(
+        &mut self,
+        outgoing: TransitionRenderInput<'_>,
+        incoming: TransitionRenderInput<'_>,
+        kind: ClipTransitionType,
+        progress: f32,
+        layers: &mut RendererLayers,
+    ) -> Result<RenderedFrame, RenderingError> {
+        let mut last_error = None;
+
+        for attempt in 0..Self::MAX_RENDER_RETRIES {
+            if attempt > 0 {
+                tracing::warn!(
+                    frame_number = incoming.uniforms.frame_number,
+                    attempt = attempt + 1,
+                    "Retrying BGRA readback transition frame after GPU error"
+                );
+                self.reset_session();
+                self.bgra_readback = None;
+                tokio::time::sleep(std::time::Duration::from_millis(100 * (attempt as u64 + 1)))
+                    .await;
+            }
+
+            let readback = self.bgra_readback.get_or_insert_with(|| {
+                frame_pipeline::RgbaToBgraReadback::new(&self.constants.device)
+            });
+            let session = self.session.get_or_insert_with(|| {
+                RenderSession::new(
+                    &self.constants.device,
+                    incoming.uniforms.output_size.0,
+                    incoming.uniforms.output_size.1,
+                )
+                .with_export_deadlines(self.export_deadlines)
+            });
+            session.update_texture_size(
+                &self.constants.device,
+                incoming.uniforms.output_size.0,
+                incoming.uniforms.output_size.1,
+            );
+            let compositor = self
+                .transition_compositor
+                .get_or_insert_with(|| TransitionCompositor::new(&self.constants.device));
+            compositor.ensure_size(
+                &self.constants.device,
+                incoming.uniforms.output_size.0,
+                incoming.uniforms.output_size.1,
+            );
+
+            let encoder = produce_transition_texture(
+                self.constants,
+                &outgoing,
+                &incoming,
+                (kind, progress),
+                layers,
+                session,
+                compositor,
+            )
+            .await?;
+
+            match finish_encoder_bgra_readback(
+                session,
+                readback,
+                &self.constants.device,
+                &self.constants.queue,
+                &incoming.uniforms,
+                encoder,
+            )
+            .await
+            {
+                Ok(Some(frame)) => return Ok(frame),
+                Ok(None) => {
+                    if let Some(frame) = self.flush_pipeline_bgra().await {
+                        return frame;
+                    }
+                    continue;
+                }
+                Err(RenderingError::BufferMapWaitingFailed) => {
+                    last_error = Some(RenderingError::BufferMapWaitingFailed);
+                }
+                Err(RenderingError::BufferMapFailed(error)) => {
+                    last_error = Some(RenderingError::BufferMapFailed(error));
+                }
+                Err(error) => return Err(error),
+            }
+        }
+
+        Err(last_error.unwrap_or(RenderingError::BufferMapWaitingFailed))
+    }
+
     pub async fn flush_pipeline(&mut self) -> Option<Result<RenderedFrame, RenderingError>> {
         if let Some(session) = &mut self.session {
             flush_pending_readback(session, &self.constants.device).await
         } else {
             None
         }
+    }
+
+    pub async fn flush_pipeline_bgra(&mut self) -> Option<Result<RenderedFrame, RenderingError>> {
+        let readback = self.bgra_readback.as_mut()?;
+        flush_pending_bgra_readback(readback, &self.constants.device, &self.constants.queue).await
     }
 
     pub async fn render_immediate_nv12(
@@ -9126,15 +9344,15 @@ impl LayerPasses<'_> {
     }
 }
 
-async fn produce_frame_with_timings(
+async fn encode_frame_with_timings(
     constants: &RenderVideoConstants,
-    segment_frames: DecodedSegmentFrames,
-    uniforms: ProjectUniforms,
+    segment_frames: &DecodedSegmentFrames,
+    uniforms: &ProjectUniforms,
     cursor: &CursorEvents,
     render_display: bool,
     layers: &mut RendererLayers,
     session: &mut RenderSession,
-) -> Result<(Option<RenderedFrame>, FrameRenderStageTimings), RenderingError> {
+) -> Result<(wgpu::CommandEncoder, FrameRenderStageTimings), RenderingError> {
     let mut encoder = constants.device.create_command_encoder(
         &(wgpu::CommandEncoderDescriptor {
             label: Some("Render Encoder"),
@@ -9145,8 +9363,8 @@ async fn produce_frame_with_timings(
     let mut timings = layers
         .prepare_with_encoder_timed(
             constants,
-            &uniforms,
-            &segment_frames,
+            uniforms,
+            segment_frames,
             cursor,
             &mut encoder,
             render_display,
@@ -9160,10 +9378,33 @@ async fn produce_frame_with_timings(
         &constants.queue,
         &mut encoder,
         session,
-        &uniforms,
+        uniforms,
         render_display,
     )?;
     timings.layer_render_duration = layer_render_start.elapsed();
+
+    Ok((encoder, timings))
+}
+
+async fn produce_frame_with_timings(
+    constants: &RenderVideoConstants,
+    segment_frames: DecodedSegmentFrames,
+    uniforms: ProjectUniforms,
+    cursor: &CursorEvents,
+    render_display: bool,
+    layers: &mut RendererLayers,
+    session: &mut RenderSession,
+) -> Result<(Option<RenderedFrame>, FrameRenderStageTimings), RenderingError> {
+    let (encoder, mut timings) = encode_frame_with_timings(
+        constants,
+        &segment_frames,
+        &uniforms,
+        cursor,
+        render_display,
+        layers,
+        session,
+    )
+    .await?;
 
     let finish_start = Instant::now();
     let (frame, finish_timings) = finish_encoder_timed(

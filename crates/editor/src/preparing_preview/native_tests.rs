@@ -792,6 +792,10 @@ async fn composed_parity_with_reference(
                     assert_eq!(frame_format, EditorFrameFormat::Rgba);
                     frame
                 }
+                EditorFrameOutput::Bgra(frame) => {
+                    assert_eq!(frame_format, EditorFrameFormat::Bgra);
+                    bgra_rgba(frame)
+                }
                 #[cfg(target_os = "macos")]
                 EditorFrameOutput::Surface(frame) => {
                     assert_eq!(frame_format, EditorFrameFormat::BgraSurface);
@@ -1075,6 +1079,32 @@ fn surface_rgba(frame: cap_rendering::SurfaceFrame) -> RenderedFrame {
     }
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_preparing_bgra_readback_matches_default_editor_frame() {
+    composed_parity_with_reference(
+        fixture(false),
+        &[0, 45, 12, 90],
+        false,
+        EditorFrameFormat::Bgra,
+    )
+    .await;
+}
+
+fn bgra_rgba(frame: RenderedFrame) -> RenderedFrame {
+    let row_bytes = frame.width * 4;
+    assert_eq!(frame.padded_bytes_per_row, row_bytes);
+    assert_eq!(frame.data.len(), row_bytes as usize * frame.height as usize);
+    let rgba = frame
+        .data
+        .chunks_exact(4)
+        .flat_map(|pixel| [pixel[2], pixel[1], pixel[0], pixel[3]])
+        .collect();
+    RenderedFrame {
+        data: Arc::new(rgba),
+        ..frame
+    }
+}
+
 #[cfg(target_os = "macos")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn native_preparing_bgra_surface_matches_default_avasset_editor_frame() {
@@ -1263,7 +1293,8 @@ async fn native_handoff_reuses_pcm_preserves_audio_across_candidate_disposal_and
             |_| {},
             Box::new(move |output, _| {
                 let frame = match output {
-                    crate::EditorFrameOutput::Rgba(frame) => frame.frame_number,
+                    crate::EditorFrameOutput::Rgba(frame)
+                    | crate::EditorFrameOutput::Bgra(frame) => frame.frame_number,
                     crate::EditorFrameOutput::Nv12(frame) => frame.frame_number,
                     #[cfg(target_os = "macos")]
                     crate::EditorFrameOutput::Surface(frame) => frame.frame_number,
@@ -1411,7 +1442,8 @@ async fn native_silent_handoff_opens_and_renders_through_an_equivalent_editor_pa
             |_| {},
             Box::new(move |output, _| {
                 let frame = match output {
-                    crate::EditorFrameOutput::Rgba(frame) => frame.frame_number,
+                    crate::EditorFrameOutput::Rgba(frame)
+                    | crate::EditorFrameOutput::Bgra(frame) => frame.frame_number,
                     crate::EditorFrameOutput::Nv12(frame) => frame.frame_number,
                     #[cfg(target_os = "macos")]
                     crate::EditorFrameOutput::Surface(frame) => frame.frame_number,
@@ -1613,7 +1645,8 @@ async fn native_studio_sound_releases_preparing_audio_and_preserves_transport() 
             |_| {},
             Box::new(move |output, _| {
                 let frame = match output {
-                    crate::EditorFrameOutput::Rgba(frame) => frame.frame_number,
+                    crate::EditorFrameOutput::Rgba(frame)
+                    | crate::EditorFrameOutput::Bgra(frame) => frame.frame_number,
                     crate::EditorFrameOutput::Nv12(frame) => frame.frame_number,
                     #[cfg(target_os = "macos")]
                     crate::EditorFrameOutput::Surface(frame) => frame.frame_number,
