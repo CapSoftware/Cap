@@ -448,6 +448,9 @@ fn sample_texture_blur(uv: vec2<f32>, crop_bounds_uv: vec4<f32>) -> vec4<f32> {
 fn sample_texture(uv: vec2<f32>, crop_bounds_uv: vec4<f32>) -> vec4<f32> {
     if uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0 {
         let cropped_uv = cropped_sample_uv(uv, crop_bounds_uv);
+        let texel_offset = 1.0 / uniforms.frame_size;
+        let safe_min = crop_bounds_uv.xy + texel_offset;
+        let safe_max = crop_bounds_uv.zw - texel_offset;
 
         let crop_size = crop_bounds_uv.zw - crop_bounds_uv.xy;
         let source_size = uniforms.frame_size * crop_size;
