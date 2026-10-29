@@ -14,9 +14,13 @@ import {
 	useState,
 } from "react";
 import { toast } from "sonner";
-import { updateVideoCallToAction } from "@/actions/videos/call-to-action";
+import {
+	updateDefaultCallToAction,
+	updateVideoCallToAction,
+} from "@/actions/videos/call-to-action";
 import {
 	type CallToActionErrors,
+	type CallToActionSource,
 	CTA_COLOR_PRESETS,
 	CTA_HEADLINE_MAX_LENGTH,
 	CTA_LABEL_MAX_LENGTH,
@@ -63,11 +67,33 @@ function formFromCallToAction(cta: ShareCallToAction | null): FormState {
 	};
 }
 
-function useVideoThumbnail(videoId: Video.VideoId, enabled: boolean) {
+function initialDialogState({
+	editingDefault,
+	callToAction,
+	source,
+	defaultCallToAction,
+}: {
+	editingDefault: boolean;
+	callToAction: ShareCallToAction | null;
+	source: CallToActionSource | null;
+	defaultCallToAction: ShareCallToAction | null;
+}) {
+	return {
+		form: formFromCallToAction(
+			callToAction ?? (editingDefault ? null : defaultCallToAction),
+		),
+		useAsDefault:
+			!editingDefault &&
+			(source === "default" ||
+				(callToAction === null && defaultCallToAction !== null)),
+	};
+}
+
+function useVideoThumbnail(videoId: Video.VideoId | null, enabled: boolean) {
 	const [thumbnail, setThumbnail] = useState<string | null>(null);
 
 	useEffect(() => {
-		if (!enabled) return;
+		if (!enabled || !videoId) return;
 		const controller = new AbortController();
 		fetch(`/api/thumbnail?videoId=${encodeURIComponent(videoId)}`, {
 			signal: controller.signal,
@@ -90,23 +116,47 @@ function useVideoThumbnail(videoId: Video.VideoId, enabled: boolean) {
 	return thumbnail;
 }
 
+/**
+ * Without a `videoId` the dialog edits the owner's default call to action,
+ * which every video without its own shows.
+ */
 export function CallToActionDialog({
 	open,
 	onOpenChange,
-	videoId,
+	videoId = null,
 	callToAction,
+	source = null,
+	defaultCallToAction = null,
 	onSaved,
 	onUpgradeRequest,
 }: {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
-	videoId: Video.VideoId;
+	videoId?: Video.VideoId | null;
 	callToAction: ShareCallToAction | null;
+	source?: CallToActionSource | null;
+	defaultCallToAction?: ShareCallToAction | null;
 	onSaved?: (callToAction: ShareCallToAction | null) => void;
 	onUpgradeRequest: () => void;
 }) {
-	const [form, setForm] = useState<FormState>(() =>
-		formFromCallToAction(callToAction),
+	const editingDefault = videoId === null;
+	const [form, setForm] = useState<FormState>(
+		() =>
+			initialDialogState({
+				editingDefault,
+				callToAction,
+				source,
+				defaultCallToAction,
+			}).form,
+	);
+	const [useAsDefault, setUseAsDefault] = useState(
+		() =>
+			initialDialogState({
+				editingDefault,
+				callToAction,
+				source,
+				defaultCallToAction,
+			}).useAsDefault,
 	);
 	const [errors, setErrors] = useState<CallToActionErrors>({});
 	const [touched, setTouched] = useState<Record<string, boolean>>({});
@@ -119,6 +169,7 @@ export function CallToActionDialog({
 		url: useId(),
 		headline: useId(),
 		playing: useId(),
+		allVideos: useId(),
 		form: useId(),
 	};
 
@@ -127,12 +178,19 @@ export function CallToActionDialog({
 		const opening = open && !wasOpenRef.current;
 		wasOpenRef.current = open;
 		if (!opening) return;
-		setForm(formFromCallToAction(callToAction));
+		const initial = initialDialogState({
+			editingDefault,
+			callToAction,
+			source,
+			defaultCallToAction,
+		});
+		setForm(initial.form);
+		setUseAsDefault(initial.useAsDefault);
 		setErrors({});
 		setTouched({});
 		setPreviewMode("end");
 		setPending(null);
-	}, [open, callToAction]);
+	}, [open, editingDefault, callToAction, source, defaultCallToAction]);
 
 	const liveErrors = useMemo(() => {
 		const result = validateCallToAction(form);
@@ -161,7 +219,29 @@ export function CallToActionDialog({
 		setTouched((previous) => ({ ...previous, [field]: true }));
 
 	const isEditing = callToAction !== null;
+	const usesDefault = !editingDefault && source === "default";
+	const savesDefault = editingDefault || useAsDefault;
+	const replacesOtherDefault =
+		useAsDefault && !usesDefault && defaultCallToAction !== null;
 	const busy = pending !== null;
+
+	const saveLabel = editingDefault
+		? isEditing
+			? "Save default"
+			: "Set default"
+		: useAsDefault
+			? usesDefault
+				? "Save changes"
+				: "Use on all videos"
+			: isEditing && source === "video"
+				? "Save changes"
+				: "Add to video";
+
+	const removeLabel = editingDefault
+		? "Remove default"
+		: usesDefault
+			? "Turn off for this video"
+			: "Remove";
 
 	const handleSave = async () => {
 		const result = validateCallToAction(form);
@@ -172,7 +252,11 @@ export function CallToActionDialog({
 		}
 		setPending("save");
 		try {
-			const response = await updateVideoCallToAction(videoId, form);
+			const response = videoId
+				? await updateVideoCallToAction(videoId, form, {
+						asDefault: useAsDefault,
+					})
+				: await updateDefaultCallToAction(form);
 			if (!response.success) {
 				if (response.upgradeRequired) {
 					onOpenChange(false);
@@ -183,7 +267,11 @@ export function CallToActionDialog({
 				return;
 			}
 			toast.success(
-				isEditing ? "Call to action updated" : "Call to action added",
+				savesDefault
+					? "Default call to action saved"
+					: isEditing && source === "video"
+						? "Call to action updated"
+						: "Call to action added",
 			);
 			onSaved?.(response.callToAction);
 			onOpenChange(false);
@@ -197,7 +285,9 @@ export function CallToActionDialog({
 	const handleRemove = async () => {
 		setPending("remove");
 		try {
-			const response = await updateVideoCallToAction(videoId, null);
+			const response = videoId
+				? await updateVideoCallToAction(videoId, null)
+				: await updateDefaultCallToAction(null);
 			if (!response.success) {
 				if (response.upgradeRequired) {
 					onOpenChange(false);
@@ -207,7 +297,13 @@ export function CallToActionDialog({
 				}
 				return;
 			}
-			toast.success("Call to action removed");
+			toast.success(
+				editingDefault
+					? "Default call to action removed"
+					: usesDefault
+						? "Call to action turned off for this video"
+						: "Call to action removed",
+			);
 			onSaved?.(null);
 			onOpenChange(false);
 		} catch {
@@ -297,10 +393,12 @@ export function CallToActionDialog({
 						</span>
 						<div className="min-w-0 flex-1">
 							<DialogTitle className="text-lg font-semibold leading-tight text-gray-12">
-								Call to action
+								{editingDefault ? "Default call to action" : "Call to action"}
 							</DialogTitle>
 							<p className="mt-0.5 text-[13px] text-gray-10">
-								Give viewers a next step, right on your video.
+								{editingDefault
+									? "Shown on every video of yours that doesn't have its own."
+									: "Give viewers a next step, right on your video."}
 							</p>
 						</div>
 						<button
@@ -436,6 +534,29 @@ export function CallToActionDialog({
 								}}
 							/>
 						</label>
+
+						{!editingDefault && (
+							<label
+								htmlFor={ids.allVideos}
+								className="flex cursor-pointer items-start gap-4 rounded-xl border border-gray-4 bg-gray-2 p-4 transition-colors hover:border-gray-5"
+							>
+								<span className="flex min-w-0 flex-1 flex-col gap-0.5">
+									<span className="text-[13px] font-medium text-gray-12">
+										Use on all my videos
+									</span>
+									<span className="text-xs leading-relaxed text-gray-10">
+										{replacesOtherDefault
+											? "Replaces your current default. Shown on every video of yours that doesn't have its own call to action."
+											: "Shown on every video of yours that doesn't have its own call to action, including ones you've already shared."}
+									</span>
+								</span>
+								<Switch
+									id={ids.allVideos}
+									checked={useAsDefault}
+									onCheckedChange={setUseAsDefault}
+								/>
+							</label>
+						)}
 					</form>
 
 					<footer className="flex items-center gap-2 border-t border-gray-4 px-6 py-4">
@@ -446,7 +567,7 @@ export function CallToActionDialog({
 								disabled={busy}
 								className="rounded-lg px-2 py-1.5 text-[13px] font-medium text-red-600 transition-colors hover:bg-red-50 disabled:opacity-50 dark:text-red-400 dark:hover:bg-red-500/10"
 							>
-								{pending === "remove" ? "Removing…" : "Remove"}
+								{pending === "remove" ? "Removing…" : removeLabel}
 							</button>
 						)}
 						<div className="ml-auto flex items-center gap-2">
@@ -464,11 +585,7 @@ export function CallToActionDialog({
 								disabled={busy}
 								className="inline-flex h-9 items-center gap-1.5 rounded-full bg-gray-12 px-4 text-[13px] font-semibold text-gray-1 transition-[opacity,transform] hover:opacity-90 active:scale-[0.98] disabled:opacity-60"
 							>
-								{pending === "save"
-									? "Saving…"
-									: isEditing
-										? "Save changes"
-										: "Add to video"}
+								{pending === "save" ? "Saving…" : saveLabel}
 							</button>
 						</div>
 					</footer>

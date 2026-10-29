@@ -5,8 +5,10 @@ import {
 	DEFAULT_CTA_COLOR,
 	normalizeCallToActionUrl,
 	normalizeHexColor,
+	parseDefaultCallToAction,
 	parseShareCallToAction,
 	readableTextColor,
+	resolveShareCallToAction,
 	type ShareCallToAction,
 	shouldShowCornerCard,
 	toStoredCallToAction,
@@ -279,5 +281,73 @@ describe("shouldShowCornerCard", () => {
 				cta: { ...cta, showWhilePlaying: false },
 			}),
 		).toBe(false);
+	});
+});
+
+describe("resolveShareCallToAction", () => {
+	const own = { label: "Watch the demo", url: "https://example.com/demo" };
+	const fallback = {
+		label: "Book a call",
+		url: "https://cal.com/me",
+		color: "#12A150",
+	};
+
+	it("prefers the video's own call to action over the owner's default", () => {
+		const resolved = resolveShareCallToAction(
+			{ callToAction: own },
+			{ defaultCallToAction: fallback },
+		);
+		expect(resolved.source).toBe("video");
+		expect(resolved.callToAction?.label).toBe("Watch the demo");
+	});
+
+	it("falls back to the owner's default when the video has none", () => {
+		for (const settings of [null, {}, { callToAction: null }]) {
+			const resolved = resolveShareCallToAction(settings, {
+				defaultCallToAction: fallback,
+			});
+			expect(resolved.source).toBe("default");
+			expect(resolved.callToAction).toMatchObject({
+				label: "Book a call",
+				url: "https://cal.com/me",
+				color: "#12A150",
+				showWhilePlaying: true,
+			});
+		}
+	});
+
+	it("keeps a video that was turned off free of the default", () => {
+		expect(
+			resolveShareCallToAction(
+				{ callToAction: false },
+				{ defaultCallToAction: fallback },
+			),
+		).toEqual({ callToAction: null, source: null });
+	});
+
+	it("ignores an invalid stored default", () => {
+		expect(
+			resolveShareCallToAction(
+				{},
+				{ defaultCallToAction: { label: "Go", url: "javascript:alert(1)" } },
+			),
+		).toEqual({ callToAction: null, source: null });
+		expect(resolveShareCallToAction({}, null)).toEqual({
+			callToAction: null,
+			source: null,
+		});
+	});
+});
+
+describe("parseDefaultCallToAction", () => {
+	it("reads the default from user preferences", () => {
+		expect(
+			parseDefaultCallToAction({
+				notifications: {},
+				defaultCallToAction: { label: "Reply to me", url: "mailto:a@b.co" },
+			}),
+		).toMatchObject({ label: "Reply to me", url: "mailto:a@b.co" });
+		expect(parseDefaultCallToAction({ notifications: {} })).toBeNull();
+		expect(parseDefaultCallToAction(null)).toBeNull();
 	});
 });

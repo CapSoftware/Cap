@@ -113,6 +113,7 @@ export const users = mysqlTable(
 				trackedEvents?: {
 					user_signed_up?: boolean;
 				};
+				defaultCallToAction?: VideoCallToAction;
 			} | null>()
 			.default(null),
 		activeOrganizationId: nanoId(
@@ -446,7 +447,7 @@ export const videos = mysqlTable(
 			disableTranscript?: boolean;
 			disableComments?: boolean;
 			defaultPlaybackSpeed?: number;
-			callToAction?: VideoCallToAction;
+			callToAction?: VideoCallToAction | false;
 		}>(),
 		transcriptionStatus: varchar("transcriptionStatus", { length: 255 }).$type<
 			"PROCESSING" | "COMPLETE" | "ERROR" | "SKIPPED" | "NO_AUDIO"
