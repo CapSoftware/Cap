@@ -97,8 +97,19 @@ const createMockCapServer = async (
 			sendJson(response, 204, {});
 			return;
 		}
-		if (request.method === "GET" && url.pathname === "/capture.html") {
-			response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+		if (
+			request.method === "GET" &&
+			(url.pathname === "/capture.html" || url.pathname === "/strict.html")
+		) {
+			response.writeHead(200, {
+				"Content-Type": "text/html; charset=utf-8",
+				...(url.pathname === "/strict.html"
+					? {
+							"Content-Security-Policy":
+								"default-src 'none'; frame-src 'none'; img-src 'none'; style-src 'none'; script-src 'none'",
+						}
+					: {}),
+			});
 			response.end(
 				`<!doctype html><html><head><title>Cap Close UI Target</title></head><body style="background:#321"><h1>Close UI page</h1></body></html>`,
 			);
@@ -1288,6 +1299,52 @@ test("choosing Camera mode picks a camera so Start stays available", async () =>
 			SETTINGS_KEY,
 		);
 		expect(savedCamera).toBeTruthy();
+	} finally {
+		await extension.cleanup();
+		await mockServer.close();
+	}
+});
+
+test("the recorder panel and camera preview load on a page with a strict CSP", async () => {
+	const mockServer = await createMockCapServer();
+	const extension = await launchExtensionContext();
+
+	try {
+		const worker = await getServiceWorker(extension.context);
+		await configureExtension(worker, mockServer.origin);
+		const messengerPage = await extension.context.newPage();
+		await messengerPage.goto(
+			`chrome-extension://${new URL(worker.url()).host}/popup.html`,
+		);
+		const targetPage = await extension.context.newPage();
+		await targetPage.goto(`${mockServer.origin}/strict.html`);
+		await targetPage.bringToFront();
+		await sendServiceWorkerMessage(messengerPage, {
+			target: "service-worker",
+			type: "open-recorder-panel",
+		});
+		await expect
+			.poll(() => frameWithUrl(targetPage, "popup.html") !== null, {
+				timeout: 15_000,
+			})
+			.toBe(true);
+		const panel = frameWithUrl(targetPage, "popup.html");
+		if (!panel) throw new Error("recorder panel missing");
+		await expect(
+			panel.getByRole("button", { name: "Start recording" }),
+		).toBeVisible();
+		await expect
+			.poll(() => frameWithUrl(targetPage, "camera-preview.html") !== null, {
+				timeout: 15_000,
+			})
+			.toBe(true);
+		const devtools = await extension.context.newCDPSession(targetPage);
+		const panelBox = await getClosedShadowElementBox(
+			devtools,
+			"class",
+			"cap-extension-panel",
+		);
+		expect(panelBox?.width ?? 0).toBeGreaterThan(200);
 	} finally {
 		await extension.cleanup();
 		await mockServer.close();
