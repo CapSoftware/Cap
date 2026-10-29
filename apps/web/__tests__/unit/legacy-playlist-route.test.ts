@@ -5,6 +5,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
 	objects: {} as Record<string, string>,
 	source: { type: "MediaConvert" } as { type: string },
+	sign: vi.fn(),
 	dispose: async () => {},
 }));
 
@@ -22,7 +23,10 @@ vi.mock("@cap/web-backend", async (importOriginal) => {
 		getObject: (key: string) =>
 			Effect.succeed(Option.fromNullable(mocks.objects[key])),
 		getSignedObjectUrl: (key: string) =>
-			Effect.succeed(`https://media.example.com/${key}?Signature=s`),
+			Effect.sync(() => {
+				mocks.sign(key);
+				return `https://media.example.com/${key}?Signature=s`;
+			}),
 	};
 	return {
 		...actual,
@@ -140,6 +144,22 @@ describe("HLS playlists on default storage", () => {
 		expect(await (await request("video")).text()).toContain(
 			"\nhttps://cdn.example.com/a.ts\n",
 		);
+	});
+
+	it("rejects an oversized playlist before signing it", async () => {
+		mocks.source = { type: "local" };
+		const segments = (count: number) =>
+			`#EXTM3U\n${Array.from({ length: count }, (_, i) => `#EXTINF:4,\nsegment_${i}.ts`).join("\n")}\n`;
+		mocks.objects = {
+			"owner/recording/combined-source/stream.m3u8": segments(10_000),
+		};
+		expect((await request("video")).status).toBe(200);
+		mocks.objects = {
+			"owner/recording/combined-source/stream.m3u8": segments(10_001),
+		};
+		mocks.sign.mockClear();
+		expect((await request("video")).status).toBe(400);
+		expect(mocks.sign).not.toHaveBeenCalled();
 	});
 
 	it("returns 404 when the playlist is missing", async () => {

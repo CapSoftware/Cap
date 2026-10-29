@@ -36,6 +36,8 @@ import {
 
 export const dynamic = "force-dynamic";
 
+const MAX_LEGACY_PLAYLIST_URIS = 10_000;
+
 const GetPlaylistParams = Schema.Struct({
 	videoId: Video.VideoId,
 	videoType: Schema.Literal(
@@ -463,8 +465,18 @@ const getPlaylistResponse = (
 				playlist = yield* readPlaylist(resolveUri(variant));
 			}
 
+			const playlistLines = playlist.text.split("\n");
+			// Legacy segments run 3-4 s, so this covers recordings of several
+			// hours while bounding the signing work a single request can cause.
+			if (
+				playlistLines.filter((line) => isUriLine(line.trim())).length >
+				MAX_LEGACY_PLAYLIST_URIS
+			) {
+				return yield* Effect.fail(new HttpApiError.BadRequest());
+			}
+
 			const lines = yield* Effect.forEach(
-				playlist.text.split("\n"),
+				playlistLines,
 				(line) => {
 					const uri = line.trim();
 					return isUriLine(uri)
