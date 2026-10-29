@@ -423,15 +423,63 @@ const getPlaylistResponse = (
 		}
 
 		if (bucket.provider === "s3" && Option.isNone(customBucket)) {
-			let redirect = `${video.ownerId}/${video.id}/combined-source/stream.m3u8`;
+			if (isMp4Source || urlParams.videoType === "mp4") {
+				return HttpServerResponse.redirect(
+					yield* bucket.getSignedObjectUrl(mp4Key),
+				);
+			}
 
-			if (isMp4Source || urlParams.videoType === "mp4") redirect = mp4Key;
-			else if (video.source.type === "MediaConvert")
-				redirect = `${video.ownerId}/${video.id}/output/video_recording_000.m3u8`;
+			const readPlaylist = (key: string) =>
+				bucket.getObject(key).pipe(
+					Effect.flatMap(
+						Option.match({
+							onNone: () => Effect.fail(new HttpApiError.NotFound()),
+							onSome: (text) => Effect.succeed({ key, text }),
+						}),
+					),
+				);
 
-			return HttpServerResponse.redirect(
-				yield* bucket.getSignedObjectUrl(redirect),
+			let playlist = yield* readPlaylist(
+				video.source.type === "MediaConvert"
+					? `${video.ownerId}/${video.id}/output/video_recording_000.m3u8`
+					: `${video.ownerId}/${video.id}/combined-source/stream.m3u8`,
 			);
+
+			// Each URI resolves against the playlist's own folder, and a signed
+			// playlist URL does not carry over to them, so every one is signed here.
+			const resolveUri = (uri: string) =>
+				`${playlist.key.slice(0, playlist.key.lastIndexOf("/") + 1)}${uri}`;
+			const isUriLine = (line: string) =>
+				line.length > 0 && !line.startsWith("#") && !/^[a-z]+:/i.test(line);
+
+			// A multivariant playlist would hand the player relative child
+			// playlists, so its first rendition is served in its place.
+			if (playlist.text.includes("#EXT-X-STREAM-INF")) {
+				const variant = playlist.text
+					.split("\n")
+					.map((line) => line.trim())
+					.find(isUriLine);
+				if (!variant) return yield* Effect.fail(new HttpApiError.NotFound());
+				playlist = yield* readPlaylist(resolveUri(variant));
+			}
+
+			const lines = yield* Effect.forEach(
+				playlist.text.split("\n"),
+				(line) => {
+					const uri = line.trim();
+					return isUriLine(uri)
+						? bucket.getSignedObjectUrl(resolveUri(uri))
+						: Effect.succeed(line);
+				},
+				{ concurrency: 16 },
+			);
+
+			return HttpServerResponse.text(lines.join("\n"), {
+				headers: {
+					...CACHE_CONTROL_HEADERS,
+					"Content-Type": "application/vnd.apple.mpegurl",
+				},
+			});
 		}
 
 		if (
