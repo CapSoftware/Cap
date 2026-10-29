@@ -550,16 +550,22 @@ export function RecordingBarOverlay({
 		setStatus((current) =>
 			current ? { ...current, microphone: muted ? "muted" : "live" } : current,
 		);
+		// The dock flips right away; if the recorder did not confirm, show what
+		// it is actually doing instead of a mute that never happened.
 		sendServiceWorkerMessage({
 			target: "service-worker",
 			type: "toggle-microphone-mute",
 			muted,
 		})
 			.then((response) => {
-				if (response.ok) applyResponse(response.status, response.plan);
+				if (response.ok && response.status) {
+					applyResponse(response.status, response.plan);
+				} else {
+					refresh();
+				}
 			})
-			.catch(() => undefined);
-	}, [applyResponse, status?.microphone]);
+			.catch(refresh);
+	}, [applyResponse, refresh, status?.microphone]);
 
 	const startRecording = useCallback(() => {
 		setBusy(true);
