@@ -11,6 +11,10 @@ import {
 } from "../shared/messages";
 import { rememberRecordingMode } from "../shared/preferences";
 import {
+	isRecorderHostPage,
+	RECORDER_OPEN_PARAM,
+} from "../shared/recorder-pages";
+import {
 	clearAuth,
 	clearAuthError,
 	clearCachedBootstrap,
@@ -364,6 +368,7 @@ const sendOverlay = async (
 const canInjectIntoTab = (tab: chrome.tabs.Tab) => {
 	if (tab.id === undefined) return false;
 	if (!tab.url) return true;
+	if (isRecorderHostPage(tab.url)) return true;
 	try {
 		const protocol = new URL(tab.url).protocol;
 		return (
@@ -379,6 +384,12 @@ const isWebPageSender = (sender: chrome.runtime.MessageSender) => {
 	const senderUrl = sender.url ?? "";
 	return !senderUrl.startsWith("chrome-extension:");
 };
+
+// Cap's own pages run the overlay as the top-level document of a tab. When
+// embedded in a frame they could be a hostile site's iframe, so only the top
+// frame counts.
+const isRecorderHostSender = (sender: chrome.runtime.MessageSender) =>
+	Boolean(sender.tab) && sender.frameId === 0 && isRecorderHostPage(sender.url);
 
 // camera-preview.html is web accessible, so any site can load it in an
 // iframe. Only honour camera requests carrying a token that one of our
@@ -754,14 +765,73 @@ const openRecorderPanel = async (actionTab?: chrome.tabs.Tab) => {
 		}
 	}
 
-	// Pages we cannot inject into (chrome://, the Web Store, etc.) still get a
-	// recorder via a standalone popup window.
+	// Browser pages (New Tab, settings, the Web Store) cannot show the
+	// in-page recorder, so it opens on a Cap page instead.
+	const opened = await openRecorderOnCapPage(
+		actionTab ?? (await getActiveTab()),
+	).catch(() => false);
+	if (opened) return;
+
 	chrome.windows.create({
 		url: chrome.runtime.getURL(POPUP_URL),
 		type: "popup",
 		width: 332,
 		height: 600,
 	});
+};
+
+// The action click grants activeTab, which exposes the clicked tab's URL
+// even for browser pages.
+const NEW_TAB_URL =
+	/^(chrome|edge|brave|vivaldi|opera):\/\/(newtab|new-tab-page)\/?$|^about:blank$/;
+
+// An empty New Tab is replaced by the Cap page; any other page keeps its tab
+// and gets the Cap page beside it. The page asks for the panel once loaded.
+const openRecorderOnCapPage = async (fromTab: chrome.tabs.Tab | null) => {
+	const url = new URL(chrome.runtime.getURL("how-it-works.html"));
+	url.searchParams.set(RECORDER_OPEN_PARAM, "open");
+	const fromUrl = fromTab?.url ?? fromTab?.pendingUrl ?? "";
+	if (fromTab?.id !== undefined && NEW_TAB_URL.test(fromUrl)) {
+		await updateTab(fromTab.id, url.toString());
+		return true;
+	}
+	const tab = await new Promise<chrome.tabs.Tab>((resolve, reject) => {
+		chrome.tabs.create(
+			{
+				url: url.toString(),
+				active: true,
+				...(fromTab
+					? {
+							windowId: fromTab.windowId,
+							index: fromTab.index + 1,
+							openerTabId: fromTab.id,
+						}
+					: {}),
+			},
+			(created) => {
+				if (chrome.runtime.lastError || !created) {
+					reject(new Error(chrome.runtime.lastError?.message));
+					return;
+				}
+				resolve(created);
+			},
+		);
+	});
+	if (tab.windowId !== undefined) await focusWindow(tab.windowId);
+	return true;
+};
+
+const showRecorderPanelInTab = async (tab: chrome.tabs.Tab) => {
+	const currentStatus = await syncRecordingStatus().catch(
+		() => recordingStatus,
+	);
+	await updateSharedUiState((current) => ({
+		...current,
+		panelOpen: true,
+		readyBarDismissed: false,
+		updatedAt: Date.now(),
+	}));
+	await showPreviewForRecorderOpen(tab, currentStatus).catch(() => undefined);
 };
 
 const getPreviewTabIdForPip = async () => {
@@ -1686,6 +1756,14 @@ const handleRequest = async (
 		return { ok: true };
 	}
 
+	if (message.type === "show-recorder-panel") {
+		if (!sender.tab || !isRecorderHostSender(sender)) {
+			return { ok: false, error: "Unauthorized" };
+		}
+		await showRecorderPanelInTab(sender.tab);
+		return { ok: true };
+	}
+
 	if (
 		message.type === "pause-recording" ||
 		message.type === "resume-recording"
@@ -1748,10 +1826,10 @@ const handleRequest = async (
 	}
 
 	if (message.type === "register-overlay-token") {
-		// Tokens may only come from content scripts. Extension pages are
-		// excluded so a web-accessible page embedded by a hostile site cannot
-		// authorise itself.
-		if (!isWebPageSender(sender)) {
+		// Tokens may only come from content scripts or Cap's own pages hosting
+		// the overlay. Other extension pages are excluded so a web-accessible
+		// page embedded by a hostile site cannot authorise itself.
+		if (!isWebPageSender(sender) && !isRecorderHostSender(sender)) {
 			return { ok: false, error: "Unauthorized" };
 		}
 		await registerOverlayToken(message.token);

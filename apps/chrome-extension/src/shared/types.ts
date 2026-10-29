@@ -383,6 +383,10 @@ export type ServiceWorkerRequest =
 	  }
 	| {
 			target: "service-worker";
+			type: "show-recorder-panel";
+	  }
+	| {
+			target: "service-worker";
 			type: "open-options";
 	  }
 	| {

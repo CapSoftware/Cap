@@ -1418,3 +1418,102 @@ test("the recorder panel and camera preview load on a page with a strict CSP", a
 		await mockServer.close();
 	}
 });
+
+test("the recorder opens and records on Cap's welcome page", async () => {
+	const mockServer = await createMockCapServer();
+	const extension = await launchExtensionContext();
+
+	try {
+		const worker = await getServiceWorker(extension.context);
+		await configureExtension(worker, mockServer.origin);
+		const extensionOrigin = `chrome-extension://${new URL(worker.url()).host}`;
+		const messengerPage = await extension.context.newPage();
+		await messengerPage.goto(`${extensionOrigin}/popup.html`);
+		const welcomePage = await extension.context.newPage();
+		await welcomePage.goto(`${extensionOrigin}/welcome.html`);
+		await welcomePage.bringToFront();
+
+		await sendServiceWorkerMessage(messengerPage, {
+			target: "service-worker",
+			type: "open-recorder-panel",
+		});
+		await expect
+			.poll(() => frameWithUrl(welcomePage, "popup.html") !== null, {
+				timeout: 15_000,
+			})
+			.toBe(true);
+		await expect
+			.poll(() => frameWithUrl(welcomePage, "camera-preview.html") !== null, {
+				timeout: 15_000,
+			})
+			.toBe(true);
+		const panel = frameWithUrl(welcomePage, "popup.html");
+		if (!panel) throw new Error("recorder panel missing");
+		await panel.getByRole("button", { name: "Start recording" }).click();
+
+		await expect
+			.poll(
+				async () =>
+					(
+						(await sendServiceWorkerMessage(messengerPage, {
+							target: "service-worker",
+							type: "get-recording-status",
+						})) as { status?: { phase?: string } }
+					).status?.phase,
+				{ timeout: 15_000 },
+			)
+			.toBe("recording");
+		expect(frameWithUrl(welcomePage, "camera-preview.html")).not.toBeNull();
+
+		await sendServiceWorkerMessage(messengerPage, {
+			target: "service-worker",
+			type: "stop-recording",
+		});
+	} finally {
+		await extension.cleanup();
+		await mockServer.close();
+	}
+});
+
+test("opening Cap on a page it cannot run on opens the recorder on a Cap page", async () => {
+	const mockServer = await createMockCapServer();
+	const extension = await launchExtensionContext();
+
+	try {
+		const worker = await getServiceWorker(extension.context);
+		await configureExtension(worker, mockServer.origin, {
+			webcamEnabled: false,
+		});
+		const extensionOrigin = `chrome-extension://${new URL(worker.url()).host}`;
+		const messengerPage = await extension.context.newPage();
+		await messengerPage.goto(`${extensionOrigin}/popup.html`);
+		await messengerPage.bringToFront();
+
+		await sendServiceWorkerMessage(messengerPage, {
+			target: "service-worker",
+			type: "open-recorder-panel",
+		});
+		const findCapPage = () =>
+			extension?.context
+				.pages()
+				.find((candidate) => candidate.url().includes("how-it-works.html"));
+		await expect.poll(() => Boolean(findCapPage())).toBe(true);
+		const page = findCapPage();
+		if (!page) throw new Error("Cap page missing");
+		await expect
+			.poll(() => frameWithUrl(page, "popup.html") !== null, {
+				timeout: 15_000,
+			})
+			.toBe(true);
+		await expect(page.locator("#recorder-note")).toBeVisible();
+		await expect.poll(() => page.url()).not.toContain("recorder=open");
+		const panel = frameWithUrl(page, "popup.html");
+		await expect(
+			panel?.getByRole("button", { name: "Start recording" }) ??
+				page.locator("missing"),
+		).toBeVisible();
+	} finally {
+		await extension.cleanup();
+		await mockServer.close();
+	}
+});
