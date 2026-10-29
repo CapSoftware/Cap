@@ -29,7 +29,8 @@ use cap_project::{
     AudioTrackSegment, Camera3DProperties, Camera3DSegment, CaptionTrackSegment,
     ClipSpeedAudioMode, CursorClickEvent, GlideDirection, KeyboardTrackSegment, MaskKind,
     MaskSegment, OverlayTrack, ProjectConfiguration, SceneMode, SceneSegment, TextSegment,
-    TimelineConfiguration, TimelineSegment, XY, ZoomMode, ZoomSegment, mask_effect_contract,
+    TimelineConfiguration, TimelineSegment, VoiceEq, XY, ZoomMode, ZoomSegment,
+    mask_effect_contract,
 };
 
 use crate::editor_timeline::{self, Segment, TrackKind};
@@ -2688,6 +2689,25 @@ pub fn set_clip_volume(timeline: &mut TimelineConfiguration, index: usize, volum
     true
 }
 
+/// Writes `voice_eq` to the clips in `indices`, returning whether any changed.
+pub fn set_clip_voice_eq(
+    timeline: &mut TimelineConfiguration,
+    indices: &[usize],
+    voice_eq: Option<VoiceEq>,
+) -> bool {
+    let voice_eq = voice_eq.map(|voice_eq| voice_eq.sanitized());
+    let mut changed = false;
+    for index in indices {
+        if let Some(segment) = timeline.segments.get_mut(*index)
+            && segment.voice_eq != voice_eq
+        {
+            segment.voice_eq = voice_eq;
+            changed = true;
+        }
+    }
+    changed
+}
+
 pub fn set_clip_muted(timeline: &mut TimelineConfiguration, index: usize, muted: bool) -> bool {
     let Some(segment) = timeline.segments.get_mut(index) else {
         return false;
@@ -2846,6 +2866,7 @@ pub fn merge_clip_segments(
     left.speed_audio_mode = settings.speed_audio_mode;
     left.volume = settings.volume;
     left.hide_cursor = settings.hide_cursor;
+    left.voice_eq = settings.voice_eq;
 
     // `transitionsAfterClipMerge`: the merged boundary's transition is gone,
     // everything past it shifts down one.
@@ -3218,6 +3239,7 @@ mod tests {
                 timescale: 1.,
                 muted: false,
                 cursor_hidden: false,
+                voice_eq: false,
                 volume: 1.,
                 recording_clip: 0,
                 holds: Arc::from(&[][..]),
