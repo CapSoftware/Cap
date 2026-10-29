@@ -600,6 +600,7 @@ pub struct MediaFoundationDecoder {
     // How the stream stopped, reported once the queued readbacks are drained.
     readback_end: Option<Result<(), String>>,
     frame_pool: FramePool,
+    nv12_byte_pool: Vec<Vec<u8>>,
     plane_converter: Nv12PlaneConverter,
     capabilities: MFDecoderCapabilities,
     // COM can unload the decoder DLL, so release every COM field before its apartment shuts down.
@@ -692,6 +693,7 @@ impl MediaFoundationDecoder {
             readback_queue: VecDeque::new(),
             readback_end: None,
             frame_pool: FramePool::new(),
+            nv12_byte_pool: Vec::with_capacity(READBACK_DEPTH),
             plane_converter,
             capabilities,
             _init_guard: guard,
@@ -759,7 +761,7 @@ impl MediaFoundationDecoder {
         Ok(Some(NV12Sample { pts, data: data? }))
     }
 
-    unsafe fn map_staging(&self, staging: &ID3D11Texture2D) -> Result<NV12Data, String> {
+    unsafe fn map_staging(&mut self, staging: &ID3D11Texture2D) -> Result<NV12Data, String> {
         let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
         unsafe {
             self.d3d11_context
@@ -773,11 +775,18 @@ impl MediaFoundationDecoder {
 
         let y_size = (y_stride * y_height) as usize;
         let uv_size = (y_stride * uv_height) as usize;
-        let total_size = y_size + uv_size;
+        let copy_len = y_size + uv_size;
 
-        let mut data = vec![0u8; total_size];
+        let mut data = self
+            .nv12_byte_pool
+            .pop()
+            .unwrap_or_else(|| Vec::with_capacity(copy_len));
+        if data.capacity() < copy_len {
+            data.reserve(copy_len - data.capacity());
+        }
         unsafe {
-            std::ptr::copy_nonoverlapping(mapped.pData as *const u8, data.as_mut_ptr(), total_size);
+            data.set_len(copy_len);
+            std::ptr::copy_nonoverlapping(mapped.pData as *const u8, data.as_mut_ptr(), copy_len);
             self.d3d11_context.Unmap(staging, 0);
         }
 

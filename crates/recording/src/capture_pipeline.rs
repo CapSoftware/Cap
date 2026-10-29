@@ -325,6 +325,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
             }
         } else {
             let d3d_device = screen_capture.d3d_device.clone();
+            let frame_rate = screen_capture.capture_frame_rate();
             let bitrate_multiplier = if ultra { 0.3f32 } else { 0.15f32 };
 
             OutputPipeline::builder(output_path.clone())
@@ -335,7 +336,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                     pixel_format: screen_capture::Direct3DCapture::PIXEL_FORMAT.as_dxgi(),
                     d3d_device,
                     bitrate_multiplier,
-                    frame_rate: 30u32,
+                    frame_rate,
                     output_size: output_size.map(|(w, h)| windows::Graphics::SizeInt32 {
                         Width: w as i32,
                         Height: h as i32,
