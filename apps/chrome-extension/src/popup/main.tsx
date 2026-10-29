@@ -74,6 +74,74 @@ const postPanelMessage = (
 	);
 };
 
+// The standalone recorder (side panel or fallback popup window) has no
+// embedding overlay to report through, so it tells the service worker its
+// lifecycle directly: the action click uses the flag to toggle, and UI
+// teardown answers with "close" since no extension API can close a side
+// panel from the outside.
+if (!IS_EMBEDDED) {
+	let knownWindowId: number | null = null;
+	const ownWindowId = new Promise<number | null>((resolve) => {
+		chrome.windows.getCurrent((currentWindow) => {
+			resolve(chrome.runtime.lastError ? null : (currentWindow?.id ?? null));
+		});
+	}).then((windowId) => {
+		knownWindowId = windowId;
+		return windowId;
+	});
+	void ownWindowId.then((windowId) =>
+		sendServiceWorkerMessage({
+			target: "service-worker",
+			type: "standalone-panel-opened",
+			windowId,
+		}).catch(() => undefined),
+	);
+	window.addEventListener("pagehide", () => {
+		chrome.runtime.sendMessage(
+			{
+				target: "service-worker",
+				type: "standalone-panel-closed",
+				windowId: knownWindowId,
+			},
+			() => {
+				void chrome.runtime.lastError;
+			},
+		);
+	});
+	chrome.runtime.onMessage.addListener(
+		(message: unknown, _sender, sendResponse) => {
+			const candidate = message as {
+				target?: string;
+				type?: string;
+				bootedAt?: number;
+				windowId?: number;
+			} | null;
+			if (candidate?.target !== "standalone-panel") return;
+			if (candidate.type === "close") {
+				const targetWindowId = candidate.windowId;
+				if (typeof targetWindowId !== "number") {
+					window.close();
+					return;
+				}
+				void ownWindowId.then((windowId) => {
+					if (windowId === targetWindowId) window.close();
+				});
+				return;
+			}
+			// Only a panel that outlived the previous worker answers; one opened
+			// by the click that woke this worker loaded after it booted.
+			if (
+				candidate.type === "survivor-check" &&
+				typeof candidate.bootedAt === "number" &&
+				performance.timeOrigin < candidate.bootedAt
+			) {
+				void ownWindowId.then((windowId) => sendResponse({ windowId }));
+				return true;
+			}
+		},
+	);
+}
+
 // Maps the offscreen document's authoritative permission query to a stored
 // access flag. "unknown" (no Permissions API) leaves the flag untouched so a
 // browser that cannot report state never wipes a working grant.

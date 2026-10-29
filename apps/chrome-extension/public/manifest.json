@@ -31,6 +31,7 @@
 		"identity",
 		"offscreen",
 		"scripting",
+		"sidePanel",
 		"storage",
 		"tabCapture"
 	],
@@ -52,5 +53,8 @@
 			"matches": ["http://*/*", "https://*/*", "file:///*"],
 			"use_dynamic_url": true
 		}
-	]
+	],
+	"side_panel": {
+		"default_path": "popup-window.html"
+	}
 }
