@@ -295,10 +295,34 @@ export const createS3BucketAccess = Effect.gen(function* () {
 					),
 				),
 			),
+		getObjectWithETag: (key: string) =>
+			wrapS3Promise(
+				provider.getInternal.pipe(
+					Effect.map(async (client) => {
+						const response = await client
+							.send(
+								new S3.GetObjectCommand({ Bucket: provider.bucket, Key: key }),
+							)
+							.catch((e) => {
+								if (e instanceof S3.NoSuchKey) return null;
+								throw e;
+							});
+						const body = await response?.Body?.transformToString();
+						return body === undefined
+							? Option.none()
+							: Option.some({ body, eTag: response?.ETag });
+					}),
+				),
+			),
 		putObject: <E>(
 			key: string,
 			body: string | Uint8Array | ArrayBuffer | Stream.Stream<Uint8Array, E>,
-			fields?: { contentType?: string; contentLength?: number },
+			fields?: {
+				contentType?: string;
+				contentLength?: number;
+				ifMatch?: string;
+				ifNoneMatch?: string;
+			},
 		) =>
 			wrapS3Promise(
 				provider.getInternal.pipe(
@@ -325,6 +349,8 @@ export const createS3BucketAccess = Effect.gen(function* () {
 									Body: _body,
 									ContentType: fields?.contentType,
 									ContentLength: fields?.contentLength,
+									IfMatch: fields?.ifMatch,
+									IfNoneMatch: fields?.ifNoneMatch,
 								}),
 							);
 						}),

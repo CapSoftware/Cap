@@ -142,6 +142,12 @@ function createServerEnv() {
 				.describe(
 					"Seconds of earlier audio sent with each instant-mode live transcription chunk (more accurate, more audio billed; default 0)",
 				),
+			LIVE_TRANSCRIBE_RUNNER: z
+				.string()
+				.optional()
+				.describe(
+					"Set to media-server to run instant-mode live transcription on the media server instead of a workflow (falls back to the workflow)",
+				),
 			ANTHROPIC_API_KEY: z.string().optional().describe("AI chat"),
 			OPENAI_API_KEY: z.string().optional().describe("AI summaries"),
 			GROQ_API_KEY: z.string().optional().describe("AI summaries"),

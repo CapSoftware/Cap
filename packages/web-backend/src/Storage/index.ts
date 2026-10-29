@@ -434,6 +434,8 @@ const makeS3Access = (s3: S3BucketAccess) => ({
 		signingArgs?: Parameters<S3BucketAccess["getInternalSignedObjectUrl"]>[1],
 	) => mapStorageError(s3.getInternalSignedObjectUrl(key, signingArgs)),
 	getObject: (key: string) => mapStorageError(s3.getObject(key)),
+	getObjectWithETag: (key: string) =>
+		mapStorageError(s3.getObjectWithETag(key)),
 	listObjects: (input: {
 		prefix?: string;
 		maxKeys?: number;

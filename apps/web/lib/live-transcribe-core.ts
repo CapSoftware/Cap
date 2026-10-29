@@ -153,6 +153,71 @@ export function planNextLiveChunk(options: {
 	};
 }
 
+/**
+ * Rebuild a chunk another runner transcribed from the segments it says it
+ * sent: `contextFromIndex..lastProcessedIndex` as context, then everything up
+ * to `lastIndex`. Offsets come from the same contiguous walk as
+ * planNextLiveChunk, so the runner never decides where words land. Null when
+ * the range doesn't describe contiguous audio right after the cursor.
+ */
+export function describeLiveChunk(options: {
+	manifest: Video.SegmentManifestType;
+	lastProcessedIndex: number;
+	lastIndex: number;
+	contextFromIndex: number | null;
+}): Extract<LiveChunkDecision, { action: "chunk" }> | null {
+	const { manifest, lastProcessedIndex, lastIndex, contextFromIndex } = options;
+	const plan = planSegmentsAudioExtraction(manifest, {
+		requireComplete: false,
+	});
+	if (plan.status !== "ok") return null;
+
+	let startMs = 0;
+	let contextSeconds = 0;
+	let durationSeconds = 0;
+	const context: NormalizedSegmentEntry[] = [];
+	const entries: NormalizedSegmentEntry[] = [];
+	let expectedIndex = plan.entries[0]?.index === 0 ? 0 : 1;
+
+	for (const entry of plan.entries) {
+		if (entry.index !== expectedIndex || entry.index > lastIndex) break;
+		expectedIndex++;
+
+		if (entry.index <= lastProcessedIndex) {
+			startMs += entry.duration * 1000;
+			if (contextFromIndex !== null && entry.index >= contextFromIndex) {
+				context.push(entry);
+				contextSeconds += entry.duration;
+			}
+		} else {
+			entries.push(entry);
+			durationSeconds += entry.duration;
+		}
+	}
+
+	const first = entries[0]?.index;
+	if (
+		first === undefined ||
+		(lastProcessedIndex !== LIVE_TRANSCRIPT_NO_SEGMENTS &&
+			first !== lastProcessedIndex + 1) ||
+		entries[entries.length - 1]?.index !== lastIndex ||
+		(contextFromIndex !== null && context[0]?.index !== contextFromIndex) ||
+		(context.length > 0 &&
+			context[context.length - 1]?.index !== lastProcessedIndex)
+	) {
+		return null;
+	}
+
+	return {
+		action: "chunk",
+		entries,
+		startMs: Math.round(startMs),
+		durationMs: Math.round(durationSeconds * 1000),
+		context,
+		contextMs: Math.round(contextSeconds * 1000),
+	};
+}
+
 export interface LiveChunkWordInput {
 	text?: unknown;
 	start?: unknown;
