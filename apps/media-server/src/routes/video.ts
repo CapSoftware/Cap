@@ -3226,6 +3226,9 @@ async function muxSegmentsAsync(
 				abort: AbortController;
 		  }
 		| undefined;
+	let pendingVerification:
+		| { promise: Promise<unknown>; abort: AbortController }
+		| undefined;
 	let processingTimeout: ReturnType<typeof setTimeout> | undefined;
 	let errorCode: RecordingErrorCode = "processing-unavailable";
 	const sources = context.sourceObjects
@@ -3394,7 +3397,7 @@ async function muxSegmentsAsync(
 		errorCode = "output-invalid";
 		updateJob(jobId, { progress: 65, message: "Combining video and audio..." });
 		sendCurrentJobWebhook(jobId);
-		await withJobHeartbeat(jobId, () =>
+		const muxed = withJobHeartbeat(jobId, () =>
 			withMuxMemoryGuard(abortController, () =>
 				muxMediaTracksToMp4(
 					combinedVideoPath,
@@ -3408,6 +3411,42 @@ async function muxSegmentsAsync(
 				errorCode = classifySourceError(error);
 			throw error;
 		});
+		// The fragment decode reads only the downloaded fragments, so it runs while the remux writes the output;
+		// the packet proof and audio decode wait for the output, and a failed remux still fails as one.
+		const verificationAbort = new AbortController();
+		let outputWritten = false;
+		const verification = withJobHeartbeat(jobId, () =>
+			withMuxMemoryGuard(abortController, () =>
+				verifyRemuxedRecording(
+					combinedVideoPath,
+					combinedAudioPath,
+					resultPath,
+					{
+						requireAudio: requiredAudio,
+						abortSignal: AbortSignal.any([
+							abortController.signal,
+							verificationAbort.signal,
+						]),
+						onProgress: ({ frames, totalFrames }) => {
+							if (!outputWritten) return;
+							updateJob(jobId, {
+								progress: totalFrames
+									? 70 + Math.min(4, Math.floor((5 * frames) / totalFrames))
+									: 70,
+								message: `Checking recording: ${frames.toLocaleString("en-US")} frames verified...`,
+							});
+						},
+					},
+					videoChunks,
+					preverified,
+					muxed,
+				),
+			),
+		);
+		verification.catch(() => {});
+		pendingVerification = { promise: verification, abort: verificationAbort };
+		await muxed;
+		outputWritten = true;
 		const beforeDecode = await lstat(resultPath, { bigint: true });
 		if (!beforeDecode.isFile())
 			throw new Error("Recording verification requires a local regular file");
@@ -3435,29 +3474,9 @@ async function muxSegmentsAsync(
 		});
 		sendCurrentJobWebhook(jobId);
 		const verificationStartedAt = Date.now();
-		const localVerified = await withJobHeartbeat(jobId, () =>
-			withMuxMemoryGuard(abortController, () =>
-				verifyRemuxedRecording(
-					combinedVideoPath,
-					combinedAudioPath,
-					resultPath,
-					{
-						requireAudio: requiredAudio,
-						abortSignal: abortController.signal,
-						onProgress: ({ frames, totalFrames }) => {
-							updateJob(jobId, {
-								progress: totalFrames
-									? 70 + Math.min(4, Math.floor((5 * frames) / totalFrames))
-									: 70,
-								message: `Checking recording: ${frames.toLocaleString("en-US")} frames verified...`,
-							});
-						},
-					},
-					videoChunks,
-					preverified,
-				),
-			),
-		);
+		const outputProbe = probeVideoFile(resultPath);
+		outputProbe.catch(() => {});
+		const localVerified = await verification;
 		if (videoChunks) await rm(videoDir, { recursive: true, force: true });
 		logVideoEvent("video_mux_verification_complete", {
 			jobId,
@@ -3531,9 +3550,7 @@ async function muxSegmentsAsync(
 		);
 		previewUploads.catch(() => {});
 
-		let metadata = await withJobHeartbeat(jobId, () =>
-			probeVideoFile(resultPath),
-		);
+		let metadata = await withJobHeartbeat(jobId, () => outputProbe);
 		if (
 			!Number.isFinite(metadata.duration) ||
 			metadata.duration <= 0 ||
@@ -3700,9 +3717,13 @@ async function muxSegmentsAsync(
 			error: logReason(error, MUX_FAILURE_LOG_LENGTH),
 			resources: getSystemResources(),
 		});
-		// Stop a hash still reading the output before the work directory is removed.
+		// Stop a hash or decode still reading the work directory before it is removed.
 		pendingOutputHash?.abort.abort();
-		await pendingOutputHash?.promise.catch(() => {});
+		pendingVerification?.abort.abort();
+		await Promise.all([
+			pendingOutputHash?.promise.catch(() => {}),
+			pendingVerification?.promise.catch(() => {}),
+		]);
 		if (!outputUploadStarted) {
 			// Parts still in flight could land after the abort, so let them settle first.
 			await pendingOutputUpload?.cancel();

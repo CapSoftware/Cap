@@ -3003,6 +3003,80 @@ describe("chunked packet-proven verification", () => {
 		}
 	});
 
+	test("decodes the fragments while the output is still being written", async () => {
+		const recording = await segmentedRecording("chunk-early", 15);
+		process.env.MEDIA_SERVER_VERIFY_DECODE_CHUNKS = "3";
+		try {
+			const expected = await verifyRemuxedRecording(
+				recording.combined,
+				silent,
+				recording.output,
+				{ requireAudio: false },
+				{ init: recording.init, segments: recording.segments },
+			);
+			const pending = join(directory, "chunk-early-pending.mp4");
+			let written!: () => void;
+			const outputReady = new Promise<void>((resolve) => {
+				written = resolve;
+			});
+			const early = verifyRemuxedRecording(
+				recording.combined,
+				silent,
+				pending,
+				{ requireAudio: false },
+				{ init: recording.init, segments: recording.segments },
+				[],
+				outputReady,
+			);
+			const warn = spyOn(console, "warn");
+			let result: Awaited<typeof early>;
+			try {
+				await new Promise((resolve) => setTimeout(resolve, 200));
+				await muxMediaTracksToMp4(recording.combined, silent, pending);
+				written();
+				result = await early;
+				expect(
+					warn.mock.calls.some((call) =>
+						String(call[0]).includes("recording_chunked_decode_fallback"),
+					),
+				).toBe(false);
+			} finally {
+				warn.mockRestore();
+			}
+			expect(result.sourcePreserved).toBe(true);
+			expect(result.video.frameCount).toBe(expected.video.frameCount);
+			expect(result.video.duration).toBe(expected.video.duration);
+			expect(Boolean(result.audio)).toBe(Boolean(expected.audio));
+		} finally {
+			delete process.env.MEDIA_SERVER_VERIFY_DECODE_CHUNKS;
+		}
+	});
+
+	test("a failed output write fails verification as itself and stops the decoders", async () => {
+		const recording = await segmentedRecording("chunk-write-failed", 15);
+		const active = getActiveSubprocessCount();
+		process.env.MEDIA_SERVER_VERIFY_DECODE_CHUNKS = "3";
+		try {
+			const failure = new Error("Remux failed");
+			await expect(
+				verifyRemuxedRecording(
+					recording.combined,
+					silent,
+					join(directory, "chunk-write-failed-missing.mp4"),
+					{ requireAudio: false },
+					{ init: recording.init, segments: recording.segments },
+					[],
+					new Promise((_resolve, reject) =>
+						setTimeout(() => reject(failure), 100),
+					),
+				),
+			).rejects.toBe(failure);
+			expect(getActiveSubprocessCount()).toBe(active);
+		} finally {
+			delete process.env.MEDIA_SERVER_VERIFY_DECODE_CHUNKS;
+		}
+	});
+
 	async function preverify(
 		recording: { init: string; segments: string[] },
 		from: number,

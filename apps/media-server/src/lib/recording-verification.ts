@@ -1026,6 +1026,7 @@ async function decodePacketProvenChunks(
 	hasAudio: boolean,
 	packetProofRead: Promise<Awaited<ReturnType<typeof proveRecordingPackets>>>,
 	preverified: PreverifiedVideoRun[] = [],
+	outputReady?: Promise<void>,
 ): Promise<RecordingVerificationResult> {
 	let knownVideoPackets: number | undefined;
 	packetProofRead.then(
@@ -1083,6 +1084,15 @@ async function decodePacketProvenChunks(
 	let failure: Error | undefined;
 	let decodedFrames = 0;
 	let lastAdvance = performance.now();
+	// Time spent waiting for the output to be written is not a stalled decoder.
+	let outputPending = outputReady !== undefined;
+	outputReady?.then(
+		() => {
+			outputPending = false;
+			lastAdvance = performance.now();
+		},
+		() => {},
+	);
 	let lastReport = 0;
 	const stopAll = () => {
 		for (const decoder of decoders) {
@@ -1108,7 +1118,7 @@ async function decodePacketProvenChunks(
 		stopAll();
 	}, options.timeoutMs ?? MAX_LOCAL_VERIFICATION_MS);
 	const stall = setInterval(() => {
-		if (performance.now() - lastAdvance > DECODER_STALL_MS) {
+		if (!outputPending && performance.now() - lastAdvance > DECODER_STALL_MS) {
 			failure ??= new RecordingVerificationError(
 				"Recording decoder stopped making progress",
 				true,
@@ -1185,6 +1195,8 @@ async function decodePacketProvenChunks(
 			}
 		};
 		for (const [index, args] of jobs.entries()) {
+			// Fragment chunks are source files; only the audio decode reads the output.
+			if (index === chunkPaths.length) await outputReady;
 			options.abortSignal?.throwIfAborted();
 			const decoder = registerSubprocess(await spawnRecordingDecoder(args, 0));
 			decoders.push(decoder);
@@ -1299,22 +1311,27 @@ export async function verifyRemuxedRecording(
 	>,
 	videoChunks?: RecordingVideoChunkSource,
 	preverified: PreverifiedVideoRun[] = [],
+	// Settles once `outputPath` is written; the fragment decode can start before it.
+	outputReady?: Promise<unknown>,
 ): Promise<RecordingVerificationResult & { sourcePreserved: true }> {
+	const outputWritten = outputReady
+		? outputReady.then(() => undefined)
+		: Promise.resolve();
+	outputWritten.catch(() => {});
 	const signal = AbortSignal.any([
 		...(options.abortSignal ? [options.abortSignal] : []),
 		AbortSignal.timeout(options.timeoutMs ?? MAX_LOCAL_VERIFICATION_MS),
 	]);
 	options = { ...options, abortSignal: signal };
-	const proofRead = proveRecordingPackets(
-		videoPath,
-		audioPath,
-		outputPath,
-		signal,
-	).then((proof) => {
-		if (proof.outputTiming.terminalPacketCount !== 1)
-			throw new Error("Tied terminal samples require decoded source evidence");
-		return proof;
-	});
+	const proofRead = outputWritten
+		.then(() => proveRecordingPackets(videoPath, audioPath, outputPath, signal))
+		.then((proof) => {
+			if (proof.outputTiming.terminalPacketCount !== 1)
+				throw new Error(
+					"Tied terminal samples require decoded source evidence",
+				);
+			return proof;
+		});
 	proofRead.catch(() => {});
 	const decodeOptions = {
 		...options,
@@ -1339,6 +1356,7 @@ export async function verifyRemuxedRecording(
 					Boolean(audioPath),
 					proofRead,
 					preverified,
+					outputWritten,
 				)
 			: undefined;
 	chunked?.catch(() => {});
@@ -1348,6 +1366,7 @@ export async function verifyRemuxedRecording(
 	} catch (error) {
 		chunkAbort.abort();
 		await chunked?.catch(() => {});
+		await outputWritten;
 		signal.throwIfAborted();
 		if (error instanceof RecordingPacketMismatchError) throw error;
 		const sourceEvidence = await inspectRecordingSources(
