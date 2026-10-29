@@ -372,6 +372,12 @@ describe("parseOpenAICompatibleTranscription", () => {
 		).toThrow(FatalError);
 	});
 
+	it("rejects a JSON object that isn't a transcription", () => {
+		expect(() =>
+			parseOpenAICompatibleTranscription({ status: "ok" }, "turbo"),
+		).toThrow(FatalError);
+	});
+
 	it("returns no words for silent audio", () => {
 		expect(
 			parseOpenAICompatibleTranscription({ text: "", segments: [] }, "turbo")

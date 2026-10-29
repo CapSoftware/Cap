@@ -227,6 +227,15 @@ export function parseOpenAICompatibleTranscription(
 	if (!isRecord(body)) {
 		throw new FatalError("STT response is not a JSON object");
 	}
+	if (
+		typeof body.text !== "string" &&
+		!Array.isArray(body.words) &&
+		!Array.isArray(body.segments)
+	) {
+		throw new FatalError(
+			"STT response has no text, words or segments; check STT_BASE_URL points at an OpenAI-compatible /audio/transcriptions endpoint",
+		);
+	}
 
 	const words = collectWords(body).map((word) => ({
 		...word,
