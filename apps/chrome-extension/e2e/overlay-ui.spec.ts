@@ -1236,3 +1236,60 @@ test("the dock mutes the recording microphone without changing saved settings", 
 		await mockServer.close();
 	}
 });
+
+test("choosing Camera mode picks a camera so Start stays available", async () => {
+	const mockServer = await createMockCapServer();
+	const extension = await launchExtensionContext();
+
+	try {
+		const worker = await getServiceWorker(extension.context);
+		await configureExtension(worker, mockServer.origin, {
+			webcamEnabled: false,
+		});
+		const messengerPage = await extension.context.newPage();
+		await messengerPage.goto(
+			`chrome-extension://${new URL(worker.url()).host}/popup.html`,
+		);
+		const targetPage = await extension.context.newPage();
+		await targetPage.goto(`${mockServer.origin}/capture.html`);
+		await targetPage.bringToFront();
+		await sendServiceWorkerMessage(messengerPage, {
+			target: "service-worker",
+			type: "open-recorder-panel",
+		});
+		await expect
+			.poll(() => frameWithUrl(targetPage, "popup.html") !== null, {
+				timeout: 15_000,
+			})
+			.toBe(true);
+		const panel = frameWithUrl(targetPage, "popup.html");
+		if (!panel) throw new Error("recorder panel missing");
+
+		await panel
+			.getByRole("combobox")
+			.filter({ hasText: /Full Screen/ })
+			.click();
+		await panel.getByRole("option", { name: "Camera only" }).click();
+
+		await expect(
+			panel.getByRole("button", { name: "Start recording" }),
+		).toBeEnabled();
+		const savedCamera = await worker.evaluate(
+			(settingsKey) =>
+				new Promise<string | null | undefined>((resolve) => {
+					const chromeApi = (globalThis as ChromeGlobal).chrome;
+					chromeApi.storage.local.get(settingsKey, (items) => {
+						const settings = items[settingsKey] as
+							| { webcam?: { deviceId?: string | null } }
+							| undefined;
+						resolve(settings?.webcam?.deviceId);
+					});
+				}),
+			SETTINGS_KEY,
+		);
+		expect(savedCamera).toBeTruthy();
+	} finally {
+		await extension.cleanup();
+		await mockServer.close();
+	}
+});
