@@ -962,6 +962,7 @@ test.describe("extension recording upload", () => {
 					expect(mockServer.state.initiateBodies).toHaveLength(0);
 				} else {
 					await expect.poll(readPhase, { timeout: 10_000 }).toBe("recording");
+					await capturePage.waitForTimeout(1_000);
 					const stopResponse = await sendServiceWorkerMessage(messengerPage, {
 						target: "service-worker",
 						type: "stop-recording",
