@@ -1,4 +1,6 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import {
 	createServer,
 	type IncomingMessage,
@@ -32,6 +34,7 @@ type MockState = {
 	initiateBodies: unknown[];
 	presignBodies: unknown[];
 	uploadBytes: number[];
+	uploadParts: Map<number, Buffer>;
 	uploadHeaders: Record<string, string | string[] | undefined>[];
 	videoId: string;
 };
@@ -56,6 +59,13 @@ type ChromeGlobal = typeof globalThis & {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const extensionPath = path.resolve(__dirname, "../dist");
+const unpackedExtensionId = createHash("sha256")
+	.update(extensionPath)
+	.digest("hex")
+	.slice(0, 32)
+	.replace(/[0-9a-f]/g, (digit) =>
+		String.fromCharCode(97 + Number.parseInt(digit, 16)),
+	);
 const SETTINGS_KEY = "cap-extension-settings";
 const AUTH_KEY = "cap-extension-auth";
 const BOOTSTRAP_CACHE_KEY = "cap-extension-bootstrap-cache";
@@ -150,6 +160,35 @@ const animatedCapturePage = () => `<!doctype html>
 	</body>
 </html>`;
 
+// Flashes white and beeps together once a second, both driven by the audio
+// clock, so the uploaded file shows whether audio and video stay aligned.
+const audibleCapturePage = () => `<!doctype html>
+<html>
+	<head>
+		<title>Cap E2E Capture Target</title>
+	</head>
+	<body style="margin:0;height:100vh;background:#000">
+		<script>
+			const context = new AudioContext();
+			let scheduledBeat = Math.ceil(context.currentTime);
+			const tick = () => {
+				while (scheduledBeat < context.currentTime + 0.5) {
+					const oscillator = context.createOscillator();
+					oscillator.frequency.value = 440;
+					oscillator.connect(context.destination);
+					oscillator.start(scheduledBeat);
+					oscillator.stop(scheduledBeat + 0.2);
+					scheduledBeat += 1;
+				}
+				const lit = context.currentTime % 1 < 0.2;
+				document.body.style.background = lit ? "#fff" : "#000";
+				requestAnimationFrame(tick);
+			};
+			tick();
+		</script>
+	</body>
+</html>`;
+
 const createMockCapServer = async () => {
 	const state: MockState = {
 		completeBodies: [],
@@ -157,6 +196,7 @@ const createMockCapServer = async () => {
 		initiateBodies: [],
 		presignBodies: [],
 		uploadBytes: [],
+		uploadParts: new Map(),
 		uploadHeaders: [],
 		videoId: `e2e-${Date.now()}`,
 	};
@@ -172,6 +212,11 @@ const createMockCapServer = async () => {
 		try {
 			if (request.method === "GET" && url.pathname === "/capture.html") {
 				sendHtml(response, animatedCapturePage());
+				return;
+			}
+
+			if (request.method === "GET" && url.pathname === "/capture-audio.html") {
+				sendHtml(response, audibleCapturePage());
 				return;
 			}
 
@@ -246,6 +291,10 @@ const createMockCapServer = async () => {
 			if (request.method === "PUT" && url.pathname.startsWith("/mock-s3/")) {
 				const body = await readRequestBody(request);
 				state.uploadBytes.push(body.byteLength);
+				state.uploadParts.set(
+					Number(url.pathname.replace("/mock-s3/part-", "")),
+					body,
+				);
 				state.uploadHeaders.push(request.headers);
 				response.writeHead(200, {
 					"Access-Control-Allow-Origin": "*",
@@ -331,21 +380,32 @@ const createMockCapServer = async () => {
 	};
 };
 
-const launchExtensionContext = async () => {
+// Chromium's fake capture devices and fake permission UI both make tab capture
+// fail with "Requested device not found", and headless Chromium captures tab
+// audio as silence, so tab recordings launch headed without them.
+const canLaunchHeaded =
+	process.platform !== "linux" || Boolean(process.env.DISPLAY);
+
+const launchExtensionContext = async ({ tabCapture = false } = {}) => {
 	const userDataDir = await mkdtemp(path.join(tmpdir(), "cap-extension-e2e-"));
 	const context = await chromium.launchPersistentContext(userDataDir, {
 		channel: "chromium",
-		headless: true,
+		headless: !tabCapture,
 		args: [
 			`--disable-extensions-except=${extensionPath}`,
 			`--load-extension=${extensionPath}`,
+			`--allowlisted-extension-id=${unpackedExtensionId}`,
 			"--allow-http-screen-capture",
 			"--auto-select-desktop-capture-source=Cap E2E Capture Target",
 			"--auto-select-tab-capture-source-by-title=Cap E2E Capture Target",
 			"--enable-usermedia-screen-capturing",
 			"--autoplay-policy=no-user-gesture-required",
-			"--use-fake-device-for-media-stream",
-			"--use-fake-ui-for-media-stream",
+			...(!tabCapture
+				? [
+						"--use-fake-device-for-media-stream",
+						"--use-fake-ui-for-media-stream",
+					]
+				: []),
 		],
 	});
 	const cleanup = async () => {
@@ -379,15 +439,34 @@ const openExtensionMessengerPage = async (
 	return page;
 };
 
+type RecordingOptions = {
+	mode: "fullscreen" | "tab";
+	microphone: boolean;
+	systemAudio: boolean;
+	capturePath: string;
+	durationMs: number;
+};
+
+const DEFAULT_RECORDING_OPTIONS: RecordingOptions = {
+	mode: RECORDING_MODE,
+	microphone: false,
+	systemAudio: false,
+	capturePath: "/capture.html",
+	durationMs: RECORDING_MS,
+};
+
 const configureExtension = async (
 	worker: Awaited<ReturnType<typeof getServiceWorker>>,
 	apiBaseUrl: string,
+	options: RecordingOptions = DEFAULT_RECORDING_OPTIONS,
 ) => {
 	await worker.evaluate(
 		async ({
 			authKey,
 			bootstrapKey,
 			recordingMode,
+			microphone,
+			systemAudio,
 			settingsKey,
 			apiBaseUrl,
 		}) => {
@@ -442,11 +521,11 @@ const configureExtension = async (
 								mirror: false,
 							},
 							microphone: {
-								enabled: false,
+								enabled: microphone,
 								deviceId: null,
 							},
 							systemAudio: {
-								enabled: false,
+								enabled: systemAudio,
 							},
 							sounds: {
 								enabled: false,
@@ -475,7 +554,9 @@ const configureExtension = async (
 			apiBaseUrl,
 			authKey: AUTH_KEY,
 			bootstrapKey: BOOTSTRAP_CACHE_KEY,
-			recordingMode: RECORDING_MODE,
+			recordingMode: options.mode,
+			microphone: options.microphone,
+			systemAudio: options.systemAudio,
 			settingsKey: SETTINGS_KEY,
 		},
 	);
@@ -536,21 +617,165 @@ const expectSuccessfulUpload = async (page: Page, state: MockState) => {
 	).toBeGreaterThanOrEqual(1);
 };
 
+type StreamDurations = { video: number; audio: number | null };
+
+const onsets = (values: { time: number; level: number }[], threshold: number) =>
+	values
+		.filter(
+			(value, index) =>
+				value.level > threshold &&
+				(index === 0 || values[index - 1].level <= threshold),
+		)
+		.map((value) => value.time);
+
+// Pairs each white flash with the nearest beep and returns audio minus video
+// time in seconds for every pair.
+const measureFlashBeepOffsets = (
+	file: string,
+	samples: Float32Array,
+	sampleRate: number,
+) => {
+	const lines = execFileSync(
+		"ffmpeg",
+		[
+			"-v",
+			"error",
+			"-i",
+			file,
+			"-an",
+			"-vf",
+			"signalstats,metadata=print:key=lavfi.signalstats.YAVG:file=-",
+			"-f",
+			"null",
+			"-",
+		],
+		{ maxBuffer: 16 * 1024 * 1024 },
+	)
+		.toString()
+		.split("\n");
+	const frames: { time: number; level: number }[] = [];
+	let frameTime: number | null = null;
+	for (const line of lines) {
+		const time = /pts_time:([\d.]+)/.exec(line);
+		if (time) frameTime = Number(time[1]);
+		const level = /YAVG=([\d.]+)/.exec(line);
+		if (level && frameTime !== null) {
+			frames.push({ time: frameTime, level: Number(level[1]) });
+		}
+	}
+	const windowSize = sampleRate / 100;
+	const windows: { time: number; level: number }[] = [];
+	for (
+		let start = 0;
+		start + windowSize <= samples.length;
+		start += windowSize
+	) {
+		let peak = 0;
+		for (let index = start; index < start + windowSize; index += 1) {
+			peak = Math.max(peak, Math.abs(samples[index]));
+		}
+		windows.push({ time: start / sampleRate, level: peak });
+	}
+	const beeps = onsets(windows, 0.1);
+	return onsets(frames, 128).flatMap((flash) => {
+		const nearest = beeps.reduce<number | null>(
+			(best, beep) =>
+				best === null || Math.abs(beep - flash) < Math.abs(best - flash)
+					? beep
+					: best,
+			null,
+		);
+		return nearest !== null && Math.abs(nearest - flash) < 0.5
+			? [nearest - flash]
+			: [];
+	});
+};
+
+const probeUploadedRecording = async (state: MockState) => {
+	const parts = [...state.uploadParts.entries()]
+		.sort(([a], [b]) => a - b)
+		.map(([, body]) => body);
+	const directory = await mkdtemp(path.join(tmpdir(), "cap-e2e-media-"));
+	const file = path.join(directory, "recording.webm");
+	await writeFile(file, Buffer.concat(parts));
+	try {
+		const duration = (type: "v" | "a") => {
+			const output = execFileSync("ffprobe", [
+				"-v",
+				"error",
+				"-select_streams",
+				type,
+				"-show_entries",
+				"packet=pts_time",
+				"-of",
+				"csv=p=0",
+				file,
+			])
+				.toString()
+				.trim()
+				.split("\n")
+				.map(Number)
+				.filter(Number.isFinite);
+			return output.length > 0 ? Math.max(...output) : null;
+		};
+		const pcm = execFileSync(
+			"ffmpeg",
+			[
+				"-v",
+				"error",
+				"-i",
+				file,
+				"-vn",
+				"-ac",
+				"1",
+				"-ar",
+				"8000",
+				"-f",
+				"f32le",
+				"-",
+			],
+			{ maxBuffer: 64 * 1024 * 1024 },
+		);
+		const samples = new Float32Array(
+			pcm.buffer,
+			pcm.byteOffset,
+			Math.floor(pcm.byteLength / 4),
+		);
+		const tail = samples.subarray(Math.max(0, samples.length - 8000 * 1.5));
+		const tailPeak = tail.reduce(
+			(peak, value) => Math.max(peak, Math.abs(value)),
+			0,
+		);
+		const durations: StreamDurations = {
+			video: duration("v") ?? 0,
+			audio: duration("a"),
+		};
+		return {
+			durations,
+			tailPeak,
+			avOffsets: measureFlashBeepOffsets(file, samples, 8000),
+		};
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+};
+
 const startRecording = async (
 	context: BrowserContext,
 	worker: Awaited<ReturnType<typeof getServiceWorker>>,
 	apiBaseUrl: string,
+	options: RecordingOptions = DEFAULT_RECORDING_OPTIONS,
 ) => {
-	await configureExtension(worker, apiBaseUrl);
+	await configureExtension(worker, apiBaseUrl, options);
 	const messengerPage = await openExtensionMessengerPage(context, worker);
 	const capturePage = await context.newPage();
-	await capturePage.goto(`${apiBaseUrl}/capture.html`);
+	await capturePage.goto(`${apiBaseUrl}${options.capturePath}`);
 	await capturePage.bringToFront();
 
 	const startResponse = await sendServiceWorkerMessage(messengerPage, {
 		target: "service-worker",
 		type: "start-recording",
-		mode: RECORDING_MODE,
+		mode: options.mode,
 	});
 	if (!startResponse.ok) {
 		throw new Error(startResponse.error);
@@ -567,7 +792,7 @@ const startRecording = async (
 		})
 		.toBe("recording");
 
-	await capturePage.waitForTimeout(RECORDING_MS);
+	await capturePage.waitForTimeout(options.durationMs);
 	return {
 		capturePage,
 		messengerPage,
@@ -608,6 +833,73 @@ test.describe("extension recording upload", () => {
 		await expectSuccessfulUpload(messengerPage, mockServer.state);
 	});
 
+	for (const options of [
+		{
+			name: "fullscreen with microphone",
+			mode: "fullscreen",
+			microphone: true,
+			systemAudio: false,
+			capturePath: "/capture.html",
+		},
+		{
+			name: "tab with tab audio",
+			mode: "tab",
+			microphone: false,
+			systemAudio: true,
+			capturePath: "/capture-audio.html",
+		},
+	] as const) {
+		test(`keeps audio for the whole ${options.name} recording`, async () => {
+			if (!extension || !mockServer)
+				throw new Error("Test harness did not start");
+			if (options.mode === "tab") {
+				test.skip(!canLaunchHeaded, "Tab audio capture needs a headed browser");
+				await extension.cleanup();
+				extension = await launchExtensionContext({ tabCapture: true });
+			}
+			const worker = await getServiceWorker(extension.context);
+			const { messengerPage } = await startRecording(
+				extension.context,
+				worker,
+				mockServer.origin,
+				{ ...options, durationMs: 6_000 },
+			);
+			const stopResponse = await sendServiceWorkerMessage(messengerPage, {
+				target: "service-worker",
+				type: "stop-recording",
+			});
+			expect(stopResponse).toMatchObject({ ok: true });
+			await expectSuccessfulUpload(messengerPage, mockServer.state);
+
+			const { durations, tailPeak, avOffsets } = await probeUploadedRecording(
+				mockServer.state,
+			);
+			if (process.env.CAP_E2E_REPORT_AV) {
+				console.log(
+					JSON.stringify({
+						name: options.name,
+						durations,
+						tailPeak,
+						avOffsets,
+					}),
+				);
+			}
+			expect(durations.video).toBeGreaterThan(5);
+			expect(durations.audio).not.toBeNull();
+			expect(Math.abs((durations.audio ?? 0) - durations.video)).toBeLessThan(
+				0.5,
+			);
+			expect(tailPeak).toBeGreaterThan(0.01);
+			if (options.mode === "tab") {
+				expect(avOffsets.length).toBeGreaterThanOrEqual(4);
+				const sorted = [...avOffsets].sort((a, b) => a - b);
+				const median = sorted[Math.floor(sorted.length / 2)];
+				expect(Math.abs(median)).toBeLessThan(0.15);
+				expect(sorted[sorted.length - 1] - sorted[0]).toBeLessThan(0.1);
+			}
+		});
+	}
+
 	test("can complete two consecutive recording uploads without stale state", async () => {
 		if (!extension || !mockServer)
 			throw new Error("Test harness did not start");
@@ -638,6 +930,7 @@ test.describe("extension recording upload", () => {
 		mockServer.state.initiateBodies = [];
 		mockServer.state.presignBodies = [];
 		mockServer.state.uploadBytes = [];
+		mockServer.state.uploadParts = new Map();
 		mockServer.state.uploadHeaders = [];
 		mockServer.state.videoId = `e2e-${Date.now()}-second`;
 
