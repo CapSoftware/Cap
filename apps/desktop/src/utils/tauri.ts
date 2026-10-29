@@ -769,7 +769,7 @@ export type Camera = { hide: boolean; mirror: boolean; position: CameraPosition;
  * Normalized (0-1) center of the camera rect in output-frame space.
  * Overrides `position` when set.
  */
-manualPosition: XY<number> | null; size: number; zoomSize: number | null; rounding: number; shadow: number; advancedShadow: ShadowConfiguration | null; shape: CameraShape; roundingType: CornerStyle; scaleDuringZoom?: number; backgroundBlur?: BackgroundBlurConfig }
+manualPosition: XY<number> | null; size: number; zoomSize: number | null; rounding: number; shadow: number; advancedShadow: ShadowConfiguration | null; shape: CameraShape; roundingType: CornerStyle; scaleDuringZoom?: number; backgroundBlur?: BackgroundBlurConfig; rotation?: number }
 /**
  * Screen-space focus blur applied over the composed frame while a 3d segment
  * is active (a UV-mask variable blur, not a depth-of-field). `strength` is a

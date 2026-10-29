@@ -2468,6 +2468,7 @@ keep_size_during_zoom = "ज़ूम के दौरान मूल आका
 mirror = "कैमरा मिरर करें"
 position = "पोज़िशन"
 reset = "रीसेट करें"
+rotation = "रोटेशन"
 rounded_corners = "गोल कोने"
 shadow = "छाया"
 shadow_blur = "ब्लर"
