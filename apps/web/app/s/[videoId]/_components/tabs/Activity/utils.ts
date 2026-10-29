@@ -9,8 +9,7 @@ export const formatTimestamp = (date: Date) => {
 	}).format(date);
 };
 
-export const formatTimeAgo = (date: Date) => {
-	const now = new Date();
+export const formatTimeAgo = (date: Date, now: Date = new Date()) => {
 	const diffInSeconds = Math.floor((now.getTime() - date.getTime()) / 1000);
 
 	if (diffInSeconds < 60) return "now";
@@ -27,6 +26,6 @@ export const formatTimeAgo = (date: Date) => {
 	const diffInMonths = Math.floor(diffInDays / 30);
 	if (diffInMonths < 12) return `${diffInMonths}mo ago`;
 
-	const diffInYears = Math.floor(diffInDays / 365);
+	const diffInYears = Math.max(1, Math.floor(diffInDays / 365));
 	return `${diffInYears}y ago`;
 };
