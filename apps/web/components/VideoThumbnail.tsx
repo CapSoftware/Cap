@@ -2,7 +2,6 @@ import { LogoSpinner } from "@cap/ui";
 import type { Video } from "@cap/web-domain";
 import clsx from "clsx";
 import { Effect } from "effect";
-import moment from "moment";
 import Image from "next/image";
 import type { CSSProperties, ReactNode } from "react";
 import {
@@ -16,6 +15,7 @@ import {
 	useState,
 	useSyncExternalStore,
 } from "react";
+import { durationParts } from "@/lib/date-format";
 import { useEffectQuery } from "@/lib/EffectRuntime";
 import { ThumbnailRequest } from "@/lib/Requests/ThumbnailRequest";
 
@@ -62,11 +62,11 @@ interface VideoThumbnailProps {
 }
 
 const formatDuration = (durationSecs: number) => {
-	const momentDuration = moment.duration(durationSecs, "seconds");
+	const duration = durationParts(durationSecs);
 
-	const totalHours = Math.floor(momentDuration.asHours());
-	const totalMinutes = Math.floor(momentDuration.asMinutes());
-	const remainingSeconds = Math.ceil(momentDuration.asSeconds() % 60); // Use ceil to avoid 0 secs
+	const totalHours = Math.floor(duration.asHours);
+	const totalMinutes = Math.floor(duration.asMinutes);
+	const remainingSeconds = Math.ceil(duration.asSeconds % 60); // Use ceil to avoid 0 secs
 
 	if (totalHours > 0) {
 		return `${totalHours} hr${totalHours > 1 ? "s" : ""}`;

@@ -292,7 +292,7 @@ describe("share page database round trips", () => {
 		expect(result.header.spacesData).toHaveLength(4);
 		expect(result.header).toMatchObject({ canDownload: true, hasEdits: false });
 		expect({ roundTrips, queries: mocks.query.mock.calls.length }).toEqual({
-			roundTrips: 4,
+			roundTrips: 3,
 			queries: 20,
 		});
 	});
