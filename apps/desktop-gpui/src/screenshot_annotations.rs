@@ -1316,6 +1316,12 @@ impl ScreenshotEditorWindow {
                 .slider_tracks
                 .insert(slider, ui::SliderTrack::default());
         }
+
+        for panel in [MaskPanel::Presets, MaskPanel::Adjust] {
+            self.annotation_state
+                .mask_anchors
+                .insert(panel, BoundsCell::default());
+        }
     }
 
     // -- Frame-space plumbing -------------------------------------------------
@@ -2767,17 +2773,18 @@ impl ScreenshotEditorWindow {
                 else {
                     return false;
                 };
+                let mut tinted = false;
                 let field = match target {
                     ColorTarget::Stroke => &mut annotation.stroke_color,
                     ColorTarget::Fill => &mut annotation.fill_color,
                     ColorTarget::Mask => {
                         let options = annotation.mask_options.get_or_insert_with(Default::default);
-                        Self::ensure_mask_tint_visible(options);
+                        tinted = Self::ensure_mask_tint_visible(options);
                         &mut options.color
                     }
                 };
                 if *field == value {
-                    return false;
+                    return tinted;
                 }
                 *field = value;
                 true

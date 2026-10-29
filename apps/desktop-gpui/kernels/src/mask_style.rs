@@ -77,7 +77,6 @@ impl MaskStyle {
     }
 }
 
-/// Signed distance from `point` to the shape's edge, negative inside.
 fn shape_distance(point: (f64, f64), shape: [f64; 4], ellipse: bool, radius: f64) -> f64 {
     let [x, y, width, height] = shape;
     let half = (width / 2., height / 2.);
@@ -125,11 +124,6 @@ fn mix(channel: u8, target: u8, amount: f64) -> u8 {
     (f64::from(channel) + (f64::from(target) - f64::from(channel)) * amount).round() as u8
 }
 
-/// One mask's pixels for `region` of the frame, with the style baked in:
-/// the effect, the tint, then the shape's coverage folded into alpha so the
-/// result composites straight over the untouched frame. `shape` is the
-/// mask's own rect in frame pixels -- equal to `region` for a normal mask,
-/// and the hole cut out of `region` for an inverted one.
 pub fn styled_mask(
     rgba: &[u8],
     frame_width: u32,

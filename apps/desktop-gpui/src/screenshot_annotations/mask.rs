@@ -150,8 +150,6 @@ impl MaskShapeChoice {
     }
 }
 
-/// One-click looks. Each preset writes every mask field, so applying one is
-/// a complete restyle rather than a merge with whatever was there.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MaskPreset {
     SoftBlur,
@@ -511,10 +509,6 @@ pub(super) fn mask_style(mask: &Annotation, bgra: bool) -> MaskStyle {
     }
 }
 
-/// The pixels one mask resamples and the rect its shape occupies, both in
-/// whole frame pixels. A normal mask works inside its own rect; an inverted
-/// one covers the screenshot's whole content rect with its own rect as the
-/// hole. Everything is clipped to `clip` first.
 pub(super) fn mask_regions(
     mask: &Annotation,
     clip: [f64; 4],
@@ -538,8 +532,6 @@ pub(super) fn mask_regions(
 }
 
 impl ScreenshotEditorWindow {
-    /// A new mask copies the look of the selected mask, or else the last one
-    /// drawn, so a run of redactions does not need restyling one by one.
     pub(super) fn mask_style_source(&self) -> Option<Annotation> {
         self.selected()
             .filter(|annotation| annotation.annotation_type == AnnotationType::Mask)
@@ -577,12 +569,12 @@ impl ScreenshotEditorWindow {
         );
     }
 
-    /// Picking a colour on a blur or pixelate mask with no tint would change
-    /// nothing visible, so the first pick also turns the tint up.
-    pub(super) fn ensure_mask_tint_visible(options: &mut MaskOptions) {
-        if !options.solid && options.tint <= 0. {
-            options.tint = TINT_ON_COLOR_PICK;
+    pub(super) fn ensure_mask_tint_visible(options: &mut MaskOptions) -> bool {
+        if options.solid || options.tint > 0. {
+            return false;
         }
+        options.tint = TINT_ON_COLOR_PICK;
+        true
     }
 
     fn toggle_mask_panel(&mut self, panel: MaskPanel, cx: &mut Context<Self>) {
@@ -1233,6 +1225,26 @@ mod tests {
         assert!(MaskShapeChoice::Square.apply(&mut options));
         assert_eq!(options.corner_radius, 0.);
         assert_eq!(options.shape, MaskShape::Rectangle);
+    }
+
+    #[test]
+    fn a_colour_pick_reports_the_tint_it_turns_on() {
+        let mut options = MaskOptions::default();
+        assert!(ScreenshotEditorWindow::ensure_mask_tint_visible(
+            &mut options
+        ));
+        assert_eq!(options.tint, TINT_ON_COLOR_PICK);
+        assert!(!ScreenshotEditorWindow::ensure_mask_tint_visible(
+            &mut options
+        ));
+        let mut solid = MaskOptions {
+            solid: true,
+            ..MaskOptions::default()
+        };
+        assert!(!ScreenshotEditorWindow::ensure_mask_tint_visible(
+            &mut solid
+        ));
+        assert_eq!(solid.tint, 0.);
     }
 
     #[test]
