@@ -10,7 +10,6 @@ const RECORDER_HOST_PATHS = new Set([
 	"/options.html",
 ]);
 
-// Opens a Cap page with the recorder panel already showing.
 export const RECORDER_OPEN_PARAM = "recorder";
 
 export const isRecorderHostPage = (url: string | undefined) => {

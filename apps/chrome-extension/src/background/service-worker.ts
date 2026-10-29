@@ -821,7 +821,6 @@ const openRecorderOnCapPage = async (fromTab: chrome.tabs.Tab | null) => {
 	return true;
 };
 
-// Opens (never toggles) the panel in a Cap page that asked for it.
 const showRecorderPanelInTab = async (tab: chrome.tabs.Tab) => {
 	const currentStatus = await syncRecordingStatus().catch(
 		() => recordingStatus,
