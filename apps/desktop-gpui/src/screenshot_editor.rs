@@ -1169,19 +1169,20 @@ impl ScreenshotEditorWindow {
         if std::env::var("CAP_GPUI_AUTO_SCREENSHOT_CROP").is_ok_and(|value| value == "1") {
             self.open_crop_dialog(window, cx);
         }
+        self.previous_transform = None;
+        self.frame_size = self.logical_frame_size();
+        self.rescale_annotations_for(self.frame_size);
         cx.notify();
     }
 
     pub fn frame_arrived(
         &mut self,
         image: Arc<RenderImage>,
-        size: (u32, u32),
+        _size: (u32, u32),
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let next = (size.0.max(1) as f32, size.1.max(1) as f32);
-        self.rescale_annotations_for(next);
-        self.frame_size = next;
+        self.frame_size = self.logical_frame_size();
         self.mask_frame_revision = self
             .mask_frame_revision
             .checked_add(1)
@@ -1248,6 +1249,8 @@ impl ScreenshotEditorWindow {
         if !change(&mut self.project) {
             return;
         }
+        self.rescale_annotations_for(self.logical_frame_size());
+        self.frame_size = self.logical_frame_size();
         // Padding, crop and aspect all move the content rect underneath the
         // masks; the clamp rides along in the same history entry.
         self.clamp_masks();
@@ -1284,10 +1287,12 @@ impl ScreenshotEditorWindow {
 
     fn notify_preview_resolution_change(&mut self, scale_factor: f32, cx: &mut Context<Self>) {
         let Some(config_tx) = &self.config_tx else {
+            cx.notify();
             return;
         };
         let preview_render_size = self.current_preview_render_size(scale_factor);
         if self.last_preview_render_size == Some(preview_render_size) {
+            cx.notify();
             return;
         }
         self.last_preview_render_size = Some(preview_render_size);
@@ -1366,6 +1371,9 @@ impl ScreenshotEditorWindow {
         {
             self.selected_annotation = None;
         }
+        self.previous_transform = None;
+        self.frame_size = self.logical_frame_size();
+        self.rescale_annotations_for(self.frame_size);
         self.ensure_background_image(window, cx);
         self.publish(window.scale_factor());
         self.schedule_save(window, cx);
@@ -1815,6 +1823,22 @@ impl ScreenshotEditorWindow {
     }
 
     // -- Preview geometry -------------------------------------------------------
+
+    /// Full composited output size in frame space. GPU preview textures may be
+    /// downscaled via `preview_render_size`; annotations and layout use this.
+    fn logical_frame_size(&self) -> (f32, f32) {
+        let Some(image_size) = self.image_size else {
+            return (1., 1.);
+        };
+        let options = screenshot_render_options(image_size);
+        let (base_w, base_h) = ProjectUniforms::get_base_size(&options, &self.project);
+        let (width, height) = ProjectUniforms::get_output_size(
+            &options,
+            &self.project,
+            cap_project::XY::new(base_w, base_h),
+        );
+        (width.max(1) as f32, height.max(1) as f32)
+    }
 
     /// `Preview.tsx:88-139`: letterbox the frame into the padded area, cap it
     /// at the frame's native size (no upscale past 100%), then place the
