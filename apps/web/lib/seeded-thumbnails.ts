@@ -4,10 +4,6 @@ import { Effect, Option } from "effect";
 import type { SeededThumbnails } from "@/components/VideoThumbnail";
 import { runPromise } from "@/lib/server";
 
-// Starts the same lookup the VideosGetThumbnails RPC runs, without awaiting it,
-// so the page streams the URLs and thumbnails stop waiting for hydration plus
-// an RPC round trip. Ids that fail or have no thumbnail are left out and fall
-// back to the RPC on the client.
 export function seedThumbnailUrls(
 	user: Parameters<typeof makeCurrentUserLayer>[0],
 	videoIds: readonly Video.VideoId[],
