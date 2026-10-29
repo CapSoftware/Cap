@@ -21,7 +21,7 @@
 			"!capcodec/**/*.jsonl",
 			"!capcodec/**/*.pyc",
 			"!capcodec/capcodec.bundle",
-			"!**/cap-solarium.icon/**"
+			"!**/*.icon"
 		],
 		"ignoreUnknown": false
 	},
