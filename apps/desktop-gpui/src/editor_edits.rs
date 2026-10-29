@@ -1945,6 +1945,7 @@ pub fn ensure_timeline(project: &mut ProjectConfiguration, clip_display_duration
                 name: None,
                 speed_audio_mode: None,
                 hide_cursor: None,
+                voice_eq: None,
                 volume: None,
             })
             .collect(),
