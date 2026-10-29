@@ -35,6 +35,10 @@ export const LIVE = {
 	MAX_CHUNK_BYTES: 64 * 1024 * 1024,
 	REPORT_TIMEOUT_MS: 30_000,
 	FINISH_TIMEOUT_MS: 110_000,
+	/** A release only restarts the session elsewhere, so it must not hold up
+	 * a server that is shutting down. */
+	RELEASE_TIMEOUT_MS: 20_000,
+	MAX_RELEASE_WAIT_MS: 45_000,
 } as const;
 
 const manifestEntrySchema = z.union([
@@ -375,7 +379,7 @@ export class LiveSession {
 			outcome = "session-error";
 		}
 		if (this.releasing) {
-			await this.report({ action: "release" }, LIVE.FINISH_TIMEOUT_MS, 3);
+			await this.report({ action: "release" }, LIVE.RELEASE_TIMEOUT_MS, 2);
 		} else if (outcome) {
 			await this.report(
 				{ action: "finish", outcome },
@@ -661,8 +665,9 @@ export function startLiveSession(
 let releasing: Promise<void> | null = null;
 
 export function releaseLiveSessions(): Promise<void> {
-	releasing ??= Promise.all(
-		[...sessions.values()].map((session) => session.release()),
-	).then(() => {});
+	releasing ??= Promise.race([
+		Promise.all([...sessions.values()].map((session) => session.release())),
+		sleep(LIVE.MAX_RELEASE_WAIT_MS),
+	]).then(() => {});
 	return releasing;
 }
