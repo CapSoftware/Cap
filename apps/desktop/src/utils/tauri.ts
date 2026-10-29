@@ -1223,7 +1223,12 @@ textSizeVersion?: number;
  * legacy configs are migrated on load by seeding both animation
  * durations from `fade_duration`.
  */
-textAnimVersion?: number }
+textAnimVersion?: number;
+/**
+ * Names the user gave timeline lanes, keyed `"<track>:<lane>"` (for
+ * example `"audio:1"`). Lanes without one show the track's own label.
+ */
+trackNames: { [key in string]: string } }
 export type ProjectRecordingsMeta = { segments: SegmentRecordings[] }
 export type RecordingAction = "Started" | "InvalidAuthentication" | "UpgradeRequired"
 export type RecordingDeleted = { path: string }

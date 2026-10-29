@@ -2707,6 +2707,10 @@ pub struct ProjectConfiguration {
     /// durations from `fade_duration`.
     #[serde(default)]
     pub text_anim_version: u32,
+    /// Names the user gave timeline lanes, keyed `"<track>:<lane>"` (for
+    /// example `"audio:1"`). Lanes without one show the track's own label.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub track_names: std::collections::BTreeMap<String, String>,
 }
 
 pub const TEXT_SIZE_VERSION: u32 = 1;
@@ -2758,6 +2762,7 @@ impl Default for ProjectConfiguration {
             color_correction: Default::default(),
             text_size_version: TEXT_SIZE_VERSION,
             text_anim_version: TEXT_ANIM_VERSION,
+            track_names: Default::default(),
         }
     }
 }
