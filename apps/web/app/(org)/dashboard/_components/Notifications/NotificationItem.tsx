@@ -93,7 +93,7 @@ export const NotificationItem = ({
 					</p>
 				)}
 				<p className="text-xs text-gray-10">
-					{formatFromNow(notification.createdAt)}
+					{formatFromNow(new Date(notification.createdAt))}
 				</p>
 			</div>
 
