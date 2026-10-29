@@ -43,7 +43,7 @@ import {
 	type OrganizationMemberData,
 } from "./components/OrganizationIndicator";
 import { SharedCapCard } from "./components/SharedCapCard";
-import type { SpaceMemberData } from "./page";
+import type { SpaceMemberData } from "./(space)/page";
 
 type SharedVideoData = {
 	id: Video.VideoId;

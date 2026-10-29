@@ -30,7 +30,7 @@ import {
 } from "@/lib/permissions/roles";
 import { useDashboardContext } from "../../../Contexts";
 import { setSpaceMembers } from "../actions";
-import type { SpaceMemberData } from "../page";
+import type { SpaceMemberData } from "../(space)/page";
 import { MemberSelect } from "./MemberSelect";
 
 type MembersIndicatorProps = {
