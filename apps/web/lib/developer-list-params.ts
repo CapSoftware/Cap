@@ -5,11 +5,11 @@ export function parseDeveloperListParams(
 	limit: string | undefined,
 	offset: string | undefined,
 ) {
+	const requestedLimit = Number(limit);
 	return {
-		limit: Math.min(
-			Math.max(1, Math.trunc(Number(limit)) || DEFAULT_LIMIT),
-			MAX_LIMIT,
-		),
+		limit: requestedLimit
+			? Math.min(Math.max(1, Math.trunc(requestedLimit)), MAX_LIMIT)
+			: DEFAULT_LIMIT,
 		offset: Math.min(
 			Math.max(0, Math.trunc(Number(offset)) || 0),
 			Number.MAX_SAFE_INTEGER,

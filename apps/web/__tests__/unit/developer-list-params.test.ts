@@ -15,6 +15,8 @@ describe("parseDeveloperListParams", () => {
 	it("only passes whole numbers MySQL accepts in LIMIT and OFFSET", () => {
 		expect(parse("5.5", "2.5")).toEqual({ limit: 5, offset: 2 });
 		expect(parse("-1", "-5")).toEqual({ limit: 1, offset: 0 });
+		expect(parse("0.5")).toEqual({ limit: 1, offset: 0 });
+		expect(parse("-0.5")).toEqual({ limit: 1, offset: 0 });
 		expect(parse("Infinity", "99999999999999999999")).toEqual({
 			limit: 100,
 			offset: Number.MAX_SAFE_INTEGER,
