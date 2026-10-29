@@ -45,6 +45,7 @@ use std::collections::BTreeSet;
 
 use crate::{
     editor_window::{EDITOR_PREVIEW_FPS, EditorWindow, letterbox},
+    i18n::tr,
     ui,
 };
 use cap_project::{Crop, XY};
@@ -1472,15 +1473,30 @@ impl CropField {
 /// groups are simply adjacent -- documented in the README. The check marks and
 /// the keyboard contract are the real thing.
 pub fn crop_menu_items(aspect: Option<Ratio>, snap: bool) -> Vec<ui::MenuItem> {
-    let mut items = vec![ui::MenuItem::new("Free", aspect.is_none())];
+    let mut items = vec![ui::MenuItem::new(
+        tr::editor::crop::free(),
+        aspect.is_none(),
+    )];
     items.extend(COMMON_RATIOS.map(|ratio| {
         ui::MenuItem::new(
             SharedString::from(format!("{}:{}", ratio.0, ratio.1)),
             aspect == Some(ratio),
         )
     }));
-    items.push(ui::MenuItem::new("Snap to ratios", snap));
+    items.push(ui::MenuItem::new(tr::editor::crop::snap_to_ratios(), snap));
     items
+}
+
+/// The hint line under the stage, split around the Shift key badge: the
+/// translated sentence places `{key}` wherever its grammar needs it.
+pub(crate) fn crop_hint_parts() -> (String, String) {
+    const KEY: char = '\u{0}';
+    let hint = tr::editor::crop::hint(KEY);
+    let (before, after) = hint.split_once(KEY).unwrap_or((hint.as_str(), ""));
+    (
+        before.trim_end().to_string(),
+        after.trim_start().to_string(),
+    )
 }
 
 /// What row `index` of [`crop_menu_items`] does.
@@ -1639,7 +1655,7 @@ impl EditorWindow {
         if let Some(target) = &state.style_target
             && !target.matches(&self.project)
         {
-            state.error = Some("This Style changed while cropping. Cancel and reopen Crop.".into());
+            state.error = Some(tr::editor::crop::style_changed().into());
             self.crop = Some(state);
             self.publish_project();
             cx.notify();
@@ -2437,14 +2453,14 @@ impl EditorWindow {
                     .text_size(px(14.))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(Hsla::from(theme.editor.text_1))
-                    .child("Crop"),
+                    .child(tr::editor::crop::title()),
             )
             .child(
                 ui::EditorButton::plain(&theme, "crop-close")
                     .left_icon("icons/x.svg")
                     .icon_size(px(12.))
                     .width(px(28.))
-                    .tooltip(&theme, "Close")
+                    .tooltip(&theme, tr::common::close())
                     .on_click(
                         cx.listener(|this, _, window, cx| this.cancel_crop("close", window, cx)),
                     ),
@@ -2549,40 +2565,46 @@ impl EditorWindow {
             .p(px(INSPECTOR_PADDING))
             .rounded(px(12.))
             .bg(Hsla::from(editor.card_2))
-            .child(label("Preview"))
+            .child(label(tr::editor::crop::preview()))
             .child(self.render_crop_preview(px(preview_width), px(preview_height)))
             .child(hairline())
-            .child(label("Aspect ratio"))
+            .child(label(tr::editor::crop::aspect_ratio()))
             .child(chips)
-            .child(row().child(row_label("Snap to ratios")).child(
-                ui::Toggle::plain(&theme, "crop-snap", snap).on_click(cx.listener(
-                    |this, _, _window, cx| {
-                        this.crop_snap_to_ratio = !this.crop_snap_to_ratio;
-                        cx.notify();
-                    },
-                )),
-            ))
+            .child(
+                row()
+                    .child(row_label(tr::editor::crop::snap_to_ratios()))
+                    .child(
+                        ui::Toggle::plain(&theme, "crop-snap", snap).on_click(cx.listener(
+                            |this, _, _window, cx| {
+                                this.crop_snap_to_ratio = !this.crop_snap_to_ratio;
+                                cx.notify();
+                            },
+                        )),
+                    ),
+            )
             .child(hairline())
             .child(
-                row().child(row_label("Size")).child(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .gap(px(6.))
-                        .child(self.render_crop_field(CropField::Width))
-                        .child(
-                            div()
-                                .w(px(8.))
-                                .text_size(px(12.))
-                                .text_color(Hsla::from(editor.text_3))
-                                .child("×"),
-                        )
-                        .child(self.render_crop_field(CropField::Height)),
-                ),
+                row()
+                    .child(row_label(tr::editor::crop::dimensions()))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(6.))
+                            .child(self.render_crop_field(CropField::Width))
+                            .child(
+                                div()
+                                    .w(px(8.))
+                                    .text_size(px(12.))
+                                    .text_color(Hsla::from(editor.text_3))
+                                    .child("×"),
+                            )
+                            .child(self.render_crop_field(CropField::Height)),
+                    ),
             )
             .child(
-                row().child(row_label("Position")).child(
+                row().child(row_label(tr::editor::crop::position())).child(
                     div()
                         .flex()
                         .flex_row()
@@ -2601,7 +2623,7 @@ impl EditorWindow {
                     .gap(px(6.))
                     .child(self.render_crop_action(
                         "crop-center",
-                        "Center",
+                        tr::editor::crop::center(),
                         centered,
                         cx.listener(|this, _, window, cx| {
                             if let Some(state) = this.crop.as_mut() {
@@ -2624,7 +2646,7 @@ impl EditorWindow {
                     ))
                     .child(self.render_crop_action(
                         "crop-full",
-                        "Full",
+                        tr::editor::crop::full(),
                         full,
                         cx.listener(|this, _, window, cx| {
                             if let Some(state) = this.crop.as_mut() {
@@ -2636,7 +2658,7 @@ impl EditorWindow {
                     ))
                     .child(self.render_crop_action(
                         "crop-reset",
-                        "Reset",
+                        tr::common::reset(),
                         untouched,
                         cx.listener(|this, _, window, cx| {
                             if let Some(state) = this.crop.as_mut() {
@@ -2662,7 +2684,7 @@ impl EditorWindow {
         let editor = self.theme.editor;
         let label = match ratio {
             Some((a, b)) => SharedString::from(format!("{a}:{b}")),
-            None => SharedString::from("Free"),
+            None => SharedString::from(tr::editor::crop::free()),
         };
         div()
             .id(("crop-ratio", index))
@@ -2909,7 +2931,7 @@ impl EditorWindow {
                     .text_size(px(12.))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(Hsla::from(theme.editor.text_2))
-                    .child("Loading frame…")
+                    .child(tr::editor::crop::loading_frame())
             }))
             .into_any_element()
     }
@@ -2954,7 +2976,7 @@ impl EditorWindow {
                         .text_size(px(11.))
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(Hsla::from(editor.text_3))
-                        .child("Rendering preview…")
+                        .child(tr::editor::crop::rendering_preview())
                         .into_any_element(),
                 ),
             })
@@ -2964,6 +2986,7 @@ impl EditorWindow {
     /// The one-line hint under the stage.
     fn render_crop_hint(&self) -> AnyElement {
         let editor = self.theme.editor;
+        let (before, after) = crop_hint_parts();
         div()
             .flex()
             .flex_row()
@@ -2975,7 +2998,7 @@ impl EditorWindow {
             .pb(px(DIALOG_PADDING_X))
             .text_size(px(12.))
             .text_color(Hsla::from(editor.text_3))
-            .child("Drag to move · Arrow keys nudge · Hold")
+            .when(!before.is_empty(), |hint| hint.child(before))
             .child(
                 div()
                     .px(px(4.))
@@ -2984,7 +3007,7 @@ impl EditorWindow {
                     .text_color(Hsla::from(editor.text_2))
                     .child("⇧"),
             )
-            .child("to skip snapping")
+            .when(!after.is_empty(), |hint| hint.child(after))
             .into_any_element()
     }
 
@@ -2997,12 +3020,9 @@ impl EditorWindow {
             (Some(error), _) => Some((SharedString::from(error.clone()), Hsla::from(theme.red_11))),
             (None, Some(target)) => Some((
                 SharedString::from(if target.opting_in {
-                    format!(
-                        "Editing Style {} only · Saving enables its background override",
-                        target.index + 1
-                    )
+                    tr::editor::crop::editing_style_override(target.index + 1)
                 } else {
-                    format!("Editing Style {} only", target.index + 1)
+                    tr::editor::crop::editing_style(target.index + 1)
                 }),
                 Hsla::from(editor.text_2),
             )),
@@ -3038,7 +3058,7 @@ impl EditorWindow {
                     .gap(px(8.))
                     .child(
                         ui::EditorButton::plain(&theme, "crop-cancel")
-                            .label("Cancel")
+                            .label(tr::common::cancel())
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.cancel_crop("cancel", window, cx)
                             })),
@@ -3100,7 +3120,7 @@ impl EditorWindow {
                     .h(px(1.))
                     .bg(gpui::hsla(0., 0., 1., 0.22)),
             )
-            .child("Save")
+            .child(tr::common::save())
             .into_any_element()
     }
 

@@ -540,6 +540,11 @@ impl DeepLinkAction {
             DeepLinkAction::OpenEditor { project_path } => {
                 use cap_project::{RecordingMeta, RecordingMetaInner, StudioRecordingStatus};
 
+                if crate::library::is_screenshot_bundle(&project_path) {
+                    cx.defer(move |cx| app_windows::open_screenshot_editor(project_path, cx));
+                    return Ok(());
+                }
+
                 let meta =
                     RecordingMeta::load_for_project(&project_path).map_err(|v| v.to_string())?;
                 match &meta.inner {
@@ -558,7 +563,7 @@ impl DeepLinkAction {
                     RecordingMetaInner::Instant(_) => {
                         let mp4_path = project_path.join("content/output.mp4");
                         if mp4_path.exists() && mp4_path.is_file() {
-                            library::open_path(&mp4_path);
+                            library::open_with_system(&mp4_path, cx);
                             app_windows::hide_main_window(cx);
                         }
                     }
@@ -606,7 +611,9 @@ fn camera_selection(id: DeviceOrModelID) -> SelectedCamera {
             .map(|info| info.display_name().to_string())
             .unwrap_or_else(|| match &id {
                 DeviceOrModelID::DeviceID(device) => device.clone(),
-                DeviceOrModelID::ModelID(_) => "Camera".to_string(),
+                DeviceOrModelID::ModelID(_) => {
+                    crate::i18n::tr::main::device::fallback_camera().to_string()
+                }
             }),
         id,
     }

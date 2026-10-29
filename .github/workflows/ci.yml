@@ -159,6 +159,7 @@ jobs:
           __tests__/unit/space-page-round-trips.test.ts
           __tests__/unit/speed-controller-playback-failure.test.ts
           __tests__/unit/speed-controller.test.ts
+          __tests__/unit/summary-chapters.test.ts
           __tests__/unit/summary-editor.test.ts
           __tests__/unit/sso-login-pages.test.ts
           __tests__/unit/timeline-paused-window.test.ts
@@ -420,6 +421,7 @@ jobs:
             cargo +1.95.0 test --manifest-path apps/desktop-gpui/Cargo.toml --locked --target ${{ matrix.settings.target }} --bin cap-gpui
           fi
           cargo +1.95.0 test --manifest-path apps/desktop-gpui/Cargo.toml --locked --target ${{ matrix.settings.target }} -p cap-gpui-kernels
+          cargo +1.95.0 test --manifest-path apps/desktop-gpui/Cargo.toml --locked --target ${{ matrix.settings.target }} -p cap-glass
           cargo +1.95.0 test --manifest-path apps/desktop-gpui/Cargo.toml --locked --target ${{ matrix.settings.target }} -p cap-i18n-build
 
   # Cap only builds gpui's crates as dependencies, so their own tests never run
@@ -481,7 +483,20 @@ jobs:
             WGPU_BACKEND=gl cargo +1.95.0 test -p gpui_wgpu --lib wgpu_atlas -- --nocapture
           elif [[ "$RUNNER_OS" == "macOS" ]]; then
             cargo +1.95.0 test -p gpui_wgpu --lib wgpu_atlas -- --nocapture
-            cargo +1.95.0 test -p gpui_macos --lib -- metal_atlas metal_renderer
+            # Run under lldb: a SIGSEGV in these tests (1 run in about 36 so
+            # far) leaves no Rust backtrace, and Blacksmith's macOS VMs write
+            # no crash reports. lldb exits 0 whatever the tests return, so
+            # pass their exit status through.
+            exe=$(cargo +1.95.0 test -p gpui_macos --lib --no-run --message-format json \
+              | jq -r 'select(.reason == "compiler-artifact" and .target.name == "gpui_macos" and .profile.test) | .executable' | tail -1)
+            lldb --batch -o "process launch" -k "thread backtrace all" -k "quit 1" \
+              -- "$exe" metal_atlas metal_renderer 2>&1 | tee "$RUNNER_TEMP/gpui-macos-tests.log"
+            if grep -q "stop reason = " "$RUNNER_TEMP/gpui-macos-tests.log"; then
+              echo "::error::gpui_macos tests crashed; the backtrace is above"
+              exit 1
+            fi
+            status=$(sed -n 's/.*exited with status = \([0-9]*\).*/\1/p' "$RUNNER_TEMP/gpui-macos-tests.log" | tail -1)
+            [[ "$status" == 0 ]] || { echo "::error::gpui_macos tests exited with status ${status:-unknown}"; exit 1; }
           else
             cargo +1.95.0 test -p gpui_windows --lib directx_atlas
           fi
