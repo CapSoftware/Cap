@@ -5,7 +5,7 @@ import {
 	developerCreditAccounts,
 	developerCreditTransactions,
 } from "@cap/database/schema";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 
 const MICRO_CREDITS_PER_DOLLAR = 100_000;
 
@@ -27,6 +27,33 @@ export async function addCreditsToAccount({
 	);
 
 	const newBalance = await db().transaction(async (tx) => {
+		if (referenceId && referenceType) {
+			const [account] = await tx
+				.select({
+					balanceMicroCredits: developerCreditAccounts.balanceMicroCredits,
+				})
+				.from(developerCreditAccounts)
+				.where(eq(developerCreditAccounts.id, accountId))
+				.limit(1)
+				.for("update");
+
+			if (!account) throw new Error(`Credit account not found: ${accountId}`);
+
+			const [existing] = await tx
+				.select({ id: developerCreditTransactions.id })
+				.from(developerCreditTransactions)
+				.where(
+					and(
+						eq(developerCreditTransactions.accountId, accountId),
+						eq(developerCreditTransactions.referenceId, referenceId),
+						eq(developerCreditTransactions.referenceType, referenceType),
+					),
+				)
+				.limit(1);
+
+			if (existing) return account.balanceMicroCredits;
+		}
+
 		await tx
 			.update(developerCreditAccounts)
 			.set({
