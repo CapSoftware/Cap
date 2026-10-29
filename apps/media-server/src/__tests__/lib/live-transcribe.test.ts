@@ -120,6 +120,7 @@ function createFakeCap() {
 	const failAudio = new Set<string>();
 	let cursor = -1;
 	let stopAfter: string | null = null;
+	let hangOn: string | null = null;
 	let manifestGets = 0;
 	let notModified = 0;
 	let server: ReturnType<typeof Bun.serve>;
@@ -204,6 +205,9 @@ function createFakeCap() {
 				if (stopAfter && report.action === stopAfter) {
 					return Response.json({ continue: false });
 				}
+				if (hangOn === report.action) {
+					return new Promise<Response>(() => {});
+				}
 				if (report.action === "chunk" || report.action === "gap") {
 					if (report.lastProcessedIndex === cursor) {
 						cursor = report.lastIndex as number;
@@ -227,6 +231,9 @@ function createFakeCap() {
 		failAudio,
 		setCursor(value: number) {
 			cursor = value;
+		},
+		hangOn(action: string) {
+			hangOn = action;
 		},
 		stopOn(action: string) {
 			stopAfter = action;
@@ -372,6 +379,27 @@ describe("LiveSession", () => {
 		expect(
 			fresh.reports.some((report) => report.action === "finish"),
 		).toBeFalse();
+	});
+
+	test("hands over at once even while a chunk report is stuck", async () => {
+		const fresh = createFakeCap();
+		fresh.record([1, 2, 3, 4]);
+		fresh.hangOn("chunk");
+		const session = new LiveSession(startRequest(fresh), deps);
+		session.start();
+		for (let i = 0; i < 400; i++) {
+			if (fresh.reports.some((report) => report.action === "chunk")) break;
+			await Bun.sleep(5);
+		}
+		const releasedAt = Date.now();
+		await session.release();
+		const waited = Date.now() - releasedAt;
+		fresh.stop();
+		expect(waited).toBeLessThan(1_000);
+		expect(fresh.reports.map((report) => report.action)).toEqual([
+			"chunk",
+			"release",
+		]);
 	});
 
 	test("resyncs to the web app's cursor instead of resending audio", async () => {

@@ -379,12 +379,18 @@ export class LiveSession {
 			outcome = "session-error";
 		}
 		if (this.releasing) {
-			await this.report({ action: "release" }, LIVE.RELEASE_TIMEOUT_MS, 2);
+			await this.report(
+				{ action: "release" },
+				LIVE.RELEASE_TIMEOUT_MS,
+				2,
+				false,
+			);
 		} else if (outcome) {
 			await this.report(
 				{ action: "finish", outcome },
 				LIVE.FINISH_TIMEOUT_MS,
 				5,
+				false,
 			);
 		}
 		this.segmentCache.clear();
@@ -594,13 +600,22 @@ export class LiveSession {
 		return audio;
 	}
 
+	/**
+	 * Reports made from inside the loop stop as soon as the session is
+	 * released or cancelled, so a slow chunk report can't delay the handoff.
+	 * Abandoning one mid-flight is safe: the web app only applies a chunk that
+	 * still matches its cursor and the artifact copy it read.
+	 */
 	private async report(
 		body: Record<string, unknown>,
 		timeoutMs: number = LIVE.REPORT_TIMEOUT_MS,
 		attempts = 3,
+		cancellable = true,
 	): Promise<ReportAnswer> {
+		const cancel = cancellable ? this.signal : undefined;
 		for (let attempt = 0; attempt < attempts; attempt++) {
-			if (attempt > 0) await this.sleep(1_000 * 2 ** (attempt - 1));
+			if (attempt > 0) await this.sleep(1_000 * 2 ** (attempt - 1), cancel);
+			if (cancel?.aborted) return "failed";
 			try {
 				const response = await fetch(this.request.callbackUrl, {
 					method: "POST",
@@ -613,7 +628,9 @@ export class LiveSession {
 						videoId: this.videoId,
 						session: this.session,
 					}),
-					signal: AbortSignal.timeout(timeoutMs),
+					signal: cancel
+						? AbortSignal.any([cancel, AbortSignal.timeout(timeoutMs)])
+						: AbortSignal.timeout(timeoutMs),
 				});
 				if (response.status >= 400 && response.status < 500) {
 					await response.body?.cancel().catch(() => {});
