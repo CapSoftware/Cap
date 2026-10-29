@@ -43,6 +43,7 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
+use crate::i18n::tr;
 use crate::{editor_timeline::TrackKind, editor_window::EditorWindow};
 use cap_project::{CameraXPosition, CameraYPosition, OverlayTrackKind, SceneMode, XY};
 use cap_rendering::FrameLayout;
@@ -451,11 +452,11 @@ pub enum CanvasSelection {
 impl CanvasSelection {
     fn label(self) -> SharedString {
         match self {
-            Self::Display => "Screen".into(),
-            Self::Camera => "Camera".into(),
-            Self::Mask(_) => "Mask".into(),
-            Self::Text(_) => "Text".into(),
-            Self::Image(_) => "Image".into(),
+            Self::Display => tr::editor::canvas::screen().into(),
+            Self::Camera => tr::editor::canvas::camera().into(),
+            Self::Mask(_) => tr::editor::canvas::mask().into(),
+            Self::Text(_) => tr::editor::canvas::text_item().into(),
+            Self::Image(_) => tr::editor::canvas::image().into(),
         }
     }
 
@@ -1463,12 +1464,12 @@ impl EditorWindow {
             CanvasSelection::Display => (
                 self.display_draggable(),
                 self.display_draggable(),
-                (!self.display_draggable()).then_some("Screen is locked while a zoom is active"),
+                (!self.display_draggable()).then(tr::editor::canvas::screen_locked),
             ),
             CanvasSelection::Camera => (
                 true,
                 self.camera_resizable(),
-                (!self.camera_resizable()).then_some("Camera size follows the zoom — drag to move"),
+                (!self.camera_resizable()).then(tr::editor::canvas::camera_follows_zoom),
             ),
             CanvasSelection::Mask(_) | CanvasSelection::Text(_) | CanvasSelection::Image(_) => {
                 (true, true, None)
@@ -1569,7 +1570,7 @@ impl EditorWindow {
                                 .rounded(px(6.))
                                 .bg(gpui::hsla(0., 0., 1., 0.15))
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .child("Edit zoom")
+                                .child(tr::editor::canvas::edit_zoom())
                                 .on_mouse_down(
                                     MouseButton::Left,
                                     cx.listener(|this, event, _, cx| {

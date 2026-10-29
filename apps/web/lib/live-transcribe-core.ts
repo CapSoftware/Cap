@@ -39,7 +39,20 @@ export const LIVE_TRANSCRIBE = {
 	/** Attempts per chunk before it is skipped so one poison chunk can never
 	 * wedge the loop or burn retries forever. */
 	MAX_CHUNK_ATTEMPTS: 2,
+	/** A chunk sent with context takes over from the previous chunk about
+	 * this far before its cut, so it hears the cut words whole. */
+	CONTEXT_HANDOVER_MS: 2_000,
+	/** The exact join may move this far either side of the handover point to
+	 * land on a word both chunks heard. */
+	HANDOVER_SEARCH_MS: 1_000,
+	/** Two chunks' copies of a word may disagree on its start by this much. */
+	HANDOVER_MATCH_MS: 300,
 } as const;
+
+export function chunkHandoverMs(chunkStartMs: number, contextMs: number) {
+	if (contextMs <= 0) return 0;
+	return Math.min(LIVE_TRANSCRIBE.CONTEXT_HANDOVER_MS, contextMs, chunkStartMs);
+}
 
 export type LiveChunkDecision =
 	| { action: "wait" }
@@ -50,6 +63,10 @@ export type LiveChunkDecision =
 			entries: NormalizedSegmentEntry[];
 			startMs: number;
 			durationMs: number;
+			/** Already transcribed segments sent ahead of `entries` so the
+			 * chunk doesn't start mid-sentence with no left context. */
+			context: NormalizedSegmentEntry[];
+			contextMs: number;
 	  };
 
 /**
@@ -63,8 +80,10 @@ export function planNextLiveChunk(options: {
 	lastProcessedIndex: number;
 	targetSeconds: number;
 	maxTakeSeconds?: number;
+	contextSeconds?: number;
 }): LiveChunkDecision {
 	const { manifest, lastProcessedIndex, targetSeconds } = options;
+	const contextSeconds = options.contextSeconds ?? 0;
 	const maxTakeSeconds =
 		options.maxTakeSeconds ?? LIVE_TRANSCRIBE.MAX_CHUNK_TAKE_SECONDS;
 
@@ -79,6 +98,7 @@ export function planNextLiveChunk(options: {
 	}
 
 	let startMs = 0;
+	const processed: NormalizedSegmentEntry[] = [];
 	const pending: NormalizedSegmentEntry[] = [];
 	let expectedIndex = plan.entries[0]?.index === 0 ? 0 : 1;
 
@@ -88,6 +108,7 @@ export function planNextLiveChunk(options: {
 
 		if (entry.index <= lastProcessedIndex) {
 			startMs += entry.duration * 1000;
+			processed.push(entry);
 		} else {
 			pending.push(entry);
 		}
@@ -113,11 +134,22 @@ export function planNextLiveChunk(options: {
 		return { action: "wait" };
 	}
 
+	const context: NormalizedSegmentEntry[] = [];
+	let contextTaken = 0;
+	for (let i = processed.length - 1; i >= 0; i--) {
+		if (contextTaken >= contextSeconds) break;
+		const entry = processed[i] as NormalizedSegmentEntry;
+		context.unshift(entry);
+		contextTaken += entry.duration;
+	}
+
 	return {
 		action: "chunk",
 		entries: taken,
 		startMs: Math.round(startMs),
 		durationMs: Math.round(takenSeconds * 1000),
+		context,
+		contextMs: Math.round(contextTaken * 1000),
 	};
 }
 
@@ -129,12 +161,16 @@ export interface LiveChunkWordInput {
 	speaker?: unknown;
 }
 
-/** Place a chunk's AssemblyAI words (chunk-relative ms) on the recording
- * timeline. Words outside the chunk bounds are clamped, invalid ones dropped. */
+/** Place a chunk's AssemblyAI words (ms from the start of the sent audio,
+ * which begins with `contextMs` of context) on the recording timeline. Context
+ * words land before `chunkStartMs`; applyChunkToLiveTranscript decides which
+ * of them replace the previous chunk's. Words outside the audio bounds are
+ * clamped, invalid ones dropped. */
 export function offsetChunkWords(
 	words: readonly LiveChunkWordInput[] | null | undefined,
 	chunkStartMs: number,
 	chunkDurationMs: number,
+	contextMs = 0,
 ): EditTranscriptWord[] {
 	const result: EditTranscriptWord[] = [];
 
@@ -147,7 +183,10 @@ export function offsetChunkWords(
 		}
 
 		const clamp = (value: number) =>
-			Math.min(Math.max(Math.round(value), 0), chunkDurationMs);
+			Math.min(
+				Math.max(Math.round(value - contextMs), -contextMs),
+				chunkDurationMs,
+			);
 		const startMs = chunkStartMs + clamp(start);
 		const endMs = chunkStartMs + Math.max(clamp(end), clamp(start));
 
@@ -311,34 +350,166 @@ export function liveTranscriptToEditTranscript(
 	artifact: LiveTranscriptArtifact,
 	speechModelUsed: string,
 ): EditTranscript {
+	const durationMs = Math.max(0, Math.round(artifact.transcribedDurationMs));
 	return {
 		version: EDIT_TRANSCRIPT_VERSION,
 		speechModelUsed,
-		durationMs: Math.max(0, Math.round(artifact.transcribedDurationMs)),
+		durationMs,
 		languageCode: artifact.languageCode,
-		words: artifact.words,
+		words: orderLiveTranscriptWords(artifact.words, durationMs),
 	};
 }
 
 /**
+ * parseEditTranscript rejects a transcript whose starts go backwards or whose
+ * words have no length, and both can come out of chunked transcription: two
+ * chunks time the same moment up to HANDOVER_MATCH_MS apart at a join, and a
+ * word clamped to a chunk's end is zero-length. Nudge such words into order
+ * instead of letting one make the whole promoted transcript unreadable.
+ */
+export function orderLiveTranscriptWords(
+	words: readonly EditTranscriptWord[],
+	durationMs: number,
+): EditTranscriptWord[] {
+	if (durationMs < 1) return [];
+	const result: EditTranscriptWord[] = [];
+	let previous: EditTranscriptWord | undefined;
+	for (const word of words) {
+		const startMs = Math.min(
+			Math.max(word.startMs, previous?.startMs ?? 0),
+			durationMs - 1,
+		);
+		let endMs = Math.min(Math.max(word.endMs, startMs + 1), durationMs);
+		if (previous && startMs === previous.startMs) {
+			endMs = Math.max(endMs, previous.endMs);
+		}
+		previous = { ...word, startMs, endMs };
+		result.push(previous);
+	}
+	return result;
+}
+
+const normalizeWordText = (text: string) =>
+	text.toLowerCase().replace(/[^\p{L}\p{N}']/gu, "");
+
+function alignedRun(
+	previous: EditTranscriptWord[],
+	a: number,
+	next: EditTranscriptWord[],
+	b: number,
+) {
+	const same = (offset: number) => {
+		const left = previous[a + offset];
+		const right = next[b + offset];
+		return (
+			left !== undefined &&
+			right !== undefined &&
+			normalizeWordText(left.text) === normalizeWordText(right.text)
+		);
+	};
+	let run = 0;
+	for (let offset = -1; offset >= -8 && same(offset); offset--) run++;
+	for (let offset = 1; offset <= 8 && same(offset); offset++) run++;
+	return run;
+}
+
+/**
+ * Join the previous words to a chunk sent with context. Both heard the audio
+ * around `targetMs` but may time the same word slightly differently, so a
+ * fixed cut could keep both copies or neither. Join on the word both heard
+ * (same text, close start) nearest the target; if they share none, cut there.
+ */
+function joinAtHandover(
+	previous: EditTranscriptWord[],
+	next: EditTranscriptWord[],
+	targetMs: number,
+	minMs: number,
+	maxMs: number,
+): EditTranscriptWord[] {
+	const anchors = next
+		.map((word, index) => ({ word, index }))
+		.filter(({ word }) => word.startMs >= minMs && word.startMs <= maxMs)
+		.sort(
+			(a, b) =>
+				Math.abs(a.word.startMs - targetMs) -
+				Math.abs(b.word.startMs - targetMs),
+		);
+	for (const { word, index } of anchors) {
+		const text = normalizeWordText(word.text);
+		if (!text) continue;
+		// A repeated word ("no, no, no") has several nearby copies: take the one
+		// where the most surrounding words line up, then the closest start.
+		let match: number | undefined;
+		let best = { run: 0, distance: Number.POSITIVE_INFINITY };
+		for (const [candidate, other] of previous.entries()) {
+			const distance = Math.abs(other.startMs - word.startMs);
+			if (
+				distance > LIVE_TRANSCRIBE.HANDOVER_MATCH_MS ||
+				normalizeWordText(other.text) !== text
+			) {
+				continue;
+			}
+			const run = alignedRun(previous, candidate, next, index);
+			if (run > best.run || (run === best.run && distance < best.distance)) {
+				best = { run, distance };
+				match = candidate;
+			}
+		}
+		if (match !== undefined) {
+			return [...previous.slice(0, match), ...next.slice(index)];
+		}
+	}
+
+	return [
+		...previous.filter((word) => word.startMs < targetMs),
+		...next.filter((word) => word.startMs >= targetMs),
+	];
+}
+
+/**
  * Merge one transcribed chunk into the artifact. Idempotent per chunk range:
- * a retried chunk first evicts any words at or after its start.
+ * a retried chunk first evicts any words at or after its start, or past its
+ * join with the previous words when it was sent with context.
  */
 export function applyChunkToLiveTranscript(
 	artifact: LiveTranscriptArtifact,
 	chunk: {
 		startMs: number;
 		durationMs: number;
+		contextMs?: number;
 		lastAudioSegmentIndex: number;
 		words: EditTranscriptWord[];
 		languageCode: string | null;
 		nowIso: string;
 	},
 ): LiveTranscriptArtifact {
-	const words = [
-		...artifact.words.filter((word) => word.startMs < chunk.startMs),
-		...chunk.words,
-	];
+	const contextMs = chunk.contextMs ?? 0;
+	const handoverMs = chunkHandoverMs(chunk.startMs, contextMs);
+	const targetMs = chunk.startMs - handoverMs;
+	const joined =
+		handoverMs > 0
+			? joinAtHandover(
+					artifact.words,
+					chunk.words,
+					targetMs,
+					Math.max(
+						targetMs - LIVE_TRANSCRIBE.HANDOVER_SEARCH_MS,
+						chunk.startMs - contextMs,
+					),
+					Math.min(
+						targetMs + LIVE_TRANSCRIBE.HANDOVER_SEARCH_MS,
+						chunk.startMs,
+					),
+				)
+			: [
+					...artifact.words.filter((word) => word.startMs < chunk.startMs),
+					...chunk.words,
+				];
+	const transcribedDurationMs = Math.max(
+		artifact.transcribedDurationMs,
+		chunk.startMs + chunk.durationMs,
+	);
+	const words = orderLiveTranscriptWords(joined, transcribedDurationMs);
 
 	return {
 		...artifact,
@@ -347,10 +518,7 @@ export function applyChunkToLiveTranscript(
 			artifact.lastAudioSegmentIndex,
 			chunk.lastAudioSegmentIndex,
 		),
-		transcribedDurationMs: Math.max(
-			artifact.transcribedDurationMs,
-			chunk.startMs + chunk.durationMs,
-		),
+		transcribedDurationMs,
 		words,
 		vtt: editTranscriptWordsToCaptionVtt(words),
 		updatedAt: chunk.nowIso,

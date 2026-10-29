@@ -2139,7 +2139,9 @@ impl SettingsWindow {
                         .text_size(px(12.))
                         .line_height(px(18.))
                         .text_color(Hsla::from(theme.red_9))
-                        .child(tr::settings::cli::load_failed(error)),
+                        .child(tr::settings::cli::load_failed(
+                            crate::i18n::messages::localize(error),
+                        )),
                 )
                 .child(div().child(self.button(
                     "cli-retry",
@@ -2336,7 +2338,7 @@ impl SettingsWindow {
                     div()
                         .text_size(px(12.))
                         .text_color(Hsla::from(theme.red_9))
-                        .child(error),
+                        .child(crate::i18n::messages::localize(&error)),
                 )
             })
             .when(status.installed && !status.on_path, |this| {

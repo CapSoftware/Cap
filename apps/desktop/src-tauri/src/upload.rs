@@ -649,7 +649,9 @@ pub async fn upload_screenshot_bytes(
     organization_id: Option<String>,
 ) -> Result<UploadedItem, AuthedApiError> {
     let _active_upload = ActiveUploadGuard::new(&ACTIVE_UPLOADS);
-    let s3_config = create_or_get_video(app, true, video_id, None, None, organization_id).await?;
+    let created = create_or_get_video(app, true, video_id, None, None, organization_id).await?;
+    let link = created.link(app).await;
+    let s3_config = created.config;
     let subpath = screenshot_upload_subpath(content_type);
     let total_size = image_bytes.len() as u64;
 
@@ -667,7 +669,7 @@ pub async fn upload_screenshot_bytes(
     .await?;
 
     Ok(UploadedItem {
-        link: app.make_app_url(format!("/s/{}", &s3_config.id)).await,
+        link,
         id: s3_config.id,
         object_identity: None,
     })
@@ -681,7 +683,9 @@ pub async fn upload_screenshot_file(
 ) -> Result<UploadedItem, AuthedApiError> {
     let _active_upload = ActiveUploadGuard::new(&ACTIVE_UPLOADS);
     let content_type = screenshot_content_type_from_path(&file_path);
-    let s3_config = create_or_get_video(app, true, video_id, None, None, organization_id).await?;
+    let created = create_or_get_video(app, true, video_id, None, None, organization_id).await?;
+    let link = created.link(app).await;
+    let s3_config = created.config;
     let subpath = screenshot_upload_subpath(content_type);
     let (stream, total_size) = file_reader_stream(file_path).await?;
 
@@ -699,7 +703,7 @@ pub async fn upload_screenshot_file(
     .await?;
 
     Ok(UploadedItem {
-        link: app.make_app_url(format!("/s/{}", &s3_config.id)).await,
+        link,
         id: s3_config.id,
         object_identity: None,
     })
@@ -713,7 +717,7 @@ pub async fn create_or_get_video(
     name: Option<String>,
     meta: Option<S3VideoMeta>,
     organization_id: Option<String>,
-) -> Result<S3UploadMeta, AuthedApiError> {
+) -> Result<CreatedVideo, AuthedApiError> {
     create_or_get_video_with_mode(
         app,
         is_screenshot,
@@ -735,7 +739,7 @@ pub async fn create_or_get_video_with_mode(
     meta: Option<S3VideoMeta>,
     organization_id: Option<String>,
     recording_mode: &str,
-) -> Result<S3UploadMeta, AuthedApiError> {
+) -> Result<CreatedVideo, AuthedApiError> {
     let mut s3_config_url = if let Some(id) = video_id {
         let mut url =
             format!("/api/desktop/video/create?recordingMode={recording_mode}&videoId={id}");
@@ -797,11 +801,54 @@ pub async fn create_or_get_video_with_mode(
         .await
         .map_err(|e| format!("Failed to read response body: {e}"))?;
 
-    let config = serde_json::from_str::<S3UploadMeta>(&response_text).map_err(|e| {
-        format!("Failed to deserialize response: {e}. Response body: {response_text}")
-    })?;
+    parse_created_video(&response_text).map_err(|e| {
+        format!("Failed to deserialize response: {e}. Response body: {response_text}").into()
+    })
+}
 
-    Ok(config)
+pub struct CreatedVideo {
+    pub config: S3UploadMeta,
+    pub share_url: Option<String>,
+}
+
+impl CreatedVideo {
+    pub async fn link(&self, app: &AppHandle) -> String {
+        match &self.share_url {
+            Some(share_url) => share_url.clone(),
+            None => app.make_app_url(format!("/s/{}", self.config.id)).await,
+        }
+    }
+}
+
+fn parse_created_video(body: &str) -> Result<CreatedVideo, serde_json::Error> {
+    #[derive(Deserialize)]
+    struct CreateVideoResponse {
+        id: String,
+        #[serde(default)]
+        share_url: Option<String>,
+    }
+
+    let response = serde_json::from_str::<CreateVideoResponse>(body)?;
+    let share_url = response
+        .share_url
+        .filter(|share_url| is_share_url_for(share_url, &response.id));
+    Ok(CreatedVideo {
+        config: S3UploadMeta { id: response.id },
+        share_url,
+    })
+}
+
+fn is_share_url_for(share_url: &str, video_id: &str) -> bool {
+    reqwest::Url::parse(share_url).is_ok_and(|url| {
+        url.scheme() == "https"
+            && url.host_str().is_some_and(|host| !host.is_empty())
+            && url.username().is_empty()
+            && url.password().is_none()
+            && url.port().is_none()
+            && url.path() == format!("/s/{video_id}")
+            && url.query().is_none()
+            && url.fragment().is_none()
+    })
 }
 
 #[instrument]
@@ -3008,6 +3055,50 @@ mod tests {
     use super::*;
     use std::io::Write;
     use std::sync::atomic::{AtomicU32, Ordering};
+
+    #[test]
+    fn created_video_uses_a_custom_domain_share_link() {
+        let created = parse_created_video(
+            r#"{"id":"abc123","share_url":"https://videos.team.test/s/abc123","user_id":"u"}"#,
+        )
+        .unwrap();
+        assert_eq!(created.config.id, "abc123");
+        assert_eq!(
+            created.share_url.as_deref(),
+            Some("https://videos.team.test/s/abc123")
+        );
+    }
+
+    #[test]
+    fn created_video_without_a_share_link_keeps_the_default() {
+        let created = parse_created_video(r#"{"id":"abc123","user_id":"u"}"#).unwrap();
+        assert_eq!(created.config.id, "abc123");
+        assert_eq!(created.share_url, None);
+
+        let created = parse_created_video(r#"{"id":"abc123","share_url":null}"#).unwrap();
+        assert_eq!(created.share_url, None);
+    }
+
+    #[test]
+    fn created_video_ignores_share_links_for_other_pages() {
+        for share_url in [
+            "",
+            "not a url",
+            "http://videos.team.test/s/abc123",
+            "https://videos.team.test/s/other",
+            "https://videos.team.test/s/abc123/extra",
+            "https://videos.team.test/c/abc123",
+            "https://videos.team.test/s/abc123?x=1",
+            "https://videos.team.test/s/abc123#x",
+            "https://user:pass@videos.team.test/s/abc123",
+            "https://videos.team.test:8443/s/abc123",
+            "javascript:alert(1)//s/abc123",
+        ] {
+            let body = serde_json::json!({ "id": "abc123", "share_url": share_url }).to_string();
+            let created = parse_created_video(&body).unwrap();
+            assert_eq!(created.share_url, None, "{share_url}");
+        }
+    }
 
     #[tokio::test]
     async fn restart_requires_a_signed_session_before_any_further_upload_work() {
