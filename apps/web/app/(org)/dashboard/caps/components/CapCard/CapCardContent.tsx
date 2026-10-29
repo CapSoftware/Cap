@@ -65,7 +65,7 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 	const handleDateClick = () => {
 		if (userId === cap.ownerId) {
 			if (!isDateEditing) {
-				loadMoment();
+				loadMoment().catch(() => {});
 				setIsDateEditing(true);
 			}
 		} else {
@@ -84,7 +84,13 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 	};
 
 	const handleDateBlur = async () => {
-		const moment = await loadMoment();
+		let moment: Awaited<ReturnType<typeof loadMoment>>;
+		try {
+			moment = await loadMoment();
+		} catch {
+			toast.error("Failed to update date - please try again.");
+			return;
+		}
 		const isValidDate = moment(dateValue).isValid();
 
 		if (!isValidDate) {
