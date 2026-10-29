@@ -42,6 +42,7 @@ export const RecorderHeader = ({
 							: "cursor-pointer transition-transform hover:scale-110",
 					)}
 					aria-label="Close Cap and hide all recorder UI"
+					data-testid="close-recorder-ui"
 				>
 					<X
 						size={10}

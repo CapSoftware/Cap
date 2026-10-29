@@ -1,0 +1,17 @@
+{
+	"actionDefaultTitle": {
+		"message": "使用 Cap 录制屏幕"
+	},
+	"extensionDescription": {
+		"message": "免费开源的屏幕录制工具。在 Chrome 中录制屏幕、标签页、摄像头和麦克风，停止录制后即可分享视频链接。"
+	},
+	"extensionName": {
+		"message": "Cap - 屏幕录制与截图"
+	},
+	"extensionShortName": {
+		"message": "Cap"
+	},
+	"offscreenJustification": {
+		"message": "从扩展页面录制并上传 Cap 视频。"
+	}
+}
