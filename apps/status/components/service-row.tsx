@@ -40,13 +40,11 @@ export function ServiceRow({
 	since: string;
 }) {
 	const [expanded, setExpanded] = useState(false);
-	const [picked, setSelected] = useState<number | null>(null);
+	const [picked, setPicked] = useState<string | null>(null);
 	const [tooltip, setTooltip] = useState(false);
 	const detailsId = useId();
-	const selected = Math.min(
-		picked ?? service.days.length - 1,
-		service.days.length - 1,
-	);
+	const pickedIndex = service.days.findIndex((day) => day.date === picked);
+	const selected = pickedIndex >= 0 ? pickedIndex : service.days.length - 1;
 	const activeDay = service.days[selected];
 	return (
 		<article className="service">
@@ -88,16 +86,16 @@ export function ServiceRow({
 							aria-label={`${formatDate(day.date)}: ${dayDescription(day)}`}
 							tabIndex={index === selected ? 0 : -1}
 							onMouseEnter={() => {
-								setSelected(index);
+								setPicked(day.date);
 								setTooltip(true);
 							}}
 							onFocus={() => {
-								setSelected(index);
+								setPicked(day.date);
 								setTooltip(true);
 							}}
 							onBlur={() => setTooltip(false)}
 							onClick={() => {
-								setSelected(index);
+								setPicked(day.date);
 								setTooltip(true);
 							}}
 							onKeyDown={(event) => {
