@@ -1,9 +1,15 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { serverEnv } from "@cap/env";
 import { Video } from "@cap/web-domain";
-import { Either, Option, Schema } from "effect";
-import { type NextRequest, NextResponse } from "next/server";
-import { z } from "zod";
+import {
+	HttpApi,
+	HttpApiBuilder,
+	HttpApiEndpoint,
+	HttpApiError,
+	HttpApiGroup,
+	HttpServerRequest,
+} from "@effect/platform";
+import { Effect, Either, Layer, Option, Schema } from "effect";
 import { dispatchLiveTranscription } from "@/lib/live-transcribe";
 import {
 	describeLiveChunk,
@@ -26,68 +32,85 @@ import {
 	writeLiveChunk,
 	writeLiveChunkGap,
 } from "@/lib/live-transcribe-runner";
+import { apiToHandler } from "@/lib/server";
 import { runWorkflowPromise } from "@/lib/workflow-runtime";
-
-export const maxDuration = 120;
 
 const MAX_CHUNK_WORDS = 20_000;
 
-const wordSchema = z.object({
-	text: z.string().max(200),
-	start: z.number(),
-	end: z.number(),
-	confidence: z.number().nullish(),
-	speaker: z.string().max(40).nullish(),
-});
+const Session = {
+	videoId: Schema.String.pipe(Schema.maxLength(64)),
+	session: Schema.String.pipe(Schema.maxLength(64)),
+};
+const SegmentIndex = Schema.Number.pipe(Schema.int());
 
-const reportSchema = z.discriminatedUnion("action", [
-	z.object({
-		action: z.literal("chunk"),
-		videoId: z.string(),
-		session: z.string(),
-		lastProcessedIndex: z.number().int(),
-		lastIndex: z.number().int(),
-		contextFromIndex: z.number().int().nullable(),
-		words: z.array(wordSchema).max(MAX_CHUNK_WORDS),
-		languageCode: z.string().max(16).nullable(),
+const Report = Schema.Union(
+	Schema.Struct({
+		action: Schema.Literal("chunk"),
+		...Session,
+		lastProcessedIndex: SegmentIndex,
+		lastIndex: SegmentIndex,
+		contextFromIndex: Schema.NullOr(SegmentIndex),
+		words: Schema.Array(
+			Schema.Struct({
+				text: Schema.String.pipe(Schema.maxLength(200)),
+				start: Schema.Number,
+				end: Schema.Number,
+				confidence: Schema.optional(Schema.NullOr(Schema.Number)),
+				speaker: Schema.optional(
+					Schema.NullOr(Schema.String.pipe(Schema.maxLength(40))),
+				),
+			}),
+		).pipe(Schema.maxItems(MAX_CHUNK_WORDS)),
+		languageCode: Schema.NullOr(Schema.String.pipe(Schema.maxLength(16))),
 	}),
-	z.object({
-		action: z.literal("gap"),
-		videoId: z.string(),
-		session: z.string(),
-		lastProcessedIndex: z.number().int(),
-		lastIndex: z.number().int(),
+	Schema.Struct({
+		action: Schema.Literal("gap"),
+		...Session,
+		lastProcessedIndex: SegmentIndex,
+		lastIndex: SegmentIndex,
 	}),
-	z.object({
-		action: z.literal("sync"),
-		videoId: z.string(),
-		session: z.string(),
+	Schema.Struct({ action: Schema.Literal("sync"), ...Session }),
+	Schema.Struct({
+		action: Schema.Literal("finish"),
+		...Session,
+		outcome: Schema.String.pipe(Schema.maxLength(40)),
 	}),
-	z.object({
-		action: z.literal("finish"),
-		videoId: z.string(),
-		session: z.string(),
-		outcome: z.string().max(40),
-	}),
-	z.object({
-		action: z.literal("release"),
-		videoId: z.string(),
-		session: z.string(),
-	}),
-]);
+	Schema.Struct({ action: Schema.Literal("release"), ...Session }),
+);
 
-const stop = () => NextResponse.json({ continue: false });
+const Answer = Schema.Union(
+	Schema.Struct({ continue: Schema.Literal(false) }),
+	Schema.Struct({
+		continue: Schema.Literal(true),
+		state: Schema.Struct({
+			lastAudioSegmentIndex: Schema.Number,
+			transcribedDurationMs: Schema.Number,
+			transcriptionOptions: Schema.Record({
+				key: Schema.String,
+				value: Schema.Unknown,
+			}),
+			urls: Schema.Struct({
+				manifest: Schema.String,
+				audioInit: Schema.String,
+				segments: Schema.Record({ key: Schema.String, value: Schema.String }),
+			}),
+		}),
+	}),
+);
 
-function authorized(request: NextRequest) {
-	const secret = serverEnv().MEDIA_SERVER_WEBHOOK_SECRET;
-	const header = request.headers.get("x-media-server-secret");
-	const digest = (value: string) =>
-		createHash("sha256").update(value, "utf8").digest();
-	return (
-		Boolean(secret) &&
-		Boolean(header) &&
-		timingSafeEqual(digest(header ?? ""), digest(secret ?? ""))
-	);
+class Api extends HttpApi.make("LiveTranscribeReportApi").add(
+	HttpApiGroup.make("root").add(
+		HttpApiEndpoint.post("report")`/api/webhooks/media-server/live-transcribe`
+			.setPayload(Report)
+			.addSuccess(Answer)
+			.addError(HttpApiError.Unauthorized),
+	),
+) {}
+
+const stop = { continue: false } as const;
+
+function digest(value: string) {
+	return createHash("sha256").update(value, "utf8").digest();
 }
 
 async function readManifest(
@@ -117,31 +140,24 @@ async function readManifest(
  * heard. Every answer carries the authoritative cursor and fresh signed URLs,
  * or `continue: false` when the session should end.
  */
-export async function POST(request: NextRequest) {
-	if (!authorized(request)) {
-		return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-	}
-
-	const parsed = reportSchema.safeParse(await request.json().catch(() => null));
-	if (!parsed.success) {
-		return NextResponse.json({ error: "Invalid report" }, { status: 400 });
-	}
-	const report = parsed.data;
+async function handleReport(
+	report: typeof Report.Type,
+): Promise<typeof Answer.Type> {
 	const { videoId, session } = report;
 
 	const row = await loadLiveVideo(videoId);
-	if (!row || getLiveSession(row.video) !== session) return stop();
+	if (!row || getLiveSession(row.video) !== session) return stop;
 	const { video } = row;
 
 	if (report.action === "release") {
 		await dispatchLiveTranscription(video.id, video.ownerId, session);
-		return stop();
+		return stop;
 	}
 
 	if (report.action === "finish") {
 		if (report.outcome === "done") {
 			const promotion = await promoteLiveTranscript(videoId, video.ownerId);
-			if (promotion.promoted) return stop();
+			if (promotion.promoted) return stop;
 			console.warn(
 				`[liveTranscribe] Promotion declined for ${videoId}: ${promotion.reason}`,
 			);
@@ -152,18 +168,18 @@ export async function POST(request: NextRequest) {
 			report.outcome === "done" ? "complete" : "stopped",
 		);
 		console.log(`[liveTranscribe] ${videoId} media server ${report.outcome}`);
-		return stop();
+		return stop;
 	}
 
 	if (liveTranscriptionEnded(row)) {
 		await finishLiveTranscription(videoId, video.ownerId, "stopped");
-		return stop();
+		return stop;
 	}
 
 	const bucket = await getFarmLiveBucket(video);
 	if (!bucket) {
 		await finishLiveTranscription(videoId, video.ownerId, "stopped");
-		return stop();
+		return stop;
 	}
 	let artifact: LiveTranscriptArtifact | null | undefined;
 	if (report.action === "sync") {
@@ -220,12 +236,12 @@ export async function POST(request: NextRequest) {
 				`[liveTranscribe] ${videoId} report for ${range} does not match the manifest`,
 			);
 		}
-		if (write?.status === "stopped") return stop();
+		if (write?.status === "stopped") return stop;
 		if (write?.status === "written") artifact = write.artifact;
 	}
 
 	artifact ??= await readLiveTranscript(bucket, video.ownerId, videoId);
-	return NextResponse.json({
+	return {
 		continue: true,
 		state: await buildLiveSessionState({
 			bucket,
@@ -233,5 +249,30 @@ export async function POST(request: NextRequest) {
 			orgSettings: row.orgSettings,
 			artifact,
 		}),
-	});
+	};
 }
+
+const ApiLive = HttpApiBuilder.api(Api).pipe(
+	Layer.provide(
+		HttpApiBuilder.group(Api, "root", (handlers) =>
+			handlers.handle("report", ({ payload }) =>
+				Effect.gen(function* () {
+					const request = yield* HttpServerRequest.HttpServerRequest;
+					const secret = serverEnv().MEDIA_SERVER_WEBHOOK_SECRET;
+					const header = request.headers["x-media-server-secret"];
+					if (
+						!secret ||
+						!header ||
+						!timingSafeEqual(digest(header), digest(secret))
+					)
+						return yield* new HttpApiError.Unauthorized();
+					return yield* Effect.promise(() => handleReport(payload));
+				}),
+			),
+		),
+	),
+);
+
+export const POST = apiToHandler(ApiLive);
+export const maxDuration = 120;
+export const dynamic = "force-dynamic";
