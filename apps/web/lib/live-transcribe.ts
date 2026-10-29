@@ -120,6 +120,17 @@ export async function dispatchLiveTranscription(
 		return "lost";
 	}
 
-	await start(liveTranscribeWorkflow, [{ videoId, userId: ownerId }]);
+	try {
+		await start(liveTranscribeWorkflow, [{ videoId, userId: ownerId }]);
+	} catch (error) {
+		// Hand the claim back so a retried release can try again; a first start
+		// has no session to return to and its caller drops the claim instead.
+		if (from !== null) {
+			await rotateLiveSession(videoId, WORKFLOW_LIVE_SESSION, from).catch(
+				() => false,
+			);
+		}
+		throw error;
+	}
 	return "workflow";
 }
