@@ -24,6 +24,7 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { seedThumbnailUrls } from "@/lib/seeded-thumbnails";
 import { runPromise } from "@/lib/server";
+import { parseLimitParam, parsePageParam } from "@/lib/pagination";
 import { Caps } from "./Caps";
 
 export const metadata: Metadata = {
@@ -133,8 +134,8 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
 		redirect("/login");
 	}
 
-	const page = Number(searchParams.page) || 1;
-	const limit = Number(searchParams.limit) || 15;
+	const page = parsePageParam(searchParams.page, 1);
+	const limit = parseLimitParam(searchParams.limit, 15);
 
 	const userId = user.id;
 	const offset = (page - 1) * limit;
