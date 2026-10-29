@@ -365,6 +365,9 @@ const createMockCapServer = async () => {
 					}
 					resolve();
 				});
+				// The share page the extension opens after an upload holds a
+				// keep-alive connection that would otherwise block close.
+				server.closeAllConnections();
 			}),
 	};
 };
@@ -375,6 +378,11 @@ const createMockCapServer = async () => {
 const canLaunchHeaded =
 	process.platform !== "linux" || Boolean(process.env.DISPLAY);
 
+// CAP_E2E_SYSTEM_DEVICES uses the machine's own camera and microphone (on CI
+// rigs, OS-level synthetic devices such as a v4l2loopback camera and a
+// PulseAudio virtual mic) instead of Chromium's built-in fake devices.
+const useSystemDevices = Boolean(process.env.CAP_E2E_SYSTEM_DEVICES);
+
 const launchExtensionContext = async ({
 	tabCapture = false,
 	fakeAudioFile,
@@ -382,9 +390,11 @@ const launchExtensionContext = async ({
 	tabCapture?: boolean;
 	fakeAudioFile?: string;
 } = {}) => {
-	return launchExtensionBrowser({
+	const extension = await launchExtensionBrowser({
 		profilePrefix: "cap-extension-e2e-",
 		headless: !tabCapture,
+		// Without the fake permission UI, grant the camera and mic up front.
+		allowExtensionMedia: tabCapture,
 		args: [
 			`--allowlisted-extension-id=${unpackedExtensionId}`,
 			"--allow-http-screen-capture",
@@ -394,8 +404,8 @@ const launchExtensionContext = async ({
 			"--autoplay-policy=no-user-gesture-required",
 			...(!tabCapture
 				? [
-						"--use-fake-device-for-media-stream",
 						"--use-fake-ui-for-media-stream",
+						...(useSystemDevices ? [] : ["--use-fake-device-for-media-stream"]),
 						...(fakeAudioFile
 							? [`--use-file-for-fake-audio-capture=${fakeAudioFile}`]
 							: []),
@@ -403,6 +413,7 @@ const launchExtensionContext = async ({
 				: []),
 		],
 	});
+	return extension;
 };
 
 const getServiceWorker = async (context: BrowserContext) => {
@@ -429,8 +440,9 @@ const openExtensionMessengerPage = async (
 };
 
 type RecordingOptions = {
-	mode: "fullscreen" | "tab";
+	mode: "fullscreen" | "tab" | "camera";
 	microphone: boolean;
+	webcam?: boolean;
 	systemAudio: boolean;
 	capturePath: string;
 	durationMs: number;
@@ -457,6 +469,7 @@ const configureExtension = async (
 			bootstrapKey,
 			recordingMode,
 			microphone,
+			webcam,
 			systemAudio,
 			cachedPlan,
 			microphoneWarning,
@@ -503,8 +516,8 @@ const configureExtension = async (
 								microphone: null,
 							},
 							webcam: {
-								enabled: false,
-								deviceId: null,
+								enabled: webcam,
+								deviceId: webcam ? "__cap_default_camera__" : null,
 								position: "bottom-left",
 								size: 230,
 								shape: "round",
@@ -546,6 +559,7 @@ const configureExtension = async (
 			bootstrapKey: BOOTSTRAP_CACHE_KEY,
 			recordingMode: options.mode,
 			microphone: options.microphone,
+			webcam: options.webcam ?? false,
 			systemAudio: options.systemAudio,
 			microphoneWarning: options.microphoneWarning ?? false,
 			cachedPlan: options.cachedPlan ?? {
@@ -686,6 +700,59 @@ const measureFlashBeepOffsets = (
 	});
 };
 
+// Frame size, mean brightness and how many frames differ from the one before,
+// so a black or frozen camera fails even when the recording has frames.
+const measureVideo = (file: string) => {
+	const [width, height] = execFileSync("ffprobe", [
+		"-v",
+		"error",
+		"-select_streams",
+		"v:0",
+		"-show_entries",
+		"stream=width,height",
+		"-of",
+		"csv=p=0",
+		file,
+	])
+		.toString()
+		.trim()
+		.split(",")
+		.map(Number);
+	const lines = execFileSync(
+		"ffmpeg",
+		[
+			"-v",
+			"error",
+			"-i",
+			file,
+			"-an",
+			"-vf",
+			"signalstats,metadata=print:file=-",
+			"-f",
+			"null",
+			"-",
+		],
+		{ maxBuffer: 16 * 1024 * 1024 },
+	)
+		.toString()
+		.split("\n");
+	const luma: number[] = [];
+	let movingFrames = 0;
+	for (const line of lines) {
+		const average = /YAVG=([\d.]+)/.exec(line);
+		if (average) luma.push(Number(average[1]));
+		const difference = /YDIF=([\d.]+)/.exec(line);
+		if (difference && Number(difference[1]) > 0.5) movingFrames += 1;
+	}
+	return {
+		width,
+		height,
+		frames: luma.length,
+		meanLuma: luma.reduce((total, value) => total + value, 0) / luma.length,
+		movingFrames,
+	};
+};
+
 const probeUploadedRecording = async (state: MockState) => {
 	const parts = [...state.uploadParts.entries()]
 		.sort(([a], [b]) => a - b)
@@ -748,6 +815,11 @@ const probeUploadedRecording = async (state: MockState) => {
 		return {
 			durations,
 			tailPeak,
+			audioPeak: samples.reduce(
+				(peak, value) => Math.max(peak, Math.abs(value)),
+				0,
+			),
+			video: measureVideo(file),
 			avOffsets: measureFlashBeepOffsets(file, samples, 8000),
 		};
 	} finally {
@@ -910,6 +982,10 @@ test.describe("extension recording upload", () => {
 		test(`microphone check: ${input.name}`, async () => {
 			if (!extension || !mockServer)
 				throw new Error("Test harness did not start");
+			test.skip(
+				useSystemDevices,
+				"Feeds the mic through Chromium's fake device",
+			);
 			const audioDirectory = await mkdtemp(path.join(tmpdir(), "cap-e2e-mic-"));
 			try {
 				const audioFile = path.join(audioDirectory, "mic.wav");
@@ -1251,5 +1327,216 @@ test.describe("extension recording upload", () => {
 			secondRecording.messengerPage,
 			mockServer.state,
 		);
+	});
+});
+
+// Reports whether the in-page camera preview is showing moving frames.
+const readCameraPreview = async (page: Page) => {
+	const frame = page
+		.frames()
+		.find((candidate) => candidate.url().includes("/camera-preview.html"));
+	if (!frame) return "no preview frame";
+	return frame
+		.evaluate(
+			() =>
+				new Promise<string>((resolve) => {
+					const video = document.querySelector("video");
+					if (!video) return resolve("no video element");
+					if (video.videoWidth === 0) return resolve("no frames yet");
+					const startTime = video.currentTime;
+					const timer = window.setTimeout(() => {
+						resolve(video.currentTime > startTime ? "live" : "frozen");
+					}, 1_000);
+					video.requestVideoFrameCallback(() => {
+						window.clearTimeout(timer);
+						resolve("live");
+					});
+				}),
+		)
+		.catch((error: unknown) =>
+			error instanceof Error ? error.message : String(error),
+		);
+};
+
+// Starts and stops a recording with the webcam and microphone on, over and
+// over in one browser, as someone recording several clips back to back would.
+// Every start must show a live camera preview, report the mic as live and
+// upload a recording whose audio carries the mic signal. With
+// CAP_E2E_SYSTEM_DEVICES the camera and mic are the OS devices; set
+// CAP_E2E_DEVICE_LOOPS to hammer it harder.
+test.describe("camera and microphone start", () => {
+	const loops = Number(process.env.CAP_E2E_DEVICE_LOOPS ?? 3);
+
+	// Display capture of a virtual X screen fails, so with OS devices the
+	// screen half of the matrix records a tab instead.
+	const screenMode = useSystemDevices ? "tab" : "fullscreen";
+
+	for (const mode of [screenMode, "camera"] as const) {
+		test(`starts the webcam and microphone on every ${mode} recording`, async () => {
+			test.setTimeout(60_000 + loops * 40_000);
+			test.skip(
+				mode === "tab" && !canLaunchHeaded,
+				"Tab capture needs a headed browser",
+			);
+			const extension = await launchExtensionContext({
+				tabCapture: mode === "tab",
+			});
+			try {
+				for (let index = 0; index < loops; index += 1) {
+					const mockServer = await createMockCapServer();
+					try {
+						// Chrome stops an idle service worker between recordings, so
+						// wake it with an extension page and take a fresh handle.
+						const wakePage = await extension.context.newPage();
+						await wakePage.goto(
+							`chrome-extension://${unpackedExtensionId}/popup.html`,
+						);
+						const worker = await getServiceWorker(extension.context);
+						await wakePage.close();
+						const startedAt = Date.now();
+						const { capturePage, messengerPage } = await startRecording(
+							extension.context,
+							worker,
+							mockServer.origin,
+							{
+								...DEFAULT_RECORDING_OPTIONS,
+								mode,
+								microphone: true,
+								webcam: true,
+								durationMs: 0,
+							},
+						);
+						const recordingAfterMs = Date.now() - startedAt;
+
+						const status = await sendServiceWorkerMessage(messengerPage, {
+							target: "service-worker",
+							type: "get-recording-status",
+						});
+						expect(status).toMatchObject({
+							ok: true,
+							status: { phase: "recording", microphone: "live" },
+						});
+						await expect
+							.poll(() => readCameraPreview(capturePage), { timeout: 10_000 })
+							.toBe("live");
+						const previewAfterMs = Date.now() - startedAt;
+
+						await capturePage.waitForTimeout(3_000);
+						const stopResponse = await sendServiceWorkerMessage(messengerPage, {
+							target: "service-worker",
+							type: "stop-recording",
+						});
+						expect(stopResponse).toMatchObject({ ok: true });
+						await expectSuccessfulUpload(messengerPage, mockServer.state);
+
+						const { durations, audioPeak, video } =
+							await probeUploadedRecording(mockServer.state);
+						if (process.env.CAP_E2E_REPORT_DEVICES) {
+							console.log(
+								JSON.stringify({
+									mode,
+									loop: index,
+									recordingAfterMs,
+									previewAfterMs,
+									durations,
+									audioPeak,
+									video,
+								}),
+							);
+						}
+						expect(durations.video).toBeGreaterThan(2);
+						expect(durations.audio).not.toBeNull();
+						expect(audioPeak).toBeGreaterThan(0.01);
+						expect(video.movingFrames).toBeGreaterThan(video.frames / 4);
+						if (mode === "camera") {
+							// Black video sits at 16 in limited-range luma.
+							expect(video.meanLuma).toBeGreaterThan(20);
+							if (useSystemDevices) {
+								expect(video).toMatchObject({ width: 1280, height: 720 });
+							}
+						}
+
+						await capturePage.close();
+						await messengerPage.close();
+					} finally {
+						await mockServer.close();
+					}
+				}
+			} finally {
+				await extension.cleanup();
+			}
+		});
+	}
+
+	test("keeps the camera preview in the recorded tab when a background tab opens", async () => {
+		test.skip(
+			screenMode === "tab" && !canLaunchHeaded,
+			"Tab capture needs a headed browser",
+		);
+		const extension = await launchExtensionContext({
+			tabCapture: screenMode === "tab",
+		});
+		const mockServer = await createMockCapServer();
+		try {
+			const worker = await getServiceWorker(extension.context);
+			const { capturePage, messengerPage } = await startRecording(
+				extension.context,
+				worker,
+				mockServer.origin,
+				{
+					...DEFAULT_RECORDING_OPTIONS,
+					mode: screenMode,
+					microphone: true,
+					webcam: true,
+					durationMs: 0,
+				},
+			);
+			await expect
+				.poll(() => readCameraPreview(capturePage), { timeout: 10_000 })
+				.toBe("live");
+
+			// Links opened in the background mid-recording load the overlay
+			// while the recording is live.
+			const urls = [0, 1, 2].map(
+				(index) => `${mockServer.origin}/background-tab-${index}`,
+			);
+			await worker.evaluate(async (urls) => {
+				const chromeApi = (
+					globalThis as unknown as {
+						chrome: {
+							tabs: { create(options: object): Promise<unknown> };
+						};
+					}
+				).chrome;
+				for (const url of urls) {
+					await chromeApi.tabs.create({ url, active: false });
+				}
+			}, urls);
+			await expect
+				.poll(
+					() =>
+						extension.context
+							.pages()
+							.filter((page) => urls.includes(page.url())).length,
+				)
+				.toBe(urls.length);
+			// Give every background overlay time to load and connect.
+			await capturePage.waitForTimeout(4_000);
+			expect(await readCameraPreview(capturePage)).toBe("live");
+			for (const page of extension.context.pages()) {
+				if (!urls.includes(page.url())) continue;
+				expect(await readCameraPreview(page)).toBe("no preview frame");
+			}
+
+			const stopResponse = await sendServiceWorkerMessage(messengerPage, {
+				target: "service-worker",
+				type: "stop-recording",
+			});
+			expect(stopResponse).toMatchObject({ ok: true });
+			await expectSuccessfulUpload(messengerPage, mockServer.state);
+		} finally {
+			await extension.cleanup();
+			await mockServer.close();
+		}
 	});
 });

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,16 +23,44 @@ export const unpackedExtensionId = createHash("sha256")
 // --load-extension, so installed browsers load the extension over CDP.
 const installedBrowser = process.env.CAP_E2E_BROWSER;
 
+// Allows the extension's camera and mic in a new profile, as if the user had
+// accepted the permission prompt. Chrome refuses CDP permission grants for
+// extension origins, so the setting is written before the browser starts.
+const allowExtensionMediaInProfile = async (userDataDir: string) => {
+	const allow = { setting: 1 };
+	const exceptions = {
+		[`chrome-extension://${unpackedExtensionId}/,*`]: allow,
+		[`chrome-extension://${unpackedExtensionId},*`]: allow,
+	};
+	await mkdir(path.join(userDataDir, "Default"), { recursive: true });
+	await writeFile(
+		path.join(userDataDir, "Default", "Preferences"),
+		JSON.stringify({
+			profile: {
+				content_settings: {
+					exceptions: {
+						media_stream_camera: exceptions,
+						media_stream_mic: exceptions,
+					},
+				},
+			},
+		}),
+	);
+};
+
 export const launchExtensionBrowser = async ({
 	profilePrefix,
 	headless,
 	args,
+	allowExtensionMedia = false,
 }: {
 	profilePrefix: string;
 	headless: boolean;
 	args: string[];
+	allowExtensionMedia?: boolean;
 }) => {
 	const userDataDir = await mkdtemp(path.join(tmpdir(), profilePrefix));
+	if (allowExtensionMedia) await allowExtensionMediaInProfile(userDataDir);
 	const context = await chromium.launchPersistentContext(
 		userDataDir,
 		installedBrowser
