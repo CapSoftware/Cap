@@ -2,7 +2,6 @@ import { isConfigured, SERVICES } from "./services";
 import type {
 	Day,
 	Health,
-	Incident,
 	MonitorState,
 	ProbeResult,
 	ServiceState,
@@ -43,18 +42,8 @@ export function isStale(checkedAt: string | null, now: number): boolean {
 	return !checkedAt || now - Date.parse(checkedAt) > STALE_AFTER_MS;
 }
 
-export function dayStatus(day: Day, incidents: Incident[] = []): Health {
-	if (
-		day.outage &&
-		incidents.some(
-			(incident) =>
-				incident.severity === "outage" &&
-				incident.startedAt.slice(0, 10) <= day.date &&
-				(incident.resolvedAt === null ||
-					incident.resolvedAt.slice(0, 10) >= day.date),
-		)
-	)
-		return "outage";
+export function dayStatus(day: Day): Health {
+	if (day.outage && day.confirmedOutage) return "outage";
 	if (day.outage || day.degraded) return "degraded";
 	return day.operational ? "operational" : "unknown";
 }
@@ -139,6 +128,13 @@ export function applyResult(
 		previous.issueStartedAt ??= time;
 		if (previous.failures >= 2) {
 			previous.status = result.status;
+			if (result.status === "outage") {
+				day.confirmedOutage = true;
+				const started = previous.days.find(
+					(entry) => entry.date === previous.issueStartedAt?.slice(0, 10),
+				);
+				if (started) started.confirmedOutage = true;
+			}
 			if (!previous.incidentId) {
 				previous.incidentId = `${id}-${now}`;
 				state.incidents.unshift({

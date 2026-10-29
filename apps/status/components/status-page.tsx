@@ -243,7 +243,6 @@ export function StatusPage() {
 							<ServiceRow
 								key={service.id}
 								service={service}
-								incidents={incidents}
 								since={
 									firstDay && firstDate ? formatDate(firstDate) : "90 days ago"
 								}

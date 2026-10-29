@@ -2,7 +2,7 @@
 
 import { useId, useState } from "react";
 import { availability, dayStatus } from "../lib/state";
-import type { Day, Health, Incident, PublicService } from "../lib/types";
+import type { Day, Health, PublicService } from "../lib/types";
 import { ServiceIcon } from "./icons";
 
 export const LABELS: Record<Health, string> = {
@@ -34,11 +34,9 @@ function dayDescription(day: Day) {
 
 export function ServiceRow({
 	service,
-	incidents,
 	since,
 }: {
 	service: PublicService;
-	incidents: Incident[];
 	since: string;
 }) {
 	const [expanded, setExpanded] = useState(false);
@@ -50,9 +48,6 @@ export function ServiceRow({
 		service.days.length - 1,
 	);
 	const activeDay = service.days[selected];
-	const serviceIncidents = incidents.filter(
-		(incident) => incident.serviceId === service.id,
-	);
 	return (
 		<article className="service">
 			<div className="service-heading">
@@ -89,7 +84,7 @@ export function ServiceRow({
 						<button
 							key={day.date}
 							type="button"
-							className={`bar ${dayStatus(day, serviceIncidents)}`}
+							className={`bar ${dayStatus(day)}`}
 							aria-label={`${formatDate(day.date)}: ${dayDescription(day)}`}
 							tabIndex={index === selected ? 0 : -1}
 							onMouseEnter={() => {
