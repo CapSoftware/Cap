@@ -9,9 +9,17 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export const extensionPath = path.resolve(__dirname, "../dist");
 
-// Chrome derives an unpacked extension's id from its absolute path.
+// Chrome derives an unpacked extension's id from its absolute path: on
+// Windows from the UTF-16 path with an upper-case drive letter.
 export const unpackedExtensionId = createHash("sha256")
-	.update(extensionPath)
+	.update(
+		process.platform === "win32"
+			? Buffer.from(
+					extensionPath.replace(/^[a-z]:/, (drive) => drive.toUpperCase()),
+					"utf16le",
+				)
+			: extensionPath,
+	)
 	.digest("hex")
 	.slice(0, 32)
 	.replace(/[0-9a-f]/g, (digit) =>
