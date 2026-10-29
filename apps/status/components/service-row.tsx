@@ -32,11 +32,19 @@ function dayDescription(day: Day) {
 		: "No monitoring data";
 }
 
-export function ServiceRow({ service }: { service: PublicService }) {
+export function ServiceRow({
+	service,
+	since,
+}: {
+	service: PublicService;
+	since: string;
+}) {
 	const [expanded, setExpanded] = useState(false);
-	const [selected, setSelected] = useState(service.days.length - 1);
+	const [picked, setPicked] = useState<string | null>(null);
 	const [tooltip, setTooltip] = useState(false);
 	const detailsId = useId();
+	const pickedIndex = service.days.findIndex((day) => day.date === picked);
+	const selected = pickedIndex >= 0 ? pickedIndex : service.days.length - 1;
 	const activeDay = service.days[selected];
 	return (
 		<article className="service">
@@ -78,16 +86,16 @@ export function ServiceRow({ service }: { service: PublicService }) {
 							aria-label={`${formatDate(day.date)}: ${dayDescription(day)}`}
 							tabIndex={index === selected ? 0 : -1}
 							onMouseEnter={() => {
-								setSelected(index);
+								setPicked(day.date);
 								setTooltip(true);
 							}}
 							onFocus={() => {
-								setSelected(index);
+								setPicked(day.date);
 								setTooltip(true);
 							}}
 							onBlur={() => setTooltip(false)}
 							onClick={() => {
-								setSelected(index);
+								setPicked(day.date);
 								setTooltip(true);
 							}}
 							onKeyDown={(event) => {
@@ -135,7 +143,7 @@ export function ServiceRow({ service }: { service: PublicService }) {
 				)}
 			</div>
 			<div className="history-caption">
-				<span>90 days ago</span>
+				<span>{since}</span>
 				<span className="uptime">
 					<strong>{formatUptime(service.days)}</strong> uptime
 					<span className="caption-divider">·</span>Today
