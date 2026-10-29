@@ -1,4 +1,12 @@
-import { X } from "lucide-react";
+import {
+	Circle,
+	FlipHorizontal,
+	Maximize2,
+	PictureInPicture,
+	RectangleHorizontal,
+	Square,
+	X,
+} from "lucide-react";
 import {
 	type PointerEvent as ReactPointerEvent,
 	useCallback,
@@ -48,6 +56,10 @@ import { replayStartupMessages, setStartupMessages } from "./startup-messages";
 const ROOT_ID = "cap-extension-recorder-overlay";
 const WINDOW_PADDING = 20;
 const BAR_HEIGHT = 52;
+// The iframe tokens are readable from the host page DOM (they sit in the
+// iframe src), so token checks alone cannot authenticate window messages.
+// Frames we embed always run on the extension origin; require it too.
+const EXTENSION_ORIGIN = new URL(chrome.runtime.getURL("")).origin;
 const createSecureToken = () => {
 	if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
 	const bytes = new Uint8Array(16);
@@ -61,6 +73,12 @@ const PREVIEW_TOKEN = createSecureToken();
 const PREVIEW_URL = chrome.runtime.getURL("camera-preview.html");
 const PREVIEW_SRC = `${PREVIEW_URL}#${encodeURIComponent(PREVIEW_TOKEN)}`;
 const PREVIEW_ERROR_DELAY_MS = 1200;
+const PANEL_TOKEN = createSecureToken();
+const PANEL_URL = chrome.runtime.getURL("popup.html");
+const PANEL_SRC = `${PANEL_URL}#${encodeURIComponent(PANEL_TOKEN)}`;
+const PANEL_WIDTH = 300;
+const PANEL_DEFAULT_HEIGHT = 460;
+const PANEL_MARGIN = 16;
 const CAMERA_MIN_SIZE = 120;
 const CAMERA_MAX_SIZE = 420;
 const CAMERA_RESIZE_CORNERS = ["nw", "ne", "sw", "se"] as const;
@@ -78,7 +96,7 @@ let overlayTokensRegistration: Promise<boolean> | null = null;
 
 const ensureOverlayTokensRegistered = () => {
 	overlayTokensRegistration ??= Promise.all(
-		[PREVIEW_TOKEN].map((token) =>
+		[PREVIEW_TOKEN, PANEL_TOKEN].map((token) =>
 			sendServiceWorkerMessage({
 				target: "service-worker",
 				type: "register-overlay-token",
@@ -314,6 +332,127 @@ const connectCameraPreview = async (
 	};
 };
 
+type PanelFrameMessage =
+	| {
+			source: "cap-extension-panel";
+			token: string;
+			type: "size";
+			height: number;
+	  }
+	| {
+			source: "cap-extension-panel";
+			token: string;
+			type: "dismiss";
+	  };
+
+const isPanelFrameMessage = (value: unknown): value is PanelFrameMessage => {
+	if (!value || typeof value !== "object") return false;
+	const candidate = value as Partial<PanelFrameMessage>;
+	if (
+		candidate.source !== "cap-extension-panel" ||
+		candidate.token !== PANEL_TOKEN
+	) {
+		return false;
+	}
+	if (candidate.type === "dismiss") return true;
+	return (
+		candidate.type === "size" &&
+		typeof candidate.height === "number" &&
+		Number.isFinite(candidate.height)
+	);
+};
+
+function RecorderPanelOverlay({
+	open,
+	onClose,
+}: {
+	open: boolean;
+	onClose: () => void;
+}) {
+	const [pageVisible, setPageVisible] = useState(
+		() => document.visibilityState === "visible",
+	);
+	const [contentHeight, setContentHeight] = useState(PANEL_DEFAULT_HEIGHT);
+	const [viewportHeight, setViewportHeight] = useState(
+		() => window.innerHeight,
+	);
+	const [tokenReady, setTokenReady] = useState(false);
+
+	useEffect(() => {
+		if (!open || tokenReady) return;
+		let disposed = false;
+		void ensureOverlayTokensRegistered().then((registered) => {
+			if (!disposed && registered) setTokenReady(true);
+		});
+		return () => {
+			disposed = true;
+		};
+	}, [open, tokenReady]);
+
+	useEffect(() => {
+		const handleVisibility = () =>
+			setPageVisible(document.visibilityState === "visible");
+		document.addEventListener("visibilitychange", handleVisibility);
+		return () =>
+			document.removeEventListener("visibilitychange", handleVisibility);
+	}, []);
+
+	useEffect(() => {
+		const handleFrameMessage = (event: MessageEvent<unknown>) => {
+			if (event.origin !== EXTENSION_ORIGIN) return;
+			if (!isPanelFrameMessage(event.data)) return;
+			if (event.data.type === "size") {
+				setContentHeight(Math.max(320, Math.ceil(event.data.height)));
+				return;
+			}
+			onClose();
+		};
+
+		window.addEventListener("message", handleFrameMessage);
+		return () => window.removeEventListener("message", handleFrameMessage);
+	}, [onClose]);
+
+	useEffect(() => {
+		if (!open) return;
+		const handleResize = () => setViewportHeight(window.innerHeight);
+		handleResize();
+		window.addEventListener("resize", handleResize);
+		return () => window.removeEventListener("resize", handleResize);
+	}, [open]);
+
+	// Only the tab on screen renders the iframe; hidden tabs keep just the
+	// shared flag so the panel reappears instantly when they come forward.
+	// The iframe also waits for its token registration so the panel page can
+	// verify it was embedded by this extension.
+	if (!open || !pageVisible || !tokenReady) return null;
+
+	const height = Math.min(contentHeight, viewportHeight - PANEL_MARGIN * 2);
+
+	return (
+		<>
+			<button
+				type="button"
+				className="cap-extension-panel-backdrop"
+				aria-label="Dismiss Cap recorder"
+				onClick={onClose}
+			/>
+			<div
+				className="cap-extension-panel"
+				role="dialog"
+				aria-label="Cap recorder"
+				style={{ width: `${PANEL_WIDTH}px`, height: `${height}px` }}
+			>
+				<iframe
+					src={PANEL_SRC}
+					title="Cap recorder"
+					allow="camera; microphone; autoplay"
+					className="cap-extension-panel-iframe"
+				/>
+			</div>
+		</>
+	);
+}
+
 function OverlayApp() {
 	const [extensionSettings, setExtensionSettings] =
 		useState<ExtensionSettings | null>(null);
@@ -333,6 +472,7 @@ function OverlayApp() {
 	const [previewError, setPreviewError] = useState<string | null>(null);
 	const [showPreviewError, setShowPreviewError] = useState(false);
 	const [iframeReady, setIframeReady] = useState(false);
+	const [pipSupported, setPipSupported] = useState(false);
 	const [parentPipActive, setParentPipActive] = useState(false);
 	const [framePipActive, setFramePipActive] = useState(false);
 	const [previewOpen, setPreviewOpen] = useState(false);
@@ -1163,6 +1303,7 @@ function OverlayApp() {
 				return false;
 			}
 
+			setPipSupported(event.supported);
 			setFramePipActive(event.active);
 			return false;
 		};
@@ -1193,6 +1334,7 @@ function OverlayApp() {
 			setLivePreviewReady(false);
 			setPreviewError(null);
 			setShowPreviewError(false);
+			setPipSupported(false);
 			setFramePipActive(false);
 			postPreviewMessage({
 				source: "cap-extension-overlay",
@@ -1429,6 +1571,33 @@ function OverlayApp() {
 		}));
 	}, [applyWebcamSettings]);
 
+	const updateSize = useCallback(() => {
+		applyWebcamSettings((current) => ({
+			...current,
+			size: current.size <= 230 ? 400 : 230,
+		}));
+	}, [applyWebcamSettings]);
+
+	const updateMirror = useCallback(() => {
+		applyWebcamSettings((current) => ({
+			...current,
+			mirror: !current.mirror,
+		}));
+	}, [applyWebcamSettings]);
+
+	const closeRecorderPanel = useCallback(() => {
+		setRecorderPanelOpen(false);
+		void sendServiceWorkerMessage({
+			target: "service-worker",
+			type: "close-extension-ui",
+		}).catch(() => undefined);
+		void updateSharedUiState((current) => ({
+			...current,
+			panelOpen: false,
+			updatedAt: Date.now(),
+		})).catch(() => undefined);
+	}, []);
+
 	const handleTogglePictureInPicture = useCallback(() => {
 		const video = pipVideoRef.current;
 		if (video && document.pictureInPictureElement === video) {
@@ -1519,6 +1688,94 @@ function OverlayApp() {
 					className="cap-extension-camera-shell"
 					style={{ borderRadius }}
 				>
+					<div className="cap-extension-camera-bar">
+						<div
+							data-controls
+							className="cap-extension-camera-controls"
+							role="toolbar"
+							aria-label="Camera preview controls"
+							onPointerDown={(event) => event.stopPropagation()}
+							onClick={(event) => event.stopPropagation()}
+							onKeyDown={(event) => {
+								if (event.key === "Escape") {
+									event.stopPropagation();
+									handleClose();
+								}
+							}}
+						>
+							<button
+								type="button"
+								className="cap-extension-camera-control"
+								aria-label="Close camera preview"
+								title="Close"
+								onClick={handleClose}
+							>
+								<X size={22} aria-hidden />
+							</button>
+							<button
+								type="button"
+								className={classNames(
+									"cap-extension-camera-control",
+									webcam.size > 230 && "is-active",
+								)}
+								aria-label="Resize camera preview"
+								title="Resize"
+								onClick={updateSize}
+							>
+								<Maximize2 size={22} aria-hidden />
+							</button>
+							<button
+								type="button"
+								className={classNames(
+									"cap-extension-camera-control",
+									webcam.shape !== "round" && "is-active",
+								)}
+								aria-label="Change camera preview shape"
+								title="Shape"
+								onClick={updateShape}
+							>
+								{webcam.shape === "round" ? (
+									<Circle size={22} aria-hidden />
+								) : null}
+								{webcam.shape === "square" ? (
+									<Square size={22} aria-hidden />
+								) : null}
+								{webcam.shape === "full" ? (
+									<RectangleHorizontal size={22} aria-hidden />
+								) : null}
+							</button>
+							<button
+								type="button"
+								className={classNames(
+									"cap-extension-camera-control",
+									webcam.mirror && "is-active",
+								)}
+								aria-label="Mirror camera preview"
+								title="Mirror"
+								onClick={updateMirror}
+							>
+								<FlipHorizontal size={22} aria-hidden />
+							</button>
+							<button
+								type="button"
+								className={classNames(
+									"cap-extension-camera-control",
+									isInPictureInPicture && "is-active",
+								)}
+								aria-label="Toggle Picture in Picture"
+								title={
+									parentPipSupported || pipSupported
+										? "Picture in Picture"
+										: "Picture in Picture is blocked on this page"
+								}
+								disabled={!parentPipSupported && !pipSupported}
+								onClick={handleTogglePictureInPicture}
+							>
+								<PictureInPicture size={22} aria-hidden />
+							</button>
+						</div>
+					</div>
+
 					<div
 						ref={cameraFrameRef}
 						className={classNames(
@@ -1533,19 +1790,6 @@ function OverlayApp() {
 							borderRadius,
 						}}
 					>
-						<button
-							type="button"
-							className="cap-extension-camera-dismiss-btn"
-							aria-label="Close camera preview"
-							title="Close camera"
-							data-controls
-							onClick={(e) => {
-								e.stopPropagation();
-								handleClose();
-							}}
-						>
-							<X size={14} aria-hidden />
-						</button>
 						{lastPreviewFrame ? (
 							<img
 								src={lastPreviewFrame.dataUrl}
@@ -1627,6 +1871,10 @@ function OverlayApp() {
 				muted
 				disablePictureInPicture={false}
 				controlsList="nodownload nofullscreen noremoteplayback"
+			/>
+			<RecorderPanelOverlay
+				open={recorderPanelOpen}
+				onClose={closeRecorderPanel}
 			/>
 			<RecordingBarOverlay
 				recorderPanelOpen={recorderPanelOpen}
