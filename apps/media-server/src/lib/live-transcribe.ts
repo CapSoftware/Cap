@@ -332,7 +332,6 @@ export class LiveSession {
 	private releasing = false;
 	private manifest: { etag: string | null; value: LiveManifest } | null = null;
 	private initAudio: Uint8Array | null = null;
-	/** Recently sent segments, so context audio isn't downloaded twice. */
 	private readonly segmentCache = new Map<number, Uint8Array>();
 	private lastReportAt: number;
 	private readonly sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
@@ -354,12 +353,10 @@ export class LiveSession {
 		return this.done;
 	}
 
-	/** Stop without reporting; the web app already moved on. */
 	cancel() {
 		this.abort.abort();
 	}
 
-	/** Stop and ask the web app to run the recording elsewhere. */
 	release() {
 		this.releasing = true;
 		this.abort.abort();
@@ -586,7 +583,6 @@ export class LiveSession {
 			offset += part.byteLength;
 		}
 
-		// Later chunks only reuse the segments just sent as context.
 		const keepFrom = (entries[entries.length - 1]?.index ?? 0) - 64;
 		for (const index of this.segmentCache.keys()) {
 			if (index < keepFrom) this.segmentCache.delete(index);
@@ -645,8 +641,8 @@ export function canAcceptLiveSession() {
 	return sessions.size < LIVE.MAX_SESSIONS;
 }
 
-/** Start a session, replacing any older one this server holds for the same
- * recording (the web app has already fenced the older one off). */
+// An older session for the same recording was already fenced off by the web
+// app when it rotated the claim, so it is cancelled without reporting.
 export function startLiveSession(
 	request: StartLiveSession,
 	deps?: LiveSessionDeps,
@@ -664,8 +660,6 @@ export function startLiveSession(
 
 let releasing: Promise<void> | null = null;
 
-/** Hand every session back to the web app, which restarts each on another
- * server (or its workflow). Called once when this server starts draining. */
 export function releaseLiveSessions(): Promise<void> {
 	releasing ??= Promise.all(
 		[...sessions.values()].map((session) => session.release()),

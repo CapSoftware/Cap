@@ -93,7 +93,6 @@ export function getLiveSession(video: typeof videos.$inferSelect) {
 	return live?.status === "active" ? (live.session ?? null) : null;
 }
 
-/** Why the recording can't be live-transcribed any more, if it can't. */
 export function liveTranscriptionEnded(row: LiveVideoRow): string | null {
 	if (row.video.source.type !== "desktopSegments") {
 		return "not a segmented recording";
@@ -223,7 +222,6 @@ export type FarmLiveStart =
 	 * the timeout. */
 	| { status: "declined"; session: string | null };
 
-/** Hand an active live transcription to the media server. */
 export async function startFarmLiveTranscription(
 	videoId: string,
 	from: string | null,
