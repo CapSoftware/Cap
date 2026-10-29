@@ -119,8 +119,6 @@ impl VoiceToneSettings {
         self.response().db(hz)
     }
 
-    /// The filters' frequency response, built once so a plot can sample
-    /// many frequencies without recomputing coefficients for each one.
     pub fn response(&self) -> ToneResponse {
         ToneResponse(self.sections())
     }
@@ -476,13 +474,11 @@ fn percentile_98(values: &mut [f64]) -> f64 {
     *values.select_nth_unstable_by(rank, f64::total_cmp).1
 }
 
-/// Repairs clicks in `region` (frames from `region_start`) and returns how many
-/// gaps it rewrote. Detection uses the forward and backward prediction error
-/// of a local AR model against the 98th percentile of that error nearby, so
-/// glottal pulses in voiced speech set the bar instead of tripping it, and a
-/// detected gap is rebuilt by least-squares AR interpolation. Everything is
-/// evaluated on a fixed sub-block grid with margins wider than any gap, so
-/// two overlapping regions agree on every sample they share.
+/// Detection measures the forward and backward prediction error of a local AR
+/// model against the 98th percentile of that error nearby, so glottal pulses in
+/// voiced speech set the bar instead of tripping it. Everything is evaluated on
+/// a fixed sub-block grid with margins wider than any gap, so two overlapping
+/// regions agree on every sample they share.
 fn declick(
     signal: &Signal,
     region_start: usize,
