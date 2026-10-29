@@ -32,6 +32,7 @@ import { and, count, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { Effect } from "effect";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+import { seedThumbnailUrls } from "@/lib/seeded-thumbnails";
 import { runPromise } from "@/lib/server";
 import { SharedCaps } from "./SharedCaps";
 
@@ -439,6 +440,12 @@ export default async function SharedCapsPage(props: {
 				organizationMembers={organizationMembersData}
 				currentUserId={user.id}
 				folders={foldersData}
+				thumbnails={seedThumbnailUrls(
+					user,
+					processedVideoData
+						.filter((video) => !video.hasActiveUpload)
+						.map((video) => video.id),
+				)}
 			/>
 		);
 	}
@@ -571,6 +578,12 @@ export default async function SharedCapsPage(props: {
 				organizationMembers={organizationMembersData}
 				currentUserId={user.id}
 				folders={foldersData}
+				thumbnails={seedThumbnailUrls(
+					user,
+					processedVideoData
+						.filter((video) => !video.hasActiveUpload)
+						.map((video) => video.id),
+				)}
 			/>
 		);
 	}
