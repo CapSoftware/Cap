@@ -661,8 +661,14 @@ describe("raw recording completion integrity", () => {
 				]),
 			),
 		);
-		mocks.database.mockReturnValue({
+		const client = {
 			update: () => ({ set: () => ({ where: async () => {} }) }),
+			delete: () => ({ where: vi.fn(async () => {}) }),
+		};
+		mocks.database.mockReturnValue({
+			...client,
+			transaction: async (run: (tx: typeof client) => Promise<void>) =>
+				run(client),
 		});
 		mocks.complete.mockReturnValue(Effect.succeed({ ETag: etag }));
 		mocks.head.mockReturnValue(
@@ -674,6 +680,9 @@ describe("raw recording completion integrity", () => {
 					provider: "s3",
 					multipart: { complete: mocks.complete },
 					headObject: mocks.head,
+					copyObject: vi.fn(() =>
+						Effect.succeed({ CopyObjectResult: { ETag: etag } }),
+					),
 				},
 			]),
 		);
@@ -687,6 +696,39 @@ describe("raw recording completion integrity", () => {
 			processingStarted: true,
 		});
 		expect(mocks.head).toHaveBeenCalledWith("owner/video/raw-upload.webm");
+	});
+
+	const completeLegacy = (submittedParts = parts) =>
+		app.request("/complete", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				fileKey: "owner/video/raw-upload.webm",
+				uploadId: "same-upload",
+				durationInSecs: 1,
+				parts: submittedParts,
+			}),
+		});
+
+	it("starts processing raw recordings completed with a legacy file key", async () => {
+		const response = await completeLegacy();
+
+		expect(response.status).toBe(200);
+		expect(await response.json()).toMatchObject({
+			success: true,
+			processingStarted: true,
+		});
+		const { startVideoProcessingWorkflow } = await import(
+			"@/lib/video-processing"
+		);
+		expect(startVideoProcessingWorkflow).toHaveBeenCalledWith(
+			expect.objectContaining({ rawFileKey: "owner/video/raw-upload.webm" }),
+		);
+	});
+
+	it("rejects incomplete legacy raw uploads before completing storage", async () => {
+		expect((await completeLegacy([secondPart])).status).toBe(400);
+		expect(mocks.complete).not.toHaveBeenCalled();
 	});
 
 	it("reconciles a lost completion response using all part identities and object size", async () => {

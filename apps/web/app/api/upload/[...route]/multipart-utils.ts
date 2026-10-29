@@ -10,7 +10,7 @@ function assertWritableFileKey(key: string) {
 
 export const getSubpath = (input: { subpath?: string; fileKey?: string }) => {
 	if ("fileKey" in input) {
-		return undefined;
+		return input.fileKey?.split("/").slice(2).join("/");
 	}
 
 	return input.subpath ?? "result.mp4";

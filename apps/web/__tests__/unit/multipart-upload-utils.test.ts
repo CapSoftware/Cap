@@ -36,8 +36,15 @@ describe("multipart upload utils", () => {
 			getSubpath({
 				fileKey: "legacy-owner/video-456/raw-upload.webm",
 			}),
-		).toBeUndefined();
+		).toBe("raw-upload.webm");
 	});
+
+	it.each(["result.mp4", "raw-upload.mp4", "segments/video/0.m4s"])(
+		"preserves the legacy subpath %s",
+		(subpath) => {
+			expect(getSubpath({ fileKey: `owner/video/${subpath}` })).toBe(subpath);
+		},
+	);
 
 	it("detects raw recorder uploads", () => {
 		expect(isRawRecorderUpload("raw-upload.webm")).toBe(true);
