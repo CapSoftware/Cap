@@ -61,12 +61,12 @@ interface VideoThumbnailProps {
 	showPreview?: boolean;
 }
 
-const formatDuration = (durationSecs: number) => {
-	const duration = durationParts(durationSecs);
+export const formatDuration = (durationSecs: number) => {
+	const duration = durationParts(Math.ceil(durationSecs));
 
 	const totalHours = Math.floor(duration.asHours);
 	const totalMinutes = Math.floor(duration.asMinutes);
-	const remainingSeconds = Math.ceil(duration.asSeconds % 60); // Use ceil to avoid 0 secs
+	const remainingSeconds = duration.asSeconds % 60;
 
 	if (totalHours > 0) {
 		return `${totalHours} hr${totalHours > 1 ? "s" : ""}`;
