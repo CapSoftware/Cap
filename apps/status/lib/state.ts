@@ -2,6 +2,7 @@ import { isConfigured, SERVICES } from "./services";
 import type {
 	Day,
 	Health,
+	Incident,
 	MonitorState,
 	ProbeResult,
 	ServiceState,
@@ -42,10 +43,33 @@ export function isStale(checkedAt: string | null, now: number): boolean {
 	return !checkedAt || now - Date.parse(checkedAt) > STALE_AFTER_MS;
 }
 
-export function dayStatus(day: Day): Health {
-	if (day.outage) return "outage";
-	if (day.degraded) return "degraded";
+export function dayStatus(day: Day, incidents: Incident[] = []): Health {
+	if (
+		day.outage &&
+		incidents.some(
+			(incident) =>
+				incident.severity === "outage" &&
+				incident.startedAt.slice(0, 10) <= day.date &&
+				(incident.resolvedAt === null ||
+					incident.resolvedAt.slice(0, 10) >= day.date),
+		)
+	)
+		return "outage";
+	if (day.outage || day.degraded) return "degraded";
 	return day.operational ? "operational" : "unknown";
+}
+
+function observed(day: Day): boolean {
+	return day.operational + day.degraded + day.outage > 0;
+}
+
+export function firstMonitoredDay(services: { days: Day[] }[]): number {
+	const first = Math.min(
+		...services
+			.map((service) => service.days.findIndex(observed))
+			.filter((index) => index >= 0),
+	);
+	return Number.isFinite(first) ? first : 0;
 }
 
 export function availability(days: Day[]): number | null {

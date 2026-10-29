@@ -4,7 +4,9 @@ import {
 	availability,
 	CHECK_INTERVAL_MS,
 	dates,
+	dayStatus,
 	emptyState,
+	firstMonitoredDay,
 	isStale,
 	publicSnapshot,
 	STALE_AFTER_MS,
@@ -134,5 +136,74 @@ describe("monitor state", () => {
 		expect(
 			publicSnapshot(state, start).incidents.map((entry) => entry.id),
 		).toEqual(["ongoing"]);
+	});
+
+	test("shows a day as an outage only when an outage was confirmed", () => {
+		const state = emptyState();
+		applyResult(state, "render", good, start);
+		applyResult(state, "render", bad, start + CHECK_INTERVAL_MS);
+		applyResult(state, "render", good, start + 2 * CHECK_INTERVAL_MS);
+		applyResult(state, "render", bad, start + 3 * CHECK_INTERVAL_MS);
+		applyResult(state, "render", good, start + 4 * CHECK_INTERVAL_MS);
+		let snapshot = publicSnapshot(state, start + 4 * CHECK_INTERVAL_MS);
+		let today = snapshot.services
+			.find((service) => service.id === "render")
+			?.days.at(-1);
+		expect(today?.outage).toBe(2);
+		expect(snapshot.incidents).toHaveLength(0);
+		expect(today && dayStatus(today, snapshot.incidents)).toBe("degraded");
+
+		applyResult(state, "render", bad, start + 5 * CHECK_INTERVAL_MS);
+		applyResult(state, "render", bad, start + 6 * CHECK_INTERVAL_MS);
+		snapshot = publicSnapshot(state, start + 6 * CHECK_INTERVAL_MS);
+		today = snapshot.services
+			.find((service) => service.id === "render")
+			?.days.at(-1);
+		expect(snapshot.incidents).toHaveLength(1);
+		expect(today && dayStatus(today, snapshot.incidents)).toBe("outage");
+		expect(
+			today &&
+				dayStatus(
+					today,
+					snapshot.incidents.map((incident) => ({
+						...incident,
+						serviceId: "website",
+						severity: "degraded" as const,
+					})),
+				),
+		).toBe("degraded");
+	});
+
+	test("confirmed outages colour every day they span", () => {
+		const incident = {
+			id: "long",
+			serviceId: "render",
+			severity: "outage" as const,
+			startedAt: "2026-10-12T23:50:00.000Z",
+			resolvedAt: "2026-10-14T00:10:00.000Z",
+		};
+		const day = (date: string) => ({
+			date,
+			operational: 1,
+			degraded: 0,
+			outage: 1,
+		});
+		expect(dayStatus(day("2026-10-12"), [incident])).toBe("outage");
+		expect(dayStatus(day("2026-10-13"), [incident])).toBe("outage");
+		expect(dayStatus(day("2026-10-14"), [incident])).toBe("outage");
+		expect(dayStatus(day("2026-10-15"), [incident])).toBe("degraded");
+		expect(
+			dayStatus(day("2026-10-20"), [{ ...incident, resolvedAt: null }]),
+		).toBe("outage");
+	});
+
+	test("history starts at the first monitored day across services", () => {
+		const state = emptyState();
+		expect(firstMonitoredDay(publicSnapshot(state, start).services)).toBe(0);
+		applyResult(state, "media", good, start - 3 * 86_400_000);
+		applyResult(state, "website", good, start - 86_400_000);
+		const services = publicSnapshot(state, start).services;
+		expect(firstMonitoredDay(services)).toBe(86);
+		expect(services[0].days[86].date).toBe("2026-10-10");
 	});
 });
