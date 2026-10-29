@@ -37,6 +37,7 @@ type MockState = {
 	uploadParts: Map<number, Buffer>;
 	uploadHeaders: Record<string, string | string[] | undefined>[];
 	videoId: string;
+	bootstrapDelayMs: number;
 };
 
 type ChromeGlobal = typeof globalThis & {
@@ -197,6 +198,7 @@ const createMockCapServer = async () => {
 		presignBodies: [],
 		uploadBytes: [],
 		uploadParts: new Map(),
+		bootstrapDelayMs: 0,
 		uploadHeaders: [],
 		videoId: `e2e-${Date.now()}`,
 	};
@@ -224,6 +226,9 @@ const createMockCapServer = async () => {
 				request.method === "GET" &&
 				url.pathname === "/api/extension/bootstrap"
 			) {
+				await new Promise((resolve) =>
+					setTimeout(resolve, state.bootstrapDelayMs),
+				);
 				sendJson(response, 200, {
 					user: {
 						id: "user-e2e",
@@ -445,6 +450,7 @@ type RecordingOptions = {
 	systemAudio: boolean;
 	capturePath: string;
 	durationMs: number;
+	cachedPlan?: { isPro: boolean; maxRecordingSeconds: number | null };
 };
 
 const DEFAULT_RECORDING_OPTIONS: RecordingOptions = {
@@ -467,6 +473,7 @@ const configureExtension = async (
 			recordingMode,
 			microphone,
 			systemAudio,
+			cachedPlan,
 			settingsKey,
 			apiBaseUrl,
 		}) => {
@@ -498,10 +505,7 @@ const configureExtension = async (
 									id: "org-e2e",
 									name: "Extension E2E",
 								},
-								plan: {
-									isPro: true,
-									maxRecordingSeconds: 600,
-								},
+								plan: cachedPlan,
 							},
 							cachedAt: Date.now(),
 						},
@@ -557,6 +561,10 @@ const configureExtension = async (
 			recordingMode: options.mode,
 			microphone: options.microphone,
 			systemAudio: options.systemAudio,
+			cachedPlan: options.cachedPlan ?? {
+				isPro: true,
+				maxRecordingSeconds: 600,
+			},
 			settingsKey: SETTINGS_KEY,
 		},
 	);
@@ -899,6 +907,37 @@ test.describe("extension recording upload", () => {
 			}
 		});
 	}
+
+	test("re-checks a cached free plan so an upgraded account is not cut off", async () => {
+		if (!extension || !mockServer)
+			throw new Error("Test harness did not start");
+		// The popup's background plan refresh is still in flight when the
+		// recording starts, as when Start is pressed right after opening it.
+		mockServer.state.bootstrapDelayMs = 1_500;
+		const worker = await getServiceWorker(extension.context);
+		const { messengerPage } = await startRecording(
+			extension.context,
+			worker,
+			mockServer.origin,
+			{
+				...DEFAULT_RECORDING_OPTIONS,
+				durationMs: 4_000,
+				cachedPlan: { isPro: false, maxRecordingSeconds: 2 },
+			},
+		);
+		const status = await sendServiceWorkerMessage(messengerPage, {
+			target: "service-worker",
+			type: "get-recording-status",
+		});
+		expect(status).toMatchObject({ ok: true, status: { phase: "recording" } });
+
+		const stopResponse = await sendServiceWorkerMessage(messengerPage, {
+			target: "service-worker",
+			type: "stop-recording",
+		});
+		expect(stopResponse).toMatchObject({ ok: true });
+		await expectSuccessfulUpload(messengerPage, mockServer.state);
+	});
 
 	test("can complete two consecutive recording uploads without stale state", async () => {
 		if (!extension || !mockServer)

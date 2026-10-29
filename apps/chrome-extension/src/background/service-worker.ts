@@ -1051,6 +1051,36 @@ const refreshBootstrapInBackground = (
 		});
 };
 
+const START_PLAN_REFRESH_TIMEOUT_MS = 3000;
+
+// The recorder enforces the free-plan limit from the bootstrap it is started
+// with, and a cached free plan can predate an upgrade, so a free-plan start
+// re-checks the plan. A slow or failed request falls back to the cache.
+const refreshFreePlanForStart = async (
+	settings: ExtensionSettings,
+	auth: ExtensionAuth,
+	cached: BootstrapData,
+) => {
+	if (cached.plan.isPro) return cached;
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	try {
+		const fresh = await Promise.race([
+			fetchBootstrap(settings, auth),
+			new Promise<null>((resolve) => {
+				timer = setTimeout(() => resolve(null), START_PLAN_REFRESH_TIMEOUT_MS);
+			}),
+		]);
+		if (!fresh) return cached;
+		bootstrapCache = fresh;
+		await saveCachedBootstrap(fresh).catch(() => undefined);
+		return fresh;
+	} catch {
+		return cached;
+	} finally {
+		clearTimeout(timer);
+	}
+};
+
 const loadSignedInState = async () => {
 	const [settings, auth, pendingAuth, authError] = await Promise.all([
 		loadSettings(),
@@ -1186,6 +1216,7 @@ const resolveMicWarning = async (
 
 const performRecordingStart = async (mode: RecordingMode) => {
 	const { settings, auth, bootstrap } = await requireSignedInState();
+	const startBootstrap = refreshFreePlanForStart(settings, auth, bootstrap);
 	externalCaptureAutoPipPending = false;
 	const recordingSettings =
 		settings.capture.recordingMode === mode
@@ -1238,7 +1269,7 @@ const performRecordingStart = async (mode: RecordingMode) => {
 			mode,
 			settings: recordingSettings,
 			auth,
-			bootstrap,
+			bootstrap: await startBootstrap,
 			tabId,
 			tabStreamId,
 		});
