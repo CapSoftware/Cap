@@ -414,6 +414,11 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             "Keep original size during zoom",
         ),
         (tr::editor::tabs::camera::mirror(), "Mirror Camera"),
+        (tr::editor::tabs::camera::crop(), "Crop"),
+        (tr::editor::tabs::camera::crop_bottom(), "Bottom"),
+        (tr::editor::tabs::camera::crop_left(), "Left"),
+        (tr::editor::tabs::camera::crop_right(), "Right"),
+        (tr::editor::tabs::camera::crop_top(), "Top"),
         (tr::editor::tabs::camera::position(), "Position"),
         (tr::editor::tabs::camera::reset(), "Reset"),
         (
