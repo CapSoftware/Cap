@@ -313,7 +313,7 @@ export default async function SharedCapsPage(props: {
 		) {
 			const offset = (page - 1) * limit;
 			const spaceVideosPage = db()
-				.select({ id: videos.id })
+				.selectDistinct({ id: videos.id })
 				.from(spaceVideos)
 				.innerJoin(videos, eq(spaceVideos.videoId, videos.id))
 				.leftJoin(organizations, eq(videos.orgId, organizations.id))
@@ -371,10 +371,18 @@ export default async function SharedCapsPage(props: {
 					)
 					.orderBy(desc(videos.effectiveCreatedAt), desc(videos.id)),
 				db()
-					.select({ count: count() })
+					.select({
+						count: sql<number>`COUNT(DISTINCT ${videos.id})`.mapWith(Number),
+					})
 					.from(spaceVideos)
+					.innerJoin(videos, eq(spaceVideos.videoId, videos.id))
+					.leftJoin(organizations, eq(videos.orgId, organizations.id))
 					.where(
-						and(eq(spaceVideos.spaceId, spaceId), isNull(spaceVideos.folderId)),
+						and(
+							eq(spaceVideos.spaceId, spaceId),
+							isNull(spaceVideos.folderId),
+							isNull(organizations.tombstoneAt),
+						),
 					),
 			]);
 			return {
@@ -468,7 +476,7 @@ export default async function SharedCapsPage(props: {
 		) {
 			const offset = (page - 1) * limit;
 			const orgVideosPage = db()
-				.select({ id: videos.id })
+				.selectDistinct({ id: videos.id })
 				.from(sharedVideos)
 				.innerJoin(videos, eq(sharedVideos.videoId, videos.id))
 				.where(
@@ -524,7 +532,9 @@ export default async function SharedCapsPage(props: {
 					)
 					.orderBy(desc(videos.effectiveCreatedAt), desc(videos.id)),
 				db()
-					.select({ count: count() })
+					.select({
+						count: sql<number>`COUNT(DISTINCT ${videos.id})`.mapWith(Number),
+					})
 					.from(sharedVideos)
 					.innerJoin(videos, eq(sharedVideos.videoId, videos.id))
 					.where(

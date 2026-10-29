@@ -183,7 +183,7 @@ export const getVideosByFolderId = Effect.fn(function* (
 		const folderVideosPage =
 			root.variant === "space"
 				? db
-						.select({ id: videos.id })
+						.selectDistinct({ id: videos.id })
 						.from(spaceVideos)
 						.innerJoin(videos, eq(spaceVideos.videoId, videos.id))
 						.leftJoin(organizations, eq(videos.orgId, organizations.id))
@@ -194,11 +194,10 @@ export const getVideosByFolderId = Effect.fn(function* (
 							),
 						)
 						.orderBy(desc(videos.effectiveCreatedAt), desc(videos.id))
-						.limit(500)
 						.as("folder_videos_page")
 				: root.variant === "org"
 					? db
-							.select({ id: videos.id })
+							.selectDistinct({ id: videos.id })
 							.from(sharedVideos)
 							.innerJoin(videos, eq(sharedVideos.videoId, videos.id))
 							.leftJoin(
@@ -212,14 +211,12 @@ export const getVideosByFolderId = Effect.fn(function* (
 								),
 							)
 							.orderBy(desc(videos.effectiveCreatedAt), desc(videos.id))
-							.limit(500)
 							.as("folder_videos_page")
 					: db
 							.select({ id: videos.id })
 							.from(videos)
 							.where(eq(videos.folderId, folderId))
 							.orderBy(desc(videos.effectiveCreatedAt), desc(videos.id))
-							.limit(500)
 							.as("folder_videos_page");
 
 		return db
