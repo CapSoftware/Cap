@@ -82,6 +82,46 @@ describe("checkOrganizationDomain", () => {
 		},
 	);
 
+	it("keeps verification when the provider returns a JSON error", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () =>
+				Response.json(
+					{ error: { code: "internal_server_error", message: "Unavailable" } },
+					{ status: 500 },
+				),
+			),
+		);
+
+		await expect(checkOrganizationDomain(organizationId)).rejects.toThrow(
+			"Failed to check domain status",
+		);
+		expect(mocks.update).not.toHaveBeenCalled();
+	});
+
+	it("revokes verification when the provider no longer has the domain", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (url: string) => {
+				if (url.includes("/config?")) {
+					return Response.json({ misconfigured: false });
+				}
+				if (url.includes("/records?")) return Response.json({ records: [] });
+				return Response.json(
+					{ error: { code: "not_found", message: "Domain not found" } },
+					{ status: 404 },
+				);
+			}),
+		);
+
+		await expect(
+			checkOrganizationDomain(organizationId),
+		).resolves.toMatchObject({ verified: false });
+		expect(mocks.update).toHaveBeenCalledExactlyOnceWith({
+			domainVerified: null,
+		});
+	});
+
 	it("revokes verification when the provider confirms misconfiguration", async () => {
 		providerResponses(true);
 
