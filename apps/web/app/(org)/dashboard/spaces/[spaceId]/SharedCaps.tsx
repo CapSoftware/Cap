@@ -23,6 +23,7 @@ import {
 	type SeededThumbnails,
 	SeededThumbnailsProvider,
 } from "@/components/VideoThumbnail";
+import { parsePageParam } from "@/lib/page-param";
 import {
 	canManageOrganizationMembers,
 	canManageSpace,
@@ -125,7 +126,7 @@ export const SharedCaps = ({
 	const params = useSearchParams();
 	const pathname = usePathname();
 	const router = useRouter();
-	const page = Number(params.get("page")) || 1;
+	const page = parsePageParam(params.get("page"));
 	const { activeOrganization } = useDashboardContext();
 	const limit = 15;
 	const [openNewFolderDialog, setOpenNewFolderDialog] = useState(false);
