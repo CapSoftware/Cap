@@ -8,6 +8,8 @@ const HIGHLIGHT_DARKNESS: f64 = 0.6;
 const HIGHLIGHT_FEATHER: f64 = 24.;
 const HIGHLIGHT_COLOR: &str = "#000000";
 const SETTINGS_WIDTH: f32 = 240.;
+const MODE_SLOT_WIDTH: f32 = 390.;
+const VALUE_WIDTH: f32 = 30.;
 
 /// The video editor's two mask kinds (`editor_panels::render_mask_panel`):
 /// Sensitive hides what is inside the mask, Highlight dims everything
@@ -373,6 +375,7 @@ impl ScreenshotEditorWindow {
             ));
         }
         let mut items = vec![kinds.into_any_element(), bar_divider(&theme)];
+        let mut mode: Vec<AnyElement> = Vec::new();
 
         match kind {
             MaskKindChoice::Sensitive => {
@@ -395,16 +398,16 @@ impl ScreenshotEditorWindow {
                         }),
                     ));
                 }
-                items.push(pills.into_any_element());
+                mode.push(pills.into_any_element());
                 if style == MaskStyleChoice::Solid {
-                    items.push(config_item(
+                    mode.push(mask_item(
                         &theme,
                         tr::screenshot_editor::style::color(),
                         None,
                         self.render_color_button(ColorTarget::Mask, cx),
                     ));
                 } else {
-                    items.push(config_item(
+                    mode.push(mask_item(
                         &theme,
                         tr::screenshot_editor::annotation::intensity(),
                         Some(format!(
@@ -417,7 +420,7 @@ impl ScreenshotEditorWindow {
                 }
             }
             MaskKindChoice::Highlight => {
-                items.push(config_item(
+                mode.push(mask_item(
                     &theme,
                     tr::screenshot_editor::mask::darkness(),
                     Some(format!(
@@ -427,7 +430,7 @@ impl ScreenshotEditorWindow {
                     self.annotation_slider(AnnotationSlider::HighlightDarkness, px(80.), cx)
                         .into_any_element(),
                 ));
-                items.push(config_item(
+                mode.push(mask_item(
                     &theme,
                     tr::screenshot_editor::style::blur(),
                     Some(format!("{}", highlight_blur(annotation).round() as i64)),
@@ -436,6 +439,17 @@ impl ScreenshotEditorWindow {
                 ));
             }
         }
+
+        items.push(
+            div()
+                .min_w(px(MODE_SLOT_WIDTH))
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(12.))
+                .children(mode)
+                .into_any_element(),
+        );
 
         items.push(bar_divider(&theme));
         let shape = MaskShapeChoice::of(&options);
@@ -553,6 +567,7 @@ impl ScreenshotEditorWindow {
                 tr::screenshot_editor::mask::feather(),
                 format!("{}px", options.feather.round() as i64),
                 AnnotationSlider::MaskFeather,
+                None,
                 cx,
             ));
         if options.shape == MaskShape::Rectangle {
@@ -560,24 +575,18 @@ impl ScreenshotEditorWindow {
                 tr::screenshot_editor::mask::corner_radius(),
                 format!("{}px", options.corner_radius.round() as i64),
                 AnnotationSlider::MaskRadius,
+                None,
                 cx,
             ));
         }
         if !options.invert && !options.solid {
-            body = body.child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_end()
-                    .gap(px(12.))
-                    .child(div().flex_1().min_w_0().child(self.mask_slider_row(
-                        tr::screenshot_editor::mask::tint(),
-                        format!("{}%", (options.tint * 100.).round() as i64),
-                        AnnotationSlider::MaskTint,
-                        cx,
-                    )))
-                    .child(self.render_color_button(ColorTarget::Mask, cx)),
-            );
+            body = body.child(self.mask_slider_row(
+                tr::screenshot_editor::mask::tint(),
+                format!("{}%", (options.tint * 100.).round() as i64),
+                AnnotationSlider::MaskTint,
+                Some(self.render_color_button(ColorTarget::Mask, cx)),
+                cx,
+            ));
         }
 
         Some(
@@ -632,6 +641,7 @@ impl ScreenshotEditorWindow {
         label: &'static str,
         value: String,
         slider: AnnotationSlider,
+        accessory: Option<AnyElement>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = self.theme;
@@ -649,7 +659,15 @@ impl ScreenshotEditorWindow {
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(theme.gray_11)
                     .child(label)
-                    .child(value),
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(8.))
+                            .children(accessory)
+                            .child(value),
+                    ),
             )
             .child(
                 self.annotation_slider(slider, px(SETTINGS_WIDTH - 32.), cx)
@@ -657,6 +675,43 @@ impl ScreenshotEditorWindow {
             )
             .into_any_element()
     }
+}
+
+/// `config_item` with a fixed-width readout, so the slider beside it does
+/// not slide as the number grows a digit.
+fn mask_item(
+    theme: &Theme,
+    label: &'static str,
+    value: Option<String>,
+    control: AnyElement,
+) -> AnyElement {
+    let theme = *theme;
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(8.))
+        .flex_shrink_0()
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(4.))
+                .flex_shrink_0()
+                .text_size(px(11.))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(theme.gray_10)
+                .child(label)
+                .children(value.map(|value| {
+                    div()
+                        .min_w(px(VALUE_WIDTH))
+                        .text_color(theme.gray_11)
+                        .child(value)
+                })),
+        )
+        .child(control)
+        .into_any_element()
 }
 
 fn bar_divider(theme: &Theme) -> AnyElement {
