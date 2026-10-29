@@ -1378,6 +1378,12 @@ test.describe("camera and microphone start", () => {
 				mode === "tab" && !canLaunchHeaded,
 				"Tab capture needs a headed browser",
 			);
+			// Tab capture cannot use the fake permission UI, and installed
+			// browsers ignore the media grant seeded into a fresh profile.
+			test.skip(
+				mode === "tab" && Boolean(process.env.CAP_E2E_BROWSER),
+				"Installed browsers need the permission page to grant the mic",
+			);
 			const extension = await launchExtensionContext({
 				tabCapture: mode === "tab",
 			});
