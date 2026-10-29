@@ -1096,14 +1096,23 @@ impl AudioMuxer for WindowsCameraMuxer {
 }
 
 pub struct CameraBuffers {
+    uyvy_buffer: Vec<u8>,
     flip_buffer: Vec<u8>,
 }
 
 impl CameraBuffers {
     pub fn new() -> Self {
         Self {
+            uyvy_buffer: Vec::new(),
             flip_buffer: Vec::new(),
         }
+    }
+
+    fn ensure_uyvy_capacity(&mut self, size: usize) -> &mut [u8] {
+        if self.uyvy_buffer.len() < size {
+            self.uyvy_buffer.resize(size, 0);
+        }
+        &mut self.uyvy_buffer[..size]
     }
 
     fn ensure_flip_capacity(&mut self, size: usize) -> &mut [u8] {
@@ -1250,6 +1259,81 @@ fn compact_primary_stride(pixel_format: cap_camera_windows::PixelFormat, width: 
     }
 }
 
+fn convert_uyvy_row_to_yuyv_into(src: &[u8], dst: &mut [u8]) {
+    let src_len = src.len().min(dst.len());
+
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("ssse3") {
+            unsafe {
+                convert_uyvy_to_yuyv_ssse3(src, dst, src_len);
+            }
+            return;
+        }
+    }
+
+    convert_uyvy_to_yuyv_scalar(src, dst, src_len);
+}
+
+fn convert_uyvy_to_yuyv_into(
+    src: &[u8],
+    dst: &mut [u8],
+    width: u32,
+    height: u32,
+    src_stride: usize,
+    flip: bool,
+) {
+    let row_bytes = (width * 2) as usize;
+    let height = height as usize;
+
+    for row in 0..height {
+        let src_row = if flip { height - 1 - row } else { row };
+        let src_start = src_row.saturating_mul(src_stride);
+        let dst_start = row.saturating_mul(row_bytes);
+        let src_end = src_start.saturating_add(row_bytes).min(src.len());
+        let dst_end = dst_start.saturating_add(row_bytes).min(dst.len());
+
+        if src_end <= src_start || dst_end <= dst_start || dst_end - dst_start < row_bytes {
+            continue;
+        }
+
+        convert_uyvy_row_to_yuyv_into(&src[src_start..src_end], &mut dst[dst_start..dst_end]);
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "ssse3")]
+unsafe fn convert_uyvy_to_yuyv_ssse3(src: &[u8], dst: &mut [u8], len: usize) {
+    use std::arch::x86_64::*;
+
+    unsafe {
+        let shuffle_mask = _mm_setr_epi8(1, 0, 3, 2, 5, 4, 7, 6, 9, 8, 11, 10, 13, 12, 15, 14);
+
+        let mut i = 0;
+        let simd_end = len & !15;
+
+        while i < simd_end {
+            let chunk = _mm_loadu_si128(src.as_ptr().add(i) as *const __m128i);
+            let shuffled = _mm_shuffle_epi8(chunk, shuffle_mask);
+            _mm_storeu_si128(dst.as_mut_ptr().add(i) as *mut __m128i, shuffled);
+            i += 16;
+        }
+
+        convert_uyvy_to_yuyv_scalar(&src[i..], &mut dst[i..], len - i);
+    }
+}
+
+fn convert_uyvy_to_yuyv_scalar(src: &[u8], dst: &mut [u8], len: usize) {
+    for i in (0..len).step_by(4) {
+        if i + 3 < src.len() && i + 3 < dst.len() {
+            dst[i] = src[i + 1];
+            dst[i + 1] = src[i];
+            dst[i + 2] = src[i + 3];
+            dst[i + 3] = src[i + 2];
+        }
+    }
+}
+
 pub(crate) fn camera_frame_to_ffmpeg(
     frame: &NativeCameraFrame,
     mjpeg_decoder: &mut MjpegDecoder,
@@ -1360,11 +1444,7 @@ pub(crate) fn camera_frame_to_ffmpeg(
         }
         cap_camera_windows::PixelFormat::YUYV422 | cap_camera_windows::PixelFormat::UYVY422 => {
             let row_bytes = width * 2;
-            let size = if frame.pixel_format == cap_camera_windows::PixelFormat::UYVY422 {
-                row_bytes * height
-            } else {
-                layout.primary_stride * height
-            };
+            let size = layout.primary_stride * height;
             if data.len() >= size {
                 let stride = ffmpeg_frame.stride(0);
                 copy_plane(
@@ -1372,11 +1452,7 @@ pub(crate) fn camera_frame_to_ffmpeg(
                     ffmpeg_frame.data_mut(0),
                     row_bytes,
                     height,
-                    if frame.pixel_format == cap_camera_windows::PixelFormat::UYVY422 {
-                        row_bytes
-                    } else {
-                        layout.primary_stride
-                    },
+                    layout.primary_stride,
                     stride,
                     flip,
                 );
@@ -1727,27 +1803,88 @@ pub fn upload_mf_buffer_to_texture(
         )
     })?;
 
+    let needs_uyvy_conversion = frame.pixel_format == cap_camera_windows::PixelFormat::UYVY422;
+    let needs_flip = frame.is_bottom_up;
     let mut row_pitch = layout.primary_stride as u32;
 
-    let data: &[u8] = if frame.is_bottom_up {
-        let flip_size = flip_buffer_size(
-            frame.width as usize,
-            frame.height as usize,
-            frame.pixel_format,
-        );
-        let dst = buffers.ensure_flip_capacity(flip_size);
-        flip_camera_buffer_into(
-            original_data,
-            dst,
-            frame.width as usize,
-            frame.height as usize,
-            frame.pixel_format,
-            layout,
-        );
-        row_pitch = compact_primary_stride(frame.pixel_format, frame.width as usize) as u32;
-        dst
-    } else {
-        original_data
+    let data: &[u8] = match (needs_uyvy_conversion, needs_flip) {
+        (false, false) => original_data,
+        (true, false) => {
+            let uyvy_size = (frame.width * frame.height * 2) as usize;
+            let dst = buffers.ensure_uyvy_capacity(uyvy_size);
+            convert_uyvy_to_yuyv_into(
+                original_data,
+                dst,
+                frame.width,
+                frame.height,
+                layout.primary_stride,
+                false,
+            );
+            row_pitch = compact_primary_stride(
+                cap_camera_windows::PixelFormat::YUYV422,
+                frame.width as usize,
+            ) as u32;
+            dst
+        }
+        (false, true) => {
+            let flip_size = flip_buffer_size(
+                frame.width as usize,
+                frame.height as usize,
+                frame.pixel_format,
+            );
+            let dst = buffers.ensure_flip_capacity(flip_size);
+            flip_camera_buffer_into(
+                original_data,
+                dst,
+                frame.width as usize,
+                frame.height as usize,
+                frame.pixel_format,
+                layout,
+            );
+            row_pitch = compact_primary_stride(frame.pixel_format, frame.width as usize) as u32;
+            dst
+        }
+        (true, true) => {
+            let uyvy_size = (frame.width * frame.height * 2) as usize;
+            let flip_size = flip_buffer_size(
+                frame.width as usize,
+                frame.height as usize,
+                frame.pixel_format,
+            );
+
+            if buffers.uyvy_buffer.len() < uyvy_size {
+                buffers.uyvy_buffer.resize(uyvy_size, 0);
+            }
+            if buffers.flip_buffer.len() < flip_size {
+                buffers.flip_buffer.resize(flip_size, 0);
+            }
+
+            convert_uyvy_to_yuyv_into(
+                original_data,
+                &mut buffers.uyvy_buffer[..uyvy_size],
+                frame.width,
+                frame.height,
+                layout.primary_stride,
+                false,
+            );
+
+            flip_camera_buffer_into(
+                &buffers.uyvy_buffer[..uyvy_size],
+                &mut buffers.flip_buffer[..flip_size],
+                frame.width as usize,
+                frame.height as usize,
+                cap_camera_windows::PixelFormat::YUYV422,
+                CameraBufferLayout {
+                    primary_stride: frame.width as usize * 2,
+                    secondary_stride: frame.width as usize * 2,
+                },
+            );
+            row_pitch = compact_primary_stride(
+                cap_camera_windows::PixelFormat::YUYV422,
+                frame.width as usize,
+            ) as u32;
+            &buffers.flip_buffer[..flip_size]
+        }
     };
 
     let texture_desc = D3D11_TEXTURE2D_DESC {
