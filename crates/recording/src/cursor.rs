@@ -968,21 +968,28 @@ fn cursor_id_for_image(
     response: &mut CursorActorResponse,
     cursors_dir: &Path,
     writer: Option<&CursorFileWriter>,
-    last_cursor_image: &mut Option<(Vec<u8>, String)>,
+    last_cursor_image: &mut Option<(Vec<u8>, [u64; 2], String)>,
 ) -> String {
     use sha2::{Digest, Sha256};
 
     // Hashing a large macOS cursor TIFF costs milliseconds, and the image
     // rarely changes between ticks.
-    if let Some((image, cursor_id)) = last_cursor_image
+    let hotspot = [data.hotspot.x.to_bits(), data.hotspot.y.to_bits()];
+    if let Some((image, cached_hotspot, cursor_id)) = last_cursor_image
         && *image == data.image
+        && *cached_hotspot == hotspot
     {
         return cursor_id.clone();
     }
 
     let hash_bytes = Sha256::digest(&data.image);
+    let cursor_hash = Sha256::new()
+        .chain_update(hash_bytes)
+        .chain_update(hotspot[0].to_le_bytes())
+        .chain_update(hotspot[1].to_le_bytes())
+        .finalize();
     let id = u64::from_le_bytes(
-        hash_bytes[..8]
+        cursor_hash[..8]
             .try_into()
             .expect("sha256 produces at least 8 bytes"),
     );
@@ -1026,7 +1033,7 @@ fn cursor_id_for_image(
     *last_cursor_image = response
         .cursors
         .contains_key(&id)
-        .then(|| (data.image, cursor_id.clone()));
+        .then(|| (data.image, hotspot, cursor_id.clone()));
     cursor_id
 }
 
@@ -2316,6 +2323,48 @@ mod cursor_image_tests {
         assert_eq!(response.cursors.len(), 2);
         assert!(dir.path().join("cursor_0.png").exists());
         assert!(dir.path().join("cursor_1.png").exists());
+    }
+
+    #[test]
+    fn identical_images_with_different_hotspots_keep_distinct_cursor_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut response = empty_response();
+        let mut last = None;
+        let image = png([255, 0, 0, 255]);
+        let origin = XY::new(0.0, 0.0);
+        let horizontal = XY::new(0.5, 0.0);
+        let vertical = XY::new(0.0, 0.5);
+
+        for reset_cache in [false, true] {
+            for (hotspot, expected) in [
+                (origin, "0"),
+                (horizontal, "1"),
+                (vertical, "2"),
+                (origin, "0"),
+            ] {
+                if reset_cache {
+                    last = None;
+                }
+                let mut data = cursor_data(image.clone());
+                data.hotspot = hotspot;
+                let id = cursor_id_for_image(data, &mut response, dir.path(), None, &mut last);
+                assert_eq!(id, expected);
+                let recorded = response
+                    .cursors
+                    .values()
+                    .find(|cursor| cursor.id.to_string() == id)
+                    .unwrap();
+                assert_eq!(recorded.hotspot, hotspot);
+            }
+        }
+        assert_eq!(response.cursors.len(), 3);
+        assert_eq!(response.next_cursor_id, 3);
+        for cursor in response.cursors.values() {
+            assert_eq!(
+                std::fs::read(dir.path().join(&cursor.file_name)).unwrap(),
+                image
+            );
+        }
     }
 
     #[test]
