@@ -4,10 +4,15 @@ import { Effect, Option } from "effect";
 import type { SeededThumbnails } from "@/components/VideoThumbnail";
 import { runPromise } from "@/lib/server";
 
+// Matches the VideosGetThumbnails batch limit. Pages take a `limit` query
+// parameter, so ids past this fall back to the client RPC.
+const MAX_SEEDED_THUMBNAILS = 50;
+
 export function seedThumbnailUrls(
 	user: Parameters<typeof makeCurrentUserLayer>[0],
-	videoIds: readonly Video.VideoId[],
+	allVideoIds: readonly Video.VideoId[],
 ): SeededThumbnails | undefined {
+	const videoIds = allVideoIds.slice(0, MAX_SEEDED_THUMBNAILS);
 	if (videoIds.length === 0) return undefined;
 
 	const urls = Effect.gen(function* () {
