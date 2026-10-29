@@ -21,6 +21,11 @@ fn no_edit(_: &mut ProjectConfiguration) {}
 fn case_id(fixture: &str, edit: &str, format: Format, fps: u32, decoder: Decoder) -> String {
     let format = match format {
         Format::Mp4 => "mp4",
+        Format::Mp4Turbo {
+            failing_chunk: None,
+            ..
+        } => "mp4-turbo",
+        Format::Mp4Turbo { .. } => "mp4-turbo-fallback",
         Format::Gif => "gif",
         Format::Mov => "mov",
     };
@@ -75,7 +80,7 @@ fn run_project(
                 let ext = match format {
                     Format::Gif => "gif",
                     Format::Mov => "mov",
-                    Format::Mp4 => "mp4",
+                    Format::Mp4 | Format::Mp4Turbo { .. } => "mp4",
                 };
                 let run = ExportRun {
                     custom_bpp: None,
@@ -104,7 +109,7 @@ fn run_project(
                             &frames,
                             &path,
                             fps,
-                            format == Format::Mp4,
+                            matches!(format, Format::Mp4 | Format::Mp4Turbo { .. }),
                         );
                         if determinism {
                             let second = dir.path().join(format!("b.{ext}"));
@@ -266,6 +271,199 @@ fn basic() {
         false,
     ));
     common::assert_passed(failures);
+}
+
+/// The turbo export split into three chunks, so chunk seams land inside
+/// cuts, speed changes, transitions, scene changes and held frames.
+#[test]
+fn turbo() {
+    let turbo = Format::Mp4Turbo {
+        chunks: 3,
+        failing_chunk: None,
+    };
+    let fallback = Format::Mp4Turbo {
+        chunks: 3,
+        failing_chunk: Some(2),
+    };
+    let mut failures: Vec<String> = Vec::new();
+    failures.extend(run(
+        catalog::basic(report::tier()),
+        &[
+            Variant {
+                edit: "full",
+                apply: no_edit,
+            },
+            Variant {
+                edit: "cuts-speeds-reorder",
+                apply: cuts_speeds_reorder,
+            },
+            Variant {
+                edit: "transition",
+                apply: transition,
+            },
+            Variant {
+                edit: "hide-camera-scene",
+                apply: hide_camera_scene,
+            },
+        ],
+        &[(turbo, 30), (turbo, 60)],
+        &Decoder::all(),
+        RES,
+        false,
+    ));
+    failures.extend(run(
+        catalog::vfr_holds(report::tier()),
+        &[Variant {
+            edit: "full",
+            apply: no_edit,
+        }],
+        &[(turbo, 60)],
+        &Decoder::all(),
+        RES,
+        false,
+    ));
+    failures.extend(run(
+        catalog::basic(report::tier()),
+        &[Variant {
+            edit: "cuts-speeds-reorder",
+            apply: cuts_speeds_reorder,
+        }],
+        &[(fallback, 30)],
+        &[Decoder::Default],
+        RES,
+        false,
+    ));
+    failures.extend(turbo_cancellation());
+    common::assert_passed(failures);
+}
+
+fn turbo_spool_files() -> Vec<std::path::PathBuf> {
+    std::fs::read_dir(std::env::temp_dir())
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|entry| entry.path())
+                .filter(|path| {
+                    path.file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(|name| name.starts_with("cap-turbo-"))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Stopping a turbo export from the progress callback or the user's cancel
+/// flag ends every chunk, leaves no output and removes the chunk spools. A
+/// destination that appears while turbo runs is left alone, whether turbo
+/// then finishes or fails: the export fails rather than falling back to a
+/// standard export that would overwrite it.
+fn turbo_cancellation() -> Vec<String> {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    let spec = catalog::vfr_holds(report::tier());
+    let decoder = if cfg!(target_os = "windows") {
+        Decoder::Ffmpeg
+    } else {
+        Decoder::Default
+    };
+    let mut failures = Vec::new();
+    for mode in ["progress", "flag", "taken", "taken-failed"] {
+        let id = format!(
+            "export/{}/turbo-cancel-{mode}/{}",
+            spec.name,
+            decoder.label()
+        );
+        if !report::selected(&id) {
+            continue;
+        }
+        let project = common::project(&spec);
+        let Some(mut case) = common::begin(&id, &project, decoder) else {
+            continue;
+        };
+        let dir = common::scratch_dir(&id);
+        let out = dir.path().join("cancelled.mp4");
+        let spools_before = turbo_spool_files();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let flag = cancel.clone();
+        let taken = out.clone();
+        let result = common::runtime().block_on(async {
+            let mut base = cap_export::ExporterBase::builder(project.path.clone())
+                .with_config(project.config())
+                .with_force_ffmpeg_decoder(decoder == Decoder::Ffmpeg)
+                .with_output_path(out.clone())
+                .build_for_mp4(cancel)
+                .await
+                .map_err(|e| format!("exporter build: {e}"))?;
+            if mode == "taken-failed" {
+                base.fail_turbo_chunk(2);
+            }
+            cap_export::mp4::Mp4ExportSettings {
+                fps: 60,
+                resolution_base: XY::new(RES.0, RES.1),
+                compression: cap_export::mp4::ExportCompression::Social,
+                custom_bpp: None,
+                force_ffmpeg_decoder: decoder == Decoder::Ffmpeg,
+                optimize_filesize: false,
+            }
+            .export_prepared_turbo(
+                base,
+                cap_export::mp4::turbo::TurboOptions {
+                    chunks: Some(3),
+                    strict: !mode.starts_with("taken"),
+                },
+                move |frame| {
+                    if mode.starts_with("taken") {
+                        if !taken.exists() {
+                            let _ = std::fs::write(&taken, "taken");
+                        }
+                        return true;
+                    }
+                    if frame < 60 {
+                        return true;
+                    }
+                    if mode == "flag" {
+                        flag.store(true, Ordering::Relaxed);
+                        return true;
+                    }
+                    false
+                },
+            )
+            .await
+        });
+        if mode.starts_with("taken") {
+            if result.is_ok() || result.as_ref().map_err(String::as_str) == Err("Export cancelled")
+            {
+                case.problem("error", format!("taken destination returned {result:?}"));
+            }
+            if std::fs::read(&out).ok().as_deref() != Some(&b"taken"[..]) {
+                case.problem("error", "export overwrote a destination created meanwhile");
+            }
+        } else {
+            if result.as_ref().map_err(String::as_str) != Err("Export cancelled") {
+                case.problem("error", format!("cancelled export returned {result:?}"));
+            }
+            if out.exists() {
+                case.problem("error", "cancelled export left an output file");
+            }
+        }
+        let leftover: Vec<_> = turbo_spool_files()
+            .into_iter()
+            .filter(|path| !spools_before.contains(path))
+            .collect();
+        if !leftover.is_empty() {
+            case.problem(
+                "error",
+                format!("cancelled export left spools {leftover:?}"),
+            );
+        }
+        if let Err(message) = report::settle(case) {
+            failures.push(message);
+        }
+    }
+    failures
 }
 
 #[test]

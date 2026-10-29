@@ -27,6 +27,7 @@ use gpui::{App, Global, PromptButton, PromptLevel};
 
 use crate::{
     app_windows,
+    i18n::tr,
     main_window::{Mode, TargetType},
     session::{Phase, RecordingSession},
     store,
@@ -213,6 +214,7 @@ pub fn pause(cx: &mut App) -> bool {
     hotkeys.paused = true;
     hotkeys.release_idle_manager();
     tracing::info!("global hotkeys paused while a shortcut is recorded");
+    crate::tray::refresh_menu(cx);
     true
 }
 
@@ -243,6 +245,16 @@ pub fn resume(cx: &mut App) -> bool {
     cx.global_mut::<Hotkeys>().paused = false;
     reload(cx);
     true
+}
+
+/// The registered combo for an action, or `None` when nothing is bound. The
+/// tray menu renders it as the row's accelerator.
+pub(crate) fn accelerator(action: HotkeyAction, cx: &App) -> Option<HotKey> {
+    cx.try_global::<Hotkeys>()?
+        .bindings
+        .iter()
+        .find(|(_, bound)| *bound == action)
+        .map(|(hotkey, _)| *hotkey)
 }
 
 pub fn unavailable_actions(cx: &App) -> Vec<&'static str> {
@@ -309,15 +321,12 @@ pub fn clean_capture_stop_message(cx: &App) -> String {
     if let Some(stop) = cx.try_global::<WaylandStop>() {
         return stop.label.clone();
     }
-    "Press and release Ctrl+Shift+F9 to start. Use the same shortcut to stop. This temporary shortcut does not change your settings.".into()
+    tr::dialog::capture::shortcut_hint("Ctrl+Shift+F9")
 }
 
 #[cfg(target_os = "linux")]
 fn clean_capture_shortcut_label(trigger: &str) -> String {
-    let trigger = readable_trigger(trigger);
-    format!(
-        "Press and release {trigger} to start. Use the same shortcut to stop. This temporary shortcut does not change your settings."
-    )
+    tr::dialog::capture::shortcut_hint(readable_trigger(trigger))
 }
 
 /// Portal backends describe triggers in their own words: GNOME says
@@ -391,7 +400,7 @@ fn reserve_wayland_stop(generation: u64, cx: &mut App) -> anyhow::Result<()> {
         gpui_tokio::Tokio::handle(cx).spawn(run_wayland_stop(generation, cancelled, events));
     cx.set_global(WaylandStop {
         generation,
-        label: "Approve a recording shortcut, or activate the Cap Stop tray icon when it appears. Recording has not started.".into(),
+        label: tr::dialog::capture::approve_shortcut().into(),
         ready: false,
         cancel,
         worker: Some(worker),
@@ -430,21 +439,26 @@ fn reserve_wayland_stop(generation: u64, cx: &mut App) -> anyhow::Result<()> {
                         );
                     }
                     WaylandStopEvent::Unavailable(error) => {
+                        let was_ready = stop.ready;
                         stop.ready = false;
-                        app_windows::clean_capture_stop_unavailable(generation, error, cx);
+                        app_windows::clean_capture_stop_unavailable(
+                            generation, error, was_ready, cx,
+                        );
                     }
                     _ => {}
                 }
             });
         }
         cx.update(|cx| {
-            if cx
+            if let Some(was_ready) = cx
                 .try_global::<WaylandStop>()
-                .is_some_and(|stop| stop.generation == generation && stop.cleanup.is_none())
+                .filter(|stop| stop.generation == generation && stop.cleanup.is_none())
+                .map(|stop| stop.ready)
             {
                 app_windows::clean_capture_stop_unavailable(
                     generation,
                     "The recording Stop worker ended".into(),
+                    was_ready,
                     cx,
                 );
             }
@@ -487,14 +501,36 @@ async fn run_wayland_stop(
     if let Err(error) = result {
         tracing::info!(%error, "Using the recording Stop tray instead of GlobalShortcuts");
     }
-    let result = run_tray_stop(generation, &cancel, &events)
-        .await
-        .map_err(|error| error.to_string());
-    if let Err(error) = &result {
-        let _ = events.send(WaylandStopEvent::Unavailable(error.clone()));
+    match run_tray_stop(generation, &cancel, &events).await {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            let _ = events.send(WaylandStopEvent::Unavailable(error.to_string()));
+            // A tray that never registered left nothing to clean up; failing
+            // here would block every later recording behind a cleanup error.
+            if error.is::<StopTrayNeverRegistered>() {
+                Ok(())
+            } else {
+                Err(error.to_string())
+            }
+        }
     }
-    result
 }
+
+/// The recording Stop tray could not register at all (no StatusNotifier
+/// watcher, as on GNOME without the AppIndicator extension).
+#[cfg(target_os = "linux")]
+#[derive(Debug)]
+struct StopTrayNeverRegistered(String);
+
+#[cfg(target_os = "linux")]
+impl std::fmt::Display for StopTrayNeverRegistered {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl std::error::Error for StopTrayNeverRegistered {}
 
 #[cfg(target_os = "linux")]
 fn wayland_stop_icon() -> anyhow::Result<cap_utils::linux_recording_stop::StopTrayIcon> {
@@ -526,17 +562,18 @@ async fn run_tray_stop(
     events: &flume::Sender<WaylandStopEvent>,
 ) -> anyhow::Result<()> {
     use cap_utils::linux_recording_stop::{StopTray, StopTrayEvent};
-    let icon = wayland_stop_icon()?;
+    let icon = wayland_stop_icon()
+        .map_err(|error| anyhow::Error::new(StopTrayNeverRegistered(error.to_string())))?;
     let tray = StopTray::open(generation, icon).await.map_err(|error| {
         if error.can_fallback() {
-            anyhow::Error::msg(error)
+            anyhow::Error::new(StopTrayNeverRegistered(error.to_string()))
         } else {
             anyhow::anyhow!("Recording Stop tray registration cleanup is unconfirmed: {error}")
         }
     })?;
     let received = tray.events();
     let outcome = async {
-        events.send(WaylandStopEvent::Ready("Activate the Cap Stop tray icon to start. Activate the same icon again to stop. Recording will not start until you use that control.".into()))?;
+        events.send(WaylandStopEvent::Ready(tr::dialog::capture::tray_stop_hint().into()))?;
         loop {
             tokio::select! {
                 biased;
@@ -580,7 +617,7 @@ async fn run_portal_stop(
         let changed = portal.receive_shortcuts_changed().await?;
         let closed = session.receive_closed().await?;
         futures_util::pin_mut!(activated, deactivated, changed, closed);
-        let shortcuts = [NewShortcut::new(&shortcut_id, "Start or stop this Cap recording").preferred_trigger("CTRL+SHIFT+F9")];
+        let shortcuts = [NewShortcut::new(&shortcut_id, tr::dialog::capture::shortcut_description()).preferred_trigger("CTRL+SHIFT+F9")];
         let bind = portal.bind_shortcuts(&session, &shortcuts, None);
         let response = tokio::select! {
             _ = cancel.recv_async() => return Ok(()),
@@ -647,9 +684,7 @@ pub fn reserve_clean_capture_stop(
     let key = HotKey::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::F9);
     let actions = actions_for(&hotkeys.bindings, key.id());
     if clean_capture_shortcut_conflicts(&actions) {
-        anyhow::bail!(
-            "Ctrl+Shift+F9 is assigned to another Cap action. Change that shortcut before recording."
-        );
+        anyhow::bail!(tr::dialog::capture::shortcut_conflict());
     }
     if actions.is_empty() {
         let registered = hotkeys
@@ -773,6 +808,7 @@ fn register_from_store(cx: &mut App) {
     }
     hotkeys.release_idle_manager();
     tracing::info!(count = hotkeys.bindings.len(), "global hotkeys registered");
+    crate::tray::refresh_menu(cx);
 }
 
 /// `CAP_GPUI_AUTO_HOTKEY=<store key>`: run an action's dispatch arm without
@@ -959,11 +995,11 @@ fn start_from_hotkey(mode: Mode, cx: &mut App) {
             main.update(cx, |_, window, cx| {
                 window.prompt(
                     PromptLevel::Warning,
-                    "No microphone detected",
-                    Some("This recording will not include your voice."),
+                    tr::main::mic_warning::title(),
+                    Some(tr::dialog::no_microphone_body()),
                     &[
-                        PromptButton::ok("Record without microphone"),
-                        PromptButton::cancel("Cancel"),
+                        PromptButton::ok(tr::main::mic_warning::record_without()),
+                        PromptButton::cancel(tr::common::cancel()),
                     ],
                     cx,
                 )

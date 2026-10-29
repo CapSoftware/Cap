@@ -1,0 +1,170 @@
+diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
+index 6ac834a..4299e15 100644
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -75,6 +75,24 @@ use crate::util::{
+ };
+ pub use prompts::*;
+ 
++/// A platform can still report focus, hover, input or a frame request for a
++/// window gpui has already removed while it closes. There is nothing left to
++/// update, so that one failure is not an error worth logging.
++trait LogUnlessClosed<T> {
++    fn log_unless_closed(self) -> Option<T>;
++}
++
++impl<T> LogUnlessClosed<T> for Result<T> {
++    #[track_caller]
++    fn log_unless_closed(self) -> Option<T> {
++        match self {
++            Ok(value) => Some(value),
++            Err(error) if error.to_string() == "window not found" => None,
++            Err(error) => Err::<T, _>(error).log_err(),
++        }
++    }
++}
++
+ /// Default window size used when no explicit size is provided.
+ pub const DEFAULT_WINDOW_SIZE: Size<Pixels> = size(px(1536.), px(1095.));
+ 
+@@ -213,7 +231,7 @@ fn update_window_or_defer(
+         return;
+     };
+     if !error.is::<std::cell::BorrowMutError>() {
+-        Result::<(), _>::Err(error).log_err();
++        Result::<(), _>::Err(error).log_unless_closed();
+         return;
+     }
+     let executor = cx.foreground_executor().clone();
+@@ -222,7 +240,7 @@ fn update_window_or_defer(
+         .spawn(async move {
+             handle
+                 .update(&mut cx, |_, window, cx| update(window, cx))
+-                .log_err();
++                .log_unless_closed();
+         })
+         .detach();
+ }
+@@ -1671,7 +1689,7 @@ impl Window {
+                         // `complete_frame`) or the compositor won't send another callback.
+                         handle
+                             .update(&mut cx, |_, window, _| window.complete_frame())
+-                            .log_err();
++                            .log_unless_closed();
+                         frame_pacer.frame_finished(true, true, now);
+                         return;
+                     }
+@@ -1689,7 +1707,7 @@ impl Window {
+                                 callback(window, cx);
+                             }
+                         })
+-                        .log_err();
++                        .log_unless_closed();
+                 }
+ 
+                 // Keep presenting if input was recently arriving at a high rate (>= 60fps).
+@@ -1713,20 +1731,20 @@ impl Window {
+                                 window.present();
+                                 arena_clear_needed.clear();
+                             })
+-                            .log_err();
++                            .log_unless_closed();
+                     })
+                 } else if needs_present {
+                     busy = true;
+                     handle
+                         .update(&mut cx, |_, window, _| window.present())
+-                        .log_err();
++                        .log_unless_closed();
+                 }
+ 
+                 handle
+                     .update(&mut cx, |_, window, _| {
+                         window.complete_frame();
+                     })
+-                    .log_err();
++                    .log_unless_closed();
+ 
+                 let pending = invalidator.is_dirty() || !pending_frame_callbacks.borrow().is_empty();
+                 frame_pacer.frame_finished(busy, pending, now);
+@@ -1782,7 +1800,7 @@ impl Window {
+ 
+                         SystemWindowTabController::update_last_active(cx, window.handle.id);
+                     })
+-                    .log_err();
++                    .log_unless_closed();
+             }
+         }));
+         platform_window.on_hover_status_change(Box::new({
+@@ -1793,7 +1811,7 @@ impl Window {
+                         window.hovered.set(active);
+                         window.refresh();
+                     })
+-                    .log_err();
++                    .log_unless_closed();
+             }
+         }));
+         platform_window.on_input({
+@@ -1801,7 +1819,7 @@ impl Window {
+             Box::new(move |event| {
+                 handle
+                     .update(&mut cx, |_, window, cx| window.dispatch_event(event, cx))
+-                    .log_err()
++                    .log_unless_closed()
+                     .unwrap_or(DispatchEventResult::default())
+             })
+         });
+@@ -1817,7 +1835,7 @@ impl Window {
+                         }
+                         None
+                     })
+-                    .log_err()
++                    .log_unless_closed()
+                     .unwrap_or(None)
+             })
+         });
+@@ -1828,7 +1846,7 @@ impl Window {
+                     .update(&mut cx, |_, _window, cx| {
+                         SystemWindowTabController::move_tab_to_new_window(cx, handle.window_id());
+                     })
+-                    .log_err();
++                    .log_unless_closed();
+             })
+         });
+         platform_window.on_merge_all_windows({
+@@ -1838,7 +1856,7 @@ impl Window {
+                     .update(&mut cx, |_, _window, cx| {
+                         SystemWindowTabController::merge_all_windows(cx, handle.window_id());
+                     })
+-                    .log_err();
++                    .log_unless_closed();
+             })
+         });
+         platform_window.on_select_next_tab({
+@@ -1848,7 +1866,7 @@ impl Window {
+                     .update(&mut cx, |_, _window, cx| {
+                         SystemWindowTabController::select_next_tab(cx, handle.window_id());
+                     })
+-                    .log_err();
++                    .log_unless_closed();
+             })
+         });
+         platform_window.on_select_previous_tab({
+@@ -1858,7 +1876,7 @@ impl Window {
+                     .update(&mut cx, |_, _window, cx| {
+                         SystemWindowTabController::select_previous_tab(cx, handle.window_id())
+                     })
+-                    .log_err();
++                    .log_unless_closed();
+             })
+         });
+         platform_window.on_toggle_tab_bar({
+@@ -1869,7 +1887,7 @@ impl Window {
+                         let tab_bar_visible = window.platform_window.tab_bar_visible();
+                         SystemWindowTabController::set_visible(cx, tab_bar_visible);
+                     })
+-                    .log_err();
++                    .log_unless_closed();
+             })
+         });
+ 

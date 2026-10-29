@@ -101,13 +101,47 @@ pub struct CaptionOverlayLayout {
     pub position: CaptionPosition,
 }
 
+/// The centre of the caption box last drawn, as fractions of the frame, with
+/// the position setting it was drawn for. Left and right presets align the
+/// box's edge to the margin, so where its centre lands depends on the box
+/// width, which only this layer measures. The editor starts Manual placement
+/// here so switching to it leaves the captions where they were.
+static LAST_CAPTION_CENTER: std::sync::Mutex<Option<(CaptionPosition, [f32; 2])>> =
+    std::sync::Mutex::new(None);
+
+/// [`LAST_CAPTION_CENTER`] when the last caption was drawn at `position`.
+pub fn last_caption_center(position: &str) -> Option<(f32, f32)> {
+    let wanted = CaptionPosition::from_str(position);
+    let last = *LAST_CAPTION_CENTER
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    last.and_then(|(drawn, [x, y])| (drawn == wanted).then_some((x, y)))
+}
+
+fn caption_center(rect: [f32; 4], frame: (u32, u32)) -> Option<[f32; 2]> {
+    (frame.0 > 0 && frame.1 > 0).then(|| {
+        [
+            ((rect[0] + rect[2] / 2.0) / frame.0 as f32).clamp(0.0, 1.0),
+            ((rect[1] + rect[3] / 2.0) / frame.1 as f32).clamp(0.0, 1.0),
+        ]
+    })
+}
+
+fn record_caption_center(position: CaptionPosition, rect: [f32; 4], frame: (u32, u32)) {
+    if let Some(center) = caption_center(rect, frame) {
+        *LAST_CAPTION_CENTER
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((position, center));
+    }
+}
+
 const BASE_TEXT_OPACITY: f32 = 0.8;
 const BOUNCE_OFFSET_PIXELS: f32 = 8.0;
 // Safety net for caption segments whose trailing word end was stretched across a
 // silence by transcription (e.g. a 16s "seconds."). Without this, such a segment
-// stays on screen for the whole inflated duration. Kept in sync with
-// MAX_CAPTION_WORD_DURATION in the desktop transcription/projection layers.
-const MAX_CAPTION_WORD_DURATION: f64 = 2.5;
+// stays on screen for the whole inflated duration. Value comes from the shared
+// caption word utilities so it stays in sync with the transcription layers.
+const MAX_CAPTION_WORD_DURATION: f64 = cap_project::caption_words::MAX_CAPTION_WORD_DURATION as f64;
 
 fn ease_out_cubic(t: f32) -> f32 {
     let t = t.clamp(0.0, 1.0);
@@ -980,6 +1014,7 @@ impl CaptionsLayer {
         ];
 
         self.active_layout = Some(CaptionOverlayLayout { rect, position });
+        record_caption_center(position, rect, (width, height));
 
         let background_uniforms = CaptionBackgroundUniforms {
             rect,
@@ -1223,8 +1258,8 @@ fn calculate_caption_bounce(current_time: f64, start: f64, end: f64, fade_durati
 #[cfg(test)]
 mod tests {
     use super::{
-        caption_segment_effective_end, find_active_caption_segment, find_active_word_index,
-        word_byte_range,
+        caption_center, caption_segment_effective_end, find_active_caption_segment,
+        find_active_word_index, word_byte_range,
     };
     use cap_project::{CaptionTrackSegment, CaptionWord};
 
@@ -1250,6 +1285,20 @@ mod tests {
             start,
             end,
         }
+    }
+
+    /// A 400 px box against the 96 px left margin of a 1920 px frame is
+    /// centred at 296 px, not at the 5% the preset table names.
+    #[test]
+    fn the_drawn_caption_centre_is_a_fraction_of_the_frame() {
+        let center = caption_center([96.0, 900.0, 400.0, 80.0], (1920, 1080)).unwrap();
+        assert!((center[0] - 296.0 / 1920.0).abs() < 1e-6);
+        assert!((center[1] - 940.0 / 1080.0).abs() < 1e-6);
+        assert!(caption_center([0.0, 0.0, 10.0, 10.0], (0, 1080)).is_none());
+        assert_eq!(
+            caption_center([1900.0, 0.0, 400.0, 10.0], (1920, 1080)).map(|c| c[0]),
+            Some(1.0)
+        );
     }
 
     #[test]

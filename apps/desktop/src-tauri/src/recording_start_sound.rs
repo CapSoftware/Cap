@@ -12,6 +12,14 @@ const CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(5);
 // done. Shared-mode WASAPI and PulseAudio devices commonly sit at 30-100ms, so
 // err towards the cue preceding capture rather than landing inside it.
 const FALLBACK_OUTPUT_LATENCY: Duration = Duration::from_millis(150);
+// An output that has not taken a single sample by now is stalled (a suspended
+// or unplugged sink): its cue is stopped so it can never play late into the
+// recording, and the recording starts instead of waiting out the timeout.
+const FALLBACK_STALL_TIMEOUT: Duration = Duration::from_millis(300);
+// Opening an output can block for seconds when the sound server is slow or
+// missing. A cue whose output is not open by the time recording starts is
+// skipped rather than waited for; the worker then never plays it.
+const OUTPUT_OPEN_TIMEOUT: Duration = Duration::from_millis(300);
 
 struct PlayCommand {
     gate: RecordingStartGate,
@@ -35,34 +43,55 @@ impl PlayCommand {
 /// Dropping it unused releases the device.
 pub struct StartCue {
     command: mpsc::Sender<PlayCommand>,
+    ready: tokio::sync::watch::Receiver<bool>,
 }
 
 impl StartCue {
     #[cfg(test)]
     fn stub() -> (Self, mpsc::Receiver<PlayCommand>) {
         let (command, rx) = mpsc::channel();
-        (Self { command }, rx)
+        let (_, ready) = tokio::sync::watch::channel(true);
+        (Self { command, ready }, rx)
+    }
+
+    #[cfg(test)]
+    fn still_opening() -> (
+        Self,
+        mpsc::Receiver<PlayCommand>,
+        tokio::sync::watch::Sender<bool>,
+    ) {
+        let (command, rx) = mpsc::channel();
+        let (opened, ready) = tokio::sync::watch::channel(false);
+        (Self { command, ready }, rx, opened)
     }
 }
 
 pub fn prime(bytes: &'static [u8]) -> StartCue {
     let (command, rx) = mpsc::channel();
+    let (opened, ready) = tokio::sync::watch::channel(false);
     if let Err(error) = std::thread::Builder::new()
         .name("recording-start-sound".into())
-        .spawn(move || worker(bytes, rx))
+        .spawn(move || worker(bytes, rx, opened))
     {
         tracing::warn!(%error, "Could not start recording sound worker");
     }
-    StartCue { command }
+    StartCue { command, ready }
 }
 
-fn worker(bytes: &'static [u8], rx: mpsc::Receiver<PlayCommand>) {
+fn worker(
+    bytes: &'static [u8],
+    rx: mpsc::Receiver<PlayCommand>,
+    opened: tokio::sync::watch::Sender<bool>,
+) {
     #[cfg(target_os = "macos")]
     match native::Output::prepare(bytes) {
-        Ok(output) => return output.run(rx),
+        Ok(output) => {
+            opened.send_replace(true);
+            return output.run(rx);
+        }
         Err(error) => tracing::warn!(%error, "Native start sound unavailable; using fallback"),
     }
-    fallback::run(bytes, rx);
+    fallback::run(bytes, rx, opened);
 }
 
 /// Plays the start cue and arms `gate` the instant its last sample has left the
@@ -74,6 +103,15 @@ pub async fn play(cue: StartCue, gate: RecordingStartGate) {
 
 async fn play_with_timeout(cue: StartCue, gate: RecordingStartGate, timeout: Duration) {
     let _arm_on_drop = ArmOnDrop(gate.clone());
+    let mut ready = cue.ready.clone();
+    if tokio::time::timeout(OUTPUT_OPEN_TIMEOUT, ready.wait_for(|ready| *ready))
+        .await
+        .is_err()
+    {
+        // Dropping `cue` closes the worker's queue, so a late open never plays.
+        tracing::warn!("Recording start sound output is still opening; starting without the cue");
+        return;
+    }
     let (done, done_rx) = tokio::sync::oneshot::channel();
     if cue.command.send(PlayCommand { gate, done }).is_err() {
         tracing::warn!("Recording start sound worker is not running");
@@ -95,10 +133,18 @@ impl Drop for ArmOnDrop {
     }
 }
 
+fn stalled(position: Duration, elapsed: Duration) -> bool {
+    position.is_zero() && elapsed >= FALLBACK_STALL_TIMEOUT
+}
+
 mod fallback {
     use super::*;
 
-    pub fn run(bytes: &'static [u8], rx: mpsc::Receiver<PlayCommand>) {
+    pub fn run(
+        bytes: &'static [u8],
+        rx: mpsc::Receiver<PlayCommand>,
+        opened: tokio::sync::watch::Sender<bool>,
+    ) {
         let output = OutputStream::try_default()
             .map_err(|error| error.to_string())
             .and_then(|(stream, handle)| {
@@ -106,9 +152,13 @@ mod fallback {
                 let source = Decoder::new(Cursor::new(bytes)).map_err(|error| error.to_string())?;
                 Ok((stream, sink, source))
             });
+        opened.send_replace(true);
         let Ok(command) = rx.recv() else {
             return;
         };
+        if command.cancelled() {
+            return;
+        }
         let (_stream, sink, source) = match output {
             Ok(output) => output,
             Err(error) => return command.finish(Err(error)),
@@ -120,6 +170,10 @@ mod fallback {
             if command.cancelled() {
                 sink.stop();
                 return;
+            }
+            if stalled(sink.get_pos(), started.elapsed()) {
+                sink.stop();
+                return command.finish(Err("the output device is not playing".to_string()));
             }
             std::thread::sleep(CANCEL_POLL_INTERVAL);
         }
@@ -326,6 +380,45 @@ mod tests {
         assert!(playback.await.unwrap_err().is_cancelled());
         assert!(gate.is_armed());
         assert!(command.cancelled());
+    }
+
+    #[tokio::test]
+    async fn an_output_still_opening_starts_the_recording_without_the_cue() {
+        let (cue, rx, _opened) = StartCue::still_opening();
+        let gate = RecordingStartGate::new();
+        let started = std::time::Instant::now();
+        play(cue, gate.clone()).await;
+        assert!(gate.is_armed());
+        assert!(started.elapsed() < PLAYBACK_TIMEOUT);
+        // Nothing was queued, and the worker's queue is closed: it never plays.
+        assert!(rx.recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn an_output_that_opens_in_time_still_plays_the_cue() {
+        let (cue, rx, opened) = StartCue::still_opening();
+        let gate = RecordingStartGate::new();
+        let playback = tokio::spawn(play(cue, gate.clone()));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        opened.send_replace(true);
+        let command = tokio::task::spawn_blocking(move || rx.recv().unwrap())
+            .await
+            .unwrap();
+        command.finish(Ok(()));
+        playback.await.unwrap();
+        assert!(gate.is_armed());
+    }
+
+    #[test]
+    fn a_stalled_output_is_given_up_on_long_before_the_timeout() {
+        assert!(!stalled(Duration::ZERO, Duration::from_millis(100)));
+        assert!(stalled(Duration::ZERO, FALLBACK_STALL_TIMEOUT));
+        // Any progress at all means the device is playing; the timeout covers it.
+        assert!(!stalled(
+            Duration::from_millis(5),
+            Duration::from_millis(900)
+        ));
+        assert!(FALLBACK_STALL_TIMEOUT < PLAYBACK_TIMEOUT);
     }
 
     #[tokio::test]

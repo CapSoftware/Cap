@@ -63,9 +63,9 @@ impl BlurMode {
     pub fn label(self) -> Option<&'static str> {
         match self {
             Self::Off => None,
-            Self::Light => Some("Light"),
-            Self::Heavy => Some("Heavy"),
-            Self::Remove => Some("Cutout"),
+            Self::Light => Some(tr::camera::blur::light()),
+            Self::Heavy => Some(tr::camera::blur::heavy()),
+            Self::Remove => Some(tr::camera::blur::cutout()),
         }
     }
 }
@@ -148,6 +148,8 @@ pub struct ExportPrefs {
     pub advanced_open: bool,
     #[serde(default)]
     pub organization_id: Option<String>,
+    #[serde(default)]
+    pub turbo: bool,
 }
 
 /// `so.cap.desktop`'s app-data dir -- where both stores live.
@@ -768,9 +770,9 @@ settings_enum! {
 settings_enum! {
     /// `StudioRecordingQuality`, whose Rust default is `balanced`.
     StudioQuality {
-        Compatibility = "compatibility", "Compatibility";
-        Balanced = "balanced", "Balanced";
-        Ultra = "ultra", "Ultra";
+        Compatibility = "compatibility", tr::settings::options::studio_quality::compatibility();
+        Balanced = "balanced", tr::settings::options::studio_quality::balanced();
+        Ultra = "ultra", tr::settings::options::studio_quality::ultra();
     }
     default = Balanced
 }
@@ -789,18 +791,29 @@ settings_enum! {
     /// `MainWindowRecordingStartBehaviour`. British spelling in both the JSON
     /// and the label, as shipped.
     MainWindowStartBehaviour {
-        Close = "close", "Close";
-        Minimise = "minimise", "Minimise";
+        Close = "close", tr::settings::options::main_window_start::close();
+        Minimise = "minimise", tr::settings::options::main_window_start::minimise();
     }
     default = Close
 }
 
 settings_enum! {
+    /// How a window recording captures the picked window: the region of the
+    /// screen it covers, or (Focused) the window by itself, centred by the
+    /// picker and followed if it moves.
+    WindowCaptureStyle {
+        ScreenRegion = "screenRegion", tr::settings::options::window_capture::screen_region();
+        FocusedWindow = "focusedWindow", tr::settings::options::window_capture::focused_window();
+    }
+    default = ScreenRegion
+}
+
+settings_enum! {
     /// `PostStudioRecordingBehaviour`.
     PostStudioBehaviour {
-        OpenEditor = "openEditor", "Open editor";
-        ShowOverlay = "showOverlay", "Show Cap";
-        DoNothing = "doNothing", "Do nothing";
+        OpenEditor = "openEditor", tr::settings::options::post_studio::open_editor();
+        ShowOverlay = "showOverlay", tr::settings::options::post_studio::show_cap();
+        DoNothing = "doNothing", tr::settings::options::post_studio::do_nothing();
     }
     default = OpenEditor
 }
@@ -809,10 +822,10 @@ settings_enum! {
     /// What a finished screenshot does next. GPUI-only: the Tauri app always
     /// opened the editor and never reads this key.
     PostScreenshotBehaviour {
-        OpenEditor = "openEditor", "Open editor";
-        Copy = "copy", "Copy to clipboard";
-        CopyAndOpenEditor = "copyAndOpenEditor", "Copy and open editor";
-        Save = "save", "Do nothing";
+        OpenEditor = "openEditor", tr::settings::options::post_screenshot::open_editor();
+        Copy = "copy", tr::settings::options::post_screenshot::copy();
+        CopyAndOpenEditor = "copyAndOpenEditor", tr::settings::options::post_screenshot::copy_and_open_editor();
+        Save = "save", tr::settings::options::post_screenshot::do_nothing();
     }
     default = OpenEditor
 }
@@ -830,8 +843,8 @@ impl PostScreenshotBehaviour {
 settings_enum! {
     /// `PostDeletionBehaviour`.
     PostDeletionBehaviour {
-        DoNothing = "doNothing", "Do nothing";
-        ReopenRecordingWindow = "reopenRecordingWindow", "Reopen recording window";
+        DoNothing = "doNothing", tr::settings::options::post_deletion::do_nothing();
+        ReopenRecordingWindow = "reopenRecordingWindow", tr::settings::options::post_deletion::reopen();
     }
     default = DoNothing
 }
@@ -846,10 +859,19 @@ settings_enum! {
 }
 
 settings_enum! {
+    UpdateDownloadPolicy {
+        Manual = "manual", "Manual";
+        Auto = "auto", "Auto";
+        Never = "never", "Never";
+    }
+    default = Manual
+}
+
+settings_enum! {
     EditorPreviewQuality {
-        Quarter = "quarter", "Quarter";
-        Half = "half", "Half";
-        Full = "full", "Full";
+        Quarter = "quarter", tr::settings::options::preview_quality::quarter();
+        Half = "half", tr::settings::options::preview_quality::half();
+        Full = "full", tr::settings::options::preview_quality::full();
     }
     default = Half
 }
@@ -1008,9 +1030,16 @@ pub struct GeneralSettings {
     pub enable_notifications: bool,
     pub instant_mode_max_resolution: u32,
     pub disable_auto_open_links: bool,
+    /// GPUI-only `showMainWindowAfterInstantRecording`: whether the main
+    /// window comes back after an Instant recording whose link did not open.
+    /// Kept as stored, absent included, so every reader resolves it the same
+    /// way in [`Self::post_instant_behaviour`].
+    pub show_main_window_after_instant: Option<bool>,
     pub studio_recording_quality: StudioQuality,
     pub recording_countdown: Option<u32>,
     pub main_window_recording_start_behaviour: MainWindowStartBehaviour,
+    pub window_capture_style: WindowCaptureStyle,
+    pub focus_center: bool,
     pub post_studio_recording_behaviour: PostStudioBehaviour,
     pub post_screenshot_behaviour: PostScreenshotBehaviour,
     pub post_deletion_behaviour: PostDeletionBehaviour,
@@ -1031,6 +1060,7 @@ pub struct GeneralSettings {
     pub default_project_name_template: Option<String>,
     pub excluded_windows: Vec<WindowExclusion>,
     pub update_channel: UpdateChannel,
+    pub update_download_policy: UpdateDownloadPolicy,
     pub server_url: String,
     pub enable_telemetry: bool,
     pub editor_preview_quality: EditorPreviewQuality,
@@ -1049,9 +1079,67 @@ pub struct GeneralSettings {
     pub studio_sound_by_default: bool,
 }
 
+pub const SHOW_MAIN_WINDOW_AFTER_INSTANT_KEY: &str = "showMainWindowAfterInstantRecording";
+
+/// What follows a cleanly stopped Instant recording, the link always copied.
+/// Not one key: `disableAutoOpenLinks` (shared with the Tauri app) decides
+/// whether the link opens, `showMainWindowAfterInstantRecording` whether the
+/// main window comes back when it does not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PostInstantBehaviour {
+    OpenLink,
+    ShowCap,
+    CopyLink,
+}
+
+impl PostInstantBehaviour {
+    /// `(disableAutoOpenLinks, showMainWindowAfterInstantRecording)`.
+    pub fn store_values(self) -> (bool, bool) {
+        match self {
+            Self::OpenLink => (false, false),
+            Self::ShowCap => (true, true),
+            Self::CopyLink => (true, false),
+        }
+    }
+}
+
 /// The section names, so the write calls read as the store keys they are.
 pub const GENERAL_SETTINGS: &str = "general_settings";
 pub const RECORDING_START_SAFETY: &str = "recording_start_safety";
+
+/// Changes the recordings folder and remembers the old one, like Tauri's
+/// `remember_previous_recordings_path`, so the library keeps listing projects
+/// left in earlier folders.
+pub fn set_recordings_path(path: Option<&str>) -> bool {
+    const MAX_PREVIOUS_PATHS: usize = 20;
+
+    update_store_section(GENERAL_SETTINGS, |settings| {
+        let mut previous_paths = strings_at(settings, "previousRecordingsPaths");
+        if let Some(path) = path {
+            previous_paths.retain(|previous| previous != path);
+        }
+        if let Some(previous) = opt_string_at(settings, "recordingsPath")
+            && Some(previous.as_str()) != path
+            && !previous_paths.contains(&previous)
+        {
+            previous_paths.push(previous);
+            let len = previous_paths.len();
+            if len > MAX_PREVIOUS_PATHS {
+                previous_paths.drain(..len - MAX_PREVIOUS_PATHS);
+            }
+        }
+        settings.insert(
+            "recordingsPath".into(),
+            path.map_or(Value::Null, Value::from),
+        );
+        settings.insert(
+            "previousRecordingsPaths".into(),
+            Value::from(previous_paths),
+        );
+        true
+    })
+}
+
 /// `audioEnhancementStore` (`apps/desktop/src/store.ts`): whether new Studio
 /// recordings start with Studio Sound on. Defaults on; the editor's Audio tab
 /// and the Recording settings card both write it.
@@ -1097,7 +1185,7 @@ pub fn set_studio_sound_defaults(enabled: bool, isolation: cap_project::VoiceIso
     set_store_value(AUDIO_ENHANCEMENT, Value::Object(section))
 }
 /// `RecordingSettingsStore::KEY` (`src-tauri/src/recording_settings.rs:37`) --
-/// the section the tray's Select Mode submenu reads and writes.
+/// the section the tray's mode picker reads and writes.
 pub const RECORDING_SETTINGS: &str = "recording_settings";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -1316,6 +1404,18 @@ impl Default for GeneralSettings {
 }
 
 impl GeneralSettings {
+    pub fn post_instant_behaviour(&self) -> PostInstantBehaviour {
+        if !self.disable_auto_open_links {
+            PostInstantBehaviour::OpenLink
+        } else if self.show_main_window_after_instant.unwrap_or(true) {
+            // Absent: "copy link only" brought the main window back before
+            // the key existed, so a store that never set it keeps doing that.
+            PostInstantBehaviour::ShowCap
+        } else {
+            PostInstantBehaviour::CopyLink
+        }
+    }
+
     pub fn load() -> Self {
         let store = cached_store(&tauri_store_path()).unwrap_or_default();
         let empty = Map::new();
@@ -1339,12 +1439,17 @@ impl GeneralSettings {
             enable_notifications: bool_at(general, "enableNotifications", true),
             instant_mode_max_resolution: u32_at(general, "instantModeMaxResolution", 1920),
             disable_auto_open_links: bool_at(general, "disableAutoOpenLinks", false),
+            show_main_window_after_instant: general
+                .get(SHOW_MAIN_WINDOW_AFTER_INSTANT_KEY)
+                .and_then(Value::as_bool),
             studio_recording_quality: enum_at(general, "studioRecordingQuality"),
             recording_countdown: opt_u32_at(general, "recordingCountdown"),
             main_window_recording_start_behaviour: enum_at(
                 general,
                 "mainWindowRecordingStartBehaviour",
             ),
+            window_capture_style: enum_at(general, "windowCaptureStyle"),
+            focus_center: bool_at(general, "focusCenter", false),
             post_studio_recording_behaviour: enum_at(general, "postStudioRecordingBehaviour"),
             post_screenshot_behaviour: enum_at(general, "postScreenshotBehaviour"),
             post_deletion_behaviour: enum_at(general, "postDeletionBehaviour"),
@@ -1381,6 +1486,7 @@ impl GeneralSettings {
                 })
                 .unwrap_or_else(default_excluded_windows),
             update_channel: enum_at(general, "updateChannel"),
+            update_download_policy: enum_at(general, "updateDownloadPolicy"),
             server_url: string_at(general, "serverUrl", DEFAULT_SERVER_URL),
             enable_telemetry: bool_at(general, "enableTelemetry", true),
             editor_preview_quality: enum_at(general, "editorPreviewQuality"),
@@ -2380,6 +2486,127 @@ mod tests {
     }
 
     #[test]
+    fn recordings_folder_changes_remember_previous_locations() {
+        let store = TempStore::new(
+            "recordings-folder-history",
+            Some(
+                r#"{"general_settings":{"recordingsPath":"old","previousRecordingsPaths":["older","new"],"maxFps":30,"future":true},"auth":{"user_id":"keep"}}"#,
+            ),
+        );
+
+        assert!(set_recordings_path(Some("new")));
+        let reloaded = store_section(GENERAL_SETTINGS);
+        assert_eq!(reloaded["recordingsPath"], "new");
+        assert_eq!(
+            strings_at(&reloaded, "previousRecordingsPaths"),
+            ["older", "old"]
+        );
+
+        assert!(set_recordings_path(Some("new")));
+        assert_eq!(store_section(GENERAL_SETTINGS), reloaded);
+
+        assert!(set_recordings_path(None));
+        let reloaded = store_section(GENERAL_SETTINGS);
+        assert_eq!(reloaded["recordingsPath"], Value::Null);
+        assert_eq!(
+            strings_at(&reloaded, "previousRecordingsPaths"),
+            ["older", "old", "new"]
+        );
+
+        assert!(set_recordings_path(Some("old")));
+        let reloaded = store_section(GENERAL_SETTINGS);
+        assert_eq!(reloaded["recordingsPath"], "old");
+        assert_eq!(
+            strings_at(&reloaded, "previousRecordingsPaths"),
+            ["older", "new"]
+        );
+        assert_eq!(reloaded["maxFps"], 30);
+        assert_eq!(store.read()[GENERAL_SETTINGS]["future"], true);
+        assert_eq!(store.read()["auth"]["user_id"], "keep");
+    }
+
+    #[test]
+    fn recordings_folder_changes_limit_history_without_duplicates() {
+        let _store = TempStore::new("recordings-folder-history-limit", None);
+        for index in 0..25 {
+            assert!(set_recordings_path(Some(&format!("folder-{index}"))));
+        }
+        let expected = (4..24)
+            .map(|index| format!("folder-{index}"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            strings_at(&store_section(GENERAL_SETTINGS), "previousRecordingsPaths"),
+            expected
+        );
+
+        assert!(set_recordings_path(Some("folder-23")));
+        assert!(set_recordings_path(Some("folder-24")));
+        assert_eq!(
+            strings_at(&store_section(GENERAL_SETTINGS), "previousRecordingsPaths"),
+            expected
+        );
+    }
+
+    #[test]
+    fn recordings_folder_changes_merge_concurrent_updates() {
+        let store = TempStore::new(
+            "recordings-folder-concurrent",
+            Some(r#"{"general_settings":{"recordingsPath":"original","maxFps":30}}"#),
+        );
+        let barrier = Arc::new(std::sync::Barrier::new(8));
+        let workers = (0..8)
+            .map(|index| {
+                let path = store.path.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    set_test_tauri_store_path(Some(path));
+                    barrier.wait();
+                    let saved = set_recordings_path(Some(&format!("folder-{index}")));
+                    set_test_tauri_store_path(None);
+                    saved
+                })
+            })
+            .collect::<Vec<_>>();
+        for worker in workers {
+            assert!(worker.join().unwrap());
+        }
+        let reloaded = store_section(GENERAL_SETTINGS);
+        let mut paths = strings_at(&reloaded, "previousRecordingsPaths");
+        assert_eq!(paths.remove(0), "original");
+        paths.push(opt_string_at(&reloaded, "recordingsPath").unwrap());
+        paths.sort();
+        assert_eq!(
+            paths,
+            (0..8)
+                .map(|index| format!("folder-{index}"))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(reloaded["maxFps"], 30);
+    }
+
+    #[test]
+    fn recordings_folder_changes_preserve_preferences_when_saving_fails() {
+        let contents = r#"{"general_settings":{"recordingsPath":"old","maxFps":30}}"#;
+        let store = TempStore::new("recordings-folder-write-failure", Some(contents));
+        let staged = store.path.with_extension("gpui-tmp");
+        std::fs::create_dir(&staged).unwrap();
+        let saved = set_recordings_path(Some("new"));
+        std::fs::remove_dir(staged).unwrap();
+
+        assert!(!saved);
+        assert_eq!(std::fs::read_to_string(&store.path).unwrap(), contents);
+        assert_eq!(store_section(GENERAL_SETTINGS)["recordingsPath"], "old");
+    }
+
+    #[test]
+    fn recordings_folder_changes_preserve_unreadable_stores() {
+        let store = TempStore::new("recordings-folder-corrupt", Some("not JSON"));
+        assert!(!set_recordings_path(Some("new")));
+        assert!(!set_recordings_path(None));
+        assert_eq!(std::fs::read_to_string(&store.path).unwrap(), "not JSON");
+    }
+
+    #[test]
     fn notification_sounds_follow_tauri_settings_without_writing() {
         for (contents, enabled) in [
             (None, false),
@@ -3191,5 +3418,60 @@ mod tests {
         general.insert("excludedWindows".to_string(), Value::Array(Vec::new()));
         let cleared = GeneralSettings::from_sections(&general, &Map::new(), &Map::new());
         assert!(cleared.excluded_windows.is_empty());
+    }
+
+    /// A store written before `showMainWindowAfterInstantRecording` keeps
+    /// what it did: "copy link only" brought the main window back, so it reads
+    /// as Show Cap; every outcome round-trips through its two keys.
+    #[test]
+    fn post_instant_behaviour_reads_old_stores_and_round_trips() {
+        let settings = |pairs: &[(&str, bool)]| {
+            let general = pairs
+                .iter()
+                .map(|(key, value)| (key.to_string(), Value::Bool(*value)))
+                .collect::<Map<_, _>>();
+            GeneralSettings::from_sections(&general, &Map::new(), &Map::new())
+                .post_instant_behaviour()
+        };
+        assert_eq!(settings(&[]), PostInstantBehaviour::OpenLink);
+        assert_eq!(
+            settings(&[("disableAutoOpenLinks", false)]),
+            PostInstantBehaviour::OpenLink
+        );
+        assert_eq!(
+            settings(&[("disableAutoOpenLinks", true)]),
+            PostInstantBehaviour::ShowCap
+        );
+        assert_eq!(
+            settings(&[
+                ("disableAutoOpenLinks", false),
+                (SHOW_MAIN_WINDOW_AFTER_INSTANT_KEY, true)
+            ]),
+            PostInstantBehaviour::OpenLink
+        );
+        // The Quality page's auto-open toggle writes only
+        // `disableAutoOpenLinks`; the open window and a reload must agree.
+        let toggled = GeneralSettings {
+            disable_auto_open_links: true,
+            ..GeneralSettings::default()
+        };
+        assert_eq!(
+            toggled.post_instant_behaviour(),
+            settings(&[("disableAutoOpenLinks", true)])
+        );
+        for behaviour in [
+            PostInstantBehaviour::OpenLink,
+            PostInstantBehaviour::ShowCap,
+            PostInstantBehaviour::CopyLink,
+        ] {
+            let (disable_open, show_main) = behaviour.store_values();
+            assert_eq!(
+                settings(&[
+                    ("disableAutoOpenLinks", disable_open),
+                    (SHOW_MAIN_WINDOW_AFTER_INSTANT_KEY, show_main),
+                ]),
+                behaviour
+            );
+        }
     }
 }

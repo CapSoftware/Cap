@@ -61,29 +61,57 @@ pub fn load_music_tracks(
             .or_insert((trim_start, trim_end));
     }
 
+    let mut missing = Vec::new();
     for (path, (source_start, source_end)) in ranges {
         if let Some(data) = cache.get(path)
             && data.covers_source_range(source_start, source_end)
         {
             result.insert(path.to_string(), Arc::clone(data));
-            continue;
+        } else {
+            missing.push((path, source_start, source_end));
         }
+    }
 
-        let resolved = resolve_music_path(project_path, path);
-        match AudioData::from_file_range(&resolved, source_start, source_end) {
-            Ok(data) => {
-                let data = Arc::new(data);
-                cache.insert(path.to_string(), Arc::clone(&data));
-                result.insert(path.to_string(), data);
+    let decode = |ranges: &[(&str, usize, usize)]| {
+        ranges
+            .iter()
+            .filter_map(|&(path, source_start, source_end)| {
+                let resolved = resolve_music_path(project_path, path);
+                match AudioData::from_file_range(&resolved, source_start, source_end) {
+                    Ok(data) => Some((path.to_string(), Arc::new(data))),
+                    Err(error) => {
+                        warn!(
+                            path = %resolved.display(),
+                            error,
+                            "Failed to load timeline audio track; skipping"
+                        );
+                        None
+                    }
+                }
+            })
+            .collect::<Vec<_>>()
+    };
+    let decoded = if missing.len() < 2 {
+        decode(&missing)
+    } else {
+        std::thread::scope(|scope| {
+            let (left, right) = missing.split_at(missing.len().div_ceil(2));
+            match std::thread::Builder::new().spawn_scoped(scope, || decode(left)) {
+                Ok(worker) => {
+                    let mut decoded = decode(right);
+                    match worker.join() {
+                        Ok(other) => decoded.extend(other),
+                        Err(panic) => std::panic::resume_unwind(panic),
+                    }
+                    decoded
+                }
+                Err(_) => decode(&missing),
             }
-            Err(error) => {
-                warn!(
-                    path = %resolved.display(),
-                    error,
-                    "Failed to load timeline audio track; skipping"
-                );
-            }
-        }
+        })
+    };
+    for (path, data) in decoded {
+        cache.insert(path.clone(), Arc::clone(&data));
+        result.insert(path, data);
     }
 
     result

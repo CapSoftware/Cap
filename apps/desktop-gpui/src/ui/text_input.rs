@@ -2720,6 +2720,58 @@ mod tests {
         }
     }
 
+    struct PasteProbe {
+        state: Entity<TextInputState>,
+    }
+
+    impl Render for PasteProbe {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().child(TextInput::settings(
+                &Theme::light(),
+                "paste-probe",
+                &self.state,
+            ))
+        }
+    }
+
+    /// A 0.6.1 report from Linux: pasting into Cap's text fields did nothing.
+    /// The fields bound only `cmd-v`, which the fork reads as Super off macOS.
+    /// This presses the platform's paste chord through the real key dispatch,
+    /// and copies back out with the copy chord.
+    #[gpui::test]
+    fn the_platform_paste_and_copy_chords_reach_a_focused_field(cx: &mut gpui::TestAppContext) {
+        cx.update(bind_keys);
+        let (probe, cx) = cx.add_window_view(|window, cx| PasteProbe {
+            state: cx.new(|cx| TextInputState::single_line(window, cx)),
+        });
+        let state = probe.read_with(cx, |probe, _| probe.state.clone());
+        cx.update(|window, cx| {
+            let focus = state.read(cx).focus_handle();
+            window.focus(&focus, cx);
+            cx.write_to_clipboard(ClipboardItem::new_string(
+                "pasted from the clipboard".into(),
+            ));
+        });
+        cx.run_until_parked();
+        let (paste, select_all, copy) = if cfg!(target_os = "macos") {
+            ("cmd-v", "cmd-a", "cmd-c")
+        } else {
+            ("ctrl-v", "ctrl-a", "ctrl-c")
+        };
+        cx.simulate_keystrokes(paste);
+        assert_eq!(
+            state.read_with(cx, |state, _| state.text().to_string()),
+            "pasted from the clipboard"
+        );
+
+        cx.update(|_, cx| cx.write_to_clipboard(ClipboardItem::new_string(String::new())));
+        cx.simulate_keystrokes(&format!("{select_all} {copy}"));
+        assert_eq!(
+            cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text())),
+            Some("pasted from the clipboard".to_string())
+        );
+    }
+
     // -- Word navigation ------------------------------------------------------
 
     /// `alt-left` skips the run of separators first, then the word, which is

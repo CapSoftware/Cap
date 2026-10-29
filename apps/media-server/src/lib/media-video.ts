@@ -621,8 +621,13 @@ function buildDashSegments(
 	if (timeline) {
 		const timelineSegments = getXmlElementBlocks(timeline.content, "S");
 		let currentTime = 0;
+		let number = startNumber;
 
 		for (const [index, segment] of timelineSegments.entries()) {
+			if (parseNumber(segment.attributes.d) === 0) {
+				number++;
+				continue;
+			}
 			const duration = parsePositiveNumber(segment.attributes.d);
 			if (!duration) {
 				throw new Error("DASH SegmentTimeline entry is missing duration");
@@ -647,10 +652,9 @@ function buildDashSegments(
 
 			for (let offset = 0; offset < count; offset++) {
 				const time = currentTime + duration * offset;
-				const number = startNumber + segments.length;
 				const resource = substituteDashTemplate(media, {
 					bandwidth,
-					number,
+					number: number++,
 					representationId,
 					time,
 				});
