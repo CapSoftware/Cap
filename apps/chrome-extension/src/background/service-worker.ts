@@ -820,6 +820,7 @@ const broadcastOverlayHide = async () => {
 const broadcastOverlayCountdown = async (
 	seconds: number,
 	durationMs: number,
+	recordedTabId?: number,
 ) => {
 	const tabs = await getTabs();
 	await Promise.all(
@@ -827,6 +828,9 @@ const broadcastOverlayCountdown = async (
 			if (!canInjectIntoTab(tab) || tab.id === undefined) {
 				return undefined;
 			}
+			// The recorded tab may still be lazy-loading its overlay when the
+			// countdown starts, so it gets the injecting, retrying send that keeps
+			// the count visible there.
 			return sendOverlay(
 				tab.id,
 				{
@@ -834,7 +838,7 @@ const broadcastOverlayCountdown = async (
 					seconds,
 					durationMs,
 				},
-				false,
+				tab.id === recordedTabId,
 			).catch(() => undefined);
 		}),
 	);
@@ -1772,7 +1776,11 @@ const handleRequest = async (
 	}
 
 	if (message.type === "show-countdown") {
-		await broadcastOverlayCountdown(message.seconds, message.durationMs);
+		await broadcastOverlayCountdown(
+			message.seconds,
+			message.durationMs,
+			message.tabId,
+		);
 		return { ok: true };
 	}
 
