@@ -21,6 +21,7 @@ import {
 	UPLOAD_TIMEOUT_MS,
 	withTimeout,
 } from "./media-common";
+import { MediaDownloads } from "./media-downloads";
 import { probeVideoFile } from "./media-probe";
 import { fetchMedia, materializeMedia } from "./media-transfer";
 import {
@@ -52,6 +53,7 @@ import {
 	getTempDir,
 	type TempFileHandle,
 } from "./temp-files";
+import { fetchAllowed } from "./url-policy";
 
 const PROCESS_TIMEOUT_PER_SECOND_MS = 20_000;
 const MAX_PROCESS_TIMEOUT_MS = 2 * 60 * 60 * 1000;
@@ -303,29 +305,26 @@ export async function materializeHlsPlaylist(
 	dirPath: string,
 	cache = new Map<string, string>(),
 	abortSignal?: AbortSignal,
+	downloads?: MediaDownloads,
 ): Promise<string> {
+	if (!downloads)
+		return new MediaDownloads(abortSignal).run((group) =>
+			materializeHlsPlaylist(playlistUrl, dirPath, cache, group.signal, group),
+		);
+	abortSignal = downloads.signal;
 	const cached = cache.get(playlistUrl);
 	if (cached) return cached;
 
-	const response = await fetch(playlistUrl, {
-		signal: getFetchSignal(DOWNLOAD_TIMEOUT_MS, abortSignal),
-	});
-
-	if (!response.ok) {
-		throw new Error(
-			`Failed to fetch HLS playlist: ${response.status} ${response.statusText}`,
-		);
-	}
-
-	const content = await response.text();
-	const parsedUrl = new URL(playlistUrl);
+	const manifest = await downloads.text(playlistUrl, "HLS playlist");
+	const content = manifest.content;
+	const parsedUrl = new URL(manifest.url);
 	const baseUrl = new URL(".", parsedUrl).toString();
 	const query = parsedUrl.search;
 	const filePath = join(dirPath, `${randomUUID()}.m3u8`);
 
 	cache.set(playlistUrl, filePath);
 
-	const lines = await Promise.all(
+	const lines = await downloads.all(
 		content.split("\n").map(async (line) => {
 			const trimmed = line.trim();
 
@@ -333,9 +332,16 @@ export async function materializeHlsPlaylist(
 
 			if (!trimmed.startsWith("#")) {
 				const resolved = resolveResourceUrl(trimmed, baseUrl, query);
-				return isHlsUrl(resolved)
-					? await materializeHlsPlaylist(resolved, dirPath, cache, abortSignal)
-					: resolved;
+				if (isHlsUrl(resolved)) {
+					return await materializeHlsPlaylist(
+						resolved,
+						dirPath,
+						cache,
+						abortSignal,
+						downloads,
+					);
+				}
+				return await downloads.download(resolved, dirPath);
 			}
 
 			if (!line.includes('URI="')) return line;
@@ -349,8 +355,14 @@ export async function materializeHlsPlaylist(
 
 				const resolved = resolveResourceUrl(original, baseUrl, query);
 				const replacement = isHlsUrl(resolved)
-					? await materializeHlsPlaylist(resolved, dirPath, cache, abortSignal)
-					: resolved;
+					? await materializeHlsPlaylist(
+							resolved,
+							dirPath,
+							cache,
+							abortSignal,
+							downloads,
+						)
+					: await downloads.download(resolved, dirPath);
 
 				rewritten = rewritten.replace(
 					`URI="${original}"`,
@@ -366,51 +378,212 @@ export async function materializeHlsPlaylist(
 	return filePath;
 }
 
-export async function materializeMpdManifest(
-	manifestUrl: string,
-	dirPath: string,
-	abortSignal?: AbortSignal,
-): Promise<string> {
-	const response = await fetch(manifestUrl, {
-		signal: getFetchSignal(DOWNLOAD_TIMEOUT_MS, abortSignal),
-	});
+interface DashBaseFrame {
+	inherited: string;
+	effective: string;
+	hasBaseUrl: boolean;
+	alternatives?: DashAlternative[];
+}
 
-	if (!response.ok) {
-		throw new Error(
-			`Failed to fetch DASH manifest: ${response.status} ${response.statusText}`,
-		);
+function currentDashBase(frames: DashBaseFrame[], fallback: string): string {
+	return frames[frames.length - 1]?.effective ?? fallback;
+}
+
+function rememberDashResource(
+	resource: string,
+	base: string,
+	query: string,
+	urls: string[],
+): string {
+	const resolved = resolveResourceUrl(resource, base, query);
+	if (resolved.includes("$")) {
+		throw new Error("DASH template URL cannot be fetched locally");
 	}
+	if (!new URL(resolved).pathname.endsWith("/")) urls.push(resolved);
+	return resolved;
+}
 
-	const content = await response.text();
-	const parsedUrl = new URL(manifestUrl);
-	const baseUrl = new URL(".", parsedUrl).toString();
-	const query = parsedUrl.search;
-	const filePath = join(dirPath, `${randomUUID()}.mpd`);
-	const rewrittenElements = content.replace(
-		/<(BaseURL|Location)(\b[^>]*)>([\s\S]*?)<\/\1>/gi,
-		(_, tag: string, attributes: string, resource: string) => {
-			const resolved = resolveResourceUrl(
-				decodeXmlAttribute(resource.trim()),
-				baseUrl,
-				query,
-			);
-			return `<${tag}${attributes}>${escapeXmlAttribute(resolved)}</${tag}>`;
-		},
-	);
-
-	const rewritten = rewrittenElements.replace(
-		/(initialization|media|sourceURL|xlink:href|href)="([^"]+)"/gi,
-		(_, attribute: string, resource: string) => {
-			const resolved = resolveResourceUrl(
+function rewriteDashAttributes(
+	attributes: string,
+	base: string,
+	query: string,
+	urls: string[],
+): string {
+	return attributes.replace(
+		/([\w:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g,
+		(
+			original: string,
+			attribute: string,
+			doubleQuoted: string | undefined,
+			singleQuoted: string | undefined,
+		) => {
+			if (
+				![
+					"initialization",
+					"media",
+					"sourceurl",
+					"xlink:href",
+					"href",
+				].includes(attribute.toLowerCase())
+			)
+				return original;
+			const resource = doubleQuoted ?? singleQuoted ?? "";
+			if (!resource) return `${attribute}=""`;
+			const resolved = rememberDashResource(
 				decodeXmlAttribute(resource),
-				baseUrl,
+				base,
 				query,
+				urls,
 			);
 			return `${attribute}="${escapeXmlAttribute(resolved)}"`;
 		},
 	);
+}
 
-	await writeFile(filePath, rewritten);
+interface DashAlternative {
+	url: string;
+	element: string;
+}
+
+function rewriteDashManifest(
+	content: string,
+	manifestBase: string,
+	query: string,
+): { urls: string[]; alternatives: DashAlternative[][]; xml: string } {
+	const urls: string[] = [];
+	const alternatives: DashAlternative[][] = [];
+	const frames: DashBaseFrame[] = [
+		{ inherited: manifestBase, effective: manifestBase, hasBaseUrl: false },
+	];
+	const pattern =
+		/<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|<(BaseURL|Location)\b([^>]*)>([\s\S]*?)<\/\1>|<\/([A-Za-z0-9:_-]+)\s*>|<([A-Za-z0-9:_-]+)\b([^>]*?)(\/)?\s*>/gi;
+	let xml = "";
+	let cursor = 0;
+
+	for (const match of content.matchAll(pattern)) {
+		const index = match.index ?? 0;
+		xml += content.slice(cursor, index);
+		cursor = index + match[0].length;
+		if (match[0].startsWith("<!--") || match[0].startsWith("<![")) {
+			xml += match[0];
+			continue;
+		}
+
+		const baseElement = match[1];
+		if (baseElement) {
+			// MPD@Location points at a refreshed manifest, not at media. The
+			// materialized copy is static, so drop it instead of fetching it or
+			// letting it change how segments resolve.
+			if (baseElement.toLowerCase() === "location") continue;
+
+			const frame = frames[frames.length - 1] ?? {
+				inherited: manifestBase,
+				effective: manifestBase,
+				hasBaseUrl: false,
+			};
+			// Sibling BaseURLs are alternatives, so each one resolves against the
+			// enclosing element's base rather than against the previous sibling.
+			const resolved = resolveResourceUrl(
+				decodeXmlAttribute((match[3] ?? "").trim()),
+				frame.inherited,
+				query,
+			);
+			const directory = new URL(resolved).pathname.endsWith("/");
+			const primary = !frame.hasBaseUrl;
+			if (primary) {
+				frame.hasBaseUrl = true;
+				frame.effective = directory
+					? new URL(".", resolved).toString()
+					: resolved;
+			}
+			if (directory) continue;
+			if (resolved.includes("$")) {
+				throw new Error("DASH template URL cannot be fetched locally");
+			}
+			const element = `<${baseElement}${rewriteDashAttributes(match[2] ?? "", frame.effective, query, urls)}>${escapeXmlAttribute(resolved)}</${baseElement}>`;
+			if (!frame.alternatives) {
+				frame.alternatives = [];
+				alternatives.push(frame.alternatives);
+			}
+			frame.alternatives.push({ url: resolved, element });
+			xml += element;
+			continue;
+		}
+
+		if (match[4]) {
+			if (frames.length > 1) frames.pop();
+			xml += match[0];
+			continue;
+		}
+
+		const base = currentDashBase(frames, manifestBase);
+		const attributes = rewriteDashAttributes(match[6] ?? "", base, query, urls);
+		const selfClosing = Boolean(match[7]);
+		xml += `<${match[5]}${attributes}${selfClosing ? " />" : ">"}`;
+		if (!selfClosing) {
+			frames.push({ inherited: base, effective: base, hasBaseUrl: false });
+		}
+	}
+
+	return { urls, alternatives, xml: xml + content.slice(cursor) };
+}
+
+export async function materializeMpdManifest(
+	manifestUrl: string,
+	dirPath: string,
+	abortSignal?: AbortSignal,
+	downloads?: MediaDownloads,
+): Promise<string> {
+	if (!downloads)
+		return new MediaDownloads(abortSignal).run((group) =>
+			materializeMpdManifest(manifestUrl, dirPath, group.signal, group),
+		);
+	const manifest = await downloads.text(manifestUrl, "DASH manifest");
+	const content = manifest.content;
+	const parsedUrl = new URL(manifest.url);
+	const filePath = join(dirPath, `${randomUUID()}.mpd`);
+	const {
+		urls: resolvedUrls,
+		alternatives,
+		xml: rewritten,
+	} = rewriteDashManifest(
+		content,
+		new URL(".", parsedUrl).toString(),
+		parsedUrl.search,
+	);
+	const localByUrl = new Map<string, string>();
+	const failedElements = new Set<string>();
+	await downloads.all([
+		...[...new Set(resolvedUrls)].map(async (url) => {
+			localByUrl.set(url, await downloads.download(url, dirPath));
+		}),
+		...alternatives.map(async (choices) => {
+			const results = await Promise.allSettled(
+				choices.map(async ({ url }) => {
+					localByUrl.set(url, await downloads.download(url, dirPath));
+				}),
+			);
+			if (results.every((result) => result.status === "rejected")) {
+				const first = results[0];
+				if (first?.status === "rejected") throw first.reason;
+			}
+			for (const [index, result] of results.entries()) {
+				if (result.status === "rejected")
+					failedElements.add(choices[index].element);
+			}
+		}),
+	]);
+	let localized = rewritten;
+	for (const element of failedElements)
+		localized = localized.split(element).join("");
+	for (const [url, name] of [...localByUrl.entries()].sort(
+		(left, right) => right[0].length - left[0].length,
+	)) {
+		localized = localized
+			.split(escapeXmlAttribute(url))
+			.join(escapeXmlAttribute(name));
+	}
+	await writeFile(filePath, localized);
 	return filePath;
 }
 
@@ -603,6 +776,7 @@ function buildDashSegments(
 	resourceBaseUrl: string,
 	query: string,
 	presentationDuration: number | null,
+	maxSegments: number,
 ): DashSegment[] {
 	const media = templateAttrs.media;
 	if (!media) {
@@ -650,6 +824,8 @@ function buildDashSegments(
 				count = Math.max(0, Math.ceil((endTime - currentTime) / duration));
 			}
 
+			if (!Number.isSafeInteger(count) || segments.length + count > maxSegments)
+				throw new Error("Playlist resource count limit exceeded");
 			for (let offset = 0; offset < count; offset++) {
 				const time = currentTime + duration * offset;
 				const resource = substituteDashTemplate(media, {
@@ -679,6 +855,8 @@ function buildDashSegments(
 	}
 
 	const segmentCount = Math.max(1, Math.ceil(totalDurationTicks / duration));
+	if (!Number.isSafeInteger(segmentCount) || segmentCount > maxSegments)
+		throw new Error("Playlist resource count limit exceeded");
 	for (let index = 0; index < segmentCount; index++) {
 		const remainingDuration = totalDurationTicks - duration * index;
 		const segmentDuration = Math.min(duration, remainingDuration);
@@ -753,20 +931,17 @@ export async function materializeMpdAsHlsPlaylist(
 	manifestUrl: string,
 	dirPath: string,
 	abortSignal?: AbortSignal,
+	downloads?: MediaDownloads,
 ): Promise<string> {
-	const response = await fetch(manifestUrl, {
-		signal: getFetchSignal(DOWNLOAD_TIMEOUT_MS, abortSignal),
-	});
-
-	if (!response.ok) {
-		throw new Error(
-			`Failed to fetch DASH manifest: ${response.status} ${response.statusText}`,
+	if (!downloads)
+		return new MediaDownloads(abortSignal).run((group) =>
+			materializeMpdAsHlsPlaylist(manifestUrl, dirPath, group.signal, group),
 		);
-	}
-
-	const content = await response.text();
+	abortSignal = downloads.signal;
+	const manifest = await downloads.text(manifestUrl, "DASH manifest");
+	const content = manifest.content;
 	const sanitizedContent = content.replace(/<!--[\s\S]*?-->/g, "");
-	const parsedUrl = new URL(manifestUrl);
+	const parsedUrl = new URL(manifest.url);
 	const manifestBaseUrl = new URL(".", parsedUrl).toString();
 	const query = parsedUrl.search;
 	const mpdAttrs = parseXmlAttributes(
@@ -780,6 +955,10 @@ export async function materializeMpdAsHlsPlaylist(
 		parseIsoDurationSeconds(periodAttrs.duration) ??
 		parseIsoDurationSeconds(mpdAttrs.mediaPresentationDuration);
 	const playlists: DashRepresentationPlaylist[] = [];
+	const periodTemplate = getFirstXmlElementBlock(
+		periodContent.split(/<AdaptationSet\b/i)[0] ?? "",
+		"SegmentTemplate",
+	);
 
 	for (const adaptation of getXmlElementBlocks(
 		periodContent,
@@ -807,10 +986,18 @@ export async function materializeMpdAsHlsPlaylist(
 				representation.content,
 				"SegmentTemplate",
 			);
-			const template = representationTemplate ?? adaptationTemplate;
+			const template =
+				representationTemplate ?? adaptationTemplate ?? periodTemplate;
 			if (!template) continue;
 
+			const templateContent =
+				[representationTemplate, adaptationTemplate, periodTemplate]
+					.map((entry) => entry?.content ?? "")
+					.find((content) =>
+						getFirstXmlElementBlock(content, "SegmentTimeline"),
+					) ?? template.content;
 			const templateAttrs = {
+				...(periodTemplate?.attributes ?? {}),
 				...(adaptationTemplate?.attributes ?? {}),
 				...template.attributes,
 			};
@@ -840,17 +1027,25 @@ export async function materializeMpdAsHlsPlaylist(
 			const initUrl = resolveResourceUrl(initResource, resourceBaseUrl, query);
 			const segments = buildDashSegments(
 				templateAttrs,
-				template.content,
+				templateContent,
 				representationId,
 				bandwidth,
 				resourceBaseUrl,
 				query,
 				presentationDuration,
+				downloads.maxResources,
+			);
+			const localInit = await downloads.download(initUrl, dirPath);
+			const localSegments = await downloads.all(
+				segments.map(async (segment) => ({
+					...segment,
+					url: await downloads.download(segment.url, dirPath),
+				})),
 			);
 			const path = await writeDashRepresentationPlaylist(
 				dirPath,
-				initUrl,
-				segments,
+				localInit,
+				localSegments,
 			);
 
 			playlists.push({
@@ -919,6 +1114,7 @@ export async function materializeStreamingInput(
 	videoUrl: string,
 	dirPath: string,
 	abortSignal?: AbortSignal,
+	downloads?: MediaDownloads,
 ): Promise<string> {
 	let inputPath: string;
 
@@ -928,6 +1124,7 @@ export async function materializeStreamingInput(
 			dirPath,
 			undefined,
 			abortSignal,
+			downloads,
 		);
 	} else if (isMpdUrl(videoUrl)) {
 		try {
@@ -935,10 +1132,16 @@ export async function materializeStreamingInput(
 				videoUrl,
 				dirPath,
 				abortSignal,
+				downloads,
 			);
 		} catch (err) {
 			if (!shouldFallbackToGenericMpd(err)) throw err;
-			inputPath = await materializeMpdManifest(videoUrl, dirPath, abortSignal);
+			inputPath = await materializeMpdManifest(
+				videoUrl,
+				dirPath,
+				abortSignal,
+				downloads,
+			);
 		}
 	} else {
 		return videoUrl;
@@ -1147,7 +1350,7 @@ export function buildStreamingDownloadFfmpegArgs(
 		"-threads",
 		"2",
 		"-protocol_whitelist",
-		"file,http,https,tcp,tls,crypto,data",
+		"file,crypto,data",
 		"-allowed_extensions",
 		"ALL",
 		...(capabilities.allowedSegmentExtensions
@@ -1309,6 +1512,12 @@ export async function downloadVideoToTemp(
 		if (parallel.concurrency > 1 && maxBytes === undefined) {
 			await downloadUrlToPathParallel(videoUrl, tempFile.path, {
 				...parallel,
+				// Ranged parts go through the same URL policy as a single download.
+				fetchImpl: ((input, init) =>
+					fetchAllowed(
+						input instanceof Request ? input.url : input.toString(),
+						init,
+					)) as typeof fetch,
 				signal: combinedSignal,
 			});
 			if (file(tempFile.path).size === 0) {
@@ -2061,33 +2270,48 @@ export async function generateThumbnail(
 	const opts = { ...DEFAULT_THUMBNAIL_OPTIONS, ...options };
 	const timestamp = getThumbnailTimestamp(duration, opts.timestamp);
 	const deadline = performance.now() + THUMBNAIL_TIMEOUT_MS;
+	abortSignal = getFetchSignal(THUMBNAIL_TIMEOUT_MS, abortSignal);
+	let localInput: { path: string; cleanup: () => Promise<void> };
 	try {
-		return await generateThumbnailFrame(
-			inputPath,
-			opts,
-			timestamp,
-			THUMBNAIL_TIMEOUT_MS,
-			abortSignal,
-		);
+		localInput = /^https?:/i.test(inputPath)
+			? await downloadVideoToTemp(inputPath, undefined, abortSignal)
+			: { path: inputPath, cleanup: async () => {} };
 	} catch (error) {
 		abortSignal?.throwIfAborted();
-		const remainingMs = deadline - performance.now();
-		if (
-			!(error instanceof EmptyThumbnailError) ||
-			!isAbsolute(normalizeLocalPath(inputPath)) ||
-			timestamp <= 0 ||
-			remainingMs <= 0
-		) {
-			throw error;
+		throw error;
+	}
+	try {
+		try {
+			return await generateThumbnailFrame(
+				localInput.path,
+				opts,
+				timestamp,
+				Math.max(1, deadline - performance.now()),
+				abortSignal,
+				true,
+			);
+		} catch (error) {
+			abortSignal?.throwIfAborted();
+			const remainingMs = deadline - performance.now();
+			if (
+				!(error instanceof EmptyThumbnailError) ||
+				!isAbsolute(normalizeLocalPath(localInput.path)) ||
+				timestamp <= 0 ||
+				remainingMs <= 0
+			) {
+				throw error;
+			}
+			return await generateThumbnailFrame(
+				localInput.path,
+				opts,
+				0,
+				remainingMs,
+				abortSignal,
+				true,
+			);
 		}
-		return await generateThumbnailFrame(
-			inputPath,
-			opts,
-			0,
-			remainingMs,
-			abortSignal,
-			true,
-		);
+	} finally {
+		await localInput.cleanup();
 	}
 }
 
@@ -2522,7 +2746,7 @@ async function uploadWithRetry(
 			};
 			if (ifNoneMatch) headers["If-None-Match"] = ifNoneMatch;
 
-			response = await fetch(presignedUrl, {
+			response = await fetchAllowed(presignedUrl, {
 				method: "PUT",
 				headers,
 				body: bodyFactory(),
@@ -2629,8 +2853,9 @@ async function postMultipartJson<TBody extends Record<string, unknown>>(
 		headers["x-media-server-secret"] = webhookSecret;
 	}
 
-	return await fetch(url, {
+	return await fetchAllowed(url, {
 		method: "POST",
+		redirect: "error",
 		headers,
 		body: JSON.stringify(body),
 		signal: uploadSignal(abortSignal),
@@ -2686,7 +2911,7 @@ async function uploadMultipartPart(
 		abortSignal?.throwIfAborted();
 		let response: Response;
 		try {
-			response = await fetch(url, {
+			response = await fetchAllowed(url, {
 				method: "PUT",
 				headers: {
 					"Content-Length": contentLength.toString(),

@@ -50,6 +50,9 @@ services:
     restart: unless-stopped
     environment:
       PORT: 3456
+      S3_INTERNAL_ENDPOINT: 'http://minio:9000'
+      S3_PUBLIC_ENDPOINT: '${SERVICE_URL_MINIO}'
+      MEDIA_SERVER_WEBHOOK_URL: 'http://cap-web:3000'
       MEDIA_SERVER_WEBHOOK_SECRET: '${SERVICE_HEX_32_MEDIASERVER}'
     healthcheck:
       test:

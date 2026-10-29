@@ -1,5 +1,5 @@
 import { describe, expect, spyOn, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -14,8 +14,15 @@ const FIXTURES_DIR = join(import.meta.dir, "..", "fixtures");
 const TEST_VIDEO_WITH_AUDIO = `file://${join(FIXTURES_DIR, "test-with-audio.mp4")}`;
 const TEST_VIDEO_NO_AUDIO = `file://${join(FIXTURES_DIR, "test-no-audio.mp4")}`;
 
-async function createHlsFixture(): Promise<string> {
+async function createHlsFixture(encrypted = false): Promise<string> {
 	const dirPath = await mkdtemp(join(tmpdir(), "cap-audio-hls-"));
+	if (encrypted) {
+		await writeFile(join(dirPath, "key.bin"), Buffer.alloc(16, 7));
+		await writeFile(
+			join(dirPath, "key.info"),
+			`key.bin\n${join(dirPath, "key.bin")}\n`,
+		);
+	}
 	const proc = Bun.spawn({
 		cmd: [
 			"ffmpeg",
@@ -31,6 +38,7 @@ async function createHlsFixture(): Promise<string> {
 			"0.25",
 			"-hls_list_size",
 			"0",
+			...(encrypted ? ["-hls_key_info_file", join(dirPath, "key.info")] : []),
 			"-hls_segment_filename",
 			join(dirPath, "segment-%03d.ts"),
 			join(dirPath, "manifest.m3u8"),
@@ -202,7 +210,7 @@ describe("mediaAudio integration tests", () => {
 			try {
 				await expect(
 					checkHasAudioTrack(`${server.url}video.mp4`),
-				).rejects.toThrow("FFprobe exited");
+				).rejects.toThrow("Failed to fetch media resource: 503");
 				await waitForAudioOperations(beforeCount);
 			} finally {
 				await server.stop(true);
@@ -226,7 +234,9 @@ describe("mediaAudio integration tests", () => {
 	describe("extractAudioStream", () => {
 		test("preserves queued audio when the reader pauses before EOF", async () => {
 			const expected = await extractAudio(TEST_VIDEO_WITH_AUDIO);
-			const { stream, cleanup } = extractAudioStream(TEST_VIDEO_WITH_AUDIO);
+			const { stream, cleanup } = await extractAudioStream(
+				TEST_VIDEO_WITH_AUDIO,
+			);
 			const reader = stream.getReader();
 			const chunks: Uint8Array[] = [];
 			try {
@@ -246,7 +256,9 @@ describe("mediaAudio integration tests", () => {
 		test("drains all encoded bytes when the consumer waits for FFmpeg to exit", async () => {
 			const expected = await extractAudio(TEST_VIDEO_WITH_AUDIO);
 			const registration = spyOn(subprocess, "registerSubprocess");
-			const { stream, cleanup } = extractAudioStream(TEST_VIDEO_WITH_AUDIO);
+			const { stream, cleanup } = await extractAudioStream(
+				TEST_VIDEO_WITH_AUDIO,
+			);
 			try {
 				const proc = registration.mock.calls[0][0];
 				expect(await proc.exited).toBe(0);
@@ -261,7 +273,7 @@ describe("mediaAudio integration tests", () => {
 
 		test("errors the stream when FFmpeg cannot extract audio", async () => {
 			const beforeCount = getActiveProcessCount();
-			const { stream, cleanup } = extractAudioStream(TEST_VIDEO_NO_AUDIO);
+			const { stream, cleanup } = await extractAudioStream(TEST_VIDEO_NO_AUDIO);
 			try {
 				await expect(readStream(stream)).rejects.toThrow("FFmpeg exited");
 				await waitForAudioOperations(beforeCount);
@@ -273,9 +285,12 @@ describe("mediaAudio integration tests", () => {
 		test("errors the stream and terminates FFmpeg at the deadline", async () => {
 			const beforeCount = getActiveProcessCount();
 			const registration = spyOn(subprocess, "registerSubprocess");
-			const { stream, cleanup } = extractAudioStream(TEST_VIDEO_WITH_AUDIO, {
-				timeoutMs: 1,
-			});
+			const { stream, cleanup } = await extractAudioStream(
+				TEST_VIDEO_WITH_AUDIO,
+				{
+					timeoutMs: 1,
+				},
+			);
 			try {
 				await expect(readStream(stream)).rejects.toThrow("timed out");
 				const proc = registration.mock.calls[0][0];
@@ -289,7 +304,7 @@ describe("mediaAudio integration tests", () => {
 
 		test("streams real mp3 data and cleans up its operation", async () => {
 			const beforeCount = getActiveProcessCount();
-			const { stream } = extractAudioStream(TEST_VIDEO_WITH_AUDIO);
+			const { stream } = await extractAudioStream(TEST_VIDEO_WITH_AUDIO);
 
 			const audioData = await readStream(stream);
 
@@ -297,13 +312,54 @@ describe("mediaAudio integration tests", () => {
 			await waitForAudioOperations(beforeCount);
 		});
 
+		test("releases the operation when a remote download fails", async () => {
+			const beforeCount = getActiveProcessCount();
+			const server = Bun.serve({
+				port: 0,
+				fetch: () => new Response("Missing", { status: 404 }),
+			});
+
+			try {
+				await expect(
+					extractAudioStream(`${server.url}clip.mp4`),
+				).rejects.toThrow("Failed to fetch media resource: 404");
+				await waitForAudioOperations(beforeCount);
+			} finally {
+				await server.stop(true);
+			}
+		});
+
 		test("cleans up when a real stream is cancelled", async () => {
 			const beforeCount = getActiveProcessCount();
-			const { stream } = extractAudioStream(TEST_VIDEO_WITH_AUDIO);
+			const { stream } = await extractAudioStream(TEST_VIDEO_WITH_AUDIO);
 
 			await stream.cancel();
 
 			await waitForAudioOperations(beforeCount);
 		});
+	});
+});
+
+describe("encrypted remote HLS audio", () => {
+	test("extracts MP3 audio after staging AES-128 keys and segments locally", async () => {
+		const directory = await createHlsFixture(true);
+		const server = Bun.serve({
+			port: 0,
+			fetch(request) {
+				return new Response(
+					Bun.file(join(directory, new URL(request.url).pathname)),
+				);
+			},
+		});
+		try {
+			const url = new URL("manifest.m3u8", server.url).toString();
+			expect(await checkHasAudioTrack(url)).toBe(true);
+			expectMp3(await extractAudio(url));
+			const { stream } = await extractAudioStream(url);
+			expectMp3(await readStream(stream));
+		} finally {
+			server.stop(true);
+			await rm(directory, { recursive: true, force: true });
+		}
 	});
 });

@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { type Subprocess, spawn } from "bun";
 import { z } from "zod";
 import { withTimeout } from "./media-common";
+import { MediaDownloads } from "./media-downloads";
 import {
 	canAcceptNewAudioOperation,
 	getActiveAudioOperationCount,
@@ -119,6 +120,11 @@ function getAudioExtractArgs(
 ): string[] {
 	return [
 		"ffmpeg",
+		"-protocol_whitelist",
+		"file,pipe,crypto,data",
+		...(videoUrl.toLowerCase().endsWith(".m3u8")
+			? ["-allowed_extensions", "ALL"]
+			: []),
 		"-i",
 		videoUrl,
 		"-vn",
@@ -134,10 +140,13 @@ function getAudioExtractArgs(
 
 function getAudioProbeArgs(inputPath: string): string[] {
 	const normalizedPath = (inputPath.split("?")[0] ?? "").toLowerCase();
-	const args = ["ffprobe", "-v", "error"];
-	if (normalizedPath.endsWith(".m3u8") || normalizedPath.endsWith(".mpd")) {
-		args.push("-protocol_whitelist", "file,http,https,tcp,tls,crypto,data");
-	}
+	const args = [
+		"ffprobe",
+		"-v",
+		"error",
+		"-protocol_whitelist",
+		"file,pipe,crypto,data",
+	];
 	if (normalizedPath.endsWith(".m3u8")) {
 		args.push(
 			"-allowed_extensions",
@@ -163,30 +172,36 @@ function isRemoteStreamingUrl(value: string): boolean {
 	}
 }
 
-async function prepareAudioProbeInput(
+async function stageRemoteInput(
 	videoUrl: string,
-	abortSignal: AbortSignal,
+	abortSignal?: AbortSignal,
 ): Promise<{ inputPath: string; cleanup: () => Promise<void> }> {
-	if (!isRemoteStreamingUrl(videoUrl)) {
+	if (!/^https?:/i.test(videoUrl)) {
 		return { inputPath: videoUrl, cleanup: async () => {} };
 	}
 
 	await ensureTempDir();
-	const dirPath = await mkdtemp(join(getTempDir(), "audio-probe-"));
-	try {
-		const inputPath = await materializeStreamingInput(
-			videoUrl,
-			dirPath,
-			abortSignal,
-		);
-		return {
-			inputPath,
-			cleanup: async () => {
-				await rm(dirPath, { recursive: true, force: true });
-			},
-		};
-	} catch (error) {
+	const dirPath = await mkdtemp(join(getTempDir(), "audio-input-"));
+	const cleanup = async () => {
 		await rm(dirPath, { recursive: true, force: true }).catch(() => {});
+	};
+	try {
+		if (isRemoteStreamingUrl(videoUrl)) {
+			return {
+				inputPath: await materializeStreamingInput(
+					videoUrl,
+					dirPath,
+					abortSignal,
+				),
+				cleanup,
+			};
+		}
+		const filename = await new MediaDownloads(abortSignal).run((downloads) =>
+			downloads.download(videoUrl, dirPath),
+		);
+		return { inputPath: join(dirPath, filename), cleanup };
+	} catch (error) {
+		await cleanup();
 		throw error;
 	}
 }
@@ -270,7 +285,7 @@ export async function checkHasAudioTrack(videoUrl: string): Promise<boolean> {
 		setCancel(cancel);
 		return await withTimeout(
 			(async () => {
-				const preparedInput = await prepareAudioProbeInput(
+				const preparedInput = await stageRemoteInput(
 					videoUrl,
 					abortController.signal,
 				);
@@ -305,18 +320,31 @@ export async function extractAudio(
 	const opts = { ...DEFAULT_OPTIONS, ...options };
 
 	return await withMediaOperation("audio", async (setCancel) => {
-		const proc = registerSubprocess(
-			spawn({
-				cmd: getAudioExtractArgs(videoUrl, opts),
-				stdout: "pipe",
-				stderr: "pipe",
-			}),
-		);
-		setCancel(() => terminateProcess(proc));
+		const abortController = new AbortController();
+		let proc: Subprocess | undefined;
+		let cleanupStaged = async () => {};
+		const cancel = async () => {
+			abortController.abort();
+			if (proc) await terminateProcess(proc);
+			await cleanupStaged();
+		};
+		setCancel(cancel);
 
 		try {
 			return await withTimeout(
 				(async () => {
+					const staged = await stageRemoteInput(
+						videoUrl,
+						abortController.signal,
+					);
+					cleanupStaged = staged.cleanup;
+					proc = registerSubprocess(
+						spawn({
+							cmd: getAudioExtractArgs(staged.inputPath, opts),
+							stdout: "pipe",
+							stderr: "pipe",
+						}),
+					);
 					const stderrPromise = readStreamWithLimit(
 						proc.stderr as ReadableStream<Uint8Array>,
 						MAX_STDERR_BYTES,
@@ -368,23 +396,36 @@ export async function extractAudio(
 					return output;
 				})(),
 				opts.timeoutMs,
-				() => terminateProcess(proc),
+				cancel,
 			);
 		} finally {
-			await terminateProcess(proc);
+			if (proc) await terminateProcess(proc);
+			await cleanupStaged();
 		}
 	});
 }
 
-export function extractAudioStream(
+export async function extractAudioStream(
 	videoUrl: string,
 	options: AudioExtractionOptions = {},
-): StreamingExtractResult {
+	abortSignal?: AbortSignal,
+): Promise<StreamingExtractResult> {
 	if (!canAcceptNewAudioOperation()) {
 		throw new Error("Server is busy, please try again later");
 	}
 
 	const opts = { ...DEFAULT_OPTIONS, ...options };
+	if (/^https?:/i.test(videoUrl)) {
+		return openRemoteAudioExtractStream(videoUrl, opts, abortSignal);
+	}
+	return openAudioExtractStream(videoUrl, opts);
+}
+
+function openAudioExtractStream(
+	videoUrl: string,
+	opts: Required<AudioExtractionOptions>,
+	cleanupInput: () => Promise<void> = async () => {},
+): StreamingExtractResult {
 	const proc: Subprocess = registerSubprocess(
 		spawn({
 			cmd: getAudioExtractArgs(videoUrl, opts),
@@ -414,6 +455,7 @@ export function extractAudioStream(
 			reader = null;
 		}
 		unregisterMediaOperation(operation);
+		void cleanupInput();
 		void terminateProcess(proc);
 	};
 	const cleanup = () => finish(new Error("Audio extraction cancelled"));
@@ -473,4 +515,40 @@ export function extractAudioStream(
 	);
 
 	return { stream, cleanup };
+}
+
+async function openRemoteAudioExtractStream(
+	videoUrl: string,
+	opts: Required<AudioExtractionOptions>,
+	abortSignal?: AbortSignal,
+): Promise<StreamingExtractResult> {
+	const controller = new AbortController();
+	const signal = AbortSignal.any([
+		controller.signal,
+		AbortSignal.timeout(opts.timeoutMs),
+		...(abortSignal ? [abortSignal] : []),
+	]);
+	const operation = registerMediaOperation("audio", () => controller.abort());
+	const startedAt = performance.now();
+	let staged: Awaited<ReturnType<typeof stageRemoteInput>> | undefined;
+	try {
+		staged = await stageRemoteInput(videoUrl, signal);
+		signal.throwIfAborted();
+		return openAudioExtractStream(
+			staged.inputPath,
+			{
+				...opts,
+				timeoutMs: Math.max(
+					1,
+					opts.timeoutMs - (performance.now() - startedAt),
+				),
+			},
+			staged.cleanup,
+		);
+	} catch (error) {
+		await staged?.cleanup();
+		throw error;
+	} finally {
+		unregisterMediaOperation(operation);
+	}
 }

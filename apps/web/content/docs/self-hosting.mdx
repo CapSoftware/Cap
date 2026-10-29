@@ -107,6 +107,21 @@ Email is optional. Without it, login codes are printed to the cap-web logs, the 
    ```
 3. Verify the domain in Resend. Login emails are sent from `auth@RESEND_FROM_DOMAIN`.
 
+## Media Server URL Policy
+
+The media server only fetches the URLs cap-web sends it, and it checks each one first:
+
+- Only `http` and `https` URLs are accepted.
+- Hosts that resolve to loopback, private, link-local (including cloud metadata at `169.254.169.254`), CGNAT or IPv6 ULA/site-local addresses are rejected, unless the host is trusted. IPv4-compatible IPv6 (`::/96`) and NAT64 (`64:ff9b::/96`) addresses are also blocked, matching the S3 endpoint policy.
+- Trusted hosts are those in `S3_INTERNAL_ENDPOINT`, `S3_PUBLIC_ENDPOINT`, `CAP_AWS_ENDPOINT`, `MEDIA_SERVER_WEBHOOK_URL` and `WEB_URL` (set them on the media server too), plus anything in `MEDIA_SERVER_ALLOWED_HOSTS`.
+- When `MEDIA_SERVER_ALLOWED_HOSTS` is set, it becomes a strict allow-list: every URL must use one of those hosts or the trusted hosts above. Entries are comma-separated and may use a `*.` prefix, e.g. `minio.railway.internal,*.r2.cloudflarestorage.com`.
+
+If your storage lives on a private network (MinIO in Docker or on Railway's private network), set `S3_INTERNAL_ENDPOINT` on the media server or add its host to `MEDIA_SERVER_ALLOWED_HOSTS`. Otherwise processing fails with `URL_NOT_ALLOWED`. `MEDIA_SERVER_ALLOW_PRIVATE_URLS=true` turns the private-address check off for `http` and `https` URLs. It is meant for local development and tests only.
+
+Remote media is connected to a checked IP address while preserving the original HTTP host and TLS server name. Untrusted downloads bypass HTTP proxy environment settings so a proxy cannot resolve the hostname again. Callback requests carrying the shared secret refuse redirects.
+
+HLS and DASH resources are cached by URL within each materialization. The default limits are 20,000 resources, 32 GiB of downloaded data, and 8 MiB per manifest. Set `MEDIA_SERVER_MAX_PLAYLIST_RESOURCES` and `MEDIA_SERVER_MAX_PLAYLIST_BYTES` on the media-server service to change the first two limits. Ordinary remote audio inputs share the byte limit, including inputs without a Content-Length header. Downloads also respect the enclosing job's transfer budget. A failed required resource cancels the remaining transfers before temporary files are removed.
+
 ## Optional Features
 
 ### AI Features
