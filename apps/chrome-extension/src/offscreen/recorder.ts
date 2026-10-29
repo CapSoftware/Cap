@@ -544,12 +544,26 @@ const getMicrophoneStream = async (
 };
 
 // How long a probe listens before declaring the mic silent, and the peak
-// amplitude (time-domain, 0..1) that counts as sound. A muted/dead device
-// flat-lines near 0; a working mic's noise floor clears this threshold, so it
-// only flags an effectively-silent input.
-const MIC_PROBE_WINDOW_MS = 250;
+// amplitude (time-domain, 0..1) that counts as sound. The probe reads the raw
+// signal: noise suppression flattens a quiet room to near zero, while a muted
+// or dead device delivers digital silence. Any real room tone sits well above
+// this threshold (about -100 dBFS). The window covers a freshly opened
+// device's leading zeros; a working mic resolves as soon as it delivers audio.
+const MIC_PROBE_WINDOW_MS = 1000;
 const MIC_PROBE_SAMPLE_INTERVAL_MS = 20;
-const MIC_SOUND_MIN_PEAK = 0.0015;
+const MIC_SOUND_MIN_PEAK = 0.00001;
+
+const getMicrophoneProbeConstraint = (
+	microphone: MicrophoneSettings,
+): MediaTrackConstraints => ({
+	...(microphone.deviceId &&
+	microphone.deviceId !== DEFAULT_MICROPHONE_DEVICE_ID
+		? { deviceId: { exact: microphone.deviceId } }
+		: {}),
+	echoCancellation: false,
+	autoGainControl: false,
+	noiseSuppression: false,
+});
 
 // Opens the selected mic and listens for any signal so the recorder can warn
 // before starting. Resolves as soon as sound is heard; only a genuinely silent
@@ -563,7 +577,7 @@ const probeMicrophone = async (
 	let stream: MediaStream;
 	try {
 		stream = await navigator.mediaDevices.getUserMedia({
-			audio: getAudioConstraint(microphone),
+			audio: getMicrophoneProbeConstraint(microphone),
 			video: false,
 		});
 	} catch {
