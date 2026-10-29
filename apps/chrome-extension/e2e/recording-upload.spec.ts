@@ -1475,13 +1475,9 @@ test.describe("camera and microphone start", () => {
 	}
 
 	test("keeps the camera preview in the recorded tab when a background tab opens", async () => {
-		test.skip(
-			screenMode === "tab" && !canLaunchHeaded,
-			"Tab capture needs a headed browser",
-		);
-		const extension = await launchExtensionContext({
-			tabCapture: screenMode === "tab",
-		});
+		// Camera mode keeps the fake permission UI, which tab capture cannot use.
+		const mode = useSystemDevices ? "camera" : "fullscreen";
+		const extension = await launchExtensionContext();
 		const mockServer = await createMockCapServer();
 		try {
 			const worker = await getServiceWorker(extension.context);
@@ -1491,7 +1487,7 @@ test.describe("camera and microphone start", () => {
 				mockServer.origin,
 				{
 					...DEFAULT_RECORDING_OPTIONS,
-					mode: screenMode,
+					mode,
 					microphone: true,
 					webcam: true,
 					durationMs: 0,
