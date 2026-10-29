@@ -49,3 +49,24 @@ export function durationParts(seconds: number) {
 		asSeconds: milliseconds / 1e3,
 	};
 }
+
+export function formatDuration(durationSecs: number): string {
+	if (!Number.isFinite(durationSecs) || durationSecs <= 0) {
+		return "< 1 sec";
+	}
+
+	const safeSeconds = Math.max(0, Math.ceil(durationSecs));
+	const totalHours = Math.floor(safeSeconds / 3600);
+	const totalMinutes = Math.floor(safeSeconds / 60);
+	const remainingSeconds = safeSeconds % 60;
+
+	if (totalHours > 0) {
+		return `${totalHours} hr${totalHours > 1 ? "s" : ""}`;
+	} else if (totalMinutes > 0) {
+		return `${totalMinutes} min${totalMinutes > 1 ? "s" : ""}`;
+	} else if (remainingSeconds > 0) {
+		return `${remainingSeconds} sec${remainingSeconds !== 1 ? "s" : ""}`;
+	} else {
+		return "< 1 sec";
+	}
+}
