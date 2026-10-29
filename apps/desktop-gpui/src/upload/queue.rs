@@ -1,4 +1,5 @@
 use super::*;
+use crate::i18n::tr;
 use cap_project::{InstantRecordingMeta, RecordingMetaInner};
 use cap_recording::upload_resume::{UploadLock, UploadLockError, collect_segment_events};
 use cap_recording::upload_verification::{UploadVerification, VerifiedUploadReceipt};
@@ -89,14 +90,14 @@ impl UploadState {
 
     pub fn label(&self) -> &'static str {
         match self.phase {
-            UploadPhase::Recording => "Upload prepared",
-            UploadPhase::Pending | UploadPhase::Uploading => "Uploading",
-            UploadPhase::Processing => "Processing upload",
-            UploadPhase::Retrying => "Upload will retry",
-            UploadPhase::NeedsAuthentication => "Sign in to retry upload",
-            UploadPhase::Failed => "Upload needs attention",
-            UploadPhase::Cancelled => "Upload paused",
-            UploadPhase::Verified => "Uploaded",
+            UploadPhase::Recording => tr::upload::status::prepared(),
+            UploadPhase::Pending | UploadPhase::Uploading => tr::upload::status::uploading(),
+            UploadPhase::Processing => tr::upload::status::processing(),
+            UploadPhase::Retrying => tr::upload::status::retrying(),
+            UploadPhase::NeedsAuthentication => tr::upload::status::sign_in(),
+            UploadPhase::Failed => tr::upload::status::failed(),
+            UploadPhase::Cancelled => tr::upload::status::paused(),
+            UploadPhase::Verified => tr::upload::status::uploaded(),
         }
     }
 

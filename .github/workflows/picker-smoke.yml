@@ -11,6 +11,8 @@ on:
       - "apps/desktop-gpui/src/main_window.rs"
       - "apps/desktop-gpui/src/foreign_window.rs"
       - "apps/desktop-gpui/src/window_arrange.rs"
+      - "apps/desktop-gpui/src/overlay_backdrop.rs"
+      - "apps/desktop-gpui/src/ui/glass.rs"
       - "apps/desktop-gpui/src/platform.rs"
       - "apps/desktop-gpui/src/platform/**"
       - "scripts/picker-smoke/**"

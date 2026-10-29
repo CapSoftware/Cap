@@ -54,6 +54,15 @@
 			"minimumSystemVersion": "12.3",
 			"entitlements": "../desktop/src-tauri/Entitlements.plist",
 			"frameworks": ["../../target/native-deps/Spacedrive.framework"],
+			"files": {
+				"Resources/en.lproj/InfoPlist.strings": "macos/en.lproj/InfoPlist.strings",
+				"Resources/zh-Hans.lproj/InfoPlist.strings": "macos/zh-Hans.lproj/InfoPlist.strings",
+				"Resources/ja.lproj/InfoPlist.strings": "macos/ja.lproj/InfoPlist.strings",
+				"Resources/fr.lproj/InfoPlist.strings": "macos/fr.lproj/InfoPlist.strings",
+				"Resources/es.lproj/InfoPlist.strings": "macos/es.lproj/InfoPlist.strings",
+				"Resources/de.lproj/InfoPlist.strings": "macos/de.lproj/InfoPlist.strings",
+				"Resources/hi.lproj/InfoPlist.strings": "macos/hi.lproj/InfoPlist.strings"
+			},
 			"dmg": {
 				"background": "../desktop/src-tauri/assets/dmg-background.png",
 				"appPosition": {

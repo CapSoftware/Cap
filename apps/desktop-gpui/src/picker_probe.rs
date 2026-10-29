@@ -18,11 +18,47 @@ pub fn run(main: WindowHandle<MainWindow>, cx: &mut App) {
             .and_then(|delay| delay.parse().ok())
             .unwrap_or(2000);
         sleep(cx, delay).await;
+        // `CAP_PICKER_PROBE_HOLD=window` (or `display`, `area`) arms that
+        // picker and leaves it up, for a script to drive the pointer over it.
+        if let Ok(hold) = std::env::var("CAP_PICKER_PROBE_HOLD") {
+            // `main` leaves the main window as it opened; `settings:<n>` opens
+            // settings page n, for screenshots of the rest of the app.
+            if hold == "main" {
+                return;
+            }
+            if let Some(page) = hold.strip_prefix("settings:") {
+                let page = page.parse::<usize>().unwrap_or(0);
+                let page = crate::settings_window::Page::ALL
+                    .get(page)
+                    .copied()
+                    .unwrap_or(crate::settings_window::Page::General);
+                cx.update(|cx| app_windows::open_settings(page, cx));
+                return;
+            }
+            let kind = match hold.as_str() {
+                "display" => TargetType::Display,
+                "area" => TargetType::Area,
+                _ => TargetType::Window,
+            };
+            main.update(cx, |view, _, cx| view.arm_overlay(kind, cx))
+                .ok();
+            sleep(cx, 800).await;
+            cx.update(|cx| {
+                let overlays = cx.global::<app_windows::AppWindows>().overlays.clone();
+                for (_, overlay) in overlays {
+                    overlay
+                        .update(cx, |_, window, _| window.activate_window())
+                        .ok();
+                }
+            });
+            return;
+        }
         cx.update(app_windows::open_camera_window);
         sleep(cx, 800).await;
 
         let mut modes = Vec::new();
         let mut window_arrangement = None;
+        let mut perf = None;
         for (label, kind) in [
             ("display", TargetType::Display),
             ("window", TargetType::Window),
@@ -69,10 +105,14 @@ pub fn run(main: WindowHandle<MainWindow>, cx: &mut App) {
             sleep(cx, 800).await;
             let mut mode = cx.update(|cx| probe_mode(label, cx));
             mode["overlayInactiveBeforeActivation"] = inactive_before.into();
+            let screen = screenshot(&output, label, cx).await;
+            mode["backdrop"] = probe_backdrop(&output, label, screen.as_ref(), cx).await;
             modes.push(mode);
-            screenshot(&output, label, cx).await;
             if kind == TargetType::Window {
                 window_arrangement = Some(probe_window_arrangement(&output, cx).await);
+            }
+            if kind == TargetType::Area {
+                perf = Some(probe_perf(cx).await);
             }
             cx.update(app_windows::dismiss_target_overlays);
             sleep(cx, 400).await;
@@ -82,12 +122,14 @@ pub fn run(main: WindowHandle<MainWindow>, cx: &mut App) {
             .as_ref()
             .is_none_or(|report: &serde_json::Value| report["passed"].as_bool() != Some(false));
         let passed = arrangement_passed
-            && modes
-                .iter()
-                .all(|mode| mode["cameraAboveOverlays"].as_bool() == Some(true));
+            && modes.iter().all(|mode| {
+                mode["cameraAboveOverlays"].as_bool() == Some(true)
+                    && mode["backdrop"]["passed"].as_bool() != Some(false)
+            });
         let report = serde_json::json!({
             "modes": modes,
             "windowArrangement": window_arrangement,
+            "perf": perf,
         });
         // The verdict leads so `run.sh` can read it without parsing JSON:
         // nested checks carry `passed` keys of their own.
@@ -168,6 +210,16 @@ async fn probe_window_arrangement(
         .map(|bounds| (bounds.size().width() as f32, bounds.size().height() as f32));
     let before = Some(picked.bounds);
 
+    // Start from Focus off whatever the saved settings say: turning Center
+    // off later under a saved Focus would put back the pre-resize frame.
+    overlay
+        .update(cx, |view, _, cx| {
+            view.set_focus_center(false, cx);
+            view.set_focus(false, cx)
+        })
+        .ok();
+    sleep(cx, 500).await;
+
     // `window_arrange::RATIOS` lists 16:9 second.
     overlay
         .update(cx, |view, _, cx| view.choose_window_size(1, cx))
@@ -187,8 +239,22 @@ async fn probe_window_arrangement(
     };
     screenshot(output, "window-16x9", cx).await;
 
+    // Focus alone records the window where it is: only Center on screen
+    // moves it.
     overlay
         .update(cx, |view, _, cx| view.set_focus(true, cx))
+        .ok();
+    sleep(cx, 1500).await;
+    let unmoved = read_window(&picked.id);
+    let stayed = unmoved.zip(shaped).is_some_and(|(now, then)| {
+        (now.x - then.x).abs() < 6.
+            && (now.y - then.y).abs() < 6.
+            && (now.width - then.width).abs() < 6.
+            && (now.height - then.height).abs() < 6.
+    });
+
+    overlay
+        .update(cx, |view, _, cx| view.set_focus_center(true, cx))
         .ok();
     sleep(cx, 1500).await;
     let focused = read_window(&picked.id);
@@ -214,7 +280,10 @@ async fn probe_window_arrangement(
     // Dismissed with the window still moved: only the dismissal can put it
     // back.
     overlay
-        .update(cx, |view, _, cx| view.set_focus(true, cx))
+        .update(cx, |view, _, cx| {
+            view.set_focus_center(true, cx);
+            view.set_focus(true, cx)
+        })
         .ok();
     sleep(cx, 1500).await;
     let moved = !near(read_window(&picked.id), before);
@@ -225,12 +294,15 @@ async fn probe_window_arrangement(
     serde_json::json!({
         "passed": ratio_ok
             && inside(shaped)
+            && stayed
             && centred
             && inside(focused)
             && unfocused_ok
             && restored_ok,
         "before": rect_json(before),
         "sixteenByNine": rect_json(shaped),
+        "focusWithoutCenter": rect_json(unmoved),
+        "focusWithoutCenterStayed": stayed,
         "ratioOk": ratio_ok,
         "focused": rect_json(focused),
         "centred": centred,
@@ -242,10 +314,12 @@ async fn probe_window_arrangement(
     })
 }
 
-async fn screenshot(output: &std::ffi::OsStr, label: &str, cx: &mut AsyncApp) {
-    let Some(directory) = std::path::Path::new(output).parent() else {
-        return;
-    };
+async fn screenshot(
+    output: &std::ffi::OsStr,
+    label: &str,
+    cx: &mut AsyncApp,
+) -> Option<image::DynamicImage> {
+    let directory = std::path::Path::new(output).parent()?;
     let path = directory.join(format!("{label}.png"));
     let target = cap_recording::sources::screen_capture::ScreenCaptureTarget::Display {
         id: scap_targets::Display::primary().id(),
@@ -259,10 +333,89 @@ async fn screenshot(output: &std::ffi::OsStr, label: &str, cx: &mut AsyncApp) {
             if let Err(error) = image.save(&path) {
                 tracing::warn!(%error, "picker probe: could not save {label} screenshot");
             }
+            Some(image)
         }
-        Ok(Err(error)) => tracing::warn!("picker probe: {label} screenshot failed: {error:#}"),
-        Err(error) => tracing::warn!(%error, "picker probe: {label} screenshot task failed"),
+        Ok(Err(error)) => {
+            tracing::warn!("picker probe: {label} screenshot failed: {error:#}");
+            None
+        }
+        Err(error) => {
+            tracing::warn!(%error, "picker probe: {label} screenshot task failed");
+            None
+        }
     }
+}
+
+/// The mean per-channel difference between two captures of one display.
+fn mean_difference(
+    backdrop: &[u8],
+    width: u32,
+    height: u32,
+    screen: &image::RgbImage,
+) -> Option<f64> {
+    if (screen.width(), screen.height()) != (width, height) {
+        return None;
+    }
+    let (mut sum, mut count) = (0u64, 0u64);
+    for (bgra, rgb) in backdrop.chunks_exact(4).zip(screen.pixels()) {
+        for (a, b) in [bgra[2], bgra[1], bgra[0]].into_iter().zip(rgb.0) {
+            sum += u64::from(a.abs_diff(b));
+            count += 1;
+        }
+    }
+    (count > 0).then(|| sum as f64 / count as f64)
+}
+
+/// Check the capture under the overlay's glass is of the desktop and not of
+/// the overlay: the overlay dims and tints the whole display, so a capture
+/// that left it out differs clearly from a screenshot that has it.
+async fn probe_backdrop(
+    output: &std::ffi::OsStr,
+    label: &str,
+    screen: Option<&image::DynamicImage>,
+    cx: &mut AsyncApp,
+) -> serde_json::Value {
+    if !crate::overlay_backdrop::SUPPORTED {
+        return serde_json::json!({ "skipped": "no capture without the overlay here" });
+    }
+    // The overlay over the display `screen` shows, so the two compare the
+    // same desktop.
+    let primary = scap_targets::Display::primary().id();
+    let image = cx.update(|cx| {
+        let overlay = cx
+            .global::<app_windows::AppWindows>()
+            .overlays
+            .iter()
+            .find(|(display, _)| *display == primary)
+            .map(|(_, overlay)| *overlay)?;
+        overlay
+            .update(cx, |view, _, _| view.backdrop_image())
+            .ok()
+            .flatten()
+    });
+    let Some(image) = image else {
+        return serde_json::json!({ "present": false, "passed": false });
+    };
+    let size = image.size(0);
+    let (width, height) = (size.width.0 as u32, size.height.0 as u32);
+    let bgra = image.as_bytes(0).unwrap_or_default();
+    if let Some(directory) = std::path::Path::new(output).parent() {
+        let rgba: Vec<u8> = bgra
+            .chunks_exact(4)
+            .flat_map(|px| [px[2], px[1], px[0], px[3]])
+            .collect();
+        if let Some(image) = image::RgbaImage::from_raw(width, height, rgba) {
+            let _ = image.save(directory.join(format!("{label}-backdrop.png")));
+        }
+    }
+    let difference =
+        screen.and_then(|screen| mean_difference(bgra, width, height, &screen.to_rgb8()));
+    serde_json::json!({
+        "present": true,
+        "size": [width, height],
+        "meanDifference": difference,
+        "passed": difference.is_some_and(|difference| difference > 6.),
+    })
 }
 
 async fn sleep(cx: &mut AsyncApp, millis: u64) {
@@ -450,4 +603,202 @@ fn own_window_stacking(ours: &[isize]) -> Vec<StackEntry> {
         }
     }
     stacking
+}
+
+#[cfg(unix)]
+fn cpu_secs() -> f64 {
+    let mut usage = std::mem::MaybeUninit::<libc::rusage>::zeroed();
+    unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) };
+    let usage = unsafe { usage.assume_init() };
+    let secs = |time: libc::timeval| time.tv_sec as f64 + time.tv_usec as f64 / 1_000_000.0;
+    secs(usage.ru_utime) + secs(usage.ru_stime)
+}
+
+#[cfg(windows)]
+fn cpu_secs() -> f64 {
+    use windows_sys::Win32::{
+        Foundation::FILETIME,
+        System::Threading::{GetCurrentProcess, GetProcessTimes},
+    };
+
+    let empty = FILETIME {
+        dwLowDateTime: 0,
+        dwHighDateTime: 0,
+    };
+    let (mut creation, mut exit, mut kernel, mut user) = (empty, empty, empty, empty);
+    unsafe {
+        GetProcessTimes(
+            GetCurrentProcess(),
+            &mut creation,
+            &mut exit,
+            &mut kernel,
+            &mut user,
+        )
+    };
+    let secs = |time: FILETIME| {
+        ((u64::from(time.dwHighDateTime) << 32) | u64::from(time.dwLowDateTime)) as f64
+            / 10_000_000.0
+    };
+    secs(kernel) + secs(user)
+}
+
+fn cpu_percent_since(cpu: f64, wall: std::time::Instant) -> f64 {
+    (cpu_secs() - cpu) / wall.elapsed().as_secs_f64() * 100.
+}
+
+/// Slide the drawn area back and forth for `millis`, the way a drag moves
+/// the picker's panels, and return the process's CPU use meanwhile, as a
+/// percentage of one core.
+async fn drag_cpu(
+    overlays: &[(
+        scap_targets::DisplayId,
+        WindowHandle<crate::target_overlay::OverlayWindow>,
+    )],
+    base: AreaRect,
+    millis: u64,
+    cx: &mut AsyncApp,
+) -> f64 {
+    let (cpu, wall) = (cpu_secs(), std::time::Instant::now());
+    let mut step = 0u32;
+    while wall.elapsed() < Duration::from_millis(millis) {
+        let offset = 240. * (step as f32 * 0.05).sin();
+        cx.update(|cx| {
+            for (_, overlay) in overlays {
+                overlay
+                    .update(cx, |view, _, cx| view.probe_offset_area(base, offset, cx))
+                    .ok();
+            }
+        });
+        sleep(cx, 8).await;
+        step += 1;
+    }
+    cpu_percent_since(cpu, wall)
+}
+
+#[cfg(target_os = "macos")]
+fn footprint_mb() -> Option<f64> {
+    let mut info = std::mem::MaybeUninit::<libc::rusage_info_v2>::zeroed();
+    let status = unsafe {
+        libc::proc_pid_rusage(
+            std::process::id() as i32,
+            libc::RUSAGE_INFO_V2,
+            info.as_mut_ptr().cast(),
+        )
+    };
+    (status == 0).then(|| unsafe { info.assume_init() }.ri_phys_footprint as f64 / 1_048_576.)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn footprint_mb() -> Option<f64> {
+    None
+}
+
+async fn drag_frames(
+    display: &scap_targets::DisplayId,
+    overlay: &WindowHandle<crate::target_overlay::OverlayWindow>,
+    base: AreaRect,
+    grab: (f32, f32),
+    millis: u64,
+    cx: &mut AsyncApp,
+) -> serde_json::Value {
+    use crate::target_overlay::{ProbeDrag, probe_frames};
+    let drag = |step: ProbeDrag, point: (f32, f32), cx: &mut AsyncApp| {
+        cx.update(|cx| {
+            overlay
+                .update(cx, |view, _, cx| view.probe_drag(step, point, cx))
+                .unwrap_or(false)
+        })
+    };
+    cx.update(|cx| {
+        overlay
+            .update(cx, |view, _, cx| view.probe_offset_area(base, 0., cx))
+            .ok();
+    });
+    sleep(cx, 300).await;
+    let started = drag(ProbeDrag::Press, grab, cx);
+    probe_frames::begin(display.clone());
+    let (cpu, wall) = (cpu_secs(), std::time::Instant::now());
+    let mut events = 0u32;
+    while wall.elapsed() < Duration::from_millis(millis) {
+        let t = events as f32;
+        let point = (
+            grab.0 + 180. * (t * 0.02).sin(),
+            grab.1 + 90. * (t * 0.013).sin(),
+        );
+        drag(ProbeDrag::Move, point, cx);
+        sleep(cx, 4).await;
+        events += 1;
+    }
+    let cpu = cpu_percent_since(cpu, wall);
+    let seconds = wall.elapsed().as_secs_f64();
+    let frames = probe_frames::end();
+    drag(ProbeDrag::Release, grab, cx);
+    let mut gaps: Vec<f64> = frames
+        .windows(2)
+        .map(|pair| pair[1].saturating_duration_since(pair[0]).as_secs_f64() * 1000.)
+        .collect();
+    gaps.sort_by(f64::total_cmp);
+    let percentile = |p: f64| {
+        gaps.get(((gaps.len() as f64 * p) as usize).min(gaps.len().saturating_sub(1)))
+            .copied()
+    };
+    serde_json::json!({
+        "dragStarted": started,
+        "cpuPercent": cpu,
+        "fps": frames.len() as f64 / seconds,
+        "mouseEvents": events,
+        "medianGapMs": percentile(0.5),
+        "p99GapMs": percentile(0.99),
+        "maxGapMs": gaps.last(),
+    })
+}
+
+/// What the picker costs: the process's CPU use with the area picker left
+/// alone, and while its panels move, with and without the desktop capture
+/// under their glass, measured back to back in one process.
+async fn probe_perf(cx: &mut AsyncApp) -> serde_json::Value {
+    let overlays = cx.update(|cx| cx.global::<app_windows::AppWindows>().overlays.clone());
+    let base = AreaRect {
+        x: 200.,
+        y: 200.,
+        width: 640.,
+        height: 360.,
+    };
+    let (cpu, wall) = (cpu_secs(), std::time::Instant::now());
+    sleep(cx, 3000).await;
+    let idle = cpu_percent_since(cpu, wall);
+    let dragging = drag_cpu(&overlays, base, 6000, cx).await;
+    let capture_ms = crate::overlay_backdrop::last_capture_ms();
+    crate::overlay_backdrop::set_disabled(true);
+    let dragging_without_backdrop = drag_cpu(&overlays, base, 6000, cx).await;
+    crate::overlay_backdrop::set_disabled(false);
+
+    let handler_drags = match overlays.first() {
+        Some((display, overlay)) => {
+            let middle = (base.x + base.width / 2., base.y + base.height / 2.);
+            let corner = (base.x + base.width, base.y + base.height);
+            let moving = drag_frames(display, overlay, base, middle, 6000, cx).await;
+            let resizing = drag_frames(display, overlay, base, corner, 6000, cx).await;
+            let warm = footprint_mb();
+            for _ in 0..3 {
+                drag_frames(display, overlay, base, middle, 5000, cx).await;
+                drag_frames(display, overlay, base, corner, 5000, cx).await;
+            }
+            let after = footprint_mb();
+            serde_json::json!({
+                "move": moving,
+                "resize": resizing,
+                "footprintMbAfterWarmup": warm,
+                "footprintMbAfter30sMoreDragging": after,
+            })
+        }
+        None => serde_json::Value::Null,
+    };
+    serde_json::json!({
+        "idleCpuPercent": idle,
+        "dragCpuPercent": dragging,
+        "dragCpuPercentWithoutBackdrop": dragging_without_backdrop,
+        "backdropCaptureMs": capture_ms,
+        "handlerDrags": handler_drags,
+    })
 }
