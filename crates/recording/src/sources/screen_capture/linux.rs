@@ -2252,14 +2252,12 @@ fn move_pactl_source_output(source_output: u32, source: &str) -> anyhow::Result<
             )?
         }
     };
-    // Fast path: if the stream is already routed to the requested source, return immediately.
-    if let Ok(outputs) = current_process_source_outputs() {
-        if outputs
+    if current_process_source_outputs().is_ok_and(|outputs| {
+        outputs
             .iter()
             .any(|output| output.id == source_output && output.source == source_index)
-        {
-            return Ok(());
-        }
+    }) {
+        return Ok(());
     }
 
     let status = Command::new("pactl")
@@ -2268,15 +2266,12 @@ fn move_pactl_source_output(source_output: u32, source: &str) -> anyhow::Result<
         .context("move PulseAudio/PipeWire system-audio stream")?;
 
     if !status.success() {
-        // Idempotency fallback: if the command failed because the stream is already on
-        // the target source (or WirePlumber moved it concurrently), accept as success.
-        if let Ok(outputs) = current_process_source_outputs() {
-            if outputs
+        if current_process_source_outputs().is_ok_and(|outputs| {
+            outputs
                 .iter()
                 .any(|output| output.id == source_output && output.source == source_index)
-            {
-                return Ok(());
-            }
+        }) {
+            return Ok(());
         }
         bail!(
             "Could not route PulseAudio/PipeWire system-audio stream {source_output} to '{source}'"
@@ -2288,15 +2283,14 @@ fn move_pactl_source_output(source_output: u32, source: &str) -> anyhow::Result<
     let started = Instant::now();
     let timeout = Duration::from_millis(2000);
     while started.elapsed() < timeout {
-        if let Ok(outputs) = current_process_source_outputs() {
-            if let Ok(true) = source_output_route_matches(&outputs, source_output, source_index) {
-                return Ok(());
-            }
+        if current_process_source_outputs().is_ok_and(|outputs| {
+            source_output_route_matches(&outputs, source_output, source_index).unwrap_or(false)
+        }) {
+            return Ok(());
         }
         std::thread::sleep(Duration::from_millis(50));
     }
 
-    // Final check for precise diagnostic reporting
     let final_outputs = current_process_source_outputs()?;
     if source_output_route_matches(&final_outputs, source_output, source_index)? {
         return Ok(());
@@ -3448,9 +3442,9 @@ mod system_audio_tests {
                 source: 61,
             },
         ];
-        assert!(outputs.iter().any(|o| o.id == 1128 && o.source == 47));
-        assert!(!outputs.iter().any(|o| o.id == 1128 && o.source == 61));
-        assert!(!outputs.iter().any(|o| o.id == 1130 && o.source == 47));
+        assert!(source_output_route_matches(&outputs, 1128, 47).unwrap());
+        assert!(!source_output_route_matches(&outputs, 1128, 61).unwrap());
+        assert!(!source_output_route_matches(&outputs, 1130, 47).unwrap());
     }
 
     #[test]
