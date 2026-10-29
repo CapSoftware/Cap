@@ -245,12 +245,17 @@ const wait = (durationMs: number) =>
 		globalThis.setTimeout(resolve, durationMs);
 	});
 
+// A runtime message reaches every extension page. When the offscreen document
+// is still loading, the panel or welcome page can receive it first and let it
+// go unanswered, so a closed port means the same as a missing receiver: the
+// offscreen listener never kept the channel open.
 const isTransientOffscreenMessageError = (error: unknown) => {
 	if (!(error instanceof Error)) return false;
 	const message = error.message.toLowerCase();
 	return (
 		message.includes("receiving end does not exist") ||
-		message.includes("could not establish connection")
+		message.includes("could not establish connection") ||
+		message.includes("message port closed before a response was received")
 	);
 };
 
@@ -820,6 +825,7 @@ const broadcastOverlayHide = async () => {
 const broadcastOverlayCountdown = async (
 	seconds: number,
 	durationMs: number,
+	recordedTabId?: number,
 ) => {
 	const tabs = await getTabs();
 	await Promise.all(
@@ -827,6 +833,9 @@ const broadcastOverlayCountdown = async (
 			if (!canInjectIntoTab(tab) || tab.id === undefined) {
 				return undefined;
 			}
+			// The recorded tab may still be lazy-loading its overlay when the
+			// countdown starts, so it gets the injecting, retrying send that keeps
+			// the count visible there.
 			return sendOverlay(
 				tab.id,
 				{
@@ -834,7 +843,7 @@ const broadcastOverlayCountdown = async (
 					seconds,
 					durationMs,
 				},
-				false,
+				tab.id === recordedTabId,
 			).catch(() => undefined);
 		}),
 	);
@@ -1047,6 +1056,36 @@ const refreshBootstrapInBackground = (
 		});
 };
 
+const START_PLAN_REFRESH_TIMEOUT_MS = 3000;
+
+// The recorder enforces the free-plan limit from the bootstrap it is started
+// with, and a cached free plan can predate an upgrade, so a free-plan start
+// re-checks the plan. A slow or failed request falls back to the cache.
+const refreshFreePlanForStart = async (
+	settings: ExtensionSettings,
+	auth: ExtensionAuth,
+	cached: BootstrapData,
+) => {
+	if (cached.plan.isPro) return cached;
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	try {
+		const fresh = await Promise.race([
+			fetchBootstrap(settings, auth),
+			new Promise<null>((resolve) => {
+				timer = setTimeout(() => resolve(null), START_PLAN_REFRESH_TIMEOUT_MS);
+			}),
+		]);
+		if (!fresh) return cached;
+		bootstrapCache = fresh;
+		await saveCachedBootstrap(fresh).catch(() => undefined);
+		return fresh;
+	} catch {
+		return cached;
+	} finally {
+		clearTimeout(timer);
+	}
+};
+
 const loadSignedInState = async () => {
 	const [settings, auth, pendingAuth, authError] = await Promise.all([
 		loadSettings(),
@@ -1182,6 +1221,7 @@ const resolveMicWarning = async (
 
 const performRecordingStart = async (mode: RecordingMode) => {
 	const { settings, auth, bootstrap } = await requireSignedInState();
+	const startBootstrap = refreshFreePlanForStart(settings, auth, bootstrap);
 	externalCaptureAutoPipPending = false;
 	const recordingSettings =
 		settings.capture.recordingMode === mode
@@ -1234,7 +1274,7 @@ const performRecordingStart = async (mode: RecordingMode) => {
 			mode,
 			settings: recordingSettings,
 			auth,
-			bootstrap,
+			bootstrap: await startBootstrap,
 			tabId,
 			tabStreamId,
 		});
@@ -1431,6 +1471,18 @@ const beginAuthFlow = async (settings: ExtensionSettings) => {
 const handlePreviewReady = async (tabId?: number) => {
 	if (tabId === undefined) return;
 	if (pendingPreviewTabId !== null && pendingPreviewTabId !== tabId) return;
+	// Hand-offs to another tab always go through showOverlayInTab, which marks
+	// the tab pending. A preview that opened on its own somewhere else (a
+	// background tab whose overlay loaded when the recording started) must not
+	// take the camera away from the tab it was placed in.
+	if (
+		pendingPreviewTabId === null &&
+		activePreviewTabId !== null &&
+		activePreviewTabId !== tabId
+	) {
+		await hidePreviewTab(tabId);
+		return;
+	}
 	activePreviewTabId = tabId;
 	pendingPreviewTabId = null;
 	await hidePreviewTabsExcept(tabId);
@@ -1653,6 +1705,9 @@ const handleRequest = async (
 			type: "toggle-microphone-mute",
 			muted: message.muted,
 		});
+		if (response.ok && response.status) {
+			setRecordingStatusAndBroadcast(response.status);
+		}
 		return response;
 	}
 
@@ -1772,7 +1827,11 @@ const handleRequest = async (
 	}
 
 	if (message.type === "show-countdown") {
-		await broadcastOverlayCountdown(message.seconds, message.durationMs);
+		await broadcastOverlayCountdown(
+			message.seconds,
+			message.durationMs,
+			message.tabId,
+		);
 		return { ok: true };
 	}
 

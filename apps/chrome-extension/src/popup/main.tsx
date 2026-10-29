@@ -525,8 +525,14 @@ function App() {
 
 	const handleModeChange = (recordingMode: RecordingMode) => {
 		setMode(recordingMode);
+		const next = rememberRecordingMode(settingsRef.current, recordingMode);
+		// Camera mode records the camera itself, so pick one rather than
+		// leaving Start disabled until the user finds the camera list.
+		const firstCamera = cameraDevices[0]?.deviceId;
 		void updateSettings(
-			rememberRecordingMode(settingsRef.current, recordingMode),
+			recordingMode === "camera" && !next.webcam.deviceId && firstCamera
+				? rememberCameraSelection(next, firstCamera, cameraDevices)
+				: next,
 		);
 	};
 
@@ -686,6 +692,11 @@ function App() {
 								onStart={() => void start()}
 								onStop={() => void stop()}
 							/>
+							{!recordingActive && cameraRequired && (
+								<p className="mt-2 text-center text-xs text-gray-11">
+									Choose a camera above to record in Camera mode.
+								</p>
+							)}
 						</div>
 						{recordingBarStatus && (
 							<div className="cap-fade-up">
