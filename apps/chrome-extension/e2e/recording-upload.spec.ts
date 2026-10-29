@@ -391,7 +391,13 @@ const createMockCapServer = async () => {
 const canLaunchHeaded =
 	process.platform !== "linux" || Boolean(process.env.DISPLAY);
 
-const launchExtensionContext = async ({ tabCapture = false } = {}) => {
+const launchExtensionContext = async ({
+	tabCapture = false,
+	fakeAudioFile,
+}: {
+	tabCapture?: boolean;
+	fakeAudioFile?: string;
+} = {}) => {
 	const userDataDir = await mkdtemp(path.join(tmpdir(), "cap-extension-e2e-"));
 	const context = await chromium.launchPersistentContext(userDataDir, {
 		channel: "chromium",
@@ -409,6 +415,9 @@ const launchExtensionContext = async ({ tabCapture = false } = {}) => {
 				? [
 						"--use-fake-device-for-media-stream",
 						"--use-fake-ui-for-media-stream",
+						...(fakeAudioFile
+							? [`--use-file-for-fake-audio-capture=${fakeAudioFile}`]
+							: []),
 					]
 				: []),
 		],
@@ -451,6 +460,7 @@ type RecordingOptions = {
 	capturePath: string;
 	durationMs: number;
 	cachedPlan?: { isPro: boolean; maxRecordingSeconds: number | null };
+	microphoneWarning?: boolean;
 };
 
 const DEFAULT_RECORDING_OPTIONS: RecordingOptions = {
@@ -474,6 +484,7 @@ const configureExtension = async (
 			microphone,
 			systemAudio,
 			cachedPlan,
+			microphoneWarning,
 			settingsKey,
 			apiBaseUrl,
 		}) => {
@@ -539,7 +550,7 @@ const configureExtension = async (
 								seconds: 3,
 							},
 							microphoneWarning: {
-								enabled: false,
+								enabled: microphoneWarning,
 							},
 						},
 					},
@@ -561,6 +572,7 @@ const configureExtension = async (
 			recordingMode: options.mode,
 			microphone: options.microphone,
 			systemAudio: options.systemAudio,
+			microphoneWarning: options.microphoneWarning ?? false,
 			cachedPlan: options.cachedPlan ?? {
 				isPro: true,
 				maxRecordingSeconds: 600,
@@ -904,6 +916,86 @@ test.describe("extension recording upload", () => {
 				const median = sorted[Math.floor(sorted.length / 2)];
 				expect(Math.abs(median)).toBeLessThan(0.15);
 				expect(sorted[sorted.length - 1] - sorted[0]).toBeLessThan(0.1);
+			}
+		});
+	}
+
+	for (const input of [
+		{
+			name: "quiet room tone starts without a warning",
+			source: "anoisesrc=color=pink:amplitude=0.0005",
+			warns: false,
+		},
+		{
+			name: "a silent microphone still warns before starting",
+			source: "anullsrc=channel_layout=mono:sample_rate=48000",
+			warns: true,
+		},
+	]) {
+		test(`microphone check: ${input.name}`, async () => {
+			if (!extension || !mockServer)
+				throw new Error("Test harness did not start");
+			const audioDirectory = await mkdtemp(path.join(tmpdir(), "cap-e2e-mic-"));
+			try {
+				const audioFile = path.join(audioDirectory, "mic.wav");
+				execFileSync("ffmpeg", [
+					"-v",
+					"error",
+					"-f",
+					"lavfi",
+					"-i",
+					input.source,
+					"-t",
+					"10",
+					"-ar",
+					"48000",
+					"-ac",
+					"1",
+					audioFile,
+				]);
+				await extension.cleanup();
+				extension = await launchExtensionContext({ fakeAudioFile: audioFile });
+				const worker = await getServiceWorker(extension.context);
+				await configureExtension(worker, mockServer.origin, {
+					...DEFAULT_RECORDING_OPTIONS,
+					microphone: true,
+					microphoneWarning: true,
+				});
+				const messengerPage = await openExtensionMessengerPage(
+					extension.context,
+					worker,
+				);
+				const capturePage = await extension.context.newPage();
+				await capturePage.goto(`${mockServer.origin}/capture.html`);
+				await capturePage.bringToFront();
+				void sendServiceWorkerMessage(messengerPage, {
+					target: "service-worker",
+					type: "start-recording",
+					mode: DEFAULT_RECORDING_OPTIONS.mode,
+				}).catch(() => undefined);
+
+				const readPhase = async () => {
+					const response = await sendServiceWorkerMessage(messengerPage, {
+						target: "service-worker",
+						type: "get-recording-status",
+					});
+					return response.ok ? response.status?.phase : response.error;
+				};
+				if (input.warns) {
+					await capturePage.waitForTimeout(4_000);
+					expect(await readPhase()).toBe("idle");
+					expect(mockServer.state.initiateBodies).toHaveLength(0);
+				} else {
+					await expect.poll(readPhase, { timeout: 10_000 }).toBe("recording");
+					const stopResponse = await sendServiceWorkerMessage(messengerPage, {
+						target: "service-worker",
+						type: "stop-recording",
+					});
+					expect(stopResponse).toMatchObject({ ok: true });
+					await expectSuccessfulUpload(messengerPage, mockServer.state);
+				}
+			} finally {
+				await rm(audioDirectory, { recursive: true, force: true });
 			}
 		});
 	}
