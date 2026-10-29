@@ -29,8 +29,8 @@ import {
 	spaceRoleLabel,
 } from "@/lib/permissions/roles";
 import { useDashboardContext } from "../../../Contexts";
-import { setSpaceMembers } from "../actions";
 import type { SpaceMemberData } from "../(space)/page";
+import { setSpaceMembers } from "../actions";
 import { MemberSelect } from "./MemberSelect";
 
 type MembersIndicatorProps = {

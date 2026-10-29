@@ -34,6 +34,7 @@ import type { FolderDataType } from "../../caps/components/Folder";
 import { FoldersSection } from "../../caps/components/FoldersSection";
 import { NewFolderDialog } from "../../caps/components/NewFolderDialog";
 import { SelectedCapsBar } from "../../caps/components/SelectedCapsBar";
+import type { SpaceMemberData } from "./(space)/page";
 import { AddVideosDialog } from "./components/AddVideosDialog";
 import { AddVideosToOrganizationDialog } from "./components/AddVideosToOrganizationDialog";
 import { EmptySharedCapState } from "./components/EmptySharedCapState";
@@ -43,7 +44,6 @@ import {
 	type OrganizationMemberData,
 } from "./components/OrganizationIndicator";
 import { SharedCapCard } from "./components/SharedCapCard";
-import type { SpaceMemberData } from "./(space)/page";
 
 type SharedVideoData = {
 	id: Video.VideoId;
