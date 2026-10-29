@@ -6,7 +6,7 @@ import { redirect, usePathname } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { InviteDialog } from "@/app/(org)/dashboard/settings/organization/components/InviteDialog";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
-import { UpgradeModal } from "@/components/UpgradeModal";
+import { LazyUpgradeModal } from "@/components/LazyUpgradeModal";
 import {
 	DashboardContext,
 	type ITheme,
@@ -177,7 +177,7 @@ export function DashboardContexts({
 				/>
 
 				{buildEnv.NEXT_PUBLIC_IS_CAP && (
-					<UpgradeModal
+					<LazyUpgradeModal
 						open={upgradeModalOpen}
 						onOpenChange={setUpgradeModalOpen}
 					/>

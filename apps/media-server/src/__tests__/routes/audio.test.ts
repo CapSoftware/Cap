@@ -181,6 +181,42 @@ describe("POST /audio/extract", () => {
 		expect(new Uint8Array(buffer)).toEqual(mockAudioData);
 	});
 
+	test("gives streamed extraction long enough for multi-hour recordings", async () => {
+		let timeoutMs: number | undefined;
+
+		mock.module("../../lib/media-audio", () => ({
+			...mediaAudio,
+			checkHasAudioTrack: async () => true,
+			extractAudioStream: (
+				_videoUrl: string,
+				options?: { timeoutMs?: number },
+			) => {
+				timeoutMs = options?.timeoutMs;
+				return {
+					stream: new ReadableStream<Uint8Array>({
+						start(controller) {
+							controller.enqueue(new Uint8Array([0x49, 0x44, 0x33]));
+							controller.close();
+						},
+					}),
+					cleanup: () => {},
+				};
+			},
+		}));
+
+		const { default: appWithMock } = await import("../../app");
+
+		const response = await appWithMock.fetch(
+			audioPostRequest("/audio/extract", {
+				videoUrl: "https://example.com/video.mp4",
+			}),
+		);
+
+		expect(response.status).toBe(200);
+		await response.arrayBuffer();
+		expect(timeoutMs).toBe(15 * 60 * 1000);
+	});
+
 	test("returns 500 when mediaAudio extraction fails", async () => {
 		mock.module("../../lib/media-audio", () => ({
 			...mediaAudio,

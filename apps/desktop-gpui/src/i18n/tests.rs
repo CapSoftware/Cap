@@ -25,6 +25,7 @@ fn english_matches_the_literals_it_replaced() {
         (tr::menu::app::settings(), "Settings…".into()),
         (tr::menu::file::close_window(), "Close Window".into()),
         (tr::menu::file::open_file(), "Open File…".into()),
+        (tr::menu::file::open_prompt(), "Open Recording".into()),
         (tr::menu::file::open_recent(), "Open Recent".into()),
         (tr::menu::file::import_media(), "Import Media…".into()),
         (tr::menu::file::title(), "File".into()),
@@ -206,6 +207,17 @@ fn english_matches_the_literals_it_replaced() {
         (
             tr::settings::general::recording::main_window_start::label(),
             "Main window when recording starts".into(),
+        ),
+        (
+            tr::settings::general::recording::window_capture::description(),
+            "How a window recording captures the window you pick. Focused window records only \
+             that window, centred and followed if it moves; Screen region records the area of \
+             the screen it covers."
+                .into(),
+        ),
+        (
+            tr::settings::general::recording::window_capture::label(),
+            "Window capture style".into(),
         ),
         (
             tr::settings::general::recording::post_deletion::description(),
@@ -488,6 +500,10 @@ fn english_matches_the_literals_it_replaced() {
             !key.starts_with(NEW_IN_THE_LANGUAGE_PICKER)
                 && !super::surface_tests::is_main_surface_key(key)
                 && !super::settings_surface_tests::is_settings_surface_key(key)
+                && !super::dialogs_surface_tests::is_dialogs_surface_key(key)
+                && !super::editor_panels_surface_tests::is_editor_panels_surface_key(key)
+                && !super::editor_shell_surface_tests::is_editor_shell_surface_key(key)
+                && !key.starts_with(super::messages::KEY_PREFIX)
         })
         .count()
         // `tray.version`, `excluded_windows.missing_body`, `self_host.confirm_change`,
@@ -571,13 +587,6 @@ fn language_picker_english() {
 }
 
 #[test]
-fn the_picker_shows_in_debug_builds() {
-    if cfg!(debug_assertions) {
-        assert!(picker_enabled());
-    }
-}
-
-#[test]
 fn system_tags_resolve_to_catalogs() {
     for (tag, expected) in [
         ("en-US", Some(Locale::En)),
@@ -616,21 +625,13 @@ fn traditional_chinese_falls_through_to_the_next_language() {
 }
 
 #[test]
-fn system_language_waits_for_the_picker() {
+fn system_default_follows_the_system_language_and_a_choice_overrides_it() {
     assert_eq!(
-        resolve_preference(Preference::System, false, || Locale::Ja),
-        Locale::En
-    );
-    assert_eq!(
-        resolve_preference(Preference::System, true, || Locale::Ja),
+        resolve_preference(Preference::System, || Locale::Ja),
         Locale::Ja
     );
     assert_eq!(
-        resolve_preference(Preference::Fixed(Locale::De), false, || Locale::Ja),
-        Locale::De
-    );
-    assert_eq!(
-        resolve_preference(Preference::Fixed(Locale::De), true, || Locale::Ja),
+        resolve_preference(Preference::Fixed(Locale::De), || Locale::Ja),
         Locale::De
     );
 }
@@ -859,6 +860,7 @@ fn every_key_is_used_outside_the_catalog() {
             }
         }
     }
+    sources.push_str(&std::fs::read_to_string(i18n.join("messages.rs")).unwrap());
     let unused: Vec<&str> = KEYS
         .iter()
         .copied()

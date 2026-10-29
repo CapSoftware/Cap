@@ -2,14 +2,45 @@ import { LogoSpinner } from "@cap/ui";
 import type { Video } from "@cap/web-domain";
 import clsx from "clsx";
 import { Effect } from "effect";
-import moment from "moment";
 import Image from "next/image";
-import type { CSSProperties } from "react";
-import { memo, useEffect, useRef, useState } from "react";
+import type { CSSProperties, ReactNode } from "react";
+import {
+	createContext,
+	memo,
+	Suspense,
+	use,
+	useContext,
+	useEffect,
+	useRef,
+	useState,
+	useSyncExternalStore,
+} from "react";
+import { durationParts } from "@/lib/date-format";
 import { useEffectQuery } from "@/lib/EffectRuntime";
 import { ThumbnailRequest } from "@/lib/Requests/ThumbnailRequest";
 
 export type ImageLoadingStatus = "loading" | "success" | "error";
+
+export type SeededThumbnails = {
+	videoIds: readonly Video.VideoId[];
+	urls: Promise<Record<string, string>>;
+};
+
+const SeededThumbnailsContext = createContext<SeededThumbnails | null>(null);
+
+export function SeededThumbnailsProvider({
+	value,
+	children,
+}: {
+	value: SeededThumbnails | undefined;
+	children: ReactNode;
+}) {
+	return (
+		<SeededThumbnailsContext.Provider value={value ?? null}>
+			{children}
+		</SeededThumbnailsContext.Provider>
+	);
+}
 
 type PreviewState = {
 	videoId: Video.VideoId;
@@ -31,11 +62,11 @@ interface VideoThumbnailProps {
 }
 
 const formatDuration = (durationSecs: number) => {
-	const momentDuration = moment.duration(durationSecs, "seconds");
+	const duration = durationParts(durationSecs);
 
-	const totalHours = Math.floor(momentDuration.asHours());
-	const totalMinutes = Math.floor(momentDuration.asMinutes());
-	const remainingSeconds = Math.ceil(momentDuration.asSeconds() % 60); // Use ceil to avoid 0 secs
+	const totalHours = Math.floor(duration.asHours);
+	const totalMinutes = Math.floor(duration.asMinutes);
+	const remainingSeconds = Math.ceil(duration.asSeconds % 60); // Use ceil to avoid 0 secs
 
 	if (totalHours > 0) {
 		return `${totalHours} hr${totalHours > 1 ? "s" : ""}`;
@@ -61,9 +92,14 @@ function getPreviewGifSrc(videoId: Video.VideoId) {
 	return `/api/video/preview?videoId=${encodeURIComponent(videoId)}&fallback=none`;
 }
 
+// Signed thumbnail URLs last an hour. A seeded URL skips the refetch on mount,
+// and is re-signed on later mounts once it is older than this, as before.
+const SEEDED_THUMBNAIL_STALE_TIME = 5 * 60 * 1000;
+
 export const useThumnailQuery = (
 	videoId: Video.VideoId,
 	enabled: boolean = true,
+	seededUrl?: string,
 ) => {
 	return useEffectQuery({
 		queryKey: ThumbnailRequest.queryKey(videoId),
@@ -74,10 +110,44 @@ export const useThumnailQuery = (
 			);
 		}),
 		enabled,
+		initialData: seededUrl,
+		staleTime: seededUrl === undefined ? 0 : SEEDED_THUMBNAIL_STALE_TIME,
 	});
 };
 
-export const VideoThumbnail: React.FC<VideoThumbnailProps> = memo(
+const subscribeToNothing = () => () => {};
+
+export const VideoThumbnail: React.FC<VideoThumbnailProps> = memo((props) => {
+	const seeded = useContext(SeededThumbnailsContext);
+	// The server HTML keeps the loading state and the image only mounts after
+	// hydration, as it did with the client RPC. Rendering it in the HTML made the
+	// thumbnails compete with the page's JS for bandwidth and delayed hydration.
+	const hydrated = useSyncExternalStore(
+		subscribeToNothing,
+		() => true,
+		() => false,
+	);
+	if (!seeded || !seeded.videoIds.includes(props.videoId)) {
+		return <VideoThumbnailView {...props} />;
+	}
+	const pending = <VideoThumbnailView {...props} awaitingSeed />;
+	if (!hydrated) return pending;
+	return (
+		<Suspense fallback={pending}>
+			<SeededVideoThumbnail {...props} urls={seeded.urls} />
+		</Suspense>
+	);
+});
+
+function SeededVideoThumbnail({
+	urls,
+	...props
+}: VideoThumbnailProps & { urls: SeededThumbnails["urls"] }) {
+	const seededUrl = use(urls)[props.videoId];
+	return <VideoThumbnailView {...props} seededUrl={seededUrl} />;
+}
+
+const VideoThumbnailView = memo(
 	({
 		videoId,
 		alt,
@@ -89,8 +159,14 @@ export const VideoThumbnail: React.FC<VideoThumbnailProps> = memo(
 		setImageStatus,
 		hasActiveUpload = false,
 		showPreview = true,
-	}) => {
-		const thumbnailUrl = useThumnailQuery(videoId, !hasActiveUpload);
+		awaitingSeed = false,
+		seededUrl,
+	}: VideoThumbnailProps & { awaitingSeed?: boolean; seededUrl?: string }) => {
+		const thumbnailUrl = useThumnailQuery(
+			videoId,
+			!hasActiveUpload && !awaitingSeed,
+			seededUrl,
+		);
 		const containerRef = useRef<HTMLDivElement>(null);
 		const imageRef = useRef<HTMLImageElement>(null);
 		const latestVideoId = useRef(videoId);
