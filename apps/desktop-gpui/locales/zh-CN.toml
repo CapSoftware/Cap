@@ -544,26 +544,9 @@ terms_title = "记住的词语"
 title = "转写"
 
 [settings.experimental]
-developer = "开发者"
-developer_description = "仅在开发版本中显示。"
 muxer = "进程外混流器"
 muxer_description = "在独立的子进程中运行分段 MP4 混流器，混流器崩溃时不会影响你的录制。需要内置的 cap-muxer 程序。"
-native_app = "使用原生应用"
-native_app_description = "关闭后会退出此应用，并在开发环境中重新打开经典的 Tauri 应用。录制和设置是共享的。"
 reliability = "可靠性"
-
-[settings.experimental.switch]
-busy = "请先完成录制、导出、上传、导入或转写任务，再切换到经典版应用。"
-check_failed = "无法确认经典版 Cap 应用是否已打开：{error}"
-data_stays = "你的录制和设置会原样保留。"
-failed = "无法打开经典版 Cap 应用。"
-not_found = "找不到可以切换回去的经典版 Cap 应用。"
-open_failed = "无法打开经典版 Cap 应用：{error}"
-opening = "正在打开经典版 Cap 应用"
-opening_detail = "经典版 Cap 应用准备就绪后，此窗口将关闭。"
-save_failed = "无法保存你的应用偏好设置。Cap 仍保持打开。"
-switching = "正在切换回经典版 Cap 应用。"
-timed_out = "经典版应用尚未打开。请在开发终端中检查构建错误，然后重试。"
 
 [settings.feedback]
 app_version = "应用版本"
@@ -959,7 +942,6 @@ name = "上传就绪时提醒我"
 [settings.automations.template.webhook_share]
 description = "将分享链接发送到 Slack、Discord 或你自己的 Webhook。"
 name = "分享内容时通知 Slack"
-
 
 [main]
 delete_recording_confirm = "确定要删除这段录制吗？"

@@ -544,26 +544,9 @@ terms_title = "登録した用語"
 title = "文字起こし"
 
 [settings.experimental]
-developer = "開発者"
-developer_description = "開発ビルドでのみ表示されます。"
 muxer = "別プロセスのマルチプレクサ"
 muxer_description = "フラグメント化MP4のマルチプレクサを独立したサブプロセスで実行し、マルチプレクサがクラッシュしても録画が失われないようにします。同梱のcap-muxerバイナリが必要です。"
-native_app = "ネイティブアプリを使う"
-native_app_description = "オフにするとこのアプリを閉じ、開発用ハーネスで従来のTauriアプリを開き直します。録画と設定は共有されます。"
 reliability = "信頼性"
-
-[settings.experimental.switch]
-busy = "従来のアプリに切り替える前に、録画、書き出し、アップロード、読み込み、文字起こしの作業を完了してください。"
-check_failed = "従来のCapアプリが開いたかどうか確認できませんでした：{error}"
-data_stays = "録画と設定はそのまま残ります。"
-failed = "従来のCapアプリを開けませんでした。"
-not_found = "切り替え先の従来のCapアプリが見つかりませんでした。"
-open_failed = "従来のCapアプリを開けませんでした：{error}"
-opening = "従来のCapアプリを開いています"
-opening_detail = "従来のCapアプリの準備ができると、このウィンドウは閉じます。"
-save_failed = "アプリの設定を保存できませんでした。Capは開いたままです。"
-switching = "従来のCapアプリに戻しています。"
-timed_out = "従来のアプリが開きません。開発用ターミナルでビルドエラーを確認してから、もう一度お試しください。"
 
 [settings.feedback]
 app_version = "アプリのバージョン"
@@ -959,7 +942,6 @@ name = "アップロードの準備ができたら通知"
 [settings.automations.template.webhook_share]
 description = "共有リンクをSlack、Discord、または独自のWebhookに送ります。"
 name = "共有したらSlackに知らせる"
-
 
 [main]
 delete_recording_confirm = "この録画を削除してもよろしいですか？"

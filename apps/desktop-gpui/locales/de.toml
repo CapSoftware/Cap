@@ -544,26 +544,9 @@ terms_title = "Gemerkte Begriffe"
 title = "Transkription"
 
 [settings.experimental]
-developer = "Entwickler"
-developer_description = "Wird nur in Entwicklungs-Builds angezeigt."
 muxer = "Muxer in separatem Prozess"
 muxer_description = "Führt den Muxer für fragmentiertes MP4 in einem isolierten Unterprozess aus, damit Muxer-Abstürze Ihre Aufnahme nicht beenden. Erfordert das mitgelieferte Programm cap-muxer."
-native_app = "Native App verwenden"
-native_app_description = "Ausschalten, um diese App zu schließen und die klassische Tauri-App in der Entwicklungsumgebung wieder zu öffnen. Aufnahmen und Einstellungen werden geteilt."
 reliability = "Zuverlässigkeit"
-
-[settings.experimental.switch]
-busy = "Schließen Sie Ihre Aufnahme, den Export, Upload, Import oder die Transkription ab, bevor Sie zur klassischen App wechseln."
-check_failed = "Es konnte nicht geprüft werden, ob die klassische Cap-App geöffnet wurde: {error}"
-data_stays = "Ihre Aufnahmen und Einstellungen bleiben genau dort, wo sie sind."
-failed = "Die klassische Cap-App konnte nicht geöffnet werden."
-not_found = "Die klassische Cap-App, zu der gewechselt werden soll, wurde nicht gefunden."
-open_failed = "Die klassische Cap-App konnte nicht geöffnet werden: {error}"
-opening = "Die klassische Cap-App wird geöffnet"
-opening_detail = "Dieses Fenster wird geschlossen, sobald die klassische Cap-App bereit ist."
-save_failed = "Ihre App-Einstellung konnte nicht gespeichert werden. Cap bleibt geöffnet."
-switching = "Es wird zur klassischen Cap-App zurückgewechselt."
-timed_out = "Die klassische App wurde nicht geöffnet. Prüfen Sie das Entwicklungsterminal auf Build-Fehler und versuchen Sie es dann erneut."
 
 [settings.feedback]
 app_version = "App-Version"
@@ -959,7 +942,6 @@ name = "Benachrichtigen, wenn ein Upload fertig ist"
 [settings.automations.template.webhook_share]
 description = "Den Link zum Teilen an Slack, Discord oder Ihren eigenen Webhook senden."
 name = "Slack beim Teilen benachrichtigen"
-
 
 [main]
 delete_recording_confirm = "Möchten Sie diese Aufnahme wirklich löschen?"
