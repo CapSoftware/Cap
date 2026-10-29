@@ -92,6 +92,10 @@ function getPreviewGifSrc(videoId: Video.VideoId) {
 	return `/api/video/preview?videoId=${encodeURIComponent(videoId)}&fallback=none`;
 }
 
+// Signed thumbnail URLs last an hour. A seeded URL skips the refetch on mount,
+// and is re-signed on later mounts once it is older than this, as before.
+const SEEDED_THUMBNAIL_STALE_TIME = 5 * 60 * 1000;
+
 export const useThumnailQuery = (
 	videoId: Video.VideoId,
 	enabled: boolean = true,
@@ -107,7 +111,7 @@ export const useThumnailQuery = (
 		}),
 		enabled,
 		initialData: seededUrl,
-		refetchOnMount: seededUrl === undefined,
+		staleTime: seededUrl === undefined ? 0 : SEEDED_THUMBNAIL_STALE_TIME,
 	});
 };
 
