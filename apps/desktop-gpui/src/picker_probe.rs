@@ -210,6 +210,16 @@ async fn probe_window_arrangement(
         .map(|bounds| (bounds.size().width() as f32, bounds.size().height() as f32));
     let before = Some(picked.bounds);
 
+    // Start from Focus off whatever the saved settings say: turning Center
+    // off later under a saved Focus would put back the pre-resize frame.
+    overlay
+        .update(cx, |view, _, cx| {
+            view.set_focus_center(false, cx);
+            view.set_focus(false, cx)
+        })
+        .ok();
+    sleep(cx, 500).await;
+
     // `window_arrange::RATIOS` lists 16:9 second.
     overlay
         .update(cx, |view, _, cx| view.choose_window_size(1, cx))
@@ -229,8 +239,22 @@ async fn probe_window_arrangement(
     };
     screenshot(output, "window-16x9", cx).await;
 
+    // Focus alone records the window where it is: only Center on screen
+    // moves it.
     overlay
         .update(cx, |view, _, cx| view.set_focus(true, cx))
+        .ok();
+    sleep(cx, 1500).await;
+    let unmoved = read_window(&picked.id);
+    let stayed = unmoved.zip(shaped).is_some_and(|(now, then)| {
+        (now.x - then.x).abs() < 6.
+            && (now.y - then.y).abs() < 6.
+            && (now.width - then.width).abs() < 6.
+            && (now.height - then.height).abs() < 6.
+    });
+
+    overlay
+        .update(cx, |view, _, cx| view.set_focus_center(true, cx))
         .ok();
     sleep(cx, 1500).await;
     let focused = read_window(&picked.id);
@@ -256,7 +280,10 @@ async fn probe_window_arrangement(
     // Dismissed with the window still moved: only the dismissal can put it
     // back.
     overlay
-        .update(cx, |view, _, cx| view.set_focus(true, cx))
+        .update(cx, |view, _, cx| {
+            view.set_focus_center(true, cx);
+            view.set_focus(true, cx)
+        })
         .ok();
     sleep(cx, 1500).await;
     let moved = !near(read_window(&picked.id), before);
@@ -267,12 +294,15 @@ async fn probe_window_arrangement(
     serde_json::json!({
         "passed": ratio_ok
             && inside(shaped)
+            && stayed
             && centred
             && inside(focused)
             && unfocused_ok
             && restored_ok,
         "before": rect_json(before),
         "sixteenByNine": rect_json(shaped),
+        "focusWithoutCenter": rect_json(unmoved),
+        "focusWithoutCenterStayed": stayed,
         "ratioOk": ratio_ok,
         "focused": rect_json(focused),
         "centred": centred,
@@ -645,6 +675,84 @@ async fn drag_cpu(
     cpu_percent_since(cpu, wall)
 }
 
+#[cfg(target_os = "macos")]
+fn footprint_mb() -> Option<f64> {
+    let mut info = std::mem::MaybeUninit::<libc::rusage_info_v2>::zeroed();
+    let status = unsafe {
+        libc::proc_pid_rusage(
+            std::process::id() as i32,
+            libc::RUSAGE_INFO_V2,
+            info.as_mut_ptr().cast(),
+        )
+    };
+    (status == 0).then(|| unsafe { info.assume_init() }.ri_phys_footprint as f64 / 1_048_576.)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn footprint_mb() -> Option<f64> {
+    None
+}
+
+async fn drag_frames(
+    display: &scap_targets::DisplayId,
+    overlay: &WindowHandle<crate::target_overlay::OverlayWindow>,
+    base: AreaRect,
+    grab: (f32, f32),
+    millis: u64,
+    cx: &mut AsyncApp,
+) -> serde_json::Value {
+    use crate::target_overlay::{ProbeDrag, probe_frames};
+    let drag = |step: ProbeDrag, point: (f32, f32), cx: &mut AsyncApp| {
+        cx.update(|cx| {
+            overlay
+                .update(cx, |view, _, cx| view.probe_drag(step, point, cx))
+                .unwrap_or(false)
+        })
+    };
+    cx.update(|cx| {
+        overlay
+            .update(cx, |view, _, cx| view.probe_offset_area(base, 0., cx))
+            .ok();
+    });
+    sleep(cx, 300).await;
+    let started = drag(ProbeDrag::Press, grab, cx);
+    probe_frames::begin(display.clone());
+    let (cpu, wall) = (cpu_secs(), std::time::Instant::now());
+    let mut events = 0u32;
+    while wall.elapsed() < Duration::from_millis(millis) {
+        let t = events as f32;
+        let point = (
+            grab.0 + 180. * (t * 0.02).sin(),
+            grab.1 + 90. * (t * 0.013).sin(),
+        );
+        drag(ProbeDrag::Move, point, cx);
+        sleep(cx, 4).await;
+        events += 1;
+    }
+    let cpu = cpu_percent_since(cpu, wall);
+    let seconds = wall.elapsed().as_secs_f64();
+    let frames = probe_frames::end();
+    drag(ProbeDrag::Release, grab, cx);
+    let mut gaps: Vec<f64> = frames
+        .windows(2)
+        .map(|pair| pair[1].saturating_duration_since(pair[0]).as_secs_f64() * 1000.)
+        .collect();
+    gaps.sort_by(f64::total_cmp);
+    let percentile = |p: f64| {
+        gaps.get(((gaps.len() as f64 * p) as usize).min(gaps.len().saturating_sub(1)))
+            .copied()
+    };
+    serde_json::json!({
+        "dragStarted": started,
+        "cpuPercent": cpu,
+        "fps": frames.len() as f64 / seconds,
+        "mouseEvents": events,
+        "medianGapMs": percentile(0.5),
+        "p99GapMs": percentile(0.99),
+        "maxGapMs": gaps.last(),
+    })
+}
+
 /// What the picker costs: the process's CPU use with the area picker left
 /// alone, and while its panels move, with and without the desktop capture
 /// under their glass, measured back to back in one process.
@@ -664,10 +772,33 @@ async fn probe_perf(cx: &mut AsyncApp) -> serde_json::Value {
     crate::overlay_backdrop::set_disabled(true);
     let dragging_without_backdrop = drag_cpu(&overlays, base, 6000, cx).await;
     crate::overlay_backdrop::set_disabled(false);
+
+    let handler_drags = match overlays.first() {
+        Some((display, overlay)) => {
+            let middle = (base.x + base.width / 2., base.y + base.height / 2.);
+            let corner = (base.x + base.width, base.y + base.height);
+            let moving = drag_frames(display, overlay, base, middle, 6000, cx).await;
+            let resizing = drag_frames(display, overlay, base, corner, 6000, cx).await;
+            let warm = footprint_mb();
+            for _ in 0..3 {
+                drag_frames(display, overlay, base, middle, 5000, cx).await;
+                drag_frames(display, overlay, base, corner, 5000, cx).await;
+            }
+            let after = footprint_mb();
+            serde_json::json!({
+                "move": moving,
+                "resize": resizing,
+                "footprintMbAfterWarmup": warm,
+                "footprintMbAfter30sMoreDragging": after,
+            })
+        }
+        None => serde_json::Value::Null,
+    };
     serde_json::json!({
         "idleCpuPercent": idle,
         "dragCpuPercent": dragging,
         "dragCpuPercentWithoutBackdrop": dragging_without_backdrop,
         "backdropCaptureMs": capture_ms,
+        "handlerDrags": handler_drags,
     })
 }

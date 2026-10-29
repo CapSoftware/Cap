@@ -126,14 +126,16 @@ pub struct Placement {
 
 /// Places a `bubble`-sized hint beside `control` in a `window`-sized space:
 /// above if it fits, then below, right and left, skipping any side that would
-/// land on the pointer at `cursor`. `prefer` keeps a hint that is already
-/// showing on its side while that still works, so it never jumps.
+/// land on the pointer at `cursor` or on a control in `keep_clear` (the Start
+/// button). `prefer` keeps a hint that is already showing on its side while
+/// that still works, so it never jumps.
 pub fn place(
     control: Bounds<Pixels>,
     bubble: Size<Pixels>,
     cursor: Point<Pixels>,
     window: Size<Pixels>,
     prefer: Option<Side>,
+    keep_clear: &[Bounds<Pixels>],
 ) -> Placement {
     let (w, h) = (f32::from(bubble.width), f32::from(bubble.height));
     let (win_w, win_h) = (f32::from(window.width), f32::from(window.height));
@@ -156,7 +158,9 @@ pub fn place(
     };
     let (cx, cy) = (f32::from(cursor.x), f32::from(cursor.y));
     let pointer = (cx + CURSOR.0, cy + CURSOR.1, cx + CURSOR.2, cy + CURSOR.3);
-    let works = |side: Side| {
+    // Whether the hint on `side` stays in the window, clear of the pointer,
+    // and clear of every control in `keep_clear`.
+    let fits = |side: Side| {
         let (x, y) = candidate(side);
         let inside = x >= MARGIN - 0.5
             && y >= MARGIN - 0.5
@@ -169,14 +173,31 @@ pub fn place(
             Side::Right => (right, y, x + w, y + h),
             Side::Left => (x, y, left, y + h),
         };
-        let covers_pointer = pointer.0 < x1 && pointer.2 > x0 && pointer.1 < y1 && pointer.3 > y0;
-        inside && !covers_pointer
+        let covers = |a: (f32, f32, f32, f32)| a.0 < x1 && a.2 > x0 && a.1 < y1 && a.3 > y0;
+        let covers_pointer = covers(pointer);
+        let covers_kept = keep_clear.iter().any(|kept| {
+            let (kx, ky) = (f32::from(kept.origin.x), f32::from(kept.origin.y));
+            covers((
+                kx,
+                ky,
+                kx + f32::from(kept.size.width),
+                ky + f32::from(kept.size.height),
+            ))
+        });
+        (inside, covers_pointer, covers_kept)
     };
+    let works = |side: Side| fits(side) == (true, false, false);
 
     let order = [Side::Above, Side::Below, Side::Right, Side::Left];
     let side = prefer
         .filter(|side| works(*side))
         .or_else(|| order.into_iter().find(|side| works(*side)))
+        // Next best: on the pointer, but never over a kept-clear control.
+        .or_else(|| {
+            order
+                .into_iter()
+                .find(|side| matches!(fits(*side), (true, _, false)))
+        })
         .unwrap_or(Side::Above);
     let (mut x, mut y) = candidate(side);
     if side == Side::Above && !works(side) {
@@ -221,6 +242,8 @@ struct Active {
 #[derive(Default)]
 pub struct Hints {
     anchors: Rc<RefCell<HashMap<&'static str, Anchor>>>,
+    /// Controls no hint may cover, with the frame each was last painted in.
+    keep_clear: Rc<RefCell<HashMap<&'static str, (Bounds<Pixels>, u64)>>>,
     frame: u64,
     active: Option<Active>,
     /// Bumped by every hover change; a timer only acts if none came since.
@@ -249,6 +272,22 @@ impl Hints {
                         frame,
                     },
                 );
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+    }
+
+    /// An invisible child of a control no hint may cover, laid out over it.
+    pub fn keep_clear(&self, id: &'static str) -> impl IntoElement {
+        let keep_clear = self.keep_clear.clone();
+        let frame = self.frame;
+        canvas(
+            move |bounds, _, _| {
+                keep_clear.borrow_mut().insert(id, (bounds, frame));
             },
             |_, _, _, _| {},
         )
@@ -363,12 +402,20 @@ impl Hints {
             px((text.0 + 2. * PAD_X + 2.).ceil()),
             px((text.1 + 2. * PAD_Y + 2.).ceil()),
         );
+        let keep_clear: Vec<Bounds<Pixels>> = self
+            .keep_clear
+            .borrow()
+            .values()
+            .filter(|(_, frame)| frame + 1 >= self.frame)
+            .map(|(bounds, _)| *bounds)
+            .collect();
         let placed = place(
             bounds,
             bubble,
             window.mouse_position(),
             window.viewport_size(),
             self.side.get().or(hint.side),
+            &keep_clear,
         );
         self.side.set(Some(placed.side));
 
@@ -580,6 +627,7 @@ mod tests {
             point(px(610.), px(716.)),
             window(),
             None,
+            &[],
         );
         assert_eq!(placed.side, Side::Above);
         assert_eq!(
@@ -598,6 +646,7 @@ mod tests {
             point(px(610.), px(26.)),
             window(),
             None,
+            &[],
         );
         assert_eq!(placed.side, Side::Below);
     }
@@ -608,7 +657,14 @@ mod tests {
         // edge: below would sit on the pointer's arrow, so it goes beside.
         let control = rect(600., 20., 120., 32.);
         let cursor = point(px(660.), px(50.));
-        let placed = place(control, size(px(200.), px(50.)), cursor, window(), None);
+        let placed = place(
+            control,
+            size(px(200.), px(50.)),
+            cursor,
+            window(),
+            None,
+            &[],
+        );
         assert_ne!(placed.side, Side::Below);
         assert!(!placed.bubble.contains(&cursor));
     }
@@ -622,6 +678,7 @@ mod tests {
             point(px(10.), px(710.)),
             window(),
             None,
+            &[],
         );
         assert_eq!(placed.side, Side::Above);
         assert_eq!(placed.bubble.origin.x, px(MARGIN));
@@ -638,7 +695,31 @@ mod tests {
             point(px(610.), px(406.)),
             window(),
             Some(Side::Left),
+            &[],
         );
         assert_eq!(placed.side, Side::Left);
+    }
+
+    #[test]
+    fn never_covers_a_kept_clear_control() {
+        // A card with the Start button just below it: the hint asked to sit
+        // below goes beside the card instead of over the button.
+        let card = rect(600., 500., 300., 52.);
+        let start = rect(620., 562., 260., 44.);
+        let placed = place(
+            card,
+            size(px(220.), px(70.)),
+            point(px(700.), px(526.)),
+            window(),
+            Some(Side::Below),
+            &[start],
+        );
+        assert_ne!(placed.side, Side::Below);
+        let bubble = placed.bubble;
+        let overlaps = bubble.origin.x < start.origin.x + start.size.width
+            && bubble.origin.x + bubble.size.width > start.origin.x
+            && bubble.origin.y < start.origin.y + start.size.height
+            && bubble.origin.y + bubble.size.height > start.origin.y;
+        assert!(!overlaps);
     }
 }

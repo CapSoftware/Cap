@@ -2067,10 +2067,12 @@ impl SettingsWindow {
     fn render_account(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let (update_label, update_ready) = match crate::updates::status(cx) {
-            crate::updates::UpdateStatus::Idle => (
-                tr::settings::sidebar::check_for_updates().to_string(),
-                false,
-            ),
+            crate::updates::UpdateStatus::Idle | crate::updates::UpdateStatus::Available { .. } => {
+                (
+                    tr::settings::sidebar::check_for_updates().to_string(),
+                    false,
+                )
+            }
             crate::updates::UpdateStatus::Checking => (
                 tr::settings::sidebar::checking_for_updates().to_string(),
                 false,
@@ -3016,8 +3018,8 @@ impl SettingsWindow {
                 let label = upload.label();
                 let message = upload
                     .last_error
-                    .clone()
-                    .unwrap_or_else(|| label.to_string());
+                    .as_deref()
+                    .map_or_else(|| label.to_string(), crate::i18n::messages::localize);
                 this.child(
                     pill(theme.settings_fill())
                         .id("recording-upload-status")
@@ -3220,9 +3222,7 @@ impl SettingsWindow {
     fn render_general(&self, window: &Window, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
         let mut sections = Vec::with_capacity(10);
         sections.push(self.render_appearance(cx).into_any_element());
-        if i18n::picker_enabled() {
-            sections.push(self.render_language(cx).into_any_element());
-        }
+        sections.push(self.render_language(cx).into_any_element());
         sections.extend([
             self.render_app_section(cx).into_any_element(),
             self.render_recording(cx).into_any_element(),

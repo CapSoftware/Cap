@@ -63,9 +63,9 @@ impl BlurMode {
     pub fn label(self) -> Option<&'static str> {
         match self {
             Self::Off => None,
-            Self::Light => Some("Light"),
-            Self::Heavy => Some("Heavy"),
-            Self::Remove => Some("Cutout"),
+            Self::Light => Some(tr::camera::blur::light()),
+            Self::Heavy => Some(tr::camera::blur::heavy()),
+            Self::Remove => Some(tr::camera::blur::cutout()),
         }
     }
 }
@@ -1039,6 +1039,7 @@ pub struct GeneralSettings {
     pub recording_countdown: Option<u32>,
     pub main_window_recording_start_behaviour: MainWindowStartBehaviour,
     pub window_capture_style: WindowCaptureStyle,
+    pub focus_center: bool,
     pub post_studio_recording_behaviour: PostStudioBehaviour,
     pub post_screenshot_behaviour: PostScreenshotBehaviour,
     pub post_deletion_behaviour: PostDeletionBehaviour,
@@ -1448,6 +1449,7 @@ impl GeneralSettings {
                 "mainWindowRecordingStartBehaviour",
             ),
             window_capture_style: enum_at(general, "windowCaptureStyle"),
+            focus_center: bool_at(general, "focusCenter", false),
             post_studio_recording_behaviour: enum_at(general, "postStudioRecordingBehaviour"),
             post_screenshot_behaviour: enum_at(general, "postScreenshotBehaviour"),
             post_deletion_behaviour: enum_at(general, "postDeletionBehaviour"),
