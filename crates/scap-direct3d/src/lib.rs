@@ -582,7 +582,7 @@ impl Capturer {
 
         let frame_pool_size = settings
             .fps
-            .map(|fps| ((fps as f32 / 30.0 * 2.0).ceil() as i32).clamp(2, 4))
+            .map(|fps| ((fps as f32 / 30.0 * 2.0).ceil() as i32).clamp(4, 6))
             .unwrap_or(2);
 
         let item_size = item.Size().map_err(NewCapturerError::ItemSize)?;

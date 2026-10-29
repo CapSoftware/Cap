@@ -466,6 +466,12 @@ pub struct VideoSourceConfig {
     settings: scap_direct3d::Settings,
     pub d3d_device: ID3D11Device,
 }
+
+impl VideoSourceConfig {
+    pub(crate) fn capture_frame_rate(&self) -> u32 {
+        self.video_info.fps().max(1)
+    }
+}
 pub struct VideoSource {
     video_info: VideoInfo,
     ctrl_tx: std::sync::mpsc::SyncSender<VideoControl>,
