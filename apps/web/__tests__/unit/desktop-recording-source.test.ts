@@ -521,6 +521,11 @@ describe("recording source preparation during upload", () => {
 				generation,
 			);
 			expect(storage.bucket.copyObject).toHaveBeenCalledTimes(3);
+			for (const [, , args, options] of storage.bucket.copyObject.mock
+				.calls as unknown as Array<[string, string, unknown, unknown]>) {
+				expect(args).toMatchObject({ IfNoneMatch: "*" });
+				expect(options).toEqual({ retryWithoutUnsupportedIfNoneMatch: true });
+			}
 			expect(
 				readInventory(storage, source.inventoryKey).objects.every(
 					(entry) => !entry.key.includes("/prepared/"),
@@ -1626,6 +1631,12 @@ describe("large desktop recording snapshots", () => {
 		await advanceDesktopRecordingSourceCommit(video, checkpoint);
 		const source = await finishSnapshot(video, checkpoint);
 		expect(storage.bucket.multipart.complete).toHaveBeenCalledOnce();
+		expect(storage.bucket.multipart.complete).toHaveBeenCalledWith(
+			expect.any(String),
+			expect.any(String),
+			expect.objectContaining({ IfNoneMatch: "*" }),
+			{ retryWithoutUnsupportedIfNoneMatch: true },
+		);
 		expect(
 			(await buildDesktopRecordingSourceUrls(video, source)).sourceFileSize,
 		).toBe(8 * 1024 ** 3);

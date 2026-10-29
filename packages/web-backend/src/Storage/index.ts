@@ -11,7 +11,10 @@ import {
 import { Effect, Exit, Option } from "effect";
 
 import { S3Buckets } from "../S3Buckets/index.ts";
-import type { S3BucketAccess } from "../S3Buckets/S3BucketAccess.ts";
+import type {
+	ConditionalWriteOptions,
+	S3BucketAccess,
+} from "../S3Buckets/S3BucketAccess.ts";
 import {
 	copyGoogleDriveFile,
 	createGoogleDriveResumableUpload,
@@ -87,6 +90,7 @@ type MultipartAccess = {
 			S3.CompleteMultipartUploadCommandInput,
 			"Key" | "Bucket" | "UploadId"
 		>,
+		options?: ConditionalWriteOptions,
 	) => Effect.Effect<
 		{ Location?: string; ETag?: string },
 		StorageDomain.StorageError
@@ -221,7 +225,8 @@ const makeS3MultipartAccess = (s3: S3BucketAccess): MultipartAccess => ({
 			S3.CompleteMultipartUploadCommandInput,
 			"Key" | "Bucket" | "UploadId"
 		>,
-	) => mapStorageError(s3.multipart.complete(key, uploadId, args)),
+		options?: ConditionalWriteOptions,
+	) => mapStorageError(s3.multipart.complete(key, uploadId, args, options)),
 	abort: (
 		key: string,
 		uploadId: string,
@@ -475,7 +480,8 @@ const makeS3Access = (s3: S3BucketAccess) => ({
 		source: string,
 		key: string,
 		args?: Omit<S3.CopyObjectCommandInput, "Bucket" | "CopySource" | "Key">,
-	) => mapStorageError(s3.copyObject(source, key, args)),
+		options?: ConditionalWriteOptions,
+	) => mapStorageError(s3.copyObject(source, key, args, options)),
 	copyObjectForRecording: (source: string, key: string) =>
 		copyS3ObjectForRecording(s3, source, key),
 	deleteObject: (key: string) =>
@@ -1128,7 +1134,8 @@ function withPublishedRecordingOutput<
 			source: string,
 			key: string,
 			args?: Omit<S3.CopyObjectCommandInput, "Bucket" | "CopySource" | "Key">,
-		) => access.copyObject(resolveCopySource(source), key, args),
+			options?: ConditionalWriteOptions,
+		) => access.copyObject(resolveCopySource(source), key, args, options),
 		copyObjectForRecording: (source: string, key: string) =>
 			access.copyObjectForRecording(resolveCopySource(source), key),
 	};
