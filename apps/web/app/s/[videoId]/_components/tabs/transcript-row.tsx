@@ -69,7 +69,8 @@ export function TranscriptEditor({
 			<textarea
 				value={editText}
 				onChange={(e) => setEditText(e.target.value)}
-				className="w-full resize-none rounded-lg border border-gray-4 bg-gray-1 p-2.5 text-[13px] leading-[22px] text-gray-12 outline-none transition placeholder:text-gray-8 focus:border-blue-500/60 focus:ring-2 focus:ring-blue-500/20"
+				disabled={isSaving}
+				className="w-full resize-none rounded-lg border border-gray-4 bg-gray-1 p-2.5 text-[13px] leading-[22px] text-gray-12 outline-none transition placeholder:text-gray-8 focus:border-blue-500/60 focus:ring-2 focus:ring-blue-500/20 disabled:cursor-not-allowed disabled:opacity-50"
 				rows={Math.max(2, Math.ceil(editText.length / 60))}
 				onClick={(e) => e.stopPropagation()}
 				placeholder="Edit transcript text..."

@@ -250,52 +250,65 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 
 	const handleTranscriptClick = useCallback(
 		(entry: TranscriptEntry) => {
-			if (editingEntry === entry.id) {
+			if (isSaving || editingEntry === entry.id) {
 				return;
 			}
 
 			setSelectedEntry(entry.id);
 			onSeek?.(entry.startTime);
 		},
-		[editingEntry, onSeek],
+		[editingEntry, isSaving, onSeek],
 	);
 
-	const startEditing = useCallback((entry: TranscriptEntry) => {
-		setEditingEntry(entry.id);
-	}, []);
+	const startEditing = useCallback(
+		(entry: TranscriptEntry) => {
+			if (isSaving) {
+				return;
+			}
+			setEditingEntry(entry.id);
+		},
+		[isSaving],
+	);
 
-	const cancelEditing = () => {
+	const cancelEditing = useCallback(() => {
+		if (isSaving) {
+			return;
+		}
 		setEditingEntry(null);
-	};
+	}, [isSaving]);
 
 	const saveEdit = async (editText: string) => {
 		const normalizedEditText = normalizeTranscriptCueText(editText);
 
-		if (!editingEntry || !normalizedEditText) {
+		if (!editingEntry || !normalizedEditText || isSaving) {
 			return;
 		}
+
+		const entryIdToSave = editingEntry;
 
 		setIsSaving(true);
 		try {
 			const result = await editTranscriptEntry(
 				data.id,
-				editingEntry,
+				entryIdToSave,
 				normalizedEditText,
 			);
 
 			if (result.success) {
 				setTranscriptData((prev) =>
 					prev.map((entry) =>
-						entry.id === editingEntry
+						entry.id === entryIdToSave
 							? { ...entry, text: normalizedEditText }
 							: entry,
 					),
 				);
-				setEditingEntry(null);
+				setEditingEntry((current) =>
+					current === entryIdToSave ? null : current,
+				);
 				invalidateTranscript(data.id);
 			} else {
 				console.error("[Transcript] Failed to save transcript edit:", {
-					entryId: editingEntry,
+					entryId: entryIdToSave,
 					videoId: data.id,
 					errorMessage: result.message,
 					result,
@@ -303,7 +316,7 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 			}
 		} catch (error) {
 			console.error("[Transcript] Error saving transcript edit:", {
-				entryId: editingEntry,
+				entryId: entryIdToSave,
 				videoId: data.id,
 				error: error instanceof Error ? error.message : error,
 				stack: error instanceof Error ? error.stack : undefined,
@@ -808,7 +821,7 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 								key={entry.id}
 								entry={entry}
 								selected={selectedEntry === entry.id}
-								canEdit={canEdit}
+								canEdit={canEdit && !isSaving}
 								onSelect={handleTranscriptClick}
 								onEdit={startEditing}
 							/>
