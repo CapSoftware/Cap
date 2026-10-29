@@ -207,7 +207,7 @@ export const sessions = mysqlTable(
 
 export const verificationTokens = mysqlTable("verification_tokens", {
 	identifier: varchar("identifier", { length: 255 }).primaryKey().notNull(),
-	token: varchar("token", { length: 255 }).unique().notNull(),
+	token: varchar("token", { length: 255 }).notNull(),
 	expires: datetime("expires").notNull(),
 	created_at: timestamp("created_at").notNull().defaultNow(),
 	updated_at: timestamp("updated_at").notNull().defaultNow().onUpdateNow(),

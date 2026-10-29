@@ -458,7 +458,7 @@ export function DrizzleAdapter(
 			const rows = await db
 				.select()
 				.from(verificationTokens)
-				.where(eq(verificationTokens.token, verificationToken.token))
+				.where(eq(verificationTokens.identifier, normalizedIdentifier))
 				.limit(1);
 			const row = rows[0];
 			if (!row) throw new Error("Error: inserted verification token not found");

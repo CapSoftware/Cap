@@ -365,6 +365,13 @@
 			"when": 1793022702933,
 			"tag": "0051_fancy_talkback",
 			"breakpoints": true
+		},
+		{
+			"idx": 52,
+			"version": "5",
+			"when": 1793306594028,
+			"tag": "0052_chubby_rick_jones",
+			"breakpoints": true
 		}
 	]
 }

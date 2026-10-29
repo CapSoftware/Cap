@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
 	accounts,
 	organizationInvites,
@@ -344,6 +344,42 @@ describe.runIf(Boolean(databaseUrl))(
 					.from(organizationMembers)
 					.where(eq(organizationMembers.userId, userId)),
 			).toHaveLength(0);
+		});
+
+		it("keeps identical OTP codes independent across email addresses", async () => {
+			const first = `${id()}@example.com`;
+			const second = `${id()}@example.com`;
+			const token = createHash("sha256")
+				.update("123456test-secret")
+				.digest("hex");
+			const expires = new Date(Date.now() + 600_000);
+			const { createVerificationToken, useVerificationToken } = DrizzleAdapter(
+				database(),
+			);
+			if (!createVerificationToken || !useVerificationToken) {
+				throw new Error("Missing verification token adapter.");
+			}
+
+			await createVerificationToken({ identifier: first, token, expires });
+			await expect(
+				createVerificationToken({ identifier: second, token, expires }),
+			).resolves.toMatchObject({ identifier: second, token });
+			await expect(
+				createVerificationToken({ identifier: second, token, expires }),
+			).resolves.toMatchObject({ identifier: second, token });
+
+			await expect(
+				useVerificationToken({ identifier: first, token: "wrong-guess" }),
+			).resolves.toBeNull();
+			await expect(
+				useVerificationToken({ identifier: first, token }),
+			).resolves.toBeNull();
+			await expect(
+				useVerificationToken({ identifier: second, token }),
+			).resolves.toMatchObject({ identifier: second, token });
+			await expect(
+				useVerificationToken({ identifier: second, token }),
+			).resolves.toBeNull();
 		});
 
 		it("burns an email OTP exactly once under concurrent guesses", async () => {
