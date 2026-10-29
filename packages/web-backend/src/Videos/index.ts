@@ -282,21 +282,23 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 
 		const getThumbnailURLForVideo = Effect.fn("Videos.getThumbnailURLForVideo")(
 			function* (video: Video.Video) {
-				const [bucket] = yield* storage.getAccessForVideo(video);
-				const publishedThumbnail = getPublishedRecordingThumbnailKey(video);
-				if (publishedThumbnail) {
-					return Option.some(
-						yield* bucket.getSignedObjectUrl(publishedThumbnail),
+				return yield* Effect.gen(function* () {
+					const [bucket] = yield* storage.getAccessForVideo(video);
+					const publishedThumbnail = getPublishedRecordingThumbnailKey(video);
+					if (publishedThumbnail) {
+						return Option.some(
+							yield* bucket.getSignedObjectUrl(publishedThumbnail),
+						);
+					}
+					const videoPrefix = `${video.ownerId}/${video.id}/`;
+					const thumbnailKey = yield* findStoredScreenshotKey(
+						bucket,
+						videoPrefix,
 					);
-				}
-				const videoPrefix = `${video.ownerId}/${video.id}/`;
-				const thumbnailKey = yield* findStoredScreenshotKey(
-					bucket,
-					videoPrefix,
-				);
-				if (!thumbnailKey) return Option.none<string>();
-				const url = yield* bucket.getSignedObjectUrl(thumbnailKey);
-				return Option.some(url);
+					if (!thumbnailKey) return Option.none<string>();
+					const url = yield* bucket.getSignedObjectUrl(thumbnailKey);
+					return Option.some(url);
+				}).pipe(Effect.catchAll(() => Effect.succeed(Option.none<string>())));
 			},
 		);
 
@@ -923,9 +925,6 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 							onSuccess: () =>
 								getThumbnailURLForVideo(entry.video).pipe(
 									Effect.map((url) => Exit.succeed(url)),
-									Effect.catchAll(() =>
-										Effect.succeed(Exit.succeed(Option.none<string>())),
-									),
 								),
 						});
 					},
