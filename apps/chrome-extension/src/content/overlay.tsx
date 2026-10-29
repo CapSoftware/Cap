@@ -91,10 +91,12 @@ const FRAME_PERSIST_INTERVAL_MS = 5000;
 // so the service worker only honours requests from frames whose URL-hash
 // token was registered by this content script. Registration must complete
 // before an iframe is rendered, otherwise its first camera connect races the
-// registry write.
+// registry write. The registry keeps only the most recently registered
+// tokens, so frames register again each time they mount instead of trusting
+// an old registration that other tabs may have pushed out.
 let overlayTokensRegistration: Promise<boolean> | null = null;
 
-const ensureOverlayTokensRegistered = () => {
+const registerOverlayTokens = () => {
 	overlayTokensRegistration ??= Promise.all(
 		[PREVIEW_TOKEN, PANEL_TOKEN].map((token) =>
 			sendServiceWorkerMessage({
@@ -104,16 +106,10 @@ const ensureOverlayTokensRegistered = () => {
 			}),
 		),
 	)
-		.then((responses) => {
-			const registered = responses.every((response) => response.ok);
-			if (!registered) {
-				overlayTokensRegistration = null;
-			}
-			return registered;
-		})
-		.catch(() => {
+		.then((responses) => responses.every((response) => response.ok))
+		.catch(() => false)
+		.finally(() => {
 			overlayTokensRegistration = null;
-			return false;
 		});
 	return overlayTokensRegistration;
 };
@@ -377,17 +373,22 @@ function RecorderPanelOverlay({
 		() => window.innerHeight,
 	);
 	const [tokenReady, setTokenReady] = useState(false);
+	const shown = open && pageVisible;
 
+	// Hidden tabs never mount the panel, so only register when it is shown.
 	useEffect(() => {
-		if (!open || tokenReady) return;
+		if (!shown) {
+			setTokenReady(false);
+			return;
+		}
 		let disposed = false;
-		void ensureOverlayTokensRegistered().then((registered) => {
+		void registerOverlayTokens().then((registered) => {
 			if (!disposed && registered) setTokenReady(true);
 		});
 		return () => {
 			disposed = true;
 		};
-	}, [open, tokenReady]);
+	}, [shown]);
 
 	useEffect(() => {
 		const handleVisibility = () =>
@@ -666,15 +667,25 @@ function OverlayApp() {
 	// worker knows this page's tokens; an unregistered frame is refused camera
 	// access.
 	useEffect(() => {
-		if (!previewEnabled || previewTokenReady) return;
+		if (!previewEnabled) {
+			setPreviewTokenReady(false);
+			return;
+		}
 		let disposed = false;
-		void ensureOverlayTokensRegistered().then((registered) => {
+		void registerOverlayTokens().then((registered) => {
 			if (!disposed && registered) setPreviewTokenReady(true);
 		});
+		// A live preview keeps using its token, so refresh it whenever the tab
+		// comes back into view.
+		const refresh = () => {
+			if (document.visibilityState === "visible") void registerOverlayTokens();
+		};
+		document.addEventListener("visibilitychange", refresh);
 		return () => {
 			disposed = true;
+			document.removeEventListener("visibilitychange", refresh);
 		};
-	}, [previewEnabled, previewTokenReady]);
+	}, [previewEnabled]);
 
 	useEffect(() => {
 		let disposed = false;
