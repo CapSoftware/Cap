@@ -1,5 +1,4 @@
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import {
 	createServer,
@@ -8,15 +7,9 @@ import {
 } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import {
-	type BrowserContext,
-	chromium,
-	expect,
-	type Page,
-	test,
-} from "@playwright/test";
+import { type BrowserContext, expect, type Page, test } from "@playwright/test";
 import type { RecordingStatus } from "../src/shared/types";
+import { launchExtensionBrowser, unpackedExtensionId } from "./browser";
 
 type ChromeRuntimeResponse =
 	| {
@@ -58,15 +51,6 @@ type ChromeGlobal = typeof globalThis & {
 	};
 };
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const extensionPath = path.resolve(__dirname, "../dist");
-const unpackedExtensionId = createHash("sha256")
-	.update(extensionPath)
-	.digest("hex")
-	.slice(0, 32)
-	.replace(/[0-9a-f]/g, (digit) =>
-		String.fromCharCode(97 + Number.parseInt(digit, 16)),
-	);
 const SETTINGS_KEY = "cap-extension-settings";
 const AUTH_KEY = "cap-extension-auth";
 const BOOTSTRAP_CACHE_KEY = "cap-extension-bootstrap-cache";
@@ -398,13 +382,10 @@ const launchExtensionContext = async ({
 	tabCapture?: boolean;
 	fakeAudioFile?: string;
 } = {}) => {
-	const userDataDir = await mkdtemp(path.join(tmpdir(), "cap-extension-e2e-"));
-	const context = await chromium.launchPersistentContext(userDataDir, {
-		channel: "chromium",
+	return launchExtensionBrowser({
+		profilePrefix: "cap-extension-e2e-",
 		headless: !tabCapture,
 		args: [
-			`--disable-extensions-except=${extensionPath}`,
-			`--load-extension=${extensionPath}`,
 			`--allowlisted-extension-id=${unpackedExtensionId}`,
 			"--allow-http-screen-capture",
 			"--auto-select-desktop-capture-source=Cap E2E Capture Target",
@@ -422,12 +403,6 @@ const launchExtensionContext = async ({
 				: []),
 		],
 	});
-	const cleanup = async () => {
-		await context.close();
-		await rm(userDataDir, { recursive: true, force: true });
-	};
-
-	return { context, cleanup };
 };
 
 const getServiceWorker = async (context: BrowserContext) => {
@@ -1029,6 +1004,199 @@ test.describe("extension recording upload", () => {
 		});
 		expect(stopResponse).toMatchObject({ ok: true });
 		await expectSuccessfulUpload(messengerPage, mockServer.state);
+	});
+
+	// Random interleavings of everything a user or the browser can do around a
+	// recording. Run with CAP_E2E_FUZZ=<iterations> (and CAP_E2E_FUZZ_SEED to
+	// replay a failure). After every step the service worker must answer, no
+	// start may hang, and at the end a clean recording must still upload.
+	test("survives random recording interleavings", async () => {
+		const iterations = Number(process.env.CAP_E2E_FUZZ ?? 0);
+		test.skip(iterations <= 0, "Set CAP_E2E_FUZZ to run the fuzz test");
+		test.setTimeout(30 * 60_000);
+		if (!extension || !mockServer)
+			throw new Error("Test harness did not start");
+		const context = extension.context;
+		const server = mockServer;
+		let seed = Number(process.env.CAP_E2E_FUZZ_SEED ?? Date.now() % 1_000_000);
+		const random = () => {
+			seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648;
+			return seed / 2_147_483_648;
+		};
+		const initialSeed = seed;
+		const pick = <T>(values: readonly T[]) =>
+			values[Math.floor(random() * values.length)];
+
+		await configureExtension(await getServiceWorker(context), server.origin);
+		const messengerPage = await openExtensionMessengerPage(
+			context,
+			await getServiceWorker(context),
+		);
+		const capturePage = await context.newPage();
+		await capturePage.goto(`${server.origin}/capture.html`);
+		await capturePage.bringToFront();
+		let otherPage: Page | null = null;
+
+		const withTimeout = <T>(promise: Promise<T>, ms: number, label: string) =>
+			Promise.race([
+				promise,
+				new Promise<never>((_, reject) =>
+					setTimeout(() => reject(new Error(`${label} timed out`)), ms),
+				),
+			]);
+		const send = (message: Record<string, unknown>) =>
+			sendServiceWorkerMessage(messengerPage, {
+				target: "service-worker",
+				...message,
+			});
+		const liveWorker = async () => {
+			const existing = context
+				.serviceWorkers()
+				.find((worker) => worker.url().includes("assets/service-worker.js"));
+			if (existing) return existing;
+			const waiting = getServiceWorker(context);
+			await send({ type: "get-recording-status" }).catch(() => undefined);
+			return waiting;
+		};
+		const readPhase = async () => {
+			const response = await withTimeout(
+				send({ type: "get-recording-status" }),
+				5_000,
+				"get-recording-status",
+			);
+			return response.ok ? (response.status?.phase ?? "unknown") : "failed";
+		};
+
+		const pendingStarts: { startedAt: number; settled: boolean }[] = [];
+		const log: string[] = [];
+		const actions: Record<string, () => Promise<unknown>> = {
+			start: async () => {
+				const entry = { startedAt: Date.now(), settled: false };
+				pendingStarts.push(entry);
+				void send({ type: "start-recording", mode: "fullscreen" })
+					.catch(() => undefined)
+					.finally(() => {
+						entry.settled = true;
+					});
+			},
+			stop: () => send({ type: "stop-recording" }),
+			pause: () => send({ type: "pause-recording" }),
+			resume: () => send({ type: "resume-recording" }),
+			openPanel: () => send({ type: "open-recorder-panel" }),
+			closeUi: () => send({ type: "close-extension-ui" }),
+			reloadPage: () => capturePage.reload(),
+			switchTab: async () => {
+				if (otherPage && random() < 0.5) {
+					await capturePage.bringToFront();
+					return;
+				}
+				otherPage ??= await context.newPage();
+				await otherPage.goto(`${server.origin}/capture-audio.html`);
+				await otherPage.bringToFront();
+			},
+			closeOtherTab: async () => {
+				await otherPage?.close();
+				otherPage = null;
+				await capturePage.bringToFront();
+			},
+			killWorker: async () => {
+				const session = await context.newCDPSession(capturePage);
+				await session.send("ServiceWorker.enable");
+				await session.send("ServiceWorker.stopAllWorkers");
+				await session.detach();
+			},
+			closeOffscreen: async () => {
+				const worker = await liveWorker();
+				await worker.evaluate(async () => {
+					const chromeApi = (
+						globalThis as unknown as {
+							chrome: { offscreen: { closeDocument: () => Promise<void> } };
+						}
+					).chrome;
+					await chromeApi.offscreen.closeDocument().catch(() => undefined);
+				});
+			},
+			toggleMicrophone: async () => {
+				const response = await send({ type: "bootstrap" });
+				const settings = (
+					response as { settings?: { microphone?: { enabled: boolean } } }
+				).settings;
+				if (!settings?.microphone) return;
+				await send({
+					type: "settings-updated",
+					settings: {
+						...settings,
+						microphone: {
+							...settings.microphone,
+							enabled: !settings.microphone.enabled,
+						},
+					},
+				});
+			},
+		};
+		const weighted = [
+			...Array(4).fill("start"),
+			...Array(3).fill("stop"),
+			"pause",
+			"resume",
+			"openPanel",
+			"closeUi",
+			"reloadPage",
+			"switchTab",
+			"closeOtherTab",
+			"killWorker",
+			"closeOffscreen",
+			"toggleMicrophone",
+		] as const;
+
+		try {
+			for (let step = 0; step < iterations; step += 1) {
+				const action = pick(weighted);
+				const phaseBefore = await readPhase();
+				log.push(`${step}:${action}@${phaseBefore}`);
+				await withTimeout(
+					actions[action]().catch(() => undefined),
+					15_000,
+					action,
+				);
+				await capturePage.waitForTimeout(Math.floor(random() * 1_500));
+				const phase = await readPhase();
+				expect(phase).not.toBe("failed");
+				const stuck = pendingStarts.find(
+					(entry) => !entry.settled && Date.now() - entry.startedAt > 20_000,
+				);
+				expect(stuck, "a recording start never settled").toBeUndefined();
+			}
+
+			await send({ type: "stop-recording" }).catch(() => undefined);
+			await expect
+				.poll(readPhase, { timeout: 30_000 })
+				.not.toMatch(/^(creating|recording|paused|uploading)$/);
+
+			server.state.completeBodies = [];
+			server.state.progressBodies = [];
+			server.state.initiateBodies = [];
+			server.state.presignBodies = [];
+			server.state.uploadBytes = [];
+			server.state.uploadParts = new Map();
+			server.state.uploadHeaders = [];
+			server.state.videoId = `e2e-${Date.now()}-after-fuzz`;
+			await capturePage.bringToFront();
+			const started = await send({
+				type: "start-recording",
+				mode: "fullscreen",
+			});
+			expect(started).toMatchObject({ ok: true });
+			await expect.poll(readPhase).toBe("recording");
+			await capturePage.waitForTimeout(2_000);
+			expect(await send({ type: "stop-recording" })).toMatchObject({
+				ok: true,
+			});
+			await expectSuccessfulUpload(messengerPage, server.state);
+		} catch (error) {
+			console.log(`fuzz seed ${initialSeed}: ${log.join(" ")}`);
+			throw error;
+		}
 	});
 
 	test("can complete two consecutive recording uploads without stale state", async () => {
