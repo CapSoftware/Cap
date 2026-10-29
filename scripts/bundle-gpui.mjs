@@ -204,6 +204,7 @@ export async function bundleGpui(target, args, { env = process.env } = {}) {
 			target,
 			[...bundleArgs, ...profileArgs],
 			{
+				platformConfig: gpuiPlatformConfig(platform, { appexBundles, icon }),
 				env: bundleEnvironment(env),
 			},
 		);
