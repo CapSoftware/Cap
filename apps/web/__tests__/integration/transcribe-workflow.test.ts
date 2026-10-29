@@ -401,6 +401,59 @@ describe("backfillEditTranscriptWorkflow", () => {
 		);
 	});
 
+	it("never substitutes edited media when the original source is inaccessible", async () => {
+		const originalKey = "user-456/video-123/original.mp4";
+		state.editRows = [
+			{
+				sourceKey: originalKey,
+				editSpec: {
+					version: 1,
+					sourceDuration: 12,
+					keepRanges: [{ start: 8, end: 12 }],
+				},
+			},
+		];
+		mocks.getInternalSignedObjectUrl.mockImplementation((key: string) =>
+			pipeValue(`https://storage.test/${key}`),
+		);
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(
+				async (url: string) =>
+					new Response(url.endsWith(originalKey) ? null : "edited audio", {
+						status: url.endsWith(originalKey) ? 404 : 200,
+					}),
+			),
+		);
+
+		const { backfillEditTranscriptWorkflow } = await import(
+			"@/workflows/transcribe"
+		);
+		const result = await backfillEditTranscriptWorkflow({
+			videoId: "video-123",
+			userId: "user-456",
+			requestId: "request-1",
+		});
+
+		expect(result).toEqual({ success: false });
+		expect(mocks.transcribe).not.toHaveBeenCalled();
+		expect(mocks.putObject).not.toHaveBeenCalled();
+		expect(mocks.getInternalSignedObjectUrl).toHaveBeenCalledExactlyOnceWith(
+			originalKey,
+		);
+		expect(mocks.updates).toContainEqual(
+			expect.objectContaining({
+				metadata: expect.objectContaining({
+					strings: expect.arrayContaining([
+						expect.stringContaining(
+							"'$.editTranscriptBackfill.status', 'error'",
+						),
+					]),
+				}),
+			}),
+		);
+	});
+
 	it("does not run a backfill after its database claim is replaced", async () => {
 		const { backfillEditTranscriptWorkflow } = await import(
 			"@/workflows/transcribe"

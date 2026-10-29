@@ -623,11 +623,11 @@ async function resolveVideoSourceUrl(
 		.where(eq(videoUploads.videoId, videoId as Video.VideoId))
 		.limit(1);
 
-	const candidateKeys = [
-		sourceKeyOverride,
-		`${userId}/${videoId}/result.mp4`,
-		upload[0]?.rawFileKey,
-	].filter(
+	const candidateKeys = (
+		sourceKeyOverride
+			? [sourceKeyOverride]
+			: [`${userId}/${videoId}/result.mp4`, upload[0]?.rawFileKey]
+	).filter(
 		(value, index, values): value is string =>
 			Boolean(value) && values.indexOf(value) === index,
 	);
