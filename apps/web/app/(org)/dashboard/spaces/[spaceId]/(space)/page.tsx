@@ -33,7 +33,7 @@ import { Effect } from "effect";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { runPromise } from "@/lib/server";
-import { SharedCaps } from "./SharedCaps";
+import { SharedCaps } from "../SharedCaps";
 
 export const metadata: Metadata = {
 	title: "Shared Caps — Cap",

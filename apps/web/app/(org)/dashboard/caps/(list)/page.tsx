@@ -23,7 +23,7 @@ import { type Array, Effect } from "effect";
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { runPromise } from "@/lib/server";
-import { Caps } from "./Caps";
+import { Caps } from "../Caps";
 
 export const metadata: Metadata = {
 	title: "My Caps — Cap",

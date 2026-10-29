@@ -9,7 +9,7 @@ import {
 import { drizzle } from "drizzle-orm/mysql-proxy";
 import { Effect, Layer, Option } from "effect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import SharedCapsPage from "@/app/(org)/dashboard/spaces/[spaceId]/page";
+import SharedCapsPage from "@/app/(org)/dashboard/spaces/[spaceId]/(space)/page";
 import { getVideosByFolderId } from "@/lib/folder";
 import {
 	Database as BackendDatabase,
