@@ -49,7 +49,6 @@ import type {
 	OffscreenRequest,
 	OffscreenResponse,
 	RecordingCaptureSource,
-	RecordingMode,
 	RecordingStatus,
 	RecordingStatusBroadcast,
 	ServiceWorkerRequest,
@@ -345,7 +344,7 @@ const getCameraPreviewStream = async (
 	}
 
 	disconnectCameraPreviewsExcept(keepSessionId);
-	const promise = getCameraMediaStream(settings, false).then((stream) => {
+	const promise = getCameraMediaStream(settings).then((stream) => {
 		// The camera can take long enough to open that every waiting session
 		// may have disconnected (or moved to another device) in the meantime;
 		// adopting the stream then would leave the camera lit with no consumer.
@@ -422,39 +421,67 @@ const broadcastCaptureSource = (source: RecordingCaptureSource) => {
 	);
 };
 
-const getCameraMediaStream = async (
-	webcam: WebcamSettings,
-	audio: boolean | MediaTrackConstraints,
+// A device that another app, the previous tab's preview or the mic probe has
+// just released can briefly fail to reopen with NotReadableError (or
+// AbortError on Windows), so each constraint gets one delayed retry.
+const DEVICE_REOPEN_RETRY_MS = 300;
+
+const isBusyDeviceError = (error: unknown) =>
+	error instanceof DOMException &&
+	(error.name === "NotReadableError" || error.name === "AbortError");
+
+// Tries each constraint in order. A saved device id goes stale when the
+// device is unplugged or Chrome rotates ids, so callers list the exact device
+// first and a looser fallback after it. A denied permission fails the same way
+// for every constraint, so it ends the search.
+const openUserMedia = async (
+	constraints: MediaStreamConstraints[],
+	isUsable: (stream: MediaStream) => boolean = () => true,
 ) => {
+	let lastError: unknown = null;
+	for (const constraint of constraints) {
+		for (let attempt = 0; attempt < 2; attempt += 1) {
+			try {
+				const stream = await navigator.mediaDevices.getUserMedia(constraint);
+				if (isUsable(stream)) return stream;
+				stopTracks(stream);
+				break;
+			} catch (error) {
+				lastError = error;
+				if (error instanceof DOMException && error.name === "NotAllowedError") {
+					throw error;
+				}
+				if (attempt > 0 || !isBusyDeviceError(error)) break;
+				await new Promise<void>((resolve) => {
+					window.setTimeout(resolve, DEVICE_REOPEN_RETRY_MS);
+				});
+			}
+		}
+	}
+	throw lastError ?? new Error("Failed to open the capture device");
+};
+
+const getCameraMediaStream = (webcam: WebcamSettings) => {
 	const constraints: MediaStreamConstraints[] = [];
 	if (webcam.deviceId && webcam.deviceId !== DEFAULT_CAMERA_DEVICE_ID) {
 		constraints.push({
 			video: { deviceId: { exact: webcam.deviceId } },
-			audio,
+			audio: false,
 		});
 		constraints.push({
 			video: { deviceId: { ideal: webcam.deviceId } },
-			audio,
+			audio: false,
 		});
 	}
 	constraints.push({
 		video: true,
-		audio,
+		audio: false,
 	});
 
-	let lastError: unknown = null;
-	for (const constraint of constraints) {
-		try {
-			const stream = await navigator.mediaDevices.getUserMedia(constraint);
-			const videoTrack = stream.getVideoTracks()[0];
-			if (videoTrack && videoTrack.readyState === "live") {
-				return stream;
-			}
-		} catch (error) {
-			lastError = error;
-		}
-	}
-	throw lastError ?? new Error("Failed to acquire camera stream");
+	return openUserMedia(
+		constraints,
+		(stream) => stream.getVideoTracks()[0]?.readyState === "live",
+	);
 };
 
 const tabCaptureConstraints = (streamId: string, includeAudio: boolean) =>
@@ -489,10 +516,7 @@ const getMainStream = async (request: StartRecordingRequest) => {
 	}
 
 	if (request.mode === "camera") {
-		return getCameraMediaStream(
-			request.settings.webcam,
-			getAudioConstraint(request.settings.microphone),
-		);
+		return getCameraMediaStream(request.settings.webcam);
 	}
 
 	return captureDisplayStream(
@@ -505,39 +529,37 @@ const getMainStream = async (request: StartRecordingRequest) => {
 	);
 };
 
-const getAudioConstraint = (
+// The selected mic first, then the default one, so an unplugged or renamed
+// device records from the default mic instead of silently recording none.
+const getMicrophoneConstraints = (
 	microphone: MicrophoneSettings,
-): boolean | MediaTrackConstraints => {
-	if (!microphone.enabled) return false;
+	processing: boolean,
+): MediaStreamConstraints[] => {
+	const audio: MediaTrackConstraints = {
+		echoCancellation: processing,
+		autoGainControl: processing,
+		noiseSuppression: processing,
+	};
+	const fallback = { audio, video: false };
 	if (
 		microphone.deviceId &&
 		microphone.deviceId !== DEFAULT_MICROPHONE_DEVICE_ID
 	) {
-		return {
-			deviceId: { exact: microphone.deviceId },
-			echoCancellation: true,
-			autoGainControl: true,
-			noiseSuppression: true,
-		};
+		return [
+			{
+				audio: { ...audio, deviceId: { exact: microphone.deviceId } },
+				video: false,
+			},
+			fallback,
+		];
 	}
-	return true;
+	return [fallback];
 };
 
-const getMicrophoneStream = async (
-	microphone: MicrophoneSettings,
-	mode: RecordingMode,
-) => {
-	if (mode === "camera") return null;
+const getMicrophoneStream = async (microphone: MicrophoneSettings) => {
 	if (!microphone.enabled) return null;
-
-	const audio = getAudioConstraint(microphone);
-	const constraints: MediaStreamConstraints = {
-		audio,
-		video: false,
-	};
-
 	try {
-		return await navigator.mediaDevices.getUserMedia(constraints);
+		return await openUserMedia(getMicrophoneConstraints(microphone, true));
 	} catch {
 		return null;
 	}
@@ -553,18 +575,6 @@ const MIC_PROBE_WINDOW_MS = 1000;
 const MIC_PROBE_SAMPLE_INTERVAL_MS = 20;
 const MIC_SOUND_MIN_PEAK = 0.00001;
 
-const getMicrophoneProbeConstraint = (
-	microphone: MicrophoneSettings,
-): MediaTrackConstraints => ({
-	...(microphone.deviceId &&
-	microphone.deviceId !== DEFAULT_MICROPHONE_DEVICE_ID
-		? { deviceId: { exact: microphone.deviceId } }
-		: {}),
-	echoCancellation: false,
-	autoGainControl: false,
-	noiseSuppression: false,
-});
-
 // Opens the selected mic and listens for any signal so the recorder can warn
 // before starting. Resolves as soon as sound is heard; only a genuinely silent
 // mic waits out the full window. Unlike a popup, the offscreen AudioContext is
@@ -576,10 +586,7 @@ const probeMicrophone = async (
 
 	let stream: MediaStream;
 	try {
-		stream = await navigator.mediaDevices.getUserMedia({
-			audio: getMicrophoneProbeConstraint(microphone),
-			video: false,
-		});
+		stream = await openUserMedia(getMicrophoneConstraints(microphone, false));
 	} catch {
 		return { available: false, hasSound: false };
 	}
@@ -908,7 +915,6 @@ const startRecording = async (request: StartRecordingRequest) => {
 		countdownPromise = runStartCountdown(request);
 		const microphoneStream = await getMicrophoneStream(
 			request.settings.microphone,
-			request.mode,
 		);
 		if (microphoneStream) {
 			ownedStreams.push(microphoneStream);
@@ -1040,10 +1046,7 @@ const startRecording = async (request: StartRecordingRequest) => {
 			recorder,
 			stopPromise: Promise.resolve(),
 			streams,
-			microphoneTracks:
-				request.mode === "camera"
-					? mainStream.getAudioTracks()
-					: (microphoneStream?.getAudioTracks() ?? []),
+			microphoneTracks: microphoneStream?.getAudioTracks() ?? [],
 			recordingStream,
 			statusTimer: null,
 			spool,
