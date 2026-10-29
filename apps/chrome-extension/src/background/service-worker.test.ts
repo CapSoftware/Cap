@@ -175,3 +175,31 @@ describe("recording status synchronization", () => {
 		});
 	});
 });
+
+describe("offscreen messaging", () => {
+	it("retries a request that reached the extension before the offscreen listener", async () => {
+		const response = new Promise<ServiceWorkerResponse>((resolve) => {
+			onMessage(
+				{ target: "service-worker", type: "pause-recording" },
+				{},
+				resolve,
+			);
+		});
+		answerContexts(true);
+		await vi.waitFor(() => expect(pollReplies).toHaveLength(1));
+		const runtime = chrome.runtime as { lastError?: { message: string } };
+		runtime.lastError = {
+			message: "The message port closed before a response was received.",
+		};
+		pollReplies[0](undefined as unknown as OffscreenResponse);
+		runtime.lastError = undefined;
+
+		await vi.waitFor(() => expect(contextReplies).toHaveLength(1));
+		answerContexts(true);
+		await vi.waitFor(() => expect(pollReplies).toHaveLength(2));
+		const pausedStatus = { ...liveStatus, phase: "paused" as const };
+		pollReplies[1]({ ok: true, status: pausedStatus });
+
+		expect(await response).toMatchObject({ ok: true, status: pausedStatus });
+	});
+});

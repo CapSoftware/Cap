@@ -245,12 +245,17 @@ const wait = (durationMs: number) =>
 		globalThis.setTimeout(resolve, durationMs);
 	});
 
+// A runtime message reaches every extension page. When the offscreen document
+// is still loading, the panel or welcome page can receive it first and let it
+// go unanswered, so a closed port means the same as a missing receiver: the
+// offscreen listener never kept the channel open.
 const isTransientOffscreenMessageError = (error: unknown) => {
 	if (!(error instanceof Error)) return false;
 	const message = error.message.toLowerCase();
 	return (
 		message.includes("receiving end does not exist") ||
-		message.includes("could not establish connection")
+		message.includes("could not establish connection") ||
+		message.includes("message port closed before a response was received")
 	);
 };
 
