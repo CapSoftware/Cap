@@ -35,6 +35,7 @@ describe("raw recording input validation", () => {
 	const damagedTruncated = join(directory, "damaged-truncated.webm");
 	const damagedStreamed = join(directory, "damaged-streamed.webm");
 	const audioOnly = join(directory, "audio-only.webm");
+	const damagedWithAudio = join(directory, "damaged-with-audio.webm");
 	const damagedVideoFullAudio = join(
 		directory,
 		"damaged-video-full-audio.webm",
@@ -92,6 +93,22 @@ describe("raw recording input validation", () => {
 		encodeVp9Ivf(cleanIvf, 60);
 		const brokenIvf = join(directory, "corrupt.ivf");
 		breakIvfPackets(cleanIvf, brokenIvf, (frame) => frame === 45);
+		execFileSync("ffmpeg", [
+			"-hide_banner",
+			"-v",
+			"error",
+			"-i",
+			brokenIvf,
+			"-f",
+			"lavfi",
+			"-i",
+			"sine=frequency=440:duration=4",
+			"-c:v",
+			"copy",
+			"-c:a",
+			"libopus",
+			damagedWithAudio,
+		]);
 		const singleKeyframeIvf = join(directory, "single-keyframe.ivf");
 		const brokenSingleKeyframeIvf = join(
 			directory,
@@ -221,6 +238,33 @@ describe("raw recording input validation", () => {
 		["damaged", corrupt, "complete", ".webm", false, null, 1],
 		["damaged-streamed", damagedStreamed, "complete", ".webm", false, null, 1],
 		[
+			"damaged-with-audio",
+			damagedWithAudio,
+			"complete",
+			".webm",
+			false,
+			null,
+			1,
+		],
+		[
+			"damaged-short-recovered-audio",
+			damagedWithAudio,
+			"error",
+			".webm",
+			false,
+			"damaged or unreadable",
+			1,
+		],
+		[
+			"damaged-unreadable-source-tracks",
+			corrupt,
+			"complete",
+			".webm",
+			false,
+			null,
+			1,
+		],
+		[
 			"damaged-video-full-audio",
 			damagedVideoFullAudio,
 			"error",
@@ -270,6 +314,25 @@ describe("raw recording input validation", () => {
 				cleanup: async () => rmSync(downloaded, { force: true }),
 			});
 			const process = spyOn(mediaVideo, "processVideo");
+			if (name === "damaged-short-recovered-audio") {
+				const spans = mediaProbe.probeTrackSpans;
+				spyOn(mediaProbe, "probeTrackSpans").mockImplementation(
+					async (path) => {
+						const measured = await spans(path);
+						return path.endsWith(".mp4")
+							? { ...measured, audio: (measured.audio ?? 0) / 2 }
+							: measured;
+					},
+				);
+			}
+			if (name === "damaged-unreadable-source-tracks") {
+				const spans = mediaProbe.probeTrackSpans;
+				spyOn(mediaProbe, "probeTrackSpans").mockImplementation((path) =>
+					path.endsWith(".mp4")
+						? spans(path)
+						: Promise.reject(new Error("Media input could not be read")),
+				);
+			}
 			if (name === "damaged-busy-output-probe") {
 				const probe = mediaProbe.probeVideoFile;
 				spyOn(mediaProbe, "probeVideoFile").mockImplementation((path) =>
