@@ -471,6 +471,43 @@ export function RecordingBarOverlay({
 		};
 	}, []);
 
+	// Swapping the pause/resume icon under the cursor can swallow the
+	// mouseleave, which left the dock stuck open, so collapse is driven by the
+	// pointer's position against the bar and dock instead.
+	useEffect(() => {
+		if (!isExpanded) return;
+		const handlePointerMove = (event: PointerEvent) => {
+			const bar = barRef.current;
+			if (!bar || isPointerDownRef.current) return;
+			const dock = bar.querySelector(".cap-extension-vertical-dock");
+			const inside = [bar, dock].some((element) => {
+				if (!element) return false;
+				const rect = element.getBoundingClientRect();
+				return (
+					event.clientX >= rect.left &&
+					event.clientX <= rect.right &&
+					event.clientY >= rect.top &&
+					event.clientY <= rect.bottom
+				);
+			});
+			if (inside) {
+				if (hoverTimeoutRef.current !== null) {
+					window.clearTimeout(hoverTimeoutRef.current);
+					hoverTimeoutRef.current = null;
+				}
+				return;
+			}
+			if (hoverTimeoutRef.current !== null) return;
+			hoverTimeoutRef.current = window.setTimeout(() => {
+				setIsExpanded(false);
+				hoverTimeoutRef.current = null;
+			}, 450);
+		};
+		window.addEventListener("pointermove", handlePointerMove, true);
+		return () =>
+			window.removeEventListener("pointermove", handlePointerMove, true);
+	}, [isExpanded]);
+
 	const handleMouseEnter = useCallback(() => {
 		if (isDragging) return;
 		if (hoverTimeoutRef.current !== null) {
