@@ -47,6 +47,10 @@ use crate::screenshot_editor::ScreenshotEditorWindow;
 use crate::theme::Theme;
 use crate::ui;
 
+mod mask;
+
+pub(crate) use mask::MaskPanel;
+
 // ---------------------------------------------------------------------------
 // Tools
 // ---------------------------------------------------------------------------
@@ -1093,15 +1097,17 @@ struct Reorder {
 enum ColorTarget {
     Stroke,
     Fill,
+    Mask,
 }
 
 impl ColorTarget {
-    const ALL: [ColorTarget; 2] = [ColorTarget::Stroke, ColorTarget::Fill];
+    const ALL: [ColorTarget; 3] = [ColorTarget::Stroke, ColorTarget::Fill, ColorTarget::Mask];
 
     fn id(self) -> &'static str {
         match self {
             Self::Stroke => "screenshot-annotation-stroke",
             Self::Fill => "screenshot-annotation-fill",
+            Self::Mask => "screenshot-annotation-mask-color",
         }
     }
 
@@ -1121,14 +1127,20 @@ enum AnnotationSlider {
     Opacity,
     MaskLevel,
     TextSize,
+    MaskFeather,
+    MaskRadius,
+    MaskTint,
 }
 
 impl AnnotationSlider {
-    const ALL: [AnnotationSlider; 4] = [
+    const ALL: [AnnotationSlider; 7] = [
         AnnotationSlider::Width,
         AnnotationSlider::Opacity,
         AnnotationSlider::MaskLevel,
         AnnotationSlider::TextSize,
+        AnnotationSlider::MaskFeather,
+        AnnotationSlider::MaskRadius,
+        AnnotationSlider::MaskTint,
     ];
 
     /// `(min, max, step)` -- `AnnotationConfig.tsx:60-157`.
@@ -1136,8 +1148,11 @@ impl AnnotationSlider {
         match self {
             Self::Width => (1., 20., 1.),
             Self::Opacity => (0.1, 1., 0.1),
-            Self::MaskLevel => (4., 50., 1.),
+            Self::MaskLevel => (4., 80., 1.),
             Self::TextSize => (12., 100., 1.),
+            Self::MaskFeather => (0., 64., 1.),
+            Self::MaskRadius => (0., 64., 1.),
+            Self::MaskTint => (0., 1., 0.05),
         }
     }
 
@@ -1147,6 +1162,9 @@ impl AnnotationSlider {
             Self::Opacity => "opacity",
             Self::MaskLevel => "mask-level",
             Self::TextSize => "text-size",
+            Self::MaskFeather => "mask-feather",
+            Self::MaskRadius => "mask-radius",
+            Self::MaskTint => "mask-tint",
         }
     }
 
@@ -1156,6 +1174,14 @@ impl AnnotationSlider {
             Self::Opacity => annotation.opacity as f32,
             Self::MaskLevel => annotation.mask_level.unwrap_or(MASK_FALLBACK_LEVEL) as f32,
             Self::TextSize => annotation.height as f32,
+            Self::MaskFeather | Self::MaskRadius | Self::MaskTint => {
+                let options = annotation.mask_options.clone().unwrap_or_default();
+                (match self {
+                    Self::MaskFeather => options.feather,
+                    Self::MaskRadius => options.corner_radius,
+                    _ => options.tint,
+                }) as f32
+            }
         }
     }
 
@@ -1172,6 +1198,14 @@ impl AnnotationSlider {
                 }
                 *level = value;
                 return true;
+            }
+            Self::MaskFeather | Self::MaskRadius | Self::MaskTint => {
+                let options = annotation.mask_options.get_or_insert_with(Default::default);
+                match self {
+                    Self::MaskFeather => &mut options.feather,
+                    Self::MaskRadius => &mut options.corner_radius,
+                    _ => &mut options.tint,
+                }
             }
         };
         if *field == value {
@@ -1220,6 +1254,10 @@ pub struct AnnotationState {
     masks: Vec<MaskEntry<MaskOverlay>>,
     mask_pending: Option<Vec<MaskRequest>>,
     mask_task: Option<gpui::Task<()>>,
+    /// The mask bar's open panel, and the mask it was opened for -- closed,
+    /// not repointed, when the selection moves.
+    mask_panel: Option<(MaskPanel, String)>,
+    mask_anchors: HashMap<MaskPanel, BoundsCell>,
 }
 
 /// One paint of the layer, copied out of the window so the closure owns it.
@@ -1623,6 +1661,8 @@ impl ScreenshotEditorWindow {
                 })
                 .flatten();
 
+        let mask_style = is_mask.then(|| self.mask_style_source()).flatten();
+
         let is_text = annotation_type == AnnotationType::Text;
         let annotation = Annotation {
             id: crate::store::new_uuid_v4(),
@@ -1647,11 +1687,25 @@ impl ScreenshotEditorWindow {
                     .map_or(DEFAULT_STROKE_WIDTH, |(_, width, _)| *width)
             },
             fill_color: TRANSPARENT.to_string(),
-            opacity: style.as_ref().map_or(1., |(_, _, opacity)| *opacity),
+            opacity: mask_style.as_ref().map_or_else(
+                || style.as_ref().map_or(1., |(_, _, opacity)| *opacity),
+                |source| source.opacity,
+            ),
             rotation: 0.,
             text: is_text.then(|| tr::screenshot_editor::annotation::default_text().to_string()),
-            mask_type: is_mask.then_some(MaskType::Pixelate),
-            mask_level: is_mask.then_some(MASK_DEFAULT_LEVEL),
+            mask_type: is_mask.then(|| {
+                mask_style
+                    .as_ref()
+                    .and_then(|source| source.mask_type)
+                    .unwrap_or(MaskType::Pixelate)
+            }),
+            mask_level: is_mask.then(|| {
+                mask_style
+                    .as_ref()
+                    .and_then(|source| source.mask_level)
+                    .unwrap_or(MASK_DEFAULT_LEVEL)
+            }),
+            mask_options: mask_style.and_then(|source| source.mask_options),
             points: (annotation_type == AnnotationType::Draw).then(|| vec![[x, y]]),
         };
 
@@ -2468,7 +2522,7 @@ impl ScreenshotEditorWindow {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
-        let mut layers = Vec::new();
+        let mut layers: Vec<AnyElement> = self.render_mask_panel(window, cx).into_iter().collect();
         if self.annotation_state.gesture.is_some() {
             layers.push(
                 ui::Slider::drag_layer(
@@ -2575,30 +2629,7 @@ impl ScreenshotEditorWindow {
             ));
         }
         if is_mask {
-            let mask_type = annotation.mask_type.unwrap_or(MaskType::Blur);
-            row = row
-                .child(config_item(
-                    &theme,
-                    tr::screenshot_editor::annotation::mask_style(),
-                    None,
-                    div()
-                        .flex()
-                        .flex_row()
-                        .gap(px(4.))
-                        .child(self.render_mask_pill(MaskType::Blur, mask_type, cx))
-                        .child(self.render_mask_pill(MaskType::Pixelate, mask_type, cx))
-                        .into_any_element(),
-                ))
-                .child(config_item(
-                    &theme,
-                    tr::screenshot_editor::annotation::intensity(),
-                    Some(format!(
-                        "{}",
-                        annotation.mask_level.unwrap_or(MASK_FALLBACK_LEVEL).round() as i64
-                    )),
-                    self.annotation_slider(AnnotationSlider::MaskLevel, px(96.), cx)
-                        .into_any_element(),
-                ));
+            row = row.children(self.render_mask_controls(annotation, cx));
         }
         if is_text {
             row = row.child(config_item(
@@ -2611,69 +2642,6 @@ impl ScreenshotEditorWindow {
         }
 
         Some(row.into_any_element())
-    }
-
-    /// The two `Style` pills (`AnnotationConfig.tsx:100-123`).
-    fn render_mask_pill(
-        &self,
-        value: MaskType,
-        current: MaskType,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let theme = self.theme;
-        let active = value == current;
-        let (id, label) = match value {
-            MaskType::Blur => ("Blur", tr::screenshot_editor::style::blur()),
-            MaskType::Pixelate => ("Pixelate", tr::screenshot_editor::annotation::pixelate()),
-        };
-        div()
-            .id(gpui::SharedString::from(format!(
-                "screenshot-mask-style-{id}"
-            )))
-            .flex()
-            .items_center()
-            .justify_center()
-            .h(px(24.))
-            .px(px(10.))
-            .rounded(px(6.))
-            .cursor_pointer()
-            .text_size(px(12.))
-            .font_weight(FontWeight::MEDIUM)
-            .when(active, |this| {
-                this.bg(theme.blue_9).text_color(gpui::white())
-            })
-            .when(!active, |this| {
-                this.bg(theme.gray_3)
-                    .text_color(theme.gray_11)
-                    .hover(|style| style.bg(theme.gray_4))
-            })
-            .child(label)
-            .on_click(cx.listener(move |this, _, window, cx| {
-                cx.stop_propagation();
-                let Some(id) = this.selected_annotation.clone() else {
-                    return;
-                };
-                this.edit_project(
-                    move |project| {
-                        let Some(annotation) = project
-                            .annotations
-                            .iter_mut()
-                            .find(|annotation| annotation.id == id)
-                        else {
-                            return false;
-                        };
-                        if annotation.mask_type == Some(value) {
-                            return false;
-                        }
-                        annotation.mask_type = Some(value);
-                        true
-                    },
-                    window,
-                    cx,
-                );
-                this.refresh_mask_overlays(window, cx);
-            }))
-            .into_any_element()
     }
 
     fn annotation_slider(
@@ -2760,9 +2728,6 @@ impl ScreenshotEditorWindow {
             window,
             cx,
         );
-        if slider == AnnotationSlider::MaskLevel {
-            self.refresh_mask_overlays(window, cx);
-        }
     }
 
     fn end_annotation_slider(&mut self, cx: &mut Context<Self>) {
@@ -2779,6 +2744,7 @@ impl ScreenshotEditorWindow {
         Some(match target {
             ColorTarget::Stroke => annotation.stroke_color.clone(),
             ColorTarget::Fill => annotation.fill_color.clone(),
+            ColorTarget::Mask => annotation.mask_options.clone().unwrap_or_default().color,
         })
     }
 
@@ -2804,6 +2770,11 @@ impl ScreenshotEditorWindow {
                 let field = match target {
                     ColorTarget::Stroke => &mut annotation.stroke_color,
                     ColorTarget::Fill => &mut annotation.fill_color,
+                    ColorTarget::Mask => {
+                        let options = annotation.mask_options.get_or_insert_with(Default::default);
+                        Self::ensure_mask_tint_visible(options);
+                        &mut options.color
+                    }
                 };
                 if *field == value {
                     return false;
@@ -3070,6 +3041,9 @@ impl ScreenshotEditorWindow {
                                                 ColorTarget::Fill => {
                                                     "screenshot-annotation-hex-fill"
                                                 }
+                                                ColorTarget::Mask => {
+                                                    "screenshot-annotation-hex-mask"
+                                                }
                                             },
                                             input,
                                         )
@@ -3105,6 +3079,11 @@ impl ScreenshotEditorWindow {
             && self.selected_annotation.as_deref() != Some(id.as_str())
         {
             self.annotation_state.color_popover = None;
+        }
+        if let Some((_, id)) = &self.annotation_state.mask_panel
+            && self.selected_annotation.as_deref() != Some(id.as_str())
+        {
+            self.annotation_state.mask_panel = None;
         }
         for target in ColorTarget::ALL {
             let Some(input) = self.annotation_state.color_inputs.get(&target).cloned() else {
@@ -4006,20 +3985,15 @@ fn mask_request(mask: &Annotation, frame: MaskFrame) -> Option<MaskRequest> {
     if mask.annotation_type != AnnotationType::Mask {
         return None;
     }
+    let content = frame.content.map(f64::from_bits);
+    let (region, shape) = mask::mask_regions(mask, content, content, frame.size)?;
     Some(MaskRequest {
         id: mask.id.clone(),
-        region: cap_gpui_kernels::mask_cache::mask_region(
-            [mask.x, mask.y, mask.width, mask.height],
-            frame.content.map(f64::from_bits),
-            frame.size,
-        )?,
+        region,
+        shape,
         frame,
-        pixelate: mask.mask_type == Some(MaskType::Pixelate),
-        level: mask
-            .mask_level
-            .unwrap_or(MASK_FALLBACK_LEVEL)
-            .max(1.)
-            .to_bits(),
+        // The preview filters the atlas's BGRA, so the colour swaps to match.
+        style: mask::mask_style(mask, true),
     })
 }
 
@@ -4033,6 +4007,7 @@ pub(crate) fn masked_region_image(
     size: (u32, u32),
     mask: &Annotation,
     rect: Rect,
+    content: Rect,
 ) -> Option<(u32, u32, image::RgbaImage)> {
     let (frame_width, frame_height) = size;
     if frame_width == 0 || frame_height == 0 {
@@ -4043,15 +4018,19 @@ pub(crate) fn masked_region_image(
         return None;
     }
 
-    let region = mask_region(mask, rect, (frame_width, frame_height))?;
-    let level = mask.mask_level.unwrap_or(MASK_FALLBACK_LEVEL).max(1.);
-    let processed = cap_gpui_kernels::screenshot::mask_filter(
+    let (region, shape) = mask::mask_regions(
+        mask,
+        [rect.x, rect.y, rect.width, rect.height],
+        [content.x, content.y, content.width, content.height],
+        size,
+    )?;
+    let processed = cap_gpui_kernels::mask_style::styled_mask(
         rgba,
         frame_width,
         frame_height,
         region,
-        mask.mask_type == Some(MaskType::Pixelate),
-        level,
+        shape,
+        &mask::mask_style(mask, false),
     )?;
 
     Some((region.0, region.1, processed))
@@ -4163,6 +4142,7 @@ mod tests {
             text: None,
             mask_type: None,
             mask_level: None,
+            mask_options: None,
             points: None,
         }];
         rescale_annotations(&mut annotations, &previous, &current);
@@ -4246,6 +4226,7 @@ mod tests {
             text: Some("Hello".into()),
             mask_type: None,
             mask_level: None,
+            mask_options: None,
             points: None,
         };
         assert_eq!(layer_label(&annotation), "Hello");
@@ -4281,6 +4262,7 @@ mod tests {
             text: None,
             mask_type: None,
             mask_level: None,
+            mask_options: None,
             points: None,
         }
     }

@@ -1,4 +1,4 @@
-use crate::screenshot::mask_filter;
+use crate::mask_style::{MaskStyle, styled_mask};
 use std::{collections::HashSet, hash::Hash};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -15,19 +15,19 @@ pub struct MaskRequest {
     pub id: String,
     pub frame: MaskFrame,
     pub region: (u32, u32, u32, u32),
-    pub pixelate: bool,
-    pub level: u64,
+    pub shape: (u32, u32, u32, u32),
+    pub style: MaskStyle,
 }
 
 impl MaskRequest {
     pub fn filter(&self, rgba: &[u8]) -> Option<image::RgbaImage> {
-        mask_filter(
+        styled_mask(
             rgba,
             self.frame.size.0,
             self.frame.size.1,
             self.region,
-            self.pixelate,
-            f64::from_bits(self.level),
+            self.shape,
+            &self.style,
         )
     }
 }
@@ -199,6 +199,8 @@ pub fn mask_region(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mask_style::MaskEffect;
+    use crate::screenshot::mask_filter;
     use std::sync::Arc;
 
     fn requests(count: usize) -> Vec<MaskRequest> {
@@ -213,8 +215,8 @@ mod tests {
                     crop: None,
                 },
                 region: (index as u32 * 4, 4, 32, 24),
-                pixelate: false,
-                level: 16_f64.to_bits(),
+                shape: (index as u32 * 4, 4, 32, 24),
+                style: MaskStyle::plain(false, 16.),
             })
             .collect()
     }
@@ -230,8 +232,8 @@ mod tests {
             let mut next = original.clone();
             match change {
                 0 => next[0].region.0 += 1,
-                1 => next[0].level = 20_f64.to_bits(),
-                2 => next[0].pixelate = true,
+                1 => next[0].style.level = 20_f64.to_bits(),
+                2 => next[0].style.effect = MaskEffect::Pixelate,
                 3 => next.push(requests(4).pop().unwrap()),
                 _ => next.reverse(),
             }
@@ -387,8 +389,8 @@ mod tests {
     fn new_and_changed_styles_are_computed() {
         let mut requests = requests(4);
         let previous = cached(&requests[..3]);
-        requests[0].pixelate = true;
-        requests[1].level = 20_f64.to_bits();
+        requests[0].style.effect = MaskEffect::Pixelate;
+        requests[1].style.level = 20_f64.to_bits();
         assert_eq!(
             plan_masks(&previous, &requests),
             vec![None, None, Some(2), None]
@@ -491,11 +493,12 @@ mod tests {
     fn overlapping_masks_always_sample_the_unmodified_frame() {
         let rgba: Vec<u8> = (0..64 * 48 * 4).map(|i| (i * 37 % 251) as u8).collect();
         let mut requests = requests(4);
-        requests[1].pixelate = true;
+        requests[1].style.effect = MaskEffect::Pixelate;
         let previous = update_masks(&[], &requests, |request| {
             request.filter(&rgba).map(Arc::new)
         });
         requests[1].region.0 += 1;
+        requests[1].shape.0 += 1;
         requests.reverse();
         let mut calls = 0;
         let next = update_masks(&previous, &requests, |request| {
@@ -509,7 +512,7 @@ mod tests {
                 64,
                 48,
                 entry.request.region,
-                entry.request.pixelate,
+                entry.request.style.effect == MaskEffect::Pixelate,
                 16.,
             )
             .unwrap();

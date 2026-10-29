@@ -1661,6 +1661,38 @@ empty_hint = "एनोटेशन जोड़ने के लिए ऊप�
 reorder_hint = "क्रम बदलने के लिए खींचें • ऊपर = सबसे आगे"
 title = "लेयर"
 
+[screenshot_editor.mask]
+adjust = "समायोजित करें"
+corner_radius = "कोने"
+feather = "फेदर"
+invert = "उलटें"
+invert_hint = "इस हिस्से को छोड़कर सब कुछ छिपाएँ"
+presets = "प्रीसेट"
+presets_title = "मास्क प्रीसेट"
+privacy_note = "ब्लर और पिक्सलेट को कभी-कभी उलटा जा सकता है। पासवर्ड और कुंजियों के लिए रिडैक्ट का उपयोग करें।"
+shape = "आकार"
+shape_ellipse = "दीर्घवृत्त"
+shape_rectangle = "आयत"
+shape_rounded = "गोल किनारे"
+solid = "ठोस"
+tint = "टिंट"
+
+[screenshot_editor.mask.preset]
+cap_blue = "Cap नीला"
+cap_blue_hint = "Cap नीले टिंट के साथ पिक्सलेट"
+focus = "फ़ोकस"
+focus_hint = "आसपास सब कुछ ब्लर करें"
+frosted = "फ्रॉस्टेड"
+frosted_hint = "हिस्से पर दूधिया काँच"
+mosaic = "मोज़ेक"
+mosaic_hint = "बड़े पिक्सल"
+redact = "रिडैक्ट"
+redact_hint = "ठोस पट्टी, कुछ भी वापस नहीं मिलेगा"
+soft_blur = "हल्का ब्लर"
+soft_blur_hint = "मुलायम किनारों वाला हल्का ब्लर"
+spotlight = "स्पॉटलाइट"
+spotlight_hint = "आसपास सब कुछ धुंधला-गहरा करें"
+
 [screenshot_editor.menu]
 delete = "हटाएँ"
 open_folder = "फ़ोल्डर खोलें"
