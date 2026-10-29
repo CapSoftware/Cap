@@ -51,11 +51,13 @@ class Stream {
 let onMessage: MessageListener;
 let capturedStream: Stream;
 let speakerStreams: Stream[];
+let mixContextOptions: unknown[];
 let spool: Pick<RecordingSpool, "sessionId" | "appendChunk" | "dispose">;
 
 beforeEach(async () => {
 	vi.resetModules();
 	speakerStreams = [];
+	mixContextOptions = [];
 	vi.useFakeTimers();
 	const stored: Record<string, unknown> = {};
 	const storage = {
@@ -100,7 +102,10 @@ beforeEach(async () => {
 		class {
 			destination = {};
 
+			constructor(readonly options?: unknown) {}
+
 			createMediaStreamDestination() {
+				mixContextOptions.push(this.options);
 				return { stream: new Stream([new Track("audio")]) };
 			}
 
@@ -222,6 +227,7 @@ describe("recording microphone mute", () => {
 			expect(speakerStreams).toEqual(
 				mode === "tab" && systemAudio ? [main] : [],
 			);
+			expect(mixContextOptions).toEqual([{ sinkId: { type: "none" } }]);
 
 			expect(
 				await send({ type: "toggle-microphone-mute", muted: true }),

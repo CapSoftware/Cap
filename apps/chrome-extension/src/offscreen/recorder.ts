@@ -112,6 +112,7 @@ type ActiveRecording = {
 	mimeType: string;
 	maxDurationMs: number | null;
 	audioContext?: AudioContext;
+	playbackAudioContext?: AudioContext;
 	chunkChain: Promise<void>;
 	dataRequestInterval: number | null;
 	chunkStartGuard: number | null;
@@ -604,36 +605,59 @@ const probeMicrophone = async (
 	}
 };
 
+// The mix runs in a context with no output device. A context that renders to
+// the speakers stops producing samples when that device changes under it
+// (AirPods switching to their headset profile mid-recording), and the
+// recording then loses its audio while the video keeps going. It also means
+// nothing captured here can reach the speakers and feed back into the mic.
+const createRecordingAudioContext = () => {
+	const options: AudioContextOptions & { sinkId: { type: "none" } } = {
+		sinkId: { type: "none" },
+	};
+	try {
+		return new AudioContext(options);
+	} catch {
+		return new AudioContext();
+	}
+};
+
 const addAudioTracks = ({
 	output,
 	streams,
-	routeFirstStreamToSpeakers,
+	playbackStream,
 }: {
 	output: MediaStream;
 	streams: MediaStream[];
-	routeFirstStreamToSpeakers: boolean;
+	playbackStream: MediaStream | null;
 }) => {
 	const streamsWithAudio = streams.filter(
 		(stream) => stream.getAudioTracks().length > 0,
 	);
 	if (streamsWithAudio.length === 0) return undefined;
 
-	const audioContext = new AudioContext();
+	const audioContext = createRecordingAudioContext();
 	const destination = audioContext.createMediaStreamDestination();
 
-	streamsWithAudio.forEach((stream) => {
-		const source = audioContext.createMediaStreamSource(stream);
-		source.connect(destination);
-		if (routeFirstStreamToSpeakers && stream === streams[0]) {
-			source.connect(audioContext.destination);
-		}
-	});
+	for (const stream of streamsWithAudio) {
+		audioContext.createMediaStreamSource(stream).connect(destination);
+	}
 
 	for (const track of destination.stream.getAudioTracks()) {
 		output.addTrack(track);
 	}
 
-	return audioContext;
+	// Tab capture mutes the captured tab, so its own audio is played back here
+	// for the user to keep hearing it, from a separate context that the
+	// recording does not depend on.
+	let playbackAudioContext: AudioContext | undefined;
+	if (playbackStream && playbackStream.getAudioTracks().length > 0) {
+		playbackAudioContext = new AudioContext();
+		playbackAudioContext
+			.createMediaStreamSource(playbackStream)
+			.connect(playbackAudioContext.destination);
+	}
+
+	return { audioContext, playbackAudioContext };
 };
 
 const updateStatusDuration = () => {
@@ -681,6 +705,7 @@ const cleanupActiveRecording = async (recording: ActiveRecording) => {
 	}
 	stopTracks(recording.recordingStream);
 	await recording.audioContext?.close().catch(() => undefined);
+	await recording.playbackAudioContext?.close().catch(() => undefined);
 };
 
 // Reconcile the IndexedDB recording spool with the failed-recording metadata
@@ -853,6 +878,7 @@ const startRecording = async (request: StartRecordingRequest) => {
 	let ownedVideoId: string | null = null;
 	let ownedSpool: RecordingSpool | null = null;
 	let ownedRecording: ActiveRecording | null = null;
+	let ownedAudio: ReturnType<typeof addAudioTracks>;
 	let countdownPromise: Promise<void> | null = null;
 
 	try {
@@ -883,10 +909,10 @@ const startRecording = async (request: StartRecordingRequest) => {
 		const streams = microphoneStream
 			? [mainStream, microphoneStream]
 			: [mainStream];
-		const audioContext = addAudioTracks({
+		ownedAudio = addAudioTracks({
 			output: recordingStream,
 			streams,
-			routeFirstStreamToSpeakers: request.mode === "tab",
+			playbackStream: request.mode === "tab" ? mainStream : null,
 		});
 		const hasAudio = recordingStream.getAudioTracks().length > 0;
 		const pipeline = selectRecordingPipeline(hasAudio);
@@ -1019,7 +1045,8 @@ const startRecording = async (request: StartRecordingRequest) => {
 			subpath,
 			mimeType: pipeline.mimeType,
 			maxDurationMs,
-			audioContext,
+			audioContext: ownedAudio?.audioContext,
+			playbackAudioContext: ownedAudio?.playbackAudioContext,
 			chunkChain: Promise.resolve(),
 			dataRequestInterval: null,
 			chunkStartGuard: null,
@@ -1179,6 +1206,9 @@ const startRecording = async (request: StartRecordingRequest) => {
 				activeRecording = null;
 			}
 			await cleanupActiveRecording(ownedRecording);
+		} else {
+			await ownedAudio?.audioContext.close().catch(() => undefined);
+			await ownedAudio?.playbackAudioContext?.close().catch(() => undefined);
 		}
 		if (ownedSpool) {
 			await removeLiveRecordingManifest(ownedSpool.sessionId).catch(
