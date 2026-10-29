@@ -6565,7 +6565,9 @@ impl MainWindow {
     /// single silhouette, whereas `img()` rasterises through resvg and keeps
     /// the colour. `img()` also renders at `SMOOTH_SVG_SCALE_FACTOR` (2x), so
     /// the 103px-wide source becomes a 206px raster -- more than the 168 device
-    /// pixels an 84px lockup needs on a 2x display.
+    /// pixels an 84px lockup needs on a 2x display. Keep the SVG's declared
+    /// size at 1x: the sprite sampler has no mipmaps, so a 4x source shrinks
+    /// about 5x on screen and its edges alias.
     ///
     /// The app ships two files rather than recolouring one, so this picks the
     /// same way it does.

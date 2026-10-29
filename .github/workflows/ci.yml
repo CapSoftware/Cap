@@ -22,8 +22,7 @@ jobs:
     runs-on: blacksmith-8vcpu-ubuntu-2404
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
-      gpui: ${{ steps.filter.outputs.rust == 'true' || steps.filter.outputs.gpui == 'true' || steps.desktop-resources.outputs.desktop-resources == 'true' }}
-      tauri-plugins: ${{ steps.filter.outputs.tauri-plugins }}
+      gpui: ${{ steps.filter.outputs.rust == 'true' || steps.filter.outputs.gpui == 'true' }}
       gpui-patches: ${{ steps.filter.outputs.gpui-patches }}
     steps:
       - name: Checkout
@@ -49,10 +48,7 @@ jobs:
             gpui:
               - '.gitattributes'
               - 'apps/desktop-gpui/**'
-              - 'apps/desktop/src/assets/**'
-              - 'apps/desktop/src-tauri/src/recording_start_sound.rs'
               - 'apps/media-server/src/__tests__/fixtures/**'
-              - 'packages/ui-solid/icons/**'
               - 'scripts/build-desktop-binaries*'
               - 'scripts/build-gpui-binary.sh'
               - 'scripts/build-linux-packages.mjs'
@@ -65,33 +61,11 @@ jobs:
               - 'scripts/finalize-macos-*'
               - 'scripts/linux-bundle-config*'
               - 'scripts/prepare-gpui-dependency*'
-              - 'scripts/run-gpui-build*'
               - 'scripts/sync-desktop-versions.mjs'
-              - 'scripts/verify-gpui-release-inputs.mjs'
               - 'scripts/verify-windows-stack.mjs'
             gpui-patches:
               - 'apps/desktop-gpui/patches/**'
               - 'scripts/prepare-gpui-dependency.sh'
-            tauri-plugins:
-              - 'Cargo.lock'
-              - 'bun.lock'
-              - 'scripts/check-tauri-plugin-versions*'
-              - 'apps/desktop/package.json'
-
-      # Cap ships as the GPUI app, which embeds icons, sounds, assets and test
-      # data from apps/desktop. Only the Tauri app's own sources are skipped.
-      - name: Check for GPUI resources in apps/desktop
-        uses: dorny/paths-filter@v3
-        id: desktop-resources
-        with:
-          predicate-quantifier: every
-          filters: |
-            desktop-resources:
-              - 'apps/desktop/**'
-              - '!apps/desktop/src/**'
-              - '!apps/desktop/src-tauri/src/**'
-              - '!apps/desktop/src-tauri/tests/**'
-              - '!apps/desktop/src-tauri/gen/**'
 
   typecheck:
     name: Typecheck
@@ -109,8 +83,7 @@ jobs:
 
       - name: Test workspace tooling
         run: |
-          node --test scripts/bun-scripts.test.mjs scripts/check-tauri-plugin-versions.test.mjs
-          bun run --cwd apps/desktop vitest run scripts/prepare.test.js
+          node --test scripts/bun-scripts.test.mjs
 
       - name: Test Loops profile sync
         run: |
@@ -275,10 +248,8 @@ jobs:
         shell: bash
         run: cargo test --locked -p cap-utils -p cap-cli-install --lib
 
-      # cap-desktop is the Tauri app, which no longer ships; Cap is the GPUI app
-      # plus the cap-muxer and cap-cli sidecars built from this workspace.
       - name: Run Clippy
-        run: cargo clippy --workspace --exclude cap-desktop --all-features --locked -- -D warnings
+        run: cargo clippy --workspace --all-features --locked -- -D warnings
 
   lint-biome:
     name: Lint (Biome)
@@ -507,18 +478,3 @@ jobs:
           else
             cargo +1.95.0 test -p gpui_windows --lib directx_atlas
           fi
-
-  tauri-plugins:
-    name: Verify Tauri plugin versions
-    runs-on: blacksmith-8vcpu-ubuntu-2404
-    needs: changes
-    if: needs.changes.outputs.tauri-plugins == 'true'
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - uses: ./.github/actions/setup-js
-
-      - name: Run verify
-        shell: bash
-        run: node scripts/check-tauri-plugin-versions.js

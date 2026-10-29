@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
 		NEXT_PUBLIC_IS_CAP: undefined as string | undefined,
 	},
 	quota: vi.fn(),
+	restrictedRedirect: vi.fn(),
 	user: vi.fn(),
 	authenticated: false,
 	ownerIsPro: false,
@@ -77,6 +78,9 @@ vi.mock("next/navigation", () => ({
 	notFound: () => {
 		throw new Error("NOT_FOUND");
 	},
+	redirect: (url: string) => {
+		throw new Error(`REDIRECT ${url}`);
+	},
 }));
 vi.mock("@/lib/video-view-count", () => ({
 	getVideoViewCount: async () => ({ count: 12 }),
@@ -102,7 +106,10 @@ vi.mock("@/lib/share-playback", async (importActual) => ({
 vi.mock("@/lib/shareable-link-quota", () => ({
 	isVideoOverShareableLinkLimit: mocks.quota,
 }));
-vi.mock("@/lib/share-web-url", () => ({ resolveShareWebUrl: vi.fn() }));
+vi.mock("@/lib/share-web-url", () => ({
+	resolveShareWebUrl: vi.fn(),
+	resolveRestrictedShareRedirect: mocks.restrictedRedirect,
+}));
 vi.mock("@/lib/transcribe", () => ({ transcribeVideo: vi.fn() }));
 vi.mock("@/lib/video-download-permissions", () => ({
 	canUserDownloadVideo: async () => false,
@@ -198,6 +205,7 @@ describe("share page loading", () => {
 		);
 		mocks.playbackUrl.mockResolvedValue("https://media.example.com/result.mp4");
 		mocks.quota.mockResolvedValue(false);
+		mocks.restrictedRedirect.mockResolvedValue(null);
 		mocks.defaultStorage = true;
 		mocks.userAgent = "";
 		mocks.buildEnv.NEXT_PUBLIC_IS_CAP = undefined;
@@ -206,6 +214,38 @@ describe("share page loading", () => {
 		mocks.ownerIsPro = false;
 		mocks.sharedOrganizations = [];
 		arrangeRows([createVideo()]);
+	});
+
+	it("renders the private state for a restricted video on the main origin", async () => {
+		mocks.policy.mockReturnValue(Effect.fail({ _tag: "PolicyDenied" }));
+		const page = (await renderPage()) as ReactElement<{ videoId: string }>;
+		expect(isValidElement(page)).toBe(true);
+		expect(page.props.videoId).toBe(createVideo().id);
+		expect(mocks.restrictedRedirect).toHaveBeenCalledOnce();
+	});
+
+	it("sends a restricted video on a custom domain to the main origin", async () => {
+		mocks.policy.mockReturnValue(Effect.fail({ _tag: "PolicyDenied" }));
+		mocks.restrictedRedirect.mockResolvedValue("https://cap.so/s/video");
+		await expect(renderPage()).rejects.toThrow(
+			"REDIRECT https://cap.so/s/video",
+		);
+		expect(mocks.playbackUrl).not.toHaveBeenCalled();
+	});
+
+	it("keeps password gates on the custom domain", async () => {
+		mocks.policy.mockReturnValue(
+			Effect.fail({ _tag: "VerifyVideoPasswordError" }),
+		);
+		mocks.restrictedRedirect.mockResolvedValue("https://cap.so/s/video");
+		const page = (await renderPage()) as ReactElement;
+		expect(page.type).toBe(PasswordGate);
+		expect(mocks.restrictedRedirect).not.toHaveBeenCalled();
+	});
+
+	it("does not look up the host for authorized videos", async () => {
+		await renderAuthorizedContent();
+		expect(mocks.restrictedRedirect).not.toHaveBeenCalled();
 	});
 
 	it.each([false, true])(

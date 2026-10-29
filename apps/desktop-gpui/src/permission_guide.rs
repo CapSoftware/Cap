@@ -39,7 +39,7 @@ const GIVE_UP_AFTER_CLOSE: Duration = Duration::from_secs(8);
 const LIFETIME: Duration = Duration::from_secs(5 * 60);
 const SIDEBAR_W: f64 = 230.;
 
-const APP_ICON: &[u8] = include_bytes!("../assets/app-icon.png");
+const APP_ICON: &[u8] = include_bytes!("../assets/dock-icon.png");
 
 /// The `.app` to drag: the bundle this binary runs from. A bare dev binary
 /// has none -- TCC attributes it to the launching terminal anyway -- so the

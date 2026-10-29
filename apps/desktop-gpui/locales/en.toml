@@ -546,26 +546,9 @@ terms_title = "Remembered terms"
 title = "Transcription"
 
 [settings.experimental]
-developer = "Developer"
-developer_description = "Only shown in development builds."
 muxer = "Out-of-process muxer"
 muxer_description = "Run the fragmented-MP4 muxer in an isolated subprocess so muxer crashes can't take down your recording. Requires the bundled cap-muxer binary."
-native_app = "Use native app"
-native_app_description = "Turn off to close this app and reopen the classic Tauri app in the dev harness. Recordings and settings are shared."
 reliability = "Reliability"
-
-[settings.experimental.switch]
-busy = "Finish your recording, export, upload, import, or transcription task before switching to the classic app."
-check_failed = { text = "Couldn't check whether the classic Cap app opened: {error}", context = "{error} is a technical error message, usually in English." }
-data_stays = "Your recordings and settings stay exactly where they are."
-failed = "Couldn't open the classic Cap app."
-not_found = "Couldn't find the classic Cap app to switch back to."
-open_failed = { text = "Couldn't open the classic Cap app: {error}", context = "{error} is a technical error message, usually in English." }
-opening = "Opening the classic Cap app"
-opening_detail = "This window will close when the classic Cap app is ready."
-save_failed = "Couldn't save your app preference. Cap is still open."
-switching = "Switching back to the classic Cap app."
-timed_out = "The classic app hasn't opened. Check the dev terminal for build errors, then try again."
 
 [settings.feedback]
 app_version = "App Version"
@@ -961,7 +944,6 @@ name = "Ping me when an upload is ready"
 [settings.automations.template.webhook_share]
 description = "Send the share link to Slack, Discord, or your own webhook."
 name = "Tell Slack when you share something"
-
 
 [main]
 delete_recording_confirm = "Are you sure you want to delete this recording?"

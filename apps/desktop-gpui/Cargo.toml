@@ -1,8 +1,8 @@
 # Standalone workspace on purpose: the gpui dependency tree is enormous and
 # pulls its own git revisions of wgpu/font stacks. Keeping it out of the root
-# workspace leaves the root Cargo.lock, `cargo hakari` workspace-hack and CI
-# untouched, and sidesteps the root `[patch.crates-io]` entries (vendored
-# wgpu-hal, tao) that only exist for the Tauri app.
+# workspace keeps the root Cargo.lock and `cargo hakari` workspace-hack free of
+# it, and sidesteps the root `[patch.crates-io]` forks (reqwest, cidre) that
+# gpui's tree does not want.
 [workspace]
 resolver = "2"
 members = [".", "kernels", "i18n-build", "glass"]
@@ -40,15 +40,15 @@ gpui_platform = { git = "https://github.com/wingleeio/zed", rev = "5d1f83d9f27a1
 ] }
 gpui_tokio = { git = "https://github.com/wingleeio/zed", rev = "5d1f83d9f27a19bec1fb241dc33b42238af9cf8d" }
 
-# Device enumeration reuses the same crates the Tauri app records with, so the
-# device identities here are byte-identical to the ones cap-recording expects.
+# Device enumeration reuses the crates cap-recording records with, so the
+# device identities here are byte-identical to the ones it expects.
 cap-camera = { path = "../../crates/camera" }
 scap-targets = { path = "../../crates/scap-targets" }
 # Same fork/rev as the root workspace: MicrophoneFeed enumerates through this.
 cpal = { git = "https://github.com/CapSoftware/cpal", rev = "6013cb5f8bd3" }
 
-# The actual recording engine -- the same studio/instant actors the Tauri app
-# drives. Drags in the ffmpeg encode stack; that is the point.
+# The actual recording engine: the studio/instant actors. Drags in the ffmpeg
+# encode stack; that is the point.
 cap-recording = { path = "../../crates/recording" }
 cap-media-info = { path = "../../crates/media-info" }
 cap-enc-ffmpeg = { path = "../../crates/enc-ffmpeg" }
@@ -71,13 +71,12 @@ rodio = { version = "0.19.0", default-features = false, features = [
 # already depends on it, so wgpu 25 and its vendored wgpu-hal have been built
 # by this workspace since the recording unit; naming it here only makes the
 # dependency direct so the editor can talk to `RenderedFrame`/`FrameLayout`.
-# `cap-editor` is the seam the Tauri editor window uses too: `EditorInstance`
-# owns the decoders, the renderer actor, the preview/scrub renderer and
-# playback, and hands frames back through a plain `FnMut` callback. It carries
-# no tauri types -- the websocket lives in the Tauri binary, not in the crate.
+# `cap-editor` is the editor's seam: `EditorInstance` owns the decoders, the
+# renderer actor, the preview/scrub renderer and playback, and hands frames
+# back through a plain `FnMut` callback.
 cap-rendering = { path = "../../crates/rendering" }
 # The camera bubble's live background blur (`src/camera_blur.rs`): the same
-# `BlurProcessor` the Tauri preview and the editor's camera layer run.
+# `BlurProcessor` the editor's camera layer runs.
 # Already in this lockfile through cap-rendering, so naming it only makes the
 # edge direct.
 cap-camera-effects = { path = "../../crates/camera-effects" }
@@ -91,7 +90,7 @@ cap-editor = { path = "../../crates/editor" }
 # is the cheaper of the two options rather than the only one.
 cap-export = { path = "../../crates/export" }
 # The first-frame JPEG a finished recording's Recents card is drawn from
-# (`create_screenshot` in the Tauri binary). Same package/git/rev the root
+# (`create_screenshot`, ported from 0.6.0). Same package/git/rev the root
 # workspace pins, and cap-recording already builds it, so this is an import,
 # not an extra dependency tree.
 ffmpeg = { package = "ffmpeg-next", git = "https://github.com/CapSoftware/rust-ffmpeg", rev = "49db1fede112" }
@@ -121,9 +120,9 @@ sys-locale = "0.3"
 unicode-segmentation = "1"
 # spawn_blocking for finalize; the runtime itself comes from gpui_tokio.
 tokio = { version = "1", features = ["rt", "time"] }
-# The same crate `tauri_plugin_global_shortcut` wraps, at the Tauri app's pin:
-# store bindings are W3C `KeyboardEvent.code` strings and this owns the
-# platform mapping (Carbon RegisterEventHotKey on macOS).
+# The crate 0.6.0's global-shortcut plugin wrapped, at the same pin: stored
+# bindings are W3C `KeyboardEvent.code` strings and this owns the platform
+# mapping (Carbon RegisterEventHotKey on macOS).
 global-hotkey = "0.7.0"
 # cap-recording's actor system; version must match its `kameo = "0.17.2"`.
 kameo = "0.17.2"
@@ -132,7 +131,7 @@ flume = "0.11.0"
 lyon_tessellation = "1.0"
 anyhow = "1"
 chrono = "0.4"
-# Read the Tauri app's settings store so both apps share one recordings library.
+# The JSON `store` file in the app-data directory (`src/store.rs`).
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
 sanitize-filename = "0.6.0"
@@ -156,14 +155,14 @@ sha2 = "0.10"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # The rolling file log the Feedback page uploads. Same crate and rolling
-# strategy the Tauri app uses, under a different filename prefix so the two
-# apps never write into one file (`src/diagnostics.rs`).
+# strategy 0.6.0 used, under its own `cap-gpui` prefix so an update never
+# appends to a 0.6.0 log (`src/diagnostics.rs`).
 tracing-appender = "0.2"
 
 # Web-backed settings pages (feedback, changelog, license) and transcription
 # model downloads. rustls so Linux builds do not pick up an OpenSSL system dep.
 # `multipart` is the log/diagnostic-report upload (`src/diagnostics.rs`):
-# `/api/desktop/logs` takes a multipart form, the same one the Tauri app posts.
+# `/api/desktop/logs` takes a multipart form, the same one 0.6.0 posted.
 bytes = "1"
 reqwest = { version = "0.12", default-features = false, features = [
     "json",
@@ -174,9 +173,8 @@ reqwest = { version = "0.12", default-features = false, features = [
 futures-util = "0.3"
 dirs = "6"
 dunce = "1.0.5"
-# Caption transcription (`src/transcription.rs`): the exact engine pin the
-# Tauri app carries (`apps/desktop/src-tauri/Cargo.toml:75`), so a model file
-# downloaded by either app loads identically in both.
+# Caption transcription (`src/transcription.rs`): the engine pin 0.6.0
+# shipped, so model files it downloaded keep loading identically.
 whisper-rs = "0.11.0"
 
 [build-dependencies]
@@ -273,8 +271,8 @@ block2 = "0.6"
 raw-window-handle = "0.6"
 core-foundation = "0.10"
 core-video = { version = "0.5.2", features = ["metal"] }
-# ScreenCaptureKit shareable content, acquired the same way recording.rs in
-# src-tauri does. Same fork/rev/features as the root workspace.
+# ScreenCaptureKit shareable content. Same fork/rev/features as the root
+# workspace.
 cidre = { git = "https://github.com/CapSoftware/cidre", rev = "bf84b67079a8", features = [
     "macos_12_7",
     "cv",
@@ -292,7 +290,6 @@ cidre = { git = "https://github.com/CapSoftware/cidre", rev = "bf84b67079a8", fe
     "vn",
 ], default-features = false }
 
-# The Tauri app's own target gate (`apps/desktop/src-tauri/Cargo.toml:151-152`):
 # parakeet-rs has no Intel-macOS ONNX Runtime build, so those Macs get the
 # Whisper caption models only.
 [target.'cfg(not(all(target_os = "macos", target_arch = "x86_64")))'.dependencies]

@@ -1,8 +1,9 @@
 import { z } from "zod";
 
-// The desktop app supplies `port` from tauri-plugin-oauth's local callback
-// server, which is always a numeric loopback port. Constraining it to an integer
-// port is what keeps the redirect target locked to 127.0.0.1: an unconstrained
+// The desktop app supplies `port` from its local sign-in callback server
+// (tauri-plugin-oauth in 0.6.0, a `127.0.0.1:0` listener since), which is
+// always a numeric loopback port. Constraining it to an integer port is what
+// keeps the redirect target locked to 127.0.0.1: an unconstrained
 // string such as `x@evil.example` would be parsed as a URL authority and would
 // redirect the browser — with the session token / API key in the query string —
 // to an attacker-controlled host.

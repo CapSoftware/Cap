@@ -544,26 +544,9 @@ terms_title = "Termes mémorisés"
 title = "Transcription"
 
 [settings.experimental]
-developer = "Développeur"
-developer_description = "Affiché uniquement dans les versions de développement."
 muxer = "Multiplexeur hors processus"
 muxer_description = "Exécute le multiplexeur MP4 fragmenté dans un sous-processus isolé pour que ses plantages ne fassent pas échouer votre enregistrement. Nécessite le binaire cap-muxer fourni."
-native_app = "Utiliser l'app native"
-native_app_description = "Désactivez pour fermer cette app et rouvrir l'app Tauri classique dans l'environnement de développement. Les enregistrements et les paramètres sont partagés."
 reliability = "Fiabilité"
-
-[settings.experimental.switch]
-busy = "Terminez votre enregistrement, exportation, mise en ligne, importation ou transcription avant de passer à l'app classique."
-check_failed = "Impossible de vérifier si l'app Cap classique s'est ouverte : {error}"
-data_stays = "Vos enregistrements et vos paramètres restent exactement où ils sont."
-failed = "Impossible d'ouvrir l'app Cap classique."
-not_found = "Impossible de trouver l'app Cap classique vers laquelle revenir."
-open_failed = "Impossible d'ouvrir l'app Cap classique : {error}"
-opening = "Ouverture de l'app Cap classique"
-opening_detail = "Cette fenêtre se fermera quand l'app Cap classique sera prête."
-save_failed = "Impossible d'enregistrer votre préférence d'app. Cap reste ouvert."
-switching = "Retour à l'app Cap classique."
-timed_out = "L'app classique ne s'est pas ouverte. Vérifiez les erreurs de compilation dans le terminal de développement, puis réessayez."
 
 [settings.feedback]
 app_version = "Version de l'app"
@@ -959,7 +942,6 @@ name = "Me prévenir quand une mise en ligne est prête"
 [settings.automations.template.webhook_share]
 description = "Envoyez le lien de partage à Slack, Discord ou votre propre webhook."
 name = "Prévenir Slack quand vous partagez"
-
 
 [main]
 delete_recording_confirm = "Voulez-vous vraiment supprimer cet enregistrement ?"

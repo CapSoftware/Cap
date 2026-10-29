@@ -1,16 +1,18 @@
-//! Persisted state: this app's own, and the Tauri app's settings store.
+//! Persisted state: this app's own, and the settings store it shares with
+//! 0.6.0 and earlier (the Tauri app, still downloadable and able to open the
+//! same data after a downgrade).
 //!
 //! Two files, both inside `so.cap.desktop`'s app-data dir:
 //!
-//! - `gpui-state.json` -- ours. The Tauri app keeps the camera window's chrome
+//! - `gpui-state.json` -- ours. The Tauri app kept the camera window's chrome
 //!   state in the webview's `localStorage` (`cameraWindowState`); there is no
 //!   webview here, so the same shape lives in a file. Reads happen once at
 //!   open; writes are whole-file rewrites on a background thread -- the state
 //!   is a handful of scalars, atomicity beyond rename is not worth plumbing.
-//! - `store` -- the tauri-plugin-store file the shipping app loads
-//!   (`Store.load("store")` in `apps/desktop/src/store.ts`), holding
-//!   `general_settings`, `recording_start_safety`, `auth`, `presets` and the
-//!   rest. Both apps read and write it, so every write here is a
+//! - `store` -- the tauri-plugin-store file 0.6.0 loads
+//!   (`Store.load("store")` in `apps/desktop/src/store.ts` at `cap-v0.6.2`),
+//!   holding `general_settings`, `recording_start_safety`, `auth`, `presets`
+//!   and the rest. Both apps read and write it, so every write here is a
 //!   read-modify-write on the raw JSON that touches exactly one key: see
 //!   [`set_store_setting`].
 
@@ -154,9 +156,9 @@ pub struct ExportPrefs {
 
 /// `so.cap.desktop`'s app-data dir -- where both stores live.
 ///
-/// Same identifier the Tauri app uses (`so.cap.desktop`), resolved the way
-/// each OS's app-data convention spells it so a recording made on Windows or
-/// Linux lands in the folder both apps already agree on.
+/// The identifier every Cap release has used (`so.cap.desktop`), resolved
+/// the way each OS's app-data convention spells it, so recordings and
+/// settings from 0.6.0 and earlier are found where those builds left them.
 pub fn app_data_dir() -> PathBuf {
     if let Ok(dir) = std::env::var("CAP_GPUI_APP_DATA_DIR")
         && !dir.trim().is_empty()
@@ -219,81 +221,6 @@ fn bundled_resource_dirs_for(
     }
 
     directories
-}
-
-/// The Tauri dev harness's hand-off marker (`gpui_app.rs` over there): it
-/// survives the whole session and is removed only on a clean quit, so a marker
-/// left behind reads as a crash and routes the next `bun run dev:desktop` back
-/// to the classic app.
-pub fn handoff_marker_path() -> PathBuf {
-    app_data_dir().join("cap-gpui.handoff")
-}
-
-pub fn mark_handoff_session() {
-    if let Err(error) = mark_handoff_session_at(&handoff_marker_path()) {
-        tracing::warn!("writing the hand-off marker: {error}");
-    }
-}
-
-fn mark_handoff_session_at(path: &Path) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let staged = path.with_extension(format!("handoff-{}", std::process::id()));
-    std::fs::write(&staged, std::process::id().to_string())?;
-    std::fs::rename(&staged, path).inspect_err(|_| {
-        let _ = std::fs::remove_file(&staged);
-    })
-}
-
-pub fn clear_handoff_marker() {
-    clear_handoff_marker_at(&handoff_marker_path());
-}
-
-fn clear_handoff_marker_at(path: &Path) {
-    match std::fs::remove_file(path) {
-        Ok(()) => tracing::info!("cleared the hand-off marker"),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => tracing::warn!("clearing the hand-off marker: {error}"),
-    }
-}
-
-/// A dev-checkout switch-back has no `Cap.app` to `open`: the classic app only
-/// runs inside its `tauri dev` harness, which exited with the hand-off. This
-/// sentinel asks whatever supervises the dev session (`scripts/dev-desktop.mjs`
-/// watches for it) to start that harness again; with no supervisor listening it
-/// is inert, and the flag written alongside it still routes the next
-/// `bun run dev:desktop` to the classic app.
-pub fn classic_reopen_path() -> PathBuf {
-    app_data_dir().join("cap-classic.reopen")
-}
-
-pub fn request_classic_reopen() -> std::io::Result<()> {
-    let path = classic_reopen_path();
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(&path, std::process::id().to_string())
-}
-
-pub fn classic_pending_path() -> PathBuf {
-    app_data_dir().join("cap-classic.pending")
-}
-
-pub fn mark_classic_pending() -> std::io::Result<()> {
-    let path = classic_pending_path();
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(&path, std::process::id().to_string())
-}
-
-pub fn clear_classic_pending() {
-    if let Err(error) = std::fs::remove_file(classic_pending_path())
-        && error.kind() != std::io::ErrorKind::NotFound
-    {
-        tracing::warn!(%error, "couldn't clear classic handoff readiness");
-    }
 }
 
 fn state_path() -> PathBuf {
@@ -2106,23 +2033,6 @@ pub fn preset_names() -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn the_handoff_marker_holds_this_pid_until_a_clean_quit_clears_it() {
-        let directory =
-            std::env::temp_dir().join(format!("cap-gpui-handoff-{}", super::new_uuid_v4()));
-        let marker = directory.join("cap-gpui.handoff");
-        super::mark_handoff_session_at(&marker).unwrap();
-        assert_eq!(
-            std::fs::read_to_string(&marker).unwrap(),
-            std::process::id().to_string()
-        );
-        assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
-        super::clear_handoff_marker_at(&marker);
-        assert!(!marker.exists());
-        super::clear_handoff_marker_at(&marker);
-        std::fs::remove_dir_all(directory).unwrap();
-    }
-
     use super::*;
 
     struct TempStore {

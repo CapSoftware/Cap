@@ -136,6 +136,12 @@ function createServerEnv() {
 				.describe(
 					"Transcription API base URL (eg. https://api.eu.assemblyai.com)",
 				),
+			LIVE_TRANSCRIBE_CONTEXT_SECONDS: z
+				.string()
+				.optional()
+				.describe(
+					"Seconds of earlier audio sent with each instant-mode live transcription chunk (more accurate, more audio billed; default 0)",
+				),
 			ANTHROPIC_API_KEY: z.string().optional().describe("AI chat"),
 			OPENAI_API_KEY: z.string().optional().describe("AI summaries"),
 			GROQ_API_KEY: z.string().optional().describe("AI summaries"),

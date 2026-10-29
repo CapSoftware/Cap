@@ -36,8 +36,9 @@ import { and, eq, type InferSelectModel, isNull, sql } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import type { Metadata } from "next";
 import { headers } from "next/headers";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { after } from "next/server";
+import type { JSX } from "react";
 import {
 	getDashboardSpacesData,
 	type OrganizationSettings,
@@ -67,7 +68,10 @@ import {
 	getSharePlaybackSource,
 } from "@/lib/share-playback";
 import { buildShareVideoMetadata } from "@/lib/share-video-metadata";
-import { resolveShareWebUrl } from "@/lib/share-web-url";
+import {
+	resolveRestrictedShareRedirect,
+	resolveShareWebUrl,
+} from "@/lib/share-web-url";
 import { isVideoOverShareableLinkLimit } from "@/lib/shareable-link-quota";
 import {
 	isIframelyCrawlerUserAgent,
@@ -244,12 +248,24 @@ const renderNoSuchElement = (awaitRecording: boolean) =>
 		? Effect.succeed(<PendingRecordingShare />)
 		: Effect.sync(() => notFound());
 
+type RestrictedShareRedirect = { redirectTo: string };
+
 const getShareVideoPageCatchers = (
 	videoId: Video.VideoId,
 	awaitRecording: boolean,
+	searchParams: ShareVideoSearchParams,
 ) => ({
 	PolicyDenied: (e: Policy.PolicyDeniedError) =>
-		renderPolicyDenied(videoId, e.reason),
+		Effect.promise(async () =>
+			resolveRestrictedShareRedirect(await headers(), videoId, searchParams),
+		).pipe(
+			Effect.flatMap(
+				(redirectTo): Effect.Effect<JSX.Element | RestrictedShareRedirect> =>
+					redirectTo
+						? Effect.succeed({ redirectTo })
+						: renderPolicyDenied(videoId, e.reason),
+			),
+		),
 	NoSuchElementException: () => renderNoSuchElement(awaitRecording),
 });
 
@@ -350,7 +366,7 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 	const awaitRecording =
 		isValidVideoIdParam(videoId) && hasRecordingStoppedParam(searchParams);
 
-	return Effect.gen(function* () {
+	const page = await Effect.gen(function* () {
 		const videosPolicy = yield* VideosPolicy;
 		const loadVideo = () =>
 			db()
@@ -442,10 +458,15 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 				</div>
 			),
 		),
-		Effect.catchTags(getShareVideoPageCatchers(videoId, awaitRecording)),
+		Effect.catchTags(
+			getShareVideoPageCatchers(videoId, awaitRecording, searchParams),
+		),
 		provideOptionalAuth,
 		EffectRuntime.runPromise,
 	);
+
+	if ("redirectTo" in page) redirect(page.redirectTo);
+	return page;
 }
 
 async function AuthorizedContent({
@@ -527,7 +548,7 @@ async function AuthorizedContent({
 	const earlySegmentPlayback =
 		recordingStopped &&
 		video.source?.type === "desktopSegments" &&
-		isEarlyInstantPlaybackEnabled(video.owner.id);
+		isEarlyInstantPlaybackEnabled();
 
 	// Everything below is an independent round trip (DB or storage); each is
 	// started here and awaited together further down, so the page pays for the
