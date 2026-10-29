@@ -981,6 +981,7 @@ async function copySmallObject(
 					Metadata: copyMetadata(original),
 					ContentType: original.track === "audio" ? "audio/mp4" : "video/mp4",
 				},
+				{ retryWithoutUnsupportedIfNoneMatch: true },
 			),
 		);
 	} catch (error) {
@@ -1012,6 +1013,7 @@ async function copyListedObject(
 					Metadata: copyMetadata(original),
 					ContentType: original.track === "audio" ? "audio/mp4" : "video/mp4",
 				},
+				{ retryWithoutUnsupportedIfNoneMatch: true },
 			),
 		);
 	} catch (error) {
@@ -1561,10 +1563,15 @@ async function copyMultipartPartBatch(
 	)
 		invalidSource("Multipart recording source is missing a copied range");
 	await context.run(
-		context.bucket.multipart.complete(multipart.key, multipart.uploadId, {
-			MultipartUpload: { Parts: parts },
-			IfNoneMatch: "*",
-		}),
+		context.bucket.multipart.complete(
+			multipart.key,
+			multipart.uploadId,
+			{
+				MultipartUpload: { Parts: parts },
+				IfNoneMatch: "*",
+			},
+			{ retryWithoutUnsupportedIfNoneMatch: true },
+		),
 	);
 	return {
 		object: await saveObjectReceipt(
