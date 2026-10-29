@@ -1457,8 +1457,13 @@ test.describe("camera and microphone start", () => {
 						if (mode === "camera") {
 							// Black video sits at 16 in limited-range luma.
 							expect(video.meanLuma).toBeGreaterThan(20);
-							if (useSystemDevices) {
-								expect(video).toMatchObject({ width: 1280, height: 720 });
+							// Camera mode records the camera's own frames. A rig that knows
+							// its camera's size (CAP_E2E_CAMERA_SIZE=1280x720) checks it.
+							const [width, height] = (process.env.CAP_E2E_CAMERA_SIZE ?? "")
+								.split("x")
+								.map(Number);
+							if (width && height) {
+								expect(video).toMatchObject({ width, height });
 							}
 						}
 
