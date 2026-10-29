@@ -1420,7 +1420,7 @@ impl ScreenshotEditorWindow {
     fn commit_annotations(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.clamp_masks();
         self.history.record(&self.project);
-        self.publish();
+        self.publish(window.scale_factor());
         self.schedule_save(window, cx);
         self.refresh_mask_overlays(window, cx);
         cx.notify();

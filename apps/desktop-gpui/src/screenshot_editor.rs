@@ -175,6 +175,7 @@ pub fn load_source(bundle: &Path) -> Result<LoadedSource, String> {
 pub struct ConfigUpdate {
     pub revision: u64,
     pub config: ProjectConfiguration,
+    pub preview_render_size: cap_project::XY<u32>,
 }
 
 /// A one-off render on the loop's GPU device -- `render_screenshot_png` in
@@ -246,7 +247,7 @@ pub async fn run_still_renderer(
                 &mut layers,
                 &decoded,
                 &update.config,
-                None,
+                Some(update.preview_render_size),
             )
             .await
             {
@@ -287,8 +288,8 @@ pub async fn run_still_renderer(
 /// One `render_immediate` of the still -- the body of the Tauri loop
 /// (`screenshot_editor.rs:385-430` over there): frame 0 at 30fps, empty
 /// cursor events, a zoom timeline precomputed to one frame. The preview
-/// renders at the config's base size; an export passes the upscaled
-/// `resolution_base`.
+/// passes a display-sized `resolution_base`; an export passes the upscaled
+/// full-resolution base.
 async fn render_still(
     constants: &RenderVideoConstants,
     frame_renderer: &mut FrameRenderer<'_>,
@@ -891,6 +892,40 @@ struct PreviewGeometry {
     content: (f32, f32),
 }
 
+fn screenshot_render_options(image_size: (u32, u32)) -> RenderOptions {
+    RenderOptions {
+        screen_size: cap_project::XY::new(image_size.0, image_size.1),
+        camera_size: None,
+        preserve_screen_alpha: true,
+    }
+}
+
+fn preview_render_size_for_geometry(
+    geometry: &PreviewGeometry,
+    frame_size: (f32, f32),
+    scale_factor: f32,
+    options: &RenderOptions,
+    config: &ProjectConfiguration,
+) -> cap_project::XY<u32> {
+    let (base_w, base_h) = ProjectUniforms::get_base_size(options, config);
+    let (full_w, full_h) =
+        ProjectUniforms::get_output_size(options, config, cap_project::XY::new(base_w, base_h));
+    let target_w = (geometry.fit_scale * frame_size.0 * scale_factor * MAX_ZOOM).ceil() as u32;
+    let target_h = (geometry.fit_scale * frame_size.1 * scale_factor * MAX_ZOOM).ceil() as u32;
+    if full_w == 0 || full_h == 0 {
+        return cap_project::XY::new(base_w, base_h);
+    }
+    let scale = (target_w as f32 / full_w as f32)
+        .min(target_h as f32 / full_h as f32)
+        .min(1.0);
+    if scale >= 1.0 {
+        return cap_project::XY::new(base_w, base_h);
+    }
+    let w = ((((base_w as f32 * scale).ceil() as u32).max(4).min(base_w)) + 3) & !3;
+    let h = ((((base_h as f32 * scale).ceil() as u32).max(2).min(base_h)) + 1) & !1;
+    cap_project::XY::new(w, h)
+}
+
 /// `handleWheel`'s pan arm (`Preview.tsx:317-320`), in gpui's sign convention.
 /// The webview's `deltaY` is AppKit's `scrollingDeltaY` negated, so the
 /// source's `pan - delta` is `pan + delta` here: an AppKit-positive delta --
@@ -976,6 +1011,7 @@ pub struct ScreenshotEditorWindow {
     panning: Option<PanDrag>,
     /// The one cached checkerboard tile the preview paints under everything.
     checker: Option<Arc<RenderImage>>,
+    last_preview_render_size: Option<cap_project::XY<u32>>,
 
     toasts: Vec<Toast>,
     next_toast: u64,
@@ -1062,6 +1098,7 @@ impl ScreenshotEditorWindow {
             viewport: BoundsCell::default(),
             panning: None,
             checker: Some(checkerboard_tile()),
+            last_preview_render_size: None,
 
             toasts: Vec::new(),
             next_toast: 0,
@@ -1156,7 +1193,7 @@ impl ScreenshotEditorWindow {
         // The content rect moves with the frame, so every mask is re-clipped
         // into it (`AnnotationLayer.tsx:88-141`) before the overlays resample.
         if self.clamp_masks() {
-            self.publish();
+            self.publish(window.scale_factor());
             self.schedule_save(window, cx);
         }
         self.refresh_mask_overlays(window, cx);
@@ -1215,13 +1252,58 @@ impl ScreenshotEditorWindow {
         // masks; the clamp rides along in the same history entry.
         self.clamp_masks();
         self.history.record(&self.project);
-        self.publish();
+        self.publish(window.scale_factor());
         self.schedule_save(window, cx);
         self.refresh_mask_overlays(window, cx);
         cx.notify();
     }
 
-    pub(crate) fn publish(&mut self) {
+    fn current_preview_render_size(&self, scale_factor: f32) -> cap_project::XY<u32> {
+        let Some(image_size) = self.image_size else {
+            let options = RenderOptions {
+                screen_size: cap_project::XY::new(1, 1),
+                camera_size: None,
+                preserve_screen_alpha: true,
+            };
+            let (base_w, base_h) = ProjectUniforms::get_base_size(&options, &self.project);
+            return cap_project::XY::new(base_w, base_h);
+        };
+        let options = screenshot_render_options(image_size);
+        let (base_w, base_h) = ProjectUniforms::get_base_size(&options, &self.project);
+        let Some(geometry) = self.preview_geometry() else {
+            return cap_project::XY::new(base_w, base_h);
+        };
+        preview_render_size_for_geometry(
+            &geometry,
+            self.frame_size,
+            scale_factor,
+            &options,
+            &self.project,
+        )
+    }
+
+    fn notify_preview_resolution_change(&mut self, scale_factor: f32, cx: &mut Context<Self>) {
+        let Some(config_tx) = &self.config_tx else {
+            return;
+        };
+        let preview_render_size = self.current_preview_render_size(scale_factor);
+        if self.last_preview_render_size == Some(preview_render_size) {
+            return;
+        }
+        self.last_preview_render_size = Some(preview_render_size);
+        let _ = config_tx.send(ConfigUpdate {
+            revision: self.revision,
+            config: self.project.clone(),
+            preview_render_size,
+        });
+        cx.notify();
+    }
+
+    fn notify_preview_resolution(&mut self, window: &Window, cx: &mut Context<Self>) {
+        self.notify_preview_resolution_change(window.scale_factor(), cx);
+    }
+
+    pub(crate) fn publish(&mut self, scale_factor: f32) {
         let Some(config_tx) = &self.config_tx else {
             return;
         };
@@ -1229,9 +1311,12 @@ impl ScreenshotEditorWindow {
             return;
         }
         self.revision += 1;
+        let preview_render_size = self.current_preview_render_size(scale_factor);
+        self.last_preview_render_size = Some(preview_render_size);
         let _ = config_tx.send(ConfigUpdate {
             revision: self.revision,
             config: self.project.clone(),
+            preview_render_size,
         });
     }
 
@@ -1282,7 +1367,7 @@ impl ScreenshotEditorWindow {
             self.selected_annotation = None;
         }
         self.ensure_background_image(window, cx);
-        self.publish();
+        self.publish(window.scale_factor());
         self.schedule_save(window, cx);
         self.refresh_mask_overlays(window, cx);
         cx.notify();
@@ -4111,12 +4196,18 @@ impl ScreenshotEditorWindow {
                     // maths reads next frame, paint tiles the cached tile.
                     .child(
                         canvas(
-                            move |bounds, _window, cx| {
+                            move |bounds, window, cx| {
                                 if area_cell.get() != Some(bounds) {
                                     area_cell.set(Some(bounds));
+                                    let scale_factor = window.scale_factor();
                                     if let Some(entity) = entity.upgrade() {
                                         cx.defer(move |cx| {
-                                            entity.update(cx, |_, cx| cx.notify());
+                                            entity.update(cx, |this, cx| {
+                                                this.notify_preview_resolution_change(
+                                                    scale_factor,
+                                                    cx,
+                                                );
+                                            });
                                         });
                                     }
                                 }
@@ -4870,9 +4961,15 @@ pub fn load_screenshot_project(
             }
         };
 
+        let preview_render_size = {
+            let options = screenshot_render_options((source.width, source.height));
+            let (base_w, base_h) = ProjectUniforms::get_base_size(&options, &source.config);
+            cap_project::XY::new(base_w, base_h)
+        };
         let (config_tx, config_rx) = tokio::sync::watch::channel(ConfigUpdate {
             revision: 0,
             config: source.config.clone(),
+            preview_render_size,
         });
         let (export_tx, export_rx) = tokio::sync::mpsc::channel(1);
         // Bounded and latest-wins like the video pump; stills only re-render
@@ -5404,9 +5501,15 @@ mod tests {
     async fn drag_stroke_width(width: u32, height: u32, ticks: usize, gated: bool) -> DragResult {
         let source = synthetic_source(width, height);
         let mut project = source.config.clone();
+        let preview_render_size = {
+            let options = screenshot_render_options((width, height));
+            let (base_w, base_h) = ProjectUniforms::get_base_size(&options, &project);
+            cap_project::XY::new(base_w, base_h)
+        };
         let (config_tx, config_rx) = tokio::sync::watch::channel(ConfigUpdate {
             revision: 0,
             config: project.clone(),
+            preview_render_size,
         });
         let (_export_tx, export_rx) = tokio::sync::mpsc::channel(1);
         let (frame_tx, frame_rx) = flume::bounded(2);
@@ -5464,6 +5567,7 @@ mod tests {
                 .send(ConfigUpdate {
                     revision,
                     config: project.clone(),
+                    preview_render_size,
                 })
                 .unwrap();
         }
