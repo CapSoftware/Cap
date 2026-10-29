@@ -818,7 +818,6 @@ pub struct SidebarState {
     pads: std::cell::RefCell<HashMap<PadKey, SliderTrack>>,
     /// The live pad drag, and whether it is holding a `history.pause()`.
     pub pad_drag: Option<PadKey>,
-    /// The Audio tab's Voice EQ card: selected band, hover, drag and plot.
     pub voice_eq: crate::editor_voice_eq::VoiceEqView,
 
     /// `ColorCorrectionSection`'s `adjustOpen` signal -- one per instance, so

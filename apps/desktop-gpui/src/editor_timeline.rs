@@ -1207,7 +1207,6 @@ pub enum SegmentDetail {
         muted: bool,
         /// `hideCursor`: the cursor (and its ripples) fade out for this clip.
         cursor_hidden: bool,
-        /// The clip's microphone runs through an active Voice EQ or de-click.
         voice_eq: bool,
         volume: f64,
         recording_clip: u32,

@@ -2689,7 +2689,6 @@ pub fn set_clip_volume(timeline: &mut TimelineConfiguration, index: usize, volum
     true
 }
 
-/// Writes `voice_eq` to the clips in `indices`, returning whether any changed.
 pub fn set_clip_voice_eq(
     timeline: &mut TimelineConfiguration,
     indices: &[usize],

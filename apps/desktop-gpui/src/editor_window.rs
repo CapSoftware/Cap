@@ -8367,8 +8367,6 @@ impl EditorWindow {
         self.note_edit("clip-volume", Some(TrackKind::Clip));
     }
 
-    /// The clip menu's Voice EQ row: select that clip and bring up its card in
-    /// the Audio tab.
     fn open_clip_voice_eq(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         self.clip_speed = None;
         if self.sidebar.tab != crate::editor_sidebar::SidebarTab::Audio

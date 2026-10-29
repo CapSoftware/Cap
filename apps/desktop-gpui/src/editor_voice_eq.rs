@@ -1,9 +1,5 @@
-//! The Audio tab's Voice EQ card: a per-clip tone curve for the microphone
-//! with draggable band points, presets, exact band sliders and de-click.
-//!
-//! The card edits the clips selected on the timeline, or every clip when none
-//! is selected. Each edit writes the whole [`VoiceEq`] to those clips, so the
-//! curve drawn here is always exactly what every target clip plays and exports.
+//! Each edit writes the whole [`VoiceEq`] to every target clip, so the curve
+//! drawn here is always exactly what each of them plays and exports.
 
 use cap_project::{
     ProjectConfiguration, TimelineSegment, VoiceDeclick, VoiceEq, VoiceEqBandKind, VoiceEqPreset,
@@ -102,8 +98,8 @@ impl VoiceEqHandle {
     }
 }
 
-/// The band sliders under the curve. Frequencies move on a log2 scale so the
-/// slider spends as much travel on 100-200 Hz as on 5-10 kHz.
+/// Frequencies move on a log2 scale so a slider spends as much travel on
+/// 100-200 Hz as on 5-10 kHz.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum VoiceEqSlider {
     HighPassHz,
@@ -158,8 +154,6 @@ impl VoiceEqSlider {
     }
 }
 
-/// The card's local state: which band the sliders show, the point under the
-/// pointer, the point being dragged, and the plot's laid-out rect.
 pub struct VoiceEqView {
     pub selected: VoiceEqHandle,
     pub hover: Option<VoiceEqHandle>,
@@ -231,7 +225,6 @@ fn preset_label(preset: VoiceEqPreset) -> &'static str {
     }
 }
 
-/// What the clip menu says about a clip's Voice EQ.
 pub fn voice_eq_summary(segment: &TimelineSegment) -> String {
     let Some(voice_eq) = segment.voice_eq else {
         return tr::editor::tabs::audio::voice_eq::off().to_string();
@@ -274,8 +267,6 @@ fn handle_filters(handle: VoiceEqHandle) -> &'static [usize] {
 
 const ALL_FILTERS: [usize; 5] = [0, 1, 2, 3, 4];
 
-/// Where a point sits on the plot, as fractions of its width and height. The
-/// low cut sits on the curve at its cutoff; every other point at its gain.
 pub fn handle_position(voice_eq: &VoiceEq, handle: VoiceEqHandle) -> (f32, f32) {
     let x = hz_to_fraction(handle.hz(voice_eq));
     let db = match handle {
@@ -288,8 +279,6 @@ pub fn handle_position(voice_eq: &VoiceEq, handle: VoiceEqHandle) -> (f32, f32) 
     (x, db_to_fraction(db))
 }
 
-/// The point nearest `position` within the hit radius, preferring the one
-/// already selected when two overlap.
 pub fn hit_test(
     voice_eq: &VoiceEq,
     bounds: Bounds<Pixels>,
@@ -316,9 +305,6 @@ pub fn hit_test(
         .map(|(handle, _)| handle)
 }
 
-/// Moves `handle` to the plot point under `position`: x picks the frequency
-/// inside the band's range and y the gain, except the low cut which only
-/// slides.
 pub fn drag_to(
     voice_eq: &mut VoiceEq,
     handle: VoiceEqHandle,
@@ -361,7 +347,6 @@ fn segment_count(project: &ProjectConfiguration) -> usize {
 }
 
 impl EditorWindow {
-    /// The clips the card edits: the timeline's clip selection, else all.
     pub(crate) fn voice_eq_targets(&self) -> Vec<usize> {
         let count = segment_count(&self.project);
         let mut selected = self
@@ -390,7 +375,6 @@ impl EditorWindow {
         self.voice_eq_targets().len() < segment_count(&self.project)
     }
 
-    /// The first target clip's EQ, which every edit starts from.
     pub(crate) fn shown_voice_eq(&self) -> Option<VoiceEq> {
         let timeline = self.project.timeline.as_ref()?;
         let first = *self.voice_eq_targets().first()?;
@@ -412,8 +396,6 @@ impl EditorWindow {
         settings.any(|other| other != first)
     }
 
-    /// One Voice EQ write: `change` edits the shown settings (Natural when
-    /// none exist yet) and the result lands on every target clip.
     pub(crate) fn edit_voice_eq(
         &mut self,
         reason: &'static str,
@@ -540,8 +522,6 @@ impl EditorWindow {
         }
     }
 
-    /// Scrolling over a bell widens or narrows it, the way most EQs map the
-    /// wheel to Q.
     fn voice_eq_scroll(
         &mut self,
         event: &ScrollWheelEvent,
