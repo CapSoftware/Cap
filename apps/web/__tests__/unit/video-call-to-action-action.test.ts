@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
 	} | null,
 	video: null as { ownerId: string } | null,
 	updates: [] as unknown[],
+	failTransactionWrite: null as number | null,
 }));
 
 vi.mock("@cap/env", () => ({
@@ -32,6 +33,24 @@ vi.mock("@cap/database", () => ({
 				},
 			}),
 		}),
+		transaction: async (
+			run: (tx: { update: () => unknown }) => Promise<void>,
+		) => {
+			const staged: unknown[] = [];
+			await run({
+				update: () => ({
+					set: (values: unknown) => ({
+						where: async () => {
+							if (mocks.failTransactionWrite === staged.length) {
+								throw new Error("write failed");
+							}
+							staged.push(values);
+						},
+					}),
+				}),
+			});
+			mocks.updates.push(...staged);
+		},
 	}),
 }));
 
@@ -65,6 +84,7 @@ describe("updateVideoCallToAction", () => {
 		mocks.user = { id: "owner", stripeSubscriptionStatus: "active" };
 		mocks.video = { ownerId: "owner" };
 		mocks.updates = [];
+		mocks.failTransactionWrite = null;
 	});
 
 	it("requires a signed-in user", async () => {
@@ -182,6 +202,18 @@ describe("updateVideoCallToAction", () => {
 		);
 		expect(settings).toContain("JSON_REMOVE(");
 		expect(settings).toContain("'$.callToAction'");
+	});
+
+	it("leaves the default unchanged when clearing the video's own copy fails", async () => {
+		mocks.failTransactionWrite = 1;
+		await expect(
+			updateVideoCallToAction(
+				videoId,
+				{ label: "Book a call", url: "cal.com/demo" },
+				{ asDefault: true },
+			),
+		).rejects.toThrow("write failed");
+		expect(mocks.updates).toHaveLength(0);
 	});
 });
 

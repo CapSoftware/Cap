@@ -33,10 +33,11 @@ const jsonObject = (column: AnyColumn): SQL =>
 	sql`CASE WHEN JSON_TYPE(${column}) = 'OBJECT' THEN ${column} ELSE JSON_OBJECT() END`;
 
 const storeDefaultCallToAction = (
+	database: Pick<ReturnType<typeof db>, "update">,
 	userId: User.UserId,
 	value: ShareCallToAction,
 ) =>
-	db()
+	database
 		.update(users)
 		.set({
 			preferences: sql`JSON_SET(${jsonObject(users.preferences)}, '$.defaultCallToAction', CAST(${JSON.stringify(toStoredCallToAction(value))} AS JSON))`,
@@ -81,14 +82,17 @@ export async function updateVideoCallToAction(
 	if (!result.ok) return { success: false, errors: result.errors };
 
 	if (options.asDefault) {
-		await storeDefaultCallToAction(user.id, result.value);
-		await db()
-			.update(videos)
-			.set({
-				settings: sql`JSON_REMOVE(${jsonObject(videos.settings)}, '$.callToAction')`,
-			})
-			.where(ownedVideo);
-		return { success: true, callToAction: result.value, source: "default" };
+		const value = result.value;
+		await db().transaction(async (tx) => {
+			await storeDefaultCallToAction(tx, user.id, value);
+			await tx
+				.update(videos)
+				.set({
+					settings: sql`JSON_REMOVE(${jsonObject(videos.settings)}, '$.callToAction')`,
+				})
+				.where(ownedVideo);
+		});
+		return { success: true, callToAction: value, source: "default" };
 	}
 
 	await db()
@@ -124,6 +128,6 @@ export async function updateDefaultCallToAction(
 	const result = validateCallToAction(input);
 	if (!result.ok) return { success: false, errors: result.errors };
 
-	await storeDefaultCallToAction(user.id, result.value);
+	await storeDefaultCallToAction(db(), user.id, result.value);
 	return { success: true, callToAction: result.value };
 }

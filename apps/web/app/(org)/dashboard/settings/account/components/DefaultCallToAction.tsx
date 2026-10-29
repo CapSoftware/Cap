@@ -28,7 +28,7 @@ export function DefaultCallToAction() {
 	const defaultCallToAction = parseDefaultCallToAction(userPreferences);
 
 	const openDialog = () => {
-		if (!user.isPro) {
+		if (!user.isPro && !defaultCallToAction) {
 			setUpgradeModalOpen(true);
 			return;
 		}
@@ -55,7 +55,9 @@ export function DefaultCallToAction() {
 					onClick={openDialog}
 				>
 					{defaultCallToAction ? "Edit" : "Set default"}
-					{!user.isPro && <span className="ml-1.5 opacity-70">Pro</span>}
+					{!user.isPro && !defaultCallToAction && (
+						<span className="ml-1.5 opacity-70">Pro</span>
+					)}
 				</Button>
 			</div>
 
