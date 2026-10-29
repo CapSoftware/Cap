@@ -1733,17 +1733,23 @@ impl PendingReadback {
 
     async fn map(&mut self, device: &wgpu::Device) -> Result<usize, RenderingError> {
         let start_time = Instant::now();
+        let timeout = gpu_buffer_wait_timeout(self.export_deadlines);
         let completed = wait_for_submission(
             device,
             &self.submission,
             start_time,
             self.frame_number,
-            gpu_buffer_wait_timeout(self.export_deadlines),
+            timeout,
         )
         .await;
-        match (completed, self.rx.try_recv()) {
-            (true, Ok(Ok(()))) => {}
-            (_, Ok(Err(error))) => {
+        let mapped = if completed {
+            mapped_result(&mut self.rx, start_time, self.frame_number, timeout).await
+        } else {
+            self.rx.try_recv().ok()
+        };
+        match (completed, mapped) {
+            (true, Some(Ok(()))) => {}
+            (_, Some(Err(error))) => {
                 self.unmap();
                 return Err(RenderingError::BufferMapFailed(error));
             }
@@ -1828,13 +1834,53 @@ pub struct RgbaToBgraReadback {
     pending: Option<PendingBgraReadback>,
 }
 
-struct BgraReadbackTarget {
-    width: u32,
-    height: u32,
+const BGRA_READBACK_SLOTS: usize = 2;
+
+struct BgraReadbackSlot {
     view: wgpu::TextureView,
     texture: wgpu::Texture,
     buffer: Arc<wgpu::Buffer>,
+}
+
+struct BgraReadbackTarget {
+    width: u32,
+    height: u32,
     padded_bytes_per_row: u32,
+    slots: [BgraReadbackSlot; BGRA_READBACK_SLOTS],
+    next_slot: usize,
+}
+
+fn new_bgra_readback_slot(
+    device: &wgpu::Device,
+    width: u32,
+    height: u32,
+    padded_bytes_per_row: u32,
+) -> BgraReadbackSlot {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("BGRA Readback Texture"),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Bgra8Unorm,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let buffer = Arc::new(device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("BGRA Readback Buffer"),
+        size: u64::from(padded_bytes_per_row) * u64::from(height),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    }));
+    BgraReadbackSlot {
+        view: texture.create_view(&Default::default()),
+        texture,
+        buffer,
+    }
 }
 
 pub struct PendingBgraReadback(PendingReadback);
@@ -1949,33 +1995,15 @@ impl RgbaToBgraReadback {
             return;
         }
         let padded_bytes_per_row = padded_bytes_per_row((width, height));
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("BGRA Readback Texture"),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Bgra8Unorm,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
+        let slots = std::array::from_fn(|_| {
+            new_bgra_readback_slot(device, width, height, padded_bytes_per_row)
         });
-        let buffer = Arc::new(device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("BGRA Readback Buffer"),
-            size: u64::from(padded_bytes_per_row) * u64::from(height),
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        }));
         self.target = Some(BgraReadbackTarget {
             width,
             height,
-            view: texture.create_view(&Default::default()),
-            texture,
-            buffer,
             padded_bytes_per_row,
+            slots,
+            next_slot: 0,
         });
     }
 
@@ -1996,14 +2024,18 @@ impl RgbaToBgraReadback {
         self.ensure_target(device, width, height);
         let target = self
             .target
-            .as_ref()
+            .as_mut()
             .expect("BGRA readback target initialized");
+        let slot_index = target.next_slot;
+        target.next_slot = (slot_index + 1) % BGRA_READBACK_SLOTS;
+        let slot = &target.slots[slot_index];
+        let padded_bytes_per_row = target.padded_bytes_per_row;
 
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("RGBA to BGRA Readback Blit"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &target.view,
+                    view: &slot.view,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
@@ -2021,16 +2053,16 @@ impl RgbaToBgraReadback {
 
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
-                texture: &target.texture,
+                texture: &slot.texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
             wgpu::TexelCopyBufferInfo {
-                buffer: &target.buffer,
+                buffer: &slot.buffer,
                 layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
-                    bytes_per_row: Some(target.padded_bytes_per_row),
+                    bytes_per_row: Some(padded_bytes_per_row),
                     rows_per_image: Some(height),
                 },
             },
@@ -2044,9 +2076,9 @@ impl RgbaToBgraReadback {
         let submission = queue.submit(std::iter::once(encoder.finish()));
 
         let (tx, rx) = oneshot::channel();
-        target
-            .buffer
-            .slice(..u64::from(target.padded_bytes_per_row) * u64::from(height))
+        let readback_buffer = slot.buffer.clone();
+        readback_buffer
+            .slice(..u64::from(padded_bytes_per_row) * u64::from(height))
             .map_async(wgpu::MapMode::Read, move |result| {
                 if let Err(e) = tx.send(result) {
                     tracing::error!("Failed to send map_async result: {:?}", e);
@@ -2058,8 +2090,8 @@ impl RgbaToBgraReadback {
             rx,
             submission,
             mapped: true,
-            buffer: target.buffer.clone(),
-            padded_bytes_per_row: target.padded_bytes_per_row,
+            buffer: readback_buffer,
+            padded_bytes_per_row,
             width,
             height,
             frame_number,

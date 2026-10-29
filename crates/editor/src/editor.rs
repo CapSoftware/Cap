@@ -443,11 +443,12 @@ impl Renderer {
             let queue_wait = current.queued_at.elapsed();
             let drain_duration = queue_drain_start.elapsed();
             let flush_start = Instant::now();
-            if drained_count > 0 {
+            let flush_pipelines = drained_count > 0 || !current.realtime;
+            if flush_pipelines {
                 let _ = frame_renderer.flush_pipeline().await;
                 let _ = frame_renderer.flush_pipeline_bgra().await;
             }
-            let flush_duration = if drained_count > 0 {
+            let flush_duration = if flush_pipelines {
                 flush_start.elapsed()
             } else {
                 std::time::Duration::ZERO
