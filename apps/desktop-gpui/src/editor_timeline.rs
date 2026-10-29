@@ -128,6 +128,7 @@ const SEGMENT_PADDING_RIGHT: f32 = 10.;
 /// handles still own the outer pixels.
 pub const CAMERA3D_POSE_DOT: f32 = 6.;
 pub const CAMERA3D_POSE_DOT_INSET: f32 = 5.;
+const KEYFRAME_MARK: f32 = 4.;
 /// The waveform's ceiling inside a row, so it never climbs into the labels.
 const WAVEFORM_MAX_HEIGHT: f32 = 18.;
 
@@ -1191,6 +1192,8 @@ pub enum SegmentDetail {
     Image {
         name: SharedString,
         enabled: bool,
+        /// Keyframe times, seconds from the segment start.
+        keyframes: Arc<[f64]>,
     },
     /// `TL/ClipTrack.tsx`. `start`/`end` above are the **output-time** box;
     /// these carry the recording-domain numbers the label reads.
@@ -1239,6 +1242,8 @@ pub enum SegmentDetail {
         bold: bool,
         fullscreen: bool,
         enabled: bool,
+        /// Keyframe times, seconds from the segment start.
+        keyframes: Arc<[f64]>,
     },
     /// `TL/MaskTrack.tsx:349-350`.
     Mask {
@@ -1424,6 +1429,7 @@ impl TimelineModel {
                     bold: segment.font_weight >= 600.,
                     fullscreen: matches!(segment.layout, TextLayout::Fullscreen),
                     enabled: segment.enabled,
+                    keyframes: segment.keyframes.times().into(),
                 },
             })
             .collect();
@@ -1526,6 +1532,7 @@ impl TimelineModel {
                 detail: SegmentDetail::Image {
                     name: segment.name.clone().into(),
                     enabled: segment.enabled,
+                    keyframes: segment.keyframes.times().into(),
                 },
             })
             .collect();
@@ -2859,6 +2866,29 @@ fn render_segment(
                 width,
                 height,
             ));
+        }
+    }
+
+    if let SegmentDetail::Text { keyframes, .. } | SegmentDetail::Image { keyframes, .. } =
+        &segment.detail
+    {
+        let duration = (segment.end - segment.start).max(0.0001);
+        // Trims and splits keep keys outside the segment so the animation
+        // holds; those play no part in what is shown, so they get no mark.
+        for time in keyframes
+            .iter()
+            .filter(|time| (0.0..=duration).contains(*time))
+        {
+            let x = ((time / duration) as f32) * width;
+            fill = fill.child(
+                div()
+                    .absolute()
+                    .bottom(px(2.))
+                    .left(px(x - KEYFRAME_MARK / 2.))
+                    .size(px(KEYFRAME_MARK))
+                    .rounded(px(1.))
+                    .bg(gpui::white().opacity(0.9)),
+            );
         }
     }
 

@@ -329,14 +329,14 @@ pub fn prepare_texts(
         .collect::<Vec<_>>();
     ordered.sort_by_key(|(index, segment)| (segment.track, *index));
     for (_, segment) in ordered {
-        let center = XY::new(
-            segment.center.x.clamp(0.0, 1.0),
-            segment.center.y.clamp(0.0, 1.0),
+        let (center, size, keyed_opacity) = segment.keyframes.sample(
+            segment.center,
+            segment.size,
+            f64::from(segment.opacity),
+            frame_time - segment.start,
         );
-        let size = XY::new(
-            segment.size.x.clamp(0.01, 2.0),
-            segment.size.y.clamp(0.01, 2.0),
-        );
+        let center = XY::new(center.x.clamp(0.0, 1.0), center.y.clamp(0.0, 1.0));
+        let size = XY::new(size.x.clamp(0.01, 2.0), size.y.clamp(0.01, 2.0));
 
         let width = (size.x * output_size.x as f64).max(1.0) as f32;
         let height = (size.y * output_size.y as f64).max(1.0) as f32;
@@ -364,7 +364,7 @@ pub fn prepare_texts(
             slide_px,
         );
 
-        let opacity = segment.opacity.clamp(0.0, 1.0) * enter.alpha * exit.alpha;
+        let opacity = (keyed_opacity as f32).clamp(0.0, 1.0) * enter.alpha * exit.alpha;
         if opacity <= 0.0 {
             continue;
         }
@@ -429,6 +429,7 @@ mod tests {
 
     fn segment(animation_in: TextAnimation, animation_out: TextAnimation) -> TextSegment {
         TextSegment {
+            keyframes: Default::default(),
             start: 0.0,
             end: 10.0,
             track: 0,

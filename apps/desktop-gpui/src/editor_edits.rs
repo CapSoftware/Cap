@@ -650,9 +650,39 @@ impl TrackSegmentOps for MaskSegment {
         self.track
     }
 }
-impl_track_segment!(TextSegment, lane: track);
+/// Text and image keyframes are measured from the segment's start, so moving
+/// the start (a start trim, or the tail half of a split) shifts them by the
+/// same amount and the animation stays put in output time. Off-segment keys
+/// still anchor interpolation at the new edge, as with masks.
+macro_rules! impl_keyed_overlay_segment {
+    ($type:ty) => {
+        impl TrackSegmentOps for $type {
+            fn start(&self) -> f64 {
+                self.start
+            }
+            fn end(&self) -> f64 {
+                self.end
+            }
+            fn set_start(&mut self, value: f64) {
+                self.start = value;
+            }
+            fn set_end(&mut self, value: f64) {
+                self.end = value;
+            }
+            fn trim_start_to(&mut self, value: f64) {
+                self.keyframes.shift(self.start - value);
+                self.start = value;
+            }
+            fn lane(&self) -> u32 {
+                self.track
+            }
+        }
+    };
+}
+
+impl_keyed_overlay_segment!(TextSegment);
 impl_track_segment!(cap_project::StyleSegment, lane: track);
-impl_track_segment!(cap_project::ImageSegment, lane: track);
+impl_keyed_overlay_segment!(cap_project::ImageSegment);
 
 impl TrackSegmentOps for CaptionTrackSegment {
     fn start(&self) -> f64 {
@@ -1697,6 +1727,7 @@ pub fn place_segment_at_time<T: TrackSegmentOps>(
 
 pub fn default_text_segment(start: f64, end: f64, track: u32) -> TextSegment {
     TextSegment {
+        keyframes: Default::default(),
         start,
         end,
         track,
@@ -2894,6 +2925,61 @@ mod tests {
     }
 
     // -- Selection ----------------------------------------------------------
+
+    fn keyed_image() -> cap_project::ImageSegment {
+        let mut image = cap_project::ImageSegment {
+            start: 10.0,
+            end: 20.0,
+            ..Default::default()
+        };
+        image
+            .keyframes
+            .set_position(2.0, cap_project::XY::new(0.2, 0.5));
+        image
+            .keyframes
+            .set_position(8.0, cap_project::XY::new(0.8, 0.5));
+        image.keyframes.set_opacity(5.0, 0.5);
+        image
+    }
+
+    #[test]
+    fn splitting_a_keyed_overlay_keeps_the_animation_in_place() {
+        let image = keyed_image();
+        let before = image
+            .keyframes
+            .sample(image.center, image.size, 1.0, 16.0 - 10.0);
+        let tail = image.split_tail(4.0);
+        assert_eq!(tail.start, 14.0);
+        let after = tail
+            .keyframes
+            .sample(tail.center, tail.size, 1.0, 16.0 - tail.start);
+        assert_eq!(before.0, after.0, "same position at 0:16");
+        assert_eq!(tail.keyframes.times(), vec![-2.0, 1.0, 4.0]);
+
+        let mut text: TextSegment = serde_json::from_value(serde_json::json!({
+            "start": 10.0, "end": 20.0, "content": "Hi"
+        }))
+        .unwrap();
+        text.keyframes
+            .set_position(6.0, cap_project::XY::new(0.3, 0.3));
+        let tail = text.split_tail(4.0);
+        assert_eq!(tail.keyframes.times(), vec![2.0]);
+    }
+
+    #[test]
+    fn trimming_a_keyed_overlays_start_keeps_keys_in_output_time() {
+        let mut image = keyed_image();
+        image.trim_start_to(13.0);
+        assert_eq!(image.start, 13.0);
+        assert_eq!(image.keyframes.times(), vec![-1.0, 2.0, 5.0]);
+        let mut image = keyed_image();
+        image.trim_start_to(8.0);
+        assert_eq!(image.keyframes.times(), vec![4.0, 7.0, 10.0]);
+        // The end handle leaves keys alone.
+        let mut image = keyed_image();
+        image.set_end(15.0);
+        assert_eq!(image.keyframes.times(), vec![2.0, 5.0, 8.0]);
+    }
 
     #[test]
     fn a_plain_click_selects_one_segment() {
