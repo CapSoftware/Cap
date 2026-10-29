@@ -2111,6 +2111,7 @@ mod mac {
     /// `setApplicationIconImage:`. Release bundles never call this: they take
     /// their icon from the compiled Icon Composer `Assets.car`, which macOS
     /// renders as native layers, and a runtime image would replace that.
+    #[cfg(debug_assertions)]
     pub fn set_dock_icon(png: &[u8]) {
         use objc2::{class, msg_send};
         unsafe {
@@ -3172,6 +3173,7 @@ mod stub {
     }
 
     pub fn close_native(_native: &NativeWindow) {}
+    #[cfg(debug_assertions)]
     pub fn set_dock_icon(_png: &[u8]) {}
     pub fn show_about_panel(_name: &str, _version: &str) {}
     pub fn escape_hotkey_events() -> flume::Receiver<()> {

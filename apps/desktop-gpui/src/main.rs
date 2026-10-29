@@ -378,12 +378,10 @@ fn main() {
     app.run(move |cx: &mut App| {
         gpui_tokio::init_from_handle(cx, runtime_handle);
         gpui_tokio::Tokio::spawn(cx, cap_utils::operation_diagnostics::run_checkpoints()).detach();
-        #[cfg(all(debug_assertions, target_os = "macos"))]
-        platform::set_dock_icon(if objc2::available!(macos = 26.0) {
-            include_bytes!("../assets/cap-debug-icon.png")
-        } else {
-            include_bytes!("../assets/cap-debug-icon-legacy.png")
-        });
+        // The dock icon: an unbundled dev binary shows the generic terminal
+        // document without it. The bytes are the shipping app's icon.png.
+        #[cfg(debug_assertions)]
+        platform::set_dock_icon(include_bytes!("../assets/dock-icon.png"));
 
         if let Err(error) = Assets.load_fonts(cx) {
             tracing::error!("failed to load embedded fonts: {error:#}");
