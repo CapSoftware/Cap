@@ -1159,6 +1159,9 @@ const startRecording = async (request: StartRecordingRequest) => {
 			startedAt,
 			durationMs: 0,
 			updatedAt: startedAt,
+			...(recording.microphoneTracks.length > 0
+				? { microphone: "live" as const }
+				: {}),
 		};
 
 		try {
@@ -1817,12 +1820,15 @@ const handleRequest = async (
 
 	if (message.type === "toggle-microphone-mute") {
 		const recording = activeRecording;
-		if (recording) {
+		if (recording && recording.microphoneTracks.length > 0) {
 			for (const track of recording.microphoneTracks) {
 				track.enabled = !message.muted;
 			}
+			if (status.phase === "recording" || status.phase === "paused") {
+				status = { ...status, microphone: message.muted ? "muted" : "live" };
+			}
 		}
-		return { ok: true };
+		return { ok: true, status };
 	}
 
 	return { ok: true, status };

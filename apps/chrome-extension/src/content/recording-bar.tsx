@@ -58,6 +58,7 @@ type BarStatus = {
 	phase: "recording" | "paused";
 	durationMs: number;
 	updatedAt: number;
+	microphone?: "live" | "muted";
 };
 
 type BarControl = "stop-recording" | "pause-recording" | "resume-recording";
@@ -78,6 +79,7 @@ const toBarStatus = (status: RecordingStatus | undefined): BarStatus | null => {
 		phase: status.phase,
 		durationMs: status.durationMs,
 		updatedAt: status.updatedAt ?? status.startedAt,
+		microphone: status.microphone,
 	};
 };
 
@@ -541,6 +543,24 @@ export function RecordingBarOverlay({
 		[applyResponse],
 	);
 
+	const toggleRecordingMicrophone = useCallback(() => {
+		const microphone = status?.microphone;
+		if (!microphone) return;
+		const muted = microphone === "live";
+		setStatus((current) =>
+			current ? { ...current, microphone: muted ? "muted" : "live" } : current,
+		);
+		sendServiceWorkerMessage({
+			target: "service-worker",
+			type: "toggle-microphone-mute",
+			muted,
+		})
+			.then((response) => {
+				if (response.ok) applyResponse(response.status, response.plan);
+			})
+			.catch(() => undefined);
+	}, [applyResponse, status?.microphone]);
+
 	const startRecording = useCallback(() => {
 		setBusy(true);
 		loadSettings()
@@ -863,21 +883,25 @@ export function RecordingBarOverlay({
 							</button>
 						) : null}
 
-						{onToggleMicrophone ? (
+						{status?.microphone ? (
 							<button
 								type="button"
 								className={classNames(
 									"cap-extension-dock-btn is-mic",
-									microphone?.enabled && "is-active",
-									!microphone?.enabled && "is-muted",
+									status.microphone === "live" && "is-active",
+									status.microphone === "muted" && "is-muted",
 								)}
 								aria-label={
-									microphone?.enabled ? "Mute microphone" : "Unmute microphone"
+									status.microphone === "live"
+										? "Mute microphone"
+										: "Unmute microphone"
 								}
-								data-tooltip={microphone?.enabled ? "Mic unmuted" : "Mic muted"}
-								onClick={onToggleMicrophone}
+								data-tooltip={
+									status.microphone === "live" ? "Mic unmuted" : "Mic muted"
+								}
+								onClick={toggleRecordingMicrophone}
 							>
-								{microphone?.enabled ? (
+								{status.microphone === "live" ? (
 									<Mic size={16} aria-hidden />
 								) : (
 									<MicOff size={16} aria-hidden />

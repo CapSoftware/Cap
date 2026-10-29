@@ -1657,6 +1657,9 @@ const handleRequest = async (
 			type: "toggle-microphone-mute",
 			muted: message.muted,
 		});
+		if (response.ok && response.status) {
+			setRecordingStatusAndBroadcast(response.status);
+		}
 		return response;
 	}
 

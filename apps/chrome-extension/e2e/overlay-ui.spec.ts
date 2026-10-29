@@ -235,7 +235,11 @@ const getServiceWorker = async (context: BrowserContext) => {
 const configureExtension = async (
 	worker: Awaited<ReturnType<typeof getServiceWorker>>,
 	apiBaseUrl: string,
-	options: { countdownEnabled?: boolean; webcamEnabled?: boolean } = {},
+	options: {
+		countdownEnabled?: boolean;
+		webcamEnabled?: boolean;
+		microphoneEnabled?: boolean;
+	} = {},
 ) => {
 	await worker.evaluate(
 		async ({ authKey, bootstrapKey, settingsKey, apiBaseUrl, options }) => {
@@ -271,7 +275,10 @@ const configureExtension = async (
 								shape: "round",
 								mirror: false,
 							},
-							microphone: { enabled: false, deviceId: null },
+							microphone: {
+								enabled: options.microphoneEnabled ?? false,
+								deviceId: null,
+							},
 							systemAudio: { enabled: false },
 							sounds: { enabled: false },
 							countdown: {
@@ -948,6 +955,9 @@ test("recording controls stay stable and the camera resizes directly", async () 
 			.toBe(true);
 		const pauseBox = settledPause.box;
 		if (!pauseBox) throw new Error("pause action missing on hover");
+		expect(
+			await getClosedShadowElementBox(devtools, "class", "is-mic"),
+		).toBeNull();
 		await targetPage.mouse.move(
 			pauseBox.x + pauseBox.width / 2,
 			pauseBox.y + pauseBox.height / 2,
@@ -1102,6 +1112,139 @@ test("recording controls stay stable and the camera resizes directly", async () 
 				timeout: 5_000,
 			})
 			.toBe(true);
+	} finally {
+		await extension.cleanup();
+		await mockServer.close();
+	}
+});
+
+test("the dock mutes the recording microphone without changing saved settings", async () => {
+	test.setTimeout(90_000);
+	const mockServer = await createMockCapServer();
+	const extension = await launchExtensionContext();
+
+	try {
+		const worker = await getServiceWorker(extension.context);
+		await configureExtension(worker, mockServer.origin, {
+			webcamEnabled: false,
+			microphoneEnabled: true,
+		});
+
+		const messengerPage = await extension.context.newPage();
+		await messengerPage.goto(
+			`chrome-extension://${new URL(worker.url()).host}/popup.html`,
+		);
+		const targetPage = await extension.context.newPage();
+		await targetPage.goto(`${mockServer.origin}/capture.html`);
+		await targetPage.bringToFront();
+
+		const startResponse = (await sendServiceWorkerMessage(messengerPage, {
+			target: "service-worker",
+			type: "start-recording",
+			mode: "fullscreen",
+		})) as { ok: boolean };
+		expect(startResponse.ok).toBe(true);
+
+		const devtools = await extension.context.newCDPSession(targetPage);
+		const readMicrophone = async () => {
+			const response = (await sendServiceWorkerMessage(messengerPage, {
+				target: "service-worker",
+				type: "get-recording-status",
+			})) as { status?: { microphone?: string } };
+			return response.status?.microphone;
+		};
+		const readSavedMicrophoneEnabled = () =>
+			worker.evaluate(
+				(settingsKey) =>
+					new Promise<boolean | undefined>((resolve) => {
+						const chromeApi = (globalThis as ChromeGlobal).chrome;
+						chromeApi.storage.local.get(settingsKey, (items) => {
+							const settings = items[settingsKey] as
+								| { microphone?: { enabled?: boolean } }
+								| undefined;
+							resolve(settings?.microphone?.enabled);
+						});
+					}),
+				SETTINGS_KEY,
+			);
+		const settledMicBox = async () => {
+			const holder: { box: ElementBox | null } = { box: null };
+			await expect
+				.poll(async () => {
+					const previous = holder.box;
+					const next = await getClosedShadowElementBox(
+						devtools,
+						"class",
+						"is-mic",
+					);
+					holder.box = next;
+					return (
+						previous !== null &&
+						next !== null &&
+						previous.x === next.x &&
+						previous.y === next.y
+					);
+				})
+				.toBe(true);
+			if (!holder.box) throw new Error("microphone action missing on hover");
+			return holder.box;
+		};
+		const clickMic = async () => {
+			const badge = await getClosedShadowElementBox(
+				devtools,
+				"class",
+				"cap-extension-recording-badge",
+			);
+			if (!badge) throw new Error("recording badge missing");
+			await targetPage.mouse.move(
+				badge.x + badge.width / 2,
+				badge.y + badge.height / 2,
+			);
+			const micBox = await settledMicBox();
+			await targetPage.mouse.move(
+				micBox.x + micBox.width / 2,
+				micBox.y + micBox.height / 2,
+				{ steps: 4 },
+			);
+			await targetPage.mouse.click(
+				micBox.x + micBox.width / 2,
+				micBox.y + micBox.height / 2,
+			);
+		};
+
+		await expect.poll(readMicrophone, { timeout: 15_000 }).toBe("live");
+		await expect
+			.poll(
+				async () =>
+					(await getClosedShadowElementBox(
+						devtools,
+						"class",
+						"cap-extension-recording-badge",
+					)) !== null,
+				{ timeout: 10_000 },
+			)
+			.toBe(true);
+
+		await clickMic();
+		await expect.poll(readMicrophone).toBe("muted");
+		await expect
+			.poll(
+				async () =>
+					(await getClosedShadowElementBox(devtools, "class", "is-muted")) !==
+					null,
+			)
+			.toBe(true);
+		expect(await readSavedMicrophoneEnabled()).toBe(true);
+
+		await clickMic();
+		await expect.poll(readMicrophone).toBe("live");
+		expect(await readSavedMicrophoneEnabled()).toBe(true);
+
+		const stopResponse = (await sendServiceWorkerMessage(messengerPage, {
+			target: "service-worker",
+			type: "stop-recording",
+		})) as { ok: boolean };
+		expect(stopResponse.ok).toBe(true);
 	} finally {
 		await extension.cleanup();
 		await mockServer.close();

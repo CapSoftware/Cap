@@ -1929,11 +1929,6 @@ function OverlayApp() {
 							enabled: nextEnabled,
 						},
 					}).catch(() => undefined);
-					void sendServiceWorkerMessage({
-						target: "service-worker",
-						type: "toggle-microphone-mute",
-						muted: !nextEnabled,
-					}).catch(() => undefined);
 				}}
 			/>
 			<CountdownOverlay />

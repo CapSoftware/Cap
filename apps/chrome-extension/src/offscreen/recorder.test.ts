@@ -214,33 +214,45 @@ describe("recording microphone mute", () => {
 					getDisplayMedia: async () => main,
 				},
 			});
-			expect(
-				await start(
-					{
-						microphone: { enabled: microphone, deviceId: null },
-						systemAudio: { enabled: systemAudio },
-					},
-					mode,
-				),
-			).toMatchObject({ ok: true, status: { phase: "recording" } });
+			const started = await start(
+				{
+					microphone: { enabled: microphone, deviceId: null },
+					systemAudio: { enabled: systemAudio },
+				},
+				mode,
+			);
+			expect(started).toMatchObject({
+				ok: true,
+				status: { phase: "recording" },
+			});
+			const recordingMicrophone = (response: unknown) =>
+				(response as { status?: { microphone?: string } }).status?.microphone;
+			expect(recordingMicrophone(started)).toBe(
+				microphone ? "live" : undefined,
+			);
 
 			expect(speakerStreams).toEqual(
 				mode === "tab" && systemAudio ? [main] : [],
 			);
 			expect(mixContextOptions).toEqual([{ sinkId: { type: "none" } }]);
 
-			expect(
-				await send({ type: "toggle-microphone-mute", muted: true }),
-			).toEqual({ ok: true });
+			const muted = await send({ type: "toggle-microphone-mute", muted: true });
+			expect(muted).toMatchObject({ ok: true });
+			expect(recordingMicrophone(muted)).toBe(microphone ? "muted" : undefined);
 			expect(mic.enabled).toBe(!microphone);
 			expect(system.enabled).toBe(true);
 			if (systemAudio) {
 				expect(capturedStream.getAudioTracks()[0]?.enabled).toBe(true);
 			}
 
-			expect(
-				await send({ type: "toggle-microphone-mute", muted: false }),
-			).toEqual({ ok: true });
+			const unmuted = await send({
+				type: "toggle-microphone-mute",
+				muted: false,
+			});
+			expect(unmuted).toMatchObject({ ok: true });
+			expect(recordingMicrophone(unmuted)).toBe(
+				microphone ? "live" : undefined,
+			);
 			expect(mic.enabled).toBe(true);
 			expect(system.enabled).toBe(true);
 		},
