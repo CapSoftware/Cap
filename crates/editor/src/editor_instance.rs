@@ -236,6 +236,7 @@ pub struct EditorInstance {
     // true, and without the epoch check that late Stop would flip the watch
     // to false while the new playback is running.
     playback_epoch: AtomicU64,
+    playback_rate_bits: AtomicU64,
     pub state: Arc<Mutex<EditorState>>,
     on_state_change: Box<dyn Fn(&EditorState) + Send + Sync + 'static>,
     pub preview_tx: watch::Sender<Option<PreviewFrameInstruction>>,
@@ -658,6 +659,7 @@ impl EditorInstance {
             export_active: AtomicBool::new(false),
             preview_layers: std::sync::Mutex::new(None),
             playback_epoch: AtomicU64::new(0),
+            playback_rate_bits: AtomicU64::new(1.0f64.to_bits()),
             runtime_handle: tokio::runtime::Handle::current(),
             audio_output,
         });
@@ -770,6 +772,7 @@ impl EditorInstance {
             playback_active,
             playback_active_rx,
             playback_epoch: AtomicU64::new(0),
+            playback_rate_bits: AtomicU64::new(1.0f64.to_bits()),
             state: Arc::new(Mutex::new(EditorState {
                 playhead_position: 0,
                 playback_task: None,
@@ -880,6 +883,22 @@ impl EditorInstance {
         .unwrap_or_default()
     }
 
+    /// Speed for playback sessions started from now on; the caller restarts
+    /// a running session to apply it.
+    pub fn set_playback_rate(&self, rate: f64) {
+        let rate = if rate.is_finite() && rate > 0.0 {
+            rate.clamp(playback::MIN_PLAYBACK_RATE, playback::MAX_PLAYBACK_RATE)
+        } else {
+            1.0
+        };
+        self.playback_rate_bits
+            .store(rate.to_bits(), Ordering::SeqCst);
+    }
+
+    pub fn playback_rate(&self) -> f64 {
+        f64::from_bits(self.playback_rate_bits.load(Ordering::SeqCst))
+    }
+
     pub async fn start_playback(self: &Arc<Self>, fps: u32, resolution_base: XY<u32>) {
         if let Err(error) = self
             .start_playback_with_handle(fps, resolution_base, None)
@@ -944,6 +963,7 @@ impl EditorInstance {
                 project: self.project_config.0.subscribe(),
                 audio_output: self.audio_output.clone(),
                 telemetry: None,
+                playback_rate: self.playback_rate(),
             };
             let playback_handle = if let Some(adoption) = adoption {
                 playback

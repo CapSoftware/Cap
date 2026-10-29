@@ -1370,6 +1370,7 @@ pub struct EditorWindow {
     /// Kept alive for the window's lifetime: dropping the last `Arc` is what
     /// tears the decoders down, and `dispose()` on close does it explicitly.
     pub(crate) instance: Option<Arc<EditorInstance>>,
+    playback_rate: f64,
     focus: FocusHandle,
 
     // -- Transport ----------------------------------------------------------
@@ -2081,6 +2082,7 @@ impl EditorWindow {
             timeline_view,
             frame_layout: None,
             instance: None,
+            playback_rate: 1.0,
             focus: cx.focus_handle(),
             playing: false,
             playhead: 0.0,
@@ -3253,6 +3255,7 @@ impl EditorWindow {
     /// `handlePlayPauseClick` (`Player.tsx:212-233`), verbatim: at the end,
     /// restart from 0; playing, stop; otherwise seek to the playhead and go.
     pub fn toggle_play(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.set_playback_rate(1.0);
         if self.preparing_transport_active() {
             if self.preparing_controls_ready() {
                 let seek = self.is_at_end().then_some(0.0);
@@ -3281,6 +3284,63 @@ impl EditorWindow {
             let from = self.playhead;
             self.start_playback(from, cx);
         }
+    }
+
+    fn set_playback_rate(&mut self, rate: f64) {
+        self.playback_rate = rate;
+        if let Some(instance) = &self.instance {
+            instance.set_playback_rate(rate);
+        }
+    }
+
+    fn shuttle(&mut self, rate: f64, window: &mut Window, cx: &mut Context<Self>) {
+        if self.is_at_end() || self.preparing_transport_active() {
+            return;
+        }
+        self.set_playback_rate(rate);
+        let from = self.playhead;
+        if self.playing {
+            self.stop_playback(cx);
+        }
+        self.start_playback(from, cx);
+        window.refresh();
+    }
+
+    fn shuttle_faster(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let current = if self.playing {
+            self.playback_rate
+        } else {
+            0.0
+        };
+        let next = SHUTTLE_RATES
+            .iter()
+            .copied()
+            .find(|rate| *rate > current && *rate >= 1.0)
+            .unwrap_or(SHUTTLE_RATES[SHUTTLE_RATES.len() - 1]);
+        self.shuttle(next, window, cx);
+    }
+
+    fn shuttle_slower(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let current = if self.playing {
+            self.playback_rate
+        } else {
+            1.0
+        };
+        let next = SHUTTLE_RATES
+            .iter()
+            .rev()
+            .copied()
+            .find(|rate| *rate < current)
+            .unwrap_or(SHUTTLE_RATES[0]);
+        self.shuttle(next, window, cx);
+    }
+
+    fn shuttle_stop(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.playing {
+            self.stop_playback(cx);
+        }
+        self.set_playback_rate(1.0);
+        window.refresh();
     }
 
     /// `seekPlayheadTo` (`Timeline/index.tsx:829-853`), minus the source's
@@ -3769,6 +3829,18 @@ impl EditorWindow {
             "c" => {
                 cx.stop_propagation();
                 self.split_at_playhead(window, cx);
+            }
+            "j" => {
+                cx.stop_propagation();
+                self.shuttle_slower(window, cx);
+            }
+            "k" => {
+                cx.stop_propagation();
+                self.shuttle_stop(window, cx);
+            }
+            "l" => {
+                cx.stop_propagation();
+                self.shuttle_faster(window, cx);
             }
             "escape" => {
                 cx.stop_propagation();
@@ -10659,6 +10731,19 @@ impl EditorWindow {
                     .flex_none()
                     .text_size(px(13.))
                     .when(narrow, |clock| clock.text_size(px(12.)))
+                    .children(
+                        (self.playing && (self.playback_rate - 1.0).abs() > 1e-3).then(|| {
+                            div()
+                                .mr(px(6.))
+                                .px(px(5.))
+                                .rounded(px(4.))
+                                .bg(Hsla::from(editor.accent))
+                                .text_color(Hsla::from(editor.card))
+                                .text_size(px(11.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(SharedString::from(shuttle_rate_label(self.playback_rate)))
+                        }),
+                    )
                     .child(
                         div()
                             .font_weight(FontWeight::MEDIUM)
@@ -10881,6 +10966,7 @@ impl EditorWindow {
                 self.playing,
                 self.playhead_epoch_live,
                 self.last_playhead_redraw.elapsed().as_secs_f64(),
+                self.playback_rate,
             );
             if ahead > 0.0 {
                 view.playhead = (view.playhead + ahead).min(self.total_duration());
@@ -11794,11 +11880,29 @@ const MAX_PLAYHEAD_EXTRAPOLATION: f64 = 0.25;
 /// back: the "playhead jumps on play, then goes back" glitch. So: no epoch
 /// sample yet, no extrapolation -- the line holds still, which is exactly
 /// what the engine is doing.
-fn playhead_extrapolation(playing: bool, epoch_has_sample: bool, since_last_sample: f64) -> f64 {
+/// `rate` is the shuttle speed: the timeline advances `rate` seconds per
+/// wall-clock second, so the glide (and its cap) scale with it.
+fn playhead_extrapolation(
+    playing: bool,
+    epoch_has_sample: bool,
+    since_last_sample: f64,
+    rate: f64,
+) -> f64 {
     if !playing || !epoch_has_sample {
         return 0.0;
     }
-    since_last_sample.clamp(0.0, MAX_PLAYHEAD_EXTRAPOLATION)
+    let rate = if rate.is_finite() && rate > 0.0 {
+        rate
+    } else {
+        1.0
+    };
+    since_last_sample.clamp(0.0, MAX_PLAYHEAD_EXTRAPOLATION) * rate
+}
+
+/// The transport's speed badge: "2x", "0.5x".
+fn shuttle_rate_label(rate: f64) -> String {
+    let text = format!("{rate:.2}");
+    format!("{}x", text.trim_end_matches('0').trim_end_matches('.'))
 }
 
 fn dismiss_indexed_sidebar_menu(menu: &mut Option<crate::editor_tabs::OpenMenu>) {
@@ -11828,6 +11932,8 @@ fn dismiss_indexed_sidebar_menu(menu: &mut Option<crate::editor_tabs::OpenMenu>)
         *menu = None;
     }
 }
+
+const SHUTTLE_RATES: [f64; 6] = [0.5, 1.0, 1.5, 2.0, 3.0, 4.0];
 
 fn is_playback_shortcut(
     keystroke: &gpui::Keystroke,
@@ -14489,24 +14595,39 @@ mod tests {
     #[test]
     fn playhead_never_extrapolates_before_the_epochs_first_sample() {
         // Freshly pressed play, stale anchor: hold the line still.
-        assert_eq!(playhead_extrapolation(true, false, 0.206), 0.0);
-        assert_eq!(playhead_extrapolation(true, false, 1.081), 0.0);
+        assert_eq!(playhead_extrapolation(true, false, 0.206, 1.0), 0.0);
+        assert_eq!(playhead_extrapolation(true, false, 1.081, 1.0), 0.0);
         // Paused, no matter what the anchor says.
-        assert_eq!(playhead_extrapolation(false, true, 0.5), 0.0);
-        assert_eq!(playhead_extrapolation(false, false, 0.5), 0.0);
+        assert_eq!(playhead_extrapolation(false, true, 0.5, 1.0), 0.0);
+        assert_eq!(playhead_extrapolation(false, false, 0.5, 1.0), 0.0);
+    }
+
+    #[test]
+    fn the_speed_badge_reads_like_the_shuttle_rates() {
+        assert_eq!(shuttle_rate_label(2.0), "2x");
+        assert_eq!(shuttle_rate_label(0.5), "0.5x");
+        assert_eq!(shuttle_rate_label(0.25), "0.25x");
+        assert_eq!(shuttle_rate_label(4.0), "4x");
     }
 
     /// Once the epoch is live the line glides by the wall clock between
     /// samples, capped so a render stall cannot run it far ahead.
     #[test]
     fn playhead_extrapolation_tracks_the_wall_clock_and_caps() {
-        assert_eq!(playhead_extrapolation(true, true, 0.016), 0.016);
+        assert_eq!(playhead_extrapolation(true, true, 0.016, 1.0), 0.016);
         assert_eq!(
-            playhead_extrapolation(true, true, 3.0),
+            playhead_extrapolation(true, true, 3.0, 1.0),
             MAX_PLAYHEAD_EXTRAPOLATION
         );
+        // Shuttling: the line glides at the playback speed.
+        assert_eq!(playhead_extrapolation(true, true, 0.016, 2.0), 0.032);
+        assert_eq!(playhead_extrapolation(true, true, 0.016, 0.5), 0.008);
+        assert_eq!(
+            playhead_extrapolation(true, true, 3.0, 4.0),
+            MAX_PLAYHEAD_EXTRAPOLATION * 4.0
+        );
         // A clock hiccup must not pull the playhead backwards.
-        assert_eq!(playhead_extrapolation(true, true, -0.01), 0.0);
+        assert_eq!(playhead_extrapolation(true, true, -0.01, 1.0), 0.0);
     }
 
     /// A paused seek stores exactly the time its engine echo carries, so the

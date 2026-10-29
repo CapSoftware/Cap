@@ -1208,6 +1208,7 @@ pub async fn realtime_playback(
         music: cap_editor::MusicTracks::new(),
         audio_output: Arc::new(audio_output),
         telemetry: Some(telemetry),
+        playback_rate: 1.0,
     };
     let started = std::time::Instant::now();
     let handle = playback
