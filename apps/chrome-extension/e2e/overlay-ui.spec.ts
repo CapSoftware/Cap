@@ -1312,6 +1312,67 @@ test("choosing Camera mode picks a camera so Start stays available", async () =>
 	}
 });
 
+test("the recorder panel still loads after other tabs push its token out of the registry", async () => {
+	const mockServer = await createMockCapServer();
+	const extension = await launchExtensionContext();
+
+	try {
+		const worker = await getServiceWorker(extension.context);
+		await configureExtension(worker, mockServer.origin, {
+			webcamEnabled: false,
+		});
+		const messengerPage = await extension.context.newPage();
+		await messengerPage.goto(
+			`chrome-extension://${new URL(worker.url()).host}/popup.html`,
+		);
+		const targetPage = await extension.context.newPage();
+		await targetPage.goto(`${mockServer.origin}/capture.html`);
+		await targetPage.bringToFront();
+		const togglePanel = () =>
+			sendServiceWorkerMessage(messengerPage, {
+				target: "service-worker",
+				type: "open-recorder-panel",
+			});
+		const startButton = () =>
+			frameWithUrl(targetPage, "popup.html")
+				?.getByRole("button", { name: "Start recording" })
+				.isVisible()
+				.catch(() => false) ?? false;
+
+		await togglePanel();
+		await expect.poll(startButton, { timeout: 15_000 }).toBe(true);
+		await togglePanel();
+		await expect
+			.poll(() => frameWithUrl(targetPage, "popup.html") === null)
+			.toBe(true);
+
+		// Hundreds of newer registrations, as from many tabs loading the
+		// overlay, evict this page's tokens.
+		await worker.evaluate(
+			() =>
+				new Promise<void>((resolve) => {
+					const now = Date.now();
+					const tokens = Object.fromEntries(
+						Array.from({ length: 300 }, (_, index) => [
+							`other-tab-${index}`,
+							now - 300 + index,
+						]),
+					);
+					(globalThis as ChromeGlobal).chrome.storage.session.set(
+						{ "cap-extension-overlay-tokens": tokens },
+						resolve,
+					);
+				}),
+		);
+
+		await togglePanel();
+		await expect.poll(startButton, { timeout: 15_000 }).toBe(true);
+	} finally {
+		await extension.cleanup();
+		await mockServer.close();
+	}
+});
+
 test("the recorder panel and camera preview load on a page with a strict CSP", async () => {
 	const mockServer = await createMockCapServer();
 	const extension = await launchExtensionContext();
