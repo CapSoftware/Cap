@@ -237,6 +237,49 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 			},
 		);
 
+		const findStoredScreenshotKey = Effect.fn("Videos.findStoredScreenshotKey")(
+			function* (
+				bucket: Effect.Effect.Success<
+					ReturnType<typeof storage.getAccessForVideo>
+				>[0],
+				videoPrefix: string,
+			) {
+				for (const suffix of SCREENSHOT_OBJECT_KEY_SUFFIXES) {
+					const key = `${videoPrefix}${suffix}`;
+					const exists = yield* bucket.headObject(key).pipe(
+						Effect.as(true),
+						Effect.catchAll(() => Effect.succeed(false)),
+					);
+					if (exists) return key;
+				}
+
+				const screenshotList = yield* bucket.listObjects({
+					prefix: `${videoPrefix}screenshot/`,
+					maxKeys: THUMBNAIL_OBJECT_LIST_MAX_KEYS,
+				});
+				let thumbnailKey = findScreenshotObjectKey(
+					screenshotList.Contents ?? [],
+				);
+				if (thumbnailKey) return thumbnailKey;
+
+				const seen = new Set<string>();
+				let continuation: string | undefined;
+				while (true) {
+					const rootList = yield* bucket.listObjects({
+						prefix: videoPrefix,
+						maxKeys: THUMBNAIL_OBJECT_LIST_MAX_KEYS,
+						continuationToken: continuation,
+					});
+					thumbnailKey = findScreenshotObjectKey(rootList.Contents ?? []);
+					if (thumbnailKey) return thumbnailKey;
+					if (!rootList.IsTruncated) return null;
+					const next = yield* nextObjectPage(rootList, seen);
+					if (!next) return null;
+					continuation = next;
+				}
+			},
+		);
+
 		const getThumbnailURLForVideo = Effect.fn("Videos.getThumbnailURLForVideo")(
 			function* (video: Video.Video) {
 				const [bucket] = yield* storage.getAccessForVideo(video);
@@ -247,20 +290,10 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 					);
 				}
 				const videoPrefix = `${video.ownerId}/${video.id}/`;
-				const screenshotList = yield* bucket.listObjects({
-					prefix: `${videoPrefix}screenshot/`,
-					maxKeys: THUMBNAIL_OBJECT_LIST_MAX_KEYS,
-				});
-				let thumbnailKey = findScreenshotObjectKey(
-					screenshotList.Contents ?? [],
+				const thumbnailKey = yield* findStoredScreenshotKey(
+					bucket,
+					videoPrefix,
 				);
-				if (!thumbnailKey) {
-					const rootList = yield* bucket.listObjects({
-						prefix: videoPrefix,
-						maxKeys: THUMBNAIL_OBJECT_LIST_MAX_KEYS,
-					});
-					thumbnailKey = findScreenshotObjectKey(rootList.Contents ?? []);
-				}
 				if (!thumbnailKey) return Option.none<string>();
 				const url = yield* bucket.getSignedObjectUrl(thumbnailKey);
 				return Option.some(url);
@@ -890,6 +923,9 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 							onSuccess: () =>
 								getThumbnailURLForVideo(entry.video).pipe(
 									Effect.map((url) => Exit.succeed(url)),
+									Effect.catchAll(() =>
+										Effect.succeed(Exit.succeed(Option.none<string>())),
+									),
 								),
 						});
 					},
