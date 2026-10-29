@@ -1600,7 +1600,6 @@ default_text = { text = "Text", context = "Initial content of a new text annotat
 done = "Done"
 fill = "Fill"
 intensity = "Intensity"
-mask_style = { text = "Style", context = "Picks how a mask hides content: blur or pixelate." }
 pixelate = "Pixelate"
 stroke = { text = "Stroke", context = "Outline colour of a shape annotation." }
 transparent = "Transparent"
@@ -1664,36 +1663,14 @@ reorder_hint = "Drag to reorder • Top = front"
 title = "Layers"
 
 [screenshot_editor.mask]
-adjust = "Adjust"
 corner_radius = { text = "Corners", context = "Corner radius of a rectangular mask, in a narrow slider row." }
+darkness = { text = "Darkness", context = "How much a highlight mask dims everything outside it." }
 feather = { text = "Feather", context = "How softly a mask fades out at its edges." }
-invert = { text = "Invert", context = "Mask everything outside the drawn area instead of inside it." }
-invert_hint = "Hide everything except this area"
-presets = "Presets"
-presets_title = "Mask presets"
-privacy_note = "Blur and pixelate can sometimes be reversed. Use Redact for passwords and keys."
-shape = "Shape"
+settings = "Mask settings"
 shape_ellipse = "Ellipse"
 shape_rectangle = "Rectangle"
-shape_rounded = "Rounded"
 solid = { text = "Solid", context = "Mask style that covers the area with a flat colour." }
 tint = { text = "Tint", context = "How strongly a colour is mixed into a blurred or pixelated mask." }
-
-[screenshot_editor.mask.preset]
-cap_blue = "Cap Blue"
-cap_blue_hint = "Pixelated with a Cap blue tint"
-focus = "Focus"
-focus_hint = "Blur everything around it"
-frosted = "Frosted"
-frosted_hint = "Milky glass over the area"
-mosaic = "Mosaic"
-mosaic_hint = "Chunky pixels"
-redact = "Redact"
-redact_hint = "Solid bar, nothing recoverable"
-soft_blur = "Soft blur"
-soft_blur_hint = "Gentle blur with soft edges"
-spotlight = "Spotlight"
-spotlight_hint = "Dim everything around it"
 
 [screenshot_editor.menu]
 delete = "Delete"

@@ -1,37 +1,80 @@
 use cap_gpui_kernels::mask_style::{MaskEffect, MaskStyle};
 use cap_project::{MaskOptions, MaskShape};
-use gpui::{linear_color_stop, linear_gradient};
 
 use super::*;
 
-const BRAND_BLUE: &str = "#4785FF";
-const ROUNDED_DEFAULT_RADIUS: f64 = 12.;
 const TINT_ON_COLOR_PICK: f64 = 0.4;
+const HIGHLIGHT_DARKNESS: f64 = 0.6;
+const HIGHLIGHT_FEATHER: f64 = 24.;
+const HIGHLIGHT_COLOR: &str = "#000000";
+const SETTINGS_WIDTH: f32 = 240.;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum MaskPanel {
-    Presets,
-    Adjust,
+/// The video editor's two mask kinds (`editor_panels::render_mask_panel`):
+/// Sensitive hides what is inside the mask, Highlight dims everything
+/// outside it. A highlight is stored as an inverted mask so older builds,
+/// which ignore `maskOptions`, still read a valid blur.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MaskKindChoice {
+    Sensitive,
+    Highlight,
 }
 
-impl MaskPanel {
-    fn id(self) -> &'static str {
-        match self {
-            Self::Presets => "screenshot-mask-presets",
-            Self::Adjust => "screenshot-mask-adjust",
+impl MaskKindChoice {
+    fn of(annotation: &Annotation) -> Self {
+        if annotation
+            .mask_options
+            .as_ref()
+            .is_some_and(|options| options.invert)
+        {
+            Self::Highlight
+        } else {
+            Self::Sensitive
         }
     }
 
-    fn width(self) -> f32 {
+    fn label(self) -> &'static str {
         match self {
-            Self::Presets => 300.,
-            Self::Adjust => 260.,
+            Self::Sensitive => tr::editor::panel::mask::sensitive(),
+            Self::Highlight => tr::editor::panel::mask::highlight(),
         }
+    }
+
+    /// Each kind seeds its own defaults on the switch, the way the video
+    /// editor's kind radio does.
+    fn apply(self, annotation: &mut Annotation) -> bool {
+        if Self::of(annotation) == self {
+            return false;
+        }
+        let options = annotation.mask_options.get_or_insert_with(Default::default);
+        match self {
+            Self::Sensitive => {
+                options.invert = false;
+                options.solid = false;
+                options.tint = 0.;
+                options.feather = 0.;
+                annotation.opacity = 1.;
+                if annotation.mask_type.is_none() {
+                    annotation.mask_type = Some(MaskType::Blur);
+                }
+            }
+            Self::Highlight => {
+                options.invert = true;
+                options.solid = true;
+                options.tint = 0.;
+                options.color = HIGHLIGHT_COLOR.to_string();
+                if options.feather <= 0. {
+                    options.feather = HIGHLIGHT_FEATHER;
+                }
+                annotation.opacity = HIGHLIGHT_DARKNESS;
+                annotation.mask_type = Some(MaskType::Blur);
+            }
+        }
+        true
     }
 }
 
-/// What the Style pills choose between. `Solid` is stored as a flag next to
-/// `maskType` so older builds still hide the region with a blur.
+/// `Solid` is stored as a flag next to `maskType` so older builds still hide
+/// the region with a blur.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MaskStyleChoice {
     Blur,
@@ -89,395 +132,107 @@ impl MaskStyleChoice {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MaskShapeChoice {
-    Square,
-    Rounded,
+    Rectangle,
     Ellipse,
 }
 
 impl MaskShapeChoice {
-    const ALL: [MaskShapeChoice; 3] = [Self::Square, Self::Rounded, Self::Ellipse];
+    const ALL: [MaskShapeChoice; 2] = [Self::Rectangle, Self::Ellipse];
 
     fn of(options: &MaskOptions) -> Self {
         match options.shape {
             MaskShape::Ellipse => Self::Ellipse,
-            MaskShape::Rectangle if options.corner_radius > 0. => Self::Rounded,
-            MaskShape::Rectangle => Self::Square,
+            MaskShape::Rectangle => Self::Rectangle,
         }
     }
 
     fn id(self) -> &'static str {
         match self {
-            Self::Square => "square",
-            Self::Rounded => "rounded",
+            Self::Rectangle => "rectangle",
             Self::Ellipse => "ellipse",
         }
     }
 
     fn icon(self) -> &'static str {
         match self {
-            Self::Square => "icons/square.svg",
-            Self::Rounded => "icons/corners.svg",
+            Self::Rectangle => "icons/square.svg",
             Self::Ellipse => "icons/circle.svg",
         }
     }
 
     fn label(self) -> &'static str {
         match self {
-            Self::Square => tr::screenshot_editor::mask::shape_rectangle(),
-            Self::Rounded => tr::screenshot_editor::mask::shape_rounded(),
+            Self::Rectangle => tr::screenshot_editor::mask::shape_rectangle(),
             Self::Ellipse => tr::screenshot_editor::mask::shape_ellipse(),
         }
     }
 
     fn apply(self, options: &mut MaskOptions) -> bool {
-        if Self::of(options) == self {
+        let shape = match self {
+            Self::Rectangle => MaskShape::Rectangle,
+            Self::Ellipse => MaskShape::Ellipse,
+        };
+        if options.shape == shape {
             return false;
         }
-        match self {
-            Self::Square => {
-                options.shape = MaskShape::Rectangle;
-                options.corner_radius = 0.;
-            }
-            Self::Rounded => {
-                options.shape = MaskShape::Rectangle;
-                if options.corner_radius <= 0. {
-                    options.corner_radius = ROUNDED_DEFAULT_RADIUS;
-                }
-            }
-            Self::Ellipse => options.shape = MaskShape::Ellipse,
-        }
+        options.shape = shape;
         true
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum MaskPreset {
-    SoftBlur,
-    Mosaic,
-    Redact,
-    Frosted,
-    Spotlight,
-    Focus,
-    CapBlue,
+/// A highlight dims the outside with flat black when its blur is off, and
+/// with a black tint over the blur when it is on: the kernel has no
+/// "no effect" mode, so darkness lives in opacity or tint depending on which.
+pub(super) fn highlight_darkness(annotation: &Annotation) -> f64 {
+    let options = annotation.mask_options.clone().unwrap_or_default();
+    if options.solid {
+        annotation.opacity
+    } else {
+        options.tint
+    }
 }
 
-struct PresetLook {
-    mask_type: MaskType,
-    level: f64,
-    opacity: f64,
-    options: MaskOptions,
+pub(super) fn highlight_blur(annotation: &Annotation) -> f64 {
+    let options = annotation.mask_options.clone().unwrap_or_default();
+    if options.solid {
+        0.
+    } else {
+        annotation.mask_level.unwrap_or(MASK_FALLBACK_LEVEL)
+    }
 }
 
-impl MaskPreset {
-    const ALL: [MaskPreset; 7] = [
-        Self::SoftBlur,
-        Self::Mosaic,
-        Self::Redact,
-        Self::Frosted,
-        Self::Spotlight,
-        Self::Focus,
-        Self::CapBlue,
-    ];
-
-    fn id(self) -> &'static str {
-        match self {
-            Self::SoftBlur => "soft-blur",
-            Self::Mosaic => "mosaic",
-            Self::Redact => "redact",
-            Self::Frosted => "frosted",
-            Self::Spotlight => "spotlight",
-            Self::Focus => "focus",
-            Self::CapBlue => "cap-blue",
-        }
+pub(super) fn set_highlight_darkness(annotation: &mut Annotation, darkness: f64) -> bool {
+    if highlight_darkness(annotation) == darkness {
+        return false;
     }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::SoftBlur => tr::screenshot_editor::mask::preset::soft_blur(),
-            Self::Mosaic => tr::screenshot_editor::mask::preset::mosaic(),
-            Self::Redact => tr::screenshot_editor::mask::preset::redact(),
-            Self::Frosted => tr::screenshot_editor::mask::preset::frosted(),
-            Self::Spotlight => tr::screenshot_editor::mask::preset::spotlight(),
-            Self::Focus => tr::screenshot_editor::mask::preset::focus(),
-            Self::CapBlue => tr::screenshot_editor::mask::preset::cap_blue(),
-        }
+    let options = annotation.mask_options.get_or_insert_with(Default::default);
+    if options.solid {
+        annotation.opacity = darkness;
+    } else {
+        options.tint = darkness;
     }
+    true
+}
 
-    fn hint(self) -> &'static str {
-        match self {
-            Self::SoftBlur => tr::screenshot_editor::mask::preset::soft_blur_hint(),
-            Self::Mosaic => tr::screenshot_editor::mask::preset::mosaic_hint(),
-            Self::Redact => tr::screenshot_editor::mask::preset::redact_hint(),
-            Self::Frosted => tr::screenshot_editor::mask::preset::frosted_hint(),
-            Self::Spotlight => tr::screenshot_editor::mask::preset::spotlight_hint(),
-            Self::Focus => tr::screenshot_editor::mask::preset::focus_hint(),
-            Self::CapBlue => tr::screenshot_editor::mask::preset::cap_blue_hint(),
-        }
+pub(super) fn set_highlight_blur(annotation: &mut Annotation, blur: f64) -> bool {
+    if highlight_blur(annotation) == blur {
+        return false;
     }
-
-    fn look(self) -> PresetLook {
-        let base = MaskOptions::default();
-        match self {
-            Self::SoftBlur => PresetLook {
-                mask_type: MaskType::Blur,
-                level: 24.,
-                opacity: 1.,
-                options: MaskOptions {
-                    corner_radius: 10.,
-                    feather: 6.,
-                    ..base
-                },
-            },
-            Self::Mosaic => PresetLook {
-                mask_type: MaskType::Pixelate,
-                level: 14.,
-                opacity: 1.,
-                options: base,
-            },
-            Self::Redact => PresetLook {
-                mask_type: MaskType::Blur,
-                level: 40.,
-                opacity: 1.,
-                options: MaskOptions {
-                    solid: true,
-                    corner_radius: 4.,
-                    ..base
-                },
-            },
-            Self::Frosted => PresetLook {
-                mask_type: MaskType::Blur,
-                level: 48.,
-                opacity: 1.,
-                options: MaskOptions {
-                    corner_radius: 16.,
-                    color: "#FFFFFF".to_string(),
-                    tint: 0.45,
-                    ..base
-                },
-            },
-            Self::Spotlight => PresetLook {
-                mask_type: MaskType::Blur,
-                level: 8.,
-                opacity: 0.65,
-                options: MaskOptions {
-                    shape: MaskShape::Ellipse,
-                    feather: 32.,
-                    invert: true,
-                    solid: true,
-                    ..base
-                },
-            },
-            Self::Focus => PresetLook {
-                mask_type: MaskType::Blur,
-                level: 36.,
-                opacity: 1.,
-                options: MaskOptions {
-                    corner_radius: 16.,
-                    feather: 20.,
-                    invert: true,
-                    ..base
-                },
-            },
-            Self::CapBlue => PresetLook {
-                mask_type: MaskType::Pixelate,
-                level: 10.,
-                opacity: 1.,
-                options: MaskOptions {
-                    corner_radius: 12.,
-                    color: BRAND_BLUE.to_string(),
-                    tint: 0.55,
-                    ..base
-                },
-            },
-        }
+    let darkness = highlight_darkness(annotation);
+    let options = annotation.mask_options.get_or_insert_with(Default::default);
+    options.color = HIGHLIGHT_COLOR.to_string();
+    if blur < 1. {
+        options.solid = true;
+        options.tint = 0.;
+        annotation.opacity = darkness;
+    } else {
+        options.solid = false;
+        options.tint = darkness;
+        annotation.opacity = 1.;
+        annotation.mask_type = Some(MaskType::Blur);
+        annotation.mask_level = Some(blur);
     }
-
-    fn apply(self, annotation: &mut Annotation) -> bool {
-        if self.matches(annotation) {
-            return false;
-        }
-        let look = self.look();
-        annotation.mask_type = Some(look.mask_type);
-        annotation.mask_level = Some(look.level);
-        annotation.opacity = look.opacity;
-        annotation.mask_options = Some(look.options);
-        true
-    }
-
-    fn matches(self, annotation: &Annotation) -> bool {
-        let look = self.look();
-        let options = annotation.mask_options.clone().unwrap_or_default();
-        let solid = look.options.solid;
-        annotation.mask_type.unwrap_or(MaskType::Blur) == look.mask_type
-            && (solid || annotation.mask_level.unwrap_or(MASK_FALLBACK_LEVEL) == look.level)
-            && annotation.opacity == look.opacity
-            && options.shape == look.options.shape
-            && options.corner_radius == look.options.corner_radius
-            && options.feather == look.options.feather
-            && options.invert == look.options.invert
-            && options.solid == solid
-            && options.tint == look.options.tint
-            && (look.options.tint <= 0. && !solid
-                || options.color.eq_ignore_ascii_case(&look.options.color))
-    }
-
-    fn of(annotation: &Annotation) -> Option<Self> {
-        Self::ALL
-            .into_iter()
-            .find(|preset| preset.matches(annotation))
-    }
-
-    fn swatch(self, theme: &Theme) -> AnyElement {
-        let scene = |inner: gpui::Div| {
-            div()
-                .relative()
-                .w(px(52.))
-                .h(px(36.))
-                .flex_shrink_0()
-                .rounded(px(8.))
-                .overflow_hidden()
-                .bg(linear_gradient(
-                    135.,
-                    linear_color_stop(gpui::rgb(0xF8B26A), 0.),
-                    linear_color_stop(gpui::rgb(0x6C8CFF), 1.),
-                ))
-                .child(inner)
-        };
-        let blob = |x: f32, y: f32, size: f32, color: u32, blur: f32| {
-            div()
-                .absolute()
-                .left(px(x))
-                .top(px(y))
-                .size(px(size))
-                .rounded_full()
-                .bg(gpui::rgb(color))
-                .shadow(vec![gpui::BoxShadow {
-                    color: Theme::with_alpha(gpui::rgb(color), 0.9),
-                    offset: gpui::point(px(0.), px(0.)),
-                    blur_radius: px(blur),
-                    spread_radius: px(blur / 2.),
-                    inset: false,
-                }])
-        };
-        let tiles = |palette: [u32; 6], tint: Option<(u32, f32)>| {
-            let mut grid = div()
-                .absolute()
-                .top_0()
-                .left_0()
-                .size_full()
-                .flex()
-                .flex_row()
-                .flex_wrap();
-            for color in palette {
-                grid = grid.child(div().w(px(52. / 3.)).h(px(18.)).bg(gpui::rgb(match tint {
-                    Some((tint, amount)) => mix_rgb(color, tint, amount),
-                    None => color,
-                })));
-            }
-            grid
-        };
-        let theme = *theme;
-        match self {
-            Self::SoftBlur => scene(
-                div()
-                    .absolute()
-                    .size_full()
-                    .child(blob(8., 8., 12., 0xFFE0B0, 10.))
-                    .child(blob(28., 14., 14., 0x8FA8FF, 10.)),
-            ),
-            Self::Mosaic => scene(tiles(
-                [0xF8B26A, 0xE58FA0, 0x9C8CF0, 0xD99A7C, 0xA88FD8, 0x6C8CFF],
-                None,
-            )),
-            Self::Redact => scene(
-                div().absolute().size_full().child(
-                    div()
-                        .absolute()
-                        .left(px(6.))
-                        .top(px(13.))
-                        .w(px(40.))
-                        .h(px(10.))
-                        .rounded(px(2.))
-                        .bg(gpui::rgb(0x111111)),
-                ),
-            ),
-            Self::Frosted => scene(
-                div()
-                    .absolute()
-                    .size_full()
-                    .child(blob(6., 6., 14., 0xFFD08A, 8.))
-                    .child(
-                        div()
-                            .absolute()
-                            .left(px(6.))
-                            .top(px(6.))
-                            .w(px(40.))
-                            .h(px(24.))
-                            .rounded(px(6.))
-                            .bg(Theme::with_alpha(gpui::rgb(0xFFFFFF), 0.55))
-                            .border_1()
-                            .border_color(Theme::with_alpha(gpui::rgb(0xFFFFFF), 0.8)),
-                    ),
-            ),
-            Self::Spotlight => scene(
-                div()
-                    .absolute()
-                    .size_full()
-                    .bg(Theme::with_alpha(gpui::rgb(0x000000), 0.6))
-                    .child(
-                        div()
-                            .absolute()
-                            .left(px(16.))
-                            .top(px(8.))
-                            .w(px(20.))
-                            .h(px(20.))
-                            .rounded_full()
-                            .bg(linear_gradient(
-                                135.,
-                                linear_color_stop(gpui::rgb(0xF8B26A), 0.),
-                                linear_color_stop(gpui::rgb(0x9C8CF0), 1.),
-                            ))
-                            .shadow(vec![gpui::BoxShadow {
-                                color: Theme::with_alpha(gpui::rgb(0xFFFFFF), 0.35),
-                                offset: gpui::point(px(0.), px(0.)),
-                                blur_radius: px(8.),
-                                spread_radius: px(2.),
-                                inset: false,
-                            }]),
-                    ),
-            ),
-            Self::Focus => scene(
-                div()
-                    .absolute()
-                    .size_full()
-                    .child(blob(2., 2., 10., 0xFFE0B0, 8.))
-                    .child(blob(40., 22., 10., 0x8FA8FF, 8.))
-                    .child(
-                        div()
-                            .absolute()
-                            .left(px(14.))
-                            .top(px(9.))
-                            .w(px(24.))
-                            .h(px(18.))
-                            .rounded(px(4.))
-                            .border_1()
-                            .border_color(gpui::white())
-                            .bg(linear_gradient(
-                                90.,
-                                linear_color_stop(gpui::rgb(0xF29B78), 0.),
-                                linear_color_stop(gpui::rgb(0x8C8CF6), 1.),
-                            )),
-                    ),
-            ),
-            Self::CapBlue => scene(tiles(
-                [0xF8B26A, 0xE58FA0, 0x9C8CF0, 0xD99A7C, 0xA88FD8, 0x6C8CFF],
-                Some((0x4785FF, 0.6)),
-            )),
-        }
-        .border_1()
-        .border_color(theme.gray_4)
-        .into_any_element()
-    }
+    true
 }
 
 /// The kernel's view of one mask. The preview filters the atlas's BGRA, so
@@ -570,33 +325,21 @@ impl ScreenshotEditorWindow {
     }
 
     pub(super) fn ensure_mask_tint_visible(options: &mut MaskOptions) -> bool {
-        if options.solid || options.tint > 0. {
+        if options.solid || options.invert || options.tint > 0. {
             return false;
         }
         options.tint = TINT_ON_COLOR_PICK;
         true
     }
 
-    fn toggle_mask_panel(&mut self, panel: MaskPanel, cx: &mut Context<Self>) {
+    fn toggle_mask_settings(&mut self, cx: &mut Context<Self>) {
         let Some(id) = self.selected_annotation.clone() else {
             return;
         };
-        let open = self
-            .annotation_state
-            .mask_panel
-            .as_ref()
-            .is_some_and(|(open, open_id)| *open == panel && open_id == &id);
+        let open = self.annotation_state.mask_settings.as_deref() == Some(id.as_str());
         self.annotation_state.color_popover = None;
-        self.annotation_state.mask_panel = (!open).then_some((panel, id));
+        self.annotation_state.mask_settings = (!open).then_some(id);
         cx.notify();
-    }
-
-    fn mask_anchor(&self, panel: MaskPanel) -> BoundsCell {
-        self.annotation_state
-            .mask_anchors
-            .get(&panel)
-            .cloned()
-            .unwrap_or_default()
     }
 
     pub(super) fn render_mask_controls(
@@ -605,59 +348,97 @@ impl ScreenshotEditorWindow {
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
         let theme = self.theme;
-        let style = MaskStyleChoice::of(annotation);
+        let kind = MaskKindChoice::of(annotation);
         let options = annotation.mask_options.clone().unwrap_or_default();
-        let shape = MaskShapeChoice::of(&options);
-        let preset = MaskPreset::of(annotation);
-        let open = self
-            .annotation_state
-            .mask_panel
-            .as_ref()
-            .map(|(panel, _)| *panel);
 
-        let mut items = vec![self.render_mask_panel_button(
-            MaskPanel::Presets,
-            "icons/sparkles.svg",
-            preset.map_or(tr::screenshot_editor::mask::presets(), MaskPreset::label),
-            open == Some(MaskPanel::Presets),
-            preset.is_some(),
-            cx,
-        )];
-
-        let mut pills = div().flex().flex_row().gap(px(4.));
-        for choice in MaskStyleChoice::ALL {
-            pills = pills.child(mask_pill(
+        let mut kinds = div().flex().flex_row().gap(px(4.));
+        for choice in [MaskKindChoice::Sensitive, MaskKindChoice::Highlight] {
+            kinds = kinds.child(mask_pill(
                 &theme,
-                format!("screenshot-mask-style-{}", choice.id()),
+                format!(
+                    "screenshot-mask-kind-{}",
+                    if choice == MaskKindChoice::Sensitive {
+                        "sensitive"
+                    } else {
+                        "highlight"
+                    }
+                ),
                 Some(choice.label().into()),
                 None,
-                choice == style,
+                choice == kind,
                 cx.listener(move |this, _, window, cx| {
                     cx.stop_propagation();
                     this.edit_selected_mask(|annotation| choice.apply(annotation), window, cx);
                 }),
             ));
         }
-        items.push(config_item(
-            &theme,
-            tr::screenshot_editor::annotation::mask_style(),
-            None,
-            pills.into_any_element(),
-        ));
+        let mut items = vec![kinds.into_any_element(), bar_divider(&theme)];
 
-        if style != MaskStyleChoice::Solid {
-            items.push(config_item(
-                &theme,
-                tr::screenshot_editor::annotation::intensity(),
-                Some(format!(
-                    "{}",
-                    annotation.mask_level.unwrap_or(MASK_FALLBACK_LEVEL).round() as i64
-                )),
-                self.annotation_slider(AnnotationSlider::MaskLevel, px(88.), cx)
-                    .into_any_element(),
-            ));
+        match kind {
+            MaskKindChoice::Sensitive => {
+                let style = MaskStyleChoice::of(annotation);
+                let mut pills = div().flex().flex_row().gap(px(4.));
+                for choice in MaskStyleChoice::ALL {
+                    pills = pills.child(mask_pill(
+                        &theme,
+                        format!("screenshot-mask-style-{}", choice.id()),
+                        Some(choice.label().into()),
+                        None,
+                        choice == style,
+                        cx.listener(move |this, _, window, cx| {
+                            cx.stop_propagation();
+                            this.edit_selected_mask(
+                                |annotation| choice.apply(annotation),
+                                window,
+                                cx,
+                            );
+                        }),
+                    ));
+                }
+                items.push(pills.into_any_element());
+                if style == MaskStyleChoice::Solid {
+                    items.push(config_item(
+                        &theme,
+                        tr::screenshot_editor::style::color(),
+                        None,
+                        self.render_color_button(ColorTarget::Mask, cx),
+                    ));
+                } else {
+                    items.push(config_item(
+                        &theme,
+                        tr::screenshot_editor::annotation::intensity(),
+                        Some(format!(
+                            "{}",
+                            annotation.mask_level.unwrap_or(MASK_FALLBACK_LEVEL).round() as i64
+                        )),
+                        self.annotation_slider(AnnotationSlider::MaskLevel, px(88.), cx)
+                            .into_any_element(),
+                    ));
+                }
+            }
+            MaskKindChoice::Highlight => {
+                items.push(config_item(
+                    &theme,
+                    tr::screenshot_editor::mask::darkness(),
+                    Some(format!(
+                        "{}%",
+                        (highlight_darkness(annotation) * 100.).round() as i64
+                    )),
+                    self.annotation_slider(AnnotationSlider::HighlightDarkness, px(80.), cx)
+                        .into_any_element(),
+                ));
+                items.push(config_item(
+                    &theme,
+                    tr::screenshot_editor::style::blur(),
+                    Some(format!("{}", highlight_blur(annotation).round() as i64)),
+                    self.annotation_slider(AnnotationSlider::HighlightBlur, px(80.), cx)
+                        .into_any_element(),
+                ));
+            }
         }
 
+        items.push(bar_divider(&theme));
+        let shape = MaskShapeChoice::of(&options);
         let mut shapes = div().flex().flex_row().gap(px(4.));
         for choice in MaskShapeChoice::ALL {
             let label = choice.label();
@@ -692,161 +473,112 @@ impl ScreenshotEditorWindow {
                     .tooltip(move |_window, cx| ui::Tooltip::new(&theme, label).view(cx)),
             );
         }
-        items.push(config_item(
-            &theme,
-            tr::screenshot_editor::mask::shape(),
-            None,
-            shapes.into_any_element(),
-        ));
+        items.push(shapes.into_any_element());
 
-        items.push(config_item(
-            &theme,
-            tr::screenshot_editor::style::color(),
-            None,
-            self.render_color_button(ColorTarget::Mask, cx),
-        ));
-
-        let inverted = options.invert;
+        let cell = self.annotation_state.mask_settings_anchor.clone();
+        let open = self.annotation_state.mask_settings.is_some();
         items.push(
             div()
-                .id("screenshot-mask-invert-tip")
-                .child(mask_pill(
-                    &theme,
-                    "screenshot-mask-invert".to_string(),
-                    Some(tr::screenshot_editor::mask::invert().into()),
-                    Some("icons/box-select.svg"),
-                    inverted,
-                    cx.listener(move |this, _, window, cx| {
-                        cx.stop_propagation();
-                        this.edit_selected_mask(
-                            |annotation| {
-                                let options =
-                                    annotation.mask_options.get_or_insert_with(Default::default);
-                                options.invert = !options.invert;
-                                true
-                            },
-                            window,
-                            cx,
-                        );
-                    }),
-                ))
-                .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
-                .tooltip(move |_window, cx| {
-                    ui::Tooltip::new(&theme, tr::screenshot_editor::mask::invert_hint()).view(cx)
-                })
+                .relative()
+                .flex_shrink_0()
+                .child(
+                    canvas(
+                        move |bounds, _window, _cx| cell.set(Some(bounds)),
+                        |_, _, _, _| {},
+                    )
+                    .absolute()
+                    .size_full(),
+                )
+                .child(
+                    ui::EditorButton::plain(&theme, "screenshot-mask-settings")
+                        .left_icon("icons/sliders-horizontal.svg")
+                        .icon_size(px(16.))
+                        .pressed(open)
+                        .tooltip(&theme, tr::screenshot_editor::mask::settings())
+                        .on_click(cx.listener(|this, _, _window, cx| {
+                            cx.stop_propagation();
+                            this.toggle_mask_settings(cx);
+                        })),
+                )
                 .into_any_element(),
         );
 
-        items.push(self.render_mask_panel_button(
-            MaskPanel::Adjust,
-            "icons/sliders-horizontal.svg",
-            tr::screenshot_editor::mask::adjust(),
-            open == Some(MaskPanel::Adjust),
-            false,
-            cx,
-        ));
-
-        items
+        vec![
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(12.))
+                .flex_shrink_0()
+                .children(items)
+                .into_any_element(),
+        ]
     }
 
-    fn render_mask_panel_button(
-        &self,
-        panel: MaskPanel,
-        icon: &'static str,
-        label: &'static str,
-        open: bool,
-        highlighted: bool,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let theme = self.theme;
-        let cell = self.mask_anchor(panel);
-        let accent = open || highlighted;
-        div()
-            .relative()
-            .flex_shrink_0()
-            .child(
-                canvas(
-                    move |bounds, _window, _cx| cell.set(Some(bounds)),
-                    |_, _, _, _| {},
-                )
-                .absolute()
-                .size_full(),
-            )
-            .child(
-                div()
-                    .id(panel.id())
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap(px(6.))
-                    .h(px(26.))
-                    .pl(px(8.))
-                    .pr(px(6.))
-                    .rounded(px(7.))
-                    .cursor_pointer()
-                    .text_size(px(12.))
-                    .font_weight(FontWeight::MEDIUM)
-                    .border_1()
-                    .when(accent, |this| {
-                        this.bg(theme.blue_3)
-                            .border_color(theme.blue_6)
-                            .text_color(theme.blue_11)
-                    })
-                    .when(!accent, |this| {
-                        this.bg(theme.gray_3)
-                            .border_color(theme.gray_4)
-                            .text_color(theme.gray_11)
-                            .hover(|style| style.bg(theme.gray_4))
-                    })
-                    .child(svg().path(icon).size(px(14.)).text_color(if accent {
-                        theme.blue_11
-                    } else {
-                        theme.gray_11
-                    }))
-                    .child(label)
-                    .child(
-                        svg()
-                            .path("icons/chevron-down.svg")
-                            .size(px(12.))
-                            .text_color(theme.gray_10),
-                    )
-                    .on_click(cx.listener(move |this, _, _window, cx| {
-                        cx.stop_propagation();
-                        this.toggle_mask_panel(panel, cx);
-                    })),
-            )
-            .into_any_element()
-    }
-
-    pub(super) fn render_mask_panel(
+    /// The header popovers' chrome (`render_popover`): same surface, same
+    /// slider rows, anchored under the bar's settings button.
+    pub(super) fn render_mask_settings(
         &self,
         window: &Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let (panel, id) = self.annotation_state.mask_panel.clone()?;
+        let id = self.annotation_state.mask_settings.clone()?;
         if self.selected_annotation.as_deref() != Some(id.as_str()) {
             return None;
         }
         let annotation = self
             .annotation(&id)
-            .filter(|annotation| annotation.annotation_type == AnnotationType::Mask)?
-            .clone();
+            .filter(|annotation| annotation.annotation_type == AnnotationType::Mask)?;
         let theme = self.theme;
-        let width = panel.width();
+        let options = annotation.mask_options.clone().unwrap_or_default();
         let viewport = window.viewport_size();
-        let anchor = self.mask_anchor(panel).get();
+        let anchor = self.annotation_state.mask_settings_anchor.get();
         let left = anchor
-            .map(|bounds| f32::from(bounds.origin.x))
+            .map(|bounds| f32::from(bounds.origin.x + bounds.size.width) - SETTINGS_WIDTH)
             .unwrap_or(16.)
-            .clamp(8., (f32::from(viewport.width) - width - 8.).max(8.));
+            .clamp(
+                8.,
+                (f32::from(viewport.width) - SETTINGS_WIDTH - 8.).max(8.),
+            );
         let top = anchor
             .map(|bounds| f32::from(bounds.origin.y + bounds.size.height) + 8.)
             .unwrap_or(120.);
 
-        let body = match panel {
-            MaskPanel::Presets => self.render_mask_presets(&annotation, cx),
-            MaskPanel::Adjust => self.render_mask_adjust(&annotation, cx),
-        };
+        let mut body = div()
+            .p(px(16.))
+            .flex()
+            .flex_col()
+            .gap(px(16.))
+            .child(self.mask_slider_row(
+                tr::screenshot_editor::mask::feather(),
+                format!("{}px", options.feather.round() as i64),
+                AnnotationSlider::MaskFeather,
+                cx,
+            ));
+        if options.shape == MaskShape::Rectangle {
+            body = body.child(self.mask_slider_row(
+                tr::screenshot_editor::mask::corner_radius(),
+                format!("{}px", options.corner_radius.round() as i64),
+                AnnotationSlider::MaskRadius,
+                cx,
+            ));
+        }
+        if !options.invert && !options.solid {
+            body = body.child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_end()
+                    .gap(px(12.))
+                    .child(div().flex_1().min_w_0().child(self.mask_slider_row(
+                        tr::screenshot_editor::mask::tint(),
+                        format!("{}%", (options.tint * 100.).round() as i64),
+                        AnnotationSlider::MaskTint,
+                        cx,
+                    )))
+                    .child(self.render_color_button(ColorTarget::Mask, cx)),
+            );
+        }
 
         Some(
             div()
@@ -856,264 +588,84 @@ impl ScreenshotEditorWindow {
                 .size_full()
                 .child(
                     div()
-                        .id("screenshot-mask-panel-backdrop")
+                        .id("screenshot-mask-settings-backdrop")
                         .occlude()
                         .absolute()
                         .top_0()
                         .left_0()
                         .size_full()
                         .on_click(cx.listener(|this, _, _window, cx| {
-                            this.annotation_state.mask_panel = None;
+                            this.annotation_state.mask_settings = None;
                             cx.notify();
                         })),
                 )
                 .child(
                     div()
-                        .id("screenshot-mask-panel")
+                        .id("screenshot-mask-settings-popover")
                         .occlude()
                         .absolute()
                         .left(px(left))
                         .top(px(top))
-                        .w(px(width))
-                        .p(px(10.))
-                        .flex()
-                        .flex_col()
-                        .gap(px(10.))
-                        .rounded(px(10.))
+                        .w(px(SETTINGS_WIDTH))
+                        .overflow_hidden()
+                        .rounded(px(12.))
                         .border_1()
-                        .border_color(theme.gray_4)
-                        .bg(if theme.is_dark() {
-                            theme.gray_2
-                        } else {
-                            theme.gray_1
-                        })
+                        .border_color(theme.gray_3)
+                        .bg(theme.gray_1)
                         .shadow(vec![gpui::BoxShadow {
                             color: Theme::with_alpha(gpui::rgb(0x000000), 0.18),
-                            offset: gpui::point(px(0.), px(8.)),
-                            blur_radius: px(24.),
+                            offset: gpui::point(px(0.), px(10.)),
+                            blur_radius: px(30.),
                             spread_radius: px(0.),
                             inset: false,
                         }])
                         .on_click(|_, _window, cx| cx.stop_propagation())
-                        .child(
-                            div()
-                                .text_size(px(11.))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(theme.gray_10)
-                                .child(match panel {
-                                    MaskPanel::Presets => {
-                                        tr::screenshot_editor::mask::presets_title()
-                                    }
-                                    MaskPanel::Adjust => tr::screenshot_editor::mask::adjust(),
-                                }),
-                        )
                         .child(body),
                 )
                 .into_any_element(),
         )
     }
 
-    fn render_mask_presets(&self, annotation: &Annotation, cx: &mut Context<Self>) -> AnyElement {
+    /// `slider_row` from the header popovers, over an annotation slider.
+    fn mask_slider_row(
+        &self,
+        label: &'static str,
+        value: String,
+        slider: AnnotationSlider,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let theme = self.theme;
-        let current = MaskPreset::of(annotation);
-        let mut list = div().flex().flex_col().gap(px(4.));
-        for preset in MaskPreset::ALL {
-            let active = current == Some(preset);
-            list = list.child(
-                div()
-                    .id(gpui::SharedString::from(format!(
-                        "screenshot-mask-preset-{}",
-                        preset.id()
-                    )))
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap(px(10.))
-                    .p(px(6.))
-                    .rounded(px(8.))
-                    .cursor_pointer()
-                    .border_1()
-                    .when(active, |this| {
-                        this.bg(theme.blue_3).border_color(theme.blue_6)
-                    })
-                    .when(!active, |this| {
-                        this.border_color(gpui::transparent_black())
-                            .hover(|style| style.bg(theme.gray_3))
-                    })
-                    .child(preset.swatch(&theme))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .flex_1()
-                            .min_w_0()
-                            .gap(px(2.))
-                            .child(
-                                div()
-                                    .text_size(px(12.))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(if active { theme.blue_11 } else { theme.gray_12 })
-                                    .child(preset.label()),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(11.))
-                                    .text_color(theme.gray_10)
-                                    .child(preset.hint()),
-                            ),
-                    )
-                    .when(active, |this| {
-                        this.child(
-                            svg()
-                                .path("icons/check.svg")
-                                .size(px(14.))
-                                .text_color(theme.blue_11),
-                        )
-                    })
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        cx.stop_propagation();
-                        this.edit_selected_mask(|annotation| preset.apply(annotation), window, cx);
-                    })),
-            );
-        }
         div()
             .flex()
             .flex_col()
             .gap(px(8.))
-            .child(list)
             .child(
                 div()
                     .flex()
                     .flex_row()
-                    .items_start()
-                    .gap(px(6.))
-                    .pt(px(8.))
-                    .border_t_1()
-                    .border_color(theme.gray_3)
-                    .child(
-                        svg()
-                            .path("icons/shield.svg")
-                            .size(px(12.))
-                            .mt(px(1.))
-                            .flex_shrink_0()
-                            .text_color(theme.gray_9),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(10.))
-                            .text_color(theme.gray_9)
-                            .child(tr::screenshot_editor::mask::privacy_note()),
-                    ),
+                    .items_center()
+                    .justify_between()
+                    .text_size(px(12.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(theme.gray_11)
+                    .child(label)
+                    .child(value),
+            )
+            .child(
+                self.annotation_slider(slider, px(SETTINGS_WIDTH - 32.), cx)
+                    .into_any_element(),
             )
             .into_any_element()
     }
-
-    fn render_mask_adjust(&self, annotation: &Annotation, cx: &mut Context<Self>) -> AnyElement {
-        let theme = self.theme;
-        let options = annotation.mask_options.clone().unwrap_or_default();
-        let row = |label: &'static str, value: String, slider: AnyElement| {
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(6.))
-                .child(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .justify_between()
-                        .text_size(px(11.))
-                        .font_weight(FontWeight::MEDIUM)
-                        .child(div().text_color(theme.gray_10).child(label))
-                        .child(div().text_color(theme.gray_12).child(value)),
-                )
-                .child(slider)
-        };
-        let slider_width = px(MaskPanel::Adjust.width() - 20.);
-        let mut body = div().flex().flex_col().gap(px(12.)).child(row(
-            tr::screenshot_editor::mask::feather(),
-            format!("{}px", options.feather.round() as i64),
-            self.annotation_slider(AnnotationSlider::MaskFeather, slider_width, cx)
-                .into_any_element(),
-        ));
-        if options.shape == MaskShape::Rectangle {
-            body = body.child(row(
-                tr::screenshot_editor::mask::corner_radius(),
-                format!("{}px", options.corner_radius.round() as i64),
-                self.annotation_slider(AnnotationSlider::MaskRadius, slider_width, cx)
-                    .into_any_element(),
-            ));
-        }
-        if !options.solid {
-            body = body.child(row(
-                tr::screenshot_editor::mask::tint(),
-                format!("{}%", (options.tint * 100.).round() as i64),
-                self.annotation_slider(AnnotationSlider::MaskTint, slider_width, cx)
-                    .into_any_element(),
-            ));
-        }
-        body.child(row(
-            tr::screenshot_editor::style::opacity(),
-            format!("{}%", (annotation.opacity * 100.).round() as i64),
-            self.annotation_slider(AnnotationSlider::Opacity, slider_width, cx)
-                .into_any_element(),
-        ))
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .justify_between()
-                .pt(px(10.))
-                .border_t_1()
-                .border_color(theme.gray_3)
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(2.))
-                        .child(
-                            div()
-                                .text_size(px(12.))
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(theme.gray_12)
-                                .child(tr::screenshot_editor::mask::invert()),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(10.))
-                                .text_color(theme.gray_9)
-                                .child(tr::screenshot_editor::mask::invert_hint()),
-                        ),
-                )
-                .child(
-                    ui::Toggle::plain(&theme, "screenshot-mask-invert-toggle", options.invert)
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            cx.stop_propagation();
-                            this.edit_selected_mask(
-                                |annotation| {
-                                    let options = annotation
-                                        .mask_options
-                                        .get_or_insert_with(Default::default);
-                                    options.invert = !options.invert;
-                                    true
-                                },
-                                window,
-                                cx,
-                            );
-                        })),
-                ),
-        )
-        .into_any_element()
-    }
 }
 
-fn mix_rgb(base: u32, tint: u32, amount: f32) -> u32 {
-    let channel = |shift: u32| {
-        let from = ((base >> shift) & 0xFF) as f32;
-        let to = ((tint >> shift) & 0xFF) as f32;
-        ((from + (to - from) * amount).round() as u32) << shift
-    };
-    channel(16) | channel(8) | channel(0)
+fn bar_divider(theme: &Theme) -> AnyElement {
+    div()
+        .w(px(1.))
+        .h(px(20.))
+        .flex_shrink_0()
+        .bg(theme.gray_4)
+        .into_any_element()
 }
 
 fn mask_pill(
@@ -1136,7 +688,6 @@ fn mask_pill(
         .flex_row()
         .items_center()
         .justify_center()
-        .gap(px(5.))
         .h(px(24.))
         .min_w(px(24.))
         .px(px(if label.is_some() { 10. } else { 5. }))
@@ -1183,48 +734,47 @@ mod tests {
     }
 
     #[test]
-    fn every_preset_round_trips_through_its_own_matcher() {
-        for preset in MaskPreset::ALL {
-            let mut annotation = mask();
-            assert!(preset.apply(&mut annotation));
-            assert_eq!(MaskPreset::of(&annotation), Some(preset), "{preset:?}");
-            assert!(!preset.apply(&mut annotation));
-        }
-    }
-
-    #[test]
-    fn presets_are_distinct() {
-        for (index, preset) in MaskPreset::ALL.into_iter().enumerate() {
-            let mut annotation = mask();
-            preset.apply(&mut annotation);
-            for other in &MaskPreset::ALL[index + 1..] {
-                assert!(!other.matches(&annotation), "{preset:?} vs {other:?}");
-            }
-        }
-    }
-
-    #[test]
-    fn solid_keeps_a_hiding_mask_type_for_older_builds() {
+    fn highlight_seeds_a_dim_feathered_inverted_mask_and_sensitive_undoes_it() {
         let mut annotation = mask();
-        assert!(MaskStyleChoice::Solid.apply(&mut annotation));
-        assert_eq!(MaskStyleChoice::of(&annotation), MaskStyleChoice::Solid);
-        assert!(annotation.mask_type.is_some());
-        assert!(MaskStyleChoice::Blur.apply(&mut annotation));
-        assert_eq!(annotation.mask_type, Some(MaskType::Blur));
-        assert!(!annotation.mask_options.unwrap().solid);
+        assert_eq!(MaskKindChoice::of(&annotation), MaskKindChoice::Sensitive);
+        assert!(MaskKindChoice::Highlight.apply(&mut annotation));
+        let options = annotation.mask_options.clone().unwrap();
+        assert!(options.invert && options.solid);
+        assert_eq!(options.feather, HIGHLIGHT_FEATHER);
+        assert_eq!(highlight_darkness(&annotation), HIGHLIGHT_DARKNESS);
+        assert_eq!(highlight_blur(&annotation), 0.);
+        assert!(!MaskKindChoice::Highlight.apply(&mut annotation));
+
+        assert!(MaskKindChoice::Sensitive.apply(&mut annotation));
+        let options = annotation.mask_options.clone().unwrap();
+        assert!(!options.invert && !options.solid);
+        assert_eq!(options.feather, 0.);
+        assert_eq!(annotation.opacity, 1.);
     }
 
     #[test]
-    fn shape_choices_set_radius_and_ellipse() {
-        let mut options = MaskOptions::default();
-        assert_eq!(MaskShapeChoice::of(&options), MaskShapeChoice::Square);
-        assert!(MaskShapeChoice::Rounded.apply(&mut options));
-        assert_eq!(options.corner_radius, ROUNDED_DEFAULT_RADIUS);
-        assert!(MaskShapeChoice::Ellipse.apply(&mut options));
-        assert_eq!(MaskShapeChoice::of(&options), MaskShapeChoice::Ellipse);
-        assert!(MaskShapeChoice::Square.apply(&mut options));
-        assert_eq!(options.corner_radius, 0.);
-        assert_eq!(options.shape, MaskShape::Rectangle);
+    fn highlight_blur_moves_darkness_between_opacity_and_tint() {
+        let mut annotation = mask();
+        MaskKindChoice::Highlight.apply(&mut annotation);
+        assert!(set_highlight_darkness(&mut annotation, 0.8));
+        assert_eq!(annotation.opacity, 0.8);
+
+        assert!(set_highlight_blur(&mut annotation, 12.));
+        let options = annotation.mask_options.clone().unwrap();
+        assert!(!options.solid);
+        assert_eq!(options.tint, 0.8);
+        assert_eq!(annotation.opacity, 1.);
+        assert_eq!(annotation.mask_level, Some(12.));
+        assert_eq!(highlight_darkness(&annotation), 0.8);
+        assert_eq!(highlight_blur(&annotation), 12.);
+
+        assert!(set_highlight_darkness(&mut annotation, 0.3));
+        assert_eq!(annotation.mask_options.as_ref().unwrap().tint, 0.3);
+
+        assert!(set_highlight_blur(&mut annotation, 0.));
+        assert!(annotation.mask_options.as_ref().unwrap().solid);
+        assert_eq!(annotation.opacity, 0.3);
+        assert!(!set_highlight_blur(&mut annotation, 0.));
     }
 
     #[test]
@@ -1245,6 +795,28 @@ mod tests {
             &mut solid
         ));
         assert_eq!(solid.tint, 0.);
+    }
+
+    #[test]
+    fn solid_keeps_a_hiding_mask_type_for_older_builds() {
+        let mut annotation = mask();
+        assert!(MaskStyleChoice::Solid.apply(&mut annotation));
+        assert_eq!(MaskStyleChoice::of(&annotation), MaskStyleChoice::Solid);
+        assert!(annotation.mask_type.is_some());
+        assert!(MaskStyleChoice::Blur.apply(&mut annotation));
+        assert_eq!(annotation.mask_type, Some(MaskType::Blur));
+        assert!(!annotation.mask_options.unwrap().solid);
+    }
+
+    #[test]
+    fn shape_choices_switch_between_rectangle_and_ellipse() {
+        let mut options = MaskOptions::default();
+        assert_eq!(MaskShapeChoice::of(&options), MaskShapeChoice::Rectangle);
+        assert!(MaskShapeChoice::Ellipse.apply(&mut options));
+        assert_eq!(options.shape, MaskShape::Ellipse);
+        assert!(!MaskShapeChoice::Ellipse.apply(&mut options));
+        assert!(MaskShapeChoice::Rectangle.apply(&mut options));
+        assert_eq!(options.shape, MaskShape::Rectangle);
     }
 
     #[test]

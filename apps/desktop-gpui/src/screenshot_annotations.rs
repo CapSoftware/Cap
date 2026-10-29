@@ -49,8 +49,6 @@ use crate::ui;
 
 mod mask;
 
-pub(crate) use mask::MaskPanel;
-
 // ---------------------------------------------------------------------------
 // Tools
 // ---------------------------------------------------------------------------
@@ -1130,10 +1128,12 @@ enum AnnotationSlider {
     MaskFeather,
     MaskRadius,
     MaskTint,
+    HighlightDarkness,
+    HighlightBlur,
 }
 
 impl AnnotationSlider {
-    const ALL: [AnnotationSlider; 7] = [
+    const ALL: [AnnotationSlider; 9] = [
         AnnotationSlider::Width,
         AnnotationSlider::Opacity,
         AnnotationSlider::MaskLevel,
@@ -1141,6 +1141,8 @@ impl AnnotationSlider {
         AnnotationSlider::MaskFeather,
         AnnotationSlider::MaskRadius,
         AnnotationSlider::MaskTint,
+        AnnotationSlider::HighlightDarkness,
+        AnnotationSlider::HighlightBlur,
     ];
 
     /// `(min, max, step)` -- `AnnotationConfig.tsx:60-157`.
@@ -1153,6 +1155,8 @@ impl AnnotationSlider {
             Self::MaskFeather => (0., 64., 1.),
             Self::MaskRadius => (0., 64., 1.),
             Self::MaskTint => (0., 1., 0.05),
+            Self::HighlightDarkness => (0.05, 1., 0.05),
+            Self::HighlightBlur => (0., 40., 1.),
         }
     }
 
@@ -1165,6 +1169,8 @@ impl AnnotationSlider {
             Self::MaskFeather => "mask-feather",
             Self::MaskRadius => "mask-radius",
             Self::MaskTint => "mask-tint",
+            Self::HighlightDarkness => "highlight-darkness",
+            Self::HighlightBlur => "highlight-blur",
         }
     }
 
@@ -1182,6 +1188,8 @@ impl AnnotationSlider {
                     _ => options.tint,
                 }) as f32
             }
+            Self::HighlightDarkness => mask::highlight_darkness(annotation) as f32,
+            Self::HighlightBlur => mask::highlight_blur(annotation) as f32,
         }
     }
 
@@ -1199,6 +1207,8 @@ impl AnnotationSlider {
                 *level = value;
                 return true;
             }
+            Self::HighlightDarkness => return mask::set_highlight_darkness(annotation, value),
+            Self::HighlightBlur => return mask::set_highlight_blur(annotation, value),
             Self::MaskFeather | Self::MaskRadius | Self::MaskTint => {
                 let options = annotation.mask_options.get_or_insert_with(Default::default);
                 match self {
@@ -1256,8 +1266,8 @@ pub struct AnnotationState {
     mask_task: Option<gpui::Task<()>>,
     /// The mask bar's open panel, and the mask it was opened for -- closed,
     /// not repointed, when the selection moves.
-    mask_panel: Option<(MaskPanel, String)>,
-    mask_anchors: HashMap<MaskPanel, BoundsCell>,
+    mask_settings: Option<String>,
+    mask_settings_anchor: BoundsCell,
 }
 
 /// One paint of the layer, copied out of the window so the closure owns it.
@@ -1315,12 +1325,6 @@ impl ScreenshotEditorWindow {
             self.annotation_state
                 .slider_tracks
                 .insert(slider, ui::SliderTrack::default());
-        }
-
-        for panel in [MaskPanel::Presets, MaskPanel::Adjust] {
-            self.annotation_state
-                .mask_anchors
-                .insert(panel, BoundsCell::default());
         }
     }
 
@@ -2528,7 +2532,8 @@ impl ScreenshotEditorWindow {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
-        let mut layers: Vec<AnyElement> = self.render_mask_panel(window, cx).into_iter().collect();
+        let mut layers: Vec<AnyElement> =
+            self.render_mask_settings(window, cx).into_iter().collect();
         if self.annotation_state.gesture.is_some() {
             layers.push(
                 ui::Slider::drag_layer(
@@ -3087,10 +3092,10 @@ impl ScreenshotEditorWindow {
         {
             self.annotation_state.color_popover = None;
         }
-        if let Some((_, id)) = &self.annotation_state.mask_panel
+        if let Some(id) = &self.annotation_state.mask_settings
             && self.selected_annotation.as_deref() != Some(id.as_str())
         {
-            self.annotation_state.mask_panel = None;
+            self.annotation_state.mask_settings = None;
         }
         for target in ColorTarget::ALL {
             let Some(input) = self.annotation_state.color_inputs.get(&target).cloned() else {
