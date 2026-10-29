@@ -40,6 +40,7 @@ const SCREENSHOT_OBJECT_KEY_SUFFIXES = [
 	"screen-capture.jpg",
 	"screen-capture.jpeg",
 ];
+const THUMBNAIL_OBJECT_LIST_MAX_KEYS = 10;
 type ScreenshotObject = {
 	Key?: string | null;
 	LastModified?: Date | string | number | null;
@@ -245,11 +246,21 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 						yield* bucket.getSignedObjectUrl(publishedThumbnail),
 					);
 				}
-				const listResponse = yield* bucket.listObjects({
-					prefix: `${video.ownerId}/${video.id}/`,
+				const videoPrefix = `${video.ownerId}/${video.id}/`;
+				const screenshotList = yield* bucket.listObjects({
+					prefix: `${videoPrefix}screenshot/`,
+					maxKeys: THUMBNAIL_OBJECT_LIST_MAX_KEYS,
 				});
-				const contents = listResponse.Contents || [];
-				const thumbnailKey = findScreenshotObjectKey(contents);
+				let thumbnailKey = findScreenshotObjectKey(
+					screenshotList.Contents ?? [],
+				);
+				if (!thumbnailKey) {
+					const rootList = yield* bucket.listObjects({
+						prefix: videoPrefix,
+						maxKeys: THUMBNAIL_OBJECT_LIST_MAX_KEYS,
+					});
+					thumbnailKey = findScreenshotObjectKey(rootList.Contents ?? []);
+				}
 				if (!thumbnailKey) return Option.none<string>();
 				const url = yield* bucket.getSignedObjectUrl(thumbnailKey);
 				return Option.some(url);

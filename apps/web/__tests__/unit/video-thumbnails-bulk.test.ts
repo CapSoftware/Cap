@@ -33,10 +33,13 @@ vi.mock("@cap/web-backend/src/Storage/index", async () => {
 								return Effect.fail(
 									new StorageError({ cause: mocks.storageError }),
 								);
+							const thumbnailKey = prefix.endsWith("screenshot/")
+								? `${prefix}screen-capture.jpg`
+								: `${prefix}screenshot/screen-capture.jpg`;
 							return Effect.succeed({
 								Contents: prefix.includes("noshot")
 									? [{ Key: `${prefix}result.mp4` }]
-									: [{ Key: `${prefix}screenshot/screen-capture.jpg` }],
+									: [{ Key: thumbnailKey }],
 							});
 						},
 					},
