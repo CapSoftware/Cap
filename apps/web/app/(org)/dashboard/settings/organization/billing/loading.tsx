@@ -17,7 +17,7 @@ export default function Loading() {
 							<Skeleton
 								baseColor="var(--gray-4)"
 								highlightColor="var(--gray-5)"
-								className="h-[16px] w-[280px]"
+								className="h-[16px] w-[280px] max-w-full"
 							/>
 						</div>
 						<Skeleton
@@ -36,7 +36,7 @@ export default function Loading() {
 							<Skeleton
 								baseColor="var(--gray-4)"
 								highlightColor="var(--gray-5)"
-								className="h-[16px] w-[260px]"
+								className="h-[16px] w-[260px] max-w-full"
 							/>
 						</div>
 						<div className="flex flex-col gap-3">

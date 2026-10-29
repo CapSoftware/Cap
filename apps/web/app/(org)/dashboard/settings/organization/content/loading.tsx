@@ -17,7 +17,7 @@ export default function Loading() {
 							<Skeleton
 								baseColor="var(--gray-4)"
 								highlightColor="var(--gray-5)"
-								className="h-[16px] w-[340px]"
+								className="h-[16px] w-[340px] max-w-full"
 							/>
 						</div>
 						<div className="grid gap-5 lg:grid-cols-2 lg:gap-x-20">
