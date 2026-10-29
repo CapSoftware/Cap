@@ -605,7 +605,11 @@ test("an abandoned recording start clears without leaving controls behind", asyn
 			.toBe(true);
 
 		const devtools = await extension.context.newCDPSession(targetPage);
+		// A start is abandoned when the worker dies mid-start: session storage
+		// keeps "creating" and the next worker life has to clear it.
 		await writeStaleCreatingState(worker);
+		await devtools.send("ServiceWorker.enable");
+		await devtools.send("ServiceWorker.stopAllWorkers");
 		await targetPage.waitForTimeout(500);
 		expect(
 			await getClosedShadowElementBox(
@@ -624,7 +628,10 @@ test("an abandoned recording start clears without leaving controls behind", asyn
 			type: "get-recording-status",
 		})) as { status?: { phase?: string } };
 		expect(statusResponse.status?.phase).toBe("idle");
-		await expect.poll(() => readSessionRecordingPhase(worker)).toBe("idle");
+		const restartedWorker = await getServiceWorker(extension.context);
+		await expect
+			.poll(() => readSessionRecordingPhase(restartedWorker))
+			.toBe("idle");
 		await expect
 			.poll(() => frameWithUrl(targetPage, "popup.html") === null, {
 				timeout: 10_000,
