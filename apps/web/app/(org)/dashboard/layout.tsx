@@ -50,8 +50,6 @@ export default async function DashboardLayout({
 	if (!user) redirect("/login");
 
 	const hasName = Boolean(user.name && user.name.length > 0);
-	// Started alongside the invite lookup instead of after the redirect checks,
-	// which saves several database round trips on every dashboard request.
 	const pendingInviteIdPromise = getPendingInviteIdForUser(user.email);
 	const dashboardDataPromise = hasName ? getDashboardData(user) : null;
 	// Fail-open: the meter is informational and must never take the shell down.
