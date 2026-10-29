@@ -51,9 +51,9 @@ import {
 import {
 	canAcceptNewProbeOperation as canAcceptNewProbeProcess,
 	getActiveProbeOperationCount as getActiveProbeProcessCount,
+	probeTrackSpans,
 	probeVideo,
 	probeVideoFile,
-	probeVideoTrackDuration,
 } from "../lib/media-probe";
 import {
 	fetchMedia,
@@ -1690,16 +1690,29 @@ async function processVideoAsync(
 				);
 		}
 		if (recoveringDamagedSource) {
-			// A full-length audio track keeps the container duration whole even when the
-			// recovered video stops early, so the video track is compared on its own.
-			const [sourceVideoDuration, recoveredVideoDuration] =
-				await withJobHeartbeat(jobId, () =>
-					Promise.all([
-						probeVideoTrackDuration(input.path),
-						probeVideoTrackDuration(outputPath),
-					]),
-				).catch(rejectUnrecoverableSource);
-			if (!isCompleteRecovery(recoveredVideoDuration, sourceVideoDuration))
+			// The container duration is the longest track, so a recovered video or audio
+			// track that stops early hides behind the other one. Each track is compared on
+			// its own against the file that was transcoded; when that file cannot be read
+			// track by track, the container duration stands in for the video span.
+			const [source, recovered] = await withJobHeartbeat(jobId, () =>
+				Promise.all([
+					probeTrackSpans(processingInputPath).catch((error) => {
+						if (isBusyError(error)) throw error;
+						return null;
+					}),
+					probeTrackSpans(outputPath),
+				]),
+			).catch(rejectUnrecoverableSource);
+			const audioIncomplete =
+				source?.audio != null &&
+				!isCompleteRecovery(recovered.audio ?? 0, source.audio);
+			if (
+				!isCompleteRecovery(
+					recovered.video,
+					source?.video ?? metadata.duration,
+				) ||
+				audioIncomplete
+			)
 				throw new Error(DAMAGED_INPUT_MESSAGE);
 		}
 		if (

@@ -1,4 +1,9 @@
-import type { AudioCodec, MediaCodec, VideoCodec } from "mediabunny";
+import type {
+	AudioCodec,
+	InputTrack,
+	MediaCodec,
+	VideoCodec,
+} from "mediabunny";
 import type { VideoMetadata } from "./job-manager";
 import {
 	createMediaInput,
@@ -141,33 +146,41 @@ export async function probeVideoFile(filePath: string): Promise<VideoMetadata> {
 	);
 }
 
-async function computeVideoTrackDuration(path: string): Promise<number> {
+export type TrackSpans = { video: number; audio: number | null };
+
+async function computeTrackSpans(path: string): Promise<TrackSpans> {
 	const input = createMediaInput(path);
 	try {
 		const videoTrack = await input.getPrimaryVideoTrack();
 		if (!videoTrack) {
 			throw new Error("No video stream found");
 		}
-		const [start, end] = await Promise.all([
-			videoTrack.getFirstTimestamp(),
-			videoTrack.computeDuration({ skipLiveWait: true }),
+		const audioTrack = await input.getPrimaryAudioTrack();
+		const span = async (track: InputTrack) => {
+			const [start, end] = await Promise.all([
+				track.getFirstTimestamp(),
+				track.computeDuration({ skipLiveWait: true }),
+			]);
+			return end - start;
+		};
+		const [video, audio] = await Promise.all([
+			span(videoTrack),
+			audioTrack ? span(audioTrack) : null,
 		]);
-		return end - start;
+		return { video, audio };
 	} finally {
 		input.dispose();
 	}
 }
 
-export async function probeVideoTrackDuration(
-	filePath: string,
-): Promise<number> {
+export async function probeTrackSpans(filePath: string): Promise<TrackSpans> {
 	if (!canAcceptNewProbeOperation()) {
 		throw new Error("Server is busy, please try again later");
 	}
 
 	return await withMediaOperation("probe", () =>
 		withTimeout(
-			computeVideoTrackDuration(normalizeLocalPath(filePath)),
+			computeTrackSpans(normalizeLocalPath(filePath)),
 			PROBE_TIMEOUT_MS,
 		),
 	);
