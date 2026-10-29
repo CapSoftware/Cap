@@ -75,6 +75,16 @@ describe("formatFromNow", () => {
 		const invalid = new Date("not a date");
 		expect(formatFromNow(invalid)).toBe(moment(invalid).fromNow());
 	});
+
+	it("matches moment for dates that arrive as JSON strings", () => {
+		const now = new Date(2026, 9, 28, 12, 0, 0);
+		for (const date of sampleDates) {
+			const json = JSON.parse(JSON.stringify({ date })).date as string;
+			expect(formatFromNow(new Date(json), now)).toBe(
+				moment(json).from(moment(now)),
+			);
+		}
+	});
 });
 
 describe("durationParts", () => {
