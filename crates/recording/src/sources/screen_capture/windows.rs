@@ -29,6 +29,7 @@ use std::{
 use tokio_util::{future::FutureExt as _, sync::CancellationToken};
 use tracing::*;
 
+#[path = "gpu_scale.rs"]
 mod gpu_scale;
 use gpu_scale::GpuTextureScaler;
 

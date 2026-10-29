@@ -155,7 +155,7 @@ impl GpuTextureScaler {
             PastFrames: 0,
             FutureFrames: 0,
             ppPastSurfaces: ptr::null_mut(),
-            pInputSurface: std::mem::transmute_copy(&input_view),
+            pInputSurface: unsafe { std::mem::transmute_copy(&input_view) },
             ppFutureSurfaces: ptr::null_mut(),
             ppPastSurfacesRight: ptr::null_mut(),
             pInputSurfaceRight: ManuallyDrop::new(None),
