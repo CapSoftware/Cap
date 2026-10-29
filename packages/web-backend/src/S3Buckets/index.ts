@@ -189,11 +189,7 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 				function* (userId: User.UserId) {
 					return yield* repo
 						.getForUser(userId)
-						.pipe(
-							Effect.option,
-							Effect.map(Option.flatten),
-							Effect.flatMap(getBucketAccess),
-						);
+						.pipe(Effect.flatMap(getBucketAccess));
 				},
 			),
 			getBucketAccessForOrganization: Effect.fn(
