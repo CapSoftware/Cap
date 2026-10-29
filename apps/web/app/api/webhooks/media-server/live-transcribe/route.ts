@@ -7,7 +7,7 @@ import { z } from "zod";
 import { dispatchLiveTranscription } from "@/lib/live-transcribe";
 import {
 	describeLiveChunk,
-	LIVE_TRANSCRIPT_NO_SEGMENTS,
+	type LiveTranscriptArtifact,
 } from "@/lib/live-transcribe-core";
 import {
 	buildLiveSessionState,
@@ -19,6 +19,7 @@ import {
 import {
 	finishLiveTranscription,
 	type LiveBucket,
+	type LiveTranscriptUpdate,
 	promoteLiveTranscript,
 	readLiveTranscript,
 	touchLiveClaim,
@@ -164,12 +165,10 @@ export async function POST(request: NextRequest) {
 		await finishLiveTranscription(videoId, video.ownerId, "stopped");
 		return stop();
 	}
-	let artifact = await readLiveTranscript(bucket, video.ownerId, videoId);
-	const cursor = artifact?.lastAudioSegmentIndex ?? LIVE_TRANSCRIPT_NO_SEGMENTS;
-
+	let artifact: LiveTranscriptArtifact | null | undefined;
 	if (report.action === "sync") {
 		await touchLiveClaim(videoId, session);
-	} else if (report.lastProcessedIndex === cursor) {
+	} else {
 		const manifest = await readManifest(bucket, video.ownerId, videoId);
 		const chunk = manifest
 			? describeLiveChunk({
@@ -180,24 +179,28 @@ export async function POST(request: NextRequest) {
 						report.action === "chunk" ? report.contextFromIndex : null,
 				})
 			: null;
+		const range = `${report.lastProcessedIndex + 1}..${report.lastIndex}`;
+		const target = {
+			bucket,
+			ownerId: video.ownerId,
+			videoId,
+			session,
+			expectedCursor: report.lastProcessedIndex,
+		};
 
+		let write: LiveTranscriptUpdate | null = null;
 		if (chunk && report.action === "gap") {
 			console.warn(
-				`[liveTranscribe] Skipping poison chunk ${cursor + 1}..${report.lastIndex} for ${videoId}`,
+				`[liveTranscribe] Skipping poison chunk ${range} for ${videoId}`,
 			);
-			artifact = await writeLiveChunkGap({
-				bucket,
-				ownerId: video.ownerId,
-				videoId,
+			write = await writeLiveChunkGap({
+				...target,
 				lastAudioSegmentIndex: report.lastIndex,
 				endMs: chunk.startMs + chunk.durationMs,
-				session,
 			});
 		} else if (chunk && report.action === "chunk") {
-			const updated = await writeLiveChunk({
-				bucket,
-				ownerId: video.ownerId,
-				videoId,
+			write = await writeLiveChunk({
+				...target,
 				chunk: {
 					startMs: chunk.startMs,
 					durationMs: chunk.durationMs,
@@ -206,20 +209,22 @@ export async function POST(request: NextRequest) {
 				},
 				words: report.words,
 				languageCode: report.languageCode,
-				session,
 			});
-			if (!updated) return stop();
-			artifact = updated;
-			console.log(
-				`[liveTranscribe] ${videoId} chunk ${cursor + 1}..${report.lastIndex} (${chunk.durationMs}ms + ${chunk.contextMs}ms context, ${report.words.length} words) via media server`,
-			);
+			if (write.status === "written") {
+				console.log(
+					`[liveTranscribe] ${videoId} chunk ${range} (${chunk.durationMs}ms + ${chunk.contextMs}ms context, ${report.words.length} words) via media server`,
+				);
+			}
 		} else {
 			console.warn(
-				`[liveTranscribe] ${videoId} report for ${report.lastProcessedIndex + 1}..${report.lastIndex} does not match the manifest`,
+				`[liveTranscribe] ${videoId} report for ${range} does not match the manifest`,
 			);
 		}
+		if (write?.status === "stopped") return stop();
+		if (write?.status === "written") artifact = write.artifact;
 	}
 
+	artifact ??= await readLiveTranscript(bucket, video.ownerId, videoId);
 	return NextResponse.json({
 		continue: true,
 		state: await buildLiveSessionState({

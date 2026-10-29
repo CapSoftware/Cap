@@ -366,13 +366,14 @@ async function processNextLiveChunk(options: {
 		// The gap MUST be durably recorded before the cursor advances, or a
 		// later promotion could ship a transcript that silently misses speech.
 		try {
-			await writeLiveChunkGap({
+			const gap = await writeLiveChunkGap({
 				bucket,
 				ownerId: video.ownerId,
 				videoId,
 				lastAudioSegmentIndex: chunkEndIndex,
 				endMs: decision.startMs + decision.durationMs,
 			});
+			if (gap.status !== "written") return { outcome: "canonical-done" };
 		} catch (error) {
 			return {
 				outcome: "chunk-failed",
@@ -427,7 +428,7 @@ async function processNextLiveChunk(options: {
 
 		// Polling + the AssemblyAI round trip can take minutes, so the write
 		// re-checks that the canonical pipeline didn't complete meanwhile.
-		const updated = await writeLiveChunk({
+		const write = await writeLiveChunk({
 			bucket,
 			ownerId: video.ownerId,
 			videoId,
@@ -443,7 +444,8 @@ async function processNextLiveChunk(options: {
 					? transcript.language_code
 					: null,
 		});
-		if (!updated) return { outcome: "canonical-done" };
+		if (write.status !== "written") return { outcome: "canonical-done" };
+		const updated = write.artifact;
 
 		// If this chunk completed full coverage of a finished recording, tell
 		// the workflow to promote right away instead of paying another poll

@@ -66,24 +66,135 @@ export async function readLiveTranscript(
 	return Option.isSome(existing) ? parseLiveTranscript(existing.value) : null;
 }
 
+export type LiveTranscriptUpdate =
+	| { status: "written"; artifact: LiveTranscriptArtifact }
+	/** The canonical transcript finished (writing would re-create the artifact
+	 * it just deleted, an orphan billed forever), or the claim moved to
+	 * another session. */
+	| { status: "stopped" }
+	/** The artifact isn't at `expectedCursor`, or changed after it was read. */
+	| { status: "conflict" };
+
+function isRejectedConditionalWrite(error: unknown) {
+	const pending = [error];
+	for (let index = 0; index < pending.length && index < 16; index++) {
+		const value = pending[index];
+		if (typeof value !== "object" || value === null) continue;
+		const record = value as Record<string, unknown>;
+		const status = (record.$metadata as { httpStatusCode?: unknown } | null)
+			?.httpStatusCode;
+		if (
+			status === 412 ||
+			status === 409 ||
+			record.name === "PreconditionFailed" ||
+			record.name === "ConditionalRequestConflict"
+		) {
+			return true;
+		}
+		pending.push(record.cause, record.error);
+	}
+	return false;
+}
+
+/**
+ * Read-modify-write of `transcription.live.json`. A session runner's reports
+ * can overlap (a retry can land while a stalled original is still running),
+ * so its writes are conditional on the copy it read: the stalled original
+ * then fails instead of putting older words back. Session runners only use
+ * Cap's own bucket; the workflow writes unconditionally as before, since
+ * customer S3-compatible buckets may not support conditional writes.
+ */
+async function updateLiveTranscript(
+	options: {
+		bucket: LiveBucket;
+		ownerId: string;
+		videoId: string;
+		session?: string;
+		expectedCursor?: number;
+	},
+	update: (artifact: LiveTranscriptArtifact) => LiveTranscriptArtifact,
+): Promise<LiveTranscriptUpdate> {
+	const { bucket, ownerId, videoId, session } = options;
+	const key = getLiveTranscriptObjectKey(ownerId, videoId);
+
+	let artifact: LiveTranscriptArtifact | null;
+	let condition: { ifMatch?: string; ifNoneMatch?: string } = {};
+	if (session !== undefined && bucket.provider === "s3") {
+		const existing = await bucket
+			.getObjectWithETag(key)
+			.pipe(runWorkflowPromise);
+		artifact = Option.isSome(existing)
+			? parseLiveTranscript(existing.value.body)
+			: null;
+		if (Option.isSome(existing) && !existing.value.eTag) {
+			return { status: "conflict" };
+		}
+		condition = Option.isSome(existing)
+			? { ifMatch: existing.value.eTag }
+			: { ifNoneMatch: "*" };
+	} else {
+		artifact = await readLiveTranscript(bucket, ownerId, videoId);
+	}
+
+	const current =
+		artifact ?? createEmptyLiveTranscript(new Date().toISOString());
+	if (
+		options.expectedCursor !== undefined &&
+		current.lastAudioSegmentIndex !== options.expectedCursor
+	) {
+		return { status: "conflict" };
+	}
+	const updated = update(current);
+
+	const [row] = await db()
+		.select({
+			transcriptionStatus: videos.transcriptionStatus,
+			session: sql<
+				string | null
+			>`JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.liveTranscript.session'))`,
+		})
+		.from(videos)
+		.where(eq(videos.id, videoId as Video.VideoId));
+	if (
+		isCanonicalTranscriptDone(row?.transcriptionStatus) ||
+		(session !== undefined && row?.session !== session)
+	) {
+		return { status: "stopped" };
+	}
+
+	try {
+		await bucket
+			.putObject(key, JSON.stringify(updated), {
+				contentType: "application/json",
+				...condition,
+			})
+			.pipe(runWorkflowPromise);
+	} catch (error) {
+		if (session !== undefined && isRejectedConditionalWrite(error)) {
+			return { status: "conflict" };
+		}
+		throw error;
+	}
+
+	await touchLiveClaim(videoId, session);
+	return { status: "written", artifact: updated };
+}
+
 /**
  * Record that the audio up to `lastAudioSegmentIndex` was skipped. Must land
  * before the cursor moves past it, or a later promotion could ship a
  * transcript that silently misses speech. Throws when it can't be recorded.
  */
-export async function writeLiveChunkGap(options: {
+export function writeLiveChunkGap(options: {
 	bucket: LiveBucket;
 	ownerId: string;
 	videoId: string;
 	lastAudioSegmentIndex: number;
 	endMs: number;
 	session?: string;
-}): Promise<LiveTranscriptArtifact> {
-	const { bucket, ownerId, videoId } = options;
-	const artifact =
-		(await readLiveTranscript(bucket, ownerId, videoId)) ??
-		createEmptyLiveTranscript(new Date().toISOString());
-	const updated: LiveTranscriptArtifact = {
+	expectedCursor?: number;
+}): Promise<LiveTranscriptUpdate> {
+	return updateLiveTranscript(options, (artifact) => ({
 		...artifact,
 		hasGaps: true,
 		lastAudioSegmentIndex: Math.max(
@@ -95,25 +206,10 @@ export async function writeLiveChunkGap(options: {
 			options.endMs,
 		),
 		updatedAt: new Date().toISOString(),
-	};
-	await bucket
-		.putObject(
-			getLiveTranscriptObjectKey(ownerId, videoId),
-			JSON.stringify(updated),
-			{ contentType: "application/json" },
-		)
-		.pipe(runWorkflowPromise);
-	await touchLiveClaim(videoId, options.session);
-	return updated;
+	}));
 }
 
-/**
- * Merge one transcribed chunk into `transcription.live.json`. Returns null
- * without writing when the canonical transcript finished meanwhile (the write
- * would re-create the artifact it just deleted, an orphan billed forever) or,
- * for a session runner, when the claim moved to another session.
- */
-export async function writeLiveChunk(options: {
+export function writeLiveChunk(options: {
 	bucket: LiveBucket;
 	ownerId: string;
 	videoId: string;
@@ -126,50 +222,23 @@ export async function writeLiveChunk(options: {
 	words: readonly LiveChunkWordInput[] | null | undefined;
 	languageCode: string | null;
 	session?: string;
-}): Promise<LiveTranscriptArtifact | null> {
-	const { bucket, ownerId, videoId, chunk, session } = options;
+	expectedCursor?: number;
+}): Promise<LiveTranscriptUpdate> {
+	const { chunk } = options;
 	const words = offsetChunkWords(
 		options.words,
 		chunk.startMs,
 		chunk.durationMs,
 		chunk.contextMs,
 	);
-	const artifact =
-		(await readLiveTranscript(bucket, ownerId, videoId)) ??
-		createEmptyLiveTranscript(new Date().toISOString());
-	const updated = applyChunkToLiveTranscript(artifact, {
-		...chunk,
-		words,
-		languageCode: options.languageCode,
-		nowIso: new Date().toISOString(),
-	});
-
-	const [current] = await db()
-		.select({
-			transcriptionStatus: videos.transcriptionStatus,
-			session: sql<
-				string | null
-			>`JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.liveTranscript.session'))`,
-		})
-		.from(videos)
-		.where(eq(videos.id, videoId as Video.VideoId));
-	if (
-		isCanonicalTranscriptDone(current?.transcriptionStatus) ||
-		(session !== undefined && current?.session !== session)
-	) {
-		return null;
-	}
-
-	await bucket
-		.putObject(
-			getLiveTranscriptObjectKey(ownerId, videoId),
-			JSON.stringify(updated),
-			{ contentType: "application/json" },
-		)
-		.pipe(runWorkflowPromise);
-
-	await touchLiveClaim(videoId, session);
-	return updated;
+	return updateLiveTranscript(options, (artifact) =>
+		applyChunkToLiveTranscript(artifact, {
+			...chunk,
+			words,
+			languageCode: options.languageCode,
+			nowIso: new Date().toISOString(),
+		}),
+	);
 }
 
 export function liveContextSeconds() {
