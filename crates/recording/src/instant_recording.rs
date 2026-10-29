@@ -1337,7 +1337,7 @@ async fn build_instant_recording_actor(
             let (display, crop_bounds) = target_to_display_and_crop(&inputs.capture_target)
                 .context("target_display_crop")?;
 
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             let max_capture_size = max_output_size.and_then(|max_output_size| {
                 inputs.capture_target.physical_size().map(|size| {
                     capture_size_constraint(
@@ -1346,7 +1346,7 @@ async fn build_instant_recording_actor(
                     )
                 })
             });
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(target_os = "linux")]
             let max_capture_size = None;
 
             #[cfg(any(target_os = "macos", windows))]
@@ -1530,7 +1530,7 @@ fn current_time_f64() -> f64 {
         .as_secs_f64()
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn capture_size_constraint(input: (u32, u32), max_output_size: u32) -> (u32, u32) {
     let aspect_ratio = input.0 as f64 / input.1 as f64;
     let max_short_edge = (max_output_size as f64 / 16.0 * 9.0) as u32;
