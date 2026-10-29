@@ -42,6 +42,9 @@ pub struct RawFrame {
     /// this config actually has.
     pub base_width: u32,
     pub base_height: u32,
+    /// Where the screenshot sits inside the preview frame -- what an inverted
+    /// mask covers. `None` treats the whole frame as content.
+    pub content: Option<Rect>,
 }
 
 /// The composited output canvas -- straight-alpha RGBA.
@@ -79,6 +82,13 @@ pub fn scale_annotations(list: &[Annotation], scale_x: f64, scale_y: f64) -> Vec
             height: annotation.height * scale_y,
             stroke_width: annotation.stroke_width * scalar,
             mask_level: annotation.mask_level.map(|level| level * scalar),
+            mask_options: annotation.mask_options.as_ref().map(|options| {
+                cap_project::MaskOptions {
+                    corner_radius: options.corner_radius * scalar,
+                    feather: options.feather * scalar,
+                    ..options.clone()
+                }
+            }),
             ..annotation.clone()
         })
         .collect()
@@ -205,12 +215,18 @@ pub fn composite(raw: &RawFrame, config: &ProjectConfiguration) -> Composited {
         width: f64::from(width),
         height: f64::from(height),
     };
+    let content = raw.content.map_or(full, |content| Rect {
+        x: content.x * scale_x,
+        y: content.y * scale_y,
+        width: content.width * scale_x,
+        height: content.height * scale_y,
+    });
     for mask in &scaled {
         if mask.annotation_type != AnnotationType::Mask {
             continue;
         }
         if let Some((x0, y0, region)) =
-            annotations::masked_region_image(&raw.rgba, (width, height), mask, full)
+            annotations::masked_region_image(&raw.rgba, (width, height), mask, full, content)
         {
             pixels::blit_over(&mut canvas, (width, height), &region, (x0, y0));
         }
@@ -709,6 +725,7 @@ mod tests {
             text: None,
             mask_type: None,
             mask_level: None,
+            mask_options: None,
             points: None,
         }
     }
@@ -741,6 +758,7 @@ mod tests {
             height: 1,
             base_width: 2,
             base_height: 1,
+            content: None,
         };
         let mut config = ProjectConfiguration::default();
         invisible_background(&mut config);
@@ -765,6 +783,7 @@ mod tests {
             height: 2,
             base_width: 4,
             base_height: 2,
+            content: None,
         };
         let mut config = ProjectConfiguration::default();
         invisible_background(&mut config);
@@ -992,6 +1011,7 @@ mod tests {
                 height: 16,
                 base_width: 16,
                 base_height: 16,
+                content: None,
             };
             for invisible in [false, true] {
                 let mut config = ProjectConfiguration::default();
@@ -1030,6 +1050,7 @@ mod tests {
             height: 1,
             base_width: 1,
             base_height: 1,
+            content: None,
         };
         let config = ProjectConfiguration::default();
         assert_eq!(
@@ -1067,6 +1088,7 @@ mod tests {
                     height,
                     base_width: width,
                     base_height: height,
+                    content: None,
                 };
                 let mut config = ProjectConfiguration::default();
                 invisible_background(&mut config);
@@ -1119,6 +1141,7 @@ mod tests {
                     height,
                     base_width: width,
                     base_height: height,
+                    content: None,
                 };
                 let config = ProjectConfiguration::default();
                 let mut before = Vec::new();
@@ -1185,6 +1208,7 @@ mod tests {
             height: 100,
             base_width: 100,
             base_height: 100,
+            content: None,
         };
         let mut text = annotation(AnnotationType::Text, 95., -5., 1., 32.);
         text.text = Some("jÁW".into());
@@ -1230,6 +1254,7 @@ mod tests {
             height: 100,
             base_width: 100,
             base_height: 100,
+            content: None,
         };
         let mut config = ProjectConfiguration {
             annotations: vec![
@@ -1271,6 +1296,7 @@ mod tests {
             height: 64,
             base_width: 64,
             base_height: 64,
+            content: None,
         };
         for visible in [true, false] {
             let mut config = ProjectConfiguration::default();
@@ -1304,6 +1330,7 @@ mod tests {
             height: 100,
             base_width: 50,
             base_height: 50,
+            content: None,
         };
         for invisible in [false, true] {
             for (x, y, pixel, size) in [
@@ -1361,6 +1388,7 @@ mod tests {
             height: 4,
             base_width: 2,
             base_height: 2,
+            content: None,
         };
         for invisible in [false, true] {
             for (x, y, pixel, size) in [
