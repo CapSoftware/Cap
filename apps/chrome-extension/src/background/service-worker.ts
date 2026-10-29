@@ -1471,6 +1471,18 @@ const beginAuthFlow = async (settings: ExtensionSettings) => {
 const handlePreviewReady = async (tabId?: number) => {
 	if (tabId === undefined) return;
 	if (pendingPreviewTabId !== null && pendingPreviewTabId !== tabId) return;
+	// Hand-offs to another tab always go through showOverlayInTab, which marks
+	// the tab pending. A preview that opened on its own somewhere else (a
+	// background tab whose overlay loaded when the recording started) must not
+	// take the camera away from the tab it was placed in.
+	if (
+		pendingPreviewTabId === null &&
+		activePreviewTabId !== null &&
+		activePreviewTabId !== tabId
+	) {
+		await hidePreviewTab(tabId);
+		return;
+	}
 	activePreviewTabId = tabId;
 	pendingPreviewTabId = null;
 	await hidePreviewTabsExcept(tabId);

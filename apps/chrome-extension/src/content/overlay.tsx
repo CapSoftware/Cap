@@ -761,8 +761,16 @@ function OverlayApp() {
 					setRecordingPreviewActive(previewActive);
 					// A replayed startup message (the lazy-load trigger) may have
 					// already opened the preview before this sync resolves, so only
-					// ever turn it on here.
-					if (!dismissed && previewActive) setPreviewOpen(true);
+					// ever turn it on here. Every open tab loads the overlay when a
+					// recording starts; only a visible one opens the camera, and a
+					// background tab picks it up when it is shown.
+					if (
+						!dismissed &&
+						previewActive &&
+						document.visibilityState === "visible"
+					) {
+						setPreviewOpen(true);
+					}
 				}
 			})
 			.catch(() => undefined);
