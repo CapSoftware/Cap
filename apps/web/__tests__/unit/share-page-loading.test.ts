@@ -163,7 +163,10 @@ function arrangeRows(rows: ReturnType<typeof createVideo>[]) {
 			from: () => query,
 			leftJoin: () => query,
 			innerJoin: () => query,
-			where: () => Promise.resolve(result),
+			where: () =>
+				Object.assign(Promise.resolve(result), {
+					limit: () => Promise.resolve(result),
+				}),
 		};
 		return query;
 	});
@@ -192,6 +195,8 @@ async function renderAuthorizedContent() {
 				sharedOrganizations: unknown[];
 				ownerIsOverShareLimit: boolean;
 				callToAction: { label: string; url: string } | null;
+				callToActionSource: "video" | "default" | null;
+				defaultCallToAction: { label: string; url: string } | null;
 			};
 		}>;
 	}>;
@@ -263,6 +268,54 @@ describe("share page loading", () => {
 			}
 		},
 	);
+
+	const ownerDefault = { label: "Book a call", url: "https://cal.com/owner" };
+
+	const withDefault = (videoSettings: unknown) =>
+		({
+			...createVideo(),
+			videoSettings,
+			owner: {
+				id: "owner",
+				image: null,
+				preferences: { defaultCallToAction: ownerDefault },
+			},
+		}) as unknown as ReturnType<typeof createVideo>;
+
+	it("shows the owner's default on a video without its own call to action", async () => {
+		mocks.ownerIsPro = true;
+		arrangeRows([withDefault({})]);
+		const data = (await renderAuthorizedContent()).props.children.props.data;
+		expect(data.callToAction).toMatchObject(ownerDefault);
+		expect(data.callToActionSource).toBe("default");
+	});
+
+	it("keeps a video that was turned off free of the owner's default", async () => {
+		mocks.ownerIsPro = true;
+		arrangeRows([withDefault({ callToAction: false })]);
+		const data = (await renderAuthorizedContent()).props.children.props.data;
+		expect(data.callToAction).toBeNull();
+		expect(data.callToActionSource).toBeNull();
+	});
+
+	it("doesn't apply the default for an owner without Pro", async () => {
+		arrangeRows([withDefault({})]);
+		const data = (await renderAuthorizedContent()).props.children.props.data;
+		expect(data.callToAction).toBeNull();
+	});
+
+	it("only sends the default itself to the owner", async () => {
+		mocks.ownerIsPro = true;
+		arrangeRows([withDefault({})]);
+		const viewerData = (await renderAuthorizedContent()).props.children.props
+			.data;
+		expect(viewerData.defaultCallToAction).toBeNull();
+
+		mocks.user.mockResolvedValue({ id: "owner" });
+		const ownerData = (await renderAuthorizedContent()).props.children.props
+			.data;
+		expect(ownerData.defaultCallToAction).toMatchObject(ownerDefault);
+	});
 
 	it("reuses the organization sharing query for the header and video data", async () => {
 		mocks.sharedOrganizations = [

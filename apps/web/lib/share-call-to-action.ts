@@ -163,7 +163,44 @@ export function parseShareCallToAction(
 	settings: unknown,
 ): ShareCallToAction | null {
 	if (!isRecord(settings)) return null;
-	const stored = settings.callToAction;
+	return parseStoredCallToAction(settings.callToAction);
+}
+
+export function parseDefaultCallToAction(
+	preferences: unknown,
+): ShareCallToAction | null {
+	if (!isRecord(preferences)) return null;
+	return parseStoredCallToAction(preferences.defaultCallToAction);
+}
+
+export type CallToActionSource = "video" | "default";
+
+export type ResolvedCallToAction = {
+	callToAction: ShareCallToAction | null;
+	source: CallToActionSource | null;
+};
+
+/**
+ * A video's own call to action wins. `false` means the owner turned calls to
+ * action off for this video, so their default doesn't apply to it either.
+ */
+export function resolveShareCallToAction(
+	videoSettings: unknown,
+	ownerPreferences: unknown,
+): ResolvedCallToAction {
+	const stored = isRecord(videoSettings) ? videoSettings.callToAction : null;
+	if (stored === false) return { callToAction: null, source: null };
+
+	const own = parseStoredCallToAction(stored);
+	if (own) return { callToAction: own, source: "video" };
+
+	const fallback = parseDefaultCallToAction(ownerPreferences);
+	return fallback
+		? { callToAction: fallback, source: "default" }
+		: { callToAction: null, source: null };
+}
+
+function parseStoredCallToAction(stored: unknown): ShareCallToAction | null {
 	if (!isRecord(stored)) return null;
 	if (typeof stored.label !== "string" || typeof stored.url !== "string") {
 		return null;
