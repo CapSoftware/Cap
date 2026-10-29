@@ -758,9 +758,8 @@ impl VoiceEqBandKind {
     }
 }
 
-/// A clip's microphone tone: a high-pass, a low shelf, two bells and a high
-/// shelf, plus click repair. `enabled` bypasses the EQ without losing it;
-/// de-click runs on its own switch.
+/// `enabled` bypasses the EQ without losing it; de-click runs on its own
+/// switch.
 #[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct VoiceEq {
@@ -837,7 +836,6 @@ impl VoiceEq {
         }
     }
 
-    /// Swaps in a preset's curve and keeps the switches the user set.
     pub fn with_preset(self, preset: VoiceEqPreset) -> Self {
         Self {
             enabled: self.enabled,
@@ -864,8 +862,6 @@ impl VoiceEq {
         }
     }
 
-    /// Every number pulled into its editor range; a damaged value falls back
-    /// to the preset's own.
     pub fn sanitized(&self) -> Self {
         let fallback = Self::from_preset(self.preset);
         let mut clean = *self;
