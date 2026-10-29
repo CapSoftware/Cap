@@ -22,7 +22,7 @@ export const CapPagination: React.FC<CapPaginationProps> = ({
 }) => {
 	return (
 		<Pagination>
-			<PaginationContent>
+			<PaginationContent className="flex-wrap">
 				{currentPage > 1 && (
 					<PaginationItem>
 						<PaginationPrevious
@@ -37,7 +37,11 @@ export const CapPagination: React.FC<CapPaginationProps> = ({
 					) : (
 						<PaginationItem key={item}>
 							<PaginationLink
-								className="h-10 min-w-10 hover:bg-gray-3"
+								className={
+									item === currentPage
+										? "h-10 min-w-10"
+										: "h-10 min-w-10 hover:bg-gray-3"
+								}
 								href={hrefForPage(item)}
 								isActive={item === currentPage}
 							>
