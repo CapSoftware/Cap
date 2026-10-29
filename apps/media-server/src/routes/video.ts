@@ -51,6 +51,7 @@ import {
 import {
 	canAcceptNewProbeOperation as canAcceptNewProbeProcess,
 	getActiveProbeOperationCount as getActiveProbeProcessCount,
+	probeTrackSpans,
 	probeVideo,
 	probeVideoFile,
 } from "../lib/media-probe";
@@ -114,7 +115,10 @@ import {
 	tryAcquireDirectVideoProcessSlot,
 	type VideoProcessSlot,
 } from "../lib/video-capacity";
-import { validateVideoInput } from "../lib/video-input-validation";
+import {
+	DAMAGED_INPUT_MESSAGE,
+	validateVideoInput,
+} from "../lib/video-input-validation";
 
 const video = new Hono();
 const PROCESSING_HEARTBEAT_MS = 60 * 1000;
@@ -1605,12 +1609,25 @@ async function processVideoAsync(
 		}
 
 		const isWebm = isWebmInput(options.inputExtension);
+		let recoveringDamagedSource = false;
 		if (isWebm && !options.importedOriginal) {
 			updateJob(jobId, { message: "Checking the original recording..." });
-			await withJobHeartbeat(jobId, () =>
-				validateVideoInput(input.path, signal),
-			);
+			recoveringDamagedSource =
+				(await withJobHeartbeat(jobId, () =>
+					validateVideoInput(input.path, signal),
+				)) === "damaged";
+			if (recoveringDamagedSource) {
+				console.warn("[video/process] Recovering damaged source frames", {
+					jobId,
+					videoId: options.videoId,
+				});
+			}
 		}
+		const rejectUnrecoverableSource = (error: unknown): never => {
+			if (recoveringDamagedSource && !signal.aborted && !isBusyError(error))
+				throw new Error(DAMAGED_INPUT_MESSAGE);
+			throw error;
+		};
 
 		updateJob(jobId, {
 			phase: "probing",
@@ -1626,7 +1643,7 @@ async function processVideoAsync(
 						repairedFile: null,
 					}))
 				: probeWithRepairFallback(input.path, isWebm, signal),
-		);
+		).catch(rejectUnrecoverableSource);
 		repairedTempFile = repairedFile;
 		signal.throwIfAborted();
 		updateJob(jobId, { metadata });
@@ -1657,19 +1674,47 @@ async function processVideoAsync(
 					isWebm,
 					jobId,
 					signal,
-				);
+				).catch(rejectUnrecoverableSource);
 		outputTempFile = processed.outputFile;
 		lastResortRepairFile = processed.lastResortRepairFile;
 		const outputPath = processed.outputFile.path;
 		updateJob(jobId, { outputTempFile: processed.outputFile });
-		if (options.importedOriginal) {
+		if (options.importedOriginal || recoveringDamagedSource) {
 			const recovered = await withJobHeartbeat(jobId, () =>
 				probeVideoFile(outputPath),
-			);
+			).catch(rejectUnrecoverableSource);
 			if (!isCompleteRecovery(recovered.duration, metadata.duration))
 				throw new Error(
-					"The imported original could not be fully recovered. The original has been preserved.",
+					options.importedOriginal
+						? "The imported original could not be fully recovered. The original has been preserved."
+						: DAMAGED_INPUT_MESSAGE,
 				);
+		}
+		if (recoveringDamagedSource) {
+			// The container duration is the longest track, so a recovered video or audio
+			// track that stops early hides behind the other one. Each track is compared on
+			// its own against the file that was transcoded; when that file cannot be read
+			// track by track, the container duration stands in for the video span.
+			const [source, recovered] = await withJobHeartbeat(jobId, () =>
+				Promise.all([
+					probeTrackSpans(processingInputPath).catch((error) => {
+						if (isBusyError(error)) throw error;
+						return null;
+					}),
+					probeTrackSpans(outputPath),
+				]),
+			).catch(rejectUnrecoverableSource);
+			const audioIncomplete =
+				source?.audio != null &&
+				!isCompleteRecovery(recovered.audio ?? 0, source.audio);
+			if (
+				!isCompleteRecovery(
+					recovered.video,
+					source?.video ?? metadata.duration,
+				) ||
+				audioIncomplete
+			)
+				throw new Error(DAMAGED_INPUT_MESSAGE);
 		}
 		if (
 			options.maxImportBytes &&
