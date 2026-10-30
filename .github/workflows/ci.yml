@@ -448,7 +448,7 @@ jobs:
         env:
           GPUI_REQUIRE_TEST_DEVICE: "1"
         run: |
-          cargo +1.95.0 test -p gpui --lib stream
+          cargo +1.95.0 test -p gpui --lib -- stream frame_pacer_tests
           if [[ "$RUNNER_OS" == "Linux" ]]; then
             WGPU_BACKEND=vulkan cargo +1.95.0 test -p gpui_wgpu --lib wgpu_atlas -- --nocapture
             WGPU_BACKEND=gl cargo +1.95.0 test -p gpui_wgpu --lib wgpu_atlas -- --nocapture
@@ -469,5 +469,5 @@ jobs:
             status=$(sed -n 's/.*exited with status = \([0-9]*\).*/\1/p' "$RUNNER_TEMP/gpui-macos-tests.log" | tail -1)
             [[ "$status" == 0 ]] || { echo "::error::gpui_macos tests exited with status ${status:-unknown}"; exit 1; }
           else
-            cargo +1.95.0 test -p gpui_windows --lib directx_atlas
+            cargo +1.95.0 test -p gpui_windows --lib -- directx_atlas frame_request_tests direct_manipulation
           fi
