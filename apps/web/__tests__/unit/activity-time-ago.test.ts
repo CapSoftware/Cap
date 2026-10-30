@@ -17,8 +17,12 @@ describe("formatTimeAgo", () => {
 
 	it("formats seconds, minutes, hours, and days", () => {
 		expect(formatTimeAgo(new Date(now.getTime() - 30 * 1000), now)).toBe("now");
-		expect(formatTimeAgo(new Date(now.getTime() - 5 * 60 * 1000), now)).toBe("5m ago");
-		expect(formatTimeAgo(new Date(now.getTime() - 3 * 3600 * 1000), now)).toBe("3h ago");
+		expect(formatTimeAgo(new Date(now.getTime() - 5 * 60 * 1000), now)).toBe(
+			"5m ago",
+		);
+		expect(formatTimeAgo(new Date(now.getTime() - 3 * 3600 * 1000), now)).toBe(
+			"3h ago",
+		);
 		expect(formatTimeAgo(dateDaysAgo(1), now)).toBe("1d ago");
 		expect(formatTimeAgo(dateDaysAgo(29), now)).toBe("29d ago");
 	});
