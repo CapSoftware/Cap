@@ -23,13 +23,16 @@ common=(LIBSEAT_BACKEND=seatd XDG_SESSION_TYPE=wayland)
 
 case "$desktop" in
   hyprland)
-    cat >"$HOME/.config/hypr/hyprland.conf" <<CONF
-monitor = , 1920x1080, 0x0, 1
-misc { disable_hyprland_logo = true }
-debug { disable_logs = false }
-exec-once = sh -c '$export_session'
-exec-once = waybar
-CONF
+    # Hyprland 0.57 reads only hyprland.lua; a hyprland.conf is ignored and
+    # the output falls back to vkms's preferred 1024x768.
+    cat >"$HOME/.config/hypr/hyprland.lua" <<LUA
+hl.monitor({ output = "", mode = "1920x1080", position = "0x0", scale = "1" })
+hl.config({ misc = { disable_hyprland_logo = true }, debug = { disable_logs = false } })
+hl.on("hyprland.start", function()
+  hl.exec_cmd("sh -c '$export_session'")
+  hl.exec_cmd("waybar")
+end)
+LUA
     # The screen-share picker: answer with the one screen, as a person would.
     cat >"$HOME/.config/hypr/xdph.conf" <<CONF
 screencopy {
