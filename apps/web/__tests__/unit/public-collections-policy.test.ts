@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	getPublicCollectionHref,
+	getPublicCollectionLoginHref,
 	parsePublicCollectionPage,
 	resolvePublicCollectionAccess,
 	resolvePublicCollectionCandidate,
@@ -18,6 +19,24 @@ describe("public collections policy", () => {
 	it("builds canonical collection page hrefs", () => {
 		expect(getPublicCollectionHref("abc123", 1)).toBe("/c/abc123");
 		expect(getPublicCollectionHref("abc123", 2)).toBe("/c/abc123?page=2");
+	});
+
+	it("keeps the original collection URL after sign-in", () => {
+		expect(getPublicCollectionLoginHref("abc123", 1)).toBe(
+			"/login?next=%2Fc%2Fabc123",
+		);
+		expect(getPublicCollectionLoginHref("abc123", 3)).toBe(
+			"/login?next=%2Fc%2Fabc123%3Fpage%3D3",
+		);
+	});
+
+	it("encodes the continuation as a single internal query value", () => {
+		const url = new URL(
+			getPublicCollectionLoginHref("abc123", 17),
+			"https://cap.so",
+		);
+		expect(url.pathname).toBe("/login");
+		expect(url.searchParams.getAll("next")).toEqual(["/c/abc123?page=17"]);
 	});
 
 	it("resolves public folder before public space on id collisions", () => {

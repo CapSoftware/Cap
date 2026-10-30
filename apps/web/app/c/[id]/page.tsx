@@ -24,6 +24,7 @@ import {
 } from "@/lib/public-collections";
 import {
 	getPublicCollectionHref,
+	getPublicCollectionLoginHref,
 	parsePublicCollectionPage,
 } from "@/lib/public-collections-policy";
 import type { SharePageBranding } from "@/lib/share-branding";
@@ -118,7 +119,10 @@ export default async function PublicCollectionPage(
 				description={
 					<>
 						The owner has restricted access. Please{" "}
-						<Link href="/login" className="text-gray-12 underline">
+						<Link
+							href={getPublicCollectionLoginHref(params.id, page)}
+							className="text-gray-12 underline"
+						>
 							sign in
 						</Link>{" "}
 						with an authorized email address to view.
