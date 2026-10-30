@@ -472,6 +472,7 @@ impl VideoSourceConfig {
         self.video_info.fps().max(1)
     }
 }
+
 pub struct VideoSource {
     video_info: VideoInfo,
     ctrl_tx: std::sync::mpsc::SyncSender<VideoControl>,
