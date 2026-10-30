@@ -19,6 +19,7 @@ import {
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
+import { useCapSelectionShortcuts } from "@/hooks/use-cap-selection-shortcuts";
 import {
 	type SeededThumbnails,
 	SeededThumbnailsProvider,
@@ -166,6 +167,11 @@ export const SharedCaps = ({
 	const canManageCurrentSharedCollection = spaceData
 		? canManageCurrentSpace
 		: canManageCurrentOrganization;
+	useCapSelectionShortcuts({
+		enabled: canManageCurrentSharedCollection,
+		items: data,
+		setSelected: setSelectedCaps,
+	});
 	const moveLocation = spaceData
 		? ({ type: "space", spaceId } as const)
 		: ({ type: "organization" } as const);
