@@ -737,7 +737,7 @@ impl WindowsFragmentedM4SCameraMuxer {
         let mut updated = false;
 
         let desired_pixel_format = match frame.pixel_format {
-            cap_camera_windows::PixelFormat::UYVY422 => Pixel::YUYV422,
+            cap_camera_windows::PixelFormat::UYVY422 => Pixel::UYVY422,
             _ => self.video_config.pixel_format,
         };
 

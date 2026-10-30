@@ -1334,19 +1334,6 @@ fn convert_uyvy_to_yuyv_scalar(src: &[u8], dst: &mut [u8], len: usize) {
     }
 }
 
-fn convert_uyvy_to_yuyv(
-    src: &[u8],
-    width: u32,
-    height: u32,
-    src_stride: usize,
-    flip: bool,
-) -> Vec<u8> {
-    let total_bytes = (width * height * 2) as usize;
-    let mut dst = vec![0u8; total_bytes];
-    convert_uyvy_to_yuyv_into(src, &mut dst, width, height, src_stride, flip);
-    dst
-}
-
 pub(crate) fn camera_frame_to_ffmpeg(
     frame: &NativeCameraFrame,
     mjpeg_decoder: &mut MjpegDecoder,
@@ -1393,37 +1380,19 @@ pub(crate) fn camera_frame_to_ffmpeg(
             )
         })?;
 
-    let converted_data_storage;
-    let (final_data, final_format): (&[u8], ffmpeg::format::Pixel) =
-        if frame.pixel_format == cap_camera_windows::PixelFormat::UYVY422 {
-            converted_data_storage = convert_uyvy_to_yuyv(
-                data,
-                frame.width,
-                frame.height,
-                layout.primary_stride,
-                frame.is_bottom_up,
-            );
-            (
-                converted_data_storage.as_slice(),
-                ffmpeg::format::Pixel::YUYV422,
-            )
-        } else {
-            (data, ffmpeg_format)
-        };
-
-    let mut ffmpeg_frame = ffmpeg::frame::Video::new(final_format, frame.width, frame.height);
-    let flip = frame.is_bottom_up && frame.pixel_format != cap_camera_windows::PixelFormat::UYVY422;
+    let mut ffmpeg_frame = ffmpeg::frame::Video::new(ffmpeg_format, frame.width, frame.height);
+    let flip = frame.is_bottom_up;
 
     match frame.pixel_format {
         cap_camera_windows::PixelFormat::NV12 => {
             let uv_height = height / 2;
             let y_size = layout.primary_stride * height;
             let uv_size = layout.secondary_stride * uv_height;
-            if final_data.len() >= y_size + uv_size {
+            if data.len() >= y_size + uv_size {
                 let stride_y = ffmpeg_frame.stride(0);
                 let stride_uv = ffmpeg_frame.stride(1);
                 copy_plane(
-                    &final_data[..y_size],
+                    &data[..y_size],
                     ffmpeg_frame.data_mut(0),
                     width,
                     height,
@@ -1432,7 +1401,7 @@ pub(crate) fn camera_frame_to_ffmpeg(
                     flip,
                 );
                 copy_plane(
-                    &final_data[y_size..y_size + uv_size],
+                    &data[y_size..y_size + uv_size],
                     ffmpeg_frame.data_mut(1),
                     width,
                     uv_height,
@@ -1446,11 +1415,11 @@ pub(crate) fn camera_frame_to_ffmpeg(
             let uv_height = height / 2;
             let y_size = layout.primary_stride * height;
             let uv_size = layout.secondary_stride * uv_height;
-            if final_data.len() >= y_size + uv_size {
+            if data.len() >= y_size + uv_size {
                 let stride_y = ffmpeg_frame.stride(0);
                 let stride_uv = ffmpeg_frame.stride(1);
                 copy_plane(
-                    &final_data[..y_size],
+                    &data[..y_size],
                     ffmpeg_frame.data_mut(0),
                     width,
                     height,
@@ -1458,7 +1427,7 @@ pub(crate) fn camera_frame_to_ffmpeg(
                     stride_y,
                     flip,
                 );
-                let uv_data = &final_data[y_size..y_size + uv_size];
+                let uv_data = &data[y_size..y_size + uv_size];
                 let dest = ffmpeg_frame.data_mut(1);
                 for row in 0..uv_height {
                     let src_row = if flip { uv_height - 1 - row } else { row };
@@ -1475,23 +1444,15 @@ pub(crate) fn camera_frame_to_ffmpeg(
         }
         cap_camera_windows::PixelFormat::YUYV422 | cap_camera_windows::PixelFormat::UYVY422 => {
             let row_bytes = width * 2;
-            let size = if frame.pixel_format == cap_camera_windows::PixelFormat::UYVY422 {
-                row_bytes * height
-            } else {
-                layout.primary_stride * height
-            };
-            if final_data.len() >= size {
+            let size = layout.primary_stride * height;
+            if data.len() >= size {
                 let stride = ffmpeg_frame.stride(0);
                 copy_plane(
-                    final_data,
+                    data,
                     ffmpeg_frame.data_mut(0),
                     row_bytes,
                     height,
-                    if frame.pixel_format == cap_camera_windows::PixelFormat::UYVY422 {
-                        row_bytes
-                    } else {
-                        layout.primary_stride
-                    },
+                    layout.primary_stride,
                     stride,
                     flip,
                 );
@@ -1500,10 +1461,10 @@ pub(crate) fn camera_frame_to_ffmpeg(
         cap_camera_windows::PixelFormat::ARGB | cap_camera_windows::PixelFormat::RGB32 => {
             let row_bytes = width * 4;
             let size = layout.primary_stride * height;
-            if final_data.len() >= size {
+            if data.len() >= size {
                 let stride = ffmpeg_frame.stride(0);
                 copy_plane(
-                    final_data,
+                    data,
                     ffmpeg_frame.data_mut(0),
                     row_bytes,
                     height,
@@ -1516,10 +1477,10 @@ pub(crate) fn camera_frame_to_ffmpeg(
         cap_camera_windows::PixelFormat::RGB24 | cap_camera_windows::PixelFormat::BGR24 => {
             let row_bytes = width * 3;
             let size = layout.primary_stride * height;
-            if final_data.len() >= size {
+            if data.len() >= size {
                 let stride = ffmpeg_frame.stride(0);
                 copy_plane(
-                    final_data,
+                    data,
                     ffmpeg_frame.data_mut(0),
                     row_bytes,
                     height,
@@ -1533,12 +1494,12 @@ pub(crate) fn camera_frame_to_ffmpeg(
             let uv_height = height / 2;
             let y_size = layout.primary_stride * height;
             let uv_size = layout.secondary_stride * uv_height;
-            if final_data.len() >= y_size + uv_size * 2 {
+            if data.len() >= y_size + uv_size * 2 {
                 let stride_y = ffmpeg_frame.stride(0);
                 let stride_u = ffmpeg_frame.stride(1);
                 let stride_v = ffmpeg_frame.stride(2);
                 copy_plane(
-                    &final_data[..y_size],
+                    &data[..y_size],
                     ffmpeg_frame.data_mut(0),
                     width,
                     height,
@@ -1547,7 +1508,7 @@ pub(crate) fn camera_frame_to_ffmpeg(
                     flip,
                 );
                 copy_plane(
-                    &final_data[y_size..y_size + uv_size],
+                    &data[y_size..y_size + uv_size],
                     ffmpeg_frame.data_mut(1),
                     width / 2,
                     uv_height,
@@ -1556,7 +1517,7 @@ pub(crate) fn camera_frame_to_ffmpeg(
                     flip,
                 );
                 copy_plane(
-                    &final_data[y_size + uv_size..y_size + uv_size * 2],
+                    &data[y_size + uv_size..y_size + uv_size * 2],
                     ffmpeg_frame.data_mut(2),
                     width / 2,
                     uv_height,
@@ -1570,12 +1531,12 @@ pub(crate) fn camera_frame_to_ffmpeg(
             let uv_height = height / 2;
             let y_size = layout.primary_stride * height;
             let uv_size = layout.secondary_stride * uv_height;
-            if final_data.len() >= y_size + uv_size * 2 {
+            if data.len() >= y_size + uv_size * 2 {
                 let stride_y = ffmpeg_frame.stride(0);
                 let stride_u = ffmpeg_frame.stride(1);
                 let stride_v = ffmpeg_frame.stride(2);
                 copy_plane(
-                    &final_data[..y_size],
+                    &data[..y_size],
                     ffmpeg_frame.data_mut(0),
                     width,
                     height,
@@ -1584,7 +1545,7 @@ pub(crate) fn camera_frame_to_ffmpeg(
                     flip,
                 );
                 copy_plane(
-                    &final_data[y_size + uv_size..y_size + uv_size * 2],
+                    &data[y_size + uv_size..y_size + uv_size * 2],
                     ffmpeg_frame.data_mut(1),
                     width / 2,
                     uv_height,
@@ -1593,7 +1554,7 @@ pub(crate) fn camera_frame_to_ffmpeg(
                     flip,
                 );
                 copy_plane(
-                    &final_data[y_size..y_size + uv_size],
+                    &data[y_size..y_size + uv_size],
                     ffmpeg_frame.data_mut(2),
                     width / 2,
                     uv_height,

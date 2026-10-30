@@ -775,11 +775,11 @@ impl MediaFoundationDecoder {
         let uv_size = (y_stride * uv_height) as usize;
         let total_size = y_size + uv_size;
 
-        let mut data = vec![0u8; total_size];
-        unsafe {
-            std::ptr::copy_nonoverlapping(mapped.pData as *const u8, data.as_mut_ptr(), total_size);
+        let data = unsafe {
+            let data = std::slice::from_raw_parts(mapped.pData as *const u8, total_size).to_vec();
             self.d3d11_context.Unmap(staging, 0);
-        }
+            data
+        };
 
         Ok(NV12Data {
             data: Arc::new(data),
