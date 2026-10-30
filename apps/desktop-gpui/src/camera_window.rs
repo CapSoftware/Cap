@@ -1594,6 +1594,70 @@ struct BlurBridge {
     _pump: gpui::Task<()>,
 }
 
+#[cfg(target_os = "linux")]
+struct X11CameraDrag {
+    connection: x11rb::rust_connection::RustConnection,
+    window_id: u32,
+    root: u32,
+    pointer_origin: (i16, i16),
+    window_origin: (i16, i16),
+}
+
+#[cfg(target_os = "linux")]
+impl X11CameraDrag {
+    fn begin(window: &Window) -> anyhow::Result<Option<Self>> {
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        use x11rb::protocol::xproto::ConnectionExt as _;
+
+        let window_id = match HasWindowHandle::window_handle(window)?.as_raw() {
+            RawWindowHandle::Xlib(handle) => u32::try_from(handle.window)?,
+            RawWindowHandle::Xcb(handle) => handle.window.get(),
+            _ => return Ok(None),
+        };
+        let (connection, _) = x11rb::connect(None)?;
+        if !connection
+            .get_window_attributes(window_id)?
+            .reply()?
+            .override_redirect
+        {
+            return Ok(None);
+        }
+        let root = connection.get_geometry(window_id)?.reply()?.root;
+        let origin = connection
+            .translate_coordinates(window_id, root, 0, 0)?
+            .reply()?;
+        let pointer = connection.query_pointer(root)?.reply()?;
+        anyhow::ensure!(
+            origin.same_screen && pointer.same_screen,
+            "Camera drag crossed X11 screens"
+        );
+        Ok(Some(Self {
+            connection,
+            window_id,
+            root,
+            pointer_origin: (pointer.root_x, pointer.root_y),
+            window_origin: (origin.dst_x, origin.dst_y),
+        }))
+    }
+
+    fn update(&self) -> anyhow::Result<()> {
+        use x11rb::connection::Connection as _;
+        use x11rb::protocol::xproto::{ConfigureWindowAux, ConnectionExt as _};
+
+        let pointer = self.connection.query_pointer(self.root)?.reply()?;
+        anyhow::ensure!(pointer.same_screen, "Camera drag crossed X11 screens");
+        let x = i32::from(self.window_origin.0) + i32::from(pointer.root_x)
+            - i32::from(self.pointer_origin.0);
+        let y = i32::from(self.window_origin.1) + i32::from(pointer.root_y)
+            - i32::from(self.pointer_origin.1);
+        self.connection
+            .configure_window(self.window_id, &ConfigureWindowAux::new().x(x).y(y))?
+            .check()?;
+        self.connection.flush()?;
+        Ok(())
+    }
+}
+
 pub struct CameraWindow {
     theme: Theme,
     state: CameraWindowState,
@@ -1602,6 +1666,8 @@ pub struct CameraWindow {
     size_generation: Arc<AtomicU64>,
     chrome_visible: bool,
     resizing: Option<ResizeDrag>,
+    #[cfg(target_os = "linux")]
+    dragging: Option<X11CameraDrag>,
     hovered_handle: Option<ResizeCorner>,
     #[cfg(target_os = "macos")]
     convert: Option<ConvertBridge>,
@@ -1828,6 +1894,8 @@ impl CameraWindow {
             size_generation: Arc::new(AtomicU64::new(0)),
             chrome_visible: false,
             resizing: None,
+            #[cfg(target_os = "linux")]
+            dragging: None,
             hovered_handle: None,
             #[cfg(target_os = "macos")]
             convert: None,
@@ -2832,6 +2900,10 @@ impl CameraWindow {
 impl Render for CameraWindow {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let resizing = self.resizing.is_some();
+        #[cfg(target_os = "linux")]
+        let dragging = self.dragging.is_some();
+        #[cfg(not(target_os = "linux"))]
+        let dragging = false;
 
         div()
             .id("camera-root")
@@ -2858,13 +2930,29 @@ impl Render for CameraWindow {
             }))
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|this, _, window, _| {
+                cx.listener(|this, _, window, cx| {
                     if this.resizing.is_none() && !this.inline {
+                        #[cfg(target_os = "linux")]
+                        match X11CameraDrag::begin(window) {
+                            Ok(Some(drag)) => {
+                                // X11 popup windows bypass the window manager, so _NET_WM_MOVERESIZE cannot move them.
+                                this.dragging = Some(drag);
+                                cx.notify();
+                                return;
+                            }
+                            Ok(None) => {}
+                            Err(error) => {
+                                tracing::warn!(%error, "Could not start camera drag");
+                                return;
+                            }
+                        }
+                        #[cfg(not(target_os = "linux"))]
+                        let _ = cx;
                         window.start_window_move();
                     }
                 }),
             )
-            .when(resizing, |this| {
+            .when(resizing || dragging, |this| {
                 let move_camera = cx.entity().downgrade();
                 let up_camera = cx.entity().downgrade();
                 this.child(gpui::canvas(
@@ -2877,6 +2965,18 @@ impl Render for CameraWindow {
                             }
                             camera
                                 .update(cx, |this, cx| {
+                                    #[cfg(target_os = "linux")]
+                                    if let Some(drag) = &this.dragging {
+                                        if !event.dragging() {
+                                            this.dragging = None;
+                                            cx.notify();
+                                        } else if let Err(error) = drag.update() {
+                                            tracing::warn!(%error, "Could not move camera window");
+                                            this.dragging = None;
+                                            cx.notify();
+                                        }
+                                        return;
+                                    }
                                     if event.dragging() {
                                         this.handle_resize_move(event, window, cx);
                                     } else {
@@ -2892,7 +2992,15 @@ impl Render for CameraWindow {
                             {
                                 return;
                             }
-                            camera.update(cx, |this, cx| this.end_resize(cx)).ok();
+                            camera
+                                .update(cx, |this, cx| {
+                                    #[cfg(target_os = "linux")]
+                                    if this.dragging.take().is_some() {
+                                        cx.notify();
+                                    }
+                                    this.end_resize(cx);
+                                })
+                                .ok();
                         });
                     },
                 ))
