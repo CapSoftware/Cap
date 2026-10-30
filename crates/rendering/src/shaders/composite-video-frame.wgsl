@@ -426,7 +426,7 @@ fn cropped_sample_uv(uv: vec2<f32>, crop_bounds_uv: vec4<f32>) -> vec2<f32> {
     }
 
     let crop_size = crop_bounds_uv.zw - crop_bounds_uv.xy;
-    var cropped_uv = sample_uv * crop_size + crop_bounds_uv.xy;
+    let cropped_uv = sample_uv * crop_size + crop_bounds_uv.xy;
 
     let texel_offset = 1.0 / uniforms.frame_size;
     let safe_min = crop_bounds_uv.xy + texel_offset;
