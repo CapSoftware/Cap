@@ -1283,11 +1283,18 @@ test("choosing Camera mode picks a camera so Start stays available", async () =>
 		const panel = frameWithUrl(targetPage, "popup.html");
 		if (!panel) throw new Error("recorder panel missing");
 
-		await panel
-			.getByRole("combobox")
-			.filter({ hasText: /Full Screen/ })
-			.click();
-		await panel.getByRole("option", { name: "Camera only" }).click();
+		// On a loaded machine the menu can close while the panel resizes, so
+		// reopen it until the mode actually reads Camera.
+		const modeSelect = panel.getByRole("combobox").first();
+		await expect(async () => {
+			if (!(await modeSelect.textContent())?.includes("Camera")) {
+				await modeSelect.click({ timeout: 2_000 });
+				await panel
+					.getByRole("option", { name: "Camera only" })
+					.click({ timeout: 2_000 });
+			}
+			await expect(modeSelect).toContainText("Camera", { timeout: 1_000 });
+		}).toPass({ timeout: 30_000 });
 
 		await expect(
 			panel.getByRole("button", { name: "Start recording" }),
