@@ -93,12 +93,25 @@ impl AsyncConverterPool {
         .expect("Factory using pre-created converter should not fail")
     }
 
+    /// On Windows, D3D11 converters are shared across workers and their textures are reused
+    /// by every conversion. External texture consumers must not read them while the pool is
+    /// converting.
     pub fn from_config(
         conversion_config: ConversionConfig,
         pool_config: ConverterPoolConfig,
     ) -> Result<Self, ConvertError> {
         let first_converter = create_converter(conversion_config.clone())?;
         let converter_name = first_converter.name().to_string();
+        let share_converter = {
+            #[cfg(target_os = "windows")]
+            {
+                first_converter.backend() == crate::ConverterBackend::D3D11
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                false
+            }
+        };
 
         let frame_pool = if pool_config.frame_pool_capacity > 0 {
             Some(VideoFramePool::new(
@@ -113,7 +126,7 @@ impl AsyncConverterPool {
 
         Self::new_with_factory(
             move |worker_id| {
-                if worker_id == 0 {
+                if worker_id == 0 || share_converter {
                     Ok(Arc::clone(&first_converter))
                 } else {
                     create_converter(conversion_config.clone())

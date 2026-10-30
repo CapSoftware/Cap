@@ -4,17 +4,19 @@ use super::core::{
 };
 use super::frame_pacing::{FramePacer, Paced};
 use super::mjpeg::MjpegDecoder;
-use super::win::reference_video_frame;
+use super::win::{duration_to_timespan, reference_video_frame};
 use crate::{
     AudioFrame, AudioMuxer, Muxer, SharedPauseState, TaskPool, VideoMuxer,
+    capture_pipeline::EncoderPreferences,
     output_pipeline::{NativeCameraFrame, camera_frame_to_ffmpeg},
     screen_capture,
 };
 use anyhow::{Context, anyhow};
 use cap_enc_ffmpeg::h264::{H264EncoderBuilder, H264Preset};
 use cap_enc_ffmpeg::segmented_stream::{
-    DiskSpaceCallback, SegmentedVideoEncoder, SegmentedVideoEncoderConfig,
+    SegmentCompletedEvent, SegmentedPacketMuxer, SegmentedVideoEncoder, SegmentedVideoEncoderConfig,
 };
+use cap_enc_mediafoundation::H264Encoder;
 use cap_media_info::{AudioInfo, Pixel, VideoInfo};
 use std::{
     path::PathBuf,
@@ -27,6 +29,10 @@ use std::{
     time::Duration,
 };
 use tracing::*;
+use windows::{
+    Graphics::SizeInt32,
+    Win32::Graphics::{Direct3D11::ID3D11Device, Dxgi::Common::DXGI_FORMAT},
+};
 
 const DEFAULT_MUXER_BUFFER_SIZE: usize = 240;
 
@@ -132,14 +138,9 @@ impl FinishableEncoderState for EncoderState {
     }
 
     fn finish_encoder(&self, timestamp: Duration, finish_label: &str) -> anyhow::Result<()> {
-        match self.encoder.lock() {
-            Ok(mut encoder) => encoder
-                .finish_with_timestamp(timestamp)
-                .map_err(|error| anyhow!("{finish_label}: {error:#}")),
-            Err(_) => Err(anyhow!(
-                "{finish_label}: encoder mutex poisoned - recording may be corrupt or incomplete"
-            )),
-        }
+        self.backend
+            .finish_with_timestamp(timestamp)
+            .map_err(|error| anyhow!("{finish_label}: {error:#}"))
     }
 }
 
@@ -162,6 +163,16 @@ impl FinishableEncoderState for CameraEncoderState {
             Err(_) => Err(anyhow!(
                 "{finish_label}: encoder mutex poisoned - recording may be corrupt or incomplete"
             )),
+        }
+    }
+}
+
+fn normalize_timestamp(ts: Duration, first: &mut Option<Duration>) -> Duration {
+    match *first {
+        Some(first_ts) => ts.checked_sub(first_ts).unwrap_or(Duration::ZERO),
+        None => {
+            *first = Some(ts);
+            Duration::ZERO
         }
     }
 }
@@ -196,8 +207,34 @@ fn finish_segmented_encoder_impl(
 
 struct EncoderState {
     video_tx: SyncSender<Option<(screen_capture::ScreenFrame, Duration)>>,
-    encoder: Arc<Mutex<SegmentedVideoEncoder>>,
+    backend: EncoderBackend,
     encoder_handle: Option<JoinHandle<anyhow::Result<()>>>,
+}
+
+enum EncoderBackend {
+    Ffmpeg(Arc<Mutex<SegmentedVideoEncoder>>),
+    MediaFoundation(Arc<Mutex<SegmentedPacketMuxer>>),
+}
+
+impl EncoderBackend {
+    fn finish_with_timestamp(&self, timestamp: Duration) -> anyhow::Result<()> {
+        match self {
+            Self::Ffmpeg(encoder) => match encoder.lock() {
+                Ok(mut encoder) => encoder
+                    .finish_with_timestamp(timestamp)
+                    .map_err(|error| anyhow!("{error:#}")),
+                Err(_) => Err(anyhow!(
+                    "encoder mutex poisoned - recording may be corrupt or incomplete"
+                )),
+            },
+            Self::MediaFoundation(muxer) => match muxer.lock() {
+                Ok(mut muxer) => muxer.finish().map_err(|error| anyhow!("{error:#}")),
+                Err(_) => Err(anyhow!(
+                    "muxer mutex poisoned - recording may be corrupt or incomplete"
+                )),
+            },
+        }
+    }
 }
 
 pub struct WindowsFragmentedM4SMuxer {
@@ -208,13 +245,14 @@ pub struct WindowsFragmentedM4SMuxer {
     preset: H264Preset,
     bpp: f32,
     output_size: Option<(u32, u32)>,
+    d3d_device: Option<ID3D11Device>,
+    pixel_format: Option<DXGI_FORMAT>,
+    encoder_preferences: EncoderPreferences,
     state: Option<EncoderState>,
     pause: SharedPauseState,
     frame_drops: FrameDropTracker,
     started: bool,
-    disk_space_callback: Option<DiskSpaceCallback>,
-    segment_tx:
-        Option<std::sync::mpsc::Sender<cap_enc_ffmpeg::segmented_stream::SegmentCompletedEvent>>,
+    segment_tx: Option<std::sync::mpsc::Sender<SegmentCompletedEvent>>,
     health_tx: SharedHealthSender,
 }
 
@@ -225,9 +263,10 @@ pub struct WindowsFragmentedM4SMuxerConfig {
     pub bpp: f32,
     pub output_size: Option<(u32, u32)>,
     pub shared_pause_state: Option<SharedPauseState>,
-    pub disk_space_callback: Option<DiskSpaceCallback>,
-    pub segment_tx:
-        Option<std::sync::mpsc::Sender<cap_enc_ffmpeg::segmented_stream::SegmentCompletedEvent>>,
+    pub d3d_device: Option<ID3D11Device>,
+    pub pixel_format: Option<DXGI_FORMAT>,
+    pub encoder_preferences: EncoderPreferences,
+    pub segment_tx: Option<std::sync::mpsc::Sender<SegmentCompletedEvent>>,
 }
 
 impl Default for WindowsFragmentedM4SMuxerConfig {
@@ -239,7 +278,9 @@ impl Default for WindowsFragmentedM4SMuxerConfig {
             bpp: H264EncoderBuilder::QUALITY_BPP,
             output_size: None,
             shared_pause_state: None,
-            disk_space_callback: None,
+            d3d_device: None,
+            pixel_format: None,
+            encoder_preferences: EncoderPreferences::new(),
             segment_tx: None,
         }
     }
@@ -277,6 +318,9 @@ impl Muxer for WindowsFragmentedM4SMuxer {
             preset: config.preset,
             bpp: config.bpp,
             output_size: config.output_size,
+            d3d_device: config.d3d_device,
+            pixel_format: config.pixel_format,
+            encoder_preferences: config.encoder_preferences,
             state: None,
             pause,
             frame_drops: FrameDropTracker::new(
@@ -284,7 +328,6 @@ impl Muxer for WindowsFragmentedM4SMuxer {
                 "muxer:windows-fragmented",
             ),
             started: false,
-            disk_space_callback: config.disk_space_callback,
             segment_tx: config.segment_tx,
             health_tx: SharedHealthSender::new(),
         };
@@ -325,6 +368,10 @@ impl Muxer for WindowsFragmentedM4SMuxer {
 
 impl WindowsFragmentedM4SMuxer {
     fn start_encoder(&mut self) -> anyhow::Result<()> {
+        if self.start_media_foundation_encoder()? {
+            return Ok(());
+        }
+
         let buffer_size = get_muxer_buffer_size();
         debug!(
             buffer_size = buffer_size,
@@ -349,9 +396,6 @@ impl WindowsFragmentedM4SMuxer {
             encoder_config,
             self.timed_fragments,
         )?;
-        if let Some(callback) = &self.disk_space_callback {
-            encoder.set_disk_space_callback(callback.clone());
-        }
         if let Some(tx) = self.segment_tx.take() {
             encoder.set_segment_callback(tx);
         }
@@ -379,19 +423,11 @@ impl WindowsFragmentedM4SMuxer {
                 let mut slow_encode_count = 0u32;
                 let mut total_frames = 0u64;
                 let mut duplicated_frames = 0u64;
+                let mut readback_frames = 0u64;
+                let mut readback_misses = 0u64;
                 let mut disk_monitor = DiskSpaceMonitor::new();
                 let mut disk_exhausted = false;
                 const SLOW_THRESHOLD_MS: u128 = 5;
-
-                let normalize_timestamp =
-                    |ts: Duration, first: &mut Option<Duration>| -> Duration {
-                        if let Some(first_ts) = *first {
-                            ts.checked_sub(first_ts).unwrap_or(Duration::ZERO)
-                        } else {
-                            *first = Some(ts);
-                            Duration::ZERO
-                        }
-                    };
 
                 let encode_frame_fn = |ffmpeg_frame: ffmpeg::frame::Video,
                                        timestamp: Duration,
@@ -444,83 +480,112 @@ impl WindowsFragmentedM4SMuxer {
                         break;
                     }
 
-                    let convert_start = std::time::Instant::now();
-
-                    let (ffmpeg_frame, timestamp) = match pacer.next(&video_rx, &pause_flag) {
-                        Paced::Frame(frame, ts) => match frame.as_ffmpeg() {
-                            Ok(f) => {
-                                last_ffmpeg_frame = Some(reference_video_frame(&f));
-                                (Some(f), ts)
-                            }
-                            Err(e) => {
-                                warn!("Failed to convert D3D11 frame: {e:?}");
-                                duplicated_frames += 1;
-                                (last_ffmpeg_frame.as_ref().map(reference_video_frame), ts)
-                            }
-                        },
-                        Paced::Repeat(ts) => {
-                            let Some(f) = &last_ffmpeg_frame else {
-                                continue;
-                            };
-                            duplicated_frames += 1;
-                            (Some(reference_video_frame(f)), ts)
-                        }
-                        Paced::End => {
-                            let mut drained = 0u64;
-                            let drain_start = std::time::Instant::now();
-                            let drain_timeout = Duration::from_millis(500);
-
-                            loop {
-                                match video_rx.recv_timeout(Duration::from_millis(10)) {
-                                    Ok(Some((frame, ts))) => {
-                                        if let Ok(f) = frame.as_ffmpeg() {
-                                            let normalized_ts =
-                                                normalize_timestamp(ts, &mut first_timestamp);
-                                            if let Err(e) = encode_frame_fn(
-                                                f,
-                                                normalized_ts,
-                                                &mut slow_encode_count,
-                                                &mut total_frames,
-                                                &encoder_clone,
-                                            ) {
-                                                warn!("Failed to encode drained frame: {e}");
-                                                break;
+                    let (ffmpeg_frame, timestamp, readback_elapsed) =
+                        match pacer.next(&video_rx, &pause_flag) {
+                            Paced::Frame(frame, ts) => {
+                                let readback_start = std::time::Instant::now();
+                                let ffmpeg_frame = frame.as_ffmpeg();
+                                let readback_elapsed = readback_start.elapsed();
+                                match ffmpeg_frame {
+                                    Ok(f) => {
+                                        last_ffmpeg_frame = Some(reference_video_frame(&f));
+                                        (Some(f), ts, Some(readback_elapsed))
+                                    }
+                                    Err(e) => {
+                                        let readback_miss = matches!(
+                                            e,
+                                            scap_ffmpeg::AsFFmpegError::NotReady
+                                                | scap_ffmpeg::AsFFmpegError::StagingBusy
+                                        );
+                                        if !readback_miss {
+                                            warn!("Failed to convert D3D11 frame: {e:?}");
+                                        } else {
+                                            readback_misses += 1;
+                                            if readback_misses == 1
+                                                || readback_misses.is_multiple_of(90)
+                                            {
+                                                warn!(
+                                                    readback_misses,
+                                                    "Screen readback is missing deadlines; the encoder is duplicating the last frame"
+                                                );
                                             }
-                                            drained += 1;
                                         }
+                                        duplicated_frames += 1;
+                                        (
+                                            last_ffmpeg_frame.as_ref().map(reference_video_frame),
+                                            ts,
+                                            Some(readback_elapsed),
+                                        )
                                     }
-                                    Ok(None) => break,
-                                    Err(RecvTimeoutError::Timeout) => {
-                                        if drain_start.elapsed() > drain_timeout {
-                                            break;
-                                        }
-                                    }
-                                    Err(RecvTimeoutError::Disconnected) => break,
                                 }
                             }
-
-                            if drained > 0 {
-                                debug!(drained = drained, "Drained remaining frames before exit");
+                            Paced::Repeat(ts) => {
+                                let Some(f) = &last_ffmpeg_frame else {
+                                    continue;
+                                };
+                                duplicated_frames += 1;
+                                (Some(reference_video_frame(f)), ts, None)
                             }
-                            break;
-                        }
-                    };
+                            Paced::End => {
+                                let mut drained = 0u64;
+                                let drain_start = std::time::Instant::now();
+                                let drain_timeout = Duration::from_millis(500);
 
-                    let convert_elapsed_ms = convert_start.elapsed().as_millis();
+                                loop {
+                                    match video_rx.recv_timeout(Duration::from_millis(10)) {
+                                        Ok(Some((frame, ts))) => {
+                                            if let Ok(f) = frame.as_ffmpeg() {
+                                                let normalized_ts =
+                                                    normalize_timestamp(ts, &mut first_timestamp);
+                                                if let Err(e) = encode_frame_fn(
+                                                    f,
+                                                    normalized_ts,
+                                                    &mut slow_encode_count,
+                                                    &mut total_frames,
+                                                    &encoder_clone,
+                                                ) {
+                                                    warn!("Failed to encode drained frame: {e}");
+                                                    break;
+                                                }
+                                                drained += 1;
+                                            }
+                                        }
+                                        Ok(None) => break,
+                                        Err(RecvTimeoutError::Timeout) => {
+                                            if drain_start.elapsed() > drain_timeout {
+                                                break;
+                                            }
+                                        }
+                                        Err(RecvTimeoutError::Disconnected) => break,
+                                    }
+                                }
+
+                                if drained > 0 {
+                                    debug!(
+                                        drained = drained,
+                                        "Drained remaining frames before exit"
+                                    );
+                                }
+                                break;
+                            }
+                        };
 
                     let Some(ffmpeg_frame) = ffmpeg_frame else {
                         continue;
                     };
 
-                    if convert_elapsed_ms > SLOW_THRESHOLD_MS {
-                        slow_convert_count += 1;
-                        if slow_convert_count <= 5 || slow_convert_count.is_multiple_of(100) {
-                            debug!(
-                                elapsed_ms = convert_elapsed_ms,
-                                count = slow_convert_count,
-                                "D3D11 frame conversion exceeded {}ms threshold",
-                                SLOW_THRESHOLD_MS
-                            );
+                    if let Some(readback_elapsed) = readback_elapsed {
+                        readback_frames += 1;
+                        if readback_elapsed.as_millis() > SLOW_THRESHOLD_MS {
+                            slow_convert_count += 1;
+                            if slow_convert_count <= 5 || slow_convert_count.is_multiple_of(100) {
+                                debug!(
+                                    elapsed_ms = readback_elapsed.as_millis(),
+                                    count = slow_convert_count,
+                                    "D3D11 frame readback exceeded {}ms threshold",
+                                    SLOW_THRESHOLD_MS
+                                );
+                            }
                         }
                     }
 
@@ -538,15 +603,18 @@ impl WindowsFragmentedM4SMuxer {
                 }
 
                 if total_frames > 0 {
+                    let readback_slow_pct = if readback_frames > 0 {
+                        100.0 * slow_convert_count as f64 / readback_frames as f64
+                    } else {
+                        0.0
+                    };
                     debug!(
                         total_frames = total_frames,
                         duplicated_frames = duplicated_frames,
-                        slow_converts = slow_convert_count,
+                        slow_readbacks = slow_convert_count,
+                        readback_frames = readback_frames,
                         slow_encodes = slow_encode_count,
-                        slow_convert_pct = format!(
-                            "{:.1}%",
-                            100.0 * slow_convert_count as f64 / total_frames as f64
-                        ),
+                        slow_readback_pct = format!("{readback_slow_pct:.1}%"),
                         slow_encode_pct = format!(
                             "{:.1}%",
                             100.0 * slow_encode_count as f64 / total_frames as f64
@@ -564,7 +632,7 @@ impl WindowsFragmentedM4SMuxer {
 
         self.state = Some(EncoderState {
             video_tx,
-            encoder,
+            backend: EncoderBackend::Ffmpeg(encoder),
             encoder_handle: Some(encoder_handle),
         });
 
@@ -576,6 +644,241 @@ impl WindowsFragmentedM4SMuxer {
         );
 
         Ok(())
+    }
+
+    fn start_media_foundation_encoder(&mut self) -> anyhow::Result<bool> {
+        let (Some(d3d_device), Some(pixel_format)) = (self.d3d_device.clone(), self.pixel_format)
+        else {
+            return Ok(false);
+        };
+
+        if self.encoder_preferences.should_force_software()
+            || matches!(
+                cap_frame_converter::detect_primary_gpu().map(|gpu| gpu.vendor),
+                Some(cap_frame_converter::GpuVendor::Amd)
+            )
+        {
+            return Ok(false);
+        }
+
+        let (video_tx, video_rx) = sync_channel::<Option<(screen_capture::ScreenFrame, Duration)>>(
+            get_muxer_buffer_size(),
+        );
+        let (ready_tx, ready_rx) =
+            sync_channel::<Result<Arc<Mutex<SegmentedPacketMuxer>>, String>>(1);
+
+        let video_config = self.video_config;
+        let output_size = self.output_size;
+        let bpp = self.bpp;
+        let segment_duration = self.segment_duration;
+        let timed_fragments = self.timed_fragments;
+        let base_path = self.base_path.clone();
+        let pause_flag = self.pause.flag();
+        let segment_tx = self.segment_tx.clone();
+        let encoder_preferences = self.encoder_preferences.clone();
+        let health_tx = self.health_tx.clone();
+
+        let encoder_handle = std::thread::Builder::new()
+            .name("win-m4s-mf-encoder".to_string())
+            .spawn(move || {
+                cap_mediafoundation_utils::thread_init();
+
+                let disk_base_path = base_path.clone();
+                let setup =
+                    (|| -> anyhow::Result<(H264Encoder, Arc<Mutex<SegmentedPacketMuxer>>)> {
+                        let input_size = SizeInt32 {
+                            Width: video_config.width as i32,
+                            Height: video_config.height as i32,
+                        };
+                        let (bitrate_width, bitrate_height) =
+                            output_size.unwrap_or((video_config.width, video_config.height));
+                        let output_size = output_size
+                            .map(|(width, height)| SizeInt32 {
+                                Width: width as i32,
+                                Height: height as i32,
+                            })
+                            .unwrap_or(input_size);
+                        let frame_rate = video_config.fps();
+                        let bitrate = cap_enc_ffmpeg::h264::bitrate_for_bpp(
+                            bitrate_width,
+                            bitrate_height,
+                            video_config.frame_rate,
+                            bpp,
+                        );
+
+                        let encoder = H264Encoder::new_with_scaled_output_and_bitrate(
+                            &d3d_device,
+                            pixel_format,
+                            input_size,
+                            output_size,
+                            frame_rate,
+                            bitrate,
+                        )?;
+                        encoder.validate().map_err(|error| anyhow!("{error}"))?;
+                        let extradata = encoder.sequence_header().ok_or_else(|| {
+                            anyhow!("no H.264 sequence header before the first frame")
+                        })?;
+                        let mut muxer = SegmentedPacketMuxer::new(
+                            base_path,
+                            video_config,
+                            (output_size.Width as u32, output_size.Height as u32),
+                            segment_duration,
+                            timed_fragments,
+                            encoder.bitrate(),
+                            &extradata,
+                        )?;
+                        if let Some(tx) = segment_tx {
+                            muxer.set_segment_callback(tx);
+                        }
+
+                        Ok((encoder, Arc::new(Mutex::new(muxer))))
+                    })();
+
+                let (mut encoder, muxer) = match setup {
+                    Ok(setup) => setup,
+                    Err(error) => {
+                        let _ = ready_tx.send(Err(format!("{error:#}")));
+                        return Ok(());
+                    }
+                };
+
+                if ready_tx.send(Ok(muxer.clone())).is_err() {
+                    return Ok(());
+                }
+
+                let mut pacer = FramePacer::new(video_config.fps());
+                let mut last_frame: Option<screen_capture::ScreenFrame> = None;
+                let mut first_timestamp: Option<Duration> = None;
+                let mut failed_writes = 0u64;
+                let mut disk_monitor = DiskSpaceMonitor::new();
+
+                let result = encoder.run(
+                    Arc::new(AtomicBool::default()),
+                    || loop {
+                        if matches!(
+                            disk_monitor.poll(&disk_base_path, &health_tx),
+                            super::core::DiskSpacePollResult::Exhausted { .. }
+                                | super::core::DiskSpacePollResult::Stopped
+                        ) {
+                            return Ok(None);
+                        }
+
+                        let (texture, timestamp) = match pacer.next(&video_rx, &pause_flag) {
+                            Paced::Frame(frame, timestamp) => {
+                                let texture = frame.texture().clone();
+                                // Keep the frame itself, not just its texture: the capture frame
+                                // owns the surface, and dropping it lets WGC recycle the buffer
+                                // while a repeat is still fed to the encoder.
+                                last_frame = Some(frame);
+                                (texture, timestamp)
+                            }
+                            Paced::Repeat(timestamp) => {
+                                let Some(frame) = &last_frame else {
+                                    continue;
+                                };
+                                (frame.texture().clone(), timestamp)
+                            }
+                            Paced::End => return Ok(None),
+                        };
+                        let normalized = normalize_timestamp(timestamp, &mut first_timestamp);
+
+                        return Ok(Some((texture, duration_to_timespan(normalized))));
+                    },
+                    |sample| {
+                        let packet = match cap_mediafoundation_ffmpeg::sample_to_packet(
+                            &sample,
+                            cap_mediafoundation_ffmpeg::MF_TIMEBASE,
+                            0,
+                        ) {
+                            Ok(packet) => packet,
+                            Err(error) => {
+                                warn!("Failed to convert Media Foundation sample: {error}");
+                                return Ok(());
+                            }
+                        };
+
+                        let Ok(mut muxer) = muxer.lock() else {
+                            return Ok(());
+                        };
+                        if let Err(error) =
+                            muxer.write_packet(packet, cap_mediafoundation_ffmpeg::MF_TIMEBASE)
+                        {
+                            failed_writes += 1;
+                            if failed_writes == 1 || failed_writes.is_multiple_of(300) {
+                                warn!(
+                                    failed_writes,
+                                    "Failed to write Media Foundation sample: {error}"
+                                );
+                            }
+                        }
+                        Ok(())
+                    },
+                );
+
+                match result {
+                    Ok(status) => {
+                        debug!(
+                            frames = status.total_frames_encoded,
+                            "Windows M4S Media Foundation encoder finished"
+                        );
+                        Ok(())
+                    }
+                    Err(error) => {
+                        if error.should_fallback() {
+                            encoder_preferences.force_software_only();
+                        }
+                        error!(
+                            "Media Foundation encoder stopped; the rest of the video stream is dropped: {error}"
+                        );
+                        health_tx.emit(super::core::PipelineHealthEvent::MuxerCrashed {
+                            reason: format!("Media Foundation encoder stopped: {error}"),
+                        });
+
+                        // Keep the channel connected while the recording runs: a closed channel
+                        // makes send_video_frame fail and aborts the whole mux-video task, losing
+                        // audio and the segments already written. Draining lets the pipeline stop
+                        // normally and finish() finalize what exists.
+                        while let Ok(message) = video_rx.recv() {
+                            if message.is_none() {
+                                break;
+                            }
+                        }
+
+                        Err(error.into())
+                    }
+                }
+            })?;
+
+        match ready_rx.recv() {
+            Ok(Ok(muxer)) => {
+                self.state = Some(EncoderState {
+                    video_tx,
+                    backend: EncoderBackend::MediaFoundation(muxer),
+                    encoder_handle: Some(encoder_handle),
+                });
+                self.started = true;
+                info!(
+                    path = %self.base_path.display(),
+                    "Started Windows M4S fragmented video encoder (Media Foundation, texture input)"
+                );
+                Ok(true)
+            }
+            Ok(Err(reason)) => {
+                warn!(
+                    %reason,
+                    "Media Foundation texture encoding unavailable; falling back to FFmpeg"
+                );
+                let _ = encoder_handle.join();
+                Ok(false)
+            }
+            Err(_) => {
+                warn!(
+                    "Media Foundation encoder thread ended before signalling readiness; falling back to FFmpeg"
+                );
+                let _ = encoder_handle.join();
+                Ok(false)
+            }
+        }
     }
 }
 
@@ -629,7 +932,6 @@ pub struct WindowsFragmentedM4SCameraMuxer {
     pause: SharedPauseState,
     frame_drops: FrameDropTracker,
     started: bool,
-    disk_space_callback: Option<DiskSpaceCallback>,
     health_tx: SharedHealthSender,
 }
 
@@ -639,7 +941,6 @@ pub struct WindowsFragmentedM4SCameraMuxerConfig {
     pub bpp: f32,
     pub output_size: Option<(u32, u32)>,
     pub shared_pause_state: Option<SharedPauseState>,
-    pub disk_space_callback: Option<DiskSpaceCallback>,
 }
 
 impl Default for WindowsFragmentedM4SCameraMuxerConfig {
@@ -650,7 +951,6 @@ impl Default for WindowsFragmentedM4SCameraMuxerConfig {
             bpp: H264EncoderBuilder::QUALITY_BPP,
             output_size: None,
             shared_pause_state: None,
-            disk_space_callback: None,
         }
     }
 }
@@ -694,7 +994,6 @@ impl Muxer for WindowsFragmentedM4SCameraMuxer {
                 "muxer:windows-fragmented-camera",
             ),
             started: false,
-            disk_space_callback: config.disk_space_callback,
             health_tx: SharedHealthSender::new(),
         };
 
@@ -794,15 +1093,12 @@ impl WindowsFragmentedM4SCameraMuxer {
             prefer_videotoolbox_hw_input: false,
         };
 
-        let mut encoder = SegmentedVideoEncoder::init_with_timed_fragments(
+        let encoder = SegmentedVideoEncoder::init_with_timed_fragments(
             self.base_path.clone(),
             self.video_config,
             encoder_config,
             true,
         )?;
-        if let Some(callback) = &self.disk_space_callback {
-            encoder.set_disk_space_callback(callback.clone());
-        }
         let encoder = Arc::new(Mutex::new(encoder));
         let encoder_clone = encoder.clone();
 

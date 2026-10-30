@@ -7,7 +7,7 @@ pub use windows_version::WindowsVersion;
 use std::{
     sync::{
         Arc, Condvar, Mutex,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, Ordering},
         mpsc::RecvError,
     },
     time::{Duration, Instant},
@@ -27,7 +27,9 @@ use windows::{
             Direct3D::{D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP},
             Direct3D11::{
                 D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_BOX,
-                D3D11_CPU_ACCESS_READ, D3D11_CREATE_DEVICE_FLAG, D3D11_MAP_READ,
+                D3D11_CPU_ACCESS_READ, D3D11_CPU_ACCESS_WRITE, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+                D3D11_CREATE_DEVICE_FLAG, D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
+                D3D11_MAP_FLAG_DO_NOT_WAIT, D3D11_MAP_READ, D3D11_MAP_WRITE,
                 D3D11_MAPPED_SUBRESOURCE, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC,
                 D3D11_USAGE_DEFAULT, D3D11_USAGE_STAGING, D3D11CreateDevice, ID3D11Device,
                 ID3D11DeviceContext, ID3D11Multithread, ID3D11Texture2D,
@@ -37,7 +39,7 @@ use windows::{
                     DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM,
                     DXGI_SAMPLE_DESC,
                 },
-                DXGI_ERROR_UNSUPPORTED, IDXGIDevice,
+                DXGI_ERROR_UNSUPPORTED, DXGI_ERROR_WAS_STILL_DRAWING, IDXGIDevice,
             },
         },
         System::WinRT::Direct3D11::{
@@ -72,6 +74,10 @@ impl PixelFormat {
 }
 
 const STAGING_POOL_SIZE: usize = 3;
+const STAGING_POOL_LIMIT: usize = STAGING_POOL_SIZE + 1;
+const STAGING_PADDING_ROWS: u32 = 1;
+const READBACK_RETRY_INTERVAL: Duration = Duration::from_micros(100);
+const READBACK_SPIN_BUDGET: Duration = Duration::from_millis(4);
 
 struct CallbackActivity {
     active: Mutex<usize>,
@@ -152,87 +158,267 @@ impl Drop for CallbackActivityGuard {
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum ReadbackError {
+    #[error("D3D11: {0}")]
+    D3D11(#[from] windows::core::Error),
+    #[error("every staging texture is in flight")]
+    StagingBusy,
+    #[error("the GPU did not finish the readback before the deadline")]
+    NotReady,
+    #[error("failed to allocate the frame buffer reference")]
+    FrameBufferAllocation,
+}
+
 struct PooledStagingTexture {
     texture: ID3D11Texture2D,
     width: u32,
     height: u32,
 }
 
+struct StagingPoolInner {
+    free: Vec<PooledStagingTexture>,
+    live: usize,
+}
+
 pub struct StagingTexturePool {
-    textures: Mutex<Vec<PooledStagingTexture>>,
+    inner: Mutex<StagingPoolInner>,
     d3d_device: ID3D11Device,
+    d3d_context: ID3D11DeviceContext,
     pixel_format: PixelFormat,
-    next_index: AtomicUsize,
 }
 
 impl StagingTexturePool {
-    fn new(d3d_device: ID3D11Device, pixel_format: PixelFormat) -> Self {
+    fn new(
+        d3d_device: ID3D11Device,
+        d3d_context: ID3D11DeviceContext,
+        pixel_format: PixelFormat,
+    ) -> Self {
         Self {
-            textures: Mutex::new(Vec::with_capacity(STAGING_POOL_SIZE)),
+            inner: Mutex::new(StagingPoolInner {
+                free: Vec::with_capacity(STAGING_POOL_SIZE),
+                live: 0,
+            }),
             d3d_device,
+            d3d_context,
             pixel_format,
-            next_index: AtomicUsize::new(0),
         }
     }
 
-    fn get_or_create_texture(
-        &self,
-        width: u32,
-        height: u32,
-    ) -> windows::core::Result<ID3D11Texture2D> {
-        let mut textures = self
-            .textures
+    fn acquire(self: &Arc<Self>, width: u32, height: u32) -> Result<StagingLease, ReadbackError> {
+        let mut inner = self
+            .inner
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
 
-        let index = self.next_index.fetch_add(1, Ordering::Relaxed) % STAGING_POOL_SIZE;
-
-        if let Some(pooled) = textures.get(index)
-            && pooled.width == width
-            && pooled.height == height
+        if let Some(index) = inner
+            .free
+            .iter()
+            .position(|pooled| pooled.width == width && pooled.height == height)
         {
-            return Ok(pooled.texture.clone());
-        }
-
-        let texture_desc = D3D11_TEXTURE2D_DESC {
-            Width: width,
-            Height: height,
-            MipLevels: 1,
-            ArraySize: 1,
-            Format: self.pixel_format.as_dxgi(),
-            SampleDesc: DXGI_SAMPLE_DESC {
-                Count: 1,
-                Quality: 0,
-            },
-            Usage: D3D11_USAGE_STAGING,
-            BindFlags: 0,
-            CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
-            MiscFlags: 0,
-        };
-
-        let mut texture = None;
-        unsafe {
-            self.d3d_device
-                .CreateTexture2D(&texture_desc, None, Some(&mut texture))?;
-        };
-
-        let texture = texture.ok_or_else(windows::core::Error::from_win32)?;
-
-        if index < textures.len() {
-            textures[index] = PooledStagingTexture {
-                texture: texture.clone(),
-                width,
-                height,
-            };
-        } else {
-            textures.push(PooledStagingTexture {
-                texture: texture.clone(),
+            let pooled = inner.free.swap_remove(index);
+            return Ok(StagingLease {
+                pool: self.clone(),
+                texture: pooled.texture,
                 width,
                 height,
             });
         }
 
-        Ok(texture)
+        if inner.live >= STAGING_POOL_LIMIT {
+            // A cached texture at another size is idle, so it can be released. Without this a
+            // geometry change can wedge the pool at the limit while the previous frame is still
+            // mapped, and every frame at the new size is dropped.
+            let stale = inner
+                .free
+                .iter()
+                .position(|pooled| pooled.width != width || pooled.height != height)
+                .ok_or(ReadbackError::StagingBusy)?;
+            inner.free.swap_remove(stale);
+            inner.live -= 1;
+        }
+
+        let texture = create_staging_texture(
+            &self.d3d_device,
+            &self.d3d_context,
+            self.pixel_format,
+            width,
+            height,
+        )?;
+        inner.live += 1;
+
+        Ok(StagingLease {
+            pool: self.clone(),
+            texture,
+            width,
+            height,
+        })
+    }
+
+    fn recycle(&self, texture: &ID3D11Texture2D, width: u32, height: u32) {
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        if inner.free.len() < STAGING_POOL_SIZE {
+            inner.free.push(PooledStagingTexture {
+                texture: texture.clone(),
+                width,
+                height,
+            });
+        } else if let Some(slot) = inner
+            .free
+            .iter_mut()
+            .find(|pooled| pooled.width != width || pooled.height != height)
+        {
+            // Capture size changed: keep the cache on the current geometry instead of allocating a
+            // fresh texture per frame while the stale sizes sit unused.
+            *slot = PooledStagingTexture {
+                texture: texture.clone(),
+                width,
+                height,
+            };
+            // The replaced texture is dropped; the recycled one was an outstanding lease, so the
+            // pool now owns one fewer texture.
+            inner.live -= 1;
+        } else {
+            inner.live -= 1;
+        }
+    }
+}
+
+struct StagingLease {
+    pool: Arc<StagingTexturePool>,
+    texture: ID3D11Texture2D,
+    width: u32,
+    height: u32,
+}
+
+impl Drop for StagingLease {
+    fn drop(&mut self) {
+        self.pool.recycle(&self.texture, self.width, self.height);
+    }
+}
+
+fn create_staging_texture(
+    device: &ID3D11Device,
+    context: &ID3D11DeviceContext,
+    pixel_format: PixelFormat,
+    width: u32,
+    height: u32,
+) -> Result<ID3D11Texture2D, ReadbackError> {
+    let texture_desc = D3D11_TEXTURE2D_DESC {
+        Width: width,
+        Height: height + STAGING_PADDING_ROWS,
+        MipLevels: 1,
+        ArraySize: 1,
+        Format: pixel_format.as_dxgi(),
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        Usage: D3D11_USAGE_STAGING,
+        BindFlags: 0,
+        CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32 | D3D11_CPU_ACCESS_WRITE.0 as u32,
+        MiscFlags: 0,
+    };
+
+    let mut texture = None;
+    unsafe {
+        device.CreateTexture2D(&texture_desc, None, Some(&mut texture))?;
+    };
+    let texture = texture.ok_or_else(windows::core::Error::from_win32)?;
+    zero_padding_row(context, &texture, height)?;
+
+    Ok(texture)
+}
+
+// ffmpeg may read up to AV_INPUT_BUFFER_PADDING_SIZE bytes past the last pixel and requires them
+// to be zero. The staging texture carries one extra row for that, zeroed once because copies only
+// ever touch the image rows.
+fn zero_padding_row(
+    context: &ID3D11DeviceContext,
+    texture: &ID3D11Texture2D,
+    image_height: u32,
+) -> Result<(), ReadbackError> {
+    let mut mapped_resource = D3D11_MAPPED_SUBRESOURCE::default();
+    unsafe {
+        context.Map(texture, 0, D3D11_MAP_WRITE, 0, Some(&mut mapped_resource))?;
+
+        let padding = (mapped_resource.pData as *mut u8)
+            .add(mapped_resource.RowPitch as usize * image_height as usize);
+        std::ptr::write_bytes(padding, 0, mapped_resource.RowPitch as usize);
+
+        context.Unmap(texture, 0);
+    };
+
+    Ok(())
+}
+
+pub struct MappedFrame {
+    lease: StagingLease,
+    d3d_context: ID3D11DeviceContext,
+    data: *mut u8,
+    row_pitch: u32,
+    width: u32,
+    height: u32,
+    pixel_format: PixelFormat,
+}
+
+// SAFETY: the mapped staging memory belongs to the GPU resource, not to a thread; the only thread
+// that touches the mapping owns this value, and the driver serializes the context (the capturer
+// enables multithread protection). The AVBuffer built from it may be released on another thread,
+// which only runs `Unmap` and returns the texture to the pool.
+unsafe impl Send for MappedFrame {}
+
+impl std::fmt::Debug for MappedFrame {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MappedFrame")
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .field("row_pitch", &self.row_pitch)
+            .finish()
+    }
+}
+
+impl Drop for MappedFrame {
+    fn drop(&mut self) {
+        unsafe {
+            self.d3d_context.Unmap(&self.lease.texture, 0);
+        }
+    }
+}
+
+impl MappedFrame {
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+
+    pub fn height(&self) -> u32 {
+        self.height
+    }
+
+    pub fn row_pitch(&self) -> u32 {
+        self.row_pitch
+    }
+
+    pub fn pixel_format(&self) -> PixelFormat {
+        self.pixel_format
+    }
+
+    pub fn data_ptr(&self) -> *mut u8 {
+        self.data
+    }
+
+    pub fn data_len(&self) -> usize {
+        self.row_pitch as usize * (self.height as usize + STAGING_PADDING_ROWS as usize)
+    }
+
+    pub fn as_slice(&self) -> &[u8] {
+        unsafe {
+            std::slice::from_raw_parts(self.data, self.height as usize * self.row_pitch as usize)
+        }
     }
 }
 
@@ -296,9 +482,27 @@ fn create_d3d_device_on_pinned_adapter(
 
 fn create_d3d_device_with_warp_fallback() -> windows::core::Result<(ID3D11Device, bool)> {
     let mut device = None;
-    let flags = D3D11_CREATE_DEVICE_FLAG::default();
+    let video_flags = D3D11_CREATE_DEVICE_VIDEO_SUPPORT | D3D11_CREATE_DEVICE_BGRA_SUPPORT;
+    let basic_flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
 
-    match create_d3d_device_on_pinned_adapter(flags, &mut device) {
+    match create_d3d_device_on_pinned_adapter(video_flags, &mut device) {
+        Ok(description) => {
+            tracing::info!(
+                adapter = %description,
+                "scap-direct3d: D3D11 device created on pinned hardware adapter with video support"
+            );
+            let device = device.ok_or_else(windows::core::Error::from_win32)?;
+            return Ok((device, false));
+        }
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "scap-direct3d: video-support device creation failed on pinned adapter, retrying without it"
+            );
+        }
+    }
+
+    match create_d3d_device_on_pinned_adapter(basic_flags, &mut device) {
         Ok(description) => {
             tracing::info!(
                 adapter = %description,
@@ -315,13 +519,13 @@ fn create_d3d_device_with_warp_fallback() -> windows::core::Result<(ID3D11Device
         }
     }
 
-    let result = create_d3d_device_with_type(D3D_DRIVER_TYPE_HARDWARE, flags, &mut device);
+    let result = create_d3d_device_with_type(D3D_DRIVER_TYPE_HARDWARE, basic_flags, &mut device);
 
     match result {
         Ok(()) => Ok((device.ok_or_else(windows::core::Error::from_win32)?, false)),
         Err(e) if e.code() == DXGI_ERROR_UNSUPPORTED => {
             tracing::info!("Hardware D3D11 device unavailable, attempting WARP fallback");
-            create_d3d_device_with_type(D3D_DRIVER_TYPE_WARP, flags, &mut device)?;
+            create_d3d_device_with_type(D3D_DRIVER_TYPE_WARP, basic_flags, &mut device)?;
             Ok((device.ok_or_else(windows::core::Error::from_win32)?, true))
         }
         Err(e) => Err(e),
@@ -565,6 +769,7 @@ impl Capturer {
 
         let staging_pool = Arc::new(StagingTexturePool::new(
             d3d_device.clone(),
+            d3d_context.clone(),
             settings.pixel_format,
         ));
 
@@ -989,82 +1194,255 @@ impl Frame {
         &self.d3d_context
     }
 
-    pub fn as_buffer(&self) -> windows::core::Result<FrameBuffer<'_>> {
-        let staging_texture = self
-            .staging_pool
-            .get_or_create_texture(self.width, self.height)?;
-
-        unsafe {
-            self.d3d_context
-                .CopyResource(&staging_texture, &self.texture);
-        };
-
-        let mut mapped_resource = D3D11_MAPPED_SUBRESOURCE::default();
-        unsafe {
-            self.d3d_context.Map(
-                &staging_texture,
-                0,
-                D3D11_MAP_READ,
-                0,
-                Some(&mut mapped_resource),
-            )?;
-        };
-
-        let data = unsafe {
-            std::slice::from_raw_parts(
-                mapped_resource.pData.cast(),
-                (self.height * mapped_resource.RowPitch) as usize,
-            )
-        };
+    /// Copies the frame into a staging texture and maps it, blocking until the GPU copy is done.
+    /// Use [`Self::map_readback`] on latency-sensitive paths.
+    pub fn as_buffer(&self) -> Result<FrameBuffer<'_>, ReadbackError> {
+        let lease = self.staging_pool.acquire(self.width, self.height)?;
+        self.copy_into_staging(&lease);
+        let mapped = self.map_staging(lease, None)?;
 
         Ok(FrameBuffer {
-            data,
+            mapped,
+            frame: std::marker::PhantomData,
+        })
+    }
+
+    /// Copies the frame into a staging texture and maps it within `budget`. The default polls
+    /// `DO_NOT_WAIT` until the copy completes or the budget expires; the caller can reuse the
+    /// previous frame on `NotReady`. Set `CAP_READBACK_BLOCKING` to block in `Map` instead, which is
+    /// faster when the copy consistently finishes quickly but removes the deadline.
+    pub fn map_readback(&self, budget: Duration) -> Result<MappedFrame, ReadbackError> {
+        let blocking = std::env::var_os("CAP_READBACK_BLOCKING").is_some();
+        let lease = self.staging_pool.acquire(self.width, self.height)?;
+        self.copy_into_staging(&lease);
+
+        if blocking {
+            return self.map_staging_hybrid(lease);
+        }
+
+        let deadline = Instant::now().checked_add(budget);
+        self.map_staging(lease, deadline)
+    }
+
+    fn copy_into_staging(&self, lease: &StagingLease) {
+        let source_box = D3D11_BOX {
+            left: 0,
+            top: 0,
+            front: 0,
+            right: self.width,
+            bottom: self.height,
+            back: 1,
+        };
+
+        unsafe {
+            self.d3d_context.CopySubresourceRegion(
+                &lease.texture,
+                0,
+                0,
+                0,
+                0,
+                &self.texture,
+                0,
+                Some(&source_box),
+            );
+            self.d3d_context.Flush();
+        }
+    }
+
+    fn map_staging(
+        &self,
+        lease: StagingLease,
+        deadline: Option<Instant>,
+    ) -> Result<MappedFrame, ReadbackError> {
+        let mut mapped_resource = D3D11_MAPPED_SUBRESOURCE::default();
+
+        if let Some(deadline) = deadline {
+            let started = Instant::now();
+            loop {
+                match unsafe {
+                    self.d3d_context.Map(
+                        &lease.texture,
+                        0,
+                        D3D11_MAP_READ,
+                        D3D11_MAP_FLAG_DO_NOT_WAIT.0 as u32,
+                        Some(&mut mapped_resource),
+                    )
+                } {
+                    Ok(()) => break,
+                    Err(error) if error.code() == DXGI_ERROR_WAS_STILL_DRAWING => {
+                        let now = Instant::now();
+                        if now >= deadline {
+                            return Err(ReadbackError::NotReady);
+                        }
+                        if now.duration_since(started) < READBACK_SPIN_BUDGET {
+                            std::hint::spin_loop();
+                        } else {
+                            std::thread::sleep(
+                                READBACK_RETRY_INTERVAL
+                                    .min(deadline.saturating_duration_since(now)),
+                            );
+                        }
+                    }
+                    Err(error) => return Err(error.into()),
+                }
+            }
+        } else {
+            unsafe {
+                self.d3d_context.Map(
+                    &lease.texture,
+                    0,
+                    D3D11_MAP_READ,
+                    0,
+                    Some(&mut mapped_resource),
+                )?;
+            }
+        }
+
+        Ok(self.mapped_frame(lease, mapped_resource))
+    }
+
+    fn mapped_frame(
+        &self,
+        lease: StagingLease,
+        mapped_resource: D3D11_MAPPED_SUBRESOURCE,
+    ) -> MappedFrame {
+        MappedFrame {
+            lease,
+            d3d_context: self.d3d_context.clone(),
+            data: mapped_resource.pData as *mut u8,
+            row_pitch: mapped_resource.RowPitch,
             width: self.width,
             height: self.height,
-            stride: mapped_resource.RowPitch,
             pixel_format: self.pixel_format,
-            staging_texture,
-            d3d_context: self.d3d_context.clone(),
-        })
+        }
+    }
+
+    fn map_staging_hybrid(&self, lease: StagingLease) -> Result<MappedFrame, ReadbackError> {
+        let mut mapped_resource = D3D11_MAPPED_SUBRESOURCE::default();
+
+        match unsafe {
+            self.d3d_context.Map(
+                &lease.texture,
+                0,
+                D3D11_MAP_READ,
+                D3D11_MAP_FLAG_DO_NOT_WAIT.0 as u32,
+                Some(&mut mapped_resource),
+            )
+        } {
+            Ok(()) => {}
+            Err(error) if error.code() == DXGI_ERROR_WAS_STILL_DRAWING => unsafe {
+                self.d3d_context.Map(
+                    &lease.texture,
+                    0,
+                    D3D11_MAP_READ,
+                    0,
+                    Some(&mut mapped_resource),
+                )?;
+            },
+            Err(error) => return Err(error.into()),
+        }
+
+        Ok(self.mapped_frame(lease, mapped_resource))
     }
 }
 
 pub struct FrameBuffer<'a> {
-    data: &'a [u8],
-    width: u32,
-    height: u32,
-    stride: u32,
-    pixel_format: PixelFormat,
-    staging_texture: ID3D11Texture2D,
-    d3d_context: ID3D11DeviceContext,
-}
-
-impl Drop for FrameBuffer<'_> {
-    fn drop(&mut self) {
-        unsafe {
-            self.d3d_context.Unmap(&self.staging_texture, 0);
-        }
-    }
+    mapped: MappedFrame,
+    frame: std::marker::PhantomData<&'a Frame>,
 }
 
 impl FrameBuffer<'_> {
     pub fn width(&self) -> u32 {
-        self.width
+        self.mapped.width()
     }
 
     pub fn height(&self) -> u32 {
-        self.height
+        self.mapped.height()
     }
 
     pub fn stride(&self) -> u32 {
-        self.stride
+        self.mapped.row_pitch()
     }
 
     pub fn data(&self) -> &[u8] {
-        self.data
+        self.mapped.as_slice()
     }
 
     pub fn pixel_format(&self) -> PixelFormat {
-        self.pixel_format
+        self.mapped.pixel_format()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn warp_pool() -> Arc<StagingTexturePool> {
+        let mut device = None;
+        unsafe {
+            D3D11CreateDevice(
+                None,
+                D3D_DRIVER_TYPE_WARP,
+                HMODULE::default(),
+                D3D11_CREATE_DEVICE_FLAG::default(),
+                None,
+                D3D11_SDK_VERSION,
+                Some(&mut device),
+                None,
+                None,
+            )
+            .unwrap();
+        }
+
+        let device = device.unwrap();
+        let context = unsafe { device.GetImmediateContext().unwrap() };
+
+        Arc::new(StagingTexturePool::new(
+            device,
+            context,
+            PixelFormat::R8G8B8A8Unorm,
+        ))
+    }
+
+    #[test]
+    fn pool_survives_capture_size_changes() {
+        let pool = warp_pool();
+        let sizes = [(320, 240), (640, 480), (800, 600), (1024, 768), (1280, 720)];
+
+        for (index, (width, height)) in sizes.into_iter().enumerate() {
+            let lease = pool
+                .acquire(width, height)
+                .unwrap_or_else(|error| panic!("acquire size {index}: {error}"));
+            drop(lease);
+
+            let inner = pool.inner.lock().unwrap();
+            assert_eq!(inner.live, inner.free.len(), "live after size {index}");
+            assert!(inner.live <= STAGING_POOL_LIMIT);
+        }
+    }
+
+    #[test]
+    fn pool_evicts_stale_sizes_at_the_limit() {
+        let pool = warp_pool();
+        let held = pool.acquire(320, 240).unwrap();
+        for (width, height) in [(640, 480), (800, 600), (1024, 768)] {
+            drop(pool.acquire(width, height).unwrap());
+        }
+
+        {
+            let inner = pool.inner.lock().unwrap();
+            assert_eq!(inner.live, STAGING_POOL_LIMIT);
+            assert_eq!(inner.free.len(), STAGING_POOL_SIZE);
+        }
+
+        let lease = pool
+            .acquire(1280, 720)
+            .unwrap_or_else(|error| panic!("acquire after a size change: {error}"));
+        drop(lease);
+        drop(held);
+
+        let inner = pool.inner.lock().unwrap();
+        assert_eq!(inner.live, inner.free.len());
+        assert!(inner.live <= STAGING_POOL_LIMIT);
     }
 }
