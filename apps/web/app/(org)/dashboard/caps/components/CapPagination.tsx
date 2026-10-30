@@ -7,6 +7,7 @@ import {
 	PaginationNext,
 	PaginationPrevious,
 } from "@cap/ui";
+import { getPaginationItems } from "./pagination-items";
 
 interface CapPaginationProps {
 	currentPage: number;
@@ -21,7 +22,7 @@ export const CapPagination: React.FC<CapPaginationProps> = ({
 }) => {
 	return (
 		<Pagination>
-			<PaginationContent>
+			<PaginationContent className="flex-wrap">
 				{currentPage > 1 && (
 					<PaginationItem>
 						<PaginationPrevious
@@ -30,46 +31,33 @@ export const CapPagination: React.FC<CapPaginationProps> = ({
 						/>
 					</PaginationItem>
 				)}
-				<PaginationItem>
-					<PaginationLink
-						className="h-10 min-w-10"
-						href={hrefForPage(1)}
-						isActive={currentPage === 1}
-					>
-						1
-					</PaginationLink>
-				</PaginationItem>
-				{currentPage !== 1 && (
-					<PaginationItem>
-						<PaginationLink
-							className="h-10 min-w-10"
-							href={hrefForPage(currentPage)}
-							isActive={true}
-						>
-							{currentPage}
-						</PaginationLink>
-					</PaginationItem>
+				{getPaginationItems(currentPage, totalPages).map((item, index) =>
+					item === "ellipsis" ? (
+						<PaginationEllipsis key={`ellipsis-${index}`} />
+					) : (
+						<PaginationItem key={item}>
+							<PaginationLink
+								className={
+									item === currentPage
+										? "h-10 min-w-10"
+										: "h-10 min-w-10 hover:bg-gray-3"
+								}
+								href={hrefForPage(item)}
+								isActive={item === currentPage}
+							>
+								{item}
+							</PaginationLink>
+						</PaginationItem>
+					),
 				)}
-				{totalPages > currentPage + 1 && (
+				{currentPage < totalPages && (
 					<PaginationItem>
-						<PaginationLink
-							className="h-10 min-w-10 hover:bg-gray-3"
+						<PaginationNext
+							className="h-10 bg-transparent hover:bg-gray-4"
 							href={hrefForPage(currentPage + 1)}
-							isActive={false}
-						>
-							{currentPage + 1}
-						</PaginationLink>
+						/>
 					</PaginationItem>
 				)}
-				{currentPage > 2 && <PaginationEllipsis />}
-				<PaginationItem>
-					<PaginationNext
-						className="h-10 bg-transparent hover:bg-gray-4"
-						href={hrefForPage(
-							currentPage === totalPages ? currentPage : currentPage + 1,
-						)}
-					/>
-				</PaginationItem>
 			</PaginationContent>
 		</Pagination>
 	);
