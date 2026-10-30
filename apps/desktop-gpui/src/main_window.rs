@@ -107,11 +107,15 @@ pub enum Mode {
     Screenshot,
 }
 
-fn effective_recording_mode(preferred: Mode, editor_recording: bool) -> Mode {
+fn effective_recording_mode(
+    preferred: Mode,
+    capture: Option<Mode>,
+    editor_recording: bool,
+) -> Mode {
     if editor_recording {
         Mode::Studio
     } else {
-        preferred
+        capture.unwrap_or(preferred)
     }
 }
 
@@ -142,6 +146,15 @@ impl Mode {
             .as_deref()
             .and_then(Self::from_slug)
             .unwrap_or(Self::Instant)
+    }
+
+    /// The mode a "Record …" shortcut or tray item records in: this one, or
+    /// Studio when this is Screenshot, so a Record command always records.
+    pub fn for_recording(self) -> Self {
+        match self {
+            Self::Screenshot => Self::Studio,
+            mode => mode,
+        }
     }
 
     pub fn icon(self) -> &'static str {
@@ -943,6 +956,11 @@ struct MicrophoneWarning {
 pub struct MainWindow {
     theme: Theme,
     mode: Mode,
+    /// The mode the shortcut or tray item that opened the picker asked for,
+    /// in place of `mode` until that capture ends, the picker is dismissed,
+    /// or the user arms it or picks a mode themselves. Those commands name
+    /// what they capture; `mode` stays the user's own pick.
+    capture_mode: Option<Mode>,
     mode_hover: ModeHoverState,
     mode_hover_task: Option<Task<()>>,
     mode_hover_bounds: [Rc<Cell<Option<gpui::Bounds<gpui::Pixels>>>>; 3],
@@ -1078,6 +1096,7 @@ impl MainWindow {
                 this.clear_mode_hover();
             }
             if phase == Phase::Idle && previous_phase != Phase::Idle {
+                this.end_capture_mode(cx);
                 this.scan_incomplete_recordings(window, cx, std::time::Duration::ZERO);
                 if let Some(notice) = session.read(cx).storage_notice.clone() {
                     let main = cx.global::<app_windows::AppWindows>().main;
@@ -1244,6 +1263,7 @@ impl MainWindow {
             // window has to start where the store left it rather than at a
             // hardcoded Instant.
             mode: Mode::from_store(),
+            capture_mode: None,
             mode_hover: ModeHoverState::default(),
             mode_hover_task: None,
             mode_hover_bounds: std::array::from_fn(|_| Rc::new(Cell::new(None))),
@@ -2012,7 +2032,16 @@ impl MainWindow {
     /// Called when the overlays are dismissed (Escape, their close button) so
     /// the armed tile stops looking armed.
     pub fn clear_target(&mut self, cx: &mut Context<Self>) {
+        self.end_capture_mode(cx);
         if self.target.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    /// Back to the saved mode: the capture a shortcut or tray item opened the
+    /// picker for is over, or the user took the picker over.
+    pub fn end_capture_mode(&mut self, cx: &mut Context<Self>) {
+        if self.capture_mode.take().is_some() {
             cx.notify();
         }
     }
@@ -2026,6 +2055,7 @@ impl MainWindow {
     pub(crate) fn effective_mode(&self, cx: &gpui::App) -> Mode {
         effective_recording_mode(
             self.mode(),
+            self.capture_mode,
             self.session.read(cx).editor_recording_target().is_some(),
         )
     }
@@ -2037,15 +2067,26 @@ impl MainWindow {
     pub fn set_mode(&mut self, mode: Mode, cx: &mut Context<Self>) {
         self.clear_mode_hover();
         cx.notify();
-        if self.mode == mode
-            || self.is_preparing_recording()
+        if self.is_preparing_recording()
             || self.session.read(cx).editor_recording_target().is_some()
         {
             return;
         }
+        // A pick ends the capture command's mode, so a picker it opened
+        // follows the pick even when that is already the saved mode.
+        let select = crate::target_overlay::TargetSelect::global(cx);
+        if self
+            .capture_mode
+            .take()
+            .is_some_and(|capture| capture != mode)
+        {
+            select.update(cx, |select, cx| select.set_recording_mode(mode, cx));
+        }
+        if self.mode == mode {
+            return;
+        }
         self.mode = mode;
         // Open overlays label their start button with the mode.
-        let select = crate::target_overlay::TargetSelect::global(cx);
         select.update(cx, |select, cx| select.set_recording_mode(mode, cx));
         tracing::info!(
             mode = mode.panel_title(),
@@ -2292,11 +2333,25 @@ impl MainWindow {
 
     /// Arm a target mode the way clicking its tile does, picking a concrete
     /// window for the window variant since the harness cannot hover one.
-    ///
-    /// Also the tray's Record Display/Window/Area path: those items are
-    /// `crate::open_target_picker(&app, RecordingTargetMode::*)` over there,
-    /// which is the same "set the target mode, open the overlays" pair.
     pub fn arm_overlay(&mut self, kind: TargetType, cx: &mut Context<Self>) {
+        self.arm_overlay_in(kind, None, cx);
+    }
+
+    /// [`Self::arm_overlay`] for one capture in `mode`, leaving the saved mode
+    /// alone: the "Record …" and "Screenshot …" shortcuts and tray items.
+    /// The tray's are `crate::open_target_picker(&app, RecordingTargetMode::*)`
+    /// over there, the same "set the target mode, open the overlays" pair.
+    pub fn arm_overlay_for(&mut self, kind: TargetType, mode: Mode, cx: &mut Context<Self>) {
+        self.arm_overlay_in(kind, Some(mode), cx);
+    }
+
+    fn arm_overlay_in(
+        &mut self,
+        kind: TargetType,
+        capture_mode: Option<Mode>,
+        cx: &mut Context<Self>,
+    ) {
+        self.capture_mode = capture_mode;
         if kind == TargetType::Window {
             self.selected_window = match auto_window_title() {
                 Some(title) => self
@@ -5995,6 +6050,7 @@ impl MainWindow {
                             cx.listener(move |this, _, _window, cx| {
                                 this.selected_display = Some(chosen.clone());
                                 this.target = Some(TargetType::Display);
+                                this.end_capture_mode(cx);
                                 this.close_panel(cx);
                                 this.sync_overlays(cx);
                             }),
@@ -6028,6 +6084,7 @@ impl MainWindow {
                             cx.listener(move |this, _, _window, cx| {
                                 this.selected_window = Some(chosen.clone());
                                 this.target = Some(TargetType::Window);
+                                this.end_capture_mode(cx);
                                 this.close_panel(cx);
                                 this.sync_overlays(cx);
                                 this.focus_selected_window(cx);
@@ -6944,6 +7001,7 @@ impl MainWindow {
                 if target == TargetType::Window {
                     this.selected_window = None;
                 }
+                this.end_capture_mode(cx);
                 this.sync_overlays(cx);
                 cx.notify();
             }));
@@ -7611,9 +7669,36 @@ mod recording_start_permit_tests {
     #[test]
     fn editor_recording_mode_does_not_change_the_normal_preference() {
         for preferred in [Mode::Instant, Mode::Studio, Mode::Screenshot] {
-            assert_eq!(effective_recording_mode(preferred, true), Mode::Studio);
-            assert_eq!(effective_recording_mode(preferred, false), preferred);
+            assert_eq!(
+                effective_recording_mode(preferred, None, true),
+                Mode::Studio
+            );
+            assert_eq!(effective_recording_mode(preferred, None, false), preferred);
         }
+    }
+
+    #[test]
+    fn a_capture_command_mode_wins_without_changing_the_preference() {
+        let modes = [Mode::Instant, Mode::Studio, Mode::Screenshot];
+        for preferred in modes {
+            for capture in modes {
+                assert_eq!(
+                    effective_recording_mode(preferred, Some(capture), false),
+                    capture
+                );
+                assert_eq!(
+                    effective_recording_mode(preferred, Some(capture), true),
+                    Mode::Studio
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn record_commands_record_whatever_the_saved_mode() {
+        assert_eq!(Mode::Studio.for_recording(), Mode::Studio);
+        assert_eq!(Mode::Instant.for_recording(), Mode::Instant);
+        assert_eq!(Mode::Screenshot.for_recording(), Mode::Studio);
     }
 }
 

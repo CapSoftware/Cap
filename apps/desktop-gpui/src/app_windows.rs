@@ -6844,15 +6844,30 @@ pub fn abort_editor_recording_flow(cx: &mut App) {
     }
 }
 
-/// The tray's Record Display / Record Window / Record Area.
+/// The "Record …" shortcuts and the tray's Record Display / Record Window /
+/// Record Area: the picker records, in the saved mode or Studio when that is
+/// Screenshot, and the saved mode stays as it is.
 ///
 /// `crate::open_target_picker(&app, RecordingTargetMode::*)` over there, which
 /// sets the target mode on the main window and opens the overlays; here the
-/// main window owns that state, so it is the same `arm_overlay` the tiles call.
-pub fn arm_target_mode(kind: crate::main_window::TargetType, cx: &mut App) {
+/// main window owns that state, so it is armed there, as its tiles arm it.
+pub fn arm_record_picker(kind: TargetType, cx: &mut App) {
     let main = cx.global::<AppWindows>().main;
-    main.update(cx, |view, _window, cx| view.arm_overlay(kind, cx))
-        .ok();
+    main.update(cx, |view, _window, cx| {
+        let mode = view.mode().for_recording();
+        view.arm_overlay_for(kind, mode, cx)
+    })
+    .ok();
+}
+
+/// The "Screenshot …" shortcuts and tray items that need a picker: it takes
+/// a screenshot, and the saved mode stays as it is.
+pub fn arm_screenshot_picker(kind: TargetType, cx: &mut App) {
+    let main = cx.global::<AppWindows>().main;
+    main.update(cx, |view, _window, cx| {
+        view.arm_overlay_for(kind, Mode::Screenshot, cx)
+    })
+    .ok();
 }
 
 fn camera_window_number(cx: &mut App) -> Option<isize> {
@@ -7047,6 +7062,11 @@ pub fn prepare_for_screenshot_capture(cx: &mut App) -> bool {
     release_camera_park(cx);
     keep_arranged_windows(cx);
     close_target_overlays(cx);
+    // The picker's capture is handed off, so its command's mode is spent. Not
+    // when the PNG lands: a picker opened while it is written keeps its own.
+    let main = cx.global::<AppWindows>().main;
+    main.update(cx, |view, _window, cx| view.end_capture_mode(cx))
+        .ok();
     true
 }
 
