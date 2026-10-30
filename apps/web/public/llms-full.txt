@@ -1,6 +1,6 @@
 # Cap — Open-Source Screen Recorder & Loom Alternative (Full Reference)
 
-> Cap is a free, open-source screen recorder and async video messaging platform — a privacy-first alternative to Loom, Vidyard, and OBS. Record your screen, camera, and audio, then share an instant link or edit locally in a professional studio editor. Native desktop apps for macOS and Windows (built on Tauri + Rust, not Electron), a Linux .deb package, and a web viewer. Bring your own storage (Google Drive, any S3-compatible bucket, or fully local) so you own every recording. Website: https://cap.so · Source: https://github.com/CapSoftware/Cap
+> Cap is a free, open-source screen recorder and async video messaging platform — a privacy-first alternative to Loom, Vidyard, and OBS. Record your screen, camera, and audio, then share an instant link or edit locally in a professional studio editor. Native desktop apps for macOS, Windows, and Linux (written in Rust with GPUI, not Electron or a web view), and a web viewer. Bring your own storage (Google Drive, any S3-compatible bucket, or fully local) so you own every recording. Website: https://cap.so · Source: https://github.com/CapSoftware/Cap
 
 This is the full-detail reference for LLMs and agents. For a concise overview, see https://cap.so/llms.txt.
 
@@ -11,7 +11,7 @@ Cap (made by Cap Software, Inc.) is the open-source screen recording tool that c
 Core principles:
 - **Open source** — AGPLv3 (camera/capture crates are MIT). Fully auditable and self-hostable; no vendor lock-in.
 - **Own your data** — store recordings in Cap Cloud, your own Google Drive, any S3-compatible bucket, or entirely on-device.
-- **Native performance** — desktop apps use Tauri + Rust, not Electron, for low CPU/RAM/battery usage.
+- **Native performance** — desktop apps are written in Rust with a GPUI interface, not Electron or a web view, for low CPU/RAM/battery usage.
 - **Privacy by default** — record locally and share only when you choose; password-protect or self-host sensitive content.
 
 ## Three Modes, One App
@@ -197,7 +197,7 @@ Early-adopter pricing is locked in for the lifetime of the subscription. Trusted
 
 ## Technology Stack
 
-- Desktop: Tauri 2.5 (Rust) + SolidJS / SolidStart; WGPU rendering; FFmpeg; ScreenCaptureKit (macOS) and Direct3D / Media Foundation (Windows); whisper-rs and Parakeet for local captions; `@ts-rest/core` API client; Effect.
+- Desktop: Rust with GPUI (native UI, no web view); WGPU rendering; FFmpeg; ScreenCaptureKit (macOS), Direct3D / Media Foundation (Windows) and PipeWire (Linux); whisper-rs and Parakeet for local captions.
 - Web: Next.js 16, React 19, TypeScript; Effect (`@effect/platform` HttpApi) and `@ts-rest/core` (no tRPC); Drizzle ORM on MySQL (PlanetScale); NextAuth + WorkOS auth; TanStack Query.
 - Media: native hardware encoders, FFmpeg, WGPU compositor, WebCodecs; HLS playback via Mux.
 - Infrastructure: AWS S3 + CloudFront + MediaConvert, Mux, PlanetScale, Vercel, Stripe, OpenPanel (self-hosted), Resend; AssemblyAI + Groq/OpenAI for AI.

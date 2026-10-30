@@ -854,7 +854,7 @@ impl SettingsWindow {
         let pages = crate::settings_pages::PagesState::new(window, cx);
         let page_scroll = ScrollHandle::new();
         let keyboard_nav = ui::keyboard_nav::install(window, cx, |this: &Self, _| {
-            this.menu.is_some() || this.shortcut_listening() || this.switch_back_running()
+            this.menu.is_some() || this.shortcut_listening()
         });
 
         Self {
@@ -1736,9 +1736,6 @@ fn covers_default_exclusion(entry: &WindowExclusion, default: &WindowExclusion) 
 impl Render for SettingsWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_appearance(window, cx);
-        if self.switch_back_running() {
-            ui::keyboard_nav::leave(window, cx);
-        }
         self.keyboard_nav = ui::keyboard_nav::active(window, cx);
         let theme = self.theme;
         if self.page == Page::Quality
@@ -1852,9 +1849,6 @@ impl Render for SettingsWindow {
             // the drag layer the zoom slider needs while the button is held.
             .children(self.render_menu(cx))
             .children(self.render_slider_drag_layer(cx))
-            // Over everything, including the menus: the Experimental page's
-            // hand-back takes the whole window while it counts down.
-            .children(self.render_switch_overlay(cx))
     }
 }
 
@@ -2067,10 +2061,12 @@ impl SettingsWindow {
     fn render_account(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let (update_label, update_ready) = match crate::updates::status(cx) {
-            crate::updates::UpdateStatus::Idle => (
-                tr::settings::sidebar::check_for_updates().to_string(),
-                false,
-            ),
+            crate::updates::UpdateStatus::Idle | crate::updates::UpdateStatus::Available { .. } => {
+                (
+                    tr::settings::sidebar::check_for_updates().to_string(),
+                    false,
+                )
+            }
             crate::updates::UpdateStatus::Checking => (
                 tr::settings::sidebar::checking_for_updates().to_string(),
                 false,
@@ -3016,8 +3012,8 @@ impl SettingsWindow {
                 let label = upload.label();
                 let message = upload
                     .last_error
-                    .clone()
-                    .unwrap_or_else(|| label.to_string());
+                    .as_deref()
+                    .map_or_else(|| label.to_string(), crate::i18n::messages::localize);
                 this.child(
                     pill(theme.settings_fill())
                         .id("recording-upload-status")
@@ -3220,9 +3216,7 @@ impl SettingsWindow {
     fn render_general(&self, window: &Window, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
         let mut sections = Vec::with_capacity(10);
         sections.push(self.render_appearance(cx).into_any_element());
-        if i18n::picker_enabled() {
-            sections.push(self.render_language(cx).into_any_element());
-        }
+        sections.push(self.render_language(cx).into_any_element());
         sections.extend([
             self.render_app_section(cx).into_any_element(),
             self.render_recording(cx).into_any_element(),

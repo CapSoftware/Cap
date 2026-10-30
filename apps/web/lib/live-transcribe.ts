@@ -4,6 +4,12 @@ import { serverEnv } from "@cap/env";
 import type { Organisation, User, Video } from "@cap/web-domain";
 import { and, eq, sql } from "drizzle-orm";
 import { start } from "workflow/api";
+import {
+	type FarmLiveStart,
+	rotateLiveSession,
+	startFarmLiveTranscription,
+	WORKFLOW_LIVE_SESSION,
+} from "@/lib/live-transcribe-farm";
 import { liveTranscribeWorkflow } from "@/workflows/live-transcribe";
 
 const getAffectedRows = (result: unknown) => {
@@ -65,7 +71,7 @@ export async function maybeStartLiveTranscription({
 		}
 
 		try {
-			await start(liveTranscribeWorkflow, [{ videoId, userId: ownerId }]);
+			await dispatchLiveTranscription(videoId, ownerId, null);
 		} catch (error) {
 			// Release the claim so a retried create can start the workflow.
 			await db()
@@ -83,4 +89,48 @@ export async function maybeStartLiveTranscription({
 		console.warn(`[maybeStartLiveTranscription] Failed for ${videoId}`, error);
 		return "skipped";
 	}
+}
+
+/**
+ * Run an active live transcription on the media server when that's enabled
+ * and a server takes it, otherwise on the workflow, which resumes from the
+ * artifact. `from` is the claim's current session (null before the first).
+ */
+export async function dispatchLiveTranscription(
+	videoId: Video.VideoId,
+	ownerId: User.UserId,
+	from: string | null,
+): Promise<"media-server" | "workflow" | "lost"> {
+	let farm: FarmLiveStart;
+	try {
+		farm = await startFarmLiveTranscription(videoId, from);
+	} catch (error) {
+		console.warn(
+			`[dispatchLiveTranscription] Media server path failed for ${videoId}`,
+			error,
+		);
+		farm = { status: "declined", session: from };
+	}
+	if (farm.status === "started") return "media-server";
+	if (farm.status === "lost") return "lost";
+	if (
+		farm.session !== null &&
+		!(await rotateLiveSession(videoId, farm.session, WORKFLOW_LIVE_SESSION))
+	) {
+		return "lost";
+	}
+
+	try {
+		await start(liveTranscribeWorkflow, [{ videoId, userId: ownerId }]);
+	} catch (error) {
+		// Hand the claim back so a retried release can try again; a first start
+		// has no session to return to and its caller drops the claim instead.
+		if (from !== null) {
+			await rotateLiveSession(videoId, WORKFLOW_LIVE_SESSION, from).catch(
+				() => false,
+			);
+		}
+		throw error;
+	}
+	return "workflow";
 }
