@@ -28,6 +28,7 @@ export function SettingsNav() {
 		},
 		...(buildEnv.NEXT_PUBLIC_IS_CAP
 			? [
+					{ label: "Invoices", href: "/dashboard/settings/invoices" },
 					{
 						label: "Security & Compliance",
 						href: "/dashboard/settings/organization/security",
