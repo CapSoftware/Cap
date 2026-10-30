@@ -136,3 +136,55 @@ impl FrameConverter for SwscaleConverter {
 
 unsafe impl Send for SwscaleConverter {}
 unsafe impl Sync for SwscaleConverter {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn convert_red(input: Pixel, output: Pixel) -> frame::Video {
+        ffmpeg::init().unwrap();
+        let converter =
+            SwscaleConverter::new(ConversionConfig::new(input, 16, 16, output, 16, 16)).unwrap();
+        let mut rgb = frame::Video::new(input, 16, 16);
+        let stride = rgb.stride(0);
+        let pixel: [u8; 4] = if input == Pixel::BGRA {
+            [40, 40, 220, 255]
+        } else {
+            [220, 40, 40, 255]
+        };
+        for row in 0..16 {
+            for col in 0..16 {
+                let offset = row * stride + col * 4;
+                rgb.data_mut(0)[offset..offset + 4].copy_from_slice(&pixel);
+            }
+        }
+        converter.convert(rgb).unwrap()
+    }
+
+    #[test]
+    fn rgb_to_yuv_uses_bt709_limited_range() {
+        // (220, 40, 40) is Y 83.2, Cb 109.9, Cr 207.1 in BT.709 limited range;
+        // swscale's BT.601 default would give Y 96.
+        for input in [Pixel::BGRA, Pixel::RGBA] {
+            let nv12 = convert_red(input, Pixel::NV12);
+            let (y, cb, cr) = (nv12.data(0)[0], nv12.data(1)[0], nv12.data(1)[1]);
+            assert!(
+                y.abs_diff(83) <= 1 && cb.abs_diff(110) <= 1 && cr.abs_diff(207) <= 1,
+                "{input:?} -> NV12: y={y} cb={cb} cr={cr}"
+            );
+
+            let yuv420p = convert_red(input, Pixel::YUV420P);
+            let (y, cb, cr) = (yuv420p.data(0)[0], yuv420p.data(1)[0], yuv420p.data(2)[0]);
+            assert!(
+                y.abs_diff(83) <= 1 && cb.abs_diff(110) <= 1 && cr.abs_diff(207) <= 1,
+                "{input:?} -> YUV420P: y={y} cb={cb} cr={cr}"
+            );
+        }
+    }
+
+    #[test]
+    fn rgb_to_rgb_conversion_is_left_untouched() {
+        let rgba = convert_red(Pixel::BGRA, Pixel::RGBA);
+        assert_eq!(&rgba.data(0)[0..4], &[220, 40, 40, 255]);
+    }
+}
