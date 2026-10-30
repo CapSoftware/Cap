@@ -624,7 +624,13 @@ impl Capturer {
             .map(|crop| {
                 let width = crop.right - crop.left;
                 let height = crop.bottom - crop.top;
-                Ok::<_, NewCapturerError>((Arc::new(TrimPool::default()), crop, width, height))
+                let texture =
+                    create_copy_texture(&d3d_device, width, height, settings.pixel_format)
+                        .map_err(NewCapturerError::CropTexture)?;
+                let crop_pool = Arc::new(TrimPool::default());
+                crop_pool.give(texture, width, height);
+
+                Ok::<_, NewCapturerError>((crop_pool, crop, width, height))
             })
             .transpose()?;
 
@@ -982,6 +988,10 @@ impl Frame {
 
     pub fn texture(&self) -> &ID3D11Texture2D {
         &self.texture
+    }
+
+    pub fn is_pooled(&self) -> bool {
+        self.recycle.is_some()
     }
 
     pub fn d3d_device(&self) -> &ID3D11Device {

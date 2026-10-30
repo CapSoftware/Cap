@@ -531,7 +531,7 @@ impl WindowsSegmentedMuxer {
                     either::Left((mut encoder, mut muxer)) => {
                         trace!("Running native encoder for segment");
                         let mut first_timestamp: Option<Duration> = None;
-                        let mut captured_keepalive: Option<scap_direct3d::Frame> = None;
+                        let mut pooled_frame: Option<scap_direct3d::Frame> = None;
                         let result = encoder.run(
                             Arc::new(AtomicBool::default()),
                             || {
@@ -548,17 +548,8 @@ impl WindowsSegmentedMuxer {
                                 };
                                 let frame_time = duration_to_timespan(relative);
 
-                                let texture = match frame {
-                                    screen_capture::ScreenFrame::Captured(captured) => {
-                                        let texture = captured.texture().clone();
-                                        captured_keepalive = Some(captured);
-                                        texture
-                                    }
-                                    screen_capture::ScreenFrame::Scaled(scaled) => {
-                                        captured_keepalive = None;
-                                        scaled.texture.clone()
-                                    }
-                                };
+                                let texture = frame.texture().clone();
+                                pooled_frame = frame.into_pooled();
                                 Ok(Some((texture, frame_time)))
                             },
                             |output_sample| {
