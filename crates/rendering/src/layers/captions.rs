@@ -1191,23 +1191,26 @@ fn find_active_caption_segment<'a>(
     segments: &'a [cap_project::CaptionTrackSegment],
     default_fade_duration: f32,
 ) -> Option<ActiveCaptionSegment<'a>> {
-    for segment in segments {
-        if time >= segment.start && time < caption_segment_effective_end(segment) {
-            return Some(ActiveCaptionSegment { segment });
-        }
-    }
+    let mut first_fading = None;
 
     for segment in segments {
         let effective_end = caption_segment_effective_end(segment);
-        let fade = segment
-            .fade_duration_override
-            .unwrap_or(default_fade_duration) as f64;
-        if time >= effective_end && time < effective_end + fade {
+
+        if time >= segment.start && time < effective_end {
             return Some(ActiveCaptionSegment { segment });
+        }
+
+        if first_fading.is_none() && time >= effective_end {
+            let fade = segment
+                .fade_duration_override
+                .unwrap_or(default_fade_duration) as f64;
+            if time < effective_end + fade {
+                first_fading = Some(ActiveCaptionSegment { segment });
+            }
         }
     }
 
-    None
+    first_fading
 }
 
 fn calculate_caption_fade(current_time: f64, start: f64, end: f64, fade_duration: f64) -> f32 {
@@ -1323,6 +1326,193 @@ mod tests {
         assert!(find_active_caption_segment(41.0, &segments, 0.2).is_none());
         // Still active while the (capped) word is on screen.
         assert!(find_active_caption_segment(37.0, &segments, 0.2).is_some());
+    }
+
+    #[test]
+    fn active_caption_takes_priority_over_an_earlier_exit_animation() {
+        let mut exiting = segment(0.0, 1.0, vec![]);
+        exiting.id = "exiting".to_string();
+        exiting.fade_duration_override = Some(0.5);
+
+        let mut active = segment(1.1, 2.0, vec![]);
+        active.id = "active".to_string();
+        let segments = vec![exiting, active];
+
+        let selected = find_active_caption_segment(1.2, &segments, 0.25).unwrap();
+        assert!(std::ptr::eq(selected.segment, &segments[1]));
+    }
+
+    #[test]
+    fn exit_animation_keeps_first_match_in_unsorted_input_order() {
+        let mut first = segment(10.0, 11.0, vec![]);
+        first.id = "first".to_string();
+        first.fade_duration_override = Some(0.5);
+
+        let mut second = segment(0.0, 10.9, vec![]);
+        second.id = "second".to_string();
+        second.fade_duration_override = Some(0.5);
+        let segments = vec![first, second];
+
+        let selected = find_active_caption_segment(11.1, &segments, 0.25).unwrap();
+        assert!(std::ptr::eq(selected.segment, &segments[0]));
+    }
+
+    #[test]
+    fn caption_lookup_preserves_active_and_fade_boundaries() {
+        let segments = vec![segment(0.0, 1.0, vec![])];
+
+        assert!(find_active_caption_segment(0.999, &segments, 0.5).is_some());
+        assert!(find_active_caption_segment(1.0, &segments, 0.5).is_some());
+        assert!(find_active_caption_segment(1.5, &segments, 0.5).is_none());
+    }
+
+    type CaptionLookup =
+        for<'a> fn(f64, &'a [CaptionTrackSegment], f32) -> Option<&'a CaptionTrackSegment>;
+
+    fn baseline_lookup<'a>(
+        time: f64,
+        segments: &'a [CaptionTrackSegment],
+        default_fade_duration: f32,
+    ) -> Option<&'a CaptionTrackSegment> {
+        for segment in segments {
+            if time >= segment.start && time < caption_segment_effective_end(segment) {
+                return Some(segment);
+            }
+        }
+
+        for segment in segments {
+            let effective_end = caption_segment_effective_end(segment);
+            let fade = segment
+                .fade_duration_override
+                .unwrap_or(default_fade_duration) as f64;
+            if time >= effective_end && time < effective_end + fade {
+                return Some(segment);
+            }
+        }
+
+        None
+    }
+
+    fn optimized_lookup<'a>(
+        time: f64,
+        segments: &'a [CaptionTrackSegment],
+        default_fade_duration: f32,
+    ) -> Option<&'a CaptionTrackSegment> {
+        find_active_caption_segment(time, segments, default_fade_duration)
+            .map(|active| active.segment)
+    }
+
+    #[test]
+    fn optimized_caption_lookup_matches_two_pass_lookup() {
+        let mut segments = vec![
+            segment(4.0, 5.0, vec![]),
+            segment(0.0, 2.0, vec![]),
+            segment(1.5, 4.5, vec![]),
+            segment(7.0, 8.25, vec![word(7.0, 8.25)]),
+            segment(5.5, 6.0, vec![]),
+            segment(2.5, 3.5, vec![]),
+            segment(9.0, 10.0, vec![]),
+        ];
+        for (index, segment) in segments.iter_mut().enumerate() {
+            segment.id = format!("segment-{index}");
+            segment.fade_duration_override = match index % 3 {
+                0 => Some(0.0),
+                1 => Some(0.2),
+                _ => Some(0.8),
+            };
+        }
+
+        for tick in -100..1_200 {
+            let time = tick as f64 / 100.0;
+            let expected = baseline_lookup(time, &segments, 0.35)
+                .map(|segment| segment.id.as_str());
+            let actual = optimized_lookup(time, &segments, 0.35)
+                .map(|segment| segment.id.as_str());
+            assert_eq!(actual, expected, "caption selection differs at t={time}");
+        }
+    }
+
+    fn measure_lookup(
+        lookup: CaptionLookup,
+        segments: &[CaptionTrackSegment],
+        time: f64,
+    ) -> f64 {
+        use std::{hint::black_box, time::Instant};
+
+        const WARMUP_ITERATIONS: usize = 250;
+        const MEASURED_ITERATIONS: usize = 3_000;
+        let mut checksum = 0usize;
+
+        for _ in 0..WARMUP_ITERATIONS {
+            if let Some(segment) = lookup(black_box(time), black_box(segments), black_box(0.25)) {
+                checksum = checksum.wrapping_add(segment.id.as_ptr() as usize);
+            }
+        }
+
+        let start = Instant::now();
+        for iteration in 0..MEASURED_ITERATIONS {
+            let time = time + ((iteration & 1) as f64 * 0.000_001);
+            if let Some(segment) = lookup(black_box(time), black_box(segments), black_box(0.25)) {
+                checksum = checksum.wrapping_add(segment.id.as_ptr() as usize);
+            }
+        }
+        black_box(checksum);
+
+        start.elapsed().as_nanos() as f64 / MEASURED_ITERATIONS as f64
+    }
+
+    fn median(samples: &mut [f64]) -> f64 {
+        samples.sort_by(f64::total_cmp);
+        samples[samples.len() / 2]
+    }
+
+    #[test]
+    #[ignore = "manual release-mode microbenchmark; see the PR description for the command"]
+    fn benchmark_caption_lookup_before_and_after() {
+        const SEGMENT_COUNT: usize = 2_400;
+        const REPETITIONS: usize = 5;
+
+        let segments: Vec<_> = (0..SEGMENT_COUNT)
+            .map(|index| {
+                let start = index as f64 * 2.0;
+                segment(
+                    start,
+                    start + 1.5,
+                    vec![word(start as f32, (start + 1.5) as f32)],
+                )
+            })
+            .collect();
+
+        let cases = [
+            ("active-early", 0.75),
+            ("active-middle", 2_400.75),
+            ("exit-animation", 2_401.7),
+            ("gap-after-fade", 2_401.9),
+            ("after-track", 5_000.0),
+        ];
+
+        println!("Caption lookup microbenchmark: {SEGMENT_COUNT} segments");
+        for (name, time) in cases {
+            let mut baseline = Vec::with_capacity(REPETITIONS);
+            let mut optimized = Vec::with_capacity(REPETITIONS);
+
+            for repetition in 0..REPETITIONS {
+                if repetition % 2 == 0 {
+                    baseline.push(measure_lookup(baseline_lookup, &segments, time));
+                    optimized.push(measure_lookup(optimized_lookup, &segments, time));
+                } else {
+                    optimized.push(measure_lookup(optimized_lookup, &segments, time));
+                    baseline.push(measure_lookup(baseline_lookup, &segments, time));
+                }
+            }
+
+            let baseline_ns = median(&mut baseline);
+            let optimized_ns = median(&mut optimized);
+            let change_percent = (baseline_ns - optimized_ns) / baseline_ns * 100.0;
+            println!(
+                "{name:>18}: baseline={baseline_ns:>8.1} ns, optimized={optimized_ns:>8.1} ns, change={change_percent:>6.1}%"
+            );
+        }
     }
 
     #[test]
