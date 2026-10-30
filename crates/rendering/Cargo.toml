@@ -74,6 +74,7 @@ cap-video-decode = { path = "../video-decode", features = ["scripted"] }
 cap-verify-expect = { path = "../verify-expect" }
 tempfile = "3"
 pollster = "0.4.0"
+naga = { version = "25", features = ["wgsl-in"] }
 pretty_assertions = "1.4.1"
 tracing-subscriber = "0.3.19"
 
