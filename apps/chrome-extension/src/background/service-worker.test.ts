@@ -276,8 +276,12 @@ describe("recorder on browser pages", () => {
 describe("canceling a start after a worker restart", () => {
 	// The restarted worker has no handle on the pending start; the recorder
 	// answers every request with its current start status.
-	const cancelWith = async (status: RecordingStatus) => {
+	const cancelWith = async (
+		status: RecordingStatus,
+		settledStatus: RecordingStatus = status,
+	) => {
 		let settled = false;
+		let replies = 0;
 		const response = new Promise<ServiceWorkerResponse>((resolve) => {
 			onMessage(
 				{ target: "service-worker", type: "cancel-recording-start" },
@@ -292,7 +296,13 @@ describe("canceling a start after a worker restart", () => {
 			() => {
 				while (contextReplies.length > 0) answerContexts(true);
 				while (pollReplies.length > 0) {
-					pollReplies.shift()?.({ ok: true, status });
+					replies += 1;
+					// Sync, stop and the stage check see the pending start; later
+					// polls see it unwound.
+					pollReplies.shift()?.({
+						ok: true,
+						status: replies <= 3 ? status : settledStatus,
+					});
 				}
 				expect(settled).toBe(true);
 			},
@@ -312,7 +322,7 @@ describe("canceling a start after a worker restart", () => {
 	});
 
 	it("lets a start past the picker unwind itself", async () => {
-		await cancelWith({ phase: "creating" });
+		await cancelWith({ phase: "creating" }, { phase: "idle" });
 
 		expect(closeOffscreenDocument).not.toHaveBeenCalled();
 		expect(chrome.runtime.sendMessage).toHaveBeenCalledWith(
