@@ -36,8 +36,9 @@ import { and, eq, type InferSelectModel, isNull, sql } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import type { Metadata } from "next";
 import { headers } from "next/headers";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { after } from "next/server";
+import type { JSX } from "react";
 import {
 	getDashboardSpacesData,
 	type OrganizationSettings,
@@ -62,9 +63,15 @@ import { runPromise } from "@/lib/server";
 import { getSharePageBranding } from "@/lib/share-branding";
 import { parseShareCallToAction } from "@/lib/share-call-to-action";
 import { getShareDashboardDestination } from "@/lib/share-dashboard-destination";
-import { getSharePlaybackUrl } from "@/lib/share-playback";
+import {
+	canStartPlaybackInHtml,
+	getSharePlaybackSource,
+} from "@/lib/share-playback";
 import { buildShareVideoMetadata } from "@/lib/share-video-metadata";
-import { resolveShareWebUrl } from "@/lib/share-web-url";
+import {
+	resolveRestrictedShareRedirect,
+	resolveShareWebUrl,
+} from "@/lib/share-web-url";
 import { isVideoOverShareableLinkLimit } from "@/lib/shareable-link-quota";
 import {
 	isIframelyCrawlerUserAgent,
@@ -126,6 +133,25 @@ function toShareVideo<
 }
 
 // Helper function to fetch shared spaces data for a video
+// The longest the page waits for the playback URL beyond its other queries.
+const SERVER_PLAYBACK_WAIT_MS = 50;
+
+function resolveWithin<T>(promise: Promise<T>, ms: number): Promise<T | null> {
+	return new Promise((resolve) => {
+		const timer = setTimeout(() => resolve(null), ms);
+		promise.then(
+			(value) => {
+				clearTimeout(timer);
+				resolve(value);
+			},
+			() => {
+				clearTimeout(timer);
+				resolve(null);
+			},
+		);
+	});
+}
+
 async function getSharedSpacesForVideo(videoId: Video.VideoId) {
 	// Space-level and organization-level sharing are independent queries.
 	const [spaceSharing, orgSharing] = await Promise.all([
@@ -222,12 +248,24 @@ const renderNoSuchElement = (awaitRecording: boolean) =>
 		? Effect.succeed(<PendingRecordingShare />)
 		: Effect.sync(() => notFound());
 
+type RestrictedShareRedirect = { redirectTo: string };
+
 const getShareVideoPageCatchers = (
 	videoId: Video.VideoId,
 	awaitRecording: boolean,
+	searchParams: ShareVideoSearchParams,
 ) => ({
 	PolicyDenied: (e: Policy.PolicyDeniedError) =>
-		renderPolicyDenied(videoId, e.reason),
+		Effect.promise(async () =>
+			resolveRestrictedShareRedirect(await headers(), videoId, searchParams),
+		).pipe(
+			Effect.flatMap(
+				(redirectTo): Effect.Effect<JSX.Element | RestrictedShareRedirect> =>
+					redirectTo
+						? Effect.succeed({ redirectTo })
+						: renderPolicyDenied(videoId, e.reason),
+			),
+		),
 	NoSuchElementException: () => renderNoSuchElement(awaitRecording),
 });
 
@@ -328,7 +366,7 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 	const awaitRecording =
 		isValidVideoIdParam(videoId) && hasRecordingStoppedParam(searchParams);
 
-	return Effect.gen(function* () {
+	const page = await Effect.gen(function* () {
 		const videosPolicy = yield* VideosPolicy;
 		const loadVideo = () =>
 			db()
@@ -420,10 +458,15 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 				</div>
 			),
 		),
-		Effect.catchTags(getShareVideoPageCatchers(videoId, awaitRecording)),
+		Effect.catchTags(
+			getShareVideoPageCatchers(videoId, awaitRecording, searchParams),
+		),
 		provideOptionalAuth,
 		EffectRuntime.runPromise,
 	);
+
+	if ("redirectTo" in page) redirect(page.redirectTo);
+	return page;
 }
 
 async function AuthorizedContent({
@@ -505,7 +548,7 @@ async function AuthorizedContent({
 	const earlySegmentPlayback =
 		recordingStopped &&
 		video.source?.type === "desktopSegments" &&
-		isEarlyInstantPlaybackEnabled(video.owner.id);
+		isEarlyInstantPlaybackEnabled();
 
 	// Everything below is an independent round trip (DB or storage); each is
 	// started here and awaited together further down, so the page pays for the
@@ -549,14 +592,31 @@ async function AuthorizedContent({
 				);
 				return false;
 			});
-	const initialPlaybackUrlPromise =
+	const initialPlaybackSourcePromise =
 		!video.isScreenshot &&
 		!hasActiveUpload &&
 		(video.source.type === "desktopMP4" || video.source.type === "webMP4")
 			? overShareLimitPromise.then((overLimit) =>
-					overLimit ? null : getSharePlaybackUrl(video),
+					overLimit ? null : getSharePlaybackSource(video),
 				)
 			: undefined;
+	const initialPlaybackUrlPromise = initialPlaybackSourcePromise?.then(
+		(source) => source?.url ?? null,
+	);
+	// On Cap's own CDN the signed URL is ready as soon as the share-limit check
+	// is (signing is local), so it is awaited with the rest of the page and
+	// rendered into the HTML: the browser starts the video download before the
+	// player hydrates. Custom buckets and storage integrations keep resolving it
+	// on the client, behind the probe that falls back to the playlist route, and
+	// so does this source if it is not ready in time.
+	const serverPlaybackSourcePromise =
+		buildEnv.NEXT_PUBLIC_IS_CAP === "true" &&
+		!video.bucket &&
+		!video.storageIntegrationId &&
+		initialPlaybackSourcePromise &&
+		canStartPlaybackInHtml((await headers()).get("user-agent"))
+			? resolveWithin(initialPlaybackSourcePromise, SERVER_PLAYBACK_WAIT_MS)
+			: Promise.resolve(null);
 
 	const aiGenerationEnabledPromise = isAiGenerationEnabled(video.owner);
 	const imagesPromise = Effect.gen(function* () {
@@ -815,6 +875,7 @@ async function AuthorizedContent({
 		ownerIsOverShareLimit,
 		resolvedImages,
 		dashboardDestination,
+		serverPlaybackSource,
 	] = await Promise.all([
 		spacesDataPromise,
 		sharedSpacesPromise,
@@ -830,6 +891,7 @@ async function AuthorizedContent({
 		overShareLimitPromise,
 		imagesPromise,
 		dashboardDestinationPromise,
+		serverPlaybackSourcePromise,
 		viewNotificationPromise,
 	]);
 
@@ -991,6 +1053,9 @@ async function AuthorizedContent({
 				dashboardDestination={dashboardDestination}
 				data={videoWithOrganizationInfo}
 				initialPlaybackUrl={initialPlaybackUrlPromise}
+				serverPlaybackUrl={
+					serverPlaybackSource?.defaultStorage ? serverPlaybackSource.url : null
+				}
 				screenshotImageUrl={screenshotImageUrl}
 				videoSettings={videoWithOrganizationInfo.settings}
 				comments={commentsPromise}
