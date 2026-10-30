@@ -1,6 +1,7 @@
 import React, { type ReactNode } from "react";
 import TestRenderer, { act } from "react-test-renderer";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MobileApiError } from "@/api/mobile";
 import { AuthProvider, useAuth } from "./AuthContext";
 
 type HostProps = {
@@ -69,6 +70,15 @@ vi.mock("expo-secure-store", () => secureStoreMock);
 vi.mock("expo-web-browser", () => webBrowserMock);
 
 vi.mock("@/api/mobile", () => ({
+	MobileApiError: class MobileApiError extends Error {
+		constructor(
+			message: string,
+			readonly status: number,
+			readonly payload: unknown,
+		) {
+			super(message);
+		}
+	},
 	createMobileApiClient: vi.fn(() => ({
 		bootstrap: apiMock.bootstrap,
 		getAuthConfig: apiMock.getAuthConfig,
@@ -239,13 +249,15 @@ describe("AuthProvider", () => {
 		);
 	});
 
-	it("clears the stored user id when bootstrapping a stored session fails", async () => {
+	it("clears a stored session when bootstrap rejects its credentials", async () => {
 		secureStoreMock.getItemAsync.mockImplementation((key: string) => {
 			if (key === "cap.mobile.apiKey") return Promise.resolve("key_123");
 			if (key === "cap.mobile.userId") return Promise.resolve("user_123");
 			return Promise.resolve(null);
 		});
-		apiMock.bootstrap.mockRejectedValueOnce(new Error("Session expired"));
+		apiMock.bootstrap.mockRejectedValueOnce(
+			new MobileApiError("Session expired", 401, null),
+		);
 
 		await act(async () => {
 			TestRenderer.create(
@@ -265,6 +277,259 @@ describe("AuthProvider", () => {
 		expect(secureStoreMock.deleteItemAsync).toHaveBeenCalledWith(
 			"cap.mobile.userId",
 		);
+	});
+
+	it.each([
+		{ name: "a network error", error: new TypeError("Network request failed") },
+		{
+			name: "a request timeout",
+			error: new Error("Mobile API request timed out"),
+		},
+		{
+			name: "HTTP 429",
+			error: new MobileApiError("Rate limited", 429, null),
+		},
+		{
+			name: "HTTP 503",
+			error: new MobileApiError("Service unavailable", 503, null),
+		},
+		{
+			name: "an invalid HTTP response",
+			error: new MobileApiError("Invalid response", 502, null),
+		},
+	])(
+		"preserves a saved session after $name during bootstrap",
+		async ({ error }) => {
+			secureStoreMock.getItemAsync.mockImplementation((key: string) => {
+				if (key === "cap.mobile.apiKey") return Promise.resolve("key_123");
+				if (key === "cap.mobile.userId") return Promise.resolve("user_123");
+				return Promise.resolve(null);
+			});
+			apiMock.bootstrap.mockRejectedValueOnce(error);
+
+			let renderer: ReturnType<typeof TestRenderer.create> | null = null;
+			await act(async () => {
+				renderer = TestRenderer.create(
+					React.createElement(AuthProvider, null, React.createElement(Probe)),
+				);
+				await flushMicrotasks();
+			});
+
+			expect(states.at(-1)).toMatchObject({
+				apiKey: "key_123",
+				status: "signedIn",
+				userId: "user_123",
+			});
+			expect(latestAuth?.bootstrap).toBeNull();
+			expect(secureStoreMock.deleteItemAsync).not.toHaveBeenCalled();
+			await act(async () => {
+				renderer?.unmount();
+			});
+		},
+	);
+
+	it("retries transient bootstrap failures and restores the library session", async () => {
+		secureStoreMock.getItemAsync.mockImplementation((key: string) =>
+			Promise.resolve(key === "cap.mobile.apiKey" ? "key_123" : "user_123"),
+		);
+		apiMock.bootstrap.mockRejectedValueOnce(new TypeError("Offline"));
+		vi.useFakeTimers();
+		let renderer: ReturnType<typeof TestRenderer.create> | null = null;
+		try {
+			await act(async () => {
+				renderer = TestRenderer.create(
+					React.createElement(AuthProvider, null, React.createElement(Probe)),
+				);
+				await flushMicrotasks();
+			});
+			expect(latestAuth?.status).toBe("signedIn");
+			expect(latestAuth?.bootstrap).toBeNull();
+
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(2_000);
+				await flushMicrotasks();
+			});
+			expect(apiMock.bootstrap).toHaveBeenCalledTimes(2);
+			expect(latestAuth?.bootstrap?.activeOrganizationId).toBe("org_123");
+			expect(secureStoreMock.deleteItemAsync).not.toHaveBeenCalled();
+		} finally {
+			await act(async () => {
+				renderer?.unmount();
+			});
+			vi.useRealTimers();
+		}
+	});
+
+	it("cancels the scheduled retry after a manual refresh recovers", async () => {
+		secureStoreMock.getItemAsync.mockImplementation((key: string) =>
+			Promise.resolve(key === "cap.mobile.apiKey" ? "key_123" : "user_123"),
+		);
+		apiMock.bootstrap.mockRejectedValueOnce(new TypeError("Offline"));
+		vi.useFakeTimers();
+		let renderer: ReturnType<typeof TestRenderer.create> | null = null;
+		try {
+			await act(async () => {
+				renderer = TestRenderer.create(
+					React.createElement(AuthProvider, null, React.createElement(Probe)),
+				);
+				await flushMicrotasks();
+			});
+			await act(async () => {
+				await latestAuth?.refresh();
+			});
+			expect(latestAuth?.bootstrap?.activeOrganizationId).toBe("org_123");
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(30_000);
+			});
+			expect(apiMock.bootstrap).toHaveBeenCalledTimes(2);
+		} finally {
+			await act(async () => renderer?.unmount());
+			vi.useRealTimers();
+		}
+	});
+
+	it.each(["success", "unauthorized", "offline"] as const)(
+		"ignores a retry's late %s after an organization switch",
+		async (outcome) => {
+			secureStoreMock.getItemAsync.mockImplementation((key: string) =>
+				Promise.resolve(key === "cap.mobile.apiKey" ? "key_123" : "user_123"),
+			);
+			const oldRetry = createDeferred<{
+				activeOrganizationId: string;
+				user: { email: string; name: string };
+			}>();
+			apiMock.bootstrap.mockRejectedValueOnce(new TypeError("Offline"));
+			apiMock.bootstrap.mockReturnValueOnce(oldRetry.promise);
+			apiMock.setActiveOrganization.mockResolvedValueOnce({
+				activeOrganizationId: "org_new",
+				user: { email: "richie@cap.so", name: "Richie" },
+			});
+			vi.useFakeTimers();
+			let renderer: ReturnType<typeof TestRenderer.create> | null = null;
+			try {
+				await act(async () => {
+					renderer = TestRenderer.create(
+						React.createElement(AuthProvider, null, React.createElement(Probe)),
+					);
+					await flushMicrotasks();
+				});
+				await act(async () => {
+					await vi.advanceTimersByTimeAsync(2_000);
+				});
+				expect(apiMock.bootstrap).toHaveBeenCalledTimes(2);
+				await act(async () => {
+					await latestAuth?.setActiveOrganization("org_new");
+				});
+				await act(async () => {
+					if (outcome === "success") {
+						oldRetry.resolve({
+							activeOrganizationId: "org_old",
+							user: { email: "richie@cap.so", name: "Richie" },
+						});
+					} else {
+						oldRetry.reject(
+							outcome === "unauthorized"
+								? new MobileApiError("Expired", 401, null)
+								: new TypeError("Offline"),
+						);
+					}
+					await flushMicrotasks();
+					await vi.advanceTimersByTimeAsync(30_000);
+				});
+				expect(latestAuth?.bootstrap?.activeOrganizationId).toBe("org_new");
+				expect(latestAuth?.status).toBe("signedIn");
+				expect(secureStoreMock.deleteItemAsync).not.toHaveBeenCalled();
+				expect(apiMock.bootstrap).toHaveBeenCalledTimes(2);
+			} finally {
+				await act(async () => renderer?.unmount());
+				vi.useRealTimers();
+			}
+		},
+	);
+
+	it.each(["older first", "newer first"])(
+		"keeps the newest overlapping refresh when responses finish %s",
+		async (order) => {
+			secureStoreMock.getItemAsync.mockImplementation((key: string) =>
+				Promise.resolve(key === "cap.mobile.apiKey" ? "key_123" : "user_123"),
+			);
+			const older = createDeferred<{
+				activeOrganizationId: string;
+				user: { email: string; name: string };
+			}>();
+			const newer = createDeferred<{
+				activeOrganizationId: string;
+				user: { email: string; name: string };
+			}>();
+			let renderer: ReturnType<typeof TestRenderer.create> | null = null;
+			try {
+				await act(async () => {
+					renderer = TestRenderer.create(
+						React.createElement(AuthProvider, null, React.createElement(Probe)),
+					);
+					await flushMicrotasks();
+				});
+				apiMock.bootstrap.mockReturnValueOnce(older.promise);
+				apiMock.bootstrap.mockReturnValueOnce(newer.promise);
+				const first = latestAuth?.refresh();
+				const second = latestAuth?.refresh();
+				const finishOlder = async () => {
+					older.resolve({
+						activeOrganizationId: "org_123",
+						user: { email: "richie@cap.so", name: "Before save" },
+					});
+					await first;
+				};
+				const finishNewer = async () => {
+					newer.resolve({
+						activeOrganizationId: "org_123",
+						user: { email: "richie@cap.so", name: "After save" },
+					});
+					await second;
+				};
+				if (order === "older first") {
+					await act(finishOlder);
+					expect(latestAuth?.bootstrap?.user.name).toBe("Before save");
+					await act(finishNewer);
+				} else {
+					await act(finishNewer);
+					await act(finishOlder);
+				}
+				expect(latestAuth?.bootstrap?.user.name).toBe("After save");
+			} finally {
+				await act(async () => renderer?.unmount());
+			}
+		},
+	);
+
+	it("does not retry a transient failure after explicit sign-out", async () => {
+		secureStoreMock.getItemAsync.mockImplementation((key: string) =>
+			Promise.resolve(key === "cap.mobile.apiKey" ? "key_123" : "user_123"),
+		);
+		apiMock.bootstrap.mockRejectedValueOnce(new TypeError("Offline"));
+		vi.useFakeTimers();
+		let renderer: ReturnType<typeof TestRenderer.create> | null = null;
+		try {
+			await act(async () => {
+				renderer = TestRenderer.create(
+					React.createElement(AuthProvider, null, React.createElement(Probe)),
+				);
+				await flushMicrotasks();
+			});
+			await act(async () => {
+				await latestAuth?.signOut();
+			});
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(30_000);
+			});
+			expect(apiMock.bootstrap).toHaveBeenCalledTimes(1);
+			expect(latestAuth?.status).toBe("signedOut");
+		} finally {
+			await act(async () => {
+				renderer?.unmount();
+			});
+			vi.useRealTimers();
+		}
 	});
 
 	it("does not restore account data when a refresh finishes after sign-out", async () => {
@@ -388,7 +653,7 @@ describe("AuthProvider", () => {
 		expect(latestAuth?.bootstrap?.user.email).toBe("new@cap.so");
 
 		await act(async () => {
-			oldBootstrap.reject(new Error("Old session expired"));
+			oldBootstrap.reject(new MobileApiError("Old session expired", 401, null));
 			await flushMicrotasks();
 		});
 		expect(latestAuth?.status).toBe("signedIn");

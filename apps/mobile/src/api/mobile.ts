@@ -134,6 +134,24 @@ const parseJson = async (response: Response) => {
 	}
 };
 
+const API_REQUEST_TIMEOUT_MS = 30_000;
+
+const fetchJson = async (url: string, init: RequestInit) => {
+	const controller = new AbortController();
+	const timeout = setTimeout(() => controller.abort(), API_REQUEST_TIMEOUT_MS);
+	try {
+		const response = await fetch(url, { ...init, signal: controller.signal });
+		return { response, payload: await parseJson(response) };
+	} catch (error) {
+		if (controller.signal.aborted) {
+			throw new Error("Mobile API request timed out", { cause: error });
+		}
+		throw error;
+	} finally {
+		clearTimeout(timeout);
+	}
+};
+
 export const createSessionRequestUrl = (
 	baseUrl: string,
 	redirectUri: string,
@@ -170,12 +188,11 @@ export const createMobileApiClient = ({ baseUrl, getToken }: ClientOptions) => {
 			body = JSON.stringify(options.body);
 		}
 
-		const response = await fetch(url.toString(), {
+		const { response, payload } = await fetchJson(url.toString(), {
 			method: options.method ?? "GET",
 			headers,
 			body,
 		});
-		const payload = await parseJson(response);
 		if (!response.ok) {
 			throw new MobileApiError(
 				`Mobile API request failed with ${response.status}`,
@@ -198,12 +215,11 @@ export const createMobileApiClient = ({ baseUrl, getToken }: ClientOptions) => {
 			body = JSON.stringify(options.body);
 		}
 
-		const response = await fetch(url.toString(), {
+		const { response, payload } = await fetchJson(url.toString(), {
 			method: options.method ?? "GET",
 			headers,
 			body,
 		});
-		const payload = await parseJson(response);
 		if (!response.ok) {
 			throw new MobileApiError(
 				`Mobile API request failed with ${response.status}`,
