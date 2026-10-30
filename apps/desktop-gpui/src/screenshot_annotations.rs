@@ -1220,6 +1220,19 @@ pub struct AnnotationState {
     masks: Vec<MaskEntry<MaskOverlay>>,
     mask_pending: Option<Vec<MaskRequest>>,
     mask_task: Option<gpui::Task<()>>,
+    geometry_pending: bool,
+}
+
+impl AnnotationState {
+    pub(crate) fn invalidate_geometry(&mut self) {
+        self.geometry_pending = true;
+        self.mask_task = None;
+        self.mask_pending = None;
+        self.layer.set(None);
+        self.gesture = None;
+        self.hover = None;
+        self.hover_cursor = None;
+    }
 }
 
 /// One paint of the layer, copied out of the window so the closure owns it.
@@ -1376,6 +1389,10 @@ impl ScreenshotEditorWindow {
     /// `getSvgPoint` (`:144-156`). The viewBox's origin is always `0 0` here,
     /// so the mapping is the layer's rect and the scale.
     fn frame_point(&self, position: Point<Pixels>) -> Option<(f64, f64)> {
+        self.frame.as_ref()?;
+        if !self.annotation_preview_ready() {
+            return None;
+        }
         let bounds = self.annotation_state.layer.get()?;
         let scale = self.annotation_scale()?;
         Some((
@@ -2254,6 +2271,26 @@ impl ScreenshotEditorWindow {
 
     // -- Mask overlays ---------------------------------------------------------
 
+    pub(crate) fn annotation_preview_ready(&self) -> bool {
+        !self.annotation_state.geometry_pending
+    }
+
+    fn finish_geometry_preview(&mut self, requests: &[MaskRequest]) {
+        if !self.annotation_state.geometry_pending {
+            return;
+        }
+        if self.frame.is_some()
+            && requests.iter().all(|request| {
+                self.annotation_state
+                    .masks
+                    .iter()
+                    .any(|entry| entry.request == *request && entry.value.is_some())
+            })
+        {
+            self.annotation_state.geometry_pending = false;
+        }
+    }
+
     fn mask_requests(&self) -> Vec<MaskRequest> {
         if self.frame.is_none() {
             return Vec::new();
@@ -2287,6 +2324,7 @@ impl ScreenshotEditorWindow {
     /// blocks on a resample.
     pub(crate) fn refresh_mask_overlays(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let requests = self.mask_requests();
+        self.finish_geometry_preview(&requests);
         if self.annotation_state.mask_pending.as_ref() == Some(&requests) {
             return;
         }
@@ -2359,6 +2397,7 @@ impl ScreenshotEditorWindow {
             let _ = window.drop_image(previous.image.clone());
         }
         self.annotation_state.masks = overlays;
+        self.finish_geometry_preview(&self.mask_requests());
     }
 }
 
@@ -4070,6 +4109,77 @@ fn mask_region(mask: &Annotation, rect: Rect, frame: (u32, u32)) -> Option<(u32,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    fn history_invalidation_cancels_a_pending_mask_completion(cx: &mut gpui::TestAppContext) {
+        struct MaskTaskView {
+            state: AnnotationState,
+        }
+
+        impl gpui::Render for MaskTaskView {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div()
+            }
+        }
+
+        let frame = MaskFrame {
+            revision: 1,
+            size: (64, 48),
+            content: [0., 0., 64., 48.].map(f64::to_bits),
+            padding: 0_f64.to_bits(),
+            crop: None,
+        };
+        let a = mask_request(&shape(AnnotationType::Mask, 0., 0., 16., 16.), frame).unwrap();
+        let b = mask_request(&shape(AnnotationType::Mask, 32., 24., 16., 16.), frame).unwrap();
+        let pixels = vec![128; 64 * 48 * 4];
+        let cached = build_mask_overlays(&pixels, &[], std::slice::from_ref(&a));
+        let completed = build_mask_overlays(&pixels, &[], std::slice::from_ref(&b));
+        let original = cached[0].value.as_ref().unwrap().image.clone();
+        let (release, blocked) = tokio::sync::oneshot::channel::<()>();
+        let started = std::rc::Rc::new(std::cell::Cell::new(false));
+        let work_started = started.clone();
+        let installed = std::rc::Rc::new(std::cell::Cell::new(false));
+        let completion = installed.clone();
+        let (view, cx) = cx.add_window_view(move |window, cx| {
+            let task = cx.spawn_in(window, async move |this, cx| {
+                work_started.set(true);
+                if blocked.await.is_ok() {
+                    this.update_in(cx, |view: &mut MaskTaskView, _, _| {
+                        completion.set(true);
+                        view.state.masks = finish_mask_build(&view.state.masks, completed);
+                    })
+                    .ok();
+                }
+            });
+            MaskTaskView {
+                state: AnnotationState {
+                    masks: cached,
+                    mask_pending: Some(vec![b]),
+                    mask_task: Some(task),
+                    ..Default::default()
+                },
+            }
+        });
+        cx.run_until_parked();
+        assert!(started.get());
+        view.update(cx, |view, _| {
+            assert!(view.state.mask_task.is_some());
+            view.state.invalidate_geometry();
+            assert!(view.state.mask_task.is_none());
+            assert!(view.state.mask_pending.is_none());
+        });
+        let _ = release.send(());
+        cx.run_until_parked();
+        assert!(!installed.get());
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.state.masks[0].request, a);
+            assert!(Arc::ptr_eq(
+                &view.state.masks[0].value.as_ref().unwrap().image,
+                &original,
+            ));
+        });
+    }
 
     fn transform(
         frame: (f64, f64),
