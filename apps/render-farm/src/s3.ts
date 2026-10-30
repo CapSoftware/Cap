@@ -60,11 +60,15 @@ export function mediaS3ConfigFromEnv(env = process.env): S3Config {
 
 const EMPTY_SHA = createHash("sha256").update("").digest("hex");
 
+function encodeUriComponent(value: string) {
+	return encodeURIComponent(value).replace(
+		/[!'()*]/g,
+		(character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
+	);
+}
+
 function encodeKey(key: string) {
-	return key
-		.split("/")
-		.map((part) => encodeURIComponent(part))
-		.join("/");
+	return key.split("/").map(encodeUriComponent).join("/");
 }
 
 function hmac(key: Buffer | string, value: string) {
@@ -163,12 +167,13 @@ export class S3 {
 	}
 
 	private canonicalQuery(query: Record<string, string>) {
-		return Object.keys(query)
-			.sort()
+		return Object.entries(query)
 			.map(
-				(name) =>
-					`${encodeURIComponent(name)}=${encodeURIComponent(query[name] ?? "")}`,
+				([name, value]) =>
+					[encodeUriComponent(name), encodeUriComponent(value)] as const,
 			)
+			.sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+			.map(([name, value]) => `${name}=${value}`)
 			.join("&");
 	}
 
