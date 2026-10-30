@@ -903,9 +903,13 @@ const startRecording = async (request: StartRecordingRequest) => {
 	let countdownPromise: Promise<void> | null = null;
 
 	try {
-		status = { phase: "creating" };
+		status = {
+			phase: "creating",
+			capturePending: request.mode !== "tab" && request.mode !== "camera",
+		};
 
 		const mainStream = await getMainStream(request);
+		status = { phase: "creating" };
 		ownedStreams.push(mainStream);
 		throwIfStartCanceled();
 		const captureSource = getCaptureSource(request, mainStream);

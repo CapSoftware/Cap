@@ -18,6 +18,7 @@ let onMessage: MessageListener;
 let stored: Record<string, unknown>;
 let pollReplies: Array<(response: OffscreenResponse) => void>;
 let contextReplies: Array<(contexts: object[]) => void>;
+let closeOffscreenDocument: ReturnType<typeof vi.fn>;
 let onActionClicked: (tab: chrome.tabs.Tab) => void;
 let tabsApi: Record<string, ReturnType<typeof vi.fn>>;
 
@@ -56,8 +57,10 @@ beforeEach(async () => {
 			callback({ id: 99, ...properties }),
 		),
 	};
+	closeOffscreenDocument = vi.fn((callback: () => void) => callback());
 	vi.stubGlobal("chrome", {
 		storage: { local: storage, session: storage },
+		offscreen: { closeDocument: closeOffscreenDocument },
 		runtime: {
 			getURL: (path: string) => `chrome-extension://test/${path}`,
 			ContextType: { OFFSCREEN_DOCUMENT: "OFFSCREEN_DOCUMENT" },
@@ -448,5 +451,64 @@ describe("recorder on browser pages", () => {
 			expect.any(Function),
 		);
 		expect(tabsApi.update).not.toHaveBeenCalled();
+	});
+});
+
+describe("canceling a start after a worker restart", () => {
+	// The restarted worker has no handle on the pending start; the recorder
+	// answers every request with its current start status.
+	const cancelWith = async (
+		status: RecordingStatus,
+		settledStatus: RecordingStatus = status,
+	) => {
+		let settled = false;
+		let replies = 0;
+		const response = new Promise<ServiceWorkerResponse>((resolve) => {
+			onMessage(
+				{ target: "service-worker", type: "cancel-recording-start" },
+				{},
+				(value: ServiceWorkerResponse) => {
+					settled = true;
+					resolve(value);
+				},
+			);
+		});
+		await vi.waitFor(
+			() => {
+				while (contextReplies.length > 0) answerContexts(true);
+				while (pollReplies.length > 0) {
+					replies += 1;
+					// Sync, stop and the stage check see the pending start; later
+					// polls see it unwound.
+					pollReplies.shift()?.({
+						ok: true,
+						status: replies <= 3 ? status : settledStatus,
+					});
+				}
+				expect(settled).toBe(true);
+			},
+			{ timeout: 4_000 },
+		);
+		return response;
+	};
+
+	it("closes the recorder when the start is still waiting on the picker", async () => {
+		const response = await cancelWith({
+			phase: "creating",
+			capturePending: true,
+		});
+
+		expect(closeOffscreenDocument).toHaveBeenCalledTimes(1);
+		expect(response).toMatchObject({ ok: true, status: { phase: "idle" } });
+	});
+
+	it("lets a start past the picker unwind itself", async () => {
+		await cancelWith({ phase: "creating" }, { phase: "idle" });
+
+		expect(closeOffscreenDocument).not.toHaveBeenCalled();
+		expect(chrome.runtime.sendMessage).toHaveBeenCalledWith(
+			{ target: "offscreen", type: "stop-recording" },
+			expect.any(Function),
+		);
 	});
 });

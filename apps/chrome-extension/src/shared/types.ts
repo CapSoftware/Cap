@@ -159,6 +159,9 @@ export type RecordingStatus =
 	  }
 	| {
 			phase: "creating";
+			// Set while the recorder waits on the browser's screen-share picker,
+			// which script cannot dismiss.
+			capturePending?: boolean;
 	  }
 	| {
 			phase: "recording" | "paused" | "uploading";
@@ -364,6 +367,10 @@ export type ServiceWorkerRequest =
 	| {
 			target: "service-worker";
 			type: "stop-recording";
+	  }
+	| {
+			target: "service-worker";
+			type: "cancel-recording-start";
 	  }
 	| {
 			target: "service-worker";

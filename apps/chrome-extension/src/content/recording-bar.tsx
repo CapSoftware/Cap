@@ -113,6 +113,11 @@ export function RecordingBarOverlay({
 	const [plan, setPlan] = useState<RecordingPlan | null>(null);
 	const [signedIn, setSignedIn] = useState(false);
 	const [readyDismissed, setReadyDismissed] = useState(false);
+	// "creating" has no BarStatus (no timer to show), but it can last as long
+	// as the capture picker stays open. Tracked separately so the bar says the
+	// start is pending instead of claiming to be ready.
+	const [starting, setStarting] = useState(false);
+	const [startError, setStartError] = useState<string | null>(null);
 	const [countdownValue, setCountdownValue] = useState<number | null>(null);
 	const [position, setPosition] = useState<{ x: number; y: number } | null>(
 		null,
@@ -149,6 +154,11 @@ export function RecordingBarOverlay({
 		(nextStatus: RecordingStatus | undefined, nextPlan?: RecordingPlan) => {
 			if (nextPlan) setPlan(nextPlan);
 			setStatus(toBarStatus(nextStatus));
+			if (nextStatus) {
+				setStarting(nextStatus.phase === "creating");
+				if (nextStatus.phase === "error") setStartError(nextStatus.message);
+				else if (nextStatus.phase !== "idle") setStartError(null);
+			}
 			setNow(Date.now());
 		},
 		[],
@@ -181,6 +191,9 @@ export function RecordingBarOverlay({
 		if (recorderPanelOpen && !recorderPanelOpenRef.current) {
 			refresh();
 		}
+		// Closing the panel acknowledges a failed start, matching the service
+		// worker clearing its error status at the same moment.
+		if (!recorderPanelOpen) setStartError(null);
 		recorderPanelOpenRef.current = recorderPanelOpen;
 	}, [recorderPanelOpen, refresh]);
 
@@ -314,7 +327,11 @@ export function RecordingBarOverlay({
 
 	const active = status !== null || countdownValue !== null;
 	const ready = signedIn && !active && recorderPanelOpen && !readyDismissed;
-	const visible = active || ready;
+	// The panel closes as soon as a start reaches "creating", so without this
+	// the only sign of a pending start would be a picker that may not even be
+	// on screen.
+	const pendingStart = signedIn && !active && starting;
+	const visible = active || ready || pendingStart;
 
 	useEffect(() => {
 		if (!visible) {
@@ -569,6 +586,7 @@ export function RecordingBarOverlay({
 
 	const startRecording = useCallback(() => {
 		setBusy(true);
+		setStartError(null);
 		loadSettings()
 			.then((settings) =>
 				sendServiceWorkerMessage({
@@ -578,13 +596,30 @@ export function RecordingBarOverlay({
 				}),
 			)
 			.then((response) => {
-				if (response.ok) applyResponse(response.status, response.plan);
+				if (response.ok) {
+					applyResponse(response.status, response.plan);
+				} else if (!response.canceled) {
+					// Failures that happen before the start reaches "creating" (no
+					// camera selected, signed out) never become an error status, so
+					// this reply is the only place the bar can learn about them.
+					setStartError(response.error);
+				}
 			})
-			.catch(() => undefined)
+			.catch((error: unknown) =>
+				setStartError(error instanceof Error ? error.message : String(error)),
+			)
 			.finally(() => setBusy(false));
 	}, [applyResponse]);
 
+	const cancelStart = useCallback(() => {
+		sendServiceWorkerMessage({
+			target: "service-worker",
+			type: "cancel-recording-start",
+		}).catch(() => undefined);
+	}, []);
+
 	const dismissReadyBar = useCallback(() => {
+		setStartError(null);
 		setReadyDismissed(true);
 		void updateSharedUiState((current) => ({
 			...current,
@@ -623,108 +658,148 @@ export function RecordingBarOverlay({
 							alt=""
 							draggable={false}
 						/>
-						<div className="cap-extension-control-bar-text">
+						<div className="cap-extension-control-bar-text" aria-live="polite">
 							<span className="cap-extension-control-bar-title">
-								Ready to record
+								{starting
+									? "Starting recording…"
+									: startError !== null
+										? "Couldn't start recording"
+										: "Ready to record"}
 							</span>
-							<span className="cap-extension-control-bar-subtitle">
+							<span
+								className="cap-extension-control-bar-subtitle"
+								title={
+									!starting && startError !== null ? startError : undefined
+								}
+							>
 								<span
-									className="cap-extension-control-bar-dot is-ready"
+									className={classNames(
+										"cap-extension-control-bar-dot",
+										starting
+											? "is-starting"
+											: startError !== null
+												? "is-error"
+												: "is-ready",
+									)}
 									aria-hidden
 								/>
-								Cap
+								<span className="cap-extension-control-bar-subtitle-text">
+									{starting
+										? "Choose what to share"
+										: startError !== null
+											? startError
+											: "Cap"}
+								</span>
 							</span>
 						</div>
 					</div>
 
 					<div className="cap-extension-control-bar-divider" aria-hidden />
 
-					<div className="cap-extension-control-bar-actions" data-controls>
-						<button
-							type="button"
-							className={classNames(
-								"cap-extension-control-bar-icon-button",
-								blurActive && "is-active",
-							)}
-							aria-label="Blur content on page"
-							title={blurActive ? "Exit blur mode" : "Blur content"}
-							onClick={() => setBlurActive((prev) => !prev)}
-						>
-							<EyeOff size={17} aria-hidden />
-						</button>
-
-						{onToggleWebcam ? (
+					{starting ? (
+						<div className="cap-extension-control-bar-actions" data-controls>
+							<button
+								type="button"
+								className="cap-extension-control-bar-pill is-cancel"
+								onClick={cancelStart}
+							>
+								<X size={14} aria-hidden />
+								Cancel
+							</button>
+						</div>
+					) : (
+						<div className="cap-extension-control-bar-actions" data-controls>
 							<button
 								type="button"
 								className={classNames(
 									"cap-extension-control-bar-icon-button",
-									webcam?.enabled && "is-active",
+									blurActive && "is-active",
 								)}
-								aria-label={webcam?.enabled ? "Camera on" : "Camera off"}
-								title={webcam?.enabled ? "Camera enabled" : "Camera disabled"}
-								onClick={onToggleWebcam}
+								aria-label="Blur content on page"
+								title={blurActive ? "Exit blur mode" : "Blur content"}
+								onClick={() => setBlurActive((prev) => !prev)}
 							>
-								{webcam?.enabled ? (
-									<Video size={17} aria-hidden />
-								) : (
-									<VideoOff size={17} aria-hidden />
-								)}
+								<EyeOff size={17} aria-hidden />
 							</button>
-						) : null}
 
-						{onToggleMicrophone ? (
+							{onToggleWebcam ? (
+								<button
+									type="button"
+									className={classNames(
+										"cap-extension-control-bar-icon-button",
+										webcam?.enabled && "is-active",
+									)}
+									aria-label={webcam?.enabled ? "Camera on" : "Camera off"}
+									title={webcam?.enabled ? "Camera enabled" : "Camera disabled"}
+									onClick={onToggleWebcam}
+								>
+									{webcam?.enabled ? (
+										<Video size={17} aria-hidden />
+									) : (
+										<VideoOff size={17} aria-hidden />
+									)}
+								</button>
+							) : null}
+
+							{onToggleMicrophone ? (
+								<button
+									type="button"
+									className={classNames(
+										"cap-extension-control-bar-icon-button",
+										microphone?.enabled && "is-active",
+									)}
+									aria-label={microphone?.enabled ? "Mic unmuted" : "Mic muted"}
+									title={microphone?.enabled ? "Mic unmuted" : "Mic muted"}
+									onClick={onToggleMicrophone}
+								>
+									{microphone?.enabled ? (
+										<Mic size={17} aria-hidden />
+									) : (
+										<MicOff size={17} aria-hidden />
+									)}
+								</button>
+							) : null}
+
 							<button
 								type="button"
 								className={classNames(
 									"cap-extension-control-bar-icon-button",
-									microphone?.enabled && "is-active",
+									drawing && "is-active",
 								)}
-								aria-label={microphone?.enabled ? "Mic unmuted" : "Mic muted"}
-								title={microphone?.enabled ? "Mic unmuted" : "Mic muted"}
-								onClick={onToggleMicrophone}
+								aria-label="Draw on the page"
+								aria-pressed={drawing}
+								title="Draw on the page"
+								onClick={toggleDrawing}
 							>
-								{microphone?.enabled ? (
-									<Mic size={17} aria-hidden />
-								) : (
-									<MicOff size={17} aria-hidden />
-								)}
+								<Pencil size={17} aria-hidden />
 							</button>
-						) : null}
 
-						<button
-							type="button"
-							className={classNames(
-								"cap-extension-control-bar-icon-button",
-								drawing && "is-active",
-							)}
-							aria-label="Draw on the page"
-							aria-pressed={drawing}
-							title="Draw on the page"
-							onClick={toggleDrawing}
-						>
-							<Pencil size={17} aria-hidden />
-						</button>
+							<button
+								type="button"
+								className="cap-extension-control-bar-pill is-start"
+								disabled={busy}
+								onClick={startRecording}
+							>
+								<Play
+									size={13}
+									fill="currentColor"
+									strokeWidth={0}
+									aria-hidden
+								/>
+								{startError !== null ? "Try again" : "Start recording"}
+							</button>
 
-						<button
-							type="button"
-							className="cap-extension-control-bar-pill is-start"
-							disabled={busy}
-							onClick={startRecording}
-						>
-							<Play size={13} fill="currentColor" strokeWidth={0} aria-hidden />
-							Start recording
-						</button>
-
-						<button
-							type="button"
-							className="cap-extension-control-bar-icon-button is-quiet"
-							aria-label="Hide recording bar"
-							title="Hide bar"
-							onClick={dismissReadyBar}
-						>
-							<X size={18} aria-hidden />
-						</button>
-					</div>
+							<button
+								type="button"
+								className="cap-extension-control-bar-icon-button is-quiet"
+								aria-label="Hide recording bar"
+								title="Hide bar"
+								onClick={dismissReadyBar}
+							>
+								<X size={18} aria-hidden />
+							</button>
+						</div>
+					)}
 				</div>
 				<BlurOverlay active={blurActive} onDone={() => setBlurActive(false)} />
 				<DrawingOverlay active={drawing} onClose={stopDrawing} />

@@ -1052,6 +1052,65 @@ test.describe("extension recording upload", () => {
 		});
 	}
 
+	test("cancel during a slow start leaves the recorder matching the result", async () => {
+		if (!extension || !mockServer)
+			throw new Error("Test harness did not start");
+		mockServer.state.bootstrapDelayMs = 2_500;
+		const worker = await getServiceWorker(extension.context);
+		await configureExtension(worker, mockServer.origin, {
+			...DEFAULT_RECORDING_OPTIONS,
+			cachedPlan: { isPro: false, maxRecordingSeconds: 300 },
+		});
+		const messengerPage = await openExtensionMessengerPage(
+			extension.context,
+			worker,
+		);
+		const capturePage = await extension.context.newPage();
+		await capturePage.goto(`${mockServer.origin}/capture.html`);
+		await capturePage.bringToFront();
+		const readPhase = async () => {
+			const response = await sendServiceWorkerMessage(messengerPage, {
+				target: "service-worker",
+				type: "get-recording-status",
+			});
+			return response.ok ? response.status?.phase : response.error;
+		};
+
+		const started = sendServiceWorkerMessage(messengerPage, {
+			target: "service-worker",
+			type: "start-recording",
+			mode: DEFAULT_RECORDING_OPTIONS.mode,
+		});
+		await expect.poll(readPhase).toBe("creating");
+		await sendServiceWorkerMessage(messengerPage, {
+			target: "service-worker",
+			type: "cancel-recording-start",
+		});
+
+		// The cancel usually lands while the plan is still being re-checked and
+		// stops the start before the recorder sees it. On a slow machine it can
+		// land after the recorder has started; either way the result must match
+		// what the recorder is doing.
+		const result = await started;
+		await capturePage.waitForTimeout(3_000);
+		const phase = await readPhase();
+		if (result.ok) {
+			// A start that beat the cancel is real, and the cancel's stop may
+			// already have ended it.
+			expect(["recording", "uploading", "completed"]).toContain(phase);
+			if (phase === "recording") {
+				await sendServiceWorkerMessage(messengerPage, {
+					target: "service-worker",
+					type: "stop-recording",
+				});
+			}
+		} else {
+			expect(result).toMatchObject({ canceled: true });
+			expect(phase).toBe("idle");
+			expect(mockServer.state.initiateBodies).toHaveLength(0);
+		}
+	});
+
 	test("re-checks a cached free plan so an upgraded account is not cut off", async () => {
 		if (!extension || !mockServer)
 			throw new Error("Test harness did not start");
