@@ -56,7 +56,9 @@ describe("parseDeveloperVideosPagination (#3568)", () => {
 	});
 
 	it("caps limit to MAX_DEVELOPER_API_LIMIT and bounds oversized offsets", () => {
-		expect(parseDeveloperVideosPagination("500", "99999999999999999999")).toEqual({
+		expect(
+			parseDeveloperVideosPagination("500", "99999999999999999999"),
+		).toEqual({
 			limit: MAX_DEVELOPER_API_LIMIT,
 			offset: MAX_DEVELOPER_API_OFFSET,
 		});
