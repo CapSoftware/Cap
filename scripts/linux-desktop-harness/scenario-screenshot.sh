@@ -44,7 +44,7 @@ focus_cap() {
       "global.display.list_all_windows().filter(w => /^(Cap|so\.cap\.Cap)$/.test(w.get_wm_class() || '') && w.showing_on_its_workspace()).forEach(w => w.activate(global.display.get_current_time_roundtrip()))" \
       >/dev/null 2>&1
   elif [[ -n ${HYPRLAND_INSTANCE_SIGNATURE:-} ]]; then
-    hyprctl dispatch focuswindow class:Cap >/dev/null 2>&1
+    hyprctl dispatch "hl.dsp.focus({ window = 'class:Cap' })" >/dev/null 2>&1
   fi
 }
 for _ in $(seq 60); do
