@@ -1427,16 +1427,24 @@ const raceRecordingStart = (
 			if (abandoned) return;
 			abandoned = true;
 			release();
-			void abandonOffscreenStart(offscreenStart).finally(() => {
-				// A start the recorder had already completed keeps recording, so
-				// report it rather than a cancellation that did not happen.
-				if (
-					settledResponse?.ok &&
-					settledResponse.status &&
-					isCapturingRecordingStatus(settledResponse.status)
-				) {
-					resolve(settledResponse);
-					return;
+			void abandonOffscreenStart(offscreenStart).finally(async () => {
+				// A start the recorder completed before the cancel reached it is
+				// real: report what the recorder is doing now (the cancel's stop
+				// may already have ended it) rather than a cancellation.
+				if (settledResponse?.ok) {
+					const current = await sendOffscreen(
+						{ target: "offscreen", type: "get-recording-status" },
+						{ createIfMissing: false },
+					).catch(() => null);
+					if (
+						current?.ok &&
+						current.status &&
+						current.status.phase !== "idle" &&
+						current.status.phase !== "creating"
+					) {
+						resolve({ ok: true, status: current.status });
+						return;
+					}
 				}
 				resolve(
 					reason === "canceled"
