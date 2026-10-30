@@ -60,7 +60,10 @@ import {
 	MediaPlayerVolumeIndicator,
 } from "./video/media-player";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./video/tooltip";
-import { captureVideoFrameDataUrl } from "./video-frame-thumbnail";
+import {
+	captureVideoFrameDataUrl,
+	shouldCaptureLiveThumbnail,
+} from "./video-frame-thumbnail";
 
 // Mounted only mid-upload; its RPC client drags the Effect runtime along, so
 // keeping it behind a dynamic import keeps that chunk off finished videos.
@@ -672,14 +675,24 @@ export function CapVideoPlayer({
 
 	// The seek tooltip asks for a thumbnail on every render while the pointer is
 	// over the bar (per animation frame). The capture snapshots the *displayed*
-	// frame, so re-encoding is pure waste until the video has actually moved;
-	// caching by currentTime (with a small tolerance while playing) bounds the
-	// canvas + JPEG work to a few captures per second at most.
+	// frame, so it is only accurate when hovering near the current playback position.
+	// For distant timestamps, returning undefined lets MediaPlayerSeek render the
+	// chapter title and timestamp without showing a misleading stale snapshot.
+	// Re-encoding is pure waste until the video has actually moved; caching by
+	// currentTime bounds the canvas + JPEG work to a few captures per second at most.
 	const thumbnailCacheRef = useRef<{ time: number; url: string } | null>(null);
 	const generateVideoFrameThumbnail = useCallback(
-		(_time: number): string | undefined => {
+		(time: number): string | undefined => {
 			const video = videoRef.current;
 			if (!video) return undefined;
+			if (
+				!shouldCaptureLiveThumbnail({
+					hoverTime: time,
+					currentTime: video.currentTime,
+				})
+			) {
+				return undefined;
+			}
 			const cached = thumbnailCacheRef.current;
 			if (cached && Math.abs(cached.time - video.currentTime) < 0.25) {
 				return cached.url;
