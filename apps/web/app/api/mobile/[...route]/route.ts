@@ -2162,7 +2162,6 @@ const getCapById = Effect.fn("Mobile.getCapById")(function* (
 		ownerPreferences: access.ownerPreferences,
 	};
 
-	// The share page shows the view count to every viewer, so mobile does too.
 	const analytics = yield* Effect.flatMap(Videos, (videos) =>
 		videos.getAnalytics(capRow.id),
 	).pipe(
@@ -2412,7 +2411,6 @@ const getCapDetail = Effect.fn("Mobile.getCapDetail")(function* (
 	const viewer = yield* getMobileCapViewer(row, rules);
 	const { settings } = rules;
 
-	// Disabled features are withheld here, not just hidden by the app.
 	return {
 		cap,
 		summary: settings.disableSummary
@@ -3590,7 +3588,6 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 									return yield* Effect.fail(new HttpApiError.NotFound());
 								}
 								const [video] = maybeVideo.value;
-								// Owners plus org and space members, like the share page.
 								yield* assertMobileVideoAccess(path.id);
 								const canDownload = yield* Effect.tryPromise({
 									try: () =>
@@ -3690,7 +3687,6 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 													eq(Db.comments.authorId, user.id),
 												),
 											);
-										// Same notification cleanup as the share page.
 										if (comment.parentCommentId) {
 											await tx
 												.delete(Db.notifications)
