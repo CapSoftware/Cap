@@ -118,6 +118,17 @@ impl ScreenFrame {
         }
     }
 
+    /// The frame, when its texture goes back to the capturer's pool once the
+    /// frame is dropped. A caller that passes such a texture on must keep the
+    /// frame until the texture has been consumed, or the next capture can
+    /// overwrite it.
+    pub fn into_pooled(self) -> Option<scap_direct3d::Frame> {
+        match self {
+            ScreenFrame::Captured(frame) if frame.is_pooled() => Some(frame),
+            ScreenFrame::Captured(_) | ScreenFrame::Scaled(_) => None,
+        }
+    }
+
     pub fn width(&self) -> u32 {
         match self {
             ScreenFrame::Captured(frame) => frame.width(),

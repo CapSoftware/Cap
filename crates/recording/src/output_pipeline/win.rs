@@ -346,24 +346,15 @@ impl Muxer for WindowsMuxer {
                         let mut first_timestamp: Option<Duration> = None;
                         let mut frame_count: u64 = 0;
                         let mut frames_reused: u64 = 0;
-                        let mut captured_keepalive: Option<scap_direct3d::Frame> = None;
+                        let mut pooled_frame: Option<scap_direct3d::Frame> = None;
 
                         let result = encoder.run(
                             Arc::new(AtomicBool::default()),
                             || loop {
                                 let (texture, timestamp) = match pacer.next(&video_rx, &pause_flag) {
                                     Paced::Frame(frame, timestamp) => {
-                                        let texture = match frame {
-                                            screen_capture::ScreenFrame::Captured(captured) => {
-                                                let texture = captured.texture().clone();
-                                                captured_keepalive = Some(captured);
-                                                texture
-                                            }
-                                            screen_capture::ScreenFrame::Scaled(scaled) => {
-                                                captured_keepalive = None;
-                                                scaled.texture.clone()
-                                            }
-                                        };
+                                        let texture = frame.texture().clone();
+                                        pooled_frame = frame.into_pooled();
                                         last_texture = Some(texture.clone());
                                         (texture, timestamp)
                                     }
