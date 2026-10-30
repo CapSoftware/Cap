@@ -22,7 +22,15 @@ describe("CapPagination getPaginationItems (#3566)", () => {
 		expect(getPaginationItems(3, 10)).toEqual([1, 2, 3, 4, "ellipsis", 10]);
 
 		// Viewing middle
-		expect(getPaginationItems(5, 10)).toEqual([1, "ellipsis", 4, 5, 6, "ellipsis", 10]);
+		expect(getPaginationItems(5, 10)).toEqual([
+			1,
+			"ellipsis",
+			4,
+			5,
+			6,
+			"ellipsis",
+			10,
+		]);
 
 		// Viewing end
 		expect(getPaginationItems(8, 10)).toEqual([1, "ellipsis", 7, 8, 9, 10]);

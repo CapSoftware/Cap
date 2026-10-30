@@ -20,14 +20,17 @@ export function getPaginationItems(
 
 	for (let i = 0; i < sorted.length; i++) {
 		const current = sorted[i];
+		if (current === undefined) continue;
 		items.push(current);
 
 		if (i < sorted.length - 1) {
 			const next = sorted[i + 1];
-			if (next - current === 2) {
-				items.push(current + 1);
-			} else if (next - current > 2) {
-				items.push("ellipsis");
+			if (next !== undefined) {
+				if (next - current === 2) {
+					items.push(current + 1);
+				} else if (next - current > 2) {
+					items.push("ellipsis");
+				}
 			}
 		}
 	}
