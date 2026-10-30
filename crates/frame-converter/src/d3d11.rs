@@ -533,6 +533,16 @@ impl D3D11Converter {
                 })?
         };
 
+        if is_rgb_format(config.input_format) && !is_rgb_format(config.output_format) {
+            let output_color_space =
+                windows::Win32::Graphics::Direct3D11::D3D11_VIDEO_PROCESSOR_COLOR_SPACE {
+                    _bitfield: YCBCR_MATRIX_BT709,
+                };
+            unsafe {
+                video_context.VideoProcessorSetOutputColorSpace(&processor, &output_color_space);
+            }
+        }
+
         let (input_texture, input_shared_handle) = create_shared_texture(
             &device,
             config.input_width,
@@ -871,6 +881,15 @@ impl FrameConverter for D3D11Converter {
     fn verify_hardware_usage(&self) -> Option<bool> {
         Some(self.verified_gpu_usage.load(Ordering::Relaxed))
     }
+}
+
+// `D3D11_VIDEO_PROCESSOR_COLOR_SPACE.YCbCr_Matrix` (bit 2): the video processor
+// converts RGB to YCbCr with BT.601 unless told otherwise, while every encoder
+// stream is tagged BT.709.
+const YCBCR_MATRIX_BT709: u32 = 1 << 2;
+
+fn is_rgb_format(pixel: Pixel) -> bool {
+    matches!(pixel, Pixel::BGRA | Pixel::RGBA)
 }
 
 fn pixel_to_dxgi(pixel: Pixel) -> Result<DXGI_FORMAT, ConvertError> {
