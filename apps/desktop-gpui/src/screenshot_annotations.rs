@@ -1186,7 +1186,7 @@ impl AnnotationSlider {
 /// annotations -- `renderMaskOverlays`' second canvas (`Preview.tsx:742-758`).
 #[derive(Clone)]
 struct MaskOverlay {
-    /// The region in frame space, snapped to whole frame pixels because that
+    /// The region in frame space, snapped to whole preview pixels because that
     /// is what was resampled.
     rect: Rect,
     image: Arc<RenderImage>,
@@ -2258,14 +2258,12 @@ impl ScreenshotEditorWindow {
         if self.frame.is_none() {
             return Vec::new();
         }
-        let size = (
-            self.frame_size.0.max(0.) as u32,
-            self.frame_size.1.max(0.) as u32,
-        );
-        let rect = self.annotation_image_rect();
+        let scale = preview_scale(self.frame_pixels, self.frame_size);
+        let rect = scale_rect(self.annotation_image_rect(), scale);
         let frame = MaskFrame {
             revision: self.mask_frame_revision,
-            size,
+            size: self.frame_pixels,
+            scale: scale.map(f64::to_bits),
             content: [rect.x, rect.y, rect.width, rect.height].map(f64::to_bits),
             padding: self.project.background.padding.to_bits(),
             crop: self
@@ -3988,12 +3986,13 @@ fn build_mask_overlays(
 ) -> Vec<MaskEntry<MaskOverlay>> {
     update_masks(previous, requests, |request| {
         let processed = request.filter(bgra)?;
+        let [scale_x, scale_y] = request.frame.scale.map(f64::from_bits);
         Some(MaskOverlay {
             rect: Rect {
-                x: request.region.0 as f64,
-                y: request.region.1 as f64,
-                width: processed.width() as f64,
-                height: processed.height() as f64,
+                x: request.region.0 as f64 / scale_x,
+                y: request.region.1 as f64 / scale_y,
+                width: processed.width() as f64 / scale_x,
+                height: processed.height() as f64 / scale_y,
             },
             image: Arc::new(RenderImage::new(smallvec::smallvec![image::Frame::new(
                 processed
@@ -4002,14 +4001,43 @@ fn build_mask_overlays(
     })
 }
 
+/// Preview-image pixels per frame-space unit on each axis. The preview texture
+/// renders at display resolution, so it can be smaller than frame space; marks
+/// stay in frame space and only the mask resample goes through this factor.
+fn preview_scale(pixels: (u32, u32), frame_space: (f32, f32)) -> [f64; 2] {
+    let axis = |pixels: u32, frame: f32| {
+        if pixels == 0 || frame <= 0. {
+            1.
+        } else {
+            f64::from(pixels) / f64::from(frame)
+        }
+    };
+    [axis(pixels.0, frame_space.0), axis(pixels.1, frame_space.1)]
+}
+
+fn scale_rect(rect: Rect, scale: [f64; 2]) -> Rect {
+    Rect {
+        x: rect.x * scale[0],
+        y: rect.y * scale[1],
+        width: rect.width * scale[0],
+        height: rect.height * scale[1],
+    }
+}
+
 fn mask_request(mask: &Annotation, frame: MaskFrame) -> Option<MaskRequest> {
     if mask.annotation_type != AnnotationType::Mask {
         return None;
     }
+    let scale = frame.scale.map(f64::from_bits);
     Some(MaskRequest {
         id: mask.id.clone(),
         region: cap_gpui_kernels::mask_cache::mask_region(
-            [mask.x, mask.y, mask.width, mask.height],
+            [
+                mask.x * scale[0],
+                mask.y * scale[1],
+                mask.width * scale[0],
+                mask.height * scale[1],
+            ],
             frame.content.map(f64::from_bits),
             frame.size,
         )?,
@@ -4554,6 +4582,158 @@ mod tests {
     }
 
     #[test]
+    fn preview_scale_is_the_texture_to_frame_space_ratio_on_each_axis() {
+        assert_eq!(preview_scale((1000, 500), (1000., 500.)), [1., 1.]);
+        assert_eq!(preview_scale((500, 250), (1000., 500.)), [0.5, 0.5]);
+        assert_eq!(preview_scale((600, 250), (1200., 500.)), [0.5, 0.5]);
+        assert_eq!(preview_scale((0, 0), (1000., 500.)), [1., 1.]);
+        assert_eq!(preview_scale((500, 250), (0., 0.)), [1., 1.]);
+    }
+
+    #[test]
+    fn a_mark_keeps_its_relative_position_in_the_preview_texture_and_the_export() {
+        let frame_space = (1200., 800.);
+        let preview = preview_scale((600, 400), frame_space);
+        let mark = shape(AnnotationType::Arrow, 300., 200., 100., 50.);
+
+        let in_preview = scale_rect(
+            Rect {
+                x: mark.x,
+                y: mark.y,
+                width: mark.width,
+                height: mark.height,
+            },
+            preview,
+        );
+        let exported = crate::screenshot_export::scale_annotations(
+            std::slice::from_ref(&mark),
+            2400. / f64::from(frame_space.0),
+            1600. / f64::from(frame_space.1),
+        );
+
+        assert_eq!((in_preview.x / 600., in_preview.y / 400.), (0.25, 0.25));
+        assert_eq!((exported[0].x / 2400., exported[0].y / 1600.), (0.25, 0.25));
+        assert_eq!(mark.x / f64::from(frame_space.0), 0.25);
+    }
+
+    #[test]
+    fn a_downscaled_preview_filters_masks_at_the_export_strength() {
+        let frame = |pixels: (u32, u32)| {
+            let scale = preview_scale(pixels, (400., 200.));
+            MaskFrame {
+                revision: 1,
+                size: pixels,
+                scale: scale.map(f64::to_bits),
+                content: [0., 0., f64::from(pixels.0), f64::from(pixels.1)].map(f64::to_bits),
+                padding: 0_f64.to_bits(),
+                crop: None,
+            }
+        };
+        let mut pixelate = shape(AnnotationType::Mask, 40., 20., 160., 80.);
+        pixelate.mask_type = Some(MaskType::Pixelate);
+        pixelate.mask_level = Some(8.);
+        let pixels: Vec<u8> = (0..100 * 50 * 4).map(|i| (i * 37 % 251) as u8).collect();
+
+        let quarter = mask_request(&pixelate, frame((100, 50))).unwrap();
+        assert_eq!(f64::from_bits(quarter.level), 8.);
+        assert_eq!(
+            quarter.filter(&pixels),
+            cap_gpui_kernels::screenshot::mask_filter(&pixels, 100, 50, quarter.region, true, 2.)
+        );
+    }
+
+    #[test]
+    fn masks_sample_a_downscaled_preview_and_paint_back_in_frame_space() {
+        let frame_space = (200., 100.);
+        let pixels = (100u32, 50u32);
+        let scale = preview_scale(pixels, frame_space);
+        let content = scale_rect(
+            Rect {
+                x: 0.,
+                y: 0.,
+                width: 200.,
+                height: 100.,
+            },
+            scale,
+        );
+        let frame = MaskFrame {
+            revision: 1,
+            size: pixels,
+            scale: scale.map(f64::to_bits),
+            content: [content.x, content.y, content.width, content.height].map(f64::to_bits),
+            padding: 0_f64.to_bits(),
+            crop: None,
+        };
+        let mut blur = shape(AnnotationType::Mask, 40., 20., 80., 40.);
+        blur.mask_type = Some(MaskType::Blur);
+        blur.mask_level = Some(8.);
+
+        let request = mask_request(&blur, frame).unwrap();
+        assert_eq!(request.region, (20, 10, 40, 20));
+
+        let preview_pixels = vec![128u8; pixels.0 as usize * pixels.1 as usize * 4];
+        let overlays = build_mask_overlays(&preview_pixels, &[], std::slice::from_ref(&request));
+        let overlay = overlays[0].value.as_ref().unwrap();
+        assert_eq!(
+            overlay.rect,
+            Rect {
+                x: 40.,
+                y: 20.,
+                width: 80.,
+                height: 40.
+            }
+        );
+
+        let full_size_frame = MaskFrame {
+            size: (200, 100),
+            scale: [1_f64, 1_f64].map(f64::to_bits),
+            content: [0., 0., 200., 100.].map(f64::to_bits),
+            ..frame
+        };
+        let mismatched = mask_request(&blur, full_size_frame).unwrap();
+        let rejected = build_mask_overlays(&preview_pixels, &[], std::slice::from_ref(&mismatched));
+        assert!(rejected[0].value.is_none());
+    }
+
+    #[test]
+    fn a_downscaled_mask_lands_within_one_preview_pixel_of_its_frame_space_rect() {
+        let frame_space = (1000., 600.);
+        let pixels = (300u32, 180u32);
+        let scale = preview_scale(pixels, frame_space);
+        let content = scale_rect(
+            Rect {
+                x: 0.,
+                y: 0.,
+                width: 1000.,
+                height: 600.,
+            },
+            scale,
+        );
+        let frame = MaskFrame {
+            revision: 1,
+            size: pixels,
+            scale: scale.map(f64::to_bits),
+            content: [content.x, content.y, content.width, content.height].map(f64::to_bits),
+            padding: 0_f64.to_bits(),
+            crop: None,
+        };
+        let mut pixelate = shape(AnnotationType::Mask, 101., 52., 333., 211.);
+        pixelate.mask_type = Some(MaskType::Pixelate);
+        pixelate.mask_level = Some(6.);
+
+        let request = mask_request(&pixelate, frame).unwrap();
+        let preview_pixels = vec![90u8; pixels.0 as usize * pixels.1 as usize * 4];
+        let overlays = build_mask_overlays(&preview_pixels, &[], std::slice::from_ref(&request));
+        let rect = overlays[0].value.as_ref().unwrap().rect;
+
+        let tolerance = 1. / scale[0];
+        assert!((rect.x - 101.).abs() <= tolerance);
+        assert!((rect.y - 52.).abs() <= tolerance);
+        assert!((rect.x + rect.width - 434.).abs() <= tolerance);
+        assert!((rect.y + rect.height - 263.).abs() <= tolerance);
+    }
+
+    #[test]
     fn mask_overlays_from_bgra_match_filtering_rgba_then_swapping() {
         let (width, height) = (37u32, 23u32);
         let stride = (width as usize * 4).next_multiple_of(256);
@@ -4577,6 +4757,7 @@ mod tests {
         let frame = MaskFrame {
             revision: 1,
             size: (width, height),
+            scale: [1_f64, 1_f64].map(f64::to_bits),
             content: [0., 0., f64::from(width), f64::from(height)].map(f64::to_bits),
             padding: 0_f64.to_bits(),
             crop: None,
@@ -4638,6 +4819,7 @@ mod tests {
         let input = MaskFrame {
             revision: 1,
             size: frame,
+            scale: [1_f64, 1_f64].map(f64::to_bits),
             content: [rect.x, rect.y, rect.width, rect.height].map(f64::to_bits),
             padding: 0_f64.to_bits(),
             crop: None,
@@ -4688,6 +4870,7 @@ mod tests {
         let frame = MaskFrame {
             revision: 1,
             size: (64, 48),
+            scale: [1_f64, 1_f64].map(f64::to_bits),
             content: [0., 0., 64., 48.].map(f64::to_bits),
             padding: 0_f64.to_bits(),
             crop: None,
@@ -4738,6 +4921,7 @@ mod tests {
         let frame = MaskFrame {
             revision: 1,
             size: (64, 48),
+            scale: [1_f64, 1_f64].map(f64::to_bits),
             content: [0., 0., 64., 48.].map(f64::to_bits),
             padding: 0_f64.to_bits(),
             crop: None,

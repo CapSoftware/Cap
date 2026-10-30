@@ -175,6 +175,7 @@ pub fn load_source(bundle: &Path) -> Result<LoadedSource, String> {
 pub struct ConfigUpdate {
     pub revision: u64,
     pub config: ProjectConfiguration,
+    pub preview_render_size: cap_project::XY<u32>,
 }
 
 /// A one-off render on the loop's GPU device -- `render_screenshot_png` in
@@ -246,7 +247,7 @@ pub async fn run_still_renderer(
                 &mut layers,
                 &decoded,
                 &update.config,
-                None,
+                Some(update.preview_render_size),
             )
             .await
             {
@@ -287,8 +288,8 @@ pub async fn run_still_renderer(
 /// One `render_immediate` of the still -- the body of the Tauri loop
 /// (`screenshot_editor.rs:385-430` over there): frame 0 at 30fps, empty
 /// cursor events, a zoom timeline precomputed to one frame. The preview
-/// renders at the config's base size; an export passes the upscaled
-/// `resolution_base`.
+/// passes a display-sized `resolution_base`; an export passes the upscaled
+/// full-resolution base.
 async fn render_still(
     constants: &RenderVideoConstants,
     frame_renderer: &mut FrameRenderer<'_>,
@@ -340,9 +341,9 @@ async fn render_still(
 /// The export render -- `render_screenshot_png`'s upscale + unpad
 /// (`screenshot_editor.rs:1618-1742` over there): scale the output so a crop
 /// is not downsampled, align the dimensions the way the exporter does, and
-/// strip the wgpu row padding into tight straight-alpha RGBA. The preview's
-/// own dimensions for the same config ride along, because that is the space
-/// the annotations live in and the compositor's scale denominator.
+/// strip the wgpu row padding into tight straight-alpha RGBA. The frame-space
+/// dimensions for the same config ride along, because that is the space the
+/// annotations live in and the compositor's scale denominator.
 async fn render_export_rgba(
     constants: &RenderVideoConstants,
     frame_renderer: &mut FrameRenderer<'_>,
@@ -402,15 +403,11 @@ async fn render_export_rgba(
         cap_gpui_kernels::frame::unpad_rows(&frame.data, row_bytes, padded, frame.height as usize)
             .ok_or_else(|| "Invalid export buffer rows".to_string())?;
 
-    // What the preview renders this config at: `get_base_size`, then the
-    // uniforms' own alignment -- `get_output_size` at scale 1. That is what
-    // `latestFrame()`'s width/height would be after `waitForSyncedPreview`,
-    // and the compositor's `canvas.width / frame.width` denominator.
-    let preview = ProjectUniforms::get_output_size(
-        &constants.options,
-        config,
-        cap_project::XY::new(base_width, base_height),
-    );
+    // Frame space: `get_base_size`, then the uniforms' own alignment --
+    // `get_output_size` at scale 1. That is what `latestFrame()`'s width/height
+    // would be after `waitForSyncedPreview` at full resolution, and the
+    // compositor's `canvas.width / frame.width` denominator.
+    let preview = frame_space_size(&constants.options, config);
 
     Ok(crate::screenshot_export::RawFrame {
         rgba,
@@ -891,6 +888,84 @@ struct PreviewGeometry {
     content: (f32, f32),
 }
 
+fn screenshot_render_options(image_size: (u32, u32)) -> RenderOptions {
+    RenderOptions {
+        screen_size: cap_project::XY::new(image_size.0, image_size.1),
+        camera_size: None,
+        preserve_screen_alpha: true,
+    }
+}
+
+fn full_render_size(image_size: (u32, u32), config: &ProjectConfiguration) -> cap_project::XY<u32> {
+    let (width, height) =
+        ProjectUniforms::get_base_size(&screenshot_render_options(image_size), config);
+    cap_project::XY::new(width, height)
+}
+
+/// The size of frame space: the coordinates annotations and masks are stored
+/// in, and the denominator the export composite scales them by. It depends on
+/// the config alone, never on the resolution the preview texture renders at.
+fn frame_space_size(options: &RenderOptions, config: &ProjectConfiguration) -> (u32, u32) {
+    let (base_w, base_h) = ProjectUniforms::get_base_size(options, config);
+    ProjectUniforms::get_output_size(options, config, cap_project::XY::new(base_w, base_h))
+}
+
+/// The `resolution_base` the preview renders at: enough pixels to stay sharp at
+/// [`MAX_ZOOM`] in the letterboxed viewport on this display, never more than
+/// the full render.
+fn preview_render_size(
+    viewport: (f32, f32),
+    display_scale: f32,
+    full: (u32, u32),
+    frame_space: (u32, u32),
+) -> cap_project::XY<u32> {
+    let full_size = cap_project::XY::new(full.0, full.1);
+    if frame_space.0 == 0 || frame_space.1 == 0 {
+        return full_size;
+    }
+    let target_w = (viewport.0 * display_scale * MAX_ZOOM).ceil();
+    let target_h = (viewport.1 * display_scale * MAX_ZOOM).ceil();
+    let scale = (target_w / frame_space.0 as f32)
+        .min(target_h / frame_space.1 as f32)
+        .min(1.);
+    if scale >= 1. {
+        return full_size;
+    }
+    let width = (((full.0 as f32 * scale).ceil() as u32).max(4).min(full.0) + 3) & !3;
+    let height = (((full.1 as f32 * scale).ceil() as u32).max(2).min(full.1) + 1) & !1;
+    cap_project::XY::new(width, height)
+}
+
+/// The resize effect's body (`context.tsx:474-547`): a layout whose frame
+/// changed size by more than a pixel carries every annotation across from the
+/// previous content rect to the current one. The first call only records the
+/// baseline the next one measures against.
+fn rescale_for_layout(
+    baseline: &mut Option<((f32, f32), annotations::ImageTransform)>,
+    project: &mut ProjectConfiguration,
+    image_size: (u32, u32),
+    frame_size: (f32, f32),
+) {
+    let changed = baseline.as_ref().is_none_or(|(known, _)| {
+        (frame_size.0 - known.0).abs() > 1. || (frame_size.1 - known.1).abs() > 1.
+    });
+    if !changed {
+        return;
+    }
+
+    let current = annotations::calculate_image_transform(
+        (frame_size.0 as f64, frame_size.1 as f64),
+        (image_size.0 as f64, image_size.1 as f64),
+        project.background.padding,
+        project.background.crop.as_ref(),
+        project.aspect_ratio.as_ref(),
+    );
+    if let Some((_, previous)) = baseline {
+        annotations::rescale_annotations(&mut project.annotations, previous, &current);
+    }
+    *baseline = Some((frame_size, current));
+}
+
 /// `handleWheel`'s pan arm (`Preview.tsx:317-320`), in gpui's sign convention.
 /// The webview's `deltaY` is AppKit's `scrollingDeltaY` negated, so the
 /// source's `pan - delta` is `pan + delta` here: an AppKit-positive delta --
@@ -933,6 +1008,7 @@ pub struct ScreenshotEditorWindow {
     pub(crate) frame: Option<Arc<RenderImage>>,
     pub(crate) mask_frame_revision: u64,
     pub(crate) frame_size: (f32, f32),
+    pub(crate) frame_pixels: (u32, u32),
     /// `originalImageSize` -- the source PNG's dimensions, which the crop
     /// button gates on and the frame-space transform needs.
     pub(crate) image_size: Option<(u32, u32)>,
@@ -976,6 +1052,8 @@ pub struct ScreenshotEditorWindow {
     panning: Option<PanDrag>,
     /// The one cached checkerboard tile the preview paints under everything.
     checker: Option<Arc<RenderImage>>,
+    last_preview_render_size: Option<cap_project::XY<u32>>,
+    display_scale: Rc<Cell<f32>>,
 
     toasts: Vec<Toast>,
     next_toast: u64,
@@ -1018,6 +1096,7 @@ impl ScreenshotEditorWindow {
             frame: None,
             mask_frame_revision: 0,
             frame_size: (1., 1.),
+            frame_pixels: (1, 1),
             image_size: None,
             previous_transform: None,
             ready: false,
@@ -1062,6 +1141,8 @@ impl ScreenshotEditorWindow {
             viewport: BoundsCell::default(),
             panning: None,
             checker: Some(checkerboard_tile()),
+            last_preview_render_size: None,
+            display_scale: Rc::new(Cell::new(window.scale_factor())),
 
             toasts: Vec::new(),
             next_toast: 0,
@@ -1113,6 +1194,9 @@ impl ScreenshotEditorWindow {
         self.project = config;
         self.render_gate = RenderInputGate::published(&mut self.project);
         self.image_size = Some(image_size);
+        self.previous_transform = None;
+        self.sync_frame_geometry();
+        self.last_preview_render_size = Some(full_render_size(image_size, &self.project));
         self.config_tx = Some(config_tx);
         self.export_tx = Some(export_tx);
         self.pending_save.borrow_mut().path = Some(self.bundle.clone());
@@ -1142,9 +1226,7 @@ impl ScreenshotEditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let next = (size.0.max(1) as f32, size.1.max(1) as f32);
-        self.rescale_annotations_for(next);
-        self.frame_size = next;
+        self.frame_pixels = (size.0.max(1), size.1.max(1));
         self.mask_frame_revision = self
             .mask_frame_revision
             .checked_add(1)
@@ -1167,34 +1249,19 @@ impl ScreenshotEditorWindow {
         self.pending_save.clone()
     }
 
-    /// The context's resize effect (`context.tsx:474-547`): a frame that has
-    /// changed size by more than a pixel moves every annotation across from
-    /// the old content rect to the new one.
-    fn rescale_annotations_for(&mut self, frame_size: (f32, f32)) {
-        let Some(image_size) = self.image_size else {
-            return;
-        };
-        let changed = self
-            .previous_transform
-            .as_ref()
-            .is_none_or(|(previous, _)| {
-                (frame_size.0 - previous.0).abs() > 1. || (frame_size.1 - previous.1).abs() > 1.
-            });
-        if !changed {
-            return;
+    /// Frame space follows the config the moment it changes, not the moment a
+    /// render lands: annotations, masks, hit testing and layout all read it.
+    fn sync_frame_geometry(&mut self) {
+        let size = self.logical_frame_size();
+        if let Some(image_size) = self.image_size {
+            rescale_for_layout(
+                &mut self.previous_transform,
+                &mut self.project,
+                image_size,
+                size,
+            );
         }
-
-        let current = annotations::calculate_image_transform(
-            (frame_size.0 as f64, frame_size.1 as f64),
-            (image_size.0 as f64, image_size.1 as f64),
-            self.project.background.padding,
-            self.project.background.crop.as_ref(),
-            self.project.aspect_ratio.as_ref(),
-        );
-        if let Some((_, previous)) = self.previous_transform {
-            annotations::rescale_annotations(&mut self.project.annotations, &previous, &current);
-        }
-        self.previous_transform = Some((frame_size, current));
+        self.frame_size = size;
     }
 
     /// Every project edit funnels through here: mutate, record one history
@@ -1211,6 +1278,7 @@ impl ScreenshotEditorWindow {
         if !change(&mut self.project) {
             return;
         }
+        self.sync_frame_geometry();
         // Padding, crop and aspect all move the content rect underneath the
         // masks; the clamp rides along in the same history entry.
         self.clamp_masks();
@@ -1221,18 +1289,54 @@ impl ScreenshotEditorWindow {
         cx.notify();
     }
 
-    pub(crate) fn publish(&mut self) {
+    fn current_preview_render_size(&self) -> Option<cap_project::XY<u32>> {
+        let image_size = self.image_size?;
+        let full = full_render_size(image_size, &self.project);
+        let Some(geometry) = self.preview_geometry() else {
+            return Some(full);
+        };
+        Some(preview_render_size(
+            geometry.size,
+            self.display_scale.get(),
+            (full.x, full.y),
+            frame_space_size(&screenshot_render_options(image_size), &self.project),
+        ))
+    }
+
+    fn send_config(&mut self, preview_render_size: cap_project::XY<u32>) {
         let Some(config_tx) = &self.config_tx else {
+            return;
+        };
+        self.last_preview_render_size = Some(preview_render_size);
+        let _ = config_tx.send(ConfigUpdate {
+            revision: self.revision,
+            config: self.project.clone(),
+            preview_render_size,
+        });
+    }
+
+    fn request_preview_resolution(&mut self) {
+        let Some(preview_render_size) = self.current_preview_render_size() else {
+            return;
+        };
+        if self.last_preview_render_size == Some(preview_render_size) {
+            return;
+        }
+        self.send_config(preview_render_size);
+    }
+
+    pub(crate) fn publish(&mut self) {
+        if self.config_tx.is_none() {
+            return;
+        }
+        let Some(preview_render_size) = self.current_preview_render_size() else {
             return;
         };
         if !self.render_gate.admit(&mut self.project) {
             return;
         }
         self.revision += 1;
-        let _ = config_tx.send(ConfigUpdate {
-            revision: self.revision,
-            config: self.project.clone(),
-        });
+        self.send_config(preview_render_size);
     }
 
     pub(crate) fn schedule_save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1281,6 +1385,8 @@ impl ScreenshotEditorWindow {
         {
             self.selected_annotation = None;
         }
+        self.previous_transform = None;
+        self.sync_frame_geometry();
         self.ensure_background_image(window, cx);
         self.publish();
         self.schedule_save(window, cx);
@@ -1730,6 +1836,15 @@ impl ScreenshotEditorWindow {
     }
 
     // -- Preview geometry -------------------------------------------------------
+
+    fn logical_frame_size(&self) -> (f32, f32) {
+        let Some(image_size) = self.image_size else {
+            return (1., 1.);
+        };
+        let (width, height) =
+            frame_space_size(&screenshot_render_options(image_size), &self.project);
+        (width.max(1) as f32, height.max(1) as f32)
+    }
 
     /// `Preview.tsx:88-139`: letterbox the frame into the padded area, cap it
     /// at the frame's native size (no upscale past 100%), then place the
@@ -4070,6 +4185,7 @@ impl ScreenshotEditorWindow {
         let frame = self.frame.clone();
         let checker = self.checker.clone();
         let area_cell = self.preview_area.clone();
+        let display_scale = self.display_scale.clone();
         let viewport_cell = self.viewport.clone();
         let entity = cx.entity().downgrade();
         let zoom = self.zoom;
@@ -4111,12 +4227,19 @@ impl ScreenshotEditorWindow {
                     // maths reads next frame, paint tiles the cached tile.
                     .child(
                         canvas(
-                            move |bounds, _window, cx| {
-                                if area_cell.get() != Some(bounds) {
+                            move |bounds, window, cx| {
+                                let scale_factor = window.scale_factor();
+                                if area_cell.get() != Some(bounds)
+                                    || display_scale.get() != scale_factor
+                                {
                                     area_cell.set(Some(bounds));
+                                    display_scale.set(scale_factor);
                                     if let Some(entity) = entity.upgrade() {
                                         cx.defer(move |cx| {
-                                            entity.update(cx, |_, cx| cx.notify());
+                                            entity.update(cx, |this, cx| {
+                                                this.request_preview_resolution();
+                                                cx.notify();
+                                            });
                                         });
                                     }
                                 }
@@ -4873,6 +4996,7 @@ pub fn load_screenshot_project(
         let (config_tx, config_rx) = tokio::sync::watch::channel(ConfigUpdate {
             revision: 0,
             config: source.config.clone(),
+            preview_render_size: full_render_size((source.width, source.height), &source.config),
         });
         let (export_tx, export_rx) = tokio::sync::mpsc::channel(1);
         // Bounded and latest-wins like the video pump; stills only re-render
@@ -5259,6 +5383,120 @@ mod tests {
         }
     }
 
+    fn size_f32(size: (u32, u32)) -> (f32, f32) {
+        (size.0 as f32, size.1 as f32)
+    }
+
+    #[test]
+    fn the_preview_renders_sharper_when_the_display_scale_rises() {
+        let full = (6000, 3000);
+        let at = |display_scale| preview_render_size((1000., 500.), display_scale, full, full);
+        assert_eq!(at(1.), cap_project::XY::new(3000, 1500));
+        assert_eq!(at(1.5), cap_project::XY::new(4500, 2250));
+        assert_eq!(at(2.), cap_project::XY::new(6000, 3000));
+        assert_eq!(at(3.), cap_project::XY::new(6000, 3000));
+    }
+
+    #[test]
+    fn the_preview_render_size_is_aligned_and_never_degenerate() {
+        let tiny = preview_render_size((1., 1.), 1., (6000, 4000), (6000, 4000));
+        assert_eq!(tiny, cap_project::XY::new(4, 2));
+
+        let odd = preview_render_size((333., 111.), 1., (1002, 602), (1004, 602));
+        assert_eq!(odd.x % 4, 0);
+        assert_eq!(odd.y % 2, 0);
+        assert!(odd.x <= 1004 && odd.y <= 602);
+
+        let empty = preview_render_size((900., 600.), 2., (1000, 500), (0, 0));
+        assert_eq!(empty, cap_project::XY::new(1000, 500));
+    }
+
+    #[test]
+    fn a_downscaled_preview_texture_stays_inside_frame_space_with_its_aspect() {
+        let image_size = (5120, 2880);
+        let options = screenshot_render_options(image_size);
+        let mut config = new_screenshot_config();
+        config.background.padding = 20.;
+        let full = full_render_size(image_size, &config);
+        let frame_space = frame_space_size(&options, &config);
+        let preview = preview_render_size((800., 450.), 2., (full.x, full.y), frame_space);
+        assert!(preview.x < full.x && preview.y < full.y);
+
+        let texture = ProjectUniforms::get_output_size(&options, &config, preview);
+        assert!(texture.0 < frame_space.0 && texture.1 < frame_space.1);
+        let texture_aspect = texture.0 as f64 / texture.1 as f64;
+        let frame_aspect = frame_space.0 as f64 / frame_space.1 as f64;
+        assert!((texture_aspect - frame_aspect).abs() / frame_aspect < 0.01);
+        assert!(texture.0 as f32 >= 800. * 2. * MAX_ZOOM);
+    }
+
+    #[test]
+    fn frame_space_does_not_move_with_the_preview_resolution() {
+        let image_size = (5120, 2880);
+        let options = screenshot_render_options(image_size);
+        let mut config = new_screenshot_config();
+        config.background.padding = 20.;
+        let full = full_render_size(image_size, &config);
+        let frame_space = frame_space_size(&options, &config);
+        assert_eq!(
+            frame_space,
+            ProjectUniforms::get_output_size(&options, &config, full)
+        );
+        for viewport in [(400., 225.), (1200., 675.)] {
+            let preview = preview_render_size(viewport, 2., (full.x, full.y), frame_space);
+            assert_eq!(frame_space_size(&options, &config), frame_space);
+            let texture = ProjectUniforms::get_output_size(&options, &config, preview);
+            assert!(texture.0 <= frame_space.0 && texture.1 <= frame_space.1);
+        }
+    }
+
+    #[test]
+    fn the_baseline_recorded_at_load_carries_marks_through_the_first_layout_edit() {
+        let image_size = (800, 600);
+        let options = screenshot_render_options(image_size);
+        let mut project = new_screenshot_config();
+        project.annotations.push(arrow("a", 4.));
+
+        let mut baseline = None;
+        let loaded = size_f32(frame_space_size(&options, &project));
+        rescale_for_layout(&mut baseline, &mut project, image_size, loaded);
+        assert_eq!(
+            (project.annotations[0].x, project.annotations[0].y),
+            (120., 80.)
+        );
+
+        project.background.padding = 50.;
+        let padded = size_f32(frame_space_size(&options, &project));
+        assert_eq!(padded, (1120., 840.));
+        rescale_for_layout(&mut baseline, &mut project, image_size, padded);
+        assert_eq!(
+            (project.annotations[0].x, project.annotations[0].y),
+            (280., 200.)
+        );
+        assert_eq!(
+            (project.annotations[0].width, project.annotations[0].height),
+            (300., 160.)
+        );
+    }
+
+    #[test]
+    fn a_missing_baseline_leaves_the_first_layout_edit_unable_to_move_marks() {
+        let image_size = (800, 600);
+        let options = screenshot_render_options(image_size);
+        let mut project = new_screenshot_config();
+        project.annotations.push(arrow("a", 4.));
+        project.background.padding = 50.;
+
+        let mut baseline = None;
+        let padded = size_f32(frame_space_size(&options, &project));
+        rescale_for_layout(&mut baseline, &mut project, image_size, padded);
+        assert_eq!(
+            (project.annotations[0].x, project.annotations[0].y),
+            (120., 80.)
+        );
+        assert!(baseline.is_some());
+    }
+
     #[test]
     fn annotation_only_edits_never_reach_the_still_renderer() {
         let mut project = new_screenshot_config();
@@ -5404,9 +5642,11 @@ mod tests {
     async fn drag_stroke_width(width: u32, height: u32, ticks: usize, gated: bool) -> DragResult {
         let source = synthetic_source(width, height);
         let mut project = source.config.clone();
+        let preview_render_size = full_render_size((width, height), &project);
         let (config_tx, config_rx) = tokio::sync::watch::channel(ConfigUpdate {
             revision: 0,
             config: project.clone(),
+            preview_render_size,
         });
         let (_export_tx, export_rx) = tokio::sync::mpsc::channel(1);
         let (frame_tx, frame_rx) = flume::bounded(2);
@@ -5464,6 +5704,7 @@ mod tests {
                 .send(ConfigUpdate {
                     revision,
                     config: project.clone(),
+                    preview_render_size,
                 })
                 .unwrap();
         }

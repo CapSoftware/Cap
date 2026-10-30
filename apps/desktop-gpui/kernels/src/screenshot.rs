@@ -291,6 +291,21 @@ pub fn mask_filter(
     pixelate: bool,
     level: f64,
 ) -> Option<image::RgbaImage> {
+    mask_filter_at_scale(rgba, frame_width, frame_height, region, pixelate, level, 1.)
+}
+
+/// `mask_filter` for a copy of the frame resampled by `scale`: the block or
+/// blur size the full frame would use is scaled with it, so a downscaled
+/// preview shows the strength the export applies.
+pub fn mask_filter_at_scale(
+    rgba: &[u8],
+    frame_width: u32,
+    frame_height: u32,
+    region: (u32, u32, u32, u32),
+    pixelate: bool,
+    level: f64,
+    scale: f64,
+) -> Option<image::RgbaImage> {
     if frame_width == 0 || frame_height == 0 {
         return None;
     }
@@ -300,12 +315,21 @@ pub fn mask_filter(
     }
 
     let (x0, y0, width, height) = region;
+    let size = mask_filter_size(pixelate, level, scale);
     if pixelate {
-        let block = (level.round() as u32).max(2);
-        return pixelate_region(rgba, stride, region, block);
+        return pixelate_region(rgba, stride, region, size);
     }
 
-    blur_triangle(rgba, stride, x0, y0, width, height, level)
+    blur_triangle(rgba, stride, x0, y0, width, height, size)
+}
+
+fn mask_filter_size(pixelate: bool, level: f64, scale: f64) -> u32 {
+    let full = if pixelate {
+        (level.round() as u32).max(2)
+    } else {
+        ((level / 4.).round() as u32).max(2)
+    };
+    ((f64::from(full) * scale).round() as u32).max(1)
 }
 
 fn blur_triangle(
@@ -315,12 +339,11 @@ fn blur_triangle(
     y0: u32,
     width: u32,
     height: u32,
-    level: f64,
+    factor: u32,
 ) -> Option<image::RgbaImage> {
     if width == 0 || height == 0 {
         return image::RgbaImage::from_raw(width, height, Vec::new());
     }
-    let factor = ((level / 4.).round() as u32).max(2);
     let small_w = (width / factor).max(1);
     let small_h = (height / factor).max(1);
     let small = resize_triangle(rgba, stride, (x0, y0, width, height), (small_w, small_h));
@@ -623,6 +646,31 @@ fn nearest_sample(output: u32, input: u32, output_size: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mask_strength_scales_with_a_resampled_frame() {
+        assert_eq!(mask_filter_size(true, 8., 1.), 8);
+        assert_eq!(mask_filter_size(true, 8., 0.25), 2);
+        assert_eq!(mask_filter_size(true, 1., 1.), 2);
+        assert_eq!(mask_filter_size(true, 3., 0.25), 1);
+        assert_eq!(mask_filter_size(false, 16., 1.), 4);
+        assert_eq!(mask_filter_size(false, 8., 1.), 2);
+        assert_eq!(mask_filter_size(false, 8., 0.5), 1);
+        assert_eq!(mask_filter_size(false, 16., 0.5), 2);
+    }
+
+    #[test]
+    fn the_full_frame_filter_is_unchanged_by_scale_one() {
+        let rgba: Vec<u8> = (0..16 * 12 * 4).map(|i| (i * 37 % 251) as u8).collect();
+        for pixelate in [false, true] {
+            for level in [1., 4., 8., 16., 30.] {
+                assert_eq!(
+                    mask_filter(&rgba, 16, 12, (2, 3, 9, 7), pixelate, level),
+                    mask_filter_at_scale(&rgba, 16, 12, (2, 3, 9, 7), pixelate, level, 1.)
+                );
+            }
+        }
+    }
 
     fn reference_pixelate(
         rgba: &[u8],
