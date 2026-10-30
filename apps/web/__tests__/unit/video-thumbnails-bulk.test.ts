@@ -357,9 +357,16 @@ describe("bulk thumbnail URLs", () => {
 		expect(mocks.listObjects).toHaveBeenCalledTimes(3);
 	});
 
-	it("fails the whole batch on a storage error, like the per-video lookup", async () => {
+	it("isolates a storage error to the affected video", async () => {
 		mocks.storageError = new Error("S3 unavailable");
-		await expect(bulk(["owned", "broken"])).rejects.toThrow();
+		const owned = Exit.succeed(
+			Option.some("signed:owner/owned/screenshot/screen-capture.jpg"),
+		);
+		await expect(bulk(["owned", "broken", "owned"])).resolves.toEqual([
+			owned,
+			Exit.succeed(Option.none()),
+			owned,
+		]);
 		await expect(
 			Effect.runPromise(
 				provide(

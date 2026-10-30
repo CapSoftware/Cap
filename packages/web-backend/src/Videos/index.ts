@@ -913,6 +913,12 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 							},
 							onSuccess: () =>
 								getThumbnailURLForVideo(entry.video).pipe(
+									Effect.catchTag("StorageError", (error) =>
+										Effect.logWarning("Thumbnail lookup failed", {
+											videoId: entry.video.id,
+											error,
+										}).pipe(Effect.as(Option.none<string>())),
+									),
 									Effect.map((url) => Exit.succeed(url)),
 								),
 						});
