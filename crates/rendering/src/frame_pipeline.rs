@@ -3027,6 +3027,167 @@ mod recycled_readback_tests {
     }
 }
 
+#[cfg(test)]
+mod bgra_readback_tests {
+    use super::*;
+
+    const WIDTH: u32 = 37;
+    const HEIGHT: u32 = 5;
+
+    fn pixel(frame: u32, x: u32, y: u32) -> [u8; 4] {
+        [
+            ((x * 7 + y * 3 + frame * 29) % 256) as u8,
+            ((x * 5 + y * 11 + frame * 13) % 256) as u8,
+            ((x * 3 + y * 17 + frame * 41) % 256) as u8,
+            255,
+        ]
+    }
+
+    fn write_source(queue: &wgpu::Queue, source: &wgpu::Texture, frame: u32) {
+        let mut data = Vec::new();
+        for y in 0..HEIGHT {
+            for x in 0..WIDTH {
+                data.extend_from_slice(&pixel(frame, x, y));
+            }
+        }
+        queue.write_texture(
+            source.as_image_copy(),
+            &data,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(WIDTH * 4),
+                rows_per_image: None,
+            },
+            wgpu::Extent3d {
+                width: WIDTH,
+                height: HEIGHT,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+
+    fn assert_frame(frame: &RenderedFrame, number: u32) {
+        assert_eq!(frame.frame_number, number);
+        assert_eq!(frame.padded_bytes_per_row, WIDTH * 4);
+        assert_eq!(frame.data.len(), (WIDTH * HEIGHT * 4) as usize);
+        for y in 0..HEIGHT {
+            for x in 0..WIDTH {
+                let [r, g, b, a] = pixel(number, x, y);
+                let offset = ((y * WIDTH + x) * 4) as usize;
+                assert_eq!(
+                    &frame.data[offset..offset + 4],
+                    &[b, g, r, a],
+                    "frame {number} pixel ({x}, {y})"
+                );
+            }
+        }
+    }
+
+    async fn device() -> Option<(wgpu::Device, wgpu::Queue)> {
+        let instance = crate::create_wgpu_instance_sync();
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions::default())
+            .await
+            .ok()?;
+        if !RgbaToBgraReadback::supported(&adapter) {
+            return None;
+        }
+        adapter
+            .request_device(&wgpu::DeviceDescriptor::default())
+            .await
+            .ok()
+    }
+
+    async fn pipelined_step(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        readback: &mut RgbaToBgraReadback,
+        source: &wgpu::Texture,
+        frame: u32,
+    ) -> Option<RenderedFrame> {
+        write_source(queue, source, frame);
+        let previous = readback.take_pending();
+        let encoder = device.create_command_encoder(&Default::default());
+        let pending = readback
+            .submit(device, queue, encoder, source, frame, 30)
+            .expect("submit readback");
+        readback.pending = Some(pending);
+        match previous {
+            Some(previous) => Some(previous.wait(device).await.expect("previous readback")),
+            None => None,
+        }
+    }
+
+    fn source_texture(device: &wgpu::Device) -> wgpu::Texture {
+        device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("bgra readback source"),
+            size: wgpu::Extent3d {
+                width: WIDTH,
+                height: HEIGHT,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        })
+    }
+
+    #[tokio::test]
+    async fn pipelined_frames_never_reuse_a_buffer_that_is_still_mapped() {
+        let Some((device, queue)) = device().await else {
+            eprintln!("no BGRA-capable graphics adapter available, skipping");
+            return;
+        };
+        let source = source_texture(&device);
+        let mut readback = RgbaToBgraReadback::new(&device);
+
+        assert!(
+            pipelined_step(&device, &queue, &mut readback, &source, 0)
+                .await
+                .is_none()
+        );
+        for frame in 1..=8 {
+            let delivered = pipelined_step(&device, &queue, &mut readback, &source, frame)
+                .await
+                .expect("the previous frame is delivered");
+            assert_frame(&delivered, frame - 1);
+        }
+        let last = flush_pending_bgra_readback(&mut readback, &device, &queue)
+            .await
+            .expect("the last frame is still pending")
+            .expect("last readback");
+        assert_frame(&last, 8);
+        assert!(readback.take_pending().is_none());
+    }
+
+    #[tokio::test]
+    async fn a_discarded_pending_readback_leaves_the_ring_usable() {
+        let Some((device, queue)) = device().await else {
+            eprintln!("no BGRA-capable graphics adapter available, skipping");
+            return;
+        };
+        let source = source_texture(&device);
+        let mut readback = RgbaToBgraReadback::new(&device);
+
+        pipelined_step(&device, &queue, &mut readback, &source, 0).await;
+        drop(readback.take_pending());
+        assert!(
+            pipelined_step(&device, &queue, &mut readback, &source, 1)
+                .await
+                .is_none()
+        );
+        for frame in 2..=5 {
+            let delivered = pipelined_step(&device, &queue, &mut readback, &source, frame)
+                .await
+                .expect("the previous frame is delivered");
+            assert_frame(&delivered, frame - 1);
+        }
+    }
+}
+
 #[cfg(all(test, target_os = "macos"))]
 mod surface_output_tests {
     use super::*;
