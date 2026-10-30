@@ -34,11 +34,13 @@ vi.mock("@cap/web-backend/src/Storage/index", async () => {
 						listObjects: ({
 							prefix,
 							continuationToken,
+							maxKeys,
 						}: {
 							prefix: string;
 							continuationToken?: string;
+							maxKeys?: number;
 						}) => {
-							mocks.listObjects(prefix);
+							mocks.listObjects(prefix, maxKeys);
 							if (mocks.storageError && prefix.includes("broken"))
 								return Effect.fail(
 									new StorageError({ cause: mocks.storageError }),
@@ -49,7 +51,7 @@ vi.mock("@cap/web-backend/src/Storage/index", async () => {
 								.filter((object) => object.Key.startsWith(prefix))
 								.sort((a, b) => (a.Key < b.Key ? -1 : 1));
 							const start = continuationToken ? Number(continuationToken) : 0;
-							const end = start + mocks.pageSize;
+							const end = start + Math.min(mocks.pageSize, maxKeys ?? 1000);
 							return Effect.succeed({
 								Contents: matching.slice(start, end),
 								IsTruncated: end < matching.length,
@@ -113,6 +115,7 @@ const videosById = new Map(
 		makeVideo("protected", { type: "desktopMP4" }),
 		makeVideo("legacy", { type: "desktopMP4" }),
 		makeVideo("reuploaded", { type: "desktopMP4" }),
+		makeVideo("stuffed", { type: "desktopMP4" }),
 		makeVideo("broken", { type: "desktopMP4" }),
 	].map((video) => [video.id as string, video] as const),
 );
@@ -282,7 +285,7 @@ describe("bulk thumbnail URLs", () => {
 	it("lists only the screenshot key prefix instead of the whole video folder", async () => {
 		await bulk(["owned"]);
 		expect(mocks.listObjects.mock.calls).toEqual([
-			["owner/owned/screenshot/screen-capture."],
+			["owner/owned/screenshot/screen-capture.", 100],
 		]);
 	});
 
@@ -300,8 +303,8 @@ describe("bulk thumbnail URLs", () => {
 			Exit.succeed(Option.some("signed:owner/legacy/screen-capture.jpg")),
 		);
 		expect(mocks.listObjects.mock.calls).toEqual([
-			["owner/legacy/screenshot/screen-capture."],
-			["owner/legacy/screen-capture."],
+			["owner/legacy/screenshot/screen-capture.", 100],
+			["owner/legacy/screen-capture.", 100],
 		]);
 	});
 
@@ -332,29 +335,28 @@ describe("bulk thumbnail URLs", () => {
 		},
 	);
 
-	it("reads every page of a truncated listing", async () => {
-		mocks.pageSize = 1;
-		mocks.objects.set("reuploaded", [
+	it("lists each screenshot prefix with one bounded page", async () => {
+		mocks.objects.set("stuffed", [
 			{
-				Key: "owner/reuploaded/screenshot/screen-capture.jpeg",
+				Key: "owner/stuffed/screenshot/screen-capture.jpg",
 				LastModified: new Date("2026-01-01T00:00:00Z"),
 			},
-			{
-				Key: "owner/reuploaded/screenshot/screen-capture.jpg",
+			...Array.from({ length: 500 }, (_, index) => ({
+				Key: `owner/stuffed/screenshot/screen-capture.x${String(index).padStart(4, "0")}`,
 				LastModified: new Date("2026-02-01T00:00:00Z"),
-			},
-			{
-				Key: "owner/reuploaded/screenshot/screen-capture.png",
-				LastModified: new Date("2026-03-01T00:00:00Z"),
-			},
+			})),
 		]);
-		const [exit] = await bulk(["reuploaded"]);
+		const [exit] = await bulk(["stuffed"]);
 		expect(exit).toEqual(
 			Exit.succeed(
-				Option.some("signed:owner/reuploaded/screenshot/screen-capture.png"),
+				Option.some("signed:owner/stuffed/screenshot/screen-capture.jpg"),
 			),
 		);
-		expect(mocks.listObjects).toHaveBeenCalledTimes(3);
+		expect(mocks.listObjects).toHaveBeenCalledTimes(1);
+		expect(mocks.listObjects).toHaveBeenCalledWith(
+			"owner/stuffed/screenshot/screen-capture.",
+			100,
+		);
 	});
 
 	it("isolates a storage error to the affected video", async () => {

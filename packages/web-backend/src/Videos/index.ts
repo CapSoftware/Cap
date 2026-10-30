@@ -44,6 +44,7 @@ const SCREENSHOT_OBJECT_LIST_PREFIXES = [
 	"screenshot/screen-capture.",
 	"screen-capture.",
 ];
+const SCREENSHOT_OBJECT_LIST_MAX_KEYS = 100;
 type StorageBucket = Effect.Effect.Success<
 	ReturnType<StorageService["getAccessForVideo"]>
 >[0];
@@ -243,29 +244,14 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 			},
 		);
 
-		const listAllObjects = Effect.fn("Videos.listAllObjects")(function* (
-			bucket: StorageBucket,
-			prefix: string,
-		) {
-			const contents: Array<ScreenshotObject> = [];
-			const seenTokens = new Set<string>();
-			let continuationToken: string | undefined;
-			do {
-				const page = yield* bucket.listObjects({ prefix, continuationToken });
-				contents.push(...(page.Contents ?? []));
-				continuationToken = yield* nextObjectPage(page, seenTokens);
-			} while (continuationToken);
-			return contents;
-		});
-
 		const findStoredScreenshotKey = Effect.fn("Videos.findStoredScreenshotKey")(
 			function* (bucket: StorageBucket, videoPrefix: string) {
 				for (const prefix of SCREENSHOT_OBJECT_LIST_PREFIXES) {
-					const contents = yield* listAllObjects(
-						bucket,
-						`${videoPrefix}${prefix}`,
-					);
-					const key = findScreenshotObjectKey(contents);
+					const page = yield* bucket.listObjects({
+						prefix: `${videoPrefix}${prefix}`,
+						maxKeys: SCREENSHOT_OBJECT_LIST_MAX_KEYS,
+					});
+					const key = findScreenshotObjectKey(page.Contents ?? []);
 					if (key) return key;
 				}
 				return null;
