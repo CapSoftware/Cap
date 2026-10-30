@@ -59,6 +59,7 @@ import type {
 	RecordingStatusBroadcast,
 	ServiceWorkerRequest,
 	ServiceWorkerResponse,
+	StartRecordingRequest,
 } from "../shared/types";
 
 // popup.html is web-accessible with use_dynamic_url so sites cannot fingerprint
@@ -284,7 +285,7 @@ const sendOffscreenRuntimeMessage = (message: OffscreenRequest) =>
 
 const sendOffscreen = async (
 	message: OffscreenRequest,
-	options: { createIfMissing?: boolean } = {},
+	options: { createIfMissing?: boolean; shouldRetry?: () => boolean } = {},
 ) => {
 	if (options.createIfMissing === false) {
 		const hasDocument = await hasOffscreenDocument();
@@ -304,7 +305,8 @@ const sendOffscreen = async (
 			if (
 				options.createIfMissing === false ||
 				attempt === OFFSCREEN_MESSAGE_ATTEMPTS ||
-				!isTransientOffscreenMessageError(error)
+				!isTransientOffscreenMessageError(error) ||
+				options.shouldRetry?.() === false
 			) {
 				break;
 			}
@@ -1303,6 +1305,7 @@ const resolveMicWarning = async (
 // hold the start, and every later Start click that joins it, forever.
 const RECORDING_START_TIMEOUT_MS = 2 * 60 * 1000;
 const RECORDING_START_CANCEL_GRACE_MS = 2_000;
+const RECORDING_START_UNWIND_TIMEOUT_MS = 90_000;
 const RECORDING_START_TIMEOUT_MESSAGE = "Nothing was chosen to share.";
 
 let abandonPendingRecordingStart:
@@ -1344,6 +1347,26 @@ const abandonOffscreenStart = async (
 		response.status.capturePending
 	) {
 		await closeOffscreenDocument();
+		return;
+	}
+	// Past the picker the recorder is still unwinding its start, which ends
+	// with its in-flight requests. A new start before then would be refused as
+	// already active, so the cancel resolves only once it is done.
+	if (offscreenStart) {
+		await offscreenStart.then(
+			() => undefined,
+			() => undefined,
+		);
+		return;
+	}
+	const deadline = Date.now() + RECORDING_START_UNWIND_TIMEOUT_MS;
+	while (Date.now() < deadline) {
+		const current = await sendOffscreen(
+			{ target: "offscreen", type: "get-recording-status" },
+			{ createIfMissing: false },
+		).catch(() => null);
+		if (!current?.ok || current.status?.phase !== "creating") return;
+		await wait(500);
 	}
 };
 
@@ -1351,9 +1374,24 @@ const abandonOffscreenStart = async (
 // first by the timeout or a cancel from the floating bar. Once abandoned, the
 // recorder's own (late) reply is ignored: closing its document rejects it with
 // a port error that would otherwise surface as a bogus failure.
-const raceRecordingStart = (offscreenStart: Promise<OffscreenResponse>) =>
+// The request is built inside the race (it waits on the plan re-check) so a
+// Cancel that lands before it is sent stops the start before the recorder
+// opens a picker.
+const raceRecordingStart = (
+	buildRequest: () => Promise<StartRecordingRequest>,
+) =>
 	new Promise<OffscreenResponse>((resolve, reject) => {
 		let abandoned = false;
+		let settledResponse: OffscreenResponse | null = null;
+		// Closing the recorder to dismiss a stuck picker fails the pending
+		// request with the same port error a not-yet-listening recorder gives,
+		// so an abandoned start must not be retried into a fresh recorder.
+		const offscreenStart = buildRequest().then(
+			(request): Promise<OffscreenResponse> | OffscreenResponse =>
+				abandoned
+					? { ok: false, canceled: true, error: "Recording canceled" }
+					: sendOffscreen(request, { shouldRetry: () => !abandoned }),
+		);
 		const release = () => {
 			globalThis.clearTimeout(timer);
 			if (abandonPendingRecordingStart === abandon) {
@@ -1364,13 +1402,23 @@ const raceRecordingStart = (offscreenStart: Promise<OffscreenResponse>) =>
 			if (abandoned) return;
 			abandoned = true;
 			release();
-			void abandonOffscreenStart(offscreenStart).finally(() =>
+			void abandonOffscreenStart(offscreenStart).finally(() => {
+				// A start the recorder had already completed keeps recording, so
+				// report it rather than a cancellation that did not happen.
+				if (
+					settledResponse?.ok &&
+					settledResponse.status &&
+					isCapturingRecordingStatus(settledResponse.status)
+				) {
+					resolve(settledResponse);
+					return;
+				}
 				resolve(
 					reason === "canceled"
 						? { ok: false, canceled: true, error: "Recording canceled" }
 						: { ok: false, error: RECORDING_START_TIMEOUT_MESSAGE },
-				),
-			);
+				);
+			});
 		};
 		const timer = globalThis.setTimeout(
 			() => abandon("timeout"),
@@ -1379,6 +1427,7 @@ const raceRecordingStart = (offscreenStart: Promise<OffscreenResponse>) =>
 		abandonPendingRecordingStart = abandon;
 		offscreenStart.then(
 			(response) => {
+				settledResponse = response;
 				if (abandoned) return;
 				release();
 				resolve(response);
@@ -1451,18 +1500,16 @@ const performRecordingStart = async (
 	// no blanket re-injection is needed here; sendOverlay still injects
 	// per-tab on demand and the bootstrap lazy-loads the overlay UI.
 	try {
-		return await raceRecordingStart(
-			sendOffscreen({
-				target: "offscreen",
-				type: "start-recording",
-				mode,
-				settings: recordingSettings,
-				auth,
-				bootstrap: await startBootstrap,
-				tabId,
-				tabStreamId,
-			}),
-		);
+		return await raceRecordingStart(async () => ({
+			target: "offscreen",
+			type: "start-recording",
+			mode,
+			settings: recordingSettings,
+			auth,
+			bootstrap: await startBootstrap,
+			tabId,
+			tabStreamId,
+		}));
 	} catch (error) {
 		// The recorder panel closes as soon as the status leaves "idle", so a
 		// silent reset would leave the user with no feedback at all. Broadcast
