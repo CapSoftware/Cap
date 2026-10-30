@@ -4043,11 +4043,9 @@ fn mask_request(mask: &Annotation, frame: MaskFrame) -> Option<MaskRequest> {
         )?,
         frame,
         pixelate: mask.mask_type == Some(MaskType::Pixelate),
-        level: mask
-            .mask_level
-            .unwrap_or(MASK_FALLBACK_LEVEL)
-            .max(1.)
-            .to_bits(),
+        level: (mask.mask_level.unwrap_or(MASK_FALLBACK_LEVEL).max(1.)
+            * (scale[0] * scale[1]).sqrt())
+        .to_bits(),
     })
 }
 
@@ -4614,6 +4612,29 @@ mod tests {
         assert_eq!((in_preview.x / 600., in_preview.y / 400.), (0.25, 0.25));
         assert_eq!((exported[0].x / 2400., exported[0].y / 1600.), (0.25, 0.25));
         assert_eq!(mark.x / f64::from(frame_space.0), 0.25);
+    }
+
+    #[test]
+    fn a_downscaled_preview_scales_mask_strength_with_its_pixels() {
+        let frame = |pixels: (u32, u32)| {
+            let scale = preview_scale(pixels, (400., 200.));
+            MaskFrame {
+                revision: 1,
+                size: pixels,
+                scale: scale.map(f64::to_bits),
+                content: [0., 0., f64::from(pixels.0), f64::from(pixels.1)].map(f64::to_bits),
+                padding: 0_f64.to_bits(),
+                crop: None,
+            }
+        };
+        let mut pixelate = shape(AnnotationType::Mask, 40., 20., 160., 80.);
+        pixelate.mask_type = Some(MaskType::Pixelate);
+        pixelate.mask_level = Some(8.);
+
+        let full = mask_request(&pixelate, frame((400, 200))).unwrap();
+        let quarter = mask_request(&pixelate, frame((100, 50))).unwrap();
+        assert_eq!(f64::from_bits(full.level), 8.);
+        assert_eq!(f64::from_bits(quarter.level), 2.);
     }
 
     #[test]
