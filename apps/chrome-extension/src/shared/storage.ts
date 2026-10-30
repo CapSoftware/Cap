@@ -219,14 +219,17 @@ export const loadCachedBootstrap = async () => {
 };
 
 export const saveCachedBootstrap = (bootstrap: BootstrapData) =>
-	setLocal({
-		[BOOTSTRAP_CACHE_KEY]: {
-			bootstrap,
-			cachedAt: Date.now(),
-		},
-	});
+	withKeyLock(BOOTSTRAP_CACHE_KEY, () =>
+		setLocal({
+			[BOOTSTRAP_CACHE_KEY]: {
+				bootstrap,
+				cachedAt: Date.now(),
+			},
+		}),
+	);
 
-export const clearCachedBootstrap = () => removeLocal(BOOTSTRAP_CACHE_KEY);
+export const clearCachedBootstrap = () =>
+	withKeyLock(BOOTSTRAP_CACHE_KEY, () => removeLocal(BOOTSTRAP_CACHE_KEY));
 
 export const savePendingAuth = (pendingAuth: PendingAuth) =>
 	setLocal({ [PENDING_AUTH_KEY]: pendingAuth });
