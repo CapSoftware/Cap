@@ -1,4 +1,4 @@
-use crate::screenshot::mask_filter;
+use crate::screenshot::mask_filter_at_scale;
 use std::{collections::HashSet, hash::Hash};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -22,13 +22,15 @@ pub struct MaskRequest {
 
 impl MaskRequest {
     pub fn filter(&self, rgba: &[u8]) -> Option<image::RgbaImage> {
-        mask_filter(
+        let [x, y] = self.frame.scale.map(f64::from_bits);
+        mask_filter_at_scale(
             rgba,
             self.frame.size.0,
             self.frame.size.1,
             self.region,
             self.pixelate,
             f64::from_bits(self.level),
+            (x * y).sqrt(),
         )
     }
 }
@@ -200,6 +202,7 @@ pub fn mask_region(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::screenshot::mask_filter;
     use std::sync::Arc;
 
     fn requests(count: usize) -> Vec<MaskRequest> {
