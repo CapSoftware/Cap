@@ -97,7 +97,7 @@ describe("dashboard pagination counts", () => {
 			await load();
 			const queries = mocks.query.mock.calls.map(([query]) => String(query));
 			const countQuery = queries.find((query) =>
-				query.startsWith("select count(*)"),
+				/^select count\(/i.test(query),
 			);
 			const listQuery = queries.find((query) => query.includes(" group by "));
 			const folderFilter = `\`${folderTable}\`.\`folderId\` is null`;
