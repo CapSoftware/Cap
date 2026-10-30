@@ -161,12 +161,10 @@ pub fn new_segment_min_duration(secs_per_pixel: f64) -> f64 {
 }
 
 /// The minimap's chip floor (`TL/Minimap.tsx:9`), the height of its hit strip
-/// and the 4px indicator drawn inside that strip, and the width it is allowed
-/// to take in the card's bottom-right corner.
+/// and the 4px indicator drawn inside that strip.
 const MINIMAP_MIN_CHIP_WIDTH: f32 = 20.;
 pub const MINIMAP_HEIGHT: f32 = 10.;
 pub const MINIMAP_BAR_HEIGHT: f32 = 4.;
-pub const MINIMAP_MAX_WIDTH: f32 = 78.;
 
 /// The edge fade (`TL/index.tsx:1103-1106`).
 
@@ -2010,13 +2008,8 @@ pub fn render_ruler(theme: &Theme, view: TimelineView, viewport_width: f32) -> A
         .into_any_element()
 }
 
-/// The minimap's strip: pinned to the card's inner right edge, at most
-/// [`MINIMAP_MAX_WIDTH`] wide. Returns its window x and its width, which the
-/// drag maths and the drawn bar have to agree on.
 pub fn minimap_bounds(viewport_width: f32) -> (f32, f32) {
-    let strip = ruler_width(viewport_width);
-    let width = MINIMAP_MAX_WIDTH.min(strip);
-    (content_left() + strip - width, width)
+    (content_left(), ruler_width(viewport_width))
 }
 
 pub fn minimap_chip(transform: Transform, total_duration: f64, bar_width: f32) -> (f32, f32) {
@@ -5367,6 +5360,15 @@ mod tests {
     }
 
     // -- The minimap --------------------------------------------------------
+
+    #[test]
+    fn the_minimap_spans_the_ruler() {
+        for viewport_width in [800., 1275., 2560.] {
+            let (left, width) = minimap_bounds(viewport_width);
+            assert_eq!(left, content_left());
+            assert_eq!(width, ruler_width(viewport_width));
+        }
+    }
 
     #[test]
     fn the_minimap_chip_never_shrinks_below_its_floor() {
