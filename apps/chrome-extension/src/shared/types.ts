@@ -159,6 +159,9 @@ export type RecordingStatus =
 	  }
 	| {
 			phase: "creating";
+			// Set while the recorder waits on the browser's screen-share picker,
+			// which script cannot dismiss.
+			capturePending?: boolean;
 	  }
 	| {
 			phase: "recording" | "paused" | "uploading";
