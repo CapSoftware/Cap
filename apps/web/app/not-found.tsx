@@ -9,7 +9,10 @@ export default function NotFound() {
 	return (
 		<div className="wrapper flex flex-col items-center justify-center h-screen text-center">
 			{HALLOWEEN ? (
-				<div aria-hidden="true" className="relative mb-6">
+				<div
+					aria-hidden="true"
+					className="relative mb-6 motion-reduce:[&_*]:!animate-none"
+				>
 					<style href="ht-halloween" precedence="default">
 						{HALLOWEEN_CSS}
 					</style>
