@@ -15,6 +15,8 @@ let onMessage: MessageListener;
 let stored: Record<string, unknown>;
 let pollReplies: Array<(response: OffscreenResponse) => void>;
 let contextReplies: Array<(contexts: object[]) => void>;
+let onActionClicked: (tab: chrome.tabs.Tab) => void;
+let tabsApi: Record<string, ReturnType<typeof vi.fn>>;
 
 const liveStatus: RecordingStatus = {
 	phase: "recording",
@@ -36,6 +38,14 @@ beforeEach(async () => {
 			callback();
 		},
 		setAccessLevel: vi.fn(),
+	};
+	tabsApi = {
+		update: vi.fn((tabId, properties, callback) =>
+			callback({ id: tabId, windowId: 1, ...properties }),
+		),
+		create: vi.fn((properties, callback) =>
+			callback({ id: 99, ...properties }),
+		),
 	};
 	vi.stubGlobal("chrome", {
 		storage: { local: storage, session: storage },
@@ -59,16 +69,26 @@ beforeEach(async () => {
 			setPopup: vi.fn((_options, callback) => callback()),
 			setBadgeText: vi.fn((_options, callback) => callback()),
 			setTitle: vi.fn((_options, callback) => callback()),
-			onClicked: { addListener: vi.fn() },
+			onClicked: {
+				addListener: (listener: (tab: chrome.tabs.Tab) => void) => {
+					onActionClicked = listener;
+				},
+			},
 		},
 		tabs: {
+			...tabsApi,
 			query: (_query: object, callback: (tabs: object[]) => void) =>
 				callback([]),
 			onActivated: { addListener: vi.fn() },
 			onUpdated: { addListener: vi.fn() },
 			onRemoved: { addListener: vi.fn() },
 		},
-		windows: { onFocusChanged: { addListener: vi.fn() } },
+		windows: {
+			onFocusChanged: { addListener: vi.fn() },
+			getLastFocused: vi.fn((callback) => callback({ id: 1 })),
+			update: vi.fn((_windowId, _properties, callback) => callback()),
+			create: vi.fn(),
+		},
 	});
 	await import("./service-worker");
 });
@@ -173,5 +193,79 @@ describe("recording status synchronization", () => {
 		expect(stored[RECORDING_STATE_KEY]).toMatchObject({
 			status: { phase: "idle" },
 		});
+	});
+});
+
+describe("offscreen messaging", () => {
+	it("retries a request that reached the extension before the offscreen listener", async () => {
+		const response = new Promise<ServiceWorkerResponse>((resolve) => {
+			onMessage(
+				{ target: "service-worker", type: "pause-recording" },
+				{},
+				resolve,
+			);
+		});
+		answerContexts(true);
+		await vi.waitFor(() => expect(pollReplies).toHaveLength(1));
+		const runtime = chrome.runtime as { lastError?: { message: string } };
+		runtime.lastError = {
+			message: "The message port closed before a response was received.",
+		};
+		pollReplies[0](undefined as unknown as OffscreenResponse);
+		runtime.lastError = undefined;
+
+		await vi.waitFor(() => expect(contextReplies).toHaveLength(1));
+		answerContexts(true);
+		await vi.waitFor(() => expect(pollReplies).toHaveLength(2));
+		const pausedStatus = { ...liveStatus, phase: "paused" as const };
+		pollReplies[1]({ ok: true, status: pausedStatus });
+
+		expect(await response).toMatchObject({ ok: true, status: pausedStatus });
+	});
+});
+
+describe("recorder on browser pages", () => {
+	const clickOn = async (url: string) => {
+		onActionClicked({ id: 7, index: 2, windowId: 1, url } as chrome.tabs.Tab);
+		// No recorder document exists, however many times the worker asks.
+		await vi.waitFor(() => {
+			while (contextReplies.length > 0) answerContexts(false);
+			expect(
+				tabsApi.update.mock.calls.length + tabsApi.create.mock.calls.length,
+			).toBe(1);
+		});
+	};
+	const capPage = expect.stringMatching(
+		/^chrome-extension:\/\/test\/how-it-works\.html\?recorder=open$/,
+	);
+
+	it.each(["chrome://newtab/", "edge://newtab/"])(
+		"replaces an empty %s with the recorder page",
+		async (url) => {
+			await clickOn(url);
+
+			expect(tabsApi.update).toHaveBeenCalledWith(
+				7,
+				{ url: capPage, active: true },
+				expect.any(Function),
+			);
+			expect(tabsApi.create).not.toHaveBeenCalled();
+		},
+	);
+
+	it("opens the recorder page beside any other browser page", async () => {
+		await clickOn("chrome://settings/");
+
+		expect(tabsApi.create).toHaveBeenCalledWith(
+			expect.objectContaining({
+				url: capPage,
+				active: true,
+				windowId: 1,
+				index: 3,
+				openerTabId: 7,
+			}),
+			expect.any(Function),
+		);
+		expect(tabsApi.update).not.toHaveBeenCalled();
 	});
 });

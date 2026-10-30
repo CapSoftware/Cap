@@ -22,6 +22,7 @@ import { and, count, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { type Array, Effect } from "effect";
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
+import { seedThumbnailUrls } from "@/lib/seeded-thumbnails";
 import { runPromise } from "@/lib/server";
 import { Caps } from "./Caps";
 
@@ -272,6 +273,12 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
 	const organizationSettings = organizationSettingsRow?.settings ?? null;
 
 	const videoIds = videoData.map((video) => video.id);
+	const thumbnails = seedThumbnailUrls(
+		user,
+		videoData
+			.filter((video) => !video.hasActiveUpload)
+			.map((video) => Video.VideoId.make(video.id)),
+	);
 	const sharedSpacesMap =
 		await getSharedSpacesForVideos(videoIds).pipe(runPromise);
 
@@ -340,6 +347,7 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
 			data={processedVideoData}
 			folders={foldersData}
 			count={totalCount}
+			thumbnails={thumbnails}
 			analyticsEnabled={Boolean(
 				serverEnv().TINYBIRD_TOKEN && serverEnv().TINYBIRD_HOST,
 			)}

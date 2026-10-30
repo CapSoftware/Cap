@@ -2,9 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
 	createLinuxBundleConfig,
-	GPUI_RPM_DEPENDS,
+	RPM_DEPENDS,
 	supportedLinuxBundles,
-	TAURI_RPM_DEPENDS,
 } from "./linux-bundle-config.mjs";
 
 test("nightly builds retain DEB and AppImage without passing invalid hyphenated versions to RPM", () => {
@@ -16,104 +15,75 @@ test("nightly builds retain DEB and AppImage without passing invalid hyphenated 
 	assert.deepEqual(supportedLinuxBundles("0.6.0-rc.1"), ["deb", "appimage"]);
 });
 
-test("all Linux formats retain the exact native library sonames and shared icons", () => {
-	const icon =
-		"/usr/share/icons/hicolor/scalable/status/so.cap.desktop-tray-studio-symbolic.svg";
-	const config = createLinuxBundleConfig(
-		["libonnxruntime.so", "libavcodec.so.61", "libonnxruntime.so.1"],
-		{ [icon]: "icons/linux/so.cap.desktop-tray-studio-symbolic.svg" },
-	);
+test("all Linux formats map the exact native library sonames from the app directory", () => {
+	const config = createLinuxBundleConfig([
+		"libonnxruntime.so",
+		"libavcodec.so.61",
+		"libonnxruntime.so.1",
+	]);
 
 	for (const format of ["deb", "rpm", "appimage"]) {
 		assert.equal(
 			config.bundle.linux[format].files["/usr/lib/cap/libavcodec.so.61"],
-			"../../../target/native-deps/cap-deb-libs/libavcodec.so.61",
+			"../../target/native-deps/cap-deb-libs/libavcodec.so.61",
 		);
 		assert.equal(
 			config.bundle.linux[format].files["/usr/lib/cap/libonnxruntime.so.1"],
-			"../../../target/native-deps/cap-deb-libs/libonnxruntime.so.1",
-		);
-		assert.equal(
-			config.bundle.linux[format].files[icon],
-			"icons/linux/so.cap.desktop-tray-studio-symbolic.svg",
+			"../../target/native-deps/cap-deb-libs/libonnxruntime.so.1",
 		);
 	}
+	assert.equal(
+		config.bundle.linux.deb.files["/usr/lib/cap/package-format"],
+		"../../packaging/linux/deb",
+	);
 });
 
-test("AppImage includes the system-audio control tool and webview media framework", () => {
+test("AppImage includes the system-audio control tool without a webview media framework", () => {
 	const { appimage, deb, rpm } = createLinuxBundleConfig([]).bundle.linux;
 	assert.equal(appimage.files["/usr/bin/pactl"], "/usr/bin/pactl");
-	assert.equal(appimage.bundleMediaFramework, true);
+	assert.equal(appimage.bundleMediaFramework, false);
 	assert.equal(
 		appimage.files["/usr/lib/alsa-lib/libasound_module_pcm_pulse.so"],
-		"../../../target/native-deps/cap-appimage-libs/libasound_module_pcm_pulse.so",
+		"../../target/native-deps/cap-appimage-libs/libasound_module_pcm_pulse.so",
 	);
 	assert.equal(
 		appimage.files["/usr/lib/cap/alsa-pulse.conf"],
-		"../../../packaging/linux/alsa-pulse.conf",
+		"../../packaging/linux/alsa-pulse.conf",
 	);
 	for (const format of [deb, rpm]) {
 		assert.equal(format.files["/usr/lib/cap/alsa-pulse.conf"], undefined);
 	}
 });
 
-test("library mappings are deterministic and preserve the input mappings", () => {
-	const files = { "/usr/share/cap/example": "example" };
-	const first = createLinuxBundleConfig(["libz.so.1", "liba.so.2"], files);
-	const second = createLinuxBundleConfig(
-		["liba.so.2", "libz.so.1", "liba.so.2"],
-		files,
-	);
+test("library mappings are deterministic", () => {
+	const first = createLinuxBundleConfig(["libz.so.1", "liba.so.2"]);
+	const second = createLinuxBundleConfig([
+		"liba.so.2",
+		"libz.so.1",
+		"liba.so.2",
+	]);
 	assert.equal(JSON.stringify(first), JSON.stringify(second));
-	assert.deepEqual(files, { "/usr/share/cap/example": "example" });
 });
 
 test("Debian audio dependencies retain existing requirements without duplicates", () => {
-	const dependencies = ["libgtk-3-0", "libasound2-plugins"];
-	const config = createLinuxBundleConfig([], {}, dependencies);
+	const dependencies = ["libxkbcommon0", "libasound2-plugins"];
+	const config = createLinuxBundleConfig([], dependencies);
 	assert.deepEqual(config.bundle.linux.deb.depends, dependencies);
 	assert.notEqual(config.bundle.linux.deb.depends, dependencies);
 	assert.deepEqual(
-		createLinuxBundleConfig([], {}, ["libgtk-3-0"]).bundle.linux.deb.depends,
-		["libgtk-3-0", "libasound2-plugins"],
+		createLinuxBundleConfig([], ["libxkbcommon0"]).bundle.linux.deb.depends,
+		["libxkbcommon0", "libasound2-plugins"],
 	);
 });
 
-test("the GPUI app maps native libraries from its own crate directory without webview packages", () => {
-	const config = createLinuxBundleConfig(
-		["libavcodec.so.61"],
-		{},
-		["libxkbcommon0"],
-		{
-			root: "../..",
-			rpmDependencies: GPUI_RPM_DEPENDS,
-			mediaFramework: false,
-		},
-	);
-	const { appimage, deb, rpm } = config.bundle.linux;
-	for (const format of [appimage, deb, rpm]) {
-		assert.equal(
-			format.files["/usr/lib/cap/libavcodec.so.61"],
-			"../../target/native-deps/cap-deb-libs/libavcodec.so.61",
-		);
-	}
-	assert.equal(
-		deb.files["/usr/lib/cap/package-format"],
-		"../../packaging/linux/deb",
-	);
-	assert.equal(appimage.bundleMediaFramework, false);
-	assert.deepEqual(deb.depends, ["libxkbcommon0", "libasound2-plugins"]);
+test("package dependencies carry no webview packages", () => {
+	const { deb, rpm } = createLinuxBundleConfig([], ["libxkbcommon0"]).bundle
+		.linux;
 	for (const depends of [deb.depends, rpm.depends]) {
 		assert.ok(
 			!depends.some((dependency) => /webkit|gtk|appindicator/.test(dependency)),
 		);
 	}
-	assert.notEqual(rpm.depends, GPUI_RPM_DEPENDS);
-});
-
-test("the Tauri dev app keeps its webview RPM dependencies by default", () => {
-	assert.deepEqual(
-		createLinuxBundleConfig([]).bundle.linux.rpm.depends,
-		TAURI_RPM_DEPENDS,
-	);
+	assert.deepEqual(rpm.depends, RPM_DEPENDS);
+	assert.notEqual(rpm.depends, RPM_DEPENDS);
 });

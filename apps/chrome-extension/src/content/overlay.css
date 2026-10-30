@@ -266,37 +266,6 @@
 	border-radius: 0 0 6px;
 }
 
-.cap-extension-camera-dismiss-btn {
-	position: absolute;
-	top: 10px;
-	right: 10px;
-	z-index: 12;
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	width: 26px;
-	height: 26px;
-	border: none;
-	border-radius: 50%;
-	background: rgba(18, 18, 23, 0.65);
-	color: #ffffff;
-	cursor: pointer;
-	opacity: 0;
-	pointer-events: none;
-	transition: all 140ms ease;
-	backdrop-filter: blur(8px);
-}
-
-.cap-extension-camera-window:hover .cap-extension-camera-dismiss-btn {
-	opacity: 1;
-	pointer-events: auto;
-}
-
-.cap-extension-camera-dismiss-btn:hover {
-	background: rgba(239, 68, 68, 0.9);
-	transform: scale(1.1);
-}
-
 .cap-extension-camera-iframe {
 	position: absolute;
 	inset: 0;

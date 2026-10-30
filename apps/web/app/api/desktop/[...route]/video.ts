@@ -22,6 +22,7 @@ import { Hono } from "hono";
 import { after } from "next/server";
 import { z } from "zod";
 import { readInstantCleanupReport } from "@/lib/desktop-instant-cleanup";
+import { getDesktopShareUrl } from "@/lib/desktop-share-url";
 import { invalidateGoogleDriveStorageQuotaCache } from "@/lib/google-drive-storage-quota";
 import { maybeStartLiveTranscription } from "@/lib/live-transcribe";
 import { runPromise } from "@/lib/server";
@@ -178,6 +179,7 @@ app.get(
 
 					return c.json({
 						id: video.id,
+						share_url: await getDesktopShareUrl(video.orgId, video.id),
 						// All deprecated
 						user_id: user.id,
 						aws_region: "n/a",
@@ -393,6 +395,7 @@ app.get(
 
 			return c.json({
 				id: idToUse,
+				share_url: await getDesktopShareUrl(videoOrgId, idToUse),
 				// All deprecated
 				user_id: user.id,
 				aws_region: "n/a",

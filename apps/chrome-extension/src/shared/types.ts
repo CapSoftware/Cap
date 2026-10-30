@@ -166,6 +166,9 @@ export type RecordingStatus =
 			startedAt: number;
 			durationMs: number;
 			updatedAt: number;
+			// Set only when this recording captures a microphone, so the dock
+			// mutes the live track instead of the saved settings.
+			microphone?: "live" | "muted";
 			uploadStatus?: UploadStatus;
 			upload?: UploadSummary;
 	  }
@@ -383,6 +386,10 @@ export type ServiceWorkerRequest =
 	| {
 			target: "service-worker";
 			type: "open-recorder-panel";
+	  }
+	| {
+			target: "service-worker";
+			type: "show-recorder-panel";
 	  }
 	| {
 			target: "service-worker";
