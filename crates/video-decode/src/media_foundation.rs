@@ -759,7 +759,7 @@ impl MediaFoundationDecoder {
         Ok(Some(NV12Sample { pts, data: data? }))
     }
 
-    unsafe fn map_staging(&mut self, staging: &ID3D11Texture2D) -> Result<NV12Data, String> {
+    unsafe fn map_staging(&self, staging: &ID3D11Texture2D) -> Result<NV12Data, String> {
         let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
         unsafe {
             self.d3d11_context
@@ -773,14 +773,13 @@ impl MediaFoundationDecoder {
 
         let y_size = (y_stride * y_height) as usize;
         let uv_size = (y_stride * uv_height) as usize;
-        let copy_len = y_size + uv_size;
+        let total_size = y_size + uv_size;
 
-        let mut data = Vec::with_capacity(copy_len);
-        unsafe {
-            data.set_len(copy_len);
-            std::ptr::copy_nonoverlapping(mapped.pData as *const u8, data.as_mut_ptr(), copy_len);
+        let data = unsafe {
+            let data = std::slice::from_raw_parts(mapped.pData as *const u8, total_size).to_vec();
             self.d3d11_context.Unmap(staging, 0);
-        }
+            data
+        };
 
         Ok(NV12Data {
             data: Arc::new(data),
