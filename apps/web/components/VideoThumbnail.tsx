@@ -15,7 +15,7 @@ import {
 	useState,
 	useSyncExternalStore,
 } from "react";
-import { durationParts } from "@/lib/date-format";
+import { formatDuration } from "@/lib/date-format";
 import { useEffectQuery } from "@/lib/EffectRuntime";
 import { ThumbnailRequest } from "@/lib/Requests/ThumbnailRequest";
 
@@ -61,23 +61,7 @@ interface VideoThumbnailProps {
 	showPreview?: boolean;
 }
 
-const formatDuration = (durationSecs: number) => {
-	const duration = durationParts(durationSecs);
-
-	const totalHours = Math.floor(duration.asHours);
-	const totalMinutes = Math.floor(duration.asMinutes);
-	const remainingSeconds = Math.ceil(duration.asSeconds % 60); // Use ceil to avoid 0 secs
-
-	if (totalHours > 0) {
-		return `${totalHours} hr${totalHours > 1 ? "s" : ""}`;
-	} else if (totalMinutes > 0) {
-		return `${totalMinutes} min${totalMinutes > 1 ? "s" : ""}`;
-	} else if (remainingSeconds > 0) {
-		return `${remainingSeconds} sec${remainingSeconds !== 1 ? "s" : ""}`;
-	} else {
-		return "< 1 sec"; // For very short durations
-	}
-};
+export { formatDuration };
 
 function generateRandomGrayScaleColor() {
 	const minGrayScaleValue = 190;
