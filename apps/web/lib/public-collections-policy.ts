@@ -1,4 +1,5 @@
 import { isEmailAllowedByRestriction } from "@cap/utils";
+import { parsePageParam } from "./pagination";
 
 export const PUBLIC_COLLECTION_PAGE_SIZE = 15;
 
@@ -19,12 +20,7 @@ export type PublicCollectionAccess =
 export function parsePublicCollectionPage(
 	page: string | string[] | undefined,
 ): number {
-	const value = Array.isArray(page) ? page[0] : page;
-	const parsed = Number(value);
-
-	if (!Number.isInteger(parsed) || parsed < 1) return 1;
-
-	return parsed;
+	return parsePageParam(page, 1);
 }
 
 export function getPublicCollectionHref(id: string, page: number): string {

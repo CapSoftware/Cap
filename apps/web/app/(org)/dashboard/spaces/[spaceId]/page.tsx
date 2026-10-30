@@ -32,6 +32,7 @@ import { and, count, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { Effect } from "effect";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+import { parseLimitParam, parsePageParam } from "@/lib/pagination";
 import { seedThumbnailUrls } from "@/lib/seeded-thumbnails";
 import { runPromise } from "@/lib/server";
 import { SharedCaps } from "./SharedCaps";
@@ -288,8 +289,8 @@ export default async function SharedCapsPage(props: {
 }) {
 	const searchParams = await props.searchParams;
 	const params = await props.params;
-	const page = Number(searchParams.page) || 1;
-	const limit = Number(searchParams.limit) || 15;
+	const page = parsePageParam(searchParams.page, 1);
+	const limit = parseLimitParam(searchParams.limit, 15);
 	const user = await getCurrentUser();
 	if (!user) notFound();
 
