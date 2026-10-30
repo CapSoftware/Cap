@@ -1012,6 +1012,7 @@ pub struct ScreenshotEditorWindow {
     /// The one cached checkerboard tile the preview paints under everything.
     checker: Option<Arc<RenderImage>>,
     last_preview_render_size: Option<cap_project::XY<u32>>,
+    last_preview_scale_factor: Option<f32>,
 
     toasts: Vec<Toast>,
     next_toast: u64,
@@ -1099,6 +1100,7 @@ impl ScreenshotEditorWindow {
             panning: None,
             checker: Some(checkerboard_tile()),
             last_preview_render_size: None,
+            last_preview_scale_factor: None,
 
             toasts: Vec::new(),
             next_toast: 0,
@@ -1171,7 +1173,6 @@ impl ScreenshotEditorWindow {
         }
         self.previous_transform = None;
         self.frame_size = self.logical_frame_size();
-        self.rescale_annotations_for(self.frame_size);
         cx.notify();
     }
 
@@ -1291,11 +1292,15 @@ impl ScreenshotEditorWindow {
             return;
         };
         let preview_render_size = self.current_preview_render_size(scale_factor);
-        if self.last_preview_render_size == Some(preview_render_size) {
+        let scale_unchanged = self
+            .last_preview_scale_factor
+            .is_some_and(|previous| (previous - scale_factor).abs() < f32::EPSILON);
+        if self.last_preview_render_size == Some(preview_render_size) && scale_unchanged {
             cx.notify();
             return;
         }
         self.last_preview_render_size = Some(preview_render_size);
+        self.last_preview_scale_factor = Some(scale_factor);
         let _ = config_tx.send(ConfigUpdate {
             revision: self.revision,
             config: self.project.clone(),
@@ -1318,6 +1323,7 @@ impl ScreenshotEditorWindow {
         self.revision += 1;
         let preview_render_size = self.current_preview_render_size(scale_factor);
         self.last_preview_render_size = Some(preview_render_size);
+        self.last_preview_scale_factor = Some(scale_factor);
         let _ = config_tx.send(ConfigUpdate {
             revision: self.revision,
             config: self.project.clone(),
