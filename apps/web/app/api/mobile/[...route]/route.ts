@@ -353,10 +353,13 @@ const toMobileCapSummary = (
 	viewCount: number,
 	publicOrigin: string,
 	currentUserId: User.UserId,
+	// Set only after access was checked for this viewer, including any unlocked password.
+	passwordVerified = false,
 ): MobileCapSummary => {
 	const hasThumbnail =
 		(!row.uploadVideoId || row.uploadPhase === "complete") &&
 		(row.ownerId === currentUserId ||
+			passwordVerified ||
 			(!row.hasPassword && !row.hasInheritedPassword));
 	const thumbnailVersion = row.updatedAt.getTime();
 	return {
@@ -2171,7 +2174,7 @@ const getCapById = Effect.fn("Mobile.getCapById")(function* (
 
 	return {
 		row: capRow,
-		cap: toMobileCapSummary(capRow, analytics, publicOrigin, user.id),
+		cap: toMobileCapSummary(capRow, analytics, publicOrigin, user.id, true),
 	};
 });
 
@@ -3454,7 +3457,7 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 							),
 						).pipe(withMobileVideoAccess(request, path.id)),
 					)
-					.handle("getCapThumbnail", ({ path }) =>
+					.handle("getCapThumbnail", ({ path, request }) =>
 						withMappedErrors(
 							Effect.gen(function* () {
 								yield* assertMobileVideoAccess(path.id);
@@ -3468,7 +3471,7 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 									}),
 								);
 							}),
-						),
+						).pipe(withMobileVideoAccess(request, path.id)),
 					)
 					.handle("updateCapSharing", ({ path, payload, request }) =>
 						withMappedErrors(
