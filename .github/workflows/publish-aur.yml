@@ -1,0 +1,143 @@
+name: "publish-aur"
+
+# Publishes each stable release to the AUR as cap-bin. The PKGBUILD is the one
+# scripts/build-linux-arch-package.sh builds the release's own pacman package
+# from, pointed at the release's CrabNebula deb, so the two stay identical.
+#
+# Release events run this file from the tagged commit; for a tag that predates
+# it, dispatch it from main with that tag. Pushing needs the AUR_SSH_PRIVATE_KEY
+# secret of an AUR account that maintains cap-bin. Without it the job still
+# builds the package and uploads the PKGBUILD as an artifact.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Published stable release tag, e.g. cap-v0.6.1"
+        required: true
+        type: string
+
+concurrency:
+  group: publish-aur
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  aur:
+    if: ${{ github.event_name == 'workflow_dispatch' || (startsWith(github.event.release.tag_name, 'cap-v') && !github.event.release.prerelease) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      TAG: ${{ inputs.tag || github.event.release.tag_name }}
+      ARCH_IMAGE: archlinux:base-devel@sha256:68bfc3b0d277b08a99101dc9b94aaa03e5ae70cf1b4fb965c03b2b87b915760d
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Resolve release deb
+        id: release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#cap-v}"
+          if [[ "$TAG" != cap-v* || ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::'$TAG' is not a stable cap-v{x.y.z} release tag."
+            exit 1
+          fi
+          RELEASE="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease,body)"
+          if [[ "$(jq -r '.isDraft or .isPrerelease' <<< "$RELEASE")" != false ]]; then
+            echo "::error::$TAG is not a published stable release."
+            exit 1
+          fi
+          DEB_URL="$(jq -r '.body | capture("<!--\\s*DOWNLOADS_JSON\\s*(?<downloads>\\{[^}]+\\})\\s*-->").downloads | fromjson | .["linux-deb"] // empty' <<< "$RELEASE")"
+          if [[ ! "$DEB_URL" =~ ^https://cdn\.crabnebula\.app/asset/[0-9A-Za-z]+$ ]]; then
+            echo "::error::$TAG has no CrabNebula linux-deb link in its DOWNLOADS_JSON."
+            exit 1
+          fi
+          {
+            echo "version=$VERSION"
+            echo "deb_url=$DEB_URL"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build AUR package
+        shell: bash
+        env:
+          DEB_URL: ${{ steps.release.outputs.deb_url }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/deb" "$RUNNER_TEMP/aur-package"
+          curl -fsSL --retry 5 --retry-all-errors -o "$RUNNER_TEMP/deb/Cap.deb" "$DEB_URL"
+          docker run --rm --network none \
+            --env CAP_PACKAGE_UID="$(id -u)" \
+            --volume "$GITHUB_WORKSPACE:/source:ro" \
+            --volume "$RUNNER_TEMP/deb:/input:ro" \
+            --volume "$RUNNER_TEMP/aur-package:/output" \
+            "$ARCH_IMAGE" \
+            bash -c 'useradd --uid "$CAP_PACKAGE_UID" --create-home cap-package && runuser -u cap-package -- bash /source/scripts/build-linux-arch-package.sh /input/Cap.deb /output "$1"' \
+            bash "$DEB_URL"
+          PKGVER="$(awk -F ' = ' '$1 == "\tpkgver" { print $2 }' "$RUNNER_TEMP/aur-package/.SRCINFO")"
+          if [[ "$PKGVER" != "$VERSION" ]]; then
+            echo "::error::The linux-deb link holds Cap $PKGVER, not $VERSION."
+            exit 1
+          fi
+
+      - name: Upload AUR package files
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: aur-cap-bin-${{ steps.release.outputs.version }}
+          path: |
+            ${{ runner.temp }}/aur-package/PKGBUILD
+            ${{ runner.temp }}/aur-package/.SRCINFO
+          include-hidden-files: true
+          overwrite: true
+          if-no-files-found: error
+
+      - name: Push to the AUR
+        shell: bash
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$AUR_SSH_PRIVATE_KEY" ]]; then
+            echo "::warning::AUR_SSH_PRIVATE_KEY is not set, so cap-bin $VERSION was built but not pushed to the AUR."
+            exit 0
+          fi
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > "$HOME/.ssh/aur"
+          chmod 600 "$HOME/.ssh/aur"
+          echo "aur.archlinux.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuBKrPzbawxA/k2g6NcyV5jmqwJ2s+zpgZGZ7tpLIcN" > "$HOME/.ssh/known_hosts"
+          export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/aur -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes"
+          PACKAGE="$RUNNER_TEMP/aur-package"
+          PKGBASE="$(awk -F ' = ' '$1 == "pkgbase" { print $2 }' "$PACKAGE/.SRCINFO")"
+          AUR="$RUNNER_TEMP/aur"
+          git -c init.defaultBranch=master clone "ssh://aur@aur.archlinux.org/$PKGBASE.git" "$AUR"
+          version_of() {
+            awk -F ' = ' '$1 == "\tepoch" { epoch = $2 ":" } $1 == "\tpkgver" { pkgver = $2 } $1 == "\tpkgrel" { pkgrel = $2 } END { print epoch pkgver "-" pkgrel }' "$1"
+          }
+          if [[ -f "$AUR/.SRCINFO" ]]; then
+            CURRENT="$(version_of "$AUR/.SRCINFO")"
+            NEW="$(version_of "$PACKAGE/.SRCINFO")"
+            if (( $(docker run --rm --network none "$ARCH_IMAGE" vercmp "$NEW" "$CURRENT") < 0 )); then
+              echo "::notice::The AUR already has $PKGBASE $CURRENT, which is newer than $NEW."
+              exit 0
+            fi
+          fi
+          cp "$PACKAGE/PKGBUILD" "$PACKAGE/.SRCINFO" "$AUR/"
+          cd "$AUR"
+          git add PKGBUILD .SRCINFO
+          if git diff --cached --quiet; then
+            echo "The AUR already has $PKGBASE $VERSION."
+            exit 0
+          fi
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" commit -m "Update to $VERSION"
+          git push origin HEAD:master
