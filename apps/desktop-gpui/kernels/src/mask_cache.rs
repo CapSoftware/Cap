@@ -5,6 +5,7 @@ use std::{collections::HashSet, hash::Hash};
 pub struct MaskFrame {
     pub revision: u64,
     pub size: (u32, u32),
+    pub scale: [u64; 2],
     pub content: [u64; 4],
     pub padding: u64,
     pub crop: Option<[u32; 4]>,
@@ -208,6 +209,7 @@ mod tests {
                 frame: MaskFrame {
                     revision: 1,
                     size: (64, 48),
+                    scale: [1_f64, 1_f64].map(f64::to_bits),
                     content: [0., 0., 64., 48.].map(f64::to_bits),
                     padding: 0_f64.to_bits(),
                     crop: None,
@@ -253,7 +255,7 @@ mod tests {
     #[test]
     fn mask_build_cancels_frame_and_layout_changes() {
         let original = requests(2);
-        for change in 0..5 {
+        for change in 0..6 {
             let mut next = original.clone();
             for request in &mut next {
                 match change {
@@ -261,6 +263,7 @@ mod tests {
                     1 => request.frame.size.0 += 1,
                     2 => request.frame.content[0] = 0.25_f64.to_bits(),
                     3 => request.frame.padding = 8_f64.to_bits(),
+                    4 => request.frame.scale[1] = 0.5_f64.to_bits(),
                     _ => request.frame.crop = Some([0, 0, 32, 24]),
                 }
             }
@@ -399,7 +402,7 @@ mod tests {
     fn frame_and_layout_changes_invalidate_every_mask() {
         let original = requests(4);
         let previous = cached(&original);
-        for change in 0..5 {
+        for change in 0..6 {
             let mut requests = original.clone();
             for request in &mut requests {
                 match change {
@@ -407,6 +410,7 @@ mod tests {
                     1 => request.frame.size.0 += 1,
                     2 => request.frame.content[0] = 0.25_f64.to_bits(),
                     3 => request.frame.padding = 1_f64.to_bits(),
+                    4 => request.frame.scale[0] = 0.5_f64.to_bits(),
                     _ => request.frame.crop = Some([1, 0, 64, 48]),
                 }
             }
