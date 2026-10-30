@@ -56,7 +56,7 @@ pub async fn render_preview(
     }
 
     let exporter_base = exporter_builder
-        .build()
+        .build_video_only()
         .await
         .map_err(|e| ExportError::Other(format!("Exporter build error: {e}")))?;
 
@@ -88,7 +88,7 @@ pub async fn render_preview_with_config(
 ) -> Result<ExportPreviewResult, ExportError> {
     let exporter_base =
         preview_builder_with_config(project_path, project_config, settings, force_ffmpeg_decoder)
-            .build()
+            .build_video_only()
             .await
             .map_err(|error| ExportError::Other(format!("Exporter build error: {error}")))?;
     render_preview_with_base(exporter_base, frame_time, settings).await
@@ -674,5 +674,177 @@ mod subtitle_preview_tests {
             false,
         );
         assert!(builder.load_project_config().unwrap().captions.is_none());
+    }
+}
+
+#[cfg(test)]
+mod video_only_preview_tests {
+    use super::*;
+
+    fn studio_project() -> tempfile::TempDir {
+        let project = tempfile::tempdir().unwrap();
+        let generated = std::process::Command::new("ffmpeg")
+            .args([
+                "-nostdin",
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=size=64x64:rate=15:duration=2",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:sample_rate=48000:duration=2",
+                "-map",
+                "0:v",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-threads",
+                "1",
+            ])
+            .arg(project.path().join("display.mp4"))
+            .args(["-map", "1:a", "-c:a", "aac", "-ac", "2"])
+            .arg(project.path().join("mic.m4a"))
+            .output()
+            .unwrap();
+        assert!(generated.status.success(), "{generated:?}");
+        std::fs::write(
+            project.path().join("recording-meta.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "pretty_name": "Video-only preview test",
+                "segments": [{
+                    "display": {"path": "display.mp4", "fps": 15},
+                    "mic": {"path": "mic.m4a"}
+                }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        ProjectConfiguration::default()
+            .write(project.path())
+            .unwrap();
+        project
+    }
+
+    fn settings(cursor_only: bool) -> ExportPreviewSettings {
+        ExportPreviewSettings {
+            fps: 15,
+            resolution_base: XY::new(64, 64),
+            compression_bpp: 0.2,
+            cursor_only,
+        }
+    }
+
+    fn assert_same_preview(actual: ExportPreviewResult, expected: &ExportPreviewResult) {
+        assert_eq!(actual.jpeg_base64, expected.jpeg_base64);
+        assert_eq!(actual.actual_width, expected.actual_width);
+        assert_eq!(actual.actual_height, expected.actual_height);
+        assert_eq!(actual.total_frames, expected.total_frames);
+        assert_eq!(
+            actual.estimated_size_mb.to_bits(),
+            expected.estimated_size_mb.to_bits()
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires ffmpeg and a wgpu adapter"]
+    async fn video_only_previews_match_eager_jpeg_and_metadata() {
+        let project = studio_project();
+        for cursor_only in [false, true] {
+            let config = ProjectConfiguration::load(project.path()).unwrap();
+            let base = preview_builder_with_config(
+                project.path().to_path_buf(),
+                config.clone(),
+                settings(cursor_only),
+                true,
+            )
+            .build()
+            .await
+            .unwrap();
+            let expected = render_preview_with_base(base, 0.5, settings(cursor_only))
+                .await
+                .unwrap();
+            let actual = render_preview(
+                project.path().to_path_buf(),
+                0.5,
+                settings(cursor_only),
+                true,
+            )
+            .await
+            .unwrap();
+            assert_same_preview(actual, &expected);
+            let actual = render_preview_with_config(
+                project.path().to_path_buf(),
+                config,
+                0.5,
+                settings(cursor_only),
+                true,
+            )
+            .await
+            .unwrap();
+            assert_same_preview(actual, &expected);
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires ffmpeg, ffprobe and a wgpu adapter"]
+    async fn preview_does_not_decode_unused_corrupt_audio() {
+        let project = studio_project();
+        let audio = project.path().join("mic.m4a");
+        let expected = render_preview(project.path().to_path_buf(), 0.5, settings(false), true)
+            .await
+            .unwrap();
+        let packets = std::process::Command::new("ffprobe")
+            .args([
+                "-v",
+                "error",
+                "-show_packets",
+                "-show_entries",
+                "packet=pts_time,pos,size",
+                "-of",
+                "json",
+            ])
+            .arg(&audio)
+            .output()
+            .unwrap();
+        assert!(packets.status.success());
+        let packets: serde_json::Value = serde_json::from_slice(&packets.stdout).unwrap();
+        let packet = packets["packets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|packet| packet["pts_time"].as_str().unwrap().parse::<f64>().unwrap() > 1.5)
+            .unwrap();
+        let position: usize = packet["pos"].as_str().unwrap().parse().unwrap();
+        let size: usize = packet["size"].as_str().unwrap().parse().unwrap();
+        let mut bytes = std::fs::read(&audio).unwrap();
+        bytes[position..position + size].fill(0xff);
+        std::fs::write(audio, bytes).unwrap();
+        let eager = ExporterBase::builder(project.path().to_path_buf())
+            .with_force_ffmpeg_decoder(true)
+            .build()
+            .await;
+        assert!(matches!(
+            eager,
+            Err(crate::ExporterBuildError::MediaLoad(_))
+        ));
+        let actual = render_preview(project.path().to_path_buf(), 0.5, settings(false), true)
+            .await
+            .unwrap();
+        assert_same_preview(actual, &expected);
+        let config = ProjectConfiguration::load(project.path()).unwrap();
+        let actual = render_preview_with_config(
+            project.path().to_path_buf(),
+            config,
+            0.5,
+            settings(false),
+            true,
+        )
+        .await
+        .unwrap();
+        assert_same_preview(actual, &expected);
     }
 }
