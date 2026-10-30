@@ -2,6 +2,7 @@ import { db } from "@cap/database";
 import { developerVideos } from "@cap/database/schema";
 import { and, desc, eq, isNull } from "drizzle-orm";
 import { Hono } from "hono";
+import { parseDeveloperVideosPagination } from "@/lib/developer-pagination";
 import { withDeveloperSecretAuth } from "../../../utils";
 
 export const app = new Hono<{
@@ -14,8 +15,10 @@ export const app = new Hono<{
 app.get("/", async (c) => {
 	const appId = c.get("developerAppId");
 	const userId = c.req.query("userId");
-	const limit = Math.min(Number(c.req.query("limit") ?? 50) || 50, 100);
-	const offset = Math.max(0, Number(c.req.query("offset") ?? 0) || 0);
+	const { limit, offset } = parseDeveloperVideosPagination(
+		c.req.query("limit"),
+		c.req.query("offset"),
+	);
 
 	const conditions = [
 		eq(developerVideos.appId, appId),
