@@ -74,11 +74,19 @@ camera=no started=no finished=no
 wait_log "auto-selecting camera" 30 && camera=yes
 wait_log "auto-record start requested" 30
 sleep 2
-camera_window=$(xdotool search --pid "$pid" --name '^Cap Camera$' 2>/dev/null | head -1)
+camera_window=""
+for _ in $(seq 40); do
+  camera_window=$(xdotool search --all --onlyvisible --limit 1 --pid "$pid" --name '^Cap Camera$' 2>/dev/null)
+  [[ -n $camera_window ]] && break
+  sleep 0.25
+done
+printf 'camera window: %s\n' "${camera_window:-not found}" >>"$out/actions.log"
 camera_drag=no
 if [[ -n $camera_window ]]; then
+  xdotool getwindowname "$camera_window" getwindowpid "$camera_window" >>"$out/actions.log"
   eval "$(xdotool getwindowgeometry --shell "$camera_window")"
   drag_x=$X drag_y=$Y
+  printf 'camera drag origin: %s,%s\n' "$X" "$Y" >>"$out/actions.log"
   xdotool mousemove --sync --window "$camera_window" "$((WIDTH / 2))" "$((HEIGHT / 2))"
   xdotool mousedown 1
   sleep 0.1
@@ -93,6 +101,7 @@ if [[ -n $camera_window ]]; then
     fi
     sleep 0.1
   done
+  printf 'camera drag final: %s,%s expected: %s,%s\n' "$X" "$Y" "$((drag_x - 100))" "$((drag_y - 60))" >>"$out/actions.log"
 fi
 result camera_drag "$camera_drag"
 xdotool key ctrl+shift+F9
