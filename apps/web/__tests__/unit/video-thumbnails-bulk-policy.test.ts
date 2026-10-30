@@ -26,7 +26,9 @@ vi.mock("@cap/web-backend/src/Storage/index", async () => {
 							Effect.succeed(`signed:${key}`),
 						listObjects: ({ prefix }: { prefix: string }) =>
 							Effect.succeed({
-								Contents: [{ Key: `${prefix}screenshot/screen-capture.jpg` }],
+								Contents: prefix.endsWith("/screenshot/screen-capture.")
+									? [{ Key: `${prefix}jpg` }]
+									: [],
 							}),
 					},
 					Option.none(),

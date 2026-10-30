@@ -40,6 +40,14 @@ const SCREENSHOT_OBJECT_KEY_SUFFIXES = [
 	"screen-capture.jpg",
 	"screen-capture.jpeg",
 ];
+const SCREENSHOT_OBJECT_LIST_PREFIXES = [
+	"screenshot/screen-capture.",
+	"screen-capture.",
+];
+const SCREENSHOT_OBJECT_LIST_MAX_KEYS = 100;
+type StorageBucket = Effect.Effect.Success<
+	ReturnType<StorageService["getAccessForVideo"]>
+>[0];
 type ScreenshotObject = {
 	Key?: string | null;
 	LastModified?: Date | string | number | null;
@@ -236,6 +244,20 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 			},
 		);
 
+		const findStoredScreenshotKey = Effect.fn("Videos.findStoredScreenshotKey")(
+			function* (bucket: StorageBucket, videoPrefix: string) {
+				for (const prefix of SCREENSHOT_OBJECT_LIST_PREFIXES) {
+					const page = yield* bucket.listObjects({
+						prefix: `${videoPrefix}${prefix}`,
+						maxKeys: SCREENSHOT_OBJECT_LIST_MAX_KEYS,
+					});
+					const key = findScreenshotObjectKey(page.Contents ?? []);
+					if (key) return key;
+				}
+				return null;
+			},
+		);
+
 		const getThumbnailURLForVideo = Effect.fn("Videos.getThumbnailURLForVideo")(
 			function* (video: Video.Video) {
 				const [bucket] = yield* storage.getAccessForVideo(video);
@@ -245,11 +267,10 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 						yield* bucket.getSignedObjectUrl(publishedThumbnail),
 					);
 				}
-				const listResponse = yield* bucket.listObjects({
-					prefix: `${video.ownerId}/${video.id}/`,
-				});
-				const contents = listResponse.Contents || [];
-				const thumbnailKey = findScreenshotObjectKey(contents);
+				const thumbnailKey = yield* findStoredScreenshotKey(
+					bucket,
+					`${video.ownerId}/${video.id}/`,
+				);
 				if (!thumbnailKey) return Option.none<string>();
 				const url = yield* bucket.getSignedObjectUrl(thumbnailKey);
 				return Option.some(url);
@@ -878,6 +899,12 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 							},
 							onSuccess: () =>
 								getThumbnailURLForVideo(entry.video).pipe(
+									Effect.catchTag("StorageError", (error) =>
+										Effect.logWarning("Thumbnail lookup failed", {
+											videoId: entry.video.id,
+											error,
+										}).pipe(Effect.as(Option.none<string>())),
+									),
 									Effect.map((url) => Exit.succeed(url)),
 								),
 						});
