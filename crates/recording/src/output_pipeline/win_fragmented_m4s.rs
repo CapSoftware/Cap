@@ -5,6 +5,7 @@ use super::core::{
 use super::frame_pacing::{FramePacer, Paced};
 use super::mjpeg::MjpegDecoder;
 use super::win::reference_video_frame;
+use super::win_m4s_convert_encode::{StagedFrame, run_win_m4s_encode_thread};
 use crate::{
     AudioFrame, AudioMuxer, Muxer, SharedPauseState, TaskPool, VideoMuxer,
     output_pipeline::{NativeCameraFrame, camera_frame_to_ffmpeg},
@@ -30,7 +31,6 @@ use tracing::*;
 
 const DEFAULT_MUXER_BUFFER_SIZE: usize = 240;
 const DEFAULT_CONVERT_STAGING_DEPTH: usize = 32;
-const DEFAULT_GPU_CONVERTER_WORKERS: usize = 2;
 
 fn get_convert_staging_depth() -> usize {
     std::env::var("CAP_WIN_CONVERT_STAGING_DEPTH")
@@ -257,11 +257,6 @@ impl Default for WindowsFragmentedM4SMuxerConfig {
     }
 }
 
-enum StagedFfmpegFrame {
-    Ready(ffmpeg::frame::Video, Duration),
-    Shutdown,
-}
-
 impl Muxer for WindowsFragmentedM4SMuxer {
     type Config = WindowsFragmentedM4SMuxerConfig;
 
@@ -377,17 +372,15 @@ impl WindowsFragmentedM4SMuxer {
             encoder.set_segment_callback(tx);
         }
         let encoder = Arc::new(Mutex::new(encoder));
-        let encoder_clone = encoder.clone();
 
         let video_config = self.video_config;
         let health_tx = self.health_tx.clone();
         let base_path = self.base_path.clone();
         let pause_flag = self.pause.flag();
-        let staging_depth = get_convert_staging_depth();
         let (staging_tx, staging_rx) =
-            sync_channel::<Option<StagedFfmpegFrame>>(staging_depth.max(4));
+            sync_channel::<StagedFrame>(get_convert_staging_depth().max(4));
         let encode_encoder = encoder.clone();
-        let use_gpu_converter =
+        let use_converter_pool =
             prefer_external_conversion && conversion_requirements.needs_conversion;
         let encode_handle = std::thread::Builder::new()
             .name("win-m4s-segment-encode".to_string())
@@ -396,8 +389,8 @@ impl WindowsFragmentedM4SMuxer {
                 run_win_m4s_encode_thread(
                     staging_rx,
                     encode_encoder,
-                    conversion_requirements,
-                    use_gpu_converter,
+                    &conversion_requirements,
+                    use_converter_pool,
                 )
             })?;
         let encoder_handle = std::thread::Builder::new()
@@ -434,7 +427,7 @@ impl WindowsFragmentedM4SMuxer {
                                    timestamp: Duration|
                  -> anyhow::Result<()> {
                     staging_tx
-                        .send(Some(StagedFfmpegFrame::Ready(ffmpeg_frame, timestamp)))
+                        .send((ffmpeg_frame, timestamp))
                         .map_err(|_| anyhow!("Windows M4S convert staging channel disconnected"))
                 };
 
@@ -533,7 +526,6 @@ impl WindowsFragmentedM4SMuxer {
                     total_frames += 1;
                 }
 
-                let _ = staging_tx.send(Some(StagedFfmpegFrame::Shutdown));
                 drop(staging_tx);
 
                 let encode_result = encode_handle
@@ -1068,185 +1060,6 @@ impl AudioMuxer for WindowsFragmentedM4SCameraMuxer {
     fn send_audio_frame(&mut self, _frame: AudioFrame, _timestamp: Duration) -> anyhow::Result<()> {
         Ok(())
     }
-}
-
-fn run_win_m4s_encode_thread(
-    staging_rx: std::sync::mpsc::Receiver<Option<StagedFfmpegFrame>>,
-    encoder: Arc<Mutex<SegmentedVideoEncoder>>,
-    requirements: cap_enc_ffmpeg::h264::ConversionRequirements,
-    use_gpu_converter: bool,
-) -> anyhow::Result<()> {
-    use cap_frame_converter::{
-        AsyncConverterPool, ConversionConfig, ConvertError, ConvertedFrame, ConverterPoolConfig,
-        DropStrategy,
-    };
-    use std::collections::BTreeMap;
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    const SLOW_THRESHOLD_MS: u128 = 5;
-
-    let worker_count = std::thread::available_parallelism()
-        .map(|parallelism| parallelism.get().clamp(2, 4))
-        .unwrap_or(DEFAULT_GPU_CONVERTER_WORKERS);
-
-    let mut converter_pool = if use_gpu_converter {
-        let conversion_config = ConversionConfig::new(
-            requirements.input_format,
-            requirements.input_width,
-            requirements.input_height,
-            requirements.output_format,
-            requirements.output_width,
-            requirements.output_height,
-        );
-        let pool_config = ConverterPoolConfig {
-            worker_count,
-            input_capacity: 120,
-            output_capacity: 90,
-            drop_strategy: DropStrategy::DropOldest,
-            ..Default::default()
-        };
-        Some(
-            AsyncConverterPool::from_config(conversion_config, pool_config)
-                .map_err(|error| anyhow!("Failed to create Windows M4S converter pool: {error}"))?,
-        )
-    } else {
-        None
-    };
-
-    if converter_pool.is_some() {
-        debug!(
-            worker_count = worker_count,
-            input = %format!(
-                "{:?} {}x{}",
-                requirements.input_format,
-                requirements.input_width,
-                requirements.input_height
-            ),
-            output = %format!(
-                "{:?} {}x{}",
-                requirements.output_format,
-                requirements.output_width,
-                requirements.output_height
-            ),
-            "Windows M4S encoder using async GPU/CPU converter pool"
-        );
-    }
-
-    let frame_sequence = AtomicU64::new(0);
-    let mut slow_encode_count = 0u32;
-    let mut total_frames = 0u64;
-    let mut next_encode_sequence = 0u64;
-    let mut pending_converted: BTreeMap<u64, ConvertedFrame> = BTreeMap::new();
-
-    let mut encode_converted = |converted: ConvertedFrame| {
-        let timestamp = Duration::from_micros(converted.frame.pts().unwrap_or(0).max(0) as u64);
-        let encode_start = std::time::Instant::now();
-        match encoder.lock() {
-            Ok(mut enc) => {
-                if let Err(error) = enc.queue_preconverted_frame(converted.frame, timestamp) {
-                    warn!("Failed to encode converted frame: {error}");
-                }
-            }
-            Err(_) => {
-                return Err(anyhow!(
-                    "Encoder mutex poisoned - all subsequent frames would be lost"
-                ));
-            }
-        }
-        let encode_elapsed_ms = encode_start.elapsed().as_millis();
-        if encode_elapsed_ms > SLOW_THRESHOLD_MS {
-            slow_encode_count += 1;
-        }
-        total_frames += 1;
-        Ok(())
-    };
-
-    let mut ingest_converted = |converted: ConvertedFrame| -> anyhow::Result<()> {
-        if converted.sequence < next_encode_sequence {
-            return Ok(());
-        }
-        pending_converted.insert(converted.sequence, converted);
-        while let Some(converted) = pending_converted.remove(&next_encode_sequence) {
-            encode_converted(converted)?;
-        }
-        Ok(())
-    };
-
-    let mut drain_converted = |pool: &mut AsyncConverterPool| -> anyhow::Result<()> {
-        while let Some(converted) = pool.try_recv() {
-            ingest_converted(converted)?;
-        }
-        Ok(())
-    };
-
-    loop {
-        match staging_rx.recv() {
-            Ok(Some(StagedFfmpegFrame::Ready(mut frame, timestamp))) => {
-                if let Some(pool) = &mut converter_pool {
-                    frame.set_pts(Some(timestamp.as_micros() as i64));
-                    match pool.submit(frame, frame_sequence.fetch_add(1, Ordering::Relaxed)) {
-                        Ok(()) => {}
-                        Err(ConvertError::PoolShutdown) => break,
-                        Err(error) => {
-                            warn!("Failed to submit frame to converter pool: {error}");
-                        }
-                    }
-                    drain_converted(pool)?;
-                } else {
-                    let encode_start = std::time::Instant::now();
-                    match encoder.lock() {
-                        Ok(mut enc) => {
-                            if let Err(error) = enc.queue_frame(frame, timestamp) {
-                                warn!("Failed to encode frame: {error}");
-                            }
-                        }
-                        Err(_) => {
-                            return Err(anyhow!(
-                                "Encoder mutex poisoned - all subsequent frames would be lost"
-                            ));
-                        }
-                    }
-                    let encode_elapsed_ms = encode_start.elapsed().as_millis();
-                    if encode_elapsed_ms > SLOW_THRESHOLD_MS {
-                        slow_encode_count += 1;
-                    }
-                    total_frames += 1;
-                }
-            }
-            Ok(Some(StagedFfmpegFrame::Shutdown)) | Ok(None) => break,
-            Err(_) => break,
-        }
-    }
-
-    if let Some(mut pool) = converter_pool {
-        pool.drain_with_timeout(
-            |converted| {
-                if ingest_converted(converted).is_err() {
-                    return;
-                }
-            },
-            Duration::from_secs(5),
-        );
-        while let Some(converted) = pending_converted.remove(&next_encode_sequence) {
-            if encode_converted(converted).is_err() {
-                break;
-            }
-        }
-    }
-
-    if total_frames > 0 {
-        debug!(
-            total_frames = total_frames,
-            slow_encodes = slow_encode_count,
-            slow_encode_pct = format!(
-                "{:.1}%",
-                100.0 * slow_encode_count as f64 / total_frames as f64
-            ),
-            "Windows M4S encode timing summary"
-        );
-    }
-
-    Ok(())
 }
 
 #[cfg(test)]

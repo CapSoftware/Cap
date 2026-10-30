@@ -62,6 +62,9 @@ mod win_fragmented_m4s;
 #[cfg(windows)]
 pub use win_fragmented_m4s::*;
 
+#[cfg(any(windows, test))]
+mod win_m4s_convert_encode;
+
 #[cfg(windows)]
 mod oop_fragmented_m4s_win;
 #[cfg(windows)]
