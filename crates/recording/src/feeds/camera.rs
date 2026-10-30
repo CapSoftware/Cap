@@ -1158,6 +1158,7 @@ async fn setup_camera(
 
     let (ready_tx, ready_rx) = oneshot::channel();
     let mut ready_signal = Some(ready_tx);
+    let decode_budget = crate::output_pipeline::SharedDecodeBudget::default();
 
     let capture_handle = camera
         .start_capturing(format.clone(), move |frame| {
@@ -1168,12 +1169,22 @@ async fn setup_camera(
                 cap_timestamp::PerformanceCounterTimestamp::new(frame.native().perf_counter),
             );
 
-            if native_ingress
+            let wants_native = native_ingress
                 .senders
                 .load(std::sync::atomic::Ordering::Relaxed)
-                > 0
-                && let Ok(bytes) = frame.native().bytes()
-            {
+                > 0;
+            // Until the ready signal fires the first frame must still be
+            // converted to derive VideoInfo; afterwards skip the full-frame
+            // copy entirely when nothing consumes ffmpeg frames.
+            let wants_ffmpeg = ready_signal.is_some()
+                || ffmpeg_sender_count.load(std::sync::atomic::Ordering::Acquire) > 0;
+
+            let shared_decode = (wants_native
+                && wants_ffmpeg
+                && frame.native().pixel_format == cap_camera_windows::PixelFormat::MJPEG)
+                .then(|| frame.as_ffmpeg());
+
+            if wants_native && let Ok(bytes) = frame.native().bytes() {
                 use cap_mediafoundation_utils::IMFMediaBufferExt;
                 use windows::Win32::Media::MediaFoundation::MFCreateMemoryBuffer;
 
@@ -1203,22 +1214,21 @@ async fn setup_camera(
                                 height: frame.native().height as u32,
                                 is_bottom_up: frame.native().is_bottom_up,
                                 timestamp,
+                                decoded: shared_decode
+                                    .as_ref()
+                                    .and_then(|decoded| decoded.as_ref().ok())
+                                    .and_then(|decoded| decode_budget.share(decoded)),
                             },
                         );
                     }
                 }
             }
 
-            // Until the ready signal fires the first frame must still be
-            // converted to derive VideoInfo; afterwards skip the full-frame
-            // copy entirely when nothing consumes ffmpeg frames.
-            if ready_signal.is_none()
-                && ffmpeg_sender_count.load(std::sync::atomic::Ordering::Acquire) == 0
-            {
+            if !wants_ffmpeg {
                 return;
             }
 
-            let Ok(mut ff_frame) = frame.as_ffmpeg() else {
+            let Ok(mut ff_frame) = shared_decode.unwrap_or_else(|| frame.as_ffmpeg()) else {
                 return;
             };
 

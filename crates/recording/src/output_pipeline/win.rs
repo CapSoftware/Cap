@@ -16,7 +16,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc, Mutex,
-        atomic::AtomicBool,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         mpsc::{SyncSender, TrySendError, sync_channel},
     },
     time::Duration,
@@ -610,10 +610,47 @@ pub struct NativeCameraFrame {
     pub height: u32,
     pub is_bottom_up: bool,
     pub timestamp: Timestamp,
+    pub decoded: Option<Arc<SharedDecodedFrame>>,
 }
 
 unsafe impl Send for NativeCameraFrame {}
 unsafe impl Sync for NativeCameraFrame {}
+
+pub struct SharedDecodedFrame {
+    frame: ffmpeg::frame::Video,
+    budget: SharedDecodeBudget,
+}
+
+impl Drop for SharedDecodedFrame {
+    fn drop(&mut self) {
+        self.budget.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// Bounds how many decoded frames the capture callback can queue for the
+/// encoder, so a stalled encoder backs up on compressed MJPEG rather than on
+/// decoded frames. Frames over the limit are decoded by the encoder as before.
+#[derive(Clone, Default)]
+pub struct SharedDecodeBudget(Arc<AtomicUsize>);
+
+impl SharedDecodeBudget {
+    const MAX_IN_FLIGHT: usize = 8;
+
+    pub fn share(&self, frame: &ffmpeg::frame::Video) -> Option<Arc<SharedDecodedFrame>> {
+        if self.0.fetch_add(1, Ordering::AcqRel) >= Self::MAX_IN_FLIGHT {
+            self.0.fetch_sub(1, Ordering::AcqRel);
+            return None;
+        }
+
+        let mut shared = SharedDecodedFrame {
+            frame: ffmpeg::frame::Video::empty(),
+            budget: self.clone(),
+        };
+        let status =
+            unsafe { ffmpeg::ffi::av_frame_ref(shared.frame.as_mut_ptr(), frame.as_ptr()) };
+        (status >= 0).then(|| Arc::new(shared))
+    }
+}
 
 impl VideoFrame for NativeCameraFrame {
     fn timestamp(&self) -> Timestamp {
@@ -1354,6 +1391,9 @@ pub(crate) fn camera_frame_to_ffmpeg(
     use cap_mediafoundation_utils::IMFMediaBufferExt;
 
     if frame.pixel_format == cap_camera_windows::PixelFormat::MJPEG {
+        if let Some(decoded) = &frame.decoded {
+            return Ok(reference_video_frame(&decoded.frame));
+        }
         return decode_mjpeg_frame(frame, mjpeg_decoder);
     }
 
@@ -1957,5 +1997,145 @@ pub fn upload_mf_buffer_to_texture(
                 "CreateTexture2D succeeded but returned no texture",
             )
         })
+    }
+}
+
+#[cfg(test)]
+mod shared_mjpeg_tests {
+    use super::*;
+    use cap_mediafoundation_utils::IMFMediaBufferExt;
+    use ffmpeg::format::Pixel;
+    use windows::Win32::Media::MediaFoundation::MFCreateMemoryBuffer;
+
+    const WIDTH: u32 = 64;
+    const HEIGHT: u32 = 48;
+
+    fn encode_mjpeg(seed: usize) -> Vec<u8> {
+        let codec = ffmpeg::codec::encoder::find(ffmpeg::codec::Id::MJPEG).unwrap();
+        let mut encoder = ffmpeg::codec::context::Context::new_with_codec(codec)
+            .encoder()
+            .video()
+            .unwrap();
+        encoder.set_width(WIDTH);
+        encoder.set_height(HEIGHT);
+        encoder.set_format(Pixel::YUVJ422P);
+        encoder.set_time_base((1, 30));
+        let mut encoder = encoder.open().unwrap();
+
+        let mut frame = ffmpeg::frame::Video::new(Pixel::YUVJ422P, WIDTH, HEIGHT);
+        for plane in 0..frame.planes() {
+            let stride = frame.stride(plane);
+            let (width, height) = (frame.plane_width(plane), frame.plane_height(plane));
+            for (y, row) in frame
+                .data_mut(plane)
+                .chunks_mut(stride)
+                .take(height as usize)
+                .enumerate()
+            {
+                for (x, pixel) in row.iter_mut().take(width as usize).enumerate() {
+                    *pixel = ((x * 3 + y * 5 + seed * 29 + plane * 71) & 0xff) as u8;
+                }
+            }
+        }
+        frame.set_pts(Some(0));
+
+        encoder.send_frame(&frame).unwrap();
+        encoder.send_eof().unwrap();
+        let mut packet = ffmpeg::Packet::empty();
+        encoder.receive_packet(&mut packet).unwrap();
+        packet.data().unwrap().to_vec()
+    }
+
+    fn mjpeg_camera_frame(
+        data: &[u8],
+        decoded: Option<Arc<SharedDecodedFrame>>,
+    ) -> NativeCameraFrame {
+        let buffer = unsafe { MFCreateMemoryBuffer(data.len() as u32) }.unwrap();
+        buffer.lock_for_write().unwrap().copy_from_slice(data);
+        unsafe { buffer.SetCurrentLength(data.len() as u32) }.unwrap();
+        #[allow(clippy::arc_with_non_send_sync)]
+        let buffer = Arc::new(Mutex::new(buffer));
+        NativeCameraFrame {
+            buffer,
+            pixel_format: cap_camera_windows::PixelFormat::MJPEG,
+            width: WIDTH,
+            height: HEIGHT,
+            is_bottom_up: false,
+            timestamp: Timestamp::Instant(std::time::Instant::now()),
+            decoded,
+        }
+    }
+
+    fn visible_planes(frame: &ffmpeg::frame::Video) -> Vec<Vec<u8>> {
+        (0..frame.planes())
+            .map(|plane| {
+                let width = frame.plane_width(plane) as usize;
+                frame
+                    .data(plane)
+                    .chunks(frame.stride(plane))
+                    .take(frame.plane_height(plane) as usize)
+                    .flat_map(|row| row[..width].iter().copied())
+                    .collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn shared_mjpeg_frame_matches_encoder_decode_without_decoding_again() {
+        let mut preview_decoder = MjpegDecoder::default();
+        let mut shared_decoder = MjpegDecoder::default();
+        let mut fallback_decoder = MjpegDecoder::default();
+        let budget = SharedDecodeBudget::default();
+
+        for seed in 0..6 {
+            let data = encode_mjpeg(seed);
+            let preview = preview_decoder.decode(&data).unwrap();
+            let shared_frame = mjpeg_camera_frame(&data, budget.share(&preview));
+            let fallback_frame = mjpeg_camera_frame(&data, None);
+
+            let shared = camera_frame_to_ffmpeg(&shared_frame, &mut shared_decoder).unwrap();
+            let repeated =
+                camera_frame_to_ffmpeg(&shared_frame.clone(), &mut shared_decoder).unwrap();
+            let fallback = camera_frame_to_ffmpeg(&fallback_frame, &mut fallback_decoder).unwrap();
+
+            assert_eq!(shared.data(0).as_ptr(), preview.data(0).as_ptr());
+            assert_eq!(repeated.data(0).as_ptr(), preview.data(0).as_ptr());
+            assert_ne!(fallback.data(0).as_ptr(), preview.data(0).as_ptr());
+            assert_eq!(shared.format(), fallback.format());
+            assert_eq!(
+                (shared.width(), shared.height()),
+                (fallback.width(), fallback.height())
+            );
+            assert_eq!(shared.color_range(), fallback.color_range());
+            assert_eq!(shared.color_space(), fallback.color_space());
+            assert_eq!(shared.pts(), fallback.pts());
+            assert_eq!(visible_planes(&shared), visible_planes(&fallback));
+        }
+
+        assert_eq!(budget.0.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn exhausted_decode_budget_leaves_decoding_to_the_encoder() {
+        let data = encode_mjpeg(3);
+        let preview = MjpegDecoder::default().decode(&data).unwrap();
+        let budget = SharedDecodeBudget::default();
+
+        let mut held: Vec<_> = (0..SharedDecodeBudget::MAX_IN_FLIGHT)
+            .map(|_| mjpeg_camera_frame(&data, budget.share(&preview)))
+            .collect();
+        assert!(held.iter().all(|frame| frame.decoded.is_some()));
+        let clones: Vec<_> = held.iter().map(NativeCameraFrame::clone).collect();
+
+        let over_budget = mjpeg_camera_frame(&data, budget.share(&preview));
+        assert!(over_budget.decoded.is_none());
+        let decoded = camera_frame_to_ffmpeg(&over_budget, &mut MjpegDecoder::default()).unwrap();
+        assert_ne!(decoded.data(0).as_ptr(), preview.data(0).as_ptr());
+        assert_eq!(visible_planes(&decoded), visible_planes(&preview));
+
+        held.pop();
+        assert!(budget.share(&preview).is_none());
+        drop(clones);
+        assert!(budget.share(&preview).is_some());
     }
 }
