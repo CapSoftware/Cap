@@ -43,9 +43,22 @@ export function isStale(checkedAt: string | null, now: number): boolean {
 }
 
 export function dayStatus(day: Day): Health {
-	if (day.outage) return "outage";
-	if (day.degraded) return "degraded";
+	if (day.outage && day.confirmedOutage) return "outage";
+	if (day.outage || day.degraded) return "degraded";
 	return day.operational ? "operational" : "unknown";
+}
+
+function observed(day: Day): boolean {
+	return day.operational + day.degraded + day.outage > 0;
+}
+
+export function firstMonitoredDay(services: { days: Day[] }[]): number {
+	const first = Math.min(
+		...services
+			.map((service) => service.days.findIndex(observed))
+			.filter((index) => index >= 0),
+	);
+	return Number.isFinite(first) ? first : 0;
 }
 
 export function availability(days: Day[]): number | null {
@@ -115,6 +128,13 @@ export function applyResult(
 		previous.issueStartedAt ??= time;
 		if (previous.failures >= 2) {
 			previous.status = result.status;
+			if (result.status === "outage") {
+				day.confirmedOutage = true;
+				const started = previous.days.find(
+					(entry) => entry.date === previous.issueStartedAt?.slice(0, 10),
+				);
+				if (started) started.confirmedOutage = true;
+			}
 			if (!previous.incidentId) {
 				previous.incidentId = `${id}-${now}`;
 				state.incidents.unshift({

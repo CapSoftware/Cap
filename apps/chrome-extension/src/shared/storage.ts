@@ -442,7 +442,7 @@ export const clearAuthError = () => removeSession(AUTH_ERROR_KEY);
 // Tokens registered by content scripts for the extension iframes they embed.
 // chrome.storage.session survives service worker restarts but clears with the
 // browser session, matching the lifetime of the iframes themselves.
-const MAX_OVERLAY_TOKENS = 64;
+const MAX_OVERLAY_TOKENS = 256;
 
 export const loadOverlayTokens = async (): Promise<Record<string, number>> => {
 	const result = await getSession([OVERLAY_TOKENS_KEY]);

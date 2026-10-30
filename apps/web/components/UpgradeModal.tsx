@@ -31,7 +31,7 @@ import { useStripeContext } from "@/app/Layout/StripeContext";
 import { PRICING } from "@/data/pricing";
 import { Fit, Layout, useRive } from "@/lib/rive";
 
-interface UpgradeModalProps {
+export interface UpgradeModalProps {
 	open: boolean;
 	onboarding?: boolean;
 	onOpenChange: (open: boolean) => void;
