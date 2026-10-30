@@ -700,20 +700,14 @@ pub fn handle_item(item: TrayItem, cx: &mut App) {
             // the window (and the menu bar) to come forward.
             cx.activate(true);
         }
-        TrayItem::RecordDisplay => record_target(TargetType::Display, cx),
-        TrayItem::RecordWindow => record_target(TargetType::Window, cx),
-        TrayItem::RecordArea => record_target(TargetType::Area, cx),
+        TrayItem::RecordDisplay => app_windows::arm_record_picker(TargetType::Display, cx),
+        TrayItem::RecordWindow => app_windows::arm_record_picker(TargetType::Window, cx),
+        TrayItem::RecordArea => app_windows::arm_record_picker(TargetType::Area, cx),
         // `TrayItem::TakeScreenshot` captures the display under the cursor,
         // primary as the fallback (`tray.rs:816` over there).
         TrayItem::TakeScreenshot | TrayItem::ScreenshotDisplay => take_display_screenshot(cx),
-        TrayItem::ScreenshotWindow => {
-            set_mode(Mode::Screenshot, cx);
-            app_windows::arm_target_mode(TargetType::Window, cx);
-        }
-        TrayItem::ScreenshotArea => {
-            set_mode(Mode::Screenshot, cx);
-            app_windows::arm_target_mode(TargetType::Area, cx);
-        }
+        TrayItem::ScreenshotWindow => app_windows::arm_screenshot_picker(TargetType::Window, cx),
+        TrayItem::ScreenshotArea => app_windows::arm_screenshot_picker(TargetType::Area, cx),
         // `TrayItem::ImportVideo` (`src-tauri/src/tray.rs:839-911`): one
         // picker over both media filters, routed by extension.
         TrayItem::ImportMedia => crate::import::pick_and_import_media(cx),
@@ -739,13 +733,6 @@ pub fn handle_item(item: TrayItem, cx: &mut App) {
         TrayItem::ModeInstant => set_mode(Mode::Instant, cx),
         TrayItem::ModeScreenshot => set_mode(Mode::Screenshot, cx),
     }
-}
-
-fn record_target(target: TargetType, cx: &mut App) {
-    if Mode::from_store() == Mode::Screenshot {
-        set_mode(Mode::Studio, cx);
-    }
-    app_windows::arm_target_mode(target, cx);
 }
 
 fn take_display_screenshot(cx: &mut App) {
