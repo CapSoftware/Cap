@@ -370,8 +370,6 @@ export type ServiceWorkerRequest =
 	  }
 	| {
 			target: "service-worker";
-			// Abandons a start that is still "creating" (capture picker open,
-			// setup round-trips pending). It resolves as a cancellation.
 			type: "cancel-recording-start";
 	  }
 	| {
