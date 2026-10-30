@@ -4043,9 +4043,11 @@ fn mask_request(mask: &Annotation, frame: MaskFrame) -> Option<MaskRequest> {
         )?,
         frame,
         pixelate: mask.mask_type == Some(MaskType::Pixelate),
-        level: (mask.mask_level.unwrap_or(MASK_FALLBACK_LEVEL).max(1.)
-            * (scale[0] * scale[1]).sqrt())
-        .to_bits(),
+        level: mask
+            .mask_level
+            .unwrap_or(MASK_FALLBACK_LEVEL)
+            .max(1.)
+            .to_bits(),
     })
 }
 
@@ -4615,7 +4617,7 @@ mod tests {
     }
 
     #[test]
-    fn a_downscaled_preview_scales_mask_strength_with_its_pixels() {
+    fn a_downscaled_preview_filters_masks_at_the_export_strength() {
         let frame = |pixels: (u32, u32)| {
             let scale = preview_scale(pixels, (400., 200.));
             MaskFrame {
@@ -4630,11 +4632,14 @@ mod tests {
         let mut pixelate = shape(AnnotationType::Mask, 40., 20., 160., 80.);
         pixelate.mask_type = Some(MaskType::Pixelate);
         pixelate.mask_level = Some(8.);
+        let pixels: Vec<u8> = (0..100 * 50 * 4).map(|i| (i * 37 % 251) as u8).collect();
 
-        let full = mask_request(&pixelate, frame((400, 200))).unwrap();
         let quarter = mask_request(&pixelate, frame((100, 50))).unwrap();
-        assert_eq!(f64::from_bits(full.level), 8.);
-        assert_eq!(f64::from_bits(quarter.level), 2.);
+        assert_eq!(f64::from_bits(quarter.level), 8.);
+        assert_eq!(
+            quarter.filter(&pixels),
+            cap_gpui_kernels::screenshot::mask_filter(&pixels, 100, 50, quarter.region, true, 2.)
+        );
     }
 
     #[test]
