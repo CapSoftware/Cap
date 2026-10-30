@@ -1310,24 +1310,41 @@ let abandonPendingRecordingStart:
 	| null = null;
 
 // Asks the recorder to cancel, which unwinds a start that is past the picker
-// (server round-trips, countdown). A getDisplayMedia call still waiting on the
-// capture picker cannot be aborted from script, so if the start has not
-// settled after a grace period, close the offscreen document: that destroys
-// the pending request together with its picker, and the next start gets a
-// fresh recorder.
-const abandonOffscreenStart = async (offscreenStart: Promise<unknown>) => {
+// (server round-trips, countdown) and deletes its server recording. A
+// getDisplayMedia call still waiting on the capture picker cannot be aborted
+// from script, so only a start still stuck there after a grace period gets its
+// offscreen document closed: that destroys the pending request together with
+// its picker, and the next start gets a fresh recorder. Closing a start that is
+// past the picker would strand its server recording.
+const abandonOffscreenStart = async (
+	offscreenStart: Promise<unknown> | null,
+) => {
 	await sendOffscreen(
 		{ target: "offscreen", type: "stop-recording" },
 		{ createIfMissing: false },
 	).catch(() => undefined);
-	const settled = await Promise.race([
-		offscreenStart.then(
-			() => true,
-			() => true,
-		),
-		wait(RECORDING_START_CANCEL_GRACE_MS).then(() => false),
-	]);
-	if (!settled) await closeOffscreenDocument();
+	const grace = wait(RECORDING_START_CANCEL_GRACE_MS).then(() => false);
+	const settled = offscreenStart
+		? await Promise.race([
+				offscreenStart.then(
+					() => true,
+					() => true,
+				),
+				grace,
+			])
+		: await grace;
+	if (settled) return;
+	const response = await sendOffscreen(
+		{ target: "offscreen", type: "get-recording-status" },
+		{ createIfMissing: false },
+	).catch(() => null);
+	if (
+		response?.ok &&
+		response.status?.phase === "creating" &&
+		response.status.capturePending
+	) {
+		await closeOffscreenDocument();
+	}
 };
 
 // Resolves with the recorder's start response, unless the start is abandoned
@@ -1815,7 +1832,19 @@ const handleRequest = async (
 	}
 
 	if (message.type === "cancel-recording-start") {
-		abandonPendingRecordingStart?.("canceled");
+		if (abandonPendingRecordingStart) {
+			abandonPendingRecordingStart("canceled");
+			return { ok: true, status: recordingStatus };
+		}
+		// A restarted worker has lost the pending start's handle and timeout,
+		// but the recorder still reports the start, so cancel it directly.
+		const currentStatus = await syncRecordingStatus().catch(
+			() => recordingStatus,
+		);
+		if (currentStatus.phase === "creating") {
+			await abandonOffscreenStart(null);
+			setRecordingStatusAndBroadcast({ phase: "idle" });
+		}
 		return { ok: true, status: recordingStatus };
 	}
 
