@@ -28,9 +28,10 @@ export function MemberAvatars() {
 	if (sidebarCollapsed) return null;
 
 	const members = activeOrganization?.members ?? [];
+	const memberCount = activeOrganization?.memberCount ?? members.length;
 	const visibleMembers = members.slice(0, MAX_VISIBLE);
-	const extraCount = members.length - MAX_VISIBLE;
-	const emptySlots = Math.max(0, MAX_VISIBLE - members.length);
+	const extraCount = Math.max(0, memberCount - MAX_VISIBLE);
+	const emptySlots = Math.max(0, MAX_VISIBLE - memberCount);
 	const emptySlotKeys = [
 		"empty-slot-1",
 		"empty-slot-2",
