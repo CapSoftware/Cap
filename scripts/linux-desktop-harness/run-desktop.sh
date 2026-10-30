@@ -19,9 +19,15 @@ no_device_select=(-e VK_LOADER_LAYERS_DISABLE=VK_LAYER_MESA_device_select)
 # main thread keeps drawing with lavapipe, which shares Mesa's libraries with
 # them; a GNOME export run segfaulted right there, in the middle of dropping
 # radv. Lavapipe is the only driver with a device on these images, so the loader
-# gets that one alone, unless DOCKER_EXTRA hands a real GPU's drivers in.
+# gets that one alone, unless DOCKER_EXTRA hands a real GPU's drivers in or the
+# caller picks the driver list itself (VK_DRIVER_FILES wins over the older
+# VK_ICD_FILENAMES in the loader, so a caller hiding every driver that way must
+# not be overridden).
 lavapipe_only=()
-[[ ${DOCKER_EXTRA:-} == *--gpus* ]] || lavapipe_only=(-e VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json)
+case "${DOCKER_EXTRA:-} $*" in
+  *--gpus*|*VK_DRIVER_FILES=*|*VK_ICD_FILENAMES=*) ;;
+  *) lavapipe_only=(-e VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json) ;;
+esac
 case "$desktop" in
   gnome) image=cap-harness-gnome dockerfile=gnome.Dockerfile up=gnome-up.sh extra_env=("${no_device_select[@]}" "${lavapipe_only[@]}") ;;
   hyprland|niri|sway) image=cap-harness-arch dockerfile=arch.Dockerfile up=arch-up.sh extra_env=("${no_device_select[@]}" "${lavapipe_only[@]}") ;;
