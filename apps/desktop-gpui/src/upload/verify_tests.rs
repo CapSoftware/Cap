@@ -251,8 +251,10 @@ pub(super) struct Budget {
 ///
 /// Studio: a 26 MiB export in six parts (five of 5 MiB, one of 1 MiB + 12345
 /// bytes), each part a presign and a PUT. Instant: 2 init segments and 8
-/// audio/video pairs on URLs from one batch presign, progress manifests (a
-/// presign and a PUT each) and the completion signal.
+/// audio/video pairs on URLs from one batch presign, progress manifests and
+/// the completion signal. Manifests are PUT to the URL the batch presign
+/// returned for them, so Instant request budgets no longer count a presign
+/// per manifest.
 pub(super) mod budget {
     use super::{Budget, PART, STUDIO_LAST_PART, STUDIO_SIZE, VIDEO_SEGMENT};
 
@@ -300,29 +302,31 @@ pub(super) mod budget {
         budget(26, 10, 0, 3 * PART, 1, 12);
 
     pub(in crate::upload) const INSTANT_LIVE_CLEAN: Budget =
-        budget(38, 18, 9, 0, 0, 13 + POOL_RACE);
+        budget(29, 18, 9, 0, 0, 13 + POOL_RACE);
     pub(in crate::upload) const INSTANT_LIVE_SEGMENT_503: Budget =
-        budget(42, 19, 10, SEGMENT_3, 0, 15 + POOL_RACE);
+        budget(32, 19, 10, SEGMENT_3, 0, 15 + POOL_RACE);
     pub(in crate::upload) const INSTANT_LIVE_SEGMENT_503X3: Budget =
-        budget(44, 21, 9, 3 * SEGMENT_3, 0, 16 + POOL_RACE);
+        budget(35, 21, 9, 3 * SEGMENT_3, 0, 16 + POOL_RACE);
     pub(in crate::upload) const INSTANT_LIVE_SEGMENT_RESET: Budget =
-        budget(44, 21, 9, 3 * (SEGMENT_4 / 2), 0, 18 + POOL_RACE);
+        budget(35, 21, 9, 3 * (SEGMENT_4 / 2), 0, 18 + POOL_RACE);
     pub(in crate::upload) const INSTANT_LIVE_OUTAGE: Budget =
-        budget(41, 19, 7, SEGMENT_3 / 2, 0, 22 + POOL_RACE);
+        budget(34, 19, 7, SEGMENT_3 / 2, 0, 22 + POOL_RACE);
     pub(in crate::upload) const INSTANT_LIVE_SLOW_SEGMENT: Budget =
-        budget(38, 18, 9, 0, 0, 13 + POOL_RACE);
+        budget(29, 18, 9, 0, 0, 13 + POOL_RACE);
     pub(in crate::upload) const INSTANT_LIVE_OUTAGE_PAST_WINDOW: Budget =
-        budget(15, 8, 3, SEGMENT_3 / 2, 0, 6 + POOL_RACE);
+        budget(12, 8, 3, SEGMENT_3 / 2, 0, 6 + POOL_RACE);
     pub(in crate::upload) const INSTANT_LIVE_PERMANENT_403: Budget =
-        budget(22, 11, 4, 3 * SEGMENT_3, 0, 9 + POOL_RACE);
+        budget(18, 11, 4, 3 * SEGMENT_3, 0, 9 + POOL_RACE);
     pub(in crate::upload) const INSTANT_LIVE_CANCEL: Budget =
-        budget(19, 10, 4, 0, 0, 7 + POOL_RACE);
+        budget(15, 10, 4, 0, 0, 7 + POOL_RACE);
+    pub(in crate::upload) const INSTANT_LIVE_MANIFEST_403: Budget =
+        budget(31, 18, 10, 0, 0, 13 + POOL_RACE);
     pub(in crate::upload) const INSTANT_LIVE_COMPLETION_500: Budget =
-        budget(40, 18, 9, 0, 0, 15 + POOL_RACE);
+        budget(31, 18, 9, 0, 0, 15 + POOL_RACE);
 
     /// The relaunch session only: every segment and the thumbnail once.
     pub(in crate::upload) const QUEUE_RESUME_AFTER_QUIT_MID_TRANSFER: Budget =
-        budget(24, 15, 2, 1_795_340, 0, 12 + POOL_RACE);
+        budget(22, 15, 2, 1_795_340, 0, 12 + POOL_RACE);
     pub(in crate::upload) const QUEUE_RESUME_AFTER_QUIT_DURING_VERIFICATION: Budget =
         budget(1, 0, 0, 0, 0, 1);
 }
@@ -453,6 +457,15 @@ impl MockCap {
             .iter()
             .filter(|(m, path, ..)| m == method && path.contains(fragment))
             .count()
+    }
+
+    pub(super) fn responses(&self, method: &str, fragment: &str) -> Vec<(u16, Duration)> {
+        self.lock()
+            .requests
+            .iter()
+            .filter(|(m, path, ..)| m == method && path.contains(fragment))
+            .map(|(_, _, status, at)| (*status, *at))
+            .collect()
     }
 
     pub(super) fn timeline(&self) -> String {
@@ -1565,7 +1578,7 @@ fn instant_case(
         let feeder = tokio::spawn(feed(video.clone(), audio.clone(), sender));
         let started = tokio::time::Instant::now();
         let result = upload_segments(
-            &LiveSegmentTransport,
+            &LiveSegmentTransport::default(),
             INSTANT_VIDEO_ID,
             events,
             mock.cancel_flag(),
@@ -1606,6 +1619,139 @@ fn instant_live_clean() {
         |mock, run| {
             assert_instant_complete(mock, &run);
         },
+    );
+}
+
+fn manifest_presigns(mock: &MockCap) -> usize {
+    mock.lock()
+        .requests
+        .iter()
+        .filter(|(method, path, ..)| method == "POST" && path == "/api/upload/signed")
+        .count()
+}
+
+#[test]
+fn instant_live_manifests_reuse_the_batch_presigned_url() {
+    instant_case(
+        "instant_live_manifest_reuse",
+        Vec::new(),
+        budget::INSTANT_LIVE_CLEAN,
+        |mock, run| {
+            assert_instant_complete(mock, &run);
+            assert!(mock.count("PUT", "segments/manifest.json") > 1);
+            assert_eq!(manifest_presigns(mock), 0, "{}", mock.timeline());
+        },
+    );
+}
+
+#[test]
+fn instant_live_manifest_signs_a_new_url_when_the_reused_one_fails() {
+    instant_case(
+        "instant_live_manifest_reuse_rejected",
+        vec![rule(
+            Route::Object("segments/manifest.json"),
+            Fault::Status(403),
+        )],
+        budget::INSTANT_LIVE_MANIFEST_403,
+        |mock, run| {
+            assert_instant_complete(mock, &run);
+            assert_eq!(manifest_presigns(mock), 1, "{}", mock.timeline());
+        },
+    );
+}
+
+/// A reused URL that times out is not retried at once with a fresh one: the
+/// attempt fails and the manifest retry loop backs off first, so a hung
+/// network costs one request timeout per attempt, as before.
+#[test]
+fn instant_live_manifest_timeout_on_the_reused_url_backs_off_before_resigning() {
+    instant_case(
+        "instant_live_manifest_reuse_timeout",
+        vec![rule(Route::Object("segments/manifest.json"), Fault::Hang)],
+        budget::INSTANT_LIVE_MANIFEST_403,
+        |mock, run| {
+            assert_instant_complete(mock, &run);
+            let hung = mock
+                .responses("PUT", "segments/manifest.json")
+                .into_iter()
+                .find(|(status, _)| *status == 0)
+                .map(|(_, at)| at)
+                .expect("no hung manifest PUT");
+            let resigned = mock
+                .responses("POST", "/api/upload/signed")
+                .into_iter()
+                .filter(|(_, at)| *at > hung)
+                .map(|(_, at)| at)
+                .min()
+                .unwrap_or_else(|| panic!("manifest was never re-signed:\n{}", mock.timeline()));
+            assert!(
+                resigned >= hung + Duration::from_secs(5 * 60) + Duration::from_millis(200),
+                "re-signed without backing off:\n{}",
+                mock.timeline()
+            );
+        },
+    );
+}
+
+#[test]
+fn instant_live_manifest_url_is_resigned_before_it_can_expire() {
+    let scratch = Scratch::new("instant_live_manifest_url_expiry");
+    virtual_time(async {
+        let mock = MockCap::start(Vec::new()).await;
+        scratch.sign_in(&mock.url);
+        let (video, audio) = instant_tracks(&scratch.0, INSTANT_PAIRS);
+        let (sender, events) = flume::unbounded();
+        let feeder = tokio::spawn({
+            let (video, audio) = (video.clone(), audio.clone());
+            async move {
+                let start = tokio::time::Instant::now();
+                let _ = sender.send(video[0].clone());
+                let _ = sender.send(audio[0].clone());
+                for k in 1..video.len() {
+                    tokio::time::sleep_until(start + Duration::from_secs(100 * k as u64)).await;
+                    let _ = sender.send(audio[k].clone());
+                    let _ = sender.send(video[k].clone());
+                }
+            }
+        });
+        let result = upload_segments(
+            &LiveSegmentTransport::default(),
+            INSTANT_VIDEO_ID,
+            events,
+            mock.cancel_flag(),
+            None,
+        )
+        .await;
+        feeder.await.unwrap();
+        assert_eq!(result, Ok(()));
+        assert_segments_stored(&mock, INSTANT_VIDEO_ID, &video, &audio);
+        assert_eq!(manifest_presigns(&mock), 1, "{}", mock.timeline());
+        mock.assert_clean();
+    });
+}
+
+#[test]
+fn only_object_store_urls_are_reused_for_manifests() {
+    let target = |url: &str| SignedUploadTarget {
+        url: url.into(),
+        headers: HashMap::new(),
+    };
+    let now = tokio::time::Instant::now();
+    assert!(
+        ReusableUploadTarget::new(
+            target("https://bucket.s3.us-east-1.amazonaws.com/o/v/segments/manifest.json?X-Amz-Signature=1"),
+            now,
+        )
+        .is_some()
+    );
+    assert!(
+        ReusableUploadTarget::new(
+            target(
+                "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&upload_id=1"
+            ),
+            now,
+        )
+        .is_none()
     );
 }
 
@@ -1673,7 +1819,7 @@ fn instant_live_deferred_retries_back_off_after_recording_ends() {
         let (sender, events) = flume::unbounded();
         let feeder = tokio::spawn(feed(video.clone(), audio.clone(), sender));
         let result = upload_segments(
-            &LiveSegmentTransport,
+            &LiveSegmentTransport::default(),
             INSTANT_VIDEO_ID,
             events,
             mock.cancel_flag(),

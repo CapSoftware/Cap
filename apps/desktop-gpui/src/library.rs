@@ -754,6 +754,14 @@ fn screenshot_items_in(dir: &Path) -> impl Iterator<Item = ScreenshotItem> {
         })
 }
 
+/// Whether a `.cap` directory is a screenshot rather than a recording. The
+/// same rule `list_screenshots` uses, so the two never disagree on a bundle.
+pub fn is_screenshot_bundle(bundle: &Path) -> bool {
+    bundle.extension().and_then(|ext| ext.to_str()) == Some("cap")
+        && bundle.is_dir()
+        && screenshot_png(bundle).is_some()
+}
+
 fn screenshot_png(bundle: &Path) -> Option<(PathBuf, f64)> {
     let original = bundle.join("original.png");
     if let Ok(metadata) = original.metadata() {
@@ -1419,6 +1427,13 @@ pub fn bundle_thumbnail_path(project_dir: &Path) -> PathBuf {
 mod tests {
     use super::*;
 
+    /// Wait long enough that the next file gets a later timestamp. Kernels
+    /// stamp files from a coarse clock (one 4 to 10 ms tick), so a shorter
+    /// sleep can leave two bundles tied and sorted in directory order.
+    fn next_timestamp() {
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+
     #[test]
     fn decode_jobs_stop_once_nobody_takes_the_results() {
         let (job_tx, job_rx) = flume::unbounded();
@@ -1670,7 +1685,7 @@ mod tests {
         // Twelve recordings, oldest first, so the newest nine are 3..=11.
         for i in 0..12 {
             write_studio_bundle(&recordings, &format!("rec-{i:02}"), 1);
-            std::thread::sleep(std::time::Duration::from_millis(6));
+            next_timestamp();
         }
 
         let items = recent_media_in(std::slice::from_ref(&recordings), &screenshots);
@@ -1699,9 +1714,9 @@ mod tests {
         std::fs::create_dir_all(&screenshots).unwrap();
 
         write_studio_bundle(&recordings, "old-recording", 1);
-        std::thread::sleep(std::time::Duration::from_millis(6));
+        next_timestamp();
         write_screenshot_bundle(&screenshots, "middle-screenshot");
-        std::thread::sleep(std::time::Duration::from_millis(6));
+        next_timestamp();
         write_studio_bundle(&recordings, "new-recording", 3);
 
         let items = recent_media_in(std::slice::from_ref(&recordings), &screenshots);
@@ -1798,15 +1813,15 @@ mod tests {
         std::fs::create_dir_all(&active).unwrap();
         std::fs::create_dir_all(&archived).unwrap();
         write_studio_bundle(&active, "old-studio", 1);
-        std::thread::sleep(std::time::Duration::from_millis(6));
+        next_timestamp();
         write_studio_bundle(&archived, "new-studio", 3);
-        std::thread::sleep(std::time::Duration::from_millis(6));
+        next_timestamp();
         write_bundle(
             &active,
             "instant",
             r#"{"pretty_name":"Instant","sharing":null,"fps":30,"sample_rate":48000}"#,
         );
-        std::thread::sleep(std::time::Duration::from_millis(6));
+        next_timestamp();
         std::fs::create_dir_all(archived.join("missing-meta")).unwrap();
         write_bundle(&active, "corrupt-meta", "{ not json ");
         std::fs::write(archived.join("loose.mp4"), b"").unwrap();
@@ -1879,16 +1894,16 @@ mod tests {
         std::fs::write(not_a_bundle.join("original.png"), b"png").unwrap();
         std::fs::write(root.join("loose.cap"), b"").unwrap();
         for i in 0..30 {
-            std::thread::sleep(std::time::Duration::from_millis(6));
+            next_timestamp();
             let bundle = write_shot(&root, &format!("shot-{:02}", (i * 7) % 30));
             std::fs::write(bundle.join("original.png"), b"png").unwrap();
         }
-        std::thread::sleep(std::time::Duration::from_millis(6));
+        next_timestamp();
         let tie_a = write_shot(&root, "tie-a");
         std::fs::write(tie_a.join("original.png"), b"png").unwrap();
         let tie_b = write_shot(&root, "tie-b");
         std::fs::hard_link(tie_a.join("original.png"), tie_b.join("original.png")).unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(6));
+        next_timestamp();
         let corrupt = write_bundle(&root, "corrupt", "{ not json ");
         std::fs::write(corrupt.join("original.png"), b"png").unwrap();
 
@@ -2268,13 +2283,13 @@ mod tests {
                 r#"{{"pretty_name":"Studio multi","sharing":{{"id":"abc","link":"https://cap.so/s/abc"}},"segments":[{segment},{segment},{segment}]}}"#
             ),
         );
-        std::thread::sleep(std::time::Duration::from_millis(6));
+        next_timestamp();
         write_bundle(
             &recordings,
             "studio-single",
             r#"{"pretty_name":"Studio single","sharing":null,"display":{"path":"content/display.mp4","fps":30}}"#,
         );
-        std::thread::sleep(std::time::Duration::from_millis(6));
+        next_timestamp();
         write_bundle(
             &recordings,
             "studio-failed",
@@ -2282,7 +2297,7 @@ mod tests {
                 r#"{{"pretty_name":"Studio failed","sharing":null,"segments":[{segment}],"status":{{"status":"Failed","error":"encoder died"}}}}"#
             ),
         );
-        std::thread::sleep(std::time::Duration::from_millis(6));
+        next_timestamp();
         write_bundle(
             &recordings,
             "studio-remux",
@@ -2290,7 +2305,7 @@ mod tests {
                 r#"{{"pretty_name":"Studio remux","sharing":null,"segments":[{segment}],"status":{{"status":"NeedsRemux"}}}}"#
             ),
         );
-        std::thread::sleep(std::time::Duration::from_millis(6));
+        next_timestamp();
         let instant_complete = write_bundle(
             &recordings,
             "instant-complete",
@@ -2316,13 +2331,13 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(6));
+        next_timestamp();
         write_bundle(
             &recordings,
             "instant-progress",
             r#"{"pretty_name":"Instant in progress","sharing":null,"recording":true}"#,
         );
-        std::thread::sleep(std::time::Duration::from_millis(6));
+        next_timestamp();
         write_bundle(
             &recordings,
             "instant-failed",
@@ -2544,7 +2559,7 @@ mod tests {
             "InProgress",
             true,
         );
-        std::thread::sleep(std::time::Duration::from_millis(6));
+        next_timestamp();
         let complete_studio = write_incomplete_bundle(
             &recordings,
             "complete-studio",
@@ -2552,11 +2567,11 @@ mod tests {
             "Complete",
             true,
         );
-        std::thread::sleep(std::time::Duration::from_millis(6));
+        next_timestamp();
         write_bundle(&recordings, "corrupt-meta", "{ not json ");
-        std::thread::sleep(std::time::Duration::from_millis(6));
+        next_timestamp();
         std::fs::create_dir_all(recordings.join("missing-meta")).unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(6));
+        next_timestamp();
         let active = write_incomplete_bundle(
             &recordings,
             "active",
@@ -2564,7 +2579,7 @@ mod tests {
             "InProgress",
             true,
         );
-        std::thread::sleep(std::time::Duration::from_millis(6));
+        next_timestamp();
         let in_progress = write_incomplete_bundle(
             &recordings,
             "in-progress",
@@ -2572,7 +2587,7 @@ mod tests {
             "InProgress",
             true,
         );
-        std::thread::sleep(std::time::Duration::from_millis(6));
+        next_timestamp();
         let remux = write_incomplete_bundle(
             &recordings,
             "remux",
@@ -2580,14 +2595,14 @@ mod tests {
             "NeedsRemux",
             true,
         );
-        std::thread::sleep(std::time::Duration::from_millis(6));
+        next_timestamp();
         let instant = write_incomplete_instant_bundle(
             &recordings,
             "instant-incomplete",
             "Cap 2026-01-03 at 10.00.00",
             false,
         );
-        std::thread::sleep(std::time::Duration::from_millis(6));
+        next_timestamp();
         let complete_instant = write_incomplete_instant_bundle(
             &recordings,
             "complete-instant",
@@ -2601,7 +2616,7 @@ mod tests {
             r#"{"pretty_name":"Cap 2026-01-06 at 10.00.00","sharing":null,"fps":30,"sample_rate":48000}"#,
         )
         .unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(6));
+        next_timestamp();
         let unrecoverable = write_incomplete_bundle(
             &recordings,
             "unrecoverable",
