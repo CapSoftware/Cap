@@ -40,7 +40,13 @@ const SCREENSHOT_OBJECT_KEY_SUFFIXES = [
 	"screen-capture.jpg",
 	"screen-capture.jpeg",
 ];
-const THUMBNAIL_OBJECT_LIST_MAX_KEYS = 10;
+const SCREENSHOT_OBJECT_LIST_PREFIXES = [
+	"screenshot/screen-capture.",
+	"screen-capture.",
+];
+type StorageBucket = Effect.Effect.Success<
+	ReturnType<StorageService["getAccessForVideo"]>
+>[0];
 type ScreenshotObject = {
 	Key?: string | null;
 	LastModified?: Date | string | number | null;
@@ -237,68 +243,51 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 			},
 		);
 
+		const listAllObjects = Effect.fn("Videos.listAllObjects")(function* (
+			bucket: StorageBucket,
+			prefix: string,
+		) {
+			const contents: Array<ScreenshotObject> = [];
+			const seenTokens = new Set<string>();
+			let continuationToken: string | undefined;
+			do {
+				const page = yield* bucket.listObjects({ prefix, continuationToken });
+				contents.push(...(page.Contents ?? []));
+				continuationToken = yield* nextObjectPage(page, seenTokens);
+			} while (continuationToken);
+			return contents;
+		});
+
 		const findStoredScreenshotKey = Effect.fn("Videos.findStoredScreenshotKey")(
-			function* (
-				bucket: Effect.Effect.Success<
-					ReturnType<typeof storage.getAccessForVideo>
-				>[0],
-				videoPrefix: string,
-			) {
-				for (const suffix of SCREENSHOT_OBJECT_KEY_SUFFIXES) {
-					const key = `${videoPrefix}${suffix}`;
-					const exists = yield* bucket.headObject(key).pipe(
-						Effect.as(true),
-						Effect.catchAll(() => Effect.succeed(false)),
+			function* (bucket: StorageBucket, videoPrefix: string) {
+				for (const prefix of SCREENSHOT_OBJECT_LIST_PREFIXES) {
+					const contents = yield* listAllObjects(
+						bucket,
+						`${videoPrefix}${prefix}`,
 					);
-					if (exists) return key;
+					const key = findScreenshotObjectKey(contents);
+					if (key) return key;
 				}
-
-				const screenshotList = yield* bucket.listObjects({
-					prefix: `${videoPrefix}screenshot/`,
-					maxKeys: THUMBNAIL_OBJECT_LIST_MAX_KEYS,
-				});
-				let thumbnailKey = findScreenshotObjectKey(
-					screenshotList.Contents ?? [],
-				);
-				if (thumbnailKey) return thumbnailKey;
-
-				const seen = new Set<string>();
-				let continuation: string | undefined;
-				while (true) {
-					const rootList = yield* bucket.listObjects({
-						prefix: videoPrefix,
-						maxKeys: THUMBNAIL_OBJECT_LIST_MAX_KEYS,
-						continuationToken: continuation,
-					});
-					thumbnailKey = findScreenshotObjectKey(rootList.Contents ?? []);
-					if (thumbnailKey) return thumbnailKey;
-					if (!rootList.IsTruncated) return null;
-					const next = yield* nextObjectPage(rootList, seen);
-					if (!next) return null;
-					continuation = next;
-				}
+				return null;
 			},
 		);
 
 		const getThumbnailURLForVideo = Effect.fn("Videos.getThumbnailURLForVideo")(
 			function* (video: Video.Video) {
-				return yield* Effect.gen(function* () {
-					const [bucket] = yield* storage.getAccessForVideo(video);
-					const publishedThumbnail = getPublishedRecordingThumbnailKey(video);
-					if (publishedThumbnail) {
-						return Option.some(
-							yield* bucket.getSignedObjectUrl(publishedThumbnail),
-						);
-					}
-					const videoPrefix = `${video.ownerId}/${video.id}/`;
-					const thumbnailKey = yield* findStoredScreenshotKey(
-						bucket,
-						videoPrefix,
+				const [bucket] = yield* storage.getAccessForVideo(video);
+				const publishedThumbnail = getPublishedRecordingThumbnailKey(video);
+				if (publishedThumbnail) {
+					return Option.some(
+						yield* bucket.getSignedObjectUrl(publishedThumbnail),
 					);
-					if (!thumbnailKey) return Option.none<string>();
-					const url = yield* bucket.getSignedObjectUrl(thumbnailKey);
-					return Option.some(url);
-				}).pipe(Effect.catchAll(() => Effect.succeed(Option.none<string>())));
+				}
+				const thumbnailKey = yield* findStoredScreenshotKey(
+					bucket,
+					`${video.ownerId}/${video.id}/`,
+				);
+				if (!thumbnailKey) return Option.none<string>();
+				const url = yield* bucket.getSignedObjectUrl(thumbnailKey);
+				return Option.some(url);
 			},
 		);
 

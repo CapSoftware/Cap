@@ -24,14 +24,12 @@ vi.mock("@cap/web-backend/src/Storage/index", async () => {
 					{
 						getSignedObjectUrl: (key: string) =>
 							Effect.succeed(`signed:${key}`),
-						listObjects: ({ prefix }: { prefix: string }) => {
-							const thumbnailKey = prefix.endsWith("screenshot/")
-								? `${prefix}screen-capture.jpg`
-								: `${prefix}screenshot/screen-capture.jpg`;
-							return Effect.succeed({
-								Contents: [{ Key: thumbnailKey }],
-							});
-						},
+						listObjects: ({ prefix }: { prefix: string }) =>
+							Effect.succeed({
+								Contents: prefix.endsWith("/screenshot/screen-capture.")
+									? [{ Key: `${prefix}jpg` }]
+									: [],
+							}),
 					},
 					Option.none(),
 				] as const),

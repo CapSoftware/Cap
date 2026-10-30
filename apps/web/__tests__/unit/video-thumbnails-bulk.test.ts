@@ -5,14 +5,18 @@ import {
 	User,
 	Video,
 } from "@cap/web-domain";
-import { Effect, Exit, Option } from "effect";
+import { Effect, Exit, Logger, Option } from "effect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+type StoredObject = { Key: string; LastModified?: Date };
 
 const mocks = vi.hoisted(() => ({
 	getById: vi.fn(),
 	getByIds: vi.fn(),
 	listObjects: vi.fn(),
 	storageError: undefined as Error | undefined,
+	objects: new Map<string, StoredObject[]>(),
+	pageSize: 1000,
 }));
 
 vi.mock("@cap/database", () => ({ db: () => ({}) }));
@@ -27,19 +31,30 @@ vi.mock("@cap/web-backend/src/Storage/index", async () => {
 					{
 						getSignedObjectUrl: (key: string) =>
 							Effect.succeed(`signed:${key}`),
-						listObjects: ({ prefix }: { prefix: string }) => {
+						listObjects: ({
+							prefix,
+							continuationToken,
+						}: {
+							prefix: string;
+							continuationToken?: string;
+						}) => {
 							mocks.listObjects(prefix);
-							if (mocks.storageError)
+							if (mocks.storageError && prefix.includes("broken"))
 								return Effect.fail(
 									new StorageError({ cause: mocks.storageError }),
 								);
-							const thumbnailKey = prefix.endsWith("screenshot/")
-								? `${prefix}screen-capture.jpg`
-								: `${prefix}screenshot/screen-capture.jpg`;
+							const stored =
+								mocks.objects.get(prefix.split("/")[1] ?? "") ?? [];
+							const matching = stored
+								.filter((object) => object.Key.startsWith(prefix))
+								.sort((a, b) => (a.Key < b.Key ? -1 : 1));
+							const start = continuationToken ? Number(continuationToken) : 0;
+							const end = start + mocks.pageSize;
 							return Effect.succeed({
-								Contents: prefix.includes("noshot")
-									? [{ Key: `${prefix}result.mp4` }]
-									: [{ Key: thumbnailKey }],
+								Contents: matching.slice(start, end),
+								IsTruncated: end < matching.length,
+								NextContinuationToken:
+									end < matching.length ? String(end) : undefined,
 							});
 						},
 					},
@@ -96,6 +111,9 @@ const videosById = new Map(
 		}),
 		makeVideo("denied", { type: "desktopMP4" }),
 		makeVideo("protected", { type: "desktopMP4" }),
+		makeVideo("legacy", { type: "desktopMP4" }),
+		makeVideo("reuploaded", { type: "desktopMP4" }),
+		makeVideo("broken", { type: "desktopMP4" }),
 	].map((video) => [video.id as string, video] as const),
 );
 
@@ -184,6 +202,7 @@ function provide<A, E>(
 		),
 		Effect.provide([Database.Default, Storage.Default, Tinybird.Default]),
 		Effect.provideService(CurrentUser, user),
+		Effect.provide(Logger.remove(Logger.defaultLogger)),
 	);
 }
 
@@ -212,6 +231,15 @@ beforeEach(() => {
 	mocks.getByIds.mockClear();
 	mocks.listObjects.mockClear();
 	mocks.storageError = undefined;
+	mocks.pageSize = 1000;
+	mocks.objects.clear();
+	mocks.objects.set("owned", [
+		{ Key: "owner/owned/screenshot/screen-capture.jpg" },
+	]);
+	mocks.objects.set("noshot", [{ Key: "owner/noshot/result.mp4" }]);
+	mocks.objects.set("broken", [
+		{ Key: "owner/broken/screenshot/screen-capture.jpg" },
+	]);
 });
 
 describe("bulk thumbnail URLs", () => {
@@ -251,14 +279,92 @@ describe("bulk thumbnail URLs", () => {
 		expect(mocks.listObjects).not.toHaveBeenCalled();
 	});
 
+	it("lists only the screenshot key prefix instead of the whole video folder", async () => {
+		await bulk(["owned"]);
+		expect(mocks.listObjects.mock.calls).toEqual([
+			["owner/owned/screenshot/screen-capture."],
+		]);
+	});
+
+	it("finds a legacy root screenshot behind many other objects", async () => {
+		mocks.objects.set("legacy", [
+			...Array.from({ length: 25 }, (_, index) => ({
+				Key: `owner/legacy/audio/segment-${index}.m4s`,
+			})),
+			{ Key: "owner/legacy/combined-source/source.mp4" },
+			{ Key: "owner/legacy/output/result.mp4" },
+			{ Key: "owner/legacy/screen-capture.jpg" },
+		]);
+		const [exit] = await bulk(["legacy"]);
+		expect(exit).toEqual(
+			Exit.succeed(Option.some("signed:owner/legacy/screen-capture.jpg")),
+		);
+		expect(mocks.listObjects.mock.calls).toEqual([
+			["owner/legacy/screenshot/screen-capture."],
+			["owner/legacy/screen-capture."],
+		]);
+	});
+
+	it.each([
+		["jpg", "png", "png"],
+		["png", "jpg", "jpg"],
+	])(
+		"uses the newest screenshot when a %s is replaced by a %s",
+		async (older, newer, expected) => {
+			mocks.objects.set("reuploaded", [
+				{
+					Key: `owner/reuploaded/screenshot/screen-capture.${older}`,
+					LastModified: new Date("2026-01-01T00:00:00Z"),
+				},
+				{
+					Key: `owner/reuploaded/screenshot/screen-capture.${newer}`,
+					LastModified: new Date("2026-02-01T00:00:00Z"),
+				},
+			]);
+			const [exit] = await bulk(["reuploaded"]);
+			expect(exit).toEqual(
+				Exit.succeed(
+					Option.some(
+						`signed:owner/reuploaded/screenshot/screen-capture.${expected}`,
+					),
+				),
+			);
+		},
+	);
+
+	it("reads every page of a truncated listing", async () => {
+		mocks.pageSize = 1;
+		mocks.objects.set("reuploaded", [
+			{
+				Key: "owner/reuploaded/screenshot/screen-capture.jpeg",
+				LastModified: new Date("2026-01-01T00:00:00Z"),
+			},
+			{
+				Key: "owner/reuploaded/screenshot/screen-capture.jpg",
+				LastModified: new Date("2026-02-01T00:00:00Z"),
+			},
+			{
+				Key: "owner/reuploaded/screenshot/screen-capture.png",
+				LastModified: new Date("2026-03-01T00:00:00Z"),
+			},
+		]);
+		const [exit] = await bulk(["reuploaded"]);
+		expect(exit).toEqual(
+			Exit.succeed(
+				Option.some("signed:owner/reuploaded/screenshot/screen-capture.png"),
+			),
+		);
+		expect(mocks.listObjects).toHaveBeenCalledTimes(3);
+	});
+
 	it("fails the whole batch on a storage error, like the per-video lookup", async () => {
 		mocks.storageError = new Error("S3 unavailable");
-		await expect(bulk(["owned"])).rejects.toThrow();
+		await expect(bulk(["owned", "broken"])).rejects.toThrow();
 		await expect(
 			Effect.runPromise(
 				provide(
 					Effect.flatMap(Videos, (videos) =>
-						videos.getThumbnailURL(Video.VideoId.make("owned")),
+						videos.getThumbnailURL(Video.VideoId.make("broken")),
 					),
 				),
 			),
