@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { trackEvent } from "@/app/utils/analytics";
 import { homepageCopy } from "@/data/homepage-copy";
+import { BTN_PUMPKIN, HALLOWEEN } from "./halloween";
 import {
 	BODY_TEXT,
 	BTN_PRIMARY,
@@ -85,7 +86,10 @@ const PlanCard = ({
 		<Link
 			href={href}
 			onClick={onClick}
-			className={classNames(primary ? BTN_PRIMARY : BTN_SECONDARY, "mt-7")}
+			className={classNames(
+				primary ? (HALLOWEEN ? BTN_PUMPKIN : BTN_PRIMARY) : BTN_SECONDARY,
+				"mt-7",
+			)}
 		>
 			{cta}
 		</Link>
