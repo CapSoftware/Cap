@@ -207,6 +207,74 @@ describe("Slack video unfurls", () => {
 		);
 	});
 
+	it("still unfurls available videos when another lookup rejects", async () => {
+		const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const sendUnfurl = vi.fn(async () => undefined);
+		const getVideo = vi.fn(async (id: Video.VideoId) => {
+			if (id === "unavailable") throw new Error("Video lookup failed");
+			return video;
+		});
+		await processSlackEvent({
+			payload: {
+				...payload,
+				event: {
+					...payload.event,
+					links: [
+						{ domain: "cap.so", url: "https://cap.so/s/unavailable" },
+						{ domain: "cap.so", url: "https://cap.so/s/abc123" },
+					],
+				},
+			},
+			webUrl: "https://cap.so",
+			dependencies: {
+				deleteInstallation: vi.fn(async () => undefined),
+				getInstallationToken: vi.fn(async () => "xoxb-token"),
+				getVideo,
+				sendUnfurl,
+			},
+		});
+
+		expect(getVideo).toHaveBeenCalledTimes(2);
+		expect(sendUnfurl).toHaveBeenCalledTimes(1);
+		expect(warning).toHaveBeenCalledWith("Slack unfurl video lookup failed", {
+			videoId: "unavailable",
+			error: expect.any(Error),
+		});
+		expect(sendUnfurl).toHaveBeenCalledWith(
+			expect.objectContaining({
+				unfurls: {
+					"https://cap.so/s/abc123": {
+						blocks: [expect.objectContaining({ type: "video" })],
+					},
+				},
+			}),
+		);
+		warning.mockRestore();
+	});
+
+	it("does not call Slack when every linked video lookup fails", async () => {
+		const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const sendUnfurl = vi.fn(async () => undefined);
+		await processSlackEvent({
+			payload,
+			webUrl: "https://cap.so",
+			dependencies: {
+				deleteInstallation: vi.fn(async () => undefined),
+				getInstallationToken: vi.fn(async () => "xoxb-token"),
+				getVideo: vi.fn(async () => {
+					throw new Error("Temporary metadata lookup failure");
+				}),
+				sendUnfurl,
+			},
+		});
+
+		expect(sendUnfurl).not.toHaveBeenCalled();
+		expect(warning).toHaveBeenCalledWith("Slack unfurl video lookup failed", {
+			videoId: "abc123",
+			error: expect.any(Error),
+		});
+		warning.mockRestore();
+	});
 	it("degrades silently when a link is restricted or the app is not installed", async () => {
 		const sendUnfurl = vi.fn(async () => undefined);
 		await processSlackEvent({
