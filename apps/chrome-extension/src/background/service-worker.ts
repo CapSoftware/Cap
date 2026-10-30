@@ -1168,15 +1168,12 @@ const refreshFreePlanForStart = async (
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	try {
 		const fresh = await Promise.race([
-			fetchBootstrap(settings, auth),
+			refreshBootstrap(settings, auth),
 			new Promise<null>((resolve) => {
 				timer = setTimeout(() => resolve(null), START_PLAN_REFRESH_TIMEOUT_MS);
 			}),
 		]);
-		if (!fresh) return cached;
-		bootstrapCache = fresh;
-		await saveCachedBootstrap(fresh).catch(() => undefined);
-		return fresh;
+		return fresh ?? cached;
 	} catch {
 		return cached;
 	} finally {
