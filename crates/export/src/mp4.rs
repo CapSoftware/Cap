@@ -655,20 +655,29 @@ impl Mp4ExportSettings {
 
                 match &input.payload {
                     ExportFramePayload::Cpu(nv12_data) => {
-                        fill_nv12_frame_direct(
-                            &mut reusable_frame,
+                        let mut wrapped = wrap_packed_nv12_frame(
                             nv12_data,
                             input.width,
                             input.height,
                             input.y_stride,
                             input.frame_number as i64,
                         );
+                        let frame = match wrapped.as_mut() {
+                            Some(frame) => frame,
+                            None => {
+                                fill_nv12_frame_direct(
+                                    &mut reusable_frame,
+                                    nv12_data,
+                                    input.width,
+                                    input.height,
+                                    input.y_stride,
+                                    input.frame_number as i64,
+                                );
+                                &mut reusable_frame
+                            }
+                        };
                         encoder
-                            .queue_video_frame_reusable(
-                                &mut reusable_frame,
-                                &mut converted_frame,
-                                Duration::MAX,
-                            )
+                            .queue_video_frame_reusable(frame, &mut converted_frame, Duration::MAX)
                             .map_err(|err| video_failure(err.to_string()))?;
                     }
                     #[cfg(target_os = "macos")]
@@ -1476,6 +1485,58 @@ fn fill_nv12_frame_from_surface(
     })
 }
 
+unsafe extern "C" fn release_wrapped_nv12(opaque: *mut std::ffi::c_void, _data: *mut u8) {
+    drop(unsafe { Box::from_raw(opaque.cast::<SharedNv12Buffer>()) });
+}
+
+/// Wraps a tightly packed NV12 buffer as a read-only frame without copying.
+/// The frame holds a reference to the pooled buffer until ffmpeg releases it.
+/// Padded or odd-sized frames return `None` and are copied instead.
+fn wrap_packed_nv12_frame(
+    nv12_data: &SharedNv12Buffer,
+    width: u32,
+    height: u32,
+    y_stride: u32,
+    pts: i64,
+) -> Option<ffmpeg::frame::Video> {
+    let y_size = width as usize * height as usize;
+    if y_size == 0
+        || y_stride != width
+        || !width.is_multiple_of(2)
+        || !height.is_multiple_of(2)
+        || nv12_data.len() < y_size + y_size / 2
+    {
+        return None;
+    }
+
+    let mut frame = ffmpeg::frame::Video::empty();
+    frame.set_format(ffmpeg::format::Pixel::NV12);
+    frame.set_width(width);
+    frame.set_height(height);
+    frame.set_pts(Some(pts));
+    unsafe {
+        let owner = Box::into_raw(Box::new(nv12_data.clone()));
+        let buf = ffmpeg::ffi::av_buffer_create(
+            nv12_data.as_ptr().cast_mut(),
+            nv12_data.len(),
+            Some(release_wrapped_nv12),
+            owner.cast(),
+            ffmpeg::ffi::AV_BUFFER_FLAG_READONLY,
+        );
+        if buf.is_null() {
+            drop(Box::from_raw(owner));
+            return None;
+        }
+        let ptr = frame.as_mut_ptr();
+        (*ptr).buf[0] = buf;
+        (*ptr).data[0] = (*buf).data;
+        (*ptr).data[1] = (*buf).data.add(y_size);
+        (*ptr).linesize[0] = width as i32;
+        (*ptr).linesize[1] = width as i32;
+    }
+    Some(frame)
+}
+
 fn fill_nv12_frame_direct(
     frame: &mut ffmpeg::frame::Video,
     nv12_data: &[u8],
@@ -2156,6 +2217,65 @@ mod tests {
                 assert_eq!(src_val, dst_val, "UV mismatch at ({col}, {row})");
             }
         }
+    }
+
+    #[test]
+    fn wrapped_nv12_frame_matches_copied_frame() {
+        ffmpeg::init().unwrap();
+
+        let width = 12u32;
+        let height = 6u32;
+        let y_size = (width * height) as usize;
+        let data: Vec<u8> = (0..y_size * 3 / 2).map(|i| (i * 7 % 251) as u8).collect();
+        let shared = SharedNv12Buffer::from_vec(data.clone());
+
+        let mut wrapped = wrap_packed_nv12_frame(&shared, width, height, width, 7)
+            .expect("packed NV12 must wrap");
+        assert_eq!(wrapped.data(0).as_ptr(), shared.as_ptr());
+        drop(shared);
+
+        let mut copied = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::NV12, width, height);
+        fill_nv12_frame_direct(&mut copied, &data, width, height, width, 7);
+
+        assert_eq!(wrapped.pts(), copied.pts());
+        assert_eq!(wrapped.format(), copied.format());
+        assert_eq!((wrapped.width(), wrapped.height()), (width, height));
+        let row_bytes = width as usize;
+        for (plane, rows) in [(0, height as usize), (1, height as usize / 2)] {
+            for row in 0..rows {
+                let start = (row * wrapped.stride(plane), row * copied.stride(plane));
+                assert_eq!(
+                    &wrapped.data(plane)[start.0..start.0 + row_bytes],
+                    &copied.data(plane)[start.1..start.1 + row_bytes],
+                    "plane {plane} row {row}"
+                );
+            }
+        }
+
+        let mut reference = ffmpeg::frame::Video::empty();
+        assert_eq!(
+            unsafe { ffmpeg::ffi::av_frame_ref(reference.as_mut_ptr(), wrapped.as_ptr()) },
+            0
+        );
+        assert_eq!(
+            unsafe { ffmpeg::ffi::av_frame_is_writable(wrapped.as_mut_ptr()) },
+            0
+        );
+        drop(wrapped);
+        assert_eq!(&reference.data(0)[..y_size], &data[..y_size]);
+    }
+
+    #[test]
+    fn padded_or_odd_nv12_frames_are_not_wrapped() {
+        ffmpeg::init().unwrap();
+
+        let shared = SharedNv12Buffer::from_vec(vec![0u8; 16 * 6 * 3 / 2]);
+        let empty = SharedNv12Buffer::from_vec(Vec::new());
+        assert!(wrap_packed_nv12_frame(&shared, 12, 6, 16, 0).is_none());
+        assert!(wrap_packed_nv12_frame(&shared, 16, 5, 16, 0).is_none());
+        assert!(wrap_packed_nv12_frame(&shared, 16, 8, 16, 0).is_none());
+        assert!(wrap_packed_nv12_frame(&empty, 16, 6, 16, 0).is_none());
+        assert!(wrap_packed_nv12_frame(&shared, 16, 6, 16, 0).is_some());
     }
 
     #[test]
