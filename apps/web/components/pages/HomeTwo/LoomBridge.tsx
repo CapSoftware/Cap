@@ -6,6 +6,7 @@ import Link from "next/link";
 import { trackEvent } from "@/app/utils/analytics";
 import { LoomMark } from "@/components/icons/LoomMark";
 import { MigratePromoBadge } from "@/components/MigratePromoBadge";
+import { BTN_PUMPKIN, HALLOWEEN } from "./halloween";
 import { BODY_TEXT, BTN_PRIMARY } from "./theme";
 
 export const LoomBridge = () => (
@@ -33,7 +34,10 @@ export const LoomBridge = () => (
 							cta_location: "primary",
 						})
 					}
-					className={classNames(BTN_PRIMARY, "gap-2.5")}
+					className={classNames(
+						HALLOWEEN ? BTN_PUMPKIN : BTN_PRIMARY,
+						"gap-2.5",
+					)}
 				>
 					<LoomMark size={16} />
 					Import from Loom
