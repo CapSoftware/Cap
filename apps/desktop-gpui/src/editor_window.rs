@@ -1360,6 +1360,8 @@ pub struct EditorWindow {
     preparing_frame_presented: bool,
     preparing_seed: Option<Arc<crate::editor_preparing::presentation::PreparingTimelineSeed>>,
     pub(crate) latest_frame: Option<EditorPreviewFrame>,
+    /// The number of the frame in `latest_frame`.
+    presented_frame: Option<u32>,
     preview: Entity<PreviewFrameView>,
     header: Entity<EditorSectionView>,
     toolbar: Entity<EditorSectionView>,
@@ -1391,6 +1393,12 @@ pub struct EditorWindow {
     /// this frame, and neither proves frames are flowing yet -- only a sample
     /// past it arms extrapolation.
     playhead_epoch_start: u32,
+    /// A playing playhead sample waiting to be drawn with its frame, so the
+    /// line and the picture change in the same window draw.
+    playhead_draw_pending: bool,
+    /// When the timeline and transport were last invalidated for the
+    /// playhead; the ticker only repaints once this is overdue.
+    playback_chrome_at: Instant,
     /// `totalDuration()`. Taken from the instance's own timeline once it
     /// exists, because that is the number the playback engine stops at
     /// (`playback.rs:560-570`, `TimelineConfiguration::duration`).
@@ -2073,6 +2081,7 @@ impl EditorWindow {
             preparing_frame_presented: false,
             preparing_seed: None,
             latest_frame: None,
+            presented_frame: None,
             preview,
             header,
             toolbar,
@@ -2087,6 +2096,8 @@ impl EditorWindow {
             last_playhead_redraw: Instant::now().checked_sub(Duration::from_secs(1)).unwrap(),
             playhead_epoch_live: false,
             playhead_epoch_start: 0,
+            playhead_draw_pending: false,
+            playback_chrome_at: Instant::now(),
             total: 0.0,
             transport: None,
             scrub: None,
@@ -3102,6 +3113,17 @@ impl EditorWindow {
         }
 
         self.last_playhead_redraw = Instant::now();
+        // The engine reports a frame when it submits it, a few milliseconds
+        // before the picture arrives; `display_frame` draws the two together.
+        if playhead_waits_for_its_frame(
+            self.playing,
+            self.playhead_epoch_live,
+            self.presented_frame,
+            frame,
+        ) {
+            self.playhead_draw_pending = true;
+            return;
+        }
         self.invalidate_playback_chrome(window, cx);
     }
 
@@ -3174,13 +3196,13 @@ impl EditorWindow {
             .as_ref()
             .map(|stats| (Instant::now(), stats.snapshot()));
         // Playhead events land at the preview fps (`EDITOR_PREVIEW_FPS`,
-        // 60Hz), and each one already repaints the timeline and transport
-        // through `invalidate_playback_chrome`. The ticker exists for render
-        // stalls: when frames stop arriving, it keeps the extrapolated
-        // playhead line (`last_playhead_redraw` in the ruler render) gliding.
-        // In steady state a tick that lands right after a playhead event
-        // would be a duplicate rebuild of both sections, so it only notifies
-        // once an event is overdue.
+        // 60Hz), and each one already repaints the timeline and transport,
+        // together with its frame. The ticker exists for render stalls: when
+        // frames stop arriving, it keeps the extrapolated playhead line
+        // (`last_playhead_redraw` in the ruler render) gliding, and draws a
+        // sample whose frame never came. In steady state a tick that lands
+        // right after a repaint would be a duplicate rebuild of both sections,
+        // so it only notifies once a repaint is overdue.
         self.playback_tick += 1;
         let generation = self.playback_tick;
         cx.spawn(async move |this, cx| {
@@ -3193,11 +3215,10 @@ impl EditorWindow {
                         if this.playback_tick != generation || !this.playing {
                             return false;
                         }
-                        if this.last_playhead_redraw.elapsed() < Duration::from_millis(15) {
+                        if this.playback_chrome_at.elapsed() < Duration::from_millis(15) {
                             return true;
                         }
-                        this.timeline_view.update(cx, |_, cx| cx.notify());
-                        this.transport_controls.update(cx, |_, cx| cx.notify());
+                        this.notify_playback_chrome(cx);
                         true
                     })
                     .unwrap_or(false);
@@ -3941,8 +3962,7 @@ impl EditorWindow {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.timeline_view.update(cx, |_, cx| cx.notify());
-        self.transport_controls.update(cx, |_, cx| cx.notify());
+        self.notify_playback_chrome(cx);
         // While playing, nothing else the parent renders reads the playhead:
         // the canvas overlay is hidden (`canvas_overlay_visible`) and the
         // scene-mode pane gates on it too. Notifying the parent here would
@@ -3956,6 +3976,13 @@ impl EditorWindow {
         if !self.playing {
             cx.notify();
         }
+    }
+
+    fn notify_playback_chrome(&mut self, cx: &mut Context<Self>) {
+        self.playhead_draw_pending = false;
+        self.playback_chrome_at = Instant::now();
+        self.timeline_view.update(cx, |_, cx| cx.notify());
+        self.transport_controls.update(cx, |_, cx| cx.notify());
     }
 
     fn emit_preview_frame(&self) {
@@ -6527,6 +6554,7 @@ impl EditorWindow {
             frame.layout.output_size[1] as f32,
         );
         self.latest_frame = Some(frame.frame.clone());
+        self.presented_frame = Some(frame.number);
         let previous = self.preview.update(cx, |preview, cx| {
             preview.set_frame(frame.frame, frame_size, self.stats.clone(), cx)
         });
@@ -6543,6 +6571,9 @@ impl EditorWindow {
             cleared_drag_rect,
         ) {
             cx.notify();
+        }
+        if self.playing && self.playhead_draw_pending {
+            self.notify_playback_chrome(cx);
         }
         // `refresh()` is a whole-window invalidation, so calling it per frame on
         // an inactive window rebuilds the sidebar, timeline and panels at 60Hz:
@@ -11801,6 +11832,20 @@ fn playhead_extrapolation(playing: bool, epoch_has_sample: bool, since_last_samp
     since_last_sample.clamp(0.0, MAX_PLAYHEAD_EXTRAPOLATION)
 }
 
+/// Whether a playhead sample should wait for `display_frame` to draw it. Only
+/// a live playing epoch's samples have a rendered frame on the way; a seek
+/// echo or the first tick of an epoch draws at once, and so does a sample
+/// whose frame is already on screen. The playback ticker draws a sample whose
+/// frame never arrives.
+fn playhead_waits_for_its_frame(
+    playing: bool,
+    epoch_live: bool,
+    presented: Option<u32>,
+    frame: u32,
+) -> bool {
+    playing && epoch_live && presented.is_none_or(|shown| shown < frame)
+}
+
 fn dismiss_indexed_sidebar_menu(menu: &mut Option<crate::editor_tabs::OpenMenu>) {
     use crate::editor_tabs::SidebarMenu;
 
@@ -14494,6 +14539,16 @@ mod tests {
         // Paused, no matter what the anchor says.
         assert_eq!(playhead_extrapolation(false, true, 0.5), 0.0);
         assert_eq!(playhead_extrapolation(false, false, 0.5), 0.0);
+    }
+
+    #[test]
+    fn a_live_playing_sample_waits_only_for_a_frame_not_yet_shown() {
+        assert!(playhead_waits_for_its_frame(true, true, Some(41), 42));
+        assert!(playhead_waits_for_its_frame(true, true, None, 42));
+        assert!(!playhead_waits_for_its_frame(true, true, Some(42), 42));
+        assert!(!playhead_waits_for_its_frame(true, true, Some(50), 42));
+        assert!(!playhead_waits_for_its_frame(true, false, Some(41), 42));
+        assert!(!playhead_waits_for_its_frame(false, true, Some(41), 42));
     }
 
     /// Once the epoch is live the line glides by the wall clock between
