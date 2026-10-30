@@ -238,7 +238,10 @@ impl WindowsFrameScaler {
         let src_width = frame.width();
         let src_height = frame.height();
         let scaler = self.ensure_gpu_scaler(src_width, src_height)?;
-        scaler.scale_texture(frame.texture())?;
+        if scaler.scale_texture(frame.texture()).is_none() {
+            self.gpu_scaler = None;
+            return None;
+        }
 
         let (width, height, pixel_format) = scaler.dimensions();
         let row_bytes = (width * 4) as usize;
