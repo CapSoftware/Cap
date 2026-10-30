@@ -2,6 +2,12 @@
 
 import { classNames } from "@cap/utils/helpers";
 import { useRef } from "react";
+import {
+	HALLOWEEN_CSS,
+	HALLOWEEN_SKY,
+	HalloweenCritters,
+	HalloweenMoon,
+} from "./halloween";
 import { BAND } from "./theme";
 import { useInView, usePageVisible } from "./visibility";
 
@@ -136,7 +142,13 @@ const SKY = [
 	`linear-gradient(180deg, #A3BFEA 0%, #C8DBF4 34%, #E2EAF5 64%, ${BAND} 92%)`,
 ].join(",");
 
-export const HeroSky = ({ className }: { className?: string }) => {
+export const HeroSky = ({
+	className,
+	halloween = false,
+}: {
+	className?: string;
+	halloween?: boolean;
+}) => {
 	const rootRef = useRef<HTMLDivElement | null>(null);
 	const inView = useInView(rootRef, "0px");
 	const pageVisible = usePageVisible();
@@ -149,12 +161,21 @@ export const HeroSky = ({ className }: { className?: string }) => {
 				"ht-sky pointer-events-none absolute inset-0 overflow-hidden",
 				className ?? "rounded-t-[24px]",
 				drifting ? "" : "ht-sky-idle",
+				halloween && "ht-halloween",
 			)}
-			style={{ backgroundColor: BAND, backgroundImage: SKY }}
+			style={{
+				backgroundColor: BAND,
+				backgroundImage: halloween ? HALLOWEEN_SKY : SKY,
+			}}
 		>
 			<style href="ht-hero-sky" precedence="default">
 				{CSS}
 			</style>
+			{halloween ? (
+				<style href="ht-halloween" precedence="default">
+					{HALLOWEEN_CSS}
+				</style>
+			) : null}
 			<div className="ht-light">
 				<div className="ht-rays ht-rays-far" />
 			</div>
@@ -163,15 +184,17 @@ export const HeroSky = ({ className }: { className?: string }) => {
 					<CloudSprite key={`${cloud.art}-${cloud.top}`} cloud={cloud} />
 				))}
 				<div className="ht-mist" />
+				{halloween ? <HalloweenMoon /> : null}
 				{CLOUDS.filter((cloud) => !cloud.far).map((cloud) => (
 					<CloudSprite key={`${cloud.art}-${cloud.top}`} cloud={cloud} />
 				))}
 			</div>
 			<div className="ht-vignette" />
 			<div className="ht-light">
-				<div className="ht-sun" />
+				{halloween ? null : <div className="ht-sun" />}
 				<div className="ht-rays ht-rays-near" />
 			</div>
+			{halloween ? <HalloweenCritters /> : null}
 			<div className="ht-ground" />
 			<div className="ht-grain" />
 			<div className="ht-wash" />
