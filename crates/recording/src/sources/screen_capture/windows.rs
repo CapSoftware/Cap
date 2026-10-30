@@ -29,7 +29,6 @@ use std::{
 use tokio_util::{future::FutureExt as _, sync::CancellationToken};
 use tracing::*;
 
-#[path = "gpu_scale.rs"]
 mod gpu_scale;
 use gpu_scale::GpuTextureScaler;
 
@@ -229,7 +228,7 @@ impl WindowsFrameScaler {
                 self.target_width,
                 self.target_height,
             );
-            self.gpu_scaler_source = self.gpu_scaler.as_ref().map(|_| (src_width, src_height));
+            self.gpu_scaler_source = Some((src_width, src_height));
         }
 
         self.gpu_scaler.as_mut()

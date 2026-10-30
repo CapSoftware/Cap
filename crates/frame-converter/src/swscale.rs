@@ -3,6 +3,39 @@ use ffmpeg::{format::Pixel, frame, software::scaling};
 use std::cell::UnsafeCell;
 use thread_local::ThreadLocal;
 
+fn is_rgb(format: Pixel) -> bool {
+    format.descriptor().is_some_and(|descriptor| unsafe {
+        (*descriptor.as_ptr()).flags & ffmpeg::ffi::AV_PIX_FMT_FLAG_RGB as u64 != 0
+    })
+}
+
+fn use_bt709_for_rgb_input(
+    converter: &mut scaling::Context,
+    input: Pixel,
+    output: Pixel,
+) -> Result<(), ffmpeg::Error> {
+    if !is_rgb(input) || is_rgb(output) {
+        return Ok(());
+    }
+    let result = unsafe {
+        let coefficients = ffmpeg::ffi::sws_getCoefficients(ffmpeg::ffi::SWS_CS_ITU709);
+        ffmpeg::ffi::sws_setColorspaceDetails(
+            converter.as_mut_ptr(),
+            coefficients,
+            1,
+            coefficients,
+            0,
+            0,
+            1 << 16,
+            1 << 16,
+        )
+    };
+    if result < 0 {
+        return Err(ffmpeg::Error::from(result));
+    }
+    Ok(())
+}
+
 struct SendableContext(UnsafeCell<scaling::Context>);
 
 unsafe impl Send for SendableContext {}
@@ -55,6 +88,11 @@ impl SwscaleConverter {
             flags,
         )
         .map_err(|_| ConvertError::UnsupportedFormat(config.input_format, config.output_format))
+        .and_then(|mut ctx| {
+            use_bt709_for_rgb_input(&mut ctx, config.input_format, config.output_format)
+                .map_err(|error| ConvertError::ConversionFailed(error.to_string()))?;
+            Ok(ctx)
+        })
     }
 
     fn get_or_create_context(&self) -> Result<&SendableContext, ConvertError> {

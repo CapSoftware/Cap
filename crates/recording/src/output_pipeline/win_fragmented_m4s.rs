@@ -1077,8 +1077,10 @@ fn run_win_m4s_encode_thread(
     use_gpu_converter: bool,
 ) -> anyhow::Result<()> {
     use cap_frame_converter::{
-        AsyncConverterPool, ConversionConfig, ConvertError, ConverterPoolConfig, DropStrategy,
+        AsyncConverterPool, ConversionConfig, ConvertError, ConvertedFrame, ConverterPoolConfig,
+        DropStrategy,
     };
+    use std::collections::BTreeMap;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     const SLOW_THRESHOLD_MS: u128 = 5;
@@ -1133,28 +1135,46 @@ fn run_win_m4s_encode_thread(
     let frame_sequence = AtomicU64::new(0);
     let mut slow_encode_count = 0u32;
     let mut total_frames = 0u64;
+    let mut next_encode_sequence = 0u64;
+    let mut pending_converted: BTreeMap<u64, ConvertedFrame> = BTreeMap::new();
+
+    let mut encode_converted = |converted: ConvertedFrame| {
+        let timestamp = Duration::from_micros(converted.frame.pts().unwrap_or(0).max(0) as u64);
+        let encode_start = std::time::Instant::now();
+        match encoder.lock() {
+            Ok(mut enc) => {
+                if let Err(error) = enc.queue_preconverted_frame(converted.frame, timestamp) {
+                    warn!("Failed to encode converted frame: {error}");
+                }
+            }
+            Err(_) => {
+                return Err(anyhow!(
+                    "Encoder mutex poisoned - all subsequent frames would be lost"
+                ));
+            }
+        }
+        let encode_elapsed_ms = encode_start.elapsed().as_millis();
+        if encode_elapsed_ms > SLOW_THRESHOLD_MS {
+            slow_encode_count += 1;
+        }
+        total_frames += 1;
+        Ok(())
+    };
+
+    let mut ingest_converted = |converted: ConvertedFrame| -> anyhow::Result<()> {
+        if converted.sequence < next_encode_sequence {
+            return Ok(());
+        }
+        pending_converted.insert(converted.sequence, converted);
+        while let Some(converted) = pending_converted.remove(&next_encode_sequence) {
+            encode_converted(converted)?;
+        }
+        Ok(())
+    };
 
     let mut drain_converted = |pool: &mut AsyncConverterPool| -> anyhow::Result<()> {
         while let Some(converted) = pool.try_recv() {
-            let timestamp = Duration::from_micros(converted.frame.pts().unwrap_or(0).max(0) as u64);
-            let encode_start = std::time::Instant::now();
-            match encoder.lock() {
-                Ok(mut enc) => {
-                    if let Err(error) = enc.queue_preconverted_frame(converted.frame, timestamp) {
-                        warn!("Failed to encode converted frame: {error}");
-                    }
-                }
-                Err(_) => {
-                    return Err(anyhow!(
-                        "Encoder mutex poisoned - all subsequent frames would be lost"
-                    ));
-                }
-            }
-            let encode_elapsed_ms = encode_start.elapsed().as_millis();
-            if encode_elapsed_ms > SLOW_THRESHOLD_MS {
-                slow_encode_count += 1;
-            }
-            total_frames += 1;
+            ingest_converted(converted)?;
         }
         Ok(())
     };
@@ -1201,18 +1221,17 @@ fn run_win_m4s_encode_thread(
     if let Some(mut pool) = converter_pool {
         pool.drain_with_timeout(
             |converted| {
-                let timestamp =
-                    Duration::from_micros(converted.frame.pts().unwrap_or(0).max(0) as u64);
-                if let Ok(mut enc) = encoder.lock()
-                    && let Err(error) = enc.queue_preconverted_frame(converted.frame, timestamp)
-                {
-                    warn!("Failed to encode drained converted frame: {error}");
-                } else {
-                    total_frames += 1;
+                if ingest_converted(converted).is_err() {
+                    return;
                 }
             },
             Duration::from_secs(5),
         );
+        while let Some(converted) = pending_converted.remove(&next_encode_sequence) {
+            if encode_converted(converted).is_err() {
+                break;
+            }
+        }
     }
 
     if total_frames > 0 {
