@@ -459,6 +459,7 @@ pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
                     name: None,
                     speed_audio_mode: None,
                     hide_cursor: None,
+                    voice_eq: None,
                     volume: None,
                 })
                 .collect(),
@@ -8366,6 +8367,19 @@ impl EditorWindow {
         self.note_edit("clip-volume", Some(TrackKind::Clip));
     }
 
+    fn open_clip_voice_eq(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.clip_speed = None;
+        if self.sidebar.tab != crate::editor_sidebar::SidebarTab::Audio
+            && let Some(position) = crate::editor_sidebar::SidebarTab::ALL
+                .iter()
+                .position(|tab| *tab == crate::editor_sidebar::SidebarTab::Audio)
+        {
+            self.select_sidebar_tab(position, window, cx);
+        }
+        self.set_selection(Some(Selection::single(TrackKind::Clip, index)), cx);
+        cx.notify();
+    }
+
     fn set_clip_muted(
         &mut self,
         index: usize,
@@ -8579,6 +8593,9 @@ impl EditorWindow {
         let muted = edits::clip_is_muted(segment);
         let audio_mode = segment.speed_audio_mode.unwrap_or_default();
         let cursor_hidden = segment.hides_cursor();
+        let voice_eq_active = segment.active_voice_eq().is_some();
+        let voice_eq_summary = crate::editor_voice_eq::voice_eq_summary(segment);
+        let has_microphone = self.summary().is_some_and(|summary| summary.has_microphone);
         let normal_speed = (timescale - 1.0).abs() < f64::EPSILON;
         let title = match self.timeline.clips.get(index).map(|clip| &clip.detail) {
             Some(timeline::SegmentDetail::Clip { name, .. }) => name.clone(),
@@ -8784,6 +8801,64 @@ impl EditorWindow {
                                 ))
                             }))
                             .into_any_element()
+                    })
+                    .when(has_microphone, |section| {
+                        section.child(
+                            div()
+                                .id("clip-menu-voice-eq")
+                                .h(px(40.))
+                                .w_full()
+                                .flex()
+                                .items_center()
+                                .gap(px(10.))
+                                .rounded(px(8.))
+                                .px(px(8.))
+                                .cursor_pointer()
+                                .hover(|this| this.bg(Hsla::from(theme.editor.ctl_hover)))
+                                .child(
+                                    svg()
+                                        .path("icons/sliders-horizontal.svg")
+                                        .size(px(14.))
+                                        .flex_none()
+                                        .text_color(Hsla::from(if voice_eq_active {
+                                            theme.editor.accent
+                                        } else {
+                                            theme.editor.text_2
+                                        })),
+                                )
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .flex()
+                                        .flex_col()
+                                        .child(
+                                            div()
+                                                .text_size(px(12.5))
+                                                .text_color(Hsla::from(theme.editor.text_1))
+                                                .child(tr::editor::window::clip_menu::voice_eq()),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(px(10.5))
+                                                .text_color(Hsla::from(theme.editor.text_3))
+                                                .overflow_hidden()
+                                                .whitespace_nowrap()
+                                                .text_ellipsis()
+                                                .child(voice_eq_summary),
+                                        ),
+                                )
+                                .child(
+                                    svg()
+                                        .path("icons/chevron-right.svg")
+                                        .size(px(12.))
+                                        .flex_none()
+                                        .text_color(Hsla::from(theme.editor.text_3)),
+                                )
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.open_clip_voice_eq(index, window, cx);
+                                })),
+                        )
                     }),
             )
             .child(
@@ -8816,7 +8891,11 @@ impl EditorWindow {
                 let duration =
                     transition.map_or(DEFAULT_CLIP_TRANSITION_DURATION, |current| current.duration);
                 let kinds = [
-                    ("None", tr::editor::window::clip_menu::transition_none(), None),
+                    (
+                        "None",
+                        tr::editor::window::clip_menu::transition_none(),
+                        None,
+                    ),
                     (
                         "Crossfade",
                         tr::editor::window::clip_menu::transition_crossfade(),
@@ -8837,24 +8916,26 @@ impl EditorWindow {
                             &theme,
                             tr::editor::window::clip_menu::transition(),
                         ))
-                        .child(chip_row().children(kinds.into_iter().map(|(id, label, kind)| {
-                            let selected = transition.map(|current| current.kind) == kind;
-                            chip(
-                                SharedString::from(format!("clip-transition-{id}")),
-                                selected,
-                                label.to_string(),
-                            )
-                            .on_click(cx.listener(
-                                move |this, _, window, cx| {
-                                    this.set_clip_transition(
-                                        index,
-                                        kind.map(|kind| (kind, duration)),
-                                        window,
-                                        cx,
-                                    );
-                                },
-                            ))
-                        })))
+                        .child(
+                            chip_row().children(kinds.into_iter().map(|(id, label, kind)| {
+                                let selected = transition.map(|current| current.kind) == kind;
+                                chip(
+                                    SharedString::from(format!("clip-transition-{id}")),
+                                    selected,
+                                    label.to_string(),
+                                )
+                                .on_click(cx.listener(
+                                    move |this, _, window, cx| {
+                                        this.set_clip_transition(
+                                            index,
+                                            kind.map(|kind| (kind, duration)),
+                                            window,
+                                            cx,
+                                        );
+                                    },
+                                ))
+                            })),
+                        )
                         .when_some(transition, |section, current| {
                             section.child(
                                 chip_row().children(
@@ -11429,9 +11510,10 @@ impl EditorWindow {
                                                 }
                                             }))
                                             .child(
-                                                div().min_w_0().truncate().child(
-                                                    self.auto_zoom_prompt(),
-                                                ),
+                                                div()
+                                                    .min_w_0()
+                                                    .truncate()
+                                                    .child(self.auto_zoom_prompt()),
                                             )
                                             .child(
                                                 ui::Button::plain(
@@ -12263,6 +12345,18 @@ impl Render for EditorWindow {
             // {mousemove, mouseup})` is exactly what the pad's own press
             // installs (`ConfigSidebar.tsx:6264-6271`), and its release is
             // what closes the pad's undo bracket.
+            .children(self.voice_eq_dragging().then(|| {
+                ui::Slider::drag_layer(
+                    "voice-eq-drag",
+                    cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+                        this.voice_eq_mouse_move(event.position, window, cx);
+                    }),
+                    cx.listener(|this, _: &MouseUpEvent, _window, cx| {
+                        this.voice_eq_mouse_up(cx);
+                    }),
+                )
+                .cursor(gpui::CursorStyle::ClosedHand)
+            }))
             .children(self.pad_dragging().then(|| {
                 ui::Slider::drag_layer(
                     "sidebar-pad-drag",
@@ -13439,6 +13533,7 @@ mod tests {
                     name: None,
                     speed_audio_mode: None,
                     hide_cursor: None,
+                    voice_eq: None,
                     volume: None,
                 }],
                 transitions: Vec::new(),
@@ -13494,6 +13589,7 @@ mod tests {
                         name: None,
                         speed_audio_mode: None,
                         hide_cursor: None,
+                        voice_eq: None,
                         volume: None,
                     },
                     cap_project::TimelineSegment {
@@ -13504,6 +13600,7 @@ mod tests {
                         name: None,
                         speed_audio_mode: None,
                         hide_cursor: None,
+                        voice_eq: None,
                         volume: None,
                     },
                 ],

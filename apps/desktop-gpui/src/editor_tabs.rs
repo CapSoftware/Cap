@@ -1836,6 +1836,7 @@ impl EditorWindow {
                 ),
             )
             .children(has_microphone.then(|| self.render_studio_sound_card(cx)))
+            .children(has_microphone.then(|| self.render_voice_eq_card(cx)))
             .children(has_microphone.then(|| {
                 self.slider_field_disabled(
                     tr::editor::tabs::audio::mic_volume(),

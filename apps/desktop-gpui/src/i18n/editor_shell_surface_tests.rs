@@ -1170,10 +1170,90 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             tr::editor::window::clip_menu::merge_blocker::speed(),
             "Match the clip speeds first",
         ),
-        (tr::editor::tabs::font::system_sans_serif(), "System Sans-Serif"),
+        (
+            tr::editor::tabs::font::system_sans_serif(),
+            "System Sans-Serif",
+        ),
         (tr::editor::tabs::font::system_serif(), "System Serif"),
-        (tr::editor::tabs::font::system_monospace(), "System Monospace"),
+        (
+            tr::editor::tabs::font::system_monospace(),
+            "System Monospace",
+        ),
         (tr::ui::selection::select_all(), "Select all"),
+        (
+            tr::editor::tabs::audio::voice_eq::apply_all(),
+            "Apply to all clips",
+        ),
+        (tr::editor::tabs::audio::voice_eq::band_high(), "High"),
+        (
+            tr::editor::tabs::audio::voice_eq::band_high_mid(),
+            "High-mid",
+        ),
+        (tr::editor::tabs::audio::voice_eq::band_low(), "Low"),
+        (tr::editor::tabs::audio::voice_eq::band_low_cut(), "Low cut"),
+        (tr::editor::tabs::audio::voice_eq::band_low_mid(), "Low-mid"),
+        (tr::editor::tabs::audio::voice_eq::declick(), "De-click"),
+        (
+            tr::editor::tabs::audio::voice_eq::declick_description(),
+            "Repairs mouth clicks and crackle and leaves the rest of your voice untouched.",
+        ),
+        (tr::editor::tabs::audio::voice_eq::declick_light(), "Light"),
+        (tr::editor::tabs::audio::voice_eq::declick_off(), "Off"),
+        (
+            tr::editor::tabs::audio::voice_eq::declick_strong(),
+            "Strong",
+        ),
+        (
+            tr::editor::tabs::audio::voice_eq::description(),
+            "Shape your microphone's tone. What you hear here is what exports.",
+        ),
+        (tr::editor::tabs::audio::voice_eq::frequency(), "Frequency"),
+        (tr::editor::tabs::audio::voice_eq::gain(), "Gain"),
+        (
+            tr::editor::tabs::audio::voice_eq::graph_hint(),
+            "Drag a point to shape the sound. Scroll over a point to widen or narrow it, and double-click to reset it.",
+        ),
+        (
+            tr::editor::tabs::audio::voice_eq::low_cut_description(),
+            "Removes rumble and handling noise below the cutoff.",
+        ),
+        (tr::editor::tabs::audio::voice_eq::off(), "Off"),
+        (tr::editor::tabs::audio::voice_eq::preset_bright(), "Bright"),
+        (
+            tr::editor::tabs::audio::voice_eq::preset_broadcast(),
+            "Broadcast",
+        ),
+        (tr::editor::tabs::audio::voice_eq::preset_clear(), "Clear"),
+        (tr::editor::tabs::audio::voice_eq::preset_custom(), "Custom"),
+        (
+            tr::editor::tabs::audio::voice_eq::preset_natural(),
+            "Natural",
+        ),
+        (tr::editor::tabs::audio::voice_eq::preset_warm(), "Warm"),
+        (tr::editor::tabs::audio::voice_eq::q(), "Q"),
+        (
+            tr::editor::tabs::audio::voice_eq::scope_all(),
+            "Editing all clips",
+        ),
+        (
+            tr::editor::tabs::audio::voice_eq::scope_all_hint(),
+            "Select a clip in the timeline to tune it on its own.",
+        ),
+        (
+            tr::editor::tabs::audio::voice_eq::scope_mixed(),
+            "Clips have different settings. A change here applies to all of them.",
+        ),
+        (
+            tr::editor::tabs::audio::voice_eq::scope_selected(),
+            "Editing the selected clip",
+        ),
+        (
+            tr::editor::tabs::audio::voice_eq::scope_selected_many(),
+            "Editing the selected clips",
+        ),
+        (tr::editor::tabs::audio::voice_eq::title(), "Voice EQ"),
+        (tr::editor::timeline::segment::voice_eq(), "Voice EQ"),
+        (tr::editor::window::clip_menu::voice_eq(), "Voice EQ"),
     ];
     for (translated, literal) in pairs {
         assert_eq!(translated, literal);
