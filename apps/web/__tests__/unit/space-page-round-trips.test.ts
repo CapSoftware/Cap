@@ -18,6 +18,7 @@ import {
 import { OrganisationsPolicy } from "../../../../packages/web-backend/src/Organisations/OrganisationsPolicy";
 import { Spaces } from "../../../../packages/web-backend/src/Spaces";
 import { SpacesPolicy } from "../../../../packages/web-backend/src/Spaces/SpacesPolicy";
+import { readDistinctVideoIds } from "../fixtures/distinct-video-ids";
 
 const mocks = vi.hoisted(() => ({
 	query: vi.fn(),
@@ -265,4 +266,48 @@ describe("space and folder page round trips", () => {
 		);
 		expect(result).toEqual({ roundTrips: 2, queries: 4 });
 	});
+});
+
+describe("space and organization page pagination", () => {
+	it.each([
+		{
+			name: "space",
+			spaceId: "space-1",
+			alias: "space_videos_page",
+			spaceOrOrg: {
+				variant: "space",
+				space: { id: "space-1", organizationId: "org-1", iconUrl: null },
+			},
+		},
+		{
+			name: "organization",
+			spaceId: "org-1",
+			alias: "org_videos_page",
+			spaceOrOrg: {
+				variant: "organization",
+				organization: { id: "org-1", name: "Org", ownerId: "owner-1" },
+			},
+		},
+	])(
+		"limits distinct $name video ids before joining comments",
+		async ({ spaceId, alias, spaceOrOrg }) => {
+			mocks.query.mockResolvedValue({ rows: [] });
+			mocks.spaceOrOrg = spaceOrOrg;
+			await SharedCapsPage({
+				params: Promise.resolve({ spaceId }),
+				searchParams: Promise.resolve({ page: "3", limit: "10" }),
+			});
+
+			const calls = mocks.query.mock.calls.map(
+				([query, params]) => [String(query), params as unknown[]] as const,
+			);
+			const page = readDistinctVideoIds(calls.map(([query]) => query));
+			expect(page).toMatchObject({ alias, paged: true });
+			expect(page?.columns).toEqual(
+				expect.arrayContaining(page?.sortColumns ?? []),
+			);
+			const [, params] = calls.find(([query]) => query.includes(alias)) ?? [];
+			expect(params?.slice(-2)).toEqual([10, 20]);
+		},
+	);
 });

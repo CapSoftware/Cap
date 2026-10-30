@@ -28,7 +28,7 @@ import {
 	type User,
 	Video,
 } from "@cap/web-domain";
-import { and, count, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { Effect } from "effect";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
@@ -313,7 +313,10 @@ export default async function SharedCapsPage(props: {
 		) {
 			const offset = (page - 1) * limit;
 			const spaceVideosPage = db()
-				.selectDistinct({ id: videos.id })
+				.selectDistinct({
+					id: videos.id,
+					effectiveCreatedAt: videos.effectiveCreatedAt,
+				})
 				.from(spaceVideos)
 				.innerJoin(videos, eq(spaceVideos.videoId, videos.id))
 				.leftJoin(organizations, eq(videos.orgId, organizations.id))
@@ -476,7 +479,10 @@ export default async function SharedCapsPage(props: {
 		) {
 			const offset = (page - 1) * limit;
 			const orgVideosPage = db()
-				.selectDistinct({ id: videos.id })
+				.selectDistinct({
+					id: videos.id,
+					effectiveCreatedAt: videos.effectiveCreatedAt,
+				})
 				.from(sharedVideos)
 				.innerJoin(videos, eq(sharedVideos.videoId, videos.id))
 				.where(
