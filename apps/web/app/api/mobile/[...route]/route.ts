@@ -343,6 +343,14 @@ const getFileExtension = (input: MobileUploadCreateInput) => {
 	return "mp4";
 };
 
+const MOBILE_SCREENSHOT_MAX_BYTES = 25 * 1024 * 1024;
+const getScreenshotExtension = (contentType: string) => {
+	const normalized = contentType.toLowerCase();
+	if (normalized === "image/jpeg") return "jpg";
+	if (normalized === "image/png") return "png";
+	return null;
+};
+
 const getUploadTitle = (fileName: string) => {
 	const title = fileName.replace(/\.[^/.]+$/, "").trim();
 	return title.length > 0 ? title : "Mobile Upload";
@@ -2992,7 +3000,16 @@ const createUpload = Effect.fn("Mobile.createUpload")(function* (
 	const organizationId = input.organizationId ?? user.activeOrganizationId;
 	yield* assertOrganizationAccess(organizationId);
 
-	if (!input.contentType.startsWith("video/")) {
+	const screenshotExtension = getScreenshotExtension(input.contentType);
+	if (!input.contentType.startsWith("video/") && !screenshotExtension) {
+		return yield* Effect.fail(new HttpApiError.BadRequest());
+	}
+	if (
+		screenshotExtension &&
+		(input.contentLength === undefined ||
+			input.contentLength <= 0 ||
+			input.contentLength > MOBILE_SCREENSHOT_MAX_BYTES)
+	) {
 		return yield* Effect.fail(new HttpApiError.BadRequest());
 	}
 
@@ -3022,6 +3039,51 @@ const createUpload = Effect.fn("Mobile.createUpload")(function* (
 		user.id,
 		organizationId,
 	);
+
+	if (screenshotExtension) {
+		// Same shape as the web image import: no upload-progress row and no processing,
+		// so the Cap shows its image as soon as the file lands.
+		const screenshotId = Video.VideoId.make(nanoId());
+		const isPublic = yield* Effect.tryPromise(() =>
+			getNewVideoPublic(organizationId),
+		);
+		yield* database.use((db) =>
+			db.insert(Db.videos).values({
+				id: screenshotId,
+				name: getUploadTitle(input.fileName),
+				ownerId: user.id,
+				orgId: organizationId,
+				source: { type: "webMP4" },
+				isScreenshot: true,
+				bucket: Option.getOrNull(writable.bucketId),
+				storageIntegrationId: Option.getOrNull(writable.storageIntegrationId),
+				public: isPublic,
+				...(folderId ? { folderId } : {}),
+			}),
+		);
+		const screenshotKey = `${user.id}/${screenshotId}/screenshot/screen-capture.${screenshotExtension}`;
+		const screenshotContentType =
+			screenshotExtension === "png" ? "image/png" : "image/jpeg";
+		const screenshotUpload = yield* writable.access.createUploadTarget(
+			screenshotKey,
+			{
+				contentType: screenshotContentType,
+				method: "put",
+				fields: {
+					"Content-Type": screenshotContentType,
+					"x-amz-meta-userid": user.id,
+					"x-amz-meta-source": "cap-mobile-ios",
+				},
+			},
+		);
+		return {
+			id: screenshotId,
+			shareUrl: `${publicOrigin}/s/${screenshotId}`,
+			rawFileKey: screenshotKey,
+			upload: screenshotUpload,
+		};
+	}
+
 	const videoId = yield* repo.create(
 		{
 			ownerId: user.id,
@@ -3784,6 +3846,7 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 											id: Db.videos.id,
 											ownerId: Db.videos.ownerId,
 											bucketId: Db.videos.bucket,
+											isScreenshot: Db.videos.isScreenshot,
 										})
 										.from(Db.videos)
 										.where(
@@ -3799,6 +3862,44 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 								const prefix = `${user.id}/${path.id}/`;
 								if (!payload.rawFileKey.startsWith(prefix)) {
 									return yield* Effect.fail(new HttpApiError.BadRequest());
+								}
+
+								if (video.isScreenshot) {
+									if (
+										payload.rawFileKey !==
+											`${prefix}screenshot/screen-capture.jpg` &&
+										payload.rawFileKey !==
+											`${prefix}screenshot/screen-capture.png`
+									) {
+										return yield* Effect.fail(new HttpApiError.BadRequest());
+									}
+									const maybeScreenshot = yield* VideosRepo.pipe(
+										Effect.flatMap((repo) => repo.getById(path.id)),
+									);
+									if (Option.isNone(maybeScreenshot)) {
+										return yield* Effect.fail(new HttpApiError.NotFound());
+									}
+									const [bucket] = yield* Storage.pipe(
+										Effect.flatMap((storage) =>
+											storage.getAccessForVideo(maybeScreenshot.value[0]),
+										),
+									);
+									const head = yield* bucket
+										.headObject(payload.rawFileKey)
+										.pipe(Effect.catchAll(() => Effect.succeed(null)));
+									if (!head) {
+										return yield* Effect.fail(new HttpApiError.BadRequest());
+									}
+									// A presigned PUT can't cap the body size, so the limit is
+									// enforced here on what actually landed.
+									if ((head.ContentLength ?? 0) > MOBILE_SCREENSHOT_MAX_BYTES) {
+										yield* videos
+											.delete(path.id)
+											.pipe(Effect.catchAll(() => Effect.void));
+										return yield* Effect.fail(new HttpApiError.BadRequest());
+									}
+									yield* Effect.sync(() => revalidatePath("/dashboard/caps"));
+									return { success: true as const };
 								}
 
 								if (payload.contentLength !== undefined) {
