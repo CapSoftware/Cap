@@ -6,8 +6,8 @@ use cap_project::{ClipTransitionType, CursorEvents, ProjectConfiguration};
 use cap_rendering::SurfaceFrame;
 use cap_rendering::{
     DecodedSegmentFrames, FrameLayout, FrameRenderStageTimings, FrameRenderer, Nv12RenderedFrame,
-    ProjectUniforms, RenderVideoConstants, RenderedFrame, RendererLayers, RgbaToBgraReadback,
-    TransitionRenderInput,
+    ProjectUniforms, RenderVideoConstants, RenderedFrame, RendererLayers, RenderingError,
+    RgbaToBgraReadback, TransitionRenderInput,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -40,6 +40,7 @@ pub enum RendererMessage {
         queued_at: Instant,
         realtime: bool,
     },
+    FlushPending,
     Stop {
         finished: oneshot::Sender<()>,
     },
@@ -81,6 +82,41 @@ pub(crate) fn supported_frame_format(
         return EditorFrameFormat::Rgba;
     }
     format
+}
+
+impl EditorFrameFormat {
+    fn pipelines_readback(self) -> bool {
+        match self {
+            Self::Rgba | Self::Bgra => true,
+            #[cfg(target_os = "macos")]
+            Self::BgraSurface => false,
+        }
+    }
+}
+
+struct HeldFrame {
+    frame_number: u32,
+    layout: FrameLayout,
+}
+
+fn output_frame_number(output: &EditorFrameOutput) -> u32 {
+    match output {
+        EditorFrameOutput::Rgba(frame) | EditorFrameOutput::Bgra(frame) => frame.frame_number,
+        EditorFrameOutput::Nv12(frame) => frame.frame_number,
+        #[cfg(target_os = "macos")]
+        EditorFrameOutput::Surface(frame) => frame.frame_number,
+    }
+}
+
+fn settled_frame(result: Option<Result<RenderedFrame, RenderingError>>) -> Option<RenderedFrame> {
+    match result {
+        Some(Ok(frame)) => Some(frame),
+        Some(Err(error)) => {
+            tracing::warn!(%error, "Failed to read back the pending preview frame");
+            None
+        }
+        None => None,
+    }
 }
 
 pub type RendererLayersReceiver = oneshot::Receiver<RendererLayers>;
@@ -277,6 +313,7 @@ impl Renderer {
         }
 
         let mut pending_frame: Option<PendingFrame> = None;
+        let mut held: Option<HeldFrame> = None;
 
         loop {
             let frame_to_render = if let Some(pending) = pending_frame.take() {
@@ -288,6 +325,7 @@ impl Renderer {
                         continue;
                     }
                     Some(RendererMessage::RenderThumbnail { input, finished }) => {
+                        Self::discard_pending(&mut frame_renderer, output_format, &mut held).await;
                         let result = frame_renderer
                             .render_immediate(
                                 input.segment_frames,
@@ -337,6 +375,16 @@ impl Renderer {
                         queued_at,
                         realtime,
                     }),
+                    Some(RendererMessage::FlushPending) => {
+                        Self::deliver_pending(
+                            &mut frame_renderer,
+                            output_format,
+                            &mut held,
+                            &mut frame_cb,
+                        )
+                        .await;
+                        continue;
+                    }
                     Some(RendererMessage::Stop { finished }) => {
                         let _ = finished.send(());
                         return;
@@ -350,10 +398,12 @@ impl Renderer {
             };
 
             let mut drained_count = 0u32;
+            let mut flush_after = false;
             let queue_drain_start = Instant::now();
             while let Ok(msg) = rx.try_recv() {
                 match msg {
                     RendererMessage::RenderThumbnail { input, finished } => {
+                        Self::discard_pending(&mut frame_renderer, output_format, &mut held).await;
                         let result = frame_renderer
                             .render_immediate(
                                 input.segment_frames,
@@ -429,6 +479,10 @@ impl Renderer {
                         };
                         drained_count += 1;
                     }
+                    RendererMessage::FlushPending => {
+                        flush_after = true;
+                        break;
+                    }
                     RendererMessage::Stop { finished } => {
                         let _ = current.finished.send(false);
                         let _ = finished.send(());
@@ -443,15 +497,11 @@ impl Renderer {
             let queue_wait = current.queued_at.elapsed();
             let drain_duration = queue_drain_start.elapsed();
             let flush_start = Instant::now();
-            let flush_pipelines = drained_count > 0 || !current.realtime;
-            if flush_pipelines {
-                let _ = frame_renderer.flush_pipeline().await;
-                let _ = frame_renderer.flush_pipeline_bgra().await;
-            }
-            let flush_duration = if flush_pipelines {
-                flush_start.elapsed()
-            } else {
+            let flush_duration = if current.realtime {
                 std::time::Duration::ZERO
+            } else {
+                Self::discard_pending(&mut frame_renderer, output_format, &mut held).await;
+                flush_start.elapsed()
             };
 
             // Playback frames composite with the newest finished camera mask;
@@ -462,6 +512,7 @@ impl Renderer {
             let input_frame_number = current.input.uniforms().frame_number;
             let frame_layout = current.input.uniforms().frame_layout();
             let realtime = current.realtime;
+            let leaves_pending = realtime && output_format.pipelines_readback();
             let render_result = match (output_format, current.input) {
                 (EditorFrameFormat::Rgba, PendingRenderInput::Single(input)) => {
                     if realtime {
@@ -615,16 +666,37 @@ impl Renderer {
                         cursor: &incoming.cursor,
                         render_display: true,
                     };
-                    frame_renderer
-                        .render_transition_bgra(outgoing, incoming, kind, progress, &mut layers)
-                        .await
-                        .map(|frame| {
-                            Some((
-                                EditorFrameOutput::Bgra(frame),
-                                PlaybackRenderOutputFormat::Bgra,
-                                FrameRenderStageTimings::default(),
-                            ))
-                        })
+                    if realtime {
+                        frame_renderer
+                            .render_transition_bgra(outgoing, incoming, kind, progress, &mut layers)
+                            .await
+                            .map(|frame| {
+                                frame.map(|frame| {
+                                    (
+                                        EditorFrameOutput::Bgra(frame),
+                                        PlaybackRenderOutputFormat::Bgra,
+                                        FrameRenderStageTimings::default(),
+                                    )
+                                })
+                            })
+                    } else {
+                        frame_renderer
+                            .render_transition_immediate_bgra(
+                                outgoing,
+                                incoming,
+                                kind,
+                                progress,
+                                &mut layers,
+                            )
+                            .await
+                            .map(|frame| {
+                                Some((
+                                    EditorFrameOutput::Bgra(frame),
+                                    PlaybackRenderOutputFormat::Bgra,
+                                    FrameRenderStageTimings::default(),
+                                ))
+                            })
+                    }
                 }
                 #[cfg(target_os = "macos")]
                 (EditorFrameFormat::BgraSurface, PendingRenderInput::Single(input)) => {
@@ -684,16 +756,20 @@ impl Renderer {
             match render_result {
                 Ok(Some((frame, output_format, render_stage_timings))) => {
                     let render_duration = render_start.elapsed();
-                    let frame_number = match &frame {
-                        EditorFrameOutput::Rgba(frame) | EditorFrameOutput::Bgra(frame) => {
-                            frame.frame_number
-                        }
-                        EditorFrameOutput::Nv12(frame) => frame.frame_number,
-                        #[cfg(target_os = "macos")]
-                        EditorFrameOutput::Surface(frame) => frame.frame_number,
+                    let frame_number = output_frame_number(&frame);
+                    let previous = if leaves_pending {
+                        held.replace(HeldFrame {
+                            frame_number: input_frame_number,
+                            layout: frame_layout,
+                        })
+                    } else {
+                        held.take()
                     };
+                    let layout = previous
+                        .filter(|previous| previous.frame_number == frame_number)
+                        .map_or(frame_layout, |previous| previous.layout);
                     let callback_start = Instant::now();
-                    (frame_cb)(frame, frame_layout);
+                    (frame_cb)(frame, layout);
                     let callback_duration = callback_start.elapsed();
                     if let Some(telemetry) = &telemetry {
                         telemetry.emit(PlaybackTelemetryEvent::RendererFrame {
@@ -712,6 +788,12 @@ impl Renderer {
                     let _ = current.finished.send(true);
                 }
                 Ok(None) => {
+                    if leaves_pending {
+                        held = Some(HeldFrame {
+                            frame_number: input_frame_number,
+                            layout: frame_layout,
+                        });
+                    }
                     let _ = current.finished.send(true);
                 }
                 Err(e) => {
@@ -719,6 +801,51 @@ impl Renderer {
                     let _ = current.finished.send(false);
                 }
             }
+
+            if flush_after {
+                Self::deliver_pending(&mut frame_renderer, output_format, &mut held, &mut frame_cb)
+                    .await;
+            }
+        }
+    }
+
+    async fn take_pending_output(
+        frame_renderer: &mut FrameRenderer<'_>,
+        output_format: EditorFrameFormat,
+    ) -> Option<EditorFrameOutput> {
+        match output_format {
+            EditorFrameFormat::Rgba => {
+                settled_frame(frame_renderer.flush_pipeline().await).map(EditorFrameOutput::Rgba)
+            }
+            EditorFrameFormat::Bgra => settled_frame(frame_renderer.flush_pipeline_bgra().await)
+                .map(EditorFrameOutput::Bgra),
+            #[cfg(target_os = "macos")]
+            EditorFrameFormat::BgraSurface => None,
+        }
+    }
+
+    async fn discard_pending(
+        frame_renderer: &mut FrameRenderer<'_>,
+        output_format: EditorFrameFormat,
+        held: &mut Option<HeldFrame>,
+    ) {
+        let _ = Self::take_pending_output(frame_renderer, output_format).await;
+        *held = None;
+    }
+
+    async fn deliver_pending(
+        frame_renderer: &mut FrameRenderer<'_>,
+        output_format: EditorFrameFormat,
+        held: &mut Option<HeldFrame>,
+        frame_cb: &mut EditorFrameCallback,
+    ) {
+        let held = held.take();
+        let Some(frame) = Self::take_pending_output(frame_renderer, output_format).await else {
+            return;
+        };
+        let frame_number = output_frame_number(&frame);
+        if let Some(held) = held.filter(|held| held.frame_number == frame_number) {
+            (frame_cb)(frame, held.layout);
         }
     }
 
@@ -836,6 +963,28 @@ impl RendererHandle {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) async fn render_frame_realtime_confirmed(
+        &self,
+        segment_frames: DecodedSegmentFrames,
+        uniforms: ProjectUniforms,
+        cursor: Arc<CursorEvents>,
+    ) -> bool {
+        let (finished_tx, finished_rx) = oneshot::channel();
+        let msg = RendererMessage::RenderFrame {
+            segment_frames,
+            uniforms,
+            finished: finished_tx,
+            cursor,
+            queued_at: Instant::now(),
+            realtime: true,
+        };
+        if self.tx.send(msg).await.is_err() {
+            return false;
+        }
+        finished_rx.await.unwrap_or(false)
+    }
+
     pub async fn render_frame_confirmed(
         &self,
         segment_frames: DecodedSegmentFrames,
@@ -942,6 +1091,10 @@ impl RendererHandle {
         }
 
         finished_rx.blocking_recv().unwrap_or(false)
+    }
+
+    pub fn flush_pending_blocking(&self) {
+        let _ = self.tx.blocking_send(RendererMessage::FlushPending);
     }
 
     pub async fn stop(&self) {

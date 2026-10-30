@@ -1079,6 +1079,196 @@ fn surface_rgba(frame: cap_rendering::SurfaceFrame) -> RenderedFrame {
     }
 }
 
+async fn pipelined_input(
+    fixture: &Fixture,
+    decoders: &RecordingSegmentDecoders,
+    constants: &RenderVideoConstants,
+    frame_number: u32,
+    padding: f64,
+) -> (cap_rendering::DecodedSegmentFrames, ProjectUniforms) {
+    let mut project = fixture.project.clone();
+    project.background.padding = padding;
+    let project = Arc::new(project);
+    let time = f64::from(frame_number) / 30.0;
+    let (segment_time, segment) = project.get_segment_time(time).unwrap();
+    let frames = decoders
+        .get_frames_initial(
+            segment_time as f32,
+            true,
+            true,
+            project.clips[segment.recording_clip as usize].offsets,
+        )
+        .await
+        .unwrap();
+    let duration = project.timeline.as_ref().unwrap().duration();
+    let mut zoom = ZoomTransformTimeline::from_project_for_clip(
+        &project,
+        &fixture.cursor,
+        duration,
+        constants.options.screen_size,
+        segment.recording_clip,
+    );
+    zoom.ensure_precomputed_until((frame_number as f32 + 1.0) / 30.0);
+    let uniforms = ProjectUniforms::new(
+        constants,
+        &project,
+        frame_number,
+        30,
+        XY::new(320, 240),
+        &fixture.cursor,
+        &frames,
+        duration,
+        &zoom,
+    );
+    (frames, uniforms)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_pipelined_preview_keeps_layouts_and_drains_the_last_frame() {
+    let fixture = fixture(false);
+    let metadata = &fixture.reference_metadata;
+    let studio = metadata.studio_meta().unwrap();
+    let decoders = RecordingSegmentDecoders::new(
+        metadata,
+        studio,
+        SegmentVideoPaths {
+            display: metadata.project_path.join("display.mp4"),
+            camera: Some(metadata.project_path.join("camera.mp4")),
+        },
+        0,
+        true,
+    )
+    .await
+    .unwrap();
+    let constants = Arc::new(
+        RenderVideoConstants::new_with_options(
+            RenderOptions {
+                screen_size: XY::new(160, 120),
+                camera_size: Some(XY::new(80, 80)),
+                preserve_screen_alpha: false,
+            },
+            metadata.clone(),
+            studio.clone(),
+        )
+        .await
+        .unwrap(),
+    );
+
+    for format in [EditorFrameFormat::Rgba, EditorFrameFormat::Bgra] {
+        if crate::editor::supported_frame_format(format, &constants) != format {
+            continue;
+        }
+        let mut layers = RendererLayers::new_with_options(
+            &constants.device,
+            &constants.queue,
+            constants.is_software_adapter,
+        );
+        layers.preload_cursor_assets(
+            &constants,
+            fixture.project.cursor.use_svg,
+            fixture.project.cursor.cursor_type(),
+        );
+        let (layers_tx, layers_rx) = tokio::sync::oneshot::channel();
+        layers_tx.send(layers).ok();
+        let (delivered_tx, mut delivered) = tokio::sync::mpsc::unbounded_channel();
+        let renderer = crate::Renderer::spawn_with_format(
+            constants.clone(),
+            Box::new(move |output, layout| {
+                let frame = match output {
+                    EditorFrameOutput::Rgba(frame) | EditorFrameOutput::Bgra(frame) => frame,
+                    _ => panic!("Unexpected output"),
+                };
+                delivered_tx.send((frame.frame_number, layout)).ok();
+            }),
+            layers_rx,
+            format,
+        )
+        .unwrap();
+
+        let (first_frames, first_uniforms) =
+            pipelined_input(&fixture, &decoders, &constants, 0, 0.0).await;
+        let (second_frames, second_uniforms) =
+            pipelined_input(&fixture, &decoders, &constants, 45, 25.0).await;
+        let (third_frames, third_uniforms) =
+            pipelined_input(&fixture, &decoders, &constants, 12, 0.0).await;
+        let (seek_frames, seek_uniforms) =
+            pipelined_input(&fixture, &decoders, &constants, 90, 40.0).await;
+        let first_layout = first_uniforms.frame_layout();
+        let second_layout = second_uniforms.frame_layout();
+        let seek_layout = seek_uniforms.frame_layout();
+        assert_ne!(first_layout, second_layout);
+        assert_ne!(second_layout, seek_layout);
+
+        assert!(
+            renderer
+                .render_frame_realtime_confirmed(
+                    first_frames,
+                    first_uniforms,
+                    fixture.cursor.clone()
+                )
+                .await
+        );
+        assert!(
+            delivered.try_recv().is_err(),
+            "{format:?}: the first frame stays pending"
+        );
+        assert!(
+            renderer
+                .render_frame_realtime_confirmed(
+                    second_frames,
+                    second_uniforms,
+                    fixture.cursor.clone()
+                )
+                .await
+        );
+        let (frame_number, layout) =
+            tokio::time::timeout(Duration::from_secs(15), delivered.recv())
+                .await
+                .unwrap()
+                .unwrap();
+        assert_eq!(frame_number, 0, "{format:?}");
+        assert_eq!(layout, first_layout, "{format:?}: pixels and layout agree");
+
+        tokio::task::block_in_place(|| renderer.flush_pending_blocking());
+        let (frame_number, layout) =
+            tokio::time::timeout(Duration::from_secs(15), delivered.recv())
+                .await
+                .unwrap()
+                .unwrap();
+        assert_eq!(frame_number, 45, "{format:?}: the last frame is drained");
+        assert_eq!(layout, second_layout, "{format:?}");
+
+        assert!(
+            renderer
+                .render_frame_realtime_confirmed(
+                    third_frames,
+                    third_uniforms,
+                    fixture.cursor.clone()
+                )
+                .await
+        );
+        assert!(
+            renderer
+                .render_frame_confirmed(seek_frames, seek_uniforms, fixture.cursor.clone())
+                .await
+        );
+        let (frame_number, layout) =
+            tokio::time::timeout(Duration::from_secs(15), delivered.recv())
+                .await
+                .unwrap()
+                .unwrap();
+        assert_eq!(frame_number, 90, "{format:?}: a seek shows its own frame");
+        assert_eq!(layout, seek_layout, "{format:?}");
+        assert!(
+            tokio::time::timeout(Duration::from_millis(300), delivered.recv())
+                .await
+                .is_err(),
+            "{format:?}: the playback frame a seek replaced is not shown"
+        );
+        renderer.stop().await;
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn native_preparing_bgra_readback_matches_default_editor_frame() {
     composed_parity_with_reference(

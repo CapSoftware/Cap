@@ -7774,7 +7774,7 @@ impl<'a> FrameRenderer<'a> {
         Ok((frame, timings))
     }
 
-    /// [`Self::render_transition_immediate`], read back as tightly packed BGRA.
+    /// [`Self::render_transition`], read back as tightly packed BGRA.
     pub async fn render_transition_bgra(
         &mut self,
         outgoing: TransitionRenderInput<'_>,
@@ -7782,7 +7782,7 @@ impl<'a> FrameRenderer<'a> {
         kind: ClipTransitionType,
         progress: f32,
         layers: &mut RendererLayers,
-    ) -> Result<RenderedFrame, RenderingError> {
+    ) -> Result<Option<RenderedFrame>, RenderingError> {
         let mut last_error = None;
 
         for attempt in 0..Self::MAX_RENDER_RETRIES {
@@ -7844,13 +7844,7 @@ impl<'a> FrameRenderer<'a> {
             )
             .await
             {
-                Ok(Some(frame)) => return Ok(frame),
-                Ok(None) => {
-                    if let Some(frame) = self.flush_pipeline_bgra().await {
-                        return frame;
-                    }
-                    continue;
-                }
+                Ok(frame) => return Ok(frame),
                 Err(RenderingError::BufferMapWaitingFailed) => {
                     last_error = Some(RenderingError::BufferMapWaitingFailed);
                 }
@@ -7862,6 +7856,27 @@ impl<'a> FrameRenderer<'a> {
         }
 
         Err(last_error.unwrap_or(RenderingError::BufferMapWaitingFailed))
+    }
+
+    /// [`Self::render_transition_immediate`], read back as tightly packed BGRA.
+    pub async fn render_transition_immediate_bgra(
+        &mut self,
+        outgoing: TransitionRenderInput<'_>,
+        incoming: TransitionRenderInput<'_>,
+        kind: ClipTransitionType,
+        progress: f32,
+        layers: &mut RendererLayers,
+    ) -> Result<RenderedFrame, RenderingError> {
+        if let Some(frame) = self
+            .render_transition_bgra(outgoing, incoming, kind, progress, layers)
+            .await?
+        {
+            return Ok(frame);
+        }
+
+        self.flush_pipeline_bgra()
+            .await
+            .unwrap_or(Err(RenderingError::BufferMapWaitingFailed))
     }
 
     pub async fn flush_pipeline(&mut self) -> Option<Result<RenderedFrame, RenderingError>> {
