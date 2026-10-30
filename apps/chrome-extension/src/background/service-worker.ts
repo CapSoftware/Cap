@@ -1537,13 +1537,19 @@ const beginAuthFlow = async (settings: ExtensionSettings) => {
 	// co-installed extensions can observe.
 	void launchWebAuthFlow(authStart.url)
 		.then(async (responseUrl) => {
-			const auth = parseAuthResponse(responseUrl, authStart.state);
+			const auth = {
+				...parseAuthResponse(responseUrl, authStart.state),
+				apiOrigin: new URL(settings.apiBaseUrl).origin,
+			};
 			// Server-minted keys never expire, so a re-auth would otherwise leave
 			// the previous key live in auth_api_keys forever; revoke it
 			// best-effort before it is forgotten locally.
 			const previousAuth = await loadAuth().catch(() => null);
 			if (previousAuth && previousAuth.authApiKey !== auth.authApiKey) {
-				await revokeAuth(settings, previousAuth).catch(() => undefined);
+				await revokeAuth(
+					{ ...settings, apiBaseUrl: previousAuth.apiOrigin },
+					previousAuth,
+				).catch(() => undefined);
 			}
 			await saveAuth(auth);
 			await resetBootstrapCache();

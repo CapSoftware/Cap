@@ -120,6 +120,7 @@ export type ExtensionSettings = {
 export type ExtensionAuth = {
 	authApiKey: string;
 	userId: string;
+	apiOrigin: string;
 };
 
 export type PendingAuth = {

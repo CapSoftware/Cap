@@ -26,6 +26,9 @@
 		"type": "module"
 	},
 	"options_page": "options.html",
+	"storage": {
+		"managed_schema": "managed_schema.json"
+	},
 	"permissions": [
 		"activeTab",
 		"identity",
