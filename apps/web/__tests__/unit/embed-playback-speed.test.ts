@@ -119,11 +119,23 @@ describe("embed default playback speed", () => {
 	it.each([
 		{ name: "organization 1×", video: undefined, org: 1, expected: 1 },
 		{ name: "video override", video: 1.5, org: 1, expected: 1.5 },
+		{ name: "video 1.25× override", video: 1.25, org: 1, expected: 1.25 },
 		{ name: "video 1× override", video: 1, org: 1.5, expected: 1 },
 		{ name: "no settings", video: undefined, org: undefined, expected: 1.2 },
 		{ name: "invalid video speed", video: 0, org: 1, expected: 1 },
 		{ name: "invalid speeds", video: -1, org: 0, expected: 1.2 },
-		{ name: "legacy speed normalization", video: 1.3, org: 1, expected: 1.2 },
+		{
+			name: "legacy speed normalization to 1.2×",
+			video: 1.15,
+			org: 1,
+			expected: 1.2,
+		},
+		{
+			name: "legacy speed normalization to 1.25×",
+			video: 1.3,
+			org: 1,
+			expected: 1.25,
+		},
 	])("resolves $name", async ({ video, org, expected }) => {
 		const embed = await renderEmbed(video, org);
 		expect(embed.props.defaultPlaybackSpeed).toBe(expected);
