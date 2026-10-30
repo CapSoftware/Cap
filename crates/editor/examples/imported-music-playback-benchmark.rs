@@ -80,7 +80,9 @@ async fn main() {
         |_| {},
         Box::new(move |frame, _| {
             let number = match frame {
-                EditorFrameOutput::Rgba(frame) => frame.frame_number,
+                EditorFrameOutput::Rgba(frame) | EditorFrameOutput::Bgra(frame) => {
+                    frame.frame_number
+                }
                 EditorFrameOutput::Nv12(frame) => frame.frame_number,
                 #[cfg(target_os = "macos")]
                 EditorFrameOutput::Surface(frame) => frame.frame_number,

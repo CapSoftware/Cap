@@ -830,7 +830,7 @@ fn more_area_ratios() -> Vec<(u32, u32)> {
 /// so a capture under their panes showed through it as hard-edged blocks;
 /// there the panes sit on the fallback fill, as they do where no capture
 /// is possible.
-fn backdrop_suits(mode: Option<TargetType>) -> bool {
+pub(crate) fn backdrop_suits(mode: Option<TargetType>) -> bool {
     match mode {
         None => false,
         Some(TargetType::Display | TargetType::Window) => !cfg!(windows),

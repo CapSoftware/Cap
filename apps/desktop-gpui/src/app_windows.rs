@@ -5442,6 +5442,14 @@ fn start_preparing_editor(
                     let Some(image) = image else { continue };
                     editor_window::EditorPreviewFrame::Image(image)
                 }
+                cap_editor::EditorFrameOutput::Bgra(frame) => {
+                    let image = cx
+                        .background_executor()
+                        .spawn(async move { editor_window::bgra_frame_image(frame) })
+                        .await;
+                    let Some(image) = image else { continue };
+                    editor_window::EditorPreviewFrame::Image(image)
+                }
                 #[cfg(target_os = "macos")]
                 cap_editor::EditorFrameOutput::Surface(surface) => {
                     editor_window::surface_preview_frame(surface)
@@ -5658,16 +5666,17 @@ fn load_editor_project_candidate(
                 //
                 let state_cb = editor_window::make_state_callback(playhead);
                 let frame_cb = editor_window::make_frame_callback(frame_tx, frame_stats);
+                let shared_device = shared_wgpu_device().await;
                 #[cfg(target_os = "macos")]
                 let frame_format = cap_editor::EditorFrameFormat::BgraSurface;
                 #[cfg(not(target_os = "macos"))]
-                let frame_format = cap_editor::EditorFrameFormat::Rgba;
+                let frame_format =
+                    editor_window::cpu_preview_frame_format(shared_device.as_ref());
                 if let Some(previous) = previous {
                     return previous
                         .recreate_preparing_candidate(state_cb, frame_cb, frame_format)
                         .await;
                 }
-                let shared_device = shared_wgpu_device().await;
                 let instance = cap_editor::EditorInstance::new_with_startup_inputs(
                     instance_path,
                     state_cb,
@@ -5742,30 +5751,71 @@ fn load_editor_project_candidate(
             return;
         }
 
-        // The pump: convert on the background executor (un-padding plus the
-        // BGRA swap is a few megabytes per frame), deliver on the main one.
         cx.spawn({
             let stats = stats.clone();
             let pump_instance = Arc::downgrade(&instance);
+            let rgba_stream = editor_window::streaming_preview_enabled()
+                .then(|| gpui::StreamingImage::new(gpui::StreamingImageFormat::Rgba8));
+            let bgra_stream = editor_window::streaming_preview_enabled()
+                .then(|| gpui::StreamingImage::new(gpui::StreamingImageFormat::Bgra8));
             async move |cx| {
                 while let Ok((output, layout)) = frame_rx.recv_async().await {
+                    let mut streamed_rgba = None;
+                    let mut streamed_bgra = None;
                     let (frame, number) = match output {
                         cap_editor::EditorFrameOutput::Rgba(rgba) => {
-                            let stats = stats.clone();
                             let number = rgba.frame_number;
-                            let image = cx
-                                .background_executor()
-                                .spawn(
-                                    async move { editor_window::frame_image_timed(&rgba, &stats) },
+                            if rgba_stream.is_some() {
+                                streamed_rgba = Some(rgba);
+                                (
+                                    editor_window::EditorPreviewFrame::Stream(
+                                        rgba_stream.as_ref().expect("stream").clone(),
+                                    ),
+                                    number,
                                 )
-                                .await;
-                            let Some(image) = image else {
-                                tracing::warn!(
-                                    "a rendered frame could not be converted for display"
-                                );
-                                continue;
-                            };
-                            (editor_window::EditorPreviewFrame::Image(image), number)
+                            } else {
+                                let stats = stats.clone();
+                                let image = cx
+                                    .background_executor()
+                                    .spawn(async move {
+                                        editor_window::frame_image_timed(&rgba, &stats)
+                                    })
+                                    .await;
+                                let Some(image) = image else {
+                                    tracing::warn!(
+                                        "a rendered frame could not be converted for display"
+                                    );
+                                    continue;
+                                };
+                                (editor_window::EditorPreviewFrame::Image(image), number)
+                            }
+                        }
+                        cap_editor::EditorFrameOutput::Bgra(bgra) => {
+                            let number = bgra.frame_number;
+                            if bgra_stream.is_some() {
+                                streamed_bgra = Some(bgra);
+                                (
+                                    editor_window::EditorPreviewFrame::Stream(
+                                        bgra_stream.as_ref().expect("stream").clone(),
+                                    ),
+                                    number,
+                                )
+                            } else {
+                                let stats = stats.clone();
+                                let image = cx
+                                    .background_executor()
+                                    .spawn(async move {
+                                        editor_window::bgra_frame_image_timed(bgra, &stats)
+                                    })
+                                    .await;
+                                let Some(image) = image else {
+                                    tracing::warn!(
+                                        "a rendered frame could not be converted for display"
+                                    );
+                                    continue;
+                                };
+                                (editor_window::EditorPreviewFrame::Image(image), number)
+                            }
                         }
                         cap_editor::EditorFrameOutput::Nv12(frame) => {
                             tracing::warn!(
@@ -5783,6 +5833,18 @@ fn load_editor_project_candidate(
                     if handle
                         .update(cx, |view, window, cx| {
                             if !view.holds_instance(&pump_instance) {
+                                return;
+                            }
+                            if let (Some(stream), Some(rgba)) =
+                                (&rgba_stream, streamed_rgba.take())
+                                && !editor_window::stream_frame_timed(stream, rgba, &stats)
+                            {
+                                return;
+                            }
+                            if let (Some(stream), Some(bgra)) =
+                                (&bgra_stream, streamed_bgra.take())
+                                && !editor_window::stream_frame_timed(stream, bgra, &stats)
+                            {
                                 return;
                             }
                             view.frame_arrived(

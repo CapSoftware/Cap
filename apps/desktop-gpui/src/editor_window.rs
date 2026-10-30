@@ -63,8 +63,8 @@ use gpui::{
     Animation, AnimationExt as _, AppContext as _, Bounds, Context, Entity, FocusHandle,
     FontWeight, Hsla, InteractiveElement, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent,
     MouseUpEvent, ParentElement, Pixels, Point, Render, RenderImage, SharedString,
-    StatefulInteractiveElement as _, StyleRefinement, Styled, Subscription, WeakEntity, Window,
-    div, point, prelude::FluentBuilder, px, svg,
+    StatefulInteractiveElement as _, StreamingImage, StyleRefinement, Styled, Subscription,
+    WeakEntity, Window, div, point, prelude::FluentBuilder, px, svg,
 };
 
 use crate::i18n::tr;
@@ -593,10 +593,71 @@ pub fn frame_image(frame: &RenderedFrame) -> Option<Arc<RenderImage>> {
     ])))
 }
 
+pub fn bgra_frame_image(frame: RenderedFrame) -> Option<Arc<RenderImage>> {
+    let row_bytes = (frame.width as usize).checked_mul(4)?;
+    if frame.padded_bytes_per_row as usize != row_bytes
+        || frame.data.len() != row_bytes.checked_mul(frame.height as usize)?
+    {
+        return None;
+    }
+    let pixels = Arc::try_unwrap(frame.data).unwrap_or_else(|shared| shared.as_ref().clone());
+    let buffer = image::RgbaImage::from_raw(frame.width, frame.height, pixels)?;
+    Some(Arc::new(RenderImage::new(smallvec::smallvec![
+        image::Frame::new(buffer)
+    ])))
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn cpu_preview_frame_format(
+    shared_device: Option<&cap_rendering::SharedWgpuDevice>,
+) -> cap_editor::EditorFrameFormat {
+    if shared_device.is_some_and(|device| !device.is_software_adapter) {
+        cap_editor::EditorFrameFormat::Bgra
+    } else {
+        cap_editor::EditorFrameFormat::Rgba
+    }
+}
+
+pub(crate) fn streaming_preview_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        match std::env::var_os("CAP_GPUI_STREAMING_IMAGE").as_deref() {
+            Some(value) => value != "0",
+            None => !cfg!(target_os = "macos"),
+        }
+    })
+}
+
+pub fn stream_frame_timed(
+    stream: &StreamingImage,
+    frame: RenderedFrame,
+    stats: &PumpStats,
+) -> bool {
+    let started = Instant::now();
+    let size = gpui::size(
+        gpui::DevicePixels(frame.width as i32),
+        gpui::DevicePixels(frame.height as i32),
+    );
+    let stride = frame.padded_bytes_per_row as usize;
+    let result = match Arc::try_unwrap(frame.data) {
+        Ok(data) => stream.set_frame(size, stride, data).map(drop),
+        Err(data) => stream.copy_frame(size, stride, &data),
+    };
+    stats
+        .convert_nanos
+        .fetch_add(started.elapsed().as_nanos() as u64, Ordering::Relaxed);
+    stats.convert_samples.fetch_add(1, Ordering::Relaxed);
+    if let Err(error) = &result {
+        tracing::warn!(%error, "a rendered frame could not be streamed to the preview");
+    }
+    result.is_ok()
+}
+
 /// What the frame pump hands the window.
 #[derive(Clone)]
 pub(crate) enum EditorPreviewFrame {
     Image(Arc<RenderImage>),
+    Stream(StreamingImage),
     #[cfg(target_os = "macos")]
     Surface(CVPixelBuffer),
 }
@@ -607,6 +668,9 @@ impl EditorPreviewFrame {
         match self {
             Self::Image(image) => {
                 let _ = window.paint_image(bounds, corners, Arc::clone(image), 0, false);
+            }
+            Self::Stream(image) => {
+                let _ = window.paint_streaming_image(bounds, corners, image, false);
             }
             #[cfg(target_os = "macos")]
             Self::Surface(surface) => {
@@ -12520,8 +12584,19 @@ pub(crate) fn surface_preview_frame(frame: cap_rendering::SurfaceFrame) -> Edito
 /// [`frame_image`], timed. The pump calls this so the CPU conversion's cost is
 /// a number rather than a hunch.
 pub fn frame_image_timed(frame: &RenderedFrame, stats: &PumpStats) -> Option<Arc<RenderImage>> {
+    timed_conversion(stats, || frame_image(frame))
+}
+
+pub fn bgra_frame_image_timed(frame: RenderedFrame, stats: &PumpStats) -> Option<Arc<RenderImage>> {
+    timed_conversion(stats, || bgra_frame_image(frame))
+}
+
+fn timed_conversion(
+    stats: &PumpStats,
+    convert: impl FnOnce() -> Option<Arc<RenderImage>>,
+) -> Option<Arc<RenderImage>> {
     let started = Instant::now();
-    let image = frame_image(frame);
+    let image = convert();
     stats
         .convert_nanos
         .fetch_add(started.elapsed().as_nanos() as u64, Ordering::Relaxed);
