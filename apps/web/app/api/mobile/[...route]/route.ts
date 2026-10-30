@@ -343,7 +343,6 @@ const getFileExtension = (input: MobileUploadCreateInput) => {
 	return "mp4";
 };
 
-// Photos become screenshot Caps, stored where the web's image import puts them.
 const MOBILE_SCREENSHOT_MAX_BYTES = 25 * 1024 * 1024;
 const getScreenshotExtension = (contentType: string) => {
 	const normalized = contentType.toLowerCase();
@@ -3865,9 +3864,13 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 									return yield* Effect.fail(new HttpApiError.BadRequest());
 								}
 
-								// Screenshots need no processing; the image is the Cap.
 								if (video.isScreenshot) {
-									if (!payload.rawFileKey.startsWith(`${prefix}screenshot/`)) {
+									if (
+										payload.rawFileKey !==
+											`${prefix}screenshot/screen-capture.jpg` &&
+										payload.rawFileKey !==
+											`${prefix}screenshot/screen-capture.png`
+									) {
 										return yield* Effect.fail(new HttpApiError.BadRequest());
 									}
 									const maybeScreenshot = yield* VideosRepo.pipe(
