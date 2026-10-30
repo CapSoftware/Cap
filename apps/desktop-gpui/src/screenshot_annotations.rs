@@ -1055,6 +1055,61 @@ struct Creating {
     /// A mask joins the live list the moment its drag starts (`:236-238`), so
     /// its blur preview follows the pointer.
     in_list: bool,
+    draw_bounds: DrawBounds,
+}
+
+struct DrawBounds {
+    min: [f64; 2],
+    max: [f64; 2],
+}
+
+impl DrawBounds {
+    fn from_points(points: &[[f64; 2]]) -> Self {
+        let mut bounds = Self {
+            min: [f64::INFINITY; 2],
+            max: [f64::NEG_INFINITY; 2],
+        };
+        for point in points {
+            bounds.include(*point);
+        }
+        bounds
+    }
+
+    fn include(&mut self, point: [f64; 2]) {
+        for (axis, value) in point.into_iter().enumerate() {
+            self.min[axis] = self.min[axis].min(value);
+            self.max[axis] = self.max[axis].max(value);
+        }
+    }
+}
+
+impl Creating {
+    fn new(temp: Annotation, in_list: bool) -> Self {
+        let draw_bounds = DrawBounds::from_points(temp.points.as_deref().unwrap_or_default());
+        Self {
+            temp,
+            in_list,
+            draw_bounds,
+        }
+    }
+
+    fn push_draw_point(&mut self, point: (f64, f64)) {
+        let temp = &mut self.temp;
+        let points = temp.points.get_or_insert_with(Vec::new);
+        let last = points.last().copied().unwrap_or([temp.x, temp.y]);
+        let (dx, dy) = (point.0 - last[0], point.1 - last[1]);
+        if dx * dx + dy * dy < 4. {
+            return;
+        }
+        let point = [point.0, point.1];
+        points.push(point);
+        self.draw_bounds.include(point);
+        temp.x = self.draw_bounds.min[0];
+        temp.y = self.draw_bounds.min[1];
+        // Keep raw extrema: reconstructing max from x + width can lose precision.
+        temp.width = self.draw_bounds.max[0] - temp.x;
+        temp.height = self.draw_bounds.max[1] - temp.y;
+    }
 }
 
 struct Dragging {
@@ -1658,10 +1713,7 @@ impl ScreenshotEditorWindow {
         if is_mask {
             self.project.annotations.push(annotation.clone());
         }
-        self.annotation_state.gesture = Some(Gesture::Create(Creating {
-            temp: annotation,
-            in_list: is_mask,
-        }));
+        self.annotation_state.gesture = Some(Gesture::Create(Creating::new(annotation, is_mask)));
         cx.notify();
     }
 
@@ -1709,26 +1761,7 @@ impl ScreenshotEditorWindow {
         }
 
         if temp.annotation_type == AnnotationType::Draw {
-            let points = temp.points.get_or_insert_with(Vec::new);
-            let last = points.last().copied().unwrap_or([temp.x, temp.y]);
-            let (dx, dy) = (point.0 - last[0], point.1 - last[1]);
-            // A 2px floor on the sample spacing (`:254`).
-            if dx * dx + dy * dy < 4. {
-                return creating;
-            }
-            points.push([point.0, point.1]);
-            let (mut min_x, mut min_y) = (f64::INFINITY, f64::INFINITY);
-            let (mut max_x, mut max_y) = (f64::NEG_INFINITY, f64::NEG_INFINITY);
-            for sample in points.iter() {
-                min_x = min_x.min(sample[0]);
-                min_y = min_y.min(sample[1]);
-                max_x = max_x.max(sample[0]);
-                max_y = max_y.max(sample[1]);
-            }
-            temp.x = min_x;
-            temp.y = min_y;
-            temp.width = max_x - min_x;
-            temp.height = max_y - min_y;
+            creating.push_draw_point(point);
             return creating;
         }
 
@@ -4282,6 +4315,237 @@ mod tests {
             mask_type: None,
             mask_level: None,
             points: None,
+        }
+    }
+
+    fn draw_annotation(point: [f64; 2]) -> Annotation {
+        let mut annotation = shape(AnnotationType::Draw, point[0], point[1], 0., 0.);
+        annotation.points = Some(vec![point]);
+        annotation
+    }
+
+    fn push_draw_point_full_scan(temp: &mut Annotation, point: (f64, f64)) {
+        let points = temp.points.get_or_insert_with(Vec::new);
+        let last = points.last().copied().unwrap_or([temp.x, temp.y]);
+        let (dx, dy) = (point.0 - last[0], point.1 - last[1]);
+        if dx * dx + dy * dy < 4. {
+            return;
+        }
+        points.push([point.0, point.1]);
+        let (mut min_x, mut min_y) = (f64::INFINITY, f64::INFINITY);
+        let (mut max_x, mut max_y) = (f64::NEG_INFINITY, f64::NEG_INFINITY);
+        for sample in points.iter() {
+            min_x = min_x.min(sample[0]);
+            min_y = min_y.min(sample[1]);
+            max_x = max_x.max(sample[0]);
+            max_y = max_y.max(sample[1]);
+        }
+        temp.x = min_x;
+        temp.y = min_y;
+        temp.width = max_x - min_x;
+        temp.height = max_y - min_y;
+    }
+
+    fn draw_coordinate_bits(value: f64) -> u64 {
+        // min/max may choose either signed zero; NaN payloads do not affect geometry.
+        if value == 0. {
+            0
+        } else if value.is_nan() {
+            f64::NAN.to_bits()
+        } else {
+            value.to_bits()
+        }
+    }
+
+    fn assert_draw_matches(actual: &Annotation, expected: &Annotation) {
+        let geometry = |annotation: &Annotation| {
+            [
+                annotation.x,
+                annotation.y,
+                annotation.width,
+                annotation.height,
+            ]
+            .map(draw_coordinate_bits)
+        };
+        assert_eq!(geometry(actual), geometry(expected));
+        let points = |annotation: &Annotation| {
+            annotation
+                .points
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .map(|point| point.map(f64::to_bits))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(points(actual), points(expected));
+    }
+
+    fn check_draw_sequence(points: &[[f64; 2]]) {
+        let mut expected = draw_annotation(points[0]);
+        let mut creating = Creating::new(expected.clone(), false);
+        for point in &points[1..] {
+            push_draw_point_full_scan(&mut expected, (point[0], point[1]));
+            creating.push_draw_point((point[0], point[1]));
+            assert_draw_matches(&creating.temp, &expected);
+        }
+        let normalized = |annotation: &Annotation| {
+            normalize_draw_points(
+                annotation.points.as_deref().unwrap_or_default(),
+                annotation.x,
+                annotation.y,
+                annotation.width,
+                annotation.height,
+            )
+            .into_iter()
+            .map(|point| point.map(draw_coordinate_bits))
+            .collect::<Vec<_>>()
+        };
+        assert_eq!(normalized(&creating.temp), normalized(&expected));
+    }
+
+    #[test]
+    fn freehand_bounds_preserve_sample_spacing_and_direction_changes() {
+        check_draw_sequence(&[
+            [10., 20.],
+            [11., 20.],
+            [12., 20.],
+            [12., 21.],
+            [12., 22.],
+            [12., 22.],
+            [-30., 40.],
+            [50., -60.],
+            [10., 20.],
+        ]);
+        let mut creating = Creating::new(draw_annotation([10., 20.]), false);
+        creating.push_draw_point((11., 20.));
+        creating.push_draw_point((12., 20.));
+        assert_eq!(
+            creating.temp.points.as_deref(),
+            Some(&[[10., 20.], [12., 20.]][..])
+        );
+        assert_eq!((creating.temp.x, creating.temp.width), (10., 2.));
+    }
+
+    #[test]
+    fn freehand_bounds_keep_raw_extrema_and_flat_strokes() {
+        let low = -31_190_271.874_936_096_f64;
+        let high = 6_549_320.788_911_953;
+        check_draw_sequence(&[[low, 0.], [high, 0.], [low.next_down(), 0.]]);
+        for points in [
+            vec![[0., 0.], [3., 0.], [-3., 0.]],
+            vec![[0., 0.], [0., 3.], [0., -3.]],
+        ] {
+            check_draw_sequence(&points);
+        }
+    }
+
+    #[test]
+    fn freehand_bounds_match_full_scans_for_nonfinite_samples_and_signed_zero() {
+        for points in [
+            vec![[0., -0.], [-0., 2.], [0., -2.], [-0., 0.]],
+            vec![
+                [0., -0.],
+                [0., -0.],
+                [-0., 2.],
+                [f64::NAN, 1.],
+                [f64::INFINITY, 2.],
+            ],
+            vec![[f64::NAN, f64::NAN], [f64::NAN, f64::NAN], [3., 4.]],
+            vec![[f64::NAN, 0.], [1., f64::NAN], [3., 4.]],
+            vec![[0., 0.], [f64::INFINITY, 2.], [f64::NEG_INFINITY, -2.]],
+            vec![[f64::MAX, f64::MIN], [f64::MIN, f64::MAX], [0., 0.]],
+        ] {
+            check_draw_sequence(&points);
+        }
+    }
+
+    #[test]
+    fn freehand_bounds_initialize_from_existing_or_missing_samples() {
+        for points in [None, Some(Vec::new()), Some(vec![[-5., 4.], [9., -3.]])] {
+            let mut expected = draw_annotation([0., 0.]);
+            expected.points = points;
+            let mut creating = Creating::new(expected.clone(), false);
+            for point in [(0., 0.), (3., 4.), (-10., 2.), (15., -7.)] {
+                push_draw_point_full_scan(&mut expected, point);
+                creating.push_draw_point(point);
+                assert_draw_matches(&creating.temp, &expected);
+            }
+        }
+    }
+
+    #[test]
+    fn freehand_bounds_match_full_scans_for_long_strokes() {
+        let mut state = 0x35c9_f12b_895e_6aa1_u64;
+        let points = (0..2048)
+            .map(|_| {
+                std::array::from_fn(|_| {
+                    state = state
+                        .wrapping_mul(6364136223846793005)
+                        .wrapping_add(1442695040888963407);
+                    (state >> 32) as f64 / u32::MAX as f64 * 4096. - 2048.
+                })
+            })
+            .collect::<Vec<_>>();
+        check_draw_sequence(&points);
+    }
+
+    #[test]
+    #[ignore = "release-mode CPU benchmark; run with --ignored --nocapture"]
+    fn benchmark_freehand_bounds() {
+        use std::hint::black_box;
+        use std::time::Instant;
+
+        println!("samples,iterations,full_scan_median_us,incremental_median_us");
+        for (count, iterations) in [(8, 5000), (32, 1000), (256, 100), (2048, 3), (8192, 1)] {
+            let points = (0..count)
+                .map(|index| {
+                    let angle = index as f64 * 0.03;
+                    [2048. + angle.cos() * 1024., 1536. + angle.sin() * 1024.]
+                })
+                .collect::<Vec<_>>();
+            check_draw_sequence(&points);
+
+            let measure = |incremental, iterations| {
+                let before = Instant::now();
+                for _ in 0..iterations {
+                    if incremental {
+                        let mut creating = Creating::new(draw_annotation(points[0]), false);
+                        for point in black_box(&points[1..]) {
+                            creating.push_draw_point((point[0], point[1]));
+                        }
+                        black_box(creating);
+                    } else {
+                        let mut annotation = draw_annotation(points[0]);
+                        for point in black_box(&points[1..]) {
+                            push_draw_point_full_scan(&mut annotation, (point[0], point[1]));
+                        }
+                        black_box(annotation);
+                    }
+                }
+                before.elapsed().as_secs_f64() * 1_000_000. / iterations as f64
+            };
+
+            for _ in 0..2 {
+                black_box(measure(false, 1));
+                black_box(measure(true, 1));
+            }
+            let mut full_scan = [0.; 9];
+            let mut incremental = [0.; 9];
+            for sample in 0..9 {
+                if sample % 2 == 0 {
+                    full_scan[sample] = measure(false, iterations);
+                    incremental[sample] = measure(true, iterations);
+                } else {
+                    incremental[sample] = measure(true, iterations);
+                    full_scan[sample] = measure(false, iterations);
+                }
+            }
+            full_scan.sort_by(f64::total_cmp);
+            incremental.sort_by(f64::total_cmp);
+            println!(
+                "{count},{iterations},{:.3},{:.3}",
+                full_scan[4], incremental[4]
+            );
         }
     }
 
