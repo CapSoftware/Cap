@@ -32,9 +32,9 @@ import { and, count, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { Effect } from "effect";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+import { parseLimitParam, parsePageParam } from "@/lib/pagination";
 import { seedThumbnailUrls } from "@/lib/seeded-thumbnails";
 import { runPromise } from "@/lib/server";
-import { parseLimitParam, parsePageParam } from "@/lib/pagination";
 import { SharedCaps } from "./SharedCaps";
 
 export const metadata: Metadata = {

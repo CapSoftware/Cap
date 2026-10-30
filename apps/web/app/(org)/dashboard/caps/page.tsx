@@ -22,9 +22,9 @@ import { and, count, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { type Array, Effect } from "effect";
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
+import { parseLimitParam, parsePageParam } from "@/lib/pagination";
 import { seedThumbnailUrls } from "@/lib/seeded-thumbnails";
 import { runPromise } from "@/lib/server";
-import { parseLimitParam, parsePageParam } from "@/lib/pagination";
 import { Caps } from "./Caps";
 
 export const metadata: Metadata = {
