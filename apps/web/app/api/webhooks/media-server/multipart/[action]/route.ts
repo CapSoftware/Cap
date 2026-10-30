@@ -272,12 +272,17 @@ export async function POST(
 			}
 
 			const result = await multipartContext.bucket.multipart
-				.complete(payload.data.key, payload.data.uploadId, {
-					MultipartUpload: { Parts: parts },
-					...(multipartContext.fenced || multipartContext.loom
-						? { IfNoneMatch: "*" }
-						: {}),
-				})
+				.complete(
+					payload.data.key,
+					payload.data.uploadId,
+					{
+						MultipartUpload: { Parts: parts },
+						...(multipartContext.fenced || multipartContext.loom
+							? { IfNoneMatch: "*" }
+							: {}),
+					},
+					{ retryWithoutUnsupportedIfNoneMatch: multipartContext.fenced },
+				)
 				.pipe(runPromise);
 
 			return NextResponse.json({

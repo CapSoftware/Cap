@@ -1,16 +1,18 @@
-//! Persisted state: this app's own, and the Tauri app's settings store.
+//! Persisted state: this app's own, and the settings store it shares with
+//! 0.6.0 and earlier (the Tauri app, still downloadable and able to open the
+//! same data after a downgrade).
 //!
 //! Two files, both inside `so.cap.desktop`'s app-data dir:
 //!
-//! - `gpui-state.json` -- ours. The Tauri app keeps the camera window's chrome
+//! - `gpui-state.json` -- ours. The Tauri app kept the camera window's chrome
 //!   state in the webview's `localStorage` (`cameraWindowState`); there is no
 //!   webview here, so the same shape lives in a file. Reads happen once at
 //!   open; writes are whole-file rewrites on a background thread -- the state
 //!   is a handful of scalars, atomicity beyond rename is not worth plumbing.
-//! - `store` -- the tauri-plugin-store file the shipping app loads
-//!   (`Store.load("store")` in `apps/desktop/src/store.ts`), holding
-//!   `general_settings`, `recording_start_safety`, `auth`, `presets` and the
-//!   rest. Both apps read and write it, so every write here is a
+//! - `store` -- the tauri-plugin-store file 0.6.0 loads
+//!   (`Store.load("store")` in `apps/desktop/src/store.ts` at `cap-v0.6.2`),
+//!   holding `general_settings`, `recording_start_safety`, `auth`, `presets`
+//!   and the rest. Both apps read and write it, so every write here is a
 //!   read-modify-write on the raw JSON that touches exactly one key: see
 //!   [`set_store_setting`].
 
@@ -63,9 +65,9 @@ impl BlurMode {
     pub fn label(self) -> Option<&'static str> {
         match self {
             Self::Off => None,
-            Self::Light => Some("Light"),
-            Self::Heavy => Some("Heavy"),
-            Self::Remove => Some("Cutout"),
+            Self::Light => Some(tr::camera::blur::light()),
+            Self::Heavy => Some(tr::camera::blur::heavy()),
+            Self::Remove => Some(tr::camera::blur::cutout()),
         }
     }
 }
@@ -148,13 +150,15 @@ pub struct ExportPrefs {
     pub advanced_open: bool,
     #[serde(default)]
     pub organization_id: Option<String>,
+    #[serde(default)]
+    pub turbo: bool,
 }
 
 /// `so.cap.desktop`'s app-data dir -- where both stores live.
 ///
-/// Same identifier the Tauri app uses (`so.cap.desktop`), resolved the way
-/// each OS's app-data convention spells it so a recording made on Windows or
-/// Linux lands in the folder both apps already agree on.
+/// The identifier every Cap release has used (`so.cap.desktop`), resolved
+/// the way each OS's app-data convention spells it, so recordings and
+/// settings from 0.6.0 and earlier are found where those builds left them.
 pub fn app_data_dir() -> PathBuf {
     if let Ok(dir) = std::env::var("CAP_GPUI_APP_DATA_DIR")
         && !dir.trim().is_empty()
@@ -217,81 +221,6 @@ fn bundled_resource_dirs_for(
     }
 
     directories
-}
-
-/// The Tauri dev harness's hand-off marker (`gpui_app.rs` over there): it
-/// survives the whole session and is removed only on a clean quit, so a marker
-/// left behind reads as a crash and routes the next `bun run dev:desktop` back
-/// to the classic app.
-pub fn handoff_marker_path() -> PathBuf {
-    app_data_dir().join("cap-gpui.handoff")
-}
-
-pub fn mark_handoff_session() {
-    if let Err(error) = mark_handoff_session_at(&handoff_marker_path()) {
-        tracing::warn!("writing the hand-off marker: {error}");
-    }
-}
-
-fn mark_handoff_session_at(path: &Path) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let staged = path.with_extension(format!("handoff-{}", std::process::id()));
-    std::fs::write(&staged, std::process::id().to_string())?;
-    std::fs::rename(&staged, path).inspect_err(|_| {
-        let _ = std::fs::remove_file(&staged);
-    })
-}
-
-pub fn clear_handoff_marker() {
-    clear_handoff_marker_at(&handoff_marker_path());
-}
-
-fn clear_handoff_marker_at(path: &Path) {
-    match std::fs::remove_file(path) {
-        Ok(()) => tracing::info!("cleared the hand-off marker"),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => tracing::warn!("clearing the hand-off marker: {error}"),
-    }
-}
-
-/// A dev-checkout switch-back has no `Cap.app` to `open`: the classic app only
-/// runs inside its `tauri dev` harness, which exited with the hand-off. This
-/// sentinel asks whatever supervises the dev session (`scripts/dev-desktop.mjs`
-/// watches for it) to start that harness again; with no supervisor listening it
-/// is inert, and the flag written alongside it still routes the next
-/// `bun run dev:desktop` to the classic app.
-pub fn classic_reopen_path() -> PathBuf {
-    app_data_dir().join("cap-classic.reopen")
-}
-
-pub fn request_classic_reopen() -> std::io::Result<()> {
-    let path = classic_reopen_path();
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(&path, std::process::id().to_string())
-}
-
-pub fn classic_pending_path() -> PathBuf {
-    app_data_dir().join("cap-classic.pending")
-}
-
-pub fn mark_classic_pending() -> std::io::Result<()> {
-    let path = classic_pending_path();
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(&path, std::process::id().to_string())
-}
-
-pub fn clear_classic_pending() {
-    if let Err(error) = std::fs::remove_file(classic_pending_path())
-        && error.kind() != std::io::ErrorKind::NotFound
-    {
-        tracing::warn!(%error, "couldn't clear classic handoff readiness");
-    }
 }
 
 fn state_path() -> PathBuf {
@@ -796,6 +725,17 @@ settings_enum! {
 }
 
 settings_enum! {
+    /// How a window recording captures the picked window: the region of the
+    /// screen it covers, or (Focused) the window by itself, centred by the
+    /// picker and followed if it moves.
+    WindowCaptureStyle {
+        ScreenRegion = "screenRegion", tr::settings::options::window_capture::screen_region();
+        FocusedWindow = "focusedWindow", tr::settings::options::window_capture::focused_window();
+    }
+    default = ScreenRegion
+}
+
+settings_enum! {
     /// `PostStudioRecordingBehaviour`.
     PostStudioBehaviour {
         OpenEditor = "openEditor", tr::settings::options::post_studio::open_editor();
@@ -1017,9 +957,16 @@ pub struct GeneralSettings {
     pub enable_notifications: bool,
     pub instant_mode_max_resolution: u32,
     pub disable_auto_open_links: bool,
+    /// GPUI-only `showMainWindowAfterInstantRecording`: whether the main
+    /// window comes back after an Instant recording whose link did not open.
+    /// Kept as stored, absent included, so every reader resolves it the same
+    /// way in [`Self::post_instant_behaviour`].
+    pub show_main_window_after_instant: Option<bool>,
     pub studio_recording_quality: StudioQuality,
     pub recording_countdown: Option<u32>,
     pub main_window_recording_start_behaviour: MainWindowStartBehaviour,
+    pub window_capture_style: WindowCaptureStyle,
+    pub focus_center: bool,
     pub post_studio_recording_behaviour: PostStudioBehaviour,
     pub post_screenshot_behaviour: PostScreenshotBehaviour,
     pub post_deletion_behaviour: PostDeletionBehaviour,
@@ -1057,6 +1004,30 @@ pub struct GeneralSettings {
     /// Also outside `general_settings`: the `audio_enhancement` section's
     /// `enabledByDefault`, rendered in the Recording card next to it.
     pub studio_sound_by_default: bool,
+}
+
+pub const SHOW_MAIN_WINDOW_AFTER_INSTANT_KEY: &str = "showMainWindowAfterInstantRecording";
+
+/// What follows a cleanly stopped Instant recording, the link always copied.
+/// Not one key: `disableAutoOpenLinks` (shared with the Tauri app) decides
+/// whether the link opens, `showMainWindowAfterInstantRecording` whether the
+/// main window comes back when it does not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PostInstantBehaviour {
+    OpenLink,
+    ShowCap,
+    CopyLink,
+}
+
+impl PostInstantBehaviour {
+    /// `(disableAutoOpenLinks, showMainWindowAfterInstantRecording)`.
+    pub fn store_values(self) -> (bool, bool) {
+        match self {
+            Self::OpenLink => (false, false),
+            Self::ShowCap => (true, true),
+            Self::CopyLink => (true, false),
+        }
+    }
 }
 
 /// The section names, so the write calls read as the store keys they are.
@@ -1360,6 +1331,18 @@ impl Default for GeneralSettings {
 }
 
 impl GeneralSettings {
+    pub fn post_instant_behaviour(&self) -> PostInstantBehaviour {
+        if !self.disable_auto_open_links {
+            PostInstantBehaviour::OpenLink
+        } else if self.show_main_window_after_instant.unwrap_or(true) {
+            // Absent: "copy link only" brought the main window back before
+            // the key existed, so a store that never set it keeps doing that.
+            PostInstantBehaviour::ShowCap
+        } else {
+            PostInstantBehaviour::CopyLink
+        }
+    }
+
     pub fn load() -> Self {
         let store = cached_store(&tauri_store_path()).unwrap_or_default();
         let empty = Map::new();
@@ -1383,12 +1366,17 @@ impl GeneralSettings {
             enable_notifications: bool_at(general, "enableNotifications", true),
             instant_mode_max_resolution: u32_at(general, "instantModeMaxResolution", 1920),
             disable_auto_open_links: bool_at(general, "disableAutoOpenLinks", false),
+            show_main_window_after_instant: general
+                .get(SHOW_MAIN_WINDOW_AFTER_INSTANT_KEY)
+                .and_then(Value::as_bool),
             studio_recording_quality: enum_at(general, "studioRecordingQuality"),
             recording_countdown: opt_u32_at(general, "recordingCountdown"),
             main_window_recording_start_behaviour: enum_at(
                 general,
                 "mainWindowRecordingStartBehaviour",
             ),
+            window_capture_style: enum_at(general, "windowCaptureStyle"),
+            focus_center: bool_at(general, "focusCenter", false),
             post_studio_recording_behaviour: enum_at(general, "postStudioRecordingBehaviour"),
             post_screenshot_behaviour: enum_at(general, "postScreenshotBehaviour"),
             post_deletion_behaviour: enum_at(general, "postDeletionBehaviour"),
@@ -2045,23 +2033,6 @@ pub fn preset_names() -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn the_handoff_marker_holds_this_pid_until_a_clean_quit_clears_it() {
-        let directory =
-            std::env::temp_dir().join(format!("cap-gpui-handoff-{}", super::new_uuid_v4()));
-        let marker = directory.join("cap-gpui.handoff");
-        super::mark_handoff_session_at(&marker).unwrap();
-        assert_eq!(
-            std::fs::read_to_string(&marker).unwrap(),
-            std::process::id().to_string()
-        );
-        assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
-        super::clear_handoff_marker_at(&marker);
-        assert!(!marker.exists());
-        super::clear_handoff_marker_at(&marker);
-        std::fs::remove_dir_all(directory).unwrap();
-    }
-
     use super::*;
 
     struct TempStore {
@@ -3357,5 +3328,60 @@ mod tests {
         general.insert("excludedWindows".to_string(), Value::Array(Vec::new()));
         let cleared = GeneralSettings::from_sections(&general, &Map::new(), &Map::new());
         assert!(cleared.excluded_windows.is_empty());
+    }
+
+    /// A store written before `showMainWindowAfterInstantRecording` keeps
+    /// what it did: "copy link only" brought the main window back, so it reads
+    /// as Show Cap; every outcome round-trips through its two keys.
+    #[test]
+    fn post_instant_behaviour_reads_old_stores_and_round_trips() {
+        let settings = |pairs: &[(&str, bool)]| {
+            let general = pairs
+                .iter()
+                .map(|(key, value)| (key.to_string(), Value::Bool(*value)))
+                .collect::<Map<_, _>>();
+            GeneralSettings::from_sections(&general, &Map::new(), &Map::new())
+                .post_instant_behaviour()
+        };
+        assert_eq!(settings(&[]), PostInstantBehaviour::OpenLink);
+        assert_eq!(
+            settings(&[("disableAutoOpenLinks", false)]),
+            PostInstantBehaviour::OpenLink
+        );
+        assert_eq!(
+            settings(&[("disableAutoOpenLinks", true)]),
+            PostInstantBehaviour::ShowCap
+        );
+        assert_eq!(
+            settings(&[
+                ("disableAutoOpenLinks", false),
+                (SHOW_MAIN_WINDOW_AFTER_INSTANT_KEY, true)
+            ]),
+            PostInstantBehaviour::OpenLink
+        );
+        // The Quality page's auto-open toggle writes only
+        // `disableAutoOpenLinks`; the open window and a reload must agree.
+        let toggled = GeneralSettings {
+            disable_auto_open_links: true,
+            ..GeneralSettings::default()
+        };
+        assert_eq!(
+            toggled.post_instant_behaviour(),
+            settings(&[("disableAutoOpenLinks", true)])
+        );
+        for behaviour in [
+            PostInstantBehaviour::OpenLink,
+            PostInstantBehaviour::ShowCap,
+            PostInstantBehaviour::CopyLink,
+        ] {
+            let (disable_open, show_main) = behaviour.store_values();
+            assert_eq!(
+                settings(&[
+                    ("disableAutoOpenLinks", disable_open),
+                    (SHOW_MAIN_WINDOW_AFTER_INSTANT_KEY, show_main),
+                ]),
+                behaviour
+            );
+        }
     }
 }

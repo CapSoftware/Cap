@@ -58,6 +58,7 @@ type BarStatus = {
 	phase: "recording" | "paused";
 	durationMs: number;
 	updatedAt: number;
+	microphone?: "live" | "muted";
 };
 
 type BarControl = "stop-recording" | "pause-recording" | "resume-recording";
@@ -78,6 +79,7 @@ const toBarStatus = (status: RecordingStatus | undefined): BarStatus | null => {
 		phase: status.phase,
 		durationMs: status.durationMs,
 		updatedAt: status.updatedAt ?? status.startedAt,
+		microphone: status.microphone,
 	};
 };
 
@@ -471,6 +473,43 @@ export function RecordingBarOverlay({
 		};
 	}, []);
 
+	// Swapping the pause/resume icon under the cursor can swallow the
+	// mouseleave, which left the dock stuck open, so collapse is driven by the
+	// pointer's position against the bar and dock instead.
+	useEffect(() => {
+		if (!isExpanded) return;
+		const handlePointerMove = (event: PointerEvent) => {
+			const bar = barRef.current;
+			if (!bar || isPointerDownRef.current) return;
+			const dock = bar.querySelector(".cap-extension-vertical-dock");
+			const inside = [bar, dock].some((element) => {
+				if (!element) return false;
+				const rect = element.getBoundingClientRect();
+				return (
+					event.clientX >= rect.left &&
+					event.clientX <= rect.right &&
+					event.clientY >= rect.top &&
+					event.clientY <= rect.bottom
+				);
+			});
+			if (inside) {
+				if (hoverTimeoutRef.current !== null) {
+					window.clearTimeout(hoverTimeoutRef.current);
+					hoverTimeoutRef.current = null;
+				}
+				return;
+			}
+			if (hoverTimeoutRef.current !== null) return;
+			hoverTimeoutRef.current = window.setTimeout(() => {
+				setIsExpanded(false);
+				hoverTimeoutRef.current = null;
+			}, 450);
+		};
+		window.addEventListener("pointermove", handlePointerMove, true);
+		return () =>
+			window.removeEventListener("pointermove", handlePointerMove, true);
+	}, [isExpanded]);
+
 	const handleMouseEnter = useCallback(() => {
 		if (isDragging) return;
 		if (hoverTimeoutRef.current !== null) {
@@ -503,6 +542,30 @@ export function RecordingBarOverlay({
 		},
 		[applyResponse],
 	);
+
+	const toggleRecordingMicrophone = useCallback(() => {
+		const microphone = status?.microphone;
+		if (!microphone) return;
+		const muted = microphone === "live";
+		setStatus((current) =>
+			current ? { ...current, microphone: muted ? "muted" : "live" } : current,
+		);
+		// The dock flips right away; if the recorder did not confirm, show what
+		// it is actually doing instead of a mute that never happened.
+		sendServiceWorkerMessage({
+			target: "service-worker",
+			type: "toggle-microphone-mute",
+			muted,
+		})
+			.then((response) => {
+				if (response.ok && response.status) {
+					applyResponse(response.status, response.plan);
+				} else {
+					refresh();
+				}
+			})
+			.catch(refresh);
+	}, [applyResponse, refresh, status?.microphone]);
 
 	const startRecording = useCallback(() => {
 		setBusy(true);
@@ -826,21 +889,25 @@ export function RecordingBarOverlay({
 							</button>
 						) : null}
 
-						{onToggleMicrophone ? (
+						{status?.microphone ? (
 							<button
 								type="button"
 								className={classNames(
 									"cap-extension-dock-btn is-mic",
-									microphone?.enabled && "is-active",
-									!microphone?.enabled && "is-muted",
+									status.microphone === "live" && "is-active",
+									status.microphone === "muted" && "is-muted",
 								)}
 								aria-label={
-									microphone?.enabled ? "Mute microphone" : "Unmute microphone"
+									status.microphone === "live"
+										? "Mute microphone"
+										: "Unmute microphone"
 								}
-								data-tooltip={microphone?.enabled ? "Mic unmuted" : "Mic muted"}
-								onClick={onToggleMicrophone}
+								data-tooltip={
+									status.microphone === "live" ? "Mic unmuted" : "Mic muted"
+								}
+								onClick={toggleRecordingMicrophone}
 							>
-								{microphone?.enabled ? (
+								{status.microphone === "live" ? (
 									<Mic size={16} aria-hidden />
 								) : (
 									<MicOff size={16} aria-hidden />

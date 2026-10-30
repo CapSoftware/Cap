@@ -21,29 +21,39 @@ export class VideosRepo extends Effect.Service<VideosRepo>()("VideosRepo", {
 		 *
 		 * The password is returned separately as the `Video` class is client-safe
 		 */
+		const decodeRow = (v: typeof Db.videos.$inferSelect) =>
+			[
+				Video.Video.decodeSync({
+					...v,
+					bucketId: v.bucket,
+					storageIntegrationId: v.storageIntegrationId,
+					createdAt: v.createdAt.toISOString(),
+					updatedAt: v.updatedAt.toISOString(),
+					metadata: v.metadata as any,
+				}),
+				Option.fromNullable(v.password),
+			] as const;
+
 		const getById = (id: Video.VideoId) =>
 			Effect.gen(function* () {
 				const [video] = yield* db.use((db) =>
 					db.select().from(Db.videos).where(Dz.eq(Db.videos.id, id)),
 				);
 
-				return Option.fromNullable(video).pipe(
-					Option.map(
-						(v) =>
-							[
-								Video.Video.decodeSync({
-									...v,
-									bucketId: v.bucket,
-									storageIntegrationId: v.storageIntegrationId,
-									createdAt: v.createdAt.toISOString(),
-									updatedAt: v.updatedAt.toISOString(),
-									metadata: v.metadata as any,
-								}),
-								Option.fromNullable(video?.password),
-							] as const,
-					),
-				);
+				return Option.fromNullable(video).pipe(Option.map(decodeRow));
 			});
+
+		const getByIds = (ids: ReadonlyArray<Video.VideoId>) =>
+			ids.length === 0
+				? Effect.succeed([])
+				: db
+						.use((db) =>
+							db
+								.select()
+								.from(Db.videos)
+								.where(Dz.inArray(Db.videos.id, [...new Set(ids)])),
+						)
+						.pipe(Effect.map((rows) => rows.map(decodeRow)));
 
 		const hasViewerGrant = (id: Video.VideoId, email: string) =>
 			db.use(async (database) => {
@@ -185,7 +195,14 @@ export class VideosRepo extends Effect.Service<VideosRepo>()("VideosRepo", {
 				return id;
 			});
 
-		return { getById, hasViewerGrant, prepareDelete, delete: delete_, create };
+		return {
+			getById,
+			getByIds,
+			hasViewerGrant,
+			prepareDelete,
+			delete: delete_,
+			create,
+		};
 	}),
 	dependencies: [Database.Default],
 }) {}

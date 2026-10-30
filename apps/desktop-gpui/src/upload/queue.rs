@@ -1,4 +1,5 @@
 use super::*;
+use crate::i18n::tr;
 use cap_project::{InstantRecordingMeta, RecordingMetaInner};
 use cap_recording::upload_resume::{UploadLock, UploadLockError, collect_segment_events};
 use cap_recording::upload_verification::{UploadVerification, VerifiedUploadReceipt};
@@ -89,14 +90,14 @@ impl UploadState {
 
     pub fn label(&self) -> &'static str {
         match self.phase {
-            UploadPhase::Recording => "Upload prepared",
-            UploadPhase::Pending | UploadPhase::Uploading => "Uploading",
-            UploadPhase::Processing => "Processing upload",
-            UploadPhase::Retrying => "Upload will retry",
-            UploadPhase::NeedsAuthentication => "Sign in to retry upload",
-            UploadPhase::Failed => "Upload needs attention",
-            UploadPhase::Cancelled => "Upload paused",
-            UploadPhase::Verified => "Uploaded",
+            UploadPhase::Recording => tr::upload::status::prepared(),
+            UploadPhase::Pending | UploadPhase::Uploading => tr::upload::status::uploading(),
+            UploadPhase::Processing => tr::upload::status::processing(),
+            UploadPhase::Retrying => tr::upload::status::retrying(),
+            UploadPhase::NeedsAuthentication => tr::upload::status::sign_in(),
+            UploadPhase::Failed => tr::upload::status::failed(),
+            UploadPhase::Cancelled => tr::upload::status::paused(),
+            UploadPhase::Verified => tr::upload::status::uploaded(),
         }
     }
 
@@ -435,11 +436,7 @@ impl UploadBackend for LiveBackend {
                 let recorded_length = recorded_length_json(&manifest).map(|bytes| {
                     publish_recorded_length(upload.video.id.clone(), bytes, upload.cancel.clone())
                 });
-                let finish = async {
-                    upload.finish_screenshot(project).await?;
-                    upload.authorize_manifest(manifest)?;
-                    upload.finish_segments().await
-                };
+                let finish = upload.finish_with_screenshot(project, manifest);
                 match recorded_length {
                     Some(recorded_length) => alongside(finish, recorded_length).await?,
                     None => finish.await?,
@@ -1247,6 +1244,9 @@ pub(crate) async fn delete_recording(project: PathBuf) -> Result<(), String> {
 
 #[cfg(test)]
 mod verify_resume_tests;
+
+#[cfg(test)]
+mod stop_tail_bench;
 
 #[cfg(test)]
 mod tests {

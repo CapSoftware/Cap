@@ -15,6 +15,7 @@ use cap_utils::disk_space::{DiskSpaceStatus, RecordingStorageMonitor};
 use gpui::{App, AppContext as _, Context, Entity, Global, Task};
 
 use crate::app_sounds::AppSound;
+use crate::i18n::tr;
 use crate::recording::{self, ActiveRecording, StartConfig};
 
 /// `Idle -> Starting -> Recording -> Stopping -> Idle`; pause is a flag on
@@ -434,6 +435,10 @@ pub struct RecordingSession {
     /// Taken by the phase observer to honour `postStudioRecordingBehaviour`
     /// (`openEditor` by default) the way the Tauri app does.
     pub finished_studio: Option<std::path::PathBuf>,
+    /// An instant recording stopped cleanly and its share link was handed
+    /// out. Taken by the phase observer, which brings the main window back
+    /// only for the "Show Cap" Instant outcome.
+    pub finished_instant: bool,
     preparing_studio_editor: Option<PreparingStudioEditor>,
     /// `EditorRecordingTarget` (`src-tauri/src/windows.rs:3679-3697`): the
     /// open editor project a "Record a new clip" capture must land back in.
@@ -497,6 +502,7 @@ impl RecordingSession {
             controls_open: false,
             mic_muted: false,
             finished_studio: None,
+            finished_instant: false,
             preparing_studio_editor: None,
             editor_recording_target: None,
             started_at: None,
@@ -1077,8 +1083,7 @@ impl RecordingSession {
                             DiskSpaceStatus::Exhausted => {
                                 this.storage_warning = true;
                                 this.stopped_for_low_storage = true;
-                                this.storage_notice =
-                                    Some("Low storage. Stopping and saving your recording…".into());
+                                this.storage_notice = Some(tr::dialog::storage::stopping().into());
                                 this.stop(cx);
                                 false
                             }
@@ -1366,7 +1371,7 @@ impl RecordingSession {
                         tracing::info!(dir = %project_dir.display(), "recording finished");
                         stop_sound.call_once(|| AppSound::StopRecording.play());
                         if low_storage {
-                            this.storage_notice = Some("Recording stopped because storage is low. Your recording was saved.".into());
+                            this.storage_notice = Some(tr::dialog::storage::stopped_saved().into());
                         }
                         if this.mode() == Some(crate::recording::RecordingMode::Studio) && !low_storage {
                             this.finished_studio = Some(project_dir);
@@ -1378,17 +1383,18 @@ impl RecordingSession {
                                 let separator = if link.contains('?') { '&' } else { '?' };
                                 cx.open_url(&format!("{link}{separator}recordingStopped=1"));
                             }
+                            this.finished_instant = !low_storage;
                             cx.write_to_clipboard(gpui::ClipboardItem::new_string(link));
                         }
                     }
                     Ok(Err(error)) => {
                         tracing::error!("recording failed to stop cleanly: {error:#}");
-                        this.storage_notice = low_storage.then(|| "Recording stopped because storage is low. Your recording files were kept. Free up space, then recover the recording below.".into());
+                        this.storage_notice = low_storage.then(|| tr::dialog::storage::stopped_kept().into());
                         this.error = Some(format!("{error:#}"));
                     }
                     Err(join_error) => {
                         tracing::error!("recording stop task died: {join_error}");
-                        this.storage_notice = low_storage.then(|| "Recording stopped because storage is low. Your recording files were kept. Free up space, then recover the recording below.".into());
+                        this.storage_notice = low_storage.then(|| tr::dialog::storage::stopped_kept().into());
                         this.error = Some("Stop task failed.".into());
                     }
                 }
