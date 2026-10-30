@@ -562,7 +562,7 @@ fn run_camera_preview_worker(config: CameraPreviewWorkerConfig) {
                 .publisher
                 .fail("Requested camera blur is unavailable".to_string());
         }
-        let max_dims = Some(crate::camera_blur_portable::MAX_DIMS);
+        let max_dims = blur_mode.map(|_| crate::camera_blur_portable::MAX_DIMS);
         let Some((mut image, dims)) =
             camera_preview_image(&frame.inner, &mut scaler, requested_mirror, max_dims)
         else {
