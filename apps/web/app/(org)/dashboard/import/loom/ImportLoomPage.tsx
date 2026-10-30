@@ -60,6 +60,7 @@ import {
 	formatLoomCsvCell,
 	isLoomCsvResultsFile,
 	LOOM_CSV_RESULTS_HEADERS,
+	MAX_LOOM_CSV_IMPORT_ROWS,
 	parseLoomCsvRecords,
 	readLoomCsvCell,
 } from "@/lib/loom-csv";
@@ -73,6 +74,7 @@ import {
 	canManageOrganizationSettings,
 	getEffectiveOrganizationRole,
 } from "@/lib/permissions/roles";
+import { LoomAgentPromptRow } from "./LoomAgentPromptRow";
 import { LoomConciergeRow } from "./LoomConciergeRow";
 
 type Mode = "single" | "csv";
@@ -103,13 +105,19 @@ const ROOT_FOLDER_VALUE = "__cap_root_folder__";
 
 const OPTIONAL_COLUMN_VALUE = "__cap_skip_column__";
 const MAX_SPACE_NAME_LENGTH = 255;
-const MAX_LOOM_CSV_IMPORT_ROWS = 500;
 const LOOM_CSV_BATCH_SIZE = 10;
 const LOOM_CSV_BATCH_DELAY_MS = 1500;
 const LOOM_CSV_RETRY_DELAY_MS = 30000;
+const LOOM_CSV_MAX_RETRY_DELAY_MS = 240000;
+const LOOM_CSV_MAX_RETRIES = 4;
+const LOOM_CSV_BULK_PRIORITY_ROWS = 500;
+const LOOM_CONCIERGE_ANCHOR = "loom-concierge";
 const LOOM_CSV_NOT_ATTEMPTED_MESSAGE = "Not attempted.";
-const LOOM_CSV_LIMIT_MESSAGE =
-	"CSV imports are limited to 500 videos at a time. Contact support to raise this limit.";
+const LOOM_CSV_LIMIT_MESSAGE = `CSV imports are limited to ${MAX_LOOM_CSV_IMPORT_ROWS.toLocaleString("en-US")} videos at a time. ${
+	buildEnv.NEXT_PUBLIC_IS_CAP
+		? "Request a concierge migration for larger libraries."
+		: "Split the file into smaller batches."
+}`;
 const LOOM_CSV_PERMISSION_MESSAGE =
 	"Only organization admins and owners can import Loom videos from a CSV.";
 
@@ -566,6 +574,7 @@ export const ImportLoomPage = ({
 
 		const orgId = activeOrganization.organization.id;
 		const importRows = readyRows;
+		const bulk = importRows.length > LOOM_CSV_BULK_PRIORITY_ROWS;
 		importRowsRef.current = importRows;
 		let combinedResults: LoomCsvImportRowResult[] = [];
 
@@ -585,6 +594,7 @@ export const ImportLoomPage = ({
 					const importResult = await importFromLoomCsv({
 						orgId,
 						rows: batch,
+						bulk,
 					});
 
 					if (importResult.results.length === 0 && importResult.error) {
@@ -605,25 +615,36 @@ export const ImportLoomPage = ({
 					batchResults = batch.map((row) => buildRowFailure(row, message));
 				}
 
-				if (retryRows.length > 0) {
-					await delay(LOOM_CSV_RETRY_DELAY_MS);
+				for (
+					let attempt = 0;
+					retryRows.length > 0 && attempt < LOOM_CSV_MAX_RETRIES;
+					attempt += 1
+				) {
+					await delay(
+						Math.min(
+							LOOM_CSV_RETRY_DELAY_MS * 2 ** attempt,
+							LOOM_CSV_MAX_RETRY_DELAY_MS,
+						),
+					);
 
 					try {
 						const retryResult = await importFromLoomCsv({
 							orgId,
 							rows: retryRows,
+							bulk,
 						});
 
-						if (retryResult.results.length > 0) {
-							const retriedByRowNumber = new Map(
-								retryResult.results.map((row) => [row.rowNumber, row]),
-							);
-							batchResults = batchResults.map(
-								(row) => retriedByRowNumber.get(row.rowNumber) ?? row,
-							);
-						}
+						if (retryResult.results.length === 0) break;
+						const retriedByRowNumber = new Map(
+							retryResult.results.map((row) => [row.rowNumber, row]),
+						);
+						batchResults = batchResults.map(
+							(row) => retriedByRowNumber.get(row.rowNumber) ?? row,
+						);
+						retryRows = retryableBatchRows(retryRows, retryResult.results);
 					} catch {
-						// Keep the first attempt's failures for this batch.
+						// Keep the previous attempt's failures for this batch.
+						break;
 					}
 				}
 
@@ -1022,7 +1043,7 @@ export const ImportLoomPage = ({
 											/>
 										</div>
 										{selectedColumnsConflict && (
-											<p className="mt-3 text-sm text-red-10">
+											<p className="mt-3 text-sm text-red-600">
 												Choose different columns for each mapped field.
 											</p>
 										)}
@@ -1047,22 +1068,32 @@ export const ImportLoomPage = ({
 									</div>
 
 									{csvLimitExceeded && (
-										<div className="flex gap-3 items-start p-4 rounded-lg border bg-red-2 border-red-4 text-red-11">
+										<div className="flex gap-3 items-start p-4 rounded-lg border border-red-200 bg-red-50 text-red-700">
 											<FontAwesomeIcon
 												className="mt-0.5 size-4"
 												icon={faTriangleExclamation}
 											/>
 											<div className="text-sm">
 												<p className="font-medium">
-													CSV imports are limited to {MAX_LOOM_CSV_IMPORT_ROWS}{" "}
+													CSV imports are limited to{" "}
+													{MAX_LOOM_CSV_IMPORT_ROWS.toLocaleString("en-US")}{" "}
 													videos at a time.
 												</p>
-												<p className="mt-1 text-red-10">
-													Split this file into smaller batches or{" "}
-													<a className="underline" href="mailto:hello@cap.so">
-														contact support
-													</a>{" "}
-													to raise the limit.
+												<p className="mt-1 text-red-600">
+													{buildEnv.NEXT_PUBLIC_IS_CAP ? (
+														<>
+															For a library this size,{" "}
+															<a
+																className="underline"
+																href={`#${LOOM_CONCIERGE_ANCHOR}`}
+															>
+																request a concierge migration
+															</a>{" "}
+															and we'll move everything for you.
+														</>
+													) : (
+														"Split this file into smaller batches."
+													)}
 												</p>
 											</div>
 										</div>
@@ -1216,12 +1247,24 @@ export const ImportLoomPage = ({
 					</div>
 				)}
 
+				{canUseCsvImport &&
+					user.isPro &&
+					activeOrganization?.organization.id && (
+						<LoomAgentPromptRow
+							organizationId={activeOrganization.organization.id}
+							organizationName={activeOrganization.organization.name}
+							userEmail={user.email}
+						/>
+					)}
+
 				{buildEnv.NEXT_PUBLIC_IS_CAP &&
 					canUseCsvImport &&
 					activeOrganization?.organization.id && (
-						<LoomConciergeRow
-							organizationId={activeOrganization.organization.id}
-						/>
+						<div id={LOOM_CONCIERGE_ANCHOR} className="scroll-mt-6">
+							<LoomConciergeRow
+								organizationId={activeOrganization.organization.id}
+							/>
+						</div>
 					)}
 			</div>
 

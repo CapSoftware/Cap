@@ -8,11 +8,28 @@ import { registerSubprocess, terminateProcess } from "./subprocess";
 
 const MAX_DIAGNOSTIC_LENGTH = 8_192;
 
+export const DAMAGED_INPUT_MESSAGE =
+	"The recording contains damaged or unreadable media. The original upload has been preserved for recovery.";
+export const NO_VIDEO_INPUT_MESSAGE =
+	"The recording has no video. Nothing was captured before it stopped. The original upload has been preserved.";
+
+export type VideoInputCondition = "clean" | "damaged";
+
+function hasNoVideoStream(diagnostics: string) {
+	return (
+		diagnostics.includes("matches no streams") && diagnostics.includes("0:v:0")
+	);
+}
+
+function couldNotOpenInput(diagnostics: string) {
+	return diagnostics.includes("Error opening input");
+}
+
 export async function validateVideoInput(
 	inputPath: string,
 	abortSignal?: AbortSignal,
 	timeoutMs = PROCESS_TIMEOUT_MS,
-): Promise<void> {
+): Promise<VideoInputCondition> {
 	abortSignal?.throwIfAborted();
 	const proc = registerSubprocess(
 		spawn({
@@ -83,11 +100,13 @@ export async function validateVideoInput(
 				diagnostics: diagnostics.replaceAll(inputPath, "<recording input>"),
 			});
 		}
-		if (exitCode !== 0) {
-			throw new Error(
-				"The recording contains damaged or unreadable media. The original upload has been preserved for recovery.",
-			);
-		}
+		if (exitCode === 0) return "clean";
+		if (hasNoVideoStream(diagnostics)) throw new Error(NO_VIDEO_INPUT_MESSAGE);
+		if (couldNotOpenInput(diagnostics)) throw new Error(DAMAGED_INPUT_MESSAGE);
+		// Strict decoding stops at the first bad packet, so one damaged frame used to fail
+		// an hour-long recording. The caller recovers what decodes and only rejects the
+		// source when the recovered output falls short of the recording's duration.
+		return "damaged";
 	} finally {
 		abortSignal?.removeEventListener("abort", abort);
 		await terminateProcess(proc);

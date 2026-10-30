@@ -33,7 +33,6 @@ test(
 			"package.json",
 			"scripts/setup.js",
 			"scripts/linux-bundle-config.mjs",
-			"apps/desktop/src-tauri/tauri.conf.json",
 			"apps/desktop-gpui/tauri.conf.json",
 		]) {
 			const destination = path.join(fixture, file);
@@ -149,22 +148,15 @@ globalThis.fetch = (input, options) => {
 						contents,
 					);
 				}
-				for (const directory of [
-					"apps/desktop/src-tauri",
-					"apps/desktop-gpui",
-				]) {
-					const config = JSON.parse(
-						readFileSync(
-							path.join(fixture, directory, "tauri.linux.conf.json"),
-							"utf8",
-						),
-					);
-					const source = config.bundle.linux.deb.files[`/usr/lib/cap/${name}`];
-					assert.equal(
-						readFileSync(path.resolve(fixture, directory, source), "utf8"),
-						contents,
-					);
-				}
+				const gpui = path.join(fixture, "apps/desktop-gpui");
+				const config = JSON.parse(
+					readFileSync(path.join(gpui, "tauri.linux.conf.json"), "utf8"),
+				);
+				const source = config.bundle.linux.deb.files[`/usr/lib/cap/${name}`];
+				assert.equal(
+					readFileSync(path.resolve(gpui, source), "utf8"),
+					contents,
+				);
 			}
 			const cargo = readFileSync(
 				path.join(fixture, ".cargo/config.toml"),

@@ -90,3 +90,26 @@ export const resolveShareWebUrl = async (
 		return defaultWebUrl;
 	}
 };
+
+/**
+ * The session cookie belongs to the main web origin, so a share page served on
+ * a custom domain never knows who is watching. A restricted video sends the
+ * viewer to the same share page on the main origin, where their session
+ * decides access. Returns null on the main origin.
+ */
+export const resolveRestrictedShareRedirect = async (
+	headersList: Headers,
+	videoId: string,
+	searchParams: Record<string, string | string[] | undefined>,
+): Promise<string | null> => {
+	const defaultWebUrl = buildEnv.NEXT_PUBLIC_WEB_URL;
+	if ((await resolveShareWebUrl(headersList)) === defaultWebUrl) return null;
+
+	const url = new URL(`/s/${encodeURIComponent(videoId)}`, defaultWebUrl);
+	for (const [key, value] of Object.entries(searchParams)) {
+		for (const entry of Array.isArray(value) ? value : [value]) {
+			if (entry !== undefined) url.searchParams.append(key, entry);
+		}
+	}
+	return url.toString();
+};

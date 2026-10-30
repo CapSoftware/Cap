@@ -65,7 +65,7 @@ impl UpdateRow {
         let title = match status {
             UpdateStatus::Idle => tr::menu::update::check(),
             UpdateStatus::Checking => tr::menu::update::checking(),
-            UpdateStatus::Downloading { fraction: None, .. } => tr::menu::update::download(),
+            UpdateStatus::Available { .. } => tr::menu::update::download(),
             UpdateStatus::Downloading { .. } | UpdateStatus::Installing { .. } => {
                 tr::menu::update::downloading()
             }
@@ -78,10 +78,7 @@ impl UpdateRow {
             enabled: !matches!(
                 status,
                 UpdateStatus::Checking
-                    | UpdateStatus::Downloading {
-                        fraction: Some(_),
-                        ..
-                    }
+                    | UpdateStatus::Downloading { .. }
                     | UpdateStatus::Installing { .. }
             ),
             badge: update_menu_badge(status),
@@ -101,7 +98,8 @@ fn update_menu_badge(status: &updates::UpdateStatus) -> Option<String> {
             version,
             (fraction * 100.0).round() as u32,
         )),
-        UpdateStatus::Downloading { version, .. }
+        UpdateStatus::Available { version }
+        | UpdateStatus::Downloading { version, .. }
         | UpdateStatus::Ready { version }
         | UpdateStatus::Installing { version }
         | UpdateStatus::Installed { version, .. } => Some(tr::menu::update::badge_version(version)),
@@ -190,7 +188,7 @@ pub fn init(cx: &mut App) {
             files,
             directories,
             multiple: false,
-            prompt: Some("Open Recording".into()),
+            prompt: Some(tr::menu::file::open_prompt().into()),
         });
         cx.spawn(async move |cx| {
             if let Ok(Ok(Some(paths))) = paths.await
@@ -761,7 +759,7 @@ fn apply_quit_action(action: QuitAction, cx: &mut App) {
                     cx.global_mut::<QuitCoordinator>().gate.cancel_exit();
                     tracing::error!(%error, "quit canceled because editor changes could not be saved");
                     cx.spawn(async move |_| {
-                        platform::alert_dialog("Cap is still open", &error);
+                        platform::alert_dialog(tr::dialog::quit::still_open(), &error);
                     })
                     .detach();
                     return;
@@ -775,17 +773,21 @@ fn apply_quit_action(action: QuitAction, cx: &mut App) {
             cx.global_mut::<QuitCoordinator>().observer = None;
             let message = RecordingSession::global(cx).update(cx, |session, cx| {
                 let message = match session.error.as_deref() {
-                    Some(error) => format!("Quit canceled: {error}. Cap will stay open so you can finish or recover the recording."),
-                    None if action == QuitAction::TimedOut => "Quit canceled because recording shutdown is still pending. Cap will stay open. Use Stop once available, then try Quit again.".into(),
-                    None => "Quit canceled because recording shutdown could not be confirmed. Cap will stay open. Use Stop, then try Quit again.".into(),
+                    Some(error) => {
+                        tr::dialog::quit::canceled(crate::i18n::messages::localize(error))
+                    }
+                    None if action == QuitAction::TimedOut => tr::dialog::quit::pending().into(),
+                    None => tr::dialog::quit::unconfirmed().into(),
                 };
                 session.error = Some(message.clone());
                 cx.notify();
                 message
             });
             tracing::warn!(%message);
-            cx.spawn(async move |_| platform::alert_dialog("Cap is still open", &message))
-                .detach();
+            cx.spawn(async move |_| {
+                platform::alert_dialog(tr::dialog::quit::still_open(), &message)
+            })
+            .detach();
         }
     }
 }
@@ -1354,10 +1356,15 @@ mod tests {
             fraction,
         };
 
+        let available = UpdateRow::of(&UpdateStatus::Available {
+            version: version.clone(),
+        });
         let cold = UpdateRow::of(&downloading(None));
         let warm = UpdateRow::of(&downloading(Some(0.42)));
-        assert_eq!(cold.title, "Download update…");
-        assert!(cold.enabled);
+        assert_eq!(available.title, "Download update…");
+        assert!(available.enabled);
+        assert_eq!(cold.title, "Downloading update…");
+        assert!(!cold.enabled);
         assert_eq!(warm.title, "Downloading update…");
         assert!(!warm.enabled);
 
@@ -1388,6 +1395,12 @@ mod tests {
         let version = Version::parse("0.4.0").unwrap();
         let badge = |status| UpdateRow::of(&status).badge;
 
+        assert_eq!(
+            badge(UpdateStatus::Available {
+                version: version.clone(),
+            }),
+            Some("v0.4.0".to_string())
+        );
         assert_eq!(
             badge(UpdateStatus::Downloading {
                 version: version.clone(),

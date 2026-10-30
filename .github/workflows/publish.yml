@@ -25,7 +25,7 @@ jobs:
         uses: SebRollen/toml-action@v1.0.2
         id: read_version
         with:
-          file: apps/desktop/src-tauri/Cargo.toml
+          file: apps/desktop-gpui/Cargo.toml
           field: "package.version"
 
   release:
