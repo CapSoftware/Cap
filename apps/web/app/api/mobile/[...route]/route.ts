@@ -3007,7 +3007,9 @@ const createUpload = Effect.fn("Mobile.createUpload")(function* (
 	}
 	if (
 		screenshotExtension &&
-		(input.contentLength ?? 0) > MOBILE_SCREENSHOT_MAX_BYTES
+		(input.contentLength === undefined ||
+			input.contentLength <= 0 ||
+			input.contentLength > MOBILE_SCREENSHOT_MAX_BYTES)
 	) {
 		return yield* Effect.fail(new HttpApiError.BadRequest());
 	}
@@ -3866,6 +3868,31 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 								// Screenshots need no processing; the image is the Cap.
 								if (video.isScreenshot) {
 									if (!payload.rawFileKey.startsWith(`${prefix}screenshot/`)) {
+										return yield* Effect.fail(new HttpApiError.BadRequest());
+									}
+									const maybeScreenshot = yield* VideosRepo.pipe(
+										Effect.flatMap((repo) => repo.getById(path.id)),
+									);
+									if (Option.isNone(maybeScreenshot)) {
+										return yield* Effect.fail(new HttpApiError.NotFound());
+									}
+									const [bucket] = yield* Storage.pipe(
+										Effect.flatMap((storage) =>
+											storage.getAccessForVideo(maybeScreenshot.value[0]),
+										),
+									);
+									const head = yield* bucket
+										.headObject(payload.rawFileKey)
+										.pipe(Effect.catchAll(() => Effect.succeed(null)));
+									if (!head) {
+										return yield* Effect.fail(new HttpApiError.BadRequest());
+									}
+									// A presigned PUT can't cap the body size, so the limit is
+									// enforced here on what actually landed.
+									if ((head.ContentLength ?? 0) > MOBILE_SCREENSHOT_MAX_BYTES) {
+										yield* videos
+											.delete(path.id)
+											.pipe(Effect.catchAll(() => Effect.void));
 										return yield* Effect.fail(new HttpApiError.BadRequest());
 									}
 									yield* Effect.sync(() => revalidatePath("/dashboard/caps"));
