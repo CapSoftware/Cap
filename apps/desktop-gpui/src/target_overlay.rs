@@ -1599,7 +1599,9 @@ impl OverlayWindow {
         };
         if self.backdrop_capturing
             || (!moved_since
-                && self.backdrop_at.is_some_and(|at| at.elapsed() < stale_after))
+                && self
+                    .backdrop_at
+                    .is_some_and(|at| at.elapsed() < stale_after))
         {
             return;
         }
