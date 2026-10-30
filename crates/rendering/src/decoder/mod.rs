@@ -1460,6 +1460,7 @@ pub fn spawn_managed_decoder<'a>(
     offset: f64,
     use_hw_acceleration: bool,
 ) -> Result<ManagedVideoDecoder, ManagedVideoError> {
+    let use_hw_acceleration = use_hw_acceleration && !crate::software_video_codecs_requested();
     let input = ManagedVideoInput {
         source,
         paths: paths
@@ -1558,14 +1559,24 @@ pub async fn spawn_decoder(
 
     #[cfg(target_os = "macos")]
     {
-        if force_ffmpeg || path.is_dir() {
+        let software_codecs = crate::software_video_codecs_requested();
+        if force_ffmpeg || path.is_dir() || software_codecs {
             info!(
                 force_ffmpeg,
                 segmented = path.is_dir(),
+                software_codecs,
                 "Video '{}' using FFmpeg decoder",
                 name
             );
-            return spawn_ffmpeg_decoder(name, path, fps, offset, timeout_duration, true).await;
+            return spawn_ffmpeg_decoder(
+                name,
+                path,
+                fps,
+                offset,
+                timeout_duration,
+                !software_codecs,
+            )
+            .await;
         }
 
         let avasset_result = {

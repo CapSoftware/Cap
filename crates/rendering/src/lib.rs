@@ -305,6 +305,21 @@ pub fn force_software_wgpu_adapter() -> bool {
         })
 }
 
+/// `CAP_MACOS_SOFTWARE_CODECS=1` forces video decode and encode onto software
+/// codecs on macOS. VideoToolbox schedules hardware H.264/HEVC work on the
+/// integrated GPU on dual-GPU Macs, even when the renderer is on the discrete
+/// GPU. Software codecs keep the integrated GPU idle at the cost of CPU time.
+/// This only changes codec choice; the renderer keeps its own GPU selection.
+pub fn software_video_codecs_requested() -> bool {
+    cfg!(target_os = "macos")
+        && std::env::var("CAP_MACOS_SOFTWARE_CODECS").is_ok_and(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+}
+
 pub fn create_wgpu_instance_sync() -> wgpu::Instance {
     #[cfg(not(target_os = "windows"))]
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
