@@ -1095,11 +1095,15 @@ test.describe("extension recording upload", () => {
 		await capturePage.waitForTimeout(3_000);
 		const phase = await readPhase();
 		if (result.ok) {
-			expect(phase).toBe("recording");
-			await sendServiceWorkerMessage(messengerPage, {
-				target: "service-worker",
-				type: "stop-recording",
-			});
+			// A start that beat the cancel is real, and the cancel's stop may
+			// already have ended it.
+			expect(["recording", "uploading", "completed"]).toContain(phase);
+			if (phase === "recording") {
+				await sendServiceWorkerMessage(messengerPage, {
+					target: "service-worker",
+					type: "stop-recording",
+				});
+			}
 		} else {
 			expect(result).toMatchObject({ canceled: true });
 			expect(phase).toBe("idle");
