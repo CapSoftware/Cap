@@ -730,11 +730,18 @@ impl Capturer {
 
                         // A frame queued before the pool was recreated: its
                         // surface is the old size, and the next frame is not.
-                        if follow_item_size
-                            && (surface_desc.Width, surface_desc.Height)
-                                != (content_width, content_height)
-                        {
-                            return Ok(());
+                        if follow_item_size {
+                            let (expected_width, expected_height) = {
+                                let size = pool_size
+                                    .lock()
+                                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                                (size.0.max(0) as u32, size.1.max(0) as u32)
+                            };
+                            if (surface_desc.Width, surface_desc.Height)
+                                != (expected_width, expected_height)
+                            {
+                                return Ok(());
+                            }
                         }
 
                         let frame = if let Some((cropped_texture, crop)) = crop_data.clone() {
