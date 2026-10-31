@@ -55,6 +55,10 @@ export const TrimmingTool = () => {
 	const videoPreviewRef = useRef<HTMLVideoElement>(null);
 	const outputVideoRef = useRef<HTMLVideoElement | null>(null);
 	const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+	const previewAudioRef = useRef<{
+		video: HTMLVideoElement;
+		destination: MediaStreamAudioDestinationNode;
+	} | null>(null);
 	const recordedChunksRef = useRef<Blob[]>([]);
 
 	const isVideoFile = (file: File): boolean => {
@@ -415,16 +419,24 @@ export const TrimmingTool = () => {
 							Boolean((video as any).webkitAudioDecodedByteCount) ||
 							Boolean((video as any).audioTracks?.length)
 						) {
-							const audioContext = new (
-								window.AudioContext || (window as any).webkitAudioContext
-							)();
-							const source = audioContext.createMediaElementSource(video);
-							const destination = audioContext.createMediaStreamDestination();
+							// A media element can only ever feed one MediaElementAudioSourceNode,
+							// so later trims of the preview reuse the first one.
+							let previewAudio = previewAudioRef.current;
+							if (previewAudio?.video !== video) {
+								const audioContext = new (
+									window.AudioContext || (window as any).webkitAudioContext
+								)();
+								const source = audioContext.createMediaElementSource(video);
+								const destination = audioContext.createMediaStreamDestination();
 
-							source.connect(destination);
-							source.connect(audioContext.destination);
+								source.connect(destination);
+								source.connect(audioContext.destination);
+								previewAudio = { video, destination };
+								previewAudioRef.current = previewAudio;
+							}
 
-							const audioTracks = destination.stream.getAudioTracks();
+							const audioTracks =
+								previewAudio.destination.stream.getAudioTracks();
 
 							if (audioTracks.length > 0) {
 								audioTracks.forEach((track) => {

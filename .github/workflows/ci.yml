@@ -140,6 +140,7 @@ jobs:
           __tests__/unit/toggle-pro-seat.test.ts
           __tests__/unit/transcript-hours.test.ts
           __tests__/unit/transcript-numbers.test.ts
+          __tests__/unit/trimming-tool-audio.test.ts
           __tests__/unit/video-analytics-access.test.ts
           __tests__/unit/video-analytics-bulk.test.ts
           __tests__/unit/video-create-atomicity.test.ts
