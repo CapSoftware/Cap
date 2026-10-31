@@ -6,12 +6,12 @@ use std::{
     sync::{Mutex, MutexGuard},
 };
 
-use cap_recording::screen_capture::{X11Grabber, X11InputConfig};
+use cap_recording::screen_capture::{X11_SHM_PUBLISH_SLOTS, X11Grabber, X11InputConfig};
 use x11rb::{
     connection::Connection,
     protocol::xproto::{
-        ConfigureWindowAux, ConnectionExt, CreateGCAux, CreateWindowAux, ImageFormat, Window,
-        WindowClass,
+        ConfigureWindowAux, ConnectionExt, CreateGCAux, CreateWindowAux, ImageFormat, Rectangle,
+        Window, WindowClass,
     },
     rust_connection::RustConnection,
     wrapper::ConnectionExt as _,
@@ -171,6 +171,33 @@ fn expected_bgr(x: u32, y: u32, width: u32, height: u32) -> Vec<u8> {
     out
 }
 
+fn page_aligned(ptr: *const u8) -> bool {
+    (ptr as usize).is_multiple_of(4096)
+}
+
+fn fill_rect(conn: &RustConnection, drawable: u32, width: u16, height: u16, pixel: u32) {
+    let gc = conn.generate_id().unwrap();
+    conn.create_gc(gc, drawable, &CreateGCAux::new().foreground(pixel))
+        .unwrap()
+        .check()
+        .unwrap();
+    conn.poly_fill_rectangle(
+        drawable,
+        gc,
+        &[Rectangle {
+            x: 0,
+            y: 0,
+            width,
+            height,
+        }],
+    )
+    .unwrap()
+    .check()
+    .unwrap();
+    conn.free_gc(gc).unwrap().check().unwrap();
+    conn.sync().unwrap();
+}
+
 fn shm_segments_owned_by_this_process() -> usize {
     let pid = std::process::id().to_string();
     std::fs::read_to_string("/proc/sysvipc/shm")
@@ -201,6 +228,142 @@ fn shm_and_get_image_capture_identical_pixels() {
     assert_eq!(shm_frame, expected_bgr(0, 0, 1280, 720));
     assert_eq!(shm_frame, get_image_frame);
     assert!(shm.uses_shm());
+    assert!(page_aligned(shm_frame_ptr(&mut shm)));
+}
+
+fn shm_frame_ptr(grabber: &mut X11Grabber) -> *const u8 {
+    grabber.grab().unwrap().data(0).as_ptr()
+}
+
+#[test]
+fn shm_publish_keeps_pixels_until_the_frame_is_dropped() {
+    let _guard = serial();
+    let Some(server) = Xvfb::start(640, 480, &["-nolisten", "tcp"]) else {
+        return;
+    };
+    let (conn, root) = connect(&server.display());
+    draw_pattern(&conn, root, 640, 480);
+    let baseline = shm_segments_owned_by_this_process();
+
+    let mut shm = grabber(&config(&server.display(), 0, 0, 640, 480), true);
+    assert!(shm.uses_shm());
+    let first = shm.grab().unwrap();
+    let first_ptr = first.data(0).as_ptr();
+    let first_pixels = bgr_rows(&first);
+    assert!(page_aligned(first_ptr));
+    assert_eq!(first_pixels, expected_bgr(0, 0, 640, 480));
+    assert!(
+        shm.publish_idle_shm_frame().is_err(),
+        "the published frame still owns the mapping"
+    );
+
+    fill_rect(&conn, root, 640, 480, 0x0000_ff00);
+    let second = shm.grab().unwrap();
+    assert_ne!(second.data(0).as_ptr(), first_ptr);
+    assert!(page_aligned(second.data(0).as_ptr()));
+    assert_eq!(bgr_rows(&first), first_pixels);
+    assert_ne!(bgr_rows(&second), first_pixels);
+
+    let second_ptr = second.data(0).as_ptr();
+    let second_pixels = bgr_rows(&second);
+    drop(second);
+    let republished = shm.publish_idle_shm_frame().unwrap();
+    assert_eq!(republished.data(0).as_ptr(), second_ptr);
+    assert_eq!(bgr_rows(&republished), second_pixels);
+    drop(republished);
+
+    drop(first);
+    let reused = shm.grab().unwrap();
+    assert_eq!(reused.data(0).as_ptr(), first_ptr);
+    drop(reused);
+    drop(shm);
+    assert_eq!(shm_segments_owned_by_this_process(), baseline);
+}
+
+#[test]
+fn shm_frame_outlives_the_grabber() {
+    let _guard = serial();
+    let Some(server) = Xvfb::start(320, 240, &["-nolisten", "tcp"]) else {
+        return;
+    };
+    let (conn, root) = connect(&server.display());
+    draw_pattern(&conn, root, 320, 240);
+    let baseline = shm_segments_owned_by_this_process();
+
+    let frame = {
+        let mut shm = grabber(&config(&server.display(), 0, 0, 320, 240), true);
+        let frame = shm.grab().unwrap();
+        assert_eq!(shm_segments_owned_by_this_process(), baseline + 1);
+        frame
+    };
+    assert_eq!(shm_segments_owned_by_this_process(), baseline + 1);
+    assert_eq!(bgr_rows(&frame), expected_bgr(0, 0, 320, 240));
+    assert!(page_aligned(frame.data(0).as_ptr()));
+    drop(frame);
+    assert_eq!(shm_segments_owned_by_this_process(), baseline);
+}
+
+#[test]
+fn busy_shm_slots_fall_back_to_a_private_copy() {
+    let _guard = serial();
+    let Some(server) = Xvfb::start(160, 120, &["-nolisten", "tcp"]) else {
+        return;
+    };
+    let (conn, root) = connect(&server.display());
+    let baseline = shm_segments_owned_by_this_process();
+    let config = config(&server.display(), 0, 0, 160, 120);
+    let mut shm = grabber(&config, true);
+    let mut frames = Vec::new();
+    let mut pixels = Vec::new();
+    for index in 0..X11_SHM_PUBLISH_SLOTS {
+        let pixel = 0x0010_1000 * (index as u32 + 1);
+        fill_rect(&conn, root, 160, 120, pixel);
+        let frame = shm.grab().unwrap();
+        assert!(page_aligned(frame.data(0).as_ptr()));
+        pixels.push(bgr_rows(&frame));
+        frames.push(frame);
+    }
+    assert_eq!(
+        shm_segments_owned_by_this_process(),
+        baseline + X11_SHM_PUBLISH_SLOTS
+    );
+
+    fill_rect(&conn, root, 160, 120, 0x00aa_00bb);
+    let copied = shm.grab().unwrap();
+    assert_eq!(
+        shm_segments_owned_by_this_process(),
+        baseline + X11_SHM_PUBLISH_SLOTS + 1
+    );
+    for (frame, expected) in frames.iter().zip(&pixels) {
+        assert_eq!(&bgr_rows(frame), expected);
+    }
+    let mut copied_grabber = grabber(&config, true);
+    copied_grabber.force_shm_row_copy(true);
+    assert_eq!(bgr_rows(&copied), bgr_rows(&copied_grabber.grab().unwrap()));
+}
+
+#[test]
+fn scaled_shm_publish_matches_the_row_copy() {
+    let _guard = serial();
+    let Some(server) = Xvfb::start(320, 240, &["-nolisten", "tcp"]) else {
+        return;
+    };
+    let (conn, root) = connect(&server.display());
+    draw_pattern(&conn, root, 320, 240);
+    let config = config(&server.display(), 0, 0, 320, 240);
+    let mut published = grabber(&config, true);
+    let mut copied = grabber(&config, true);
+    copied.force_shm_row_copy(true);
+    published.set_output_size(160, 120);
+    copied.set_output_size(160, 120);
+
+    let published_frame = published.grab().unwrap();
+    let copied_frame = copied.grab().unwrap();
+    assert_eq!(
+        (published_frame.width(), published_frame.height()),
+        (160, 120)
+    );
+    assert_eq!(bgr_rows(&published_frame), bgr_rows(&copied_frame));
 }
 
 #[test]
