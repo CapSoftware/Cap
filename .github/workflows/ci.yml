@@ -131,6 +131,7 @@ jobs:
           __tests__/unit/signed-baa-card.test.ts
           __tests__/unit/space-folder-page-access.test.ts
           __tests__/unit/space-page-round-trips.test.ts
+          __tests__/unit/speed-controller-metadata.test.ts
           __tests__/unit/speed-controller-playback-failure.test.ts
           __tests__/unit/speed-controller.test.ts
           __tests__/unit/summary-chapters.test.ts
