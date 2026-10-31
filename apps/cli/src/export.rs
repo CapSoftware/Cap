@@ -783,8 +783,8 @@ fn copy_instant_output(source_path: &Path, output_path: PathBuf) -> Result<PathB
     }
 
     if output_path.exists()
-        && let (Ok(source), Ok(output)) = (source_path.canonicalize(), output_path.canonicalize())
-        && source == output
+        && crate::file_identity::is_same_file(source_path, &output_path)
+            .map_err(|e| format!("Failed to compare source and destination: {e}"))?
     {
         return Ok(output_path);
     }
@@ -1033,6 +1033,30 @@ mod tests {
         .save_for_project()
         .unwrap();
         project
+    }
+
+    #[tokio::test]
+    async fn instant_export_preserves_a_hard_link_to_the_recording() {
+        let project = playable_instant_project();
+        let source = project.path().join("content/output.mp4");
+        let before = std::fs::read(&source).unwrap();
+        let destination = project.path().join("export.mp4");
+        std::fs::hard_link(&source, &destination).unwrap();
+
+        Export::export_project(
+            project.path(),
+            Some(destination.clone()),
+            settings_from_flags(&ExportFlags::default()).unwrap(),
+            false,
+            false,
+            false,
+            &Arc::new(Mutex::new(stdout())),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(std::fs::read(&source).unwrap(), before);
+        assert_eq!(std::fs::read(&destination).unwrap(), before);
     }
 
     #[tokio::test]

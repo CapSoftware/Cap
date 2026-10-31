@@ -11,6 +11,7 @@ mod credentials;
 mod developers;
 mod doctor;
 mod export;
+mod file_identity;
 mod guide;
 mod jobs;
 mod library;
