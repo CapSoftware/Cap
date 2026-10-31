@@ -7,7 +7,7 @@ use gpui::{
     SharedString, StatefulInteractiveElement, Styled, div, prelude::FluentBuilder, px, svg,
 };
 
-use crate::{editor_window::EditorWindow, theme::Theme, ui};
+use crate::{editor_window::EditorWindow, i18n::tr, theme::Theme, ui};
 
 pub const AUDIO_LIBRARY: &[(&str, &str)] = &[
     ("lofi-beats-mirostar", "Lofi Beats"),
@@ -131,10 +131,7 @@ fn bundled_track_path_from(
         .iter()
         .map(|directory| directory.join("assets/music").join(&file))
         .collect::<Vec<_>>();
-    candidates.extend([
-        manifest.join("../desktop/src/assets/music").join(&file),
-        manifest.join("assets/music").join(&file),
-    ]);
+    candidates.push(manifest.join("assets/music").join(&file));
     candidates.into_iter().find(|path| path.is_file())
 }
 
@@ -189,7 +186,7 @@ impl EditorWindow {
                         ui::EditorButton::plain(&theme, "audio-library-close")
                             .left_icon("icons/check.svg")
                             .icon_size(px(16.))
-                            .label("Done")
+                            .label(tr::editor::audio::library::done())
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.audio_picker = None;
                                 cx.notify();
@@ -200,9 +197,9 @@ impl EditorWindow {
                             .text_size(px(14.))
                             .text_color(Hsla::from(theme.gray_10))
                             .child(if is_replace {
-                                "Change audio"
+                                tr::editor::audio::library::change_title()
                             } else {
-                                "Add audio"
+                                tr::editor::audio::library::add_title()
                             }),
                     ),
             )
@@ -211,15 +208,15 @@ impl EditorWindow {
                     .text_size(px(12.))
                     .text_color(Hsla::from(theme.gray_10))
                     .child(if is_replace {
-                        "Pick a different track for this segment"
+                        tr::editor::audio::library::change_hint()
                     } else {
-                        "Add audio, music or other sounds to your video"
+                        tr::editor::audio::library::add_hint()
                     }),
             )
             .child(
                 ui::EditorButton::plain(&theme, "audio-library-import")
                     .left_icon("icons/import.svg")
-                    .label("Import file")
+                    .label(tr::editor::audio::library::import())
                     .disabled(importing)
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.import_audio_from_picker(window, cx);

@@ -541,6 +541,34 @@ describe("importFromLoom", () => {
 		});
 	});
 
+	it("marks Loom throttling as a retryable download failure", async () => {
+		vi.mocked(fetch).mockImplementation(async (input) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url.includes("/transcoded-url") || url.includes("/raw-url")) {
+				return {
+					ok: false,
+					status: 429,
+					headers: new Headers({ "retry-after": "90" }),
+					body: null,
+				} as Response;
+			}
+			throw new Error(`Unexpected fetch: ${url}`);
+		});
+
+		const { downloadLoomVideo } = await import("@/actions/loom");
+
+		const result = await downloadLoomVideo(
+			"https://www.loom.com/share/loom-abc1234567",
+		);
+
+		expect(result).toEqual({
+			success: false,
+			error: "Loom is temporarily unavailable. Please retry the import later.",
+			errorCode: "loom_temporarily_unavailable",
+			retryAfterMs: 90_000,
+		});
+	});
+
 	it("returns streaming Loom URLs for browser conversion instead of proxying", async () => {
 		const fetchMock = vi.mocked(fetch);
 		fetchMock.mockImplementation(async (input) => {

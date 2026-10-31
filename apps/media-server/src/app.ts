@@ -3,6 +3,7 @@ import { logger } from "hono/logger";
 import { beginRequest } from "./lib/lifecycle";
 import audio from "./routes/audio";
 import health from "./routes/health";
+import liveTranscribe from "./routes/live-transcribe";
 import video from "./routes/video";
 
 const app = new Hono();
@@ -21,6 +22,7 @@ app.use("*", async (c, next) => {
 app.route("/health", health);
 app.route("/audio", audio);
 app.route("/video", video);
+app.route("/live-transcribe", liveTranscribe);
 
 app.get("/", (c) => {
 	return c.json({
@@ -42,6 +44,8 @@ app.get("/", (c) => {
 			"/video/process/:jobId/cancel",
 			"/video/cleanup",
 			"/video/force-cleanup",
+			"/live-transcribe/status",
+			"/live-transcribe/sessions",
 		],
 	});
 });

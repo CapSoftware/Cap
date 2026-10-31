@@ -36,6 +36,7 @@ pub struct ControlsWindow {
     _tick: gpui::Task<()>,
     ticking_live: bool,
     level_bar: Entity<ui::MicrophoneLevel>,
+    issue_room: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -63,6 +64,7 @@ impl ControlsWindow {
         crate::theme::bind_window(window, cx);
         let theme = Theme::for_window(window, cx, false);
         cx.observe_in(&session, window, |this, _, window, cx| {
+            this.fit_to_issue(window, cx);
             let live = this.timer_is_live(cx);
             if live != this.ticking_live {
                 this.ticking_live = live;
@@ -90,10 +92,38 @@ impl ControlsWindow {
             _tick: gpui::Task::ready(()),
             ticking_live: false,
             level_bar,
+            issue_room: false,
         };
         this.ticking_live = this.timer_is_live(cx);
         this._tick = Self::spawn_tick(window, cx);
+        // Once the platform window is finished: an issue may already be up.
+        cx.defer_in(window, |this, window, cx| this.fit_to_issue(window, cx));
         this
+    }
+
+    fn issue(&self, cx: &gpui::App) -> Option<String> {
+        let session = self.session.read(cx);
+        session.error.clone().or_else(|| {
+            session
+                .storage_warning
+                .then(|| tr::controls::low_storage().to_owned())
+        })
+    }
+
+    fn fit_to_issue(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let issue = self.issue(cx).is_some();
+        if issue == self.issue_room {
+            return;
+        }
+        self.issue_room = issue;
+        let Some(native) = crate::platform::native_window(window) else {
+            return;
+        };
+        let scale = window.scale_factor();
+        cx.spawn(async move |_, _| {
+            crate::app_windows::fit_controls_to_issue(&native, issue, scale);
+        })
+        .detach();
     }
 
     fn timer_is_live(&self, cx: &gpui::App) -> bool {
@@ -130,10 +160,10 @@ impl ControlsWindow {
         })
     }
 
-    /// `formatTime`: `M:SS`, hours folded into minutes the same way.
+    /// `formatTime`, through the editor clock's formatter, so a recording past
+    /// an hour reads `H:MM:SS` where the source folds the hours into minutes.
     fn format_elapsed(elapsed: Duration) -> String {
-        let total = elapsed.as_secs();
-        format!("{}:{:02}", total / 60, total % 60)
+        crate::editor_timeline::format_time(elapsed.as_secs_f64())
     }
 
     fn action_button(
@@ -511,12 +541,7 @@ impl ControlsWindow {
 impl Render for ControlsWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.theme.refresh(window, cx, false);
-        let session = self.session.read(cx);
-        let issue = session.error.clone().or_else(|| {
-            session
-                .storage_warning
-                .then(|| tr::controls::low_storage().to_owned())
-        });
+        let issue = self.issue(cx);
 
         div()
             .size_full()
@@ -573,7 +598,7 @@ fn recording_issue_text(error: String) -> impl IntoElement + Styled {
             {
                 tr::controls::disk_full_resume().to_owned()
             } else {
-                error
+                crate::i18n::messages::localize(&error)
             },
         )
 }
@@ -607,6 +632,16 @@ mod repaint_tests {
             Duration::from_millis(20)
         );
         assert_eq!(until_next_second(Duration::ZERO), Duration::from_secs(1));
+    }
+
+    #[test]
+    fn the_timer_shows_hours_from_an_hour_on() {
+        let label = |seconds| ControlsWindow::format_elapsed(Duration::from_secs_f64(seconds));
+        assert_eq!(label(0.), "0:00");
+        assert_eq!(label(95.7), "1:35");
+        assert_eq!(label(3_599.9), "59:59");
+        assert_eq!(label(3_600.), "1:00:00");
+        assert_eq!(label(3_905.), "1:05:05");
     }
 
     #[test]

@@ -5,20 +5,23 @@ export type AiGenerationEntitlementUser = {
 	thirdPartyStripeSubscriptionId?: string | null;
 };
 
+// Mirrors userIsPro in @cap/utils: past_due keeps entitlement during
+// Stripe's dunning window.
+export const AI_ENTITLED_SUBSCRIPTION_STATUSES = [
+	"active",
+	"trialing",
+	"complete",
+	"paid",
+	"past_due",
+];
+
 export const isAiGenerationEnabledForUser = (
 	user?: AiGenerationEntitlementUser | null,
 ) => {
 	if (!buildEnv.NEXT_PUBLIC_IS_CAP) return true;
 	if (!user) return false;
 	if (user.thirdPartyStripeSubscriptionId) return true;
-
-	// Mirrors userIsPro in @cap/utils: past_due keeps entitlement during
-	// Stripe's dunning window.
-	return (
-		user.stripeSubscriptionStatus === "active" ||
-		user.stripeSubscriptionStatus === "trialing" ||
-		user.stripeSubscriptionStatus === "complete" ||
-		user.stripeSubscriptionStatus === "paid" ||
-		user.stripeSubscriptionStatus === "past_due"
+	return AI_ENTITLED_SUBSCRIPTION_STATUSES.includes(
+		user.stripeSubscriptionStatus ?? "",
 	);
 };

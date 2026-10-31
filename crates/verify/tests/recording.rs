@@ -52,7 +52,7 @@ use cap_verify::{
         SENTINEL_FILE, SentinelLog, StimulusEvent, StimulusProcess, StimulusSpec, host_add_secs,
         host_now, host_secs,
     },
-    video_code::{self, FrameMarker, Readout, StreamKind},
+    video_code::{self, FrameMarker, PixelSource as _, Readout, StreamKind},
 };
 
 use platform::{Shareable, host_timestamp};
@@ -136,6 +136,18 @@ mod platform {
         use cpal::traits::HostTrait;
         cpal::default_host().default_output_device().is_some()
     }
+
+    /// What Cap's manifest declares: window bounds are read in physical
+    /// pixels only by a per-monitor DPI aware process, and a window target
+    /// has none otherwise.
+    pub fn declare_dpi_awareness() {
+        const PROCESS_PER_MONITOR_DPI_AWARE: i32 = 2;
+        #[link(name = "shcore")]
+        unsafe extern "system" {
+            fn SetProcessDpiAwareness(value: i32) -> i32;
+        }
+        unsafe { SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE) };
+    }
 }
 
 static ATTEMPT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -198,10 +210,30 @@ struct Spec {
     mic_delay: f64,
     mic: bool,
     system_audio: bool,
+    /// Focus: record the stimulus window by itself (window-only capture)
+    /// with a magenta window in front of it, which must stay out.
+    focus: bool,
 }
 
 fn specs() -> Vec<Spec> {
     let mut specs = vec![
+        Spec {
+            id: "recording/studio-window/focus",
+            tier: Tier::Fast,
+            mode: Mode::Studio {
+                fragmented: true,
+                camera: false,
+            },
+            seconds: 6.0,
+            stimulus_fps: 20.0,
+            holds: vec![],
+            camera_drops_at: vec![],
+            gated: false,
+            mic_delay: 0.0,
+            mic: true,
+            system_audio: false,
+            focus: true,
+        },
         Spec {
             id: "recording/studio-screen/fragmented",
             tier: Tier::Fast,
@@ -217,6 +249,7 @@ fn specs() -> Vec<Spec> {
             mic_delay: 0.0,
             mic: true,
             system_audio: true,
+            focus: false,
         },
         Spec {
             id: "recording/studio-camera/startup-drops",
@@ -233,6 +266,7 @@ fn specs() -> Vec<Spec> {
             mic_delay: 0.0,
             mic: true,
             system_audio: true,
+            focus: false,
         },
         Spec {
             id: "recording/instant/screen-mic-system",
@@ -246,6 +280,7 @@ fn specs() -> Vec<Spec> {
             mic_delay: 0.0,
             mic: true,
             system_audio: true,
+            focus: false,
         },
         Spec {
             id: "recording/studio-screen/gated",
@@ -262,6 +297,7 @@ fn specs() -> Vec<Spec> {
             mic_delay: 0.0,
             mic: true,
             system_audio: true,
+            focus: false,
         },
         Spec {
             id: "recording/instant/gated",
@@ -275,6 +311,7 @@ fn specs() -> Vec<Spec> {
             mic_delay: 0.0,
             mic: true,
             system_audio: true,
+            focus: false,
         },
         Spec {
             id: "recording/instant/late-mic",
@@ -288,6 +325,7 @@ fn specs() -> Vec<Spec> {
             mic_delay: 1.0,
             mic: true,
             system_audio: false,
+            focus: false,
         },
         Spec {
             id: "recording/instant/system-only",
@@ -301,6 +339,7 @@ fn specs() -> Vec<Spec> {
             mic_delay: 0.0,
             mic: false,
             system_audio: true,
+            focus: false,
         },
         Spec {
             id: "recording/studio-screen/late-mic",
@@ -317,6 +356,7 @@ fn specs() -> Vec<Spec> {
             mic_delay: 0.3,
             mic: true,
             system_audio: true,
+            focus: false,
         },
         Spec {
             id: "recording/studio-recovery/crash",
@@ -330,6 +370,7 @@ fn specs() -> Vec<Spec> {
             mic_delay: 0.0,
             mic: true,
             system_audio: true,
+            focus: false,
         },
         Spec {
             id: "recording/studio-screen/mp4-holds",
@@ -346,6 +387,7 @@ fn specs() -> Vec<Spec> {
             mic_delay: 0.0,
             mic: true,
             system_audio: true,
+            focus: false,
         },
         Spec {
             id: "recording/studio-camera/long",
@@ -362,6 +404,7 @@ fn specs() -> Vec<Spec> {
             mic_delay: 0.0,
             mic: true,
             system_audio: true,
+            focus: false,
         },
         Spec {
             id: "recording/instant/long-holds",
@@ -375,6 +418,7 @@ fn specs() -> Vec<Spec> {
             mic_delay: 0.0,
             mic: true,
             system_audio: true,
+            focus: false,
         },
     ];
     specs.extend(soak_specs());
@@ -420,6 +464,7 @@ fn soak_specs() -> Vec<Spec> {
             mic_delay: 0.0,
             mic: true,
             system_audio: true,
+            focus: false,
         },
         Spec {
             id: "recording/soak/instant",
@@ -433,6 +478,7 @@ fn soak_specs() -> Vec<Spec> {
             mic_delay: 0.0,
             mic: true,
             system_audio: true,
+            focus: false,
         },
     ]
 }
@@ -503,6 +549,8 @@ fn runtime() -> tokio::runtime::Runtime {
 }
 
 fn init() {
+    #[cfg(windows)]
+    platform::declare_dpi_awareness();
     media::init();
     if std::env::var_os("RUST_LOG").is_some() {
         let _ = tracing_subscriber::fmt()
@@ -558,6 +606,7 @@ fn real_capture() {
             mic_delay: 0.0,
             mic: true,
             system_audio: true,
+            focus: false,
         };
         let mut case = Case::new(warmup.id);
         let started = std::time::Instant::now();
@@ -1300,6 +1349,8 @@ struct Recorded {
     /// Recovery after a crash may lose at most this many seconds before the
     /// crash (the in-flight fragment).
     loss_budget: Option<f64>,
+    /// A Focus case: the screen track must be the stimulus window alone.
+    focus: bool,
 }
 
 async fn run_case(
@@ -2180,6 +2231,12 @@ async fn record(
     reference: u64,
     case: &mut Case,
 ) -> anyhow::Result<Recorded> {
+    // Focus records one window, whatever the host's default capture is.
+    let capture = if spec.focus {
+        CaptureMode::Window
+    } else {
+        capture
+    };
     let system_output = platform::system_audio_output();
     if spec.system_audio && require_system_audio() && !system_output {
         case.problem(
@@ -2203,6 +2260,9 @@ async fn record(
             CaptureMode::Display => None,
             CaptureMode::Window => Some((80, 120, 640, 400)),
         },
+        // Over the stimulus window's lower right, where a region capture
+        // would record it.
+        occluder: spec.focus.then_some((480, 320, 360, 260)),
     };
     let mut stimulus = tokio::task::block_in_place(|| {
         StimulusProcess::spawn(
@@ -2212,7 +2272,16 @@ async fn record(
         )
     })?;
     tokio::task::block_in_place(|| stimulus.wait_for("ready", Duration::from_secs(30)))?;
-    let (target, excluded, shareable) = capture_setup(capture).await?;
+    let (target, mut excluded, shareable) = capture_setup(capture).await?;
+    if spec.focus {
+        // Left in the picture on purpose: the window-only capture itself must
+        // keep it out, not the exclusion list a region capture relies on.
+        if let Some(occluder) = find_window(cap_verify::stimulus::OCCLUDER_TITLE) {
+            excluded.retain(|id| *id != occluder);
+        } else {
+            case.problem("missing", "focus: the occluder window never appeared");
+        }
+    }
 
     let camera = matches!(spec.mode, Mode::Studio { camera: true, .. });
     let feeds = start_feeds(
@@ -2250,7 +2319,11 @@ async fn record(
                 camera,
                 system_audio,
             );
-            let mut builder = builder;
+            // `CAP_VERIFY_FOCUS_OFF=1` records a Focus case as a region
+            // instead, which the Focus checks must catch: the control that
+            // shows they can fail.
+            let mut builder =
+                builder.with_window_only(spec.focus && !env_flag("CAP_VERIFY_FOCUS_OFF"));
             if spec.mic {
                 builder = builder.with_mic_feed(mic_lock.clone());
             }
@@ -2414,6 +2487,7 @@ async fn record(
         sources,
         sentinel,
         loss_budget,
+        focus: spec.focus,
     })
 }
 
@@ -3126,6 +3200,105 @@ impl VideoCheck<'_> {
 /// recorded picture is the first one presented, 9 to 69 ms after the start.
 const START_COVERAGE_SECS: f64 = 0.3;
 
+/// A Focus recording's screen track is the stimulus window and nothing else:
+/// no magenta from the occluder in front of it (the screen key is blue, the
+/// noise grey, so strong positive Cr is the occluder alone), no black column
+/// or row along an edge (the window drawn smaller than its frame), and the
+/// window's own size, less the rounded corners macOS trims off.
+fn check_focus(case: &mut Case, track: &Track, stimulus: &[StimulusEvent]) -> anyhow::Result<()> {
+    let Some((width, height, scale)) = stimulus.iter().find_map(|event| match event {
+        StimulusEvent::Ready {
+            width,
+            height,
+            scale,
+            ..
+        } => Some((*width, *height, *scale)),
+        _ => None,
+    }) else {
+        case.problem("missing", "focus: the stimulus never reported its size");
+        return Ok(());
+    };
+    #[cfg(target_os = "macos")]
+    let trim =
+        2 * (cap_recording::sources::screen_capture::WINDOW_CORNER_TRIM * scale).round() as u32;
+    #[cfg(not(target_os = "macos"))]
+    let trim = {
+        let _ = scale;
+        0
+    };
+    let expected = (width.saturating_sub(trim), height.saturating_sub(trim));
+
+    let mut frames = 0usize;
+    let mut sizes = BTreeMap::new();
+    let mut leaks = Vec::new();
+    let mut edges = Vec::new();
+    media::decode_video(&track.path, |picture| {
+        let view = picture.view();
+        let (w, h) = (view.width(), view.height());
+        *sizes.entry((w, h)).or_insert(0usize) += 1;
+        frames += 1;
+        let mut magenta = 0usize;
+        for y in (0..h).step_by(2) {
+            for x in (0..w).step_by(2) {
+                let (cb, cr) = view.chroma(x, y);
+                if cr > 60.0 && cb > 30.0 {
+                    magenta += 1;
+                }
+            }
+        }
+        if magenta > 0 && leaks.len() < 3 {
+            leaks.push(format!("{:.3}s: {magenta} pixels", picture.pts_secs));
+        }
+        let black_column = |x: usize| (0..h).all(|y| view.luma(x, y) < 20.0);
+        let black_row = |y: usize| (0..w).all(|x| view.luma(x, y) < 20.0);
+        let empty = [
+            ("left", black_column(0)),
+            ("right", black_column(w - 1)),
+            ("top", black_row(0)),
+            ("bottom", black_row(h - 1)),
+        ];
+        if let Some((side, _)) = empty.iter().find(|(_, black)| *black)
+            && edges.len() < 3
+        {
+            edges.push(format!("{:.3}s: {side} edge", picture.pts_secs));
+        }
+    })?;
+
+    if frames == 0 {
+        case.problem("missing", "focus: no screen frames");
+        return Ok(());
+    }
+    if !leaks.is_empty() {
+        case.problem(
+            "focus-leak",
+            format!("the window in front was recorded: {}", leaks.join("; ")),
+        );
+    }
+    if !edges.is_empty() {
+        case.problem(
+            "focus-edge",
+            format!("an empty strip along the frame: {}", edges.join("; ")),
+        );
+    }
+    // Frame sizes are rounded to even dimensions for the encoder.
+    let near = |(w, h): (usize, usize)| {
+        (w as i64 - expected.0 as i64).abs() <= 2 && (h as i64 - expected.1 as i64).abs() <= 2
+    };
+    if !sizes.keys().all(|size| near(*size)) {
+        case.problem(
+            "focus-size",
+            format!(
+                "expected {}x{} (the window less {trim} px of corners), recorded {sizes:?}",
+                expected.0, expected.1
+            ),
+        );
+    }
+    case.note(format!(
+        "focus: {frames} frames at {sizes:?}, window {width}x{height} @{scale}x"
+    ));
+    Ok(())
+}
+
 fn check_video(case: &mut Case, track: &Track, mut check: VideoCheck) -> anyhow::Result<Offsets> {
     let mut frames: Vec<(f64, Readout)> = Vec::new();
     media::decode_video(&track.path, |picture| {
@@ -3733,6 +3906,9 @@ fn analyze(rec: &Recorded, reference: u64, case: &mut Case) -> anyhow::Result<()
             observed,
         },
     )?;
+    if rec.focus {
+        check_focus(case, &layout.display, &rec.stimulus)?;
+    }
     let camera = match (&layout.camera, &rec.camera) {
         (Some(track), Some((truth, dropped))) if track.path.is_file() => {
             case.note(format!("camera: dropped at source {dropped:?}"));
