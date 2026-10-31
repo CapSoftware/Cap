@@ -976,7 +976,7 @@ fn agent_installer_dry_run_is_machine_readable() {
     assert_eq!(json["target"], "codex");
     assert_eq!(json["dryRun"], true);
     assert_eq!(json["applied"], false);
-    assert_eq!(json["changes"].as_array().map(Vec::len), Some(2));
+    assert_eq!(json["changes"].as_array().map(Vec::len), Some(16));
 }
 
 #[test]

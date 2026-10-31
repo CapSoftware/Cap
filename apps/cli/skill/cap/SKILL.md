@@ -122,3 +122,9 @@ To generate a short, cinematic 3D product-demo video from a URL, use the install
 `cap-demo` skill (installed alongside this one). It scouts the page, records it with
 virtual input, and treats it with Cap's 3D camera, a brand-matched background, and
 music. Currently macOS-only.
+
+## Local Studio timeline edits
+
+To trim clip edges in a local recording that is open in Cap Studio, use the installed
+`cap-trim` skill (installed alongside this one). It inspects the timeline, trims one
+edge at a time through the editor, and verifies the result on disk.
