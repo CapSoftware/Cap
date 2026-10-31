@@ -20,6 +20,7 @@ const FORMATTED: &[&str] = &[
     "editor.panel.keyboard.title",
     "editor.panel.audio.title",
     "editor.panel.mask.title",
+    "editor.panel.mask.tracking_progress",
     "editor.panel.camera3d.shots",
     "editor.panel.camera3d.pose_start",
     "editor.panel.camera3d.pose_end",
@@ -246,6 +247,25 @@ fn editor_panels_match_the_literals_they_replaced() {
         (
             tr::editor::panel::mask::outside_darkness(),
             "Outside Darkness",
+        ),
+        (tr::editor::panel::mask::tracking(), "Tracking"),
+        (tr::editor::panel::mask::add_marker(), "Add Marker"),
+        (tr::editor::panel::mask::remove_marker(), "Remove Marker"),
+        (tr::editor::panel::mask::track_motion(), "Track Motion"),
+        (tr::editor::panel::mask::clear_markers(), "Clear"),
+        (tr::editor::panel::mask::four_points(), "Four Points"),
+        (tr::editor::panel::mask::stop(), "Stop"),
+        (
+            tr::editor::panel::mask::tracking_failed(),
+            "Could not track this region. Choose points with more detail.",
+        ),
+        (
+            tr::editor::panel::mask::tracking_review(),
+            "Tracking lost the target. Review the mask before exporting.",
+        ),
+        (
+            tr::editor::panel::mask::tracking_changed(),
+            "The project changed. Run tracking again.",
         ),
         (tr::editor::panel::scene::camera_layout(), "Camera Layout"),
         (tr::editor::panel::scene::transition(), "Transition"),
@@ -840,6 +860,10 @@ fn editor_panel_messages_format_like_the_code_they_replaced() {
         assert_eq!(
             tr::editor::panel::mask::title(number),
             format!("Mask {}", index + 1)
+        );
+        assert_eq!(
+            tr::editor::panel::mask::tracking_progress(number),
+            format!("Tracking {}%", index + 1)
         );
         assert_eq!(
             tr::editor::crop::editing_style(number),

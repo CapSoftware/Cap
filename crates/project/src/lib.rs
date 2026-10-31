@@ -6,6 +6,7 @@ mod config_write_tests;
 mod configuration;
 pub mod cursor;
 pub mod keyboard;
+mod mask_tracking;
 mod meta;
 
 pub use animated_gradient::*;

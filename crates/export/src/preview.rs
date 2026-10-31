@@ -134,7 +134,9 @@ async fn render_preview_with_base(
         total_duration,
         layers_cache: None,
     };
-    render_preview_frame(source, frame_time, settings).await
+    let render_start = std::time::Instant::now();
+    let frame = render_source_frame(source, frame_time, settings).await?;
+    preview_result(frame, render_start, total_duration, settings)
 }
 
 /// Render the preview through an open editor's decoders and GPU pipelines
@@ -148,6 +150,21 @@ pub async fn render_preview_with_editor(
     frame_time: f64,
     settings: ExportPreviewSettings,
 ) -> Result<ExportPreviewResult, ExportError> {
+    let render_start = std::time::Instant::now();
+    let (frame, total_duration) =
+        render_frame_with_editor(editor, project_config, frame_time, settings).await?;
+    preview_result(frame, render_start, total_duration, settings)
+}
+
+/// One composited output frame as raw RGBA, through an open editor's
+/// decoders and GPU pipelines, for callers that analyse pixels rather than
+/// show a JPEG.
+pub async fn render_frame_with_editor(
+    editor: &EditorInstance,
+    project_config: ProjectConfiguration,
+    frame_time: f64,
+    settings: ExportPreviewSettings,
+) -> Result<(RenderedFrame, f64), ExportError> {
     let recording_meta = editor.meta();
     let studio_meta = recording_meta
         .studio_meta()
@@ -189,7 +206,8 @@ pub async fn render_preview_with_editor(
         total_duration,
         layers_cache: Some(&editor.preview_layers),
     };
-    render_preview_frame(source, frame_time, settings).await
+    let frame = render_source_frame(source, frame_time, settings).await?;
+    Ok((frame, total_duration))
 }
 
 /// Holds the editor's `export_preview_active` flag so its idle prefetch does
@@ -213,11 +231,11 @@ impl Drop for EditorPreviewGuard<'_> {
     }
 }
 
-async fn render_preview_frame(
+async fn render_source_frame(
     source: PreviewSource<'_>,
     frame_time: f64,
     settings: ExportPreviewSettings,
-) -> Result<ExportPreviewResult, ExportError> {
+) -> Result<RenderedFrame, ExportError> {
     let PreviewSource {
         project_config,
         render_constants,
@@ -253,8 +271,6 @@ async fn render_preview_frame(
         .clips
         .iter()
         .find(|v| v.index == segment.recording_clip);
-
-    let render_start = std::time::Instant::now();
 
     let segment_frames = segment_media
         .decoders
@@ -400,6 +416,21 @@ async fn render_preview_frame(
             .await?
     };
 
+    if let Some(cache) = layers_cache
+        && let Ok(mut guard) = cache.lock()
+    {
+        *guard = Some(layers);
+    }
+
+    Ok(frame)
+}
+
+fn preview_result(
+    frame: RenderedFrame,
+    render_start: std::time::Instant,
+    total_duration: f64,
+    settings: ExportPreviewSettings,
+) -> Result<ExportPreviewResult, ExportError> {
     let frame_render_time_ms = render_start.elapsed().as_secs_f64() * 1000.0;
     let width = frame.width;
     let height = frame.height;
@@ -422,12 +453,6 @@ async fn render_preview_frame(
         let encoder_efficiency = 0.5;
         (total_bitrate * encoder_efficiency * duration_seconds) / (8.0 * 1024.0 * 1024.0)
     };
-
-    if let Some(cache) = layers_cache
-        && let Ok(mut guard) = cache.lock()
-    {
-        *guard = Some(layers);
-    }
 
     Ok(ExportPreviewResult {
         jpeg_base64: STANDARD.encode(&jpeg_buffer),

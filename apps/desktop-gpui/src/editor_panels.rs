@@ -6341,7 +6341,179 @@ impl EditorWindow {
                 ));
         }
 
-        panel.into_any_element()
+        panel
+            .child(self.render_mask_tracking(index, segment, cx))
+            .into_any_element()
+    }
+
+    fn render_mask_tracking(
+        &self,
+        index: usize,
+        segment: &MaskSegment,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let theme = self.theme;
+        let start = segment.start;
+        let relative = self.preview_or_playhead() - start;
+        let in_segment = relative >= 0. && relative <= segment.end - start;
+        let at_marker = segment.tracking_marker_at(relative);
+
+        let toggle = ui::EditorButton::plain(&theme, "mask-marker-toggle")
+            .left_icon(if at_marker.is_some() {
+                "icons/x.svg"
+            } else {
+                "icons/plus.svg"
+            })
+            .icon_size(px(13.))
+            .label(if at_marker.is_some() {
+                tr::editor::panel::mask::remove_marker()
+            } else {
+                tr::editor::panel::mask::add_marker()
+            })
+            .disabled(
+                !in_segment || self.mask_tracking.is_some() || self.mask_tracking_points.is_some(),
+            )
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.edit_mask_segment("mask-marker", index, window, cx, move |segment| {
+                    match at_marker {
+                        Some(time) => segment.remove_tracking_marker(time),
+                        None => segment.add_tracking_marker(relative),
+                    }
+                    true
+                });
+            }));
+
+        let progress = self.mask_tracking_progress(index);
+        let busy = self.mask_tracking.is_some();
+        let track = ui::EditorButton::plain(&theme, "mask-track-motion")
+            .left_icon(if progress.is_some() {
+                "icons/square.svg"
+            } else {
+                "icons/play.svg"
+            })
+            .disabled(progress.is_none() && (!in_segment || busy || self.playing))
+            .label(match progress {
+                Some(_) => tr::editor::panel::mask::stop().to_string(),
+                None => tr::editor::panel::mask::track_motion().to_string(),
+            })
+            .on_click(cx.listener(move |this, _, window, cx| {
+                if this.mask_tracking_progress(index).is_some() {
+                    this.stop_mask_tracking(cx);
+                } else {
+                    this.mask_tracking_points = None;
+                    this.start_mask_tracking(index, None, window, cx);
+                }
+            }));
+
+        let picking = self
+            .mask_tracking_points
+            .as_ref()
+            .filter(|points| points.index == index);
+        let four_points = ui::EditorButton::plain(&theme, "mask-track-four-points")
+            .left_icon("icons/corners.svg")
+            .label(tr::editor::panel::mask::four_points())
+            .disabled(!in_segment || busy || self.playing)
+            .on_click(cx.listener(move |this, _, _window, cx| {
+                this.mask_tracking_points = if this.mask_tracking_points.is_some() {
+                    None
+                } else {
+                    Some(crate::editor_mask_tracking::MaskTrackingPoints {
+                        index,
+                        time: this.preview_or_playhead(),
+                        points: Vec::with_capacity(4),
+                        dragging: None,
+                    })
+                };
+                cx.notify();
+            }));
+
+        let mut marker_actions = div().flex().items_center().gap(px(4.)).child(toggle);
+        let mut actions = div()
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .items_center()
+            .gap(px(4.));
+        if let Some(picking) = picking {
+            let ready = picking.points.len() == 4;
+            actions = actions
+                .child(
+                    ui::EditorButton::plain(&theme, "mask-points-cancel")
+                        .label(tr::common::cancel())
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.mask_tracking_points = None;
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    ui::EditorButton::plain(&theme, "mask-points-undo")
+                        .left_icon("icons/undo.svg")
+                        .tooltip(&theme, tr::menu::edit::undo())
+                        .disabled(picking.points.is_empty())
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            if let Some(picking) = this.mask_tracking_points.as_mut() {
+                                picking.points.pop();
+                            }
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    ui::EditorButton::plain(&theme, "mask-points-start")
+                        .left_icon("icons/play.svg")
+                        .label(tr::editor::panel::mask::track_motion())
+                        .disabled(!ready)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            if let Some(picking) = this.mask_tracking_points.take()
+                                && picking.points.len() == 4
+                            {
+                                let points = std::array::from_fn(|i| {
+                                    (picking.points[i].x, picking.points[i].y)
+                                });
+                                this.start_mask_tracking(picking.index, Some(points), window, cx);
+                            }
+                        })),
+                );
+        } else {
+            actions = actions.child(track).child(four_points);
+        }
+        if let Some(progress) = progress {
+            actions = actions.child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(Hsla::from(theme.editor.text_2))
+                    .child(tr::editor::panel::mask::tracking_progress(
+                        (progress * 100.).round() as u32,
+                    )),
+            );
+        }
+        if segment.is_tracked() {
+            marker_actions = marker_actions.child(div().flex_1()).child(
+                ui::EditorButton::plain(&theme, "mask-marker-clear")
+                    .danger(&theme)
+                    .left_icon("icons/trash.svg")
+                    .icon_size(px(13.))
+                    .label(tr::editor::panel::mask::clear_markers())
+                    .disabled(busy || picking.is_some())
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        let relative = relative.max(0.);
+                        this.edit_mask_segment("mask-marker-clear", index, window, cx, |segment| {
+                            segment.clear_tracking_markers(relative);
+                            true
+                        });
+                    })),
+            );
+        }
+
+        ui::Field::section(&theme, tr::editor::panel::mask::tracking())
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(4.))
+                    .child(marker_actions)
+                    .child(actions),
+            )
+            .into_any_element()
     }
 
     /// The `grid grid-cols-2 gap-2` radio pair the mask panel uses twice.

@@ -44,7 +44,10 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use crate::i18n::tr;
-use crate::{editor_timeline::TrackKind, editor_window::EditorWindow};
+use crate::{
+    editor_timeline::{MASK_MARKER_DOT, TrackKind},
+    editor_window::EditorWindow,
+};
 use cap_project::{CameraXPosition, CameraYPosition, OverlayTrackKind, SceneMode, XY};
 use cap_rendering::FrameLayout;
 use gpui::{
@@ -360,13 +363,14 @@ fn overlay_nudge_center(rect: NormRect, direction: (f64, f64), shift: bool) -> X
     }
 }
 
-fn overlay_rect_from_center_size(segment: &cap_project::MaskSegment) -> Option<NormRect> {
-    Some(NormRect {
-        x: segment.center.x - segment.size.x / 2.,
-        y: segment.center.y - segment.size.y / 2.,
-        w: segment.size.x,
-        h: segment.size.y,
-    })
+fn mask_rect_at(segment: &cap_project::MaskSegment, time: f64) -> NormRect {
+    let (center, size) = segment.rect_at(time - segment.start);
+    NormRect {
+        x: center.x - size.x / 2.,
+        y: center.y - size.y / 2.,
+        w: size.x,
+        h: size.y,
+    }
 }
 
 /// The whole move mapping, pure, so a scripted drag can be predicted.
@@ -641,12 +645,7 @@ impl EditorWindow {
                 if !(t >= segment.start && t < segment.end) {
                     continue;
                 }
-                rects.push(NormRect {
-                    x: segment.center.x - segment.size.x / 2.,
-                    y: segment.center.y - segment.size.y / 2.,
-                    w: segment.size.x,
-                    h: segment.size.y,
-                });
+                rects.push(mask_rect_at(segment, t));
             }
         }
         let wants_margin = matches!(exclude, CanvasSelection::Display | CanvasSelection::Camera);
@@ -1001,6 +1000,7 @@ impl EditorWindow {
                     "canvas camera drag"
                 ),
                 CanvasSelection::Mask(index) => {
+                    self.rebuild_timeline();
                     tracing::info!(index, "canvas mask drag");
                 }
                 CanvasSelection::Text(index) => {
@@ -1080,6 +1080,9 @@ impl EditorWindow {
                 self.canvas_overlay_rect = Some(optimistic);
                 self.write_overlay_rect(selected, optimistic, cx);
             }
+        }
+        if matches!(selected, CanvasSelection::Mask(_)) {
+            self.rebuild_timeline();
         }
         self.schedule_save(window, cx);
         true
@@ -1186,9 +1189,10 @@ impl EditorWindow {
                 {
                     return Some(rect);
                 }
-                overlay_rect_from_center_size(
+                Some(mask_rect_at(
                     self.project.timeline.as_ref()?.mask_segments.get(index)?,
-                )
+                    self.preview_or_playhead(),
+                ))
             }
             CanvasSelection::Text(index) => {
                 if self
@@ -1224,6 +1228,7 @@ impl EditorWindow {
             x: rect.w.max(0.01),
             y: rect.h.max(0.01),
         };
+        let time = self.preview_or_playhead();
         let Some(timeline) = self.project.timeline.as_mut() else {
             return;
         };
@@ -1239,10 +1244,7 @@ impl EditorWindow {
                 let Some(segment) = timeline.mask_segments.get_mut(index) else {
                     return;
                 };
-                segment.center = center;
-                segment.size = size;
-                segment.keyframes.position.clear();
-                segment.keyframes.size.clear();
+                segment.set_rect_at(time - segment.start, center, size);
             }
             CanvasSelection::Text(index) => {
                 let Some(segment) = timeline.text_segments.get_mut(index) else {
@@ -1304,7 +1306,9 @@ impl EditorWindow {
     /// inside `size()` (`Player.tsx:636`), not the player pane.
     pub(crate) fn render_canvas_overlay(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if !self.canvas_overlay_visible()
-            || (!self.player_panel_hovered && self.canvas_drag.is_none())
+            || (!self.player_panel_hovered
+                && self.canvas_drag.is_none()
+                && self.mask_tracking_points.is_none())
         {
             return None;
         }
@@ -1323,6 +1327,115 @@ impl EditorWindow {
             .w(player.frame.size.width)
             .h(player.frame.size.height)
             .overflow_hidden();
+
+        if let Some(picking) = self.mask_tracking_points.as_ref()
+            && picking.time == self.preview_or_playhead()
+        {
+            let points = picking.points.clone();
+            let color = Hsla::from(self.theme.editor.accent);
+            return Some(
+                layer
+                    .id("mask-tracking-points")
+                    .cursor(CursorStyle::Crosshair)
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                            cx.stop_propagation();
+                            let Some(bounds) = this.canvas_bounds() else {
+                                return;
+                            };
+                            let point = XY::new(
+                                f64::from(
+                                    f32::from(event.position.x - bounds.origin.x)
+                                        / f32::from(bounds.size.width),
+                                )
+                                .clamp(0.0, 1.0),
+                                f64::from(
+                                    f32::from(event.position.y - bounds.origin.y)
+                                        / f32::from(bounds.size.height),
+                                )
+                                .clamp(0.0, 1.0),
+                            );
+                            this.pick_mask_tracking_point(point, window, cx);
+                        }),
+                    )
+                    .child(
+                        gpui::canvas(
+                            |bounds, _, _| bounds,
+                            move |_, bounds, window, _| {
+                                let mut path = gpui::PathBuilder::stroke(px(1.5));
+                                let at = |x: f32, y: f32| {
+                                    gpui::point(bounds.origin.x + px(x), bounds.origin.y + px(y))
+                                };
+                                if points.len() == 4 {
+                                    let mut corners = points.clone();
+                                    corners.sort_by(|a, b| a.y.total_cmp(&b.y));
+                                    corners[..2].sort_by(|a, b| a.x.total_cmp(&b.x));
+                                    corners[2..].sort_by(|a, b| b.x.total_cmp(&a.x));
+                                    for (index, point) in
+                                        corners.iter().chain(corners.first()).enumerate()
+                                    {
+                                        let point = at(point.x as f32 * cw, point.y as f32 * ch);
+                                        if index == 0 {
+                                            path.move_to(point);
+                                        } else {
+                                            path.line_to(point);
+                                        }
+                                    }
+                                }
+                                for point in &points {
+                                    let (x, y) = (point.x as f32 * cw, point.y as f32 * ch);
+                                    let handle_y = (y - 26.).max(10.);
+                                    let direction = if handle_y < y { 1. } else { -1. };
+                                    path.move_to(at(x, handle_y + direction * 8.));
+                                    path.line_to(at(x, y));
+                                    path.move_to(at(x - 4., y - direction * 5.));
+                                    path.line_to(at(x, y));
+                                    path.line_to(at(x + 4., y - direction * 5.));
+                                    path.move_to(at(x - 5., y));
+                                    path.line_to(at(x + 5., y));
+                                }
+                                if let Ok(path) = path.build() {
+                                    window.paint_path(path, color);
+                                }
+                            },
+                        )
+                        .absolute()
+                        .inset_0(),
+                    )
+                    .children(picking.points.iter().enumerate().map(|(index, point)| {
+                        div()
+                            .id(("mask-point-handle", index))
+                            .absolute()
+                            .left(px(point.x as f32 * cw - 8.0))
+                            .top(px((point.y as f32 * ch - 26.).max(10.) - 8.))
+                            .size(px(16.0))
+                            .rounded_full()
+                            .border_1()
+                            .border_color(gpui::white())
+                            .bg(color)
+                            .cursor(CursorStyle::OpenHand)
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                                    cx.stop_propagation();
+                                    if let Some(picking) = this.mask_tracking_points.as_mut() {
+                                        picking.dragging =
+                                            Some((index, event.position, picking.points[index]));
+                                    }
+                                    cx.notify();
+                                }),
+                            )
+                            .text_color(gpui::rgb(0xffffff))
+                            .text_size(px(10.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child((index + 1).to_string())
+                    }))
+                    .into_any_element(),
+            );
+        }
 
         if self.canvas_selection.is_some() || self.selection.is_some() {
             layer = layer.child(
@@ -1370,6 +1483,20 @@ impl EditorWindow {
                                 continue;
                             }
                             let element = CanvasSelection::Mask(index);
+                            if self.canvas_selection == Some(element) {
+                                for marker in segment.tracking_marker_times() {
+                                    let (center, _) = segment.rect_at(marker);
+                                    layer = layer.child(
+                                        div()
+                                            .absolute()
+                                            .left(px(center.x as f32 * cw - MASK_MARKER_DOT / 2.))
+                                            .top(px(center.y as f32 * ch - MASK_MARKER_DOT / 2.))
+                                            .size(px(MASK_MARKER_DOT))
+                                            .rounded_full()
+                                            .bg(Hsla::from(self.theme.editor.accent)),
+                                    );
+                                }
+                            }
                             if let Some(rect) = self.element_rect(element) {
                                 layer = layer.child(self.render_element_box(
                                     element,

@@ -3262,13 +3262,19 @@ mod tests {
                 start: 0.,
                 end: 5.,
                 lane: 0,
-                detail: SegmentDetail::Mask { label: "Sensitive" },
+                detail: SegmentDetail::Mask {
+                    label: "Sensitive",
+                    markers: std::sync::Arc::from([]),
+                },
             },
             Segment {
                 start: 0.,
                 end: 5.,
                 lane: 1,
-                detail: SegmentDetail::Mask { label: "Highlight" },
+                detail: SegmentDetail::Mask {
+                    label: "Highlight",
+                    markers: std::sync::Arc::from([]),
+                },
             },
         ];
         assert_eq!(hit_test(&masks, 1, 100., 0., 0.01), Hit::Body { index: 1 });
