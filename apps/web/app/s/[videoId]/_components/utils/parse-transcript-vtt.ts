@@ -74,7 +74,11 @@ export const parseTranscriptVTT = (vttContent: string): TranscriptEntry[] => {
 			continue;
 		}
 
-		if (trimmedLine.includes("-->")) {
+		if (
+			/^\d+:\d+:\d+(?:[.,]\d+)?\s*-->\s*\d+:\d+:\d+(?:[.,]\d+)?(?:\s+.*)?$/.test(
+				trimmedLine,
+			)
+		) {
 			const [startTimeStr, endTimeStr] = trimmedLine.split(" --> ");
 			if (!startTimeStr || !endTimeStr) continue;
 
