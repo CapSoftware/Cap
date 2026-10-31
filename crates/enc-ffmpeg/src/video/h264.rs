@@ -1489,7 +1489,7 @@ fn get_codec_and_options(
             }
             "h264_nvenc" => {
                 if is_export {
-                    options.set("preset", "p5");
+                    options.set("preset", "p4");
                     options.set("tune", "hq");
                     options.set("rc", "vbr");
                     options.set("spatial-aq", "1");
