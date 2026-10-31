@@ -11,10 +11,12 @@ export const granularityOf = (
 	return gap > 0 && gap <= 60 * 60 * 1000 ? "hour" : "day";
 };
 
+// Each tier starts where the one below would round up into it, so 999,500
+// reads 1.0M rather than 1000k, and 9,960 reads 10k like 10,000 does.
 export const formatCompact = (value: number) => {
-	if (value >= 1_000_000)
-		return `${(value / 1_000_000).toFixed(value >= 10_000_000 ? 0 : 1)}M`;
-	if (value >= 10_000) return `${Math.round(value / 1_000)}k`;
+	if (value >= 9_950_000) return `${Math.round(value / 1_000_000)}M`;
+	if (value >= 999_500) return `${(value / 1_000_000).toFixed(1)}M`;
+	if (value >= 9_950) return `${Math.round(value / 1_000)}k`;
 	if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`;
 	return value.toLocaleString();
 };
@@ -22,6 +24,7 @@ export const formatCompact = (value: number) => {
 export const formatPercent = (fraction: number) => {
 	const pct = fraction * 100;
 	if (pct > 0 && pct < 1) return "<1%";
+	if (pct > 99 && pct < 100) return ">99%";
 	return `${Math.round(pct)}%`;
 };
 
