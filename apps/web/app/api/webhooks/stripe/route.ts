@@ -566,10 +566,10 @@ export const POST = async (req: Request) => {
 
 				if (!dbUser) {
 					console.log(
-						"No user found after all retries. Returning 202 to allow retry.",
+						"No user found after all retries. Returning 503 to allow retry.",
 					);
 					return new Response("User not found, webhook will be retried", {
-						status: 202,
+						status: 503,
 					});
 				}
 
@@ -727,18 +727,18 @@ export const POST = async (req: Request) => {
 				});
 
 				// BAA cleanup depends only on Stripe state, so it must run even
-				// when the customer cannot be mapped to a user; the 202 below is
-				// treated as delivered and the event is never redelivered.
+				// when the customer cannot be mapped to a user, before returning
+				// a retryable failure for the missing user mapping.
 				if (!hasEntitledProSubscription(subscriptions.data)) {
 					await cancelEntitledBaaSubscriptions(subscriptions.data, customer.id);
 				}
 
 				if (!dbUser) {
 					console.log(
-						"No user found after all retries. Returning 202 to allow retry.",
+						"No user found after all retries. Returning 503 to allow retry.",
 					);
 					return new Response("User not found, webhook will be retried", {
-						status: 202,
+						status: 503,
 					});
 				}
 
@@ -767,9 +767,15 @@ export const POST = async (req: Request) => {
 						);
 					}, 0);
 
+				// A retried delivery can be older than the latest change, so save
+				// Stripe's current status rather than the event's snapshot.
+				const currentStatus =
+					subscriptions.data.find((sub) => sub.id === subscription.id)
+						?.status ?? subscription.status;
+
 				console.log("Updating user in database with:", {
 					subscriptionId: subscription.id,
-					status: subscription.status,
+					status: currentStatus,
 					customerId: customer.id,
 					inviteQuota,
 				});
@@ -778,7 +784,7 @@ export const POST = async (req: Request) => {
 					.update(users)
 					.set({
 						stripeSubscriptionId: subscription.id,
-						stripeSubscriptionStatus: subscription.status,
+						stripeSubscriptionStatus: currentStatus,
 						stripeCustomerId: customer.id,
 						inviteQuota: inviteQuota,
 					})
