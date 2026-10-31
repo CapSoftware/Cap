@@ -531,6 +531,7 @@ pub struct YuvToRgbaConverter {
     output_textures: [wgpu::Texture; 2],
     output_views: [wgpu::TextureView; 2],
     current_output: usize,
+    external_output: bool,
     allocated_width: u32,
     allocated_height: u32,
     gpu_max_texture_size: u32,
@@ -571,7 +572,6 @@ impl YuvToRgbaConverter {
         pipelines: Arc<YuvConverterPipelines>,
     ) -> Self {
         let gpu_max_texture_size = device.limits().max_texture_dimension_2d;
-
         tracing::info!(
             gpu_max_texture_size = gpu_max_texture_size,
             "Initializing YUV converter textures (using shared pipelines)"
@@ -602,6 +602,7 @@ impl YuvToRgbaConverter {
             output_textures,
             output_views,
             current_output: 0,
+            external_output: false,
             allocated_width: initial_width,
             allocated_height: initial_height,
             gpu_max_texture_size,
@@ -624,6 +625,38 @@ impl YuvToRgbaConverter {
             d3d11_interop: D3D11WgpuInterop::new(),
             #[cfg(target_os = "linux")]
             cuda_staging: None,
+        }
+    }
+
+    /// Uses the layer's own frame textures as the conversion target, avoiding
+    /// a full-frame RGBA copy after conversion.
+    pub fn new_with_shared_pipelines_and_outputs(
+        device: &wgpu::Device,
+        pipelines: Arc<YuvConverterPipelines>,
+        output_textures: [wgpu::Texture; 2],
+        output_views: [wgpu::TextureView; 2],
+    ) -> Self {
+        let mut converter = Self::new_with_shared_pipelines(device, pipelines);
+        converter.output_textures = output_textures;
+        converter.output_views = output_views;
+        converter.external_output = true;
+        converter
+    }
+
+    pub fn set_output_index(&mut self, index: usize) {
+        self.current_output = index.min(1);
+    }
+
+    pub fn set_external_output(
+        &mut self,
+        index: usize,
+        texture: wgpu::Texture,
+        view: wgpu::TextureView,
+    ) {
+        if self.external_output && index < 2 {
+            self.output_textures[index] = texture;
+            self.output_views[index] = view;
+            self.bind_group_cache.invalidate();
         }
     }
 
@@ -911,8 +944,6 @@ impl YuvToRgbaConverter {
         let (uv_texture, uv_view) = Self::create_uv_texture(device, new_width, new_height);
         let (u_texture, u_view) = Self::create_u_texture(device, new_width, new_height);
         let (v_texture, v_view) = Self::create_v_texture(device, new_width, new_height);
-        let (output_textures, output_views) =
-            Self::create_output_textures(device, new_width, new_height);
 
         self.y_texture = y_texture;
         self.y_view = y_view;
@@ -922,8 +953,12 @@ impl YuvToRgbaConverter {
         self.u_view = u_view;
         self.v_texture = v_texture;
         self.v_view = v_view;
-        self.output_textures = output_textures;
-        self.output_views = output_views;
+        if !self.external_output {
+            let (output_textures, output_views) =
+                Self::create_output_textures(device, new_width, new_height);
+            self.output_textures = output_textures;
+            self.output_views = output_views;
+        }
         self.allocated_width = new_width;
         self.allocated_height = new_height;
         self.bind_group_cache.invalidate();
@@ -946,7 +981,9 @@ impl YuvToRgbaConverter {
     }
 
     fn swap_output_buffer(&mut self) {
-        self.current_output = 1 - self.current_output;
+        if !self.external_output {
+            self.current_output = 1 - self.current_output;
+        }
     }
 
     fn current_output_texture(&self) -> &wgpu::Texture {
@@ -1887,6 +1924,69 @@ impl YuvToRgbaConverter {
     }
 }
 
+#[cfg(test)]
+mod rgba_copy_benchmark {
+    #[test]
+    #[ignore = "performance probe: measures the full-frame RGBA copy removed by direct converter output"]
+    fn rgba_4k_copy_benchmark() {
+        const WIDTH: u32 = 3840;
+        const HEIGHT: u32 = 2160;
+        const ITERS: u32 = 60;
+
+        let instance = crate::create_wgpu_instance_sync();
+        let Ok(adapter) =
+            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+        else {
+            eprintln!("no GPU adapter available, skipping RGBA copy probe");
+            return;
+        };
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).unwrap();
+
+        let descriptor = wgpu::TextureDescriptor {
+            label: Some("RGBA copy probe"),
+            size: wgpu::Extent3d {
+                width: WIDTH,
+                height: HEIGHT,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        };
+        let source = device.create_texture(&descriptor);
+        let destination = device.create_texture(&descriptor);
+
+        let mut encoder = device.create_command_encoder(&Default::default());
+        for _ in 0..ITERS {
+            encoder.copy_texture_to_texture(
+                source.as_image_copy(),
+                destination.as_image_copy(),
+                wgpu::Extent3d {
+                    width: WIDTH,
+                    height: HEIGHT,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+
+        let started = std::time::Instant::now();
+        queue.submit(std::iter::once(encoder.finish()));
+        device.poll(wgpu::PollType::Wait).unwrap();
+        let elapsed = started.elapsed();
+
+        let bytes = (WIDTH as f64) * (HEIGHT as f64) * 4.0 * (ITERS as f64);
+        println!(
+            "4K RGBA copy: {:.2} ms/frame, {:.1} MiB/s",
+            elapsed.as_secs_f64() * 1000.0 / ITERS as f64,
+            bytes / (1024.0 * 1024.0) / elapsed.as_secs_f64(),
+        );
+    }
+}
+
 /// The GPU conversions against the CPU reference in `cpu_yuv`: the export's
 /// RGBA to NV12 shader must produce BT.709 limited range (the matrix the
 /// encoders tag), and the decode shaders must apply the matrix they are asked
@@ -2064,6 +2164,63 @@ mod colour_matrix_tests {
                     "{rgb:?}: got {actual:?}, BT.709 reference {y:.2} {cb:.2} {cr:.2}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn external_outputs_receive_conversion_directly() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter available, skipping");
+            return;
+        };
+        let (y, uv) = chart_nv12();
+        let usage = wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::STORAGE_BINDING
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::COPY_DST;
+        let create_target = || {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("external converter target"),
+                size: wgpu::Extent3d {
+                    width: WIDTH,
+                    height: HEIGHT,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage,
+                view_formats: &[],
+            })
+        };
+        let targets = [create_target(), create_target()];
+        let views = [
+            targets[0].create_view(&Default::default()),
+            targets[1].create_view(&Default::default()),
+        ];
+        let pipelines = Arc::new(YuvConverterPipelines::new(&device));
+        let mut converter = YuvToRgbaConverter::new_with_shared_pipelines_and_outputs(
+            &device,
+            pipelines,
+            targets.clone(),
+            views,
+        );
+
+        converter.set_output_index(1);
+        converter.set_matrix(YuvMatrix::Bt709);
+        converter
+            .convert_nv12(&device, &queue, &y, &uv, WIDTH, HEIGHT, WIDTH, WIDTH)
+            .expect("convert NV12 into external output");
+
+        let rgba = read_rgba(&device, &queue, &targets[1]);
+        for (i, rgb) in CHART.iter().enumerate() {
+            let x = i * 4;
+            let actual = &rgba[x * 4..x * 4 + 3];
+            assert!(
+                actual.iter().zip(rgb).all(|(a, e)| a.abs_diff(*e) <= 2),
+                "external output {rgb:?} gave {actual:?}"
+            );
         }
     }
 

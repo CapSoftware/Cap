@@ -59,6 +59,8 @@ mod scene;
 mod segment_timing;
 pub mod spring_mass_damper;
 mod takeover;
+#[cfg(test)]
+mod test_support;
 mod text;
 mod transition;
 pub mod yuv_converter;
@@ -8810,11 +8812,6 @@ impl RendererLayers {
         self.camera3d.retain_views(session_views);
         self.mask.begin_frame(session_views);
 
-        if render_display {
-            self.display.copy_to_texture(encoder);
-        }
-        self.camera.copy_to_texture(encoder);
-        self.camera_only.copy_to_texture(encoder);
         self.background.render_surface(encoder);
 
         let mut passes = LayerPasses {
