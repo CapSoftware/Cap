@@ -702,7 +702,9 @@ fn project_config_get_without_file_returns_default() {
     ]);
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let json = parse_json(&output);
-    assert!(json.is_object(), "expected a default project config object");
+    let expected_json =
+        serde_json::to_string(&cap_project::ProjectConfiguration::default()).unwrap();
+    assert_eq!(json, serde_json::from_str::<Value>(&expected_json).unwrap());
 }
 
 #[test]
@@ -1499,4 +1501,23 @@ fn write_single_segment_meta(project: &Path) {
         serde_json::to_vec_pretty(&meta).unwrap(),
     )
     .unwrap();
+}
+
+#[test]
+fn caps_json_errors_include_the_standard_error_field() {
+    for flags in [&["--json"][..], &["--format", "json"][..]] {
+        let output = cap()
+            .args(["caps", "get", "!"])
+            .args(flags)
+            .env("CAP_AGENT_TOKEN", "cap_cli_synthetic_test_token")
+            .env("CAP_SERVER_URL", "http://127.0.0.1:9")
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        let error = parse_json(&output);
+        assert_eq!(error["error"], "Cap ID contains invalid characters");
+        assert_eq!(error["message"], "Cap ID contains invalid characters");
+        assert_eq!(error["code"], "INVALID_REQUEST");
+        assert_eq!(error["retryable"], false);
+    }
 }

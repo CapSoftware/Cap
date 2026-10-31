@@ -14,6 +14,7 @@ import { MenuBar } from "./demo/MacDesktop";
 import { AppleGlyph } from "./glyphs";
 import { HeroHeadline } from "./HeroHeadline";
 import { HeroSky } from "./HeroSky";
+import { BTN_PUMPKIN, HALLOWEEN, PUMPKIN_CHIP } from "./halloween";
 import { Fit, noop, useInView } from "./scenes/engine";
 import {
 	BODY_TEXT,
@@ -40,11 +41,13 @@ const PhoneStage = () => {
 						className="relative overflow-hidden rounded-[14px] bg-black"
 						style={{ width: PHONE_STAGE.w, height: PHONE_STAGE.h }}
 					>
+						{/* The stage is scaled down to phone width, so a pre-sized 960px
+						    copy beats the 1920px variant next/image picks on dense screens. */}
 						<Image
-							src="/backgrounds/sf.webp"
+							src="/backgrounds/landing/sf-960.webp"
 							alt=""
 							fill
-							sizes="440px"
+							unoptimized
 							draggable={false}
 							className="object-cover"
 						/>
@@ -114,7 +117,7 @@ export const Hero = () => {
 
 	return (
 		<section className="relative px-5 pb-12 pt-12 sm:pt-14 md:pb-4 md:pt-[56px]">
-			<HeroSky />
+			<HeroSky halloween={HALLOWEEN} />
 			<span
 				data-header-sentinel
 				aria-hidden="true"
@@ -129,10 +132,11 @@ export const Hero = () => {
 							release: "v0.6.1",
 						})
 					}
-					className="ht-rise group mb-7 inline-flex [--d:0.2s] max-w-full items-center gap-2.5 rounded-full bg-[#111111] py-1.5 pl-1.5 pr-3.5 text-[13px] leading-none text-white shadow-[0_1px_2px_rgba(17,17,17,0.12),0_10px_24px_-14px_rgba(17,17,17,0.6)] transition-colors duration-200 hover:bg-[#2A2A2A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#111111] focus-visible:ring-offset-2 focus-visible:ring-offset-[#EDF1F6] md:mb-9"
+					className="ht-rise group mb-7 inline-flex [--d:0.04s] max-w-full items-center gap-2.5 rounded-full bg-[#111111] py-1.5 pl-1.5 pr-3.5 text-[13px] leading-none text-white shadow-[0_1px_2px_rgba(17,17,17,0.12),0_10px_24px_-14px_rgba(17,17,17,0.6)] transition-colors duration-200 hover:bg-[#2A2A2A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#111111] focus-visible:ring-offset-2 focus-visible:ring-offset-[#EDF1F6] md:mb-9"
 				>
 					<span
 						className={`${MONO} rounded-full bg-[#8DBCF0] px-2 py-[5px] text-[10.5px] uppercase leading-none tracking-[0.06em] text-[#111111]`}
+						style={HALLOWEEN ? { backgroundColor: PUMPKIN_CHIP } : undefined}
 					>
 						New
 					</span>
@@ -145,16 +149,19 @@ export const Hero = () => {
 				<HeroHeadline />
 
 				<p
-					className={`ht-rise [--d:0.75s] ${BODY_TEXT} mt-8 max-w-[660px] text-balance text-[16.5px] leading-[1.5] text-[rgba(17,17,17,0.78)] sm:text-[19px] md:mt-10`}
+					className={`ht-rise [--d:0.16s] ${BODY_TEXT} mt-8 max-w-[660px] text-balance text-[16.5px] leading-[1.5] text-[rgba(17,17,17,0.78)] sm:text-[19px] md:mt-10`}
 				>
 					Record your screen, then share it as a link the moment you stop or
 					polish it in the built-in editor. Trusted by over 80,000 teams and
 					creators, and free to start.
 				</p>
 
-				<div className="ht-rise mt-9 flex flex-col items-stretch gap-3 [--d:0.9s] sm:flex-row sm:items-center">
+				<div className="ht-rise mt-9 flex flex-col items-stretch gap-3 [--d:0.2s] sm:flex-row sm:items-center">
 					<Link
 						href={downloadHref}
+						// Redirects to the installer on the CDN; prefetching it only
+						// produced a failed cross-origin request on every visit.
+						prefetch={false}
 						onClick={() =>
 							trackEvent("download_cta_clicked", {
 								source_page: "home_header",
@@ -164,7 +171,7 @@ export const Hero = () => {
 								is_intel: Boolean(isIntel),
 							})
 						}
-						className={BTN_PRIMARY}
+						className={HALLOWEEN ? BTN_PUMPKIN : BTN_PRIMARY}
 					>
 						{isWindows ? (
 							<WindowsGlyph className="mr-2.5 size-[18px]" />
@@ -207,7 +214,7 @@ export const Hero = () => {
 							cta_location: "under_primary",
 						})
 					}
-					className="ht-rise group mt-5 inline-flex items-center gap-2 rounded-[6px] [--d:1.05s] text-[14px] text-[rgba(17,17,17,0.55)] transition-colors duration-200 hover:text-[#111111] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#111111] focus-visible:ring-offset-4 focus-visible:ring-offset-[#F8FAFC]"
+					className="ht-rise group mt-5 inline-flex items-center gap-2 rounded-[6px] [--d:0.24s] text-[14px] text-[rgba(17,17,17,0.55)] transition-colors duration-200 hover:text-[#111111] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#111111] focus-visible:ring-offset-4 focus-visible:ring-offset-[#F8FAFC]"
 				>
 					<LoomMark
 						size={13}
@@ -222,7 +229,7 @@ export const Hero = () => {
 					<ArrowRight className="size-3.5 transition-transform duration-200 group-hover:translate-x-0.5" />
 				</Link>
 
-				<div className="ht-rise mt-3 flex items-center gap-2 text-[14px] text-[rgba(17,17,17,0.5)] [--d:1.15s]">
+				<div className="ht-rise mt-3 flex items-center gap-2 text-[14px] text-[rgba(17,17,17,0.5)] [--d:0.28s]">
 					<span>Also available on</span>
 					<span className="flex items-center gap-1">
 						{isWindows || isLinux ? (

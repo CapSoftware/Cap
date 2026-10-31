@@ -8,7 +8,6 @@ import { Fit, Layout, useRive } from "@rive-app/react-canvas";
 import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";
 import { Check, Minus, Plus } from "lucide-react";
-import moment from "moment";
 import type React from "react";
 import { memo, useState } from "react";
 import { useTheme } from "@/app/(org)/dashboard/Contexts";
@@ -17,6 +16,7 @@ import {
 	type ImageLoadingStatus,
 	VideoThumbnail,
 } from "@/components/VideoThumbnail";
+import { formatMonthDayYear } from "@/lib/date-format";
 import type { VideoData } from "./AddVideosDialogBase";
 
 interface VideoCardProps {
@@ -165,7 +165,7 @@ const VideoCard: React.FC<VideoCardProps> = memo(
 							</h3>
 						</Tooltip>
 						<p className="text-xs text-gray-10">
-							{moment(effectiveDate).format("MMM D, YYYY")}
+							{formatMonthDayYear(effectiveDate)}
 						</p>
 					</div>
 					<div className="flex gap-1 items-center text-xs text-gray-10">

@@ -251,8 +251,15 @@ export const MediaFormatConverter = ({
 	};
 
 	const validateAndSetFile = (selectedFile: File) => {
+		if (isConverting) return;
+
 		setError(null);
+		setFile(null);
+		if (outputUrl) {
+			URL.revokeObjectURL(outputUrl);
+		}
 		setOutputUrl(null);
+		recordedChunksRef.current = [];
 
 		const expectedMimeType = getMimeType(currentSourceFormat);
 
@@ -492,7 +499,7 @@ export const MediaFormatConverter = ({
 			const videoDuration = videoElement.duration;
 			const fps = gifFps;
 			const frameCount = Math.min(Math.floor(videoDuration * fps), gifFps * 15);
-			const frameDelay = 1000 / fps;
+			const frameDelay = (videoDuration * 1000) / frameCount;
 
 			const canvas = document.createElement("canvas");
 			canvas.width = targetWidth;
@@ -712,7 +719,7 @@ export const MediaFormatConverter = ({
 		const fileExtension = `.${currentSourceFormat}`;
 		const newExtension = `.${actualExtension}`;
 		const downloadFileName = file.name.replace(
-			new RegExp(`${fileExtension}$`),
+			new RegExp(`${fileExtension}$`, "i"),
 			newExtension,
 		);
 
@@ -974,6 +981,7 @@ export const MediaFormatConverter = ({
 				<input
 					type="file"
 					accept={getAcceptAttribute(currentSourceFormat)}
+					disabled={isConverting}
 					className="hidden"
 					onChange={handleFileChange}
 					ref={fileInputRef}

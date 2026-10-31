@@ -1,9 +1,8 @@
+use crate::caption_words::{MAX_CAPTION_WORD_DURATION, caption_text_from_words};
 use crate::{
     CaptionSegment, CaptionTrackSegment, CaptionWord, ProjectConfiguration, TimelineConfiguration,
 };
 use std::collections::HashMap;
-
-const MAX_CAPTION_WORD_DURATION: f32 = 2.5;
 
 pub(crate) fn clip_timeline_offsets(timeline: &TimelineConfiguration) -> Vec<f64> {
     let mut offset = 0.0;
@@ -20,55 +19,6 @@ pub(crate) fn clip_timeline_offsets(timeline: &TimelineConfiguration) -> Vec<f64
             start
         })
         .collect()
-}
-
-fn caption_char_attaches_to_previous(value: char) -> bool {
-    matches!(
-        value,
-        ',' | '.'
-            | '!'
-            | '?'
-            | ';'
-            | ':'
-            | '%'
-            | ')'
-            | ']'
-            | '}'
-            | '\''
-            | '’'
-            | '、'
-            | '。'
-            | '！'
-            | '？'
-            | '；'
-            | '：'
-            | '，'
-    )
-}
-
-fn caption_token_attaches_to_previous(text: &str) -> bool {
-    text.trim()
-        .chars()
-        .next()
-        .is_some_and(caption_char_attaches_to_previous)
-}
-
-fn caption_text_from_words<'a>(words: impl IntoIterator<Item = &'a CaptionWord>) -> String {
-    let mut text = String::new();
-
-    for word in words {
-        let word_text = word.text.trim();
-        if word_text.is_empty() {
-            continue;
-        }
-
-        if !text.is_empty() && !caption_token_attaches_to_previous(word_text) {
-            text.push(' ');
-        }
-        text.push_str(word_text);
-    }
-
-    text
 }
 
 const CAPTION_EDL_SEPARATOR: &str = "::edl";
@@ -152,6 +102,51 @@ fn build_source_to_edited_mappings(
         .collect()
 }
 
+pub fn transcription_source_ranges(
+    timeline: Option<&TimelineConfiguration>,
+    recording_durations: &[f64],
+) -> Vec<std::ops::Range<f64>> {
+    let Some(timeline) = timeline else {
+        let duration = recording_durations.iter().sum();
+        return if duration > 0.0 {
+            vec![0.0..duration]
+        } else {
+            Vec::new()
+        };
+    };
+    let mut ranges: Vec<_> = build_source_to_edited_mappings(timeline, recording_durations)
+        .into_iter()
+        .zip(&timeline.segments)
+        .filter_map(|(mapping, segment)| {
+            let duration = *recording_durations.get(segment.recording_clip as usize)?;
+            let offset = mapping.source_start - segment.start;
+            let start = segment.start.max(0.0);
+            let end = segment.end.min(duration);
+            (start < end).then_some(offset + start..offset + end)
+        })
+        .collect();
+    ranges.sort_by(|a, b| a.start.total_cmp(&b.start));
+    let mut merged: Vec<std::ops::Range<f64>> = Vec::with_capacity(ranges.len());
+    for range in ranges {
+        match merged.last_mut() {
+            Some(last) if range.start <= last.end => last.end = last.end.max(range.end),
+            _ => merged.push(range),
+        }
+    }
+    merged
+}
+
+pub fn transcription_ranges_cover(
+    transcribed: &[std::ops::Range<f64>],
+    required: &[std::ops::Range<f64>],
+) -> bool {
+    required.iter().all(|range| {
+        transcribed
+            .iter()
+            .any(|source| source.start <= range.start && source.end >= range.end)
+    })
+}
+
 fn map_time_range_within_mapping(
     start: f64,
     end: f64,
@@ -220,6 +215,12 @@ fn map_captions_to_edited_timeline(
     }
 
     let mappings = build_source_to_edited_mappings(timeline, recording_durations);
+    let mappings_ordered = mappings
+        .iter()
+        .all(|mapping| mapping.source_start.is_finite() && mapping.source_end.is_finite())
+        && mappings.windows(2).all(|pair| {
+            pair[0].source_start <= pair[1].source_start && pair[0].source_end <= pair[1].source_end
+        });
     let holds = timeline.hold_windows();
     let hold_adjusted = |start: f64, end: f64| {
         if holds.is_empty() {
@@ -253,7 +254,21 @@ fn map_captions_to_edited_timeline(
             )
         };
 
-        for mapping in &mappings {
+        let bounds = if caption.words.is_empty() {
+            Some((f64::from(caption.start), f64::from(caption.end)))
+        } else {
+            word_bounds
+        };
+        let caption_mappings = match bounds {
+            Some((start, end)) if mappings_ordered && start.is_finite() && end.is_finite() => {
+                let first = mappings.partition_point(|mapping| mapping.source_end <= start);
+                let count = mappings[first..].partition_point(|mapping| mapping.source_start < end);
+                &mappings[first..first + count]
+            }
+            _ => &mappings,
+        };
+
+        for mapping in caption_mappings {
             if !caption.words.is_empty() {
                 if let Some((word_start, word_end)) = word_bounds
                     && (word_end <= mapping.source_start || word_start >= mapping.source_end)
@@ -329,27 +344,11 @@ pub fn derive_caption_track_segments(
     timeline: &TimelineConfiguration,
     recording_durations: &[f64],
 ) -> Vec<CaptionTrackSegment> {
-    struct TrackOverrides {
-        fade_duration: Option<f32>,
-        linger_duration: Option<f32>,
-        position: Option<String>,
-        color: Option<String>,
-        background_color: Option<String>,
-        font_size: Option<u32>,
-    }
-
-    let mut overrides_by_source_id: HashMap<String, TrackOverrides> = HashMap::new();
+    let mut overrides_by_source_id = HashMap::new();
     for segment in &timeline.caption_segments {
         overrides_by_source_id
-            .entry(source_caption_id(&segment.id).to_string())
-            .or_insert_with(|| TrackOverrides {
-                fade_duration: segment.fade_duration_override,
-                linger_duration: segment.linger_duration_override,
-                position: segment.position_override.clone(),
-                color: segment.color_override.clone(),
-                background_color: segment.background_color_override.clone(),
-                font_size: segment.font_size_override,
-            });
+            .entry(source_caption_id(&segment.id))
+            .or_insert(segment);
     }
 
     let mut mapped =
@@ -361,17 +360,18 @@ pub fn derive_caption_track_segments(
         .map(|segment| {
             let overrides = overrides_by_source_id.get(source_caption_id(&segment.id));
             CaptionTrackSegment {
-                id: segment.id.clone(),
+                id: segment.id,
                 start: segment.start,
                 end: segment.end,
                 text: segment.text,
                 words: segment.words,
-                fade_duration_override: overrides.and_then(|o| o.fade_duration),
-                linger_duration_override: overrides.and_then(|o| o.linger_duration),
-                position_override: overrides.and_then(|o| o.position.clone()),
-                color_override: overrides.and_then(|o| o.color.clone()),
-                background_color_override: overrides.and_then(|o| o.background_color.clone()),
-                font_size_override: overrides.and_then(|o| o.font_size),
+                fade_duration_override: overrides.and_then(|o| o.fade_duration_override),
+                linger_duration_override: overrides.and_then(|o| o.linger_duration_override),
+                position_override: overrides.and_then(|o| o.position_override.clone()),
+                color_override: overrides.and_then(|o| o.color_override.clone()),
+                background_color_override: overrides
+                    .and_then(|o| o.background_color_override.clone()),
+                font_size_override: overrides.and_then(|o| o.font_size_override),
             }
         })
         .collect()
@@ -449,6 +449,94 @@ mod projection_tests;
 mod tests {
     use super::*;
     use crate::CaptionsData;
+
+    #[test]
+    fn transcription_ranges_follow_source_cuts_independent_of_speed_and_clip_order() {
+        let timeline = serde_json::from_value(serde_json::json!({
+            "segments": [
+                {"recordingSegment":1,"start":1.0,"end":3.0,"timescale":0.5},
+                {"recordingSegment":0,"start":5.0,"end":6.0,"timescale":2.0},
+                {"recordingSegment":0,"start":1.0,"end":3.0,"timescale":1.0},
+                {"recordingSegment":0,"start":2.0,"end":4.0,"timescale":1.0},
+                {"recordingSegment":0,"start":4.0,"end":4.5,"timescale":1.0},
+                {"recordingSegment":0,"start":1.0,"end":3.0,"timescale":2.0}
+            ], "zoomSegments": []
+        }))
+        .unwrap();
+        assert_eq!(
+            transcription_source_ranges(Some(&timeline), &[10.0, 4.0]),
+            vec![1.0..4.5, 5.0..6.0, 11.0..13.0]
+        );
+    }
+
+    #[test]
+    fn transcription_ranges_preserve_empty_timelines_and_clip_to_sources() {
+        let mut timeline: TimelineConfiguration =
+            serde_json::from_value(serde_json::json!({"segments": [], "zoomSegments": []}))
+                .unwrap();
+        assert!(transcription_source_ranges(Some(&timeline), &[30.0]).is_empty());
+        assert_eq!(
+            transcription_source_ranges(None, &[30.0, 10.0]),
+            vec![0.0..40.0]
+        );
+        timeline.segments = serde_json::from_value(serde_json::json!([
+            {"recordingSegment":0,"start":-1.0,"end":4.0,"timescale":1.0},
+            {"recordingSegment":0,"start":8.0,"end":40.0,"timescale":1.0},
+            {"recordingSegment":2,"start":0.0,"end":3.0,"timescale":1.0},
+            {"recordingSegment":0,"start":5.0,"end":5.0,"timescale":1.0}
+        ]))
+        .unwrap();
+        assert_eq!(
+            transcription_source_ranges(Some(&timeline), &[10.0]),
+            vec![0.0..4.0, 8.0..10.0]
+        );
+    }
+
+    #[test]
+    fn transcription_coverage_accepts_identical_ranges() {
+        let ranges = [1.0..4.0, 6.0..10.0];
+        assert!(transcription_ranges_cover(&ranges, &ranges));
+    }
+
+    #[test]
+    fn transcription_coverage_accepts_further_trims_and_reordered_clips() {
+        let timeline = serde_json::from_value(serde_json::json!({
+            "segments": [
+                {"start":7.0,"end":9.0,"timescale":2.0},
+                {"start":2.0,"end":3.0,"timescale":0.5}
+            ], "zoomSegments": []
+        }))
+        .unwrap();
+        let current = transcription_source_ranges(Some(&timeline), &[10.0]);
+        assert!(transcription_ranges_cover(&[1.0..4.0, 6.0..10.0], &current));
+    }
+
+    #[test]
+    fn transcription_coverage_rejects_audio_restored_by_undo() {
+        let timeline = serde_json::from_value(serde_json::json!({
+            "segments": [{"start":0.0,"end":10.0,"timescale":1.0}],
+            "zoomSegments": []
+        }))
+        .unwrap();
+        let current = transcription_source_ranges(Some(&timeline), &[10.0]);
+        assert!(!transcription_ranges_cover(
+            &[0.0..4.0, 6.0..10.0],
+            &current
+        ));
+        assert!(!transcription_ranges_cover(&[1.0..10.0], &current));
+        assert!(!transcription_ranges_cover(&[0.0..9.0], &current));
+        assert!(!transcription_ranges_cover(&[], &current));
+        assert!(!transcription_ranges_cover(
+            &[0.0..4.0],
+            &[0.0..4.0, 6.0..10.0]
+        ));
+    }
+
+    #[test]
+    fn transcription_coverage_accepts_an_empty_timeline() {
+        assert!(transcription_ranges_cover(&[0.0..10.0], &[]));
+        assert!(transcription_ranges_cover(&[], &[]));
+    }
 
     fn project(source_timed: bool, start: f32, end: f32) -> ProjectConfiguration {
         ProjectConfiguration {

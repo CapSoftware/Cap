@@ -196,9 +196,10 @@ fn main() {
     }
 }
 
-// Baseline implementations prior to this optimization
+// Baseline implementations; `copy_rows` mirrors the current implementation in frame.rs
 mod baseline {
     use super::Nv12Range;
+    use std::mem::MaybeUninit;
 
     pub fn copy_rows(
         data: &[u8],
@@ -210,18 +211,31 @@ mod baseline {
         if stride < row_bytes || data.len() < rows.checked_mul(stride)? {
             return None;
         }
-        let mut pixels = vec![0; rows.checked_mul(row_bytes)?];
-        for (row, output) in pixels.chunks_exact_mut(row_bytes.max(1)).enumerate() {
-            let input = &data[row * stride..row * stride + row_bytes];
-            if mirrored {
-                for (target, source) in output.chunks_exact_mut(4).zip(input.chunks_exact(4).rev())
-                {
-                    target.copy_from_slice(source);
-                }
-            } else {
-                output.copy_from_slice(input);
-            }
+        let output_len = rows.checked_mul(row_bytes)?;
+        if output_len == 0 {
+            return Some(Vec::new());
         }
+        if !mirrored {
+            let mut pixels = Vec::with_capacity(output_len);
+            for input in data.chunks(stride).take(rows) {
+                pixels.extend_from_slice(&input[..row_bytes]);
+            }
+            return Some(pixels);
+        }
+        let mut pixels = Vec::with_capacity(output_len);
+        let spare = &mut pixels.spare_capacity_mut()[..output_len];
+        for (input, output) in data.chunks(stride).zip(spare.chunks_exact_mut(row_bytes)) {
+            let (target, padding) = output.as_chunks_mut::<4>();
+            for (pixel, source) in target
+                .iter_mut()
+                .zip(input[..row_bytes].as_chunks::<4>().0.iter().rev())
+            {
+                *pixel = source.map(MaybeUninit::new);
+            }
+            padding.fill(MaybeUninit::new(0));
+        }
+        // SAFETY: every row writes all row_bytes of its chunk, so all output_len bytes are initialized.
+        unsafe { pixels.set_len(output_len) };
         Some(pixels)
     }
 

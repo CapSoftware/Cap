@@ -1,4 +1,6 @@
 import type { HttpApi } from "@effect/platform";
+import type { SQL } from "drizzle-orm";
+import { MySqlDialect } from "drizzle-orm/mysql-core";
 import { Effect, type Layer as EffectLayer, Option } from "effect";
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -154,6 +156,7 @@ import {
 	encryptEditTranscriptObject,
 } from "@/lib/edit-transcript-storage";
 import { reassignLoomImport } from "@/lib/loom-import-reassign";
+import { getOwnerOriginalKey } from "@/lib/loom-original-key";
 
 const call = (
 	handler: (request: Request) => Promise<Response>,
@@ -244,6 +247,7 @@ describe("operator CSV import", () => {
 			orgId: ids.org,
 			actorId: "owneraaaaaaaaaa",
 			allowFolders: true,
+			importPriority: "bulk",
 		});
 	});
 
@@ -293,7 +297,11 @@ describe("reassignLoomImport", () => {
 			],
 		]);
 		expect(mocks.updates).toEqual([
-			{ ownerId: ids.to, public: false, folderId: null },
+			expect.objectContaining({
+				ownerId: ids.to,
+				public: false,
+				folderId: null,
+			}),
 		]);
 		expect(mocks.deletes).toBe(2);
 		expect(mocks.removed).toEqual([mocks.objects.map(({ Key }) => Key)]);
@@ -309,6 +317,19 @@ describe("reassignLoomImport", () => {
 		[
 			[importedVideo({ source: { type: "webMP4", outputKey: "edited.mp4" } })],
 			"edited video",
+		],
+		[
+			[
+				importedVideo({
+					metadata: {
+						loomDeferredProcessing: {
+							status: "started",
+							rawFileKey: `${ids.from}/${ids.video}/raw-upload.webm`,
+						},
+					},
+				}),
+			],
+			"conversion running",
 		],
 		[[importedVideo(), []], "new owner not a member"],
 	])("leaves unsafe moves alone: %#", async (selects, reason) => {
@@ -341,6 +362,34 @@ describe("reassignLoomImport", () => {
 		expect(mocks.claims).toHaveLength(2);
 	});
 
+	it("points a pending conversion at the new owner's copy", async () => {
+		mocks.selects = [
+			[
+				importedVideo({
+					metadata: {
+						loomDeferredProcessing: {
+							status: "pending",
+							rawFileKey: `someoneaaaaaaaa/${ids.video}/raw-upload.webm`,
+						},
+					},
+				}),
+			],
+			[{ userId: ids.to }],
+		];
+		await reassignLoomImport(input);
+		const query = new MySqlDialect().sqlToQuery(
+			mocks.updates[0]?.metadata as SQL,
+		);
+		expect(query.sql).toContain("'$.loomDeferredProcessing.rawFileKey', ?)");
+		expect(query.params).toEqual([`${ids.to}/${ids.video}/raw-upload.webm`]);
+	});
+
+	it("leaves metadata alone for videos without a pending conversion", async () => {
+		mocks.selects = [[importedVideo()], [{ userId: ids.to }]];
+		await reassignLoomImport(input);
+		expect(mocks.updates[0]).not.toHaveProperty("metadata");
+	});
+
 	it("keeps sharing and visibility when asked", async () => {
 		mocks.selects = [[importedVideo()], [{ userId: ids.to }]];
 		await expect(
@@ -350,8 +399,9 @@ describe("reassignLoomImport", () => {
 			}),
 		).resolves.toMatchObject({ status: "moved" });
 		expect(mocks.updates).toEqual([
-			{ ownerId: ids.to, folderId: "folderaaaaaaaaa" },
+			expect.objectContaining({ ownerId: ids.to, folderId: "folderaaaaaaaaa" }),
 		]);
+		expect(mocks.updates[0]).not.toHaveProperty("public");
 		expect(mocks.deletes).toBe(0);
 	});
 
@@ -456,5 +506,17 @@ describe("POST /api/internal/loom-imports/reassign", () => {
 				},
 			],
 		});
+	});
+});
+
+describe("getOwnerOriginalKey", () => {
+	it.each([
+		["a/vid/raw-upload.webm", "b/vid/raw-upload.webm"],
+		["a/vid/nested/file.webm", "b/vid/nested/file.webm"],
+		["a/other/raw-upload.webm", null],
+		["a/vid/", null],
+		[undefined, null],
+	])("%s -> %s", (key, expected) => {
+		expect(getOwnerOriginalKey(key, "b", "vid")).toBe(expected);
 	});
 });
