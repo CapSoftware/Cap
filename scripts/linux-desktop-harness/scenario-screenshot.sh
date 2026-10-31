@@ -5,6 +5,12 @@ export XDG_RUNTIME_DIR=/run/user/$(id -u)
 export DBUS_SESSION_BUS_ADDRESS=unix:path=$XDG_RUNTIME_DIR/bus
 out=${HARNESS_OUT:-/out}
 eval "$(systemctl --user show-environment | grep -E "^(WAYLAND_DISPLAY|XDG_SESSION_TYPE|XDG_CURRENT_DESKTOP|XDG_SESSION_DESKTOP|LIBGL_ALWAYS_SOFTWARE|HYPRLAND_INSTANCE_SIGNATURE|NIRI_SOCKET)=" | sed 's/^/export /')"
+expected_size=${SCREEN:-1920x1080}
+if [[ -n ${HYPRLAND_INSTANCE_SIGNATURE:-} ]]; then
+  expected_size=$(hyprctl -j monitors | python3 -c 'import json, sys
+monitor, = json.load(sys.stdin)
+print("{}x{}".format(monitor["width"], monitor["height"]))') || exit 1
+fi
 : >"$out/result.txt"
 result() { printf '%s=%s\n' "$1" "$2" >>"$out/result.txt"; }
 
@@ -20,6 +26,15 @@ if [[ $XDG_CURRENT_DESKTOP != *GNOME* ]]; then
   done
 fi
 
+# PRELAUNCH=1 runs Cap once first, as on a system Cap has run on: a shell
+# launch writes so.cap.Cap.desktop, which GNOME reads a few seconds later.
+if [[ ${PRELAUNCH:-} == 1 ]]; then
+  first=$(bash "$here/launch-cap.sh" first)
+  sleep 8
+  kill "$first" 2>/dev/null
+  sleep 3
+fi
+
 # LAUNCH=dock starts Cap in the unit GNOME's app grid gives it, as
 # scenario-start-stop.sh does; LAUNCH=terminal from a shell.
 if [[ ${LAUNCH:-dock} == dock ]]; then
@@ -32,7 +47,7 @@ pid=$(bash "$here/launch-cap.sh" cap CAP_GPUI_AUTO_RECORD=screenshot CAP_GPUI_AU
 focus_cap() {
   if [[ $XDG_CURRENT_DESKTOP == *GNOME* ]]; then
     gdbus call --session --dest org.gnome.Shell --object-path /org/gnome/Shell --method org.gnome.Shell.Eval \
-      "global.display.list_all_windows().filter(w => w.get_wm_class() === 'Cap' && w.showing_on_its_workspace()).forEach(w => w.activate(global.display.get_current_time_roundtrip()))" \
+      "global.display.list_all_windows().filter(w => /^(Cap|so\.cap\.Cap)$/.test(w.get_wm_class() || '') && w.showing_on_its_workspace()).forEach(w => w.activate(global.display.get_current_time_roundtrip()))" \
       >/dev/null 2>&1
   elif [[ -n ${HYPRLAND_INSTANCE_SIGNATURE:-} ]]; then
     hyprctl dispatch focuswindow class:Cap >/dev/null 2>&1
@@ -72,7 +87,7 @@ if data[:8] == b"\x89PNG\r\n\x1a\n":
     print(*struct.unpack(">II", data[16:24]))' "$shot")
 echo "screenshot: ${shot:-none} ${size:-}" >>"$out/actions.log"
 result screenshot_taken "$([[ -n $size ]] && echo yes || echo no)"
-result screenshot_size "$([[ ${size// /x} == "${SCREEN:-1920x1080}" ]] && echo yes || echo "${size// /x}")"
+result screenshot_size "$([[ ${size// /x} == "$expected_size" ]] && echo yes || echo "${size// /x}")"
 result capture_failed "$(grep -ac 'screenshot capture failed' "$out/cap.log")"
 if [[ -z $shot ]]; then
   find "$HOME" /tmp -newer "$out/profile/store" -iname "Screenshot*.png" -printf "portal file: %s bytes %p\n" 2>/dev/null >>"$out/actions.log"

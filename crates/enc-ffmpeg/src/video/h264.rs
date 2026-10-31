@@ -35,6 +35,30 @@ pub struct H264EncoderBuilder {
     encoder_priority_override: Option<&'static [&'static str]>,
     is_export: bool,
     crf: Option<u8>,
+    software_tuning: Option<SoftwareEncoderTuning>,
+}
+
+/// libx264 settings for an export split across several encoders running at
+/// once: each gets a share of the CPU threads, and `capped_crf` switches rate
+/// control to constant quality with the export bitrate as its ceiling.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SoftwareEncoderTuning {
+    pub threads: usize,
+    pub capped_crf: Option<u8>,
+}
+
+impl SoftwareEncoderTuning {
+    fn apply(&self, codec: &Codec, options: &mut Dictionary<'static>, max_bitrate: usize) {
+        if codec.name() != "libx264" {
+            return;
+        }
+        options.set("threads", &self.threads.max(1).to_string());
+        if let Some(crf) = self.capped_crf {
+            options.set("crf", &crf.to_string());
+            options.set("maxrate", &max_bitrate.to_string());
+            options.set("bufsize", &max_bitrate.saturating_mul(2).to_string());
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -87,7 +111,13 @@ impl H264EncoderBuilder {
             encoder_priority_override: None,
             is_export: false,
             crf: None,
+            software_tuning: None,
         }
+    }
+
+    pub fn with_software_tuning(mut self, tuning: SoftwareEncoderTuning) -> Self {
+        self.software_tuning = Some(tuning);
+        self
     }
 
     pub fn with_preset(mut self, preset: H264Preset) -> Self {
@@ -171,8 +201,20 @@ impl H264EncoderBuilder {
 
         let mut last_error = None;
 
-        for (codec, encoder_options) in candidates {
+        for (codec, mut encoder_options) in candidates {
             let codec_name = codec.name().to_string();
+            if let Some(tuning) = &self.software_tuning {
+                tuning.apply(
+                    &codec,
+                    &mut encoder_options,
+                    get_bitrate(
+                        output_width,
+                        output_height,
+                        input_config.frame_rate.0 as f32 / input_config.frame_rate.1.max(1) as f32,
+                        self.bpp,
+                    ),
+                );
+            }
 
             if is_hardware_h264(&codec_name)
                 && let Err(reason) = cached_hardware_self_test(
@@ -293,6 +335,75 @@ impl H264EncoderBuilder {
 
         Ok(H264Encoder {
             base: EncoderBase::new(stream_index),
+            encoder,
+            converter,
+            output_format,
+            output_width,
+            output_height,
+            input_format,
+            input_width,
+            input_height,
+            converted_frame_pool,
+            hw_upload,
+            #[cfg(target_os = "macos")]
+            videotoolbox_hw: None,
+        })
+    }
+
+    /// Opens libx264 without an output file, for packets written through a
+    /// [`PacketSink`] as stream 0 and muxed into an output later.
+    pub fn build_software_detached(self) -> Result<H264Encoder, H264EncoderError> {
+        let input_config = self.input_config;
+        let (raw_width, raw_height) = self
+            .output_size
+            .unwrap_or((input_config.width, input_config.height));
+        let candidates = get_codec_and_options(
+            &input_config,
+            self.preset,
+            Some(&["libx264"]),
+            self.is_export,
+            self.crf,
+        );
+        let (codec, mut encoder_options) = candidates
+            .into_iter()
+            .next()
+            .ok_or(H264EncoderError::CodecNotFound)?;
+        let (output_width, output_height) = (ensure_even(raw_width), ensure_even(raw_height));
+        if let Some(tuning) = &self.software_tuning {
+            tuning.apply(
+                &codec,
+                &mut encoder_options,
+                get_bitrate(
+                    output_width,
+                    output_height,
+                    input_config.frame_rate.0 as f32 / input_config.frame_rate.1.max(1) as f32,
+                    self.bpp,
+                ),
+            );
+        }
+        let OpenedVideoEncoder {
+            encoder,
+            converter,
+            converted_frame_pool,
+            output_format,
+            output_width,
+            output_height,
+            input_format,
+            input_width,
+            input_height,
+            hw_upload,
+        } = open_video_encoder(
+            codec,
+            encoder_options,
+            &input_config,
+            output_width,
+            output_height,
+            self.bpp,
+            self.external_conversion,
+            self.crf,
+        )?;
+        Ok(H264Encoder {
+            base: EncoderBase::new(0),
             encoder,
             converter,
             output_format,
@@ -1021,12 +1132,12 @@ impl H264Encoder {
         Ok(())
     }
 
-    pub fn queue_frame_reusable(
+    pub fn queue_frame_reusable<S: PacketSink + ?Sized>(
         &mut self,
         frame: &mut frame::Video,
         converted_frame: &mut Option<frame::Video>,
         timestamp: Duration,
-        output: &mut format::context::Output,
+        output: &mut S,
     ) -> Result<(), QueueFrameError> {
         self.base.update_pts(frame, timestamp, &mut self.encoder);
 

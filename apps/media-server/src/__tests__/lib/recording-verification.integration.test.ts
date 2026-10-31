@@ -25,13 +25,17 @@ import {
 	timingMetadataBudget,
 } from "../../lib/recording-timing";
 import {
+	decodePreverifiedRun,
+	hashRecordingUpload,
 	inspectRecordingSources,
 	isRetryableRecordingVerificationError,
+	type PreverifiedVideoRun,
 	verifyRecording,
 	verifyRemoteRecording,
 	verifyRemoteRecordingBytes,
 	verifyRemuxedRecording,
 } from "../../lib/recording-verification";
+import { getActiveSubprocessCount } from "../../lib/subprocess";
 
 const FIXTURES = join(import.meta.dir, "..", "fixtures");
 let directory: string;
@@ -2971,6 +2975,324 @@ describe("chunked packet-proven verification", () => {
 			delete process.env.MEDIA_SERVER_VERIFY_DECODE_CHUNKS;
 		}
 	});
+
+	test("a packet mismatch wins over the fragment decode it runs beside", async () => {
+		const recording = await segmentedRecording("chunk-mismatch", 15);
+		const bytes = await readFile(recording.output);
+		const mdat = bytes.indexOf(Buffer.from("mdat"));
+		if (mdat < 0) throw new Error("Fixture has no media data");
+		bytes[mdat + 64] ^= 0xff;
+		await writeFile(recording.output, bytes);
+		const active = getActiveSubprocessCount();
+		process.env.MEDIA_SERVER_VERIFY_DECODE_CHUNKS = "3";
+		try {
+			await expect(
+				verifyRemuxedRecording(
+					recording.combined,
+					silent,
+					recording.output,
+					{ requireAudio: false },
+					{ init: recording.init, segments: recording.segments },
+				),
+			).rejects.toThrow(
+				/video does not preserve the source \(first difference at packet \d+: data differs\)/,
+			);
+			expect(getActiveSubprocessCount()).toBe(active);
+		} finally {
+			delete process.env.MEDIA_SERVER_VERIFY_DECODE_CHUNKS;
+		}
+	});
+
+	test("decodes the fragments while the output is still being written", async () => {
+		const recording = await segmentedRecording("chunk-early", 15);
+		process.env.MEDIA_SERVER_VERIFY_DECODE_CHUNKS = "3";
+		try {
+			const expected = await verifyRemuxedRecording(
+				recording.combined,
+				silent,
+				recording.output,
+				{ requireAudio: false },
+				{ init: recording.init, segments: recording.segments },
+			);
+			const pending = join(directory, "chunk-early-pending.mp4");
+			let written!: () => void;
+			const outputReady = new Promise<void>((resolve) => {
+				written = resolve;
+			});
+			const early = verifyRemuxedRecording(
+				recording.combined,
+				silent,
+				pending,
+				{ requireAudio: false },
+				{ init: recording.init, segments: recording.segments },
+				[],
+				outputReady,
+			);
+			const warn = spyOn(console, "warn");
+			let result: Awaited<typeof early>;
+			try {
+				await new Promise((resolve) => setTimeout(resolve, 200));
+				await muxMediaTracksToMp4(recording.combined, silent, pending);
+				written();
+				result = await early;
+				expect(
+					warn.mock.calls.some((call) =>
+						String(call[0]).includes("recording_chunked_decode_fallback"),
+					),
+				).toBe(false);
+			} finally {
+				warn.mockRestore();
+			}
+			expect(result.sourcePreserved).toBe(true);
+			expect(result.video.frameCount).toBe(expected.video.frameCount);
+			expect(result.video.duration).toBe(expected.video.duration);
+			expect(Boolean(result.audio)).toBe(Boolean(expected.audio));
+		} finally {
+			delete process.env.MEDIA_SERVER_VERIFY_DECODE_CHUNKS;
+		}
+	});
+
+	test("a failed output write fails verification as itself and stops the decoders", async () => {
+		const recording = await segmentedRecording("chunk-write-failed", 15);
+		const active = getActiveSubprocessCount();
+		process.env.MEDIA_SERVER_VERIFY_DECODE_CHUNKS = "3";
+		try {
+			const failure = new Error("Remux failed");
+			await expect(
+				verifyRemuxedRecording(
+					recording.combined,
+					silent,
+					join(directory, "chunk-write-failed-missing.mp4"),
+					{ requireAudio: false },
+					{ init: recording.init, segments: recording.segments },
+					[],
+					new Promise((_resolve, reject) =>
+						setTimeout(() => reject(failure), 100),
+					),
+				),
+			).rejects.toBe(failure);
+			expect(getActiveSubprocessCount()).toBe(active);
+		} finally {
+			delete process.env.MEDIA_SERVER_VERIFY_DECODE_CHUNKS;
+		}
+	});
+
+	async function preverify(
+		recording: { init: string; segments: string[] },
+		from: number,
+		to: number,
+	): Promise<PreverifiedVideoRun> {
+		const work = await mkdtemp(join(directory, "preverify-"));
+		const lines = await decodePreverifiedRun(
+			recording.init,
+			recording.segments.slice(from, to),
+			work,
+		);
+		if (!lines) throw new Error("Expected a decodable preverified run");
+		return { segments: to - from, lines };
+	}
+
+	async function withRuns(
+		recording: Awaited<ReturnType<typeof segmentedRecording>>,
+		runs: PreverifiedVideoRun[],
+		chunks?: string,
+	) {
+		if (chunks === undefined)
+			delete process.env.MEDIA_SERVER_VERIFY_DECODE_CHUNKS;
+		else process.env.MEDIA_SERVER_VERIFY_DECODE_CHUNKS = chunks;
+		const warn = spyOn(console, "warn");
+		try {
+			const result = await verifyRemuxedRecording(
+				recording.combined,
+				silent,
+				recording.output,
+				{ requireAudio: false },
+				{ init: recording.init, segments: recording.segments },
+				runs,
+			);
+			const fallbacks = warn.mock.calls.filter((call) =>
+				String(call[0]).includes("recording_chunked_decode_fallback"),
+			);
+			return { result, fallbacks };
+		} finally {
+			warn.mockRestore();
+			delete process.env.MEDIA_SERVER_VERIFY_DECODE_CHUNKS;
+		}
+	}
+
+	test.each([undefined, "3"])(
+		"returns the same evidence from preverified runs as one full decode (chunks %s)",
+		async (chunks) => {
+			const recording = await segmentedRecording("preverified-parity", 15);
+			expect(recording.segments.length).toBeGreaterThanOrEqual(6);
+			const { single } = await both(recording);
+			const runs = [
+				await preverify(recording, 0, 2),
+				await preverify(recording, 2, 4),
+			];
+			const { result, fallbacks } = await withRuns(recording, runs, chunks);
+			expect(fallbacks).toHaveLength(0);
+			expect(result).toEqual(single);
+			expect(result.video.frameCount).toBe(120);
+		},
+	);
+
+	test("accepts runs that cover every fragment", async () => {
+		const recording = await segmentedRecording("preverified-complete", 15);
+		const { single } = await both(recording);
+		const { result, fallbacks } = await withRuns(recording, [
+			await preverify(recording, 0, recording.segments.length),
+		]);
+		expect(fallbacks).toHaveLength(0);
+		expect(result).toEqual(single);
+	});
+
+	test.each([
+		"dropped frame",
+		"extra frame",
+		"shifted timestamps",
+		"changed header",
+	])(
+		"falls back to one full decode when a cached run has a %s",
+		async (defect) => {
+			const recording = await segmentedRecording(
+				`preverified-${defect.replaceAll(" ", "-")}`,
+				15,
+			);
+			const { single } = await both(recording);
+			const run = await preverify(recording, 0, 3);
+			const frames = run.lines.filter((line) => !line.startsWith("#"));
+			const header = run.lines.filter((line) => line.startsWith("#"));
+			const changed =
+				defect === "dropped frame"
+					? [...header, ...frames.slice(0, -1)]
+					: defect === "extra frame"
+						? [...header, ...frames, frames.at(-1) as string]
+						: defect === "shifted timestamps"
+							? [
+									...header,
+									...frames.map((line) =>
+										line.replace(
+											/^0,\s*(\d+),\s*(\d+)/,
+											(_, dts, pts) =>
+												`0, ${Number(dts) + 1}, ${Number(pts) + 1}`,
+										),
+									),
+								]
+							: [
+									...header.map((line) =>
+										line.replace(/^#dimensions 0: .*/, "#dimensions 0: 1x1"),
+									),
+									...frames,
+								];
+			const { result, fallbacks } = await withRuns(recording, [
+				{ segments: run.segments, lines: changed },
+			]);
+			expect(fallbacks).toHaveLength(1);
+			expect(result).toEqual(single);
+		},
+	);
+
+	test("drops a cached run whose next fragment cannot be decoded on its own", async () => {
+		const recording = await misalignedRecording("preverified-misaligned");
+		const { single } = await both(recording);
+		const work = await mkdtemp(join(directory, "preverify-misaligned-"));
+		const lines = await decodePreverifiedRun(
+			recording.init,
+			recording.segments.slice(0, 1),
+			work,
+		);
+		expect(lines).not.toBeNull();
+		const { result } = await withRuns(recording, [
+			{ segments: 1, lines: lines ?? [] },
+		]);
+		expect(result).toEqual(single);
+	});
+
+	test("does not preverify a run that does not start on a keyframe", async () => {
+		const recording = await misalignedRecording("preverified-unaligned-start");
+		const work = await mkdtemp(join(directory, "preverify-unaligned-"));
+		expect(
+			await decodePreverifiedRun(
+				recording.init,
+				recording.segments.slice(1, 3),
+				work,
+			),
+		).toBeNull();
+	});
+
+	test("does not preverify fragments that fail to decode", async () => {
+		const recording = await segmentedRecording("preverified-corrupt", 15);
+		const [first, second] = recording.segments;
+		if (!first || !second) throw new Error("Expected two fragments");
+		const packets = JSON.parse(
+			await run([
+				"ffprobe",
+				"-v",
+				"error",
+				"-protocol_whitelist",
+				"file,concat",
+				"-select_streams",
+				"v:0",
+				"-show_packets",
+				"-show_entries",
+				"packet=pos,size",
+				"-of",
+				"json",
+				`concat:${recording.init}|${second}`,
+			]),
+		) as { packets: { pos: string; size: string }[] };
+		const last = packets.packets.at(-1);
+		if (!last) throw new Error("Fragment has no video packet");
+		const offset = Number(last.pos) - (await readFile(recording.init)).length;
+		const bytes = Buffer.from(await readFile(second));
+		bytes.fill(0, offset, offset + Number(last.size));
+		const corrupt = join(directory, "preverified-corrupt-fragment.m4s");
+		await writeFile(corrupt, bytes);
+		const work = await mkdtemp(join(directory, "preverify-corrupt-"));
+		expect(
+			await decodePreverifiedRun(recording.init, [first, corrupt], work),
+		).toBeNull();
+	});
+});
+
+describe("upload content tags", () => {
+	const md5 = (bytes: Uint8Array) => createHash("md5").update(bytes).digest();
+	const multipartTag = (bytes: Uint8Array, partSize: number) => {
+		const parts: Buffer[] = [];
+		for (let start = 0; start < bytes.length; start += partSize)
+			parts.push(md5(bytes.subarray(start, start + partSize)));
+		return `"${createHash("md5").update(Buffer.concat(parts)).digest("hex")}-${parts.length}"`;
+	};
+
+	test.each([
+		["uneven", 3 * 1024 * 1024 + 12_345],
+		["part aligned", 2 * 1024 * 1024],
+		["one partial part", 777],
+	])("matches the S3 ETags of a %s file", async (_, size) => {
+		const bytes = new Uint8Array(size).map(
+			(_, index) => (index * 13 + 5) % 253,
+		);
+		const work = await mkdtemp(join(tmpdir(), "upload-tag-"));
+		try {
+			const path = join(work, "result.mp4");
+			await writeFile(path, bytes);
+			const sha256 = createHash("sha256").update(bytes).digest("hex");
+			expect(await hashRecordingUpload(path, {})).toEqual({
+				sha256,
+				contentIdentity: `"${md5(bytes).toString("hex")}"`,
+			});
+			expect(
+				await hashRecordingUpload(path, { partSize: 1024 * 1024 }),
+			).toEqual({
+				sha256,
+				contentIdentity: multipartTag(bytes, 1024 * 1024),
+			});
+			expect(await hashRecordingUpload(path, undefined)).toEqual({ sha256 });
+		} finally {
+			await rm(work, { recursive: true, force: true });
+		}
+	});
 });
 
 describe("ranged remote byte verification", () => {
@@ -3059,6 +3381,99 @@ describe("ranged remote byte verification", () => {
 							`bytes=${index * mb}-${Math.min(payload.length, (index + 1) * mb) - 1}`,
 					)
 					.sort(),
+			);
+		} finally {
+			await server.stop(true);
+		}
+	});
+
+	test("trusts an ETag that is the uploaded file's own content tag", async () => {
+		const contentIdentity = `"${createHash("md5").update(payload).digest("hex")}"`;
+		const requests: string[] = [];
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch(request) {
+				requests.push(request.headers.get("range") ?? "full");
+				if (request.headers.get("if-match") !== contentIdentity)
+					return new Response("Object changed", { status: 412 });
+				return new Response(payload.slice(0, 1), {
+					status: 206,
+					headers: {
+						ETag: contentIdentity,
+						"Content-Range": `bytes 0-0/${payload.length}`,
+					},
+				});
+			},
+		});
+		try {
+			const result = await verifyRemoteRecordingBytes(
+				`http://127.0.0.1:${server.port}/recording.mp4`,
+				{
+					expectedObjectIdentity: contentIdentity,
+					expectedSha256: sha256,
+					expectedFileSize: payload.length,
+					uploadedContentIdentity: contentIdentity,
+				},
+			);
+			expect(result).toEqual({
+				objectIdentity: contentIdentity,
+				fileSize: payload.length,
+				remoteSha256: sha256,
+			});
+			expect(requests).toEqual(["bytes=0-0"]);
+		} finally {
+			await server.stop(true);
+		}
+	});
+
+	test("re-reads every byte when the ETag is not the uploaded content tag", async () => {
+		const { server, ranges } = rangedServer();
+		try {
+			const result = await verifyRemoteRecordingBytes(
+				`http://127.0.0.1:${server.port}/recording.mp4`,
+				{
+					expectedObjectIdentity: identity,
+					expectedSha256: sha256,
+					expectedFileSize: payload.length,
+					uploadedContentIdentity: `"${createHash("md5").update(payload).digest("hex")}"`,
+				},
+			);
+			expect(result.remoteSha256).toBe(sha256);
+			expect(ranges).toHaveLength(4);
+		} finally {
+			await server.stop(true);
+		}
+	});
+
+	test("rejects a content-tagged object whose size differs", async () => {
+		const contentIdentity = `"${createHash("md5").update(payload).digest("hex")}"`;
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch() {
+				return new Response(payload.slice(0, 1), {
+					status: 206,
+					headers: {
+						ETag: contentIdentity,
+						"Content-Range": `bytes 0-0/${payload.length + 1}`,
+					},
+				});
+			},
+		});
+		try {
+			await expect(
+				verifyRemoteRecordingBytes(
+					`http://127.0.0.1:${server.port}/recording.mp4`,
+					{
+						expectedObjectIdentity: contentIdentity,
+						expectedSha256: sha256,
+						expectedFileSize: payload.length,
+						uploadedContentIdentity: contentIdentity,
+					},
+				),
+			).rejects.toThrow(
+				"Uploaded recording size does not match the muxed file",
 			);
 		} finally {
 			await server.stop(true);

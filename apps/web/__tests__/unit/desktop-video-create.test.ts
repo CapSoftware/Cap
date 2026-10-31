@@ -134,6 +134,10 @@ vi.mock("@/lib/live-transcribe", () => ({
 	maybeStartLiveTranscription: vi.fn(async () => "skipped"),
 }));
 
+vi.mock("@/lib/desktop-share-url", () => ({
+	getDesktopShareUrl: vi.fn(async () => undefined),
+}));
+
 vi.mock("drizzle-orm", () => ({
 	and: vi.fn((...args: unknown[]) => args),
 	eq: vi.fn((field: unknown, value: unknown) => ({ field, value })),
@@ -148,6 +152,7 @@ const { invalidateGoogleDriveStorageQuotaCache } = await import(
 );
 const { maybeStartLiveTranscription } = await import("@/lib/live-transcribe");
 const { trackServerEvent } = await import("@/lib/server-analytics");
+const { getDesktopShareUrl } = await import("@/lib/desktop-share-url");
 
 function resetMockDb() {
 	for (const key of Object.keys(mockDb)) {
@@ -739,6 +744,68 @@ describe("GET /create", () => {
 			orgId: "org-2",
 			ownerId: "user-1",
 		});
+	});
+
+	it("returns the share link for the new video's organization", async () => {
+		mockGetCurrentUser.mockResolvedValue({
+			id: "user-1",
+			email: "someone@cap.test",
+			defaultOrgId: "org-1",
+			activeOrganizationId: "org-1",
+		});
+		mockDb.where
+			.mockResolvedValueOnce([
+				{ id: "org-1", name: "Acme", createdAt: new Date() },
+			])
+			.mockResolvedValueOnce([
+				{ id: "org-2", name: "Team", createdAt: new Date() },
+			])
+			.mockResolvedValueOnce([{ count: 5 }]);
+		vi.mocked(getDesktopShareUrl).mockResolvedValueOnce(
+			"https://videos.team.test/s/new-video",
+		);
+
+		const response = await app.request("https://cap.test/create?orgId=org-2");
+
+		expect(response.status).toBe(200);
+		const body = await response.json();
+		expect(getDesktopShareUrl).toHaveBeenCalledWith("org-2", body.id);
+		expect(body).toMatchObject({
+			share_url: "https://videos.team.test/s/new-video",
+		});
+	});
+
+	it("returns the share link for an existing video's organization", async () => {
+		mockGetCurrentUser.mockResolvedValue({
+			id: "user-1",
+			email: "someone@cap.test",
+			defaultOrgId: "org-1",
+			activeOrganizationId: "org-1",
+		});
+		mockDb.where.mockResolvedValueOnce([
+			{
+				id: "0123456789abcde",
+				ownerId: "user-1",
+				orgId: "org-3",
+				isScreenshot: false,
+				source: { type: "desktopMP4" },
+			},
+		]);
+		vi.mocked(getDesktopShareUrl).mockResolvedValueOnce(
+			"https://videos.team.test/s/0123456789abcde",
+		);
+
+		const response = await app.request(
+			"https://cap.test/create?videoId=0123456789abcde&orgId=org-1",
+		);
+
+		expect(response.status).toBe(200);
+		expect(getDesktopShareUrl).toHaveBeenCalledWith("org-3", "0123456789abcde");
+		expect(await response.json()).toMatchObject({
+			id: "0123456789abcde",
+			share_url: "https://videos.team.test/s/0123456789abcde",
+		});
+		expect(mockDb.transaction).not.toHaveBeenCalled();
 	});
 
 	it("creates a missing video with an explicitly reserved ID", async () => {

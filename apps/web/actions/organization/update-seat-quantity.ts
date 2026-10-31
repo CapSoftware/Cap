@@ -151,9 +151,19 @@ export async function previewSeatChange(
 	}
 
 	const nextPaymentDate = preview.period_end;
+	// Lines starting after this period are the next full period at the new
+	// quantity, priced by Stripe, so tiered prices are quoted correctly.
+	const recurringAmount = previewLines.reduce(
+		(total, line) =>
+			!line.proration && line.period.start >= subscription.current_period_end
+				? total + line.amount
+				: total,
+		0,
+	);
 
 	return {
 		proratedAmount,
+		recurringAmount,
 		nextPaymentDate,
 		currentQuantity,
 		newQuantity,
