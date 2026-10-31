@@ -468,7 +468,7 @@ async function fetchDashRepresentationBlob({
 		representation.initUrl,
 		...representation.segments.map((s) => s.url),
 	];
-	const buffers: Array<ArrayBuffer> = new Array(resources.length);
+	const buffers: Blob[] = new Array(resources.length);
 	let nextIndex = 0;
 
 	const worker = async () => {
@@ -481,7 +481,7 @@ async function fetchDashRepresentationBlob({
 			if (!resource) continue;
 
 			const response = await fetchCors(resource, signal);
-			buffers[index] = await response.arrayBuffer();
+			buffers[index] = await response.blob();
 			onResourceLoaded();
 		}
 	};
