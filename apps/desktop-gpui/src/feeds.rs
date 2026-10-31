@@ -1438,6 +1438,15 @@ pub(crate) fn camera_preview_image(
         None => return None,
     };
 
+    // Even-width 1:1 YUYV, UYVY, and NV12. Odd widths stay here: swscale
+    // resamples that chroma, and the kernel does not.
+    if width == source_width
+        && height == source_height
+        && let Some(pixels) = bt601_preview_bgra(frame, mirrored)
+    {
+        return bgra_preview_image(pixels, width, height);
+    }
+
     let mut converted = ffmpeg::frame::Video::empty();
     let source = if frame.format() == ffmpeg::format::Pixel::BGRA
         && width == source_width
@@ -1479,11 +1488,56 @@ pub(crate) fn camera_preview_image(
         height,
         mirrored,
     )?;
-    let image = image::RgbaImage::from_raw(width as u32, height as u32, pixels)?;
+    bgra_preview_image(pixels, width as u32, height as u32)
+}
+
+#[cfg(any(not(target_os = "macos"), test))]
+fn bt601_preview_bgra(frame: &ffmpeg::frame::Video, mirrored: bool) -> Option<Vec<u8>> {
+    use cap_gpui_kernels::camera_bgra::{self, Packed422};
+
+    let width = frame.width() as usize;
+    let height = frame.height() as usize;
+    match frame.format() {
+        ffmpeg::format::Pixel::YUYV422 => camera_bgra::packed422_to_bgra(
+            frame.data(0),
+            width,
+            height,
+            frame.stride(0),
+            Packed422::Yuyv,
+            mirrored,
+        ),
+        ffmpeg::format::Pixel::UYVY422 => camera_bgra::packed422_to_bgra(
+            frame.data(0),
+            width,
+            height,
+            frame.stride(0),
+            Packed422::Uyvy,
+            mirrored,
+        ),
+        ffmpeg::format::Pixel::NV12 => camera_bgra::nv12_to_bgra(
+            frame.data(0),
+            frame.data(1),
+            width,
+            height,
+            frame.stride(0),
+            frame.stride(1),
+            mirrored,
+        ),
+        _ => None,
+    }
+}
+
+#[cfg(any(not(target_os = "macos"), test))]
+fn bgra_preview_image(
+    pixels: Vec<u8>,
+    width: u32,
+    height: u32,
+) -> Option<(Arc<gpui::RenderImage>, (usize, usize))> {
+    let image = image::RgbaImage::from_raw(width, height, pixels)?;
     let image = Arc::new(gpui::RenderImage::new(smallvec::smallvec![
         image::Frame::new(image)
     ]));
-    Some((image, (width, height)))
+    Some((image, (width as usize, height as usize)))
 }
 
 /// The quietest level any meter draws: `bar_level` bottoms out at -60 dB and
@@ -2238,6 +2292,468 @@ mod tests {
         let (_, recapped) =
             camera_preview_image(&frame, &mut scaler, false, Some((16, 16))).unwrap();
         assert_eq!(recapped, (16, 8));
+    }
+
+    fn preview_uses_kernel() -> bool {
+        cap_gpui_kernels::camera_bgra::simd_path() != "swscale"
+    }
+
+    fn assert_preview_scaler(scaler: &Option<ffmpeg::software::scaling::Context>) {
+        if preview_uses_kernel() {
+            assert!(scaler.is_none());
+        } else {
+            assert!(scaler.is_some());
+        }
+    }
+
+    fn assert_preview_bytes(bytes: &[u8], expected: &[u8]) {
+        if preview_uses_kernel() {
+            assert_eq!(bytes, expected);
+            return;
+        }
+        assert_eq!(bytes.len(), expected.len());
+        let gap = bytes
+            .iter()
+            .zip(expected)
+            .map(|(got, expected)| got.abs_diff(*expected))
+            .max()
+            .unwrap_or(0);
+        assert!(gap <= 3, "{bytes:?}");
+    }
+
+    #[test]
+    fn camera_preview_converts_packed_422_and_nv12_without_swscale() {
+        let mut yuyv = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::YUYV422, 2, 1);
+        yuyv.data_mut(0)[..4].copy_from_slice(&[16, 128, 235, 128]);
+        let mut scaler = None;
+        let (image, dims) = camera_preview_image(&yuyv, &mut scaler, false, None).unwrap();
+        assert_eq!(dims, (2, 1));
+        assert_preview_scaler(&scaler);
+        assert_preview_bytes(
+            image.as_bytes(0).unwrap(),
+            &[0, 0, 0, 255, 255, 255, 255, 255],
+        );
+
+        let (mirrored, _) = camera_preview_image(&yuyv, &mut scaler, true, None).unwrap();
+        assert_preview_scaler(&scaler);
+        assert_preview_bytes(
+            mirrored.as_bytes(0).unwrap(),
+            &[255, 255, 255, 255, 0, 0, 0, 255],
+        );
+
+        let mut uyvy = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::UYVY422, 2, 1);
+        uyvy.data_mut(0)[..4].copy_from_slice(&[128, 16, 128, 235]);
+        let (image, _) = camera_preview_image(&uyvy, &mut scaler, false, None).unwrap();
+        assert_preview_scaler(&scaler);
+        assert_preview_bytes(
+            image.as_bytes(0).unwrap(),
+            &[0, 0, 0, 255, 255, 255, 255, 255],
+        );
+
+        let mut nv12 = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::NV12, 2, 2);
+        let y_stride = nv12.stride(0);
+        nv12.data_mut(0)[..2].copy_from_slice(&[128, 128]);
+        nv12.data_mut(0)[y_stride..y_stride + 2].copy_from_slice(&[128, 128]);
+        nv12.data_mut(1)[..2].copy_from_slice(&[128, 128]);
+        let (image, dims) = camera_preview_image(&nv12, &mut scaler, false, None).unwrap();
+        assert_eq!(dims, (2, 2));
+        assert_preview_scaler(&scaler);
+        assert_preview_bytes(image.as_bytes(0).unwrap(), &[130, 130, 130, 255].repeat(4));
+    }
+
+    #[test]
+    fn preview_stays_within_three_codes_of_swscale_bilinear() {
+        if !preview_uses_kernel() {
+            for pixel in [
+                ffmpeg::format::Pixel::YUYV422,
+                ffmpeg::format::Pixel::UYVY422,
+                ffmpeg::format::Pixel::NV12,
+            ] {
+                let frame = ffmpeg::frame::Video::new(pixel, 16, 8);
+                let mut scaler = None;
+                let (_, dims) = camera_preview_image(&frame, &mut scaler, false, None).unwrap();
+                assert_eq!(dims, (16, 8));
+                assert!(scaler.is_some(), "{pixel:?}");
+                let (_, mirrored) = camera_preview_image(&frame, &mut scaler, true, None).unwrap();
+                assert_eq!(mirrored, (16, 8));
+                assert!(scaler.is_some(), "{pixel:?} mirrored");
+            }
+            assert!(nv12_gap_vs_swscale(16, 8, false, Nv12Pattern::VerticalStep).is_none());
+            assert!(packed_gap_vs_swscale(ffmpeg::format::Pixel::YUYV422, 16, 8, false).is_none());
+            return;
+        }
+        expect_gap_at_most_3(
+            nv12_gap_vs_swscale(128, 16, false, Nv12Pattern::HighFrequency),
+            "nv12 128x16 high frequency",
+        );
+        expect_gap_at_most_3(
+            nv12_gap_vs_swscale(16, 8, false, Nv12Pattern::VerticalStep),
+            "nv12 16x8 vertical step",
+        );
+        expect_gap_at_most_3(
+            nv12_gap_vs_swscale(64, 32, false, Nv12Pattern::Smooth),
+            "nv12 64x32 smooth",
+        );
+        expect_gap_at_most_3(
+            nv12_gap_vs_swscale(1920, 8, false, Nv12Pattern::HighFrequency),
+            "nv12 1920x8 high frequency",
+        );
+        expect_gap_at_most_3(
+            nv12_gap_vs_swscale(128, 15, false, Nv12Pattern::HighFrequency),
+            "nv12 128x15 high frequency",
+        );
+        expect_gap_at_most_3(
+            nv12_gap_vs_swscale(64, 32, true, Nv12Pattern::HighFrequency),
+            "nv12 64x32 high frequency mirrored",
+        );
+        expect_gap_at_most_3(
+            nv12_gap_vs_swscale(16, 9, true, Nv12Pattern::VerticalStep),
+            "nv12 16x9 vertical step mirrored",
+        );
+        expect_gap_at_most_3(
+            packed_gap_vs_swscale(ffmpeg::format::Pixel::YUYV422, 128, 16, false),
+            "yuyv 128x16",
+        );
+        expect_gap_at_most_3(
+            packed_gap_vs_swscale(ffmpeg::format::Pixel::YUYV422, 128, 15, true),
+            "yuyv 128x15 mirrored",
+        );
+        expect_gap_at_most_3(
+            packed_gap_vs_swscale(ffmpeg::format::Pixel::UYVY422, 64, 32, true),
+            "uyvy 64x32 mirrored",
+        );
+    }
+
+    fn expect_gap_at_most_3(gap: Option<u8>, what: &str) {
+        expect_gap_at_most(gap, 3, what);
+    }
+
+    fn expect_gap_at_most(gap: Option<u8>, limit: u8, what: &str) {
+        let gap = gap.unwrap_or_else(|| panic!("{what}: kernel unavailable"));
+        assert!(gap <= limit, "{what} gap {gap}");
+    }
+
+    /// `ff_nv12_to_bgra_neon` repeats each chroma row for two luma rows. With
+    /// the kernel's coefficients that is 41 codes on the Smooth pattern and 42
+    /// against `SWS_POINT` at 1920x8; a vertical gradient stays at 3. Packed
+    /// 4:2:2 is not that converter, and its bilinear gap is already 3.
+    #[cfg(target_arch = "aarch64")]
+    const NEON_SMOOTH_GAP: u8 = 42;
+
+    #[cfg(target_arch = "aarch64")]
+    #[test]
+    fn preview_stays_near_the_neon_swscale_path() {
+        expect_gap_at_most(
+            nv12_gap_vs_native_swscale(64, 32, false, Nv12Pattern::Smooth),
+            NEON_SMOOTH_GAP,
+            "nv12 64x32 smooth neon",
+        );
+        expect_gap_at_most(
+            nv12_gap_vs_native_swscale(1920, 8, false, Nv12Pattern::Smooth),
+            NEON_SMOOTH_GAP,
+            "nv12 1920x8 smooth neon",
+        );
+        expect_gap_at_most_3(
+            gradient_nv12_gap_vs_native_swscale(64, 32),
+            "nv12 64x32 gradient neon",
+        );
+        expect_gap_at_most_3(
+            packed_ramp_gap_vs_native_swscale(ffmpeg::format::Pixel::YUYV422, 128, 32),
+            "yuyv 128x32 ramp neon",
+        );
+        expect_gap_at_most_3(
+            packed_ramp_gap_vs_native_swscale(ffmpeg::format::Pixel::UYVY422, 64, 32),
+            "uyvy 64x32 ramp neon",
+        );
+    }
+
+    #[test]
+    fn odd_width_preview_stays_on_swscale() {
+        for pixel in [
+            ffmpeg::format::Pixel::YUYV422,
+            ffmpeg::format::Pixel::UYVY422,
+            ffmpeg::format::Pixel::NV12,
+        ] {
+            let frame = ffmpeg::frame::Video::new(pixel, 3, 2);
+            let mut scaler = None;
+            let (_, dims) = camera_preview_image(&frame, &mut scaler, false, None).unwrap();
+            assert_eq!(dims, (3, 2));
+            assert!(scaler.is_some(), "{pixel:?}");
+        }
+    }
+
+    enum Nv12Pattern {
+        HighFrequency,
+        VerticalStep,
+        Smooth,
+    }
+
+    fn nv12_gap_vs_swscale(
+        width: u32,
+        height: u32,
+        mirrored: bool,
+        pattern: Nv12Pattern,
+    ) -> Option<u8> {
+        nv12_gap(width, height, mirrored, pattern, false)
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    fn nv12_gap_vs_native_swscale(
+        width: u32,
+        height: u32,
+        mirrored: bool,
+        pattern: Nv12Pattern,
+    ) -> Option<u8> {
+        nv12_gap(width, height, mirrored, pattern, true)
+    }
+
+    fn nv12_gap(
+        width: u32,
+        height: u32,
+        mirrored: bool,
+        pattern: Nv12Pattern,
+        native_swscale: bool,
+    ) -> Option<u8> {
+        let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::NV12, width, height);
+        let y_stride = frame.stride(0);
+        let uv_stride = frame.stride(1);
+        let uv_rows = height.div_ceil(2) as usize;
+        match pattern {
+            Nv12Pattern::HighFrequency => {
+                for plane in 0..2 {
+                    for (index, byte) in frame.data_mut(plane).iter_mut().enumerate() {
+                        *byte = index.wrapping_mul(17).wrapping_add(plane * 41) as u8;
+                    }
+                }
+            }
+            Nv12Pattern::VerticalStep => {
+                frame.data_mut(0)[..height as usize * y_stride].fill(128);
+                let uv = frame.data_mut(1);
+                for row in 0..uv_rows {
+                    let (cb, cr) = if row.is_multiple_of(2) {
+                        (16, 240)
+                    } else {
+                        (240, 16)
+                    };
+                    for col in (0..width as usize).step_by(2) {
+                        uv[row * uv_stride + col] = cb;
+                        uv[row * uv_stride + col + 1] = cr;
+                    }
+                }
+            }
+            Nv12Pattern::Smooth => {
+                let y = frame.data_mut(0);
+                for row in 0..height as usize {
+                    for col in 0..width as usize {
+                        y[row * y_stride + col] = 16 + ((col + row) % 200) as u8;
+                    }
+                }
+                let uv = frame.data_mut(1);
+                for row in 0..uv_rows {
+                    for col in (0..width as usize).step_by(2) {
+                        let value = 108 + ((col / 2 + row) % 40) as u8;
+                        uv[row * uv_stride + col] = value;
+                        uv[row * uv_stride + col + 1] = value.wrapping_add(8);
+                    }
+                }
+            }
+        }
+        let kernel = cap_gpui_kernels::camera_bgra::nv12_to_bgra(
+            frame.data(0),
+            frame.data(1),
+            width as usize,
+            height as usize,
+            y_stride,
+            uv_stride,
+            mirrored,
+        )?;
+        Some(if native_swscale {
+            gap_vs_native_swscale(&frame, &kernel, mirrored)
+        } else {
+            gap_vs_swscale(&frame, &kernel, mirrored)
+        })
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    fn gradient_nv12_gap_vs_native_swscale(width: u32, height: u32) -> Option<u8> {
+        let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::NV12, width, height);
+        let y_stride = frame.stride(0);
+        let uv_stride = frame.stride(1);
+        let height = height as usize;
+        let width = width as usize;
+        for row in 0..height {
+            for col in 0..width {
+                frame.data_mut(0)[row * y_stride + col] =
+                    (16 + (row * 180 / height.max(1)) + (col % 8)) as u8;
+            }
+        }
+        for row in 0..height.div_ceil(2) {
+            for col in (0..width).step_by(2) {
+                frame.data_mut(1)[row * uv_stride + col] = (48 + row * 3).min(224) as u8;
+                frame.data_mut(1)[row * uv_stride + col + 1] =
+                    u8::try_from(208u16.saturating_sub((row * 2) as u16)).unwrap_or(0);
+            }
+        }
+        let kernel = cap_gpui_kernels::camera_bgra::nv12_to_bgra(
+            frame.data(0),
+            frame.data(1),
+            width,
+            height,
+            y_stride,
+            uv_stride,
+            false,
+        )?;
+        Some(gap_vs_native_swscale(&frame, &kernel, false))
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    fn packed_ramp_gap_vs_native_swscale(
+        pixel: ffmpeg::format::Pixel,
+        width: u32,
+        height: u32,
+    ) -> Option<u8> {
+        use cap_gpui_kernels::camera_bgra::{self, Packed422};
+
+        let mut frame = ffmpeg::frame::Video::new(pixel, width, height);
+        for (index, byte) in frame.data_mut(0).iter_mut().enumerate() {
+            *byte = 16 + ((index / 4) % 200) as u8;
+        }
+        let format = if pixel == ffmpeg::format::Pixel::UYVY422 {
+            Packed422::Uyvy
+        } else {
+            Packed422::Yuyv
+        };
+        let kernel = camera_bgra::packed422_to_bgra(
+            frame.data(0),
+            width as usize,
+            height as usize,
+            frame.stride(0),
+            format,
+            false,
+        )?;
+        Some(gap_vs_native_swscale(&frame, &kernel, false))
+    }
+
+    fn packed_gap_vs_swscale(
+        pixel: ffmpeg::format::Pixel,
+        width: u32,
+        height: u32,
+        mirrored: bool,
+    ) -> Option<u8> {
+        use cap_gpui_kernels::camera_bgra::{self, Packed422};
+
+        let mut frame = ffmpeg::frame::Video::new(pixel, width, height);
+        for (index, byte) in frame.data_mut(0).iter_mut().enumerate() {
+            *byte = index.wrapping_mul(17).wrapping_add(41) as u8;
+        }
+        let format = if pixel == ffmpeg::format::Pixel::UYVY422 {
+            Packed422::Uyvy
+        } else {
+            Packed422::Yuyv
+        };
+        let kernel = camera_bgra::packed422_to_bgra(
+            frame.data(0),
+            width as usize,
+            height as usize,
+            frame.stride(0),
+            format,
+            mirrored,
+        )?;
+        Some(gap_vs_swscale(&frame, &kernel, mirrored))
+    }
+
+    // FFmpeg 7.1's aarch64 bilinear scaler keeps NEON `hscale` / `yuv2planeX`
+    // after `SWS_ACCURATE_RND` has skipped `ff_nv12_to_bgra_neon`. The strict
+    // check wants the C filters instead. `av_force_cpu_flags` is process-global,
+    // so the mutex keeps parallel tests from observing flags mid-flip, and `-1`
+    // turns auto-detection back on before the guard drops.
+    #[cfg(target_arch = "aarch64")]
+    unsafe extern "C" {
+        fn av_force_cpu_flags(flags: i32);
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    fn swscale_cpu_guard() -> std::sync::MutexGuard<'static, ()> {
+        static CPU: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        CPU.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    struct RestoreSwscaleCpu;
+
+    #[cfg(target_arch = "aarch64")]
+    impl Drop for RestoreSwscaleCpu {
+        fn drop(&mut self) {
+            unsafe { av_force_cpu_flags(-1) }
+        }
+    }
+
+    fn gap_vs_swscale(frame: &ffmpeg::frame::Video, kernel: &[u8], mirrored: bool) -> u8 {
+        gap_vs_bilinear(frame, kernel, mirrored, true)
+    }
+
+    fn gap_vs_native_swscale(frame: &ffmpeg::frame::Video, kernel: &[u8], mirrored: bool) -> u8 {
+        gap_vs_bilinear(frame, kernel, mirrored, false)
+    }
+
+    fn gap_vs_bilinear(
+        frame: &ffmpeg::frame::Video,
+        kernel: &[u8],
+        mirrored: bool,
+        c_reference: bool,
+    ) -> u8 {
+        #[cfg(target_arch = "aarch64")]
+        let _guard = swscale_cpu_guard();
+        #[cfg(target_arch = "aarch64")]
+        let _restore = c_reference.then(|| {
+            unsafe { av_force_cpu_flags(0) }
+            RestoreSwscaleCpu
+        });
+        #[cfg(not(target_arch = "aarch64"))]
+        let _ = c_reference;
+        let mut scaler = ffmpeg::software::scaling::Context::get(
+            frame.format(),
+            frame.width(),
+            frame.height(),
+            ffmpeg::format::Pixel::BGRA,
+            frame.width(),
+            frame.height(),
+            ffmpeg::software::scaling::Flags::BILINEAR,
+        )
+        .unwrap();
+        let mut converted = ffmpeg::frame::Video::empty();
+        scaler.run(frame, &mut converted).unwrap();
+        let swscale = cap_gpui_kernels::frame::copy_rows(
+            converted.data(0),
+            frame.width() as usize * 4,
+            converted.stride(0),
+            frame.height() as usize,
+            mirrored,
+        )
+        .unwrap();
+        kernel
+            .iter()
+            .zip(&swscale)
+            .map(|(kernel, swscale)| kernel.abs_diff(*swscale))
+            .max()
+            .unwrap_or(0)
+    }
+
+    #[test]
+    fn camera_preview_keeps_swscale_for_downscale_and_yuv420p() {
+        let yuyv = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::YUYV422, 64, 32);
+        let mut scaler = None;
+        let (_, capped) = camera_preview_image(&yuyv, &mut scaler, false, Some((32, 32))).unwrap();
+        assert_eq!(capped, (32, 16));
+        assert!(scaler.is_some());
+
+        let yuv420 = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::YUV420P, 4, 4);
+        let mut scaler = None;
+        let (image, dims) = camera_preview_image(&yuv420, &mut scaler, false, None).unwrap();
+        assert_eq!(dims, (4, 4));
+        assert!(scaler.is_some());
+        assert_eq!(image.as_bytes(0).unwrap().len(), 4 * 4 * 4);
     }
 }
 
