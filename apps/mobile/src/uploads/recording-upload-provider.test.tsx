@@ -205,6 +205,60 @@ describe("RecordingUploadProvider", () => {
 		authState.updateUploadProgress.mockClear();
 	});
 
+	it.each(["signedIn", "signedOut"] as const)(
+		"releases hydration waiters when auth becomes %s during queue restoration",
+		async (status) => {
+			vi.useFakeTimers();
+			authState.status = "loading";
+			let restore: (value: string) => void = () => {};
+			fileSystemMock.readAsStringAsync.mockImplementationOnce(
+				() =>
+					new Promise<string>((resolve) => {
+						restore = resolve;
+					}),
+			);
+			await mountRecoveryProvider();
+			authState.status = status;
+			await act(async () => {
+				recoveryRenderer?.update(
+					<RecordingUploadProvider>
+						<Harness />
+					</RecordingUploadProvider>,
+				);
+			});
+			await act(async () => {
+				restore(JSON.stringify({ jobs: [] }));
+			});
+			await flushQueue();
+			if (status === "signedOut") {
+				expect(fileSystemMock.deleteAsync).toHaveBeenCalledWith(
+					"file:///documents/recording-upload-queue.json",
+					{ idempotent: true },
+				);
+				return;
+			}
+			let created: { id: string; shareUrl: string } | undefined;
+			await act(async () => {
+				void recordingUploads
+					?.beginRecording({
+						fileName: "Cap Recording.mp4",
+						width: 720,
+						height: 1280,
+						fps: 30,
+					})
+					.then((result) => {
+						created = result;
+					});
+			});
+			await flushQueue();
+			expect(created).toEqual({
+				id: "cap_123",
+				shareUrl: "https://cap.so/s/cap_123",
+			});
+			expect(authState.createRecording).toHaveBeenCalledTimes(1);
+		},
+	);
+
 	it.each([false, true])(
 		"resumes interrupted completion after restart when the server accepted it: %s",
 		async (acceptedBeforeRestart) => {
