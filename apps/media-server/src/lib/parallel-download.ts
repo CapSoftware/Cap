@@ -80,9 +80,18 @@ async function readInto(
 		while (true) {
 			const { done, value } = await reader.read();
 			if (done) break;
+			const read = offset - start + value.byteLength;
+			if (expected !== null && read > expected) {
+				throw new Error(
+					`Ranged download returned more than expected ${expected} bytes`,
+				);
+			}
 			await write(value, offset);
 			offset += value.byteLength;
 		}
+	} catch (error) {
+		await reader.cancel(error).catch(() => {});
+		throw error;
 	} finally {
 		reader.releaseLock();
 	}
@@ -171,6 +180,20 @@ export async function downloadUrlToPathParallel(
 					await response.body?.cancel().catch(() => {});
 					throw new Error(
 						`Ranged download part failed: ${response.status} ${response.statusText}`,
+					);
+				}
+				const receivedRange = parseContentRange(
+					response.headers.get("content-range"),
+				);
+				if (
+					receivedRange === null ||
+					receivedRange.start !== part.start ||
+					receivedRange.end !== part.end ||
+					receivedRange.total !== total
+				) {
+					await response.body?.cancel().catch(() => {});
+					throw new Error(
+						"Ranged download part returned an unexpected Content-Range",
 					);
 				}
 				await readInto(response, write, part.start, part.end - part.start + 1);
