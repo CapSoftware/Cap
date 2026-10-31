@@ -4,6 +4,12 @@ use crate::motion_track::{
 
 type Point = (f64, f64);
 
+struct AnchorTracker {
+    tracker: MotionTracker,
+    anchor: Point,
+    offset: Point,
+}
+
 pub struct FourPointSession {
     region: TrackSession,
     trackers: [MotionTracker; 4],
@@ -13,18 +19,23 @@ pub struct FourPointSession {
     initial_size: Point,
     corners: Vec<(f64, [Point; 4])>,
     unresolved: Vec<f64>,
+    supplemental: Vec<AnchorTracker>,
 }
 
 impl FourPointSession {
-    pub fn new(frame: &LumaFrame, time: f64, mut points: [Point; 4]) -> Option<Self> {
-        if points.iter().any(|&(x, y)| {
-            !x.is_finite()
-                || !y.is_finite()
-                || !(0.0..=1.0).contains(&x)
-                || !(0.0..=1.0).contains(&y)
-        }) {
+    pub fn new(frame: &LumaFrame, time: f64, selected: impl AsRef<[Point]>) -> Option<Self> {
+        let selected = selected.as_ref();
+        if selected.len() < 4
+            || selected.iter().any(|&(x, y)| {
+                !x.is_finite()
+                    || !y.is_finite()
+                    || !(0.0..=1.0).contains(&x)
+                    || !(0.0..=1.0).contains(&y)
+            })
+        {
             return None;
         }
+        let mut points: [Point; 4] = selected[..4].try_into().ok()?;
         points.sort_by(|a, b| a.1.total_cmp(&b.1));
         points[..2].sort_by(|a, b| a.0.total_cmp(&b.0));
         points[2..].sort_by(|a, b| b.0.total_cmp(&a.0));
@@ -52,18 +63,21 @@ impl FourPointSession {
         let mut offsets = [(0.0, 0.0); 4];
         let anchors = points.map(|p| ((p.0 - left) / size.0, (p.1 - top) / size.1));
         for (index, point) in points.into_iter().enumerate() {
-            let (px, py) = (point.0 * width, point.1 * height);
-            let x = (px - side / 2.0).round().clamp(0.0, width - side);
-            let y = (py - side / 2.0).round().clamp(0.0, height - side);
-            offsets[index] = ((px - x) / side - 0.5, (py - y) / side - 0.5);
-            trackers.push(MotionTracker::new(
-                frame,
-                x as usize,
-                y as usize,
-                side as usize,
-                side as usize,
-            )?);
+            let (tracker, offset) = anchor_tracker(frame, point, side)?;
+            offsets[index] = offset;
+            trackers.push(tracker);
         }
+        let supplemental = selected[4..]
+            .iter()
+            .map(|&point| {
+                let (tracker, offset) = anchor_tracker(frame, point, side)?;
+                Some(AnchorTracker {
+                    tracker,
+                    anchor: ((point.0 - left) / size.0, (point.1 - top) / size.1),
+                    offset,
+                })
+            })
+            .collect::<Option<Vec<_>>>()?;
         Some(Self {
             region,
             trackers: trackers.try_into().ok()?,
@@ -73,6 +87,7 @@ impl FourPointSession {
             initial_size: size,
             corners: vec![(time, points)],
             unresolved: Vec::new(),
+            supplemental,
         })
     }
 
@@ -85,6 +100,9 @@ impl FourPointSession {
         let mut local_points = [(0.0, 0.0); 4];
         let mut complete = true;
         let mut local_confidence = 1.0_f32;
+        let mut measurements = Vec::new();
+        let mut anchor_confidence = 1.0_f32;
+        let mut matched = [false; 4];
         for (index, tracker) in local.iter_mut().enumerate() {
             if let Some(found) = tracker
                 .follow_only(&pyramid)
@@ -96,8 +114,30 @@ impl FourPointSession {
                     (found.x + (0.5 + offset.0) * found.width) / width,
                     (found.y + (0.5 + offset.1) * found.height) / height,
                 );
+                if found.score >= 0.85 {
+                    matched[index] = true;
+                    anchor_confidence = anchor_confidence.min(found.score);
+                    measurements.push((self.anchors[index], local_points[index]));
+                }
             } else {
                 complete = false;
+            }
+        }
+        for anchor in &mut self.supplemental {
+            let mut candidate = anchor.tracker.clone();
+            if let Some(found) = candidate
+                .follow_only(&pyramid)
+                .filter(|found| found.score >= 0.85)
+            {
+                anchor_confidence = anchor_confidence.min(found.score);
+                measurements.push((
+                    anchor.anchor,
+                    (
+                        (found.x + (0.5 + anchor.offset.0) * found.width) / width,
+                        (found.y + (0.5 + anchor.offset.1) * found.height) / height,
+                    ),
+                ));
+                anchor.tracker = candidate;
             }
         }
         let follows_region = local_confidence >= 0.9
@@ -121,6 +161,26 @@ impl FourPointSession {
                 local_points
             };
             self.corners.push((time, points));
+            return;
+        }
+        if !self.supplemental.is_empty()
+            && let Some(fitted) = fit_anchors(time, &measurements, (width, height))
+            && (anchor_confidence >= 0.9
+                || confidence < 0.85
+                || self.anchors.iter().all(|&anchor| {
+                    let expected = project(region, anchor);
+                    let found = project(fitted, anchor);
+                    ((expected.0 - found.0) * width).hypot((expected.1 - found.1) * height) <= 8.0
+                }))
+        {
+            for ((tracker, candidate), matched) in self.trackers.iter_mut().zip(local).zip(matched)
+            {
+                if matched {
+                    *tracker = candidate;
+                }
+            }
+            self.corners
+                .push((time, self.anchors.map(|anchor| project(fitted, anchor))));
             return;
         }
         if region.time != time {
@@ -205,6 +265,60 @@ impl FourPointSession {
     }
 }
 
+fn anchor_tracker(frame: &LumaFrame, point: Point, side: f64) -> Option<(MotionTracker, Point)> {
+    let (px, py) = (
+        point.0 * frame.width() as f64,
+        point.1 * frame.height() as f64,
+    );
+    let x = (px - side / 2.0)
+        .round()
+        .clamp(0.0, frame.width() as f64 - side);
+    let y = (py - side / 2.0)
+        .round()
+        .clamp(0.0, frame.height() as f64 - side);
+    Some((
+        MotionTracker::new(frame, x as usize, y as usize, side as usize, side as usize)?,
+        ((px - x) / side - 0.5, (py - y) / side - 0.5),
+    ))
+}
+
+fn fit_anchors(time: f64, measurements: &[(Point, Point)], pixels: Point) -> Option<TrackPoint> {
+    if measurements.len() < 4 {
+        return None;
+    }
+    let fit = |axis: fn(Point) -> f64, pixels: f64| {
+        let count = measurements.len() as f64;
+        let mean_a = measurements.iter().map(|(a, _)| axis(*a)).sum::<f64>() / count;
+        let mean_b = measurements.iter().map(|(_, b)| axis(*b)).sum::<f64>() / count;
+        let variance = measurements
+            .iter()
+            .map(|(a, _)| (axis(*a) - mean_a).powi(2))
+            .sum::<f64>();
+        if variance < 1e-6 {
+            return None;
+        }
+        let scale = measurements
+            .iter()
+            .map(|(a, b)| (axis(*a) - mean_a) * (axis(*b) - mean_b))
+            .sum::<f64>()
+            / variance;
+        let offset = mean_b - scale * mean_a;
+        (scale > 0.0
+            && scale <= 2.0
+            && measurements
+                .iter()
+                .all(|(a, b)| (axis(*b) - (offset + scale * axis(*a))).abs() * pixels <= 3.0))
+        .then_some((offset + scale / 2.0, scale))
+    };
+    let x = fit(|p| p.0, pixels.0)?;
+    let y = fit(|p| p.1, pixels.1)?;
+    Some(TrackPoint {
+        time,
+        center: (x.0, y.0),
+        size: (x.1, y.1),
+    })
+}
+
 fn coherent(anchors: [Point; 4], points: [Point; 4], size: Point) -> bool {
     let fit = |axis: fn(Point) -> f64, pixels: f64| {
         let a = anchors.map(axis);
@@ -252,9 +366,12 @@ fn region_at(time: f64, [tl, tr, br, bl]: [Point; 4]) -> Option<TrackPoint> {
 mod tests {
     use super::*;
 
-    fn window(step: usize) -> (LumaFrame, [Point; 4]) {
+    fn window(step: usize, supplemental: bool) -> (LumaFrame, Vec<Point>) {
         let (left, top, right, bottom) = (40 + step, 30 + step / 2, 160 + 3 * step, 130 - step);
-        let points = [(left, top), (right, top), (right, bottom), (left, bottom)];
+        let mut points = vec![(left, top), (right, top), (right, bottom), (left, bottom)];
+        if supplemental {
+            points.extend([((left + right) / 2, top), ((left + right) / 2, bottom)]);
+        }
         let mut rgba = vec![45u8; 320 * 180 * 4];
         for y in top..=bottom {
             for x in left..=right {
@@ -264,6 +381,9 @@ mod tests {
             }
         }
         for (corner, &(x, y)) in points.iter().enumerate() {
+            if supplemental && step >= 4 && corner < 2 {
+                continue;
+            }
             for dy in 0..16 {
                 for dx in 0..16 {
                     let value = ((dx * 37 + dy * 61 + corner * 43 + dx * dy * 19) % 220 + 20) as u8;
@@ -274,18 +394,21 @@ mod tests {
         }
         (
             LumaFrame::from_rgba(&rgba, 320, 180, 320 * 4),
-            points.map(|(x, y)| (x as f64 / 320.0, y as f64 / 180.0)),
+            points
+                .into_iter()
+                .map(|(x, y)| (x as f64 / 320.0, y as f64 / 180.0))
+                .collect(),
         )
     }
 
     #[test]
     fn follows_independent_width_and_height_changes_with_changing_contents() {
-        let (first, points) = window(0);
+        let (first, points) = window(0, false);
         let mut session =
             FourPointSession::new(&first, 0.0, [points[2], points[0], points[3], points[1]])
                 .unwrap();
         for step in 1..=20 {
-            session.push(step as f64 / 30.0, window(step).0);
+            session.push(step as f64 / 30.0, window(step, false).0);
         }
         let hidden = LumaFrame::from_rgba(&vec![0; 320 * 180 * 4], 320, 180, 320 * 4);
         for step in 21..=40 {
@@ -327,5 +450,43 @@ mod tests {
         let last = path.last().unwrap();
         assert!((last.center.0 * 320.0 - 140.0).abs() < 2.0, "{last:?}");
         assert!((last.size.0 * 320.0 - 160.0).abs() < 3.0, "{last:?}");
+    }
+
+    #[test]
+    fn supplemental_points_follow_resizing_when_two_corners_disappear() {
+        let (first, points) = window(0, true);
+        let mut session = FourPointSession::new(&first, 0.0, &points).unwrap();
+        for step in 1..=20 {
+            session.push(step as f64 / 30.0, window(step, true).0);
+        }
+        let (path, _) = session.finish();
+        for step in 4..=20 {
+            let time = step as f64 / 30.0;
+            let found = path
+                .iter()
+                .find(|p| p.time == time)
+                .expect("visible anchors still track");
+            let expected_center = (
+                (100 + 2 * step) as f64,
+                (160 + step / 2 - step) as f64 / 2.0,
+            );
+            let expected_size = ((120 + 2 * step) as f64, (100 - step - step / 2) as f64);
+            assert!(
+                (found.center.0 * 320.0 - expected_center.0).abs() < 2.0,
+                "{step}: {found:?}"
+            );
+            assert!(
+                (found.center.1 * 180.0 - expected_center.1).abs() < 2.0,
+                "{step}: {found:?}"
+            );
+            assert!(
+                (found.size.0 * 320.0 - expected_size.0).abs() < 3.0,
+                "{step}: {found:?}"
+            );
+            assert!(
+                (found.size.1 * 180.0 - expected_size.1).abs() < 3.0,
+                "{step}: {found:?}"
+            );
+        }
     }
 }

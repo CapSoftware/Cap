@@ -6409,11 +6409,13 @@ impl EditorWindow {
             .mask_tracking_points
             .as_ref()
             .filter(|points| points.index == index);
-        let four_points = ui::EditorButton::plain(&theme, "mask-track-four-points")
+        let track_points = ui::EditorButton::plain(&theme, "mask-track-points")
             .left_icon("icons/corners.svg")
-            .label(tr::editor::panel::mask::four_points())
+            .label(tr::editor::panel::mask::track_points())
             .disabled(!in_segment || busy || self.playing)
             .on_click(cx.listener(move |this, _, _window, cx| {
+                this.show_mask_tracking = true;
+                this.publish_project();
                 this.mask_tracking_points = if this.mask_tracking_points.is_some() {
                     None
                 } else {
@@ -6435,7 +6437,7 @@ impl EditorWindow {
             .items_center()
             .gap(px(4.));
         if let Some(picking) = picking {
-            let ready = picking.points.len() == 4;
+            let ready = picking.points.len() >= 4;
             actions = actions
                 .child(
                     ui::EditorButton::plain(&theme, "mask-points-cancel")
@@ -6464,17 +6466,19 @@ impl EditorWindow {
                         .disabled(!ready)
                         .on_click(cx.listener(|this, _, window, cx| {
                             if let Some(picking) = this.mask_tracking_points.take()
-                                && picking.points.len() == 4
+                                && picking.points.len() >= 4
                             {
-                                let points = std::array::from_fn(|i| {
-                                    (picking.points[i].x, picking.points[i].y)
-                                });
+                                let points = picking
+                                    .points
+                                    .iter()
+                                    .map(|point| (point.x, point.y))
+                                    .collect();
                                 this.start_mask_tracking(picking.index, Some(points), window, cx);
                             }
                         })),
                 );
         } else {
-            actions = actions.child(track).child(four_points);
+            actions = actions.child(track).child(track_points);
         }
         if let Some(progress) = progress {
             actions = actions.child(
@@ -6510,6 +6514,28 @@ impl EditorWindow {
                     .flex()
                     .flex_col()
                     .gap(px(4.))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(tr::editor::panel::mask::show_tracking())
+                            .child(
+                                ui::Toggle::plain(
+                                    &theme,
+                                    "mask-show-tracking",
+                                    self.show_mask_tracking,
+                                )
+                                .label(tr::editor::panel::mask::show_tracking())
+                                .on_click(cx.listener(
+                                    |this, _, _, cx| {
+                                        this.show_mask_tracking = !this.show_mask_tracking;
+                                        this.publish_project();
+                                        cx.notify();
+                                    },
+                                )),
+                            ),
+                    )
                     .child(marker_actions)
                     .child(actions),
             )

@@ -1329,9 +1329,12 @@ impl EditorWindow {
             .overflow_hidden();
 
         if let Some(picking) = self.mask_tracking_points.as_ref()
+            && self.show_mask_tracking
             && picking.time == self.preview_or_playhead()
         {
             let points = picking.points.clone();
+            let handles = crate::editor_mask_tracking::tracking_pin_centers(&points, (cw, ch));
+            let drawn_handles = handles.clone();
             let color = Hsla::from(self.theme.editor.accent);
             return Some(
                 layer
@@ -1367,8 +1370,8 @@ impl EditorWindow {
                                 let at = |x: f32, y: f32| {
                                     gpui::point(bounds.origin.x + px(x), bounds.origin.y + px(y))
                                 };
-                                if points.len() == 4 {
-                                    let mut corners = points.clone();
+                                if points.len() >= 4 {
+                                    let mut corners = points[..4].to_vec();
                                     corners.sort_by(|a, b| a.y.total_cmp(&b.y));
                                     corners[..2].sort_by(|a, b| a.x.total_cmp(&b.x));
                                     corners[2..].sort_by(|a, b| b.x.total_cmp(&a.x));
@@ -1383,37 +1386,59 @@ impl EditorWindow {
                                         }
                                     }
                                 }
-                                for point in &points {
-                                    let (x, y) = (point.x as f32 * cw, point.y as f32 * ch);
-                                    let handle_y = (y - 26.).max(10.);
-                                    let direction = if handle_y < y { 1. } else { -1. };
-                                    path.move_to(at(x, handle_y + direction * 8.));
-                                    path.line_to(at(x, y));
-                                    path.move_to(at(x - 4., y - direction * 5.));
-                                    path.line_to(at(x, y));
-                                    path.line_to(at(x + 4., y - direction * 5.));
-                                    path.move_to(at(x - 5., y));
-                                    path.line_to(at(x + 5., y));
-                                }
                                 if let Ok(path) = path.build() {
                                     window.paint_path(path, color);
+                                }
+                                for (point, handle) in points.iter().zip(drawn_handles) {
+                                    let (x, y) = (point.x as f32 * cw, point.y as f32 * ch);
+                                    let length = (handle.0 - x).hypot(handle.1 - y).max(1.);
+                                    let (dx, dy) =
+                                        ((handle.0 - x) / length, (handle.1 - y) / length);
+                                    let place = |u, v| at(x + dx * u - dy * v, y + dy * u + dx * v);
+                                    for (mut drop, fill) in [
+                                        (gpui::PathBuilder::fill(), color),
+                                        (gpui::PathBuilder::stroke(px(1.)), gpui::white()),
+                                    ] {
+                                        drop.move_to(place(0., 0.));
+                                        drop.cubic_bezier_to(
+                                            place(length, 8.),
+                                            place(length * 0.5, 3.),
+                                            place(length - 7., 8.),
+                                        );
+                                        drop.cubic_bezier_to(
+                                            place(length + 8., 0.),
+                                            place(length + 4.418, 8.),
+                                            place(length + 8., 4.418),
+                                        );
+                                        drop.cubic_bezier_to(
+                                            place(length, -8.),
+                                            place(length + 8., -4.418),
+                                            place(length + 4.418, -8.),
+                                        );
+                                        drop.cubic_bezier_to(
+                                            place(0., 0.),
+                                            place(length - 7., -8.),
+                                            place(length * 0.5, -3.),
+                                        );
+                                        drop.close();
+                                        if let Ok(path) = drop.build() {
+                                            window.paint_path(path, fill);
+                                        }
+                                    }
                                 }
                             },
                         )
                         .absolute()
                         .inset_0(),
                     )
-                    .children(picking.points.iter().enumerate().map(|(index, point)| {
+                    .children(handles.into_iter().enumerate().map(|(index, handle)| {
                         div()
                             .id(("mask-point-handle", index))
                             .absolute()
-                            .left(px(point.x as f32 * cw - 8.0))
-                            .top(px((point.y as f32 * ch - 26.).max(10.) - 8.))
+                            .left(px(handle.0 - 8.))
+                            .top(px(handle.1 - 8.))
                             .size(px(16.0))
                             .rounded_full()
-                            .border_1()
-                            .border_color(gpui::white())
-                            .bg(color)
                             .cursor(CursorStyle::OpenHand)
                             .on_mouse_down(
                                 MouseButton::Left,
@@ -1473,6 +1498,9 @@ impl EditorWindow {
             for track in overlay_order.iter().rev() {
                 match track.kind {
                     OverlayTrackKind::Mask => {
+                        if !self.show_mask_tracking {
+                            continue;
+                        }
                         for (index, segment) in timeline
                             .mask_segments
                             .iter()

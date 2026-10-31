@@ -18,6 +18,40 @@ const MARKER_TOLERANCE: f64 = 0.003;
 
 type TrackedRect = (f64, XY<f64>, XY<f64>);
 
+pub(crate) fn tracking_pin_centers(points: &[XY<f64>], size: (f32, f32)) -> Vec<(f32, f32)> {
+    let bounds = points
+        .iter()
+        .take(4)
+        .fold((1.0_f64, 1.0_f64, 0.0_f64, 0.0_f64), |(l, t, r, b), p| {
+            (l.min(p.x), t.min(p.y), r.max(p.x), b.max(p.y))
+        });
+    let center = ((bounds.0 + bounds.2) / 2.0, (bounds.1 + bounds.3) / 2.0);
+    let mut handles: Vec<(f32, f32)> = Vec::with_capacity(points.len());
+    for (index, point) in points.iter().enumerate() {
+        let dx = (point.x - center.0) / (bounds.2 - bounds.0).max(0.01);
+        let dy = (point.y - center.1) / (bounds.3 - bounds.1).max(0.01);
+        let angle = if dx.hypot(dy) < 0.01 {
+            -std::f64::consts::FRAC_PI_4 * 3.0 + index as f64 * std::f64::consts::FRAC_PI_2
+        } else {
+            dy.atan2(dx)
+        };
+        let candidate = |turn: f64| {
+            let angle = angle + turn * std::f64::consts::FRAC_PI_4;
+            (
+                (point.x as f32 * size.0 + angle.cos() as f32 * 28.).clamp(9., size.0 - 9.),
+                (point.y as f32 * size.1 + angle.sin() as f32 * 28.).clamp(9., size.1 - 9.),
+            )
+        };
+        let handle = [0., 1., -1., 2., -2., 3., -3., 4.]
+            .into_iter()
+            .map(candidate)
+            .find(|p| handles.iter().all(|q| (p.0 - q.0).hypot(p.1 - q.1) >= 19.))
+            .unwrap_or_else(|| candidate(0.));
+        handles.push(handle);
+    }
+    handles
+}
+
 pub(crate) struct MaskTrackingPoints {
     pub(crate) index: usize,
     pub(crate) time: f64,
@@ -27,7 +61,7 @@ pub(crate) struct MaskTrackingPoints {
 
 enum TrackingTarget {
     Box(XY<f64>, XY<f64>),
-    Points([(f64, f64); 4]),
+    Points(Vec<(f64, f64)>),
 }
 
 enum TrackingSession {
@@ -74,9 +108,7 @@ impl EditorWindow {
             cx.notify();
             return;
         }
-        if picking.points.len() < 4 {
-            picking.points.push(point);
-        }
+        picking.points.push(point);
         cx.notify();
     }
 
@@ -124,7 +156,7 @@ impl EditorWindow {
     pub(crate) fn start_mask_tracking(
         &mut self,
         index: usize,
-        points: Option<[(f64, f64); 4]>,
+        points: Option<Vec<(f64, f64)>>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -279,7 +311,7 @@ async fn track(
             Some(TrackingSession::Box(session)) => session.push(time, luma),
             Some(TrackingSession::Points(session)) => session.push(time, luma),
             None => {
-                let created = match target {
+                let created = match &target {
                     TrackingTarget::Box(center, size) => {
                         TrackSession::new(&luma, time, (center.x, center.y), (size.x, size.y))
                             .map(TrackingSession::Box)

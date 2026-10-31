@@ -1372,6 +1372,7 @@ pub struct EditorWindow {
     pub(crate) instance: Option<Arc<EditorInstance>>,
     pub(crate) mask_tracking: Option<crate::editor_mask_tracking::MaskTrackingJob>,
     pub(crate) mask_tracking_points: Option<crate::editor_mask_tracking::MaskTrackingPoints>,
+    pub(crate) show_mask_tracking: bool,
     focus: FocusHandle,
 
     // -- Transport ----------------------------------------------------------
@@ -2091,6 +2092,7 @@ impl EditorWindow {
             instance: None,
             mask_tracking: None,
             mask_tracking_points: None,
+            show_mask_tracking: true,
             focus: cx.focus_handle(),
             playing: false,
             playhead: 0.0,
@@ -2681,7 +2683,13 @@ impl EditorWindow {
         let Some(instance) = &self.instance else {
             return;
         };
-        instance.project_config.0.send(self.project.clone()).ok();
+        let mut preview = self.project.clone();
+        if !self.show_mask_tracking
+            && let Some(timeline) = preview.timeline.as_mut()
+        {
+            timeline.mask_segments.clear();
+        }
+        instance.project_config.0.send(preview).ok();
         if !self.playing {
             let time = self.view.preview_time.unwrap_or(self.playhead).max(0.0);
             request_frame(
