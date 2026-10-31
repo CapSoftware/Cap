@@ -57,6 +57,8 @@ screenshot mode does, with Cap focused as after a click, and allows it when
 the portal asks (GNOME Shell's question is answered from the Shell, so it needs
 `GNOME_UNSAFE=1`; elsewhere the permission is granted up front because the GTK
 portal's dialog aborts in the container). It checks a PNG of the display's size (`SCREEN`, 1920x1080) was saved.
+`PRELAUNCH=1` runs Cap once before, so a `LAUNCH=terminal` run finds the
+`so.cap.Cap.desktop` entry GNOME matches Cap's windows to.
 `SCENARIO=wallpaper` records a clip, opens it in the editor and imports the
 desktop's wallpaper as its background (`CAP_GPUI_AUTO_DESKTOP_BACKGROUND=1`).
 GNOME keeps its default JPEG XL wallpaper; `WALLPAPER=swaybg` starts swaybg
@@ -83,7 +85,8 @@ real login activates.
 
 - `x11-camera.sh <cap-gpui> <ffmpeg lib dir> <out-dir>` records the display on
   Xvfb (X11 capture, no portal) with a camera: a v4l2loopback device that
-  ffmpeg feeds a 1280x720 test pattern. Cap waits for the Stop shortcut to start
+  ffmpeg feeds a 1280x720 test pattern, as YUYV, NV12 or MJPEG
+  (`CAMERA_FORMAT`; CI runs all three). Cap waits for the Stop shortcut to start
   and to stop, pressed with real X input (xdotool), well before its 60 s
   automatic stop. It checks the camera track is 1280x720 and as long as the
   display track, about five seconds, and fails if any result is missing. It
@@ -96,6 +99,10 @@ real login activates.
   a screenshot, and checks the size, length and loudness of each result. It also
   checks the window picker offers the other app's window rather than one of
   Cap's own.
+- `x11-stale-wayland.sh <cap-gpui> <ffmpeg lib dir> <out-dir>` starts Cap on
+  Xvfb with `WAYLAND_DISPLAY` naming a socket nothing listens on, as a systemd
+  user environment keeps it after a Wayland session ends, and checks Cap falls
+  back to the X display instead of failing to start.
 
 - `niri-screencast/run.sh` records through Cap's PipeWire capture loop from a
   producer that negotiates and shares frames the way niri 26.04 does: a

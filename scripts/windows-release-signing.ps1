@@ -33,11 +33,11 @@ function Get-PayloadDefinitions {
 		},
 		[pscustomobject]@{
 			Name = "cap-cli.exe"
-			Path = Join-Path $WorkspaceRoot "apps/desktop/src-tauri/binaries/cap-cli-$Target.exe"
+			Path = Join-Path $WorkspaceRoot "apps/desktop-gpui/binaries/cap-cli-$Target.exe"
 		},
 		[pscustomobject]@{
 			Name = "cap-muxer.exe"
-			Path = Join-Path $WorkspaceRoot "apps/desktop/src-tauri/binaries/cap-muxer-$Target.exe"
+			Path = Join-Path $WorkspaceRoot "apps/desktop-gpui/binaries/cap-muxer-$Target.exe"
 		}
 	)
 }

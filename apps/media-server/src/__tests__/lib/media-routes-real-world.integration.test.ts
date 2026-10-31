@@ -909,10 +909,10 @@ describe("media routes real-world integration tests", () => {
 		let hashSettled = false;
 		const hashing = spyOn(
 			recordingVerification,
-			"hashRecordingFile",
+			"hashRecordingUpload",
 		).mockImplementation(
-			(_path, signal) =>
-				new Promise<string>((_resolve, reject) => {
+			(_path, _upload, signal) =>
+				new Promise<{ sha256: string }>((_resolve, reject) => {
 					signal?.addEventListener("abort", () => {
 						hashAborted = true;
 						setTimeout(() => {
@@ -948,12 +948,12 @@ describe("media routes real-world integration tests", () => {
 
 	// Hashing now overlaps the decode check, so whichever check reads the changed bytes first refuses it.
 	test("refuses a local output changed while it is decoded and hashed", async () => {
-		const originalHash = recordingVerification.hashRecordingFile;
+		const originalHash = recordingVerification.hashRecordingUpload;
 		const hashing = spyOn(
 			recordingVerification,
-			"hashRecordingFile",
-		).mockImplementation(async (path, signal) => {
-			const digest = await originalHash(path, signal);
+			"hashRecordingUpload",
+		).mockImplementation(async (path, upload, signal) => {
+			const digest = await originalHash(path, upload, signal);
 			const bytes = await readFile(path);
 			bytes[bytes.length - 1] ^= 1;
 			await writeFile(path, bytes);
