@@ -1164,8 +1164,10 @@ fn shortcut_effect(
                 }
             }
         }
+        // `Mode::for_recording`: a "Record …" shortcut records in Studio when
+        // the saved mode is Screenshot.
         "openRecordingPickerArea" => match mode {
-            Mode::Studio => ShortcutEffect {
+            Mode::Studio | Mode::Screenshot => ShortcutEffect {
                 phrase: tr::settings::shortcuts::effect::picker_area_studio,
                 sentence: tr::settings::shortcuts::sentence::picker_area_studio,
             },
@@ -1173,13 +1175,9 @@ fn shortcut_effect(
                 phrase: tr::settings::shortcuts::effect::picker_area_instant,
                 sentence: tr::settings::shortcuts::sentence::picker_area_instant,
             },
-            Mode::Screenshot => ShortcutEffect {
-                phrase: tr::settings::shortcuts::effect::picker_area_screenshot,
-                sentence: tr::settings::shortcuts::sentence::picker_area_screenshot,
-            },
         },
         "openRecordingPickerWindow" => match mode {
-            Mode::Studio => ShortcutEffect {
+            Mode::Studio | Mode::Screenshot => ShortcutEffect {
                 phrase: tr::settings::shortcuts::effect::picker_window_studio,
                 sentence: tr::settings::shortcuts::sentence::picker_window_studio,
             },
@@ -1187,23 +1185,15 @@ fn shortcut_effect(
                 phrase: tr::settings::shortcuts::effect::picker_window_instant,
                 sentence: tr::settings::shortcuts::sentence::picker_window_instant,
             },
-            Mode::Screenshot => ShortcutEffect {
-                phrase: tr::settings::shortcuts::effect::picker_window_screenshot,
-                sentence: tr::settings::shortcuts::sentence::picker_window_screenshot,
-            },
         },
         "openRecordingPickerDisplay" => match mode {
-            Mode::Studio => ShortcutEffect {
+            Mode::Studio | Mode::Screenshot => ShortcutEffect {
                 phrase: tr::settings::shortcuts::effect::picker_display_studio,
                 sentence: tr::settings::shortcuts::sentence::picker_display_studio,
             },
             Mode::Instant => ShortcutEffect {
                 phrase: tr::settings::shortcuts::effect::picker_display_instant,
                 sentence: tr::settings::shortcuts::sentence::picker_display_instant,
-            },
-            Mode::Screenshot => ShortcutEffect {
-                phrase: tr::settings::shortcuts::effect::picker_display_screenshot,
-                sentence: tr::settings::shortcuts::sentence::picker_display_screenshot,
             },
         },
         "openRecordingPicker" => ShortcutEffect {
@@ -8292,9 +8282,10 @@ mod tests {
             }
         };
         let picker = match mode {
-            crate::main_window::Mode::Studio => "record it in Studio mode",
+            crate::main_window::Mode::Studio | crate::main_window::Mode::Screenshot => {
+                "record it in Studio mode"
+            }
             crate::main_window::Mode::Instant => "record it in Instant mode",
-            crate::main_window::Mode::Screenshot => "take a screenshot of it",
         };
         let studio_stop = match settings.post_studio_recording_behaviour {
             store::PostStudioBehaviour::OpenEditor => ", then open the editor when you stop",
@@ -8371,7 +8362,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(checked.len(), 30, "every effect message is reachable");
+        assert_eq!(checked.len(), 27, "every effect message is reachable");
         assert!(shortcut_effect("nope", &settings, Mode::Studio).is_none());
     }
 

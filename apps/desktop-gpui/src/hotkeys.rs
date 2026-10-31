@@ -864,8 +864,14 @@ fn dispatch(action: HotkeyAction, cx: &mut App) {
             RecordingSession::global(cx).update(cx, |session, cx| session.toggle_pause(cx));
         }
         HotkeyAction::CycleRecordingMode => {
-            // `Studio -> Instant -> Screenshot -> Studio` (`hotkeys.rs:262`).
-            let next = match Mode::from_store() {
+            // `Studio -> Instant -> Screenshot -> Studio` (`hotkeys.rs:262`),
+            // from the mode on screen: a picker a shortcut opened shows that
+            // shortcut's mode, not the saved one.
+            let main = cx.global::<app_windows::AppWindows>().main;
+            let current = main
+                .update(cx, |view, _window, cx| view.effective_mode(cx))
+                .unwrap_or_else(|_| Mode::from_store());
+            let next = match current {
                 Mode::Studio => Mode::Instant,
                 Mode::Instant => Mode::Screenshot,
                 Mode::Screenshot => Mode::Studio,
@@ -877,12 +883,14 @@ fn dispatch(action: HotkeyAction, cx: &mut App) {
             cx.activate(true);
         }
         HotkeyAction::OpenRecordingPickerDisplay => {
-            app_windows::arm_target_mode(TargetType::Display, cx)
+            app_windows::arm_record_picker(TargetType::Display, cx)
         }
         HotkeyAction::OpenRecordingPickerWindow => {
-            app_windows::arm_target_mode(TargetType::Window, cx)
+            app_windows::arm_record_picker(TargetType::Window, cx)
         }
-        HotkeyAction::OpenRecordingPickerArea => app_windows::arm_target_mode(TargetType::Area, cx),
+        HotkeyAction::OpenRecordingPickerArea => {
+            app_windows::arm_record_picker(TargetType::Area, cx)
+        }
         HotkeyAction::ScreenshotDisplay => {
             let display = scap_targets::Display::get_containing_cursor()
                 .unwrap_or_else(scap_targets::Display::primary);
@@ -903,10 +911,11 @@ fn dispatch(action: HotkeyAction, cx: &mut App) {
             }
         }
         HotkeyAction::ScreenshotArea => {
-            // `set_mode(Screenshot)` + the area picker (`hotkeys.rs:311-323`):
-            // the grab happens when the drawn area is released.
-            app_windows::set_recording_mode(Mode::Screenshot, cx);
-            app_windows::arm_target_mode(TargetType::Area, cx);
+            // The area picker in Screenshot mode for this capture only: the
+            // grab happens when the drawn area is released. The Tauri handler
+            // also `set_mode(Screenshot)`s (`hotkeys.rs:311-323`), which left
+            // every later "Record …" shortcut taking screenshots.
+            app_windows::arm_screenshot_picker(TargetType::Area, cx);
         }
     }
 }
