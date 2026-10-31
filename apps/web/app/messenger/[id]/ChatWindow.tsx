@@ -145,6 +145,7 @@ export function ChatWindow({
 	const prevMessageCountRef = useRef(initialMessages.length);
 	const userScrolledRef = useRef(false);
 	const isSendingRef = useRef(false);
+	const messageVersionRef = useRef(0);
 
 	const scrollToBottom = useCallback((instant?: boolean) => {
 		bottomRef.current?.scrollIntoView({
@@ -179,16 +180,32 @@ export function ChatWindow({
 	}, []);
 
 	useEffect(() => {
+		let active = true;
+		let pollVersion = 0;
+		let appliedPollVersion = 0;
 		const interval = setInterval(async () => {
 			if (isSendingRef.current) return;
+			const requestVersion = ++pollVersion;
+			const messageVersion = messageVersionRef.current;
 			const data = await fetchMessengerConversation(
 				initialConversation.id,
 			).catch(() => null);
-			if (!data || isSendingRef.current) return;
+			if (
+				!active ||
+				!data ||
+				isSendingRef.current ||
+				requestVersion <= appliedPollVersion ||
+				messageVersion !== messageVersionRef.current
+			)
+				return;
+			appliedPollVersion = requestVersion;
 			setMessages(data.messages);
 			setConversation(data.conversation);
 		}, FULLPAGE_POLL_MS);
-		return () => clearInterval(interval);
+		return () => {
+			active = false;
+			clearInterval(interval);
+		};
 	}, [initialConversation.id]);
 
 	const sendMessage = (text: string) => {
@@ -206,6 +223,7 @@ export function ChatWindow({
 		};
 		setMessages((prev) => [...prev, optimistic]);
 		isSendingRef.current = true;
+		messageVersionRef.current++;
 
 		startTransition(async () => {
 			await sendMessengerUserMessage({
