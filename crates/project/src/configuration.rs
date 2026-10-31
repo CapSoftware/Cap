@@ -2588,7 +2588,7 @@ impl fmt::Display for AnnotationValidationError {
 
 impl std::error::Error for AnnotationValidationError {}
 
-#[derive(Type, Serialize, Deserialize, Clone, Debug)]
+#[derive(Type, Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Annotation {
     pub id: String,

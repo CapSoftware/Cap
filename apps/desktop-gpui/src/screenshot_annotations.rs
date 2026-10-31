@@ -23,7 +23,7 @@
 // next person would go back to `layout.ts` and re-derive it.
 #![allow(dead_code)]
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -1220,6 +1220,7 @@ pub struct AnnotationState {
     masks: Vec<MaskEntry<MaskOverlay>>,
     mask_pending: Option<Vec<MaskRequest>>,
     mask_task: Option<gpui::Task<()>>,
+    paths: Rc<RefCell<Vec<Option<CachedAnnotationPaths>>>>,
 }
 
 /// One paint of the layer, copied out of the window so the closure owns it.
@@ -1227,6 +1228,7 @@ pub struct AnnotationState {
 /// carries a handful of annotations, not a timeline's worth.
 struct LayerPaint {
     annotations: Vec<Annotation>,
+    paths: Rc<RefCell<Vec<Option<CachedAnnotationPaths>>>>,
     temp: Option<Annotation>,
     masks: Vec<MaskOverlay>,
     selected: Option<String>,
@@ -2386,6 +2388,7 @@ impl ScreenshotEditorWindow {
         };
         let paint = LayerPaint {
             annotations: self.project.annotations.clone(),
+            paths: self.annotation_state.paths.clone(),
             temp,
             masks: self
                 .annotation_state
@@ -3556,14 +3559,48 @@ fn paint_fill(builder: PathBuilder, color: Hsla, window: &mut Window) {
     }
 }
 
+type AnnotationPaths = Vec<(gpui::Path<Pixels>, Hsla)>;
+
+struct CachedAnnotationPaths {
+    source: Annotation,
+    origin: Point<Pixels>,
+    scale: f32,
+    paths: AnnotationPaths,
+}
+
+fn cached_annotation_paths<'a>(
+    cache: &'a mut Option<CachedAnnotationPaths>,
+    annotation: &Annotation,
+    origin: Point<Pixels>,
+    scale: f32,
+) -> &'a [(gpui::Path<Pixels>, Hsla)] {
+    if !cache.as_ref().is_some_and(|entry| {
+        entry.source == *annotation && entry.origin == origin && entry.scale == scale
+    }) {
+        *cache = Some(CachedAnnotationPaths {
+            source: annotation.clone(),
+            origin,
+            scale,
+            paths: annotation_paths(annotation, origin, scale),
+        });
+    }
+    &cache.as_ref().unwrap().paths
+}
+
+fn push_fill(paths: &mut AnnotationPaths, builder: PathBuilder, color: Hsla) {
+    if let Ok(path) = builder.build() {
+        paths.push((path, color));
+    }
+}
+
 /// A `stroke-linecap="round"` end, as the disc the cap is.
-fn paint_disc(window: &mut Window, center: Point<Pixels>, radius: f32, color: Hsla) {
+fn push_disc(paths: &mut AnnotationPaths, center: Point<Pixels>, radius: f32, color: Hsla) {
     if radius <= 0.25 {
         return;
     }
     let mut builder = PathBuilder::fill();
     push_circle(&mut builder, center, radius, radius);
-    paint_fill(builder, color, window);
+    push_fill(paths, builder, color);
 }
 
 fn paint_layer(paint: &LayerPaint, bounds: Bounds<Pixels>, window: &mut Window, cx: &mut App) {
@@ -3583,11 +3620,19 @@ fn paint_layer(paint: &LayerPaint, bounds: Bounds<Pixels>, window: &mut Window, 
         let _ = window.paint_image(region, Corners::default(), overlay.image.clone(), 0, false);
     }
 
-    for annotation in &paint.annotations {
+    let mut paths = paint.paths.borrow_mut();
+    paths.resize_with(paint.annotations.len(), || None);
+    for (annotation, cache) in paint.annotations.iter().zip(paths.iter_mut()) {
         if paint.editing.as_deref() == Some(annotation.id.as_str()) {
             continue;
         }
-        paint_annotation(annotation, origin, scale, window, cx);
+        if annotation.annotation_type == AnnotationType::Text {
+            paint_text(annotation, origin, scale, window, cx);
+        } else {
+            for (path, color) in cached_annotation_paths(cache, annotation, origin, scale) {
+                window.paint_path(path.clone(), *color);
+            }
+        }
     }
 
     if paint.select_tool && paint.editing.is_none() {
@@ -3667,7 +3712,6 @@ fn screen_rect(origin: Point<Pixels>, scale: f32, rect: Rect) -> Bounds<Pixels> 
     }
 }
 
-/// `RenderAnnotation` (`AnnotationLayer.tsx:813-933`).
 fn paint_annotation(
     annotation: &Annotation,
     origin: Point<Pixels>,
@@ -3675,6 +3719,33 @@ fn paint_annotation(
     window: &mut Window,
     cx: &mut App,
 ) {
+    if annotation.annotation_type == AnnotationType::Text {
+        paint_text(annotation, origin, scale, window, cx);
+    } else {
+        for (path, color) in annotation_paths(annotation, origin, scale) {
+            window.paint_path(path, color);
+        }
+    }
+}
+
+fn paint_stroke_path(
+    points: &[[f64; 2]],
+    origin: Point<Pixels>,
+    scale: f32,
+    stroke_width: f32,
+    color: Hsla,
+    window: &mut Window,
+) {
+    let mut paths = Vec::new();
+    push_stroke_path(points, origin, scale, stroke_width, color, &mut paths);
+    for (path, color) in paths {
+        window.paint_path(path, color);
+    }
+}
+
+/// `RenderAnnotation` (`AnnotationLayer.tsx:813-933`).
+fn annotation_paths(annotation: &Annotation, origin: Point<Pixels>, scale: f32) -> AnnotationPaths {
+    let mut paths = Vec::new();
     let opacity = annotation.opacity;
     let stroke_color = annotation_color(&annotation.stroke_color, opacity);
     let fill_color = annotation_color(&annotation.fill_color, opacity);
@@ -3689,14 +3760,14 @@ fn paint_annotation(
             if let Some(fill) = fill_color {
                 let mut builder = PathBuilder::fill();
                 push_rect(&mut builder, origin, scale, rect);
-                paint_fill(builder, fill, window);
+                push_fill(&mut paths, builder, fill);
             }
             if let Some(stroke) = stroke_color
                 && stroke_width > 0.
             {
                 let mut builder = PathBuilder::stroke(px(stroke_width));
                 push_rect(&mut builder, origin, scale, rect);
-                paint_fill(builder, stroke, window);
+                push_fill(&mut paths, builder, stroke);
             }
         }
         AnnotationType::Circle => {
@@ -3709,24 +3780,24 @@ fn paint_annotation(
             let radius_x = (annotation.width / 2.).abs() as f32 * scale;
             let radius_y = (annotation.height / 2.).abs() as f32 * scale;
             if radius_x <= 0. || radius_y <= 0. {
-                return;
+                return paths;
             }
             if let Some(fill) = fill_color {
                 let mut builder = PathBuilder::fill();
                 push_circle(&mut builder, center, radius_x, radius_y);
-                paint_fill(builder, fill, window);
+                push_fill(&mut paths, builder, fill);
             }
             if let Some(stroke) = stroke_color
                 && stroke_width > 0.
             {
                 let mut builder = PathBuilder::stroke(px(stroke_width));
                 push_circle(&mut builder, center, radius_x, radius_y);
-                paint_fill(builder, stroke, window);
+                push_fill(&mut paths, builder, stroke);
             }
         }
         AnnotationType::Arrow => {
             let Some(stroke) = stroke_color else {
-                return;
+                return paths;
             };
             let end = (
                 annotation.x + annotation.width,
@@ -3740,9 +3811,9 @@ fn paint_annotation(
                 let mut builder = PathBuilder::stroke(px(stroke_width));
                 builder.move_to(tail);
                 builder.line_to(base);
-                paint_fill(builder, stroke, window);
-                paint_disc(window, tail, stroke_width / 2., stroke);
-                paint_disc(window, base, stroke_width / 2., stroke);
+                push_fill(&mut paths, builder, stroke);
+                push_disc(&mut paths, tail, stroke_width / 2., stroke);
+                push_disc(&mut paths, base, stroke_width / 2., stroke);
             }
             let mut builder = PathBuilder::fill();
             let points: Vec<Point<Pixels>> = head
@@ -3751,32 +3822,33 @@ fn paint_annotation(
                 .map(|(x, y)| map_point(origin, scale, *x, *y))
                 .collect();
             builder.add_polygon(&points, true);
-            paint_fill(builder, stroke, window);
+            push_fill(&mut paths, builder, stroke);
         }
         AnnotationType::Draw => {
             let Some(stroke) = stroke_color else {
-                return;
+                return paths;
             };
             if stroke_width <= 0. {
-                return;
+                return paths;
             }
             let points = draw_points(annotation);
-            paint_stroke_path(&points, origin, scale, stroke_width, stroke, window);
+            push_stroke_path(&points, origin, scale, stroke_width, stroke, &mut paths);
         }
-        AnnotationType::Text => paint_text(annotation, origin, scale, window, cx),
+        AnnotationType::Text => {}
     }
+    paths
 }
 
 /// A smoothed freehand stroke, with the round caps its `stroke-linecap` asks
 /// for. The quadratics `smooth_path` emits are already tangent-continuous, so
 /// the joins need nothing extra.
-fn paint_stroke_path(
+fn push_stroke_path(
     points: &[[f64; 2]],
     origin: Point<Pixels>,
     scale: f32,
     stroke_width: f32,
     color: Hsla,
-    window: &mut Window,
+    paths: &mut AnnotationPaths,
 ) {
     let segments = smooth_path(points);
     if segments.is_empty() {
@@ -3793,16 +3865,16 @@ fn paint_stroke_path(
             ),
         }
     }
-    paint_fill(builder, color, window);
+    push_fill(paths, builder, color);
     if let (Some(first), Some(last)) = (points.first(), points.last()) {
-        paint_disc(
-            window,
+        push_disc(
+            paths,
             map_point(origin, scale, first[0], first[1]),
             stroke_width / 2.,
             color,
         );
-        paint_disc(
-            window,
+        push_disc(
+            paths,
             map_point(origin, scale, last[0], last[1]),
             stroke_width / 2.,
             color,
@@ -4855,3 +4927,7 @@ mod tests {
         assert!(geometry_changed(&before, &after));
     }
 }
+
+#[cfg(test)]
+#[path = "screenshot_annotation_render_tests.rs"]
+mod render_tests;
