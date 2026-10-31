@@ -12,6 +12,7 @@
 use std::{
     collections::{HashMap, HashSet},
     path::PathBuf,
+    rc::Rc,
     str::FromStr as _,
     sync::{
         Arc,
@@ -23,8 +24,8 @@ use std::{
 use cap_cli_install as cli_install;
 use gpui::{
     AppContext as _, Context, Entity, FontWeight, Hsla, InteractiveElement, IntoElement,
-    MouseButton, ParentElement, SharedString, StatefulInteractiveElement, Styled, Window, div,
-    prelude::FluentBuilder, px, rgb, svg,
+    ListAlignment, ListState, MouseButton, ParentElement, SharedString, StatefulInteractiveElement,
+    Styled, Window, div, list, prelude::FluentBuilder, px, rgb, svg,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -148,7 +149,133 @@ struct ChangelogEntry {
     title: String,
     version: String,
     published_at: String,
-    content: String,
+    #[serde(
+        rename = "content",
+        deserialize_with = "deserialize_changelog_paragraphs"
+    )]
+    paragraphs: Vec<MarkdownParagraph>,
+}
+
+struct ChangelogContent {
+    rows: Rc<[ChangelogRow]>,
+    scroll: ListState,
+}
+
+enum ChangelogRow {
+    Header {
+        title: SharedString,
+        version: SharedString,
+        published_at: SharedString,
+        is_new: bool,
+    },
+    Paragraph {
+        paragraph: MarkdownParagraph,
+        is_last: bool,
+    },
+    Separator,
+}
+
+impl ChangelogContent {
+    fn new(entries: Vec<ChangelogEntry>) -> Self {
+        let mut rows = Vec::new();
+        for (index, entry) in entries.into_iter().enumerate() {
+            if index != 0 {
+                rows.push(ChangelogRow::Separator);
+            }
+            rows.push(ChangelogRow::Header {
+                title: entry.title.into(),
+                version: entry.version.into(),
+                published_at: changelog_date(&entry.published_at).into(),
+                is_new: index == 0,
+            });
+            let paragraph_count = entry.paragraphs.len();
+            rows.extend(
+                entry
+                    .paragraphs
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, paragraph)| ChangelogRow::Paragraph {
+                        paragraph,
+                        is_last: index + 1 == paragraph_count,
+                    }),
+            );
+        }
+        Self {
+            scroll: ListState::new(rows.len(), ListAlignment::Top, px(300.)),
+            rows: rows.into(),
+        }
+    }
+}
+
+impl ChangelogRow {
+    fn render(&self, theme: Theme) -> gpui::AnyElement {
+        match self {
+            Self::Header {
+                title,
+                version,
+                published_at,
+                is_new,
+            } => div()
+                .flex()
+                .flex_col()
+                .w_full()
+                .min_w_0()
+                .when(*is_new, |this| {
+                    this.child(
+                        div().flex().flex_row().mb(px(8.)).child(
+                            div()
+                                .px(px(8.))
+                                .py(px(4.))
+                                .rounded(px(6.))
+                                .bg(Hsla::from(theme.blue_9))
+                                .text_size(px(12.))
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(gpui::white())
+                                .child(tr::settings::changelog::new()),
+                        ),
+                    )
+                })
+                .child(
+                    div()
+                        .text_size(px(14.))
+                        .font_weight(FontWeight::BOLD)
+                        .mb(px(8.))
+                        .child(title.clone()),
+                )
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .line_height(px(18.))
+                        .text_color(theme.settings_muted())
+                        .mb(px(16.))
+                        .child(tr::settings::changelog::version(version, published_at)),
+                )
+                .into_any_element(),
+            Self::Paragraph { paragraph, is_last } => div()
+                .w_full()
+                .min_w_0()
+                .text_size(px(13.))
+                .line_height(px(20.))
+                .text_color(theme.settings_muted())
+                .when(paragraph.heading, |this| {
+                    this.font_weight(FontWeight::BOLD)
+                        .text_color(theme.settings_text())
+                })
+                .when(!*is_last, |this| this.pb(px(10.)))
+                .child(paragraph.text.clone())
+                .into_any_element(),
+            Self::Separator => div()
+                .w_full()
+                .pb(px(32.))
+                .child(
+                    div()
+                        .h(px(34.))
+                        .border_b_2()
+                        .border_color(theme.settings_border()),
+                )
+                .into_any_element(),
+        }
+    }
 }
 
 /// `DesktopStorageIntegrations` (`web-api-contract/src/desktop.ts:58-79`),
@@ -346,7 +473,7 @@ pub(crate) struct PagesState {
 
     // Changelog (changelog.tsx). `None` until the first fetch lands; a
     // refetch keeps showing the loaded list, the way the cached query does.
-    changelog: Option<Result<Vec<ChangelogEntry>, String>>,
+    changelog: Option<Result<ChangelogContent, String>>,
 
     // License (license.tsx)
     license_input: Entity<ui::TextInputState>,
@@ -3664,6 +3791,12 @@ fn os_version() -> Option<String> {
 // ---------------------------------------------------------------------------
 
 impl SettingsWindow {
+    pub(crate) fn reset_changelog_scroll(&self) {
+        if let Some(Ok(changelog)) = &self.pages.changelog {
+            changelog.scroll.scroll_to(Default::default());
+        }
+    }
+
     /// `apiClient.desktop.getChangelogPosts({ query: { origin } })` -- GET
     /// `/api/changelog?origin=..`; the server only reads `origin` for CORS,
     /// so the configured server origin stands in for `window.location.origin`.
@@ -3688,6 +3821,15 @@ impl SettingsWindow {
             |this, result, _window, _cx| {
                 this.pages.changelog = Some(match result {
                     Ok((200, body)) => serde_json::from_value::<Vec<ChangelogEntry>>(body)
+                        .map(|entries| {
+                            let changelog = ChangelogContent::new(entries);
+                            if let Some(Ok(previous)) = &this.pages.changelog {
+                                changelog
+                                    .scroll
+                                    .scroll_to(previous.scroll.logical_scroll_top());
+                            }
+                            changelog
+                        })
                         .map_err(|error| error.to_string()),
                     Ok(_) => Err(tr::settings::changelog::fetch_failed().to_string()),
                     Err(error) => Err(error.text()),
@@ -3705,6 +3847,8 @@ impl SettingsWindow {
                     .flex()
                     .flex_1()
                     .min_h(px(200.))
+                    .pt(px(18.))
+                    .pb(px(28.))
                     .items_center()
                     .justify_center()
                     .text_color(theme.settings_muted())
@@ -3713,78 +3857,24 @@ impl SettingsWindow {
             ],
             Some(Err(error)) => vec![
                 div()
+                    .pt(px(18.))
+                    .pb(px(28.))
                     .text_size(px(13.))
                     .font_weight(FontWeight::MEDIUM)
                     .child(error.clone())
                     .into_any_element(),
             ],
-            Some(Ok(entries)) => {
-                let last = entries.len().saturating_sub(1);
+            Some(Ok(changelog)) => {
+                let rows = changelog.rows.clone();
                 vec![
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(32.))
-                        .children(entries.iter().enumerate().map(|(index, entry)| {
-                            // `border-b-2 pb-8 last:border-b-0`.
-                            div()
-                                .flex()
-                                .flex_col()
-                                .when(index != last, |this| {
-                                    this.pb(px(32.))
-                                        .border_b_2()
-                                        .border_color(theme.settings_border())
-                                })
-                                .when(index == 0, |this| {
-                                    this.child(
-                                        div().flex().flex_row().mb(px(8.)).child(
-                                            div()
-                                                .px(px(8.))
-                                                .py(px(4.))
-                                                .rounded(px(6.))
-                                                .bg(Hsla::from(theme.blue_9))
-                                                .text_size(px(12.))
-                                                .font_weight(FontWeight::BOLD)
-                                                .text_color(gpui::white())
-                                                .child(tr::settings::changelog::new()),
-                                        ),
-                                    )
-                                })
-                                .child(
-                                    div()
-                                        .text_size(px(14.))
-                                        .font_weight(FontWeight::BOLD)
-                                        .mb(px(8.))
-                                        .child(entry.title.clone()),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(px(12.))
-                                        .line_height(px(18.))
-                                        .text_color(theme.settings_muted())
-                                        .mb(px(16.))
-                                        .child(tr::settings::changelog::version(
-                                            &entry.version,
-                                            changelog_date(&entry.published_at),
-                                        )),
-                                )
-                                .child(div().flex().flex_col().gap(px(10.)).children(
-                                    markdown_paragraphs(&entry.content).into_iter().map(
-                                        |paragraph| {
-                                            div()
-                                                .text_size(px(13.))
-                                                .line_height(px(20.))
-                                                .text_color(theme.settings_muted())
-                                                .when(paragraph.heading, |this| {
-                                                    this.font_weight(FontWeight::BOLD)
-                                                        .text_color(theme.settings_text())
-                                                })
-                                                .child(paragraph.text)
-                                        },
-                                    ),
-                                ))
-                        }))
-                        .into_any_element(),
+                    list(changelog.scroll.clone(), move |index, _, _| {
+                        rows[index].render(theme)
+                    })
+                    .size_full()
+                    .min_h_0()
+                    .pt(px(18.))
+                    .pb(px(28.))
+                    .into_any_element(),
                 ]
             }
         }
@@ -3798,9 +3888,20 @@ fn changelog_date(published_at: &str) -> String {
         .unwrap_or_else(|_| published_at.to_string())
 }
 
+#[derive(Debug, Clone)]
 struct MarkdownParagraph {
-    text: String,
+    text: SharedString,
     heading: bool,
+}
+
+fn deserialize_changelog_paragraphs<'de, D>(
+    deserializer: D,
+) -> Result<Vec<MarkdownParagraph>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let content = String::deserialize(deserializer)?;
+    Ok(markdown_paragraphs(&content))
 }
 
 /// The stand-in for `SolidMarkdown`: paragraphs split on blank lines,
@@ -3837,7 +3938,7 @@ fn markdown_paragraphs(content: &str) -> Vec<MarkdownParagraph> {
                 }
             }
             Some(MarkdownParagraph {
-                text: text.to_string(),
+                text: text.into(),
                 heading,
             })
         })
