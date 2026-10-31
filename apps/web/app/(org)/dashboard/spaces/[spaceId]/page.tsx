@@ -32,6 +32,7 @@ import { and, count, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { Effect } from "effect";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+import { seedThumbnailUrls } from "@/lib/seeded-thumbnails";
 import { runPromise } from "@/lib/server";
 import { SharedCaps } from "./SharedCaps";
 
@@ -388,6 +389,12 @@ export default async function SharedCapsPage(props: {
 			fetchSpaceVideos(space.id, page, limit),
 			fetchOrganizationSettings(space.organizationId),
 		]);
+		const thumbnails = seedThumbnailUrls(
+			user,
+			spaceVideoData
+				.filter((video) => !video.hasActiveUpload)
+				.map((video) => Video.VideoId.make(video.id)),
+		);
 		const resolvedSpace = await Effect.gen(function* () {
 			const imageUploads = yield* ImageUploads;
 			return {
@@ -439,6 +446,7 @@ export default async function SharedCapsPage(props: {
 				organizationMembers={organizationMembersData}
 				currentUserId={user.id}
 				folders={foldersData}
+				thumbnails={thumbnails}
 			/>
 		);
 	}
@@ -529,6 +537,12 @@ export default async function SharedCapsPage(props: {
 			fetchFolders(organization.id, true),
 			fetchOrganizationSettings(organization.id),
 		]);
+		const thumbnails = seedThumbnailUrls(
+			user,
+			orgVideoData
+				.filter((video) => !video.hasActiveUpload)
+				.map((video) => Video.VideoId.make(video.id)),
+		);
 		const sharedSpacesMap = await fetchSharedSpacesForVideos(
 			orgVideoData.map((video) => Video.VideoId.make(video.id)),
 			{ userId: user.id, organizationId: organization.id },
@@ -571,6 +585,7 @@ export default async function SharedCapsPage(props: {
 				organizationMembers={organizationMembersData}
 				currentUserId={user.id}
 				folders={foldersData}
+				thumbnails={thumbnails}
 			/>
 		);
 	}

@@ -22,7 +22,7 @@ fn main() {
         println!("cargo:rustc-link-arg-bin=cap-gpui=/STACK:16777216");
     }
 
-    let icon = "../desktop/src-tauri/icons/icon.ico";
+    let icon = "icons/icon.ico";
     println!("cargo:rerun-if-changed={icon}");
     tauri_winres::WindowsResource::new()
         .set_icon_with_id(icon, "1")

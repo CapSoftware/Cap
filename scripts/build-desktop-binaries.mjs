@@ -10,13 +10,7 @@ import {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
-const binariesDir = path.join(
-	repoRoot,
-	"apps",
-	"desktop",
-	"src-tauri",
-	"binaries",
-);
+const binariesDir = path.join(repoRoot, "apps", "desktop-gpui", "binaries");
 
 function detectHostTriple() {
 	const result = spawnSync("rustc", ["-vV"], { encoding: "utf8" });

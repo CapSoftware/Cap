@@ -136,6 +136,18 @@ function createServerEnv() {
 				.describe(
 					"Transcription API base URL (eg. https://api.eu.assemblyai.com)",
 				),
+			LIVE_TRANSCRIBE_CONTEXT_SECONDS: z
+				.string()
+				.optional()
+				.describe(
+					"Seconds of earlier audio sent with each instant-mode live transcription chunk (more accurate, more audio billed; default 0)",
+				),
+			LIVE_TRANSCRIBE_RUNNER: z
+				.string()
+				.optional()
+				.describe(
+					"Set to media-server to run instant-mode live transcription on the media server instead of a workflow (falls back to the workflow)",
+				),
 			ANTHROPIC_API_KEY: z.string().optional().describe("AI chat"),
 			OPENAI_API_KEY: z.string().optional().describe("AI summaries"),
 			GROQ_API_KEY: z.string().optional().describe("AI summaries"),
@@ -185,6 +197,12 @@ function createServerEnv() {
 			/// Cap Cloud
 			// These are only needed for Cap Cloud (https://cap.so)
 			STRIPE_SECRET_KEY: z.string().optional(),
+			STRIPE_PUBLISHABLE_KEY: z
+				.string()
+				.optional()
+				.describe(
+					"Enables the in-app Cap Pro checkout; hosted Stripe Checkout is used without it",
+				),
 			STRIPE_SAML_SSO_PRICE_ID: z.string().optional(),
 			STRIPE_WEBHOOK_SECRET: z.string().optional(),
 			DISCORD_FEEDBACK_WEBHOOK_URL: z.string().optional(),

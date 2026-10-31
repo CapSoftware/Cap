@@ -49,10 +49,22 @@ export default async function DashboardLayout({
 	const user = await getCurrentUser();
 	if (!user) redirect("/login");
 
-	const pendingInviteId = await getPendingInviteIdForUser(user.email);
+	const hasName = Boolean(user.name && user.name.length > 0);
+	const pendingInviteIdPromise = getPendingInviteIdForUser(user.email);
+	const dashboardDataPromise = hasName ? getDashboardData(user) : null;
+	// Fail-open: the meter is informational and must never take the shell down.
+	const shareableLinkUsagePromise =
+		hasName && !userIsPro(user)
+			? getShareableLinkUsage(user.id).catch((error) => {
+					console.error("Failed to load shareable link usage", error);
+					return null;
+				})
+			: null;
+
+	const pendingInviteId = await pendingInviteIdPromise;
 	if (pendingInviteId) redirect(`/invite/${pendingInviteId}`);
 
-	if (!user.name || user.name.length === 0) {
+	if (!hasName || !dashboardDataPromise) {
 		redirect("/onboarding/welcome");
 	}
 
@@ -63,7 +75,7 @@ export default async function DashboardLayout({
 	let anyNewNotifications = false;
 	let userPreferences: UserPreferences;
 	try {
-		const dashboardData = await getDashboardData(user);
+		const dashboardData = await dashboardDataPromise;
 		organizationSelect = dashboardData.organizationSelect;
 		userCapsCount = dashboardData.userCapsCount;
 		organizationSettings = dashboardData.organizationSettings;
@@ -80,13 +92,7 @@ export default async function DashboardLayout({
 		userPreferences = null;
 	}
 
-	// Fail-open: the meter is informational and must never take the shell down.
-	const shareableLinkUsage = userIsPro(user)
-		? null
-		: await getShareableLinkUsage(user.id).catch((error) => {
-				console.error("Failed to load shareable link usage", error);
-				return null;
-			});
+	const shareableLinkUsage = await shareableLinkUsagePromise;
 
 	let activeOrganization = organizationSelect.find(
 		(organization) =>

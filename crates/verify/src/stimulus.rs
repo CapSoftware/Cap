@@ -33,7 +33,14 @@ pub struct StimulusSpec {
     /// `None` = borderless fullscreen on the primary display; otherwise a
     /// window at (x, y, width, height) in points.
     pub window: Option<(i32, i32, u32, u32)>,
+    /// A solid magenta window at (x, y, width, height) in points, in front
+    /// of the stimulus window: what a window-only capture must leave out.
+    #[serde(default)]
+    pub occluder: Option<(i32, i32, u32, u32)>,
 }
+
+/// The occluder's title, for the oracle to find its window.
+pub const OCCLUDER_TITLE: &str = "Cap Verify Occluder";
 
 impl StimulusSpec {
     pub fn frame_count(&self) -> u32 {
