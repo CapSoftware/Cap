@@ -122,6 +122,409 @@ pub(crate) fn bt709_chroma(r: i32, g: i32, b: i32) -> [u8; 2] {
     ]
 }
 
+/// Limited-range BT.709 RGBA8 to tightly packed NV12.
+///
+/// Luma is one sample per pixel. Chroma is the mean of each complete 2×2
+/// block, `(sum + 2) / 4`, then [`bt709_chroma`]. A trailing odd column or row
+/// keeps its luma and does not contribute a chroma sample. Rows may be padded;
+/// `src_stride` is the byte distance between RGBA rows and must be at least
+/// `width * 4` for the vector path.
+pub(crate) fn rgba_to_nv12(
+    src: &[u8],
+    src_stride: usize,
+    width: usize,
+    height: usize,
+    dst: &mut [u8],
+) {
+    #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
+    if is_x86_feature_detected!("avx2")
+        && rgba_nv12_bounds_ok(src.len(), src_stride, width, height, dst.len())
+    {
+        // SAFETY: AVX2 is enabled on this CPU, and the bounds check covers every
+        // byte the kernel reads or writes, including the width%8 scalar tail.
+        unsafe {
+            rgba_to_nv12_avx2(src, src_stride, width, height, dst);
+        }
+        return;
+    }
+    rgba_to_nv12_scalar(src, src_stride, width, height, dst);
+}
+
+#[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
+unsafe fn rgba_to_nv12_avx2(
+    src: &[u8],
+    src_stride: usize,
+    width: usize,
+    height: usize,
+    dst: &mut [u8],
+) {
+    unsafe {
+        rgba_nv12_avx2::convert(src, src_stride, width, height, dst);
+    }
+}
+
+#[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
+fn rgba_nv12_bounds_ok(
+    src_len: usize,
+    src_stride: usize,
+    width: usize,
+    height: usize,
+    dst_len: usize,
+) -> bool {
+    if width == 0 || height == 0 {
+        return false;
+    }
+    let Some(row_bytes) = width.checked_mul(4) else {
+        return false;
+    };
+    if src_stride < row_bytes {
+        return false;
+    }
+    let Some(src_need) = (height - 1)
+        .checked_mul(src_stride)
+        .and_then(|offset| offset.checked_add(row_bytes))
+    else {
+        return false;
+    };
+    if src_need > src_len {
+        return false;
+    }
+    let Some(y_bytes) = width.checked_mul(height) else {
+        return false;
+    };
+    let Some(uv_bytes) = width.checked_mul(height / 2) else {
+        return false;
+    };
+    y_bytes
+        .checked_add(uv_bytes)
+        .is_some_and(|dst_need| dst_need <= dst_len)
+}
+
+fn rgba_to_nv12_scalar(src: &[u8], src_stride: usize, width: usize, height: usize, dst: &mut [u8]) {
+    rgba_to_nv12_rect(src, src_stride, width, height, 0, width, 0, height, dst);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn rgba_to_nv12_rect(
+    src: &[u8],
+    src_stride: usize,
+    width: usize,
+    height: usize,
+    x0: usize,
+    x1: usize,
+    y0: usize,
+    y1: usize,
+    dst: &mut [u8],
+) {
+    for row in y0..y1 {
+        let src_off = row * src_stride + x0 * 4;
+        let src_row = &src[src_off..src_off + (x1 - x0) * 4];
+        let y_off = row * width + x0;
+        let y_row = &mut dst[y_off..y_off + (x1 - x0)];
+        for (pixel, y) in src_row.chunks_exact(4).zip(y_row.iter_mut()) {
+            *y = bt709_luma(
+                i32::from(pixel[0]),
+                i32::from(pixel[1]),
+                i32::from(pixel[2]),
+            );
+        }
+    }
+
+    let uv_offset = width * height;
+    let col_start = x0 / 2;
+    let col_end = x1 / 2;
+    for row in y0.div_ceil(2)..(y1 / 2) {
+        let src0 = row * 2 * src_stride;
+        let src1 = src0 + src_stride;
+        let uv_off = uv_offset + row * width;
+        let uv_row = &mut dst[uv_off..uv_off + width];
+        for col in col_start..col_end {
+            let r = (i32::from(src[src0 + col * 8])
+                + i32::from(src[src0 + col * 8 + 4])
+                + i32::from(src[src1 + col * 8])
+                + i32::from(src[src1 + col * 8 + 4])
+                + 2)
+                / 4;
+            let g = (i32::from(src[src0 + col * 8 + 1])
+                + i32::from(src[src0 + col * 8 + 5])
+                + i32::from(src[src1 + col * 8 + 1])
+                + i32::from(src[src1 + col * 8 + 5])
+                + 2)
+                / 4;
+            let b = (i32::from(src[src0 + col * 8 + 2])
+                + i32::from(src[src0 + col * 8 + 6])
+                + i32::from(src[src1 + col * 8 + 2])
+                + i32::from(src[src1 + col * 8 + 6])
+                + 2)
+                / 4;
+            [uv_row[col * 2], uv_row[col * 2 + 1]] = bt709_chroma(r, g, b);
+        }
+    }
+}
+
+#[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
+mod rgba_nv12_avx2 {
+    #[cfg(target_arch = "x86")]
+    use std::arch::x86::*;
+    #[cfg(target_arch = "x86_64")]
+    use std::arch::x86_64::*;
+
+    use super::{BT709_CB, BT709_CR, BT709_Y};
+
+    struct Job {
+        src: *const u8,
+        src_stride: usize,
+        y: *mut u8,
+        uv: *mut u8,
+        stride: usize,
+    }
+
+    struct Coeffs {
+        y_r: __m256i,
+        y_g: __m256i,
+        y_b: __m256i,
+        cb_r: __m256i,
+        cb_g: __m256i,
+        cb_b: __m256i,
+        cr_r: __m256i,
+        cr_g: __m256i,
+        cr_b: __m256i,
+        round: __m256i,
+        two: __m256i,
+        y_bias: __m256i,
+        c_bias: __m256i,
+        y_lo: __m256i,
+        y_hi: __m256i,
+        c_lo: __m256i,
+        c_hi: __m256i,
+        mask: __m256i,
+        pair_mask: __m256i,
+        gather: __m256i,
+    }
+
+    impl Coeffs {
+        #[target_feature(enable = "avx2")]
+        unsafe fn new() -> Self {
+            Self {
+                y_r: _mm256_set1_epi32(BT709_Y[0]),
+                y_g: _mm256_set1_epi32(BT709_Y[1]),
+                y_b: _mm256_set1_epi32(BT709_Y[2]),
+                cb_r: _mm256_set1_epi32(BT709_CB[0]),
+                cb_g: _mm256_set1_epi32(BT709_CB[1]),
+                cb_b: _mm256_set1_epi32(BT709_CB[2]),
+                cr_r: _mm256_set1_epi32(BT709_CR[0]),
+                cr_g: _mm256_set1_epi32(BT709_CR[1]),
+                cr_b: _mm256_set1_epi32(BT709_CR[2]),
+                round: _mm256_set1_epi32(1 << 15),
+                two: _mm256_set1_epi32(2),
+                y_bias: _mm256_set1_epi32(16),
+                c_bias: _mm256_set1_epi32(128),
+                y_lo: _mm256_set1_epi32(16),
+                y_hi: _mm256_set1_epi32(235),
+                c_lo: _mm256_set1_epi32(16),
+                c_hi: _mm256_set1_epi32(240),
+                mask: _mm256_set1_epi32(0x00FF),
+                pair_mask: _mm256_set1_epi64x(0xFFFF_FFFF),
+                gather: _mm256_setr_epi32(0, 1, 4, 5, 2, 3, 6, 7),
+            }
+        }
+    }
+
+    pub(super) unsafe fn convert(
+        src: &[u8],
+        src_stride: usize,
+        width: usize,
+        height: usize,
+        dst: &mut [u8],
+    ) {
+        unsafe {
+            convert_avx2(src, src_stride, width, height, dst);
+        }
+    }
+
+    #[target_feature(enable = "avx2")]
+    unsafe fn convert_avx2(
+        src: &[u8],
+        src_stride: usize,
+        width: usize,
+        height: usize,
+        dst: &mut [u8],
+    ) {
+        unsafe {
+            let vector_width = (width / 8) * 8;
+            let coeffs = Coeffs::new();
+            let job = Job {
+                src: src.as_ptr(),
+                src_stride,
+                y: dst.as_mut_ptr(),
+                uv: dst.as_mut_ptr().add(width * height),
+                stride: width,
+            };
+            let mut y = 0;
+            while y + 1 < height {
+                let mut x = 0;
+                while x + 16 <= vector_width {
+                    kernel8(&job, &coeffs, x, y);
+                    kernel8(&job, &coeffs, x + 8, y);
+                    x += 16;
+                }
+                if x + 8 <= vector_width {
+                    kernel8(&job, &coeffs, x, y);
+                }
+                y += 2;
+            }
+            if vector_width < width {
+                let mut y = 0;
+                while y + 1 < height {
+                    super::rgba_to_nv12_rect(
+                        src,
+                        src_stride,
+                        width,
+                        height,
+                        vector_width,
+                        width,
+                        y,
+                        y + 2,
+                        dst,
+                    );
+                    y += 2;
+                }
+            }
+            if height % 2 == 1 {
+                super::rgba_to_nv12_rect(
+                    src,
+                    src_stride,
+                    width,
+                    height,
+                    0,
+                    width,
+                    height - 1,
+                    height,
+                    dst,
+                );
+            }
+        }
+    }
+
+    #[target_feature(enable = "avx2")]
+    #[inline]
+    unsafe fn kernel8(job: &Job, coeffs: &Coeffs, x: usize, y: usize) {
+        unsafe {
+            let row0 = job.src.add(y * job.src_stride + x * 4);
+            let row1 = job.src.add((y + 1) * job.src_stride + x * 4);
+            let (r0, g0, b0) = unpack8(_mm256_loadu_si256(row0.cast()), coeffs.mask);
+            let (r1, g1, b1) = unpack8(_mm256_loadu_si256(row1.cast()), coeffs.mask);
+            store_y8(job.y.add(y * job.stride + x), luma8(r0, g0, b0, coeffs));
+            store_y8(
+                job.y.add((y + 1) * job.stride + x),
+                luma8(r1, g1, b1, coeffs),
+            );
+            // Mean the 2×2 block in pixel units before the matrix. Shifting the
+            // weighted sum by 18 is a different rounding and misses `bt709_chroma`.
+            let r_avg = average8(pair_sum(r0, coeffs), pair_sum(r1, coeffs), coeffs);
+            let g_avg = average8(pair_sum(g0, coeffs), pair_sum(g1, coeffs), coeffs);
+            let b_avg = average8(pair_sum(b0, coeffs), pair_sum(b1, coeffs), coeffs);
+            let cb = chroma8(
+                r_avg,
+                g_avg,
+                b_avg,
+                coeffs.cb_r,
+                coeffs.cb_g,
+                coeffs.cb_b,
+                coeffs,
+            );
+            let cr = chroma8(
+                r_avg,
+                g_avg,
+                b_avg,
+                coeffs.cr_r,
+                coeffs.cr_g,
+                coeffs.cr_b,
+                coeffs,
+            );
+            store_uv8(job, x, y / 2, cb, cr, coeffs.gather);
+        }
+    }
+
+    #[target_feature(enable = "avx2")]
+    #[inline]
+    unsafe fn unpack8(pix: __m256i, mask: __m256i) -> (__m256i, __m256i, __m256i) {
+        let r = _mm256_and_si256(pix, mask);
+        let g = _mm256_and_si256(_mm256_srli_epi32(pix, 8), mask);
+        let b = _mm256_and_si256(_mm256_srli_epi32(pix, 16), mask);
+        (r, g, b)
+    }
+
+    #[target_feature(enable = "avx2")]
+    #[inline]
+    unsafe fn luma8(r: __m256i, g: __m256i, b: __m256i, coeffs: &Coeffs) -> __m256i {
+        let mut acc = _mm256_mullo_epi32(r, coeffs.y_r);
+        acc = _mm256_add_epi32(acc, _mm256_mullo_epi32(g, coeffs.y_g));
+        acc = _mm256_add_epi32(acc, _mm256_mullo_epi32(b, coeffs.y_b));
+        acc = _mm256_srai_epi32(_mm256_add_epi32(acc, coeffs.round), 16);
+        acc = _mm256_add_epi32(acc, coeffs.y_bias);
+        _mm256_min_epi32(_mm256_max_epi32(acc, coeffs.y_lo), coeffs.y_hi)
+    }
+
+    #[target_feature(enable = "avx2")]
+    #[inline]
+    unsafe fn pair_sum(v: __m256i, coeffs: &Coeffs) -> __m256i {
+        let shifted = _mm256_srli_epi64(v, 32);
+        let sum = _mm256_add_epi32(v, shifted);
+        _mm256_and_si256(sum, coeffs.pair_mask)
+    }
+
+    #[target_feature(enable = "avx2")]
+    #[inline]
+    unsafe fn average8(row0: __m256i, row1: __m256i, coeffs: &Coeffs) -> __m256i {
+        let sum = _mm256_add_epi32(row0, row1);
+        _mm256_srai_epi32(_mm256_add_epi32(sum, coeffs.two), 2)
+    }
+
+    #[target_feature(enable = "avx2")]
+    #[inline]
+    unsafe fn chroma8(
+        r: __m256i,
+        g: __m256i,
+        b: __m256i,
+        c_r: __m256i,
+        c_g: __m256i,
+        c_b: __m256i,
+        coeffs: &Coeffs,
+    ) -> __m256i {
+        let mut acc = _mm256_mullo_epi32(r, c_r);
+        acc = _mm256_add_epi32(acc, _mm256_mullo_epi32(g, c_g));
+        acc = _mm256_add_epi32(acc, _mm256_mullo_epi32(b, c_b));
+        acc = _mm256_srai_epi32(_mm256_add_epi32(acc, coeffs.round), 16);
+        acc = _mm256_add_epi32(acc, coeffs.c_bias);
+        _mm256_min_epi32(_mm256_max_epi32(acc, coeffs.c_lo), coeffs.c_hi)
+    }
+
+    #[target_feature(enable = "avx2")]
+    #[inline]
+    unsafe fn store_y8(ptr: *mut u8, v: __m256i) {
+        unsafe {
+            let packed = _mm256_packs_epi32(v, _mm256_setzero_si256());
+            let grouped = _mm256_permute4x64_epi64(packed, 0xD8);
+            let bytes = _mm_packus_epi16(_mm256_castsi256_si128(grouped), _mm_setzero_si128());
+            _mm_storel_epi64(ptr.cast(), bytes);
+        }
+    }
+
+    #[target_feature(enable = "avx2")]
+    #[inline]
+    unsafe fn store_uv8(job: &Job, x: usize, cy: usize, cb: __m256i, cr: __m256i, gather: __m256i) {
+        unsafe {
+            let cb = _mm256_permutevar8x32_epi32(_mm256_shuffle_epi32(cb, 0xD8), gather);
+            let cr = _mm256_permutevar8x32_epi32(_mm256_shuffle_epi32(cr, 0xD8), gather);
+            let lo = _mm_unpacklo_epi32(_mm256_castsi256_si128(cb), _mm256_castsi256_si128(cr));
+            let hi = _mm_unpackhi_epi32(_mm256_castsi256_si128(cb), _mm256_castsi256_si128(cr));
+            let bytes = _mm_packus_epi16(_mm_packs_epi32(lo, hi), _mm_setzero_si128());
+            _mm_storel_epi64(job.uv.add(cy * job.stride + x).cast(), bytes);
+        }
+    }
+}
+
 /// BT.601 [`nv12_to_rgba_with_matrix`], the conversion this module always did.
 pub fn nv12_to_rgba(
     y_data: &[u8],
@@ -1491,6 +1894,8 @@ mod avx2_yuv {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
+    use std::arch::is_x86_feature_detected;
 
     #[test]
     fn test_nv12_basic_conversion() {
@@ -2124,6 +2529,195 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    fn nv12_len(width: usize, height: usize) -> usize {
+        width * height + width * (height / 2)
+    }
+
+    fn sample_rgba(x: usize, y: usize) -> [u8; 4] {
+        [
+            x.wrapping_mul(17).wrapping_add(y.wrapping_mul(31)) as u8,
+            x.wrapping_mul(13)
+                .wrapping_add(y.wrapping_mul(7))
+                .wrapping_add(40) as u8,
+            x.wrapping_mul(3)
+                .wrapping_add(y.wrapping_mul(19))
+                .wrapping_add(90) as u8,
+            x.wrapping_mul(19).wrapping_add(y) as u8,
+        ]
+    }
+
+    fn rgba_frame(width: usize, height: usize, stride: usize) -> Vec<u8> {
+        let mut data = vec![0xA5; stride.saturating_mul(height)];
+        for y in 0..height {
+            for x in 0..width {
+                let pixel = sample_rgba(x, y);
+                let offset = y * stride + x * 4;
+                data[offset..offset + 4].copy_from_slice(&pixel);
+            }
+        }
+        data
+    }
+
+    fn assert_max_abs_diff(actual: &[u8], expected: &[u8], label: &str) {
+        assert_eq!(actual.len(), expected.len(), "{label} length");
+        let mut max_diff = 0i32;
+        let mut first = None;
+        for (index, (got, want)) in actual.iter().zip(expected).enumerate() {
+            let diff = i32::from(*got) - i32::from(*want);
+            let abs = diff.abs();
+            if abs > max_diff {
+                max_diff = abs;
+            }
+            if abs != 0 && first.is_none() {
+                first = Some((index, *want, *got));
+            }
+        }
+        assert!(
+            max_diff == 0,
+            "{label}: max abs diff {max_diff}, first mismatch {first:?}"
+        );
+    }
+
+    #[test]
+    fn rgba_to_nv12_empty_dimensions_are_a_no_op() {
+        let mut dst = Vec::new();
+        rgba_to_nv12(&[], 0, 0, 0, &mut dst);
+        rgba_to_nv12(&[], 0, 0, 4, &mut dst);
+        rgba_to_nv12(&[0; 16], 16, 4, 0, &mut dst);
+    }
+
+    #[test]
+    fn rgba_to_nv12_averages_the_block_before_the_matrix() {
+        // Blue 5 in one sample of the 2×2 block. The mean is (5 + 2) / 4 = 1,
+        // and BT.709 chroma of that mean is neutral. A >>18 weighted sum is Cb 129.
+        for (width, x) in [(2, 0), (8, 0), (10, 8), (16, 8)] {
+            let height = 2;
+            let mut rgba = vec![0u8; width * height * 4];
+            rgba[(x * 4) + 2] = 5;
+            let mut dst = vec![0u8; nv12_len(width, height)];
+            rgba_to_nv12(&rgba, width * 4, width, height, &mut dst);
+            let y_plane = width * height;
+            assert_eq!(dst[x], bt709_luma(0, 0, 5), "width {width} x {x}");
+            let chroma = bt709_chroma(0, 0, 1);
+            assert_eq!(chroma, [128, 128]);
+            let uv = y_plane + (x / 2) * 2;
+            assert_eq!(&dst[uv..uv + 2], &chroma, "width {width} x {x}");
+        }
+    }
+
+    #[test]
+    fn rgba_to_nv12_matches_scalar_on_odd_sizes_and_padding() {
+        let widths = [1, 2, 3, 7, 8, 9, 15, 16, 17, 31, 32, 33, 63, 64, 65];
+        let heights = [1, 2, 3, 5, 8, 15, 17];
+        let pads = [0, 1, 7, 16, 63];
+        for width in widths {
+            for height in heights {
+                for pad in pads {
+                    assert_rgba_nv12_exact(width, height, width * 4 + pad);
+                }
+            }
+        }
+        for (width, height, pad) in [(1919, 3, 7), (1920, 2, 0), (1921, 4, 13), (160, 9, 192)] {
+            assert_rgba_nv12_exact(width, height, width * 4 + pad);
+        }
+    }
+
+    fn assert_rgba_nv12_exact(width: usize, height: usize, stride: usize) {
+        let src = rgba_frame(width, height, stride);
+        let mut expected = vec![0x5A; nv12_len(width, height)];
+        let mut actual = expected.clone();
+        rgba_to_nv12_scalar(&src, stride, width, height, &mut expected);
+        rgba_to_nv12(&src, stride, width, height, &mut actual);
+        assert_max_abs_diff(
+            &actual,
+            &expected,
+            &format!("{width}x{height} stride {stride}"),
+        );
+        #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
+        if is_x86_feature_detected!("avx2") {
+            let mut direct = vec![0x5A; expected.len()];
+            unsafe {
+                rgba_to_nv12_avx2(&src, stride, width, height, &mut direct);
+            }
+            assert_max_abs_diff(
+                &direct,
+                &expected,
+                &format!("avx2 {width}x{height} stride {stride}"),
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "benchmark; run with --release --ignored --nocapture"]
+    fn benchmark_rgba_to_nv12() {
+        use std::time::Instant;
+
+        const WARMUP: usize = 8;
+        const SAMPLES: usize = 31;
+
+        fn median_ms(samples: &mut [std::time::Duration]) -> f64 {
+            samples.sort_unstable();
+            let mid = samples.len() / 2;
+            let median = if samples.len().is_multiple_of(2) {
+                (samples[mid - 1].as_secs_f64() + samples[mid].as_secs_f64()) / 2.0
+            } else {
+                samples[mid].as_secs_f64()
+            };
+            median * 1000.0
+        }
+
+        fn time_ms(mut invoke: impl FnMut()) -> f64 {
+            for _ in 0..WARMUP {
+                invoke();
+            }
+            let mut samples = Vec::with_capacity(SAMPLES);
+            for _ in 0..SAMPLES {
+                let start = Instant::now();
+                invoke();
+                samples.push(start.elapsed());
+            }
+            median_ms(&mut samples)
+        }
+
+        let cpu = std::fs::read_to_string("/proc/cpuinfo").unwrap_or_default();
+        let model = cpu
+            .lines()
+            .find(|line| line.starts_with("model name"))
+            .unwrap_or("model name: unknown");
+        println!("cpu: {model}");
+        println!("warmup: {WARMUP} samples: {SAMPLES} threads: 1");
+        println!("profile: opt-level=s codegen-units=1 lto=thin target-cpu=generic");
+        println!("rayon: not used by rgba_to_nv12");
+        println!("| size | stride | scalar ms | avx2 ms | speedup | max abs diff |");
+        println!("| --- | ---: | ---: | ---: | ---: | ---: |");
+
+        for (width, height) in [(1920, 1080), (3024, 1964), (3840, 2160)] {
+            let stride =
+                crate::frame_pipeline::padded_bytes_per_row((width as u32, height as u32)) as usize;
+            let src = rgba_frame(width, height, stride);
+            let mut scalar_dst = vec![0u8; nv12_len(width, height)];
+            let mut avx2_dst = scalar_dst.clone();
+            rgba_to_nv12_scalar(&src, stride, width, height, &mut scalar_dst);
+            rgba_to_nv12(&src, stride, width, height, &mut avx2_dst);
+            let mut max_diff = 0i32;
+            for (got, want) in avx2_dst.iter().zip(&scalar_dst) {
+                max_diff = max_diff.max((i32::from(*got) - i32::from(*want)).abs());
+            }
+            let scalar_ms = time_ms(|| {
+                rgba_to_nv12_scalar(&src, stride, width, height, &mut scalar_dst);
+                std::hint::black_box(scalar_dst.as_ptr());
+            });
+            let avx2_ms = time_ms(|| {
+                rgba_to_nv12(&src, stride, width, height, &mut avx2_dst);
+                std::hint::black_box(avx2_dst.as_ptr());
+            });
+            let speedup = scalar_ms / avx2_ms;
+            println!(
+                "| {width}x{height} | {stride} | {scalar_ms:.3} | {avx2_ms:.3} | {speedup:.2}x | {max_diff} |"
+            );
         }
     }
 }

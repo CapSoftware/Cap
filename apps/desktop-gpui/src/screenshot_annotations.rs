@@ -42,6 +42,7 @@ use gpui::{
 };
 
 use crate::editor_sidebar::{BACKGROUND_COLORS, hex_digit_count, hex_to_rgb};
+use crate::i18n::tr;
 use crate::screenshot_editor::ScreenshotEditorWindow;
 use crate::theme::Theme;
 use crate::ui;
@@ -88,7 +89,7 @@ impl Tool {
         }
     }
 
-    pub fn label(self) -> &'static str {
+    pub fn id(self) -> &'static str {
         match self {
             Tool::Select => "Select",
             Tool::Draw => "Draw",
@@ -97,6 +98,18 @@ impl Tool {
             Tool::Mask => "Mask",
             Tool::Circle => "Circle",
             Tool::Text => "Text",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Tool::Select => tr::screenshot_editor::tool::select(),
+            Tool::Draw => tr::screenshot_editor::tool::draw(),
+            Tool::Arrow => tr::screenshot_editor::tool::arrow(),
+            Tool::Rectangle => tr::screenshot_editor::tool::rectangle(),
+            Tool::Mask => tr::screenshot_editor::tool::mask(),
+            Tool::Circle => tr::screenshot_editor::tool::circle(),
+            Tool::Text => tr::screenshot_editor::tool::text_label(),
         }
     }
 
@@ -143,12 +156,12 @@ pub fn annotation_icon(annotation_type: AnnotationType) -> &'static str {
 /// `ANNOTATION_TYPE_LABELS` (`LayersPanel.tsx:23-30`).
 pub fn annotation_label(annotation_type: AnnotationType) -> &'static str {
     match annotation_type {
-        AnnotationType::Arrow => "Arrow",
-        AnnotationType::Rectangle => "Rectangle",
-        AnnotationType::Circle => "Circle",
-        AnnotationType::Mask => "Mask",
-        AnnotationType::Text => "Text",
-        AnnotationType::Draw => "Draw",
+        AnnotationType::Arrow => tr::screenshot_editor::tool::arrow(),
+        AnnotationType::Rectangle => tr::screenshot_editor::tool::rectangle(),
+        AnnotationType::Circle => tr::screenshot_editor::tool::circle(),
+        AnnotationType::Mask => tr::screenshot_editor::tool::mask(),
+        AnnotationType::Text => tr::screenshot_editor::tool::text_label(),
+        AnnotationType::Draw => tr::screenshot_editor::tool::draw(),
     }
 }
 
@@ -1636,7 +1649,7 @@ impl ScreenshotEditorWindow {
             fill_color: TRANSPARENT.to_string(),
             opacity: style.as_ref().map_or(1., |(_, _, opacity)| *opacity),
             rotation: 0.,
-            text: is_text.then(|| "Text".to_string()),
+            text: is_text.then(|| tr::screenshot_editor::annotation::default_text().to_string()),
             mask_type: is_mask.then_some(MaskType::Pixelate),
             mask_level: is_mask.then_some(MASK_DEFAULT_LEVEL),
             points: (annotation_type == AnnotationType::Draw).then(|| vec![[x, y]]),
@@ -2526,7 +2539,11 @@ impl ScreenshotEditorWindow {
         if !is_mask {
             row = row.child(config_item(
                 &theme,
-                if is_text { "Color" } else { "Stroke" },
+                if is_text {
+                    tr::screenshot_editor::style::color()
+                } else {
+                    tr::screenshot_editor::annotation::stroke()
+                },
                 None,
                 self.render_color_button(ColorTarget::Stroke, cx),
             ));
@@ -2534,7 +2551,7 @@ impl ScreenshotEditorWindow {
         if !is_mask && !is_text {
             row = row.child(config_item(
                 &theme,
-                "Width",
+                tr::screenshot_editor::style::width(),
                 Some(format!("{}px", annotation.stroke_width.round() as i64)),
                 self.annotation_slider(AnnotationSlider::Width, px(80.), cx)
                     .into_any_element(),
@@ -2543,7 +2560,7 @@ impl ScreenshotEditorWindow {
         if matches!(kind, AnnotationType::Rectangle | AnnotationType::Circle) {
             row = row.child(config_item(
                 &theme,
-                "Fill",
+                tr::screenshot_editor::annotation::fill(),
                 None,
                 self.render_color_button(ColorTarget::Fill, cx),
             ));
@@ -2551,7 +2568,7 @@ impl ScreenshotEditorWindow {
         if !is_mask {
             row = row.child(config_item(
                 &theme,
-                "Opacity",
+                tr::screenshot_editor::style::opacity(),
                 Some(format!("{}%", (annotation.opacity * 100.).round() as i64)),
                 self.annotation_slider(AnnotationSlider::Opacity, px(80.), cx)
                     .into_any_element(),
@@ -2562,19 +2579,19 @@ impl ScreenshotEditorWindow {
             row = row
                 .child(config_item(
                     &theme,
-                    "Style",
+                    tr::screenshot_editor::annotation::mask_style(),
                     None,
                     div()
                         .flex()
                         .flex_row()
                         .gap(px(4.))
-                        .child(self.render_mask_pill("Blur", MaskType::Blur, mask_type, cx))
-                        .child(self.render_mask_pill("Pixelate", MaskType::Pixelate, mask_type, cx))
+                        .child(self.render_mask_pill(MaskType::Blur, mask_type, cx))
+                        .child(self.render_mask_pill(MaskType::Pixelate, mask_type, cx))
                         .into_any_element(),
                 ))
                 .child(config_item(
                     &theme,
-                    "Intensity",
+                    tr::screenshot_editor::annotation::intensity(),
                     Some(format!(
                         "{}",
                         annotation.mask_level.unwrap_or(MASK_FALLBACK_LEVEL).round() as i64
@@ -2586,7 +2603,7 @@ impl ScreenshotEditorWindow {
         if is_text {
             row = row.child(config_item(
                 &theme,
-                "Size",
+                tr::screenshot_editor::style::size_label(),
                 Some(format!("{}px", annotation.height.round() as i64)),
                 self.annotation_slider(AnnotationSlider::TextSize, px(80.), cx)
                     .into_any_element(),
@@ -2599,16 +2616,19 @@ impl ScreenshotEditorWindow {
     /// The two `Style` pills (`AnnotationConfig.tsx:100-123`).
     fn render_mask_pill(
         &self,
-        label: &'static str,
         value: MaskType,
         current: MaskType,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = self.theme;
         let active = value == current;
+        let (id, label) = match value {
+            MaskType::Blur => ("Blur", tr::screenshot_editor::style::blur()),
+            MaskType::Pixelate => ("Pixelate", tr::screenshot_editor::annotation::pixelate()),
+        };
         div()
             .id(gpui::SharedString::from(format!(
-                "screenshot-mask-style-{label}"
+                "screenshot-mask-style-{id}"
             )))
             .flex()
             .items_center()
@@ -2920,7 +2940,11 @@ impl ScreenshotEditorWindow {
                             .when(selected, |this| this.border_2())
                             .children(checker_quarters(20.))
                             .tooltip(move |_window, cx| {
-                                ui::Tooltip::new(&theme, "Transparent").view(cx)
+                                ui::Tooltip::new(
+                                    &theme,
+                                    tr::screenshot_editor::annotation::transparent(),
+                                )
+                                .view(cx)
                             })
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 cx.stop_propagation();
@@ -3164,14 +3188,14 @@ impl ScreenshotEditorWindow {
                     div()
                         .text_size(px(12.))
                         .text_color(theme.gray_10)
-                        .child("No layers yet"),
+                        .child(tr::screenshot_editor::layers::empty()),
                 )
                 .child(
                     div()
                         .mt(px(4.))
                         .text_size(px(10.))
                         .text_color(theme.gray_8)
-                        .child("Use the tools above to add annotations"),
+                        .child(tr::screenshot_editor::layers::empty_hint()),
                 )
                 .into_any_element();
         }
