@@ -742,21 +742,7 @@ pub fn hit_annotation(annotation: &Annotation, point: (f64, f64), handle_size: f
             distance_to_segment(point, (annotation.x, annotation.y), head.base) <= tolerance
                 || point_in_triangle(point, head.points)
         }
-        AnnotationType::Draw => {
-            let points = draw_points(annotation);
-            if points.len() < 2 {
-                return false;
-            }
-            let tolerance = stroke.max(2.);
-            // The line itself, and -- because `pointer-events: all` ignores
-            // `fill="none"` -- whatever the path would have enclosed. Without
-            // the second half a scribble is only selectable within half a
-            // stroke of its own line, which at 50 % zoom is about a pixel.
-            points.windows(2).any(|pair| {
-                distance_to_segment(point, (pair[0][0], pair[0][1]), (pair[1][0], pair[1][1]))
-                    <= tolerance
-            }) || point_in_polygon(point, &points)
-        }
+        AnnotationType::Draw => hit_draw(annotation, point, stroke.max(2.)),
     }
 }
 
@@ -824,6 +810,10 @@ pub fn text_hit_rect(
 /// A stroke's samples in frame space -- `RenderAnnotation`'s draw branch
 /// (`:915-921`), including its `|| 1` guard against a zero-width box.
 pub fn draw_points(annotation: &Annotation) -> Vec<[f64; 2]> {
+    draw_point_iter(annotation).collect()
+}
+
+fn draw_point_iter(annotation: &Annotation) -> impl ExactSizeIterator<Item = [f64; 2]> {
     let width = if annotation.width == 0. {
         1.
     } else {
@@ -839,13 +829,12 @@ pub fn draw_points(annotation: &Annotation) -> Vec<[f64; 2]> {
         .as_deref()
         .unwrap_or_default()
         .iter()
-        .map(|point| {
+        .map(move |point| {
             [
                 annotation.x + point[0] * width,
                 annotation.y + point[1] * height,
             ]
         })
-        .collect()
 }
 
 /// `handleMouseUp`'s draw branch (`:449-453`): the samples become fractions of
@@ -968,29 +957,47 @@ fn distance_to_segment(point: (f64, f64), start: (f64, f64), end: (f64, f64)) ->
     ((point.0 - closest.0).powi(2) + (point.1 - closest.1).powi(2)).sqrt()
 }
 
-/// SVG's default `fill-rule: nonzero`, over a stroke's samples closed back on
-/// themselves -- the region a `fill="none"` path still counts as its interior
-/// for hit testing. The winding number, rather than an even-odd crossing
-/// count, so a scribble that loops over itself stays solid.
-fn point_in_polygon(point: (f64, f64), points: &[[f64; 2]]) -> bool {
-    if points.len() < 3 {
+fn hit_draw(annotation: &Annotation, point: (f64, f64), tolerance: f64) -> bool {
+    let mut points = draw_point_iter(annotation);
+    let count = points.len();
+    if count < 2 {
         return false;
     }
-    // Which side of `a -> b` the point falls on.
-    let side = |a: [f64; 2], b: [f64; 2]| {
-        (b[0] - a[0]) * (point.1 - a[1]) - (point.0 - a[0]) * (b[1] - a[1])
-    };
+    let first = points.next().unwrap();
+    let mut previous = first;
+    let mut previous_above = previous[1] > point.1;
     let mut winding = 0i32;
-    for index in 0..points.len() {
-        let a = points[index];
-        let b = points[(index + 1) % points.len()];
-        if a[1] <= point.1 {
-            if b[1] > point.1 && side(a, b) > 0. {
-                winding += 1;
-            }
-        } else if b[1] <= point.1 && side(a, b) < 0. {
-            winding -= 1;
+
+    for next in points {
+        if distance_to_segment(point, (previous[0], previous[1]), (next[0], next[1])) <= tolerance {
+            return true;
         }
+        let next_above = next[1] > point.1;
+        if previous_above != next_above {
+            let side = (next[0] - previous[0]) * (point.1 - previous[1])
+                - (point.0 - previous[0]) * (next[1] - previous[1]);
+            if !previous_above && side > 0. {
+                winding += 1;
+            } else if previous_above && side < 0. {
+                winding -= 1;
+            }
+        }
+        previous = next;
+        previous_above = next_above;
+    }
+
+    if count < 3 {
+        return false;
+    }
+    // The implicit closing edge contributes to SVG's nonzero fill, but is not stroked.
+    let side = (first[0] - previous[0]) * (point.1 - previous[1])
+        - (point.0 - previous[0]) * (first[1] - previous[1]);
+    if previous[1] <= point.1 {
+        if first[1] > point.1 && side > 0. {
+            winding += 1;
+        }
+    } else if first[1] <= point.1 && side < 0. {
+        winding -= 1;
     }
     winding != 0
 }
@@ -4282,6 +4289,325 @@ mod tests {
             mask_type: None,
             mask_level: None,
             points: None,
+        }
+    }
+
+    mod freehand_hit_tests {
+        use super::*;
+        use std::{hint::black_box, time::Instant};
+
+        fn baseline_hit_annotation(
+            annotation: &Annotation,
+            point: (f64, f64),
+            handle_size: f64,
+        ) -> bool {
+            let stroke = (annotation.stroke_width / 2.).max(0.);
+            match annotation.annotation_type {
+                AnnotationType::Rectangle | AnnotationType::Mask => {
+                    let rect = normalized_rect(annotation);
+                    point.0 >= rect.x - stroke
+                        && point.0 <= rect.x + rect.width + stroke
+                        && point.1 >= rect.y - stroke
+                        && point.1 <= rect.y + rect.height + stroke
+                }
+                AnnotationType::Circle => {
+                    if annotation.width == 0. || annotation.height == 0. {
+                        return false;
+                    }
+                    let center = (
+                        annotation.x + annotation.width / 2.,
+                        annotation.y + annotation.height / 2.,
+                    );
+                    let radius_x = (annotation.width / 2.).abs() + stroke;
+                    let radius_y = (annotation.height / 2.).abs() + stroke;
+                    if radius_x <= 0. || radius_y <= 0. {
+                        return false;
+                    }
+                    let dx = (point.0 - center.0) / radius_x;
+                    let dy = (point.1 - center.1) / radius_y;
+                    dx * dx + dy * dy <= 1.
+                }
+                AnnotationType::Text => {
+                    let rect = text_hit_rect(annotation, handle_size, None);
+                    point.0 >= rect.x
+                        && point.0 <= rect.x + rect.width
+                        && point.1 >= rect.y
+                        && point.1 <= rect.y + rect.height
+                }
+                AnnotationType::Arrow => {
+                    let end = (
+                        annotation.x + annotation.width,
+                        annotation.y + annotation.height,
+                    );
+                    let angle = (end.1 - annotation.y).atan2(end.0 - annotation.x);
+                    let head = arrow_head_points(end.0, end.1, angle, annotation.stroke_width);
+                    let tolerance = stroke.max(2.);
+                    distance_to_segment(point, (annotation.x, annotation.y), head.base) <= tolerance
+                        || point_in_triangle(point, head.points)
+                }
+                AnnotationType::Draw => {
+                    let points = baseline_draw_points(annotation);
+                    if points.len() < 2 {
+                        return false;
+                    }
+                    let tolerance = stroke.max(2.);
+                    points.windows(2).any(|pair| {
+                        distance_to_segment(
+                            point,
+                            (pair[0][0], pair[0][1]),
+                            (pair[1][0], pair[1][1]),
+                        ) <= tolerance
+                    }) || point_in_polygon(point, &points)
+                }
+            }
+        }
+
+        fn baseline_draw_points(annotation: &Annotation) -> Vec<[f64; 2]> {
+            let width = if annotation.width == 0. {
+                1.
+            } else {
+                annotation.width
+            };
+            let height = if annotation.height == 0. {
+                1.
+            } else {
+                annotation.height
+            };
+            annotation
+                .points
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .map(|point| {
+                    [
+                        annotation.x + point[0] * width,
+                        annotation.y + point[1] * height,
+                    ]
+                })
+                .collect()
+        }
+
+        fn point_in_polygon(point: (f64, f64), points: &[[f64; 2]]) -> bool {
+            if points.len() < 3 {
+                return false;
+            }
+            let side = |a: [f64; 2], b: [f64; 2]| {
+                (b[0] - a[0]) * (point.1 - a[1]) - (point.0 - a[0]) * (b[1] - a[1])
+            };
+            let mut winding = 0i32;
+            for index in 0..points.len() {
+                let a = points[index];
+                let b = points[(index + 1) % points.len()];
+                if a[1] <= point.1 {
+                    if b[1] > point.1 && side(a, b) > 0. {
+                        winding += 1;
+                    }
+                } else if b[1] <= point.1 && side(a, b) < 0. {
+                    winding -= 1;
+                }
+            }
+            winding != 0
+        }
+
+        fn baseline_hit_test(
+            annotations: &[Annotation],
+            point: (f64, f64),
+            handle_size: f64,
+        ) -> Option<usize> {
+            annotations
+                .iter()
+                .enumerate()
+                .rev()
+                .find(|(_, annotation)| baseline_hit_annotation(annotation, point, handle_size))
+                .map(|(index, _)| index)
+        }
+
+        #[test]
+        fn freehand_hits_preserve_nonzero_fill_without_stroking_the_closing_edge() {
+            let mut annotation = shape(AnnotationType::Draw, 0., 0., 100., 100.);
+            let square = vec![[0., 0.], [1., 0.], [1., 1.], [0., 1.]];
+            annotation.points = Some(square.clone());
+            assert!(hit_annotation(&annotation, (50., 50.), 10.));
+            assert!(hit_annotation(&annotation, (50., -2.), 10.));
+            assert!(!hit_annotation(&annotation, (-1., 50.), 10.));
+            annotation.points.as_mut().unwrap().extend(square.clone());
+            assert!(hit_annotation(&annotation, (50., 50.), 10.));
+            let mut reversed = square.clone();
+            reversed.reverse();
+            annotation.points = Some(square.into_iter().chain(reversed).collect());
+            assert!(!hit_annotation(&annotation, (50., 50.), 10.));
+        }
+
+        #[test]
+        fn freehand_hits_preserve_transforms_and_degenerate_paths() {
+            let samples = [
+                None,
+                Some(vec![]),
+                Some(vec![[0.5, 0.5]]),
+                Some(vec![[0., 0.], [0., 0.]]),
+                Some(vec![[0., 0.], [1., 1.]]),
+                Some(vec![[0., 0.], [1., 1.], [0., 1.], [1., 0.]]),
+                Some(vec![[-2., 3.], [4., -5.], [6., 7.]]),
+            ];
+            for points in samples {
+                for width in [0., -0., 1., 100., -100.] {
+                    for height in [0., -0., 1., 80., -80.] {
+                        let mut annotation = shape(AnnotationType::Draw, 13., -17., width, height);
+                        annotation.points = points.clone();
+                        for x in [-200., -2., 0., 0.5, 13., 50., 113., 400.] {
+                            for y in [-200., -17., 0., 0.5, 50., 80., 400.] {
+                                assert_eq!(
+                                    hit_annotation(&annotation, (x, y), 10.),
+                                    baseline_hit_annotation(&annotation, (x, y), 10.)
+                                );
+                            }
+                        }
+                        assert_eq!(draw_points(&annotation), baseline_draw_points(&annotation));
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn freehand_hits_preserve_float_edge_cases() {
+            let mut state = 0x4af2_9103_f723_c165_u64;
+            let mut number = || {
+                state = state
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                match state % 8 {
+                    0 => 0.,
+                    1 => -0.,
+                    2 => f64::INFINITY,
+                    3 => f64::NEG_INFINITY,
+                    4 => f64::NAN,
+                    5 => f64::from_bits(state),
+                    _ => ((state >> 32) as i32) as f64 / 65536.,
+                }
+            };
+            for case in 0..10_000 {
+                let mut annotation =
+                    shape(AnnotationType::Draw, number(), number(), number(), number());
+                annotation.stroke_width = number();
+                annotation.points = (case % 23 != 0)
+                    .then(|| (0..case % 19).map(|_| [number(), number()]).collect());
+                let mut point = (number(), number());
+                if case % 2 == 0
+                    && let Some(first) = baseline_draw_points(&annotation).first()
+                {
+                    point = (first[0], first[1]);
+                }
+                assert_eq!(
+                    hit_annotation(&annotation, point, 10.),
+                    baseline_hit_annotation(&annotation, point, 10.),
+                    "case {case}"
+                );
+            }
+        }
+
+        #[test]
+        fn freehand_hits_keep_the_topmost_annotation() {
+            let mut stroke = shape(AnnotationType::Draw, 0., 0., 100., 100.);
+            stroke.points = Some(vec![[0., 0.], [1., 0.], [1., 1.], [0., 1.]]);
+            let mut annotations = vec![
+                stroke.clone(),
+                shape(AnnotationType::Rectangle, 0., 0., 100., 100.),
+                stroke,
+            ];
+            assert_eq!(hit_test(&annotations, (50., 50.), 10.), Some(2));
+            annotations[2].x = 200.;
+            assert_eq!(hit_test(&annotations, (50., 50.), 10.), Some(1));
+            annotations[1].x = 200.;
+            assert_eq!(hit_test(&annotations, (50., 50.), 10.), Some(0));
+            assert_eq!(hit_test(&annotations, (500., 500.), 10.), None);
+        }
+
+        fn freehand_hit_fixture(
+            count: usize,
+            stack: usize,
+            kind: &str,
+        ) -> (Vec<Annotation>, (f64, f64)) {
+            let mut stroke = shape(AnnotationType::Draw, 0., 0., 2000., 2000.);
+            stroke.points = Some(
+                (0..count)
+                    .map(|index| {
+                        let angle = index as f64 / count as f64 * std::f64::consts::TAU;
+                        [0.5 + 0.5 * angle.cos(), 0.5 + 0.5 * angle.sin()]
+                    })
+                    .collect(),
+            );
+            let mut point = match kind {
+                "early_top" | "early_bottom" => (2000., 1000.),
+                "late_top" | "late_bottom" => (1000., 0.),
+                "inside" => (1000., 1000.),
+                "miss" => (4000., 4000.),
+                _ => unreachable!(),
+            };
+            if kind.ends_with("_top") {
+                point.0 += (stack - 1) as f64 * 10_000.;
+            }
+            let annotations = (0..stack)
+                .map(|index| {
+                    let mut annotation = stroke.clone();
+                    annotation.x += index as f64 * 10_000.;
+                    annotation
+                })
+                .collect();
+            (annotations, point)
+        }
+
+        type HitTest = fn(&[Annotation], (f64, f64), f64) -> Option<usize>;
+
+        fn benchmark_hit_tests(before: HitTest, after: HitTest) {
+            println!("points,stack,query,before_ns,after_ns");
+            for count in [8, 32, 256, 2048, 8192] {
+                for stack in [1, 8, 32] {
+                    for kind in [
+                        "early_top",
+                        "late_top",
+                        "early_bottom",
+                        "late_bottom",
+                        "inside",
+                        "miss",
+                    ] {
+                        let (annotations, point) = freehand_hit_fixture(count, stack, kind);
+                        let expected = before(&annotations, point, 10.);
+                        assert_eq!(after(&annotations, point, 10.), expected);
+                        let batch = (32768 / (count * stack)).clamp(16, 256);
+                        let mut samples = [Vec::new(), Vec::new()];
+                        for iteration in 0..41 {
+                            for offset in 0..2 {
+                                let index = (iteration + offset) % 2;
+                                let hit = [before, after][index];
+                                let started = Instant::now();
+                                for _ in 0..batch {
+                                    black_box(hit(
+                                        black_box(&annotations),
+                                        black_box(point),
+                                        black_box(10.),
+                                    ));
+                                }
+                                let elapsed = started.elapsed().as_secs_f64() * 1e9 / batch as f64;
+                                if iteration >= 10 {
+                                    samples[index].push(elapsed);
+                                }
+                            }
+                        }
+                        samples[0].sort_by(f64::total_cmp);
+                        samples[1].sort_by(f64::total_cmp);
+                        println!(
+                            "{count},{stack},{kind},{:.3},{:.3}",
+                            samples[0][15], samples[1][15]
+                        );
+                    }
+                }
+            }
+        }
+
+        #[test]
+        #[ignore = "manual freehand pointer hit-test benchmark"]
+        fn benchmark_freehand_hit_testing() {
+            benchmark_hit_tests(baseline_hit_test, hit_test);
         }
     }
 
