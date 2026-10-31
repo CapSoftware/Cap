@@ -25,6 +25,7 @@ export type SeatPreviewResult =
 	| {
 			ok: true;
 			proratedAmount: number;
+			recurringAmount: number;
 			nextPaymentDate: number;
 			currency: string;
 	  }
@@ -109,6 +110,7 @@ export async function previewAddSeats(
 		return {
 			ok: true,
 			proratedAmount: preview.proratedAmount,
+			recurringAmount: preview.recurringAmount,
 			nextPaymentDate: preview.nextPaymentDate,
 			currency: preview.currency,
 		};

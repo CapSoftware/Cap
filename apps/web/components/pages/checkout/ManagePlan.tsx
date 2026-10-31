@@ -195,6 +195,10 @@ function AddSeats({
 					preview.currency,
 				)
 			: null;
+	const renewal =
+		preview?.ok === true && preview.recurringAmount > 0
+			? formatAmount(preview.recurringAmount / 100, preview.currency)
+			: formatAmount(perSeatPerPeriod * seats, details.currency);
 
 	const submit = async () => {
 		if (submitting || pastDue || !preview?.ok) return;
@@ -348,7 +352,7 @@ function AddSeats({
 						/>
 						<SummaryRow
 							label={`From ${formatDate(details.currentPeriodEnd)}`}
-							value={`${formatAmount(perSeatPerPeriod * seats, details.currency)} per ${yearly ? "year" : "month"}`}
+							value={`${renewal} per ${yearly ? "year" : "month"}`}
 						/>
 					</dl>
 				)}
