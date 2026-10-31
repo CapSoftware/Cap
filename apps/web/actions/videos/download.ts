@@ -3,10 +3,10 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { videoEdits, videos, videoUploads } from "@cap/database/schema";
-import { Storage } from "@cap/web-backend";
+import { provideOptionalAuth, Storage, VideosPolicy } from "@cap/web-backend";
 import { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
-import { Effect } from "effect";
+import { Effect, Option } from "effect";
 import { runPromise } from "@/lib/server";
 import { canUserDownloadVideo } from "@/lib/video-download-permissions";
 import { decodeStorageVideo } from "@/lib/video-storage";
@@ -149,6 +149,11 @@ export async function getVideoDownloadInfo(
 			}
 		}
 		const downloadUrl = await Effect.gen(function* () {
+			const videosPolicy = yield* VideosPolicy;
+			yield* videosPolicy.canViewLoaded(
+				decodedVideo,
+				Option.fromNullable(video.password),
+			);
 			const [bucket] = yield* Storage.getAccessForVideo(decodedVideo);
 			const exists = yield* bucket.headObject(downloadKey).pipe(
 				Effect.as(true),
@@ -156,7 +161,7 @@ export async function getVideoDownloadInfo(
 			);
 			if (!exists) return null;
 			return yield* bucket.getSignedObjectUrl(downloadKey);
-		}).pipe(runPromise);
+		}).pipe(provideOptionalAuth, runPromise);
 
 		if (!downloadUrl) {
 			return {
