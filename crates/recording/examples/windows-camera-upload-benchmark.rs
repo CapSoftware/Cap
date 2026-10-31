@@ -1,16 +1,3 @@
-//! Measures the Windows native camera upload path: the per-frame media buffer
-//! copy plus `upload_mf_buffer_to_texture`. `before` replays frames through an
-//! inline copy of the previous path (new `MFCreateMemoryBuffer` and new
-//! `CreateTexture2D` per frame), `after` through the pooled buffers and the
-//! library upload.
-//!
-//!   cargo build --release -p cap-recording --example windows-camera-upload-benchmark
-//!   windows-camera-upload-benchmark capture frames.bin [camera name]
-//!   windows-camera-upload-benchmark both frames.bin
-//!   windows-camera-upload-benchmark before frames.bin
-//!   windows-camera-upload-benchmark after frames.bin
-//!   windows-camera-upload-benchmark validate
-
 #[cfg(not(target_os = "windows"))]
 fn main() {
     eprintln!("windows-camera-upload-benchmark: skipped (not Windows)");
