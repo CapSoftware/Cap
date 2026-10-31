@@ -310,6 +310,7 @@ struct PipewireCaptureState {
     rate_limited: Arc<AtomicU64>,
     capture_clock: Instant,
     cadence_gate: FrameCadenceGate,
+    frame_pool: CaptureFramePool,
     /// Reads frames with a GPU-tiled modifier; `None` without a usable EGL.
     importer: Option<linux_dmabuf_import::DmaBufImporter>,
     imported: Vec<u8>,
@@ -565,6 +566,7 @@ fn capture_pipewire_node(
         rate_limited: rate_limited.clone(),
         capture_clock: started,
         cadence_gate: FrameCadenceGate::new(1_000_000_000 / i64::from(input.fps.max(1))),
+        frame_pool: CaptureFramePool::new(),
         importer,
         imported: Vec::new(),
     };
@@ -893,7 +895,12 @@ fn process_pipewire_frame(
             &mut state.imported,
         )?
     } else {
-        frame_from_pipewire_data(&mut datas[0], state.format, state.crop_bounds)?
+        frame_from_pipewire_data(
+            &mut datas[0],
+            state.format,
+            state.crop_bounds,
+            &mut state.frame_pool,
+        )?
     };
     let Some(raw_frame) = raw_frame else {
         return Ok(Some(StallSendOutcome::StalledAndDropped { waited_ms: 0 }));
@@ -939,10 +946,70 @@ fn prepare_pipewire_frame(
         .scale(&frame, output)
 }
 
+const CAPTURE_FRAME_POOL_CAPACITY: usize = 4;
+
+struct CaptureFramePool {
+    key: Option<(ffmpeg::format::Pixel, u32, u32)>,
+    frames: Vec<ffmpeg::frame::Video>,
+}
+
+impl CaptureFramePool {
+    fn new() -> Self {
+        Self {
+            key: None,
+            frames: Vec::new(),
+        }
+    }
+
+    fn acquire(
+        &mut self,
+        format: ffmpeg::format::Pixel,
+        width: u32,
+        height: u32,
+    ) -> ffmpeg::frame::Video {
+        if self.key != Some((format, width, height)) {
+            self.key = Some((format, width, height));
+            self.frames = (0..CAPTURE_FRAME_POOL_CAPACITY)
+                .map(|_| ffmpeg::frame::Video::new(format, width, height))
+                .collect();
+        }
+
+        if let Some(index) = self.frames.iter_mut().position(capture_frame_writable) {
+            self.frames.swap_remove(index)
+        } else {
+            ffmpeg::frame::Video::new(format, width, height)
+        }
+    }
+
+    fn share(&mut self, frame: ffmpeg::frame::Video) -> ffmpeg::frame::Video {
+        let mut shared = ffmpeg::frame::Video::empty();
+        let status = unsafe { ffmpeg::ffi::av_frame_ref(shared.as_mut_ptr(), frame.as_ptr()) };
+        if status >= 0 {
+            self.release(frame);
+            shared
+        } else {
+            frame
+        }
+    }
+
+    fn release(&mut self, frame: ffmpeg::frame::Video) {
+        if self.key == Some((frame.format(), frame.width(), frame.height()))
+            && self.frames.len() < CAPTURE_FRAME_POOL_CAPACITY
+        {
+            self.frames.push(frame);
+        }
+    }
+}
+
+fn capture_frame_writable(frame: &mut ffmpeg::frame::Video) -> bool {
+    unsafe { ffmpeg::ffi::av_frame_is_writable(frame.as_mut_ptr()) != 0 }
+}
+
 fn frame_from_pipewire_data(
     data: &mut spa::buffer::Data,
     format: spa::param::video::VideoInfoRaw,
     crop_bounds: Option<CropBounds>,
+    pool: &mut CaptureFramePool,
 ) -> anyhow::Result<Option<ffmpeg::frame::Video>> {
     let (pixel_format, bytes_per_pixel) =
         pipewire_pixel_format(format.format()).ok_or_else(|| {
@@ -1002,35 +1069,41 @@ fn frame_from_pipewire_data(
     };
     let row_bytes = crop_width * bytes_per_pixel;
 
-    let mut frame = ffmpeg::frame::Video::new(pixel_format, crop_width as u32, crop_height as u32);
+    let mut frame = pool.acquire(pixel_format, crop_width as u32, crop_height as u32);
     let target_stride = frame.stride(0);
+    let mut copy_error = None;
     if target_stride < row_bytes {
-        bail!(
+        copy_error = Some(anyhow!(
             "PipeWire target frame stride was too small: {} for {}x{}",
             target_stride,
             crop_width,
             crop_height
-        );
-    }
+        ));
+    } else {
+        for y in 0..crop_height {
+            let source_start = offset + (crop_y + y) * source_stride + crop_x * bytes_per_pixel;
+            let source_end = source_start + row_bytes;
+            if source_end > source_limit {
+                copy_error = Some(anyhow!(
+                    "PipeWire screen capture frame was too small: {} bytes for {}x{}",
+                    source.len(),
+                    source_width,
+                    source_height
+                ));
+                break;
+            }
 
-    for y in 0..crop_height {
-        let source_start = offset + (crop_y + y) * source_stride + crop_x * bytes_per_pixel;
-        let source_end = source_start + row_bytes;
-        if source_end > source_limit {
-            bail!(
-                "PipeWire screen capture frame was too small: {} bytes for {}x{}",
-                source.len(),
-                source_width,
-                source_height
-            );
+            let target_start = y * target_stride;
+            frame.data_mut(0)[target_start..target_start + row_bytes]
+                .copy_from_slice(&source[source_start..source_end]);
         }
-
-        let target_start = y * target_stride;
-        frame.data_mut(0)[target_start..target_start + row_bytes]
-            .copy_from_slice(&source[source_start..source_end]);
+    }
+    if let Some(error) = copy_error {
+        pool.release(frame);
+        return Err(error);
     }
 
-    Ok(Some(frame))
+    Ok(Some(pool.share(frame)))
 }
 
 /// A frame with a GPU-tiled modifier, read back through EGL as RGBA.
@@ -2498,6 +2571,7 @@ pub struct X11Grabber {
     output: VideoInfo,
     scaler: Option<FrameScaler>,
     show_cursor: bool,
+    frame_pool: CaptureFramePool,
 }
 
 enum GrabBackend {
@@ -2640,6 +2714,7 @@ impl X11Grabber {
             output,
             scaler: None,
             show_cursor,
+            frame_pool: CaptureFramePool::new(),
         };
         grabber.refresh_window_pixmap()?;
         grabber.backend = grabber.initial_backend(allow_shm);
@@ -2784,26 +2859,38 @@ impl X11Grabber {
             }
             None => (self.root, self.x, self.y),
         };
-        let mut source = ffmpeg::frame::Video::new(
+        let mut source = self.frame_pool.acquire(
             self.source_pixel,
             u32::from(self.width),
             u32::from(self.height),
         );
-        if self.uses_shm() {
+        let read = if self.uses_shm() {
             if let Err(shm_error) = self.read_shm_image(drawable, x, y, &mut source) {
                 // Only abandon MIT-SHM once GetImage succeeds on the same frame;
                 // if both fail the cause is the drawable/region, not SHM.
-                self.read_get_image(drawable, x, y, &mut source)?;
-                tracing::warn!(
-                    error = %format!("{shm_error:#}"),
-                    "X11 MIT-SHM capture failed, switching to GetImage"
-                );
-                self.backend = GrabBackend::GetImage;
+                match self.read_get_image(drawable, x, y, &mut source) {
+                    Ok(()) => {
+                        tracing::warn!(
+                            error = %format!("{shm_error:#}"),
+                            "X11 MIT-SHM capture failed, switching to GetImage"
+                        );
+                        self.backend = GrabBackend::GetImage;
+                        Ok(())
+                    }
+                    Err(error) => Err(error),
+                }
+            } else {
+                Ok(())
             }
         } else {
-            self.read_get_image(drawable, x, y, &mut source)?;
+            self.read_get_image(drawable, x, y, &mut source)
+        };
+        if let Err(error) = read {
+            self.frame_pool.release(source);
+            return Err(error);
         }
 
+        let source = self.frame_pool.share(source);
         let mut frame = prepare_pipewire_frame(source, &mut self.scaler, self.output)?;
 
         if self.show_cursor
@@ -3421,10 +3508,10 @@ mod system_audio_tests {
 #[cfg(test)]
 mod pipewire_frame_tests {
     use super::{
-        FrameScaler, LinuxCaptureSource, PipewireNodeInput, VideoInfo, capture_pipewire_node,
-        frame_from_pipewire_data, pipewire_dmabuf_format_param, pipewire_format_param,
-        prefers_wayland_environment, prepare_pipewire_frame, spa, wayland_area_matches_display,
-        wayland_video_info,
+        CAPTURE_FRAME_POOL_CAPACITY, CaptureFramePool, FrameScaler, LinuxCaptureSource,
+        PipewireNodeInput, VideoInfo, capture_pipewire_node, frame_from_pipewire_data,
+        pipewire_dmabuf_format_param, pipewire_format_param, prefers_wayland_environment,
+        prepare_pipewire_frame, spa, wayland_area_matches_display, wayland_video_info,
     };
     use std::os::fd::AsRawFd;
 
@@ -3567,7 +3654,8 @@ mod pipewire_frame_tests {
             height: height as u32,
         });
         format.set_modifier(0);
-        let frame = frame_from_pipewire_data(data, format, None)
+        let mut pool = CaptureFramePool::new();
+        let frame = frame_from_pipewire_data(data, format, None, &mut pool)
             .unwrap()
             .expect("a frame");
         assert_eq!((frame.width(), frame.height()), (4, 3));
@@ -3679,6 +3767,90 @@ mod pipewire_frame_tests {
         assert!(!prefers_wayland_environment(true, true, Some("x11")));
         assert!(!prefers_wayland_environment(true, true, None));
         assert!(!prefers_wayland_environment(false, true, Some("wayland")));
+    }
+
+    #[test]
+    fn capture_frame_pool_reuses_free_frames_and_resets_on_shape_change() {
+        let format = ffmpeg::format::Pixel::BGRZ;
+        let mut pool = CaptureFramePool::new();
+        let mut first = pool.acquire(format, 4, 2);
+        let first_ptr = first.data(0).as_ptr();
+        first.data_mut(0).fill(1);
+        let first = pool.share(first);
+        assert_eq!(first.data(0).as_ptr(), first_ptr);
+        assert!(first.data(0).iter().all(|byte| *byte == 1));
+
+        let mut second = pool.acquire(format, 4, 2);
+        assert_ne!(second.data(0).as_ptr(), first_ptr);
+        second.data_mut(0).fill(2);
+        assert!(first.data(0).iter().all(|byte| *byte == 1));
+        let second = pool.share(second);
+
+        drop(first);
+        let reused = pool.acquire(format, 4, 2);
+        assert_eq!(reused.data(0).as_ptr(), first_ptr);
+        assert!(second.data(0).iter().all(|byte| *byte == 2));
+        let _reused = pool.share(reused);
+
+        let resized = pool.acquire(format, 8, 2);
+        assert_eq!((resized.width(), resized.height()), (8, 2));
+        assert_ne!(resized.data(0).as_ptr(), first_ptr);
+        let resized_ptr = resized.data(0).as_ptr();
+        let _resized = pool.share(resized);
+
+        let reformatted = pool.acquire(ffmpeg::format::Pixel::RGBZ, 8, 2);
+        assert_eq!(reformatted.format(), ffmpeg::format::Pixel::RGBZ);
+        assert_ne!(reformatted.data(0).as_ptr(), resized_ptr);
+    }
+
+    #[test]
+    fn capture_frame_pool_keeps_held_frames_when_capacity_is_busy() {
+        let format = ffmpeg::format::Pixel::BGRZ;
+        let mut pool = CaptureFramePool::new();
+        let mut held = Vec::new();
+        let mut pointers = Vec::new();
+
+        for index in 0..CAPTURE_FRAME_POOL_CAPACITY {
+            let marker = (index + 1) as u8;
+            let mut frame = pool.acquire(format, 4, 2);
+            let pointer = frame.data(0).as_ptr();
+            frame.data_mut(0).fill(marker);
+            let frame = pool.share(frame);
+            assert_eq!(frame.data(0).as_ptr(), pointer);
+            assert!(frame.data(0).iter().all(|byte| *byte == marker));
+            pointers.push(pointer);
+            held.push(frame);
+        }
+
+        let mut overflow = pool.acquire(format, 4, 2);
+        let overflow_ptr = overflow.data(0).as_ptr();
+        assert!(!pointers.contains(&overflow_ptr));
+        overflow.data_mut(0).fill(9);
+        let overflow = pool.share(overflow);
+        assert_eq!(overflow.data(0).as_ptr(), overflow_ptr);
+        assert!(overflow.data(0).iter().all(|byte| *byte == 9));
+        assert_eq!(pool.frames.len(), CAPTURE_FRAME_POOL_CAPACITY);
+        assert!(
+            pool.frames
+                .iter()
+                .all(|frame| pointers.contains(&frame.data(0).as_ptr()))
+        );
+
+        for (index, frame) in held.iter().enumerate() {
+            let marker = (index + 1) as u8;
+            assert_eq!(frame.data(0).as_ptr(), pointers[index]);
+            assert!(frame.data(0).iter().all(|byte| *byte == marker));
+        }
+
+        let dropped_ptr = pointers.remove(0);
+        drop(held.remove(0));
+        let reused = pool.acquire(format, 4, 2);
+        assert_eq!(reused.data(0).as_ptr(), dropped_ptr);
+        assert_eq!(pool.frames.len(), CAPTURE_FRAME_POOL_CAPACITY - 1);
+        for (frame, pointer) in held.iter().zip(&pointers) {
+            assert_eq!(frame.data(0).as_ptr(), *pointer);
+        }
+        let _overflow = overflow;
     }
 
     #[test]
