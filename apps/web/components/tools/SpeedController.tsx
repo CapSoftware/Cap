@@ -3,6 +3,7 @@
 import { Button } from "@cap/ui";
 import { useEffect, useRef, useState } from "react";
 import { trackEvent } from "@/app/utils/analytics";
+import { formatClock } from "@/lib/player-time";
 
 const SPEED_OPTIONS = [
 	{ value: 0.25, label: "0.25x (Very Slow)" },
@@ -489,16 +490,10 @@ export const SpeedController = () => {
 		}
 	};
 
-	const formatDuration = (seconds: number) => {
-		const minutes = Math.floor(seconds / 60);
-		const remainingSeconds = Math.floor(seconds % 60);
-		return `${minutes}:${remainingSeconds.toString().padStart(2, "0")}`;
-	};
-
 	const getEstimatedOutputDuration = () => {
 		if (!videoInfo) return null;
 		const estimatedDuration = videoInfo.duration / selectedSpeed;
-		return formatDuration(estimatedDuration);
+		return formatClock(estimatedDuration);
 	};
 
 	useEffect(() => {
@@ -608,7 +603,7 @@ export const SpeedController = () => {
 							</p>
 							{videoInfo && (
 								<div className="mt-3 text-sm text-gray-600">
-									<p>Duration: {formatDuration(videoInfo.duration)}</p>
+									<p>Duration: {formatClock(videoInfo.duration)}</p>
 									<p>Resolution: {videoInfo.dimensions}</p>
 									<p className="mt-2 font-medium">
 										Estimated output duration: {getEstimatedOutputDuration()}
