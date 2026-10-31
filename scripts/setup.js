@@ -698,10 +698,34 @@ async function signMacOSDylib(filePath) {
 }
 
 async function downloadBytes(url) {
-	const response = await fetch(url);
-	if (!response.ok)
-		throw new Error(`Failed to download ${url}: HTTP ${response.status}`);
-	return response.arrayBuffer();
+	for (let attempt = 0; ; attempt++) {
+		try {
+			const response = await fetch(url);
+			if (!response.ok)
+				throw new Error(`Failed to download ${url}: HTTP ${response.status}`);
+			return await response.arrayBuffer();
+		} catch (error) {
+			const cause = error instanceof Error ? error.cause : undefined;
+			const retryable =
+				cause instanceof Error &&
+				"code" in cause &&
+				[
+					"UND_ERR_CONNECT_TIMEOUT",
+					"UND_ERR_HEADERS_TIMEOUT",
+					"UND_ERR_SOCKET",
+					"ECONNRESET",
+					"ECONNREFUSED",
+					"ETIMEDOUT",
+					"EAI_AGAIN",
+					"ENOTFOUND",
+				].includes(String(cause.code));
+			if (attempt === 2 || !retryable) throw error;
+			console.warn(
+				`Download connection failed; retrying (${attempt + 2}/3): ${url}`,
+			);
+			await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)));
+		}
+	}
 }
 
 async function fileExists(path) {

@@ -64,11 +64,17 @@ test(
 		}
 
 		let failNative = true;
+		let networkFailures = 0;
 		const requests = [];
 		const server = createServer((request, response) => {
 			requests.push(request.url);
 			if (failNative && request.url === nativeUrl) {
 				response.writeHead(503).end("Service Unavailable\n");
+				return;
+			}
+			if (request.url === nativeUrl && networkFailures > 0) {
+				networkFailures--;
+				request.socket.destroy();
 				return;
 			}
 			const archive = archives.get(request.url);
@@ -126,7 +132,19 @@ globalThis.fetch = (input, options) => {
 		assert.match(failed.stderr, /HTTP 503/);
 
 		failNative = false;
-		for (const expectedRequests of [[nativeUrl, onnxUrl], []]) {
+		networkFailures = 3;
+		requests.length = 0;
+		const disconnected = await runSetup();
+		assert.equal(disconnected.code, 1, disconnected.stderr);
+		assert.deepEqual(requests, [nativeUrl, nativeUrl, nativeUrl]);
+		assert.equal(existsSync(cache), false);
+		assert.match(disconnected.stderr, /UND_ERR_SOCKET/);
+
+		networkFailures = 2;
+		for (const expectedRequests of [
+			[nativeUrl, nativeUrl, nativeUrl, onnxUrl],
+			[],
+		]) {
 			requests.length = 0;
 			const result = await runSetup();
 			assert.equal(result.code, 0, result.stderr);

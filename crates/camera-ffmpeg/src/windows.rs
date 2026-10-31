@@ -230,6 +230,14 @@ fn src_y(y: usize, height: usize, is_bottom_up: bool) -> usize {
 }
 
 impl CapturedFrameExt for CapturedFrame {
+    fn as_ffmpeg_covering(
+        &self,
+        _max_width: u32,
+        _max_height: u32,
+    ) -> Result<ffmpeg::frame::Video, AsFFmpegError> {
+        self.as_ffmpeg()
+    }
+
     fn as_ffmpeg(&self) -> Result<ffmpeg::frame::Video, AsFFmpegError> {
         let native = self.native();
         let width = native.width;
