@@ -863,6 +863,48 @@ impl EditorInstance {
         (self.on_state_change)(&state);
     }
 
+    /// Audio scrubbing: plays `secs` of the mixed project audio at `time`
+    /// (output seconds) on this editor's own audio output, so it follows
+    /// device changes and closes with the editor. Ignored while playing.
+    pub async fn scrub_audio(&self, time: f64, secs: f64) {
+        let samples = self.audio_snippet(time, secs).await;
+        self.audio_output.play_snippet(samples);
+    }
+
+    /// A short slice of the mixed project audio at `time` (output seconds),
+    /// interleaved stereo at [`crate::AudioRenderer::SAMPLE_RATE`]. Edges are
+    /// faded so back-to-back slices don't click.
+    async fn audio_snippet(&self, time: f64, secs: f64) -> Vec<f32> {
+        let segments = crate::get_audio_segments(&self.segment_medias).await;
+        let music = self.load_music_tracks().await;
+        let project = self.project_config.1.borrow().clone();
+        // Rendering speed-changed clips builds audio filters, so it runs off
+        // the async workers.
+        tokio::task::spawn_blocking(move || {
+            let mut renderer = crate::AudioRenderer::new(segments).with_music(music);
+            renderer.set_playhead(time.max(0.0), &project);
+            let frames =
+                (secs.clamp(0.01, 0.5) * f64::from(crate::AudioRenderer::SAMPLE_RATE)) as usize;
+            let Some((_, mut samples)) = renderer.render_frame_raw(frames, &project) else {
+                return Vec::new();
+            };
+            let channels = usize::from(crate::AudioRenderer::CHANNELS);
+            let total = samples.len() / channels;
+            let fade = (crate::AudioRenderer::SAMPLE_RATE as usize / 200)
+                .min(total / 2)
+                .max(1);
+            for frame in 0..total {
+                let gain = (frame.min(total - 1 - frame) as f32 / fade as f32).min(1.0);
+                for sample in &mut samples[frame * channels..(frame + 1) * channels] {
+                    *sample *= gain;
+                }
+            }
+            samples
+        })
+        .await
+        .unwrap_or_default()
+    }
+
     /// Decodes (and caches) the music tracks referenced by the current project
     /// config off the async runtime so playback start isn't blocked by ffmpeg.
     async fn load_music_tracks(&self) -> crate::MusicTracks {
