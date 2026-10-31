@@ -472,12 +472,16 @@ async fn run_trigger(trigger: Trigger, ctx: TriggerContext) {
     let Some(store) = load_store() else {
         return;
     };
+    run_trigger_with_store(&store, trigger, ctx).await;
+}
+
+async fn run_trigger_with_store(store: &AutomationsStore, trigger: Trigger, ctx: TriggerContext) {
     if store.rules.is_empty() {
         return;
     }
 
     let host = CliAutomationHost;
-    let results = cap_automation::run(&host, &store, &trigger, &ctx).await;
+    let results = cap_automation::run(&host, store, &trigger, &ctx).await;
     for result in &results {
         for action in &result.action_results {
             if let Some(error) = &action.error {
@@ -507,26 +511,55 @@ pub async fn run_screenshot(path: &Path, target: &ScreenCaptureTarget) {
 }
 
 pub async fn run_recording_finished(project_path: &Path, mode: AutomationRecordingMode) {
-    if load_store().is_none() {
+    let Some(store) = load_store() else {
         return;
-    }
-
+    };
     let trigger = match mode {
         AutomationRecordingMode::Studio => Trigger::StudioRecordingFinished,
         AutomationRecordingMode::Instant => Trigger::InstantRecordingFinished,
     };
+    let ctx = recording_finished_context(project_path, mode, &store);
+    run_trigger_with_store(&store, trigger, ctx).await;
+}
 
+fn recording_finished_context(
+    project_path: &Path,
+    mode: AutomationRecordingMode,
+    store: &AutomationsStore,
+) -> TriggerContext {
     let mut ctx = TriggerContext::new()
         .with_project_path(project_path.to_path_buf())
         .with_recording_mode(mode);
 
-    if let Ok(meta) = cap_project::RecordingMeta::load_for_project(project_path)
-        && let Some(sharing) = meta.sharing
-    {
-        ctx = ctx.with_share_link(sharing.link).with_share_id(sharing.id);
-    }
+    let needs_duration = mode == AutomationRecordingMode::Studio
+        && store.rules.iter().any(|rule| {
+            rule.enabled
+                && rule.trigger == Trigger::StudioRecordingFinished
+                && rule.conditions.iter().any(|condition| {
+                    matches!(
+                        condition,
+                        cap_automation::Condition::DurationAtLeast { .. }
+                            | cap_automation::Condition::DurationAtMost { .. }
+                    )
+                })
+        });
 
-    run_trigger(trigger, ctx).await;
+    if let Ok(meta) = cap_project::RecordingMeta::load_for_project(project_path) {
+        if needs_duration
+            && let Some(studio) = meta.studio_meta()
+            && let Ok(recordings) =
+                cap_rendering::ProjectRecordingsMeta::new(&project_path.to_path_buf(), studio)
+        {
+            let duration = recordings.duration();
+            if duration > 0.0 {
+                ctx = ctx.with_duration(duration);
+            }
+        }
+        if let Some(sharing) = meta.sharing {
+            ctx = ctx.with_share_link(sharing.link).with_share_id(sharing.id);
+        }
+    }
+    ctx
 }
 
 pub async fn run_upload_completed(project_path: &Path, link: &str, id: &str) {
@@ -707,5 +740,82 @@ mod tests {
                 assert!(results[0].action_results[0].success);
             }
         }
+    }
+
+    #[tokio::test]
+    async fn studio_recording_duration_conditions_use_recorded_media() {
+        use cap_automation::Condition;
+
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            temp.path().join("display.mp4"),
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../crates/video-decode/tests/fixtures/h264-no-reordering.mp4"
+            )),
+        )
+        .unwrap();
+        std::fs::write(
+            temp.path().join("recording-meta.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "pretty_name": "duration test",
+                "sharing": {"id": "example", "link": "https://cap.test/s/example"},
+                "segments": [{"display": {"path": "display.mp4", "fps": 30}}]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let rule = |id: &str, condition| AutomationRule {
+            id: id.to_string(),
+            name: id.to_string(),
+            enabled: true,
+            trigger: Trigger::StudioRecordingFinished,
+            match_mode: MatchMode::All,
+            conditions: vec![condition],
+            actions: vec![Action::SkipEditor],
+        };
+        let store = AutomationsStore {
+            version: 1,
+            rules: vec![
+                rule("long-enough", Condition::DurationAtLeast { secs: 2.0 }),
+                rule("short-enough", Condition::DurationAtMost { secs: 4.0 }),
+                rule("too-long", Condition::DurationAtLeast { secs: 4.0 }),
+                rule("too-short", Condition::DurationAtMost { secs: 2.0 }),
+            ],
+        };
+        let ctx = recording_finished_context(temp.path(), AutomationRecordingMode::Studio, &store);
+        let matched = cap_automation::evaluate(&store, &Trigger::StudioRecordingFinished, &ctx);
+        let ids = matched
+            .iter()
+            .map(|(id, _)| id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, ["long-enough", "short-enough"]);
+        assert_eq!(ctx.share_id.as_deref(), Some("example"));
+        let results = cap_automation::run(
+            &CliAutomationHost,
+            &store,
+            &Trigger::StudioRecordingFinished,
+            &ctx,
+        )
+        .await;
+        assert_eq!(results.len(), 2);
+        assert!(
+            results
+                .iter()
+                .all(|result| result.action_results[0].success)
+        );
+
+        let mut disabled = store.clone();
+        for rule in &mut disabled.rules {
+            rule.enabled = false;
+        }
+        let ctx =
+            recording_finished_context(temp.path(), AutomationRecordingMode::Studio, &disabled);
+        assert!(ctx.duration_secs.is_none());
+        let ctx = recording_finished_context(temp.path(), AutomationRecordingMode::Instant, &store);
+        assert!(ctx.duration_secs.is_none());
+        std::fs::remove_file(temp.path().join("display.mp4")).unwrap();
+        let ctx = recording_finished_context(temp.path(), AutomationRecordingMode::Studio, &store);
+        assert!(ctx.duration_secs.is_none());
     }
 }
