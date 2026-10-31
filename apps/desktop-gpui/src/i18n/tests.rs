@@ -24,6 +24,10 @@ fn english_matches_the_literals_it_replaced() {
         (tr::menu::app::services(), "Services".into()),
         (tr::menu::app::settings(), "Settings…".into()),
         (tr::menu::file::close_window(), "Close Window".into()),
+        (tr::menu::file::open_file(), "Open File…".into()),
+        (tr::menu::file::open_prompt(), "Open Recording".into()),
+        (tr::menu::file::open_recent(), "Open Recent".into()),
+        (tr::menu::file::import_media(), "Import Media…".into()),
         (tr::menu::file::title(), "File".into()),
         (tr::menu::edit::copy(), "Copy".into()),
         (tr::menu::edit::cut(), "Cut".into()),
@@ -42,8 +46,32 @@ fn english_matches_the_literals_it_replaced() {
         (tr::menu::window::title(), "Window".into()),
         (tr::menu::window::zoom(), "Zoom".into()),
         (tr::menu::help::title(), "Help".into()),
+        (tr::menu::help::feedback(), "Give Feedback…".into()),
+        (tr::menu::help::changelog(), "Changelog".into()),
+        (
+            tr::menu::about::licensed(),
+            "Licensed under AGPL-3.0".into(),
+        ),
+        (tr::menu::about::website(), "Website".into()),
+        (tr::menu::about::commit(), "Commit".into()),
+        (tr::menu::help::dashboard(), "Dashboard".into()),
+        (tr::menu::help::documentation(), "Documentation".into()),
+        (tr::menu::help::faq(), "FAQ".into()),
+        (tr::menu::help::self_hosting(), "Self-hosting".into()),
+        (tr::menu::help::help_center(), "Help Center".into()),
+        (tr::menu::help::system_status(), "System Status".into()),
+        (tr::menu::help::discord(), "Join Discord Community".into()),
+        (tr::menu::update::check(), "Check for Update".into()),
+        (tr::menu::update::download(), "Download update…".into()),
+        (tr::menu::update::checking(), "Checking for Update…".into()),
+        (
+            tr::menu::update::downloading(),
+            "Downloading update…".into(),
+        ),
+        (tr::menu::update::restart(), "Restart to update…".into()),
         (tr::tray::import_media(), "Import Media...".into()),
         (tr::tray::no_recent_items(), "No recent items".into()),
+        (tr::tray::recording_mode(), "Recording Mode".into()),
         (tr::tray::open_main_window(), "Open Main Window".into()),
         (tr::tray::previous(), "Previous".into()),
         (tr::tray::quit(), "Quit Cap".into()),
@@ -179,6 +207,17 @@ fn english_matches_the_literals_it_replaced() {
         (
             tr::settings::general::recording::main_window_start::label(),
             "Main window when recording starts".into(),
+        ),
+        (
+            tr::settings::general::recording::window_capture::description(),
+            "How a window recording captures the window you pick. Focused window records only \
+             that window, centred and followed if it moves; Screen region records the area of \
+             the screen it covers."
+                .into(),
+        ),
+        (
+            tr::settings::general::recording::window_capture::label(),
+            "Window capture style".into(),
         ),
         (
             tr::settings::general::recording::post_deletion::description(),
@@ -399,6 +438,26 @@ fn english_matches_the_literals_it_replaced() {
         ),
         (tr::settings::general::updates::title(), "Updates".into()),
         (
+            tr::settings::general::updates::download_policy::label(),
+            "Update downloads".into(),
+        ),
+        (
+            tr::settings::general::updates::download_policy::description(),
+            "Choose whether Cap downloads updates automatically.".into(),
+        ),
+        (
+            tr::settings::general::updates::download_policy::manual(),
+            "Ask first".into(),
+        ),
+        (
+            tr::settings::general::updates::download_policy::auto(),
+            "Auto".into(),
+        ),
+        (
+            tr::settings::general::updates::download_policy::never(),
+            "Never".into(),
+        ),
+        (
             tr::settings::general::updates::channel::description(),
             "Which release channel Cap updates from.".into(),
         ),
@@ -440,9 +499,16 @@ fn english_matches_the_literals_it_replaced() {
         .filter(|key| {
             !key.starts_with(NEW_IN_THE_LANGUAGE_PICKER)
                 && !super::surface_tests::is_main_surface_key(key)
+                && !super::settings_surface_tests::is_settings_surface_key(key)
+                && !super::dialogs_surface_tests::is_dialogs_surface_key(key)
+                && !super::editor_panels_surface_tests::is_editor_panels_surface_key(key)
+                && !super::editor_shell_surface_tests::is_editor_shell_surface_key(key)
+                && !key.starts_with(super::messages::KEY_PREFIX)
         })
         .count()
-        - 3;
+        // `tray.version`, `excluded_windows.missing_body`, `self_host.confirm_change`,
+        // `menu.update.badge_progress` and `menu.update.badge_version` take arguments.
+        - 5;
     assert_eq!(
         pairs.len(),
         plain_keys,
@@ -521,13 +587,6 @@ fn language_picker_english() {
 }
 
 #[test]
-fn the_picker_shows_in_debug_builds() {
-    if cfg!(debug_assertions) {
-        assert!(picker_enabled());
-    }
-}
-
-#[test]
 fn system_tags_resolve_to_catalogs() {
     for (tag, expected) in [
         ("en-US", Some(Locale::En)),
@@ -566,21 +625,13 @@ fn traditional_chinese_falls_through_to_the_next_language() {
 }
 
 #[test]
-fn system_language_waits_for_the_picker() {
+fn system_default_follows_the_system_language_and_a_choice_overrides_it() {
     assert_eq!(
-        resolve_preference(Preference::System, false, || Locale::Ja),
-        Locale::En
-    );
-    assert_eq!(
-        resolve_preference(Preference::System, true, || Locale::Ja),
+        resolve_preference(Preference::System, || Locale::Ja),
         Locale::Ja
     );
     assert_eq!(
-        resolve_preference(Preference::Fixed(Locale::De), false, || Locale::Ja),
-        Locale::De
-    );
-    assert_eq!(
-        resolve_preference(Preference::Fixed(Locale::De), true, || Locale::Ja),
+        resolve_preference(Preference::Fixed(Locale::De), || Locale::Ja),
         Locale::De
     );
 }
@@ -770,6 +821,12 @@ fn english_messages_format_like_the_literals_they_replaced() {
                  to sign in again."
         )
     );
+
+    assert_eq!(
+        tr::menu::update::badge_progress("0.4.0", 42),
+        "v0.4.0 · 42%"
+    );
+    assert_eq!(tr::menu::update::badge_version("0.4.0"), "v0.4.0");
 }
 
 #[test]
@@ -803,6 +860,7 @@ fn every_key_is_used_outside_the_catalog() {
             }
         }
     }
+    sources.push_str(&std::fs::read_to_string(i18n.join("messages.rs")).unwrap());
     let unused: Vec<&str> = KEYS
         .iter()
         .copied()

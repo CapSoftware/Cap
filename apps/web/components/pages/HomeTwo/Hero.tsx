@@ -14,6 +14,7 @@ import { MenuBar } from "./demo/MacDesktop";
 import { AppleGlyph } from "./glyphs";
 import { HeroHeadline } from "./HeroHeadline";
 import { HeroSky } from "./HeroSky";
+import { BTN_PUMPKIN, HALLOWEEN, PUMPKIN_CHIP } from "./halloween";
 import { Fit, noop, useInView } from "./scenes/engine";
 import {
 	BODY_TEXT,
@@ -116,7 +117,7 @@ export const Hero = () => {
 
 	return (
 		<section className="relative px-5 pb-12 pt-12 sm:pt-14 md:pb-4 md:pt-[56px]">
-			<HeroSky />
+			<HeroSky halloween={HALLOWEEN} />
 			<span
 				data-header-sentinel
 				aria-hidden="true"
@@ -135,6 +136,7 @@ export const Hero = () => {
 				>
 					<span
 						className={`${MONO} rounded-full bg-[#8DBCF0] px-2 py-[5px] text-[10.5px] uppercase leading-none tracking-[0.06em] text-[#111111]`}
+						style={HALLOWEEN ? { backgroundColor: PUMPKIN_CHIP } : undefined}
 					>
 						New
 					</span>
@@ -169,7 +171,7 @@ export const Hero = () => {
 								is_intel: Boolean(isIntel),
 							})
 						}
-						className={BTN_PRIMARY}
+						className={HALLOWEEN ? BTN_PUMPKIN : BTN_PRIMARY}
 					>
 						{isWindows ? (
 							<WindowsGlyph className="mr-2.5 size-[18px]" />

@@ -1,7 +1,12 @@
 import crypto from "node:crypto";
 import { authOptions } from "@cap/database/auth/auth-options";
 import { isEmailAllowedForSignup } from "@cap/database/auth/domain-utils";
-import { hashPassword } from "@cap/database/crypto";
+import {
+	decrypt,
+	encrypt,
+	hashPassword,
+	verifyPassword as verifyPlainPassword,
+} from "@cap/database/crypto";
 import { getEmailDeliveryStatus, sendEmail } from "@cap/database/emails/config";
 import { OTPEmail } from "@cap/database/emails/otp-email";
 import { nanoId } from "@cap/database/helpers";
@@ -10,12 +15,16 @@ import { getNewVideoPublic } from "@cap/database/video-sharing-default";
 import { buildEnv, serverEnv } from "@cap/env";
 import { userIsPro } from "@cap/utils";
 import {
+	collectPasswordHashes,
 	Database,
 	findScreenshotObjectKey,
 	getCurrentUser,
 	ImageUploads,
+	resolveEffectiveVideoRules,
 	Storage,
+	Tinybird,
 	Videos,
+	VideosPolicy,
 	VideosRepo,
 } from "@cap/web-backend";
 import { getPublishedRecordingThumbnailKey } from "@cap/web-backend/src/Storage/recording-output";
@@ -66,10 +75,14 @@ import {
 	resolveMobileRequestOrigin,
 	resolveMobileWebResourceUrl,
 } from "@/lib/mobile-request-origin";
-import { createNotification } from "@/lib/Notification";
+import { createNotification, sendFirstViewEmail } from "@/lib/Notification";
+import { resolveDefaultPlaybackSpeed } from "@/lib/playback-speed";
 import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 import { apiToHandler } from "@/lib/server";
+import { isVideoOverShareableLinkLimit } from "@/lib/shareable-link-quota";
+import { canViewSpaceAnalytics } from "@/lib/space-analytics-access";
 import { enqueueVideoStorageNameSync } from "@/lib/sync-video-storage-names";
+import { canUserDownloadVideo } from "@/lib/video-download-permissions";
 import { startVideoProcessingWorkflow } from "@/lib/video-processing";
 import { importLoomVideoWorkflow } from "@/workflows/import-loom-video";
 
@@ -108,6 +121,8 @@ type CapRow = {
 };
 
 type MobileCapSummary = (typeof Mobile.MobileCapSummary)["Type"];
+type MobileVideoAccessStatus =
+	(typeof Mobile.MobileCapAccessResponse)["Type"]["status"];
 type MobileFolder = (typeof Mobile.MobileFolder)["Type"];
 type MobileOrganization = (typeof Mobile.MobileOrganization)["Type"];
 type MobileSpace = (typeof Mobile.MobileSpace)["Type"];
@@ -328,6 +343,14 @@ const getFileExtension = (input: MobileUploadCreateInput) => {
 	return "mp4";
 };
 
+const MOBILE_SCREENSHOT_MAX_BYTES = 25 * 1024 * 1024;
+const getScreenshotExtension = (contentType: string) => {
+	const normalized = contentType.toLowerCase();
+	if (normalized === "image/jpeg") return "jpg";
+	if (normalized === "image/png") return "png";
+	return null;
+};
+
 const getUploadTitle = (fileName: string) => {
 	const title = fileName.replace(/\.[^/.]+$/, "").trim();
 	return title.length > 0 ? title : "Mobile Upload";
@@ -338,10 +361,13 @@ const toMobileCapSummary = (
 	viewCount: number,
 	publicOrigin: string,
 	currentUserId: User.UserId,
+	// Set only after access was checked for this viewer, including any unlocked password.
+	passwordVerified = false,
 ): MobileCapSummary => {
 	const hasThumbnail =
 		(!row.uploadVideoId || row.uploadPhase === "complete") &&
 		(row.ownerId === currentUserId ||
+			passwordVerified ||
 			(!row.hasPassword && !row.hasInheritedPassword));
 	const thumbnailVersion = row.updatedAt.getTime();
 	return {
@@ -1805,7 +1831,7 @@ const createMobileFolder = Effect.fn("Mobile.createFolder")(function* (
 	};
 });
 
-const assertMobileVideoAccess = Effect.fn("Mobile.assertVideoAccess")(
+const resolveMobileVideoAccess = Effect.fn("Mobile.resolveVideoAccess")(
 	function* (videoId: Video.VideoId) {
 		const user = yield* CurrentUser;
 		const blockedUserIds = yield* getCurrentBlockedUserIds();
@@ -1884,16 +1910,188 @@ const assertMobileVideoAccess = Effect.fn("Mobile.assertVideoAccess")(
 		) {
 			return yield* Effect.fail(new HttpApiError.NotFound());
 		}
-		if (row.ownerId === user.id) return row;
-		if (!row.sharedWithOrganization && !row.sharedWithAccessibleSpace) {
-			return yield* Effect.fail(new HttpApiError.NotFound());
+		if (row.ownerId === user.id) {
+			return { row, status: "granted" as MobileVideoAccessStatus };
 		}
-		if (row.hasPassword || row.hasInheritedPassword) {
+		if (
+			(row.sharedWithOrganization || row.sharedWithAccessibleSpace) &&
+			!row.hasPassword &&
+			!row.hasInheritedPassword
+		) {
+			return { row, status: "granted" as MobileVideoAccessStatus };
+		}
+
+		// Everything else follows the share page's rules: public links, org and
+		// space shares in any of the viewer's orgs, viewer grants, email-domain
+		// restrictions and passwords unlocked through /caps/:id/unlock.
+		const policy = yield* VideosPolicy;
+		const status = yield* policy.canView(videoId).pipe(
+			Effect.as("granted" as MobileVideoAccessStatus),
+			Effect.catchTags({
+				PolicyDenied: () =>
+					Effect.succeed("restricted" as MobileVideoAccessStatus),
+				VerifyVideoPasswordError: () =>
+					Effect.succeed("password_required" as MobileVideoAccessStatus),
+			}),
+		);
+		return { row, status };
+	},
+);
+
+const assertMobileVideoAccess = Effect.fn("Mobile.assertVideoAccess")(
+	function* (videoId: Video.VideoId) {
+		const { row, status } = yield* resolveMobileVideoAccess(videoId);
+		if (status !== "granted") {
 			return yield* Effect.fail(new HttpApiError.Forbidden());
 		}
 		return row;
 	},
 );
+
+const MOBILE_VIDEO_ACCESS_HEADER = "x-cap-video-access";
+const MOBILE_VIDEO_ACCESS_TTL_MS = 12 * 60 * 60 * 1000;
+const MOBILE_VIDEO_ACCESS_MAX_TOKEN_LENGTH = 4096;
+
+type MobileVideoAccessToken = {
+	videoId: string;
+	userId: string;
+	hashes: string[];
+	expiresAt: number;
+};
+
+const readMobileVideoAccessHashes = (
+	request: HttpServerRequest.HttpServerRequest,
+	videoId: Video.VideoId,
+	userId: User.UserId,
+) =>
+	Effect.promise(async (): Promise<string[]> => {
+		const token = request.headers[MOBILE_VIDEO_ACCESS_HEADER];
+		if (
+			typeof token !== "string" ||
+			token.length === 0 ||
+			token.length > MOBILE_VIDEO_ACCESS_MAX_TOKEN_LENGTH
+		) {
+			return [];
+		}
+		try {
+			const parsed = JSON.parse(
+				await decrypt(token),
+			) as Partial<MobileVideoAccessToken>;
+			if (
+				parsed.videoId !== videoId ||
+				parsed.userId !== userId ||
+				typeof parsed.expiresAt !== "number" ||
+				parsed.expiresAt < Date.now() ||
+				!Array.isArray(parsed.hashes)
+			) {
+				return [];
+			}
+			return parsed.hashes
+				.filter((hash): hash is string => typeof hash === "string")
+				.slice(0, 10);
+		} catch {
+			return [];
+		}
+	});
+
+/**
+ * Mobile requests carry no cookies, so a password unlocked in the app travels
+ * as an encrypted, user- and video-bound token instead of the share page's
+ * x-cap-password cookie.
+ */
+const withMobileVideoAccess =
+	(request: HttpServerRequest.HttpServerRequest, videoId: Video.VideoId) =>
+	<A, E, R>(effect: Effect.Effect<A, E, R>) =>
+		Effect.gen(function* () {
+			const user = yield* CurrentUser;
+			const passwords = yield* readMobileVideoAccessHashes(
+				request,
+				videoId,
+				user.id,
+			);
+			if (passwords.length === 0) return yield* effect;
+			return yield* Effect.provideService(
+				effect,
+				Video.VideoPasswordAttachment,
+				{ passwords },
+			);
+		});
+
+const unlockMobileCap = Effect.fn("Mobile.unlockCap")(function* (
+	videoId: Video.VideoId,
+	password: string,
+	request: HttpServerRequest.HttpServerRequest,
+) {
+	const user = yield* CurrentUser;
+	if (password.length === 0 || password.length > 512) {
+		return yield* Effect.fail(new HttpApiError.BadRequest());
+	}
+	const limited = yield* Effect.promise(() =>
+		isRateLimited(RATE_LIMIT_IDS.MOBILE_VIDEO_PASSWORD, {
+			key: `mobile-video-password:${user.id}`,
+			headers: toHeaders(request.headers),
+		}),
+	);
+	if (limited) return yield* Effect.fail(new HttpApiError.BadRequest());
+
+	// Blocked owners and missing videos are 404 before any password check.
+	yield* resolveMobileVideoAccess(videoId);
+
+	const database = yield* Database;
+	const [video] = yield* database.use((db) =>
+		db
+			.select({ password: Db.videos.password })
+			.from(Db.videos)
+			.where(eq(Db.videos.id, videoId))
+			.limit(1),
+	);
+	if (!video) return yield* Effect.fail(new HttpApiError.NotFound());
+	const spacePasswords = yield* database.use((db) =>
+		db
+			.select({ password: Db.spaces.password })
+			.from(Db.spaceVideos)
+			.innerJoin(Db.spaces, eq(Db.spaceVideos.spaceId, Db.spaces.id))
+			.where(eq(Db.spaceVideos.videoId, videoId)),
+	);
+	const candidates = collectPasswordHashes({
+		videoPassword: video.password,
+		spacePasswords,
+	});
+
+	let verifiedHash: string | null = null;
+	for (const hash of candidates) {
+		const valid = yield* Effect.promise(() =>
+			verifyPlainPassword(hash, password).catch(() => false),
+		);
+		if (valid) {
+			verifiedHash = hash;
+			break;
+		}
+	}
+	if (!verifiedHash) return yield* Effect.fail(new HttpApiError.Forbidden());
+
+	const { status } = yield* Effect.provideService(
+		resolveMobileVideoAccess(videoId),
+		Video.VideoPasswordAttachment,
+		{ passwords: [verifiedHash] },
+	);
+	if (status !== "granted") {
+		return yield* Effect.fail(new HttpApiError.Forbidden());
+	}
+
+	const expiresAt = Date.now() + MOBILE_VIDEO_ACCESS_TTL_MS;
+	const token: MobileVideoAccessToken = {
+		videoId,
+		userId: user.id,
+		hashes: [verifiedHash],
+		expiresAt,
+	};
+	const accessToken = yield* Effect.tryPromise({
+		try: () => encrypt(JSON.stringify(token)),
+		catch: () => new HttpApiError.InternalServerError(),
+	});
+	return { accessToken, expiresAt: new Date(expiresAt).toISOString() };
+});
 
 const assertMobileVideoOwner = Effect.fn("Mobile.assertVideoOwner")(function* (
 	videoId: Video.VideoId,
@@ -1975,19 +2173,16 @@ const getCapById = Effect.fn("Mobile.getCapById")(function* (
 		ownerPreferences: access.ownerPreferences,
 	};
 
-	const analytics =
-		capRow.ownerId === user.id
-			? yield* Effect.flatMap(Videos, (videos) =>
-					videos.getAnalytics(capRow.id),
-				).pipe(
-					Effect.map((result) => result.count),
-					Effect.catchAll(() => Effect.succeed(0)),
-				)
-			: 0;
+	const analytics = yield* Effect.flatMap(Videos, (videos) =>
+		videos.getAnalytics(capRow.id),
+	).pipe(
+		Effect.map((result) => result.count),
+		Effect.catchAll(() => Effect.succeed(0)),
+	);
 
 	return {
 		row: capRow,
-		cap: toMobileCapSummary(capRow, analytics, publicOrigin, user.id),
+		cap: toMobileCapSummary(capRow, analytics, publicOrigin, user.id, true),
 	};
 });
 
@@ -2083,21 +2278,164 @@ const getComments = Effect.fn("Mobile.getComments")(function* (
 	}));
 });
 
+const getMobileVideoRules = Effect.fn("Mobile.getVideoRules")(function* (
+	videoId: Video.VideoId,
+) {
+	const database = yield* Database;
+	const [[video], sharedSpaces] = yield* Effect.all(
+		[
+			database.use((db) =>
+				db
+					.select({
+						ownerId: Db.videos.ownerId,
+						createdAt: Db.videos.createdAt,
+						settings: Db.videos.settings,
+						orgSettings: Db.organizations.settings,
+						isScreenshot: Db.videos.isScreenshot,
+						source: Db.videos.source,
+						ownerImage: Db.users.image,
+						ownerStripeSubscriptionStatus: Db.users.stripeSubscriptionStatus,
+						ownerThirdPartyStripeSubscriptionId:
+							Db.users.thirdPartyStripeSubscriptionId,
+					})
+					.from(Db.videos)
+					.leftJoin(Db.organizations, eq(Db.organizations.id, Db.videos.orgId))
+					.leftJoin(Db.users, eq(Db.users.id, Db.videos.ownerId))
+					.where(eq(Db.videos.id, videoId))
+					.limit(1),
+			),
+			database.use((db) =>
+				db
+					.select({
+						id: Db.spaces.id,
+						name: Db.spaces.name,
+						organizationId: Db.spaces.organizationId,
+						settings: Db.spaces.settings,
+						hasPassword:
+							sql<boolean>`${Db.spaces.password} IS NOT NULL`.mapWith(Boolean),
+					})
+					.from(Db.spaceVideos)
+					.innerJoin(Db.spaces, eq(Db.spaceVideos.spaceId, Db.spaces.id))
+					.where(eq(Db.spaceVideos.videoId, videoId)),
+			),
+		],
+		{ concurrency: "unbounded" },
+	);
+	if (!video) return yield* Effect.fail(new HttpApiError.NotFound());
+
+	const rules = resolveEffectiveVideoRules({
+		videoSettings: video.settings,
+		organizationSettings: video.orgSettings,
+		spaces: sharedSpaces.filter((space) => space.id !== space.organizationId),
+	});
+	return {
+		settings: rules.settings,
+		defaultPlaybackSpeed: resolveDefaultPlaybackSpeed(
+			video.settings?.defaultPlaybackSpeed,
+			video.orgSettings?.defaultPlaybackSpeed,
+		),
+		isScreenshot: video.isScreenshot,
+		isSegmentsSource: video.source?.type === "desktopSegments",
+		ownerId: video.ownerId,
+		ownerImage: video.ownerImage,
+		createdAt: video.createdAt,
+		ownerBilling: {
+			stripeSubscriptionStatus: video.ownerStripeSubscriptionStatus,
+			thirdPartyStripeSubscriptionId: video.ownerThirdPartyStripeSubscriptionId,
+		},
+	};
+});
+
+// Fail-open like the share page: a broken count never blocks playback.
+const isMobileVideoOverShareLimit = (
+	videoId: Video.VideoId,
+	rules: MobileVideoRules,
+) =>
+	userIsPro(rules.ownerBilling)
+		? Effect.succeed(false)
+		: Effect.promise(() =>
+				isVideoOverShareableLinkLimit({
+					id: videoId,
+					ownerId: rules.ownerId,
+					createdAt: rules.createdAt,
+					isScreenshot: rules.isScreenshot,
+				}).catch(() => false),
+			);
+
+type MobileVideoRules = Effect.Effect.Success<
+	ReturnType<typeof getMobileVideoRules>
+>;
+
+const getMobileCapViewer = Effect.fn("Mobile.getCapViewer")(function* (
+	row: CapRow,
+	rules: MobileVideoRules,
+) {
+	const user = yield* CurrentUser;
+	const imageUploads = yield* ImageUploads;
+	const hasActiveUpload = Boolean(
+		row.uploadVideoId && row.uploadPhase !== "complete",
+	);
+	const [canDownload, ownerImageUrl, overShareLimit] = yield* Effect.all(
+		[
+			hasActiveUpload || rules.isSegmentsSource
+				? Effect.succeed(false)
+				: Effect.promise(() =>
+						canUserDownloadVideo({
+							userId: user.id,
+							ownerId: row.ownerId,
+							videoId: row.id,
+						}).catch(() => false),
+					),
+			rules.ownerImage
+				? imageUploads
+						.resolveImageUrl(rules.ownerImage)
+						.pipe(Effect.catchAll(() => Effect.succeed(null)))
+				: Effect.succeed(null),
+			isMobileVideoOverShareLimit(row.id, rules),
+		],
+		{ concurrency: "unbounded" },
+	);
+	return {
+		settings: rules.settings,
+		defaultPlaybackSpeed: rules.defaultPlaybackSpeed,
+		canDownload,
+		isScreenshot: rules.isScreenshot,
+		overShareLimit,
+		ownerImageUrl,
+		aiGenerationStatus: getMetadataString(
+			getMetadataRecord(row.metadata),
+			"aiGenerationStatus",
+		),
+	};
+});
+
 const getCapDetail = Effect.fn("Mobile.getCapDetail")(function* (
 	videoId: Video.VideoId,
 	publicOrigin: string,
 ) {
 	const { row, cap } = yield* getCapById(videoId, publicOrigin);
 	const metadata = getMetadataRecord(row.metadata);
-	const comments = yield* getComments(videoId);
+	const [comments, rules] = yield* Effect.all(
+		[getComments(videoId), getMobileVideoRules(videoId)],
+		{ concurrency: "unbounded" },
+	);
+	const viewer = yield* getMobileCapViewer(row, rules);
+	const { settings } = rules;
 
 	return {
 		cap,
-		summary: getMetadataString(metadata, "summary"),
-		chapters: getMetadataChapters(metadata),
+		summary: settings.disableSummary
+			? null
+			: getMetadataString(metadata, "summary"),
+		chapters: settings.disableChapters ? [] : getMetadataChapters(metadata),
 		transcriptionStatus: row.transcriptionStatus,
-		comments,
+		comments: comments.filter((comment) =>
+			comment.type === "emoji"
+				? !settings.disableReactions
+				: !settings.disableComments,
+		),
 		shareUrl: `${publicOrigin}/s/${videoId}`,
+		viewer,
 	};
 });
 
@@ -2131,7 +2469,7 @@ const createMobileComment = Effect.fn("Mobile.createComment")(function* ({
 	videoId,
 	content,
 	timestamp,
-	parentCommentId,
+	parentCommentId: requestedParentCommentId,
 	type,
 }: {
 	videoId: Video.VideoId;
@@ -2141,7 +2479,12 @@ const createMobileComment = Effect.fn("Mobile.createComment")(function* ({
 	type: "text" | "emoji";
 }) {
 	const user = yield* CurrentUser;
+	let parentCommentId = requestedParentCommentId;
 	yield* assertCanCreateFeedback(videoId);
+	const { settings } = yield* getMobileVideoRules(videoId);
+	if (type === "emoji" ? settings.disableReactions : settings.disableComments) {
+		return yield* Effect.fail(new HttpApiError.Forbidden());
+	}
 
 	const trimmedContent = content.trim();
 	if (trimmedContent.length === 0) {
@@ -2152,13 +2495,17 @@ const createMobileComment = Effect.fn("Mobile.createComment")(function* ({
 	const now = new Date();
 	const database = yield* Database;
 	if (parentCommentId) {
+		const requestedParentId = parentCommentId;
 		const [parent] = yield* database.use((db) =>
 			db
-				.select({ id: Db.comments.id })
+				.select({
+					id: Db.comments.id,
+					parentCommentId: Db.comments.parentCommentId,
+				})
 				.from(Db.comments)
 				.where(
 					and(
-						eq(Db.comments.id, parentCommentId),
+						eq(Db.comments.id, requestedParentId),
 						eq(Db.comments.videoId, videoId),
 						eq(Db.comments.type, "text"),
 					),
@@ -2166,6 +2513,11 @@ const createMobileComment = Effect.fn("Mobile.createComment")(function* ({
 				.limit(1),
 		);
 		if (!parent) return yield* Effect.fail(new HttpApiError.NotFound());
+		// Threads are one level deep, like the share page: a reply to a reply
+		// joins the top-level comment's thread.
+		if (parent.parentCommentId) {
+			parentCommentId = parent.parentCommentId;
+		}
 	}
 	yield* database.use((db) =>
 		db.insert(Db.comments).values({
@@ -2204,11 +2556,110 @@ const createMobileComment = Effect.fn("Mobile.createComment")(function* ({
 	return created;
 });
 
+const MOBILE_VIEW_TRACKING_DELAY_MS = 2 * 60 * 1000;
+const MOBILE_FIRST_VIEW_EMAIL_CUTOFF = new Date("2026-03-04T00:00:00Z");
+
+const readHeader = (
+	request: HttpServerRequest.HttpServerRequest,
+	name: string,
+) => {
+	const value = request.headers[name]?.trim();
+	if (!value || value === "unknown") return "";
+	try {
+		return decodeURIComponent(value).slice(0, 256);
+	} catch {
+		return value.slice(0, 256);
+	}
+};
+
+/** Mirrors /api/analytics/track for signed-in viewers watching in the app. */
+const trackMobileCapView = Effect.fn("Mobile.trackCapView")(function* (
+	videoId: Video.VideoId,
+	sessionId: string,
+	request: HttpServerRequest.HttpServerRequest,
+) {
+	const user = yield* CurrentUser;
+	const trimmedSession = sessionId.trim().slice(0, 128);
+	if (!/^[A-Za-z0-9_-]{8,128}$/.test(trimmedSession)) {
+		return yield* Effect.fail(new HttpApiError.BadRequest());
+	}
+	yield* assertMobileVideoAccess(videoId);
+
+	const database = yield* Database;
+	const [video] = yield* database.use((db) =>
+		db
+			.select({
+				orgId: Db.videos.orgId,
+				ownerId: Db.videos.ownerId,
+				createdAt: Db.videos.createdAt,
+				updatedAt: Db.videos.updatedAt,
+				firstViewEmailSentAt: Db.videos.firstViewEmailSentAt,
+				activeUploadVideoId: Db.videoUploads.videoId,
+			})
+			.from(Db.videos)
+			.leftJoin(Db.videoUploads, eq(Db.videoUploads.videoId, Db.videos.id))
+			.where(eq(Db.videos.id, videoId))
+			.limit(1),
+	);
+	if (!video) return yield* Effect.fail(new HttpApiError.NotFound());
+	if (
+		video.ownerId === user.id ||
+		video.activeUploadVideoId ||
+		Date.now() - video.updatedAt.getTime() < MOBILE_VIEW_TRACKING_DELAY_MS
+	) {
+		return { success: true as const };
+	}
+
+	const tinybird = yield* Tinybird;
+	yield* tinybird
+		.appendEvents([
+			{
+				timestamp: new Date().toISOString(),
+				session_id: trimmedSession,
+				action: "page_hit",
+				version: "1.0",
+				tenant_id: video.orgId || video.ownerId,
+				video_id: videoId,
+				pathname: `/s/${videoId}`,
+				country: readHeader(request, "x-vercel-ip-country"),
+				region: readHeader(request, "x-vercel-ip-country-region"),
+				city: readHeader(request, "x-vercel-ip-city"),
+				browser: "Cap for iOS",
+				device: "mobile",
+				os: "iOS",
+				user_id: user.id,
+			},
+		])
+		.pipe(Effect.catchAll(() => Effect.void));
+
+	if (
+		video.createdAt >= MOBILE_FIRST_VIEW_EMAIL_CUTOFF &&
+		!video.firstViewEmailSentAt
+	) {
+		yield* Effect.forkDaemon(
+			Effect.tryPromise(() =>
+				sendFirstViewEmail({
+					videoId,
+					viewerUserId: user.id,
+					isAnonymous: false,
+				}),
+			).pipe(Effect.catchAll(() => Effect.void)),
+		);
+	}
+	return { success: true as const };
+});
+
 const getPlayback = Effect.fn("Mobile.getPlayback")(function* (
 	videoId: Video.VideoId,
 	publicOrigin: string,
 ) {
 	yield* assertMobileVideoAccess(videoId);
+	const rules = yield* getMobileVideoRules(videoId);
+	// The share page doesn't mount a player for videos over the free link
+	// quota; mobile refuses the source instead of hiding it.
+	if (yield* isMobileVideoOverShareLimit(videoId, rules)) {
+		return yield* Effect.fail(new HttpApiError.Forbidden());
+	}
 	const repo = yield* VideosRepo;
 	const storage = yield* Storage;
 	const maybeVideo = yield* repo.getById(videoId);
@@ -2221,13 +2672,17 @@ const getPlayback = Effect.fn("Mobile.getPlayback")(function* (
 	const source = Video.Video.getSource(video);
 
 	const transcriptKey = `${video.ownerId}/${video.id}/transcription.vtt`;
-	const transcriptUrl = yield* bucket.headObject(transcriptKey).pipe(
-		Effect.flatMap(() => bucket.getSignedObjectUrl(transcriptKey)),
-		Effect.map((url) =>
-			resolveMobileWebResourceUrl(url, serverEnv().WEB_URL, publicOrigin),
-		),
-		Effect.catchAll(() => Effect.succeed(null)),
-	);
+	const transcriptAllowed =
+		!rules.settings.disableTranscript || !rules.settings.disableCaptions;
+	const transcriptUrl = transcriptAllowed
+		? yield* bucket.headObject(transcriptKey).pipe(
+				Effect.flatMap(() => bucket.getSignedObjectUrl(transcriptKey)),
+				Effect.map((url) =>
+					resolveMobileWebResourceUrl(url, serverEnv().WEB_URL, publicOrigin),
+				),
+				Effect.catchAll(() => Effect.succeed(null)),
+			)
+		: null;
 
 	if (source instanceof Video.Mp4Source) {
 		const signedUrl = yield* bucket.getSignedObjectUrl(source.getFileKey());
@@ -2262,21 +2717,9 @@ const getPlayback = Effect.fn("Mobile.getPlayback")(function* (
 	return yield* Effect.fail(new HttpApiError.NotFound());
 });
 
-const getCapAnalytics = Effect.fn("Mobile.getCapAnalytics")(function* (
-	videoId: Video.VideoId,
-	range: (typeof Mobile.MobileAnalyticsRange)["Type"],
-) {
+const currentUserIsPro = Effect.fn("Mobile.currentUserIsPro")(function* () {
 	const user = yield* CurrentUser;
 	const database = yield* Database;
-	const [video] = yield* database.use((db) =>
-		db
-			.select({ name: Db.videos.name, orgId: Db.videos.orgId })
-			.from(Db.videos)
-			.where(and(eq(Db.videos.id, videoId), eq(Db.videos.ownerId, user.id)))
-			.limit(1),
-	);
-	if (!video) return yield* Effect.fail(new HttpApiError.NotFound());
-
 	const [userRow] = yield* database.use((db) =>
 		db
 			.select({
@@ -2287,14 +2730,13 @@ const getCapAnalytics = Effect.fn("Mobile.getCapAnalytics")(function* (
 			.where(eq(Db.users.id, user.id))
 			.limit(1),
 	);
-	if (!userIsPro(userRow)) {
-		return { available: false as const, data: null };
-	}
+	return userIsPro(userRow);
+});
 
-	const data = yield* Effect.tryPromise({
-		try: () => getOrgAnalyticsData(video.orgId, range, undefined, videoId),
-		catch: () => new HttpApiError.InternalServerError(),
-	});
+const toMobileAnalyticsData = (
+	data: Awaited<ReturnType<typeof getOrgAnalyticsData>>,
+	fallbackName: string,
+) => {
 	const chartLimit = 96;
 	const chartGroupSize = Math.ceil(data.chart.length / chartLimit);
 	const chart =
@@ -2323,21 +2765,79 @@ const getCapAnalytics = Effect.fn("Mobile.getCapAnalytics")(function* (
 					},
 				);
 	return {
-		available: true as const,
-		data: {
-			...data,
-			capName: data.capName ?? video.name,
-			chart,
-			breakdowns: {
-				...data.breakdowns,
-				topCaps: data.breakdowns.topCaps.map((cap) => ({
-					...cap,
-					id: Video.VideoId.make(cap.id),
-				})),
-			},
+		...data,
+		capName: data.capName ?? fallbackName,
+		chart,
+		breakdowns: {
+			...data.breakdowns,
+			topCaps: data.breakdowns.topCaps.map((cap) => ({
+				...cap,
+				id: Video.VideoId.make(cap.id),
+			})),
 		},
 	};
+};
+
+const getCapAnalytics = Effect.fn("Mobile.getCapAnalytics")(function* (
+	videoId: Video.VideoId,
+	range: (typeof Mobile.MobileAnalyticsRange)["Type"],
+) {
+	const user = yield* CurrentUser;
+	const database = yield* Database;
+	const [video] = yield* database.use((db) =>
+		db
+			.select({ name: Db.videos.name, orgId: Db.videos.orgId })
+			.from(Db.videos)
+			.where(and(eq(Db.videos.id, videoId), eq(Db.videos.ownerId, user.id)))
+			.limit(1),
+	);
+	if (!video) return yield* Effect.fail(new HttpApiError.NotFound());
+
+	if (!(yield* currentUserIsPro())) {
+		return { available: false as const, data: null };
+	}
+
+	const data = yield* Effect.tryPromise({
+		try: () => getOrgAnalyticsData(video.orgId, range, undefined, videoId),
+		catch: () => new HttpApiError.InternalServerError(),
+	});
+	return {
+		available: true as const,
+		data: toMobileAnalyticsData(data, video.name),
+	};
 });
+
+const getOrganizationAnalytics = Effect.fn("Mobile.getOrganizationAnalytics")(
+	function* (
+		range: (typeof Mobile.MobileAnalyticsRange)["Type"],
+		spaceId: string | undefined,
+	) {
+		const user = yield* CurrentUser;
+		const organizationId = user.activeOrganizationId;
+		yield* assertOrganizationAccess(organizationId);
+
+		if (spaceId) {
+			const canView = yield* Effect.tryPromise({
+				try: () => canViewSpaceAnalytics(user.id, organizationId, spaceId),
+				catch: () => new HttpApiError.InternalServerError(),
+			});
+			if (!canView) return yield* Effect.fail(new HttpApiError.Forbidden());
+		}
+
+		if (!(yield* currentUserIsPro())) {
+			return { available: false as const, data: null };
+		}
+
+		const data = yield* Effect.tryPromise({
+			try: () => getOrgAnalyticsData(organizationId, range, spaceId),
+			catch: () => new HttpApiError.InternalServerError(),
+		});
+		return {
+			available: true as const,
+			data: toMobileAnalyticsData(data, ""),
+		};
+	},
+);
 
 const isLoomUrl = (value: string) => {
 	try {
@@ -2500,7 +3000,16 @@ const createUpload = Effect.fn("Mobile.createUpload")(function* (
 	const organizationId = input.organizationId ?? user.activeOrganizationId;
 	yield* assertOrganizationAccess(organizationId);
 
-	if (!input.contentType.startsWith("video/")) {
+	const screenshotExtension = getScreenshotExtension(input.contentType);
+	if (!input.contentType.startsWith("video/") && !screenshotExtension) {
+		return yield* Effect.fail(new HttpApiError.BadRequest());
+	}
+	if (
+		screenshotExtension &&
+		(input.contentLength === undefined ||
+			input.contentLength <= 0 ||
+			input.contentLength > MOBILE_SCREENSHOT_MAX_BYTES)
+	) {
 		return yield* Effect.fail(new HttpApiError.BadRequest());
 	}
 
@@ -2530,6 +3039,51 @@ const createUpload = Effect.fn("Mobile.createUpload")(function* (
 		user.id,
 		organizationId,
 	);
+
+	if (screenshotExtension) {
+		// Same shape as the web image import: no upload-progress row and no processing,
+		// so the Cap shows its image as soon as the file lands.
+		const screenshotId = Video.VideoId.make(nanoId());
+		const isPublic = yield* Effect.tryPromise(() =>
+			getNewVideoPublic(organizationId),
+		);
+		yield* database.use((db) =>
+			db.insert(Db.videos).values({
+				id: screenshotId,
+				name: getUploadTitle(input.fileName),
+				ownerId: user.id,
+				orgId: organizationId,
+				source: { type: "webMP4" },
+				isScreenshot: true,
+				bucket: Option.getOrNull(writable.bucketId),
+				storageIntegrationId: Option.getOrNull(writable.storageIntegrationId),
+				public: isPublic,
+				...(folderId ? { folderId } : {}),
+			}),
+		);
+		const screenshotKey = `${user.id}/${screenshotId}/screenshot/screen-capture.${screenshotExtension}`;
+		const screenshotContentType =
+			screenshotExtension === "png" ? "image/png" : "image/jpeg";
+		const screenshotUpload = yield* writable.access.createUploadTarget(
+			screenshotKey,
+			{
+				contentType: screenshotContentType,
+				method: "put",
+				fields: {
+					"Content-Type": screenshotContentType,
+					"x-amz-meta-userid": user.id,
+					"x-amz-meta-source": "cap-mobile-ios",
+				},
+			},
+		);
+		return {
+			id: screenshotId,
+			shareUrl: `${publicOrigin}/s/${screenshotId}`,
+			rawFileKey: screenshotKey,
+			upload: screenshotUpload,
+		};
+	}
+
 	const videoId = yield* repo.create(
 		{
 			ownerId: user.id,
@@ -2937,7 +3491,24 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 					.handle("getCap", ({ path, request }) =>
 						withMappedErrors(
 							getCapDetail(path.id, getMobilePublicOrigin(request)),
+						).pipe(withMobileVideoAccess(request, path.id)),
+					)
+					.handle("getCapAccess", ({ path, request }) =>
+						withMappedErrors(
+							resolveMobileVideoAccess(path.id).pipe(
+								Effect.map(({ status }) => ({ status })),
+							),
+						).pipe(withMobileVideoAccess(request, path.id)),
+					)
+					.handle("unlockCap", ({ path, payload, request }) =>
+						withMappedErrors(
+							unlockMobileCap(path.id, payload.password, request),
 						),
+					)
+					.handle("trackCapView", ({ path, payload, request }) =>
+						withMappedErrors(
+							trackMobileCapView(path.id, payload.sessionId, request),
+						).pipe(withMobileVideoAccess(request, path.id)),
 					)
 					.handle("reportCap", ({ path, payload, request }) =>
 						withMappedErrors(
@@ -2946,9 +3517,9 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 								payload.reason,
 								getMobilePublicOrigin(request),
 							),
-						),
+						).pipe(withMobileVideoAccess(request, path.id)),
 					)
-					.handle("getCapThumbnail", ({ path }) =>
+					.handle("getCapThumbnail", ({ path, request }) =>
 						withMappedErrors(
 							Effect.gen(function* () {
 								yield* assertMobileVideoAccess(path.id);
@@ -2962,7 +3533,7 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 									}),
 								);
 							}),
-						),
+						).pipe(withMobileVideoAccess(request, path.id)),
 					)
 					.handle("updateCapSharing", ({ path, payload, request }) =>
 						withMappedErrors(
@@ -3069,7 +3640,7 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 					.handle("getPlayback", ({ path, request }) =>
 						withMappedErrors(
 							getPlayback(path.id, getMobilePublicOrigin(request)),
-						),
+						).pipe(withMobileVideoAccess(request, path.id)),
 					)
 					.handle("getDownload", ({ path, request }) =>
 						withMappedErrors(
@@ -3082,8 +3653,18 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 									return yield* Effect.fail(new HttpApiError.NotFound());
 								}
 								const [video] = maybeVideo.value;
-								if (video.ownerId !== user.id) {
-									return yield* Effect.fail(new HttpApiError.NotFound());
+								yield* assertMobileVideoAccess(path.id);
+								const canDownload = yield* Effect.tryPromise({
+									try: () =>
+										canUserDownloadVideo({
+											userId: user.id,
+											ownerId: video.ownerId,
+											videoId: path.id,
+										}),
+									catch: () => new HttpApiError.InternalServerError(),
+								});
+								if (!canDownload) {
+									return yield* Effect.fail(new HttpApiError.Forbidden());
 								}
 
 								return yield* videos.getDownloadInfo(path.id).pipe(
@@ -3103,10 +3684,18 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 									),
 								);
 							}),
-						),
+						).pipe(withMobileVideoAccess(request, path.id)),
 					)
 					.handle("getCapAnalytics", ({ path, urlParams }) =>
 						withMappedErrors(getCapAnalytics(path.id, urlParams.range ?? "7d")),
+					)
+					.handle("getOrganizationAnalytics", ({ urlParams }) =>
+						withMappedErrors(
+							getOrganizationAnalytics(
+								urlParams.range ?? "7d",
+								urlParams.spaceId,
+							),
+						),
 					)
 					.handle("getOrganizationSettings", () =>
 						withMappedErrors(getOrganizationSettings()),
@@ -3123,7 +3712,7 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 					.handle("importLoom", ({ payload, request }) =>
 						withMappedErrors(importLoom(payload.loomUrl, request)),
 					)
-					.handle("createComment", ({ path, payload }) =>
+					.handle("createComment", ({ path, payload, request }) =>
 						withMappedErrors(
 							createMobileComment({
 								videoId: path.id,
@@ -3132,31 +3721,78 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 								parentCommentId: payload.parentCommentId ?? null,
 								type: "text",
 							}),
-						),
+						).pipe(withMobileVideoAccess(request, path.id)),
 					)
 					.handle("deleteComment", ({ path }) =>
 						withMappedErrors(
 							Effect.gen(function* () {
 								const user = yield* CurrentUser;
-								const result = yield* database.use((db) =>
-									db
-										.delete(Db.comments)
-										.where(
-											and(
-												eq(Db.comments.id, path.id),
-												eq(Db.comments.authorId, user.id),
-											),
-										),
+								const deleted = yield* database.use((db) =>
+									db.transaction(async (tx) => {
+										const [comment] = await tx
+											.select({
+												id: Db.comments.id,
+												parentCommentId: Db.comments.parentCommentId,
+											})
+											.from(Db.comments)
+											.where(
+												and(
+													eq(Db.comments.id, path.id),
+													eq(Db.comments.authorId, user.id),
+													inArray(Db.comments.type, ["text", "emoji"]),
+												),
+											)
+											.limit(1);
+										if (!comment) return false;
+										await tx
+											.delete(Db.comments)
+											.where(
+												and(
+													eq(Db.comments.id, path.id),
+													eq(Db.comments.authorId, user.id),
+												),
+											);
+										if (comment.parentCommentId) {
+											await tx
+												.delete(Db.notifications)
+												.where(
+													and(
+														eq(Db.notifications.type, "reply"),
+														sql`JSON_EXTRACT(${Db.notifications.data}, '$.comment.id') = ${path.id}`,
+													),
+												);
+										} else {
+											await tx
+												.delete(Db.notifications)
+												.where(
+													and(
+														inArray(Db.notifications.type, [
+															"comment",
+															"reaction",
+														]),
+														sql`JSON_EXTRACT(${Db.notifications.data}, '$.comment.id') = ${path.id}`,
+													),
+												);
+											await tx
+												.delete(Db.notifications)
+												.where(
+													and(
+														eq(Db.notifications.type, "reply"),
+														sql`JSON_EXTRACT(${Db.notifications.data}, '$.comment.parentCommentId') = ${path.id}`,
+													),
+												);
+										}
+										return true;
+									}),
 								);
-								const affectedRows = getAffectedRows(result);
-								if (affectedRows === 0) {
+								if (!deleted) {
 									return yield* Effect.fail(new HttpApiError.NotFound());
 								}
 								return { success: true as const };
 							}),
 						),
 					)
-					.handle("createReaction", ({ path, payload }) =>
+					.handle("createReaction", ({ path, payload, request }) =>
 						withMappedErrors(
 							createMobileComment({
 								videoId: path.id,
@@ -3165,7 +3801,7 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 								parentCommentId: null,
 								type: "emoji",
 							}),
-						),
+						).pipe(withMobileVideoAccess(request, path.id)),
 					)
 					.handle("createUpload", ({ payload, request }) =>
 						withMappedErrors(
@@ -3210,6 +3846,7 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 											id: Db.videos.id,
 											ownerId: Db.videos.ownerId,
 											bucketId: Db.videos.bucket,
+											isScreenshot: Db.videos.isScreenshot,
 										})
 										.from(Db.videos)
 										.where(
@@ -3225,6 +3862,44 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 								const prefix = `${user.id}/${path.id}/`;
 								if (!payload.rawFileKey.startsWith(prefix)) {
 									return yield* Effect.fail(new HttpApiError.BadRequest());
+								}
+
+								if (video.isScreenshot) {
+									if (
+										payload.rawFileKey !==
+											`${prefix}screenshot/screen-capture.jpg` &&
+										payload.rawFileKey !==
+											`${prefix}screenshot/screen-capture.png`
+									) {
+										return yield* Effect.fail(new HttpApiError.BadRequest());
+									}
+									const maybeScreenshot = yield* VideosRepo.pipe(
+										Effect.flatMap((repo) => repo.getById(path.id)),
+									);
+									if (Option.isNone(maybeScreenshot)) {
+										return yield* Effect.fail(new HttpApiError.NotFound());
+									}
+									const [bucket] = yield* Storage.pipe(
+										Effect.flatMap((storage) =>
+											storage.getAccessForVideo(maybeScreenshot.value[0]),
+										),
+									);
+									const head = yield* bucket
+										.headObject(payload.rawFileKey)
+										.pipe(Effect.catchAll(() => Effect.succeed(null)));
+									if (!head) {
+										return yield* Effect.fail(new HttpApiError.BadRequest());
+									}
+									// A presigned PUT can't cap the body size, so the limit is
+									// enforced here on what actually landed.
+									if ((head.ContentLength ?? 0) > MOBILE_SCREENSHOT_MAX_BYTES) {
+										yield* videos
+											.delete(path.id)
+											.pipe(Effect.catchAll(() => Effect.void));
+										return yield* Effect.fail(new HttpApiError.BadRequest());
+									}
+									yield* Effect.sync(() => revalidatePath("/dashboard/caps"));
+									return { success: true as const };
 								}
 
 								if (payload.contentLength !== undefined) {

@@ -63,8 +63,8 @@ impl MicrophoneOption {
         let sample_rate = self.sample_rate?;
         let khz = sample_rate as f32 / 1000.;
         let layout = match self.channels {
-            Some(1) => "Mono".to_string(),
-            Some(2) => "Stereo".to_string(),
+            Some(1) => crate::i18n::tr::main::device::format::mono().to_string(),
+            Some(2) => crate::i18n::tr::main::device::format::stereo().to_string(),
             Some(n) => format!("{n}ch"),
             None => return Some(format!("{khz}kHz")),
         };
@@ -988,6 +988,11 @@ fn linux_window_targets_from_snapshot() -> Option<Vec<(WindowOption, Window)>> {
                 }
                 let app = snapshot.owner_name?;
                 if app == "Window Server" {
+                    return None;
+                }
+                // As on macOS: recording one of our own windows records a
+                // window the recording hides.
+                if snapshot.owner_pid == Some(std::process::id()) {
                     return None;
                 }
                 Some((
