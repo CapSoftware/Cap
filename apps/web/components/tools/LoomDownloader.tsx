@@ -298,20 +298,21 @@ export function LoomDownloader() {
 
 	useEffect(
 		() => () => {
+			abortRef.current?.abort();
+			abortRef.current = null;
 			if (downloadObjectUrlRef.current) {
 				URL.revokeObjectURL(downloadObjectUrlRef.current);
+				downloadObjectUrlRef.current = null;
 			}
 		},
 		[],
 	);
 
 	const runBrowserConversion = useCallback(
-		async (conversion: BrowserConversion) => {
+		async (conversion: BrowserConversion, controller: AbortController) => {
 			setStatus("converting");
 			setErrorMessage("");
 			setConvertProgress(0);
-			const controller = new AbortController();
-			abortRef.current = controller;
 
 			try {
 				const convertedBlob = await saveLoomStreamAsMp4({
@@ -319,9 +320,10 @@ export function LoomDownloader() {
 					filename: conversion.filename,
 					signal: controller.signal,
 					onProgress: ({ percent }) => {
-						setConvertProgress(percent);
+						if (!controller.signal.aborted) setConvertProgress(percent);
 					},
 				});
+				if (controller.signal.aborted) return;
 				let objectUrl: string | null = null;
 				if (convertedBlob) {
 					objectUrl = triggerBlobDownload(convertedBlob, conversion.filename);
@@ -332,6 +334,7 @@ export function LoomDownloader() {
 				setLastDownloadedName(conversion.videoName);
 				setStatus("success");
 			} catch (err) {
+				if (controller.signal.aborted) return;
 				if (
 					(err instanceof DOMException && err.name === "AbortError") ||
 					isLoomBrowserConversionAbort(err)
@@ -345,15 +348,15 @@ export function LoomDownloader() {
 					getLoomBrowserConversionErrorMessage(err) ??
 						"An unexpected error occurred. Please try again.",
 				);
-			} finally {
-				abortRef.current = null;
 			}
 		},
 		[updateDownloadObjectUrl],
 	);
 
 	const handleDownload = useCallback(async () => {
-		if (!url.trim()) return;
+		if (!url.trim() || abortRef.current) return;
+		const controller = new AbortController();
+		abortRef.current = controller;
 
 		setStatus("fetching");
 		setErrorMessage("");
@@ -361,6 +364,7 @@ export function LoomDownloader() {
 
 		try {
 			const result = await resolveLoomBrowserDownload(url.trim());
+			if (controller.signal.aborted) return;
 
 			if (!result.success || !result.videoId) {
 				setStatus("error");
@@ -399,12 +403,16 @@ export function LoomDownloader() {
 				return;
 			}
 
-			await runBrowserConversion({
-				url: result.downloadUrl,
-				filename,
-				videoName: result.videoName ?? "",
-			});
+			await runBrowserConversion(
+				{
+					url: result.downloadUrl,
+					filename,
+					videoName: result.videoName ?? "",
+				},
+				controller,
+			);
 		} catch (err) {
+			if (controller.signal.aborted) return;
 			if (err instanceof DOMException && err.name === "AbortError") {
 				setStatus("idle");
 				return;
@@ -419,7 +427,7 @@ export function LoomDownloader() {
 					"An unexpected error occurred. Please try again.",
 			);
 		} finally {
-			abortRef.current = null;
+			if (abortRef.current === controller) abortRef.current = null;
 		}
 	}, [runBrowserConversion, updateDownloadObjectUrl, url]);
 
