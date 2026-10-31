@@ -61,7 +61,10 @@ import { getPublicShareVideo } from "@/lib/public-share-video";
 import * as EffectRuntime from "@/lib/server";
 import { runPromise } from "@/lib/server";
 import { getSharePageBranding } from "@/lib/share-branding";
-import { parseShareCallToAction } from "@/lib/share-call-to-action";
+import {
+	parseDefaultCallToAction,
+	resolveShareCallToAction,
+} from "@/lib/share-call-to-action";
 import { getShareDashboardDestination } from "@/lib/share-dashboard-destination";
 import {
 	canStartPlaybackInHtml,
@@ -956,6 +959,10 @@ async function AuthorizedContent({
 		aiGenerationStatus,
 	};
 
+	const resolvedCallToAction = ownerIsPro
+		? resolveShareCallToAction(video.videoSettings, video.owner.preferences)
+		: { callToAction: null, source: null };
+
 	const videoWithOrganizationInfo = {
 		...video,
 		hasActiveUpload,
@@ -981,9 +988,12 @@ async function AuthorizedContent({
 		hasInheritedPassword: rules.hasInheritedPassword,
 		inheritedPasswordSources: rules.inheritedPasswordSources,
 		inheritedSpaceSettings: rules.inheritedSettings,
-		callToAction: ownerIsPro
-			? parseShareCallToAction(video.videoSettings)
-			: null,
+		callToAction: resolvedCallToAction.callToAction,
+		callToActionSource: resolvedCallToAction.source,
+		defaultCallToAction:
+			user?.id === video.owner.id
+				? parseDefaultCallToAction(video.owner.preferences)
+				: null,
 	};
 	const isEditProcessing =
 		isEditSourceKey({

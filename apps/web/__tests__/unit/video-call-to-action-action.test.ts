@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
 	} | null,
 	video: null as { ownerId: string } | null,
 	updates: [] as unknown[],
+	failTransactionWrite: null as number | null,
 }));
 
 vi.mock("@cap/env", () => ({
@@ -32,19 +33,43 @@ vi.mock("@cap/database", () => ({
 				},
 			}),
 		}),
+		transaction: async (
+			run: (tx: { update: () => unknown }) => Promise<void>,
+		) => {
+			const staged: unknown[] = [];
+			await run({
+				update: () => ({
+					set: (values: unknown) => ({
+						where: async () => {
+							if (mocks.failTransactionWrite === staged.length) {
+								throw new Error("write failed");
+							}
+							staged.push(values);
+						},
+					}),
+				}),
+			});
+			mocks.updates.push(...staged);
+		},
 	}),
 }));
 
 import type { Video } from "@cap/web-domain";
-import { updateVideoCallToAction } from "@/actions/videos/call-to-action";
+import {
+	updateDefaultCallToAction,
+	updateVideoCallToAction,
+} from "@/actions/videos/call-to-action";
 
 const videoId = "video123" as Video.VideoId;
 
 const sqlText = (value: unknown): string => {
 	const chunks = (value as { queryChunks?: unknown[] }).queryChunks ?? [];
 	return chunks
-		.map((chunk) => {
+		.map((chunk): string => {
 			if (typeof chunk === "string") return chunk;
+			if (chunk && typeof chunk === "object" && "queryChunks" in chunk) {
+				return sqlText(chunk);
+			}
 			if (chunk && typeof chunk === "object" && "value" in chunk) {
 				const inner = (chunk as { value: unknown }).value;
 				return Array.isArray(inner) ? inner.join("") : String(inner);
@@ -59,6 +84,7 @@ describe("updateVideoCallToAction", () => {
 		mocks.user = { id: "owner", stripeSubscriptionStatus: "active" };
 		mocks.video = { ownerId: "owner" };
 		mocks.updates = [];
+		mocks.failTransactionWrite = null;
 	});
 
 	it("requires a signed-in user", async () => {
@@ -135,24 +161,116 @@ describe("updateVideoCallToAction", () => {
 				color: "#12A150",
 				showWhilePlaying: false,
 			},
+			source: "video",
 		});
 		expect(mocks.updates).toHaveLength(1);
 		const settings = sqlText(
 			(mocks.updates[0] as { settings: unknown }).settings,
 		);
-		expect(settings).toContain("JSON_MERGE_PATCH(");
-		expect(settings).toContain('"callToAction":null');
+		expect(settings).toContain("JSON_SET(");
+		expect(settings).toContain("'$.callToAction'");
 		expect(settings).toContain('"url":"https://cal.com/demo"');
 	});
 
-	it("removes only the call to action key", async () => {
+	it("turns calls to action off for the video so a default can't apply", async () => {
 		const result = await updateVideoCallToAction(videoId, null);
-		expect(result).toEqual({ success: true, callToAction: null });
+		expect(result).toEqual({ success: true, callToAction: null, source: null });
+		expect(mocks.updates).toHaveLength(1);
 		const settings = sqlText(
 			(mocks.updates[0] as { settings: unknown }).settings,
 		);
-		expect(settings).toContain("JSON_MERGE_PATCH(");
-		expect(settings).toContain('{"callToAction":null}');
+		expect(settings).toContain("'$.callToAction'");
+		expect(settings).toContain("CAST('false' AS JSON)");
 		expect(settings).not.toContain('"url"');
+	});
+
+	it("saves as the owner's default and lets the video follow it", async () => {
+		const result = await updateVideoCallToAction(
+			videoId,
+			{ label: "Book a call", url: "cal.com/demo" },
+			{ asDefault: true },
+		);
+		expect(result).toMatchObject({ success: true, source: "default" });
+		expect(mocks.updates).toHaveLength(2);
+		const preferences = sqlText(
+			(mocks.updates[0] as { preferences: unknown }).preferences,
+		);
+		expect(preferences).toContain("'$.defaultCallToAction'");
+		expect(preferences).toContain('"url":"https://cal.com/demo"');
+		const settings = sqlText(
+			(mocks.updates[1] as { settings: unknown }).settings,
+		);
+		expect(settings).toContain("JSON_REMOVE(");
+		expect(settings).toContain("'$.callToAction'");
+	});
+
+	it("leaves the default unchanged when clearing the video's own copy fails", async () => {
+		mocks.failTransactionWrite = 1;
+		await expect(
+			updateVideoCallToAction(
+				videoId,
+				{ label: "Book a call", url: "cal.com/demo" },
+				{ asDefault: true },
+			),
+		).rejects.toThrow("write failed");
+		expect(mocks.updates).toHaveLength(0);
+	});
+});
+
+describe("updateDefaultCallToAction", () => {
+	beforeEach(() => {
+		mocks.user = { id: "owner", stripeSubscriptionStatus: "active" };
+		mocks.updates = [];
+	});
+
+	it("requires a signed-in user", async () => {
+		mocks.user = null;
+		await expect(updateDefaultCallToAction(null)).rejects.toThrow(
+			"Unauthorized",
+		);
+		expect(mocks.updates).toHaveLength(0);
+	});
+
+	it("stores the normalized default in the user's preferences", async () => {
+		const result = await updateDefaultCallToAction({
+			label: "Try it free",
+			url: "cap.so",
+		});
+		expect(result).toMatchObject({
+			success: true,
+			callToAction: { label: "Try it free", url: "https://cap.so/" },
+		});
+		const preferences = sqlText(
+			(mocks.updates[0] as { preferences: unknown }).preferences,
+		);
+		expect(preferences).toContain("JSON_SET(");
+		expect(preferences).toContain("'$.defaultCallToAction'");
+		// New users' preferences are a JSON null, which COALESCE wouldn't replace.
+		expect(preferences).toContain("JSON_TYPE(");
+		expect(preferences).not.toContain("COALESCE(");
+	});
+
+	it("needs Pro to set a default but not to remove one", async () => {
+		mocks.user = { id: "owner", stripeSubscriptionStatus: "canceled" };
+		await expect(
+			updateDefaultCallToAction({ label: "Go", url: "example.com" }),
+		).resolves.toEqual({ success: false, errors: {}, upgradeRequired: true });
+		expect(mocks.updates).toHaveLength(0);
+
+		await expect(updateDefaultCallToAction(null)).resolves.toEqual({
+			success: true,
+			callToAction: null,
+		});
+		const preferences = sqlText(
+			(mocks.updates[0] as { preferences: unknown }).preferences,
+		);
+		expect(preferences).toContain("JSON_REMOVE(");
+		expect(preferences).toContain("'$.defaultCallToAction'");
+	});
+
+	it("returns field errors without writing invalid input", async () => {
+		const result = await updateDefaultCallToAction({ label: "", url: "" });
+		expect(result.success).toBe(false);
+		expect(mocks.updates).toHaveLength(0);
 	});
 });

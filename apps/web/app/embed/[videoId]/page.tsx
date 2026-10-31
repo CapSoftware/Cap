@@ -35,7 +35,7 @@ import {
 import { resolveDefaultPlaybackSpeed } from "@/lib/playback-speed";
 import * as EffectRuntime from "@/lib/server";
 import { getSharePageBranding } from "@/lib/share-branding";
-import { parseShareCallToAction } from "@/lib/share-call-to-action";
+import { resolveShareCallToAction } from "@/lib/share-call-to-action";
 import { buildShareVideoMetadata } from "@/lib/share-video-metadata";
 import { isVideoOverShareableLinkLimit } from "@/lib/shareable-link-quota";
 import { transcribeVideo } from "@/lib/transcribe";
@@ -246,11 +246,13 @@ async function EmbedContent({
 
 	let aiGenerationEnabled = false;
 	let ownerIsProUser = false;
+	let ownerPreferences: unknown = null;
 	const videoOwnerQuery = await db()
 		.select({
 			email: users.email,
 			stripeSubscriptionStatus: users.stripeSubscriptionStatus,
 			thirdPartyStripeSubscriptionId: users.thirdPartyStripeSubscriptionId,
+			preferences: users.preferences,
 		})
 		.from(users)
 		.where(eq(users.id, video.ownerId))
@@ -260,6 +262,7 @@ async function EmbedContent({
 		const videoOwner = videoOwnerQuery[0];
 		aiGenerationEnabled = await isAiGenerationEnabled(videoOwner);
 		ownerIsProUser = userIsPro(videoOwner);
+		ownerPreferences = videoOwner.preferences;
 	}
 
 	if (
@@ -439,7 +442,8 @@ async function EmbedContent({
 			showPlaybackStatusBadge={user?.id === video.ownerId}
 			callToAction={
 				ownerIsProUser && !minimal
-					? parseShareCallToAction(video.settings)
+					? resolveShareCallToAction(video.settings, ownerPreferences)
+							.callToAction
 					: null
 			}
 		/>
