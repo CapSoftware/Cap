@@ -88,6 +88,86 @@ describe("loom-browser-conversion", () => {
 		expect(isLoomBrowserConversionAbort(new Error("Other"))).toBe(false);
 	});
 
+	it("expands time-based DASH segments with r=-1 through the period end", () => {
+		const result = parseLoomDashManifest(
+			`<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" mediaPresentationDuration="PT8S">
+				<Period><AdaptationSet contentType="video"><Representation id="hi">
+					<SegmentTemplate timescale="1000" initialization="init.webm" media="chunk-$Time$.webm">
+						<SegmentTimeline><S t="0" d="2000" r="-1"/></SegmentTimeline>
+					</SegmentTemplate>
+				</Representation></AdaptationSet></Period>
+			</MPD>`,
+			"https://luna.loom.com/video/manifest.mpd?Policy=signed",
+		);
+		expect(
+			result.videoRepresentations[0]?.segments.map((segment) => segment.url),
+		).toEqual([
+			"https://luna.loom.com/video/chunk-0.webm?Policy=signed",
+			"https://luna.loom.com/video/chunk-2000.webm?Policy=signed",
+			"https://luna.loom.com/video/chunk-4000.webm?Policy=signed",
+			"https://luna.loom.com/video/chunk-6000.webm?Policy=signed",
+		]);
+	});
+
+	it("terminates an indefinite DASH run at the next explicit timestamp", () => {
+		const result = parseLoomDashManifest(
+			`<MPD xmlns="urn:mpeg:dash:schema:mpd:2011">
+				<Period><AdaptationSet contentType="video"><Representation>
+					<SegmentTemplate timescale="1" initialization="init.webm" media="segment-$Number$.webm">
+						<SegmentTimeline><S t="0" d="2" r="-1"/><S t="6" d="2"/></SegmentTimeline>
+					</SegmentTemplate>
+				</Representation></AdaptationSet></Period></MPD>`,
+			"https://luna.loom.com/playlist.mpd",
+		);
+		expect(result.videoRepresentations[0]?.segments).toHaveLength(4);
+	});
+
+	it("retains video tracks when Loom appends a zero-length closing entry", () => {
+		const parsed = parseLoomDashManifest(
+			`<MPD xmlns="urn:mpeg:dash:schema:mpd:2011">
+				<Period><AdaptationSet contentType="video"><Representation>
+					<SegmentTemplate timescale="1" initialization="init.webm" media="part-$Number$.webm">
+						<SegmentTimeline><S t="0" d="2" r="1"/><S t="4" d="0"/></SegmentTimeline>
+					</SegmentTemplate>
+				</Representation></AdaptationSet></Period></MPD>`,
+			"https://luna.loom.com/playlist.mpd",
+		);
+		expect(parsed.videoRepresentations[0]?.segments).toHaveLength(2);
+	});
+
+	it("accounts for the presentation timestamp offset at the period end", () => {
+		const parsed = parseLoomDashManifest(
+			`<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" mediaPresentationDuration="PT8S">
+				<Period><AdaptationSet contentType="video"><Representation>
+					<SegmentTemplate timescale="1000" presentationTimeOffset="10000" initialization="init.webm" media="part-$Time$.webm">
+						<SegmentTimeline><S t="10000" d="2000" r="-1"/></SegmentTimeline>
+					</SegmentTemplate>
+				</Representation></AdaptationSet></Period></MPD>`,
+			"https://luna.loom.com/playlist.mpd",
+		);
+		expect(parsed.videoRepresentations[0]?.segments).toHaveLength(4);
+		expect(parsed.videoRepresentations[0]?.segments[3]?.url).toBe(
+			"https://luna.loom.com/part-16000.webm",
+		);
+	});
+
+	it.each(["9999999999", "1.5", "-2"])(
+		"rejects invalid DASH repeat count %s without allocating an enormous array",
+		(repeat) => {
+			expect(() =>
+				parseLoomDashManifest(
+					`<MPD xmlns="urn:mpeg:dash:schema:mpd:2011">
+						<Period><AdaptationSet contentType="video"><Representation>
+							<SegmentTemplate initialization="init.webm" media="segment-$Number$.webm">
+								<SegmentTimeline><S t="0" d="2" r="${repeat}"/></SegmentTimeline>
+							</SegmentTemplate>
+						</Representation></AdaptationSet></Period></MPD>`,
+					"https://luna.loom.com/playlist.mpd",
+				),
+			).toThrow(LoomBrowserConversionError);
+		},
+	);
+
 	it("expands Loom DASH WebM segments with inherited signed query params", () => {
 		const manifest = parseLoomDashManifest(
 			`<?xml version="1.0" encoding="UTF-8"?>
