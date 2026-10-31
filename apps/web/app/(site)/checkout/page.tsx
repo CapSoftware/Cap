@@ -1,5 +1,5 @@
 import { getCurrentUser } from "@cap/database/auth/session";
-import { buildEnv, serverEnv } from "@cap/env";
+import { serverEnv } from "@cap/env";
 import { userIsPro } from "@cap/utils";
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
@@ -42,13 +42,7 @@ export default async function CheckoutPage(props: {
 	]);
 	const publishableKey = serverEnv().STRIPE_PUBLISHABLE_KEY;
 
-	if (
-		buildEnv.NEXT_PUBLIC_IS_CAP !== "true" ||
-		!publishableKey ||
-		!customCheckoutEnabled()
-	) {
-		redirect("/pricing");
-	}
+	if (!publishableKey || !customCheckoutEnabled()) redirect("/pricing");
 	const seats = parseCheckoutSeats(first(searchParams.seats));
 
 	if (user && userIsPro(user)) {

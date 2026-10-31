@@ -13,7 +13,7 @@ const checkoutMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@cap/env", () => ({
-	buildEnv: {},
+	buildEnv: { NEXT_PUBLIC_IS_CAP: "true" },
 	serverEnv: () => checkoutMocks.env,
 }));
 

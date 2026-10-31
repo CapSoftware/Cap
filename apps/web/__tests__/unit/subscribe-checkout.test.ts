@@ -8,10 +8,14 @@ const checkoutMocks = vi.hoisted(() => ({
 	getCurrentUser: vi.fn(),
 	dbUpdate: vi.fn(),
 	env: { WEB_URL: "https://cap.so" } as Record<string, string | undefined>,
+	buildEnv: { NEXT_PUBLIC_IS_CAP: "true" } as Record<
+		string,
+		string | undefined
+	>,
 }));
 
 vi.mock("@cap/env", () => ({
-	buildEnv: { NEXT_PUBLIC_IS_CAP: "true" },
+	buildEnv: checkoutMocks.buildEnv,
 	serverEnv: () => checkoutMocks.env,
 }));
 
@@ -201,6 +205,24 @@ describe("POST /api/settings/billing/subscribe", () => {
 				STRIPE_SECRET_KEY: "sk_test_x",
 				STRIPE_PUBLISHABLE_KEY: "pk_test_x",
 			};
+			checkoutMocks.buildEnv.NEXT_PUBLIC_IS_CAP = "true";
+		});
+
+		it("keeps hosted checkout on deployments that are not Cap Cloud", async () => {
+			checkoutMocks.buildEnv.NEXT_PUBLIC_IS_CAP = "false";
+
+			const response = await subscribe(
+				makeSubscribeRequest({
+					priceId: STRIPE_PLAN_IDS.development.yearly,
+					quantity: 3,
+				}),
+			);
+
+			expect(response.status).toBe(200);
+			expect(await response.json()).toEqual({
+				url: "https://pay.cap.so/session",
+			});
+			expect(checkoutMocks.create).toHaveBeenCalledTimes(1);
 		});
 
 		it("sends the buyer to /checkout without creating a hosted session", async () => {
