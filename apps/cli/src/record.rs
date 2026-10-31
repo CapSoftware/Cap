@@ -251,10 +251,6 @@ fn automation_mode(mode: RecordMode) -> cap_automation::AutomationRecordingMode 
 
 async fn run_detached(params: RecordParams, format: OutputFormat) -> Result<(), String> {
     let recording_id = new_recording_id();
-    // Validate the target up front so a bad --screen/--window fails fast with a clear message rather
-    // than surfacing later from the background worker's log.
-    resolve_target(&params)?;
-
     let path = resolve_path(&params, &recording_id)?;
     let path = if path.is_absolute() {
         path
@@ -263,6 +259,13 @@ async fn run_detached(params: RecordParams, format: OutputFormat) -> Result<(), 
             .map_err(|e| format!("Could not determine current directory: {e}"))?
             .join(path)
     };
+
+    if path.to_str().is_none() {
+        return Err("Detached recording paths must be valid UTF-8; choose a different path or working directory".to_string());
+    }
+
+    // Validate before spawning so target errors do not surface only in the worker log.
+    resolve_target(&params)?;
 
     let exe =
         std::env::current_exe().map_err(|e| format!("Could not locate the cap executable: {e}"))?;
@@ -1321,6 +1324,43 @@ fn emit_record_event(format: OutputFormat, event: &RecordEvent<'_>) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn detached_recording_rejects_non_utf8_path_before_starting() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let root = tempfile::tempdir().unwrap();
+        let path = root
+            .path()
+            .join(std::ffi::OsString::from_vec(b"capture-\xff.cap".to_vec()));
+        let params = RecordParams {
+            target: RecordTargets {
+                screen: None,
+                window: None,
+            },
+            mode: RecordMode::Studio,
+            camera: None,
+            mic: None,
+            system_audio: false,
+            path: Some(path.clone()),
+            fps: None,
+            duration: None,
+        };
+
+        let error = run_detached(params.clone(), OutputFormat::Text)
+            .await
+            .unwrap_err();
+        assert!(error.contains("valid UTF-8"), "{error}");
+        assert!(!path.exists());
+
+        let mut valid_params = params;
+        valid_params.path = Some(root.path().join("capture-记录.cap"));
+        let error = run_detached(valid_params, OutputFormat::Text)
+            .await
+            .unwrap_err();
+        assert!(error.contains("No target specified"), "{error}");
+    }
 
     #[test]
     fn instant_project_is_discoverable_before_capture_with_required_audio_intent() {
