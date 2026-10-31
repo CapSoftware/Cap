@@ -61,6 +61,8 @@ class Stream {
 
 class Recorder {
 	static isTypeSupported = () => true;
+	static last: Recorder;
+	static stopError = false;
 	static startError: Error | null = null;
 
 	state: RecordingState = "inactive";
@@ -69,7 +71,9 @@ class Recorder {
 	onerror: ((event: Event) => void) | null = null;
 	mimeType = "video/webm";
 
-	constructor(private readonly stream: Stream) {}
+	constructor(private readonly stream: Stream) {
+		Recorder.last = this;
+	}
 
 	start() {
 		if (Recorder.startError) throw Recorder.startError;
@@ -81,6 +85,18 @@ class Recorder {
 
 	stop() {
 		this.state = "inactive";
+		if (Recorder.stopError)
+			queueMicrotask(() => {
+				const error = new Event("error");
+				Object.defineProperty(error, "target", { value: this });
+				Object.defineProperty(error, "error", {
+					value: new Error("Encoder failed"),
+				});
+				this.onerror?.(error);
+				const stopped = new Event("stop");
+				Object.defineProperty(stopped, "target", { value: this });
+				this.onstop?.(stopped);
+			});
 	}
 }
 
@@ -100,6 +116,7 @@ describe("comment recorder lifecycle", () => {
 	beforeEach(async () => {
 		vi.clearAllMocks();
 		Recorder.startError = null;
+		Recorder.stopError = false;
 		vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 		vi.stubGlobal("MediaStream", Stream);
 		vi.stubGlobal("MediaRecorder", Recorder);
@@ -182,5 +199,44 @@ describe("comment recorder lifecycle", () => {
 			"Recording couldn't start. Please choose the source again.",
 		);
 		expect(videoTrack.stop).toHaveBeenCalled();
+	});
+	it.each([true, false])(
+		"releases video capture after an unexpected browser stop (error: %s)",
+		async (error) => {
+			const video = new Track("video");
+			mocks.display.mockResolvedValue(new Stream([video]));
+			mocks.mic.mockRejectedValue(new Error("No microphone"));
+			await act(async () => recorder.startScreen());
+			expect(recorder.phase).toBe("recording");
+			const target = Recorder.last;
+			await act(async () => {
+				if (error) {
+					const event = new Event("error");
+					Object.defineProperty(event, "target", { value: target });
+					Object.defineProperty(event, "error", {
+						value: new Error("Encoder failed"),
+					});
+					target.onerror?.(event);
+				}
+				target.state = "inactive";
+				const event = new Event("stop");
+				Object.defineProperty(event, "target", { value: target });
+				target.onstop?.(event);
+			});
+			expect(video.stop).toHaveBeenCalled();
+			expect(recorder.phase).toBe("idle");
+			expect(recorder.error).toContain("stopped unexpectedly");
+		},
+	);
+	it("reports a video encoder error received while stopping", async () => {
+		const video = new Track("video");
+		mocks.display.mockResolvedValue(new Stream([video]));
+		mocks.mic.mockRejectedValue(new Error("No microphone"));
+		await act(async () => recorder.startScreen());
+		Recorder.stopError = true;
+		await act(async () => recorder.stop());
+		expect(video.stop).toHaveBeenCalled();
+		expect(recorder.phase).toBe("idle");
+		expect(recorder.error).toContain("stopped unexpectedly");
 	});
 });

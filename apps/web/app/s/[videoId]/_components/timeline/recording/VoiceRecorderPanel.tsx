@@ -121,13 +121,15 @@ export function VoiceRecorderPanel({
 						</svg>
 					</span>
 					<p className="text-xs leading-relaxed text-gray-11">
-						{phase === "denied"
-							? "Microphone is blocked. Enable it in your browser settings, then try again."
-							: phase === "requesting"
-								? "Waiting for microphone access…"
-								: devices.mics.length > 0
-									? "Pick a microphone, then click Start to record your voice note."
-									: "Click Start and your browser will ask for microphone access."}
+						{phase === "error"
+							? "Recording stopped unexpectedly. Please try again."
+							: phase === "denied"
+								? "Microphone is blocked. Enable it in your browser settings, then try again."
+								: phase === "requesting"
+									? "Waiting for microphone access…"
+									: devices.mics.length > 0
+										? "Pick a microphone, then click Start to record your voice note."
+										: "Click Start and your browser will ask for microphone access."}
 					</p>
 				</div>
 			)}
@@ -208,7 +210,7 @@ export function VoiceRecorderPanel({
 							disabled={phase === "requesting"}
 							className="h-7 rounded-lg bg-blue-9 px-3 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40"
 						>
-							{phase === "denied" ? "Try again" : "Start"}
+							{phase === "denied" || phase === "error" ? "Try again" : "Start"}
 						</button>
 					</>
 				)}
