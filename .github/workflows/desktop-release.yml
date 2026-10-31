@@ -116,7 +116,7 @@ jobs:
                 releasePublished = !release.draft;
 
                 if (releasePublished)
-                  throw new Error(`Release '${tag}' is already published: ${releaseUrl}. Bump apps/desktop/src-tauri/Cargo.toml before publishing a new build.`);
+                  throw new Error(`Release '${tag}' is already published: ${releaseUrl}. Bump apps/desktop-gpui/Cargo.toml before publishing a new build.`);
                 else
                   core.notice(`Draft release '${tag}' already exists. Continuing build and upload.`);
               }
@@ -287,20 +287,25 @@ jobs:
         shell: bash
         env:
           BUILD_VERSION: ${{ inputs.version }}
+        # promote-nightly can rebuild a commit from before the Tauri app was
+        # removed, where apps/desktop/src-tauri/Cargo.toml was the version
+        # source, so that manifest is stamped too when it exists.
         run: |
           node -e '
             const fs = require("fs");
-            const path = "apps/desktop/src-tauri/Cargo.toml";
             const version = process.env.BUILD_VERSION;
-            let toml = fs.readFileSync(path, "utf8");
-            const re = /^version = ".*"$/m;
-            if (!re.test(toml)) {
-              console.error("package.version line not found in " + path);
-              process.exit(1);
+            const manifests = ["apps/desktop-gpui/Cargo.toml", "apps/desktop/src-tauri/Cargo.toml"];
+            for (const path of manifests.filter((path, index) => index === 0 || fs.existsSync(path))) {
+              let toml = fs.readFileSync(path, "utf8");
+              const re = /^version = ".*"$/m;
+              if (!re.test(toml)) {
+                console.error("package.version line not found in " + path);
+                process.exit(1);
+              }
+              toml = toml.replace(re, "version = \"" + version + "\"");
+              fs.writeFileSync(path, toml);
+              console.log("Stamped " + path + " with " + version);
             }
-            toml = toml.replace(re, "version = \"" + version + "\"");
-            fs.writeFileSync(path, toml);
-            console.log("Stamped " + path + " with " + version);
           '
           node scripts/sync-desktop-versions.mjs
 
@@ -359,7 +364,7 @@ jobs:
           free -h
 
       # The same link used to exhaust commit on the 16GB Windows runner
-      # ("rustc-LLVM ERROR: out of memory" while linking cap-desktop), so
+      # ("rustc-LLVM ERROR: out of memory" while linking the desktop app), so
       # raise the pagefile on the roomy D: disk, the Windows analog of the
       # Linux swapfile above. Kept for headroom after the move to thin LTO.
       - name: Increase pagefile size (Windows)
@@ -745,6 +750,17 @@ jobs:
             echo "::error::The Cap AppImage bundles PipeWire that can conflict with host ALSA plugins"
             exit 1
           fi
+          if [[ -n "$(find "$APPROOT/usr/lib" -maxdepth 1 -name 'libva*.so*' -print -quit)" ]]; then
+            echo "::error::The Cap AppImage puts its libva where Cap loads it ahead of the host's, which breaks host PipeWire plugins"
+            exit 1
+          fi
+          test -e "$APPROOT/usr/lib/cap/libva/libva.so.2"
+          test -e "$APPROOT/usr/lib/cap/libva/libva-drm.so.2"
+          grep -qx 'exec "$cap_appdir/usr/bin/Cap" "$@"' "$APPROOT/AppRun"
+          if grep -q 'AppRun.cap-original' "$APPROOT/AppRun"; then
+            echo "::error::The Cap AppImage still starts through the generic AppImage launcher"
+            exit 1
+          fi
 
       - name: Build Arch Linux package
         id: build_arch
@@ -879,8 +895,12 @@ jobs:
       - name: Re-sign Windows installer for the updater
         if: ${{ runner.os == 'Windows' }}
         shell: bash
-        working-directory: apps/desktop
         run: |
+          # Commits from before the Tauri app was removed (promote-nightly)
+          # keep the Tauri CLI in apps/desktop.
+          tauri_dir=apps/desktop-gpui
+          [[ -f "$tauri_dir/package.json" ]] || tauri_dir=apps/desktop
+          cd "$tauri_dir"
           BUNDLE_DIR="../../$CAP_BUNDLE/nsis"
           for exe in "$BUNDLE_DIR"/*.exe; do
             echo "Re-signing $(basename "$exe") for the updater..."

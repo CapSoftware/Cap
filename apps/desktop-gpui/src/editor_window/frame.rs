@@ -1,4 +1,6 @@
-use cap_project::{FrameConfiguration, FrameStyle, FrameTheme, ProjectConfiguration};
+use cap_project::{
+    BackgroundConfiguration, FrameConfiguration, FrameStyle, FrameTheme, ProjectConfiguration,
+};
 use gpui::{
     AppContext as _, Context, Entity, FontWeight, InteractiveElement, IntoElement, MouseButton,
     ParentElement, StatefulInteractiveElement as _, Styled, Window, div, point,
@@ -6,37 +8,39 @@ use gpui::{
 };
 
 use super::EditorWindow;
-use crate::ui;
+use crate::{i18n::tr, ui};
 
-const FRAME_STYLES: [(FrameStyle, &str, &str, &str); 5] = [
+type Text = fn() -> &'static str;
+
+const FRAME_STYLES: [(FrameStyle, Text, Text, &str); 5] = [
     (
         FrameStyle::None,
-        "None",
-        "Show the recording as-is",
+        tr::editor::window::frame::none,
+        tr::editor::window::frame::none_description,
         "icons/ban.svg",
     ),
     (
         FrameStyle::MacOS,
-        "macOS",
-        "Window chrome with traffic lights",
+        || "macOS",
+        tr::editor::window::frame::macos_description,
         "icons/app-window-mac.svg",
     ),
     (
         FrameStyle::Windows,
-        "Windows",
-        "Title bar with window controls",
+        || "Windows",
+        tr::editor::window::frame::windows_description,
         "icons/app-window.svg",
     ),
     (
         FrameStyle::Browser,
-        "Browser",
-        "Browser chrome with address bar",
+        tr::editor::window::frame::browser,
+        tr::editor::window::frame::browser_description,
         "icons/globe.svg",
     ),
     (
         FrameStyle::Macbook,
-        "MacBook",
-        "Laptop bezel around the recording",
+        || "MacBook",
+        tr::editor::window::frame::macbook_description,
         "icons/laptop.svg",
     ),
 ];
@@ -100,8 +104,15 @@ impl FrameField {
 
     fn label(self) -> &'static str {
         match self {
-            Self::Url => "URL",
-            Self::Title => "Title",
+            Self::Url => tr::editor::window::frame::url(),
+            Self::Title => tr::editor::window::frame::title(),
+        }
+    }
+
+    fn placeholder(self) -> &'static str {
+        match self {
+            Self::Url => "cap.so",
+            Self::Title => tr::editor::window::frame::window_title_placeholder(),
         }
     }
 
@@ -120,18 +131,22 @@ enum FrameChange {
 }
 
 fn apply_frame_change(project: &mut ProjectConfiguration, change: FrameChange) -> bool {
-    let previous = project.background.frame.clone();
-    let frame = project
-        .background
-        .frame
-        .get_or_insert_with(Default::default);
+    apply_background_frame_change(&mut project.background, change)
+}
+
+fn apply_background_frame_change(
+    background: &mut BackgroundConfiguration,
+    change: FrameChange,
+) -> bool {
+    let previous = background.frame.clone();
+    let frame = background.frame.get_or_insert_with(Default::default);
     match change {
         FrameChange::Style(style) => frame.style = style,
         FrameChange::Theme(theme) => frame.theme = theme,
         FrameChange::Text(FrameField::Url, text) => frame.url = text,
         FrameChange::Text(FrameField::Title, text) => frame.title = text,
     }
-    project.background.frame != previous
+    background.frame != previous
 }
 
 fn apply_targeted_frame_change(
@@ -145,22 +160,6 @@ fn apply_targeted_frame_change(
     if !target.matches(project) {
         return false;
     }
-    let mut scoped = project.clone();
-    let Some(segment) = project
-        .timeline
-        .as_ref()
-        .and_then(|timeline| timeline.style_segments.get(target.index))
-    else {
-        return false;
-    };
-    scoped.background = segment
-        .overrides
-        .background
-        .clone()
-        .unwrap_or_else(|| project.background.clone());
-    if !apply_frame_change(&mut scoped, change) {
-        return false;
-    }
     let Some(segment) = project
         .timeline
         .as_mut()
@@ -168,19 +167,35 @@ fn apply_targeted_frame_change(
     else {
         return false;
     };
-    segment.overrides.background = Some(scoped.background);
+    // The edit only ever touches the background, so clone that rather than the
+    // whole project: the text fields send one of these per keystroke.
+    let mut background = segment
+        .overrides
+        .background
+        .clone()
+        .unwrap_or_else(|| project.background.clone());
+    if !apply_background_frame_change(&mut background, change) {
+        return false;
+    }
+    segment.overrides.background = Some(background);
     true
 }
 
 fn button_content(style: FrameStyle) -> (&'static str, &'static str) {
     if style == FrameStyle::None {
-        return ("Frame", "icons/app-window-mac.svg");
+        return (
+            tr::editor::window::frame::button(),
+            "icons/app-window-mac.svg",
+        );
     }
     FRAME_STYLES
         .iter()
         .find(|option| option.0 == style)
-        .map(|option| (option.1, option.3))
-        .unwrap_or(("Frame", "icons/app-window-mac.svg"))
+        .map(|option| ((option.1)(), option.3))
+        .unwrap_or((
+            tr::editor::window::frame::button(),
+            "icons/app-window-mac.svg",
+        ))
 }
 
 impl EditorWindow {
@@ -229,7 +244,7 @@ impl EditorWindow {
         {
             *target = next;
         }
-        self.project_changed(window, cx);
+        self.project_changed_without_timeline(window, cx);
     }
 
     fn frame_style(&self) -> FrameStyle {
@@ -252,7 +267,7 @@ impl EditorWindow {
                     .left_icon(icon)
                     .right_icon("icons/chevron-down.svg")
                     .when(!narrow, |button| button.label(label))
-                    .tooltip(&self.theme, "Add a frame")
+                    .tooltip(&self.theme, tr::editor::window::frame::add_tooltip())
                     .pressed(self.frame_controls.open)
                     .disabled(self.instance.is_none())
                     .on_click(cx.listener(|this, _, window, cx| {
@@ -287,10 +302,7 @@ impl EditorWindow {
             self.frame_controls.fields = Some([FrameField::Url, FrameField::Title].map(|field| {
                 let input = cx.new(|cx| {
                     let mut input = ui::TextInputState::single_line(window, cx);
-                    input.set_placeholder(match field {
-                        FrameField::Url => "cap.so",
-                        FrameField::Title => "Window title",
-                    });
+                    input.set_placeholder(field.placeholder());
                     input
                 });
                 let subscription =
@@ -305,6 +317,7 @@ impl EditorWindow {
         if let Some(inputs) = &self.frame_controls.fields {
             for field in [FrameField::Url, FrameField::Title] {
                 let input = &inputs[field.index()];
+                input.update(cx, |input, _| input.set_placeholder(field.placeholder()));
                 if !input.read(cx).focus_handle().is_focused(window) {
                     input.update(cx, |input, cx| {
                         input.set_text(field.text(&frame).to_owned(), cx)
@@ -415,13 +428,13 @@ impl EditorWindow {
                             .text_size(px(13.))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme.gray(12))
-                            .child("Frame"),
+                            .child(tr::editor::window::frame::heading()),
                     )
                     .child(
                         div().text_size(px(11.)).text_color(theme.gray(10)).child(
                             match &self.frame_controls.style_target {
                                 Some(target) if !target.matches(&self.project) => {
-                                    "This Style changed. Close and reopen Frame.".to_string()
+                                    tr::editor::window::frame::style_changed().to_string()
                                 }
                                 Some(target)
                                     if self
@@ -435,19 +448,12 @@ impl EditorWindow {
                                             segment.overrides.background.is_none()
                                         }) =>
                                 {
-                                    format!(
-                                        "Style {} only · Editing enables its background override.",
-                                        target.index + 1
-                                    )
+                                    tr::editor::window::frame::style_only_override(target.index + 1)
                                 }
-                                Some(target) => format!(
-                                    "Style {} only · Global settings stay unchanged.",
-                                    target.index + 1
-                                ),
-                                None => {
-                                    "Global frame · Applies wherever Style inherits background."
-                                        .to_string()
+                                Some(target) => {
+                                    tr::editor::window::frame::style_only(target.index + 1)
                                 }
+                                None => tr::editor::window::frame::global().to_string(),
                             },
                         ),
                     ),
@@ -455,6 +461,7 @@ impl EditorWindow {
             .child(div().flex().flex_col().gap(px(2.)).p(px(6.)).children(
                 FRAME_STYLES.into_iter().enumerate().map(
                     |(index, (value, label, description, icon))| {
+                        let (label, description) = (label(), description());
                         let selected = value == style;
                         div()
                             .id(("frame-style", index))
@@ -543,7 +550,7 @@ impl EditorWindow {
                                         .text_size(px(12.))
                                         .font_weight(FontWeight::MEDIUM)
                                         .text_color(theme.gray(11))
-                                        .child("Theme"),
+                                        .child(tr::editor::window::frame::theme()),
                                 )
                                 .child(
                                     div()
@@ -556,8 +563,14 @@ impl EditorWindow {
                                         .p(px(1.))
                                         .children(
                                             [
-                                                (FrameTheme::Light, "Light"),
-                                                (FrameTheme::Dark, "Dark"),
+                                                (
+                                                    FrameTheme::Light,
+                                                    tr::editor::window::frame::light(),
+                                                ),
+                                                (
+                                                    FrameTheme::Dark,
+                                                    tr::editor::window::frame::dark(),
+                                                ),
                                             ]
                                             .into_iter()
                                             .map(
@@ -671,7 +684,7 @@ mod tests {
     #[test]
     fn frame_styles_and_button_labels_match_tauri() {
         assert_eq!(
-            FRAME_STYLES.map(|option| option.1),
+            FRAME_STYLES.map(|option| (option.1)()),
             ["None", "macOS", "Windows", "Browser", "MacBook"]
         );
         assert_eq!(
@@ -679,7 +692,7 @@ mod tests {
             ("Frame", "icons/app-window-mac.svg")
         );
         for (style, label, _, icon) in FRAME_STYLES.into_iter().skip(1) {
-            assert_eq!(button_content(style), (label, icon));
+            assert_eq!(button_content(style), (label(), icon));
         }
     }
 
@@ -726,6 +739,294 @@ mod tests {
         for style in [FrameStyle::None, FrameStyle::Windows, FrameStyle::Macbook] {
             assert!(FrameField::for_style(style).is_none());
         }
+    }
+
+    /// The pre-PR clone/fallback flow, kept test-only so the benchmark below
+    /// can measure the clone it removed in the same run as the current one.
+    /// It shares the current frame mutator, which behaves exactly like the
+    /// pre-PR one.
+    fn apply_targeted_frame_change_with_project_clone(
+        project: &mut ProjectConfiguration,
+        target: Option<&StyleFrameTarget>,
+        change: FrameChange,
+    ) -> bool {
+        let Some(target) = target else {
+            return apply_frame_change(project, change);
+        };
+        if !target.matches(project) {
+            return false;
+        }
+        let mut scoped = project.clone();
+        let Some(segment) = project
+            .timeline
+            .as_ref()
+            .and_then(|timeline| timeline.style_segments.get(target.index))
+        else {
+            return false;
+        };
+        scoped.background = segment
+            .overrides
+            .background
+            .clone()
+            .unwrap_or_else(|| project.background.clone());
+        if !apply_frame_change(&mut scoped, change) {
+            return false;
+        }
+        let Some(segment) = project
+            .timeline
+            .as_mut()
+            .and_then(|timeline| timeline.style_segments.get_mut(target.index))
+        else {
+            return false;
+        };
+        segment.overrides.background = Some(scoped.background);
+        true
+    }
+
+    fn style_frame_project(timeline_segments: usize, with_override: bool) -> ProjectConfiguration {
+        let mut project = ProjectConfiguration::default();
+        project.timeline = Some(cap_project::TimelineConfiguration {
+            segments: (0..timeline_segments)
+                .map(|index| cap_project::TimelineSegment {
+                    timescale: 1.,
+                    start: index as f64,
+                    end: index as f64 + 1.,
+                    ..Default::default()
+                })
+                .collect(),
+            transitions: Vec::new(),
+            zoom_segments: Vec::new(),
+            scene_segments: Vec::new(),
+            mask_segments: Vec::new(),
+            text_segments: Vec::new(),
+            caption_segments: Vec::new(),
+            keyboard_segments: Vec::new(),
+            audio_segments: Vec::new(),
+            style_segments: vec![cap_project::StyleSegment {
+                overrides: cap_project::StyleOverrides {
+                    background: with_override.then(|| BackgroundConfiguration {
+                        frame: Some(FrameConfiguration {
+                            style: FrameStyle::MacOS,
+                            ..Default::default()
+                        }),
+                        padding: 77.5,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }],
+            image_segments: Vec::new(),
+            camera3d_segments: Vec::new(),
+        });
+        project
+    }
+
+    fn style_frame_lanes(project: &ProjectConfiguration) -> crate::editor_timeline::TrackLanes {
+        crate::editor_timeline::TrackLanes::from_project(project, false)
+    }
+
+    fn frame_change_cases() -> [fn() -> FrameChange; 4] {
+        [
+            || FrameChange::Style(FrameStyle::Windows),
+            || FrameChange::Theme(FrameTheme::Light),
+            || FrameChange::Text(FrameField::Title, "Changed title".into()),
+            || FrameChange::Text(FrameField::Url, "https://example.com".into()),
+        ]
+    }
+
+    fn median(samples: &mut Vec<f64>) -> f64 {
+        assert!(samples.len() > 1, "need a warm-up and a sample");
+        samples.remove(0);
+        samples.sort_by(f64::total_cmp);
+        samples[samples.len() / 2]
+    }
+
+    fn edit_frame_title(
+        project: &mut ProjectConfiguration,
+        target: &mut StyleFrameTarget,
+        i: usize,
+        j: usize,
+        clone_project: bool,
+    ) {
+        let text = format!("Window title {i}-{j}");
+        let changed = if clone_project {
+            apply_targeted_frame_change_with_project_clone(
+                project,
+                Some(target),
+                FrameChange::Text(FrameField::Title, text),
+            )
+        } else {
+            apply_targeted_frame_change(
+                project,
+                Some(target),
+                FrameChange::Text(FrameField::Title, text),
+            )
+        };
+        if changed && let Some(next) = StyleFrameTarget::capture(project, target.index) {
+            *target = next;
+        }
+    }
+
+    /// One keystroke in a style frame's title field, with the old
+    /// clone-the-project implementation and the current one measured in the
+    /// same run, plus the timeline rebuild `project_changed` used to do.
+    /// `cargo test -p cap-desktop-gpui --bin cap-gpui -- --ignored benchmark_style_frame_edit --nocapture`
+    #[test]
+    #[ignore = "manual style frame edit benchmark"]
+    fn benchmark_style_frame_edit() {
+        let mut cloned = style_frame_project(2_000, true);
+        let mut borrowed = cloned.clone();
+        let mut cloned_target = StyleFrameTarget::capture(&cloned, 0).expect("the style segment");
+        let mut borrowed_target =
+            StyleFrameTarget::capture(&borrowed, 0).expect("the style segment");
+
+        let mut clone_samples = Vec::new();
+        for i in 0..32 {
+            let started = std::time::Instant::now();
+            for j in 0..10 {
+                edit_frame_title(&mut cloned, &mut cloned_target, i, j, true);
+            }
+            clone_samples.push(started.elapsed().as_secs_f64() * 1_000_000. / 10.);
+        }
+        let clone_edit = median(&mut clone_samples);
+
+        let mut borrow_samples = Vec::new();
+        for i in 0..32 {
+            let started = std::time::Instant::now();
+            for j in 0..10 {
+                edit_frame_title(&mut borrowed, &mut borrowed_target, i, j, false);
+            }
+            borrow_samples.push(started.elapsed().as_secs_f64() * 1_000_000. / 10.);
+        }
+        let borrow_edit = median(&mut borrow_samples);
+
+        assert_eq!(
+            serde_json::to_value(&cloned).unwrap(),
+            serde_json::to_value(&borrowed).unwrap(),
+            "the old and new implementations must leave the same project"
+        );
+
+        // The other half of the old per-keystroke path: `project_changed`
+        // rebuilt this model every time.
+        let lanes = style_frame_lanes(&borrowed);
+        let mut rebuild_samples = Vec::new();
+        for _ in 0..16 {
+            let started = std::time::Instant::now();
+            for _ in 0..10 {
+                drop(std::hint::black_box(
+                    crate::editor_timeline::TimelineModel::build_with_lanes(
+                        &borrowed, false, false, &lanes,
+                    ),
+                ));
+            }
+            rebuild_samples.push(started.elapsed().as_secs_f64() * 1_000_000. / 10.);
+        }
+        let rebuild = median(&mut rebuild_samples);
+        println!(
+            "style_frame_edit timeline_segments=2000 clone_edit_us={clone_edit:.3} borrow_edit_us={borrow_edit:.3} timeline_rebuild_us={rebuild:.3}"
+        );
+    }
+
+    #[test]
+    fn a_frame_edit_does_not_change_the_timeline_model() {
+        for with_override in [false, true] {
+            for targeted in [false, true] {
+                for change in frame_change_cases() {
+                    let mut project = style_frame_project(64, with_override);
+                    let target = StyleFrameTarget::capture(&project, 0).expect("the style segment");
+                    let lanes = style_frame_lanes(&project);
+                    let before = crate::editor_timeline::TimelineModel::build_with_lanes(
+                        &project, false, false, &lanes,
+                    );
+                    assert!(
+                        apply_targeted_frame_change(
+                            &mut project,
+                            targeted.then_some(&target),
+                            change(),
+                        ),
+                        "the frame change should apply \
+                         (override={with_override}, targeted={targeted})"
+                    );
+                    let after = crate::editor_timeline::TimelineModel::build_with_lanes(
+                        &project, false, false, &lanes,
+                    );
+                    assert_eq!(
+                        format!("{before:?}"),
+                        format!("{after:?}"),
+                        "a frame edit must not change anything the timeline model draws \
+                         (override={with_override}, targeted={targeted})"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_targeted_frame_edit_matches_the_clone_the_project_flow() {
+        for with_override in [false, true] {
+            for change in frame_change_cases() {
+                let mut cloned = style_frame_project(8, with_override);
+                let mut borrowed = cloned.clone();
+                let target = StyleFrameTarget::capture(&cloned, 0).expect("the style segment");
+                assert_eq!(
+                    apply_targeted_frame_change_with_project_clone(
+                        &mut cloned,
+                        Some(&target),
+                        change(),
+                    ),
+                    apply_targeted_frame_change(&mut borrowed, Some(&target), change()),
+                    "the old and new implementations must agree (override={with_override})"
+                );
+                assert_eq!(
+                    serde_json::to_value(&cloned).unwrap(),
+                    serde_json::to_value(&borrowed).unwrap(),
+                    "the old and new implementations must leave the same project \
+                     (override={with_override})"
+                );
+            }
+        }
+
+        // A missing target takes the global-background path in both.
+        let mut cloned = style_frame_project(8, false);
+        let mut borrowed = cloned.clone();
+        assert_eq!(
+            apply_targeted_frame_change_with_project_clone(
+                &mut cloned,
+                None,
+                FrameChange::Style(FrameStyle::Windows),
+            ),
+            apply_targeted_frame_change(
+                &mut borrowed,
+                None,
+                FrameChange::Style(FrameStyle::Windows),
+            )
+        );
+        assert_eq!(
+            serde_json::to_value(&cloned).unwrap(),
+            serde_json::to_value(&borrowed).unwrap()
+        );
+
+        // A stale target is a no-op in both.
+        let mut cloned = style_frame_project(8, false);
+        let mut borrowed = cloned.clone();
+        let target = StyleFrameTarget::capture(&cloned, 0).expect("the style segment");
+        cloned.timeline.as_mut().unwrap().style_segments[0].name = "Moved".into();
+        borrowed.timeline.as_mut().unwrap().style_segments[0].name = "Moved".into();
+        assert!(!apply_targeted_frame_change_with_project_clone(
+            &mut cloned,
+            Some(&target),
+            FrameChange::Style(FrameStyle::Windows),
+        ));
+        assert!(!apply_targeted_frame_change(
+            &mut borrowed,
+            Some(&target),
+            FrameChange::Style(FrameStyle::Windows),
+        ));
+        assert_eq!(
+            serde_json::to_value(&cloned).unwrap(),
+            serde_json::to_value(&borrowed).unwrap()
+        );
     }
 
     #[test]

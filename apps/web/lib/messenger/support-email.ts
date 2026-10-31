@@ -105,7 +105,7 @@ export const sendMessengerSupportEmail = async ({
 		return reserved;
 	}
 
-	await sendEmail({
+	const delivery = await sendEmail({
 		email: SUPPORT_EMAIL_TO,
 		subject: `Messenger support: ${normalizedSubject}`,
 		react: MessengerSupportEmail({
@@ -117,6 +117,9 @@ export const sendMessengerSupportEmail = async ({
 		replyTo: user.email,
 		fromOverride: SUPPORT_EMAIL_FROM,
 	});
+	if (delivery?.error) {
+		throw new Error(`Support email was not sent: ${delivery.error.message}`);
+	}
 
 	return reserved;
 };

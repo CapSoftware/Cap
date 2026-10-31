@@ -1,3 +1,5 @@
+use std::mem::MaybeUninit;
+
 pub fn unpad_rows(data: &[u8], row_bytes: usize, stride: usize, rows: usize) -> Option<Vec<u8>> {
     if stride == 0 {
         return None;
@@ -68,17 +70,31 @@ pub fn copy_rows(
     if stride < row_bytes || data.len() < rows.checked_mul(stride)? {
         return None;
     }
-    let mut pixels = vec![0; rows.checked_mul(row_bytes)?];
-    for (row, output) in pixels.chunks_exact_mut(row_bytes.max(1)).enumerate() {
-        let input = &data[row * stride..row * stride + row_bytes];
-        if mirrored {
-            for (target, source) in output.chunks_exact_mut(4).zip(input.chunks_exact(4).rev()) {
-                target.copy_from_slice(source);
-            }
-        } else {
-            output.copy_from_slice(input);
-        }
+    let output_len = rows.checked_mul(row_bytes)?;
+    if output_len == 0 {
+        return Some(Vec::new());
     }
+    if !mirrored {
+        let mut pixels = Vec::with_capacity(output_len);
+        for input in data.chunks(stride).take(rows) {
+            pixels.extend_from_slice(&input[..row_bytes]);
+        }
+        return Some(pixels);
+    }
+    let mut pixels = Vec::with_capacity(output_len);
+    let spare = &mut pixels.spare_capacity_mut()[..output_len];
+    for (input, output) in data.chunks(stride).zip(spare.chunks_exact_mut(row_bytes)) {
+        let (target, padding) = output.as_chunks_mut::<4>();
+        for (pixel, source) in target
+            .iter_mut()
+            .zip(input[..row_bytes].as_chunks::<4>().0.iter().rev())
+        {
+            *pixel = source.map(MaybeUninit::new);
+        }
+        padding.fill(MaybeUninit::new(0));
+    }
+    // SAFETY: every row writes all row_bytes of its chunk, so all output_len bytes are initialized.
+    unsafe { pixels.set_len(output_len) };
     Some(pixels)
 }
 
@@ -333,6 +349,53 @@ mod tests {
         );
         assert_eq!(copy_rows(&PADDED, 8, 6, 2, false), None);
         assert_eq!(copy_rows(&PADDED, 8, 10, 3, false), None);
+    }
+
+    fn zeroed_copy_rows(
+        data: &[u8],
+        row_bytes: usize,
+        stride: usize,
+        rows: usize,
+        mirrored: bool,
+    ) -> Vec<u8> {
+        let mut pixels = vec![0; rows * row_bytes];
+        for (row, output) in pixels.chunks_exact_mut(row_bytes.max(1)).enumerate() {
+            let input = &data[row * stride..row * stride + row_bytes];
+            if mirrored {
+                let source = input.as_chunks::<4>().0.iter().rev();
+                for (target, source) in output.as_chunks_mut::<4>().0.iter_mut().zip(source) {
+                    *target = *source;
+                }
+            } else {
+                output.copy_from_slice(input);
+            }
+        }
+        pixels
+    }
+
+    #[test]
+    fn copy_rows_matches_a_zeroed_copy_for_every_shape() {
+        for (row_bytes, stride, rows) in [
+            (0, 0, 3),
+            (0, 8, 3),
+            (8, 8, 0),
+            (4, 4, 1),
+            (12, 12, 5),
+            (12, 16, 5),
+            (15, 15, 3),
+            (15, 64, 3),
+            (1280 * 3, 1280 * 3 + 64, 7),
+            (1366 * 4, (1366 * 4usize).next_multiple_of(256), 9),
+        ] {
+            let data: Vec<u8> = (0..stride * rows + 5).map(|i| (i * 7 + 3) as u8).collect();
+            for mirrored in [false, true] {
+                assert_eq!(
+                    copy_rows(&data, row_bytes, stride, rows, mirrored).unwrap(),
+                    zeroed_copy_rows(&data, row_bytes, stride, rows, mirrored),
+                    "{row_bytes} {stride} {rows} {mirrored}"
+                );
+            }
+        }
     }
 
     #[test]

@@ -2,7 +2,7 @@
 
 import { type RefObject, useEffect, useRef } from "react";
 import { usePlayback } from "../playback/PlaybackContext";
-import { useTimelineWindowRef } from "./TimelineProvider";
+import { useTimelineWindow } from "./TimelineProvider";
 import {
 	fractionInWindow,
 	RAIL_PAD_X,
@@ -14,26 +14,18 @@ interface TimelinePlayheadProps {
 	widthRef: RefObject<number>;
 }
 
-/**
- * Rendered exactly once and then never again: the subscriber writes a transform
- * straight to the DOM, so a playing video costs zero React work here — including
- * when a zoom pushes the playhead out of the window and the needle has to
- * disappear. Deliberately unlabelled: the transport clock is the deck's single
- * time readout, and the needle only marks where it is.
- */
 export function TimelinePlayhead({ widthRef }: TimelinePlayheadProps) {
 	const playback = usePlayback();
-	const windowRef = useTimelineWindowRef();
+	const { start, end } = useTimelineWindow();
 	const rootRef = useRef<HTMLDivElement | null>(null);
 
 	useEffect(() => {
 		const root = rootRef.current;
 		if (!root) return;
 
-		let visible = true;
+		let visible = root.style.opacity !== "0";
 
 		return playback.subscribe((time) => {
-			const { start, end } = windowRef.current;
 			const fraction = fractionInWindow(time, start, end);
 			const inside = fraction >= 0 && fraction <= 1;
 			if (inside !== visible) {
@@ -50,7 +42,7 @@ export function TimelinePlayhead({ widthRef }: TimelinePlayheadProps) {
 			const clamped = width > 12 ? Math.min(Math.max(x, 6), width - 6) : x;
 			root.style.transform = `translate3d(${clamped}px, 0, 0)`;
 		});
-	}, [playback, widthRef, windowRef]);
+	}, [playback, widthRef, start, end]);
 
 	return (
 		<div

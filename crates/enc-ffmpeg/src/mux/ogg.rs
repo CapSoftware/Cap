@@ -204,6 +204,20 @@ mod tests {
     }
 
     #[test]
+    fn sustained_44k1_input_keeps_its_duration() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audio-input.ogg");
+
+        write_recording(path.clone(), 44_100, 44_100 * 5);
+
+        let duration = probed_duration_secs(&path);
+        assert!(
+            (duration - 5.0).abs() < 0.02,
+            "expected 5s of audio, probed {duration}s"
+        );
+    }
+
+    #[test]
     fn sub_frame_input_is_flushed_not_dropped() {
         // Less input than one opus frame (20ms): finish() must drain the
         // resampler remainder instead of dropping it.

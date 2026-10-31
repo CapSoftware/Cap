@@ -11,6 +11,7 @@ import {
 	resolveFps,
 } from "../../loom-importer/media";
 import {
+	canSkipMissingSegments,
 	listMediaPlaylistResources,
 	parseHlsAttributes,
 	selectHlsTracks,
@@ -238,5 +239,39 @@ describe("Semaphore", () => {
 			}),
 		).rejects.toThrow("boom");
 		expect(await semaphore.run(async () => "ok")).toBe("ok");
+	});
+});
+
+describe("canSkipMissingSegments", () => {
+	const segments = (count: number, duration: number) =>
+		Array.from({ length: count }, () => duration);
+
+	test("accepts a source with nothing missing", () => {
+		expect(canSkipMissingSegments([], segments(3, 4))).toBe(true);
+	});
+
+	test("accepts one missing segment in a long recording", () => {
+		expect(canSkipMissingSegments([5], segments(1183, 5))).toBe(true);
+	});
+
+	test("accepts a missing short final segment in a short recording", () => {
+		expect(canSkipMissingSegments([3.07], [...segments(33, 6), 3.07])).toBe(
+			true,
+		);
+	});
+
+	test("rejects more missing segments than one percent allows", () => {
+		expect(canSkipMissingSegments([6, 6], segments(34, 6))).toBe(false);
+		expect(canSkipMissingSegments(segments(12, 5), segments(1183, 5))).toBe(
+			false,
+		);
+	});
+
+	test("rejects a missing segment that is too long to skip", () => {
+		expect(canSkipMissingSegments([20], segments(30, 20))).toBe(false);
+	});
+
+	test("rejects losing every segment", () => {
+		expect(canSkipMissingSegments([2], [2])).toBe(false);
 	});
 });

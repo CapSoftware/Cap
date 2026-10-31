@@ -42,8 +42,9 @@ use gpui::{
 use crate::{
     app_windows,
     editor_edits::{self as edits, TrackSegmentOps},
-    editor_timeline::clip_timeline_offsets,
+    editor_timeline::{clip_timeline_offsets, format_time},
     editor_window::EditorWindow,
+    i18n::tr,
     session::{Phase, RecordingSession},
     theme::Theme,
     ui,
@@ -53,18 +54,18 @@ use crate::{
 // Naming (`ClipsSidebar.tsx:558-609`)
 // ---------------------------------------------------------------------------
 
-/// `formatClipDuration` (`ClipsSidebar.tsx:79-85`).
+/// `formatClipDuration` (`ClipsSidebar.tsx:79-85`), with hours from an hour on
+/// like the editor's clock, where the source counts minutes past 59.
 pub(crate) fn format_clip_duration(seconds: f64) -> String {
     if !seconds.is_finite() || seconds <= 0.0 {
         return "0:00".to_string();
     }
-    let total = seconds.round() as i64;
-    format!("{}:{:02}", total / 60, total % 60)
+    format_time(seconds.round())
 }
 
 /// `clipLabel` (`:563`).
 pub(crate) fn clip_label(clip_index: usize) -> String {
-    format!("Clip {}", clip_index + 1)
+    tr::editor::clips::clip(clip_index + 1)
 }
 
 /// `segmentClipIndex` (`:565-567`). The `?? Math.min(index, ...)` fallback is
@@ -91,7 +92,7 @@ pub(crate) fn segment_label(segments: &[TimelineSegment], index: usize) -> Strin
     if split_number == 1 {
         clip_label(segment_clip_index(&segments[index]))
     } else {
-        format!("Split {}", split_number - 1)
+        tr::editor::clips::split(split_number - 1)
     }
 }
 
@@ -119,8 +120,8 @@ fn display_name_at(segments: &[TimelineSegment], index: usize) -> String {
     }
 }
 
-/// `segmentDescription` (`:598-609`): `m:ss`, prefixed with the parent clip's
-/// label for a split.
+/// `segmentDescription` (`:598-609`): `m:ss` (`h:mm:ss` from an hour on),
+/// prefixed with the parent clip's label for a split.
 pub(crate) fn segment_description(segments: &[TimelineSegment], index: usize) -> String {
     let formatted = format_clip_duration(segments[index].duration());
     if segment_split_number(segments, index) > 1 {
@@ -214,34 +215,132 @@ pub(crate) fn drop_clip_transition(
             .retain(|candidate| candidate.segment_index as usize != segment_index);
         return false;
     };
-    let boundary = clip_timeline_offsets(timeline)
-        .get(segment_index)
-        .copied()
-        .unwrap_or(0.)
-        + effective.duration;
-    let boundary = edits::effective_to_output(&timeline.hold_windows(), boundary);
+    let edges = transition_edges(timeline, segment_index, effective.duration);
     timeline
         .transitions
         .retain(|candidate| candidate.segment_index as usize != segment_index);
-    ripple_track(&mut timeline.style_segments, boundary, effective.duration);
-    ripple_track(&mut timeline.image_segments, boundary, effective.duration);
-    ripple_track(&mut timeline.zoom_segments, boundary, effective.duration);
-    ripple_track(&mut timeline.scene_segments, boundary, effective.duration);
-    ripple_track(&mut timeline.mask_segments, boundary, effective.duration);
-    ripple_track(&mut timeline.text_segments, boundary, effective.duration);
-    ripple_track(&mut timeline.caption_segments, boundary, effective.duration);
-    ripple_track(
-        &mut timeline.camera3d_segments,
-        boundary,
-        effective.duration,
-    );
-    ripple_keyboard_track(
-        &mut timeline.keyboard_segments,
-        boundary,
-        effective.duration,
-    );
-    ripple_track(&mut timeline.audio_segments, boundary, effective.duration);
+    ripple_every_track(timeline, edges, effective.duration);
     true
+}
+
+/// `setClipTransition` (`ED/context.ts`): puts a `kind` transition on
+/// `segment_index`'s leading boundary, `duration` long within the limits of
+/// half the shorter clip (`clampTransitionDuration`), and ripples every other
+/// track past the boundary by the overlap it gained or gave back. Returns
+/// false when the boundary does not exist or the clips are too short for one.
+pub(crate) fn set_clip_transition(
+    timeline: &mut TimelineConfiguration,
+    segment_index: usize,
+    kind: cap_project::ClipTransitionType,
+    duration: f64,
+) -> bool {
+    if segment_index == 0 || segment_index >= timeline.segments.len() {
+        return false;
+    }
+    let maximum = max_transition_duration(timeline, segment_index);
+    if !maximum.is_finite() || maximum < cap_project::MIN_CLIP_TRANSITION_DURATION {
+        return false;
+    }
+    let duration = duration.clamp(cap_project::MIN_CLIP_TRANSITION_DURATION, maximum);
+    let old = timeline
+        .effective_transition(segment_index)
+        .map_or(0.0, |transition| transition.duration);
+    let edges = transition_edges(timeline, segment_index, old);
+    timeline
+        .transitions
+        .retain(|candidate| candidate.segment_index as usize != segment_index);
+    timeline.transitions.push(ClipTransition {
+        segment_index: segment_index as u32,
+        kind,
+        duration,
+    });
+    timeline
+        .transitions
+        .sort_by_key(|transition| transition.segment_index);
+    let shift = old - duration;
+    if shift != 0.0 {
+        ripple_every_track(timeline, edges, shift);
+    }
+    true
+}
+
+/// `maxTransitionDuration`: half the shorter of the two clips a boundary joins.
+pub(crate) fn max_transition_duration(
+    timeline: &TimelineConfiguration,
+    segment_index: usize,
+) -> f64 {
+    match (
+        segment_index
+            .checked_sub(1)
+            .and_then(|previous| timeline.segments.get(previous)),
+        timeline.segments.get(segment_index),
+    ) {
+        (Some(previous), Some(current)) => previous.duration().min(current.duration()) / 2.0,
+        _ => 0.0,
+    }
+}
+
+/// The output times of a transition that overlaps `segment_index` with the
+/// clip before it by `overlap`: where the incoming clip starts, and where the
+/// outgoing one ends (the ripple boundary).
+#[derive(Clone, Copy)]
+struct TransitionEdges {
+    incoming: f64,
+    boundary: f64,
+}
+
+fn transition_edges(
+    timeline: &TimelineConfiguration,
+    segment_index: usize,
+    overlap: f64,
+) -> TransitionEdges {
+    let start = clip_timeline_offsets(timeline)
+        .get(segment_index)
+        .copied()
+        .unwrap_or(0.);
+    let holds = timeline.hold_windows();
+    TransitionEdges {
+        incoming: edits::effective_to_output(&holds, start),
+        boundary: edits::effective_to_output(&holds, start + overlap),
+    }
+}
+
+/// Everything at or past the boundary moves by `shift`, and so does an effect
+/// that starts with the incoming clip and runs on past the outgoing clip's end:
+/// one laid on a clip's first frame stays on it as the overlap grows, shrinks
+/// or goes. The project does not record which clip an effect belongs to, so
+/// one that starts there but ends inside the overlap is left with the
+/// outgoing clip, which it may equally belong to.
+fn ripple_every_track(timeline: &mut TimelineConfiguration, edges: TransitionEdges, shift: f64) {
+    fn ripple<T: TrackSegmentOps>(track: &mut [T], edges: TransitionEdges, shift: f64) {
+        for item in track {
+            let boundary = edges.boundary_for(item.start(), item.end());
+            ripple_track(std::slice::from_mut(item), boundary, shift);
+        }
+    }
+    ripple(&mut timeline.style_segments, edges, shift);
+    ripple(&mut timeline.image_segments, edges, shift);
+    ripple(&mut timeline.zoom_segments, edges, shift);
+    ripple(&mut timeline.scene_segments, edges, shift);
+    ripple(&mut timeline.mask_segments, edges, shift);
+    ripple(&mut timeline.text_segments, edges, shift);
+    ripple(&mut timeline.caption_segments, edges, shift);
+    ripple(&mut timeline.camera3d_segments, edges, shift);
+    for segment in &mut timeline.keyboard_segments {
+        let boundary = edges.boundary_for(segment.start, segment.end);
+        ripple_keyboard_track(std::slice::from_mut(segment), boundary, shift);
+    }
+    ripple(&mut timeline.audio_segments, edges, shift);
+}
+
+impl TransitionEdges {
+    fn boundary_for(self, start: f64, end: f64) -> f64 {
+        if (start - self.incoming).abs() < 1e-6 && end > self.boundary + 1e-6 {
+            start
+        } else {
+            self.boundary
+        }
+    }
 }
 
 /// `moveClip` (`ClipsSidebar.tsx:639-690`): reorder `timeline.segments`,
@@ -379,6 +478,10 @@ impl Default for ClipsState {
 }
 
 impl ClipsState {
+    pub(crate) fn has_open_menu(&self) -> bool {
+        self.import_menu.is_some()
+    }
+
     pub(crate) fn is_importing(&self) -> bool {
         self.importing
     }
@@ -449,8 +552,8 @@ impl EditorWindow {
     ) -> impl IntoElement {
         ui::EditorButton::plain(&self.theme, "clips-pill")
             .left_icon("icons/clapperboard.svg")
-            .when(!compact, |button| button.label("Clips"))
-            .tooltip(&self.theme, "Clips")
+            .when(!compact, |button| button.label(tr::editor::clips::title()))
+            .tooltip(&self.theme, tr::editor::clips::title())
             .pressed(self.clips.open)
             .disabled(!self.project_ready())
             .on_click(cx.listener(|this, _, window, cx| this.toggle_clips(window, cx)))
@@ -742,8 +845,10 @@ impl EditorWindow {
     pub(crate) fn render_clips_sidebar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .w(px(crate::editor_window::SIDEBAR_WIDTH))
-            .flex_none()
+            .h_full()
             .flex()
+            .flex_col()
+            .flex_none()
             .min_h_0()
             .child(
                 div()
@@ -751,6 +856,7 @@ impl EditorWindow {
                     .flex_col()
                     .flex_1()
                     .min_h_0()
+                    .h_full()
                     .overflow_hidden()
                     .rounded(px(12.))
                     .border_1()
@@ -791,7 +897,7 @@ impl EditorWindow {
                     .flex_shrink_0()
                     .text_color(Hsla::from(theme.editor.text_2)),
             )
-            .child("Back to editor")
+            .child(tr::editor::clips::back())
             .on_click(cx.listener(|this, _, window, cx| this.close_clips(window, cx)))
     }
 
@@ -826,7 +932,7 @@ impl EditorWindow {
                                 ui::ButtonSize::Md,
                             )
                             .icon("icons/video.svg")
-                            .label("Record a new clip")
+                            .label(tr::editor::clips::record_new())
                             .height(px(40.))
                             .gap(px(8.))
                             .font_weight(FontWeight::MEDIUM)
@@ -854,9 +960,9 @@ impl EditorWindow {
                         )
                         .icon("icons/circle-plus.svg")
                         .label(if self.clips.importing {
-                            "Importing…"
+                            tr::editor::clips::importing()
                         } else {
-                            "Import"
+                            tr::editor::clips::import()
                         })
                         .height(px(40.))
                         .gap(px(8.))
@@ -887,7 +993,7 @@ impl EditorWindow {
                             .text_size(px(14.))
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(Hsla::from(theme.gray_12))
-                            .child("Clips"),
+                            .child(tr::editor::clips::title()),
                     )
                     .children((recorded_clip_count > 0).then(|| {
                         div()
@@ -955,14 +1061,14 @@ impl EditorWindow {
                     .text_size(px(14.))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(Hsla::from(theme.gray_12))
-                    .child("No clips yet"),
+                    .child(tr::editor::clips::empty_title()),
             )
             .child(
                 div()
                     .max_w(px(200.))
                     .text_size(px(12.))
                     .text_color(Hsla::from(theme.gray_10))
-                    .child("Record or import a clip and it will show up here."),
+                    .child(tr::editor::clips::empty_description()),
             )
     }
 
@@ -1283,14 +1389,14 @@ impl EditorWindow {
         self.pending_save().borrow_mut().flush();
         if let Err(error) = self.project.write(&self.project_path) {
             tracing::error!("failed to persist the project config before recording: {error}");
-            let message = format!("Could not save the current project before recording: {error}");
+            let message = tr::editor::clips::save_before_recording_failed(error);
             cx.spawn(async move |_, _| show_append_error(&message))
                 .detach();
             return false;
         }
         let main = cx.global::<app_windows::AppWindows>().main;
         if let Err(error) = main.update(cx, |view, _, _| view.cancel_deep_link_start()) {
-            let message = format!("Could not prepare the recording controls: {error}");
+            let message = tr::editor::clips::prepare_controls_failed(error);
             cx.spawn(async move |_, _| show_append_error(&message))
                 .detach();
             return false;
@@ -1456,16 +1562,21 @@ impl EditorWindow {
                                 .text_size(px(12.))
                                 .text_color(Hsla::from(theme.gray_12))
                                 .child(
-                                    row("clips-import-existing", "Existing recording")
-                                        .hover(move |style| style.bg(Hsla::from(theme.gray_3)))
-                                        .on_click(cx.listener(|this, _, window, cx| {
+                                    row(
+                                        "clips-import-existing",
+                                        tr::editor::clips::import_existing(),
+                                    )
+                                    .hover(move |style| style.bg(Hsla::from(theme.gray_3)))
+                                    .on_click(cx.listener(
+                                        |this, _, window, cx| {
                                             this.clips.import_menu = None;
                                             cx.notify();
                                             this.pick_existing_recording(window, cx);
-                                        })),
+                                        },
+                                    )),
                                 )
                                 .child(
-                                    row("clips-import-mp4", "MP4 Video…")
+                                    row("clips-import-mp4", tr::editor::clips::import_mp4())
                                         .hover(move |style| style.bg(Hsla::from(theme.gray_3)))
                                         .on_click(cx.listener(|this, _, window, cx| {
                                             this.clips.import_menu = None;
@@ -1560,11 +1671,15 @@ impl EditorWindow {
             #[cfg(target_os = "macos")]
             let source = crate::platform::open_image_panel(&["mp4"]);
             #[cfg(target_os = "linux")]
-            let source =
-                crate::platform::open_file_panel_async(&[("MP4 Video", &["mp4"])], None, cx).await;
+            let source = crate::platform::open_file_panel_async(
+                &[(tr::editor::clips::mp4_filter(), &["mp4"])],
+                None,
+                cx,
+            )
+            .await;
             #[cfg(not(any(target_os = "macos", target_os = "linux")))]
             let source = rfd::FileDialog::new()
-                .add_filter("MP4 Video", &["mp4"])
+                .add_filter(tr::editor::clips::mp4_filter(), &["mp4"])
                 .pick_file();
             if let Some(source) = source {
                 this.update_in(cx, |this, window, cx| {
@@ -1883,20 +1998,20 @@ impl PreparedMp4Import {
         in_flight: crate::import::InFlightImport,
     ) -> Result<Self, String> {
         if cancelled.load(Ordering::Acquire) {
-            return Err("Import cancelled".to_string());
+            return Err(tr::editor::clips::error::cancelled().to_string());
         }
         let target = target.canonicalize().map_err(|error| error.to_string())?;
         let upload_lock = cap_recording::upload_resume::UploadLock::acquire(&target)
-            .map_err(|error| format!("Cannot import while this recording is in use: {error}"))?;
+            .map_err(tr::editor::clips::error::in_use)?;
         let original_meta =
             std::fs::read(target.join("recording-meta.json")).map_err(|error| error.to_string())?;
         let mut meta = RecordingMeta::load_for_project(&target)
             .map_err(|error| format!("Failed to load target project metadata: {error}"))?;
         let RecordingMetaInner::Studio(studio) = &meta.inner else {
-            return Err("Instant mode recordings cannot be edited".to_string());
+            return Err(tr::editor::clips::error::instant_target().to_string());
         };
         if !matches!(studio.status(), StudioRecordingStatus::Complete) {
-            return Err("Finish or recover this recording before importing a clip".to_string());
+            return Err(tr::editor::clips::error::unfinished_target().to_string());
         }
         let segments = ensure_multiple_segments(&mut meta)?.segments.clone();
         let fallback_timeline = if config.timeline.is_none() {
@@ -1906,7 +2021,7 @@ impl PreparedMp4Import {
             None
         };
         if cancelled.load(Ordering::Acquire) {
-            return Err("Import cancelled".to_string());
+            return Err(tr::editor::clips::error::cancelled().to_string());
         }
         let index = u32::try_from(segments.len()).map_err(|error| error.to_string())?;
         let (directory, relative) = unique_segment_dir(&target, index)?;
@@ -1925,7 +2040,7 @@ impl PreparedMp4Import {
         )?;
         let duration = get_video_duration_secs(&display_path)?;
         if !duration.is_finite() || duration <= 0.0 {
-            return Err("Imported video has no valid duration".to_string());
+            return Err(tr::editor::clips::error::no_duration().to_string());
         }
         let system_audio = sample_rate.map(|_| AudioMeta {
             path: format!("{relative}/audio.ogg").into(),
@@ -1971,7 +2086,7 @@ impl PreparedMp4Import {
         write_config: impl FnOnce(&ProjectConfiguration, &Path) -> std::io::Result<()>,
     ) -> Result<ProjectConfiguration, String> {
         if self.cancelled.load(Ordering::Acquire) {
-            return Err("Import cancelled".to_string());
+            return Err(tr::editor::clips::error::cancelled().to_string());
         }
         let meta_path = self.target.join("recording-meta.json");
         if std::fs::read(&meta_path).map_err(|error| error.to_string())? != self.original_meta {
@@ -2062,7 +2177,7 @@ async fn pick_existing_recording_path(_cx: &mut gpui::AsyncWindowContext) -> Opt
     #[cfg(target_os = "linux")]
     {
         crate::platform::open_file_panel_async(
-            &[("Cap Recording", &["cap"])],
+            &[(tr::editor::clips::cap_filter(), &["cap"])],
             Some(crate::recording::recordings_dir()),
             _cx,
         )
@@ -2072,7 +2187,7 @@ async fn pick_existing_recording_path(_cx: &mut gpui::AsyncWindowContext) -> Opt
     {
         rfd::FileDialog::new()
             .set_directory(crate::recording::recordings_dir())
-            .add_filter("Cap Recording", &["cap"])
+            .add_filter(tr::editor::clips::cap_filter(), &["cap"])
             .pick_file()
     }
 }
@@ -2081,8 +2196,8 @@ async fn pick_existing_recording_path(_cx: &mut gpui::AsyncWindowContext) -> Opt
 /// dialog this app uses where the webview has toasts.
 fn show_import_error(message: &str) {
     let _ = rfd::MessageDialog::new()
-        .set_title("Import Error")
-        .set_description(format!("Failed to import clip: {message}"))
+        .set_title(tr::editor::clips::import_error_title())
+        .set_description(tr::editor::clips::import_error(message))
         .set_level(rfd::MessageLevel::Error)
         .set_buttons(rfd::MessageButtons::Ok)
         .show();
@@ -2092,8 +2207,8 @@ fn show_import_error(message: &str) {
 /// stand-in.
 fn show_append_error(message: &str) {
     let _ = rfd::MessageDialog::new()
-        .set_title("Recording Error")
-        .set_description(format!("Failed to add clip: {message}"))
+        .set_title(tr::editor::clips::append_error_title())
+        .set_description(tr::editor::clips::append_error(message))
         .set_level(rfd::MessageLevel::Error)
         .set_buttons(rfd::MessageButtons::Ok)
         .show();
@@ -2418,7 +2533,7 @@ fn source_asset_path(
 /// single-segment studio bundle into the multi-segment shape imports extend.
 fn ensure_multiple_segments(meta: &mut RecordingMeta) -> Result<&mut MultipleSegments, String> {
     let RecordingMetaInner::Studio(studio_meta) = &mut meta.inner else {
-        return Err("Instant mode recordings cannot be edited".to_string());
+        return Err(tr::editor::clips::error::instant_target().to_string());
     };
 
     if let StudioRecordingMeta::SingleSegment { segment } = studio_meta.as_ref() {
@@ -2755,19 +2870,20 @@ fn copy_video_meta(
     )?
     else {
         if required {
-            return Err(format!(
-                "Missing video file: {}",
-                source_project_path.join(source.path.as_str()).display()
+            return Err(tr::editor::clips::error::missing_video(
+                source_project_path.join(source.path.as_str()).display(),
             ));
         }
         return Ok(None);
     };
 
     let can_decode = probe_video_can_decode(&source_path)
-        .map_err(|e| format!("Cannot decode video {}: {e}", source_path.display()))?;
+        .map_err(|e| tr::editor::clips::error::cannot_decode(source_path.display(), e))?;
     if !can_decode {
         if required {
-            return Err(format!("Unsupported video file: {}", source_path.display()));
+            return Err(tr::editor::clips::error::unsupported_video(
+                source_path.display(),
+            ));
         }
         return Ok(None);
     }
@@ -3095,9 +3211,8 @@ fn get_source_video_duration_secs(
         VIDEO_IMPORT_EXTENSIONS,
     )?
     .ok_or_else(|| {
-        format!(
-            "Missing video file: {}",
-            source_meta.project_path.join(video.path.as_str()).display()
+        tr::editor::clips::error::missing_video(
+            source_meta.project_path.join(video.path.as_str()).display(),
         )
     })?;
     get_video_duration_secs(&source_path)
@@ -3290,31 +3405,31 @@ pub(crate) fn append_cap_project_to_editor(
     source_path: &Path,
 ) -> Result<usize, String> {
     if same_project_path(target_project_path, source_path) {
-        return Err("Cannot import a recording into itself".to_string());
+        return Err(tr::editor::clips::error::into_itself().to_string());
     }
     if !is_cap_project_path(source_path) {
-        return Err("Select a Cap project folder".to_string());
+        return Err(tr::editor::clips::error::not_a_project().to_string());
     }
 
     let source_meta = RecordingMeta::load_for_project(source_path)
         .map_err(|e| format!("Failed to load source project metadata: {e}"))?;
 
     let RecordingMetaInner::Studio(source_studio_meta) = &source_meta.inner else {
-        return Err("Instant recordings can't be imported into a project yet".to_string());
+        return Err(tr::editor::clips::error::instant_source().to_string());
     };
     match source_studio_meta.status() {
         StudioRecordingStatus::InProgress => {
-            return Err("Source Cap project is still recording".to_string());
+            return Err(tr::editor::clips::error::source_recording().to_string());
         }
         StudioRecordingStatus::Failed { error } => {
-            return Err(format!("Source Cap project failed: {error}"));
+            return Err(tr::editor::clips::error::source_failed(error));
         }
         StudioRecordingStatus::Complete | StudioRecordingStatus::NeedsRemux => {}
     }
 
     let source_segments = studio_segments_for_import(source_studio_meta);
     if source_segments.is_empty() {
-        return Err("Source Cap project has no recording segments".to_string());
+        return Err(tr::editor::clips::error::source_empty().to_string());
     }
 
     let source_timeline = source_timeline_segments_for_import(&source_meta, &source_segments)?;
@@ -3380,7 +3495,7 @@ pub(crate) fn append_cap_project_to_editor(
     };
 
     if copied_segments.is_empty() {
-        return Err("Source Cap project has no importable recording segments".to_string());
+        return Err(tr::editor::clips::error::source_unimportable().to_string());
     }
 
     {
@@ -3424,9 +3539,7 @@ mod tests {
 
     #[test]
     fn split_thumbnails_use_requested_time_inside_keyframe_interval() {
-        let fixture = ImportFixture::new(include_bytes!(
-            "../../desktop/src-tauri/test-data/clip-thumbnail-gop.mp4"
-        ));
+        let fixture = ImportFixture::new(include_bytes!("../tests/data/clip-thumbnail-gop.mp4"));
         for (time, expected_channel) in [(0.0, 2), (1.5, 1), (2.5, 0), (3.0, 0)] {
             let thumbnail = decode_thumbnail_frame(&fixture.source, time).unwrap();
             let data = thumbnail.as_bytes(0).unwrap();
@@ -3445,9 +3558,8 @@ mod tests {
 
     #[test]
     fn long_gop_thumbnails_reach_requested_time_and_preserve_eof_fallback() {
-        let fixture = ImportFixture::new(include_bytes!(
-            "../../desktop/src-tauri/test-data/clip-thumbnail-long-gop.mp4"
-        ));
+        let fixture =
+            ImportFixture::new(include_bytes!("../tests/data/clip-thumbnail-long-gop.mp4"));
         for time in [8.5, 10.0, 11.0] {
             let thumbnail = decode_thumbnail_frame(&fixture.source, time).unwrap();
             let data = thumbnail.as_bytes(0).unwrap();
@@ -3461,9 +3573,8 @@ mod tests {
 
     #[test]
     fn exhausted_decode_budget_does_not_return_partial_thumbnail() {
-        let fixture = ImportFixture::new(include_bytes!(
-            "../../desktop/src-tauri/test-data/clip-thumbnail-long-gop.mp4"
-        ));
+        let fixture =
+            ImportFixture::new(include_bytes!("../tests/data/clip-thumbnail-long-gop.mp4"));
         for (packet_limit, timeout, expected_error) in [
             (240, std::time::Duration::from_secs(2), "packet budget"),
             (
@@ -3874,6 +3985,9 @@ mod tests {
         assert_eq!(format_clip_duration(0.6), "0:01");
         assert_eq!(format_clip_duration(59.6), "1:00");
         assert_eq!(format_clip_duration(75.0), "1:15");
+        assert_eq!(format_clip_duration(3_599.4), "59:59");
+        assert_eq!(format_clip_duration(3_599.6), "1:00:00");
+        assert_eq!(format_clip_duration(3_905.0), "1:05:05");
         assert_eq!(format_clip_duration(600.0), "10:00");
     }
 
@@ -3972,6 +4086,136 @@ mod tests {
         assert_eq!(kept[0].segment_index, 2);
         assert_eq!(dropped.len(), 1);
         assert_eq!(dropped[0].segment_index, 3);
+    }
+
+    fn zoom_at(start: f64, end: f64) -> cap_project::ZoomSegment {
+        cap_project::ZoomSegment {
+            start,
+            end,
+            amount: 1.5,
+            mode: cap_project::ZoomMode::Auto,
+            glide_direction: Default::default(),
+            glide_speed: 0.5,
+            instant_animation: false,
+            edge_snap_ratio: 0.25,
+        }
+    }
+
+    #[test]
+    fn adding_a_transition_overlaps_the_clips_and_ripples_the_other_tracks() {
+        let mut config = timeline(vec![segment(0, 0.0, 10.0), segment(1, 0.0, 10.0)]);
+        // A zoom on the second clip, past the boundary at 10s.
+        config.zoom_segments = vec![zoom_at(15.0, 18.0)];
+
+        assert!(set_clip_transition(
+            &mut config,
+            1,
+            cap_project::ClipTransitionType::CrossFade,
+            0.5
+        ));
+        let added = config.effective_transition(1).unwrap();
+        assert_eq!(added.duration, 0.5);
+        assert_eq!(added.kind, cap_project::ClipTransitionType::CrossFade);
+        // The second clip now starts half a second earlier, and so does the
+        // zoom that sits on it.
+        assert_eq!(config.zoom_segments[0].start, 14.5);
+        assert_eq!(config.zoom_segments[0].end, 17.5);
+
+        // Lengthening it ripples by the difference only, and the kind changes.
+        assert!(set_clip_transition(
+            &mut config,
+            1,
+            cap_project::ClipTransitionType::FadeThroughBlack,
+            1.0
+        ));
+        assert_eq!(config.transitions.len(), 1);
+        let changed = config.effective_transition(1).unwrap();
+        assert_eq!(changed.duration, 1.0);
+        assert_eq!(
+            changed.kind,
+            cap_project::ClipTransitionType::FadeThroughBlack
+        );
+        assert_eq!(config.zoom_segments[0].start, 14.0);
+
+        // Removing it puts everything back where it began.
+        assert!(drop_clip_transition(&mut config, 1));
+        assert!(config.transitions.is_empty());
+        assert_eq!(config.zoom_segments[0].start, 15.0);
+        assert_eq!(config.zoom_segments[0].end, 18.0);
+    }
+
+    #[test]
+    fn an_effect_on_the_incoming_clips_first_frame_keeps_its_timing() {
+        let mut config = timeline(vec![segment(0, 0.0, 10.0), segment(1, 0.0, 10.0)]);
+        config.zoom_segments = vec![zoom_at(10.0, 12.0), zoom_at(8.0, 9.8)];
+        let kind = cap_project::ClipTransitionType::CrossFade;
+        let zooms = |config: &TimelineConfiguration| {
+            config
+                .zoom_segments
+                .iter()
+                .map(|zoom| (zoom.start, zoom.end))
+                .collect::<Vec<_>>()
+        };
+
+        assert!(set_clip_transition(&mut config, 1, kind, 0.5));
+        assert_eq!(zooms(&config), [(9.5, 11.5), (8.0, 9.8)]);
+        assert!(set_clip_transition(&mut config, 1, kind, 1.0));
+        assert_eq!(zooms(&config), [(9.0, 11.0), (8.0, 9.8)]);
+        assert!(set_clip_transition(&mut config, 1, kind, 0.25));
+        assert_eq!(zooms(&config), [(9.75, 11.75), (8.0, 9.8)]);
+        assert!(drop_clip_transition(&mut config, 1));
+        assert_eq!(zooms(&config), [(10.0, 12.0), (8.0, 9.8)]);
+    }
+
+    #[test]
+    fn an_effect_ending_inside_the_new_overlap_keeps_its_timing() {
+        let mut config = timeline(vec![segment(0, 0.0, 10.0), segment(1, 0.0, 10.0)]);
+        config.zoom_segments = vec![zoom_at(9.0, 9.8)];
+        let kind = cap_project::ClipTransitionType::CrossFade;
+
+        assert!(set_clip_transition(&mut config, 1, kind, 1.0));
+        assert_eq!(
+            (config.zoom_segments[0].start, config.zoom_segments[0].end),
+            (9.0, 9.8)
+        );
+        assert!(drop_clip_transition(&mut config, 1));
+        assert_eq!(
+            (config.zoom_segments[0].start, config.zoom_segments[0].end),
+            (9.0, 9.8)
+        );
+    }
+
+    #[test]
+    fn a_transition_is_held_to_half_the_shorter_clip() {
+        let mut config = timeline(vec![segment(0, 0.0, 10.0), segment(1, 0.0, 3.0)]);
+        assert_eq!(max_transition_duration(&config, 1), 1.5);
+        assert!(set_clip_transition(
+            &mut config,
+            1,
+            cap_project::ClipTransitionType::CrossFade,
+            5.0
+        ));
+        assert_eq!(config.effective_transition(1).unwrap().duration, 1.5);
+        assert!(set_clip_transition(
+            &mut config,
+            1,
+            cap_project::ClipTransitionType::CrossFade,
+            0.0
+        ));
+        assert_eq!(
+            config.effective_transition(1).unwrap().duration,
+            cap_project::MIN_CLIP_TRANSITION_DURATION
+        );
+    }
+
+    #[test]
+    fn the_first_clip_and_clips_too_short_take_no_transition() {
+        let mut config = timeline(vec![segment(0, 0.0, 10.0), segment(1, 0.0, 0.08)]);
+        let kind = cap_project::ClipTransitionType::CrossFade;
+        assert!(!set_clip_transition(&mut config, 0, kind, 0.5));
+        assert!(!set_clip_transition(&mut config, 1, kind, 0.5));
+        assert!(!set_clip_transition(&mut config, 2, kind, 0.5));
+        assert!(config.transitions.is_empty());
     }
 
     /// The dropped transition's overlap is given back: every later segment on

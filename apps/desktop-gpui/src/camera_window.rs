@@ -136,6 +136,22 @@ mod inline_preview_tests {
     }
 
     #[test]
+    fn a_shrunk_preview_fits_its_toolbar_inside_it() {
+        // Not shrunk: the size-driven scale and every button.
+        assert_eq!(toolbar_fit(0.85, None), (0.85, 5));
+        // Wide enough: unchanged.
+        assert_eq!(toolbar_fit(0.7, Some(300.)), (0.7, 5));
+        for width in [81., 100., 120., 144., 160., 200.] {
+            let (scale, buttons) = toolbar_fit(1., Some(width));
+            let drawn = (42. * buttons as f32 + 4.) * scale + 2.;
+            assert!(drawn <= width - 8. + 0.01, "{width}: {drawn}");
+            assert!(scale >= 0.4);
+        }
+        // A portrait sliver keeps close, size and shape.
+        assert_eq!(toolbar_fit(1., Some(81.)).1, 3);
+    }
+
+    #[test]
     fn camera_only_wide_preview_preserves_aspect_and_toolbar_space() {
         let state = CameraWindowState {
             size: 600.,
@@ -155,6 +171,25 @@ mod inline_preview_tests {
 /// `cameraOverlayTextMetrics`.
 fn normalized_size(state: &CameraWindowState) -> f32 {
     (clamp_size(state.size) - CAMERA_MIN_SIZE) / (CAMERA_MAX_SIZE - CAMERA_MIN_SIZE)
+}
+
+/// The fit uses each button's footprint (a 22px icon in 8px padding, 4px
+/// apart, in a 4px-padded strip with a 1px border). The preview-only blur,
+/// then mirror, buttons go first, before the rest get too small to hit.
+fn toolbar_fit(base_scale: f32, width: Option<f32>) -> (f32, usize) {
+    const SMALLEST_COMFORTABLE: f32 = 0.6;
+    const SMALLEST: f32 = 0.4;
+    let Some(width) = width else {
+        return (base_scale, 5);
+    };
+    let fit = |buttons: usize| (width - 10.) / (42. * buttons as f32 + 4.);
+    for buttons in [5, 4] {
+        let scale = base_scale.min(fit(buttons));
+        if scale >= SMALLEST_COMFORTABLE {
+            return (scale, buttons);
+        }
+    }
+    (base_scale.min(fit(3)).max(SMALLEST), 3)
 }
 
 /// The visible bubble's corner radius. The shipped Tauri experience is the
@@ -2202,8 +2237,11 @@ impl CameraWindow {
             .or(self.retained_aspect)
     }
 
-    fn toolbar_scale(&self) -> f32 {
-        0.7 + normalized_size(&self.state) * 0.3
+    fn toolbar_fit(&self) -> (f32, usize) {
+        toolbar_fit(
+            0.7 + normalized_size(&self.state) * 0.3,
+            self.picker_size.map(|(width, _)| width),
+        )
     }
 
     /// Pushes the chrome inputs the preview renders with (its own notify is
@@ -2454,7 +2492,7 @@ impl CameraWindow {
 
     fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
-        let scale = self.toolbar_scale();
+        let (scale, buttons) = self.toolbar_fit();
         #[cfg(target_os = "macos")]
         let (mirror_failed, blur_failed) = (self.effect_failures.mirror, self.effect_failures.blur);
         #[cfg(not(target_os = "macos"))]
@@ -2533,36 +2571,40 @@ impl CameraWindow {
                     // Preview-only, like both Tauri paths (the WGSL UV flip /
                     // the legacy `scaleX(-1)`); the recorded camera track is
                     // never mirrored by either app.
-                    .child(self.toolbar_button(
-                        "mirror",
-                        "icons/arrows.svg",
-                        self.state.mirrored && !mirror_failed,
-                        scale,
-                        mirror_failed.then_some("!"),
-                        cx,
-                        |this, window, cx| {
-                            this.mutate_state(window, cx, |state| {
-                                state.mirrored = !state.mirrored;
-                            })
-                        },
-                    ))
-                    .child(self.toolbar_button(
-                        "blur",
-                        "icons/person-standing.svg",
-                        self.state.background_blur != BlurMode::Off && !blur_failed,
-                        scale,
-                        if blur_failed {
-                            Some("!")
-                        } else {
-                            self.state.background_blur.label()
-                        },
-                        cx,
-                        |this, window, cx| {
-                            this.mutate_state(window, cx, |state| {
-                                state.background_blur = state.background_blur.cycle();
-                            })
-                        },
-                    )),
+                    .when(buttons >= 4, |this| {
+                        this.child(self.toolbar_button(
+                            "mirror",
+                            "icons/arrows.svg",
+                            self.state.mirrored && !mirror_failed,
+                            scale,
+                            mirror_failed.then_some("!"),
+                            cx,
+                            |this, window, cx| {
+                                this.mutate_state(window, cx, |state| {
+                                    state.mirrored = !state.mirrored;
+                                })
+                            },
+                        ))
+                    })
+                    .when(buttons >= 5, |this| {
+                        this.child(self.toolbar_button(
+                            "blur",
+                            "icons/person-standing.svg",
+                            self.state.background_blur != BlurMode::Off && !blur_failed,
+                            scale,
+                            if blur_failed {
+                                Some("!")
+                            } else {
+                                self.state.background_blur.label()
+                            },
+                            cx,
+                            |this, window, cx| {
+                                this.mutate_state(window, cx, |state| {
+                                    state.background_blur = state.background_blur.cycle();
+                                })
+                            },
+                        ))
+                    }),
             )
     }
 
@@ -2950,20 +2992,106 @@ fn saved_position(preferred: &scap_targets::Display) -> Option<(f64, f64)> {
 /// Tauri default slot -- bottom-right of the preferred monitor measured with
 /// `DEFAULT_WINDOW_SIZE = 230.0 * 2.0` (`windows.rs:2160, 2340-2344`; the
 /// constant, not the actual window size, is what the shipping app subtracts).
-pub fn opening_position(preferred: &scap_targets::Display) -> (f32, f32) {
-    if let Some((x, y)) = saved_position(preferred) {
-        tracing::info!(x, y, "camera window restored to its saved position");
+/// Clamp against the actual size before the camera can deliver its first frame.
+pub fn opening_position(preferred: &scap_targets::Display, window_size: (f32, f32)) -> (f32, f32) {
+    let saved = saved_position(preferred);
+    let bounds = saved
+        .and_then(|(x, y)| display_for_point(x, y))
+        .and_then(|display| display.raw_handle().logical_bounds())
+        .or_else(|| preferred.raw_handle().logical_bounds());
+    opening_position_in_bounds(saved, bounds, window_size)
+}
+
+fn opening_position_in_bounds(
+    saved: Option<(f64, f64)>,
+    bounds: Option<scap_targets::bounds::LogicalBounds>,
+    window_size: (f32, f32),
+) -> (f32, f32) {
+    let Some(bounds) = bounds else {
+        let (x, y) = saved.unwrap_or((100., 100.));
         return (x as f32, y as f32);
-    }
+    };
     const TAURI_DEFAULT_WINDOW_SIZE: f64 = 230.0 * 2.0;
-    match preferred.raw_handle().logical_bounds() {
-        Some(bounds) => (
-            (bounds.position().x() + bounds.size().width() - TAURI_DEFAULT_WINDOW_SIZE - 100.)
-                as f32,
-            (bounds.position().y() + bounds.size().height() - TAURI_DEFAULT_WINDOW_SIZE - 100.)
-                as f32,
-        ),
-        None => (100., 100.),
+    let (dx, dy) = (bounds.position().x(), bounds.position().y());
+    let (dw, dh) = (bounds.size().width(), bounds.size().height());
+    let (x, y) = saved.unwrap_or((
+        dx + dw - TAURI_DEFAULT_WINDOW_SIZE - 100.,
+        dy + dh - TAURI_DEFAULT_WINDOW_SIZE - 100.,
+    ));
+    (
+        x.clamp(dx, dx + (dw - f64::from(window_size.0)).max(0.)) as f32,
+        y.clamp(dy, dy + (dh - f64::from(window_size.1)).max(0.)) as f32,
+    )
+}
+
+#[cfg(test)]
+mod opening_position_tests {
+    use super::*;
+    use scap_targets::bounds::{LogicalBounds, LogicalPosition, LogicalSize};
+
+    fn display(x: f64, y: f64, width: f64, height: f64) -> Option<LogicalBounds> {
+        Some(LogicalBounds::new(
+            LogicalPosition::new(x, y),
+            LogicalSize::new(width, height),
+        ))
+    }
+
+    #[test]
+    fn restored_wide_preview_fits_after_display_resolution_changes() {
+        let state = CameraWindowState {
+            size: 600.,
+            shape: CameraShape::Full,
+            ..Default::default()
+        };
+        let dimensions = window_size(&state, Some(16. / 9.));
+        let (x, y) = opening_position_in_bounds(
+            Some((1800., 1000.)),
+            display(0., 0., 1920., 1080.),
+            dimensions,
+        );
+        assert!((x + dimensions.0 - 1920.).abs() < 0.001);
+        assert_eq!(y + dimensions.1, 1080.);
+    }
+
+    #[test]
+    fn fresh_large_preview_fits_on_a_display_with_negative_origin() {
+        assert_eq!(
+            opening_position_in_bounds(None, display(-1280., -800., 1280., 800.), (600., 656.)),
+            (-600., -656.),
+        );
+    }
+
+    #[test]
+    fn oversized_preview_is_anchored_to_the_display_origin() {
+        assert_eq!(
+            opening_position_in_bounds(None, display(-640., 200., 640., 480.), (1066., 656.)),
+            (-640., 200.),
+        );
+    }
+
+    #[test]
+    fn valid_saved_position_and_default_slot_are_preserved() {
+        let bounds = display(1920., 0., 1920., 1080.);
+        assert_eq!(
+            opening_position_in_bounds(Some((2000., 400.)), bounds, (230., 286.)),
+            (2000., 400.),
+        );
+        assert_eq!(
+            opening_position_in_bounds(None, bounds, (230., 286.)),
+            (3280., 520.),
+        );
+    }
+
+    #[test]
+    fn missing_display_geometry_preserves_the_existing_fallback() {
+        assert_eq!(
+            opening_position_in_bounds(None, None, (600., 656.)),
+            (100., 100.),
+        );
+        assert_eq!(
+            opening_position_in_bounds(Some((300., 400.)), None, (600., 656.)),
+            (300., 400.),
+        );
     }
 }
 

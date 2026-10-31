@@ -75,7 +75,9 @@ pub use frame_pipeline::{GpuOutputFormat, Nv12RenderedFrame, RenderedFrame, Shar
 #[cfg(target_os = "macos")]
 pub use frame_pipeline::{PendingSurface, RgbaToBgraSurfaceConverter};
 pub use frame_windows::FrameWindows;
-pub use layers::{BackgroundTextureCache, clean_background_path, new_font_system};
+pub use layers::{
+    BackgroundTextureCache, clean_background_path, last_caption_center, new_font_system,
+};
 pub use managed_segment::{
     ManagedRecordingSegmentDecoders, ManagedSegmentDecoderStatus, ManagedSegmentStopHandles,
     ManagedSegmentVideoError, ManagedSegmentVideoExit, ManagedSegmentVideoInput,
@@ -907,6 +909,7 @@ pub async fn render_video_to_channel(
     resolution_base: XY<u32>,
     recordings: &ProjectRecordingsMeta,
     frame_windows: Option<FrameWindows>,
+    owned_frames: bool,
 ) -> Result<(), RenderingError> {
     ffmpeg::init().unwrap();
     validate_timeline(project, render_segments.len())?;
@@ -980,6 +983,9 @@ pub async fn render_video_to_channel(
 
     let mut frame_renderer = FrameRenderer::new(constants);
     frame_renderer.use_export_deadlines();
+    if owned_frames {
+        frame_renderer.deliver_owned_frames();
+    }
 
     let mut layers = RendererLayers::new_with_options(
         &constants.device,
@@ -2589,7 +2595,7 @@ pub async fn create_shared_device() -> Result<SharedWgpuDevice, RenderingError> 
     }
 
     let adapter_phase = readiness::Phase::start("wgpu.adapter");
-    let hardware_adapter = if force_software_adapter {
+    let preferred = if force_software_adapter {
         None
     } else {
         instance
@@ -2601,55 +2607,118 @@ pub async fn create_shared_device() -> Result<SharedWgpuDevice, RenderingError> 
             .await
             .ok()
     };
-
-    let (adapter, is_software_adapter) = if let Some(adapter) = hardware_adapter {
-        let adapter_info = adapter.get_info();
-        let is_software = is_software_wgpu_adapter(&adapter_info);
-
-        if is_software {
-            tracing::warn!(
-                adapter_name = adapter_info.name,
-                adapter_backend = ?adapter_info.backend,
-                adapter_device_type = ?adapter_info.device_type,
-                "Hardware adapter behaves like a software renderer"
-            );
-        } else {
-            tracing::info!(
-                adapter_name = adapter_info.name,
-                adapter_backend = ?adapter_info.backend,
-                adapter_device_type = ?adapter_info.device_type,
-                "Using hardware GPU adapter"
-            );
-        }
-
-        (adapter, is_software)
+    adapter_phase.finish(if preferred.is_some() {
+        "preferred"
     } else {
-        tracing::warn!("No hardware GPU adapter found, attempting software fallback");
-        let software_adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::LowPower,
-                force_fallback_adapter: true,
-                compatible_surface: None,
-            })
-            .await
-            .map_err(|_| RenderingError::NoAdapter)?;
+        "none"
+    });
 
-        let adapter_info = software_adapter.get_info();
-        tracing::info!(
+    let device_phase = readiness::Phase::start("wgpu.device");
+    let mut last_error = None;
+    let mut created = None;
+    if let Some(adapter) = preferred {
+        match try_rendering_device(adapter).await {
+            Ok(found) => created = Some(found),
+            Err(error) => last_error = Some(error),
+        }
+    }
+    // A driver can list an adapter it cannot make a device on (a GL context
+    // without compute shaders, a broken install). Only then are the others
+    // enumerated, hardware first, then the fallback adapter.
+    if created.is_none() {
+        for adapter in other_wgpu_adapters(&instance, force_software_adapter).await {
+            match try_rendering_device(adapter).await {
+                Ok(found) => {
+                    created = Some(found);
+                    break;
+                }
+                Err(error) => last_error = Some(error),
+            }
+        }
+    }
+    let Some((adapter, device, queue)) = created else {
+        device_phase.finish("failed");
+        return Err(last_error.map_or(RenderingError::NoAdapter, Into::into));
+    };
+    device_phase.finish("returned");
+
+    let adapter_info = adapter.get_info();
+    let is_software_adapter = is_software_wgpu_adapter(&adapter_info);
+    if is_software_adapter {
+        tracing::warn!(
             adapter_name = adapter_info.name,
             adapter_backend = ?adapter_info.backend,
             adapter_device_type = ?adapter_info.device_type,
             "Using software adapter (CPU rendering - performance may be reduced)"
         );
-        (software_adapter, true)
-    };
-
-    adapter_phase.finish(if is_software_adapter {
-        "software"
     } else {
-        "hardware"
-    });
+        tracing::info!(
+            adapter_name = adapter_info.name,
+            adapter_backend = ?adapter_info.backend,
+            adapter_device_type = ?adapter_info.device_type,
+            "Using hardware GPU adapter"
+        );
+    }
+    log_uncaptured_errors(&device, "cap-rendering-device");
+    Ok(SharedWgpuDevice {
+        instance,
+        adapter,
+        device,
+        queue,
+        is_software_adapter,
+    })
+}
 
+// Identical cards report identical `AdapterInfo` (wgpu 25 has no bus id), so
+// the preferred adapter is not filtered out: one more failed attempt on it is
+// cheaper than skipping a working twin.
+#[cfg(not(target_arch = "wasm32"))]
+async fn other_wgpu_adapters(
+    instance: &wgpu::Instance,
+    force_software_adapter: bool,
+) -> Vec<wgpu::Adapter> {
+    let mut adapters = if force_software_adapter {
+        Vec::new()
+    } else {
+        instance.enumerate_adapters(wgpu::Backends::all())
+    };
+    adapters.sort_by_key(|adapter| is_software_wgpu_adapter(&adapter.get_info()));
+    if let Ok(fallback) = instance
+        .request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::LowPower,
+            force_fallback_adapter: true,
+            compatible_surface: None,
+        })
+        .await
+    {
+        adapters.push(fallback);
+    }
+    adapters
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn try_rendering_device(
+    adapter: wgpu::Adapter,
+) -> Result<(wgpu::Adapter, wgpu::Device, wgpu::Queue), wgpu::RequestDeviceError> {
+    let info = adapter.get_info();
+    match request_rendering_device(&adapter).await {
+        Ok((device, queue)) => Ok((adapter, device, queue)),
+        Err(error) => {
+            tracing::warn!(
+                adapter_name = info.name,
+                adapter_backend = ?info.backend,
+                %error,
+                "Could not create a rendering device; trying the next adapter"
+            );
+            Err(error)
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn request_rendering_device(
+    adapter: &wgpu::Adapter,
+) -> Result<(wgpu::Device, wgpu::Queue), wgpu::RequestDeviceError> {
     let mut required_features = wgpu::Features::empty();
     if adapter.features().contains(wgpu::Features::PIPELINE_CACHE) {
         required_features |= wgpu::Features::PIPELINE_CACHE;
@@ -2660,23 +2729,40 @@ pub async fn create_shared_device() -> Result<SharedWgpuDevice, RenderingError> 
     {
         required_features |= wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES;
     }
+    adapter
+        .request_device(&wgpu::DeviceDescriptor {
+            label: Some("cap-rendering-device"),
+            required_features,
+            ..Default::default()
+        })
+        .await
+}
 
-    let device_descriptor = wgpu::DeviceDescriptor {
-        label: Some("cap-rendering-device"),
-        required_features,
-        ..Default::default()
+/// wgpu panics on an error nothing captured. After a device is lost (a driver
+/// reset, sleep, a GPU switch) every call on it fails validation, so that
+/// default ended the app at the next frame or export. Log those errors
+/// instead, at most a few per second; the operation that hit them fails on
+/// its own (a readback that cannot map, a frame that never presents) and the
+/// next device request gets a new device.
+pub fn log_uncaptured_errors(device: &wgpu::Device, label: &'static str) {
+    use std::sync::{
+        Mutex,
+        atomic::{AtomicU64, Ordering},
     };
-
-    let device_phase = readiness::Phase::start("wgpu.device");
-    let (device, queue) = adapter.request_device(&device_descriptor).await?;
-    device_phase.finish("returned");
-    Ok(SharedWgpuDevice {
-        instance,
-        adapter,
-        device,
-        queue,
-        is_software_adapter,
-    })
+    const MIN_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
+    let last = Mutex::new(None::<std::time::Instant>);
+    let suppressed = AtomicU64::new(0);
+    device.on_uncaptured_error(Box::new(move |error| {
+        let now = std::time::Instant::now();
+        let mut last = last.lock().unwrap_or_else(|error| error.into_inner());
+        if last.is_some_and(|last| now.duration_since(last) < MIN_INTERVAL) {
+            suppressed.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+        *last = Some(now);
+        let suppressed = suppressed.swap(0, Ordering::Relaxed);
+        tracing::error!(device = label, suppressed, %error, "uncaptured wgpu error");
+    }));
 }
 
 #[derive(Clone, Debug)]
@@ -6756,6 +6842,7 @@ mod export_order_tests {
                 XY::new(SIZE, SIZE),
                 &recordings,
                 None,
+                false,
             );
             let collect = async {
                 let mut order = Vec::new();
@@ -7239,6 +7326,7 @@ pub struct FrameRenderer<'a> {
     nv12_buffer_pool: NV12BufferPool,
     transition_compositor: Option<TransitionCompositor>,
     export_deadlines: bool,
+    owned_frames: bool,
 }
 
 impl<'a> FrameRenderer<'a> {
@@ -7257,6 +7345,7 @@ impl<'a> FrameRenderer<'a> {
             nv12_buffer_pool: NV12BufferPool::new(6),
             transition_compositor: None,
             export_deadlines: false,
+            owned_frames: false,
         }
     }
 
@@ -7265,6 +7354,13 @@ impl<'a> FrameRenderer<'a> {
     /// failed readback costs the export a frame.
     pub(crate) fn use_export_deadlines(&mut self) {
         self.export_deadlines = true;
+    }
+
+    /// Frames are delivered with no other owner: the readback does not keep
+    /// a clone for recycling, so the consumer can take the buffer by value
+    /// instead of copying it out of a shared `Arc`.
+    pub(crate) fn deliver_owned_frames(&mut self) {
+        self.owned_frames = true;
     }
 
     /// NV12 frames come back as IOSurface-backed CVPixelBuffers instead of
@@ -7315,6 +7411,7 @@ impl<'a> FrameRenderer<'a> {
         let session = self.session.get_or_insert_with(|| {
             RenderSession::new(&self.constants.device, width, height)
                 .with_export_deadlines(self.export_deadlines)
+                .with_recycle_readback_frames(!self.owned_frames)
         });
         session.update_texture_size(&self.constants.device, width, height);
     }
@@ -7363,6 +7460,7 @@ impl<'a> FrameRenderer<'a> {
                     uniforms.output_size.1,
                 )
                 .with_export_deadlines(self.export_deadlines)
+                .with_recycle_readback_frames(!self.owned_frames)
             });
 
             session.update_texture_size(
@@ -7441,6 +7539,7 @@ impl<'a> FrameRenderer<'a> {
                     incoming.uniforms.output_size.1,
                 )
                 .with_export_deadlines(self.export_deadlines)
+                .with_recycle_readback_frames(!self.owned_frames)
             });
             session.update_texture_size(
                 &self.constants.device,
@@ -7613,6 +7712,7 @@ impl<'a> FrameRenderer<'a> {
                     uniforms.output_size.1,
                 )
                 .with_export_deadlines(self.export_deadlines)
+                .with_recycle_readback_frames(!self.owned_frames)
             });
             session.update_texture_size(
                 &self.constants.device,
@@ -7751,6 +7851,7 @@ impl<'a> FrameRenderer<'a> {
                     incoming.uniforms.output_size.1,
                 )
                 .with_export_deadlines(self.export_deadlines)
+                .with_recycle_readback_frames(!self.owned_frames)
             });
             session.update_texture_size(
                 &self.constants.device,
@@ -7837,6 +7938,7 @@ impl<'a> FrameRenderer<'a> {
                     incoming.uniforms.output_size.1,
                 )
                 .with_export_deadlines(self.export_deadlines)
+                .with_recycle_readback_frames(!self.owned_frames)
             });
             session.update_texture_size(
                 &self.constants.device,
@@ -7931,56 +8033,17 @@ impl<'a> FrameRenderer<'a> {
         let nv12_size = (width as usize) * (height as usize) * 3 / 2;
         let mut nv12_buf = self.nv12_buffer_pool.acquire(nv12_size);
 
-        let y_stride = width as usize;
-        let uv_stride = width as usize;
-        let y_plane_size = y_stride * height as usize;
-        let uv_plane_size = uv_stride * (height as usize / 2);
+        let y_plane_size = width as usize * height as usize;
+        let uv_plane_size = width as usize * (height as usize / 2);
         nv12_buf.resize(y_plane_size + uv_plane_size, 0);
 
-        let src_data = &rgba_frame.data;
-        let src_stride = padded_bytes_per_row as usize;
-
-        for row in 0..height as usize {
-            let src_row = &src_data[row * src_stride..row * src_stride + width as usize * 4];
-            let y_row = &mut nv12_buf[row * y_stride..(row + 1) * y_stride];
-            for col in 0..width as usize {
-                let r = src_row[col * 4] as i32;
-                let g = src_row[col * 4 + 1] as i32;
-                let b = src_row[col * 4 + 2] as i32;
-                y_row[col] = cpu_yuv::bt709_luma(r, g, b);
-            }
-        }
-
-        let uv_offset = y_plane_size;
-        for row in 0..(height as usize / 2) {
-            let src_row0 =
-                &src_data[row * 2 * src_stride..row * 2 * src_stride + width as usize * 4];
-            let src_row1 = &src_data
-                [(row * 2 + 1) * src_stride..(row * 2 + 1) * src_stride + width as usize * 4];
-            let uv_row =
-                &mut nv12_buf[uv_offset + row * uv_stride..uv_offset + (row + 1) * uv_stride];
-            for col in 0..(width as usize / 2) {
-                let r = (src_row0[col * 8] as i32
-                    + src_row0[col * 8 + 4] as i32
-                    + src_row1[col * 8] as i32
-                    + src_row1[col * 8 + 4] as i32
-                    + 2)
-                    / 4;
-                let g = (src_row0[col * 8 + 1] as i32
-                    + src_row0[col * 8 + 5] as i32
-                    + src_row1[col * 8 + 1] as i32
-                    + src_row1[col * 8 + 5] as i32
-                    + 2)
-                    / 4;
-                let b = (src_row0[col * 8 + 2] as i32
-                    + src_row0[col * 8 + 6] as i32
-                    + src_row1[col * 8 + 2] as i32
-                    + src_row1[col * 8 + 6] as i32
-                    + 2)
-                    / 4;
-                [uv_row[col * 2], uv_row[col * 2 + 1]] = cpu_yuv::bt709_chroma(r, g, b);
-            }
-        }
+        cpu_yuv::rgba_to_nv12(
+            &rgba_frame.data,
+            padded_bytes_per_row as usize,
+            width as usize,
+            height as usize,
+            &mut nv12_buf,
+        );
 
         frame_pipeline::Nv12RenderedFrame {
             data: self.nv12_buffer_pool.wrap(nv12_buf),
@@ -8030,6 +8093,7 @@ impl<'a> FrameRenderer<'a> {
                     uniforms.output_size.1,
                 )
                 .with_export_deadlines(self.export_deadlines)
+                .with_recycle_readback_frames(!self.owned_frames)
             });
 
             session.update_texture_size(
