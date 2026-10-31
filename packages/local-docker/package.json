@@ -1,15 +1,15 @@
 {
-	"name": "@cap/local-docker",
-	"version": "0.0.0",
-	"main": "./src/index.tsx",
-	"types": "./src/index.tsx",
-	"scripts": {
-		"dev": "bun run docker:up",
-		"docker:up": "docker compose up -d --wait",
-		"docker:stop": "docker compose stop",
-		"docker:clean": "docker compose down -v"
-	},
-	"engines": {
-		"node": ">=20"
-	}
+  "name": "@cap/local-docker",
+  "version": "0.0.0",
+  "main": "./src/index.tsx",
+  "types": "./src/index.tsx",
+  "scripts": {
+    "dev": "node init && bun run docker:up",
+    "docker:up": "docker compose up -d --wait",
+    "docker:stop": "docker compose stop",
+    "docker:clean": "docker compose down -v"
+  },
+  "engines": {
+    "node": ">=20"
+  }
 }

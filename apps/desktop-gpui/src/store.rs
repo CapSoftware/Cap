@@ -155,39 +155,8 @@ pub struct ExportPrefs {
 }
 
 /// `so.cap.desktop`'s app-data dir -- where both stores live.
-///
-/// The identifier every Cap release has used (`so.cap.desktop`), resolved
-/// the way each OS's app-data convention spells it, so recordings and
-/// settings from 0.6.0 and earlier are found where those builds left them.
 pub fn app_data_dir() -> PathBuf {
-    if let Ok(dir) = std::env::var("CAP_GPUI_APP_DATA_DIR")
-        && !dir.trim().is_empty()
-    {
-        return PathBuf::from(dir);
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into()))
-            .join("Library/Application Support/so.cap.desktop")
-    }
-    #[cfg(target_os = "windows")]
-    {
-        std::env::var_os("APPDATA")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("so.cap.desktop")
-    }
-    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
-    {
-        let base = std::env::var_os("XDG_DATA_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| {
-                PathBuf::from(std::env::var_os("HOME").unwrap_or_else(|| ".".into()))
-                    .join(".local/share")
-            });
-        base.join("so.cap.desktop")
-    }
+    cap_utils::agent_trim::app_data_dir()
 }
 
 pub(crate) fn bundled_resource_dirs() -> Vec<PathBuf> {
