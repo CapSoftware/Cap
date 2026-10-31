@@ -1600,7 +1600,6 @@ default_text = { text = "Text", context = "Initial content of a new text annotat
 done = "Done"
 fill = "Fill"
 intensity = "Intensity"
-mask_style = { text = "Style", context = "Picks how a mask hides content: blur or pixelate." }
 pixelate = "Pixelate"
 stroke = { text = "Stroke", context = "Outline colour of a shape annotation." }
 transparent = "Transparent"
@@ -1662,6 +1661,16 @@ empty = "No layers yet"
 empty_hint = "Use the tools above to add annotations"
 reorder_hint = "Drag to reorder • Top = front"
 title = "Layers"
+
+[screenshot_editor.mask]
+corner_radius = { text = "Corners", context = "Corner radius of a rectangular mask, in a narrow slider row." }
+darkness = { text = "Darkness", context = "How much a highlight mask dims everything outside it." }
+feather = { text = "Feather", context = "How softly a mask fades out at its edges." }
+settings = "Mask settings"
+shape_ellipse = "Ellipse"
+shape_rectangle = "Rectangle"
+solid = { text = "Solid", context = "Mask style that covers the area with a flat colour." }
+tint = { text = "Tint", context = "How strongly a colour is mixed into a blurred or pixelated mask." }
 
 [screenshot_editor.menu]
 delete = "Delete"

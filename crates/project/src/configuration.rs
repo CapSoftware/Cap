@@ -2545,6 +2545,43 @@ pub enum MaskType {
     Pixelate,
 }
 
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum MaskShape {
+    #[default]
+    Rectangle,
+    Ellipse,
+}
+
+/// Styling layered on top of `maskType`. Older builds ignore the field and
+/// fall back to plain blur or pixelate, so `solid` never weakens a redaction:
+/// it rides alongside a `maskType` that still hides the region.
+#[derive(Type, Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct MaskOptions {
+    pub shape: MaskShape,
+    pub corner_radius: f64,
+    pub feather: f64,
+    pub invert: bool,
+    pub solid: bool,
+    pub color: String,
+    pub tint: f64,
+}
+
+impl Default for MaskOptions {
+    fn default() -> Self {
+        Self {
+            shape: MaskShape::Rectangle,
+            corner_radius: 0.0,
+            feather: 0.0,
+            invert: false,
+            solid: false,
+            color: "#000000".to_string(),
+            tint: 0.0,
+        }
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub enum AnnotationValidationError {
     MaskTypeMissing {
@@ -2608,6 +2645,8 @@ pub struct Annotation {
     pub mask_type: Option<MaskType>,
     #[serde(default)]
     pub mask_level: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mask_options: Option<MaskOptions>,
     #[serde(default)]
     pub points: Option<Vec<[f64; 2]>>,
 }
@@ -3262,6 +3301,29 @@ mod notch_tests {
 mod tests {
     use super::*;
     use serde_json::Value;
+
+    #[test]
+    fn mask_options_are_optional_and_fill_missing_fields() {
+        let legacy: Annotation = serde_json::from_str(
+            r#"{"id":"a","type":"mask","x":0,"y":0,"width":10,"height":10,"strokeColor":"transparent","strokeWidth":0,"fillColor":"transparent","opacity":1,"rotation":0,"text":null,"maskType":"blur","maskLevel":7}"#,
+        )
+        .unwrap();
+        assert!(legacy.mask_options.is_none());
+        assert!(legacy.validate().is_ok());
+        let json = serde_json::to_value(&legacy).unwrap();
+        assert!(json.get("maskOptions").is_none());
+
+        let partial: Annotation = serde_json::from_str(
+            r#"{"id":"b","type":"mask","x":0,"y":0,"width":10,"height":10,"strokeColor":"transparent","strokeWidth":0,"fillColor":"transparent","opacity":1,"rotation":0,"text":null,"maskType":"pixelate","maskLevel":7,"maskOptions":{"shape":"ellipse","invert":true}}"#,
+        )
+        .unwrap();
+        let options = partial.mask_options.unwrap();
+        assert_eq!(options.shape, MaskShape::Ellipse);
+        assert!(options.invert);
+        assert!(!options.solid);
+        assert_eq!(options.color, "#000000");
+        assert_eq!(options.tint, 0.0);
+    }
 
     #[test]
     fn studio_sound_defaults_old_projects_to_balanced_and_round_trips_tiers() {

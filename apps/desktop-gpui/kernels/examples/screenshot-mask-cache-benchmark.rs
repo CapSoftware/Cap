@@ -1,4 +1,5 @@
 use cap_gpui_kernels::mask_cache::{MaskEntry, MaskFrame, MaskRequest, mask_region, update_masks};
+use cap_gpui_kernels::mask_style::MaskStyle;
 use std::{hint::black_box, sync::Arc, time::Instant};
 
 const SIZE: (u32, u32) = (3840, 2160);
@@ -31,6 +32,7 @@ fn requests(count: usize, pixelate: bool, event: usize) -> Vec<MaskRequest> {
         .map(|index| {
             let x = 80. + (index % 4) as f64 * 720. + if index == 0 { event as f64 } else { 0. };
             let y = 80. + (index / 4) as f64 * 440.;
+            let region = mask_region([x, y, 640., 360.], content, SIZE).unwrap();
             MaskRequest {
                 id: index.to_string(),
                 frame: MaskFrame {
@@ -40,9 +42,9 @@ fn requests(count: usize, pixelate: bool, event: usize) -> Vec<MaskRequest> {
                     padding: 0_f64.to_bits(),
                     crop: None,
                 },
-                region: mask_region([x, y, 640., 360.], content, SIZE).unwrap(),
-                pixelate,
-                level: 16_f64.to_bits(),
+                region,
+                shape: region,
+                style: MaskStyle::plain(pixelate, 16.),
             }
         })
         .collect()

@@ -412,12 +412,21 @@ async fn render_export_rgba(
         cap_project::XY::new(base_width, base_height),
     );
 
+    let content = crate::screenshot_annotations::image_rect(
+        (f64::from(preview.0), f64::from(preview.1)),
+        Some((f64::from(source.width()), f64::from(source.height()))),
+        config.background.padding,
+        config.background.crop.as_ref(),
+        config.aspect_ratio.as_ref(),
+    );
+
     Ok(crate::screenshot_export::RawFrame {
         rgba,
         width: frame.width,
         height: frame.height,
         base_width: preview.0,
         base_height: preview.1,
+        content: Some(content),
     })
 }
 
@@ -5255,6 +5264,7 @@ mod tests {
             text: None,
             mask_type: None,
             mask_level: None,
+            mask_options: None,
             points: None,
         }
     }

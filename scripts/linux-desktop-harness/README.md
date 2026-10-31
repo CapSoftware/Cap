@@ -77,9 +77,11 @@ Hyprland image needs `modprobe vkms` on the host. With `GNOME_UNSAFE=1`,
 `shot.sh` takes a screenshot of the GNOME session.
 
 Harness-only workarounds (not in the app): Mesa's device_select Vulkan layer is
-disabled on the vkms images because it crashes on their virtual devices, and
-the GNOME session gets a target bound to `graphical-session.target`, which a
-real login activates.
+disabled on the vkms images because it crashes on their virtual devices, the
+Vulkan loader on those images is pointed at lavapipe alone (`VK_DRIVER_FILES`)
+because unloading the hardware drivers that find no device crashed Cap while it
+drew with lavapipe, and the GNOME session gets a target bound to
+`graphical-session.target`, which a real login activates.
 
 ## Checks without a desktop
 
