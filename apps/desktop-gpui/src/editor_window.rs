@@ -617,7 +617,7 @@ impl EditorPreviewFrame {
 }
 
 /// The stage's rounded preview: radius and the hairline ring around it.
-const PREVIEW_RADIUS: f32 = 6.;
+pub(crate) const PREVIEW_RADIUS: f32 = 6.;
 
 /// The breathing room between the fitted frame and the card. [`letterbox`] --
 /// which the crop dialog shares -- already eats `PLAYER_CANVAS_PADDING`, so the
@@ -634,6 +634,10 @@ struct PreviewFrameView {
     /// The stage's lift under the preview. A canvas paints raw quads, so the
     /// shadow cannot come from a style and is carried here instead.
     shadow: Vec<gpui::BoxShadow>,
+    /// Set while the watch overlay is showing the picture: the stage still
+    /// measures its rect, which is where the overlay animates back to, but
+    /// paints nothing.
+    hidden: bool,
 }
 
 impl PreviewFrameView {
@@ -645,6 +649,14 @@ impl PreviewFrameView {
             stats: None,
             frame_sequence: 0,
             shadow: crate::theme::preview_shadow(),
+            hidden: false,
+        }
+    }
+
+    fn set_hidden(&mut self, hidden: bool, cx: &mut Context<Self>) {
+        if self.hidden != hidden {
+            self.hidden = hidden;
+            cx.notify();
         }
     }
 
@@ -662,6 +674,10 @@ impl PreviewFrameView {
         cx.notify();
         previous
     }
+
+    fn paint_counters(&self) -> (Option<Arc<PumpStats>>, u64) {
+        (self.stats.clone(), self.frame_sequence)
+    }
 }
 
 impl Render for PreviewFrameView {
@@ -674,6 +690,7 @@ impl Render for PreviewFrameView {
         let painted = self.stats.clone();
         let frame_sequence = self.frame_sequence;
         let shadow = self.shadow.clone();
+        let hidden = self.hidden;
 
         gpui::canvas(
             |bounds, _window, _cx| bounds,
@@ -698,6 +715,9 @@ impl Render for PreviewFrameView {
                     container: bounds,
                     frame: fitted,
                 }));
+                if hidden {
+                    return;
+                }
                 let radius = px(PREVIEW_RADIUS);
                 window.paint_drop_shadows(fitted, gpui::Corners::all(radius), &shadow);
                 window.paint_quad(gpui::fill(fitted, gpui::black()).corner_radii(radius));
@@ -853,7 +873,7 @@ pub struct StatsSnapshot {
 }
 
 impl PumpStats {
-    fn record_paint(&self, frame_sequence: u64) {
+    pub(crate) fn record_paint(&self, frame_sequence: u64) {
         self.painted.fetch_add(1, Ordering::Relaxed);
         if self
             .last_painted_sequence
@@ -1361,6 +1381,11 @@ pub struct EditorWindow {
     preparing_seed: Option<Arc<crate::editor_preparing::presentation::PreparingTimelineSeed>>,
     pub(crate) latest_frame: Option<EditorPreviewFrame>,
     preview: Entity<PreviewFrameView>,
+    pub(crate) watch_preview: Entity<crate::editor_watch::WatchView>,
+    /// The watch overlay is mounted, from the open until its return motion
+    /// lands back on the stage.
+    pub(crate) watch_preview_open: bool,
+    pub(crate) watch_preview_closing: Option<gpui::Task<()>>,
     header: Entity<EditorSectionView>,
     toolbar: Entity<EditorSectionView>,
     transport_controls: Entity<EditorSectionView>,
@@ -1370,7 +1395,7 @@ pub struct EditorWindow {
     /// Kept alive for the window's lifetime: dropping the last `Arc` is what
     /// tears the decoders down, and `dispose()` on close does it explicitly.
     pub(crate) instance: Option<Arc<EditorInstance>>,
-    focus: FocusHandle,
+    pub(crate) focus: FocusHandle,
 
     // -- Transport ----------------------------------------------------------
     /// `editorState.playing`.
@@ -1644,7 +1669,7 @@ const ADD_TRACK_TILE_STAGGER_MS: f32 = 24.;
 const ADD_TRACK_TILE_IN_MS: f32 = 320.;
 const ADD_TRACK_TILE_SLIDE: f32 = 10.;
 
-fn ease_out_quint(t: f32) -> f32 {
+pub(crate) fn ease_out_quint(t: f32) -> f32 {
     1. - (1. - t).powi(5)
 }
 
@@ -2026,6 +2051,10 @@ impl EditorWindow {
         let player_frame_rect = crate::editor_canvas::canvas_rect_cell();
         let preview = cx.new(|_| PreviewFrameView::new(player_frame_rect.clone()));
         let editor = cx.entity();
+        let watch_preview = cx.new({
+            let editor = editor.downgrade();
+            move |_| crate::editor_watch::WatchView::new(editor)
+        });
         let header = cx.new({
             let editor = editor.clone();
             move |cx| EditorSectionView::new(&editor, EditorSection::Header, cx)
@@ -2074,6 +2103,9 @@ impl EditorWindow {
             preparing_seed: None,
             latest_frame: None,
             preview,
+            watch_preview,
+            watch_preview_open: false,
+            watch_preview_closing: None,
             header,
             toolbar,
             transport_controls,
@@ -2709,6 +2741,24 @@ impl EditorWindow {
 
     pub(crate) fn project_ready(&self) -> bool {
         self.instance.is_some() && matches!(&self.state, LoadState::Ready(_))
+    }
+
+    pub(crate) fn set_stage_frame_hidden(&mut self, hidden: bool, cx: &mut Context<Self>) {
+        self.preview
+            .update(cx, |preview, cx| preview.set_hidden(hidden, cx));
+    }
+
+    pub(crate) fn watch_paint_counters(&self, cx: &Context<Self>) -> (Option<Arc<PumpStats>>, u64) {
+        self.preview.read(cx).paint_counters()
+    }
+
+    pub(crate) fn dismiss_watch_preview_menus(&mut self) {
+        self.dismiss_transient_menus();
+        self.sidebar.menu = None;
+        self.toolbar_menu = None;
+        self.add_track = None;
+        self.clip_speed = None;
+        self.presets_menu = None;
     }
 
     #[allow(dead_code)]
@@ -3501,6 +3551,13 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.watch_preview_open {
+            if event.keystroke.key == "escape" && !event.is_held {
+                self.close_watch_preview(window, cx);
+            }
+            cx.stop_propagation();
+            return;
+        }
         if self.frame_controls.is_open() && event.keystroke.key == "escape" {
             self.close_frame_controls(window, cx);
             cx.stop_propagation();
@@ -6527,11 +6584,26 @@ impl EditorWindow {
             frame.layout.output_size[1] as f32,
         );
         self.latest_frame = Some(frame.frame.clone());
+        let watch_frame = self.watch_preview_open.then(|| frame.frame.clone());
         let previous = self.preview.update(cx, |preview, cx| {
             preview.set_frame(frame.frame, frame_size, self.stats.clone(), cx)
         });
+        if let Some(watch_frame) = watch_frame {
+            let (stats, frame_sequence) = self.watch_paint_counters(cx);
+            self.watch_preview.update(cx, |watch, cx| {
+                watch.set_frame(watch_frame, frame_size, stats, frame_sequence, cx);
+            });
+        }
         if let Some(EditorPreviewFrame::Image(previous)) = previous {
-            let _ = window.drop_image(previous);
+            if self.watch_preview_open {
+                // The overlay still paints this tile until its next draw;
+                // dropping it here blanks the card on Windows wgpu.
+                cx.on_next_frame(window, move |_, window, _| {
+                    let _ = window.drop_image(previous);
+                });
+            } else {
+                let _ = window.drop_image(previous);
+            }
         }
         if let Some(stats) = &self.stats {
             stats.presented.fetch_add(1, Ordering::Relaxed);
@@ -10786,6 +10858,7 @@ impl EditorWindow {
                                 )),
                             ),
                     )
+                    .child(self.render_watch_preview_button(cx))
                     .child(self.header_divider())
                     // `IconCapZoomOut` -> `updateZoom(zoom * 1.1,
                     // playbackTime)`; `IconCapZoomIn` -> `zoom / 1.1`
@@ -12344,6 +12417,7 @@ impl Render for EditorWindow {
             // The clips overlays: import menu, record modal, and the card
             // drag's window-wide layer with its floating ghost.
             .children(self.render_clips_overlays(cx))
+            .children(self.watch_preview_open.then(|| self.watch_preview.clone()))
             // Crop mode is a modal: it goes over everything, including the
             // menu above.
             .children(self.render_crop_dialog(cx))

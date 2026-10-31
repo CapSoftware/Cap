@@ -40,6 +40,7 @@ mod editor_preparing;
 mod editor_sidebar;
 mod editor_tabs;
 mod editor_timeline;
+mod editor_watch;
 mod editor_window;
 mod feeds;
 mod focus_border;
