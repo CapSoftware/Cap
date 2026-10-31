@@ -38,6 +38,9 @@ use std::{
 
 mod playback_follow;
 
+#[cfg(test)]
+mod waveform_bench;
+
 pub use playback_follow::PlaybackFollow;
 
 use cap_project::{
@@ -584,6 +587,18 @@ fn waveform_amplitude(peaks: &[f32], source_time: Option<f64>) -> f64 {
 /// `canvasHeight * (1 - scale)` (`:285-290`); gpui has no path transform on
 /// `paint_path`, so the same maths is applied to each point as it is emitted.
 pub fn waveform_path(geometry: &WaveformGeometry) -> Option<gpui::Path<Pixels>> {
+    // Sweep along time so distant peaks don't share the active edge list.
+    tessellate_waveform(
+        geometry,
+        gpui::FillOptions::default()
+            .with_sweep_orientation(lyon_tessellation::Orientation::Horizontal),
+    )
+}
+
+fn tessellate_waveform(
+    geometry: &WaveformGeometry,
+    options: gpui::FillOptions,
+) -> Option<gpui::Path<Pixels>> {
     let &WaveformGeometry {
         ref peaks,
         range,
@@ -651,7 +666,7 @@ pub fn waveform_path(geometry: &WaveformGeometry) -> Option<gpui::Path<Pixels>> 
         )
     };
 
-    let mut builder = gpui::PathBuilder::fill();
+    let mut builder = gpui::PathBuilder::fill().with_style(gpui::PathStyle::Fill(options));
     builder.move_to(map(0., 1.));
 
     let control_step = (WAVEFORM_CONTROL_STEP / timescale / duration).min(0.25);
