@@ -296,10 +296,12 @@ describe("share transcript rendering", () => {
 		await click(button("Save"));
 		expect(button("Save").disabled).toBe(true);
 		expect(button("Cancel").disabled).toBe(true);
-		await editCue(3);
-		expect(container.querySelector("textarea")?.value).toMatch(/^Cue 3:/);
-		expect(button("Save").disabled).toBe(true);
-		expect(button("Cancel").disabled).toBe(true);
+		expect(container.querySelector("textarea")?.disabled).toBe(true);
+		expect(
+			cue(3).parentElement?.querySelector(
+				'button[title="Edit transcript entry"]',
+			),
+		).toBeNull();
 		await act(async () => finish({ success: true }));
 		expect(container.querySelector("textarea")).toBeNull();
 		expect(container.textContent).toContain("Saved after waiting");
