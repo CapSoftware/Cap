@@ -297,6 +297,7 @@ impl MacOSFragmentedM4SMuxer {
             bpp: self.bpp,
             output_size: self.output_size,
             prefer_videotoolbox_hw_input: true,
+            prefer_external_conversion: false,
         };
 
         let mut encoder = SegmentedVideoEncoder::init_write_behind(
@@ -688,6 +689,7 @@ impl MacOSFragmentedM4SCameraMuxer {
             bpp: self.bpp,
             output_size: self.output_size,
             prefer_videotoolbox_hw_input: false,
+            prefer_external_conversion: false,
         };
 
         let mut encoder = SegmentedVideoEncoder::init_write_behind(

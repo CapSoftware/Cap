@@ -29,6 +29,9 @@ use std::{
 use tokio_util::{future::FutureExt as _, sync::CancellationToken};
 use tracing::*;
 
+mod gpu_scale;
+use gpu_scale::GpuTextureScaler;
+
 // const WINDOW_DURATION: Duration = Duration::from_secs(3);
 // const LOG_INTERVAL: Duration = Duration::from_secs(5);
 
@@ -185,6 +188,8 @@ struct WindowsFrameScaler {
     pixel_format: scap_direct3d::PixelFormat,
     d3d_device: ID3D11Device,
     state: Option<FrameScalerState>,
+    gpu_scaler: Option<GpuTextureScaler>,
+    gpu_scaler_source: Option<(u32, u32)>,
 }
 
 impl WindowsFrameScaler {
@@ -200,10 +205,101 @@ impl WindowsFrameScaler {
             pixel_format,
             d3d_device,
             state: None,
+            gpu_scaler: None,
+            gpu_scaler_source: None,
         }
     }
 
+    fn ensure_gpu_scaler(
+        &mut self,
+        src_width: u32,
+        src_height: u32,
+    ) -> Option<&mut GpuTextureScaler> {
+        let needs_reinit = self
+            .gpu_scaler_source
+            .is_none_or(|(w, h)| w != src_width || h != src_height);
+
+        if needs_reinit {
+            self.gpu_scaler = GpuTextureScaler::try_new(
+                &self.d3d_device,
+                self.pixel_format,
+                src_width,
+                src_height,
+                self.target_width,
+                self.target_height,
+            );
+            self.gpu_scaler_source = Some((src_width, src_height));
+        }
+
+        self.gpu_scaler.as_mut()
+    }
+
+    fn scale_frame_gpu(&mut self, frame: &scap_direct3d::Frame) -> Option<ScreenFrame> {
+        let src_width = frame.width();
+        let src_height = frame.height();
+        let scaler = self.ensure_gpu_scaler(src_width, src_height)?;
+        if scaler.scale_texture(frame.texture()).is_none() {
+            self.gpu_scaler = None;
+            return None;
+        }
+
+        let (width, height, pixel_format) = scaler.dimensions();
+        let row_bytes = (width * 4) as usize;
+        let pixel_data = scaler.pixel_data_for_frame().to_vec();
+
+        let dxgi_format = match pixel_format {
+            scap_direct3d::PixelFormat::R8G8B8A8Unorm => {
+                ::windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R8G8B8A8_UNORM
+            }
+            scap_direct3d::PixelFormat::B8G8R8A8Unorm => {
+                ::windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM
+            }
+        };
+
+        let texture_desc = D3D11_TEXTURE2D_DESC {
+            Width: width,
+            Height: height,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: dxgi_format,
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            Usage: D3D11_USAGE_DEFAULT,
+            BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
+            CPUAccessFlags: 0,
+            MiscFlags: 0,
+        };
+
+        let subresource_data = D3D11_SUBRESOURCE_DATA {
+            pSysMem: pixel_data.as_ptr() as *const _,
+            SysMemPitch: row_bytes as u32,
+            SysMemSlicePitch: 0,
+        };
+
+        let texture = unsafe {
+            let mut tex = None;
+            self.d3d_device
+                .CreateTexture2D(&texture_desc, Some(&subresource_data), Some(&mut tex))
+                .ok()?;
+            tex?
+        };
+
+        Some(ScreenFrame::Scaled(ScaledScreenFrame {
+            texture,
+            pixel_data,
+            width,
+            height,
+            pixel_format,
+        }))
+    }
+
     fn scale_frame(&mut self, frame: &scap_direct3d::Frame) -> Option<ScreenFrame> {
+        if let Some(scaled) = self.scale_frame_gpu(frame) {
+            return Some(scaled);
+        }
+
         let src_width = frame.width();
         let src_height = frame.height();
 
@@ -657,6 +753,8 @@ fn create_d3d_capturer(
                             );
                             if let Ok(mut guard) = frame_scaler.lock() {
                                 guard.state = None;
+                                guard.gpu_scaler = None;
+                                guard.gpu_scaler_source = None;
                             }
                         }
                         ScreenFrame::Captured(frame)

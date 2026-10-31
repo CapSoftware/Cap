@@ -231,6 +231,10 @@ pub struct SegmentedVideoEncoderConfig {
     /// [`SegmentedVideoEncoder::queue_hw_pixel_buffer`]) before falling back
     /// to the software-frame path. Ignored on other platforms.
     pub prefer_videotoolbox_hw_input: bool,
+    /// When set, pixel format conversion and scaling run outside the encoder
+    /// (for example via [`cap_frame_converter::AsyncConverterPool`]) so
+    /// readback and GPU conversion can overlap encoding.
+    pub prefer_external_conversion: bool,
 }
 
 impl Default for SegmentedVideoEncoderConfig {
@@ -241,6 +245,7 @@ impl Default for SegmentedVideoEncoderConfig {
             bpp: H264EncoderBuilder::QUALITY_BPP,
             output_size: None,
             prefer_videotoolbox_hw_input: false,
+            prefer_external_conversion: false,
         }
     }
 }
@@ -331,6 +336,10 @@ impl SegmentedVideoEncoder {
 
         if let Some((width, height)) = config.output_size {
             builder = builder.with_output_size(width, height)?;
+        }
+
+        if config.prefer_external_conversion {
+            builder = builder.with_external_conversion();
         }
 
         #[cfg(target_os = "macos")]
@@ -477,6 +486,21 @@ impl SegmentedVideoEncoder {
 
         self.mux.frame_queued();
 
+        Ok(())
+    }
+
+    pub fn conversion_requirements(&self) -> crate::video::h264::ConversionRequirements {
+        self.encoder.conversion_requirements()
+    }
+
+    pub fn queue_preconverted_frame(
+        &mut self,
+        frame: frame::Video,
+        timestamp: Duration,
+    ) -> Result<(), QueueFrameError> {
+        self.encoder
+            .queue_preconverted_frame_to(frame, timestamp, &mut self.mux)?;
+        self.mux.frame_queued();
         Ok(())
     }
 

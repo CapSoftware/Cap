@@ -1167,9 +1167,18 @@ impl H264Encoder {
 
     pub fn queue_preconverted_frame(
         &mut self,
-        mut frame: frame::Video,
+        frame: frame::Video,
         timestamp: Duration,
         output: &mut format::context::Output,
+    ) -> Result<(), QueueFrameError> {
+        self.queue_preconverted_frame_to(frame, timestamp, output)
+    }
+
+    pub fn queue_preconverted_frame_to<S: PacketSink + ?Sized>(
+        &mut self,
+        mut frame: frame::Video,
+        timestamp: Duration,
+        output: &mut S,
     ) -> Result<(), QueueFrameError> {
         trace!(
             "Encoding pre-converted frame: format={:?}, size={}x{}, expected={:?} {}x{}",

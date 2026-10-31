@@ -5,6 +5,7 @@ use super::core::{
 use super::frame_pacing::{FramePacer, Paced};
 use super::mjpeg::MjpegDecoder;
 use super::win::reference_video_frame;
+use super::win_m4s_convert_encode::{StagedFrame, run_win_m4s_encode_thread};
 use crate::{
     AudioFrame, AudioMuxer, Muxer, SharedPauseState, TaskPool, VideoMuxer,
     output_pipeline::{NativeCameraFrame, camera_frame_to_ffmpeg},
@@ -29,6 +30,14 @@ use std::{
 use tracing::*;
 
 const DEFAULT_MUXER_BUFFER_SIZE: usize = 240;
+const DEFAULT_CONVERT_STAGING_DEPTH: usize = 32;
+
+fn get_convert_staging_depth() -> usize {
+    std::env::var("CAP_WIN_CONVERT_STAGING_DEPTH")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(DEFAULT_CONVERT_STAGING_DEPTH)
+}
 
 fn get_muxer_buffer_size() -> usize {
     std::env::var("CAP_MUXER_BUFFER_SIZE")
@@ -215,6 +224,7 @@ pub struct WindowsFragmentedM4SMuxer {
     disk_space_callback: Option<DiskSpaceCallback>,
     segment_tx:
         Option<std::sync::mpsc::Sender<cap_enc_ffmpeg::segmented_stream::SegmentCompletedEvent>>,
+    prefer_external_conversion: bool,
     health_tx: SharedHealthSender,
 }
 
@@ -228,6 +238,7 @@ pub struct WindowsFragmentedM4SMuxerConfig {
     pub disk_space_callback: Option<DiskSpaceCallback>,
     pub segment_tx:
         Option<std::sync::mpsc::Sender<cap_enc_ffmpeg::segmented_stream::SegmentCompletedEvent>>,
+    pub prefer_external_conversion: bool,
 }
 
 impl Default for WindowsFragmentedM4SMuxerConfig {
@@ -241,6 +252,7 @@ impl Default for WindowsFragmentedM4SMuxerConfig {
             shared_pause_state: None,
             disk_space_callback: None,
             segment_tx: None,
+            prefer_external_conversion: true,
         }
     }
 }
@@ -286,6 +298,7 @@ impl Muxer for WindowsFragmentedM4SMuxer {
             started: false,
             disk_space_callback: config.disk_space_callback,
             segment_tx: config.segment_tx,
+            prefer_external_conversion: config.prefer_external_conversion,
             health_tx: SharedHealthSender::new(),
         };
 
@@ -335,12 +348,14 @@ impl WindowsFragmentedM4SMuxer {
             sync_channel::<Option<(screen_capture::ScreenFrame, Duration)>>(buffer_size);
         let (ready_tx, ready_rx) = sync_channel::<anyhow::Result<()>>(1);
 
+        let prefer_external_conversion = self.prefer_external_conversion;
         let encoder_config = SegmentedVideoEncoderConfig {
             segment_duration: self.segment_duration,
             preset: self.preset,
             bpp: self.bpp,
             output_size: self.output_size,
             prefer_videotoolbox_hw_input: false,
+            prefer_external_conversion,
         };
 
         let mut encoder = SegmentedVideoEncoder::init_with_timed_fragments(
@@ -349,6 +364,7 @@ impl WindowsFragmentedM4SMuxer {
             encoder_config,
             self.timed_fragments,
         )?;
+        let conversion_requirements = encoder.conversion_requirements();
         if let Some(callback) = &self.disk_space_callback {
             encoder.set_disk_space_callback(callback.clone());
         }
@@ -356,14 +372,29 @@ impl WindowsFragmentedM4SMuxer {
             encoder.set_segment_callback(tx);
         }
         let encoder = Arc::new(Mutex::new(encoder));
-        let encoder_clone = encoder.clone();
 
         let video_config = self.video_config;
         let health_tx = self.health_tx.clone();
         let base_path = self.base_path.clone();
         let pause_flag = self.pause.flag();
+        let (staging_tx, staging_rx) =
+            sync_channel::<StagedFrame>(get_convert_staging_depth().max(4));
+        let encode_encoder = encoder.clone();
+        let use_converter_pool =
+            prefer_external_conversion && conversion_requirements.needs_conversion;
+        let encode_handle = std::thread::Builder::new()
+            .name("win-m4s-segment-encode".to_string())
+            .spawn(move || {
+                cap_mediafoundation_utils::thread_init();
+                run_win_m4s_encode_thread(
+                    staging_rx,
+                    encode_encoder,
+                    &conversion_requirements,
+                    use_converter_pool,
+                )
+            })?;
         let encoder_handle = std::thread::Builder::new()
-            .name("win-m4s-segment-encoder".to_string())
+            .name("win-m4s-segment-readback".to_string())
             .spawn(move || {
                 cap_mediafoundation_utils::thread_init();
 
@@ -376,7 +407,6 @@ impl WindowsFragmentedM4SMuxer {
                 let mut first_timestamp: Option<Duration> = None;
 
                 let mut slow_convert_count = 0u32;
-                let mut slow_encode_count = 0u32;
                 let mut total_frames = 0u64;
                 let mut duplicated_frames = 0u64;
                 let mut disk_monitor = DiskSpaceMonitor::new();
@@ -393,43 +423,12 @@ impl WindowsFragmentedM4SMuxer {
                         }
                     };
 
-                let encode_frame_fn = |ffmpeg_frame: ffmpeg::frame::Video,
-                                       timestamp: Duration,
-                                       slow_encode_count: &mut u32,
-                                       total_frames: &mut u64,
-                                       encoder: &Arc<Mutex<SegmentedVideoEncoder>>|
+                let stage_frame = |ffmpeg_frame: ffmpeg::frame::Video,
+                                   timestamp: Duration|
                  -> anyhow::Result<()> {
-                    let encode_start = std::time::Instant::now();
-
-                    match encoder.lock() {
-                        Ok(mut enc) => {
-                            if let Err(e) = enc.queue_frame(ffmpeg_frame, timestamp) {
-                                warn!("Failed to encode frame: {e}");
-                            }
-                        }
-                        Err(_) => {
-                            return Err(anyhow!(
-                                "Encoder mutex poisoned - all subsequent frames would be lost"
-                            ));
-                        }
-                    }
-
-                    let encode_elapsed_ms = encode_start.elapsed().as_millis();
-
-                    if encode_elapsed_ms > SLOW_THRESHOLD_MS {
-                        *slow_encode_count += 1;
-                        if *slow_encode_count <= 5 || slow_encode_count.is_multiple_of(100) {
-                            debug!(
-                                elapsed_ms = encode_elapsed_ms,
-                                count = *slow_encode_count,
-                                "encoder.queue_frame exceeded {}ms threshold",
-                                SLOW_THRESHOLD_MS
-                            );
-                        }
-                    }
-
-                    *total_frames += 1;
-                    Ok(())
+                    staging_tx
+                        .send((ffmpeg_frame, timestamp))
+                        .map_err(|_| anyhow!("Windows M4S convert staging channel disconnected"))
                 };
 
                 loop {
@@ -476,17 +475,12 @@ impl WindowsFragmentedM4SMuxer {
                                         if let Ok(f) = frame.as_ffmpeg() {
                                             let normalized_ts =
                                                 normalize_timestamp(ts, &mut first_timestamp);
-                                            if let Err(e) = encode_frame_fn(
-                                                f,
-                                                normalized_ts,
-                                                &mut slow_encode_count,
-                                                &mut total_frames,
-                                                &encoder_clone,
-                                            ) {
-                                                warn!("Failed to encode drained frame: {e}");
+                                            if let Err(e) = stage_frame(f, normalized_ts) {
+                                                warn!("Failed to stage drained frame: {e}");
                                                 break;
                                             }
                                             drained += 1;
+                                            total_frames += 1;
                                         }
                                     }
                                     Ok(None) => break,
@@ -525,37 +519,33 @@ impl WindowsFragmentedM4SMuxer {
                     }
 
                     let normalized_ts = normalize_timestamp(timestamp, &mut first_timestamp);
-                    if let Err(e) = encode_frame_fn(
-                        ffmpeg_frame,
-                        normalized_ts,
-                        &mut slow_encode_count,
-                        &mut total_frames,
-                        &encoder_clone,
-                    ) {
-                        error!("Encoder mutex poisoned - encoder thread likely panicked, stopping");
+                    if let Err(e) = stage_frame(ffmpeg_frame, normalized_ts) {
+                        error!("Convert staging channel closed, stopping readback thread");
                         return Err(e);
                     }
+                    total_frames += 1;
                 }
+
+                drop(staging_tx);
+
+                let encode_result = encode_handle
+                    .join()
+                    .map_err(|_| anyhow!("Windows M4S encode thread panicked"))?;
 
                 if total_frames > 0 {
                     debug!(
                         total_frames = total_frames,
                         duplicated_frames = duplicated_frames,
                         slow_converts = slow_convert_count,
-                        slow_encodes = slow_encode_count,
                         slow_convert_pct = format!(
                             "{:.1}%",
                             100.0 * slow_convert_count as f64 / total_frames as f64
                         ),
-                        slow_encode_pct = format!(
-                            "{:.1}%",
-                            100.0 * slow_encode_count as f64 / total_frames as f64
-                        ),
-                        "Windows M4S encoder timing summary (using SegmentedVideoEncoder)"
+                        "Windows M4S readback timing summary"
                     );
                 }
 
-                Ok(())
+                encode_result
             })?;
 
         ready_rx
@@ -792,6 +782,7 @@ impl WindowsFragmentedM4SCameraMuxer {
             bpp: self.bpp,
             output_size: self.output_size,
             prefer_videotoolbox_hw_input: false,
+            prefer_external_conversion: false,
         };
 
         let mut encoder = SegmentedVideoEncoder::init_with_timed_fragments(
