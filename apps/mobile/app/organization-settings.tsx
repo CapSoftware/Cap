@@ -63,6 +63,23 @@ const openPhotoSettings = () => {
 
 export default function OrganizationSettingsScreen() {
 	const auth = useAuth();
+	return (
+		<OrganizationSettingsForAccount
+			key={`${auth.userId ?? ""}:${auth.bootstrap?.activeOrganizationId ?? ""}`}
+		/>
+	);
+}
+
+function OrganizationSettingsForAccount() {
+	const auth = useAuth();
+	const activeOrganizationId = auth.bootstrap?.activeOrganizationId;
+	const activeRef = useRef(true);
+	useEffect(() => {
+		activeRef.current = true;
+		return () => {
+			activeRef.current = false;
+		};
+	}, []);
 	const [settings, setSettings] = useState<MobileOrganizationSettings | null>(
 		null,
 	);
@@ -86,6 +103,13 @@ export default function OrganizationSettingsScreen() {
 			.getOrganizationSettings()
 			.then((response) => {
 				if (requestRef.current !== requestId) return;
+				if (activeOrganizationId && response.id !== activeOrganizationId) {
+					setSettings(null);
+					setError(
+						"The active organization changed. Refresh your account and try again.",
+					);
+					return;
+				}
 				setSettings(response);
 				setName(response.name);
 				setAllowedEmailDomain(response.allowedEmailDomain ?? "");
@@ -98,7 +122,7 @@ export default function OrganizationSettingsScreen() {
 			.finally(() => {
 				if (requestRef.current === requestId) setLoading(false);
 			});
-	}, [auth.client, auth.status]);
+	}, [activeOrganizationId, auth.client, auth.status]);
 
 	useEffect(() => {
 		load();
@@ -114,7 +138,8 @@ export default function OrganizationSettingsScreen() {
 	const busy = saving || iconBusy;
 
 	const save = async () => {
-		if (!settings?.canManage || saving || !name.trim()) return;
+		if (!activeRef.current || !settings?.canManage || saving || !name.trim())
+			return;
 		setSaving(true);
 		setError(null);
 		try {
@@ -122,6 +147,7 @@ export default function OrganizationSettingsScreen() {
 				name: name.trim(),
 				allowedEmailDomain: allowedEmailDomain.trim() || null,
 			});
+			if (!activeRef.current) return;
 			setSettings(response);
 			setName(response.name);
 			setAllowedEmailDomain(response.allowedEmailDomain ?? "");
@@ -134,11 +160,12 @@ export default function OrganizationSettingsScreen() {
 	};
 
 	const chooseIcon = async () => {
-		if (!settings?.canManage || busy) return;
+		if (!activeRef.current || !settings?.canManage || busy) return;
 		let result: ImagePicker.ImagePickerResult;
 		try {
 			const permission =
 				await ImagePicker.requestMediaLibraryPermissionsAsync();
+			if (!activeRef.current) return;
 			if (!permission.granted) {
 				openPhotoSettings();
 				return;
@@ -151,10 +178,11 @@ export default function OrganizationSettingsScreen() {
 				quality: 0.8,
 			});
 		} catch {
+			if (!activeRef.current) return;
 			setError("Photos could not be opened. Check access and try again.");
 			return;
 		}
-		if (result.canceled) return;
+		if (!activeRef.current || result.canceled) return;
 		const asset = result.assets[0];
 		if (!asset?.base64) {
 			setError("The selected image could not be read. Choose another image.");
@@ -191,6 +219,7 @@ export default function OrganizationSettingsScreen() {
 				contentType,
 				fileName,
 			});
+			if (!activeRef.current) return;
 			setSettings(response);
 			void auth.refresh().catch(() => undefined);
 		} catch (cause) {
@@ -201,11 +230,13 @@ export default function OrganizationSettingsScreen() {
 	};
 
 	const removeIcon = async () => {
-		if (!settings?.canManage || !settings.iconUrl || busy) return;
+		if (!activeRef.current || !settings?.canManage || !settings.iconUrl || busy)
+			return;
 		setIconBusy(true);
 		setError(null);
 		try {
 			const response = await auth.client.removeOrganizationIcon();
+			if (!activeRef.current) return;
 			setSettings(response);
 			void auth.refresh().catch(() => undefined);
 		} catch (cause) {

@@ -28,6 +28,7 @@ const settings = {
 const auth = vi.hoisted(() => ({
 	value: {
 		status: "signedIn" as const,
+		bootstrap: { activeOrganizationId: "org_123" },
 		client: {
 			getOrganizationSettings: vi.fn(),
 			removeOrganizationIcon: vi.fn(),
@@ -167,6 +168,7 @@ vi.mock("@/components/CapLoadingIndicator", async () => {
 
 describe("OrganizationSettingsScreen", () => {
 	beforeEach(() => {
+		auth.value.bootstrap.activeOrganizationId = "org_123";
 		auth.value.client.getOrganizationSettings.mockReset();
 		auth.value.client.getOrganizationSettings.mockResolvedValue(settings);
 		auth.value.client.updateOrganizationSettings.mockReset();
@@ -218,5 +220,187 @@ describe("OrganizationSettingsScreen", () => {
 			allowedEmailDomain: null,
 		});
 		expect(auth.value.refresh).toHaveBeenCalledTimes(1);
+	});
+
+	it("replaces drafts when the active organization changes", async () => {
+		const renderer = await renderComponent(
+			React.createElement(OrganizationSettingsScreen),
+		);
+		const input = renderer.root.findByProps({
+			accessibilityLabel: "Organization name",
+		});
+		await act(async () => input.props.onChangeText("Unfinished A"));
+		auth.value.client.getOrganizationSettings.mockResolvedValueOnce({
+			...settings,
+			id: "org_b",
+			name: "Organization B",
+		});
+		auth.value.bootstrap.activeOrganizationId = "org_b";
+		await act(async () => {
+			renderer.update(React.createElement(OrganizationSettingsScreen));
+			await Promise.resolve();
+			await Promise.resolve();
+		});
+		expect(
+			renderer.root.findByProps({ accessibilityLabel: "Organization name" })
+				.props.value,
+		).toBe("Organization B");
+		await act(async () => renderer.unmount());
+	});
+
+	it("ignores an old settings save after switching organizations", async () => {
+		let resolveSave!: (value: typeof settings) => void;
+		auth.value.client.updateOrganizationSettings.mockReturnValueOnce(
+			new Promise((resolve) => {
+				resolveSave = resolve;
+			}),
+		);
+		const renderer = await renderComponent(
+			React.createElement(OrganizationSettingsScreen),
+		);
+		await act(async () =>
+			renderer.root
+				.findByProps({ accessibilityLabel: "Organization name" })
+				.props.onChangeText("A draft"),
+		);
+		await act(async () => {
+			renderer.root
+				.findByProps({ accessibilityLabel: "Save changes" })
+				.props.onPress();
+		});
+		auth.value.client.getOrganizationSettings.mockResolvedValueOnce({
+			...settings,
+			id: "org_b",
+			name: "Organization B",
+		});
+		auth.value.bootstrap.activeOrganizationId = "org_b";
+		await act(async () => {
+			renderer.update(React.createElement(OrganizationSettingsScreen));
+			await Promise.resolve();
+			await Promise.resolve();
+		});
+		await act(async () => {
+			resolveSave({ ...settings, name: "A saved" });
+			await Promise.resolve();
+		});
+		expect(
+			renderer.root.findByProps({ accessibilityLabel: "Organization name" })
+				.props.value,
+		).toBe("Organization B");
+		await act(async () => renderer.unmount());
+	});
+
+	it("does not upload a photo selected for a previous organization", async () => {
+		const { ActionSheetIOS } = await import("react-native");
+		const picker = await import("expo-image-picker");
+		let finishPicker!: (
+			value: Awaited<ReturnType<typeof picker.launchImageLibraryAsync>>,
+		) => void;
+		vi.mocked(picker.requestMediaLibraryPermissionsAsync).mockResolvedValue({
+			granted: true,
+		} as Awaited<
+			ReturnType<typeof picker.requestMediaLibraryPermissionsAsync>
+		>);
+		vi.mocked(picker.launchImageLibraryAsync).mockReturnValueOnce(
+			new Promise((resolve) => {
+				finishPicker = resolve;
+			}),
+		);
+		auth.value.client.updateOrganizationIcon
+			.mockReset()
+			.mockResolvedValue(settings);
+		const renderer = await renderComponent(
+			React.createElement(OrganizationSettingsScreen),
+		);
+		await act(async () => {
+			renderer.root
+				.findByProps({ accessibilityLabel: "Organization icon" })
+				.props.onPress();
+		});
+		const choose = vi
+			.mocked(ActionSheetIOS.showActionSheetWithOptions)
+			.mock.calls.at(-1)?.[1];
+		if (!choose) throw new Error("Missing icon action");
+		await act(async () => {
+			choose(0);
+			await Promise.resolve();
+		});
+		auth.value.client.getOrganizationSettings.mockResolvedValueOnce({
+			...settings,
+			id: "org_b",
+			name: "Organization B",
+		});
+		auth.value.bootstrap.activeOrganizationId = "org_b";
+		await act(async () => {
+			renderer.update(React.createElement(OrganizationSettingsScreen));
+			await Promise.resolve();
+			await Promise.resolve();
+		});
+		await act(async () => {
+			finishPicker({
+				canceled: false,
+				assets: [
+					{
+						uri: "file:///photo.jpg",
+						width: 10,
+						height: 10,
+						base64: "abcd",
+						mimeType: "image/jpeg",
+					},
+				],
+			});
+			await Promise.resolve();
+		});
+		expect(auth.value.client.updateOrganizationIcon).not.toHaveBeenCalled();
+		await act(async () => renderer.unmount());
+	});
+	it("refuses to show editable settings for a different server organization", async () => {
+		auth.value.client.getOrganizationSettings.mockResolvedValueOnce({
+			...settings,
+			id: "org_b",
+			name: "Organization B",
+		});
+		const renderer = await renderComponent(
+			React.createElement(OrganizationSettingsScreen),
+		);
+		expect(getTextNodes(renderer.toJSON()).join(" ")).toContain(
+			"The active organization changed",
+		);
+		expect(
+			renderer.root.findAllByProps({ accessibilityLabel: "Organization name" }),
+		).toHaveLength(0);
+		await act(async () => renderer.unmount());
+	});
+
+	it("ignores a previous organization's delayed icon action", async () => {
+		const { ActionSheetIOS } = await import("react-native");
+		const picker = await import("expo-image-picker");
+		vi.mocked(picker.requestMediaLibraryPermissionsAsync).mockReset();
+		const renderer = await renderComponent(
+			React.createElement(OrganizationSettingsScreen),
+		);
+		await act(async () =>
+			renderer.root
+				.findByProps({ accessibilityLabel: "Organization icon" })
+				.props.onPress(),
+		);
+		const choose = vi
+			.mocked(ActionSheetIOS.showActionSheetWithOptions)
+			.mock.calls.at(-1)?.[1];
+		if (!choose) throw new Error("Missing icon action");
+		auth.value.client.getOrganizationSettings.mockResolvedValueOnce({
+			...settings,
+			id: "org_b",
+			name: "Organization B",
+		});
+		auth.value.bootstrap.activeOrganizationId = "org_b";
+		await act(async () => {
+			renderer.update(React.createElement(OrganizationSettingsScreen));
+			await Promise.resolve();
+			await Promise.resolve();
+		});
+		await act(async () => choose(0));
+		expect(picker.requestMediaLibraryPermissionsAsync).not.toHaveBeenCalled();
+		await act(async () => renderer.unmount());
 	});
 });
