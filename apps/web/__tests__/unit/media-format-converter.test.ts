@@ -157,6 +157,7 @@ it.each([
 		});
 		vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue();
 		vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+		vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => {});
 		vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
 			drawImage: vi.fn(),
 		} as unknown as CanvasRenderingContext2D);
