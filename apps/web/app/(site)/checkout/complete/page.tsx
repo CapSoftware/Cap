@@ -10,6 +10,7 @@ import {
 	PlanHeading,
 } from "@/components/pages/checkout/CheckoutForm";
 import { CARD, CheckoutShell } from "@/components/pages/checkout/CheckoutShell";
+import { SwitchAccountButton } from "@/components/pages/checkout/SwitchAccountButton";
 import { BTN_PRIMARY } from "@/components/pages/HomeTwo/theme";
 import {
 	type CheckoutEnvironment,
@@ -149,12 +150,19 @@ export default async function CheckoutCompletePage(props: {
 									: "Sign in with the email you paid with to start recording and sharing."}
 							</p>
 						</div>
-						<Link
-							href={loginHref}
-							className={classNames(BTN_PRIMARY, "w-full")}
-						>
-							{user ? "Switch account" : "Sign in to Cap"}
-						</Link>
+						{user ? (
+							<SwitchAccountButton
+								loginHref={loginHref}
+								className={classNames(BTN_PRIMARY, "w-full")}
+							/>
+						) : (
+							<Link
+								href={loginHref}
+								className={classNames(BTN_PRIMARY, "w-full")}
+							>
+								Sign in to Cap
+							</Link>
+						)}
 					</>
 				) : session.status === "complete" ? (
 					<div>
