@@ -107,6 +107,7 @@ jobs:
           __tests__/unit/comment-composer-composition.test.ts
           __tests__/unit/dashboard-analytics-cap-access.test.ts
           __tests__/unit/dashboard-analytics-space-access.test.ts
+          __tests__/unit/embed-page-round-trips.test.ts
           __tests__/unit/embed-video-playback-chrome.test.ts
           __tests__/unit/folder-videos.test.ts
           __tests__/unit/homepage-demo-accessibility.test.ts
