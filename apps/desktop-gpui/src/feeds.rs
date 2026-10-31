@@ -1438,47 +1438,65 @@ pub(crate) fn camera_preview_image(
         None => return None,
     };
 
-    let mut converted = ffmpeg::frame::Video::empty();
-    let source = if frame.format() == ffmpeg::format::Pixel::BGRA
-        && width == source_width
-        && height == source_height
-    {
-        frame
+    let width_px = width as usize;
+    let height_px = height as usize;
+    // Blur passes `max_dims` and keeps swscale (it also downscales). Full-size
+    // YUYV is the blur-off preview: one BT.601 store, including the mirror.
+    let fast = if max_dims.is_none() && frame.format() == ffmpeg::format::Pixel::YUYV422 {
+        cap_gpui_kernels::yuyv::to_bgra(
+            frame.data(0),
+            width_px,
+            frame.stride(0),
+            height_px,
+            mirrored,
+        )
     } else {
-        let definition = scaler.as_ref().map(|context| context.input());
-        let output = scaler.as_ref().map(|context| context.output());
-        if definition.is_none_or(|input| {
-            input.format != frame.format()
-                || input.width != source_width
-                || input.height != source_height
-        }) || output.is_none_or(|output| output.width != width || output.height != height)
-        {
-            *scaler = Some(
-                ffmpeg::software::scaling::Context::get(
-                    frame.format(),
-                    source_width,
-                    source_height,
-                    ffmpeg::format::Pixel::BGRA,
-                    width,
-                    height,
-                    ffmpeg::software::scaling::Flags::BILINEAR,
-                )
-                .ok()?,
-            );
-        }
-        scaler.as_mut()?.run(frame, &mut converted).ok()?;
-        &converted
+        None
     };
-
-    let width = width as usize;
-    let height = height as usize;
-    let pixels = cap_gpui_kernels::frame::copy_rows(
-        source.data(0),
-        width.checked_mul(4)?,
-        source.stride(0),
-        height,
-        mirrored,
-    )?;
+    let pixels = if let Some(pixels) = fast {
+        pixels
+    } else {
+        let mut converted = ffmpeg::frame::Video::empty();
+        let source = if frame.format() == ffmpeg::format::Pixel::BGRA
+            && width == source_width
+            && height == source_height
+        {
+            frame
+        } else {
+            let definition = scaler.as_ref().map(|context| context.input());
+            let output = scaler.as_ref().map(|context| context.output());
+            if definition.is_none_or(|input| {
+                input.format != frame.format()
+                    || input.width != source_width
+                    || input.height != source_height
+            }) || output.is_none_or(|output| output.width != width || output.height != height)
+            {
+                *scaler = Some(
+                    ffmpeg::software::scaling::Context::get(
+                        frame.format(),
+                        source_width,
+                        source_height,
+                        ffmpeg::format::Pixel::BGRA,
+                        width,
+                        height,
+                        ffmpeg::software::scaling::Flags::BILINEAR,
+                    )
+                    .ok()?,
+                );
+            }
+            scaler.as_mut()?.run(frame, &mut converted).ok()?;
+            &converted
+        };
+        cap_gpui_kernels::frame::copy_rows(
+            source.data(0),
+            width_px.checked_mul(4)?,
+            source.stride(0),
+            height_px,
+            mirrored,
+        )?
+    };
+    let width = width_px;
+    let height = height_px;
     let image = image::RgbaImage::from_raw(width as u32, height as u32, pixels)?;
     let image = Arc::new(gpui::RenderImage::new(smallvec::smallvec![
         image::Frame::new(image)
@@ -2189,6 +2207,58 @@ mod tests {
             mirrored.as_bytes(0).unwrap(),
             &[5, 6, 7, 8, 1, 2, 3, 4, 13, 14, 15, 16, 9, 10, 11, 12]
         );
+    }
+
+    #[test]
+    fn camera_preview_converts_full_yuyv_without_swscale() {
+        // Integer BT.601: Y=81,U=90,V=240 → BGRA 0,0,255,255.
+        // Y=235,U=90,V=240 → BGRA 178,179,255,255.
+        let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::YUYV422, 2, 1);
+        let stride = frame.stride(0);
+        frame.data_mut(0)[..4].copy_from_slice(&[81, 90, 235, 240]);
+
+        let mut scaler = None;
+        let (image, dims) = camera_preview_image(&frame, &mut scaler, false, None).unwrap();
+        assert_eq!(dims, (2, 1));
+        assert!(scaler.is_none());
+        assert_eq!(
+            image.as_bytes(0).unwrap(),
+            &[0, 0, 255, 255, 178, 179, 255, 255]
+        );
+        assert_eq!(
+            image.as_bytes(0).unwrap(),
+            cap_gpui_kernels::yuyv::to_bgra(frame.data(0), 2, stride, 1, false)
+                .unwrap()
+                .as_slice()
+        );
+
+        let (mirrored, dims) = camera_preview_image(&frame, &mut scaler, true, None).unwrap();
+        assert_eq!(dims, (2, 1));
+        assert!(scaler.is_none());
+        assert_eq!(
+            mirrored.as_bytes(0).unwrap(),
+            &[178, 179, 255, 255, 0, 0, 255, 255]
+        );
+    }
+
+    #[test]
+    fn camera_preview_keeps_yuyv_blur_on_swscale() {
+        let frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::YUYV422, 64, 32);
+        let mut scaler = None;
+        let (_, full) = camera_preview_image(&frame, &mut scaler, false, None).unwrap();
+        assert_eq!(full, (64, 32));
+        assert!(scaler.is_none());
+
+        let (_, capped) = camera_preview_image(&frame, &mut scaler, false, Some((32, 32))).unwrap();
+        assert_eq!(capped, (32, 16));
+        assert!(scaler.is_some());
+
+        let small = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::YUYV422, 320, 180);
+        let mut scaler = None;
+        let (_, fitted) =
+            camera_preview_image(&small, &mut scaler, false, Some((640, 360))).unwrap();
+        assert_eq!(fitted, (320, 180));
+        assert!(scaler.is_some());
     }
 
     #[test]

@@ -6,3 +6,4 @@ pub mod screenshot;
 pub mod texture;
 pub mod thumbnail;
 pub mod waveform;
+pub mod yuyv;

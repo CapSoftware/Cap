@@ -54,6 +54,9 @@ done
 # test user the access a seat grants it on a real machine.
 docker exec "$name" sh -c 'chmod 666 /dev/dri/* 2>/dev/null || true'
 envs=(-e HARNESS_OUT=/out -e DESKTOP="$desktop" "${extra_env[@]}")
+if [[ -n ${VK_DRIVER_FILES:-} ]]; then
+  envs+=(-e "VK_DRIVER_FILES=$VK_DRIVER_FILES")
+fi
 case "$package" in
   *.deb) if [[ $desktop == gnome ]]; then
            docker exec "$name" apt-get install -y -qq "/pkgs/$(basename "$package")" >"$out/install.log" 2>&1
