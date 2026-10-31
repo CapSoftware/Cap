@@ -125,6 +125,7 @@ jobs:
           __tests__/unit/remove-organization-member.test.ts
           __tests__/unit/reply-notification.test.ts
           __tests__/unit/seo-demo-videos.test.ts
+          __tests__/unit/share-comments-rendering.test.ts
           __tests__/unit/share-page-round-trips.test.ts
           __tests__/unit/share-transcript-rendering.test.ts
           __tests__/unit/share-video-quota-loading.test.ts

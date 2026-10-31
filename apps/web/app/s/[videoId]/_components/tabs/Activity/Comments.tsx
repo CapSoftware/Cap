@@ -13,6 +13,7 @@ import {
 	useCallback,
 	useEffect,
 	useImperativeHandle,
+	useMemo,
 	useRef,
 	useState,
 } from "react";
@@ -23,6 +24,8 @@ import type { CommentType } from "../../../Share";
 import { ActivityComposer } from "./ActivityComposer";
 import CommentComponent from "./Comment";
 import EmptyState from "./EmptyState";
+
+const EMPTY_REPLIES: CommentType[] = [];
 
 export const Comments = Object.assign(
 	forwardRef<
@@ -47,6 +50,8 @@ export const Comments = Object.assign(
 			handleCommentSuccess,
 			onSeek,
 			commentsDisabled,
+			videoId,
+			setShowAuthOverlay,
 		} = props;
 		const commentParams = useSearchParams().get("comment");
 		const replyParams = useSearchParams().get("reply");
@@ -77,9 +82,28 @@ export const Comments = Object.assign(
 
 		useImperativeHandle(ref, () => ({ scrollToBottom }), [scrollToBottom]);
 
-		const rootComments = optimisticComments.filter(
-			(comment) => !comment.parentCommentId || comment.parentCommentId === "",
-		);
+		const { rootComments, repliesByRoot } = useMemo(() => {
+			const byId = new Map(
+				optimisticComments.map((comment) => [comment.id, comment]),
+			);
+			const rootComments = optimisticComments.filter(
+				(comment) => !comment.parentCommentId,
+			);
+			const rootIds = new Set(rootComments.map((comment) => comment.id));
+			const repliesByRoot = new Map<Comment.CommentId, CommentType[]>();
+			for (const comment of optimisticComments) {
+				const parentId = comment.parentCommentId;
+				if (!parentId) continue;
+				const rootId = rootIds.has(parentId)
+					? parentId
+					: byId.get(parentId)?.parentCommentId;
+				if (!rootId || !rootIds.has(rootId)) continue;
+				const replies = repliesByRoot.get(rootId);
+				if (replies) replies.push(comment);
+				else repliesByRoot.set(rootId, [comment]);
+			}
+			return { rootComments, repliesByRoot };
+		}, [optimisticComments]);
 
 		const handleNewComment = async (content: string) => {
 			if (!user) return;
@@ -95,7 +119,7 @@ export const Comments = Object.assign(
 				authorImage: user.imageUrl,
 				content,
 				createdAt: new Date(),
-				videoId: props.videoId,
+				videoId,
 				parentCommentId: "" as Comment.CommentId,
 				type: "text",
 				timestamp: currentTime,
@@ -113,7 +137,7 @@ export const Comments = Object.assign(
 			try {
 				const data = await newComment({
 					content,
-					videoId: props.videoId,
+					videoId,
 					authorImage: user.imageUrl,
 					parentCommentId: "" as Comment.CommentId,
 					type: "text",
@@ -125,83 +149,107 @@ export const Comments = Object.assign(
 			}
 		};
 
-		const handleReply = async (content: string) => {
-			if (!replyingTo || !user) return;
+		const handleReply = useCallback(
+			async (content: string, replyingTo: Comment.CommentId) => {
+				if (!user) return;
 
-			const videoElement = document.querySelector("video") as HTMLVideoElement;
-			const currentTime = videoElement?.currentTime || 0;
+				const videoElement = document.querySelector(
+					"video",
+				) as HTMLVideoElement;
+				const currentTime = videoElement?.currentTime || 0;
 
-			const parentComment = optimisticComments.find((c) => c.id === replyingTo);
-			const actualParentId = parentComment?.parentCommentId
-				? parentComment.parentCommentId
-				: replyingTo;
+				const parentComment = optimisticComments.find(
+					(c) => c.id === replyingTo,
+				);
+				const actualParentId = parentComment?.parentCommentId
+					? parentComment.parentCommentId
+					: replyingTo;
 
-			const optimisticReply: CommentType = {
-				id: `temp-reply-${Date.now()}` as Comment.CommentId,
-				authorId: user.id,
-				authorName: user.name,
-				authorImage: user.imageUrl,
-				content,
-				createdAt: new Date(),
-				videoId: props.videoId,
-				parentCommentId: actualParentId,
-				type: "text",
-				timestamp: currentTime,
-				updatedAt: new Date(),
-				mediaKey: null,
-				mediaDuration: null,
-				mediaMeta: null,
-				sending: true,
-			};
-
-			startTransition(() => {
-				setOptimisticComments(optimisticReply);
-			});
-
-			try {
-				const data = await newComment({
+				const optimisticReply: CommentType = {
+					id: `temp-reply-${Date.now()}` as Comment.CommentId,
+					authorId: user.id,
+					authorName: user.name,
+					authorImage: user.imageUrl,
 					content,
-					videoId: props.videoId,
+					createdAt: new Date(),
+					videoId,
 					parentCommentId: actualParentId,
 					type: "text",
 					timestamp: currentTime,
-					authorImage: user.imageUrl,
+					updatedAt: new Date(),
+					mediaKey: null,
+					mediaDuration: null,
+					mediaMeta: null,
+					sending: true,
+				};
+
+				startTransition(() => {
+					setOptimisticComments(optimisticReply);
 				});
 
-				handleCommentSuccess(data);
-
-				const newReplyElement = document.getElementById(`comment-${data.id}`);
-				if (newReplyElement) {
-					newReplyElement.scrollIntoView({
-						behavior: "smooth",
-						block: "center",
+				try {
+					const data = await newComment({
+						content,
+						videoId,
+						parentCommentId: actualParentId,
+						type: "text",
+						timestamp: currentTime,
+						authorImage: user.imageUrl,
 					});
+
+					handleCommentSuccess(data);
+
+					const newReplyElement = document.getElementById(`comment-${data.id}`);
+					if (newReplyElement) {
+						newReplyElement.scrollIntoView({
+							behavior: "smooth",
+							block: "center",
+						});
+					}
+					setReplyingTo(null);
+				} catch (error) {
+					console.error("Error posting reply:", error);
 				}
-				setReplyingTo(null);
-			} catch (error) {
-				console.error("Error posting reply:", error);
-			}
-		};
+			},
+			[
+				user,
+				optimisticComments,
+				videoId,
+				setOptimisticComments,
+				handleCommentSuccess,
+			],
+		);
 
-		const handleCancelReply = () => {
+		const handleCancelReply = useCallback(() => {
 			setReplyingTo(null);
-		};
+		}, []);
 
-		const handleDeleteComment = async (
-			commentId: Comment.CommentId,
-			parentId: Comment.CommentId | null,
-		) => {
-			try {
-				await deleteComment({
-					commentId,
-					parentId,
-					videoId: props.videoId,
-				});
-				setComments((prev) => prev.filter((c) => c.id !== commentId));
-			} catch (error) {
-				console.error("Failed to delete comment:", error);
-			}
-		};
+		const handleStartReply = useCallback(
+			(id: Comment.CommentId) => {
+				if (!user) setShowAuthOverlay(true);
+				else setReplyingTo(id);
+			},
+			[user, setShowAuthOverlay],
+		);
+
+		const handleDeleteComment = useCallback(
+			async (
+				commentId: Comment.CommentId,
+				parentId: Comment.CommentId | null,
+			) => {
+				try {
+					await deleteComment({
+						commentId,
+						parentId,
+						videoId,
+					});
+					setComments((prev) => prev.filter((c) => c.id !== commentId));
+				} catch (error) {
+					console.error("Failed to delete comment:", error);
+				}
+			},
+			[videoId, setComments],
+		);
 
 		return (
 			<Comments.Shell
@@ -232,27 +280,29 @@ export const Comments = Object.assign(
 					<EmptyState />
 				) : (
 					<div className="p-4 space-y-6">
-						{rootComments.map((comment) => (
-							<CommentComponent
-								// clientKey pins a just-uploaded comment to its optimistic
-								// card's mount, so the settle can't restart its playback.
-								key={comment.clientKey ?? comment.id}
-								comment={comment}
-								replies={optimisticComments}
-								onReply={(id) => {
-									if (!user) {
-										props.setShowAuthOverlay(true);
-									} else {
-										setReplyingTo(id);
+						{rootComments.map((comment) => {
+							const replies = repliesByRoot.get(comment.id) ?? EMPTY_REPLIES;
+							return (
+								<CommentComponent
+									// clientKey pins a just-uploaded comment to its optimistic
+									// card's mount, so the settle can't restart its playback.
+									key={comment.clientKey ?? comment.id}
+									comment={comment}
+									replies={replies}
+									onReply={handleStartReply}
+									replyingToId={
+										replyingTo === comment.id ||
+										replies.some((reply) => reply.id === replyingTo)
+											? replyingTo
+											: null
 									}
-								}}
-								replyingToId={replyingTo}
-								handleReply={handleReply}
-								onCancelReply={handleCancelReply}
-								onDelete={handleDeleteComment}
-								onSeek={onSeek}
-							/>
-						))}
+									handleReply={handleReply}
+									onCancelReply={handleCancelReply}
+									onDelete={handleDeleteComment}
+									onSeek={onSeek}
+								/>
+							);
+						})}
 					</div>
 				)}
 			</Comments.Shell>
