@@ -77,6 +77,7 @@ jobs:
     timeout-minutes: 90
     env:
       CARGO_PROFILE_DEV_DEBUG: "0"
+      VK_DRIVER_FILES: /usr/share/vulkan/icd.d/lvp_icd.json
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
