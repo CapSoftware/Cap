@@ -71,6 +71,14 @@ fn chroma_from_sum(r_sum: i32, g_sum: i32, b_sum: i32, n: i32) -> (u8, u8) {
 }
 
 #[cfg(any(target_arch = "x86_64", test))]
+fn luma_from_sum(r_sum: i32, g_sum: i32, b_sum: i32, n: i32) -> u8 {
+    let shift = 16 + n.trailing_zeros();
+    let bias = n << 15;
+    let y = (Y_R * r_sum + Y_G * g_sum + Y_B * b_sum + bias) >> shift;
+    (16 + y).clamp(16, 235) as u8
+}
+
+#[cfg(any(target_arch = "x86_64", test))]
 unsafe fn load_rgb(job: &Job, x: usize, y: usize) -> (i32, i32, i32) {
     unsafe {
         let pixel = job.src.add(y * job.src_stride + x * 4);
@@ -133,6 +141,109 @@ unsafe fn convert_range(job: &Job, x0: usize, x1: usize, y0: usize, y1: usize) {
     }
 }
 
+#[cfg(any(target_arch = "x86_64", test))]
+struct BoxJob {
+    src: *const u8,
+    src_stride: usize,
+    order: ChannelOrder,
+    y: *mut u8,
+    y_stride: usize,
+    u: *mut u8,
+    u_stride: usize,
+    v: *mut u8,
+    v_stride: usize,
+    uv: *mut u8,
+    uv_stride: usize,
+    nv12: bool,
+    dst_width: usize,
+    dst_height: usize,
+}
+
+/// `x0` and `y0` are even output coordinates. Each luma sample is the limited
+/// BT.709 conversion of one 2×2 source block (`n = 4`). Each chroma sample is
+/// that conversion of the 4×4 block behind a 2×2 luma quad (`n = 16`).
+#[cfg(any(target_arch = "x86_64", test))]
+#[inline(never)]
+unsafe fn convert_box2(job: &BoxJob, x0: usize, x1: usize, y0: usize, y1: usize) {
+    unsafe {
+        debug_assert!(x0.is_multiple_of(2) && y0.is_multiple_of(2));
+        debug_assert!(x1.is_multiple_of(2) && y1.is_multiple_of(2));
+        debug_assert!(x1 <= job.dst_width && y1 <= job.dst_height);
+        let mut y = y0;
+        while y + 1 < y1 {
+            let mut x = x0;
+            while x + 1 < x1 {
+                let mut r_sum = 0;
+                let mut g_sum = 0;
+                let mut b_sum = 0;
+                for row in 0..2 {
+                    for col in 0..2 {
+                        let (r, g, b) = sample_box(job, x + col, y + row);
+                        r_sum += r;
+                        g_sum += g;
+                        b_sum += b;
+                        *job.y.add((y + row) * job.y_stride + (x + col)) =
+                            luma_from_sum(r, g, b, 4);
+                    }
+                }
+                let (cb, cr) = chroma_from_sum(r_sum, g_sum, b_sum, 16);
+                if job.nv12 {
+                    let offset = (y / 2) * job.uv_stride + (x / 2) * 2;
+                    *job.uv.add(offset) = cb;
+                    *job.uv.add(offset + 1) = cr;
+                } else {
+                    *job.u.add((y / 2) * job.u_stride + x / 2) = cb;
+                    *job.v.add((y / 2) * job.v_stride + x / 2) = cr;
+                }
+                x += 2;
+            }
+            y += 2;
+        }
+    }
+}
+
+#[cfg(any(target_arch = "x86_64", test))]
+#[inline(always)]
+unsafe fn sample_box(job: &BoxJob, ox: usize, oy: usize) -> (i32, i32, i32) {
+    unsafe {
+        let mut r = 0;
+        let mut g = 0;
+        let mut b = 0;
+        for dy in 0..2 {
+            let row = job.src.add((oy * 2 + dy) * job.src_stride + (ox * 2) * 4);
+            for dx in 0..2 {
+                let pixel = row.add(dx * 4);
+                let c0 = i32::from(*pixel);
+                let c1 = i32::from(*pixel.add(1));
+                let c2 = i32::from(*pixel.add(2));
+                let (pr, pg, pb) = match job.order {
+                    ChannelOrder::Bgr => (c2, c1, c0),
+                    ChannelOrder::Rgb => (c0, c1, c2),
+                };
+                r += pr;
+                g += pg;
+                b += pb;
+            }
+        }
+        (r, g, b)
+    }
+}
+
+#[cfg(any(target_arch = "x86_64", test))]
+fn execute_box2(job: &BoxJob) {
+    #[cfg(target_arch = "x86_64")]
+    {
+        // SAFETY: `try_convert` calls this only after `avx2_runtime`, and each
+        // plane covers the active rectangle. The scalar tail covers a partial
+        // output row that the 8-wide kernel did not write.
+        unsafe { avx2::execute_box(job) };
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    unsafe {
+        convert_box2(job, 0, job.dst_width, 0, job.dst_height);
+    }
+}
+
 fn avx2_runtime() -> bool {
     #[cfg(target_arch = "x86_64")]
     {
@@ -178,7 +289,16 @@ fn covers(stride: usize, row_bytes: usize, height: usize, len: usize) -> bool {
 }
 
 pub(crate) fn try_convert(src: &frame::Video, dst: &mut frame::Video) -> bool {
-    if src.width() != dst.width() || src.height() != dst.height() {
+    let src_w_px = src.width();
+    let src_h_px = src.height();
+    let dst_w_px = dst.width();
+    let dst_h_px = dst.height();
+    let same = src_w_px == dst_w_px && src_h_px == dst_h_px;
+    let exact_2x = dst_w_px > 0
+        && dst_h_px > 0
+        && src_w_px == dst_w_px.saturating_mul(2)
+        && src_h_px == dst_h_px.saturating_mul(2);
+    if !same && !exact_2x {
         return false;
     }
     #[cfg(any(target_arch = "x86_64", test))]
@@ -199,12 +319,16 @@ pub(crate) fn try_convert(src: &frame::Video, dst: &mut frame::Video) -> bool {
         Pixel::NV12 => true,
         _ => return false,
     };
-    let width = src.width() as usize;
-    let height = src.height() as usize;
-    if !width.is_multiple_of(2) || !height.is_multiple_of(2) {
+    let src_w = src_w_px as usize;
+    let src_h = src_h_px as usize;
+    let dst_w = dst_w_px as usize;
+    let dst_h = dst_h_px as usize;
+    // Odd output is not a 4:2:0 grid. Exact 2× of an odd side would also leave
+    // a partial 4×4 chroma block, so that ratio stays on swscale.
+    if !dst_w.is_multiple_of(2) || !dst_h.is_multiple_of(2) {
         return false;
     }
-    if width == 0 || height == 0 {
+    if dst_w == 0 || dst_h == 0 {
         return true;
     }
     if !avx2_runtime() {
@@ -216,14 +340,14 @@ pub(crate) fn try_convert(src: &frame::Video, dst: &mut frame::Video) -> bool {
     let Some(y_stride) = positive_linesize(dst, 0) else {
         return false;
     };
-    if !covers(src_stride, width * 4, height, src.data(0).len())
-        || !covers(y_stride, width, height, dst.data(0).len())
+    if !covers(src_stride, src_w * 4, src_h, src.data(0).len())
+        || !covers(y_stride, dst_w, dst_h, dst.data(0).len())
     {
         return false;
     }
 
-    let chroma_w = width.div_ceil(2);
-    let chroma_h = height.div_ceil(2);
+    let chroma_w = dst_w / 2;
+    let chroma_h = dst_h / 2;
     let (u_stride, v_stride, uv_stride) = if nv12 {
         let Some(uv_stride) = positive_linesize(dst, 1) else {
             return false;
@@ -247,7 +371,7 @@ pub(crate) fn try_convert(src: &frame::Video, dst: &mut frame::Video) -> bool {
         (u_stride, v_stride, 0)
     };
     #[cfg(not(any(target_arch = "x86_64", test)))]
-    let _ = (u_stride, v_stride, uv_stride);
+    let _ = (u_stride, v_stride, uv_stride, exact_2x);
 
     #[cfg(any(target_arch = "x86_64", test))]
     {
@@ -265,24 +389,43 @@ pub(crate) fn try_convert(src: &frame::Video, dst: &mut frame::Video) -> bool {
             (u_ptr, v_ptr, std::ptr::null_mut())
         };
 
-        execute(&Job {
-            src: src_ptr,
-            src_stride,
-            #[cfg(target_arch = "x86_64")]
-            width,
-            #[cfg(target_arch = "x86_64")]
-            height,
-            order,
-            y: y_ptr,
-            y_stride,
-            u: u_ptr,
-            u_stride,
-            v: v_ptr,
-            v_stride,
-            uv: uv_ptr,
-            uv_stride,
-            nv12,
-        });
+        if exact_2x {
+            execute_box2(&BoxJob {
+                src: src_ptr,
+                src_stride,
+                order,
+                y: y_ptr,
+                y_stride,
+                u: u_ptr,
+                u_stride,
+                v: v_ptr,
+                v_stride,
+                uv: uv_ptr,
+                uv_stride,
+                nv12,
+                dst_width: dst_w,
+                dst_height: dst_h,
+            });
+        } else {
+            execute(&Job {
+                src: src_ptr,
+                src_stride,
+                #[cfg(target_arch = "x86_64")]
+                width: dst_w,
+                #[cfg(target_arch = "x86_64")]
+                height: dst_h,
+                order,
+                y: y_ptr,
+                y_stride,
+                u: u_ptr,
+                u_stride,
+                v: v_ptr,
+                v_stride,
+                uv: uv_ptr,
+                uv_stride,
+                nv12,
+            });
+        }
     }
     true
 }
@@ -300,7 +443,7 @@ pub(crate) fn convert_or_scale(
 mod avx2 {
     use std::arch::x86_64::*;
 
-    use super::{Job, ROUND, convert_range};
+    use super::{BoxJob, Job, ROUND, convert_box2, convert_range};
 
     struct Coeffs {
         y_r: __m256i,
@@ -323,6 +466,8 @@ mod avx2 {
         mask: __m256i,
         pair_mask: __m256i,
         gather: __m256i,
+        box_luma_round: __m256i,
+        box_chroma_round: __m256i,
     }
 
     impl Coeffs {
@@ -349,6 +494,8 @@ mod avx2 {
                 mask: _mm256_set1_epi32(0x00FF),
                 pair_mask: _mm256_set1_epi64x(0xFFFF_FFFF),
                 gather: _mm256_setr_epi32(0, 1, 4, 5, 2, 3, 6, 7),
+                box_luma_round: _mm256_set1_epi32(4 * ROUND),
+                box_chroma_round: _mm256_set1_epi32(16 * ROUND),
             }
         }
     }
@@ -360,6 +507,172 @@ mod avx2 {
                 (super::ChannelOrder::Bgr, true) => convert::<true, true>(job),
                 (super::ChannelOrder::Rgb, false) => convert::<false, false>(job),
                 (super::ChannelOrder::Rgb, true) => convert::<false, true>(job),
+            }
+        }
+    }
+
+    pub(super) unsafe fn execute_box(job: &BoxJob) {
+        unsafe {
+            match (job.order, job.nv12) {
+                (super::ChannelOrder::Bgr, false) => convert_box::<true, false>(job),
+                (super::ChannelOrder::Bgr, true) => convert_box::<true, true>(job),
+                (super::ChannelOrder::Rgb, false) => convert_box::<false, false>(job),
+                (super::ChannelOrder::Rgb, true) => convert_box::<false, true>(job),
+            }
+        }
+    }
+
+    #[target_feature(enable = "avx2")]
+    unsafe fn convert_box<const BGR: bool, const NV12: bool>(job: &BoxJob) {
+        unsafe {
+            debug_assert!(job.dst_width.is_multiple_of(2) && job.dst_height.is_multiple_of(2));
+            let coeffs = Coeffs::new();
+            let mut y = 0;
+            while y + 1 < job.dst_height {
+                let mut x = 0;
+                while x + 8 <= job.dst_width {
+                    kernel_box8::<BGR, NV12>(job, &coeffs, x, y);
+                    x += 8;
+                }
+                if x < job.dst_width {
+                    convert_box2(job, x, job.dst_width, y, y + 2);
+                }
+                y += 2;
+            }
+        }
+    }
+
+    #[target_feature(enable = "avx2")]
+    #[inline]
+    unsafe fn kernel_box8<const BGR: bool, const NV12: bool>(
+        job: &BoxJob,
+        coeffs: &Coeffs,
+        x: usize,
+        y: usize,
+    ) {
+        unsafe {
+            let row0 = job.src.add((y * 2) * job.src_stride + (x * 2) * 4);
+            let (r0, g0, b0) = pair_row::<BGR>(row0, coeffs);
+            let (r1, g1, b1) = pair_row::<BGR>(row0.add(job.src_stride), coeffs);
+            let (r2, g2, b2) = pair_row::<BGR>(row0.add(job.src_stride * 2), coeffs);
+            let (r3, g3, b3) = pair_row::<BGR>(row0.add(job.src_stride * 3), coeffs);
+            let r_y0 = _mm256_add_epi32(r0, r1);
+            let g_y0 = _mm256_add_epi32(g0, g1);
+            let b_y0 = _mm256_add_epi32(b0, b1);
+            let r_y1 = _mm256_add_epi32(r2, r3);
+            let g_y1 = _mm256_add_epi32(g2, g3);
+            let b_y1 = _mm256_add_epi32(b2, b3);
+            store_y8(
+                job.y.add(y * job.y_stride + x),
+                luma_box(r_y0, g_y0, b_y0, coeffs),
+            );
+            store_y8(
+                job.y.add((y + 1) * job.y_stride + x),
+                luma_box(r_y1, g_y1, b_y1, coeffs),
+            );
+            let r_sum = pair_sum(_mm256_add_epi32(r_y0, r_y1), coeffs.pair_mask);
+            let g_sum = pair_sum(_mm256_add_epi32(g_y0, g_y1), coeffs.pair_mask);
+            let b_sum = pair_sum(_mm256_add_epi32(b_y0, b_y1), coeffs.pair_mask);
+            let cb = chroma_box(
+                r_sum,
+                g_sum,
+                b_sum,
+                coeffs.cb_r,
+                coeffs.cb_g,
+                coeffs.cb_b,
+                coeffs,
+            );
+            let cr = chroma_box(
+                r_sum,
+                g_sum,
+                b_sum,
+                coeffs.cr_r,
+                coeffs.cr_g,
+                coeffs.cr_b,
+                coeffs,
+            );
+            store_chroma8_box::<NV12>(job, x, y / 2, cb, cr, coeffs.gather);
+        }
+    }
+
+    #[target_feature(enable = "avx2")]
+    #[inline]
+    unsafe fn pair_row<const BGR: bool>(
+        src: *const u8,
+        coeffs: &Coeffs,
+    ) -> (__m256i, __m256i, __m256i) {
+        unsafe {
+            let lo = _mm256_loadu_si256(src.cast());
+            let hi = _mm256_loadu_si256(src.add(32).cast());
+            let (r0, g0, b0) = unpack8::<BGR>(lo, coeffs.mask);
+            let (r1, g1, b1) = unpack8::<BGR>(hi, coeffs.mask);
+            (
+                pack_pairs(r0, r1, coeffs.gather),
+                pack_pairs(g0, g1, coeffs.gather),
+                pack_pairs(b0, b1, coeffs.gather),
+            )
+        }
+    }
+
+    #[target_feature(enable = "avx2")]
+    #[inline]
+    unsafe fn pack_pairs(lo: __m256i, hi: __m256i, gather: __m256i) -> __m256i {
+        _mm256_permutevar8x32_epi32(_mm256_hadd_epi32(lo, hi), gather)
+    }
+
+    #[target_feature(enable = "avx2")]
+    #[inline]
+    unsafe fn luma_box(r: __m256i, g: __m256i, b: __m256i, coeffs: &Coeffs) -> __m256i {
+        let mut acc = _mm256_mullo_epi32(r, coeffs.y_r);
+        acc = _mm256_add_epi32(acc, _mm256_mullo_epi32(g, coeffs.y_g));
+        acc = _mm256_add_epi32(acc, _mm256_mullo_epi32(b, coeffs.y_b));
+        acc = _mm256_srai_epi32(_mm256_add_epi32(acc, coeffs.box_luma_round), 18);
+        acc = _mm256_add_epi32(acc, coeffs.y_bias);
+        _mm256_min_epi32(_mm256_max_epi32(acc, coeffs.y_lo), coeffs.y_hi)
+    }
+
+    #[target_feature(enable = "avx2")]
+    #[inline]
+    unsafe fn chroma_box(
+        r_sum: __m256i,
+        g_sum: __m256i,
+        b_sum: __m256i,
+        c_r: __m256i,
+        c_g: __m256i,
+        c_b: __m256i,
+        coeffs: &Coeffs,
+    ) -> __m256i {
+        let mut acc = _mm256_mullo_epi32(r_sum, c_r);
+        acc = _mm256_add_epi32(acc, _mm256_mullo_epi32(g_sum, c_g));
+        acc = _mm256_add_epi32(acc, _mm256_mullo_epi32(b_sum, c_b));
+        acc = _mm256_srai_epi32(_mm256_add_epi32(acc, coeffs.box_chroma_round), 20);
+        acc = _mm256_add_epi32(acc, coeffs.c_bias);
+        _mm256_min_epi32(_mm256_max_epi32(acc, coeffs.c_lo), coeffs.c_hi)
+    }
+
+    #[target_feature(enable = "avx2")]
+    #[inline]
+    unsafe fn store_chroma8_box<const NV12: bool>(
+        job: &BoxJob,
+        x: usize,
+        cy: usize,
+        cb: __m256i,
+        cr: __m256i,
+        gather: __m256i,
+    ) {
+        unsafe {
+            let cb = _mm256_permutevar8x32_epi32(_mm256_shuffle_epi32(cb, 0xD8), gather);
+            let cr = _mm256_permutevar8x32_epi32(_mm256_shuffle_epi32(cr, 0xD8), gather);
+            if NV12 {
+                let cb128 = _mm256_castsi256_si128(cb);
+                let cr128 = _mm256_castsi256_si128(cr);
+                let lo = _mm_unpacklo_epi32(cb128, cr128);
+                let hi = _mm_unpackhi_epi32(cb128, cr128);
+                let bytes = _mm_packus_epi16(_mm_packs_epi32(lo, hi), _mm_setzero_si128());
+                _mm_storel_epi64(job.uv.add(cy * job.uv_stride + x) as *mut __m128i, bytes);
+            } else {
+                store_u32(job.u.add(cy * job.u_stride + x / 2), cb);
+                store_u32(job.v.add(cy * job.v_stride + x / 2), cr);
             }
         }
     }
@@ -1055,13 +1368,14 @@ mod tests {
         let yuv_src = frame::Video::new(Pixel::YUV420P, 32, 16);
         assert!(!try_convert(&yuv_src, &mut yuv));
 
+        // 32×16 → 24×10 is not an exact 2× (and neither is 2560×1440 → 1920×1080).
         let mut scaler = ffmpeg::software::scaling::Context::get(
             Pixel::BGRA,
             32,
             16,
             Pixel::YUV420P,
-            16,
-            8,
+            24,
+            10,
             ffmpeg::software::scaling::flag::Flags::BICUBIC,
         )
         .unwrap();
@@ -1071,8 +1385,9 @@ mod tests {
         for (index, byte) in bgra.data_mut(0).iter_mut().enumerate() {
             *byte = (index % 251) as u8;
         }
-        let mut via_helper = frame::Video::empty();
-        let mut direct = frame::Video::empty();
+        let mut via_helper = frame::Video::new(Pixel::YUV420P, 24, 10);
+        let mut direct = frame::Video::new(Pixel::YUV420P, 24, 10);
+        assert!(!try_convert(&bgra, &mut via_helper));
         convert_or_scale(&bgra, &mut via_helper, &mut scaler).unwrap();
         scaler.run(&bgra, &mut direct).unwrap();
         for plane in 0..direct.planes() {
@@ -1081,6 +1396,439 @@ mod tests {
                 let got = &via_helper.data(plane)[row * via_helper.stride(plane)..][..width];
                 let expect = &direct.data(plane)[row * direct.stride(plane)..][..width];
                 assert_eq!(got, expect);
+            }
+        }
+    }
+
+    fn run_box(
+        kernel: Kernel,
+        order: ChannelOrder,
+        nv12: bool,
+        dst_width: usize,
+        dst_height: usize,
+        pad: usize,
+        rgb: impl Fn(usize, usize) -> (u8, u8, u8),
+    ) -> (Plane, Plane, Plane, Plane) {
+        let src_w = dst_width * 2;
+        let src_h = dst_height * 2;
+        let mut src = plane(src_w * 4, pad, src_h);
+        for y in 0..src_h {
+            for x in 0..src_w {
+                let (r, g, b) = rgb(x, y);
+                let pixel = swizzle(order, r, g, b);
+                let offset = y * src.stride + x * 4;
+                src.data[offset..offset + 4].copy_from_slice(&pixel);
+            }
+        }
+        let chroma_w = dst_width / 2;
+        let chroma_h = dst_height / 2;
+        let mut y_plane = plane(dst_width, pad, dst_height);
+        let mut u_plane = plane(chroma_w, pad, chroma_h);
+        let mut v_plane = plane(chroma_w, pad, chroma_h);
+        let mut uv_plane = plane(chroma_w * 2, pad, chroma_h);
+        let job = BoxJob {
+            src: src.data.as_ptr(),
+            src_stride: src.stride,
+            order,
+            y: y_plane.data.as_mut_ptr(),
+            y_stride: y_plane.stride,
+            u: u_plane.data.as_mut_ptr(),
+            u_stride: u_plane.stride,
+            v: v_plane.data.as_mut_ptr(),
+            v_stride: v_plane.stride,
+            uv: uv_plane.data.as_mut_ptr(),
+            uv_stride: uv_plane.stride,
+            nv12,
+            dst_width,
+            dst_height,
+        };
+        match kernel {
+            Kernel::Scalar => unsafe { convert_box2(&job, 0, dst_width, 0, dst_height) },
+            Kernel::Avx2 => {
+                #[cfg(target_arch = "x86_64")]
+                unsafe {
+                    avx2::execute_box(&job);
+                }
+                #[cfg(not(target_arch = "x86_64"))]
+                let _ = job;
+            }
+        }
+        (y_plane, u_plane, v_plane, uv_plane)
+    }
+
+    #[test]
+    fn box2_uniform_and_quad_match_formula() {
+        let uniforms = [
+            ((220u8, 40u8, 40u8), 83u8, 110u8, 207u8),
+            ((0, 0, 0), 16, 128, 128),
+            ((255, 255, 255), 235, 128, 128),
+            ((128, 128, 128), 126, 128, 128),
+        ];
+        let sizes = [(2usize, 2usize), (8, 2), (10, 4), (16, 8)];
+        for ((r, g, b), ey, eu, ev) in uniforms {
+            for (dw, dh) in sizes {
+                for nv12 in [false, true] {
+                    for order in [ChannelOrder::Bgr, ChannelOrder::Rgb] {
+                        for kernel in [Kernel::Scalar, Kernel::Avx2] {
+                            if matches!(kernel, Kernel::Avx2) && !avx2_ready() {
+                                continue;
+                            }
+                            let (y_plane, u_plane, v_plane, uv_plane) =
+                                run_box(kernel, order, nv12, dw, dh, 7, |_, _| (r, g, b));
+                            assert_active(&y_plane, dh, ey);
+                            if nv12 {
+                                assert_nv12(&uv_plane, dh / 2, eu, ev);
+                            } else {
+                                assert_active(&u_plane, dh / 2, eu);
+                                assert_active(&v_plane, dh / 2, ev);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let quad = |x: usize, y: usize| match (x % 2, y % 2) {
+            (0, 0) => (10u8, 20u8, 30u8),
+            (1, 0) => (40, 50, 60),
+            (0, 1) => (70, 80, 90),
+            _ => (100, 110, 120),
+        };
+        for (dw, dh) in sizes {
+            for nv12 in [false, true] {
+                for order in [ChannelOrder::Bgr, ChannelOrder::Rgb] {
+                    for kernel in [Kernel::Scalar, Kernel::Avx2] {
+                        if matches!(kernel, Kernel::Avx2) && !avx2_ready() {
+                            continue;
+                        }
+                        let (y_plane, u_plane, v_plane, uv_plane) =
+                            run_box(kernel, order, nv12, dw, dh, 3, quad);
+                        assert_active(&y_plane, dh, 71);
+                        if nv12 {
+                            assert_nv12(&uv_plane, dh / 2, 133, 123);
+                        } else {
+                            assert_active(&u_plane, dh / 2, 133);
+                            assert_active(&v_plane, dh / 2, 123);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn box2_avx2_matches_scalar_on_tails_and_padding() {
+        if !avx2_ready() {
+            return;
+        }
+        let widths = [2usize, 4, 6, 8, 10, 14, 16, 18, 30, 32, 34];
+        let heights = [2usize, 4, 6, 10];
+        let pads = [0usize, 1, 7, 63];
+        let rgb = |x: usize, y: usize| {
+            (
+                (x.wrapping_mul(17).wrapping_add(y.wrapping_mul(31))) as u8,
+                (x.wrapping_mul(13)
+                    .wrapping_add(y.wrapping_mul(7))
+                    .wrapping_add(40)) as u8,
+                (x.wrapping_mul(3)
+                    .wrapping_add(y.wrapping_mul(19))
+                    .wrapping_add(90)) as u8,
+            )
+        };
+        for width in widths {
+            for height in heights {
+                for pad in pads {
+                    for (order, nv12) in [
+                        (ChannelOrder::Bgr, false),
+                        (ChannelOrder::Bgr, true),
+                        (ChannelOrder::Rgb, false),
+                        (ChannelOrder::Rgb, true),
+                    ] {
+                        let scalar = run_box(Kernel::Scalar, order, nv12, width, height, pad, rgb);
+                        let vector = run_box(Kernel::Avx2, order, nv12, width, height, pad, rgb);
+                        assert_plane_eq(&vector.0, &scalar.0);
+                        assert_plane_eq(&vector.1, &scalar.1);
+                        assert_plane_eq(&vector.2, &scalar.2);
+                        assert_plane_eq(&vector.3, &scalar.3);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn exact_2x_try_convert_matches_scalar_formula() {
+        ffmpeg::init().unwrap();
+        if !avx2_ready() {
+            let src = frame::Video::new(Pixel::BGRZ, 32, 16);
+            let mut dst = frame::Video::new(Pixel::YUV420P, 16, 8);
+            assert!(!try_convert(&src, &mut dst));
+            return;
+        }
+        let rgb = |x: usize, y: usize| {
+            (
+                (x.wrapping_mul(17).wrapping_add(y.wrapping_mul(31))) as u8,
+                (x.wrapping_mul(13)
+                    .wrapping_add(y.wrapping_mul(7))
+                    .wrapping_add(40)) as u8,
+                (x.wrapping_mul(3)
+                    .wrapping_add(y.wrapping_mul(19))
+                    .wrapping_add(90)) as u8,
+            )
+        };
+        let small = [
+            (Pixel::BGRZ, Pixel::YUV420P),
+            (Pixel::BGRA, Pixel::YUV420P),
+            (Pixel::RGBA, Pixel::NV12),
+            (Pixel::RGBZ, Pixel::NV12),
+            (Pixel::BGRZ, Pixel::NV12),
+            (Pixel::RGBA, Pixel::YUV420P),
+        ];
+        for (src_fmt, dst_fmt) in small {
+            for (dw, dh) in [(2u32, 2u32), (8, 2), (10, 4), (18, 6), (34, 18)] {
+                assert_frame_box(src_fmt, dst_fmt, dw, dh, rgb);
+            }
+        }
+        assert_frame_box(Pixel::BGRZ, Pixel::YUV420P, 320, 180, rgb);
+        assert_frame_box(Pixel::BGRA, Pixel::NV12, 958, 2, rgb);
+
+        let mut scaled_src = frame::Video::new(Pixel::BGRZ, 64, 32);
+        {
+            let stride = scaled_src.stride(0);
+            let data = scaled_src.data_mut(0);
+            for y in 0..32 {
+                for x in 0..64 {
+                    let (r, g, b) = rgb(x, y);
+                    let offset = y * stride + x * 4;
+                    data[offset..offset + 4].copy_from_slice(&[b, g, r, 255]);
+                }
+            }
+        }
+        let mut via = frame::Video::new(Pixel::YUV420P, 32, 16);
+        let mut scalar_dst = frame::Video::new(Pixel::YUV420P, 32, 16);
+        let mut scaler = ffmpeg::software::scaling::Context::get(
+            Pixel::BGRZ,
+            64,
+            32,
+            Pixel::YUV420P,
+            32,
+            16,
+            ffmpeg::software::scaling::flag::Flags::BICUBIC,
+        )
+        .unwrap();
+        super::super::colour::use_bt709_for_rgb_input(&mut scaler, Pixel::BGRZ, Pixel::YUV420P)
+            .unwrap();
+        convert_or_scale(&scaled_src, &mut via, &mut scaler).unwrap();
+        scalar_box_frame(&scaled_src, &mut scalar_dst);
+        assert_max_diff(&via, &scalar_dst, 0);
+
+        let src = frame::Video::new(Pixel::RGB24, 8, 8);
+        let mut dst = frame::Video::new(Pixel::YUV420P, 4, 4);
+        assert!(!try_convert(&src, &mut dst));
+        let yuv_src = frame::Video::new(Pixel::YUV420P, 8, 8);
+        assert!(!try_convert(&yuv_src, &mut dst));
+    }
+
+    #[test]
+    fn odd_and_non_exact_ratios_stay_off_the_box() {
+        ffmpeg::init().unwrap();
+        for (sw, sh, dw, dh) in [
+            (6u32, 6u32, 3u32, 3u32),
+            (10, 8, 5, 4),
+            (8, 6, 4, 3),
+            (7, 4, 7, 4),
+            (32, 16, 16, 16),
+        ] {
+            let src = frame::Video::new(Pixel::BGRZ, sw, sh);
+            let mut yuv = frame::Video::new(Pixel::YUV420P, dw, dh);
+            assert!(!try_convert(&src, &mut yuv), "{sw}x{sh}->{dw}x{dh} yuv");
+            let mut nv = frame::Video::new(Pixel::NV12, dw, dh);
+            assert!(!try_convert(&src, &mut nv), "{sw}x{sh}->{dw}x{dh} nv12");
+        }
+
+        // Same ratio as 2560×1440 → 1920×1080. Not an exact 2×.
+        let src = frame::Video::new(Pixel::BGRZ, 2560, 1440);
+        let mut yuv = frame::Video::new(Pixel::YUV420P, 1920, 1080);
+        assert!(!try_convert(&src, &mut yuv));
+        let mut nv = frame::Video::new(Pixel::NV12, 1920, 1080);
+        assert!(!try_convert(&src, &mut nv));
+
+        let mut small = frame::Video::new(Pixel::BGRA, 32, 24);
+        for (index, byte) in small.data_mut(0).iter_mut().enumerate() {
+            *byte = (index % 251) as u8;
+        }
+        let mut scaler = ffmpeg::software::scaling::Context::get(
+            Pixel::BGRA,
+            32,
+            24,
+            Pixel::YUV420P,
+            24,
+            18,
+            ffmpeg::software::scaling::flag::Flags::BICUBIC,
+        )
+        .unwrap();
+        super::super::colour::use_bt709_for_rgb_input(&mut scaler, Pixel::BGRA, Pixel::YUV420P)
+            .unwrap();
+        let mut via = frame::Video::new(Pixel::YUV420P, 24, 18);
+        let mut direct = frame::Video::new(Pixel::YUV420P, 24, 18);
+        assert!(!try_convert(&small, &mut via));
+        convert_or_scale(&small, &mut via, &mut scaler).unwrap();
+        scaler.run(&small, &mut direct).unwrap();
+        assert_frames_eq(&via, &direct, 24, 18);
+    }
+
+    #[test]
+    fn box2_ignores_alpha() {
+        ffmpeg::init().unwrap();
+        if !avx2_ready() {
+            return;
+        }
+        let mut clear = frame::Video::new(Pixel::BGRA, 32, 16);
+        let mut opaque = frame::Video::new(Pixel::BGRA, 32, 16);
+        for (frame, alpha) in [(&mut clear, 0u8), (&mut opaque, 255u8)] {
+            let stride = frame.stride(0);
+            let width = frame.width() as usize;
+            let height = frame.height() as usize;
+            let data = frame.data_mut(0);
+            for y in 0..height {
+                for x in 0..width {
+                    let offset = y * stride + x * 4;
+                    data[offset] = (x * 3 + y) as u8;
+                    data[offset + 1] = (y * 5 + 40) as u8;
+                    data[offset + 2] = (x * 7 + 90) as u8;
+                    data[offset + 3] = alpha;
+                }
+            }
+        }
+        let mut from_clear = frame::Video::new(Pixel::NV12, 16, 8);
+        let mut from_opaque = frame::Video::new(Pixel::NV12, 16, 8);
+        assert!(try_convert(&clear, &mut from_clear));
+        assert!(try_convert(&opaque, &mut from_opaque));
+        assert_max_diff(&from_clear, &from_opaque, 0);
+    }
+
+    fn assert_frame_box(
+        src_fmt: Pixel,
+        dst_fmt: Pixel,
+        dst_w: u32,
+        dst_h: u32,
+        rgb: impl Fn(usize, usize) -> (u8, u8, u8),
+    ) {
+        let order = match src_fmt {
+            Pixel::BGRA | Pixel::BGRZ => ChannelOrder::Bgr,
+            Pixel::RGBA | Pixel::RGBZ => ChannelOrder::Rgb,
+            other => panic!("unsupported source {other:?}"),
+        };
+        let mut src = frame::Video::new(src_fmt, dst_w * 2, dst_h * 2);
+        let width = src.width() as usize;
+        let height = src.height() as usize;
+        let stride = src.stride(0);
+        {
+            let data = src.data_mut(0);
+            for y in 0..height {
+                for x in 0..width {
+                    let (r, g, b) = rgb(x, y);
+                    let pixel = swizzle(order, r, g, b);
+                    let offset = y * stride + x * 4;
+                    data[offset..offset + 4].copy_from_slice(&pixel);
+                }
+            }
+        }
+        let mut scalar = frame::Video::new(dst_fmt, dst_w, dst_h);
+        let mut kernel = frame::Video::new(dst_fmt, dst_w, dst_h);
+        scalar_box_frame(&src, &mut scalar);
+        assert!(
+            try_convert(&src, &mut kernel),
+            "{src_fmt:?}->{dst_fmt:?} {dst_w}x{dst_h}"
+        );
+        assert_max_diff(&kernel, &scalar, 0);
+    }
+
+    fn scalar_box_frame(src: &frame::Video, dst: &mut frame::Video) {
+        let order = match src.format() {
+            Pixel::BGRA | Pixel::BGRZ => ChannelOrder::Bgr,
+            Pixel::RGBA | Pixel::RGBZ => ChannelOrder::Rgb,
+            other => panic!("scalar box source {other:?}"),
+        };
+        let nv12 = match dst.format() {
+            Pixel::YUV420P => false,
+            Pixel::NV12 => true,
+            other => panic!("scalar box dest {other:?}"),
+        };
+        let dst_width = dst.width() as usize;
+        let dst_height = dst.height() as usize;
+        let src_stride = src.stride(0);
+        let y_stride = dst.stride(0);
+        let u_stride = if nv12 { 0 } else { dst.stride(1) };
+        let v_stride = if nv12 { 0 } else { dst.stride(2) };
+        let uv_stride = if nv12 { dst.stride(1) } else { 0 };
+        let src_ptr = src.data(0).as_ptr();
+        let y_ptr = dst.data_mut(0).as_mut_ptr();
+        let (u_ptr, v_ptr, uv_ptr) = if nv12 {
+            (
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                dst.data_mut(1).as_mut_ptr(),
+            )
+        } else {
+            let u_ptr = dst.data_mut(1).as_mut_ptr();
+            let v_ptr = dst.data_mut(2).as_mut_ptr();
+            (u_ptr, v_ptr, std::ptr::null_mut())
+        };
+        let job = BoxJob {
+            src: src_ptr,
+            src_stride,
+            order,
+            y: y_ptr,
+            y_stride,
+            u: u_ptr,
+            u_stride,
+            v: v_ptr,
+            v_stride,
+            uv: uv_ptr,
+            uv_stride,
+            nv12,
+            dst_width,
+            dst_height,
+        };
+        unsafe { convert_box2(&job, 0, dst_width, 0, dst_height) };
+    }
+
+    fn assert_max_diff(actual: &frame::Video, expected: &frame::Video, limit: u8) {
+        let width = actual.width() as usize;
+        let height = actual.height() as usize;
+        let y_stats = plane_delta(actual, expected, 0, width, height);
+        assert!(
+            y_stats.max_diff <= limit,
+            "luma max {} mean {:.3} at {},{}",
+            y_stats.max_diff,
+            y_stats.mean,
+            y_stats.col,
+            y_stats.row
+        );
+        let chroma_h = height / 2;
+        if actual.format() == Pixel::NV12 {
+            let stats = plane_delta(actual, expected, 1, width, chroma_h);
+            assert!(
+                stats.max_diff <= limit,
+                "nv12 max {} mean {:.3} at {},{}",
+                stats.max_diff,
+                stats.mean,
+                stats.col,
+                stats.row
+            );
+        } else {
+            let chroma_w = width / 2;
+            for plane in [1usize, 2] {
+                let stats = plane_delta(actual, expected, plane, chroma_w, chroma_h);
+                assert!(
+                    stats.max_diff <= limit,
+                    "plane {plane} max {} mean {:.3} at {},{}",
+                    stats.max_diff,
+                    stats.mean,
+                    stats.col,
+                    stats.row
+                );
             }
         }
     }
@@ -1222,5 +1970,171 @@ mod tests {
         }
         samples.sort_unstable();
         samples[samples.len() / 2] as f64
+    }
+
+    fn time_spread(warmup: usize, runs: usize, mut body: impl FnMut()) -> (u128, u128, u128) {
+        for _ in 0..warmup {
+            body();
+        }
+        let mut samples = Vec::with_capacity(runs);
+        for _ in 0..runs {
+            let started = std::time::Instant::now();
+            body();
+            samples.push(started.elapsed().as_nanos());
+        }
+        samples.sort_unstable();
+        (
+            samples[samples.len() / 2],
+            samples[0],
+            samples[samples.len() - 1],
+        )
+    }
+
+    fn print_spread(label: &str, spread: (u128, u128, u128)) {
+        let ms = |ns: u128| ns as f64 / 1_000_000.0;
+        println!(
+            "3840x2160->1920x1080 {label} median {:.3} ms min {:.3} max {:.3} n=31 warmup=5",
+            ms(spread.0),
+            ms(spread.1),
+            ms(spread.2)
+        );
+    }
+
+    #[test]
+    #[ignore = "release timing bench, run with --ignored --nocapture"]
+    fn bench_bgrz_box2_4k_to_1080() {
+        ffmpeg::init().unwrap();
+        assert!(avx2_ready(), "exact 2x bench requires avx2");
+        let model = std::fs::read_to_string("/proc/cpuinfo")
+            .ok()
+            .and_then(|text| {
+                text.lines()
+                    .find(|line| line.starts_with("model name"))
+                    .and_then(|line| line.split(':').nth(1))
+                    .map(|value| value.trim().to_string())
+            })
+            .unwrap_or_else(|| "unknown".into());
+        let cpus = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(0);
+        println!("cpu: {model}");
+        println!("logical_cpus: {cpus}");
+        println!("avx2: true");
+        println!("debug_assertions: {}", cfg!(debug_assertions));
+        println!("warmup excluded from n; median is the middle sorted sample");
+        println!("formula: exact 2x box, luma n=4 shift 18, chroma n=16 shift 20, BT.709 limited");
+
+        let src_w = 3840u32;
+        let src_h = 2160u32;
+        let dst_w = 1920u32;
+        let dst_h = 1080u32;
+        let mut src = frame::Video::new(Pixel::BGRZ, src_w, src_h);
+        fill_smooth(&mut src);
+        let mut kernel = frame::Video::new(Pixel::YUV420P, dst_w, dst_h);
+        let mut scalar = frame::Video::new(Pixel::YUV420P, dst_w, dst_h);
+        let mut sws = frame::Video::new(Pixel::YUV420P, dst_w, dst_h);
+        let mut bicubic = ffmpeg::software::scaling::Context::get(
+            Pixel::BGRZ,
+            src_w,
+            src_h,
+            Pixel::YUV420P,
+            dst_w,
+            dst_h,
+            ffmpeg::software::scaling::flag::Flags::BICUBIC,
+        )
+        .unwrap();
+        super::super::colour::use_bt709_for_rgb_input(&mut bicubic, Pixel::BGRZ, Pixel::YUV420P)
+            .unwrap();
+
+        let sws_ns = time_spread(5, 31, || {
+            bicubic.run(&src, &mut sws).unwrap();
+            std::hint::black_box(sws.data(0).as_ptr());
+        });
+        let kernel_ns = time_spread(5, 31, || {
+            assert!(try_convert(&src, &mut kernel));
+            std::hint::black_box(kernel.data(0).as_ptr());
+            std::hint::black_box(kernel.data(1).as_ptr());
+        });
+        let scalar_ns = time_spread(5, 31, || {
+            scalar_box_frame(&src, &mut scalar);
+            std::hint::black_box(scalar.data(0).as_ptr());
+            std::hint::black_box(scalar.data(1).as_ptr());
+        });
+        print_spread("swscale_bicubic_bt709", sws_ns);
+        print_spread("exact_2x_bt709_box", kernel_ns);
+        println!(
+            "3840x2160->1920x1080 exact_2x_bt709_box speedup {:.2}x vs bicubic",
+            sws_ns.0 as f64 / kernel_ns.0 as f64
+        );
+        print_spread("scalar_2x_bt709_box", scalar_ns);
+
+        let y_scalar = plane_delta(&kernel, &scalar, 0, dst_w as usize, dst_h as usize);
+        let u_scalar = plane_delta(
+            &kernel,
+            &scalar,
+            1,
+            (dst_w / 2) as usize,
+            (dst_h / 2) as usize,
+        );
+        let v_scalar = plane_delta(
+            &kernel,
+            &scalar,
+            2,
+            (dst_w / 2) as usize,
+            (dst_h / 2) as usize,
+        );
+        println!(
+            "gradient vs scalar luma max {} mean {:.3} cb max {} mean {:.3} cr max {} mean {:.3}",
+            y_scalar.max_diff,
+            y_scalar.mean,
+            u_scalar.max_diff,
+            u_scalar.mean,
+            v_scalar.max_diff,
+            v_scalar.mean
+        );
+        assert!(
+            y_scalar.max_diff <= 1 && u_scalar.max_diff <= 1 && v_scalar.max_diff <= 1,
+            "gradient vs scalar exceeds 1"
+        );
+        let y_stats = plane_delta(&kernel, &sws, 0, dst_w as usize, dst_h as usize);
+        let u_stats = plane_delta(&kernel, &sws, 1, (dst_w / 2) as usize, (dst_h / 2) as usize);
+        let v_stats = plane_delta(&kernel, &sws, 2, (dst_w / 2) as usize, (dst_h / 2) as usize);
+        println!(
+            "gradient vs bicubic luma max {} mean {:.3} cb max {} mean {:.3} cr max {} mean {:.3}",
+            y_stats.max_diff,
+            y_stats.mean,
+            u_stats.max_diff,
+            u_stats.mean,
+            v_stats.max_diff,
+            v_stats.mean
+        );
+        assert!(
+            y_stats.max_diff <= 1 && u_stats.max_diff <= 1 && v_stats.max_diff <= 1,
+            "gradient vs bicubic exceeds 1"
+        );
+
+        let mut nv_kernel = frame::Video::new(Pixel::NV12, dst_w, dst_h);
+        let mut nv_scalar = frame::Video::new(Pixel::NV12, dst_w, dst_h);
+        assert!(try_convert(&src, &mut nv_kernel));
+        scalar_box_frame(&src, &mut nv_scalar);
+        assert_max_diff(&nv_kernel, &nv_scalar, 1);
+    }
+
+    fn fill_smooth(frame: &mut frame::Video) {
+        let width = frame.width() as usize;
+        let height = frame.height() as usize;
+        let stride = frame.stride(0);
+        let data = frame.data_mut(0);
+        let x_denom = width.max(1);
+        let y_denom = height.max(1);
+        for y in 0..height {
+            for x in 0..width {
+                let offset = y * stride + x * 4;
+                data[offset] = (x * 255 / x_denom) as u8;
+                data[offset + 1] = (y * 255 / y_denom) as u8;
+                data[offset + 2] = ((x * 128 / x_denom) + (y * 127 / y_denom)) as u8;
+                data[offset + 3] = 255;
+            }
+        }
     }
 }
