@@ -197,6 +197,12 @@ function createServerEnv() {
 			/// Cap Cloud
 			// These are only needed for Cap Cloud (https://cap.so)
 			STRIPE_SECRET_KEY: z.string().optional(),
+			STRIPE_PUBLISHABLE_KEY: z
+				.string()
+				.optional()
+				.describe(
+					"Enables the in-app Cap Pro checkout; hosted Stripe Checkout is used without it",
+				),
 			STRIPE_SAML_SSO_PRICE_ID: z.string().optional(),
 			STRIPE_WEBHOOK_SECRET: z.string().optional(),
 			DISCORD_FEEDBACK_WEBHOOK_URL: z.string().optional(),
