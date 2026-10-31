@@ -560,6 +560,7 @@ export const AgentAiGenerationLanguage = Schema.Literal(
 	"pt",
 	"it",
 	"nl",
+	"da",
 	"pl",
 	"ro",
 	"sk",
