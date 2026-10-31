@@ -410,6 +410,7 @@ async function queueProcessedVideoTranscription(
 ): Promise<void> {
 	"use step";
 
+	if (!serverEnv().ASSEMBLY_API_KEY) return;
 	try {
 		const [owner] = await db()
 			.select({
