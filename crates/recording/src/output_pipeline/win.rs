@@ -845,7 +845,12 @@ impl Muxer for WindowsCameraMuxer {
                             .map_err(|e| anyhow!("CameraSoftwareEncoder/{e}"))
                     };
 
-                    if encoder_preferences.should_force_software() {
+                    if encoder_preferences.should_force_software()
+                        || matches!(
+                            cap_frame_converter::detect_primary_gpu().map(|gpu| gpu.vendor),
+                            Some(cap_frame_converter::GpuVendor::Amd)
+                        )
+                    {
                         return fallback(None);
                     }
 
