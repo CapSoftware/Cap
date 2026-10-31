@@ -12,7 +12,10 @@ import {
 	cleanupMediaTransferCache,
 	sweepMediaTransferCache,
 } from "./lib/media-transfer";
+import { assertSecureStartup } from "./lib/startup-checks";
 import { removeOwnTempDir, startTempDirMaintenance } from "./lib/temp-files";
+
+assertSecureStartup();
 
 const port = Number(process.env.PORT) || 3456;
 
