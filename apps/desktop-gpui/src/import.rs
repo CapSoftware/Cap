@@ -985,6 +985,14 @@ fn transcode_video(
         .unwrap_or(1000)
         .max(1);
 
+    let copy_video = {
+        let stream = input
+            .stream(video_stream_index)
+            .ok_or("No video stream found in file")?;
+        h264_stream_copy_eligible(source_path, &stream, fps, project_path, cancelled)
+            .then(|| stream.parameters())
+    };
+
     let mut video_decoder = avcodec::Context::from_parameters(
         input
             .stream(video_stream_index)
@@ -1056,14 +1064,33 @@ fn transcode_video(
 
     let mut output =
         avformat::output(output_path).map_err(|e| format!("Failed to create encoder: {e}"))?;
-    let mut video_encoder = open_h264_encoder(
-        &mut output,
-        output_width,
-        output_height,
-        fps,
-        video_time_base,
-    )?;
-    video_encoder.strict = strict;
+    let mut video_output = match copy_video {
+        Some(parameters) => {
+            tracing::info!(
+                width = source_width,
+                height = source_height,
+                fps,
+                "import copies the source H264 stream"
+            );
+            ImportVideoOutput::Copy(CopiedH264::open(
+                &mut output,
+                parameters,
+                video_time_base,
+                fps,
+            )?)
+        }
+        None => {
+            let mut encoder = open_h264_encoder(
+                &mut output,
+                output_width,
+                output_height,
+                fps,
+                video_time_base,
+            )?;
+            encoder.strict = strict;
+            ImportVideoOutput::Encode(encoder)
+        }
+    };
 
     let mut audio: Option<(avformat::context::Output, OpusOutput)> = None;
     let mut sample_rate = None;
@@ -1095,7 +1122,7 @@ fn transcode_video(
     let mut audio_samples_processed = 0u64;
     let mut last_progress = 0.0;
 
-    while let Some(packet) = next_import_packet(&mut input, project_path, cancelled)? {
+    while let Some(mut packet) = next_import_packet(&mut input, project_path, cancelled)? {
         check_editor_import_cancelled(project_path, cancelled)?;
         let stream_index = packet.stream();
         if strict
@@ -1105,6 +1132,24 @@ fn transcode_video(
             return Err("Imported media contains a corrupt packet".to_string());
         }
         if stream_index == video_stream_index {
+            let video_encoder = match &mut video_output {
+                ImportVideoOutput::Copy(copy) => {
+                    if strict {
+                        validate_copied_video(&mut video_decoder, Some(&packet), &mut video_frame)?;
+                    }
+                    copy.write(&mut packet, &mut output)?;
+                    frames_processed += 1;
+                    report_import_progress(
+                        frames_processed,
+                        total_frames,
+                        &mut last_progress,
+                        project_path,
+                        report_converting,
+                    )?;
+                    continue;
+                }
+                ImportVideoOutput::Encode(encoder) => encoder,
+            };
             video_decoder
                 .send_packet(&packet)
                 .map_err(|e| format!("Transcoding failed: {e}"))?;
@@ -1128,17 +1173,13 @@ fn transcode_video(
                 video_encoder.queue_frame(frame, timestamp, &mut output)?;
 
                 frames_processed += 1;
-                let progress = (frames_processed as f64 / total_frames as f64).min(0.99);
-                if progress - last_progress >= 0.01 {
-                    last_progress = progress;
-                    // Deleting the bundle is how an import is cancelled
-                    // (`import.rs:1253-1256`).
-                    if !check_project_exists(project_path) {
-                        tracing::info!("import cancelled: project directory was deleted");
-                        return Err(IMPORT_CANCELLED.to_string());
-                    }
-                    report_converting(progress);
-                }
+                report_import_progress(
+                    frames_processed,
+                    total_frames,
+                    &mut last_progress,
+                    project_path,
+                    report_converting,
+                )?;
             }
         } else if let Some((audio_index, decoder)) = audio_decoder.as_mut()
             && stream_index == *audio_index
@@ -1163,28 +1204,33 @@ fn transcode_video(
     }
 
     check_editor_import_cancelled(project_path, cancelled)?;
-    video_decoder
-        .send_eof()
-        .map_err(|e| format!("Transcoding failed: {e}"))?;
-    while receive_import_output(
-        video_decoder.receive_frame(&mut video_frame),
-        strict,
-        "Video decode flush",
-    )? {
-        check_editor_import_cancelled(project_path, cancelled)?;
-        if strict && video_frame.is_corrupt() {
-            return Err("Imported video contains a corrupt frame".to_string());
+    if strict && matches!(video_output, ImportVideoOutput::Copy(_)) {
+        validate_copied_video(&mut video_decoder, None, &mut video_frame)?;
+    }
+    if let ImportVideoOutput::Encode(video_encoder) = &mut video_output {
+        video_decoder
+            .send_eof()
+            .map_err(|e| format!("Transcoding failed: {e}"))?;
+        while receive_import_output(
+            video_decoder.receive_frame(&mut video_frame),
+            strict,
+            "Video decode flush",
+        )? {
+            check_editor_import_cancelled(project_path, cancelled)?;
+            if strict && video_frame.is_corrupt() {
+                return Err("Imported video contains a corrupt frame".to_string());
+            }
+            frames_processed += 1;
+            let timestamp = frame_timestamp(&video_frame, video_time_base);
+            let frame = convert_for_encode(
+                &video_frame,
+                &mut scaler,
+                video_encoder.pixel_format,
+                output_width,
+                output_height,
+            )?;
+            video_encoder.queue_frame(frame, timestamp, &mut output)?;
         }
-        frames_processed += 1;
-        let timestamp = frame_timestamp(&video_frame, video_time_base);
-        let frame = convert_for_encode(
-            &video_frame,
-            &mut scaler,
-            video_encoder.pixel_format,
-            output_width,
-            output_height,
-        )?;
-        video_encoder.queue_frame(frame, timestamp, &mut output)?;
     }
 
     if let Some((_, decoder)) = audio_decoder.as_mut() {
@@ -1213,7 +1259,9 @@ fn transcode_video(
     {
         return Err("Imported media has an empty video or audio track".to_string());
     }
-    video_encoder.flush(&mut output)?;
+    if let ImportVideoOutput::Encode(video_encoder) = &mut video_output {
+        video_encoder.flush(&mut output)?;
+    }
 
     if let Some((mut audio_output, mut opus)) = audio.take() {
         opus.flush(&mut audio_output)?;
@@ -1567,6 +1615,223 @@ fn fix_packet_timestamps(packet: &mut ffmpeg::Packet, last_written_dts: &mut Opt
     }
 
     *last_written_dts = packet.dts();
+}
+
+fn report_import_progress(
+    frames_processed: u64,
+    total_frames: u64,
+    last_progress: &mut f64,
+    project_path: &Path,
+    report_converting: &dyn Fn(f64),
+) -> Result<(), String> {
+    let progress = (frames_processed as f64 / total_frames as f64).min(0.99);
+    if progress - *last_progress >= 0.01 {
+        *last_progress = progress;
+        // Deleting the bundle is how an import is cancelled
+        // (`import.rs:1253-1256`).
+        if !check_project_exists(project_path) {
+            tracing::info!("import cancelled: project directory was deleted");
+            return Err(IMPORT_CANCELLED.to_string());
+        }
+        report_converting(progress);
+    }
+    Ok(())
+}
+
+// Strict (editor) imports reject damaged video that the container doesn't flag;
+// copying skips the encoder, so the packets are still decoded to catch it.
+fn validate_copied_video(
+    decoder: &mut ffmpeg::codec::decoder::Video,
+    packet: Option<&ffmpeg::Packet>,
+    frame: &mut ffmpeg::frame::Video,
+) -> Result<(), String> {
+    match packet {
+        Some(packet) => decoder.send_packet(packet),
+        None => decoder.send_eof(),
+    }
+    .map_err(|e| format!("Transcoding failed: {e}"))?;
+    while receive_import_output(decoder.receive_frame(frame), true, "Video decode")? {
+        if frame.is_corrupt() {
+            return Err("Imported video contains a corrupt frame".to_string());
+        }
+    }
+    Ok(())
+}
+
+enum ImportVideoOutput {
+    Encode(H264Output),
+    Copy(CopiedH264),
+}
+
+/// Whether the source's H264 stream can go into the project as-is, giving the
+/// editor the same kind of stream the transcode would: 8-bit 4:2:0, even
+/// dimensions, constant frame rate, no B-frames or rotation, BT.709 colour,
+/// and a keyframe at least every `KEYFRAME_INTERVAL_SECS` so seeking stays as
+/// cheap as in an encoded import. Untagged sources are re-encoded: the editor
+/// reads an unspecified matrix as BT.601, while the encode tags BT.709.
+fn h264_stream_copy_eligible(
+    source_path: &Path,
+    stream: &ffmpeg::format::stream::Stream,
+    fps: u32,
+    project_path: &Path,
+    cancelled: Option<&AtomicBool>,
+) -> bool {
+    let parameters = stream.parameters();
+    if parameters.id() != avcodec::Id::H264 {
+        return false;
+    }
+    let (format, width, height, video_delay, primaries, space, rotated) = unsafe {
+        let raw = &*parameters.as_ptr();
+        let side_data = if raw.coded_side_data.is_null() {
+            &[][..]
+        } else {
+            std::slice::from_raw_parts(raw.coded_side_data, raw.nb_coded_side_data.max(0) as usize)
+        };
+        (
+            raw.format,
+            raw.width,
+            raw.height,
+            raw.video_delay,
+            raw.color_primaries,
+            raw.color_space,
+            side_data.iter().any(|entry| {
+                entry.type_ == ffmpeg::ffi::AVPacketSideDataType::AV_PKT_DATA_DISPLAYMATRIX
+            }),
+        )
+    };
+    let average_rate = stream.avg_frame_rate();
+    let base_rate = stream.rate();
+    format == ffmpeg::ffi::AVPixelFormat::AV_PIX_FMT_YUV420P as i32
+        && width > 0
+        && height > 0
+        && width % 2 == 0
+        && height % 2 == 0
+        && video_delay == 0
+        && !rotated
+        && primaries == ffmpeg::ffi::AVColorPrimaries::AVCOL_PRI_BT709
+        && space == ffmpeg::ffi::AVColorSpace::AVCOL_SPC_BT709
+        && average_rate.denominator() > 0
+        && average_rate == base_rate
+        && keyframes_within(
+            source_path,
+            stream.index(),
+            stream.time_base(),
+            f64::from(KEYFRAME_INTERVAL_SECS) + 1.0 / f64::from(fps.max(1)),
+            project_path,
+            cancelled,
+        )
+}
+
+fn keyframes_within(
+    source_path: &Path,
+    stream_index: usize,
+    time_base: ffmpeg::Rational,
+    max_gap_secs: f64,
+    project_path: &Path,
+    cancelled: Option<&AtomicBool>,
+) -> bool {
+    let input = match cancelled {
+        Some(cancelled) => {
+            avformat::input_with_interrupt(source_path, || cancelled.load(Ordering::Acquire))
+        }
+        None => avformat::input(source_path),
+    };
+    let Ok(mut input) = input else {
+        return false;
+    };
+    let seconds = |ticks: i64| {
+        ticks as f64 * f64::from(time_base.numerator()) / f64::from(time_base.denominator().max(1))
+    };
+    let mut last_keyframe = None;
+    let mut end = None;
+    for (stream, packet) in input.packets() {
+        if check_editor_import_cancelled(project_path, cancelled).is_err() {
+            return false;
+        }
+        if stream.index() != stream_index {
+            continue;
+        }
+        let Some(timestamp) = packet.pts().or(packet.dts()) else {
+            return false;
+        };
+        match last_keyframe {
+            None if !packet.is_key() => return false,
+            Some(keyframe) if packet.is_key() && seconds(timestamp - keyframe) > max_gap_secs => {
+                return false;
+            }
+            _ => {}
+        }
+        if packet.is_key() {
+            last_keyframe = Some(timestamp);
+        }
+        end = Some(timestamp + packet.duration().max(0));
+    }
+    matches!(
+        (last_keyframe, end),
+        (Some(keyframe), Some(end)) if seconds(end - keyframe) <= max_gap_secs
+    )
+}
+
+struct CopiedH264 {
+    stream_index: usize,
+    input_time_base: ffmpeg::Rational,
+    frame_duration: i64,
+    first_timestamp: Option<i64>,
+    last_written_dts: Option<i64>,
+}
+
+impl CopiedH264 {
+    fn open(
+        output: &mut avformat::context::Output,
+        parameters: avcodec::Parameters,
+        input_time_base: ffmpeg::Rational,
+        fps: u32,
+    ) -> Result<Self, String> {
+        let mut stream = output
+            .add_stream(ffmpeg::encoder::find(avcodec::Id::None))
+            .map_err(|e| format!("Failed to create video stream: {e}"))?;
+        stream.set_parameters(parameters);
+        // The source container's tag (avc1/H264/...) need not be valid in mp4;
+        // zero lets the muxer pick its own.
+        unsafe {
+            (*stream.parameters().as_mut_ptr()).codec_tag = 0;
+        }
+        stream.set_time_base(input_time_base);
+        stream.set_rate((fps as i32, 1));
+        Ok(Self {
+            stream_index: stream.index(),
+            input_time_base,
+            frame_duration: frame_duration_ticks(input_time_base, fps),
+            first_timestamp: None,
+            last_written_dts: None,
+        })
+    }
+
+    fn write(
+        &mut self,
+        packet: &mut ffmpeg::Packet,
+        output: &mut avformat::context::Output,
+    ) -> Result<(), String> {
+        let first = *self
+            .first_timestamp
+            .get_or_insert(packet.pts().or(packet.dts()).unwrap_or(0));
+        packet.set_pts(packet.pts().map(|pts| pts - first));
+        packet.set_dts(packet.dts().map(|dts| dts - first));
+        if packet.duration() <= 0 {
+            packet.set_duration(self.frame_duration);
+        }
+        let output_time_base = output
+            .stream(self.stream_index)
+            .ok_or("Video stream disappeared")?
+            .time_base();
+        packet.set_stream(self.stream_index);
+        packet.set_position(-1);
+        packet.rescale_ts(self.input_time_base, output_time_base);
+        fix_packet_timestamps(packet, &mut self.last_written_dts);
+        packet
+            .write_interleaved(output)
+            .map_err(|e| format!("Transcoding failed: {e}"))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2219,6 +2484,138 @@ mod tests {
         assert!((duration - 1.0).abs() < 0.01, "{duration}");
         let audio_seconds = decoded_audio_seconds(&audio);
         assert!((0.9..=1.1).contains(&audio_seconds), "{audio_seconds}");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    fn stream_copy_eligible(path: &Path, fps: u32) -> bool {
+        let input = avformat::input(path).unwrap();
+        let stream = input.streams().best(ffmpeg::media::Type::Video).unwrap();
+        h264_stream_copy_eligible(path, &stream, fps, path, None)
+    }
+
+    fn video_packet_data(path: &Path) -> Vec<Vec<u8>> {
+        let mut input = avformat::input(path).unwrap();
+        let index = input
+            .streams()
+            .best(ffmpeg::media::Type::Video)
+            .unwrap()
+            .index();
+        input
+            .packets()
+            .filter(|(stream, _)| stream.index() == index)
+            .map(|(_, packet)| packet.data().unwrap_or_default().to_vec())
+            .collect()
+    }
+
+    /// A 64x64, 25 fps BT.709 H264 file written with libx264 directly, so the
+    /// copy-path tests see the same source on every platform (macOS imports
+    /// encode with VideoToolbox, whose output these tests must not depend on).
+    fn write_h264_source(path: &Path, frames: i64, gop: u32, b_frames: u32) {
+        ffmpeg::init().unwrap();
+        let codec = ffmpeg::encoder::find_by_name("libx264").unwrap();
+        let mut output = avformat::output(path).unwrap();
+        let mut context = avcodec::Context::new_with_codec(codec)
+            .encoder()
+            .video()
+            .unwrap();
+        context.set_width(64);
+        context.set_height(64);
+        context.set_format(avformat::Pixel::YUV420P);
+        context.set_time_base((1, 25));
+        context.set_frame_rate(Some((25, 1)));
+        context.set_colorspace(ffmpeg::color::Space::BT709);
+        context.set_color_range(ffmpeg::color::Range::MPEG);
+        unsafe {
+            (*context.as_mut_ptr()).color_primaries =
+                ffmpeg::ffi::AVColorPrimaries::AVCOL_PRI_BT709;
+            (*context.as_mut_ptr()).color_trc =
+                ffmpeg::ffi::AVColorTransferCharacteristic::AVCOL_TRC_BT709;
+        }
+        let mut options = ffmpeg::Dictionary::new();
+        options.set("preset", "ultrafast");
+        options.set("g", &gop.to_string());
+        options.set("keyint_min", &gop.to_string());
+        options.set("bf", &b_frames.to_string());
+        let mut encoder = context.open_as_with(codec, options).unwrap();
+        let mut stream = output.add_stream(codec).unwrap();
+        stream.set_time_base((1, 25));
+        stream.set_parameters(&encoder);
+        let index = stream.index();
+        output.write_header().unwrap();
+        let stream_time_base = output.stream(index).unwrap().time_base();
+
+        let mut packet = ffmpeg::Packet::empty();
+        let mut drain = |encoder: &mut ffmpeg::codec::encoder::Video,
+                         output: &mut avformat::context::Output| {
+            while encoder.receive_packet(&mut packet).is_ok() {
+                packet.set_stream(index);
+                packet.set_duration(1);
+                packet.rescale_ts((1, 25), stream_time_base);
+                packet.write_interleaved(output).unwrap();
+            }
+        };
+        for index in 0..frames {
+            let mut frame = ffmpeg::frame::Video::new(avformat::Pixel::YUV420P, 64, 64);
+            frame.data_mut(0).fill((index * 5 % 220) as u8 + 16);
+            frame.data_mut(1).fill(128);
+            frame.data_mut(2).fill(128);
+            frame.set_pts(Some(index));
+            encoder.send_frame(&frame).unwrap();
+            drain(&mut encoder, &mut output);
+        }
+        encoder.send_eof().unwrap();
+        drain(&mut encoder, &mut output);
+        output.write_trailer().unwrap();
+    }
+
+    #[test]
+    fn a_qualifying_h264_source_is_copied_without_re_encoding() {
+        let root = temp_dir("stream-copy");
+        let source = root.join("source.mp4");
+        write_h264_source(&source, 50, 25, 0);
+        std::fs::write(root.join("recording-meta.json"), b"{}").unwrap();
+        assert!(stream_copy_eligible(&source, 25));
+
+        let copied = root.join("display.mp4");
+        let (fps, _) = transcode_video(&source, &copied, None, &root, &|_| {}, None).unwrap();
+
+        assert_eq!(fps, 25);
+        assert_eq!(video_packet_data(&copied), video_packet_data(&source));
+        assert_eq!(decoded_video_frames(&copied), 50);
+
+        let strict_copy = root.join("strict.mp4");
+        let not_cancelled = AtomicBool::new(false);
+        transcode_video(
+            &source,
+            &strict_copy,
+            None,
+            &root,
+            &|_| {},
+            Some(&not_cancelled),
+        )
+        .unwrap();
+        assert_eq!(video_packet_data(&strict_copy), video_packet_data(&source));
+        let duration = media_duration(&copied).unwrap().as_secs_f64();
+        assert!((duration - 2.0).abs() < 0.01, "{duration}");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn sources_with_b_frames_or_sparse_keyframes_are_re_encoded() {
+        let root = temp_dir("not-copied");
+        let b_frames = root.join("b-frames.mp4");
+        write_h264_source(&b_frames, 50, 25, 2);
+        let sparse = root.join("sparse.mp4");
+        write_h264_source(&sparse, 100, 100, 0);
+        std::fs::write(root.join("recording-meta.json"), b"{}").unwrap();
+
+        assert!(!stream_copy_eligible(&b_frames, 25));
+        assert!(!stream_copy_eligible(&sparse, 25));
+
+        let output = root.join("display.mp4");
+        transcode_video(&sparse, &output, None, &root, &|_| {}, None).unwrap();
+        assert_ne!(video_packet_data(&output), video_packet_data(&sparse));
+        assert_eq!(decoded_video_frames(&output), 100);
         std::fs::remove_dir_all(root).unwrap();
     }
 
