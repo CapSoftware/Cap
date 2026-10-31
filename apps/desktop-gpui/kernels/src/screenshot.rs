@@ -54,12 +54,17 @@ pub fn flatten_onto_white(rgba: &[u8]) -> Vec<u8> {
     rgba
 }
 
+#[inline(always)]
 fn blend_pixel_over(dst: &mut [u8], src: [u8; 4]) {
     if src[3] == 0 {
         return;
     }
-    if src[3] == 255 {
+    if src[3] == 255 || dst[3] == 0 {
         dst.copy_from_slice(&src);
+        return;
+    }
+    if dst[3] == 255 {
+        blend_pixel_over_opaque(dst, src);
         return;
     }
     let sa = f32::from(src[3]) / 255.;
@@ -81,6 +86,7 @@ fn blend_pixel_over(dst: &mut [u8], src: [u8; 4]) {
 // 8-bit source alpha, so the divide drops out and the result is the integer
 // rounding of `(s*a + d*(255-a)) / 255`, which is bit-identical to the float
 // path for all 16.6M (src, dst, alpha) combinations.
+#[inline(always)]
 fn blend_pixel_over_opaque(dst: &mut [u8], src: [u8; 4]) {
     let alpha = u32::from(src[3]);
     let inverse = 255 - alpha;
@@ -204,7 +210,27 @@ fn blend_row_over(target: &mut [u8], source: &[u8]) {
             }
         }
         Backdrop::Mixed => {
-            for (target, source) in target.chunks_exact_mut(4).zip(source.chunks_exact(4)) {
+            const ALPHA_MASK: u128 = 0xff000000ff000000ff000000ff000000;
+            let mut targets = target.chunks_exact_mut(16);
+            let mut sources = source.chunks_exact(16);
+            for (target, source) in targets.by_ref().zip(sources.by_ref()) {
+                let mask = u128::from_le_bytes(source.try_into().unwrap()) & ALPHA_MASK;
+                if mask == ALPHA_MASK {
+                    target.copy_from_slice(source);
+                    continue;
+                }
+                if mask == 0 {
+                    continue;
+                }
+                for (target, source) in target.chunks_exact_mut(4).zip(source.chunks_exact(4)) {
+                    blend_pixel_over(target, source.try_into().unwrap());
+                }
+            }
+            for (target, source) in targets
+                .into_remainder()
+                .chunks_exact_mut(4)
+                .zip(sources.remainder().chunks_exact(4))
+            {
                 blend_pixel_over(target, source.try_into().unwrap());
             }
         }
@@ -888,6 +914,29 @@ mod tests {
         }
     }
 
+    fn reference_blend_pixel_over(dst: &mut [u8], src: [u8; 4]) {
+        if src[3] == 0 {
+            return;
+        }
+        if src[3] == 255 {
+            dst.copy_from_slice(&src);
+            return;
+        }
+        let sa = f32::from(src[3]) / 255.;
+        let da = f32::from(dst[3]) / 255.;
+        let oa = sa + da * (1. - sa);
+        if oa <= 0. {
+            dst.fill(0);
+            return;
+        }
+        for channel in 0..3 {
+            let s = f32::from(src[channel]);
+            let d = f32::from(dst[channel]);
+            dst[channel] = ((s * sa + d * da * (1. - sa)) / oa).round().clamp(0., 255.) as u8;
+        }
+        dst[3] = (oa * 255.).round() as u8;
+    }
+
     fn reference_blit(
         dst: &mut [u8],
         dst_size: (u32, u32),
@@ -904,7 +953,7 @@ mod tests {
                 }
                 let source = (y as usize * src_size.0 as usize + x as usize) * 4;
                 let target = (dy as usize * dst_size.0 as usize + dx as usize) * 4;
-                blend_pixel_over(
+                reference_blend_pixel_over(
                     &mut dst[target..target + 4],
                     src[source..source + 4].try_into().unwrap(),
                 );
