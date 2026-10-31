@@ -107,6 +107,19 @@ Email is optional. Without it, login codes are printed to the cap-web logs, the 
    ```
 3. Verify the domain in Resend. Login emails are sent from `auth@RESEND_FROM_DOMAIN`.
 
+## Media Server Tuning
+
+The media server converts uploads in parallel based on the CPUs it can use: half the available CPUs, at least 1 and at most 4. It still turns work away when CPU or memory pressure is high. The CPU quota and assigned CPU set both limit this default. To override it in the bundled Compose deployments, add these values to `.env` (the media-server service forwards them):
+
+```bash
+MEDIA_SERVER_MAX_CONCURRENT_DIRECT_CONVERSIONS=2   # direct /video/convert requests
+MEDIA_SERVER_MAX_CONCURRENT_VIDEO_PROCESSES=4      # all video jobs
+```
+
+Apply changes with `docker compose up -d --force-recreate media-server`. With `docker-compose.template.yml`, use `docker compose -f docker-compose.template.yml up -d --force-recreate cap-media-server`. In Coolify, update the environment variables and redeploy the `media-server` service. For a custom Compose file, also add these variables to the media-server service’s `environment` mapping; `.env` alone does not pass variables into a container.
+
+On `docker compose stop` the media server stops taking new work and lets active work finish for up to `MEDIA_SERVER_SHUTDOWN_GRACE_MS` (25s in the bundled compose files). It then cancels what is left and sends each cancelled job's webhook: an attempt already in flight can take up to 5s, then up to 3 tries of 5s with 1.5s of backoff (16.5s). That is 46.5s before cleanup, so the compose files set `stop_grace_period: 60s`. If you raise the grace period, raise `stop_grace_period` by the same amount, or Docker kills the container before it finishes.
+
 ## Optional Features
 
 ### AI Features
