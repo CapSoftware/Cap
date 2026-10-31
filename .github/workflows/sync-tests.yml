@@ -23,6 +23,8 @@ on:
       - "crates/enc-mediafoundation/**"
       - "crates/timestamp/**"
       - "crates/rendering/**"
+      - "crates/video-decode/**"
+      - "crates/d3d-adapter/**"
       - "crates/render-farm/**"
       - "crates/editor/**"
       - "crates/export/**"
@@ -155,6 +157,19 @@ jobs:
           # 2 s decode deadline is not meant for a loaded hosted runner.
           cargo test --locked -p cap-rendering -- --nocapture --skip zoom_spring::tests::precompute_cost_is_bounded_for_long_projects --skip decoder::model::
           cargo test --locked -p cap-rendering --lib zoom_spring::tests::precompute_cost_is_bounded_for_long_projects -- --exact --nocapture --test-threads=1
+
+      # The hosted runner has no video-capable D3D11 adapter, so these tests
+      # force plain WARP and exercise the software Media Foundation path. The
+      # required flags turn a missing device or decoder into a failure instead
+      # of a silent skip.
+      - name: Media Foundation decoder tests (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          CAP_FORCE_WARP_TESTS: "1"
+          CAP_REQUIRE_D3D11_TESTS: "1"
+          CAP_REQUIRE_MF_TESTS: "1"
+        run: cargo test --locked -p cap-video-decode --lib -- --nocapture --test-threads=1
 
       - name: Editor audio playback and export regressions
         shell: bash

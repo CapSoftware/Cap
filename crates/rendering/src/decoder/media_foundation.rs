@@ -192,13 +192,14 @@ impl MFDecoder {
                         )
                     },
                     |data| {
-                        DecodedFrame::new_nv12_with_arc(
+                        DecodedFrame::new_nv12_with_mapped(
                             data.data,
                             video_width,
                             video_height,
                             data.y_stride,
                             data.uv_stride,
                         )
+                        .with_storage_epoch(data.storage_epoch)
                         .with_matrix(matrix)
                     },
                 ));
