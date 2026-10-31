@@ -76,22 +76,11 @@ impl SourceToEditedMapping {
     }
 }
 
-fn source_time_at(
-    mappings: &[SourceToEditedMapping],
-    effective: f64,
-    ordered: bool,
-) -> Option<f32> {
-    let mapping = if ordered {
-        let end = mappings.partition_point(|mapping| mapping.edited_start <= effective);
-        mappings
-            .get(end.checked_sub(1)?)
-            .filter(|mapping| effective <= mapping.edited_end())
-    } else {
-        mappings
-            .iter()
-            .rev()
-            .find(|mapping| effective >= mapping.edited_start && effective <= mapping.edited_end())
-    }?;
+fn source_time_at(mappings: &[SourceToEditedMapping], effective: f64) -> Option<f32> {
+    let end = mappings.partition_point(|mapping| mapping.edited_start <= effective);
+    let mapping = mappings
+        .get(end.checked_sub(1)?)
+        .filter(|mapping| effective <= mapping.edited_end())?;
     Some((mapping.source_start + (effective - mapping.edited_start) * mapping.timescale) as f32)
 }
 
@@ -412,14 +401,16 @@ pub fn synchronize_captions(project: &mut ProjectConfiguration, recording_durati
     if !captions.source_timed {
         let holds = timeline.hold_windows();
         let mappings = build_source_to_edited_mappings(timeline, recording_durations);
-        let mappings_ordered = mappings.iter().all(|mapping| {
-            mapping.edited_start.is_finite()
-                && mapping.edited_end().is_finite()
-                && mapping.edited_end() >= mapping.edited_start
-        }) && mappings.windows(2).all(|pair| {
-            pair[0].edited_start <= pair[1].edited_start
-                && pair[0].edited_end() <= pair[1].edited_end()
-        });
+        let mappings_ordered = mappings.len() >= 128
+            && mappings.iter().all(|mapping| {
+                mapping.edited_start.is_finite()
+                    && mapping.edited_end().is_finite()
+                    && mapping.edited_end() >= mapping.edited_start
+            })
+            && mappings.windows(2).all(|pair| {
+                pair[0].edited_start <= pair[1].edited_start
+                    && pair[0].edited_end() <= pair[1].edited_end()
+            });
         let output_end = timeline.duration() as f32;
         let to_source = |output: f32| -> Option<f32> {
             if output == output_end {
@@ -431,7 +422,17 @@ pub fn synchronize_captions(project: &mut ProjectConfiguration, recording_durati
                     .iter()
                     .map(|(start, end)| (output.min(*end) - start).max(0.0))
                     .sum::<f64>();
-            source_time_at(&mappings, effective, mappings_ordered)
+            if mappings_ordered {
+                return source_time_at(&mappings, effective);
+            }
+            mappings.iter().rev().find_map(|mapping| {
+                let end = mapping.edited_start
+                    + (mapping.source_end - mapping.source_start) / mapping.timescale;
+                (effective >= mapping.edited_start && effective <= end).then_some({
+                    (mapping.source_start + (effective - mapping.edited_start) * mapping.timescale)
+                        as f32
+                })
+            })
         };
         captions.segments = captions
             .segments

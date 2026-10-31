@@ -46,7 +46,7 @@ fn fixture(clips: usize, words_per_clip: usize) -> (ProjectConfiguration, Vec<f6
 
 #[test]
 fn indexed_migration_preserves_complete_projects_and_repeated_sync() {
-    for clips in [1, 2, 32, 60] {
+    for clips in [1, 2, 32, 60, 128, 200] {
         for transitions in [false, true] {
             for holds in [false, true] {
                 let (mut project, durations) = fixture(clips, 10);
@@ -105,12 +105,10 @@ fn indexed_lookup_matches_reverse_scan_at_shared_edges_and_gaps() {
                 (mapping.source_start + (time - mapping.edited_start) * mapping.timescale) as f32,
             )
         });
-        for ordered in [false, true] {
-            assert_eq!(
-                source_time_at(&mappings, time, ordered).map(f32::to_bits),
-                expected.map(f32::to_bits)
-            );
-        }
+        assert_eq!(
+            source_time_at(&mappings, time).map(f32::to_bits),
+            expected.map(f32::to_bits)
+        );
     }
 }
 
@@ -118,7 +116,7 @@ fn indexed_lookup_matches_reverse_scan_at_shared_edges_and_gaps() {
 fn migration_falls_back_for_nonmonotonic_and_nonfinite_clips() {
     for value in [0.0, -1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
         for field in 0..3 {
-            let (mut project, durations) = fixture(4, 10);
+            let (mut project, durations) = fixture(128, 10);
             let clip = &mut project.timeline.as_mut().unwrap().segments[1];
             match field {
                 0 => clip.start = value,
