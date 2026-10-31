@@ -493,6 +493,9 @@ async fn run_operation(
     format: OutputFormat,
     global_json: bool,
 ) -> Result<(), String> {
+    if wait {
+        crate::jobs::validate_wait_timeout(timeout).map_err(|error| error.to_string())?;
+    }
     let client = AgentClient::from_credentials().map_err(|error| error.to_string())?;
     let mut value = client
         .mutate_json_confirmed(method, path, &json!({}))
@@ -1030,6 +1033,10 @@ impl OrganizationsArgs {
                     confirmation::require(args.yes, "Set the organization custom domain")?;
                     let id = opaque_id(&args.organization, "Organization ID")
                         .map_err(|error| error.to_string())?;
+                    if args.wait {
+                        crate::jobs::validate_wait_timeout(args.timeout)
+                            .map_err(|error| error.to_string())?;
+                    }
                     let client =
                         AgentClient::from_credentials().map_err(|error| error.to_string())?;
                     let mut value = client

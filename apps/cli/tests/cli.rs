@@ -43,6 +43,135 @@ fn parse_json(output: &Output) -> Value {
     })
 }
 
+#[tokio::test]
+async fn organization_operations_validate_wait_timeouts_before_submitting() {
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
+
+    for (arguments, method, path, body) in [
+        (
+            vec!["organizations", "delete", "org_test"],
+            "DELETE",
+            "/api/v1/organizations/org_test",
+            serde_json::json!({}),
+        ),
+        (
+            vec!["organizations", "domain", "remove", "org_test"],
+            "DELETE",
+            "/api/v1/organizations/org_test/domain",
+            serde_json::json!({}),
+        ),
+        (
+            vec!["organizations", "domain", "verify", "org_test"],
+            "POST",
+            "/api/v1/organizations/org_test/domain/verify",
+            serde_json::json!({}),
+        ),
+        (
+            vec![
+                "organizations",
+                "domain",
+                "set",
+                "org_test",
+                "clips.example.com",
+            ],
+            "PUT",
+            "/api/v1/organizations/org_test/domain",
+            serde_json::json!({"domain": "clips.example.com"}),
+        ),
+    ] {
+        for (wait, timeout, expected_requests) in [
+            (true, "0", 0),
+            (true, "86401", 0),
+            (true, "86400", 2),
+            (false, "0", 1),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let (sender, receiver) = mpsc::channel();
+            let server = tokio::spawn(async move {
+                loop {
+                    let (mut stream, _) = listener.accept().await.unwrap();
+                    let mut reader = tokio::io::BufReader::new(&mut stream);
+                    let mut request = String::new();
+                    reader.read_line(&mut request).await.unwrap();
+                    let mut length = 0;
+                    loop {
+                        let mut header = String::new();
+                        reader.read_line(&mut header).await.unwrap();
+                        if header == "\r\n" {
+                            break;
+                        }
+                        if let Some((name, value)) = header.split_once(':')
+                            && name.eq_ignore_ascii_case("content-length")
+                        {
+                            length = value.trim().parse::<usize>().unwrap();
+                        }
+                    }
+                    let mut bytes = vec![0; length];
+                    reader.read_exact(&mut bytes).await.unwrap();
+                    let state = if request.starts_with("GET ") {
+                        "succeeded"
+                    } else {
+                        "queued"
+                    };
+                    sender.send((request, bytes)).unwrap();
+                    let response = serde_json::json!({"id": "op_test", "state": state}).to_string();
+                    stream
+                        .write_all(
+                            format!(
+                                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}",
+                                response.len()
+                            )
+                            .as_bytes(),
+                        )
+                        .await
+                        .unwrap();
+                }
+            });
+            let mut args = arguments.clone();
+            args.extend(["--yes", "--json", "--timeout", timeout]);
+            if wait {
+                args.push("--wait");
+            }
+            let output = tokio::task::spawn_blocking(move || {
+                cap()
+                    .args(args)
+                    .env("CAP_AGENT_TOKEN", "cap_cli_synthetic_test_token")
+                    .env("CAP_SERVER_URL", format!("http://{address}"))
+                    .output()
+                    .expect("failed to spawn cap binary")
+            })
+            .await
+            .unwrap();
+            server.abort();
+            assert!(server.await.unwrap_err().is_cancelled());
+            let requests = receiver.try_iter().collect::<Vec<_>>();
+            assert_eq!(requests.len(), expected_requests, "{arguments:?} {timeout}");
+            if expected_requests == 0 {
+                assert!(!output.status.success());
+                assert!(output.stdout.is_empty());
+                assert!(
+                    stderr(&output)
+                        .contains("INVALID_REQUEST: --timeout must be between 1 and 86400 seconds")
+                );
+                continue;
+            }
+            assert!(output.status.success(), "{}", stderr(&output));
+            assert_eq!(requests[0].0, format!("{method} {path} HTTP/1.1\r\n"));
+            assert_eq!(
+                serde_json::from_slice::<Value>(&requests[0].1).unwrap(),
+                body
+            );
+            if wait {
+                assert_eq!(requests[1].0, "GET /api/v1/operations/op_test HTTP/1.1\r\n");
+            }
+            let value = parse_json(&output);
+            assert_eq!(value["id"], "op_test");
+            assert_eq!(value["state"], if wait { "succeeded" } else { "queued" });
+        }
+    }
+}
+
 #[test]
 fn help_succeeds_and_lists_commands() {
     let output = run(&["--help"]);

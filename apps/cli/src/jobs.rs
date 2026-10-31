@@ -48,17 +48,22 @@ fn local_error(code: &str, message: impl Into<String>) -> AgentApiError {
     }
 }
 
-pub async fn wait_operation(
-    client: &AgentClient,
-    operation_id: &str,
-    timeout: u64,
-) -> Result<Value, AgentApiError> {
+pub fn validate_wait_timeout(timeout: u64) -> Result<(), AgentApiError> {
     if timeout == 0 || timeout > 86_400 {
         return Err(local_error(
             "INVALID_REQUEST",
             "--timeout must be between 1 and 86400 seconds",
         ));
     }
+    Ok(())
+}
+
+pub async fn wait_operation(
+    client: &AgentClient,
+    operation_id: &str,
+    timeout: u64,
+) -> Result<Value, AgentApiError> {
+    validate_wait_timeout(timeout)?;
     let operation_id = opaque_id(operation_id, "Operation ID")?;
     let mut request_id = None;
     let wait = async {
