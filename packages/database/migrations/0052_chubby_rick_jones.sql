@@ -1,0 +1,1 @@
+ALTER TABLE `verification_tokens` DROP INDEX `verification_tokens_token_unique`;
