@@ -98,6 +98,7 @@ export function CheckoutForm({
 }) {
 	const state = useCheckoutElements();
 	const copy = purchaseCopy(onboarding);
+	const [seatsPending, setSeatsPending] = useState(false);
 
 	if (state.type === "loading") {
 		return (
@@ -158,9 +159,19 @@ export function CheckoutForm({
 	return (
 		<CheckoutShell
 			{...copy}
-			summary={<OrderSummary checkout={checkout} clientSecret={clientSecret} />}
+			summary={
+				<OrderSummary
+					checkout={checkout}
+					clientSecret={clientSecret}
+					onSeatsPendingChange={setSeatsPending}
+				/>
+			}
 		>
-			<PaymentForm checkout={checkout} email={email} />
+			<PaymentForm
+				checkout={checkout}
+				email={email}
+				seatsPending={seatsPending}
+			/>
 		</CheckoutShell>
 	);
 }
@@ -168,9 +179,11 @@ export function CheckoutForm({
 function OrderSummary({
 	checkout,
 	clientSecret,
+	onSeatsPendingChange,
 }: {
 	checkout: Checkout;
 	clientSecret: Promise<string>;
+	onSeatsPendingChange: (pending: boolean) => void;
 }) {
 	const lineItem = checkout.lineItems[0];
 	const plan: CheckoutPlan =
@@ -233,7 +246,11 @@ function OrderSummary({
 					]}
 					theme={MODE_THEME.instant}
 				/>
-				<SeatControl checkout={checkout} lineItemId={lineItem.id} />
+				<SeatControl
+					checkout={checkout}
+					lineItemId={lineItem.id}
+					onPendingChange={onSeatsPendingChange}
+				/>
 				{planError ? (
 					<p role="alert" className="text-[13px] text-[#B4322E]">
 						Couldn't switch plans. Please try again.
@@ -380,9 +397,11 @@ const STEP_BTN =
 function SeatControl({
 	checkout,
 	lineItemId,
+	onPendingChange,
 }: {
 	checkout: Checkout;
 	lineItemId: string;
+	onPendingChange: (pending: boolean) => void;
 }) {
 	const quantity =
 		checkout.lineItems.find((item) => item.id === lineItemId)?.quantity ?? 1;
@@ -396,6 +415,13 @@ function SeatControl({
 	useEffect(() => {
 		setDraft(String(quantity));
 	}, [quantity]);
+
+	// A chosen count only reaches Stripe after the debounce and the update
+	// request, so payment waits until the session's quantity matches it.
+	const pending = valid && seats !== quantity;
+	useEffect(() => {
+		onPendingChange(pending);
+	}, [onPendingChange, pending]);
 
 	useEffect(() => {
 		if (!valid || seats === quantity) return;
@@ -573,9 +599,11 @@ function PromotionCode({ checkout }: { checkout: Checkout }) {
 function PaymentForm({
 	checkout,
 	email,
+	seatsPending,
 }: {
 	checkout: Checkout;
 	email: string | null;
+	seatsPending: boolean;
 }) {
 	const pathname = usePathname();
 	const searchParams = useSearchParams();
@@ -663,7 +691,7 @@ function PaymentForm({
 
 	const submit = async (event: FormEvent) => {
 		event.preventDefault();
-		if (submitting) return;
+		if (submitting || seatsPending) return;
 		if (!(await commitEmail())) return;
 		await confirm();
 	};
@@ -698,7 +726,13 @@ function PaymentForm({
 				)}
 			</div>
 
-			<div className={walletsAvailable ? "mt-7" : "mt-0"}>
+			<div
+				aria-disabled={seatsPending}
+				className={classNames(
+					walletsAvailable ? "mt-7" : "mt-0",
+					seatsPending && "pointer-events-none opacity-60",
+				)}
+			>
 				<ExpressCheckoutElement
 					options={{
 						buttonHeight: 48,
@@ -715,7 +749,9 @@ function PaymentForm({
 					onReady={(event) =>
 						setWalletsAvailable(Boolean(event.availablePaymentMethods))
 					}
-					onConfirm={(event) => confirm(event)}
+					onConfirm={(event) =>
+						seatsPending ? event.paymentFailed() : confirm(event)
+					}
 				/>
 			</div>
 			{walletsAvailable ? (
@@ -858,7 +894,7 @@ function PaymentForm({
 
 			<button
 				type="submit"
-				disabled={submitting}
+				disabled={submitting || seatsPending}
 				className={classNames(
 					BTN_PRIMARY,
 					"mt-7 w-full gap-2 disabled:cursor-not-allowed disabled:opacity-70",
@@ -868,6 +904,11 @@ function PaymentForm({
 					<>
 						<Loader2 className="size-4 animate-spin" strokeWidth={2} />
 						Processing payment...
+					</>
+				) : seatsPending ? (
+					<>
+						<Loader2 className="size-4 animate-spin" strokeWidth={2} />
+						Updating total...
 					</>
 				) : (
 					`Subscribe for ${checkout.total.total.amount}`
