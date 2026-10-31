@@ -113,6 +113,10 @@ const expectedCanonicals: Array<{ file: string; canonical: string }> = [
 		file: "(site)/(seo)/google-chrome-screen-recorder/page.tsx",
 		canonical: "https://cap.so/google-chrome-screen-recorder",
 	},
+	{
+		file: "(site)/deactivate-license/page.tsx",
+		canonical: "https://cap.so/deactivate-license",
+	},
 ];
 
 describe("Canonical URLs", () => {
@@ -135,5 +139,20 @@ describe("Canonical URLs", () => {
 		expect(content).toContain(
 			`canonical: \`https://cap.so/tools/convert/\${conversionPath}\``,
 		);
+	});
+
+	it("dynamic blog [slug] route generates canonical from the post slug", () => {
+		const content = readPage("(site)/blog/[slug]/page.tsx");
+		expect(content).toContain(
+			`canonical: \`https://cap.so/blog/\${post.slug}\``,
+		);
+	});
+
+	it("dynamic docs route generates canonical from the slug, with /docs as the docs home", () => {
+		const content = readPage("(docs)/docs/[[...slug]]/page.tsx");
+		expect(content).toContain(
+			`const docPath = isDocsHome ? "/docs" : \`/docs/\${slug}\`;`,
+		);
+		expect(content).toContain(`canonical: \`https://cap.so\${docPath}\``);
 	});
 });
