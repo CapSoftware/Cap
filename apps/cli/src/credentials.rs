@@ -3,7 +3,7 @@
 //! Priority: explicit `CAP_API_KEY`/`CAP_SERVER_URL` env vars (for CI/headless), then the login the
 //! desktop app already stored. The CLI is the same product as Cap Desktop, so if the user is signed
 //! in there, `cap upload` just works — no key to copy, no env var to set. The desktop persists its
-//! auth as plain JSON via tauri-plugin-store, so we read it directly without any Tauri dependency.
+//! auth as a plain JSON store file, so we read it directly.
 
 use std::collections::BTreeMap;
 

@@ -2770,10 +2770,12 @@ pub enum ClipMergeBlocker {
 impl ClipMergeBlocker {
     pub fn hint(self) -> &'static str {
         match self {
-            Self::Edge => "No clip on that side",
-            Self::DifferentRecording => "Different recording",
-            Self::Gap => "Footage was cut between them",
-            Self::Speed => "Match the clip speeds first",
+            Self::Edge => crate::i18n::tr::editor::window::clip_menu::merge_blocker::edge(),
+            Self::DifferentRecording => {
+                crate::i18n::tr::editor::window::clip_menu::merge_blocker::different_recording()
+            }
+            Self::Gap => crate::i18n::tr::editor::window::clip_menu::merge_blocker::gap(),
+            Self::Speed => crate::i18n::tr::editor::window::clip_menu::merge_blocker::speed(),
         }
     }
 }
@@ -3218,6 +3220,7 @@ mod tests {
                 volume: 1.,
                 recording_clip: 0,
                 holds: Arc::from(&[][..]),
+                transition_in: None,
             },
         };
         let clips = [clip(0., 10.), clip(10., 18.)];

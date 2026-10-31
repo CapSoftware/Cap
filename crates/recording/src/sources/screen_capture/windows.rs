@@ -1,6 +1,8 @@
 use crate::{
     AudioFrame, SetupCtx, output_pipeline,
-    screen_capture::{ScreenCaptureConfig, ScreenCaptureFormat, cadence::FrameCadenceGate},
+    screen_capture::{
+        CropBounds, ScreenCaptureConfig, ScreenCaptureFormat, cadence::FrameCadenceGate,
+    },
 };
 use ::windows::Win32::Graphics::Direct3D11::{
     D3D11_BIND_SHADER_RESOURCE, D3D11_BOX, D3D11_SUBRESOURCE_DATA, D3D11_TEXTURE2D_DESC,
@@ -16,7 +18,7 @@ use futures::{
     channel::{mpsc, oneshot},
 };
 use scap_ffmpeg::*;
-use scap_targets::{Display, DisplayId};
+use scap_targets::{Display, DisplayId, Window, WindowId, bounds::PhysicalSize};
 use std::{
     sync::{
         Arc, Mutex,
@@ -351,13 +353,51 @@ impl output_pipeline::VideoFrame for VideoFrame {
     }
 }
 
+/// The size a window recording is encoded at: the window's own capture item,
+/// floored to even. WGC delivers the window's frames at the item's size, which
+/// differs from the window rect (invisible resize borders, odd dimensions), so
+/// sizing the output from the rect sends every frame through the CPU scaler.
+/// The odd row or column is trimmed on the GPU (`Settings::even_dimensions`),
+/// which keeps the frames exactly this size.
+pub fn window_capture_size(window: &WindowId) -> Option<PhysicalSize> {
+    let size = Window::from_id_direct(window)?
+        .raw_handle()
+        .try_as_capture_item()
+        .ok()?
+        .Size()
+        .ok()?;
+    even_capture_size(size.Width, size.Height)
+}
+
+fn even_capture_size(width: i32, height: i32) -> Option<PhysicalSize> {
+    let width = (width.max(0) as u32) & !1;
+    let height = (height.max(0) as u32) & !1;
+    (width > 0 && height > 0).then(|| PhysicalSize::new(width as f64, height as f64))
+}
+
+/// A window target captures the window's own GraphicsCaptureItem, so the crop
+/// that carves the window out of the display is neither needed nor correct:
+/// WGC already hands back just that window, and the crop would additionally
+/// pin the recording to wherever the window started out.
+fn crop_for_target(
+    window: Option<&WindowId>,
+    crop_bounds: Option<CropBounds>,
+) -> Option<CropBounds> {
+    match window {
+        Some(_) => None,
+        None => crop_bounds,
+    }
+}
+
 impl ScreenCaptureConfig<Direct3DCapture> {
     pub async fn to_sources(
         &self,
     ) -> anyhow::Result<(VideoSourceConfig, Option<SystemAudioSourceConfig>)> {
+        let crop_bounds = crop_for_target(self.config.window.as_ref(), self.config.crop_bounds);
+
         let mut settings = scap_direct3d::Settings {
             pixel_format: Direct3DCapture::PIXEL_FORMAT,
-            crop: self.config.crop_bounds.map(|b| {
+            crop: crop_bounds.map(|b| {
                 let position = b.position();
                 let size = b.size().map(|v| (v / 2.0).floor() * 2.0);
 
@@ -375,6 +415,11 @@ impl ScreenCaptureConfig<Direct3DCapture> {
                     back: 1,
                 }
             }),
+            // Matches `window_capture_size`, which the output is sized from.
+            even_dimensions: self.config.window.is_some(),
+            // Only a window target follows its item's size; display and area
+            // recordings keep the pool they were created with.
+            follow_item_size: self.config.window.is_some(),
             ..Default::default()
         };
 
@@ -393,12 +438,13 @@ impl ScreenCaptureConfig<Direct3DCapture> {
 
         settings.fps = Some(self.config.fps);
 
-        // Store the display ID instead of GraphicsCaptureItem to avoid COM threading issues
+        // Store the target's ID instead of GraphicsCaptureItem to avoid COM threading issues
         // The GraphicsCaptureItem will be created on the capture thread
         Ok((
             VideoSourceConfig {
                 video_info: self.video_info,
                 display_id: self.config.display.clone(),
+                window_id: self.config.window.clone(),
                 settings,
                 d3d_device: self.d3d_device.clone(),
             },
@@ -416,6 +462,7 @@ pub enum VideoSourceError {
 pub struct VideoSourceConfig {
     video_info: VideoInfo,
     display_id: DisplayId,
+    window_id: Option<WindowId>,
     settings: scap_direct3d::Settings,
     pub d3d_device: ID3D11Device,
 }
@@ -487,6 +534,7 @@ struct CaptureClosureEvent {
 
 struct CreateCapturerParams<'a> {
     display_id: &'a DisplayId,
+    window_id: Option<&'a WindowId>,
     settings: &'a scap_direct3d::Settings,
     d3d_device: &'a ID3D11Device,
     video_tx: &'a mpsc::Sender<VideoFrame>,
@@ -511,11 +559,21 @@ fn create_d3d_capturer(
     params: &CreateCapturerParams,
     error_tx: &mpsc::Sender<CaptureClosureEvent>,
 ) -> anyhow::Result<scap_direct3d::Capturer> {
-    let capture_item = Display::from_id(params.display_id)
-        .ok_or_else(|| anyhow!("Display not found for ID: {:?}", params.display_id))?
-        .raw_handle()
-        .try_as_capture_item()
-        .map_err(|e| anyhow!("Failed to create GraphicsCaptureItem: {}", e))?;
+    let capture_item = match params.window_id {
+        // Resolve the handle directly: `from_id` searches `list()`, which
+        // skips minimized windows, so a target minimized between selection
+        // and capture setup would fail to start despite still existing.
+        Some(window_id) => Window::from_id_direct(window_id)
+            .ok_or_else(|| anyhow!("Window not found for ID: {:?}", window_id))?
+            .raw_handle()
+            .try_as_capture_item()
+            .map_err(|e| anyhow!("Failed to create window GraphicsCaptureItem: {}", e))?,
+        None => Display::from_id(params.display_id)
+            .ok_or_else(|| anyhow!("Display not found for ID: {:?}", params.display_id))?
+            .raw_handle()
+            .try_as_capture_item()
+            .map_err(|e| anyhow!("Failed to create GraphicsCaptureItem: {}", e))?,
+    };
 
     scap_direct3d::Capturer::new(
         capture_item,
@@ -650,7 +708,16 @@ fn create_d3d_capturer(
         },
         Some(params.d3d_device.clone()),
     )
-    .map_err(|e| anyhow!("{e}"))
+    .map_err(|error| match &error {
+        scap_direct3d::NewCapturerError::CaptureSession(inner)
+            if inner.code() == windows::Win32::Foundation::E_ACCESSDENIED =>
+        {
+            anyhow!(
+                "Windows denied Cap access to screen capture. Check that screen capture is allowed for desktop apps in Windows privacy settings and that no security software is blocking it ({error})"
+            )
+        }
+        _ => anyhow!("{error}"),
+    })
 }
 
 impl output_pipeline::VideoSource for VideoSource {
@@ -661,6 +728,7 @@ impl output_pipeline::VideoSource for VideoSource {
         VideoSourceConfig {
             video_info,
             display_id,
+            window_id,
             settings,
             d3d_device,
         }: Self::Config,
@@ -723,6 +791,7 @@ impl output_pipeline::VideoSource for VideoSource {
                     ($device:expr) => {
                         CreateCapturerParams {
                             display_id: &display_id,
+                            window_id: window_id.as_ref(),
                             settings: &settings,
                             d3d_device: $device,
                             video_tx: &video_tx,
@@ -748,6 +817,9 @@ impl output_pipeline::VideoSource for VideoSource {
                     }
                     Err(e) => {
                         error!("Failed to create D3D capturer: {}", e);
+                        // `start` reads why from here: its reply channel only
+                        // says the thread is gone.
+                        first_frame.complete(Err(format!("{e:#}")));
                         return Err(e);
                     }
                 };
@@ -1025,12 +1097,18 @@ impl output_pipeline::VideoSource for VideoSource {
         let first_frame = self.first_frame.take();
         async move {
             tokio::time::timeout(Duration::from_secs(5), async move {
-                rx.await??;
-                wait_for_first_screen_frame(
-                    first_frame.ok_or_else(|| anyhow!("Windows screen source already started"))?,
-                    Duration::from_secs(5),
-                )
-                .await
+                let first_frame =
+                    first_frame.ok_or_else(|| anyhow!("Windows screen source already started"))?;
+                match rx.await {
+                    Ok(started) => started?,
+                    Err(_) => {
+                        return Err(match first_frame.await {
+                            Ok(Err(reason)) => anyhow!(reason),
+                            _ => anyhow!("Windows screen capture stopped before it started"),
+                        });
+                    }
+                }
+                wait_for_first_screen_frame(first_frame, Duration::from_secs(5)).await
             })
             .await
             .map_err(|_| {
@@ -1596,5 +1674,42 @@ mod first_screen_frame_tests {
             .await
             .unwrap_err();
         assert!(error.to_string().contains("closed before its first frame"));
+    }
+}
+
+#[cfg(test)]
+mod capture_target_tests {
+    use super::*;
+    use scap_targets::bounds::{PhysicalPosition, PhysicalSize};
+
+    fn bounds() -> CropBounds {
+        CropBounds::new(
+            PhysicalPosition::new(120.0, 80.0),
+            PhysicalSize::new(640.0, 480.0),
+        )
+    }
+
+    #[test]
+    fn a_display_target_keeps_its_crop() {
+        let kept = crop_for_target(None, Some(bounds())).expect("crop kept");
+        assert_eq!(kept.position().x(), 120.0);
+        assert_eq!(kept.size().width(), 640.0);
+        assert!(crop_for_target(None, None).is_none());
+    }
+
+    #[test]
+    fn a_window_recording_is_sized_to_its_capture_item_floored_to_even() {
+        let size = even_capture_size(801, 601).expect("size");
+        assert_eq!((size.width(), size.height()), (800.0, 600.0));
+        let size = even_capture_size(786, 593).expect("size");
+        assert_eq!((size.width(), size.height()), (786.0, 592.0));
+        assert!(even_capture_size(1, 600).is_none());
+        assert!(even_capture_size(-4, 600).is_none());
+    }
+
+    #[test]
+    fn a_window_target_captures_the_window_rather_than_a_crop_of_the_display() {
+        let window: WindowId = "1234".parse().unwrap();
+        assert!(crop_for_target(Some(&window), Some(bounds())).is_none());
     }
 }

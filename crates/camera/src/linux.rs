@@ -63,8 +63,8 @@ pub struct NativeFrameFormat {
 }
 
 #[derive(Debug)]
-pub struct NativeCapturedFrame {
-    pub bytes: Vec<u8>,
+pub struct NativeCapturedFrame<'a> {
+    pub bytes: &'a [u8],
     pub format: NativeFrameFormat,
 }
 
@@ -183,7 +183,7 @@ impl CameraInfo {
 pub fn start_capturing_impl(
     camera: &CameraInfo,
     format: Format,
-    mut callback: Box<dyn FnMut(CapturedFrame) + Send>,
+    mut callback: Box<dyn for<'a> FnMut(CapturedFrame<'a>) + Send>,
 ) -> Result<NativeCaptureHandle, StartCapturingError> {
     let device = open_device(camera)?;
     let requested = V4lFormat::new(
@@ -252,7 +252,7 @@ pub fn start_capturing_impl(
                         let bytes = bytes.get(..used).unwrap_or(bytes);
                         callback(CapturedFrame {
                             native: NativeCapturedFrame {
-                                bytes: bytes.to_vec(),
+                                bytes,
                                 format: frame_format,
                             },
                             timestamp: started.elapsed(),

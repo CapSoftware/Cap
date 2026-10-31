@@ -27,7 +27,16 @@ vi.mock("@/app/(org)/dashboard/analytics/data", () => ({
 }));
 vi.mock("@/lib/account-deletion-request", () => ({}));
 vi.mock("@/lib/desktop-segments-finalization", () => ({}));
-vi.mock("@/lib/Notification", () => ({ createNotification: mocks.notify }));
+vi.mock("@/lib/Notification", () => ({
+	createNotification: mocks.notify,
+	sendFirstViewEmail: vi.fn(),
+}));
+vi.mock("@/lib/shareable-link-quota", () => ({
+	isVideoOverShareableLinkLimit: vi.fn(async () => false),
+}));
+vi.mock("@/lib/video-download-permissions", () => ({
+	canUserDownloadVideo: vi.fn(async () => false),
+}));
 vi.mock("@/lib/sync-video-storage-names", () => ({}));
 vi.mock("@/lib/video-processing", () => ({}));
 vi.mock("@/workflows/import-loom-video", () => ({}));
@@ -37,8 +46,15 @@ vi.mock("@cap/web-backend", async () => {
 	const { Database } = await import(
 		"../../../../packages/web-backend/src/Database"
 	);
+	const { collectPasswordHashes, resolveEffectiveVideoRules } = await import(
+		"../../../../packages/web-backend/src/Videos/EffectiveVideoRules"
+	);
 	return {
 		Database,
+		collectPasswordHashes,
+		resolveEffectiveVideoRules,
+		Tinybird: Context.GenericTag("mobile-comment-test/Tinybird"),
+		VideosPolicy: Context.GenericTag("mobile-comment-test/VideosPolicy"),
 		Videos: Context.GenericTag("mobile-comment-test/Videos"),
 		ImageUploads: Context.GenericTag("mobile-comment-test/ImageUploads"),
 	};
@@ -54,6 +70,7 @@ const videoId = Video.VideoId.make("accessible-video");
 type Row = Record<string, unknown>;
 let parents: Row[];
 let inserted: Row[];
+let videoSettings: Row | null;
 const dialect = new MySqlDialect();
 
 function matchesParent(condition: SQL, row: Row) {
@@ -77,9 +94,15 @@ const database = {
 				if (table === Db.users) return [{ preferences: {} }];
 				if (table === Db.organizations)
 					return [{ id: user.activeOrganizationId }];
-				if (table === Db.videos) return [{ ownerId: user.id }];
+				if (table === Db.videos)
+					return [{ ownerId: user.id, settings: videoSettings }];
+				if (table === Db.spaceVideos) return [];
 				if (table !== Db.comments) throw new Error("Unexpected table");
-				if (columns && Object.keys(columns).length === 1) {
+				if (
+					columns &&
+					"parentCommentId" in columns &&
+					Object.keys(columns).length === 2
+				) {
 					return parents.filter((row) => matchesParent(condition, row));
 				}
 				return inserted.map((row) => ({
@@ -92,9 +115,10 @@ const database = {
 			const query = {
 				leftJoin: () => query,
 				innerJoin: () => query,
+				// Drizzle queries are awaitable without .limit(); mirror that.
 				where: (value: SQL) => {
 					condition = value;
-					return query;
+					return Object.assign(Promise.resolve().then(result), query);
 				},
 				limit: async () => result(),
 				orderBy: async () => result(),
@@ -165,8 +189,9 @@ function postComment(parentCommentId: string | null = "parent") {
 }
 
 beforeEach(() => {
-	parents = [{ id: "parent", videoId, type: "text" }];
+	parents = [{ id: "parent", videoId, type: "text", parentCommentId: null }];
 	inserted = [];
+	videoSettings = null;
 	mocks.notify.mockClear();
 });
 
@@ -209,6 +234,22 @@ describe("mobile reply parent authorization", () => {
 				videoId,
 			}),
 		);
+	});
+
+	it("threads a reply to a reply under the top-level comment", async () => {
+		parents = [
+			{ id: "parent", videoId, type: "text", parentCommentId: "root" },
+		];
+		const response = await postComment();
+		expect(response.status).toBe(200);
+		expect(inserted[0]).toMatchObject({ parentCommentId: "root" });
+	});
+
+	it("rejects comments when the Cap has comments turned off", async () => {
+		videoSettings = { disableComments: true };
+		const response = await postComment(null);
+		expect(response.status).toBe(403);
+		expect(inserted).toEqual([]);
 	});
 
 	it("preserves top-level comments", async () => {

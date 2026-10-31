@@ -7,7 +7,7 @@ if [[ -z "$TARGET" ]]; then
 fi
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-BINARIES_DIR="$REPO_ROOT/apps/desktop/src-tauri/binaries"
+BINARIES_DIR="$REPO_ROOT/apps/desktop-gpui/binaries"
 
 EXT=""
 case "$TARGET" in

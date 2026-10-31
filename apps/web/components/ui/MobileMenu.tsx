@@ -206,7 +206,6 @@ const MobileMenu = ({ stars }: MobileMenuProps) => {
 										onClick={() => setOpen(false)}
 									>
 										<Logo
-											squaredMark
 											viewBoxDimensions="0 0 120 40"
 											style={{ width: 84, height: 36 }}
 										/>
