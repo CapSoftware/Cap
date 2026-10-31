@@ -5,10 +5,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use cap_export::estimates::{ExportEstimates, estimate_export};
+use cap_export::estimates::{ExportEstimates, estimate_export, estimate_turbo_export};
 use cap_export::gif::GifExportSettings;
 use cap_export::mov::MovExportSettings;
-use cap_export::mp4::{ExportCompression, Mp4ExportSettings};
+use cap_export::mp4::{ExportCompression, Mp4ExportSettings, turbo::TurboOptions};
 use cap_export::preview::{
     ExportPreviewSettings, render_preview_with_config, render_preview_with_editor,
 };
@@ -25,6 +25,7 @@ use gpui::{
 };
 
 use crate::editor_window::EditorWindow;
+use crate::i18n::tr;
 use crate::sign_in::{SignIn, SignInEvent, SignInOrigin, SignInOutcome};
 use crate::store::{self, ExportPrefs};
 use crate::ui;
@@ -38,11 +39,20 @@ const STAGE_PADDING_X: f32 = 24.;
 const STAGE_VERTICAL_CHROME: f32 = 16. + 22. + 14. + 18. + STATS_HEIGHT + 20.;
 const STATS_HEIGHT: f32 = 44.;
 const SEGMENT_HEIGHT: f32 = 26.;
-const COMPRESSION_PRESETS: [(ExportCompression, &str); 4] = [
-    (ExportCompression::Potato, "Potato"),
-    (ExportCompression::Web, "Web"),
-    (ExportCompression::Social, "Social"),
-    (ExportCompression::Maximum, "Maximum"),
+const COMPRESSION_PRESETS: [(ExportCompression, fn() -> &'static str); 4] = [
+    (
+        ExportCompression::Potato,
+        tr::editor::export::quality::potato,
+    ),
+    (ExportCompression::Web, tr::editor::export::quality::web),
+    (
+        ExportCompression::Social,
+        tr::editor::export::quality::social,
+    ),
+    (
+        ExportCompression::Maximum,
+        tr::editor::export::quality::maximum,
+    ),
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,9 +67,9 @@ impl ExportDestination {
 
     fn label(self) -> &'static str {
         match self {
-            Self::File => "File",
-            Self::Clipboard => "Clipboard",
-            Self::Link => "Shareable Link",
+            Self::File => tr::editor::export::destination::file(),
+            Self::Clipboard => tr::editor::export::destination::clipboard(),
+            Self::Link => tr::editor::export::destination::link(),
         }
     }
 
@@ -189,6 +199,7 @@ pub struct ExportUi {
     pub fps: u32,
     pub compression: ExportCompression,
     pub optimize_filesize: bool,
+    pub turbo: bool,
     pub cursor_only: bool,
     pub custom_bpp: Option<f32>,
     pub force_ffmpeg: bool,
@@ -262,6 +273,7 @@ impl ExportUi {
             force_ffmpeg_decoder: false,
             advanced_open: false,
             organization_id: None,
+            turbo: false,
         });
         Self::from_preferences(prefs)
     }
@@ -279,6 +291,7 @@ impl ExportUi {
                 _ => ExportCompression::Maximum,
             },
             optimize_filesize: prefs.optimize_filesize,
+            turbo: prefs.turbo && turbo_available(),
             cursor_only: prefs.cursor_only,
             custom_bpp: prefs.custom_bpp,
             force_ffmpeg: prefs.force_ffmpeg_decoder,
@@ -332,6 +345,7 @@ impl ExportUi {
             force_ffmpeg_decoder: self.force_ffmpeg,
             advanced_open: self.advanced_open,
             organization_id: self.organization_id.clone(),
+            turbo: self.turbo,
         };
         store::update(|state| state.export = Some(prefs));
     }
@@ -453,29 +467,56 @@ fn export_file_name(pretty_name: &str, extension: &str) -> String {
 }
 
 fn format_estimate_range(range: [f64; 2], time: bool) -> String {
+    type Single = fn(String) -> String;
+    type Range = fn(String, String) -> String;
     if range[1] < 1.0 {
-        return if time { "< 1s" } else { "< 1 MB" }.into();
-    }
-    let (scale, unit) = if time {
-        if range[1] >= 3600.0 {
-            (3600.0, "hr")
-        } else if range[1] >= 60.0 {
-            (60.0, "min")
+        return if time {
+            tr::editor::export::estimate::under_second()
         } else {
-            (1.0, "s")
+            tr::editor::export::estimate::under_megabyte()
+        }
+        .into();
+    }
+    let (scale, single, range_of): (f64, Single, Range) = if time {
+        if range[1] >= 3600.0 {
+            (
+                3600.0,
+                tr::editor::export::estimate::hours,
+                tr::editor::export::estimate::hours_range,
+            )
+        } else if range[1] >= 60.0 {
+            (
+                60.0,
+                tr::editor::export::estimate::minutes,
+                tr::editor::export::estimate::minutes_range,
+            )
+        } else {
+            (
+                1.0,
+                tr::editor::export::estimate::seconds,
+                tr::editor::export::estimate::seconds_range,
+            )
         }
     } else if range[1] >= 1024.0 {
-        (1024.0, "GB")
+        (
+            1024.0,
+            tr::editor::export::estimate::gigabytes,
+            tr::editor::export::estimate::gigabytes_range,
+        )
     } else {
-        (1.0, "MB")
+        (
+            1.0,
+            tr::editor::export::estimate::megabytes,
+            tr::editor::export::estimate::megabytes_range,
+        )
     };
     let precision = if scale == 1.0 { 1.0 } else { 10.0 };
     let lower = ((range[0] / scale * precision).round() / precision).max(1.0 / precision);
     let upper = ((range[1] / scale * precision).round() / precision).max(lower);
     if lower == upper {
-        format!("~{lower} {unit}")
+        single(crate::i18n::decimal(lower))
     } else {
-        format!("~{lower}–{upper} {unit}")
+        range_of(crate::i18n::decimal(lower), crate::i18n::decimal(upper))
     }
 }
 
@@ -496,13 +537,13 @@ impl EditorWindow {
             .child(
                 ui::EditorButton::plain(&self.theme, "editor-reupload")
                     .left_icon("icons/cloud-upload.svg")
-                    .label("Reupload")
+                    .label(tr::editor::export::reupload())
                     .tooltip(
                         &self.theme,
                         if has_transparent_background(&self.project) {
-                            "Share links require a background without transparency"
+                            tr::editor::export::reupload_transparent()
                         } else {
-                            "Upload your latest edit to the same link"
+                            tr::editor::export::reupload_tooltip()
                         },
                     )
                     .disabled(!self.project_ready() || has_transparent_background(&self.project))
@@ -662,6 +703,7 @@ impl EditorWindow {
         ui.preview_stats = None;
         let estimate_cancel = ui.estimate_cancel.clone();
         let estimate_settings = ui.estimate_settings();
+        let estimate_turbo = ui.turbo;
         let estimate_instance = instance.clone();
         let estimate_project = project.clone();
         let (width, height) = ui.resolution.size();
@@ -723,7 +765,7 @@ impl EditorWindow {
                         ui.preview_error = Some(error.to_string());
                     }
                     None => {
-                        ui.preview_error = Some("Preview unavailable".into());
+                        ui.preview_error = Some(tr::editor::export::preview_unavailable().into());
                     }
                 });
                 if !updated {
@@ -735,16 +777,28 @@ impl EditorWindow {
             let result = if let Some(instance) = estimate_instance {
                 let (estimate_tx, estimate_rx) = flume::unbounded();
                 let estimate_task = gpui_tokio::Tokio::spawn(cx, async move {
-                    estimate_export(
-                        instance,
-                        estimate_project,
-                        estimate_settings,
-                        estimate_cancel,
-                        move |estimate| {
-                            let _ = estimate_tx.send(estimate);
-                        },
-                    )
-                    .await
+                    let on_estimate = move |estimate| {
+                        let _ = estimate_tx.send(estimate);
+                    };
+                    if estimate_turbo {
+                        estimate_turbo_export(
+                            instance,
+                            estimate_project,
+                            estimate_settings,
+                            estimate_cancel,
+                            on_estimate,
+                        )
+                        .await
+                    } else {
+                        estimate_export(
+                            instance,
+                            estimate_project,
+                            estimate_settings,
+                            estimate_cancel,
+                            on_estimate,
+                        )
+                        .await
+                    }
                 });
                 while let Ok(estimate) = estimate_rx.recv_async().await {
                     let _ = this.update(cx, |this, cx| {
@@ -821,6 +875,7 @@ impl EditorWindow {
         let compression = ui.compression;
         let custom_bpp = ui.custom_bpp;
         let optimize = ui.optimize_filesize;
+        let turbo = ui.turbo;
         let force = ui.force_ffmpeg;
         let project_path = self.project_path.clone();
         let project = self.project.clone();
@@ -935,6 +990,7 @@ impl EditorWindow {
                     compression,
                     custom_bpp,
                     optimize,
+                    turbo,
                     force,
                     save_path.clone(),
                     progress_tx,
@@ -1012,7 +1068,7 @@ impl EditorWindow {
                     let _ = this.update(cx, |this, cx| {
                         if let Some(ui) = this.export.as_mut() {
                             ui.phase = ExportPhase::Failed;
-                            ui.error = Some("Export task failed".into());
+                            ui.error = Some(tr::editor::export::task_failed().into());
                         }
                         cx.notify();
                     });
@@ -1109,6 +1165,7 @@ impl EditorWindow {
         let compression = ui.compression;
         let custom_bpp = ui.custom_bpp;
         let optimize = ui.optimize_filesize;
+        let turbo = ui.turbo;
         let force = ui.force_ffmpeg;
         let project_path = self.project_path.clone();
         let project = self.project.clone();
@@ -1178,6 +1235,7 @@ impl EditorWindow {
                             compression,
                             custom_bpp,
                             optimize,
+                            turbo,
                             force,
                             save_path.clone(),
                             progress_tx,
@@ -1287,7 +1345,7 @@ impl EditorWindow {
                             show_upload_failure(
                                 &this,
                                 cx,
-                                "You need to sign in to share recordings",
+                                tr::editor::export::sign_in_required(),
                                 true,
                             );
                         }
@@ -1302,8 +1360,8 @@ impl EditorWindow {
                                 cx.open_url(crate::auth::PRICING_URL);
                             });
                             platform::alert_dialog(
-                                "Upgrade required",
-                                "This feature requires an upgraded plan",
+                                tr::editor::export::upgrade_title(),
+                                tr::editor::export::upgrade_message(),
                             );
                         }
                         Ok(Err(error)) => {
@@ -1320,7 +1378,12 @@ impl EditorWindow {
                         }
                         Err(error) => {
                             tracing::error!(%error, "share upload task ended without a result");
-                            show_upload_failure(&this, cx, "Failed to upload recording", true);
+                            show_upload_failure(
+                                &this,
+                                cx,
+                                tr::editor::export::upload_failed(),
+                                true,
+                            );
                         }
                     }
                 }
@@ -1344,12 +1407,12 @@ impl EditorWindow {
                         cx.notify();
                     });
                     if !cancelled {
-                        platform::alert_dialog("Export failed", &error);
+                        platform::alert_dialog(tr::editor::export::failed(), &error);
                     }
                 }
                 Err(error) => {
                     tracing::error!(%error, "share export task ended without a result");
-                    show_upload_failure(&this, cx, "Export task failed", false);
+                    show_upload_failure(&this, cx, tr::editor::export::task_failed(), false);
                 }
             }
             let _ = this.update_in(cx, |this, window, cx| {
@@ -1421,7 +1484,7 @@ impl EditorWindow {
                                 .size(px(14.))
                                 .text_color(Hsla::from(editor.text_2)),
                         )
-                        .child("Back to editor")
+                        .child(tr::editor::export::back())
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.close_export(window, cx);
                         })),
@@ -1433,7 +1496,7 @@ impl EditorWindow {
                     .text_size(px(13.))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(Hsla::from(editor.text_1))
-                    .child("Export"),
+                    .child(tr::editor::export::title()),
             )
             .child(div().flex_1());
         #[cfg(target_os = "windows")]
@@ -1539,7 +1602,7 @@ impl EditorWindow {
                 .child(
                     ui.preview_error
                         .clone()
-                        .unwrap_or_else(|| "Generating preview…".into()),
+                        .unwrap_or_else(|| tr::editor::export::generating_preview().into()),
                 )
                 .into_any_element(),
         };
@@ -1565,7 +1628,7 @@ impl EditorWindow {
                             .text_size(px(12.))
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(Hsla::from(editor.text_2))
-                            .child("Preview"),
+                            .child(tr::editor::export::preview()),
                     )
                     .child(
                         div()
@@ -1573,12 +1636,8 @@ impl EditorWindow {
                             .flex()
                             .items_center()
                             .tooltip(move |_window, cx| {
-                                crate::ui::Tooltip::new(
-                                    &theme,
-                                    "This is a rendered frame from your video. Adjust the \
-                                     settings to see the quality of the final export.",
-                                )
-                                .view(cx)
+                                crate::ui::Tooltip::new(&theme, tr::editor::export::preview_info())
+                                    .view(cx)
                             })
                             .child(
                                 svg()
@@ -1611,24 +1670,28 @@ impl EditorWindow {
                         .shadow(editor.card_shadow())
                         .child(export_stat(
                             &theme,
-                            "Duration",
+                            tr::editor::export::stats::duration(),
                             stats.map(|_| format_duration(duration)),
                             false,
                         ))
                         .child(export_stat(
                             &theme,
-                            "Output",
+                            tr::editor::export::stats::output(),
                             stats.map(|stats| {
-                                format!("{}×{} · {} fps", stats.width, stats.height, ui.fps)
+                                tr::editor::export::stats::output_value(
+                                    stats.width,
+                                    stats.height,
+                                    ui.fps,
+                                )
                             }),
                             true,
                         ))
                         .child(export_stat(
                             &theme,
                             if ui.estimate_loading && ui.estimate.is_some() {
-                                "Refining size…"
+                                tr::editor::export::stats::refining_size()
                             } else {
-                                "Estimated size"
+                                tr::editor::export::stats::estimated_size()
                             },
                             Some(
                                 ui.estimate
@@ -1638,9 +1701,9 @@ impl EditorWindow {
                                     })
                                     .unwrap_or_else(|| {
                                         if ui.estimate_loading {
-                                            "Calculating…".into()
+                                            tr::editor::export::stats::calculating().into()
                                         } else {
-                                            "Unavailable".into()
+                                            tr::editor::export::stats::unavailable().into()
                                         }
                                     }),
                             ),
@@ -1649,9 +1712,9 @@ impl EditorWindow {
                         .child(export_stat(
                             &theme,
                             if ui.estimate_loading && ui.estimate.is_some() {
-                                "Refining time…"
+                                tr::editor::export::stats::refining_time()
                             } else {
-                                "Export time"
+                                tr::editor::export::stats::export_time()
                             },
                             Some(
                                 ui.estimate
@@ -1661,9 +1724,9 @@ impl EditorWindow {
                                     })
                                     .unwrap_or_else(|| {
                                         if ui.estimate_loading {
-                                            "Calculating…".into()
+                                            tr::editor::export::stats::calculating().into()
                                         } else {
-                                            "Unavailable".into()
+                                            tr::editor::export::stats::unavailable().into()
                                         }
                                     }),
                             ),
@@ -1729,17 +1792,29 @@ impl EditorWindow {
         let signed_in = !ui.auth_rejected && store::auth_snapshot().signed_in();
         let sign_in_pending = SignIn::global(cx).read(cx).is_pending();
         let (label, icon, primary) = match ui.destination {
-            ExportDestination::File => ("Export to File", Some("icons/folder.svg"), true),
-            ExportDestination::Clipboard => ("Export to Clipboard", Some("icons/copy.svg"), true),
-            ExportDestination::Link if sign_in_pending => ("Cancel Sign In", None, false),
-            ExportDestination::Link if !signed_in => {
-                ("Sign in to share", Some("icons/link.svg"), true)
+            ExportDestination::File => (
+                tr::editor::export::cta::file(),
+                Some("icons/folder.svg"),
+                true,
+            ),
+            ExportDestination::Clipboard => (
+                tr::editor::export::cta::clipboard(),
+                Some("icons/copy.svg"),
+                true,
+            ),
+            ExportDestination::Link if sign_in_pending => {
+                (tr::editor::export::cta::cancel_sign_in(), None, false)
             }
+            ExportDestination::Link if !signed_in => (
+                tr::editor::export::cta::sign_in(),
+                Some("icons/link.svg"),
+                true,
+            ),
             ExportDestination::Link => (
                 if self.sharing.is_some() {
-                    "Reupload to same link"
+                    tr::editor::export::cta::reupload()
                 } else {
-                    "Create shareable link"
+                    tr::editor::export::cta::create_link()
                 },
                 Some("icons/link.svg"),
                 true,
@@ -1809,178 +1884,180 @@ impl EditorWindow {
     ) -> impl IntoElement {
         let theme = self.theme;
         let editor = theme.editor;
-        self.export_section("Destination", "icons/upload-arrow.svg")
-            .child(
-                ui::SegmentedControl::editor(
-                    &theme,
-                    "export-destination",
-                    ExportDestination::ALL
-                        .iter()
-                        .map(|dest| {
-                            let label = if *dest == ExportDestination::Link
-                                && self.sharing.is_some()
-                            {
-                                "Reupload"
-                            } else {
-                                dest.label()
-                            };
-                            let mut option =
-                                ui::SegmentOption::new(label, ui.destination == *dest)
-                                    .disabled(*dest == ExportDestination::Link && link_disabled);
-                            option.icon = Some(dest.icon().into());
-                            option
-                        })
-                        .collect(),
-                )
-                .stretch()
-                .item_height(px(30.))
-                .on_select(cx.listener(|this, index: &usize, window, cx| {
-                    let Some(dest) = ui::option_at(ExportDestination::ALL, *index) else {
-                        return;
-                    };
-                    if let Some(ui) = this.export.as_mut() {
-                        if dest == ExportDestination::Link
-                            && (has_transparent_background(&this.project) || ui.cursor_only)
-                        {
-                            return;
-                        }
-                        ui.destination = dest;
-                        if dest == ExportDestination::Link && ui.format == ExportFormatKind::Gif {
-                            ui.format = ExportFormatKind::Mp4;
-                        }
-                        ui.persist();
-                    }
-                    this.refresh_export_preview(window, cx);
-                    cx.notify();
-                })),
+        self.export_section(
+            tr::editor::export::section::destination(),
+            "icons/upload-arrow.svg",
+        )
+        .child(
+            ui::SegmentedControl::editor(
+                &theme,
+                "export-destination",
+                ExportDestination::ALL
+                    .iter()
+                    .map(|dest| {
+                        let label = if *dest == ExportDestination::Link && self.sharing.is_some() {
+                            tr::editor::export::reupload()
+                        } else {
+                            dest.label()
+                        };
+                        let mut option = ui::SegmentOption::new(label, ui.destination == *dest)
+                            .disabled(*dest == ExportDestination::Link && link_disabled);
+                        option.icon = Some(dest.icon().into());
+                        option
+                    })
+                    .collect(),
             )
-            .when(link_disabled, |field| {
+            .stretch()
+            .item_height(px(30.))
+            .on_select(cx.listener(|this, index: &usize, window, cx| {
+                let Some(dest) = ui::option_at(ExportDestination::ALL, *index) else {
+                    return;
+                };
+                if let Some(ui) = this.export.as_mut() {
+                    if dest == ExportDestination::Link
+                        && (has_transparent_background(&this.project) || ui.cursor_only)
+                    {
+                        return;
+                    }
+                    ui.destination = dest;
+                    if dest == ExportDestination::Link && ui.format == ExportFormatKind::Gif {
+                        ui.format = ExportFormatKind::Mp4;
+                    }
+                    ui.persist();
+                }
+                this.refresh_export_preview(window, cx);
+                cx.notify();
+            })),
+        )
+        .when(link_disabled, |field| {
+            field.child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(Hsla::from(editor.text_3))
+                    .child(if ui.cursor_only {
+                        tr::editor::export::link_unavailable_cursor()
+                    } else {
+                        tr::editor::export::link_unavailable_transparent()
+                    }),
+            )
+        })
+        .when(
+            ui.destination == ExportDestination::Link && self.sharing.is_some(),
+            |field| {
+                let link = self
+                    .sharing
+                    .as_ref()
+                    .map(|sharing| sharing.link.clone())
+                    .unwrap_or_default();
                 field.child(
                     div()
-                        .text_size(px(11.))
-                        .text_color(Hsla::from(editor.text_3))
-                        .child(if ui.cursor_only {
-                            "Cursor-only exports can only be saved to a file or clipboard."
-                        } else {
-                            "Transparent exports can only be saved to a file or clipboard."
-                        }),
+                        .p(px(12.))
+                        .rounded(px(10.))
+                        .bg(Hsla::from(editor.card_2))
+                        .flex()
+                        .flex_col()
+                        .gap(px(4.))
+                        .child(
+                            div()
+                                .text_size(px(12.5))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(Hsla::from(editor.text_1))
+                                .child(tr::editor::export::existing_link_title()),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(11.5))
+                                .line_height(px(15.))
+                                .text_color(Hsla::from(editor.text_3))
+                                .child(tr::editor::export::existing_link_description()),
+                        )
+                        .child(
+                            div()
+                                .id("reupload-existing-link")
+                                .text_size(px(11.5))
+                                .text_color(Hsla::from(editor.accent))
+                                .truncate()
+                                .cursor_pointer()
+                                .child(link.clone())
+                                .on_click(move |_, _, cx| cx.open_url(&link)),
+                        ),
                 )
-            })
-            .when(
-                ui.destination == ExportDestination::Link && self.sharing.is_some(),
-                |field| {
-                    let link = self.sharing.as_ref()
-                        .map(|sharing| sharing.link.clone())
-                        .unwrap_or_default();
-                    field.child(
-                        div()
-                            .p(px(12.))
-                            .rounded(px(10.))
-                            .bg(Hsla::from(editor.card_2))
-                            .flex()
-                            .flex_col()
-                            .gap(px(4.))
-                            .child(
-                                div()
-                                    .text_size(px(12.5))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(Hsla::from(editor.text_1))
-                                    .child("Update your existing link"),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(11.5))
-                                    .line_height(px(15.))
-                                    .text_color(Hsla::from(editor.text_3))
-                                    .child("Reupload replaces the video at this link with your latest edit. Everyone with the link will see the updated version."),
-                            )
-                            .child(
-                                div()
-                                    .id("reupload-existing-link")
-                                    .text_size(px(11.5))
-                                    .text_color(Hsla::from(editor.accent))
-                                    .truncate()
-                                    .cursor_pointer()
-                                    .child(link.clone())
-                                    .on_click(move |_, _, cx| cx.open_url(&link)),
-                            ),
-                    )
-                },
-            )
-            .when(
-                ui.destination == ExportDestination::Link
-                    && self.sharing.is_none()
-                    && store::auth_snapshot().organizations.len() > 1,
-                |this| {
-                    let orgs = store::auth_snapshot().organizations;
-                    let selected = ui
-                        .organization_id
-                        .clone()
-                        .or_else(|| orgs.first().map(|org| org.id.clone()));
-                    let label = orgs
-                        .iter()
-                        .find(|org| Some(org.id.as_str()) == selected.as_deref())
-                        .or(orgs.first())
-                        .map(|org| org.name.clone())
-                        .unwrap_or_else(|| "Organization".into());
-                    this.child(
-                        div()
-                            .id("export-organization")
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .justify_between()
-                            .h(px(30.))
-                            .px(px(10.))
-                            .rounded(px(7.))
-                            .bg(Hsla::from(editor.ctl))
-                            .cursor_pointer()
-                            .hover(move |style| style.bg(Hsla::from(editor.ctl_hover)))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                let orgs = store::auth_snapshot().organizations;
-                                if orgs.is_empty() {
-                                    return;
-                                }
-                                if let Some(ui) = this.export.as_mut() {
-                                    let current = ui
-                                        .organization_id
-                                        .as_deref()
-                                        .or(orgs.first().map(|org| org.id.as_str()));
-                                    let index = orgs
-                                        .iter()
-                                        .position(|org| Some(org.id.as_str()) == current)
-                                        .unwrap_or(0);
-                                    let next = orgs[(index + 1) % orgs.len()].id.clone();
-                                    ui.organization_id = Some(next);
-                                    ui.persist();
-                                }
-                                cx.notify();
-                            }))
-                            .child(
-                                div()
-                                    .text_size(px(12.))
-                                    .text_color(Hsla::from(editor.text_2))
-                                    .child("Organization"),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_row()
-                                    .items_center()
-                                    .gap(px(4.))
-                                    .text_size(px(12.))
-                                    .text_color(Hsla::from(editor.text_1))
-                                    .child(label)
-                                    .child(
-                                        svg()
-                                            .path("icons/caret-down.svg")
-                                            .size(px(14.))
-                                            .text_color(Hsla::from(editor.text_3)),
-                                    ),
-                            ),
-                    )
-                },
-            )
+            },
+        )
+        .when(
+            ui.destination == ExportDestination::Link
+                && self.sharing.is_none()
+                && store::auth_snapshot().organizations.len() > 1,
+            |this| {
+                let orgs = store::auth_snapshot().organizations;
+                let selected = ui
+                    .organization_id
+                    .clone()
+                    .or_else(|| orgs.first().map(|org| org.id.clone()));
+                let label = orgs
+                    .iter()
+                    .find(|org| Some(org.id.as_str()) == selected.as_deref())
+                    .or(orgs.first())
+                    .map(|org| org.name.clone())
+                    .unwrap_or_else(|| tr::editor::export::organization().into());
+                this.child(
+                    div()
+                        .id("export-organization")
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .justify_between()
+                        .h(px(30.))
+                        .px(px(10.))
+                        .rounded(px(7.))
+                        .bg(Hsla::from(editor.ctl))
+                        .cursor_pointer()
+                        .hover(move |style| style.bg(Hsla::from(editor.ctl_hover)))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            let orgs = store::auth_snapshot().organizations;
+                            if orgs.is_empty() {
+                                return;
+                            }
+                            if let Some(ui) = this.export.as_mut() {
+                                let current = ui
+                                    .organization_id
+                                    .as_deref()
+                                    .or(orgs.first().map(|org| org.id.as_str()));
+                                let index = orgs
+                                    .iter()
+                                    .position(|org| Some(org.id.as_str()) == current)
+                                    .unwrap_or(0);
+                                let next = orgs[(index + 1) % orgs.len()].id.clone();
+                                ui.organization_id = Some(next);
+                                ui.persist();
+                            }
+                            cx.notify();
+                        }))
+                        .child(
+                            div()
+                                .text_size(px(12.))
+                                .text_color(Hsla::from(editor.text_2))
+                                .child(tr::editor::export::organization()),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_row()
+                                .items_center()
+                                .gap(px(4.))
+                                .text_size(px(12.))
+                                .text_color(Hsla::from(editor.text_1))
+                                .child(label)
+                                .child(
+                                    svg()
+                                        .path("icons/caret-down.svg")
+                                        .size(px(14.))
+                                        .text_color(Hsla::from(editor.text_3)),
+                                ),
+                        ),
+                )
+            },
+        )
     }
 
     fn export_format_field(
@@ -1991,7 +2068,7 @@ impl EditorWindow {
     ) -> impl IntoElement {
         let theme = self.theme;
         let options = [ExportFormatKind::Mp4, ExportFormatKind::Gif];
-        self.export_section("Format", "icons/video.svg")
+        self.export_section(tr::editor::export::section::format(), "icons/video.svg")
             .disabled(locked)
             .child(
                 ui::SegmentedControl::editor(
@@ -2043,30 +2120,33 @@ impl EditorWindow {
     ) -> impl IntoElement {
         let theme = self.theme;
         let resolutions = resolutions.to_vec();
-        self.export_section("Resolution", "icons/monitor-outline.svg")
-            .child(
-                ui::SegmentedControl::editor(
-                    &theme,
-                    "export-resolution",
-                    resolutions
-                        .iter()
-                        .map(|res| ui::SegmentOption::new(res.label(), ui.resolution == *res))
-                        .collect(),
-                )
-                .stretch()
-                .item_height(px(SEGMENT_HEIGHT))
-                .on_select(cx.listener(move |this, index: &usize, window, cx| {
-                    let Some(resolution) = resolutions.get(*index).copied() else {
-                        return;
-                    };
-                    if let Some(ui) = this.export.as_mut() {
-                        ui.resolution = resolution;
-                        ui.persist();
-                    }
-                    this.refresh_export_preview(window, cx);
-                    cx.notify();
-                })),
+        self.export_section(
+            tr::editor::export::section::resolution(),
+            "icons/monitor-outline.svg",
+        )
+        .child(
+            ui::SegmentedControl::editor(
+                &theme,
+                "export-resolution",
+                resolutions
+                    .iter()
+                    .map(|res| ui::SegmentOption::new(res.label(), ui.resolution == *res))
+                    .collect(),
             )
+            .stretch()
+            .item_height(px(SEGMENT_HEIGHT))
+            .on_select(cx.listener(move |this, index: &usize, window, cx| {
+                let Some(resolution) = resolutions.get(*index).copied() else {
+                    return;
+                };
+                if let Some(ui) = this.export.as_mut() {
+                    ui.resolution = resolution;
+                    ui.persist();
+                }
+                this.refresh_export_preview(window, cx);
+                cx.notify();
+            })),
+        )
     }
 
     fn export_fps_field(
@@ -2077,35 +2157,38 @@ impl EditorWindow {
     ) -> impl IntoElement {
         let theme = self.theme;
         let options = options.to_vec();
-        self.export_section("Frame rate", "icons/gauge.svg").child(
-            ui::SegmentedControl::editor(
-                &theme,
-                "export-fps",
-                options
-                    .iter()
-                    .map(|fps| ui::SegmentOption::new(format!("{fps} FPS"), ui.fps == *fps))
-                    .collect(),
+        self.export_section(tr::editor::export::section::frame_rate(), "icons/gauge.svg")
+            .child(
+                ui::SegmentedControl::editor(
+                    &theme,
+                    "export-fps",
+                    options
+                        .iter()
+                        .map(|fps| {
+                            ui::SegmentOption::new(tr::editor::export::fps(fps), ui.fps == *fps)
+                        })
+                        .collect(),
+                )
+                .stretch()
+                .item_height(px(SEGMENT_HEIGHT))
+                .on_select(cx.listener(move |this, index: &usize, window, cx| {
+                    let Some(fps) = options.get(*index).copied() else {
+                        return;
+                    };
+                    if let Some(ui) = this.export.as_mut() {
+                        ui.fps = fps;
+                        ui.persist();
+                    }
+                    this.refresh_export_preview(window, cx);
+                    cx.notify();
+                })),
             )
-            .stretch()
-            .item_height(px(SEGMENT_HEIGHT))
-            .on_select(cx.listener(move |this, index: &usize, window, cx| {
-                let Some(fps) = options.get(*index).copied() else {
-                    return;
-                };
-                if let Some(ui) = this.export.as_mut() {
-                    ui.fps = fps;
-                    ui.persist();
-                }
-                this.refresh_export_preview(window, cx);
-                cx.notify();
-            })),
-        )
     }
 
     fn export_quality_field(&self, ui: &ExportUi, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let editor = theme.editor;
-        self.export_section("Quality", "icons/gem.svg")
+        self.export_section(tr::editor::export::section::quality(), "icons/gem.svg")
             .child(
                 ui::SegmentedControl::editor(
                     &theme,
@@ -2114,7 +2197,7 @@ impl EditorWindow {
                         .iter()
                         .map(|(value, label)| {
                             ui::SegmentOption::new(
-                                *label,
+                                label(),
                                 !ui.is_custom_bpp() && matches_compression(ui.compression, *value),
                             )
                         })
@@ -2143,10 +2226,13 @@ impl EditorWindow {
                     .px(px(2.))
                     .text_size(px(10.5))
                     .text_color(Hsla::from(editor.text_3))
-                    .child("Smaller file")
-                    .child("Larger file"),
+                    .child(tr::editor::export::quality::smaller())
+                    .child(tr::editor::export::quality::larger()),
             )
             .child(self.export_optimize_row(ui, cx))
+            .when(turbo_available(), |this| {
+                this.child(self.export_turbo_row(ui, cx))
+            })
     }
 
     fn export_toggle_row(
@@ -2192,8 +2278,8 @@ impl EditorWindow {
     fn export_optimize_row(&self, ui: &ExportUi, cx: &mut Context<Self>) -> impl IntoElement {
         self.export_toggle_row(
             "export-optimize",
-            "Optimize file size",
-            "Re-encodes with software for much smaller files (slower)",
+            tr::editor::export::optimize::title(),
+            tr::editor::export::optimize::description(),
             ui.optimize_filesize,
             cx.listener(|this, _, window, cx| {
                 if let Some(ui) = this.export.as_mut() {
@@ -2204,6 +2290,57 @@ impl EditorWindow {
                 cx.notify();
             }),
         )
+    }
+
+    fn export_turbo_row(&self, ui: &ExportUi, cx: &mut Context<Self>) -> impl IntoElement {
+        let editor = self.theme.editor;
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(4.))
+            .child(self.export_toggle_row(
+                "export-turbo",
+                tr::editor::export::turbo::title(),
+                tr::editor::export::turbo::description(),
+                ui.turbo,
+                cx.listener(|this, _, window, cx| {
+                    if let Some(ui) = this.export.as_mut() {
+                        ui.turbo = !ui.turbo;
+                        ui.persist();
+                    }
+                    this.refresh_export_preview(window, cx);
+                    cx.notify();
+                }),
+            ))
+            .when(ui.turbo, |this| {
+                this.child(
+                    div()
+                        .p(px(12.))
+                        .rounded(px(10.))
+                        .bg(Hsla::from(editor.card_2))
+                        .flex()
+                        .flex_row()
+                        .items_start()
+                        .gap(px(8.))
+                        .child(
+                            svg()
+                                .path("icons/triangle-alert.svg")
+                                .size(px(14.))
+                                .flex_shrink_0()
+                                .mt(px(1.))
+                                .text_color(Hsla::from(editor.text_2)),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_size(px(11.5))
+                                .line_height(px(15.))
+                                .text_color(Hsla::from(editor.text_2))
+                                .child(tr::editor::export::turbo::warning()),
+                        ),
+                )
+            })
     }
 
     fn export_advanced(&self, ui: &ExportUi, cx: &mut Context<Self>) -> impl IntoElement {
@@ -2247,7 +2384,7 @@ impl EditorWindow {
                             .size(px(14.))
                             .text_color(Hsla::from(editor.text_2)),
                     )
-                    .child("Advanced")
+                    .child(tr::editor::export::advanced::title())
                     .child(
                         svg()
                             .path(if ui.advanced_open {
@@ -2263,8 +2400,8 @@ impl EditorWindow {
             .when(ui.advanced_open, |this| {
                 this.child(self.export_toggle_row(
                     "export-cursor-only",
-                    "Export cursor only",
-                    "Keeps the same cursor motion and clicks on a transparent background",
+                    tr::editor::export::advanced::cursor_only(),
+                    tr::editor::export::advanced::cursor_only_description(),
                     ui.cursor_only,
                     cx.listener(|this, _, window, cx| {
                         if let Some(ui) = this.export.as_mut() {
@@ -2302,9 +2439,7 @@ impl EditorWindow {
                                     .text_size(px(11.5))
                                     .line_height(px(15.))
                                     .text_color(Hsla::from(editor.text_2))
-                                    .child(
-                                        "Exports as a transparent MOV. Files are large and best for compositing or editing.",
-                                    ),
+                                    .child(tr::editor::export::advanced::transparent_mov()),
                             ),
                     )
                 })
@@ -2323,7 +2458,7 @@ impl EditorWindow {
                                     .min_w(px(96.))
                                     .text_size(px(13.))
                                     .text_color(Hsla::from(editor.text_1))
-                                    .child("Bits per pixel"),
+                                    .child(tr::editor::export::advanced::bits_per_pixel()),
                             )
                             .child(
                                 div()
@@ -2351,11 +2486,13 @@ impl EditorWindow {
                                             Some(gpui::hsla(0., 0., 0., 0.12)),
                                         )
                                         .thumb_shadow()
-                                        .on_drag_start(cx.listener(
-                                            |this, event: &MouseDownEvent, _window, cx| {
-                                                this.export_bpp_mouse_down(event, cx);
-                                            },
-                                        )),
+                                        .on_drag_start(
+                                            cx.listener(
+                                                |this, event: &MouseDownEvent, _window, cx| {
+                                                    this.export_bpp_mouse_down(event, cx);
+                                                },
+                                            ),
+                                        ),
                                     ),
                             )
                             .child(
@@ -2373,15 +2510,15 @@ impl EditorWindow {
                             div()
                                 .text_size(px(11.))
                                 .text_color(Hsla::from(editor.text_3))
-                                .child("Using a custom bitrate"),
+                                .child(tr::editor::export::advanced::custom_bitrate()),
                         )
                     })
                 })
                 .when(cfg!(target_os = "macos") && show_bpp, |this| {
                     this.child(self.export_toggle_row(
                         "export-force-ffmpeg",
-                        "Force FFmpeg decoder",
-                        "Skip hardware decoder (auto-fallback enabled)",
+                        tr::editor::export::advanced::force_ffmpeg(),
+                        tr::editor::export::advanced::force_ffmpeg_description(),
                         ui.force_ffmpeg,
                         cx.listener(|this, _, window, cx| {
                             if let Some(ui) = this.export.as_mut() {
@@ -2457,28 +2594,34 @@ impl EditorWindow {
             Some(ui.rendered as f32 / ui.total_frames as f32)
         };
         let heading = match ui.phase {
-            ExportPhase::Starting => "Preparing export",
-            ExportPhase::Rendering if ui.cursor_only => "Rendering cursor track",
-            ExportPhase::Rendering if ui.format == ExportFormatKind::Gif => "Rendering GIF",
-            ExportPhase::Rendering => "Rendering video",
-            ExportPhase::Copying if ui.destination == ExportDestination::Clipboard => {
-                "Copying to clipboard"
+            ExportPhase::Starting => tr::editor::export::phase::starting(),
+            ExportPhase::Rendering if ui.cursor_only => {
+                tr::editor::export::phase::rendering_cursor()
             }
-            ExportPhase::Copying => "Saving to file",
-            ExportPhase::Uploading if ui.reuploading => "Reuploading to your link",
-            ExportPhase::Uploading => "Creating shareable link",
+            ExportPhase::Rendering if ui.format == ExportFormatKind::Gif => {
+                tr::editor::export::phase::rendering_gif()
+            }
+            ExportPhase::Rendering => tr::editor::export::phase::rendering_video(),
+            ExportPhase::Copying if ui.destination == ExportDestination::Clipboard => {
+                tr::editor::export::phase::copying_to_clipboard()
+            }
+            ExportPhase::Copying => tr::editor::export::phase::saving_to_file(),
+            ExportPhase::Uploading if ui.reuploading => tr::editor::export::phase::reuploading(),
+            ExportPhase::Uploading => tr::editor::export::phase::uploading(),
             ExportPhase::Done if ui.destination == ExportDestination::Clipboard => {
-                "Copied to clipboard"
+                tr::editor::export::phase::copied()
             }
             ExportPhase::Done if ui.destination == ExportDestination::Link && ui.reuploading => {
-                "Reupload complete"
+                tr::editor::export::phase::reupload_complete()
             }
-            ExportPhase::Done if ui.destination == ExportDestination::Link => "Upload complete",
-            ExportPhase::Done => "Export complete",
+            ExportPhase::Done if ui.destination == ExportDestination::Link => {
+                tr::editor::export::phase::upload_complete()
+            }
+            ExportPhase::Done => tr::editor::export::phase::complete(),
             ExportPhase::Failed if ui.clipboard_retry_path().is_some() => {
-                "Export complete; clipboard copy failed"
+                tr::editor::export::phase::clipboard_failed()
             }
-            ExportPhase::Failed => "Export failed",
+            ExportPhase::Failed => tr::editor::export::failed(),
             ExportPhase::Idle | ExportPhase::ChoosingFile => "",
         };
 
@@ -2523,30 +2666,35 @@ impl EditorWindow {
                             .child(heading),
                     )
                     .when(
-                        ui.phase == ExportPhase::Done
-                            && ui.destination == ExportDestination::Link,
+                        ui.phase == ExportPhase::Done && ui.destination == ExportDestination::Link,
                         |this| {
                             this.child(
                                 div()
                                     .text_size(px(12.))
                                     .text_color(Hsla::from(editor.text_2))
                                     .child(if ui.reuploading {
-                                        "Your latest edit is ready at the same link"
+                                        tr::editor::export::done::reuploaded()
                                     } else {
-                                        "Your Cap has been uploaded successfully"
+                                        tr::editor::export::done::uploaded()
                                     }),
                             )
                         },
                     ),
             )
-            .when(ui.phase == ExportPhase::Rendering && ui.total_frames > 0, |this| {
-                this.child(
-                    div()
-                        .text_size(px(12.))
-                        .text_color(Hsla::from(editor.text_2))
-                        .child(format!("{} / {} frames", ui.rendered, ui.total_frames)),
-                )
-            })
+            .when(
+                ui.phase == ExportPhase::Rendering && ui.total_frames > 0,
+                |this| {
+                    this.child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(Hsla::from(editor.text_2))
+                            .child(tr::editor::export::frames(
+                                ui.total_frames as usize,
+                                ui.rendered,
+                            )),
+                    )
+                },
+            )
             .when_some(ui.error.clone(), |this, error| {
                 this.child(
                     div()
@@ -2565,7 +2713,7 @@ impl EditorWindow {
                         ui::ButtonVariant::Gray,
                         ui::ButtonSize::Md,
                     )
-                    .label("Cancel")
+                    .label(tr::common::cancel())
                     .on_click(cx.listener(|this, _, window, cx| {
                         let Some(ui) = this.export.as_mut() else {
                             return;
@@ -2593,10 +2741,10 @@ impl EditorWindow {
                         #[cfg(not(target_os = "linux"))]
                         cx.spawn_in(window, async move |this, cx| {
                             let confirmed = platform::confirm_dialog(
-                                "Cancel export?",
-                                "Are you sure you want to cancel the export?",
-                                "Cancel export",
-                                "Keep exporting",
+                                tr::editor::modal::cancel_export_title(),
+                                tr::editor::modal::cancel_export_message(),
+                                tr::editor::modal::cancel_export(),
+                                tr::editor::modal::keep_exporting(),
                                 true,
                             );
                             let _ = this.update(cx, |this, cx| {
@@ -2615,98 +2763,108 @@ impl EditorWindow {
                         .text_size(px(12.))
                         .text_color(Hsla::from(editor.text_2))
                         .text_center()
-                        .child(
-                            "Use Instant Mode for your next recording if you want a link the moment you stop.",
-                        ),
+                        .child(tr::editor::export::done::instant_hint()),
                 )
             })
-            .when(ui.phase == ExportPhase::Done || ui.phase == ExportPhase::Failed, |this| {
-                this.when(ui.clipboard_retry_path().is_some(), |this| {
-                    this.child(
+            .when(
+                ui.phase == ExportPhase::Done || ui.phase == ExportPhase::Failed,
+                |this| {
+                    this.when(ui.clipboard_retry_path().is_some(), |this| {
+                        this.child(
+                            ui::Button::plain(
+                                &theme,
+                                "export-retry-copy",
+                                ui::ButtonVariant::Gray,
+                                ui::ButtonSize::Md,
+                            )
+                            .icon("icons/copy.svg")
+                            .label(tr::editor::export::done::retry_copy())
+                            .on_click(cx.listener(
+                                |this, _, window, cx| {
+                                    this.retry_clipboard_copy(window, cx);
+                                },
+                            )),
+                        )
+                    })
+                    .when(
+                        (ui.phase == ExportPhase::Done
+                            && ui.destination == ExportDestination::File)
+                            || ui.clipboard_retry_path().is_some(),
+                        |this| {
+                            let path = ui.output_path.clone();
+                            this.child(
+                                ui::Button::plain(
+                                    &theme,
+                                    "export-open-file",
+                                    ui::ButtonVariant::Gray,
+                                    ui::ButtonSize::Md,
+                                )
+                                .label(tr::editor::export::done::open_file())
+                                .on_click(move |_, _, cx| {
+                                    if let Some(path) = &path {
+                                        library::open_with_system(path, cx);
+                                    }
+                                }),
+                            )
+                        },
+                    )
+                    .when(
+                        ui.phase == ExportPhase::Done
+                            && ui.destination == ExportDestination::Link
+                            && ui.share_link.is_some(),
+                        |this| {
+                            let copied = ui.copy_link_pressed;
+                            let open = ui.share_link.clone().unwrap_or_default();
+                            this.child(
+                                ui::Button::plain(
+                                    &theme,
+                                    "export-copy-link",
+                                    ui::ButtonVariant::Gray,
+                                    ui::ButtonSize::Md,
+                                )
+                                .icon(if copied {
+                                    "icons/check.svg"
+                                } else {
+                                    "icons/copy.svg"
+                                })
+                                .label(if copied {
+                                    tr::editor::export::done::link_copied()
+                                } else {
+                                    tr::editor::export::done::copy_link()
+                                })
+                                .on_click(cx.listener(
+                                    |this, _, window, cx| {
+                                        this.copy_share_link(window, cx);
+                                    },
+                                )),
+                            )
+                            .child(
+                                ui::Button::plain(
+                                    &theme,
+                                    "export-open-link",
+                                    ui::ButtonVariant::Primary,
+                                    ui::ButtonSize::Md,
+                                )
+                                .icon("icons/link.svg")
+                                .label(tr::editor::export::done::open_link())
+                                .on_click(move |_, _, cx| {
+                                    cx.open_url(&open);
+                                }),
+                            )
+                        },
+                    )
+                    .child(
                         ui::Button::plain(
                             &theme,
-                            "export-retry-copy",
+                            "export-back-done",
                             ui::ButtonVariant::Gray,
                             ui::ButtonSize::Md,
                         )
-                        .icon("icons/copy.svg")
-                        .label("Retry Copy")
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.retry_clipboard_copy(window, cx);
-                        })),
+                        .label(tr::editor::export::back())
+                        .on_click(cx.listener(|this, _, window, cx| this.close_export(window, cx))),
                     )
-                })
-                .when(
-                    (ui.phase == ExportPhase::Done && ui.destination == ExportDestination::File)
-                        || ui.clipboard_retry_path().is_some(),
-                    |this| {
-                        let path = ui.output_path.clone();
-                        this.child(
-                            ui::Button::plain(
-                                &theme,
-                                "export-open-file",
-                                ui::ButtonVariant::Gray,
-                                ui::ButtonSize::Md,
-                            )
-                            .label("Open File")
-                            .on_click(move |_, _, _| {
-                                if let Some(path) = &path {
-                                    library::open_path(path);
-                                }
-                            }),
-                        )
-                    },
-                )
-                .when(
-                    ui.phase == ExportPhase::Done
-                        && ui.destination == ExportDestination::Link
-                        && ui.share_link.is_some(),
-                    |this| {
-                        let copied = ui.copy_link_pressed;
-                        let open = ui.share_link.clone().unwrap_or_default();
-                        this.child(
-                            ui::Button::plain(
-                                &theme,
-                                "export-copy-link",
-                                ui::ButtonVariant::Gray,
-                                ui::ButtonSize::Md,
-                            )
-                            .icon(if copied {
-                                "icons/check.svg"
-                            } else {
-                                "icons/copy.svg"
-                            })
-                            .label(if copied { "Link copied" } else { "Copy link" })
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.copy_share_link(window, cx);
-                            })),
-                        )
-                        .child(
-                            ui::Button::plain(
-                                &theme,
-                                "export-open-link",
-                                ui::ButtonVariant::Primary,
-                                ui::ButtonSize::Md,
-                            )
-                            .icon("icons/link.svg")
-                            .label("Open link")
-                            .on_click(move |_, _, cx| {
-                                cx.open_url(&open);
-                            }),
-                        )
-                    },
-                )
-                .child(
-                    ui::Button::plain(
-                        &theme,
-                        "export-back-done",
-                        ui::ButtonVariant::Gray,
-                        ui::ButtonSize::Md,
-                    )
-                    .label("Back to editor")
-                    .on_click(cx.listener(|this, _, window, cx| this.close_export(window, cx))),
-                )
-            })
+                },
+            )
     }
 }
 
@@ -2736,6 +2894,7 @@ async fn confirm_export_resources(
     let result = async {
         let warning = check.map_err(|error| error.to_string())??;
         if let Some(message) = warning {
+            tracing::info!(%message, "export waits for the user to confirm its resources");
             #[cfg(target_os = "linux")]
             let confirmed = {
                 let response = loop {
@@ -2747,10 +2906,10 @@ async fn confirm_export_resources(
                         });
                         let response = (current && !window.has_active_prompt()).then(|| {
                             crate::editor_modal::confirm_action(
-                                "Check export resources",
+                                tr::editor::export::resources::title(),
                                 &message,
-                                "Proceed anyway",
-                                "Go back",
+                                tr::editor::export::resources::proceed(),
+                                tr::common::go_back(),
                                 window,
                                 cx,
                             )
@@ -2784,10 +2943,10 @@ async fn confirm_export_resources(
                     return Ok(false);
                 }
                 platform::confirm_dialog(
-                    "Check export resources",
+                    tr::editor::export::resources::title(),
                     &message,
-                    "Proceed anyway",
-                    "Go back",
+                    tr::editor::export::resources::proceed(),
+                    tr::common::go_back(),
                     false,
                 )
             };
@@ -2849,7 +3008,7 @@ fn show_upload_failure(
         cx.notify();
     });
     if dialog {
-        platform::alert_dialog("Failed to upload recording", &message);
+        platform::alert_dialog(tr::editor::export::upload_failed(), &message);
     }
 }
 
@@ -2863,6 +3022,7 @@ fn export_stat(
     div()
         .flex()
         .flex_1()
+        .min_w_0()
         .flex_col()
         .justify_center()
         .px(px(16.))
@@ -2875,6 +3035,7 @@ fn export_stat(
                 .text_size(px(10.5))
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(Hsla::from(editor.text_3))
+                .truncate()
                 .child(label),
         )
         .child(match value {
@@ -2895,6 +3056,13 @@ fn export_stat(
         })
 }
 
+/// Turbo trades the hardware encoder for libx264 on every core, which is
+/// only measured faster on macOS so far.
+fn turbo_available() -> bool {
+    cfg!(target_os = "macos")
+        && std::thread::available_parallelism().is_ok_and(|cores| cores.get() >= 8)
+}
+
 fn matches_compression(current: ExportCompression, expected: ExportCompression) -> bool {
     std::mem::discriminant(&current) == std::mem::discriminant(&expected)
 }
@@ -2911,6 +3079,7 @@ async fn run_export(
     compression: ExportCompression,
     custom_bpp: Option<f32>,
     optimize: bool,
+    turbo: bool,
     force: bool,
     save_path: Option<PathBuf>,
     progress_tx: flume::Sender<(u32, u32)>,
@@ -2984,22 +3153,41 @@ async fn run_export(
             .await
         }
         PreparedBase::Mp4(base) => {
-            Mp4ExportSettings {
+            let settings = Mp4ExportSettings {
                 fps,
                 resolution_base: resolution,
                 compression,
                 custom_bpp,
                 force_ffmpeg_decoder: force,
                 optimize_filesize: optimize,
+            };
+            if turbo {
+                settings
+                    .export_prepared_turbo(base, TurboOptions::default(), progress)
+                    .await
+            } else {
+                settings.export_prepared(base, progress).await
             }
-            .export_prepared(base, progress)
-            .await
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn estimate_ranges_keep_their_english_wording() {
+        use super::format_estimate_range;
+
+        assert_eq!(format_estimate_range([0.2, 0.5], false), "< 1 MB");
+        assert_eq!(format_estimate_range([0.2, 0.5], true), "< 1s");
+        assert_eq!(format_estimate_range([12.0, 12.0], false), "~12 MB");
+        assert_eq!(format_estimate_range([12.3, 40.7], false), "~12–41 MB");
+        assert_eq!(format_estimate_range([2048.0, 3500.0], false), "~2–3.4 GB");
+        assert_eq!(format_estimate_range([30.0, 45.0], true), "~30–45 s");
+        assert_eq!(format_estimate_range([90.0, 150.0], true), "~1.5–2.5 min");
+        assert_eq!(format_estimate_range([7200.0, 7200.0], true), "~2 hr");
+    }
+
     use super::{
         ExportDestination, ExportPhase, ExportUi, cancel_matching_export, export_file_name,
     };
@@ -3023,6 +3211,7 @@ mod tests {
             force_ffmpeg_decoder: false,
             advanced_open: false,
             organization_id: None,
+            turbo: false,
         })
     }
 

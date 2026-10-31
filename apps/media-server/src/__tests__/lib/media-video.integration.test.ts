@@ -811,6 +811,57 @@ describe("processVideo integration tests", () => {
 		}
 	});
 
+	test("skips the zero-length closing entry Loom adds to DASH timelines", async () => {
+		const originalFetch = globalThis.fetch;
+		const manifestDir = mkdtempSync(join(tmpdir(), "cap-mpd-zero-"));
+
+		globalThis.fetch = (async () =>
+			new Response(
+				`<MPD mediaPresentationDuration="PT7.001S">
+					<Period id="0">
+						<AdaptationSet id="1" contentType="video">
+							<Representation id="1" bandwidth="500000" codecs="vp9" mimeType="video/webm" width="1280" height="720">
+								<SegmentTemplate timescale="1000000" initialization="loom-video-init.webm" media="loom-video-$Number$.webm" startNumber="0">
+									<SegmentTimeline>
+										<S t="0" d="3539000"/>
+										<S t="3522000" d="3479000"/>
+										<S t="7001000" d="0"/>
+									</SegmentTimeline>
+								</SegmentTemplate>
+							</Representation>
+						</AdaptationSet>
+					</Period>
+				</MPD>`,
+				{ status: 200, statusText: "OK" },
+			)) as unknown as typeof fetch;
+
+		try {
+			const masterPath = await materializeMpdAsHlsPlaylist(
+				"https://luna.example/id/x/resource/dash/playlist.mpd?Signature=s",
+				manifestDir,
+			);
+			const masterLines = readFileSync(masterPath, "utf8").split("\n");
+			const videoPlaylist = readFileSync(
+				masterLines[
+					masterLines.findIndex((line) =>
+						line.startsWith("#EXT-X-STREAM-INF:"),
+					) + 1
+				] ?? "",
+				"utf8",
+			);
+
+			expect(videoPlaylist).toContain("loom-video-0.webm?Signature=s");
+			expect(videoPlaylist).toContain("loom-video-1.webm?Signature=s");
+			expect(videoPlaylist).not.toContain("loom-video-2.webm");
+			expect(videoPlaylist.match(/#EXTINF:/g)?.length).toBe(2);
+			expect(videoPlaylist).toContain("#EXTINF:3.539000,");
+			expect(videoPlaylist).toContain("#EXTINF:3.479000,");
+		} finally {
+			globalThis.fetch = originalFetch;
+			rmSync(manifestDir, { recursive: true, force: true });
+		}
+	});
+
 	test("falls back to generic DASH manifest materialization for unsupported MPD shapes", async () => {
 		const originalFetch = globalThis.fetch;
 		const manifestDir = mkdtempSync(join(tmpdir(), "cap-mpd-fallback-"));

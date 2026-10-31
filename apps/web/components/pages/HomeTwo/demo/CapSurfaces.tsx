@@ -21,7 +21,7 @@ import {
 	CapTrash,
 	CapX,
 } from "./capIcons";
-import { useVideoAttrs, VIDEO_POSTERS } from "./media";
+import { PresenterSources, useVideoAttrs, VIDEO_POSTERS } from "./media";
 import { OS_FONT, useIsWindowsDemo } from "./platform";
 
 const ToolButton = ({
@@ -178,12 +178,13 @@ export const CameraWindow = ({
 				<video
 					ref={videoRef}
 					className="h-full w-full object-cover"
-					src="/videos/home-two/webcam.mp4"
 					muted
 					loop
 					playsInline
 					{...videoAttrs}
-				/>
+				>
+					<PresenterSources />
+				</video>
 			</div>
 		</div>
 	);

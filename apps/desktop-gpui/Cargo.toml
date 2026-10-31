@@ -1,15 +1,15 @@
 # Standalone workspace on purpose: the gpui dependency tree is enormous and
 # pulls its own git revisions of wgpu/font stacks. Keeping it out of the root
-# workspace leaves the root Cargo.lock, `cargo hakari` workspace-hack and CI
-# untouched, and sidesteps the root `[patch.crates-io]` entries (vendored
-# wgpu-hal, tao) that only exist for the Tauri app.
+# workspace keeps the root Cargo.lock and `cargo hakari` workspace-hack free of
+# it, and sidesteps the root `[patch.crates-io]` forks (reqwest, cidre) that
+# gpui's tree does not want.
 [workspace]
 resolver = "2"
-members = [".", "kernels", "i18n-build"]
+members = [".", "kernels", "i18n-build", "glass"]
 
 [package]
 name = "cap-desktop-gpui"
-version = "0.6.1"
+version = "0.6.2"
 description = "Beautiful screen recordings, owned by you."
 edition = "2024"
 license = "AGPL-3.0"
@@ -27,6 +27,7 @@ path = "../../crates/recording/examples/studio-finalization-benchmark.rs"
 cap-audio = { path = "../../crates/audio" }
 cap-cli-install = { path = "../../crates/cli-install" }
 cap-gpui-kernels = { path = "kernels" }
+cap-glass = { path = "glass" }
 # gpui — the wingleeio/zed fork Comet ships. The pinned rev carries f596cde
 # ("destination alpha on transparent windows: Porter-Duff OVER, not additive"),
 # which our transparent rounded main-window shell depends on.
@@ -39,15 +40,15 @@ gpui_platform = { git = "https://github.com/wingleeio/zed", rev = "5d1f83d9f27a1
 ] }
 gpui_tokio = { git = "https://github.com/wingleeio/zed", rev = "5d1f83d9f27a19bec1fb241dc33b42238af9cf8d" }
 
-# Device enumeration reuses the same crates the Tauri app records with, so the
-# device identities here are byte-identical to the ones cap-recording expects.
+# Device enumeration reuses the crates cap-recording records with, so the
+# device identities here are byte-identical to the ones it expects.
 cap-camera = { path = "../../crates/camera" }
 scap-targets = { path = "../../crates/scap-targets" }
 # Same fork/rev as the root workspace: MicrophoneFeed enumerates through this.
 cpal = { git = "https://github.com/CapSoftware/cpal", rev = "6013cb5f8bd3" }
 
-# The actual recording engine -- the same studio/instant actors the Tauri app
-# drives. Drags in the ffmpeg encode stack; that is the point.
+# The actual recording engine: the studio/instant actors. Drags in the ffmpeg
+# encode stack; that is the point.
 cap-recording = { path = "../../crates/recording" }
 cap-media-info = { path = "../../crates/media-info" }
 cap-enc-ffmpeg = { path = "../../crates/enc-ffmpeg" }
@@ -62,18 +63,20 @@ cap-project = { path = "../../crates/project" }
 # a `RenderImage` (`src/editor_sidebar/cursor.rs`).
 cap-cursor-info = { path = "../../crates/cursor-info" }
 resvg = "0.45"
-rodio = { version = "0.19.0", default-features = false, features = ["mp3", "vorbis"] }
+rodio = { version = "0.19.0", default-features = false, features = [
+    "mp3",
+    "vorbis",
+] }
 # The editor stack. `cap-rendering` is not a new subtree -- cap-recording
 # already depends on it, so wgpu 25 and its vendored wgpu-hal have been built
 # by this workspace since the recording unit; naming it here only makes the
 # dependency direct so the editor can talk to `RenderedFrame`/`FrameLayout`.
-# `cap-editor` is the seam the Tauri editor window uses too: `EditorInstance`
-# owns the decoders, the renderer actor, the preview/scrub renderer and
-# playback, and hands frames back through a plain `FnMut` callback. It carries
-# no tauri types -- the websocket lives in the Tauri binary, not in the crate.
+# `cap-editor` is the editor's seam: `EditorInstance` owns the decoders, the
+# renderer actor, the preview/scrub renderer and playback, and hands frames
+# back through a plain `FnMut` callback.
 cap-rendering = { path = "../../crates/rendering" }
 # The camera bubble's live background blur (`src/camera_blur.rs`): the same
-# `BlurProcessor` the Tauri preview and the editor's camera layer run.
+# `BlurProcessor` the editor's camera layer runs.
 # Already in this lockfile through cap-rendering, so naming it only makes the
 # edge direct.
 cap-camera-effects = { path = "../../crates/camera-effects" }
@@ -87,7 +90,7 @@ cap-editor = { path = "../../crates/editor" }
 # is the cheaper of the two options rather than the only one.
 cap-export = { path = "../../crates/export" }
 # The first-frame JPEG a finished recording's Recents card is drawn from
-# (`create_screenshot` in the Tauri binary). Same package/git/rev the root
+# (`create_screenshot`, ported from 0.6.0). Same package/git/rev the root
 # workspace pins, and cap-recording already builds it, so this is an import,
 # not an extra dependency tree.
 ffmpeg = { package = "ffmpeg-next", git = "https://github.com/CapSoftware/rust-ffmpeg", rev = "49db1fede112" }
@@ -100,7 +103,11 @@ ffmpeg = { package = "ffmpeg-next", git = "https://github.com/CapSoftware/rust-f
 # `webp` is the config sidebar's four background-source illustrations, which
 # the app ships as webp; features are additive, so enabling it here does not
 # move gpui's own pin.
-image = { version = "0.25.1", default-features = false, features = ["jpeg", "png", "webp"] }
+image = { version = "0.25.1", default-features = false, features = [
+    "jpeg",
+    "png",
+    "webp",
+] }
 jpeg-decoder = "0.3"
 smallvec = "1"
 # The OS language list the UI language follows when set to System default.
@@ -113,9 +120,9 @@ sys-locale = "0.3"
 unicode-segmentation = "1"
 # spawn_blocking for finalize; the runtime itself comes from gpui_tokio.
 tokio = { version = "1", features = ["rt", "time"] }
-# The same crate `tauri_plugin_global_shortcut` wraps, at the Tauri app's pin:
-# store bindings are W3C `KeyboardEvent.code` strings and this owns the
-# platform mapping (Carbon RegisterEventHotKey on macOS).
+# The crate 0.6.0's global-shortcut plugin wrapped, at the same pin: stored
+# bindings are W3C `KeyboardEvent.code` strings and this owns the platform
+# mapping (Carbon RegisterEventHotKey on macOS).
 global-hotkey = "0.7.0"
 # cap-recording's actor system; version must match its `kameo = "0.17.2"`.
 kameo = "0.17.2"
@@ -124,14 +131,17 @@ flume = "0.11.0"
 lyon_tessellation = "1.0"
 anyhow = "1"
 chrono = "0.4"
-# Read the Tauri app's settings store so both apps share one recordings library.
+# The JSON `store` file in the app-data directory (`src/store.rs`).
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
 sanitize-filename = "0.6.0"
 semver = "1"
 base64 = "0.22"
 minisign-verify = "0.2.4"
-rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "tokio"] }
+rfd = { version = "0.15", default-features = false, features = [
+    "xdg-portal",
+    "tokio",
+] }
 # The screenshot export compositor (`src/screenshot_export.rs`): the canvas-2d
 # work `renderScreenshotExportCanvas` does in the webview -- shape rasterizing,
 # text, and the share fingerprint. All three are already in this lockfile
@@ -145,14 +155,14 @@ sha2 = "0.10"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # The rolling file log the Feedback page uploads. Same crate and rolling
-# strategy the Tauri app uses, under a different filename prefix so the two
-# apps never write into one file (`src/diagnostics.rs`).
+# strategy 0.6.0 used, under its own `cap-gpui` prefix so an update never
+# appends to a 0.6.0 log (`src/diagnostics.rs`).
 tracing-appender = "0.2"
 
 # Web-backed settings pages (feedback, changelog, license) and transcription
 # model downloads. rustls so Linux builds do not pick up an OpenSSL system dep.
 # `multipart` is the log/diagnostic-report upload (`src/diagnostics.rs`):
-# `/api/desktop/logs` takes a multipart form, the same one the Tauri app posts.
+# `/api/desktop/logs` takes a multipart form, the same one 0.6.0 posted.
 bytes = "1"
 reqwest = { version = "0.12", default-features = false, features = [
     "json",
@@ -162,9 +172,9 @@ reqwest = { version = "0.12", default-features = false, features = [
 ] }
 futures-util = "0.3"
 dirs = "6"
-# Caption transcription (`src/transcription.rs`): the exact engine pin the
-# Tauri app carries (`apps/desktop/src-tauri/Cargo.toml:75`), so a model file
-# downloaded by either app loads identically in both.
+dunce = "1.0.5"
+# Caption transcription (`src/transcription.rs`): the engine pin 0.6.0
+# shipped, so model files it downloaded keep loading identically.
 whisper-rs = "0.11.0"
 
 [build-dependencies]
@@ -178,7 +188,14 @@ gpui = { git = "https://github.com/wingleeio/zed", rev = "5d1f83d9f27a19bec1fb24
 # decoders, renderer and preview tasks are all tokio-spawned -- a current-thread
 # runtime would deadlock the moment the test thread blocks on a frame. Kept in
 # dev-dependencies so the shipped binary's tokio features are unchanged.
-tokio = { version = "1", features = ["rt-multi-thread", "time", "test-util", "net", "io-util", "macros"] }
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "time",
+    "test-util",
+    "net",
+    "io-util",
+    "macros",
+] }
 # Caption oracles (`src/transcription/verify_tests.rs`): fixture projects and
 # audio markers for the fake transcriber.
 cap-verify = { path = "../../crates/verify" }
@@ -193,6 +210,7 @@ raw-window-handle = "0.6"
 tray-icon = { version = "0.21.1", default-features = false }
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
+    "Win32_Graphics_Dwm",
     "Win32_Security",
     "Win32_Storage_FileSystem",
     "Win32_System_Console",
@@ -209,6 +227,8 @@ windows-sys = { version = "0.59", features = [
 
 [target.'cfg(target_os = "linux")'.dependencies]
 ashpd = { version = "0.11", default-features = false, features = ["tokio"] }
+# GNOME's wallpapers are JPEG XL, which `image` cannot read.
+jxl-oxide = { version = "0.12", features = ["image"] }
 wayland-client = "0.31"
 
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
@@ -217,20 +237,42 @@ x11rb = "0.13"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Native window treatment (panel levels, Spaces) gpui does not expose. Same
-# versions gpui's own tree compiles, so no second objc2 universe gets built.
-objc2 = "0.5.2"
+# direct 0.6 line used by this app's class definitions and AppKit bindings.
+objc2 = { version = "0.6.5", features = ["exception"] }
 # `NSVisualEffectView` is the pre-macOS-26 window-material fallback. Features
 # only -- the versions stay pinned, or a second objc2 universe gets built.
-objc2-app-kit = { version = "0.2.2", features = ["NSAppearance", "NSWindow", "NSView", "NSResponder", "NSGraphics", "NSPasteboard", "NSVisualEffectView", "NSWorkspace", "NSAccessibility"] }
+objc2-app-kit = { version = "0.3.2", features = [
+    "NSAppearance",
+    "NSWindow",
+    "NSView",
+    "NSResponder",
+    "NSGraphics",
+    "NSPasteboard",
+    "NSMenuItemBadge",
+    "NSVisualEffectView",
+    "NSWorkspace",
+    "NSAccessibility",
+] }
+objc2-quartz-core = { version = "0.3.2", features = [
+    "CALayer",
+    "CATransaction",
+    "objc2-core-foundation",
+] }
+objc2-core-graphics = { version = "0.3.2", features = ["CGColor"] }
 # NSRect/NSPoint/NSSize for `setFrame:display:`. Already in the tree as
 # objc2-app-kit's own dependency, so this adds nothing to the build.
-objc2-foundation = { version = "0.2.2", features = ["NSNotification", "NSOperation", "NSString", "block2"] }
-block2 = "0.5.1"
+objc2-foundation = { version = "0.3.2", features = [
+    "NSNotification",
+    "NSOperation",
+    "NSString",
+    "block2",
+] }
+block2 = "0.6"
 raw-window-handle = "0.6"
 core-foundation = "0.10"
 core-video = { version = "0.5.2", features = ["metal"] }
-# ScreenCaptureKit shareable content, acquired the same way recording.rs in
-# src-tauri does. Same fork/rev/features as the root workspace.
+# ScreenCaptureKit shareable content. Same fork/rev/features as the root
+# workspace.
 cidre = { git = "https://github.com/CapSoftware/cidre", rev = "bf84b67079a8", features = [
     "macos_12_7",
     "cv",
@@ -248,7 +290,6 @@ cidre = { git = "https://github.com/CapSoftware/cidre", rev = "bf84b67079a8", fe
     "vn",
 ], default-features = false }
 
-# The Tauri app's own target gate (`apps/desktop/src-tauri/Cargo.toml:151-152`):
 # parakeet-rs has no Intel-macOS ONNX Runtime build, so those Macs get the
 # Whisper caption models only.
 [target.'cfg(not(all(target_os = "macos", target_arch = "x86_64")))'.dependencies]
@@ -288,6 +329,10 @@ debug = "line-tables-only"
 # unoptimized against 1.0ms here, and optimizing the whole app crate instead
 # turns a one-line edit into a 6-minute rebuild.
 [profile.dev.package.cap-gpui-kernels]
+opt-level = 3
+
+# The glass probe renders the CPU model of every scene it captures.
+[profile.dev.package.cap-glass]
 opt-level = 3
 
 # Incremental halves a one-line rebuild for about 2 GB of cache, and line tables
