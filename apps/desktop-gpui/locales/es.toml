@@ -2183,7 +2183,8 @@ noise = "Ruido"
 to = "Hasta"
 
 [editor.sidebar.image]
-prompt = "Haz clic para elegir o arrastra y suelta una imagen"
+file_type = "Imagen o vídeo"
+prompt = "Haz clic para elegir o arrastra y suelta una imagen, un GIF o un vídeo"
 
 [editor.sidebar.layout]
 background_blur = "Desenfoque del fondo"

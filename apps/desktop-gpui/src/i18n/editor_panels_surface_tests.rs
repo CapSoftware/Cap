@@ -504,9 +504,10 @@ fn editor_panels_match_the_literals_they_replaced() {
             "Use the wallpaper from your desktop",
         ),
         (tr::editor::sidebar::desktop::reimport(), "Re-import"),
+        (tr::editor::sidebar::image::file_type(), "Image or video"),
         (
             tr::editor::sidebar::image::prompt(),
-            "Click to select or drag and drop image",
+            "Click to select or drag and drop an image, GIF or video",
         ),
         (tr::editor::sidebar::gradient::from(), "From"),
         (tr::editor::sidebar::gradient::to(), "To"),

@@ -2183,7 +2183,8 @@ noise = "Rauschen"
 to = "Bis"
 
 [editor.sidebar.image]
-prompt = "Klicken Sie zum Auswählen oder ziehen Sie ein Bild hierher"
+file_type = "Bild oder Video"
+prompt = "Klicken Sie zum Auswählen oder ziehen Sie ein Bild, GIF oder Video hierher"
 
 [editor.sidebar.layout]
 background_blur = "Hintergrundunschärfe"

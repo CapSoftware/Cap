@@ -2183,7 +2183,8 @@ noise = "ノイズ"
 to = "終了"
 
 [editor.sidebar.image]
-prompt = "クリックして選択するか、画像をドラッグ＆ドロップ"
+file_type = "画像または動画"
+prompt = "クリックして選択するか、画像・GIF・動画をドラッグ＆ドロップ"
 
 [editor.sidebar.layout]
 background_blur = "背景のぼかし"

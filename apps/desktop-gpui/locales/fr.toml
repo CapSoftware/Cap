@@ -2183,7 +2183,8 @@ noise = "Bruit"
 to = "À"
 
 [editor.sidebar.image]
-prompt = "Cliquez pour choisir ou glissez-déposez une image"
+file_type = "Image ou vidéo"
+prompt = "Cliquez pour choisir ou glissez-déposez une image, un GIF ou une vidéo"
 
 [editor.sidebar.layout]
 background_blur = "Flou de l'arrière-plan"

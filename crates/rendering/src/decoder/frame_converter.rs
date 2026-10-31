@@ -185,14 +185,22 @@ impl FrameConverter {
 
 /// swscale converts YUV with BT.601 unless told otherwise: switch the source
 /// matrix to BT.709 and keep the ranges and adjustments it chose.
-fn use_bt709_source(context: &mut software::scaling::Context) {
+pub(crate) fn use_bt709_source(context: &mut software::scaling::Context) {
+    unsafe { use_bt709_source_raw(context.as_mut_ptr()) }
+}
+
+/// [`use_bt709_source`] for a context created through the raw swscale API.
+///
+/// # Safety
+/// `context` must point to an initialised `SwsContext`.
+pub(crate) unsafe fn use_bt709_source_raw(context: *mut ffmpeg::ffi::SwsContext) {
     unsafe {
         let mut inv_table = std::ptr::null_mut();
         let mut table = std::ptr::null_mut();
         let (mut src_range, mut dst_range) = (0, 0);
         let (mut brightness, mut contrast, mut saturation) = (0, 0, 0);
         if ffmpeg::ffi::sws_getColorspaceDetails(
-            context.as_mut_ptr(),
+            context,
             &mut inv_table,
             &mut src_range,
             &mut table,
@@ -206,14 +214,7 @@ fn use_bt709_source(context: &mut software::scaling::Context) {
         }
         let bt709 = ffmpeg::ffi::sws_getCoefficients(ffmpeg::ffi::SWS_CS_ITU709);
         ffmpeg::ffi::sws_setColorspaceDetails(
-            context.as_mut_ptr(),
-            bt709,
-            src_range,
-            table,
-            dst_range,
-            brightness,
-            contrast,
-            saturation,
+            context, bt709, src_range, table, dst_range, brightness, contrast, saturation,
         );
     }
 }

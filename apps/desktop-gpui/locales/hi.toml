@@ -2183,7 +2183,8 @@ noise = "नॉइज़"
 to = "तक"
 
 [editor.sidebar.image]
-prompt = "चुनने के लिए क्लिक करें या इमेज ड्रैग करके छोड़ें"
+file_type = "इमेज या वीडियो"
+prompt = "चुनने के लिए क्लिक करें या इमेज, GIF या वीडियो ड्रैग करके छोड़ें"
 
 [editor.sidebar.layout]
 background_blur = "बैकग्राउंड ब्लर"

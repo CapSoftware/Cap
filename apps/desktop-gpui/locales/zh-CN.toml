@@ -2183,7 +2183,8 @@ noise = "噪点"
 to = "结束"
 
 [editor.sidebar.image]
-prompt = "点击选择或拖放图片"
+file_type = "图片或视频"
+prompt = "点击选择或拖放图片、GIF 或视频"
 
 [editor.sidebar.layout]
 background_blur = "背景模糊"

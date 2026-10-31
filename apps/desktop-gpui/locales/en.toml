@@ -2185,7 +2185,8 @@ noise = "Noise"
 to = "To"
 
 [editor.sidebar.image]
-prompt = "Click to select or drag and drop image"
+file_type = { text = "Image or video", context = "File type name in the Linux file chooser for editor backgrounds, which accept images, GIFs and videos." }
+prompt = "Click to select or drag and drop an image, GIF or video"
 
 [editor.sidebar.layout]
 background_blur = "Background Blur"

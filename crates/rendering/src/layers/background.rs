@@ -4,13 +4,20 @@ use image::GenericImageView;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
 use wgpu::{include_wgsl, util::DeviceExt};
 
 use crate::{ProjectUniforms, RenderVideoConstants, RenderingError, create_shader_render_pipeline};
 
-use super::AnimatedGradientLayer;
+use super::{
+    AnimatedGradientLayer,
+    video_background::{
+        VideoBackgroundFrame, VideoBackgroundSource, is_video_background,
+        video_background_max_dimension,
+    },
+};
 
 const MAX_BACKGROUND_DIMENSION: u32 = 2560;
 
@@ -266,6 +273,7 @@ pub enum Background {
     Gradient(Gradient),
     AnimatedGradient(AnimatedGradientConfig),
     Image { path: String },
+    Video { path: String },
 }
 
 impl From<BackgroundSource> for Background {
@@ -322,6 +330,7 @@ fn background_source_is_empty(source: &BackgroundSource) -> bool {
 impl Background {
     fn image_or_white(path: Option<String>) -> Self {
         match path {
+            Some(path) if is_video_background(&path) => Background::Video { path },
             Some(path) => Background::Image { path },
             None => Background::Color([1.0, 1.0, 1.0, 1.0]),
         }
@@ -375,6 +384,7 @@ pub enum Inner {
         output_size: (u32, u32),
         bind_group: wgpu::BindGroup,
     },
+    Video(Box<VideoBackground>),
     ColorOrGradient {
         value: ColorOrGradient,
         #[allow(unused)]
@@ -389,6 +399,8 @@ pub struct BackgroundLayer {
     /// derived from a static background (e.g. its blurred copy).
     generation: u64,
     resolved_image_path: ResolvedImagePath,
+    /// A video that failed to open, so it is not reopened every frame.
+    failed_video_path: Option<String>,
     image_pipeline: ImageBackgroundPipeline,
     color_pipeline: GradientOrColorPipeline,
 }
@@ -399,6 +411,7 @@ impl BackgroundLayer {
             inner: None,
             generation: 0,
             resolved_image_path: ResolvedImagePath::default(),
+            failed_video_path: None,
             image_pipeline: ImageBackgroundPipeline::new(device),
             color_pipeline: GradientOrColorPipeline::new(device),
         }
@@ -462,35 +475,10 @@ impl BackgroundLayer {
                             }
                         };
 
-                        let output_ar =
-                            uniforms.output_size.1 as f32 / uniforms.output_size.0 as f32;
-                        let image_ar = texture.height() as f32 / texture.width() as f32;
-
-                        let y_height = if output_ar < image_ar {
-                            ((image_ar - output_ar) / 2.0) / image_ar
-                        } else {
-                            0.0
-                        };
-
-                        let x_width = if output_ar > image_ar {
-                            let output_ar = 1.0 / output_ar;
-                            let image_ar = 1.0 / image_ar;
-
-                            ((image_ar - output_ar) / 2.0) / image_ar
-                        } else {
-                            0.0
-                        };
-
-                        let image_uniforms = ImageBackgroundUniforms {
-                            output_size: [
-                                uniforms.output_size.0 as f32,
-                                uniforms.output_size.1 as f32,
-                            ],
-                            padding: 0.0,
-                            x_width,
-                            y_height,
-                            _padding: 0.0,
-                        };
+                        let image_uniforms = ImageBackgroundUniforms::cover(
+                            uniforms.output_size,
+                            (texture.width(), texture.height()),
+                        );
 
                         let uniform_buffer =
                             device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -514,6 +502,9 @@ impl BackgroundLayer {
                         });
                     }
                 };
+            }
+            Background::Video { path } => {
+                self.prepare_video(constants, uniforms, path).await;
             }
             Background::Color(color) => match &self.inner {
                 Some(Inner::ColorOrGradient {
@@ -550,6 +541,85 @@ impl BackgroundLayer {
         Ok(())
     }
 
+    async fn prepare_video(
+        &mut self,
+        constants: &RenderVideoConstants,
+        uniforms: &ProjectUniforms,
+        path: String,
+    ) {
+        let device = &constants.device;
+        let max_dimension = video_background_max_dimension(
+            uniforms.output_size,
+            device.limits().max_texture_dimension_2d,
+        );
+
+        let reusable = matches!(
+            &self.inner,
+            Some(Inner::Video(video))
+                if video.path == path && video.max_dimension == max_dimension
+        );
+        if !reusable {
+            if self.failed_video_path.as_ref() == Some(&path) {
+                self.use_white_fallback(device);
+                return;
+            }
+            match VideoBackgroundSource::open(PathBuf::from(&path), max_dimension).await {
+                Ok(source) => {
+                    self.failed_video_path = None;
+                    self.generation += 1;
+                    self.inner = Some(Inner::Video(Box::new(VideoBackground {
+                        path,
+                        max_dimension,
+                        source,
+                        current: None,
+                        texture: None,
+                    })));
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        "Failed to open background video '{}': {}. Falling back to solid color.",
+                        path,
+                        error
+                    );
+                    self.failed_video_path = Some(path);
+                    self.use_white_fallback(device);
+                    return;
+                }
+            }
+        }
+
+        let Some(Inner::Video(video)) = &mut self.inner else {
+            return;
+        };
+        let seconds = f64::from(uniforms.frame_number) / f64::from(uniforms.frame_rate.max(1));
+        if let Some(frame) = video.source.frame_at(seconds).await {
+            video.show(
+                device,
+                &constants.queue,
+                &self.image_pipeline,
+                uniforms.output_size,
+                frame,
+            );
+        }
+    }
+
+    fn use_white_fallback(&mut self, device: &wgpu::Device) {
+        let white = [1.0, 1.0, 1.0, 1.0];
+        if matches!(
+            &self.inner,
+            Some(Inner::ColorOrGradient { value: ColorOrGradient::Color(color), .. }) if *color == white
+        ) {
+            return;
+        }
+        let buffer = GradientOrColorUniforms::from(Background::Color(white)).to_buffer(device);
+        self.generation += 1;
+        self.inner = Some(Inner::ColorOrGradient {
+            value: ColorOrGradient::Color(white),
+            bind_group: self.color_pipeline.bind_group(device, &buffer),
+            buffer,
+        });
+    }
+
     /// Identifies the current background while it renders the same pixels
     /// every frame; `None` for animated backgrounds.
     pub fn static_generation(&self) -> Option<u64> {
@@ -570,7 +640,17 @@ impl BackgroundLayer {
             layer.render(pass);
             return;
         }
-        if let Some(Inner::Image { bind_group, .. }) = &self.inner {
+        let video_bind_group = match &self.inner {
+            Some(Inner::Video(video)) => match &video.texture {
+                Some(texture) => Some(&texture.bind_group),
+                None => return,
+            },
+            _ => None,
+        };
+        if let Some(bind_group) = video_bind_group {
+            pass.set_pipeline(&self.image_pipeline.render_pipeline);
+            pass.set_bind_group(0, bind_group, &[]);
+        } else if let Some(Inner::Image { bind_group, .. }) = &self.inner {
             pass.set_pipeline(&self.image_pipeline.render_pipeline);
             pass.set_bind_group(0, bind_group, &[]);
         } else if let Some(Inner::ColorOrGradient { bind_group, .. }) = &self.inner {
@@ -581,6 +661,97 @@ impl BackgroundLayer {
         }
 
         pass.draw(0..4, 0..1);
+    }
+}
+
+pub struct VideoBackground {
+    path: String,
+    max_dimension: u32,
+    source: VideoBackgroundSource,
+    current: Option<Arc<VideoBackgroundFrame>>,
+    texture: Option<VideoBackgroundTexture>,
+}
+
+struct VideoBackgroundTexture {
+    texture: wgpu::Texture,
+    output_size: (u32, u32),
+    bind_group: wgpu::BindGroup,
+}
+
+impl VideoBackground {
+    fn show(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        pipeline: &ImageBackgroundPipeline,
+        output_size: (u32, u32),
+        frame: Arc<VideoBackgroundFrame>,
+    ) {
+        let reusable = self.texture.as_ref().is_some_and(|current| {
+            current.output_size == output_size
+                && current.texture.width() == frame.width
+                && current.texture.height() == frame.height
+        });
+        if !reusable {
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("Background Video Texture"),
+                size: wgpu::Extent3d {
+                    width: frame.width,
+                    height: frame.height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            let uniforms = ImageBackgroundUniforms::cover(output_size, (frame.width, frame.height));
+            let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Video Background Uniforms"),
+                contents: bytemuck::cast_slice(&[uniforms]),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            self.texture = Some(VideoBackgroundTexture {
+                bind_group: pipeline.bind_group(device, &uniform_buffer, &view),
+                texture,
+                output_size,
+            });
+            self.current = None;
+        }
+
+        if self
+            .current
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, &frame))
+        {
+            return;
+        }
+        let Some(target) = &self.texture else {
+            return;
+        };
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &target.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &frame.data,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * frame.width),
+                rows_per_image: Some(frame.height),
+            },
+            wgpu::Extent3d {
+                width: frame.width,
+                height: frame.height,
+                depth_or_array_layers: 1,
+            },
+        );
+        self.current = Some(frame);
     }
 }
 
@@ -597,6 +768,37 @@ pub struct ImageBackgroundUniforms {
     x_width: f32,
     y_height: f32,
     _padding: f32, // For alignment
+}
+
+impl ImageBackgroundUniforms {
+    /// Crops the texture to fill the output without stretching it.
+    fn cover(output_size: (u32, u32), texture_size: (u32, u32)) -> Self {
+        let output_ar = output_size.1 as f32 / output_size.0 as f32;
+        let image_ar = texture_size.1 as f32 / texture_size.0 as f32;
+
+        let y_height = if output_ar < image_ar {
+            ((image_ar - output_ar) / 2.0) / image_ar
+        } else {
+            0.0
+        };
+
+        let x_width = if output_ar > image_ar {
+            let output_ar = 1.0 / output_ar;
+            let image_ar = 1.0 / image_ar;
+
+            ((image_ar - output_ar) / 2.0) / image_ar
+        } else {
+            0.0
+        };
+
+        Self {
+            output_size: [output_size.0 as f32, output_size.1 as f32],
+            padding: 0.0,
+            x_width,
+            y_height,
+            _padding: 0.0,
+        }
+    }
 }
 
 impl ImageBackgroundPipeline {
@@ -791,7 +993,9 @@ impl From<Background> for GradientOrColorUniforms {
                 noise_scale,
                 _padding: 0.0,
             },
-            Background::Image { .. } | Background::AnimatedGradient(_) => {
+            Background::Image { .. }
+            | Background::Video { .. }
+            | Background::AnimatedGradient(_) => {
                 unreachable!("Textured backgrounds should be handled separately")
             }
         }
