@@ -88,7 +88,11 @@ export async function sendOrganizationInvites(
 	const validEmails = validInvites.map((invite) => invite.email);
 
 	if (validEmails.length === 0) {
-		return { success: true, failedEmails: [] as string[] };
+		return {
+			success: true,
+			failedEmails: [] as string[],
+			skippedEmails: [] as string[],
+		};
 	}
 
 	if (options.sendEmailNotifications === false) {
@@ -108,7 +112,7 @@ export async function sendOrganizationInvites(
 
 		revalidatePath("/dashboard/settings/organization");
 
-		return { success: true, failedEmails };
+		return { success: true, failedEmails, skippedEmails: [] as string[] };
 	}
 
 	const inviteRecords = await db().transaction(async (tx) => {
@@ -184,10 +188,22 @@ export async function sendOrganizationInvites(
 		}),
 	);
 
-	const failedInvites = inviteRecords.filter(
-		(_, i) => emailResults[i]?.status === "rejected",
-	);
+	const failedInvites = inviteRecords.filter((_, i) => {
+		const result = emailResults[i];
+		if (!result || result.status === "rejected") return true;
+		const error = result.value?.error;
+		return Boolean(error && error.name !== "email_not_configured");
+	});
 	const failedEmails = failedInvites.map((r) => r.email);
+	const skippedEmails = inviteRecords
+		.filter((_, i) => {
+			const result = emailResults[i];
+			return (
+				result?.status === "fulfilled" &&
+				result.value?.error?.name === "email_not_configured"
+			);
+		})
+		.map((record) => record.email);
 
 	if (failedInvites.length > 0) {
 		try {
@@ -213,5 +229,5 @@ export async function sendOrganizationInvites(
 
 	revalidatePath("/dashboard/settings/organization");
 
-	return { success: true, failedEmails };
+	return { success: true, failedEmails, skippedEmails };
 }

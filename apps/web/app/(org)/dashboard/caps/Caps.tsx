@@ -12,6 +12,10 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { ChromeRecorderButton } from "@/components/ChromeRecorderButton";
+import {
+	type SeededThumbnails,
+	SeededThumbnailsProvider,
+} from "@/components/VideoThumbnail";
 import { CHROME_EXTENSION_BUTTON_CLASS } from "@/lib/chrome-extension";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { useVideosAnalyticsQuery } from "@/lib/Queries/Analytics";
@@ -70,11 +74,13 @@ export const Caps = ({
 	count,
 	analyticsEnabled,
 	folders,
+	thumbnails,
 }: {
 	data: VideoData;
 	count: number;
 	folders: FolderDataType[];
 	analyticsEnabled: boolean;
+	thumbnails?: SeededThumbnails;
 }) => {
 	const router = useRouter();
 	const params = useSearchParams();
@@ -193,15 +199,15 @@ export const Caps = ({
 				(e.key === "Delete" || e.key === "Backspace") &&
 				selectedCaps.length > 0
 			) {
-				if (e.key === "Backspace") {
-					e.preventDefault();
-				}
-
 				if (
 					!["INPUT", "TEXTAREA", "SELECT"].includes(
 						document.activeElement?.tagName || "",
 					)
 				) {
+					if (e.key === "Backspace") {
+						e.preventDefault();
+					}
+
 					deleteCaps(selectedCaps);
 				}
 			}
@@ -286,36 +292,38 @@ export const Caps = ({
 						</h1>
 					</div>
 
-					<div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
-						{isUploading && (
-							<UploadPlaceholderCard key={"upload-placeholder"} />
-						)}
-						{visibleVideos.map((video) => {
-							const videoAnalytics = analytics[video.id];
-							return (
-								<CapCard
-									key={video.id}
-									cap={video}
-									analytics={videoAnalytics ?? 0}
-									onDelete={() => {
-										if (selectedCaps.length > 0) {
-											deleteCaps(selectedCaps);
-										} else {
-											deleteCap(video.id);
-										}
-									}}
-									userId={user?.id}
-									isLoadingAnalytics={isLoadingAnalytics}
-									isSelected={selectedCaps.includes(video.id)}
-									anyCapSelected={anyCapSelected}
-									onSelectToggle={() => handleCapSelection(video.id)}
-									canMove
-									moveLocation={moveLocation}
-									moveRootLabel="My Caps"
-								/>
-							);
-						})}
-					</div>
+					<SeededThumbnailsProvider value={thumbnails}>
+						<div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+							{isUploading && (
+								<UploadPlaceholderCard key={"upload-placeholder"} />
+							)}
+							{visibleVideos.map((video) => {
+								const videoAnalytics = analytics[video.id];
+								return (
+									<CapCard
+										key={video.id}
+										cap={video}
+										analytics={videoAnalytics ?? 0}
+										onDelete={() => {
+											if (selectedCaps.length > 0) {
+												deleteCaps(selectedCaps);
+											} else {
+												deleteCap(video.id);
+											}
+										}}
+										userId={user?.id}
+										isLoadingAnalytics={isLoadingAnalytics}
+										isSelected={selectedCaps.includes(video.id)}
+										anyCapSelected={anyCapSelected}
+										onSelectToggle={() => handleCapSelection(video.id)}
+										canMove
+										moveLocation={moveLocation}
+										moveRootLabel="My Caps"
+									/>
+								);
+							})}
+						</div>
+					</SeededThumbnailsProvider>
 				</>
 			)}
 			{(data.length > limit || data.length === limit || page !== 1) && (

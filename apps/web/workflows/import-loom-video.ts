@@ -50,6 +50,7 @@ interface ImportLoomPayload {
 	agentOperationId?: string;
 	reuseExistingRawUpload?: boolean;
 	cleanupRawUpload?: boolean;
+	importPriority?: "customer" | "bulk";
 }
 
 const MINIMUM_VIDEO_SIZE = 1024;
@@ -427,6 +428,7 @@ async function startMediaServerProcessJob(
 		webhookSecret?: string;
 		inputExtension?: string;
 		priority: "bulk";
+		importPriority?: "customer" | "bulk";
 	},
 	recordDispatch: (
 		state: "accepted" | "rejected" | "uncertain",
@@ -709,6 +711,10 @@ async function processVideoOnMediaServer(
 				webhookSecret: webhookSecret || undefined,
 				inputExtension: getInputExtension(rawVideoUrl),
 				priority: "bulk",
+				importPriority:
+					worker === "importer"
+						? (payload.importPriority ?? "customer")
+						: undefined,
 			},
 			(state, jobId) =>
 				recordLoomMediaDispatch({

@@ -76,7 +76,9 @@ fn one_pass_styles_match_independent_group_selection() {
         timeline.style_segments[index].end = end;
     }
     let original = serde_json::to_value(&project).unwrap();
-    for time in [
+    let project = Arc::new(project);
+    let cache = ProjectStyleCache::default();
+    let times = [
         -1.0,
         -0.0,
         0.0,
@@ -93,7 +95,8 @@ fn one_pass_styles_match_independent_group_selection() {
         f64::NAN,
         f64::NEG_INFINITY,
         f64::INFINITY,
-    ] {
+    ];
+    for time in times.into_iter().chain(times.into_iter().rev()) {
         let expected = baseline_style_at(&project, time);
         let actual = project.style_at(time);
         assert_eq!(
@@ -104,10 +107,91 @@ fn one_pass_styles_match_independent_group_selection() {
             serde_json::to_value(actual.as_ref()).unwrap(),
             serde_json::to_value(expected.as_ref()).unwrap()
         );
+        let cached = cache.resolve(&project, time);
+        assert_eq!(
+            serde_json::to_value(cached.as_ref()).unwrap(),
+            serde_json::to_value(expected.as_ref()).unwrap()
+        );
+        assert_eq!(
+            Arc::ptr_eq(&cached, &project),
+            matches!(expected, Cow::Borrowed(_))
+        );
     }
-    assert_eq!(serde_json::to_value(&project).unwrap(), original);
+    assert_eq!(serde_json::to_value(project.as_ref()).unwrap(), original);
     let project = ProjectConfiguration::default();
     assert!(matches!(project.style_at(1.0), Cow::Borrowed(_)));
+}
+
+#[test]
+fn cached_styles_follow_edits_and_keep_old_frames_unchanged() {
+    let cache = ProjectStyleCache::default();
+    let mut source = Arc::new(fixture(1, false));
+    let first = cache.resolve(&source, 0.25);
+    assert!(Arc::ptr_eq(&first, &cache.resolve(&source, 0.75)));
+    assert!(Arc::get_mut(&mut source).is_none());
+    let mut frame = Arc::clone(&first);
+    Arc::make_mut(&mut frame).background.padding = 99.0;
+    assert_eq!(cache.resolve(&source, 0.5).background.padding, 0.0);
+    Arc::make_mut(&mut source).hidden_text_segments.push(17);
+    let updated = cache.resolve(&source, 0.5);
+    assert_eq!(updated.hidden_text_segments, [17]);
+    assert!(first.hidden_text_segments.is_empty());
+    assert!(!Arc::ptr_eq(&first, &updated));
+    assert!(Arc::ptr_eq(&cache.resolve(&source, 1.0), &source));
+    let old = Arc::downgrade(&updated);
+    drop(updated);
+    let replacement = Arc::new(fixture(1, false));
+    assert!(
+        cache
+            .resolve(&replacement, 0.5)
+            .hidden_text_segments
+            .is_empty()
+    );
+    assert!(old.upgrade().is_none());
+}
+
+#[test]
+fn concurrent_frames_share_the_cached_snapshot() {
+    let source = Arc::new(fixture(1, false));
+    let cache = ProjectStyleCache::default();
+    let barrier = std::sync::Barrier::new(8);
+    let frames = std::thread::scope(|scope| {
+        (0..8)
+            .map(|_| {
+                scope.spawn(|| {
+                    barrier.wait();
+                    cache.resolve(&source, 0.5)
+                })
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|thread| thread.join().unwrap())
+            .collect::<Vec<_>>()
+    });
+    assert!(frames.iter().all(|frame| Arc::ptr_eq(frame, &frames[0])));
+}
+
+#[test]
+fn concurrent_projects_never_exchange_cached_snapshots() {
+    let cache = ProjectStyleCache::default();
+    std::thread::scope(|scope| {
+        let threads: Vec<_> = (0..4)
+            .map(|worker| {
+                let cache = &cache;
+                scope.spawn(move || {
+                    let mut project = fixture(1, false);
+                    project.hidden_text_segments.push(worker);
+                    let source = Arc::new(project);
+                    for _ in 0..200 {
+                        assert_eq!(cache.resolve(&source, 0.5).hidden_text_segments, [worker]);
+                    }
+                })
+            })
+            .collect();
+        for thread in threads {
+            thread.join().unwrap();
+        }
+    });
 }
 
 #[test]

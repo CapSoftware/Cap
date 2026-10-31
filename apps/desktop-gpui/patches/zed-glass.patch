@@ -1,0 +1,2531 @@
+diff --git a/crates/gpui/src/scene.rs b/crates/gpui/src/scene.rs
+index 6cc3562..4c1f558 100644
+--- a/crates/gpui/src/scene.rs
++++ b/crates/gpui/src/scene.rs
+@@ -52,7 +52,7 @@ pub struct Scene {
+     pub surfaces: Vec<PaintSurface>,
+     /// Backdrop-blur regions — deliberately OUTSIDE the primitive batch
+     /// stream: the renderer breaks its render pass at each blur's order to
+-    /// snapshot the framebuffer (macOS Metal; other renderers ignore them).
++    /// snapshot the framebuffer.
+     pub backdrop_blurs: Vec<BackdropBlur>,
+ }
+ 
+@@ -613,8 +613,8 @@ impl From<Underline> for Primitive {
+ 
+ /// A within-window backdrop blur region: the renderer snapshots everything
+ /// painted below this order and paints it back gaussian-blurred inside the
+-/// rounded bounds (frosted-glass popovers). macOS Metal only — see
+-/// [`crate::Window::paint_backdrop_blur`].
++/// rounded bounds, optionally shaded as glass. See
++/// [`crate::Window::paint_backdrop_blur`] and [`crate::Window::paint_glass`].
+ #[derive(Debug, Copy, Clone)]
+ #[repr(C)]
+ #[expect(missing_docs)]
+@@ -624,6 +624,87 @@ pub struct BackdropBlur {
+     pub bounds: Bounds<ScaledPixels>,
+     pub content_mask: ContentMask<ScaledPixels>,
+     pub corner_radii: Corners<ScaledPixels>,
++    pub glass: GlassStyle,
++}
++
++/// The glass material a backdrop blur is shaded with, resolved for one
++/// pane. Lengths are device pixels; colours are 0-1 in the framebuffer's
++/// (gamma-encoded) space. All zeros (`enabled == 0`) is a plain blur.
++///
++/// Per pixel: the blurred backdrop is sampled along the edge normal by
++/// `rim_bend` within the `lens_rim`-wide rim (falling off with
++/// `lens_curve`) and transformed by a cubic polynomial: each output channel
++/// `c` is `poly[c * 13..]` dotted with `r, g, b, r², g², b², rg, gb, rb, r³,
++/// g³, b³, 1`. An edge line then scales the colour by `1 + line + line_lit`
++/// times how much the edge faces `light_x`/`light_y` (decaying over
++/// `line_width`), and an inner glow adds `glow` (decaying over
++/// `glow_width`). Over a transparent backdrop the glass is `opacity` opaque.
++/// The pixel ring just outside the edge gets a hairline,
++/// `clamp(min(under, a * under + b), 0, 1)`, with `a` and `b` blended from
++/// `hairline[0..2]` on vertical edges to `hairline[2..4]` on horizontal ones.
++#[derive(Debug, Copy, Clone, PartialEq)]
++#[repr(C)]
++#[expect(missing_docs)]
++pub struct GlassStyle {
++    pub enabled: u32,
++    pub lens_rim: f32,
++    pub lens_curve: f32,
++    pub rim_bend: f32,
++    pub poly: [f32; 60],
++    pub opacity: f32,
++    pub line: f32,
++    pub line_lit: f32,
++    pub line_width: f32,
++    pub light_x: f32,
++    pub light_y: f32,
++    pub glow: f32,
++    pub glow_width: f32,
++    pub hairline: [f32; 4],
++    /// Tint, a colour matrix on the finished glass colour: `color *
++    /// tint_scale + luma(color) * tint_luma + tint_offset` per channel, with
++    /// Rec. 709 luma of the gamma-encoded colour. Untinted glass has a scale
++    /// of 1 and nothing else. The struct stays a multiple of 8 bytes, which
++    /// WGSL's storage layout requires of `BackdropBlur`.
++    pub tint_scale: [f32; 3],
++    pub tint_luma: [f32; 3],
++    pub tint_offset: [f32; 3],
++    pub pad: f32,
++}
++
++impl Default for GlassStyle {
++    fn default() -> Self {
++        Self {
++            enabled: 0,
++            lens_rim: 0.,
++            lens_curve: 0.,
++            rim_bend: 0.,
++            poly: [0.; 60],
++            opacity: 0.,
++            line: 0.,
++            line_lit: 0.,
++            line_width: 0.,
++            light_x: 0.,
++            light_y: 0.,
++            glow: 0.,
++            glow_width: 0.,
++            hairline: [0.; 4],
++            tint_scale: [1.; 3],
++            tint_luma: [0.; 3],
++            tint_offset: [0.; 3],
++            pad: 0.,
++        }
++    }
++}
++
++impl GlassStyle {
++    /// How far the shader may sample outside the pane's bounds.
++    pub fn reach(&self) -> f32 {
++        if self.enabled == 0 {
++            0.
++        } else {
++            self.rim_bend.abs() + 2.
++        }
++    }
+ }
+ 
+ #[derive(Debug, Copy, Clone)]
+diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
+index 4299e15..82cdc92 100644
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -13,7 +13,7 @@ use crate::{
+     PolychromeSprite,
+     Priority, PromptButton, PromptLevel, Quad, Render, RenderGlyphParams, RenderImage,
+     RenderImageParams, RenderSvgParams, Replay, ResizeEdge, SMOOTH_SVG_SCALE_FACTOR,
+-    SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, BackdropBlur, ScaledPixels, Scene, Shadow, SharedString, Size,
++    SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, BackdropBlur, GlassStyle, ScaledPixels, Scene, Shadow, SharedString, Size,
+     StrikethroughStyle, Style, SubpixelSprite, SubscriberSet, Subscription, SystemWindowTab,
+     SystemWindowTabController, TabStopMap, TaffyLayoutEngine, Task, TextRenderingMode, TextStyle,
+     TextStyleRefinement, ThermalState, TransformationMatrix, Underline, UnderlineStyle,
+@@ -4186,10 +4186,29 @@ impl Window {
+         bounds: Bounds<Pixels>,
+         corner_radii: Corners<Pixels>,
+         blur_radius: Pixels,
++    ) {
++        self.paint_glass(bounds, corner_radii, blur_radius, GlassStyle::default());
++    }
++
++    /// Paint a glass pane: [`Self::paint_backdrop_blur`] shaded with
++    /// `glass`, whose lengths are logical pixels here and scaled to device
++    /// pixels for the renderer.
++    pub fn paint_glass(
++        &mut self,
++        bounds: Bounds<Pixels>,
++        corner_radii: Corners<Pixels>,
++        blur_radius: Pixels,
++        glass: GlassStyle,
+     ) {
+         self.invalidator.debug_assert_paint();
+         let scale_factor = self.scale_factor();
+         let content_mask = self.content_mask().scale(scale_factor);
++        // One layer gives the splitter and the blur the same order, so the
++        // renderer paints the blur before the splitter's batch even when
++        // nothing else is painted above it. The extra 2px covers glass's
++        // hairline.
++        let layer_bounds = bounds.scale(scale_factor).dilate(ScaledPixels(2.));
++        self.next_frame.scene.push_layer(layer_bounds);
+         // Invisible splitter primitive: forces a batch boundary at this order
+         // so the renderer can break its render pass exactly here.
+         self.next_frame.scene.insert_primitive(Shadow {
+@@ -4210,7 +4229,15 @@ impl Window {
+             bounds: bounds.scale(scale_factor),
+             content_mask,
+             corner_radii: corner_radii.scale(scale_factor),
++            glass: GlassStyle {
++                lens_rim: glass.lens_rim * scale_factor,
++                rim_bend: glass.rim_bend * scale_factor,
++                line_width: glass.line_width * scale_factor,
++                glow_width: glass.glow_width * scale_factor,
++                ..glass
++            },
+         });
++        self.next_frame.scene.pop_layer();
+     }
+ 
+     /// Paint one or more quads into the scene for the next frame at the current stacking context.
+diff --git a/crates/gpui_macos/build.rs b/crates/gpui_macos/build.rs
+index 70e9a0b..79415df 100644
+--- a/crates/gpui_macos/build.rs
++++ b/crates/gpui_macos/build.rs
+@@ -52,6 +52,7 @@ mod macos_build {
+             "Shadow".into(),
+             "BackdropBlurInputIndex".into(),
+             "BackdropBlur".into(),
++            "GlassStyle".into(),
+             "QuadInputIndex".into(),
+             "Underline".into(),
+             "UnderlineInputIndex".into(),
+diff --git a/crates/gpui_macos/src/metal_renderer.rs b/crates/gpui_macos/src/metal_renderer.rs
+index 4be15aa..0285c9e 100644
+--- a/crates/gpui_macos/src/metal_renderer.rs
++++ b/crates/gpui_macos/src/metal_renderer.rs
+@@ -25,10 +25,8 @@ use metal::{
+     CAMetalLayer, CommandQueue, MTLGPUFamily, MTLPixelFormat, MTLResourceOptions, NSRange,
+     RenderPassColorAttachmentDescriptorRef,
+ };
+-use objc::{self, class, msg_send, sel, sel_impl};
++use objc::{self, msg_send, sel, sel_impl};
+ 
+-#[link(name = "MetalPerformanceShaders", kind = "framework")]
+-unsafe extern "C" {}
+ use parking_lot::Mutex;
+ 
+ use std::{cell::Cell, ffi::c_void, mem, ptr, sync::Arc};
+@@ -153,15 +151,23 @@ pub(crate) struct MetalRenderer {
+     path_sprites_pipeline_state: metal::RenderPipelineState,
+     shadows_pipeline_state: metal::RenderPipelineState,
+     backdrop_blur_pipeline_state: metal::RenderPipelineState,
++    /// Copies the region under a blur out of the drawable, and blurs it
++    /// there, in render passes: a blit or compute pass between a frame's
++    /// render passes made the driver hold tens of megabytes for the window.
++    backdrop_copy_pipeline_state: metal::RenderPipelineState,
++    /// The gaussian's horizontal pass, into the half-float `backdrop_temp`.
++    backdrop_gaussian_wide_pipeline_state: metal::RenderPipelineState,
++    backdrop_gaussian_pipeline_state: metal::RenderPipelineState,
+     /// Framebuffer snapshot (blit dst / gaussian src) + the blurred result the
+     /// draw samples from. Sized to the padded blur region (not the drawable),
+     /// recreated when the needed region outgrows them, and released along with
+-    /// `backdrop_kernel` after [`SCRATCH_RELEASE_AFTER_FRAMES`] blur-free
++    /// `backdrop_temp` after [`SCRATCH_RELEASE_AFTER_FRAMES`] blur-free
+     /// frames.
+     backdrop_scratch: Option<metal::Texture>,
+     backdrop_blurred: Option<metal::Texture>,
+-    /// Cached `MPSImageGaussianBlur` kernel, keyed by sigma.
+-    backdrop_kernel: Option<(f32, *mut objc::runtime::Object)>,
++    /// The horizontally blurred snapshot, in half floats so the vertical pass
++    /// reads it unrounded.
++    backdrop_temp: Option<metal::Texture>,
+     /// Consecutive frames rendered without any backdrop blur / any path.
+     blur_free_frames: u32,
+     path_free_frames: u32,
+@@ -190,8 +196,6 @@ pub(crate) struct MetalRenderer {
+ 
+ impl Drop for MetalRenderer {
+     fn drop(&mut self) {
+-        // The MPS kernel is a manually-retained ObjC object; everything else
+-        // releases through metal-rs wrappers.
+         self.release_backdrop_resources();
+     }
+ }
+@@ -219,8 +223,7 @@ impl MetalRenderer {
+         // https://developer.apple.com/documentation/metal/managing-your-game-window-for-metal-in-macos
+         layer.set_opaque(!transparent);
+         layer.set_maximum_drawable_count(3);
+-        // Allow texture reading for visual tests (captures screenshots without ScreenCaptureKit)
+-        #[cfg(any(test, feature = "test-support"))]
++        // Backdrop blurs read the drawable in a shader.
+         layer.set_framebuffer_only(false);
+         unsafe {
+             let _: () = msg_send![&*layer, setAllowsNextDrawableTimeout: NO];
+@@ -343,6 +346,30 @@ impl MetalRenderer {
+             "backdrop_blur_fragment",
+             MTLPixelFormat::BGRA8Unorm,
+         )?;
++        let backdrop_copy_pipeline_state = build_pipeline_state_no_blend(
++            &device,
++            &library,
++            "backdrop_copy",
++            "backdrop_pass_vertex",
++            "backdrop_copy_fragment",
++            MTLPixelFormat::BGRA8Unorm,
++        )?;
++        let backdrop_gaussian_wide_pipeline_state = build_pipeline_state_no_blend(
++            &device,
++            &library,
++            "backdrop_gaussian_wide",
++            "backdrop_pass_vertex",
++            "backdrop_gaussian_fragment",
++            MTLPixelFormat::RGBA16Float,
++        )?;
++        let backdrop_gaussian_pipeline_state = build_pipeline_state_no_blend(
++            &device,
++            &library,
++            "backdrop_gaussian",
++            "backdrop_pass_vertex",
++            "backdrop_gaussian_fragment",
++            MTLPixelFormat::BGRA8Unorm,
++        )?;
+         let quads_pipeline_state = build_pipeline_state(
+             &device,
+             &library,
+@@ -411,9 +438,12 @@ impl MetalRenderer {
+             path_sprites_pipeline_state,
+             shadows_pipeline_state,
+             backdrop_blur_pipeline_state,
++            backdrop_copy_pipeline_state,
++            backdrop_gaussian_wide_pipeline_state,
++            backdrop_gaussian_pipeline_state,
+             backdrop_scratch: None,
+             backdrop_blurred: None,
+-            backdrop_kernel: None,
++            backdrop_temp: None,
+             blur_free_frames: 0,
+             path_free_frames: 0,
+             stats_last_log: None,
+@@ -979,7 +1009,7 @@ impl MetalRenderer {
+                 // so snapshot just that padded region instead of the whole
+                 // drawable (popovers are small; this is a 10-20x reduction).
+                 let sigma = blur.blur_radius.0.max(1.0);
+-                let padding = (sigma * 3.0).ceil() + 2.0;
++                let padding = (sigma * 3.0 + blur.glass.reach()).ceil() + 2.0;
+                 let visible = blur.bounds.intersect(&blur.content_mask.bounds);
+                 let drawable_width = texture.width() as i64;
+                 let drawable_height = texture.height() as i64;
+@@ -994,7 +1024,7 @@ impl MetalRenderer {
+                     continue;
+                 }
+                 command_encoder.end_encoding();
+-                let (scratch, blurred) = self.ensure_backdrop_scratch(
++                let (scratch, temp, blurred) = self.ensure_backdrop_scratch(
+                     (x1 - x0) as u64,
+                     (y1 - y0) as u64,
+                     drawable_width as u64,
+@@ -1010,39 +1040,15 @@ impl MetalRenderer {
+                 // region is clamped against it).
+                 let copy_x = x0.min(drawable_width - scratch.width() as i64).max(0) as u64;
+                 let copy_y = y0.min(drawable_height - scratch.height() as i64).max(0) as u64;
+-                let blit = command_buffer.new_blit_command_encoder();
+-                blit.copy_from_texture(
++                self.encode_backdrop_blur(
++                    command_buffer,
+                     texture,
+-                    0,
+-                    0,
+-                    metal::MTLOrigin {
+-                        x: copy_x,
+-                        y: copy_y,
+-                        z: 0,
+-                    },
+-                    metal::MTLSize {
+-                        width: scratch.width(),
+-                        height: scratch.height(),
+-                        depth: 1,
+-                    },
++                    [copy_x as u32, copy_y as u32],
++                    sigma,
+                     &scratch,
+-                    0,
+-                    0,
+-                    metal::MTLOrigin { x: 0, y: 0, z: 0 },
++                    &temp,
++                    &blurred,
+                 );
+-                blit.end_encoding();
+-                {
+-                    use metal::foreign_types::ForeignType as _;
+-                    let kernel = self.ensure_gaussian_kernel(sigma);
+-                    unsafe {
+-                        let _: () = msg_send![
+-                            kernel,
+-                            encodeToCommandBuffer: command_buffer.as_ptr() as *mut objc::runtime::Object
+-                            sourceTexture: scratch.as_ptr() as *mut objc::runtime::Object
+-                            destinationTexture: blurred.as_ptr() as *mut objc::runtime::Object
+-                        ];
+-                    }
+-                }
+                 command_encoder = new_command_encoder_for_texture(
+                     command_buffer,
+                     texture,
+@@ -1064,6 +1070,7 @@ impl MetalRenderer {
+                     &mut instance_offset,
+                     viewport_size,
+                     &blurred,
++                    &scratch,
+                     command_encoder,
+                 ) {
+                     command_encoder.end_encoding();
+@@ -1341,7 +1348,7 @@ impl MetalRenderer {
+         drawable_width: u64,
+         drawable_height: u64,
+         format: MTLPixelFormat,
+-    ) -> (metal::Texture, metal::Texture) {
++    ) -> (metal::Texture, metal::Texture, metal::Texture) {
+         let reusable = self.backdrop_scratch.as_ref().is_some_and(|scratch| {
+             scratch.pixel_format() == format
+                 && scratch.width() >= needed_width
+@@ -1360,17 +1367,18 @@ impl MetalRenderer {
+             descriptor.set_pixel_format(format);
+             descriptor.set_width(width);
+             descriptor.set_height(height);
+-            descriptor.set_usage(metal::MTLTextureUsage::ShaderRead);
+-            descriptor.set_storage_mode(metal::MTLStorageMode::Private);
+-            self.backdrop_scratch = Some(self.device.new_texture(&descriptor));
+-            // The gaussian kernel writes via compute — the dst needs ShaderWrite.
+             descriptor.set_usage(
+-                metal::MTLTextureUsage::ShaderRead | metal::MTLTextureUsage::ShaderWrite,
++                metal::MTLTextureUsage::ShaderRead | metal::MTLTextureUsage::RenderTarget,
+             );
++            descriptor.set_storage_mode(metal::MTLStorageMode::Private);
++            self.backdrop_scratch = Some(self.device.new_texture(&descriptor));
+             self.backdrop_blurred = Some(self.device.new_texture(&descriptor));
++            descriptor.set_pixel_format(MTLPixelFormat::RGBA16Float);
++            self.backdrop_temp = Some(self.device.new_texture(&descriptor));
+         }
+         (
+             self.backdrop_scratch.clone().unwrap(),
++            self.backdrop_temp.clone().unwrap(),
+             self.backdrop_blurred.clone().unwrap(),
+         )
+     }
+@@ -1380,39 +1388,102 @@ impl MetalRenderer {
+     fn release_backdrop_resources(&mut self) {
+         self.backdrop_scratch = None;
+         self.backdrop_blurred = None;
+-        if let Some((_, kernel)) = self.backdrop_kernel.take() {
+-            unsafe {
+-                let _: () = msg_send![kernel, release];
+-            }
+-        }
++        self.backdrop_temp = None;
+     }
+ 
+-    /// The cached `MPSImageGaussianBlur` for `sigma` (device px) — Apple's
+-    /// optimized true gaussian; hand-rolled sparse taps ghosted on text.
+-    fn ensure_gaussian_kernel(&mut self, sigma: f32) -> *mut objc::runtime::Object {
+-        use metal::foreign_types::ForeignType as _;
+-        if let Some((cached_sigma, kernel)) = self.backdrop_kernel {
+-            if (cached_sigma - sigma).abs() < 0.01 {
+-                return kernel;
+-            }
+-            unsafe {
+-                let _: () = msg_send![kernel, release];
+-            }
+-        }
+-        let kernel: *mut objc::runtime::Object = unsafe {
+-            let alloc: *mut objc::runtime::Object = msg_send![class!(MPSImageGaussianBlur), alloc];
+-            let kernel: *mut objc::runtime::Object = msg_send![
+-                alloc,
+-                initWithDevice: self.device.as_ptr() as *mut objc::runtime::Object
+-                sigma: sigma
+-            ];
+-            // Clamp edges: the default zero-edge mode bleeds transparent black
+-            // into blurs near the window border (dark vignette).
+-            let _: () = msg_send![kernel, setEdgeMode: 1u64];
+-            kernel
++    /// Copy `scratch`-sized pixels from `drawable` at `origin` into
++    /// `scratch`, then gaussian-blur them by `sigma` device pixels into
++    /// `blurred`: the same separable blur, edges clamped, as
++    /// `cap_glass::Image::blurred`, with the pass between in half floats.
++    #[allow(clippy::too_many_arguments)]
++    fn encode_backdrop_blur(
++        &self,
++        command_buffer: &metal::CommandBufferRef,
++        drawable: &metal::TextureRef,
++        origin: [u32; 2],
++        sigma: f32,
++        scratch: &metal::TextureRef,
++        temp: &metal::TextureRef,
++        blurred: &metal::TextureRef,
++    ) {
++        #[repr(C)]
++        struct Gaussian {
++            direction: [i32; 2],
++            radius: i32,
++            pad: i32,
++        }
++        let size: Size<DevicePixels> = size(
++            (scratch.width() as i32).into(),
++            (scratch.height() as i32).into(),
++        );
++        let radius = (sigma * 3.).ceil().max(0.) as i32;
++        let mut weights: Vec<f32> = (0..=radius)
++            .map(|offset| (-((offset * offset) as f32) / (2. * sigma * sigma)).exp())
++            .collect();
++        let total = weights[0] + 2. * weights[1..].iter().sum::<f32>();
++        for weight in &mut weights {
++            *weight /= total;
++        }
++        let weight_bytes = unsafe {
++            std::slice::from_raw_parts(
++                weights.as_ptr() as *const u8,
++                mem::size_of_val(weights.as_slice()),
++            )
+         };
+-        self.backdrop_kernel = Some((sigma, kernel));
+-        kernel
++        let pass = |target: &metal::TextureRef,
++                    pipeline: &metal::RenderPipelineStateRef,
++                    source: &metal::TextureRef,
++                    bytes: &[u8]| {
++            let encoder =
++                new_command_encoder_for_texture(command_buffer, target, size, |attachment| {
++                    attachment.set_load_action(metal::MTLLoadAction::DontCare);
++                });
++            encoder.set_render_pipeline_state(pipeline);
++            encoder.set_fragment_texture(0, Some(source));
++            encoder.set_fragment_bytes(0, bytes.len() as u64, bytes.as_ptr() as *const c_void);
++            encoder.set_fragment_bytes(
++                1,
++                weight_bytes.len() as u64,
++                weight_bytes.as_ptr() as *const c_void,
++            );
++            encoder.draw_primitives(metal::MTLPrimitiveType::Triangle, 0, 3);
++            encoder.end_encoding();
++        };
++        let as_bytes = |value: &Gaussian| unsafe {
++            std::slice::from_raw_parts(
++                value as *const Gaussian as *const u8,
++                mem::size_of::<Gaussian>(),
++            )
++        };
++        let origin_bytes = unsafe {
++            std::slice::from_raw_parts(origin.as_ptr() as *const u8, mem::size_of_val(&origin))
++        };
++        pass(
++            scratch,
++            &self.backdrop_copy_pipeline_state,
++            drawable,
++            origin_bytes,
++        );
++        pass(
++            temp,
++            &self.backdrop_gaussian_wide_pipeline_state,
++            scratch,
++            as_bytes(&Gaussian {
++                direction: [1, 0],
++                radius,
++                pad: 0,
++            }),
++        );
++        pass(
++            blurred,
++            &self.backdrop_gaussian_pipeline_state,
++            temp,
++            as_bytes(&Gaussian {
++                direction: [0, 1],
++                radius,
++                pad: 0,
++            }),
++        );
+     }
+ 
+     fn draw_backdrop_blurs(
+@@ -1425,6 +1496,7 @@ impl MetalRenderer {
+         instance_offset: &mut usize,
+         viewport_size: Size<DevicePixels>,
+         source_texture: &metal::TextureRef,
++        sharp_texture: &metal::TextureRef,
+         command_encoder: &metal::RenderCommandEncoderRef,
+     ) -> bool {
+         if blurs.is_empty() {
+@@ -1462,6 +1534,10 @@ impl MetalRenderer {
+             BackdropBlurInputIndex::SourceTexture as u64,
+             Some(source_texture),
+         );
++        command_encoder.set_fragment_texture(
++            BackdropBlurInputIndex::SharpTexture as u64,
++            Some(sharp_texture),
++        );
+ 
+         let blur_bytes_len = mem::size_of_val(blurs);
+         let buffer_contents =
+@@ -2397,6 +2473,8 @@ enum BackdropBlurInputIndex {
+     /// Drawable rect the snapshot covers (x, y, w, h in device px) — the
+     /// fragment shader maps frag position → snapshot UV through it.
+     SourceRect = 4,
++    /// The unblurred snapshot glass antialiases its edge against.
++    SharpTexture = 5,
+ }
+ 
+ #[repr(C)]
+@@ -2568,7 +2646,7 @@ mod renderer_hardening_tests {
+ #[cfg(test)]
+ mod backdrop_blur_tests {
+     use super::*;
+-    use gpui::{Corners, Edges, Hsla, solid_background, transparent_black};
++    use gpui::{Corners, Edges, GlassStyle, Hsla, solid_background, transparent_black};
+     use image::RgbaImage;
+ 
+     const VIEW_W: i32 = 640;
+@@ -2645,6 +2723,7 @@ mod backdrop_blur_tests {
+             bounds: blur_bounds,
+             content_mask: ContentMask { bounds: viewport() },
+             corner_radii: Corners::default(),
++            glass: Default::default(),
+         });
+         scene.pop_layer();
+     }
+@@ -2741,6 +2820,249 @@ mod backdrop_blur_tests {
+         );
+     }
+ 
++    fn push_stripes(scene: &mut Scene) {
++        let mut x = 0.;
++        let mut dark = true;
++        while x < VIEW_W as f32 {
++            push_quad(
++                scene,
++                bounds(x, 0., 8., VIEW_H as f32),
++                if dark { 0.05 } else { 0.95 },
++            );
++            x += 8.;
++            dark = !dark;
++        }
++    }
++
++    fn test_glass() -> GlassStyle {
++        let mut poly = [0.; 60];
++        poly[..20].copy_from_slice(&[
++            0.6, 0.15, 0.05, -0.2, 0.1, 0.0, 0.05, 0.0, 0.02, 0.1, 0.0, -0.02, 0.04, -0.03,
++            0.0, 0.02, 0.0, 0.0, 0.05, 0.22,
++        ]);
++        poly[20..40].copy_from_slice(&[
++            0.05, 0.5, 0.1, 0.0, -0.15, 0.05, 0.0, 0.04, 0.0, 0.0, 0.08, 0.0, 0.0, 0.03, -0.04,
++            0.0, 0.02, 0.0, -0.03, 0.2,
++        ]);
++        poly[40..].copy_from_slice(&[
++            0.12, 0.05, 0.55, 0.0, 0.0, -0.1, 0.02, 0.0, 0.03, -0.03, 0.0, 0.06, 0.0, 0.0,
++            0.03, 0.0, -0.05, 0.04, 0.02, 0.18,
++        ]);
++        GlassStyle {
++            enabled: 1,
++            lens_rim: 28.,
++            lens_curve: 0.4,
++            rim_bend: -40.,
++            poly,
++            opacity: 0.6,
++            line: -0.1,
++            line_lit: 0.05,
++            line_width: 1.,
++            light_x: -0.7,
++            light_y: -0.7,
++            glow: 0.04,
++            glow_width: 6.,
++            hairline: [0.86, -0.12, 0.92, -0.08],
++            tint_scale: [0.4, 0.4, 0.4],
++            tint_luma: [0.05, 0.12, 0.25],
++            tint_offset: [0.02, 0.15, 0.3],
++            pad: 0.,
++        }
++    }
++
++    fn gaussian_blur(image: &RgbaImage, sigma: f32) -> Vec<[f32; 4]> {
++        let (w, h) = (image.width() as i32, image.height() as i32);
++        let radius = (sigma * 3.).ceil() as i32;
++        let weights: Vec<f32> = (-radius..=radius)
++            .map(|i| (-(i * i) as f32 / (2. * sigma * sigma)).exp())
++            .collect();
++        let total: f32 = weights.iter().sum();
++        let pass = |src: &dyn Fn(i32, i32) -> [f32; 4], horizontal: bool| -> Vec<[f32; 4]> {
++            let mut out = vec![[0.; 4]; (w * h) as usize];
++            for y in 0..h {
++                for x in 0..w {
++                    let mut acc = [0.; 4];
++                    for (k, weight) in weights.iter().enumerate() {
++                        let offset = k as i32 - radius;
++                        let (sx, sy) = if horizontal {
++                            ((x + offset).clamp(0, w - 1), y)
++                        } else {
++                            (x, (y + offset).clamp(0, h - 1))
++                        };
++                        let px = src(sx, sy);
++                        for c in 0..4 {
++                            acc[c] += px[c] * weight / total;
++                        }
++                    }
++                    out[(y * w + x) as usize] = acc;
++                }
++            }
++            out
++        };
++        let first = pass(
++            &|x, y| {
++                let p = image.get_pixel(x as u32, y as u32);
++                [p[0] as f32, p[1] as f32, p[2] as f32, p[3] as f32]
++            },
++            true,
++        );
++        pass(&|x, y| first[(y * w + x) as usize], false)
++    }
++
++    /// The glass shader against the same math on the CPU: the snapshot is
++    /// gaussian-blurred, sampled along the edge normal in the rim, then
++    /// colour-transformed, compressed and lit.
++    #[test]
++    fn glass_matches_the_cpu_model() {
++        if metal::Device::system_default().is_none() {
++            return;
++        }
++        let pane = bounds(200., 140., 240., 160.);
++        let radius = 30.;
++        let sigma = 12.;
++        let glass = test_glass();
++
++        let mut base = Scene::default();
++        push_stripes(&mut base);
++        let backdrop = render(&mut base);
++
++        let mut scene = Scene::default();
++        push_stripes(&mut scene);
++        scene.push_layer(pane);
++        scene.insert_primitive(Shadow {
++            order: 0,
++            blur_radius: ScaledPixels(0.),
++            bounds: pane,
++            corner_radii: Corners::all(ScaledPixels(radius)),
++            content_mask: ContentMask { bounds: viewport() },
++            color: transparent_black(),
++            element_bounds: pane,
++            element_corner_radii: Corners::all(ScaledPixels(radius)),
++            inset: 0,
++            pad: 0,
++        });
++        scene.insert_backdrop_blur(BackdropBlur {
++            order: 0,
++            blur_radius: ScaledPixels(sigma),
++            bounds: pane,
++            content_mask: ContentMask { bounds: viewport() },
++            corner_radii: Corners::all(ScaledPixels(radius)),
++            glass,
++        });
++        scene.pop_layer();
++        let rendered = render(&mut scene);
++
++        let blurred = gaussian_blur(&backdrop, sigma);
++        let width = VIEW_W;
++        let sample = |x: f32, y: f32| -> [f32; 4] {
++            let fx = (x - 0.5).clamp(0., (VIEW_W - 1) as f32);
++            let fy = (y - 0.5).clamp(0., (VIEW_H - 1) as f32);
++            let (x0, y0) = (fx.floor() as i32, fy.floor() as i32);
++            let (x1, y1) = ((x0 + 1).min(VIEW_W - 1), (y0 + 1).min(VIEW_H - 1));
++            let (tx, ty) = (fx - x0 as f32, fy - y0 as f32);
++            let at = |x: i32, y: i32| blurred[(y * width + x) as usize];
++            let (a, b, c, d) = (at(x0, y0), at(x1, y0), at(x0, y1), at(x1, y1));
++            std::array::from_fn(|i| {
++                let top = a[i] + (b[i] - a[i]) * tx;
++                top + (c[i] + (d[i] - c[i]) * tx - top) * ty
++            })
++        };
++        let sdf = |x: f32, y: f32| -> f32 {
++            let half = (pane.size.width.0 / 2., pane.size.height.0 / 2.);
++            let qx = (x - (pane.origin.x.0 + half.0)).abs() - (half.0 - radius);
++            let qy = (y - (pane.origin.y.0 + half.1)).abs() - (half.1 - radius);
++            (qx.max(0.).powi(2) + qy.max(0.).powi(2)).sqrt() + qx.max(qy).min(0.) - radius
++        };
++
++        let mut errors = Vec::new();
++        for y in (pane.origin.y.0 as i32 - 2)..(pane.origin.y.0 + pane.size.height.0) as i32 + 2 {
++            for x in (pane.origin.x.0 as i32 - 2)..(pane.origin.x.0 + pane.size.width.0) as i32 + 2
++            {
++                let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
++                let d = sdf(px, py);
++                let coverage = (0.5 - d).clamp(0., 1.);
++                let ring = (1.5 - d).clamp(0., 1.) - coverage;
++                let (nx, ny) = {
++                    let dx = sdf(px + 0.5, py) - sdf(px - 0.5, py);
++                    let dy = sdf(px, py + 0.5) - sdf(px, py - 0.5);
++                    let len = (dx * dx + dy * dy).sqrt().max(1e-6);
++                    (dx / len, dy / len)
++                };
++                let vertical = nx * nx;
++                let hair_a = glass.hairline[2] + (glass.hairline[0] - glass.hairline[2]) * vertical;
++                let hair_b = glass.hairline[3] + (glass.hairline[1] - glass.hairline[3]) * vertical;
++                let raw = backdrop.get_pixel(x as u32, y as u32);
++                let under: [f32; 3] = std::array::from_fn(|i| {
++                    let value = raw[i] as f32 / 255.;
++                    let line = value.min(hair_a * value + hair_b).clamp(0., 1.);
++                    (value + (line - value) * ring) * 255.
++                });
++                let expected: [f32; 3] = if coverage <= 0. {
++                    under
++                } else {
++                    let edge = (-d).max(0.);
++                    let rim = (-(edge / glass.lens_rim).powf(glass.lens_curve)).exp();
++                    let s = sample(
++                        px + nx * glass.rim_bend * rim,
++                        py + ny * glass.rim_bend * rim,
++                    );
++                    let c = [s[0] / 255., s[1] / 255., s[2] / 255.];
++                    let features = [
++                        c[0],
++                        c[1],
++                        c[2],
++                        c[0] * c[0],
++                        c[1] * c[1],
++                        c[2] * c[2],
++                        c[0] * c[1],
++                        c[1] * c[2],
++                        c[0] * c[2],
++                        c[0] * c[0] * c[0],
++                        c[1] * c[1] * c[1],
++                        c[2] * c[2] * c[2],
++                        c[0] * c[0] * c[1],
++                        c[0] * c[0] * c[2],
++                        c[1] * c[1] * c[0],
++                        c[1] * c[1] * c[2],
++                        c[2] * c[2] * c[0],
++                        c[2] * c[2] * c[1],
++                        c[0] * c[1] * c[2],
++                        1.,
++                    ];
++                    let facing = nx * glass.light_x + ny * glass.light_y;
++                    let line =
++                        (-edge / glass.line_width).exp() * (glass.line + glass.line_lit * facing);
++                    let glow = (-edge / glass.glow_width).exp() * glass.glow;
++                    let shaded: [f32; 3] = std::array::from_fn(|i| {
++                        let value: f32 =
++                            (0..20).map(|t| glass.poly[i * 20 + t] * features[t]).sum();
++                        (value * (1. + line) + glow).clamp(0., 1.)
++                    });
++                    let luma = shaded[0] * 0.2126 + shaded[1] * 0.7152 + shaded[2] * 0.0722;
++                    std::array::from_fn(|i| {
++                        let value = (shaded[i] * glass.tint_scale[i]
++                            + luma * glass.tint_luma[i]
++                            + glass.tint_offset[i])
++                            .clamp(0., 1.)
++                            * 255.;
++                        under[i] + (value - under[i]) * coverage
++                    })
++                };
++                let got = rendered.get_pixel(x as u32, y as u32);
++                for c in 0..3 {
++                    errors.push((got[c] as f32 - expected[c]).abs());
++                }
++            }
++        }
++        errors.sort_by(f32::total_cmp);
++        let mean = errors.iter().sum::<f32>() / errors.len() as f32;
++        let p99 = errors[errors.len() * 99 / 100];
++        assert!(
++            mean < 1.5 && p99 < 8.,
++            "glass vs CPU model: mean {mean:.2}, p99 {p99:.2}"
++        );
++    }
++
+     #[test]
+     fn two_blurs_of_different_sizes_in_one_frame() {
+         if metal::Device::system_default().is_none() {
+diff --git a/crates/gpui_macos/src/shaders.metal b/crates/gpui_macos/src/shaders.metal
+index e087c0d..4692c8f 100644
+--- a/crates/gpui_macos/src/shaders.metal
++++ b/crates/gpui_macos/src/shaders.metal
+@@ -1335,6 +1335,48 @@ float4 fill_color(Background background,
+   return color;
+ }
+ 
++struct BackdropPassOutput {
++  float4 position [[position]];
++};
++
++vertex BackdropPassOutput backdrop_pass_vertex(uint vertex_id [[vertex_id]]) {
++  float2 uv = float2((vertex_id << 1) & 2, vertex_id & 2);
++  return BackdropPassOutput{float4(uv * 2. - 1., 0., 1.)};
++}
++
++fragment float4 backdrop_copy_fragment(BackdropPassOutput input [[stage_in]],
++                                       constant uint2 &origin [[buffer(0)]],
++                                       texture2d<float> source [[texture(0)]]) {
++  return source.read(uint2(input.position.xy) + origin);
++}
++
++struct BackdropGaussian {
++  int2 direction;
++  int radius;
++  int pad;
++};
++
++// One direction of the separable gaussian, edges clamped:
++// `cap_glass::metrics::separable_blur`.
++// `weights` holds the normalised kernel from the centre out, computed once
++// per blur rather than per pixel.
++fragment float4 backdrop_gaussian_fragment(
++    BackdropPassOutput input [[stage_in]],
++    constant BackdropGaussian &gaussian [[buffer(0)]],
++    constant float *weights [[buffer(1)]],
++    texture2d<float> source [[texture(0)]]) {
++  int2 last = int2(source.get_width(), source.get_height()) - 1;
++  int2 center = int2(input.position.xy);
++  float4 sum = weights[0] * source.read(uint2(center));
++  for (int offset = 1; offset <= gaussian.radius; offset++) {
++    int2 step = gaussian.direction * offset;
++    sum += weights[offset] *
++           (source.read(uint2(clamp(center + step, int2(0), last))) +
++            source.read(uint2(clamp(center - step, int2(0), last))));
++  }
++  return sum;
++}
++
+ struct BackdropBlurVertexOutput {
+   float4 position [[position]];
+   uint blur_id [[flat]];
+@@ -1354,9 +1396,17 @@ vertex BackdropBlurVertexOutput backdrop_blur_vertex(
+     [[buffer(BackdropBlurInputIndex_ViewportSize)]]) {
+   float2 unit_vertex = unit_vertices[unit_vertex_id];
+   BackdropBlur blur = blurs[blur_id];
++  // Glass draws a hairline in the pixel ring just outside its edge.
++  Bounds_ScaledPixels bounds = blur.bounds;
++  if (blur.glass.enabled != 0) {
++    bounds.origin.x -= 2.;
++    bounds.origin.y -= 2.;
++    bounds.size.width += 4.;
++    bounds.size.height += 4.;
++  }
+   float4 device_position =
+-      to_device_position(unit_vertex, blur.bounds, viewport_size);
+-  float4 clip_distance = distance_from_clip_rect(unit_vertex, blur.bounds,
++      to_device_position(unit_vertex, bounds, viewport_size);
++  float4 clip_distance = distance_from_clip_rect(unit_vertex, bounds,
+                                                  blur.content_mask.bounds);
+   return BackdropBlurVertexOutput{
+       device_position,
+@@ -1364,26 +1414,88 @@ vertex BackdropBlurVertexOutput backdrop_blur_vertex(
+       {clip_distance.x, clip_distance.y, clip_distance.z, clip_distance.w}};
+ }
+ 
++float3 glass_shade(GlassStyle glass, float3 c, float edge, float2 normal) {
++  // The full cubic in r, g and b; `cap_glass::model::poly_features`.
++  float features[20] = {c.r, c.g, c.b, c.r * c.r, c.g * c.g, c.b * c.b,
++                        c.r * c.g, c.g * c.b, c.r * c.b, c.r * c.r * c.r,
++                        c.g * c.g * c.g, c.b * c.b * c.b, c.r * c.r * c.g,
++                        c.r * c.r * c.b, c.g * c.g * c.r, c.g * c.g * c.b,
++                        c.b * c.b * c.r, c.b * c.b * c.g, c.r * c.g * c.b, 1.};
++  float3 color = float3(0.);
++  for (int term = 0; term < 20; term++) {
++    color += features[term] *
++             float3(glass.poly[term], glass.poly[20 + term], glass.poly[40 + term]);
++  }
++  float facing = dot(normal, float2(glass.light_x, glass.light_y));
++  float line = exp(-edge / glass.line_width) * (glass.line + glass.line_lit * facing);
++  float glow = exp(-edge / glass.glow_width) * glass.glow;
++  return color * (1. + line) + glow;
++}
++
+ fragment float4 backdrop_blur_fragment(
+     BackdropBlurFragmentInput input [[stage_in]],
+     constant BackdropBlur *blurs [[buffer(BackdropBlurInputIndex_Blurs)]],
+     constant float4 &source_rect [[buffer(BackdropBlurInputIndex_SourceRect)]],
+     texture2d<float> source_texture
+-    [[texture(BackdropBlurInputIndex_SourceTexture)]]) {
++    [[texture(BackdropBlurInputIndex_SourceTexture)]],
++    texture2d<float> sharp_texture
++    [[texture(BackdropBlurInputIndex_SharpTexture)]]) {
+   constexpr sampler source_sampler(coord::normalized, address::clamp_to_edge,
+                                    filter::linear);
+   BackdropBlur blur = blurs[input.blur_id];
++  float2 position = input.position.xy;
++  float distance = quad_sdf(position, blur.bounds, blur.corner_radii);
+ 
+-  // Rounded-rect clip: blending is disabled on this pipeline (the blur
+-  // REPLACES the region), so fragments outside must discard, not return 0.
+-  float distance = quad_sdf(input.position.xy, blur.bounds, blur.corner_radii);
+-  if (distance > 0.) {
+-    discard_fragment();
++  // The snapshot was gaussian-blurred on the GPU (MPSImageGaussianBlur)
++  // before this pass. It covers only source_rect (x, y, w, h) of the
++  // drawable, not the whole viewport.
++  if (blur.glass.enabled == 0) {
++    // Blending is disabled on this pipeline (the blur REPLACES the region),
++    // so fragments outside must discard, not return 0.
++    if (distance > 0.) {
++      discard_fragment();
++    }
++    float2 uv = (position - source_rect.xy) / source_rect.zw;
++    return source_texture.sample(source_sampler, uv);
+   }
+ 
+-  // The snapshot was gaussian-blurred on the GPU (MPSImageGaussianBlur)
+-  // before this pass — one clean sample. The snapshot covers only
+-  // source_rect (x, y, w, h) of the drawable, not the whole viewport.
+-  float2 uv = (input.position.xy - source_rect.xy) / source_rect.zw;
+-  return source_texture.sample(source_sampler, uv);
++  // Glass antialiases its own edge against the unblurred snapshot, and
++  // draws its hairline in the ring just outside the edge.
++  float coverage = saturate(0.5 - distance);
++  float ring = saturate(1.5 - distance) - coverage;
++  if (coverage <= 0. && ring <= 0.) {
++    discard_fragment();
++  }
++  float2 normal = float2(
++      quad_sdf(position + float2(0.5, 0.), blur.bounds, blur.corner_radii) -
++          quad_sdf(position - float2(0.5, 0.), blur.bounds, blur.corner_radii),
++      quad_sdf(position + float2(0., 0.5), blur.bounds, blur.corner_radii) -
++          quad_sdf(position - float2(0., 0.5), blur.bounds, blur.corner_radii));
++  normal /= max(length(normal), 1e-6);
++  float vertical = normal.x * normal.x;
++  float hair_a = mix(blur.glass.hairline[2], blur.glass.hairline[0], vertical);
++  float hair_b = mix(blur.glass.hairline[3], blur.glass.hairline[1], vertical);
++  float4 under = sharp_texture.sample(
++      source_sampler, (position - source_rect.xy) / source_rect.zw);
++  float3 hairline = saturate(min(under.rgb, hair_a * under.rgb + hair_b));
++  under.rgb = mix(under.rgb, hairline, ring);
++  if (coverage <= 0.) {
++    return under;
++  }
++  float edge = max(-distance, 0.);
++  float rim = exp(-pow(edge / blur.glass.lens_rim, blur.glass.lens_curve));
++  float2 sample_at = position + normal * blur.glass.rim_bend * rim;
++  float4 backdrop = source_texture.sample(
++      source_sampler, (sample_at - source_rect.xy) / source_rect.zw);
++  float3 straight = backdrop.a > 0. ? backdrop.rgb / backdrop.a : float3(0.);
++  float alpha = mix(backdrop.a, 1., blur.glass.opacity);
++  float3 glass = saturate(glass_shade(blur.glass, straight, edge, normal));
++  float luma = dot(glass, float3(0.2126, 0.7152, 0.0722));
++  glass = saturate(glass * float3(blur.glass.tint_scale[0], blur.glass.tint_scale[1],
++                                  blur.glass.tint_scale[2]) +
++                   luma * float3(blur.glass.tint_luma[0], blur.glass.tint_luma[1],
++                                 blur.glass.tint_luma[2]) +
++                   float3(blur.glass.tint_offset[0], blur.glass.tint_offset[1],
++                          blur.glass.tint_offset[2]));
++  return mix(under, float4(glass * alpha, alpha), coverage);
+ }
+diff --git a/crates/gpui_wgpu/src/shaders.wgsl b/crates/gpui_wgpu/src/shaders.wgsl
+index 011be71..2b82b2b 100644
+--- a/crates/gpui_wgpu/src/shaders.wgsl
++++ b/crates/gpui_wgpu/src/shaders.wgsl
+@@ -1399,3 +1399,204 @@ fn fs_surface(input: SurfaceVarying) -> @location(0) vec4<f32> {
+ 
+     return ycbcr_to_RGB * y_cb_cr;
+ }
++
++// --- backdrop blur and glass --- //
++
++struct GlassStyle {
++    enabled: u32,
++    lens_rim: f32,
++    lens_curve: f32,
++    rim_bend: f32,
++    poly: array<f32, 60>,
++    opacity: f32,
++    line_strength: f32,
++    line_lit: f32,
++    line_width: f32,
++    light_x: f32,
++    light_y: f32,
++    glow: f32,
++    glow_width: f32,
++    hairline: array<f32, 4>,
++    tint_scale: array<f32, 3>,
++    tint_luma: array<f32, 3>,
++    tint_offset: array<f32, 3>,
++    pad: f32,
++}
++
++struct BackdropBlur {
++    order: u32,
++    blur_radius: f32,
++    bounds: Bounds,
++    content_mask: Bounds,
++    corner_radii: Corners,
++    glass: GlassStyle,
++}
++
++// For the downsample and blur passes `source_rect` is the texel rect of the
++// source texture being read and `params` is (direction x, direction y,
++// sigma in source texels or the downsample factor, unused). For the glass
++// pass `source_rect` is the drawable rect that was blurred, `params.xy` how
++// far it was scaled down on each axis (the blurred texture holds it from
++// texel 0), and `sharp_texture_size` the size of the drawable-sized
++// unblurred copy.
++struct BackdropParams {
++    source_rect: vec4<f32>,
++    params: vec4<f32>,
++    source_texture_size: vec2<f32>,
++    sharp_texture_size: vec2<f32>,
++}
++
++@group(1) @binding(0) var<storage, read> backdrop_params: BackdropParams;
++@group(1) @binding(1) var t_backdrop: texture_2d<f32>;
++@group(1) @binding(2) var s_backdrop: sampler;
++@group(1) @binding(3) var<storage, read> b_backdrop_blurs: array<BackdropBlur>;
++@group(1) @binding(4) var t_backdrop_sharp: texture_2d<f32>;
++
++struct BackdropPassVarying {
++    @builtin(position) position: vec4<f32>,
++    @location(0) uv: vec2<f32>,
++}
++
++@vertex
++fn vs_backdrop_pass(@builtin(vertex_index) vertex_id: u32) -> BackdropPassVarying {
++    let uv = vec2<f32>(f32((vertex_id << 1u) & 2u), f32(vertex_id & 2u));
++    var out = BackdropPassVarying();
++    out.position = vec4<f32>(uv * vec2<f32>(2.0, -2.0) + vec2<f32>(-1.0, 1.0), 0.0, 1.0);
++    out.uv = uv;
++    return out;
++}
++
++fn backdrop_source_uv(uv: vec2<f32>) -> vec2<f32> {
++    let rect = backdrop_params.source_rect;
++    return (rect.xy + uv * rect.zw) / backdrop_params.source_texture_size;
++}
++
++@fragment
++fn fs_backdrop_downsample(input: BackdropPassVarying) -> @location(0) vec4<f32> {
++    let rect = backdrop_params.source_rect;
++    let texel = 1.0 / backdrop_params.source_texture_size;
++    let center = backdrop_source_uv(input.uv);
++    let quarter = texel * backdrop_params.params.z * 0.25;
++    let lo = (rect.xy + 0.5) * texel;
++    let hi = (rect.xy + rect.zw - 0.5) * texel;
++    return 0.25 * (
++        textureSampleLevel(t_backdrop, s_backdrop, clamp(center + vec2<f32>(-quarter.x, -quarter.y), lo, hi), 0.0) +
++        textureSampleLevel(t_backdrop, s_backdrop, clamp(center + vec2<f32>(quarter.x, -quarter.y), lo, hi), 0.0) +
++        textureSampleLevel(t_backdrop, s_backdrop, clamp(center + vec2<f32>(-quarter.x, quarter.y), lo, hi), 0.0) +
++        textureSampleLevel(t_backdrop, s_backdrop, clamp(center + vec2<f32>(quarter.x, quarter.y), lo, hi), 0.0));
++}
++
++@fragment
++fn fs_backdrop_blur_pass(input: BackdropPassVarying) -> @location(0) vec4<f32> {
++    let rect = backdrop_params.source_rect;
++    let sigma = max(backdrop_params.params.z, 0.5);
++    let radius = i32(ceil(sigma * 3.0));
++    let step = backdrop_params.params.xy / backdrop_params.source_texture_size;
++    let uv = backdrop_source_uv(input.uv);
++    let lo = (rect.xy + 0.5) / backdrop_params.source_texture_size;
++    let hi = (rect.xy + rect.zw - 0.5) / backdrop_params.source_texture_size;
++    var sum = vec4<f32>(0.0);
++    var total = 0.0;
++    for (var i = -radius; i <= radius; i++) {
++        let weight = exp(-f32(i * i) / (2.0 * sigma * sigma));
++        sum += weight * textureSampleLevel(t_backdrop, s_backdrop, clamp(uv + step * f32(i), lo, hi), 0.0);
++        total += weight;
++    }
++    return sum / total;
++}
++
++struct BackdropGlassVarying {
++    @builtin(position) position: vec4<f32>,
++    @location(0) @interpolate(flat) blur_id: u32,
++    @location(1) clip_distances: vec4<f32>,
++}
++
++@vertex
++fn vs_backdrop_glass(@builtin(vertex_index) vertex_id: u32, @builtin(instance_index) instance_id: u32) -> BackdropGlassVarying {
++    let unit_vertex = vec2<f32>(f32(vertex_id & 1u), 0.5 * f32(vertex_id & 2u));
++    let blur = b_backdrop_blurs[instance_id];
++    // Glass draws a hairline in the pixel ring just outside its edge.
++    var bounds = blur.bounds;
++    if (blur.glass.enabled != 0u) {
++        bounds.origin -= vec2<f32>(2.0);
++        bounds.size += vec2<f32>(4.0);
++    }
++    var out = BackdropGlassVarying();
++    out.position = to_device_position(unit_vertex, bounds);
++    out.blur_id = instance_id;
++    out.clip_distances = distance_from_clip_rect(unit_vertex, bounds, blur.content_mask);
++    return out;
++}
++
++// Clamped to the blurred region: texels beyond it hold an older pass.
++fn backdrop_blurred_uv(position: vec2<f32>) -> vec2<f32> {
++    let rect = backdrop_params.source_rect;
++    let scale = backdrop_params.params.xy;
++    let texel = clamp((position - rect.xy) / scale, vec2<f32>(0.5), rect.zw / scale - 0.5);
++    return texel / backdrop_params.source_texture_size;
++}
++
++@fragment
++fn fs_backdrop_glass(input: BackdropGlassVarying) -> @location(0) vec4<f32> {
++    if (any(input.clip_distances < vec4<f32>(0.0))) {
++        discard;
++    }
++    let blur = b_backdrop_blurs[input.blur_id];
++    let position = input.position.xy;
++    let distance = quad_sdf(position, blur.bounds, blur.corner_radii);
++
++    if (blur.glass.enabled == 0u) {
++        if (distance > 0.0) {
++            discard;
++        }
++        return textureSampleLevel(t_backdrop, s_backdrop, backdrop_blurred_uv(position), 0.0);
++    }
++
++    let coverage = saturate(0.5 - distance);
++    let ring = saturate(1.5 - distance) - coverage;
++    if (coverage <= 0.0 && ring <= 0.0) {
++        discard;
++    }
++    let glass = blur.glass;
++    let edge = max(-distance, 0.0);
++    var normal = vec2<f32>(
++        quad_sdf(position + vec2<f32>(0.5, 0.0), blur.bounds, blur.corner_radii) -
++            quad_sdf(position - vec2<f32>(0.5, 0.0), blur.bounds, blur.corner_radii),
++        quad_sdf(position + vec2<f32>(0.0, 0.5), blur.bounds, blur.corner_radii) -
++            quad_sdf(position - vec2<f32>(0.0, 0.5), blur.bounds, blur.corner_radii));
++    normal = normal / max(length(normal), 1e-6);
++    let vertical = normal.x * normal.x;
++    let hair_a = mix(glass.hairline[2], glass.hairline[0], vertical);
++    let hair_b = mix(glass.hairline[3], glass.hairline[1], vertical);
++    var under = textureSampleLevel(t_backdrop_sharp, s_backdrop, position / backdrop_params.sharp_texture_size, 0.0);
++    let hair_color = saturate(min(under.rgb, hair_a * under.rgb + vec3<f32>(hair_b)));
++    under = vec4<f32>(mix(under.rgb, hair_color, ring), under.a);
++    if (coverage <= 0.0) {
++        return under;
++    }
++    let rim = exp(-pow(edge / glass.lens_rim, glass.lens_curve));
++    let sample_at = position + normal * glass.rim_bend * rim;
++    let backdrop = textureSampleLevel(t_backdrop, s_backdrop, backdrop_blurred_uv(sample_at), 0.0);
++    var color = select(vec3<f32>(0.0), backdrop.rgb / backdrop.a, backdrop.a > 0.0);
++    let alpha = mix(backdrop.a, 1.0, glass.opacity);
++
++    let c = color;
++    let features = array<f32, 20>(c.r, c.g, c.b, c.r * c.r, c.g * c.g, c.b * c.b,
++        c.r * c.g, c.g * c.b, c.r * c.b, c.r * c.r * c.r, c.g * c.g * c.g, c.b * c.b * c.b,
++        c.r * c.r * c.g, c.r * c.r * c.b, c.g * c.g * c.r, c.g * c.g * c.b,
++        c.b * c.b * c.r, c.b * c.b * c.g, c.r * c.g * c.b, 1.0);
++    color = vec3<f32>(0.0);
++    for (var term = 0; term < 20; term++) {
++        color += features[term] * vec3<f32>(glass.poly[term], glass.poly[20 + term], glass.poly[40 + term]);
++    }
++    let facing = dot(normal, vec2<f32>(glass.light_x, glass.light_y));
++    let line_term = exp(-edge / glass.line_width) * (glass.line_strength + glass.line_lit * facing);
++    let glow = exp(-edge / glass.glow_width) * glass.glow;
++    color = saturate(color * (1.0 + line_term) + vec3<f32>(glow));
++    let luma = dot(color, vec3<f32>(0.2126, 0.7152, 0.0722));
++    color = saturate(color * vec3<f32>(glass.tint_scale[0], glass.tint_scale[1], glass.tint_scale[2])
++        + luma * vec3<f32>(glass.tint_luma[0], glass.tint_luma[1], glass.tint_luma[2])
++        + vec3<f32>(glass.tint_offset[0], glass.tint_offset[1], glass.tint_offset[2]));
++
++    return mix(under, vec4<f32>(color * alpha, alpha), coverage);
++}
+diff --git a/crates/gpui_wgpu/src/wgpu_renderer.rs b/crates/gpui_wgpu/src/wgpu_renderer.rs
+index 2bfbc4e..72ce028 100644
+--- a/crates/gpui_wgpu/src/wgpu_renderer.rs
++++ b/crates/gpui_wgpu/src/wgpu_renderer.rs
+@@ -2,7 +2,8 @@ use crate::surface_frame::SurfaceFrame;
+ use crate::{CompositorGpuHint, WgpuAtlas, WgpuContext};
+ use bytemuck::{Pod, Zeroable};
+ use gpui::{
+-    AtlasTextureId, AtlasTextureKind, Background, Bounds, DevicePixels, GpuSpecs, MonochromeSprite,
++    AtlasTextureId, AtlasTextureKind, BackdropBlur, Background, Bounds, DevicePixels, DrawOrder,
++    GpuSpecs, MonochromeSprite,
+     Path, Point, PolychromeSprite, PrimitiveBatch, Quad, ScaledPixels, Scene, Shadow, Size,
+     SubpixelSprite, Underline, get_gamma_correction_ratios,
+ };
+@@ -93,6 +94,9 @@ struct WgpuPipelines {
+     poly_sprites: wgpu::RenderPipeline,
+     #[allow(dead_code)]
+     surfaces: wgpu::RenderPipeline,
++    backdrop_downsample: wgpu::RenderPipeline,
++    backdrop_blur_pass: wgpu::RenderPipeline,
++    backdrop_glass: wgpu::RenderPipeline,
+ }
+ 
+ struct WgpuBindGroupLayouts {
+@@ -100,8 +104,34 @@ struct WgpuBindGroupLayouts {
+     instances: wgpu::BindGroupLayout,
+     instances_with_texture: wgpu::BindGroupLayout,
+     surfaces: wgpu::BindGroupLayout,
++    backdrop_pass: wgpu::BindGroupLayout,
++    backdrop_glass: wgpu::BindGroupLayout,
+ }
+ 
++/// Surface-sized textures for backdrop blurs: `sharp` holds the snapshot at
++/// the region's own position; `ping` and `pong` hold it downsampled and
++/// blurred from texel 0.
++struct BackdropTargets {
++    width: u32,
++    height: u32,
++    sharp: wgpu::Texture,
++    sharp_view: wgpu::TextureView,
++    ping_view: wgpu::TextureView,
++    pong_view: wgpu::TextureView,
++}
++
++#[repr(C)]
++#[derive(Clone, Copy, Pod, Zeroable)]
++struct BackdropParams {
++    source_rect: [f32; 4],
++    params: [f32; 4],
++    source_texture_size: [f32; 2],
++    sharp_texture_size: [f32; 2],
++}
++
++/// Frames without a backdrop blur before its textures are dropped.
++const BACKDROP_RELEASE_AFTER_FRAMES: u32 = 120;
++
+ /// Shared GPU context reference, used to coordinate device recovery across multiple windows.
+ pub type GpuContext = Rc<RefCell<Option<WgpuContext>>>;
+ 
+@@ -121,6 +151,8 @@ struct WgpuResources {
+     path_intermediate_view: Option<wgpu::TextureView>,
+     path_msaa_texture: Option<wgpu::Texture>,
+     path_msaa_view: Option<wgpu::TextureView>,
++    backdrop_sampler: wgpu::Sampler,
++    backdrop_targets: Option<BackdropTargets>,
+ }
+ 
+ impl WgpuResources {
+@@ -129,6 +161,7 @@ impl WgpuResources {
+         self.path_intermediate_view = None;
+         self.path_msaa_texture = None;
+         self.path_msaa_view = None;
++        self.backdrop_targets = None;
+     }
+ }
+ 
+@@ -159,6 +192,9 @@ pub struct WgpuRenderer {
+     device_lost: std::sync::Arc<std::sync::atomic::AtomicBool>,
+     surface_configured: bool,
+     needs_redraw: bool,
++    /// Whether the surface can be copied from, which backdrop blurs need.
++    backdrop_supported: bool,
++    blur_free_frames: u32,
+ }
+ 
+ impl WgpuRenderer {
+@@ -331,8 +367,13 @@ impl WgpuRenderer {
+             );
+         }
+ 
++        let backdrop_supported = surface_caps.usages.contains(wgpu::TextureUsages::COPY_SRC);
+         let surface_config = wgpu::SurfaceConfiguration {
+-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
++            usage: if backdrop_supported {
++                wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC
++            } else {
++                wgpu::TextureUsages::RENDER_ATTACHMENT
++            },
+             format: surface_format,
+             width: clamped_width.max(1),
+             height: clamped_height.max(1),
+@@ -368,6 +409,12 @@ impl WgpuRenderer {
+             min_filter: wgpu::FilterMode::Linear,
+             ..Default::default()
+         });
++        let backdrop_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
++            label: Some("backdrop_sampler"),
++            mag_filter: wgpu::FilterMode::Linear,
++            min_filter: wgpu::FilterMode::Linear,
++            ..Default::default()
++        });
+ 
+         let uniform_alignment = device.limits().min_uniform_buffer_offset_alignment as u64;
+         let globals_size = std::mem::size_of::<GlobalParams>() as u64;
+@@ -464,6 +511,8 @@ impl WgpuRenderer {
+             path_intermediate_view: None,
+             path_msaa_texture: None,
+             path_msaa_view: None,
++            backdrop_sampler,
++            backdrop_targets: None,
+         };
+ 
+         Ok(Self {
+@@ -489,6 +538,8 @@ impl WgpuRenderer {
+             device_lost: context.device_lost_flag(),
+             surface_configured: true,
+             needs_redraw: false,
++            backdrop_supported,
++            blur_free_frames: 0,
+         })
+     }
+ 
+@@ -608,11 +659,44 @@ impl WgpuRenderer {
+             ],
+         });
+ 
++        let texture_entry = |binding: u32| wgpu::BindGroupLayoutEntry {
++            binding,
++            visibility: wgpu::ShaderStages::FRAGMENT,
++            ty: wgpu::BindingType::Texture {
++                sample_type: wgpu::TextureSampleType::Float { filterable: true },
++                view_dimension: wgpu::TextureViewDimension::D2,
++                multisampled: false,
++            },
++            count: None,
++        };
++        let sampler_entry = wgpu::BindGroupLayoutEntry {
++            binding: 2,
++            visibility: wgpu::ShaderStages::FRAGMENT,
++            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
++            count: None,
++        };
++        let backdrop_pass = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
++            label: Some("backdrop_pass_layout"),
++            entries: &[storage_buffer_entry(0), texture_entry(1), sampler_entry],
++        });
++        let backdrop_glass = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
++            label: Some("backdrop_glass_layout"),
++            entries: &[
++                storage_buffer_entry(0),
++                texture_entry(1),
++                sampler_entry,
++                storage_buffer_entry(3),
++                texture_entry(4),
++            ],
++        });
++
+         WgpuBindGroupLayouts {
+             globals,
+             instances,
+             instances_with_texture,
+             surfaces,
++            backdrop_pass,
++            backdrop_glass,
+         }
+     }
+ 
+@@ -878,6 +962,46 @@ impl WgpuRenderer {
+             &shader_module,
+         );
+ 
++        // The backdrop passes write their final colour, coverage included.
++        let replace_target = [Some(wgpu::ColorTargetState {
++            format: surface_format,
++            blend: None,
++            write_mask: wgpu::ColorWrites::ALL,
++        })];
++        let backdrop_downsample = create_pipeline(
++            "backdrop_downsample",
++            "vs_backdrop_pass",
++            "fs_backdrop_downsample",
++            &layouts.globals,
++            &layouts.backdrop_pass,
++            wgpu::PrimitiveTopology::TriangleList,
++            &replace_target,
++            1,
++            &shader_module,
++        );
++        let backdrop_blur_pass = create_pipeline(
++            "backdrop_blur_pass",
++            "vs_backdrop_pass",
++            "fs_backdrop_blur_pass",
++            &layouts.globals,
++            &layouts.backdrop_pass,
++            wgpu::PrimitiveTopology::TriangleList,
++            &replace_target,
++            1,
++            &shader_module,
++        );
++        let backdrop_glass = create_pipeline(
++            "backdrop_glass",
++            "vs_backdrop_glass",
++            "fs_backdrop_glass",
++            &layouts.globals,
++            &layouts.backdrop_glass,
++            wgpu::PrimitiveTopology::TriangleStrip,
++            &replace_target,
++            1,
++            &shader_module,
++        );
++
+         WgpuPipelines {
+             quads,
+             shadows,
+@@ -888,6 +1012,9 @@ impl WgpuRenderer {
+             subpixel_sprites,
+             poly_sprites,
+             surfaces,
++            backdrop_downsample,
++            backdrop_blur_pass,
++            backdrop_glass,
+         }
+     }
+ 
+@@ -1148,6 +1275,17 @@ impl WgpuRenderer {
+ 
+         // Now that we know the surface is healthy, ensure intermediate textures exist
+         self.ensure_intermediate_textures();
++        if scene.backdrop_blurs.is_empty() {
++            self.blur_free_frames = self.blur_free_frames.saturating_add(1);
++            if self.blur_free_frames >= BACKDROP_RELEASE_AFTER_FRAMES {
++                self.resources_mut().backdrop_targets = None;
++            }
++        } else {
++            self.blur_free_frames = 0;
++            if self.backdrop_supported {
++                self.ensure_backdrop_targets();
++            }
++        }
+ 
+         let frame_view = frame
+             .texture()
+@@ -1227,7 +1365,28 @@ impl WgpuRenderer {
+                     ..Default::default()
+                 });
+ 
+-                for batch in scene.batches() {
++                let mut pending_blurs = scene.backdrop_blurs.iter().peekable();
++                'batches: for batch in scene.batches() {
++                    // Backdrop blurs interleave by draw order outside the
++                    // batch stream: everything painted so far is copied,
++                    // blurred and painted back before the batch above it.
++                    while let Some(blur) = pending_blurs
++                        .next_if(|blur| blur.order <= batch_first_order(scene, &batch))
++                    {
++                        drop(pass);
++                        let ok = self.draw_backdrop_blur(
++                            &mut encoder,
++                            frame.texture(),
++                            &frame_view,
++                            blur,
++                            &mut instance_offset,
++                        );
++                        pass = Self::continue_main_pass(&mut encoder, &frame_view);
++                        if !ok {
++                            overflow = true;
++                            break 'batches;
++                        }
++                    }
+                     let ok = match batch {
+                         PrimitiveBatch::Quads(range) => {
+                             self.draw_quads(&scene.quads[range], &mut instance_offset, &mut pass)
+@@ -1313,6 +1472,21 @@ impl WgpuRenderer {
+                         break;
+                     }
+                 }
++                if !overflow {
++                    drop(pass);
++                    for blur in pending_blurs {
++                        if !self.draw_backdrop_blur(
++                            &mut encoder,
++                            frame.texture(),
++                            &frame_view,
++                            blur,
++                            &mut instance_offset,
++                        ) {
++                            overflow = true;
++                            break;
++                        }
++                    }
++                }
+             }
+ 
+             if overflow {
+@@ -1365,6 +1539,279 @@ impl WgpuRenderer {
+         )
+     }
+ 
++    fn continue_main_pass<'a>(
++        encoder: &'a mut wgpu::CommandEncoder,
++        frame_view: &'a wgpu::TextureView,
++    ) -> wgpu::RenderPass<'a> {
++        encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
++            label: Some("main_pass_continued"),
++            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
++                view: frame_view,
++                resolve_target: None,
++                ops: wgpu::Operations {
++                    load: wgpu::LoadOp::Load,
++                    store: wgpu::StoreOp::Store,
++                },
++                depth_slice: None,
++            })],
++            depth_stencil_attachment: None,
++            ..Default::default()
++        })
++    }
++
++    fn ensure_backdrop_targets(&mut self) {
++        let (width, height) = (self.surface_config.width, self.surface_config.height);
++        let format = self.surface_config.format;
++        let resources = self.resources_mut();
++        if resources
++            .backdrop_targets
++            .as_ref()
++            .is_some_and(|targets| targets.width == width && targets.height == height)
++        {
++            return;
++        }
++        let texture = |label: &str, usage: wgpu::TextureUsages| {
++            resources.device.create_texture(&wgpu::TextureDescriptor {
++                label: Some(label),
++                size: wgpu::Extent3d {
++                    width,
++                    height,
++                    depth_or_array_layers: 1,
++                },
++                mip_level_count: 1,
++                sample_count: 1,
++                dimension: wgpu::TextureDimension::D2,
++                format,
++                usage,
++                view_formats: &[],
++            })
++        };
++        let target_usage =
++            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING;
++        let sharp = texture(
++            "backdrop_sharp",
++            wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
++        );
++        let view = |texture: &wgpu::Texture| texture.create_view(&Default::default());
++        let targets = BackdropTargets {
++            width,
++            height,
++            sharp_view: view(&sharp),
++            ping_view: view(&texture("backdrop_ping", target_usage)),
++            pong_view: view(&texture("backdrop_pong", target_usage)),
++            sharp,
++        };
++        resources.backdrop_targets = Some(targets);
++    }
++
++    /// Copy the region under `blur` (plus room for the gaussian tail and any
++    /// glass lensing), downsample and blur it, then paint it back. Returns
++    /// false only when the instance buffer is full. Downsampling keeps every
++    /// blur under ~13 taps per side: a gaussian that wide is
++    /// indistinguishable from one taken at full resolution.
++    fn draw_backdrop_blur(
++        &self,
++        encoder: &mut wgpu::CommandEncoder,
++        frame_texture: &wgpu::Texture,
++        frame_view: &wgpu::TextureView,
++        blur: &BackdropBlur,
++        instance_offset: &mut u64,
++    ) -> bool {
++        let resources = self.resources();
++        let Some(targets) = resources.backdrop_targets.as_ref() else {
++            return true;
++        };
++        let sigma = blur.blur_radius.0.max(1.0);
++        let padding = (sigma * 3.0 + blur.glass.reach()).ceil() + 2.0;
++        let visible = blur.bounds.intersect(&blur.content_mask.bounds);
++        let (width, height) = (targets.width as i64, targets.height as i64);
++        let x0 = ((visible.origin.x.0 - padding).floor() as i64).max(0);
++        let y0 = ((visible.origin.y.0 - padding).floor() as i64).max(0);
++        let x1 = ((visible.origin.x.0 + visible.size.width.0 + padding).ceil() as i64).min(width);
++        let y1 = ((visible.origin.y.0 + visible.size.height.0 + padding).ceil() as i64).min(height);
++        if x1 <= x0 || y1 <= y0 {
++            return true;
++        }
++        let factor = (sigma / 4.).floor().clamp(1., 8.);
++        let region = [x0 as f32, y0 as f32, (x1 - x0) as f32, (y1 - y0) as f32];
++        let reduced = [(region[2] / factor).ceil(), (region[3] / factor).ceil()];
++        // The downsample stretches the region across `reduced` texels, so a
++        // side that `factor` does not divide shrinks by a little less.
++        let scale = [region[2] / reduced[0], region[3] / reduced[1]];
++        let full = [targets.width as f32, targets.height as f32];
++
++        encoder.copy_texture_to_texture(
++            wgpu::TexelCopyTextureInfo {
++                texture: frame_texture,
++                mip_level: 0,
++                origin: wgpu::Origin3d {
++                    x: x0 as u32,
++                    y: y0 as u32,
++                    z: 0,
++                },
++                aspect: wgpu::TextureAspect::All,
++            },
++            wgpu::TexelCopyTextureInfo {
++                texture: &targets.sharp,
++                mip_level: 0,
++                origin: wgpu::Origin3d {
++                    x: x0 as u32,
++                    y: y0 as u32,
++                    z: 0,
++                },
++                aspect: wgpu::TextureAspect::All,
++            },
++            wgpu::Extent3d {
++                width: (x1 - x0) as u32,
++                height: (y1 - y0) as u32,
++                depth_or_array_layers: 1,
++            },
++        );
++
++        let mut run_pass = |pipeline: &wgpu::RenderPipeline,
++                            source: &wgpu::TextureView,
++                            target: &wgpu::TextureView,
++                            params: BackdropParams|
++         -> bool {
++            let Some((offset, size)) =
++                self.write_to_instance_buffer(instance_offset, bytemuck::bytes_of(&params))
++            else {
++                return false;
++            };
++            let bind_group = resources.device.create_bind_group(&wgpu::BindGroupDescriptor {
++                label: None,
++                layout: &resources.bind_group_layouts.backdrop_pass,
++                entries: &[
++                    wgpu::BindGroupEntry {
++                        binding: 0,
++                        resource: self.instance_binding(offset, size),
++                    },
++                    wgpu::BindGroupEntry {
++                        binding: 1,
++                        resource: wgpu::BindingResource::TextureView(source),
++                    },
++                    wgpu::BindGroupEntry {
++                        binding: 2,
++                        resource: wgpu::BindingResource::Sampler(&resources.backdrop_sampler),
++                    },
++                ],
++            });
++            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
++                label: Some("backdrop_pass"),
++                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
++                    view: target,
++                    resolve_target: None,
++                    ops: wgpu::Operations {
++                        load: wgpu::LoadOp::Load,
++                        store: wgpu::StoreOp::Store,
++                    },
++                    depth_slice: None,
++                })],
++                depth_stencil_attachment: None,
++                ..Default::default()
++            });
++            pass.set_viewport(0., 0., reduced[0], reduced[1], 0., 1.);
++            pass.set_pipeline(pipeline);
++            pass.set_bind_group(0, &resources.globals_bind_group, &[]);
++            pass.set_bind_group(1, &bind_group, &[]);
++            pass.draw(0..3, 0..1);
++            true
++        };
++
++        let pipelines = &resources.pipelines;
++        let reduced_rect = [0., 0., reduced[0], reduced[1]];
++        let (blur_source, blur_source_rect) = if factor > 1. {
++            if !run_pass(
++                &pipelines.backdrop_downsample,
++                &targets.sharp_view,
++                &targets.pong_view,
++                BackdropParams {
++                    source_rect: region,
++                    params: [0., 0., factor, 0.],
++                    source_texture_size: full,
++                    sharp_texture_size: full,
++                },
++            ) {
++                return false;
++            }
++            (&targets.pong_view, reduced_rect)
++        } else {
++            (&targets.sharp_view, region)
++        };
++        if !run_pass(
++            &pipelines.backdrop_blur_pass,
++            blur_source,
++            &targets.ping_view,
++            BackdropParams {
++                source_rect: blur_source_rect,
++                params: [1., 0., sigma / scale[0], 0.],
++                source_texture_size: full,
++                sharp_texture_size: full,
++            },
++        ) || !run_pass(
++            &pipelines.backdrop_blur_pass,
++            &targets.ping_view,
++            &targets.pong_view,
++            BackdropParams {
++                source_rect: reduced_rect,
++                params: [0., 1., sigma / scale[1], 0.],
++                source_texture_size: full,
++                sharp_texture_size: full,
++            },
++        ) {
++            return false;
++        }
++
++        let params = BackdropParams {
++            source_rect: region,
++            params: [scale[0], scale[1], 0., 0.],
++            source_texture_size: full,
++            sharp_texture_size: full,
++        };
++        let Some((params_offset, params_size)) =
++            self.write_to_instance_buffer(instance_offset, bytemuck::bytes_of(&params))
++        else {
++            return false;
++        };
++        let blur_bytes = unsafe { Self::instance_bytes(std::slice::from_ref(blur)) };
++        let Some((blur_offset, blur_size)) = self.write_to_instance_buffer(instance_offset, blur_bytes)
++        else {
++            return false;
++        };
++        let bind_group = resources.device.create_bind_group(&wgpu::BindGroupDescriptor {
++            label: None,
++            layout: &resources.bind_group_layouts.backdrop_glass,
++            entries: &[
++                wgpu::BindGroupEntry {
++                    binding: 0,
++                    resource: self.instance_binding(params_offset, params_size),
++                },
++                wgpu::BindGroupEntry {
++                    binding: 1,
++                    resource: wgpu::BindingResource::TextureView(&targets.pong_view),
++                },
++                wgpu::BindGroupEntry {
++                    binding: 2,
++                    resource: wgpu::BindingResource::Sampler(&resources.backdrop_sampler),
++                },
++                wgpu::BindGroupEntry {
++                    binding: 3,
++                    resource: self.instance_binding(blur_offset, blur_size),
++                },
++                wgpu::BindGroupEntry {
++                    binding: 4,
++                    resource: wgpu::BindingResource::TextureView(&targets.sharp_view),
++                },
++            ],
++        });
++        let mut pass = Self::continue_main_pass(encoder, frame_view);
++        pass.set_pipeline(&pipelines.backdrop_glass);
++        pass.set_bind_group(0, &resources.globals_bind_group, &[]);
++        pass.set_bind_group(1, &bind_group, &[]);
++        pass.draw(0..4, 0..1);
++        true
++    }
++
+     fn draw_shadows(
+         &self,
+         shadows: &[Shadow],
+@@ -1937,3 +2384,22 @@ impl RenderingParameters {
+         }
+     }
+ }
++
++/// The draw order of a batch's first primitive -- where a backdrop blur
++/// whose order is not above it must be painted first.
++fn batch_first_order(scene: &Scene, batch: &PrimitiveBatch) -> DrawOrder {
++    match batch {
++        PrimitiveBatch::Shadows(range) => scene.shadows[range.start].order,
++        PrimitiveBatch::Quads(range) => scene.quads[range.start].order,
++        PrimitiveBatch::Paths(range) => scene.paths[range.start].order,
++        PrimitiveBatch::Underlines(range) => scene.underlines[range.start].order,
++        PrimitiveBatch::MonochromeSprites { range, .. } => {
++            scene.monochrome_sprites[range.start].order
++        }
++        PrimitiveBatch::SubpixelSprites { range, .. } => scene.subpixel_sprites[range.start].order,
++        PrimitiveBatch::PolychromeSprites { range, .. } => {
++            scene.polychrome_sprites[range.start].order
++        }
++        PrimitiveBatch::Surfaces(range) => scene.surfaces[range.start].order,
++    }
++}
+diff --git a/crates/gpui_windows/build.rs b/crates/gpui_windows/build.rs
+index 1db9571..0a6b4a0 100644
+--- a/crates/gpui_windows/build.rs
++++ b/crates/gpui_windows/build.rs
+@@ -38,6 +38,9 @@ mod shader_compilation {
+             "monochrome_sprite",
+             "subpixel_sprite",
+             "polychrome_sprite",
++            "backdrop_downsample",
++            "backdrop_blur_pass",
++            "backdrop_glass",
+         ];
+ 
+         let rust_binding_path = format!("{}/shaders_bytes.rs", out_dir);
+diff --git a/crates/gpui_windows/src/directx_renderer.rs b/crates/gpui_windows/src/directx_renderer.rs
+index e4b605b..89f3cbb 100644
+--- a/crates/gpui_windows/src/directx_renderer.rs
++++ b/crates/gpui_windows/src/directx_renderer.rs
+@@ -53,6 +53,34 @@ pub(crate) struct DirectXRenderer {
+     /// In that case we want to discard the first frame that we draw as we got reset in the middle of a frame
+     /// meaning we lost all the allocated gpu textures and scene resources.
+     skip_draws: bool,
++
++    /// Snapshot and blur targets for backdrop blurs, dropped again after
++    /// [`BACKDROP_RELEASE_AFTER_FRAMES`] frames without one.
++    backdrop_textures: Option<BackdropTextures>,
++    blur_free_frames: u32,
++}
++
++const BACKDROP_RELEASE_AFTER_FRAMES: u32 = 120;
++
++/// Drawable-sized textures for backdrop blurs: `sharp` holds the snapshot
++/// at the region's own position; `ping` and `pong` hold it downsampled and
++/// blurred from texel 0.
++struct BackdropTextures {
++    width: u32,
++    height: u32,
++    sharp: ID3D11Texture2D,
++    sharp_view: Option<ID3D11ShaderResourceView>,
++    ping: (Option<ID3D11RenderTargetView>, Option<ID3D11ShaderResourceView>),
++    pong: (Option<ID3D11RenderTargetView>, Option<ID3D11ShaderResourceView>),
++}
++
++#[derive(Debug, Default, Clone, Copy)]
++#[repr(C)]
++struct BackdropParams {
++    source_rect: [f32; 4],
++    params: [f32; 4],
++    source_texture_size: [f32; 2],
++    sharp_texture_size: [f32; 2],
+ }
+ 
+ /// Direct3D objects
+@@ -91,11 +119,16 @@ struct DirectXRenderPipelines {
+     mono_sprites: PipelineState<MonochromeSprite>,
+     subpixel_sprites: PipelineState<SubpixelSprite>,
+     poly_sprites: PipelineState<PolychromeSprite>,
++    backdrop_glass: PipelineState<BackdropBlur>,
++    backdrop_downsample: (ID3D11VertexShader, ID3D11PixelShader),
++    backdrop_blur_pass: (ID3D11VertexShader, ID3D11PixelShader),
+ }
+ 
+ struct DirectXGlobalElements {
+     global_params_buffer: Option<ID3D11Buffer>,
+     sampler: Option<ID3D11SamplerState>,
++    backdrop_params_buffer: Option<ID3D11Buffer>,
++    backdrop_sampler: Option<ID3D11SamplerState>,
+ }
+ 
+ struct Annotation<'a>(&'a ID3DUserDefinedAnnotation);
+@@ -192,6 +225,8 @@ impl DirectXRenderer {
+             width: 1,
+             height: 1,
+             skip_draws: false,
++            backdrop_textures: None,
++            blur_free_frames: 0,
+         })
+     }
+ 
+@@ -314,6 +349,7 @@ impl DirectXRenderer {
+         self.resources = Some(resources);
+         self.globals = globals;
+         self.pipelines = pipelines;
++        self.backdrop_textures = None;
+         self.direct_composition = direct_composition;
+         self.skip_draws = true;
+         Ok(())
+@@ -336,12 +372,30 @@ impl DirectXRenderer {
+ 
+         self.upload_scene_buffers(scene)?;
+ 
++        if scene.backdrop_blurs.is_empty() {
++            self.blur_free_frames = self.blur_free_frames.saturating_add(1);
++            if self.blur_free_frames >= BACKDROP_RELEASE_AFTER_FRAMES {
++                self.backdrop_textures = None;
++            }
++        } else {
++            self.blur_free_frames = 0;
++        }
++
+         let annotation = self
+             .devices
+             .as_ref()
+             .and_then(|devices| devices.annotation.clone())
+             .filter(|annotation| unsafe { annotation.GetStatus().as_bool() });
++        let mut pending_blurs = scene.backdrop_blurs.iter().peekable();
+         for batch in scene.batches() {
++            // Backdrop blurs interleave by draw order outside the batch
++            // stream: everything painted so far is snapshotted, blurred and
++            // painted back before the batch drawn above it.
++            while let Some(blur) =
++                pending_blurs.next_if(|blur| blur.order <= batch_first_order(scene, &batch))
++            {
++                self.draw_backdrop_blur(blur)?;
++            }
+             let _annotation = annotation
+                 .as_ref()
+                 .map(|annotation| Annotation::new(annotation, HSTRING::from(batch.label())));
+@@ -380,9 +434,225 @@ impl DirectXRenderer {
+                 )
+             })?;
+         }
++        for blur in pending_blurs {
++            self.draw_backdrop_blur(blur)?;
++        }
+         self.present()
+     }
+ 
++    fn ensure_backdrop_textures(&mut self) -> Result<()> {
++        let (width, height) = (self.width, self.height);
++        if self
++            .backdrop_textures
++            .as_ref()
++            .is_some_and(|textures| textures.width == width && textures.height == height)
++        {
++            return Ok(());
++        }
++        let device = &self.devices.as_ref().context("devices missing")?.device;
++        let texture = |bind: u32| -> Result<ID3D11Texture2D> {
++            let desc = D3D11_TEXTURE2D_DESC {
++                Width: width,
++                Height: height,
++                MipLevels: 1,
++                ArraySize: 1,
++                Format: RENDER_TARGET_FORMAT,
++                SampleDesc: DXGI_SAMPLE_DESC {
++                    Count: 1,
++                    Quality: 0,
++                },
++                Usage: D3D11_USAGE_DEFAULT,
++                BindFlags: bind,
++                CPUAccessFlags: 0,
++                MiscFlags: 0,
++            };
++            let mut output = None;
++            unsafe { device.CreateTexture2D(&desc, None, Some(&mut output))? };
++            Ok(output.unwrap())
++        };
++        let target = || -> Result<(Option<ID3D11RenderTargetView>, Option<ID3D11ShaderResourceView>)> {
++            let texture = texture((D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32)?;
++            let mut target_view = None;
++            let mut shader_view = None;
++            unsafe {
++                device.CreateRenderTargetView(&texture, None, Some(&mut target_view))?;
++                device.CreateShaderResourceView(&texture, None, Some(&mut shader_view))?;
++            }
++            Ok((target_view, shader_view))
++        };
++        let sharp = texture(D3D11_BIND_SHADER_RESOURCE.0 as u32)?;
++        let mut sharp_view = None;
++        unsafe { device.CreateShaderResourceView(&sharp, None, Some(&mut sharp_view))? };
++        self.backdrop_textures = Some(BackdropTextures {
++            width,
++            height,
++            sharp,
++            sharp_view,
++            ping: target()?,
++            pong: target()?,
++        });
++        Ok(())
++    }
++
++    /// Snapshot the region under `blur` (plus room for the gaussian tail and
++    /// any glass lensing), downsample and blur it, then paint it back.
++    /// Downsampling keeps every blur under ~13 taps per side: a gaussian
++    /// that wide is indistinguishable from one taken at full resolution.
++    fn draw_backdrop_blur(&mut self, blur: &BackdropBlur) -> Result<()> {
++        let sigma = blur.blur_radius.0.max(1.0);
++        let padding = (sigma * 3.0 + blur.glass.reach()).ceil() + 2.0;
++        let visible = blur.bounds.intersect(&blur.content_mask.bounds);
++        let (width, height) = (self.width as i64, self.height as i64);
++        let x0 = ((visible.origin.x.0 - padding).floor() as i64).max(0);
++        let y0 = ((visible.origin.y.0 - padding).floor() as i64).max(0);
++        let x1 = ((visible.origin.x.0 + visible.size.width.0 + padding).ceil() as i64).min(width);
++        let y1 = ((visible.origin.y.0 + visible.size.height.0 + padding).ceil() as i64).min(height);
++        if x1 <= x0 || y1 <= y0 {
++            return Ok(());
++        }
++        self.ensure_backdrop_textures()?;
++        let factor = (sigma / 4.).floor().clamp(1., 8.);
++        let region = [x0 as f32, y0 as f32, (x1 - x0) as f32, (y1 - y0) as f32];
++        let reduced = [(region[2] / factor).ceil(), (region[3] / factor).ceil()];
++        // The downsample stretches the region across `reduced` texels, so a
++        // side that `factor` does not divide shrinks by a little less.
++        let scale = [region[2] / reduced[0], region[3] / reduced[1]];
++        let full = [self.width as f32, self.height as f32];
++
++        let devices = self.devices.as_ref().context("devices missing")?;
++        let context = &devices.device_context;
++        let resources = self.resources.as_ref().context("resources missing")?;
++        let render_target = resources.render_target.as_ref().context("render target missing")?;
++        let textures = self.backdrop_textures.as_ref().context("backdrop textures missing")?;
++        let params_buffer = &self.globals.backdrop_params_buffer;
++        let sampler = slice::from_ref(&self.globals.backdrop_sampler);
++        let no_views: [Option<ID3D11ShaderResourceView>; 3] = [None, None, None];
++
++        let set_params = |params: BackdropParams| -> Result<()> {
++            if let Some(buffer) = params_buffer {
++                update_buffer(context, buffer, slice::from_ref(&params))?;
++            }
++            Ok(())
++        };
++        let reduced_viewport = D3D11_VIEWPORT {
++            TopLeftX: 0.,
++            TopLeftY: 0.,
++            Width: reduced[0],
++            Height: reduced[1],
++            MinDepth: 0.,
++            MaxDepth: 1.,
++        };
++        let run_pass = |shaders: &(ID3D11VertexShader, ID3D11PixelShader),
++                        source: &Option<ID3D11ShaderResourceView>,
++                        target: &Option<ID3D11RenderTargetView>,
++                        params: BackdropParams|
++         -> Result<()> {
++            set_params(params)?;
++            unsafe {
++                context.PSSetShaderResources(1, Some(&no_views));
++                context.OMSetRenderTargets(Some(slice::from_ref(target)), None);
++                context.RSSetViewports(Some(slice::from_ref(&reduced_viewport)));
++                context.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
++                context.VSSetShader(&shaders.0, None);
++                context.PSSetShader(&shaders.1, None);
++                context.PSSetConstantBuffers(1, Some(slice::from_ref(params_buffer)));
++                context.PSSetSamplers(1, Some(sampler));
++                context.PSSetShaderResources(2, Some(slice::from_ref(source)));
++                context.OMSetBlendState(&self.pipelines.backdrop_glass.blend_state, None, 0xFFFFFFFF);
++                context.Draw(3, 0);
++                context.PSSetShaderResources(2, Some(&[None]));
++            }
++            Ok(())
++        };
++
++        unsafe {
++            context.CopySubresourceRegion(
++                &textures.sharp,
++                0,
++                x0 as u32,
++                y0 as u32,
++                0,
++                render_target,
++                0,
++                Some(&D3D11_BOX {
++                    left: x0 as u32,
++                    top: y0 as u32,
++                    front: 0,
++                    right: x1 as u32,
++                    bottom: y1 as u32,
++                    back: 1,
++                }),
++            );
++        }
++        let reduced_rect = [0., 0., reduced[0], reduced[1]];
++        let blur_source = if factor > 1. {
++            run_pass(
++                &self.pipelines.backdrop_downsample,
++                &textures.sharp_view,
++                &textures.pong.0,
++                BackdropParams {
++                    source_rect: region,
++                    params: [0., 0., factor, 0.],
++                    source_texture_size: full,
++                    sharp_texture_size: full,
++                },
++            )?;
++            (&textures.pong.1, reduced_rect)
++        } else {
++            (&textures.sharp_view, region)
++        };
++        run_pass(
++            &self.pipelines.backdrop_blur_pass,
++            blur_source.0,
++            &textures.ping.0,
++            BackdropParams {
++                source_rect: blur_source.1,
++                params: [1., 0., sigma / scale[0], 0.],
++                source_texture_size: full,
++                sharp_texture_size: full,
++            },
++        )?;
++        run_pass(
++            &self.pipelines.backdrop_blur_pass,
++            &textures.ping.1,
++            &textures.pong.0,
++            BackdropParams {
++                source_rect: reduced_rect,
++                params: [0., 1., sigma / scale[1], 0.],
++                source_texture_size: full,
++                sharp_texture_size: full,
++            },
++        )?;
++
++        set_params(BackdropParams {
++            source_rect: region,
++            params: [scale[0], scale[1], 0., 0.],
++            source_texture_size: full,
++            sharp_texture_size: full,
++        })?;
++        self.pipelines
++            .backdrop_glass
++            .update_buffer(&devices.device, context, slice::from_ref(blur))?;
++        unsafe {
++            context.OMSetRenderTargets(Some(slice::from_ref(&resources.render_target_view)), None);
++            context.PSSetConstantBuffers(1, Some(slice::from_ref(params_buffer)));
++            context.PSSetSamplers(1, Some(sampler));
++            context.PSSetShaderResources(2, Some(&[textures.pong.1.clone(), textures.sharp_view.clone()]));
++        }
++        self.pipelines.backdrop_glass.draw(
++            context,
++            slice::from_ref(&resources.viewport),
++            slice::from_ref(&self.globals.global_params_buffer),
++            D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP,
++            4,
++            1,
++        )?;
++        unsafe {
++            context.PSSetShaderResources(2, Some(&[None, None]));
++        }
++        Ok(())
++    }
++
+     pub(crate) fn resize(&mut self, new_size: Size<DevicePixels>) -> Result<()> {
+         let width = new_size.width.0.max(1) as u32;
+         let height = new_size.height.0.max(1) as u32;
+@@ -917,6 +1187,22 @@ impl DirectXRenderPipelines {
+             create_blend_state(device)?,
+         )?;
+ 
++        let backdrop_glass = PipelineState::new(
++            device,
++            "backdrop_glass_pipeline",
++            ShaderModule::BackdropGlass,
++            4,
++            create_replace_blend_state(device)?,
++        )?;
++        let pass_shaders = |module: ShaderModule| -> Result<(ID3D11VertexShader, ID3D11PixelShader)> {
++            let vertex = RawShaderBytes::new(module, ShaderTarget::Vertex)?;
++            let fragment = RawShaderBytes::new(module, ShaderTarget::Fragment)?;
++            Ok((
++                create_vertex_shader(device, vertex.as_bytes())?,
++                create_fragment_shader(device, fragment.as_bytes())?,
++            ))
++        };
++
+         Ok(Self {
+             shadow_pipeline,
+             quad_pipeline,
+@@ -926,6 +1212,9 @@ impl DirectXRenderPipelines {
+             mono_sprites,
+             subpixel_sprites,
+             poly_sprites,
++            backdrop_glass,
++            backdrop_downsample: pass_shaders(ShaderModule::BackdropDownsample)?,
++            backdrop_blur_pass: pass_shaders(ShaderModule::BackdropBlurPass)?,
+         })
+     }
+ }
+@@ -986,9 +1275,41 @@ impl DirectXGlobalElements {
+             output
+         };
+ 
++        let backdrop_params_buffer = unsafe {
++            let desc = D3D11_BUFFER_DESC {
++                ByteWidth: std::mem::size_of::<BackdropParams>() as u32,
++                Usage: D3D11_USAGE_DYNAMIC,
++                BindFlags: D3D11_BIND_CONSTANT_BUFFER.0 as u32,
++                CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
++                ..Default::default()
++            };
++            let mut buffer = None;
++            device.CreateBuffer(&desc, None, Some(&mut buffer))?;
++            buffer
++        };
++        let backdrop_sampler = unsafe {
++            let desc = D3D11_SAMPLER_DESC {
++                Filter: D3D11_FILTER_MIN_MAG_MIP_LINEAR,
++                AddressU: D3D11_TEXTURE_ADDRESS_CLAMP,
++                AddressV: D3D11_TEXTURE_ADDRESS_CLAMP,
++                AddressW: D3D11_TEXTURE_ADDRESS_CLAMP,
++                MipLODBias: 0.0,
++                MaxAnisotropy: 1,
++                ComparisonFunc: D3D11_COMPARISON_ALWAYS,
++                BorderColor: [0.0; 4],
++                MinLOD: 0.0,
++                MaxLOD: D3D11_FLOAT32_MAX,
++            };
++            let mut output = None;
++            device.CreateSamplerState(&desc, Some(&mut output))?;
++            output
++        };
++
+         Ok(Self {
+             global_params_buffer,
+             sampler,
++            backdrop_params_buffer,
++            backdrop_sampler,
+         })
+     }
+ }
+@@ -1432,6 +1753,18 @@ fn create_blend_state(device: &ID3D11Device) -> Result<ID3D11BlendState> {
+     }
+ }
+ 
++/// The backdrop passes write their final colour, coverage already applied.
++fn create_replace_blend_state(device: &ID3D11Device) -> Result<ID3D11BlendState> {
++    let mut desc = D3D11_BLEND_DESC::default();
++    desc.RenderTarget[0].BlendEnable = false.into();
++    desc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL.0 as u8;
++    unsafe {
++        let mut state = None;
++        device.CreateBlendState(&desc, Some(&mut state))?;
++        Ok(state.unwrap())
++    }
++}
++
+ #[inline]
+ fn create_blend_state_for_subpixel_rendering(device: &ID3D11Device) -> Result<ID3D11BlendState> {
+     let mut desc = D3D11_BLEND_DESC::default();
+@@ -1614,6 +1947,25 @@ fn report_live_objects(device: &ID3D11Device) -> Result<()> {
+     Ok(())
+ }
+ 
++/// The draw order of a batch's first primitive -- where a backdrop blur
++/// whose order is not above it must be painted first.
++fn batch_first_order(scene: &Scene, batch: &PrimitiveBatch) -> DrawOrder {
++    match batch {
++        PrimitiveBatch::Shadows(range) => scene.shadows[range.start].order,
++        PrimitiveBatch::Quads(range) => scene.quads[range.start].order,
++        PrimitiveBatch::Paths(range) => scene.paths[range.start].order,
++        PrimitiveBatch::Underlines(range) => scene.underlines[range.start].order,
++        PrimitiveBatch::MonochromeSprites { range, .. } => {
++            scene.monochrome_sprites[range.start].order
++        }
++        PrimitiveBatch::SubpixelSprites { range, .. } => scene.subpixel_sprites[range.start].order,
++        PrimitiveBatch::PolychromeSprites { range, .. } => {
++            scene.polychrome_sprites[range.start].order
++        }
++        PrimitiveBatch::Surfaces(range) => scene.surfaces[range.start].order,
++    }
++}
++
+ const BUFFER_COUNT: usize = 3;
+ 
+ pub(crate) mod shader_resources {
+@@ -1639,6 +1991,9 @@ pub(crate) mod shader_resources {
+         SubpixelSprite,
+         PolychromeSprite,
+         EmojiRasterization,
++        BackdropDownsample,
++        BackdropBlurPass,
++        BackdropGlass,
+     }
+ 
+     #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+@@ -1716,6 +2071,18 @@ pub(crate) mod shader_resources {
+                     ShaderTarget::Vertex => EMOJI_RASTERIZATION_VERTEX_BYTES,
+                     ShaderTarget::Fragment => EMOJI_RASTERIZATION_FRAGMENT_BYTES,
+                 },
++                ShaderModule::BackdropDownsample => match target {
++                    ShaderTarget::Vertex => BACKDROP_DOWNSAMPLE_VERTEX_BYTES,
++                    ShaderTarget::Fragment => BACKDROP_DOWNSAMPLE_FRAGMENT_BYTES,
++                },
++                ShaderModule::BackdropBlurPass => match target {
++                    ShaderTarget::Vertex => BACKDROP_BLUR_PASS_VERTEX_BYTES,
++                    ShaderTarget::Fragment => BACKDROP_BLUR_PASS_FRAGMENT_BYTES,
++                },
++                ShaderModule::BackdropGlass => match target {
++                    ShaderTarget::Vertex => BACKDROP_GLASS_VERTEX_BYTES,
++                    ShaderTarget::Fragment => BACKDROP_GLASS_FRAGMENT_BYTES,
++                },
+             };
+             Self { inner: bytes }
+         }
+@@ -1803,6 +2170,9 @@ pub(crate) mod shader_resources {
+                 ShaderModule::SubpixelSprite => "subpixel_sprite",
+                 ShaderModule::PolychromeSprite => "polychrome_sprite",
+                 ShaderModule::EmojiRasterization => "emoji_rasterization",
++                ShaderModule::BackdropDownsample => "backdrop_downsample",
++                ShaderModule::BackdropBlurPass => "backdrop_blur_pass",
++                ShaderModule::BackdropGlass => "backdrop_glass",
+             }
+         }
+     }
+diff --git a/crates/gpui_windows/src/shaders.hlsl b/crates/gpui_windows/src/shaders.hlsl
+index 78b1ada..fa802f7 100644
+--- a/crates/gpui_windows/src/shaders.hlsl
++++ b/crates/gpui_windows/src/shaders.hlsl
+@@ -1289,3 +1289,211 @@ float4 polychrome_sprite_fragment(PolychromeSpriteFragmentInput input): SV_Targe
+     color.a *= sprite.opacity * saturate(0.5 - distance) * edge_fade_alpha(input.position.xy, sprite.fade);
+     return color;
+ }
++
++/*
++**
++**              Backdrop blur and glass
++**
++*/
++
++// Mirrors gpui's `GlassStyle`; `line` is reserved in HLSL, hence
++// `line_strength` for the same field.
++struct GlassStyle {
++    uint enabled;
++    float lens_rim;
++    float lens_curve;
++    float rim_bend;
++    float poly[60];
++    float opacity;
++    float line_strength;
++    float line_lit;
++    float line_width;
++    float light_x;
++    float light_y;
++    float glow;
++    float glow_width;
++    float hairline[4];
++    float tint_scale[3];
++    float tint_luma[3];
++    float tint_offset[3];
++    float pad;
++};
++
++struct BackdropBlur {
++    uint order;
++    float blur_radius;
++    Bounds bounds;
++    Bounds content_mask;
++    Corners corner_radii;
++    GlassStyle glass;
++};
++
++// One constant buffer serves every backdrop pass. For the downsample and
++// blur passes `source_rect` is the texel rect of the source texture being
++// read and `params` is (direction x, direction y, sigma in source texels or
++// the downsample factor, unused). For the glass pass `source_rect` is the
++// drawable rect that was blurred, `params.xy` how far it was scaled down on
++// each axis (the blurred texture holds it from texel 0), and
++// `sharp_texture_size` the size of the drawable-sized unblurred copy.
++cbuffer BackdropParams: register(b1) {
++    float4 source_rect;
++    float4 params;
++    float2 source_texture_size;
++    float2 sharp_texture_size;
++};
++
++Texture2D<float4> t_backdrop: register(t2);
++Texture2D<float4> t_backdrop_sharp: register(t3);
++SamplerState s_backdrop: register(s1);
++
++struct BackdropPassOutput {
++    float4 position: SV_Position;
++    float2 uv: TEXCOORD0;
++};
++
++BackdropPassOutput backdrop_pass_vertex(uint vertex_id: SV_VertexID) {
++    float2 uv = float2((vertex_id << 1) & 2, vertex_id & 2);
++    BackdropPassOutput output;
++    output.position = float4(uv * float2(2., -2.) + float2(-1., 1.), 0., 1.);
++    output.uv = uv;
++    return output;
++}
++
++BackdropPassOutput backdrop_downsample_vertex(uint vertex_id: SV_VertexID) {
++    return backdrop_pass_vertex(vertex_id);
++}
++
++BackdropPassOutput backdrop_blur_pass_vertex(uint vertex_id: SV_VertexID) {
++    return backdrop_pass_vertex(vertex_id);
++}
++
++float2 backdrop_source_uv(float2 uv) {
++    return (source_rect.xy + uv * source_rect.zw) / source_texture_size;
++}
++
++float4 backdrop_downsample_fragment(BackdropPassOutput input): SV_Target {
++    float2 texel = 1. / source_texture_size;
++    float2 center = backdrop_source_uv(input.uv);
++    float2 quarter = texel * params.z * 0.25;
++    float2 lo = (source_rect.xy + 0.5) * texel;
++    float2 hi = (source_rect.xy + source_rect.zw - 0.5) * texel;
++    float4 sum = t_backdrop.SampleLevel(s_backdrop, clamp(center + float2(-quarter.x, -quarter.y), lo, hi), 0);
++    sum += t_backdrop.SampleLevel(s_backdrop, clamp(center + float2(quarter.x, -quarter.y), lo, hi), 0);
++    sum += t_backdrop.SampleLevel(s_backdrop, clamp(center + float2(-quarter.x, quarter.y), lo, hi), 0);
++    sum += t_backdrop.SampleLevel(s_backdrop, clamp(center + float2(quarter.x, quarter.y), lo, hi), 0);
++    return 0.25 * sum;
++}
++
++float4 backdrop_blur_pass_fragment(BackdropPassOutput input): SV_Target {
++    float sigma = max(params.z, 0.5);
++    int radius = (int)ceil(sigma * 3.);
++    float2 step = params.xy / source_texture_size;
++    float2 uv = backdrop_source_uv(input.uv);
++    float2 lo = (source_rect.xy + 0.5) / source_texture_size;
++    float2 hi = (source_rect.xy + source_rect.zw - 0.5) / source_texture_size;
++    float4 sum = 0.;
++    float total = 0.;
++    [loop]
++    for (int i = -radius; i <= radius; i++) {
++        float weight = exp(-(float)(i * i) / (2. * sigma * sigma));
++        sum += weight * t_backdrop.SampleLevel(s_backdrop, clamp(uv + step * (float)i, lo, hi), 0);
++        total += weight;
++    }
++    return sum / total;
++}
++
++StructuredBuffer<BackdropBlur> backdrop_blurs: register(t1);
++
++struct BackdropGlassVertexOutput {
++    float4 position: SV_Position;
++    nointerpolation uint blur_id: TEXCOORD0;
++    float4 clip_distance: SV_ClipDistance;
++};
++
++BackdropGlassVertexOutput backdrop_glass_vertex(uint vertex_id: SV_VertexID, uint blur_id: SV_InstanceID) {
++    float2 unit_vertex = float2(float(vertex_id & 1u), 0.5 * float(vertex_id & 2u));
++    BackdropBlur blur = backdrop_blurs[blur_id];
++    // Glass draws a hairline in the pixel ring just outside its edge.
++    Bounds bounds = blur.bounds;
++    if (blur.glass.enabled != 0u) {
++        bounds.origin -= 2.;
++        bounds.size += 4.;
++    }
++    BackdropGlassVertexOutput output;
++    output.position = to_device_position(unit_vertex, bounds);
++    output.blur_id = blur_id;
++    output.clip_distance = distance_from_clip_rect(unit_vertex, bounds, blur.content_mask);
++    return output;
++}
++
++// Clamped to the blurred region: texels beyond it hold an older pass.
++float2 backdrop_blurred_uv(float2 position) {
++    float2 texel = (position - source_rect.xy) / params.xy;
++    texel = clamp(texel, 0.5, source_rect.zw / params.xy - 0.5);
++    return texel / source_texture_size;
++}
++
++float4 backdrop_glass_fragment(BackdropGlassVertexOutput input): SV_Target {
++    BackdropBlur blur = backdrop_blurs[input.blur_id];
++    float2 position = input.position.xy;
++    float distance = quad_sdf(position, blur.bounds, blur.corner_radii);
++
++    if (blur.glass.enabled == 0u) {
++        if (distance > 0.) {
++            discard;
++        }
++        return t_backdrop.SampleLevel(s_backdrop, backdrop_blurred_uv(position), 0);
++    }
++
++    float coverage = saturate(0.5 - distance);
++    float ring = saturate(1.5 - distance) - coverage;
++    if (coverage <= 0. && ring <= 0.) {
++        discard;
++    }
++    GlassStyle glass = blur.glass;
++    float edge = max(-distance, 0.);
++    float2 normal = float2(
++        quad_sdf(position + float2(0.5, 0.), blur.bounds, blur.corner_radii) -
++            quad_sdf(position - float2(0.5, 0.), blur.bounds, blur.corner_radii),
++        quad_sdf(position + float2(0., 0.5), blur.bounds, blur.corner_radii) -
++            quad_sdf(position - float2(0., 0.5), blur.bounds, blur.corner_radii));
++    normal /= max(length(normal), 1e-6);
++    float vertical = normal.x * normal.x;
++    float hair_a = lerp(glass.hairline[2], glass.hairline[0], vertical);
++    float hair_b = lerp(glass.hairline[3], glass.hairline[1], vertical);
++    float4 under = t_backdrop_sharp.SampleLevel(s_backdrop, position / sharp_texture_size, 0);
++    float3 hair_color = saturate(min(under.rgb, hair_a * under.rgb + hair_b));
++    under.rgb = lerp(under.rgb, hair_color, ring);
++    if (coverage <= 0.) {
++        return under;
++    }
++    float rim = exp(-pow(edge / glass.lens_rim, glass.lens_curve));
++    float2 sample_at = position + normal * glass.rim_bend * rim;
++    float4 backdrop = t_backdrop.SampleLevel(s_backdrop, backdrop_blurred_uv(sample_at), 0);
++    float3 color = backdrop.a > 0. ? backdrop.rgb / backdrop.a : float3(0., 0., 0.);
++    float alpha = lerp(backdrop.a, 1., glass.opacity);
++
++    float features[20] = {color.r, color.g, color.b, color.r * color.r, color.g * color.g,
++                          color.b * color.b, color.r * color.g, color.g * color.b,
++                          color.r * color.b, color.r * color.r * color.r,
++                          color.g * color.g * color.g, color.b * color.b * color.b,
++                          color.r * color.r * color.g, color.r * color.r * color.b,
++                          color.g * color.g * color.r, color.g * color.g * color.b,
++                          color.b * color.b * color.r, color.b * color.b * color.g,
++                          color.r * color.g * color.b, 1.};
++    color = float3(0., 0., 0.);
++    [unroll]
++    for (int term = 0; term < 20; term++) {
++        color += features[term] * float3(glass.poly[term], glass.poly[20 + term], glass.poly[40 + term]);
++    }
++    float facing = dot(normal, float2(glass.light_x, glass.light_y));
++    float line_term = exp(-edge / glass.line_width) * (glass.line_strength + glass.line_lit * facing);
++    float glow = exp(-edge / glass.glow_width) * glass.glow;
++    color = saturate(color * (1. + line_term) + glow);
++    float luma = dot(color, float3(0.2126, 0.7152, 0.0722));
++    color = saturate(color * float3(glass.tint_scale[0], glass.tint_scale[1], glass.tint_scale[2])
++        + luma * float3(glass.tint_luma[0], glass.tint_luma[1], glass.tint_luma[2])
++        + float3(glass.tint_offset[0], glass.tint_offset[1], glass.tint_offset[2]));
++
++    return lerp(under, float4(color * alpha, alpha), coverage);
++}

@@ -6,6 +6,7 @@ import { organizations, users } from "@cap/database/schema";
 import { isProSubscription, stripe } from "@cap/utils";
 import type { Organisation } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
+import type Stripe from "stripe";
 
 export type SubscriptionDetails = {
 	planName: string;
@@ -17,6 +18,32 @@ export type SubscriptionDetails = {
 	currency: string;
 	cancelAtPeriodEnd: boolean;
 };
+
+// Tiered prices have no unit_amount; the per-seat cost depends on the tier
+// the quantity lands in (volume) or the blend across tiers (graduated).
+function seatUnitAmount(price: Stripe.Price, quantity: number): number {
+	if (price.billing_scheme !== "tiered") return price.unit_amount ?? 0;
+	const tiers = price.tiers ?? [];
+	const seats = Math.max(quantity, 1);
+
+	if (price.tiers_mode === "volume") {
+		const tier =
+			tiers.find((t) => t.up_to === null || seats <= t.up_to) ?? tiers.at(-1);
+		if (!tier) return 0;
+		return (tier.unit_amount ?? 0) + (tier.flat_amount ?? 0) / seats;
+	}
+
+	let total = 0;
+	let counted = 0;
+	for (const tier of tiers) {
+		const inTier = Math.min(seats, tier.up_to ?? seats) - counted;
+		if (inTier <= 0) continue;
+		total += inTier * (tier.unit_amount ?? 0) + (tier.flat_amount ?? 0);
+		counted += inTier;
+		if (counted >= seats) break;
+	}
+	return total / seats;
+}
 
 export async function getSubscriptionDetails(
 	organizationId: Organisation.OrganisationId,
@@ -49,6 +76,7 @@ export async function getSubscriptionDetails(
 
 	const subscription = await stripe().subscriptions.retrieve(
 		owner.stripeSubscriptionId,
+		{ expand: ["items.data.price.tiers"] },
 	);
 	const customerId =
 		typeof subscription.customer === "string"
@@ -71,7 +99,7 @@ export async function getSubscriptionDetails(
 	if (!item) return null;
 
 	const price = item.price;
-	const unitAmount = price.unit_amount ?? 0;
+	const unitAmount = seatUnitAmount(price, item.quantity ?? 1);
 	const interval = price.recurring?.interval === "year" ? "year" : "month";
 	const pricePerSeat =
 		interval === "year" ? unitAmount / 100 / 12 : unitAmount / 100;

@@ -199,10 +199,7 @@ impl ProjectHistory {
         self.paused = self.paused.saturating_sub(1);
         if self.paused == 0 && std::mem::take(&mut self.dirty) {
             let current = &self.entries[self.entries.len() - self.count - 1];
-            if matches!(
-                (serde_json::to_value(current), serde_json::to_value(config)),
-                (Ok(before), Ok(after)) if before == after
-            ) {
+            if serializes_equal(current, config) {
                 return;
             }
             self.record(config);
@@ -241,6 +238,34 @@ impl ProjectHistory {
     fn depth(&self) -> usize {
         self.entries.len()
     }
+}
+
+/// Compares the JSON the two configs save as, stopping at the first differing
+/// byte. Building two `serde_json::Value` trees instead took ~14 ms on every
+/// drag release in a captioned 20 minute project.
+fn serializes_equal(before: &ProjectConfiguration, after: &ProjectConfiguration) -> bool {
+    struct Unmatched<'a>(&'a [u8]);
+
+    impl std::io::Write for Unmatched<'_> {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            let rest = self
+                .0
+                .strip_prefix(bytes)
+                .ok_or(std::io::ErrorKind::InvalidData)?;
+            self.0 = rest;
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let Ok(before) = serde_json::to_vec(before) else {
+        return false;
+    };
+    let mut unmatched = Unmatched(&before);
+    serde_json::to_writer(&mut unmatched, after).is_ok() && unmatched.0.is_empty()
 }
 
 // ---------------------------------------------------------------------------
@@ -2745,10 +2770,12 @@ pub enum ClipMergeBlocker {
 impl ClipMergeBlocker {
     pub fn hint(self) -> &'static str {
         match self {
-            Self::Edge => "No clip on that side",
-            Self::DifferentRecording => "Different recording",
-            Self::Gap => "Footage was cut between them",
-            Self::Speed => "Match the clip speeds first",
+            Self::Edge => crate::i18n::tr::editor::window::clip_menu::merge_blocker::edge(),
+            Self::DifferentRecording => {
+                crate::i18n::tr::editor::window::clip_menu::merge_blocker::different_recording()
+            }
+            Self::Gap => crate::i18n::tr::editor::window::clip_menu::merge_blocker::gap(),
+            Self::Speed => crate::i18n::tr::editor::window::clip_menu::merge_blocker::speed(),
         }
     }
 }
@@ -3039,6 +3066,91 @@ mod tests {
         assert_eq!(history.depth(), HISTORY_LIMIT);
     }
 
+    /// A 20 minute recording cut into 30 clips, with 40 zooms and 400
+    /// eight-word captions.
+    fn long_captioned_project() -> ProjectConfiguration {
+        let mut project = config(serde_json::json!({
+            "timeline": {
+                "segments": (0..30).map(|index| serde_json::json!({
+                    "timescale": 1.0, "start": index as f64 * 40.0, "end": index as f64 * 40.0 + 38.0
+                })).collect::<Vec<_>>(),
+                "zoomSegments": (0..40).map(|index| serde_json::json!({
+                    "start": index as f64 * 28.0, "end": index as f64 * 28.0 + 3.0, "amount": 1.5, "mode": "auto"
+                })).collect::<Vec<_>>()
+            }
+        }));
+        let segments = (0..400)
+            .map(|index| {
+                let start = index as f32 * 3.0;
+                cap_project::CaptionSegment {
+                    id: format!("caption-{index}"),
+                    start,
+                    end: start + 2.8,
+                    text: "the quick brown fox jumps over the dog".into(),
+                    words: (0..8)
+                        .map(|word| cap_project::CaptionWord {
+                            text: "word".into(),
+                            start: start + word as f32 * 0.35,
+                            end: start + word as f32 * 0.35 + 0.3,
+                        })
+                        .collect(),
+                }
+            })
+            .collect();
+        project.captions = Some(cap_project::CaptionsData {
+            segments,
+            source_timed: true,
+            ..Default::default()
+        });
+        cap_project::synchronize_captions(&mut project, &[1200.0]);
+        project
+    }
+
+    fn resume_after_drag(initial: &ProjectConfiguration, end: &ProjectConfiguration) -> usize {
+        let mut history = ProjectHistory::new(initial.clone());
+        history.pause();
+        history.record(end);
+        history.resume(end);
+        history.depth()
+    }
+
+    #[test]
+    fn a_drag_records_a_change_in_the_last_serialized_field() {
+        let initial = long_captioned_project();
+        let mut changed = initial.clone();
+        changed.text_anim_version += 1;
+        assert_eq!(resume_after_drag(&initial, &changed), 2);
+        assert_eq!(resume_after_drag(&initial, &initial), 1);
+    }
+
+    #[test]
+    #[ignore = "benchmark: cargo test --release -p cap-desktop-gpui --bin cap-gpui history_resume_benchmark -- --ignored --nocapture"]
+    fn history_resume_benchmark() {
+        let initial = long_captioned_project();
+        let mut padding = initial.clone();
+        padding.background.padding += 1.0;
+        let mut caption = initial.clone();
+        caption.timeline.as_mut().unwrap().caption_segments[200].text = "edited".into();
+        for (label, end) in [
+            ("padding", &padding),
+            ("caption", &caption),
+            ("unchanged", &initial),
+        ] {
+            let mut samples = (0..50)
+                .map(|_| {
+                    let mut history = ProjectHistory::new(initial.clone());
+                    history.pause();
+                    history.record(end);
+                    let start = std::time::Instant::now();
+                    history.resume(end);
+                    start.elapsed()
+                })
+                .collect::<Vec<_>>();
+            samples.sort();
+            println!("{label}: median {:?}", samples[samples.len() / 2]);
+        }
+    }
+
     // -- Hit testing --------------------------------------------------------
 
     #[test]
@@ -3108,6 +3220,7 @@ mod tests {
                 volume: 1.,
                 recording_clip: 0,
                 holds: Arc::from(&[][..]),
+                transition_in: None,
             },
         };
         let clips = [clip(0., 10.), clip(10., 18.)];

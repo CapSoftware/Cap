@@ -63,8 +63,8 @@ impl MicrophoneOption {
         let sample_rate = self.sample_rate?;
         let khz = sample_rate as f32 / 1000.;
         let layout = match self.channels {
-            Some(1) => "Mono".to_string(),
-            Some(2) => "Stereo".to_string(),
+            Some(1) => crate::i18n::tr::main::device::format::mono().to_string(),
+            Some(2) => crate::i18n::tr::main::device::format::stereo().to_string(),
             Some(n) => format!("{n}ch"),
             None => return Some(format!("{khz}kHz")),
         };
@@ -832,7 +832,15 @@ pub fn topmost_foreign_window_at_cursor() -> Option<Window> {
     candidates.into_iter().next().map(|(window, _)| window)
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
+pub fn topmost_foreign_window_at_cursor() -> Option<Window> {
+    match scap_targets::WindowImpl::topmost_x11_snapshot_at_cursor() {
+        Some(found) => found.map(|snapshot| snapshot.window),
+        None => Window::get_topmost_at_cursor(),
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub fn topmost_foreign_window_at_cursor() -> Option<Window> {
     Window::get_topmost_at_cursor()
 }
@@ -880,15 +888,37 @@ pub fn list_windows() -> Vec<WindowOption> {
 /// `collect_windows_with_thumbnails` (`thumbnails/mod.rs:107-137`), which needs
 /// the handle for both the ScreenCaptureKit filter and `Window::app_icon()`.
 pub fn list_window_targets() -> Vec<(WindowOption, Window)> {
-    Window::list()
+    list_window_targets_inner(
+        #[cfg(target_os = "windows")]
+        &mut scap_targets::platform::WindowListCache::default(),
+    )
+}
+
+pub(crate) fn list_window_targets_inner(
+    #[cfg(target_os = "windows")] cache: &mut scap_targets::platform::WindowListCache,
+) -> Vec<(WindowOption, Window)> {
+    #[cfg(target_os = "linux")]
+    if let Some(targets) = linux_window_targets_from_snapshot() {
+        return targets;
+    }
+
+    #[cfg(target_os = "windows")]
+    let windows = cache.list();
+    #[cfg(not(target_os = "windows"))]
+    let windows = Window::list();
+
+    windows
         .into_iter()
         .filter_map(|window| {
             #[cfg(target_os = "windows")]
-            if !window.raw_handle().is_valid() || !window.raw_handle().is_on_screen() {
+            if !cache.is_valid(&window) || !cache.is_on_screen(&window) {
                 return None;
             }
 
             let label = window.name().filter(|name| !name.trim().is_empty())?;
+            #[cfg(target_os = "windows")]
+            let app = cache.owner_name(&window)?;
+            #[cfg(not(target_os = "windows"))]
             let app = window.owner_name()?;
 
             if app == "Window Server" {
@@ -940,6 +970,45 @@ pub fn list_window_targets() -> Vec<(WindowOption, Window)> {
             ))
         })
         .collect()
+}
+
+#[cfg(target_os = "linux")]
+fn linux_window_targets_from_snapshot() -> Option<Vec<(WindowOption, Window)>> {
+    let snapshots = scap_targets::WindowImpl::list_x11_snapshots()?;
+    Some(
+        snapshots
+            .into_iter()
+            .filter_map(|snapshot| {
+                let size = snapshot.logical_size();
+                let position = snapshot.display_relative_origin();
+                let refresh_rate = snapshot.refresh_rate();
+                let id = snapshot.window.id();
+                if snapshot.name.trim().is_empty() {
+                    return None;
+                }
+                let app = snapshot.owner_name?;
+                if app == "Window Server" {
+                    return None;
+                }
+                // As on macOS: recording one of our own windows records a
+                // window the recording hides.
+                if snapshot.owner_pid == Some(std::process::id()) {
+                    return None;
+                }
+                Some((
+                    WindowOption {
+                        id,
+                        label: snapshot.name,
+                        app,
+                        size: Some((size.width() as u32, size.height() as u32)),
+                        position,
+                        refresh_rate: Some(refresh_rate),
+                    },
+                    snapshot.window,
+                ))
+            })
+            .collect(),
+    )
 }
 
 #[cfg(test)]

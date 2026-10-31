@@ -1,6 +1,6 @@
 [package]
 name = "cap"
-version = "0.6.1"
+version = "0.6.2"
 edition = "2024"
 
 [dependencies]

@@ -16,10 +16,12 @@ export function VerifyOTPForm({
 	email,
 	next,
 	lastSent,
+	emailDeliveryConfigured = true,
 }: {
 	email: string;
 	next?: string;
 	lastSent?: string;
+	emailDeliveryConfigured?: boolean;
 }) {
 	const [code, setCode] = useState(["", "", "", "", "", ""]);
 	const [lastResendTime, setLastResendTime] = useState<number | null>(
@@ -133,7 +135,11 @@ export function VerifyOTPForm({
 			}
 		},
 		onSuccess: () => {
-			toast.success("A new code has been sent to your email!");
+			toast.success(
+				emailDeliveryConfigured
+					? "A new code has been sent to your email!"
+					: "A new code was printed to the server logs",
+			);
 			setCode(["", "", "", "", "", ""]);
 			inputRefs.current[0]?.focus();
 			setLastResendTime(Date.now());
@@ -171,9 +177,17 @@ export function VerifyOTPForm({
 				<h1 className="text-xl font-semibold text-gray-12">
 					Enter verification code
 				</h1>
-				<p className="text-sm text-gray-10">
-					We sent a 6-digit code to {normalizedEmail}
-				</p>
+				{emailDeliveryConfigured ? (
+					<p className="text-sm text-gray-10">
+						We sent a 6-digit code to {normalizedEmail}
+					</p>
+				) : (
+					<p className="text-sm text-gray-10">
+						Email (Resend) is not configured on this server. The 6-digit code
+						for {normalizedEmail} was printed to the server logs. Ask your
+						administrator, or set RESEND_API_KEY and RESEND_FROM_DOMAIN.
+					</p>
+				)}
 			</div>
 
 			<div className="flex flex-1 gap-2 justify-between mb-5">

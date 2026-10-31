@@ -218,6 +218,7 @@ pub enum CaptureMode {
     Compatibility,
 }
 
+#[cfg(not(target_os = "linux"))]
 #[derive(Debug)]
 pub struct CapturedFrame {
     native: NativeCapturedFrame,
@@ -226,8 +227,25 @@ pub struct CapturedFrame {
     // pub capture_begin_time: Option<Instant>,
 }
 
+#[cfg(target_os = "linux")]
+#[derive(Debug)]
+pub struct CapturedFrame<'a> {
+    native: NativeCapturedFrame<'a>,
+    // pub reference_time: Instant,
+    pub timestamp: Duration,
+    // pub capture_begin_time: Option<Instant>,
+}
+
+#[cfg(not(target_os = "linux"))]
 impl CapturedFrame {
     pub fn native(&self) -> &NativeCapturedFrame {
+        &self.native
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl<'a> CapturedFrame<'a> {
+    pub fn native(&self) -> &NativeCapturedFrame<'a> {
         &self.native
     }
 }
@@ -237,6 +255,7 @@ impl CameraInfo {
         self.formats_impl()
     }
 
+    #[cfg(not(target_os = "linux"))]
     pub fn start_capturing(
         &self,
         format: Format,
@@ -245,6 +264,16 @@ impl CameraInfo {
         self.start_capturing_with_mode(format, CaptureMode::default(), callback)
     }
 
+    #[cfg(target_os = "linux")]
+    pub fn start_capturing(
+        &self,
+        format: Format,
+        callback: impl for<'a> FnMut(CapturedFrame<'a>) + Send + 'static,
+    ) -> Result<CaptureHandle, StartCapturingError> {
+        self.start_capturing_with_mode(format, CaptureMode::default(), callback)
+    }
+
+    #[cfg(not(target_os = "linux"))]
     #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
     pub fn start_capturing_with_mode(
         &self,
@@ -262,7 +291,17 @@ impl CameraInfo {
             )?),
             #[cfg(windows)]
             native: Some(start_capturing_impl(self, format, Box::new(callback))?),
-            #[cfg(target_os = "linux")]
+        })
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn start_capturing_with_mode(
+        &self,
+        format: Format,
+        _mode: CaptureMode,
+        callback: impl for<'a> FnMut(CapturedFrame<'a>) + Send + 'static,
+    ) -> Result<CaptureHandle, StartCapturingError> {
+        Ok(CaptureHandle {
             native: Some(start_capturing_impl(self, format, Box::new(callback))?),
         })
     }

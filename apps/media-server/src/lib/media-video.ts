@@ -621,8 +621,13 @@ function buildDashSegments(
 	if (timeline) {
 		const timelineSegments = getXmlElementBlocks(timeline.content, "S");
 		let currentTime = 0;
+		let number = startNumber;
 
 		for (const [index, segment] of timelineSegments.entries()) {
+			if (parseNumber(segment.attributes.d) === 0) {
+				number++;
+				continue;
+			}
 			const duration = parsePositiveNumber(segment.attributes.d);
 			if (!duration) {
 				throw new Error("DASH SegmentTimeline entry is missing duration");
@@ -647,10 +652,9 @@ function buildDashSegments(
 
 			for (let offset = 0; offset < count; offset++) {
 				const time = currentTime + duration * offset;
-				const number = startNumber + segments.length;
 				const resource = substituteDashTemplate(media, {
 					bandwidth,
-					number,
+					number: number++,
 					representationId,
 					time,
 				});
@@ -1597,6 +1601,7 @@ export async function processVideo(
 	abortSignal?: AbortSignal,
 	resilientFlags?: ResilientInputFlags,
 ): Promise<TempFileHandle> {
+	abortSignal?.throwIfAborted();
 	const definedOptions = Object.fromEntries(
 		Object.entries(options).filter(([, value]) => value !== undefined),
 	) as VideoProcessingOptions;
@@ -1608,6 +1613,7 @@ export async function processVideo(
 		!remuxOnly && metadata.videoCodec === "h264"
 			? await probeH264Level(inputPath, abortSignal)
 			: null;
+	abortSignal?.throwIfAborted();
 	const targetH264Level = pickMobileSafeH264Level(metadata, opts);
 	const normalizeH264Level =
 		opts.normalizeH264Level &&
@@ -1647,9 +1653,11 @@ export async function processVideo(
 				onProgress,
 				abortSignal,
 			);
+			abortSignal?.throwIfAborted();
 			return outputTempFile;
 		} catch (err) {
 			await outputTempFile.cleanup();
+			abortSignal?.throwIfAborted();
 			throw err;
 		}
 	}
@@ -1697,6 +1705,7 @@ export async function processVideo(
 					abortSignal,
 				);
 				recordNvencAttempt("process");
+				abortSignal?.throwIfAborted();
 				return outputTempFile;
 			} catch (error) {
 				const reason = nvencFallbackReason(
@@ -1722,9 +1731,11 @@ export async function processVideo(
 			onProgress,
 			abortSignal,
 		);
+		abortSignal?.throwIfAborted();
 		return outputTempFile;
 	} catch (err) {
 		await outputTempFile.cleanup();
+		abortSignal?.throwIfAborted();
 		throw err;
 	}
 }
@@ -1777,12 +1788,9 @@ export function buildProcessVideoArgs(input: ProcessVideoArgsInput): string[] {
 				)
 			: []),
 		...input.extraInputArgs,
-		// Browser captures change size when the tab resizes. Rebuilding the filter graph for that crashes h264_nvenc
-		// (SIGSEGV on FFmpeg 7.1, even with a fixed output size), so keep the first graph; scale absorbs the new size
-		// exactly as the libx264 fallback's auto-inserted scaler does.
-		...(nvenc && !gpuDecode && input.videoTranscode && !input.normalizeH264Level
-			? ["-reinit_filter", "0"]
-			: []),
+		// Browser captures change size when the tab resizes. FFmpeg rebuilds the filter graph and scales every frame
+		// back to the first size, for NVENC as for libx264. Keeping the first graph instead (-reinit_filter 0) feeds
+		// frames of the new size through filters set up for the old one, and h264_nvenc stalls then segfaults.
 		"-i",
 		input.inputPath,
 	];

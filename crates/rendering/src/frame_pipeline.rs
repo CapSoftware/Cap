@@ -106,6 +106,25 @@ async fn wait_for_submission(
     }
 }
 
+/// The result of a `map_async` whose submission has finished. wgpu runs map
+/// callbacks on whichever thread's poll collected them, so when several
+/// renderers share a device, another thread can still be about to run this
+/// buffer's callback after this thread's own wait returned.
+async fn mapped_result(
+    rx: &mut oneshot::Receiver<Result<(), wgpu::BufferAsyncError>>,
+    started: Instant,
+    frame_number: u32,
+    timeout: std::time::Duration,
+) -> Option<Result<(), wgpu::BufferAsyncError>> {
+    match rx.try_recv() {
+        Ok(result) => return Some(result),
+        Err(oneshot::error::TryRecvError::Closed) => return None,
+        Err(oneshot::error::TryRecvError::Empty) => {}
+    }
+    let remaining = timeout.checked_sub(readback_waited(started, frame_number))?;
+    tokio::time::timeout(remaining, rx).await.ok()?.ok()
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FinishEncoderTimings {
     pub wait_previous_duration: std::time::Duration,
@@ -1147,17 +1166,18 @@ impl PendingNv12Readback {
             return Err(self.cancel());
         };
 
-        let completed = wait_for_submission(
-            device,
-            &submission,
-            Instant::now(),
-            self.frame_number,
-            gpu_buffer_wait_timeout(self.export_deadlines),
-        )
-        .await;
-        match (completed, rx.try_recv()) {
-            (true, Ok(Ok(()))) => {}
-            (_, Ok(Err(error))) => {
+        let started = Instant::now();
+        let timeout = gpu_buffer_wait_timeout(self.export_deadlines);
+        let completed =
+            wait_for_submission(device, &submission, started, self.frame_number, timeout).await;
+        let mapped = if completed {
+            mapped_result(&mut rx, started, self.frame_number, timeout).await
+        } else {
+            rx.try_recv().ok()
+        };
+        match (completed, mapped) {
+            (true, Some(Ok(()))) => {}
+            (_, Some(Err(error))) => {
                 self.unmap();
                 return Err(RenderingError::BufferMapFailed(error));
             }
@@ -1644,6 +1664,7 @@ pub struct PendingReadback {
     frame_number: u32,
     frame_rate: u32,
     export_deadlines: bool,
+    recycle_readback_frames: bool,
 }
 
 fn active_readback_byte_len(
@@ -1711,17 +1732,23 @@ impl PendingReadback {
         recycled: &mut RecycledReadbackFrames,
     ) -> Result<RenderedFrame, RenderingError> {
         let start_time = Instant::now();
+        let timeout = gpu_buffer_wait_timeout(self.export_deadlines);
         let completed = wait_for_submission(
             device,
             &self.submission,
             start_time,
             self.frame_number,
-            gpu_buffer_wait_timeout(self.export_deadlines),
+            timeout,
         )
         .await;
-        match (completed, self.rx.try_recv()) {
-            (true, Ok(Ok(()))) => {}
-            (_, Ok(Err(error))) => {
+        let mapped = if completed {
+            mapped_result(&mut self.rx, start_time, self.frame_number, timeout).await
+        } else {
+            self.rx.try_recv().ok()
+        };
+        match (completed, mapped) {
+            (true, Some(Ok(()))) => {}
+            (_, Some(Err(error))) => {
                 self.unmap();
                 return Err(RenderingError::BufferMapFailed(error));
             }
@@ -1772,7 +1799,7 @@ impl PendingReadback {
             phase.finish("frame_ready");
         }
         let data = Arc::new(data_vec);
-        if self.export_deadlines {
+        if self.export_deadlines && self.recycle_readback_frames {
             recycled.keep(&data);
         }
         Ok(RenderedFrame {
@@ -1827,6 +1854,7 @@ pub struct PipelinedGpuReadback {
     pending_resize_size: u64,
     readiness_first_output: bool,
     export_deadlines: bool,
+    recycle_readback_frames: bool,
 }
 
 impl PipelinedGpuReadback {
@@ -1850,6 +1878,7 @@ impl PipelinedGpuReadback {
             pending_resize_size: 0,
             readiness_first_output: true,
             export_deadlines: false,
+            recycle_readback_frames: true,
         }
     }
 
@@ -1982,6 +2011,7 @@ impl PipelinedGpuReadback {
             frame_number: uniforms.frame_number,
             frame_rate: uniforms.frame_rate,
             export_deadlines: self.export_deadlines,
+            recycle_readback_frames: self.recycle_readback_frames,
         });
 
         Ok(())
@@ -2000,6 +2030,7 @@ pub struct RenderSession {
     texture_width: u32,
     texture_height: u32,
     export_deadlines: bool,
+    recycle_readback_frames: bool,
 }
 
 /// The blurred-background cache copies its result into the current session
@@ -2044,6 +2075,7 @@ impl RenderSession {
             texture_width: width,
             texture_height: height,
             export_deadlines: false,
+            recycle_readback_frames: true,
         };
         phase.finish("returned");
         session
@@ -2052,6 +2084,11 @@ impl RenderSession {
     /// See `FrameRenderer::use_export_deadlines`.
     pub fn with_export_deadlines(mut self, export_deadlines: bool) -> Self {
         self.export_deadlines = export_deadlines;
+        self
+    }
+
+    pub fn with_recycle_readback_frames(mut self, recycle_readback_frames: bool) -> Self {
+        self.recycle_readback_frames = recycle_readback_frames;
         self
     }
 
@@ -2223,10 +2260,12 @@ pub async fn finish_encoder_timed(
     let initial_buffer_size =
         (padded_bytes_per_row(uniforms.output_size) * uniforms.output_size.1) as u64;
     let export_deadlines = session.export_deadlines;
+    let recycle_readback_frames = session.recycle_readback_frames;
     let readback = session
         .pipelined_readback
         .get_or_insert_with(|| PipelinedGpuReadback::new(device, initial_buffer_size));
     readback.export_deadlines = export_deadlines;
+    readback.recycle_readback_frames = recycle_readback_frames;
 
     let previous = readback.take_pending();
 
@@ -2390,6 +2429,41 @@ pub async fn flush_pending_readback(
 mod readback_output_tests {
     use super::*;
 
+    #[tokio::test]
+    async fn map_callback_run_by_another_thread_after_the_wait_still_counts() {
+        let timeout = std::time::Duration::from_secs(5);
+        let (tx, mut rx) = oneshot::channel();
+        let late = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            tx.send(Ok(())).expect("map receiver");
+        });
+        assert!(matches!(
+            mapped_result(&mut rx, Instant::now(), 0, timeout).await,
+            Some(Ok(()))
+        ));
+        late.join().unwrap();
+
+        let (tx, mut rx) = oneshot::channel::<Result<(), wgpu::BufferAsyncError>>();
+        drop(tx);
+        assert!(
+            mapped_result(&mut rx, Instant::now(), 0, timeout)
+                .await
+                .is_none()
+        );
+
+        let (_tx, mut rx) = oneshot::channel::<Result<(), wgpu::BufferAsyncError>>();
+        assert!(
+            mapped_result(
+                &mut rx,
+                Instant::now(),
+                0,
+                std::time::Duration::from_millis(20)
+            )
+            .await
+            .is_none()
+        );
+    }
+
     #[test]
     fn readback_allocation_reserves_frame_and_metadata_without_changing_length() {
         let mut data = Vec::new();
@@ -2448,6 +2522,7 @@ mod readback_output_tests {
                 frame_number: 7,
                 frame_rate: 30,
                 export_deadlines: false,
+                recycle_readback_frames: true,
             };
             if fail {
                 readback_allocation_failure::inject(7);
