@@ -974,13 +974,20 @@ mod tests {
         ffmpeg::init().expect("ffmpeg");
         let mut bytes = vec![0u8; 16 * 2];
         bytes[4] = 42;
+        let mut file = tempfile::tempfile().unwrap();
+        std::io::Write::write_all(&mut file, &bytes).unwrap();
         let frames = PipewireFrames::new();
-        let plane = memptr_plane(&mut bytes);
+        let plane = memfd_plane(&file);
         let (frame, leased) =
             linear_frame(&frames, &plane, &geometry(4, 2, 16, 1, 0, 1, 2), true).unwrap();
         assert!(!leased);
         let copied = frame.data(0).as_ptr() as usize;
-        let origin = bytes.as_ptr() as usize;
+        let origin = frames
+            .inner
+            .cache
+            .lock()
+            .base_for(file.as_raw_fd())
+            .unwrap() as usize;
         assert!(copied < origin || copied >= origin + bytes.len());
         assert_eq!(frame.data(0)[0], 42);
         assert_eq!(frames.inflight(), 0);
