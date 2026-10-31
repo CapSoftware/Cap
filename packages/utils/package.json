@@ -1,35 +1,35 @@
 {
-	"name": "@cap/utils",
-	"type": "module",
-	"sideEffects": false,
-	"exports": {
-		".": "./src/index.ts",
-		"./helpers": "./src/helpers.ts"
-	},
-	"scripts": {
-		"typecheck": "tsc -b",
-		"build": "tsdown"
-	},
-	"publishConfig": {
-		"main": "./dist/index.js"
-	},
-	"devDependencies": {
-		"react": "^19.1.1",
-		"react-dom": "^19.1.1",
-		"react-router-dom": "^6.30.6",
-		"tsconfig": "workspace:*",
-		"typescript": "^5.8.3"
-	},
-	"dependencies": {
-		"@aws-sdk/client-s3": "^3.485.0",
-		"@cap/env": "workspace:*",
-		"clsx": "^2.0.0",
-		"dub": "^0.64.0",
-		"stripe": "^14.24.0",
-		"tailwind-merge": "^2.1.0",
-		"zod": "^3"
-	},
-	"engines": {
-		"node": ">=20"
-	}
+  "name": "@cap/utils",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts",
+    "./helpers": "./src/helpers.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -b",
+    "build": "node init && tsdown"
+  },
+  "publishConfig": {
+    "main": "./dist/index.js"
+  },
+  "devDependencies": {
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "react-router-dom": "^6.30.6",
+    "tsconfig": "workspace:*",
+    "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.485.0",
+    "@cap/env": "workspace:*",
+    "clsx": "^2.0.0",
+    "dub": "^0.64.0",
+    "stripe": "^14.24.0",
+    "tailwind-merge": "^2.1.0",
+    "zod": "^3"
+  },
+  "engines": {
+    "node": ">=20"
+  }
 }

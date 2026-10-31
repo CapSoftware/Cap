@@ -9,6 +9,7 @@ use std::{
 use aho_corasick::{AhoCorasickBuilder, MatchKind};
 use tracing::Instrument;
 
+pub mod agent_trim;
 pub mod diagnostic_writer;
 pub mod disk_space;
 pub mod export_resources;

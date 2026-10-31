@@ -1,3 +1,4 @@
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use clap::{Args, Subcommand};
@@ -87,6 +88,108 @@ fn list_caps_path(input: ListCapsInput) -> Result<String, AgentApiError> {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct CapInput {
     cap: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct StudioTimelineInput {
+    project_path: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct StudioTimelineTrimInput {
+    project_path: String,
+    clip_index: usize,
+    edge: String,
+    time_seconds: f64,
+    expected_current_seconds: f64,
+    confirmed: bool,
+}
+
+fn parse_studio_trim_edge(edge: &str) -> Result<&'static str, AgentApiError> {
+    match edge {
+        "start" => Ok("start"),
+        "end" => Ok("end"),
+        _ => Err(CapMcpServer::invalid("edge must be 'start' or 'end'")),
+    }
+}
+
+fn validate_studio_trim_times(
+    time_seconds: f64,
+    expected_current_seconds: f64,
+) -> Result<(), AgentApiError> {
+    if !time_seconds.is_finite() || !expected_current_seconds.is_finite() {
+        return Err(CapMcpServer::invalid("trim times must be finite seconds"));
+    }
+    if (time_seconds - expected_current_seconds).abs() <= f64::EPSILON {
+        return Err(CapMcpServer::invalid(
+            "requested trim does not change the edge",
+        ));
+    }
+    Ok(())
+}
+
+fn studio_project_config(
+    project_path: &str,
+) -> Result<(PathBuf, cap_project::ProjectConfiguration), AgentApiError> {
+    let path = PathBuf::from(project_path);
+    if !path.is_absolute() {
+        return Err(CapMcpServer::invalid(
+            "project_path must be an absolute local path",
+        ));
+    }
+    let path = path
+        .canonicalize()
+        .map_err(|error| CapMcpServer::invalid(format!("Cannot resolve project_path: {error}")))?;
+    if !path.is_dir() || path.extension().and_then(|extension| extension.to_str()) != Some("cap") {
+        return Err(CapMcpServer::invalid(
+            "project_path must name a local .cap project directory",
+        ));
+    }
+    let meta = cap_project::RecordingMeta::load_for_project(&path).map_err(|error| {
+        CapMcpServer::invalid(format!("Cannot read Studio project metadata: {error}"))
+    })?;
+    let cap_project::RecordingMetaInner::Studio(studio) = &meta.inner else {
+        return Err(CapMcpServer::invalid(
+            "Timeline editing is only supported for Studio projects",
+        ));
+    };
+    if !matches!(
+        studio.status(),
+        cap_project::StudioRecordingStatus::Complete
+    ) {
+        return Err(CapMcpServer::invalid(
+            "Studio recording must be complete before editing",
+        ));
+    }
+    let config = meta.project_config();
+    if config.timeline.is_none() {
+        return Err(CapMcpServer::invalid("Studio project has no timeline"));
+    }
+    Ok((path, config))
+}
+
+fn studio_timeline_value(path: &Path, config: &cap_project::ProjectConfiguration) -> Value {
+    let clips = config
+        .timeline
+        .as_ref()
+        .map(|timeline| {
+            timeline
+                .segments
+                .iter()
+                .enumerate()
+                .map(|(index, segment)| {
+                    json!({
+                        "clipIndex": index,
+                        "recordingSegment": segment.recording_clip,
+                        "startSeconds": segment.start,
+                        "endSeconds": segment.end,
+                        "timescale": segment.timescale,
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    json!({ "projectPath": path, "clips": clips })
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -941,6 +1044,215 @@ impl CapMcpServer {
         let mut result = CallToolResult::structured(context);
         result.content.extend(links);
         result
+    }
+
+    #[tool(
+        name = "studio_timeline_inspect",
+        description = "Read clip indices and source-time bounds from a local Studio .cap project",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn studio_timeline_inspect(
+        &self,
+        Parameters(input): Parameters<StudioTimelineInput>,
+    ) -> CallToolResult {
+        match studio_project_config(&input.project_path) {
+            Ok((path, config)) => CallToolResult::structured(studio_timeline_value(&path, &config)),
+            Err(error) => CallToolResult::structured_error(
+                serde_json::to_value(error)
+                    .unwrap_or_else(|_| json!({"message":"Invalid Studio project"})),
+            ),
+        }
+    }
+
+    #[tool(
+        name = "studio_timeline_trim",
+        description = "Trim one edge of one clip in an already-open local Studio project; times are recording seconds, the unit timeline.segments stores; requires explicit confirmation and the current edge value from studio_timeline_inspect",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn studio_timeline_trim(
+        &self,
+        Parameters(input): Parameters<StudioTimelineTrimInput>,
+    ) -> CallToolResult {
+        if let Some(result) =
+            Self::require_confirmation(input.confirmed, "trim a Studio timeline clip")
+        {
+            return result;
+        }
+        let edge = match parse_studio_trim_edge(&input.edge) {
+            Ok(edge) => edge,
+            Err(error) => return Self::result(Err(error)),
+        };
+        if let Err(error) =
+            validate_studio_trim_times(input.time_seconds, input.expected_current_seconds)
+        {
+            return Self::result(Err(error));
+        }
+        let (path, config) = match studio_project_config(&input.project_path) {
+            Ok(project) => project,
+            Err(error) => return Self::result(Err(error)),
+        };
+        let Some(timeline) = config.timeline.as_ref() else {
+            return Self::result(Err(Self::invalid("Studio project has no timeline")));
+        };
+        let Some(segment) = timeline.segments.get(input.clip_index) else {
+            return Self::result(Err(Self::invalid("clip_index is outside the timeline")));
+        };
+        let current = if edge == "start" {
+            segment.start
+        } else {
+            segment.end
+        };
+        if (current - input.expected_current_seconds).abs() > 0.001 {
+            return Self::result(Err(Self::invalid(format!(
+                "Stale trim request: expected edge at {:.3}s, current edge is {:.3}s; inspect again",
+                input.expected_current_seconds, current
+            ))));
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let request_id = uuid::Uuid::new_v4().to_string();
+            let action = json!({
+                "trim_clip_edge": {
+                    "project_path": path,
+                    "clip_index": input.clip_index,
+                    "edge": edge,
+                    "time_seconds": input.time_seconds,
+                    "expected_current_seconds": input.expected_current_seconds,
+                    "request_id": request_id,
+                }
+            });
+            let action = match serde_json::to_string(&action) {
+                Ok(action) => action,
+                Err(error) => return Self::result(Err(Self::invalid(error.to_string()))),
+            };
+            let action_url = match url::Url::parse_with_params(
+                "cap-desktop://action",
+                &[("value", action.as_str())],
+            ) {
+                Ok(url) => url,
+                Err(error) => return Self::result(Err(Self::invalid(error.to_string()))),
+            };
+            let opened = tokio::process::Command::new("/usr/bin/open")
+                .arg(action_url.as_str())
+                .status()
+                .await;
+            match opened {
+                Ok(status) if status.success() => {}
+                Ok(status) => {
+                    return Self::result(Err(Self::invalid(format!(
+                        "Cap did not accept the local trim action (open exited {status})"
+                    ))));
+                }
+                Err(error) => return Self::result(Err(Self::invalid(error.to_string()))),
+            }
+
+            let mut receipt = None;
+            let mut persisted = None;
+            for _ in 0..60 {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                if receipt.is_none() {
+                    receipt = cap_utils::agent_trim::read_receipt(&request_id);
+                    if receipt.as_ref().is_some_and(|receipt| {
+                        receipt.outcome == cap_utils::agent_trim::TrimOutcome::Rejected
+                    }) {
+                        break;
+                    }
+                }
+                let Ok(updated) = cap_project::ProjectConfiguration::load(&path) else {
+                    continue;
+                };
+                let Some(segment) = updated
+                    .timeline
+                    .as_ref()
+                    .and_then(|timeline| timeline.segments.get(input.clip_index))
+                else {
+                    return Self::result(Err(Self::invalid("clip disappeared during trim")));
+                };
+                let resolved = if edge == "start" {
+                    segment.start
+                } else {
+                    segment.end
+                };
+                if (resolved - current).abs() > 0.001 {
+                    persisted = Some(resolved);
+                    break;
+                }
+            }
+            cap_utils::agent_trim::remove_receipt(&request_id);
+
+            if let Some(receipt) = receipt {
+                if receipt.outcome == cap_utils::agent_trim::TrimOutcome::Rejected {
+                    return Self::result(Err(AgentApiError {
+                        code: "EDITOR_REJECTED".to_string(),
+                        message: receipt
+                            .error
+                            .unwrap_or_else(|| "Cap refused the trim".to_string()),
+                        retryable: false,
+                        retry_after_ms: None,
+                        request_id: None,
+                    }));
+                }
+                let applied = receipt.applied_seconds.unwrap_or(current);
+                if persisted.is_none() {
+                    return Self::result(Err(AgentApiError {
+                        code: "EDITOR_NOT_PERSISTED".to_string(),
+                        message: format!(
+                            "Cap applied the trim in the editor but did not save the project (edge at {applied:.3}s). The edit may be lost when the editor closes."
+                        ),
+                        retryable: false,
+                        retry_after_ms: None,
+                        request_id: None,
+                    }));
+                }
+                return CallToolResult::structured(json!({
+                    "projectPath": path,
+                    "clipIndex": input.clip_index,
+                    "edge": edge,
+                    "requestedSeconds": input.time_seconds,
+                    "appliedSeconds": applied,
+                    "clamped": (applied - input.time_seconds).abs() > 0.001,
+                    "verifiedOnDisk": true,
+                }));
+            }
+
+            if let Some(resolved) = persisted {
+                return CallToolResult::structured(json!({
+                    "projectPath": path,
+                    "clipIndex": input.clip_index,
+                    "edge": edge,
+                    "requestedSeconds": input.time_seconds,
+                    "appliedSeconds": resolved,
+                    "clamped": (resolved - input.time_seconds).abs() > 0.001,
+                    "verifiedOnDisk": true,
+                }));
+            }
+
+            return Self::result(Err(AgentApiError {
+                code: "EDITOR_NOT_UPDATED".to_string(),
+                message: "Cap did not persist the trim. Confirm this exact project is open in Studio and running a Cap build with MCP timeline editing enabled.".to_string(),
+                retryable: false,
+                retry_after_ms: None,
+                request_id: None,
+            }));
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = (path, config);
+            Self::result(Err(Self::invalid(
+                "Live Studio timeline editing through MCP is currently implemented only on macOS",
+            )))
+        }
     }
 
     #[tool(
@@ -3565,5 +3877,25 @@ impl McpArgs {
                 Ok(())
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod studio_timeline_tests {
+    use super::{parse_studio_trim_edge, validate_studio_trim_times};
+
+    #[test]
+    fn trim_edge_accepts_only_start_or_end() {
+        assert_eq!(parse_studio_trim_edge("start").unwrap(), "start");
+        assert_eq!(parse_studio_trim_edge("end").unwrap(), "end");
+        assert!(parse_studio_trim_edge("middle").is_err());
+    }
+
+    #[test]
+    fn trim_time_requires_finite_changed_value() {
+        assert!(validate_studio_trim_times(4.0, 9.0).is_ok());
+        assert!(validate_studio_trim_times(f64::NAN, 9.0).is_err());
+        assert!(validate_studio_trim_times(4.0, f64::INFINITY).is_err());
+        assert!(validate_studio_trim_times(9.0, 9.0).is_err());
     }
 }
