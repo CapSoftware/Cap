@@ -149,8 +149,6 @@ impl Drop for SysvMapping {
     }
 }
 
-/// Reference to the SysV mapping that keeps the pixels alive after the
-/// segment is reused or the grabber is dropped.
 pub(crate) struct SharedMapping {
     inner: Arc<SysvMapping>,
 }
@@ -211,7 +209,6 @@ impl ShmSegment {
         self.mapping.bytes()
     }
 
-    /// `true` when no published frame still references this mapping.
     pub(crate) fn is_exclusive(&mut self) -> bool {
         Arc::get_mut(&mut self.mapping).is_some()
     }

@@ -2881,20 +2881,17 @@ impl X11Grabber {
         matches!(self.backend, GrabBackend::Shm(_))
     }
 
-    /// Benchmark hook: keep the pre-publish row copy after `XShmGetImage`.
     #[doc(hidden)]
     pub fn force_shm_row_copy(&mut self, force: bool) {
         self.force_shm_row_copy = force;
     }
 
-    /// Benchmark and test hook. Scales the grabbed frame before it is returned.
     #[doc(hidden)]
     pub fn set_output_size(&mut self, width: u32, height: u32) {
         self.output.width = width;
         self.output.height = height;
     }
 
-    /// Wrap the idle SHM segment from the last grab without calling X again.
     #[doc(hidden)]
     pub fn publish_idle_shm_frame(&mut self) -> anyhow::Result<ffmpeg::frame::Video> {
         let image_bytes = self.shm_image_size()?;

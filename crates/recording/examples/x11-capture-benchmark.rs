@@ -1,6 +1,3 @@
-//! Compares X11 `GetImage`, MIT-SHM publish (no row copy), and MIT-SHM with
-//! the previous row copy. Full-grab samples include the X round trip. A
-//! separate section times only the row copy and only the SHM publish.
 //!
 //!   scripts/bench-x11.sh            # runs under xvfb-run at 3840x2160x24
 //!   scripts/bench-x11.sh --json
