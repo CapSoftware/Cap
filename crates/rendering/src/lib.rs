@@ -4845,7 +4845,11 @@ impl ProjectUniforms {
                             .map_or(50.0, |s| s.blur),
                         opacity: scene.screen_opacity as f32 * split_fade * takeover_accessory_fade,
                         border_enabled: if decorated && border_on { 1.0 } else { 0.0 },
-                        border_width: project.background.border.as_ref().map_or(5.0, |b| b.width),
+                        border_width: if decorated && border_on {
+                            project.background.border.as_ref().map_or(0.0, |b| b.width)
+                        } else {
+                            0.0
+                        },
                         preserve_source_alpha: 1.0,
                         _padding1: [0.0; 3],
                         border_color,
@@ -4971,7 +4975,11 @@ impl ProjectUniforms {
                         .map_or(50.0, |s| s.blur),
                     opacity: scene.screen_opacity as f32 * takeover_display_fade,
                     border_enabled: if border_on && !frame_active { 1.0 } else { 0.0 },
-                    border_width: project.background.border.as_ref().map_or(5.0, |b| b.width),
+                    border_width: if border_on && !frame_active {
+                        project.background.border.as_ref().map_or(0.0, |b| b.width)
+                    } else {
+                        0.0
+                    },
                     preserve_source_alpha: if options.preserve_screen_alpha {
                         1.0
                     } else {
@@ -5347,6 +5355,7 @@ impl ProjectUniforms {
                 uniforms.shadow = 0.0;
                 uniforms.shadow_opacity = 0.0;
                 uniforms.border_enabled = 0.0;
+                uniforms.border_width = 0.0;
             }
             uniforms
         };
@@ -6456,6 +6465,183 @@ mod style_image_tests {
                 at(&project, 180).camera_background_effect_mode(),
                 Some(mode)
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn uniforms_zero_border_width_when_border_disabled_or_delegated_to_frame() {
+        use cap_project::{BorderConfiguration, FrameConfiguration, FrameStyle};
+
+        let recording_meta: RecordingMeta = serde_json::from_value(serde_json::json!({
+            "pretty_name": "border-width-zeroing",
+            "display": { "path": "display.mp4", "fps": 60 },
+            "camera": null, "audio": null, "cursor": null
+        }))
+        .expect("metadata");
+        let meta = recording_meta.studio_meta().expect("studio").clone();
+        let size = XY::new(160, 90);
+        let constants = RenderVideoConstants::new_with_options(
+            RenderOptions {
+                screen_size: size,
+                camera_size: None,
+                preserve_screen_alpha: false,
+            },
+            recording_meta,
+            meta,
+        )
+        .await
+        .expect("graphics device");
+
+        let mut project = ProjectConfiguration::default();
+        let cursor = CursorEvents::default();
+        let frames = DecodedSegmentFrames {
+            screen_size: size,
+            screen_frame: Some(DecodedFrame::new(
+                [0, 0, 255, 255].repeat(160 * 90),
+                160,
+                90,
+            )),
+            camera_frame: None,
+            segment_time: 0.0,
+            recording_time: 0.0,
+            segment_has_camera: false,
+        };
+        let zoom = ZoomTransformTimeline::from_project(&project, &cursor, 1.0, size);
+
+        project.background.border = None;
+        let uniforms = ProjectUniforms::new(
+            &constants, &project, 0, 60, size, &cursor, &frames, 1.0, &zoom,
+        );
+        assert_eq!(uniforms.display.border_enabled, 0.0);
+        assert_eq!(uniforms.display.border_width, 0.0);
+
+        project.background.border = Some(BorderConfiguration {
+            enabled: false,
+            width: 12.0,
+            ..Default::default()
+        });
+        let uniforms = ProjectUniforms::new(
+            &constants, &project, 0, 60, size, &cursor, &frames, 1.0, &zoom,
+        );
+        assert_eq!(uniforms.display.border_enabled, 0.0);
+        assert_eq!(uniforms.display.border_width, 0.0);
+
+        project.background.border = Some(BorderConfiguration {
+            enabled: true,
+            width: 12.0,
+            ..Default::default()
+        });
+        let uniforms = ProjectUniforms::new(
+            &constants, &project, 0, 60, size, &cursor, &frames, 1.0, &zoom,
+        );
+        assert_eq!(uniforms.display.border_enabled, 1.0);
+        assert_eq!(uniforms.display.border_width, 12.0);
+
+        project.background.frame = Some(FrameConfiguration {
+            style: FrameStyle::MacOS,
+            ..Default::default()
+        });
+        let uniforms = ProjectUniforms::new(
+            &constants, &project, 0, 60, size, &cursor, &frames, 1.0, &zoom,
+        );
+        assert_eq!(uniforms.display.border_enabled, 0.0);
+        assert_eq!(uniforms.display.border_width, 0.0);
+        let chrome = uniforms.frame_chrome.expect("frame chrome active");
+        assert_eq!(chrome.composite.border_enabled, 1.0);
+        assert_eq!(chrome.composite.border_width, 12.0);
+
+        project.background.border = Some(BorderConfiguration {
+            enabled: false,
+            width: 12.0,
+            ..Default::default()
+        });
+        let uniforms = ProjectUniforms::new(
+            &constants, &project, 0, 60, size, &cursor, &frames, 1.0, &zoom,
+        );
+        let chrome = uniforms.frame_chrome.as_ref().expect("frame chrome active");
+        assert_eq!(chrome.composite.border_enabled, 0.0);
+        assert_eq!(chrome.composite.border_width, 0.0);
+
+        project.background.frame = None;
+        project.background.shadow = 0.0;
+        project.background.rounding = 0.0;
+        project.background.padding = 25.0;
+        project.background.source = BackgroundSource::Color {
+            value: [0, 0, 0],
+            alpha: 255,
+        };
+        let base_uniforms = ProjectUniforms::new(
+            &constants, &project, 0, 60, size, &cursor, &frames, 1.0, &zoom,
+        );
+        let [x0, y0, x1, y1] = base_uniforms.display.target_bounds;
+        let left = x0.floor() as usize;
+        let top = y0.floor() as usize;
+        let right = x1.ceil() as usize;
+        let bottom = y1.ceil() as usize;
+
+        let pixel = |frame: &RenderedFrame, x: usize, y: usize| {
+            let offset = y * frame.padded_bytes_per_row as usize + x * 4;
+            <[u8; 4]>::try_from(&frame.data[offset..offset + 4]).expect("pixel")
+        };
+
+        let mut layers = RendererLayers::new(&constants.device, &constants.queue);
+        let mut renderer = FrameRenderer::new(&constants);
+
+        for (case, motion_blur_params, motion_blur_vector) in [
+            ("static", [0.0, 0.0, 0.0, 0.0], [0.0, 0.0]),
+            ("moving", [1.0, 1.0, 0.0, 0.0], [0.04, 0.0]),
+            ("zooming", [2.0, 1.0, 0.02, 0.0], [0.0, 0.0]),
+        ] {
+            let mut case_uniforms = base_uniforms.clone();
+            case_uniforms.display.motion_blur_params = motion_blur_params;
+            case_uniforms.display.motion_blur_vector = motion_blur_vector;
+            case_uniforms.display.motion_blur_zoom_center = [0.5, 0.5];
+
+            let preview = renderer
+                .render_immediate(frames.clone(), case_uniforms, &cursor, true, &mut layers)
+                .await
+                .expect("preview");
+            assert_eq!(pixel(&preview, 80, 45), [0, 0, 255, 255], "{case} center");
+
+            for y in 0..top.saturating_sub(3) {
+                for x in 0..160 {
+                    assert_eq!(
+                        pixel(&preview, x, y),
+                        [0, 0, 0, 255],
+                        "{case} top ({x},{y})"
+                    );
+                }
+            }
+            for y in (bottom + 4)..90 {
+                for x in 0..160 {
+                    assert_eq!(
+                        pixel(&preview, x, y),
+                        [0, 0, 0, 255],
+                        "{case} bottom ({x},{y})"
+                    );
+                }
+            }
+            let left_clear_limit = if case == "moving" {
+                left.saturating_sub(8)
+            } else {
+                left.saturating_sub(3)
+            };
+            for y in 0..90 {
+                for x in 0..left_clear_limit {
+                    assert_eq!(
+                        pixel(&preview, x, y),
+                        [0, 0, 0, 255],
+                        "{case} left ({x},{y})"
+                    );
+                }
+                for x in (right + 4)..160 {
+                    assert_eq!(
+                        pixel(&preview, x, y),
+                        [0, 0, 0, 255],
+                        "{case} right ({x},{y})"
+                    );
+                }
+            }
         }
     }
 

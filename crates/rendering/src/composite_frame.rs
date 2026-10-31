@@ -123,7 +123,7 @@ impl Default for CompositeVideoFrameUniforms {
             shadow_blur: Default::default(),
             opacity: 1.0,
             border_enabled: 0.0,
-            border_width: 5.0,
+            border_width: 0.0,
             preserve_source_alpha: 0.0,
             _padding1: [0.0; 3],
             border_color: [0.0, 0.0, 0.0, 0.0],
@@ -446,5 +446,17 @@ impl CompositeVideoFramePipeline {
                 view_formats: &[],
             }),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_uniforms_have_zero_border_width_and_disabled_border() {
+        let uniforms = CompositeVideoFrameUniforms::default();
+        assert_eq!(uniforms.border_enabled, 0.0);
+        assert_eq!(uniforms.border_width, 0.0);
     }
 }
