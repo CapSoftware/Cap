@@ -225,7 +225,7 @@ impl AutomationHost for CliAutomationHost {
             .or(ctx.output_path.as_ref())
             .or(ctx.project_path.as_ref())
             .ok_or("No path available to reveal")?;
-        open_path_or_url(&path.to_string_lossy())
+        reveal_path(path)
     }
 
     async fn open_file(&self, ctx: &TriggerContext) -> Result<(), String> {
@@ -468,6 +468,44 @@ fn open_path_or_url(target: &str) -> Result<(), String> {
         .map_err(|e| format!("Failed to open: {e}"))
 }
 
+fn reveal_command(path: &Path) -> Result<std::process::Command, String> {
+    let path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(|error| format!("Failed to resolve path: {error}"))?
+            .join(path)
+    };
+
+    #[cfg(target_os = "macos")]
+    let cmd = {
+        let mut cmd = std::process::Command::new("open");
+        cmd.arg("-R").arg(&path);
+        cmd
+    };
+    #[cfg(target_os = "windows")]
+    let cmd = {
+        let mut cmd = std::process::Command::new("explorer");
+        cmd.arg("/select,").arg(&path);
+        cmd
+    };
+    #[cfg(target_os = "linux")]
+    let cmd = {
+        let mut cmd = std::process::Command::new("xdg-open");
+        cmd.arg(path.parent().unwrap_or(&path));
+        cmd
+    };
+
+    Ok(cmd)
+}
+
+fn reveal_path(path: &Path) -> Result<(), String> {
+    reveal_command(path)?
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("Failed to reveal: {error}"))
+}
+
 async fn run_trigger(trigger: Trigger, ctx: TriggerContext) {
     let Some(store) = load_store() else {
         return;
@@ -581,6 +619,62 @@ pub fn list(format: crate::OutputFormat) -> Result<(), String> {
 mod tests {
     use super::*;
     use cap_automation::{Action, AutomationRule, MatchMode};
+
+    #[test]
+    fn reveal_uses_file_manager_instead_of_opening_file() {
+        let file = Path::new("relative folder").join("capture.png");
+        let absolute = std::env::current_dir().unwrap().join(&file);
+        let cmd = reveal_command(&file).unwrap();
+        let args: Vec<_> = cmd.get_args().collect();
+
+        #[cfg(target_os = "linux")]
+        {
+            assert_eq!(cmd.get_program(), "xdg-open");
+            assert_eq!(args, [absolute.parent().unwrap().as_os_str()]);
+        }
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(cmd.get_program(), "open");
+            assert_eq!(args, [std::ffi::OsStr::new("-R"), absolute.as_os_str()]);
+        }
+        #[cfg(target_os = "windows")]
+        {
+            assert_eq!(cmd.get_program(), "explorer");
+            assert_eq!(
+                args,
+                [std::ffi::OsStr::new("/select,"), absolute.as_os_str()]
+            );
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn reveal_passes_parent_directory_as_one_argument_to_file_manager() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let program = temp.path().join("xdg-open");
+        let log = temp.path().join("arguments");
+        std::fs::write(
+            &program,
+            "#!/bin/sh\nprintf '%s\\n' \"$#\" \"$1\" > \"$CAP_REVEAL_TEST_LOG\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let file = temp.path().join("folder with spaces").join("capture.png");
+        let status = reveal_command(&file)
+            .unwrap()
+            .env("PATH", temp.path())
+            .env("CAP_REVEAL_TEST_LOG", &log)
+            .status()
+            .unwrap();
+
+        assert!(status.success());
+        assert_eq!(
+            std::fs::read_to_string(log).unwrap(),
+            format!("1\n{}\n", file.parent().unwrap().display())
+        );
+    }
 
     #[test]
     fn cli_presets_keep_caption_source_and_edits_after_reopening() {
