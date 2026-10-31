@@ -1098,6 +1098,15 @@ impl AudioMuxer for WindowsCameraMuxer {
 pub struct CameraBuffers {
     uyvy_buffer: Vec<u8>,
     flip_buffer: Vec<u8>,
+    texture: Option<CameraUploadTexture>,
+}
+
+struct CameraUploadTexture {
+    key: (u32, u32, DXGI_FORMAT),
+    device: ID3D11Device,
+    context: windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext,
+    texture: windows::Win32::Graphics::Direct3D11::ID3D11Texture2D,
+    dynamic: bool,
 }
 
 impl CameraBuffers {
@@ -1105,6 +1114,7 @@ impl CameraBuffers {
         Self {
             uyvy_buffer: Vec::new(),
             flip_buffer: Vec::new(),
+            texture: None,
         }
     }
 
@@ -1810,8 +1820,8 @@ pub fn upload_mf_buffer_to_texture(
 ) -> windows::core::Result<windows::Win32::Graphics::Direct3D11::ID3D11Texture2D> {
     use cap_mediafoundation_utils::IMFMediaBufferExt;
     use windows::Win32::Graphics::Direct3D11::{
-        D3D11_BIND_SHADER_RESOURCE, D3D11_SUBRESOURCE_DATA, D3D11_TEXTURE2D_DESC,
-        D3D11_USAGE_DEFAULT,
+        D3D11_BIND_SHADER_RESOURCE, D3D11_CPU_ACCESS_WRITE, D3D11_MAP_WRITE_DISCARD,
+        D3D11_MAPPED_SUBRESOURCE, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, D3D11_USAGE_DYNAMIC,
     };
     use windows::Win32::Graphics::Dxgi::Common::DXGI_SAMPLE_DESC;
 
@@ -1841,6 +1851,56 @@ pub fn upload_mf_buffer_to_texture(
             ),
         )
     })?;
+
+    let key = (frame.width, frame.height, dxgi_format);
+    if buffers
+        .texture
+        .as_ref()
+        .is_none_or(|cached| cached.key != key || cached.device != *device)
+    {
+        let mut desc = D3D11_TEXTURE2D_DESC {
+            Width: frame.width,
+            Height: frame.height,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: dxgi_format,
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            Usage: D3D11_USAGE_DYNAMIC,
+            BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
+            CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
+            MiscFlags: 0,
+        };
+        let mut texture = None;
+        let dynamic = unsafe {
+            device
+                .CreateTexture2D(&desc, None, Some(&mut texture))
+                .is_ok()
+        };
+        if !dynamic {
+            desc.Usage = D3D11_USAGE_DEFAULT;
+            desc.CPUAccessFlags = 0;
+            unsafe { device.CreateTexture2D(&desc, None, Some(&mut texture))? };
+        }
+        buffers.texture = Some(CameraUploadTexture {
+            key,
+            device: device.clone(),
+            context: unsafe { device.GetImmediateContext()? },
+            texture: texture.ok_or_else(|| {
+                windows::core::Error::new(
+                    windows::core::HRESULT(-1),
+                    "CreateTexture2D succeeded but returned no texture",
+                )
+            })?,
+            dynamic,
+        });
+    }
+    let cached = buffers.texture.as_ref().unwrap();
+    let texture = cached.texture.clone();
+    let context = cached.context.clone();
+    let dynamic = cached.dynamic;
 
     let needs_uyvy_conversion = frame.pixel_format == cap_camera_windows::PixelFormat::UYVY422;
     let needs_flip = frame.is_bottom_up;
@@ -1926,36 +1986,46 @@ pub fn upload_mf_buffer_to_texture(
         }
     };
 
-    let texture_desc = D3D11_TEXTURE2D_DESC {
-        Width: frame.width,
-        Height: frame.height,
-        MipLevels: 1,
-        ArraySize: 1,
-        Format: dxgi_format,
-        SampleDesc: DXGI_SAMPLE_DESC {
-            Count: 1,
-            Quality: 0,
-        },
-        Usage: D3D11_USAGE_DEFAULT,
-        BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
-        CPUAccessFlags: 0,
-        MiscFlags: 0,
+    let (row_bytes, rows) = match dxgi_format {
+        DXGI_FORMAT_NV12 => (
+            frame.width as usize,
+            frame.height as usize + frame.height as usize / 2,
+        ),
+        DXGI_FORMAT_YUY2 => (frame.width as usize * 2, frame.height as usize),
+        _ => (frame.width as usize * 4, frame.height as usize),
     };
-
-    let subresource_data = D3D11_SUBRESOURCE_DATA {
-        pSysMem: data.as_ptr() as *const _,
-        SysMemPitch: row_pitch,
-        SysMemSlicePitch: 0,
-    };
-
-    unsafe {
-        let mut texture = None;
-        device.CreateTexture2D(&texture_desc, Some(&subresource_data), Some(&mut texture))?;
-        texture.ok_or_else(|| {
-            windows::core::Error::new(
-                windows::core::HRESULT(-1),
-                "CreateTexture2D succeeded but returned no texture",
-            )
-        })
+    if (row_pitch as usize) < row_bytes || data.len() < (rows - 1) * row_pitch as usize + row_bytes
+    {
+        return Err(windows::core::Error::new(
+            windows::Win32::Foundation::E_INVALIDARG,
+            "Camera buffer is too small for the upload texture",
+        ));
     }
+    unsafe {
+        if dynamic {
+            let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+            context.Map(&texture, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(&mut mapped))?;
+            if (mapped.RowPitch as usize) < row_bytes {
+                context.Unmap(&texture, 0);
+                return Err(windows::core::Error::new(
+                    windows::Win32::Foundation::E_INVALIDARG,
+                    "Mapped camera texture row pitch is too small",
+                ));
+            }
+            for row in 0..rows {
+                std::ptr::copy_nonoverlapping(
+                    data.as_ptr().add(row * row_pitch as usize),
+                    mapped
+                        .pData
+                        .cast::<u8>()
+                        .add(row * mapped.RowPitch as usize),
+                    row_bytes,
+                );
+            }
+            context.Unmap(&texture, 0);
+        } else {
+            context.UpdateSubresource(&texture, 0, None, data.as_ptr().cast(), row_pitch, 0);
+        }
+    }
+    Ok(texture)
 }
