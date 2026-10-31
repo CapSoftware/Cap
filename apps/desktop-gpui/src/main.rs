@@ -3,6 +3,15 @@
 
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
+// The Windows heap serves blocks past its large-block threshold (far smaller
+// than a preview frame) straight from VirtualAlloc and frees them back, so the
+// readback and `frame_image` buffers of every preview frame were mapped,
+// zero-faulted and unmapped again. mimalloc reuses its freed segments.
+// `examples/frame-alloc-benchmark.rs` measures both.
+#[cfg(windows)]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 mod app_sounds;
 mod app_windows;
 mod assets;
