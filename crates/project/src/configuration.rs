@@ -2707,6 +2707,26 @@ pub struct ProjectConfiguration {
     /// durations from `fade_duration`.
     #[serde(default)]
     pub text_anim_version: u32,
+    /// Timeline tracks that keep their segments in place when clips are
+    /// deleted, merged, retimed or reordered, instead of rippling.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub locked_tracks: Vec<LockableTimelineTrack>,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum LockableTimelineTrack {
+    Style,
+    Image,
+    Caption,
+    Keyboard,
+    Text,
+    Zoom,
+    Scene,
+    Mask,
+    Audio,
+    #[serde(rename = "3d")]
+    Camera3d,
 }
 
 pub const TEXT_SIZE_VERSION: u32 = 1;
@@ -2758,6 +2778,7 @@ impl Default for ProjectConfiguration {
             color_correction: Default::default(),
             text_size_version: TEXT_SIZE_VERSION,
             text_anim_version: TEXT_ANIM_VERSION,
+            locked_tracks: Vec::new(),
         }
     }
 }
@@ -2842,6 +2863,7 @@ impl ProjectConfiguration {
         preset.text_size_version = self.text_size_version;
         preset.text_anim_version = self.text_anim_version;
         preset.overlay_order = self.overlay_order.clone();
+        preset.locked_tracks = self.locked_tracks.clone();
         preset.clips = self.clips.clone();
         preset
     }
@@ -3262,6 +3284,16 @@ mod notch_tests {
 mod tests {
     use super::*;
     use serde_json::Value;
+
+    #[test]
+    fn applying_a_preset_keeps_the_projects_locked_tracks() {
+        let project = ProjectConfiguration {
+            locked_tracks: vec![LockableTimelineTrack::Zoom, LockableTimelineTrack::Text],
+            ..Default::default()
+        };
+        let applied = project.with_preset(ProjectConfiguration::default());
+        assert_eq!(applied.locked_tracks, project.locked_tracks);
+    }
 
     #[test]
     fn studio_sound_defaults_old_projects_to_balanced_and_round_trips_tiers() {

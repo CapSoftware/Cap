@@ -27,9 +27,10 @@
 
 use cap_project::{
     AudioTrackSegment, Camera3DProperties, Camera3DSegment, CaptionTrackSegment,
-    ClipSpeedAudioMode, CursorClickEvent, GlideDirection, KeyboardTrackSegment, MaskKind,
-    MaskSegment, OverlayTrack, ProjectConfiguration, SceneMode, SceneSegment, TextSegment,
-    TimelineConfiguration, TimelineSegment, XY, ZoomMode, ZoomSegment, mask_effect_contract,
+    ClipSpeedAudioMode, CursorClickEvent, GlideDirection, KeyboardTrackSegment,
+    LockableTimelineTrack, MaskKind, MaskSegment, OverlayTrack, ProjectConfiguration, SceneMode,
+    SceneSegment, TextSegment, TimelineConfiguration, TimelineSegment, XY, ZoomMode, ZoomSegment,
+    mask_effect_contract,
 };
 
 use crate::editor_timeline::{self, Segment, TrackKind};
@@ -1198,6 +1199,60 @@ pub fn reorder_track_lane(
         }),
         _ => false,
     }
+}
+
+/// Runs a clip edit that ripples the other tracks, then puts the segments of
+/// every locked track back where they were, so locked tracks keep their
+/// timing when clips are deleted, merged, retimed or reordered.
+pub fn with_locked_tracks(
+    timeline: &mut TimelineConfiguration,
+    locked: &[LockableTimelineTrack],
+    edit: impl FnOnce(&mut TimelineConfiguration) -> bool,
+) -> bool {
+    if locked.is_empty() {
+        return edit(timeline);
+    }
+    let saved = timeline.clone();
+    if !edit(timeline) {
+        return false;
+    }
+    for track in locked {
+        match track {
+            LockableTimelineTrack::Style => timeline.style_segments = saved.style_segments.clone(),
+            LockableTimelineTrack::Image => timeline.image_segments = saved.image_segments.clone(),
+            LockableTimelineTrack::Caption => {
+                timeline.caption_segments = saved.caption_segments.clone()
+            }
+            LockableTimelineTrack::Keyboard => {
+                timeline.keyboard_segments = saved.keyboard_segments.clone()
+            }
+            LockableTimelineTrack::Text => timeline.text_segments = saved.text_segments.clone(),
+            LockableTimelineTrack::Zoom => timeline.zoom_segments = saved.zoom_segments.clone(),
+            LockableTimelineTrack::Scene => timeline.scene_segments = saved.scene_segments.clone(),
+            LockableTimelineTrack::Mask => timeline.mask_segments = saved.mask_segments.clone(),
+            LockableTimelineTrack::Audio => timeline.audio_segments = saved.audio_segments.clone(),
+            LockableTimelineTrack::Camera3d => {
+                timeline.camera3d_segments = saved.camera3d_segments.clone()
+            }
+        }
+    }
+    true
+}
+
+pub fn lockable_track(kind: TrackKind) -> Option<LockableTimelineTrack> {
+    Some(match kind {
+        TrackKind::Clip => return None,
+        TrackKind::Style => LockableTimelineTrack::Style,
+        TrackKind::Image => LockableTimelineTrack::Image,
+        TrackKind::Caption => LockableTimelineTrack::Caption,
+        TrackKind::Keyboard => LockableTimelineTrack::Keyboard,
+        TrackKind::Text => LockableTimelineTrack::Text,
+        TrackKind::Zoom => LockableTimelineTrack::Zoom,
+        TrackKind::Scene => LockableTimelineTrack::Scene,
+        TrackKind::Mask => LockableTimelineTrack::Mask,
+        TrackKind::Audio => LockableTimelineTrack::Audio,
+        TrackKind::ThreeD => LockableTimelineTrack::Camera3d,
+    })
 }
 
 /// `deleteClipSegment` (`ED/context.ts:581-600`), including the guard that
@@ -4574,6 +4629,43 @@ mod tests {
 
         assert_eq!((audio[0].start, audio[0].end), (4.0, 6.0));
         assert_eq!(audio[0].trim_start, 3.0);
+    }
+
+    #[test]
+    fn deleting_a_clip_leaves_locked_tracks_in_place() {
+        let config = config(serde_json::json!({
+            "timeline": {
+                "segments": [
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 10.0 },
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 10.0, "end": 20.0 }
+                ],
+                "zoomSegments": [{ "start": 12.0, "end": 14.0, "amount": 2.0, "mode": "auto" }],
+                "sceneSegments": [{ "start": 12.0, "end": 14.0, "mode": "cameraOnly" }]
+            }
+        }));
+        let mut timeline = config.timeline.unwrap();
+
+        assert!(with_locked_tracks(
+            &mut timeline,
+            &[LockableTimelineTrack::Zoom],
+            |timeline| delete_clip_segments(timeline, &[0]),
+        ));
+
+        assert_eq!(timeline.segments.len(), 1);
+        assert_eq!(
+            (
+                timeline.zoom_segments[0].start,
+                timeline.zoom_segments[0].end
+            ),
+            (12.0, 14.0)
+        );
+        assert_eq!(
+            (
+                timeline.scene_segments[0].start,
+                timeline.scene_segments[0].end
+            ),
+            (2.0, 4.0)
+        );
     }
 
     #[test]
