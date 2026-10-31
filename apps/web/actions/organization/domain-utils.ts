@@ -168,15 +168,23 @@ export const checkDomainStatus = async (domain: string) => {
 			getRequiredConfig(domain),
 		]);
 
+		const domainNotFound = domainJson?.error?.code === "not_found";
+		if (configJson?.error || (domainJson?.error && !domainNotFound)) {
+			throw new Error("Vercel domain lookup failed");
+		}
+
 		let verified = false;
 
-		if (configJson.misconfigured || domainJson?.error?.code === "not_found") {
+		if (configJson.misconfigured || domainNotFound) {
 			verified = false;
 		} else if (domainJson.verified) {
 			verified = true;
 		} else {
 			const verificationJson = await verifyDomain(domain);
-			verified = verificationJson?.verified;
+			if (typeof verificationJson?.verified !== "boolean") {
+				throw new Error("Vercel domain verification failed");
+			}
+			verified = verificationJson.verified;
 		}
 
 		const currentAValues = configJson.aValues || [];
