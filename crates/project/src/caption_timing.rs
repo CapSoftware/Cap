@@ -2,7 +2,11 @@ use crate::caption_words::{MAX_CAPTION_WORD_DURATION, caption_text_from_words};
 use crate::{
     CaptionSegment, CaptionTrackSegment, CaptionWord, ProjectConfiguration, TimelineConfiguration,
 };
+use either::Either;
 use std::collections::HashMap;
+
+#[cfg(test)]
+mod unordered_projection_tests;
 
 pub(crate) fn clip_timeline_offsets(timeline: &TimelineConfiguration) -> Vec<f64> {
     let mut offset = 0.0;
@@ -163,6 +167,40 @@ fn map_time_range_within_mapping(
     ))
 }
 
+struct IndexedSourceMapping {
+    mapping_index: usize,
+    maximum_end: f64,
+}
+
+fn index_source_mappings(mappings: &[SourceToEditedMapping]) -> Option<Vec<IndexedSourceMapping>> {
+    if !mappings.iter().all(|mapping| {
+        mapping.source_start.is_finite()
+            && mapping.source_end.is_finite()
+            && mapping.source_end >= mapping.source_start
+    }) {
+        return None;
+    }
+    let mut index: Vec<_> = mappings
+        .iter()
+        .enumerate()
+        .map(|(mapping_index, mapping)| IndexedSourceMapping {
+            mapping_index,
+            maximum_end: mapping.source_end,
+        })
+        .collect();
+    index.sort_unstable_by(|left, right| {
+        mappings[left.mapping_index]
+            .source_start
+            .total_cmp(&mappings[right.mapping_index].source_start)
+    });
+    let mut maximum_end = f64::NEG_INFINITY;
+    for entry in &mut index {
+        maximum_end = maximum_end.max(entry.maximum_end);
+        entry.maximum_end = maximum_end;
+    }
+    Some(index)
+}
+
 fn effective_to_output(holds: &[(f64, f64)], effective: f64) -> f64 {
     let mut output = effective;
     for (start, end) in holds {
@@ -221,6 +259,12 @@ fn map_captions_to_edited_timeline(
         && mappings.windows(2).all(|pair| {
             pair[0].source_start <= pair[1].source_start && pair[0].source_end <= pair[1].source_end
         });
+    let source_index = if !mappings_ordered && mappings.len() >= 32 && raw_segments.len() >= 16 {
+        index_source_mappings(&mappings)
+    } else {
+        None
+    };
+    let mut candidates = Vec::new();
     let holds = timeline.hold_windows();
     let hold_adjusted = |start: f64, end: f64| {
         if holds.is_empty() {
@@ -259,13 +303,31 @@ fn map_captions_to_edited_timeline(
         } else {
             word_bounds
         };
-        let caption_mappings = match bounds {
-            Some((start, end)) if mappings_ordered && start.is_finite() && end.is_finite() => {
+        let caption_mappings = match (bounds, source_index.as_deref()) {
+            (Some((start, end)), _) if mappings_ordered && start.is_finite() && end.is_finite() => {
                 let first = mappings.partition_point(|mapping| mapping.source_end <= start);
                 let count = mappings[first..].partition_point(|mapping| mapping.source_start < end);
-                &mappings[first..first + count]
+                Either::Left(mappings[first..first + count].iter())
             }
-            _ => &mappings,
+            (Some((start, end)), Some(index))
+                if start.is_finite() && end.is_finite() && start < end =>
+            {
+                let first = index.partition_point(|entry| entry.maximum_end <= start);
+                let count = index[first..]
+                    .partition_point(|entry| mappings[entry.mapping_index].source_start < end);
+                if count >= mappings.len() / 2 {
+                    Either::Left(mappings.iter())
+                } else {
+                    candidates.clear();
+                    candidates.extend(index[first..first + count].iter().filter_map(|entry| {
+                        (mappings[entry.mapping_index].source_end > start)
+                            .then_some(entry.mapping_index)
+                    }));
+                    candidates.sort_unstable();
+                    Either::Right(candidates.iter().map(|index| &mappings[*index]))
+                }
+            }
+            _ => Either::Left(mappings.iter()),
         };
 
         for mapping in caption_mappings {
