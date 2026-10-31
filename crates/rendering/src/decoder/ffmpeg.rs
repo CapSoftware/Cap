@@ -106,6 +106,31 @@ struct PendingRequest {
     reply: oneshot::Sender<DecodedFrame>,
 }
 
+#[derive(Default)]
+struct SequentialAccess {
+    preferred: bool,
+    highest_request: Option<u32>,
+    moved_backwards: bool,
+}
+
+impl SequentialAccess {
+    fn record_request(&mut self, frame: u32) {
+        self.moved_backwards |= self.highest_request.is_some_and(|highest| frame < highest);
+        self.highest_request = self.highest_request.max(Some(frame));
+    }
+
+    fn release_past_frames<T>(&self, cache: &mut BTreeMap<u32, T>, last_served: Option<u32>) {
+        if self.preferred
+            && !self.moved_backwards
+            && let Some(last_served) = last_served
+        {
+            // Keep the actual VFR hold and every decoded future frame. The
+            // independent first-frame and gap-hold owners are untouched.
+            cache.retain(|number, _| *number >= last_served);
+        }
+    }
+}
+
 const MAX_FRAME_CACHE_BYTES: usize = 128 * 1024 * 1024;
 /// Cache weight of a frame still on the GPU (it pins an NVDEC surface).
 #[cfg(target_os = "linux")]
@@ -661,6 +686,8 @@ impl FfmpegDecoder {
             }
         };
 
+        let mut sequential_access = SequentialAccess::default();
+
         if first_frame_result.is_none() && is_hw {
             let mut sw_this = match input.open(None, managed.as_ref()) {
                 Err(e) => {
@@ -756,6 +783,9 @@ impl FfmpegDecoder {
                     };
 
                 match r {
+                    VideoDecoderMessage::PreferSequentialAccess => {
+                        sequential_access.preferred = true
+                    }
                     VideoDecoderMessage::GetFrame(requested_time, _, reply) => {
                         push_request(requested_time, reply);
                     }
@@ -766,6 +796,9 @@ impl FfmpegDecoder {
                         return;
                     }
                     match msg {
+                        VideoDecoderMessage::PreferSequentialAccess => {
+                            sequential_access.preferred = true
+                        }
                         VideoDecoderMessage::GetFrame(requested_time, _, reply) => {
                             push_request(requested_time, reply);
                         }
@@ -787,6 +820,7 @@ impl FfmpegDecoder {
                         continue;
                     }
 
+                    sequential_access.record_request(requested_frame);
                     let last_sent_number = sw_last_sent_frame.borrow().as_ref().map(|f| f.number);
                     let is_backward_seek = last_sent_number
                         .map(|last| requested_frame < last)
@@ -873,7 +907,12 @@ impl FfmpegDecoder {
                         })
                     };
 
-                    let cache_min = requested_frame.saturating_sub(FRAME_CACHE_SIZE as u32 / 2);
+                    let cache_min =
+                        if sequential_access.preferred && !sequential_access.moved_backwards {
+                            requested_frame
+                        } else {
+                            requested_frame.saturating_sub(FRAME_CACHE_SIZE as u32 / 2)
+                        };
                     let cache_max = requested_frame + FRAME_CACHE_SIZE as u32 / 2;
 
                     // The reader has already passed this uncached frame: it fell
@@ -989,7 +1028,11 @@ impl FfmpegDecoder {
                             // candidate instead of discarding it; a frame below
                             // the cache window can never exceed the request, so
                             // nothing else in this iteration applies to it.
-                            if current_frame <= requested_frame {
+                            if current_frame <= requested_frame
+                                && hold_candidate
+                                    .as_ref()
+                                    .is_none_or(|(number, _)| current_frame >= *number)
+                            {
                                 hold_candidate = Some((current_frame, cache_frame));
                             }
                             continue;
@@ -1173,6 +1216,13 @@ impl FfmpegDecoder {
                         }
                     }
                 }
+                sequential_access.release_past_frames(
+                    &mut sw_cache,
+                    sw_last_sent_frame
+                        .borrow()
+                        .as_ref()
+                        .map(|frame| frame.number),
+                );
             }
 
             return;
@@ -1320,6 +1370,7 @@ impl FfmpegDecoder {
             };
 
             match r {
+                VideoDecoderMessage::PreferSequentialAccess => sequential_access.preferred = true,
                 VideoDecoderMessage::GetFrame(requested_time, _, reply) => {
                     push_request(requested_time, reply);
                 }
@@ -1330,6 +1381,9 @@ impl FfmpegDecoder {
                     return;
                 }
                 match msg {
+                    VideoDecoderMessage::PreferSequentialAccess => {
+                        sequential_access.preferred = true
+                    }
                     VideoDecoderMessage::GetFrame(requested_time, _, reply) => {
                         push_request(requested_time, reply);
                     }
@@ -1351,6 +1405,7 @@ impl FfmpegDecoder {
                     continue;
                 }
 
+                sequential_access.record_request(requested_frame);
                 let last_sent_number = last_sent_frame.borrow().as_ref().map(|f| f.number);
                 let is_backward_seek = last_sent_number
                     .map(|last| requested_frame < last)
@@ -1444,7 +1499,14 @@ impl FfmpegDecoder {
                     })
                 };
 
-                let cache_min = requested_frame.saturating_sub(FRAME_CACHE_SIZE as u32 / 2);
+                let cache_min = if !is_hw
+                    && sequential_access.preferred
+                    && !sequential_access.moved_backwards
+                {
+                    requested_frame
+                } else {
+                    requested_frame.saturating_sub(FRAME_CACHE_SIZE as u32 / 2)
+                };
                 let cache_max = requested_frame + FRAME_CACHE_SIZE as u32 / 2;
 
                 // The reader has already passed this uncached frame: it fell
@@ -1558,7 +1620,11 @@ impl FfmpegDecoder {
                         // candidate instead of discarding it; a frame below
                         // the cache window can never exceed the request, so
                         // nothing else in this iteration applies to it.
-                        if current_frame <= requested_frame {
+                        if current_frame <= requested_frame
+                            && hold_candidate
+                                .as_ref()
+                                .is_none_or(|(number, _)| current_frame >= *number)
+                        {
                             hold_candidate = Some((current_frame, cache_frame));
                         }
                         continue;
@@ -1730,6 +1796,10 @@ impl FfmpegDecoder {
                     }
                 }
             }
+            sequential_access.release_past_frames(
+                &mut cache,
+                last_sent_frame.borrow().as_ref().map(|frame| frame.number),
+            );
         }
     }
 }
@@ -1737,6 +1807,52 @@ impl FfmpegDecoder {
 #[cfg(test)]
 mod cache_tests {
     use super::*;
+
+    #[test]
+    fn sequential_release_keeps_vfr_hold_future_and_external_owners() {
+        let old = Arc::new(0);
+        let old_weak = Arc::downgrade(&old);
+        let first = Arc::new(1);
+        let gap_hold = Arc::new(2);
+        let mut cache = BTreeMap::from([
+            (0, first.clone()),
+            (2, old),
+            (5, gap_hold.clone()),
+            (10, Arc::new(3)),
+            (30, Arc::new(4)),
+        ]);
+        let mut policy = SequentialAccess::default();
+        policy.record_request(18);
+        policy.release_past_frames(&mut cache, Some(10));
+        assert_eq!(cache.len(), 5, "playback retains its cache");
+        policy.preferred = true;
+        policy.release_past_frames(&mut cache, Some(10));
+        assert_eq!(cache.keys().copied().collect::<Vec<_>>(), [10, 30]);
+        assert!(
+            old_weak.upgrade().is_none(),
+            "past cache ownership released"
+        );
+        assert_eq!((*first, *gap_hold), (1, 2));
+        assert_eq!(*cache[&10], 3, "hold is the served frame, not request 18");
+    }
+
+    #[test]
+    fn backwards_requests_disable_release_even_with_a_static_hold() {
+        let mut policy = SequentialAccess {
+            preferred: true,
+            ..Default::default()
+        };
+        policy.record_request(18);
+        policy.record_request(18);
+        assert!(!policy.moved_backwards);
+        policy.record_request(17);
+        let mut cache = BTreeMap::from([(0, ()), (10, ()), (30, ())]);
+        policy.release_past_frames(&mut cache, Some(10));
+        assert_eq!(cache.len(), 3);
+        policy.record_request(50);
+        policy.release_past_frames(&mut cache, Some(30));
+        assert_eq!(cache.len(), 3, "backward fallback remains enabled");
+    }
 
     #[test]
     fn readahead_stops_at_its_window() {
