@@ -72,6 +72,44 @@ impl KeyboardEvents {
     }
 }
 
+/// Builds the bytes of [`KeyboardEvents::to_bytes`] one press at a time. With
+/// bincode's standard config a struct is its fields back to back and a `Vec`
+/// is a varint length followed by its elements, so the encoded presses can be
+/// kept and only the length prefix rebuilt for each write.
+#[derive(Default)]
+pub struct KeyboardEventsEncoder {
+    presses: Vec<u8>,
+    count: usize,
+}
+
+impl KeyboardEventsEncoder {
+    pub fn push(&mut self, press: &KeyPressEvent) -> Result<(), String> {
+        let start = self.presses.len();
+        bincode::serde::encode_into_std_write(
+            press,
+            &mut self.presses,
+            bincode::config::standard(),
+        )
+        .map_err(|e| {
+            self.presses.truncate(start);
+            format!("Failed to serialize keyboard event: {e}")
+        })?;
+        self.count += 1;
+        Ok(())
+    }
+
+    pub fn header(&self) -> Result<Vec<u8>, String> {
+        let mut header = KEYBOARD_EVENTS_MAGIC.to_vec();
+        bincode::encode_into_std_write(self.count, &mut header, bincode::config::standard())
+            .map_err(|e| format!("Failed to serialize keyboard events: {e}"))?;
+        Ok(header)
+    }
+
+    pub fn presses(&self) -> &[u8] {
+        &self.presses
+    }
+}
+
 const MODIFIER_KEYS: &[&str] = &[
     "LShift", "RShift", "LControl", "RControl", "LAlt", "RAlt", "LOption", "ROption", "LMeta",
     "RMeta", "Meta", "Command", "RCommand",
@@ -1251,6 +1289,61 @@ mod tests {
             );
             assert_eq!(events.to_bytes().unwrap(), expected, "key length {length}");
         }
+    }
+
+    #[test]
+    fn incremental_encoder_matches_whole_encoding_across_varint_widths() {
+        let mut seed = 0x9e37_79b9_7f4a_7c15_u64;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let keys = ["", "a", "文字🖱", "LControl", &"x".repeat(300)];
+        let press = |index: usize, random: u64| KeyPressEvent {
+            key: keys[random as usize % keys.len()].into(),
+            key_code: keys[(random >> 8) as usize % keys.len()].into(),
+            time_ms: match random % 7 {
+                0 => f64::NAN,
+                1 => -0.0,
+                2 => f64::INFINITY,
+                _ => index as f64 * 16.5,
+            },
+            down: random & 1 == 0,
+        };
+        let check = |encoder: &KeyboardEventsEncoder, events: &KeyboardEvents| {
+            let mut bytes = encoder.header().unwrap();
+            bytes.extend_from_slice(encoder.presses());
+            assert_eq!(
+                bytes,
+                events.to_bytes().unwrap(),
+                "{} events",
+                events.presses.len()
+            );
+        };
+        let mut encoder = KeyboardEventsEncoder::default();
+        let mut events = KeyboardEvents::default();
+        check(&encoder, &events);
+        for target in [0, 1, 249, 250, 251, 252, 65_535, 65_536, 65_537, 70_000] {
+            while events.presses.len() < target {
+                let batch = (next() % 600) as usize;
+                let batch = batch.min(target - events.presses.len());
+                for _ in 0..batch {
+                    let event = press(events.presses.len(), next());
+                    encoder.push(&event).unwrap();
+                    events.presses.push(event);
+                }
+                check(&encoder, &events);
+            }
+            check(&encoder, &events);
+        }
+        let decoded = KeyboardEvents::from_bytes(
+            &[encoder.header().unwrap(), encoder.presses().to_vec()].concat(),
+            Path::new("keyboard.bin"),
+        )
+        .unwrap();
+        assert_eq!(decoded.presses.len(), events.presses.len());
     }
 
     #[test]
