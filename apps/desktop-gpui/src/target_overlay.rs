@@ -830,7 +830,7 @@ fn more_area_ratios() -> Vec<(u32, u32)> {
 /// so a capture under their panes showed through it as hard-edged blocks;
 /// there the panes sit on the fallback fill, as they do where no capture
 /// is possible.
-fn backdrop_suits(mode: Option<TargetType>) -> bool {
+pub(crate) fn backdrop_suits(mode: Option<TargetType>) -> bool {
     match mode {
         None => false,
         Some(TargetType::Display | TargetType::Window) => !cfg!(windows),
@@ -1224,6 +1224,8 @@ pub struct OverlayWindow {
     /// The area as the last render drew it, and when it last changed: a
     /// capture waits for the panels to stop moving.
     backdrop_crop: Option<AreaRect>,
+    backdrop_capture_crop: Option<AreaRect>,
+    backdrop_display_size: Option<(f32, f32)>,
     crop_moved_at: Option<Instant>,
     backdrop_wake_pending: bool,
     inline_camera: Option<Entity<crate::camera_window::CameraWindow>>,
@@ -1398,6 +1400,8 @@ impl OverlayWindow {
             backdrop_at: None,
             backdrop_capturing: false,
             backdrop_crop: None,
+            backdrop_capture_crop: None,
+            backdrop_display_size: None,
             crop_moved_at: None,
             backdrop_wake_pending: false,
             inline_camera: None,
@@ -1570,6 +1574,8 @@ impl OverlayWindow {
             if self.backdrop.has_image() {
                 self.backdrop.set_image(None, gpui::Bounds::default());
                 self.backdrop_at = None;
+                self.backdrop_capture_crop = None;
+                self.backdrop_display_size = None;
             }
             return;
         }
@@ -1577,17 +1583,25 @@ impl OverlayWindow {
             self.backdrop_crop = self.crop;
             self.crop_moved_at = Some(Instant::now());
         }
+        let bounds_unchanged = self.backdrop.has_image()
+            && self.backdrop_capture_crop == self.crop
+            && self.backdrop_display_size == Some(self.display_size);
         // A drawn area moves the camera into it, so a capture from before the
         // area last changed is stale however recent it is.
         let moved_since = self
             .crop_moved_at
             .zip(self.backdrop_at)
             .is_some_and(|(moved, captured)| moved > captured);
+        let stale_after = if bounds_unchanged {
+            crate::overlay_backdrop::STALE_AFTER
+        } else {
+            crate::overlay_backdrop::STALE_AFTER_MIN
+        };
         if self.backdrop_capturing
             || (!moved_since
                 && self
                     .backdrop_at
-                    .is_some_and(|at| at.elapsed() < crate::overlay_backdrop::STALE_AFTER))
+                    .is_some_and(|at| at.elapsed() < stale_after))
         {
             return;
         }
@@ -1644,6 +1658,8 @@ impl OverlayWindow {
                         size,
                     )
                 });
+                this.backdrop_capture_crop = this.crop;
+                this.backdrop_display_size = image.as_ref().map(|_| size);
                 this.backdrop.set_image(
                     image,
                     gpui::Bounds::new(

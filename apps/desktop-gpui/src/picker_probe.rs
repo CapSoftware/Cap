@@ -106,7 +106,7 @@ pub fn run(main: WindowHandle<MainWindow>, cx: &mut App) {
             let mut mode = cx.update(|cx| probe_mode(label, cx));
             mode["overlayInactiveBeforeActivation"] = inactive_before.into();
             let screen = screenshot(&output, label, cx).await;
-            mode["backdrop"] = probe_backdrop(&output, label, screen.as_ref(), cx).await;
+            mode["backdrop"] = probe_backdrop(&output, label, kind, screen.as_ref(), cx).await;
             modes.push(mode);
             if kind == TargetType::Window {
                 window_arrangement = Some(probe_window_arrangement(&output, cx).await);
@@ -372,6 +372,7 @@ fn mean_difference(
 async fn probe_backdrop(
     output: &std::ffi::OsStr,
     label: &str,
+    kind: TargetType,
     screen: Option<&image::DynamicImage>,
     cx: &mut AsyncApp,
 ) -> serde_json::Value {
@@ -393,6 +394,13 @@ async fn probe_backdrop(
             .ok()
             .flatten()
     });
+    if !crate::target_overlay::backdrop_suits(Some(kind)) {
+        return serde_json::json!({
+            "skipped": "the picker takes no backdrop in this mode here",
+            "present": image.is_some(),
+            "passed": image.is_none(),
+        });
+    }
     let Some(image) = image else {
         return serde_json::json!({ "present": false, "passed": false });
     };
