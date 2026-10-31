@@ -376,6 +376,7 @@ fn main() {
         gpui_tokio::Tokio::spawn(cx, cap_utils::operation_diagnostics::run_checkpoints()).detach();
         // The dock icon: an unbundled dev binary shows the generic terminal
         // document without it. The bytes are the shipping app's icon.png.
+        #[cfg(debug_assertions)]
         platform::set_dock_icon(include_bytes!("../assets/dock-icon.png"));
 
         if let Err(error) = Assets.load_fonts(cx) {
