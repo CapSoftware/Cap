@@ -1135,6 +1135,8 @@ impl Compositor {
             return None;
         }
         let layout = PackedRgbLayout::of(screen.format())?;
+        // PipeWire aliases are read-only, so the blend copies into private
+        // pixels. An owned screen frame is already writable and stays put.
         let writable = unsafe { ffmpeg::sys::av_frame_make_writable(screen.as_mut_ptr()) };
         (writable >= 0).then_some(layout)
     }

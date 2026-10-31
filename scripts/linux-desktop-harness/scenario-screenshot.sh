@@ -5,6 +5,12 @@ export XDG_RUNTIME_DIR=/run/user/$(id -u)
 export DBUS_SESSION_BUS_ADDRESS=unix:path=$XDG_RUNTIME_DIR/bus
 out=${HARNESS_OUT:-/out}
 eval "$(systemctl --user show-environment | grep -E "^(WAYLAND_DISPLAY|XDG_SESSION_TYPE|XDG_CURRENT_DESKTOP|XDG_SESSION_DESKTOP|LIBGL_ALWAYS_SOFTWARE|HYPRLAND_INSTANCE_SIGNATURE|NIRI_SOCKET)=" | sed 's/^/export /')"
+expected_size=${SCREEN:-1920x1080}
+if [[ -n ${HYPRLAND_INSTANCE_SIGNATURE:-} ]]; then
+  expected_size=$(hyprctl -j monitors | python3 -c 'import json, sys
+monitor, = json.load(sys.stdin)
+print("{}x{}".format(monitor["width"], monitor["height"]))') || exit 1
+fi
 : >"$out/result.txt"
 result() { printf '%s=%s\n' "$1" "$2" >>"$out/result.txt"; }
 
@@ -81,7 +87,7 @@ if data[:8] == b"\x89PNG\r\n\x1a\n":
     print(*struct.unpack(">II", data[16:24]))' "$shot")
 echo "screenshot: ${shot:-none} ${size:-}" >>"$out/actions.log"
 result screenshot_taken "$([[ -n $size ]] && echo yes || echo no)"
-result screenshot_size "$([[ ${size// /x} == "${SCREEN:-1920x1080}" ]] && echo yes || echo "${size// /x}")"
+result screenshot_size "$([[ ${size// /x} == "$expected_size" ]] && echo yes || echo "${size// /x}")"
 result capture_failed "$(grep -ac 'screenshot capture failed' "$out/cap.log")"
 if [[ -z $shot ]]; then
   find "$HOME" /tmp -newer "$out/profile/store" -iname "Screenshot*.png" -printf "portal file: %s bytes %p\n" 2>/dev/null >>"$out/actions.log"
