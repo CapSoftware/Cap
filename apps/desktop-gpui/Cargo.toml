@@ -133,6 +133,7 @@ anyhow = "1"
 chrono = "0.4"
 # The JSON `store` file in the app-data directory (`src/store.rs`).
 serde_json = "1"
+relative-path = { version = "1.9.3", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
 sanitize-filename = "0.6.0"
 semver = "1"
