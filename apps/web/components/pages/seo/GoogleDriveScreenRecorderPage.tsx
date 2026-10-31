@@ -9,7 +9,7 @@ import {
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, motion, type Variants } from "framer-motion";
 import {
 	ArrowLeftRight,
 	Building2,
@@ -173,7 +173,7 @@ const steps = [
 	},
 ];
 
-const fadeUp = {
+const fadeUp: Variants = {
 	hidden: { opacity: 0, y: 24 },
 	visible: (custom: number) => ({
 		opacity: 1,

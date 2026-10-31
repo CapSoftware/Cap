@@ -5,6 +5,7 @@ export type Day = {
 	operational: number;
 	degraded: number;
 	outage: number;
+	confirmedOutage?: boolean;
 };
 
 export type Incident = {

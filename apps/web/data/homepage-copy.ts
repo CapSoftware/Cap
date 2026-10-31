@@ -271,7 +271,7 @@ export const homepageCopy: HomePageCopy = {
 				key: "native",
 				title: "Native, Not An Electron Tab",
 				description:
-					"Built on Tauri and Rust for genuinely native performance on macOS and Windows. No bloated browser, no battery hit — just a fast, lightweight recorder.",
+					"Built in Rust with a native interface for genuinely native performance on macOS, Windows, and Linux. No bloated browser, no battery hit — just a fast, lightweight recorder.",
 			},
 			{
 				key: "oss",

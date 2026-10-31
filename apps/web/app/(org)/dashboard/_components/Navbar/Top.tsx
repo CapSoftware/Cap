@@ -33,8 +33,8 @@ import {
 import { markAsRead } from "@/actions/notifications/mark-as-read";
 import Notifications from "@/app/(org)/dashboard/_components/Notifications";
 import { resetUser } from "@/app/utils/analytics";
+import { LazyUpgradeModal } from "@/components/LazyUpgradeModal";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
-import { UpgradeModal } from "@/components/UpgradeModal";
 import { useDashboardContext, useTheme } from "../../Contexts";
 import {
 	ArrowUpIcon,
@@ -270,7 +270,7 @@ const User = () => {
 
 	return (
 		<>
-			<UpgradeModal
+			<LazyUpgradeModal
 				open={upgradeModalOpen}
 				onOpenChange={setUpgradeModalOpen}
 			/>
