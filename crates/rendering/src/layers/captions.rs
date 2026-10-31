@@ -139,9 +139,9 @@ const BASE_TEXT_OPACITY: f32 = 0.8;
 const BOUNCE_OFFSET_PIXELS: f32 = 8.0;
 // Safety net for caption segments whose trailing word end was stretched across a
 // silence by transcription (e.g. a 16s "seconds."). Without this, such a segment
-// stays on screen for the whole inflated duration. Kept in sync with
-// MAX_CAPTION_WORD_DURATION in the desktop transcription/projection layers.
-const MAX_CAPTION_WORD_DURATION: f64 = 2.5;
+// stays on screen for the whole inflated duration. Value comes from the shared
+// caption word utilities so it stays in sync with the transcription layers.
+const MAX_CAPTION_WORD_DURATION: f64 = cap_project::caption_words::MAX_CAPTION_WORD_DURATION as f64;
 
 fn ease_out_cubic(t: f32) -> f32 {
     let t = t.clamp(0.0, 1.0);

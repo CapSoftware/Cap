@@ -520,15 +520,27 @@ export const POST = async (req: Request) => {
 					customerEmail = customer.email;
 				}
 
+				// Signed-in checkouts record the buyer on the session itself, which
+				// still finds them when the Stripe customer has no userId metadata
+				// and its email no longer matches their account.
+				const sessionUserId = session.metadata?.dubCustomerId
+					? User.UserId.make(session.metadata.dubCustomerId)
+					: undefined;
+
 				console.log("Starting user lookup with:", {
 					foundUserId,
+					sessionUserId,
 					customerEmail,
 				});
 
 				let dbUser = await findUserWithRetry(
 					customerEmail as string,
-					foundUserId,
+					foundUserId ?? sessionUserId,
 				);
+
+				if (!dbUser && sessionUserId && sessionUserId !== foundUserId) {
+					dbUser = await findUserWithRetry("", sessionUserId, 1);
+				}
 
 				if (!dbUser && session.metadata?.guestCheckout === "true") {
 					const guestEmail = customerEmail || session.customer_details?.email;
@@ -546,13 +558,6 @@ export const POST = async (req: Request) => {
 					);
 					try {
 						dbUser = await createGuestUser(guestEmail);
-
-						await stripe().customers.update(customer.id, {
-							metadata: {
-								...("metadata" in customer ? customer.metadata : {}),
-								userId: dbUser.id,
-							},
-						});
 					} catch (error) {
 						console.error("Failed to create guest user:", error);
 						return new Response("Failed to create user", { status: 500 });
@@ -573,6 +578,15 @@ export const POST = async (req: Request) => {
 					email: dbUser.email,
 					name: dbUser.name,
 				});
+
+				// Later subscription events (renewals, seat changes, cancellation)
+				// find the user through this metadata, so link it while the
+				// session still says who paid.
+				if ("metadata" in customer && customer.metadata.userId !== dbUser.id) {
+					await stripe().customers.update(customer.id, {
+						metadata: { ...customer.metadata, userId: dbUser.id },
+					});
+				}
 
 				const subscription =
 					checkoutSubscription ??

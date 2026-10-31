@@ -45,7 +45,7 @@ use gpui::{
     prelude::FluentBuilder, px,
 };
 
-use crate::{editor_window::EditorWindow, ui};
+use crate::{editor_window::EditorWindow, i18n::tr, ui};
 
 // ---------------------------------------------------------------------------
 // The catalogue
@@ -103,8 +103,8 @@ pub const IDENTITY: GradeValues = GradeValues {
 
 pub struct ColorPreset {
     pub id: &'static str,
-    pub label: &'static str,
-    pub description: &'static str,
+    pub label: fn() -> &'static str,
+    pub description: fn() -> &'static str,
     pub values: GradeValues,
     pub filter: &'static [Filter],
     pub overlay: Option<Overlay>,
@@ -118,16 +118,16 @@ const fn rgba(r: u8, g: u8, b: u8, a: f32) -> [f32; 4] {
 pub static COLOR_CORRECTION_PRESETS: &[ColorPreset] = &[
     ColorPreset {
         id: PRESET_NONE,
-        label: "None",
-        description: "Original colors, no grade applied",
+        label: tr::editor::color::preset::none::name,
+        description: tr::editor::color::preset::none::description,
         values: IDENTITY,
         filter: &[],
         overlay: None,
     },
     ColorPreset {
         id: "cinematic",
-        label: "Cinematic",
-        description: "Teal shadows and orange highlights with light grain",
+        label: tr::editor::color::preset::cinematic::name,
+        description: tr::editor::color::preset::cinematic::description,
         values: GradeValues {
             contrast: 0.12,
             saturation: 0.06,
@@ -147,8 +147,8 @@ pub static COLOR_CORRECTION_PRESETS: &[ColorPreset] = &[
     },
     ColorPreset {
         id: "noir",
-        label: "Noir",
-        description: "High-contrast black and white with heavy grain",
+        label: tr::editor::color::preset::noir::name,
+        description: tr::editor::color::preset::noir::description,
         values: GradeValues {
             exposure: 0.04,
             contrast: 0.3,
@@ -168,8 +168,8 @@ pub static COLOR_CORRECTION_PRESETS: &[ColorPreset] = &[
     },
     ColorPreset {
         id: "vintage",
-        label: "Vintage",
-        description: "Faded warm film look with soft contrast",
+        label: tr::editor::color::preset::vintage::name,
+        description: tr::editor::color::preset::vintage::description,
         values: GradeValues {
             contrast: -0.06,
             saturation: -0.18,
@@ -191,8 +191,8 @@ pub static COLOR_CORRECTION_PRESETS: &[ColorPreset] = &[
     },
     ColorPreset {
         id: "frost",
-        label: "Frost",
-        description: "Cool, crisp tones with muted color",
+        label: tr::editor::color::preset::frost::name,
+        description: tr::editor::color::preset::frost::description,
         values: GradeValues {
             contrast: 0.08,
             saturation: -0.08,
@@ -215,8 +215,8 @@ pub static COLOR_CORRECTION_PRESETS: &[ColorPreset] = &[
     },
     ColorPreset {
         id: "golden",
-        label: "Golden",
-        description: "Warm golden-hour glow",
+        label: tr::editor::color::preset::golden::name,
+        description: tr::editor::color::preset::golden::description,
         values: GradeValues {
             exposure: 0.06,
             contrast: 0.06,
@@ -241,8 +241,8 @@ pub static COLOR_CORRECTION_PRESETS: &[ColorPreset] = &[
     },
     ColorPreset {
         id: "midnight",
-        label: "Midnight",
-        description: "Dark, moody teal with subdued color",
+        label: tr::editor::color::preset::midnight::name,
+        description: tr::editor::color::preset::midnight::description,
         values: GradeValues {
             exposure: -0.08,
             contrast: 0.16,
@@ -267,8 +267,8 @@ pub static COLOR_CORRECTION_PRESETS: &[ColorPreset] = &[
     },
     ColorPreset {
         id: "vivid",
-        label: "Vivid",
-        description: "Punchy saturation and contrast boost",
+        label: tr::editor::color::preset::vivid::name,
+        description: tr::editor::color::preset::vivid::description,
         values: GradeValues {
             exposure: 0.02,
             contrast: 0.14,
@@ -281,8 +281,8 @@ pub static COLOR_CORRECTION_PRESETS: &[ColorPreset] = &[
     },
     ColorPreset {
         id: "dreamy",
-        label: "Dreamy",
-        description: "Soft, airy pastels with lifted blacks",
+        label: tr::editor::color::preset::dreamy::name,
+        description: tr::editor::color::preset::dreamy::description,
         values: GradeValues {
             exposure: 0.08,
             contrast: -0.14,
@@ -326,6 +326,25 @@ pub enum GradeSlider {
 }
 
 impl GradeSlider {
+    /// Whether this slider writes a field
+    /// [`crate::editor_timeline::TimelineModel::build`] or
+    /// [`crate::editor_timeline::TrackLanes::from_project`] reads. The match
+    /// is exhaustive so a new slider has to make the choice explicitly.
+    pub(crate) fn changes_timeline_model(self) -> bool {
+        match self {
+            Self::Grain
+            | Self::Intensity
+            | Self::Exposure
+            | Self::Contrast
+            | Self::Saturation
+            | Self::Temperature
+            | Self::Tint
+            | Self::Fade
+            | Self::SplitTone
+            | Self::Vignette => false,
+        }
+    }
+
     /// The nine rows inside "Fine-tune colors", in order.
     pub const ADJUST: [GradeSlider; 9] = [
         Self::Intensity,
@@ -341,16 +360,16 @@ impl GradeSlider {
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::Grain => "Grain",
-            Self::Intensity => "Strength",
-            Self::Exposure => "Exposure",
-            Self::Contrast => "Contrast",
-            Self::Saturation => "Saturation",
-            Self::Temperature => "Temperature",
-            Self::Tint => "Tint",
-            Self::Fade => "Fade",
-            Self::SplitTone => "Split Tone",
-            Self::Vignette => "Vignette",
+            Self::Grain => tr::editor::color::slider::grain(),
+            Self::Intensity => tr::editor::color::slider::strength(),
+            Self::Exposure => tr::editor::color::slider::exposure(),
+            Self::Contrast => tr::editor::color::slider::contrast(),
+            Self::Saturation => tr::editor::color::slider::saturation(),
+            Self::Temperature => tr::editor::color::slider::temperature(),
+            Self::Tint => tr::editor::color::slider::tint(),
+            Self::Fade => tr::editor::color::slider::fade(),
+            Self::SplitTone => tr::editor::color::slider::split_tone(),
+            Self::Vignette => tr::editor::color::slider::vignette(),
         }
     }
 
@@ -492,17 +511,23 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.edit_project("grade", window, cx, move |project| {
-            let grade = Self::grade_mut(project, target);
-            if (slider.read(grade) - value).abs() < f32::EPSILON {
-                return false;
-            }
-            slider.write(grade, value);
-            if !slider.keeps_preset() {
-                grade.preset = PRESET_CUSTOM.to_string();
-            }
-            true
-        });
+        self.edit_project_with_rebuild(
+            slider.changes_timeline_model(),
+            "grade",
+            window,
+            cx,
+            move |project| {
+                let grade = Self::grade_mut(project, target);
+                if (slider.read(grade) - value).abs() < f32::EPSILON {
+                    return false;
+                }
+                slider.write(grade, value);
+                if !slider.keeps_preset() {
+                    grade.preset = PRESET_CUSTOM.to_string();
+                }
+                true
+            },
+        );
     }
 
     fn preset_image(index: usize) -> Option<Arc<RenderImage>> {
@@ -586,10 +611,10 @@ impl EditorWindow {
                                 .text_size(px(12.))
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_color(Hsla::from(theme.gray_12))
-                                .child(preset.label),
+                                .child((preset.label)()),
                         )
                         .tooltip({
-                            let description = SharedString::from(preset.description);
+                            let description = SharedString::from((preset.description)());
                             move |_window, cx| {
                                 ui::Tooltip::new(&theme, description.clone()).view(cx)
                             }
@@ -604,9 +629,9 @@ impl EditorWindow {
             .flex()
             .flex_col()
             .gap(px(14.))
-            .child(ui::Field::section(&theme, "Color Correction").child(tiles))
+            .child(ui::Field::section(&theme, tr::editor::color::title()).child(tiles))
             .child(self.slider_field(
-                "Grain",
+                GradeSlider::Grain.label(),
                 crate::editor_sidebar::SliderKey::Grade(target, GradeSlider::Grain),
                 "%",
                 cx,
@@ -616,7 +641,7 @@ impl EditorWindow {
         if target == GradeTarget::Screen {
             let grade_cursor = self.project.color_correction.grade_cursor;
             section = section.child(
-                ui::Field::inline(&theme, "Apply to cursor").value(
+                ui::Field::inline(&theme, tr::editor::color::apply_to_cursor()).value(
                     ui::Toggle::plain(&theme, "grade-cursor", grade_cursor)
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.edit_project("grade-cursor", window, cx, |project| {
@@ -639,7 +664,7 @@ impl EditorWindow {
                     .child(crate::editor_sidebar::disclosure_row(
                         &theme,
                         SharedString::from(format!("grade-adjust-{}", target.key())),
-                        "Fine-tune colors",
+                        tr::editor::color::fine_tune(),
                         open.is_open(),
                         cx.listener(move |this, _, window, cx| {
                             let next = !this.sidebar.grade_open(target).is_open();
