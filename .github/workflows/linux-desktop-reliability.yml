@@ -11,6 +11,8 @@ on:
     paths:
       - "apps/desktop-gpui/**"
       - "crates/recording/**"
+      - "crates/camera/**"
+      - "crates/camera-ffmpeg/**"
       - "crates/utils/**"
       - "crates/scap-targets/**"
       - "scripts/linux-desktop-harness/**"
@@ -60,7 +62,7 @@ jobs:
             echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
           gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --paginate --jq '.[].filename' > "$RUNNER_TEMP/changed.txt"
-          if grep -qE '^(apps/desktop-gpui/|crates/(recording|utils|scap-targets)/|scripts/(prepare-gpui-dependency\.sh|finalize-linux-appimage\.mjs)$)' "$RUNNER_TEMP/changed.txt"; then
+          if grep -qE '^(apps/desktop-gpui/|crates/(recording|camera|camera-ffmpeg|utils|scap-targets)/|scripts/(prepare-gpui-dependency\.sh|finalize-linux-appimage\.mjs)$)' "$RUNNER_TEMP/changed.txt"; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
@@ -281,6 +283,19 @@ jobs:
             grep -qx "$line" "$RUNNER_TEMP/out/gnome-screenshot/result.txt"
           done
 
+      - name: GNOME 50 screenshot from a terminal launch (Cap names itself so.cap.Cap)
+        env:
+          DEV_BIN: ${{ github.workspace }}/apps/desktop-gpui/target/debug/cap-gpui
+          DEV_LIBS: ${{ github.workspace }}/target/native-deps/lib
+          SCENARIO: screenshot
+        run: |
+          sudo -E bash scripts/linux-desktop-harness/run-desktop.sh gnome "$RUNNER_TEMP/cap.deb" \
+            "$RUNNER_TEMP/out/gnome-screenshot-terminal" LAUNCH=terminal PRELAUNCH=1 GNOME_UNSAFE=1
+          cat "$RUNNER_TEMP/out/gnome-screenshot-terminal/result.txt" "$RUNNER_TEMP/out/gnome-screenshot-terminal/actions.log"
+          for line in screenshot_taken=yes screenshot_size=yes capture_failed=0 cap_alive=yes panics=0; do
+            grep -qx "$line" "$RUNNER_TEMP/out/gnome-screenshot-terminal/result.txt"
+          done
+
       - name: GNOME 50 area recording (portal stream cropped to the area)
         env:
           DEV_BIN: ${{ github.workspace }}/apps/desktop-gpui/target/debug/cap-gpui
@@ -351,9 +366,13 @@ jobs:
 
       - name: Virtual display devices
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq "linux-modules-extra-$(uname -r)"
-          sudo modprobe vkms
+          # Newer runner kernels ship vkms in the base modules package and
+          # have no linux-modules-extra package at all.
+          if ! sudo modprobe vkms 2>/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq "linux-modules-extra-$(uname -r)"
+            sudo modprobe vkms
+          fi
           ls -la /dev/dri
 
       - name: Hyprland (portal refuses host apps, tray Stop control)
@@ -393,9 +412,14 @@ jobs:
         run: |
           sudo apt-get install -y -qq "linux-headers-$(uname -r)" v4l2loopback-dkms xvfb xdotool ffmpeg dbus >/dev/null
           chmod +x "$RUNNER_TEMP/build/cap-gpui"
-          sudo install -d -o "$(id -u)" -g "$(id -g)" "$RUNNER_TEMP/out/x11-camera"
-          bash scripts/linux-desktop-harness/x11-camera.sh "$RUNNER_TEMP/build/cap-gpui" "$RUNNER_TEMP/build/libs" \
-            "$RUNNER_TEMP/out/x11-camera"
+          # Each format Cap's Linux camera path converts: packed YUYV, NV12 and
+          # MJPEG (decoded before use).
+          for format in yuyv422 nv12 mjpeg; do
+            dir="$RUNNER_TEMP/out/x11-camera-$format"
+            sudo install -d -o "$(id -u)" -g "$(id -g)" "$dir"
+            CAMERA_FORMAT=$format bash scripts/linux-desktop-harness/x11-camera.sh \
+              "$RUNNER_TEMP/build/cap-gpui" "$RUNNER_TEMP/build/libs" "$dir"
+          done
 
       - name: Hyprland area recording
         run: |
@@ -510,9 +534,13 @@ jobs:
 
       - name: Virtual display devices
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq "linux-modules-extra-$(uname -r)"
-          sudo modprobe vkms
+          # Newer runner kernels ship vkms in the base modules package and
+          # have no linux-modules-extra package at all.
+          if ! sudo modprobe vkms 2>/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq "linux-modules-extra-$(uname -r)"
+            sudo modprobe vkms
+          fi
           ls -la /dev/dri
 
       - name: Build niri

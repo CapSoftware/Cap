@@ -42,11 +42,13 @@ mod editor_tabs;
 mod editor_timeline;
 mod editor_window;
 mod feeds;
+mod focus_border;
 mod hotkeys;
 mod i18n;
 mod import;
 mod installer;
 mod jpeg_thumbnail;
+mod library;
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 mod linux_dialog;
 #[cfg(target_os = "linux")]
@@ -55,7 +57,6 @@ mod linux_display;
 mod linux_portal_id;
 #[cfg(target_os = "linux")]
 mod linux_wallpaper;
-mod library;
 mod main_window;
 mod media_access;
 mod menus;
@@ -63,11 +64,16 @@ mod mode_select_window;
 mod onboarding_audio;
 mod onboarding_doodles;
 mod onboarding_window;
+mod overlay_backdrop;
 mod permission_guide;
 mod permissions;
 mod permissions_ui;
 #[cfg(test)]
 mod picker_benchmark;
+#[cfg(debug_assertions)]
+mod glass_probe;
+#[cfg(debug_assertions)]
+mod picker_probe;
 #[cfg(debug_assertions)]
 mod picker_ui_benchmark;
 mod platform;
@@ -97,6 +103,8 @@ mod tray;
 mod ui;
 mod updates;
 mod upload;
+mod foreign_window;
+mod window_arrange;
 
 use gpui::{App, AppContext as _, Bounds, WindowBounds, WindowOptions, px, size};
 
@@ -157,10 +165,9 @@ fn resolve_auto_screenshot_editor(target: &str) -> Option<std::path::PathBuf> {
 }
 
 /// Windows ends the process at logoff or shutdown without running
-/// `on_app_quit`, so both markers that mean "this session crashed" clear here.
+/// `on_app_quit`, so the marker that means "this session crashed" clears here.
 #[cfg(target_os = "windows")]
 fn end_windows_session() {
-    crate::store::clear_handoff_marker();
     crash_capture::mark_clean_exit();
 }
 
@@ -335,9 +342,6 @@ fn main() {
     single_instance::acquire();
     let previous_session = crash_capture::begin_session(&diagnostics::logs_dir());
     blur_recovery::configure(previous_session);
-    if cfg!(debug_assertions) {
-        store::mark_handoff_session();
-    }
 
     #[cfg(target_os = "macos")]
     platform::install_appkit_exception_guards();
@@ -436,7 +440,7 @@ fn main() {
                         ..Default::default()
                     }),
                     #[cfg(target_os = "linux")]
-                    app_id: Some(crate::app_windows::APP_ID.into()),
+                    app_id: Some(crate::app_windows::app_id().into()),
                     #[cfg(target_os = "linux")]
                     window_min_size: Some(size(px(MAIN_WINDOW_WIDTH), px(MAIN_WINDOW_HEIGHT))),
                     #[cfg(target_os = "linux")]
@@ -471,12 +475,6 @@ fn main() {
             return;
         };
 
-        if cfg!(debug_assertions) {
-            cx.on_app_quit(|_| async {
-                crate::store::clear_handoff_marker();
-            })
-            .detach();
-        }
         cx.on_app_quit(|_| async {
             crash_capture::mark_clean_exit();
         })
@@ -806,6 +804,10 @@ fn main() {
         // synthetic clicks are dropped.
         #[cfg(debug_assertions)]
         picker_ui_benchmark::run(window_handle, cx);
+        #[cfg(debug_assertions)]
+        picker_probe::run(window_handle, cx);
+        #[cfg(debug_assertions)]
+        glass_probe::run(cx);
         if let Ok(auto) = std::env::var("CAP_GPUI_AUTO_RECORD")
             && let Some((mode, secs)) = parse_auto_record(&auto)
         {
@@ -893,8 +895,8 @@ mod runtime_tests {
 #[cfg(test)]
 mod logging_tests {
     use super::create_log_appender;
-    use tracing_subscriber::Layer as _;
     use std::{io::Write, path::PathBuf};
+    use tracing_subscriber::{Layer as _, layer::SubscriberExt as _};
 
     struct LogDirectory(PathBuf);
 
@@ -920,7 +922,6 @@ mod logging_tests {
     #[test]
     fn the_default_filter_drops_zbus_property_cache_warnings_only() {
         use std::sync::{Arc, Mutex};
-        use tracing_subscriber::layer::SubscriberExt as _;
 
         #[derive(Clone, Default)]
         struct Lines(Arc<Mutex<Vec<u8>>>);

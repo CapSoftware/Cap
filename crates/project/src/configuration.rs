@@ -1970,7 +1970,11 @@ impl TimelineConfiguration {
     /// Output-time windows where a fullscreen text segment pauses the
     /// recording clock, sorted and merged. Empty for every project without
     /// fullscreen text — the mapping below then short-circuits to the exact
-    /// pre-hold arithmetic.
+    /// pre-hold arithmetic. A hold that starts after the clips have ended
+    /// (a text card left there by a clip trim or delete, which do not ripple
+    /// text) has no frame to hold and is never reached, so it is left out
+    /// and adds nothing to `duration()`; one starting exactly at the end is
+    /// a closing title and stays.
     pub fn hold_windows(&self) -> Vec<(f64, f64)> {
         let mut windows: Vec<(f64, f64)> = self
             .text_segments
@@ -1989,6 +1993,15 @@ impl TimelineConfiguration {
             } else {
                 false
             }
+        });
+        let clips_end = self.clips_duration();
+        let mut held = 0.0;
+        windows.retain(|(start, end)| {
+            if start - held > clips_end + CLOSING_HOLD_TOLERANCE {
+                return false;
+            }
+            held += end - start;
+            true
         });
         windows
     }
@@ -2812,6 +2825,27 @@ impl ProjectStyleCache {
 }
 
 impl ProjectConfiguration {
+    pub fn with_preset(&self, mut preset: Self) -> Self {
+        let settings = preset.captions.take().map(|captions| captions.settings);
+        preset.captions = match (self.captions.clone(), settings) {
+            (Some(mut captions), settings) => {
+                captions.settings = settings.unwrap_or_default();
+                Some(captions)
+            }
+            (None, Some(settings)) => Some(CaptionsData {
+                settings,
+                ..Default::default()
+            }),
+            (None, None) => None,
+        };
+        preset.timeline = self.timeline.clone();
+        preset.text_size_version = self.text_size_version;
+        preset.text_anim_version = self.text_anim_version;
+        preset.overlay_order = self.overlay_order.clone();
+        preset.clips = self.clips.clone();
+        preset
+    }
+
     pub fn resolved_overlay_order(&self, available: &[OverlayTrack]) -> Vec<OverlayTrack> {
         let mut ordered = Vec::with_capacity(available.len());
         for track in available {
@@ -3931,6 +3965,34 @@ mod tests {
                     if source.segment_index == 0 && source.source_time < 1.2 && output_end == 6.2
             ));
         }
+    }
+
+    #[test]
+    fn holds_left_past_the_end_of_the_clips_are_not_counted() {
+        let mut timeline = timeline_with_transitions(Vec::new());
+        timeline.segments.truncate(1);
+        timeline.segments[0].end = 3.2;
+        timeline.text_segments = vec![
+            fullscreen_text(1.0, 2.0),
+            fullscreen_text(4.2, 5.0),
+            fullscreen_text(6.4, 7.4),
+            fullscreen_text(9.0, 9.5),
+        ];
+
+        assert_eq!(timeline.hold_windows(), vec![(1.0, 2.0), (4.2, 5.0)]);
+        assert_eq!(timeline.duration(), 5.0);
+        for frame in 0..150 {
+            let time = f64::from(frame) / 30.0;
+            assert!(
+                timeline.get_frame_mapping(time).is_some(),
+                "no source at output time {time}"
+            );
+        }
+        assert!(timeline.get_frame_mapping(5.0).is_none());
+
+        timeline.segments[0].end = 2.0;
+        assert_eq!(timeline.hold_windows(), vec![(1.0, 2.0)]);
+        assert_eq!(timeline.duration(), 3.0);
     }
 
     #[test]

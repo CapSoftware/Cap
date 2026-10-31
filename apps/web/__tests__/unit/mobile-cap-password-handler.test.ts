@@ -22,7 +22,7 @@ vi.mock("server-only", () => ({}));
 vi.mock("next/cache", () => ({ revalidatePath: mocks.revalidatePath }));
 
 vi.mock("@/lib/server", async () => {
-	const { Database, Videos } = await import("@cap/web-backend");
+	const { Database, Videos, VideosPolicy } = await import("@cap/web-backend");
 	const { HttpAuthMiddleware, Organisation, User } = await import(
 		"@cap/web-domain"
 	);
@@ -105,6 +105,9 @@ vi.mock("@/lib/server", async () => {
 	const videos = Layer.succeed(Videos, {
 		getAnalytics: () => Effect.succeed({ count: 0 }),
 	} as unknown as Context.Tag.Service<typeof Videos>);
+	const policy = Layer.succeed(VideosPolicy, {
+		canView: () => Effect.void,
+	} as unknown as Context.Tag.Service<typeof VideosPolicy>);
 	const auth = Layer.succeed(
 		HttpAuthMiddleware,
 		Effect.succeed({
@@ -121,6 +124,7 @@ vi.mock("@/lib/server", async () => {
 				never,
 				| Context.Tag.Identifier<typeof Database>
 				| Context.Tag.Identifier<typeof Videos>
+				| Context.Tag.Identifier<typeof VideosPolicy>
 				| Context.Tag.Identifier<typeof HttpAuthMiddleware>
 			>,
 		) => {
@@ -128,6 +132,7 @@ vi.mock("@/lib/server", async () => {
 				Layer.provideMerge(auth),
 				Layer.provideMerge(database),
 				Layer.provideMerge(videos),
+				Layer.provideMerge(policy),
 				Layer.merge(HttpServer.layerContext),
 				HttpApiBuilder.toWebHandler,
 			);
