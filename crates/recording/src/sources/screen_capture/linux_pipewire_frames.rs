@@ -82,7 +82,7 @@ struct MappedBuffer {
     owned: RawFd,
     len: usize,
     pointer: usize,
-    in_use: bool,
+    leases: usize,
     retire: bool,
 }
 
@@ -144,7 +144,7 @@ impl DmaBufCache {
             owned,
             len,
             pointer,
-            in_use: false,
+            leases: 0,
             retire: false,
         });
         Ok((pointer as *mut u8, len))
@@ -161,7 +161,7 @@ impl DmaBufCache {
     fn lease(&mut self, pointer: *mut u8) {
         let pointer = pointer as usize;
         if let Some(map) = self.maps.iter_mut().find(|map| map.pointer == pointer) {
-            map.in_use = true;
+            map.leases += 1;
         }
     }
 
@@ -172,8 +172,8 @@ impl DmaBufCache {
         let Some(index) = self.maps.iter().position(|map| map.pointer == pointer) else {
             return;
         };
-        self.maps[index].in_use = false;
-        if self.maps[index].retire {
+        self.maps[index].leases -= 1;
+        if self.maps[index].retire && self.maps[index].leases == 0 {
             self.unmap_at(index);
         }
     }
@@ -182,7 +182,7 @@ impl DmaBufCache {
     fn unmap_idle(&mut self) {
         let mut index = 0;
         while index < self.maps.len() {
-            if self.maps[index].in_use {
+            if self.maps[index].leases > 0 {
                 index += 1;
             } else {
                 self.unmap_at(index);
@@ -212,7 +212,7 @@ impl DmaBufCache {
     fn unmap_retired(&mut self) {
         let mut index = 0;
         while index < self.maps.len() {
-            if self.maps[index].retire && !self.maps[index].in_use {
+            if self.maps[index].retire && self.maps[index].leases == 0 {
                 self.unmap_at(index);
             } else {
                 index += 1;
@@ -967,6 +967,30 @@ mod tests {
         assert!(!frames.inner.cache.lock().contains(pointer as usize));
         assert_eq!(grown.data(0)[0], bytes[0]);
         drop(grown);
+    }
+
+    #[test]
+    fn shared_fd_regions_keep_the_mapping_until_both_frames_are_released() {
+        ffmpeg::init().expect("ffmpeg");
+        let mut file = tempfile::tempfile().unwrap();
+        std::io::Write::write_all(&mut file, &[1u8, 2, 3, 4, 5, 6, 7, 8]).unwrap();
+        let frames = PipewireFrames::new();
+        let plane = memfd_plane(&file);
+        let mut geometry = geometry(1, 1, 4, 0, 0, 1, 1);
+        let (first, leased) = linear_frame(&frames, &plane, &geometry, true).unwrap();
+        assert!(leased);
+        geometry.offset = 4;
+        let (second, leased) = linear_frame(&frames, &plane, &geometry, true).unwrap();
+        assert!(leased);
+        assert_eq!(frames.inner.cache.lock().map_calls, 1);
+
+        frames.retire_all();
+        drop(first);
+        assert_eq!(frames.inner.cache.lock().unmap_calls, 0);
+        assert_eq!(&second.data(0)[..4], &[5, 6, 7, 8]);
+        drop(second);
+        assert_eq!(frames.inner.cache.lock().unmap_calls, 1);
+        assert_eq!(frames.inflight(), 0);
     }
 
     #[test]
