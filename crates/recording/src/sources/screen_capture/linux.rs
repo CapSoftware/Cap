@@ -2252,29 +2252,52 @@ fn move_pactl_source_output(source_output: u32, source: &str) -> anyhow::Result<
             )?
         }
     };
+    if current_process_source_outputs().is_ok_and(|outputs| {
+        outputs
+            .iter()
+            .any(|output| output.id == source_output && output.source == source_index)
+    }) {
+        return Ok(());
+    }
+
     let status = Command::new("pactl")
         .args(["move-source-output", &source_output.to_string(), source])
         .status()
         .context("move PulseAudio/PipeWire system-audio stream")?;
 
     if !status.success() {
+        if current_process_source_outputs().is_ok_and(|outputs| {
+            outputs
+                .iter()
+                .any(|output| output.id == source_output && output.source == source_index)
+        }) {
+            return Ok(());
+        }
         bail!(
             "Could not route PulseAudio/PipeWire system-audio stream {source_output} to '{source}'"
         );
     }
 
-    for _ in 0..10 {
-        if source_output_route_matches(
-            &current_process_source_outputs()?,
-            source_output,
-            source_index,
-        )? {
+    // PipeWire/WirePlumber handles stream moves asynchronously. Wait up to 2 seconds
+    // with 50ms intervals, tolerating transient states during link renegotiation.
+    let started = Instant::now();
+    let timeout = Duration::from_millis(2000);
+    while started.elapsed() < timeout {
+        if current_process_source_outputs().is_ok_and(|outputs| {
+            source_output_route_matches(&outputs, source_output, source_index).unwrap_or(false)
+        }) {
             return Ok(());
         }
-        std::thread::sleep(Duration::from_millis(20));
+        std::thread::sleep(Duration::from_millis(50));
     }
+
+    let final_outputs = current_process_source_outputs()?;
+    if source_output_route_matches(&final_outputs, source_output, source_index)? {
+        return Ok(());
+    }
+
     bail!(
-        "PulseAudio/PipeWire acknowledged routing stream {source_output} to '{source}', but the input did not change"
+        "PulseAudio/PipeWire acknowledged routing stream {source_output} to '{source}', but the input did not change within 2 seconds"
     )
 }
 
@@ -3405,6 +3428,23 @@ mod system_audio_tests {
         assert!(source_output_route_matches(&routed, 1128, 47).unwrap());
         assert!(source_output_route_matches(&[], 1128, 47).is_err());
         assert!(source_output_route_matches(&routed, 1129, 47).is_err());
+    }
+
+    #[test]
+    fn already_matching_source_output_is_identified() {
+        let outputs = [
+            PactlSourceOutput {
+                id: 1128,
+                source: 47,
+            },
+            PactlSourceOutput {
+                id: 1129,
+                source: 61,
+            },
+        ];
+        assert!(source_output_route_matches(&outputs, 1128, 47).unwrap());
+        assert!(!source_output_route_matches(&outputs, 1128, 61).unwrap());
+        assert!(!source_output_route_matches(&outputs, 1130, 47).unwrap());
     }
 
     #[test]
