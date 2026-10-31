@@ -8164,15 +8164,15 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 								);
 							}
 						}
-						const folderId = Folder.FolderId.make(nanoId());
 						return yield* runAgentMutation({
 							principal,
 							operation: "create_folder",
 							idempotencyKey: yield* requestIdempotencyKey,
-							request: { path, payload: { ...payload, name }, folderId },
+							request: { path, payload: { ...payload, name } },
 							requestId,
 							decodeReplay: decodeMutationResponse,
 							execute: async (tx) => {
+								const folderId = Folder.FolderId.make(nanoId());
 								const now = new Date();
 								await tx.insert(Db.folders).values({
 									id: folderId,
@@ -8501,7 +8501,6 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 								"Cap Pro is required for these space settings",
 							);
 						}
-						const spaceId = Space.SpaceId.make(nanoId());
 						return yield* runAgentMutation({
 							principal,
 							operation: "create_space",
@@ -8509,7 +8508,6 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 							request: {
 								path,
 								payload: { ...payload, name, description },
-								spaceId,
 							},
 							requestId,
 							decodeReplay: decodeMutationResponse,
@@ -8526,6 +8524,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 									.limit(1)
 									.for("update");
 								if (existing) return { state: "conflict" };
+								const spaceId = Space.SpaceId.make(nanoId());
 								const now = new Date();
 								await tx.insert(Db.spaces).values({
 									id: spaceId,
