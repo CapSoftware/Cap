@@ -1561,6 +1561,9 @@ pub struct EditorWindow {
 
     preview_quality: crate::store::EditorPreviewQuality,
     pub(crate) tracks: TrackLanes,
+    /// Where a library track dropped on the timeline goes: the import's
+    /// generation and the output time under the pointer at the drop.
+    audio_drop_start: Option<(u64, f64)>,
     toolbar_menu: Option<OpenToolbarMenu>,
     text_menu: Option<OpenTextMenu>,
     text_style_clipboard: Option<crate::editor_panels::TextStyle>,
@@ -2155,6 +2158,7 @@ impl EditorWindow {
             snap_guides: Vec::new(),
             preview_quality: crate::store::GeneralSettings::load().editor_preview_quality,
             tracks: TrackLanes::from_project(&ProjectConfiguration::default(), false),
+            audio_drop_start: None,
             toolbar_menu: None,
             text_menu: None,
             text_style_clipboard: None,
@@ -5618,6 +5622,32 @@ impl EditorWindow {
         .detach();
     }
 
+    /// A library track dropped on the timeline: added on the audio lane it
+    /// landed on (a new lane anywhere else), starting under the pointer.
+    fn drop_library_track(
+        &mut self,
+        drag: &crate::editor_audio::LibraryDrag,
+        lane: Option<u32>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.project_ready()
+            || matches!(
+                self.audio_picker,
+                Some(crate::editor_audio::AudioPicker::Replace { .. })
+            )
+        {
+            return;
+        }
+        let viewport_width: f32 = window.viewport_size().width.into();
+        let x = f32::from(window.mouse_position().x).max(timeline::content_left());
+        let time = self.time_at(x, viewport_width).max(0.);
+        let lane = lane.unwrap_or(self.tracks.audio);
+        self.open_audio_picker(lane, cx);
+        self.audio_drop_start = Some((self.audio_picker_generation, time));
+        self.add_library_track(drag.id, drag.name, window, cx);
+    }
+
     pub(crate) fn import_audio_from_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(request) = self.begin_audio_import(window, cx) else {
             return;
@@ -5636,6 +5666,13 @@ impl EditorWindow {
             return;
         }
         self.audio_import_pending = None;
+        // Taken on every path, so a failed or empty import can't leave the
+        // drop time behind for the next click on a library row.
+        let dropped_at = self
+            .audio_drop_start
+            .take()
+            .filter(|(generation, _)| *generation == request.generation)
+            .map(|(_, time)| time);
         if !request.accepts(
             self.audio_picker,
             self.audio_picker_generation,
@@ -5664,7 +5701,7 @@ impl EditorWindow {
         };
         match request.picker {
             crate::editor_audio::AudioPicker::Add { lane } => {
-                self.commit_audio_import(lane, imported, window, cx);
+                self.commit_audio_import(lane, imported, dropped_at, window, cx);
             }
             crate::editor_audio::AudioPicker::Replace { index } => {
                 self.replace_audio_segment(
@@ -7894,20 +7931,17 @@ impl EditorWindow {
         &mut self,
         lane: u32,
         imported: ImportedAudio,
+        start_at: Option<f64>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let total = self.total_duration();
         let has_source = imported.duration > 0.0;
-        let source_duration = if has_source { imported.duration } else { total };
-        let length = edits::MIN_AUDIO_SEGMENT_DURATION.max(source_duration.min(if total > 0.0 {
-            total
-        } else {
-            source_duration
-        }));
-        let max_start = (total - length).max(0.0);
-        let start = self.playhead.max(0.0).min(max_start);
-        let end = start + length;
+        let (start, end) = edits::audio_import_placement(
+            self.total_duration(),
+            has_source.then_some(imported.duration),
+            self.playhead,
+            start_at,
+        );
         let path = imported.path.clone();
         let inserted = self.edit(
             |timeline| {
@@ -11301,6 +11335,17 @@ impl EditorWindow {
                             }
                         }),
                     )
+                    .on_drop(cx.listener(
+                        move |this, drag: &crate::editor_audio::LibraryDrag, window, cx| {
+                            let lane = (kind == TrackKind::Audio).then_some(lane);
+                            this.drop_library_track(drag, lane, window, cx);
+                        },
+                    ))
+                    .when(kind == TrackKind::Audio, |row| {
+                        row.drag_over::<crate::editor_audio::LibraryDrag>(|style, _, _, _| {
+                            style.opacity(0.7)
+                        })
+                    })
                     .child(timeline::render_row(
                         &theme,
                         model,

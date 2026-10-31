@@ -1659,6 +1659,32 @@ pub const DEFAULT_ZOOM_AMOUNT: f64 = 1.5;
 
 pub const MIN_AUDIO_SEGMENT_DURATION: f64 = 0.5;
 
+/// Where an imported audio track goes, as `(start, end)`. From the picker it
+/// starts at the playhead and slides back so the whole track fits. A drop
+/// keeps the time it landed on (pulled in only far enough to leave a minimum
+/// segment) and the segment is shortened to end with the project instead.
+pub fn audio_import_placement(
+    total: f64,
+    source_duration: Option<f64>,
+    playhead: f64,
+    dropped_at: Option<f64>,
+) -> (f64, f64) {
+    let source = source_duration.unwrap_or(total);
+    let length =
+        MIN_AUDIO_SEGMENT_DURATION.max(source.min(if total > 0.0 { total } else { source }));
+    match dropped_at {
+        Some(dropped) => {
+            let start = dropped.clamp(0.0, (total - MIN_AUDIO_SEGMENT_DURATION).max(0.0));
+            let length = length.min((total - start).max(MIN_AUDIO_SEGMENT_DURATION));
+            (start, start + length)
+        }
+        None => {
+            let start = playhead.max(0.0).min((total - length).max(0.0));
+            (start, start + length)
+        }
+    }
+}
+
 pub fn used_lane_count<T: TrackSegmentOps>(segments: &[T]) -> u32 {
     segments
         .iter()
@@ -2894,6 +2920,31 @@ mod tests {
     }
 
     // -- Selection ----------------------------------------------------------
+
+    #[test]
+    fn a_dropped_track_keeps_its_drop_time_and_is_cut_to_fit() {
+        // A 120s library track dropped at 0:20 on a 60s project.
+        let (start, end) = audio_import_placement(60.0, Some(120.0), 5.0, Some(20.0));
+        assert_eq!((start, end), (20.0, 60.0));
+        // Near the end it keeps a minimum segment inside the project.
+        let (start, end) = audio_import_placement(60.0, Some(120.0), 5.0, Some(59.99));
+        assert!(start <= 60.0 - MIN_AUDIO_SEGMENT_DURATION + 1e-9);
+        assert!((end - 60.0).abs() < 1e-9);
+        // A short track keeps its own length.
+        assert_eq!(
+            audio_import_placement(60.0, Some(10.0), 5.0, Some(30.0)),
+            (30.0, 40.0)
+        );
+        // From the picker it still slides back to fit, starting at the playhead.
+        assert_eq!(
+            audio_import_placement(60.0, Some(10.0), 55.0, None),
+            (50.0, 60.0)
+        );
+        assert_eq!(
+            audio_import_placement(60.0, Some(120.0), 30.0, None),
+            (0.0, 60.0)
+        );
+    }
 
     #[test]
     fn a_plain_click_selects_one_segment() {
