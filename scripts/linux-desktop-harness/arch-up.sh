@@ -30,6 +30,17 @@ debug { disable_logs = false }
 exec-once = sh -c '$export_session'
 exec-once = waybar
 CONF
+    cat >"$HOME/.config/hypr/hyprland.lua" <<LUA
+hl.monitor({ output = "", mode = "1920x1080", position = "0x0", scale = 1 })
+hl.config({
+  misc = { disable_hyprland_logo = true },
+  debug = { disable_logs = false, enable_stdout_logs = true },
+})
+hl.on("hyprland.start", function()
+  hl.exec_cmd("sh -c '$export_session'")
+  hl.exec_cmd("waybar")
+end)
+LUA
     # The screen-share picker: answer with the one screen, as a person would.
     cat >"$HOME/.config/hypr/xdph.conf" <<CONF
 screencopy {
