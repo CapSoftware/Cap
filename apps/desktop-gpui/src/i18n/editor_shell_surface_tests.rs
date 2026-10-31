@@ -272,6 +272,10 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         ),
         (tr::editor::export::phase::starting(), "Preparing export"),
         (
+            tr::editor::export::phase::normalizing(),
+            "Normalizing audio",
+        ),
+        (
             tr::editor::export::phase::upload_complete(),
             "Upload complete",
         ),
@@ -367,6 +371,10 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         ),
         (tr::editor::tabs::audio::mic_volume(), "Microphone Volume"),
         (tr::editor::tabs::audio::mute(), "Mute Audio"),
+        (
+            tr::editor::tabs::audio::normalize_loudness(),
+            "Normalize Loudness",
+        ),
         (tr::editor::tabs::audio::stereo::mono_left(), "Mono L"),
         (tr::editor::tabs::audio::stereo::mono_right(), "Mono R"),
         (tr::editor::tabs::audio::stereo::stereo(), "Stereo"),

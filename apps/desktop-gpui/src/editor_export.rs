@@ -161,11 +161,18 @@ impl ExportResolution {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ExportProgress {
+    Frames(u32, u32),
+    Normalizing,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExportPhase {
     Idle,
     ChoosingFile,
     Starting,
     Rendering,
+    Normalizing,
     Copying,
     Uploading,
     Done,
@@ -176,7 +183,12 @@ impl ExportPhase {
     pub(crate) fn is_busy(self) -> bool {
         matches!(
             self,
-            Self::ChoosingFile | Self::Starting | Self::Rendering | Self::Copying | Self::Uploading
+            Self::ChoosingFile
+                | Self::Starting
+                | Self::Rendering
+                | Self::Normalizing
+                | Self::Copying
+                | Self::Uploading
         )
     }
 
@@ -975,7 +987,7 @@ impl EditorWindow {
             }
 
             let notify_file_save = save_path.is_some();
-            let (progress_tx, progress_rx) = flume::unbounded::<(u32, u32)>();
+            let (progress_tx, progress_rx) = flume::unbounded::<ExportProgress>();
             let export_cancel = cancel.clone();
             let export = gpui_tokio::Tokio::spawn(cx, async move {
                 let stopped = export_cancel.clone();
@@ -999,16 +1011,24 @@ impl EditorWindow {
             });
 
             loop {
-                let mut latest: Option<(u32, u32)> = None;
-                while let Ok((rendered, total)) = progress_rx.try_recv() {
-                    latest = Some((rendered, total));
+                let mut latest: Option<ExportProgress> = None;
+                while let Ok(update) = progress_rx.try_recv() {
+                    latest = Some(update);
                 }
-                if let Some((rendered, total)) = latest {
+                if let Some(update) = latest {
                     let _ = this.update(cx, |this, cx| {
                         if let Some(ui) = this.export.as_mut() {
-                            ui.rendered = rendered;
-                            ui.total_frames = total;
-                            ui.phase = ExportPhase::Rendering;
+                            match update {
+                                ExportProgress::Frames(rendered, total) => {
+                                    ui.rendered = rendered;
+                                    ui.total_frames = total;
+                                    ui.phase = ExportPhase::Rendering;
+                                }
+                                ExportProgress::Normalizing => {
+                                    ui.total_frames = 0;
+                                    ui.phase = ExportPhase::Normalizing;
+                                }
+                            }
                         }
                         cx.notify();
                     });
@@ -1217,7 +1237,7 @@ impl EditorWindow {
                 cx.notify();
             });
 
-            let (progress_tx, progress_rx) = flume::unbounded::<(u32, u32)>();
+            let (progress_tx, progress_rx) = flume::unbounded::<ExportProgress>();
             let export_cancel = cancel.clone();
             let export_path = project_path.clone();
             let export = gpui_tokio::Tokio::spawn(cx, async move {
@@ -1247,16 +1267,24 @@ impl EditorWindow {
             });
 
             loop {
-                let mut latest: Option<(u32, u32)> = None;
-                while let Ok((rendered, total)) = progress_rx.try_recv() {
-                    latest = Some((rendered, total));
+                let mut latest: Option<ExportProgress> = None;
+                while let Ok(update) = progress_rx.try_recv() {
+                    latest = Some(update);
                 }
-                if let Some((rendered, total)) = latest {
+                if let Some(update) = latest {
                     let _ = this.update(cx, |this, cx| {
                         if let Some(ui) = this.export.as_mut() {
-                            ui.rendered = rendered;
-                            ui.total_frames = total;
-                            ui.phase = ExportPhase::Rendering;
+                            match update {
+                                ExportProgress::Frames(rendered, total) => {
+                                    ui.rendered = rendered;
+                                    ui.total_frames = total;
+                                    ui.phase = ExportPhase::Rendering;
+                                }
+                                ExportProgress::Normalizing => {
+                                    ui.total_frames = 0;
+                                    ui.phase = ExportPhase::Normalizing;
+                                }
+                            }
                         }
                         cx.notify();
                     });
@@ -2595,6 +2623,7 @@ impl EditorWindow {
         };
         let heading = match ui.phase {
             ExportPhase::Starting => tr::editor::export::phase::starting(),
+            ExportPhase::Normalizing => tr::editor::export::phase::normalizing(),
             ExportPhase::Rendering if ui.cursor_only => {
                 tr::editor::export::phase::rendering_cursor()
             }
@@ -3082,12 +3111,85 @@ async fn run_export(
     turbo: bool,
     force: bool,
     save_path: Option<PathBuf>,
-    progress_tx: flume::Sender<(u32, u32)>,
+    progress_tx: flume::Sender<ExportProgress>,
     cancel: Arc<AtomicBool>,
 ) -> Result<PathBuf, String> {
     if cancel.load(Ordering::Relaxed) {
         return Err("Export cancelled".into());
     }
+    let normalize_loudness =
+        project.audio.normalize_loudness && !cursor_only && format != ExportFormatKind::Gif;
+    let loudness_progress = progress_tx.clone();
+    let loudness_cancel = cancel.clone();
+    let path = render_export(
+        project_path,
+        project,
+        format,
+        cursor_only,
+        fps,
+        width,
+        height,
+        compression,
+        custom_bpp,
+        optimize,
+        turbo,
+        force,
+        save_path,
+        progress_tx,
+        cancel,
+    )
+    .await?;
+    if normalize_loudness {
+        let _ = loudness_progress.send(ExportProgress::Normalizing);
+        let target = path.clone();
+        let cancel = loudness_cancel.clone();
+        match tokio::task::spawn_blocking(move || {
+            cap_export::loudness::normalize_file_loudness(
+                &target,
+                cap_export::loudness::SOCIAL_TARGET_LUFS,
+                &cancel,
+            )
+        })
+        .await
+        {
+            Ok(Ok(_)) => {}
+            // Cancelled mid-pass: the export file is untouched, but the user
+            // asked to stop, so it ends like any other cancelled export.
+            Ok(Err(cap_export::loudness::LoudnessError::Cancelled)) => {
+                let _ = std::fs::remove_file(&path);
+                return Err("Export cancelled".into());
+            }
+            Ok(Err(error)) => tracing::warn!(
+                %error,
+                "Loudness normalization failed, keeping the unnormalized export"
+            ),
+            Err(error) => tracing::warn!(
+                %error,
+                "Loudness normalization task failed, keeping the unnormalized export"
+            ),
+        }
+    }
+    Ok(path)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn render_export(
+    project_path: PathBuf,
+    project: cap_project::ProjectConfiguration,
+    format: ExportFormatKind,
+    cursor_only: bool,
+    fps: u32,
+    width: u32,
+    height: u32,
+    compression: ExportCompression,
+    custom_bpp: Option<f32>,
+    optimize: bool,
+    turbo: bool,
+    force: bool,
+    save_path: Option<PathBuf>,
+    progress_tx: flume::Sender<ExportProgress>,
+    cancel: Arc<AtomicBool>,
+) -> Result<PathBuf, String> {
     let mut builder = ExporterBase::builder(project_path).with_force_ffmpeg_decoder(force);
     if cursor_only {
         builder = builder.with_config(make_cursor_only_project(project));
@@ -3117,7 +3219,7 @@ async fn run_export(
         let total = base.total_frames(fps);
         (PreparedBase::Other(base), total)
     };
-    let _ = progress_tx.send((0, total));
+    let _ = progress_tx.send(ExportProgress::Frames(0, total));
 
     let progress = {
         let progress_tx = progress_tx.clone();
@@ -3127,7 +3229,7 @@ async fn run_export(
                 return false;
             }
             progress_tx
-                .send(((frame_index + 1).min(total), total))
+                .send(ExportProgress::Frames((frame_index + 1).min(total), total))
                 .is_ok()
         }
     };
@@ -3390,6 +3492,7 @@ mod tests {
         for phase in [
             ExportPhase::Starting,
             ExportPhase::Rendering,
+            ExportPhase::Normalizing,
             ExportPhase::Copying,
             ExportPhase::Uploading,
             ExportPhase::Done,

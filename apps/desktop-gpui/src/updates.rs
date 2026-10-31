@@ -1078,6 +1078,7 @@ mod tests {
         for phase in [
             ExportPhase::Starting,
             ExportPhase::Rendering,
+            ExportPhase::Normalizing,
             ExportPhase::Copying,
             ExportPhase::Uploading,
         ] {

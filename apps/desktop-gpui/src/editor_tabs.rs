@@ -1821,6 +1821,33 @@ impl EditorWindow {
                                 ),
                             ),
                         )
+                        .child(
+                            ui::Subfield::plain(
+                                &theme,
+                                tr::editor::tabs::audio::normalize_loudness(),
+                            )
+                            .child(
+                                ui::Toggle::plain(
+                                    &theme,
+                                    "audio-normalize-loudness",
+                                    audio.normalize_loudness,
+                                )
+                                .on_click(cx.listener(
+                                    |this, _, window, cx| {
+                                        let next = !this.project.audio.normalize_loudness;
+                                        this.edit_project(
+                                            "audio-normalize-loudness",
+                                            window,
+                                            cx,
+                                            move |p| {
+                                                p.audio.normalize_loudness = next;
+                                                true
+                                            },
+                                        );
+                                    },
+                                )),
+                            ),
+                        )
                         // Only a two-channel microphone gets the stereo row
                         // (`:709-711`).
                         .children(stereo_mic.then(|| {
