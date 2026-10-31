@@ -38,7 +38,7 @@
 //! tray and the global hotkeys use.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use cap_recording::feeds::camera::DeviceOrModelID;
@@ -140,9 +140,24 @@ pub enum DeepLinkAction {
     OpenEditor {
         project_path: PathBuf,
     },
+    TrimClipEdge {
+        project_path: PathBuf,
+        clip_index: usize,
+        edge: ClipTrimEdge,
+        time_seconds: f64,
+        expected_current_seconds: f64,
+        request_id: Option<String>,
+    },
     OpenSettings {
         page: Option<String>,
     },
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ClipTrimEdge {
+    Start,
+    End,
 }
 
 /// `ActionParseFromUrlError` (`deeplink_actions.rs:148-153`).
@@ -314,6 +329,68 @@ fn dispatch_recording_stop<C>(
         cancel_preflight(context);
     } else {
         stop_session(context);
+    }
+}
+
+fn apply_clip_trim_edge(
+    project_path: &Path,
+    clip_index: usize,
+    edge: ClipTrimEdge,
+    time_seconds: f64,
+    expected_current_seconds: f64,
+    cx: &mut App,
+) -> Result<f64, String> {
+    if !time_seconds.is_finite() || !expected_current_seconds.is_finite() {
+        return Err("Clip trim times must be finite seconds".to_string());
+    }
+    let key = project_path
+        .canonicalize()
+        .map_err(|error| format!("Cannot resolve project path: {error}"))?;
+    let editor = cx
+        .global::<app_windows::AppWindows>()
+        .editors
+        .iter()
+        .find(|(path, _)| path == &key)
+        .map(|(_, handle)| *handle)
+        .ok_or_else(|| "The specified Studio project is not open".to_string())?;
+    match editor.update(cx, |view, window, cx| {
+        view.apply_agent_clip_trim(
+            clip_index,
+            edge,
+            time_seconds,
+            expected_current_seconds,
+            window,
+            cx,
+        )
+    }) {
+        Ok(outcome) => outcome,
+        Err(_) => Err("The target Studio editor is no longer available".to_string()),
+    }
+}
+
+/// The deep-link channel has no reply path, so the outcome of an agent trim
+/// is left where the caller can read it.
+fn record_trim_receipt(request_id: &str, outcome: &Result<f64, String>) {
+    record_trim_receipt_in(&cap_utils::agent_trim::receipt_dir(), request_id, outcome);
+}
+
+fn record_trim_receipt_in(dir: &Path, request_id: &str, outcome: &Result<f64, String>) {
+    let receipt = match outcome {
+        Ok(applied_seconds) => cap_utils::agent_trim::TrimReceipt {
+            request_id: request_id.to_string(),
+            outcome: cap_utils::agent_trim::TrimOutcome::Applied,
+            applied_seconds: Some(*applied_seconds),
+            error: None,
+        },
+        Err(error) => cap_utils::agent_trim::TrimReceipt {
+            request_id: request_id.to_string(),
+            outcome: cap_utils::agent_trim::TrimOutcome::Rejected,
+            applied_seconds: None,
+            error: Some(error.clone()),
+        },
+    };
+    if let Err(error) = cap_utils::agent_trim::write_receipt_in(dir, &receipt) {
+        tracing::warn!(%error, "could not write the agent trim receipt");
     }
 }
 
@@ -570,6 +647,27 @@ impl DeepLinkAction {
                 }
                 Ok(())
             }
+            DeepLinkAction::TrimClipEdge {
+                project_path,
+                clip_index,
+                edge,
+                time_seconds,
+                expected_current_seconds,
+                request_id,
+            } => {
+                let outcome = apply_clip_trim_edge(
+                    &project_path,
+                    clip_index,
+                    edge,
+                    time_seconds,
+                    expected_current_seconds,
+                    cx,
+                );
+                if let Some(request_id) = request_id.as_deref() {
+                    record_trim_receipt(request_id, &outcome);
+                }
+                outcome.map(|_| ())
+            }
             // `ShowCapWindow::Settings { page }`. The Tauri window navigates
             // to `/settings/{page}` and an unknown slug is a dead route; here
             // an unknown (or absent) slug lands on General, the settings
@@ -695,6 +793,87 @@ mod tests {
         assert_eq!(
             DeepLinkAction::try_from(&url),
             Ok(DeepLinkAction::StopRecording)
+        );
+    }
+
+    #[test]
+    fn parses_confirmed_clip_trim_action_url() {
+        let value = serde_json::json!({
+            "trim_clip_edge": {
+                "project_path": "/tmp/test.cap",
+                "clip_index": 2,
+                "edge": "end",
+                "time_seconds": 18.5,
+                "expected_current_seconds": 20.0,
+                "request_id": "9f1b0c2e-0000-4000-8000-000000000001"
+            }
+        })
+        .to_string();
+        let url = Url::parse_with_params("cap-desktop://action", &[("value", value)]).unwrap();
+
+        assert_eq!(
+            DeepLinkAction::try_from(&url),
+            Ok(DeepLinkAction::TrimClipEdge {
+                project_path: "/tmp/test.cap".into(),
+                clip_index: 2,
+                edge: ClipTrimEdge::End,
+                time_seconds: 18.5,
+                expected_current_seconds: 20.0,
+                request_id: Some("9f1b0c2e-0000-4000-8000-000000000001".to_string()),
+            })
+        );
+    }
+
+    #[test]
+    fn a_clip_trim_action_without_a_request_id_still_parses() {
+        let value = serde_json::json!({
+            "trim_clip_edge": {
+                "project_path": "/tmp/test.cap",
+                "clip_index": 0,
+                "edge": "start",
+                "time_seconds": 1.5,
+                "expected_current_seconds": 0.0
+            }
+        })
+        .to_string();
+        let url = Url::parse_with_params("cap-desktop://action", &[("value", value)]).unwrap();
+
+        assert_eq!(
+            DeepLinkAction::try_from(&url),
+            Ok(DeepLinkAction::TrimClipEdge {
+                project_path: "/tmp/test.cap".into(),
+                clip_index: 0,
+                edge: ClipTrimEdge::Start,
+                time_seconds: 1.5,
+                expected_current_seconds: 0.0,
+                request_id: None,
+            })
+        );
+    }
+
+    #[test]
+    fn a_trim_receipt_records_what_the_editor_did() {
+        let dir = tempfile::tempdir().unwrap();
+
+        record_trim_receipt_in(dir.path(), "applied", &Ok(18.5));
+        record_trim_receipt_in(
+            dir.path(),
+            "rejected",
+            &Err("Clip edge is stale: expected 20.000s".to_string()),
+        );
+
+        let applied = cap_utils::agent_trim::read_receipt_in(dir.path(), "applied").unwrap();
+        assert_eq!(applied.outcome, cap_utils::agent_trim::TrimOutcome::Applied);
+        assert_eq!(applied.applied_seconds, Some(18.5));
+
+        let rejected = cap_utils::agent_trim::read_receipt_in(dir.path(), "rejected").unwrap();
+        assert_eq!(
+            rejected.outcome,
+            cap_utils::agent_trim::TrimOutcome::Rejected
+        );
+        assert_eq!(
+            rejected.error,
+            Some("Clip edge is stale: expected 20.000s".to_string())
         );
     }
 

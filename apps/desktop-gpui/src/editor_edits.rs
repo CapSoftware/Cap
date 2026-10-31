@@ -2099,6 +2099,75 @@ pub fn clip_trim_end(
     )
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClipTrimEdge {
+    Start,
+    End,
+}
+
+/// The clip segment and the edge value the caller last inspected, so a
+/// request made against a stale view of the timeline is refused instead of
+/// moving the wrong edge.
+pub fn check_clip_trim_edge(
+    timeline: &TimelineConfiguration,
+    index: usize,
+    edge: ClipTrimEdge,
+    expected_current: f64,
+) -> Result<(&TimelineSegment, f64), String> {
+    let segment = timeline
+        .segments
+        .get(index)
+        .ok_or_else(|| format!("Clip index {index} is out of range"))?;
+    let current = match edge {
+        ClipTrimEdge::Start => segment.start,
+        ClipTrimEdge::End => segment.end,
+    };
+    if (current - expected_current).abs() > 0.001 {
+        return Err(format!(
+            "Clip edge is stale: expected {expected_current:.3}s, current value is {current:.3}s"
+        ));
+    }
+    Ok((segment, current))
+}
+
+pub fn trim_clip_edge(
+    timeline: &mut TimelineConfiguration,
+    index: usize,
+    edge: ClipTrimEdge,
+    requested: f64,
+    secs_per_pixel: f64,
+    clip_display_durations: &[f64],
+    recording_duration: f64,
+) -> Option<f64> {
+    if !requested.is_finite() || !secs_per_pixel.is_finite() || secs_per_pixel < 0. {
+        return None;
+    }
+    let resolved = match edge {
+        ClipTrimEdge::Start => clip_trim_start(
+            timeline,
+            index,
+            requested,
+            secs_per_pixel,
+            clip_display_durations,
+            recording_duration,
+        ),
+        ClipTrimEdge::End => clip_trim_end(
+            timeline,
+            index,
+            requested,
+            secs_per_pixel,
+            clip_display_durations,
+            recording_duration,
+        ),
+    }?;
+    let segment = timeline.segments.get_mut(index)?;
+    match edge {
+        ClipTrimEdge::Start => segment.start = resolved,
+        ClipTrimEdge::End => segment.end = resolved,
+    }
+    Some(resolved)
+}
+
 // ---------------------------------------------------------------------------
 // Auto zoom
 // ---------------------------------------------------------------------------
@@ -3463,6 +3532,74 @@ mod tests {
             clip_trim_end(timeline, 0, 0.02, 0.001, &displays, recording),
             Some(0.1)
         );
+    }
+
+    #[test]
+    fn trim_clip_edge_applies_existing_clamp_and_returns_resolved_time() {
+        let mut config = two_clip_config();
+        let timeline = config.timeline.as_mut().unwrap();
+        let displays = [12.0, 9.0];
+
+        assert_eq!(
+            trim_clip_edge(timeline, 0, ClipTrimEdge::Start, 3.0, 0.05, &displays, 21.0,),
+            Some(3.0)
+        );
+        assert_eq!(timeline.segments[0].start, 3.0);
+
+        assert_eq!(
+            trim_clip_edge(timeline, 0, ClipTrimEdge::End, 30.0, 0.05, &displays, 21.0,),
+            Some(12.0)
+        );
+        assert_eq!(timeline.segments[0].end, 12.0);
+    }
+
+    #[test]
+    fn check_clip_trim_edge_refuses_a_stale_edge_and_a_missing_clip() {
+        let config = two_clip_config();
+        let timeline = config.timeline.as_ref().unwrap();
+
+        assert_eq!(
+            check_clip_trim_edge(timeline, 0, ClipTrimEdge::Start, 0.0).map(|(_, current)| current),
+            Ok(0.0)
+        );
+        assert_eq!(
+            check_clip_trim_edge(timeline, 1, ClipTrimEdge::End, 8.0).map(|(_, current)| current),
+            Ok(8.0)
+        );
+        assert_eq!(
+            check_clip_trim_edge(timeline, 0, ClipTrimEdge::End, 19.0).unwrap_err(),
+            "Clip edge is stale: expected 19.000s, current value is 10.000s".to_string()
+        );
+        assert_eq!(
+            check_clip_trim_edge(timeline, 7, ClipTrimEdge::Start, 0.0).unwrap_err(),
+            "Clip index 7 is out of range".to_string()
+        );
+    }
+
+    #[test]
+    fn trim_clip_edge_rejects_bad_indices_and_non_finite_requests() {
+        let mut config = two_clip_config();
+        let timeline = config.timeline.as_mut().unwrap();
+        let displays = [12.0, 9.0];
+
+        assert_eq!(
+            trim_clip_edge(timeline, 9, ClipTrimEdge::Start, 1.0, 0.05, &displays, 21.0,),
+            None
+        );
+        assert_eq!(
+            trim_clip_edge(
+                timeline,
+                0,
+                ClipTrimEdge::End,
+                f64::NAN,
+                0.05,
+                &displays,
+                21.0,
+            ),
+            None
+        );
+        assert_eq!(timeline.segments[0].start, 0.0);
+        assert_eq!(timeline.segments[0].end, 10.0);
     }
 
     /// Clips whose source ranges *overlap* their same-clip neighbours --

@@ -2408,6 +2408,82 @@ impl EditorWindow {
         true
     }
 
+    pub(crate) fn apply_agent_clip_trim(
+        &mut self,
+        index: usize,
+        edge: crate::deeplink::ClipTrimEdge,
+        requested_seconds: f64,
+        expected_current_seconds: f64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<f64, String> {
+        if !self.project_ready() {
+            return Err("The Studio project is not ready".to_string());
+        }
+        if self.drag.is_some() || self.clip_draft.is_some() {
+            return Err("Finish the active timeline drag before applying a trim".to_string());
+        }
+        if !requested_seconds.is_finite() || !expected_current_seconds.is_finite() {
+            return Err("Clip trim times must be finite seconds".to_string());
+        }
+
+        let edge = match edge {
+            crate::deeplink::ClipTrimEdge::Start => edits::ClipTrimEdge::Start,
+            crate::deeplink::ClipTrimEdge::End => edits::ClipTrimEdge::End,
+        };
+        let timeline = self
+            .project
+            .timeline
+            .as_ref()
+            .ok_or_else(|| "The Studio project has no timeline".to_string())?;
+        let (segment, current_seconds) =
+            edits::check_clip_trim_edge(timeline, index, edge, expected_current_seconds)?;
+        let clip_start = self.timeline.clips.get(index).map_or(0., |clip| clip.start);
+        let timescale = segment.timescale;
+        let displays = self.clip_display_durations.clone();
+        let recording_duration = self.recording_duration;
+        let viewport_width = f32::from(window.viewport_size().width);
+        let secs_per_pixel = self.secs_per_pixel(viewport_width);
+        let mut resolved_seconds = None;
+        let changed = self.edit_timeline_project(
+            |project| {
+                let Some(timeline) = project.timeline.as_mut() else {
+                    return false;
+                };
+                let Some(resolved) = edits::trim_clip_edge(
+                    timeline,
+                    index,
+                    edge,
+                    requested_seconds,
+                    secs_per_pixel,
+                    &displays,
+                    recording_duration,
+                ) else {
+                    return false;
+                };
+                resolved_seconds = Some(resolved);
+                (resolved - current_seconds).abs() > f64::EPSILON
+            },
+            window,
+            cx,
+        );
+        let Some(resolved_seconds) = resolved_seconds else {
+            return Err("The clip trim could not be applied".to_string());
+        };
+        if !changed {
+            return Err(format!(
+                "This clip edge is already at {resolved_seconds:.3}s"
+            ));
+        }
+        if timescale > 0. {
+            self.set_preview_time(clip_start + (resolved_seconds - current_seconds) / timescale);
+        }
+        self.on_handle_released(cx);
+        self.note_edit("agent-trim", Some(TrackKind::Clip));
+        cx.notify();
+        Ok(resolved_seconds)
+    }
+
     /// One line per *committed* edit, at `info`, for the same reason
     /// `note_transform` exists: a drag's arithmetic is only checkable end to
     /// end if the numbers come out of the running app. Intermediate drag
