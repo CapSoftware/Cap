@@ -129,6 +129,14 @@ impl CliExportSettings {
         }
     }
 
+    fn resolution_base(&self) -> XY<u32> {
+        match self {
+            Self::Mp4(settings) => settings.resolution_base,
+            Self::Gif(settings) => settings.resolution_base,
+            Self::Mov(settings) => settings.resolution_base,
+        }
+    }
+
     fn force_ffmpeg_decoder(&self) -> bool {
         match self {
             Self::Mp4(settings) => settings.force_ffmpeg_decoder,
@@ -175,6 +183,19 @@ fn parse_resolution(value: &str) -> Result<XY<u32>, String> {
         return Err(format!("Resolution '{value}' must be greater than zero"));
     }
     Ok(XY::new(width, height))
+}
+
+fn settings_from_json(json: &str) -> Result<CliExportSettings, String> {
+    let settings: CliExportSettings =
+        serde_json::from_str(json).map_err(|e| format!("Invalid export settings JSON: {e}"))?;
+    if settings.fps() == 0 {
+        return Err("--settings-json fps must be greater than zero".to_string());
+    }
+    let resolution = settings.resolution_base();
+    if resolution.x == 0 || resolution.y == 0 {
+        return Err("--settings-json resolution_base must be greater than zero".to_string());
+    }
+    Ok(settings)
 }
 
 pub fn settings_from_flags(flags: &ExportFlags) -> Result<CliExportSettings, String> {
@@ -348,7 +369,7 @@ impl Export {
                             .to_string(),
                     );
                 }
-                serde_json::from_str(json).map_err(|e| format!("Invalid export settings JSON: {e}"))
+                settings_from_json(json)
             }
             None => settings_from_flags(&flags),
         }
@@ -1178,6 +1199,33 @@ mod tests {
             ..Default::default()
         });
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn settings_json_rejects_zero_fps_and_resolution_like_the_flags() {
+        let json = |format: &str, fps: u32, x: u32, y: u32| {
+            format!(
+                r#"{{"format":"{format}","fps":{fps},"resolution_base":{{"x":{x},"y":{y}}},"compression":"Maximum","custom_bpp":null,"quality":null,"cursor_only":false}}"#
+            )
+        };
+        for format in ["Mp4", "Gif", "Mov"] {
+            assert!(
+                settings_from_json(&json(format, 30, 1280, 720)).is_ok(),
+                "{format}"
+            );
+            assert!(
+                settings_from_json(&json(format, 0, 1280, 720)).is_err(),
+                "{format}"
+            );
+            assert!(
+                settings_from_json(&json(format, 30, 0, 0)).is_err(),
+                "{format}"
+            );
+            assert!(
+                settings_from_json(&json(format, 30, 1280, 0)).is_err(),
+                "{format}"
+            );
+        }
     }
 
     #[test]
