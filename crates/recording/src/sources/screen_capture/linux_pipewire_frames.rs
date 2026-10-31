@@ -17,10 +17,11 @@
 //!   the mapping is copied for the same reason.
 
 use std::{
+    collections::HashMap,
     os::fd::RawFd,
     sync::{
         Arc,
-        atomic::{AtomicPtr, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -252,7 +253,8 @@ impl Drop for DmaBufCache {
 
 struct Inner {
     cache: Mutex<DmaBufCache>,
-    requeue: Mutex<Option<pw::channel::Sender<usize>>>,
+    requeue: Mutex<Option<pw::channel::Sender<BufferRelease>>>,
+    buffers: Mutex<HashMap<usize, Arc<AtomicBool>>>,
     stream: AtomicPtr<pw::sys::pw_stream>,
     pool: AtomicUsize,
     inflight: AtomicUsize,
@@ -264,11 +266,22 @@ struct Inner {
 
 struct AliasedBuffer {
     frames: Arc<Inner>,
-    pw_buffer: usize,
+    release: Option<BufferRelease>,
     fd: i32,
-    /// mmap base, or 0 when the alias borrows a MemPtr this cache does not own.
     map_base: usize,
     end_sync: bool,
+}
+
+#[derive(Clone)]
+pub(super) struct BufferRelease {
+    address: usize,
+    active: Arc<AtomicBool>,
+}
+
+impl BufferRelease {
+    fn is_active(&self) -> bool {
+        self.active.load(Ordering::Acquire)
+    }
 }
 
 /// Shared owner of cached DMA-BUF mappings and the in-flight alias count.
@@ -287,6 +300,7 @@ impl PipewireFrames {
                     unmap_calls: 0,
                 }),
                 requeue: Mutex::new(None),
+                buffers: Mutex::new(HashMap::new()),
                 stream: AtomicPtr::new(std::ptr::null_mut()),
                 pool: AtomicUsize::new(0),
                 inflight: AtomicUsize::new(0),
@@ -298,7 +312,7 @@ impl PipewireFrames {
         }
     }
 
-    pub(super) fn set_requeue_sender(&self, sender: pw::channel::Sender<usize>) {
+    pub(super) fn set_requeue_sender(&self, sender: pw::channel::Sender<BufferRelease>) {
         *self.inner.requeue.lock() = Some(sender);
     }
 
@@ -306,10 +320,10 @@ impl PipewireFrames {
         self.inner.stream.store(stream, Ordering::Release);
     }
 
-    /// `pw_stream_queue_buffer` is single-producer. The encoder thread only
-    /// posts the buffer address; this runs on the PipeWire loop thread.
-    pub(super) fn queue_released_buffer(&self, buffer: usize) {
-        if buffer == 0 {
+    /// `pw_stream_queue_buffer` is single-producer. Releases are validated on
+    /// the same loop as remove_buffer, including releases already in the channel.
+    pub(super) fn queue_released_buffer(&self, buffer: BufferRelease) {
+        if !buffer.is_active() {
             return;
         }
         let stream = self.inner.stream.load(Ordering::Acquire);
@@ -317,15 +331,31 @@ impl PipewireFrames {
             return;
         }
         unsafe {
-            pw::sys::pw_stream_queue_buffer(stream, buffer as *mut pw::sys::pw_buffer);
+            pw::sys::pw_stream_queue_buffer(stream, buffer.address as *mut pw::sys::pw_buffer);
         }
     }
 
-    pub(super) fn add_pool_buffer(&self) {
-        self.inner.pool.fetch_add(1, Ordering::AcqRel);
+    pub(super) fn add_pool_buffer(&self, buffer: *mut pw::sys::pw_buffer) {
+        if buffer.is_null() {
+            return;
+        }
+        let previous = self
+            .inner
+            .buffers
+            .lock()
+            .insert(buffer as usize, Arc::new(AtomicBool::new(true)));
+        if let Some(previous) = previous {
+            previous.store(false, Ordering::Release);
+        } else {
+            self.inner.pool.fetch_add(1, Ordering::AcqRel);
+        }
     }
 
     pub(super) fn remove_pool_buffer(&self, buffer: *mut pw::sys::pw_buffer) {
+        let Some(active) = self.inner.buffers.lock().remove(&(buffer as usize)) else {
+            return;
+        };
+        active.store(false, Ordering::Release);
         let mut current = self.inner.pool.load(Ordering::Acquire);
         while current > 0 {
             match self.inner.pool.compare_exchange_weak(
@@ -407,10 +437,12 @@ impl Inner {
         }
         self.cache.lock().release(aliased.map_base);
         self.releases.fetch_add(1, Ordering::Release);
-        if aliased.pw_buffer != 0 {
+        if let Some(buffer) = &aliased.release
+            && buffer.is_active()
+        {
             self.requeues.fetch_add(1, Ordering::Release);
             if let Some(sender) = self.requeue.lock().as_ref() {
-                let _ = sender.send(aliased.pw_buffer);
+                let _ = sender.send(buffer.clone());
             }
         }
     }
@@ -517,8 +549,12 @@ pub(super) fn linear_frame(
     }
 
     let start = offset + crop_y * source_stride + crop_x * bytes_per_pixel;
-    if lease && alias_window_fits(start, source_stride, crop_height, readable) {
-        if let Some(frame) = alias_frame(
+    // MemPtr storage can disappear when remove_buffer returns. Only our owned
+    // fd mappings keep an encoder's outstanding frame alive across renegotiation.
+    if lease
+        && source.data.is_null()
+        && alias_window_fits(start, source_stride, crop_height, readable)
+        && let Some(frame) = alias_frame(
             frames,
             source,
             geometry,
@@ -529,9 +565,9 @@ pub(super) fn linear_frame(
                 row_bytes,
                 sync_fd,
             },
-        )? {
-            return Ok((frame, true));
-        }
+        )?
+    {
+        return Ok((frame, true));
     }
 
     let copied = match copy_linear_frame(
@@ -587,10 +623,21 @@ fn alias_frame(
     } else {
         0
     };
+    let release = if source.pw_buffer == 0 {
+        None
+    } else {
+        let Some(active) = frames.inner.buffers.lock().get(&source.pw_buffer).cloned() else {
+            return Ok(None);
+        };
+        Some(BufferRelease {
+            address: source.pw_buffer,
+            active,
+        })
+    };
     frames.begin_inflight();
     let aliased = Box::new(AliasedBuffer {
         frames: Arc::clone(&frames.inner),
-        pw_buffer: source.pw_buffer,
+        release,
         fd: plane.sync_fd,
         map_base,
         end_sync: plane.sync_fd >= 0,
@@ -793,6 +840,17 @@ mod tests {
         }
     }
 
+    fn memfd_plane(file: &std::fs::File) -> SourcePlane {
+        SourcePlane {
+            data: std::ptr::null_mut(),
+            data_len: 0,
+            fd: file.as_raw_fd(),
+            map_offset: 0,
+            sync_dma_buf: false,
+            pw_buffer: 0,
+        }
+    }
+
     #[test]
     fn spare_pool_keeps_one_buffer_for_the_producer() {
         assert!(!spare_buffer(0, 0));
@@ -805,7 +863,7 @@ mod tests {
     }
 
     #[test]
-    fn memptr_alias_points_at_the_producer_until_the_last_reference_drops() {
+    fn memptr_is_copied_before_the_producer_storage_is_removed() {
         ffmpeg::init().expect("ffmpeg");
         let mut bytes = vec![0u8; 8 * 4];
         for (index, pixel) in bytes.chunks_exact_mut(4).enumerate() {
@@ -815,29 +873,21 @@ mod tests {
         let plane = memptr_plane(&mut bytes);
         let (frame, leased) =
             linear_frame(&frames, &plane, &geometry(2, 2, 8, 0, 0, 2, 2), true).unwrap();
-        assert!(leased);
-        assert_eq!(frame.data(0).as_ptr(), bytes.as_ptr());
-        assert_eq!(frames.inflight(), 1);
-        assert_eq!(frames.inner.releases.load(Ordering::Acquire), 0);
-
-        let mut duplicate = ffmpeg::frame::Video::empty();
-        let status = unsafe { ffmpeg::sys::av_frame_ref(duplicate.as_mut_ptr(), frame.as_ptr()) };
-        assert!(status >= 0);
-        drop(frame);
-        assert_eq!(frames.inner.releases.load(Ordering::Acquire), 0);
-        assert_eq!(duplicate.data(0)[0], 0);
-        assert_eq!(frames.inflight(), 1);
-        drop(duplicate);
-        assert_eq!(frames.inner.releases.load(Ordering::Acquire), 1);
+        assert!(!leased);
+        assert_ne!(frame.data(0).as_ptr(), bytes.as_ptr());
+        drop(bytes);
+        assert_eq!(&frame.data(0)[..8], &[0, 2, 3, 4, 1, 2, 3, 4]);
         assert_eq!(frames.inflight(), 0);
     }
 
     #[test]
     fn readonly_alias_is_copied_before_it_can_be_written() {
         ffmpeg::init().expect("ffmpeg");
-        let mut bytes = vec![7u8, 8, 9, 10, 0, 0, 0, 0];
+        let bytes = [7u8, 8, 9, 10, 0, 0, 0, 0];
+        let mut file = tempfile::tempfile().unwrap();
+        std::io::Write::write_all(&mut file, &bytes).unwrap();
         let frames = PipewireFrames::new();
-        let plane = memptr_plane(&mut bytes);
+        let plane = memfd_plane(&file);
         let (mut frame, leased) =
             linear_frame(&frames, &plane, &geometry(1, 1, 8, 0, 0, 1, 1), true).unwrap();
         assert!(leased);
@@ -848,7 +898,7 @@ mod tests {
         assert_eq!(&frame.data(0)[..4], &[7, 8, 9, 10]);
         assert_eq!(frames.inner.releases.load(Ordering::Acquire), 1);
         assert_eq!(frames.inflight(), 0);
-        bytes[0] = 99;
+        std::os::unix::fs::FileExt::write_at(&file, &[99], 0).unwrap();
         assert_eq!(frame.data(0)[0], 7);
     }
 
@@ -940,12 +990,13 @@ mod tests {
     #[test]
     fn a_borrowed_pipewire_buffer_is_returned_once_on_the_last_drop() {
         ffmpeg::init().expect("ffmpeg");
-        let mut bytes = vec![1u8, 2, 3, 4];
+        let mut file = tempfile::tempfile().unwrap();
+        std::io::Write::write_all(&mut file, &[1u8, 2, 3, 4]).unwrap();
         let frames = PipewireFrames::new();
-        frames.add_pool_buffer();
-        frames.add_pool_buffer();
-        frames.add_pool_buffer();
-        let mut plane = memptr_plane(&mut bytes);
+        frames.add_pool_buffer(0x51ce as *mut pw::sys::pw_buffer);
+        frames.add_pool_buffer(0x51cf as *mut pw::sys::pw_buffer);
+        frames.add_pool_buffer(0x51d0 as *mut pw::sys::pw_buffer);
+        let mut plane = memfd_plane(&file);
         plane.pw_buffer = 0x51ce;
         let (frame, leased) =
             linear_frame(&frames, &plane, &geometry(1, 1, 4, 0, 0, 1, 1), true).unwrap();
@@ -958,6 +1009,72 @@ mod tests {
         assert_eq!(frames.inner.requeues.load(Ordering::Acquire), 0);
         drop(duplicate);
         assert_eq!(frames.inner.requeues.load(Ordering::Acquire), 1);
+        assert_eq!(frames.inflight(), 0);
+    }
+
+    #[test]
+    fn removing_a_borrowed_buffer_keeps_pixels_alive_without_requeueing_it() {
+        ffmpeg::init().expect("ffmpeg");
+        let mut file = tempfile::tempfile().unwrap();
+        std::io::Write::write_all(&mut file, &[1u8, 2, 3, 4]).unwrap();
+        let mut buffer = Box::new(unsafe { std::mem::zeroed::<pw::sys::pw_buffer>() });
+        let address = &mut *buffer as *mut pw::sys::pw_buffer;
+        let frames = PipewireFrames::new();
+        frames.add_pool_buffer(address);
+        let mut plane = memfd_plane(&file);
+        plane.pw_buffer = address as usize;
+        let (frame, leased) =
+            linear_frame(&frames, &plane, &geometry(1, 1, 4, 0, 0, 1, 1), true).unwrap();
+        assert!(leased);
+
+        frames.remove_pool_buffer(address);
+        frames.retire_all();
+        drop(buffer);
+        drop(file);
+        assert_eq!(&frame.data(0)[..4], &[1, 2, 3, 4]);
+        assert_eq!(frames.inner.pool.load(Ordering::Acquire), 0);
+        drop(frame);
+        assert_eq!(frames.inflight(), 0);
+        assert_eq!(frames.inner.releases.load(Ordering::Acquire), 1);
+        assert_eq!(frames.inner.requeues.load(Ordering::Acquire), 0);
+        assert_eq!(frames.inner.cache.lock().unmap_calls, 1);
+    }
+
+    #[test]
+    fn removal_cancels_queued_releases_even_when_the_buffer_address_is_reused() {
+        ffmpeg::init().expect("ffmpeg");
+        let mut file = tempfile::tempfile().unwrap();
+        std::io::Write::write_all(&mut file, &[5u8, 6, 7, 8]).unwrap();
+        let mut buffer = Box::new(unsafe { std::mem::zeroed::<pw::sys::pw_buffer>() });
+        let address = &mut *buffer as *mut pw::sys::pw_buffer;
+        let frames = PipewireFrames::new();
+        frames.add_pool_buffer(address);
+        let mut plane = memfd_plane(&file);
+        plane.pw_buffer = address as usize;
+        let (frame, leased) =
+            linear_frame(&frames, &plane, &geometry(1, 1, 4, 0, 0, 1, 1), true).unwrap();
+        assert!(leased);
+        let queued = BufferRelease {
+            address: address as usize,
+            active: frames.inner.buffers.lock()[&(address as usize)].clone(),
+        };
+        drop(frame);
+        assert_eq!(frames.inner.requeues.load(Ordering::Acquire), 1);
+        assert!(queued.is_active());
+
+        frames.remove_pool_buffer(address);
+        frames.add_pool_buffer(address);
+        assert!(!queued.is_active());
+        let replacement = frames.inner.buffers.lock()[&(address as usize)].clone();
+        assert!(!Arc::ptr_eq(&queued.active, &replacement));
+        assert!(replacement.load(Ordering::Acquire));
+        frames.queue_released_buffer(queued);
+        let (frame, leased) =
+            linear_frame(&frames, &plane, &geometry(1, 1, 4, 0, 0, 1, 1), true).unwrap();
+        assert!(leased);
+        assert_eq!(&frame.data(0)[..4], &[5, 6, 7, 8]);
+        drop(frame);
+        assert_eq!(frames.inner.requeues.load(Ordering::Acquire), 2);
         assert_eq!(frames.inflight(), 0);
     }
 
@@ -1020,10 +1137,16 @@ mod tests {
         let frames = PipewireFrames::new();
         let geometry = geometry(WIDTH, HEIGHT, STRIDE, 0, 0, WIDTH, HEIGHT);
 
-        let plane = memptr_plane(&mut bytes);
+        let mut source = tempfile::tempfile().unwrap();
+        std::io::Write::write_all(&mut source, &bytes).unwrap();
+        let plane = memfd_plane(&source);
         let (frame, leased) = linear_frame(&frames, &plane, &geometry, true).unwrap();
         assert!(leased);
-        assert_eq!(frame.data(0).as_ptr(), bytes.as_ptr());
+        let pointer = frame.data(0).as_ptr();
+        assert_eq!(
+            frames.inner.cache.lock().base_for(source.as_raw_fd()),
+            Some(pointer)
+        );
         assert_eq!(frame.data(0)[0], 11);
         assert_eq!(frame.data(0)[frame.data(0).len() - 1], 22);
         drop(frame);
@@ -1091,11 +1214,16 @@ mod tests {
             std::hint::black_box(frame.data(0)[frame.data(0).len() - 1]);
             drop(frame);
         });
+        let mut alias_file = tempfile::tempfile().unwrap();
+        std::io::Write::write_all(&mut alias_file, &bytes).unwrap();
+        let alias_plane = memfd_plane(&alias_file);
+        let (warm, _) = linear_frame(&frames, &alias_plane, &geometry, true).unwrap();
+        let pointer = warm.data(0).as_ptr();
+        drop(warm);
         let alias_ms = median_ms(|| {
-            let plane = memptr_plane(&mut bytes);
-            let (frame, leased) = linear_frame(&frames, &plane, &geometry, true).unwrap();
+            let (frame, leased) = linear_frame(&frames, &alias_plane, &geometry, true).unwrap();
             assert!(leased);
-            assert_eq!(frame.data(0).as_ptr(), bytes.as_ptr());
+            assert_eq!(frame.data(0).as_ptr(), pointer);
             std::hint::black_box(frame.data(0)[0]);
             drop(frame);
         });

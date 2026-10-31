@@ -625,8 +625,8 @@ fn capture_pipewire_node(
                 Err(error) => state.set_fatal_error(error.to_string()),
             }
         })
-        .add_buffer(|_, state, _buffer| {
-            state.frames.add_pool_buffer();
+        .add_buffer(|_, state, buffer| {
+            state.frames.add_pool_buffer(buffer);
         })
         .remove_buffer(|_, state, buffer| {
             state.frames.remove_pool_buffer(buffer);
