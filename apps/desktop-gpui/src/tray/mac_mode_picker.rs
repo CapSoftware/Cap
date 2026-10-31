@@ -334,7 +334,7 @@ impl ModePickerView {
         let bounds = self.bounds();
         NSRect::new(
             NSPoint::new(
-                bounds.size.width - RIGHT_INSET - w,
+                picker_width() - RIGHT_INSET - w,
                 (bounds.size.height - h) / 2.0,
             ),
             NSSize::new(w, h),

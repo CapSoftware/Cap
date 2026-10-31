@@ -36,6 +36,7 @@ title = "ファイル"
 open_file = "ファイルを開く…"
 open_recent = "最近使った項目を開く"
 import_media = "メディアを読み込む…"
+export = "書き出す…"
 
 [menu.edit]
 copy = "コピー"

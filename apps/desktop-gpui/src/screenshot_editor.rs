@@ -4505,6 +4505,13 @@ impl Render for ScreenshotEditorWindow {
             .id("screenshot-editor-root")
             .track_focus(&self.focus)
             .key_context("ScreenshotEditor")
+            .when(self.crop.is_none(), |root| {
+                root.on_action(
+                    cx.listener(|this, _: &crate::menus::ExportEditor, window, cx| {
+                        this.export_image(ExportDestination::File, window, cx);
+                    }),
+                )
+            })
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
                 this.on_key(event, window, cx);
             }))
