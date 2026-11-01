@@ -226,13 +226,27 @@ impl SegmentBounds {
             leading_x: horizontal.is_none_or(|(leading, _)| leading),
             leading_y: vertical.is_none_or(|(leading, _)| leading),
         };
-        (
-            XY::new(
-                center.x + weighted(horizontal),
-                center.y + weighted(vertical),
-            ),
-            Some(chosen),
-        )
+        let blended = XY::new(
+            center.x + weighted(horizontal),
+            center.y + weighted(vertical),
+        );
+        if !zone.contains(Self::focus_on_screen(amount, focus, blended)) {
+            return (blended, Some(chosen));
+        }
+        // The cheapest exit can be one that cannot reach, which leaves the
+        // exit that can with too little weight to clear the zone.
+        let clearing = |choice: Option<(bool, (f64, f64, bool))>| {
+            choice
+                .filter(|(_, (_, _, clears))| *clears)
+                .map(|(_, (cost, shift, _))| (cost, shift))
+        };
+        let moved = match (clearing(horizontal), clearing(vertical)) {
+            (Some(x), Some(y)) if x.0 <= y.0 => XY::new(center.x + x.1, center.y),
+            (_, Some(y)) => XY::new(center.x, center.y + y.1),
+            (Some(x), None) => XY::new(center.x + x.1, center.y),
+            (None, None) => blended,
+        };
+        (moved, Some(chosen))
     }
 }
 
@@ -441,6 +455,18 @@ mod test {
         assert_clear(2.0, focus, moved, &camera);
         let screen = SegmentBounds::focus_on_screen(2.0, focus, moved);
         assert!(screen.x <= 0.75 || screen.y <= 0.65, "{screen:?}");
+    }
+
+    #[test]
+    fn camera_avoidance_uses_a_reachable_exit_when_the_cheapest_cannot_reach() {
+        let camera = CameraZone {
+            top_left: XY::new(0.1, 0.3),
+            bottom_right: XY::new(0.79, 0.945),
+            content_aspect: 0.25,
+        };
+        let focus = XY::new(0.5, 0.5);
+        let moved = SegmentBounds::center_avoiding_zone(1.5, focus, focus, &camera, None).0;
+        assert_clear(1.5, focus, moved, &camera);
     }
 
     #[test]
