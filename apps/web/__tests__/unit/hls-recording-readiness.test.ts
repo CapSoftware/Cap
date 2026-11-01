@@ -221,8 +221,14 @@ describe("Instant player readiness and failure UX", () => {
 				mocks.handlers.get("error")?.("hlsError", {
 					details: "fragLoadError",
 					fatal: false,
-					frag: { sn },
+					frag: { type: "main", sn },
 					response: { code },
+				}),
+			);
+		const loadFragment = (sn: number | "initSegment", type = "main") =>
+			act(async () =>
+				mocks.handlers.get("fragLoaded")?.("fragLoaded", {
+					frag: { type, sn },
 				}),
 			);
 		const renderPlaying = async ({
@@ -323,18 +329,22 @@ describe("Instant player readiness and failure UX", () => {
 			await renderPlaying({ currentTime: 12, playbackRate: 1 });
 
 			await failFragment(4);
-			await act(async () =>
-				mocks.handlers.get("fragLoaded")?.("fragLoaded", {
-					frag: { sn: "initSegment" },
-				}),
-			);
+			await loadFragment("initSegment");
 			await failFragment(4);
-			await act(async () =>
-				mocks.handlers.get("fragLoaded")?.("fragLoaded", { frag: { sn: 4 } }),
-			);
+			await loadFragment(4);
 			await failFragment(4);
 
 			expect(mocks.loadSource).toHaveBeenCalledTimes(2);
+		});
+
+		it("keeps the guard when only the audio fragment with that number loads", async () => {
+			await renderPlaying({ currentTime: 12, playbackRate: 1 });
+
+			await failFragment(4);
+			await loadFragment(4, "audio");
+			await failFragment(4);
+
+			expect(mocks.loadSource).toHaveBeenCalledTimes(1);
 		});
 
 		it("does not treat other fragment failures as expiry", async () => {
