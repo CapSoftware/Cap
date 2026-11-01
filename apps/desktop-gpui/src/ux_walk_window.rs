@@ -786,6 +786,7 @@ impl Render for WalkWindow {
                 let full_retry = file.clone();
                 let checkpoint_file = file.clone();
                 let has_checkpoints = folder.join("checkpoints/identity.json").is_file();
+                let recovery = crate::ux_walk_checkpoints::recovery_notice(&folder);
                 let retry_disabled = capture_active
                     || (!saved_view && processing)
                     || self.reprocessing.contains(&file);
@@ -799,6 +800,14 @@ impl Render for WalkWindow {
                         .text_color(theme.gray_10)
                         .child(evidence),
                 )
+                .when_some(recovery, |this, recovery| {
+                    this.child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(theme.amber_11)
+                            .child(recovery),
+                    )
+                })
                 .child(
                     div()
                         .flex()

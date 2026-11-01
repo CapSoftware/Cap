@@ -981,7 +981,7 @@ if (isMainModule()) {
 		} else if (command === "checkpoint-resume") {
 			const { loadConfig } = await import(new URL("config.mjs", engine));
 			const { runCheckpointWorker } = await import("./checkpoint-worker.mjs");
-			await runCheckpointWorker(file, loadConfig());
+			await runCheckpointWorker(file, loadConfig(), { resume: true });
 		} else if (command === "prepare-edit") {
 			const { prepareCapEdit } = await import(new URL("cap.mjs", engine));
 			console.log(JSON.stringify(prepareCapEdit(snapshotNativeWalk(file))));

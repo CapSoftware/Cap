@@ -1,6 +1,8 @@
+use std::time::Duration;
+
 use gpui::{
-    AnyElement, AppContext as _, Context, Entity, IntoElement, ParentElement, Styled, Window, div,
-    prelude::FluentBuilder, px,
+    AnyElement, AppContext as _, Context, Entity, IntoElement, ParentElement, Styled, Task, Window,
+    div, prelude::FluentBuilder, px,
 };
 
 use super::{MainWindow, Mode, TargetType};
@@ -14,10 +16,44 @@ pub(super) struct RecorderWalk {
     pub(super) opening: bool,
     generation: u64,
     notice: Option<String>,
+    key_warning: Option<String>,
     topic: Entity<ui::TextInputState>,
     speakers: Entity<ui::TextInputState>,
     _topic_events: gpui::Subscription,
     _speaker_events: gpui::Subscription,
+    _key_watch: Task<()>,
+}
+
+fn watch_transcription_key(cx: &mut Context<MainWindow>) -> Task<()> {
+    cx.spawn(async move |this, cx| {
+        loop {
+            let Ok(ready) = this.update(cx, |this, cx| {
+                this.walk.selected && this.session.read(cx).phase == Phase::Idle
+            }) else {
+                return;
+            };
+            if ready {
+                let warning = cx
+                    .background_executor()
+                    .spawn(async {
+                        crate::ux_walk::load()
+                            .ok()
+                            .and_then(|settings| crate::ux_walk::missing_key_warning(&settings))
+                    })
+                    .await;
+                let updated = this.update(cx, |this, cx| {
+                    if this.walk.key_warning != warning {
+                        this.walk.key_warning = warning;
+                        cx.notify();
+                    }
+                });
+                if updated.is_err() {
+                    return;
+                }
+            }
+            cx.background_executor().timer(Duration::from_secs(5)).await;
+        }
+    })
 }
 
 impl RecorderWalk {
@@ -82,10 +118,12 @@ impl RecorderWalk {
             opening: false,
             generation: 0,
             notice: None,
+            key_warning: None,
             topic,
             speakers,
             _topic_events: topic_events,
             _speaker_events: speaker_events,
+            _key_watch: watch_transcription_key(cx),
         }
     }
 }
@@ -313,6 +351,17 @@ impl MainWindow {
                             ),
                     )
                 })
+                .when_some(
+                    self.walk.key_warning.clone().filter(|_| selected),
+                    |this, warning| {
+                        this.child(
+                            div()
+                                .text_size(px(11.))
+                                .text_color(theme.amber_11)
+                                .child(warning),
+                        )
+                    },
+                )
                 .when(has_recent, |this| {
                     this.child(
                         ui::Button::body(

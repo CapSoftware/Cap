@@ -14,11 +14,15 @@ const { glossaryTerms, resolveGlossaries } = await import(
 	new URL("glossary.mjs", engine)
 );
 
+// The engine reads the key before it builds a request, so this error proves nothing was sent.
+export const MISSING_KEY = /^no \S+ key\b/;
+const KEY_RECHECK_MS = 30000;
+
 export class CheckpointJobs {
 	constructor(
 		store,
 		cfg,
-		{ words, materialize, timeoutMs = 120000, media = execute } = {},
+		{ words, materialize, timeoutMs = 120000, media = execute, hasKey } = {},
 	) {
 		this.store = store;
 		this.cfg = cfg;
@@ -26,9 +30,25 @@ export class CheckpointJobs {
 		this.materialize = materialize ?? ((job) => this.audio(job));
 		this.timeoutMs = timeoutMs;
 		this.media = media;
+		this.hasKey =
+			hasKey ??
+			(words
+				? () => true
+				: async () =>
+						(
+							await import(new URL("transcribe.mjs", engine))
+						).providerKeyPresent(cfg));
 		this.running = null;
+		this.requeuedNotSent = false;
+		this.nextKeyCheckAt = 0;
 		for (const job of this.all())
-			if (job.state === "submitted") {
+			if (job.state === "ambiguous" && MISSING_KEY.test(job.error ?? ""))
+				durableJson(this.jobPath(job.jobId), {
+					...job,
+					state: "failed",
+					notSent: "missing-key",
+				});
+			else if (job.state === "submitted") {
 				const result = this.resultPath(job.jobId);
 				let recovered = null;
 				try {
@@ -117,6 +137,21 @@ export class CheckpointJobs {
 			terms: glossaryTerms(resolveGlossaries(this.cfg.glossary)),
 		};
 	}
+	requeue({ notSent: _notSent, error, ...job }) {
+		durableJson(this.jobPath(job.jobId), {
+			...job,
+			state: "prepared",
+			priorError: error,
+		});
+	}
+	notSent(reason) {
+		return this.all().filter(
+			(job) =>
+				job.state === "failed" &&
+				job.notSent &&
+				(!reason || job.notSent === reason),
+		);
+	}
 	retry(id) {
 		if (this.running)
 			throw new Error(
@@ -127,6 +162,10 @@ export class CheckpointJobs {
 			throw new Error(
 				"Only failed or ambiguous jobs can be explicitly retried",
 			);
+		if (job.notSent) {
+			this.requeue(job);
+			return;
+		}
 		if ((job.manualRetries ?? 0) >= 3)
 			throw new Error(
 				"This job reached its three manual retry limit; retained source audio can be processed separately",
@@ -231,9 +270,32 @@ export class CheckpointJobs {
 			!["elevenlabs", "assemblyai"].includes(this.cfg.transcriber)
 		)
 			return;
-		const job = this.all().find((item) => item.state === "prepared");
-		if (!job) return;
+		if (!this.requeuedNotSent) {
+			this.requeuedNotSent = true;
+			for (const job of this.notSent()) this.requeue(job);
+		}
+		const keyCheckDue =
+			Date.now() >= this.nextKeyCheckAt &&
+			this.notSent("missing-key").length > 0;
+		if (!keyCheckDue && !this.all().some((item) => item.state === "prepared"))
+			return;
 		this.running = (async () => {
+			this.nextKeyCheckAt = Date.now() + KEY_RECHECK_MS;
+			const keyed = await this.hasKey();
+			if (keyed)
+				for (const job of this.notSent("missing-key")) this.requeue(job);
+			const job = this.all().find((item) => item.state === "prepared");
+			if (!job) return;
+			if (!keyed) {
+				durableJson(this.jobPath(job.jobId), {
+					...job,
+					state: "failed",
+					notSent: "missing-key",
+					error:
+						"No provider key is available, so no request was sent. Add the key in Settings, then choose Resume evidence sync.",
+				});
+				return;
+			}
 			let submitted = false;
 			try {
 				if (
@@ -308,12 +370,18 @@ export class CheckpointJobs {
 					resultHash: sha256(fs.readFileSync(this.resultPath(job.jobId))),
 				});
 			} catch (error) {
+				const missingKey = MISSING_KEY.test(error.message);
 				const rejected =
 					/\b4\d\d\b/.test(error.message) &&
 					!/\b408\b|\b429\b/.test(error.message);
 				durableJson(this.jobPath(job.jobId), {
 					...job,
-					state: submitted && !rejected ? "ambiguous" : "failed",
+					state: submitted && !missingKey && !rejected ? "ambiguous" : "failed",
+					...(missingKey
+						? { notSent: "missing-key" }
+						: submitted
+							? {}
+							: { notSent: "local" }),
 					error: String(error.message).slice(0, 500),
 				});
 			}

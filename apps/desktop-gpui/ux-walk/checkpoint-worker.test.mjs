@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { durableJson, sha256 } from "./checkpoint-store.mjs";
-import { CheckpointWorker } from "./checkpoint-worker.mjs";
+import { CheckpointWorker, runCheckpointWorker } from "./checkpoint-worker.mjs";
 import { restoreRecovery } from "./restore-checkpoint.mjs";
 
 test("local complete audio and log checkpoints advance while network is held; acknowledged sources restore and stop tail transcribes once", async (t) => {
@@ -358,4 +358,248 @@ test("modified full transcript metadata is never admitted to the durable backup 
 		0,
 	);
 	assert.match(worker.error, /integrity|checksum|receipt/i);
+});
+
+function stoppingWalk(t, durationMs) {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "uxw-stop-"));
+	t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+	const file = path.join(root, "native-walk.json");
+	const sourceProject = path.join(root, "source.cap");
+	const segment = path.join(sourceProject, "content/segments/segment-0");
+	fs.mkdirSync(segment, { recursive: true });
+	execFileSync("ffmpeg", [
+		"-v",
+		"error",
+		"-f",
+		"lavfi",
+		"-i",
+		"sine=frequency=660:duration=2.4",
+		"-c:a",
+		"aac",
+		"-threads",
+		"1",
+		"-movflags",
+		"frag_keyframe+empty_moov+default_base_moof",
+		"-frag_duration",
+		"1000000",
+		path.join(segment, "audio-input.m4a"),
+	]);
+	execFileSync("ffmpeg", [
+		"-v",
+		"error",
+		"-f",
+		"lavfi",
+		"-i",
+		"testsrc2=size=64x64:rate=5:duration=2.4",
+		path.join(segment, "display.mp4"),
+	]);
+	durableJson(path.join(segment, "start-times.json"), { mic: 0, display: 0 });
+	durableJson(path.join(sourceProject, "recording-meta.json"), {
+		segments: [
+			{
+				display: { path: "content/segments/segment-0/display.mp4" },
+				mic: { path: "content/segments/segment-0/audio-input.m4a" },
+			},
+		],
+	});
+	const journal = {
+		schemaVersion: 1,
+		state: "recording",
+		request: { directory: root, topic: "Synthetic", speakers: [] },
+		sourceProject,
+		startedAtMs: 1,
+		events: [],
+		durationMs: null,
+	};
+	durableJson(file, journal);
+	const heartbeat = (activeElapsedMs, captureEnded) =>
+		durableJson(path.join(root, "checkpoint-heartbeat.json"), {
+			activeElapsedMs,
+			wallMs: 1000,
+			paused: false,
+			captureEnded,
+			parentPid: process.pid,
+			generation: 1,
+			expectedAudio: { microphone: true, systemAudio: false },
+		});
+	heartbeat(durationMs, false);
+	const complete = () =>
+		durableJson(file, { ...journal, state: "complete", durationMs });
+	return { root, file, heartbeat, complete };
+}
+
+const noBackup = {
+	status: async () => ({ backupEnabled: false, server: "" }),
+};
+
+test("a stop whose terminal heartbeat lost the session clock seals and runs its tail job", async (t) => {
+	const walk = stoppingWalk(t, 2231625);
+	const cfg = { transcriber: "elevenlabs" };
+	let calls = 0;
+	const jobs = {
+		words: async () => {
+			calls++;
+			return [];
+		},
+	};
+	const live = new CheckpointWorker(walk.file, cfg, noBackup, {
+		transport: noBackup,
+		sessionGeneration: 1,
+		jobs,
+	});
+	await live.checkpoint({ force: true });
+	assert.equal(live.store.state.localClockThroughMs, 2231625);
+	walk.complete();
+	walk.heartbeat(0, true);
+	await runCheckpointWorker(walk.file, cfg, { transport: noBackup, jobs });
+	const status = JSON.parse(
+		fs.readFileSync(path.join(walk.root, "checkpoint-status.json")),
+	);
+	assert.equal(status.error, null);
+	assert.equal(status.phase, "stopped");
+	assert.equal(status.localClockThroughMs, 2231625);
+	assert.equal(status.observedActiveMs, 2231625);
+	assert.equal(calls, 1);
+	const seal = JSON.parse(
+		fs.readFileSync(path.join(walk.root, "checkpoints/seal.json")),
+	);
+	assert.equal(seal.captureState, "complete");
+	assert.equal(seal.providerJobs, 1);
+});
+
+test("Resume finishes a walk that an earlier build left draining on a stale clock", async (t) => {
+	const walk = stoppingWalk(t, 5000);
+	const cfg = { transcriber: "elevenlabs" };
+	let calls = 0;
+	const jobs = {
+		words: async () => {
+			calls++;
+			return [];
+		},
+	};
+	await new CheckpointWorker(walk.file, cfg, noBackup, {
+		transport: noBackup,
+		sessionGeneration: 1,
+		jobs,
+	}).checkpoint({ force: true });
+	walk.complete();
+	walk.heartbeat(4000, true);
+	await runCheckpointWorker(walk.file, cfg, {
+		transport: noBackup,
+		jobs,
+		resume: true,
+	});
+	const status = JSON.parse(
+		fs.readFileSync(path.join(walk.root, "checkpoint-status.json")),
+	);
+	assert.equal(status.phase, "stopped");
+	assert.equal(status.error, null);
+	assert.equal(calls, 1);
+});
+
+test("a repeated final clock is harmless and a smaller live clock is still refused", async (t) => {
+	const walk = stoppingWalk(t, 5000);
+	const worker = new CheckpointWorker(
+		walk.file,
+		{ transcriber: "none" },
+		noBackup,
+		{ transport: noBackup, sessionGeneration: 1 },
+	);
+	await worker.checkpoint({ force: true });
+	await worker.checkpoint({ force: true });
+	assert.equal(worker.store.state.sequence, 2);
+	walk.heartbeat(4000, false);
+	await assert.rejects(worker.checkpoint({ force: true }), /moved backwards/);
+	assert.equal(worker.store.state.localClockThroughMs, 5000);
+});
+
+test("a drain that cannot finish names Resume evidence sync and leaves draining", async (t) => {
+	const walk = stoppingWalk(t, 5000);
+	const cfg = { transcriber: "none" };
+	walk.complete();
+	walk.heartbeat(5000, true);
+	durableJson(
+		path.join(walk.root, "checkpoints/full-transcript-words.json"),
+		[],
+	);
+	await runCheckpointWorker(walk.file, cfg, {
+		transport: noBackup,
+		drainMs: 10,
+	});
+	const status = JSON.parse(
+		fs.readFileSync(path.join(walk.root, "checkpoint-status.json")),
+	);
+	assert.equal(status.phase, "resume-needed");
+	assert.match(status.error, /Resume evidence sync/);
+	assert.equal(
+		fs.existsSync(path.join(walk.root, "checkpoints/seal.json")),
+		false,
+	);
+});
+
+test("Resume keeps its drain budget open while a saved job is running", async (t) => {
+	const walk = stoppingWalk(t, 5000);
+	const cfg = { transcriber: "elevenlabs" };
+	walk.complete();
+	walk.heartbeat(5000, true);
+	const seen = [];
+	const words = async (_audio, _cfg, { signal }) => {
+		await new Promise((resolve) => setTimeout(resolve, 2500));
+		seen.push(signal.aborted);
+		return [];
+	};
+	await new CheckpointWorker(walk.file, cfg, noBackup, {
+		transport: noBackup,
+		sessionGeneration: 1,
+		jobs: { words },
+	}).checkpoint({ force: true });
+	await runCheckpointWorker(walk.file, cfg, {
+		transport: noBackup,
+		jobs: { words },
+		drainMs: 1000,
+		resume: true,
+	});
+	assert.deepEqual(seen, [false]);
+	const jobs = fs
+		.readdirSync(path.join(walk.root, "checkpoints/jobs"))
+		.filter((name) => /^[a-f0-9]{64}\.json$/.test(name))
+		.map((name) =>
+			JSON.parse(
+				fs.readFileSync(path.join(walk.root, "checkpoints/jobs", name)),
+			),
+		);
+	assert.deepEqual(
+		jobs.map((job) => job.state),
+		["complete"],
+	);
+});
+
+test("a missing key leaves stop-tail jobs waiting for a key, not ambiguous", async (t) => {
+	const walk = stoppingWalk(t, 5000);
+	const cfg = { transcriber: "elevenlabs" };
+	walk.complete();
+	walk.heartbeat(5000, true);
+	let key = false;
+	let calls = 0;
+	const jobs = {
+		hasKey: () => key,
+		words: async () => {
+			calls++;
+			return [];
+		},
+	};
+	await runCheckpointWorker(walk.file, cfg, { transport: noBackup, jobs });
+	const status = () =>
+		JSON.parse(fs.readFileSync(path.join(walk.root, "checkpoint-status.json")));
+	assert.equal(status().phase, "stopped");
+	assert.match(status().transcription, /key/i);
+	assert.equal(calls, 0);
+	key = true;
+	await runCheckpointWorker(walk.file, cfg, {
+		transport: noBackup,
+		jobs,
+		resume: true,
+	});
+	assert.equal(calls, 1);
+	assert.match(status().transcription, /caught up/);
 });
