@@ -1,9 +1,3 @@
-//! "Hide when silent": the camera steps aside while nobody is talking.
-//!
-//! Speech detection runs once per opened project and lands as ordinary
-//! `HideCamera` scene segments, so the result shows on the Scene track and can
-//! be trimmed or deleted like any other scene.
-
 use super::*;
 use cap_rendering::{ClipSpeech, regenerate_silence_scenes};
 
