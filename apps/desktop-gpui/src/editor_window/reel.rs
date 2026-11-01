@@ -9,7 +9,6 @@ use super::*;
 use gpui::{AnyElement, Hsla, linear_color_stop, linear_gradient, svg};
 
 const REFERENCE_WIDTH: f32 = 1080.;
-const REFERENCE_HEIGHT: f32 = 1920.;
 const MAX_REEL_ASPECT: f32 = 0.7;
 
 const EDGE: f32 = 42.;
@@ -31,17 +30,13 @@ pub(crate) enum ReelPlatform {
     Shorts,
 }
 
-/// One platform's interface on a 1080x1920 frame.
 struct ReelChrome {
     label: &'static str,
     top_icons: &'static [&'static str],
     rail: &'static [&'static str],
-    /// Distance from the frame's bottom to the rail's last slot.
     rail_bottom: f32,
-    /// Distance from the frame's bottom to the caption block.
     caption_bottom: f32,
     caption_width: f32,
-    /// The app's own tab bar, which the video ends behind.
     tabs: &'static [&'static str],
 }
 
@@ -126,9 +121,9 @@ pub(crate) fn is_reel_output(output: [u32; 2]) -> bool {
     output[1] > 0 && output[0] as f32 / output[1] as f32 <= MAX_REEL_ASPECT
 }
 
-fn rail_slot_top(chrome: &ReelChrome, index: usize) -> f32 {
+fn rail_slot_bottom(chrome: &ReelChrome, index: usize) -> f32 {
     let from_end = (chrome.rail.len() - 1 - index) as f32;
-    REFERENCE_HEIGHT - chrome.rail_bottom - RAIL_SLOT * (from_end + 1.)
+    chrome.rail_bottom + RAIL_SLOT * from_end
 }
 
 fn reel_interface(platform: ReelPlatform, size: gpui::Size<Pixels>) -> AnyElement {
@@ -201,7 +196,7 @@ fn reel_interface(platform: ReelPlatform, size: gpui::Size<Pixels>) -> AnyElemen
     let rail = chrome.rail.iter().enumerate().map(|(index, path)| {
         div()
             .absolute()
-            .top(at(rail_slot_top(&chrome, index)))
+            .bottom(at(rail_slot_bottom(&chrome, index)))
             .right(at(EDGE))
             .flex()
             .flex_col()
@@ -371,12 +366,16 @@ mod tests {
     }
 
     #[test]
-    fn every_platform_keeps_its_interface_inside_the_frame() {
+    fn every_platform_fits_the_shortest_reel_output() {
+        let shortest_height = REFERENCE_WIDTH / MAX_REEL_ASPECT;
         for platform in ReelPlatform::ALL {
             let chrome = platform.chrome();
-            assert!(rail_slot_top(&chrome, 0) > TOP_BAR_Y + TOP_LABEL_SIZE);
-            let last = rail_slot_top(&chrome, chrome.rail.len() - 1);
-            assert!((last + RAIL_SLOT + chrome.rail_bottom - REFERENCE_HEIGHT).abs() < 1e-3);
+            assert_eq!(
+                rail_slot_bottom(&chrome, chrome.rail.len() - 1),
+                chrome.rail_bottom
+            );
+            let rail_top = shortest_height - rail_slot_bottom(&chrome, 0) - RAIL_SLOT;
+            assert!(rail_top > TOP_BAR_Y + TOP_LABEL_SIZE);
             assert!(EDGE + chrome.caption_width < REFERENCE_WIDTH - EDGE - ICON_SIZE);
         }
     }
