@@ -4760,6 +4760,45 @@ mod tests {
     }
 
     #[test]
+    fn clip_speed_changes_split_mask_keyframes_at_hold_edges() {
+        let mut project = config(serde_json::json!({
+            "timeline": {
+                "segments": [
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 10.0 },
+                    { "recordingSegment": 1, "timescale": 1.0, "start": 0.0, "end": 10.0 }
+                ],
+                "zoomSegments": [],
+                "textSegments": [
+                    { "start": 14.0, "end": 16.0, "track": 0, "content": "title", "layout": "fullscreen" }
+                ],
+                "maskSegments": [{
+                    "start": 12.0, "end": 20.0, "maskType": "sensitive",
+                    "center": { "x": 0.5, "y": 0.5 }, "size": { "x": 0.2, "y": 0.2 },
+                    "keyframes": { "intensity": [
+                        { "time": 0.0, "value": 0.0 },
+                        { "time": 8.0, "value": 1.0 }
+                    ] }
+                }]
+            }
+        }));
+        let timeline = project.timeline.as_mut().unwrap();
+
+        assert!(set_clip_segment_timescale(timeline, 1, 2.0));
+
+        let text = &timeline.text_segments[0];
+        assert_eq!((text.start, text.end), (12.0, 14.0));
+        let mask = &timeline.mask_segments[0];
+        assert_eq!((mask.start, mask.end), (11.0, 16.0));
+        let intensity: Vec<_> = mask
+            .keyframes
+            .intensity
+            .iter()
+            .map(|key| (key.time, key.value))
+            .collect();
+        assert_eq!(intensity, [(0.0, 0.0), (1.0, 0.25), (3.0, 0.5), (5.0, 1.0)]);
+    }
+
+    #[test]
     fn clip_speed_changes_remap_mask_keyframes_in_absolute_time() {
         for (timescale, expected) in [
             (
