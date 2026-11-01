@@ -1,12 +1,14 @@
 "use client";
 
-import type { Folder, Organisation } from "@cap/web-domain";
+import type { Folder, Organisation, Video } from "@cap/web-domain";
 import { toast } from "sonner";
 import { createVideoForServerProcessing } from "@/actions/video/create-for-processing";
 import { triggerVideoProcessing } from "@/actions/video/trigger-processing";
 import { createVideoAndGetUploadUrl } from "@/actions/video/upload";
 import { sendProgressUpdate } from "@/app/(org)/dashboard/caps/components/sendProgressUpdate";
 import type { UploadStatus } from "@/app/(org)/dashboard/caps/UploadingContext";
+import { EffectRuntime } from "@/lib/EffectRuntime";
+import { withRpc } from "@/lib/Rpcs";
 import { uploadWithTarget } from "@/utils/upload-target";
 import {
 	getSupportedImageContentType,
@@ -51,6 +53,16 @@ export async function importMediaFile({
 	return false;
 }
 
+// A retry creates a new Cap, so keeping this one would leave a dead card in the
+// library for every failed attempt.
+async function deleteFailedImport(videoId: Video.VideoId) {
+	try {
+		await EffectRuntime.runPromise(withRpc((rpc) => rpc.VideoDelete(videoId)));
+	} catch (error) {
+		console.error("Failed to delete failed import", error);
+	}
+}
+
 async function uploadImageAsScreenshot(
 	file: File,
 	contentType: string,
@@ -78,23 +90,30 @@ async function uploadImageAsScreenshot(
 		});
 		let uploadTotal = file.size || 1;
 
-		await uploadWithTarget({
-			target: imageData.uploadTarget,
-			body: file,
-			fileName:
-				file.name ||
-				(contentType === "image/png" ? "pasted-image.png" : "pasted-image.jpg"),
-			onProgress: ({ loaded, total }) => {
-				uploadTotal = Math.max(total, file.size, 1);
-				const percent = (loaded / uploadTotal) * 100;
-				setUploadStatus({
-					status: "uploadingVideo",
-					capId: imageData.id,
-					progress: percent,
-					thumbnailUrl,
-				});
-			},
-		});
+		try {
+			await uploadWithTarget({
+				target: imageData.uploadTarget,
+				body: file,
+				fileName:
+					file.name ||
+					(contentType === "image/png"
+						? "pasted-image.png"
+						: "pasted-image.jpg"),
+				onProgress: ({ loaded, total }) => {
+					uploadTotal = Math.max(total, file.size, 1);
+					const percent = (loaded / uploadTotal) * 100;
+					setUploadStatus({
+						status: "uploadingVideo",
+						capId: imageData.id,
+						progress: percent,
+						thumbnailUrl,
+					});
+				},
+			});
+		} catch (uploadError) {
+			await deleteFailedImport(imageData.id);
+			throw uploadError;
+		}
 		await sendProgressUpdate(imageData.id, uploadTotal, uploadTotal);
 
 		setUploadStatus(undefined);
@@ -231,6 +250,7 @@ async function uploadVideoForServerProcessing(
 		} catch (uploadError) {
 			if (!progressTracker.didFinishSending()) {
 				progressTracker.cleanup();
+				await deleteFailedImport(uploadId);
 				throw uploadError;
 			}
 

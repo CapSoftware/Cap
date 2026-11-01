@@ -5,6 +5,9 @@ const mocks = vi.hoisted(() => ({
 	create: vi.fn(),
 	trigger: vi.fn(),
 	progress: vi.fn(),
+	createImage: vi.fn(),
+	deleteVideo: vi.fn(),
+	toastError: vi.fn(),
 }));
 
 vi.mock("@/actions/video/create-for-processing", () => ({
@@ -14,16 +17,24 @@ vi.mock("@/actions/video/trigger-processing", () => ({
 	triggerVideoProcessing: mocks.trigger,
 }));
 vi.mock("@/actions/video/upload", () => ({
-	createVideoAndGetUploadUrl: vi.fn(),
+	createVideoAndGetUploadUrl: mocks.createImage,
 }));
 vi.mock("@/app/(org)/dashboard/caps/components/sendProgressUpdate", () => ({
 	sendProgressUpdate: mocks.progress,
+}));
+vi.mock("@/lib/EffectRuntime", () => ({
+	EffectRuntime: { runPromise: (task: Promise<void>) => task },
+}));
+vi.mock("@/lib/Rpcs", () => ({
+	withRpc: (
+		run: (rpc: { VideoDelete: typeof mocks.deleteVideo }) => Promise<void>,
+	) => run({ VideoDelete: mocks.deleteVideo }),
 }));
 vi.mock("@remotion/media-parser", () => ({
 	parseMedia: async () => ({ durationInSeconds: 60, dimensions: null }),
 }));
 vi.mock("sonner", () => ({
-	toast: { success: vi.fn(), error: vi.fn() },
+	toast: { success: vi.fn(), error: mocks.toastError },
 }));
 
 import { importMediaFile } from "@/app/(org)/dashboard/import/import-media";
@@ -135,4 +146,101 @@ describe("dashboard video import progress", () => {
 			expect(vi.getTimerCount()).toBe(0);
 		},
 	);
+
+	describe("failed uploads", () => {
+		const startImport = async (file: File) => {
+			const importing = importMediaFile({
+				file,
+				orgId: Organisation.OrganisationId.make("org-123"),
+				setUploadStatus: vi.fn(),
+			});
+			const request = await vi.waitFor(() => {
+				if (!MockXMLHttpRequest.current) throw new Error("Upload not started");
+				return MockXMLHttpRequest.current;
+			});
+			return { importing, request };
+		};
+		const videoFile = () => {
+			const file = new File(["video"], "clip.mp4", { type: "video/mp4" });
+			Object.defineProperty(file, "size", { value: total });
+			return file;
+		};
+
+		beforeEach(() => {
+			vi.spyOn(console, "error").mockImplementation(() => {});
+			vi.spyOn(console, "warn").mockImplementation(() => {});
+			mocks.deleteVideo.mockReset().mockResolvedValue(undefined);
+			mocks.toastError.mockReset();
+			mocks.trigger.mockReset().mockResolvedValue({ success: true });
+		});
+
+		it("deletes the Cap when a video upload stops partway", async () => {
+			const { importing, request } = await startImport(videoFile());
+			request.progress(total / 2, total);
+			request.onerror?.();
+
+			expect(await importing).toBe(false);
+			expect(mocks.deleteVideo).toHaveBeenCalledExactlyOnceWith(videoId);
+			expect(mocks.trigger).not.toHaveBeenCalled();
+			expect(mocks.toastError).toHaveBeenCalledWith(
+				"Failed to upload video. Please try again.",
+			);
+		});
+
+		it("deletes the Cap when an image upload fails", async () => {
+			mocks.createImage.mockResolvedValue({
+				id: videoId,
+				uploadTarget: {
+					type: "put",
+					url: "https://storage.example/upload",
+					headers: {},
+				},
+			});
+			const { importing, request } = await startImport(
+				new File(["image"], "shot.png", { type: "image/png" }),
+			);
+			request.onerror?.();
+
+			expect(await importing).toBe(false);
+			expect(mocks.deleteVideo).toHaveBeenCalledExactlyOnceWith(videoId);
+			expect(mocks.toastError).toHaveBeenCalledWith(
+				"Failed to upload image. Please try again.",
+			);
+		});
+
+		it("still reports the upload failure when the delete fails", async () => {
+			mocks.deleteVideo.mockRejectedValue(new Error("delete failed"));
+			const { importing, request } = await startImport(videoFile());
+			request.onerror?.();
+
+			expect(await importing).toBe(false);
+			expect(mocks.toastError).toHaveBeenCalledWith(
+				"Failed to upload video. Please try again.",
+			);
+		});
+
+		it("keeps the Cap when every byte was sent before the request failed", async () => {
+			const { importing, request } = await startImport(videoFile());
+			request.progress(total, total);
+			request.onerror?.();
+
+			expect(await importing).toBe(true);
+			expect(mocks.trigger).toHaveBeenCalledTimes(1);
+			expect(mocks.deleteVideo).not.toHaveBeenCalled();
+		});
+
+		it("keeps the uploaded Cap when processing fails to start", async () => {
+			mocks.trigger.mockRejectedValue(new Error("workflow unavailable"));
+			const { importing, request } = await startImport(videoFile());
+			request.status = 200;
+			request.progress(total, total);
+			request.onload?.();
+
+			expect(await importing).toBe(false);
+			expect(mocks.deleteVideo).not.toHaveBeenCalled();
+			expect(mocks.toastError).toHaveBeenCalledWith(
+				"Failed to start video processing. Please try again.",
+			);
+		});
+	});
 });
