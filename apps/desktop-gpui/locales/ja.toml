@@ -2321,6 +2321,12 @@ force_ffmpeg_description = "ハードウェアデコーダを使わない（自�
 title = "詳細設定"
 transparent_mov = "透過MOVとして書き出します。ファイルサイズは大きくなりますが、合成や編集に最適です。"
 
+[editor.export.codec]
+checking = "HEVCエンコーダを確認しています…"
+hevc = "同じ品質でファイルが小さくなり、GPUでエンコードします。QuickTime、Safari、Windows、最近のスマートフォンで再生できますが、古いプレーヤーやブラウザでは開けない場合があります。"
+link = "共有リンクは、どのブラウザでも再生できるようにH.264を使います。"
+unavailable = "HEVCにはハードウェアビデオエンコーダが必要ですが、このデバイスでは起動できるものがありませんでした。"
+
 [editor.export.cta]
 cancel_sign_in = "サインインをキャンセル"
 clipboard = "クリップボードに書き出す"
@@ -2390,6 +2396,7 @@ proceed = "このまま続行"
 title = "書き出しのリソースを確認"
 
 [editor.export.section]
+codec = "コーデック"
 destination = "書き出し先"
 format = "形式"
 frame_rate = "フレームレート"

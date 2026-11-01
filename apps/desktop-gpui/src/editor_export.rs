@@ -8,7 +8,7 @@ use std::time::Duration;
 use cap_export::estimates::{ExportEstimates, estimate_export, estimate_turbo_export};
 use cap_export::gif::GifExportSettings;
 use cap_export::mov::MovExportSettings;
-use cap_export::mp4::{ExportCompression, Mp4ExportSettings, turbo::TurboOptions};
+use cap_export::mp4::{ExportCodec, ExportCompression, Mp4ExportSettings, turbo::TurboOptions};
 use cap_export::preview::{
     ExportPreviewSettings, render_preview_with_config, render_preview_with_editor,
 };
@@ -97,6 +97,34 @@ impl ExportDestination {
         }
     }
 }
+
+const CODEC_OPTIONS: [ExportCodec; 2] = [ExportCodec::H264, ExportCodec::Hevc];
+
+fn codec_label(codec: ExportCodec) -> &'static str {
+    match codec {
+        ExportCodec::H264 => "H.264",
+        ExportCodec::Hevc => "HEVC",
+    }
+}
+
+fn codec_slug(codec: ExportCodec) -> &'static str {
+    match codec {
+        ExportCodec::H264 => "H264",
+        ExportCodec::Hevc => "Hevc",
+    }
+}
+
+fn codec_from_slug(slug: &str) -> ExportCodec {
+    match slug {
+        "Hevc" => ExportCodec::Hevc,
+        _ => ExportCodec::H264,
+    }
+}
+
+/// Whether this machine can export HEVC, once the probe has run. The probe
+/// opens the hardware encoders, so it runs once per process off the UI
+/// thread.
+static HEVC_SUPPORTED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExportFormatKind {
@@ -200,6 +228,8 @@ pub struct ExportUi {
     pub compression: ExportCompression,
     pub optimize_filesize: bool,
     pub turbo: bool,
+    pub codec: ExportCodec,
+    pub hevc_supported: Option<bool>,
     pub cursor_only: bool,
     pub custom_bpp: Option<f32>,
     pub force_ffmpeg: bool,
@@ -274,6 +304,7 @@ impl ExportUi {
             advanced_open: false,
             organization_id: None,
             turbo: false,
+            codec: String::new(),
         });
         Self::from_preferences(prefs)
     }
@@ -292,6 +323,8 @@ impl ExportUi {
             },
             optimize_filesize: prefs.optimize_filesize,
             turbo: prefs.turbo && turbo_available(),
+            codec: codec_from_slug(&prefs.codec),
+            hevc_supported: HEVC_SUPPORTED.get().copied(),
             cursor_only: prefs.cursor_only,
             custom_bpp: prefs.custom_bpp,
             force_ffmpeg: prefs.force_ffmpeg_decoder,
@@ -346,6 +379,7 @@ impl ExportUi {
             advanced_open: self.advanced_open,
             organization_id: self.organization_id.clone(),
             turbo: self.turbo,
+            codec: codec_slug(self.codec).to_string(),
         };
         store::update(|state| state.export = Some(prefs));
     }
@@ -353,6 +387,37 @@ impl ExportUi {
     fn bpp(&self) -> f32 {
         self.custom_bpp
             .unwrap_or_else(|| self.compression.bits_per_pixel())
+    }
+
+    fn shows_codec(&self) -> bool {
+        self.format == ExportFormatKind::Mp4 && !self.cursor_only
+    }
+
+    fn hevc_selectable(&self) -> bool {
+        self.destination != ExportDestination::Link && self.hevc_supported == Some(true)
+    }
+
+    /// The codec the export runs with: the one picked, unless HEVC cannot be
+    /// used for this destination or on this machine.
+    fn export_codec(&self) -> ExportCodec {
+        if self.codec == ExportCodec::Hevc && !self.hevc_selectable() {
+            ExportCodec::H264
+        } else {
+            self.codec
+        }
+    }
+
+    fn mp4_settings(&self) -> Mp4ExportSettings {
+        let (width, height) = self.resolution.size();
+        Mp4ExportSettings {
+            fps: self.fps,
+            resolution_base: XY::new(width, height),
+            compression: self.compression,
+            custom_bpp: self.custom_bpp,
+            force_ffmpeg_decoder: self.force_ffmpeg,
+            optimize_filesize: self.optimize_filesize,
+            codec: self.export_codec(),
+        }
     }
 
     fn estimate_settings(&self) -> ExportSettings {
@@ -371,14 +436,7 @@ impl ExportUi {
                 quality: None,
             })
         } else {
-            ExportSettings::Mp4(Mp4ExportSettings {
-                fps: self.fps,
-                resolution_base,
-                compression: self.compression,
-                custom_bpp: self.custom_bpp,
-                force_ffmpeg_decoder: self.force_ffmpeg,
-                optimize_filesize: self.optimize_filesize,
-            })
+            ExportSettings::Mp4(self.mp4_settings())
         }
     }
 
@@ -587,10 +645,35 @@ impl EditorWindow {
             ui.destination = ExportDestination::File;
         }
         self.normalize_export_fps(&mut ui);
+        let probe_hevc = ui.hevc_supported.is_none();
         self.export = Some(ui);
         self.subscribe_export_to_sign_in(window, cx);
         self.refresh_export_preview(window, cx);
+        if probe_hevc {
+            self.probe_hevc_export(window, cx);
+        }
         cx.notify();
+    }
+
+    fn probe_hevc_export(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let probe = cx
+            .background_executor()
+            .spawn(async { *HEVC_SUPPORTED.get_or_init(|| ExportCodec::Hevc.is_supported()) });
+        cx.spawn_in(window, async move |this, cx| {
+            let supported = probe.await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                let Some(ui) = this.export.as_mut() else {
+                    return;
+                };
+                let before = ui.export_codec();
+                ui.hevc_supported = Some(supported);
+                if ui.export_codec() != before {
+                    this.refresh_export_preview(window, cx);
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     pub(crate) fn close_export(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -876,6 +959,7 @@ impl EditorWindow {
         let custom_bpp = ui.custom_bpp;
         let optimize = ui.optimize_filesize;
         let turbo = ui.turbo;
+        let codec = ui.export_codec();
         let force = ui.force_ffmpeg;
         let project_path = self.project_path.clone();
         let project = self.project.clone();
@@ -990,6 +1074,7 @@ impl EditorWindow {
                     compression,
                     custom_bpp,
                     optimize,
+                    codec,
                     turbo,
                     force,
                     save_path.clone(),
@@ -1235,6 +1320,7 @@ impl EditorWindow {
                             compression,
                             custom_bpp,
                             optimize,
+                            ExportCodec::H264,
                             turbo,
                             force,
                             save_path.clone(),
@@ -1766,6 +1852,9 @@ impl EditorWindow {
                     .gap(px(20.))
                     .child(self.export_destination_field(ui, link_disabled, cx))
                     .child(self.export_format_field(ui, format_locked, cx))
+                    .when(ui.shows_codec(), |this| {
+                        this.child(self.export_codec_field(ui, cx))
+                    })
                     .child(self.export_resolution_field(ui, &resolutions, cx))
                     .child(self.export_fps_field(ui, fps_options, cx))
                     .when(
@@ -2229,9 +2318,70 @@ impl EditorWindow {
                     .child(tr::editor::export::quality::smaller())
                     .child(tr::editor::export::quality::larger()),
             )
-            .child(self.export_optimize_row(ui, cx))
-            .when(turbo_available(), |this| {
-                this.child(self.export_turbo_row(ui, cx))
+            .when(ui.export_codec() == ExportCodec::H264, |this| {
+                this.child(self.export_optimize_row(ui, cx))
+                    .when(turbo_available(), |this| {
+                        this.child(self.export_turbo_row(ui, cx))
+                    })
+            })
+    }
+
+    fn export_codec_field(&self, ui: &ExportUi, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        let editor = theme.editor;
+        let selected = ui.export_codec();
+        let hevc_selectable = ui.hevc_selectable();
+        let hint = if ui.destination == ExportDestination::Link {
+            Some(tr::editor::export::codec::link())
+        } else {
+            match ui.hevc_supported {
+                None => Some(tr::editor::export::codec::checking()),
+                Some(false) => Some(tr::editor::export::codec::unavailable()),
+                Some(true) if selected == ExportCodec::Hevc => {
+                    Some(tr::editor::export::codec::hevc())
+                }
+                Some(true) => None,
+            }
+        };
+        self.export_section(tr::editor::export::section::codec(), "icons/film.svg")
+            .child(
+                ui::SegmentedControl::editor(
+                    &theme,
+                    "export-codec",
+                    CODEC_OPTIONS
+                        .iter()
+                        .map(|codec| {
+                            ui::SegmentOption::new(codec_label(*codec), selected == *codec)
+                                .disabled(*codec == ExportCodec::Hevc && !hevc_selectable)
+                        })
+                        .collect(),
+                )
+                .stretch()
+                .item_height(px(SEGMENT_HEIGHT))
+                .on_select(cx.listener(|this, index: &usize, window, cx| {
+                    let Some(codec) = CODEC_OPTIONS.get(*index).copied() else {
+                        return;
+                    };
+                    let Some(ui) = this.export.as_mut() else {
+                        return;
+                    };
+                    if codec == ExportCodec::Hevc && !ui.hevc_selectable() {
+                        return;
+                    }
+                    ui.codec = codec;
+                    ui.persist();
+                    this.refresh_export_preview(window, cx);
+                    cx.notify();
+                })),
+            )
+            .when_some(hint, |field, hint| {
+                field.child(
+                    div()
+                        .text_size(px(11.))
+                        .line_height(px(14.))
+                        .text_color(Hsla::from(editor.text_3))
+                        .child(hint),
+                )
             })
     }
 
@@ -3079,6 +3229,7 @@ async fn run_export(
     compression: ExportCompression,
     custom_bpp: Option<f32>,
     optimize: bool,
+    codec: ExportCodec,
     turbo: bool,
     force: bool,
     save_path: Option<PathBuf>,
@@ -3160,6 +3311,7 @@ async fn run_export(
                 custom_bpp,
                 force_ffmpeg_decoder: force,
                 optimize_filesize: optimize,
+                codec,
             };
             if turbo {
                 settings
@@ -3212,7 +3364,36 @@ mod tests {
             advanced_open: false,
             organization_id: None,
             turbo: false,
+            codec: String::new(),
         })
+    }
+
+    #[test]
+    fn hevc_exports_only_where_it_can_and_never_to_a_link() {
+        use super::{ExportCodec, codec_from_slug, codec_slug};
+
+        let mut ui = clipboard_export();
+        assert_eq!(ui.codec, ExportCodec::H264);
+        ui.codec = ExportCodec::Hevc;
+
+        ui.hevc_supported = None;
+        assert_eq!(ui.export_codec(), ExportCodec::H264);
+        ui.hevc_supported = Some(false);
+        assert_eq!(ui.export_codec(), ExportCodec::H264);
+        ui.hevc_supported = Some(true);
+        assert_eq!(ui.export_codec(), ExportCodec::Hevc);
+        assert_eq!(ui.mp4_settings().codec, ExportCodec::Hevc);
+
+        ui.destination = ExportDestination::Link;
+        assert_eq!(ui.export_codec(), ExportCodec::H264);
+        assert_eq!(ui.mp4_settings().codec, ExportCodec::H264);
+        ui.destination = ExportDestination::File;
+        assert_eq!(ui.export_codec(), ExportCodec::Hevc);
+
+        for codec in [ExportCodec::H264, ExportCodec::Hevc] {
+            assert_eq!(codec_from_slug(codec_slug(codec)), codec);
+        }
+        assert_eq!(codec_from_slug(""), ExportCodec::H264);
     }
 
     #[test]

@@ -2323,6 +2323,12 @@ force_ffmpeg_description = "Skip hardware decoder (auto-fallback enabled)"
 title = "Advanced"
 transparent_mov = "Exports as a transparent MOV. Files are large and best for compositing or editing."
 
+[editor.export.codec]
+checking = "Checking for an HEVC encoder…"
+hevc = "Smaller files at the same quality, encoded by your GPU. Plays in QuickTime, Safari, Windows and modern phones; some older players and browsers can't open it."
+link = "Shareable links use H.264 so every browser can play them."
+unavailable = "HEVC needs a hardware video encoder, and none on this device could start."
+
 [editor.export.cta]
 cancel_sign_in = "Cancel Sign In"
 clipboard = "Export to Clipboard"
@@ -2392,6 +2398,7 @@ proceed = "Proceed anyway"
 title = "Check export resources"
 
 [editor.export.section]
+codec = "Codec"
 destination = "Destination"
 format = "Format"
 frame_rate = "Frame rate"

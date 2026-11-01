@@ -2321,6 +2321,12 @@ force_ffmpeg_description = "Hardware-Decoder überspringen (automatischer Fallba
 title = "Erweitert"
 transparent_mov = "Exportiert als transparente MOV-Datei. Die Dateien sind groß und eignen sich am besten zum Compositing oder Bearbeiten."
 
+[editor.export.codec]
+checking = "Suche nach einem HEVC-Encoder…"
+hevc = "Kleinere Dateien bei gleicher Qualität, kodiert von Ihrer GPU. Läuft in QuickTime, Safari, Windows und aktuellen Smartphones; manche ältere Player und Browser können sie nicht öffnen."
+link = "Links zum Teilen verwenden H.264, damit jeder Browser sie abspielen kann."
+unavailable = "HEVC braucht einen Hardware-Video-Encoder, und auf diesem Gerät ließ sich keiner starten."
+
 [editor.export.cta]
 cancel_sign_in = "Anmeldung abbrechen"
 clipboard = "In die Zwischenablage exportieren"
@@ -2390,6 +2396,7 @@ proceed = "Trotzdem fortfahren"
 title = "Exportressourcen prüfen"
 
 [editor.export.section]
+codec = "Codec"
 destination = "Ziel"
 format = "Format"
 frame_rate = "Bildrate"

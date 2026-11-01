@@ -2321,6 +2321,12 @@ force_ffmpeg_description = "Ignorer le décodeur matériel (repli automatique ac
 title = "Avancé"
 transparent_mov = "Exporte en MOV transparent. Les fichiers sont volumineux et conviennent surtout à la composition ou au montage."
 
+[editor.export.codec]
+checking = "Recherche d'un encodeur HEVC…"
+hevc = "Des fichiers plus petits à qualité égale, encodés par votre GPU. Lisibles dans QuickTime, Safari, Windows et les téléphones récents, mais certains lecteurs et navigateurs anciens ne peuvent pas les ouvrir."
+link = "Les liens de partage utilisent H.264 pour que tous les navigateurs puissent les lire."
+unavailable = "HEVC nécessite un encodeur vidéo matériel, et aucun n'a pu démarrer sur cet appareil."
+
 [editor.export.cta]
 cancel_sign_in = "Annuler la connexion"
 clipboard = "Exporter vers le presse-papiers"
@@ -2390,6 +2396,7 @@ proceed = "Continuer quand même"
 title = "Vérifier les ressources d'exportation"
 
 [editor.export.section]
+codec = "Codec"
 destination = "Destination"
 format = "Format"
 frame_rate = "Fréquence d'images"

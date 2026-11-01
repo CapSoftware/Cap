@@ -2321,6 +2321,12 @@ force_ffmpeg_description = "跳过硬件解码器（已启用自动回退）"
 title = "高级"
 transparent_mov = "导出为透明 MOV。文件较大，最适合合成或剪辑。"
 
+[editor.export.codec]
+checking = "正在检测 HEVC 编码器…"
+hevc = "同等画质下文件更小，由 GPU 编码。可在 QuickTime、Safari、Windows 和较新的手机上播放；部分旧播放器和浏览器无法打开。"
+link = "分享链接使用 H.264，确保所有浏览器都能播放。"
+unavailable = "HEVC 需要硬件视频编码器，但此设备上没有可以启动的编码器。"
+
 [editor.export.cta]
 cancel_sign_in = "取消登录"
 clipboard = "导出到剪贴板"
@@ -2390,6 +2396,7 @@ proceed = "仍然继续"
 title = "检查导出资源"
 
 [editor.export.section]
+codec = "编码格式"
 destination = "目标"
 format = "格式"
 frame_rate = "帧率"

@@ -2321,6 +2321,12 @@ force_ffmpeg_description = "Omitir el decodificador por hardware (respaldo autom
 title = "Avanzado"
 transparent_mov = "Exporta como MOV transparente. Los archivos son grandes y sirven mejor para composición o edición."
 
+[editor.export.codec]
+checking = "Buscando un codificador HEVC…"
+hevc = "Archivos más pequeños con la misma calidad, codificados por tu GPU. Se reproducen en QuickTime, Safari, Windows y móviles recientes; algunos reproductores y navegadores antiguos no pueden abrirlos."
+link = "Los enlaces para compartir usan H.264 para que cualquier navegador pueda reproducirlos."
+unavailable = "HEVC necesita un codificador de vídeo por hardware, y ninguno de este dispositivo pudo iniciarse."
+
 [editor.export.cta]
 cancel_sign_in = "Cancelar inicio de sesión"
 clipboard = "Exportar al portapapeles"
@@ -2390,6 +2396,7 @@ proceed = "Continuar de todos modos"
 title = "Comprobar recursos de exportación"
 
 [editor.export.section]
+codec = "Códec"
 destination = "Destino"
 format = "Formato"
 frame_rate = "Velocidad de fotogramas"
