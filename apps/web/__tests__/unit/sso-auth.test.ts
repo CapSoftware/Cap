@@ -81,6 +81,7 @@ function matchesRow(condition: SQL | undefined, scope: RowScope) {
 function createDatabase(seed: Map<MySqlTable, Row[]>) {
 	const tables = new Map(seed);
 	const hooks: { beforeUpdate?: (table: MySqlTable) => void } = {};
+	const lockedTables: MySqlTable[] = [];
 	const rows = (table: MySqlTable) => {
 		const result = tables.get(table);
 		if (!result) throw new Error("Unexpected table");
@@ -118,6 +119,7 @@ function createDatabase(seed: Map<MySqlTable, Row[]>) {
 		}
 
 		for() {
+			if (this.table) lockedTables.push(this.table);
 			return Promise.resolve().then(() => this.execute());
 		}
 
@@ -223,7 +225,7 @@ function createDatabase(seed: Map<MySqlTable, Row[]>) {
 			},
 		),
 	};
-	return { client, rows, hooks };
+	return { client, rows, hooks, lockedTables };
 }
 
 const USER_ID = User.UserId.make("sso-user");
@@ -702,6 +704,7 @@ describe("SSO membership provisioning", () => {
 			}),
 		]);
 		expect(invite.status).toBe("accepted");
+		expect(fixture.lockedTables).toContain(Db.organizationInvites);
 	});
 
 	it.each(["owner", "admin", "member"])(

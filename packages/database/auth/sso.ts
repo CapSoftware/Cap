@@ -247,7 +247,7 @@ export async function provisionSsoMembership(
 				.select({ id: organizationInvites.id })
 				.from(organizationInvites)
 				.where(and(pendingInvites, eq(organizationInvites.role, "admin")))
-				.limit(1);
+				.for("update");
 			await tx.insert(organizationMembers).values({
 				id: nanoId(),
 				userId,
