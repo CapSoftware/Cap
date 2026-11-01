@@ -43,13 +43,18 @@ const HEADER_HEIGHT: f32 = 36.;
 /// `h-[42px]` in deviceRowStyles.ts.
 const DEVICE_ROW_HEIGHT: f32 = 42.;
 
+fn connected_camera<'a>(
+    id: &recording::DeviceOrModelID,
+    cameras: &'a [CameraOption],
+) -> Option<&'a CameraOption> {
+    cameras.iter().find(|camera| match id {
+        recording::DeviceOrModelID::DeviceID(id) => camera.device_id == *id,
+        recording::DeviceOrModelID::ModelID(model) => camera.model_id.as_ref() == Some(model),
+    })
+}
+
 fn remembered_camera(id: &recording::DeviceOrModelID, cameras: &[CameraOption]) -> CameraOption {
-    cameras
-        .iter()
-        .find(|camera| match id {
-            recording::DeviceOrModelID::DeviceID(id) => camera.device_id == *id,
-            recording::DeviceOrModelID::ModelID(model) => camera.model_id.as_ref() == Some(model),
-        })
+    connected_camera(id, cameras)
         .cloned()
         .unwrap_or_else(|| CameraOption {
             device_id: match id {
@@ -86,6 +91,30 @@ fn remembered_microphone(name: &str, microphones: &[MicrophoneOption]) -> Microp
             sample_rate: None,
             channels: None,
         })
+}
+
+/// A remembered input stays selected while it is unplugged, so a start has to
+/// go ahead without it rather than fail on its open error. Camera-only is the
+/// one target that cannot record without its camera.
+fn skip_disconnected_inputs(config: &mut recording::StartConfig, devices: &DeviceSnapshot) {
+    let camera_missing = config
+        .camera
+        .as_ref()
+        .is_some_and(|id| connected_camera(id, &devices.cameras).is_none());
+    if camera_missing && !matches!(config.target, ScreenCaptureTarget::CameraOnly) {
+        tracing::warn!("Selected camera is not connected, recording without it");
+        config.camera = None;
+        config.camera_feed = None;
+    }
+    let microphone_missing = config
+        .microphone
+        .as_ref()
+        .is_some_and(|name| !devices.microphones.iter().any(|mic| &mic.name == name));
+    if microphone_missing {
+        tracing::warn!("Selected microphone is not connected, recording without it");
+        config.microphone = None;
+        config.mic_feed = None;
+    }
 }
 
 fn take_pending_recording_inputs(
@@ -2461,7 +2490,7 @@ impl MainWindow {
 
     pub(crate) fn start_recording_config(
         &mut self,
-        config: recording::StartConfig,
+        mut config: recording::StartConfig,
         cx: &mut Context<Self>,
     ) {
         if self.enumerating
@@ -2478,13 +2507,9 @@ impl MainWindow {
         let Ok(permit) = self.prepare_deep_link_start(cx) else {
             return;
         };
-        let microphone_available = config.microphone.as_ref().is_some_and(|name| {
-            self.devices
-                .microphones
-                .iter()
-                .any(|device| &device.name == name)
-        });
-        if !microphone_available && crate::store::GeneralSettings::load().confirm_without_microphone
+        skip_disconnected_inputs(&mut config, &self.devices);
+        if config.microphone.is_none()
+            && crate::store::GeneralSettings::load().confirm_without_microphone
         {
             self.microphone_warning = Some(MicrophoneWarning {
                 config,
@@ -2590,8 +2615,6 @@ impl MainWindow {
             cx.notify();
             return;
         }
-        warning.config.microphone = None;
-        warning.config.mic_feed = None;
         self.check_storage_before_start(warning.config, false, warning.permit, cx);
         cx.notify();
     }
@@ -7395,6 +7418,88 @@ mod remembered_device_tests {
             remembered_microphone("Unrequested microphone", &microphones),
             microphones[0]
         );
+    }
+
+    fn start_config(
+        target: ScreenCaptureTarget,
+        camera: recording::DeviceOrModelID,
+        microphone: &str,
+    ) -> recording::StartConfig {
+        recording::StartConfig {
+            mode: recording::RecordingMode::Studio,
+            target,
+            microphone: Some(microphone.to_string()),
+            camera: Some(camera),
+            device_settings: crate::store::RecordingDeviceSettings::default(),
+            input_readiness: feeds::InputReadiness::default(),
+            system_audio: false,
+            excluded_windows: Vec::new(),
+            camera_feed: None,
+            mic_feed: None,
+            mic_meter: None,
+            #[cfg(target_os = "linux")]
+            linux_instant_camera: None,
+            start_gate: None,
+        }
+    }
+
+    fn display_target() -> ScreenCaptureTarget {
+        ScreenCaptureTarget::Display {
+            id: "1".parse().unwrap(),
+        }
+    }
+
+    fn connected_devices() -> DeviceSnapshot {
+        DeviceSnapshot {
+            cameras: vec![camera("connected-camera", Some("046d:08e5"))],
+            microphones: vec![MicrophoneOption {
+                name: "Connected microphone".into(),
+                sample_rate: None,
+                channels: None,
+            }],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_start_skips_remembered_inputs_that_are_unplugged() {
+        let unplugged_model = cap_camera::ModelID::try_from("1234:5678".to_string()).unwrap();
+        for camera in [
+            recording::DeviceOrModelID::DeviceID("unplugged-camera".into()),
+            recording::DeviceOrModelID::ModelID(unplugged_model),
+        ] {
+            let mut config = start_config(display_target(), camera, "Unplugged microphone");
+            skip_disconnected_inputs(&mut config, &connected_devices());
+            assert!(config.camera.is_none());
+            assert!(config.microphone.is_none());
+        }
+    }
+
+    #[test]
+    fn a_start_keeps_connected_inputs() {
+        let connected_model = cap_camera::ModelID::try_from("046d:08e5".to_string()).unwrap();
+        for camera in [
+            recording::DeviceOrModelID::DeviceID("connected-camera".into()),
+            recording::DeviceOrModelID::ModelID(connected_model),
+        ] {
+            let mut config = start_config(display_target(), camera.clone(), "Connected microphone");
+            skip_disconnected_inputs(&mut config, &connected_devices());
+            assert_eq!(config.camera, Some(camera));
+            assert_eq!(config.microphone.as_deref(), Some("Connected microphone"));
+        }
+    }
+
+    #[test]
+    fn camera_only_still_requires_its_camera() {
+        let unplugged = recording::DeviceOrModelID::DeviceID("unplugged-camera".into());
+        let mut config = start_config(
+            ScreenCaptureTarget::CameraOnly,
+            unplugged.clone(),
+            "Unplugged microphone",
+        );
+        skip_disconnected_inputs(&mut config, &connected_devices());
+        assert_eq!(config.camera, Some(unplugged));
+        assert!(config.microphone.is_none());
     }
 
     #[test]
