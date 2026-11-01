@@ -411,7 +411,8 @@ impl OutOfProcessFragmentedM4SMuxer {
 
                     let convert_start = std::time::Instant::now();
                     let frame = frame_pool.get_frame();
-                    let fill_result = fill_frame_from_sample_buf(&sample_buf, frame);
+                    let fill_result =
+                        cidre::objc::ar_pool(|| fill_frame_from_sample_buf(&sample_buf, frame));
                     let convert_elapsed_ms = convert_start.elapsed().as_millis();
 
                     if convert_elapsed_ms > slow_threshold_ms {
