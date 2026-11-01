@@ -35,10 +35,10 @@ vi.mock("@cap/database", () => ({
 				const query = {
 					leftJoin: () => query,
 					innerJoin: () => query,
-					where: () => query,
-					limit: async () => rows(),
-					// biome-ignore lint/suspicious/noThenProperty: Drizzle queries are awaitable without .limit()
-					then: (resolve: (value: Row[]) => unknown) => resolve(rows()),
+					where: () =>
+						Object.assign(Promise.resolve(rows()), {
+							limit: async () => rows(),
+						}),
 				};
 				return query;
 			},
