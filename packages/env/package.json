@@ -1,20 +1,20 @@
 {
-	"name": "@cap/env",
-	"private": true,
-	"type": "module",
-	"main": "./index.ts",
-	"types": "./index.ts",
-	"scripts": {
-		"build": "tsdown"
-	},
-	"publishConfig": {
-		"main": "./dist/index.js"
-	},
-	"dependencies": {
-		"@t3-oss/env-nextjs": "^0.12.0",
-		"zod": "^3.25.76"
-	},
-	"devDependencies": {
-		"@types/node": "^22.15.14"
-	}
+  "name": "@cap/env",
+  "private": true,
+  "type": "module",
+  "main": "./index.ts",
+  "types": "./index.ts",
+  "scripts": {
+    "build": "node init && tsdown"
+  },
+  "publishConfig": {
+    "main": "./dist/index.js"
+  },
+  "dependencies": {
+    "@t3-oss/env-nextjs": "^0.12.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.14"
+  }
 }
