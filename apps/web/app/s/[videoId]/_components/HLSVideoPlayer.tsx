@@ -415,7 +415,7 @@ export function HLSVideoPlayer({
 			let networkRetryCount = 0;
 			let mediaRetryCount = 0;
 			const maxNetworkRetries = isLiveSegments ? 30 : 6;
-			let hasTriedPlaylistReload = false;
+			let reloadedForFragment: number | "initSegment" | undefined | null = null;
 			let retryTimer: ReturnType<typeof setTimeout> | null = null;
 
 			hls.on(Hls.Events.ERROR, (event, data) => {
@@ -434,13 +434,21 @@ export function HLSVideoPlayer({
 					isExpiredUrl &&
 					(data.details === Hls.ErrorDetails.FRAG_LOAD_ERROR ||
 						data.details === Hls.ErrorDetails.KEY_LOAD_ERROR) &&
-					!hasTriedPlaylistReload
+					// S3 also answers 403 for a missing object, so a fragment refused
+					// again with fresh URLs has not expired and must not reload forever.
+					data.frag?.sn !== reloadedForFragment
 				) {
-					hasTriedPlaylistReload = true;
+					reloadedForFragment = data.frag?.sn;
 					console.log(
 						"HLSVideoPlayer: Presigned URL expired, reloading playlist for fresh URLs",
 					);
+					// Reloading the same URL rebuilds the MediaSource, which resets the
+					// element to 0:00, paused, at normal speed.
+					const { currentTime, paused, playbackRate } = video;
+					hls.config.startPosition = currentTime;
 					hls.loadSource(playbackSrc);
+					video.playbackRate = playbackRate;
+					if (!paused) void video.play().catch(() => {});
 					return;
 				}
 
@@ -494,7 +502,6 @@ export function HLSVideoPlayer({
 
 			hls.on(Hls.Events.MANIFEST_LOADED, () => {
 				networkRetryCount = 0;
-				hasTriedPlaylistReload = false;
 			});
 
 			if (isEarlyPlayback) {
