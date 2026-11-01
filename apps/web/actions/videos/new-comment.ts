@@ -73,7 +73,7 @@ export async function newComment(data: {
 	if (
 		await isVideoFeedbackDisabled(
 			videoId,
-			type === "emoji" ? "disableReactions" : "disableComments",
+			conditionalType === "reaction" ? "disableReactions" : "disableComments",
 		)
 	)
 		throw new Error("Feedback is disabled on this video");

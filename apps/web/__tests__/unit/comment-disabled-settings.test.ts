@@ -119,6 +119,7 @@ describe("comment and reaction settings", () => {
 
 		await expect(post("text")).rejects.toThrow("disabled");
 		await expect(post("text", "parent")).rejects.toThrow("disabled");
+		await expect(post("emoji", "parent")).rejects.toThrow("disabled");
 
 		expect(mocks.state.inserted).toEqual([]);
 		expect(mocks.notify).not.toHaveBeenCalled();
