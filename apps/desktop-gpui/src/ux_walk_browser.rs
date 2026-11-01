@@ -95,7 +95,7 @@ mod owned {
         Ok(executable
             .parent()
             .and_then(Path::parent)
-            .ok_or("Cap UX app bundle is unavailable.")?
+            .ok_or("The app bundle is unavailable.")?
             .join("Resources/ux-walk"))
     }
 
@@ -162,8 +162,7 @@ mod owned {
             .lines()
             .any(|line| line.trim_start().starts_with("dyld"))
         {
-            return "Cap UX's bundled Node runtime could not load. Rebuild or reinstall Cap UX."
-                .into();
+            return "The bundled Node runtime could not load. Rebuild or reinstall the app.".into();
         }
         let redacted = redact_stderr(stderr);
         let lines: Vec<&str> = redacted
@@ -234,7 +233,7 @@ mod owned {
             .spawn()
             .map_err(|error| {
                 format!(
-                    "Could not start Cap UX's bundled Node runtime: {error}. Rebuild or reinstall Cap UX."
+                    "Could not start the bundled Node runtime: {error}. Rebuild or reinstall the app."
                 )
             })?;
         let input = child
@@ -319,7 +318,7 @@ mod owned {
             .map(|window| window.id().to_string())
             .collect();
         let mut browser = spawn()?;
-        let marker = format!("Cap UX walk {}", browser.capture_id);
+        let marker = format!("UX Walk {}", browser.capture_id);
         let started = Instant::now();
         while started.elapsed() < Duration::from_secs(15) {
             let matches: Vec<_> = crate::devices::list_window_targets()
@@ -592,7 +591,7 @@ EOF
                 .unwrap()
                 .as_nanos();
             let directory = std::env::temp_dir().join(format!(
-                "cap-ux-browser-health-{}-{unique}",
+                "ux-walk-browser-health-{}-{unique}",
                 std::process::id()
             ));
             let mut journal = crate::ux_walk_journal::Journal::begin(

@@ -73,7 +73,7 @@ impl SettingsWindow {
                 vec![
                     ui::Button::settings(
                         &theme,
-                        "cap-ux-feedback",
+                        "fork-feedback",
                         ui::ButtonVariant::Dark,
                         ui::ButtonSize::Sm,
                     )
@@ -99,7 +99,7 @@ impl SettingsWindow {
             .child(
                 ui::Button::settings(
                     &theme,
-                    "cap-ux-releases",
+                    "fork-releases",
                     ui::ButtonVariant::Dark,
                     ui::ButtonSize::Sm,
                 )
@@ -109,7 +109,7 @@ impl SettingsWindow {
             .child(
                 ui::Button::settings(
                     &theme,
-                    "cap-ux-changes",
+                    "fork-changes",
                     ui::ButtonVariant::Gray,
                     ui::ButtonSize::Sm,
                 )

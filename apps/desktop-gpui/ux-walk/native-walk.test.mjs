@@ -12,7 +12,7 @@ import {
 } from "./native-walk.mjs";
 
 function fixture(t) {
-	const root = fs.mkdtempSync(path.join(os.tmpdir(), "cap-ux-native-"));
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "ux-walk-native-"));
 	t.after(() => fs.rmSync(root, { recursive: true, force: true }));
 	const source = path.join(root, "original.cap");
 	const directory = path.join(root, "walk");

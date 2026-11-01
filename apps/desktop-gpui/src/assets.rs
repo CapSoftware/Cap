@@ -260,10 +260,10 @@ pub struct Assets;
 
 impl Assets {
     fn all() -> impl Iterator<Item = &'static (&'static str, &'static [u8])> {
-        FONTS
+        crate::ux_walk::assets::ALL
             .iter()
+            .chain(FONTS.iter())
             .chain(ICONS.iter())
-            .chain(crate::ux_walk::assets::ALL.iter())
             .chain(IMAGES.iter())
             .chain(ONBOARDING.iter())
     }

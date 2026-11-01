@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" role="img" aria-label="Coiled gold worm with a star at its centre, on a red tile">
+<defs>
+<linearGradient id="field" x1="0" y1="100" x2="0" y2="924" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#D8392E"/><stop offset="1" stop-color="#9E1B1B"/></linearGradient>
+<radialGradient id="light" cx="306" cy="265" r="618" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#fff" stop-opacity=".22"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient>
+<linearGradient id="gold" x1="0" y1="196" x2="0" y2="710" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#F2B630"/><stop offset="1" stop-color="#E39B12"/></linearGradient>
+<clipPath id="body"><rect x="100" y="100" width="824" height="824" rx="184"/></clipPath>
+<clipPath id="tail"><path d="M512 628C382 628 286 656 176 656A26 26 0 0 0 176 708H512Z"/></clipPath>
+</defs>
+<g id="tile">
+<g clip-path="url(#body)">
+<rect x="100" y="100" width="824" height="824" fill="url(#field)"/>
+<rect x="100" y="100" width="824" height="824" fill="url(#light)"/>
+<path d="M797.1 402L1368.3 328.3L1353.7 251.8L795.5 393.5ZM763.3 308.4L1275.8 45.5L1236.1 -21.5L758.9 300.9ZM699.8 231.8L1092.9 -189.2L1033 -238.8L693.1 226.2ZM614.1 181.2L841.4 -348L768.2 -374.4L605.9 178.2ZM516.3 162.6L550.9 -412.3L473.1 -412.3L507.7 162.6ZM418.1 178.2L255.8 -374.4L182.6 -348L409.9 181.2ZM330.9 226.2L-9 -238.8L-68.9 -189.2L324.2 231.8ZM265.1 300.9L-212.1 -21.5L-251.8 45.5L260.7 308.4ZM228.5 393.5L-329.7 251.8L-344.3 328.3L226.9 402Z" fill="#F2B630" fill-opacity=".16"/>
+<rect x="100" y="708" width="824" height="216" fill="#7A1414" fill-opacity=".55"/>
+</g>
+</g>
+<g id="mark">
+<path d="M512 628C382 628 286 656 176 656A26 26 0 0 0 176 708H512Z" fill="url(#gold)"/>
+<path d="M512 668A216 216 0 0 0 512 236A158 158 0 0 0 512 552A100 100 0 0 0 512 352" stroke="url(#gold)" stroke-width="80" stroke-linecap="round"/>
+</g>
+<g id="rings">
+<path d="M512 668A216 216 0 0 0 512 236A158 158 0 0 0 512 552A100 100 0 0 0 512 352" stroke="#A85F0E" stroke-opacity=".26" stroke-width="80" stroke-dasharray="5 41"/>
+<path d="M512 668H210" clip-path="url(#tail)" stroke="#A85F0E" stroke-opacity=".26" stroke-width="80" stroke-dasharray="5 41" stroke-dashoffset="28"/>
+</g>
+<g id="star">
+<path d="M512 406L499.7 439L464.4 440.5L492 462.5L482.6 496.5L512 477L541.4 496.5L532 462.5L559.6 440.5L524.3 439Z" fill="#fff"/>
+</g>
+<g id="mark-small" display="none">
+<path d="M512 608C382 608 290 636 186 636A42 42 0 0 0 186 720H512Z" fill="url(#gold)"/>
+<path d="M512 664A214 214 0 0 0 512 236A140 140 0 0 0 512 516A66 66 0 0 0 512 384" stroke="url(#gold)" stroke-width="112" stroke-linecap="round"/>
+<path d="M512 412L502.1 438.4L474 439.6L496 457.2L488.5 484.4L512 468.8L535.5 484.4L528 457.2L550 439.6L521.9 438.4Z" fill="#fff"/>
+</g>
+<g id="mark-tiny" display="none">
+<path d="M540 606C410 606 300 626 186 626A38 38 0 0 0 186 702H540Z" fill="#F2B630"/>
+<path d="M540 654A216 216 0 0 0 540 222A132 132 0 0 0 540 486A48 48 0 0 0 540 390" stroke="#F2B630" stroke-width="96" stroke-linecap="round"/>
+</g>
+<g id="glyph" display="none">
+<path d="M560 656C400 656 230 694 96 694A55 55 0 0 0 96 804H560Z" fill="#000"/>
+<path d="M560 730A318 318 0 0 0 560 94A212 212 0 0 0 560 518A106 106 0 0 0 560 306" stroke="#000" stroke-width="148" stroke-linecap="round"/>
+</g>
+<g id="wordmark" display="none" data-advance="2958">
+<path d="M229 0L37 -710L196 -710L318 -210L441 -710L574 -710L698 -210L819 -710L978 -710L787 0L623 0L507 -454L391 0L229 0ZM1324 12Q1242 12 1181 -22.5Q1120 -57 1086 -120Q1052 -183 1052 -268Q1052 -353 1086 -415.5Q1120 -478 1181 -513Q1242 -548 1324 -548Q1406 -548 1467.5 -513Q1529 -478 1562.5 -415.5Q1596 -353 1596 -268Q1596 -183 1562.5 -120Q1529 -57 1467.5 -22.5Q1406 12 1324 12ZM1324 -103Q1380 -103 1411 -146.5Q1442 -190 1442 -268Q1442 -346 1411 -389.5Q1380 -433 1324 -433Q1268 -433 1237 -389.5Q1206 -346 1206 -268Q1206 -190 1237 -146.5Q1268 -103 1324 -103ZM1699 0L1699 -536L1841 -536L1845 -429Q1861 -485 1892 -510.5Q1923 -536 1972 -536L2021 -536L2021 -412L1972 -412Q1909 -412 1879 -386.5Q1849 -361 1849 -301L1849 0L1699 0ZM2124 0L2124 -536L2259 -536L2262 -449Q2282 -496 2320.5 -522Q2359 -548 2408 -548Q2466 -548 2505 -518.5Q2544 -489 2561 -439Q2580 -492 2619.5 -520Q2659 -548 2712 -548Q2794 -548 2843 -496Q2892 -444 2892 -345L2892 0L2742 0L2742 -303Q2742 -429 2661 -429Q2620 -429 2597.5 -395.5Q2575 -362 2575 -301L2575 0L2440 0L2440 -301Q2440 -363 2422 -396Q2404 -429 2360 -429Q2319 -429 2296.5 -395Q2274 -361 2274 -301L2274 0L2124 0Z"/>
+</g>
+</svg>

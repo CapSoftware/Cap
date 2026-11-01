@@ -278,7 +278,7 @@ impl SettingsWindow {
                         cx,
                     ),
                     self.ux_walk_field(6, cx),
-                    self.setting_row("Browser evidence", Some("Walks in the browser opened by Cap UX include clicks, page errors and failed requests alongside your video and notes. Other capture sources keep video and notes; each walk’s report shows the evidence available."), div().into_any_element()),
+                    self.setting_row("Browser evidence", Some(fork_brand::text_static("Walks in the browser opened by Cap include clicks, page errors and failed requests alongside your video and notes. Other capture sources keep video and notes; each walk’s report shows the evidence available.")), div().into_any_element()),
                 ])
                 .into_any_element(),
                 self.ux_walk_notice(),
@@ -340,7 +340,7 @@ impl SettingsWindow {
         }
         self.section(
             "UX Walk transcription",
-            Some("Cloud providers receive recording audio when transcription runs. Cap UX editor captions keep their existing local models."),
+            Some(fork_brand::text_static("Cloud providers receive recording audio when transcription runs. Cap editor captions keep their existing local models.")),
             None,
             vec![self.rows(rows).into_any_element(), self.ux_walk_notice()],
         ).into_any_element()

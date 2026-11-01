@@ -19,7 +19,7 @@ async function openShare() {
 			"Open the full sharing link to view this recording. It may have expired or been revoked.",
 		);
 	const share = await response.json();
-	document.title = `${share.title} · Cap UX`;
+	document.title = document.title.replace("Shared recording", share.title);
 	document.getElementById("title").textContent = share.title;
 	document.getElementById("status").textContent =
 		`Available until ${new Date(share.expiresAt).toLocaleString()}`;

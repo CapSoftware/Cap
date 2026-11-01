@@ -524,7 +524,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureConfig<TCaptureFormat> {
     ) -> Result<Self, ScreenCaptureInitError> {
         cap_fail::fail!("ScreenCaptureSource::init");
 
-        // Cap UX records a selected macOS window exactly, whatever the window-only
+        // The fork records a selected macOS window exactly, whatever the window-only
         // setting or camera state, so every window target takes the window path.
         #[cfg(target_os = "macos")]
         let window = target_window.clone().or(window);

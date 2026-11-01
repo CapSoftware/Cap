@@ -1,6 +1,16 @@
 ## Merging upstream Cap into this fork
 
-The fork's logos, dock icon and macOS app icon live at upstream's own asset paths. Nested `.gitattributes` files in `apps/desktop-gpui/assets/` and `apps/desktop-gpui/icons/` mark those paths `merge=ours`, and `apps/desktop-gpui/assets/branding/` keeps a master copy of each. The `ours` driver is not built into Git, so define it once per clone (worktrees share it) before merging, and turn on rerere for repeated conflicts:
+Name, icon and logo live behind one door so upstream files stay close to upstream:
+
+- `crates/fork-brand/brand.json` holds the name, the `zworm` command, the skill name, the kept identifiers and the macOS strings. `crates/fork-brand/templates/` holds the agent skill and CLI help. `crates/fork-brand/kept-names.json` lists every old-name identifier that must not change, with the reason.
+- `apps/desktop-gpui/assets/branding/brand.svg` is the one master for the art. `node scripts/fork-brand-assets.mjs` regenerates every size from it, and needs `rsvg-convert` and macOS `iconutil`.
+- `tauri.conf.json` and `Info.plist` stay upstream's. `scripts/fork-brand.mjs` passes the identity to `tauri bundle` as a config overlay and stamps the plist of the built app in `scripts/bundle-ux-walk.mjs`.
+- Upstream's window titles and catalog strings stay in place. `fork_brand::text` brands them when the app runs, and a test build keeps upstream's words so upstream's tests stay unchanged.
+- The cloud Worker imports `brand.json` and fills `%app%` in its pages.
+
+To rename: change `brand.json`, moving the old name into `former_names` so saved window rules follow it, replace `brand.svg`, run the asset script, and update the prose docs listed in `kept-names.json`. `node --test scripts/fork-branding.test.mjs` fails on any hard-coded name elsewhere.
+
+The dock icon is the one image still at an upstream path, because two upstream files embed it. A nested `.gitattributes` in `apps/desktop-gpui/assets/` marks it `merge=ours`, and `apps/desktop-gpui/assets/branding/` keeps its master. Logos are drawn from a fork overlay in `src/ux_walk/assets.rs` instead, and the app icons from `assets/branding/app/`. The `ours` driver is not built into Git, so define it once per clone (worktrees share it) before merging, and turn on rerere for repeated conflicts:
 
 ```bash
 git config merge.ours.driver true
@@ -8,7 +18,7 @@ git config rerere.enabled true
 git config rerere.autoupdate true
 ```
 
-After each merge, run `node --test scripts/fork-branding.test.mjs`. It fails when an upstream path no longer matches its master or upstream stopped drawing a protected path; re-copy the master or move it to the new path and update the guard.
+After each merge, run `node --test scripts/fork-branding.test.mjs`. It fails when an upstream path no longer matches its master, upstream stopped drawing a protected path, or a fork name appears outside the door; re-copy the master, move it to the new path and update the guard, or route the name through the door.
 
 ## Upstream Cap development and self-hosting
 

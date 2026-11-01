@@ -303,7 +303,7 @@ mod tests {
     impl Fixture {
         fn new() -> Self {
             let path = std::env::temp_dir().join(format!(
-                "cap-ux-preferences-{}-{}",
+                "ux-walk-preferences-{}-{}",
                 std::process::id(),
                 NEXT.fetch_add(1, Ordering::Relaxed)
             ));

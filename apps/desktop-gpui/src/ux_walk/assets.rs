@@ -1,7 +1,21 @@
-pub(crate) const ALL: &[(&str, &[u8])] = &[(
-    "branding/cap-ux.png",
-    include_bytes!("../../assets/branding/cap-ux.png"),
-)];
+pub(crate) const ALL: &[(&str, &[u8])] = &[
+    (
+        "branding/app-icon.png",
+        include_bytes!("../../assets/branding/app-icon.png"),
+    ),
+    (
+        "icons/logo-full.svg",
+        include_bytes!("../../assets/branding/logo-full.svg"),
+    ),
+    (
+        "icons/logo-full-dark.svg",
+        include_bytes!("../../assets/branding/logo-full-dark.svg"),
+    ),
+    (
+        "icons/logo-mark.svg",
+        include_bytes!("../../assets/branding/logo-mark.svg"),
+    ),
+];
 
 #[cfg(test)]
 mod tests {

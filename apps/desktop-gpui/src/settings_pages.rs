@@ -20,7 +20,7 @@ use std::{
     time::Duration,
 };
 
-use cap_cli_install as cli_install;
+use fork_cli_shim as cli_install;
 use gpui::{
     AppContext as _, Context, Entity, FontWeight, Hsla, InteractiveElement, IntoElement,
     MouseButton, ParentElement, SharedString, StatefulInteractiveElement, Styled, Window, div,
@@ -2230,7 +2230,7 @@ impl SettingsWindow {
                             .line_height(px(16.))
                             .text_color(theme.settings_muted())
                             .child(before_command.to_string())
-                            .child(code_span("cap".into()).text_size(px(12.)))
+                            .child(code_span(fork_brand::CLI_NAME.into()).text_size(px(12.)))
                             .child(after_command.to_string()),
                     ),
             )
@@ -2714,7 +2714,8 @@ impl SettingsWindow {
 
 /// Written into the diagnostic report, which stays English; the page shows
 /// `settings.feedback.diagnostic.no_cli_sync` in its place.
-const NO_SELFTEST_BINARY: &str = "The Cap UX command-line tool was not found next to this build, so the sync test could not run.";
+const NO_SELFTEST_BINARY: &str =
+    "The Cap command-line tool was not found next to this build, so the sync test could not run.";
 
 impl SettingsWindow {
     /// The page's two one-shot probes: the OS string and whether there is a

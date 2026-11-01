@@ -43,10 +43,10 @@ test("targets map to their packaging platform and main binary", () => {
 	);
 });
 
-test("Cap-UX has its own identity and does not publish official updater artifacts", () => {
-	assert.equal(gpuiConfig.productName, "Cap UX");
+test("the GPUI app keeps the identity every existing install updates into", () => {
+	assert.equal(gpuiConfig.productName, "Cap");
 	assert.equal(gpuiConfig.mainBinaryName, "Cap");
-	assert.equal(gpuiConfig.identifier, "com.cantrell.cap-ux");
+	assert.equal(gpuiConfig.identifier, "so.cap.desktop");
 	assert.equal(gpuiConfig.plugins.updater.pubkey, shippedUpdaterPubkey);
 	assert.deepEqual(gpuiConfig.plugins.updater.endpoints, [
 		"https://cdn.crabnebula.app/update/cap/cap/{{target}}/{{current_version}}",
@@ -61,16 +61,10 @@ test("Cap-UX has its own identity and does not publish official updater artifact
 			`const UPDATER_PUBLIC_KEY: &str = "${gpuiConfig.plugins.updater.pubkey}";`,
 		),
 	);
-	assert.deepEqual(gpuiConfig.plugins["deep-link"].desktop.schemes, ["cap-ux"]);
-	assert.equal(gpuiConfig.bundle.createUpdaterArtifacts, false);
-});
-
-test("the fork and original Cap can be installed side by side", () => {
-	assert.notEqual(gpuiConfig.productName, "Cap");
-	assert.notEqual(gpuiConfig.identifier, "so.cap.desktop");
-	assert.notDeepEqual(gpuiConfig.plugins["deep-link"], {
+	assert.deepEqual(gpuiConfig.plugins["deep-link"], {
 		desktop: { schemes: ["cap-desktop"] },
 	});
+	assert.equal(gpuiConfig.bundle.createUpdaterArtifacts, true);
 });
 
 test("every committed file the GPUI bundle references exists", () => {
@@ -247,6 +241,7 @@ test("profile selection reaches the GPUI build, staging and macOS bundler", asyn
 					return "/fixture/Cap";
 				},
 				writeConfig: async () => {},
+				writeBrandConfig: async () => "/fixture/brand.json",
 				packageMacos: async (...args) => {
 					packages.push(args);
 					return { code: 0 };
@@ -260,6 +255,8 @@ test("profile selection reaches the GPUI build, staging and macOS bundler", asyn
 		assert.deepEqual(stages, [[target, debug ? "debug" : "release"]]);
 		assert.deepEqual(packages[0][1], [
 			...(debug ? ["--debug"] : []),
+			"--config",
+			"/fixture/brand.json",
 			"--bundles",
 			"app",
 		]);

@@ -14,6 +14,7 @@ on:
       - apps/cloud/**
       - crates/cloud-sharing/**
       - crates/fork-brand/**
+      - crates/fork-cli-shim/**
       - crates/recording/**
       - scripts/bundle-gpui*
       - scripts/fork-brand*
@@ -31,6 +32,7 @@ on:
       - apps/cloud/**
       - crates/cloud-sharing/**
       - crates/fork-brand/**
+      - crates/fork-cli-shim/**
       - crates/recording/**
       - scripts/bundle-gpui*
       - scripts/fork-brand*
@@ -125,7 +127,7 @@ jobs:
             apps/desktop-gpui -> target
       - name: Format changed Rust surfaces
         run: |
-          rustfmt +1.95.0 --edition 2024 --config skip_children=true apps/desktop-gpui/src/fork.rs apps/desktop-gpui/src/ux_walk_checkpoints.rs apps/cli/src/recovery.rs crates/cloud-sharing/src/recovery.rs apps/desktop-gpui/src/assets.rs apps/desktop-gpui/src/platform.rs apps/desktop-gpui/src/permission_guide.rs apps/desktop-gpui/src/camera_window.rs apps/desktop-gpui/src/target_overlay.rs apps/desktop-gpui/src/ux_walk_browser.rs apps/desktop-gpui/src/ux_walk_browser_target.rs apps/desktop-gpui/tests/ux_walk_browser_contract.rs apps/desktop-gpui/src/tray.rs apps/desktop-gpui/src/tray/ux_walk.rs apps/desktop-gpui/src/tray/mac_mode_picker.rs apps/desktop-gpui/src/updates.rs apps/desktop-gpui/src/installer.rs apps/desktop-gpui/src/ux_walk.rs apps/desktop-gpui/src/ux_walk/assets.rs apps/desktop-gpui/src/ux_walk_journal.rs apps/desktop-gpui/src/ux_walk_library.rs apps/desktop-gpui/src/library.rs apps/desktop-gpui/src/library/ux_walk.rs apps/desktop-gpui/tests/ux_walk_library_contract.rs apps/desktop-gpui/src/ux_walk_window.rs apps/desktop-gpui/src/session.rs apps/desktop-gpui/src/session/ux_walk.rs apps/desktop-gpui/src/controls_window.rs apps/desktop-gpui/src/recording.rs apps/desktop-gpui/src/recording/local_instant.rs apps/desktop-gpui/src/deeplink.rs apps/desktop-gpui/src/menus.rs apps/desktop-gpui/src/menus/fork.rs apps/desktop-gpui/src/hotkeys.rs apps/desktop-gpui/tests/ux_walk_journal_contract.rs apps/desktop-gpui/src/ux_walk_preferences.rs apps/desktop-gpui/src/settings_ux_walk.rs apps/desktop-gpui/src/settings_window.rs apps/desktop-gpui/src/settings_window/fork.rs apps/desktop-gpui/src/fork_policy.rs apps/desktop-gpui/src/settings_pages.rs apps/desktop-gpui/src/settings_pages/fork.rs apps/desktop-gpui/src/store.rs apps/desktop-gpui/src/diagnostics.rs apps/desktop-gpui/src/transcription.rs apps/desktop-gpui/src/mode_choice.rs apps/desktop-gpui/src/mode_select_window.rs apps/desktop-gpui/src/main_window.rs apps/desktop-gpui/src/main_window/ux_walk.rs apps/desktop-gpui/src/onboarding_window.rs apps/desktop-gpui/src/onboarding_window/ux_walk.rs apps/desktop-gpui/src/onboarding_doodles.rs apps/desktop-gpui/src/app_windows.rs apps/cli/src/credentials.rs apps/cli/src/automation.rs apps/cli/src/recordings.rs apps/cli/src/update.rs apps/cli/src/upload.rs apps/cli/src/sharing.rs apps/cli/src/main.rs apps/cli/src/guide.rs apps/cli/src/agents.rs apps/desktop-gpui/src/settings_sharing.rs apps/desktop-gpui/src/auth.rs apps/desktop-gpui/src/sign_in.rs apps/desktop-gpui/src/upload.rs apps/desktop-gpui/src/upload/queue.rs apps/desktop-gpui/src/editor_export.rs apps/desktop-gpui/src/editor_window/frame.rs apps/desktop-gpui/src/screenshot_editor.rs crates/cloud-sharing/src/lib.rs
+          rustfmt +1.95.0 --edition 2024 --config skip_children=true apps/desktop-gpui/src/fork.rs apps/desktop-gpui/src/fork_titles.rs apps/cli/src/fork_cli.rs crates/fork-cli-shim/src/lib.rs apps/desktop-gpui/src/ux_walk_checkpoints.rs apps/cli/src/recovery.rs crates/cloud-sharing/src/recovery.rs apps/desktop-gpui/src/assets.rs apps/desktop-gpui/src/platform.rs apps/desktop-gpui/src/permission_guide.rs apps/desktop-gpui/src/camera_window.rs apps/desktop-gpui/src/target_overlay.rs apps/desktop-gpui/src/ux_walk_browser.rs apps/desktop-gpui/src/ux_walk_browser_target.rs apps/desktop-gpui/tests/ux_walk_browser_contract.rs apps/desktop-gpui/src/tray.rs apps/desktop-gpui/src/tray/ux_walk.rs apps/desktop-gpui/src/tray/mac_mode_picker.rs apps/desktop-gpui/src/updates.rs apps/desktop-gpui/src/installer.rs apps/desktop-gpui/src/ux_walk.rs apps/desktop-gpui/src/ux_walk/assets.rs apps/desktop-gpui/src/ux_walk_journal.rs apps/desktop-gpui/src/ux_walk_library.rs apps/desktop-gpui/src/library.rs apps/desktop-gpui/src/library/ux_walk.rs apps/desktop-gpui/tests/ux_walk_library_contract.rs apps/desktop-gpui/src/ux_walk_window.rs apps/desktop-gpui/src/session.rs apps/desktop-gpui/src/session/ux_walk.rs apps/desktop-gpui/src/controls_window.rs apps/desktop-gpui/src/recording.rs apps/desktop-gpui/src/recording/local_instant.rs apps/desktop-gpui/src/deeplink.rs apps/desktop-gpui/src/menus.rs apps/desktop-gpui/src/menus/fork.rs apps/desktop-gpui/src/hotkeys.rs apps/desktop-gpui/tests/ux_walk_journal_contract.rs apps/desktop-gpui/src/ux_walk_preferences.rs apps/desktop-gpui/src/settings_ux_walk.rs apps/desktop-gpui/src/settings_window.rs apps/desktop-gpui/src/settings_window/fork.rs apps/desktop-gpui/src/fork_policy.rs apps/desktop-gpui/src/settings_pages.rs apps/desktop-gpui/src/settings_pages/fork.rs apps/desktop-gpui/src/store.rs apps/desktop-gpui/src/diagnostics.rs apps/desktop-gpui/src/transcription.rs apps/desktop-gpui/src/mode_choice.rs apps/desktop-gpui/src/mode_select_window.rs apps/desktop-gpui/src/main_window.rs apps/desktop-gpui/src/main_window/ux_walk.rs apps/desktop-gpui/src/onboarding_window.rs apps/desktop-gpui/src/onboarding_window/ux_walk.rs apps/desktop-gpui/src/onboarding_doodles.rs apps/desktop-gpui/src/app_windows.rs apps/cli/src/credentials.rs apps/cli/src/automation.rs apps/cli/src/recordings.rs apps/cli/src/update.rs apps/cli/src/upload.rs apps/cli/src/sharing.rs apps/cli/src/main.rs apps/cli/src/guide.rs apps/cli/src/agents.rs apps/desktop-gpui/src/settings_sharing.rs apps/desktop-gpui/src/auth.rs apps/desktop-gpui/src/sign_in.rs apps/desktop-gpui/src/upload.rs apps/desktop-gpui/src/upload/queue.rs apps/desktop-gpui/src/editor_export.rs apps/desktop-gpui/src/editor_window/frame.rs apps/desktop-gpui/src/screenshot_editor.rs crates/cloud-sharing/src/lib.rs
           rustfmt +1.95.0 --edition 2024 --config skip_children=true crates/recording/src/sources/screen_capture/mod.rs crates/recording/src/sources/screen_capture/macos.rs crates/recording/src/sources/screen_capture/window_target.rs crates/recording/src/studio_recording.rs crates/recording/src/instant_recording.rs crates/recording/tests/macos_window_target_contract.rs
           rustfmt +1.95.0 --edition 2024 --config skip_children=true apps/desktop-gpui/src/onboarding_window/stage.rs apps/desktop-gpui/src/permissions.rs
           rustfmt +1.95.0 --edition 2024 --config skip_children=true apps/cli/src/agents.rs
@@ -150,6 +152,7 @@ jobs:
           cargo +1.95.0 check --locked -p cap
           cargo +1.95.0 test --locked -p cap-cloud-sharing
           cargo +1.95.0 test --locked -p fork-brand
+          cargo +1.95.0 test --locked -p fork-cli-shim
       - name: Exercise the native walk processor
         run: |
           command -v ffmpeg >/dev/null || brew install ffmpeg
@@ -221,6 +224,14 @@ jobs:
           python3 - <<'PY'
           import json, os, pathlib, plistlib
           root = pathlib.Path(os.environ['GITHUB_WORKSPACE'])
+          brand = json.loads((root / 'crates/fork-brand/brand.json').read_text())
+          preview_name = brand['display_name'] + ' Preview'
+          preview_id = brand['bundle_id'] + '.preview'
+          with open(os.environ['GITHUB_ENV'], 'a') as env:
+              env.write('PREVIEW_APP=apps/desktop-gpui/target/debug/bundle/macos/' + preview_name + '.app\n')
+              env.write('PREVIEW_ID=' + preview_id + '\n')
+              env.write('BRAND_NAME=' + brand['display_name'] + '\n')
+              env.write('BRAND_MACOS=' + brand['macos']['minimum_system_version'] + '\n')
           out = pathlib.Path(os.environ['RUNNER_TEMP']) / 'ux-walk-preview'
           out.mkdir(parents=True, exist_ok=True)
           sha = os.environ['GITHUB_SHA']
@@ -241,13 +252,13 @@ jobs:
           plist.write_bytes(plistlib.dumps(info))
           (root / 'apps/desktop-gpui/Info.plist').write_bytes(plist.read_bytes())
           config = {
-              'productName': 'Cap UX Preview',
+              'productName': preview_name,
               'mainBinaryName': 'Cap',
-              'identifier': 'com.cantrell.cap-ux.preview',
+              'identifier': preview_id,
               'bundle': {
                   'createUpdaterArtifacts': False,
                   'fileAssociations': [],
-                  'macOS': {'signingIdentity': '-', 'minimumSystemVersion': '15.0'},
+                  'macOS': {'signingIdentity': '-', 'minimumSystemVersion': brand['macos']['minimum_system_version']},
               },
           }
           (out / 'preview.json').write_text(json.dumps(config, indent=2) + '\n')
@@ -271,28 +282,36 @@ jobs:
           npm ci --ignore-scripts --prefix vendor/ux-walk
           CAP_UX_BROWSER_SMOKE=1 node --test apps/desktop-gpui/ux-walk/native-browser.test.mjs
           node --test vendor/ux-walk/test/unit/embedded-config.test.mjs vendor/ux-walk/test/unit/start-link.test.mjs vendor/ux-walk/test/unit/cap-editor-handoff.test.mjs
-          node scripts/bundle-ux-walk.mjs 'apps/desktop-gpui/target/debug/bundle/macos/Cap UX Preview.app'
+          node scripts/bundle-ux-walk.mjs "$PREVIEW_APP"
       - name: Verify and retain the preview
         if: (github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.preview))
         run: |
-          task_app='apps/desktop-gpui/target/debug/bundle/macos/Cap UX Preview.app'
+          task_app="$PREVIEW_APP"
           test -d "$task_app"
-          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$task_app/Contents/Info.plist")" = com.cantrell.cap-ux.preview
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$task_app/Contents/Info.plist")" = "$PREVIEW_ID"
           test "$(/usr/libexec/PlistBuddy -c 'Print :UXWalkBuildSHA' "$task_app/Contents/Info.plist")" = "$GITHUB_SHA"
           codesign --verify --deep --strict "$task_app"
           test "$(env -i "$task_app/Contents/Resources/ux-walk/bin/node" -p 'process.versions.node.split(".")[0]')" = 22
           python3 - <<'PY'
           import os, pathlib, plistlib
-          app = pathlib.Path('apps/desktop-gpui/target/debug/bundle/macos/Cap UX Preview.app')
+          app = pathlib.Path(os.environ['PREVIEW_APP'])
+          name = os.environ['BRAND_NAME']
+          minimum = os.environ['BRAND_MACOS']
           info = plistlib.loads((app / 'Contents/Info.plist').read_bytes())
           profile = '/tmp/ux-walk-cap-preview-' + os.environ['GITHUB_SHA'][:12]
           assert not info.get('CFBundleDocumentTypes'), 'Preview must not claim recordings'
           assert not info.get('CFBundleURLTypes'), 'Preview must not claim URL schemes'
-          assert info['CFBundleDisplayName'] == 'Cap UX', 'Dock branding must be Cap UX'
-          assert info['CFBundleName'] == 'Cap UX', 'App menu branding must be Cap UX'
+          assert info['CFBundleDisplayName'] == name, 'Dock branding must be ' + name
+          assert info['CFBundleName'] == name, 'App menu branding must be ' + name
+          assert name in info['NSMicrophoneUsageDescription'], 'Permission prompts must name ' + name
+          assert not info.get('CFBundleLocalizations'), 'The fork ships English permission text'
+          assert not list((app / 'Contents/Resources').glob('*.lproj/InfoPlist.strings')), 'Upstream permission text must not ship'
+          icon = info.get('CFBundleIconFile', 'icon.icns')
+          icon = icon if icon.endswith('.icns') else icon + '.icns'
+          assert (app / 'Contents/Resources' / icon).read_bytes() == pathlib.Path('apps/desktop-gpui/assets/branding/app/icon.icns').read_bytes(), 'The app icon must be the fork art'
           assert not (app / 'Contents/Helpers/UX Walk.app').exists(), 'Do not ship a second menu bar app'
           assert (app / 'Contents/Resources/ux-walk/native-walk.mjs').is_file(), 'Bundle the native walk processor'
-          assert info['LSMinimumSystemVersion'] == '15.0', f"Cap UX requires macOS 15; bundled value was {info['LSMinimumSystemVersion']}"
+          assert info['LSMinimumSystemVersion'] == minimum, f"{name} requires macOS {minimum}; bundled value was {info['LSMinimumSystemVersion']}"
           assert info['LSEnvironment'] == {
               'CAP_GPUI_APP_DATA_DIR': profile + '/data',
               'CAP_GPUI_LOG_DIR': profile + '/logs',
@@ -303,9 +322,9 @@ jobs:
           print('Bundled preview associations and isolated profile verified')
           PY
           file "$task_app/Contents/MacOS/Cap" > "$RUNNER_TEMP/ux-walk-preview/executable.txt"
-          ditto -c -k --sequesterRsrc --keepParent "$task_app" "$RUNNER_TEMP/ux-walk-preview/Cap-UX-Preview.zip"
+          ditto -c -k --sequesterRsrc --keepParent "$task_app" "$RUNNER_TEMP/ux-walk-preview/preview.zip"
           cp LICENSE UX-WALK.md "$RUNNER_TEMP/ux-walk-preview/"
-          shasum -a 256 "$RUNNER_TEMP/ux-walk-preview/Cap-UX-Preview.zip" > "$RUNNER_TEMP/ux-walk-preview/SHA256.txt"
+          shasum -a 256 "$RUNNER_TEMP/ux-walk-preview/preview.zip" > "$RUNNER_TEMP/ux-walk-preview/SHA256.txt"
       - uses: actions/upload-artifact@v4
         if: success() && (github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.preview))
         with:

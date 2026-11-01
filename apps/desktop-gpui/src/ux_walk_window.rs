@@ -101,7 +101,7 @@ fn ensure(show: bool, cx: &mut App) -> Result<isize, String> {
                     WindowOptions {
                         window_bounds: Some(WindowBounds::Windowed(bounds)),
                         titlebar: Some(gpui::TitlebarOptions {
-                            title: Some("Cap UX · Walk notes".into()),
+                            title: Some(fork_brand::text_static("Cap · Walk notes").into()),
                             ..Default::default()
                         }),
                         focus: show,
@@ -424,7 +424,7 @@ impl WalkWindow {
             let Some(parent) = paths.into_iter().next() else { let _ = this.update_in(cx, |this, _, cx| { this.recovery_loading = false; cx.notify(); }); return; };
             let result = cx.background_executor().spawn(async move {
                 let destination = parent.join(format!("Recovered-walk-{}", crate::store::new_uuid_v4()));
-                let request_file = std::env::temp_dir().join(format!("cap-ux-restore-{}.json", crate::store::new_uuid_v4()));
+                let request_file = std::env::temp_dir().join(format!("ux-walk-restore-{}.json", crate::store::new_uuid_v4()));
                 let value = serde_json::json!({ "recordingId": id, "origin": origin, "destination": destination });
                 std::fs::write(&request_file, serde_json::to_vec(&value).map_err(|error| error.to_string())?).map_err(|error| error.to_string())?;
                 let result = crate::ux_walk::run_engine("recovery-restore", &request_file);

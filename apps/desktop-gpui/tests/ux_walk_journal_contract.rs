@@ -16,7 +16,7 @@ fn request() -> Request {
         .as_nanos();
     Request {
         directory: std::env::temp_dir().join(format!(
-            "cap-ux-journal-{id}-{}-{unique}",
+            "ux-walk-journal-{id}-{}-{unique}",
             std::process::id()
         )),
         topic: "Checkout walk".into(),

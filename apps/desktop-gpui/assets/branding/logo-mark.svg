@@ -1,10 +1,18 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40" fill="none">
-<rect x="0.25" y="0.25" width="39.5" height="39.5" rx="7.75" fill="white"/>
-<rect x="0.25" y="0.25" width="39.5" height="39.5" rx="7.75" stroke="#E7EAF0" stroke-width="0.5"/>
-<path d="M20 36C28.8365 36 36 28.8365 36 20C36 11.1635 28.8365 4 20 4C11.1635 4 4 11.1635 4 20C4 28.8365 11.1635 36 20 36Z" fill="#4785FF"/>
-<path d="M20.0001 33C27.1797 33 33 27.1797 33 20.0001C33 12.8203 27.1797 7 20.0001 7C12.8203 7 7 12.8204 7 20.0001C7 27.1797 12.8204 33 20.0001 33Z" fill="#ADC9FF"/>
-<path d="M20.0001 30.0002C25.5229 30.0002 30.0002 25.5229 30.0002 20.0001C30.0002 14.4773 25.5229 10.0002 20.0001 10.0002C14.4773 10.0002 10.0002 14.4773 10.0002 20.0001C10.0002 25.5229 14.4773 30.0002 20.0001 30.0002Z" fill="white"/>
-<g fill="#2852A3" transform="translate(-3.7037 -3.7037) scale(.0925926)">
-<path d="M178 214H196V267C196 278 201 283 211 283C221 283 226 278 226 267V214H244V268C244 289 232 301 211 301C190 301 178 289 178 268V214Z"/>
-<path d="M258 214H280L297 242L314 214H336L309 256L337 298H315L297 269L279 298H257L284 256L258 214Z"/>
-</g></svg>
+<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="100 100 824 824" fill="none">
+<defs>
+<linearGradient id="field" x1="0" y1="100" x2="0" y2="924" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#D8392E"/><stop offset="1" stop-color="#9E1B1B"/></linearGradient>
+<radialGradient id="light" cx="306" cy="265" r="618" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#fff" stop-opacity=".22"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient>
+<linearGradient id="gold" x1="0" y1="196" x2="0" y2="710" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#F2B630"/><stop offset="1" stop-color="#E39B12"/></linearGradient>
+<clipPath id="body"><rect x="100" y="100" width="824" height="824" rx="184"/></clipPath>
+<clipPath id="tail"><path d="M512 628C382 628 286 656 176 656A26 26 0 0 0 176 708H512Z"/></clipPath>
+</defs>
+<g clip-path="url(#body)">
+<rect x="100" y="100" width="824" height="824" fill="url(#field)"/>
+<rect x="100" y="100" width="824" height="824" fill="url(#light)"/>
+<path d="M797.1 402L1368.3 328.3L1353.7 251.8L795.5 393.5ZM763.3 308.4L1275.8 45.5L1236.1 -21.5L758.9 300.9ZM699.8 231.8L1092.9 -189.2L1033 -238.8L693.1 226.2ZM614.1 181.2L841.4 -348L768.2 -374.4L605.9 178.2ZM516.3 162.6L550.9 -412.3L473.1 -412.3L507.7 162.6ZM418.1 178.2L255.8 -374.4L182.6 -348L409.9 181.2ZM330.9 226.2L-9 -238.8L-68.9 -189.2L324.2 231.8ZM265.1 300.9L-212.1 -21.5L-251.8 45.5L260.7 308.4ZM228.5 393.5L-329.7 251.8L-344.3 328.3L226.9 402Z" fill="#F2B630" fill-opacity=".16"/>
+<rect x="100" y="708" width="824" height="216" fill="#7A1414" fill-opacity=".55"/>
+</g>
+<path d="M512 608C382 608 290 636 186 636A42 42 0 0 0 186 720H512Z" fill="url(#gold)"/>
+<path d="M512 664A214 214 0 0 0 512 236A140 140 0 0 0 512 516A66 66 0 0 0 512 384" stroke="url(#gold)" stroke-width="112" stroke-linecap="round"/>
+<path d="M512 412L502.1 438.4L474 439.6L496 457.2L488.5 484.4L512 468.8L535.5 484.4L528 457.2L550 439.6L521.9 438.4Z" fill="#fff"/>
+</svg>

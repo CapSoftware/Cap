@@ -196,7 +196,7 @@ mod tests {
         assert_eq!(
             found, expected,
             "Paywall call sites changed. A new upstream plan, pricing or sign-in gate must go \
-             through crate::entitlement or be hidden in Cap UX; then update PAYWALL_INVENTORY:\n{table}"
+             through crate::entitlement or be hidden in this fork; then update PAYWALL_INVENTORY:\n{table}"
         );
     }
 }

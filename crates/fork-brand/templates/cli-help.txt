@@ -1,0 +1,5 @@
+%app% records locally without an account.
+Use %cli% sharing configure --server https://your-server.example --enable to choose a sharing server.
+Supply an upload credential with --token-stdin, or CAP_UX_UPLOAD_TOKEN for a headless session.
+Use %cli% upload FILE --json to share explicitly, and %cli% sharing revoke ID to revoke a link.
+Use %cli% guide --json for local capture, export and library commands.

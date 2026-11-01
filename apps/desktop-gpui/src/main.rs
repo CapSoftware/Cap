@@ -46,6 +46,9 @@ mod editor_timeline;
 mod editor_window;
 mod feeds;
 mod focus_border;
+mod foreign_window;
+#[cfg(debug_assertions)]
+mod glass_probe;
 mod hotkeys;
 mod i18n;
 mod import;
@@ -73,8 +76,6 @@ mod permissions;
 mod permissions_ui;
 #[cfg(test)]
 mod picker_benchmark;
-#[cfg(debug_assertions)]
-mod glass_probe;
 #[cfg(debug_assertions)]
 mod picker_probe;
 #[cfg(debug_assertions)]
@@ -106,7 +107,6 @@ mod tray;
 mod ui;
 mod updates;
 mod upload;
-mod foreign_window;
 mod window_arrange;
 
 use gpui::{App, AppContext as _, Bounds, WindowBounds, WindowOptions, px, size};
@@ -518,6 +518,7 @@ fn main() {
         }
         // The store's global shortcuts, after the registry they dispatch into.
         hotkeys::init(cx);
+        fork_cli_shim::repair_in_background();
         // The gate's TCC queries (screen recording preflight, AXIsProcessTrusted)
         // are ~30ms of synchronous XPC on this Mac -- the whole startup delta
         // between the 08-17 and 08-18 builds. Both are thread-safe reads, so
@@ -944,7 +945,9 @@ mod logging_tests {
             tracing_subscriber::fmt::layer()
                 .with_ansi(false)
                 .with_writer(move || writer.clone())
-                .with_filter(tracing_subscriber::EnvFilter::new(super::DEFAULT_LOG_FILTER)),
+                .with_filter(tracing_subscriber::EnvFilter::new(
+                    super::DEFAULT_LOG_FILTER,
+                )),
         );
         tracing::subscriber::with_default(subscriber, || {
             tracing::warn!(target: "zbus::proxy", "Failed to populate properties cache");
@@ -953,9 +956,15 @@ mod logging_tests {
             tracing::info!(target: "cap_gpui::session", "recording started");
         });
         let logged = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
-        assert!(!logged.contains("Failed to populate properties cache"), "{logged}");
+        assert!(
+            !logged.contains("Failed to populate properties cache"),
+            "{logged}"
+        );
         assert!(logged.contains("a zbus error still shows"), "{logged}");
-        assert!(logged.contains("other zbus warnings still show"), "{logged}");
+        assert!(
+            logged.contains("other zbus warnings still show"),
+            "{logged}"
+        );
         assert!(logged.contains("recording started"), "{logged}");
     }
 

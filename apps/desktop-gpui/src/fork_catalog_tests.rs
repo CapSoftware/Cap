@@ -30,7 +30,8 @@ fn overlay() -> BTreeMap<String, String> {
                 format!("{section}.{name}"),
                 fork_brand::text(value.expect("overlay values are one-line strings"))
                     .replace("%upstream%", fork_brand::UPSTREAM_NAME)
-                    .replace("%releases%", fork_brand::RELEASES_URL),
+                    .replace("%releases%", fork_brand::RELEASES_URL)
+                    .replace("%cli%", fork_brand::CLI_NAME),
             );
         }
     }

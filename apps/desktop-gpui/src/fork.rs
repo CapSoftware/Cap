@@ -11,6 +11,8 @@ pub mod fork_identity_tests;
 pub mod fork_link_tests;
 #[path = "fork_policy.rs"]
 pub mod fork_policy;
+#[path = "fork_titles.rs"]
+pub mod fork_titles;
 #[cfg(all(test, feature = "ux-walk"))]
 #[path = "i18n_shipped.rs"]
 pub mod i18n_shipped;

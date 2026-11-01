@@ -95,9 +95,9 @@ impl ModeChoice {
                 "Saves to your computer and opens the editor when you stop. Choose recording quality in settings."
             }
             Self::Capture(Mode::Screenshot) => "Capture and annotate stills.",
-            Self::UxWalk => {
-                "Opens a new browser window and selects it for recording. Keep Cap UX’s camera, microphone and capture options, then review notes, chapters and transcripts."
-            }
+            Self::UxWalk => fork_brand::text_static(
+                "Opens a new browser window and selects it for recording. Keep Cap’s camera, microphone and capture options, then review notes, chapters and transcripts.",
+            ),
         }
     }
 

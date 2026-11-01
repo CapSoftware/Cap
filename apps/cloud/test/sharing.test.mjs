@@ -10,9 +10,15 @@ const headers = { Authorization: `Bearer ${owner}` };
 const deployment = JSON.parse(
 	readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8"),
 );
+const brand = JSON.parse(
+	readFileSync(
+		new URL("../../../crates/fork-brand/brand.json", import.meta.url),
+		"utf8",
+	),
+);
 function runtimeOptions(uploadToken = owner) {
 	return convertV4MiniflareOptions({
-		name: "capux-test",
+		name: "sharing-test",
 		modules: true,
 		scriptPath: fileURLToPath(new URL("../dist/index.js", import.meta.url)),
 		compatibilityDate: "2026-10-25",
@@ -33,7 +39,7 @@ before(async () => {
 after(async () => runtime?.dispose());
 
 async function request(path, init = {}) {
-	return runtime.dispatchFetch(`https://capux.test${path}`, init);
+	return runtime.dispatchFetch(`https://sharing.test${path}`, init);
 }
 
 async function create(bytes, options = {}) {
@@ -109,7 +115,7 @@ test("multipart bytes survive upload, public reads require a capability, video s
 	assert.equal((await request(`${path}/metadata`)).status, 404);
 	assert.equal((await request(`${path}/media`)).status, 404);
 	const read = {
-		Authorization: `Bearer ${new URL(`https://capux.test${share.sharePath}`).hash.slice(1)}`,
+		Authorization: `Bearer ${new URL(`https://sharing.test${share.sharePath}`).hash.slice(1)}`,
 	};
 	const response = await request(`${path}/media`, {
 		headers: { ...read, Range: "bytes=8388608-8388610" },
@@ -256,13 +262,19 @@ test("viewer preserves the share path and serves the viewer without a redirect",
 	});
 	assert.equal(result.status, 200);
 	assert.equal(result.headers.get("Location"), null);
-	assert.match(await result.text(), /Opening shared recording/);
+	const page = await result.text();
+	assert.match(page, /Opening shared recording/);
+	assert.match(page, new RegExp(`Shared with ${brand.display_name}`));
+	assert.doesNotMatch(page, /%app%/);
 });
 
 test("the cloud home page works with exact HTML asset routing", async () => {
 	const result = await request("/", { redirect: "manual" });
 	assert.equal(result.status, 200);
-	assert.match(await result.text(), /Show what happened/);
+	const page = await result.text();
+	assert.match(page, /Show what happened/);
+	assert.match(page, new RegExp(`<title>${brand.display_name}</title>`));
+	assert.doesNotMatch(page, /%app%/);
 });
 
 test("credential rotation preserves ownership and revocation rights", async () => {

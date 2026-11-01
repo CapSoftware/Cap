@@ -27,6 +27,11 @@ description = "Host your own sharing server with private storage, including Clou
 [onboarding.customize.domain]
 description = "Use your own server and domain for shareable links"
 
+[settings.cli]
+description = "Install the %cli% command for terminals, agents, scripts, and local automation."
+path_configured = "Added %cli% to your PATH. Restart your terminal to use it, or run this now:"
+path_missing = "Add {path} to your PATH to use %cli% from a new terminal."
+
 [settings.general.self_host]
 description = "Only change this if you are running your own instance of the upstream web service."
 

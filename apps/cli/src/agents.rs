@@ -11,12 +11,12 @@ use toml_edit::{Array, DocumentMut, Item, Table, value};
 use crate::{OutputFormat, atomic, resolve_format, write_json};
 
 const BUNDLED_SKILL: &str = if cfg!(feature = "ux-walk") {
-    include_str!("../skill/cap-ux/SKILL.md")
+    fork_brand::AGENT_SKILL
 } else {
     include_str!("../skill/cap/SKILL.md")
 };
 const SKILL_NAME: &str = if cfg!(feature = "ux-walk") {
-    fork_brand::SLUG
+    fork_brand::SKILL_NAME
 } else {
     "cap"
 };
