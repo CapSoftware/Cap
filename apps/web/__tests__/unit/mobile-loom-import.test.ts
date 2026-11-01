@@ -17,6 +17,8 @@ import {
 
 const mocks = vi.hoisted(() => ({
 	getLoomDownloadUrl: vi.fn(),
+	getWritableAccessForUser: vi.fn(),
+	LoomDownloadTemporaryError: class extends Error {},
 	start: vi.fn(),
 }));
 
@@ -39,7 +41,7 @@ vi.mock("@/lib/desktop-segments-finalization", () => ({}));
 vi.mock("@/lib/loom-concierge", () => ({}));
 vi.mock("@/lib/loom-download-url", () => ({
 	getLoomDownloadUrl: mocks.getLoomDownloadUrl,
-	LoomDownloadTemporaryError: class extends Error {},
+	LoomDownloadTemporaryError: mocks.LoomDownloadTemporaryError,
 }));
 vi.mock("@/lib/Notification", () => ({}));
 vi.mock("@/lib/organization-provisioning", () => ({}));
@@ -55,19 +57,14 @@ vi.mock("@/workflows/import-loom-video", () => ({
 vi.mock("workflow/api", () => ({ getRun: vi.fn(), start: mocks.start }));
 vi.mock("workflow/runtime", () => ({ getWorld: () => ({}) }));
 vi.mock("@cap/web-backend", async () => {
-	const { Context, Effect, Option } = await import("effect");
+	const { Context } = await import("effect");
 	const { Database } = await import(
 		"../../../../packages/web-backend/src/Database"
 	);
-	const getWritableAccessForUser = () =>
-		Effect.succeed({
-			bucketId: Option.none(),
-			storageIntegrationId: Option.none(),
-		});
 	return {
 		Database,
 		Storage: Object.assign(Context.GenericTag("mobile-loom-test/Storage"), {
-			getWritableAccessForUser,
+			getWritableAccessForUser: mocks.getWritableAccessForUser,
 		}),
 		Tinybird: Context.GenericTag("mobile-loom-test/Tinybird"),
 		VideosPolicy: Context.GenericTag("mobile-loom-test/VideosPolicy"),
@@ -190,6 +187,12 @@ beforeEach(() => {
 	video = null;
 	upload = null;
 	mocks.start.mockReset().mockResolvedValue(undefined);
+	mocks.getWritableAccessForUser.mockReset().mockReturnValue(
+		Effect.succeed({
+			bucketId: Option.none(),
+			storageIntegrationId: Option.none(),
+		}),
+	);
 	mocks.getLoomDownloadUrl
 		.mockReset()
 		.mockResolvedValue("https://cdn.loom.com/sessions/video.mp4");
@@ -239,6 +242,51 @@ describe("POST /api/mobile/imports/loom", () => {
 				reuseExistingRawUpload: true,
 			}),
 		]);
+	});
+
+	it("reports a failed restart as a server error", async () => {
+		mocks.start.mockRejectedValue(new Error("queue unavailable"));
+
+		await importLoom();
+		const retried = await importLoom();
+
+		expect(retried.status).toBe(500);
+		expect(mocks.start).toHaveBeenCalledTimes(2);
+		expect(upload).toMatchObject({
+			phase: "error",
+			processingError: "Loom import could not start. Please try again.",
+		});
+	});
+
+	it("reports a storage failure as a server error", async () => {
+		mocks.getWritableAccessForUser.mockReturnValue(
+			Effect.fail(new Error("storage unavailable")),
+		);
+
+		const response = await importLoom();
+
+		expect(response.status).toBe(500);
+		expect(mocks.start).not.toHaveBeenCalled();
+	});
+
+	it("reports a Loom outage as a server error", async () => {
+		mocks.getLoomDownloadUrl.mockRejectedValue(
+			new mocks.LoomDownloadTemporaryError("Loom is unavailable"),
+		);
+
+		const response = await importLoom();
+
+		expect(response.status).toBe(500);
+		expect(mocks.start).not.toHaveBeenCalled();
+	});
+
+	it("rejects a Loom video it cannot download", async () => {
+		mocks.getLoomDownloadUrl.mockResolvedValue(null);
+
+		const response = await importLoom();
+
+		expect(response.status).toBe(400);
+		expect(mocks.start).not.toHaveBeenCalled();
 	});
 
 	it("rejects a Loom video that is already in the organization", async () => {

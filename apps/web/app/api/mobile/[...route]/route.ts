@@ -2892,9 +2892,12 @@ const importLoom = Effect.fn("Mobile.importLoom")(function* (
 			}),
 		catch: () => new HttpApiError.InternalServerError(),
 	});
-	if (!result.videoId) return yield* Effect.fail(new HttpApiError.BadRequest());
-	if (!result.success) {
-		return yield* Effect.fail(new HttpApiError.InternalServerError());
+	if (!result.success || !result.videoId) {
+		return yield* Effect.fail(
+			result.errorCode
+				? new HttpApiError.InternalServerError()
+				: new HttpApiError.BadRequest(),
+		);
 	}
 	return {
 		id: result.videoId,
