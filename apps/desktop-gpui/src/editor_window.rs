@@ -2924,6 +2924,7 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.speech_request = None;
         self.sidebar.style_target = None;
         self.sidebar.menu = None;
         self.text_menu = None;
