@@ -326,11 +326,12 @@ fn playhead_past_end(playhead: f64, total: f64) -> Option<f64> {
 fn keep_only_playhead(
     previous_playhead: f64,
     clip_bounds: Option<(f64, f64)>,
+    new_clip_start: f64,
     new_total: f64,
 ) -> f64 {
     match clip_bounds {
         Some((start, end)) if previous_playhead > start && previous_playhead < end => {
-            (previous_playhead - start).clamp(0.0, new_total.max(0.0))
+            (new_clip_start + (previous_playhead - start)).clamp(0.0, new_total.max(0.0))
         }
         _ => 0.0,
     }
@@ -338,14 +339,14 @@ fn keep_only_playhead(
 
 fn transform_after_keep_only(
     mut transform: Transform,
-    clip_start: f64,
+    shift: f64,
     target_playhead: f64,
     new_total: f64,
 ) -> Transform {
     if new_total <= 0.0 || transform.zoom <= 0.0 {
         return transform;
     }
-    transform.position = (transform.position - clip_start).max(0.0);
+    transform.position = (transform.position - shift).max(0.0);
     transform.update_zoom(transform.zoom, target_playhead, new_total);
     if target_playhead < transform.position
         || target_playhead > transform.position + transform.zoom
@@ -10078,12 +10079,15 @@ impl EditorWindow {
             cx.notify();
             return;
         }
-        let target_playhead = keep_only_playhead(previous_playhead, clip_bounds, self.total);
+        let old_clip_start = clip_bounds.map_or(0.0, |(start, _)| start);
+        let new_clip_start = self.timeline.clips.first().map_or(0.0, |clip| clip.start);
+        let target_playhead =
+            keep_only_playhead(previous_playhead, clip_bounds, new_clip_start, self.total);
         self.apply_seek(target_playhead);
-        let clip_start = clip_bounds.map_or(0.0, |(start, _)| start);
+        let shift = (old_clip_start - new_clip_start).max(0.0);
         self.view.transform = transform_after_keep_only(
             previous_transform,
-            clip_start,
+            shift,
             target_playhead,
             self.total,
         );
@@ -15382,12 +15386,19 @@ mod tests {
 
     #[test]
     fn keep_only_playhead_rebases_interior_playhead_and_resets_exterior_to_start() {
-        assert_eq!(keep_only_playhead(7.0, Some((3.5, 7.0)), 3.5), 0.0);
-        assert_eq!(keep_only_playhead(3.5, Some((3.5, 7.0)), 3.5), 0.0);
-        assert_eq!(keep_only_playhead(1.2, Some((3.5, 7.0)), 3.5), 0.0);
-        assert_eq!(keep_only_playhead(8.8, Some((3.5, 7.0)), 3.5), 0.0);
-        assert!((keep_only_playhead(5.0, Some((3.5, 7.0)), 3.5) - 1.5).abs() < 1e-9);
-        assert_eq!(keep_only_playhead(5.0, None, 3.5), 0.0);
+        assert_eq!(keep_only_playhead(7.0, Some((3.5, 7.0)), 0.0, 3.5), 0.0);
+        assert_eq!(keep_only_playhead(3.5, Some((3.5, 7.0)), 0.0, 3.5), 0.0);
+        assert_eq!(keep_only_playhead(1.2, Some((3.5, 7.0)), 0.0, 3.5), 0.0);
+        assert_eq!(keep_only_playhead(8.8, Some((3.5, 7.0)), 0.0, 3.5), 0.0);
+        assert!((keep_only_playhead(5.0, Some((3.5, 7.0)), 0.0, 3.5) - 1.5).abs() < 1e-9);
+        assert_eq!(keep_only_playhead(5.0, None, 0.0, 3.5), 0.0);
+    }
+
+    #[test]
+    fn keep_only_playhead_accounts_for_retained_titles_before_clip() {
+        assert!((keep_only_playhead(15.0, Some((12.0, 22.0)), 2.0, 12.0) - 5.0).abs() < 1e-9);
+        assert_eq!(keep_only_playhead(10.5, Some((12.0, 22.0)), 2.0, 12.0), 0.0);
+        assert_eq!(keep_only_playhead(23.0, Some((12.0, 22.0)), 2.0, 12.0), 0.0);
     }
 
     #[test]
@@ -15422,6 +15433,18 @@ mod tests {
             transform_after_keep_only(zoomed_inside, 42.0, 3.5, 10.0),
             Transform {
                 zoom: 4.0,
+                position: 2.0,
+            }
+        );
+
+        let with_title_shift = Transform {
+            zoom: 6.0,
+            position: 12.0,
+        };
+        assert_eq!(
+            transform_after_keep_only(with_title_shift, 10.0, 5.0, 12.0),
+            Transform {
+                zoom: 6.0,
                 position: 2.0,
             }
         );
