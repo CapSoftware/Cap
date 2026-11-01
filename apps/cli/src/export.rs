@@ -28,6 +28,21 @@ pub enum QualityArg {
     Potato,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum CodecArg {
+    H264,
+    Hevc,
+}
+
+impl From<CodecArg> for cap_export::mp4::ExportCodec {
+    fn from(value: CodecArg) -> Self {
+        match value {
+            CodecArg::H264 => Self::H264,
+            CodecArg::Hevc => Self::Hevc,
+        }
+    }
+}
+
 impl From<QualityArg> for cap_export::mp4::ExportCompression {
     fn from(value: QualityArg) -> Self {
         match value {
@@ -75,6 +90,9 @@ pub struct Export {
     /// Optimise for smaller files using CRF (mp4 only)
     #[arg(long)]
     optimize_filesize: bool,
+    /// Video codec: h264 (default) or hevc, which needs a hardware HEVC encoder (mp4 only)
+    #[arg(long, value_enum)]
+    codec: Option<CodecArg>,
     /// Full export settings as JSON, e.g. {"format":"Mp4","fps":60,"resolution_base":{"x":1920,"y":1080},"compression":"Maximum","custom_bpp":null} (mutually exclusive with the flags above)
     #[arg(long)]
     settings_json: Option<String>,
@@ -96,6 +114,7 @@ pub struct ExportFlags {
     pub resolution: Option<String>,
     pub quality: Option<QualityArg>,
     pub optimize_filesize: bool,
+    pub codec: Option<CodecArg>,
     pub force_ffmpeg_decoder: bool,
 }
 
@@ -106,6 +125,7 @@ impl ExportFlags {
             || self.resolution.is_some()
             || self.quality.is_some()
             || self.optimize_filesize
+            || self.codec.is_some()
     }
 }
 
@@ -177,6 +197,16 @@ fn parse_resolution(value: &str) -> Result<XY<u32>, String> {
     Ok(XY::new(width, height))
 }
 
+fn ensure_codec_supported(settings: &CliExportSettings) -> Result<(), String> {
+    match settings {
+        CliExportSettings::Mp4(settings) if !settings.codec.is_supported() => Err(
+            "HEVC exports need a hardware HEVC encoder and none could start on this machine; export with --codec h264 instead"
+                .to_string(),
+        ),
+        _ => Ok(()),
+    }
+}
+
 pub fn settings_from_flags(flags: &ExportFlags) -> Result<CliExportSettings, String> {
     let format = flags.format.unwrap_or(ExportFormat::Mp4);
     let fps = flags.fps.unwrap_or_else(|| default_fps(format));
@@ -199,6 +229,7 @@ pub fn settings_from_flags(flags: &ExportFlags) -> Result<CliExportSettings, Str
             custom_bpp: None,
             force_ffmpeg_decoder: flags.force_ffmpeg_decoder,
             optimize_filesize: flags.optimize_filesize,
+            codec: flags.codec.map(Into::into).unwrap_or_default(),
         })),
         ExportFormat::Gif => {
             if flags.quality.is_some() {
@@ -209,6 +240,9 @@ pub fn settings_from_flags(flags: &ExportFlags) -> Result<CliExportSettings, Str
             }
             if flags.optimize_filesize {
                 return Err("--optimize-filesize is only supported for --format mp4".to_string());
+            }
+            if flags.codec.is_some() {
+                return Err("--codec is only supported for --format mp4".to_string());
             }
             Ok(CliExportSettings::Gif(cap_export::gif::GifExportSettings {
                 fps,
@@ -222,6 +256,9 @@ pub fn settings_from_flags(flags: &ExportFlags) -> Result<CliExportSettings, Str
             }
             if flags.optimize_filesize {
                 return Err("--optimize-filesize is only supported for --format mp4".to_string());
+            }
+            if flags.codec.is_some() {
+                return Err("--codec is only supported for --format mp4".to_string());
             }
             Ok(CliExportSettings::Mov(cap_export::mov::MovExportSettings {
                 fps,
@@ -337,6 +374,7 @@ impl Export {
             resolution: self.resolution.clone(),
             quality: self.quality,
             optimize_filesize: self.optimize_filesize,
+            codec: self.codec,
             force_ffmpeg_decoder: self.force_ffmpeg_decoder,
         };
 
@@ -344,7 +382,7 @@ impl Export {
             Some(json) => {
                 if flags.is_set() {
                     return Err(
-                        "--settings-json cannot be combined with --format/--fps/--resolution/--quality/--optimize-filesize"
+                        "--settings-json cannot be combined with --format/--fps/--resolution/--quality/--optimize-filesize/--codec"
                             .to_string(),
                     );
                 }
@@ -388,6 +426,7 @@ impl Export {
         stdout: &Arc<Mutex<std::io::Stdout>>,
     ) -> Result<(), String> {
         let settings = self.resolve_settings()?;
+        ensure_codec_supported(&settings)?;
         let (projects, output) = split_projects_and_output(self.project_paths, self.output)?;
 
         if projects.len() == 1 {
@@ -1156,6 +1195,43 @@ mod tests {
             }
             _ => panic!("expected mp4 settings"),
         }
+    }
+
+    #[test]
+    fn codec_flag_selects_hevc_for_mp4_only() {
+        let default = settings_from_flags(&ExportFlags::default()).unwrap();
+        assert!(matches!(
+            default,
+            CliExportSettings::Mp4(settings)
+                if settings.codec == cap_export::mp4::ExportCodec::H264
+        ));
+        let hevc = settings_from_flags(&ExportFlags {
+            codec: Some(CodecArg::Hevc),
+            ..Default::default()
+        })
+        .unwrap();
+        assert!(matches!(
+            hevc,
+            CliExportSettings::Mp4(settings)
+                if settings.codec == cap_export::mp4::ExportCodec::Hevc
+        ));
+        for format in [ExportFormat::Gif, ExportFormat::Mov] {
+            assert!(
+                settings_from_flags(&ExportFlags {
+                    format: Some(format),
+                    codec: Some(CodecArg::Hevc),
+                    ..Default::default()
+                })
+                .is_err()
+            );
+        }
+        assert!(
+            ExportFlags {
+                codec: Some(CodecArg::H264),
+                ..Default::default()
+            }
+            .is_set()
+        );
     }
 
     #[test]
