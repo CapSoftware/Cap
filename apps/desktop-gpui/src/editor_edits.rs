@@ -5294,7 +5294,7 @@ mod tests {
                         "start": 4.0,
                         "end": 7.0,
                         "name": "Highlight",
-                        "speedAudioMode": "maintain-pitch",
+                        "speedAudioMode": "maintainPitch",
                         "hideCursor": true,
                         "volume": 0.8
                     },
