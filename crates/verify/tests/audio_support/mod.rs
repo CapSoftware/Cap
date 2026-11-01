@@ -292,6 +292,7 @@ pub async fn export_failing_encoder_at(
         custom_bpp: None,
         force_ffmpeg_decoder: false,
         optimize_filesize: false,
+        codec: Default::default(),
     };
     match path {
         ExportPath::App => {

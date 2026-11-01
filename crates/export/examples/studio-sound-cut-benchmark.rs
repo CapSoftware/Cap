@@ -77,6 +77,7 @@ async fn main() {
         custom_bpp: None,
         force_ffmpeg_decoder: true,
         optimize_filesize: false,
+        codec: Default::default(),
     };
     let export_start = Instant::now();
     settings

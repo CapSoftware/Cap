@@ -3,7 +3,12 @@ use cap_editor::{
     AudioRenderer, ExportAudioError, ExportAudioRenderer, get_audio_segments,
     load_music_tracks_uncached,
 };
-use cap_enc_ffmpeg::{AudioEncoder, PacketQueue, aac::AACEncoder, h264::H264Encoder, mp4::*};
+use cap_enc_ffmpeg::{
+    AudioEncoder, PacketQueue, VideoCodec,
+    aac::AACEncoder,
+    h264::{H264Encoder, probe_export_encoder},
+    mp4::*,
+};
 use cap_media_info::{RawVideoFormat, VideoInfo};
 use cap_project::XY;
 use cap_rendering::{
@@ -168,6 +173,39 @@ impl ExportCompression {
     }
 }
 
+#[derive(Serialize, Deserialize, Type, Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum ExportCodec {
+    #[default]
+    H264,
+    Hevc,
+}
+
+impl ExportCodec {
+    pub fn video_codec(self) -> VideoCodec {
+        match self {
+            Self::H264 => VideoCodec::H264,
+            Self::Hevc => VideoCodec::Hevc,
+        }
+    }
+
+    /// Whether this machine has an encoder for the codec. HEVC exports only
+    /// on a hardware encoder, which is probed with a short encode the first
+    /// time this is asked.
+    pub fn is_supported(self) -> bool {
+        probe_export_encoder(self.video_codec()).is_some()
+    }
+
+    /// The share of a compression preset's H.264 bitrate this codec needs
+    /// for the same picture. Hardware HEVC encoders match hardware H.264 at
+    /// roughly two thirds of its bitrate.
+    pub fn preset_bitrate_scale(self) -> f32 {
+        match self {
+            Self::H264 => 1.0,
+            Self::Hevc => 0.65,
+        }
+    }
+}
+
 #[derive(Clone, Default)]
 struct ExportNv12Mode {
     stop_after_frames_sent: Option<u32>,
@@ -193,12 +231,28 @@ pub struct Mp4ExportSettings {
     pub force_ffmpeg_decoder: bool,
     #[serde(default)]
     pub optimize_filesize: bool,
+    #[serde(default)]
+    pub codec: ExportCodec,
 }
 
 impl Mp4ExportSettings {
     pub fn effective_bpp(&self) -> f32 {
-        self.custom_bpp
-            .unwrap_or_else(|| self.compression.bits_per_pixel())
+        self.custom_bpp.unwrap_or_else(|| {
+            self.compression.bits_per_pixel() * self.codec.preset_bitrate_scale()
+        })
+    }
+
+    /// libx264's constant quality, used when the file size is optimized.
+    /// HEVC exports on a hardware encoder at the preset's bitrate instead.
+    pub fn constant_quality(&self) -> Option<u8> {
+        (self.optimize_filesize && self.codec == ExportCodec::H264)
+            .then(|| self.compression.crf_value())
+    }
+
+    /// Whether the export runs as turbo chunks, which are libx264 and so
+    /// H.264 only.
+    pub fn supports_turbo(&self) -> bool {
+        self.codec == ExportCodec::H264
     }
 }
 
@@ -213,13 +267,17 @@ impl Mp4ExportSettings {
 
     /// Exports with every core: see [`turbo`]. Falls back to the standard
     /// export when the turbo pipeline fails, unless it was cancelled or its
-    /// destination appeared while it ran.
+    /// destination appeared while it ran. Codecs turbo cannot encode export
+    /// with the standard pipeline.
     pub async fn export_prepared_turbo(
         self,
         base: Mp4ExporterBase,
         options: turbo::TurboOptions,
         on_progress: impl FnMut(u32) -> bool + Send + 'static,
     ) -> Result<PathBuf, String> {
+        if !self.supports_turbo() {
+            return self.export_prepared(base, on_progress).await;
+        }
         let mut base = base.0;
         let on_progress = Arc::new(Mutex::new(on_progress));
         let user_cancellation = base
@@ -383,7 +441,7 @@ impl Mp4ExportSettings {
     }
 
     async fn export_nv12(
-        self,
+        mut self,
         mut base: ExporterBase,
         output_size: (u32, u32),
         fps: u32,
@@ -428,10 +486,12 @@ impl Mp4ExportSettings {
                 {
                     warn!(
                         %error,
-                        "Hardware video encoder failed during export, restarting with the software encoder"
+                        codec = ?self.codec,
+                        "Hardware video encoder failed during export, restarting with the software H.264 encoder"
                     );
                     base.reopen_streaming(user_cancellation.clone()).await?;
                     mode.software_encoder = true;
+                    self.codec = ExportCodec::H264;
                 }
                 result => return result,
             }
@@ -522,7 +582,7 @@ impl Mp4ExportSettings {
                 return Err(Mp4PipelineError::Interrupted);
             }
             #[cfg(target_os = "macos")]
-            let want_hw_input = !self.optimize_filesize
+            let want_hw_input = self.constant_quality().is_none()
                 && !software_encoder
                 && matches!(
                     first_frame.as_ref().map(|frame| &frame.payload),
@@ -543,6 +603,7 @@ impl Mp4ExportSettings {
                     #[cfg(target_os = "macos")]
                     if want_hw_input {
                         match H264Encoder::builder(video_info)
+                            .with_codec(self.codec.video_codec())
                             .with_bpp(self.effective_bpp())
                             .with_export_settings()
                             .build_videotoolbox_hw_input(o)
@@ -559,12 +620,13 @@ impl Mp4ExportSettings {
                     }
 
                     let builder = H264Encoder::builder(video_info)
+                        .with_codec(self.codec.video_codec())
                         .with_bpp(self.effective_bpp())
                         .with_export_priority()
                         .with_export_settings()
                         .with_external_conversion();
-                    let builder = if self.optimize_filesize {
-                        builder.with_crf(self.compression.crf_value())
+                    let builder = if let Some(crf) = self.constant_quality() {
+                        builder.with_crf(crf)
                     } else if software_encoder {
                         builder.with_encoder_priority_override(&["libx264"])
                     } else {
@@ -585,7 +647,10 @@ impl Mp4ExportSettings {
                     }
                 },
             )
-            .map_err(|v| v.to_string())?;
+            .map_err(|error| match self.codec {
+                ExportCodec::H264 => error.to_string(),
+                ExportCodec::Hevc => format!("No HEVC hardware encoder could start: {error}"),
+            })?;
             if let Some(timing) = &sample_timing {
                 encoder.video_mut().set_packet_stats(timing.packet_stats());
             }
@@ -1792,6 +1857,66 @@ async fn export_render_to_channel(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn settings(codec: ExportCodec, optimize_filesize: bool) -> Mp4ExportSettings {
+        Mp4ExportSettings {
+            fps: 30,
+            resolution_base: XY::new(1920, 1080),
+            compression: ExportCompression::Social,
+            custom_bpp: None,
+            force_ffmpeg_decoder: false,
+            optimize_filesize,
+            codec,
+        }
+    }
+
+    #[test]
+    fn settings_saved_before_codecs_existed_export_h264() {
+        let saved: Mp4ExportSettings = serde_json::from_str(
+            r#"{"fps":30,"resolution_base":{"x":1920,"y":1080},"compression":"Web","custom_bpp":null}"#,
+        )
+        .unwrap();
+        assert_eq!(saved.codec, ExportCodec::H264);
+        let hevc: crate::settings::ExportSettings = serde_json::from_str(
+            r#"{"format":"Mp4","fps":60,"resolution_base":{"x":3840,"y":2160},"compression":"Maximum","custom_bpp":null,"codec":"Hevc"}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            hevc,
+            crate::settings::ExportSettings::Mp4(Mp4ExportSettings {
+                codec: ExportCodec::Hevc,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn hevc_spends_less_of_the_preset_bitrate_but_keeps_a_custom_one() {
+        let h264 = settings(ExportCodec::H264, false);
+        let hevc = settings(ExportCodec::Hevc, false);
+        assert_eq!(
+            h264.effective_bpp(),
+            ExportCompression::Social.bits_per_pixel()
+        );
+        assert!((hevc.effective_bpp() - 0.15 * 0.65).abs() < 1e-6);
+        let custom = Mp4ExportSettings {
+            custom_bpp: Some(0.2),
+            ..hevc
+        };
+        assert_eq!(custom.effective_bpp(), 0.2);
+    }
+
+    #[test]
+    fn only_h264_exports_use_libx264_quality_or_turbo() {
+        assert_eq!(
+            settings(ExportCodec::H264, true).constant_quality(),
+            Some(ExportCompression::Social.crf_value())
+        );
+        assert_eq!(settings(ExportCodec::H264, false).constant_quality(), None);
+        assert_eq!(settings(ExportCodec::Hevc, true).constant_quality(), None);
+        assert!(settings(ExportCodec::H264, false).supports_turbo());
+        assert!(!settings(ExportCodec::Hevc, false).supports_turbo());
+    }
 
     #[test]
     fn hardware_encoder_errors_restart_on_software() {

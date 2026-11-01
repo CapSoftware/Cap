@@ -140,7 +140,7 @@ pub async fn estimate_turbo_export(
     cancel: Arc<AtomicBool>,
     on_estimate: impl FnMut(ExportEstimates) + Send,
 ) -> Result<ExportEstimates, String> {
-    let turbo = matches!(settings, ExportSettings::Mp4(_));
+    let turbo = matches!(settings, ExportSettings::Mp4(settings) if settings.supports_turbo());
     estimate(editor, project, settings, turbo, cancel, on_estimate).await
 }
 
@@ -468,7 +468,7 @@ fn sample_plan(settings: ExportSettings) -> SamplePlan {
             timing: FrameTiming::Amortized,
             keyframe_interval,
         },
-        ExportSettings::Mp4(settings) if settings.optimize_filesize => SamplePlan {
+        ExportSettings::Mp4(settings) if settings.constant_quality().is_some() => SamplePlan {
             windows: 3,
             window_frames: keyframe_interval.unwrap_or(fps * 2) + X264_WARMUP_FRAMES as u32,
             leading_window: false,
@@ -965,6 +965,7 @@ mod tests {
             custom_bpp: None,
             force_ffmpeg_decoder: false,
             optimize_filesize: false,
+            codec: Default::default(),
         }));
         assert_eq!((hardware.windows, hardware.window_frames), (4, 32));
         assert_eq!(hardware.timing, FrameTiming::Steady);
@@ -976,6 +977,7 @@ mod tests {
             custom_bpp: None,
             force_ffmpeg_decoder: false,
             optimize_filesize: true,
+            codec: Default::default(),
         }));
         assert_eq!((x264.windows, x264.window_frames), (3, 90));
         assert!(!x264.leading_window && hardware.leading_window);

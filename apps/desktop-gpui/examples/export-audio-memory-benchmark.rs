@@ -52,6 +52,7 @@ async fn main() -> anyhow::Result<()> {
         custom_bpp: None,
         force_ffmpeg_decoder: false,
         optimize_filesize: false,
+        codec: Default::default(),
     };
     let started = Instant::now();
     let base = ExporterBase::builder(project_path)

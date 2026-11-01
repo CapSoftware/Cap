@@ -1074,6 +1074,7 @@ pub async fn export(
                 custom_bpp: bpp,
                 force_ffmpeg_decoder: false,
                 optimize_filesize: false,
+                codec: Default::default(),
             }
             .export(base, |_| true)
             .await
@@ -1414,6 +1415,7 @@ async fn export_config(
         custom_bpp: None,
         force_ffmpeg_decoder: false,
         optimize_filesize: false,
+        codec: Default::default(),
     })
     .export(base, |_| true)
     .await

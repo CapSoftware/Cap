@@ -549,6 +549,7 @@ async fn benchmark_export(recording_path: &Path) -> Result<ExportMetrics> {
         custom_bpp: None,
         force_ffmpeg_decoder: false,
         optimize_filesize: false,
+        codec: Default::default(),
     };
 
     let total_frames = exporter_base.total_frames(settings.fps);

@@ -407,6 +407,7 @@ fn turbo_cancellation() -> Vec<String> {
                 custom_bpp: None,
                 force_ffmpeg_decoder: decoder == Decoder::Ffmpeg,
                 optimize_filesize: false,
+                codec: Default::default(),
             }
             .export_prepared_turbo(
                 base,

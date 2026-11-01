@@ -61,6 +61,7 @@ async fn run(
         custom_bpp: None,
         force_ffmpeg_decoder: false,
         optimize_filesize: std::env::var_os("TURBO_BENCH_OPTIMIZE").is_some(),
+        codec: Default::default(),
     };
     let path = if turbo {
         let options = cap_export::mp4::turbo::TurboOptions {

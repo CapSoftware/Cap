@@ -19,6 +19,7 @@ async fn main() -> Result<(), String> {
         custom_bpp: None,
         force_ffmpeg_decoder: false,
         optimize_filesize: false,
+        codec: Default::default(),
     };
 
     let temp_out = tempfile::Builder::new()

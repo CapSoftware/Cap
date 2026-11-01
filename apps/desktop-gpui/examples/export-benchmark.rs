@@ -70,6 +70,7 @@ async fn run(project_path: PathBuf, size: XY<u32>, fps: u32, runs: u32) -> anyho
             custom_bpp: None,
             force_ffmpeg_decoder: false,
             optimize_filesize: false,
+            codec: Default::default(),
         }
         .export_prepared(base, |_| true)
         .await

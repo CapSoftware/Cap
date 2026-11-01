@@ -310,6 +310,7 @@ pub async fn export(
             custom_bpp: run.custom_bpp,
             force_ffmpeg_decoder: force,
             optimize_filesize: false,
+            codec: Default::default(),
         }
         .export_prepared_turbo(
             base,
@@ -337,6 +338,7 @@ pub async fn export(
                 custom_bpp: run.custom_bpp,
                 force_ffmpeg_decoder: force,
                 optimize_filesize: false,
+                codec: Default::default(),
             }
             .export(base, |_| true)
             .await

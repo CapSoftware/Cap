@@ -4321,6 +4321,7 @@ async fn check_export(rec: &Recorded, case: &mut Case) -> anyhow::Result<()> {
         custom_bpp: None,
         force_ffmpeg_decoder: false,
         optimize_filesize: false,
+        codec: Default::default(),
     }
     .export(base, |_| true)
     .await;
