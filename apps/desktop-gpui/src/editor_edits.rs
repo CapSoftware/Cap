@@ -5449,10 +5449,13 @@ mod tests {
             (
                 timeline.scene_segments[0].start,
                 timeline.scene_segments[0].end,
-                timeline.scene_segments[0].mode
             ),
-            (0.0, 3.0, cap_project::SceneMode::CameraOnly)
+            (0.0, 3.0)
         );
+        assert!(matches!(
+            timeline.scene_segments[0].mode,
+            cap_project::SceneMode::CameraOnly
+        ));
         assert_eq!(timeline.text_segments.len(), 1);
         assert_eq!(
             (
