@@ -57,6 +57,7 @@ let empty = false;
 let denied = false;
 let failDatabase = false;
 let failAnalytics = false;
+let leftoverScreenshotUpload = false;
 let latency = 0;
 let activeQueries = 0;
 let peakQueries = 0;
@@ -111,13 +112,11 @@ const client = drizzle(async (sql, params) => {
 								index === 7,
 								2,
 								1,
-								null,
-								null,
-								null,
-								null,
-								null,
-								null,
-								null,
+								...(leftoverScreenshotUpload &&
+								index === 5 &&
+								!sql.includes("`videos`.`isScreenshot` = ?")
+									? [`video-${index}`, 2048, 2048, "uploading", 0, null, null]
+									: [null, null, null, null, null, null, null]),
 								null,
 								null,
 							];
@@ -257,6 +256,7 @@ beforeEach(() => {
 	denied = false;
 	failDatabase = false;
 	failAnalytics = false;
+	leftoverScreenshotUpload = false;
 	latency = 0;
 	activeQueries = 0;
 	peakQueries = 0;
@@ -329,6 +329,13 @@ describe("mobile Caps list", () => {
 
 	it("keeps zero views when analytics fails", async () => {
 		failAnalytics = true;
+		const response = await list();
+		expect(response.status).toBe(200);
+		expect((await response.json()).caps).toEqual(expectedCaps());
+	});
+
+	it("keeps screenshots with a leftover progress row out of the upload state", async () => {
+		leftoverScreenshotUpload = true;
 		const response = await list();
 		expect(response.status).toBe(200);
 		expect((await response.json()).caps).toEqual(expectedCaps());

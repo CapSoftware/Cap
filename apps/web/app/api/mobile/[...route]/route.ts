@@ -356,6 +356,13 @@ const getUploadTitle = (fileName: string) => {
 	return title.length > 0 ? title : "Mobile Upload";
 };
 
+// Web image imports leave a progress row behind, and the web never treats a
+// screenshot as uploading, so the app shouldn't either.
+const activeUploadJoin = and(
+	eq(Db.videos.id, Db.videoUploads.videoId),
+	eq(Db.videos.isScreenshot, false),
+);
+
 const toMobileCapSummary = (
 	row: CapRow,
 	viewCount: number,
@@ -1633,7 +1640,7 @@ const getCapRows = Effect.fn("Mobile.getCapRows")(function* (
 			.from(Db.videos)
 			.leftJoin(Db.comments, eq(Db.videos.id, Db.comments.videoId))
 			.leftJoin(Db.users, eq(Db.videos.ownerId, Db.users.id))
-			.leftJoin(Db.videoUploads, eq(Db.videos.id, Db.videoUploads.videoId))
+			.leftJoin(Db.videoUploads, activeUploadJoin)
 			.where(
 				inArray(
 					Db.videos.id,
@@ -1765,7 +1772,7 @@ const getCapStatuses = Effect.fn("Mobile.getCapStatuses")(function* (
 				processingError: Db.videoUploads.processingError,
 			})
 			.from(Db.videos)
-			.leftJoin(Db.videoUploads, eq(Db.videos.id, Db.videoUploads.videoId))
+			.leftJoin(Db.videoUploads, activeUploadJoin)
 			.where(and(eq(Db.videos.ownerId, user.id), inArray(Db.videos.id, ids))),
 	);
 
@@ -2141,7 +2148,7 @@ const getCapById = Effect.fn("Mobile.getCapById")(function* (
 			.from(Db.videos)
 			.leftJoin(Db.comments, eq(Db.videos.id, Db.comments.videoId))
 			.leftJoin(Db.users, eq(Db.videos.ownerId, Db.users.id))
-			.leftJoin(Db.videoUploads, eq(Db.videos.id, Db.videoUploads.videoId))
+			.leftJoin(Db.videoUploads, activeUploadJoin)
 			.where(eq(Db.videos.id, videoId))
 			.groupBy(
 				Db.videos.id,
@@ -2597,7 +2604,7 @@ const trackMobileCapView = Effect.fn("Mobile.trackCapView")(function* (
 				activeUploadVideoId: Db.videoUploads.videoId,
 			})
 			.from(Db.videos)
-			.leftJoin(Db.videoUploads, eq(Db.videoUploads.videoId, Db.videos.id))
+			.leftJoin(Db.videoUploads, activeUploadJoin)
 			.where(eq(Db.videos.id, videoId))
 			.limit(1),
 	);
