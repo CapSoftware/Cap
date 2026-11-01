@@ -165,6 +165,8 @@ describe("dashboard video import progress", () => {
 			Object.defineProperty(file, "size", { value: total });
 			return file;
 		};
+		const imageFile = () =>
+			new File(["image"], "shot.png", { type: "image/png" });
 
 		beforeEach(() => {
 			vi.spyOn(console, "error").mockImplementation(() => {});
@@ -172,6 +174,14 @@ describe("dashboard video import progress", () => {
 			mocks.deleteVideo.mockReset().mockResolvedValue(undefined);
 			mocks.toastError.mockReset();
 			mocks.trigger.mockReset().mockResolvedValue({ success: true });
+			mocks.createImage.mockResolvedValue({
+				id: videoId,
+				uploadTarget: {
+					type: "put",
+					url: "https://storage.example/upload",
+					headers: {},
+				},
+			});
 		});
 
 		it("deletes the Cap when a video upload stops partway", async () => {
@@ -187,24 +197,32 @@ describe("dashboard video import progress", () => {
 			);
 		});
 
-		it("deletes the Cap when an image upload fails", async () => {
-			mocks.createImage.mockResolvedValue({
-				id: videoId,
-				uploadTarget: {
-					type: "put",
-					url: "https://storage.example/upload",
-					headers: {},
-				},
-			});
-			const { importing, request } = await startImport(
-				new File(["image"], "shot.png", { type: "image/png" }),
-			);
+		it("deletes the Cap when an image upload stops partway", async () => {
+			const image = imageFile();
+			const { importing, request } = await startImport(image);
+			request.progress(image.size - 1, image.size);
 			request.onerror?.();
 
 			expect(await importing).toBe(false);
 			expect(mocks.deleteVideo).toHaveBeenCalledExactlyOnceWith(videoId);
 			expect(mocks.toastError).toHaveBeenCalledWith(
 				"Failed to upload image. Please try again.",
+			);
+		});
+
+		it("keeps the image Cap when every byte was sent before the request failed", async () => {
+			const image = imageFile();
+			const { importing, request } = await startImport(image);
+			request.progress(image.size, image.size);
+			request.onerror?.();
+
+			expect(await importing).toBe(true);
+			expect(mocks.deleteVideo).not.toHaveBeenCalled();
+			expect(mocks.toastError).not.toHaveBeenCalled();
+			expect(mocks.progress).toHaveBeenLastCalledWith(
+				videoId,
+				image.size,
+				image.size,
 			);
 		});
 

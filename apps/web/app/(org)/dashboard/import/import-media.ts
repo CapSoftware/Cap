@@ -89,6 +89,7 @@ async function uploadImageAsScreenshot(
 			thumbnailUrl,
 		});
 		let uploadTotal = file.size || 1;
+		let uploadedBytes = 0;
 
 		try {
 			await uploadWithTarget({
@@ -101,6 +102,7 @@ async function uploadImageAsScreenshot(
 						: "pasted-image.jpg"),
 				onProgress: ({ loaded, total }) => {
 					uploadTotal = Math.max(total, file.size, 1);
+					uploadedBytes = loaded;
 					const percent = (loaded / uploadTotal) * 100;
 					setUploadStatus({
 						status: "uploadingVideo",
@@ -111,8 +113,15 @@ async function uploadImageAsScreenshot(
 				},
 			});
 		} catch (uploadError) {
-			await deleteFailedImport(imageData.id);
-			throw uploadError;
+			if (uploadedBytes < uploadTotal) {
+				await deleteFailedImport(imageData.id);
+				throw uploadError;
+			}
+
+			console.warn(
+				"Upload request failed after all bytes were sent; keeping the image:",
+				uploadError,
+			);
 		}
 		await sendProgressUpdate(imageData.id, uploadTotal, uploadTotal);
 
