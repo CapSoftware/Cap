@@ -541,16 +541,6 @@ async fn run_preview(
         .camera
         .as_ref()
         .map(|camera| XY::new(camera.video_width, camera.video_height));
-    let clip_camera_sizes = match &metadata {
-        cap_project::StudioRecordingMeta::SingleSegment { segment } => {
-            vec![segment.camera.as_ref().and(camera_size)]
-        }
-        cap_project::StudioRecordingMeta::MultipleSegments { inner } => inner
-            .segments
-            .iter()
-            .map(|segment| segment.camera.as_ref().and(camera_size))
-            .collect(),
-    };
     let render_options = RenderOptions {
         screen_size,
         camera_size,
@@ -568,8 +558,7 @@ async fn run_preview(
             .await
             .map_err(|error| PreparingPreviewError::Render(error.to_string()))?,
     }
-    .with_frozen_recorded_cursors(cursor_assets)
-    .with_clip_camera_sizes(clip_camera_sizes);
+    .with_frozen_recorded_cursors(cursor_assets);
     control.check()?;
     let mut layers = RendererLayers::new_for_preparing_preview(
         &constants.device,
@@ -636,6 +625,14 @@ async fn run_preview(
         let cursor = decoders.inputs[index].cursor.clone();
         for attempt in 0..PREVIEW_RENDER_MAX_ATTEMPTS {
             let segment = decoders.ensure(index, control, registry).await?;
+            let zoom_layout = ZoomLayoutInputs {
+                screen_size: constants.options.screen_size,
+                camera_size: segment
+                    .status
+                    .camera
+                    .as_ref()
+                    .map(|camera| XY::new(camera.video_width, camera.video_height)),
+            };
             let frames = tokio::select! {
                 biased;
                 _ = control.cancel.cancelled() => return Err(PreparingPreviewError::Cancelled),
@@ -663,7 +660,7 @@ async fn run_preview(
                 &project,
                 &cursor,
                 duration,
-                constants.zoom_layout(timeline_segment.recording_clip),
+                zoom_layout,
             );
             zoom.ensure_precomputed_until((request.frame_number as f32 + 1.0) / request.fps as f32);
             control.check()?;
