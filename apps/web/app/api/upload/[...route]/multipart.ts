@@ -41,6 +41,7 @@ import {
 	matchesCompletedRecordingParts,
 } from "@/lib/recording-multipart-integrity";
 import { runPromise } from "@/lib/server";
+import { getEditSourceKey } from "@/lib/video-edit-processing";
 import { startVideoProcessingWorkflow } from "@/lib/video-processing";
 import { stringOrNumberOptional } from "@/utils/zod";
 import {
@@ -631,14 +632,14 @@ app.post(
 							),
 						);
 					const head = yield* verify;
-					yield* db.use((db) =>
+					const published = yield* db.use((db) =>
 						db.transaction(async (tx) => {
 							const publication = await prepareDesktopReupload(
 								tx,
 								video,
 								replacement,
 							);
-							if (!publication) return;
+							if (!publication) return false;
 							await tx
 								.update(Db.videos)
 								.set({
@@ -665,8 +666,13 @@ app.post(
 										eq(Db.videoUploads.rawFileKey, outputKey),
 									),
 								);
+							return true;
 						}),
 					);
+					if (published)
+						yield* bucket
+							.deleteObject(getEditSourceKey(video.ownerId, video.id))
+							.pipe(Effect.catchAll(Effect.logWarning));
 					yield* Effect.tryPromise(() =>
 						invalidateGoogleDriveStorageQuotaCache(
 							Option.getOrNull(video.storageIntegrationId),

@@ -306,6 +306,7 @@ describe("desktop reupload publication", () => {
 			"lock-video",
 			"lock-upload",
 			"retire-job",
+			"delete-edits",
 		]);
 		expect(mocks.retire).toHaveBeenCalledWith(tx, {
 			videoId: "video",
@@ -313,6 +314,16 @@ describe("desktop reupload publication", () => {
 		});
 		expect(mocks.head).not.toHaveBeenCalled();
 		expect(mocks.access).not.toHaveBeenCalled();
+	});
+
+	it("forgets web edits made to the replaced recording", async () => {
+		const replacement = await prepareDesktopReupload(
+			transaction(),
+			original(),
+			tokenFor(),
+		);
+		expect(replacement).not.toBeNull();
+		expect(events).toContain("delete-edits");
 	});
 
 	it.each(["desktopSegments", "webMP4"])(
@@ -393,6 +404,7 @@ describe("desktop reupload publication", () => {
 			"lock-video",
 			"lock-upload",
 			"retire-job",
+			"delete-edits",
 		]);
 	});
 
@@ -491,6 +503,7 @@ describe("desktop reupload publication", () => {
 			"lock-video",
 			"lock-upload",
 			"retire-job",
+			"delete-edits",
 			"publication-failed",
 			"rollback",
 		]);
