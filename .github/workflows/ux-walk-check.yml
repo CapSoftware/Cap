@@ -19,7 +19,7 @@ on:
       - scripts/fork-brand*
       - scripts/build-desktop-binaries*
       - scripts/build-macos-packages*
-      - scripts/bundle-ux-walk.mjs
+      - scripts/bundle-ux-walk*
       - vendor/ux-walk/**
       - scripts/sync-ux-walk.mjs
       - .github/workflows/ux-walk-*.yml
@@ -110,7 +110,7 @@ jobs:
         with:
           node-version: '22'
       - name: Check packaging profiles and staging
-        run: node --test scripts/fork-brand.test.mjs scripts/fork-branding.test.mjs scripts/bundle-gpui.test.mjs scripts/build-desktop-binaries-cache.test.mjs scripts/build-macos-packages.test.mjs
+        run: node --test scripts/fork-brand.test.mjs scripts/fork-branding.test.mjs scripts/bundle-gpui.test.mjs scripts/bundle-ux-walk.test.mjs scripts/build-desktop-binaries-cache.test.mjs scripts/build-macos-packages.test.mjs
       - name: Check the cross-app audio hardware smoke runner
         run: python3 -m py_compile scripts/test-independent-audio.py
       - uses: dtolnay/rust-toolchain@1.95.0
@@ -280,6 +280,7 @@ jobs:
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$task_app/Contents/Info.plist")" = com.cantrell.cap-ux.preview
           test "$(/usr/libexec/PlistBuddy -c 'Print :UXWalkBuildSHA' "$task_app/Contents/Info.plist")" = "$GITHUB_SHA"
           codesign --verify --deep --strict "$task_app"
+          test "$(env -i "$task_app/Contents/Resources/ux-walk/bin/node" -p 'process.versions.node.split(".")[0]')" = 22
           python3 - <<'PY'
           import os, pathlib, plistlib
           app = pathlib.Path('apps/desktop-gpui/target/debug/bundle/macos/Cap UX Preview.app')
