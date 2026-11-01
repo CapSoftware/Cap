@@ -457,65 +457,73 @@ impl Muxer for AVFoundationMp4Muxer {
                             let mut retry_count = 0;
                             const MAX_RETRIES: u32 = 100;
 
-                            loop {
-                                let queue_result = {
-                                    let mut encoder = match encoder_clone.lock() {
-                                        Ok(e) => e,
-                                        Err(_) => {
-                                            let message = "MP4 encoder mutex poisoned".to_string();
+                            let step_result = cidre::objc::ar_pool(|| {
+                                loop {
+                                    let queue_result = {
+                                        let mut encoder = match encoder_clone.lock() {
+                                            Ok(e) => e,
+                                            Err(_) => {
+                                                let message = "MP4 encoder mutex poisoned".to_string();
+                                                set_fatal_error(&video_fatal_error, message.clone());
+                                                return Err(anyhow!(message));
+                                            }
+                                        };
+                                        encoder.queue_video_frame(sample_buf.clone(), timestamp)
+                                    };
+
+                                    match queue_result {
+                                        Ok(()) => break Ok(None),
+                                        Err(QueueFrameError::NotReadyForMore) => {
+                                            retry_count += 1;
+                                            if retry_count >= MAX_RETRIES {
+                                                encoder_busy_count += 1;
+                                                video_busy_thread.store(
+                                                    encoder_busy_count,
+                                                    std::sync::atomic::Ordering::Relaxed,
+                                                );
+                                                if encoder_busy_count <= 5 || encoder_busy_count.is_multiple_of(100) {
+                                                    debug!(
+                                                        encoder_busy_count,
+                                                        "MP4 encoder busy, frame queued after max retries"
+                                                    );
+                                                }
+                                                break Ok(None);
+                                            }
+                                            std::thread::sleep(Duration::from_micros(500));
+                                        }
+                                        Err(QueueFrameError::WriterFailed(err)) => {
+                                            let total = video_count_thread
+                                                .load(std::sync::atomic::Ordering::Relaxed);
+                                            let message = format!(
+                                                "Failed to encode video frame: WriterFailed/{err:?} \
+                                                 (frame #{total}, ts={timestamp:?})"
+                                            );
                                             set_fatal_error(&video_fatal_error, message.clone());
                                             return Err(anyhow!(message));
                                         }
-                                    };
-                                    encoder.queue_video_frame(sample_buf.clone(), timestamp)
-                                };
-
-                                match queue_result {
-                                    Ok(()) => break,
-                                    Err(QueueFrameError::NotReadyForMore) => {
-                                        retry_count += 1;
-                                        if retry_count >= MAX_RETRIES {
-                                            encoder_busy_count += 1;
-                                            video_busy_thread.store(
-                                                encoder_busy_count,
-                                                std::sync::atomic::Ordering::Relaxed,
+                                        Err(QueueFrameError::Failed) => {
+                                            let total = video_count_thread
+                                                .load(std::sync::atomic::Ordering::Relaxed);
+                                            let message = format!(
+                                                "Failed to encode video frame: Failed \
+                                                 (frame #{total}, ts={timestamp:?})"
                                             );
-                                            if encoder_busy_count <= 5 || encoder_busy_count.is_multiple_of(100) {
-                                                debug!(
-                                                    encoder_busy_count,
-                                                    "MP4 encoder busy, frame queued after max retries"
-                                                );
-                                            }
-                                            break;
+                                            set_fatal_error(&video_fatal_error, message.clone());
+                                            return Err(anyhow!(message));
                                         }
-                                        std::thread::sleep(Duration::from_micros(500));
-                                    }
-                                    Err(QueueFrameError::WriterFailed(err)) => {
-                                        let total = video_count_thread
-                                            .load(std::sync::atomic::Ordering::Relaxed);
-                                        let message = format!(
-                                            "Failed to encode video frame: WriterFailed/{err:?} \
-                                             (frame #{total}, ts={timestamp:?})"
-                                        );
-                                        set_fatal_error(&video_fatal_error, message.clone());
-                                        return Err(anyhow!(message));
-                                    }
-                                    Err(QueueFrameError::Failed) => {
-                                        let total = video_count_thread
-                                            .load(std::sync::atomic::Ordering::Relaxed);
-                                        let message = format!(
-                                            "Failed to encode video frame: Failed \
-                                             (frame #{total}, ts={timestamp:?})"
-                                        );
-                                        set_fatal_error(&video_fatal_error, message.clone());
-                                        return Err(anyhow!(message));
-                                    }
-                                    Err(QueueFrameError::Finished) => return Ok(()),
-                                    Err(e) => {
-                                        warn!("Failed to encode video frame: {e}");
-                                        break;
+                                        Err(QueueFrameError::Finished) => return Ok(Some(())),
+                                        Err(e) => {
+                                            warn!("Failed to encode video frame: {e}");
+                                            break Ok(None);
+                                        }
                                     }
                                 }
+                            });
+
+                            match step_result {
+                                Ok(Some(())) => return Ok(()),
+                                Ok(None) => {}
+                                Err(err) => return Err(err),
                             }
 
                             video_count_thread.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
