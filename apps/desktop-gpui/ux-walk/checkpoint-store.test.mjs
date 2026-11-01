@@ -83,3 +83,19 @@ test("incomplete JSONL tails remain unread and do not move the event cursor", (t
 		'{"ev":"error"}\n',
 	);
 });
+
+test("an equal clock commits and a smaller one is refused without advancing", (t) => {
+	const f = fixture(t);
+	const store = new CheckpointStore(f.root, f.options);
+	const clock = (activeElapsedMs) => ({
+		wallMs: 1000,
+		activeElapsedMs,
+		paused: false,
+	});
+	store.commit([], clock(1000));
+	store.commit([], clock(1000));
+	assert.equal(store.state.sequence, 2);
+	assert.throws(() => store.commit([], clock(999)), /moved backwards/);
+	assert.equal(store.state.sequence, 2);
+	assert.equal(store.state.localClockThroughMs, 1000);
+});

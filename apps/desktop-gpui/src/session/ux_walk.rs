@@ -118,6 +118,7 @@ impl RecordingSession {
             Some(
                 cx.spawn(async move |this, cx| {
                     let mut started = false;
+                    let mut clock = 0;
                     loop {
                         let snapshot = this
                             .update(cx, |this, _| {
@@ -166,13 +167,18 @@ impl RecordingSession {
                         else {
                             return;
                         };
+                        clock = crate::ux_walk_checkpoints::heartbeat_clock(
+                            clock,
+                            elapsed,
+                            journal.duration_ms,
+                        );
                         let status = cx
                             .background_executor()
                             .spawn(async move {
                                 crate::ux_walk_checkpoints::heartbeat(
                                     &journal,
                                     generation,
-                                    elapsed,
+                                    clock,
                                     paused,
                                     &draft,
                                     microphone,

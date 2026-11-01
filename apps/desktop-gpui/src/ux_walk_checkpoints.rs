@@ -16,6 +16,14 @@ fn sync_directory(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// The session clears its clock in `finish`, before the monitor writes the terminal heartbeat,
+/// so the session's elapsed time reads zero exactly when the worker needs the final clock.
+pub fn heartbeat_clock(previous: u64, elapsed: u64, journal_duration: Option<u64>) -> u64 {
+    previous
+        .max(elapsed)
+        .max(journal_duration.unwrap_or_default())
+}
+
 pub fn heartbeat(
     journal: &crate::ux_walk_journal::Journal,
     generation: u64,
@@ -98,6 +106,14 @@ pub fn start(journal: &crate::ux_walk_journal::Journal) -> Result<(), String> {
     Ok(())
 }
 
+pub fn recovery_notice(directory: &Path) -> Option<String> {
+    let status: Value =
+        serde_json::from_slice(&fs::read(directory.join("checkpoint-status.json")).ok()?).ok()?;
+    (status["phase"] == "resume-needed")
+        .then(|| status["error"].as_str().map(str::to_string))
+        .flatten()
+}
+
 pub fn notice(directory: &Path) -> String {
     let file = directory.join("checkpoint-status.json");
     let Some(status) = fs::read(file)
@@ -144,4 +160,26 @@ pub fn notice(directory: &Path) -> String {
         status["transcription"].as_str().unwrap_or("waiting"),
         warning
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::heartbeat_clock;
+
+    #[test]
+    fn terminal_heartbeat_never_regresses_when_the_session_clock_is_cleared() {
+        assert_eq!(heartbeat_clock(0, 1_000, None), 1_000);
+        assert_eq!(heartbeat_clock(2_231_000, 2_231_625, None), 2_231_625);
+        assert_eq!(
+            heartbeat_clock(2_231_625, 0, Some(2_231_625)),
+            2_231_625,
+            "a completed stop keeps the journal duration"
+        );
+        assert_eq!(
+            heartbeat_clock(2_231_000, 0, Some(2_231_625)),
+            2_231_625,
+            "the journal wins when the last heartbeat predates the stop"
+        );
+        assert_eq!(heartbeat_clock(9_000, 0, None), 9_000, "an aborted walk");
+    }
 }

@@ -1,6 +1,6 @@
 // Cap owns media capture/editing. ux-walk owns chapters, observations and evidence.
 // Call the installed, version-matched CLI; do not vendor Cap's recorder or upload implicitly.
-import { execFile, execFileSync } from 'node:child_process';
+import { execFile, execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -8,11 +8,20 @@ import { promisify } from 'node:util';
 import { createHash, randomUUID } from 'node:crypto';
 
 const exec = promisify(execFile);
+// Measured without progress, not in total: a 37 minute 60fps walk took 9 minutes, so a total
+// limit of 15 minutes would kill a walk of about an hour however healthy its export was.
+const EXPORT_STALL_MS = 15 * 60 * 1000;
+const EXPORT_STALL_TICKS = 12;
+const EXPORT_KILL_GRACE_MS = 5000;
+const MAX_EVENT_LINE_CHARS = 1024 * 1024;
+const MAX_ERROR_CHARS = 800;
 export function capBinary(explicit = process.env.UXW_CAP_BINARY) {
   if (explicit) return explicit;
   return ['/Applications/Cap.app', path.join(os.homedir(), 'Applications/Cap.app')]
     .map((p) => path.join(p, 'Contents/MacOS/cap-cli')).find((p) => fs.existsSync(p)) || 'cap';
 }
+
+const capFailure = (e) => e?.error || e?.type === 'Error' || e?.type === 'error' ? `Cap: ${e.error || 'operation failed'}` : null;
 
 export function parseCapJson(stdout) {
   const text = String(stdout).trim();
@@ -20,12 +29,12 @@ export function parseCapJson(stdout) {
   let result;
   try { result = [JSON.parse(text)]; }
   catch { result = text.split('\n').filter(Boolean).map((line) => JSON.parse(line)); }
-  for (const e of result) if (e?.error || e?.type === 'Error' || e?.type === 'error') throw new Error(`Cap: ${e.error || 'operation failed'}`);
+  for (const e of result) if (capFailure(e)) throw new Error(capFailure(e));
   return result;
 }
 
 export class CapClient {
-  constructor({ binary, run = exec } = {}) { this.binary = capBinary(binary); this.run = run; }
+  constructor({ binary, run = exec, start = spawn, exportStallMs = EXPORT_STALL_MS } = {}) { Object.assign(this, { binary: capBinary(binary), run, start, exportStallMs }); }
   async events(args, timeout = 30000) {
     let result;
     try { result = await this.run(this.binary, [...args, '--json'], { encoding: 'utf8', timeout, maxBuffer: 8 * 1024 * 1024 }); }
@@ -36,6 +45,64 @@ export class CapClient {
     return parseCapJson(result.stdout);
   }
   async json(args, timeout) { return (await this.events(args, timeout)).at(-1); }
+  // Export writes one Progress line per frame, so buffering its stdout fails on long recordings.
+  // Keep only the verdict and read each line as it arrives. Resolves with the Completed event.
+  exportEvents(args) {
+    const label = `Cap ${args.slice(0, 2).join(' ')}`;
+    return new Promise((resolve, reject) => {
+      let child, partial = '', skipping = false, unreadable = 0, stderr = '', completed = null, failure = null;
+      let rendered = -1, total = null, idleTicks = 0, stalled = false, escalation = null, watchdog = null;
+      const finish = (settle, value) => { clearInterval(watchdog); clearTimeout(escalation); settle(value); };
+      const consume = (line) => {
+        if (!line.trim()) return;
+        let e;
+        try { e = JSON.parse(line); } catch { unreadable += 1; return; }
+        if (e?.type === 'Progress') {
+          const count = Number(e.rendered_count);
+          if (count <= rendered) return; // A repeated count is not progress.
+          if (Number.isFinite(count)) rendered = count;
+          if (Number.isFinite(Number(e.total_frames))) total = Number(e.total_frames);
+          idleTicks = 0;
+          return;
+        }
+        idleTicks = 0;
+        failure ??= capFailure(e);
+        if (e?.type === 'Completed') completed = e;
+      };
+      try { child = this.start(this.binary, [...args, '--json'], { stdio: ['ignore', 'pipe', 'pipe'] }); }
+      catch (e) { reject(new Error(`${label} failed: ${e.message}`)); return; }
+      child.stdout.setEncoding('utf8');
+      child.stdout.on('data', (chunk) => {
+        let start = 0;
+        for (let end = chunk.indexOf('\n'); end !== -1; end = chunk.indexOf('\n', start)) {
+          if (!skipping) consume(partial + chunk.slice(start, end));
+          partial = ''; skipping = false; start = end + 1;
+        }
+        if (skipping) return;
+        partial += chunk.slice(start);
+        if (partial.length > MAX_EVENT_LINE_CHARS) { partial = ''; skipping = true; unreadable += 1; }
+      });
+      child.stderr.setEncoding('utf8');
+      child.stderr.on('data', (chunk) => { stderr = (stderr + chunk).slice(-MAX_ERROR_CHARS); });
+      // Ticks, not a deadline: a Mac asleep mid-export has made no progress to measure.
+      watchdog = setInterval(() => {
+        if (++idleTicks < EXPORT_STALL_TICKS) return;
+        clearInterval(watchdog); stalled = true; child.kill('SIGTERM');
+        escalation = setTimeout(() => { child.kill('SIGKILL'); child.stdout.destroy(); child.stderr.destroy(); }, Math.min(EXPORT_KILL_GRACE_MS, this.exportStallMs));
+      }, this.exportStallMs / EXPORT_STALL_TICKS);
+      child.on('error', (e) => finish(reject, new Error(`${label} failed: ${e.code === 'ENOENT' ? 'install Cap Desktop from https://cap.so/download first' : e.message}`)));
+      child.on('close', (code, signal) => {
+        // Only a clean exit can have written a whole last line; anything else may be cut off.
+        if (partial && !skipping && code === 0) consume(partial);
+        const at = rendered < 0 ? 'before the first frame' : `at frame ${rendered}${total == null ? '' : ` of ${total}`}`;
+        const unread = unreadable ? ` ${unreadable} output line${unreadable === 1 ? ' was' : 's were'} unreadable.` : '';
+        if (failure) finish(reject, new Error(failure));
+        else if (stalled) finish(reject, new Error(`${label} failed: timed out after ${Math.round(this.exportStallMs / 60000)} minutes without progress ${at}`));
+        else if (code !== 0) finish(reject, new Error(`${label} failed: ${stderr.trim() || `exited with ${signal || `code ${code}`}`} (${at}).${unread}`));
+        else finish(resolve, completed);
+      });
+    });
+  }
   async localOnly() {
     const store = await this.json(['automations', 'list']);
     if (!Array.isArray(store.rules)) throw new Error('Cap automation schema is unsupported; local-only capture cannot be verified');
@@ -55,8 +122,7 @@ export class CapClient {
   }
   async export(project, output) {
     if (fs.existsSync(output)) throw new Error(`Refusing to replace an existing export: ${output}`);
-    const events = await this.events(['export', project, '--output', output, '--format', 'mp4', '--quality', 'web'], 15 * 60 * 1000);
-    const completed = events.findLast((e) => e.type === 'Completed');
+    const completed = await this.exportEvents(['export', project, '--output', output, '--format', 'mp4', '--quality', 'web']);
     if (!completed || path.resolve(completed.path || '') !== path.resolve(output) || !fs.existsSync(output) || fs.statSync(output).size === 0) throw new Error('Cap export did not produce the requested MP4');
     const { stdout } = await this.run('ffprobe', ['-v', 'error', '-show_entries', 'format=duration:stream=codec_type', '-of', 'json', output], { encoding: 'utf8', timeout: 30000 });
     const probe = JSON.parse(stdout), durationS = Number(probe.format?.duration);

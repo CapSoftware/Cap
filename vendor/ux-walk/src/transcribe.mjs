@@ -29,6 +29,15 @@ export function providerKey(cfg, id = cfg.transcriber) {
   }
 }
 
+// Presence only: without -w, security does not return the secret.
+export function providerKeyPresent(cfg, id = cfg.transcriber) {
+  const p = PROVIDERS[id];
+  if (!p) return false;
+  if (process.env[p.env]) return true;
+  try { execFileSync('security', ['find-generic-password', '-a', process.env.USER, '-s', p.item(cfg)], { stdio: 'ignore' }); return true; }
+  catch { return false; }
+}
+
 // Before recording: say now, not after the walk, when the chapters would get no transcript. null when fine.
 export function transcriberProblem(cfg) {
   if (cfg.transcriber === 'none') return null;

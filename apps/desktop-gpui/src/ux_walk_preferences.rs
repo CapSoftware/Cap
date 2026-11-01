@@ -189,6 +189,23 @@ fn account() -> String {
     std::env::var("USER").unwrap_or_default()
 }
 
+const NO_SAVED_KEY: &str = "No saved key";
+
+/// Runs `key_status`, which starts a process, so call it off the main thread.
+pub fn missing_key_warning(settings: &Map<String, Value>) -> Option<String> {
+    let provider = provider(settings)?;
+    key_warning(provider, key_status(settings, provider))
+}
+
+fn key_warning(provider: Provider, status: &str) -> Option<String> {
+    (provider.id != "none" && status == NO_SAVED_KEY).then(|| {
+        format!(
+            "No {} key is saved, so this walk will have no transcript. Add the key in Settings > Transcription. You can record now and run saved audio later with Resume evidence sync.",
+            provider.label
+        )
+    })
+}
+
 pub fn key_status(settings: &Map<String, Value>, provider: Provider) -> &'static str {
     if provider.id == "none" {
         return "Transcription is off";
@@ -212,7 +229,7 @@ pub fn key_status(settings: &Map<String, Value>, provider: Provider) -> &'static
     {
         "Saved in Keychain"
     } else {
-        "No saved key"
+        NO_SAVED_KEY
     }
 }
 
@@ -299,6 +316,23 @@ mod tests {
         fn drop(&mut self) {
             fs::remove_dir_all(self.0.parent().unwrap()).unwrap();
         }
+    }
+
+    #[test]
+    fn only_a_provider_without_a_key_warns() {
+        let provider = |id: &str| *PROVIDERS.iter().find(|item| item.id == id).unwrap();
+        let warning = key_warning(provider("assemblyai"), NO_SAVED_KEY).unwrap();
+        assert!(warning.contains(provider("assemblyai").label));
+        assert!(warning.contains("Settings"));
+        assert_eq!(
+            key_warning(provider("assemblyai"), "Saved in Keychain"),
+            None
+        );
+        assert_eq!(
+            key_warning(provider("descript"), "Using environment key"),
+            None
+        );
+        assert_eq!(key_warning(provider("none"), NO_SAVED_KEY), None);
     }
 
     #[test]
