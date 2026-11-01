@@ -504,6 +504,10 @@ export function HLSVideoPlayer({
 				networkRetryCount = 0;
 			});
 
+			hls.on(Hls.Events.FRAG_LOADED, (_event, data) => {
+				if (data.frag.sn === reloadedForFragment) reloadedForFragment = null;
+			});
+
 			if (isEarlyPlayback) {
 				setEarlyPlaylistEnded(false);
 				hls.on(Hls.Events.LEVEL_UPDATED, (_event, data) => {

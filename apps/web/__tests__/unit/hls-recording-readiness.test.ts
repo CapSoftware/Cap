@@ -319,6 +319,24 @@ describe("Instant player readiness and failure UX", () => {
 			expect(mocks.loadSource).toHaveBeenCalledTimes(2);
 		});
 
+		it("refreshes again when a recovered fragment expires later", async () => {
+			await renderPlaying({ currentTime: 12, playbackRate: 1 });
+
+			await failFragment(4);
+			await act(async () =>
+				mocks.handlers.get("fragLoaded")?.("fragLoaded", {
+					frag: { sn: "initSegment" },
+				}),
+			);
+			await failFragment(4);
+			await act(async () =>
+				mocks.handlers.get("fragLoaded")?.("fragLoaded", { frag: { sn: 4 } }),
+			);
+			await failFragment(4);
+
+			expect(mocks.loadSource).toHaveBeenCalledTimes(2);
+		});
+
 		it("does not treat other fragment failures as expiry", async () => {
 			await renderPlaying({ currentTime: 12, playbackRate: 1 });
 
