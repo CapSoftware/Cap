@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { processChapter } from '../../src/process.mjs';
+import { providerKeyPresent } from '../../src/transcribe.mjs';
 
 function fixture(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ux-walk-transcript-'));
@@ -49,4 +50,16 @@ test('disabled transcription never consults a provider in transcript-only proces
   const result = await processChapter(dir, { transcriber: 'none', glossary: '' }, { transcriptOnly: true, media, log: () => {} });
   assert.equal(result.transcript, false);
   assert.equal(fs.existsSync(path.join(dir, 'timeline.md')), false);
+});
+
+test('a key is reported present from its environment name, absent otherwise, and never fetched', (t) => {
+  const saved = process.env.ASSEMBLYAI_API_KEY, cfg = { transcriber: 'assemblyai', assemblyaiKeychainItem: 'uxw-test-absent-item' };
+  t.after(() => { if (saved === undefined) delete process.env.ASSEMBLYAI_API_KEY; else process.env.ASSEMBLYAI_API_KEY = saved; });
+  delete process.env.ASSEMBLYAI_API_KEY;
+  assert.equal(providerKeyPresent(cfg), false);
+  assert.equal(providerKeyPresent({ transcriber: 'unknown' }), false);
+  process.env.ASSEMBLYAI_API_KEY = 'synthetic';
+  assert.equal(providerKeyPresent(cfg), true);
+  const source = fs.readFileSync(new URL('../../src/transcribe.mjs', import.meta.url), 'utf8');
+  assert.doesNotMatch(source.slice(source.indexOf('function providerKeyPresent'), source.indexOf('function transcriberProblem')), /'-w'/);
 });

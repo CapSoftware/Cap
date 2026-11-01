@@ -2,6 +2,7 @@
 // Each finished chapter is processed in the background (audio, screenshots, transcript, timeline)
 // while the next one records.
 import { spawn, spawnSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -21,6 +22,7 @@ import { emit, readCommands, createIpcAsker } from './ipc.mjs';
 import { transcriberProblem } from './transcribe.mjs';
 import { isRisky, label, writeKind, writeLabel } from './timeline.mjs';
 import { chapterName, handoffLine, pad, createSessionDir } from './naming.mjs';
+import { assertCompanionAvailable, CompanionSession, durableCompanionJson, startCompanionServer } from './companion.mjs';
 
 const tty = process.stdout.isTTY;
 const paint = (code, s) => (tty ? `\x1b[${code}m${s}\x1b[0m` : s);
@@ -77,6 +79,7 @@ export async function record(cfg, { topic, url, app, title, windowId, display, b
   if (windowId != null && !noBrowser) throw new Error('--window-id requires --no-browser so telemetry cannot refer to a different browser');
   if (windowId != null && (!/^\d+$/.test(String(windowId)) || Number(windowId) <= 0)) throw new Error('--window-id must be a positive numeric window ID');
   fs.mkdirSync(CONFIG_DIR, { recursive: true });
+  assertCompanionAvailable(CONFIG_DIR);
   const interactive = !ipc && process.stdin.isTTY && process.stdout.isTTY;
   // Before recording: who is talking, and which glossaries apply (when there is a choice).
   let speakers = String(cfg.speakers || '').split(',').map((x) => x.trim()).filter(Boolean);
@@ -102,10 +105,7 @@ export async function record(cfg, { topic, url, app, title, windowId, display, b
   let sendState = () => {};
   const saveSession = () => { fs.writeFileSync(path.join(dir, 'session.json'), JSON.stringify(session, null, 2)); sendState(); };
   saveSession();
-  // The Meet extension's host files captions into this walk only while this file names a live recorder.
   const activeFile = path.join(CONFIG_DIR, 'active.json');
-  fs.writeFileSync(activeFile, JSON.stringify({ dir, pid: process.pid, startedAt: session.startedAt }));
-  process.on('exit', () => { try { if (JSON.parse(fs.readFileSync(activeFile, 'utf8')).pid === process.pid) fs.unlinkSync(activeFile); } catch {} });
   const log = fs.createWriteStream(path.join(dir, 'actions.jsonl'), { flags: 'a' });
   // Say now, not after the walk, when the chapters would get no transcript; the walk still records.
   const noTranscript = cfg.evidenceOnly ? null : transcriberProblem(cfg);
@@ -113,17 +113,6 @@ export async function record(cfg, { topic, url, app, title, windowId, display, b
     console.log(paint(33, `No transcript for this walk: ${noTranscript}. It records anyway; after setup, "ux-walk process ${dir}" adds the speech.`));
     if (ipc) emit({ ev: 'warn', kind: 'transcriber', text: noTranscript });
   }
-  // In a Meet call (the extension listed its people in the last 90 s) but no captions 45 s in: names come from
-  // Meet's captions, so say so while the call is still on.
-  setTimeout(() => {
-    if (finishing) return;
-    let meet = null;
-    try { meet = JSON.parse(fs.readFileSync(path.join(CONFIG_DIR, 'meet-participants.json'), 'utf8')); } catch {}
-    if (!meet || Date.now() - meet.t > 90000 || fs.existsSync(path.join(dir, 'meet.jsonl'))) return;
-    const msg = 'No Meet captions yet: turn on captions in the Meet (CC, or press C) so ux-walk can tell who is speaking.';
-    console.log(paint(33, msg));
-    if (ipc) emit({ ev: 'warn', kind: 'meet', text: msg });
-  }, 45000).unref();
   // A walk that dies before recording (Chrome or the capture would not start) leaves its reason behind.
   const died = (e) => { session.error = e.message; saveSession(); throw e; };
   let live = () => {};
@@ -181,6 +170,43 @@ export async function record(cfg, { topic, url, app, title, windowId, display, b
   let current = null; // the chapter being recorded
   let paused = false;
   let finishing = false;
+  let companionEpoch = 0;
+  const companionMetadata = {};
+  const companion = new CompanionSession({
+    recordingId: `${process.pid}:${session.startedAt}`, generation: randomUUID(), backend: 'standalone', mode: noBrowser ? 'external' : 'owned', metadata: companionMetadata,
+    epoch: () => companionEpoch,
+    state: () => finishing ? 'finishing' : paused ? 'paused' : current && session.capture?.status === 'recording' ? 'recording' : 'preparing',
+    details: () => ({ audio: { scope: 'Configured standalone recording sources' } }),
+    write: async event => {
+      if (!noBrowser && event.companion.role === 'walkthrough' && event.ev === 'click') return true;
+      await new Promise((resolve, reject) => log.write(`${JSON.stringify({ ...event, t: event.observedAt })}\n`, error => error ? reject(error) : resolve()));
+      if (event.ev === 'meet-caption') {
+        const file = path.join(dir, 'meet.jsonl');
+        fs.appendFileSync(file, `${JSON.stringify({ t: event.observedAt, observedAt: event.observedAt, kind: 'caption', name: event.name, text: event.text, id: `${event.companion.bindingId}:${companionEpoch}:${event.captionId}`, meeting: event.companion.meeting, revision: event.revision, localSpeaker: event.localSpeaker, timingUncertain: event.timingUncertain, identity: event.identity })}\n`, { mode: 0o600 });
+        const fd = fs.openSync(file, 'r'); try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+      }
+      return true;
+    },
+    flush: async () => { await new Promise(resolve => log.write('', resolve)); fs.fsyncSync(log.fd); },
+    persist: async () => durableCompanionJson(path.join(dir, 'companion.json'), companionMetadata),
+  });
+  let companionServer;
+  try {
+    companionServer = await startCompanionServer({ configDir: CONFIG_DIR, session: companion });
+    durableCompanionJson(activeFile, { dir, pid: process.pid, startedAt: session.startedAt });
+  } catch (error) {
+    await companionServer?.close();
+    await browser?.close().catch(() => {});
+    await new Promise(resolve => log.end(resolve));
+    died(error);
+  }
+  process.on('exit', () => { try { const active = JSON.parse(fs.readFileSync(activeFile, 'utf8')); if (active.pid === process.pid && active.dir === dir && active.startedAt === session.startedAt) fs.unlinkSync(activeFile); } catch {} });
+  process.on('exit', companionServer.cleanup);
+  setTimeout(() => {
+    if (finishing || !companionMetadata.meet?.participantCount || companionMetadata.meet.lastCaptionAt) return;
+    const text = 'No selected Meet captions yet: turn captions on in the attached Meet tab for speaker-name evidence.';
+    console.log(paint(33, text)); if (ipc) emit({ ev: 'warn', kind: 'meet', text });
+  }, 45000).unref();
   const jobs = new Set();
   const controlsHelp = () => capture.continuous
     ? `  n [name]   chapter marker (Cap keeps recording)\n  m <note>   timeline marker\n  p          pause/resume logging only; Cap keeps recording\n  s          status\n  detach     end logging; leave Cap recording\n  q          ${capture.ownsRecording ? 'stop this Cap recording and finish logging' : 'end attached logging; leave Cap recording'}`
@@ -348,7 +374,7 @@ export async function record(cfg, { topic, url, app, title, windowId, display, b
 
   const finish = async (why) => {
     if (finishing) return;
-    finishing = true;
+    finishing = true; companionEpoch++;
     rl?.close();
     try { hot?.stdin.end(); hot?.kill(); } catch {}
     if (ipc && !script && !cfg.evidenceOnly) asker = ipcAsker;
@@ -473,7 +499,7 @@ export async function record(cfg, { topic, url, app, title, windowId, display, b
         } else if (cmd === 'p' || cmd === 'pause') {
           if (!paused) {
             const finished = await capture.pause();
-            const prev = current; current = null; paused = true;
+            const prev = current; current = null; paused = true; companionEpoch++;
             if (session.logging) session.logging.paused = true;
             write({ ev: 'pause' });
             if (browser) await browser.saveTraceChunk(traceFile(prev));
@@ -483,7 +509,7 @@ export async function record(cfg, { topic, url, app, title, windowId, display, b
             const ch = newChapter(arg || `part ${session.chapters.length + 1}`);
             if (browser) await browser.startTraceChunk();
             begin(ch, (await capture.resume(ch.video)).startMs);
-            paused = false;
+            paused = false; companionEpoch++;
             if (session.logging) { session.logging.paused = false; saveSession(); }
             tell(`resumed: chapter ${ch.n} "${ch.name}"`);
           }

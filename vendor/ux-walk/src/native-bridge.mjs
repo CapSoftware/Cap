@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { safeUrl } from './network.mjs';
+import { COMPANION_PROTOCOL, processAlive, requestCompanion } from './companion.mjs';
 const read = (f) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return null; } };
 const need = (ok, message) => { if (!ok) throw new Error(message); };
 const short = (v, n = 200) => typeof v === 'string' ? v.slice(0, n) : '';
@@ -35,17 +36,32 @@ export function createNativeBridge({ configDir, clock = Date.now, isAlive = (pid
   };
   return { handle(m) {
     const a = active();
+    if (String(m.type).startsWith('companion-')) {
+      const reply = async () => {
+        const file = path.join(configDir, 'companion-session.json');
+        let owner;
+        try {
+          const info = fs.lstatSync(file);
+          need(info.isFile() && !info.isSymbolicLink() && (info.mode & 0o077) === 0 && (process.getuid == null || info.uid === process.getuid()), 'Companion owner descriptor is not private.');
+          owner = read(file);
+          need(owner?.protocolVersion === COMPANION_PROTOCOL && /^[a-f0-9]{64}$/.test(owner.token) && owner.host === '127.0.0.1' && Number.isSafeInteger(owner.port) && owner.port >= 20000 && owner.port < 40000, 'Invalid companion owner descriptor.');
+          if (!processAlive(owner.pid) || !processAlive(owner.recorderPid)) owner = null;
+        } catch (error) { if (error.code !== 'ENOENT') throw error; }
+        need(!owner || !a || recordingId(a) === owner.recordingId, 'Two recording owners are active. Stop one before attaching the companion.');
+        if (!owner) {
+          need(m.type === 'companion-hello', 'Start a current Cap UX or ux-walk recording first.');
+          return { type: 'status', protocolVersion: COMPANION_PROTOCOL, state: a ? 'legacy' : 'idle', recording: false, roles: {} };
+        }
+        return requestCompanion(owner, m);
+      };
+      return reply().then(result => result.type === 'status' ? { ...result, requestId: m.requestId } : { type: 'companion-result', requestId: m.requestId, ok: true, result }).catch(error => ({ type: 'companion-result', requestId: m.requestId, ok: false, error: error.message }));
+    }
     if (m.type === 'hello') {
       const b = a ? read(path.join(a.dir, 'browser-target.json')) : null;
       return { type: 'status', ...(m.requestId ? { requestId: m.requestId } : {}), recording: !!a, dir: a?.dir || null, recordingId: recordingId(a),
         ...(b && !b.endedAt && b.clientId === m.clientId && b.recordingId === recordingId(a) ? { target: b } : {}) };
     }
-    if (m.type === 'participants') { fs.writeFileSync(path.join(configDir, 'meet-participants.json'), JSON.stringify({ t: m.t, meeting: m.meeting, names: m.names })); return; }
-    if (m.type === 'debug') { fs.writeFileSync(path.join(configDir, 'meet-debug.json'), JSON.stringify(m)); return; }
-    if (m.type === 'event' && a) {
-      if (read(path.join(a.dir, 'session.json'))?.logging?.paused) return;
-      fs.appendFileSync(path.join(a.dir, 'meet.jsonl'), JSON.stringify({ t: m.t, kind: m.kind, name: m.name, text: m.text, ...(m.meeting ? { meeting: m.meeting } : {}), ...(m.id != null ? { id: m.id } : {}) }) + '\n'); return;
-    }
+    if (['participants', 'debug', 'event'].includes(m.type)) return;
     if (!String(m.type).startsWith('tab-')) return;
     const ok = (result) => ({ type: 'tab-result', requestId: m.requestId, ok: true, result });
     try {

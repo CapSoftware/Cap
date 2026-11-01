@@ -4,13 +4,17 @@ import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
 import { createNativeBridge } from '../src/native-bridge.mjs';
-const bridge = createNativeBridge({ configDir: path.join(os.homedir(), '.config', 'ux-walk') });
+import { COMPANION_EXTENSION } from '../src/companion.mjs';
+const bridge = createNativeBridge({ configDir: process.env.CAP_UX_WALK_CONFIG_DIR || path.join(os.homedir(), '.config', 'ux-walk') });
+const allowed = process.argv[2] === `chrome-extension://${COMPANION_EXTENSION}/`;
 function reply(value) {
   if (!value) return;
   const body = Buffer.from(JSON.stringify(value)), head = Buffer.alloc(4);
   head.writeUInt32LE(body.length); fs.writeSync(1, Buffer.concat([head, body]));
 }
 let buf = Buffer.alloc(0);
+let requests = Promise.resolve();
+let queued = 0;
 process.stdin.on('data', (data) => {
   buf = Buffer.concat([buf, data]);
   while (buf.length >= 4) {
@@ -18,8 +22,14 @@ process.stdin.on('data', (data) => {
     if (size > 512 * 1024) { process.stderr.write('ux-walk: native message exceeds 512 KiB\n'); process.exit(1); }
     if (buf.length < 4 + size) break;
     const body = buf.subarray(4, 4 + size); buf = buf.subarray(4 + size);
-    try { reply(bridge.handle(JSON.parse(body.toString('utf8')))); }
-    catch (error) { process.stderr.write(`ux-walk: ${error.message}\n`); }
+    if (queued >= 64) { reply({ ok: false, error: 'Native companion queue is full.' }); continue; }
+    queued++;
+    requests = requests.then(async () => {
+      let message;
+      try { message = JSON.parse(body.toString('utf8')); if (!allowed && message.type !== 'hello') throw new Error('Native host caller origin is not allowed.'); reply(await bridge.handle(message)); }
+      catch (error) { reply({ requestId: message?.requestId, ok: false, error: error.message }); }
+      finally { queued--; }
+    });
   }
 });
-process.stdin.on('end', () => process.exit(0));
+process.stdin.on('end', () => { requests.finally(() => process.exit(0)); });

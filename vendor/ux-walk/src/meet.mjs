@@ -8,7 +8,7 @@ export function readMeet(sessionDir, startMs, endMs) {
   let text = '';
   try { text = fs.readFileSync(path.join(sessionDir, 'meet.jsonl'), 'utf8'); } catch { return []; }
   return text.split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } })
-    .filter((e) => e && e.kind === 'caption' && e.name && e.t >= startMs - 5000 && e.t <= endMs + 5000);
+    .filter((e) => e && e.kind === 'caption' && e.name && !e.timingUncertain && e.t >= startMs - 5000 && e.t <= endMs + 5000);
 }
 
 // A caption block is updated in place as the words come: one span per block, from its first sighting to its last
@@ -18,11 +18,11 @@ export function captionSpans(events, startMs) {
   const blocks = new Map();
   for (const e of events) {
     const k = e.id ?? `${e.name}:${e.t}`;
-    const b = blocks.get(k) || { name: e.name, first: e.t, last: e.t };
+    const b = blocks.get(k) || { name: e.name, first: e.t, last: e.t, localSpeaker: e.localSpeaker === true };
     b.first = Math.min(b.first, e.t); b.last = Math.max(b.last, e.t);
     blocks.set(k, b);
   }
-  return [...blocks.values()].map((b) => ({ name: b.name, start: (b.first - startMs) / 1000 - LAG - 1, end: (b.last - startMs) / 1000 - LAG + 0.3 }));
+  return [...blocks.values()].map((b) => ({ name: b.name, localSpeaker: b.localSpeaker, start: (b.first - startMs) / 1000 - LAG - 1, end: (b.last - startMs) / 1000 - LAG + 0.3 }));
 }
 
 // cues: [{ start, end, speaker }] with the transcriber's raw labels. Each label takes the name whose caption spans
@@ -30,12 +30,16 @@ export function captionSpans(events, startMs) {
 // "You": that is `me`.
 export function namesFromMeet(cues, spans, me) {
   const score = new Map();
+  const scopes = new Map();
   for (const c of cues) {
     if (!c.speaker) continue;
+    const scope = `${c.source || ''}:${c.jobId || ''}`;
+    if (!scopes.has(c.speaker)) scopes.set(c.speaker, new Set());
+    scopes.get(c.speaker).add(scope);
     for (const s of spans) {
       const o = Math.min(c.end, s.end) - Math.max(c.start, s.start);
       if (o <= 0) continue;
-      const name = /^you$/i.test(s.name.trim()) ? me : s.name.trim();
+      const name = s.localSpeaker || /^you$/i.test(s.name.trim()) ? me : s.name.trim();
       if (!name) continue;
       const m = score.get(c.speaker) || new Map();
       m.set(name, (m.get(name) || 0) + o);
@@ -44,9 +48,10 @@ export function namesFromMeet(cues, spans, me) {
   }
   const out = {};
   for (const [label, m] of score) {
+    if (scopes.get(label).size > 1) continue;
     const total = [...m.values()].reduce((a, b) => a + b, 0);
-    const [name, best] = [...m].sort((a, b) => b[1] - a[1])[0];
-    if (total > 0 && best / total >= 0.4) out[label] = name;
+    const sorted = [...m].sort((a, b) => b[1] - a[1]), [name, best] = sorted[0], second = sorted[1]?.[1] || 0;
+    if (best >= 0.35 && total > 0 && best / total >= 0.65 && (best - second) / total >= 0.25) out[label] = name;
   }
   return out;
 }

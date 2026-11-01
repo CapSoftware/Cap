@@ -269,13 +269,14 @@ export async function processChapter(dir, cfg, { force = [], speakers, glossary,
   if (carried) who = guessVoices(fs.readFileSync(srtFile, 'utf8'), who, null, ch.sources, carried);
   // A Meet call with the ux-walk extension: its captions say who each voice is. A confirmed map (speakerMap) still wins.
   let byMeet = false;
-  const meetEvents = fs.existsSync(srtFile) && !speakers && !ch.speakerMap ? readMeet(path.dirname(dir), ch.startMs, endMs) : [];
+  const sourceQualified = Array.isArray(speakers) && speakers.length === 0;
+  const meetEvents = fs.existsSync(srtFile) && (!speakers || sourceQualified) && !ch.speakerMap ? readMeet(path.dirname(dir), ch.startMs, endMs) : [];
   if (meetEvents.length) {
     const srtText = fs.readFileSync(srtFile, 'utf8');
     const names = list(ch.speakers ?? cfg.speakers);
     const fromMeet = namesFromMeet(parseSrt(srtText, [], {}), captionSpans(meetEvents, ch.startMs), names[0] || cfg.me);
     if (Object.keys(fromMeet).length) {
-      who = { ...(Array.isArray(who) ? guessVoices(srtText, names, split, ch.sources) : who), ...fromMeet };
+      who = { ...(sourceQualified ? {} : Array.isArray(who) ? guessVoices(srtText, names, split, ch.sources) : who), ...fromMeet };
       byMeet = true;
       step(`named ${Object.keys(fromMeet).length} voice(s) from Meet captions: ${Object.entries(fromMeet).map(([k, v]) => `${k} = ${v}`).join(', ')}`);
     }
@@ -324,6 +325,7 @@ export async function processChapter(dir, cfg, { force = [], speakers, glossary,
     transcript: fs.existsSync(srtFile), ...(transcriptError ? { transcriptError: transcriptError.message } : {}), processedS: Math.round((Date.now() - t0) / 1000),
     sections: sections.map((x) => ({ at: x.t, title: x.title })),
     voices: byMeet ? 'meet' : split?.split ? 'tracks' : byCall ? 'call' : 'diarization',
+    ...(byMeet ? { speakerIdentity: 'Inferred from Meet caption overlap; names are unconfirmed and source/chunk labels remain separate' } : {}),
     toolVersion: version,
   };
   fs.writeFileSync(path.join(dir, 'summary.json'), JSON.stringify(summary, null, 2));
