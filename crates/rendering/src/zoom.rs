@@ -82,6 +82,7 @@ impl SegmentBounds {
 
 const EXIT_BLEND_RATIO: f64 = 2.0;
 const INFEASIBLE_EXIT_PENALTY: f64 = 4.0;
+const MIN_EXIT_EDGE_INSET: f64 = 0.1;
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub struct CameraZone {
@@ -146,7 +147,9 @@ impl SegmentBounds {
         }
 
         let exit = |horizontal: bool, target: f64| {
-            if !(0.0..=1.0).contains(&target) {
+            // A camera sits a little inside the frame, and the sliver past it
+            // would pin the focus against the edge.
+            if !(MIN_EXIT_EDGE_INSET..=1.0 - MIN_EXIT_EDGE_INSET).contains(&target) {
                 return None;
             }
             let (axis_focus, axis_screen, axis_center, weight) = if horizontal {
@@ -428,6 +431,16 @@ mod test {
         let moved =
             SegmentBounds::center_avoiding_zone(2.0, XY::new(0.5, 0.5), center, &camera, None).0;
         assert_eq!(moved, center);
+    }
+
+    #[test]
+    fn camera_avoidance_moves_toward_the_frame_not_into_the_sliver_past_the_camera() {
+        let camera = zone(0.75, 0.65, 0.95, 0.92);
+        let focus = XY::new(0.86, 0.86);
+        let moved = SegmentBounds::center_avoiding_zone(2.0, focus, focus, &camera, None).0;
+        assert_clear(2.0, focus, moved, &camera);
+        let screen = SegmentBounds::focus_on_screen(2.0, focus, moved);
+        assert!(screen.x <= 0.75 || screen.y <= 0.65, "{screen:?}");
     }
 
     #[test]
