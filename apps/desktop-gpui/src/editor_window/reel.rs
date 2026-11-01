@@ -1,10 +1,3 @@
-//! Reel Mode: how Instagram's, TikTok's or YouTube's interface sits on top of
-//! a vertical video, so nothing important ends up underneath it.
-//!
-//! This is a stand-in for each app's chrome, in the positions the apps use on
-//! a 1080x1920 frame. It is drawn by the editor over the preview, never by the
-//! renderer, so it cannot reach an export.
-
 use super::*;
 use gpui::{AnyElement, Hsla, linear_color_stop, linear_gradient, svg};
 

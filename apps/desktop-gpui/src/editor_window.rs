@@ -299,8 +299,6 @@ pub fn letterbox(container: (f32, f32), frame: (f32, f32)) -> (f32, f32) {
     }
 }
 
-/// Where the preview draws a `frame_size` frame inside `bounds`: inset by
-/// [`STAGE_INSET`], letterboxed and centred.
 pub(crate) fn preview_frame_bounds(
     bounds: gpui::Bounds<Pixels>,
     frame_size: (f32, f32),
