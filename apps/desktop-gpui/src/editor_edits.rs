@@ -5303,7 +5303,7 @@ mod tests {
                 ],
                 "transitions": [
                     { "segmentIndex": 1, "type": "cross-fade", "duration": 0.5 },
-                    { "segmentIndex": 2, "type": "fade", "duration": 0.5 }
+                    { "segmentIndex": 2, "type": "cross-fade", "duration": 0.5 }
                 ],
                 "zoomSegments": [
                     { "start": 0.5, "end": 2.0, "amount": 1.4, "mode": "auto" },
