@@ -408,12 +408,8 @@ mod tests {
             recording_time: frame as f32 / 30.0,
             segment_has_camera: false,
         };
-        let mut zoom = ZoomTransformTimeline::from_project(
-            &project,
-            &cursor,
-            60.0,
-            constants.options.screen_size,
-        );
+        let mut zoom =
+            ZoomTransformTimeline::from_project(&project, &cursor, 60.0, &constants.options);
         zoom.ensure_precomputed_until(60.0);
         let mut uniforms = ProjectUniforms::new(
             constants,

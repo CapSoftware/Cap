@@ -570,6 +570,10 @@ pub struct Camera {
     pub scale_during_zoom: f32,
     #[serde(default)]
     pub background_blur: BackgroundBlurConfig,
+    /// Off unless set, so existing projects keep their framing; new
+    /// recordings opt in via [`ProjectConfiguration::for_new_recording`].
+    #[serde(default)]
+    pub zoom_avoids_camera: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Type, Default)]
@@ -614,6 +618,7 @@ impl Default for Camera {
             rounding_type: CornerStyle::default(),
             scale_during_zoom: Self::default_scale_during_zoom(),
             background_blur: BackgroundBlurConfig::default(),
+            zoom_avoids_camera: false,
         }
     }
 }
@@ -3178,6 +3183,24 @@ impl ProjectConfiguration {
         selected
     }
 
+    pub fn styled_background_and_camera_at(
+        &self,
+        time: f64,
+    ) -> (&BackgroundConfiguration, &Camera) {
+        let Some(timeline) = &self.timeline else {
+            return (&self.background, &self.camera);
+        };
+        let [background, camera, _] = self.style_indices_at(time);
+        (
+            background
+                .and_then(|index| timeline.style_segments[index].overrides.background.as_ref())
+                .unwrap_or(&self.background),
+            camera
+                .and_then(|index| timeline.style_segments[index].overrides.camera.as_ref())
+                .unwrap_or(&self.camera),
+        )
+    }
+
     pub fn style_at(&self, time: f64) -> Cow<'_, Self> {
         let Some(timeline) = &self.timeline else {
             return Cow::Borrowed(self);
@@ -3226,6 +3249,12 @@ impl ProjectConfiguration {
                             .is_some_and(|camera| !camera.hide)
                 })
             })
+    }
+
+    pub fn for_new_recording() -> Self {
+        let mut config = Self::default();
+        config.camera.zoom_avoids_camera = true;
+        config
     }
 
     fn default_screen_motion_blur() -> f32 {
@@ -3550,6 +3579,33 @@ mod tests {
             round_trip.background_blur.is_active(),
             cfg!(target_os = "macos")
         );
+    }
+
+    #[test]
+    fn camera_aware_zoom_is_on_for_new_recordings_only() {
+        assert!(
+            ProjectConfiguration::for_new_recording()
+                .camera
+                .zoom_avoids_camera
+        );
+        assert!(!ProjectConfiguration::default().camera.zoom_avoids_camera);
+        assert!(!Camera::default().zoom_avoids_camera);
+
+        let legacy: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "camera": { "size": 30.0 }
+        }))
+        .unwrap();
+        assert!(!legacy.camera.zoom_avoids_camera);
+
+        let no_camera: ProjectConfiguration =
+            serde_json::from_value(serde_json::json!({})).unwrap();
+        assert!(!no_camera.camera.zoom_avoids_camera);
+
+        let round_trip: ProjectConfiguration = serde_json::from_slice(
+            &serde_json::to_vec(&ProjectConfiguration::for_new_recording()).unwrap(),
+        )
+        .unwrap();
+        assert!(round_trip.camera.zoom_avoids_camera);
     }
 
     fn timeline_with_transitions(transitions: Vec<ClipTransition>) -> TimelineConfiguration {

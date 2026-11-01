@@ -69,8 +69,12 @@ async fn camera_geometry_matches_a_project_with_the_current_clips_dimensions() {
             for shape in [CameraShape::Source, CameraShape::Square] {
                 project.camera.shape = shape;
                 for number in [56, 90, 145] {
-                    let zoom =
-                        ZoomTransformTimeline::from_project(&project, &cursor, 6.0, screen_size);
+                    let zoom = ZoomTransformTimeline::from_project(
+                        &project,
+                        &cursor,
+                        6.0,
+                        cap_rendering::ZoomLayoutInputs::screen_only(screen_size),
+                    );
                     let shared = std::sync::Arc::new(project.clone());
                     constants.options.camera_size = Some(first_camera_size);
                     let actual = ProjectUniforms::new(

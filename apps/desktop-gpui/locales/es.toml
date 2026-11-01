@@ -2542,6 +2542,7 @@ shape_label = "Forma"
 size_during_zoom = "Tamaño durante el zoom"
 size_label = "Tamaño"
 title = "Cámara"
+zoom_avoids_camera = "Mantener los zooms lejos de la cámara"
 
 [editor.tabs.camera.blur]
 heavy = "Desenfoque intenso"

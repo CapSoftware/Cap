@@ -652,7 +652,7 @@ async fn run_preview(
                 &project,
                 &cursor,
                 duration,
-                screen_size,
+                &constants.options,
             );
             zoom.ensure_precomputed_until((request.frame_number as f32 + 1.0) / request.fps as f32);
             control.check()?;
@@ -774,7 +774,7 @@ fn cached_zoom<'a>(
     project: &ProjectConfiguration,
     cursor: &CursorEvents,
     duration: f64,
-    screen_size: XY<u32>,
+    options: &RenderOptions,
 ) -> &'a mut ZoomTransformTimeline {
     if let Some(position) = cache.iter().position(|(index, _)| *index == clip) {
         let entry = cache
@@ -787,13 +787,7 @@ fn cached_zoom<'a>(
         }
         cache.push_back((
             clip,
-            ZoomTransformTimeline::from_project_for_clip(
-                project,
-                cursor,
-                duration,
-                screen_size,
-                clip,
-            ),
+            ZoomTransformTimeline::from_project_for_clip(project, cursor, duration, options, clip),
         ));
     }
     &mut cache.back_mut().expect("Requested zoom entry is cached").1

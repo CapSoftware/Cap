@@ -2542,6 +2542,7 @@ shape_label = "形"
 size_during_zoom = "ズーム中のサイズ"
 size_label = "サイズ"
 title = "カメラ"
+zoom_avoids_camera = "ズームでカメラと重ねない"
 
 [editor.tabs.camera.blur]
 heavy = "強いぼかし"

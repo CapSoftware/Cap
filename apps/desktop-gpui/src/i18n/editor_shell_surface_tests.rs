@@ -441,6 +441,10 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         (tr::editor::tabs::camera::shadow(), "Shadow"),
         (tr::editor::tabs::camera::shadow_blur(), "Blur"),
         (tr::editor::tabs::camera::shadow_opacity(), "Opacity"),
+        (
+            tr::editor::tabs::camera::zoom_avoids_camera(),
+            "Keep zooms clear of camera",
+        ),
         (tr::editor::tabs::camera::shape::source(), "Source"),
         (tr::editor::tabs::camera::shape::square(), "Square"),
         (tr::editor::tabs::camera::shape_label(), "Shape"),

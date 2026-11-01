@@ -1613,6 +1613,23 @@ impl EditorWindow {
                     ),
             )
             .child(
+                ui::Subfield::plain(&theme, tr::editor::tabs::camera::zoom_avoids_camera()).child(
+                    ui::Toggle::plain(&theme, "camera-zoom-avoids", camera.zoom_avoids_camera)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            let next = !this.style_control_project().camera.zoom_avoids_camera;
+                            this.edit_project_without_timeline(
+                                "camera-zoom-avoids",
+                                window,
+                                cx,
+                                move |p| {
+                                    p.camera.zoom_avoids_camera = next;
+                                    true
+                                },
+                            );
+                        })),
+                ),
+            )
+            .child(
                 div()
                     .flex()
                     .flex_col()
