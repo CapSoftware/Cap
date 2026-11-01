@@ -33,8 +33,8 @@ the timeline on disk disagree. Every step below goes through the editor.
 
 2. Read the timeline with the `studio_timeline_inspect` MCP tool, passing the
    project's `project_path`. It returns the project's clips, each with
-   `clipIndex`, `startSeconds` and `endSeconds` in recording seconds. Those
-   seconds are the unit the whole workflow uses.
+   `clipIndex`, `clipId`, `startSeconds` and `endSeconds` in recording
+   seconds. Those seconds are the unit the whole workflow uses.
 
 3. Show the user the exact edit - clip index, edge, current value, requested
    value - and get explicit confirmation. A trim changes their recording.
@@ -45,16 +45,18 @@ the timeline on disk disagree. Every step below goes through the editor.
    |---|---|
    | `project_path` | the `.cap` directory |
    | `clip_index` | the index from step 2 |
+   | `expected_clip_id` | the clip's `clipId` from step 2 |
    | `edge` | `start` or `end` |
    | `time_seconds` | where the edge should land, in recording seconds |
    | `expected_current_seconds` | the edge's current value, from step 2 |
    | `confirmed` | `true`, after the user confirmed |
 
 5. Read the result. `appliedSeconds` is where the edge ended up after the
-   editor's clamps, `clamped` says whether that differs from what was asked
-   for, and `verifiedOnDisk` says whether the project file already holds the
-   new edge. A failed trim comes back as an error whose message is the
-   editor's own reason.
+   editor's clamps, and `clamped` says whether that differs from what was
+   asked for. A successful result is only returned once the project file
+   holds the new edge, so `verifiedOnDisk` is true; a trim the editor
+   applied but did not save comes back as an error instead. A failed trim
+   comes back as an error whose message is the editor's own reason.
 
 6. Export a copy when the user wants to check it:
 
@@ -64,9 +66,9 @@ the timeline on disk disagree. Every step below goes through the editor.
 
 ## Rules
 
-- `expected_current_seconds` is the value from the inspection. If the editor
-  has moved on since, the trim is refused as stale: inspect again and retry
-  with the new value rather than guessing.
+- `expected_current_seconds` and `expected_clip_id` are the values from the
+  inspection. If the editor has moved on since, the trim is refused as stale:
+  inspect again and retry with the new values rather than guessing.
 - One edge per call. The end of one clip and the start of the next are two
   calls, each confirmed on its own.
 - The editor's clamps win. A trim that would make a clip shorter than the
