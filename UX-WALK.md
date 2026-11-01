@@ -66,6 +66,10 @@ Automatic walk windows require Google Chrome. The walkthrough processor requires
 
 Use the existing Cap GPUI setup and packaging pipeline. Install pinned engine dependencies with `npm ci --ignore-scripts --prefix vendor/ux-walk`, then run `node scripts/bundle-ux-walk.mjs /path/to/Cap\ UX.app` after packaging. The bundle contains Node, the pinned engine and a fork-owned native lifecycle adapter in `Contents/Resources/ux-walk`. No separate UX Walk application is required.
 
+The bundler copies the Node that runs it, so run it with a self-contained Node 22, such as the nodejs.org build or `actions/setup-node`. It refuses any other version, a Node linked to libraries outside `/usr/lib` and `/System`, such as a Homebrew one, and a Node that cannot run `--version` from the app.
+
+The bundler signs Node, then the app, and its last step verifies the app's seal. Changing any file inside the app after that breaks the seal, and macOS then reports the app as damaged. After touching the bundle, rerun `node scripts/bundle-ux-walk.mjs` with the same `CAP_UX_SIGNING_IDENTITY` so it signs and verifies again.
+
 Checkpoint work and full transcription share an OS-held ownership guard; ordinary video/report processing has a separate guard and can overlap live transcription. Guard identity uses the resolved walk directory and filesystem identity, so aliases share ownership. PID files are advisory for current guards; known-live legacy owners still block a mixed-version attempt. Crash metadata is archived, unknown files are retained, and the OS guard is released only after owned metadata cleanup. The loopback-only socket accepts no application protocol; an unrelated port collision fails closed rather than starting a second writer.
 
 The public engine snapshot contains selected source files, license, contract tests and per-file hashes in `SOURCE.json`. Refresh it with `scripts/sync-ux-walk.mjs` from a reviewed canonical revision; do not edit the snapshot directly. The lifecycle adapter is maintained under `apps/desktop-gpui/ux-walk`.

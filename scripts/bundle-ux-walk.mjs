@@ -6,12 +6,65 @@ import { verifyUxWalkSource } from "./sync-ux-walk.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const source = path.join(root, "vendor", "ux-walk");
+export const bundledNodeMajor = 22;
+const nodeAdvice = `Run this script with a self-contained Node ${bundledNodeMajor}, such as the nodejs.org build. Package manager builds often link libraries the app does not carry.`;
 
 function run(command, args) {
 	return execFileSync(command, args, {
 		encoding: "utf8",
 		stdio: ["ignore", "pipe", "pipe"],
 	});
+}
+
+export function linkedLibraries(otoolOutput) {
+	return [
+		...new Set(
+			otoolOutput
+				.split("\n")
+				.filter((line) => /^\s+\S/.test(line))
+				.map((line) => line.trim().replace(/ \(compatibility version .*$/, "")),
+		),
+	];
+}
+
+export function isSystemLibrary(library) {
+	return (
+		!library.split("/").includes("..") &&
+		(library.startsWith("/usr/lib/") || library.startsWith("/System/"))
+	);
+}
+
+export function verifyBundledNode(node) {
+	const libraries = linkedLibraries(run("otool", ["-L", "-arch", "all", node]));
+	if (libraries.length === 0) {
+		throw new Error(`Could not read the libraries of ${node}. ${nodeAdvice}`);
+	}
+	const foreign = libraries.filter((library) => !isSystemLibrary(library));
+	if (foreign.length > 0) {
+		throw new Error(
+			`The bundled Node links libraries outside the system (${foreign.length}), including ${foreign.slice(0, 3).join(", ")}. ${nodeAdvice}`,
+		);
+	}
+	let version;
+	try {
+		// An empty environment keeps DYLD_* settings from hiding a load failure.
+		version = execFileSync(node, ["--version"], {
+			encoding: "utf8",
+			env: {},
+			stdio: ["ignore", "pipe", "pipe"],
+			timeout: 60000,
+		}).trim();
+	} catch (error) {
+		throw new Error(
+			`The bundled Node could not run: ${error.message}\n${nodeAdvice}`,
+		);
+	}
+	if (!version.startsWith(`v${bundledNodeMajor}.`)) {
+		throw new Error(
+			`The bundled Node reported "${version}", expected version ${bundledNodeMajor}. ${nodeAdvice}`,
+		);
+	}
+	return version;
 }
 
 export async function bundleUxWalk(app) {
@@ -57,8 +110,16 @@ export async function bundleUxWalk(app) {
 		path.join(engine, "node_modules", "playwright-core"),
 		{ recursive: true },
 	);
-	await fs.copyFile(process.execPath, path.join(engine, "bin", "node"));
-	await fs.chmod(path.join(engine, "bin", "node"), 0o755);
+	const node = path.join(engine, "bin", "node");
+	await fs.copyFile(process.execPath, node);
+	await fs.chmod(node, 0o755);
+	let nodeVersion;
+	try {
+		nodeVersion = verifyBundledNode(node);
+	} catch (error) {
+		await fs.rm(engine, { recursive: true, force: true });
+		throw error;
+	}
 	const nodeLicense = path.resolve(
 		path.dirname(process.execPath),
 		"..",
@@ -91,7 +152,7 @@ export async function bundleUxWalk(app) {
 	}
 	await fs.writeFile(
 		path.join(resources, "engine-source.json"),
-		`${JSON.stringify({ repository: "https://github.com/CantrellJax/ux-walk-cap", sourceURL: `${parent.UXWalkSourceURL ?? `https://github.com/CantrellJax/ux-walk-cap/tree/${run("git", ["-C", root, "rev-parse", "HEAD"]).trim()}`}/vendor/ux-walk`, revision, node: process.version }, null, 2)}\n`,
+		`${JSON.stringify({ repository: "https://github.com/CantrellJax/ux-walk-cap", sourceURL: `${parent.UXWalkSourceURL ?? `https://github.com/CantrellJax/ux-walk-cap/tree/${run("git", ["-C", root, "rev-parse", "HEAD"]).trim()}`}/vendor/ux-walk`, revision, node: nodeVersion }, null, 2)}\n`,
 	);
 	for (const key of ["CFBundleName", "CFBundleDisplayName"]) {
 		run("plutil", [
@@ -103,7 +164,7 @@ export async function bundleUxWalk(app) {
 		]);
 	}
 	const identity = process.env.CAP_UX_SIGNING_IDENTITY || "-";
-	for (const target of [path.join(engine, "bin", "node"), path.resolve(app)]) {
+	for (const target of [node, path.resolve(app)]) {
 		run("codesign", [
 			"--force",
 			"--sign",
@@ -112,6 +173,7 @@ export async function bundleUxWalk(app) {
 			target,
 		]);
 	}
+	verifyBundledNode(node);
 	run("codesign", ["--verify", "--deep", "--strict", path.resolve(app)]);
 	console.log(
 		`Bundled the native UX Walk engine ${revision} into ${path.basename(app)}`,

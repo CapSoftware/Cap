@@ -39,7 +39,7 @@ git clone https://github.com/CantrellJax/ux-walk-cap.git
 cd ux-walk-cap
 ```
 
-Use Xcode 26 or newer with the Cap setup in [UPSTREAM-DEVELOPMENT.md](UPSTREAM-DEVELOPMENT.md) and `bun run gpui:build <target>`, install the engine dependencies with `npm ci --ignore-scripts --prefix vendor/ux-walk`, then run `node scripts/bundle-ux-walk.mjs /path/to/Cap\ UX.app` after packaging. The engine comes from the pinned source snapshot; a separate UX Walk installation is unnecessary.
+Use Xcode 26 or newer with the Cap setup in [UPSTREAM-DEVELOPMENT.md](UPSTREAM-DEVELOPMENT.md) and `bun run gpui:build <target>`, install the engine dependencies with `npm ci --ignore-scripts --prefix vendor/ux-walk`, then run `node scripts/bundle-ux-walk.mjs /path/to/Cap\ UX.app` after packaging with a self-contained Node 22, such as the nodejs.org build. The bundler refuses a Homebrew Node. It signs the app and verifies the seal last, so rerun it after changing anything inside the app, or macOS reports the app as damaged. The engine comes from the pinned source snapshot; a separate UX Walk installation is unnecessary.
 
 ## Contribute
 
