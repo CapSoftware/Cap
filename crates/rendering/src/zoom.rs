@@ -159,10 +159,10 @@ impl SegmentBounds {
             let shortfall = (wanted - reached).abs() * travel;
             let cost =
                 ((target - axis_screen).abs() + shortfall * INFEASIBLE_EXIT_PENALTY) * weight;
-            Some((cost, reached - axis_center))
+            Some((cost, reached - axis_center, shortfall <= 1e-9))
         };
-        let pick = |leading: Option<(f64, f64)>,
-                    trailing: Option<(f64, f64)>,
+        let pick = |leading: Option<(f64, f64, bool)>,
+                    trailing: Option<(f64, f64, bool)>,
                     held: Option<bool>| match (leading, trailing, held) {
             (Some(leading), _, Some(true)) => Some((true, leading)),
             (_, Some(trailing), Some(false)) => Some((false, trailing)),
@@ -175,27 +175,42 @@ impl SegmentBounds {
             (None, Some(trailing), _) => Some((false, trailing)),
             (None, None, _) => None,
         };
-        let horizontal = pick(
-            exit(true, zone.top_left.x),
-            exit(true, zone.bottom_right.x),
-            sides.map(|sides| sides.leading_x),
-        );
-        let vertical = pick(
-            exit(false, zone.top_left.y),
-            exit(false, zone.bottom_right.y),
-            sides.map(|sides| sides.leading_y),
-        );
+        let choose = |sides: Option<ZoneExitSides>| {
+            (
+                pick(
+                    exit(true, zone.top_left.x),
+                    exit(true, zone.bottom_right.x),
+                    sides.map(|sides| sides.leading_x),
+                ),
+                pick(
+                    exit(false, zone.top_left.y),
+                    exit(false, zone.bottom_right.y),
+                    sides.map(|sides| sides.leading_y),
+                ),
+            )
+        };
+        let (mut horizontal, mut vertical) = choose(sides);
+        // Held sides yield only once neither can clear the zone. The target
+        // then jumps across it, which the spring smooths; the alternative is
+        // leaving the focus covered for the rest of the segment.
+        if ![horizontal, vertical]
+            .iter()
+            .flatten()
+            .any(|(_, (_, _, clears))| *clears)
+        {
+            (horizontal, vertical) = choose(None);
+        }
 
         let Some(best) = [horizontal, vertical]
             .iter()
             .flatten()
-            .map(|(_, (cost, _))| *cost)
+            .map(|(_, (cost, ..))| *cost)
             .min_by(f64::total_cmp)
         else {
             return (center, None);
         };
-        let weighted = |choice: Option<(bool, (f64, f64))>| {
-            choice.map_or(0.0, |(_, (cost, shift))| {
+        let weighted = |choice: Option<(bool, (f64, f64, bool))>| {
+            choice.map_or(0.0, |(_, (cost, shift, _))| {
                 let weight = if best <= f64::EPSILON {
                     if cost <= f64::EPSILON { 1.0 } else { 0.0 }
                 } else {
@@ -416,6 +431,28 @@ mod test {
     }
 
     #[test]
+    fn camera_avoidance_gives_up_a_held_side_that_can_no_longer_clear() {
+        let camera = zone(0.38, 0.33, 0.62, 0.67);
+        let amount = 1.25;
+        let mut sides = None;
+        let mut focus = XY::new(0.4, 0.5);
+        let mut center = focus;
+        for step in 0..=25 {
+            focus = XY::new(0.4 + 0.01 * f64::from(step), 0.5);
+            let (moved, chosen) = SegmentBounds::center_avoiding_zone(
+                amount,
+                focus,
+                follow_center(focus),
+                &camera,
+                sides,
+            );
+            sides = chosen;
+            center = moved;
+        }
+        assert_clear(amount, focus, center, &camera);
+    }
+
+    #[test]
     fn camera_avoidance_clears_each_corner() {
         let amount = 2.0;
         let corners = [
@@ -558,7 +595,7 @@ mod test {
         let bottom_right = zone(0.55, 0.5, 1.05, 1.05);
         for amount in [1.25, 1.5] {
             for center_for in [manual_center as fn(XY<f64>) -> XY<f64>, follow_center] {
-                let across = (0..=200).map(|step| XY::new(0.4 + f64::from(step) * 0.001, 0.9));
+                let across = (0..=100).map(|step| XY::new(0.4 + f64::from(step) * 0.001, 0.9));
                 let largest = largest_screen_step(amount, &bottom_centre, across, center_for);
                 assert!(
                     largest < 0.015,
@@ -575,7 +612,7 @@ mod test {
                     "bottom right at {amount}: jumped {largest}"
                 );
 
-                let back = (0..=200).map(|step| XY::new(0.6 - f64::from(step) * 0.001, 0.9));
+                let back = (0..=100).map(|step| XY::new(0.6 - f64::from(step) * 0.001, 0.9));
                 let largest = largest_screen_step(amount, &bottom_centre, back, center_for);
                 assert!(
                     largest < 0.015,

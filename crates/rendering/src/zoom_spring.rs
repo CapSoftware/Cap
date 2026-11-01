@@ -26,12 +26,13 @@
 //! export matches playback by construction.
 
 use cap_project::{
-    Crop, CursorEvents, ProjectConfiguration, SceneMode, ScreenMovementSpring,
-    TimelineConfiguration, XY, ZoomMode, ZoomSegment,
+    Crop, CursorEvents, ProjectConfiguration, ScreenMovementSpring, TimelineConfiguration, XY,
+    ZoomMode, ZoomSegment,
 };
 
 use crate::{
     ProjectUniforms, RenderOptions,
+    scene::{InterpolatedScene, SceneSegmentsCursor},
     spring_mass_damper::{SpringMassDamperSimulation, SpringMassDamperSimulationConfig},
     zoom::{CameraZone, InterpolatedZoom, SegmentBounds, ZoneExitSides},
 };
@@ -164,12 +165,14 @@ fn camera_zone_spans(
             .style_segments
             .iter()
             .flat_map(|segment| [segment.start, segment.end])
-            .chain(
-                timeline
-                    .scene_segments
-                    .iter()
-                    .flat_map(|segment| [segment.start, segment.end]),
-            )
+            .chain(timeline.scene_segments.iter().flat_map(|segment| {
+                [
+                    segment.start - segment.transition_in.max(0.0),
+                    segment.start,
+                    segment.end - segment.transition_out.max(0.0),
+                    segment.end,
+                ]
+            }))
             .filter(|time| time.is_finite() && *time > 0.0),
     );
     boundaries.sort_by(f64::total_cmp);
@@ -180,11 +183,10 @@ fn camera_zone_spans(
         let probe = boundaries
             .get(index + 1)
             .map_or(start + 1.0, |next| (start + next) / 2.0);
-        let camera_is_overlay = timeline
-            .scene_segments
-            .iter()
-            .find(|segment| probe >= segment.start && probe < segment.end)
-            .is_none_or(|segment| matches!(segment.mode, SceneMode::Default));
+        let scene =
+            InterpolatedScene::new(SceneSegmentsCursor::new(probe, &timeline.scene_segments));
+        let camera_is_overlay =
+            scene.regular_camera_transition_opacity() > 0.01 && scene.split_factor <= 0.0;
         let zone = if camera_is_overlay {
             let (background, camera) = project.styled_background_and_camera_at(probe);
             if std::ptr::eq(background, &project.background) {
@@ -1448,7 +1450,8 @@ impl ZoomTransformTimeline {
 mod tests {
     use cap_project::{
         BackgroundConfiguration, ClipTransition, ClipTransitionType, CursorClickEvent,
-        CursorMoveEvent, GlideDirection, StyleOverrides, StyleSegment, TimelineSegment, ZoomMode,
+        CursorMoveEvent, GlideDirection, SceneMode, StyleOverrides, StyleSegment, TimelineSegment,
+        ZoomMode,
     };
 
     use super::*;
@@ -3723,6 +3726,22 @@ mod tests {
             aware.sample(0.5).bounds,
             "framing changed before any zoom"
         );
+    }
+
+    #[test]
+    fn camera_avoidance_covers_the_fade_back_from_a_hidden_camera() {
+        let mut project = project_with_camera(vec![manual_segment(1.0, 9.0, 2.0, 0.85, 0.8)]);
+        project.timeline.as_mut().unwrap().scene_segments = vec![cap_project::SceneSegment {
+            start: 2.0,
+            end: 6.0,
+            mode: SceneMode::HideCamera,
+            split_layout: None,
+            transition_in: 0.3,
+            transition_out: 1.0,
+        }];
+        let spans = camera_zone_spans(&project, camera_layout());
+        assert!(camera_zone_at(&spans, 4.0).is_none());
+        assert!(camera_zone_at(&spans, 5.5).is_some());
     }
 
     #[test]

@@ -960,7 +960,7 @@ pub async fn render_video_to_channel(
                 project,
                 &segment.cursor,
                 duration,
-                &constants.options,
+                constants.zoom_layout(recording_clip as u32),
                 recording_clip as u32,
             )
         })
@@ -978,7 +978,7 @@ pub async fn render_video_to_channel(
                         project,
                         &segment.cursor,
                         duration,
-                        &constants.options,
+                        constants.zoom_layout(recording_clip as u32),
                         recording_clip as u32,
                     )
                 })
@@ -1534,7 +1534,7 @@ pub async fn render_video_to_channel_nv12(
                 project,
                 &segment.cursor,
                 duration,
-                &constants.options,
+                constants.zoom_layout(recording_clip as u32),
                 recording_clip as u32,
             )
         })
@@ -1552,7 +1552,7 @@ pub async fn render_video_to_channel_nv12(
                         project,
                         &segment.cursor,
                         duration,
-                        &constants.options,
+                        constants.zoom_layout(recording_clip as u32),
                         recording_clip as u32,
                     )
                 })
@@ -2579,6 +2579,7 @@ pub struct RenderVideoConstants {
     pub queue: wgpu::Queue,
     pub device: wgpu::Device,
     pub options: RenderOptions,
+    clip_camera_sizes: Vec<Option<XY<u32>>>,
     pub meta: StudioRecordingMeta,
     pub recording_meta: RecordingMeta,
     pub background_textures: std::sync::Arc<BackgroundTextureCache>,
@@ -2782,7 +2783,49 @@ pub struct SharedWgpuDevice {
     pub is_software_adapter: bool,
 }
 
+fn clip_camera_sizes(segments: &[SegmentRecordings]) -> Vec<Option<XY<u32>>> {
+    segments
+        .iter()
+        .map(|segment| {
+            segment
+                .camera
+                .as_ref()
+                .map(|camera| XY::new(camera.width, camera.height))
+        })
+        .collect()
+}
+
 impl RenderVideoConstants {
+    /// `options` describes the first clip only; a later clip can have a
+    /// different camera, or none.
+    pub fn zoom_layout(&self, recording_clip: u32) -> ZoomLayoutInputs {
+        ZoomLayoutInputs {
+            screen_size: self.options.screen_size,
+            camera_size: self
+                .clip_camera_sizes
+                .get(recording_clip as usize)
+                .copied()
+                .unwrap_or(self.options.camera_size),
+        }
+    }
+
+    pub fn zoom_inputs_match(
+        &self,
+        before: &ProjectConfiguration,
+        after: &ProjectConfiguration,
+    ) -> bool {
+        let mut layouts: Vec<ZoomLayoutInputs> = Vec::new();
+        for clip in 0..self.clip_camera_sizes.len().max(1) {
+            let layout = self.zoom_layout(clip as u32);
+            if !layouts.contains(&layout) {
+                layouts.push(layout);
+            }
+        }
+        layouts
+            .into_iter()
+            .all(|layout| ZoomTransformTimeline::project_inputs_match(before, after, layout))
+    }
+
     pub fn with_frozen_recorded_cursors(mut self, assets: FrozenRecordedCursorAssets) -> Self {
         self.frozen_recorded_cursors = Some(assets);
         self
@@ -2830,6 +2873,7 @@ impl RenderVideoConstants {
             recording_meta,
             frozen_recorded_cursors: None,
             project_styles: ProjectStyleCache::default(),
+            clip_camera_sizes: clip_camera_sizes(segments),
             is_software_adapter: shared.is_software_adapter,
             adapter_name,
         })
@@ -2861,6 +2905,7 @@ impl RenderVideoConstants {
             recording_meta,
             frozen_recorded_cursors: None,
             project_styles: ProjectStyleCache::default(),
+            clip_camera_sizes: Vec::new(),
             is_software_adapter: shared.is_software_adapter,
             adapter_name,
         }
@@ -2882,7 +2927,14 @@ impl RenderVideoConstants {
             preserve_screen_alpha: false,
         };
 
-        Self::new_with_options(options, recording_meta, meta).await
+        Ok(Self::new_with_options(options, recording_meta, meta)
+            .await?
+            .with_clip_camera_sizes(clip_camera_sizes(segments)))
+    }
+
+    pub fn with_clip_camera_sizes(mut self, sizes: Vec<Option<XY<u32>>>) -> Self {
+        self.clip_camera_sizes = sizes;
+        self
     }
 
     /// [`Self::new`] with the `RenderOptions` supplied by the caller instead
@@ -2923,6 +2975,7 @@ impl RenderVideoConstants {
             recording_meta,
             frozen_recorded_cursors: None,
             project_styles: ProjectStyleCache::default(),
+            clip_camera_sizes: Vec::new(),
             is_software_adapter,
             adapter_name,
         })
@@ -6634,6 +6687,7 @@ mod style_image_tests {
             recording_meta,
             frozen_recorded_cursors: None,
             project_styles: ProjectStyleCache::default(),
+            clip_camera_sizes: Vec::new(),
             background_textures: Arc::new(BackgroundTextureCache::default()),
             is_software_adapter: false,
         };
@@ -6895,6 +6949,7 @@ mod export_order_tests {
             recording_meta,
             frozen_recorded_cursors: None,
             project_styles: ProjectStyleCache::default(),
+            clip_camera_sizes: Vec::new(),
             background_textures: Arc::new(BackgroundTextureCache::default()),
             is_software_adapter: is_software_adapter || software_path,
         })
@@ -7232,6 +7287,7 @@ mod nv12_flush_tests {
             recording_meta,
             frozen_recorded_cursors: None,
             project_styles: ProjectStyleCache::default(),
+            clip_camera_sizes: Vec::new(),
             background_textures: Arc::new(BackgroundTextureCache::default()),
             is_software_adapter,
         })
