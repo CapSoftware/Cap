@@ -23,7 +23,6 @@ vi.mock("@cap/env", () => ({
 }));
 vi.mock("@cap/database/auth/auth-options", () => ({ authOptions: () => ({}) }));
 vi.mock("@cap/database/emails/config", () => ({ sendEmail: vi.fn() }));
-vi.mock("@/actions/loom", () => ({}));
 vi.mock("@/app/(org)/dashboard/analytics/data", () => ({}));
 vi.mock("@/lib/account-deletion-request", () => ({}));
 vi.mock("@/lib/desktop-segments-finalization", () => ({}));

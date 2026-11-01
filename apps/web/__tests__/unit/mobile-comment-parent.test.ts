@@ -21,7 +21,6 @@ const mocks = vi.hoisted(() => ({ notify: vi.fn(async () => undefined) }));
 vi.mock("server-only", () => ({}));
 vi.mock("@cap/database/auth/auth-options", () => ({ authOptions: () => ({}) }));
 vi.mock("@cap/database/emails/config", () => ({ sendEmail: vi.fn() }));
-vi.mock("@/actions/loom", () => ({ downloadLoomVideo: vi.fn() }));
 vi.mock("@/app/(org)/dashboard/analytics/data", () => ({
 	getOrgAnalyticsData: vi.fn(),
 }));
