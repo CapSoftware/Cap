@@ -1716,7 +1716,7 @@ impl EditorWindow {
             .flex_col()
             .gap(px(14.))
             .child(toggle)
-            .when(enabling, |column| {
+            .when(enabling || self.pending_silence_delay().is_some(), |column| {
                 column.child(
                     div()
                         .text_size(px(12.))

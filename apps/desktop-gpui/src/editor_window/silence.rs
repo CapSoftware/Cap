@@ -9,17 +9,27 @@ use cap_rendering::{ClipSpeech, regenerate_silence_scenes};
 
 /// What to do with the speech analysis once it lands. Cleared when the user
 /// backs out, because the running analysis cannot be stopped.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum SpeechRequest {
     Enable,
-    Regenerate,
+    Delay(f32),
 }
 
 impl EditorWindow {
     fn cached_clip_speech(&self) -> Option<Arc<Vec<Option<ClipSpeech>>>> {
         self.clip_speech
             .clone()
-            .filter(|speech| speech.len() == self.clip_display_durations.len())
+            .filter(|speech| {
+                speech.len() == self.clip_display_durations.len()
+                    && speech.iter().any(Option::is_some)
+            })
+    }
+
+    pub(crate) fn pending_silence_delay(&self) -> Option<f32> {
+        match self.speech_request {
+            Some(SpeechRequest::Delay(delay)) => Some(delay),
+            _ => None,
+        }
     }
 
     pub(crate) fn enabling_camera_silence(&self) -> bool {
@@ -78,10 +88,11 @@ impl EditorWindow {
                     Some(SpeechRequest::Enable) => this.enable_camera_silence(&speech, window, cx),
                     // Unreadable mics count as speech, which would wipe the
                     // scenes the delay was only meant to adjust.
-                    Some(SpeechRequest::Regenerate) if speech.iter().any(Option::is_some) => {
-                        if let Some(delay) = this.project.camera_silence_delay {
-                            this.write_camera_silence(delay, &speech, window, cx);
-                        }
+                    Some(SpeechRequest::Delay(delay))
+                        if this.project.camera_silence_delay.is_some()
+                            && speech.iter().any(Option::is_some) =>
+                    {
+                        this.write_camera_silence(delay, &speech, window, cx);
                     }
                     _ => {}
                 }
@@ -120,15 +131,7 @@ impl EditorWindow {
             self.write_camera_silence(delay, &speech, window, cx);
             return;
         }
-        self.edit_timeline_project(
-            |project| {
-                project.camera_silence_delay = Some(delay);
-                true
-            },
-            window,
-            cx,
-        );
-        self.speech_request = Some(SpeechRequest::Regenerate);
+        self.speech_request = Some(SpeechRequest::Delay(delay));
         self.analyze_speech(window, cx);
     }
 
