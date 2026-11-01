@@ -12,10 +12,10 @@ use ffmpeg::{
 use tracing::{debug, error, info, trace, warn};
 
 use crate::base::{EncoderBase, PacketSink};
-use crate::video::HwUpload;
 use crate::video::h264_packet::H264PacketEncoder;
 #[cfg(target_os = "macos")]
 use crate::video::videotoolbox_hw::VideoToolboxHwFrames;
+use crate::video::{HwUpload, VideoCodec};
 use std::sync::Arc;
 
 fn is_420(format: ffmpeg::format::Pixel) -> bool {
@@ -36,6 +36,7 @@ pub struct H264EncoderBuilder {
     is_export: bool,
     crf: Option<u8>,
     software_tuning: Option<SoftwareEncoderTuning>,
+    codec: VideoCodec,
 }
 
 /// libx264 settings for an export split across several encoders running at
@@ -92,8 +93,34 @@ pub enum H264EncoderError {
 fn is_hardware_h264(codec_name: &str) -> bool {
     matches!(
         codec_name,
-        "h264_videotoolbox" | "h264_nvenc" | "h264_qsv" | "h264_amf" | "h264_mf" | "h264_vaapi"
+        "h264_videotoolbox"
+            | "h264_nvenc"
+            | "h264_qsv"
+            | "h264_amf"
+            | "h264_mf"
+            | "h264_vaapi"
+            | "hevc_videotoolbox"
+            | "hevc_nvenc"
+            | "hevc_qsv"
+            | "hevc_amf"
+            | "hevc_mf"
+            | "hevc_vaapi"
     )
+}
+
+/// MP4 players on Apple platforms only open HEVC tracks tagged `hvc1`, while
+/// FFmpeg's MP4 muxer writes `hev1` unless told otherwise.
+fn tag_hevc_for_apple_players(stream: &mut format::stream::StreamMut, codec: &Codec) {
+    if codec.id() != ffmpeg::codec::Id::HEVC {
+        return;
+    }
+    let tag = u32::from_le_bytes(*b"hvc1");
+    unsafe {
+        let parameters = (*stream.as_mut_ptr()).codecpar;
+        if !parameters.is_null() {
+            (*parameters).codec_tag = tag;
+        }
+    }
 }
 
 impl H264EncoderBuilder {
@@ -112,7 +139,13 @@ impl H264EncoderBuilder {
             is_export: false,
             crf: None,
             software_tuning: None,
+            codec: VideoCodec::H264,
         }
+    }
+
+    pub fn with_codec(mut self, codec: VideoCodec) -> Self {
+        self.codec = codec;
+        self
     }
 
     pub fn with_software_tuning(mut self, tuning: SoftwareEncoderTuning) -> Self {
@@ -194,6 +227,7 @@ impl H264EncoderBuilder {
             self.encoder_priority_override,
             self.is_export,
             self.crf,
+            self.codec,
         );
         if candidates.is_empty() {
             return Err(H264EncoderError::CodecNotFound);
@@ -332,6 +366,7 @@ impl H264EncoderBuilder {
         output_stream.set_time_base((1, H264Encoder::TIME_BASE));
         output_stream.set_rate(input_config.frame_rate);
         output_stream.set_parameters(&encoder);
+        tag_hevc_for_apple_players(&mut output_stream, &codec);
 
         Ok(H264Encoder {
             base: EncoderBase::new(stream_index),
@@ -363,6 +398,7 @@ impl H264EncoderBuilder {
             Some(&["libx264"]),
             self.is_export,
             self.crf,
+            self.codec,
         );
         let (codec, mut encoder_options) = candidates
             .into_iter()
@@ -470,14 +506,18 @@ impl H264EncoderBuilder {
             ));
         }
 
-        let codec =
-            encoder::find_by_name("h264_videotoolbox").ok_or(H264EncoderError::CodecNotFound)?;
+        let codec = self
+            .codec
+            .encoder_name("h264_videotoolbox")
+            .and_then(encoder::find_by_name)
+            .ok_or(H264EncoderError::CodecNotFound)?;
         let encoder_options = get_codec_and_options(
             &input_config,
             self.preset,
             Some(&["h264_videotoolbox"]),
             self.is_export,
             None,
+            self.codec,
         )
         .into_iter()
         .next()
@@ -529,12 +569,14 @@ impl H264EncoderBuilder {
         output_stream.set_time_base((1, H264Encoder::TIME_BASE));
         output_stream.set_rate(input_config.frame_rate);
         output_stream.set_parameters(&encoder);
+        tag_hevc_for_apple_players(&mut output_stream, &codec);
 
         info!(
             width = output_width,
             height = output_height,
             fps = input_config.frame_rate.0 as f32 / input_config.frame_rate.1.max(1) as f32,
-            "Selected hardware H264 encoder with zero-copy VideoToolbox input"
+            encoder = %codec.name(),
+            "Selected hardware encoder with zero-copy VideoToolbox input"
         );
 
         Ok(H264Encoder {
@@ -578,6 +620,7 @@ impl H264EncoderBuilder {
             self.encoder_priority_override,
             self.is_export,
             self.crf,
+            self.codec,
         );
         if candidates.is_empty() {
             return Err(H264EncoderError::CodecNotFound);
@@ -761,7 +804,7 @@ fn open_video_encoder_inner(
 ) -> Result<OpenedVideoEncoder, H264EncoderError> {
     // `h264_vaapi` lists only VA surfaces; the frames it is handed are NV12
     // that gets uploaded into one.
-    let vaapi = codec.name() == "h264_vaapi";
+    let vaapi = matches!(codec.name(), "h264_vaapi" | "hevc_vaapi");
     let encoder_supports_input_format = if vaapi {
         input_config.pixel_format == ffmpeg::format::Pixel::NV12
     } else {
@@ -986,7 +1029,7 @@ fn open_on_a_vaapi_node(
         };
         match open(&hw_upload) {
             Ok(encoder) => {
-                debug!(node = %node.display(), "H264 encodes through VA-API");
+                debug!(node = %node.display(), "Encoding through VA-API");
                 return Ok((encoder, hw_upload));
             }
             Err(error) => errors.push(format!("{}: {error}", node.display())),
@@ -1447,6 +1490,7 @@ fn get_codec_and_options(
     encoder_priority_override: Option<&'static [&'static str]>,
     is_export: bool,
     crf: Option<u8>,
+    video_codec: VideoCodec,
 ) -> Vec<(Codec, Dictionary<'static>)> {
     let keyframe_interval_secs = DEFAULT_KEYFRAME_INTERVAL_SECS;
     let denominator = config.frame_rate.denominator();
@@ -1466,13 +1510,28 @@ fn get_codec_and_options(
     let mut encoders = Vec::new();
 
     let crf_str = crf.map(|v| v.to_string());
+    let hevc = video_codec == VideoCodec::Hevc;
 
     for encoder_name in encoder_priority {
-        let Some(codec) = encoder::find_by_name(encoder_name) else {
+        let Some(codec) = video_codec
+            .encoder_name(encoder_name)
+            .and_then(encoder::find_by_name)
+        else {
             continue;
         };
 
         let mut options = Dictionary::new();
+
+        if hevc {
+            set_hevc_options(
+                &mut options,
+                encoder_name,
+                is_export,
+                &keyframe_interval_str,
+            );
+            encoders.push((codec, options));
+            continue;
+        }
 
         match *encoder_name {
             "h264_videotoolbox" => {
@@ -1587,6 +1646,116 @@ fn get_codec_and_options(
     encoders
 }
 
+/// The first export encoder for `codec` that opens on this machine and
+/// survives the gray round trip of [`hardware_encoder_self_test`], probed
+/// once per process. H.264 always ends at libx264; HEVC has only hardware
+/// encoders, so `None` means this machine cannot export HEVC.
+pub fn probe_export_encoder(codec: VideoCodec) -> Option<String> {
+    use std::{
+        collections::HashMap,
+        sync::{Mutex, OnceLock},
+    };
+
+    type Probed = Mutex<HashMap<VideoCodec, Option<String>>>;
+    static PROBED: OnceLock<Probed> = OnceLock::new();
+    let probed = PROBED.get_or_init(Default::default);
+    if let Some(result) = probed
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(&codec)
+    {
+        return result.clone();
+    }
+
+    let config = VideoInfo::from_raw_ffmpeg(ffmpeg::format::Pixel::NV12, 1280, 720, 30);
+    let result = get_codec_and_options(
+        &config,
+        H264Preset::Ultrafast,
+        export_encoder_priority_override(&config, H264Preset::Ultrafast),
+        true,
+        None,
+        codec,
+    )
+    .into_iter()
+    .find_map(|(candidate, options)| {
+        let name = candidate.name().to_string();
+        if !is_hardware_h264(&name) {
+            return Some(name);
+        }
+        hardware_encoder_self_test(
+            candidate,
+            options,
+            &config,
+            config.width,
+            config.height,
+            0.15,
+            None,
+        )
+        .inspect_err(|reason| debug!(encoder = %name, %reason, "Export encoder probe failed"))
+        .ok()
+        .map(|()| name)
+    });
+    info!(?codec, encoder = ?result, "Probed export encoder");
+    probed
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(codec, result.clone());
+    result
+}
+
+/// Options for the HEVC encoder standing in for `h264_name`. Hardware
+/// encoders keep their H.264 export tuning where the HEVC encoder accepts the
+/// same option.
+fn set_hevc_options(
+    options: &mut Dictionary<'static>,
+    h264_name: &str,
+    is_export: bool,
+    keyframe_interval: &str,
+) {
+    match h264_name {
+        "h264_videotoolbox" => {
+            options.set("profile", "main");
+            if is_export {
+                options.set("realtime", "false");
+                options.set("allow_sw", "0");
+                options.set("g", keyframe_interval);
+            } else {
+                options.set("realtime", "true");
+                options.set("prio_speed", "true");
+            }
+        }
+        "h264_nvenc" => {
+            options.set("profile", "main");
+            options.set("preset", if is_export { "p5" } else { "p4" });
+            options.set("tune", if is_export { "hq" } else { "ll" });
+            options.set("rc", "vbr");
+            options.set("spatial-aq", "1");
+            options.set("temporal-aq", "1");
+            options.set("g", keyframe_interval);
+        }
+        "h264_qsv" => {
+            options.set("preset", if is_export { "medium" } else { "faster" });
+            options.set("g", keyframe_interval);
+        }
+        "h264_amf" => {
+            options.set("quality", if is_export { "quality" } else { "balanced" });
+            options.set("rc", if is_export { "vbr_peak" } else { "vbr_latency" });
+            options.set("g", keyframe_interval);
+        }
+        "h264_vaapi" => {
+            options.set("profile", "main");
+            options.set("g", keyframe_interval);
+        }
+        "h264_mf" => {
+            options.set("hw_encoding", "true");
+            options.set("scenario", if is_export { "0" } else { "4" });
+            options.set("quality", if is_export { "0" } else { "1" });
+            options.set("g", keyframe_interval);
+        }
+        _ => {}
+    }
+}
+
 /// Some GPU driver stacks open a hardware H264 session successfully but then
 /// emit zeroed YUV — rendered as a solid green (or black) recording — with no
 /// error surfaced anywhere. Before committing a recording to a hardware
@@ -1619,7 +1788,11 @@ fn cached_hardware_self_test(
     };
 
     if !(cfg!(target_os = "windows")
-        || (cfg!(target_os = "linux") && matches!(codec.name(), "h264_nvenc" | "h264_vaapi")))
+        || (cfg!(target_os = "linux")
+            && matches!(
+                codec.name(),
+                "h264_nvenc" | "h264_vaapi" | "hevc_nvenc" | "hevc_vaapi"
+            )))
     {
         return Ok(());
     }
@@ -1763,8 +1936,8 @@ fn hardware_encoder_self_test(
         return Err("encoder produced no packets".to_string());
     }
 
-    let decoder_codec = ffmpeg::codec::decoder::find(ffmpeg::codec::Id::H264)
-        .ok_or_else(|| "no software H264 decoder available".to_string())?;
+    let decoder_codec = ffmpeg::codec::decoder::find(codec.id())
+        .ok_or_else(|| format!("no software {:?} decoder available", codec.id()))?;
     let mut decoder_ctx = context::Context::new_with_codec(decoder_codec);
     // Hand over out-of-band SPS/PPS when the encoder produced extradata;
     // in-band parameter sets (the common case without GLOBAL_HEADER) decode
@@ -1939,6 +2112,7 @@ mod self_test_tests {
                 Some(&["h264_videotoolbox"]),
                 is_export,
                 None,
+                VideoCodec::H264,
             )
             .into_iter()
             .find(|(codec, _)| codec.name() == "h264_videotoolbox")
@@ -2010,6 +2184,7 @@ mod self_test_tests {
             Some(linux_encoder_priority(true, true)),
             true,
             Some(23),
+            VideoCodec::H264,
         );
 
         assert_eq!(codecs.len(), 1);
@@ -2034,6 +2209,7 @@ mod self_test_tests {
             Some(&["h264_nvenc", "libx264"]),
             false,
             None,
+            VideoCodec::H264,
         )
         .into_iter()
         .find(|(candidate, _)| candidate.name() == "h264_nvenc")
@@ -2062,6 +2238,7 @@ mod self_test_tests {
             Some(&["h264_vaapi", "libx264"]),
             false,
             None,
+            VideoCodec::H264,
         )
         .into_iter()
         .find(|(candidate, _)| candidate.name() == "h264_vaapi")
@@ -2447,5 +2624,106 @@ mod rgb_color_tests {
         ] {
             assert!(!is_rgb(format));
         }
+    }
+}
+
+#[cfg(test)]
+mod hevc_tests {
+    use super::*;
+
+    #[test]
+    fn hevc_uses_the_hardware_counterpart_of_every_h264_encoder_and_no_libx265() {
+        for (h264, hevc) in [
+            ("h264_videotoolbox", "hevc_videotoolbox"),
+            ("h264_nvenc", "hevc_nvenc"),
+            ("h264_qsv", "hevc_qsv"),
+            ("h264_amf", "hevc_amf"),
+            ("h264_mf", "hevc_mf"),
+            ("h264_vaapi", "hevc_vaapi"),
+        ] {
+            assert_eq!(VideoCodec::Hevc.encoder_name(h264), Some(hevc));
+            assert_eq!(VideoCodec::H264.encoder_name(h264), Some(h264));
+            assert!(is_hardware_h264(hevc));
+        }
+        assert_eq!(VideoCodec::Hevc.encoder_name("libx264"), None);
+        assert_eq!(VideoCodec::H264.encoder_name("libx264"), Some("libx264"));
+    }
+
+    #[test]
+    fn hevc_candidates_follow_the_h264_order_without_a_software_encoder() {
+        ffmpeg::init().unwrap();
+        let config = VideoInfo::from_raw_ffmpeg(format::Pixel::NV12, 1280, 720, 30);
+        let candidates = |priority, crf| {
+            get_codec_and_options(
+                &config,
+                H264Preset::Ultrafast,
+                priority,
+                true,
+                crf,
+                VideoCodec::Hevc,
+            )
+            .into_iter()
+            .map(|(codec, options)| {
+                let options: Vec<_> = options
+                    .iter()
+                    .map(|(key, value)| format!("{key}={value}"))
+                    .collect();
+                (codec.name().to_string(), options)
+            })
+            .collect::<Vec<_>>()
+        };
+
+        let hardware = candidates(Some(&["h264_nvenc", "h264_vaapi", "libx264"]), None);
+        let names: Vec<_> = hardware.iter().map(|(name, _)| name.as_str()).collect();
+        let expected: Vec<_> = ["hevc_nvenc", "hevc_vaapi"]
+            .into_iter()
+            .filter(|name| encoder::find_by_name(name).is_some())
+            .collect();
+        assert_eq!(names, expected);
+        for (name, options) in &hardware {
+            assert!(options.contains(&"g=60".to_string()), "{name}: {options:?}");
+            assert!(
+                options.contains(&"profile=main".to_string()),
+                "{name}: {options:?}"
+            );
+            assert!(
+                !options
+                    .iter()
+                    .any(|option| option.starts_with("b_ref_mode"))
+            );
+        }
+
+        assert!(candidates(Some(&["libx264"]), None).is_empty());
+        assert!(candidates(None, Some(28)).is_empty());
+    }
+
+    #[test]
+    fn only_hevc_streams_are_tagged_hvc1() {
+        ffmpeg::init().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let mut output = format::output_as(&directory.path().join("tag.mp4"), "mp4").unwrap();
+        for (id, expected) in [
+            (ffmpeg::codec::Id::HEVC, u32::from_le_bytes(*b"hvc1")),
+            (ffmpeg::codec::Id::H264, 0),
+        ] {
+            let codec = ffmpeg::decoder::find(id).unwrap();
+            let mut stream = output.add_stream(codec).unwrap();
+            tag_hevc_for_apple_players(&mut stream, &codec);
+            let tag = unsafe { (*(*stream.as_mut_ptr()).codecpar).codec_tag };
+            assert_eq!(tag, expected, "{id:?}");
+        }
+    }
+
+    #[test]
+    fn probing_reports_a_working_encoder_and_never_libx265() {
+        ffmpeg::init().unwrap();
+        assert!(probe_export_encoder(VideoCodec::H264).is_some());
+        if let Some(name) = probe_export_encoder(VideoCodec::Hevc) {
+            assert!(name.starts_with("hevc_"), "{name}");
+        }
+        assert_eq!(
+            probe_export_encoder(VideoCodec::Hevc),
+            probe_export_encoder(VideoCodec::Hevc)
+        );
     }
 }
