@@ -1,4 +1,5 @@
 import { Organisation, Video } from "@cap/web-domain";
+import { Option } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -7,7 +8,9 @@ const mocks = vi.hoisted(() => ({
 	progress: vi.fn(),
 	createImage: vi.fn(),
 	deleteVideo: vi.fn(),
+	downloadInfo: vi.fn(),
 	toastError: vi.fn(),
+	toastSuccess: vi.fn(),
 }));
 
 vi.mock("@/actions/video/create-for-processing", () => ({
@@ -27,14 +30,21 @@ vi.mock("@/lib/EffectRuntime", () => ({
 }));
 vi.mock("@/lib/Rpcs", () => ({
 	withRpc: (
-		run: (rpc: { VideoDelete: typeof mocks.deleteVideo }) => Promise<void>,
-	) => run({ VideoDelete: mocks.deleteVideo }),
+		run: (rpc: {
+			VideoDelete: typeof mocks.deleteVideo;
+			VideoGetDownloadInfo: typeof mocks.downloadInfo;
+		}) => Promise<unknown>,
+	) =>
+		run({
+			VideoDelete: mocks.deleteVideo,
+			VideoGetDownloadInfo: mocks.downloadInfo,
+		}),
 }));
 vi.mock("@remotion/media-parser", () => ({
 	parseMedia: async () => ({ durationInSeconds: 60, dimensions: null }),
 }));
 vi.mock("sonner", () => ({
-	toast: { success: vi.fn(), error: mocks.toastError },
+	toast: { success: mocks.toastSuccess, error: mocks.toastError },
 }));
 
 import { importMediaFile } from "@/app/(org)/dashboard/import/import-media";
@@ -172,7 +182,13 @@ describe("dashboard video import progress", () => {
 			vi.spyOn(console, "error").mockImplementation(() => {});
 			vi.spyOn(console, "warn").mockImplementation(() => {});
 			mocks.deleteVideo.mockReset().mockResolvedValue(undefined);
+			mocks.downloadInfo
+				.mockReset()
+				.mockResolvedValue(
+					Option.some({ fileName: "shot.png", downloadUrl: "https://signed" }),
+				);
 			mocks.toastError.mockReset();
+			mocks.toastSuccess.mockReset();
 			mocks.trigger.mockReset().mockResolvedValue({ success: true });
 			mocks.createImage.mockResolvedValue({
 				id: videoId,
@@ -210,19 +226,66 @@ describe("dashboard video import progress", () => {
 			);
 		});
 
-		it("keeps the image Cap when every byte was sent before the request failed", async () => {
+		it("keeps the image Cap when the response was lost but storage has the image", async () => {
 			const image = imageFile();
 			const { importing, request } = await startImport(image);
 			request.progress(image.size, image.size);
 			request.onerror?.();
 
 			expect(await importing).toBe(true);
+			expect(mocks.downloadInfo).toHaveBeenCalledExactlyOnceWith(videoId);
 			expect(mocks.deleteVideo).not.toHaveBeenCalled();
 			expect(mocks.toastError).not.toHaveBeenCalled();
 			expect(mocks.progress).toHaveBeenLastCalledWith(
 				videoId,
 				image.size,
 				image.size,
+			);
+		});
+
+		it("deletes the image Cap when the response was lost and storage has no image", async () => {
+			mocks.downloadInfo.mockResolvedValue(Option.none());
+			const image = imageFile();
+			const { importing, request } = await startImport(image);
+			request.progress(image.size, image.size);
+			request.onerror?.();
+
+			expect(await importing).toBe(false);
+			expect(mocks.deleteVideo).toHaveBeenCalledExactlyOnceWith(videoId);
+			expect(mocks.toastSuccess).not.toHaveBeenCalled();
+			expect(mocks.toastError).toHaveBeenCalledWith(
+				"Failed to upload image. Please try again.",
+			);
+		});
+
+		it("keeps the image Cap but reports failure when storage cannot be checked", async () => {
+			mocks.downloadInfo.mockRejectedValue(new Error("offline"));
+			const image = imageFile();
+			const { importing, request } = await startImport(image);
+			request.progress(image.size, image.size);
+			request.onerror?.();
+
+			expect(await importing).toBe(false);
+			expect(mocks.deleteVideo).not.toHaveBeenCalled();
+			expect(mocks.toastSuccess).not.toHaveBeenCalled();
+			expect(mocks.toastError).toHaveBeenCalledWith(
+				"Failed to upload image. Please try again.",
+			);
+		});
+
+		it("deletes the image Cap when storage rejects it after every byte was sent", async () => {
+			const image = imageFile();
+			const { importing, request } = await startImport(image);
+			request.progress(image.size, image.size);
+			request.status = 403;
+			request.onload?.();
+
+			expect(await importing).toBe(false);
+			expect(mocks.downloadInfo).not.toHaveBeenCalled();
+			expect(mocks.deleteVideo).toHaveBeenCalledExactlyOnceWith(videoId);
+			expect(mocks.toastSuccess).not.toHaveBeenCalled();
+			expect(mocks.toastError).toHaveBeenCalledWith(
+				"Failed to upload image. Please try again.",
 			);
 		});
 

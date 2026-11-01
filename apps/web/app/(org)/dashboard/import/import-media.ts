@@ -1,6 +1,7 @@
 "use client";
 
 import type { Folder, Organisation, Video } from "@cap/web-domain";
+import { Option } from "effect";
 import { toast } from "sonner";
 import { createVideoForServerProcessing } from "@/actions/video/create-for-processing";
 import { triggerVideoProcessing } from "@/actions/video/trigger-processing";
@@ -9,7 +10,7 @@ import { sendProgressUpdate } from "@/app/(org)/dashboard/caps/components/sendPr
 import type { UploadStatus } from "@/app/(org)/dashboard/caps/UploadingContext";
 import { EffectRuntime } from "@/lib/EffectRuntime";
 import { withRpc } from "@/lib/Rpcs";
-import { uploadWithTarget } from "@/utils/upload-target";
+import { UploadRejectedError, uploadWithTarget } from "@/utils/upload-target";
 import {
 	getSupportedImageContentType,
 	isSupportedVideoFile,
@@ -63,6 +64,13 @@ async function deleteFailedImport(videoId: Video.VideoId) {
 	}
 }
 
+async function isImageInStorage(videoId: Video.VideoId) {
+	const downloadInfo = await EffectRuntime.runPromise(
+		withRpc((rpc) => rpc.VideoGetDownloadInfo(videoId)),
+	);
+	return Option.isSome(downloadInfo);
+}
+
 async function uploadImageAsScreenshot(
 	file: File,
 	contentType: string,
@@ -113,13 +121,19 @@ async function uploadImageAsScreenshot(
 				},
 			});
 		} catch (uploadError) {
-			if (uploadedBytes < uploadTotal) {
+			// Drive lists an object as soon as its upload starts, so storage can only
+			// settle a lost response, not overrule an explicit rejection.
+			if (
+				uploadedBytes < uploadTotal ||
+				uploadError instanceof UploadRejectedError ||
+				!(await isImageInStorage(imageData.id))
+			) {
 				await deleteFailedImport(imageData.id);
 				throw uploadError;
 			}
 
 			console.warn(
-				"Upload request failed after all bytes were sent; keeping the image:",
+				"Upload response was lost but storage has the image; keeping it:",
 				uploadError,
 			);
 		}
