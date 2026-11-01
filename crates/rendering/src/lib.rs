@@ -2795,17 +2795,28 @@ fn clip_camera_sizes(segments: &[SegmentRecordings]) -> Vec<Option<XY<u32>>> {
         .collect()
 }
 
+fn clip_camera_size(
+    sizes: &[Option<XY<u32>>],
+    recording_clip: u32,
+    fallback: Option<XY<u32>>,
+) -> Option<XY<u32>> {
+    sizes
+        .get(recording_clip as usize)
+        .copied()
+        .unwrap_or(fallback)
+}
+
 impl RenderVideoConstants {
     /// `options` describes the first clip only; a later clip can have a
     /// different camera, or none.
     pub fn zoom_layout(&self, recording_clip: u32) -> ZoomLayoutInputs {
         ZoomLayoutInputs {
             screen_size: self.options.screen_size,
-            camera_size: self
-                .clip_camera_sizes
-                .get(recording_clip as usize)
-                .copied()
-                .unwrap_or(self.options.camera_size),
+            camera_size: clip_camera_size(
+                &self.clip_camera_sizes,
+                recording_clip,
+                self.options.camera_size,
+            ),
         }
     }
 
@@ -6450,6 +6461,27 @@ pub struct FrameRenderStageTimings {
     pub finish_resize_duration: std::time::Duration,
     pub finish_submit_readback_duration: std::time::Duration,
     pub immediate_flush_duration: std::time::Duration,
+}
+
+#[cfg(test)]
+mod clip_camera_size_tests {
+    use super::*;
+
+    #[test]
+    fn each_clip_uses_its_own_camera_and_a_clip_without_one_stays_without() {
+        let wide = Some(XY::new(1920, 1080));
+        let round = Some(XY::new(720, 720));
+        let sizes = [wide, None, round];
+        assert_eq!(clip_camera_size(&sizes, 0, wide), wide);
+        assert_eq!(clip_camera_size(&sizes, 1, wide), None);
+        assert_eq!(clip_camera_size(&sizes, 2, wide), round);
+    }
+
+    #[test]
+    fn constants_without_clip_sizes_fall_back_to_the_render_options() {
+        let wide = Some(XY::new(1920, 1080));
+        assert_eq!(clip_camera_size(&[], 3, wide), wide);
+    }
 }
 
 #[cfg(test)]

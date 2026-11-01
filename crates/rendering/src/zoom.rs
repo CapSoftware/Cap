@@ -623,6 +623,41 @@ mod test {
     }
 
     #[test]
+    fn camera_avoidance_flips_sides_at_most_once_crossing_the_camera() {
+        let camera = zone(0.38, 0.7, 0.62, 1.05);
+        for amount in [1.25, 1.5] {
+            for center_for in [manual_center as fn(XY<f64>) -> XY<f64>, follow_center] {
+                let mut sides = None;
+                let mut previous: Option<XY<f64>> = None;
+                let mut jumps = 0;
+                let mut last = (XY::new(0.0, 0.0), XY::new(0.0, 0.0));
+                for step in 0..=200 {
+                    let focus = XY::new(0.4 + f64::from(step) * 0.001, 0.9);
+                    let (moved, chosen) = SegmentBounds::center_avoiding_zone(
+                        amount,
+                        focus,
+                        center_for(focus),
+                        &camera,
+                        sides,
+                    );
+                    sides = chosen;
+                    let screen = SegmentBounds::focus_on_screen(amount, focus, moved);
+                    if previous.is_some_and(|previous| {
+                        let step = screen - previous;
+                        step.x.abs().max(step.y.abs()) >= 0.015
+                    }) {
+                        jumps += 1;
+                    }
+                    previous = Some(screen);
+                    last = (focus, moved);
+                }
+                assert!(jumps <= 1, "{jumps} jumps at {amount}");
+                assert_clear(amount, last.0, last.1, &camera);
+            }
+        }
+    }
+
+    #[test]
     fn display_amount_is_zoom_scale() {
         let zoom = InterpolatedZoom {
             t: 1.0,
