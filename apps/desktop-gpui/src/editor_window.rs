@@ -82,6 +82,7 @@ use crate::{
 mod frame;
 mod loading;
 mod markers;
+mod reel;
 mod scenes;
 mod snap;
 mod style_preset_ui;
@@ -295,6 +296,30 @@ pub fn letterbox(container: (f32, f32), frame: (f32, f32)) -> (f32, f32) {
         (available_height * frame_aspect, available_height)
     } else {
         (available_width, available_width / frame_aspect)
+    }
+}
+
+/// Where the preview draws a `frame_size` frame inside `bounds`: inset by
+/// [`STAGE_INSET`], letterboxed and centred.
+pub(crate) fn preview_frame_bounds(
+    bounds: gpui::Bounds<Pixels>,
+    frame_size: (f32, f32),
+) -> gpui::Bounds<Pixels> {
+    let container_width: f32 = bounds.size.width.into();
+    let container_height: f32 = bounds.size.height.into();
+    let (width, height) = letterbox(
+        (
+            (container_width - STAGE_INSET * 2.).max(0.),
+            (container_height - STAGE_INSET * 2.).max(0.),
+        ),
+        frame_size,
+    );
+    gpui::Bounds {
+        origin: gpui::point(
+            bounds.origin.x + px((container_width - width) / 2.),
+            bounds.origin.y + px((container_height - height) / 2.),
+        ),
+        size: gpui::size(px(width), px(height)),
     }
 }
 
@@ -704,22 +729,7 @@ impl Render for PreviewFrameView {
         gpui::canvas(
             |bounds, _window, _cx| bounds,
             move |_, bounds, window, _cx| {
-                let container_width: f32 = bounds.size.width.into();
-                let container_height: f32 = bounds.size.height.into();
-                let (width, height) = letterbox(
-                    (
-                        (container_width - STAGE_INSET * 2.).max(0.),
-                        (container_height - STAGE_INSET * 2.).max(0.),
-                    ),
-                    frame_size,
-                );
-                let fitted = gpui::Bounds {
-                    origin: gpui::point(
-                        bounds.origin.x + px((container_width - width) / 2.),
-                        bounds.origin.y + px((container_height - height) / 2.),
-                    ),
-                    size: gpui::size(px(width), px(height)),
-                };
+                let fitted = preview_frame_bounds(bounds, frame_size);
                 frame_rect.set(Some(crate::editor_canvas::PlayerFrame {
                     container: bounds,
                     frame: fitted,
@@ -1409,6 +1419,7 @@ pub struct EditorWindow {
     /// Kept alive for the window's lifetime: dropping the last `Arc` is what
     /// tears the decoders down, and `dispose()` on close does it explicitly.
     pub(crate) instance: Option<Arc<EditorInstance>>,
+    reel_platform: Option<reel::ReelPlatform>,
     focus: FocusHandle,
 
     // -- Transport ----------------------------------------------------------
@@ -1997,6 +2008,7 @@ fn clip_menu_row(
 enum ToolbarMenu {
     AspectRatio,
     PreviewSpeed,
+    Reel,
 }
 
 struct OpenToolbarMenu {
@@ -2192,6 +2204,7 @@ impl EditorWindow {
             timeline_view,
             frame_layout: None,
             instance: None,
+            reel_platform: None,
             focus: cx.focus_handle(),
             playing: false,
             playhead: 0.0,
@@ -7541,6 +7554,7 @@ impl EditorWindow {
                 .iter()
                 .map(|speed| ui::MenuItem::new(speed.label(), *speed == self.preview_speed))
                 .collect(),
+            ToolbarMenu::Reel => self.reel_menu_items(),
         }
     }
 
@@ -7619,6 +7633,7 @@ impl EditorWindow {
                     self.set_preview_speed(*speed, window, cx);
                 }
             }
+            ToolbarMenu::Reel => self.select_reel_platform(index),
         }
         cx.notify();
         window.refresh();
@@ -10996,6 +11011,7 @@ impl EditorWindow {
             )
             .child(self.render_frame_button(narrow, cx))
             .child(self.render_shape_tool_button(narrow, cx))
+            .children(self.render_reel_button(narrow, cx))
     }
 
     /// The preview-resolution control: a segmented `Full | Half | Quarter`.
@@ -11102,6 +11118,11 @@ impl EditorWindow {
                 }
             }))
             .child(body)
+            .children(if self.project_ready() {
+                self.render_reel_overlay()
+            } else {
+                None
+            })
             // `CanvasElementsOverlay` + `SnapGuidesOverlay`
             // (`Player.tsx:636-643`), both mounted inside the letterbox
             // wrapper and only while a frame exists.

@@ -3052,6 +3052,11 @@ half = "आधा"
 label = "प्रीव्यू"
 quarter = "एक-चौथाई"
 
+[editor.window.reel]
+off = "बंद"
+title = "रील मोड"
+tooltip = "देखें कि फ़ोन ऐप का इंटरफ़ेस आपके वीडियो के ऊपर कैसा दिखता है। यह एक्सपोर्ट में कभी नहीं आता।"
+
 [editor.window.text_menu]
 copy_style = "स्टाइल कॉपी करें"
 copy_style_first = "पहले कोई स्टाइल कॉपी करें"

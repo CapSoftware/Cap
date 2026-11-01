@@ -3052,6 +3052,11 @@ half = "Halb"
 label = "Vorschau"
 quarter = "Viertel"
 
+[editor.window.reel]
+off = "Aus"
+title = "Reel-Modus"
+tooltip = "Zeigt, wie die Oberfläche einer Handy-App über Ihrem Video liegt. Erscheint nie im Export."
+
 [editor.window.text_menu]
 copy_style = "Stil kopieren"
 copy_style_first = "Zuerst einen Stil kopieren"
