@@ -1236,6 +1236,40 @@ fn description_follows_outcome(action: &str) -> bool {
         || matches!(action, "startStudioRecording" | "startInstantRecording")
 }
 
+/// gpui on macOS reports ⌘⇧4 as `cmd-$` with Shift cleared, so this restores
+/// the US key and Shift. It only fires while Shift is held because AZERTY has
+/// an unshifted `$` key.
+fn unfold_shifted_symbol(key: &str, shift: bool, shift_held: bool) -> (&str, bool) {
+    if shift || !shift_held {
+        return (key, shift);
+    }
+    let base = match key {
+        "!" => "1",
+        "@" => "2",
+        "#" => "3",
+        "$" => "4",
+        "%" => "5",
+        "^" => "6",
+        "&" => "7",
+        "*" => "8",
+        "(" => "9",
+        ")" => "0",
+        "_" => "-",
+        "+" => "=",
+        "{" => "[",
+        "}" => "]",
+        "|" => "\\",
+        ":" => ";",
+        "\"" => "'",
+        "<" => ",",
+        ">" => ".",
+        "?" => "/",
+        "~" => "`",
+        _ => return (key, shift),
+    };
+    (base, true)
+}
+
 /// The gpui keystroke name for a key, as the W3C `KeyboardEvent.code` string
 /// the Tauri app stores (`e.code` in hotkeys.tsx, `global_hotkey::Code` in
 /// hotkeys.rs). `None` for keys neither side can bind.
@@ -1490,7 +1524,9 @@ impl SettingsWindow {
         // `HotkeysStore` deserializes the whole `hotkeys` map strictly
         // (`serde_json::from_value` in `HotkeysStore::get`), so one bad entry
         // would silently drop every binding over there.
-        let Some(code) = hotkey_code_for_key(&keystroke.key)
+        let (key, shift) =
+            unfold_shifted_symbol(&keystroke.key, modifiers.shift, listening.modifiers.shift);
+        let Some(code) = hotkey_code_for_key(key)
             .filter(|code| global_hotkey::hotkey::Code::from_str(code).is_ok())
         else {
             listening.error = Some(UNSUPPORTED_KEY);
@@ -1502,7 +1538,7 @@ impl SettingsWindow {
             meta: modifiers.platform,
             ctrl: modifiers.control,
             alt: modifiers.alt,
-            shift: modifiers.shift,
+            shift,
         };
         if shortcut_needs_modifier(&hotkey) {
             listening.error = Some(NEEDS_MODIFIER);
@@ -8408,6 +8444,32 @@ mod tests {
         // Unbindable keys are consumed but never stored.
         assert_eq!(hotkey_code_for_key("fn"), None);
         assert_eq!(hotkey_code_for_key("escape"), None);
+    }
+
+    #[test]
+    fn shifted_symbols_record_as_their_key_with_shift() {
+        assert_eq!(unfold_shifted_symbol("$", false, true), ("4", true));
+        assert_eq!(unfold_shifted_symbol("?", false, true), ("/", true));
+        assert_eq!(unfold_shifted_symbol("~", false, true), ("`", true));
+        assert_eq!(unfold_shifted_symbol("a", true, true), ("a", true));
+        assert_eq!(unfold_shifted_symbol("4", false, false), ("4", false));
+        // AZERTY types `$` without Shift, so it stays an unsupported key.
+        assert_eq!(unfold_shifted_symbol("$", false, false), ("$", false));
+
+        for symbol in [
+            "!", "@", "#", "$", "%", "^", "&", "*", "(", ")", "_", "+", "{", "}", "|", ":", "\"",
+            "<", ">", "?", "~",
+        ] {
+            let (key, shift) = unfold_shifted_symbol(symbol, false, true);
+            assert!(shift, "{symbol} should restore Shift");
+            let Some(code) = hotkey_code_for_key(key) else {
+                panic!("{symbol} unfolded to {key}, which has no code");
+            };
+            assert!(
+                global_hotkey::hotkey::Code::from_str(&code).is_ok(),
+                "{symbol} produced {code}, which global_hotkey cannot parse"
+            );
+        }
     }
 
     /// Every code the capture can produce parses as a `global_hotkey` `Code`.
