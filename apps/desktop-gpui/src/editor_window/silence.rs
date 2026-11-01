@@ -7,6 +7,14 @@
 use super::*;
 use cap_rendering::{ClipSpeech, regenerate_silence_scenes};
 
+/// What to do with the speech analysis once it lands. Cleared when the user
+/// backs out, because the running analysis cannot be stopped.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SpeechRequest {
+    Enable,
+    Regenerate,
+}
+
 impl EditorWindow {
     fn cached_clip_speech(&self) -> Option<Arc<Vec<Option<ClipSpeech>>>> {
         self.clip_speech
@@ -14,11 +22,18 @@ impl EditorWindow {
             .filter(|speech| speech.len() == self.clip_display_durations.len())
     }
 
+    pub(crate) fn enabling_camera_silence(&self) -> bool {
+        self.speech_request == Some(SpeechRequest::Enable)
+    }
+
     pub(crate) fn toggle_camera_silence(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.analyzing_speech {
+        if self.enabling_camera_silence() {
+            self.speech_request = None;
+            cx.notify();
             return;
         }
         if self.project.camera_silence_delay.is_some() {
+            self.speech_request = None;
             let cleared = self.edit_timeline_project(
                 |project| {
                     project.camera_silence_delay = None;
@@ -39,9 +54,16 @@ impl EditorWindow {
             self.enable_camera_silence(&speech, window, cx);
             return;
         }
+        self.speech_request = Some(SpeechRequest::Enable);
+        self.analyze_speech(window, cx);
+    }
 
-        self.analyzing_speech = true;
+    fn analyze_speech(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         cx.notify();
+        if self.analyzing_speech {
+            return;
+        }
+        self.analyzing_speech = true;
         let path = self.project_path.clone();
         cx.spawn_in(window, async move |this, cx| {
             let speech = cx
@@ -52,7 +74,17 @@ impl EditorWindow {
                 this.analyzing_speech = false;
                 let speech = Arc::new(speech);
                 this.clip_speech = Some(Arc::clone(&speech));
-                this.enable_camera_silence(&speech, window, cx);
+                match this.speech_request.take() {
+                    Some(SpeechRequest::Enable) => this.enable_camera_silence(&speech, window, cx),
+                    // Unreadable mics count as speech, which would wipe the
+                    // scenes the delay was only meant to adjust.
+                    Some(SpeechRequest::Regenerate) if speech.iter().any(Option::is_some) => {
+                        if let Some(delay) = this.project.camera_silence_delay {
+                            this.write_camera_silence(delay, &speech, window, cx);
+                        }
+                    }
+                    _ => {}
+                }
                 cx.notify();
             })
             .ok();
@@ -88,7 +120,7 @@ impl EditorWindow {
             self.write_camera_silence(delay, &speech, window, cx);
             return;
         }
-        let edited = self.edit_timeline_project(
+        self.edit_timeline_project(
             |project| {
                 project.camera_silence_delay = Some(delay);
                 true
@@ -96,9 +128,8 @@ impl EditorWindow {
             window,
             cx,
         );
-        if edited {
-            self.note_edit("camera-silence-delay", Some(TrackKind::Scene));
-        }
+        self.speech_request = Some(SpeechRequest::Regenerate);
+        self.analyze_speech(window, cx);
     }
 
     fn write_camera_silence(

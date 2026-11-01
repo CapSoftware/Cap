@@ -1496,7 +1496,8 @@ pub struct EditorWindow {
     timeline_locale: crate::i18n::Locale,
     zoom_prompt_dismissed: bool,
     hovering_generate_zoom: bool,
-    pub(crate) analyzing_speech: bool,
+    analyzing_speech: bool,
+    speech_request: Option<silence::SpeechRequest>,
     clip_speech: Option<Arc<Vec<Option<cap_rendering::ClipSpeech>>>>,
     pub(crate) generating_keyboard: bool,
     pub(crate) keyboard_generation_message: Option<String>,
@@ -2230,6 +2231,7 @@ impl EditorWindow {
             zoom_prompt_dismissed: false,
             hovering_generate_zoom: false,
             analyzing_speech: false,
+            speech_request: None,
             clip_speech: None,
             generating_keyboard: false,
             keyboard_generation_message: None,
@@ -6860,6 +6862,9 @@ impl EditorWindow {
             .is_some_and(|selection| selection.track == kind)
         {
             self.set_selection(None, cx);
+        }
+        if kind == TrackKind::Scene {
+            self.speech_request = None;
         }
         let cleared = self.edit_timeline_project(
             |project| {

@@ -1699,12 +1699,13 @@ impl EditorWindow {
     fn render_camera_silence(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = self.theme;
         let enabled = self.project.camera_silence_delay.is_some();
+        let enabling = self.enabling_camera_silence();
         let toggle = ui::Subfield::plain(&theme, tr::editor::tabs::camera::hide_when_silent())
             .child(
                 ui::Toggle::plain(
                     &theme,
                     "camera-hide-when-silent",
-                    enabled || self.analyzing_speech,
+                    enabled || enabling,
                 )
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.toggle_camera_silence(window, cx);
@@ -1715,7 +1716,7 @@ impl EditorWindow {
             .flex_col()
             .gap(px(14.))
             .child(toggle)
-            .when(self.analyzing_speech, |column| {
+            .when(enabling, |column| {
                 column.child(
                     div()
                         .text_size(px(12.))

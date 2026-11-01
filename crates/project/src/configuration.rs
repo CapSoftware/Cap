@@ -2298,10 +2298,10 @@ impl TimelineConfiguration {
         None
     }
 
-    /// The output windows each clip is the frame source for, as
-    /// `get_segment_time` resolves them (a transition belongs to the incoming
-    /// clip), split around fullscreen text holds so every window maps output
-    /// time to source time linearly. Holds themselves are left out.
+    /// The output windows each clip plays in, split around fullscreen text
+    /// holds so every window maps output time to source time linearly. Clips
+    /// overlap during a transition, where both are audible. Holds themselves
+    /// are left out.
     pub fn clip_source_windows(&self) -> Vec<ClipSourceWindow> {
         let holds = self.hold_windows();
         let effective_hold_starts: Vec<f64> = holds
@@ -2314,13 +2314,13 @@ impl TimelineConfiguration {
             let next = self
                 .effective_transition(index + 1)
                 .map_or(0.0, |transition| transition.duration);
-            let segment_end = segment_start + segment.duration() - next;
+            let played_end = segment_start + segment.duration();
             let mut piece_start = segment_start;
             let cuts = effective_hold_starts
                 .iter()
                 .copied()
-                .filter(|cut| *cut > segment_start && *cut < segment_end)
-                .chain(std::iter::once(segment_end));
+                .filter(|cut| *cut > segment_start && *cut < played_end)
+                .chain(std::iter::once(played_end));
             for piece_end in cuts {
                 if piece_end > piece_start {
                     let output_start = effective_to_output(&holds, piece_start);
@@ -2335,7 +2335,7 @@ impl TimelineConfiguration {
                 }
                 piece_start = piece_end;
             }
-            segment_start = segment_end;
+            segment_start = played_end - next;
         }
         windows
     }
@@ -3644,7 +3644,7 @@ mod tests {
     }
 
     #[test]
-    fn clip_source_windows_match_the_frame_mapping() {
+    fn clip_source_windows_follow_the_incoming_clip_of_the_frame_mapping() {
         let clip = |recording_clip, start, end, timescale| TimelineSegment {
             recording_clip,
             timescale,
@@ -3682,7 +3682,7 @@ mod tests {
                 .any(|(start, end)| step >= *start && step < *end);
             let mapped = windows
                 .iter()
-                .find(|w| step >= w.output_start && step < w.output_end)
+                .rfind(|w| step >= w.output_start && step < w.output_end)
                 .map(|w| {
                     (
                         w.source_start + (step - w.output_start) * w.timescale,

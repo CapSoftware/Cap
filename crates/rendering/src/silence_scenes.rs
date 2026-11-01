@@ -297,6 +297,19 @@ mod tests {
     }
 
     #[test]
+    fn speech_in_a_cross_fades_outgoing_tail_counts() {
+        let mut project = project_with(vec![clip(0, 0.0, 10.0, 1.0), clip(1, 0.0, 10.0, 1.0)]);
+        project.timeline.as_mut().unwrap().transitions =
+            serde_json::from_value(serde_json::json!([
+                { "segmentIndex": 1, "type": "cross-fade", "duration": 1.0 }
+            ]))
+            .unwrap();
+        let spoken = runs(&project, &[speech(&[(9.2, 9.8)]), speech(&[])]);
+        assert_eq!(spoken.len(), 1);
+        assert!(approx(spoken[0].0, 9.2) && approx(spoken[0].1, 9.8));
+    }
+
+    #[test]
     fn clips_without_speech_data_keep_the_camera() {
         let project = project_with(vec![clip(0, 0.0, 10.0, 1.0), clip(1, 0.0, 10.0, 1.0)]);
         let spoken = runs(&project, &[speech(&[]), None]);
