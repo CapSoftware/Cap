@@ -3705,7 +3705,7 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 												.where(
 													and(
 														eq(Db.notifications.type, "reply"),
-														sql`JSON_EXTRACT(${Db.notifications.data}, '$.comment.parentCommentId') = ${path.id}`,
+														sql`JSON_EXTRACT(${Db.notifications.data}, '$.parentCommentId') = ${path.id}`,
 													),
 												);
 										}
