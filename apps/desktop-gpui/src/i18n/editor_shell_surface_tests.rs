@@ -308,6 +308,7 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             tr::editor::export::reupload_transparent(),
             "Share links require a background without transparency",
         ),
+        (tr::editor::export::section::codec(), "Codec"),
         (tr::editor::export::section::destination(), "Destination"),
         (tr::editor::export::section::format(), "Format"),
         (tr::editor::export::section::frame_rate(), "Frame rate"),
@@ -1138,6 +1139,22 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         (tr::ui::selection::delete(), "Delete"),
         (tr::ui::selection::done(), "Done"),
         (tr::editor::export::turbo::title(), "Turbo export"),
+        (
+            tr::editor::export::codec::checking(),
+            "Checking for an HEVC encoder…",
+        ),
+        (
+            tr::editor::export::codec::hevc(),
+            "Smaller files at the same quality, encoded by your GPU. Plays in QuickTime, Safari, Windows and modern phones; some older players and browsers can't open it.",
+        ),
+        (
+            tr::editor::export::codec::link(),
+            "Shareable links use H.264 so every browser can play them.",
+        ),
+        (
+            tr::editor::export::codec::unavailable(),
+            "HEVC needs a hardware video encoder, and none on this device could start.",
+        ),
         (
             tr::editor::export::turbo::description(),
             "Exports much faster using every CPU core and the GPU",
