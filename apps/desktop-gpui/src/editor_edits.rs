@@ -5253,7 +5253,7 @@ mod tests {
                 "segments": [
                     { "recordingSegment": 0, "timescale": 1.25, "start": 2.0, "end": 7.0 }
                 ],
-                "zoomSegments": [{ "start": 0.5, "end": 2.5, "amount": 1.5 }]
+                "zoomSegments": [{ "start": 0.5, "end": 2.5, "amount": 1.5, "mode": "auto" }]
             }
         }));
         let snapshot = single.clone();
@@ -5285,35 +5285,6 @@ mod tests {
     #[test]
     fn keep_only_clip_segment_rebases_middle_clip_tracks_captions_and_restores_on_single_undo() {
         let mut project = config(serde_json::json!({
-            "captions": {
-                "sourceTimed": true,
-                "segments": [
-                    {
-                        "id": "cap-intro",
-                        "start": 0.5,
-                        "end": 2.0,
-                        "text": "Intro",
-                        "words": [{ "text": "Intro", "start": 0.5, "end": 2.0 }]
-                    },
-                    {
-                        "id": "cap-keep",
-                        "start": 4.5,
-                        "end": 6.5,
-                        "text": "Main point",
-                        "words": [
-                            { "text": "Main", "start": 4.5, "end": 5.4 },
-                            { "text": "point", "start": 5.5, "end": 6.5 }
-                        ]
-                    },
-                    {
-                        "id": "cap-outro",
-                        "start": 8.0,
-                        "end": 9.5,
-                        "text": "Outro",
-                        "words": [{ "text": "Outro", "start": 8.0, "end": 9.5 }]
-                    }
-                ]
-            },
             "timeline": {
                 "segments": [
                     { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 4.0 },
@@ -5335,9 +5306,9 @@ mod tests {
                     { "segmentIndex": 2, "type": "fade", "duration": 0.5 }
                 ],
                 "zoomSegments": [
-                    { "start": 0.5, "end": 2.0, "amount": 1.4 },
-                    { "start": 4.0, "end": 5.5, "amount": 1.8 },
-                    { "start": 7.0, "end": 8.5, "amount": 1.6 }
+                    { "start": 0.5, "end": 2.0, "amount": 1.4, "mode": "auto" },
+                    { "start": 4.0, "end": 5.5, "amount": 1.8, "mode": "auto" },
+                    { "start": 7.0, "end": 8.5, "amount": 1.6, "mode": "auto" }
                 ],
                 "sceneSegments": [
                     { "start": 0.0, "end": 3.5, "mode": "default" },
@@ -5381,6 +5352,55 @@ mod tests {
                 ]
             }
         }));
+        project.captions = Some(cap_project::CaptionsData {
+            source_timed: true,
+            segments: vec![
+                cap_project::CaptionSegment {
+                    id: "cap-intro".into(),
+                    start: 0.5,
+                    end: 2.0,
+                    text: "Intro".into(),
+                    words: vec![cap_project::CaptionWord {
+                        text: "Intro".into(),
+                        start: 0.5,
+                        end: 2.0,
+                    }],
+                    ..Default::default()
+                },
+                cap_project::CaptionSegment {
+                    id: "cap-keep".into(),
+                    start: 4.5,
+                    end: 6.5,
+                    text: "Main point".into(),
+                    words: vec![
+                        cap_project::CaptionWord {
+                            text: "Main".into(),
+                            start: 4.5,
+                            end: 5.4,
+                        },
+                        cap_project::CaptionWord {
+                            text: "point".into(),
+                            start: 5.5,
+                            end: 6.5,
+                        },
+                    ],
+                    ..Default::default()
+                },
+                cap_project::CaptionSegment {
+                    id: "cap-outro".into(),
+                    start: 8.0,
+                    end: 9.5,
+                    text: "Outro".into(),
+                    words: vec![cap_project::CaptionWord {
+                        text: "Outro".into(),
+                        start: 8.0,
+                        end: 9.5,
+                    }],
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
         let recording_durations = [12.0];
         cap_project::synchronize_captions(&mut project, &recording_durations);
         {
@@ -5536,8 +5556,8 @@ mod tests {
                     { "recordingSegment": 0, "timescale": 2.0, "start": 6.0, "end": 10.0, "name": "Last" }
                 ],
                 "zoomSegments": [
-                    { "start": 0.5, "end": 2.0, "amount": 1.3 },
-                    { "start": 6.5, "end": 7.5, "amount": 1.7 }
+                    { "start": 0.5, "end": 2.0, "amount": 1.3, "mode": "auto" },
+                    { "start": 6.5, "end": 7.5, "amount": 1.7, "mode": "auto" }
                 ]
             }
         }));
