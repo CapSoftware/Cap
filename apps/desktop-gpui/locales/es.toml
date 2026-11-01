@@ -2539,6 +2539,18 @@ light = "Desenfoque suave"
 off = "Desactivado"
 remove = "Quitar fondo"
 
+[editor.tabs.camera.green_screen]
+blue = "Azul"
+description = "Quita un fondo liso verde o azul que tengas detrás."
+green = "Verde"
+key_color = "Color clave"
+no_backdrop = "No se encontró un color de fondo uniforme en los bordes de la cámara."
+pick_from_camera = "Tomar de la cámara"
+softness = "Suavidad"
+spill = "Supresión de derrame"
+title = "Pantalla verde"
+tolerance = "Tolerancia"
+
 [editor.tabs.camera.shape]
 source = "Original"
 square = "Cuadrada"

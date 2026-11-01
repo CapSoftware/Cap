@@ -2539,6 +2539,18 @@ light = "हल्का ब्लर"
 off = "बंद"
 remove = "बैकग्राउंड हटाएँ"
 
+[editor.tabs.camera.green_screen]
+blue = "नीला"
+description = "आपके पीछे का सादा हरा या नीला बैकग्राउंड हटाता है।"
+green = "हरा"
+key_color = "हटाने वाला रंग"
+no_backdrop = "कैमरे के किनारों पर कोई एक सादा बैकग्राउंड रंग नहीं मिला।"
+pick_from_camera = "कैमरा से चुनें"
+softness = "नरमी"
+spill = "स्पिल हटाना"
+title = "ग्रीन स्क्रीन"
+tolerance = "टॉलरेंस"
+
 [editor.tabs.camera.shape]
 source = "मूल"
 square = "वर्ग"

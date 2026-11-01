@@ -65,6 +65,7 @@ use crate::{
 
 mod animated_gradient;
 mod cursor;
+mod green_screen;
 
 // ---------------------------------------------------------------------------
 // The catalogue: every constant the background section reads
@@ -736,9 +737,10 @@ pub enum ColorTarget {
     GradientTo,
     AnimatedGradientStop(usize),
     BorderColor,
-    /// The click ripple's ring colour, the one `[u8; 3]` target outside the
-    /// background tab.
+    /// The click ripple's ring colour, one of the two `[u8; 3]` targets
+    /// outside the background tab.
     CursorRipple,
+    ChromaKey,
     CaptionColor,
     CaptionBackground,
     CaptionHighlight,
@@ -768,6 +770,7 @@ impl ColorTarget {
                 | Self::AnimatedGradientStop(_)
                 | Self::BorderColor
                 | Self::CursorRipple
+                | Self::ChromaKey
         )
     }
 }
@@ -830,6 +833,10 @@ pub struct SidebarState {
     pub cursor_physics_open: CollapsibleState,
     /// The click-ripple settings, revealed by their own toggle.
     pub cursor_ripple_open: CollapsibleState,
+    /// The camera's green screen settings, revealed by their own toggle.
+    pub green_screen_open: CollapsibleState,
+    /// The last "Pick from Camera" found no single backdrop colour.
+    pub(crate) key_color_not_found: bool,
     /// The style picker's rasterised cursor art, keyed by shape and the device
     /// pixel box it was drawn for. A `BTreeMap` because `CursorShape` is `Ord`
     /// but not `Hash`.
@@ -930,6 +937,8 @@ impl SidebarState {
             camera_shadow_open: CollapsibleState::new(false),
             cursor_physics_open: CollapsibleState::new(!config.cursor.raw),
             cursor_ripple_open: CollapsibleState::new(config.cursor.ripple.enabled),
+            green_screen_open: CollapsibleState::new(config.camera.active_chroma_key().is_some()),
+            key_color_not_found: false,
             cursor_previews: std::cell::RefCell::new(BTreeMap::new()),
             cursor_scale: 2.,
             panel_sections: std::cell::RefCell::new(HashMap::new()),
@@ -1771,6 +1780,7 @@ impl EditorWindow {
                     .map_or(UI_BORDER_FALLBACK.color, |border| border.color),
             ),
             ColorTarget::CursorRipple => Some(project.cursor.ripple.color),
+            ColorTarget::ChromaKey => project.camera.chroma_key.map(|key| key.color),
             _ => self.hex_string_for(target).and_then(|hex| {
                 hex_to_rgb(&hex).map(|rgba| [rgba[0] as u16, rgba[1] as u16, rgba[2] as u16])
             }),
@@ -1837,16 +1847,20 @@ impl EditorWindow {
         if target.is_hex_string() {
             return self.set_hex_color(target, color, window, cx);
         }
-        // The one `[u8; 3]` target that does not live under `background`, so
-        // it takes the general fan-out rather than `edit_background`.
-        if target == ColorTarget::CursorRipple {
-            return self.edit_project("cursor-ripple-color", window, cx, move |project| {
-                if project.cursor.ripple.color == color {
-                    return false;
-                }
-                project.cursor.ripple.color = color;
-                true
-            });
+        // The `[u8; 3]` targets that do not live under `background` take the
+        // general fan-out rather than `edit_background`.
+        match target {
+            ColorTarget::CursorRipple => {
+                return self.edit_project("cursor-ripple-color", window, cx, move |project| {
+                    if project.cursor.ripple.color == color {
+                        return false;
+                    }
+                    project.cursor.ripple.color = color;
+                    true
+                });
+            }
+            ColorTarget::ChromaKey => return self.set_key_color(color, window, cx),
+            _ => {}
         }
         self.edit_background(
             "color",

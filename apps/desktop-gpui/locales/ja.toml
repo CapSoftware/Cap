@@ -2539,6 +2539,18 @@ light = "弱いぼかし"
 off = "オフ"
 remove = "背景を削除"
 
+[editor.tabs.camera.green_screen]
+blue = "青"
+description = "背後にある緑または青の単色の背景を取り除きます。"
+green = "緑"
+key_color = "キーカラー"
+no_backdrop = "カメラの端に単色の背景が見つかりませんでした。"
+pick_from_camera = "カメラから取得"
+softness = "柔らかさ"
+spill = "スピル除去"
+title = "グリーンバック"
+tolerance = "許容値"
+
 [editor.tabs.camera.shape]
 source = "元の形"
 square = "正方形"

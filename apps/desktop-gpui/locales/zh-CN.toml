@@ -2539,6 +2539,18 @@ light = "轻模糊"
 off = "关闭"
 remove = "移除背景"
 
+[editor.tabs.camera.green_screen]
+blue = "蓝色"
+description = "移除你身后纯色的绿色或蓝色背景。"
+green = "绿色"
+key_color = "抠像颜色"
+no_backdrop = "未在摄像头画面边缘找到单一的背景颜色。"
+pick_from_camera = "从摄像头取色"
+softness = "柔和度"
+spill = "溢色去除"
+title = "绿幕"
+tolerance = "容差"
+
 [editor.tabs.camera.shape]
 source = "原始"
 square = "方形"

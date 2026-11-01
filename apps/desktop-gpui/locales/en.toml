@@ -2541,6 +2541,18 @@ light = "Light Blur"
 off = "Off"
 remove = "Remove Background"
 
+[editor.tabs.camera.green_screen]
+blue = "Blue"
+description = "Removes a solid green or blue backdrop from behind you."
+green = "Green"
+key_color = "Key Color"
+no_backdrop = "No solid backdrop color found at the edges of the camera."
+pick_from_camera = "Pick from Camera"
+softness = "Softness"
+spill = "Spill Removal"
+title = "Green Screen"
+tolerance = "Tolerance"
+
 [editor.tabs.camera.shape]
 source = { text = "Source", context = "Camera shape that keeps the camera's own aspect ratio." }
 square = "Square"

@@ -2539,6 +2539,18 @@ light = "Leichte Unschärfe"
 off = "Aus"
 remove = "Hintergrund entfernen"
 
+[editor.tabs.camera.green_screen]
+blue = "Blau"
+description = "Entfernt einen einfarbigen grünen oder blauen Hintergrund hinter Ihnen."
+green = "Grün"
+key_color = "Key-Farbe"
+no_backdrop = "An den Rändern der Kamera wurde keine einheitliche Hintergrundfarbe gefunden."
+pick_from_camera = "Aus Kamera übernehmen"
+softness = "Weichheit"
+spill = "Spill-Unterdrückung"
+title = "Greenscreen"
+tolerance = "Toleranz"
+
 [editor.tabs.camera.shape]
 source = "Original"
 square = "Quadrat"

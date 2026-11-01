@@ -393,6 +393,9 @@ pub enum CameraSlider {
     ShadowSize,
     ShadowOpacity,
     ShadowBlur,
+    KeyTolerance,
+    KeySoftness,
+    KeySpill,
 }
 
 impl CameraSlider {
@@ -408,7 +411,10 @@ impl CameraSlider {
             | Self::Shadow
             | Self::ShadowSize
             | Self::ShadowOpacity
-            | Self::ShadowBlur => false,
+            | Self::ShadowBlur
+            | Self::KeyTolerance
+            | Self::KeySoftness
+            | Self::KeySpill => false,
         }
     }
 
@@ -417,6 +423,8 @@ impl CameraSlider {
             // `minValue={20} maxValue={80} step={0.1}` (`:3204-3206`).
             Self::Size => (20., 80., 0.1),
             Self::ZoomSize => (10., 100., 0.1),
+            // `ChromaKey`'s levels are fractions, shown as percentages.
+            Self::KeyTolerance | Self::KeySoftness | Self::KeySpill => (0., 100., 1.),
             _ => (0., 100., 0.1),
         }
     }
@@ -432,6 +440,14 @@ impl CameraSlider {
             Self::ShadowSize => shadow.map_or(UI_SHADOW_FALLBACK.size, |s| s.size),
             Self::ShadowOpacity => shadow.map_or(UI_SHADOW_FALLBACK.opacity, |s| s.opacity),
             Self::ShadowBlur => shadow.map_or(UI_SHADOW_FALLBACK.blur, |s| s.blur),
+            Self::KeyTolerance | Self::KeySoftness | Self::KeySpill => {
+                let key = camera.chroma_key.unwrap_or_default().sanitized();
+                100. * match self {
+                    Self::KeyTolerance => key.tolerance,
+                    Self::KeySoftness => key.softness,
+                    _ => key.spill,
+                }
+            }
         }
     }
 }
@@ -1279,6 +1295,19 @@ impl EditorWindow {
                         }
                         camera.advanced_shadow = Some(shadow);
                     }
+                    CameraSlider::KeyTolerance
+                    | CameraSlider::KeySoftness
+                    | CameraSlider::KeySpill => {
+                        let Some(key) = camera.chroma_key.as_mut() else {
+                            return false;
+                        };
+                        let level = value / 100.;
+                        match slider {
+                            CameraSlider::KeyTolerance => key.tolerance = level,
+                            CameraSlider::KeySoftness => key.softness = level,
+                            _ => key.spill = level,
+                        }
+                    }
                 }
                 true
             },
@@ -1575,6 +1604,7 @@ impl EditorWindow {
                         ),
                 ),
             )
+            .child(self.render_green_screen(cx))
             // `<div class="w-full border-t border-dashed border-gray-5" />`
             .child(dashed_divider(Hsla::from(theme.editor.line)))
             .child(self.slider_field(
@@ -4594,6 +4624,24 @@ mod tests {
                     blur: 12.,
                 });
             }),
+            slider_case!("camera.chroma_key.tolerance", |project| {
+                project.camera.chroma_key = Some(cap_project::ChromaKey {
+                    tolerance: 0.3,
+                    ..Default::default()
+                });
+            }),
+            slider_case!("camera.chroma_key.softness", |project| {
+                project.camera.chroma_key = Some(cap_project::ChromaKey {
+                    softness: 0.3,
+                    ..Default::default()
+                });
+            }),
+            slider_case!("camera.chroma_key.spill", |project| {
+                project.camera.chroma_key = Some(cap_project::ChromaKey {
+                    spill: 0.3,
+                    ..Default::default()
+                });
+            }),
             slider_case!("cursor.size", |project| project.cursor.size = 2),
             slider_case!("cursor.rotation_amount", |project| project
                 .cursor
@@ -4867,6 +4915,9 @@ mod tests {
             CameraSlider::ShadowSize,
             CameraSlider::ShadowOpacity,
             CameraSlider::ShadowBlur,
+            CameraSlider::KeyTolerance,
+            CameraSlider::KeySoftness,
+            CameraSlider::KeySpill,
         ] {
             assert!(
                 !slider.changes_timeline_model(),
