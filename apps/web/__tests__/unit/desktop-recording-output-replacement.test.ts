@@ -13,6 +13,9 @@ const mocks = vi.hoisted(() => ({
 	fetch: vi.fn(),
 	cloudfront: vi.fn(),
 	auth: vi.fn(),
+	storedTranscript: vi.fn(),
+	putObject: vi.fn(),
+	deleteObjects: vi.fn(),
 }));
 vi.mock("@cap/database", () => ({ db: mocks.db }));
 vi.mock("@cap/database/auth/session", () => ({ getCurrentUser: mocks.auth }));
@@ -66,7 +69,7 @@ vi.mock("@/lib/video-storage", () => ({
 	decodeStorageVideo: (video: unknown) => video,
 }));
 vi.mock("@/lib/edit-transcript-storage", () => ({
-	decryptEditTranscriptObject: () => null,
+	decryptEditTranscriptObject: (value: string) => value,
 }));
 vi.mock("@/lib/generate-ai", () => ({ startAiGeneration: vi.fn() }));
 vi.mock("@/lib/transcribe", () => ({ transcribeVideo: vi.fn() }));
@@ -102,6 +105,7 @@ let video: {
 		audioLevelSourceKey?: string;
 	};
 	metadata: Record<string, unknown>;
+	transcriptionStatus?: string | null;
 };
 let events: string[];
 let updates: Record<string, unknown>[];
@@ -239,11 +243,20 @@ beforeEach(() => {
 						Effect.succeed(
 							`https://storage.test/${options?.resolvePublishedOutput === false ? "canonical" : "published"}/${key}`,
 						),
-					getObject: () => Effect.succeed(Option.none()),
-					listObjects: () => Effect.succeed({ Contents: [] }),
+					getObject: () =>
+						Effect.succeed(Option.fromNullable(mocks.storedTranscript())),
+					listObjects: () =>
+						Effect.succeed({
+							Contents: [{ Key: "user/video/transcription.edit.v3.json" }],
+						}),
+					putObject: mocks.putObject,
+					deleteObjects: mocks.deleteObjects,
 				},
 			]),
 	);
+	mocks.storedTranscript.mockReturnValue(null);
+	mocks.putObject.mockReturnValue(Effect.void);
+	mocks.deleteObjects.mockReturnValue(Effect.void);
 	mocks.retire.mockImplementation(async () => {
 		events.push("retire-job");
 	});
@@ -649,6 +662,48 @@ describe("edited recording publication", () => {
 			expect(events).toHaveLength(before);
 		},
 	);
+
+	describe.each([
+		["COMPLETE", true],
+		[null, false],
+		["PROCESSING", false],
+	])("with transcription status %s", (transcriptionStatus, remapped) => {
+		it(`${remapped ? "remaps" : "discards"} the stored words`, async () => {
+			video.transcriptionStatus = transcriptionStatus;
+			mocks.storedTranscript.mockReturnValue(
+				JSON.stringify({
+					version: 3,
+					speechModelUsed: "test",
+					durationMs: 10_000,
+					languageCode: "en",
+					words: [],
+				}),
+			);
+			video.metadata.editProcessing = {
+				...operation,
+				ownerId: video.ownerId,
+				bucket: video.bucket,
+				storageIntegrationId: video.storageIntegrationId,
+				sourceKey,
+				source: JSON.stringify(video.source),
+				dispatch: "accepted",
+			};
+			await expect(
+				saveEditResultAndComplete(
+					"video",
+					sourceKey,
+					editSpec,
+					editSpec,
+					metadata,
+					operation,
+				),
+			).resolves.toEqual({ transcriptRemapped: remapped });
+			expect(video.transcriptionStatus).toBe(
+				remapped ? transcriptionStatus : null,
+			);
+			expect(mocks.deleteObjects).toHaveBeenCalledTimes(remapped ? 0 : 1);
+		});
+	});
 
 	it("checks a reprocessed canonical object before clearing its previous immutable publication", async () => {
 		await saveMetadataAndComplete("video", metadata);

@@ -12,7 +12,6 @@ const mocks = vi.hoisted(() => ({
 	prepareReplacement: vi.fn(),
 	invalidate: vi.fn(),
 	head: vi.fn(),
-	deleteObject: vi.fn(),
 	queueTranscription: vi.fn(),
 	shouldQueueTranscription: vi.fn(),
 	complete: vi.fn(),
@@ -228,10 +227,10 @@ describe("desktop reupload completion", () => {
 					}),
 				}),
 			}),
-			transaction: async (run: (tx: unknown) => Promise<unknown>) => {
+			transaction: async (run: (tx: unknown) => Promise<void>) => {
 				const pending: Record<string, unknown>[] = [];
 				let removeUpload = false;
-				const result = await run({
+				await run({
 					update: () => ({
 						set: (values: Record<string, unknown>) => ({
 							where: async () => {
@@ -255,7 +254,6 @@ describe("desktop reupload completion", () => {
 						video.source = values.source as typeof video.source;
 				}
 				if (removeUpload) uploadKey = null;
-				return result;
 			},
 			insert: () => ({
 				values: (values: { rawFileKey?: string | null }) => ({
@@ -299,12 +297,6 @@ describe("desktop reupload completion", () => {
 				? Effect.succeed(value)
 				: Effect.fail(new Error("Object missing"));
 		});
-		mocks.deleteObject.mockImplementation((key: string) =>
-			Effect.sync(() => {
-				events.push("delete-edit-source");
-				objects.delete(key);
-			}),
-		);
 		mocks.storage.mockImplementation(() =>
 			Effect.succeed([
 				{
@@ -317,7 +309,6 @@ describe("desktop reupload completion", () => {
 						getPresignedUploadPartUrl: mocks.sign,
 					},
 					headObject: (key: string) => Effect.suspend(() => mocks.head(key)),
-					deleteObject: mocks.deleteObject,
 					copyObject: () =>
 						Effect.succeed({ CopyObjectResult: { ETag: "new-video" } }),
 				},
@@ -425,7 +416,6 @@ describe("desktop reupload completion", () => {
 			"retire",
 			"publish",
 			"delete-upload",
-			"delete-edit-source",
 			"invalidate",
 		]);
 		expect(mocks.complete).toHaveBeenCalledWith(
@@ -438,21 +428,6 @@ describe("desktop reupload completion", () => {
 			ETag: "original",
 			ContentLength: 90,
 		});
-	});
-	it("drops the preserved edit original of the replaced recording", async () => {
-		const editSourceKey = "owner/video/source/original.mp4";
-		objects.set(editSourceKey, { ETag: "pre-replacement", ContentLength: 80 });
-		expect((await complete()).status).toBe(200);
-		expect(mocks.deleteObject).toHaveBeenCalledWith(editSourceKey);
-		expect(objects.has(editSourceKey)).toBe(false);
-		expect(objects.get(oldKey)?.ETag).toBe("original");
-	});
-	it("publishes the replacement even when the edit original cannot be dropped", async () => {
-		mocks.deleteObject.mockReturnValueOnce(
-			Effect.fail(new Error("Storage unavailable")),
-		);
-		expect((await complete()).status).toBe(200);
-		expect(video.source.outputKey).toBe(outputKey);
 	});
 	it("uses a new playback key even when CDN invalidation fails", async () => {
 		mocks.invalidate.mockRejectedValueOnce(new Error("CloudFront unavailable"));
@@ -499,7 +474,6 @@ describe("desktop reupload completion", () => {
 		expect(video.source.outputKey).toBe(oldKey);
 		expect(objects.get(oldKey)?.ETag).toBe("original");
 		expect(objects.get(outputKey)?.ETag).toBe("new-video");
-		expect(mocks.deleteObject).not.toHaveBeenCalled();
 		rejectCommit = false;
 		mocks.complete.mockReturnValueOnce(Effect.fail(new Error("NoSuchUpload")));
 		expect((await complete()).status).toBe(200);
@@ -525,17 +499,6 @@ describe("desktop reupload completion", () => {
 		expect((await complete()).status).toBe(200);
 		expect(mocks.complete).toHaveBeenCalledTimes(1);
 		expect(mocks.prepareReplacement).toHaveBeenCalledTimes(1);
-	});
-	it("keeps the edit original when a late duplicate finds the replacement published", async () => {
-		const stale = { ...video, source: { ...video.source } };
-		expect((await complete()).status).toBe(200);
-		mocks.getOwnedById.mockImplementationOnce(() =>
-			Effect.succeed(Option.some([stale])),
-		);
-		mocks.deleteObject.mockClear();
-		expect((await complete()).status).toBe(200);
-		expect(mocks.prepareReplacement).toHaveBeenCalledTimes(2);
-		expect(mocks.deleteObject).not.toHaveBeenCalled();
 	});
 	it("rejects competing replacements after another operation publishes", async () => {
 		const competing = createDesktopReuploadToken(video, {

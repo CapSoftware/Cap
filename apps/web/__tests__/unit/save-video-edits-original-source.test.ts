@@ -13,6 +13,7 @@ const state = vi.hoisted(() => ({
 
 const headObjectMock = vi.fn();
 const copyObjectMock = vi.fn();
+const deleteObjectMock = vi.fn();
 const clearPendingEditMock = vi.fn();
 const startMock = vi.fn();
 
@@ -64,6 +65,7 @@ vi.mock("@cap/web-backend", () => ({
 					bucketName: "cap-bucket",
 					headObject: headObjectMock,
 					copyObject: copyObjectMock,
+					deleteObject: deleteObjectMock,
 				},
 			]),
 	},
@@ -142,6 +144,7 @@ describe("saveVideoEdits original source copy", () => {
 		vi.clearAllMocks();
 		state.rows.clear();
 		copyObjectMock.mockReturnValue(Effect.succeed({}));
+		deleteObjectMock.mockReturnValue(Effect.void);
 	});
 
 	it("keeps the preserved original when its HEAD request fails transiently", async () => {
@@ -184,7 +187,7 @@ describe("saveVideoEdits original source copy", () => {
 	});
 
 	it("treats a Google Drive 404 as a missing original", async () => {
-		setUpVideo({ edited: false });
+		setUpVideo({ edited: true });
 		headObjectMock.mockReturnValue(
 			Effect.fail(
 				storageError(
@@ -196,9 +199,38 @@ describe("saveVideoEdits original source copy", () => {
 			),
 		);
 
-		await expect(saveTrim(300)).resolves.toEqual({ success: true });
+		await expect(saveTrim(60)).resolves.toEqual({ success: true });
 
 		expect(copyObjectMock).toHaveBeenCalledOnce();
+	});
+
+	it("replaces a leftover original when the video has no edit record", async () => {
+		setUpVideo({ edited: false });
+		headObjectMock.mockReturnValue(Effect.succeed({ ContentLength: 1 }));
+
+		await expect(saveTrim(300)).resolves.toEqual({ success: true });
+
+		expect(deleteObjectMock).toHaveBeenCalledWith(sourceKey);
+		expect(copyObjectMock).toHaveBeenCalledWith(
+			"cap-bucket/user-1/video-1/result.mp4",
+			sourceKey,
+		);
+		expect(deleteObjectMock.mock.invocationCallOrder[0]).toBeLessThan(
+			copyObjectMock.mock.invocationCallOrder[0] ?? 0,
+		);
+	});
+
+	it("does not start the edit when a leftover original cannot be cleared", async () => {
+		setUpVideo({ edited: false });
+		deleteObjectMock.mockReturnValue(
+			Effect.fail(storageError(s3Error("SlowDown", 503))),
+		);
+
+		await expect(saveTrim(300)).rejects.toBeDefined();
+
+		expect(copyObjectMock).not.toHaveBeenCalled();
+		expect(startMock).not.toHaveBeenCalled();
+		expect(clearPendingEditMock).toHaveBeenCalledOnce();
 	});
 
 	it("does not copy when the preserved original exists", async () => {
@@ -207,6 +239,7 @@ describe("saveVideoEdits original source copy", () => {
 
 		await expect(saveTrim(60)).resolves.toEqual({ success: true });
 
+		expect(deleteObjectMock).not.toHaveBeenCalled();
 		expect(copyObjectMock).not.toHaveBeenCalled();
 	});
 });

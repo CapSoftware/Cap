@@ -606,6 +606,10 @@ async function loadOriginalEditTranscript(
 	video: typeof videos.$inferSelect,
 	editSpec: VideoEditSpec,
 ) {
+	// A reupload clears the status when it publishes, and until the new pass
+	// finishes the stored words can still be the replaced recording's.
+	if (video.transcriptionStatus !== "COMPLETE") return null;
+
 	const [bucket] = await Storage.getAccessForVideo(
 		decodeStorageVideo(video),
 	).pipe(runWorkflowPromise);

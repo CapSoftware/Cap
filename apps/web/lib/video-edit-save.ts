@@ -90,19 +90,19 @@ async function getVideoBucket(video: typeof videos.$inferSelect) {
 
 async function ensureOriginalSourceCopy(
 	video: typeof videos.$inferSelect,
-	sourceKey = getEditSourceKey(video.ownerId, video.id),
+	sourceKey: string,
+	isEdited: boolean,
 ) {
 	const bucket = await getVideoBucket(video);
-	const hasSource = await objectExists(bucket, sourceKey);
+	if (isEdited && (await objectExists(bucket, sourceKey))) return;
 
-	if (!hasSource) {
-		const resultKey = getResultKey(video.ownerId, video.id);
-		await bucket
-			.copyObject(`${bucket.bucketName}/${resultKey}`, sourceKey)
-			.pipe(runPromise);
-	}
-
-	return sourceKey;
+	// Publishing an edit writes its record, so an unedited video's output is its
+	// original. Any copy already here is from a failed edit or a replaced upload.
+	if (!isEdited) await bucket.deleteObject(sourceKey).pipe(runPromise);
+	const resultKey = getResultKey(video.ownerId, video.id);
+	await bucket
+		.copyObject(`${bucket.bucketName}/${resultKey}`, sourceKey)
+		.pipe(runPromise);
 }
 
 async function markEditProcessing({
@@ -334,7 +334,7 @@ export async function saveVideoEditsAsUser(
 		previousSpec,
 	});
 	try {
-		await ensureOriginalSourceCopy(video, sourceKey);
+		await ensureOriginalSourceCopy(video, sourceKey, Boolean(existingEdit));
 	} catch (error) {
 		await clearPendingEdit(videoId, sourceKey, operation);
 		throw error;
