@@ -4175,18 +4175,26 @@ pub fn open_camera_window(cx: &mut App) {
         camera_window::window_size(&state, camera_window::retained_preview_aspect(cx));
 
     let main = cx.global::<AppWindows>().main;
-    let display = main
-        .update(cx, |_, window, _| window.bounds())
-        .ok()
-        .and_then(|bounds| {
+    let main_geometry = main
+        .update(cx, |_, window, _| {
+            (
+                window.bounds(),
+                crate::target_overlay::capture_scale_factor(window),
+            )
+        })
+        .ok();
+    let capture_scale = main_geometry.map_or(1., |(_, scale)| f64::from(scale));
+    let display = main_geometry
+        .and_then(|(bounds, _)| {
             camera_window::display_for_point(
                 f64::from(f32::from(bounds.origin.x + bounds.size.width / 2.)),
                 f64::from(f32::from(bounds.origin.y + bounds.size.height / 2.)),
+                capture_scale,
             )
         })
         .or_else(scap_targets::Display::get_containing_cursor)
         .unwrap_or_else(scap_targets::Display::primary);
-    let (x, y) = camera_window::opening_position(&display, (width, height));
+    let (x, y) = camera_window::opening_position(&display, (width, height), capture_scale);
     let display_id = gpui_display_id(Some(&display), cx);
 
     let inline = camera_preview_is_inline(cx);
