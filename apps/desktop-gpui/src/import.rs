@@ -947,7 +947,7 @@ fn transcode_video(
     .map_err(|error| format!("Failed to open video file: {error}"))?;
     check_editor_import_cancelled(project_path, cancelled)?;
 
-    let (video_stream_index, video_time_base, frame_rate, source_width, source_height) = {
+    let (video_stream_index, video_time_base, frame_rate, unrotated_size, rotation) = {
         let stream = input
             .streams()
             .best(ffmpeg::media::Type::Video)
@@ -957,17 +957,23 @@ fn transcode_video(
             .decoder()
             .video()
             .map_err(|e| format!("Failed to create decoder: {e}"))?;
+        let stream_aspect =
+            ffmpeg::Rational::from(unsafe { (*stream.as_ptr()).sample_aspect_ratio });
         (
             stream.index(),
             stream.time_base(),
             stream.avg_frame_rate(),
-            decoder.width(),
-            decoder.height(),
+            square_pixel_size(
+                decoder.width(),
+                decoder.height(),
+                [stream_aspect, decoder.aspect_ratio()],
+            ),
+            SourceRotation::from_parameters(&stream.parameters()),
         )
     };
 
-    let output_width = ensure_even(source_width);
-    let output_height = ensure_even(source_height);
+    let (scaled_width, scaled_height) = unrotated_size;
+    let (output_width, output_height) = rotation.rotated_size(scaled_width, scaled_height);
     let fps = if frame_rate.denominator() > 0 {
         ((f64::from(frame_rate.numerator()) / f64::from(frame_rate.denominator())).round() as u32)
             .clamp(1, 120)
@@ -1122,9 +1128,10 @@ fn transcode_video(
                     &video_frame,
                     &mut scaler,
                     video_encoder.pixel_format,
-                    output_width,
-                    output_height,
+                    scaled_width,
+                    scaled_height,
                 )?;
+                let frame = rotation.apply(frame)?;
                 video_encoder.queue_frame(frame, timestamp, &mut output)?;
 
                 frames_processed += 1;
@@ -1181,9 +1188,10 @@ fn transcode_video(
             &video_frame,
             &mut scaler,
             video_encoder.pixel_format,
-            output_width,
-            output_height,
+            scaled_width,
+            scaled_height,
         )?;
+        let frame = rotation.apply(frame)?;
         video_encoder.queue_frame(frame, timestamp, &mut output)?;
     }
 
@@ -1307,6 +1315,163 @@ fn convert_for_encode(
         .map_err(|e| format!("Transcoding failed: {e}"))?;
     scaled.set_pts(frame.pts());
     Ok(scaled)
+}
+
+/// The coded size resampled to square pixels. Anamorphic sources (a non-1:1
+/// sample aspect ratio) otherwise reach the editor at their coded size, which
+/// stretches them because nothing downstream reads the ratio.
+fn square_pixel_size(width: u32, height: u32, sample_aspects: [ffmpeg::Rational; 2]) -> (u32, u32) {
+    let display_width = sample_aspects
+        .into_iter()
+        .find(|ratio| ratio.numerator() > 0 && ratio.denominator() > 0)
+        .map(|ratio| {
+            f64::from(width) * f64::from(ratio.numerator()) / f64::from(ratio.denominator())
+        })
+        .filter(|width| width.is_finite() && (2.0..=f64::from(MAX_IMAGE_DIMENSION)).contains(width))
+        .map_or(width, |width| width.round() as u32);
+    (ensure_even(display_width), ensure_even(height))
+}
+
+/// Clockwise turn that makes a source upright. Phone cameras store portrait
+/// video as landscape pixels plus a display matrix; the bundle's display.mp4
+/// carries no matrix and the editor never reads one, so the import bakes the
+/// turn into the pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SourceRotation {
+    None,
+    Clockwise90,
+    Clockwise180,
+    Clockwise270,
+}
+
+impl SourceRotation {
+    fn from_parameters(parameters: &avcodec::Parameters) -> Self {
+        let counterclockwise = unsafe {
+            let parameters = parameters.as_ptr();
+            let side_data = ffmpeg::ffi::av_packet_side_data_get(
+                (*parameters).coded_side_data,
+                (*parameters).nb_coded_side_data,
+                ffmpeg::ffi::AVPacketSideDataType::AV_PKT_DATA_DISPLAYMATRIX,
+            );
+            if side_data.is_null()
+                || (*side_data).data.is_null()
+                || (*side_data).size < 9 * std::mem::size_of::<i32>()
+            {
+                return Self::None;
+            }
+            ffmpeg::ffi::av_display_rotation_get((*side_data).data.cast::<i32>())
+        };
+        Self::from_counterclockwise_degrees(counterclockwise)
+    }
+
+    fn from_counterclockwise_degrees(degrees: f64) -> Self {
+        if !degrees.is_finite() {
+            return Self::None;
+        }
+        match (-degrees.round()).rem_euclid(360.0) as u32 {
+            90 => Self::Clockwise90,
+            180 => Self::Clockwise180,
+            270 => Self::Clockwise270,
+            _ => Self::None,
+        }
+    }
+
+    fn rotated_size(self, width: u32, height: u32) -> (u32, u32) {
+        match self {
+            Self::Clockwise90 | Self::Clockwise270 => (height, width),
+            Self::None | Self::Clockwise180 => (width, height),
+        }
+    }
+
+    fn apply(self, frame: ffmpeg::frame::Video) -> Result<ffmpeg::frame::Video, String> {
+        if self == Self::None {
+            return Ok(frame);
+        }
+        let format = frame.format();
+        if !matches!(format, avformat::Pixel::YUV420P | avformat::Pixel::NV12) {
+            return Err(format!("Cannot rotate {format:?} video frames"));
+        }
+        let (width, height) = self.rotated_size(frame.width(), frame.height());
+        let mut rotated = ffmpeg::frame::Video::new(format, width, height);
+        for plane in 0..frame.planes() {
+            let sample_bytes = if format == avformat::Pixel::NV12 && plane == 1 {
+                2
+            } else {
+                1
+            };
+            let source = SourcePlane {
+                data: frame.data(plane),
+                stride: frame.stride(plane),
+                width: frame.plane_width(plane) as usize,
+                height: frame.plane_height(plane) as usize,
+                sample_bytes,
+            };
+            let dst_stride = rotated.stride(plane);
+            source.rotate_into(rotated.data_mut(plane), dst_stride, self);
+        }
+        rotated.set_pts(frame.pts());
+        Ok(rotated)
+    }
+}
+
+struct SourcePlane<'a> {
+    data: &'a [u8],
+    stride: usize,
+    width: usize,
+    height: usize,
+    sample_bytes: usize,
+}
+
+impl SourcePlane<'_> {
+    fn rotate_into(&self, dst: &mut [u8], dst_stride: usize, rotation: SourceRotation) {
+        match self.sample_bytes {
+            2 => self.rotate_samples::<2>(dst, dst_stride, rotation),
+            _ => self.rotate_samples::<1>(dst, dst_stride, rotation),
+        }
+    }
+
+    fn rotate_samples<const SAMPLE: usize>(
+        &self,
+        dst: &mut [u8],
+        dst_stride: usize,
+        rotation: SourceRotation,
+    ) {
+        let (width, height) = (self.width, self.height);
+        match rotation {
+            SourceRotation::None => self.copy_tiles::<SAMPLE>(dst, dst_stride, |x, y| (x, y)),
+            SourceRotation::Clockwise90 => {
+                self.copy_tiles::<SAMPLE>(dst, dst_stride, |x, y| (height - 1 - y, x))
+            }
+            SourceRotation::Clockwise180 => {
+                self.copy_tiles::<SAMPLE>(dst, dst_stride, |x, y| (width - 1 - x, height - 1 - y))
+            }
+            SourceRotation::Clockwise270 => {
+                self.copy_tiles::<SAMPLE>(dst, dst_stride, |x, y| (y, width - 1 - x))
+            }
+        }
+    }
+
+    fn copy_tiles<const SAMPLE: usize>(
+        &self,
+        dst: &mut [u8],
+        dst_stride: usize,
+        destination: impl Fn(usize, usize) -> (usize, usize),
+    ) {
+        const TILE: usize = 64;
+        for tile_y in (0..self.height).step_by(TILE) {
+            for tile_x in (0..self.width).step_by(TILE) {
+                for y in tile_y..(tile_y + TILE).min(self.height) {
+                    let row = &self.data[y * self.stride..];
+                    for x in tile_x..(tile_x + TILE).min(self.width) {
+                        let (dst_x, dst_y) = destination(x, y);
+                        let to = dst_y * dst_stride + dst_x * SAMPLE;
+                        let from = x * SAMPLE;
+                        dst[to..to + SAMPLE].copy_from_slice(&row[from..from + SAMPLE]);
+                    }
+                }
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
