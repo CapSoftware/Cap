@@ -884,6 +884,7 @@ fn styled_settings(rng: &mut Rng) -> CaptionSettings {
         enabled: true,
         font: ["System Sans-Serif", "System Serif", "System Monospace"][rng.range(0, 2) as usize]
             .into(),
+        custom_font: Some("/fonts/Brand Sans.otf".into()),
         size: rng.range(12, 96) as u32,
         color: "#12AB34".into(),
         background_color: "#00C800".into(),
