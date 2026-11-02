@@ -111,6 +111,7 @@ import {
 } from "@/lib/agent-upload-entitlement";
 import {
 	createAgentFeedback,
+	deleteAgentFeedback,
 	isAgentIdempotencyKey,
 	runAgentExternalMutation,
 	runAgentMutation,
@@ -7642,28 +7643,12 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 							requestId,
 							decodeReplay: decodeMutationResponse,
 							execute: async (tx) => {
-								const [comment] = await tx
-									.select({ id: Db.comments.id })
-									.from(Db.comments)
-									.where(
-										and(
-											eq(Db.comments.id, path.commentId),
-											eq(Db.comments.videoId, path.id),
-											eq(Db.comments.authorId, principal.id),
-										),
-									)
-									.limit(1)
-									.for("update");
-								if (!comment) return { state: "not_found" };
-								await tx
-									.delete(Db.comments)
-									.where(
-										and(
-											eq(Db.comments.id, path.commentId),
-											eq(Db.comments.videoId, path.id),
-											eq(Db.comments.authorId, principal.id),
-										),
-									);
+								const deleted = await deleteAgentFeedback(tx, {
+									videoId: path.id,
+									commentId: path.commentId,
+									authorId: principal.id,
+								});
+								if (!deleted) return { state: "not_found" };
 								return {
 									state: "success",
 									response: mutationResponse(

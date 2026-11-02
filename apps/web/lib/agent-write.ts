@@ -10,7 +10,7 @@ import {
 	type DatabaseError,
 	type Video,
 } from "@cap/web-domain";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { Effect, Schedule, Schema } from "effect";
 import { revalidatePath } from "next/cache";
 import { createNotification } from "@/lib/Notification";
@@ -521,6 +521,57 @@ export const createAgentFeedback = Effect.fn("Agent.createFeedback")(
 		return result.response;
 	},
 );
+
+export const deleteAgentFeedback = async (
+	tx: Transaction,
+	input: {
+		videoId: Video.VideoId;
+		commentId: Comment.CommentId;
+		authorId: Agent.AgentPrincipal["Type"]["id"];
+	},
+) => {
+	const ownComment = and(
+		eq(Db.comments.id, input.commentId),
+		eq(Db.comments.videoId, input.videoId),
+		eq(Db.comments.authorId, input.authorId),
+	);
+	const [comment] = await tx
+		.select({ parentCommentId: Db.comments.parentCommentId })
+		.from(Db.comments)
+		.where(ownComment)
+		.limit(1)
+		.for("update");
+	if (!comment) return false;
+	await tx.delete(Db.comments).where(ownComment);
+	if (comment.parentCommentId) {
+		await tx
+			.delete(Db.notifications)
+			.where(
+				and(
+					eq(Db.notifications.type, "reply"),
+					sql`JSON_EXTRACT(${Db.notifications.data}, '$.comment.id') = ${input.commentId}`,
+				),
+			);
+		return true;
+	}
+	await tx
+		.delete(Db.notifications)
+		.where(
+			and(
+				inArray(Db.notifications.type, ["comment", "reaction"]),
+				sql`JSON_EXTRACT(${Db.notifications.data}, '$.comment.id') = ${input.commentId}`,
+			),
+		);
+	await tx
+		.delete(Db.notifications)
+		.where(
+			and(
+				eq(Db.notifications.type, "reply"),
+				sql`JSON_EXTRACT(${Db.notifications.data}, '$.parentCommentId') = ${input.commentId}`,
+			),
+		);
+	return true;
+};
 
 export const updateAgentCap = Effect.fn("Agent.updateCap")(function* (input: {
 	videoId: Video.VideoId;
