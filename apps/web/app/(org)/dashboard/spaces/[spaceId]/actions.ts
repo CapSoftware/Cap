@@ -244,11 +244,18 @@ export async function setSpaceMembers(
 	const roleByUserId = new Map(
 		submittedMembers.map((member) => [member.userId, member.role]),
 	);
+	const creatorBelongsToOrganization = await usersBelongToOrganization(
+		access.organizationId,
+		access.organizationOwnerId,
+		[access.createdById],
+	);
+	const submittedIds = submittedMembers.map((member) => member.userId);
 	const allMemberIds = Array.from(
-		new Set([
-			...submittedMembers.map((member) => member.userId),
-			access.createdById,
-		]),
+		new Set(
+			creatorBelongsToOrganization
+				? [...submittedIds, access.createdById]
+				: submittedIds,
+		),
 	);
 	const now = new Date();
 	const values = allMemberIds.map((userId) => {
@@ -266,7 +273,7 @@ export async function setSpaceMembers(
 	});
 
 	await db().delete(spaceMembers).where(eq(spaceMembers.spaceId, spaceId));
-	await db().insert(spaceMembers).values(values);
+	if (values.length > 0) await db().insert(spaceMembers).values(values);
 
 	revalidatePath(`/dashboard/spaces/${spaceId}`);
 	return { success: true, count: allMemberIds.length };

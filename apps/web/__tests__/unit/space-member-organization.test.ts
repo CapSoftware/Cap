@@ -1,3 +1,4 @@
+import { Space, User } from "@cap/web-domain";
 import { getTableName } from "drizzle-orm";
 import type { MySqlTable } from "drizzle-orm/mysql-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -5,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
 	user: vi.fn(),
 	spaceAccess: vi.fn(),
+	spaceManager: vi.fn(),
 	organizationAccess: vi.fn(),
 	organizationMemberIds: [] as string[],
 	spaces: [] as unknown[],
@@ -72,6 +74,7 @@ vi.mock("@/lib/server", () => ({ runPromise: vi.fn() }));
 vi.mock("@/lib/org-pro", () => ({ isOrganizationOwnerPro: async () => true }));
 vi.mock("@/actions/organization/space-authorization", () => ({
 	getSpaceAccess: mocks.spaceAccess,
+	requireSpaceManager: mocks.spaceManager,
 }));
 vi.mock("@/actions/organization/authorization", () => ({
 	getOrganizationAccess: mocks.organizationAccess,
@@ -83,6 +86,7 @@ vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 
 import { createSpace } from "@/actions/organization/create-space";
 import { updateSpace } from "@/actions/organization/update-space";
+import { setSpaceMembers } from "@/app/(org)/dashboard/spaces/[spaceId]/actions";
 
 function spaceForm(members: string[]) {
 	const formData = new FormData();
@@ -107,6 +111,11 @@ beforeEach(() => {
 		canManage: true,
 	});
 	mocks.organizationAccess.mockResolvedValue({ ownerId: "owner" });
+	mocks.spaceManager.mockResolvedValue({
+		organizationId: "org-1",
+		organizationOwnerId: "owner",
+		createdById: "creator",
+	});
 });
 
 describe("editing a space", () => {
@@ -190,5 +199,37 @@ describe("creating a space", () => {
 			expect.objectContaining({ userId: "member", role: "member" }),
 			expect.objectContaining({ userId: "creator", role: "admin" }),
 		]);
+	});
+});
+
+describe("setting space members", () => {
+	const setMembers = (userIds: string[]) =>
+		setSpaceMembers({
+			spaceId: Space.SpaceId.make("space-1"),
+			userIds: userIds.map((userId) => User.UserId.make(userId)),
+			role: "member",
+		});
+
+	it("keeps the creator as admin", async () => {
+		await setMembers(["member"]);
+		expect(mocks.inserted).toEqual([
+			expect.objectContaining({ userId: "member", role: "member" }),
+			expect.objectContaining({ userId: "creator", role: "admin" }),
+		]);
+	});
+
+	it("does not restore a creator who left the organization", async () => {
+		mocks.organizationMemberIds = ["member"];
+		await setMembers(["member"]);
+		expect(mocks.inserted).toEqual([
+			expect.objectContaining({ userId: "member", role: "member" }),
+		]);
+	});
+
+	it("saves with no members once the creator has left", async () => {
+		mocks.organizationMemberIds = ["member"];
+		await expect(setMembers([])).resolves.toEqual({ success: true, count: 0 });
+		expect(mocks.writes).toContain("delete:space_members");
+		expect(mocks.inserted).toEqual([]);
 	});
 });
