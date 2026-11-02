@@ -79,6 +79,18 @@ describe("checkout seat control", () => {
 		);
 	const seatsInput = () =>
 		container.querySelector<HTMLInputElement>("input[inputmode=numeric]");
+	const payButton = () =>
+		container.querySelector<HTMLButtonElement>("button[type=submit]");
+	const typeSeats = (value: string) =>
+		act(async () => {
+			const input = seatsInput();
+			if (!input) return;
+			Object.getOwnPropertyDescriptor(
+				HTMLInputElement.prototype,
+				"value",
+			)?.set?.call(input, value);
+			input.dispatchEvent(new Event("input", { bubbles: true }));
+		});
 	const addUser = () =>
 		act(async () =>
 			container
@@ -140,6 +152,13 @@ describe("checkout seat control", () => {
 			lineItem: "li_seats",
 			quantity: 3,
 		});
+		expect(payButton()?.disabled).toBe(true);
+
+		await act(async () => pending[1]?.());
+		stripe.checkout = checkoutWithSeats(3, update);
+		await render();
+		expect(seatsInput()?.value).toBe("3");
+		expect(payButton()?.disabled).toBe(false);
 	});
 
 	it("restores the session's count when an update fails", async () => {
@@ -181,5 +200,37 @@ describe("checkout seat control", () => {
 		await act(async () => pending[0]?.());
 
 		expect(seatsInput()?.value).toBe("3");
+		expect(payButton()?.disabled).toBe(true);
+
+		update.mockImplementationOnce(async () => ({ type: "success" }));
+		await act(async () => vi.advanceTimersByTime(400));
+		expect(update).toHaveBeenLastCalledWith({
+			lineItem: "li_seats",
+			quantity: 3,
+		});
+		stripe.checkout = checkoutWithSeats(3, update);
+		await render();
+		expect(payButton()?.disabled).toBe(false);
+	});
+
+	it("restores the session's count when a typed count with a leading zero fails", async () => {
+		const update = vi.fn(
+			async (): Promise<UpdateResult> => ({
+				type: "error",
+				error: { message: "nope" },
+			}),
+		);
+		stripe.checkout = checkoutWithSeats(1, update);
+		await render();
+
+		await typeSeats("02");
+		await act(async () => vi.advanceTimersByTime(400));
+
+		expect(update).toHaveBeenLastCalledWith({
+			lineItem: "li_seats",
+			quantity: 2,
+		});
+		expect(seatsInput()?.value).toBe("1");
+		expect(payButton()?.disabled).toBe(false);
 	});
 });

@@ -431,7 +431,7 @@ function SeatControl({
 			setFailed(result.type === "error");
 			if (result.type === "error") {
 				setDraft((current) =>
-					current === String(seats) ? String(quantity) : current,
+					Number(current) === seats ? String(quantity) : current,
 				);
 			}
 		}, SEAT_COMMIT_DELAY_MS);
