@@ -23,6 +23,15 @@ impl EditorWindow {
         if self.sidebar.tab != SidebarTab::Camera {
             return;
         }
+        let enabled = self
+            .style_control_project()
+            .camera
+            .active_chroma_key()
+            .is_some();
+        if self.sidebar.green_screen_open.is_open() != enabled {
+            self.sidebar.green_screen_open.set_open(enabled);
+            self.animate_collapsibles(window, cx);
+        }
         self.ensure_hex_input(ColorTarget::ChromaKey, window, cx);
     }
 
@@ -41,9 +50,7 @@ impl EditorWindow {
                         .on_click(cx.listener(move |this, _, window, cx| {
                             let project = this.style_control_project();
                             let next = !project.camera.chroma_key.is_some_and(|key| key.enabled);
-                            this.sidebar.green_screen_open.set_open(next);
                             this.sidebar.key_color_not_found = false;
-                            this.animate_collapsibles(window, cx);
                             this.edit_project_without_timeline(
                                 "camera-green-screen",
                                 window,
@@ -278,6 +285,50 @@ mod tests {
             .iter()
             .zip(expected)
             .all(|(&value, expected)| value.abs_diff(u16::from(expected)) <= tolerance)
+    }
+
+    fn editor_with_camera_style(
+        cx: &mut gpui::TestAppContext,
+    ) -> (gpui::Entity<EditorWindow>, &mut gpui::VisualTestContext) {
+        let project = tempfile::tempdir().unwrap();
+        let project_path = project.path().to_path_buf();
+        let (editor, cx) = cx
+            .add_window_view(move |window, cx| EditorWindow::new(project_path.clone(), window, cx));
+        editor.update(cx, |editor, _| {
+            editor.project.timeline = Some(
+                serde_json::from_value(serde_json::json!({
+                    "segments": [],
+                    "zoomSegments": [],
+                    "styleSegments": [{ "overrides": { "camera": {} } }],
+                }))
+                .unwrap(),
+            );
+        });
+        (editor, cx)
+    }
+
+    // gpui's test windows have no platform window handle on macOS or Windows, which the editor needs.
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    fn settings_follow_the_key_through_undo_and_style_changes(cx: &mut gpui::TestAppContext) {
+        let (editor, cx) = editor_with_camera_style(cx);
+        editor.update_in(cx, |editor, window, cx| {
+            editor.sidebar.tab = SidebarTab::Camera;
+            editor.prepare_green_screen_fields(window, cx);
+            assert!(!editor.sidebar.green_screen_open.is_open());
+
+            editor.project.camera.chroma_key = Some(ChromaKey::default());
+            editor.prepare_green_screen_fields(window, cx);
+            assert!(editor.sidebar.green_screen_open.is_open());
+
+            editor.open_style_group(0, StyleGroup::Camera, window, cx);
+            editor.prepare_green_screen_fields(window, cx);
+            assert!(!editor.sidebar.green_screen_open.is_open());
+
+            editor.sidebar.style_target = None;
+            editor.prepare_green_screen_fields(window, cx);
+            assert!(editor.sidebar.green_screen_open.is_open());
+        });
     }
 
     #[test]
