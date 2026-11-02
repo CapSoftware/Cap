@@ -2387,6 +2387,248 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    #[test]
+    fn display_matrix_angles_map_to_the_clockwise_turn_ffmpeg_applies() {
+        assert_eq!(
+            SourceRotation::from_counterclockwise_degrees(-90.0),
+            SourceRotation::Clockwise90
+        );
+        assert_eq!(
+            SourceRotation::from_counterclockwise_degrees(90.0),
+            SourceRotation::Clockwise270
+        );
+        assert_eq!(
+            SourceRotation::from_counterclockwise_degrees(180.0),
+            SourceRotation::Clockwise180
+        );
+        assert_eq!(
+            SourceRotation::from_counterclockwise_degrees(-180.0),
+            SourceRotation::Clockwise180
+        );
+        assert_eq!(
+            SourceRotation::from_counterclockwise_degrees(-0.0),
+            SourceRotation::None
+        );
+        assert_eq!(
+            SourceRotation::from_counterclockwise_degrees(45.0),
+            SourceRotation::None
+        );
+        assert_eq!(
+            SourceRotation::from_counterclockwise_degrees(f64::NAN),
+            SourceRotation::None
+        );
+    }
+
+    #[test]
+    fn anamorphic_sources_resample_to_square_pixels() {
+        let unset = ffmpeg::Rational::new(0, 1);
+        assert_eq!(
+            square_pixel_size(1440, 1080, [ffmpeg::Rational::new(4, 3), unset]),
+            (1920, 1080)
+        );
+        assert_eq!(
+            square_pixel_size(720, 720, [unset, ffmpeg::Rational::new(9, 16)]),
+            (404, 720)
+        );
+        assert_eq!(square_pixel_size(1920, 1080, [unset, unset]), (1920, 1080));
+        assert_eq!(
+            square_pixel_size(1920, 1080, [ffmpeg::Rational::new(1, 1), unset]),
+            (1920, 1080)
+        );
+        assert_eq!(
+            square_pixel_size(1920, 1080, [ffmpeg::Rational::new(100, 1), unset]),
+            (1920, 1080)
+        );
+    }
+
+    /// Encodes a clip whose top-left quadrant is bright and everything else
+    /// dark, tagged with the display matrix and sample aspect ratio a phone or
+    /// editing app would write. The angle is the counterclockwise rotation
+    /// ffprobe reports (-90 for an iPhone portrait clip); `av_display_rotation_set`
+    /// takes the clockwise angle.
+    fn write_tagged_source(
+        path: &Path,
+        width: u32,
+        height: u32,
+        counterclockwise_degrees: Option<f64>,
+        sample_aspect: Option<(i32, i32)>,
+    ) {
+        let mut output = avformat::output(path).unwrap();
+        let mut encoder =
+            open_h264_encoder(&mut output, width, height, 10, (1, 10).into()).unwrap();
+        unsafe {
+            let stream = (*output.as_mut_ptr())
+                .streams
+                .add(encoder.stream_index)
+                .read();
+            let parameters = (*stream).codecpar;
+            if let Some(degrees) = counterclockwise_degrees {
+                let side_data = ffmpeg::ffi::av_packet_side_data_new(
+                    &mut (*parameters).coded_side_data,
+                    &mut (*parameters).nb_coded_side_data,
+                    ffmpeg::ffi::AVPacketSideDataType::AV_PKT_DATA_DISPLAYMATRIX,
+                    9 * std::mem::size_of::<i32>(),
+                    0,
+                );
+                assert!(!side_data.is_null());
+                ffmpeg::ffi::av_display_rotation_set((*side_data).data.cast::<i32>(), -degrees);
+            }
+            if let Some((num, den)) = sample_aspect {
+                let ratio = ffmpeg::ffi::AVRational { num, den };
+                (*parameters).sample_aspect_ratio = ratio;
+                (*stream).sample_aspect_ratio = ratio;
+            }
+        }
+        output.write_header().unwrap();
+        for index in 0..10u64 {
+            let mut frame = ffmpeg::frame::Video::new(encoder.pixel_format, width, height);
+            let luma_stride = frame.stride(0);
+            let luma = frame.data_mut(0);
+            for y in 0..height as usize {
+                for x in 0..width as usize {
+                    let bright = x < width as usize / 2 && y < height as usize / 2;
+                    luma[y * luma_stride + x] = if bright { 235 } else { 16 };
+                }
+            }
+            for plane in 1..frame.planes() {
+                frame.data_mut(plane).fill(128);
+            }
+            encoder
+                .queue_frame(frame, Duration::from_millis(index * 100), &mut output)
+                .unwrap();
+        }
+        encoder.flush(&mut output).unwrap();
+        output.write_trailer().unwrap();
+    }
+
+    fn first_frame_luma(path: &Path) -> (u32, u32, Vec<u8>) {
+        let mut input = avformat::input(path).unwrap();
+        let stream = input.streams().best(ffmpeg::media::Type::Video).unwrap();
+        let index = stream.index();
+        let mut decoder = avcodec::Context::from_parameters(stream.parameters())
+            .unwrap()
+            .decoder()
+            .video()
+            .unwrap();
+        let mut frame = ffmpeg::frame::Video::empty();
+        for (stream, packet) in input.packets() {
+            if stream.index() != index {
+                continue;
+            }
+            decoder.send_packet(&packet).unwrap();
+            if decoder.receive_frame(&mut frame).is_ok() {
+                break;
+            }
+        }
+        if frame.width() == 0 {
+            decoder.send_eof().unwrap();
+            decoder.receive_frame(&mut frame).unwrap();
+        }
+        let mut gray = ffmpeg::frame::Video::empty();
+        ffmpeg::software::scaling::Context::get(
+            frame.format(),
+            frame.width(),
+            frame.height(),
+            avformat::Pixel::GRAY8,
+            frame.width(),
+            frame.height(),
+            ffmpeg::software::scaling::Flags::POINT,
+        )
+        .unwrap()
+        .run(&frame, &mut gray)
+        .unwrap();
+        let (width, height, stride) = (gray.width(), gray.height(), gray.stride(0));
+        let luma = (0..height as usize)
+            .flat_map(|y| gray.data(0)[y * stride..y * stride + width as usize].to_vec())
+            .collect();
+        (width, height, luma)
+    }
+
+    /// Whether each quadrant is bright, in top-left, top-right, bottom-left,
+    /// bottom-right order.
+    fn quadrant_brightness(width: u32, height: u32, luma: &[u8]) -> [bool; 4] {
+        let (width, height) = (width as usize, height as usize);
+        let mut sums = [0u64; 4];
+        let mut counts = [0u64; 4];
+        for y in 0..height {
+            for x in 0..width {
+                let quadrant = usize::from(x >= width / 2) + 2 * usize::from(y >= height / 2);
+                sums[quadrant] += u64::from(luma[y * width + x]);
+                counts[quadrant] += 1;
+            }
+        }
+        std::array::from_fn(|quadrant| sums[quadrant] / counts[quadrant].max(1) > 128)
+    }
+
+    fn import_tagged_source(
+        tag: &str,
+        width: u32,
+        height: u32,
+        counterclockwise_degrees: Option<f64>,
+        sample_aspect: Option<(i32, i32)>,
+    ) -> (u32, u32, [bool; 4]) {
+        ffmpeg::init().unwrap();
+        let root = temp_dir(tag);
+        let source = root.join("source.mp4");
+        write_tagged_source(
+            &source,
+            width,
+            height,
+            counterclockwise_degrees,
+            sample_aspect,
+        );
+        std::fs::write(root.join("recording-meta.json"), b"{}").unwrap();
+        let output = root.join("display.mp4");
+        transcode_video(&source, &output, None, &root, &|_| {}, None).unwrap();
+        let (out_width, out_height, luma) = first_frame_luma(&output);
+        std::fs::remove_dir_all(root).unwrap();
+        (
+            out_width,
+            out_height,
+            quadrant_brightness(out_width, out_height, &luma),
+        )
+    }
+
+    #[test]
+    fn untagged_sources_import_unchanged() {
+        assert_eq!(
+            import_tagged_source("untagged", 320, 240, None, None),
+            (320, 240, [true, false, false, false])
+        );
+    }
+
+    #[test]
+    fn iphone_portrait_video_imports_upright_and_portrait() {
+        assert_eq!(
+            import_tagged_source("rotate-cw", 320, 240, Some(-90.0), None),
+            (240, 320, [false, true, false, false])
+        );
+    }
+
+    #[test]
+    fn counterclockwise_and_upside_down_sources_import_upright() {
+        assert_eq!(
+            import_tagged_source("rotate-ccw", 320, 240, Some(90.0), None),
+            (240, 320, [false, false, true, false])
+        );
+        assert_eq!(
+            import_tagged_source("rotate-180", 320, 240, Some(180.0), None),
+            (320, 240, [false, false, false, true])
+        );
+    }
+
+    #[test]
+    fn anamorphic_video_imports_at_its_display_shape() {
+        assert_eq!(
+            import_tagged_source("anamorphic", 160, 240, None, Some((2, 1))),
+            (320, 240, [true, false, false, false])
+        );
+        assert_eq!(
+            import_tagged_source("anamorphic-rotated", 160, 240, Some(-90.0), Some((2, 1))),
+            (240, 320, [false, true, false, false])
+        );
+    }
+
     /// `CAP_IMPORT_BENCH_SOURCES=a.mp4,b.mp4 cargo test --bin cap-gpui benchmark_video_import -- --ignored --nocapture`
     #[test]
     #[ignore = "benchmark: transcodes the videos named by CAP_IMPORT_BENCH_SOURCES"]
