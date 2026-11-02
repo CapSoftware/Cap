@@ -69,6 +69,7 @@ import {
 } from "@/lib/share-playback";
 import { buildShareVideoMetadata } from "@/lib/share-video-metadata";
 import {
+	resolveForeignShareRedirect,
 	resolveRestrictedShareRedirect,
 	resolveShareWebUrl,
 } from "@/lib/share-web-url";
@@ -365,6 +366,13 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 	const videoId = params.videoId as Video.VideoId;
 	const awaitRecording =
 		isValidVideoIdParam(videoId) && hasRecordingStoppedParam(searchParams);
+
+	const foreignShareRedirect = await resolveForeignShareRedirect(
+		await headers(),
+		videoId,
+		searchParams,
+	);
+	if (foreignShareRedirect) redirect(foreignShareRedirect);
 
 	const page = await Effect.gen(function* () {
 		const videosPolicy = yield* VideosPolicy;
