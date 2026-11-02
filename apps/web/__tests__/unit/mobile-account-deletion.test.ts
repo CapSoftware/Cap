@@ -1,6 +1,6 @@
 import type { DbClient } from "@cap/web-backend/src/Database";
 import type { HttpApi } from "@effect/platform";
-import type { Table } from "drizzle-orm";
+import type { SQL, Table } from "drizzle-orm";
 import type { Context, Layer as EffectLayer } from "effect";
 import {
 	afterAll,
@@ -14,7 +14,11 @@ import {
 
 const mocks = vi.hoisted(() => ({
 	createAccountDeletionRequest: vi.fn(),
-	updates: [] as { table: string; value: unknown }[],
+	updates: [] as {
+		table: string;
+		value: unknown;
+		where: { sql: string; params: unknown[] };
+	}[],
 	deletes: [] as string[],
 	dispose: async () => {},
 }));
@@ -34,12 +38,19 @@ vi.mock("@/lib/server", async () => {
 	const { HttpApiBuilder, HttpServer } = await import("@effect/platform");
 	const { Effect, Layer, Option } = await import("effect");
 	const { getTableName } = await import("drizzle-orm");
+	const { MySqlDialect } = await import("drizzle-orm/mysql-core");
+	const dialect = new MySqlDialect();
 
 	const client = {
 		update: (table: Table) => ({
 			set: (value: unknown) => ({
-				where: async () => {
-					mocks.updates.push({ table: getTableName(table), value });
+				where: async (condition: SQL) => {
+					const { sql, params } = dialect.sqlToQuery(condition);
+					mocks.updates.push({
+						table: getTableName(table),
+						value,
+						where: { sql, params },
+					});
 				},
 			}),
 		}),
@@ -147,7 +158,14 @@ describe("mobile account deletion request", () => {
 			"users",
 			"agent_api_keys",
 		]);
-		expect(mocks.updates[1]?.value).toEqual({ revokedAt: expect.any(Date) });
+		expect(mocks.updates[1]).toEqual({
+			table: "agent_api_keys",
+			value: { revokedAt: expect.any(Date) },
+			where: {
+				sql: "(`agent_api_keys`.`userId` = ? and `agent_api_keys`.`revokedAt` is null)",
+				params: ["user-1"],
+			},
+		});
 	});
 
 	it("leaves every credential in place when the request cannot be recorded", async () => {
