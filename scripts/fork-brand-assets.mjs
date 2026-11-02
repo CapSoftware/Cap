@@ -4,9 +4,44 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { brand } from "./fork-brand.mjs";
+
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const branding = path.join(root, "apps/desktop-gpui/assets/branding");
 export const masterPath = path.join(branding, "brand.svg");
+const TOKENS_OUTSIDE_THE_ART = new Set(["ink", "ink-dark"]);
+
+export function applyPalette(master, palette = brand.palette) {
+	const painted = new Set();
+	const result = master.replace(
+		/<(linearGradient|radialGradient) id="([a-z-]+)"([^>]*)>([\s\S]*?)<\/\1>/g,
+		(_element, kind, id, attributes, stops) => {
+			const token = palette[id];
+			if (token === undefined) {
+				throw new Error(
+					`brand.svg paints ${id}, which brand.json's palette lacks`,
+				);
+			}
+			const colors = [token].flat();
+			const count = stops.match(/stop-color="/g)?.length ?? 0;
+			if (colors.length !== count) {
+				throw new Error(`palette ${id} needs ${count} colour(s)`);
+			}
+			let index = 0;
+			painted.add(id);
+			return `<${kind} id="${id}"${attributes}>${stops.replace(
+				/stop-color="[^"]*"/g,
+				() => `stop-color="${colors[index++]}"`,
+			)}</${kind}>`;
+		},
+	);
+	for (const token of Object.keys(palette)) {
+		if (!painted.has(token) && !TOKENS_OUTSIDE_THE_ART.has(token)) {
+			throw new Error(`palette ${token} paints nothing in brand.svg`);
+		}
+	}
+	return result;
+}
 
 const open = (viewBox, width, height) =>
 	`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="${viewBox}" fill="none">`;
@@ -22,9 +57,10 @@ export function masterParts(master) {
 	for (const name of [
 		"defs",
 		"tile",
+		"rays",
 		"mark",
 		"rings",
-		"star",
+		"ground",
 		"mark-small",
 		"mark-tiny",
 		"glyph",
@@ -36,23 +72,29 @@ export function masterParts(master) {
 }
 
 export function tileSvg(parts, pixels) {
-	const detail =
-		pixels <= 32
-			? parts["mark-tiny"]
-			: pixels <= 48
-				? parts["mark-small"]
-				: pixels < 128
-					? `${parts.mark}\n${parts.star}`
-					: `${parts.mark}\n${parts.rings}\n${parts.star}`;
-	return `${open("0 0 1024 1024", pixels, pixels)}\n${parts.defs}\n${parts.tile}\n${detail}\n</svg>\n`;
+	const layers =
+		pixels <= 48
+			? [parts.tile, parts["mark-tiny"]]
+			: pixels <= 192
+				? [parts.tile, parts.rays, parts["mark-small"]]
+				: [parts.tile, parts.rays, parts.mark, parts.rings, parts.ground];
+	return `${open("0 0 1024 1024", pixels, pixels)}\n${parts.defs}\n${layers.join("\n")}\n</svg>\n`;
 }
 
-export function glyphSvg(parts, pixels) {
-	return `${open("0 0 1024 1024", pixels, pixels)}\n${parts.glyph}\n</svg>\n`;
+export function glyphBox(master) {
+	const box = master.match(/<g id="glyph"[^>]*data-view-box="([^"]+)"/)?.[1];
+	if (!box) throw new Error("brand.svg's glyph group needs data-view-box");
+	const [, , width, height] = box.split(" ").map(Number);
+	return { box, ratio: width / height };
+}
+
+export function glyphSvg(parts, { box }, height = 0) {
+	const size = height ? ` height="${height}"` : "";
+	return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${box}"${size} fill="none">\n${parts.glyph}\n</svg>\n`;
 }
 
 export function logoMarkSvg(parts) {
-	return `${open("100 100 824 824", 40, 40)}\n${parts.defs}\n${parts.tile}\n${parts["mark-small"]}\n</svg>\n`;
+	return `${open("100 100 824 824", 40, 40)}\n${parts.defs}\n${parts.tile}\n${parts.rays}\n${parts["mark-small"]}\n</svg>\n`;
 }
 
 export function logoFullSvg(parts, ink) {
@@ -61,6 +103,7 @@ export function logoFullSvg(parts, ink) {
 <svg x="0" y="0" width="40" height="40" viewBox="100 100 824 824">
 ${parts.defs}
 ${parts.tile}
+${parts.rays}
 ${parts["mark-small"]}
 </svg>
 <g transform="translate(46 27) scale(.0192)">
@@ -70,10 +113,10 @@ ${wordmark}
 `;
 }
 
-function render(svg, pixels, output) {
+function render(svg, pixels, output, height = pixels) {
 	execFileSync(
 		"rsvg-convert",
-		["-w", `${pixels}`, "-h", `${pixels}`, "-o", output],
+		["-w", `${pixels}`, "-h", `${height}`, "-o", output],
 		{
 			input: svg,
 		},
@@ -99,7 +142,10 @@ export function icoBytes(images) {
 }
 
 export async function generateBrandAssets() {
-	const parts = masterParts(await fs.readFile(masterPath, "utf8"));
+	const master = applyPalette(await fs.readFile(masterPath, "utf8"));
+	await fs.writeFile(masterPath, master);
+	const parts = masterParts(master);
+	const glyph = glyphBox(master);
 	const work = await fs.mkdtemp(path.join(os.tmpdir(), "fork-brand-"));
 	const app = path.join(branding, "app");
 	await fs.mkdir(app, { recursive: true });
@@ -142,13 +188,19 @@ export async function generateBrandAssets() {
 		}
 		await fs.writeFile(path.join(app, "icon.ico"), icoBytes(images));
 
+		const trayHeight = 72;
 		render(
-			glyphSvg(parts, 88),
-			88,
+			glyphSvg(parts, glyph),
+			Math.round(trayHeight * glyph.ratio),
 			path.join(
 				root,
 				"apps/desktop-gpui/assets/tray/tray-default-icon-ux-walk.png",
 			),
+			trayHeight,
+		);
+		await fs.writeFile(
+			path.join(root, "apps/desktop-gpui/assets/icons/ux-walk.svg"),
+			glyphSvg(parts, glyph),
 		);
 
 		await fs.writeFile(
@@ -157,11 +209,11 @@ export async function generateBrandAssets() {
 		);
 		await fs.writeFile(
 			path.join(branding, "logo-full.svg"),
-			logoFullSvg(parts, "#12161F"),
+			logoFullSvg(parts, brand.palette.ink),
 		);
 		await fs.writeFile(
 			path.join(branding, "logo-full-dark.svg"),
-			logoFullSvg(parts, "#FFFFFF"),
+			logoFullSvg(parts, brand.palette["ink-dark"]),
 		);
 	} finally {
 		await fs.rm(work, { recursive: true, force: true });

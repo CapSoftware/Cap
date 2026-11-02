@@ -1,5 +1,5 @@
 <p align="center">
-  <img width="144" height="144" src="apps/desktop-gpui/assets/branding/brand.svg" alt="Worm logo: a gold coiled worm around a white star on a red tile">
+  <img width="144" height="144" src="apps/desktop-gpui/assets/branding/brand.svg" alt="Worm logo: a gold worm coiling out of a red dune under a rising sun">
 </p>
 
 <h1 align="center">Worm</h1>
