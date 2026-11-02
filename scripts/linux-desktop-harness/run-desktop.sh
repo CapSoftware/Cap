@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Host side: one fresh desktop container, one Cap package, one scenario.
-# Usage: run-desktop.sh <gnome|hyprland|niri|sway> <package.deb|.AppImage|any file with DEV_BIN> <out-dir> [ENV=VALUE...]
+# Usage: run-desktop.sh <gnome|kde|hyprland|niri|sway> <package.deb|.AppImage|any file with DEV_BIN> <out-dir> [ENV=VALUE...]
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 desktop=$1
@@ -8,12 +8,16 @@ package=$(realpath "$2")
 out=$(realpath -m "$3")
 shift 3
 extra_env=()
+# Mesa's device_select Vulkan layer segfaults in vkEnumeratePhysicalDevices on
+# the vgem/vkms faux devices this harness renders with (Mesa 26.2 on Arch; on
+# Ubuntu 26.04 it took down 4 of 16 GNOME screenshot runs and none of 16 with
+# the layer off). Real GPUs are not affected, so the harness (not Cap) turns
+# that layer off.
+no_device_select=(-e VK_LOADER_LAYERS_DISABLE=VK_LAYER_MESA_device_select)
 case "$desktop" in
-  gnome) image=cap-harness-gnome dockerfile=gnome.Dockerfile up=gnome-up.sh ;;
-  # Mesa 26.2's device_select Vulkan layer segfaults in vkEnumeratePhysicalDevices
-  # on the vgem/vkms faux devices this harness renders with; real GPUs are not
-  # affected, so the harness (not Cap) turns that layer off.
-  hyprland|niri|sway) image=cap-harness-arch dockerfile=arch.Dockerfile up=arch-up.sh extra_env=(-e VK_LOADER_LAYERS_DISABLE=VK_LAYER_MESA_device_select) ;;
+  gnome) image=cap-harness-gnome dockerfile=gnome.Dockerfile up=gnome-up.sh extra_env=("${no_device_select[@]}") ;;
+  hyprland|niri|sway) image=cap-harness-arch dockerfile=arch.Dockerfile up=arch-up.sh extra_env=("${no_device_select[@]}") ;;
+  kde) image=cap-harness-kde dockerfile=kde.Dockerfile up=kde-up.sh ;;
   *) echo "unknown desktop $desktop" >&2; exit 2 ;;
 esac
 name=cap-$desktop-$$

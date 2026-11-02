@@ -1788,12 +1788,9 @@ export function buildProcessVideoArgs(input: ProcessVideoArgsInput): string[] {
 				)
 			: []),
 		...input.extraInputArgs,
-		// Browser captures change size when the tab resizes. Rebuilding the filter graph for that crashes h264_nvenc
-		// (SIGSEGV on FFmpeg 7.1, even with a fixed output size), so keep the first graph; scale absorbs the new size
-		// exactly as the libx264 fallback's auto-inserted scaler does.
-		...(nvenc && !gpuDecode && input.videoTranscode && !input.normalizeH264Level
-			? ["-reinit_filter", "0"]
-			: []),
+		// Browser captures change size when the tab resizes. FFmpeg rebuilds the filter graph and scales every frame
+		// back to the first size, for NVENC as for libx264. Keeping the first graph instead (-reinit_filter 0) feeds
+		// frames of the new size through filters set up for the old one, and h264_nvenc stalls then segfaults.
 		"-i",
 		input.inputPath,
 	];

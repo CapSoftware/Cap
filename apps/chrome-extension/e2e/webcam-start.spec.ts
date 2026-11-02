@@ -1,19 +1,10 @@
-import { mkdtemp, rm } from "node:fs/promises";
 import {
 	createServer,
 	type IncomingMessage,
 	type ServerResponse,
 } from "node:http";
-import { tmpdir } from "node:os";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import {
-	type BrowserContext,
-	chromium,
-	expect,
-	type Page,
-	test,
-} from "@playwright/test";
+import { type BrowserContext, expect, type Page, test } from "@playwright/test";
+import { launchExtensionBrowser } from "./browser";
 
 type ChromeGlobal = typeof globalThis & {
 	chrome: {
@@ -33,8 +24,6 @@ type ChromeGlobal = typeof globalThis & {
 	};
 };
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const extensionPath = path.resolve(__dirname, "../dist");
 const SETTINGS_KEY = "cap-extension-settings";
 const AUTH_KEY = "cap-extension-auth";
 const BOOTSTRAP_CACHE_KEY = "cap-extension-bootstrap-cache";
@@ -163,14 +152,11 @@ const createMockCapServer = async () => {
 	};
 };
 
-const launchExtensionContext = async () => {
-	const userDataDir = await mkdtemp(path.join(tmpdir(), "cap-repro-e2e-"));
-	const context = await chromium.launchPersistentContext(userDataDir, {
-		channel: "chromium",
+const launchExtensionContext = () =>
+	launchExtensionBrowser({
+		profilePrefix: "cap-repro-e2e-",
 		headless: true,
 		args: [
-			`--disable-extensions-except=${extensionPath}`,
-			`--load-extension=${extensionPath}`,
 			"--allow-http-screen-capture",
 			"--auto-select-tab-capture-source-by-title=Cap Repro Capture Target",
 			"--auto-select-desktop-capture-source=Cap Repro Capture Target",
@@ -180,12 +166,6 @@ const launchExtensionContext = async () => {
 			"--use-fake-ui-for-media-stream",
 		],
 	});
-	const cleanup = async () => {
-		await context.close();
-		await rm(userDataDir, { recursive: true, force: true });
-	};
-	return { context, cleanup };
-};
 
 const getServiceWorker = async (context: BrowserContext) => {
 	const existing = context

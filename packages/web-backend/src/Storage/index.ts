@@ -11,7 +11,10 @@ import {
 import { Effect, Exit, Option } from "effect";
 
 import { S3Buckets } from "../S3Buckets/index.ts";
-import type { S3BucketAccess } from "../S3Buckets/S3BucketAccess.ts";
+import type {
+	ConditionalWriteOptions,
+	S3BucketAccess,
+} from "../S3Buckets/S3BucketAccess.ts";
 import {
 	copyGoogleDriveFile,
 	createGoogleDriveResumableUpload,
@@ -87,6 +90,7 @@ type MultipartAccess = {
 			S3.CompleteMultipartUploadCommandInput,
 			"Key" | "Bucket" | "UploadId"
 		>,
+		options?: ConditionalWriteOptions,
 	) => Effect.Effect<
 		{ Location?: string; ETag?: string },
 		StorageDomain.StorageError
@@ -221,7 +225,8 @@ const makeS3MultipartAccess = (s3: S3BucketAccess): MultipartAccess => ({
 			S3.CompleteMultipartUploadCommandInput,
 			"Key" | "Bucket" | "UploadId"
 		>,
-	) => mapStorageError(s3.multipart.complete(key, uploadId, args)),
+		options?: ConditionalWriteOptions,
+	) => mapStorageError(s3.multipart.complete(key, uploadId, args, options)),
 	abort: (
 		key: string,
 		uploadId: string,
@@ -429,6 +434,8 @@ const makeS3Access = (s3: S3BucketAccess) => ({
 		signingArgs?: Parameters<S3BucketAccess["getInternalSignedObjectUrl"]>[1],
 	) => mapStorageError(s3.getInternalSignedObjectUrl(key, signingArgs)),
 	getObject: (key: string) => mapStorageError(s3.getObject(key)),
+	getObjectWithETag: (key: string) =>
+		mapStorageError(s3.getObjectWithETag(key)),
 	listObjects: (input: {
 		prefix?: string;
 		maxKeys?: number;
@@ -439,6 +446,7 @@ const makeS3Access = (s3: S3BucketAccess) => ({
 				Contents: result.Contents?.map((object) => ({
 					Key: object.Key,
 					Size: object.Size,
+					ETag: object.ETag,
 					LastModified: object.LastModified,
 				})),
 				KeyCount: result.KeyCount,
@@ -462,11 +470,20 @@ const makeS3Access = (s3: S3BucketAccess) => ({
 		body: Parameters<S3BucketAccess["putObject"]>[1],
 		fields?: Parameters<S3BucketAccess["putObject"]>[2],
 	) => mapStorageError(s3.putObject(key, body, fields)).pipe(Effect.asVoid),
+	putObjectWithETag: (
+		key: string,
+		body: string,
+		fields?: Parameters<S3BucketAccess["putObject"]>[2],
+	) =>
+		mapStorageError(s3.putObject(key, body, fields)).pipe(
+			Effect.map((result) => ({ ETag: result.ETag })),
+		),
 	copyObject: (
 		source: string,
 		key: string,
 		args?: Omit<S3.CopyObjectCommandInput, "Bucket" | "CopySource" | "Key">,
-	) => mapStorageError(s3.copyObject(source, key, args)),
+		options?: ConditionalWriteOptions,
+	) => mapStorageError(s3.copyObject(source, key, args, options)),
 	copyObjectForRecording: (source: string, key: string) =>
 		copyS3ObjectForRecording(s3, source, key),
 	deleteObject: (key: string) =>
@@ -924,6 +941,7 @@ const makeGoogleDriveAccess = ({
 						.map((object) => ({
 							Key: object.objectKey,
 							Size: object.contentLength ?? undefined,
+							ETag: undefined,
 							LastModified: object.updatedAt,
 						}));
 					return {
@@ -1118,7 +1136,8 @@ function withPublishedRecordingOutput<
 			source: string,
 			key: string,
 			args?: Omit<S3.CopyObjectCommandInput, "Bucket" | "CopySource" | "Key">,
-		) => access.copyObject(resolveCopySource(source), key, args),
+			options?: ConditionalWriteOptions,
+		) => access.copyObject(resolveCopySource(source), key, args, options),
 		copyObjectForRecording: (source: string, key: string) =>
 			access.copyObjectForRecording(resolveCopySource(source), key),
 	};

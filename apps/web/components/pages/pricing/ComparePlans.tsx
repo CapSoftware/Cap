@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
 import { useStripeContext } from "@/app/Layout/StripeContext";
 import { trackEvent } from "@/app/utils/analytics";
+import { useInAppCheckout } from "@/components/pages/checkout/useInAppCheckout";
 import {
 	BODY_TEXT,
 	H_SECTION,
@@ -223,9 +224,12 @@ export const ComparePlans = () => {
 	const user = useCurrentUser();
 	const { symbol } = useCurrency();
 	const stripeCtx = useStripeContext();
+	const inAppCheckout = useInAppCheckout();
 	const [loading, setLoading] = useState(false);
 
-	const disabled = Boolean((user?.email && user.isPro) || loading);
+	const disabled = Boolean(
+		(user?.email && user.isPro) || loading || inAppCheckout?.pending,
+	);
 
 	const plans: Plan[] = useMemo(
 		() => [
@@ -317,6 +321,10 @@ export const ComparePlans = () => {
 
 		if (key === "free") {
 			window.location.href = "/download";
+			return;
+		}
+		if (key === "pro" && inAppCheckout) {
+			inAppCheckout.open({ plan: "monthly", seats: 1 });
 			return;
 		}
 

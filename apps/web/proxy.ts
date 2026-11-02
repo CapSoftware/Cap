@@ -44,6 +44,7 @@ const FRAME_PROTECTED_PATHS = [
 	"/admin",
 	"/signup",
 	"/verify-otp",
+	"/checkout",
 ];
 
 const isFrameProtectedPath = (path: string) =>

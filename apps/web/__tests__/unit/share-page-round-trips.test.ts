@@ -75,7 +75,11 @@ vi.mock("@/lib/loom-deferred-processing", () => ({
 }));
 vi.mock("@/lib/public-share-video", () => ({ getPublicShareVideo: vi.fn() }));
 vi.mock("@/lib/share-playback", () => ({
-	getSharePlaybackUrl: async () => "https://media.example.com/result.mp4",
+	canStartPlaybackInHtml: () => true,
+	getSharePlaybackSource: async () => ({
+		url: "https://media.example.com/result.mp4",
+		defaultStorage: true,
+	}),
 }));
 vi.mock("@/lib/share-web-url", () => ({ resolveShareWebUrl: vi.fn() }));
 vi.mock("@/lib/transcribe", () => ({ transcribeVideo: vi.fn() }));
@@ -288,7 +292,7 @@ describe("share page database round trips", () => {
 		expect(result.header.spacesData).toHaveLength(4);
 		expect(result.header).toMatchObject({ canDownload: true, hasEdits: false });
 		expect({ roundTrips, queries: mocks.query.mock.calls.length }).toEqual({
-			roundTrips: 4,
+			roundTrips: 3,
 			queries: 20,
 		});
 	});

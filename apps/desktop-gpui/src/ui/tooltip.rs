@@ -21,6 +21,7 @@ use gpui::{
 };
 
 use crate::{
+    i18n::tr,
     theme::Theme,
     ui::kbd::{KbdChip, kbd_symbol},
 };
@@ -61,7 +62,7 @@ impl Tooltip {
     /// `ComingSoonTooltip`: always the literal text, instant delay at the call
     /// site (`openDelay={0} closeDelay={0}`).
     pub fn coming_soon(theme: &Theme) -> Self {
-        Self::new(theme, "Coming Soon")
+        Self::new(theme, tr::ui::coming_soon())
     }
 
     /// `EditorButton`'s `kbd` prop: one chip per key, in order.

@@ -22,7 +22,7 @@ export const MESSENGER_AGENT: {
 export const CAP_REFERENCE_GUIDE = `CAP REFERENCE GUIDE (use this to give accurate, detailed answers with correct links):
 
 WHAT IS CAP:
-Cap is the open source alternative to Loom. It's a lightweight, powerful screen recording and video messaging tool for creators, educators, marketers, developers, and remote teams. Cap is privacy-first, open source, and built with Tauri (Rust + native UI) so it's fast and uses minimal resources (not Electron). Cap lets you record your screen, camera, or both, then share instantly or edit locally with professional tools.
+Cap is the open source alternative to Loom. It's a lightweight, powerful screen recording and video messaging tool for creators, educators, marketers, developers, and remote teams. Cap is privacy-first, open source, and built in Rust with a native interface so it's fast and uses minimal resources (not Electron). Cap lets you record your screen, camera, or both, then share instantly or edit locally with professional tools.
 
 IMPORTANT URLS:
 - Homepage: https://cap.so

@@ -141,7 +141,7 @@ async fn render_preview_with_base(
 /// instead of building a fresh exporter (a new wgpu device, every shader, and
 /// a cold decoder per recording segment) for each frame. This is what makes the
 /// export page's preview respond in one frame's worth of work rather than
-/// seconds, and it is the same path the Tauri editor's fast preview takes.
+/// seconds.
 pub async fn render_preview_with_editor(
     editor: &EditorInstance,
     project_config: ProjectConfiguration,

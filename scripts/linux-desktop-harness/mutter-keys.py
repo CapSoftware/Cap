@@ -3,6 +3,7 @@
 keyboard reaches GNOME Shell (and so its global shortcut grabs).
 
 Usage: mutter-keys.py Control_L+Shift_L+F9 [--hold-ms 120]
+       mutter-keys.py --type TEXT   (printable ASCII, one key per character)
 """
 import sys
 import time
@@ -23,8 +24,14 @@ for n in range(1, 13):
     KEYSYMS[f"F{n}"] = 0xFFBE + n - 1
 
 
+def keysym(key: str) -> int:
+    # A printable ASCII character's keysym is its code point.
+    return KEYSYMS[key] if key in KEYSYMS else ord(key)
+
+
 def main() -> int:
-    chord = sys.argv[1].split("+")
+    typing = sys.argv[1] == "--type"
+    chord = [] if typing else sys.argv[1].split("+")
     hold = 0.12
     if "--hold-ms" in sys.argv:
         hold = int(sys.argv[sys.argv.index("--hold-ms") + 1]) / 1000
@@ -54,12 +61,27 @@ def main() -> int:
 
     call("Start")
     time.sleep(0.3)
+    # A fresh session can drop its first key, so a Shift tap nothing reacts
+    # to goes first.
+    call("NotifyKeyboardKeysym", GLib.Variant("(ub)", (KEYSYMS["Shift_L"], True)))
+    call("NotifyKeyboardKeysym", GLib.Variant("(ub)", (KEYSYMS["Shift_L"], False)))
+    time.sleep(0.05)
+    if typing:
+        for character in sys.argv[2]:
+            call("NotifyKeyboardKeysym", GLib.Variant("(ub)", (keysym(character), True)))
+            time.sleep(0.02)
+            call("NotifyKeyboardKeysym", GLib.Variant("(ub)", (keysym(character), False)))
+            time.sleep(0.03)
+        time.sleep(0.2)
+        call("Stop")
+        print(f"typed {sys.argv[2]!r}")
+        return 0
     for key in chord:
-        call("NotifyKeyboardKeysym", GLib.Variant("(ub)", (KEYSYMS[key], True)))
+        call("NotifyKeyboardKeysym", GLib.Variant("(ub)", (keysym(key), True)))
         time.sleep(0.03)
     time.sleep(hold)
     for key in reversed(chord):
-        call("NotifyKeyboardKeysym", GLib.Variant("(ub)", (KEYSYMS[key], False)))
+        call("NotifyKeyboardKeysym", GLib.Variant("(ub)", (keysym(key), False)))
         time.sleep(0.03)
     time.sleep(0.2)
     call("Stop")

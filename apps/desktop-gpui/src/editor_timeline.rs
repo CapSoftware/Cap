@@ -51,6 +51,7 @@ use gpui::{
 
 use crate::{
     editor_edits::{Selection, clip_is_muted},
+    i18n::tr,
     theme::Theme,
 };
 
@@ -472,12 +473,17 @@ pub fn marking_resolution(zoom: f64) -> f64 {
 }
 
 /// `formatTime` (`routes/editor/utils.ts:1-13`) -- `M:SS`, which is both the
-/// transport clock and the **ruler's** label (`TL/index.tsx:48, 1597`).
+/// transport clock and the **ruler's** label (`TL/index.tsx:48, 1597`). One
+/// deliberate deviation: from an hour on it prints `H:MM:SS`, where the source
+/// prints a minute count such as `65:05`.
 pub fn format_time(seconds: f64) -> String {
-    let seconds = seconds.max(0.0);
-    let minutes = (seconds / 60.0).floor() as u64;
-    let secs = (seconds % 60.0).floor() as u64;
-    format!("{minutes}:{secs:02}")
+    let total = seconds.max(0.0).floor() as u64;
+    let (hours, minutes, secs) = (total / 3600, total / 60 % 60, total % 60);
+    if hours > 0 {
+        format!("{hours}:{minutes:02}:{secs:02}")
+    } else {
+        format!("{minutes}:{secs:02}")
+    }
 }
 
 /// The *other* `formatTime`, the clip track's own (`TL/ClipTrack.tsx:129-141`):
@@ -948,17 +954,17 @@ impl TrackKind {
         match self {
             // The clip row's gutter label is "Video", not the definition's
             // "Clip" (`TL/index.tsx:1334`).
-            Self::Clip => "Video",
-            Self::Style => "Style",
-            Self::Image => "Image",
-            Self::Caption => "Captions",
-            Self::Keyboard => "Keyboard",
-            Self::Text => "Text",
-            Self::Mask => "Mask",
-            Self::Audio => "Audio",
-            Self::Zoom => "Zoom",
+            Self::Clip => tr::editor::timeline::track::video(),
+            Self::Style => tr::editor::timeline::track::style(),
+            Self::Image => tr::editor::timeline::track::image(),
+            Self::Caption => tr::editor::timeline::track::captions(),
+            Self::Keyboard => tr::editor::timeline::track::keyboard(),
+            Self::Text => tr::editor::timeline::track::text_track(),
+            Self::Mask => tr::editor::timeline::track::mask(),
+            Self::Audio => tr::editor::timeline::track::audio(),
+            Self::Zoom => tr::editor::timeline::track::zoom(),
             Self::ThreeD => "3D",
-            Self::Scene => "Scene",
+            Self::Scene => tr::editor::timeline::track::scene(),
         }
     }
 
@@ -997,30 +1003,48 @@ impl TrackKind {
 
     pub fn picker_label(self) -> &'static str {
         match self {
-            Self::Clip => "Clip",
+            Self::Clip => tr::editor::timeline::track::clip(),
             other => other.label(),
         }
     }
 
     pub fn picker_description(self) -> &'static str {
         match self {
-            Self::Clip => "Your recorded screen footage.",
-            Self::Style => "Change background, camera and cursor settings over time.",
-            Self::Image => "Add an image to your recording.",
-            Self::Zoom => "Smooth zoom-ins that follow the action.",
-            Self::Caption => "Auto-transcribe your recording into on-screen subtitles.",
-            Self::Keyboard => "Display key presses on screen as you type.",
-            Self::Text => "Add custom text overlays and titles to the canvas.",
-            Self::Mask => "Blur or black out private areas of the screen.",
-            Self::Audio => "Add background music or import your own audio.",
-            Self::Scene => "Switch layouts between your screen and camera.",
-            Self::ThreeD => "Tilt the scene in 3D perspective.",
+            Self::Clip => tr::editor::timeline::picker::clip(),
+            Self::Style => tr::editor::timeline::picker::style(),
+            Self::Image => tr::editor::timeline::picker::image(),
+            Self::Zoom => tr::editor::timeline::picker::zoom(),
+            Self::Caption => tr::editor::timeline::picker::caption(),
+            Self::Keyboard => tr::editor::timeline::picker::keyboard(),
+            Self::Text => tr::editor::timeline::picker::text_overlay(),
+            Self::Mask => tr::editor::timeline::picker::mask(),
+            Self::Audio => tr::editor::timeline::picker::audio(),
+            Self::Scene => tr::editor::timeline::picker::scene(),
+            Self::ThreeD => tr::editor::timeline::picker::three_d(),
+        }
+    }
+
+    /// What the add-track hint says over the tile of a single-lane track
+    /// that is already on the timeline.
+    pub fn picker_remove(self) -> &'static str {
+        match self {
+            Self::Clip => tr::editor::timeline::remove::clip(),
+            Self::Style => tr::editor::timeline::remove::style(),
+            Self::Image => tr::editor::timeline::remove::image(),
+            Self::Caption => tr::editor::timeline::remove::captions(),
+            Self::Keyboard => tr::editor::timeline::remove::keyboard(),
+            Self::Text => tr::editor::timeline::remove::text_track(),
+            Self::Mask => tr::editor::timeline::remove::mask(),
+            Self::Audio => tr::editor::timeline::remove::audio(),
+            Self::Zoom => tr::editor::timeline::remove::zoom(),
+            Self::ThreeD => tr::editor::timeline::remove::three_d(),
+            Self::Scene => tr::editor::timeline::remove::scene(),
         }
     }
 
     pub fn picker_unavailable(self) -> &'static str {
         match self {
-            Self::Scene => "Record with a camera to use scenes.",
+            Self::Scene => tr::editor::timeline::picker::scene_unavailable(),
             _ => "",
         }
     }
@@ -1188,6 +1212,11 @@ pub enum SegmentDetail {
         /// Held (paused) windows inside this clip's on-screen box, in output
         /// time (`TL/ClipTrack.tsx:658-666`).
         holds: Arc<[(f64, f64)]>,
+        /// The transition into this clip from the one before it: how long
+        /// its overlap is on screen, in output seconds (holds inside it
+        /// stretch it), and whether it fades through black rather than
+        /// crossfading.
+        transition_in: Option<(f64, bool)>,
     },
     /// `TL/ZoomTrack.tsx:343-349`.
     Zoom {
@@ -1383,7 +1412,7 @@ impl TimelineModel {
                 lane: segment.track,
                 detail: SegmentDetail::Text {
                     content: if segment.content.is_empty() {
-                        SharedString::new_static("Label")
+                        SharedString::new_static(tr::editor::timeline::segment::label())
                     } else {
                         SharedString::from(segment.content.clone())
                     },
@@ -1408,8 +1437,8 @@ impl TimelineModel {
                 lane: segment.track,
                 detail: SegmentDetail::Mask {
                     label: match segment.mask_type {
-                        MaskKind::Sensitive => "Sensitive",
-                        MaskKind::Highlight => "Highlight",
+                        MaskKind::Sensitive => tr::editor::timeline::segment::sensitive(),
+                        MaskKind::Highlight => tr::editor::timeline::segment::highlight(),
                     },
                 },
             })
@@ -1427,7 +1456,10 @@ impl TimelineModel {
                         .name
                         .clone()
                         .filter(|name| !name.is_empty())
-                        .map_or_else(|| SharedString::new_static("Audio"), SharedString::from),
+                        .map_or_else(
+                            || SharedString::new_static(tr::editor::timeline::segment::audio()),
+                            SharedString::from,
+                        ),
                     enabled: segment.enabled,
                     fade_in: segment.fade_in,
                     fade_out: segment.fade_out,
@@ -1446,7 +1478,7 @@ impl TimelineModel {
                 lane: 0,
                 detail: SegmentDetail::Caption {
                     text: if segment.text.is_empty() {
-                        SharedString::new_static("Caption")
+                        SharedString::new_static(tr::editor::timeline::segment::caption())
                     } else {
                         SharedString::from(segment.text.clone())
                     },
@@ -1697,10 +1729,10 @@ fn clip_rows(
                     // clips sidebar (`displayName`).
                     name: match segment.name.as_deref().map(str::trim) {
                         Some(name) if !name.is_empty() => SharedString::from(name.to_string()),
-                        _ if multiple_clips => {
-                            SharedString::from(format!("Clip {}", segment.recording_clip))
-                        }
-                        _ => SharedString::new_static("Clip"),
+                        _ if multiple_clips => SharedString::from(
+                            tr::editor::timeline::segment::numbered_clip(segment.recording_clip),
+                        ),
+                        _ => SharedString::new_static(tr::editor::timeline::segment::clip()),
                     },
                     source_start: segment.start,
                     // The label shows `formatTime(seg.end - seg.start)` -- the
@@ -1712,6 +1744,12 @@ fn clip_rows(
                     volume: segment.volume(),
                     recording_clip: segment.recording_clip,
                     holds: inner_holds,
+                    transition_in: timeline.effective_transition(index).map(|transition| {
+                        (
+                            effective_to_output(holds, previous + transition.duration) - start,
+                            transition.kind == cap_project::ClipTransitionType::FadeThroughBlack,
+                        )
+                    }),
                 },
             }
         })
@@ -1738,11 +1776,11 @@ fn parse_hex_color(value: &str) -> Option<Hsla> {
 /// `getSceneLabel` / `getSceneIcon` (`TL/SceneTrack.tsx:80-102`).
 fn scene_label(mode: SceneMode) -> &'static str {
     match mode {
-        SceneMode::CameraOnly => "Camera Only",
-        SceneMode::HideCamera => "Hide Camera",
-        SceneMode::SplitScreen => "Split Screen",
-        SceneMode::Floating => "Floating",
-        SceneMode::Default => "Default",
+        SceneMode::CameraOnly => tr::editor::timeline::scene::camera_only(),
+        SceneMode::HideCamera => tr::editor::timeline::scene::hide_camera(),
+        SceneMode::SplitScreen => tr::editor::timeline::scene::split_screen(),
+        SceneMode::Floating => tr::editor::timeline::scene::floating(),
+        SceneMode::Default => tr::editor::timeline::scene::default(),
     }
 }
 
@@ -1947,8 +1985,8 @@ pub fn render_ruler(theme: &Theme, view: TimelineView, viewport_width: f32) -> A
                             // overhang into the icon gutter
                             // (`TL/index.tsx:1591-1594`). gpui has no
                             // transform, so the label sits in a fixed box wide
-                            // enough for `M:SS` at any minute count and is
-                            // centred inside it.
+                            // enough for `M:SS`, or `H:MM:SS` below ten hours,
+                            // and is centred inside it.
                             .when(second != 0., |this| this.left(px(-22.)))
                             .w(px(44.))
                             .flex()
@@ -2473,12 +2511,12 @@ pub fn new_camera3d_ghost(model: &TimelineModel, preview: f64) -> Option<(f64, f
 /// nothing but the plus.
 fn camera3d_ghost_label(width: f32, duration: f64) -> Option<String> {
     if width >= 208. {
-        Some(format!(
-            "Add shot \u{b7} {} \u{b7} {duration:.1}s",
-            crate::editor_panels::CAMERA3D_DEFAULT_LOOK_NAME
+        Some(tr::editor::timeline::add_shot_with_look(
+            tr::editor::panel::camera3d::look::glide_across(),
+            crate::i18n::decimal(format!("{duration:.1}")),
         ))
     } else if width >= 84. {
-        Some("Add shot".to_string())
+        Some(tr::editor::timeline::add_shot().to_string())
     } else {
         None
     }
@@ -2634,18 +2672,18 @@ fn render_empty_track(
 ) -> Option<AnyElement> {
     let (copy, action) = match kind {
         // `TL/CaptionsTrack.tsx:146-160`.
-        TrackKind::Caption => ("No captions", None),
+        TrackKind::Caption => (tr::editor::timeline::empty::captions(), None),
         // `TL/KeyboardTrack.tsx:146-153`.
-        TrackKind::Keyboard => ("No keyboard events", None),
+        TrackKind::Keyboard => (tr::editor::timeline::empty::keyboard(), None),
         // `TL/AudioTrack.tsx:400-427`, `TL/ThreeDTrack.tsx:319-337`, and the
         // scene lane, which had no empty state at all.
         TrackKind::Audio => (
-            kind.picker_description().trim_end_matches('.'),
-            Some("Add audio"),
+            tr::editor::timeline::empty::audio(),
+            Some(tr::editor::timeline::empty::add_audio()),
         ),
         TrackKind::Scene => (
-            kind.picker_description().trim_end_matches('.'),
-            Some("Add scene"),
+            tr::editor::timeline::empty::scene(),
+            Some(tr::editor::timeline::empty::add_scene()),
         ),
         _ => return None,
     };
@@ -2657,6 +2695,26 @@ fn render_empty_track(
         hovered,
         active,
     ))
+}
+
+fn render_transition_in(theme: &Theme, overlap_width: f32, clip_width: f32) -> AnyElement {
+    let accent = Hsla::from(theme.editor.accent);
+    let band_width = overlap_width.min(clip_width).max(3.);
+    let hatch = gpui::linear_gradient(
+        135.,
+        gpui::linear_color_stop(accent.opacity(0.18), 0.42),
+        gpui::linear_color_stop(accent.opacity(0.55), 0.5),
+    );
+    div()
+        .absolute()
+        .top_0()
+        .bottom_0()
+        .left_0()
+        .w(px(band_width))
+        .bg(hatch)
+        .border_x_1()
+        .border_color(accent.opacity(0.7))
+        .into_any_element()
 }
 
 /// `SegmentRoot` (`TL/Track.tsx:100-137`): the positioned box, its tinted fill
@@ -2756,6 +2814,18 @@ fn render_segment(
             let hold_width = ((hold_end - hold_start) / secs_per_pixel) as f32;
             fill = fill.child(render_hold(theme, color, hold_x, hold_width, width, height));
         }
+    }
+
+    if let SegmentDetail::Clip {
+        transition_in: Some((seconds, _)),
+        ..
+    } = &segment.detail
+    {
+        fill = fill.child(render_transition_in(
+            theme,
+            (*seconds / secs_per_pixel) as f32,
+            width,
+        ));
     }
 
     fill = fill.child(render_label(
@@ -3239,7 +3309,7 @@ fn render_hold(
                     .text_size(px(10.))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(ink)
-                    .child("Paused"),
+                    .child(tr::editor::timeline::paused()),
             )
         })
 }
@@ -3483,14 +3553,19 @@ fn label_body(
         ) => label_row()
             .child(label_primary(theme, color).child(name.clone()))
             .when(*muted, |this| {
-                this.child(clip_badge(theme, color, "icons/volume-x.svg", "Muted"))
+                this.child(clip_badge(
+                    theme,
+                    color,
+                    "icons/volume-x.svg",
+                    tr::editor::timeline::segment::muted(),
+                ))
             })
             .when(*cursor_hidden, |this| {
                 this.child(clip_badge(
                     theme,
                     color,
                     "icons/mouse-pointer-ban.svg",
-                    "Cursor hidden",
+                    tr::editor::timeline::segment::cursor_hidden(),
                 ))
             })
             .child(label_secondary(theme, color).child(format_clip_time(*source_duration)))
@@ -3542,12 +3617,12 @@ fn label_body(
                 // least 140px wide (`TL/ZoomTrack.tsx:700-704`).
                 if visible_width >= 140. {
                     if *automatic {
-                        "Automatic Zoom"
+                        tr::editor::timeline::segment::automatic_zoom()
                     } else {
-                        "Manual Zoom"
+                        tr::editor::timeline::segment::manual_zoom()
                     }
                 } else {
-                    "Zoom"
+                    tr::editor::timeline::track::zoom()
                 },
             )))
             .child(label_secondary(theme, color).child(format!("{amount:.1}x")))
@@ -3561,7 +3636,7 @@ fn label_body(
 
         // -- Scene (`TL/SceneTrack.tsx:543-566`) --------------------------
         (SegmentDetail::Scene { mode }, LabelTier::Full) => label_row()
-            .child(label_primary(theme, color).child("Scene"))
+            .child(label_primary(theme, color).child(tr::editor::timeline::track::scene()))
             .child(label_secondary(theme, color).child(scene_label(*mode)))
             .into_any_element(),
         (SegmentDetail::Scene { mode }, LabelTier::Compact) => label_row()
@@ -3633,7 +3708,7 @@ fn label_body(
 
         // -- Mask (`TL/MaskTrack.tsx:481-495`) ----------------------------
         (SegmentDetail::Mask { label }, LabelTier::Full) => label_row()
-            .child(label_primary(theme, color).child("Mask"))
+            .child(label_primary(theme, color).child(tr::editor::timeline::track::mask()))
             .child(label_secondary(theme, color).child(*label))
             .into_any_element(),
         (SegmentDetail::Mask { label }, LabelTier::Compact) => label_row()
@@ -3791,6 +3866,18 @@ mod tests {
     const AUDIO_SAMPLE_RATE: usize = 48_000;
 
     // -- The ruler ----------------------------------------------------------
+
+    #[test]
+    fn the_clock_and_ruler_show_hours_from_an_hour_on() {
+        assert_eq!(format_time(0.), "0:00");
+        assert_eq!(format_time(95.7), "1:35");
+        assert_eq!(format_time(3599.9), "59:59");
+        assert_eq!(format_time(3600.), "1:00:00");
+        assert_eq!(format_time(3905.), "1:05:05");
+        assert_eq!(format_time(5400.), "1:30:00");
+        assert_eq!(format_time(36000.), "10:00:00");
+        assert_eq!(format_time(-3.), "0:00");
+    }
 
     #[test]
     fn clip_markings_stop_at_the_clip_edge() {
@@ -5515,7 +5602,7 @@ pub(crate) fn render_preparing_timeline(
                         .items_center()
                         .pl(px(10.))
                         .text_size(px(12.))
-                        .child("Clip"),
+                        .child(tr::editor::timeline::track::clip()),
                 )
                 .child(
                     div()
@@ -5556,7 +5643,7 @@ pub(crate) fn render_preparing_timeline(
                         .bottom_0()
                         .text_size(px(12.))
                         .text_color(Hsla::from(theme.editor.text_3))
-                        .child("Timeline"),
+                        .child(tr::editor::timeline::title()),
                 ),
         )
         .child(

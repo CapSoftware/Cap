@@ -106,6 +106,25 @@ async fn wait_for_submission(
     }
 }
 
+/// The result of a `map_async` whose submission has finished. wgpu runs map
+/// callbacks on whichever thread's poll collected them, so when several
+/// renderers share a device, another thread can still be about to run this
+/// buffer's callback after this thread's own wait returned.
+async fn mapped_result(
+    rx: &mut oneshot::Receiver<Result<(), wgpu::BufferAsyncError>>,
+    started: Instant,
+    frame_number: u32,
+    timeout: std::time::Duration,
+) -> Option<Result<(), wgpu::BufferAsyncError>> {
+    match rx.try_recv() {
+        Ok(result) => return Some(result),
+        Err(oneshot::error::TryRecvError::Closed) => return None,
+        Err(oneshot::error::TryRecvError::Empty) => {}
+    }
+    let remaining = timeout.checked_sub(readback_waited(started, frame_number))?;
+    tokio::time::timeout(remaining, rx).await.ok()?.ok()
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FinishEncoderTimings {
     pub wait_previous_duration: std::time::Duration,
@@ -1147,17 +1166,18 @@ impl PendingNv12Readback {
             return Err(self.cancel());
         };
 
-        let completed = wait_for_submission(
-            device,
-            &submission,
-            Instant::now(),
-            self.frame_number,
-            gpu_buffer_wait_timeout(self.export_deadlines),
-        )
-        .await;
-        match (completed, rx.try_recv()) {
-            (true, Ok(Ok(()))) => {}
-            (_, Ok(Err(error))) => {
+        let started = Instant::now();
+        let timeout = gpu_buffer_wait_timeout(self.export_deadlines);
+        let completed =
+            wait_for_submission(device, &submission, started, self.frame_number, timeout).await;
+        let mapped = if completed {
+            mapped_result(&mut rx, started, self.frame_number, timeout).await
+        } else {
+            rx.try_recv().ok()
+        };
+        match (completed, mapped) {
+            (true, Some(Ok(()))) => {}
+            (_, Some(Err(error))) => {
                 self.unmap();
                 return Err(RenderingError::BufferMapFailed(error));
             }
@@ -1712,17 +1732,23 @@ impl PendingReadback {
         recycled: &mut RecycledReadbackFrames,
     ) -> Result<RenderedFrame, RenderingError> {
         let start_time = Instant::now();
+        let timeout = gpu_buffer_wait_timeout(self.export_deadlines);
         let completed = wait_for_submission(
             device,
             &self.submission,
             start_time,
             self.frame_number,
-            gpu_buffer_wait_timeout(self.export_deadlines),
+            timeout,
         )
         .await;
-        match (completed, self.rx.try_recv()) {
-            (true, Ok(Ok(()))) => {}
-            (_, Ok(Err(error))) => {
+        let mapped = if completed {
+            mapped_result(&mut self.rx, start_time, self.frame_number, timeout).await
+        } else {
+            self.rx.try_recv().ok()
+        };
+        match (completed, mapped) {
+            (true, Some(Ok(()))) => {}
+            (_, Some(Err(error))) => {
                 self.unmap();
                 return Err(RenderingError::BufferMapFailed(error));
             }
@@ -2402,6 +2428,41 @@ pub async fn flush_pending_readback(
 #[cfg(test)]
 mod readback_output_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn map_callback_run_by_another_thread_after_the_wait_still_counts() {
+        let timeout = std::time::Duration::from_secs(5);
+        let (tx, mut rx) = oneshot::channel();
+        let late = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            tx.send(Ok(())).expect("map receiver");
+        });
+        assert!(matches!(
+            mapped_result(&mut rx, Instant::now(), 0, timeout).await,
+            Some(Ok(()))
+        ));
+        late.join().unwrap();
+
+        let (tx, mut rx) = oneshot::channel::<Result<(), wgpu::BufferAsyncError>>();
+        drop(tx);
+        assert!(
+            mapped_result(&mut rx, Instant::now(), 0, timeout)
+                .await
+                .is_none()
+        );
+
+        let (_tx, mut rx) = oneshot::channel::<Result<(), wgpu::BufferAsyncError>>();
+        assert!(
+            mapped_result(
+                &mut rx,
+                Instant::now(),
+                0,
+                std::time::Duration::from_millis(20)
+            )
+            .await
+            .is_none()
+        );
+    }
 
     #[test]
     fn readback_allocation_reserves_frame_and_metadata_without_changing_length() {

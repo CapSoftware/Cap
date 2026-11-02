@@ -43,6 +43,9 @@ const extensionApiPath = (path: string) => `${EXTENSION_API_PREFIX}${path}`;
 const apiUrl = (settings: ExtensionSettings, path: string) =>
 	new URL(path, settings.apiBaseUrl).toString();
 
+const isLocalApi = (url: URL) =>
+	["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+
 const checkAuthStartRoute = async (
 	settings: ExtensionSettings,
 	url: URL,
@@ -59,7 +62,9 @@ const checkAuthStartRoute = async (
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		throw new Error(
-			`Could not reach Cap extension auth at ${url.origin}. Start the local web server with bun run dev:extension and make sure the extension Options Cap URL is ${settings.apiBaseUrl}. Redirect URI: ${redirectUri}. ${message}`,
+			isLocalApi(url)
+				? `Could not reach Cap extension auth at ${url.origin}. Start the local web server with bun run dev:extension and make sure the extension Options Cap URL is ${settings.apiBaseUrl}. Redirect URI: ${redirectUri}. ${message}`
+				: `Could not reach Cap at ${url.origin}. Check your connection and the Cap URL in the extension's options, then try again. (${message})`,
 		);
 	}
 };
