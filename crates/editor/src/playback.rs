@@ -24,10 +24,11 @@ use tracing::{info, warn};
 
 use crate::{
     PreviewSpeed, PreviewSpeedHandle,
+    audio::MusicTracks,
     audio_output::{AudioOutput, PlaySpec},
     editor,
     editor_instance::{SegmentMedia, cursor_timeline_settings},
-    segments::get_audio_segments,
+    segments::{MusicLoader, get_audio_segments, music_tracks_cover},
     telemetry::{
         PlaybackFrameSource, PlaybackSkipReason, PlaybackTelemetry, PlaybackTelemetryEvent,
     },
@@ -99,6 +100,56 @@ fn clip_audio_changed(previous: &ProjectConfiguration, next: &ProjectConfigurati
         }
         (None, None) => false,
         _ => true,
+    }
+}
+
+/// The music the live mix plays. An edit that reaches past the decoded source
+/// ranges decodes them on a blocking task, so the frame loop never waits on
+/// ffmpeg, and the mix refreshes once that decode lands.
+struct LiveMusic {
+    tracks: MusicTracks,
+    loader: MusicLoader,
+    pending: Option<tokio::task::JoinHandle<MusicTracks>>,
+}
+
+impl LiveMusic {
+    fn new(tracks: MusicTracks, loader: MusicLoader) -> Self {
+        Self {
+            tracks,
+            loader,
+            pending: None,
+        }
+    }
+
+    /// Whether the mix can refresh with [`Self::tracks`] right away after an
+    /// audio edit. When it cannot, the missing ranges start decoding.
+    fn edited(
+        &mut self,
+        project: &Arc<ProjectConfiguration>,
+        runtime: &tokio::runtime::Handle,
+    ) -> bool {
+        if music_tracks_cover(&self.tracks, project) {
+            self.pending = None;
+            return true;
+        }
+        let loader = self.loader.clone();
+        let project = Arc::clone(project);
+        self.pending = Some(runtime.spawn_blocking(move || loader.load(&project)));
+        false
+    }
+
+    /// Adopts a finished decode, returning whether the mix should refresh.
+    fn take_loaded(&mut self, runtime: &tokio::runtime::Handle) -> bool {
+        let Some(load) = self.pending.take_if(|load| load.is_finished()) else {
+            return false;
+        };
+        match runtime.block_on(load) {
+            Ok(tracks) => {
+                self.tracks = tracks;
+                true
+            }
+            Err(_) => false,
+        }
     }
 }
 
@@ -253,7 +304,8 @@ pub struct Playback {
     pub start_frame_number: u32,
     pub project: watch::Receiver<ProjectConfiguration>,
     pub segment_medias: Arc<Vec<SegmentMedia>>,
-    pub music: crate::audio::MusicTracks,
+    pub music: MusicTracks,
+    pub music_loader: MusicLoader,
     pub audio_output: Arc<AudioOutput>,
     pub telemetry: Option<PlaybackTelemetry>,
     pub preview_speed: PreviewSpeedHandle,
@@ -1485,6 +1537,7 @@ impl Playback {
 
             let mut transitioned_audio = None;
             let mut last_adopted_frame = None;
+            let mut live_music = LiveMusic::new(self.music.clone(), self.music_loader.clone());
             'playback: loop {
                 if *stop_rx.borrow() {
                     break;
@@ -1516,7 +1569,7 @@ impl Playback {
                     Arc::make_mut(&mut cached_project).audio = project.audio.clone();
                     let ticket = self.audio_output.prepare_playback(PlaySpec {
                         segments: audio_segments.clone(),
-                        music: self.music.clone(),
+                        music: live_music.tracks.clone(),
                         project,
                         duration_secs: duration,
                         start_playhead_secs: frame_number as f64 / fps_f64,
@@ -1581,6 +1634,7 @@ impl Playback {
                     continue;
                 }
 
+                let mut refresh_audio = live_music.take_loaded(&runtime);
                 if self.project.has_changed().unwrap_or(false) {
                     let next_project = self.project.borrow_and_update().clone();
                     let audio_changed = cached_project.audio != next_project.audio
@@ -1593,23 +1647,10 @@ impl Playback {
                         self.render_constants.options.screen_size,
                     );
                     cached_project = Arc::new(next_project);
-                    if adopted.is_none()
+                    refresh_audio |= adopted.is_none()
                         && audio_changed
-                        && let Some(generation) = audio_generation
-                    {
-                        self.audio_output.refresh_playback(
-                            PlaySpec {
-                                segments: audio_segments.clone(),
-                                music: self.music.clone(),
-                                project: (*cached_project).clone(),
-                                duration_secs: duration,
-                                start_playhead_secs: frame_number as f64 / fps_f64,
-                                playhead_rx: audio_playhead_rx.clone(),
-                                preview_speed: self.preview_speed.clone(),
-                            },
-                            generation,
-                        );
-                    }
+                        && audio_generation.is_some()
+                        && live_music.edited(&cached_project, &runtime);
                     if cursor_changed {
                         cursor_timelines = build_cursor_timelines(&cached_project);
                     }
@@ -1617,6 +1658,23 @@ impl Playback {
                         zoom_timelines = build_zoom_timelines(&cached_project);
                         outgoing_zoom_timelines = build_outgoing_zoom_timelines(&cached_project);
                     }
+                }
+                if refresh_audio
+                    && adopted.is_none()
+                    && let Some(generation) = audio_generation
+                {
+                    self.audio_output.refresh_playback(
+                        PlaySpec {
+                            segments: audio_segments.clone(),
+                            music: live_music.tracks.clone(),
+                            project: (*cached_project).clone(),
+                            duration_secs: duration,
+                            start_playhead_secs: frame_number as f64 / fps_f64,
+                            playhead_rx: audio_playhead_rx.clone(),
+                            preview_speed: self.preview_speed.clone(),
+                        },
+                        generation,
+                    );
                 }
 
                 let requested_speed = if adopted.is_some() {
@@ -2455,6 +2513,57 @@ mod tests {
         deleted.timeline.as_mut().unwrap().audio_segments.clear();
         assert!(clip_audio_changed(&project, &deleted));
         assert!(clip_audio_changed(&deleted, &project));
+    }
+
+    #[test]
+    fn a_live_trim_past_the_decoded_music_plays_the_new_range() {
+        let _ = ffmpeg::init();
+        let dir = tempfile::tempdir().unwrap();
+        crate::audio::tests::write_step_wav(
+            &dir.path().join("music.wav"),
+            &[2_000, 4_000, 6_000, 8_000, 10_000, 12_000],
+        );
+        let project: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "timeline": {
+                "zoomSegments": [],
+                "segments": [
+                    { "recordingSegment": 0, "start": 0.0, "end": 2.0, "timescale": 1.0 }
+                ],
+                "audioSegments": [{ "start": 0.0, "end": 2.0, "path": "music.wav" }]
+            }
+        }))
+        .unwrap();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let loader = MusicLoader::new(dir.path().to_path_buf());
+        let mut live = LiveMusic::new(loader.load(&project), loader.clone());
+
+        let mut louder = project.clone();
+        louder.timeline.as_mut().unwrap().audio_segments[0].volume_db = 3.0;
+        assert!(live.edited(&Arc::new(louder), runtime.handle()));
+        assert!(live.pending.is_none());
+
+        let mut trimmed = project.clone();
+        trimmed.timeline.as_mut().unwrap().audio_segments[0].trim_start = 3.0;
+        let trimmed = Arc::new(trimmed);
+        let refresh_now = live.edited(&trimmed, runtime.handle());
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !refresh_now && !live.take_loaded(runtime.handle()) {
+            assert!(Instant::now() < deadline, "the trimmed range never decoded");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+
+        let mut renderer = crate::AudioRenderer::new(Vec::new()).with_music(live.tracks.clone());
+        renderer.set_playhead(0.5, &trimmed);
+        let (_, samples) = renderer.render_frame_raw(480, &trimmed).unwrap();
+        assert!(
+            (samples[0] - 8_000.0 / 32_768.0).abs() < 0.02,
+            "{}",
+            samples[0]
+        );
+        assert!(Arc::ptr_eq(
+            &live.tracks["music.wav"],
+            &loader.load(&trimmed)["music.wav"],
+        ));
     }
 
     #[test]

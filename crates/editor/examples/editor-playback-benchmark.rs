@@ -704,6 +704,7 @@ async fn main() {
             project: project_rx.clone(),
             segment_medias: segment_medias.clone(),
             music: cap_editor::MusicTracks::new(),
+            music_loader: cap_editor::MusicLoader::default(),
             audio_output: audio_output.clone(),
             telemetry: Some(telemetry.clone()),
             preview_speed: preview_speed.clone(),

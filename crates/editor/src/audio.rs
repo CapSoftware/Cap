@@ -3349,7 +3349,7 @@ impl RenderControl {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use cap_project::{
         ClipConfiguration, ClipTransition, ClipTransitionType, ProjectConfiguration,
@@ -3370,7 +3370,7 @@ mod tests {
         0.0
     }
 
-    fn write_step_wav(path: &Path, section_values: &[i16]) {
+    pub(crate) fn write_step_wav(path: &Path, section_values: &[i16]) {
         let sample_rate = AudioData::SAMPLE_RATE;
         let channels = 2u16;
         let bits_per_sample = 16u16;

@@ -1206,6 +1206,7 @@ pub async fn realtime_playback(
         project: project_rx,
         segment_medias: segments,
         music: cap_editor::MusicTracks::new(),
+        music_loader: cap_editor::MusicLoader::default(),
         audio_output: Arc::new(audio_output),
         telemetry: Some(telemetry),
         preview_speed: Default::default(),
