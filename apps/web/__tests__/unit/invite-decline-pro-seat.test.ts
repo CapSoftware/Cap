@@ -73,6 +73,7 @@ const database = {
 		deletes.push(table);
 		return { where: async () => [{ affectedRows: 1 }] };
 	}),
+	insert: vi.fn(() => ({ values: async () => [] })),
 	update: vi.fn((table: unknown) => ({
 		set: (value: Record<string, unknown>) => {
 			if (table === tables.users && "thirdPartyStripeSubscriptionId" in value) {

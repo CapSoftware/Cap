@@ -1,6 +1,7 @@
 import { db } from "@cap/database";
 import { isCrossSiteCookieWrite } from "@cap/database/auth/request-site";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { createPersonalOrganization } from "@cap/database/personal-organization";
 import { releaseProSeatSubscription } from "@cap/database/pro-seat-subscription";
 import {
 	organizationInvites,
@@ -89,30 +90,49 @@ export async function POST(request: NextRequest) {
 							),
 						);
 				}
-
-				const [remainingMembership] = await tx
-					.select({ organizationId: organizationMembers.organizationId })
-					.from(organizationMembers)
-					.where(eq(organizationMembers.userId, user.id))
-					.limit(1);
-
-				const userUpdate: Partial<typeof users.$inferInsert> = {};
-				if (user.activeOrganizationId === invite.organizationId) {
-					userUpdate.activeOrganizationId =
-						remainingMembership?.organizationId ??
-						Organisation.OrganisationId.make("");
-				}
-				if (user.defaultOrgId === invite.organizationId) {
-					userUpdate.defaultOrgId = remainingMembership?.organizationId ?? null;
-				}
-				if (Object.keys(userUpdate).length > 0) {
-					await tx.update(users).set(userUpdate).where(eq(users.id, user.id));
-				}
 			}
 
 			await tx
 				.delete(organizationInvites)
 				.where(eq(organizationInvites.id, inviteId));
+
+			const [remainingMembership] = await tx
+				.select({ organizationId: organizationMembers.organizationId })
+				.from(organizationMembers)
+				.where(eq(organizationMembers.userId, user.id))
+				.limit(1);
+			const [pendingInvite] = remainingMembership
+				? []
+				: await tx
+						.select({ id: organizationInvites.id })
+						.from(organizationInvites)
+						.where(
+							and(
+								eq(organizationInvites.invitedEmail, invite.invitedEmail),
+								eq(organizationInvites.status, "pending"),
+							),
+						)
+						.limit(1);
+
+			// Signup skips the personal organization while an invite is pending,
+			// so declining the last one would otherwise leave the user with none.
+			if (!remainingMembership && !pendingInvite) {
+				await createPersonalOrganization(tx, user.id);
+				return;
+			}
+
+			const userUpdate: Partial<typeof users.$inferInsert> = {};
+			if (user.activeOrganizationId === invite.organizationId) {
+				userUpdate.activeOrganizationId =
+					remainingMembership?.organizationId ??
+					Organisation.OrganisationId.make("");
+			}
+			if (user.defaultOrgId === invite.organizationId) {
+				userUpdate.defaultOrgId = remainingMembership?.organizationId ?? null;
+			}
+			if (Object.keys(userUpdate).length > 0) {
+				await tx.update(users).set(userUpdate).where(eq(users.id, user.id));
+			}
 		});
 
 		return NextResponse.json({ success: true });
