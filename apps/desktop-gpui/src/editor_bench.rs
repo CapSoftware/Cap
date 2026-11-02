@@ -184,7 +184,7 @@ pub(crate) async fn run(handle: WindowHandle<EditorWindow>, cx: &mut AsyncApp) {
         let ready = handle
             .update(cx, |view, _, _| {
                 let (mic, system) = view.has_waveforms();
-                view.latest_frame.is_some() && (mic || system)
+                view.latest_frame.is_some() && (mic || system) && view.has_imported_waveforms()
             })
             .unwrap_or(false);
         if ready {
@@ -206,8 +206,9 @@ pub(crate) async fn run(handle: WindowHandle<EditorWindow>, cx: &mut AsyncApp) {
         let (mic, system) = view.has_waveforms();
         format!(
             "timeline-bench: viewport {viewport_width:.0}px, content {content_width:.0}px, \
-             clip {:.1}s, mic {mic}, system {system}, target {} samples/path",
+             clip {:.1}s, mic {mic}, system {system}, imported {}, target {} samples/path",
             view.total_duration(),
+            view.has_imported_waveforms(),
             editor_timeline::waveform_sample_count(f64::from(content_width)),
         )
     }) else {
