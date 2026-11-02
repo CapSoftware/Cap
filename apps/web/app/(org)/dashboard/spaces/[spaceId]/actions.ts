@@ -3,9 +3,9 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoIdLength } from "@cap/database/helpers";
-import { organizationMembers, spaceMembers } from "@cap/database/schema";
+import { spaceMembers } from "@cap/database/schema";
 import { type Organisation, Space, User } from "@cap/web-domain";
-import { and, eq, inArray } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { v4 as uuidv4 } from "uuid";
 import { z } from "zod";
@@ -15,6 +15,7 @@ import {
 	normalizeSpaceRole,
 	type SpaceRole,
 } from "@/lib/permissions/roles";
+import { usersBelongToOrganization } from "@/lib/space-members";
 
 const spaceRole = z.preprocess(
 	(value) => (value === "Admin" ? "admin" : value),
@@ -43,28 +44,13 @@ async function assertUsersBelongToOrganization(
 	organizationOwnerId: User.UserId,
 	userIds: User.UserId[],
 ) {
-	const uniqueUserIds = Array.from(new Set(userIds));
-	if (uniqueUserIds.length === 0) return;
-
-	const rows = await db()
-		.select({ userId: organizationMembers.userId })
-		.from(organizationMembers)
-		.where(
-			and(
-				eq(organizationMembers.organizationId, organizationId),
-				inArray(
-					organizationMembers.userId,
-					uniqueUserIds.map((id) => User.UserId.make(id)),
-				),
-			),
-		);
-	const allowedUserIds = new Set([
-		organizationOwnerId,
-		...rows.map((row) => row.userId),
-	]);
-	const invalidUserIds = uniqueUserIds.filter((id) => !allowedUserIds.has(id));
-
-	if (invalidUserIds.length > 0) {
+	if (
+		!(await usersBelongToOrganization(
+			organizationId,
+			organizationOwnerId,
+			userIds,
+		))
+	) {
 		throw new Error("All space members must belong to the organization");
 	}
 }

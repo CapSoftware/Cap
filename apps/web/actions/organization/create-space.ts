@@ -17,6 +17,8 @@ import {
 import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { isOrganizationOwnerPro } from "@/lib/org-pro";
+import { usersBelongToOrganization } from "@/lib/space-members";
+import { getOrganizationAccess } from "./authorization";
 import {
 	getSpaceSettingsFromFormData,
 	hasProSpaceSettingsEnabled,
@@ -91,6 +93,38 @@ export async function createSpace(
 			};
 		}
 
+		const organizationId = Organisation.OrganisationId.make(
+			user.activeOrganizationId,
+		);
+		const memberUserIds: User.UserId[] = [];
+		for (const entry of formData.getAll("members[]")) {
+			if (typeof entry === "string" && entry.length > 0) {
+				memberUserIds.push(User.UserId.make(entry));
+			}
+		}
+
+		if (!memberUserIds.includes(user.id)) {
+			memberUserIds.push(user.id);
+		}
+
+		const organization = await getOrganizationAccess(user.id, organizationId);
+		if (!organization) {
+			return { success: false, error: "Unauthorized" };
+		}
+
+		if (
+			!(await usersBelongToOrganization(
+				organizationId,
+				organization.ownerId,
+				memberUserIds,
+			))
+		) {
+			return {
+				success: false,
+				error: "All space members must belong to the organization",
+			};
+		}
+
 		const existingSpace = await db()
 			.select({ id: spaces.id })
 			.from(spaces)
@@ -128,24 +162,13 @@ export async function createSpace(
 				public: publicEnabled,
 			});
 
-			const memberUserIds: string[] = [];
-			for (const entry of formData.getAll("members[]")) {
-				if (typeof entry === "string" && entry.length > 0) {
-					memberUserIds.push(entry);
-				}
-			}
-
-			if (!memberUserIds.includes(user.id)) {
-				memberUserIds.push(user.id);
-			}
-
 			if (memberUserIds.length > 0) {
 				const spaceMembersToInsert = memberUserIds.map((userId) => {
 					const role: SpaceMemberRole = userId === user.id ? "admin" : "member";
 					return {
 						id: SpaceMemberId.make(nanoId()),
 						spaceId,
-						userId: User.UserId.make(userId),
+						userId,
 						role,
 					};
 				});

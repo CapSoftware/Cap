@@ -19,6 +19,7 @@ import { revalidatePath } from "next/cache";
 import { isOrganizationOwnerPro } from "@/lib/org-pro";
 import { normalizeSpaceRole } from "@/lib/permissions/roles";
 import { runPromise } from "@/lib/server";
+import { usersBelongToOrganization } from "@/lib/space-members";
 import { getSpaceAccess } from "./space-authorization";
 import {
 	getSpaceSettingsFromFormData,
@@ -65,6 +66,19 @@ export async function updateSpace(formData: FormData) {
 	const access = await getSpaceAccess(user.id, id);
 	if (!access?.canManage) {
 		return { success: false, error: "Unauthorized" };
+	}
+
+	if (
+		!(await usersBelongToOrganization(
+			access.organizationId,
+			access.organizationOwnerId,
+			members,
+		))
+	) {
+		return {
+			success: false,
+			error: "All space members must belong to the organization",
+		};
 	}
 
 	// Publishing is gated on the org owner's plan, but a downgraded org can
