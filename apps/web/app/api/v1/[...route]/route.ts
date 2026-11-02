@@ -116,6 +116,7 @@ import {
 	runAgentMutation,
 	updateAgentCap,
 } from "@/lib/agent-write";
+import { withJsonNotFound } from "@/lib/api-errors";
 import { hashKey } from "@/lib/developer-key-hash";
 import { startAiGeneration } from "@/lib/generate-ai";
 import { probeVideoViaMediaServer } from "@/lib/media-client";
@@ -9020,7 +9021,7 @@ const ApiLive = HttpApiBuilder.api(Agent.AgentApiContract).pipe(
 	),
 );
 
-const handler = agentApiToHandler(ApiLive);
+const handler = withJsonNotFound(agentApiToHandler(ApiLive));
 
 export const GET = handler;
 export const OPTIONS = handler;
