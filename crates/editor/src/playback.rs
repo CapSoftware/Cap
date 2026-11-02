@@ -69,15 +69,34 @@ fn clip_audio_changed(previous: &ProjectConfiguration, next: &ProjectConfigurati
             offsets.system_audio,
         )
     };
+    fn music(segment: &cap_project::AudioTrackSegment) -> impl PartialEq + '_ {
+        (
+            segment.path.as_str(),
+            segment.start,
+            segment.end,
+            segment.enabled,
+            segment.trim_start,
+            segment.volume_db,
+            segment.fade_in,
+            segment.fade_out,
+        )
+    }
     match (&previous.timeline, &next.timeline) {
-        (Some(previous_timeline), Some(next_timeline)) => !previous_timeline
-            .segments
-            .iter()
-            .map(|segment| settings(previous, segment))
-            .eq(next_timeline
+        (Some(previous_timeline), Some(next_timeline)) => {
+            !previous_timeline
                 .segments
                 .iter()
-                .map(|segment| settings(next, segment))),
+                .map(|segment| settings(previous, segment))
+                .eq(next_timeline
+                    .segments
+                    .iter()
+                    .map(|segment| settings(next, segment)))
+                || !previous_timeline
+                    .audio_segments
+                    .iter()
+                    .map(music)
+                    .eq(next_timeline.audio_segments.iter().map(music))
+        }
         (None, None) => false,
         _ => true,
     }
@@ -2221,6 +2240,7 @@ impl PlaybackHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cap_project::AudioTrackSegment;
 
     #[test]
     fn precision_sleep_returns_at_its_deadline() {
@@ -2383,6 +2403,58 @@ mod tests {
         assert!(clip_audio_changed(&project, &next));
         next.timeline.as_mut().unwrap().segments.clear();
         assert!(clip_audio_changed(&project, &next));
+    }
+
+    #[test]
+    fn imported_audio_edits_refresh_playback_without_refreshing_for_names_or_lanes() {
+        let project: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "timeline": {
+                "zoomSegments": [],
+                "segments": [
+                    { "recordingSegment": 0, "start": 0.0, "end": 10.0, "timescale": 1.0 }
+                ],
+                "audioSegments": [
+                    { "start": 1.0, "end": 6.0, "path": "assets/audio/song.mp3", "trimStart": 0.5 }
+                ]
+            }
+        }))
+        .unwrap();
+        let edited = |edit: fn(&mut AudioTrackSegment)| {
+            let mut next = project.clone();
+            edit(&mut next.timeline.as_mut().unwrap().audio_segments[0]);
+            next
+        };
+
+        let audible: [fn(&mut AudioTrackSegment); 8] = [
+            |segment| segment.volume_db = -12.0,
+            |segment| segment.enabled = false,
+            |segment| segment.fade_in = 1.0,
+            |segment| segment.fade_out = 1.0,
+            |segment| segment.trim_start = 2.0,
+            |segment| {
+                segment.start += 1.0;
+                segment.end += 1.0;
+            },
+            |segment| segment.end = 4.0,
+            |segment| segment.path = "assets/audio/other.mp3".into(),
+        ];
+        for edit in audible {
+            assert!(clip_audio_changed(&project, &edited(edit)));
+        }
+
+        let inaudible: [fn(&mut AudioTrackSegment); 3] = [
+            |segment| segment.name = Some("Song".into()),
+            |segment| segment.track = 1,
+            |segment| segment.duration = Some(30.0),
+        ];
+        for edit in inaudible {
+            assert!(!clip_audio_changed(&project, &edited(edit)));
+        }
+
+        let mut deleted = project.clone();
+        deleted.timeline.as_mut().unwrap().audio_segments.clear();
+        assert!(clip_audio_changed(&project, &deleted));
+        assert!(clip_audio_changed(&deleted, &project));
     }
 
     #[test]
