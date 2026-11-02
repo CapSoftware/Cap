@@ -2298,8 +2298,6 @@ async fn decode_display_frame(
     ])))
 }
 
-/// The display frame, or with `camera` the camera frame, that the timeline
-/// shows at `time_secs`, decoded to RGBA.
 pub(crate) async fn decode_frame_rgba(
     instance: &cap_editor::EditorInstance,
     project: &cap_project::ProjectConfiguration,

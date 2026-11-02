@@ -833,9 +833,7 @@ pub struct SidebarState {
     pub cursor_physics_open: CollapsibleState,
     /// The click-ripple settings, revealed by their own toggle.
     pub cursor_ripple_open: CollapsibleState,
-    /// The camera's green screen settings, revealed by their own toggle.
     pub green_screen_open: CollapsibleState,
-    /// The last "Pick from Camera" found no single backdrop colour.
     pub(crate) key_color_not_found: bool,
     /// The style picker's rasterised cursor art, keyed by shape and the device
     /// pixel box it was drawn for. A `BTreeMap` because `CursorShape` is `Ord`
