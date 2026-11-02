@@ -45,6 +45,8 @@ function write(kind: string) {
 			...done,
 			set: () => done,
 			values: async (rows: { userId: string; role: string }[]) => {
+				if (rows.length === 0)
+					throw new Error("values() needs at least one row");
 				mocks.writes.push(`${kind}:${table}`);
 				if (table === "space_members") mocks.inserted.push(...rows);
 			},
@@ -138,6 +140,25 @@ describe("editing a space", () => {
 			"member",
 			"owner",
 		]);
+	});
+
+	it("does not restore a creator who left the organization", async () => {
+		mocks.organizationMemberIds = ["member"];
+		await expect(updateSpace(spaceForm(["member"]))).resolves.toEqual({
+			success: true,
+		});
+		expect(mocks.inserted).toEqual([
+			expect.objectContaining({ userId: "member", role: "member" }),
+		]);
+	});
+
+	it("saves with no members once the creator has left", async () => {
+		mocks.organizationMemberIds = ["member"];
+		await expect(updateSpace(spaceForm([]))).resolves.toEqual({
+			success: true,
+		});
+		expect(mocks.writes).toContain("delete:space_members");
+		expect(mocks.inserted).toEqual([]);
 	});
 });
 

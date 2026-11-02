@@ -81,6 +81,17 @@ export async function updateSpace(formData: FormData) {
 		};
 	}
 
+	const creatorBelongsToOrganization = await usersBelongToOrganization(
+		access.organizationId,
+		access.organizationOwnerId,
+		[space.createdById],
+	);
+	const memberIds = Array.from(
+		new Set(
+			creatorBelongsToOrganization ? [...members, space.createdById] : members,
+		),
+	);
+
 	// Publishing is gated on the org owner's plan, but a downgraded org can
 	// always un-publish — so only the false→true transition requires Pro.
 	if (
@@ -133,7 +144,6 @@ export async function updateSpace(formData: FormData) {
 
 	await db().update(spaces).set(spaceUpdate).where(eq(spaces.id, id));
 
-	const memberIds = Array.from(new Set([...members, space.createdById]));
 	const existingMembers = await db()
 		.select({ userId: spaceMembers.userId, role: spaceMembers.role })
 		.from(spaceMembers)
@@ -146,22 +156,24 @@ export async function updateSpace(formData: FormData) {
 	);
 
 	await db().delete(spaceMembers).where(eq(spaceMembers.spaceId, id));
-	await db()
-		.insert(spaceMembers)
-		.values(
-			memberIds.map((userId) => {
-				const role: SpaceMemberRole =
-					userId === space.createdById
-						? "admin"
-						: (existingRoleByUserId.get(userId) ?? "member");
-				return {
-					id: SpaceMemberId.make(nanoId()),
-					spaceId: id,
-					userId,
-					role,
-				};
-			}),
-		);
+	if (memberIds.length > 0) {
+		await db()
+			.insert(spaceMembers)
+			.values(
+				memberIds.map((userId) => {
+					const role: SpaceMemberRole =
+						userId === space.createdById
+							? "admin"
+							: (existingRoleByUserId.get(userId) ?? "member");
+					return {
+						id: SpaceMemberId.make(nanoId()),
+						spaceId: id,
+						userId,
+						role,
+					};
+				}),
+			);
+	}
 
 	if (formData.get("removeIcon") === "true") {
 		const spaceArr = await db().select().from(spaces).where(eq(spaces.id, id));
