@@ -300,6 +300,13 @@ export function DashboardSearch({
 		return () => window.cancelAnimationFrame(animationFrame);
 	}, [open]);
 
+	// Cached results are keyed by query only, but they belong to the active
+	// organization and to the caps as they were, both of which can change
+	// while the dialog is closed.
+	useEffect(() => {
+		if (!open) videoCacheRef.current.clear();
+	}, [open]);
+
 	useEffect(() => {
 		if (!open || !canSearchVideos) {
 			requestIdRef.current += 1;
