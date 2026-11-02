@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { NextRequest } from "next/server";
 import { describe, expect, it, vi } from "vitest";
 import {
 	agentMarkdownResponse,
@@ -8,6 +9,20 @@ import {
 } from "@/lib/agent-markdown";
 import { apiNotFoundBody, withJsonNotFound } from "@/lib/api-errors";
 import { developerOpenApiSpec } from "@/lib/developer-openapi";
+import { proxy } from "../../proxy";
+
+vi.mock("@cap/database", () => ({
+	db: () => ({
+		select: () => ({ from: () => ({ where: async () => [] }) }),
+	}),
+}));
+
+vi.mock("@cap/database/schema", () => ({ organizations: {} }));
+
+vi.mock("@cap/env", () => ({
+	buildEnv: { NEXT_PUBLIC_IS_CAP: "true" },
+	serverEnv: () => ({ WEB_URL: "https://cap.so" }),
+}));
 
 const request = (path: string, accept: string | null, init: RequestInit = {}) =>
 	new Request(`https://cap.so${path}`, {
@@ -140,6 +155,31 @@ describe("agentMarkdownResponse", () => {
 			}),
 		).toBeNull();
 		expect(fetch).not.toHaveBeenCalled();
+	});
+
+	it.each<Record<string, string>>([
+		{ cookie: "next-auth.session-token=abc" },
+		{ authorization: "Bearer cap_cli_x" },
+	])("never probes requests that carry identity (%o)", async (headers) => {
+		const fetch = vi.fn(async () => new Response(null, { status: 404 }));
+		expect(
+			await agentMarkdownResponse(
+				request("/s/abc/edit", "text/markdown", { headers }),
+				{ isPublicAsset: noAssets, fetch },
+			),
+		).toBeNull();
+		expect(fetch).not.toHaveBeenCalled();
+	});
+
+	it("keeps Markdown 404s out of shared caches", async () => {
+		const response = await agentMarkdownResponse(
+			request("/missing", "text/markdown"),
+			{
+				isPublicAsset: noAssets,
+				fetch: vi.fn(async () => new Response(null, { status: 404 })),
+			},
+		);
+		expect(response?.headers.get("cache-control")).toBe("private, no-store");
 	});
 
 	it("keeps the 404 status but drops the body for HEAD", async () => {
@@ -285,5 +325,36 @@ describe("developer OpenAPI spec", () => {
 			({ path, method }) => `${method} ${path}`,
 		);
 		expect(documented.sort()).toEqual([...implemented].sort());
+	});
+});
+
+describe("proxy content negotiation", () => {
+	const send = (path: string, accept: string) =>
+		proxy(new NextRequest(`https://cap.so${path}`, { headers: { accept } }));
+
+	it.each(["/", "/pricing"])(
+		"passes HTML requests for %s straight to Next",
+		async (path) => {
+			const response = await send(path, "text/html,*/*;q=0.8");
+			expect(response.headers.get("x-middleware-next")).toBe("1");
+			expect(response.headers.get("content-type")).toBeNull();
+		},
+	);
+
+	it("serves the homepage as Markdown", async () => {
+		const fetch = vi
+			.spyOn(globalThis, "fetch")
+			.mockResolvedValue(new Response("# Cap"));
+		try {
+			const response = await send("/", "text/markdown");
+			expect(response.status).toBe(200);
+			expect(response.headers.get("content-type")).toBe(
+				"text/markdown; charset=utf-8",
+			);
+			expect(response.headers.get("vary")).toBe("Accept");
+			expect(await response.text()).toBe("# Cap");
+		} finally {
+			fetch.mockRestore();
+		}
 	});
 });

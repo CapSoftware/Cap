@@ -98,6 +98,8 @@ export async function agentMarkdownResponse(
 		}
 
 		if (isPublicAsset(url.pathname)) return null;
+		if (request.headers.has("cookie") || request.headers.has("authorization"))
+			return null;
 
 		const probe = await fetchImpl(
 			new URL(url.pathname + url.search, url.origin),
@@ -112,7 +114,7 @@ export async function agentMarkdownResponse(
 
 		return new Response(body(markdownNotFoundBody(url.origin, url.pathname)), {
 			status: 404,
-			headers: markdownHeaders("public, max-age=60"),
+			headers: markdownHeaders("private, no-store"),
 		});
 	} catch {
 		return null;
