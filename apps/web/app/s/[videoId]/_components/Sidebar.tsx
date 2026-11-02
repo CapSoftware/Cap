@@ -8,6 +8,8 @@ import { forwardRef, Suspense, useState } from "react";
 import type { OrganizationSettings } from "@/app/(org)/dashboard/dashboard-data";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
 import type { VideoData } from "../types";
+import { HighlightsPanel } from "./highlights/HighlightsPanel";
+import type { VideoHighlightsController } from "./highlights/useVideoHighlights";
 import { Activity } from "./tabs/Activity";
 import type { SummaryEditingState } from "./tabs/SummaryEditor";
 
@@ -29,7 +31,12 @@ const prefetchTab = (tabId: string) => {
 	else if (tabId === "transcript") void importTranscript();
 };
 
-type TabType = "activity" | "transcript" | "summary" | "settings";
+type TabType =
+	| "activity"
+	| "highlights"
+	| "transcript"
+	| "summary"
+	| "settings";
 
 type CommentType = typeof commentsSchema.$inferSelect & {
 	authorName?: string | null;
@@ -71,6 +78,7 @@ interface SidebarProps {
 	canRecordMedia?: boolean;
 	/** Supplied on desktop, where the rail can be folded away. */
 	onCollapse?: () => void;
+	highlights?: VideoHighlightsController;
 }
 
 const TabContent = motion.div;
@@ -116,6 +124,7 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 			recordingStopped = false,
 			canRecordMedia = false,
 			onCollapse,
+			highlights,
 		},
 		ref,
 	) => {
@@ -166,6 +175,15 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 			...(isScreenshot
 				? []
 				: [
+						...(highlights
+							? [
+									{
+										id: "highlights",
+										label: "Highlights",
+										disabled: false,
+									},
+								]
+							: []),
 						{
 							id: "summary",
 							label: "Summary",
@@ -222,6 +240,14 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 							/>
 						</Suspense>
 					);
+				case "highlights":
+					return highlights ? (
+						<HighlightsPanel
+							controller={highlights}
+							ownerId={data.owner.id}
+							onSeek={onSeek}
+						/>
+					) : null;
 				case "summary":
 					return (
 						<Summary

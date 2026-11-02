@@ -22,6 +22,7 @@ import { bindCaptionTrackCueText } from "./caption-tracks";
 import { scheduleReadyRefresh } from "./deferred-ready-refresh";
 import { EarlyUploadOverlay } from "./EarlyUploadOverlay";
 import { useEarlyPlayback } from "./early-playback";
+import { type HighlightTick, HighlightTicks } from "./HighlightTicks";
 import { waitForSegmentPlayback } from "./segment-playback-probe";
 import {
 	canRetryFailedProcessing,
@@ -64,6 +65,7 @@ const { circumference } = getProgressCircleConfig();
 // Stable default: `= []` in the destructuring would mint a new array identity
 // every render and re-run everything that depends on the prop.
 const NO_CAPTIONS: CaptionOption[] = [];
+const NO_HIGHLIGHTS: readonly HighlightTick[] = [];
 
 function getProgressStatusText(
 	status: "uploading" | "processing" | "generating_thumbnail",
@@ -120,6 +122,8 @@ interface Props {
 	canRetryProcessing?: boolean;
 	duration?: number | null;
 	defaultPlaybackSpeed?: number;
+	highlights?: readonly HighlightTick[];
+	onSeek?: (time: number) => void;
 	previewMode?: "background";
 	/** The share page's timeline deck owns scrubbing while visible. */
 	externalTimeline?: boolean;
@@ -157,6 +161,8 @@ export function HLSVideoPlayer({
 	canRetryProcessing = false,
 	duration: fallbackDuration,
 	defaultPlaybackSpeed,
+	highlights = NO_HIGHLIGHTS,
+	onSeek,
 	previewMode,
 	externalTimeline = false,
 	controlsPortalEl = null,
@@ -929,6 +935,13 @@ export function HLSVideoPlayer({
 						}
 					>
 						{!docked && <MediaPlayerControlsOverlay />}
+						{!externalTimeline && (
+							<HighlightTicks
+								highlights={highlights}
+								duration={playerDuration}
+								onSeek={onSeek}
+							/>
+						)}
 						{!externalTimeline && (
 							<MediaPlayerSeek
 								fallbackDuration={playerDuration}

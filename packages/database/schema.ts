@@ -627,6 +627,25 @@ export const comments = mysqlTable(
 	}),
 );
 
+export const videoHighlights = mysqlTable(
+	"video_highlights",
+	{
+		id: nanoId("id").notNull().primaryKey(),
+		videoId: nanoId("videoId").notNull().$type<Video.VideoId>(),
+		authorId: nanoId("authorId").notNull().$type<User.UserId>(),
+		timestamp: float("timestamp").notNull(),
+		label: varchar("label", { length: 200 }),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+	},
+	(table) => ({
+		videoTimestampIndex: index("video_timestamp_idx").on(
+			table.videoId,
+			table.timestamp,
+		),
+	}),
+);
+
 export const notifications = mysqlTable(
 	"notifications",
 	{

@@ -24,6 +24,7 @@ import { isRetryableDesktopSegmentsFinalizationError } from "@/lib/desktop-segme
 import type { ShareCallToAction } from "@/lib/share-call-to-action";
 import type { VideoData } from "../types";
 import { type CaptionLanguage, useCaptionContext } from "./CaptionContext";
+import type { HighlightTick } from "./HighlightTicks";
 import {
 	PreparingVideoOverlay,
 	RecordingInProgressOverlay,
@@ -107,6 +108,7 @@ export const ShareVideo = forwardRef<
 		defaultPlaybackSpeed?: number;
 		viewerIsOwner?: boolean;
 		callToAction?: ShareCallToAction | null;
+		highlights?: readonly HighlightTick[];
 	}
 >(
 	(
@@ -132,6 +134,7 @@ export const ShareVideo = forwardRef<
 			defaultPlaybackSpeed,
 			viewerIsOwner = false,
 			callToAction = null,
+			highlights,
 		},
 		ref,
 	) => {
@@ -584,6 +587,7 @@ export const ShareVideo = forwardRef<
 							blockPlaybackDuringProcessing={isEditProcessing}
 							onUploadComplete={handleUploadComplete}
 							comments={stampComments}
+							highlights={highlights}
 							onSeek={handleSeek}
 							captionLanguage={captionContext.selectedLanguage}
 							onCaptionLanguageChange={handleCaptionLanguageChange}
@@ -606,6 +610,8 @@ export const ShareVideo = forwardRef<
 							videoSrc={videoSrc}
 							duration={data.duration}
 							defaultPlaybackSpeed={defaultPlaybackSpeed}
+							highlights={highlights}
+							onSeek={handleSeek}
 							externalTimeline={externalTimeline}
 							controlsPortalEl={controlsPortalEl}
 							disableCaptions={areCaptionsDisabled ?? false}

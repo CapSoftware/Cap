@@ -21,9 +21,11 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { toast } from "sonner";
 import type { OrganizationSettings } from "@/app/(org)/dashboard/dashboard-data";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import type { ShareDashboardDestination } from "@/lib/share-dashboard-destination";
+import type { VideoHighlight } from "@/lib/video-highlights";
 import {
 	VideoStatusNotFoundError,
 	videoStatusQueryOptions,
@@ -31,6 +33,7 @@ import {
 import { CaptionProvider } from "./_components/CaptionContext";
 import { DashboardBackLink } from "./_components/DashboardBackLink";
 import { seekLength } from "./_components/early-length";
+import { useVideoHighlights } from "./_components/highlights/useVideoHighlights";
 import { PlaybackProvider } from "./_components/playback/PlaybackContext";
 import { ShareVideo } from "./_components/ShareVideo";
 import { type ShareView, ShareViewToggle } from "./_components/ShareViewToggle";
@@ -55,6 +58,8 @@ const SummaryChapters = dynamic(() => import("./_components/SummaryChapters"));
  * copy of the post rather than back at cap.so.
  */
 const TIMELINE_GUIDE_URL = "/blog/timeline-view";
+
+const NO_HIGHLIGHTS: VideoHighlight[] = [];
 
 type CommentWithAuthor = typeof commentsSchema.$inferSelect & {
 	authorName: string | null;
@@ -188,6 +193,7 @@ interface ShareProps {
 	initialPlaybackUrl?: Promise<string | null>;
 	serverPlaybackUrl?: string | null;
 	comments: MaybePromise<CommentWithAuthor[]>;
+	highlights?: MaybePromise<VideoHighlight[]>;
 	views: MaybePromise<number>;
 	screenshotImageUrl?: string | null;
 	customDomain: string | null;
@@ -324,6 +330,7 @@ export const Share = ({
 	initialPlaybackUrl,
 	serverPlaybackUrl = null,
 	comments,
+	highlights: highlightsInput = NO_HIGHLIGHTS,
 	views,
 	screenshotImageUrl,
 	initialAiData,
@@ -358,6 +365,23 @@ export const Share = ({
 		comments instanceof Promise ? use(comments) : comments;
 	const [commentsData, setCommentsData] =
 		useState<CommentType[]>(initialComments);
+	const initialHighlights =
+		highlightsInput instanceof Promise ? use(highlightsInput) : highlightsInput;
+	const highlightViewer = useMemo(
+		() =>
+			viewerId
+				? {
+						id: viewerId,
+						name: null,
+					}
+				: null,
+		[viewerId],
+	);
+	const highlights = useVideoHighlights({
+		videoId: data.id,
+		initialHighlights,
+		viewer: highlightViewer,
+	});
 	const [optimisticComments, setOptimisticComments] = useOptimistic(
 		commentsData,
 		(state, newComment: CommentType) => {
@@ -703,6 +727,35 @@ export const Share = ({
 			document.removeEventListener("fullscreenchange", syncFullscreen);
 	}, []);
 
+	const addHighlight = highlights.add;
+	useEffect(() => {
+		if (isScreenshot || !viewerId) return;
+
+		const handleKeyDown = (event: KeyboardEvent) => {
+			if (event.key !== "h" && event.key !== "H") return;
+			if (event.metaKey || event.ctrlKey || event.altKey) return;
+			const target = event.target as HTMLElement | null;
+			if (
+				target instanceof HTMLInputElement ||
+				target instanceof HTMLTextAreaElement ||
+				target?.isContentEditable
+			) {
+				return;
+			}
+			const video =
+				playerRef.current ??
+				(document.querySelector("video") as HTMLVideoElement | null);
+			if (!video) return;
+			event.preventDefault();
+			void addHighlight(video.currentTime).then((added) => {
+				if (added) toast.success("Highlight added");
+			});
+		};
+
+		window.addEventListener("keydown", handleKeyDown);
+		return () => window.removeEventListener("keydown", handleKeyDown);
+	}, [isScreenshot, viewerId, addHighlight]);
+
 	// T flips Player/Timeline, under the same guards as the toggle itself.
 	useEffect(() => {
 		if (!timelineAvailable) return;
@@ -991,6 +1044,7 @@ export const Share = ({
 															(view === "timeline" && !stageFullscreen)
 														}
 														chapters={aiData?.chapters ?? undefined}
+														highlights={highlights.highlights}
 														aiGenerationStatus={aiData?.aiGenerationStatus}
 														canRetryProcessing={viewerId === data.owner.id}
 														canFinalizeDesktopSegments={
@@ -1198,6 +1252,7 @@ export const Share = ({
 									recordingStopped={recordingStopped}
 									canRecordMedia={canRecordMedia}
 									onCollapse={toggleRail}
+									highlights={isScreenshot ? undefined : highlights}
 									ref={activityRef}
 								/>
 							</div>

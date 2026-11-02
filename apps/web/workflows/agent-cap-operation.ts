@@ -242,6 +242,9 @@ async function deleteCapDatabase(
 	await db().transaction(async (tx) => {
 		await tx.delete(Db.comments).where(eq(Db.comments.videoId, videoId));
 		await tx
+			.delete(Db.videoHighlights)
+			.where(eq(Db.videoHighlights.videoId, videoId));
+		await tx
 			.delete(Db.notifications)
 			.where(eq(Db.notifications.videoId, videoId));
 		await tx

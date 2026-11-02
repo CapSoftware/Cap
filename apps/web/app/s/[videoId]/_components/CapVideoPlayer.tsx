@@ -18,6 +18,7 @@ import type { ShareCallToAction } from "@/lib/share-call-to-action";
 import CommentStamp from "./CommentStamp";
 import { CallToActionOverlay } from "./call-to-action/CallToActionOverlay";
 import { bindCaptionTrackCueText } from "./caption-tracks";
+import { type HighlightTick, HighlightTicks } from "./HighlightTicks";
 import { resolveInitialPlaybackUrl } from "./initial-playback-url";
 import {
 	AVC_LEVEL_IOS_HARDWARE_CEILING,
@@ -73,6 +74,7 @@ const { circumference } = getProgressCircleConfig();
 // Stable defaults: a `= []` in the destructuring mints a new array identity
 // every render, which re-runs every hook/memo that lists the prop as a dep.
 const NO_COMMENTS: NonNullable<Props["comments"]> = [];
+const NO_HIGHLIGHTS: readonly HighlightTick[] = [];
 const NO_CAPTIONS: CaptionOption[] = [];
 
 function getProgressStatusText(
@@ -132,6 +134,7 @@ interface Props {
 		content: string;
 		authorName?: string | null;
 	}>;
+	highlights?: readonly HighlightTick[];
 	onSeek?: (time: number) => void;
 	enhancedAudioUrl?: string | null;
 	enhancedAudioStatus?: EnhancedAudioStatus | null;
@@ -172,6 +175,7 @@ export function CapVideoPlayer({
 	disablePlaybackSpeedDial = false,
 	externalTimeline = false,
 	controlsPortalEl = null,
+	highlights = NO_HIGHLIGHTS,
 	onSeek,
 	enhancedAudioUrl: _enhancedAudioUrl,
 	enhancedAudioStatus: _enhancedAudioStatus,
@@ -1128,6 +1132,13 @@ export function CapVideoPlayer({
 						isUploadingOrFailed={blockPlaybackControls}
 					>
 						{!docked && <MediaPlayerControlsOverlay className="rounded-b-xl" />}
+						{!externalTimeline && (
+							<HighlightTicks
+								highlights={highlights}
+								duration={playerDuration}
+								onSeek={onSeek}
+							/>
+						)}
 						{!externalTimeline && (
 							<MediaPlayerSeek
 								fallbackDuration={playerDuration}
