@@ -1,5 +1,10 @@
 import { getCurrentUser } from "@cap/database/auth/session";
-import { organizations } from "@cap/database/schema";
+import {
+	organizationInvites,
+	organizationMembers,
+	organizations,
+	users,
+} from "@cap/database/schema";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockDb = {
@@ -210,6 +215,23 @@ describe("POST /api/invite/decline", () => {
 				activeOrganizationId: organization.id,
 				defaultOrgId: organization.id,
 			});
+		});
+
+		it("locks the user row before reading memberships and invites", async () => {
+			await POST(makeRequest({ inviteId: "invite-1" }));
+
+			const reads = mockDb.from.mock.calls.map(([table]) => table);
+			const userRead = reads.indexOf(users);
+			expect(userRead).toBe(1);
+			expect(reads.slice(userRead + 1)).toEqual([
+				organizationMembers,
+				organizationMembers,
+				organizationInvites,
+			]);
+			const [, userLock] = mockDb.for.mock.invocationCallOrder;
+			expect(
+				mockDb.from.mock.invocationCallOrder[userRead + 1],
+			).toBeGreaterThan(userLock ?? Number.POSITIVE_INFINITY);
 		});
 
 		it("waits for the other pending invite instead of adding an empty organization", async () => {

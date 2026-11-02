@@ -109,6 +109,7 @@ async function declineProSeat(
 				organizationId: "org-1",
 			},
 		],
+		[{ id: "user-1" }],
 		[{ id: "member-1", hasProSeat: true }],
 		[{ id: "user-1" }],
 		remainingSeats,
@@ -183,6 +184,7 @@ describe("POST /api/invite/decline with a Pro seat", () => {
 
 		expect(lockRows.mock.calls).toEqual([
 			["update", tables.organizationInvites],
+			["update", tables.users],
 			["update", tables.organizationMembers],
 			["update", tables.users],
 		]);

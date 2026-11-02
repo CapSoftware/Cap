@@ -50,6 +50,14 @@ export async function POST(request: NextRequest) {
 				throw new Error("EMAIL_MISMATCH");
 			}
 
+			// Serializes declines of different invites by one user, so the last one
+			// to commit sees the others gone before deciding on a personal org.
+			await tx
+				.select({ id: users.id })
+				.from(users)
+				.where(eq(users.id, user.id))
+				.for("update");
+
 			const [membership] = await tx
 				.select({
 					id: organizationMembers.id,
