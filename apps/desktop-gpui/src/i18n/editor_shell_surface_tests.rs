@@ -483,6 +483,7 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         ),
         (tr::editor::tabs::captions::fade_duration(), "Fade Duration"),
         (tr::editor::tabs::captions::font_family(), "Font Family"),
+        (tr::editor::tabs::captions::font_filter(), "Fonts"),
         (tr::editor::tabs::captions::font_settings(), "Font Settings"),
         (tr::editor::tabs::captions::font_weight(), "Font Weight"),
         (tr::editor::tabs::captions::generate(), "Generate Captions"),
@@ -540,6 +541,7 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         (tr::editor::tabs::captions::language::ur(), "Urdu"),
         (tr::editor::tabs::captions::language::zh(), "Chinese"),
         (tr::editor::tabs::captions::language_label(), "Language"),
+        (tr::editor::tabs::captions::load_font(), "Load Font…"),
         (
             tr::editor::tabs::captions::model::high_accuracy(),
             "High Accuracy",

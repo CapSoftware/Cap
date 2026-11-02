@@ -4,7 +4,7 @@ use std::{
     fmt,
     io::Write,
     ops::{Add, Div, Mul, Sub, SubAssign},
-    path::Path,
+    path::{Path, PathBuf},
     sync::{Arc, LazyLock, Mutex, Weak},
 };
 
@@ -2468,6 +2468,8 @@ pub enum CaptionPosition {
 pub struct CaptionSettings {
     pub enabled: bool,
     pub font: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub custom_font: Option<PathBuf>,
     pub size: u32,
     pub color: String,
     #[serde(alias = "backgroundColor")]
@@ -2558,6 +2560,7 @@ impl Default for CaptionSettings {
         Self {
             enabled: false,
             font: "System Sans-Serif".to_string(),
+            custom_font: None,
             size: 24,
             color: "#FFFFFF".to_string(),
             background_color: "#000000".to_string(),
@@ -3505,6 +3508,30 @@ mod tests {
         assert!(restored.show_filler_words);
         assert_eq!(restored.filler_language.as_deref(), Some("en"));
         assert!(restored.uppercase);
+    }
+
+    #[test]
+    fn caption_custom_font_defaults_to_none_and_round_trips() {
+        let legacy: CaptionSettings =
+            serde_json::from_str(r#"{"enabled":true,"font":"System Serif"}"#).unwrap();
+        assert_eq!(legacy.custom_font, None);
+        assert_eq!(legacy.font, "System Serif");
+        assert!(
+            serde_json::to_value(&legacy)
+                .unwrap()
+                .get("customFont")
+                .is_none()
+        );
+
+        let custom = CaptionSettings {
+            custom_font: Some(PathBuf::from("/fonts/Brand Sans.otf")),
+            ..legacy
+        };
+        let json = serde_json::to_value(&custom).unwrap();
+        assert_eq!(json["customFont"], "/fonts/Brand Sans.otf");
+        let restored: CaptionSettings = serde_json::from_value(json).unwrap();
+        assert_eq!(restored.custom_font, custom.custom_font);
+        assert_eq!(restored.font, "System Serif");
     }
 
     #[test]

@@ -1,12 +1,14 @@
 use std::borrow::Cow;
 use std::ops::Range;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
 use cap_project::{CaptionWord, XY, caption_words::caption_display_segment};
 use glyphon::cosmic_text::LayoutRunIter;
 use glyphon::{
-    Attrs, Buffer, Cache, Color, Family, FontSystem, Metrics, Resolution, Shaping, SwashCache,
-    TextArea, TextAtlas, TextBounds, TextRenderer, Viewport, Weight,
+    Attrs, Buffer, Cache, Color, FamilyOwned, FontSystem, Metrics, Resolution, Shaping, SwashCache,
+    TextArea, TextAtlas, TextBounds, TextRenderer, Viewport, Weight, fontdb,
 };
 use log::warn;
 use wgpu::{Device, Queue, include_wgsl, util::DeviceExt};
@@ -440,7 +442,7 @@ struct ShapedCaptionText {
     text: String,
     font_size: u32,
     wrap_width: u32,
-    family: Family<'static>,
+    family: FamilyOwned,
     weight: Weight,
     colors: CaptionTextColors,
 }
@@ -450,7 +452,9 @@ fn shape_caption_text(font_system: &mut FontSystem, shaped: &ShapedCaptionText) 
     let mut buffer = Buffer::new(font_system, Metrics::new(font_size, font_size * 1.2));
     buffer.set_size(font_system, Some(f32::from_bits(shaped.wrap_width)), None);
     buffer.set_wrap(font_system, glyphon::Wrap::None);
-    let attrs = Attrs::new().family(shaped.family).weight(shaped.weight);
+    let attrs = Attrs::new()
+        .family(shaped.family.as_family())
+        .weight(shaped.weight);
     match &shaped.colors {
         CaptionTextColors::Uniform(color) => buffer.set_text(
             font_system,
@@ -494,9 +498,70 @@ impl CaptionText {
     }
 }
 
+fn system_caption_family(font: &str) -> FamilyOwned {
+    match font {
+        "System Serif" => FamilyOwned::Serif,
+        "System Monospace" => FamilyOwned::Monospace,
+        _ => FamilyOwned::SansSerif,
+    }
+}
+
+#[derive(Default)]
+struct CustomCaptionFont {
+    path: Option<PathBuf>,
+    faces: Vec<fontdb::ID>,
+    family: Option<FamilyOwned>,
+}
+
+impl CustomCaptionFont {
+    /// Returns whether the registered font changed. A file that cannot be read
+    /// or parsed is remembered as failed, so it is not re-read every frame.
+    fn sync(&mut self, font_system: &mut FontSystem, path: Option<&Path>) -> bool {
+        if self.path.as_deref() == path {
+            return false;
+        }
+        for face in self.faces.drain(..) {
+            font_system.db_mut().remove_face(face);
+        }
+        self.family = None;
+        self.path = path.map(Path::to_path_buf);
+        let Some(path) = path else {
+            return true;
+        };
+        let data = match std::fs::read(path) {
+            Ok(data) => data,
+            Err(error) => {
+                warn!("Caption font {} could not be read: {error}", path.display());
+                return true;
+            }
+        };
+        let db = font_system.db_mut();
+        self.faces = db
+            .load_font_source(fontdb::Source::Binary(Arc::new(data)))
+            .to_vec();
+        self.family = self
+            .faces
+            .first()
+            .and_then(|face| db.face(*face))
+            .and_then(|face| face.families.first())
+            .map(|(name, _)| FamilyOwned::Name(name.as_str().into()));
+        if self.family.is_none() {
+            warn!("Caption font {} is not a usable font", path.display());
+        }
+        true
+    }
+
+    fn family_or(&self, fallback: &str) -> FamilyOwned {
+        self.family
+            .clone()
+            .unwrap_or_else(|| system_caption_family(fallback))
+    }
+}
+
 pub struct CaptionsLayer {
     _settings_buffer: wgpu::Buffer,
     font_system: FontSystem,
+    custom_font: CustomCaptionFont,
     swash_cache: SwashCache,
     text_atlas: TextAtlas,
     text_renderer: TextRenderer,
@@ -639,6 +704,7 @@ impl CaptionsLayer {
         Self {
             _settings_buffer: settings_buffer,
             font_system,
+            custom_font: CustomCaptionFont::default(),
             swash_cache,
             text_atlas,
             text_renderer,
@@ -842,11 +908,15 @@ impl CaptionsLayer {
 
         let font_size = caption_data.settings.size as f32 * (height as f32 / 1080.0);
         let wrap_width = (width as f32 - margin * 2.0).max(font_size);
-        let font_family = match caption_data.settings.font.as_str() {
-            "System Serif" => Family::Serif,
-            "System Monospace" => Family::Monospace,
-            _ => Family::SansSerif,
-        };
+        if self.custom_font.sync(
+            &mut self.font_system,
+            caption_data.settings.custom_font.as_deref(),
+        ) {
+            // Two files can share a family name, so the shape key alone would
+            // keep glyphs from the faces that were just removed.
+            self.text = CaptionText::new();
+        }
+        let font_family = self.custom_font.family_or(&caption_data.settings.font);
 
         let weight = if caption_data.settings.font_weight >= 700 {
             Weight::BOLD
@@ -1583,9 +1653,78 @@ mod tests {
 }
 
 #[cfg(test)]
+pub(super) mod custom_font_tests {
+    use std::path::PathBuf;
+
+    use glyphon::{FamilyOwned, fontdb};
+
+    use super::CustomCaptionFont;
+
+    pub(crate) fn system_font_file(family: fontdb::Family, weight: u16) -> (PathBuf, String) {
+        let font_system = super::super::new_font_system();
+        let db = font_system.db();
+        let id = db
+            .query(&fontdb::Query {
+                families: &[family],
+                weight: fontdb::Weight(weight),
+                ..Default::default()
+            })
+            .expect("the generic family resolves to an installed font");
+        let face = db.face(id).unwrap();
+        let path = match &face.source {
+            fontdb::Source::File(path) | fontdb::Source::SharedFile(path, _) => path.clone(),
+            fontdb::Source::Binary(_) => panic!("system fonts are loaded from files"),
+        };
+        (path, face.families[0].0.clone())
+    }
+
+    #[test]
+    fn custom_font_registers_its_family_and_unloads_when_cleared() {
+        let mut font_system = super::super::new_font_system();
+        let system_faces = font_system.db().len();
+        let (path, family) = system_font_file(fontdb::Family::Serif, 700);
+        let mut font = CustomCaptionFont::default();
+
+        assert!(!font.sync(&mut font_system, None));
+        assert_eq!(font.family_or("System Monospace"), FamilyOwned::Monospace);
+
+        assert!(font.sync(&mut font_system, Some(&path)));
+        assert_eq!(
+            font.family_or("System Sans-Serif"),
+            FamilyOwned::Name(family.into())
+        );
+        assert!(font_system.db().len() > system_faces);
+        assert!(!font.sync(&mut font_system, Some(&path)));
+
+        assert!(font.sync(&mut font_system, None));
+        assert_eq!(font_system.db().len(), system_faces);
+        assert_eq!(font.family_or("System Serif"), FamilyOwned::Serif);
+    }
+
+    #[test]
+    fn missing_or_unreadable_font_file_falls_back_to_the_system_family() {
+        let mut font_system = super::super::new_font_system();
+        let system_faces = font_system.db().len();
+        let dir = tempfile::tempdir().unwrap();
+        let not_a_font = dir.path().join("notes.ttf");
+        std::fs::write(&not_a_font, b"not a font").unwrap();
+        let mut font = CustomCaptionFont::default();
+
+        for path in [dir.path().join("missing.otf"), not_a_font] {
+            assert!(font.sync(&mut font_system, Some(&path)));
+            assert_eq!(font.family_or("System Serif"), FamilyOwned::Serif);
+            assert_eq!(font_system.db().len(), system_faces);
+            assert!(!font.sync(&mut font_system, Some(&path)));
+        }
+    }
+}
+
+#[cfg(test)]
 mod shaping_tests {
     use cap_project::CaptionWord;
-    use glyphon::{Attrs, Buffer, Color, Family, FontSystem, Metrics, Shaping, Weight};
+    use glyphon::{
+        Attrs, Buffer, Color, Family, FamilyOwned, FontSystem, Metrics, Shaping, Weight,
+    };
 
     use super::{
         BASE_TEXT_OPACITY, CaptionText, CaptionTextColors, ShapedCaptionText, WordHighlight,
@@ -1625,7 +1764,7 @@ mod shaping_tests {
                 text: self.text.clone(),
                 font_size: self.font_size.to_bits(),
                 wrap_width: self.wrap_width.to_bits(),
-                family: self.family,
+                family: FamilyOwned::new(self.family),
                 weight: self.weight,
                 colors: CaptionTextColors::Spans(word_highlight_spans(
                     &self.text,
@@ -2425,6 +2564,70 @@ mod gpu_tests {
             render(&mut reused, &plain, base_size) == expected,
             "returning to plain text reused the highlighted layout"
         );
+    }
+
+    #[test]
+    #[ignore = "requires a working wgpu adapter"]
+    fn custom_font_file_renders_its_family_and_falls_back_when_missing() {
+        let size = XY::new(512, 288);
+        let constants = constants(size);
+        let segments = spoken_segments(&["Ship it today"]);
+        let frames = frames(size);
+        let render = |layer: &mut CaptionsLayer, settings: &CaptionSettings| {
+            let mut uniforms = uniforms(&constants, settings.clone(), &segments, size);
+            uniforms.frame_number = 45;
+            layer.prepare(&uniforms, &frames, size, &constants);
+            assert!(layer.has_caption);
+            render_pixels(&constants, layer, size)
+        };
+        let fresh = |settings: &CaptionSettings| {
+            render(
+                &mut CaptionsLayer::new(&constants.device, &constants.queue),
+                settings,
+            )
+        };
+        let plain = CaptionSettings {
+            enabled: true,
+            size: 60,
+            ..Default::default()
+        };
+        let (serif_file, _) = super::custom_font_tests::system_font_file(
+            glyphon::fontdb::Family::Serif,
+            plain.font_weight as u16,
+        );
+        let custom = CaptionSettings {
+            custom_font: Some(serif_file),
+            ..plain.clone()
+        };
+        let missing = CaptionSettings {
+            font: "System Monospace".to_string(),
+            custom_font: Some(std::path::PathBuf::from("/missing/caption-font.ttf")),
+            ..plain.clone()
+        };
+        let serif = fresh(&CaptionSettings {
+            font: "System Serif".to_string(),
+            ..plain.clone()
+        });
+        let monospace = fresh(&CaptionSettings {
+            font: "System Monospace".to_string(),
+            ..plain.clone()
+        });
+        let sans = fresh(&plain);
+
+        assert!(serif != sans);
+        assert!(fresh(&custom) == serif, "the loaded file's family is drawn");
+        assert!(fresh(&missing) == monospace, "a missing file uses `font`");
+
+        let mut reused = CaptionsLayer::new(&constants.device, &constants.queue);
+        for (settings, expected) in [
+            (&plain, &sans),
+            (&custom, &serif),
+            (&missing, &monospace),
+            (&custom, &serif),
+            (&plain, &sans),
+        ] {
+            assert!(render(&mut reused, settings) == *expected);
+        }
     }
 
     #[test]
