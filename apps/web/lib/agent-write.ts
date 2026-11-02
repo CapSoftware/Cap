@@ -548,6 +548,7 @@ export const deleteAgentFeedback = async (
 			.delete(Db.notifications)
 			.where(
 				and(
+					eq(Db.notifications.videoId, input.videoId),
 					eq(Db.notifications.type, "reply"),
 					sql`JSON_EXTRACT(${Db.notifications.data}, '$.comment.id') = ${input.commentId}`,
 				),
@@ -558,6 +559,7 @@ export const deleteAgentFeedback = async (
 		.delete(Db.notifications)
 		.where(
 			and(
+				eq(Db.notifications.videoId, input.videoId),
 				inArray(Db.notifications.type, ["comment", "reaction"]),
 				sql`JSON_EXTRACT(${Db.notifications.data}, '$.comment.id') = ${input.commentId}`,
 			),
@@ -566,6 +568,7 @@ export const deleteAgentFeedback = async (
 		.delete(Db.notifications)
 		.where(
 			and(
+				eq(Db.notifications.videoId, input.videoId),
 				eq(Db.notifications.type, "reply"),
 				sql`JSON_EXTRACT(${Db.notifications.data}, '$.parentCommentId') = ${input.commentId}`,
 			),

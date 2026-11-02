@@ -47,16 +47,16 @@ describe("agent feedback deletion", () => {
 			expect(notificationDeletes()).toEqual([
 				[
 					expect.stringContaining(
-						"`notifications`.`type` in (?, ?) and JSON_EXTRACT(`notifications`.`data`, '$.comment.id') = ?",
+						"`notifications`.`videoId` = ? and `notifications`.`type` in (?, ?) and JSON_EXTRACT(`notifications`.`data`, '$.comment.id') = ?",
 					),
-					["comment", "reaction", commentId],
+					[videoId, "comment", "reaction", commentId],
 					"execute",
 				],
 				[
 					expect.stringContaining(
-						"`notifications`.`type` = ? and JSON_EXTRACT(`notifications`.`data`, '$.parentCommentId') = ?",
+						"`notifications`.`videoId` = ? and `notifications`.`type` = ? and JSON_EXTRACT(`notifications`.`data`, '$.parentCommentId') = ?",
 					),
-					["reply", commentId],
+					[videoId, "reply", commentId],
 					"execute",
 				],
 			]);
@@ -71,9 +71,9 @@ describe("agent feedback deletion", () => {
 		expect(notificationDeletes()).toEqual([
 			[
 				expect.stringContaining(
-					"`notifications`.`type` = ? and JSON_EXTRACT(`notifications`.`data`, '$.comment.id') = ?",
+					"`notifications`.`videoId` = ? and `notifications`.`type` = ? and JSON_EXTRACT(`notifications`.`data`, '$.comment.id') = ?",
 				),
-				["reply", commentId],
+				[videoId, "reply", commentId],
 				"execute",
 			],
 		]);
