@@ -130,7 +130,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 			"",
 			"Create a developer app and its keys at https://cap.so/dashboard/developers. Development apps accept any origin, so use one to test before switching to a production app with allowed domains.",
 			"",
-			"Every error response is JSON with `error`, `code`, `message`, `hint` and `docs` fields; validation errors from request bodies return `success: false` with the failing fields. Each key is limited to 60 requests per minute; a 429 response carries Retry-After.",
+			"Authentication, origin, rate-limit, unknown-route and unexpected errors include `error`, `code`, `message`, `hint` and `docs` fields. Other handler errors may include only `error`; request-body validation errors return `success: false` with the failing fields. Each key is limited to 60 requests per minute; a 429 response carries Retry-After.",
 		].join("\n"),
 		termsOfService: "https://cap.so/terms",
 		contact: { name: "Cap", email: "hello@cap.so", url: "https://cap.so" },
