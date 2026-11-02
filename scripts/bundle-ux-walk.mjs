@@ -68,6 +68,98 @@ export function verifyBundledNode(node) {
 	return version;
 }
 
+export const entitlements = path.join(
+	root,
+	"apps/desktop-gpui/packaging/macos/Entitlements.plist",
+);
+const bundleExtensions = new Set([
+	".app",
+	".appex",
+	".bundle",
+	".framework",
+	".plugin",
+	".xpc",
+]);
+const machOMagics = new Set([
+	"feedface",
+	"cefaedfe",
+	"feedfacf",
+	"cffaedfe",
+	"cafebabe",
+	"bebafeca",
+	"cafebabf",
+	"bfbafeca",
+]);
+
+async function isMachO(file) {
+	const handle = await fs.open(file, "r");
+	try {
+		const { buffer, bytesRead } = await handle.read(Buffer.alloc(4), 0, 4, 0);
+		return bytesRead === 4 && machOMagics.has(buffer.toString("hex"));
+	} finally {
+		await handle.close();
+	}
+}
+
+async function collectNestedCode(directory, skip, order) {
+	const entries = await fs.readdir(directory, { withFileTypes: true });
+	entries.sort((a, b) => a.name.localeCompare(b.name));
+	for (const entry of entries) {
+		const item = path.join(directory, entry.name);
+		if (entry.isDirectory()) {
+			await collectNestedCode(item, skip, order);
+			if (bundleExtensions.has(path.extname(entry.name))) order.push(item);
+		} else if (entry.isFile() && item !== skip && (await isMachO(item))) {
+			order.push(item);
+		}
+	}
+	return order;
+}
+
+export async function nestedCode(app, executable) {
+	const contents = path.join(path.resolve(app), "Contents");
+	return collectNestedCode(
+		contents,
+		path.join(contents, "MacOS", executable),
+		[],
+	);
+}
+
+// Tauri leaves Contents/Frameworks unsigned when no signing identity is set,
+// and codesign refuses to seal an app over unsigned nested code. Signing every
+// nested binary and bundle before its parent avoids --deep, which would also
+// overwrite the entitlements Node ships with.
+export async function signApp(app, identity) {
+	const appPath = path.resolve(app);
+	const { CFBundleExecutable: executable } = JSON.parse(
+		run("plutil", [
+			"-convert",
+			"json",
+			"-o",
+			"-",
+			path.join(appPath, "Contents", "Info.plist"),
+		]),
+	);
+	for (const target of await nestedCode(appPath, executable)) {
+		run("codesign", [
+			"--force",
+			"--sign",
+			identity,
+			"--preserve-metadata=entitlements",
+			target,
+		]);
+	}
+	run("codesign", [
+		"--force",
+		"--sign",
+		identity,
+		"--entitlements",
+		entitlements,
+		appPath,
+	]);
+	run("codesign", ["--verify", "--deep", "--strict", appPath]);
+}
+
 export async function bundleUxWalk(app) {
 	if (process.platform !== "darwin") throw new Error("Bundle UX Walk on macOS");
 	const contents = path.join(path.resolve(app), "Contents");
@@ -159,18 +251,8 @@ export async function bundleUxWalk(app) {
 		`${JSON.stringify({ repository: "https://github.com/CantrellJax/ux-walk-cap", sourceURL: `${parent.UXWalkSourceURL ?? `https://github.com/CantrellJax/ux-walk-cap/tree/${run("git", ["-C", root, "rev-parse", "HEAD"]).trim()}`}/vendor/ux-walk`, revision, node: nodeVersion }, null, 2)}\n`,
 	);
 	await brandBuiltApp(contents, parent);
-	const identity = process.env.CAP_UX_SIGNING_IDENTITY || "-";
-	for (const target of [node, path.resolve(app)]) {
-		run("codesign", [
-			"--force",
-			"--sign",
-			identity,
-			"--preserve-metadata=entitlements",
-			target,
-		]);
-	}
+	await signApp(app, process.env.CAP_UX_SIGNING_IDENTITY || "-");
 	verifyBundledNode(node);
-	run("codesign", ["--verify", "--deep", "--strict", path.resolve(app)]);
 	console.log(
 		`Bundled the native UX Walk engine ${revision} into ${path.basename(app)}`,
 	);
