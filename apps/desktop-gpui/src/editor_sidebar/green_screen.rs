@@ -194,6 +194,7 @@ impl EditorWindow {
         let fps = f64::from(crate::editor_window::EDITOR_PREVIEW_FPS);
         let time_secs = (self.preview_or_playhead() * fps).floor().max(0.) / fps;
         let project = self.project.clone();
+        let target = self.sidebar.style_target;
 
         cx.spawn_in(window, async move |this, cx| {
             let sampled = cx
@@ -209,16 +210,31 @@ impl EditorWindow {
                 Some(task) => task.await.ok().flatten(),
                 None => None,
             };
-            this.update_in(cx, |this: &mut Self, window, cx| match color {
-                Some(color) => this.set_key_color(color, window, cx),
-                None => {
-                    this.sidebar.key_color_not_found = true;
-                    cx.notify();
-                }
+            this.update_in(cx, |this: &mut Self, window, cx| {
+                this.finish_key_color_pick(target, color, window, cx);
             })
             .ok();
         })
         .detach();
+    }
+
+    fn finish_key_color_pick(
+        &mut self,
+        target: Option<(usize, StyleGroup)>,
+        color: Option<Color>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.sidebar.style_target != target {
+            return;
+        }
+        match color {
+            Some(color) => self.set_key_color(color, window, cx),
+            None => {
+                self.sidebar.key_color_not_found = true;
+                cx.notify();
+            }
+        }
     }
 }
 
@@ -328,6 +344,21 @@ mod tests {
             editor.sidebar.style_target = None;
             editor.prepare_green_screen_fields(window, cx);
             assert!(editor.sidebar.green_screen_open.is_open());
+        });
+    }
+
+    // gpui's test windows have no platform window handle on macOS or Windows, which the editor needs.
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    fn a_pick_is_dropped_once_the_style_target_changes(cx: &mut gpui::TestAppContext) {
+        let (editor, cx) = editor_with_camera_style(cx);
+        editor.update_in(cx, |editor, window, cx| {
+            editor.open_style_group(0, StyleGroup::Camera, window, cx);
+            editor.finish_key_color_pick(None, None, window, cx);
+            assert!(!editor.sidebar.key_color_not_found);
+
+            editor.finish_key_color_pick(Some((0, StyleGroup::Camera)), None, window, cx);
+            assert!(editor.sidebar.key_color_not_found);
         });
     }
 
