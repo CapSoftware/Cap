@@ -1086,6 +1086,7 @@ dependencies = [
  "ffmpeg-next",
  "flume",
  "fork-brand",
+ "fork-cli-shim",
  "futures",
  "image 0.25.8",
  "include_dir",
@@ -3419,6 +3420,15 @@ name = "fork-brand"
 version = "0.1.0"
 dependencies = [
  "serde_json",
+]
+
+[[package]]
+name = "fork-cli-shim"
+version = "0.1.0"
+dependencies = [
+ "cap-cli-install",
+ "fork-brand",
+ "tempfile",
 ]
 
 [[package]]

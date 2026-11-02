@@ -5,6 +5,7 @@ use toml::{Table, Value};
 const OVERLAY: &str = "locales-fork/en.toml";
 const UPSTREAM_TOKEN: &str = "%upstream%";
 const RELEASES_TOKEN: &str = "%releases%";
+const CLI_TOKEN: &str = "%cli%";
 const SHIPPED: &str = "i18n_shipped.rs";
 const UPSTREAM: &str = "i18n_upstream.rs";
 const NAMED_BY_APP_NAME: &[&str] = &["menu.app.about", "menu.app.hide", "menu.app.quit"];
@@ -205,7 +206,8 @@ fn brand_table(table: &mut Table, prefix: &str) {
                 }
                 *text = text
                     .replace(UPSTREAM_TOKEN, fork_brand::UPSTREAM_NAME)
-                    .replace(RELEASES_TOKEN, fork_brand::RELEASES_URL);
+                    .replace(RELEASES_TOKEN, fork_brand::RELEASES_URL)
+                    .replace(CLI_TOKEN, fork_brand::CLI_NAME);
             }
             Value::Table(inner) => brand_table(inner, &key),
             _ => {}

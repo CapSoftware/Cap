@@ -1,3 +1,4 @@
+import brand from "../../../crates/fork-brand/brand.json";
 import { recovery } from "./recovery";
 
 type RuntimeEnv = Env & { UPLOAD_TOKEN?: string };
@@ -164,7 +165,7 @@ async function create(request: Request, env: RuntimeEnv): Promise<Response> {
 		id,
 		owner: ownerId,
 		readHash: await hash(token),
-		title: title.trim() || "Cap UX recording",
+		title: title.trim() || `${brand.display_name} recording`,
 		contentType,
 		size,
 		uploadId: upload.uploadId,
@@ -357,7 +358,15 @@ async function route(request: Request, env: RuntimeEnv): Promise<Response> {
 	if (url.pathname.startsWith("/api/")) throw new HttpError(404, "Not found.");
 	if (/^\/s\/[a-f0-9-]{36}$/.test(url.pathname)) url.pathname = "/viewer.html";
 	if (url.pathname === "/") url.pathname = "/index.html";
-	return env.ASSETS.fetch(new Request(url, request));
+	const asset = await env.ASSETS.fetch(new Request(url, request));
+	if (!url.pathname.endsWith(".html") || !asset.ok) return asset;
+	const headers = new Headers(asset.headers);
+	headers.delete("content-length");
+	headers.delete("etag");
+	return new Response(
+		(await asset.text()).replaceAll("%app%", brand.display_name),
+		{ status: asset.status, headers },
+	);
 }
 
 export default {

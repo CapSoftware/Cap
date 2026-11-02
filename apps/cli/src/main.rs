@@ -11,6 +11,7 @@ mod credentials;
 mod developers;
 mod doctor;
 mod export;
+mod fork_cli;
 mod guide;
 mod jobs;
 mod library;
@@ -34,7 +35,7 @@ use std::{
     path::PathBuf,
 };
 
-use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use export::{Export, ExportPreview};
 use record::RecordStart;
 use serde::Serialize;
@@ -148,11 +149,7 @@ TYPICAL AGENT WORKFLOW
   cap upload out.mp4 --json                   # get a shareable link (needs CAP_API_KEY)";
 
 const AGENT_HELP: &str = if cfg!(feature = "ux-walk") {
-    "Cap UX records locally without an account.
-Use cap sharing configure --server https://your-server.example --enable to choose a sharing server.
-Supply an upload credential with --token-stdin, or CAP_UX_UPLOAD_TOKEN for a headless session.
-Use cap upload FILE --json to share explicitly, and cap sharing revoke ID to revoke a link.
-Use cap guide --json for local capture, export and library commands."
+    fork_brand::CLI_HELP
 } else {
     UPSTREAM_AGENT_HELP
 };
@@ -215,7 +212,7 @@ enum Commands {
     Recordings(RecordingsArgs),
     /// Upload a recording or video file and get a shareable link
     Upload(upload::UploadArgs),
-    /// Configure your Cap UX sharing server or revoke a link
+    /// Configure your Cap sharing server or revoke a link
     Sharing(sharing::SharingArgs),
     Recovery(recovery::RecoveryArgs),
     /// Update Cap Desktop and the bundled CLI
@@ -487,7 +484,7 @@ fn main() {
         let _ = unsafe { SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE) };
     }
 
-    let cli = Cli::parse();
+    let cli = fork_cli::parse();
     let level_filter = cli.log_level.level_filter();
 
     let registry = tracing_subscriber::registry().with(tracing_subscriber::filter::filter_fn(
@@ -819,23 +816,20 @@ impl DesktopArgs {
         let (format, result) = match self.command {
             DesktopCommands::Status(args) => {
                 let format = resolve_format(json, args.format);
-                (
-                    format,
-                    emit_install_status(cap_cli_install::status(), format),
-                )
+                (format, emit_install_status(fork_cli_shim::status(), format))
             }
             DesktopCommands::InstallCli(args) => {
                 let format = resolve_format(json, args.format);
                 (
                     format,
-                    emit_install_status(cap_cli_install::install(), format),
+                    emit_install_status(fork_cli_shim::install(), format),
                 )
             }
             DesktopCommands::UninstallCli(args) => {
                 let format = resolve_format(json, args.format);
                 (
                     format,
-                    emit_install_status(cap_cli_install::uninstall(), format),
+                    emit_install_status(fork_cli_shim::uninstall(), format),
                 )
             }
         };
@@ -856,7 +850,7 @@ fn finish_json(format: OutputFormat, result: Result<(), String>) -> Result<(), S
 }
 
 fn emit_install_status(
-    status: Result<cap_cli_install::CliInstallStatus, String>,
+    status: Result<fork_cli_shim::CliInstallStatus, String>,
     format: OutputFormat,
 ) -> Result<(), String> {
     let status = status?;
@@ -888,7 +882,7 @@ fn emit_install_status(
 
 impl CompletionsArgs {
     fn run(self) {
-        let mut cmd = Cli::command();
+        let mut cmd = fork_cli::command();
         let name = cmd.get_name().to_string();
         clap_complete::generate(self.shell, &mut cmd, name, &mut stdout());
     }

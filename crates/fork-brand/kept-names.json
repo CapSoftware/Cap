@@ -1,0 +1,61 @@
+{
+	"stable_identifiers": [
+		{
+			"id": "com.cantrell.cap-ux",
+			"why": "bundle id, app data directory, Keychain services"
+		},
+		{ "id": ".config/cap-ux/", "why": "saved sharing settings" },
+		{
+			"id": "CAP_UX_UPLOAD_TOKEN",
+			"why": "headless credential in existing environments"
+		},
+		{
+			"id": "CAP_UX_SHARING_CONFIG",
+			"why": "environment contract between the app, CLI and engine"
+		},
+		{
+			"id": "CAP_UX_WALK_CONFIG_DIR",
+			"why": "environment contract with the vendored engine"
+		},
+		{
+			"id": "CAP_UX_SIGNING_IDENTITY",
+			"why": "local build setting people already export"
+		},
+		{
+			"id": "CAP_UX_BROWSER_SMOKE",
+			"why": "CI switch for the browser smoke test"
+		},
+		{
+			"id": "CAP_UX_TEST_ENGINE_DIR",
+			"why": "CI switch for the browser smoke test"
+		},
+		{
+			"id": "cap-ux-walk-lock/v1",
+			"why": "hash input of the running walk's lock port"
+		},
+		{ "id": "cap-ux-xcode26", "why": "CI build cache key" },
+		{
+			"id": "capux.jaxtrell.workers.dev",
+			"why": "deployed sharing server and every existing link"
+		},
+		{ "id": "\"name\": \"capux\"", "why": "deployed Worker name" },
+		{ "id": "product: \"capux\"", "why": "sharing protocol handshake" },
+		{ "id": "capux-media", "why": "deployed R2 bucket" },
+		{ "id": "capux-retention", "why": "deployed R2 lifecycle rule" },
+		{ "id": "capux_read", "why": "viewer cookie on existing links" },
+		{ "id": "@cap-ux/cloud", "why": "private package name held in lockfiles" }
+	],
+	"prose_docs": [
+		"README.md",
+		"UX-WALK.md",
+		"CLOUD-PLATFORM.md",
+		"UPSTREAM-DEVELOPMENT.md",
+		"apps/cloud/README.md"
+	],
+	"door": [
+		"crates/fork-brand/",
+		"scripts/fork-brand",
+		"apps/desktop-gpui/assets/branding/"
+	],
+	"vendored": ["vendor/ux-walk/"]
+}

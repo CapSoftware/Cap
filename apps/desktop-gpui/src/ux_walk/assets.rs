@@ -1,7 +1,25 @@
 pub(crate) const ALL: &[(&str, &[u8])] = &[(
-    "branding/cap-ux.png",
-    include_bytes!("../../assets/branding/cap-ux.png"),
+    "branding/app-icon.png",
+    include_bytes!("../../assets/branding/app-icon.png"),
 )];
+
+/// Fork art served at upstream's own asset paths. `Assets::load` checks these
+/// first, so upstream code keeps drawing the same paths and its files stay
+/// unchanged.
+pub(crate) const OVERRIDES: &[(&str, &[u8])] = &[
+    (
+        "icons/logo-full.svg",
+        include_bytes!("../../assets/branding/logo-full.svg"),
+    ),
+    (
+        "icons/logo-full-dark.svg",
+        include_bytes!("../../assets/branding/logo-full-dark.svg"),
+    ),
+    (
+        "icons/logo-mark.svg",
+        include_bytes!("../../assets/branding/logo-mark.svg"),
+    ),
+];
 
 #[cfg(test)]
 mod tests {
@@ -73,8 +91,18 @@ mod tests {
     }
 
     #[test]
+    fn overrides_replace_upstream_assets() {
+        for (path, _) in super::OVERRIDES {
+            assert!(
+                Assets.list(path).unwrap().iter().any(|name| name == path),
+                "{path} is no longer an upstream asset; drop or move its override"
+            );
+        }
+    }
+
+    #[test]
     fn fork_assets_load_their_own_bytes() {
-        for (path, bytes) in super::ALL {
+        for (path, bytes) in super::ALL.iter().chain(super::OVERRIDES) {
             assert_eq!(Assets.load(path).unwrap().as_deref(), Some(*bytes));
         }
     }

@@ -1,7 +1,12 @@
 {
-	"display_name": "Cap UX",
+	"display_name": "Worm",
+	"former_names": ["Cap UX"],
 	"upstream_name": "Cap",
-	"slug": "cap-ux",
+	"slug": "worm",
+	"cli_name": "zworm",
+	"former_cli_names": ["cap"],
+	"skill_name": "zworm",
+	"former_skill_names": ["cap-ux"],
 	"bundle_id": "com.cantrell.cap-ux",
 	"legacy_bundle_ids": [],
 	"url_scheme": "cap-ux",
@@ -15,18 +20,33 @@
 	"status_url": "",
 	"community_url": "",
 	"default_server_url": "",
-	"long_description": "Cap UX combines Cap screen recording and editing with UX Walk notes, chapters, transcripts and agent-ready evidence.",
+	"long_description": "%app% combines Cap screen recording and editing with UX Walk notes, chapters, transcripts and agent-ready evidence.",
+	"palette": {
+		"field": ["#D8392E", "#9E1B1B"],
+		"light": ["#FFFFFF", "#FFFFFF"],
+		"gold": ["#F2B630", "#E39B12"],
+		"soil": ["#8E1818", "#6E1010"],
+		"ray": "#F2B630",
+		"ring": "#A85F0E",
+		"spray": "#F2B630",
+		"ridge": "#C0392B",
+		"clod": "#8E1818",
+		"clod-light": "#B52A24",
+		"ink": "#12161F",
+		"ink-dark": "#FFFFFF"
+	},
 	"icon": [
-		"icons/32x32.png",
-		"icons/128x128.png",
-		"icons/128x128@2x.png",
-		"icons/macos/icon.icns",
-		"icons/icon.ico"
+		"assets/branding/app/32x32.png",
+		"assets/branding/app/128x128.png",
+		"assets/branding/app/128x128@2x.png",
+		"assets/branding/app/icon.icns",
+		"assets/branding/app/icon.ico"
 	],
 	"macos": {
-		"document_type_name": "Cap UX Recording",
-		"camera_usage": "Cap UX uses your camera when you include it in a recording.",
-		"microphone_usage": "Cap UX uses your microphone to record your narration.",
-		"screen_capture_usage": "Cap UX captures the display, window or area you select."
+		"minimum_system_version": "15.0",
+		"document_type_name": "%app% Recording",
+		"camera_usage": "%app% uses your camera when you include it in a recording.",
+		"microphone_usage": "%app% uses your microphone to record your narration.",
+		"screen_capture_usage": "%app% captures the display, window or area you select."
 	}
 }

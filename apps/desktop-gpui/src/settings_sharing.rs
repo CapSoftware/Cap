@@ -57,7 +57,7 @@ impl SettingsWindow {
                         settings.endpoint = this.sharing.endpoint.read(cx).text().to_string();
                         this.sharing_save(settings, cx);
                     }))
-                    .child(div().text_size(px(12.)).child("Use Cap UX Cloud, your own Cloudflare deployment, or a compatible server. There is no default upload destination."))
+                    .child(div().text_size(px(12.)).child(fork_brand::text("Use Cap Cloud, your own Cloudflare deployment, or a compatible server. There is no default upload destination.")))
                     .into_any_element()
             ]).into_any_element(),
             self.section("Upload credential", Some("Stored in your system credential store for this server. Recordings never contain it."), None, vec![
@@ -132,7 +132,7 @@ impl SettingsWindow {
         &self,
         cx: &mut Context<Self>,
     ) -> Vec<gpui::AnyElement> {
-        vec![self.section("Integrations", Some("Connect the services you choose. Cap UX does not require an account or subscription."), None, vec![
+        vec![self.section("Integrations", Some(fork_brand::text_static("Connect the services you choose. Cap does not require an account or subscription.")), None, vec![
             self.card(true).flex().flex_col().gap(px(12.))
                 .child(self.button("integrations-sharing", (ui::ButtonVariant::Dark, None), "Configure cloud sharing", false, cx, |this, window, cx| this.set_page(Page::Sharing, window, cx)))
                 .child(self.button("integrations-transcription", (ui::ButtonVariant::Gray, None), "Configure transcription", false, cx, |this, window, cx| this.set_page(Page::Transcription, window, cx)))

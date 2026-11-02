@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { readFileSync } from "node:fs";
 import { PassThrough } from "node:stream";
 import test from "node:test";
 import {
@@ -9,6 +8,7 @@ import {
 	isTimestampSigningFailure,
 	resolveMacosDeploymentTarget,
 } from "./build-macos-packages.mjs";
+import { tauriOverlay } from "./fork-brand.mjs";
 
 const target = "x86_64-apple-darwin";
 const config = ["--config", "release.conf.json"];
@@ -60,17 +60,11 @@ function harness(results) {
 	};
 }
 
-test("Cap-UX requires macOS 15 while the underlying capture pipeline keeps its baseline", () => {
+test("The fork requires macOS 15 while the underlying capture pipeline keeps its baseline", () => {
 	const minimum = resolveMacosDeploymentTarget();
 	assert.equal(minimum, "15.0");
 	assert.equal(resolveMacosDeploymentTarget(""), minimum);
-	const gpui = JSON.parse(
-		readFileSync(
-			new URL("../apps/desktop-gpui/tauri.conf.json", import.meta.url),
-			"utf8",
-		),
-	);
-	assert.equal(gpui.bundle.macOS.minimumSystemVersion, "15.0");
+	assert.equal(tauriOverlay().bundle.macOS.minimumSystemVersion, "15.0");
 	assert.equal(resolveMacosDeploymentTarget(undefined, "15.0"), "15.0");
 	assert.throws(
 		() => resolveMacosDeploymentTarget("14.9", "15.0"),

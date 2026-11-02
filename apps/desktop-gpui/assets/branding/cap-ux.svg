@@ -1,9 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" fill="none" role="img" aria-labelledby="title"><title id="title">Cap UX</title>
-<rect x="42" y="42" width="428" height="428" rx="86" fill="white"/>
-<circle cx="256" cy="256" r="172" fill="#4785FF"/>
-<circle cx="256" cy="256" r="140" fill="#ADC9FF"/>
-<circle cx="256" cy="256" r="108" fill="white"/>
-<g fill="#2852A3">
-<path d="M178 214H196V267C196 278 201 283 211 283C221 283 226 278 226 267V214H244V268C244 289 232 301 211 301C190 301 178 289 178 268V214Z"/>
-<path d="M258 214H280L297 242L314 214H336L309 256L337 298H315L297 269L279 298H257L284 256L258 214Z"/>
-</g></svg>

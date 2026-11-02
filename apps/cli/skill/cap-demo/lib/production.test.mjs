@@ -14,7 +14,7 @@ import {
 const media = { width: 640, height: 360, fps: 30, frames: 300, hasAudio: true };
 
 async function fixture(t) {
-	const root = await fs.mkdtemp(path.join(os.tmpdir(), "capux-production-"));
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "demo-production-"));
 	t.after(() => fs.rm(root, { recursive: true, force: true }));
 	const source = path.join(root, "Original demo.mp4");
 	await fs.writeFile(source, "untouched recording");

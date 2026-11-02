@@ -1,4 +1,4 @@
-# Cap UX sharing server
+# Worm sharing server
 
 A standalone Cloudflare Worker, private R2 bucket and static viewer. No Cap account, billing API, subscription or upstream web application is required. This first release is an owner-managed sharing service; public user signup is not implemented yet.
 
@@ -18,7 +18,7 @@ npm run deploy
 npx wrangler secret put UPLOAD_TOKEN
 ```
 
-At the secret prompt, supply a randomly generated credential of at least 32 characters. Save the same credential in Cap UX Settings → Sharing. Keep it in your password manager or system credential store; do not paste it into source, a recording, a URL or an issue. Requests to create shares return 503 until the secret is configured. Rotate it with the same secret command; existing links remain revocable with the new owner credential.
+At the secret prompt, supply a randomly generated credential of at least 32 characters. Save the same credential in Worm Settings → Sharing. Keep it in your password manager or system credential store; do not paste it into source, a recording, a URL or an issue. Requests to create shares return 503 until the secret is configured. Rotate it with the same secret command; existing links remain revocable with the new owner credential.
 
 Change the Worker and bucket names in `wrangler.jsonc` for another instance. Set the deployment's returned HTTPS origin in the app. A custom domain can route to this same Worker later; API and viewer must share an origin so scoped playback cookies work. Never make the R2 bucket public. The 31-day retention rule applies only to this sharing bucket; it leaves source recordings on the user's computer untouched.
 
@@ -62,4 +62,4 @@ Supported media: video/mp4, image/png and image/jpeg. Maximum media size: 20 GB.
 
 `npm run check` regenerates binding types, typechecks, tests real R2 multipart/range/authorization/revocation behavior and packages a deployment dry run. `worker-configuration.d.ts` is generated, never edited manually. Native CI checks the shared Rust client, desktop and CLI and builds an isolated macOS preview.
 
-The platform roadmap and capture handoff contract are in [CAP-UX-CLOUD.md](../../CAP-UX-CLOUD.md). Source remains available under the repository's [license](../../LICENSE).
+The platform roadmap and capture handoff contract are in [CLOUD-PLATFORM.md](../../CLOUD-PLATFORM.md). Source remains available under the repository's [license](../../LICENSE).

@@ -30,6 +30,7 @@ ux-walk = []
 [dependencies]
 cap-cloud-sharing = { path = "../../crates/cloud-sharing" }
 fork-brand = { path = "../../crates/fork-brand" }
+fork-cli-shim = { path = "../../crates/fork-cli-shim" }
 cap-audio = { path = "../../crates/audio" }
 cap-cli-install = { path = "../../crates/cli-install" }
 cap-gpui-kernels = { path = "kernels" }

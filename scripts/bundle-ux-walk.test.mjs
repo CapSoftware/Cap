@@ -15,9 +15,9 @@ const macOnly = { skip: process.platform !== "darwin" };
 
 test("linked libraries cover every architecture of a universal binary", () => {
 	const output = [
-		"/tmp/Cap UX.app/node (architecture x86_64):",
+		"/tmp/App.app/node (architecture x86_64):",
 		"\t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1356.0.0)",
-		"/tmp/Cap UX.app/node (architecture arm64):",
+		"/tmp/App.app/node (architecture arm64):",
 		"\t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1356.0.0)",
 		"\t/System/Library/Frameworks/Core Foundation.framework/CoreFoundation (compatibility version 150.0.0, current version 2000.0.0, weak)",
 		"",
@@ -64,7 +64,7 @@ test("only /usr/lib and /System count as system libraries", () => {
 });
 
 test("a file with no readable libraries is refused", macOnly, async (t) => {
-	const directory = await fs.mkdtemp(path.join(os.tmpdir(), "cap-ux-node-"));
+	const directory = await fs.mkdtemp(path.join(os.tmpdir(), "ux-walk-node-"));
 	t.after(() => fs.rm(directory, { recursive: true, force: true }));
 	const script = path.join(directory, "node");
 	await fs.writeFile(script, "#!/bin/sh\necho v22.0.0\n", { mode: 0o755 });

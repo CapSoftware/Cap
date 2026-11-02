@@ -282,7 +282,7 @@ export async function runNativeBrowser(captureId, workDir) {
 	const cfg = loadConfig();
 	const evidence = new NativeBrowserEvidence(captureId, workDir);
 	const events = new OwnedWindowEvents(evidence);
-	const marker = `Cap UX walk ${captureId}`;
+	const marker = `UX Walk ${captureId}`;
 	const bootstrap = http.createServer((request, response) => {
 		if (request.url !== `/walk/${captureId}`) {
 			response.writeHead(404);
@@ -311,7 +311,7 @@ export async function runNativeBrowser(captureId, workDir) {
 		canCapturePage: (page) => events.canCapturePage(page),
 		genericTestids: cfg.genericTestids,
 		onCommand: () =>
-			"Use Cap UX recording controls for notes, chapters and pause.",
+			"Use the recording controls for notes, chapters and pause.",
 	}).catch((error) => {
 		bootstrap.closeAllConnections();
 		bootstrap.close();

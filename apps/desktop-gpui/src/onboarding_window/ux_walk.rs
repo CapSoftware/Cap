@@ -43,7 +43,7 @@ pub(super) fn wordmark(ink: Hsla) -> gpui::Div {
         .flex()
         .items_center()
         .gap(px(12.))
-        .child(img("branding/cap-ux.png").size(px(36.)))
+        .child(img("branding/app-icon.png").size(px(36.)))
         .child(copy(fork_brand::APP_NAME, 28., ink).font_weight(FontWeight::SEMIBOLD))
 }
 

@@ -1,8 +1,8 @@
 {
 	"$schema": "https://schema.tauri.app/config/2",
-	"productName": "Cap UX",
+	"productName": "Cap",
 	"mainBinaryName": "Cap",
-	"identifier": "com.cantrell.cap-ux",
+	"identifier": "so.cap.desktop",
 	"plugins": {
 		"updater": {
 			"endpoints": [
@@ -12,16 +12,16 @@
 		},
 		"deep-link": {
 			"desktop": {
-				"schemes": ["cap-ux"]
+				"schemes": ["cap-desktop"]
 			}
 		}
 	},
 	"bundle": {
 		"active": true,
-		"createUpdaterArtifacts": false,
+		"createUpdaterArtifacts": true,
 		"targets": "all",
 		"category": "Video",
-		"longDescription": "Cap UX combines Cap screen recording and editing with UX Walk notes, chapters, transcripts and agent-ready evidence.",
+		"longDescription": "Cap is the open source alternative to Loom. Lightweight, powerful, and cross-platform. Record and share in seconds.",
 		"externalBin": ["binaries/cap-muxer", "binaries/cap-cli"],
 		"icon": [
 			"icons/32x32.png",
@@ -48,9 +48,18 @@
 			}
 		],
 		"macOS": {
-			"minimumSystemVersion": "15.0",
+			"minimumSystemVersion": "12.3",
 			"entitlements": "packaging/macos/Entitlements.plist",
 			"frameworks": ["../../target/native-deps/Spacedrive.framework"],
+			"files": {
+				"Resources/en.lproj/InfoPlist.strings": "macos/en.lproj/InfoPlist.strings",
+				"Resources/zh-Hans.lproj/InfoPlist.strings": "macos/zh-Hans.lproj/InfoPlist.strings",
+				"Resources/ja.lproj/InfoPlist.strings": "macos/ja.lproj/InfoPlist.strings",
+				"Resources/fr.lproj/InfoPlist.strings": "macos/fr.lproj/InfoPlist.strings",
+				"Resources/es.lproj/InfoPlist.strings": "macos/es.lproj/InfoPlist.strings",
+				"Resources/de.lproj/InfoPlist.strings": "macos/de.lproj/InfoPlist.strings",
+				"Resources/hi.lproj/InfoPlist.strings": "macos/hi.lproj/InfoPlist.strings"
+			},
 			"dmg": {
 				"background": "packaging/macos/dmg-background.png",
 				"appPosition": {

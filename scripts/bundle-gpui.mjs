@@ -11,6 +11,7 @@ import {
 	buildMacosPackages,
 	resolveMacosDeploymentTarget,
 } from "./build-macos-packages.mjs";
+import { minimumMacos, writeTauriOverlay } from "./fork-brand.mjs";
 
 const repoRoot = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
@@ -167,6 +168,7 @@ export async function bundleGpui(
 		packageMacos = buildMacosPackages,
 		writeConfig = writePlatformConfig,
 		hostTriple = detectHostTriple,
+		writeBrandConfig = writeTauriOverlay,
 	} = {},
 ) {
 	const {
@@ -184,17 +186,13 @@ export async function bundleGpui(
 			);
 	}
 	const profile = debug ? "debug" : "release";
-	const bundleArgs = [...(debug ? ["--debug"] : []), ...requestedArgs];
 	let environment = env;
 	if (platform === "darwin") {
-		const config = JSON.parse(
-			await fs.readFile(path.join(gpuiDirectory, "tauri.conf.json"), "utf8"),
-		);
 		environment = {
 			...env,
 			MACOSX_DEPLOYMENT_TARGET: resolveMacosDeploymentTarget(
 				env.MACOSX_DEPLOYMENT_TARGET,
-				config.bundle.macOS.minimumSystemVersion,
+				minimumMacos,
 			),
 		};
 	}
@@ -214,6 +212,12 @@ export async function bundleGpui(
 	console.log(`Staged ${staged}`);
 	if (noBundle) return;
 	await writeConfig(platform);
+	const bundleArgs = [
+		...(debug ? ["--debug"] : []),
+		"--config",
+		await writeBrandConfig(gpuiDirectory),
+		...requestedArgs,
+	];
 	if (platform === "linux") {
 		await fs
 			.access(path.join(gpuiDirectory, platformConfigNames.linux))

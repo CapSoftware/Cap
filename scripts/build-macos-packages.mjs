@@ -1,10 +1,10 @@
 import { spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
 import { constants } from "node:os";
 import path from "node:path";
 import { setTimeout as wait } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { stripVTControlCharacters } from "node:util";
+import { minimumMacos } from "./fork-brand.mjs";
 
 const gpuiDirectory = fileURLToPath(
 	new URL("../apps/desktop-gpui/", import.meta.url),
@@ -12,12 +12,7 @@ const gpuiDirectory = fileURLToPath(
 const retryDelays = [15_000, 30_000];
 const outputTailLimit = 64 * 1024;
 
-export function resolveMacosDeploymentTarget(
-	value,
-	minimum = JSON.parse(
-		readFileSync(path.join(gpuiDirectory, "tauri.conf.json"), "utf8"),
-	).bundle.macOS.minimumSystemVersion,
-) {
+export function resolveMacosDeploymentTarget(value, minimum = minimumMacos) {
 	const target = value || minimum;
 	const parseVersion = (version) => {
 		if (typeof version !== "string" || !/^\d+(?:\.\d+){0,2}$/.test(version)) {

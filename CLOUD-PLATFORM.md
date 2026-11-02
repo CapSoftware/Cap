@@ -1,12 +1,12 @@
-# Cap UX platform
+# Worm platform
 
-Cap UX owns its recording workflow, identity and cloud protocol. Local recording works without an account. Users choose whether to share and which compatible server stores their media. The desktop presents no Cap subscription, commercial-license activation or paid quality gate. Required upstream attribution and source licenses remain intact.
+Worm owns its recording workflow, identity and cloud protocol. Local recording works without an account. Users choose whether to share and which compatible server stores their media. The desktop presents no Cap subscription, commercial-license activation or paid quality gate. Required upstream attribution and source licenses remain intact.
 
 ## Shipping foundation
 
 The native GPUI recorder/editor, UX Walk evidence collector, provider configuration and library stay in their existing paths. The new Sharing settings and shared Rust client extend those paths. Instant records locally, with its existing capture/finalization pipeline and recovery ownership; it no longer needs a remote video reservation. Share is an explicit action after capture/export.
 
-The standalone apps/cloud service uses Workers for the API, private R2 for media and metadata, and Workers Static Assets for the viewer. The Jacks Unlimited, Inc. project is named capux. Its current origin is https://capux.jaxtrell.workers.dev. demo.jacks.med is a possible future custom domain; no existing demo route or DNS record is changed by this implementation.
+The standalone apps/cloud service uses Workers for the API, private R2 for media and metadata, and Workers Static Assets for the viewer. The Jacks Unlimited, Inc. project keeps its original deployment name. Its current origin is https://capux.jaxtrell.workers.dev. demo.jacks.med is a possible future custom domain; no existing demo route or DNS record is changed by this implementation.
 
 There is one server-owner upload credential today. Viewing links are expiring unlisted capabilities. This is suitable for our own use and self-hosted deployments; public account registration is deliberately a subsequent capability, not a simulated signup screen. The native app can use any compatible origin and does not hardcode our instance as its upload default.
 

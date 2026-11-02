@@ -10,7 +10,7 @@ let runtime;
 before(() => {
 	runtime = new Miniflare(
 		convertV4MiniflareOptions({
-			name: "capux-recovery",
+			name: "recovery-test",
 			modules: true,
 			scriptPath: fileURLToPath(new URL("../dist/index.js", import.meta.url)),
 			compatibilityDate: "2026-10-25",

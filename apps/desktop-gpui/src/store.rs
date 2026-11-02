@@ -912,15 +912,15 @@ impl WindowExclusion {
 /// `DEFAULT_EXCLUDED_WINDOW_TITLES` in `general_settings.rs`, which is what
 /// the page's Reset button asks the backend for.
 pub const DEFAULT_EXCLUDED_WINDOW_TITLES: &[&str] = &[
-    "Cap UX",
-    "Cap UX Settings",
-    "Cap UX Recording Controls",
-    "Cap UX Camera",
-    "Cap UX Window Capture Occluder",
-    "Cap UX Capture Area",
-    "Cap UX Mode Selection",
-    "Cap UX Recordings Overlay",
-    "Cap UX Teleprompter",
+    "Cap",
+    "Cap Settings",
+    "Cap Recording Controls",
+    "Cap Camera",
+    "Cap Window Capture Occluder",
+    "Cap Capture Area",
+    "Cap Mode Selection",
+    "Cap Recordings Overlay",
+    "Cap Teleprompter",
 ];
 
 pub fn default_excluded_windows() -> Vec<WindowExclusion> {
@@ -929,7 +929,7 @@ pub fn default_excluded_windows() -> Vec<WindowExclusion> {
         .map(|title| WindowExclusion {
             bundle_identifier: None,
             owner_name: None,
-            window_title: Some((*title).to_string()),
+            window_title: Some(crate::fork_titles::window_title(title).to_string()),
         })
         .collect()
 }
@@ -1367,11 +1367,9 @@ impl GeneralSettings {
             if rule.bundle_identifier.is_none()
                 && rule.owner_name.is_none()
                 && let Some(title) = &mut rule.window_title
-                && let Some(current) = DEFAULT_EXCLUDED_WINDOW_TITLES
-                    .iter()
-                    .find(|current| current.replace("Cap UX", "Cap") == *title)
+                && let Some(current) = crate::fork_titles::current_title(title)
             {
-                *title = (*current).into();
+                *title = current.into();
             }
         }
         settings

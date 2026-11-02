@@ -1,6 +1,6 @@
 ---
 name: cap-demo
-description: Prepare an existing Cap UX recording for reversible demo edits with optional FilmCraft and EffectCraft bridges, or record a short website showcase with Cap.
+description: Prepare an existing recording for reversible demo edits with optional FilmCraft and EffectCraft bridges, or record a short website showcase with Cap.
 ---
 
 # cap-demo
@@ -102,7 +102,7 @@ alias cap-demo='node <skilldir>/cap-demo.mjs'
   Chromium** under `~/Library/Caches/ms-playwright`; if none is cached, run
   `npx playwright install chromium` once.
 - **`python3`** and **`ffmpeg`/`ffprobe`** on PATH.
-- The **`cap` CLI** on PATH ([Cap UX](https://github.com/CantrellJax/ux-walk-cap)) with macOS
+- The **`cap` CLI** on PATH ([this fork](https://github.com/CantrellJax/ux-walk-cap)) with macOS
   **screen-recording permission** granted to it. Both stages otherwise resolve
   the binary from `CAP_BIN`; if neither is set they error clearly.
 

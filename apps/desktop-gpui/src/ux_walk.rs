@@ -66,7 +66,7 @@ pub fn run_engine(command: &str, file: &std::path::Path) -> Result<String, Strin
     let contents = executable
         .parent()
         .and_then(|p| p.parent())
-        .ok_or("Cap UX app bundle is unavailable.")?;
+        .ok_or("The app bundle is unavailable.")?;
     let engine = contents.join("Resources/ux-walk");
     let cli = contents.join("MacOS/cap-cli");
     let output = Command::new(engine.join("bin/node"))

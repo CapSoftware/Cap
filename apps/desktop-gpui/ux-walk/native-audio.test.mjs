@@ -7,7 +7,7 @@ import test from "node:test";
 import { prepareNativeAudio } from "./native-audio.mjs";
 
 function fixture(t) {
-	const root = fs.mkdtempSync(path.join(os.tmpdir(), "cap-ux-audio-"));
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "ux-walk-audio-"));
 	t.after(() => fs.rmSync(root, { recursive: true, force: true }));
 	const project = path.join(root, "source.cap");
 	const directory = path.join(root, "walk");

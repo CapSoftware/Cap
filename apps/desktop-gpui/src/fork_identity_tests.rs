@@ -250,6 +250,27 @@ fn fork_wording_reads_the_same_in_every_locale() {
 }
 
 #[test]
+fn saved_window_rules_follow_a_rename() {
+    let shipped = fork_brand::text_static;
+    let current = shipped("Cap Settings");
+    assert!(current.contains(fork_brand::APP_NAME));
+    assert_eq!(
+        crate::fork_titles::current_title_among("Cap Settings", shipped),
+        Some(current)
+    );
+    for former in fork_brand::former_names() {
+        assert_eq!(
+            crate::fork_titles::current_title_among(&format!("{former} Settings"), shipped),
+            Some(current)
+        );
+    }
+    assert_eq!(
+        crate::fork_titles::current_title_among("Finder", shipped),
+        None
+    );
+}
+
+#[test]
 fn fork_keeps_its_own_identity() {
     assert_eq!(crate::store::APP_IDENTIFIER, fork_brand::BUNDLE_ID);
     assert_eq!(crate::menus::APP_NAME, fork_brand::APP_NAME);

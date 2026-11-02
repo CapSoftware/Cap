@@ -70,7 +70,7 @@ pub fn endpoint(value: &str) -> Result<Url, String> {
         || host.is_empty()
         || !(url.scheme() == "https" || (url.scheme() == "http" && loopback))
     {
-        return Err("Use your Cap UX server's HTTPS origin, without a path, credentials, query or fragment. HTTP is available for localhost development.".into());
+        return Err("Use your sharing server's HTTPS origin, without a path, credentials, query or fragment. HTTP is available for localhost development.".into());
     }
     url.set_path("/");
     Ok(url)
@@ -397,7 +397,7 @@ async fn decode<T: serde::de::DeserializeOwned>(mut response: Response) -> Resul
         bytes.extend_from_slice(&chunk);
     }
     serde_json::from_slice(&bytes)
-        .map_err(|_| "The server does not support the Cap UX sharing protocol.".into())
+        .map_err(|_| "The server does not support this sharing protocol.".into())
 }
 
 #[cfg(test)]

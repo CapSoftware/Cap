@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { brand, brandBuiltApp, brandEngineText } from "./fork-brand.mjs";
 import { verifyUxWalkSource } from "./sync-ux-walk.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -79,8 +80,10 @@ export async function bundleUxWalk(app) {
 			path.join(contents, "Info.plist"),
 		]),
 	);
-	if (!String(parent.CFBundleIdentifier).startsWith("com.cantrell.cap-ux")) {
-		throw new Error("UX Walk can only be bundled into a Cap-UX app");
+	if (!String(parent.CFBundleIdentifier).startsWith(brand.bundle_id)) {
+		throw new Error(
+			`UX Walk can only be bundled into a ${brand.display_name} app`,
+		);
 	}
 	const { revision } = await verifyUxWalkSource(source);
 	await fs.access(
@@ -105,6 +108,7 @@ export async function bundleUxWalk(app) {
 			recursive: true,
 		});
 	}
+	await brandEngineText(path.join(engine, "src"));
 	await fs.cp(
 		path.join(source, "node_modules", "playwright-core"),
 		path.join(engine, "node_modules", "playwright-core"),
@@ -154,15 +158,7 @@ export async function bundleUxWalk(app) {
 		path.join(resources, "engine-source.json"),
 		`${JSON.stringify({ repository: "https://github.com/CantrellJax/ux-walk-cap", sourceURL: `${parent.UXWalkSourceURL ?? `https://github.com/CantrellJax/ux-walk-cap/tree/${run("git", ["-C", root, "rev-parse", "HEAD"]).trim()}`}/vendor/ux-walk`, revision, node: nodeVersion }, null, 2)}\n`,
 	);
-	for (const key of ["CFBundleName", "CFBundleDisplayName"]) {
-		run("plutil", [
-			"-replace",
-			key,
-			"-string",
-			"Cap UX",
-			path.join(contents, "Info.plist"),
-		]);
-	}
+	await brandBuiltApp(contents, parent);
 	const identity = process.env.CAP_UX_SIGNING_IDENTITY || "-";
 	for (const target of [node, path.resolve(app)]) {
 		run("codesign", [
@@ -186,7 +182,9 @@ if (
 ) {
 	const app = process.argv[2];
 	if (!app)
-		throw new Error("Usage: node scripts/bundle-ux-walk.mjs <Cap-UX.app>");
+		throw new Error(
+			`Usage: node scripts/bundle-ux-walk.mjs <${brand.display_name}.app>`,
+		);
 	bundleUxWalk(app).catch((error) => {
 		console.error(error.message);
 		process.exitCode = 1;

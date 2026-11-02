@@ -471,6 +471,13 @@ fn build() -> Guide {
         guide
             .notes
             .retain(|text| !text.contains("paid processing") && !text.contains("MCP"));
+        for note in &mut guide.notes {
+            *note = fork_brand::cli_text_static(*note);
+        }
+        for command in &mut guide.commands {
+            command.summary = fork_brand::cli_text_static(command.summary);
+            command.notes = command.notes.map(fork_brand::cli_text_static);
+        }
     }
     guide
 }
