@@ -2137,7 +2137,7 @@ impl EditorWindow {
             multiple_clips: false,
             recorded_cursor_family: None,
             save_task: None,
-            imported_waveforms_stale: false,
+            imported_waveforms_stale: true,
             imported_waveforms_loading: false,
             imported_waveform_requests: HashMap::new(),
             name_input,
@@ -3552,7 +3552,13 @@ impl EditorWindow {
     }
 
     pub(crate) fn has_imported_waveforms(&self) -> bool {
-        self.timeline.audio.is_empty() || !self.timeline.imported_waveforms.is_empty()
+        !self.timeline.imported_waveforms.is_empty()
+    }
+
+    /// Every imported clip that can draw a waveform has its peak table, or its
+    /// load finished without one (disabled, silent or undecodable files).
+    pub(crate) fn imported_waveforms_settled(&self) -> bool {
+        self.project_ready() && !self.imported_waveforms_stale && !self.imported_waveforms_loading
     }
 
     pub(crate) fn waveform_cache_stats(&self) -> crate::editor_timeline::WaveformPathStats {

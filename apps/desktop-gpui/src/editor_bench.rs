@@ -184,7 +184,7 @@ pub(crate) async fn run(handle: WindowHandle<EditorWindow>, cx: &mut AsyncApp) {
         let ready = handle
             .update(cx, |view, _, _| {
                 let (mic, system) = view.has_waveforms();
-                view.latest_frame.is_some() && (mic || system) && view.has_imported_waveforms()
+                view.latest_frame.is_some() && (mic || system) && view.imported_waveforms_settled()
             })
             .unwrap_or(false);
         if ready {
