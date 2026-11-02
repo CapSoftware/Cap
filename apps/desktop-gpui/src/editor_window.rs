@@ -1490,6 +1490,12 @@ pub struct EditorWindow {
     /// The debounced `project-config.json` write, and the task driving it.
     pending_save: Rc<RefCell<PendingProjectSave>>,
     save_task: Option<gpui::Task<()>>,
+    /// Imported audio waveforms are re-checked after a timeline rebuild, at
+    /// most one load runs at a time, and each file's last requested source
+    /// range is kept so a file that never decodes is not retried every frame.
+    imported_waveforms_stale: bool,
+    imported_waveforms_loading: bool,
+    imported_waveform_requests: HashMap<String, (usize, usize)>,
 
     // -- Text fields (E5.5) ---------------------------------------------------
     /// `NameEditor` (`Header.tsx:276-330`). The value lives in
@@ -2131,6 +2137,9 @@ impl EditorWindow {
             multiple_clips: false,
             recorded_cursor_family: None,
             save_task: None,
+            imported_waveforms_stale: false,
+            imported_waveforms_loading: false,
+            imported_waveform_requests: HashMap::new(),
             name_input,
             hex_inputs,
             picker_hex,
@@ -2298,6 +2307,7 @@ impl EditorWindow {
         self.dismiss_transient_menus();
         let mic = std::mem::take(&mut self.timeline.mic_waveforms);
         let system = std::mem::take(&mut self.timeline.system_waveforms);
+        let imported = std::mem::take(&mut self.timeline.imported_waveforms);
         let waveform_paths = self.timeline.waveform_paths.clone();
         self.timeline = TimelineModel::build_with_lanes(
             &self.project,
@@ -2307,7 +2317,9 @@ impl EditorWindow {
         );
         self.timeline.mic_waveforms = mic;
         self.timeline.system_waveforms = system;
+        self.timeline.imported_waveforms = imported;
         self.timeline.waveform_paths = waveform_paths;
+        self.imported_waveforms_stale = true;
         if self.timeline.total_duration > 0.0 {
             self.total = self.timeline.total_duration;
             // Deleting or trimming the clip under the playhead shortens the
@@ -2341,6 +2353,106 @@ impl EditorWindow {
         self.timeline.system_waveforms = system;
         cx.notify();
         window.refresh();
+    }
+
+    /// Peak tables for imported audio. The samples come from the editor's
+    /// music decode cache, which the editor already fills on open and which
+    /// playback reads, so a file is decoded once for both and the waveform
+    /// only adds a single pass over samples already in memory. Nothing runs
+    /// while a drag is live; the drop's rebuild picks the final range up.
+    fn sync_imported_waveforms(&mut self, cx: &mut Context<Self>) {
+        if !self.imported_waveforms_stale
+            || self.imported_waveforms_loading
+            || self.drag.is_some()
+            || !self.project_ready()
+        {
+            return;
+        }
+        let Some(instance) = self.instance.clone() else {
+            return;
+        };
+        self.imported_waveforms_stale = false;
+
+        let wanted = cap_editor::music_track_ranges(&self.project);
+        if self
+            .timeline
+            .imported_waveforms
+            .keys()
+            .any(|path| !wanted.contains_key(path.as_str()))
+        {
+            let mut kept = (*self.timeline.imported_waveforms).clone();
+            kept.retain(|path, _| wanted.contains_key(path.as_str()));
+            self.timeline.imported_waveforms = Arc::new(kept);
+        }
+        self.imported_waveform_requests
+            .retain(|path, _| wanted.contains_key(path.as_str()));
+
+        let mut missing = Vec::new();
+        for (path, range) in wanted {
+            let drawn = self
+                .timeline
+                .imported_waveforms
+                .get(path)
+                .is_some_and(|waveform| waveform.covers(range));
+            let requested = self
+                .imported_waveform_requests
+                .get(path)
+                .is_some_and(|&(start, end)| start <= range.0 && range.1 <= end);
+            if !drawn && !requested {
+                self.imported_waveform_requests
+                    .insert(path.to_string(), range);
+                missing.push(path.to_string());
+            }
+        }
+        if missing.is_empty() {
+            return;
+        }
+
+        self.imported_waveforms_loading = true;
+        let project = self.project.clone();
+        let load =
+            gpui_tokio::Tokio::spawn(
+                cx,
+                async move { instance.load_music_tracks_for(project).await },
+            );
+        cx.spawn(async move |this, cx| {
+            let waveforms = match load.await {
+                Ok(tracks) => {
+                    cx.background_executor()
+                        .spawn(async move {
+                            let started = Instant::now();
+                            let waveforms = missing
+                                .into_iter()
+                                .filter_map(|path| {
+                                    let waveform =
+                                        timeline::ImportedWaveform::from_audio(tracks.get(&path)?);
+                                    Some((path, waveform))
+                                })
+                                .collect::<Vec<_>>();
+                            tracing::info!(
+                                files = waveforms.len(),
+                                peaks_ms = started.elapsed().as_secs_f64() * 1e3,
+                                "imported audio waveforms ready"
+                            );
+                            waveforms
+                        })
+                        .await
+                }
+                Err(_) => Vec::new(),
+            };
+            this.update(cx, |view, cx| {
+                view.imported_waveforms_loading = false;
+                view.imported_waveforms_stale = true;
+                if !waveforms.is_empty() {
+                    let mut next = (*view.timeline.imported_waveforms).clone();
+                    next.extend(waveforms);
+                    view.timeline.imported_waveforms = Arc::new(next);
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     // -- Editing: the write path ---------------------------------------------
@@ -3437,6 +3549,10 @@ impl EditorWindow {
             present(&self.timeline.mic_waveforms),
             present(&self.timeline.system_waveforms),
         )
+    }
+
+    pub(crate) fn has_imported_waveforms(&self) -> bool {
+        self.timeline.audio.is_empty() || !self.timeline.imported_waveforms.is_empty()
     }
 
     pub(crate) fn waveform_cache_stats(&self) -> crate::editor_timeline::WaveformPathStats {
@@ -11841,6 +11957,7 @@ impl Render for EditorWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_appearance(window, cx);
         self.sync_locale();
+        self.sync_imported_waveforms(cx);
         let title_disabled = !self.visual_ready();
         if self.name_input.read(cx).is_disabled() != title_disabled {
             self.name_input
