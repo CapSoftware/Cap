@@ -6363,8 +6363,7 @@ async fn drive_auto_playback(
 /// as the frontmost surface (AppKit hands it key status as the editor goes
 /// away) rather than revealing main over it. The idle gate is this port's
 /// own: during a recording the main window is deliberately hidden and the
-/// session observer restores it when the recording ends. A main window the
-/// user closed stays closed.
+/// session observer restores it when the recording ends.
 fn reveal_main_after_editor_close(
     editors_left: usize,
     settings_open: bool,
