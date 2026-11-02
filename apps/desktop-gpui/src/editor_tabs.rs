@@ -3567,9 +3567,9 @@ impl EditorWindow {
                         &task_path,
                         model,
                         language,
+                        segment_words,
                         timeline.as_ref(),
                         &task_durations,
-                        segment_words,
                     )
                 })
                 .await
