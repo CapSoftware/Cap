@@ -24,6 +24,13 @@ const DEBOUNCE_MS = 500;
 
 export function SeatManagementCard() {
 	const { activeOrganization } = useDashboardContext();
+	return (
+		<OrganizationSeatManagementCard key={activeOrganization?.organization.id} />
+	);
+}
+
+function OrganizationSeatManagementCard() {
+	const { activeOrganization } = useDashboardContext();
 	const router = useRouter();
 	const queryClient = useQueryClient();
 	const organizationId = activeOrganization?.organization.id;
