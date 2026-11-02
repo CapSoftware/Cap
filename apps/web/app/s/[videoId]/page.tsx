@@ -39,6 +39,7 @@ import { headers } from "next/headers";
 import { notFound, redirect } from "next/navigation";
 import { after } from "next/server";
 import type { JSX } from "react";
+import { getVideoHighlights } from "@/actions/videos/highlights";
 import {
 	getDashboardSpacesData,
 	type OrganizationSettings,
@@ -782,6 +783,11 @@ async function AuthorizedContent({
 			);
 	}).pipe(EffectRuntime.runPromise);
 
+	const highlightsPromise = getVideoHighlights(videoId).catch((error) => {
+		console.error("Failed to load highlights:", error);
+		return [];
+	});
+
 	const viewsPromise = getVideoViewCount(videoId).then((v) => v.count);
 
 	const videoOrganizationRolePromise = (async () => {
@@ -1059,6 +1065,7 @@ async function AuthorizedContent({
 				screenshotImageUrl={screenshotImageUrl}
 				videoSettings={videoWithOrganizationInfo.settings}
 				comments={commentsPromise}
+				highlights={highlightsPromise}
 				views={viewsPromise}
 				customDomain={customDomain}
 				domainVerified={domainVerified}

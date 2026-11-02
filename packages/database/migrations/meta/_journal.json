@@ -365,6 +365,13 @@
 			"when": 1793022702933,
 			"tag": "0051_fancy_talkback",
 			"breakpoints": true
+		},
+		{
+			"idx": 52,
+			"version": "5",
+			"when": 1793263507199,
+			"tag": "0052_video_highlights",
+			"breakpoints": true
 		}
 	]
 }
