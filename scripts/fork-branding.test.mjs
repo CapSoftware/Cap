@@ -60,13 +60,14 @@ test("the code still draws the protected asset paths", () => {
 
 test("fork logos win over upstream's at the paths the code draws", () => {
 	const overlay = text("src/ux_walk/assets.rs");
+	const overrides = overlay.slice(overlay.indexOf("OVERRIDES"));
 	for (const path of overlaidArt) {
-		assert.ok(overlay.includes(`"${path}"`), `the overlay lost ${path}`);
+		assert.ok(overrides.includes(`"${path}"`), `the overrides lost ${path}`);
 	}
 	assert.match(
 		text("src/assets.rs"),
-		/crate::ux_walk::assets::ALL\s*\.iter\(\)\s*\.chain\(FONTS/,
-		"the overlay must come first: Assets::load returns the first match",
+		/crate::ux_walk::assets::OVERRIDES\s*\.iter\(\)\s*\.chain\(Self::all\(\)\)/,
+		"Assets::load must check the overrides first: it returns the first match",
 	);
 });
 

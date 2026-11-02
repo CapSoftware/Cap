@@ -260,10 +260,10 @@ pub struct Assets;
 
 impl Assets {
     fn all() -> impl Iterator<Item = &'static (&'static str, &'static [u8])> {
-        crate::ux_walk::assets::ALL
+        FONTS
             .iter()
-            .chain(FONTS.iter())
             .chain(ICONS.iter())
+            .chain(crate::ux_walk::assets::ALL.iter())
             .chain(IMAGES.iter())
             .chain(ONBOARDING.iter())
     }
@@ -271,7 +271,9 @@ impl Assets {
 
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
-        Ok(Self::all()
+        Ok(crate::ux_walk::assets::OVERRIDES
+            .iter()
+            .chain(Self::all())
             .find(|(name, _)| *name == path)
             .map(|(_, bytes)| Cow::Borrowed(*bytes)))
     }
