@@ -1,3 +1,5 @@
+import type { SQL } from "drizzle-orm";
+import { MySqlDialect } from "drizzle-orm/mysql-core";
 import { Context, Effect, Option } from "effect";
 import { isValidElement, type ReactElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -23,6 +25,10 @@ const mocks = vi.hoisted(() => ({
 		name: string;
 		organizationId: string;
 	}[],
+	organizationDomains: {} as Record<
+		string,
+		{ customDomain: string; domainVerified: Date }
+	>,
 }));
 
 vi.mock("@cap/database", () => ({ db: () => ({ select: mocks.select }) }));
@@ -92,7 +98,7 @@ vi.mock("@/lib/ai/provider", () => ({ isAiConfigured: () => false }));
 vi.mock("@/lib/desktop-segments-recovery", () => ({
 	completeDesktopSegmentsManifestAndQueue: vi.fn(),
 }));
-vi.mock("@/lib/Notification", () => ({ createNotification: vi.fn() }));
+vi.mock("@/lib/Notification", () => ({ createNotification: async () => {} }));
 vi.mock("@/lib/public-share-video", () => ({ getPublicShareVideo: vi.fn() }));
 vi.mock("@/lib/share-playback", async (importActual) => ({
 	canStartPlaybackInHtml: (
@@ -153,17 +159,28 @@ const createVideo = () => ({
 
 function arrangeRows(rows: ReturnType<typeof createVideo>[]) {
 	mocks.select.mockImplementation((selection: Record<string, unknown>) => {
-		const result =
-			"ownerId" in selection
+		const resultFor = (condition: SQL) => {
+			if ("customDomain" in selection) {
+				const [organizationId] = new MySqlDialect().sqlToQuery(
+					condition,
+				).params;
+				const domain = mocks.organizationDomains[String(organizationId)];
+				return domain ? [domain] : [];
+			}
+			return "ownerId" in selection
 				? rows
 				: "organizationId" in selection && !("settings" in selection)
 					? mocks.sharedOrganizations
 					: [];
+		};
 		const query = {
 			from: () => query,
 			leftJoin: () => query,
 			innerJoin: () => query,
-			where: () => Promise.resolve(result),
+			where: (condition: SQL) => {
+				const result = Promise.resolve(resultFor(condition));
+				return Object.assign(result, { limit: () => result });
+			},
 		};
 		return query;
 	});
@@ -213,6 +230,7 @@ describe("share page loading", () => {
 		mocks.authenticated = false;
 		mocks.ownerIsPro = false;
 		mocks.sharedOrganizations = [];
+		mocks.organizationDomains = {};
 		arrangeRows([createVideo()]);
 	});
 
@@ -261,6 +279,45 @@ describe("share page loading", () => {
 			} else {
 				expect(callToAction).toBeNull();
 			}
+		},
+	);
+
+	it.each([
+		{
+			viewerId: "owner",
+			videoOrganizationDomain: "videos.team.test",
+			expected: "videos.team.test",
+		},
+		{ viewerId: "owner", videoOrganizationDomain: null, expected: null },
+		{
+			viewerId: "viewer",
+			videoOrganizationDomain: "videos.team.test",
+			expected: null,
+		},
+	])(
+		"gives only the owner the custom domain of the video's organization: %j",
+		async ({ viewerId, videoOrganizationDomain, expected }) => {
+			mocks.user.mockResolvedValue({
+				id: viewerId,
+				activeOrganizationId: "other-organization",
+			});
+			mocks.organizationDomains = {
+				"other-organization": {
+					customDomain: "videos.other-team.test",
+					domainVerified: new Date(),
+				},
+			};
+			if (videoOrganizationDomain) {
+				mocks.organizationDomains.organization = {
+					customDomain: videoOrganizationDomain,
+					domainVerified: new Date(),
+				};
+			}
+			const content = await renderAuthorizedContent();
+			expect(content.props.children.props).toMatchObject({
+				customDomain: expected,
+				domainVerified: expected !== null,
+			});
 		},
 	);
 
