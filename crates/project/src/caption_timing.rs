@@ -459,10 +459,14 @@ fn keep_locked_caption_positions(
         .iter()
         .map(|source| source.id.as_str())
         .collect::<HashSet<_>>();
+    let fresh_by_id = derived
+        .iter()
+        .map(|segment| (segment.id.as_str(), segment))
+        .collect::<HashMap<_, _>>();
     let mut kept = current
         .iter()
         .filter(|segment| source_ids.contains(source_caption_id(&segment.id)))
-        .cloned()
+        .map(|segment| locked_caption_content(segment, fresh_by_id.get(segment.id.as_str())))
         .collect::<Vec<_>>();
     let placed = kept
         .iter()
@@ -475,6 +479,47 @@ fn keep_locked_caption_positions(
     );
     kept.sort_by(|a, b| a.start.total_cmp(&b.start));
     kept
+}
+
+fn locked_caption_content(
+    locked: &CaptionTrackSegment,
+    fresh: Option<&&CaptionTrackSegment>,
+) -> CaptionTrackSegment {
+    let mut segment = locked.clone();
+    let (start, end) = (locked.start as f32, locked.end.max(locked.start) as f32);
+    if let Some(fresh) = fresh {
+        let offset = (locked.start - fresh.start) as f32;
+        segment.text.clone_from(&fresh.text);
+        segment.words = fresh
+            .words
+            .iter()
+            .map(|word| CaptionWord {
+                text: word.text.clone(),
+                start: (word.start + offset).clamp(start, end),
+                end: (word.end + offset).clamp(start, end),
+            })
+            .collect();
+        return segment;
+    }
+    let tokens = segment.text.split_whitespace().collect::<Vec<_>>();
+    let matches = tokens.len() == segment.words.len()
+        && tokens
+            .iter()
+            .zip(&segment.words)
+            .all(|(token, word)| *token == word.text);
+    if !matches {
+        let step = (end - start) / tokens.len().max(1) as f32;
+        segment.words = tokens
+            .iter()
+            .enumerate()
+            .map(|(index, token)| CaptionWord {
+                text: (*token).to_string(),
+                start: start + step * index as f32,
+                end: start + step * (index + 1) as f32,
+            })
+            .collect();
+    }
+    segment
 }
 
 #[cfg(test)]
@@ -565,6 +610,70 @@ mod tests {
         synchronize_captions(&mut project, &[20.0]);
         let track = &project.timeline.as_ref().unwrap().caption_segments;
         assert_eq!((track[1].start, track[1].end), (7.0, 9.0));
+    }
+
+    #[test]
+    fn a_locked_caption_takes_edited_words_at_its_locked_position() {
+        let mut project: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "timeline": {
+                "segments": [{ "recordingSegment": 0, "timescale": 1.0, "start": 5.0, "end": 20.0 }],
+                "zoomSegments": [],
+                "captionSegments": [
+                    {
+                        "id": "kept", "start": 12.0, "end": 14.0, "text": "old words",
+                        "words": [
+                            { "text": "old", "start": 12.0, "end": 13.0 },
+                            { "text": "words", "start": 13.0, "end": 14.0 }
+                        ]
+                    },
+                    { "id": "gone", "start": 30.0, "end": 32.0, "text": "two words" }
+                ]
+            },
+            "captions": {
+                "segments": [
+                    {
+                        "id": "kept", "start": 12.0, "end": 14.0, "text": "new text here",
+                        "words": [
+                            { "text": "new", "start": 12.0, "end": 12.5 },
+                            { "text": "text", "start": 12.5, "end": 13.0 },
+                            { "text": "here", "start": 13.0, "end": 14.0 }
+                        ]
+                    },
+                    { "id": "gone", "start": 40.0, "end": 41.0, "text": "two words" }
+                ],
+                "settings": {},
+                "sourceTimed": true
+            },
+            "lockedTracks": ["caption"]
+        }))
+        .unwrap();
+
+        synchronize_captions(&mut project, &[20.0]);
+
+        let track = &project.timeline.as_ref().unwrap().caption_segments;
+        let kept = track.iter().find(|segment| segment.id == "kept").unwrap();
+        assert_eq!((kept.start, kept.end), (12.0, 14.0));
+        assert_eq!(kept.text, "new text here");
+        assert_eq!(
+            kept.words
+                .iter()
+                .map(|word| (word.text.as_str(), word.start, word.end))
+                .collect::<Vec<_>>(),
+            vec![
+                ("new", 12.0, 12.5),
+                ("text", 12.5, 13.0),
+                ("here", 13.0, 14.0)
+            ]
+        );
+        let gone = track.iter().find(|segment| segment.id == "gone").unwrap();
+        assert_eq!((gone.start, gone.end), (30.0, 32.0));
+        assert_eq!(
+            gone.words
+                .iter()
+                .map(|word| (word.text.as_str(), word.start, word.end))
+                .collect::<Vec<_>>(),
+            vec![("two", 30.0, 31.0), ("words", 31.0, 32.0)]
+        );
     }
 
     #[test]

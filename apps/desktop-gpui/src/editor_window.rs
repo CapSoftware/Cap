@@ -8443,15 +8443,16 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let locked = self.project.locked_tracks.clone();
         let Some(timeline) = self.project.timeline.as_mut() else {
             return;
         };
-        let changed = match transition {
+        let changed = edits::with_locked_tracks(timeline, &locked, |timeline| match transition {
             Some((kind, duration)) => {
                 crate::editor_clips::set_clip_transition(timeline, index, kind, duration)
             }
             None => crate::editor_clips::drop_clip_transition(timeline, index),
-        };
+        });
         if !changed {
             return;
         }
@@ -11591,8 +11592,6 @@ impl EditorWindow {
                                 )),
                             )
                     }))
-                    // A lock covers the whole track, so it sits on the
-                    // track's first lane only.
                     .children(
                         edits::lockable_track(kind)
                             .filter(|_| lane == 0)

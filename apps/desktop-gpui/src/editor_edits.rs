@@ -1201,9 +1201,6 @@ pub fn reorder_track_lane(
     }
 }
 
-/// Runs a clip edit that ripples the other tracks, then puts the segments of
-/// every locked track back where they were, so locked tracks keep their
-/// timing when clips are deleted, merged, retimed or reordered.
 pub fn with_locked_tracks(
     timeline: &mut TimelineConfiguration,
     locked: &[LockableTimelineTrack],
@@ -1216,6 +1213,7 @@ pub fn with_locked_tracks(
     if !edit(timeline) {
         return false;
     }
+    let edited_holds = timeline.hold_windows();
     for track in locked {
         match track {
             LockableTimelineTrack::Style => timeline.style_segments = saved.style_segments.clone(),
@@ -1236,7 +1234,64 @@ pub fn with_locked_tracks(
             }
         }
     }
+    // The edit placed the unlocked tracks against the fullscreen holds of the
+    // text it rippled; a locked text track keeps its old holds instead, so
+    // those positions are re-derived through the recording time they show.
+    let final_holds = timeline.hold_windows();
+    if edited_holds != final_holds {
+        let remap = |time: f64| {
+            effective_to_output(&final_holds, time - held_time_before(&edited_holds, time))
+        };
+        remap_unlocked_tracks(timeline, locked, remap);
+    }
     true
+}
+
+fn remap_unlocked_tracks(
+    timeline: &mut TimelineConfiguration,
+    locked: &[LockableTimelineTrack],
+    remap: impl Fn(f64) -> f64,
+) {
+    fn remap_track<T: TrackSegmentOps>(segments: &mut [T], remap: &impl Fn(f64) -> f64) {
+        for segment in segments {
+            let (start, end) = (remap(segment.start()), remap(segment.end()));
+            segment.set_start(start);
+            segment.set_end(end.max(start));
+        }
+    }
+    let unlocked = |track: LockableTimelineTrack| !locked.contains(&track);
+    if unlocked(LockableTimelineTrack::Style) {
+        remap_track(&mut timeline.style_segments, &remap);
+    }
+    if unlocked(LockableTimelineTrack::Image) {
+        remap_track(&mut timeline.image_segments, &remap);
+    }
+    if unlocked(LockableTimelineTrack::Caption) {
+        remap_track(&mut timeline.caption_segments, &remap);
+    }
+    if unlocked(LockableTimelineTrack::Keyboard) {
+        for segment in &mut timeline.keyboard_segments {
+            segment.remap_times(&remap);
+        }
+    }
+    if unlocked(LockableTimelineTrack::Text) {
+        remap_track(&mut timeline.text_segments, &remap);
+    }
+    if unlocked(LockableTimelineTrack::Zoom) {
+        remap_track(&mut timeline.zoom_segments, &remap);
+    }
+    if unlocked(LockableTimelineTrack::Scene) {
+        remap_track(&mut timeline.scene_segments, &remap);
+    }
+    if unlocked(LockableTimelineTrack::Mask) {
+        remap_track(&mut timeline.mask_segments, &remap);
+    }
+    if unlocked(LockableTimelineTrack::Audio) {
+        remap_track(&mut timeline.audio_segments, &remap);
+    }
+    if unlocked(LockableTimelineTrack::Camera3d) {
+        remap_track(&mut timeline.camera3d_segments, &remap);
+    }
 }
 
 pub fn lockable_track(kind: TrackKind) -> Option<LockableTimelineTrack> {
@@ -4666,6 +4721,45 @@ mod tests {
             ),
             (2.0, 4.0)
         );
+    }
+
+    #[test]
+    fn a_locked_fullscreen_title_keeps_unlocked_effects_on_their_content() {
+        let mut timeline = config(serde_json::json!({
+            "timeline": {
+                "segments": [
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 10.0 },
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 10.0, "end": 30.0 }
+                ],
+                "zoomSegments": [{ "start": 17.0, "end": 18.0, "amount": 2.0, "mode": "auto" }],
+                "textSegments": [
+                    { "start": 2.0, "end": 4.0, "layout": "fullscreen", "content": "Title" }
+                ]
+            }
+        }))
+        .timeline
+        .unwrap();
+        let zoom_flow = |timeline: &TimelineConfiguration| {
+            let start = timeline.zoom_segments[0].start;
+            start - held_time_before(&timeline.hold_windows(), start)
+        };
+        let before = zoom_flow(&timeline);
+
+        assert!(with_locked_tracks(
+            &mut timeline,
+            &[LockableTimelineTrack::Text],
+            |timeline| delete_clip_segments(timeline, &[0]),
+        ));
+
+        assert_eq!(timeline.hold_windows(), vec![(2.0, 4.0)]);
+        assert_eq!(
+            (
+                timeline.zoom_segments[0].start,
+                timeline.zoom_segments[0].end
+            ),
+            (7.0, 8.0)
+        );
+        assert_eq!(zoom_flow(&timeline), before - 10.0);
     }
 
     #[test]

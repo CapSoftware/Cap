@@ -4109,8 +4109,6 @@ mod tests {
         }
     }
 
-    /// A locked track keeps its segments where they were even when a reorder
-    /// drops a transition and ripples everything else.
     #[test]
     fn reordering_clips_leaves_locked_tracks_in_place() {
         let mut config = timeline(vec![
