@@ -14,16 +14,12 @@ pub struct PreparedShape {
     pub to: [f32; 2],
     pub stroke_width: f32,
     pub stroke_color: [f32; 3],
-    /// Straight RGB plus the fill's own opacity; `None` draws no fill.
     pub fill: Option<[f32; 4]>,
     pub corner_radius: f32,
     pub arrow_head: ShapeArrowHead,
     pub shadow: f32,
-    /// Overall opacity: the segment's own times both edges' fades.
     pub alpha: f32,
-    /// How much of the outline is drawn, 0..1; 1 outside a draw animation.
     pub draw: f32,
-    /// Output pixels per authored 1080p pixel.
     pub unit: f32,
     pub number: u32,
 }
@@ -38,7 +34,6 @@ impl PreparedShape {
         ]
     }
 
-    /// The badge's circle: its centre and radius.
     pub fn badge_circle(&self) -> ([f32; 2], f32) {
         let [left, top, right, bottom] = self.rect();
         (
@@ -122,7 +117,6 @@ const AT_REST: EdgeSample = EdgeSample {
     draw: 1.0,
 };
 
-/// `progress` runs 0 to 1 toward fully visible on both edges.
 fn sample_edge(animation: ShapeAnimation, progress: f32) -> EdgeSample {
     if progress >= 1.0 {
         return AT_REST;
@@ -146,8 +140,6 @@ fn sample_edge(animation: ShapeAnimation, progress: f32) -> EdgeSample {
     }
 }
 
-/// Enter and exit durations, shrunk in proportion when together they outlast
-/// the segment so the shape still reaches its resting state.
 pub(crate) fn edge_durations(segment: &ShapeSegment) -> (f64, f64) {
     let duration = |animation, seconds: f64| {
         if animation == ShapeAnimation::None || !seconds.is_finite() {

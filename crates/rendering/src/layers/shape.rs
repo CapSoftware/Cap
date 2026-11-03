@@ -56,8 +56,6 @@ fn lerp(a: [f32; 2], b: [f32; 2], t: f32) -> [f32; 2] {
     [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]
 }
 
-/// The GPU description of one prepared shape, or `None` when nothing of it
-/// is visible on this frame.
 pub(crate) fn shape_instance(shape: &PreparedShape) -> Option<ShapeInstance> {
     let width = shape.stroke_width.max(0.0);
     let unit = shape.unit.max(1.0e-3);
@@ -213,7 +211,6 @@ pub(crate) fn shape_instance(shape: &PreparedShape) -> Option<ShapeInstance> {
     Some(instance)
 }
 
-/// The number on a step badge, as text the badge's own track draws.
 pub(crate) fn badge_label(shape: &PreparedShape) -> Option<PreparedText> {
     if shape.kind != ShapeKind::Badge {
         return None;

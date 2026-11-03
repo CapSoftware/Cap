@@ -3979,8 +3979,6 @@ pub fn shape_kind_label(kind: ShapeKind) -> &'static str {
     }
 }
 
-/// The colour a shape reads as at a glance: its fill for the filled kinds,
-/// its stroke otherwise.
 fn shape_swatch(segment: &cap_project::ShapeSegment) -> Hsla {
     let fill_first = match segment.kind {
         ShapeKind::Highlight | ShapeKind::Badge => segment.fill,
