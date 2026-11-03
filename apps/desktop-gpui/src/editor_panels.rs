@@ -2923,8 +2923,9 @@ impl EditorWindow {
             return Some(());
         }
         if matches!(key, FieldKey::CaptionManualX | FieldKey::CaptionManualY) {
-            let settings = crate::editor_tabs::caption_settings(&self.project);
-            let (x, y) = crate::editor_tabs::caption_manual_center(&settings);
+            let (x, y) = crate::editor_tabs::caption_manual_center(
+                &self.project.captions.as_ref()?.settings,
+            );
             let value = if key == FieldKey::CaptionManualX {
                 x
             } else {
