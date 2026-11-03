@@ -995,6 +995,9 @@ pub struct GeneralSettings {
     pub server_url: String,
     pub enable_telemetry: bool,
     pub editor_preview_quality: EditorPreviewQuality,
+    /// How fast the editor preview plays. Preview only: export and the
+    /// project never see it. Anything but one of the offered steps reads as 1x.
+    pub editor_preview_speed: cap_editor::PreviewSpeed,
     /// The Experimental page's two toggles. Both default false the way the
     /// page shows them (`!!settings.enableNativeCameraPreview` /
     /// `!!settings.outOfProcessMuxer` in experimental.tsx).
@@ -1011,6 +1014,7 @@ pub struct GeneralSettings {
 }
 
 pub const SHOW_MAIN_WINDOW_AFTER_INSTANT_KEY: &str = "showMainWindowAfterInstantRecording";
+pub const EDITOR_PREVIEW_SPEED_KEY: &str = "editorPreviewSpeed";
 
 pub const RECORDING_MARKER_SOUND_KEY: &str = "recordingMarkerSound";
 
@@ -1437,6 +1441,11 @@ impl GeneralSettings {
             server_url: string_at(general, "serverUrl", DEFAULT_SERVER_URL),
             enable_telemetry: bool_at(general, "enableTelemetry", true),
             editor_preview_quality: enum_at(general, "editorPreviewQuality"),
+            editor_preview_speed: general
+                .get(EDITOR_PREVIEW_SPEED_KEY)
+                .and_then(Value::as_f64)
+                .and_then(cap_editor::PreviewSpeed::from_f64)
+                .unwrap_or_default(),
             enable_native_camera_preview: bool_at(general, "enableNativeCameraPreview", false),
             out_of_process_muxer: bool_at(general, "outOfProcessMuxer", false),
             confirm_without_microphone: bool_at(
@@ -3429,6 +3438,31 @@ mod tests {
             ..Default::default()
         };
         assert!(bundle_first.matches(Some("com.cap.desktop"), None, Some("Wrong")));
+    }
+
+    #[test]
+    fn editor_preview_speed_reads_offered_steps_and_falls_back_to_normal() {
+        let read = |value: Option<Value>| {
+            let mut general = Map::new();
+            if let Some(value) = value {
+                general.insert(EDITOR_PREVIEW_SPEED_KEY.to_string(), value);
+            }
+            GeneralSettings::from_sections(&general, &Map::new(), &Map::new())
+                .editor_preview_speed
+                .as_f64()
+        };
+        assert_eq!(read(None), 1.0);
+        for speed in cap_editor::PreviewSpeed::ALL {
+            assert_eq!(
+                read(Some(serde_json::json!(speed.as_f64()))),
+                speed.as_f64()
+            );
+        }
+        assert_eq!(read(Some(serde_json::json!(2))), 2.0);
+        assert_eq!(read(Some(serde_json::json!(2.5))), 1.0);
+        assert_eq!(read(Some(serde_json::json!(-1))), 1.0);
+        assert_eq!(read(Some(serde_json::json!("2"))), 1.0);
+        assert_eq!(read(Some(Value::Null)), 1.0);
     }
 
     /// Key absent -> the default exclusion list (the Rust struct's serde

@@ -117,6 +117,8 @@ pub const TRAFFIC_LIGHTS: Option<Point<Pixels>> = Some(point(px(20.), px(20.)));
 /// on the `preview_tx` tuple, so the app owns it.
 pub const EDITOR_PREVIEW_FPS: u32 = 60;
 
+const PREVIEW_SPEED_BUTTON_WIDTH: f32 = 46.;
+
 /// `OUTPUT_SIZE = { x: 1920, y: 1080 }` (`context.ts:150-153`,
 /// `lib.rs:147`).
 const EDITOR_OUTPUT_SIZE: XY<u32> = XY { x: 1920, y: 1080 };
@@ -1583,6 +1585,7 @@ pub struct EditorWindow {
     pub(crate) snap_guides: Vec<crate::editor_canvas::SnapGuide>,
 
     preview_quality: crate::store::EditorPreviewQuality,
+    preview_speed: cap_editor::PreviewSpeed,
     pub(crate) tracks: TrackLanes,
     toolbar_menu: Option<OpenToolbarMenu>,
     text_menu: Option<OpenTextMenu>,
@@ -1917,6 +1920,7 @@ fn clip_menu_row(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ToolbarMenu {
     AspectRatio,
+    PreviewSpeed,
 }
 
 struct OpenToolbarMenu {
@@ -2184,6 +2188,7 @@ impl EditorWindow {
             canvas_overlay_rect: None,
             snap_guides: Vec::new(),
             preview_quality: crate::store::GeneralSettings::load().editor_preview_quality,
+            preview_speed: crate::store::GeneralSettings::load().editor_preview_speed,
             tracks: TrackLanes::from_project(&ProjectConfiguration::default(), false),
             toolbar_menu: None,
             text_menu: None,
@@ -3113,6 +3118,7 @@ impl EditorWindow {
         if instance.preparing_adoption().is_some() {
             self.ordinary_handoff_frame = None;
         }
+        instance.set_preview_speed(self.preview_speed);
         self.instance = Some(instance);
     }
 
@@ -3862,6 +3868,13 @@ impl EditorWindow {
                 self.zoom_by(step, origin, cx);
                 window.refresh();
             }
+            return;
+        }
+        if let Some(faster) = preview_speed_shortcut(keystroke)
+            && !self.has_open_menu()
+        {
+            cx.stop_propagation();
+            self.step_preview_speed(faster, window, cx);
             return;
         }
         if keystroke.modifiers.platform
@@ -7183,6 +7196,10 @@ impl EditorWindow {
                     })
                     .collect()
             }
+            ToolbarMenu::PreviewSpeed => cap_editor::PreviewSpeed::ALL
+                .iter()
+                .map(|speed| ui::MenuItem::new(speed.label(), *speed == self.preview_speed))
+                .collect(),
         }
     }
 
@@ -7256,6 +7273,11 @@ impl EditorWindow {
                     true
                 });
             }
+            ToolbarMenu::PreviewSpeed => {
+                if let Some(speed) = cap_editor::PreviewSpeed::ALL.get(index) {
+                    self.set_preview_speed(*speed, window, cx);
+                }
+            }
         }
         cx.notify();
         window.refresh();
@@ -7267,7 +7289,10 @@ impl EditorWindow {
         let items = self.toolbar_menu_items(kind);
         Some(
             ui::Menu::editor(&self.theme, "toolbar-menu", items, &menu.state)
-                .min_width(px(200.))
+                .min_width(match kind {
+                    ToolbarMenu::AspectRatio => px(200.),
+                    ToolbarMenu::PreviewSpeed => px(96.),
+                })
                 .on_select(cx.listener(move |this, index: &usize, window, cx| {
                     this.choose_toolbar_menu(kind, *index, window, cx);
                 }))
@@ -7277,6 +7302,60 @@ impl EditorWindow {
                 }))
                 .into_any_element(),
         )
+    }
+
+    /// Preview only: the playback engine and the audio callback read the
+    /// shared speed on their next frame, so a running playback changes pace
+    /// in place without a restart, and export never sees it.
+    fn set_preview_speed(
+        &mut self,
+        speed: cap_editor::PreviewSpeed,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if speed == self.preview_speed {
+            return;
+        }
+        self.preview_speed = speed;
+        if let Some(instance) = &self.instance {
+            instance.set_preview_speed(speed);
+        }
+        tracing::info!(speed = speed.as_f64(), "preview speed");
+        if !crate::store::set_store_setting(
+            crate::store::GENERAL_SETTINGS,
+            crate::store::EDITOR_PREVIEW_SPEED_KEY,
+            serde_json::json!(speed.as_f64()),
+        ) {
+            tracing::warn!("failed to persist preview speed");
+        }
+        self.invalidate_playback_chrome(window, cx);
+        cx.notify();
+    }
+
+    fn has_open_menu(&self) -> bool {
+        self.sidebar.menu.is_some()
+            || self.toolbar_menu.is_some()
+            || self.text_menu.is_some()
+            || self.add_track.is_some()
+            || self.clip_speed.is_some()
+            || self.sidebar.color_picker.is_some()
+            || self.presets_menu.is_some()
+            || self.preset_dialog.is_some()
+            || self.clips.has_open_menu()
+            || self.audio_picker.is_some()
+            || self.camera3d_picker
+            || self.frame_controls.is_open()
+    }
+
+    fn step_preview_speed(&mut self, faster: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let next = if faster {
+            self.preview_speed.faster()
+        } else {
+            self.preview_speed.slower()
+        };
+        if let Some(next) = next {
+            self.set_preview_speed(next, window, cx);
+        }
     }
 
     fn set_preview_quality(
@@ -10879,6 +10958,9 @@ impl EditorWindow {
                             .justify_center()
                             .gap(px(14.))
                             .when(!live, |this| this.opacity(0.5))
+                            .when(!narrow, |this| {
+                                this.child(div().w(px(PREVIEW_SPEED_BUTTON_WIDTH)).flex_none())
+                            })
                             .child(skip(
                                 "transport-prev",
                                 "icons/prev.svg",
@@ -10920,7 +11002,8 @@ impl EditorWindow {
                                 "transport-next",
                                 "icons/next.svg",
                                 Box::new(cx.listener(|this, _, _window, cx| this.jump_to_end(cx))),
-                            )),
+                            ))
+                            .child(self.render_preview_speed(cx)),
                     ),
             )
             .child(
@@ -11013,6 +11096,71 @@ impl EditorWindow {
             )
     }
 
+    fn render_preview_speed(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        let editor = theme.editor;
+        let enabled = self.visual_ready();
+        let open = self
+            .toolbar_menu
+            .as_ref()
+            .is_some_and(|menu| menu.kind == ToolbarMenu::PreviewSpeed);
+        let changed = !self.preview_speed.is_normal();
+        let accent = Hsla::from(editor.accent);
+        let trigger = div()
+            .id("transport-speed")
+            .flex()
+            .flex_none()
+            .items_center()
+            .justify_center()
+            .w(px(PREVIEW_SPEED_BUTTON_WIDTH))
+            .h(px(24.))
+            .rounded(px(7.))
+            .text_size(px(12.))
+            .font_weight(FontWeight::MEDIUM)
+            .map(|this| {
+                if changed {
+                    this.bg(accent.opacity(if open { 0.22 } else { 0.14 }))
+                        .text_color(accent)
+                } else if open {
+                    this.bg(Hsla::from(editor.ctl_hover))
+                        .text_color(Hsla::from(editor.text_1))
+                } else {
+                    this.text_color(Hsla::from(editor.text_2))
+                }
+            })
+            .when(!enabled, |this| this.opacity(0.45))
+            .when(enabled && !open, |this| {
+                this.cursor_pointer().hover(move |style| {
+                    if changed {
+                        style.bg(accent.opacity(0.22))
+                    } else {
+                        style
+                            .bg(Hsla::from(editor.ctl_hover))
+                            .text_color(Hsla::from(editor.text_1))
+                    }
+                })
+            })
+            .when(!open, |this| {
+                this.tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
+                    .tooltip(move |_window, cx| {
+                        ui::Tooltip::new(&theme, tr::editor::window::transport::speed())
+                            .keys(["<", ">"])
+                            .view(cx)
+                    })
+            })
+            .child(self.preview_speed.label());
+        if enabled {
+            ui::Menu::trigger(
+                trigger,
+                cx.listener(|this, bounds: &Bounds<Pixels>, window, cx| {
+                    this.open_toolbar_menu(ToolbarMenu::PreviewSpeed, *bounds, window, cx);
+                }),
+            )
+        } else {
+            trigger
+        }
+    }
+
     // -- Timeline ------------------------------------------------------------
 
     fn render_timeline(
@@ -11068,6 +11216,7 @@ impl EditorWindow {
                 self.playing,
                 self.playhead_epoch_live,
                 self.last_playhead_redraw.elapsed().as_secs_f64(),
+                self.preview_speed.as_f64(),
             );
             if ahead > 0.0 {
                 view.playhead = (view.playhead + ahead).min(self.total_duration());
@@ -11983,11 +12132,37 @@ const MAX_PLAYHEAD_EXTRAPOLATION: f64 = 0.25;
 /// back: the "playhead jumps on play, then goes back" glitch. So: no epoch
 /// sample yet, no extrapolation -- the line holds still, which is exactly
 /// what the engine is doing.
-fn playhead_extrapolation(playing: bool, epoch_has_sample: bool, since_last_sample: f64) -> f64 {
+fn playhead_extrapolation(
+    playing: bool,
+    epoch_has_sample: bool,
+    since_last_sample: f64,
+    speed: f64,
+) -> f64 {
     if !playing || !epoch_has_sample {
         return 0.0;
     }
-    since_last_sample.clamp(0.0, MAX_PLAYHEAD_EXTRAPOLATION)
+    since_last_sample.clamp(0.0, MAX_PLAYHEAD_EXTRAPOLATION) * speed
+}
+
+/// `<` and `>` step the preview speed down and up. Matched on the typed
+/// character, so the keys follow the keyboard layout: Shift-comma and
+/// Shift-period on US layouts, the dedicated `<>` key on many European ones.
+fn preview_speed_shortcut(keystroke: &gpui::Keystroke) -> Option<bool> {
+    let modifiers = keystroke.modifiers;
+    if modifiers.platform || modifiers.control || modifiers.alt || modifiers.function {
+        return None;
+    }
+    let typed = keystroke.key_char.as_deref();
+    let shifted = |key: &str, symbol: &str| {
+        modifiers.shift && keystroke.key == key && typed.is_none_or(|typed| typed == symbol)
+    };
+    if typed == Some(">") || keystroke.key == ">" || shifted(".", ">") {
+        Some(true)
+    } else if typed == Some("<") || keystroke.key == "<" || shifted(",", "<") {
+        Some(false)
+    } else {
+        None
+    }
 }
 
 fn dismiss_indexed_sidebar_menu(menu: &mut Option<crate::editor_tabs::OpenMenu>) {
@@ -14729,24 +14904,120 @@ mod tests {
     #[test]
     fn playhead_never_extrapolates_before_the_epochs_first_sample() {
         // Freshly pressed play, stale anchor: hold the line still.
-        assert_eq!(playhead_extrapolation(true, false, 0.206), 0.0);
-        assert_eq!(playhead_extrapolation(true, false, 1.081), 0.0);
+        assert_eq!(playhead_extrapolation(true, false, 0.206, 1.0), 0.0);
+        assert_eq!(playhead_extrapolation(true, false, 1.081, 2.0), 0.0);
         // Paused, no matter what the anchor says.
-        assert_eq!(playhead_extrapolation(false, true, 0.5), 0.0);
-        assert_eq!(playhead_extrapolation(false, false, 0.5), 0.0);
+        assert_eq!(playhead_extrapolation(false, true, 0.5, 1.0), 0.0);
+        assert_eq!(playhead_extrapolation(false, false, 0.5, 3.0), 0.0);
     }
 
     /// Once the epoch is live the line glides by the wall clock between
     /// samples, capped so a render stall cannot run it far ahead.
     #[test]
     fn playhead_extrapolation_tracks_the_wall_clock_and_caps() {
-        assert_eq!(playhead_extrapolation(true, true, 0.016), 0.016);
+        assert_eq!(playhead_extrapolation(true, true, 0.016, 1.0), 0.016);
         assert_eq!(
-            playhead_extrapolation(true, true, 3.0),
+            playhead_extrapolation(true, true, 3.0, 1.0),
             MAX_PLAYHEAD_EXTRAPOLATION
         );
         // A clock hiccup must not pull the playhead backwards.
-        assert_eq!(playhead_extrapolation(true, true, -0.01), 0.0);
+        assert_eq!(playhead_extrapolation(true, true, -0.01, 1.0), 0.0);
+    }
+
+    #[test]
+    fn playhead_extrapolation_runs_at_the_preview_speed() {
+        assert_eq!(playhead_extrapolation(true, true, 0.016, 2.0), 0.032);
+        assert_eq!(playhead_extrapolation(true, true, 0.016, 0.5), 0.008);
+        assert_eq!(
+            playhead_extrapolation(true, true, 3.0, 3.0),
+            MAX_PLAYHEAD_EXTRAPOLATION * 3.0
+        );
+    }
+
+    #[test]
+    fn preview_speed_shortcuts_follow_the_typed_angle_brackets() {
+        let keystroke =
+            |key: &str, key_char: Option<&str>, modifiers: gpui::Modifiers| gpui::Keystroke {
+                modifiers,
+                key: key.into(),
+                key_char: key_char.map(Into::into),
+            };
+        let shift = gpui::Modifiers {
+            shift: true,
+            ..Default::default()
+        };
+        let none = gpui::Modifiers::default();
+        assert_eq!(
+            preview_speed_shortcut(&keystroke(".", Some(">"), shift)),
+            Some(true)
+        );
+        assert_eq!(
+            preview_speed_shortcut(&keystroke(",", Some("<"), shift)),
+            Some(false)
+        );
+        assert_eq!(
+            preview_speed_shortcut(&keystroke(".", None, shift)),
+            Some(true)
+        );
+        assert_eq!(
+            preview_speed_shortcut(&keystroke(",", None, shift)),
+            Some(false)
+        );
+        assert_eq!(
+            preview_speed_shortcut(&keystroke("<", Some("<"), none)),
+            Some(false)
+        );
+        assert_eq!(
+            preview_speed_shortcut(&keystroke("<", Some(">"), shift)),
+            Some(true)
+        );
+        assert_eq!(
+            preview_speed_shortcut(&keystroke(">", None, shift)),
+            Some(true)
+        );
+        assert_eq!(
+            preview_speed_shortcut(&keystroke(".", Some(":"), shift)),
+            None
+        );
+        assert_eq!(
+            preview_speed_shortcut(&keystroke(".", Some("."), none)),
+            None
+        );
+        assert_eq!(
+            preview_speed_shortcut(&keystroke(",", Some(","), none)),
+            None
+        );
+        for modifiers in [
+            gpui::Modifiers {
+                platform: true,
+                shift: true,
+                ..Default::default()
+            },
+            gpui::Modifiers {
+                control: true,
+                shift: true,
+                ..Default::default()
+            },
+            gpui::Modifiers {
+                alt: true,
+                shift: true,
+                ..Default::default()
+            },
+        ] {
+            assert_eq!(
+                preview_speed_shortcut(&keystroke(".", Some(">"), modifiers)),
+                None
+            );
+        }
+        for key in ["space", "s", "c", "up", "down", "home", "end", "delete"] {
+            let parsed = gpui::Keystroke::parse(key).unwrap();
+            assert_eq!(preview_speed_shortcut(&parsed), None, "{key}");
+            assert!(!is_playback_shortcut(
+                &keystroke(".", Some(">"), shift),
+                false,
+                false
+            ));
+        }
     }
 
     /// A paused seek stores exactly the time its engine echo carries, so the

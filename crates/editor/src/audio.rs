@@ -2323,6 +2323,41 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> PrerenderedAudioBuffer<T> {
             PrerenderedAudioBufferMode::Streaming(source) => source.fill(buffer),
         }
     }
+
+    pub(crate) fn read_frame(&self) -> usize {
+        match &self.mode {
+            PrerenderedAudioBufferMode::Progressive(buffer) => {
+                buffer.read_position / buffer.channels
+            }
+            PrerenderedAudioBufferMode::Streaming(buffer) => buffer.read_position / buffer.channels,
+        }
+    }
+
+    pub(crate) fn sample_rate(&self) -> u32 {
+        match &self.mode {
+            PrerenderedAudioBufferMode::Progressive(buffer) => buffer.sample_rate,
+            PrerenderedAudioBufferMode::Streaming(buffer) => buffer.sample_rate,
+        }
+    }
+}
+
+impl<T: FromSampleBytes + cpal::FromSample<f32>> crate::preview_stretch::StretchSource
+    for PrerenderedAudioBuffer<T>
+{
+    fn read_frame(&self) -> usize {
+        PrerenderedAudioBuffer::read_frame(self)
+    }
+
+    fn read(&mut self, out: &mut [f32]) {
+        match &mut self.mode {
+            PrerenderedAudioBufferMode::Progressive(source) => {
+                source.fill_with(out, 0.0, std::convert::identity)
+            }
+            PrerenderedAudioBufferMode::Streaming(source) => {
+                source.fill_with(out, 0.0, std::convert::identity)
+            }
+        }
+    }
 }
 
 impl<T: FromSampleBytes + cpal::FromSample<f32>> ProgressiveAudioBuffer<T> {
@@ -2596,6 +2631,10 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> ProgressiveAudioBuffer<T> {
     }
 
     pub fn fill(&mut self, buffer: &mut [T]) {
+        self.fill_with(buffer, T::EQUILIBRIUM, <T as cpal::Sample>::from_sample);
+    }
+
+    fn fill_with<U: Copy>(&mut self, buffer: &mut [U], silence: U, convert: impl Fn(f32) -> U) {
         let timeline = &self.render.timeline;
         let samples = &timeline.samples;
         let available = samples.len().saturating_sub(self.read_position);
@@ -2618,18 +2657,16 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> ProgressiveAudioBuffer<T> {
                         idx < wrap_end
                     };
                 *slot = if rendered {
-                    <T as cpal::Sample>::from_sample(f32::from_bits(
-                        samples[idx].load(Ordering::Relaxed),
-                    ))
+                    convert(f32::from_bits(samples[idx].load(Ordering::Relaxed)))
                 } else {
-                    T::EQUILIBRIUM
+                    silence
                 };
             }
             self.read_position += to_copy;
         }
 
         if to_copy < buffer.len() {
-            buffer[to_copy..].fill(T::EQUILIBRIUM);
+            buffer[to_copy..].fill(silence);
         }
     }
 }
@@ -2861,18 +2898,22 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> StreamingAudioBuffer<T> {
     }
 
     fn fill(&mut self, buffer: &mut [T]) {
+        self.fill_with(buffer, T::EQUILIBRIUM, T::from_sample);
+    }
+
+    fn fill_with<U: Copy>(&mut self, buffer: &mut [U], silence: U, convert: impl Fn(f32) -> U) {
         let generation = self.timeline.published_generation.load(Ordering::Acquire);
         let start = self.timeline.published_start.load(Ordering::Acquire);
         let end = self.timeline.published_end.load(Ordering::Acquire);
         for (offset, sample) in buffer.iter_mut().enumerate() {
             let position = self.read_position + offset;
             *sample = if generation == self.generation && position >= start && position < end {
-                T::from_sample(f32::from_bits(
+                convert(f32::from_bits(
                     self.timeline.samples[position % self.timeline.samples.len()]
                         .load(Ordering::Relaxed),
                 ))
             } else {
-                T::EQUILIBRIUM
+                silence
             };
         }
         self.read_position = self.read_position.saturating_add(buffer.len());
