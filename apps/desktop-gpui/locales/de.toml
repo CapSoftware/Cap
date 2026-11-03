@@ -2930,7 +2930,10 @@ zoom_some = { one = "{count} von {total} ausgewählt", other = "{count} von {tot
 
 [dialog.quit]
 canceled = "Beenden abgebrochen: {error}. Cap bleibt geöffnet, damit Sie die Aufnahme abschließen oder wiederherstellen können."
+files_kept = "Cap behält alles, was bisher aufgenommen wurde, und bietet beim nächsten Öffnen an, es wiederherzustellen."
+keep_open = "Cap geöffnet lassen"
 pending = "Beenden abgebrochen, weil die Aufnahme noch nicht beendet ist. Cap bleibt geöffnet. Verwenden Sie „Stoppen“, sobald es verfügbar ist, und beenden Sie Cap dann erneut."
+quit_anyway = "Trotzdem beenden"
 still_open = "Cap ist noch geöffnet"
 unconfirmed = "Beenden abgebrochen, weil nicht bestätigt werden konnte, dass die Aufnahme beendet wurde. Cap bleibt geöffnet. Verwenden Sie „Stoppen“ und beenden Sie Cap dann erneut."
 

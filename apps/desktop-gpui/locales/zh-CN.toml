@@ -2930,7 +2930,10 @@ zoom_some = { other = "已选择 {count}/{total} 个" }
 
 [dialog.quit]
 canceled = "已取消退出：{error}。Cap 将保持打开，以便你完成或恢复录制。"
+files_kept = "Cap 会保留目前为止录制的所有内容，并在下次打开时提示你恢复。"
+keep_open = "保持 Cap 打开"
 pending = "录制仍在停止中，已取消退出。Cap 将保持打开。请在可用时点击“停止”，然后再次尝试退出。"
+quit_anyway = "仍然退出"
 still_open = "Cap 仍在运行"
 unconfirmed = "无法确认录制已停止，已取消退出。Cap 将保持打开。请点击“停止”，然后再次尝试退出。"
 
