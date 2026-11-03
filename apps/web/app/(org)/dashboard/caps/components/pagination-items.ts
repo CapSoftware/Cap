@@ -1,4 +1,4 @@
-export type PaginationItemValue = number | "ellipsis";
+export type PaginationItemValue = number | "start-ellipsis" | "end-ellipsis";
 
 export function getPaginationItems(
 	currentPage: number,
@@ -14,7 +14,8 @@ export function getPaginationItems(
 	let previous = 0;
 	for (const page of pages) {
 		if (page - previous === 2) items.push(previous + 1);
-		else if (page - previous > 2) items.push("ellipsis");
+		else if (page - previous > 2)
+			items.push(page <= currentPage ? "start-ellipsis" : "end-ellipsis");
 		items.push(page);
 		previous = page;
 	}

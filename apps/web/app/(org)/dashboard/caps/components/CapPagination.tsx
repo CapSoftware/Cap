@@ -31,9 +31,9 @@ export const CapPagination: React.FC<CapPaginationProps> = ({
 						/>
 					</PaginationItem>
 				)}
-				{getPaginationItems(currentPage, totalPages).map((item, index) =>
-					item === "ellipsis" ? (
-						<PaginationEllipsis key={`ellipsis-${index}`} />
+				{getPaginationItems(currentPage, totalPages).map((item) =>
+					typeof item === "string" ? (
+						<PaginationEllipsis key={item} />
 					) : (
 						<PaginationItem key={item}>
 							<PaginationLink
