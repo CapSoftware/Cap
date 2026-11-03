@@ -17,10 +17,11 @@ const readJson = (relative) =>
 	JSON.parse(readFileSync(new URL(relative, import.meta.url), "utf8"));
 
 const gpuiConfig = readJson("../apps/desktop-gpui/tauri.conf.json");
-const tauriConfig = readJson("../apps/desktop/src-tauri/tauri.conf.json");
-const tauriProduction = readJson(
-	"../apps/desktop/src-tauri/tauri.prod.conf.json",
-);
+
+// Every Cap install since 0.6.0 checks for updates at this endpoint and only
+// accepts packages signed for this key, so neither can change.
+const shippedUpdaterPubkey =
+	"dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEUyOTAzOTdFNzJFQkRFOTMKUldTVDN1dHlmam1RNHFXb1VYTXlrQk1iMFFkcjN0YitqZlA5WnZNY0ZtQ1dvM1dxK211M3VIYUQK";
 
 test("targets map to their packaging platform and main binary", () => {
 	assert.equal(targetPlatform("aarch64-apple-darwin"), "darwin");
@@ -42,10 +43,7 @@ test("the GPUI app keeps the identity every existing install updates into", () =
 	assert.equal(gpuiConfig.productName, "Cap");
 	assert.equal(gpuiConfig.mainBinaryName, "Cap");
 	assert.equal(gpuiConfig.identifier, "so.cap.desktop");
-	assert.equal(
-		gpuiConfig.plugins.updater.pubkey,
-		tauriProduction.plugins.updater.pubkey,
-	);
+	assert.equal(gpuiConfig.plugins.updater.pubkey, shippedUpdaterPubkey);
 	assert.deepEqual(gpuiConfig.plugins.updater.endpoints, [
 		"https://cdn.crabnebula.app/update/cap/cap/{{target}}/{{current_version}}",
 	]);
@@ -59,20 +57,10 @@ test("the GPUI app keeps the identity every existing install updates into", () =
 			`const UPDATER_PUBLIC_KEY: &str = "${gpuiConfig.plugins.updater.pubkey}";`,
 		),
 	);
-	assert.deepEqual(
-		gpuiConfig.plugins["deep-link"],
-		tauriConfig.plugins["deep-link"],
-	);
+	assert.deepEqual(gpuiConfig.plugins["deep-link"], {
+		desktop: { schemes: ["cap-desktop"] },
+	});
 	assert.equal(gpuiConfig.bundle.createUpdaterArtifacts, true);
-});
-
-test("the GPUI bundle takes over the identity the Tauri app shipped with", () => {
-	assert.equal(tauriProduction.productName, gpuiConfig.productName);
-	assert.equal(tauriProduction.identifier, gpuiConfig.identifier);
-	assert.deepEqual(
-		tauriProduction.plugins.updater.endpoints,
-		gpuiConfig.plugins.updater.endpoints,
-	);
 });
 
 test("every committed file the GPUI bundle references exists", () => {

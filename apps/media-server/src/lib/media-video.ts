@@ -1577,6 +1577,21 @@ async function probeH264Level(
 	return Number.isFinite(level) && level > 0 ? level : null;
 }
 
+// Safari, phones and Firefox on Windows play H.264 through hardware decoders that only take 8-bit 4:2:0.
+const BROWSER_H264_PIXEL_FORMATS = new Set(["yuv420p", "yuvj420p"]);
+
+async function probeH264PixelFormat(
+	inputPath: string,
+	abortSignal?: AbortSignal,
+): Promise<string | null> {
+	const stdout = await probeVideoStreamEntries(
+		inputPath,
+		"stream=pix_fmt",
+		abortSignal,
+	);
+	return stdout?.split(/\s+/)[0] || null;
+}
+
 async function probeVideoRotation(
 	inputPath: string,
 	abortSignal?: AbortSignal,
@@ -1609,22 +1624,30 @@ export async function processVideo(
 	const outputTempFile = await createTempFile(".mp4");
 
 	const remuxOnly = opts.remuxOnly;
-	const sourceH264Level =
+	const [sourceH264Level, sourcePixelFormat] =
 		!remuxOnly && metadata.videoCodec === "h264"
-			? await probeH264Level(inputPath, abortSignal)
-			: null;
+			? await Promise.all([
+					probeH264Level(inputPath, abortSignal),
+					probeH264PixelFormat(inputPath, abortSignal),
+				])
+			: [null, null];
 	abortSignal?.throwIfAborted();
+	const browserPixelFormat =
+		sourcePixelFormat === null ||
+		BROWSER_H264_PIXEL_FORMATS.has(sourcePixelFormat);
 	const targetH264Level = pickMobileSafeH264Level(metadata, opts);
 	const normalizeH264Level =
 		opts.normalizeH264Level &&
 		metadata.videoCodec === "h264" &&
+		browserPixelFormat &&
 		sourceH264Level !== null &&
 		sourceH264Level > targetH264Level.value &&
 		metadata.width <= opts.maxWidth &&
 		metadata.height <= opts.maxHeight;
 	const videoTranscode = remuxOnly
 		? false
-		: needsVideoTranscode(metadata, opts, sourceH264Level);
+		: !browserPixelFormat ||
+			needsVideoTranscode(metadata, opts, sourceH264Level);
 	const audioTranscode = remuxOnly ? false : needsAudioTranscode(metadata);
 	const extraInputArgs = resilientFlags
 		? buildExtraInputFlags(resilientFlags)
@@ -1788,12 +1811,9 @@ export function buildProcessVideoArgs(input: ProcessVideoArgsInput): string[] {
 				)
 			: []),
 		...input.extraInputArgs,
-		// Browser captures change size when the tab resizes. Rebuilding the filter graph for that crashes h264_nvenc
-		// (SIGSEGV on FFmpeg 7.1, even with a fixed output size), so keep the first graph; scale absorbs the new size
-		// exactly as the libx264 fallback's auto-inserted scaler does.
-		...(nvenc && !gpuDecode && input.videoTranscode && !input.normalizeH264Level
-			? ["-reinit_filter", "0"]
-			: []),
+		// Browser captures change size when the tab resizes. FFmpeg rebuilds the filter graph and scales every frame
+		// back to the first size, for NVENC as for libx264. Keeping the first graph instead (-reinit_filter 0) feeds
+		// frames of the new size through filters set up for the old one, and h264_nvenc stalls then segfaults.
 		"-i",
 		input.inputPath,
 	];

@@ -1,9 +1,10 @@
 import type { VideoEditRange, VideoEditSpec } from "@cap/database/types";
 import { formatToWebVTT } from "@/lib/transcribe-utils";
 import {
+	clampEditTime,
 	getEditSpecOutputDuration,
-	mapSourceTimeToOutputTime,
 	normalizeKeepRanges,
+	roundEditTime,
 } from "@/lib/video-edits";
 
 /**
@@ -289,6 +290,12 @@ export function remapEditTranscriptThroughSpec(
 	);
 	const durationMs = Math.round(getEditSpecOutputDuration(spec) * 1000);
 	const keepRanges = spec.keepRanges;
+	const outputOffsets: number[] = [];
+	let outputOffset = 0;
+	for (const range of keepRanges) {
+		outputOffsets.push(outputOffset);
+		outputOffset += range.end - range.start;
+	}
 	const words: EditTranscriptWord[] = [];
 	let rangeIndex = 0;
 
@@ -318,11 +325,15 @@ export function remapEditTranscriptThroughSpec(
 			Math.max(word.endMs / 1000, range.start),
 			range.end,
 		);
-		const outputStartSeconds = mapSourceTimeToOutputTime(
-			clampedStartSeconds,
-			spec,
+		if (!Number.isFinite(clampedStartSeconds)) continue;
+		const outputStartSeconds = roundEditTime(
+			(outputOffsets[rangeIndex] ?? 0) +
+				clampEditTime(
+					clampedStartSeconds - range.start,
+					0,
+					range.end - range.start,
+				),
 		);
-		if (outputStartSeconds === null) continue;
 
 		const startMs = clampMilliseconds(outputStartSeconds * 1000, durationMs);
 		const endMs = Math.max(

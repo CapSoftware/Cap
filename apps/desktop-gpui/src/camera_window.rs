@@ -136,6 +136,22 @@ mod inline_preview_tests {
     }
 
     #[test]
+    fn a_shrunk_preview_fits_its_toolbar_inside_it() {
+        // Not shrunk: the size-driven scale and every button.
+        assert_eq!(toolbar_fit(0.85, None), (0.85, 5));
+        // Wide enough: unchanged.
+        assert_eq!(toolbar_fit(0.7, Some(300.)), (0.7, 5));
+        for width in [81., 100., 120., 144., 160., 200.] {
+            let (scale, buttons) = toolbar_fit(1., Some(width));
+            let drawn = (42. * buttons as f32 + 4.) * scale + 2.;
+            assert!(drawn <= width - 8. + 0.01, "{width}: {drawn}");
+            assert!(scale >= 0.4);
+        }
+        // A portrait sliver keeps close, size and shape.
+        assert_eq!(toolbar_fit(1., Some(81.)).1, 3);
+    }
+
+    #[test]
     fn camera_only_wide_preview_preserves_aspect_and_toolbar_space() {
         let state = CameraWindowState {
             size: 600.,
@@ -155,6 +171,25 @@ mod inline_preview_tests {
 /// `cameraOverlayTextMetrics`.
 fn normalized_size(state: &CameraWindowState) -> f32 {
     (clamp_size(state.size) - CAMERA_MIN_SIZE) / (CAMERA_MAX_SIZE - CAMERA_MIN_SIZE)
+}
+
+/// The fit uses each button's footprint (a 22px icon in 8px padding, 4px
+/// apart, in a 4px-padded strip with a 1px border). The preview-only blur,
+/// then mirror, buttons go first, before the rest get too small to hit.
+fn toolbar_fit(base_scale: f32, width: Option<f32>) -> (f32, usize) {
+    const SMALLEST_COMFORTABLE: f32 = 0.6;
+    const SMALLEST: f32 = 0.4;
+    let Some(width) = width else {
+        return (base_scale, 5);
+    };
+    let fit = |buttons: usize| (width - 10.) / (42. * buttons as f32 + 4.);
+    for buttons in [5, 4] {
+        let scale = base_scale.min(fit(buttons));
+        if scale >= SMALLEST_COMFORTABLE {
+            return (scale, buttons);
+        }
+    }
+    (base_scale.min(fit(3)).max(SMALLEST), 3)
 }
 
 /// The visible bubble's corner radius. The shipped Tauri experience is the
@@ -2202,8 +2237,11 @@ impl CameraWindow {
             .or(self.retained_aspect)
     }
 
-    fn toolbar_scale(&self) -> f32 {
-        0.7 + normalized_size(&self.state) * 0.3
+    fn toolbar_fit(&self) -> (f32, usize) {
+        toolbar_fit(
+            0.7 + normalized_size(&self.state) * 0.3,
+            self.picker_size.map(|(width, _)| width),
+        )
     }
 
     /// Pushes the chrome inputs the preview renders with (its own notify is
@@ -2354,6 +2392,7 @@ impl CameraWindow {
     fn queue_position_save(&mut self, window: &Window, cx: &mut Context<Self>) {
         let origin = window.bounds().origin;
         let (x, y) = (f32::from(origin.x), f32::from(origin.y));
+        let capture_scale = f64::from(crate::target_overlay::capture_scale_factor(window));
         if self
             .last_saved_position
             .is_some_and(|(sx, sy)| (sx - x).abs() < 1. && (sy - y).abs() < 1.)
@@ -2368,7 +2407,7 @@ impl CameraWindow {
             .spawn(async move {
                 executor.timer(Duration::from_millis(200)).await;
                 if generations.load(Ordering::Acquire) == generation {
-                    persist_camera_position(x as f64, y as f64);
+                    persist_camera_position(x as f64, y as f64, capture_scale);
                 }
             })
             .detach();
@@ -2454,7 +2493,7 @@ impl CameraWindow {
 
     fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
-        let scale = self.toolbar_scale();
+        let (scale, buttons) = self.toolbar_fit();
         #[cfg(target_os = "macos")]
         let (mirror_failed, blur_failed) = (self.effect_failures.mirror, self.effect_failures.blur);
         #[cfg(not(target_os = "macos"))]
@@ -2533,36 +2572,40 @@ impl CameraWindow {
                     // Preview-only, like both Tauri paths (the WGSL UV flip /
                     // the legacy `scaleX(-1)`); the recorded camera track is
                     // never mirrored by either app.
-                    .child(self.toolbar_button(
-                        "mirror",
-                        "icons/arrows.svg",
-                        self.state.mirrored && !mirror_failed,
-                        scale,
-                        mirror_failed.then_some("!"),
-                        cx,
-                        |this, window, cx| {
-                            this.mutate_state(window, cx, |state| {
-                                state.mirrored = !state.mirrored;
-                            })
-                        },
-                    ))
-                    .child(self.toolbar_button(
-                        "blur",
-                        "icons/person-standing.svg",
-                        self.state.background_blur != BlurMode::Off && !blur_failed,
-                        scale,
-                        if blur_failed {
-                            Some("!")
-                        } else {
-                            self.state.background_blur.label()
-                        },
-                        cx,
-                        |this, window, cx| {
-                            this.mutate_state(window, cx, |state| {
-                                state.background_blur = state.background_blur.cycle();
-                            })
-                        },
-                    )),
+                    .when(buttons >= 4, |this| {
+                        this.child(self.toolbar_button(
+                            "mirror",
+                            "icons/arrows.svg",
+                            self.state.mirrored && !mirror_failed,
+                            scale,
+                            mirror_failed.then_some("!"),
+                            cx,
+                            |this, window, cx| {
+                                this.mutate_state(window, cx, |state| {
+                                    state.mirrored = !state.mirrored;
+                                })
+                            },
+                        ))
+                    })
+                    .when(buttons >= 5, |this| {
+                        this.child(self.toolbar_button(
+                            "blur",
+                            "icons/person-standing.svg",
+                            self.state.background_blur != BlurMode::Off && !blur_failed,
+                            scale,
+                            if blur_failed {
+                                Some("!")
+                            } else {
+                                self.state.background_blur.label()
+                            },
+                            cx,
+                            |this, window, cx| {
+                                this.mutate_state(window, cx, |state| {
+                                    state.background_blur = state.background_blur.cycle();
+                                })
+                            },
+                        ))
+                    }),
             )
     }
 
@@ -2888,34 +2931,52 @@ struct StoredWindowPosition {
     display_id: Option<scap_targets::DisplayId>,
 }
 
-fn display_contains(display: &scap_targets::Display, x: f64, y: f64) -> bool {
+/// Capture bounds in window coordinates. `capture_scale` is
+/// [`crate::target_overlay::capture_scale_factor`]: X11 capture bounds are
+/// physical pixels while window positions are logical.
+fn window_space(
+    bounds: scap_targets::bounds::LogicalBounds,
+    capture_scale: f64,
+) -> scap_targets::bounds::LogicalBounds {
+    use scap_targets::bounds::{LogicalBounds, LogicalPosition, LogicalSize};
+    LogicalBounds::new(
+        LogicalPosition::new(
+            bounds.position().x() / capture_scale,
+            bounds.position().y() / capture_scale,
+        ),
+        LogicalSize::new(
+            bounds.size().width() / capture_scale,
+            bounds.size().height() / capture_scale,
+        ),
+    )
+}
+
+fn display_contains(display: &scap_targets::Display, x: f64, y: f64, capture_scale: f64) -> bool {
     display.raw_handle().logical_bounds().is_some_and(|bounds| {
-        x >= bounds.position().x()
-            && x < bounds.position().x() + bounds.size().width()
-            && y >= bounds.position().y()
-            && y < bounds.position().y() + bounds.size().height()
+        window_space(bounds, capture_scale)
+            .contains_point(scap_targets::bounds::LogicalPosition::new(x, y))
     })
 }
 
 /// `display_for_position` (`lib.rs:1612-1625`).
-pub fn display_for_point(x: f64, y: f64) -> Option<scap_targets::Display> {
+pub fn display_for_point(x: f64, y: f64, capture_scale: f64) -> Option<scap_targets::Display> {
     scap_targets::Display::list()
         .into_iter()
-        .find(|display| display_contains(display, x, y))
+        .find(|display| display_contains(display, x, y, capture_scale))
 }
 
 /// `is_position_on_monitor_name` (`windows.rs:857-878`).
-fn position_on_monitor_name(name: &str, x: f64, y: f64) -> bool {
-    scap_targets::Display::list()
-        .into_iter()
-        .any(|display| display.name().as_deref() == Some(name) && display_contains(&display, x, y))
+fn position_on_monitor_name(name: &str, x: f64, y: f64, capture_scale: f64) -> bool {
+    scap_targets::Display::list().into_iter().any(|display| {
+        display.name().as_deref() == Some(name) && display_contains(&display, x, y, capture_scale)
+    })
 }
 
 /// `is_position_on_any_screen` (`windows.rs:880-896`).
-fn any_display_contains(x: f64, y: f64) -> bool {
+fn any_display_contains(x: f64, y: f64, capture_scale: f64) -> bool {
     scap_targets::Display::list()
         .into_iter()
-        .any(|display| display_contains(&display, x, y))
+        .any(|display| display_contains(&display, x, y, capture_scale))
 }
 
 /// The saved position that is still valid for `preferred` -- the Tauri
@@ -2924,7 +2985,7 @@ fn any_display_contains(x: f64, y: f64) -> bool {
 /// else the global `cameraWindowPosition` on the preferred monitor; with no
 /// monitor name, the global position validated against its recorded display
 /// (or any screen).
-fn saved_position(preferred: &scap_targets::Display) -> Option<(f64, f64)> {
+fn saved_position(preferred: &scap_targets::Display, capture_scale: f64) -> Option<(f64, f64)> {
     let settings = store::store_section(store::GENERAL_SETTINGS);
     let parse = |value: &Value| serde_json::from_value::<StoredWindowPosition>(value.clone()).ok();
     let global = settings.get("cameraWindowPosition").and_then(parse);
@@ -2935,12 +2996,14 @@ fn saved_position(preferred: &scap_targets::Display) -> Option<(f64, f64)> {
             .and_then(|value| value.as_object())
             .and_then(|map| map.get(&name))
             .and_then(parse)
-            .filter(|pos| position_on_monitor_name(&name, pos.x, pos.y))
-            .or_else(|| global.filter(|pos| position_on_monitor_name(&name, pos.x, pos.y))),
+            .filter(|pos| position_on_monitor_name(&name, pos.x, pos.y, capture_scale))
+            .or_else(|| {
+                global.filter(|pos| position_on_monitor_name(&name, pos.x, pos.y, capture_scale))
+            }),
         None => global.filter(|pos| match &pos.display_id {
             Some(id) => scap_targets::Display::from_id(id)
-                .is_some_and(|display| display_contains(&display, pos.x, pos.y)),
-            None => any_display_contains(pos.x, pos.y),
+                .is_some_and(|display| display_contains(&display, pos.x, pos.y, capture_scale)),
+            None => any_display_contains(pos.x, pos.y, capture_scale),
         }),
     };
     position.map(|pos| (pos.x, pos.y))
@@ -2951,12 +3014,17 @@ fn saved_position(preferred: &scap_targets::Display) -> Option<(f64, f64)> {
 /// `DEFAULT_WINDOW_SIZE = 230.0 * 2.0` (`windows.rs:2160, 2340-2344`; the
 /// constant, not the actual window size, is what the shipping app subtracts).
 /// Clamp against the actual size before the camera can deliver its first frame.
-pub fn opening_position(preferred: &scap_targets::Display, window_size: (f32, f32)) -> (f32, f32) {
-    let saved = saved_position(preferred);
+pub fn opening_position(
+    preferred: &scap_targets::Display,
+    window_size: (f32, f32),
+    capture_scale: f64,
+) -> (f32, f32) {
+    let saved = saved_position(preferred, capture_scale);
     let bounds = saved
-        .and_then(|(x, y)| display_for_point(x, y))
+        .and_then(|(x, y)| display_for_point(x, y, capture_scale))
         .and_then(|display| display.raw_handle().logical_bounds())
-        .or_else(|| preferred.raw_handle().logical_bounds());
+        .or_else(|| preferred.raw_handle().logical_bounds())
+        .map(|bounds| window_space(bounds, capture_scale));
     opening_position_in_bounds(saved, bounds, window_size)
 }
 
@@ -3041,6 +3109,24 @@ mod opening_position_tests {
     }
 
     #[test]
+    fn x11_display_at_2x_places_the_preview_in_window_coordinates() {
+        let left = display(0., 0., 2560., 1600.).map(|bounds| window_space(bounds, 2.));
+        assert_eq!(
+            opening_position_in_bounds(None, left, (230., 286.)),
+            (720., 240.),
+        );
+        assert_eq!(
+            opening_position_in_bounds(Some((2153., 974.)), left, (230., 286.)),
+            (1050., 514.),
+        );
+        let right = display(2560., 0., 2560., 1600.).map(|bounds| window_space(bounds, 2.));
+        assert_eq!(
+            opening_position_in_bounds(None, right, (230., 286.)),
+            (2000., 240.),
+        );
+    }
+
+    #[test]
     fn missing_display_geometry_preserves_the_existing_fallback() {
         assert_eq!(
             opening_position_in_bounds(None, None, (600., 656.)),
@@ -3056,8 +3142,8 @@ mod opening_position_tests {
 /// `update_camera_window_position_settings` (`lib.rs:1645-1666`): the global
 /// position plus the per-monitor-name map entry, both carrying the display
 /// id. Runs on the background executor -- two store read-modify-writes.
-fn persist_camera_position(x: f64, y: f64) {
-    let display = display_for_point(x, y);
+fn persist_camera_position(x: f64, y: f64, capture_scale: f64) {
+    let display = display_for_point(x, y, capture_scale);
     let position = StoredWindowPosition {
         x,
         y,

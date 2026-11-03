@@ -22,8 +22,7 @@ jobs:
     runs-on: blacksmith-8vcpu-ubuntu-2404
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
-      gpui: ${{ steps.filter.outputs.rust == 'true' || steps.filter.outputs.gpui == 'true' || steps.desktop-resources.outputs.desktop-resources == 'true' }}
-      tauri-plugins: ${{ steps.filter.outputs.tauri-plugins }}
+      gpui: ${{ steps.filter.outputs.rust == 'true' || steps.filter.outputs.gpui == 'true' }}
       gpui-patches: ${{ steps.filter.outputs.gpui-patches }}
     steps:
       - name: Checkout
@@ -49,10 +48,7 @@ jobs:
             gpui:
               - '.gitattributes'
               - 'apps/desktop-gpui/**'
-              - 'apps/desktop/src/assets/**'
-              - 'apps/desktop/src-tauri/src/recording_start_sound.rs'
               - 'apps/media-server/src/__tests__/fixtures/**'
-              - 'packages/ui-solid/icons/**'
               - 'scripts/build-desktop-binaries*'
               - 'scripts/build-gpui-binary.sh'
               - 'scripts/build-linux-packages.mjs'
@@ -62,33 +58,11 @@ jobs:
               - 'scripts/finalize-macos-*'
               - 'scripts/linux-bundle-config*'
               - 'scripts/prepare-gpui-dependency*'
-              - 'scripts/run-gpui-build*'
               - 'scripts/sync-desktop-versions.mjs'
-              - 'scripts/verify-gpui-release-inputs.mjs'
               - 'scripts/verify-windows-stack.mjs'
             gpui-patches:
               - 'apps/desktop-gpui/patches/**'
               - 'scripts/prepare-gpui-dependency.sh'
-            tauri-plugins:
-              - 'Cargo.lock'
-              - 'bun.lock'
-              - 'scripts/check-tauri-plugin-versions*'
-              - 'apps/desktop/package.json'
-
-      # Cap ships as the GPUI app, which embeds icons, sounds, assets and test
-      # data from apps/desktop. Only the Tauri app's own sources are skipped.
-      - name: Check for GPUI resources in apps/desktop
-        uses: dorny/paths-filter@v3
-        id: desktop-resources
-        with:
-          predicate-quantifier: every
-          filters: |
-            desktop-resources:
-              - 'apps/desktop/**'
-              - '!apps/desktop/src/**'
-              - '!apps/desktop/src-tauri/src/**'
-              - '!apps/desktop/src-tauri/tests/**'
-              - '!apps/desktop/src-tauri/gen/**'
 
   typecheck:
     name: Typecheck
@@ -106,8 +80,7 @@ jobs:
 
       - name: Test workspace tooling
         run: |
-          node --test scripts/bun-scripts.test.mjs scripts/check-tauri-plugin-versions.test.mjs
-          bun run --cwd apps/desktop vitest run scripts/prepare.test.js
+          node --test scripts/bun-scripts.test.mjs
 
       - name: Test Loops profile sync
         run: |
@@ -131,32 +104,48 @@ jobs:
           __tests__/unit/analytics-track-route.test.ts
           __tests__/unit/caps-analytics-round-trips.test.ts
           __tests__/unit/caps-keyboard.test.ts
+          __tests__/unit/caption-translation-ownership.test.ts
           __tests__/unit/comment-composer-composition.test.ts
+          __tests__/unit/currency-hook.test.ts
           __tests__/unit/dashboard-analytics-cap-access.test.ts
           __tests__/unit/dashboard-analytics-space-access.test.ts
+          __tests__/unit/embed-page-round-trips.test.ts
           __tests__/unit/embed-video-playback-chrome.test.ts
+          __tests__/unit/first-view-email.test.ts
           __tests__/unit/folder-videos.test.ts
+          __tests__/unit/generate-ai-duration.test.ts
           __tests__/unit/homepage-demo-accessibility.test.ts
           __tests__/unit/invite-decline-pro-seat.test.ts
           __tests__/unit/invite-decline.test.ts
           __tests__/unit/linkified-text.test.ts
           __tests__/unit/loom-import-ui.test.ts
+          __tests__/unit/messenger-poll-ordering.test.ts
           __tests__/unit/media-comment-playback-cleanup.test.ts
+          __tests__/unit/media-client.test.ts
           __tests__/unit/media-format-converter-selection.test.ts
           __tests__/unit/media-format-converter.test.ts
+          __tests__/unit/gif-video-errors.test.ts
           __tests__/unit/media-player-store-refs.test.ts
+          __tests__/unit/mobile-cap-view-notification.test.ts
           __tests__/unit/mobile-caps-list.test.ts
+          __tests__/unit/mobile-loom-import.test.ts
+          __tests__/unit/mobile-organization-analytics.test.ts
           __tests__/unit/notification-read-state.test.ts
+          __tests__/unit/organization-settings-ownership.test.ts
           __tests__/unit/playback-store.test.ts
           __tests__/unit/remove-organization-member.test.ts
           __tests__/unit/reply-notification.test.ts
           __tests__/unit/seo-demo-videos.test.ts
+          __tests__/unit/share-comments-rendering.test.ts
           __tests__/unit/share-page-round-trips.test.ts
           __tests__/unit/share-transcript-rendering.test.ts
           __tests__/unit/share-video-quota-loading.test.ts
+          __tests__/unit/sdk-recorder-hook.test.ts
           __tests__/unit/signed-baa-card.test.ts
+          __tests__/unit/sonner-theme.test.ts
           __tests__/unit/space-folder-page-access.test.ts
           __tests__/unit/space-page-round-trips.test.ts
+          __tests__/unit/speed-controller-metadata.test.ts
           __tests__/unit/speed-controller-playback-failure.test.ts
           __tests__/unit/speed-controller.test.ts
           __tests__/unit/summary-chapters.test.ts
@@ -164,8 +153,10 @@ jobs:
           __tests__/unit/sso-login-pages.test.ts
           __tests__/unit/timeline-paused-window.test.ts
           __tests__/unit/toggle-pro-seat.test.ts
+          __tests__/unit/transcript-arrow-text.test.ts
           __tests__/unit/transcript-hours.test.ts
           __tests__/unit/transcript-numbers.test.ts
+          __tests__/unit/trimming-tool-audio.test.ts
           __tests__/unit/video-analytics-access.test.ts
           __tests__/unit/video-analytics-bulk.test.ts
           __tests__/unit/video-create-atomicity.test.ts
@@ -272,10 +263,8 @@ jobs:
         shell: bash
         run: cargo test --locked -p cap-utils -p cap-cli-install --lib
 
-      # cap-desktop is the Tauri app, which no longer ships; Cap is the GPUI app
-      # plus the cap-muxer and cap-cli sidecars built from this workspace.
       - name: Run Clippy
-        run: cargo clippy --workspace --exclude cap-desktop --all-features --locked -- -D warnings
+        run: cargo clippy --workspace --all-features --locked -- -D warnings
 
   lint-biome:
     name: Lint (Biome)
@@ -323,18 +312,25 @@ jobs:
       - name: Run setup
         run: node scripts/setup.js
 
+      - name: Test CLI Studio automation duration
+        run: cargo test --locked -p cap --bin cap automation::tests::studio_recording_duration_conditions_use_recorded_media
+
       - name: Test desktop regressions
         run: |
           cargo test --locked -p cap-utils -p cap-cli-install --lib
           cargo test --locked -p cap --bin cap record::tests
           cargo test --locked -p cap --bin cap recordings::tests
+          cargo test --locked -p cap --bin cap automation::tests::cli_save_to_location
+          cargo test --locked -p cap --bin cap export::tests::instant_export_preserves_a_hard_link_to_the_recording
           cargo test --locked -p cap --test cli recordings_list
           cargo test --locked -p cap --test cli project_config_get_without_file_returns_default
           cargo test --locked -p cap --test cli caps_json_errors_include_the_standard_error_field
+          cargo test --locked -p cap --bin cap caps::tests::cap_operations_validate_wait_timeouts_before_submitting
+          cargo test --locked -p cap --test cli organization_operations_validate_wait_timeouts_before_submitting
           cargo test --locked -p cap-recording --lib -- --test-threads=1
           cargo test --locked -p cap-recording --test x11_shm_capture -- --test-threads=1
           cargo test --locked -p scap-targets --lib --test linux_targets
-          cargo test --locked -p cap-enc-ffmpeg
+          cargo test --locked -p cap-enc-ffmpeg -p cap-camera-ffmpeg
 
   build-gpui:
     name: Build GPUI Desktop
@@ -421,6 +417,7 @@ jobs:
             cargo +1.95.0 test --manifest-path apps/desktop-gpui/Cargo.toml --locked --target ${{ matrix.settings.target }} --bin cap-gpui
           fi
           cargo +1.95.0 test --manifest-path apps/desktop-gpui/Cargo.toml --locked --target ${{ matrix.settings.target }} -p cap-gpui-kernels
+          cargo +1.95.0 test --manifest-path apps/desktop-gpui/Cargo.toml --locked --target ${{ matrix.settings.target }} -p cap-glass
           cargo +1.95.0 test --manifest-path apps/desktop-gpui/Cargo.toml --locked --target ${{ matrix.settings.target }} -p cap-i18n-build
 
   # Cap only builds gpui's crates as dependencies, so their own tests never run
@@ -499,18 +496,3 @@ jobs:
           else
             cargo +1.95.0 test -p gpui_windows --lib directx_atlas
           fi
-
-  tauri-plugins:
-    name: Verify Tauri plugin versions
-    runs-on: blacksmith-8vcpu-ubuntu-2404
-    needs: changes
-    if: needs.changes.outputs.tauri-plugins == 'true'
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - uses: ./.github/actions/setup-js
-
-      - name: Run verify
-        shell: bash
-        run: node scripts/check-tauri-plugin-versions.js

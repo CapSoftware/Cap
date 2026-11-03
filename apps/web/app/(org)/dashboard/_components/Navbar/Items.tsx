@@ -217,7 +217,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 							<PopoverTrigger suppressHydrationWarning asChild>
 								<motion.div
 									transition={{
-										type: "easeInOut",
+										ease: "easeInOut",
 										duration: 0.2,
 									}}
 									className={clsx(

@@ -611,7 +611,9 @@ fn camera_selection(id: DeviceOrModelID) -> SelectedCamera {
             .map(|info| info.display_name().to_string())
             .unwrap_or_else(|| match &id {
                 DeviceOrModelID::DeviceID(device) => device.clone(),
-                DeviceOrModelID::ModelID(_) => "Camera".to_string(),
+                DeviceOrModelID::ModelID(_) => {
+                    crate::i18n::tr::main::device::fallback_camera().to_string()
+                }
             }),
         id,
     }

@@ -476,6 +476,24 @@ pub(super) struct Config {
 pub(super) struct PreparedCamera {
     camera_feed: Arc<CameraFeedLock>,
     frames: PreparedCameraFrames,
+    mjpeg_overlay: camera::MjpegOverlayHold,
+}
+
+/// Portable blur downscales the camera to this before the matte. Scaled IDCT
+/// has to cover it, or an instant recording with blur upscales a bubble-sized
+/// decode into the segmenter.
+const INSTANT_BLUR_COVERAGE: (u32, u32) = (640, 360);
+
+fn instant_mjpeg_coverage(presentation: &LinuxCameraPresentation, blur: bool) -> (u32, u32) {
+    let rect = presentation.rect;
+    if blur {
+        (
+            rect.width.max(INSTANT_BLUR_COVERAGE.0),
+            rect.height.max(INSTANT_BLUR_COVERAGE.1),
+        )
+    } else {
+        (rect.width, rect.height)
+    }
 }
 
 struct PreparedCameraFrames {
@@ -497,6 +515,9 @@ impl PreparedCamera {
         if let Some(reference) = reference_size {
             presentation = presentation.resolve(reference, (info.width, info.height))?;
         }
+        let (coverage_width, coverage_height) =
+            instant_mjpeg_coverage(&presentation, processed.is_some());
+        let mjpeg_overlay = camera_feed.hold_instant_overlay(coverage_width, coverage_height);
         let receiver = if let Some(processed) = processed {
             anyhow::ensure!(
                 Arc::ptr_eq(&processed.camera_feed, &camera_feed),
@@ -530,6 +551,7 @@ impl PreparedCamera {
             Self {
                 camera_feed,
                 frames,
+                mjpeg_overlay,
             },
             timestamps,
         ))
@@ -561,6 +583,7 @@ pub(super) struct CameraCompositeSource {
     info: VideoInfo,
     _camera_feed: Arc<CameraFeedLock>,
     _compositor_stop: tokio_util::sync::DropGuard,
+    _mjpeg_overlay: camera::MjpegOverlayHold,
 }
 
 impl VideoSource for CameraCompositeSource {
@@ -578,6 +601,7 @@ impl VideoSource for CameraCompositeSource {
         let PreparedCamera {
             camera_feed,
             frames,
+            mjpeg_overlay,
         } = config.camera;
         let PreparedCameraFrames {
             receiver: camera_rx,
@@ -609,6 +633,7 @@ impl VideoSource for CameraCompositeSource {
             info,
             _camera_feed: camera_feed,
             _compositor_stop: compositor_stop,
+            _mjpeg_overlay: mjpeg_overlay,
         })
     }
 
@@ -2912,6 +2937,24 @@ mod tests {
         };
         assert!(!camera_is_fresh(camera_freshness_anchor(&frame, now), now));
         assert_eq!(camera_freshness_anchor(&frame, now), captured_at);
+    }
+
+    #[test]
+    fn instant_mjpeg_coverage_is_the_overlay_unless_blur_needs_more() {
+        let presentation = LinuxCameraPresentation::default_for(1920, 1080);
+        assert_eq!(presentation.rect.width, 324);
+        assert_eq!(instant_mjpeg_coverage(&presentation, false), (324, 324));
+        assert_eq!(instant_mjpeg_coverage(&presentation, true), (640, 360));
+        let large = LinuxCameraPresentation {
+            rect: LinuxCameraRect {
+                x: 0,
+                y: 0,
+                width: 800,
+                height: 800,
+            },
+            ..LinuxCameraPresentation::default_for(1920, 1080)
+        };
+        assert_eq!(instant_mjpeg_coverage(&large, true), (800, 800));
     }
 
     #[test]

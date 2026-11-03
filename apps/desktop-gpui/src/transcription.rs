@@ -51,6 +51,7 @@ use futures_util::StreamExt;
 use parakeet_rs::{ParakeetTDT, TimestampMode, Transcriber};
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
+use crate::i18n::tr;
 use crate::{editor_timeline::clip_timeline_offsets, store};
 
 // ---------------------------------------------------------------------------
@@ -260,7 +261,7 @@ pub fn begin_download(model: &str) -> bool {
         model: model.to_string(),
         state: DownloadState::Downloading,
         progress: 0.0,
-        message: "Preparing model download".to_string(),
+        message: tr::transcription::download::preparing().to_string(),
     });
     true
 }
@@ -291,7 +292,7 @@ pub async fn run_model_download(model: String) {
             model: model.clone(),
             state: DownloadState::Completed,
             progress: 100.0,
-            message: "Download complete".to_string(),
+            message: tr::transcription::download::complete().to_string(),
         },
         Err(error) => {
             tracing::error!(model, "caption model download failed: {error}");
@@ -299,7 +300,7 @@ pub async fn run_model_download(model: String) {
                 model: model.clone(),
                 state: DownloadState::Failed,
                 progress: 0.0,
-                message: format!("Download failed: {error}"),
+                message: tr::transcription::download::failed(error),
             }
         }
     };
@@ -468,7 +469,7 @@ async fn write_whisper_parts(
             set_download_progress(
                 model,
                 progress,
-                format!("Downloading model: {progress:.0}%"),
+                tr::transcription::download::progress(format!("{progress:.0}")),
             );
         }
     }
@@ -757,7 +758,10 @@ async fn download_parakeet_model(model: &str) -> Result<(), String> {
                     set_download_progress(
                         model,
                         progress,
-                        format!("Downloading {filename}: {progress:.0}%"),
+                        tr::transcription::download::file_progress(
+                            filename,
+                            format!("{progress:.0}"),
+                        ),
                     );
                 }
             }
@@ -1765,8 +1769,8 @@ fn transcribe_project_with(
 // ---------------------------------------------------------------------------
 
 use cap_project::caption_words::{
-    caption_text_from_words, caption_word_chunks, normalize_caption_words,
-    MAX_CAPTION_WORD_DURATION,
+    MAX_CAPTION_WORD_DURATION, caption_text_from_words, caption_word_chunks,
+    normalize_caption_words,
 };
 
 // ---------------------------------------------------------------------------
@@ -2031,20 +2035,19 @@ pub fn apply_caption_result(
 /// `getCaptionGenerationErrorMessage` (`captions.ts:634-662`).
 pub fn caption_generation_error_message(message: &str) -> String {
     if message.contains("No audio stream found") {
-        return "No audio found in the video file".to_string();
+        return tr::transcription::error::no_audio().to_string();
     }
     if message.contains("Model file not found") {
-        return "Caption model not found. Please download it first".to_string();
+        return tr::transcription::error::model_missing().to_string();
     }
     if message.contains("Failed to load Whisper model") {
-        return "Failed to load the caption model. Try downloading it again".to_string();
+        return tr::transcription::error::model_load().to_string();
     }
     if message.contains(PARAKEET_UNSUPPORTED_LANGUAGE) {
-        return "The Recommended and High Accuracy models only transcribe English and 24 other European languages. Download the Small or Medium model to caption this language".to_string();
+        return tr::transcription::error::unsupported_language().to_string();
     }
     if message.contains("Parakeet transcription is not available on Intel macOS") {
-        return "Parakeet models are not available on Intel Macs. Use a Whisper model instead"
-            .to_string();
+        return tr::transcription::error::intel_mac().to_string();
     }
     message.to_string()
 }

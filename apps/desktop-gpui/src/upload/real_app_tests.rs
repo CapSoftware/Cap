@@ -310,6 +310,94 @@ async fn real_app_instant_recording_uploads_and_verifies() {
     assert!(sandbox.journal().is_empty(), "{:?}", sandbox.journal());
 }
 
+/// An Instant recording with the camera on uploads and verifies. On Linux the
+/// camera is drawn into the screen video, so a camera that stalls or sends a
+/// bad frame stops the recording. Runs only with `CAP_GPUI_REAL_APP_CAMERA=1`,
+/// since it needs a camera attached; the CI job feeds a virtual one and checks
+/// its picture reached the video.
+#[ignore]
+#[tokio::test(flavor = "multi_thread")]
+async fn real_app_instant_recording_with_camera_uploads_and_verifies() {
+    if std::env::var("CAP_GPUI_REAL_APP_CAMERA").is_err() {
+        eprintln!("skipped: set CAP_GPUI_REAL_APP_CAMERA=1 where a camera is attached");
+        return;
+    }
+    let mock = MockCap::start(Vec::new()).await;
+    let sandbox = Sandbox::new(&mock.url, 0);
+    let app = sandbox.launch(
+        "camera",
+        &[
+            ("CAP_GPUI_AUTO_CAMERA", "1"),
+            ("CAP_GPUI_AUTO_RECORD", "instant:60"),
+        ],
+    );
+    // On X11 a window recorded with the camera hides Cap's controls, and the
+    // recording waits for the Stop shortcut to start; the same shortcut stops
+    // it, well before the automatic stop.
+    #[cfg(target_os = "linux")]
+    {
+        let press = || {
+            let status = Command::new("xdotool")
+                .args(["key", "ctrl+shift+F9"])
+                .status()
+                .expect("install xdotool");
+            assert!(status.success());
+        };
+        let sandbox = &sandbox;
+        let logged = |line: &'static str| move || sandbox.log("camera").contains(line);
+        let start = Duration::from_secs(60);
+        wait_for_app(
+            sandbox,
+            &app,
+            "the start press",
+            start,
+            logged("overlay start pressed"),
+        )
+        .await;
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        press();
+        wait_for_app(
+            sandbox,
+            &app,
+            "the recording to start",
+            start,
+            logged("recording started"),
+        )
+        .await;
+        tokio::time::sleep(Duration::from_secs(8)).await;
+        press();
+    }
+    wait_for_app(
+        &sandbox,
+        &app,
+        "a verified upload",
+        Duration::from_secs(180),
+        || {
+            sandbox
+                .projects()
+                .first()
+                .and_then(|project| state(project))
+                .is_some_and(|state| state["phase"] == "Verified")
+        },
+    )
+    .await;
+    kill(app);
+    let log = sandbox.log("camera");
+    assert!(log.contains("auto-selecting camera"), "no camera selected");
+    let video = mock.created();
+    assert_eq!(video.len(), 1, "{video:?}");
+    assert!(
+        mock.confirmations()
+            .iter()
+            .any(|confirmation| confirmation["videoId"] == video[0].as_str())
+    );
+    let project = sandbox.projects().remove(0);
+    assert!(finished_segments(&project) >= 3, "{}", project.display());
+    assert!(mock.deleted().is_empty(), "{:?}", mock.deleted());
+    assert!(sandbox.journal().is_empty(), "{:?}", sandbox.journal());
+    assert!(!log.contains("panicked at"), "the app panicked");
+}
+
 /// The After an Instant recording outcome decides whether the main window,
 /// hidden at start, comes back once the recording finishes: only Show Cap
 /// takes the reshow, so opening the link never leaves it on screen behind the

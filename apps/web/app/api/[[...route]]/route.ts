@@ -1,10 +1,13 @@
 import { HttpLive } from "@cap/web-backend";
 import { HttpApiScalar } from "@effect/platform";
 import { Layer } from "effect";
+import { withJsonNotFound } from "@/lib/api-errors";
 import { apiToHandler } from "@/lib/server";
 
-const handler = apiToHandler(
-	HttpApiScalar.layer({ path: "/api" }).pipe(Layer.provideMerge(HttpLive)),
+const handler = withJsonNotFound(
+	apiToHandler(
+		HttpApiScalar.layer({ path: "/api" }).pipe(Layer.provideMerge(HttpLive)),
+	),
 );
 
 export const GET = handler;

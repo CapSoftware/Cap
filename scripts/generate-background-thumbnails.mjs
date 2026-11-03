@@ -12,7 +12,7 @@ if (args.some((argument) => argument !== "--check")) {
 }
 const check = args.includes("--check");
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const backgrounds = join(root, "apps/desktop/src-tauri/assets/backgrounds");
+const backgrounds = join(root, "apps/desktop-gpui/assets/backgrounds");
 const ffmpeg = process.env.FFMPEG_PATH || "ffmpeg";
 const temporary = await mkdtemp(join(tmpdir(), "cap-background-thumbnails-"));
 let count = 0;

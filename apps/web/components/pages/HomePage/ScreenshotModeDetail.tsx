@@ -1,7 +1,7 @@
 "use client";
 
 import { Button } from "@cap/ui";
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, motion, type Variants } from "framer-motion";
 import {
 	Aperture,
 	Check,
@@ -136,7 +136,7 @@ const featureContainerVariants = {
 	},
 };
 
-const featureItemVariants = {
+const featureItemVariants: Variants = {
 	hidden: { opacity: 0, y: 20, scale: 0.97 },
 	visible: {
 		opacity: 1,

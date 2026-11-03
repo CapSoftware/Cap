@@ -29,9 +29,13 @@ pub(crate) enum LinuxFileDialogError {
 impl LinuxFileDialogError {
     pub(crate) fn message(&self) -> String {
         match self {
-            Self::Busy => "A file dialog is already open. Finish or cancel it before trying again.".into(),
-            Self::BeforeDispatch(error) | Self::NativeResponse(error) => format!("The file dialog could not complete: {error}"),
-            Self::Indeterminate(_) | Self::RestartRequired => "Cap could not confirm that the file dialog closed. Close any remaining file dialog and restart Cap before trying again.".into(),
+            Self::Busy => crate::i18n::tr::dialog::file::busy().into(),
+            Self::BeforeDispatch(error) | Self::NativeResponse(error) => {
+                crate::i18n::tr::dialog::file::failed(error)
+            }
+            Self::Indeterminate(_) | Self::RestartRequired => {
+                crate::i18n::tr::dialog::file::unconfirmed().into()
+            }
         }
     }
 }
@@ -313,7 +317,7 @@ async fn linux_save_file_panel(
     let filters = if extensions.is_empty() {
         Vec::new()
     } else {
-        portal_filters(&[("Export", extensions)])
+        portal_filters(&[(crate::i18n::tr::dialog::file::export_filter(), extensions)])
     };
     run_linux_file_dialog(cx, owner, parent, move |identifier| async move {
         let request = ashpd::desktop::file_chooser::SaveFileRequest::default()
@@ -355,7 +359,7 @@ async fn finish_linux_file_dialog(
                             return None;
                         }
                         Some(crate::editor_modal::informational_alert(
-                            "File dialog unavailable",
+                            crate::i18n::tr::dialog::file::unavailable_title(),
                             &message,
                             window,
                             cx,
@@ -553,7 +557,7 @@ fn clipboard_file_path(path: &std::path::Path) -> Result<std::path::PathBuf, Str
     let metadata = std::fs::metadata(&path)
         .map_err(|error| format!("Could not read the clipboard file: {error}"))?;
     if !metadata.is_file() {
-        return Err("Only files can be copied to the clipboard".into());
+        return Err(crate::i18n::tr::dialog::clipboard::not_a_file().into());
     }
     Ok(path)
 }
@@ -1586,8 +1590,8 @@ mod mac {
             NSRect::new(NSPoint::new(x, appkit_y), NSSize::new(width, height)),
             true,
         );
-        ns_window.setLevel(level);
         apply_fullscreen_overlay_behavior(ns_window);
+        ns_window.setLevel(level);
         // `.shadow(false)` in the Tauri builder.
         ns_window.setHasShadow(false);
         ns_window.setAnimationBehavior(objc2_app_kit::NSWindowAnimationBehavior::None);
@@ -1730,6 +1734,15 @@ mod mac {
         rerun_occlusion_handler_after_show(&native.0);
     }
 
+    /// Lift a floating panel to the front of its level, first restoring the
+    /// level if anything lowered it below `level`.
+    pub fn raise_panel_native(native: &NativeWindow, level: isize) {
+        if native.0.level() < level {
+            native.0.setLevel(level);
+        }
+        native.0.orderFrontRegardless();
+    }
+
     /// The `NSWindow` behind a gpui window.
     pub fn ns_window(window: &Window) -> Option<Retained<NSWindow>> {
         // Fully qualified: `Window` also has an inherent `window_handle()`
@@ -1753,15 +1766,17 @@ mod mac {
             tracing::error!("no NSWindow behind gpui window; panel behavior not applied");
             return;
         };
+        // Before the level: `setFloatingPanel:` resets it to
+        // `NSFloatingWindowLevel`.
+        if behavior.join_all_spaces {
+            apply_fullscreen_overlay_behavior(&ns_window);
+        }
         ns_window.setLevel(behavior.level);
         tracing::debug!(
             requested = behavior.level,
             actual = ns_window.level(),
             "panel level applied"
         );
-        if behavior.join_all_spaces {
-            apply_fullscreen_overlay_behavior(&ns_window);
-        }
         ns_window.setHasShadow(behavior.shadow);
     }
 
@@ -1825,6 +1840,13 @@ mod mac {
     /// `setSharingType: None`/`ReadOnly`, so that is what this is.
     ///
     /// Returns the value AppKit reports back, for the probe log.
+    /// Whether the window is already left out of screen captures.
+    pub fn window_capture_hidden(native: &NativeWindow) -> bool {
+        use objc2::msg_send;
+        let sharing: usize = unsafe { msg_send![&*native.0, sharingType] };
+        sharing == NS_WINDOW_SHARING_NONE
+    }
+
     pub fn set_window_capture_hidden(native: &NativeWindow, hidden: bool) -> usize {
         use objc2::msg_send;
         let sharing = if hidden {
@@ -2508,7 +2530,7 @@ mod mac {
         autoreleasepool(|_| unsafe {
             let pasteboard: *mut AnyObject = msg_send![class!(NSPasteboard), generalPasteboard];
             if pasteboard.is_null() {
-                return Err("Clipboard unavailable".into());
+                return Err(crate::i18n::tr::dialog::clipboard::unavailable().into());
             }
             let url_class = class!(NSURL);
             let ns_path = NSString::from_str(path);
@@ -2522,7 +2544,7 @@ mod mac {
             if ok.as_bool() {
                 Ok(())
             } else {
-                Err("Failed to copy file to clipboard".into())
+                Err(crate::i18n::tr::dialog::clipboard::copy_file_failed().into())
             }
         })
     }
@@ -2542,7 +2564,7 @@ mod mac {
         autoreleasepool(|_| unsafe {
             let pasteboard: *mut AnyObject = msg_send![class!(NSPasteboard), generalPasteboard];
             if pasteboard.is_null() {
-                return Err("Clipboard unavailable".into());
+                return Err(crate::i18n::tr::dialog::clipboard::unavailable().into());
             }
             let data = NSData::with_bytes(&image.0);
             let image: *mut AnyObject = msg_send![class!(NSImage), alloc];
@@ -2554,7 +2576,7 @@ mod mac {
             if ok.as_bool() {
                 Ok(())
             } else {
-                Err("Failed to copy image to clipboard".into())
+                Err(crate::i18n::tr::dialog::clipboard::copy_image_failed().into())
             }
         })
     }
@@ -3017,6 +3039,9 @@ mod stub {
     pub fn set_window_alpha(_native: &NativeWindow, _alpha: f64) -> f64 {
         1.
     }
+    pub fn window_capture_hidden(_native: &NativeWindow) -> bool {
+        false
+    }
     pub fn set_window_capture_hidden(_native: &NativeWindow, _hidden: bool) -> usize {
         0
     }
@@ -3175,6 +3200,7 @@ mod stub {
     }
     pub fn set_window_frame(_native: &NativeWindow, _x: f64, _y: f64, _width: f64, _height: f64) {}
     pub fn order_front_native(_native: &NativeWindow) {}
+    pub fn raise_panel_native(_native: &NativeWindow, _level: isize) {}
     pub fn frame_is_on_screen(_x: f64, _y: f64, _width: f64, _height: f64) -> bool {
         true
     }
@@ -3275,7 +3301,7 @@ mod stub {
         cx.try_write_to_clipboard(
             gpui::ClipboardEntry::ExternalPaths(gpui::ExternalPaths(vec![path].into())).into(),
         )
-        .map_err(|error| format!("Could not copy the file to the clipboard: {error}"))
+        .map_err(crate::i18n::tr::dialog::clipboard::copy_file)
     }
 
     pub struct ClipboardImage(gpui::ClipboardItem);
@@ -3298,7 +3324,7 @@ mod stub {
 
     pub fn write_clipboard_image(image: ClipboardImage, cx: &gpui::App) -> Result<(), String> {
         cx.try_write_to_clipboard(image.0)
-            .map_err(|error| format!("Could not copy the image to the clipboard: {error}"))
+            .map_err(crate::i18n::tr::dialog::clipboard::copy_image)
     }
     pub fn desktop_picture_path() -> Option<std::path::PathBuf> {
         #[cfg(target_os = "linux")]

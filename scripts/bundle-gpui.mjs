@@ -10,7 +10,6 @@ const repoRoot = path.resolve(
 	"..",
 );
 export const gpuiDirectory = path.join(repoRoot, "apps", "desktop-gpui");
-const desktopDirectory = path.join(repoRoot, "apps", "desktop");
 export const gpuiToolchain = process.env.CAP_GPUI_RUST_TOOLCHAIN || "1.95.0";
 
 const platformConfigNames = {
@@ -164,7 +163,6 @@ export async function bundleGpui(target, args, { env = process.env } = {}) {
 
 	if (platform === "darwin") {
 		const result = await buildMacosPackages(target, bundleArgs, {
-			bundleOnly: true,
 			env: bundleEnvironment(env),
 		});
 		if (result.signal || result.code !== 0) {
@@ -176,7 +174,7 @@ export async function bundleGpui(target, args, { env = process.env } = {}) {
 	}
 
 	run("bun", ["run", ...bundleArguments(target, bundleArgs)], {
-		cwd: desktopDirectory,
+		cwd: gpuiDirectory,
 		env: bundleEnvironment({ ...env, RUST_TARGET_TRIPLE: target }),
 	});
 }

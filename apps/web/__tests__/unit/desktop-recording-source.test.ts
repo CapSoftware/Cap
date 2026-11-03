@@ -521,6 +521,11 @@ describe("recording source preparation during upload", () => {
 				generation,
 			);
 			expect(storage.bucket.copyObject).toHaveBeenCalledTimes(3);
+			for (const [, , args, options] of storage.bucket.copyObject.mock
+				.calls as unknown as Array<[string, string, unknown, unknown]>) {
+				expect(args).toMatchObject({ IfNoneMatch: "*" });
+				expect(options).toEqual({ retryWithoutUnsupportedIfNoneMatch: true });
+			}
 			expect(
 				readInventory(storage, source.inventoryKey).objects.every(
 					(entry) => !entry.key.includes("/prepared/"),
@@ -1626,6 +1631,12 @@ describe("large desktop recording snapshots", () => {
 		await advanceDesktopRecordingSourceCommit(video, checkpoint);
 		const source = await finishSnapshot(video, checkpoint);
 		expect(storage.bucket.multipart.complete).toHaveBeenCalledOnce();
+		expect(storage.bucket.multipart.complete).toHaveBeenCalledWith(
+			expect.any(String),
+			expect.any(String),
+			expect.objectContaining({ IfNoneMatch: "*" }),
+			{ retryWithoutUnsupportedIfNoneMatch: true },
+		);
 		expect(
 			(await buildDesktopRecordingSourceUrls(video, source)).sourceFileSize,
 		).toBe(8 * 1024 ** 3);
@@ -2704,6 +2715,24 @@ describe("listed source commit on Cap's bucket", () => {
 				key.endsWith("segment_003.m4s"),
 			).length,
 		).toBeGreaterThan(0);
+	});
+
+	it("lists the snapshot once before verifying and once to verify it", async () => {
+		const storage = listedStorage();
+		seedRecording(storage, 20, 10);
+		const source = await commitDesktopRecordingSource(recording(), generation);
+		const listedPrefixes = storage.bucket.listObjects.mock.calls.map(
+			([input]) => input.prefix,
+		);
+		expect(
+			listedPrefixes.filter((prefix) => prefix?.endsWith("/segments/video/")),
+		).toHaveLength(2);
+		expect(
+			listedPrefixes.filter((prefix) => prefix?.endsWith("/segments/audio/")),
+		).toHaveLength(2);
+		const shape = inventoryShape(storage, source.inventoryKey);
+		expect(shape).toHaveLength(32);
+		expect(shape.every((entry) => entry.identityMatchesCopy)).toBe(true);
 	});
 
 	it("proves checkpoint writes by their ETag instead of reading them back", async () => {
