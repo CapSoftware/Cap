@@ -18,7 +18,7 @@ pub use session::{
 pub use workspace::{bundle_busy, recover_interrupted_repairs};
 
 pub fn init(cx: &mut gpui::App) {
-    availability::refresh(cx);
+    availability::start(cx);
     cx.background_executor()
         .spawn(async {
             recover_interrupted_repairs(&crate::library::known_recordings_dirs());

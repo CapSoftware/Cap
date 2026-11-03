@@ -10611,7 +10611,6 @@ impl EditorWindow {
     /// the canvas.
     fn render_error_state(&self, message: &str, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
-        crate::repair::availability::refresh(cx);
         let can_fix = crate::repair::availability::fix_enabled();
         div()
             .absolute()

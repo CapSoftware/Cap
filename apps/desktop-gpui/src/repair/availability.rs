@@ -1,5 +1,5 @@
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde::Deserialize;
 
@@ -25,14 +25,12 @@ struct WireConfig {
 
 struct State {
     config: Option<RepairConfig>,
-    fetched_at: Option<Instant>,
     in_flight: bool,
     pinned: bool,
 }
 
 static STATE: Mutex<State> = Mutex::new(State {
     config: None,
-    fetched_at: None,
     in_flight: false,
     pinned: false,
 });
@@ -95,13 +93,20 @@ async fn fetch(base: String) -> Option<RepairConfig> {
     parse_config(status, &body)
 }
 
-pub fn refresh(cx: &mut gpui::App) {
+pub fn start(cx: &mut gpui::App) {
+    cx.spawn(async move |cx| {
+        loop {
+            cx.update(refresh);
+            cx.background_executor().timer(REFRESH_INTERVAL).await;
+        }
+    })
+    .detach();
+}
+
+fn refresh(cx: &mut gpui::App) {
     {
         let mut state = state();
-        let fresh = state
-            .fetched_at
-            .is_some_and(|fetched| fetched.elapsed() < REFRESH_INTERVAL);
-        if state.in_flight || fresh || state.pinned {
+        if state.in_flight || state.pinned {
             return;
         }
         state.in_flight = true;
@@ -115,7 +120,6 @@ pub fn refresh(cx: &mut gpui::App) {
             if state.pinned {
                 return;
             }
-            state.fetched_at = Some(Instant::now());
             let changed = state.config != config;
             state.config = config;
             changed

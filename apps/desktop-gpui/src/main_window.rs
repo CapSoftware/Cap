@@ -3543,9 +3543,6 @@ impl MainWindow {
         let theme = self.theme;
         let repairing = app_windows::is_repair_open(&recording.project_path, cx);
         let pending = self.recovery_pending || repairing;
-        if self.recovery_error.is_some() {
-            crate::repair::availability::refresh(cx);
-        }
         let can_fix = self.recovery_error.is_some()
             && !self.recovery_pending
             && crate::repair::availability::fix_enabled();
