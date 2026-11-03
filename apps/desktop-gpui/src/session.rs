@@ -1548,27 +1548,36 @@ impl RecordingSession {
     /// an Instant pause keeps ScreenCaptureKit running. Returns whether
     /// anything was dispatched; the sleep is held while it settles.
     pub fn prepare_for_sleep(&mut self, cx: &mut Context<Self>) -> bool {
-        if !pauses_for_sleep(self.phase, self.pause_unavailable()) {
-            return false;
+        match sleep_action(
+            self.phase,
+            self.mode(),
+            self.pause_unavailable(),
+            self.pipeline_failed,
+        ) {
+            SleepAction::None => false,
+            SleepAction::StopInstant => {
+                tracing::info!("stopping the Instant recording before sleep");
+                self.stop(cx);
+                self.phase == Phase::Stopping
+            }
+            SleepAction::PauseStudio => {
+                self.toggle_pause(cx);
+                let pausing = self.pause_control.pending.is_some();
+                if pausing {
+                    self.paused_for_sleep = true;
+                    cx.notify();
+                }
+                pausing
+            }
         }
-        if self.mode() == Some(recording::RecordingMode::Instant) {
-            tracing::info!("stopping the Instant recording before sleep");
-            self.stop(cx);
-            return self.phase == Phase::Stopping;
-        }
-        self.toggle_pause(cx);
-        let pausing = self.pause_control.pending.is_some();
-        if pausing {
-            self.paused_for_sleep = true;
-            cx.notify();
-        }
-        pausing
     }
 
-    /// Whether a control the user (or sleep) already started is still
-    /// settling: a pause or resume in flight, or a stop.
+    /// Whether a control already started is still settling: a stop, or a
+    /// Studio pause or resume in flight. An Instant recording is stopped
+    /// straight away instead, because its pause keeps capture running.
     pub fn sleep_should_wait(&self) -> bool {
-        self.pause_pending() || self.phase == Phase::Stopping
+        self.phase == Phase::Stopping
+            || (self.pause_pending() && self.mode() != Some(recording::RecordingMode::Instant))
     }
 
     pub fn woke_from_sleep(&mut self, cx: &mut Context<Self>) {
@@ -2110,8 +2119,30 @@ impl RecordingSession {
     }
 }
 
-fn pauses_for_sleep(phase: Phase, pause_unavailable: bool) -> bool {
-    phase == (Phase::Recording { paused: false }) && !pause_unavailable
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SleepAction {
+    None,
+    PauseStudio,
+    StopInstant,
+}
+
+fn sleep_action(
+    phase: Phase,
+    mode: Option<recording::RecordingMode>,
+    pause_unavailable: bool,
+    pipeline_failed: bool,
+) -> SleepAction {
+    match (phase, mode) {
+        (Phase::Recording { .. }, Some(recording::RecordingMode::Instant)) if !pipeline_failed => {
+            SleepAction::StopInstant
+        }
+        (Phase::Recording { paused: false }, Some(recording::RecordingMode::Studio))
+            if !pause_unavailable =>
+        {
+            SleepAction::PauseStudio
+        }
+        _ => SleepAction::None,
+    }
 }
 
 fn recording_failure_is_current(phase: Phase, current: u64, completed: u64) -> bool {
@@ -2741,16 +2772,50 @@ mod pause_control_tests {
     use super::*;
 
     #[test]
-    fn only_a_running_recording_that_can_pause_is_paused_for_sleep() {
-        assert!(pauses_for_sleep(Phase::Recording { paused: false }, false));
-        assert!(!pauses_for_sleep(Phase::Recording { paused: false }, true));
-        for phase in [
-            Phase::Idle,
-            Phase::Starting,
-            Phase::Recording { paused: true },
-            Phase::Stopping,
+    fn sleep_pauses_running_studio_and_stops_every_live_instant_recording() {
+        use recording::RecordingMode::{Instant, Studio};
+        let running = Phase::Recording { paused: false };
+        let paused = Phase::Recording { paused: true };
+
+        assert_eq!(
+            sleep_action(running, Some(Studio), false, false),
+            SleepAction::PauseStudio
+        );
+        assert_eq!(
+            sleep_action(running, Some(Studio), true, false),
+            SleepAction::None
+        );
+        assert_eq!(
+            sleep_action(paused, Some(Studio), false, false),
+            SleepAction::None
+        );
+
+        for (phase, pause_unavailable) in [
+            (running, false),
+            (paused, false),
+            (running, true),
+            (paused, true),
         ] {
-            assert!(!pauses_for_sleep(phase, false), "{phase:?}");
+            assert_eq!(
+                sleep_action(phase, Some(Instant), pause_unavailable, false),
+                SleepAction::StopInstant,
+                "{phase:?} pause_unavailable={pause_unavailable}"
+            );
+        }
+        assert_eq!(
+            sleep_action(paused, Some(Instant), false, true),
+            SleepAction::None,
+            "a failed pipeline is already being stopped"
+        );
+
+        for phase in [Phase::Idle, Phase::Starting, Phase::Stopping] {
+            for mode in [Some(Studio), Some(Instant), None] {
+                assert_eq!(
+                    sleep_action(phase, mode, false, false),
+                    SleepAction::None,
+                    "{phase:?}"
+                );
+            }
         }
     }
 
