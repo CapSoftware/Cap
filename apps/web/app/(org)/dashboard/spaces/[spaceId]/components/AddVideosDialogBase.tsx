@@ -16,7 +16,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import { Search } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 import * as z from "zod";
@@ -90,6 +90,7 @@ function AddVideosDialogBase<T>({
 	getEntityVideoIds,
 }: AddVideosDialogBaseProp<T>) {
 	const [selectedVideos, setSelectedVideos] = useState<Video.VideoId[]>([]);
+	const dialogSession = useRef(0);
 	const [searchTerm, setSearchTerm] = useState("");
 	const filterTabs = ["all", "added", "notAdded"];
 
@@ -139,6 +140,7 @@ function AddVideosDialogBase<T>({
 		}: {
 			toAdd: Video.VideoId[];
 			toRemove: Video.VideoId[];
+			session: number;
 		}) => {
 			let addResult: UpdateVideosResult = { success: true };
 			let removeResult: UpdateVideosResult = { success: true };
@@ -150,16 +152,9 @@ function AddVideosDialogBase<T>({
 			}
 			return { addResult, removeResult };
 		},
-		onSuccess: async (result, { toAdd, toRemove }) => {
-			const { addResult, removeResult } = result || {};
-
-			setSelectedVideos((selected) =>
-				selected.filter(
-					(id) =>
-						!(addResult.success && toAdd.includes(id)) &&
-						!(removeResult.success && toRemove.includes(id)),
-				),
-			);
+		onSuccess: async (result, { toAdd, toRemove, session }) => {
+			const { addResult, removeResult } = result;
+			const completed = addResult.success && removeResult.success;
 
 			// Invalidate both queries to ensure UI updates
 			await Promise.all([
@@ -169,10 +164,20 @@ function AddVideosDialogBase<T>({
 				}),
 			]);
 
-			if ((addResult?.success ?? true) && (removeResult?.success ?? true)) {
+			if (completed) onVideosAdded?.();
+			if (session !== dialogSession.current) return;
+
+			setSelectedVideos((selected) =>
+				selected.filter(
+					(id) =>
+						!(addResult.success && toAdd.includes(id)) &&
+						!(removeResult.success && toRemove.includes(id)),
+				),
+			);
+
+			if (completed) {
 				toast.success("Videos updated successfully");
 				setSelectedVideos([]);
-				onVideosAdded?.();
 				onClose();
 			} else {
 				toast.error(
@@ -222,7 +227,11 @@ function AddVideosDialogBase<T>({
 		const toAdd = selectedVideos.filter((id) => !entityVideoIds.includes(id));
 		// To remove: selected and already in entity
 		const toRemove = selectedVideos.filter((id) => entityVideoIds.includes(id));
-		updateVideosMutation.mutate({ toAdd, toRemove });
+		updateVideosMutation.mutate({
+			toAdd,
+			toRemove,
+			session: dialogSession.current,
+		});
 	};
 
 	// Reset state when dialog closes
@@ -232,6 +241,9 @@ function AddVideosDialogBase<T>({
 			setSearchTerm("");
 			form.reset();
 		}
+		return () => {
+			dialogSession.current += 1;
+		};
 	}, [open, form]);
 
 	return (

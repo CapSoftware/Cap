@@ -112,6 +112,24 @@ async function flushUpdates() {
 	});
 }
 
+async function renderDialog(
+	props: Parameters<typeof AddVideosDialogBase<string>>[0],
+) {
+	await act(async () => {
+		root.render(
+			createElement(
+				TooltipProvider,
+				null,
+				createElement(
+					QueryClientProvider,
+					{ client: queryClient },
+					createElement(AddVideosDialogBase<string>, props),
+				),
+			),
+		);
+	});
+}
+
 it.each(["addition", "removal"])(
 	"retries a failed %s without reversing the successful operation",
 	async (failure) => {
@@ -130,30 +148,18 @@ it.each(["addition", "removal"])(
 			addVideos.mockResolvedValueOnce({ success: false });
 		else removeVideos.mockResolvedValueOnce({ success: false });
 		const onClose = vi.fn();
-		await act(async () => {
-			root.render(
-				createElement(
-					TooltipProvider,
-					null,
-					createElement(
-						QueryClientProvider,
-						{ client: queryClient },
-						createElement(AddVideosDialogBase<string>, {
-							open: true,
-							onClose,
-							entityId: "folder",
-							entityName: "Demo folder",
-							addVideos,
-							removeVideos,
-							getVideos: async () => ({ success: true, data: videoData }),
-							getEntityVideoIds: async () => ({
-								success: true,
-								data: [...membership],
-							}),
-						}),
-					),
-				),
-			);
+		await renderDialog({
+			open: true,
+			onClose,
+			entityId: "folder",
+			entityName: "Demo folder",
+			addVideos,
+			removeVideos,
+			getVideos: async () => ({ success: true, data: videoData }),
+			getEntityVideoIds: async () => ({
+				success: true,
+				data: [...membership],
+			}),
 		});
 		await flushUpdates();
 		await act(async () => button(newId).click());
@@ -171,5 +177,70 @@ it.each(["addition", "removal"])(
 		expect(removeVideos).toHaveBeenCalledTimes(failure === "removal" ? 2 : 1);
 		expect(removeVideos).toHaveBeenLastCalledWith("folder", [existingId]);
 		expect(onClose).toHaveBeenCalledOnce();
+	},
+);
+
+it.each([false, true])(
+	"keeps reopened selections when the previous removal completes with success=%s",
+	async (success) => {
+		const membership = new Set([existingId]);
+		const pending = Promise.withResolvers<{ success: boolean }>();
+		const addVideos = vi.fn(async (_entityId: string, ids: Video.VideoId[]) => {
+			for (const id of ids) membership.add(id);
+			return { success: true };
+		});
+		const removeVideos = vi
+			.fn(async (_entityId: string, ids: Video.VideoId[]) => {
+				for (const id of ids) membership.delete(id);
+				return { success: true };
+			})
+			.mockImplementationOnce(async (_entityId, ids) => {
+				const result = await pending.promise;
+				if (result.success) {
+					for (const id of ids) membership.delete(id);
+				}
+				return result;
+			});
+		const onClose = vi.fn();
+		const onVideosAdded = vi.fn();
+		const props = {
+			open: true,
+			onClose,
+			onVideosAdded,
+			entityId: "folder",
+			entityName: "Demo folder",
+			addVideos,
+			removeVideos,
+			getVideos: async () => ({ success: true, data: videoData }),
+			getEntityVideoIds: async () => ({
+				success: true,
+				data: [...membership],
+			}),
+		};
+		await renderDialog(props);
+		await flushUpdates();
+		await act(async () => button(newId).click());
+		await act(async () => button(existingId).click());
+		await act(async () => button("Update videos").click());
+		await flushUpdates();
+		expect(removeVideos).toHaveBeenCalledOnce();
+		await act(async () => button("Cancel").click());
+		await renderDialog({ ...props, open: false });
+		await renderDialog(props);
+		await flushUpdates();
+		await act(async () => button(newId).click());
+		expect(document.body.textContent).toContain("1 video selected");
+		await act(async () => pending.resolve({ success }));
+		await flushUpdates();
+		expect(document.body.textContent).toContain("1 video selected");
+		expect(onClose).toHaveBeenCalledOnce();
+		expect(onVideosAdded).toHaveBeenCalledTimes(success ? 1 : 0);
+		await act(async () => button("Update videos").click());
+		await flushUpdates();
+		expect([...membership]).toEqual(success ? [] : [existingId]);
+		expect(addVideos).toHaveBeenCalledOnce();
+		expect(removeVideos).toHaveBeenLastCalledWith("folder", [newId]);
+		expect(onClose).toHaveBeenCalledTimes(2);
+		expect(onVideosAdded).toHaveBeenCalledTimes(success ? 2 : 1);
 	},
 );
