@@ -2801,7 +2801,9 @@ impl RecoveryManager {
         let mut config = match ProjectConfiguration::load(&recording.project_path) {
             Ok(config) => config,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                ProjectConfiguration::default()
+                let mut config = ProjectConfiguration::default();
+                config.markers = Self::recovered_markers(recording, inner, &timeline_segments);
+                config
             }
             Err(error) => return Err(error.into()),
         };
@@ -2828,6 +2830,36 @@ impl RecoveryManager {
         finalization_info!("{}", purpose.timeline_message());
 
         Ok(())
+    }
+
+    /// The markers a recording that never stopped left in its sidecar. Only a
+    /// project without a config reads them: a normal stop already saved them
+    /// into the config, and the user may have deleted them since.
+    fn recovered_markers(
+        recording: &IncompleteRecording,
+        inner: &MultipleSegments,
+        timeline_segments: &[TimelineSegment],
+    ) -> Vec<cap_project::TimelineMarker> {
+        let recorded = crate::markers::read_recorded_markers(&recording.project_path);
+        if recorded.is_empty() {
+            return Vec::new();
+        }
+        let clocks: Vec<_> = inner
+            .segments
+            .iter()
+            .zip(timeline_segments)
+            .map(|(segment, timeline)| crate::markers::MarkerSegmentClock {
+                latest_start: segment.latest_start_time(),
+                duration: timeline.end,
+            })
+            .collect();
+        crate::markers::place_recorded_markers(&recorded, &clocks, |original| {
+            recording
+                .recoverable_segments
+                .iter()
+                .position(|segment| segment.index == original)
+                .and_then(|position| u32::try_from(position).ok())
+        })
     }
 
     fn load_existing_cursors(project_path: &Path) -> Cursors {
