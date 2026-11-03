@@ -62,6 +62,14 @@ impl CapturedFrameExt for CapturedFrame {
     fn as_ffmpeg(&self) -> Result<ffmpeg::frame::Video, AsFFmpegError> {
         sample_buf_as_ffmpeg(self.native().sample_buf())
     }
+
+    fn as_ffmpeg_covering(
+        &self,
+        _max_width: u32,
+        _max_height: u32,
+    ) -> Result<ffmpeg::frame::Video, AsFFmpegError> {
+        self.as_ffmpeg()
+    }
 }
 
 // Standalone so consumers holding a bare retained CMSampleBuffer (e.g. the
