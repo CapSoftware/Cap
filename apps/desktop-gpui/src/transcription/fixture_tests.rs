@@ -203,7 +203,7 @@ fn make_caption_demo_project() {
     let out = PathBuf::from(std::env::var("CAP_DEMO_OUT").expect("CAP_DEMO_OUT"));
     let speech = PathBuf::from(std::env::var("CAP_DEMO_AUDIO").expect("CAP_DEMO_AUDIO"));
     let model = std::env::var("CAP_DEMO_MODEL").unwrap_or_else(|_| "best".into());
-    let duration = 9.0;
+    let duration = 14.5;
     let spec = FixtureSpec {
         name: "caption-demo".into(),
         segments: vec![SegmentSpec {
