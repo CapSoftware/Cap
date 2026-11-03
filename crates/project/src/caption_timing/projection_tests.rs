@@ -239,7 +239,7 @@ fn baseline_projection(
                 start: f64::from(segment.start),
                 end: f64::from(segment.end),
                 text: segment.text,
-                source_words: 0..segment.words.len(),
+                source_words: (0..segment.words.len()).collect(),
                 words: segment.words,
             })
             .collect();
@@ -306,10 +306,9 @@ fn baseline_projection(
                     source_words.push(index);
                 }
 
-                let (Some(&first), Some(&last)) = (source_words.first(), source_words.last())
-                else {
+                if mapped_words.is_empty() {
                     continue;
-                };
+                }
 
                 let start = mapped_words
                     .first()
@@ -323,7 +322,7 @@ fn baseline_projection(
                     end,
                     text: caption_text_from_words(&mapped_words),
                     words: mapped_words,
-                    source_words: first..last + 1,
+                    source_words,
                 });
             } else {
                 let Some((start, end)) = map_time_range_within_mapping(
@@ -340,7 +339,7 @@ fn baseline_projection(
                     end,
                     text: caption.text.clone(),
                     words: Vec::new(),
-                    source_words: 0..0,
+                    source_words: Vec::new(),
                 });
             }
         }

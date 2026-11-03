@@ -245,7 +245,7 @@ struct MappedCaption {
     end: f64,
     text: String,
     words: Vec<CaptionWord>,
-    source_words: std::ops::Range<usize>,
+    source_words: Vec<usize>,
 }
 
 fn map_captions_to_edited_timeline(
@@ -262,7 +262,7 @@ fn map_captions_to_edited_timeline(
                 start: f64::from(segment.start),
                 end: f64::from(segment.end),
                 text: segment.text,
-                source_words: 0..segment.words.len(),
+                source_words: (0..segment.words.len()).collect(),
                 words: segment.words,
             })
             .collect();
@@ -355,7 +355,7 @@ fn map_captions_to_edited_timeline(
                 }
 
                 let mut mapped_words = Vec::new();
-                let mut source_words = None;
+                let mut source_words = Vec::new();
                 for (index, word) in caption.words.iter().enumerate() {
                     let Some((start, end)) = map_time_range_within_mapping(
                         f64::from(word.start),
@@ -370,12 +370,12 @@ fn map_captions_to_edited_timeline(
                         start: start as f32,
                         end: end as f32,
                     });
-                    source_words.get_or_insert(index..index).end = index + 1;
+                    source_words.push(index);
                 }
 
-                let Some(source_words) = source_words else {
+                if mapped_words.is_empty() {
                     continue;
-                };
+                }
 
                 let start = mapped_words
                     .first()
@@ -406,7 +406,7 @@ fn map_captions_to_edited_timeline(
                     end,
                     text: caption.text.clone(),
                     words: Vec::new(),
-                    source_words: 0..0,
+                    source_words: Vec::new(),
                 });
             }
         }
@@ -421,18 +421,29 @@ fn map_captions_to_edited_timeline(
     result
 }
 
-/// The span of `caption.words` that the track piece `piece_id` shows. A word
-/// straddling a cut belongs to the pieces on both sides.
-pub fn caption_piece_source_words(
+/// One track piece of a source caption: its output-time span and the indices
+/// of the caption words it shows. A word straddling a cut belongs to the
+/// pieces on both sides.
+pub struct CaptionPiece {
+    pub start: f64,
+    pub end: f64,
+    pub source_words: Vec<usize>,
+}
+
+pub fn caption_piece(
     caption: &CaptionSegment,
     piece_id: &str,
     timeline: &TimelineConfiguration,
     recording_durations: &[f64],
-) -> Option<std::ops::Range<usize>> {
+) -> Option<CaptionPiece> {
     map_captions_to_edited_timeline(std::slice::from_ref(caption), timeline, recording_durations)
         .into_iter()
         .find(|piece| piece.id == piece_id)
-        .map(|piece| piece.source_words)
+        .map(|piece| CaptionPiece {
+            start: piece.start,
+            end: piece.end,
+            source_words: piece.source_words,
+        })
 }
 
 pub fn derive_caption_track_segments(
@@ -848,27 +859,42 @@ mod tests {
     #[test]
     fn caption_pieces_report_the_source_words_they_show() {
         let timeline = project(true, 0.0, 0.5).timeline.unwrap();
-        let word = |text: &str, start, end| CaptionWord {
-            text: text.into(),
-            start,
-            end,
-        };
-        let caption = CaptionSegment {
+        let caption = |words: &[(&str, f32, f32)]| CaptionSegment {
             id: "spoken".into(),
-            start: 1.0,
-            end: 9.0,
-            text: "before across after".into(),
-            words: vec![
-                word("before", 1.0, 2.0),
-                word("across", 4.5, 6.5),
-                word("after", 8.0, 9.0),
-            ],
+            start: 0.0,
+            end: 0.0,
+            text: String::new(),
+            words: words
+                .iter()
+                .map(|(text, start, end)| CaptionWord {
+                    text: (*text).into(),
+                    start: *start,
+                    end: *end,
+                })
+                .collect(),
+        };
+        let pieces = |caption: &CaptionSegment| {
+            ["spoken::edl0", "spoken::edl1", "spoken"].map(|id| {
+                caption_piece(caption, id, &timeline, &[10.0]).map(|piece| piece.source_words)
+            })
         };
 
-        let piece = |id| caption_piece_source_words(&caption, id, &timeline, &[10.0]);
-        assert_eq!(piece("spoken::edl0"), Some(0..2));
-        assert_eq!(piece("spoken::edl1"), Some(1..3));
-        assert_eq!(piece("spoken"), None);
+        let across_cut = caption(&[
+            ("before", 1.0, 2.0),
+            ("across", 4.5, 6.5),
+            ("after", 8.0, 9.0),
+        ]);
+        assert_eq!(
+            pieces(&across_cut),
+            [Some(vec![0, 1]), Some(vec![1, 2]), None]
+        );
+
+        let unsorted = caption(&[
+            ("late-first", 4.0, 4.5),
+            ("second-clip", 7.0, 7.5),
+            ("early-last", 1.0, 1.5),
+        ]);
+        assert_eq!(pieces(&unsorted), [Some(vec![0, 2]), Some(vec![1]), None]);
     }
 
     #[test]

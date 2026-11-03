@@ -12,7 +12,7 @@ mod shapes;
 
 pub use animated_gradient::*;
 pub use caption_timing::{
-    caption_piece_source_words, derive_caption_track_segments, source_caption_id,
+    CaptionPiece, caption_piece, derive_caption_track_segments, source_caption_id,
     synchronize_captions, transcription_ranges_cover, transcription_source_ranges,
 };
 pub use caption_words::{
