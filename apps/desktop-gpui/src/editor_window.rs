@@ -2604,6 +2604,7 @@ impl EditorWindow {
         }
         self.synchronize_caption_track(false);
         self.history.record(&self.project);
+        self.style_presets.close_menu();
         if rebuild_timeline {
             self.rebuild_timeline();
         } else {
@@ -2754,6 +2755,7 @@ impl EditorWindow {
         self.sidebar.style_target = None;
         self.sidebar.menu = None;
         self.text_menu = None;
+        self.style_presets.close_menu();
         self.selection = None;
         self.sidebar.image_asset_status = None;
         self.canvas_selection = None;
@@ -4306,6 +4308,7 @@ impl EditorWindow {
     pub(crate) fn set_selection(&mut self, selection: Option<Selection>, cx: &mut Context<Self>) {
         if self.selection != selection {
             self.text_menu = None;
+            self.style_presets.close_menu();
             self.dismiss_frame_controls(cx);
             self.end_field_edit(cx);
             self.close_color_picker(cx);
