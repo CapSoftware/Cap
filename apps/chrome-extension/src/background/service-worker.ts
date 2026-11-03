@@ -1145,9 +1145,10 @@ const signOutIfSessionExpired = async (message: string, generation: number) => {
 	) {
 		return;
 	}
+	// Saved first so a popup reacting to the cleared key can read it.
+	await saveAuthError(SESSION_EXPIRED_MESSAGE);
 	await clearAuth();
 	await resetBootstrapCache();
-	await saveAuthError(SESSION_EXPIRED_MESSAGE);
 };
 
 const refreshBootstrap = (settings: ExtensionSettings, auth: ExtensionAuth) => {
