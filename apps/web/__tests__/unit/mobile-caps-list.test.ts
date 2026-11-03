@@ -57,6 +57,7 @@ let empty = false;
 let denied = false;
 let failDatabase = false;
 let failAnalytics = false;
+let uploadRows = false;
 let latency = 0;
 let activeQueries = 0;
 let peakQueries = 0;
@@ -65,6 +66,14 @@ let analyticsIds: readonly Video.VideoId[] = [];
 
 function owner(index: number) {
 	return !sharedList || index % 4 === 0 ? "viewer" : `owner-${index % 4}`;
+}
+
+function joinsUpload(index: number, sql: string, params: unknown[]) {
+	if (!uploadRows || (index !== 5 && index !== 6)) return false;
+	const filter = sql.indexOf("`videos`.`isScreenshot` = ?");
+	if (filter === -1) return true;
+	const isScreenshot = params[sql.slice(0, filter).split("?").length - 1];
+	return isScreenshot === (index === 5);
 }
 
 function preferences(id: string) {
@@ -111,13 +120,9 @@ const client = drizzle(async (sql, params) => {
 								index === 7,
 								2,
 								1,
-								null,
-								null,
-								null,
-								null,
-								null,
-								null,
-								null,
+								...(joinsUpload(index, sql, params)
+									? [`video-${index}`, 1024, 2048, "uploading", 0, null, null]
+									: [null, null, null, null, null, null, null]),
 								null,
 								null,
 							];
@@ -257,6 +262,7 @@ beforeEach(() => {
 	denied = false;
 	failDatabase = false;
 	failAnalytics = false;
+	uploadRows = false;
 	latency = 0;
 	activeQueries = 0;
 	peakQueries = 0;
@@ -332,6 +338,31 @@ describe("mobile Caps list", () => {
 		const response = await list();
 		expect(response.status).toBe(200);
 		expect((await response.json()).caps).toEqual(expectedCaps());
+	});
+
+	it("shows video uploads but not leftover screenshot progress rows", async () => {
+		uploadRows = true;
+		const response = await list();
+		expect(response.status).toBe(200);
+		expect((await response.json()).caps).toEqual(
+			expectedCaps().map((cap) =>
+				cap.id === "video-6"
+					? {
+							...cap,
+							thumbnailUrl: null,
+							thumbnailCacheKey: null,
+							upload: {
+								uploaded: 1024,
+								total: 2048,
+								phase: "uploading",
+								processingProgress: 0,
+								processingMessage: null,
+								processingError: null,
+							},
+						}
+					: cap,
+			),
+		);
 	});
 
 	it("rejects inaccessible spaces before loading caps", async () => {
