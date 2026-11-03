@@ -296,35 +296,6 @@ impl Emissions for Acoustic {
 
 const WINDOW_SECONDS: f64 = 20.0;
 const WINDOW_MARGIN_SECONDS: f64 = 0.6;
-const ENGLISH_MARKERS: [&str; 24] = [
-    "the", "and", "a", "to", "of", "i", "you", "it", "is", "that", "in", "we", "this", "so", "for",
-    "on", "but", "with", "was", "just", "be", "are", "have", "what",
-];
-
-/// Whether a transcript reads as English: the character model only knows the
-/// English alphabet, and its timings are only trusted there.
-pub(super) fn looks_english(words: &[CaptionWord]) -> bool {
-    let mut total = 0usize;
-    let mut markers = 0usize;
-    for word in words {
-        let lower = cap_project::disfluency::normalize_word(&word.text);
-        if lower.is_empty() {
-            continue;
-        }
-        total += 1;
-        if ENGLISH_MARKERS.contains(&lower.as_str()) {
-            markers += 1;
-        }
-        if !lower
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '\'' || c == '-')
-        {
-            return false;
-        }
-    }
-    total > 0 && markers * 8 >= total
-}
-
 pub(super) fn windows(words: &[CaptionWord]) -> Vec<std::ops::Range<usize>> {
     let mut ranges = Vec::new();
     let mut start = 0;
@@ -409,18 +380,36 @@ fn place_unaligned(words: &mut [CaptionWord], aligned: &[bool]) {
         while index < words.len() && !aligned[index] {
             index += 1;
         }
-        let (Some(before), Some(after)) = (run_start.checked_sub(1), words.get(index)) else {
-            continue;
-        };
-        let from = words[before].end;
-        let to = after.start;
-        if to <= from {
-            continue;
-        }
-        let step = (to - from) / (index - run_start) as f32;
-        for (offset, word) in words[run_start..index].iter_mut().enumerate() {
-            word.start = from + step * offset as f32;
-            word.end = from + step * (offset + 1) as f32;
+        let from = run_start.checked_sub(1).map(|before| words[before].end);
+        let to = words.get(index).map(|after| after.start);
+        let run = &mut words[run_start..index];
+        match (from, to) {
+            (Some(from), Some(to)) if to > from => {
+                let step = (to - from) / run.len() as f32;
+                for (offset, word) in run.iter_mut().enumerate() {
+                    word.start = from + step * offset as f32;
+                    word.end = from + step * (offset + 1) as f32;
+                }
+            }
+            (None, Some(to)) => {
+                let overshoot = run.last().map_or(0.0, |last| last.end - to);
+                if overshoot > 0.0 {
+                    for word in run.iter_mut() {
+                        word.start = (word.start - overshoot).max(0.0);
+                        word.end = (word.end - overshoot).max(word.start);
+                    }
+                }
+            }
+            (Some(from), None) => {
+                let overshoot = run.first().map_or(0.0, |first| from - first.start);
+                if overshoot > 0.0 {
+                    for word in run.iter_mut() {
+                        word.start += overshoot;
+                        word.end += overshoot;
+                    }
+                }
+            }
+            _ => {}
         }
     }
 }
@@ -530,23 +519,6 @@ mod tests {
     }
 
     #[test]
-    fn english_detection_needs_common_words_and_plain_letters() {
-        let english: Vec<_> = "so I think we should start with the dashboard"
-            .split(' ')
-            .map(|t| word(t, 0.0, 0.1))
-            .collect();
-        assert!(looks_english(&english));
-        let german: Vec<_> = "ich glaube wir sollten mit dem Dashboard anfangen"
-            .split(' ')
-            .map(|t| word(t, 0.0, 0.1))
-            .collect();
-        assert!(!looks_english(&german));
-        let accented = vec![word("the", 0.0, 0.1), word("café", 0.1, 0.2)];
-        assert!(!looks_english(&accented));
-        assert!(!looks_english(&[]));
-    }
-
-    #[test]
     fn windows_stay_short_and_cut_at_the_widest_gap() {
         let mut words = Vec::new();
         let mut t = 0.0f32;
@@ -597,5 +569,20 @@ mod tests {
         assert!((words[1].start - 1.2).abs() < 1e-6 && (words[1].end - 1.6).abs() < 1e-6);
         assert!((words[2].start - 1.6).abs() < 1e-6 && (words[2].end - 2.0).abs() < 1e-6);
         assert_eq!((words[4].start, words[4].end), (7.0, 8.0));
+    }
+
+    #[test]
+    fn leading_and_trailing_unaligned_words_move_clear_of_their_neighbour() {
+        let mut words = vec![
+            word("42", 0.5, 1.5),
+            word("people", 0.8, 1.2),
+            word("came", 1.3, 1.6),
+            word("2024", 1.4, 2.0),
+        ];
+        place_unaligned(&mut words, &[false, true, true, false]);
+        assert!(words[0].start.abs() < 1e-5 && (words[0].end - 0.8).abs() < 1e-5);
+        assert!((words[3].start - 1.6).abs() < 1e-5 && (words[3].end - 2.2).abs() < 1e-5);
+        keep_order(&mut words);
+        assert_eq!((words[1].start, words[1].end), (0.8, 1.2));
     }
 }
