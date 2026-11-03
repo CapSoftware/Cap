@@ -56,6 +56,7 @@ export const TrimmingTool = () => {
 	const outputVideoRef = useRef<HTMLVideoElement | null>(null);
 	const mediaRecorderRef = useRef<MediaRecorder | null>(null);
 	const recordedChunksRef = useRef<Blob[]>([]);
+	const cancelTrimRef = useRef<(() => void) | null>(null);
 
 	const isVideoFile = (file: File): boolean => {
 		return (
@@ -74,6 +75,7 @@ export const TrimmingTool = () => {
 	};
 
 	const cleanupResources = () => {
+		cancelTrimRef.current?.();
 		if (fileState.videoSrc) {
 			URL.revokeObjectURL(fileState.videoSrc);
 		}
@@ -293,6 +295,7 @@ export const TrimmingTool = () => {
 		try {
 			await processTrim();
 		} catch (err: any) {
+			if (err instanceof DOMException && err.name === "AbortError") return;
 			console.error("Detailed processing error:", err);
 
 			let errorMessage = "Trimming failed: ";
@@ -331,6 +334,8 @@ export const TrimmingTool = () => {
 				return;
 			}
 
+			let cleanupSetup: (() => void) | null = null;
+			let failSetup: ((error: unknown) => void) | null = null;
 			try {
 				const video = videoPreviewRef.current;
 				const canvas = document.createElement("canvas");
@@ -406,6 +411,10 @@ export const TrimmingTool = () => {
 				}
 
 				const stream = canvas.captureStream(60);
+				const canvasTracks = stream.getVideoTracks();
+				cleanupSetup = () => {
+					for (const track of canvasTracks) track.stop();
+				};
 
 				video.muted = false;
 				if (includeAudio) {
@@ -447,6 +456,56 @@ export const TrimmingTool = () => {
 				});
 				mediaRecorderRef.current = recorder;
 				recordedChunksRef.current = [];
+				let settled = false;
+				let completed = false;
+				let frame: number | null = null;
+				let safetyTimeout: ReturnType<typeof setTimeout> | null = null;
+
+				const cleanup = () => {
+					if (frame !== null) cancelAnimationFrame(frame);
+					if (safetyTimeout !== null) clearTimeout(safetyTimeout);
+					video.removeEventListener("ended", handleEnded);
+					video.removeEventListener("error", handleVideoFailure);
+					video.pause();
+					cleanupSetup?.();
+					cleanupSetup = null;
+					if (mediaRecorderRef.current === recorder)
+						mediaRecorderRef.current = null;
+					if (cancelTrimRef.current === cancel) cancelTrimRef.current = null;
+				};
+				const fail = (error: unknown) => {
+					if (settled) return;
+					settled = true;
+					recorder.ondataavailable = null;
+					recorder.onstop = null;
+					recorder.onerror = null;
+					try {
+						if (recorder.state !== "inactive") recorder.stop();
+					} catch {
+					} finally {
+						cleanup();
+						reject(error);
+					}
+				};
+				failSetup = fail;
+				const cancel = () =>
+					fail(new DOMException("Trim cancelled", "AbortError"));
+				const stopRecording = () => {
+					if (settled || recorder.state === "inactive") return;
+					completed = true;
+					try {
+						recorder.stop();
+					} catch (error) {
+						fail(error);
+					}
+				};
+				const handleEnded = () => stopRecording();
+				const handleVideoFailure = () =>
+					fail(new Error("Video playback failed"));
+				cancelTrimRef.current = cancel;
+				video.addEventListener("ended", handleEnded);
+				video.addEventListener("error", handleVideoFailure);
+				recorder.onerror = () => fail(new Error("Recording failed"));
 
 				recorder.ondataavailable = (e) => {
 					if (e.data.size > 0) {
@@ -455,6 +514,13 @@ export const TrimmingTool = () => {
 				};
 
 				recorder.onstop = () => {
+					if (settled) return;
+					if (!completed) {
+						fail(new Error("Recording stopped unexpectedly"));
+						return;
+					}
+					settled = true;
+					cleanup();
 					try {
 						const chunks = recordedChunksRef.current;
 						const blob = new Blob(chunks, {
@@ -490,11 +556,10 @@ export const TrimmingTool = () => {
 				let recordingStartTime: number | null = null;
 
 				const captureFrame = () => {
+					frame = null;
+					if (settled) return;
 					if (video.currentTime >= trimState.endTime) {
-						if (recorder.state === "recording") {
-							recorder.stop();
-							video.pause();
-						}
+						stopRecording();
 						return;
 					}
 
@@ -512,36 +577,29 @@ export const TrimmingTool = () => {
 						progress: Math.round(progress),
 					}));
 
-					requestAnimationFrame(captureFrame);
+					frame = requestAnimationFrame(captureFrame);
 				};
 
 				video
 					.play()
 					.then(() => {
-						requestAnimationFrame(captureFrame);
+						if (!settled) frame = requestAnimationFrame(captureFrame);
 					})
 					.catch((err) => {
 						console.error("Error playing video:", err);
-						reject(err);
+						fail(err);
 					});
 
-				const safetyTimeout = setTimeout(
-					() => {
-						if (recorder.state === "recording") {
-							recorder.stop();
-						}
-					},
+				safetyTimeout = setTimeout(
+					() => fail(new Error("Video processing timed out")),
 					duration * 1000 + 10000,
 				);
-
-				video.onended = () => {
-					clearTimeout(safetyTimeout);
-					if (recorder.state === "recording") {
-						recorder.stop();
-					}
-				};
 			} catch (err) {
-				reject(err);
+				if (failSetup) failSetup(err);
+				else {
+					cleanupSetup?.();
+					reject(err);
+				}
 			}
 		});
 	};
@@ -725,6 +783,7 @@ export const TrimmingTool = () => {
 
 	useEffect(() => {
 		return () => {
+			cancelTrimRef.current?.();
 			if (latestVideoSrcRef.current) {
 				URL.revokeObjectURL(latestVideoSrcRef.current);
 			}
