@@ -375,6 +375,23 @@ jobs:
           fi
           ls -la /dev/dri
 
+      # The hosted runner can build v4l2loopback; Blacksmith's kernel cannot.
+      - name: Install Linux desktop dependencies
+        uses: ./.github/actions/install-desktop-deps
+
+      - name: X11 recording with a camera
+        run: |
+          sudo apt-get install -y -qq "linux-headers-$(uname -r)" v4l2loopback-dkms xvfb xdotool ffmpeg dbus >/dev/null
+          chmod +x "$RUNNER_TEMP/build/cap-gpui"
+          # Each format Cap's Linux camera path converts: packed YUYV, NV12 and
+          # MJPEG (decoded before use).
+          for format in yuyv422 nv12 mjpeg; do
+            dir="$RUNNER_TEMP/out/x11-camera-$format"
+            sudo install -d -o "$(id -u)" -g "$(id -g)" "$dir"
+            CAMERA_FORMAT=$format bash scripts/linux-desktop-harness/x11-camera.sh \
+              "$RUNNER_TEMP/build/cap-gpui" "$RUNNER_TEMP/build/libs" "$dir"
+          done
+
       - name: Hyprland (portal refuses host apps, tray Stop control)
         run: |
           chmod +x "$RUNNER_TEMP/build/cap-gpui"
@@ -402,23 +419,6 @@ jobs:
           cat "$RUNNER_TEMP/out/hyprland-screenshot/result.txt"
           for line in screenshot_taken=yes screenshot_size=yes capture_failed=0 cap_alive=yes panics=0; do
             grep -qx "$line" "$RUNNER_TEMP/out/hyprland-screenshot/result.txt"
-          done
-
-      # The hosted runner can build v4l2loopback; Blacksmith's kernel cannot.
-      - name: Install Linux desktop dependencies
-        uses: ./.github/actions/install-desktop-deps
-
-      - name: X11 recording with a camera
-        run: |
-          sudo apt-get install -y -qq "linux-headers-$(uname -r)" v4l2loopback-dkms xvfb xdotool ffmpeg dbus >/dev/null
-          chmod +x "$RUNNER_TEMP/build/cap-gpui"
-          # Each format Cap's Linux camera path converts: packed YUYV, NV12 and
-          # MJPEG (decoded before use).
-          for format in yuyv422 nv12 mjpeg; do
-            dir="$RUNNER_TEMP/out/x11-camera-$format"
-            sudo install -d -o "$(id -u)" -g "$(id -g)" "$dir"
-            CAMERA_FORMAT=$format bash scripts/linux-desktop-harness/x11-camera.sh \
-              "$RUNNER_TEMP/build/cap-gpui" "$RUNNER_TEMP/build/libs" "$dir"
           done
 
       - name: Hyprland area recording

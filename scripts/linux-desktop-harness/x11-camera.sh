@@ -74,6 +74,36 @@ camera=no started=no finished=no
 wait_log "auto-selecting camera" 30 && camera=yes
 wait_log "auto-record start requested" 30
 sleep 2
+camera_window=""
+for _ in $(seq 40); do
+  camera_window=$(xdotool search --all --onlyvisible --limit 1 --pid "$pid" --name '^Cap Camera$' 2>/dev/null)
+  [[ -n $camera_window ]] && break
+  sleep 0.25
+done
+printf 'camera window: %s\n' "${camera_window:-not found}" >>"$out/actions.log"
+camera_drag=no
+if [[ -n $camera_window ]]; then
+  xdotool getwindowname "$camera_window" getwindowpid "$camera_window" >>"$out/actions.log"
+  eval "$(xdotool getwindowgeometry --shell "$camera_window")"
+  drag_x=$X drag_y=$Y
+  printf 'camera drag origin: %s,%s\n' "$X" "$Y" >>"$out/actions.log"
+  xdotool mousemove --sync --window "$camera_window" "$((WIDTH / 2))" "$((HEIGHT / 2))"
+  xdotool mousedown 1
+  sleep 0.1
+  xdotool mousemove_relative --sync -- -100 -60
+  sleep 0.2
+  xdotool mouseup 1
+  for _ in $(seq 20); do
+    eval "$(xdotool getwindowgeometry --shell "$camera_window")"
+    if [[ $X == $((drag_x - 100)) && $Y == $((drag_y - 60)) ]]; then
+      camera_drag=yes
+      break
+    fi
+    sleep 0.1
+  done
+  printf 'camera drag final: %s,%s expected: %s,%s\n' "$X" "$Y" "$((drag_x - 100))" "$((drag_y - 60))" >>"$out/actions.log"
+fi
+result camera_drag "$camera_drag"
 xdotool key ctrl+shift+F9
 wait_log "recording started" 30 && started=yes
 if [[ $started == yes ]]; then
@@ -108,7 +138,7 @@ kill "$pid" 2>/dev/null
 
 cat "$out/result.txt" "$out/actions.log"
 failed=0
-for key in camera_selected started finished camera_size camera_matches_display cap_alive panics; do
+for key in camera_selected camera_drag started finished camera_size camera_matches_display cap_alive panics; do
   grep -q "^$key=" "$out/result.txt" || { echo "x11-camera: no $key result" >&2; failed=1; }
 done
 while IFS== read -r key value; do
