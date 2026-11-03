@@ -1136,19 +1136,24 @@ const requireBootstrapGeneration = (generation: number) => {
 	}
 };
 
-const signOutIfAuthRejected = async (authApiKey: string) => {
-	// Saved first so a popup reacting to the cleared key can read it.
-	await saveAuthError(SESSION_EXPIRED_MESSAGE);
-	// Nothing runs between this read and the clear, so a sign-in that saved a
-	// new key meanwhile is seen here and keeps it.
-	const current = await loadAuth().catch(() => null);
-	if (current?.authApiKey !== authApiKey) {
-		await clearAuthError();
-		return;
-	}
-	await clearAuth();
-	await resetBootstrapCache();
+// Sign-in and sign-out on a rejected key both read and write the stored key
+// across awaits, so they run one at a time.
+let authWrites: Promise<void> = Promise.resolve();
+const serializeAuthWrite = (write: () => Promise<void>) => {
+	const next = authWrites.then(write, write);
+	authWrites = next.catch(() => undefined);
+	return next;
 };
+
+const signOutIfAuthRejected = (authApiKey: string) =>
+	serializeAuthWrite(async () => {
+		const current = await loadAuth().catch(() => null);
+		if (current?.authApiKey !== authApiKey) return;
+		// Saved first so a popup reacting to the cleared key can read it.
+		await saveAuthError(SESSION_EXPIRED_MESSAGE);
+		await clearAuth();
+		await resetBootstrapCache();
+	});
 
 const refreshBootstrap = (settings: ExtensionSettings, auth: ExtensionAuth) => {
 	if (bootstrapRefreshInFlight) return bootstrapRefreshInFlight;
@@ -1736,8 +1741,10 @@ const beginAuthFlow = async (settings: ExtensionSettings) => {
 			if (previousAuth && previousAuth.authApiKey !== auth.authApiKey) {
 				await revokeAuth(settings, previousAuth).catch(() => undefined);
 			}
-			await saveAuth(auth);
-			await resetBootstrapCache();
+			await serializeAuthWrite(async () => {
+				await saveAuth(auth);
+				await resetBootstrapCache();
+			});
 			void refreshBootstrap(settings, auth).catch(() => undefined);
 		})
 		.catch(async (error: unknown) => {

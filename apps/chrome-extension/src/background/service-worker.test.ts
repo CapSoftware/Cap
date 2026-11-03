@@ -285,6 +285,16 @@ describe("bootstrap account ownership", () => {
 		expect(await send("bootstrap")).toMatchObject({ authError: null });
 	});
 
+	it("keeps the expiry message when a later request reports the same key", async () => {
+		await reportRejected(oldAuth.authApiKey);
+		await reportRejected(oldAuth.authApiKey);
+
+		expect(await send("bootstrap")).toMatchObject({
+			auth: null,
+			authError: SESSION_EXPIRED_MESSAGE,
+		});
+	});
+
 	it("stays signed in when the server fails for another reason", async () => {
 		delete stored[cacheKey];
 		requests.mockImplementation(async () => new Response("", { status: 403 }));
