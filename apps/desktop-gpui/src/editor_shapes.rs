@@ -811,6 +811,13 @@ impl EditorWindow {
             .map_or(&[], |timeline| timeline.shape_segments.as_slice())
     }
 
+    pub(crate) fn hovering_visible_shape(&self) -> bool {
+        let time = self.preview_or_playhead();
+        self.shape_hover
+            .and_then(|index| self.shape_segments().get(index))
+            .is_some_and(|segment| segment.is_active_at(time))
+    }
+
     pub(crate) fn selected_shape_indices(&self) -> Vec<usize> {
         let len = self.shape_segments().len();
         let mut indices: Vec<usize> = self
@@ -1605,7 +1612,7 @@ impl EditorWindow {
         };
         let cursor = if self.shape_tool.is_some() {
             Some(CursorStyle::Crosshair)
-        } else if self.shape_hover.is_some() {
+        } else if self.hovering_visible_shape() {
             Some(CursorStyle::OpenHand)
         } else {
             None
