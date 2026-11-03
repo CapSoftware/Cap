@@ -1680,15 +1680,17 @@ fn preparing_presentation_for(
     library: &cap_project::AnimatedGradientLibrary,
     presets: &crate::presets::PresetsStore,
 ) -> Result<cap_project::ProjectConfiguration, String> {
-    let preset = presets.apply_default(project);
-    let project = preset.as_ref().unwrap_or(project);
-    if blur != crate::store::BlurMode::Off || project.camera.background_blur.is_active() {
+    if blur != crate::store::BlurMode::Off {
         return Err("Camera blur requires ordinary editor loading".into());
     }
+    let preset = presets.apply_default(project);
     if preset.is_none() && library.selected && library.last_used.is_some() {
         return Err("Animated-gradient preferences require ordinary editor loading".into());
     }
-    Ok(project.clone())
+    let mut project = preset.unwrap_or_else(|| project.clone());
+    // Finalization replaces any saved blur with the live toggle, which is off here.
+    project.camera.background_blur = cap_project::BackgroundBlurConfig::default();
+    Ok(project)
 }
 
 /// Style a new recording with the default preset, as the Tauri app's
@@ -5220,6 +5222,27 @@ mod preparing_presentation_tests {
             .is_err()
         );
         assert_eq!(serde_json::to_value(project).unwrap(), original);
+    }
+
+    #[test]
+    fn a_default_preset_saved_with_blur_follows_the_live_blur_toggle() {
+        let mut blurred = cap_project::ProjectConfiguration::default();
+        blurred.camera.background_blur.mode = cap_project::BackgroundBlurMode::Heavy;
+        let presets = crate::presets::PresetsStore {
+            presets: vec![crate::presets::PresetEntry {
+                name: "Blurred".into(),
+                config: crate::presets::preset_config(&blurred),
+            }],
+            default: Some(0),
+        };
+        let shown = preparing_presentation_for(
+            &cap_project::ProjectConfiguration::default(),
+            crate::store::BlurMode::Off,
+            &cap_project::AnimatedGradientLibrary::default(),
+            &presets,
+        )
+        .unwrap();
+        assert!(!shown.camera.background_blur.is_active());
     }
 
     #[test]
