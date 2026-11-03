@@ -155,11 +155,14 @@ impl PointTrackSession {
                 plausible_scale(fit.size.0 / previous.0) && plausible_scale(fit.size.1 / previous.1)
             })
         });
+        // The whole-box tracker applies its own match thresholds (lower ones
+        // for fine detail it had to smooth to see) and reports a box for this
+        // frame only when it found the target.
         let region = self
             .region
             .as_ref()
             .map(TrackSession::latest)
-            .filter(|(region, confidence)| region.time == time && *confidence >= MATCH_SCORE);
+            .filter(|(region, _)| region.time == time);
         // A fit backed by most matched patches wins. When only a few back
         // it, they are more likely stuck on the background than right, so
         // the whole-box track is preferred and the fit used only without

@@ -18,6 +18,8 @@ const MIN_TEMPLATE_DEVIATION: f64 = 2.0;
 const MIN_VISIBLE: f64 = 0.35;
 const REACQUIRE_VISIBLE: f64 = 0.6;
 const LOST_SCORE: f32 = 0.5;
+/// What a match on the smoothed frames must reach, being easier to reach.
+const SMOOTHED_SCORE: f32 = 0.65;
 const REACQUIRE_SCORE: f32 = 0.8;
 const EXACT_SCORE: f32 = 0.93;
 const EDGE_MARGIN: f64 = 0.25;
@@ -71,6 +73,39 @@ impl LumaFrame {
         for row in y..y + height {
             let start = row * self.width + x;
             pixels.extend_from_slice(&self.pixels[start..start + width]);
+        }
+        Self {
+            width,
+            height,
+            pixels: pixels.into(),
+        }
+    }
+
+    /// The frame under a [1, 2, 1] binomial blur in each direction (about
+    /// 0.7 pixels' sigma). Text a pixel or two tall at tracking resolution
+    /// resamples into a different pattern whenever it moves by a fraction of
+    /// a pixel, which dropped correct matches on a dragged terminal window to
+    /// about 0.5, the lost threshold; on the smoothed frames they stay near
+    /// 0.75.
+    fn smoothed(&self) -> Self {
+        let (width, height) = (self.width, self.height);
+        let blur = |at: &dyn Fn(usize) -> f32, index: usize, length: usize| {
+            let before = at(index.saturating_sub(1));
+            let after = at((index + 1).min(length - 1));
+            (before + 2.0 * at(index) + after) * 0.25
+        };
+        let mut rows = vec![0.0; width * height];
+        for y in 0..height {
+            let row = &self.pixels[y * width..(y + 1) * width];
+            for x in 0..width {
+                rows[y * width + x] = blur(&|x| row[x], x, width);
+            }
+        }
+        let mut pixels = vec![0.0; width * height];
+        for x in 0..width {
+            for y in 0..height {
+                pixels[y * width + x] = blur(&|y| rows[y * width + x], y, height);
+            }
         }
         Self {
             width,
@@ -231,7 +266,11 @@ impl Template {
     }
 }
 
-pub(crate) struct Pyramid(Vec<LumaFrame>);
+/// Coarse-to-fine levels of a frame for matching, and the same levels of the
+/// smoothed frame (see [`LumaFrame::smoothed`]), built only when a match on
+/// the sharp levels fails.
+#[derive(Clone)]
+pub(crate) struct Pyramid(Vec<LumaFrame>, std::sync::OnceLock<Box<Pyramid>>);
 
 impl Pyramid {
     pub(crate) fn new(frame: &LumaFrame) -> Self {
@@ -240,7 +279,12 @@ impl Pyramid {
             let next = levels[levels.len() - 1].half();
             levels.push(next);
         }
-        Self(levels)
+        Self(levels, std::sync::OnceLock::new())
+    }
+
+    fn smoothed(&self) -> &Pyramid {
+        self.1
+            .get_or_init(|| Box::new(Pyramid::new(&self.0[0].smoothed())))
     }
 }
 
@@ -253,15 +297,12 @@ struct Appearance {
 
 impl Appearance {
     fn templates(&self, width: usize, height: usize, min_side: usize) -> Vec<Template> {
-        let mut levels = Vec::new();
-        for level in 0..MAX_LEVELS {
-            let (w, h) = (width >> level, height >> level);
-            if level > 0 && w.min(h) < min_side {
-                break;
-            }
-            levels.push(Template::new(self.reference.resized(w.max(1), h.max(1))));
-        }
-        levels
+        templates_of(&self.reference, width, height, min_side)
+    }
+
+    /// Templates for matching against [`Pyramid::smoothed`].
+    fn smoothed_templates(&self, width: usize, height: usize, min_side: usize) -> Vec<Template> {
+        templates_of(&self.reference.smoothed(), width, height, min_side)
     }
 
     fn agrees_in_parts(&self, frame: &LumaFrame, found: Match, size: (usize, usize)) -> bool {
@@ -349,6 +390,25 @@ fn best_in(
 
 /// Coarse-to-fine search for `templates` (one per pyramid level) with its
 /// top-left corner near `center`, in level-0 pixels.
+/// `reference` rescaled to `width` by `height` and halved for each coarser
+/// level, down to `min_side`.
+fn templates_of(
+    reference: &LumaFrame,
+    width: usize,
+    height: usize,
+    min_side: usize,
+) -> Vec<Template> {
+    let mut levels = Vec::new();
+    for level in 0..MAX_LEVELS {
+        let (w, h) = (width >> level, height >> level);
+        if level > 0 && w.min(h) < min_side {
+            break;
+        }
+        levels.push(Template::new(reference.resized(w.max(1), h.max(1))));
+    }
+    levels
+}
+
 fn search(
     pyramid: &Pyramid,
     templates: &[Template],
@@ -596,7 +656,27 @@ impl MotionTracker {
                 )
             })
             .max_by(|a, b| a.score.total_cmp(&b.score))
-            .filter(|found| found.score >= LOST_SCORE)?;
+            .filter(|found| found.score >= LOST_SCORE);
+        let Some(best) = best else {
+            // Fine detail (text a pixel or two tall) that has moved by a
+            // fraction of a pixel no longer matches itself; smoothed, it
+            // does. Only tried after the sharp match fails, because smoothing
+            // also lets look-alikes match each other.
+            let found = [&self.original, &self.recent]
+                .into_iter()
+                .filter_map(|appearance| {
+                    search(
+                        pyramid.smoothed(),
+                        &appearance.smoothed_templates(width, height, MIN_COARSE_SIDE),
+                        predicted,
+                        radius,
+                        MIN_VISIBLE,
+                    )
+                })
+                .max_by(|a, b| a.score.total_cmp(&b.score))
+                .filter(|found| found.score >= SMOOTHED_SCORE)?;
+            return Some(self.accept(pyramid, found, 1.0));
+        };
 
         let center = (
             best.x as f64 + width as f64 / 2.0,
@@ -734,7 +814,7 @@ pub struct TrackSession {
     height: f64,
     points: Vec<TrackPoint>,
     confidence: f32,
-    lost_frames: Vec<(f64, LumaFrame)>,
+    lost_frames: Vec<(f64, Pyramid)>,
     lost_since: Option<f64>,
     lost_spans: Vec<(f64, f64)>,
 }
@@ -822,7 +902,7 @@ impl TrackSession {
             if self.lost_frames.len() == MAX_BUFFERED_FRAMES {
                 self.lost_frames.remove(0);
             }
-            self.lost_frames.push((time, pyramid.0[0].clone()));
+            self.lost_frames.push((time, pyramid.clone()));
             return;
         };
         self.confidence = found.score;
@@ -831,9 +911,9 @@ impl TrackSession {
             let mut back = self.tracker.reversed();
             let mut recovered = Vec::new();
             let mut entering: Option<TrackedBox> = None;
-            for (time, frame) in std::mem::take(&mut self.lost_frames).into_iter().rev() {
+            for (time, pyramid) in std::mem::take(&mut self.lost_frames).into_iter().rev() {
                 let found = match entering {
-                    None => back.follow_only(&Pyramid::new(&frame)),
+                    None => back.follow_only(&pyramid),
                     Some(_) => None,
                 };
                 let found = match found {
@@ -1087,6 +1167,104 @@ mod tests {
         }
         let (left, ..) = box_at(&points, 20.0);
         assert!(left > 100.0, "never jumps to the look-alike: {left}");
+    }
+
+    /// A window of one-pixel text strokes dragged by fractional pixels each
+    /// frame, the way a screen recording scaled down to tracking resolution
+    /// moves a terminal: each frame is the sharp page shifted at four times
+    /// the resolution and averaged down, so the strokes land on different
+    /// pixel phases. Matched only on the sharp frames, this target was lost
+    /// as soon as it moved.
+    #[test]
+    fn follows_fine_text_moving_by_fractions_of_a_pixel() {
+        const FINE: usize = 4;
+        let (page_w, page_h) = (160 * FINE, 100 * FINE);
+        let mut page = vec![40.0_f32; page_w * page_h];
+        // Lines of words with irregular lengths and gaps, each word a run of
+        // one-pixel glyph strokes, so no shift of the page resembles itself.
+        let mut seed = 7_u64;
+        let mut next = |range: usize| {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (seed >> 33) as usize % range
+        };
+        for line in 0..page_h / (6 * FINE) {
+            let mut x = (1 + next(4)) * FINE;
+            while x + 12 * FINE < page_w {
+                for glyph in 0..2 + next(6) {
+                    let shape = next(5);
+                    for dy in 0..2 * FINE {
+                        for dx in 0..FINE {
+                            let gx = x + glyph * 2 * FINE + dx;
+                            let gy = line * 6 * FINE + 2 * FINE + dy;
+                            if shape != 0 || dy < FINE {
+                                page[gy * page_w + gx] = 220.0;
+                            }
+                        }
+                    }
+                }
+                x += (2 + next(6)) * 2 * FINE + (2 + next(3)) * FINE;
+            }
+        }
+        let frame = |at: (f64, f64)| {
+            let mut pixels = vec![120.0_f32; WIDTH * HEIGHT];
+            let (ox, oy) = (
+                (at.0 * FINE as f64).round() as isize,
+                (at.1 * FINE as f64).round() as isize,
+            );
+            for y in 0..HEIGHT {
+                for x in 0..WIDTH {
+                    let mut sum = 0.0;
+                    let mut inside = 0;
+                    for sy in 0..FINE {
+                        for sx in 0..FINE {
+                            let px = (x * FINE + sx) as isize - ox;
+                            let py = (y * FINE + sy) as isize - oy;
+                            if (0..page_w as isize).contains(&px)
+                                && (0..page_h as isize).contains(&py)
+                            {
+                                sum += page[py as usize * page_w + px as usize];
+                                inside += 1;
+                            }
+                        }
+                    }
+                    if inside == FINE * FINE {
+                        pixels[y * WIDTH + x] = sum / inside as f32;
+                    }
+                }
+            }
+            LumaFrame {
+                width: WIDTH,
+                height: HEIGHT,
+                pixels: pixels.into(),
+            }
+        };
+        let path = |step: usize| (40.0 + 3.37 * step as f64, 30.0 + 1.61 * step as f64);
+        let start = path(0);
+        let mut session = TrackSession::new(
+            &frame(start),
+            0.0,
+            (
+                (start.0 + 80.0) / WIDTH as f64,
+                (start.1 + 50.0) / HEIGHT as f64,
+            ),
+            (160.0 / WIDTH as f64, 100.0 / HEIGHT as f64),
+        )
+        .unwrap();
+        for step in 1..=30 {
+            session.push(step as f64, frame(path(step)));
+        }
+        let (points, lost) = session.finish();
+        assert!(lost.is_empty(), "lost {lost:?}");
+        for step in 1..=30 {
+            let (left, top, _, _) = box_at(&points, step as f64);
+            let (x, y) = path(step);
+            assert!(
+                (left - x).abs() <= 1.5 && (top - y).abs() <= 1.5,
+                "{step}: box at {left:.1},{top:.1}, window at {x:.1},{y:.1}"
+            );
+        }
     }
 
     #[test]

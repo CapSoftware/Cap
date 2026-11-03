@@ -3,7 +3,11 @@
 //!
 //!   ffmpeg -i clip.mp4 -vf scale=960:540 -f rawvideo -pix_fmt rgba frames.rgba
 //!   cargo run --release -p cap-gpui-kernels --example mask_track_replay -- \
-//!     frames.rgba 30 "x,y x,y x,y x,y"
+//!     frames.rgba 960x540 30 "x,y x,y x,y x,y"
+//!
+//! Frames dumped by the editor (`CAP_GPUI_MASK_TRACK_DUMP`) are at the
+//! tracking resolution fitted to the recording's aspect ratio, which the
+//! editor logs when tracking starts.
 //!
 //! Points are normalized to the frame (0..1), taken on the first frame. Four
 //! or more track points; two (centre, size) track the whole box instead.
@@ -13,15 +17,17 @@
 use cap_gpui_kernels::motion_track::{LumaFrame, TrackSession};
 use cap_gpui_kernels::point_track::PointTrackSession;
 
-const WIDTH: u32 = 960;
-const HEIGHT: u32 = 540;
-
 fn main() {
     let args = std::env::args().collect::<Vec<_>>();
-    let [_, frames, fps, points] = &args[..] else {
-        eprintln!("usage: mask_track_replay <frames.rgba> <fps> \"x,y x,y ...\"");
+    let [_, frames, size, fps, points] = &args[..] else {
+        eprintln!("usage: mask_track_replay <frames.rgba> <width>x<height> <fps> \"x,y x,y ...\"");
         std::process::exit(2);
     };
+    let (width, height) = size.split_once('x').expect("<width>x<height>");
+    let (width, height): (u32, u32) = (
+        width.parse().expect("width"),
+        height.parse().expect("height"),
+    );
     let fps: f64 = fps.parse().expect("fps");
     let points = points
         .split_whitespace()
@@ -31,10 +37,10 @@ fn main() {
         })
         .collect::<Vec<_>>();
     let bytes = std::fs::read(frames).expect("frames");
-    let frame_len = (WIDTH * HEIGHT * 4) as usize;
+    let frame_len = (width * height * 4) as usize;
     let mut frames = bytes
         .chunks_exact(frame_len)
-        .map(|frame| LumaFrame::from_rgba(frame, WIDTH, HEIGHT, (WIDTH * 4) as usize));
+        .map(|frame| LumaFrame::from_rgba(frame, width, height, (width * 4) as usize));
     let first = frames.next().expect("at least one frame");
     let (path, lost) = if points.len() >= 4 {
         let mut session = PointTrackSession::new(&first, 0.0, &points).expect("trackable points");
@@ -53,7 +59,7 @@ fn main() {
         session.finish()
     };
     for point in path {
-        let (w, h) = (f64::from(WIDTH), f64::from(HEIGHT));
+        let (w, h) = (f64::from(width), f64::from(height));
         println!(
             "{:.3} {:.1} {:.1} {:.1} {:.1}",
             point.time,
