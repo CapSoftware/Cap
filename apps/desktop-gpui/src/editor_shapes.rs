@@ -1073,9 +1073,7 @@ impl EditorWindow {
         }
         let time = self.playhead.max(0.);
         let length = self.new_shape_length(window);
-        let Some((lane, start, end)) = self.shape_placement(time, length) else {
-            return None;
-        };
+        let (lane, start, end) = self.shape_placement(time, length)?;
         let shape = self.shape_template(kind, center, start, end, lane);
         let (animation_in, animation_out) =
             (shape.animation_in_duration, shape.animation_out_duration);
@@ -1567,8 +1565,19 @@ impl EditorWindow {
             copy.track = free_lane(&placed, copy.start, copy.end);
             placed.push(copy.clone());
         }
+        let first = copies.first().map(|copy| {
+            (
+                copy.start,
+                copy.end,
+                copy.animation_in_duration,
+                copy.animation_out_duration,
+            )
+        });
         let inserted = !self.insert_shapes(copies, window, cx).is_empty();
         if inserted {
+            if let Some((start, end, animation_in, animation_out)) = first {
+                self.reveal_shape_at_playhead(start, end, animation_in, animation_out, cx);
+            }
             self.note_edit("paste-shape", Some(TrackKind::Shape));
         }
         inserted
