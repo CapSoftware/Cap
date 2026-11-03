@@ -70,6 +70,23 @@ function readH264Level(filePath: string): number {
 	return Number.parseInt(output, 10);
 }
 
+function readVideoPixelFormat(filePath: string): string {
+	return execFileSync("ffprobe", [
+		"-hide_banner",
+		"-v",
+		"error",
+		"-select_streams",
+		"v:0",
+		"-show_entries",
+		"stream=pix_fmt",
+		"-of",
+		"default=noprint_wrappers=1:nokey=1",
+		filePath,
+	])
+		.toString()
+		.trim();
+}
+
 function readDecodedStreamHash(filePath: string, stream: "v" | "a") {
 	return execFileSync("ffmpeg", [
 		"-hide_banner",
@@ -1309,6 +1326,56 @@ describe("processVideo integration tests", () => {
 			expect(outputMetadata.duration).toBeCloseTo(metadata.duration, 2);
 
 			await tempFile.cleanup();
+		} finally {
+			rmSync(workDir, { recursive: true, force: true });
+		}
+	}, 120000);
+
+	test("re-encodes h264 input that is not 8-bit 4:2:0", async () => {
+		const workDir = mkdtempSync(join(tmpdir(), "cap-h264-pixel-format-"));
+		try {
+			for (const source of [
+				{ pixelFormat: "yuv444p", level: "3.0" },
+				{ pixelFormat: "yuv420p10le", level: "3.0" },
+				{ pixelFormat: "yuv444p", level: "6.2" },
+			]) {
+				const sourcePath = join(
+					workDir,
+					`${source.pixelFormat}-${source.level}.mp4`,
+				);
+				execFileSync("ffmpeg", [
+					"-hide_banner",
+					"-loglevel",
+					"error",
+					"-y",
+					"-i",
+					TEST_VIDEO_WITH_AUDIO,
+					"-c:v",
+					"libx264",
+					"-pix_fmt",
+					source.pixelFormat,
+					"-level:v",
+					source.level,
+					"-c:a",
+					"copy",
+					sourcePath,
+				]);
+				const metadata = await probeVideo(`file://${sourcePath}`);
+
+				const tempFile = await processVideo(sourcePath, metadata, {
+					maxWidth: metadata.width,
+					maxHeight: metadata.height,
+					normalizeH264Level: true,
+				});
+				tempFiles.push(tempFile.path);
+
+				expect(readVideoPixelFormat(tempFile.path)).toBe("yuv420p");
+				const outputMetadata = await probeVideo(`file://${tempFile.path}`);
+				expect(outputMetadata.videoCodec).toBe("h264");
+				expect(outputMetadata.audioCodec).toBe("aac");
+
+				await tempFile.cleanup();
+			}
 		} finally {
 			rmSync(workDir, { recursive: true, force: true });
 		}
