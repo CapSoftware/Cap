@@ -1584,6 +1584,139 @@ fn ripple_delete_output_tracks(
     ripple_delete_audio_track(&mut timeline.audio_segments, cut_start, cut_end, shift);
 }
 
+/// Why [`cut_clip_range`] left a clip alone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RangeCut {
+    Applied,
+    Empty,
+    /// The range reaches into a transition, or would leave a transition
+    /// without the two clip lengths of material it needs.
+    Transition,
+    /// A fullscreen text card holds the frame inside the range.
+    Hold,
+    /// The range covers the only clip left.
+    LastClip,
+}
+
+/// A clip piece shorter than one 60 fps frame is not worth keeping: a cut that
+/// would leave one takes it too, so playback never seeks into a sliver.
+pub const MIN_CLIP_PIECE: f64 = 1.0 / 60.0;
+
+/// Removes `local_start..local_end` (seconds of playback from the clip's own
+/// start) from clip `index`, splitting it when the range is interior, and
+/// ripples every other track the way deleting a whole clip does. This is the
+/// transcript's word delete; the timeline's own Delete removes whole clips
+/// through [`delete_clip_segments`].
+pub fn cut_clip_range(
+    timeline: &mut TimelineConfiguration,
+    index: usize,
+    local_start: f64,
+    local_end: f64,
+) -> RangeCut {
+    let Some(segment) = timeline.segments.get(index) else {
+        return RangeCut::Empty;
+    };
+    let duration = segment.duration();
+    if !(local_start.is_finite() && local_end.is_finite() && duration.is_finite()) {
+        return RangeCut::Empty;
+    }
+    let mut local_start = local_start.clamp(0.0, duration);
+    let mut local_end = local_end.clamp(0.0, duration);
+    if local_end - local_start < 1e-4 {
+        return RangeCut::Empty;
+    }
+    if local_start < MIN_CLIP_PIECE {
+        local_start = 0.0;
+    }
+    if duration - local_end < MIN_CLIP_PIECE {
+        local_end = duration;
+    }
+    let incoming = timeline
+        .effective_transition(index)
+        .map_or(0.0, |transition| transition.duration);
+    let outgoing = timeline
+        .effective_transition(index + 1)
+        .map_or(0.0, |transition| transition.duration);
+    if (incoming > 0.0 && local_start < incoming * 2.0)
+        || (outgoing > 0.0 && duration - local_end < outgoing * 2.0)
+    {
+        return RangeCut::Transition;
+    }
+    let whole = local_start == 0.0 && local_end == duration;
+    if whole && timeline.segments.len() < 2 {
+        return RangeCut::LastClip;
+    }
+
+    let clip_start = editor_timeline::clip_timeline_offsets(timeline)
+        .get(index)
+        .copied()
+        .unwrap_or(0.0);
+    let holds = timeline.hold_windows();
+    let output_start = effective_to_output_end(&holds, clip_start + local_start);
+    let output_end = effective_to_output(&holds, clip_start + local_end).max(output_start);
+    if holds
+        .iter()
+        .any(|(start, end)| *start < output_end - 1e-9 && *end > output_start + 1e-9)
+    {
+        return RangeCut::Hold;
+    }
+
+    let duration_before = clip_timeline_duration(timeline);
+    let segment = &mut timeline.segments[index];
+    let source_start = segment.start + local_start * segment.timescale;
+    let source_end = segment.start + local_end * segment.timescale;
+    if whole {
+        timeline.segments.remove(index);
+        timeline.transitions.retain(|transition| {
+            let at = transition.segment_index as usize;
+            at != index && at != index + 1
+        });
+        for transition in timeline.transitions.iter_mut() {
+            if transition.segment_index as usize > index {
+                transition.segment_index -= 1;
+            }
+        }
+    } else if local_start == 0.0 {
+        segment.start = source_end;
+    } else if local_end == duration {
+        segment.end = source_start;
+    } else {
+        let mut tail = segment.clone();
+        tail.start = source_end;
+        segment.end = source_start;
+        timeline.segments.insert(index + 1, tail);
+        for transition in timeline.transitions.iter_mut() {
+            if transition.segment_index as usize > index {
+                transition.segment_index += 1;
+            }
+        }
+    }
+    let shift = (duration_before - clip_timeline_duration(timeline)).max(0.0);
+    ripple_delete_output_tracks(timeline, output_start, output_end, shift);
+    RangeCut::Applied
+}
+
+/// The inverse ripple: every track item at or past `boundary` (output time)
+/// moves later by `shift`, and one spanning it grows, the way trimming a clip
+/// back out pushes everything after it.
+pub fn ripple_insert_output_tracks(
+    timeline: &mut TimelineConfiguration,
+    boundary: f64,
+    shift: f64,
+) {
+    use crate::editor_clips::{ripple_keyboard_track, ripple_track};
+    ripple_track(&mut timeline.style_segments, boundary, shift);
+    ripple_track(&mut timeline.image_segments, boundary, shift);
+    ripple_track(&mut timeline.zoom_segments, boundary, shift);
+    ripple_track(&mut timeline.scene_segments, boundary, shift);
+    ripple_track(&mut timeline.mask_segments, boundary, shift);
+    ripple_track(&mut timeline.text_segments, boundary, shift);
+    ripple_track(&mut timeline.caption_segments, boundary, shift);
+    ripple_track(&mut timeline.camera3d_segments, boundary, shift);
+    ripple_keyboard_track(&mut timeline.keyboard_segments, boundary, shift);
+    ripple_track(&mut timeline.audio_segments, boundary, shift);
+}
+
 /// The seven plain splits. 3D is **not** among them: `splitCamera3DSegment`
 /// rebuilds both halves' pose tracks around the pose the segment held at the
 /// cut (`ED/context.ts:640-676`), which needs the keyframe evaluator; see the
