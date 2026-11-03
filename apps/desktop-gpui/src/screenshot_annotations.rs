@@ -4447,11 +4447,11 @@ mod tests {
         #[test]
         fn freehand_hits_preserve_float_edge_cases() {
             let mut state = 0x4af2_9103_f723_c165_u64;
-            let mut number = || {
+            let number = || {
                 state = state
                     .wrapping_mul(6364136223846793005)
                     .wrapping_add(1442695040888963407);
-                match state % 8 {
+                match state >> 61 {
                     0 => 0.,
                     1 => -0.,
                     2 => f64::INFINITY,
@@ -4461,6 +4461,22 @@ mod tests {
                     _ => ((state >> 32) as i32) as f64 / 65536.,
                 }
             };
+            assert_generated_freehand_hits(number);
+        }
+
+        #[test]
+        fn freehand_hits_preserve_all_finite_generated_paths() {
+            let mut state = 0xe518_0b7a_346d_92cf_u64;
+            let number = || {
+                state = state
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                ((state >> 32) as i32) as f64 / 65536.
+            };
+            assert_generated_freehand_hits(number);
+        }
+
+        fn assert_generated_freehand_hits(mut number: impl FnMut() -> f64) {
             for case in 0..10_000 {
                 let mut annotation =
                     shape(AnnotationType::Draw, number(), number(), number(), number());
