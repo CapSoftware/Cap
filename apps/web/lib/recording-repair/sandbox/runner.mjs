@@ -264,10 +264,7 @@ const handlePulled = async (req, res, url) => {
 	}
 };
 
-const UPLOAD_ERRORS = new Set([
-	"body exceeds content-length",
-	"short upload",
-]);
+const UPLOAD_ERRORS = new Set(["body exceeds content-length", "short upload"]);
 
 const chownTree = (dir) => {
 	fs.chownSync(dir, AGENT_UID, AGENT_GID);
