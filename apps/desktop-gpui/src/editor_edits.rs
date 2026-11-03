@@ -650,9 +650,39 @@ impl TrackSegmentOps for MaskSegment {
         self.track
     }
 }
-impl_track_segment!(TextSegment, lane: track);
+/// Text and image keyframes are measured from the segment's start, so moving
+/// the start (a start trim, or the tail half of a split) shifts them by the
+/// same amount and the animation stays put in output time. Off-segment keys
+/// still anchor interpolation at the new edge, as with masks.
+macro_rules! impl_keyed_overlay_segment {
+    ($type:ty) => {
+        impl TrackSegmentOps for $type {
+            fn start(&self) -> f64 {
+                self.start
+            }
+            fn end(&self) -> f64 {
+                self.end
+            }
+            fn set_start(&mut self, value: f64) {
+                self.start = value;
+            }
+            fn set_end(&mut self, value: f64) {
+                self.end = value;
+            }
+            fn trim_start_to(&mut self, value: f64) {
+                self.keyframes.shift(self.start - value);
+                self.start = value;
+            }
+            fn lane(&self) -> u32 {
+                self.track
+            }
+        }
+    };
+}
+
+impl_keyed_overlay_segment!(TextSegment);
 impl_track_segment!(cap_project::StyleSegment, lane: track);
-impl_track_segment!(cap_project::ImageSegment, lane: track);
+impl_keyed_overlay_segment!(cap_project::ImageSegment);
 
 impl TrackSegmentOps for CaptionTrackSegment {
     fn start(&self) -> f64 {
@@ -1564,6 +1594,73 @@ fn ripple_delete_audio_track(
     *segments = next;
 }
 
+fn ripple_overlay_keyframes(
+    keyframes: &mut cap_project::OverlayKeyframes,
+    old_start: f64,
+    new_start: f64,
+    cut_start: f64,
+    cut_end: f64,
+    shift: f64,
+) {
+    ripple_relative_keyframes(
+        &mut keyframes.position,
+        old_start,
+        new_start,
+        cut_start,
+        cut_end,
+        shift,
+        |keyframe| &mut keyframe.time,
+    );
+    ripple_relative_keyframes(
+        &mut keyframes.size,
+        old_start,
+        new_start,
+        cut_start,
+        cut_end,
+        shift,
+        |keyframe| &mut keyframe.time,
+    );
+    ripple_relative_keyframes(
+        &mut keyframes.opacity,
+        old_start,
+        new_start,
+        cut_start,
+        cut_end,
+        shift,
+        |keyframe| &mut keyframe.time,
+    );
+}
+
+fn ripple_delete_keyed_overlay_track<T: TrackSegmentOps>(
+    segments: &mut Vec<T>,
+    cut_start: f64,
+    cut_end: f64,
+    shift: f64,
+    keyframes: fn(&mut T) -> &mut cap_project::OverlayKeyframes,
+) {
+    segments.retain_mut(|segment| {
+        let old_start = segment.start();
+        let Some((new_start, new_end)) =
+            ripple_deleted_bounds(old_start, segment.end(), cut_start, cut_end, shift)
+        else {
+            return false;
+        };
+        if segment.end() > cut_start && old_start < cut_end {
+            ripple_overlay_keyframes(
+                keyframes(segment),
+                old_start,
+                new_start,
+                cut_start,
+                cut_end,
+                shift,
+            );
+        }
+        segment.set_start(new_start);
+        segment.set_end(new_end);
+        true
+    });
+}
+
 fn ripple_delete_output_tracks(
     timeline: &mut TimelineConfiguration,
     cut_start: f64,
@@ -1571,12 +1668,24 @@ fn ripple_delete_output_tracks(
     shift: f64,
 ) {
     ripple_delete_track(&mut timeline.style_segments, cut_start, cut_end, shift);
-    ripple_delete_track(&mut timeline.image_segments, cut_start, cut_end, shift);
+    ripple_delete_keyed_overlay_track(
+        &mut timeline.image_segments,
+        cut_start,
+        cut_end,
+        shift,
+        |segment| &mut segment.keyframes,
+    );
     ripple_delete_track(&mut timeline.zoom_segments, cut_start, cut_end, shift);
     ripple_delete_track(&mut timeline.scene_segments, cut_start, cut_end, shift);
     ripple_delete_camera3d_track(&mut timeline.camera3d_segments, cut_start, cut_end, shift);
     ripple_delete_mask_track(&mut timeline.mask_segments, cut_start, cut_end, shift);
-    ripple_delete_track(&mut timeline.text_segments, cut_start, cut_end, shift);
+    ripple_delete_keyed_overlay_track(
+        &mut timeline.text_segments,
+        cut_start,
+        cut_end,
+        shift,
+        |segment| &mut segment.keyframes,
+    );
     ripple_delete_track(&mut timeline.caption_segments, cut_start, cut_end, shift);
     timeline
         .keyboard_segments
@@ -1697,6 +1806,7 @@ pub fn place_segment_at_time<T: TrackSegmentOps>(
 
 pub fn default_text_segment(start: f64, end: f64, track: u32) -> TextSegment {
     TextSegment {
+        keyframes: Default::default(),
         start,
         end,
         track,
@@ -2541,6 +2651,26 @@ fn lerp_vector_keyframe(
     }
 }
 
+/// Overlay keys ease between each pair, so unlike masks no key is inserted at
+/// the bends of the remap: that would stop the motion there. Each key keeps
+/// its value and moves to where its moment of the recording now plays.
+fn retime_overlay_keyframes(
+    keyframes: &mut cap_project::OverlayKeyframes,
+    old_start: f64,
+    start_shift: f64,
+    shift: &impl Fn(f64) -> f64,
+) {
+    for time in keyframes
+        .position
+        .iter_mut()
+        .chain(&mut keyframes.size)
+        .map(|key| &mut key.time)
+        .chain(keyframes.opacity.iter_mut().map(|key| &mut key.time))
+    {
+        *time += shift(old_start + *time) - start_shift;
+    }
+}
+
 pub fn set_clip_segment_timescale(
     timeline: &mut TimelineConfiguration,
     index: usize,
@@ -2589,7 +2719,9 @@ pub fn set_clip_segment_timescale(
         segment.end += shift(segment.end);
     }
     for segment in &mut timeline.image_segments {
-        segment.start += shift(segment.start);
+        let start_shift = shift(segment.start);
+        retime_overlay_keyframes(&mut segment.keyframes, segment.start, start_shift, &shift);
+        segment.start += start_shift;
         segment.end += shift(segment.end);
     }
     for segment in &mut timeline.zoom_segments {
@@ -2652,7 +2784,9 @@ pub fn set_clip_segment_timescale(
         }
     }
     for segment in &mut timeline.text_segments {
-        segment.start += shift(segment.start);
+        let start_shift = shift(segment.start);
+        retime_overlay_keyframes(&mut segment.keyframes, segment.start, start_shift, &shift);
+        segment.start += start_shift;
         segment.end += shift(segment.end);
     }
     for segment in &mut timeline.audio_segments {
@@ -2908,6 +3042,124 @@ mod tests {
     }
 
     // -- Selection ----------------------------------------------------------
+
+    fn keyed_image() -> cap_project::ImageSegment {
+        let mut image = cap_project::ImageSegment {
+            start: 10.0,
+            end: 20.0,
+            ..Default::default()
+        };
+        image
+            .keyframes
+            .set_position(2.0, cap_project::XY::new(0.2, 0.5));
+        image
+            .keyframes
+            .set_position(8.0, cap_project::XY::new(0.8, 0.5));
+        image.keyframes.set_opacity(5.0, 0.5);
+        image
+    }
+
+    #[test]
+    fn splitting_a_keyed_overlay_keeps_the_animation_in_place() {
+        let image = keyed_image();
+        let before = image
+            .keyframes
+            .sample(image.center, image.size, 1.0, 16.0 - 10.0);
+        let tail = image.split_tail(4.0);
+        assert_eq!(tail.start, 14.0);
+        let after = tail
+            .keyframes
+            .sample(tail.center, tail.size, 1.0, 16.0 - tail.start);
+        assert_eq!(before.0, after.0, "same position at 0:16");
+        assert_eq!(tail.keyframes.times(), vec![-2.0, 1.0, 4.0]);
+
+        let mut text: TextSegment = serde_json::from_value(serde_json::json!({
+            "start": 10.0, "end": 20.0, "content": "Hi"
+        }))
+        .unwrap();
+        text.keyframes
+            .set_position(6.0, cap_project::XY::new(0.3, 0.3));
+        let tail = text.split_tail(4.0);
+        assert_eq!(tail.keyframes.times(), vec![2.0]);
+    }
+
+    #[test]
+    fn deleting_a_clip_ripples_overlay_keys_with_the_cut() {
+        let mut project = config(serde_json::json!({
+            "timeline": {
+                "segments": [
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 12.0 },
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 12.0, "end": 14.0 },
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 14.0, "end": 30.0 }
+                ],
+                "zoomSegments": [],
+                "textSegments": [{ "start": 10.0, "end": 20.0, "content": "Hi" }]
+            }
+        }));
+        let timeline = project.timeline.as_mut().unwrap();
+        let mut image = keyed_image();
+        image.keyframes.set_opacity(3.0, 0.2);
+        timeline.image_segments.push(image);
+        timeline.text_segments[0]
+            .keyframes
+            .set_position(8.0, cap_project::XY::new(0.9, 0.9));
+
+        assert!(delete_clip_segments(timeline, &[1]));
+
+        let image = &timeline.image_segments[0];
+        assert_eq!((image.start, image.end), (10.0, 18.0));
+        assert_eq!(image.keyframes.times(), vec![3.0, 6.0]);
+        let text = &timeline.text_segments[0];
+        assert_eq!((text.start, text.end), (10.0, 18.0));
+        assert_eq!(text.keyframes.times(), vec![6.0]);
+    }
+
+    #[test]
+    fn retiming_a_clip_moves_overlay_keys_with_it() {
+        let mut project = config(serde_json::json!({
+            "timeline": {
+                "segments": [
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 10.0 }
+                ],
+                "zoomSegments": [],
+                "textSegments": [{ "start": 0.0, "end": 10.0, "content": "Hi" }]
+            }
+        }));
+        let timeline = project.timeline.as_mut().unwrap();
+        let mut image = cap_project::ImageSegment {
+            start: 0.0,
+            end: 10.0,
+            ..Default::default()
+        };
+        image.keyframes.set_opacity(0.0, 1.0);
+        image.keyframes.set_opacity(10.0, 0.0);
+        timeline.image_segments.push(image);
+        timeline.text_segments[0]
+            .keyframes
+            .set_position(4.0, cap_project::XY::new(0.2, 0.2));
+
+        assert!(set_clip_segment_timescale(timeline, 0, 2.0));
+
+        let image = &timeline.image_segments[0];
+        assert_eq!((image.start, image.end), (0.0, 5.0));
+        assert_eq!(image.keyframes.times(), vec![0.0, 5.0]);
+        assert_eq!(image.opacity_at(5.0), 0.0);
+        assert_eq!(timeline.text_segments[0].keyframes.times(), vec![2.0]);
+    }
+
+    #[test]
+    fn trimming_a_keyed_overlays_start_keeps_keys_in_output_time() {
+        let mut image = keyed_image();
+        image.trim_start_to(13.0);
+        assert_eq!(image.start, 13.0);
+        assert_eq!(image.keyframes.times(), vec![-1.0, 2.0, 5.0]);
+        let mut image = keyed_image();
+        image.trim_start_to(8.0);
+        assert_eq!(image.keyframes.times(), vec![4.0, 7.0, 10.0]);
+        let mut image = keyed_image();
+        image.set_end(15.0);
+        assert_eq!(image.keyframes.times(), vec![2.0, 5.0, 8.0]);
+    }
 
     #[test]
     fn a_plain_click_selects_one_segment() {

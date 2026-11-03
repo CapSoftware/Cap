@@ -503,6 +503,10 @@ pub struct CanvasDrag {
     pub resize: Option<CanvasResize>,
 }
 
+fn same_point(a: XY<f64>, b: XY<f64>) -> bool {
+    (a.x - b.x).abs() < 1e-6 && (a.y - b.y).abs() < 1e-6
+}
+
 impl EditorWindow {
     /// `overlayVisible()` (`:238`): only while paused, and only once the
     /// renderer has reported a layout.
@@ -603,7 +607,7 @@ impl EditorWindow {
             for (index, segment) in timeline.image_segments.iter().enumerate() {
                 if exclude == CanvasSelection::Image(index)
                     || !segment.is_active_at(t)
-                    || segment.opacity <= 0.
+                    || segment.opacity_at(t) <= 0.
                 {
                     continue;
                 }
@@ -625,8 +629,12 @@ impl EditorWindow {
                 if !(t >= segment.start && t < segment.end && segment.enabled) {
                     continue;
                 }
-                let center = segment.center;
-                let size = segment.size;
+                let (center, size, _) = segment.keyframes.sample(
+                    segment.center,
+                    segment.size,
+                    f64::from(segment.opacity),
+                    t - segment.start,
+                );
                 rects.push(NormRect {
                     x: center.x - size.x / 2.,
                     y: center.y - size.y / 2.,
@@ -982,6 +990,14 @@ impl EditorWindow {
         self.snap_guides.clear();
         self.canvas_overlay_rect = None;
         if drag.moved {
+            // Live drag writes skip the timeline rebuild, and a drag over an
+            // animated overlay can add keys whose marks the model carries.
+            if matches!(
+                drag.element,
+                CanvasSelection::Text(_) | CanvasSelection::Image(_)
+            ) {
+                self.rebuild_timeline();
+            }
             self.schedule_save(window, cx);
             match drag.element {
                 CanvasSelection::Display => tracing::info!(
@@ -1035,7 +1051,8 @@ impl EditorWindow {
                 .as_ref()
                 .and_then(|timeline| timeline.image_segments.get(index))
                 .is_some_and(|segment| {
-                    segment.is_active_at(self.preview_or_playhead()) && segment.opacity > 0.
+                    let now = self.preview_or_playhead();
+                    segment.is_active_at(now) && segment.opacity_at(now) > 0.
                 })
         {
             return false;
@@ -1079,6 +1096,7 @@ impl EditorWindow {
             CanvasSelection::Mask(_) | CanvasSelection::Text(_) | CanvasSelection::Image(_) => {
                 self.canvas_overlay_rect = Some(optimistic);
                 self.write_overlay_rect(selected, optimistic, cx);
+                self.rebuild_timeline();
             }
         }
         self.schedule_save(window, cx);
@@ -1170,11 +1188,17 @@ impl EditorWindow {
                     return Some(rect);
                 }
                 let segment = self.project.timeline.as_ref()?.image_segments.get(index)?;
+                let (center, size, _) = segment.keyframes.sample(
+                    segment.center,
+                    segment.size,
+                    f64::from(segment.opacity),
+                    self.preview_or_playhead() - segment.start,
+                );
                 Some(NormRect {
-                    x: segment.center.x - segment.size.x / 2.,
-                    y: segment.center.y - segment.size.y / 2.,
-                    w: segment.size.x,
-                    h: segment.size.y,
+                    x: center.x - size.x / 2.,
+                    y: center.y - size.y / 2.,
+                    w: size.x,
+                    h: size.y,
                 })
             }
             CanvasSelection::Mask(index) => {
@@ -1200,11 +1224,17 @@ impl EditorWindow {
                     return Some(rect);
                 }
                 let segment = self.project.timeline.as_ref()?.text_segments.get(index)?;
+                let (center, size, _) = segment.keyframes.sample(
+                    segment.center,
+                    segment.size,
+                    f64::from(segment.opacity),
+                    self.preview_or_playhead() - segment.start,
+                );
                 Some(NormRect {
-                    x: segment.center.x - segment.size.x / 2.,
-                    y: segment.center.y - segment.size.y / 2.,
-                    w: segment.size.x,
-                    h: segment.size.y,
+                    x: center.x - size.x / 2.,
+                    y: center.y - size.y / 2.,
+                    w: size.x,
+                    h: size.y,
                 })
             }
         }
@@ -1224,6 +1254,7 @@ impl EditorWindow {
             x: rect.w.max(0.01),
             y: rect.h.max(0.01),
         };
+        let now = self.preview_or_playhead();
         let Some(timeline) = self.project.timeline.as_mut() else {
             return;
         };
@@ -1232,8 +1263,25 @@ impl EditorWindow {
                 let Some(segment) = timeline.image_segments.get_mut(index) else {
                     return;
                 };
-                segment.center = center;
-                segment.size = size;
+                // A key is only written for a property the gesture changed:
+                // each span eases on its own, so an extra key bends the curve.
+                let at = segment.key_time(now);
+                let (current_center, current_size, _) = segment.keyframes.sample(
+                    segment.center,
+                    segment.size,
+                    f64::from(segment.opacity),
+                    at,
+                );
+                if segment.keyframes.position.is_empty() {
+                    segment.center = center;
+                } else if !same_point(current_center, center) {
+                    segment.keyframes.set_position(at, center);
+                }
+                if segment.keyframes.size.is_empty() {
+                    segment.size = size;
+                } else if !same_point(current_size, size) {
+                    segment.keyframes.set_size(at, size);
+                }
             }
             CanvasSelection::Mask(index) => {
                 let Some(segment) = timeline.mask_segments.get_mut(index) else {
@@ -1248,7 +1296,18 @@ impl EditorWindow {
                 let Some(segment) = timeline.text_segments.get_mut(index) else {
                     return;
                 };
-                segment.center = center;
+                let at = segment.key_time(now);
+                let (current_center, _, _) = segment.keyframes.sample(
+                    segment.center,
+                    segment.size,
+                    f64::from(segment.opacity),
+                    at,
+                );
+                if segment.keyframes.position.is_empty() {
+                    segment.center = center;
+                } else if !same_point(current_center, center) {
+                    segment.keyframes.set_position(at, center);
+                }
                 segment.size = size;
             }
             _ => return,
@@ -1389,7 +1448,7 @@ impl EditorWindow {
                                 .filter(|(_, segment)| {
                                     segment.track == track.track
                                         && segment.is_active_at(time)
-                                        && segment.opacity > 0.
+                                        && segment.opacity_at(time) > 0.
                                 })
                         {
                             if let Some(rect) = self.element_rect(CanvasSelection::Image(index)) {
