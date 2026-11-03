@@ -4803,6 +4803,57 @@ mod tests {
         assert_eq!(loaded.background.display_position, Some(XY::new(0.5, 0.4)));
     }
 
+    #[test]
+    fn manual_caption_position_loads_from_old_projects_and_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let mut value = serde_json::to_value(ProjectConfiguration::default()).unwrap();
+        value["captions"] = serde_json::json!({
+            "segments": [],
+            "settings": { "enabled": true, "position": "manual" },
+        });
+        std::fs::write(
+            dir.path().join("project-config.json"),
+            serde_json::to_string(&value).unwrap(),
+        )
+        .unwrap();
+        let old = ProjectConfiguration::load(dir.path()).unwrap();
+        let settings = &old.captions.as_ref().unwrap().settings;
+        assert_eq!(settings.position, "manual");
+        assert_eq!(settings.manual_position, None);
+
+        value["captions"]["settings"]["manualPosition"] = serde_json::json!({ "x": 0.3, "y": 0.2 });
+        std::fs::write(
+            dir.path().join("project-config.json"),
+            serde_json::to_string(&value).unwrap(),
+        )
+        .unwrap();
+        let tauri = ProjectConfiguration::load(dir.path()).unwrap();
+        assert_eq!(
+            tauri.captions.as_ref().unwrap().settings.manual_position,
+            Some(XY::new(0.3, 0.2))
+        );
+
+        let mut config = tauri;
+        config.captions.as_mut().unwrap().settings.manual_position =
+            Some(XY::new(0.423_7, 0.123_4));
+        let saved = serde_json::to_value(&config).unwrap();
+        assert_eq!(
+            saved["captions"]["settings"]["manualPosition"],
+            serde_json::json!({ "x": 0.423_7_f32, "y": 0.123_4_f32 })
+        );
+        std::fs::write(
+            dir.path().join("project-config.json"),
+            serde_json::to_string(&config).unwrap(),
+        )
+        .unwrap();
+        let reopened = ProjectConfiguration::load(dir.path()).unwrap();
+        assert_eq!(
+            reopened.captions.as_ref().unwrap().settings.manual_position,
+            Some(XY::new(0.423_7, 0.123_4))
+        );
+    }
+
     fn write_config_with_text_segment(
         project_path: &std::path::Path,
         font_size: f32,
