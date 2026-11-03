@@ -72,17 +72,28 @@ pub struct PlaySpec {
 /// timeline time at higher speeds.
 const VIDEO_SYNC_TOLERANCE_SECS: f64 = 0.04;
 const STRETCH_SCRATCH_FRAMES: usize = 1024;
-const STRETCH_HISTORY_BLOCKS: usize = 512;
+/// Wall seconds over which a speed change's lead or lag is played out.
+const SPEED_CHANGE_CATCH_UP_SECS: f64 = 0.5;
 
 /// The preview-speed half of an ordinary source: the shared speed and the
 /// stretcher that plays the timeline mix faster or slower without changing
 /// its pitch. Allocated at install, off the audio thread.
+///
+/// Audio is rendered one device delay ahead of when it is heard, so the
+/// rendered position leads the video by `latency * speed`. When the speed
+/// changes, that lead must change too, and the audio already queued in the
+/// device can't. Seeking would skip or repeat speech, so the stage records
+/// the difference as `pending_shift` and plays it out by rendering slightly
+/// slower or faster than the new speed for a moment. The drift check ignores
+/// the part of the error still being played out.
 struct PreviewSpeedStage {
     speed: PreviewSpeedHandle,
     stretcher: Box<PreviewStretcher>,
     scratch: Box<[f32]>,
-    history: std::collections::VecDeque<(usize, f64)>,
     channels: usize,
+    sample_rate: f64,
+    last_speed: Option<f64>,
+    pending_shift: f64,
 }
 
 impl PreviewSpeedStage {
@@ -92,27 +103,24 @@ impl PreviewSpeedStage {
             speed,
             stretcher: Box::new(PreviewStretcher::new(output_info.sample_rate, channels)),
             scratch: vec![0.0; STRETCH_SCRATCH_FRAMES * channels].into_boxed_slice(),
-            history: std::collections::VecDeque::with_capacity(STRETCH_HISTORY_BLOCKS),
             channels,
+            sample_rate: f64::from(output_info.sample_rate.max(1)),
+            last_speed: None,
+            pending_shift: 0.0,
         }
     }
 
-    /// Timeline seconds still queued in the device. Audio queued before a
-    /// speed change was rendered at the old speed, so the device's delay is
-    /// walked back through the speeds of the blocks actually sent; anything
-    /// older than this stage's history played at 1x.
-    fn queued_timeline_secs(&self, latency_secs: f64, sample_rate: f64) -> f64 {
-        let mut remaining = latency_secs.max(0.0) * sample_rate;
-        let mut timeline = 0.0;
-        for &(frames, speed) in self.history.iter().rev() {
-            if remaining <= 0.0 {
-                break;
-            }
-            let taken = remaining.min(frames as f64);
-            timeline += taken * speed;
-            remaining -= taken;
+    fn note_speed(&mut self, speed: f64, latency_secs: f64) {
+        if let Some(previous) = self.last_speed
+            && previous != speed
+        {
+            self.pending_shift += latency_secs.max(0.0) * (previous - speed);
         }
-        (timeline + remaining.max(0.0)) / sample_rate
+        self.last_speed = Some(speed);
+    }
+
+    fn engaged(&self, speed: f64) -> bool {
+        speed != 1.0 || self.pending_shift != 0.0 || self.stretcher.is_active()
     }
 
     fn playhead_secs<T: FromSampleBytes + cpal::FromSample<f32>>(
@@ -135,14 +143,15 @@ impl PreviewSpeedStage {
             return;
         }
         let video_playhead = *playhead_rx.borrow_and_update();
-        let position = self
+        let rendered = self
             .playhead_secs(audio)
             .unwrap_or_else(|| audio.current_playhead_secs());
-        let queued = self.queued_timeline_secs(latency_secs, f64::from(audio.sample_rate().max(1)));
-        let audible_playhead = (position - queued).max(0.0);
-        if (video_playhead - audible_playhead).abs() > VIDEO_SYNC_TOLERANCE_SECS * speed.max(1.0) {
-            audio.set_playhead(video_playhead + latency_secs.max(0.0) * speed);
+        let target = video_playhead + latency_secs.max(0.0) * speed;
+        let unexplained = rendered - target - self.pending_shift;
+        if unexplained.abs() > VIDEO_SYNC_TOLERANCE_SECS * speed.max(1.0) {
+            audio.set_playhead(target);
             self.stretcher.seek(audio.read_frame());
+            self.pending_shift = 0.0;
         }
     }
 
@@ -152,18 +161,29 @@ impl PreviewSpeedStage {
         buffer: &mut [T],
         speed: f64,
     ) {
-        if self.history.len() == STRETCH_HISTORY_BLOCKS {
-            self.history.pop_front();
-        }
-        self.history
-            .push_back((buffer.len() / self.channels, speed));
+        let frames = (buffer.len() / self.channels) as f64;
+        let effective = if self.pending_shift == 0.0 {
+            speed
+        } else {
+            (speed - self.pending_shift / SPEED_CHANGE_CATCH_UP_SECS)
+                .clamp((speed * 0.5).max(0.25), (speed * 1.5).min(4.0))
+        };
         let scratch_len = self.scratch.len();
         for chunk in buffer.chunks_mut(scratch_len) {
             let scratch = &mut self.scratch[..chunk.len()];
-            self.stretcher.render(scratch, speed, audio);
+            self.stretcher.render(scratch, effective, audio);
             for (sample, value) in chunk.iter_mut().zip(scratch.iter()) {
                 *sample = <T as cpal::Sample>::from_sample(*value);
             }
+        }
+        if self.pending_shift != 0.0 {
+            let remaining = self.pending_shift - (speed - effective) * frames / self.sample_rate;
+            self.pending_shift =
+                if remaining.signum() != self.pending_shift.signum() || remaining.abs() < 1e-4 {
+                    0.0
+                } else {
+                    remaining
+                };
         }
     }
 }
@@ -1024,22 +1044,23 @@ fn render_source_block<T: FromSampleBytes + cpal::FromSample<f32>>(
         return;
     }
     match &mut source.buffer {
-        ActiveSourceBuffer::Ordinary(audio) => match source.preview_speed.as_deref_mut() {
-            Some(stage) if !stage.speed.get().is_normal() || stage.stretcher.is_active() => {
+        ActiveSourceBuffer::Ordinary(audio) => {
+            let stage = source.preview_speed.as_deref_mut().and_then(|stage| {
                 let speed = stage.speed.get().as_f64();
-                stage.sync_video_playhead(audio, &mut source.playhead_rx, latency_secs, speed);
-                stage.render(audio, buffer, speed);
+                stage.note_speed(speed, latency_secs);
+                stage.engaged(speed).then_some((stage, speed))
+            });
+            match stage {
+                Some((stage, speed)) => {
+                    stage.sync_video_playhead(audio, &mut source.playhead_rx, latency_secs, speed);
+                    stage.render(audio, buffer, speed);
+                }
+                None => {
+                    sync_video_playhead(audio, &mut source.playhead_rx, latency_secs);
+                    audio.fill(buffer);
+                }
             }
-            Some(stage) => {
-                stage.history.clear();
-                sync_video_playhead(audio, &mut source.playhead_rx, latency_secs);
-                audio.fill(buffer);
-            }
-            _ => {
-                sync_video_playhead(audio, &mut source.playhead_rx, latency_secs);
-                audio.fill(buffer);
-            }
-        },
+        }
         ActiveSourceBuffer::Preparing(audio) => {
             if audio.fill(buffer, latency_secs) == 0 {
                 if audio.is_terminal()
@@ -1796,43 +1817,137 @@ mod tests {
         (*source, playhead_tx)
     }
 
-    #[test]
-    fn queued_audio_is_counted_at_the_speed_it_was_rendered() {
-        let info = AudioInfo::new_raw(AudioData::SAMPLE_FORMAT, 48_000, 2);
-        let mut stage = PreviewSpeedStage::new(PreviewSpeedHandle::default(), info);
-        let rate = 48_000.0;
-        assert!((stage.queued_timeline_secs(0.2, rate) - 0.2).abs() < 1e-9);
-        for _ in 0..5 {
-            stage.history.push_back((4_800, 3.0));
+    struct SpeedSwitchRun {
+        backward_seeks: u32,
+        forward_skips: u32,
+        peak_offset: f64,
+        settled_offset: f64,
+    }
+
+    /// Plays a silent timeline through a source on a device that holds
+    /// `latency` seconds of audio, with the video clock switching from one
+    /// preview speed to another, and follows what the device plays.
+    fn run_speed_switch(latency: f64, from: f64, to: f64) -> SpeedSwitchRun {
+        ffmpeg::init().unwrap();
+        const RATE: u32 = 48_000;
+        const BLOCK: usize = 480;
+        let tick = BLOCK as f64 / f64::from(RATE);
+        let speed = PreviewSpeedHandle::new(crate::PreviewSpeed::from_f64(from).unwrap());
+        let (playhead_tx, playhead_rx) = watch::channel(0.0);
+        let (install_tx, install_rx) = std_mpsc::channel();
+        let (ack_tx, _ack_rx) = std_mpsc::channel();
+        install_source(
+            Box::new(PlaySpec {
+                segments: Vec::new(),
+                music: MusicTracks::new(),
+                project: ProjectConfiguration::default(),
+                duration_secs: 60.0,
+                start_playhead_secs: 0.0,
+                playhead_rx,
+                preview_speed: speed.clone(),
+            }),
+            0,
+            SourceAcknowledgement::Ordinary(ack_tx),
+            AudioInfo::new_raw(AudioData::SAMPLE_FORMAT, RATE, 2),
+            false,
+            &install_tx,
+            &PlaybackAudioCache::default(),
+        )
+        .unwrap();
+        let SourceCommand::Install(mut source) = install_rx.recv().unwrap() else {
+            panic!("expected installed audio source");
+        };
+        let render_position = |source: &ActiveSource<f32>| match &source.buffer {
+            ActiveSourceBuffer::Ordinary(audio) => source
+                .preview_speed
+                .as_ref()
+                .and_then(|stage| stage.playhead_secs(audio))
+                .unwrap_or_else(|| audio.current_playhead_secs()),
+            ActiveSourceBuffer::Preparing(_) => unreachable!(),
+        };
+
+        let queued_blocks = (latency / tick).round() as usize;
+        let switch_block = 300;
+        let blocks = 900;
+        let mut buffer = vec![0.0f32; BLOCK * 2];
+        let mut video = 0.0f64;
+        let mut device = std::collections::VecDeque::new();
+        let mut run = SpeedSwitchRun {
+            backward_seeks: 0,
+            forward_skips: 0,
+            peak_offset: 0.0,
+            settled_offset: 0.0,
+        };
+        let mut settled = Vec::new();
+        for block in 0..blocks {
+            if block == switch_block {
+                speed.set(crate::PreviewSpeed::from_f64(to).unwrap());
+            }
+            let current = speed.get().as_f64();
+            playhead_tx.send(video).unwrap();
+            let before = render_position(&source);
+            render_source_block(&mut source, &mut buffer, latency);
+            let after = render_position(&source);
+            if block > 10 {
+                if after < before - 1e-6 {
+                    run.backward_seeks += 1;
+                }
+                if after - before > tick * 4.0 + 1e-6 {
+                    run.forward_skips += 1;
+                }
+            }
+            device.push_back(before);
+            if device.len() > queued_blocks {
+                let audible = device.pop_front().unwrap();
+                let offset = audible - video;
+                if block >= switch_block {
+                    run.peak_offset = run.peak_offset.max(offset.abs());
+                }
+                if block >= blocks - 100 {
+                    settled.push(offset);
+                }
+            }
+            video += tick * current;
         }
-        assert!((stage.queued_timeline_secs(0.2, rate) - 0.6).abs() < 1e-9);
-        assert!((stage.queued_timeline_secs(0.6, rate) - (1.5 + 0.1)).abs() < 1e-9);
-        stage.history.clear();
-        stage.history.push_back((9_600, 1.0));
-        stage.history.push_back((2_400, 2.0));
-        assert!((stage.queued_timeline_secs(0.1, rate) - (0.1 + 0.05)).abs() < 1e-9);
-        assert_eq!(stage.queued_timeline_secs(-1.0, rate), 0.0);
+        run.settled_offset = settled.iter().sum::<f64>() / settled.len() as f64;
+        run
     }
 
     #[test]
-    fn stretched_blocks_are_remembered_with_their_speed_and_bounded() {
-        let info = AudioInfo::new_raw(AudioData::SAMPLE_FORMAT, 48_000, 2);
-        let mut stage = PreviewSpeedStage::new(PreviewSpeedHandle::default(), info);
-        let (mut source, _playhead) = source(48_000);
-        let ActiveSourceBuffer::Ordinary(audio) = &mut source.buffer else {
-            panic!("expected an ordinary source");
-        };
-        let mut block = vec![0.0f32; 512 * 2];
-        for _ in 0..STRETCH_HISTORY_BLOCKS + 10 {
-            stage.render(audio, &mut block, 2.0);
+    fn speed_changes_on_a_slow_output_neither_repeat_nor_skip_audio() {
+        for (from, to) in [
+            (2.0, 1.0),
+            (1.0, 2.0),
+            (1.0, 3.0),
+            (3.0, 1.0),
+            (2.0, 0.5),
+            (0.5, 1.5),
+        ] {
+            let latency = 0.2;
+            let run = run_speed_switch(latency, from, to);
+            assert_eq!(run.backward_seeks, 0, "{from}x to {to}x repeated audio");
+            assert_eq!(run.forward_skips, 0, "{from}x to {to}x skipped audio");
+            assert!(
+                run.settled_offset.abs() < 0.02 * f64::max(to, 1.0),
+                "{from}x to {to}x settled {:.1} ms off the video",
+                run.settled_offset * 1000.0
+            );
+            assert!(
+                run.peak_offset <= latency * (from - to).abs() + 0.05,
+                "{from}x to {to}x drifted {:.1} ms while switching",
+                run.peak_offset * 1000.0
+            );
         }
-        assert_eq!(stage.history.len(), STRETCH_HISTORY_BLOCKS);
-        assert!(
-            stage
-                .history
-                .iter()
-                .all(|&(frames, speed)| frames == 512 && speed == 2.0)
-        );
+    }
+
+    #[test]
+    fn a_steady_speed_on_a_slow_output_stays_in_sync() {
+        for speed in [1.0, 2.0] {
+            let run = run_speed_switch(0.2, speed, speed);
+            assert_eq!(run.backward_seeks, 0);
+            assert_eq!(run.forward_skips, 0);
+            assert!(run.settled_offset.abs() < 0.02 * speed);
+        }
     }
 
     #[test]
