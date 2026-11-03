@@ -156,7 +156,7 @@ jobs:
       - name: Exercise the native walk processor
         run: |
           command -v ffmpeg >/dev/null || brew install ffmpeg
-          node --test apps/desktop-gpui/ux-walk/browser-evidence.test.mjs apps/desktop-gpui/ux-walk/native-walk.test.mjs apps/desktop-gpui/ux-walk/native-audio.test.mjs apps/desktop-gpui/ux-walk/checkpoint-*.test.mjs apps/desktop-gpui/ux-walk/fragmented-audio.test.mjs apps/desktop-gpui/ux-walk/restore-checkpoint.test.mjs vendor/ux-walk/test/unit/transcript-only.test.mjs vendor/ux-walk/test/unit/transcript-words.test.mjs
+          node --test apps/desktop-gpui/ux-walk/browser-evidence.test.mjs apps/desktop-gpui/ux-walk/native-walk.test.mjs apps/desktop-gpui/ux-walk/native-audio.test.mjs apps/desktop-gpui/ux-walk/walk-chrome-launcher.test.mjs apps/desktop-gpui/ux-walk/checkpoint-*.test.mjs apps/desktop-gpui/ux-walk/fragmented-audio.test.mjs apps/desktop-gpui/ux-walk/restore-checkpoint.test.mjs vendor/ux-walk/test/unit/transcript-only.test.mjs vendor/ux-walk/test/unit/transcript-words.test.mjs
       - name: Exercise portable production projects
         run: node --test apps/cli/skill/cap-demo/lib/production.test.mjs
       - name: Exercise isolated window selection

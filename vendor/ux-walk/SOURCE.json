@@ -1,7 +1,7 @@
 {
   "name": "UX Walk",
   "repository": "https://github.com/CantrellJax/ux-walk",
-  "revision": "c0893a022f80dffadeaf7bb746127d025e65cca0",
+  "revision": "9eb5fee66a2c4da02722dbd51b464f4547f70a06",
   "license": "AGPL-3.0-only",
   "files": {
     ".gitignore": "77cc9c247322e06e2a62b7fb48877c0427f5e414d0addbd8d898efda5b7b6ad5",
@@ -20,7 +20,7 @@
     "skills/ux-walk/references/cap.md": "bfe9acc69a883a7f38ef5723b2cb8ba1750169a0fa43963b014cedc12a874fbe",
     "src/ask.mjs": "260134c9286ca241048296e15a30a4eeb531cbcb2eaec3b87b008e4113c156f4",
     "src/brief.mjs": "0bd29ff59f7b8eca0aab20daceac3688d8113981459da874c70f648ebc73e88c",
-    "src/browser.mjs": "31bff1fb0d762ae2c5c76bd889ab8d143d2e40b9662e2d55d96b61ba8a672d91",
+    "src/browser.mjs": "c88e74c1c5ed59ed659351fa7955d08b22b7d56193d890fb4add32e7cdd270fb",
     "src/cap-session.mjs": "af79faf17e909f06ca6d2b33988707dde423366a1332850ff91f232a98e2f900",
     "src/cap-updates.mjs": "aa5e180c865cc120228577ee292c98fe84b16c60022918f0a4a3422de17e1f7c",
     "src/cap.mjs": "8ed116ff71e9608ced2106e74c3a0a4554dab988a3e45ec149f9b61f5528d56a",
