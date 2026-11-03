@@ -630,3 +630,40 @@ async fn a_mask_ordered_above_an_image_still_hides_it_during_a_push() {
         );
     }
 }
+
+#[tokio::test]
+async fn a_highlight_ordered_above_an_image_dims_each_frame_once() {
+    let mut fixture = fixture_with(true, true).await;
+    let mut project = (*fixture.project).clone();
+    if let Some(timeline) = project.timeline.as_mut() {
+        timeline.mask_segments[0].mask_type = MaskKind::Highlight;
+        timeline.mask_segments[0].darkness = 0.6;
+    }
+    project.overlay_order = vec![
+        OverlayTrack {
+            kind: OverlayTrackKind::Mask,
+            track: 0,
+        },
+        OverlayTrack {
+            kind: OverlayTrackKind::Image,
+            track: 0,
+        },
+    ];
+    fixture.project = Arc::new(project);
+    let cursor = CursorEvents::default();
+    let sides = sides(&fixture, &cursor);
+    let outgoing = render_plain(&fixture, &sides.outgoing, &cursor).await;
+    let incoming = render_plain(&fixture, &sides.incoming, &cursor).await;
+    for kind in [
+        ClipTransitionType::PushLeft,
+        ClipTransitionType::WipeUp,
+        ClipTransitionType::Zoom,
+    ] {
+        let start = render_transition(&fixture, &sides, &cursor, kind, 0.0).await;
+        let end = render_transition(&fixture, &sides, &cursor, kind, 1.0).await;
+        let first = worst_pixel(&start, &outgoing);
+        assert!(first.0 <= 1, "{kind:?} at its first frame: {first:?}");
+        let last = worst_pixel(&end, &incoming);
+        assert!(last.0 <= 1, "{kind:?} at its last frame: {last:?}");
+    }
+}

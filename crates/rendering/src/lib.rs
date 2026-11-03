@@ -9156,17 +9156,17 @@ impl RendererLayers {
         } else if let Some(overlays) = &self.overlays {
             // A mask ordered above a text or image track also hides that
             // overlay. In a moving transition the clips carry their own
-            // masks, and the overlays are drawn here afterwards, so such a
-            // mask is applied again over them.
+            // masks and the overlays are drawn here afterwards, so a
+            // sensitive mask is applied again over them. A highlight only
+            // dims and has already dimmed the clips, so it is not repeated.
             let mut overlay_below = false;
             for overlay in uniforms.project.overlay_tracks().into_iter().rev() {
                 match overlay.kind {
                     OverlayTrackKind::Mask if parts.masks || (parts.overlays && overlay_below) => {
-                        for mask in uniforms
-                            .masks
-                            .iter()
-                            .filter(|mask| mask.track == overlay.track)
-                        {
+                        for mask in uniforms.masks.iter().filter(|mask| {
+                            mask.track == overlay.track
+                                && (parts.masks || mask.mode != MaskRenderMode::Highlight)
+                        }) {
                             self.mask
                                 .render(device, queue, session, passes.encoder(), mask);
                         }
