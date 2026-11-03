@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({
 	organizationAccess: vi.fn(),
 	organizationMemberIds: [] as string[],
 	spaces: [] as unknown[],
-	writes: [] as string[],
+	events: [] as string[],
 	inserted: [] as { userId: string; role: string }[],
 }));
 
@@ -25,44 +25,87 @@ function rowsFor(table: string) {
 type SelectQuery = Promise<unknown[]> & {
 	where(): SelectQuery;
 	limit(): SelectQuery;
+	for(strength: string): SelectQuery;
 };
 
-function selectQuery() {
-	return {
+type MemberRow = { userId: string; role: string };
+
+function selectQuery(prefix: string) {
+	return () => ({
 		from(value: MySqlTable) {
+			const table = getTableName(value);
+			if (table === "organization_members") {
+				mocks.events.push(`${prefix}select:${table}`);
+			}
 			const query: SelectQuery = Object.assign(
-				Promise.resolve(rowsFor(getTableName(value))),
-				{ where: () => query, limit: () => query },
+				Promise.resolve(rowsFor(table)),
+				{
+					where: () => query,
+					limit: () => query,
+					for: (strength: string) => {
+						mocks.events.push(`${prefix}lock:${strength}`);
+						return query;
+					},
+				},
 			);
 			return query;
 		},
-	};
+	});
 }
 
-function write(kind: string) {
+function write(prefix: string, kind: string) {
 	return (value: MySqlTable) => {
 		const table = getTableName(value);
-		const done = { where: async () => mocks.writes.push(`${kind}:${table}`) };
+		const event = `${prefix}${kind}:${table}`;
+		const done = { where: async () => mocks.events.push(event) };
 		return {
 			...done,
 			set: () => done,
-			values: async (rows: { userId: string; role: string }[]) => {
-				if (rows.length === 0)
+			values: async (rows: MemberRow | MemberRow[]) => {
+				const list = Array.isArray(rows) ? rows : [rows];
+				if (list.length === 0) {
 					throw new Error("values() needs at least one row");
-				mocks.writes.push(`${kind}:${table}`);
-				if (table === "space_members") mocks.inserted.push(...rows);
+				}
+				mocks.events.push(event);
+				if (table === "space_members") mocks.inserted.push(...list);
 			},
 		};
 	};
 }
 
+function client(prefix: string) {
+	return {
+		select: selectQuery(prefix),
+		insert: write(prefix, "insert"),
+		update: write(prefix, "update"),
+		delete: write(prefix, "delete"),
+	};
+}
+
+const transaction = client("tx:");
 const database = {
-	select: selectQuery,
-	insert: write("insert"),
-	update: write("update"),
-	delete: write("delete"),
-	transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn(database),
+	...client(""),
+	transaction: async (fn: (tx: typeof transaction) => Promise<unknown>) => {
+		mocks.events.push("begin");
+		try {
+			const result = await fn(transaction);
+			mocks.events.push("commit");
+			return result;
+		} catch (error) {
+			mocks.events.push("rollback");
+			throw error;
+		}
+	},
 };
+
+const lockedMembershipCheck = [
+	"tx:select:organization_members",
+	"tx:lock:share",
+];
+
+function writes() {
+	return mocks.events.filter((event) => /(insert|update|delete):/.test(event));
+}
 
 vi.mock("server-only", () => ({}));
 vi.mock("@cap/database", () => ({ db: () => database }));
@@ -86,7 +129,11 @@ vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 
 import { createSpace } from "@/actions/organization/create-space";
 import { updateSpace } from "@/actions/organization/update-space";
-import { setSpaceMembers } from "@/app/(org)/dashboard/spaces/[spaceId]/actions";
+import {
+	addSpaceMember,
+	addSpaceMembers,
+	setSpaceMembers,
+} from "@/app/(org)/dashboard/spaces/[spaceId]/actions";
 
 function spaceForm(members: string[]) {
 	const formData = new FormData();
@@ -97,7 +144,7 @@ function spaceForm(members: string[]) {
 }
 
 beforeEach(() => {
-	mocks.writes.length = 0;
+	mocks.events.length = 0;
 	mocks.inserted.length = 0;
 	mocks.organizationMemberIds = ["creator", "member"];
 	mocks.spaces = [];
@@ -137,7 +184,22 @@ describe("editing a space", () => {
 			success: false,
 			error: "All space members must belong to the organization",
 		});
-		expect(mocks.writes).toEqual([]);
+		expect(writes()).toEqual([]);
+	});
+
+	it("checks members under a lock in the transaction that writes them", async () => {
+		await expect(updateSpace(spaceForm(["member"]))).resolves.toEqual({
+			success: true,
+		});
+		expect(mocks.events).toEqual([
+			"begin",
+			...lockedMembershipCheck,
+			...lockedMembershipCheck,
+			"tx:update:spaces",
+			"tx:delete:space_members",
+			"tx:insert:space_members",
+			"commit",
+		]);
 	});
 
 	it("keeps organization members and the owner", async () => {
@@ -166,7 +228,7 @@ describe("editing a space", () => {
 		await expect(updateSpace(spaceForm([]))).resolves.toEqual({
 			success: true,
 		});
-		expect(mocks.writes).toContain("delete:space_members");
+		expect(writes()).toEqual(["tx:update:spaces", "tx:delete:space_members"]);
 		expect(mocks.inserted).toEqual([]);
 	});
 });
@@ -179,7 +241,7 @@ describe("creating a space", () => {
 			success: false,
 			error: "All space members must belong to the organization",
 		});
-		expect(mocks.writes).toEqual([]);
+		expect(writes()).toEqual([]);
 	});
 
 	it("rejects a creator who left the organization", async () => {
@@ -188,7 +250,20 @@ describe("creating a space", () => {
 			success: false,
 			error: "Unauthorized",
 		});
-		expect(mocks.writes).toEqual([]);
+		expect(writes()).toEqual([]);
+	});
+
+	it("checks members under a lock in the transaction that writes them", async () => {
+		await expect(createSpace(spaceForm(["member"]))).resolves.toMatchObject({
+			success: true,
+		});
+		expect(mocks.events).toEqual([
+			"begin",
+			...lockedMembershipCheck,
+			"tx:insert:spaces",
+			"tx:insert:space_members",
+			"commit",
+		]);
 	});
 
 	it("adds organization members", async () => {
@@ -210,6 +285,18 @@ describe("setting space members", () => {
 			role: "member",
 		});
 
+	it("checks members under a lock in the transaction that writes them", async () => {
+		await setMembers(["member"]);
+		expect(mocks.events).toEqual([
+			"begin",
+			...lockedMembershipCheck,
+			...lockedMembershipCheck,
+			"tx:delete:space_members",
+			"tx:insert:space_members",
+			"commit",
+		]);
+	});
+
 	it("keeps the creator as admin", async () => {
 		await setMembers(["member"]);
 		expect(mocks.inserted).toEqual([
@@ -229,7 +316,54 @@ describe("setting space members", () => {
 	it("saves with no members once the creator has left", async () => {
 		mocks.organizationMemberIds = ["member"];
 		await expect(setMembers([])).resolves.toEqual({ success: true, count: 0 });
-		expect(mocks.writes).toContain("delete:space_members");
+		expect(writes()).toEqual(["tx:delete:space_members"]);
 		expect(mocks.inserted).toEqual([]);
+	});
+});
+
+describe("adding space members", () => {
+	const spaceId = Space.SpaceId.make("space-1");
+
+	it("checks one member under a lock in the transaction that adds them", async () => {
+		await addSpaceMember({
+			spaceId,
+			userId: User.UserId.make("member"),
+			role: "member",
+		});
+		expect(mocks.events).toEqual([
+			"begin",
+			...lockedMembershipCheck,
+			"tx:insert:space_members",
+			"commit",
+		]);
+	});
+
+	it("checks several members under a lock in the transaction that adds them", async () => {
+		await addSpaceMembers({
+			spaceId,
+			userIds: [User.UserId.make("member")],
+			role: "member",
+		});
+		expect(mocks.events).toEqual([
+			"begin",
+			...lockedMembershipCheck,
+			"tx:insert:space_members",
+			"commit",
+		]);
+	});
+
+	it("rolls back without writing when a member left the organization", async () => {
+		await expect(
+			addSpaceMember({
+				spaceId,
+				userId: User.UserId.make("outsider"),
+				role: "member",
+			}),
+		).rejects.toThrow("All space members must belong to the organization");
+		expect(mocks.events).toEqual([
+			"begin",
+			...lockedMembershipCheck,
+			"rollback",
+		]);
 	});
 });

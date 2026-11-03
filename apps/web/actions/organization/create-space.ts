@@ -112,19 +112,6 @@ export async function createSpace(
 			return { success: false, error: "Unauthorized" };
 		}
 
-		if (
-			!(await usersBelongToOrganization(
-				organizationId,
-				organization.ownerId,
-				memberUserIds,
-			))
-		) {
-			return {
-				success: false,
-				error: "All space members must belong to the organization",
-			};
-		}
-
 		const existingSpace = await db()
 			.select({ id: spaces.id })
 			.from(spaces)
@@ -150,7 +137,18 @@ export async function createSpace(
 				? await hashPassword(password.trim())
 				: null;
 
-		await db().transaction(async (tx) => {
+		const created = await db().transaction(async (tx) => {
+			if (
+				!(await usersBelongToOrganization(
+					tx,
+					organizationId,
+					organization.ownerId,
+					memberUserIds,
+				))
+			) {
+				return false;
+			}
+
 			await tx.insert(spaces).values({
 				id: spaceId,
 				name,
@@ -175,7 +173,15 @@ export async function createSpace(
 
 				await tx.insert(spaceMembers).values(spaceMembersToInsert);
 			}
+			return true;
 		});
+
+		if (!created) {
+			return {
+				success: false,
+				error: "All space members must belong to the organization",
+			};
+		}
 
 		const iconFile = formData.get("icon") as File | null;
 

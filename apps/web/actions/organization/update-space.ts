@@ -68,30 +68,6 @@ export async function updateSpace(formData: FormData) {
 		return { success: false, error: "Unauthorized" };
 	}
 
-	if (
-		!(await usersBelongToOrganization(
-			access.organizationId,
-			access.organizationOwnerId,
-			members,
-		))
-	) {
-		return {
-			success: false,
-			error: "All space members must belong to the organization",
-		};
-	}
-
-	const creatorBelongsToOrganization = await usersBelongToOrganization(
-		access.organizationId,
-		access.organizationOwnerId,
-		[space.createdById],
-	);
-	const memberIds = Array.from(
-		new Set(
-			creatorBelongsToOrganization ? [...members, space.createdById] : members,
-		),
-	);
-
 	// Publishing is gated on the org owner's plan, but a downgraded org can
 	// always un-publish — so only the false→true transition requires Pro.
 	if (
@@ -142,24 +118,48 @@ export async function updateSpace(formData: FormData) {
 		spaceUpdate.password = null;
 	}
 
-	await db().update(spaces).set(spaceUpdate).where(eq(spaces.id, id));
+	const membersSaved = await db().transaction(async (tx) => {
+		if (
+			!(await usersBelongToOrganization(
+				tx,
+				access.organizationId,
+				access.organizationOwnerId,
+				members,
+			))
+		) {
+			return false;
+		}
 
-	const existingMembers = await db()
-		.select({ userId: spaceMembers.userId, role: spaceMembers.role })
-		.from(spaceMembers)
-		.where(eq(spaceMembers.spaceId, id));
-	const existingRoleByUserId = new Map(
-		existingMembers.map((member) => [
-			member.userId,
-			normalizeSpaceRole(member.role) ?? "member",
-		]),
-	);
+		const creatorBelongsToOrganization = await usersBelongToOrganization(
+			tx,
+			access.organizationId,
+			access.organizationOwnerId,
+			[space.createdById],
+		);
+		const memberIds = Array.from(
+			new Set(
+				creatorBelongsToOrganization
+					? [...members, space.createdById]
+					: members,
+			),
+		);
 
-	await db().delete(spaceMembers).where(eq(spaceMembers.spaceId, id));
-	if (memberIds.length > 0) {
-		await db()
-			.insert(spaceMembers)
-			.values(
+		await tx.update(spaces).set(spaceUpdate).where(eq(spaces.id, id));
+
+		const existingMembers = await tx
+			.select({ userId: spaceMembers.userId, role: spaceMembers.role })
+			.from(spaceMembers)
+			.where(eq(spaceMembers.spaceId, id));
+		const existingRoleByUserId = new Map(
+			existingMembers.map((member) => [
+				member.userId,
+				normalizeSpaceRole(member.role) ?? "member",
+			]),
+		);
+
+		await tx.delete(spaceMembers).where(eq(spaceMembers.spaceId, id));
+		if (memberIds.length > 0) {
+			await tx.insert(spaceMembers).values(
 				memberIds.map((userId) => {
 					const role: SpaceMemberRole =
 						userId === space.createdById
@@ -173,6 +173,15 @@ export async function updateSpace(formData: FormData) {
 					};
 				}),
 			);
+		}
+		return true;
+	});
+
+	if (!membersSaved) {
+		return {
+			success: false,
+			error: "All space members must belong to the organization",
+		};
 	}
 
 	if (formData.get("removeIcon") === "true") {

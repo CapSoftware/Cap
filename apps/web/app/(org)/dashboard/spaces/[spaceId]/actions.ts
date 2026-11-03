@@ -40,12 +40,14 @@ const addSpaceMembersSchema = z.object({
 });
 
 async function assertUsersBelongToOrganization(
+	tx: Parameters<typeof usersBelongToOrganization>[0],
 	organizationId: Organisation.OrganisationId,
 	organizationOwnerId: User.UserId,
 	userIds: User.UserId[],
 ) {
 	if (
 		!(await usersBelongToOrganization(
+			tx,
 			organizationId,
 			organizationOwnerId,
 			userIds,
@@ -72,15 +74,15 @@ export async function addSpaceMember(
 
 	const { spaceId, userId, role } = validation.data;
 	const access = await requireSpaceManager(currentUser.id, spaceId);
-	await assertUsersBelongToOrganization(
-		access.organizationId,
-		access.organizationOwnerId,
-		[userId],
-	);
+	await db().transaction(async (tx) => {
+		await assertUsersBelongToOrganization(
+			tx,
+			access.organizationId,
+			access.organizationOwnerId,
+			[userId],
+		);
 
-	await db()
-		.insert(spaceMembers)
-		.values({
+		await tx.insert(spaceMembers).values({
 			id: uuidv4().substring(0, nanoIdLength),
 			spaceId,
 			userId,
@@ -88,6 +90,7 @@ export async function addSpaceMember(
 			createdAt: new Date(),
 			updatedAt: new Date(),
 		});
+	});
 
 	revalidatePath(`/dashboard/spaces/${spaceId}`);
 
@@ -109,35 +112,42 @@ export async function addSpaceMembers(
 
 	const { spaceId, userIds, role } = validation.data;
 	const access = await requireSpaceManager(currentUser.id, spaceId);
-	await assertUsersBelongToOrganization(
-		access.organizationId,
-		access.organizationOwnerId,
-		userIds,
-	);
+	const { existingIds, newUserIds } = await db().transaction(async (tx) => {
+		await assertUsersBelongToOrganization(
+			tx,
+			access.organizationId,
+			access.organizationOwnerId,
+			userIds,
+		);
 
-	const existing = await db()
-		.select({ userId: spaceMembers.userId })
-		.from(spaceMembers)
-		.where(eq(spaceMembers.spaceId, spaceId));
-	const existingIds = new Set(existing.map((m) => m.userId));
-	const newUserIds = userIds.filter((id) => !existingIds.has(id));
+		const existing = await tx
+			.select({ userId: spaceMembers.userId })
+			.from(spaceMembers)
+			.where(eq(spaceMembers.spaceId, spaceId));
+		const existingIds = new Set(existing.map((m) => m.userId));
+		const newUserIds = userIds.filter((id) => !existingIds.has(id));
+
+		if (newUserIds.length > 0) {
+			const now = new Date();
+			await tx.insert(spaceMembers).values(
+				newUserIds.map((userId) => ({
+					id: uuidv4().substring(0, nanoIdLength),
+					spaceId,
+					userId,
+					role,
+					createdAt: now,
+					updatedAt: now,
+				})),
+			);
+		}
+		return { existingIds, newUserIds };
+	});
 
 	if (newUserIds.length === 0) {
 		revalidatePath(`/dashboard/spaces/${spaceId}`);
 		return { success: true, added: [], alreadyMembers: userIds };
 	}
 
-	const now = new Date();
-	const values = newUserIds.map((userId) => ({
-		id: uuidv4().substring(0, nanoIdLength),
-		spaceId,
-		userId,
-		role,
-		createdAt: now,
-		updatedAt: now,
-	}));
-
-	await db().insert(spaceMembers).values(values);
 	revalidatePath(`/dashboard/spaces/${spaceId}`);
 	return {
 		success: true,
@@ -235,45 +245,50 @@ export async function setSpaceMembers(
 			role: normalizeSpaceRole(role) ?? "member",
 		}));
 
-	await assertUsersBelongToOrganization(
-		access.organizationId,
-		access.organizationOwnerId,
-		submittedMembers.map((member) => member.userId),
-	);
-
 	const roleByUserId = new Map(
 		submittedMembers.map((member) => [member.userId, member.role]),
 	);
-	const creatorBelongsToOrganization = await usersBelongToOrganization(
-		access.organizationId,
-		access.organizationOwnerId,
-		[access.createdById],
-	);
 	const submittedIds = submittedMembers.map((member) => member.userId);
-	const allMemberIds = Array.from(
-		new Set(
-			creatorBelongsToOrganization
-				? [...submittedIds, access.createdById]
-				: submittedIds,
-		),
-	);
-	const now = new Date();
-	const values = allMemberIds.map((userId) => {
-		return {
-			id: uuidv4().substring(0, nanoIdLength),
-			spaceId,
-			userId,
-			role:
-				userId === access.createdById
-					? ("admin" as const)
-					: ((roleByUserId.get(userId) as SpaceRole | undefined) ?? "member"),
-			createdAt: now,
-			updatedAt: now,
-		};
-	});
+	const allMemberIds = await db().transaction(async (tx) => {
+		await assertUsersBelongToOrganization(
+			tx,
+			access.organizationId,
+			access.organizationOwnerId,
+			submittedIds,
+		);
 
-	await db().delete(spaceMembers).where(eq(spaceMembers.spaceId, spaceId));
-	if (values.length > 0) await db().insert(spaceMembers).values(values);
+		const creatorBelongsToOrganization = await usersBelongToOrganization(
+			tx,
+			access.organizationId,
+			access.organizationOwnerId,
+			[access.createdById],
+		);
+		const allMemberIds = Array.from(
+			new Set(
+				creatorBelongsToOrganization
+					? [...submittedIds, access.createdById]
+					: submittedIds,
+			),
+		);
+		const now = new Date();
+		const values = allMemberIds.map((userId) => {
+			return {
+				id: uuidv4().substring(0, nanoIdLength),
+				spaceId,
+				userId,
+				role:
+					userId === access.createdById
+						? ("admin" as const)
+						: ((roleByUserId.get(userId) as SpaceRole | undefined) ?? "member"),
+				createdAt: now,
+				updatedAt: now,
+			};
+		});
+
+		await tx.delete(spaceMembers).where(eq(spaceMembers.spaceId, spaceId));
+		if (values.length > 0) await tx.insert(spaceMembers).values(values);
+		return allMemberIds;
+	});
 
 	revalidatePath(`/dashboard/spaces/${spaceId}`);
 	return { success: true, count: allMemberIds.length };
