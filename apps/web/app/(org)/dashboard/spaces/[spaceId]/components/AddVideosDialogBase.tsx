@@ -150,8 +150,16 @@ function AddVideosDialogBase<T>({
 			}
 			return { addResult, removeResult };
 		},
-		onSuccess: async (result) => {
+		onSuccess: async (result, { toAdd, toRemove }) => {
 			const { addResult, removeResult } = result || {};
+
+			setSelectedVideos((selected) =>
+				selected.filter(
+					(id) =>
+						!(addResult.success && toAdd.includes(id)) &&
+						!(removeResult.success && toRemove.includes(id)),
+				),
+			);
 
 			// Invalidate both queries to ensure UI updates
 			await Promise.all([
