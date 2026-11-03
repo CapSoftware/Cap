@@ -52,6 +52,7 @@ title = "Ayuda"
 
 [tray]
 import_media = "Importar contenido..."
+import_screen_studio = "Importar proyecto de Screen Studio..."
 no_recent_items = "No hay elementos recientes"
 open_main_window = "Abrir ventana principal"
 previous = "Recientes"

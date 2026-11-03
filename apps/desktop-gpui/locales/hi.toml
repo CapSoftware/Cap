@@ -52,6 +52,7 @@ title = "सहायता"
 
 [tray]
 import_media = "मीडिया इम्पोर्ट करें..."
+import_screen_studio = "Screen Studio प्रोजेक्ट इम्पोर्ट करें..."
 no_recent_items = "कोई हालिया आइटम नहीं"
 open_main_window = "मुख्य विंडो खोलें"
 previous = "हाल के आइटम"

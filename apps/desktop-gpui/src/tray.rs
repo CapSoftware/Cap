@@ -66,6 +66,7 @@ pub enum TrayItem {
     RecordArea,
     TakeScreenshot,
     ImportMedia,
+    ImportScreenStudio,
     ViewAllRecordings,
     ViewAllScreenshots,
     OpenSettings,
@@ -349,6 +350,14 @@ pub fn build_menu(mode: Mode, previous: &[PreviousItem], version: &str) -> Vec<E
     }
 
     entries.push(Entry::item(tr::tray::import_media(), TrayItem::ImportMedia));
+    // Outside macOS a Screen Studio project is a plain folder, which the media
+    // file picker cannot select.
+    if cfg!(not(target_os = "macos")) {
+        entries.push(Entry::item(
+            tr::tray::import_screen_studio(),
+            TrayItem::ImportScreenStudio,
+        ));
+    }
 
     entries.push(Entry::Separator);
     entries.push(mode_submenu(mode));
@@ -428,6 +437,7 @@ pub fn handle_item(item: TrayItem, cx: &mut App) {
         // `TrayItem::ImportVideo` (`src-tauri/src/tray.rs:839-911`): one
         // picker over both media filters, routed by extension.
         TrayItem::ImportMedia => crate::import::pick_and_import_media(cx),
+        TrayItem::ImportScreenStudio => crate::import::pick_and_import_screen_studio(cx),
         TrayItem::ViewAllRecordings => {
             app_windows::open_settings(Page::Recordings, cx);
             cx.activate(true);
@@ -635,6 +645,7 @@ fn harness_item(spec: &str, cx: &App) -> Option<TrayItem> {
         "record_window" => TrayItem::RecordWindow,
         "record_area" => TrayItem::RecordArea,
         "import_media" => TrayItem::ImportMedia,
+        "import_screen_studio" => TrayItem::ImportScreenStudio,
         "recordings" => TrayItem::ViewAllRecordings,
         "screenshots" => TrayItem::ViewAllScreenshots,
         "settings" => TrayItem::OpenSettings,
@@ -1431,8 +1442,12 @@ mod tests {
     #[test]
     fn menu_matches_build_tray_menu() {
         let menu = build_menu(Mode::Studio, &[], "0.1.0");
+        let mut titles = titles(&menu);
+        if cfg!(not(target_os = "macos")) {
+            assert_eq!(titles.remove(6), "Import Screen Studio Project...");
+        }
         assert_eq!(
-            titles(&menu),
+            titles,
             vec![
                 "Open Main Window",
                 "Record Display",
@@ -1460,7 +1475,10 @@ mod tests {
     #[test]
     fn screenshot_mode_relabels_the_capture_rows() {
         let menu = build_menu(Mode::Screenshot, &[], "0.1.0");
-        let titles = titles(&menu);
+        let mut titles = titles(&menu);
+        if cfg!(not(target_os = "macos")) {
+            assert_eq!(titles.remove(5), "Import Screen Studio Project...");
+        }
         assert_eq!(
             &titles[..6],
             &[

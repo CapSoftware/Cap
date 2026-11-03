@@ -52,6 +52,7 @@ title = "帮助"
 
 [tray]
 import_media = "导入媒体..."
+import_screen_studio = "导入 Screen Studio 项目..."
 no_recent_items = "没有最近的项目"
 open_main_window = "打开主窗口"
 previous = "最近项目"

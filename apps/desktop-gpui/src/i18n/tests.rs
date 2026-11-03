@@ -43,6 +43,10 @@ fn english_matches_the_literals_it_replaced() {
         (tr::menu::window::zoom(), "Zoom".into()),
         (tr::menu::help::title(), "Help".into()),
         (tr::tray::import_media(), "Import Media...".into()),
+        (
+            tr::tray::import_screen_studio(),
+            "Import Screen Studio Project...".into(),
+        ),
         (tr::tray::no_recent_items(), "No recent items".into()),
         (tr::tray::open_main_window(), "Open Main Window".into()),
         (tr::tray::previous(), "Previous".into()),

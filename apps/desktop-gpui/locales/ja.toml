@@ -52,6 +52,7 @@ title = "ヘルプ"
 
 [tray]
 import_media = "メディアを読み込む..."
+import_screen_studio = "Screen Studio プロジェクトを読み込む..."
 no_recent_items = "最近の項目はありません"
 open_main_window = "メインウィンドウを開く"
 previous = "最近の項目"

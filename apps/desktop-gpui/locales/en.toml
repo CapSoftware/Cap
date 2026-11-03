@@ -52,6 +52,7 @@ title = "Help"
 
 [tray]
 import_media = "Import Media..."
+import_screen_studio = "Import Screen Studio Project..."
 no_recent_items = "No recent items"
 open_main_window = "Open Main Window"
 previous = { text = "Previous", context = "Submenu listing the most recent recordings and screenshots." }

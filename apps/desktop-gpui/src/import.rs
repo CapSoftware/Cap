@@ -357,6 +357,25 @@ pub fn pick_and_import_media(cx: &mut App) {
     .detach();
 }
 
+pub fn pick_and_import_screen_studio(cx: &mut App) {
+    let paths = cx.prompt_for_paths(gpui::PathPromptOptions {
+        files: false,
+        directories: true,
+        multiple: false,
+        prompt: None,
+    });
+    cx.spawn(async move |cx| {
+        let Ok(Ok(Some(paths))) = paths.await else {
+            return;
+        };
+        let Some(path) = paths.into_iter().next() else {
+            return;
+        };
+        cx.update(|cx| import_screen_studio_from_path(path, cx));
+    })
+    .detach();
+}
+
 /// `start_video_import`, minus the Tauri command envelope: probes, builds the
 /// bundle, transcodes on a worker thread, and reports through [`ActiveImports`].
 pub fn import_video_from_path(source_path: PathBuf, cx: &mut App) {
