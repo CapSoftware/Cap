@@ -1372,6 +1372,10 @@ impl RgbaConverter {
         {
             return Err(anyhow!("invalid video dimensions for compositor"));
         }
+        let mut flags = ffmpeg::software::scaling::Flags::BILINEAR;
+        if source_format == Pixel::YUYV422 && destination_format == Pixel::RGBA {
+            flags |= ffmpeg::software::scaling::Flags::FULL_CHR_H_INT;
+        }
         let context = ffmpeg::software::scaling::Context::get(
             source_format,
             source_width,
@@ -1379,7 +1383,7 @@ impl RgbaConverter {
             destination_format,
             destination_width,
             destination_height,
-            ffmpeg::software::scaling::Flags::BILINEAR,
+            flags,
         )?;
         Ok(Self {
             context,
@@ -5037,6 +5041,73 @@ mod tests {
         );
     }
 
+    fn chroma_psnr(left: &ffmpeg::frame::Video, right: &ffmpeg::frame::Video) -> f64 {
+        assert_eq!(
+            (left.width(), left.height()),
+            (right.width(), right.height())
+        );
+        let row = left.width() as usize * 4;
+        let mut squared_error = 0.0;
+        for y in 0..left.height() as usize {
+            let left_row = &left.data(0)[y * left.stride(0)..][..row];
+            let right_row = &right.data(0)[y * right.stride(0)..][..row];
+            for (left_pixel, right_pixel) in left_row.chunks_exact(4).zip(right_row.chunks_exact(4))
+            {
+                let r = f64::from(left_pixel[0]) - f64::from(right_pixel[0]);
+                let g = f64::from(left_pixel[1]) - f64::from(right_pixel[1]);
+                let b = f64::from(left_pixel[2]) - f64::from(right_pixel[2]);
+                let u = -0.148223 * r - 0.290993 * g + 0.439216 * b;
+                let v = 0.439216 * r - 0.367788 * g - 0.071427 * b;
+                squared_error += u * u + v * v;
+            }
+        }
+        let samples = f64::from(left.width()) * f64::from(left.height()) * 2.0;
+        10.0 * (255.0 * 255.0 * samples / squared_error).log10()
+    }
+
+    #[test]
+    fn yuyv_overlay_preserves_spatial_chroma() {
+        ffmpeg::init().expect("FFmpeg initializes");
+        let mut source = solid_yuyv(640, 360, 128, 128, 128);
+        let stride = source.stride(0);
+        for y in 0..source.height() as usize {
+            for (pair, pixel) in source.data_mut(0)[y * stride..][..640 * 2]
+                .chunks_exact_mut(4)
+                .enumerate()
+            {
+                let x = (pair * 2) as f64;
+                pixel[1] = (128.0 + 45.0 * (x / 8.0 + y as f64 / 15.0).sin()).round() as u8;
+                pixel[3] = (128.0 + 45.0 * (x / 15.0 - y as f64 / 18.0).cos()).round() as u8;
+            }
+        }
+        let mut compositor = overlay_at(
+            192,
+            108,
+            LinuxCameraShape::RoundedRectangle { radius_pixels: 0 },
+        );
+        let actual = compositor
+            .convert_camera(&source, 192, 108)
+            .expect("camera overlay");
+        let mut reference_scaler = ffmpeg::software::scaling::Context::get(
+            Pixel::YUYV422,
+            640,
+            360,
+            Pixel::RGBA,
+            192,
+            108,
+            ffmpeg::software::scaling::Flags::LANCZOS
+                | ffmpeg::software::scaling::Flags::FULL_CHR_H_INT,
+        )
+        .expect("reference scaler");
+        let mut reference = ffmpeg::frame::Video::empty();
+        reference_scaler
+            .run(&source, &mut reference)
+            .expect("reference overlay");
+        let psnr = chroma_psnr(&actual, &reference);
+        assert!(psnr > 45.0, "overlay chroma PSNR fell to {psnr:.2} dB");
+        println!("overlay chroma PSNR against Lanczos reference: {psnr:.2} dB");
+    }
+
     #[test]
     #[ignore = "release timing benchmark; run with --release --ignored --nocapture"]
     fn yuyv_overlay_scale_benchmark() {
@@ -5061,7 +5132,9 @@ mod tests {
             "rustc 1.88.0; warmup {WARMUP} excluded; median is sorted index {} of {RUNS}",
             RUNS / 2
         );
-        println!("path: Compositor::convert_camera swscale Flags::BILINEAR");
+        println!(
+            "path: Compositor::convert_camera swscale BILINEAR | FULL_CHR_H_INT for YUYV->RGBA"
+        );
         println!(
             "before is full-frame YUYV->BGRA bilinear, a tight BGRA copy, then BGRA->RGBA overlay"
         );
@@ -5157,6 +5230,25 @@ mod tests {
             dst_h,
             LinuxCameraShape::RoundedRectangle { radius_pixels: 0 },
         );
+        let mut previous_yuyv_e2e = overlay_at(
+            dst_w,
+            dst_h,
+            LinuxCameraShape::RoundedRectangle { radius_pixels: 0 },
+        );
+        let mut previous_converter =
+            RgbaConverter::new(Pixel::YUYV422, width, height, Pixel::RGBA, dst_w, dst_h)
+                .expect("previous converter");
+        previous_converter.context = ffmpeg::software::scaling::Context::get(
+            Pixel::YUYV422,
+            width,
+            height,
+            Pixel::RGBA,
+            dst_w,
+            dst_h,
+            ffmpeg::software::scaling::Flags::BILINEAR,
+        )
+        .expect("previous bilinear scaler");
+        previous_yuyv_e2e.camera_to_rgba = Some(previous_converter);
         let mut yuyv_mirror_e2e = overlay_at(
             dst_w,
             dst_h,
@@ -5186,6 +5278,23 @@ mod tests {
                 let scaled = bgra_e2e
                     .convert_camera(&frame.inner, dst_w, dst_h)
                     .expect("e2e bgra");
+                std::hint::black_box(scaled.data(0)[0]);
+            }),
+        );
+        print_ms(
+            "e2e direct YUYV before full_chroma_int",
+            time_crop(WARMUP, RUNS, || {
+                let sample = LinuxProcessedCameraFrame::from_yuyv422(
+                    std::hint::black_box(&yuyv),
+                    timestamp,
+                    1,
+                    unmirrored,
+                )
+                .expect("previous sample");
+                let frame = processed_to_ffmpeg(&sample).expect("previous yuyv ffmpeg");
+                let scaled = previous_yuyv_e2e
+                    .convert_camera(&frame.inner, dst_w, dst_h)
+                    .expect("previous e2e yuyv");
                 std::hint::black_box(scaled.data(0)[0]);
             }),
         );
