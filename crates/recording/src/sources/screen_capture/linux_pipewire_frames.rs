@@ -23,11 +23,10 @@ use std::{
         Arc,
         atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering},
     },
-    time::{Duration, Instant},
 };
 
 use anyhow::{Context, anyhow, bail};
-use parking_lot::{Condvar, Mutex};
+use parking_lot::Mutex;
 use pipewire as pw;
 
 const DMA_BUF_IOCTL_SYNC: libc::c_ulong = 0x4008_6200;
@@ -258,8 +257,6 @@ struct Inner {
     stream: AtomicPtr<pw::sys::pw_stream>,
     pool: AtomicUsize,
     inflight: AtomicUsize,
-    inflight_lock: Mutex<()>,
-    inflight_cv: Condvar,
     releases: AtomicUsize,
     requeues: AtomicUsize,
 }
@@ -304,8 +301,6 @@ impl PipewireFrames {
                 stream: AtomicPtr::new(std::ptr::null_mut()),
                 pool: AtomicUsize::new(0),
                 inflight: AtomicUsize::new(0),
-                inflight_lock: Mutex::new(()),
-                inflight_cv: Condvar::new(),
                 releases: AtomicUsize::new(0),
                 requeues: AtomicUsize::new(0),
             }),
@@ -383,21 +378,16 @@ impl PipewireFrames {
         )
     }
 
-    pub(super) fn wait_idle(&self, timeout: Duration) -> bool {
-        let deadline = Instant::now() + timeout;
-        let mut guard = self.inner.inflight_lock.lock();
-        loop {
-            if self.inner.inflight.load(Ordering::Acquire) == 0 {
-                return true;
-            }
-            let now = Instant::now();
-            if now >= deadline {
-                return false;
-            }
-            self.inner
-                .inflight_cv
-                .wait_for(&mut guard, deadline.saturating_duration_since(now));
+    pub(super) fn detach_stream(&self) {
+        self.inner
+            .stream
+            .store(std::ptr::null_mut(), Ordering::Release);
+        self.inner.requeue.lock().take();
+        for (_, active) in self.inner.buffers.lock().drain() {
+            active.store(false, Ordering::Release);
         }
+        self.inner.pool.store(0, Ordering::Release);
+        self.retire_all();
     }
 
     #[cfg(test)]
@@ -411,17 +401,11 @@ impl PipewireFrames {
     }
 
     fn begin_inflight(&self) {
-        let _guard = self.inner.inflight_lock.lock();
         self.inner.inflight.fetch_add(1, Ordering::AcqRel);
     }
 
     fn end_inflight(&self) {
-        let _guard = self.inner.inflight_lock.lock();
-        let previous = self.inner.inflight.fetch_sub(1, Ordering::AcqRel);
-        debug_assert!(previous > 0);
-        if previous == 1 {
-            self.inner.inflight_cv.notify_all();
-        }
+        self.inner.end_borrow();
     }
 }
 
@@ -459,12 +443,8 @@ unsafe extern "C" fn release_aliased_pipewire_frame(opaque: *mut libc::c_void, _
 
 impl Inner {
     fn end_borrow(&self) {
-        let _guard = self.inflight_lock.lock();
         let previous = self.inflight.fetch_sub(1, Ordering::AcqRel);
         debug_assert!(previous > 0);
-        if previous == 1 {
-            self.inflight_cv.notify_all();
-        }
     }
 }
 
@@ -803,7 +783,7 @@ unsafe fn first_data_fd(buffer: *mut pw::sys::pw_buffer) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use std::os::fd::AsRawFd;
+    use std::{os::fd::AsRawFd, time::Instant};
 
     use super::*;
 
@@ -1107,6 +1087,92 @@ mod tests {
         drop(frame);
         assert_eq!(frames.inner.requeues.load(Ordering::Acquire), 2);
         assert_eq!(frames.inflight(), 0);
+    }
+
+    #[test]
+    fn detaching_the_stream_keeps_aliases_alive_and_cancels_late_requeues() {
+        ffmpeg::init().expect("ffmpeg");
+        let mut file = tempfile::tempfile().unwrap();
+        std::io::Write::write_all(&mut file, &[1u8, 2, 3, 4, 5, 6, 7, 8]).unwrap();
+        let mut buffer = Box::new(unsafe { std::mem::zeroed::<pw::sys::pw_buffer>() });
+        let address = &mut *buffer as *mut pw::sys::pw_buffer;
+        let frames = PipewireFrames::new();
+        frames.add_pool_buffer(address);
+        let (sender, _receiver) = pw::channel::channel();
+        frames.set_requeue_sender(sender);
+        frames.set_stream(std::ptr::dangling_mut());
+        let release = BufferRelease {
+            address: address as usize,
+            active: frames.inner.buffers.lock()[&(address as usize)].clone(),
+        };
+        let mut plane = memfd_plane(&file);
+        plane.pw_buffer = address as usize;
+        let mut geometry = geometry(1, 1, 4, 0, 0, 1, 1);
+        let (first, leased) = linear_frame(&frames, &plane, &geometry, true).unwrap();
+        assert!(leased);
+        geometry.offset = 4;
+        let (second, leased) = linear_frame(&frames, &plane, &geometry, true).unwrap();
+        assert!(leased);
+        let mut duplicate = ffmpeg::frame::Video::empty();
+        assert!(unsafe { ffmpeg::sys::av_frame_ref(duplicate.as_mut_ptr(), first.as_ptr()) } >= 0);
+
+        frames.detach_stream();
+        frames.detach_stream();
+        drop(buffer);
+        drop(file);
+        assert!(!frames.can_lease());
+        assert!(!release.is_active());
+        assert!(frames.inner.stream.load(Ordering::Acquire).is_null());
+        assert!(frames.inner.requeue.lock().is_none());
+        frames.queue_released_buffer(release);
+        assert_eq!(frames.inflight(), 2);
+        assert_eq!(frames.inner.cache.lock().unmap_calls, 0);
+        assert_eq!(&duplicate.data(0)[..4], &[1, 2, 3, 4]);
+        assert_eq!(&second.data(0)[..4], &[5, 6, 7, 8]);
+        drop(first);
+        drop(second);
+        assert_eq!(frames.inflight(), 1);
+        assert_eq!(frames.inner.cache.lock().unmap_calls, 0);
+        drop(duplicate);
+        assert_eq!(frames.inflight(), 0);
+        assert_eq!(frames.inner.cache.lock().unmap_calls, 1);
+        assert_eq!(frames.inner.releases.load(Ordering::Acquire), 2);
+        assert_eq!(frames.inner.requeues.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn detaching_the_stream_can_race_with_the_last_frame_drop() {
+        ffmpeg::init().expect("ffmpeg");
+        for _ in 0..32 {
+            let mut file = tempfile::tempfile().unwrap();
+            std::io::Write::write_all(&mut file, &[1u8, 2, 3, 4]).unwrap();
+            let mut buffer = Box::new(unsafe { std::mem::zeroed::<pw::sys::pw_buffer>() });
+            let address = &mut *buffer as *mut pw::sys::pw_buffer;
+            let frames = PipewireFrames::new();
+            frames.add_pool_buffer(address);
+            let (sender, _receiver) = pw::channel::channel();
+            frames.set_requeue_sender(sender);
+            let mut plane = memfd_plane(&file);
+            plane.pw_buffer = address as usize;
+            let (frame, leased) =
+                linear_frame(&frames, &plane, &geometry(1, 1, 4, 0, 0, 1, 1), true).unwrap();
+            assert!(leased);
+            let barrier = Arc::new(std::sync::Barrier::new(2));
+            let releasing = std::thread::spawn({
+                let barrier = barrier.clone();
+                move || {
+                    barrier.wait();
+                    drop(frame);
+                }
+            });
+            barrier.wait();
+            frames.detach_stream();
+            releasing.join().unwrap();
+            assert_eq!(frames.inflight(), 0);
+            assert_eq!(frames.inner.releases.load(Ordering::Acquire), 1);
+            assert_eq!(frames.inner.cache.lock().unmap_calls, 1);
+            assert!(frames.inner.buffers.lock().is_empty());
+        }
     }
 
     #[test]

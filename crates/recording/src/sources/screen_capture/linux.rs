@@ -695,14 +695,11 @@ fn capture_pipewire_node(
 
     stop_requested.store(true, Ordering::Relaxed);
     thread_loop.stop();
-    // The muxer holds the latest frame until the next one replaces it, so an
-    // alias can outlive this thread. Drop the sender to let that drain finish,
-    // then destroy the stream only after the last reference is gone.
-    // `pw_stream_queue_buffer` is single-producer on this loop; a late release
-    // only posts the buffer address here. Destroying the stream earlier would
-    // unmap memory the encoder is still reading.
+    // Aliases own dup'd fds and mappings; MemPtr frames are already copied.
+    // The muxer's static tail can outlive the stream without retaining any
+    // PipeWire-owned memory or requeueing a buffer into a destroyed stream.
     video_tx_shutdown.lock().take();
-    let idle = frames_shutdown.wait_idle(Duration::from_secs(30));
+    frames_shutdown.detach_stream();
 
     let error = fatal_error.lock().take();
     tracing::info!(
@@ -712,17 +709,6 @@ fn capture_pipewire_node(
         elapsed_ms = started.elapsed().as_millis() as u64,
         "Linux Wayland PipeWire capture stopped"
     );
-
-    if !idle {
-        tracing::error!("PipeWire screen capture stopped while a frame was still borrowed");
-        std::mem::forget(_release_rx);
-        std::mem::forget(_listener);
-        std::mem::forget(stream);
-        std::mem::forget(core);
-        std::mem::forget(context);
-        std::mem::forget(thread_loop);
-        bail!("PipeWire screen capture stopped while a frame was still borrowed");
-    }
 
     if let Some(error) = error {
         Err(anyhow!(error))
@@ -3784,24 +3770,84 @@ mod pipewire_frame_tests {
         });
 
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        let target_frames = std::env::var("CAP_PIPEWIRE_TEST_FRAMES")
+            .map(|value| {
+                value
+                    .parse::<usize>()
+                    .expect("CAP_PIPEWIRE_TEST_FRAMES must be a count")
+            })
+            .unwrap_or(10)
+            .max(10);
+        let mut checked = 0;
         let mut frames = Vec::new();
         loop {
-            if frames.len() >= 10 || std::time::Instant::now() >= deadline || capture.is_finished()
+            if checked >= target_frames
+                || std::time::Instant::now() >= deadline
+                || capture.is_finished()
             {
                 break;
             }
             match video_rx.try_next() {
-                Ok(Some(frame)) => frames.push(frame.inner),
+                Ok(Some(frame)) => {
+                    let frame = frame.inner;
+                    let pixel = &frame.data(0)[..4];
+                    assert_eq!(&pixel[1..], &[0x40, 0x80, 0xff]);
+                    for row in frame
+                        .data(0)
+                        .chunks_exact(frame.stride(0))
+                        .take(frame.height() as usize)
+                    {
+                        assert!(
+                            row[..frame.width() as usize * 4]
+                                .chunks_exact(4)
+                                .all(|value| value == pixel),
+                            "torn producer frame {checked}"
+                        );
+                    }
+                    checked += 1;
+                    if checked > target_frames - 10 {
+                        frames.push(frame);
+                    }
+                }
                 Ok(None) => break,
                 Err(_) => std::thread::park_timeout(std::time::Duration::from_millis(10)),
             }
         }
-        // Borrowed DMA-BUF frames keep the producer buffer until the last
-        // reference drops. The capture thread waits for that before it
-        // destroys the stream, so copy the pixels and release the frames
-        // before joining it.
+        assert!(
+            frames.iter().any(|frame| unsafe {
+                ffmpeg::sys::av_frame_is_writable(frame.as_ptr().cast_mut()) == 0
+            }),
+            "the producer never supplied a borrowed frame"
+        );
+        let pixels: Vec<_> = frames.iter().map(|frame| frame.data(0).to_vec()).collect();
+        stop.cancel();
+        let stopped = std::time::Instant::now();
+        while !capture.is_finished() && stopped.elapsed() < std::time::Duration::from_secs(3) {
+            std::thread::park_timeout(std::time::Duration::from_millis(10));
+        }
+        assert!(capture.is_finished(), "capture stop waited for held frames");
+        let result = capture.join().unwrap();
+        eprintln!(
+            "checked {checked} frames; capture stopped with {} held frames in {:?}",
+            frames.len(),
+            stopped.elapsed()
+        );
+        std::thread::park_timeout(std::time::Duration::from_millis(100));
+        for (frame, expected) in frames.iter().zip(&pixels) {
+            assert_eq!(
+                frame.data(0),
+                expected,
+                "held frame changed while the producer was still running after stop"
+            );
+        }
+        drop(child);
         let mut samples = Vec::with_capacity(frames.len());
-        for frame in &frames {
+        for (frame, expected) in frames.iter().zip(&pixels) {
+            assert_eq!(
+                frame.data(0),
+                expected,
+                "held frame changed after stream and producer teardown"
+            );
             let mut pixel = [0u8; 4];
             let data = frame.data(0);
             if data.len() >= 4 {
@@ -3809,15 +3855,10 @@ mod pipewire_frame_tests {
             }
             samples.push((frame.width(), frame.height(), pixel));
         }
-        drop(frames);
         drop(video_rx);
-        stop.cancel();
-        let result = capture.join().unwrap();
-        drop(child);
         assert!(
-            samples.len() >= 10,
-            "captured {} frames; capture ended with {result:?}",
-            samples.len()
+            checked >= target_frames,
+            "captured {checked} of {target_frames} frames; capture ended with {result:?}"
         );
         result.unwrap();
         let mut levels = std::collections::BTreeSet::new();
@@ -3830,6 +3871,60 @@ mod pipewire_frame_tests {
             levels.len() > 1,
             "every captured frame was the same picture"
         );
+
+        let expected_frames = frames.len();
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("held-frames-after-stop.mp4");
+        let mut output = ffmpeg::format::output(&path).unwrap();
+        let mut encoder = cap_enc_ffmpeg::h264::H264Encoder::builder(VideoInfo::from_raw_ffmpeg(
+            ffmpeg::format::Pixel::BGRZ,
+            640,
+            360,
+            30,
+        ))
+        .with_encoder_priority_override(&["libx264"])
+        .build(&mut output)
+        .unwrap();
+        output.write_header().unwrap();
+        for (index, frame) in frames.into_iter().enumerate() {
+            encoder
+                .queue_frame(
+                    frame,
+                    std::time::Duration::from_secs_f64(index as f64 / 30.0),
+                    &mut output,
+                )
+                .unwrap();
+        }
+        encoder.flush(&mut output).unwrap();
+        output.write_trailer().unwrap();
+        drop(output);
+
+        let mut input = ffmpeg::format::input(&path).unwrap();
+        let stream = input.streams().best(ffmpeg::media::Type::Video).unwrap();
+        let stream_index = stream.index();
+        let mut decoder = ffmpeg::codec::context::Context::from_parameters(stream.parameters())
+            .unwrap()
+            .decoder()
+            .video()
+            .unwrap();
+        let mut decoded = ffmpeg::frame::Video::empty();
+        let mut decoded_frames = 0;
+        for (stream, packet) in input.packets() {
+            if stream.index() == stream_index {
+                decoder.send_packet(&packet).unwrap();
+                while decoder.receive_frame(&mut decoded).is_ok() {
+                    assert_eq!((decoded.width(), decoded.height()), (640, 360));
+                    decoded_frames += 1;
+                }
+            }
+        }
+        decoder.send_eof().unwrap();
+        while decoder.receive_frame(&mut decoded).is_ok() {
+            assert_eq!((decoded.width(), decoded.height()), (640, 360));
+            decoded_frames += 1;
+        }
+        assert_eq!(decoded_frames, expected_frames);
+        eprintln!("encoded and decoded {decoded_frames} held frames after stop");
     }
 
     /// niri 26.04 shares only DMA-BUFs: the buffer is not mapped for the
