@@ -69,6 +69,11 @@ const checkAuthStartRoute = async (
 	}
 };
 
+// The offscreen recorder reports start failures to the service worker as a
+// plain message string, so this text is how a 401 there is recognized.
+export const SESSION_EXPIRED_MESSAGE =
+	"Your Cap sign-in expired. Sign in again to keep recording.";
+
 // Carries the HTTP status so callers can tell a definitive server answer
 // (the request was processed and rejected) from a failure where the request
 // may never have arrived.
@@ -106,7 +111,11 @@ const requestJson = async <TResponse>({
 	});
 
 	if (!response.ok) {
-		throw new ApiRequestError(response.status, await response.text());
+		const text = await response.text();
+		throw new ApiRequestError(
+			response.status,
+			response.status === 401 ? SESSION_EXPIRED_MESSAGE : text,
+		);
 	}
 
 	return (await response.json()) as TResponse;

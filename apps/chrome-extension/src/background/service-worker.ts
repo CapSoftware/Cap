@@ -4,6 +4,7 @@ import {
 	fetchBootstrap,
 	parseAuthResponse,
 	revokeAuth,
+	SESSION_EXPIRED_MESSAGE,
 } from "../shared/api";
 import {
 	isRecordingStatusBroadcast,
@@ -1135,6 +1136,20 @@ const requireBootstrapGeneration = (generation: number) => {
 	}
 };
 
+// A 401 means the server no longer accepts this key, so keeping it would fail
+// every request; drop it and tell the user to sign in again.
+const signOutIfSessionExpired = async (message: string, generation: number) => {
+	if (
+		message !== SESSION_EXPIRED_MESSAGE ||
+		generation !== bootstrapGeneration
+	) {
+		return;
+	}
+	await clearAuth();
+	await resetBootstrapCache();
+	await saveAuthError(SESSION_EXPIRED_MESSAGE);
+};
+
 const refreshBootstrap = (settings: ExtensionSettings, auth: ExtensionAuth) => {
 	if (bootstrapRefreshInFlight) return bootstrapRefreshInFlight;
 	const generation = bootstrapGeneration;
@@ -1145,6 +1160,12 @@ const refreshBootstrap = (settings: ExtensionSettings, auth: ExtensionAuth) => {
 			await saveCachedBootstrap(bootstrap);
 			requireBootstrapGeneration(generation);
 			return bootstrap;
+		})
+		.catch(async (error: unknown) => {
+			if (error instanceof ApiRequestError) {
+				await signOutIfSessionExpired(error.message, generation);
+			}
+			throw error;
 		})
 		.finally(() => {
 			if (bootstrapRefreshInFlight === refresh) {
@@ -1885,7 +1906,11 @@ const handleRequest = async (
 	}
 
 	if (message.type === "start-recording") {
+		const generation = bootstrapGeneration;
 		const response = await startRecording(message.mode, sender.tab);
+		if (!response.ok) {
+			await signOutIfSessionExpired(response.error, generation);
+		}
 		if (response.ok && response.status) {
 			setRecordingStatusAndBroadcast(response.status);
 			if (isRecordingPreviewStatus(response.status)) {

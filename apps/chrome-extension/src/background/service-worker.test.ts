@@ -1,5 +1,6 @@
 import type { VideoId } from "@cap/recorder-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { SESSION_EXPIRED_MESSAGE } from "../shared/api";
 import { AUTH_KEY } from "../shared/storage";
 import { RECORDING_STATE_KEY } from "../shared/storage-keys";
 import type {
@@ -240,6 +241,29 @@ describe("bootstrap account ownership", () => {
 			expect(stored[cacheKey]).toMatchObject({ bootstrap: newBootstrap });
 		},
 	);
+
+	it("signs out with a message when the server rejects the key", async () => {
+		delete stored[cacheKey];
+		requests.mockImplementation(async () => new Response("", { status: 401 }));
+
+		await send("bootstrap");
+		await vi.waitFor(() => expect(stored[AUTH_KEY]).toBeUndefined());
+
+		expect(await send("bootstrap")).toMatchObject({
+			ok: true,
+			auth: null,
+			authError: SESSION_EXPIRED_MESSAGE,
+		});
+	});
+
+	it("stays signed in when the server fails for another reason", async () => {
+		delete stored[cacheKey];
+		requests.mockImplementation(async () => new Response("", { status: 403 }));
+
+		await send("bootstrap");
+
+		expect(stored[AUTH_KEY]).toEqual(oldAuth);
+	});
 
 	it("discards an initial fetch that finishes after sign-out", async () => {
 		delete stored[cacheKey];
