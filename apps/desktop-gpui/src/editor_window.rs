@@ -8460,6 +8460,28 @@ impl EditorWindow {
         self.note_edit("clip-transition", Some(TrackKind::Clip));
     }
 
+    // Written straight to the project: `edit_project` goes through an open
+    // style group's apply path, which keeps only style settings.
+    fn toggle_track_lock(
+        &mut self,
+        track: cap_project::LockableTimelineTrack,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.project_ready() {
+            return;
+        }
+        let locks = &mut self.project.locked_tracks;
+        match locks.iter().position(|locked| *locked == track) {
+            Some(at) => {
+                locks.remove(at);
+            }
+            None => locks.push(track),
+        }
+        self.project_changed(window, cx);
+        self.note_project_edit("track-lock");
+    }
+
     fn merge_clip(
         &mut self,
         index: usize,
@@ -11623,23 +11645,7 @@ impl EditorWindow {
                                                 MouseButton::Left,
                                                 cx.listener(move |this, _, window, cx| {
                                                     cx.stop_propagation();
-                                                    this.edit_project(
-                                                        "track-lock",
-                                                        window,
-                                                        cx,
-                                                        move |project| {
-                                                            if let Some(at) = project
-                                                                .locked_tracks
-                                                                .iter()
-                                                                .position(|t| *t == track)
-                                                            {
-                                                                project.locked_tracks.remove(at);
-                                                            } else {
-                                                                project.locked_tracks.push(track);
-                                                            }
-                                                            true
-                                                        },
-                                                    );
+                                                    this.toggle_track_lock(track, window, cx);
                                                 }),
                                             )
                                             .child(

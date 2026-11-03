@@ -459,14 +459,17 @@ fn keep_locked_caption_positions(
         .iter()
         .map(|source| source.id.as_str())
         .collect::<HashSet<_>>();
-    let fresh_by_id = derived
-        .iter()
-        .map(|segment| (segment.id.as_str(), segment))
-        .collect::<HashMap<_, _>>();
+    let mut used = vec![false; derived.len()];
     let mut kept = current
         .iter()
         .filter(|segment| source_ids.contains(source_caption_id(&segment.id)))
-        .map(|segment| locked_caption_content(segment, fresh_by_id.get(segment.id.as_str())))
+        .map(|segment| {
+            let fresh = matching_fresh_part(segment, &derived, &used);
+            if let Some(index) = fresh {
+                used[index] = true;
+            }
+            locked_caption_content(segment, fresh.map(|index| &derived[index]))
+        })
         .collect::<Vec<_>>();
     let placed = kept
         .iter()
@@ -481,9 +484,42 @@ fn keep_locked_caption_positions(
     kept
 }
 
+// A caption cut by the edit list is split into parts numbered in timeline
+// order, so after a clip reorder the same id names a different stretch of
+// speech. A locked part is matched to the fresh part holding its words.
+fn matching_fresh_part(
+    locked: &CaptionTrackSegment,
+    derived: &[CaptionTrackSegment],
+    used: &[bool],
+) -> Option<usize> {
+    let source = source_caption_id(&locked.id);
+    let locked_words = locked
+        .words
+        .iter()
+        .map(|word| word.text.as_str())
+        .collect::<Vec<_>>();
+    derived
+        .iter()
+        .enumerate()
+        .filter(|(index, fresh)| !used[*index] && source_caption_id(&fresh.id) == source)
+        .max_by_key(|(_, fresh)| {
+            let fresh_words = fresh
+                .words
+                .iter()
+                .map(|word| word.text.as_str())
+                .collect::<Vec<_>>();
+            let shared = fresh_words
+                .iter()
+                .filter(|word| locked_words.contains(word))
+                .count();
+            (fresh_words == locked_words, shared, fresh.id == locked.id)
+        })
+        .map(|(index, _)| index)
+}
+
 fn locked_caption_content(
     locked: &CaptionTrackSegment,
-    fresh: Option<&&CaptionTrackSegment>,
+    fresh: Option<&CaptionTrackSegment>,
 ) -> CaptionTrackSegment {
     let mut segment = locked.clone();
     let (start, end) = (locked.start as f32, locked.end.max(locked.start) as f32);
@@ -674,6 +710,58 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![("two", 30.0, 31.0), ("words", 31.0, 32.0)]
         );
+    }
+
+    #[test]
+    fn locked_parts_of_a_caption_keep_their_own_words_when_clips_swap() {
+        let mut project: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "timeline": {
+                "segments": [
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 5.0 },
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 5.0, "end": 10.0 }
+                ],
+                "zoomSegments": []
+            },
+            "captions": {
+                "segments": [{
+                    "id": "c", "start": 3.0, "end": 7.0, "text": "early late",
+                    "words": [
+                        { "text": "early", "start": 3.0, "end": 4.0 },
+                        { "text": "late", "start": 6.0, "end": 7.0 }
+                    ]
+                }],
+                "settings": {},
+                "sourceTimed": true
+            },
+            "lockedTracks": ["caption"]
+        }))
+        .unwrap();
+        synchronize_captions(&mut project, &[10.0]);
+        let parts = |project: &ProjectConfiguration| {
+            let mut parts = project
+                .timeline
+                .as_ref()
+                .unwrap()
+                .caption_segments
+                .iter()
+                .map(|segment| (segment.start, segment.text.clone(), segment.words[0].start))
+                .collect::<Vec<_>>();
+            parts.sort_by(|a, b| a.0.total_cmp(&b.0));
+            parts
+        };
+        let before = parts(&project);
+        assert_eq!(
+            before,
+            vec![
+                (3.0, "early".to_string(), 3.0),
+                (6.0, "late".to_string(), 6.0)
+            ]
+        );
+
+        project.timeline.as_mut().unwrap().segments.swap(0, 1);
+        synchronize_captions(&mut project, &[10.0]);
+
+        assert_eq!(parts(&project), before);
     }
 
     #[test]

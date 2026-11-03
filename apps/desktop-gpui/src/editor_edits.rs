@@ -1239,10 +1239,10 @@ pub fn with_locked_tracks(
     // those positions are re-derived through the recording time they show.
     let final_holds = timeline.hold_windows();
     if edited_holds != final_holds {
-        let remap = |time: f64| {
-            effective_to_output(&final_holds, time - held_time_before(&edited_holds, time))
-        };
-        remap_unlocked_tracks(timeline, locked, remap);
+        let flow = |time: f64| time - held_time_before(&edited_holds, time);
+        let remap_start = |time: f64| effective_to_output(&final_holds, flow(time));
+        let remap_end = |time: f64| effective_to_output_end(&final_holds, flow(time));
+        remap_unlocked_tracks(timeline, locked, remap_start, remap_end);
     }
     true
 }
@@ -1250,47 +1250,55 @@ pub fn with_locked_tracks(
 fn remap_unlocked_tracks(
     timeline: &mut TimelineConfiguration,
     locked: &[LockableTimelineTrack],
-    remap: impl Fn(f64) -> f64,
+    start_map: impl Fn(f64) -> f64,
+    end_map: impl Fn(f64) -> f64,
 ) {
-    fn remap_track<T: TrackSegmentOps>(segments: &mut [T], remap: &impl Fn(f64) -> f64) {
+    fn remap_track<T: TrackSegmentOps>(
+        segments: &mut [T],
+        start_map: &impl Fn(f64) -> f64,
+        end_map: &impl Fn(f64) -> f64,
+    ) {
         for segment in segments {
-            let (start, end) = (remap(segment.start()), remap(segment.end()));
+            let start = start_map(segment.start());
+            let end = end_map(segment.end()).max(start);
             segment.set_start(start);
-            segment.set_end(end.max(start));
+            segment.set_end(end);
         }
     }
     let unlocked = |track: LockableTimelineTrack| !locked.contains(&track);
     if unlocked(LockableTimelineTrack::Style) {
-        remap_track(&mut timeline.style_segments, &remap);
+        remap_track(&mut timeline.style_segments, &start_map, &end_map);
     }
     if unlocked(LockableTimelineTrack::Image) {
-        remap_track(&mut timeline.image_segments, &remap);
+        remap_track(&mut timeline.image_segments, &start_map, &end_map);
     }
     if unlocked(LockableTimelineTrack::Caption) {
-        remap_track(&mut timeline.caption_segments, &remap);
+        remap_track(&mut timeline.caption_segments, &start_map, &end_map);
     }
     if unlocked(LockableTimelineTrack::Keyboard) {
         for segment in &mut timeline.keyboard_segments {
-            segment.remap_times(&remap);
+            let end = segment.end;
+            segment.remap_times(&start_map);
+            segment.end = end_map(end).max(segment.start);
         }
     }
     if unlocked(LockableTimelineTrack::Text) {
-        remap_track(&mut timeline.text_segments, &remap);
+        remap_track(&mut timeline.text_segments, &start_map, &end_map);
     }
     if unlocked(LockableTimelineTrack::Zoom) {
-        remap_track(&mut timeline.zoom_segments, &remap);
+        remap_track(&mut timeline.zoom_segments, &start_map, &end_map);
     }
     if unlocked(LockableTimelineTrack::Scene) {
-        remap_track(&mut timeline.scene_segments, &remap);
+        remap_track(&mut timeline.scene_segments, &start_map, &end_map);
     }
     if unlocked(LockableTimelineTrack::Mask) {
-        remap_track(&mut timeline.mask_segments, &remap);
+        remap_track(&mut timeline.mask_segments, &start_map, &end_map);
     }
     if unlocked(LockableTimelineTrack::Audio) {
-        remap_track(&mut timeline.audio_segments, &remap);
+        remap_track(&mut timeline.audio_segments, &start_map, &end_map);
     }
     if unlocked(LockableTimelineTrack::Camera3d) {
-        remap_track(&mut timeline.camera3d_segments, &remap);
+        remap_track(&mut timeline.camera3d_segments, &start_map, &end_map);
     }
 }
 
@@ -4760,6 +4768,38 @@ mod tests {
             (7.0, 8.0)
         );
         assert_eq!(zoom_flow(&timeline), before - 10.0);
+    }
+
+    #[test]
+    fn an_unlocked_effect_ending_at_a_locked_title_stops_before_it() {
+        let mut timeline = config(serde_json::json!({
+            "timeline": {
+                "segments": [
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 10.0 },
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 10.0, "end": 30.0 }
+                ],
+                "zoomSegments": [{ "start": 13.0, "end": 14.0, "amount": 2.0, "mode": "auto" }],
+                "textSegments": [
+                    { "start": 2.0, "end": 4.0, "layout": "fullscreen", "content": "Title" }
+                ]
+            }
+        }))
+        .timeline
+        .unwrap();
+
+        assert!(with_locked_tracks(
+            &mut timeline,
+            &[LockableTimelineTrack::Text],
+            |timeline| delete_clip_segments(timeline, &[0]),
+        ));
+
+        assert_eq!(
+            (
+                timeline.zoom_segments[0].start,
+                timeline.zoom_segments[0].end
+            ),
+            (1.0, 2.0)
+        );
     }
 
     #[test]
