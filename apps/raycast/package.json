@@ -5,7 +5,10 @@
 	"description": "Start and stop screen recordings with Cap and open your dashboard.",
 	"icon": "icon.png",
 	"author": "CapSoftware",
-	"categories": ["Productivity", "Media"],
+	"categories": [
+		"Productivity",
+		"Media"
+	],
 	"license": "MIT",
 	"commands": [
 		{
