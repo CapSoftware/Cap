@@ -75,7 +75,8 @@ pub use frame_pipeline::{GpuOutputFormat, Nv12RenderedFrame, RenderedFrame, Shar
 pub use frame_pipeline::{PendingSurface, RgbaToBgraSurfaceConverter};
 pub use frame_windows::FrameWindows;
 pub use layers::{
-    BackgroundTextureCache, clean_background_path, last_caption_center, new_font_system,
+    BackgroundTextureCache, CaptionFrameBox, clean_background_path, last_caption_center,
+    new_font_system,
 };
 pub use managed_segment::{
     ManagedRecordingSegmentDecoders, ManagedSegmentDecoderStatus, ManagedSegmentStopHandles,
@@ -3653,6 +3654,9 @@ pub struct FrameLayout {
     pub display: [f32; 4],
     pub camera: Option<[f32; 4]>,
     pub output_size: [u32; 2],
+    /// Only the caption layer measures its box, so this is filled in after
+    /// the frame renders and stays `None` from [`ProjectUniforms::frame_layout`].
+    pub caption: Option<CaptionFrameBox>,
 }
 
 /// Unzoomed placement of the display card in output-frame pixels. Without a
@@ -3682,6 +3686,7 @@ impl ProjectUniforms {
             display: self.display_outer_bounds,
             camera: self.camera.as_ref().map(|c| c.target_bounds),
             output_size: [self.output_size.0, self.output_size.1],
+            caption: None,
         }
     }
 
@@ -8218,6 +8223,10 @@ fn join_layer<T>(handle: std::thread::ScopedJoinHandle<'_, T>) -> T {
 }
 
 impl RendererLayers {
+    pub fn caption_frame_box(&self) -> Option<CaptionFrameBox> {
+        self.overlays.as_ref()?.captions.frame_box()
+    }
+
     pub fn reset_frame_state(&mut self) {
         self.display.reset_frame_state();
         self.camera.reset_frame_state();

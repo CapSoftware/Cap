@@ -2794,6 +2794,8 @@ pub enum FieldKey {
     KeyboardStart(usize),
     KeyboardEnd(usize),
     SyncOffset(usize, OffsetKind),
+    CaptionManualX,
+    CaptionManualY,
     /// The crop dialog's four `BoundInput`s (`Editor.tsx:1199-1216`). They do
     /// not edit the project at all -- they drive the open cropper, which is
     /// why they are the one key whose value comes from outside
@@ -2918,6 +2920,18 @@ impl EditorWindow {
         if let FieldKey::Crop(field) = key {
             let state = self.crop.as_ref()?;
             out.push_str(&ui::format_number(field.read(state.real())));
+            return Some(());
+        }
+        if matches!(key, FieldKey::CaptionManualX | FieldKey::CaptionManualY) {
+            let (x, y) = crate::editor_tabs::caption_manual_center(
+                &self.project.captions.as_ref()?.settings,
+            );
+            let value = if key == FieldKey::CaptionManualX {
+                x
+            } else {
+                y
+            };
+            out.push_str(&crate::editor_tabs::caption_percent_text(value));
             return Some(());
         }
         let timeline = self.project.timeline.as_ref()?;
@@ -3173,6 +3187,23 @@ impl EditorWindow {
                     }
                     segment.display_text = text;
                     true
+                });
+            }
+            FieldKey::CaptionManualX | FieldKey::CaptionManualY => {
+                if !final_commit {
+                    return;
+                }
+                let Some(value) = ui::parse_number(&text) else {
+                    return;
+                };
+                let value = value.clamp(0., 100.) as f32;
+                let horizontal = key == FieldKey::CaptionManualX;
+                self.set_caption_placement(window, cx, move |settings| {
+                    if horizontal {
+                        crate::editor_tabs::set_caption_manual_center(settings, Some(value), None);
+                    } else {
+                        crate::editor_tabs::set_caption_manual_center(settings, None, Some(value));
+                    }
                 });
             }
             // The four `<Input type="number">` boxes commit `onChange`, which
@@ -8306,11 +8337,21 @@ impl EditorWindow {
                 }
             }
             None => match self.sidebar.tab {
-                crate::editor_sidebar::SidebarTab::Captions => colors.extend([
-                    ColorTarget::CaptionColor,
-                    ColorTarget::CaptionBackground,
-                    ColorTarget::CaptionHighlight,
-                ]),
+                crate::editor_sidebar::SidebarTab::Captions => {
+                    colors.extend([
+                        ColorTarget::CaptionColor,
+                        ColorTarget::CaptionBackground,
+                        ColorTarget::CaptionHighlight,
+                    ]);
+                    if self
+                        .project
+                        .captions
+                        .as_ref()
+                        .is_some_and(|captions| captions.settings.position == "manual")
+                    {
+                        fields.extend([FieldKey::CaptionManualX, FieldKey::CaptionManualY]);
+                    }
+                }
                 crate::editor_sidebar::SidebarTab::Keyboard => {
                     colors.extend([ColorTarget::KeyboardColor, ColorTarget::KeyboardBackground])
                 }
