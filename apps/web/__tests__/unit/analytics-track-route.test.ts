@@ -1,4 +1,5 @@
-import type { Effect as EffectModule } from "effect";
+import type { ViewableVideo, ViewDecisionDeps } from "@cap/web-backend";
+import type { Effect as EffectModule, Option as OptionModule } from "effect";
 import type { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -9,6 +10,8 @@ const OWNER_ID = "owner-1";
 const mocks = vi.hoisted(() => ({
 	video: undefined as Record<string, unknown> | undefined,
 	userId: null as string | null,
+	orgMember: false,
+	verifiedPasswords: [] as string[],
 	appendEvents: vi.fn(),
 }));
 
@@ -32,32 +35,61 @@ vi.mock("@cap/database/auth/request-site", () => ({
 	isCrossSiteCookieWrite: () => false,
 }));
 
-vi.mock("@cap/web-backend", async () => {
+vi.mock("@cap/web-backend", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("@cap/web-backend")>();
 	const { Context, Effect } = await import("effect");
-	const { CurrentUser } = await import("@cap/web-domain");
+	const { CurrentUser, Video } = await import("@cap/web-domain");
 	const Tinybird = Context.GenericTag<{
 		appendEvents: (events: unknown[]) => EffectModule.Effect<void>;
 	}>("Tinybird");
+	const deps: ViewDecisionDeps = {
+		repo: {
+			getById: () => Effect.succeedNone,
+			hasViewerGrant: () => Effect.succeed(false),
+		},
+		orgsRepo: {
+			membershipForVideo: () =>
+				Effect.sync(() => (mocks.orgMember ? [{ membershipId: "m" }] : [])),
+			allowedEmailDomain: () => Effect.succeedNone,
+		},
+		spacesRepo: {
+			membershipForVideo: () => Effect.succeedNone,
+			passwordsForVideo: () => Effect.succeed([]),
+		},
+	};
+	class VideosPolicy extends Effect.Service<VideosPolicy>()("VideosPolicy", {
+		sync: () => ({
+			canViewLoaded: (
+				video: ViewableVideo,
+				password: OptionModule.Option<string>,
+			) => actual.buildCanViewLoaded(deps, video, password),
+		}),
+	}) {}
 	return {
 		Tinybird,
+		VideosPolicy,
 		provideOptionalAuth: (
 			app: EffectModule.Effect<unknown, unknown, never>,
 		) => {
-			const withTinybird = app.pipe(
+			const withServices = app.pipe(
 				Effect.provideService(Tinybird, {
 					appendEvents: (events) =>
 						Effect.sync(() => mocks.appendEvents(events)),
 				}),
+				Effect.provide(VideosPolicy.Default),
+				Effect.provideService(Video.VideoPasswordAttachment, {
+					passwords: mocks.verifiedPasswords,
+				}),
 			);
 			return mocks.userId
-				? withTinybird.pipe(
+				? withServices.pipe(
 						Effect.provideService(CurrentUser, {
 							id: mocks.userId,
 							email: "viewer@example.com",
 							activeOrganizationId: ORG_ID,
 						} as never),
 					)
-				: withTinybird;
+				: withServices;
 		},
 	};
 });
@@ -73,6 +105,7 @@ vi.mock("@/lib/Notification", () => ({
 }));
 
 const { POST } = await import("@/app/api/analytics/track/route");
+const { createAnonymousViewNotification } = await import("@/lib/Notification");
 
 const track = (body: Record<string, unknown>) =>
 	POST(
@@ -91,10 +124,16 @@ const recordedEvents = () =>
 describe("POST /api/analytics/track", () => {
 	beforeEach(() => {
 		mocks.appendEvents.mockClear();
+		vi.mocked(createAnonymousViewNotification).mockClear();
 		mocks.userId = null;
+		mocks.orgMember = false;
+		mocks.verifiedPasswords = [];
 		mocks.video = {
+			id: VIDEO_ID,
 			orgId: ORG_ID,
 			ownerId: OWNER_ID,
+			public: true,
+			password: null,
 			firstViewEmailSentAt: new Date("2025-01-01T00:00:00Z"),
 			videoName: "Demo",
 			createdAt: new Date("2025-01-01T00:00:00Z"),
@@ -144,6 +183,46 @@ describe("POST /api/analytics/track", () => {
 		await track({ videoId: VIDEO_ID, sessionId: "session-1" });
 
 		expect(recordedEvents()).toEqual([]);
+	});
+
+	it("does not record views of private videos the viewer cannot watch", async () => {
+		mocks.video = {
+			...mocks.video,
+			public: false,
+			createdAt: new Date(),
+			firstViewEmailSentAt: null,
+		};
+
+		await track({ videoId: VIDEO_ID, sessionId: "session-1" });
+		mocks.userId = "stranger";
+		await track({ videoId: VIDEO_ID, sessionId: "session-2" });
+
+		expect(recordedEvents()).toEqual([]);
+		expect(createAnonymousViewNotification).not.toHaveBeenCalled();
+	});
+
+	it("records views of private videos by org members", async () => {
+		mocks.video = { ...mocks.video, public: false };
+		mocks.userId = "member";
+		mocks.orgMember = true;
+
+		await track({ videoId: VIDEO_ID, sessionId: "session-1" });
+
+		expect(recordedEvents()).toEqual([
+			expect.objectContaining({ video_id: VIDEO_ID, user_id: "member" }),
+		]);
+	});
+
+	it("records password-protected views only after the password is verified", async () => {
+		mocks.video = { ...mocks.video, password: "password-hash" };
+
+		await track({ videoId: VIDEO_ID, sessionId: "locked" });
+		mocks.verifiedPasswords = ["password-hash"];
+		await track({ videoId: VIDEO_ID, sessionId: "unlocked" });
+
+		expect(recordedEvents()).toEqual([
+			expect.objectContaining({ session_id: "unlocked" }),
+		]);
 	});
 
 	it("keeps a client timestamp close to now and replaces one far from it", async () => {

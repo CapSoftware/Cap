@@ -36,11 +36,15 @@ use x11rb::protocol::xproto::{
 };
 use x11rb::rust_connection::RustConnection;
 
+mod frame_scaler;
+
 #[cfg(test)]
 mod x11_tests;
 
 #[cfg(test)]
 mod system_audio_channel_tests;
+
+use frame_scaler::FrameScaler;
 
 #[derive(Debug)]
 pub struct X11Capture;
@@ -2346,67 +2350,6 @@ fn pactl_default_device(command: &str) -> Option<String> {
         .success()
         .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
         .filter(|sink| !sink.is_empty())
-}
-
-struct FrameScaler {
-    context: ffmpeg::software::scaling::Context,
-    source_format: ffmpeg::format::Pixel,
-    source_width: u32,
-    source_height: u32,
-}
-
-impl FrameScaler {
-    fn new(
-        source_format: ffmpeg::format::Pixel,
-        source_width: u32,
-        source_height: u32,
-        output: VideoInfo,
-    ) -> anyhow::Result<Self> {
-        let context = ffmpeg::software::scaling::Context::get(
-            source_format,
-            source_width,
-            source_height,
-            output.pixel_format,
-            output.width,
-            output.height,
-            ffmpeg::software::scaling::Flags::BILINEAR,
-        )?;
-
-        Ok(Self {
-            context,
-            source_format,
-            source_width,
-            source_height,
-        })
-    }
-
-    fn matches(&self, frame: &ffmpeg::frame::Video) -> bool {
-        self.source_format == frame.format()
-            && self.source_width == frame.width()
-            && self.source_height == frame.height()
-    }
-
-    fn scale(
-        &mut self,
-        frame: &ffmpeg::frame::Video,
-        output: VideoInfo,
-    ) -> anyhow::Result<ffmpeg::frame::Video> {
-        if frame.format() == output.pixel_format
-            && frame.width() == output.width
-            && frame.height() == output.height
-        {
-            return Ok(frame.clone());
-        }
-
-        if !self.matches(frame) {
-            *self = Self::new(frame.format(), frame.width(), frame.height(), output)?;
-        }
-
-        let mut scaled = ffmpeg::frame::Video::empty();
-        self.context.run(frame, &mut scaled)?;
-        scaled.set_pts(frame.pts());
-        Ok(scaled)
-    }
 }
 
 fn capture_x11(

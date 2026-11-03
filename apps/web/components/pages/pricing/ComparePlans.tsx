@@ -67,8 +67,8 @@ const sections: FeatureSection[] = [
 		rows: [
 			{
 				label: "Shareable links",
-				free: "Up to 5 min",
-				desktop: "Up to 5 min",
+				free: "25 a month, up to 5 min",
+				desktop: "25 a month, up to 5 min",
 				pro: "Unlimited",
 			},
 			{

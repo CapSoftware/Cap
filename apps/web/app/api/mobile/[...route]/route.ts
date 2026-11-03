@@ -58,8 +58,6 @@ import {
 } from "drizzle-orm";
 import { Effect, Layer, Option } from "effect";
 import { revalidatePath } from "next/cache";
-import { start } from "workflow/api";
-import { downloadLoomVideo } from "@/actions/loom";
 import { getOrgAnalyticsData } from "@/app/(org)/dashboard/analytics/data";
 import {
 	createAccountDeletionRequest,
@@ -71,6 +69,7 @@ import {
 	isEmailCodeSendLimited,
 	isEmailCodeVerifyLimited,
 } from "@/lib/email-code-rate-limit";
+import { importLoomVideoForOwner } from "@/lib/loom-csv-import";
 import {
 	resolveMobileRequestOrigin,
 	resolveMobileWebResourceUrl,
@@ -84,7 +83,6 @@ import { canViewSpaceAnalytics } from "@/lib/space-analytics-access";
 import { enqueueVideoStorageNameSync } from "@/lib/sync-video-storage-names";
 import { canUserDownloadVideo } from "@/lib/video-download-permissions";
 import { startVideoProcessingWorkflow } from "@/lib/video-processing";
-import { importLoomVideoWorkflow } from "@/workflows/import-loom-video";
 
 export const dynamic = "force-dynamic";
 
@@ -355,6 +353,13 @@ const getUploadTitle = (fileName: string) => {
 	const title = fileName.replace(/\.[^/.]+$/, "").trim();
 	return title.length > 0 ? title : "Mobile Upload";
 };
+
+// Web image imports leave a progress row behind, and the web never treats a
+// screenshot as uploading, so the app shouldn't either.
+const activeUploadJoin = and(
+	eq(Db.videos.id, Db.videoUploads.videoId),
+	eq(Db.videos.isScreenshot, false),
+);
 
 const toMobileCapSummary = (
 	row: CapRow,
@@ -1633,7 +1638,7 @@ const getCapRows = Effect.fn("Mobile.getCapRows")(function* (
 			.from(Db.videos)
 			.leftJoin(Db.comments, eq(Db.videos.id, Db.comments.videoId))
 			.leftJoin(Db.users, eq(Db.videos.ownerId, Db.users.id))
-			.leftJoin(Db.videoUploads, eq(Db.videos.id, Db.videoUploads.videoId))
+			.leftJoin(Db.videoUploads, activeUploadJoin)
 			.where(
 				inArray(
 					Db.videos.id,
@@ -1765,7 +1770,7 @@ const getCapStatuses = Effect.fn("Mobile.getCapStatuses")(function* (
 				processingError: Db.videoUploads.processingError,
 			})
 			.from(Db.videos)
-			.leftJoin(Db.videoUploads, eq(Db.videos.id, Db.videoUploads.videoId))
+			.leftJoin(Db.videoUploads, activeUploadJoin)
 			.where(and(eq(Db.videos.ownerId, user.id), inArray(Db.videos.id, ids))),
 	);
 
@@ -2141,7 +2146,7 @@ const getCapById = Effect.fn("Mobile.getCapById")(function* (
 			.from(Db.videos)
 			.leftJoin(Db.comments, eq(Db.videos.id, Db.comments.videoId))
 			.leftJoin(Db.users, eq(Db.videos.ownerId, Db.users.id))
-			.leftJoin(Db.videoUploads, eq(Db.videos.id, Db.videoUploads.videoId))
+			.leftJoin(Db.videoUploads, activeUploadJoin)
 			.where(eq(Db.videos.id, videoId))
 			.groupBy(
 				Db.videos.id,
@@ -2572,7 +2577,7 @@ const readHeader = (
 	}
 };
 
-/** Mirrors /api/analytics/track for signed-in viewers watching in the app. */
+/** Mirrors the share page's view tracking for signed-in viewers watching in the app. */
 const trackMobileCapView = Effect.fn("Mobile.trackCapView")(function* (
 	videoId: Video.VideoId,
 	sessionId: string,
@@ -2597,7 +2602,7 @@ const trackMobileCapView = Effect.fn("Mobile.trackCapView")(function* (
 				activeUploadVideoId: Db.videoUploads.videoId,
 			})
 			.from(Db.videos)
-			.leftJoin(Db.videoUploads, eq(Db.videoUploads.videoId, Db.videos.id))
+			.leftJoin(Db.videoUploads, activeUploadJoin)
 			.where(eq(Db.videos.id, videoId))
 			.limit(1),
 	);
@@ -2631,6 +2636,12 @@ const trackMobileCapView = Effect.fn("Mobile.trackCapView")(function* (
 			},
 		])
 		.pipe(Effect.catchAll(() => Effect.void));
+
+	yield* Effect.forkDaemon(
+		Effect.tryPromise(() =>
+			createNotification({ type: "view", videoId, authorId: user.id }),
+		).pipe(Effect.catchAll(() => Effect.void)),
+	);
 
 	if (
 		video.createdAt >= MOBILE_FIRST_VIEW_EMAIL_CUTOFF &&
@@ -2885,110 +2896,25 @@ const importLoom = Effect.fn("Mobile.importLoom")(function* (
 	);
 	if (limited) return yield* Effect.fail(new HttpApiError.BadRequest());
 
-	const download = yield* Effect.tryPromise({
-		try: () => downloadLoomVideo(loomUrl),
-		catch: () => new HttpApiError.InternalServerError(),
-	});
-	if (!download.success || !download.videoId || !download.downloadUrl) {
-		return yield* Effect.fail(new HttpApiError.BadRequest());
-	}
-	const loomVideoId = download.videoId;
-
-	const storage = yield* Storage;
-	const writable = yield* storage.getWritableAccessForUser(
-		user.id,
-		user.activeOrganizationId,
-	);
-	const videoId = Video.VideoId.make(nanoId());
-	const now = new Date();
-	const importState = yield* database.use((db) =>
-		db.transaction(async (tx) => {
-			const [existing] = await tx
-				.select({
-					importId: Db.importedVideos.id,
-					videoId: Db.videos.id,
-				})
-				.from(Db.importedVideos)
-				.leftJoin(
-					Db.videos,
-					and(
-						eq(Db.videos.id, Db.importedVideos.id),
-						eq(Db.videos.orgId, Db.importedVideos.orgId),
-					),
-				)
-				.where(
-					and(
-						eq(Db.importedVideos.orgId, user.activeOrganizationId),
-						eq(Db.importedVideos.source, "loom"),
-						eq(Db.importedVideos.sourceId, loomVideoId),
-					),
-				)
-				.limit(1);
-			if (existing?.videoId) return "conflict" as const;
-			if (existing) {
-				await tx
-					.delete(Db.importedVideos)
-					.where(
-						and(
-							eq(Db.importedVideos.orgId, user.activeOrganizationId),
-							eq(Db.importedVideos.source, "loom"),
-							eq(Db.importedVideos.sourceId, loomVideoId),
-						),
-					);
-			}
-
-			await tx.insert(Db.videos).values({
-				id: videoId,
-				name:
-					download.videoName?.slice(0, 255) ??
-					`Loom Import - ${now.toISOString().slice(0, 10)}`,
-				ownerId: user.id,
-				orgId: user.activeOrganizationId,
-				source: { type: "webMP4" },
-				bucket: Option.getOrNull(writable.bucketId),
-				storageIntegrationId: Option.getOrNull(writable.storageIntegrationId),
-				public: await getNewVideoPublic(user.activeOrganizationId),
-				duration: download.durationSeconds,
-				width: download.width,
-				height: download.height,
-			});
-			await tx.insert(Db.videoUploads).values({
-				videoId,
-				phase: "uploading",
-				processingProgress: 0,
-				processingMessage: "Importing from Loom...",
-			});
-			await tx.insert(Db.importedVideos).values({
-				id: videoId,
-				orgId: user.activeOrganizationId,
-				source: "loom",
-				sourceId: loomVideoId,
-			});
-			return "ready" as const;
-		}),
-	);
-	if (importState === "conflict") {
-		return yield* Effect.fail(new HttpApiError.BadRequest());
-	}
-
-	const rawFileKey = `${user.id}/${videoId}/raw-upload.mp4`;
-	yield* Effect.tryPromise({
+	const result = yield* Effect.tryPromise({
 		try: () =>
-			start(importLoomVideoWorkflow, [
-				{
-					videoId,
-					userId: user.id,
-					rawFileKey,
-					bucketId: Option.getOrNull(writable.bucketId),
-					loomVideoId,
-				},
-			]),
+			importLoomVideoForOwner({
+				loomUrl,
+				orgId: user.activeOrganizationId,
+				ownerId: user.id,
+			}),
 		catch: () => new HttpApiError.InternalServerError(),
 	});
-	yield* Effect.sync(() => revalidatePath("/dashboard/caps"));
+	if (!result.success || !result.videoId) {
+		return yield* Effect.fail(
+			result.errorCode
+				? new HttpApiError.InternalServerError()
+				: new HttpApiError.BadRequest(),
+		);
+	}
 	return {
-		id: videoId,
-		shareUrl: `${getMobilePublicOrigin(request)}/s/${videoId}`,
+		id: result.videoId,
+		shareUrl: `${getMobilePublicOrigin(request)}/s/${result.videoId}`,
 	};
 });
 

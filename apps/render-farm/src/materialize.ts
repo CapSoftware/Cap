@@ -54,6 +54,7 @@ export type FetchStats = { bytes: number; requests: number; ms: number };
 
 export class ProjectCache {
 	private files = new Map<string, LocalFile>();
+	private closed = false;
 	private rewritten = false;
 	private limiter: Limiter;
 	bytesFetched = 0;
@@ -67,6 +68,7 @@ export class ProjectCache {
 	}
 
 	private open(spec: FileSpec) {
+		this.checkOpen();
 		const fullPath = resolve(this.root, spec.path);
 		if (!fullPath.startsWith(resolve(this.root) + sep)) {
 			throw new Error(`${spec.path} is outside the project`);
@@ -82,6 +84,10 @@ export class ProjectCache {
 		return file;
 	}
 
+	private checkOpen() {
+		if (this.closed) throw new Error("Project cache has been closed");
+	}
+
 	private fetchPiece(
 		spec: FileSpec,
 		file: LocalFile,
@@ -93,7 +99,9 @@ export class ProjectCache {
 			const start = piece * PIECE;
 			const end = Math.min(spec.size, start + PIECE);
 			pending = this.limiter.run(async () => {
+				this.checkOpen();
 				const bytes = await this.s3.getRange(spec.key, start, end - 1);
+				this.checkOpen();
 				if (bytes.byteLength !== end - start) {
 					throw new Error(
 						`short read ${spec.key} ${start}-${end}: ${bytes.byteLength}`,
@@ -120,6 +128,7 @@ export class ProjectCache {
 	}
 
 	async materialize(specs: FileSpec[]): Promise<FetchStats> {
+		this.checkOpen();
 		const started = performance.now();
 		const stats: FetchStats = { bytes: 0, requests: 0, ms: 0 };
 		const work: Promise<void>[] = [];
@@ -147,6 +156,7 @@ export class ProjectCache {
 				work.push(this.fetchPiece(spec, file, piece, stats));
 		}
 		await Promise.all(work);
+		this.checkOpen();
 		if (
 			!this.rewritten &&
 			specs.some((spec) => spec.path === "project-config.json")
@@ -163,6 +173,7 @@ export class ProjectCache {
 	}
 
 	close() {
+		this.closed = true;
 		for (const file of this.files.values()) {
 			try {
 				closeSync(file.fd);

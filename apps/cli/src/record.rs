@@ -251,10 +251,6 @@ fn automation_mode(mode: RecordMode) -> cap_automation::AutomationRecordingMode 
 
 async fn run_detached(params: RecordParams, format: OutputFormat) -> Result<(), String> {
     let recording_id = new_recording_id();
-    // Validate the target up front so a bad --screen/--window fails fast with a clear message rather
-    // than surfacing later from the background worker's log.
-    resolve_target(&params)?;
-
     let path = resolve_path(&params, &recording_id)?;
     let path = if path.is_absolute() {
         path
@@ -263,6 +259,13 @@ async fn run_detached(params: RecordParams, format: OutputFormat) -> Result<(), 
             .map_err(|e| format!("Could not determine current directory: {e}"))?
             .join(path)
     };
+
+    if path.to_str().is_none() {
+        return Err("Detached recording paths must be valid UTF-8; choose a different path or working directory".to_string());
+    }
+
+    // Validate before spawning so target errors do not surface only in the worker log.
+    resolve_target(&params)?;
 
     let exe =
         std::env::current_exe().map_err(|e| format!("Could not locate the cap executable: {e}"))?;
@@ -477,6 +480,7 @@ impl RecordStopArgs {
     }
 
     async fn run_inner(self, format: OutputFormat) -> Result<(), String> {
+        let timeout = stop_timeout(self.timeout)?;
         let session = resolve_session(self.id.as_deref(), self.path.as_deref())?;
         let id = session.recording_id.clone();
 
@@ -492,9 +496,11 @@ impl RecordStopArgs {
             return Ok(());
         }
 
+        let deadline = Instant::now()
+            .checked_add(timeout)
+            .ok_or_else(|| "--timeout is too large".to_string())?;
         session::request_stop(&id)?;
 
-        let deadline = Instant::now() + Duration::from_secs_f64(self.timeout.max(0.0));
         loop {
             let current = session::read_session(&id).unwrap_or_else(|_| session.clone());
             match current.status {
@@ -554,6 +560,11 @@ impl RecordStopArgs {
             tokio::time::sleep(Duration::from_millis(150)).await;
         }
     }
+}
+
+fn stop_timeout(timeout: f64) -> Result<Duration, String> {
+    Duration::try_from_secs_f64(timeout)
+        .map_err(|_| "--timeout must be finite, non-negative, and representable".to_string())
 }
 
 fn cleanup_session(id: &str, project_path: &Path) {
@@ -1321,6 +1332,64 @@ fn emit_record_event(format: OutputFormat, event: &RecordEvent<'_>) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn detached_recording_rejects_non_utf8_path_before_starting() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let root = tempfile::tempdir().unwrap();
+        let path = root
+            .path()
+            .join(std::ffi::OsString::from_vec(b"capture-\xff.cap".to_vec()));
+        let params = RecordParams {
+            target: RecordTargets {
+                screen: None,
+                window: None,
+            },
+            mode: RecordMode::Studio,
+            camera: None,
+            mic: None,
+            system_audio: false,
+            path: Some(path.clone()),
+            fps: None,
+            duration: None,
+        };
+
+        let error = run_detached(params.clone(), OutputFormat::Text)
+            .await
+            .unwrap_err();
+        assert!(error.contains("valid UTF-8"), "{error}");
+        assert!(!path.exists());
+
+        let mut valid_params = params;
+        valid_params.path = Some(root.path().join("capture-记录.cap"));
+        let error = run_detached(valid_params, OutputFormat::Text)
+            .await
+            .unwrap_err();
+        assert!(error.contains("No target specified"), "{error}");
+    }
+
+    #[test]
+    fn stop_timeout_accepts_zero_and_rejects_invalid_timeouts() {
+        assert_eq!(stop_timeout(0.0).unwrap(), Duration::ZERO);
+        assert_eq!(stop_timeout(1.5).unwrap(), Duration::from_millis(1500));
+        for timeout in [-1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY, f64::MAX] {
+            assert!(stop_timeout(timeout).is_err(), "timeout: {timeout}");
+        }
+    }
+
+    #[tokio::test]
+    async fn invalid_stop_timeout_is_rejected_before_session_lookup() {
+        let args = RecordStopArgs {
+            id: Some(format!("missing-{}", Uuid::new_v4())),
+            path: None,
+            timeout: -1.0,
+            format: OutputFormat::Text,
+        };
+        let error = args.run_inner(OutputFormat::Text).await.unwrap_err();
+        assert!(error.contains("--timeout"), "{error}");
+    }
 
     #[test]
     fn instant_project_is_discoverable_before_capture_with_required_audio_intent() {

@@ -116,6 +116,7 @@ export async function generateAiWorkflow(payload: GenerateAiWorkflowPayload) {
 		const result = await generateWithAi(
 			transcript,
 			videoData.aiGenerationLanguage,
+			videoData.video.duration,
 		);
 
 		await saveResults(videoId, videoData, result);
@@ -248,12 +249,16 @@ async function markSkipped(videoId: string): Promise<void> {
 async function generateWithAi(
 	transcript: TranscriptData,
 	language: AiGenerationLanguage,
+	duration: number | null,
 ): Promise<AiResult> {
 	"use step";
 
 	const chunks = chunkTranscriptWithTimestamps(transcript.segments);
 
-	const videoDuration = getVideoDuration(transcript.segments);
+	const videoDuration =
+		duration !== null && duration > 0
+			? duration
+			: getVideoDuration(transcript.segments);
 	const languageInstruction = getAiLanguageInstruction(language);
 
 	let result: AiResult;
