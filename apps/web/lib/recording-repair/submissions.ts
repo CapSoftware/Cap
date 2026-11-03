@@ -65,25 +65,62 @@ export async function createSubmission(
 	return { submissionId, uploadId, partSize: partSizeFor(request.sizeBytes) };
 }
 
+async function loadRequest(userId: string, submissionId: string) {
+	return Effect.gen(function* () {
+		const [bucket] = yield* S3Buckets.getBucketAccess(Option.none());
+		const raw = yield* bucket.getObject(requestKey(userId, submissionId));
+		if (Option.isNone(raw))
+			return yield* Effect.fail(new Error("Unknown submission"));
+		return submissionRequestSchema.parse(JSON.parse(raw.value));
+	}).pipe(runPromise);
+}
+
+export function partLength(sizeBytes: number, partNumber: number) {
+	const partSize = partSizeFor(sizeBytes);
+	const count = Math.ceil(sizeBytes / partSize);
+	if (!Number.isInteger(partNumber) || partNumber < 1 || partNumber > count)
+		return null;
+	return Math.min(partSize, sizeBytes - (partNumber - 1) * partSize);
+}
+
 export async function presignParts(
 	userId: string,
 	submissionId: string,
 	uploadId: string,
 	partNumbers: number[],
 ) {
+	const request = await loadRequest(userId, submissionId);
+	const lengths = partNumbers.map((partNumber) => {
+		const length = partLength(request.sizeBytes, partNumber);
+		if (length === null) throw new Error("Part outside the declared size");
+		return [partNumber, length] as const;
+	});
 	const key = archiveKey(userId, submissionId);
 	const entries = await Effect.gen(function* () {
 		const [bucket] = yield* S3Buckets.getBucketAccess(Option.none());
 		return yield* Effect.all(
-			partNumbers.map((partNumber) =>
+			lengths.map(([partNumber, length]) =>
 				bucket.multipart
-					.getPresignedUploadPartUrl(key, uploadId, partNumber)
+					.getPresignedUploadPartUrl(key, uploadId, partNumber, {
+						ContentLength: length,
+					})
 					.pipe(Effect.map((url) => [String(partNumber), url] as const)),
 			),
 			{ concurrency: 10 },
 		);
 	}).pipe(runPromise);
 	return Object.fromEntries(entries);
+}
+
+export async function abortSubmission(
+	userId: string,
+	submissionId: string,
+	uploadId: string,
+) {
+	await Effect.gen(function* () {
+		const [bucket] = yield* S3Buckets.getBucketAccess(Option.none());
+		yield* bucket.multipart.abort(archiveKey(userId, submissionId), uploadId);
+	}).pipe(runPromise);
 }
 
 export async function completeSubmission(args: {
@@ -94,24 +131,34 @@ export async function completeSubmission(args: {
 	parts: { partNumber: number; etag: string }[];
 }) {
 	const key = archiveKey(args.userId, args.submissionId);
-	const request = await Effect.gen(function* () {
+	const request = await loadRequest(args.userId, args.submissionId);
+	await Effect.gen(function* () {
 		const [bucket] = yield* S3Buckets.getBucketAccess(Option.none());
-		const raw = yield* bucket.getObject(
-			requestKey(args.userId, args.submissionId),
-		);
-		if (Option.isNone(raw))
-			return yield* Effect.fail(new Error("Unknown submission"));
-		yield* bucket.multipart.complete(key, args.uploadId, {
-			MultipartUpload: {
-				Parts: [...args.parts]
-					.sort((a, b) => a.partNumber - b.partNumber)
-					.map((part) => ({ PartNumber: part.partNumber, ETag: part.etag })),
-			},
-		});
-		return submissionRequestSchema.parse(JSON.parse(raw.value));
+		const stored = yield* bucket
+			.headObject(key)
+			.pipe(Effect.catchAll(() => Effect.succeed(null)));
+		if (!stored) {
+			yield* bucket.multipart.complete(key, args.uploadId, {
+				MultipartUpload: {
+					Parts: [...args.parts]
+						.sort((a, b) => a.partNumber - b.partNumber)
+						.map((part) => ({
+							PartNumber: part.partNumber,
+							ETag: part.etag,
+						})),
+				},
+			});
+		}
+		const { ContentLength } = stored ?? (yield* bucket.headObject(key));
+		if (ContentLength !== request.sizeBytes) {
+			yield* bucket.deleteObject(key);
+			return yield* Effect.fail(
+				new Error("Uploaded archive does not match the declared size"),
+			);
+		}
 	}).pipe(runPromise);
 
-	await sendEmail({
+	const sent = await sendEmail({
 		email: REPAIR_INBOX,
 		subject: `Recording repair request from ${args.userEmail}`,
 		react: RecordingRepairRequest({
@@ -128,4 +175,6 @@ export async function completeSubmission(args: {
 		replyTo: args.userEmail,
 		fromOverride: "Cap <richie@send.cap.so>",
 	});
+	if (sent && "error" in sent && sent.error)
+		throw new Error(`Repair request email failed: ${sent.error.message}`);
 }

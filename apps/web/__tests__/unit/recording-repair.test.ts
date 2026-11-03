@@ -17,6 +17,7 @@ vi.mock("@cap/database/emails/recording-repair-request", () => ({
 	RecordingRepairRequest: vi.fn(() => null),
 }));
 
+import { sendEmail } from "@cap/database/emails/config";
 import {
 	type BrokeredModel,
 	createRepairSession,
@@ -28,10 +29,13 @@ import {
 	stopRepairSession,
 } from "@/lib/recording-repair/sandbox";
 import {
+	completeSubmission,
 	isSubmissionId,
 	MAX_SUBMISSION_BYTES,
+	partLength,
 	partSizeFor,
 } from "@/lib/recording-repair/submissions";
+import { runPromise } from "@/lib/server";
 
 const model: BrokeredModel = {
 	model: "anthropic/claude-opus-5-5",
@@ -165,6 +169,45 @@ describe("recording repair identifiers", () => {
 		const size = partSizeFor(MAX_SUBMISSION_BYTES);
 		expect(Math.ceil(MAX_SUBMISSION_BYTES / size)).toBeLessThanOrEqual(10_000);
 		expect(size % (1024 * 1024)).toBe(0);
+	});
+
+	it("only signs parts inside the declared archive, at their exact length", () => {
+		const part = partSizeFor(40 * 1024 * 1024);
+		expect(partLength(40 * 1024 * 1024, 1)).toBe(part);
+		expect(partLength(40 * 1024 * 1024, 3)).toBe(40 * 1024 * 1024 - 2 * part);
+		expect(partLength(40 * 1024 * 1024, 4)).toBeNull();
+		expect(partLength(40 * 1024 * 1024, 0)).toBeNull();
+		expect(partLength(1, 1)).toBe(1);
+		expect(partLength(1, 2)).toBeNull();
+	});
+});
+
+describe("completeSubmission", () => {
+	it("fails when the team's email is not sent", async () => {
+		vi.mocked(runPromise)
+			.mockResolvedValueOnce({
+				sizeBytes: 10,
+				operation: "open",
+				appVersion: "0.6.2",
+				os: "macos",
+				errorMessage: "x",
+				diagnosis: null,
+				sessionId: null,
+			})
+			.mockResolvedValueOnce(undefined);
+		vi.mocked(sendEmail).mockResolvedValueOnce({
+			data: null,
+			error: { name: "email_not_configured", message: "not configured" },
+		} as never);
+		await expect(
+			completeSubmission({
+				userId: "user-1",
+				userEmail: "a@b.c",
+				submissionId: "sub_000000000000000000000000",
+				uploadId: "u",
+				parts: [{ partNumber: 1, etag: "e" }],
+			}),
+		).rejects.toThrow("email failed");
 	});
 });
 
