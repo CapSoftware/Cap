@@ -44,6 +44,10 @@ mod x11_tests;
 #[cfg(test)]
 mod system_audio_channel_tests;
 
+#[cfg(test)]
+#[path = "linux_frame_pool_tests.rs"]
+mod frame_pool_tests;
+
 use frame_scaler::FrameScaler;
 
 #[derive(Debug)]
@@ -954,14 +958,29 @@ const CAPTURE_FRAME_POOL_CAPACITY: usize = 4;
 
 struct CaptureFramePool {
     key: Option<(ffmpeg::format::Pixel, u32, u32)>,
-    frames: Vec<ffmpeg::frame::Video>,
+    frames: Arc<parking_lot::Mutex<Vec<ffmpeg::frame::Video>>>,
+}
+
+struct CaptureFrameLease {
+    frame: ffmpeg::frame::Video,
+    frames: std::sync::Weak<parking_lot::Mutex<Vec<ffmpeg::frame::Video>>>,
+}
+
+unsafe extern "C" fn recycle_capture_frame(opaque: *mut libc::c_void, _data: *mut u8) {
+    let lease = unsafe { Box::from_raw(opaque.cast::<CaptureFrameLease>()) };
+    if let Some(frames) = lease.frames.upgrade() {
+        let mut frames = frames.lock();
+        if frames.len() < CAPTURE_FRAME_POOL_CAPACITY {
+            frames.push(lease.frame);
+        }
+    }
 }
 
 impl CaptureFramePool {
     fn new() -> Self {
         Self {
             key: None,
-            frames: Vec::new(),
+            frames: Arc::default(),
         }
     }
 
@@ -973,40 +992,69 @@ impl CaptureFramePool {
     ) -> ffmpeg::frame::Video {
         if self.key != Some((format, width, height)) {
             self.key = Some((format, width, height));
-            self.frames = (0..CAPTURE_FRAME_POOL_CAPACITY)
-                .map(|_| ffmpeg::frame::Video::new(format, width, height))
-                .collect();
+            self.frames = Arc::new(parking_lot::Mutex::new(
+                (0..CAPTURE_FRAME_POOL_CAPACITY)
+                    .map(|_| ffmpeg::frame::Video::new(format, width, height))
+                    .collect(),
+            ));
         }
 
-        if let Some(index) = self.frames.iter_mut().position(capture_frame_writable) {
-            self.frames.swap_remove(index)
-        } else {
-            ffmpeg::frame::Video::new(format, width, height)
-        }
+        self.frames
+            .lock()
+            .pop()
+            .unwrap_or_else(|| ffmpeg::frame::Video::new(format, width, height))
     }
 
     fn share(&mut self, frame: ffmpeg::frame::Video) -> ffmpeg::frame::Video {
+        let raw = unsafe { &*frame.as_ptr() };
+        if self.key != Some((frame.format(), frame.width(), frame.height()))
+            || raw.buf[0].is_null()
+            || raw.buf[1..].iter().any(|buffer| !buffer.is_null())
+            || raw.nb_extended_buf != 0
+        {
+            return frame;
+        }
+        let backing = unsafe { *raw.buf[0] };
         let mut shared = ffmpeg::frame::Video::empty();
         let status = unsafe { ffmpeg::ffi::av_frame_ref(shared.as_mut_ptr(), frame.as_ptr()) };
-        if status >= 0 {
-            self.release(frame);
-            shared
-        } else {
-            frame
+        if status < 0 {
+            return frame;
         }
+
+        // Only the final-release callback owns the backing frame. Keeping it in
+        // the idle pool while live would force av_frame_make_writable to copy.
+        let lease = Box::into_raw(Box::new(CaptureFrameLease {
+            frame,
+            frames: Arc::downgrade(&self.frames),
+        }));
+        let buffer = unsafe {
+            ffmpeg::ffi::av_buffer_create(
+                backing.data,
+                backing.size,
+                Some(recycle_capture_frame),
+                lease.cast(),
+                0,
+            )
+        };
+        if buffer.is_null() {
+            return unsafe { Box::from_raw(lease) }.frame;
+        }
+        unsafe {
+            let raw = &mut *shared.as_mut_ptr();
+            ffmpeg::ffi::av_buffer_unref(&mut raw.buf[0]);
+            raw.buf[0] = buffer;
+        }
+        shared
     }
 
     fn release(&mut self, frame: ffmpeg::frame::Video) {
-        if self.key == Some((frame.format(), frame.width(), frame.height()))
-            && self.frames.len() < CAPTURE_FRAME_POOL_CAPACITY
-        {
-            self.frames.push(frame);
+        if self.key == Some((frame.format(), frame.width(), frame.height())) {
+            let mut frames = self.frames.lock();
+            if frames.len() < CAPTURE_FRAME_POOL_CAPACITY {
+                frames.push(frame);
+            }
         }
     }
-}
-
-fn capture_frame_writable(frame: &mut ffmpeg::frame::Video) -> bool {
-    unsafe { ffmpeg::ffi::av_frame_is_writable(frame.as_mut_ptr()) != 0 }
 }
 
 fn frame_from_pipewire_data(
@@ -1049,7 +1097,7 @@ fn frame_from_pipewire_data(
     let (crop_x, crop_y, crop_width, crop_height) =
         pipewire_crop(source_width, source_height, crop_bounds)?;
     let offset = chunk_offset as usize;
-    let dmabuf_fd = (data.type_() == spa::buffer::DataType::DmaBuf).then(|| data.fd() as i32);
+    let dmabuf_fd = (data.type_() == spa::buffer::DataType::DmaBuf).then(|| data.fd());
     let mapping;
     let source: &[u8] = match data.data() {
         Some(source) => source,
@@ -4079,12 +4127,7 @@ mod pipewire_frame_tests {
         let overflow = pool.share(overflow);
         assert_eq!(overflow.data(0).as_ptr(), overflow_ptr);
         assert!(overflow.data(0).iter().all(|byte| *byte == 9));
-        assert_eq!(pool.frames.len(), CAPTURE_FRAME_POOL_CAPACITY);
-        assert!(
-            pool.frames
-                .iter()
-                .all(|frame| pointers.contains(&frame.data(0).as_ptr()))
-        );
+        assert!(pool.frames.lock().is_empty());
 
         for (index, frame) in held.iter().enumerate() {
             let marker = (index + 1) as u8;
@@ -4096,11 +4139,14 @@ mod pipewire_frame_tests {
         drop(held.remove(0));
         let reused = pool.acquire(format, 4, 2);
         assert_eq!(reused.data(0).as_ptr(), dropped_ptr);
-        assert_eq!(pool.frames.len(), CAPTURE_FRAME_POOL_CAPACITY - 1);
+        assert!(pool.frames.lock().is_empty());
         for (frame, pointer) in held.iter().zip(&pointers) {
             assert_eq!(frame.data(0).as_ptr(), *pointer);
         }
-        let _overflow = overflow;
+        drop(reused);
+        drop(held);
+        drop(overflow);
+        assert_eq!(pool.frames.lock().len(), CAPTURE_FRAME_POOL_CAPACITY);
     }
 
     #[test]

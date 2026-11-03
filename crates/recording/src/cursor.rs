@@ -2101,7 +2101,7 @@ mod incremental_writer_tests {
         // for that rename before the last flush, so the last write always
         // replaces it with a regular file.
         let deadline = Instant::now() + Duration::from_secs(30);
-        while !(outputs.cursor.as_ref().unwrap().exists() && !fifo.exists()) {
+        while !outputs.cursor.as_ref().unwrap().exists() || fifo.exists() {
             assert!(
                 Instant::now() < deadline,
                 "the stalled write never completed"
