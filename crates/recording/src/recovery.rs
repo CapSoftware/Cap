@@ -3000,24 +3000,14 @@ fn media_follows_torn_fragment(dir: &Path, first_torn: &Path) -> bool {
     else {
         return true;
     };
-    let init = dir.join("init.mp4");
-    let later_fragment = std::fs::read_dir(dir)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .any(|entry| {
-            let path = entry.path();
-            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-                return false;
-            };
-            if let Some(index) = fragment_index_with_suffix(name, ".m4s") {
-                index > torn_index && RecoveryManager::is_m4s_complete(&path)
-            } else if let Some(index) = fragment_index_with_suffix(name, ".m4s.tmp") {
-                index > torn_index && init.is_file() && read_fragment_prefix(&init, &path).is_ok()
-            } else {
-                false
-            }
-        });
+    let later_fragment = fragment_entries(dir).any(|(path, name)| {
+        if let Some(index) = fragment_index_with_suffix(&name, ".m4s") {
+            index > torn_index && RecoveryManager::is_m4s_complete(&path)
+        } else {
+            fragment_index_with_suffix(&name, ".m4s.tmp")
+                .is_some_and(|index| index > torn_index && is_salvageable_pending(dir, &path))
+        }
+    });
     let respawned = !RecoveryManager::respawn_directories(dir).is_empty()
         || dir
             .file_name()
@@ -3026,6 +3016,42 @@ fn media_follows_torn_fragment(dir: &Path, first_torn: &Path) -> bool {
     later_fragment || respawned || later_recording_segment_has_media(dir)
 }
 
+fn fragment_entries(dir: &Path) -> impl Iterator<Item = (PathBuf, String)> {
+    std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            let name = path.file_name()?.to_str()?.to_owned();
+            Some((path, name))
+        })
+}
+
+/// Mirrors `rescue_pending_tmp_fragments`, which turns such a file into a
+/// fragment after validation.
+fn is_salvageable_pending(dir: &Path, path: &Path) -> bool {
+    let init = dir.join("init.mp4");
+    init.is_file() && read_fragment_prefix(&init, path).is_ok()
+}
+
+fn has_salvageable_pending(dir: &Path) -> bool {
+    std::iter::once(dir.to_path_buf())
+        .chain(
+            RecoveryManager::respawn_directories(dir)
+                .into_iter()
+                .map(|(_, directory)| directory),
+        )
+        .any(|directory| {
+            fragment_entries(&directory).any(|(path, name)| {
+                fragment_index_with_suffix(&name, ".m4s.tmp").is_some()
+                    && is_salvageable_pending(&directory, &path)
+            })
+        })
+}
+
+/// A later segment only counts when recovery would use something from it, so
+/// the empty residue of an interrupted resume does not block trimming.
 fn later_recording_segment_has_media(track_dir: &Path) -> bool {
     let segment_index = |path: &Path| {
         path.file_name()?
@@ -3040,15 +3066,13 @@ fn later_recording_segment_has_media(track_dir: &Path) -> bool {
     let (Some(current), Some(root)) = (segment_index(segment), segment.parent()) else {
         return false;
     };
-    std::fs::read_dir(root)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .any(|entry| {
-            let path = entry.path();
-            segment_index(&path).is_some_and(|index| index > current)
-                && std::fs::read_dir(&path).is_ok_and(|mut entries| entries.next().is_some())
-        })
+    fragment_entries(root).any(|(path, _)| {
+        segment_index(&path).is_some_and(|index| index > current)
+            && (RecoveryManager::segment_holds_recoverable_media(&path)
+                || ["display", "camera"]
+                    .iter()
+                    .any(|track| has_salvageable_pending(&path.join(track))))
+    })
 }
 
 fn validate_recovery_manifests(dir: &Path) -> Result<(), RecoveryError> {
@@ -4954,19 +4978,44 @@ mod clean_studio_snapshot_tests {
     }
 
     #[test]
-    fn torn_tail_before_a_later_recording_segment_still_fails() {
+    fn torn_tail_before_a_later_recording_segment_with_media_still_fails() {
         let (directory, fragments) = torn_fixture();
         let project = directory.path();
         let torn = fragments.last().unwrap();
         tear_fragment(torn);
         let later = project.join("content/segments/segment-1/display");
         fs::create_dir_all(&later).unwrap();
-        fs::write(later.join("init.mp4"), b"later segment media").unwrap();
+        fs::copy(
+            project.join(format!("{DISPLAY}/init.mp4")),
+            later.join("init.mp4"),
+        )
+        .unwrap();
+        fs::copy(&fragments[0], later.join("segment_001.m4s")).unwrap();
         assert_rejects_torn(project, torn);
-        fs::remove_file(later.join("init.mp4")).unwrap();
-        fs::remove_dir(&later).unwrap();
+        fs::rename(
+            later.join("segment_001.m4s"),
+            later.join("segment_001.m4s.tmp"),
+        )
+        .unwrap();
+        assert_rejects_torn(project, torn);
+    }
+
+    #[test]
+    fn torn_tail_before_an_empty_later_recording_segment_recovers() {
+        let (directory, fragments) = torn_fixture();
+        let project = directory.path();
+        tear_fragment(fragments.last().unwrap());
+        let later = project.join("content/segments/segment-1/display");
+        fs::create_dir_all(&later).unwrap();
         validate_recovery_manifests(&project.join("content"))
-            .expect("an empty later segment directory holds no media to cut around");
+            .expect("an empty later track directory holds no media to cut around");
+        fs::write(later.join("init.mp4"), b"init without any fragment").unwrap();
+        validate_recovery_manifests(&project.join("content"))
+            .expect("an init segment alone holds no recoverable media");
+        let recording = RecoveryManager::inspect_recording(project).unwrap();
+        RecoveryManager::recover(&recording)
+            .expect("an interrupted resume must not block recovering the earlier footage");
+        validate_recovered_track(&project.join(OUTPUT), ffmpeg::media::Type::Video).unwrap();
     }
 
     #[test]
