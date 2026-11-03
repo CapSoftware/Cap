@@ -50,14 +50,6 @@ export async function POST(request: NextRequest) {
 				throw new Error("EMAIL_MISMATCH");
 			}
 
-			// Serializes declines of different invites by one user, so the last one
-			// to commit sees the others gone before deciding on a personal org.
-			await tx
-				.select({ id: users.id })
-				.from(users)
-				.where(eq(users.id, user.id))
-				.for("update");
-
 			const [membership] = await tx
 				.select({
 					id: organizationMembers.id,
@@ -71,6 +63,16 @@ export async function POST(request: NextRequest) {
 					),
 				)
 				.limit(1)
+				.for("update");
+
+			// Serializes declines of different invites by one user, so the last one
+			// to commit sees the others gone before deciding on a personal org.
+			// Taken after the membership to match seat changes, which lock the
+			// member before the user.
+			await tx
+				.select({ id: users.id })
+				.from(users)
+				.where(eq(users.id, user.id))
 				.for("update");
 
 			if (membership) {
