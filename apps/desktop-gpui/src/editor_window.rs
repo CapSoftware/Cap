@@ -83,6 +83,7 @@ mod frame;
 mod loading;
 mod scenes;
 mod snap;
+mod style_preset_ui;
 
 // ---------------------------------------------------------------------------
 // Window geometry
@@ -1598,6 +1599,7 @@ pub struct EditorWindow {
     /// exactly as the Solid dialogs replace the dropdown.
     presets_menu: Option<PresetsMenu>,
     preset_dialog: Option<PresetDialog>,
+    style_presets: style_preset_ui::StylePresetsState,
     caption_sync_signature: Option<u64>,
     pub(crate) export: Option<ExportUi>,
     pub(crate) sharing: Option<cap_project::SharingMeta>,
@@ -1626,6 +1628,7 @@ enum PresetDialog {
     Create { default: bool },
     Rename { index: usize },
     Delete { index: usize },
+    Style(style_preset_ui::StyleDialog),
 }
 
 /// The add-track tray, computed once when it opens. It slides out of the
@@ -2184,6 +2187,7 @@ impl EditorWindow {
             timeline_resize: None,
             presets_menu: None,
             preset_dialog: None,
+            style_presets: style_preset_ui::StylePresetsState::load(),
             caption_sync_signature: None,
             export: None,
             clips: crate::editor_clips::ClipsState::default(),
@@ -3746,10 +3750,13 @@ impl EditorWindow {
             return;
         }
         if event.keystroke.key.as_str() == "escape"
-            && (self.presets_menu.is_some() || self.preset_dialog.is_some())
+            && (self.presets_menu.is_some()
+                || self.preset_dialog.is_some()
+                || self.style_presets.menu_open())
         {
             self.presets_menu = None;
             self.preset_dialog = None;
+            self.style_presets.close_menu();
             cx.stop_propagation();
             cx.notify();
             return;
@@ -3857,6 +3864,7 @@ impl EditorWindow {
                     || self.sidebar.color_picker.is_some()
                     || self.presets_menu.is_some()
                     || self.preset_dialog.is_some()
+                    || self.style_presets.menu_open()
                     || self.clips.has_open_menu()
                     || self.audio_picker.is_some()
                     || self.camera3d_picker
@@ -6016,11 +6024,11 @@ impl EditorWindow {
                 index = match kind {
                     TrackKind::Text => edits::insert_text_segment(
                         timeline,
-                        edits::default_text_segment(start, end, lane),
+                        crate::style_presets::new_text_segment(start, end, lane),
                     ),
                     TrackKind::Mask => edits::insert_mask_segment(
                         timeline,
-                        edits::default_mask_segment(start, end, lane),
+                        crate::style_presets::new_mask_segment(start, end, lane),
                     ),
                     TrackKind::Scene => edits::insert_scene_segment(
                         timeline,
@@ -7494,6 +7502,11 @@ impl EditorWindow {
                     tracing::warn!("the presets store could not be written");
                 }
             }
+            PresetDialog::Style(dialog) => {
+                if !self.commit_style_dialog(dialog, &name, window, cx) {
+                    return;
+                }
+            }
         }
         self.preset_dialog = None;
         let focus = self.focus.clone();
@@ -7696,11 +7709,11 @@ impl EditorWindow {
                 let index = match kind {
                     TrackKind::Text => edits::insert_text_segment(
                         timeline,
-                        edits::default_text_segment(start, end, lane),
+                        crate::style_presets::new_text_segment(start, end, lane),
                     ),
                     TrackKind::Mask => edits::insert_mask_segment(
                         timeline,
-                        edits::default_mask_segment(start, end, lane),
+                        crate::style_presets::new_mask_segment(start, end, lane),
                     ),
                     _ => return false,
                 };
@@ -7772,12 +7785,7 @@ impl EditorWindow {
             |timeline| {
                 index = edits::insert_style_segment(
                     timeline,
-                    cap_project::StyleSegment {
-                        start,
-                        end,
-                        track: lane,
-                        ..Default::default()
-                    },
+                    crate::style_presets::new_style_segment(start, end, lane),
                 );
                 true
             },
@@ -9761,7 +9769,15 @@ impl EditorWindow {
         self.preset_name_input.update(cx, |input, _| {
             input.set_placeholder(tr::editor::window::presets::name_placeholder())
         });
+        let style_parts = match dialog {
+            PresetDialog::Style(style) => Some(self.style_dialog_parts(style, cx)),
+            _ => None,
+        };
         let (title, primary, danger) = match dialog {
+            PresetDialog::Style(_) => style_parts
+                .as_ref()
+                .map(|(title, primary, danger, _)| (*title, *primary, *danger))
+                .unwrap_or_default(),
             PresetDialog::Create { .. } => (
                 tr::editor::window::presets::create_title(),
                 tr::editor::window::presets::create(),
@@ -9780,6 +9796,9 @@ impl EditorWindow {
         };
 
         let body: gpui::AnyElement = match dialog {
+            PresetDialog::Style(_) => style_parts
+                .map(|(_, _, _, body)| body)
+                .unwrap_or_else(|| div().into_any_element()),
             PresetDialog::Delete { index } => div()
                 .text_size(px(14.))
                 .text_color(Hsla::from(theme.editor.text_2))
@@ -12463,6 +12482,7 @@ impl Render for EditorWindow {
             }))
             .children(self.with_style_controls(|this| this.render_color_picker_popover(cx)))
             .children(self.render_presets_menu(cx))
+            .children(self.render_style_presets_menu(cx))
             .children(self.render_preset_dialog(cx))
             // The clips overlays: import menu, record modal, and the card
             // drag's window-wide layer with its floating ghost.
