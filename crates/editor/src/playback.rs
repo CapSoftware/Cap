@@ -64,6 +64,7 @@ fn clip_audio_changed(previous: &ProjectConfiguration, next: &ProjectConfigurati
             segment.timescale,
             segment.speed_audio_mode,
             segment.volume(),
+            segment.active_voice_eq(),
             offsets.mic,
             offsets.system_audio,
         )
@@ -2328,6 +2329,19 @@ mod tests {
         next.timeline.as_mut().unwrap().segments[0].name = Some("Renamed".into());
         next.timeline.as_mut().unwrap().segments[0].volume = Some(1.0);
         assert!(!clip_audio_changed(&project, &next));
+        next.timeline.as_mut().unwrap().segments[0].voice_eq = Some(cap_project::VoiceEq {
+            enabled: false,
+            ..Default::default()
+        });
+        assert!(!clip_audio_changed(&project, &next));
+        let mut voice_eq = cap_project::VoiceEq::default();
+        next.timeline.as_mut().unwrap().segments[0].voice_eq = Some(voice_eq);
+        assert!(clip_audio_changed(&project, &next));
+        let equalized = next.clone();
+        voice_eq.high_mid.gain_db += 1.0;
+        next.timeline.as_mut().unwrap().segments[0].voice_eq = Some(voice_eq);
+        assert!(clip_audio_changed(&equalized, &next));
+        next.timeline.as_mut().unwrap().segments[0].voice_eq = None;
         next.timeline.as_mut().unwrap().segments[0].volume = Some(0.5);
         assert!(clip_audio_changed(&project, &next));
         next.timeline.as_mut().unwrap().segments[0].volume = None;

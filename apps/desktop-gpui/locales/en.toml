@@ -2442,6 +2442,38 @@ mono_left = "Mono L"
 mono_right = "Mono R"
 stereo = "Stereo"
 
+[editor.tabs.audio.voice_eq]
+apply_all = "Apply to all clips"
+band_high = "High"
+band_high_mid = "High-mid"
+band_low = "Low"
+band_low_cut = "Low cut"
+band_low_mid = "Low-mid"
+declick = "De-click"
+declick_description = "Repairs mouth clicks and crackle and leaves the rest of your voice untouched."
+declick_light = "Light"
+declick_off = "Off"
+declick_strong = "Strong"
+description = "Shape your microphone's tone. What you hear here is what exports."
+frequency = "Frequency"
+gain = "Gain"
+graph_hint = "Drag a point to shape the sound. Scroll over a point to widen or narrow it, and double-click to reset it."
+low_cut_description = "Removes rumble and handling noise below the cutoff."
+off = "Off"
+preset_bright = "Bright"
+preset_broadcast = "Broadcast"
+preset_clear = "Clear"
+preset_custom = "Custom"
+preset_natural = "Natural"
+preset_warm = "Warm"
+q = { text = "Q", context = "Bandwidth of an EQ band. Keep the letter Q, the standard audio term." }
+scope_all = "Editing all clips"
+scope_all_hint = "Select a clip in the timeline to tune it on its own."
+scope_mixed = "Clips have different settings. A change here applies to all of them."
+scope_selected = "Editing the selected clip"
+scope_selected_many = "Editing the selected clips"
+title = "Voice EQ"
+
 [editor.tabs.camera]
 advanced_shadow = "Advanced shadow settings"
 background = "Background"
@@ -2716,6 +2748,7 @@ manual_zoom = "Manual Zoom"
 muted = "Muted"
 numbered_clip = { text = "Clip {number}", context = "{number} is the recording clip number, starting at 1." }
 sensitive = { text = "Sensitive", context = "Mask type that blurs a private area." }
+voice_eq = "Voice EQ"
 
 [editor.timeline.track]
 audio = "Audio"
@@ -2802,6 +2835,7 @@ transition_none = { text = "None", context = "Transition chip: no transition bef
 transition_crossfade = { text = "Crossfade", context = "Transition chip: the previous clip dissolves into this one." }
 transition_fade = { text = "Fade", context = "Transition chip: fade through black into this clip." }
 transition_seconds = { text = "{seconds}s", context = "Transition length chip; {seconds} is a number such as 0.5." }
+voice_eq = "Voice EQ"
 
 [editor.window.clip_menu.merge_blocker]
 edge = { text = "No clip on that side", context = "Grey hint next to a disabled Merge with next/previous clip row." }

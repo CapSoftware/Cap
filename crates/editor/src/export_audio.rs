@@ -1,8 +1,9 @@
 use crate::{AudioRenderer, SegmentMedia};
 use cap_audio::{
     AudioData, AudioRendererTrack, AudioSampleSource, AudioStream, AudioStreamError, ChunkRead,
-    StereoMode, VOICE_PREROLL_SAMPLES, VOICE_PROFILE_SAMPLES, VOICE_WINDOW_PADDING_SAMPLES,
-    VoiceAudio, VoiceEnhancer, VoiceProfile, VoiceSource,
+    StereoMode, VOICE_PREROLL_SAMPLES, VOICE_PROFILE_SAMPLES, VOICE_TONE_LOOKAHEAD_SAMPLES,
+    VOICE_TONE_LOOKBEHIND_SAMPLES, VOICE_WINDOW_PADDING_SAMPLES, VoiceAudio, VoiceEnhancer,
+    VoiceProfile, VoiceSource, VoiceTone, VoiceToneSettings,
 };
 use cap_project::{ClipOffsets, ProjectConfiguration, RecordingMeta, StudioRecordingMeta};
 use std::{
@@ -18,8 +19,11 @@ use std::{
 
 pub(crate) const EXPORT_AUDIO_BLOCK_SAMPLES: usize = 4_096;
 const MAX_PARALLEL_AUDIO_SOURCES: usize = 4;
-const MAX_ENHANCED_WINDOW_SAMPLES: usize =
-    EXPORT_AUDIO_BLOCK_SAMPLES + VOICE_PREROLL_SAMPLES + VOICE_WINDOW_PADDING_SAMPLES;
+const MAX_ENHANCED_WINDOW_SAMPLES: usize = EXPORT_AUDIO_BLOCK_SAMPLES
+    + VOICE_PREROLL_SAMPLES
+    + VOICE_WINDOW_PADDING_SAMPLES
+    + VOICE_TONE_LOOKBEHIND_SAMPLES
+    + VOICE_TONE_LOOKAHEAD_SAMPLES;
 const STUDIO_SOUND_HISTORY_SAMPLES: usize = VOICE_PREROLL_SAMPLES + VOICE_WINDOW_PADDING_SAMPLES;
 
 #[derive(Clone, Debug)]
@@ -467,6 +471,7 @@ impl ExportAudioSources {
         &mut self,
         project: &ProjectConfiguration,
         clip_index: u32,
+        voice_tone: Option<VoiceToneSettings>,
         cursor: usize,
         samples: usize,
         output: &mut [f32],
@@ -481,56 +486,35 @@ impl ExportAudioSources {
             .find(|clip| clip.index == clip_index)
             .map(|clip| clip.offsets)
             .unwrap_or_default();
+        let clip_has_tone = project.timeline.as_ref().is_some_and(|timeline| {
+            timeline.segments.iter().any(|segment| {
+                segment.recording_clip == clip_index
+                    && crate::audio::segment_voice_tone(segment).is_some()
+            })
+        });
         for track in tracks.iter_mut() {
             let start = cursor as i128 + track.offset(&offsets) as i128;
             let end = start + samples as i128;
-            let improve = track.mic
-                && project.audio.improve
+            let processable = track.mic
                 && !project.audio.mute
                 && project.audio.mic_volume_db > -30.0
                 && (1..=2).contains(&track.source.channels());
-            if improve {
-                let start =
-                    usize::try_from(start.max(0)).map_err(|_| ExportAudioError::InvalidWindow)?;
-                let end =
-                    usize::try_from(end.max(0)).map_err(|_| ExportAudioError::InvalidWindow)?;
-                if track.eof.is_some_and(|eof| start >= eof) {
-                    track.enhanced = None;
-                    continue;
-                }
-                if track.isolation != project.audio.isolation {
-                    track.enhancer = None;
-                    track.isolation = project.audio.isolation;
-                }
-                let profile = *track.voice_profile.get_or_insert_with(|| {
-                    AudioData::from_file_range(&track.path, 0, VOICE_PROFILE_SAMPLES)
-                        .map(|audio| VoiceProfile::analyze(&audio))
-                        .unwrap_or_else(|error| {
-                            tracing::warn!(%error, "Could not estimate export voice level");
-                            VoiceProfile::default()
-                        })
-                });
-                let mut enhancer = track.enhancer.take().unwrap_or_else(|| {
-                    VoiceEnhancer::with_settings(
-                        track.source.channels(),
-                        project.audio.isolation.strength(),
-                        profile,
-                    )
-                });
-                let range = enhancer.source_range(start, end.saturating_sub(start));
-                track.prepare(
-                    range.start as i128,
-                    range.end as i128,
-                    STUDIO_SOUND_HISTORY_SAMPLES,
-                )?;
-                track.enhanced =
-                    Some(enhancer.render(&track.view(), start, end.saturating_sub(start)));
-                track.enhancer = Some(enhancer);
+            let improve = processable && project.audio.improve;
+            let voice_tone = voice_tone.filter(|_| processable);
+            let history = if clip_has_tone && track.mic {
+                VOICE_TONE_LOOKBEHIND_SAMPLES
             } else {
-                track.prepare(start, end, 0)?;
-                track.enhanced = None;
+                0
+            };
+            if track.tone.as_ref().map(VoiceTone::settings) != voice_tone {
+                track.tone =
+                    voice_tone.map(|settings| VoiceTone::new(track.source.channels(), settings));
                 track.enhancer = None;
             }
+            let mut tone = track.tone.take();
+            let enhanced = track.render_voice(project, improve, tone.as_mut(), start, end, history);
+            track.tone = tone;
+            track.enhanced = enhanced?;
         }
         let views = tracks.iter().map(|track| track.view()).collect::<Vec<_>>();
         let sources = tracks
@@ -604,6 +588,7 @@ struct ExportAudioTrack {
     enhanced: Option<VoiceAudio>,
     voice_profile: Option<VoiceProfile>,
     isolation: cap_project::VoiceIsolation,
+    tone: Option<VoiceTone>,
 }
 
 impl ExportAudioTrack {
@@ -635,7 +620,81 @@ impl ExportAudioTrack {
             enhanced: None,
             voice_profile: None,
             isolation: cap_project::VoiceIsolation::default(),
+            tone: None,
         })
+    }
+
+    /// Voice EQ and Studio Sound run in the order and with the windows the
+    /// playback renderer uses, so preview and export produce the same samples.
+    fn render_voice(
+        &mut self,
+        project: &ProjectConfiguration,
+        improve: bool,
+        tone: Option<&mut VoiceTone>,
+        start: i128,
+        end: i128,
+        history: usize,
+    ) -> Result<Option<VoiceAudio>, ExportAudioError> {
+        if !improve && tone.is_none() {
+            self.prepare(start, end, history)?;
+            self.enhancer = None;
+            return Ok(None);
+        }
+        let start = usize::try_from(start.max(0)).map_err(|_| ExportAudioError::InvalidWindow)?;
+        let end = usize::try_from(end.max(0)).map_err(|_| ExportAudioError::InvalidWindow)?;
+        if self.eof.is_some_and(|eof| start >= eof) {
+            return Ok(None);
+        }
+        let count = end.saturating_sub(start);
+        match tone {
+            Some(tone) if !improve => {
+                self.enhancer = None;
+                let window = tone.source_range(start, count);
+                self.prepare(window.start as i128, window.end as i128, history)?;
+                Ok(Some(tone.render(&self.view(), start, count)))
+            }
+            mut tone => {
+                if self.isolation != project.audio.isolation {
+                    self.enhancer = None;
+                    self.isolation = project.audio.isolation;
+                }
+                let path = &self.path;
+                let profile = *self.voice_profile.get_or_insert_with(|| {
+                    AudioData::from_file_range(path, 0, VOICE_PROFILE_SAMPLES)
+                        .map(|audio| VoiceProfile::analyze(&audio))
+                        .unwrap_or_else(|error| {
+                            tracing::warn!(%error, "Could not estimate export voice level");
+                            VoiceProfile::default()
+                        })
+                });
+                let mut enhancer = self.enhancer.take().unwrap_or_else(|| {
+                    VoiceEnhancer::with_settings(
+                        self.source.channels(),
+                        project.audio.isolation.strength(),
+                        profile,
+                    )
+                });
+                let range = enhancer.source_range(start, count);
+                let window = tone.as_ref().map_or(range.clone(), |tone| {
+                    tone.source_range(range.start, range.len())
+                });
+                self.prepare(
+                    window.start as i128,
+                    window.end as i128,
+                    STUDIO_SOUND_HISTORY_SAMPLES + history,
+                )?;
+                let view = self.view();
+                let audio = match tone.as_mut() {
+                    Some(tone) => {
+                        let toned = tone.render(&view, range.start, range.len());
+                        enhancer.render(&toned, start, count)
+                    }
+                    None => enhancer.render(&view, start, count),
+                };
+                self.enhancer = Some(enhancer);
+                Ok(Some(audio))
+            }
+        }
     }
 
     fn offset(&self, offsets: &ClipOffsets) -> isize {
@@ -1100,6 +1159,7 @@ mod tests {
             name: None,
             speed_audio_mode: None,
             hide_cursor: None,
+            voice_eq: None,
             volume: None,
         }
     }
@@ -1436,6 +1496,7 @@ mod tests {
                         .render(
                             &project,
                             clip as u32,
+                            None,
                             cursor,
                             EXPORT_AUDIO_BLOCK_SAMPLES,
                             &mut output,
@@ -1658,6 +1719,222 @@ mod tests {
             }
         }
         std::fs::write(path, bytes).unwrap();
+    }
+
+    fn write_clicky_voice_wav(path: &Path, frames: usize, channels: u16, seed: u64) {
+        write_voice_like_wav(path, frames, channels, seed);
+        let mut bytes = std::fs::read(path).unwrap();
+        let channels = usize::from(channels);
+        let mut frame = 2_000 + seed as usize * 37;
+        while frame + 8 < frames {
+            for width in 0..1 + frame % 5 {
+                let index = 44 + ((frame + width) * channels) * 2;
+                let value = if frame.is_multiple_of(2) {
+                    24_000i16
+                } else {
+                    -24_000
+                };
+                bytes[index..index + 2].copy_from_slice(&value.to_le_bytes());
+            }
+            frame += 2_400 + (frame * 7_919) % 4_800;
+        }
+        std::fs::write(path, bytes).unwrap();
+    }
+
+    #[test]
+    fn voice_eq_matches_preview_across_cuts_clips_and_studio_sound() {
+        use cap_project::{VoiceDeclick, VoiceEq, VoiceEqPreset};
+        ffmpeg::init().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let paths =
+            ["mic.wav", "system.wav", "incoming.wav"].map(|name| directory.path().join(name));
+        for (((path, frames), channels), seed) in paths
+            .iter()
+            .zip([168_013, 96_007, 150_013])
+            .zip([1, 2, 2])
+            .zip([5, 9, 13])
+        {
+            write_clicky_voice_wav(path, frames, channels, seed);
+        }
+        let data = paths
+            .iter()
+            .map(|path| Arc::new(AudioData::from_file(path).unwrap()))
+            .collect::<Vec<_>>();
+        let eq = |preset, declick| VoiceEq {
+            declick,
+            ..VoiceEq::from_preset(preset)
+        };
+        let declick_only = VoiceEq {
+            enabled: false,
+            ..eq(VoiceEqPreset::Natural, VoiceDeclick::Strong)
+        };
+        for variant in 0..10 {
+            let mut project = project();
+            project.audio.improve = variant % 2 == 1;
+            let timeline = project.timeline.as_mut().unwrap();
+            timeline.segments = vec![
+                segment(0, 0.001_01, 0.72),
+                segment(0, 0.73, 0.8),
+                segment(0, 0.800_02, 0.92),
+                segment(0, 1.0, 1.63),
+                segment(1, 0.35, 1.4),
+                segment(1, 1.5, 2.2),
+                segment(0, 1.8, 2.5),
+                segment(0, 2.500_02, 3.05),
+            ];
+            match variant / 2 {
+                0 => {
+                    for segment in &mut timeline.segments {
+                        segment.voice_eq = Some(eq(VoiceEqPreset::Clear, VoiceDeclick::Off));
+                    }
+                }
+                1 => {
+                    let settings = [
+                        Some(eq(VoiceEqPreset::Clear, VoiceDeclick::Off)),
+                        None,
+                        Some(eq(VoiceEqPreset::Warm, VoiceDeclick::Strong)),
+                        Some(declick_only),
+                        Some(eq(VoiceEqPreset::Bright, VoiceDeclick::Light)),
+                        None,
+                        Some(eq(VoiceEqPreset::Broadcast, VoiceDeclick::Light)),
+                        Some(eq(VoiceEqPreset::Broadcast, VoiceDeclick::Light)),
+                    ];
+                    for (segment, voice_eq) in timeline.segments.iter_mut().zip(settings) {
+                        segment.voice_eq = voice_eq;
+                    }
+                }
+                2 => {
+                    timeline.segments = vec![segment(0, 0.2, 2.9), segment(1, 0.4, 2.5)];
+                    timeline.segments[0].voice_eq =
+                        Some(eq(VoiceEqPreset::Natural, VoiceDeclick::Strong));
+                    timeline.segments[1].voice_eq =
+                        Some(eq(VoiceEqPreset::Warm, VoiceDeclick::Off));
+                    timeline.transitions.push(ClipTransition {
+                        segment_index: 1,
+                        kind: ClipTransitionType::CrossFade,
+                        duration: 0.431_234_567,
+                    });
+                }
+                3 => {
+                    for segment in &mut timeline.segments {
+                        segment.voice_eq = Some(declick_only);
+                    }
+                    timeline.segments[5].voice_eq = None;
+                    project.clips[0].offsets.mic = 0.137_125;
+                    project.clips[1].offsets.mic = -0.117_125;
+                    project.audio.mic_stereo_mode = cap_project::StereoMode::MonoR;
+                    project.audio.mic_volume_db = 4.0;
+                }
+                _ => {
+                    for segment in &mut timeline.segments {
+                        segment.voice_eq = Some(eq(VoiceEqPreset::Bright, VoiceDeclick::Strong));
+                    }
+                    project.audio.mute = variant == 8;
+                    project.audio.mic_volume_db = if variant == 9 { -30.0 } else { 0.0 };
+                }
+            }
+            for request in [997, 4_096, 48_001] {
+                let context = format!("variant {variant}, request {request}");
+                let (mut reference, mut candidate) = fixture(&paths, &data);
+                reference.set_playhead(0.0, &project);
+                loop {
+                    let expected = reference.render_frame_raw(request, &project);
+                    let mut actual = Vec::new();
+                    let written = candidate
+                        .render_chunks(request, &project, |offset, samples| {
+                            assert_eq!(offset * 2, actual.len());
+                            assert!(samples.len() <= EXPORT_AUDIO_BLOCK_SAMPLES * 2);
+                            actual.extend_from_slice(samples);
+                            Ok(())
+                        })
+                        .unwrap_or_else(|error| panic!("{context}: {error}"));
+                    assert_eq!(
+                        written,
+                        expected.as_ref().map(|(count, _)| *count),
+                        "{context}"
+                    );
+                    let expected = expected.as_ref().map_or(&[][..], |(_, data)| data);
+                    assert_eq!(actual.len(), expected.len(), "{context}");
+                    if let Some(index) = actual
+                        .iter()
+                        .zip(expected)
+                        .position(|(a, b)| a.to_bits() != b.to_bits())
+                    {
+                        panic!(
+                            "{context}: sample {index} differs: {} vs {}",
+                            actual[index], expected[index]
+                        );
+                    }
+                    for track in candidate.sources.tracks.iter().flatten() {
+                        let limit = MAX_ENHANCED_WINDOW_SAMPLES
+                            + STUDIO_SOUND_HISTORY_SAMPLES
+                            + VOICE_TONE_LOOKBEHIND_SAMPLES;
+                        assert!(
+                            track.samples.len() <= limit * track.source.channels() as usize,
+                            "{context}: source window grew to {}",
+                            track.samples.len()
+                        );
+                    }
+                    if written.is_none() {
+                        break;
+                    }
+                }
+                candidate.validate_to_end().unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn voice_eq_changes_only_the_microphone() {
+        use cap_project::{VoiceDeclick, VoiceEq, VoiceEqPreset};
+        ffmpeg::init().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let paths =
+            ["mic.wav", "system.wav", "incoming.wav"].map(|name| directory.path().join(name));
+        for (((path, frames), channels), seed) in paths
+            .iter()
+            .zip([96_013, 96_007, 96_013])
+            .zip([1, 2, 2])
+            .zip([5, 9, 13])
+        {
+            write_clicky_voice_wav(path, frames, channels, seed);
+        }
+        let data = paths
+            .iter()
+            .map(|path| Arc::new(AudioData::from_file(path).unwrap()))
+            .collect::<Vec<_>>();
+        let render = |project: &ProjectConfiguration| {
+            let (mut reference, _) = fixture(&paths, &data);
+            reference.set_playhead(0.0, project);
+            let mut output = Vec::new();
+            while let Some((_, samples)) = reference.render_frame_raw(4_096, project) {
+                output.extend(samples);
+            }
+            output
+        };
+        let mut silent_mic = project();
+        silent_mic.audio.mic_volume_db = f32::NEG_INFINITY;
+        let system_only = render(&silent_mic);
+        for segment in &mut silent_mic.timeline.as_mut().unwrap().segments {
+            segment.voice_eq = Some(VoiceEq {
+                declick: VoiceDeclick::Strong,
+                ..VoiceEq::from_preset(VoiceEqPreset::Broadcast)
+            });
+        }
+        assert_eq!(render(&silent_mic), system_only);
+        let mut plain = project();
+        let original = render(&plain);
+        for segment in &mut plain.timeline.as_mut().unwrap().segments {
+            segment.voice_eq = Some(VoiceEq {
+                enabled: false,
+                ..VoiceEq::default()
+            });
+        }
+        assert_eq!(render(&plain), original);
+        for segment in &mut plain.timeline.as_mut().unwrap().segments {
+            segment.voice_eq = Some(VoiceEq::from_preset(VoiceEqPreset::Bright));
+        }
+        assert_ne!(render(&plain), original);
     }
 
     #[test]

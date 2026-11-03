@@ -39,6 +39,7 @@ mod editor_panels;
 mod editor_preparing;
 mod editor_sidebar;
 mod editor_tabs;
+mod editor_voice_eq;
 mod editor_timeline;
 mod editor_window;
 mod feeds;

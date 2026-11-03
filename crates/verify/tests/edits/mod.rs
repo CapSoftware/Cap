@@ -303,6 +303,7 @@ pub fn base_config(durations: &[f64]) -> ProjectConfiguration {
                 speed_audio_mode: None,
                 volume: None,
                 hide_cursor: None,
+                voice_eq: None,
             })
             .collect(),
         transitions: Vec::new(),
