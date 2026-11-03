@@ -36,8 +36,10 @@ impl EditorInstance {
     async fn render_pending_thumbnail(&self) -> Result<Option<(Vec<u8>, RenderedFrame)>, String> {
         let project_path = self.project_path.clone();
         let pending = tokio::task::spawn_blocking(move || {
-            let project = ProjectConfiguration::load(&project_path)?;
+            let mut project = ProjectConfiguration::load(&project_path)?;
+            let markers = std::mem::take(&mut project.markers);
             let signature = serde_json::to_vec(&project)?;
+            project.markers = markers;
             let screenshots = project_path.join("screenshots");
             if screenshots.join("preview.jpg").is_file()
                 && std::fs::read(screenshots.join("preview-config.json"))
