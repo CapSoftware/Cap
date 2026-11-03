@@ -203,7 +203,6 @@ impl EditorVerticalLayout {
     }
 }
 
-/// Length of each audio-scrub slice; the next one replaces what is left.
 const SCRUB_SLICE_SECS: f64 = 0.09;
 const PRESETS_MENU_WIDTH: f32 = 288.;
 const PRESET_SUBMENU_WIDTH: f32 = 208.;
@@ -1369,9 +1368,6 @@ pub struct EditorWindow {
     /// Kept alive for the window's lifetime: dropping the last `Arc` is what
     /// tears the decoders down, and `dispose()` on close does it explicitly.
     pub(crate) instance: Option<Arc<EditorInstance>>,
-    /// Audio scrub: a slice request is in flight, and the newest position
-    /// asked for meanwhile (played once it lands).
-    /// The toolbar's speaker toggle ([`crate::store::audio_scrub_enabled`]).
     audio_scrub: bool,
     scrub_audio_busy: bool,
     scrub_audio_next: Option<f64>,
@@ -4032,10 +4028,6 @@ impl EditorWindow {
         self.scrub_audio_at(time, cx);
     }
 
-    /// Audio scrub: while the ruler is dragged with playback stopped, play a
-    /// short slice of the mix under the playhead. One request at a time; the
-    /// newest position waits and plays next, spaced by about a slice so they
-    /// run back to back.
     fn scrub_audio_at(&mut self, time: f64, cx: &mut Context<Self>) {
         if self.playing || !self.audio_scrub {
             return;

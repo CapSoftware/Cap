@@ -99,9 +99,7 @@ enum ControlMsg {
     StopPlayback {
         generation: u64,
     },
-    /// A short scrub slice (interleaved stereo at
-    /// [`crate::AudioRenderer::SAMPLE_RATE`]) to play while playback is
-    /// stopped, replacing whatever is left of the previous one.
+    /// Interleaved stereo at [`crate::AudioRenderer::SAMPLE_RATE`].
     Scrub {
         samples: Vec<f32>,
     },
@@ -526,11 +524,9 @@ impl AudioOutput {
             .send(ControlMsg::StopPlayback { generation });
     }
 
-    /// Plays a short scrub slice (interleaved stereo at
-    /// [`crate::AudioRenderer::SAMPLE_RATE`]) on the shared stream, replacing
-    /// whatever is left of the previous slice. Ignored while playback owns the
-    /// stream. Non-blocking: the slice is converted to the device's format on
-    /// the output thread.
+    /// `samples` are interleaved stereo at
+    /// [`crate::AudioRenderer::SAMPLE_RATE`]. Ignored while playback owns the
+    /// stream.
     pub fn play_snippet(&self, samples: Vec<f32>) {
         if samples.is_empty() {
             return;
@@ -1583,34 +1579,52 @@ where
     let (snippet_tx, mut snippet_rx) = HeapRb::<Vec<T>>::new(SCRUB_QUEUE).split();
     let (mut spent_tx, spent_rx) = HeapRb::<Vec<T>>::new(SCRUB_QUEUE * 2).split();
     let mut snippet: Option<(Vec<T>, usize)> = None;
+    let mut replaced: Option<(Vec<T>, usize)> = None;
+    let scrub_channels = output_info.channels.max(1);
+    let crossfade_frames = (output_info.sample_rate as usize / 200).max(1);
     let callback_source_active = source_active.clone();
     let stream = device
         .build_output_stream(
             &config,
             move |buffer: &mut [T], info| {
                 drain_source_commands(&mut active, &source_rx);
-                while spent_tx.vacant_len() > usize::from(snippet.is_some())
+                while spent_tx.vacant_len()
+                    > usize::from(snippet.is_some()) + usize::from(replaced.is_some())
                     && let Some(next) = snippet_rx.try_pop()
                 {
-                    retire_snippet(&mut spent_tx, &mut snippet);
+                    retire_snippet(&mut spent_tx, &mut replaced);
+                    if snippet
+                        .as_ref()
+                        .is_some_and(|(samples, position)| *position < samples.len())
+                    {
+                        replaced = snippet.take();
+                    } else {
+                        retire_snippet(&mut spent_tx, &mut snippet);
+                    }
                     snippet = Some((next, 0));
                 }
                 if active.is_some() {
+                    retire_snippet(&mut spent_tx, &mut replaced);
                     retire_snippet(&mut spent_tx, &mut snippet);
                 }
                 callback_source_active
                     .store(active.is_some() || snippet.is_some(), Ordering::Release);
 
                 let Some(source) = active.as_mut() else {
-                    let Some((samples, position)) = snippet.as_mut() else {
+                    let Some(current) = snippet.as_mut() else {
                         buffer.fill(T::EQUILIBRIUM);
                         return;
                     };
-                    let count = (samples.len() - *position).min(buffer.len());
-                    buffer[..count].copy_from_slice(&samples[*position..*position + count]);
-                    buffer[count..].fill(T::EQUILIBRIUM);
-                    *position += count;
-                    if *position >= samples.len() {
+                    if !write_scrub_slice(
+                        buffer,
+                        current,
+                        replaced.as_ref(),
+                        scrub_channels,
+                        crossfade_frames,
+                    ) {
+                        retire_snippet(&mut spent_tx, &mut replaced);
+                    }
+                    if current.1 >= current.0.len() {
                         retire_snippet(&mut spent_tx, &mut snippet);
                     }
                     return;
@@ -1709,10 +1723,41 @@ fn retire_snippet<T>(spent: &mut HeapProd<Vec<T>>, slot: &mut Option<(Vec<T>, us
     }
 }
 
+/// A slice that replaced one still playing starts with the old one fading out
+/// under it: cutting the old slice mid-waveform clicks.
+fn write_scrub_slice<T>(
+    buffer: &mut [T],
+    (samples, position): &mut (Vec<T>, usize),
+    replaced: Option<&(Vec<T>, usize)>,
+    channels: usize,
+    crossfade_frames: usize,
+) -> bool
+where
+    T: cpal::SizedSample + cpal::FromSample<f32>,
+{
+    let as_f32 = |sample: T| cpal::Sample::to_sample::<f32>(cpal::Sample::to_float_sample(sample));
+    let count = (samples.len() - *position).min(buffer.len());
+    for (offset, out) in buffer[..count].iter_mut().enumerate() {
+        let index = *position + offset;
+        let frame = index / channels;
+        *out = match replaced.and_then(|(old, start)| old.get(start + index)) {
+            Some(&previous) if frame < crossfade_frames => {
+                let gain = 1.0 - frame as f32 / crossfade_frames as f32;
+                T::from_sample_(as_f32(samples[index]) + as_f32(previous) * gain)
+            }
+            _ => samples[index],
+        };
+    }
+    buffer[count..].fill(T::EQUILIBRIUM);
+    *position += count;
+    replaced.is_some_and(|(old, start)| {
+        *position / channels < crossfade_frames && start + *position < old.len()
+    })
+}
+
 /// Scrub slices waiting for the callback; a drag sends one every ~100 ms.
 const SCRUB_QUEUE: usize = 4;
 
-/// How long scrub slices are dropped after the stream fails to open.
 const SCRUB_RETRY_AFTER_FAILURE: Duration = Duration::from_secs(2);
 
 /// Converts an interleaved stereo slice at `source_rate` to the device's
@@ -1763,7 +1808,23 @@ mod native_tests;
 
 #[cfg(test)]
 mod scrub_snippet_tests {
-    use super::{HeapRb, Split, convert_snippet, retire_snippet};
+    use super::{HeapRb, Split, convert_snippet, retire_snippet, write_scrub_slice};
+
+    #[test]
+    fn a_replaced_slice_fades_out_under_the_new_one() {
+        let old = (vec![1.0f32; 8], 2);
+        let mut new = (vec![0.0f32; 8], 0);
+        let mut buffer = [9.0f32; 4];
+        assert!(write_scrub_slice(&mut buffer, &mut new, Some(&old), 1, 8));
+        assert_eq!(buffer, [1.0, 0.875, 0.75, 0.625]);
+        assert!(!write_scrub_slice(&mut buffer, &mut new, Some(&old), 1, 8));
+        assert_eq!(buffer, [0.5, 0.375, 0.0, 0.0]);
+
+        let mut alone = (vec![0.5f32; 3], 0);
+        assert!(!write_scrub_slice(&mut buffer, &mut alone, None, 1, 4));
+        assert_eq!(buffer, [0.5, 0.5, 0.5, 0.0]);
+        assert_eq!(alone.1, 3);
+    }
 
     #[test]
     fn a_full_spent_ring_keeps_the_slice_instead_of_freeing_it() {

@@ -863,17 +863,12 @@ impl EditorInstance {
         (self.on_state_change)(&state);
     }
 
-    /// Audio scrubbing: plays `secs` of the mixed project audio at `time`
-    /// (output seconds) on this editor's own audio output, so it follows
-    /// device changes and closes with the editor. Ignored while playing.
     pub async fn scrub_audio(&self, time: f64, secs: f64) {
         let samples = self.audio_snippet(time, secs).await;
         self.audio_output.play_snippet(samples);
     }
 
-    /// A short slice of the mixed project audio at `time` (output seconds),
-    /// interleaved stereo at [`crate::AudioRenderer::SAMPLE_RATE`]. Edges are
-    /// faded so back-to-back slices don't click.
+    /// Edges are faded so back-to-back slices don't click.
     async fn audio_snippet(&self, time: f64, secs: f64) -> Vec<f32> {
         let segments = crate::get_audio_segments(&self.segment_medias).await;
         let music = self.load_music_tracks().await;
