@@ -1996,6 +1996,55 @@ edit_cursor = "Editar cursor"
 help = "Los cambios solo se aplican durante este segmento. Activa un grupo para copiar sus ajustes globales."
 reset_crop = "Restablecer recorte"
 
+[editor.panel.style_presets]
+apply = "Aplicar"
+create = "Guardar"
+create_title = "Guardar preajuste de estilo"
+custom = "Estilo personalizado"
+default_badge = "Predeterminado"
+delete = "Eliminar"
+delete_confirm = "¿Eliminar «{name}»? Los elementos que ya usan este estilo lo conservan."
+delete_title = "Eliminar preajuste de estilo"
+empty = "Aún no hay preajustes guardados"
+empty_help = "Guarda un estilo para reutilizarlo en cualquier proyecto."
+font_missing = "{font} no está instalada en este ordenador, así que se usa {fallback} en su lugar."
+move_down = "Bajar"
+move_up = "Subir"
+remove_default = "Quitar como predeterminado"
+rename = "Renombrar"
+rename_title = "Renombrar preajuste de estilo"
+save = "Guardar estilo como preajuste"
+save_failed = "No se pudieron guardar los preajustes. Cap no puede escribir su archivo de ajustes."
+set_default = "Establecer como predeterminado"
+tooltip = "Preajustes de estilo"
+update = "Actualizar con el estilo actual"
+
+[editor.panel.style_presets.captions]
+default_name = "Mi estilo de subtítulos"
+use_for_new = "Usar para subtítulos nuevos"
+used_for_new = "Los subtítulos nuevos usan este estilo"
+
+[editor.panel.style_presets.mask]
+applied_all = "Aplicado a todas las máscaras ({number})"
+apply_all = "Aplicar a todas las máscaras ({number})"
+default_name = "Mi estilo de máscara"
+use_for_new = "Usar para máscaras nuevas"
+used_for_new = "Las máscaras nuevas usan este estilo"
+
+[editor.panel.style_presets.style]
+applied_all = "Aplicado a todos los segmentos de estilo ({number})"
+apply_all = "Aplicar a todos los segmentos de estilo ({number})"
+default_name = "Mi estilo"
+use_for_new = "Usar para segmentos de estilo nuevos"
+used_for_new = "Los segmentos de estilo nuevos usan este estilo"
+
+[editor.panel.style_presets.text_segment]
+applied_all = "Aplicado a todos los segmentos de texto ({number})"
+apply_all = "Aplicar a todos los segmentos de texto ({number})"
+default_name = "Mi estilo de texto"
+use_for_new = "Usar para texto nuevo"
+used_for_new = "El texto nuevo usa este estilo"
+
 [editor.panel.text_animation]
 bounce = "Rebote"
 fade = "Fundido"

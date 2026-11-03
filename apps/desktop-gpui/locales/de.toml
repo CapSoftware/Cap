@@ -1996,6 +1996,55 @@ edit_cursor = "Cursor bearbeiten"
 help = "Überschreibungen gelten nur während dieses Segments. Aktivieren Sie eine Gruppe, um ihre globalen Einstellungen zu übernehmen."
 reset_crop = "Zuschnitt zurücksetzen"
 
+[editor.panel.style_presets]
+apply = "Anwenden"
+create = "Speichern"
+create_title = "Stilvorlage speichern"
+custom = "Eigener Stil"
+default_badge = "Standard"
+delete = "Löschen"
+delete_confirm = "„{name}“ löschen? Elemente, die diesen Stil bereits verwenden, behalten ihn."
+delete_title = "Stilvorlage löschen"
+empty = "Noch keine gespeicherten Vorlagen"
+empty_help = "Speichern Sie einen Stil, um ihn in jedem Projekt wiederzuverwenden."
+font_missing = "{font} ist auf diesem Computer nicht installiert, daher wird stattdessen {fallback} verwendet."
+move_down = "Nach unten"
+move_up = "Nach oben"
+remove_default = "Nicht mehr als Standard verwenden"
+rename = "Umbenennen"
+rename_title = "Stilvorlage umbenennen"
+save = "Stil als Vorlage speichern"
+save_failed = "Vorlagen konnten nicht gespeichert werden. Cap kann seine Einstellungsdatei nicht schreiben."
+set_default = "Als Standard festlegen"
+tooltip = "Stilvorlagen"
+update = "Mit aktuellem Stil aktualisieren"
+
+[editor.panel.style_presets.captions]
+default_name = "Mein Untertitelstil"
+use_for_new = "Für neue Untertitel verwenden"
+used_for_new = "Neue Untertitel verwenden diesen Stil"
+
+[editor.panel.style_presets.mask]
+applied_all = "Auf alle Masken angewendet ({number})"
+apply_all = "Auf alle Masken anwenden ({number})"
+default_name = "Mein Maskenstil"
+use_for_new = "Für neue Masken verwenden"
+used_for_new = "Neue Masken verwenden diesen Stil"
+
+[editor.panel.style_presets.style]
+applied_all = "Auf alle Stilsegmente angewendet ({number})"
+apply_all = "Auf alle Stilsegmente anwenden ({number})"
+default_name = "Mein Stil"
+use_for_new = "Für neue Stilsegmente verwenden"
+used_for_new = "Neue Stilsegmente verwenden diesen Stil"
+
+[editor.panel.style_presets.text_segment]
+applied_all = "Auf alle Textsegmente angewendet ({number})"
+apply_all = "Auf alle Textsegmente anwenden ({number})"
+default_name = "Mein Textstil"
+use_for_new = "Für neuen Text verwenden"
+used_for_new = "Neuer Text verwendet diesen Stil"
+
 [editor.panel.text_animation]
 bounce = "Hüpfen"
 fade = "Blende"

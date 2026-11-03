@@ -1996,6 +1996,55 @@ edit_cursor = "Modifier le curseur"
 help = "Les remplacements ne s'appliquent que pendant ce segment. Activez un groupe pour copier ses paramètres globaux."
 reset_crop = "Réinitialiser le recadrage"
 
+[editor.panel.style_presets]
+apply = "Appliquer"
+create = "Enregistrer"
+create_title = "Enregistrer le préréglage de style"
+custom = "Style personnalisé"
+default_badge = "Par défaut"
+delete = "Supprimer"
+delete_confirm = "Supprimer « {name} » ? Les éléments qui utilisent déjà ce style le conservent."
+delete_title = "Supprimer le préréglage de style"
+empty = "Aucun préréglage enregistré pour l'instant"
+empty_help = "Enregistrez un style pour le réutiliser dans n'importe quel projet."
+font_missing = "{font} n'est pas installée sur cet ordinateur, {fallback} est donc utilisée à la place."
+move_down = "Descendre"
+move_up = "Monter"
+remove_default = "Ne plus utiliser par défaut"
+rename = "Renommer"
+rename_title = "Renommer le préréglage de style"
+save = "Enregistrer le style comme préréglage"
+save_failed = "Impossible d'enregistrer les préréglages. Cap ne peut pas écrire son fichier de réglages."
+set_default = "Définir par défaut"
+tooltip = "Préréglages de style"
+update = "Mettre à jour avec le style actuel"
+
+[editor.panel.style_presets.captions]
+default_name = "Mon style de sous-titres"
+use_for_new = "Utiliser pour les nouveaux sous-titres"
+used_for_new = "Les nouveaux sous-titres utilisent ce style"
+
+[editor.panel.style_presets.mask]
+applied_all = "Appliqué à tous les masques ({number})"
+apply_all = "Appliquer à tous les masques ({number})"
+default_name = "Mon style de masque"
+use_for_new = "Utiliser pour les nouveaux masques"
+used_for_new = "Les nouveaux masques utilisent ce style"
+
+[editor.panel.style_presets.style]
+applied_all = "Appliqué à tous les segments de style ({number})"
+apply_all = "Appliquer à tous les segments de style ({number})"
+default_name = "Mon style"
+use_for_new = "Utiliser pour les nouveaux segments de style"
+used_for_new = "Les nouveaux segments de style utilisent ce style"
+
+[editor.panel.style_presets.text_segment]
+applied_all = "Appliqué à tous les segments de texte ({number})"
+apply_all = "Appliquer à tous les segments de texte ({number})"
+default_name = "Mon style de texte"
+use_for_new = "Utiliser pour le nouveau texte"
+used_for_new = "Le nouveau texte utilise ce style"
+
 [editor.panel.text_animation]
 bounce = "Rebond"
 fade = "Fondu"

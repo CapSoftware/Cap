@@ -1996,6 +1996,55 @@ edit_cursor = "कर्सर एडिट करें"
 help = "बदलाव सिर्फ़ इस सेगमेंट के दौरान लागू होते हैं। किसी ग्रुप की ग्लोबल सेटिंग्स कॉपी करने के लिए उसे चालू करें।"
 reset_crop = "क्रॉप रीसेट करें"
 
+[editor.panel.style_presets]
+apply = "लागू करें"
+create = "सेव करें"
+create_title = "स्टाइल प्रीसेट सेव करें"
+custom = "कस्टम स्टाइल"
+default_badge = "डिफ़ॉल्ट"
+delete = "हटाएँ"
+delete_confirm = "\"{name}\" हटाएँ? जो आइटम पहले से यह स्टाइल इस्तेमाल करते हैं, उनमें यह बनी रहेगी।"
+delete_title = "स्टाइल प्रीसेट हटाएँ"
+empty = "अभी तक कोई सेव किया गया प्रीसेट नहीं"
+empty_help = "किसी भी प्रोजेक्ट में दोबारा इस्तेमाल करने के लिए स्टाइल सेव करें।"
+font_missing = "{font} इस कंप्यूटर पर इंस्टॉल नहीं है, इसलिए इसकी जगह {fallback} इस्तेमाल होता है।"
+move_down = "नीचे ले जाएँ"
+move_up = "ऊपर ले जाएँ"
+remove_default = "डिफ़ॉल्ट से हटाएँ"
+rename = "नाम बदलें"
+rename_title = "स्टाइल प्रीसेट का नाम बदलें"
+save = "स्टाइल को प्रीसेट के रूप में सेव करें"
+save_failed = "प्रीसेट सेव नहीं हो सके। Cap अपनी सेटिंग्स फ़ाइल में नहीं लिख पा रहा है।"
+set_default = "डिफ़ॉल्ट बनाएँ"
+tooltip = "स्टाइल प्रीसेट"
+update = "मौजूदा स्टाइल से अपडेट करें"
+
+[editor.panel.style_presets.captions]
+default_name = "मेरी कैप्शन स्टाइल"
+use_for_new = "नए कैप्शन के लिए इस्तेमाल करें"
+used_for_new = "नए कैप्शन यह स्टाइल इस्तेमाल करते हैं"
+
+[editor.panel.style_presets.mask]
+applied_all = "सभी मास्क पर लागू किया गया ({number})"
+apply_all = "सभी मास्क पर लागू करें ({number})"
+default_name = "मेरी मास्क स्टाइल"
+use_for_new = "नए मास्क के लिए इस्तेमाल करें"
+used_for_new = "नए मास्क यह स्टाइल इस्तेमाल करते हैं"
+
+[editor.panel.style_presets.style]
+applied_all = "सभी स्टाइल सेगमेंट पर लागू किया गया ({number})"
+apply_all = "सभी स्टाइल सेगमेंट पर लागू करें ({number})"
+default_name = "मेरी स्टाइल"
+use_for_new = "नए स्टाइल सेगमेंट के लिए इस्तेमाल करें"
+used_for_new = "नए स्टाइल सेगमेंट यह स्टाइल इस्तेमाल करते हैं"
+
+[editor.panel.style_presets.text_segment]
+applied_all = "सभी टेक्स्ट सेगमेंट पर लागू किया गया ({number})"
+apply_all = "सभी टेक्स्ट सेगमेंट पर लागू करें ({number})"
+default_name = "मेरी टेक्स्ट स्टाइल"
+use_for_new = "नए टेक्स्ट के लिए इस्तेमाल करें"
+used_for_new = "नया टेक्स्ट यह स्टाइल इस्तेमाल करता है"
+
 [editor.panel.text_animation]
 bounce = "बाउंस"
 fade = "फ़ेड"
