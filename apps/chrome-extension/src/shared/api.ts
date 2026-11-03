@@ -69,8 +69,6 @@ const checkAuthStartRoute = async (
 	}
 };
 
-// The offscreen recorder reports start failures to the service worker as a
-// plain message string, so this text is how a 401 there is recognized.
 export const SESSION_EXPIRED_MESSAGE =
 	"Your Cap sign-in expired. Sign in again to keep recording.";
 

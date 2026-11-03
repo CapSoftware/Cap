@@ -1136,17 +1136,16 @@ const requireBootstrapGeneration = (generation: number) => {
 	}
 };
 
-// A 401 means the server no longer accepts this key, so keeping it would fail
-// every request; drop it and tell the user to sign in again.
-const signOutIfSessionExpired = async (message: string, generation: number) => {
-	if (
-		message !== SESSION_EXPIRED_MESSAGE ||
-		generation !== bootstrapGeneration
-	) {
-		return;
-	}
+const signOutIfAuthRejected = async (authApiKey: string) => {
 	// Saved first so a popup reacting to the cleared key can read it.
 	await saveAuthError(SESSION_EXPIRED_MESSAGE);
+	// Nothing runs between this read and the clear, so a sign-in that saved a
+	// new key meanwhile is seen here and keeps it.
+	const current = await loadAuth().catch(() => null);
+	if (current?.authApiKey !== authApiKey) {
+		await clearAuthError();
+		return;
+	}
 	await clearAuth();
 	await resetBootstrapCache();
 };
@@ -1163,8 +1162,8 @@ const refreshBootstrap = (settings: ExtensionSettings, auth: ExtensionAuth) => {
 			return bootstrap;
 		})
 		.catch(async (error: unknown) => {
-			if (error instanceof ApiRequestError) {
-				await signOutIfSessionExpired(error.message, generation);
+			if (error instanceof ApiRequestError && error.status === 401) {
+				await signOutIfAuthRejected(auth.authApiKey);
 			}
 			throw error;
 		})
@@ -1907,11 +1906,7 @@ const handleRequest = async (
 	}
 
 	if (message.type === "start-recording") {
-		const generation = bootstrapGeneration;
 		const response = await startRecording(message.mode, sender.tab);
-		if (!response.ok) {
-			await signOutIfSessionExpired(response.error, generation);
-		}
 		if (response.ok && response.status) {
 			setRecordingStatusAndBroadcast(response.status);
 			if (isRecordingPreviewStatus(response.status)) {
@@ -2143,6 +2138,11 @@ const handleRequest = async (
 
 	if (message.type === "confirm-result") {
 		resolveRecordingConfirmation(message.requestId, message.confirmed);
+		return { ok: true };
+	}
+
+	if (message.type === "auth-rejected") {
+		await signOutIfAuthRejected(message.authApiKey);
 		return { ok: true };
 	}
 

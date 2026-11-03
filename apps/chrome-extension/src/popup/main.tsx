@@ -352,8 +352,6 @@ function App() {
 			areaName: string,
 		) => {
 			if (areaName !== "local") return;
-			// The service worker drops a key the server rejects; reflect that in a
-			// popup that is already open instead of offering a Record that fails.
 			if (changes[AUTH_KEY] && changes[AUTH_KEY].newValue === undefined) {
 				setAuth(null);
 				setBootstrap(null);
