@@ -350,6 +350,207 @@ impl ParagraphPainter {
     }
 }
 
+const ROW_HEIGHT: f32 = 30.;
+const MAX_VISIBLE_ROWS: usize = 8;
+
+fn snippet_around(doc: &TranscriptDoc, words: Range<usize>) -> (String, Range<usize>) {
+    let paragraph = &doc.paragraphs[doc.paragraph_of(words.start)].words;
+    let before_start = paragraph.start.max(words.start.saturating_sub(4));
+    let after_end = doc.paragraphs[doc.paragraph_of(words.end - 1)]
+        .words
+        .end
+        .min(words.end + 4);
+    let phrase = doc.text_of(words.clone());
+    let mut snippet = String::new();
+    if before_start < words.start {
+        snippet.push_str("… ");
+        snippet.push_str(&doc.text_of(before_start..words.start));
+        snippet.push(' ');
+    }
+    let highlight = snippet.len()..snippet.len() + phrase.len();
+    snippet.push_str(&phrase);
+    if words.end < after_end {
+        snippet.push(' ');
+        snippet.push_str(&doc.text_of(words.end..after_end));
+        snippet.push_str(" …");
+    }
+    (snippet, highlight)
+}
+
+fn row_stamp(palette: Palette, stamp: String) -> impl IntoElement {
+    div()
+        .flex_none()
+        .w(px(38.))
+        .text_size(px(11.))
+        .text_color(palette.text_3)
+        .child(stamp)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn filler_row(
+    theme: &Theme,
+    palette: Palette,
+    doc: &TranscriptDoc,
+    edl: &TranscriptEdl,
+    index: usize,
+    words: Range<usize>,
+    selected: bool,
+    editor: WeakEntity<EditorWindow>,
+) -> AnyElement {
+    let (snippet, highlight) = snippet_around(doc, words.clone());
+    let text = StyledText::new(snippet).with_highlights([(
+        highlight,
+        HighlightStyle {
+            background_color: Some(palette.filler_bg),
+            color: Some(palette.filler_text),
+            ..Default::default()
+        },
+    )]);
+    let stamp = edl
+        .source_to_output(doc.words[words.start].start)
+        .map(crate::editor_timeline::format_time)
+        .unwrap_or_default();
+    let on_row = {
+        let editor = editor.clone();
+        let words = words.clone();
+        move |_: &gpui::ClickEvent, window: &mut Window, cx: &mut gpui::App| {
+            editor
+                .update(cx, |this, cx| {
+                    window.focus(&this.transcript.focus, cx);
+                    this.transcript_focus_filler(words.clone(), false, cx);
+                })
+                .ok();
+        }
+    };
+    let on_listen = {
+        let editor = editor.clone();
+        let words = words.clone();
+        move |_: &gpui::ClickEvent, _: &mut Window, cx: &mut gpui::App| {
+            editor
+                .update(cx, |this, cx| {
+                    this.transcript_focus_filler(words.clone(), true, cx);
+                })
+                .ok();
+        }
+    };
+    let on_keep = {
+        let editor = editor.clone();
+        let start = words.start;
+        move |_: &gpui::ClickEvent, _: &mut Window, cx: &mut gpui::App| {
+            editor
+                .update(cx, |this, cx| {
+                    this.transcript.cleanup.ignored.insert(start);
+                    this.invalidate_transcript(cx);
+                })
+                .ok();
+        }
+    };
+    let on_remove = move |_: &gpui::ClickEvent, window: &mut Window, cx: &mut gpui::App| {
+        editor
+            .update(cx, |this, cx| {
+                this.transcript_remove_filler(words.clone(), window, cx);
+            })
+            .ok();
+    };
+    div()
+        .id(("transcript-filler", index))
+        .w_full()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(4.))
+        .h(px(ROW_HEIGHT))
+        .px(px(6.))
+        .rounded(px(6.))
+        .when(selected, |this| this.bg(palette.selection.opacity(0.6)))
+        .hover(|style| style.bg(Hsla::from(theme.editor.ctl)))
+        .cursor_pointer()
+        .on_click(on_row)
+        .child(row_stamp(palette, stamp))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_size(px(13.))
+                .text_color(palette.text_2)
+                .truncate()
+                .child(text),
+        )
+        .child(
+            ui::EditorButton::plain(theme, ("transcript-filler-listen", index))
+                .left_icon("icons/play.svg")
+                .tooltip(theme, tr::editor::transcript::fillers::listen())
+                .on_click(on_listen),
+        )
+        .child(
+            ui::EditorButton::plain(theme, ("transcript-filler-keep", index))
+                .left_icon("icons/check.svg")
+                .tooltip(theme, tr::editor::transcript::fillers::keep())
+                .on_click(on_keep),
+        )
+        .child(
+            ui::EditorButton::plain(theme, ("transcript-filler-remove", index))
+                .left_icon("icons/x.svg")
+                .tooltip(theme, tr::editor::transcript::fillers::remove())
+                .on_click(on_remove),
+        )
+        .into_any_element()
+}
+
+fn pause_row(
+    theme: &Theme,
+    palette: Palette,
+    doc: &TranscriptDoc,
+    edl: &TranscriptEdl,
+    pause: &cuts::PauseCut,
+    keep: f64,
+    editor: WeakEntity<EditorWindow>,
+) -> AnyElement {
+    let word = pause.after_word;
+    let stamp = edl
+        .source_to_output(doc.words[word].end)
+        .map(crate::editor_timeline::format_time)
+        .unwrap_or_default();
+    let before = doc.text_of(word.saturating_sub(3)..word + 1);
+    let after = doc.text_of(word + 1..(word + 4).min(doc.words.len()));
+    let text = format!(
+        "{before}  {} → {}  {after}",
+        seconds_label(pause.length),
+        seconds_label(keep)
+    );
+    div()
+        .id(("transcript-pause", word))
+        .w_full()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(4.))
+        .h(px(ROW_HEIGHT))
+        .px(px(6.))
+        .rounded(px(6.))
+        .hover(|style| style.bg(Hsla::from(theme.editor.ctl)))
+        .cursor_pointer()
+        .on_click(move |_, window, cx| {
+            editor
+                .update(cx, |this, cx| {
+                    window.focus(&this.transcript.focus, cx);
+                    this.transcript_focus_filler(word..word + 2, true, cx);
+                })
+                .ok();
+        })
+        .child(row_stamp(palette, stamp))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_size(px(13.))
+                .text_color(palette.text_2)
+                .truncate()
+                .child(text),
+        )
+        .into_any_element()
+}
+
 fn byte_at(layout: &TextLayout, position: Point<Pixels>) -> usize {
     match layout.index_for_position(position) {
         Ok(index) | Err(index) => index,
@@ -406,8 +607,6 @@ impl EditorWindow {
         self.transcript.refresh(&self.project, &durations)
     }
 
-    /// Moves the playback highlight to the word under the playhead. Only the
-    /// transcript is redrawn, and only when the word changes.
     pub(crate) fn transcript_sync_active(&mut self, follow: bool, cx: &mut Context<Self>) {
         if !self.transcript.open {
             return;
@@ -436,8 +635,6 @@ impl EditorWindow {
         self.invalidate_transcript(cx);
     }
 
-    /// Scrolls `word` into view. Following playback keeps it a third of the
-    /// way down; keyboard moves scroll only as far as needed.
     pub(crate) fn transcript_reveal(&mut self, word: usize, follow: bool) {
         let Some(doc) = self.transcript.doc.clone() else {
             return;
@@ -759,9 +956,6 @@ impl EditorWindow {
         }
     }
 
-    /// The word on the line above or below `from`, at the same horizontal
-    /// position, using the laid-out paragraphs. Off the painted area it falls
-    /// back to the neighbouring paragraph's first or last word.
     fn transcript_vertical(&self, doc: &TranscriptDoc, from: usize, direction: i32) -> usize {
         let paragraph = doc.paragraph_of(from);
         let layouts = self.transcript.layouts.borrow();
@@ -1270,7 +1464,11 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let project_changed = self.transcript.dirty;
         self.transcript_refresh();
+        if project_changed {
+            self.transcript_load_energy(cx);
+        }
         self.transcript.layouts.borrow_mut().clear();
         let theme = self.theme;
         let palette = Palette::new(&theme);
@@ -1478,6 +1676,7 @@ impl EditorWindow {
                 .flex_none()
                 .px(px(12.))
                 .py(px(8.))
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .border_b_1()
                 .border_color(Hsla::from(theme.editor.line))
                 .child(
@@ -1541,10 +1740,7 @@ impl EditorWindow {
             .filter(|(_, filler)| cleanup.category_enabled(filler.kind))
             .collect();
         let pauses = self.transcript_pause_plan();
-        let saved: f64 = pauses
-            .iter()
-            .map(|pause| pause.cut.end - pause.cut.start)
-            .sum();
+        let saved: f64 = pauses.iter().map(|pause| pause.saves).sum();
         let on_pauses = cleanup.tab == CleanupTab::Pauses;
 
         let tabs = ui::SegmentedControl::editor(
@@ -1605,9 +1801,9 @@ impl EditorWindow {
             .child(action);
 
         let body = if on_pauses {
-            self.render_transcript_pause_list(&doc, &edl, &pauses, saved, palette, cx)
+            self.render_transcript_pause_list(&doc, &edl, pauses, saved, palette, cx)
         } else {
-            self.render_transcript_filler_list(&doc, &edl, &listed, counts, palette, cx)
+            self.render_transcript_filler_list(&doc, &edl, listed, counts, palette, cx)
         };
 
         Some(
@@ -1622,13 +1818,10 @@ impl EditorWindow {
                 .child(header)
                 .child(
                     div()
-                        .id("transcript-cleanup-body")
                         .flex()
                         .flex_col()
                         .flex_1()
                         .min_h_0()
-                        .overflow_y_scroll()
-                        .track_scroll(&cleanup.list_scroll)
                         .px(px(6.))
                         .pb(px(8.))
                         .child(body),
@@ -1639,9 +1832,9 @@ impl EditorWindow {
 
     fn render_transcript_filler_list(
         &self,
-        doc: &TranscriptDoc,
-        edl: &TranscriptEdl,
-        listed: &[(usize, Disfluency)],
+        doc: &Arc<TranscriptDoc>,
+        edl: &Arc<TranscriptEdl>,
+        listed: Vec<(usize, Disfluency)>,
         counts: [usize; 4],
         palette: Palette,
         cx: &mut Context<Self>,
@@ -1725,112 +1918,40 @@ impl EditorWindow {
                 )
         });
 
-        let rows = listed.iter().map(|(index, filler)| {
-            let words = filler.words.clone();
-            let paragraph = &doc.paragraphs[doc.paragraph_of(words.start)].words;
-            let before_start = paragraph.start.max(words.start.saturating_sub(4));
-            let after_end = doc.paragraphs[doc.paragraph_of(words.end - 1)]
-                .words
-                .end
-                .min(words.end + 4);
-            let phrase = doc.text_of(words.clone());
-            let mut snippet = String::new();
-            if before_start < words.start {
-                snippet.push_str("… ");
-                snippet.push_str(&doc.text_of(before_start..words.start));
-                snippet.push(' ');
-            }
-            let highlight = snippet.len()..snippet.len() + phrase.len();
-            snippet.push_str(&phrase);
-            if words.end < after_end {
-                snippet.push(' ');
-                snippet.push_str(&doc.text_of(words.end..after_end));
-                snippet.push_str(" …");
-            }
-            let text = StyledText::new(snippet).with_highlights([(
-                highlight,
-                HighlightStyle {
-                    background_color: Some(palette.filler_bg),
-                    color: Some(palette.filler_text),
-                    ..Default::default()
-                },
-            )]);
-            let stamp = edl
-                .source_to_output(doc.words[words.start].start)
-                .map(crate::editor_timeline::format_time)
-                .unwrap_or_default();
-            let selected = self
-                .transcript
-                .selection
-                .is_some_and(|selection| selection.range() == words);
-            let focus_words = words.clone();
-            let listen_words = words.clone();
-            let remove_words = words.clone();
-            let keep_start = words.start;
-            div()
-                .id(("transcript-filler", *index))
-                .flex()
-                .flex_row()
-                .flex_none()
-                .items_center()
-                .gap(px(4.))
-                .px(px(6.))
-                .py(px(2.))
-                .rounded(px(6.))
-                .when(selected, |this| this.bg(palette.selection.opacity(0.6)))
-                .hover(|style| style.bg(Hsla::from(theme.editor.ctl)))
-                .cursor_pointer()
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    window.focus(&this.transcript.focus, cx);
-                    this.transcript_focus_filler(focus_words.clone(), false, cx);
-                }))
-                .child(
-                    div()
-                        .flex_none()
-                        .w(px(38.))
-                        .text_size(px(11.))
-                        .text_color(palette.text_3)
-                        .child(stamp),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .text_size(px(13.))
-                        .text_color(palette.text_2)
-                        .truncate()
-                        .child(text),
-                )
-                .child(
-                    ui::EditorButton::plain(&theme, ("transcript-filler-listen", *index))
-                        .left_icon("icons/play.svg")
-                        .tooltip(&theme, tr::editor::transcript::fillers::listen())
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.transcript_focus_filler(listen_words.clone(), true, cx);
-                        })),
-                )
-                .child(
-                    ui::EditorButton::plain(&theme, ("transcript-filler-keep", *index))
-                        .left_icon("icons/check.svg")
-                        .tooltip(&theme, tr::editor::transcript::fillers::keep())
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.transcript.cleanup.ignored.insert(keep_start);
-                            this.invalidate_transcript(cx);
-                        })),
-                )
-                .child(
-                    ui::EditorButton::plain(&theme, ("transcript-filler-remove", *index))
-                        .left_icon("icons/x.svg")
-                        .tooltip(&theme, tr::editor::transcript::fillers::remove())
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.transcript_remove_filler(remove_words.clone(), window, cx);
-                        })),
-                )
-        });
+        let count = listed.len();
+        let rows = {
+            let doc = doc.clone();
+            let edl = edl.clone();
+            let listed = Arc::new(listed);
+            let selection = self.transcript.selection.map(WordSelection::range);
+            let editor = cx.entity().downgrade();
+            gpui::uniform_list("transcript-filler-rows", count, move |range, _, _| {
+                range
+                    .filter_map(|row| listed.get(row))
+                    .map(|(index, filler)| {
+                        filler_row(
+                            &theme,
+                            palette,
+                            &doc,
+                            &edl,
+                            *index,
+                            filler.words.clone(),
+                            selection.as_ref() == Some(&filler.words),
+                            editor.clone(),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .track_scroll(&cleanup.filler_rows)
+            .min_h(px(ROW_HEIGHT * count.min(2) as f32))
+            .h(px(ROW_HEIGHT * count.min(MAX_VISIBLE_ROWS) as f32))
+        };
 
         div()
             .flex()
             .flex_col()
+            .flex_1()
+            .min_h_0()
             .child(
                 div()
                     .flex()
@@ -1847,9 +1968,10 @@ impl EditorWindow {
                     .mb(px(4.))
                     .bg(Hsla::from(theme.editor.line)),
             )
-            .when(listed.is_empty(), |this| {
+            .when(count == 0, |this| {
                 this.child(
                     div()
+                        .flex_none()
                         .px(px(6.))
                         .py(px(6.))
                         .text_size(px(12.))
@@ -1857,15 +1979,15 @@ impl EditorWindow {
                         .child(tr::editor::transcript::fillers::none()),
                 )
             })
-            .children(rows)
+            .child(rows)
             .into_any_element()
     }
 
     fn render_transcript_pause_list(
         &self,
-        doc: &TranscriptDoc,
-        edl: &TranscriptEdl,
-        pauses: &[cuts::PauseCut],
+        doc: &Arc<TranscriptDoc>,
+        edl: &Arc<TranscriptEdl>,
+        pauses: Vec<cuts::PauseCut>,
         saved: f64,
         palette: Palette,
         cx: &mut Context<Self>,
@@ -1930,57 +2052,38 @@ impl EditorWindow {
             cleanup.pause_keep,
             false,
         );
-        let keep = cleanup.pause_keep;
-        let rows = pauses.iter().map(|pause| {
-            let word = pause.after_word;
-            let stamp = edl
-                .source_to_output(doc.words[word].end)
-                .map(crate::editor_timeline::format_time)
-                .unwrap_or_default();
-            let before = doc.text_of(word.saturating_sub(3)..word + 1);
-            let after = doc.text_of(word + 1..(word + 4).min(doc.words.len()));
-            let text = format!(
-                "{before}  {} → {}  {after}",
-                seconds_label(pause.length),
-                seconds_label(keep)
-            );
-            div()
-                .id(("transcript-pause", word))
-                .flex()
-                .flex_row()
-                .flex_none()
-                .items_center()
-                .gap(px(4.))
-                .px(px(6.))
-                .h(px(26.))
-                .rounded(px(6.))
-                .hover(|style| style.bg(Hsla::from(theme.editor.ctl)))
-                .cursor_pointer()
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    window.focus(&this.transcript.focus, cx);
-                    this.transcript_focus_filler(word..word + 2, true, cx);
-                }))
-                .child(
-                    div()
-                        .flex_none()
-                        .w(px(38.))
-                        .text_size(px(11.))
-                        .text_color(palette.text_3)
-                        .child(stamp),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .text_size(px(13.))
-                        .text_color(palette.text_2)
-                        .truncate()
-                        .child(text),
-                )
-        });
+        let summary = if pauses.is_empty() {
+            SharedString::from(tr::editor::transcript::pauses::none())
+        } else {
+            SharedString::from(tr::editor::transcript::pauses::summary(
+                pauses.len(),
+                crate::i18n::decimal(format!("{saved:.1}")),
+            ))
+        };
+        let count = pauses.len();
+        let rows = {
+            let doc = doc.clone();
+            let edl = edl.clone();
+            let pauses = Arc::new(pauses);
+            let keep = cleanup.pause_keep;
+            let editor = cx.entity().downgrade();
+            gpui::uniform_list("transcript-pause-rows", count, move |range, _, _| {
+                range
+                    .filter_map(|row| pauses.get(row))
+                    .map(|pause| {
+                        pause_row(&theme, palette, &doc, &edl, pause, keep, editor.clone())
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .track_scroll(&cleanup.pause_rows)
+            .min_h(px(ROW_HEIGHT * count.min(2) as f32))
+            .h(px(ROW_HEIGHT * count.min(MAX_VISIBLE_ROWS) as f32))
+        };
         div()
             .flex()
             .flex_col()
+            .flex_1()
+            .min_h_0()
             .child(longer)
             .child(shorter)
             .child(
@@ -1990,14 +2093,7 @@ impl EditorWindow {
                     .py(px(6.))
                     .text_size(px(12.))
                     .text_color(palette.text_3)
-                    .child(if pauses.is_empty() {
-                        SharedString::from(tr::editor::transcript::pauses::none())
-                    } else {
-                        SharedString::from(tr::editor::transcript::pauses::summary(
-                            pauses.len(),
-                            crate::i18n::decimal(format!("{saved:.1}")),
-                        ))
-                    }),
+                    .child(summary),
             )
             .child(
                 div()
@@ -2007,7 +2103,7 @@ impl EditorWindow {
                     .mb(px(4.))
                     .bg(Hsla::from(theme.editor.line)),
             )
-            .children(rows)
+            .child(rows)
             .into_any_element()
     }
 
@@ -2169,11 +2265,8 @@ impl EditorWindow {
             .into_any_element()
     }
 
-    /// Builds the loudness envelope the cut planner snaps to, from the audio
-    /// playback already decoded, on a background thread. Cuts made before it
-    /// lands fall back to the middle of each gap.
     fn transcript_load_energy(&mut self, cx: &mut Context<Self>) {
-        if self.transcript.energy.is_some() || self.transcript.energy_loading {
+        if self.transcript.energy_loading {
             return;
         }
         let Some(instance) = self.instance.clone() else {
@@ -2199,6 +2292,10 @@ impl EditorWindow {
                 )
             })
             .collect();
+        if self.transcript.energy.is_some() && self.transcript.energy_offsets == offsets {
+            return;
+        }
+        self.transcript.energy_offsets = offsets.clone();
         self.transcript.energy_loading = true;
         cx.spawn(async move |this, cx| {
             let task = cx.update(|cx| {

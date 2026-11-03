@@ -102,7 +102,8 @@ pub(crate) struct CleanupState {
     pub ignored: HashSet<usize>,
     pub pause_longer_than: f64,
     pub pause_keep: f64,
-    pub list_scroll: gpui::ScrollHandle,
+    pub filler_rows: gpui::UniformListScrollHandle,
+    pub pause_rows: gpui::UniformListScrollHandle,
 }
 
 impl CleanupState {
@@ -126,7 +127,8 @@ impl CleanupState {
                 PAUSE_LONGER_RANGE,
             ),
             pause_keep: read(PAUSE_KEEP_KEY, DEFAULT_PAUSE_KEEP, PAUSE_KEEP_RANGE),
-            list_scroll: gpui::ScrollHandle::new(),
+            filler_rows: gpui::UniformListScrollHandle::new(),
+            pause_rows: gpui::UniformListScrollHandle::new(),
         }
     }
 
@@ -184,6 +186,7 @@ pub(crate) struct TranscriptState {
     pub resize: Option<(f32, f32)>,
     pub energy: Option<Arc<EnergyEnvelope>>,
     pub energy_loading: bool,
+    pub energy_offsets: Vec<(f64, f64)>,
 }
 
 impl TranscriptState {
@@ -216,6 +219,7 @@ impl TranscriptState {
             resize: None,
             energy: None,
             energy_loading: false,
+            energy_offsets: Vec::new(),
         }
     }
 
