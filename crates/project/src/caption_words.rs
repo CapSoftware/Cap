@@ -135,11 +135,20 @@ pub fn caption_text_from_words<'a>(words: impl IntoIterator<Item = &'a CaptionWo
 /// weak word, and a trailing fragment shorter than [`MIN_FINAL_CAPTION_WORDS`]
 /// merges into the previous segment when it starts with a weak word, which can
 /// put the merged segment over the max.
-///
-/// Hesitation fillers do not count towards those sizes and open the segment
-/// after them, so with fillers hidden from display the captions break exactly
-/// where a transcript without them would.
 pub fn caption_word_chunks(words: &[CaptionWord]) -> Vec<&[CaptionWord]> {
+    chunk_spans(words.len(), |index| {
+        caption_boundary_word_is_weak(&words[index])
+    })
+    .into_iter()
+    .map(|range| &words[range])
+    .collect()
+}
+
+/// [`caption_word_chunks`] for an English transcript whose hesitation
+/// fillers are hidden from display: fillers do not count towards the sizes
+/// and open the segment after them, so the captions break exactly where a
+/// transcript without them would.
+pub fn caption_word_chunks_skipping_fillers(words: &[CaptionWord]) -> Vec<&[CaptionWord]> {
     let spoken: Vec<usize> = words
         .iter()
         .enumerate()
@@ -147,12 +156,7 @@ pub fn caption_word_chunks(words: &[CaptionWord]) -> Vec<&[CaptionWord]> {
         .map(|(index, _)| index)
         .collect();
     if spoken.is_empty() {
-        return chunk_spans(words.len(), |index| {
-            caption_boundary_word_is_weak(&words[index])
-        })
-        .into_iter()
-        .map(|range| &words[range])
-        .collect();
+        return caption_word_chunks(words);
     }
     let spans = chunk_spans(spoken.len(), |index| {
         caption_boundary_word_is_weak(&words[spoken[index]])
@@ -203,14 +207,14 @@ fn chunk_spans(len: usize, weak: impl Fn(usize) -> bool) -> Vec<std::ops::Range<
     chunks
 }
 
-/// The caption as it should be drawn: with `show_fillers` off, hesitation
-/// fillers leave its words and text, and a filler at either edge no longer
-/// holds the caption on screen. `None` when nothing but fillers is left.
+/// The caption as it should be drawn: with `hide_fillers`, hesitation fillers
+/// leave its words and text, and a filler at either edge no longer holds the
+/// caption on screen. `None` when nothing but fillers is left.
 pub fn caption_display_segment(
     segment: &CaptionTrackSegment,
-    show_fillers: bool,
+    hide_fillers: bool,
 ) -> Option<Cow<'_, CaptionTrackSegment>> {
-    if show_fillers
+    if !hide_fillers
         || (!segment
             .words
             .iter()
@@ -267,6 +271,36 @@ pub fn caption_display_segment(
         words,
         ..segment.clone()
     }))
+}
+
+const ENGLISH_MARKERS: [&str; 24] = [
+    "the", "and", "a", "to", "of", "i", "you", "it", "is", "that", "in", "we", "this", "so", "for",
+    "on", "but", "with", "was", "just", "be", "are", "have", "what",
+];
+
+/// Whether a transcript reads as English: plain letters only, and enough of
+/// its words are common English ones. The filler list is English ("er" and
+/// "um" are ordinary German words), so only English captions hide fillers.
+pub fn reads_as_english<'a>(words: impl IntoIterator<Item = &'a CaptionWord>) -> bool {
+    let mut total = 0usize;
+    let mut markers = 0usize;
+    for word in words {
+        let lower = crate::disfluency::normalize_word(&word.text);
+        if lower.is_empty() {
+            continue;
+        }
+        total += 1;
+        if ENGLISH_MARKERS.contains(&lower.as_str()) {
+            markers += 1;
+        }
+        if !lower
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '\'' || c == '-')
+        {
+            return false;
+        }
+    }
+    total > 0 && markers * 8 >= total
 }
 
 #[cfg(test)]
@@ -423,7 +457,7 @@ mod tests {
         ]);
 
         assert_eq!(
-            texts(&caption_word_chunks(&verbatim)),
+            texts(&caption_word_chunks_skipping_fillers(&verbatim)),
             vec![
                 vec!["So,", "um,", "I", "think", "we", "should,", "uh,", "start"],
                 vec!["with", "the", "dashboard", "today", "please", "now"],
@@ -441,7 +475,7 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         assert_eq!(
-            spoken(caption_word_chunks(&verbatim)),
+            spoken(caption_word_chunks_skipping_fillers(&verbatim)),
             spoken(caption_word_chunks(&plain))
         );
     }
@@ -449,16 +483,16 @@ mod tests {
     #[test]
     fn caption_word_chunks_keep_trailing_and_all_filler_runs() {
         let tail = words(&["one", "two", "three", "four", "five", "six", "seven", "um"]);
-        let chunks = caption_word_chunks(&tail);
+        let chunks = caption_word_chunks_skipping_fillers(&tail);
         assert_eq!(chunks.concat().len(), tail.len());
         assert_eq!(chunks.last().unwrap().last().unwrap().text, "um");
 
         let fillers = words(&["um", "uh", "hmm", "um", "uh", "er", "ah", "mm"]);
-        let chunks = caption_word_chunks(&fillers);
+        let chunks = caption_word_chunks_skipping_fillers(&fillers);
         assert_eq!(chunks.concat().len(), fillers.len());
         assert_eq!(chunks.len(), 2);
 
-        assert!(caption_word_chunks(&[]).is_empty());
+        assert!(caption_word_chunks_skipping_fillers(&[]).is_empty());
     }
 
     fn track(text: &str, words: &[(&str, f32, f32)]) -> CaptionTrackSegment {
@@ -498,7 +532,7 @@ mod tests {
             ],
         );
 
-        let shown = caption_display_segment(&segment, false).unwrap();
+        let shown = caption_display_segment(&segment, true).unwrap();
         assert_eq!(shown.text, "so I, think");
         assert_eq!(
             shown
@@ -513,7 +547,7 @@ mod tests {
         assert_eq!(shown.font_size_override, Some(40));
         assert_eq!(shown.fade_duration_override, Some(0.3));
 
-        let verbatim = caption_display_segment(&segment, true).unwrap();
+        let verbatim = caption_display_segment(&segment, false).unwrap();
         assert!(matches!(verbatim, Cow::Borrowed(_)));
         assert_eq!(verbatim.text, segment.text);
     }
@@ -525,12 +559,12 @@ mod tests {
             &[("so", 1.0, 1.2), ("I", 1.2, 1.3), ("think", 1.3, 1.6)],
         );
         assert!(matches!(
-            caption_display_segment(&plain, false),
+            caption_display_segment(&plain, true),
             Some(Cow::Borrowed(_))
         ));
         let fillers = track("Um, uh.", &[("Um,", 1.0, 1.4), ("uh.", 1.5, 1.9)]);
-        assert!(caption_display_segment(&fillers, false).is_none());
-        assert!(caption_display_segment(&fillers, true).is_some());
+        assert!(caption_display_segment(&fillers, true).is_none());
+        assert!(caption_display_segment(&fillers, false).is_some());
     }
 
     #[test]
@@ -539,15 +573,36 @@ mod tests {
             "Um we ship today",
             &[("um", 1.0, 1.3), ("we", 1.4, 1.6), ("ship", 1.6, 2.0)],
         );
-        let shown = caption_display_segment(&edited, false).unwrap();
+        let shown = caption_display_segment(&edited, true).unwrap();
         assert_eq!(shown.text, "we ship today");
         assert_eq!(shown.words.len(), 2);
 
         let mut wordless = track("hmm okay then", &[]);
         wordless.start = 4.0;
         wordless.end = 6.0;
-        let shown = caption_display_segment(&wordless, false).unwrap();
+        let shown = caption_display_segment(&wordless, true).unwrap();
         assert_eq!(shown.text, "okay then");
         assert_eq!((shown.start, shown.end), (4.0, 6.0));
+    }
+
+    #[test]
+    fn english_detection_needs_common_words_and_plain_letters() {
+        let english = words(&[
+            "so",
+            "I",
+            "think",
+            "we",
+            "should",
+            "start",
+            "with",
+            "the",
+            "dashboard",
+        ]);
+        assert!(reads_as_english(&english));
+        let german = words(&["Er", "kommt", "um", "acht", "und", "bleibt", "bis", "zehn"]);
+        assert!(!reads_as_english(&german));
+        let accented = words(&["the", "café"]);
+        assert!(!reads_as_english(&accented));
+        assert!(!reads_as_english(&[]));
     }
 }

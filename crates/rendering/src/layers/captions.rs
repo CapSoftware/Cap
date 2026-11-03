@@ -656,7 +656,7 @@ impl CaptionsLayer {
             current_time,
             &timeline.caption_segments,
             default_fade,
-            caption_data.settings.show_filler_words,
+            caption_data.settings.hides_fillers(),
         ) else {
             self.current_text = None;
             return;
@@ -1193,13 +1193,13 @@ fn find_active_caption_segment<'a>(
     time: f64,
     segments: &'a [cap_project::CaptionTrackSegment],
     default_fade_duration: f32,
-    show_filler_words: bool,
+    hide_fillers: bool,
 ) -> Option<ActiveCaptionSegment<'a>> {
     for segment in segments {
         if time < segment.start || time >= caption_segment_effective_end(segment) {
             continue;
         }
-        if let Some(display) = caption_display_segment(segment, show_filler_words)
+        if let Some(display) = caption_display_segment(segment, hide_fillers)
             && time >= display.start
             && time < caption_segment_effective_end(&display)
         {
@@ -1215,7 +1215,7 @@ fn find_active_caption_segment<'a>(
         if time < segment.start.min(raw_end) || time >= raw_end + fade {
             continue;
         }
-        if let Some(display) = caption_display_segment(segment, show_filler_words) {
+        if let Some(display) = caption_display_segment(segment, hide_fillers) {
             let effective_end = caption_segment_effective_end(&display);
             if time >= effective_end && time < effective_end + fade {
                 return Some(ActiveCaptionSegment { segment: display });
@@ -1350,27 +1350,27 @@ mod tests {
         seg.text = "Um, we ship uh.".to_string();
         let segments = vec![seg];
 
-        assert!(find_active_caption_segment(1.2, &segments, 0.0, false).is_none());
-        assert!(find_active_caption_segment(3.0, &segments, 0.0, false).is_none());
-        let active = find_active_caption_segment(1.7, &segments, 0.0, false).unwrap();
+        assert!(find_active_caption_segment(1.2, &segments, 0.0, true).is_none());
+        assert!(find_active_caption_segment(3.0, &segments, 0.0, true).is_none());
+        let active = find_active_caption_segment(1.7, &segments, 0.0, true).unwrap();
         assert_eq!(active.segment.text, "we ship");
         assert_eq!(active.segment.words.len(), 2);
         assert!((caption_segment_effective_end(&active.segment) - 2.4).abs() < 1e-6);
-        let lingering = find_active_caption_segment(2.5, &segments, 0.2, false).unwrap();
+        let lingering = find_active_caption_segment(2.5, &segments, 0.2, true).unwrap();
         assert_eq!(lingering.segment.text, "we ship");
 
-        let verbatim = find_active_caption_segment(1.2, &segments, 0.0, true).unwrap();
+        let verbatim = find_active_caption_segment(1.2, &segments, 0.0, false).unwrap();
         assert_eq!(verbatim.segment.text, "Um, we ship uh.");
-        assert!(find_active_caption_segment(3.0, &segments, 0.0, true).is_some());
+        assert!(find_active_caption_segment(3.0, &segments, 0.0, false).is_some());
     }
 
     #[test]
     fn inflated_caption_does_not_stay_active_after_clamp() {
         let segments = vec![segment(36.1, 42.31, vec![word(36.1, 42.31)])];
         // Well within the original (bloated) end, but past the clamped end.
-        assert!(find_active_caption_segment(41.0, &segments, 0.2, false).is_none());
+        assert!(find_active_caption_segment(41.0, &segments, 0.2, true).is_none());
         // Still active while the (capped) word is on screen.
-        assert!(find_active_caption_segment(37.0, &segments, 0.2, false).is_some());
+        assert!(find_active_caption_segment(37.0, &segments, 0.2, true).is_some());
     }
 
     #[test]

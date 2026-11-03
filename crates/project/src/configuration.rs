@@ -2377,6 +2377,17 @@ pub struct CaptionSettings {
     pub uppercase: bool,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub show_filler_words: bool,
+    /// The language whose hesitation fillers these captions hide, set when
+    /// they are generated: only English is supported, and captions from
+    /// before it existed hide nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filler_language: Option<String>,
+}
+
+impl CaptionSettings {
+    pub fn hides_fillers(&self) -> bool {
+        !self.show_filler_words && self.filler_language.as_deref() == Some("en")
+    }
 }
 
 impl CaptionSettings {
@@ -2443,6 +2454,7 @@ impl Default for CaptionSettings {
             highlight_style: Self::default_highlight_style(),
             uppercase: false,
             show_filler_words: false,
+            filler_language: None,
         }
     }
 }
@@ -3267,21 +3279,32 @@ mod tests {
     use serde_json::Value;
 
     #[test]
-    fn show_filler_words_is_off_for_old_projects_and_only_written_when_on() {
+    fn filler_settings_are_off_for_old_projects_and_only_written_when_set() {
         let legacy: CaptionSettings =
             serde_json::from_str(r#"{"enabled":true,"uppercase":true}"#).unwrap();
         assert!(!legacy.show_filler_words);
         let written = serde_json::to_value(&legacy).unwrap();
         assert!(written.get("showFillerWords").is_none());
 
+        assert!(written.get("fillerLanguage").is_none());
+        assert!(!legacy.hides_fillers());
+
+        let english = CaptionSettings {
+            filler_language: Some("en".into()),
+            ..legacy.clone()
+        };
+        assert!(english.hides_fillers());
         let shown = CaptionSettings {
             show_filler_words: true,
-            ..legacy
+            ..english
         };
+        assert!(!shown.hides_fillers());
         let written = serde_json::to_value(&shown).unwrap();
         assert_eq!(written["showFillerWords"], Value::Bool(true));
+        assert_eq!(written["fillerLanguage"], Value::from("en"));
         let restored: CaptionSettings = serde_json::from_value(written).unwrap();
         assert!(restored.show_filler_words);
+        assert_eq!(restored.filler_language.as_deref(), Some("en"));
         assert!(restored.uppercase);
     }
 
