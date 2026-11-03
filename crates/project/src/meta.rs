@@ -3,6 +3,7 @@ use relative_path::RelativePathBuf;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::{
+    borrow::Cow,
     collections::{HashMap, HashSet},
     error::Error,
     io::Write,
@@ -372,6 +373,8 @@ impl RecordingMeta {
     }
 }
 
+const MEDIA_ROOTS: [&str; 3] = ["content/", "screenshots/", "output/"];
+
 fn normalize_relative_path(path: &mut RelativePathBuf) {
     // No real file name holds a NUL, and every media opener (FFmpeg, AVFoundation)
     // converts the path to a C string, which a NUL makes fail or panic. Dropping
@@ -379,22 +382,23 @@ fn normalize_relative_path(path: &mut RelativePathBuf) {
     if path.as_str().contains('\0') {
         *path = RelativePathBuf::from(path.as_str().replace('\0', ""));
     }
-    let original = path.as_str();
-    let normalized = original.replace('\\', "/");
 
-    if normalized.starts_with("content/")
-        || normalized.starts_with("screenshots/")
-        || normalized.starts_with("output/")
-    {
-        *path = RelativePathBuf::from(normalized);
+    let original = path.as_str();
+    let normalized = if original.contains('\\') {
+        Cow::Owned(original.replace('\\', "/"))
+    } else {
+        Cow::Borrowed(original)
+    };
+
+    if MEDIA_ROOTS.iter().any(|root| normalized.starts_with(root)) {
+        if normalized.as_ref() != original {
+            *path = RelativePathBuf::from(normalized.as_ref());
+        }
         return;
     }
 
-    for root in ["content/", "screenshots/", "output/"] {
-        if let Some(index) = normalized.find(root) {
-            *path = RelativePathBuf::from(&normalized[index..]);
-            return;
-        }
+    if let Some(index) = MEDIA_ROOTS.iter().find_map(|root| normalized.find(root)) {
+        *path = RelativePathBuf::from(&normalized[index..]);
     }
 }
 
@@ -1638,5 +1642,74 @@ mod nul_path_tests {
         let mut path = RelativePathBuf::from("content/segments/segment-0/disp\0lay.mp4");
         normalize_relative_path(&mut path);
         assert_eq!(path.as_str(), "content/segments/segment-0/display.mp4");
+    }
+}
+
+#[cfg(test)]
+mod normalize_path_tests {
+    use super::*;
+
+    fn normalized(path: &str) -> String {
+        let mut path = RelativePathBuf::from(path);
+        normalize_relative_path(&mut path);
+        path.as_str().to_string()
+    }
+
+    #[test]
+    fn canonical_paths_are_left_alone() {
+        for path in [
+            "content/display.mp4",
+            "screenshots/preview.jpg",
+            "output/output.mp4",
+            "content/segments/segment-0/display.mp4",
+        ] {
+            assert_eq!(normalized(path), path);
+        }
+    }
+
+    #[test]
+    fn windows_separators_are_normalized() {
+        assert_eq!(
+            normalized("content\\segments\\segment-0\\display.mp4"),
+            "content/segments/segment-0/display.mp4"
+        );
+        assert_eq!(
+            normalized("C:\\Users\\cap\\recording.cap\\content\\display.mp4"),
+            "content/display.mp4"
+        );
+    }
+
+    #[test]
+    fn absolute_paths_are_rebased_onto_the_media_root() {
+        assert_eq!(
+            normalized("/Users/cap/recordings/Cap 2026-11-03 at 12.00.00.cap/content/display.mp4"),
+            "content/display.mp4"
+        );
+        assert_eq!(
+            normalized("/Users/cap/recordings/recording.cap/screenshots/preview.jpg"),
+            "screenshots/preview.jpg"
+        );
+        assert_eq!(
+            normalized("/Users/cap/recordings/recording.cap/output/output.mp4"),
+            "output/output.mp4"
+        );
+    }
+
+    #[test]
+    fn media_roots_are_matched_in_a_fixed_order() {
+        assert_eq!(
+            normalized("/tmp/output/output.mp4/../content/display.mp4"),
+            "content/display.mp4"
+        );
+        assert_eq!(
+            normalized("/tmp/content/content/display.mp4"),
+            "content/content/display.mp4"
+        );
+    }
+
+    #[test]
+    fn paths_without_a_media_root_are_unchanged() {
+        assert_eq!(normalized("display.mp4"), "display.mp4");
+        assert_eq!(normalized("/tmp/display.mp4"), "/tmp/display.mp4");
     }
 }
