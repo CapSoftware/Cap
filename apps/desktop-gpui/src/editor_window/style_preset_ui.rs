@@ -339,9 +339,10 @@ impl EditorWindow {
         self.style_presets.library = PresetLibrary::load();
         let viewport = window.viewport_size();
         let width = f32::from(bounds.size.width).max(MENU_MIN_WIDTH);
-        let left = f32::from(bounds.origin.x)
-            .min(f32::from(viewport.width) - width - POPOVER_WINDOW_INSET)
-            .max(POPOVER_WINDOW_INSET);
+        let left = f32::from(bounds.origin.x).clamp(
+            POPOVER_WINDOW_INSET,
+            (f32::from(viewport.width) - width - POPOVER_WINDOW_INSET).max(POPOVER_WINDOW_INSET),
+        );
         let count = with_kind!(kind, S => S::presets(&self.style_presets.library).presets().len());
         let estimated =
             (count.max(1) as f32 * ROW_HEIGHT).min(LIST_MAX_HEIGHT) + 4. * ROW_HEIGHT + 40.;
@@ -676,12 +677,18 @@ impl EditorWindow {
         let x = if menu_left - SUBMENU_WIDTH - 4. >= POPOVER_WINDOW_INSET {
             menu_left - SUBMENU_WIDTH - 4.
         } else {
-            (menu_right + 4.).min(f32::from(viewport.width) - SUBMENU_WIDTH - POPOVER_WINDOW_INSET)
+            (menu_right + 4.).clamp(
+                POPOVER_WINDOW_INSET,
+                (f32::from(viewport.width) - SUBMENU_WIDTH - POPOVER_WINDOW_INSET)
+                    .max(POPOVER_WINDOW_INSET),
+            )
         };
         let submenu_height = 7. * ROW_HEIGHT + 24.;
-        let y = (f32::from(at.y) - 16.)
-            .min(f32::from(viewport.height) - submenu_height - POPOVER_WINDOW_INSET)
-            .max(POPOVER_WINDOW_INSET);
+        let y = (f32::from(at.y) - 16.).clamp(
+            POPOVER_WINDOW_INSET,
+            (f32::from(viewport.height) - submenu_height - POPOVER_WINDOW_INSET)
+                .max(POPOVER_WINDOW_INSET),
+        );
         menu.submenu = Some((id, point(px(x), px(y))));
         cx.notify();
     }
