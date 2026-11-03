@@ -1121,6 +1121,7 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             tr::editor::window::transport::play_pause(),
             "Play/Pause video",
         ),
+        (tr::editor::window::transport::speed(), "Preview speed"),
         (tr::editor::window::transport::split(), "Split"),
         (
             tr::editor::window::transport::split_tooltip(),

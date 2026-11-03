@@ -10896,7 +10896,9 @@ impl EditorWindow {
                             .justify_center()
                             .gap(px(14.))
                             .when(!live, |this| this.opacity(0.5))
-                            .child(div().w(px(PREVIEW_SPEED_BUTTON_WIDTH)).flex_none())
+                            .when(!narrow, |this| {
+                                this.child(div().w(px(PREVIEW_SPEED_BUTTON_WIDTH)).flex_none())
+                            })
                             .child(skip(
                                 "transport-prev",
                                 "icons/prev.svg",
