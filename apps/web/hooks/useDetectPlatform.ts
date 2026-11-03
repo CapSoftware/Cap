@@ -56,18 +56,35 @@ export const useDetectPlatform = (): PlatformInfo => {
 				return;
 			}
 
-			if (
-				"userAgentData" in navigator &&
-				(navigator as any).userAgentData?.getHighEntropyValues
-			) {
+			const userAgentData = (
+				navigator as Navigator & {
+					userAgentData?: {
+						getHighEntropyValues?: (
+							hints: string[],
+						) => Promise<{ architecture?: string }>;
+					};
+				}
+			).userAgentData;
+			if (userAgentData?.getHighEntropyValues) {
 				try {
-					const uaData = await (
-						navigator as any
-					).userAgentData.getHighEntropyValues(["architecture"]);
+					const uaData = await userAgentData.getHighEntropyValues([
+						"architecture",
+					]);
 					if (!isMounted) return;
-					const arch = (uaData.architecture ?? "").toLowerCase();
-					if (isMounted) setIsIntel(arch !== "arm" && arch !== "arm64");
-					return;
+					const arch = (uaData.architecture ?? "").trim().toLowerCase();
+					if (arch === "arm" || arch === "arm64" || arch === "aarch64") {
+						setIsIntel(false);
+						return;
+					}
+					if (
+						arch === "x86" ||
+						arch === "x86_64" ||
+						arch === "x64" ||
+						arch === "amd64"
+					) {
+						setIsIntel(true);
+						return;
+					}
 				} catch {}
 			}
 
