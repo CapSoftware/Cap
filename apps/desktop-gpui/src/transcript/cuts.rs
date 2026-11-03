@@ -16,11 +16,7 @@ pub const ONSET_GUARD: f64 = 0.02;
 /// takes the lead-in with it, so cutting an opening "um" starts the video on
 /// the next word instead of leaving a sliver of silence.
 pub const EDGE_REACH: f64 = 0.6;
-/// When two words touch, the cut point is searched within this distance of the
-/// shared boundary, and never past the middle of either word.
 const TOUCHING_SEARCH: f64 = 0.04;
-/// A point at the edge of the search window must be this many decibels
-/// quieter than the middle to win, so equal silence splits a pause evenly.
 const EDGE_PENALTY_DB: f32 = 6.0;
 const MAX_SEARCH_STEPS: usize = 4_000;
 const MIN_PAUSE_CUT: f64 = 0.05;
@@ -99,16 +95,11 @@ pub fn plan_word_cuts(
 #[derive(Clone, Debug, PartialEq)]
 pub struct PauseCut {
     pub after_word: usize,
-    /// Playback seconds, so a pause inside a sped-up clip is measured as heard.
     pub length: f64,
     pub saves: f64,
     pub cut: Range<f64>,
 }
 
-/// Every silence between two kept words longer than `longer_than`, trimmed so
-/// `keep` seconds of it remain: a little under half after the first word,
-/// the rest before the next so the breath into it survives. Pauses that
-/// already contain a cut are left alone.
 pub fn plan_pause_cuts(
     doc: &TranscriptDoc,
     edl: &TranscriptEdl,
@@ -124,12 +115,11 @@ pub fn plan_pause_cuts(
         }
         let previous_end = doc.words[index - 1].end;
         let next_start = doc.words[index].start;
-        let timescale = edl.timescale_at(previous_end);
+        let Some(timescale) = edl.timescale_over(previous_end..next_start) else {
+            continue;
+        };
         let length = (next_start - previous_end) / timescale;
         if length <= longer_than || length <= keep + MIN_PAUSE_CUT {
-            continue;
-        }
-        if !edl.covers(previous_end..next_start) {
             continue;
         }
         let lead = keep * 0.45 * timescale;
@@ -221,19 +211,12 @@ pub fn apply_source_cuts(
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RestoreBlocker {
-    /// The clips on either side of the cut are not neighbours on the
-    /// timeline (it was reordered), or the cut is not next to any clip.
     NotAdjacent,
     Transition,
 }
 
 const TOUCH_EPSILON: f64 = 1e-6;
 
-/// Plays `hole` again by growing the clips that end and start at its edges,
-/// putting back any whole recording take it swallowed, rippling everything
-/// after each change later, and merging the two halves back into one clip
-/// when they become contiguous with the same settings. `must_cover` is a source instant the restore has to bring back;
-/// if it cannot, nothing changes.
 pub fn restore_hole(
     timeline: &mut TimelineConfiguration,
     recording_durations: &[f64],
@@ -329,14 +312,20 @@ pub fn restore_hole(
             .unwrap_or_else(|| editor_edits::clip_timeline_duration(&next));
         let holds = next.hold_windows();
         let boundary = editor_edits::effective_to_output(&holds, effective);
+        let neighbour = left
+            .or(right)
+            .and_then(|mapping| timeline.segments.get(mapping.segment));
         next.segments.insert(
             index,
             cap_project::TimelineSegment {
                 recording_clip: clip,
-                timescale: 1.0,
                 start: 0.0,
                 end: duration,
-                ..Default::default()
+                name: None,
+                ..neighbour.cloned().unwrap_or(cap_project::TimelineSegment {
+                    timescale: 1.0,
+                    ..Default::default()
+                })
             },
         );
         for transition in next.transitions.iter_mut() {
@@ -344,7 +333,8 @@ pub fn restore_hole(
                 transition.segment_index += 1;
             }
         }
-        editor_edits::ripple_insert_output_tracks(&mut next, boundary, duration);
+        let played = next.segments[index].duration();
+        editor_edits::ripple_insert_output_tracks(&mut next, boundary, played);
         index += 1;
     }
 

@@ -7,17 +7,10 @@ use gpui::SharedString;
 use crate::editor_edits;
 use crate::editor_timeline;
 
-/// A silence this long always starts a new paragraph.
 const PARAGRAPH_PAUSE: f64 = 1.6;
-/// After a full stop, a shorter pause is enough.
 const SENTENCE_PARAGRAPH_PAUSE: f64 = 0.7;
-/// Paragraphs past this many words break at the next sentence end.
 const SOFT_PARAGRAPH_WORDS: usize = 70;
-/// And past this many at the next comma or pause, so a run-on transcript
-/// without punctuation still scrolls in reasonable blocks.
 const HARD_PARAGRAPH_WORDS: usize = 140;
-/// The playback highlight stays on a word for this long after it ends, so it
-/// does not flicker off in the short gaps between words.
 const ACTIVE_WORD_LINGER: f64 = 0.25;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -48,9 +41,6 @@ impl Paragraph {
     }
 }
 
-/// The source transcript, laid out for reading. Depends only on the caption
-/// words, so editing the timeline never rebuilds it and paragraph indices stay
-/// stable while the user cuts.
 pub struct TranscriptDoc {
     pub words: Vec<Word>,
     pub paragraphs: Vec<Paragraph>,
@@ -115,9 +105,6 @@ pub fn captions_signature(captions: Option<&CaptionsData>) -> u64 {
     hasher.finish()
 }
 
-/// Flattens caption words into one ordered list. Punctuation the recognizer
-/// emitted as its own token is folded into the word before it, so every entry
-/// is something that was spoken and has a usable time span.
 pub fn flatten_words(captions: &CaptionsData) -> Vec<Word> {
     let mut words: Vec<Word> = Vec::new();
     let mut raw: Vec<(&str, f64, f64)> = captions
@@ -269,9 +256,6 @@ impl TranscriptDoc {
     }
 }
 
-/// One timeline clip, in the absolute source time the caption words use
-/// (each recording clip's own time plus the durations of the clips before
-/// it).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Mapping {
     pub segment: usize,
@@ -446,15 +430,17 @@ impl TranscriptEdl {
         ))
     }
 
-    pub fn timescale_at(&self, source: f64) -> f64 {
+    /// The speed `range` plays at when one clip plays all of it; `None` when it
+    /// is cut, or crosses into another clip where the speed may differ.
+    pub fn timescale_over(&self, range: Range<f64>) -> Option<f64> {
         self.mappings
             .iter()
-            .find(|mapping| mapping.source_start <= source && source < mapping.source_end)
-            .map_or(1.0, |mapping| mapping.timescale)
+            .find(|mapping| {
+                mapping.source_start <= range.start + 1e-9 && range.end <= mapping.source_end + 1e-9
+            })
+            .map(|mapping| mapping.timescale)
     }
 
-    /// The source time playing at playhead `output`. Where a transition
-    /// overlaps two clips the incoming one wins, as in the renderer.
     pub fn output_to_source(&self, output: f64) -> Option<f64> {
         let effective = output - editor_edits::held_time_before(&self.holds, output);
         let index = self
@@ -482,14 +468,5 @@ impl TranscriptEdl {
             .get(after)
             .map_or(f64::INFINITY, |range| range.start);
         Some(start..end)
-    }
-
-    pub fn covers(&self, range: Range<f64>) -> bool {
-        let index = self
-            .kept_ranges
-            .partition_point(|kept| kept.end <= range.start);
-        self.kept_ranges
-            .get(index)
-            .is_some_and(|kept| kept.start <= range.start + 1e-9 && kept.end >= range.end - 1e-9)
     }
 }
