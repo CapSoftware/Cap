@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { readdirSync, readFileSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -9,6 +10,7 @@ import { brand } from "./fork-brand.mjs";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const branding = path.join(root, "apps/desktop-gpui/assets/branding");
 export const masterPath = path.join(branding, "brand.svg");
+const skinsPath = path.join(branding, "skins");
 const TOKENS_OUTSIDE_THE_ART = new Set(["ink", "ink-dark"]);
 
 export function applyPalette(master, palette = brand.palette) {
@@ -46,7 +48,13 @@ export function applyPalette(master, palette = brand.palette) {
 const open = (viewBox, width, height) =>
 	`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="${viewBox}" fill="none">`;
 
-export function masterParts(master) {
+const ART_GROUPS = ["defs", "tile", "mark", "mark-small", "mark-tiny"];
+const SHARED_GROUPS = ["glyph", "wordmark"];
+
+export function masterParts(
+	master,
+	required = [...ART_GROUPS, ...SHARED_GROUPS],
+) {
 	const defs = master.match(/<defs>[\s\S]*?<\/defs>/)?.[0];
 	const parts = { defs };
 	for (const match of master.matchAll(
@@ -54,22 +62,41 @@ export function masterParts(master) {
 	)) {
 		parts[match[1]] = match[2];
 	}
-	for (const name of [
-		"defs",
-		"tile",
-		"rays",
-		"mark",
-		"rings",
-		"ground",
-		"mark-small",
-		"mark-tiny",
-		"glyph",
-		"wordmark",
-	]) {
+	for (const name of required) {
 		if (!parts[name]) throw new Error(`brand.svg has no ${name} group`);
 	}
 	return parts;
 }
+
+export function skinNames() {
+	return readdirSync(skinsPath, { withFileTypes: true })
+		.filter((entry) => entry.isDirectory())
+		.map((entry) => entry.name)
+		.sort();
+}
+
+export function skinMaster(name) {
+	const directory = path.join(skinsPath, name);
+	return {
+		masterFile: path.join(directory, "brand.svg"),
+		master: readFileSync(path.join(directory, "brand.svg"), "utf8"),
+		palette: JSON.parse(
+			readFileSync(path.join(directory, "palette.json"), "utf8"),
+		),
+	};
+}
+
+export function skinParts(skin, defaultMaster) {
+	const own = masterParts(skin, ART_GROUPS);
+	const shared = masterParts(defaultMaster);
+	for (const name of SHARED_GROUPS) {
+		if (own[name]) throw new Error(`a skin cannot carry its own ${name}`);
+		own[name] = shared[name];
+	}
+	return own;
+}
+
+const stack = (...layers) => layers.filter(Boolean).join("\n");
 
 export function tileSvg(parts, pixels) {
 	const layers =
@@ -78,7 +105,7 @@ export function tileSvg(parts, pixels) {
 			: pixels <= 192
 				? [parts.tile, parts.rays, parts["mark-small"]]
 				: [parts.tile, parts.rays, parts.mark, parts.rings, parts.ground];
-	return `${open("0 0 1024 1024", pixels, pixels)}\n${parts.defs}\n${layers.join("\n")}\n</svg>\n`;
+	return `${open("0 0 1024 1024", pixels, pixels)}\n${parts.defs}\n${stack(...layers)}\n</svg>\n`;
 }
 
 export function glyphBox(master) {
@@ -94,7 +121,7 @@ export function glyphSvg(parts, { box }, height = 0) {
 }
 
 export function logoMarkSvg(parts) {
-	return `${open("100 100 824 824", 40, 40)}\n${parts.defs}\n${parts.tile}\n${parts.rays}\n${parts["mark-small"]}\n</svg>\n`;
+	return `${open("100 100 824 824", 40, 40)}\n${parts.defs}\n${stack(parts.tile, parts.rays, parts["mark-small"])}\n</svg>\n`;
 }
 
 export function logoFullSvg(parts, ink) {
@@ -102,9 +129,7 @@ export function logoFullSvg(parts, ink) {
 	return `${open("0 0 103 40", 103, 40)}
 <svg x="0" y="0" width="40" height="40" viewBox="100 100 824 824">
 ${parts.defs}
-${parts.tile}
-${parts.rays}
-${parts["mark-small"]}
+${stack(parts.tile, parts.rays, parts["mark-small"])}
 </svg>
 <g transform="translate(46 27) scale(.0192)">
 ${wordmark}
@@ -145,6 +170,12 @@ export async function generateBrandAssets() {
 	const master = applyPalette(await fs.readFile(masterPath, "utf8"));
 	await fs.writeFile(masterPath, master);
 	const parts = masterParts(master);
+	for (const name of skinNames()) {
+		const skin = skinMaster(name);
+		const painted = applyPalette(skin.master, skin.palette);
+		skinParts(painted, master);
+		await fs.writeFile(skin.masterFile, painted);
+	}
 	const glyph = glyphBox(master);
 	const work = await fs.mkdtemp(path.join(os.tmpdir(), "fork-brand-"));
 	const app = path.join(branding, "app");
