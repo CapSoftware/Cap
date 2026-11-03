@@ -1702,8 +1702,6 @@ pub fn set_recording_mode(mode: Mode, cx: &mut App) {
     refresh_target_overlays(cx);
 }
 
-// -- Recording repair ------------------------------------------------------
-
 /// One Fix window per `.cap` bundle, keyed like the editors so a second Fix
 /// click on the same recording focuses the running session instead of
 /// starting another one against the same files.
@@ -1856,8 +1854,6 @@ fn refresh_main_window(cx: &mut App) {
     .ok();
 }
 
-/// A Fix session recovered an incomplete recording: the main window drops
-/// its recovery toast and rescans, as after a successful Recover click.
 pub fn recording_repaired(original: PathBuf, repaired: PathBuf, cx: &mut App) {
     let main = cx.global::<AppWindows>().main;
     main.update(cx, |view, window, cx| {
@@ -1866,8 +1862,6 @@ pub fn recording_repaired(original: PathBuf, repaired: PathBuf, cx: &mut App) {
     .ok();
 }
 
-/// "Open recording" after a repaired recovery: the same reveal-or-edit
-/// choice `process_incomplete_recording` makes after its own Recover.
 pub fn open_recovered_recording(project_path: PathBuf, cx: &mut App) {
     let output = project_path.join("content/output.mp4");
     if output.is_file() {
