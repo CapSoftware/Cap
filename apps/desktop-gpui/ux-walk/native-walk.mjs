@@ -587,6 +587,7 @@ export async function finishNativeWalk(file, cfg, dependencies = {}) {
 					earlyRows,
 					journal.startedAtMs,
 					cfg,
+					journal.request.speakers,
 				);
 				if (cached.handled) {
 					liveCacheHandled = true;
@@ -718,6 +719,7 @@ export async function finishNativeWalk(file, cfg, dependencies = {}) {
 				rows,
 				journal.startedAtMs,
 				cfg,
+				journal.request.speakers,
 			);
 			for (const [name, summary] of cached.results)
 				earlyResults.set(name, summary);
@@ -758,7 +760,7 @@ export async function finishNativeWalk(file, cfg, dependencies = {}) {
 						!JSON.parse(
 							fs.readFileSync(path.join(chapterDir, "chapter.json"), "utf8"),
 						).speakerMap
-							? { speakers: [] }
+							? { speakers: early?.speakers ?? [] }
 							: {}),
 						log: () => {},
 					},
@@ -770,8 +772,10 @@ export async function finishNativeWalk(file, cfg, dependencies = {}) {
 						transcriptError: early.transcriptError,
 					});
 				const attributed = attribution.record(row.dir);
-				if (attributed.speakerAttributionNotice)
-					row.speakerAttributionNotice = attributed.speakerAttributionNotice;
+				const speakerNotice =
+					attributed.speakerAttributionNotice ??
+					early?.speakerAttributionNotice;
+				if (speakerNotice) row.speakerAttributionNotice = speakerNotice;
 				row.status =
 					early?.transcriptError || summary?.transcriptError
 						? "no transcript"

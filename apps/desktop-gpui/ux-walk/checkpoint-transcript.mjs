@@ -14,11 +14,33 @@ const engine = fs.existsSync(local)
 	? new URL("./src/", import.meta.url)
 	: new URL("../../../vendor/ux-walk/src/", import.meta.url);
 
+// Transcribers number voices per request and return no voiceprint, so nothing saved can match a voice
+// across chunks. A person is named only when the walk says exactly who is talking: one configured
+// speaker, microphone speech only, and under 2% of the words (the engine's stray-voice rule in
+// speakers.mjs) outside each chunk's busiest voice.
+function soleSpeaker(words, speakers) {
+	if (speakers.length !== 1 || !words.length) return null;
+	const jobs = new Map();
+	for (const word of words) {
+		if (!/^segment-\d+:microphone$/.test(word.source)) return null;
+		const voices = jobs.get(word.jobId) ?? new Map();
+		voices.set(word.speaker, (voices.get(word.speaker) ?? 0) + 1);
+		jobs.set(word.jobId, voices);
+	}
+	let main = 0;
+	for (const voices of jobs.values()) main += Math.max(...voices.values());
+	return (words.length - main) / words.length < 0.02 ? speakers[0] : null;
+}
+
+const UNMATCHED_VOICES_NOTICE =
+	"Speaker labels belong to one audio source and transcription chunk. Voices are not matched between them, so two labels can be the same person.";
+
 export async function reuseCheckpointTranscript(
 	directory,
 	rows,
 	startedAtMs,
 	cfg = {},
+	speakers = [],
 ) {
 	const root = path.join(directory, "checkpoints");
 	const jobsRoot = path.join(root, "jobs");
@@ -174,6 +196,7 @@ export async function reuseCheckpointTranscript(
 			"Partial live transcript: some source audio is pending, failed or ambiguous. Saved jobs are reused without another automatic billable submission.";
 	const { wordsToSrt } = await import(new URL("transcribe.mjs", engine));
 	mapped.sort((a, b) => a.start - b.start || a.source.localeCompare(b.source));
+	const sole = soleSpeaker(mapped, speakers);
 	for (const row of rows) {
 		const start = (row.startMs - startedAtMs) / 1000;
 		const end = (row.endMs - startedAtMs) / 1000;
@@ -205,14 +228,27 @@ export async function reuseCheckpointTranscript(
 			schemaVersion: 1,
 			words,
 			complete: !error,
-			speakerIdentity:
-				"Labels belong to one source and chunk; identities are not matched across requests",
+			speakerIdentity: sole
+				? `One configured speaker and microphone speech only: every label here is ${sole}`
+				: "Labels belong to one source and chunk; identities are not matched across requests",
 			...(error ? { error } : {}),
 		});
 		if (words.length)
-			durableWrite(path.join(chapter, "transcript.srt"), wordsToSrt(words));
+			durableWrite(
+				path.join(chapter, "transcript.srt"),
+				wordsToSrt(
+					sole ? words.map((word) => ({ ...word, speaker: sole })) : words,
+				),
+			);
+		const labels = new Set(
+			words.map((word) => `${word.jobId}:${word.speaker}`),
+		);
 		results.set(row.dir, {
 			transcript: words.length > 0,
+			speakers: sole ? [sole] : [],
+			...(!sole && labels.size > 1
+				? { speakerAttributionNotice: UNMATCHED_VOICES_NOTICE }
+				: {}),
 			...(error ? { transcriptError: error } : {}),
 		});
 	}
