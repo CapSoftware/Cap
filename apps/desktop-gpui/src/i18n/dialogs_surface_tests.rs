@@ -834,7 +834,7 @@ fn dialog_surfaces_match_the_literals_they_replaced() {
         (tr::dialog::quit::still_open(), "Cap is still open"),
         (
             tr::dialog::quit::files_kept(),
-            "Cap keeps everything recorded so far and offers to recover it the next time it opens.",
+            "Everything recorded so far stays in the recording's folder.",
         ),
         (tr::dialog::quit::keep_open(), "Keep Cap Open"),
         (tr::dialog::quit::quit_anyway(), "Quit Anyway"),

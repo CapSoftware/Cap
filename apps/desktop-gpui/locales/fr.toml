@@ -2930,7 +2930,7 @@ zoom_some = { one = "{count} sur {total} sélectionné", other = "{count} sur {t
 
 [dialog.quit]
 canceled = "Fermeture annulée : {error}. Cap reste ouvert pour que vous puissiez terminer ou récupérer l'enregistrement."
-files_kept = "Cap conserve tout ce qui a été enregistré jusqu'ici et proposera de le récupérer à sa prochaine ouverture."
+files_kept = "Tout ce qui a été enregistré jusqu'ici reste dans le dossier de l'enregistrement."
 keep_open = "Garder Cap ouvert"
 pending = "Fermeture annulée, car l'arrêt de l'enregistrement est toujours en cours. Cap reste ouvert. Utilisez Arrêter dès que possible, puis quittez à nouveau."
 quit_anyway = "Quitter quand même"

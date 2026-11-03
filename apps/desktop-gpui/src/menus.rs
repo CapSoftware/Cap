@@ -803,8 +803,8 @@ fn apply_quit_action(action: QuitAction, cx: &mut App) {
 }
 
 /// The user chose to quit although the recording could not be confirmed
-/// stopped. Every fragment written so far is already on disk, and the next
-/// launch offers to recover it, so this is never worse than a force quit.
+/// stopped. Every fragment written so far is already on disk, so this is
+/// never worse than the force quit it replaces.
 fn quit_with_unconfirmed_recording(cx: &mut App) {
     tracing::warn!("quitting with an unconfirmed recording stop; its files are kept for recovery");
     let coordinator = cx.global_mut::<QuitCoordinator>();
