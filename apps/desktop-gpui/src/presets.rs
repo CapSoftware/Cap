@@ -143,6 +143,7 @@ pub fn preset_config(project: &ProjectConfiguration) -> Value {
         map.insert("timeline".into(), Value::Null);
         map.insert("clips".into(), Value::Array(Vec::new()));
         map.remove("overlayOrder");
+        map.remove("markers");
         if let Some(captions) = map.get_mut("captions").and_then(Value::as_object_mut) {
             captions.insert("segments".into(), Value::Array(Vec::new()));
             captions.remove("sourceTimed");
@@ -228,6 +229,24 @@ mod tests {
         let config = preset_config(&ProjectConfiguration::default());
         assert_eq!(config["timeline"], Value::Null);
         assert_eq!(config["clips"], json!([]));
+    }
+
+    #[test]
+    fn presets_leave_markers_with_their_recording() {
+        let project = ProjectConfiguration {
+            markers: vec![cap_project::TimelineMarker::new(0, 2.0)],
+            ..ProjectConfiguration::default()
+        };
+        let config = preset_config(&project);
+        assert!(config.get("markers").is_none());
+        let other = ProjectConfiguration {
+            markers: vec![cap_project::TimelineMarker::new(1, 4.0)],
+            ..ProjectConfiguration::default()
+        };
+        assert_eq!(
+            apply_preset(&config, &other).unwrap().markers,
+            other.markers
+        );
     }
 
     #[test]

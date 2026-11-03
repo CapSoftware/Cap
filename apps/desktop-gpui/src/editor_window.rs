@@ -81,6 +81,7 @@ use crate::{
 
 mod frame;
 mod loading;
+mod markers;
 mod scenes;
 mod snap;
 
@@ -1459,6 +1460,7 @@ pub struct EditorWindow {
     pub(crate) generating_keyboard: bool,
     pub(crate) keyboard_generation_message: Option<String>,
     clip_speed: Option<ClipSpeedMenu>,
+    markers: markers::MarkersState,
     timeline_scroll: gpui::ScrollHandle,
     minimap_drag: Option<timeline::MinimapDrag>,
     /// Magnetic edges for the live drag: playhead, clip cuts and every other
@@ -2029,6 +2031,7 @@ impl EditorWindow {
                 _ => {}
             },
         ));
+        let markers_state = markers::MarkersState::new(window, cx, &mut text_events);
         let player_frame_rect = crate::editor_canvas::canvas_rect_cell();
         let preview = cx.new(|_| PreviewFrameView::new(player_frame_rect.clone()));
         let editor = cx.entity();
@@ -2124,6 +2127,7 @@ impl EditorWindow {
             generating_keyboard: false,
             keyboard_generation_message: None,
             clip_speed: None,
+            markers: markers_state,
             timeline_scroll: gpui::ScrollHandle::new(),
             minimap_drag: None,
             drag_snap_targets: snap::SnapTargets::default(),
@@ -2320,6 +2324,7 @@ impl EditorWindow {
         self.timeline.imported_waveforms = imported;
         self.timeline.waveform_paths = waveform_paths;
         self.imported_waveforms_stale = true;
+        self.refresh_markers();
         if self.timeline.total_duration > 0.0 {
             self.total = self.timeline.total_duration;
             // Deleting or trimming the clip under the playhead shortens the
@@ -3760,7 +3765,17 @@ impl EditorWindow {
             cx.stop_propagation();
             return;
         }
+        if event.keystroke.key.as_str() == "escape" && self.markers.popover_open() {
+            self.marker_escape(window, cx);
+            cx.stop_propagation();
+            return;
+        }
         if ui::text_input_has_focus(window, cx) {
+            return;
+        }
+        if self.marker_key(&event.keystroke, window, cx) {
+            cx.stop_propagation();
+            window.refresh();
             return;
         }
         let keystroke = &event.keystroke;
@@ -3909,6 +3924,10 @@ impl EditorWindow {
                 }
                 if self.camera3d_picker {
                     self.close_camera3d_picker(cx);
+                    return;
+                }
+                if self.marker_escape(window, cx) {
+                    window.refresh();
                     return;
                 }
                 if self.split_mode {
@@ -4226,6 +4245,7 @@ impl EditorWindow {
     /// over the timeline seeks to where it landed.
     fn timeline_mouse_up(&mut self, cx: &mut Context<Self>) {
         if let Some(Scrub::Press { time }) = self.scrub.take() {
+            self.clear_marker_selection();
             self.seek_to_time(time, cx);
             // The other half of that listener: a press on bare timeline also
             // clears the selection (`TL/index.tsx:1157-1163`). It is gated on
@@ -4318,6 +4338,9 @@ impl EditorWindow {
                     _ => None,
                 }
             });
+            if selection.is_some() {
+                self.clear_marker_selection();
+            }
             self.selection = selection;
             self.refresh_image_asset_status();
             cx.notify();
@@ -10868,6 +10891,8 @@ impl EditorWindow {
                     .gap(px(2.))
                     .justify_end()
                     .items_center()
+                    .child(self.render_markers_button(compact, cx))
+                    .child(self.header_divider())
                     // The split toggle (`Player.tsx:409-427`).
                     .child(
                         div()
@@ -11125,6 +11150,7 @@ impl EditorWindow {
             // while paused and while the pointer is over the content
             // column.
             .children(ghost_x.map(|x| timeline::render_preview_line(&theme, x)))
+            .children(self.render_marker_lines(viewport_width))
             // The playhead (`:1279-1295`). It dims to 50 % in split
             // mode, where the cut line is the thing to watch
             // (`TL/index.tsx:1281`).
@@ -11245,6 +11271,7 @@ impl EditorWindow {
                         ),
                 )
             })
+            .children(self.render_marker_flags(viewport_width, cx))
     }
 
     /// The scroll body (`TL/index.tsx:1317-1499`): `relative flex-1 min-h-0`
@@ -12114,6 +12141,7 @@ impl Render for EditorWindow {
                                         && this.drag.is_none()
                                         && this.lane_reorder.is_none()
                                         && this.minimap_drag.is_none()
+                                        && this.markers.drag.is_none()
                                     {
                                         return;
                                     }
@@ -12122,6 +12150,7 @@ impl Render for EditorWindow {
                                         // window never heard about (another
                                         // app, a system gesture): settle the
                                         // drag at its last state.
+                                        this.marker_drag_up(window, cx);
                                         this.window_mouse_up(cx);
                                         this.drag_mouse_up(window, cx);
                                         this.cancel_lane_reorder(cx);
@@ -12132,6 +12161,14 @@ impl Render for EditorWindow {
                                     }
                                     if this.lane_reorder.is_some() {
                                         this.update_lane_reorder(event.position, window, cx);
+                                        return;
+                                    }
+                                    if this.markers.drag.is_some() {
+                                        this.marker_drag_move(
+                                            f32::from(event.position.x),
+                                            window,
+                                            cx,
+                                        );
                                         return;
                                     }
                                     if let Some(drag) = this.minimap_drag {
@@ -12166,9 +12203,11 @@ impl Render for EditorWindow {
                                         && this.drag.is_none()
                                         && this.lane_reorder.is_none()
                                         && this.minimap_drag.is_none()
+                                        && this.markers.drag.is_none()
                                     {
                                         return;
                                     }
+                                    this.marker_drag_up(window, cx);
                                     this.window_mouse_up(cx);
                                     this.drag_mouse_up(window, cx);
                                     this.finish_lane_reorder(window, cx);
@@ -12464,6 +12503,7 @@ impl Render for EditorWindow {
             .children(self.with_style_controls(|this| this.render_color_picker_popover(cx)))
             .children(self.render_presets_menu(cx))
             .children(self.render_preset_dialog(cx))
+            .children(self.render_marker_overlays(window, cx))
             // The clips overlays: import menu, record modal, and the card
             // drag's window-wide layer with its floating ghost.
             .children(self.render_clips_overlays(cx))
