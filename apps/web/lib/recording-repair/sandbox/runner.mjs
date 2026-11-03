@@ -257,9 +257,17 @@ const handlePulled = async (req, res, url) => {
 		sendJson(res, 200, { size: written });
 	} catch (error) {
 		fs.rmSync(temp, { force: true });
-		sendJson(res, 400, { error: clip(String(error?.message ?? error), 200) });
+		const reason = UPLOAD_ERRORS.has(error?.message)
+			? error.message
+			: "upload failed";
+		sendJson(res, 400, { error: reason });
 	}
 };
+
+const UPLOAD_ERRORS = new Set([
+	"body exceeds content-length",
+	"short upload",
+]);
 
 const chownTree = (dir) => {
 	fs.chownSync(dir, AGENT_UID, AGENT_GID);
