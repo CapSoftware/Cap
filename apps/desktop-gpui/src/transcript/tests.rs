@@ -640,6 +640,84 @@ fn cuts_unknown_to_the_planner_are_no_ops() {
     assert_eq!(report, CutReport::default());
 }
 
+#[test]
+fn restoring_brings_back_mask_keyframes_with_the_material() {
+    let words = spoken(&["one", "two", "three", "four"]);
+    let durations = [4.0];
+    let mut project = project(&borrowed(&words), &durations);
+    let mut mask = editor_edits::default_mask_segment(0.0, 4.0, 0);
+    mask.keyframes.intensity = vec![
+        cap_project::MaskScalarKeyframe {
+            time: 1.0,
+            value: 0.2,
+        },
+        cap_project::MaskScalarKeyframe {
+            time: 3.0,
+            value: 0.8,
+        },
+    ];
+    timeline_mut(&mut project).mask_segments.push(mask);
+    cut_words(&mut project, &durations, &[(1, 2)]);
+    let doc = TranscriptDoc::build(project.captions.as_ref().unwrap());
+    restore_words(timeline_mut(&mut project), &durations, &doc, 1..2).unwrap();
+    let mask = &timeline(&project).mask_segments[0];
+    assert!(close(mask.end, 4.0));
+    let times: Vec<f64> = mask
+        .keyframes
+        .intensity
+        .iter()
+        .map(|key| key.time)
+        .collect();
+    assert!(close(times[0], 1.0) && close(times[1], 3.0), "{times:?}");
+}
+
+#[test]
+fn restoring_puts_back_a_whole_take_that_was_cut() {
+    let durations = [2.0, 2.0, 2.0];
+    let words = [
+        ("first", 0.5, 0.9),
+        ("middle", 2.5, 2.9),
+        ("last", 4.5, 4.9),
+    ];
+    let mut project = project(&words, &durations);
+    assert!(editor_edits::delete_clip_segments(
+        timeline_mut(&mut project),
+        &[1]
+    ));
+    assert_eq!(kept(&project, &durations), [true, false, true]);
+    let doc = TranscriptDoc::build(project.captions.as_ref().unwrap());
+    restore_words(timeline_mut(&mut project), &durations, &doc, 1..2).unwrap();
+    assert_eq!(kept(&project, &durations), [true, true, true]);
+    let clips: Vec<u32> = timeline(&project)
+        .segments
+        .iter()
+        .map(|segment| segment.recording_clip)
+        .collect();
+    assert_eq!(clips, [0, 1, 2]);
+    assert!(close(
+        editor_edits::clip_timeline_duration(timeline(&project)),
+        6.0
+    ));
+}
+
+#[test]
+fn pauses_are_measured_and_kept_in_playback_time() {
+    let words = [("before", 1.0, 1.4), ("after", 5.0, 5.4)];
+    let durations = [6.0];
+    let mut project = project(&words, &durations);
+    timeline_mut(&mut project).segments[0].timescale = 2.0;
+    let (doc, edl) = model(&project, &durations);
+    assert!(plan_pause_cuts(&doc, &edl, None, 2.0, 0.5).is_empty());
+    let pauses = plan_pause_cuts(&doc, &edl, None, 1.5, 0.5);
+    assert_eq!(pauses.len(), 1);
+    assert!(close(pauses[0].length, 1.8));
+    let cuts: Vec<_> = pauses.iter().map(|pause| pause.cut.clone()).collect();
+    apply_source_cuts(timeline_mut(&mut project), &durations, &cuts);
+    let (_, edl) = model(&project, &durations);
+    let gap = edl.source_to_output(5.0).unwrap() - edl.source_to_output(1.4).unwrap();
+    assert!((gap - 0.5).abs() < 1e-6, "{gap}");
+}
+
 #[cfg(target_os = "linux")]
 mod keyboard {
     use gpui::{
