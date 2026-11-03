@@ -904,6 +904,7 @@ fn styled_settings(rng: &mut Rng) -> CaptionSettings {
         animation: "pop".into(),
         highlight_style: "pill".into(),
         uppercase: true,
+        show_filler_words: false,
     }
 }
 

@@ -5,6 +5,7 @@ pub mod caption_words;
 mod config_write_tests;
 mod configuration;
 pub mod cursor;
+pub mod disfluency;
 pub mod keyboard;
 mod meta;
 

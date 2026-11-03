@@ -2375,6 +2375,8 @@ pub struct CaptionSettings {
     #[serde(alias = "highlightStyle")]
     pub highlight_style: String,
     pub uppercase: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub show_filler_words: bool,
 }
 
 impl CaptionSettings {
@@ -2440,6 +2442,7 @@ impl Default for CaptionSettings {
             animation: Self::default_animation(),
             highlight_style: Self::default_highlight_style(),
             uppercase: false,
+            show_filler_words: false,
         }
     }
 }
@@ -3262,6 +3265,25 @@ mod notch_tests {
 mod tests {
     use super::*;
     use serde_json::Value;
+
+    #[test]
+    fn show_filler_words_is_off_for_old_projects_and_only_written_when_on() {
+        let legacy: CaptionSettings =
+            serde_json::from_str(r#"{"enabled":true,"uppercase":true}"#).unwrap();
+        assert!(!legacy.show_filler_words);
+        let written = serde_json::to_value(&legacy).unwrap();
+        assert!(written.get("showFillerWords").is_none());
+
+        let shown = CaptionSettings {
+            show_filler_words: true,
+            ..legacy
+        };
+        let written = serde_json::to_value(&shown).unwrap();
+        assert_eq!(written["showFillerWords"], Value::Bool(true));
+        let restored: CaptionSettings = serde_json::from_value(written).unwrap();
+        assert!(restored.show_filler_words);
+        assert!(restored.uppercase);
+    }
 
     #[test]
     fn studio_sound_defaults_old_projects_to_balanced_and_round_trips_tiers() {
