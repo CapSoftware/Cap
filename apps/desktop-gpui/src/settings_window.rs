@@ -3886,6 +3886,23 @@ impl SettingsWindow {
                         .into_any_element(),
                     ),
                     self.setting_row(
+                        tr::settings::general::recording::marker_sound::label(),
+                        Some(tr::settings::general::recording::marker_sound::description()),
+                        self.toggle(
+                            "marker-sound",
+                            tr::settings::general::recording::marker_sound::label(),
+                            settings.recording_marker_sound,
+                            cx,
+                            |this, cx| {
+                                this.settings.recording_marker_sound =
+                                    !this.settings.recording_marker_sound;
+                                let value = this.settings.recording_marker_sound;
+                                this.write_bool(store::RECORDING_MARKER_SOUND_KEY, value, cx);
+                            },
+                        )
+                        .into_any_element(),
+                    ),
+                    self.setting_row(
                         tr::settings::general::recording::notch_overlay::label(),
                         Some(tr::settings::general::recording::notch_overlay::description()),
                         self.toggle(
