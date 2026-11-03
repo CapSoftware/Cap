@@ -13,10 +13,11 @@ use crate::{
 use anyhow::{Context, anyhow};
 use cap_enc_ffmpeg::h264::{H264EncoderBuilder, H264Preset};
 use cap_enc_ffmpeg::segmented_stream::{
-    DiskSpaceCallback, SegmentedVideoEncoder, SegmentedVideoEncoderConfig,
+    DiskSpaceCallback, QueueFrameError, SegmentedVideoEncoder, SegmentedVideoEncoderConfig,
 };
 use cap_media_info::{AudioInfo, Pixel, VideoInfo};
 use std::{
+    cell::Cell,
     path::PathBuf,
     sync::{
         Arc, Mutex,
@@ -104,6 +105,37 @@ impl FrameDropTracker {
             self.frames_in_window = 0;
             self.last_check = std::time::Instant::now();
         }
+    }
+}
+
+/// Logs the first encode failures, then every 300th: a warning per frame from
+/// a dead encoder pushed its first error out of the size-capped log upload.
+fn report_encode_result(
+    encoder: &mut SegmentedVideoEncoder,
+    result: Result<(), QueueFrameError>,
+    failures: &Cell<u64>,
+    health_tx: &SharedHealthSender,
+    track: &'static str,
+) {
+    if let Err(error) = result {
+        let count = failures.get() + 1;
+        failures.set(count);
+        if count <= 3 || count.is_multiple_of(300) {
+            warn!(track, failures = count, "Failed to encode frame: {error}");
+        }
+    }
+    if let Some(fallback) = encoder.take_encoder_fallback() {
+        warn!(
+            track,
+            failed_encoder = %fallback.failed_encoder,
+            error = %fallback.error,
+            replacement = %fallback.replacement,
+            "Video encoder replaced mid-recording"
+        );
+        health_tx.emit(PipelineHealthEvent::EncoderRebuilt {
+            backend: fallback.replacement,
+            attempt: 1,
+        });
     }
 }
 
@@ -382,6 +414,7 @@ impl WindowsFragmentedM4SMuxer {
                 let mut disk_monitor = DiskSpaceMonitor::new();
                 let mut disk_exhausted = false;
                 const SLOW_THRESHOLD_MS: u128 = 5;
+                let encode_failures = Cell::new(0u64);
 
                 let normalize_timestamp =
                     |ts: Duration, first: &mut Option<Duration>| -> Duration {
@@ -403,9 +436,14 @@ impl WindowsFragmentedM4SMuxer {
 
                     match encoder.lock() {
                         Ok(mut enc) => {
-                            if let Err(e) = enc.queue_frame(ffmpeg_frame, timestamp) {
-                                warn!("Failed to encode frame: {e}");
-                            }
+                            let result = enc.queue_frame(ffmpeg_frame, timestamp);
+                            report_encode_result(
+                                &mut enc,
+                                result,
+                                &encode_failures,
+                                &health_tx,
+                                "screen",
+                            );
                         }
                         Err(_) => {
                             return Err(anyhow!(
@@ -833,6 +871,7 @@ impl WindowsFragmentedM4SCameraMuxer {
                 let mut disk_exhausted = false;
                 let mut mjpeg_decoder = MjpegDecoder::default();
                 const SLOW_THRESHOLD_MS: u128 = 5;
+                let encode_failures = Cell::new(0u64);
 
                 let normalize_timestamp =
                     |ts: Duration, first: &mut Option<Duration>| -> Duration {
@@ -875,9 +914,14 @@ impl WindowsFragmentedM4SCameraMuxer {
 
                                 match encoder.lock() {
                                     Ok(mut enc) => {
-                                        if let Err(e) = enc.queue_frame(ffmpeg_frame, timestamp) {
-                                            warn!("Failed to encode camera frame: {e}");
-                                        }
+                                        let result = enc.queue_frame(ffmpeg_frame, timestamp);
+                                        report_encode_result(
+                                            &mut enc,
+                                            result,
+                                            &encode_failures,
+                                            &health_tx,
+                                            "camera",
+                                        );
                                     }
                                     Err(_) => {
                                         return Err(anyhow!(
