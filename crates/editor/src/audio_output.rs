@@ -72,6 +72,7 @@ pub struct PlaySpec {
 /// timeline time at higher speeds.
 const VIDEO_SYNC_TOLERANCE_SECS: f64 = 0.04;
 const STRETCH_SCRATCH_FRAMES: usize = 1024;
+const STRETCH_HISTORY_BLOCKS: usize = 512;
 
 /// The preview-speed half of an ordinary source: the shared speed and the
 /// stretcher that plays the timeline mix faster or slower without changing
@@ -80,6 +81,8 @@ struct PreviewSpeedStage {
     speed: PreviewSpeedHandle,
     stretcher: Box<PreviewStretcher>,
     scratch: Box<[f32]>,
+    history: std::collections::VecDeque<(usize, f64)>,
+    channels: usize,
 }
 
 impl PreviewSpeedStage {
@@ -89,7 +92,27 @@ impl PreviewSpeedStage {
             speed,
             stretcher: Box::new(PreviewStretcher::new(output_info.sample_rate, channels)),
             scratch: vec![0.0; STRETCH_SCRATCH_FRAMES * channels].into_boxed_slice(),
+            history: std::collections::VecDeque::with_capacity(STRETCH_HISTORY_BLOCKS),
+            channels,
         }
+    }
+
+    /// Timeline seconds still queued in the device. Audio queued before a
+    /// speed change was rendered at the old speed, so the device's delay is
+    /// walked back through the speeds of the blocks actually sent; anything
+    /// older than this stage's history played at 1x.
+    fn queued_timeline_secs(&self, latency_secs: f64, sample_rate: f64) -> f64 {
+        let mut remaining = latency_secs.max(0.0) * sample_rate;
+        let mut timeline = 0.0;
+        for &(frames, speed) in self.history.iter().rev() {
+            if remaining <= 0.0 {
+                break;
+            }
+            let taken = remaining.min(frames as f64);
+            timeline += taken * speed;
+            remaining -= taken;
+        }
+        (timeline + remaining.max(0.0)) / sample_rate
     }
 
     fn playhead_secs<T: FromSampleBytes + cpal::FromSample<f32>>(
@@ -115,10 +138,10 @@ impl PreviewSpeedStage {
         let position = self
             .playhead_secs(audio)
             .unwrap_or_else(|| audio.current_playhead_secs());
-        let latency = latency_secs.max(0.0) * speed;
-        let audible_playhead = (position - latency).max(0.0);
+        let queued = self.queued_timeline_secs(latency_secs, f64::from(audio.sample_rate().max(1)));
+        let audible_playhead = (position - queued).max(0.0);
         if (video_playhead - audible_playhead).abs() > VIDEO_SYNC_TOLERANCE_SECS * speed.max(1.0) {
-            audio.set_playhead(video_playhead + latency);
+            audio.set_playhead(video_playhead + latency_secs.max(0.0) * speed);
             self.stretcher.seek(audio.read_frame());
         }
     }
@@ -129,6 +152,11 @@ impl PreviewSpeedStage {
         buffer: &mut [T],
         speed: f64,
     ) {
+        if self.history.len() == STRETCH_HISTORY_BLOCKS {
+            self.history.pop_front();
+        }
+        self.history
+            .push_back((buffer.len() / self.channels, speed));
         let scratch_len = self.scratch.len();
         for chunk in buffer.chunks_mut(scratch_len) {
             let scratch = &mut self.scratch[..chunk.len()];
@@ -1002,6 +1030,11 @@ fn render_source_block<T: FromSampleBytes + cpal::FromSample<f32>>(
                 stage.sync_video_playhead(audio, &mut source.playhead_rx, latency_secs, speed);
                 stage.render(audio, buffer, speed);
             }
+            Some(stage) => {
+                stage.history.clear();
+                sync_video_playhead(audio, &mut source.playhead_rx, latency_secs);
+                audio.fill(buffer);
+            }
             _ => {
                 sync_video_playhead(audio, &mut source.playhead_rx, latency_secs);
                 audio.fill(buffer);
@@ -1761,6 +1794,45 @@ mod tests {
             panic!("expected installed audio source");
         };
         (*source, playhead_tx)
+    }
+
+    #[test]
+    fn queued_audio_is_counted_at_the_speed_it_was_rendered() {
+        let info = AudioInfo::new_raw(AudioData::SAMPLE_FORMAT, 48_000, 2);
+        let mut stage = PreviewSpeedStage::new(PreviewSpeedHandle::default(), info);
+        let rate = 48_000.0;
+        assert!((stage.queued_timeline_secs(0.2, rate) - 0.2).abs() < 1e-9);
+        for _ in 0..5 {
+            stage.history.push_back((4_800, 3.0));
+        }
+        assert!((stage.queued_timeline_secs(0.2, rate) - 0.6).abs() < 1e-9);
+        assert!((stage.queued_timeline_secs(0.6, rate) - (1.5 + 0.1)).abs() < 1e-9);
+        stage.history.clear();
+        stage.history.push_back((9_600, 1.0));
+        stage.history.push_back((2_400, 2.0));
+        assert!((stage.queued_timeline_secs(0.1, rate) - (0.1 + 0.05)).abs() < 1e-9);
+        assert_eq!(stage.queued_timeline_secs(-1.0, rate), 0.0);
+    }
+
+    #[test]
+    fn stretched_blocks_are_remembered_with_their_speed_and_bounded() {
+        let info = AudioInfo::new_raw(AudioData::SAMPLE_FORMAT, 48_000, 2);
+        let mut stage = PreviewSpeedStage::new(PreviewSpeedHandle::default(), info);
+        let (mut source, _playhead) = source(48_000);
+        let ActiveSourceBuffer::Ordinary(audio) = &mut source.buffer else {
+            panic!("expected an ordinary source");
+        };
+        let mut block = vec![0.0f32; 512 * 2];
+        for _ in 0..STRETCH_HISTORY_BLOCKS + 10 {
+            stage.render(audio, &mut block, 2.0);
+        }
+        assert_eq!(stage.history.len(), STRETCH_HISTORY_BLOCKS);
+        assert!(
+            stage
+                .history
+                .iter()
+                .all(|&(frames, speed)| frames == 512 && speed == 2.0)
+        );
     }
 
     #[test]

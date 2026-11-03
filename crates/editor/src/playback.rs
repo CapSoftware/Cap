@@ -753,7 +753,9 @@ impl Playback {
         let mut prefetch_stop_rx = stop_rx.clone();
         let mut prefetch_project = self.project.clone();
         let prefetch_speed = self.preview_speed.clone();
-        let mut prefetch_previous_speed = prefetch_speed.get();
+        let preparing_owns_clock = Arc::new(AtomicBool::new(adopted.is_some()));
+        let prefetch_preparing_owns_clock = Arc::clone(&preparing_owns_clock);
+        let mut prefetch_previous_speed = PreviewSpeed::NORMAL;
         let prefetch_segment_medias = self.segment_medias.clone();
         let (prefetch_duration, has_timeline) = self
             .project
@@ -858,7 +860,11 @@ impl Playback {
                 }
 
                 let current_playback_frame = *playback_position_rx.borrow_and_update();
-                let speed = prefetch_speed.get();
+                let speed = if prefetch_preparing_owns_clock.load(Ordering::Acquire) {
+                    PreviewSpeed::NORMAL
+                } else {
+                    prefetch_speed.get()
+                };
                 if speed != prefetch_previous_speed {
                     if speed < prefetch_previous_speed {
                         next_prefetch_frame = next_prefetch_frame.min(current_playback_frame);
@@ -1485,6 +1491,7 @@ impl Playback {
                         break;
                     }
                     drop(adopted.take());
+                    preparing_owns_clock.store(false, Ordering::Release);
                     preparing_audio_released.store(true, Ordering::Release);
                     let project = self.project.borrow().clone();
                     Arc::make_mut(&mut cached_project).audio = project.audio.clone();
