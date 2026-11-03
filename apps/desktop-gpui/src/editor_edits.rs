@@ -1130,7 +1130,38 @@ pub fn delete_track_lane_and_order(
             true
         }
     });
-    timeline_changed || order_changed
+    let names_changed = matches!(
+        kind,
+        TrackKind::Style | TrackKind::Image | TrackKind::Text | TrackKind::Mask | TrackKind::Audio
+    ) && delete_track_name(&mut project.track_names, kind, lane);
+    timeline_changed || order_changed || names_changed
+}
+
+fn delete_track_name(
+    names: &mut std::collections::BTreeMap<String, String>,
+    kind: TrackKind,
+    deleted: u32,
+) -> bool {
+    let prefix = format!("{}:", kind.name_key());
+    let lanes: Vec<(u32, String)> = names
+        .iter()
+        .filter_map(|(key, name)| {
+            let lane = key.strip_prefix(&prefix)?.parse::<u32>().ok()?;
+            (lane >= deleted).then(|| (lane, name.clone()))
+        })
+        .collect();
+    if lanes.is_empty() {
+        return false;
+    }
+    for (lane, _) in &lanes {
+        names.remove(&format!("{prefix}{lane}"));
+    }
+    for (lane, name) in lanes {
+        if lane > deleted {
+            names.insert(format!("{prefix}{}", lane - 1), name);
+        }
+    }
+    true
 }
 
 pub fn reorder_overlay_track(
@@ -2922,6 +2953,59 @@ mod tests {
     }
 
     // -- Selection ----------------------------------------------------------
+
+    #[test]
+    fn deleting_a_lane_drops_its_name_and_shifts_the_names_above() {
+        let mut project = config(serde_json::json!({
+            "timeline": {
+                "segments": [{ "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 30.0 }],
+                "zoomSegments": [],
+                "audioSegments": [
+                    { "start": 0.0, "end": 5.0, "track": 0, "path": "voice.mp3", "name": "Voice", "duration": 5.0 },
+                    { "start": 0.0, "end": 5.0, "track": 1, "path": "music.mp3", "name": "Music", "duration": 5.0 }
+                ]
+            },
+            "trackNames": { "audio:0": "Voice", "audio:1": "Music", "text:0": "Titles" }
+        }));
+        assert!(delete_track_lane_and_order(
+            &mut project,
+            &[],
+            TrackKind::Audio,
+            0
+        ));
+        let names = |project: &ProjectConfiguration| {
+            project
+                .track_names
+                .iter()
+                .map(|(key, name)| (key.clone(), name.clone()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            names(&project),
+            [
+                ("audio:0".to_string(), "Music".to_string()),
+                ("text:0".to_string(), "Titles".to_string())
+            ]
+        );
+
+        let mut empty_lane = config(serde_json::json!({
+            "timeline": {
+                "segments": [{ "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 30.0 }],
+                "zoomSegments": []
+            },
+            "trackNames": { "text:0": "Empty", "text:1": "Above" }
+        }));
+        assert!(delete_track_lane_and_order(
+            &mut empty_lane,
+            &[],
+            TrackKind::Text,
+            0
+        ));
+        assert_eq!(
+            names(&empty_lane),
+            [("text:0".to_string(), "Above".to_string())]
+        );
+    }
 
     #[test]
     fn lane_names_follow_their_lane_when_lanes_are_reordered() {
