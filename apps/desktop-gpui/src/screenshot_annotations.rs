@@ -1225,6 +1225,11 @@ pub struct AnnotationState {
 }
 
 impl AnnotationState {
+    #[cfg(test)]
+    pub(crate) fn set_layer_bounds_for_test(&mut self, bounds: Bounds<Pixels>) {
+        self.layer.set(Some(bounds));
+    }
+
     pub(crate) fn has_active_gesture(&self) -> bool {
         self.gesture.is_some()
     }

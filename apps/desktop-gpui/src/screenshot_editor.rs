@@ -5301,8 +5301,8 @@ mod tests {
         fn a_newer_matching_frame_preserves_an_in_flight_drawing(cx: &mut gpui::TestAppContext) {
             let (fixture, cx) = fixture(cx, config(), (800, 600));
             let (square, auto) = queue_aspect_round_trip(&fixture.editor, cx);
-            paint_annotation_layer(&fixture.editor, cx);
             fixture.editor.update_in(cx, |editor, window, cx| {
+                set_annotation_pointer_bounds(editor);
                 editor.tool = Tool::Rectangle;
                 assert!(editor.annotation_mouse_down(&mouse_down(200., 200.), window, cx));
                 assert!(editor.annotation_mouse_move(gpui::point(px(240.), px(230.)), window, cx));
@@ -5363,24 +5363,11 @@ mod tests {
             })
         }
 
-        fn paint_annotation_layer(
-            editor: &Entity<ScreenshotEditorWindow>,
-            cx: &mut gpui::VisualTestContext,
-        ) {
-            cx.draw(
-                gpui::point(px(0.), px(0.)),
-                gpui::size(px(800.), px(600.)),
-                |_, cx| {
-                    let layer = editor.update(cx, |editor, cx| {
-                        editor.render_annotation_layer(
-                            (800., 600.),
-                            editor.annotation_image_rect(),
-                            cx,
-                        )
-                    });
-                    div().relative().w(px(800.)).h(px(600.)).children(layer)
-                },
-            );
+        fn set_annotation_pointer_bounds(editor: &mut ScreenshotEditorWindow) {
+            editor.annotation_state.set_layer_bounds_for_test(Bounds {
+                origin: gpui::point(px(0.), px(0.)),
+                size: gpui::size(px(800.), px(600.)),
+            });
         }
 
         fn mouse_down(x: f32, y: f32) -> MouseDownEvent {
@@ -5399,13 +5386,13 @@ mod tests {
         ) {
             let (fixture, cx) = fixture(cx, config(), (800, 600));
             let (square, _) = queue_aspect_round_trip(&fixture.editor, cx);
-            paint_annotation_layer(&fixture.editor, cx);
             let expected = if resize {
                 (100., 100., 80., 60.)
             } else {
                 (130., 120., 50., 30.)
             };
             fixture.editor.update_in(cx, |editor, window, cx| {
+                set_annotation_pointer_bounds(editor);
                 editor.tool = Tool::Select;
                 let (start, end) = if resize {
                     editor.selected_annotation = Some("shape".into());
