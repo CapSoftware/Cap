@@ -243,8 +243,6 @@ impl TranscriptDoc {
         self.paragraph_of.get(word).copied().unwrap_or(0) as usize
     }
 
-    /// The word being spoken at `source`, or the one that just ended if the
-    /// gap since is short.
     pub fn word_at_source(&self, source: f64) -> Option<usize> {
         let index = self
             .words
@@ -432,8 +430,6 @@ impl TranscriptEdl {
             .map(|_| index)
     }
 
-    /// The playhead time at which `source` plays, taking the first clip in
-    /// timeline order that contains it.
     pub fn source_to_output(&self, source: f64) -> Option<f64> {
         let mapping = self
             .mappings
@@ -448,6 +444,13 @@ impl TranscriptEdl {
             &self.holds,
             mapping.effective_at(source),
         ))
+    }
+
+    pub fn timescale_at(&self, source: f64) -> f64 {
+        self.mappings
+            .iter()
+            .find(|mapping| mapping.source_start <= source && source < mapping.source_end)
+            .map_or(1.0, |mapping| mapping.timescale)
     }
 
     /// The source time playing at playhead `output`. Where a transition

@@ -25,8 +25,6 @@ const EDGE_PENALTY_DB: f32 = 6.0;
 const MAX_SEARCH_STEPS: usize = 4_000;
 const MIN_PAUSE_CUT: f64 = 0.05;
 
-/// The quietest point in `lo..hi`, preferring the middle when the audio does
-/// not say otherwise. Without audio, the middle.
 pub fn quietest_point(energy: Option<&EnergyEnvelope>, lo: f64, hi: f64) -> f64 {
     let (lo, hi) = if lo <= hi { (lo, hi) } else { (hi, lo) };
     let centre = (lo + hi) / 2.0;
@@ -85,8 +83,6 @@ pub fn gap_cut(doc: &TranscriptDoc, energy: Option<&EnergyEnvelope>, index: usiz
     quietest_point(energy, lo, hi)
 }
 
-/// Source ranges that remove each run of words, with the cut edges in the
-/// silences on either side. Overlapping and touching ranges are merged.
 pub fn plan_word_cuts(
     doc: &TranscriptDoc,
     energy: Option<&EnergyEnvelope>,
@@ -103,7 +99,9 @@ pub fn plan_word_cuts(
 #[derive(Clone, Debug, PartialEq)]
 pub struct PauseCut {
     pub after_word: usize,
+    /// Playback seconds, so a pause inside a sped-up clip is measured as heard.
     pub length: f64,
+    pub saves: f64,
     pub cut: Range<f64>,
 }
 
@@ -126,15 +124,16 @@ pub fn plan_pause_cuts(
         }
         let previous_end = doc.words[index - 1].end;
         let next_start = doc.words[index].start;
-        let length = next_start - previous_end;
+        let timescale = edl.timescale_at(previous_end);
+        let length = (next_start - previous_end) / timescale;
         if length <= longer_than || length <= keep + MIN_PAUSE_CUT {
             continue;
         }
         if !edl.covers(previous_end..next_start) {
             continue;
         }
-        let lead = keep * 0.45;
-        let trail = keep - lead;
+        let lead = keep * 0.45 * timescale;
+        let trail = keep * timescale - lead;
         let lo_limit = previous_end + TAIL_GUARD.min(lead);
         let hi_limit = next_start - ONSET_GUARD.min(trail);
         let start_target = previous_end + lead;
@@ -149,12 +148,14 @@ pub fn plan_pause_cuts(
             (end_target - 0.06).max(start),
             (end_target + 0.06).min(hi_limit),
         );
-        if end - start < MIN_PAUSE_CUT {
+        let saves = (end - start) / timescale;
+        if saves < MIN_PAUSE_CUT {
             continue;
         }
         pauses.push(PauseCut {
             after_word: index - 1,
             length,
+            saves,
             cut: start..end,
         });
     }
@@ -229,9 +230,9 @@ pub enum RestoreBlocker {
 const TOUCH_EPSILON: f64 = 1e-6;
 
 /// Plays `hole` again by growing the clips that end and start at its edges,
-/// rippling everything after each grown edge later, and merging the two
-/// halves back into one clip when they become contiguous with the same
-/// settings. `must_cover` is a source instant the restore has to bring back;
+/// putting back any whole recording take it swallowed, rippling everything
+/// after each change later, and merging the two halves back into one clip
+/// when they become contiguous with the same settings. `must_cover` is a source instant the restore has to bring back;
 /// if it cannot, nothing changes.
 pub fn restore_hole(
     timeline: &mut TimelineConfiguration,
@@ -302,6 +303,49 @@ pub fn restore_hole(
             next.segments[right.segment].start = target - clip_start;
             editor_edits::ripple_insert_output_tracks(&mut next, boundary, grow / right.timescale);
         }
+    }
+
+    let first_missing = left.map_or(0, |left| left.recording_clip + 1);
+    let last_missing = right.map_or(recording_durations.len() as u32, |right| {
+        right.recording_clip
+    });
+    let mut index = match (left, right) {
+        (Some(left), _) => left.segment + 1,
+        (None, Some(right)) => right.segment,
+        (None, None) => 0,
+    };
+    for clip in first_missing..last_missing {
+        let (start, end) = clip_bounds(clip);
+        let duration = end - start;
+        if !(duration.is_finite() && duration > 0.0)
+            || start < hole.start - TOUCH_EPSILON
+            || end > hole.end + TOUCH_EPSILON
+        {
+            continue;
+        }
+        let effective = crate::editor_timeline::clip_timeline_offsets(&next)
+            .get(index)
+            .copied()
+            .unwrap_or_else(|| editor_edits::clip_timeline_duration(&next));
+        let holds = next.hold_windows();
+        let boundary = editor_edits::effective_to_output(&holds, effective);
+        next.segments.insert(
+            index,
+            cap_project::TimelineSegment {
+                recording_clip: clip,
+                timescale: 1.0,
+                start: 0.0,
+                end: duration,
+                ..Default::default()
+            },
+        );
+        for transition in next.transitions.iter_mut() {
+            if transition.segment_index as usize >= index {
+                transition.segment_index += 1;
+            }
+        }
+        editor_edits::ripple_insert_output_tracks(&mut next, boundary, duration);
+        index += 1;
     }
 
     let covered = build_mappings(&next, recording_durations)
