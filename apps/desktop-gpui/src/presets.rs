@@ -136,7 +136,8 @@ pub fn default_project_config(current: &ProjectConfiguration) -> ProjectConfigur
     current.with_preset(config)
 }
 
-/// Presets store styling without recording cuts, caption text or layer order.
+/// Presets store styling without recording cuts, caption text, the caption
+/// transcript's language or layer order.
 pub fn preset_config(project: &ProjectConfiguration) -> Value {
     let mut value = serde_json::to_value(project).unwrap_or(Value::Null);
     if let Some(map) = value.as_object_mut() {
@@ -146,6 +147,9 @@ pub fn preset_config(project: &ProjectConfiguration) -> Value {
         if let Some(captions) = map.get_mut("captions").and_then(Value::as_object_mut) {
             captions.insert("segments".into(), Value::Array(Vec::new()));
             captions.remove("sourceTimed");
+            if let Some(settings) = captions.get_mut("settings").and_then(Value::as_object_mut) {
+                settings.remove("fillerLanguage");
+            }
         }
     }
     value
@@ -361,6 +365,40 @@ mod tests {
                 .unwrap()
                 .contains("Other recording")
         );
+    }
+
+    #[test]
+    fn presets_neither_save_nor_replace_the_transcript_language() {
+        let mut english = ProjectConfiguration::default();
+        english.captions = Some(cap_project::CaptionsData {
+            settings: cap_project::CaptionSettings {
+                filler_language: Some("en".into()),
+                size: 40,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        let preset = preset_config(&english);
+        assert!(
+            preset["captions"]["settings"]
+                .get("fillerLanguage")
+                .is_none()
+        );
+
+        let mut german = english.clone();
+        german.captions.as_mut().unwrap().settings.filler_language = None;
+        let mut stale = preset.clone();
+        stale["captions"]["settings"]["fillerLanguage"] = json!("en");
+        let applied = apply_preset(&stale, &german).unwrap();
+        assert_eq!(applied.captions.unwrap().settings.filler_language, None);
+
+        let applied = apply_preset(&preset, &english).unwrap();
+        let settings = applied.captions.unwrap().settings;
+        assert_eq!(settings.filler_language.as_deref(), Some("en"));
+        assert_eq!(settings.size, 40);
+
+        let fresh = apply_preset(&stale, &ProjectConfiguration::default()).unwrap();
+        assert_eq!(fresh.captions.unwrap().settings.filler_language, None);
     }
 
     #[test]

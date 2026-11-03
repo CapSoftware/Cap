@@ -2844,11 +2844,18 @@ impl ProjectConfiguration {
         let settings = preset.captions.take().map(|captions| captions.settings);
         preset.captions = match (self.captions.clone(), settings) {
             (Some(mut captions), settings) => {
-                captions.settings = settings.unwrap_or_default();
+                let filler_language = captions.settings.filler_language.take();
+                captions.settings = CaptionSettings {
+                    filler_language,
+                    ..settings.unwrap_or_default()
+                };
                 Some(captions)
             }
             (None, Some(settings)) => Some(CaptionsData {
-                settings,
+                settings: CaptionSettings {
+                    filler_language: None,
+                    ..settings
+                },
                 ..Default::default()
             }),
             (None, None) => None,
