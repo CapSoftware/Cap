@@ -585,6 +585,9 @@ async function convertDashWebmManifestToMp4({
 		const audioRepresentation = selectAudioRepresentation(
 			manifest.audioRepresentations,
 		);
+		if (audioRepresentation) {
+			await assertAacEncodingSupported(mediabunny.canEncodeAudio);
+		}
 		const totalResources =
 			1 +
 			videoRepresentation.segments.length +
@@ -649,7 +652,7 @@ async function convertDashWebmManifestToMp4({
 		const videoSource = new mediabunny.VideoSampleSource({
 			codec: "avc",
 			bitrate: mediabunny.QUALITY_HIGH,
-			hardwareAcceleration: "prefer-hardware",
+			hardwareAcceleration: "no-preference",
 			alpha: "discard",
 		});
 		output.addVideoTrack(videoSource);
@@ -743,16 +746,18 @@ async function convertDashWebmManifestToMp4({
 	}
 }
 
-async function assertMp4EncodingSupported(
+async function assertAvcEncodingSupported(
 	canEncodeVideo: typeof import("mediabunny").canEncodeVideo,
+) {
+	if (!(await canEncodeVideo("avc").catch(() => false))) {
+		throw new LoomBrowserConversionError(UNSUPPORTED_BROWSER_MESSAGE);
+	}
+}
+
+async function assertAacEncodingSupported(
 	canEncodeAudio: typeof import("mediabunny").canEncodeAudio,
 ) {
-	const [canEncodeAvc, canEncodeAac] = await Promise.all([
-		canEncodeVideo("avc").catch(() => false),
-		canEncodeAudio("aac").catch(() => false),
-	]);
-
-	if (!canEncodeAvc || !canEncodeAac) {
+	if (!(await canEncodeAudio("aac").catch(() => false))) {
 		throw new LoomBrowserConversionError(UNSUPPORTED_BROWSER_MESSAGE);
 	}
 }
@@ -805,7 +810,7 @@ export async function saveLoomStreamAsMp4({
 			canEncodeVideo,
 		} = mediabunny;
 
-		await assertMp4EncodingSupported(canEncodeVideo, canEncodeAudio);
+		await assertAvcEncodingSupported(canEncodeVideo);
 
 		conversionTarget = await createConversionTarget({
 			filename,
@@ -853,6 +858,9 @@ export async function saveLoomStreamAsMp4({
 			source,
 			formats: ALL_FORMATS,
 		});
+		if (await input.getPrimaryAudioTrack()) {
+			await assertAacEncodingSupported(canEncodeAudio);
+		}
 
 		const output = new Output({
 			format: new Mp4OutputFormat({ fastStart: false }),
@@ -866,7 +874,7 @@ export async function saveLoomStreamAsMp4({
 			video: {
 				codec: "avc",
 				bitrate: QUALITY_HIGH,
-				hardwareAcceleration: "prefer-hardware",
+				hardwareAcceleration: "no-preference",
 			},
 			audio: {
 				codec: "aac",
