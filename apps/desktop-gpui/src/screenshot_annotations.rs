@@ -1225,6 +1225,10 @@ pub struct AnnotationState {
 }
 
 impl AnnotationState {
+    pub(crate) fn has_active_gesture(&self) -> bool {
+        self.gesture.is_some()
+    }
+
     pub(crate) fn invalidate_geometry(&mut self) {
         self.geometry_pending = true;
         self.mask_task = None;
@@ -1962,6 +1966,7 @@ impl ScreenshotEditorWindow {
                 self.finish_drag(dragging, window, cx)
             }
         }
+        self.present_pending_preview(window, cx);
         true
     }
 

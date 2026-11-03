@@ -1202,7 +1202,15 @@ impl ScreenshotEditorWindow {
         {
             return;
         }
-        if self.annotation_frame_pending() {
+        let layout_changed = self.frame_config.as_ref().is_none_or(|previous| {
+            self.image_size.is_some_and(|image_size| {
+                annotation_layout(image_size, &previous.config)
+                    != annotation_layout(image_size, &update.config)
+            })
+        });
+        if self.annotation_frame_pending()
+            || (layout_changed && self.annotation_state.has_active_gesture())
+        {
             self.pending_preview_frame = Some(PendingPreviewFrame {
                 image,
                 size,
@@ -1212,12 +1220,6 @@ impl ScreenshotEditorWindow {
         }
         self.pending_preview_frame = None;
         self.retain_annotation_preview();
-        let layout_changed = self.frame_config.as_ref().is_none_or(|previous| {
-            self.image_size.is_some_and(|image_size| {
-                annotation_layout(image_size, &previous.config)
-                    != annotation_layout(image_size, &update.config)
-            })
-        });
         if layout_changed {
             self.annotation_state.invalidate_geometry();
         }
@@ -5293,6 +5295,167 @@ mod tests {
                 assert!(editor.annotation_preview_ready());
                 assert_rect(&editor.project, (100., 100., 50., 30.));
             });
+        }
+
+        #[gpui::test]
+        fn a_newer_matching_frame_preserves_an_in_flight_drawing(cx: &mut gpui::TestAppContext) {
+            let (fixture, cx) = fixture(cx, config(), (800, 600));
+            let (square, auto) = queue_aspect_round_trip(&fixture.editor, cx);
+            paint_annotation_layer(&fixture.editor, cx);
+            fixture.editor.update_in(cx, |editor, window, cx| {
+                editor.tool = Tool::Rectangle;
+                assert!(editor.annotation_mouse_down(&mouse_down(200., 200.), window, cx));
+                assert!(editor.annotation_mouse_move(gpui::point(px(240.), px(230.)), window, cx));
+                let initial = editor.frame.clone().unwrap();
+                editor.frame_arrived(frame((800, 800)), (800, 800), square, window, cx);
+                assert!(editor.annotation_state.has_active_gesture());
+                assert!(editor.annotation_preview_ready());
+                assert!(Arc::ptr_eq(editor.frame.as_ref().unwrap(), &initial));
+                assert!(editor.pending_preview_frame.is_some());
+                editor.frame_arrived(frame((800, 600)), (800, 600), auto, window, cx);
+                assert!(editor.annotation_state.has_active_gesture());
+                assert!(editor.pending_preview_frame.is_none());
+                assert!(editor.annotation_mouse_move(gpui::point(px(300.), px(250.)), window, cx));
+                assert!(editor.annotation_mouse_up(window, cx));
+                assert_eq!(editor.project.annotations.len(), 2);
+                let created = &editor.project.annotations[1];
+                assert_eq!(
+                    (created.x, created.y, created.width, created.height),
+                    (200., 200., 100., 50.)
+                );
+                assert_eq!(
+                    editor
+                        .pending_save
+                        .borrow()
+                        .config
+                        .as_ref()
+                        .unwrap()
+                        .annotations
+                        .len(),
+                    2
+                );
+                editor.undo(window, cx);
+                assert_eq!(editor.project.annotations.len(), 1);
+                editor.redo(window, cx);
+                assert_eq!(editor.project.annotations.len(), 2);
+                editor.pending_save.borrow_mut().flush();
+            });
+            let saved = ProjectConfiguration::load(fixture.bundle.path()).unwrap();
+            assert_eq!(saved.annotations.len(), 2);
+            let created = &saved.annotations[1];
+            assert_eq!(
+                (created.x, created.y, created.width, created.height),
+                (200., 200., 100., 50.)
+            );
+        }
+
+        fn queue_aspect_round_trip(
+            editor: &Entity<ScreenshotEditorWindow>,
+            cx: &mut gpui::VisualTestContext,
+        ) -> (ConfigUpdate, ConfigUpdate) {
+            editor.update_in(cx, |editor, window, cx| {
+                editor.choose_aspect(3, window, cx);
+                let square = editor.config_tx.as_ref().unwrap().borrow().clone();
+                editor.choose_aspect(0, window, cx);
+                let auto = editor.config_tx.as_ref().unwrap().borrow().clone();
+                assert!(editor.annotation_preview_ready());
+                (square, auto)
+            })
+        }
+
+        fn paint_annotation_layer(
+            editor: &Entity<ScreenshotEditorWindow>,
+            cx: &mut gpui::VisualTestContext,
+        ) {
+            cx.draw(
+                gpui::point(px(0.), px(0.)),
+                gpui::size(px(800.), px(600.)),
+                |_, cx| {
+                    let layer = editor.update(cx, |editor, cx| {
+                        editor.render_annotation_layer(
+                            (800., 600.),
+                            editor.annotation_image_rect(),
+                            cx,
+                        )
+                    });
+                    div().relative().w(px(800.)).h(px(600.)).children(layer)
+                },
+            );
+        }
+
+        fn mouse_down(x: f32, y: f32) -> MouseDownEvent {
+            MouseDownEvent {
+                position: gpui::point(px(x), px(y)),
+                button: gpui::MouseButton::Left,
+                modifiers: gpui::Modifiers::default(),
+                click_count: 1,
+                first_mouse: false,
+            }
+        }
+
+        fn assert_selection_gesture_survives_a_layout_frame(
+            cx: &mut gpui::TestAppContext,
+            resize: bool,
+        ) {
+            let (fixture, cx) = fixture(cx, config(), (800, 600));
+            let (square, _) = queue_aspect_round_trip(&fixture.editor, cx);
+            paint_annotation_layer(&fixture.editor, cx);
+            let expected = if resize {
+                (100., 100., 80., 60.)
+            } else {
+                (130., 120., 50., 30.)
+            };
+            fixture.editor.update_in(cx, |editor, window, cx| {
+                editor.tool = Tool::Select;
+                let (start, end) = if resize {
+                    editor.selected_annotation = Some("shape".into());
+                    ((150., 130.), (180., 160.))
+                } else {
+                    ((120., 100.), (150., 120.))
+                };
+                assert!(editor.annotation_mouse_down(&mouse_down(start.0, start.1), window, cx));
+                assert!(editor.annotation_mouse_move(
+                    gpui::point(px(end.0), px(end.1)),
+                    window,
+                    cx
+                ));
+                assert_rect(&editor.project, expected);
+                let initial = editor.frame.clone().unwrap();
+                editor.frame_arrived(frame((800, 800)), (800, 800), square, window, cx);
+                assert!(editor.annotation_state.has_active_gesture());
+                assert!(editor.annotation_preview_ready());
+                assert!(Arc::ptr_eq(editor.frame.as_ref().unwrap(), &initial));
+                assert!(editor.pending_preview_frame.is_some());
+                assert!(editor.annotation_mouse_up(window, cx));
+                assert!(!editor.annotation_state.has_active_gesture());
+                assert!(editor.pending_preview_frame.is_none());
+                assert_rect(&editor.project, expected);
+                assert_rect(
+                    editor.pending_save.borrow().config.as_ref().unwrap(),
+                    expected,
+                );
+                arrive_current(editor, (800, 600), window, cx);
+                assert!(editor.annotation_preview_ready());
+                editor.undo(window, cx);
+                assert_rect(&editor.project, (100., 100., 50., 30.));
+                editor.redo(window, cx);
+                assert_rect(&editor.project, expected);
+                editor.pending_save.borrow_mut().flush();
+            });
+            assert_rect(
+                &ProjectConfiguration::load(fixture.bundle.path()).unwrap(),
+                expected,
+            );
+        }
+
+        #[gpui::test]
+        fn a_layout_frame_waits_until_an_annotation_move_is_saved(cx: &mut gpui::TestAppContext) {
+            assert_selection_gesture_survives_a_layout_frame(cx, false);
+        }
+
+        #[gpui::test]
+        fn a_layout_frame_waits_until_an_annotation_resize_is_saved(cx: &mut gpui::TestAppContext) {
+            assert_selection_gesture_survives_a_layout_frame(cx, true);
         }
 
         #[gpui::test]
