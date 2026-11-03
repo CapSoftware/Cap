@@ -38,6 +38,7 @@ use crate::preparing_audio::{
     PreparingAudioBuffer, PreparingAudioOutputHandle, PreparingAudioOutputSnapshot,
     PreparingAudioSources,
 };
+use crate::{preview_speed::PreviewSpeedHandle, preview_stretch::PreviewStretcher};
 
 /// How long to wait for the live callback to acknowledge a newly installed
 /// source before reporting "no audio". A running stream acknowledges within
@@ -62,6 +63,81 @@ pub struct PlaySpec {
     pub duration_secs: f64,
     pub start_playhead_secs: f64,
     pub playhead_rx: watch::Receiver<f64>,
+    pub preview_speed: PreviewSpeedHandle,
+}
+
+/// Seconds of audio/video disagreement, at 1x, before the audio re-seats on
+/// the video playhead. Faster previews scale it so it stays the same in wall
+/// time: the video playhead already leads by one display tick, which is more
+/// timeline time at higher speeds.
+const VIDEO_SYNC_TOLERANCE_SECS: f64 = 0.04;
+const STRETCH_SCRATCH_FRAMES: usize = 1024;
+
+/// The preview-speed half of an ordinary source: the shared speed and the
+/// stretcher that plays the timeline mix faster or slower without changing
+/// its pitch. Allocated at install, off the audio thread.
+struct PreviewSpeedStage {
+    speed: PreviewSpeedHandle,
+    stretcher: Box<PreviewStretcher>,
+    scratch: Box<[f32]>,
+}
+
+impl PreviewSpeedStage {
+    fn new(speed: PreviewSpeedHandle, output_info: AudioInfo) -> Self {
+        let channels = output_info.channels.max(1);
+        Self {
+            speed,
+            stretcher: Box::new(PreviewStretcher::new(output_info.sample_rate, channels)),
+            scratch: vec![0.0; STRETCH_SCRATCH_FRAMES * channels].into_boxed_slice(),
+        }
+    }
+
+    fn playhead_secs<T: FromSampleBytes + cpal::FromSample<f32>>(
+        &self,
+        audio: &PrerenderedAudioBuffer<T>,
+    ) -> Option<f64> {
+        self.stretcher
+            .position()
+            .map(|frames| frames / f64::from(audio.sample_rate().max(1)))
+    }
+
+    fn sync_video_playhead<T: FromSampleBytes + cpal::FromSample<f32>>(
+        &mut self,
+        audio: &mut PrerenderedAudioBuffer<T>,
+        playhead_rx: &mut watch::Receiver<f64>,
+        latency_secs: f64,
+        speed: f64,
+    ) {
+        if !playhead_rx.has_changed().unwrap_or(false) {
+            return;
+        }
+        let video_playhead = *playhead_rx.borrow_and_update();
+        let position = self
+            .playhead_secs(audio)
+            .unwrap_or_else(|| audio.current_playhead_secs());
+        let latency = latency_secs.max(0.0) * speed;
+        let audible_playhead = (position - latency).max(0.0);
+        if (video_playhead - audible_playhead).abs() > VIDEO_SYNC_TOLERANCE_SECS * speed.max(1.0) {
+            audio.set_playhead(video_playhead + latency);
+            self.stretcher.seek(audio.read_frame());
+        }
+    }
+
+    fn render<T: FromSampleBytes + cpal::FromSample<f32>>(
+        &mut self,
+        audio: &mut PrerenderedAudioBuffer<T>,
+        buffer: &mut [T],
+        speed: f64,
+    ) {
+        let scratch_len = self.scratch.len();
+        for chunk in buffer.chunks_mut(scratch_len) {
+            let scratch = &mut self.scratch[..chunk.len()];
+            self.stretcher.render(scratch, speed, audio);
+            for (sample, value) in chunk.iter_mut().zip(scratch.iter()) {
+                *sample = <T as cpal::Sample>::from_sample(*value);
+            }
+        }
+    }
 }
 
 enum ControlMsg {
@@ -543,6 +619,7 @@ struct ActiveSource<T: FromSampleBytes> {
     generation: u64,
     refresh_revision: u64,
     buffer: ActiveSourceBuffer<T>,
+    preview_speed: Option<Box<PreviewSpeedStage>>,
     playhead_rx: watch::Receiver<f64>,
     ack: Option<SourceAcknowledgement>,
     preparing_request: Option<Arc<PreparingAudioRequest>>,
@@ -816,8 +893,17 @@ fn drain_source_commands<T: FromSampleBytes + cpal::FromSample<f32>>(
                         ActiveSourceBuffer::Ordinary(replacement),
                     ) = (&current.buffer, &mut source.buffer)
                     {
-                        let playhead = previous.current_audible_playhead(0.0);
-                        if !replacement.try_align_prepared_playhead(playhead) {
+                        let playhead = current
+                            .preview_speed
+                            .as_ref()
+                            .and_then(|stage| stage.playhead_secs(previous))
+                            .unwrap_or_else(|| previous.current_audible_playhead(0.0));
+                        if replacement.try_align_prepared_playhead(playhead) {
+                            if let Some(mut stage) = current.preview_speed.take() {
+                                stage.stretcher.seek(replacement.read_frame());
+                                source.preview_speed = Some(stage);
+                            }
+                        } else {
                             let sender = retire_tx.clone();
                             let _ = sender.send(ControlMsg::Realign(Box::new(move || {
                                 if let ActiveSourceBuffer::Ordinary(buffer) = &mut source.buffer {
@@ -910,10 +996,17 @@ fn render_source_block<T: FromSampleBytes + cpal::FromSample<f32>>(
         return;
     }
     match &mut source.buffer {
-        ActiveSourceBuffer::Ordinary(audio) => {
-            sync_video_playhead(audio, &mut source.playhead_rx, latency_secs);
-            audio.fill(buffer);
-        }
+        ActiveSourceBuffer::Ordinary(audio) => match source.preview_speed.as_deref_mut() {
+            Some(stage) if !stage.speed.get().is_normal() || stage.stretcher.is_active() => {
+                let speed = stage.speed.get().as_f64();
+                stage.sync_video_playhead(audio, &mut source.playhead_rx, latency_secs, speed);
+                stage.render(audio, buffer, speed);
+            }
+            _ => {
+                sync_video_playhead(audio, &mut source.playhead_rx, latency_secs);
+                audio.fill(buffer);
+            }
+        },
         ActiveSourceBuffer::Preparing(audio) => {
             if audio.fill(buffer, latency_secs) == 0 {
                 if audio.is_terminal()
@@ -966,6 +1059,7 @@ fn install_source<T: FromSampleBytes + cpal::FromSample<f32>>(
         duration_secs,
         start_playhead_secs,
         playhead_rx,
+        preview_speed,
     } = *spec;
 
     if !(duration_secs.is_finite() && duration_secs > 0.0) {
@@ -1052,6 +1146,10 @@ fn install_source<T: FromSampleBytes + cpal::FromSample<f32>>(
         generation,
         refresh_revision,
         buffer: ActiveSourceBuffer::Ordinary(buffer),
+        preview_speed: Some(Box::new(PreviewSpeedStage::new(
+            preview_speed,
+            output_info.for_ffmpeg_output(),
+        ))),
         playhead_rx,
         ack: Some(ack),
         preparing_request,
@@ -1116,6 +1214,7 @@ fn install_progressive_source<T: FromSampleBytes + cpal::FromSample<f32>>(
             generation,
             refresh_revision: 0,
             buffer: ActiveSourceBuffer::Preparing(buffer),
+            preview_speed: None,
             playhead_rx,
             ack: Some(SourceAcknowledgement::Preparing(request.clone())),
             preparing_request: Some(request.clone()),
@@ -1648,6 +1747,7 @@ mod tests {
                 duration_secs: 2.0,
                 start_playhead_secs: 0.0,
                 playhead_rx,
+                preview_speed: PreviewSpeedHandle::default(),
             }),
             0,
             SourceAcknowledgement::Ordinary(ack_tx),
