@@ -3465,7 +3465,28 @@ fn copy_recovery_input_with_durability(
             .write(true)
             .create_new(true)
             .open(destination)?;
+        #[cfg(any(target_os = "linux", target_os = "android"))]
         std::io::copy(&mut input, &mut output)?;
+        #[cfg(not(any(target_os = "linux", target_os = "android")))]
+        {
+            use std::io::{Read, Write};
+
+            let buffer_size = usize::try_from(metadata.len())
+                .unwrap_or(0)
+                .clamp(8 * 1024, 1024 * 1024);
+            let mut buffer = vec![0u8; buffer_size];
+            loop {
+                let read = match input.read(&mut buffer) {
+                    Ok(read) => read,
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(error) => return Err(error.into()),
+                };
+                if read == 0 {
+                    break;
+                }
+                output.write_all(&buffer[..read])?;
+            }
+        }
         if durability == RecoveryCopyDurability::Durable {
             output.sync_all()?;
         }
@@ -7692,6 +7713,35 @@ mod transactional_recovery_tests {
             );
             assert_eq!(std::fs::read(&source).unwrap(), b"original");
             assert_eq!(std::fs::read(&destination).unwrap(), b"existing");
+        }
+    }
+
+    #[test]
+    fn recovery_copy_handles_multi_chunk_and_empty_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("large");
+        let bytes: Vec<u8> = (0..3 * 1024 * 1024 + 7)
+            .map(|index| (index % 251) as u8)
+            .collect();
+        std::fs::write(&source, &bytes).unwrap();
+        let empty_source = dir.path().join("empty");
+        std::fs::write(&empty_source, b"").unwrap();
+
+        for (index, durability) in [
+            RecoveryCopyDurability::Durable,
+            RecoveryCopyDurability::Deferred,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let destination = dir.path().join(format!("large-{index}"));
+            copy_recovery_input_with_durability(&source, &destination, durability).unwrap();
+            assert_eq!(std::fs::read(&destination).unwrap(), bytes);
+
+            let empty_destination = dir.path().join(format!("empty-{index}"));
+            copy_recovery_input_with_durability(&empty_source, &empty_destination, durability)
+                .unwrap();
+            assert_eq!(std::fs::read(&empty_destination).unwrap(), b"");
         }
     }
 
