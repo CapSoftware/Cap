@@ -153,14 +153,17 @@ impl Redactor {
                 let trimmed = rest.trim_start();
                 if let Some(colon_rest) = trimmed.strip_prefix(':') {
                     let value_rest = colon_rest.trim_start();
-                    if let Some(value_body) = value_rest.strip_prefix('"')
-                        && let Some(value_end) = find_string_end(value_body)
-                    {
+                    if let Some(value_body) = value_rest.strip_prefix('"') {
                         out.push_str(": \"");
+                        changed = true;
+                        let Some(value_end) = find_string_end(value_body) else {
+                            out.push_str(&placeholder(value_body));
+                            rest = "";
+                            break;
+                        };
                         out.push_str(&placeholder(&value_body[..value_end]));
                         out.push('"');
                         rest = &value_body[value_end + 1..];
-                        changed = true;
                         continue 'scan;
                     }
                 }
@@ -359,6 +362,11 @@ mod tests {
         assert!(out.contains("<redacted:"), "{out}");
         assert!(out.contains("~/a"), "{out}");
         assert!(!out.contains("\"x\""), "{out}");
+
+        let (cut, changed) = redactor().raw_json_text(r#"{"fps":30,"device_name": "Bob's iPh"#);
+        assert!(changed);
+        assert!(!cut.contains("Bob"), "{cut}");
+        assert!(cut.ends_with("\"<redacted:9>"), "{cut}");
     }
 
     #[test]
