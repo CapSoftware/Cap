@@ -126,6 +126,8 @@ struct BenchmarkSummary {
     render_immediate_flush: DurationStats,
     callback: DurationStats,
     render_samples: Vec<RenderSample>,
+    first_frame_number: Option<u32>,
+    last_frame_number: Option<u32>,
 }
 
 #[derive(Clone)]
@@ -164,7 +166,7 @@ impl BenchmarkSummary {
                 self.warmup_target_frames = target_frames;
             }
             PlaybackTelemetryEvent::FrameSubmitted {
-                frame_number: _,
+                frame_number,
                 source,
                 schedule_overshoot,
                 frame_acquire_duration,
@@ -174,6 +176,8 @@ impl BenchmarkSummary {
                 total_frames_skipped: _,
             } => {
                 self.submitted_frames += 1;
+                self.first_frame_number.get_or_insert(frame_number);
+                self.last_frame_number = Some(frame_number);
                 if self.first_submit_ms.is_none() {
                     self.first_submit_ms = press_elapsed_ms;
                 }
@@ -414,6 +418,16 @@ async fn load_recording(
     Ok((recording_meta, meta, project, recordings))
 }
 
+fn process_cpu_secs() -> f64 {
+    let mut usage = std::mem::MaybeUninit::<libc::rusage>::zeroed();
+    if unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) } != 0 {
+        return 0.0;
+    }
+    let usage = unsafe { usage.assume_init() };
+    let secs = |time: libc::timeval| time.tv_sec as f64 + time.tv_usec as f64 / 1_000_000.0;
+    secs(usage.ru_utime) + secs(usage.ru_stime)
+}
+
 fn arg_value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
     args.iter()
         .position(|arg| arg == flag)
@@ -485,6 +499,22 @@ async fn main() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(300u64);
     let resolution_base = parse_resolution(&args);
+    let preview_speed = cap_editor::PreviewSpeedHandle::new(
+        arg_value(&args, "--preview-speed")
+            .map(|value| {
+                value
+                    .parse::<f64>()
+                    .ok()
+                    .and_then(cap_editor::PreviewSpeed::from_f64)
+                    .unwrap_or_else(|| {
+                        eprintln!(
+                            "--preview-speed must be one of 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 3"
+                        );
+                        std::process::exit(2);
+                    })
+            })
+            .unwrap_or_default(),
+    );
     let start_frame_number = arg_value(&args, "--start-frame")
         .and_then(|s| s.parse().ok())
         .or_else(|| {
@@ -517,6 +547,7 @@ async fn main() {
         resolution_base.x, resolution_base.y
     );
     println!("Start frame: {start_frame_number}");
+    println!("Preview speed: {}", preview_speed.get().label());
 
     let (recording_meta, meta, project, recordings) = match load_recording(&recording_path).await {
         Ok(recording) => recording,
@@ -626,6 +657,7 @@ async fn main() {
 
     let mut summary = BenchmarkSummary::default();
     let mut measured_elapsed = 0.0f64;
+    let mut measured_cpu = 0.0f64;
     let mut live_edit_high = false;
 
     for (press_idx, (press_start_frame, press_frames)) in presses.iter().copied().enumerate() {
@@ -643,6 +675,7 @@ async fn main() {
             music: cap_editor::MusicTracks::new(),
             audio_output: audio_output.clone(),
             telemetry: Some(telemetry.clone()),
+            preview_speed: preview_speed.clone(),
         };
 
         let press_instant = Instant::now();
@@ -656,6 +689,7 @@ async fn main() {
         let start_await_ms = press_instant.elapsed().as_secs_f64() * 1000.0;
 
         let start = Instant::now();
+        let cpu_start = process_cpu_secs();
         let timeout = Duration::from_secs_f64(press_frames as f64 / fps as f64 + 15.0);
         let deadline = tokio::time::sleep(timeout);
         tokio::pin!(deadline);
@@ -706,6 +740,7 @@ async fn main() {
         }
 
         let press_elapsed = start.elapsed().as_secs_f64();
+        measured_cpu = process_cpu_secs() - cpu_start;
 
         playback_handle.stop();
         tokio::time::sleep(Duration::from_millis(250)).await;
@@ -793,6 +828,18 @@ async fn main() {
         "Effective FPS: submitted={effective_submitted_fps:.1} rendered={effective_rendered_fps:.1}"
     );
     println!("Callback payload: {mb_sent:.1}MB total, {mb_per_sec:.1}MB/s");
+    if let (Some(first), Some(last)) = (summary.first_frame_number, summary.last_frame_number) {
+        let advanced = f64::from(last.saturating_sub(first)) / fps as f64;
+        println!(
+            "Timeline advanced: {advanced:.2}s in {measured_elapsed:.2}s wall ({:.3}x, preview speed {})",
+            advanced / measured_elapsed.max(0.001),
+            preview_speed.get().label()
+        );
+    }
+    println!(
+        "Process CPU: {measured_cpu:.2}s over {measured_elapsed:.2}s ({:.0}% of one core)",
+        measured_cpu / measured_elapsed.max(0.001) * 100.0
+    );
     println!("Top measured p95 stage: {top_stage} ({top_stage_p95:.2}ms)");
 
     println!("\nPlayback stages:");
