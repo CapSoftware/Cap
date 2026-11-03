@@ -2464,7 +2464,7 @@ fn a_failed_salvage_keeps_the_failure_evidence_where_it_was() {
     let recording = interrupted_after_resume_fixture();
     for fragment in list_m4s_segments(&recording.path().join("content/segments/segment-0/display"))
     {
-        std::fs::write(&fragment, b"corrupt display media").unwrap();
+        corrupt_video_sample_data(&fragment);
     }
     let incomplete = RecoveryManager::inspect_recording(recording.path()).unwrap();
     let before = recovery_input_bytes(recording.path());
