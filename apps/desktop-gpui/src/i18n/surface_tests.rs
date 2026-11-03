@@ -287,6 +287,7 @@ fn main_surfaces_match_the_literals_they_replaced() {
         (tr::controls::pause::resuming(), "Resuming recording…"),
         (tr::controls::pause::pausing(), "Pausing recording…"),
         (tr::controls::pause::resume(), "Resume recording"),
+        (tr::controls::marker::add(), "Add marker"),
         (tr::controls::pause::pause(), "Pause recording"),
         (
             tr::controls::low_storage(),

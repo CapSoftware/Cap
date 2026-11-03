@@ -206,6 +206,10 @@ fps_30 = "30 FPS"
 fps_60 = "60 FPS (empfohlen)"
 label = "Maximale Bildrate"
 
+[settings.general.recording.marker_sound]
+description = "Spielt einen kurzen Ton ab, wenn Sie während einer Studio-Aufnahme einen Marker hinzufügen. Ihr Mikrofon oder der Systemton kann ihn mit aufnehmen."
+label = "Ton für Marker abspielen"
+
 [settings.general.storage]
 choose_folder = "Ordner wählen"
 default_location = "Standard (Application Support)"
@@ -431,6 +435,7 @@ studio_show_cap = "Cap anzeigen"
 studio_show_cap_hint = "Zurück zum Rekorder"
 
 [settings.shortcuts.label]
+add_marker = "Marker hinzufügen"
 cycle_mode = "Aufnahmemodus wechseln"
 fallback = "Tastenkürzel"
 open_picker = "Aufnahmeauswahl öffnen"
@@ -447,6 +452,7 @@ start_studio = "Studio-Aufnahme starten"
 stop = "Aufnahme stoppen"
 
 [settings.shortcuts.effect]
+add_marker = "diesen Moment in einer Studio-Aufnahme markieren"
 cycle_mode = "zwischen Studio-, Instant- und Bildschirmfoto-Modus zu wechseln"
 instant_copy = "den ausgewählten Bildschirm oder das ausgewählte Fenster im Instant-Modus aufzunehmen und beim Stoppen den Link zum Teilen zu kopieren"
 instant_copy_and_open = "den ausgewählten Bildschirm oder das ausgewählte Fenster im Instant-Modus aufzunehmen und beim Stoppen den Link zum Teilen zu kopieren und zu öffnen"
@@ -479,6 +485,7 @@ studio = "den ausgewählten Bildschirm oder das ausgewählte Fenster im Studio-M
 studio_open_editor = "den ausgewählten Bildschirm oder das ausgewählte Fenster im Studio-Modus aufzunehmen und beim Stoppen den Editor zu öffnen"
 
 [settings.shortcuts.sentence]
+add_marker = "Diesen Moment in einer Studio-Aufnahme markieren."
 cycle_mode = "Zwischen Studio-, Instant- und Bildschirmfoto-Modus wechseln."
 instant_copy = "Ausgewählten Bildschirm oder ausgewähltes Fenster im Instant-Modus aufnehmen und beim Stoppen den Link zum Teilen kopieren."
 instant_copy_and_open = "Ausgewählten Bildschirm oder ausgewähltes Fenster im Instant-Modus aufnehmen und beim Stoppen den Link zum Teilen kopieren und öffnen."
@@ -1141,6 +1148,9 @@ pausing = "Pause…"
 resuming = "Weiter…"
 saving = "Sichert…"
 starting = "Startet"
+
+[controls.marker]
+add = "Marker hinzufügen"
 
 [camera]
 waiting_title = "Warten auf Kamerazugriff"
@@ -2906,6 +2916,21 @@ generate = "Erstellen"
 generating = "Wird erstellt…"
 no_clicks = "Keine Klicks zum Zoomen gefunden. Ziehen Sie über die Spur, um einen hinzuzufügen."
 prompt = "Zooms automatisch hinzufügen"
+
+[editor.markers]
+add = "Marker hinzufügen"
+button = { one = "{count} Marker", other = "{count} Marker" }
+default_name = "Marker {number}"
+delete = "Marker löschen"
+done = "Fertig"
+edit = "Marker bearbeiten"
+empty = "Noch keine Marker. Drücken Sie M, um die Abspielposition zu markieren, oder setzen Sie Marker während der Aufnahme."
+hidden = { one = "{count} Marker liegt in einem herausgeschnittenen Teil.", other = "{count} Marker liegen in herausgeschnittenen Teilen." }
+next = "Nächster Marker"
+previous = "Vorheriger Marker"
+split = "Clips an Markern teilen"
+stack = { one = "{count} Marker. Zum Vergrößern klicken.", other = "{count} Marker. Zum Vergrößern klicken." }
+title = "Marker"
 
 [ui]
 coming_soon = "Demnächst verfügbar"

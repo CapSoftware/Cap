@@ -208,6 +208,10 @@ fps_30 = { text = "30 FPS", max_px = 180, size = 12 }
 fps_60 = { text = "60 FPS (Recommended)", max_px = 180, size = 12 }
 label = "Max capture framerate"
 
+[settings.general.recording.marker_sound]
+description = "Plays a short sound when you add a marker during a Studio recording. Your microphone or system audio can pick it up."
+label = "Play a sound for markers"
+
 [settings.general.storage]
 choose_folder = "Choose Folder"
 default_location = { text = "Default (Application Support)", context = "Shown in place of a folder path when recordings use the default location." }
@@ -433,6 +437,7 @@ studio_show_cap = "Show Cap"
 studio_show_cap_hint = "Back to the recorder"
 
 [settings.shortcuts.label]
+add_marker = "Add marker"
 cycle_mode = "Cycle recording mode"
 fallback = "Shortcut"
 open_picker = "Open recording picker"
@@ -449,6 +454,7 @@ start_studio = "Start Studio recording"
 stop = "Stop recording"
 
 [settings.shortcuts.effect]
+add_marker = "mark this moment in a Studio recording"
 cycle_mode = "switch between Studio, Instant and Screenshot mode"
 instant_copy = "record your selected screen or window in Instant mode, then copy its share link when you stop"
 instant_copy_and_open = "record your selected screen or window in Instant mode, then copy and open its share link when you stop"
@@ -481,6 +487,7 @@ studio = "record your selected screen or window in Studio mode"
 studio_open_editor = "record your selected screen or window in Studio mode, then open the editor when you stop"
 
 [settings.shortcuts.sentence]
+add_marker = "Mark this moment in a Studio recording."
 cycle_mode = "Switch between Studio, Instant and Screenshot mode."
 instant_copy = "Record your selected screen or window in Instant mode, then copy its share link when you stop."
 instant_copy_and_open = "Record your selected screen or window in Instant mode, then copy and open its share link when you stop."
@@ -1143,6 +1150,9 @@ pausing = { text = "Pausing…", max_px = 73, size = 14 }
 resuming = { text = "Resuming…", max_px = 73, size = 14 }
 saving = { text = "Saving…", max_px = 73, size = 14 }
 starting = { text = "Starting", max_px = 73, size = 14 }
+
+[controls.marker]
+add = "Add marker"
 
 [camera]
 waiting_title = "Waiting for camera access"
@@ -2908,6 +2918,21 @@ generate = "Generate"
 generating = "Generating…"
 no_clicks = "No clicks found to zoom into. Drag across the lane to add one."
 prompt = "Add zooms automatically"
+
+[editor.markers]
+add = "Add marker"
+button = { one = "{count} marker", other = "{count} markers" }
+default_name = { text = "Marker {number}", context = "{number} counts the markers in timeline order, starting at 1." }
+delete = "Delete marker"
+done = "Done"
+edit = "Edit marker"
+empty = "No markers yet. Press M to mark the playhead, or add markers while you record."
+hidden = { one = "{count} marker is in a part you cut out.", other = "{count} markers are in parts you cut out." }
+next = "Next marker"
+previous = "Previous marker"
+split = "Split clips at markers"
+stack = { one = "{count} marker. Click to zoom in.", other = "{count} markers. Click to zoom in." }
+title = "Markers"
 
 [ui]
 coming_soon = "Coming Soon"

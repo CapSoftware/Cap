@@ -206,6 +206,10 @@ fps_30 = "30 FPS"
 fps_60 = "60 FPS（推荐）"
 label = "最大捕获帧率"
 
+[settings.general.recording.marker_sound]
+description = "在 Studio 录制中添加标记时播放一段简短提示音。麦克风或系统音频可能会录入这段声音。"
+label = "添加标记时播放提示音"
+
 [settings.general.storage]
 choose_folder = "选择文件夹"
 default_location = "默认（Application Support）"
@@ -431,6 +435,7 @@ studio_show_cap = "显示 Cap"
 studio_show_cap_hint = "回到录制器"
 
 [settings.shortcuts.label]
+add_marker = "添加标记"
 cycle_mode = "切换录制模式"
 fallback = "快捷键"
 open_picker = "打开录制选择器"
@@ -447,6 +452,7 @@ start_studio = "开始 Studio 录制"
 stop = "停止录制"
 
 [settings.shortcuts.effect]
+add_marker = "在 Studio 录制中标记此刻"
 cycle_mode = "在 Studio、Instant 和截图模式之间切换"
 instant_copy = "以 Instant 模式录制所选屏幕或窗口，停止后复制分享链接"
 instant_copy_and_open = "以 Instant 模式录制所选屏幕或窗口，停止后复制并打开分享链接"
@@ -479,6 +485,7 @@ studio = "以 Studio 模式录制所选屏幕或窗口"
 studio_open_editor = "以 Studio 模式录制所选屏幕或窗口，停止后打开编辑器"
 
 [settings.shortcuts.sentence]
+add_marker = "在 Studio 录制中标记此刻。"
 cycle_mode = "在 Studio、Instant 和截图模式之间切换。"
 instant_copy = "以 Instant 模式录制所选屏幕或窗口，停止后复制分享链接。"
 instant_copy_and_open = "以 Instant 模式录制所选屏幕或窗口，停止后复制并打开分享链接。"
@@ -1141,6 +1148,9 @@ pausing = "暂停中…"
 resuming = "恢复中…"
 saving = "保存中…"
 starting = "正在开始"
+
+[controls.marker]
+add = "添加标记"
 
 [camera]
 waiting_title = "正在等待摄像头权限"
@@ -2906,6 +2916,21 @@ generate = "生成"
 generating = "正在生成…"
 no_clicks = "未找到可缩放的点击。在轨道上拖动即可添加。"
 prompt = "自动添加缩放"
+
+[editor.markers]
+add = "添加标记"
+button = { other = "{count} 个标记" }
+default_name = "标记 {number}"
+delete = "删除标记"
+done = "完成"
+edit = "编辑标记"
+empty = "还没有标记。按 M 标记播放头位置，或在录制时添加标记。"
+hidden = { other = "{count} 个标记位于已剪掉的部分。" }
+next = "下一个标记"
+previous = "上一个标记"
+split = "在标记处拆分片段"
+stack = { other = "{count} 个标记。点击放大。" }
+title = "标记"
 
 [ui]
 coming_soon = "即将推出"
