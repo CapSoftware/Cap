@@ -58,6 +58,10 @@ impl LumaFrame {
         self.width
     }
 
+    pub(crate) fn at(&self, x: usize, y: usize) -> f32 {
+        self.pixels[y * self.width + x]
+    }
+
     pub fn height(&self) -> usize {
         self.height
     }
@@ -443,6 +447,15 @@ impl MotionTracker {
 
     pub fn is_lost(&self) -> bool {
         self.lost
+    }
+
+    /// The tracked box's centre in frame pixels.
+    pub(crate) fn center(&self) -> (f64, f64) {
+        (self.x + self.width / 2.0, self.y + self.height / 2.0)
+    }
+
+    pub(crate) fn size(&self) -> (f64, f64) {
+        (self.width, self.height)
     }
 
     fn size_at(&self, scale: f64) -> (usize, usize) {

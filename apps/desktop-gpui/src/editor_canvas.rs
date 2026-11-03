@@ -44,10 +44,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use crate::i18n::tr;
-use crate::{
-    editor_timeline::{MASK_MARKER_DOT, TrackKind},
-    editor_window::EditorWindow,
-};
+use crate::{editor_timeline::TrackKind, editor_window::EditorWindow};
 use cap_project::{CameraXPosition, CameraYPosition, OverlayTrackKind, SceneMode, XY};
 use cap_rendering::FrameLayout;
 use gpui::{
@@ -1332,134 +1329,7 @@ impl EditorWindow {
             && self.show_mask_tracking
             && picking.time == self.preview_or_playhead()
         {
-            let points = picking.points.clone();
-            let handles = crate::editor_mask_tracking::tracking_pin_centers(&points, (cw, ch));
-            let drawn_handles = handles.clone();
-            let color = Hsla::from(self.theme.editor.accent);
-            return Some(
-                layer
-                    .id("mask-tracking-points")
-                    .cursor(CursorStyle::Crosshair)
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, event: &MouseDownEvent, window, cx| {
-                            cx.stop_propagation();
-                            let Some(bounds) = this.canvas_bounds() else {
-                                return;
-                            };
-                            let point = XY::new(
-                                f64::from(
-                                    f32::from(event.position.x - bounds.origin.x)
-                                        / f32::from(bounds.size.width),
-                                )
-                                .clamp(0.0, 1.0),
-                                f64::from(
-                                    f32::from(event.position.y - bounds.origin.y)
-                                        / f32::from(bounds.size.height),
-                                )
-                                .clamp(0.0, 1.0),
-                            );
-                            this.pick_mask_tracking_point(point, window, cx);
-                        }),
-                    )
-                    .child(
-                        gpui::canvas(
-                            |bounds, _, _| bounds,
-                            move |_, bounds, window, _| {
-                                let mut path = gpui::PathBuilder::stroke(px(1.5));
-                                let at = |x: f32, y: f32| {
-                                    gpui::point(bounds.origin.x + px(x), bounds.origin.y + px(y))
-                                };
-                                if points.len() >= 4 {
-                                    let mut corners = points[..4].to_vec();
-                                    corners.sort_by(|a, b| a.y.total_cmp(&b.y));
-                                    corners[..2].sort_by(|a, b| a.x.total_cmp(&b.x));
-                                    corners[2..].sort_by(|a, b| b.x.total_cmp(&a.x));
-                                    for (index, point) in
-                                        corners.iter().chain(corners.first()).enumerate()
-                                    {
-                                        let point = at(point.x as f32 * cw, point.y as f32 * ch);
-                                        if index == 0 {
-                                            path.move_to(point);
-                                        } else {
-                                            path.line_to(point);
-                                        }
-                                    }
-                                }
-                                if let Ok(path) = path.build() {
-                                    window.paint_path(path, color);
-                                }
-                                for (point, handle) in points.iter().zip(drawn_handles) {
-                                    let (x, y) = (point.x as f32 * cw, point.y as f32 * ch);
-                                    let length = (handle.0 - x).hypot(handle.1 - y).max(1.);
-                                    let (dx, dy) =
-                                        ((handle.0 - x) / length, (handle.1 - y) / length);
-                                    let place = |u, v| at(x + dx * u - dy * v, y + dy * u + dx * v);
-                                    for (mut drop, fill) in [
-                                        (gpui::PathBuilder::fill(), color),
-                                        (gpui::PathBuilder::stroke(px(1.)), gpui::white()),
-                                    ] {
-                                        drop.move_to(place(0., 0.));
-                                        drop.cubic_bezier_to(
-                                            place(length, 8.),
-                                            place(length * 0.5, 3.),
-                                            place(length - 7., 8.),
-                                        );
-                                        drop.cubic_bezier_to(
-                                            place(length + 8., 0.),
-                                            place(length + 4.418, 8.),
-                                            place(length + 8., 4.418),
-                                        );
-                                        drop.cubic_bezier_to(
-                                            place(length, -8.),
-                                            place(length + 8., -4.418),
-                                            place(length + 4.418, -8.),
-                                        );
-                                        drop.cubic_bezier_to(
-                                            place(0., 0.),
-                                            place(length - 7., -8.),
-                                            place(length * 0.5, -3.),
-                                        );
-                                        drop.close();
-                                        if let Ok(path) = drop.build() {
-                                            window.paint_path(path, fill);
-                                        }
-                                    }
-                                }
-                            },
-                        )
-                        .absolute()
-                        .inset_0(),
-                    )
-                    .children(handles.into_iter().enumerate().map(|(index, handle)| {
-                        div()
-                            .id(("mask-point-handle", index))
-                            .absolute()
-                            .left(px(handle.0 - 8.))
-                            .top(px(handle.1 - 8.))
-                            .size(px(16.0))
-                            .rounded_full()
-                            .cursor(CursorStyle::OpenHand)
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
-                                    cx.stop_propagation();
-                                    if let Some(picking) = this.mask_tracking_points.as_mut() {
-                                        picking.dragging =
-                                            Some((index, event.position, picking.points[index]));
-                                    }
-                                    cx.notify();
-                                }),
-                            )
-                            .text_color(gpui::rgb(0xffffff))
-                            .text_size(px(10.0))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .child((index + 1).to_string())
-                    }))
-                    .into_any_element(),
-            );
+            return Some(self.render_mask_point_picker(layer, picking, (cw, ch), cx));
         }
 
         if self.canvas_selection.is_some() || self.selection.is_some() {
@@ -1512,18 +1382,12 @@ impl EditorWindow {
                             }
                             let element = CanvasSelection::Mask(index);
                             if self.canvas_selection == Some(element) {
-                                for marker in segment.tracking_marker_times() {
-                                    let (center, _) = segment.rect_at(marker);
-                                    layer = layer.child(
-                                        div()
-                                            .absolute()
-                                            .left(px(center.x as f32 * cw - MASK_MARKER_DOT / 2.))
-                                            .top(px(center.y as f32 * ch - MASK_MARKER_DOT / 2.))
-                                            .size(px(MASK_MARKER_DOT))
-                                            .rounded_full()
-                                            .bg(Hsla::from(self.theme.editor.accent)),
-                                    );
-                                }
+                                layer =
+                                    layer.child(crate::editor_mask_tracking::render_motion_path(
+                                        &self.theme,
+                                        segment,
+                                        (cw, ch),
+                                    ));
                             }
                             if let Some(rect) = self.element_rect(element) {
                                 layer = layer.child(self.render_element_box(

@@ -5,20 +5,42 @@ use std::sync::{
 
 use cap_editor::EditorInstance;
 use cap_export::preview::{ExportPreviewSettings, render_frame_with_editor};
-use cap_gpui_kernels::four_point_track::FourPointSession;
 use cap_gpui_kernels::motion_track::{LumaFrame, TrackSession};
-use cap_project::{ProjectConfiguration, XY};
-use gpui::{Context, MouseMoveEvent, Pixels, Point, Task, Window};
+use cap_gpui_kernels::point_track::PointTrackSession;
+use cap_project::{MaskSegment, ProjectConfiguration, XY};
+use gpui::{
+    AnyElement, Context, CursorStyle, Div, FontWeight, Hsla, InteractiveElement, IntoElement,
+    MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement, Pixels, Point, Styled, Task,
+    Window, div, px,
+};
 
-use crate::{editor_window::EditorWindow, i18n::tr};
+use crate::{
+    editor_sidebar::with_alpha, editor_timeline::MASK_MARKER_DOT, editor_window::EditorWindow,
+    i18n::tr, theme::Theme,
+};
 
 const TRACK_FPS: f64 = 30.;
 const TRACK_RESOLUTION: XY<u32> = XY { x: 960, y: 540 };
 const MARKER_TOLERANCE: f64 = 0.003;
+/// How much a Track Points mask is widened and heightened past the box
+/// around its points (about 4 pixels a side at 1280 wide): measured on
+/// clicks around round and rectangular targets, it covers how far inside
+/// the outline a careful click lands.
+const POINT_OUTLINE_MARGIN: f64 = 0.006;
+/// The canvas's resize handle (`render_element_box`): picked points use the
+/// same disc so the picker reads as part of the selection, hollow so the
+/// pixel being tracked stays visible through it.
+const POINT_HANDLE: f32 = 12.;
+/// How far a point's number sits from the point, clear of the handle.
+const POINT_LABEL_OFFSET: f32 = 18.;
+const POINT_LABEL_SPACING: f32 = 18.;
 
 type TrackedRect = (f64, XY<f64>, XY<f64>);
 
-pub(crate) fn tracking_pin_centers(points: &[XY<f64>], size: (f32, f32)) -> Vec<(f32, f32)> {
+/// Where each point's number goes: pushed away from the points' centre so
+/// it never covers the corner it names, turning in 45 degree steps until it
+/// clears the numbers already placed.
+pub(crate) fn tracking_label_centers(points: &[XY<f64>], size: (f32, f32)) -> Vec<(f32, f32)> {
     let bounds = points
         .iter()
         .take(4)
@@ -26,7 +48,7 @@ pub(crate) fn tracking_pin_centers(points: &[XY<f64>], size: (f32, f32)) -> Vec<
             (l.min(p.x), t.min(p.y), r.max(p.x), b.max(p.y))
         });
     let center = ((bounds.0 + bounds.2) / 2.0, (bounds.1 + bounds.3) / 2.0);
-    let mut handles: Vec<(f32, f32)> = Vec::with_capacity(points.len());
+    let mut labels: Vec<(f32, f32)> = Vec::with_capacity(points.len());
     for (index, point) in points.iter().enumerate() {
         let dx = (point.x - center.0) / (bounds.2 - bounds.0).max(0.01);
         let dy = (point.y - center.1) / (bounds.3 - bounds.1).max(0.01);
@@ -38,18 +60,110 @@ pub(crate) fn tracking_pin_centers(points: &[XY<f64>], size: (f32, f32)) -> Vec<
         let candidate = |turn: f64| {
             let angle = angle + turn * std::f64::consts::FRAC_PI_4;
             (
-                (point.x as f32 * size.0 + angle.cos() as f32 * 28.).clamp(9., size.0 - 9.),
-                (point.y as f32 * size.1 + angle.sin() as f32 * 28.).clamp(9., size.1 - 9.),
+                (point.x as f32 * size.0 + angle.cos() as f32 * POINT_LABEL_OFFSET)
+                    .clamp(9., size.0 - 9.),
+                (point.y as f32 * size.1 + angle.sin() as f32 * POINT_LABEL_OFFSET)
+                    .clamp(9., size.1 - 9.),
             )
         };
-        let handle = [0., 1., -1., 2., -2., 3., -3., 4.]
+        let label = [0., 1., -1., 2., -2., 3., -3., 4.]
             .into_iter()
             .map(candidate)
-            .find(|p| handles.iter().all(|q| (p.0 - q.0).hypot(p.1 - q.1) >= 19.))
+            .find(|p| {
+                labels
+                    .iter()
+                    .all(|q| (p.0 - q.0).hypot(p.1 - q.1) >= POINT_LABEL_SPACING)
+            })
             .unwrap_or_else(|| candidate(0.));
-        handles.push(handle);
+        labels.push(label);
     }
-    handles
+    labels
+}
+
+/// The outline around the picked points (their convex hull, clockwise from
+/// the top-left), which is what a rectangle's corners or points around a
+/// rounded shape enclose. `None` until there are three points to enclose.
+pub(crate) fn points_outline(points: &[XY<f64>]) -> Option<Vec<XY<f64>>> {
+    let mut sorted = points.to_vec();
+    sorted.sort_by(|a, b| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)));
+    sorted.dedup_by(|a, b| a.x == b.x && a.y == b.y);
+    if sorted.len() < 3 {
+        return None;
+    }
+    let turn =
+        |o: XY<f64>, a: XY<f64>, b: XY<f64>| (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+    let mut hull: Vec<XY<f64>> = Vec::with_capacity(sorted.len() * 2);
+    for pass in [sorted.clone(), sorted.into_iter().rev().collect()] {
+        let floor = hull.len();
+        for point in pass {
+            while hull.len() >= floor + 2
+                && turn(hull[hull.len() - 2], hull[hull.len() - 1], point) <= 0.0
+            {
+                hull.pop();
+            }
+            hull.push(point);
+        }
+        hull.pop();
+    }
+    (hull.len() >= 3).then_some(hull)
+}
+
+/// A tracked mask's path on the canvas while it is selected: a faint line
+/// through its markers' centres, each marker a small handle-style dot.
+pub(crate) fn render_motion_path(
+    theme: &Theme,
+    segment: &MaskSegment,
+    (width, height): (f32, f32),
+) -> AnyElement {
+    let centers = segment
+        .tracking_marker_times()
+        .into_iter()
+        .map(|time| {
+            let (center, _) = segment.rect_at(time);
+            (center.x as f32 * width, center.y as f32 * height)
+        })
+        .collect::<Vec<_>>();
+    let line = with_alpha(theme.blue_9, 0.55);
+    let path = centers.clone();
+    div()
+        .absolute()
+        .inset_0()
+        .child(
+            gpui::canvas(
+                |bounds, _, _| bounds,
+                move |_, bounds, window, _| {
+                    if path.len() < 2 {
+                        return;
+                    }
+                    let mut stroke = gpui::PathBuilder::stroke(px(1.5));
+                    for (index, &(x, y)) in path.iter().enumerate() {
+                        let point = gpui::point(bounds.origin.x + px(x), bounds.origin.y + px(y));
+                        if index == 0 {
+                            stroke.move_to(point);
+                        } else {
+                            stroke.line_to(point);
+                        }
+                    }
+                    if let Ok(stroke) = stroke.build() {
+                        window.paint_path(stroke, line);
+                    }
+                },
+            )
+            .absolute()
+            .inset_0(),
+        )
+        .children(centers.into_iter().map(|(x, y)| {
+            div()
+                .absolute()
+                .left(px(x - MASK_MARKER_DOT / 2.))
+                .top(px(y - MASK_MARKER_DOT / 2.))
+                .size(px(MASK_MARKER_DOT))
+                .rounded_full()
+                .border_1()
+                .border_color(gpui::white())
+                .bg(Hsla::from(theme.blue_9))
+        }))
+        .into_any_element()
 }
 
 pub(crate) struct MaskTrackingPoints {
@@ -66,7 +180,7 @@ enum TrackingTarget {
 
 enum TrackingSession {
     Box(TrackSession),
-    Points(FourPointSession),
+    Points(PointTrackSession),
 }
 
 pub(crate) struct MaskTrackingJob {
@@ -93,6 +207,200 @@ enum TrackEvent {
 }
 
 impl EditorWindow {
+    /// The point picker over the player, drawn in the canvas's selection
+    /// vocabulary: the selection blue, its hollow handle disc at each point,
+    /// its label chip for each point's number, and its dark notice pill for
+    /// the instruction. Clicks on the frame add points; handles drag them.
+    pub(crate) fn render_mask_point_picker(
+        &self,
+        layer: Div,
+        picking: &MaskTrackingPoints,
+        (width, height): (f32, f32),
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let theme = self.theme;
+        let blue = Hsla::from(theme.blue_9);
+        let fill = with_alpha(theme.blue_9, 0.12);
+        let faint = with_alpha(theme.blue_9, 0.5);
+        let points = picking.points.clone();
+        let labels = tracking_label_centers(&points, (width, height));
+        let at = |point: &XY<f64>| (point.x as f32 * width, point.y as f32 * height);
+        let outline = (points.len() >= 4)
+            .then(|| points_outline(&points))
+            .flatten()
+            .map(|outline| outline.iter().map(at).collect::<Vec<_>>());
+        // Until there are four points, join them in the order they were
+        // clicked so the next click's place in the outline is obvious.
+        let trail = points.iter().map(at).collect::<Vec<_>>();
+        let instruction = if points.len() < 4 {
+            tr::editor::panel::mask::pick_point(points.len() + 1)
+        } else {
+            tr::editor::panel::mask::pick_more().to_string()
+        };
+
+        let start_drag = |index: usize| {
+            cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                cx.stop_propagation();
+                if let Some(picking) = this.mask_tracking_points.as_mut() {
+                    picking.dragging = Some((index, event.position, picking.points[index]));
+                }
+                cx.notify();
+            })
+        };
+
+        layer
+            .id("mask-tracking-points")
+            .cursor(CursorStyle::Crosshair)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                    cx.stop_propagation();
+                    let Some(bounds) = this.canvas_bounds() else {
+                        return;
+                    };
+                    let point = XY::new(
+                        f64::from(
+                            f32::from(event.position.x - bounds.origin.x)
+                                / f32::from(bounds.size.width),
+                        )
+                        .clamp(0.0, 1.0),
+                        f64::from(
+                            f32::from(event.position.y - bounds.origin.y)
+                                / f32::from(bounds.size.height),
+                        )
+                        .clamp(0.0, 1.0),
+                    );
+                    this.pick_mask_tracking_point(point, window, cx);
+                }),
+            )
+            .child(
+                gpui::canvas(
+                    |bounds, _, _| bounds,
+                    move |_, bounds, window, _| {
+                        let at = |(x, y): (f32, f32)| {
+                            gpui::point(bounds.origin.x + px(x), bounds.origin.y + px(y))
+                        };
+                        let polygon =
+                            |points: &[(f32, f32)], close: bool, mut path: gpui::PathBuilder| {
+                                for (index, &point) in points.iter().enumerate() {
+                                    if index == 0 {
+                                        path.move_to(at(point));
+                                    } else {
+                                        path.line_to(at(point));
+                                    }
+                                }
+                                if close {
+                                    path.close();
+                                }
+                                path.build().ok()
+                            };
+                        match outline {
+                            Some(outline) => {
+                                if let Some(area) =
+                                    polygon(&outline, true, gpui::PathBuilder::fill())
+                                {
+                                    window.paint_path(area, fill);
+                                }
+                                if let Some(edge) =
+                                    polygon(&outline, true, gpui::PathBuilder::stroke(px(2.)))
+                                {
+                                    window.paint_path(edge, blue);
+                                }
+                                // The mask itself is the box around the
+                                // points; outline it faintly so a rounded
+                                // shape's covered corners are not a surprise.
+                                let (left, top, right, bottom) = outline.iter().fold(
+                                    (f32::MAX, f32::MAX, f32::MIN, f32::MIN),
+                                    |(l, t, r, b), &(x, y)| {
+                                        (l.min(x), t.min(y), r.max(x), b.max(y))
+                                    },
+                                );
+                                if let Some(edge) = polygon(
+                                    &[(left, top), (right, top), (right, bottom), (left, bottom)],
+                                    true,
+                                    gpui::PathBuilder::stroke(px(1.)),
+                                ) {
+                                    window.paint_path(edge, faint);
+                                }
+                            }
+                            None if trail.len() >= 2 => {
+                                if let Some(edge) =
+                                    polygon(&trail, false, gpui::PathBuilder::stroke(px(2.)))
+                                {
+                                    window.paint_path(edge, blue);
+                                }
+                            }
+                            None => {}
+                        }
+                    },
+                )
+                .absolute()
+                .inset_0(),
+            )
+            .children(points.iter().enumerate().map(|(index, point)| {
+                let (x, y) = at(point);
+                div()
+                    .id(("mask-point-handle", index))
+                    .absolute()
+                    .left(px(x - POINT_HANDLE / 2.))
+                    .top(px(y - POINT_HANDLE / 2.))
+                    .size(px(POINT_HANDLE))
+                    .rounded_full()
+                    .border_1()
+                    .border_color(gpui::white())
+                    .cursor(CursorStyle::OpenHand)
+                    .child(
+                        div()
+                            .size_full()
+                            .rounded_full()
+                            .border_2()
+                            .border_color(blue),
+                    )
+                    .on_mouse_down(MouseButton::Left, start_drag(index))
+            }))
+            .children(labels.into_iter().enumerate().map(|(index, (x, y))| {
+                div()
+                    .id(("mask-point-label", index))
+                    .absolute()
+                    .left(px(x - 8.))
+                    .top(px(y - 8.))
+                    .min_w(px(16.))
+                    .h(px(16.))
+                    .px(px(4.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(4.))
+                    .bg(blue)
+                    .text_size(px(11.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(gpui::white())
+                    .cursor(CursorStyle::OpenHand)
+                    .child((index + 1).to_string())
+                    .on_mouse_down(MouseButton::Left, start_drag(index))
+            }))
+            .child(
+                div()
+                    .absolute()
+                    .top(px(10.))
+                    .left_0()
+                    .right_0()
+                    .flex()
+                    .justify_center()
+                    .child(
+                        div()
+                            .px(px(12.))
+                            .py(px(6.))
+                            .rounded(px(8.))
+                            .bg(gpui::hsla(0., 0., 0., 0.8))
+                            .text_size(px(12.))
+                            .text_color(gpui::white())
+                            .child(instruction),
+                    ),
+            )
+            .into_any_element()
+    }
+
     pub(crate) fn pick_mask_tracking_point(
         &mut self,
         point: XY<f64>,
@@ -180,6 +488,7 @@ impl EditorWindow {
             return;
         }
         let (center, size) = segment.rect_at(from - segment.start);
+        tracing::debug!(index, from, ?points, "mask tracking started");
         let target = points.map_or(TrackingTarget::Box(center, size), TrackingTarget::Points);
         let Ok(snapshot) = serde_json::to_value(&self.project) else {
             return;
@@ -301,6 +610,8 @@ async fn track(
             needs_review = true;
             break;
         };
+        #[cfg(debug_assertions)]
+        dump_tracking_frame(&frame);
         let luma = LumaFrame::from_rgba(
             &frame.data,
             frame.width,
@@ -317,7 +628,7 @@ async fn track(
                             .map(TrackingSession::Box)
                     }
                     TrackingTarget::Points(points) => {
-                        FourPointSession::new(&luma, time, points).map(TrackingSession::Points)
+                        PointTrackSession::new(&luma, time, points).map(TrackingSession::Points)
                     }
                 };
                 let Some(created) = created else {
@@ -335,9 +646,17 @@ async fn track(
             needs_review: true,
         };
     };
-    let (points, lost) = match session {
-        TrackingSession::Box(session) => session.finish(),
-        TrackingSession::Points(session) => session.finish(),
+    // Points are clicked on, or just inside, the outline of what they mark,
+    // so the box around them falls a few pixels short of it.
+    let (points, lost, outline_margin) = match session {
+        TrackingSession::Box(session) => {
+            let (points, lost) = session.finish();
+            (points, lost, 0.0)
+        }
+        TrackingSession::Points(session) => {
+            let (points, lost) = session.finish();
+            (points, lost, POINT_OUTLINE_MARGIN)
+        }
     };
     if !lost.is_empty() {
         tracing::info!(?lost, "mask target was out of sight");
@@ -348,12 +667,70 @@ async fn track(
             (
                 point.time - segment_start,
                 XY::new(point.center.0, point.center.1),
-                XY::new(point.size.0, point.size.1),
+                XY::new(point.size.0 + outline_margin, point.size.1 + outline_margin),
             )
         })
         .collect();
     TrackedPath {
         rects,
         needs_review: needs_review || !lost.is_empty(),
+    }
+}
+
+/// `CAP_GPUI_MASK_TRACK_DUMP=<file>` (debug builds): append every frame the
+/// tracker is given, as raw RGBA at the tracking resolution, so a run can be
+/// replayed outside the editor with the kernels' `mask_track_replay`
+/// example. Tracking sees the editor's render, not the source video, and
+/// the two differ in colour and sharpness enough to matter.
+#[cfg(debug_assertions)]
+fn dump_tracking_frame(frame: &cap_rendering::RenderedFrame) {
+    use std::io::Write;
+    let Some(path) = std::env::var_os("CAP_GPUI_MASK_TRACK_DUMP") else {
+        return;
+    };
+    let written = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .and_then(|mut file| {
+            let stride = frame.padded_bytes_per_row as usize;
+            frame
+                .data
+                .chunks(stride)
+                .take(frame.height as usize)
+                .try_for_each(|row| file.write_all(&row[..frame.width as usize * 4]))
+        });
+    if let Err(error) = written {
+        tracing::warn!(%error, "could not dump a tracking frame");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_outline_encloses_points_in_any_order_and_skips_inner_ones() {
+        let point = |x, y| XY::new(x, y);
+        let outline = points_outline(&[
+            point(0.6, 0.6),
+            point(0.2, 0.2),
+            point(0.4, 0.4),
+            point(0.6, 0.2),
+            point(0.2, 0.6),
+        ])
+        .unwrap();
+        assert_eq!(outline.len(), 4, "{outline:?}");
+        assert!(!outline.contains(&point(0.4, 0.4)));
+
+        let around = (0..8)
+            .map(|k| {
+                let angle = k as f64 * std::f64::consts::TAU / 8.0;
+                point(0.5 + 0.2 * angle.cos(), 0.5 + 0.1 * angle.sin())
+            })
+            .rev()
+            .collect::<Vec<_>>();
+        assert_eq!(points_outline(&around).unwrap().len(), 8);
+        assert!(points_outline(&[point(0.1, 0.1), point(0.2, 0.2)]).is_none());
     }
 }

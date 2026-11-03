@@ -21,6 +21,7 @@ const FORMATTED: &[&str] = &[
     "editor.panel.audio.title",
     "editor.panel.mask.title",
     "editor.panel.mask.tracking_progress",
+    "editor.panel.mask.pick_point",
     "editor.panel.camera3d.shots",
     "editor.panel.camera3d.pose_start",
     "editor.panel.camera3d.pose_end",
@@ -256,6 +257,10 @@ fn editor_panels_match_the_literals_they_replaced() {
         (tr::editor::panel::mask::track_points(), "Track Points"),
         (tr::editor::panel::mask::show_tracking(), "Show tracking"),
         (tr::editor::panel::mask::stop(), "Stop"),
+        (
+            tr::editor::panel::mask::pick_more(),
+            "Add points around a curved shape, or start tracking",
+        ),
         (
             tr::editor::panel::mask::tracking_failed(),
             "Could not track this region. Choose points with more detail.",
@@ -865,6 +870,10 @@ fn editor_panel_messages_format_like_the_code_they_replaced() {
         assert_eq!(
             tr::editor::panel::mask::tracking_progress(number),
             format!("Tracking {}%", index + 1)
+        );
+        assert_eq!(
+            tr::editor::panel::mask::pick_point(number),
+            format!("Click point {} of 4", index + 1)
         );
         assert_eq!(
             tr::editor::crop::editing_style(number),

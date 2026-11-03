@@ -6357,95 +6357,88 @@ impl EditorWindow {
         let relative = self.preview_or_playhead() - start;
         let in_segment = relative >= 0. && relative <= segment.end - start;
         let at_marker = segment.tracking_marker_at(relative);
-
-        let toggle = ui::EditorButton::plain(&theme, "mask-marker-toggle")
-            .left_icon(if at_marker.is_some() {
-                "icons/x.svg"
-            } else {
-                "icons/plus.svg"
-            })
-            .icon_size(px(13.))
-            .label(if at_marker.is_some() {
-                tr::editor::panel::mask::remove_marker()
-            } else {
-                tr::editor::panel::mask::add_marker()
-            })
-            .disabled(
-                !in_segment || self.mask_tracking.is_some() || self.mask_tracking_points.is_some(),
-            )
-            .on_click(cx.listener(move |this, _, window, cx| {
-                this.edit_mask_segment("mask-marker", index, window, cx, move |segment| {
-                    match at_marker {
-                        Some(time) => segment.remove_tracking_marker(time),
-                        None => segment.add_tracking_marker(relative),
-                    }
-                    true
-                });
-            }));
-
         let progress = self.mask_tracking_progress(index);
         let busy = self.mask_tracking.is_some();
-        let track = ui::EditorButton::plain(&theme, "mask-track-motion")
-            .left_icon(if progress.is_some() {
-                "icons/square.svg"
-            } else {
-                "icons/play.svg"
-            })
-            .disabled(progress.is_none() && (!in_segment || busy || self.playing))
-            .label(match progress {
-                Some(_) => tr::editor::panel::mask::stop().to_string(),
-                None => tr::editor::panel::mask::track_motion().to_string(),
-            })
-            .on_click(cx.listener(move |this, _, window, cx| {
-                if this.mask_tracking_progress(index).is_some() {
-                    this.stop_mask_tracking(cx);
-                } else {
-                    this.mask_tracking_points = None;
-                    this.start_mask_tracking(index, None, window, cx);
-                }
-            }));
-
         let picking = self
             .mask_tracking_points
             .as_ref()
             .filter(|points| points.index == index);
-        let track_points = ui::EditorButton::plain(&theme, "mask-track-points")
-            .left_icon("icons/corners.svg")
-            .label(tr::editor::panel::mask::track_points())
-            .disabled(!in_segment || busy || self.playing)
-            .on_click(cx.listener(move |this, _, _window, cx| {
-                this.show_mask_tracking = true;
-                this.publish_project();
-                this.mask_tracking_points = if this.mask_tracking_points.is_some() {
-                    None
-                } else {
-                    Some(crate::editor_mask_tracking::MaskTrackingPoints {
-                        index,
-                        time: this.preview_or_playhead(),
-                        points: Vec::with_capacity(4),
-                        dragging: None,
-                    })
-                };
-                cx.notify();
-            }));
+        // Shares the mask panel's radio-card corners, and fills its half of a
+        // row: `full_width` alone would make each button claim the whole row.
+        let action = |id: &'static str, variant| {
+            ui::Button::plain(&theme, id, variant, ui::ButtonSize::Sm)
+                .full_width()
+                .radius(px(8.))
+        };
+        let half = |button: ui::Button| div().flex_1().min_w_0().child(button);
 
-        let mut marker_actions = div().flex().items_center().gap(px(4.)).child(toggle);
-        let mut actions = div()
-            .flex()
-            .flex_row()
-            .flex_wrap()
-            .items_center()
-            .gap(px(4.));
-        if let Some(picking) = picking {
-            let ready = picking.points.len() >= 4;
-            actions = actions
+        // One row of actions for whichever step tracking is in: running
+        // (progress and Stop), picking points (Cancel, Undo, Start), or idle
+        // (the two ways to start).
+        let actions = if let Some(progress) = progress {
+            div()
+                .flex()
+                .items_center()
+                .gap(px(8.))
                 .child(
-                    ui::EditorButton::plain(&theme, "mask-points-cancel")
-                        .label(tr::common::cancel())
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.mask_tracking_points = None;
-                            cx.notify();
-                        })),
+                    div()
+                        .flex_1()
+                        .flex()
+                        .flex_col()
+                        .gap(px(4.))
+                        .child(
+                            div()
+                                .text_size(px(12.))
+                                .text_color(Hsla::from(theme.gray_11))
+                                .child(tr::editor::panel::mask::tracking_progress(
+                                    (progress * 100.).round() as u32,
+                                )),
+                        )
+                        .child(
+                            div()
+                                .h(px(4.))
+                                .rounded_full()
+                                .bg(Hsla::from(theme.gray_4))
+                                .child(
+                                    div()
+                                        .h_full()
+                                        .w(gpui::relative(progress.clamp(0., 1.)))
+                                        .rounded_full()
+                                        .bg(Hsla::from(theme.blue_9)),
+                                ),
+                        ),
+                )
+                .child(
+                    ui::Button::plain(
+                        &theme,
+                        "mask-track-stop",
+                        ui::ButtonVariant::Gray,
+                        ui::ButtonSize::Sm,
+                    )
+                    .radius(px(8.))
+                    .icon("icons/square.svg")
+                    .label(tr::editor::panel::mask::stop())
+                    .on_click(cx.listener(|this, _, _, cx| this.stop_mask_tracking(cx))),
+                )
+        } else if let Some(picking) = picking {
+            let ready = picking.points.len() >= 4;
+            div()
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .child(
+                    ui::Button::plain(
+                        &theme,
+                        "mask-points-cancel",
+                        ui::ButtonVariant::Gray,
+                        ui::ButtonSize::Sm,
+                    )
+                    .radius(px(8.))
+                    .label(tr::common::cancel())
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.mask_tracking_points = None;
+                        cx.notify();
+                    })),
                 )
                 .child(
                     ui::EditorButton::plain(&theme, "mask-points-undo")
@@ -6459,39 +6452,92 @@ impl EditorWindow {
                             cx.notify();
                         })),
                 )
-                .child(
-                    ui::EditorButton::plain(&theme, "mask-points-start")
-                        .left_icon("icons/play.svg")
-                        .label(tr::editor::panel::mask::track_motion())
-                        .disabled(!ready)
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            if let Some(picking) = this.mask_tracking_points.take()
-                                && picking.points.len() >= 4
-                            {
-                                let points = picking
-                                    .points
-                                    .iter()
-                                    .map(|point| (point.x, point.y))
-                                    .collect();
-                                this.start_mask_tracking(picking.index, Some(points), window, cx);
-                            }
-                        })),
-                );
+                .child(half(
+                    action(
+                        "mask-points-start",
+                        if ready {
+                            ui::ButtonVariant::Blue
+                        } else {
+                            ui::ButtonVariant::Gray
+                        },
+                    )
+                    .icon("icons/play.svg")
+                    .label(tr::editor::panel::mask::track_motion())
+                    .disabled(!ready)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        if let Some(picking) = this.mask_tracking_points.take()
+                            && picking.points.len() >= 4
+                        {
+                            let points = picking
+                                .points
+                                .iter()
+                                .map(|point| (point.x, point.y))
+                                .collect();
+                            this.start_mask_tracking(picking.index, Some(points), window, cx);
+                        }
+                    })),
+                ))
         } else {
-            actions = actions.child(track).child(track_points);
-        }
-        if let Some(progress) = progress {
-            actions = actions.child(
-                div()
-                    .text_size(px(11.))
-                    .text_color(Hsla::from(theme.editor.text_2))
-                    .child(tr::editor::panel::mask::tracking_progress(
-                        (progress * 100.).round() as u32,
-                    )),
-            );
-        }
+            let unavailable = !in_segment || busy || self.playing;
+            div()
+                .flex()
+                .gap(px(8.))
+                .child(half(
+                    action("mask-track-motion", ui::ButtonVariant::Gray)
+                        .icon("icons/play.svg")
+                        .label(tr::editor::panel::mask::track_motion())
+                        .disabled(unavailable)
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.mask_tracking_points = None;
+                            this.start_mask_tracking(index, None, window, cx);
+                        })),
+                ))
+                .child(half(
+                    action("mask-track-points", ui::ButtonVariant::Gray)
+                        .icon("icons/corners.svg")
+                        .label(tr::editor::panel::mask::track_points())
+                        .disabled(unavailable)
+                        .on_click(cx.listener(move |this, _, _window, cx| {
+                            this.show_mask_tracking = true;
+                            this.publish_project();
+                            this.mask_tracking_points =
+                                Some(crate::editor_mask_tracking::MaskTrackingPoints {
+                                    index,
+                                    time: this.preview_or_playhead(),
+                                    points: Vec::with_capacity(4),
+                                    dragging: None,
+                                });
+                            cx.notify();
+                        })),
+                ))
+        };
+
+        let mut markers = div().flex().items_center().gap(px(4.)).child(
+            ui::EditorButton::plain(&theme, "mask-marker-toggle")
+                .left_icon(if at_marker.is_some() {
+                    "icons/x.svg"
+                } else {
+                    "icons/plus.svg"
+                })
+                .icon_size(px(13.))
+                .label(if at_marker.is_some() {
+                    tr::editor::panel::mask::remove_marker()
+                } else {
+                    tr::editor::panel::mask::add_marker()
+                })
+                .disabled(!in_segment || busy || picking.is_some())
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.edit_mask_segment("mask-marker", index, window, cx, move |segment| {
+                        match at_marker {
+                            Some(time) => segment.remove_tracking_marker(time),
+                            None => segment.add_tracking_marker(relative),
+                        }
+                        true
+                    });
+                })),
+        );
         if segment.is_tracked() {
-            marker_actions = marker_actions.child(div().flex_1()).child(
+            markers = markers.child(div().flex_1()).child(
                 ui::EditorButton::plain(&theme, "mask-marker-clear")
                     .danger(&theme)
                     .left_icon("icons/trash.svg")
@@ -6513,12 +6559,14 @@ impl EditorWindow {
                 div()
                     .flex()
                     .flex_col()
-                    .gap(px(4.))
+                    .gap(px(8.))
                     .child(
                         div()
                             .flex()
                             .items_center()
                             .justify_between()
+                            .text_size(px(14.))
+                            .text_color(Hsla::from(theme.gray_12))
                             .child(tr::editor::panel::mask::show_tracking())
                             .child(
                                 ui::Toggle::plain(
@@ -6536,8 +6584,8 @@ impl EditorWindow {
                                 )),
                             ),
                     )
-                    .child(marker_actions)
-                    .child(actions),
+                    .child(actions)
+                    .child(markers),
             )
             .into_any_element()
     }

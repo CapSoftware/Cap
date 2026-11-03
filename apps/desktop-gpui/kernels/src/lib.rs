@@ -1,9 +1,10 @@
+mod box_edges;
 pub mod codec;
-pub mod four_point_track;
 pub mod frame;
 pub mod mask_cache;
 pub mod motion_track;
 pub mod png;
+pub mod point_track;
 pub mod screenshot;
 pub mod texture;
 pub mod thumbnail;

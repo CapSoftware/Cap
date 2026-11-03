@@ -1952,6 +1952,8 @@ highlight = "Highlight"
 outside_darkness = "Outside Darkness"
 pixel_size = "Pixel Size"
 pixelate = "Pixelate"
+pick_point = { text = "Click point {number} of 4", context = "{number} is 1 to 4, the point the next click places." }
+pick_more = "Add points around a curved shape, or start tracking"
 remove_marker = "Remove Marker"
 sensitive = "Sensitive"
 stop = "Stop"
