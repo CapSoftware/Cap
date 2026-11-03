@@ -372,14 +372,19 @@ impl EditorWindow {
             return;
         }
         let next = crate::editor_clips::apply_dragged_transition(base, index, kind, duration);
-        if self.edit_live(
-            |timeline| {
-                *timeline = next;
-                true
-            },
-            cx,
-        ) && let Some(clip) = self.timeline.clips.get(index)
-        {
+        let Some(timeline) = self.project.timeline.as_mut() else {
+            return;
+        };
+        *timeline = next;
+        // The ripple moves caption boxes but not the words inside them, so
+        // they are projected again from recording time, as `project_changed`
+        // does for every other transition edit.
+        self.synchronize_caption_track(false);
+        self.history.record(&self.project);
+        self.rebuild_timeline();
+        self.publish_project();
+        cx.notify();
+        if let Some(clip) = self.timeline.clips.get(index) {
             self.set_preview_time(clip.start + duration.unwrap_or(0.) / 2.);
         }
     }

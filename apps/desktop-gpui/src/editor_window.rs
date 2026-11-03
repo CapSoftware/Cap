@@ -14338,6 +14338,73 @@ mod tests {
             );
         }
 
+        /// A caption is stored in recording time and projected onto the
+        /// timeline; a transition drag moves its clip, so the words have to
+        /// be projected again with the box, not only the box rippled.
+        #[gpui::test]
+        fn a_transition_drag_moves_caption_words_with_their_clip(cx: &mut gpui::TestAppContext) {
+            let (editor, cx) = split_clip(cx);
+            editor.update(cx, |editor, cx| {
+                editor.project.captions = Some(cap_project::CaptionsData {
+                    segments: vec![cap_project::CaptionSegment {
+                        id: "said".into(),
+                        start: 6.0,
+                        end: 7.0,
+                        text: "hello there".into(),
+                        words: vec![
+                            cap_project::CaptionWord {
+                                text: "hello".into(),
+                                start: 6.0,
+                                end: 6.5,
+                            },
+                            cap_project::CaptionWord {
+                                text: "there".into(),
+                                start: 6.5,
+                                end: 7.0,
+                            },
+                        ],
+                    }],
+                    settings: Default::default(),
+                    source_timed: true,
+                });
+                editor.synchronize_caption_track(true);
+                editor.rebuild_timeline();
+                cx.notify();
+            });
+            cx.run_until_parked();
+            let caption = |editor: &Entity<EditorWindow>, cx: &mut gpui::VisualTestContext| {
+                editor.read_with(cx, |editor, _| {
+                    let segment =
+                        editor.project.timeline.as_ref().unwrap().caption_segments[0].clone();
+                    (segment.start, segment.words[0].start)
+                })
+            };
+            let (start, word) = caption(&editor, cx);
+            assert!((start - 6.0).abs() < 1e-6 && (f64::from(word) - 6.0).abs() < 1e-4);
+
+            let (x, secs_per_pixel) = x_of(&editor, cx, 7.0);
+            let y = clip_row_y(cx);
+            cx.simulate_mouse_move(point(px(x), y), None, gpui::Modifiers::default());
+            cx.simulate_mouse_down(
+                point(px(x), y),
+                MouseButton::Left,
+                gpui::Modifiers::default(),
+            );
+            drag_to(&editor, cx, x - (0.6 / secs_per_pixel) as f32);
+            let made = transition(&editor, cx).expect("the drag made a transition");
+
+            let (start, word) = caption(&editor, cx);
+            let expected = 6.0 - made.duration;
+            assert!(
+                (start - expected).abs() < 1e-3,
+                "box at {start}, expected {expected}"
+            );
+            assert!(
+                (f64::from(word) - expected).abs() < 1e-3,
+                "first word at {word}, box at {start}"
+            );
+        }
+
         #[gpui::test]
         fn a_press_that_moves_right_first_only_selects_the_clip(cx: &mut gpui::TestAppContext) {
             let (editor, cx) = split_clip(cx);
