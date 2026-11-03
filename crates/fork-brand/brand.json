@@ -31,7 +31,7 @@
 		"tail": ["#0174E9", "#068CFC", "#16A7FE"],
 		"ribbon": ["#1BAFFE", "#31C2FE"],
 		"rise": ["#099CFD", "#30C3FD"],
-		"fold": ["#015EC7", "#015EC7"],
+		"fold": ["#015EC7", "#015EC7", "#015EC7"],
 		"ink": "#12161F",
 		"ink-dark": "#FFFFFF"
 	},
