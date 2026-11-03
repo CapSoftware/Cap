@@ -655,27 +655,17 @@ async function AuthorizedContent({
 		if (!user || user.id !== video.owner.id) {
 			return { customDomain: null, domainVerified: false };
 		}
-		const activeOrganizationId = user.activeOrganizationId;
-		if (!activeOrganizationId) {
-			return { customDomain: null, domainVerified: false };
-		}
 
-		// Fetch the active org
-		const orgArr = await db()
+		const [org] = await db()
 			.select({
 				customDomain: organizations.customDomain,
 				domainVerified: organizations.domainVerified,
 			})
 			.from(organizations)
-			.where(eq(organizations.id, activeOrganizationId))
+			.where(eq(organizations.id, video.orgId))
 			.limit(1);
 
-		const org = orgArr[0];
-		if (
-			org?.customDomain &&
-			org.domainVerified !== null &&
-			user.id === video.owner.id
-		) {
+		if (org?.customDomain && org.domainVerified !== null) {
 			return { customDomain: org.customDomain, domainVerified: true };
 		}
 		return { customDomain: null, domainVerified: false };
