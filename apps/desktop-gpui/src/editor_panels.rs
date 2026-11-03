@@ -2797,6 +2797,9 @@ pub enum FieldKey {
     SyncOffset(usize, OffsetKind),
     CaptionManualX,
     CaptionManualY,
+    /// The length, in seconds, of the transition into clip `.0`, in the
+    /// transition popover.
+    TransitionDuration(usize),
     /// The crop dialog's four `BoundInput`s (`Editor.tsx:1199-1216`). They do
     /// not edit the project at all -- they drive the open cropper, which is
     /// why they are the one key whose value comes from outside
@@ -2985,6 +2988,9 @@ impl EditorWindow {
             }
             FieldKey::KeyboardEnd(index) => {
                 let _ = write!(out, "{:.2}", timeline.keyboard_segments.get(index)?.end);
+            }
+            FieldKey::TransitionDuration(index) => {
+                let _ = write!(out, "{:.2}", timeline.effective_transition(index)?.duration);
             }
             // `Math.round((props.value ?? 0) * 1000)` -- the offset field is in
             // milliseconds (`:6182`).
@@ -3241,6 +3247,23 @@ impl EditorWindow {
                     None => return,
                 };
                 self.set_clip_offset(clip, kind, value, window, cx);
+            }
+            FieldKey::TransitionDuration(index) => {
+                if !final_commit {
+                    return;
+                }
+                let current = self
+                    .project
+                    .timeline
+                    .as_ref()
+                    .and_then(|timeline| timeline.effective_transition(index));
+                let (Some(current), Some(value)) = (current, ui::parse_number(&text)) else {
+                    return;
+                };
+                if !value.is_finite() || (value - current.duration).abs() < 1e-9 {
+                    return;
+                }
+                self.set_clip_transition(index, Some((current.kind, value)), window, cx);
             }
             _ => {}
         }
@@ -8256,6 +8279,12 @@ impl EditorWindow {
         // The crop dialog's four `BoundInput`s, while it is open. Created up
         // front because the match below bails early when the project has no
         // timeline and the dialog is independent of it.
+        if let Some(index) = self.transition_popover_index() {
+            let key = FieldKey::TransitionDuration(index);
+            self.ensure_field(key, window, cx);
+            fields.push(key);
+        }
+
         if self.crop.is_some() {
             use crate::editor_crop::CropField;
             for field in [

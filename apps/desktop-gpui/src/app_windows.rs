@@ -6046,6 +6046,7 @@ async fn drive_auto_sidebar(handle: WindowHandle<EditorWindow>, cx: &mut gpui::A
     let clip_menu = std::env::var("CAP_GPUI_AUTO_CLIP_MENU").ok();
     let camera3d = std::env::var("CAP_GPUI_AUTO_CAMERA3D").ok();
     let add_track = std::env::var("CAP_GPUI_AUTO_ADD_TRACK").ok();
+    let transition = std::env::var("CAP_GPUI_AUTO_TRANSITION").ok();
     let generate_zoom =
         std::env::var("CAP_GPUI_AUTO_GENERATE_ZOOM").is_ok_and(|value| value == "1");
     let pick_background =
@@ -6059,6 +6060,7 @@ async fn drive_auto_sidebar(handle: WindowHandle<EditorWindow>, cx: &mut gpui::A
         && clip_menu.is_none()
         && camera3d.is_none()
         && add_track.is_none()
+        && transition.is_none()
         && !generate_zoom
         && !pick_background
         && !desktop_background
@@ -6144,6 +6146,18 @@ async fn drive_auto_sidebar(handle: WindowHandle<EditorWindow>, cx: &mut gpui::A
         handle
             .update(cx, |view, window, cx| {
                 view.auto_clip_menu(&spec, window, cx)
+            })
+            .ok();
+    }
+
+    // `CAP_GPUI_AUTO_TRANSITION=<index>[:<kind>]`: open the popover for the
+    // transition into clip `<index>` (adding a cross dissolve first if the
+    // cut has none, and switching it to `<kind>` when given), the way a click
+    // on the transition does.
+    if let Some(spec) = transition {
+        handle
+            .update(cx, |view, window, cx| {
+                view.auto_transition(&spec, window, cx)
             })
             .ok();
     }

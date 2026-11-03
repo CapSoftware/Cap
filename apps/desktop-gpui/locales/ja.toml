@@ -2858,8 +2858,6 @@ split_hint = "再生ヘッドをこのクリップ内に移動してください
 volume = "音量"
 transition = "トランジション"
 transition_none = "なし"
-transition_crossfade = "クロスフェード"
-transition_fade = "フェード"
 transition_seconds = "{seconds}秒"
 
 [editor.window.clip_menu.merge_blocker]
@@ -2953,6 +2951,25 @@ save_failed = "{path}の録画タイトルを保存できませんでした：{e
 [editor.window.track]
 clear_all = "すべて消去"
 delete = "削除"
+
+[editor.window.transition]
+title = "トランジション"
+add = "トランジションを追加"
+duration = "長さ"
+seconds_unit = "秒"
+remove = "トランジションを削除"
+cross_fade = "クロスディゾルブ"
+fade_through_black = "黒にフェード"
+fade_through_white = "白にフェード"
+push_left = "左へプッシュ"
+push_right = "右へプッシュ"
+push_up = "上へプッシュ"
+push_down = "下へプッシュ"
+wipe_left = "左へワイプ"
+wipe_right = "右へワイプ"
+wipe_up = "上へワイプ"
+wipe_down = "下へワイプ"
+zoom = "ズーム"
 
 [editor.window.transport]
 done_splitting = "分割を終了"
