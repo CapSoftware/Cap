@@ -8857,7 +8857,9 @@ impl RendererLayers {
     /// transparent frame, with its masks, so a blurred region moves with the
     /// footage it hides. A focus blur or a highlight mask covers the
     /// background too, so a side with one keeps its background to stay
-    /// identical to its plain frames.
+    /// identical to its plain frames. When a mask is ordered above a text or
+    /// image overlay it has to cover that overlay as well, which only a whole
+    /// frame can show correctly, so the overlays travel with the clips then.
     fn transition_side_parts(&self, uniforms: &ProjectUniforms) -> LayerParts {
         let background = self.camera3d.blur_kind().is_some()
             || uniforms
@@ -8868,8 +8870,37 @@ impl RendererLayers {
             background,
             content: true,
             masks: true,
-            overlays: false,
+            overlays: self.masks_cover_overlays(uniforms),
         }
+    }
+
+    fn masks_cover_overlays(&self, uniforms: &ProjectUniforms) -> bool {
+        let Some(overlays) = &self.overlays else {
+            return false;
+        };
+        if uniforms.masks.is_empty() || uniforms.project.overlay_order.is_empty() {
+            return false;
+        }
+        let mut overlay_below = false;
+        for overlay in uniforms.project.overlay_tracks().into_iter().rev() {
+            match overlay.kind {
+                OverlayTrackKind::Image => {
+                    overlay_below |= overlays.images.has_track(overlay.track)
+                }
+                OverlayTrackKind::Text => overlay_below |= overlays.text.has_track(overlay.track),
+                OverlayTrackKind::Mask => {
+                    if overlay_below
+                        && uniforms
+                            .masks
+                            .iter()
+                            .any(|mask| mask.track == overlay.track)
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -9154,19 +9185,14 @@ impl RendererLayers {
                 }
             }
         } else if let Some(overlays) = &self.overlays {
-            // A mask ordered above a text or image track also hides that
-            // overlay. In a moving transition the clips carry their own
-            // masks and the overlays are drawn here afterwards, so a
-            // sensitive mask is applied again over them. A highlight only
-            // dims and has already dimmed the clips, so it is not repeated.
-            let mut overlay_below = false;
             for overlay in uniforms.project.overlay_tracks().into_iter().rev() {
                 match overlay.kind {
-                    OverlayTrackKind::Mask if parts.masks || (parts.overlays && overlay_below) => {
-                        for mask in uniforms.masks.iter().filter(|mask| {
-                            mask.track == overlay.track
-                                && (parts.masks || mask.mode != MaskRenderMode::Highlight)
-                        }) {
+                    OverlayTrackKind::Mask if parts.masks => {
+                        for mask in uniforms
+                            .masks
+                            .iter()
+                            .filter(|mask| mask.track == overlay.track)
+                        {
                             self.mask
                                 .render(device, queue, session, passes.encoder(), mask);
                         }
@@ -9180,7 +9206,6 @@ impl RendererLayers {
                             passes.pass(session.current_texture_view(), load),
                             overlay.track,
                         );
-                        overlay_below = true;
                     }
                     OverlayTrackKind::Text
                         if parts.overlays && overlays.text.has_track(overlay.track) =>
@@ -9189,7 +9214,6 @@ impl RendererLayers {
                             passes.pass(session.current_texture_view(), load),
                             overlay.track,
                         );
-                        overlay_below = true;
                     }
                     OverlayTrackKind::Mask | OverlayTrackKind::Text | OverlayTrackKind::Image => {}
                 }
@@ -9483,15 +9507,17 @@ async fn produce_transition_texture(
         session.current_texture_view(),
         parameters,
     );
-    layers.render_parts(
-        &constants.device,
-        &constants.queue,
-        &mut incoming_encoder,
-        session,
-        &incoming.uniforms,
-        incoming.render_display,
-        LayerParts::OVERLAYS,
-    )?;
+    if !incoming_parts.overlays {
+        layers.render_parts(
+            &constants.device,
+            &constants.queue,
+            &mut incoming_encoder,
+            session,
+            &incoming.uniforms,
+            incoming.render_display,
+            LayerParts::OVERLAYS,
+        )?;
+    }
 
     Ok(incoming_encoder)
 }

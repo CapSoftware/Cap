@@ -586,7 +586,7 @@ async fn a_sensitive_mask_moves_with_the_footage_it_hides() {
 }
 
 #[tokio::test]
-async fn a_mask_ordered_above_an_image_still_hides_it_during_a_push() {
+async fn a_mask_ordered_above_an_image_still_hides_it_during_a_transition() {
     let mut fixture = fixture_with(true, true).await;
     let mut striped = image::RgbaImage::new(16, 9);
     for (x, _, pixel) in striped.enumerate_pixels_mut() {
@@ -600,6 +600,9 @@ async fn a_mask_ordered_above_an_image_still_hides_it_during_a_push() {
         .save(fixture.directory.join("content/images/overlay.png"))
         .expect("striped image");
     let mut project = (*fixture.project).clone();
+    if let Some(timeline) = project.timeline.as_mut() {
+        timeline.mask_segments[0].pixelation = 1080.0;
+    }
     project.overlay_order = vec![
         OverlayTrack {
             kind: OverlayTrackKind::Mask,
@@ -613,21 +616,37 @@ async fn a_mask_ordered_above_an_image_still_hides_it_during_a_push() {
     fixture.project = Arc::new(project);
     let cursor = CursorEvents::default();
     let sides = sides(&fixture, &cursor);
+    let white_pixels = |frame: &RenderedFrame| {
+        (0..HEIGHT)
+            .flat_map(|y| (0..WIDTH).map(move |x| (x, y)))
+            .filter(|(x, y)| {
+                pixel(frame, *x, *y)[..3]
+                    .iter()
+                    .all(|channel| *channel > 240)
+            })
+            .count()
+    };
 
     let plain = render_plain(&fixture, &sides.incoming, &cursor).await;
-    assert!(stripe_edges(&plain, 80, 45) < 6, "the mask hides the image");
+    assert_eq!(
+        white_pixels(&plain),
+        0,
+        "the mask blurs the image's stripes"
+    );
 
-    let progress = (0.25f32 / 4.0).cbrt();
     for kind in [
         ClipTransitionType::PushLeft,
         ClipTransitionType::WipeRight,
         ClipTransitionType::Zoom,
     ] {
-        let frame = render_transition(&fixture, &sides, &cursor, kind, progress).await;
-        assert!(
-            stripe_edges(&frame, 80, 45) < 6,
-            "{kind:?} leaves the image under its mask"
-        );
+        for progress in [0.2, 0.4, 0.6, 0.8] {
+            let frame = render_transition(&fixture, &sides, &cursor, kind, progress).await;
+            assert_eq!(
+                white_pixels(&frame),
+                0,
+                "{kind:?} at {progress} shows the image's stripes"
+            );
+        }
     }
 }
 
@@ -638,6 +657,7 @@ async fn a_highlight_ordered_above_an_image_dims_each_frame_once() {
     if let Some(timeline) = project.timeline.as_mut() {
         timeline.mask_segments[0].mask_type = MaskKind::Highlight;
         timeline.mask_segments[0].darkness = 0.6;
+        timeline.image_segments[0].size = XY::new(0.4, 0.4);
     }
     project.overlay_order = vec![
         OverlayTrack {
