@@ -218,15 +218,38 @@ impl PointTrackSession {
         // the whole-box track it fell back on). The whole-box track adds only
         // what it found for frames that had none: when it picks the target
         // up again it walks back through the frames it missed.
-        let (region, lost) = self
+        let region = self
             .region
-            .map_or_else(|| (Vec::new(), Vec::new()), TrackSession::finish);
+            .map_or_else(Vec::new, |region| region.finish().0);
         let mut path = self.fitted;
+        let mut recovered = Vec::new();
         for found in region {
             if self.unresolved.contains(&found.time) {
                 let index = path.partition_point(|point| point.time < found.time);
                 path.insert(index, found);
+                recovered.push(found.time);
             }
+        }
+        // Frames nothing could place, grouped into spans that run until the
+        // next frame that was placed: what the user is asked to review.
+        let mut lost: Vec<(f64, f64)> = Vec::new();
+        let mut previous_missing = None;
+        for &time in self
+            .unresolved
+            .iter()
+            .filter(|time| !recovered.contains(time))
+        {
+            let next = path.partition_point(|point| point.time <= time);
+            let end = path.get(next).map_or(time, |point| point.time);
+            let placed_between = previous_missing.is_none_or(|previous| {
+                path.get(path.partition_point(|point| point.time <= previous))
+                    .is_some_and(|point| point.time < time)
+            });
+            match lost.last_mut() {
+                Some(span) if !placed_between => span.1 = end,
+                _ => lost.push((time, end)),
+            }
+            previous_missing = Some(time);
         }
         for &(_, end) in &lost {
             let next = path.partition_point(|point| point.time < end);
@@ -242,14 +265,6 @@ impl PointTrackSession {
                 );
             }
         }
-        let lost = lost
-            .into_iter()
-            .filter(|(from, to)| {
-                self.unresolved
-                    .iter()
-                    .any(|time| time >= from && time <= to)
-            })
-            .collect();
         (path, lost)
     }
 }
@@ -415,7 +430,12 @@ mod tests {
         for step in 21..=40 {
             session.push(step as f64 / 30.0, hidden.clone());
         }
-        let (path, _) = session.finish();
+        let (path, lost) = session.finish();
+        assert!(
+            lost.iter()
+                .any(|&(from, to)| from <= 21.0 / 30.0 + 1e-9 && to >= 40.0 / 30.0 - 1e-9),
+            "the hidden frames are reported for review: {lost:?}"
+        );
         for step in 0..=20 {
             let time = step as f64 / 30.0;
             let found = path
