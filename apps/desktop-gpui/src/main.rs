@@ -80,6 +80,7 @@ mod platform;
 mod presets;
 mod project_save;
 mod recording;
+mod repair;
 mod screenshot;
 mod screenshot_annotations;
 mod screenshot_crop;
@@ -374,6 +375,7 @@ fn main() {
     app.run(move |cx: &mut App| {
         gpui_tokio::init_from_handle(cx, runtime_handle);
         gpui_tokio::Tokio::spawn(cx, cap_utils::operation_diagnostics::run_checkpoints()).detach();
+        repair::init(cx);
         // The dock icon: an unbundled dev binary shows the generic terminal
         // document without it. The bytes are the shipping app's icon.png.
         platform::set_dock_icon(include_bytes!("../assets/dock-icon.png"));

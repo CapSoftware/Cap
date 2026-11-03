@@ -158,6 +158,8 @@ mod editor_panels_surface_tests;
 #[cfg(test)]
 mod editor_shell_surface_tests;
 #[cfg(test)]
+mod repair_surface_tests;
+#[cfg(test)]
 mod settings_surface_tests;
 #[cfg(test)]
 mod surface_tests;
