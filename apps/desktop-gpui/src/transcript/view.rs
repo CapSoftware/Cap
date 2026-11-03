@@ -630,6 +630,7 @@ impl EditorWindow {
             return;
         };
         window.focus(&self.transcript.focus, cx);
+        cx.stop_propagation();
         self.transcript.selection = Some(WordSelection {
             anchor: range.start,
             focus: range.end - 1,
