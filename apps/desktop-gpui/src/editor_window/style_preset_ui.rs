@@ -113,19 +113,15 @@ fn kind_copy(kind: PresetKind) -> KindCopy {
             use_for_new: tr::editor::panel::style_presets::text_segment::use_for_new(),
             used_for_new: tr::editor::panel::style_presets::text_segment::used_for_new(),
             default_name: tr::editor::panel::style_presets::text_segment::default_name(),
-            apply_all: Some(|number| {
-                tr::editor::panel::style_presets::text_segment::apply_all(number)
-            }),
-            applied_all: Some(|number| {
-                tr::editor::panel::style_presets::text_segment::applied_all(number)
-            }),
+            apply_all: Some(tr::editor::panel::style_presets::text_segment::apply_all),
+            applied_all: Some(tr::editor::panel::style_presets::text_segment::applied_all),
         },
         PresetKind::Mask => KindCopy {
             use_for_new: tr::editor::panel::style_presets::mask::use_for_new(),
             used_for_new: tr::editor::panel::style_presets::mask::used_for_new(),
             default_name: tr::editor::panel::style_presets::mask::default_name(),
-            apply_all: Some(|number| tr::editor::panel::style_presets::mask::apply_all(number)),
-            applied_all: Some(|number| tr::editor::panel::style_presets::mask::applied_all(number)),
+            apply_all: Some(tr::editor::panel::style_presets::mask::apply_all),
+            applied_all: Some(tr::editor::panel::style_presets::mask::applied_all),
         },
         PresetKind::Captions => KindCopy {
             use_for_new: tr::editor::panel::style_presets::captions::use_for_new(),
@@ -138,10 +134,8 @@ fn kind_copy(kind: PresetKind) -> KindCopy {
             use_for_new: tr::editor::panel::style_presets::style::use_for_new(),
             used_for_new: tr::editor::panel::style_presets::style::used_for_new(),
             default_name: tr::editor::panel::style_presets::style::default_name(),
-            apply_all: Some(|number| tr::editor::panel::style_presets::style::apply_all(number)),
-            applied_all: Some(|number| {
-                tr::editor::panel::style_presets::style::applied_all(number)
-            }),
+            apply_all: Some(tr::editor::panel::style_presets::style::apply_all),
+            applied_all: Some(tr::editor::panel::style_presets::style::applied_all),
         },
     }
 }
