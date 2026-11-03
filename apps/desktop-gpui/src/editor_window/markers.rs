@@ -1,11 +1,7 @@
-//! Recording markers on the editor timeline: flags on the ruler, the markers
-//! list in the transport, the per-marker editor, and their shortcuts.
-//!
-//! Markers live in `ProjectConfiguration::markers`, anchored to source time,
-//! so their output positions come from `TimelineConfiguration::place_markers`
-//! and follow every cut, split, speed change and clip reorder. One cut out of
-//! the timeline is hidden rather than deleted. Every change goes through the
-//! project history like any other edit.
+//! Markers are anchored to source time, so their output positions come from
+//! `TimelineConfiguration::place_markers` and follow every cut, split, speed
+//! change and clip reorder. A marker in footage that was cut out is hidden
+//! rather than deleted.
 
 use super::*;
 use cap_project::{PlacedMarker, TimelineMarker};
@@ -15,13 +11,9 @@ pub(super) const MARKER_COLORS: [&str; 6] = [
     "#ff9f0a", "#ffcc00", "#34c759", "#0a84ff", "#af52de", "#ff2d55",
 ];
 
-/// Flags closer than this share one stack at the current zoom.
 const MARKER_STACK_PX: f32 = 14.;
-/// A press that moves less than this is a click, not a drag.
 const MARKER_DRAG_PX: f32 = 3.;
-/// A dragged marker sticks to the playhead within this distance.
 const MARKER_SNAP_PX: f64 = 6.;
-/// Stacked markers are spread at least this far apart by a click.
 const MARKER_SPREAD_PX: f64 = 24.;
 const FLAG_ICON: f32 = 12.;
 /// Where the pole sits inside the flag glyph (x = 4.17 of 20).
@@ -32,7 +24,6 @@ const MARKER_EDITOR_WIDTH: f32 = 252.;
 const MARKER_POPOVER_MARGIN: f32 = 12.;
 
 pub(super) struct MarkersState {
-    /// `place_markers` over the live project, rebuilt with the timeline.
     pub(super) placed: Vec<PlacedMarker>,
     pub(super) selected: Option<String>,
     pub(super) drag: Option<MarkerDrag>,
@@ -46,7 +37,6 @@ pub(super) struct MarkersState {
 pub(super) struct MarkerDrag {
     id: String,
     press_x: f32,
-    /// Output time under the pointer, or the original time until it moves.
     time: f64,
     moved: bool,
 }
@@ -56,8 +46,6 @@ struct MarkerEditor {
     anchor: Point<Pixels>,
 }
 
-/// Markers whose flags would overlap, drawn as one flag: `start` and `len`
-/// index the placed list, `x` is the first marker's offset into the strip.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct MarkerStack {
     pub(super) start: usize,
@@ -65,8 +53,6 @@ pub(super) struct MarkerStack {
     pub(super) x: f32,
 }
 
-/// Groups placed markers (sorted by time) into stacks at the given scale and
-/// drops the ones entirely outside a strip `width` pixels wide.
 pub(super) fn marker_stacks(
     placed: &[PlacedMarker],
     position: f64,
@@ -92,8 +78,6 @@ pub(super) fn marker_stacks(
     stacks
 }
 
-/// The zoom that spreads a stack's markers at least [`MARKER_SPREAD_PX`]
-/// apart, or `None` when they sit on the same instant and no zoom can.
 pub(super) fn spread_zoom(times: &[f64], content_width: f32) -> Option<f64> {
     let gap = times
         .windows(2)
@@ -210,7 +194,6 @@ impl EditorWindow {
             .position(|marker| marker.id == id)
     }
 
-    /// The position in the time-ordered list, which the default names count.
     fn marker_ordinal(&self, index: usize) -> usize {
         self.markers
             .placed
@@ -228,8 +211,7 @@ impl EditorWindow {
             .map(|placed| placed.time)
     }
 
-    /// A marker edit: one undo step, saved, redrawn. The renderer is not
-    /// told; nothing it draws depends on markers.
+    /// The renderer is not told: nothing it draws depends on markers.
     fn markers_changed(
         &mut self,
         reason: &'static str,
@@ -260,8 +242,8 @@ impl EditorWindow {
         self.markers.selected = None;
     }
 
-    /// `M`: a marker under the playhead. Pressing it again on the same frame
-    /// does not stack a duplicate.
+    /// A second press on the same frame selects the marker already there
+    /// instead of stacking a duplicate.
     pub(super) fn add_marker_at_playhead(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.project_ready() {
             return;
@@ -304,12 +286,11 @@ impl EditorWindow {
             .find(|placed| placed.time == time)
         {
             let id = self.project.markers[placed.index].id.clone();
-            self.markers.selected = Some(id);
+            self.select_marker(Some(id), cx);
         }
         self.seek_to_marker_time(time, cx);
     }
 
-    /// Seeks and scrolls the timeline so the marker is in view.
     fn seek_to_marker_time(&mut self, time: f64, cx: &mut Context<Self>) {
         let transform = self.view.transform;
         if time < transform.position || time > transform.position + transform.zoom {
@@ -341,7 +322,6 @@ impl EditorWindow {
         self.markers_changed("marker-delete", window, cx);
     }
 
-    /// Backspace or Delete with a marker selected.
     pub(super) fn delete_selected_marker(
         &mut self,
         window: &mut Window,
@@ -392,9 +372,8 @@ impl EditorWindow {
         self.markers_changed("marker-move", window, cx);
     }
 
-    /// Cuts every clip at every visible marker in one undo step. Markers on a
-    /// clip edge or too close to a crossfade are skipped, as a split there
-    /// would be.
+    /// Markers on a clip edge or too close to a crossfade are skipped, as a
+    /// split there would be.
     fn split_at_markers(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let times: Vec<f64> = self
             .markers
@@ -411,8 +390,6 @@ impl EditorWindow {
             self.note_edit("split-at-markers", Some(TrackKind::Clip));
         }
     }
-
-    // -- Pointer -------------------------------------------------------------
 
     fn marker_flag_down(
         &mut self,
@@ -438,10 +415,20 @@ impl EditorWindow {
         if markers.len() > 1 {
             let viewport_width: f32 = window.viewport_size().width.into();
             let times: Vec<f64> = markers.iter().map(|marker| marker.time).collect();
-            if let Some(zoom) = spread_zoom(&times, timeline::content_width(viewport_width)) {
-                let total = self.total_duration();
-                self.view.transform.update_zoom(zoom, first.time, total);
-                self.note_transform("marker-stack", Some(first.time));
+            let id = self.project.markers[first.index].id.clone();
+            self.select_marker(Some(id), cx);
+            match spread_zoom(&times, timeline::content_width(viewport_width))
+                .filter(|zoom| *zoom >= timeline::MAX_ZOOM_IN)
+            {
+                Some(zoom) => {
+                    let total = self.total_duration();
+                    self.view.transform.update_zoom(zoom, first.time, total);
+                    self.note_transform("marker-stack", Some(first.time));
+                }
+                None => {
+                    self.markers.editor = None;
+                    self.markers.list = Some(event.position);
+                }
             }
             self.seek_to_time(first.time, cx);
             cx.notify();
@@ -479,7 +466,6 @@ impl EditorWindow {
         self.open_marker_editor(id, event.position, window, cx);
     }
 
-    /// The root listener's move while a flag is held.
     pub(super) fn marker_drag_move(&mut self, x: f32, window: &mut Window, cx: &mut Context<Self>) {
         let Some(drag) = self.markers.drag.as_ref() else {
             return;
@@ -504,8 +490,6 @@ impl EditorWindow {
         self.invalidate_hover_chrome(cx);
     }
 
-    /// The root listener's release: a click seeks to the marker, a drag moves
-    /// it to the new instant.
     pub(super) fn marker_drag_up(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(drag) = self.markers.drag.take() else {
             return;
@@ -518,10 +502,6 @@ impl EditorWindow {
         cx.notify();
     }
 
-    // -- Keyboard ------------------------------------------------------------
-
-    /// `M` adds a marker, ⌥← / ⌥→ walk them, Backspace or Delete removes the
-    /// selected one. True when the key was used.
     pub(super) fn marker_key(
         &mut self,
         keystroke: &gpui::Keystroke,
@@ -555,7 +535,6 @@ impl EditorWindow {
         }
     }
 
-    /// Escape closes the marker popovers, then drops the marker selection.
     pub(super) fn marker_escape(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         if self.markers.editor.is_some() {
             self.close_marker_editor(false, window, cx);
@@ -571,8 +550,6 @@ impl EditorWindow {
         }
         false
     }
-
-    // -- Popovers ------------------------------------------------------------
 
     fn toggle_marker_list(&mut self, anchor: Point<Pixels>, cx: &mut Context<Self>) {
         if self.markers.list.take().is_some() {
@@ -598,7 +575,7 @@ impl EditorWindow {
         let label = self.project.markers[index].label.clone();
         let placeholder = tr::editor::markers::default_name(ordinal + 1);
         self.markers.list = None;
-        self.markers.selected = Some(id.clone());
+        self.select_marker(Some(id.clone()), cx);
         self.markers.editor = Some(MarkerEditor { id, anchor });
         self.markers.label_input.update(cx, |input, cx| {
             input.set_placeholder(placeholder);
@@ -622,8 +599,6 @@ impl EditorWindow {
         self.focus_root(window, cx);
         cx.notify();
     }
-
-    // -- Rendering -----------------------------------------------------------
 
     /// The markers as drawn: the live drag moves its marker without touching
     /// the project until release.
@@ -784,8 +759,6 @@ impl EditorWindow {
         Some(layer.into_any_element())
     }
 
-    /// A hairline down through the tracks under every flag, faint unless the
-    /// marker is selected or held.
     pub(super) fn render_marker_lines(&self, viewport_width: f32) -> Vec<gpui::AnyElement> {
         if !self.project_ready() || (self.markers.placed.is_empty() && self.markers.drag.is_none())
         {
@@ -827,7 +800,6 @@ impl EditorWindow {
         .collect()
     }
 
-    /// The transport's Markers button: the flag and how many markers play.
     pub(super) fn render_markers_button(
         &self,
         compact: bool,

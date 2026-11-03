@@ -2931,7 +2931,7 @@ hidden = { one = "{count} marker is in a part you cut out.", other = "{count} ma
 next = "Next marker"
 previous = "Previous marker"
 split = "Split clips at markers"
-stack = { one = "{count} marker. Click to zoom in.", other = "{count} markers. Click to zoom in." }
+stack = { one = "{count} marker. Click to see it.", other = "{count} markers close together. Click to see them." }
 title = "Markers"
 
 [ui]

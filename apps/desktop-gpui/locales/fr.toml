@@ -2929,7 +2929,7 @@ hidden = { one = "{count} repère se trouve dans une partie coupée.", other = "
 next = "Repère suivant"
 previous = "Repère précédent"
 split = "Couper les clips aux repères"
-stack = { one = "{count} repère. Cliquez pour zoomer.", other = "{count} repères. Cliquez pour zoomer." }
+stack = { one = "{count} repère. Cliquez pour le voir.", other = "{count} repères rapprochés. Cliquez pour les voir." }
 title = "Repères"
 
 [ui]

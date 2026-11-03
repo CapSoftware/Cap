@@ -1223,7 +1223,7 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
     );
     assert_eq!(
         tr::editor::markers::stack(4),
-        "4 markers. Click to zoom in."
+        "4 markers close together. Click to see them."
     );
 }
 

@@ -2929,7 +2929,7 @@ hidden = { other = "{count}件のマーカーはカットした部分にあり�
 next = "次のマーカー"
 previous = "前のマーカー"
 split = "マーカー位置でクリップを分割"
-stack = { other = "{count}件のマーカー。クリックで拡大します。" }
+stack = { other = "{count}件のマーカーが近接しています。クリックで表示します。" }
 title = "マーカー"
 
 [ui]

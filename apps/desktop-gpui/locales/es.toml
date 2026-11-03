@@ -2929,7 +2929,7 @@ hidden = { one = "{count} marcador está en una parte que recortaste.", other = 
 next = "Marcador siguiente"
 previous = "Marcador anterior"
 split = "Dividir clips en los marcadores"
-stack = { one = "{count} marcador. Haz clic para acercar.", other = "{count} marcadores. Haz clic para acercar." }
+stack = { one = "{count} marcador. Haz clic para verlo.", other = "{count} marcadores muy juntos. Haz clic para verlos." }
 title = "Marcadores"
 
 [ui]

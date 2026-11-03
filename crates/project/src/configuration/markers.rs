@@ -74,8 +74,6 @@ pub(super) fn deserialize_markers<'de, D: Deserializer<'de>>(
     })
 }
 
-/// A marker drawn on the timeline: its index in the project's marker list
-/// and where it lands in output time.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PlacedMarker {
     pub index: usize,
@@ -91,8 +89,6 @@ struct ClipSpan {
 }
 
 impl TimelineConfiguration {
-    /// Each clip's source range with its gapless output offset, the same
-    /// offsets the clip boxes are drawn from (`clip_timeline_offsets`).
     fn clip_spans(&self) -> Vec<ClipSpan> {
         let mut spans = Vec::with_capacity(self.segments.len());
         let mut offset = 0.0;
@@ -143,8 +139,6 @@ impl TimelineConfiguration {
             .map(|segment| (segment.recording_clip, segment.end))
     }
 
-    /// Every marker the timeline plays, sorted by output time. Markers in
-    /// footage that was cut out are left out.
     pub fn place_markers(&self, markers: &[TimelineMarker]) -> Vec<PlacedMarker> {
         if markers.is_empty() {
             return Vec::new();

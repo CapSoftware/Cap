@@ -2929,7 +2929,7 @@ hidden = { one = "{count} Marker liegt in einem herausgeschnittenen Teil.", othe
 next = "Nächster Marker"
 previous = "Vorheriger Marker"
 split = "Clips an Markern teilen"
-stack = { one = "{count} Marker. Zum Vergrößern klicken.", other = "{count} Marker. Zum Vergrößern klicken." }
+stack = { one = "{count} Marker. Zum Anzeigen klicken.", other = "{count} Marker dicht beieinander. Zum Anzeigen klicken." }
 title = "Marker"
 
 [ui]
