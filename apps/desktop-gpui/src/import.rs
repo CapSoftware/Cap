@@ -97,7 +97,7 @@ fn generate_project_name(source_path: &Path, fallback: &str) -> String {
 }
 
 /// `import.rs:125-132`.
-fn sanitize_filename(name: &str) -> String {
+pub(crate) fn sanitize_filename(name: &str) -> String {
     name.chars()
         .map(|c| match c {
             '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
@@ -397,11 +397,31 @@ pub fn import_screen_studio_from_path(source_path: PathBuf, cx: &mut App) {
     tracing::info!(source = %source_path.display(), "starting Screen Studio import");
     spawn_import(cx, move |tx| {
         let recordings_dir = crate::recording::recordings_dir();
-        let update = match std::fs::create_dir_all(&recordings_dir)
+        let mut reserved: Option<(PathBuf, String)> = None;
+        let result = std::fs::create_dir_all(&recordings_dir)
             .map_err(|error| error.to_string())
             .and_then(|()| {
-                crate::screen_studio_import::import_project(&recordings_dir, &source_path)
-            }) {
+                crate::screen_studio_import::import_project(
+                    &recordings_dir,
+                    &source_path,
+                    |project_path, progress| {
+                        let pretty_name = project_path
+                            .file_stem()
+                            .map(|stem| stem.to_string_lossy().into_owned())
+                            .unwrap_or_default();
+                        reserved = Some((project_path.to_path_buf(), pretty_name.clone()));
+                        let _ = tx.send(ImportProgress {
+                            kind: ImportKind::Video,
+                            project_path: project_path.to_path_buf(),
+                            pretty_name,
+                            stage: ImportStage::Converting,
+                            progress,
+                            message: String::new(),
+                        });
+                    },
+                )
+            });
+        let update = match result {
             Ok(project_path) => ImportProgress {
                 kind: ImportKind::Video,
                 pretty_name: project_path
@@ -413,14 +433,18 @@ pub fn import_screen_studio_from_path(source_path: PathBuf, cx: &mut App) {
                 progress: 100.0,
                 message: "Import complete".to_string(),
             },
-            Err(error) => ImportProgress {
-                kind: ImportKind::Video,
-                project_path: source_path.clone(),
-                pretty_name: String::new(),
-                stage: ImportStage::Failed,
-                progress: 0.0,
-                message: error,
-            },
+            Err(error) => {
+                let (project_path, pretty_name) =
+                    reserved.unwrap_or_else(|| (source_path.clone(), String::new()));
+                ImportProgress {
+                    kind: ImportKind::Video,
+                    project_path,
+                    pretty_name,
+                    stage: ImportStage::Failed,
+                    progress: 0.0,
+                    message: error,
+                }
+            }
         };
         let _ = tx.send(update);
     });

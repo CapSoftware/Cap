@@ -296,16 +296,7 @@ fn aspect_ratio(project: &Value) -> Option<AspectRatio> {
 // import already claimed the name, so each import only ever owns (and on
 // failure removes) a directory it created itself.
 fn reserve_project_path(recordings_dir: &Path, name: &str) -> Result<PathBuf, String> {
-    let sanitized: String = name
-        .chars()
-        .map(|c| {
-            if matches!(c, '/' | '\\' | ':') {
-                '-'
-            } else {
-                c
-            }
-        })
-        .collect();
+    let sanitized = crate::import::sanitize_filename(name);
     std::fs::create_dir_all(recordings_dir).map_err(|e| e.to_string())?;
     for counter in 0u32.. {
         let path = if counter == 0 {
@@ -397,7 +388,11 @@ impl Drop for PartialProject {
     }
 }
 
-pub fn import_project(recordings_dir: &Path, source: &Path) -> Result<PathBuf, String> {
+pub fn import_project(
+    recordings_dir: &Path,
+    source: &Path,
+    mut on_progress: impl FnMut(&Path, f64),
+) -> Result<PathBuf, String> {
     let recording_dir = source.join("recording");
     let metadata = read_json(&bundle_file(&recording_dir, "metadata.json")?)?;
     let sessions = sessions_by_type(&metadata)?;
@@ -438,12 +433,14 @@ pub fn import_project(recordings_dir: &Path, source: &Path) -> Result<PathBuf, S
         path: project_path.clone(),
         keep: false,
     };
+    on_progress(&project_path, 0.0);
     let segment_dir = project_path.join(SEGMENT_DIR);
     std::fs::create_dir_all(&segment_dir).map_err(|e| e.to_string())?;
     let relative = |file: &str| RelativePathBuf::from(format!("{SEGMENT_DIR}/{file}"));
     let offset_secs = |session: &Session| Some((session.start_ms - origin_ms) / 1000.0);
 
     clone_into(&display_source, &segment_dir.join("display.mp4"))?;
+    on_progress(&project_path, 50.0);
     let display_meta = VideoMeta {
         path: relative("display.mp4"),
         fps: video_fps(&display_source, None),
@@ -499,6 +496,8 @@ pub fn import_project(recordings_dir: &Path, source: &Path) -> Result<PathBuf, S
             digital_silence_ms: None,
         }
     });
+
+    on_progress(&project_path, 80.0);
 
     // Input events carry the same process clock as the media sessions, so
     // measuring them from the display start lines the cursor up with frames.
@@ -713,13 +712,10 @@ mod tests {
         assert!(bundle_file(bundle.path(), "display.mp4").is_err());
         assert!(bundle_file(bundle.path(), "plain.mp4").is_ok());
 
-        // A linked directory is refused too.
         let linked_dir = bundle.path().join("recording");
         std::os::unix::fs::symlink(outside.path(), &linked_dir).unwrap();
         assert!(bundle_file(&linked_dir, "secret.mp4").is_err());
 
-        // So is a name that reaches through a linked directory inside the
-        // bundle (`escape/secret.mp4`), and any name with a directory part.
         let recording = bundle.path().join("real");
         std::fs::create_dir(&recording).unwrap();
         std::os::unix::fs::symlink(outside.path(), recording.join("escape")).unwrap();
@@ -758,13 +754,26 @@ mod tests {
         .unwrap();
         let recordings = tempfile::tempdir().unwrap();
 
-        assert!(import_project(recordings.path(), &bundle).is_err());
+        let mut reported = Vec::new();
+        assert!(
+            import_project(recordings.path(), &bundle, |path, progress| {
+                reported.push((path.to_path_buf(), progress))
+            })
+            .is_err()
+        );
         assert_eq!(std::fs::read_dir(recordings.path()).unwrap().count(), 0);
+        assert!(!reported.is_empty(), "the import showed up before failing");
+        assert!(reported.iter().all(|(path, _)| *path == reported[0].0));
     }
 
     #[test]
     fn each_import_reserves_its_own_project_directory() {
         let recordings = tempfile::tempdir().unwrap();
+        let odd = reserve_project_path(recordings.path(), "Take \"2\": a/b?").unwrap();
+        assert_eq!(
+            odd.file_name().unwrap().to_string_lossy(),
+            "Take _2__ a_b_.cap"
+        );
         let first = reserve_project_path(recordings.path(), "Demo").unwrap();
         let second = reserve_project_path(recordings.path(), "Demo").unwrap();
         assert_ne!(first, second);
@@ -818,7 +827,6 @@ mod tests {
             metas: HashMap::new(),
         };
         assert_eq!(cursors.register("pointingHand"), None);
-        // A later image gets its own ID, not one an earlier event holds.
         std::fs::write(source.path().join("iBeam.png"), b"png").unwrap();
         let beam = cursors.register("iBeam").unwrap();
         assert!(cursors.metas.contains_key(&beam));
@@ -864,7 +872,7 @@ mod tests {
         let output_dir = std::env::var("CAP_SCREEN_STUDIO_OUTPUT")
             .map(PathBuf::from)
             .unwrap_or_else(|_| output.path().to_path_buf());
-        let project = import_project(&output_dir, Path::new(&source)).unwrap();
+        let project = import_project(&output_dir, Path::new(&source), |_, _| {}).unwrap();
         let meta = RecordingMeta::load_for_project(&project).unwrap();
         let RecordingMetaInner::Studio(studio) = &meta.inner else {
             panic!("expected a studio recording");
