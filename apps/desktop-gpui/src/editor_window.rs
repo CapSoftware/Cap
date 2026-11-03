@@ -244,7 +244,6 @@ fn editor_player_width(viewport_width: f32) -> f32 {
     (viewport_width - SIDEBAR_WIDTH - 8. - 16. - 2.).max(0.)
 }
 
-/// The resize grip between the player and the transcript.
 const TRANSCRIPT_GRIP_WIDTH: f32 = 12.;
 
 fn transcript_row_width(viewport_width: f32) -> f32 {
@@ -3438,8 +3437,6 @@ impl EditorWindow {
         }
     }
 
-    /// Plays from `from` and stops itself at `until`, the way a 3D shot is
-    /// auditioned.
     pub(crate) fn play_range(&mut self, from: f64, until: f64, cx: &mut Context<Self>) {
         if self.playing {
             self.stop_playback(cx);
@@ -4193,8 +4190,6 @@ impl EditorWindow {
         self.sidebar_view.update(cx, |_, cx| cx.notify());
     }
 
-    /// The transcript panel's own redraw, for the playback highlight and its
-    /// pointer state.
     pub(crate) fn invalidate_transcript(&mut self, cx: &mut Context<Self>) {
         self.transcript_view.update(cx, |_, cx| cx.notify());
     }
@@ -10236,8 +10231,6 @@ impl EditorWindow {
             .bg(Hsla::from(self.theme.editor.line_strong))
     }
 
-    /// The Transcript toggle, beside Clips: the two layout modes replace the
-    /// config sidebar's column, so opening one closes the other.
     fn render_transcript_pill(&self, compact: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         ui::EditorButton::plain(&theme, "editor-transcript-pill")
@@ -10251,7 +10244,6 @@ impl EditorWindow {
             .on_click(cx.listener(|this, _, window, cx| this.toggle_transcript(window, cx)))
     }
 
-    /// The vertical grip between the player and the transcript.
     fn render_transcript_grip(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         div()

@@ -348,8 +348,6 @@ impl EditorWindow {
         )
     }
 
-    /// Writes every word with whether it plays and when, for checking an
-    /// export against the transcript.
     fn transcript_dump(&self, path: &str) -> String {
         let (Some(doc), Some(edl)) = (&self.transcript.doc, &self.transcript.edl) else {
             return "no transcript".into();

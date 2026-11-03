@@ -91,7 +91,6 @@ impl EnergyEnvelope {
         Some((clip, source - self.clip_offsets[clip]))
     }
 
-    /// Mean square over the hop containing `source`, `None` outside the audio.
     pub fn energy_at(&self, source: f64) -> Option<f32> {
         let (clip, local) = self.locate(source)?;
         if local < 0.0 {
