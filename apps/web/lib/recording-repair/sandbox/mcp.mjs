@@ -117,7 +117,7 @@ const TOOLS = [
 	{
 		name: "stage_replace",
 		description:
-			"Stage replacing (or creating) a bundle media file with a file you produced under /vercel/sandbox/work/out/. JSON files cannot be replaced; use stage_json_edit.",
+			"Stage replacing (or creating) a bundle media file with a file you produced under /vercel/sandbox/work/out/. JSON files cannot be replaced; use stage_json_edit. Replacing a file counts all of its real (non-zero) bytes against the content-loss limit, so only replace empty or zero-filled media.",
 		inputSchema: object(
 			{
 				path,

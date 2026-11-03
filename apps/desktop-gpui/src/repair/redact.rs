@@ -267,6 +267,23 @@ pub fn restore_hidden(
     }
 }
 
+/// Every complete string literal in `text`, valid or cut-off JSON.
+pub fn string_literals(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = text;
+    while let Some(start) = rest.find('"') {
+        let after = &rest[start + 1..];
+        let Some(end) = find_string_end(after) else {
+            break;
+        };
+        if let Ok(value) = serde_json::from_str::<String>(&format!("\"{}\"", &after[..end])) {
+            out.push(value);
+        }
+        rest = &after[end + 1..];
+    }
+    out
+}
+
 fn find_string_end(text: &str) -> Option<usize> {
     let bytes = text.as_bytes();
     let mut index = 0;

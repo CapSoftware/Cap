@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -719,6 +719,44 @@ impl Workspace {
         Ok((end - start).saturating_sub(zero))
     }
 
+    /// Media files a JSON document names, relative to the bundle or to the
+    /// document's own folder (fragment manifests use bare file names).
+    fn media_references(&self, rel: &RelPath, text: &str) -> BTreeSet<RelPath> {
+        let dir = rel.as_str().rsplit_once('/').map(|(dir, _)| dir);
+        redact::string_literals(text)
+            .into_iter()
+            .flat_map(|value| {
+                let nested = dir.map(|dir| format!("{dir}/{value}"));
+                [Some(value), nested]
+            })
+            .flatten()
+            .filter_map(|candidate| RelPath::parse(&candidate).ok())
+            .filter(|candidate| {
+                candidate.is_media() && matches!(self.original(candidate), Ok(Some(_)))
+            })
+            .collect()
+    }
+
+    /// Real (non-zero) bytes of media the edit stops naming. Unlinking a file
+    /// from the metadata hides it from Cap as surely as deleting it, so it is
+    /// charged against the same allowance; files that are gone cost nothing.
+    fn dereferenced_loss(&self, rel: &RelPath, before: &str, after: &str) -> Result<u64, String> {
+        let kept = self.media_references(rel, after);
+        let mut loss = 0u64;
+        for dropped in self.media_references(rel, before).difference(&kept) {
+            let Some((path, len)) = self.original(dropped)? else {
+                continue;
+            };
+            let (zero, _) = media::zero_bytes_in_range_until(&path, 0, len, u64::MAX)
+                .map_err(|error| format!("cannot scan file: {error}"))?;
+            loss = loss.saturating_add(len.saturating_sub(zero));
+            if loss > self.allowance {
+                return Err(self.loss_refusal());
+            }
+        }
+        Ok(loss)
+    }
+
     fn loss_refusal(&self) -> String {
         format!(
             "refused: this would discard more than {} of real recording data (only zero-filled data can be dropped freely)",
@@ -752,12 +790,14 @@ impl Workspace {
         if ops.is_empty() || ops.len() > MAX_JSON_OPS {
             return Err(format!("between 1 and {MAX_JSON_OPS} ops are required"));
         }
-        let hidden = match self.original(rel)? {
-            Some((path, len)) if len <= MAX_JSON_BYTES => redact::hidden_values(
-                &String::from_utf8_lossy(&std::fs::read(&path).map_err(|error| error.to_string())?),
-            ),
-            _ => redact::HiddenValues::new(),
+        let original_text = match self.original(rel)? {
+            Some((path, len)) if len <= MAX_JSON_BYTES => {
+                String::from_utf8_lossy(&std::fs::read(&path).map_err(|error| error.to_string())?)
+                    .into_owned()
+            }
+            _ => String::new(),
         };
+        let hidden = redact::hidden_values(&original_text);
         let ops = ops
             .iter()
             .cloned()
@@ -820,6 +860,7 @@ impl Workspace {
         if bytes.len() as u64 > MAX_JSON_BYTES {
             return Err("edited JSON is too large".into());
         }
+        let loss = self.dereferenced_loss(rel, &original_text, &String::from_utf8_lossy(&bytes))?;
         self.ensure_dir()?;
         let staged_path = self.next_staged_path(rel);
         std::fs::write(&staged_path, &bytes).map_err(|error| error.to_string())?;
@@ -830,7 +871,7 @@ impl Workspace {
                     staged: staged_path,
                 },
                 had_original: original.is_some(),
-                loss: 0,
+                loss,
             },
         )?;
         Ok(json!({ "staged": true }))
@@ -838,6 +879,9 @@ impl Workspace {
 
     pub fn stage_truncate(&mut self, rel: &RelPath, length: u64) -> Result<Value, String> {
         self.check_writable(rel)?;
+        if !rel.is_media() {
+            return Err("only media files can be truncated; edit JSON with stage_json_edit".into());
+        }
         match self.changes.get(rel).map(|staged| &staged.change) {
             Some(Change::Edit { .. }) | Some(Change::Replace { .. }) => {
                 return Err("this file has a staged rewrite; discard_staged first".into());
@@ -920,8 +964,7 @@ impl Workspace {
             Some((path, len)) if rel.is_media() => {
                 let (zero, _) = media::zero_bytes_in_range_until(path, 0, *len, u64::MAX)
                     .map_err(|error| error.to_string())?;
-                let non_zero = len.saturating_sub(zero);
-                let loss = non_zero.saturating_sub(new_size);
+                let loss = len.saturating_sub(zero);
                 let used = self.loss_used().saturating_sub(previous);
                 if used.saturating_add(loss) > self.allowance {
                     return Err(self.loss_refusal());
@@ -1481,6 +1524,32 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn unlinking_real_media_from_json_counts_as_loss() {
+        let bundle = fixture("unlink");
+        let mut ws = workspace(&bundle);
+        let error = ws
+            .stage_json_edit(&manifest(), &[op(JsonOpKind::Remove, "/segments/0", None)])
+            .unwrap_err();
+        assert!(error.contains("refused"), "{error}");
+        ws.stage_json_edit(&manifest(), &[op(JsonOpKind::Remove, "/segments/1", None)])
+            .unwrap();
+        ws.stage_json_edit(
+            &manifest(),
+            &[op(
+                JsonOpKind::Set,
+                "/segments/0/is_complete",
+                Some(json!(false)),
+            )],
+        )
+        .unwrap();
+        assert!(
+            ws.stage_truncate(&RelPath::parse("recording-meta.json").unwrap(), 0)
+                .is_err()
+        );
+        std::fs::remove_dir_all(bundle.parent().unwrap()).ok();
+    }
+
+    #[test]
     fn rebuilding_a_cut_off_meta_keeps_its_hidden_title() {
         let bundle = fixture("cutmeta");
         let meta = RelPath::parse("recording-meta.json").unwrap();
@@ -1699,21 +1768,23 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn replace_counts_shrinkage_against_the_guard() {
+    fn replace_charges_the_originals_real_bytes() {
         let bundle = fixture("replace");
         let mut ws = workspace(&bundle);
+        for size in [1024, 40 * 1024 * 1024] {
+            let incoming = ws.incoming_path().unwrap();
+            std::fs::write(&incoming, vec![1u8; size]).unwrap();
+            assert!(
+                ws.stage_replace(&real(), &incoming)
+                    .unwrap_err()
+                    .starts_with("refused")
+            );
+            assert!(!incoming.exists());
+        }
         let incoming = ws.incoming_path().unwrap();
         std::fs::write(&incoming, vec![1u8; 1024]).unwrap();
-        assert!(
-            ws.stage_replace(&real(), &incoming)
-                .unwrap_err()
-                .starts_with("refused")
-        );
-        assert!(!incoming.exists());
-        let incoming = ws.incoming_path().unwrap();
-        std::fs::write(&incoming, vec![1u8; 39 * 1024 * 1024]).unwrap();
-        ws.stage_replace(&real(), &incoming).unwrap();
-        assert_eq!(ws.loss_used(), 1024 * 1024);
+        ws.stage_replace(&torn(), &incoming).unwrap();
+        assert_eq!(ws.loss_used(), 0);
         assert_eq!(ws.list_staged()["changes"][0]["change"], json!("replace"));
         std::fs::remove_dir_all(bundle.parent().unwrap()).ok();
     }
@@ -1805,7 +1876,11 @@ pub(crate) mod tests {
             let mut ws = workspace(&bundle);
             ws.stage_json_edit(
                 &manifest(),
-                &[op(JsonOpKind::Set, "/segments", Some(json!([])))],
+                &[op(
+                    JsonOpKind::Set,
+                    "/segments/1/is_complete",
+                    Some(json!(false)),
+                )],
             )
             .unwrap();
             ws.stage_remove(&torn()).unwrap();
