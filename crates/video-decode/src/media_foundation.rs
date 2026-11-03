@@ -1703,18 +1703,62 @@ mod tests {
         context: &ID3D11DeviceContext,
         staging: &ID3D11Texture2D,
         height: u32,
-    ) -> Vec<u8> {
+    ) -> (Vec<u8>, usize) {
         let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
         unsafe {
             context
                 .Map(staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))
                 .unwrap();
             let y_stride = mapped.RowPitch as usize;
-            let len = y_stride * height as usize + y_stride * (height / 2) as usize;
+            let len = y_stride * height as usize + y_stride * height.div_ceil(2) as usize;
             let data = std::slice::from_raw_parts(mapped.pData as *const u8, len).to_vec();
             context.Unmap(staging, 0);
-            data
+            (data, y_stride)
         }
+    }
+
+    fn assert_nv12_visible_rows_equal(
+        actual: &[u8],
+        actual_pitch: usize,
+        expected: &[u8],
+        expected_pitch: usize,
+        width: u32,
+        height: u32,
+    ) {
+        assert_eq!(actual_pitch, expected_pitch);
+        let luma_rows = height as usize;
+        let chroma_rows = height.div_ceil(2) as usize;
+        let visible = width as usize;
+        assert_eq!(actual.len(), actual_pitch * (luma_rows + chroma_rows));
+        assert_eq!(expected.len(), expected_pitch * (luma_rows + chroma_rows));
+
+        for row in 0..luma_rows {
+            let start = row * actual_pitch;
+            assert_eq!(
+                &actual[start..start + visible],
+                &expected[start..start + visible],
+                "luma row {row} differs"
+            );
+        }
+        let chroma_start = actual_pitch * luma_rows;
+        for row in 0..chroma_rows {
+            let start = chroma_start + row * actual_pitch;
+            assert_eq!(
+                &actual[start..start + visible],
+                &expected[start..start + visible],
+                "chroma row {row} differs"
+            );
+        }
+    }
+
+    fn assert_nv12_samples_equal(
+        actual: &(i64, usize, Vec<u8>),
+        expected: &(i64, usize, Vec<u8>),
+        width: u32,
+        height: u32,
+    ) {
+        assert_eq!(actual.0, expected.0);
+        assert_nv12_visible_rows_equal(&actual.2, actual.1, &expected.2, expected.1, width, height);
     }
 
     fn recycle_reclaimed(
@@ -1796,8 +1840,9 @@ mod tests {
                         surface.subresource,
                         Some(&source_box),
                     );
-                    let data = blocking_map_copy(&decoder.d3d11_context, &staging, video_height);
-                    expected.push((surface.pts, data));
+                    let (data, pitch) =
+                        blocking_map_copy(&decoder.d3d11_context, &staging, video_height);
+                    expected.push((surface.pts, pitch, data));
                     decoder.staging_pool.recycle(staging);
                 },
                 end => {
@@ -1814,7 +1859,11 @@ mod tests {
         let mut read = Vec::new();
         let end = loop {
             match decoder.read_nv12() {
-                Ok(Some(sample)) => read.push((sample.pts, sample.data.as_slice().to_vec())),
+                Ok(Some(sample)) => read.push((
+                    sample.pts,
+                    sample.data.y_stride as usize,
+                    sample.data.as_slice().to_vec(),
+                )),
                 end => break end.is_err(),
             }
         };
@@ -1824,7 +1873,10 @@ mod tests {
             "the decoder surface must stay macroblock-aligned for this test"
         );
         assert!(expected.len() > READBACK_DEPTH);
-        assert!(read == expected);
+        assert_eq!(read.len(), expected.len());
+        for (actual, expected) in read.iter().zip(&expected) {
+            assert_nv12_samples_equal(actual, expected, video_width, video_height);
+        }
         assert_eq!(end, expected_end);
 
         let stats = decoder.readback_stats();
@@ -1840,13 +1892,27 @@ mod tests {
 
         let first = |decoder: &mut MediaFoundationDecoder| {
             let sample = decoder.read_nv12().unwrap().unwrap();
-            (sample.pts, sample.data.as_slice().to_vec())
+            (
+                sample.pts,
+                sample.data.y_stride as usize,
+                sample.data.as_slice().to_vec(),
+            )
         };
         decoder.seek(0).unwrap();
-        assert!(first(&mut decoder) == expected[0]);
+        assert_nv12_samples_equal(
+            &first(&mut decoder),
+            &expected[0],
+            video_width,
+            video_height,
+        );
         decoder.read_nv12().unwrap();
         decoder.seek(0).unwrap();
-        assert!(first(&mut decoder) == expected[0]);
+        assert_nv12_samples_equal(
+            &first(&mut decoder),
+            &expected[0],
+            video_width,
+            video_height,
+        );
     }
 
     #[test]
@@ -1939,7 +2005,7 @@ mod tests {
             context.Flush();
         }
 
-        let old = unsafe { blocking_map_copy(&context, &old_staging, HEIGHT) };
+        let (old, old_pitch) = unsafe { blocking_map_copy(&context, &old_staging, HEIGHT) };
         pool.recycle(old_staging);
 
         let (reclaim_tx, reclaim_rx) = mpsc::channel();
@@ -1959,8 +2025,14 @@ mod tests {
             )
             .unwrap()
         };
-        assert_eq!(new.as_slice(), old.as_slice());
-        assert_eq!(new.as_slice().len(), old.len());
+        assert_nv12_visible_rows_equal(
+            new.as_slice(),
+            new.y_stride as usize,
+            &old,
+            old_pitch,
+            WIDTH,
+            HEIGHT,
+        );
         println!(
             "MediaFoundation software-decode parity: 1 frame, {WIDTH}x{HEIGHT}, {SURFACE_HEIGHT}-row source"
         );
