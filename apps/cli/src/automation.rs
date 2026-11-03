@@ -316,10 +316,7 @@ impl AutomationHost for CliAutomationHost {
             .map_err(|e| format!("Failed to serialize webhook body: {e}"))?
         };
 
-        let mut req = client.request(method, url).body(body);
-        for (k, v) in headers {
-            req = req.header(k, v);
-        }
+        let req = webhook_request(&client, method, url, body, body_template.is_none(), headers);
         let resp = req
             .send()
             .await
@@ -380,6 +377,28 @@ impl AutomationHost for CliAutomationHost {
             .ok_or("No project path for deletion")?;
         std::fs::remove_dir_all(path).map_err(|e| format!("Failed to delete: {e}"))
     }
+}
+
+fn webhook_request(
+    client: &reqwest::Client,
+    method: reqwest::Method,
+    url: &str,
+    body: String,
+    default_json: bool,
+    headers: &HashMap<String, String>,
+) -> reqwest::RequestBuilder {
+    let mut req = client.request(method, url).body(body);
+    if default_json
+        && !headers
+            .keys()
+            .any(|key| key.eq_ignore_ascii_case("content-type"))
+    {
+        req = req.header(reqwest::header::CONTENT_TYPE, "application/json");
+    }
+    for (key, value) in headers {
+        req = req.header(key, value);
+    }
+    req
 }
 
 fn map_compression(
@@ -581,6 +600,46 @@ pub fn list(format: crate::OutputFormat) -> Result<(), String> {
 mod tests {
     use super::*;
     use cap_automation::{Action, AutomationRule, MatchMode};
+
+    #[tokio::test]
+    async fn webhook_default_json_sets_content_type_unless_supplied() {
+        let client = reqwest::Client::new();
+        let build = |default_json, headers: &HashMap<String, String>| {
+            webhook_request(
+                &client,
+                reqwest::Method::POST,
+                "http://localhost/",
+                "{\"project_path\":null}".into(),
+                default_json,
+                headers,
+            )
+            .build()
+            .unwrap()
+        };
+
+        let default = build(true, &HashMap::new());
+        assert_eq!(
+            default.headers()[reqwest::header::CONTENT_TYPE],
+            "application/json"
+        );
+        assert_eq!(
+            default.body().unwrap().as_bytes().unwrap(),
+            b"{\"project_path\":null}"
+        );
+
+        let explicit = HashMap::from([("cOnTeNt-TyPe".into(), "application/custom".into())]);
+        let request = build(true, &explicit);
+        let values: Vec<_> = request
+            .headers()
+            .get_all(reqwest::header::CONTENT_TYPE)
+            .iter()
+            .collect();
+        assert_eq!(values.len(), 1);
+        assert_eq!(values[0], "application/custom");
+
+        let custom = build(false, &HashMap::new());
+        assert!(!custom.headers().contains_key(reqwest::header::CONTENT_TYPE));
+    }
 
     #[test]
     fn cli_presets_keep_caption_source_and_edits_after_reopening() {
