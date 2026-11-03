@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
 	},
 	quota: vi.fn(),
 	restrictedRedirect: vi.fn(),
+	foreignRedirect: vi.fn(),
 	user: vi.fn(),
 	authenticated: false,
 	ownerIsPro: false,
@@ -109,6 +110,7 @@ vi.mock("@/lib/shareable-link-quota", () => ({
 vi.mock("@/lib/share-web-url", () => ({
 	resolveShareWebUrl: vi.fn(),
 	resolveRestrictedShareRedirect: mocks.restrictedRedirect,
+	resolveForeignShareRedirect: mocks.foreignRedirect,
 }));
 vi.mock("@/lib/transcribe", () => ({ transcribeVideo: vi.fn() }));
 vi.mock("@/lib/video-download-permissions", () => ({
@@ -206,6 +208,7 @@ describe("share page loading", () => {
 		mocks.playbackUrl.mockResolvedValue("https://media.example.com/result.mp4");
 		mocks.quota.mockResolvedValue(false);
 		mocks.restrictedRedirect.mockResolvedValue(null);
+		mocks.foreignRedirect.mockResolvedValue(null);
 		mocks.defaultStorage = true;
 		mocks.userAgent = "";
 		mocks.buildEnv.NEXT_PUBLIC_IS_CAP = undefined;
@@ -241,6 +244,20 @@ describe("share page loading", () => {
 		const page = (await renderPage()) as ReactElement;
 		expect(page.type).toBe(PasswordGate);
 		expect(mocks.restrictedRedirect).not.toHaveBeenCalled();
+	});
+
+	it("sends another organization's video on a custom domain to the main origin", async () => {
+		mocks.foreignRedirect.mockResolvedValue("https://cap.so/s/video");
+		await expect(renderPage()).rejects.toThrow(
+			"REDIRECT https://cap.so/s/video",
+		);
+		expect(mocks.foreignRedirect).toHaveBeenCalledWith(
+			expect.any(Headers),
+			"video",
+			{},
+		);
+		expect(mocks.select).not.toHaveBeenCalled();
+		expect(mocks.playbackUrl).not.toHaveBeenCalled();
 	});
 
 	it("does not look up the host for authorized videos", async () => {
