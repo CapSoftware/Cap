@@ -568,6 +568,7 @@ impl EditorWindow {
             self.close_clips(window, cx);
         } else {
             self.clips.open = true;
+            self.transcript.open = false;
         }
         cx.notify();
     }
