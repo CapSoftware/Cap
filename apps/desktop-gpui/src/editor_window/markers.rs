@@ -122,6 +122,16 @@ pub(super) fn neighbour_marker(placed: &[PlacedMarker], time: f64, forward: bool
     }
 }
 
+/// Splits the clip under each output time. Splits never move footage, so
+/// the times stay valid as the clips are cut one after another.
+pub(super) fn split_clips_at(timeline: &mut TimelineConfiguration, times: &[f64]) -> bool {
+    let mut changed = false;
+    for time in times {
+        changed |= edits::split_clip_segment(timeline, *time, None);
+    }
+    changed
+}
+
 fn parse_marker_color(value: Option<&str>) -> Hsla {
     let value = value.unwrap_or(MARKER_COLORS[0]);
     let hex = value.trim_start_matches('#');
@@ -395,17 +405,7 @@ impl EditorWindow {
         if times.is_empty() {
             return;
         }
-        let split = self.edit(
-            |timeline| {
-                let mut changed = false;
-                for time in &times {
-                    changed |= edits::split_clip_segment(timeline, *time, None);
-                }
-                changed
-            },
-            window,
-            cx,
-        );
+        let split = self.edit(|timeline| split_clips_at(timeline, &times), window, cx);
         if split {
             self.markers.list = None;
             self.note_edit("split-at-markers", Some(TrackKind::Clip));
@@ -1412,6 +1412,31 @@ mod tests {
         assert_eq!(neighbour_marker(&markers, 3.0, true), None);
         assert_eq!(neighbour_marker(&markers, 0.0, false), None);
         assert_eq!(neighbour_marker(&[], 0.0, true), None);
+    }
+
+    #[test]
+    fn splitting_at_markers_keeps_every_marker_in_place() {
+        let mut timeline: TimelineConfiguration = serde_json::from_value(serde_json::json!({
+            "segments": [
+                { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 10.0 },
+                { "recordingSegment": 1, "timescale": 2.0, "start": 0.0, "end": 8.0 },
+            ],
+            "zoomSegments": [],
+        }))
+        .unwrap();
+        let markers = vec![
+            TimelineMarker::new(0, 2.5),
+            TimelineMarker::new(0, 10.0),
+            TimelineMarker::new(1, 3.0),
+            TimelineMarker::new(1, 9.0),
+        ];
+        let before = timeline.place_markers(&markers);
+        assert_eq!(before.len(), 3);
+        let times: Vec<f64> = before.iter().map(|placed| placed.time).collect();
+        assert!(split_clips_at(&mut timeline, &times));
+        assert_eq!(timeline.segments.len(), 4);
+        assert_eq!(timeline.place_markers(&markers), before);
+        assert!(!split_clips_at(&mut timeline, &times));
     }
 
     #[test]
