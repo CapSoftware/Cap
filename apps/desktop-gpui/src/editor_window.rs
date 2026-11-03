@@ -3846,7 +3846,9 @@ impl EditorWindow {
             }
             return;
         }
-        if let Some(faster) = preview_speed_shortcut(keystroke) {
+        if let Some(faster) = preview_speed_shortcut(keystroke)
+            && !self.has_open_menu()
+        {
             cx.stop_propagation();
             self.step_preview_speed(faster, window, cx);
             return;
@@ -7294,6 +7296,21 @@ impl EditorWindow {
         }
         self.invalidate_playback_chrome(window, cx);
         cx.notify();
+    }
+
+    fn has_open_menu(&self) -> bool {
+        self.sidebar.menu.is_some()
+            || self.toolbar_menu.is_some()
+            || self.text_menu.is_some()
+            || self.add_track.is_some()
+            || self.clip_speed.is_some()
+            || self.sidebar.color_picker.is_some()
+            || self.presets_menu.is_some()
+            || self.preset_dialog.is_some()
+            || self.clips.has_open_menu()
+            || self.audio_picker.is_some()
+            || self.camera3d_picker
+            || self.frame_controls.is_open()
     }
 
     fn step_preview_speed(&mut self, faster: bool, window: &mut Window, cx: &mut Context<Self>) {
@@ -11032,9 +11049,6 @@ impl EditorWindow {
             )
     }
 
-    /// The preview speed trigger beside the transport. Quiet at 1x; any other
-    /// speed wears the accent so a sped-up preview is never mistaken for the
-    /// recording's own pace.
     fn render_preview_speed(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let editor = theme.editor;
@@ -11079,11 +11093,13 @@ impl EditorWindow {
                     }
                 })
             })
-            .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
-            .tooltip(move |_window, cx| {
-                ui::Tooltip::new(&theme, tr::editor::window::transport::speed())
-                    .keys(["<", ">"])
-                    .view(cx)
+            .when(!open, |this| {
+                this.tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
+                    .tooltip(move |_window, cx| {
+                        ui::Tooltip::new(&theme, tr::editor::window::transport::speed())
+                            .keys(["<", ">"])
+                            .view(cx)
+                    })
             })
             .child(self.preview_speed.label());
         if enabled {

@@ -418,14 +418,20 @@ async fn load_recording(
     Ok((recording_meta, meta, project, recordings))
 }
 
-fn process_cpu_secs() -> f64 {
+#[cfg(unix)]
+fn process_cpu_secs() -> Option<f64> {
     let mut usage = std::mem::MaybeUninit::<libc::rusage>::zeroed();
     if unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) } != 0 {
-        return 0.0;
+        return None;
     }
     let usage = unsafe { usage.assume_init() };
     let secs = |time: libc::timeval| time.tv_sec as f64 + time.tv_usec as f64 / 1_000_000.0;
-    secs(usage.ru_utime) + secs(usage.ru_stime)
+    Some(secs(usage.ru_utime) + secs(usage.ru_stime))
+}
+
+#[cfg(not(unix))]
+fn process_cpu_secs() -> Option<f64> {
+    None
 }
 
 fn arg_value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
@@ -515,6 +521,32 @@ async fn main() {
             })
             .unwrap_or_default(),
     );
+    let speed_changes: Vec<(Duration, cap_editor::PreviewSpeed)> = arg_value(
+        &args,
+        "--preview-speed-changes",
+    )
+    .map(|value| {
+        value
+            .split(',')
+            .map(|change| {
+                change
+                    .split_once('@')
+                    .and_then(|(speed, at)| {
+                        Some((
+                            Duration::try_from_secs_f64(at.trim().parse().ok()?).ok()?,
+                            cap_editor::PreviewSpeed::from_f64(speed.trim().parse().ok()?)?,
+                        ))
+                    })
+                    .unwrap_or_else(|| {
+                        eprintln!(
+                            "--preview-speed-changes expects speed@seconds pairs, got {change:?}"
+                        );
+                        std::process::exit(2);
+                    })
+            })
+            .collect()
+    })
+    .unwrap_or_default();
     let start_frame_number = arg_value(&args, "--start-frame")
         .and_then(|s| s.parse().ok())
         .or_else(|| {
@@ -657,7 +689,7 @@ async fn main() {
 
     let mut summary = BenchmarkSummary::default();
     let mut measured_elapsed = 0.0f64;
-    let mut measured_cpu = 0.0f64;
+    let mut measured_cpu: Option<f64> = None;
     let mut live_edit_high = false;
 
     for (press_idx, (press_start_frame, press_frames)) in presses.iter().copied().enumerate() {
@@ -679,6 +711,18 @@ async fn main() {
         };
 
         let press_instant = Instant::now();
+        for (at, speed) in speed_changes.iter().copied() {
+            let handle = preview_speed.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(at).await;
+                handle.set(speed);
+                println!(
+                    "Preview speed -> {} at {:.1}s",
+                    speed.label(),
+                    at.as_secs_f64()
+                );
+            });
+        }
         let playback_handle = match playback.start(fps, resolution_base).await {
             Ok(handle) => handle,
             Err(e) => {
@@ -740,7 +784,9 @@ async fn main() {
         }
 
         let press_elapsed = start.elapsed().as_secs_f64();
-        measured_cpu = process_cpu_secs() - cpu_start;
+        measured_cpu = process_cpu_secs()
+            .zip(cpu_start)
+            .map(|(end, start)| end - start);
 
         playback_handle.stop();
         tokio::time::sleep(Duration::from_millis(250)).await;
@@ -836,10 +882,12 @@ async fn main() {
             preview_speed.get().label()
         );
     }
-    println!(
-        "Process CPU: {measured_cpu:.2}s over {measured_elapsed:.2}s ({:.0}% of one core)",
-        measured_cpu / measured_elapsed.max(0.001) * 100.0
-    );
+    if let Some(cpu) = measured_cpu {
+        println!(
+            "Process CPU: {cpu:.2}s over {measured_elapsed:.2}s ({:.0}% of one core)",
+            cpu / measured_elapsed.max(0.001) * 100.0
+        );
+    }
     println!("Top measured p95 stage: {top_stage} ({top_stage_p95:.2}ms)");
 
     println!("\nPlayback stages:");

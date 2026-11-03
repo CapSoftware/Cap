@@ -753,6 +753,7 @@ impl Playback {
         let mut prefetch_stop_rx = stop_rx.clone();
         let mut prefetch_project = self.project.clone();
         let prefetch_speed = self.preview_speed.clone();
+        let mut prefetch_previous_speed = prefetch_speed.get();
         let prefetch_segment_medias = self.segment_medias.clone();
         let (prefetch_duration, has_timeline) = self
             .project
@@ -858,6 +859,12 @@ impl Playback {
 
                 let current_playback_frame = *playback_position_rx.borrow_and_update();
                 let speed = prefetch_speed.get();
+                if speed != prefetch_previous_speed {
+                    if speed < prefetch_previous_speed {
+                        next_prefetch_frame = next_prefetch_frame.min(current_playback_frame);
+                    }
+                    prefetch_previous_speed = speed;
+                }
                 let max_prefetch_ahead = producer_prefetch_frame_limit
                     .load(Ordering::Relaxed)
                     .clamp(INITIAL_PREFETCH_BUFFER_SIZE, MAX_PREFETCH_BUFFER_SIZE)

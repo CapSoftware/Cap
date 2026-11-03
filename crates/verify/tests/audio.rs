@@ -1159,9 +1159,8 @@ fn preview_speed_playback() {
                 );
             }
             let level = rms(&pcm);
-            let window = &normal[..pcm.len().min(normal.len()) * 2 / 2];
-            let expected = rms(&window
-                [..((window.len() as f64 * speed.as_f64()) as usize).min(window.len()) / 2 * 2]);
+            let covered = ((pcm.len() / 2) as f64 * speed.as_f64()) as usize * 2;
+            let expected = rms(&normal[..covered.min(normal.len())]);
             if expected > 1e-3 && !(0.7..1.3).contains(&(level / expected)) {
                 case.problem(
                     "level",
