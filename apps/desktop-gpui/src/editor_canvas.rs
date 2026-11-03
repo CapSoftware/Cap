@@ -1263,8 +1263,6 @@ impl EditorWindow {
                 let Some(segment) = timeline.image_segments.get_mut(index) else {
                     return;
                 };
-                // An animated property edits the key under the playhead
-                // (adding one there); a still one moves the overlay itself.
                 // A key is only written for a property the gesture changed:
                 // each span eases on its own, so an extra key bends the curve.
                 let at = segment.key_time(now);
@@ -1298,7 +1296,6 @@ impl EditorWindow {
                 let Some(segment) = timeline.text_segments.get_mut(index) else {
                     return;
                 };
-                // Text keys position only; its box follows the font size.
                 let at = segment.key_time(now);
                 let (current_center, _, _) = segment.keyframes.sample(
                     segment.center,

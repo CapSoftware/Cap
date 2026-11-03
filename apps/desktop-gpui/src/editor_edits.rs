@@ -3142,7 +3142,6 @@ mod tests {
         let mut image = keyed_image();
         image.trim_start_to(8.0);
         assert_eq!(image.keyframes.times(), vec![4.0, 7.0, 10.0]);
-        // The end handle leaves keys alone.
         let mut image = keyed_image();
         image.set_end(15.0);
         assert_eq!(image.keyframes.times(), vec![2.0, 5.0, 8.0]);

@@ -1192,7 +1192,6 @@ pub enum SegmentDetail {
     Image {
         name: SharedString,
         enabled: bool,
-        /// Keyframe times, seconds from the segment start.
         keyframes: Arc<[f64]>,
     },
     /// `TL/ClipTrack.tsx`. `start`/`end` above are the **output-time** box;
@@ -1242,7 +1241,6 @@ pub enum SegmentDetail {
         bold: bool,
         fullscreen: bool,
         enabled: bool,
-        /// Keyframe times, seconds from the segment start.
         keyframes: Arc<[f64]>,
     },
     /// `TL/MaskTrack.tsx:349-350`.

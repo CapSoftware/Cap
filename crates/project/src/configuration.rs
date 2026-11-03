@@ -1230,7 +1230,6 @@ pub struct OverlayKeyframes {
     pub opacity: Vec<MaskScalarKeyframe>,
 }
 
-/// Keys closer together than this (seconds) are the same keyframe.
 pub const OVERLAY_KEYFRAME_MATCH_SECS: f64 = 1.0 / 120.0;
 
 impl OverlayKeyframes {
@@ -1238,7 +1237,6 @@ impl OverlayKeyframes {
         self.position.is_empty() && self.size.is_empty() && self.opacity.is_empty()
     }
 
-    /// Distinct key times across every property, ascending.
     pub fn times(&self) -> Vec<f64> {
         let mut times: Vec<f64> = self
             .position
@@ -1275,8 +1273,6 @@ impl OverlayKeyframes {
         }
     }
 
-    /// Moves every key by `seconds`, for when the segment's start moves but
-    /// the animation should stay where it is in output time.
     pub fn shift(&mut self, seconds: f64) {
         for key in self.position.iter_mut().chain(&mut self.size) {
             key.time += seconds;
@@ -1293,8 +1289,6 @@ impl OverlayKeyframes {
         self.opacity.retain(|k| keep(k.time));
     }
 
-    /// Center, size and opacity at `relative_time`, falling back to the base
-    /// values for any property without keys.
     pub fn sample(
         &self,
         center: XY<f64>,
@@ -1327,7 +1321,6 @@ fn keyframe_span<T>(keys: &[T], time: f64, key_time: impl Fn(&T) -> f64) -> Opti
         .filter(|k| key_time(k) < key_time(next))
         .max_by(by_time)?;
     let span = (key_time(next) - key_time(prev)).max(1e-6);
-    // Ease in and out between keys so motion starts and stops softly
     let t = ((time - key_time(prev)) / span).clamp(0.0, 1.0);
     Some((prev, next, t * t * (3.0 - 2.0 * t)))
 }
@@ -1441,8 +1434,6 @@ pub struct TextSegment {
 }
 
 impl TextSegment {
-    /// Seconds into the segment for `time`, clamped to its length: the
-    /// timebase of [`OverlayKeyframes`].
     pub fn key_time(&self, time: f64) -> f64 {
         (time - self.start).clamp(0., (self.end - self.start).max(0.))
     }
@@ -1458,8 +1449,6 @@ impl TextSegment {
             .2
     }
 
-    /// Sets the opacity at `time`: the key there when opacity is animated,
-    /// otherwise the segment's own value.
     pub fn set_opacity_at(&mut self, time: f64, value: f64) {
         if self.keyframes.opacity.is_empty() {
             self.opacity = value as f32;
@@ -1987,8 +1976,6 @@ impl ImageSegment {
         self.enabled && is_timeline_interval_active(self.start, self.end, time)
     }
 
-    /// Seconds into the segment for `time`, clamped to its length: the
-    /// timebase of [`OverlayKeyframes`].
     pub fn key_time(&self, time: f64) -> f64 {
         (time - self.start).clamp(0., (self.end - self.start).max(0.))
     }
@@ -2004,8 +1991,6 @@ impl ImageSegment {
             .2
     }
 
-    /// Sets the opacity at `time`: the key there when opacity is animated,
-    /// otherwise the segment's own value.
     pub fn set_opacity_at(&mut self, time: f64, value: f64) {
         if self.keyframes.opacity.is_empty() {
             self.opacity = value as f32;
