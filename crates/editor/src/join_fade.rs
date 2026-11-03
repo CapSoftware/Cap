@@ -48,9 +48,6 @@ fn fade_gain(distance: usize) -> f32 {
     0.5 - 0.5 * (std::f32::consts::PI * t).cos()
 }
 
-/// Fades interleaved stereo `samples`, which start at output sample `start`,
-/// down to silence into every join and back up out of it. Depends only on
-/// output position, so any chunking of the render produces the same audio.
 pub(crate) fn apply_join_fades(samples: &mut [f32], start: usize, joins: &[usize]) {
     let frames = samples.len() / 2;
     let end = start + frames;

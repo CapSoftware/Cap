@@ -76,7 +76,6 @@ pub(crate) enum DragUnit {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct WordDrag {
     pub unit: DragUnit,
-    /// The unit the press landed in, kept whole whichever way the drag goes.
     pub origin: (usize, usize),
 }
 
@@ -97,8 +96,6 @@ pub(crate) struct CleanupState {
     pub open: bool,
     pub tab: CleanupTab,
     pub categories: [bool; 4],
-    /// Fillers the user chose to keep, by their first word. For this session
-    /// only: a new transcript or a reopened editor shows them again.
     pub ignored: HashSet<usize>,
     pub pause_longer_than: f64,
     pub pause_keep: f64,
@@ -170,8 +167,6 @@ pub(crate) struct TranscriptState {
     edl_key: u64,
     pub list: ListState,
     pub selection: Option<WordSelection>,
-    /// Where the keyboard continues from when nothing is selected, such as
-    /// the word after a delete.
     pub caret: Option<usize>,
     pub drag: Option<WordDrag>,
     pub active: Option<usize>,
@@ -180,8 +175,6 @@ pub(crate) struct TranscriptState {
     pub search: Option<SearchState>,
     pub cleanup: CleanupState,
     pub focus: FocusHandle,
-    /// Every paragraph painted this frame, for hit testing outside the
-    /// paragraph's own listeners and for following playback.
     pub layouts: Rc<RefCell<HashMap<usize, TextLayout>>>,
     pub resize: Option<(f32, f32)>,
     pub energy: Option<Arc<EnergyEnvelope>>,

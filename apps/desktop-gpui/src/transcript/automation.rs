@@ -1,12 +1,9 @@
-//! `CAP_GPUI_AUTO_TRANSCRIPT=<action>[,<action>...]` drives the transcript
-//! panel for screenshots, perf runs and the export check, the way the other
-//! `CAP_GPUI_AUTO_*` hooks drive the rest of the editor. Each action prints
-//! one `transcript-auto:` line with what it did and how long it took.
-//!
-//! Actions: `open`, `seed:<words>`, `transcribe`, `select:<a>-<b>`, `delete`,
-//! `cleanup[:pauses]`, `fillers`, `pauses`, `cuts:<n>`, `search:<query>`,
-//! `seek:<seconds>`, `play`, `stop`, `wait:<ms>`, `scroll:<frames>`,
-//! `follow:<seconds>`, `undo`, `redo`, `hover-cut`, `restore`, `dump:<path>`.
+//! `CAP_GPUI_AUTO_TRANSCRIPT=<action>,...` drives the transcript panel for
+//! screenshots, perf runs and export checks. Actions: `open`, `seed:<words>`,
+//! `transcribe`, `select:<a>-<b>`, `delete`, `cleanup[:pauses]`, `fillers`,
+//! `pauses`, `cuts:<n>`, `search:<query>`, `seek:<seconds>`, `play`, `stop`,
+//! `wait:<ms>`, `scroll:<frames>`, `follow:<seconds>`, `undo`, `redo`,
+//! `hover-cut`, `restore`, `dump:<path>`.
 
 use std::time::{Duration, Instant};
 
@@ -32,9 +29,6 @@ fn draw(handle: WindowHandle<EditorWindow>, cx: &mut AsyncApp) -> f64 {
         .map_or(f64::NAN, ms)
 }
 
-/// A spoken-looking transcript spread over the recording: sentences of
-/// varying length, a hesitation every 40 words, so paragraphs, fillers and
-/// pauses all exist at realistic density.
 fn seeded_captions(words: usize, duration: f64) -> cap_project::CaptionsData {
     const VOCABULARY: &[&str] = &[
         "today", "we", "are", "going", "to", "look", "at", "how", "the", "export", "settings",
@@ -306,8 +300,6 @@ pub(crate) async fn run(handle: WindowHandle<EditorWindow>, cx: &mut AsyncApp) {
 }
 
 impl EditorWindow {
-    /// Cuts `count` single words spread evenly over the transcript, each its
-    /// own cut, as one edit: the stress case for clip counts.
     fn transcript_spread_cuts(
         &mut self,
         count: usize,

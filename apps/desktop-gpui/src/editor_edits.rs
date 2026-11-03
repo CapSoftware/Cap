@@ -1584,17 +1584,12 @@ fn ripple_delete_output_tracks(
     ripple_delete_audio_track(&mut timeline.audio_segments, cut_start, cut_end, shift);
 }
 
-/// Why [`cut_clip_range`] left a clip alone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RangeCut {
     Applied,
     Empty,
-    /// The range reaches into a transition, or would leave a transition
-    /// without the two clip lengths of material it needs.
     Transition,
-    /// A fullscreen text card holds the frame inside the range.
     Hold,
-    /// The range covers the only clip left.
     LastClip,
 }
 
@@ -1602,11 +1597,6 @@ pub enum RangeCut {
 /// would leave one takes it too, so playback never seeks into a sliver.
 pub const MIN_CLIP_PIECE: f64 = 1.0 / 60.0;
 
-/// Removes `local_start..local_end` (seconds of playback from the clip's own
-/// start) from clip `index`, splitting it when the range is interior, and
-/// ripples every other track the way deleting a whole clip does. This is the
-/// transcript's word delete; the timeline's own Delete removes whole clips
-/// through [`delete_clip_segments`].
 pub fn cut_clip_range(
     timeline: &mut TimelineConfiguration,
     index: usize,
@@ -1696,11 +1686,11 @@ pub fn cut_clip_range(
     RangeCut::Applied
 }
 
-/// The inverse ripple: every track item at or past `boundary` (output time)
-/// moves later by `shift`, and one spanning it grows, the way trimming a clip
-/// back out pushes everything after it. Keyframes inside a growing mask or 3D
-/// shot move with the material after the boundary instead of stretching.
-pub fn ripple_insert_output_tracks(timeline: &mut TimelineConfiguration, boundary: f64, shift: f64) {
+pub fn ripple_insert_output_tracks(
+    timeline: &mut TimelineConfiguration,
+    boundary: f64,
+    shift: f64,
+) {
     use crate::editor_clips::{ripple_keyboard_track, ripple_track};
     ripple_track(&mut timeline.style_segments, boundary, shift);
     ripple_track(&mut timeline.image_segments, boundary, shift);
@@ -1722,7 +1712,13 @@ pub fn ripple_insert_output_tracks(timeline: &mut TimelineConfiguration, boundar
                 .iter_mut()
                 .map(|key| &mut key.time)
                 .chain(segment.keyframes.size.iter_mut().map(|key| &mut key.time))
-                .chain(segment.keyframes.intensity.iter_mut().map(|key| &mut key.time))
+                .chain(
+                    segment
+                        .keyframes
+                        .intensity
+                        .iter_mut()
+                        .map(|key| &mut key.time),
+                )
             {
                 if *time >= local {
                     *time += shift;

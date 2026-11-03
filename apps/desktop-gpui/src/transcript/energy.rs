@@ -5,18 +5,12 @@ use std::sync::Arc;
 pub const HOP_SECONDS: f64 = 0.005;
 const SAMPLE_RATE: f64 = 48_000.0;
 
-/// Short-term loudness of what playback actually plays, per recording clip:
-/// the mean square of the mono mix of every audio track, with each track's
-/// sync offset applied the way the audio renderer applies it.
 #[derive(Debug, Default)]
 pub struct EnergyEnvelope {
     clips: Vec<Arc<[f32]>>,
     clip_offsets: Vec<f64>,
 }
 
-/// One audio track of a recording clip: interleaved 48 kHz samples, their
-/// channel count, and the offset the renderer reads them at (source sample
-/// `n` plays data sample `n + offset`).
 pub struct EnvelopeTrack<'a> {
     pub slices: Vec<&'a [f32]>,
     pub channels: u16,
@@ -102,8 +96,6 @@ impl EnergyEnvelope {
             .copied()
     }
 
-    /// Loudness around `source` in decibels, smoothed over three hops so a
-    /// single quiet hop inside a word does not look like a gap.
     pub fn smoothed_db(&self, source: f64) -> Option<f32> {
         let mut total = 0.0;
         let mut count = 0;

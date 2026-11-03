@@ -11,8 +11,6 @@ pub fn is_hesitation_filler(text: &str) -> bool {
     HESITATION_FILLERS.contains(&normalize_word(text).as_str())
 }
 
-/// [`is_hesitation_filler`] plus drawn-out spellings such as "ummmm" and
-/// "hmmmm".
 pub fn is_hesitation(text: &str) -> bool {
     let normalized = normalize_word(text);
     HESITATION_FILLERS.contains(&normalized.as_str()) || is_drawn_out_hesitation(&normalized)
@@ -70,10 +68,6 @@ impl DisfluencyKind {
     }
 }
 
-/// One removable stretch of the transcript. `words` indexes the token slice
-/// passed to [`detect_disfluencies`] and always starts and ends on a spoken
-/// word. `phrase` is the lowercased words it covers, which is what the review
-/// list groups discourse fillers by.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Disfluency {
     pub kind: DisfluencyKind,
@@ -88,8 +82,6 @@ pub struct DisfluencyToken<'a> {
     pub end: f64,
 }
 
-/// A pause this long reads as a sentence break even when the recognizer did
-/// not punctuate one.
 const SENTENCE_PAUSE: f64 = 1.0;
 const MAX_REPEATED_PHRASE: usize = 4;
 const MAX_FALSE_START: usize = 3;
@@ -246,9 +238,6 @@ fn is_intentional_double(norm: &str) -> bool {
         )
 }
 
-/// Words a restarted clause can begin with. A false start is only proposed
-/// when the abandoned and the restarted clause both open on one of these, so
-/// a content word that merely recurs is never cut.
 fn is_clause_opener(norm: &str) -> bool {
     matches!(
         norm,
@@ -372,9 +361,6 @@ impl Context<'_> {
         }
     }
 
-    /// Whether `at` opens a sentence, looking back past hesitations and
-    /// other opening markers ("Um, okay, so"). With `pauses`, a long silence
-    /// counts as a sentence break even without punctuation.
     fn starts_sentence(&self, at: usize, pauses: bool) -> bool {
         let mut cursor = at;
         loop {
@@ -401,9 +387,6 @@ impl Context<'_> {
         previous.trailing.sets_off() || previous.hesitation || previous.cut_off
     }
 
-    /// Set off on the right by a comma, a dash, an ellipsis, a hesitation
-    /// or a long pause. A full stop only counts when `sentence_end` allows
-    /// it: "it works, actually." keeps its "actually".
     fn set_off_after(&self, last: usize, sentence_end: bool) -> bool {
         let word = &self.words[last];
         match word.trailing {
@@ -429,8 +412,6 @@ impl Context<'_> {
     }
 }
 
-/// Sentence-opening markers that may precede another marker without ending
-/// the sentence start: "Okay, so, basically".
 fn is_opening_marker(norm: &str) -> bool {
     matches!(
         norm,
@@ -446,11 +427,6 @@ fn detect_hesitations(words: &[Word], out: &mut Vec<(DisfluencyKind, usize, usiz
     }
 }
 
-/// Immediate repeats of one to four words, matched with hesitations and
-/// cut-off fragments skipped so "the, um, the" is still a repeat. Every copy
-/// but the last is marked, because the last one flows into the rest of the
-/// sentence. A copy abandoned with a fragment ("the wh- the") is a false
-/// start rather than a repeat.
 fn detect_repetitions(words: &[Word], out: &mut Vec<(DisfluencyKind, usize, usize)>) {
     let spoken: Vec<usize> = (0..words.len())
         .filter(|&at| !words[at].hesitation && !words[at].cut_off)
@@ -604,8 +580,6 @@ fn detect_false_starts(words: &[Word], out: &mut Vec<(DisfluencyKind, usize, usi
     }
 }
 
-/// Phrases that are fillers when set off from the sentence, and whether a
-/// full stop after them counts as setting them off.
 const SET_OFF_PHRASES: &[(&[&str], bool)] = &[
     (&["you", "know", "what", "i", "mean"], true),
     (&["you", "know"], true),
@@ -628,8 +602,6 @@ const SENTENCE_OPENERS: &[&[&str]] = &[
     &["well"],
 ];
 
-/// "So" opening a sentence is almost always a discourse marker, unless it is
-/// the start of "so much", "so far" and the like.
 fn so_is_degree_word(next: &Word) -> bool {
     matches!(
         next.norm.as_str(),

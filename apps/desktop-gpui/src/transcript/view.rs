@@ -29,8 +29,6 @@ const TEXT_SIZE: f32 = 15.;
 const LINE_HEIGHT: f32 = 25.;
 const STAMP_WIDTH: f32 = 46.;
 const FOLLOW_MARGIN: f32 = 48.;
-/// While following playback the active line is kept this far down the
-/// viewport, so the words coming next are visible.
 const FOLLOW_ANCHOR: f32 = 0.32;
 const LISTEN_BEFORE: f64 = 1.5;
 const LISTEN_AFTER: f64 = 1.0;
@@ -2354,8 +2352,6 @@ impl EditorWindow {
         .detach();
     }
 
-    /// Redraws the transcript until a generation started from it finishes, so
-    /// the button returns from "Transcribing…" even when nothing else moves.
     fn spawn_transcript_generation_poll(&mut self, cx: &mut Context<Self>) {
         let path = self.project_path.clone();
         cx.spawn(async move |this, cx| {
