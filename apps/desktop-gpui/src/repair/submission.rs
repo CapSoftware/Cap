@@ -231,17 +231,16 @@ impl Read for TarReader {
             }
             if self.remaining > 0 {
                 let want = (self.remaining.min(buf.len() as u64)) as usize;
-                let read = match self.current.as_mut() {
-                    Some(file) => file.read(&mut buf[..want])?,
-                    None => 0,
-                };
-                let count = if read == 0 {
-                    self.current = None;
-                    buf[..want].fill(0);
-                    want
-                } else {
-                    read
-                };
+                let file = self.current.as_mut().ok_or_else(|| {
+                    std::io::Error::new(std::io::ErrorKind::NotFound, "a file is missing")
+                })?;
+                let count = file.read(&mut buf[..want])?;
+                if count == 0 {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::UnexpectedEof,
+                        "a file got shorter while it was being sent",
+                    ));
+                }
                 self.remaining -= count as u64;
                 return Ok(count);
             }
@@ -259,7 +258,7 @@ impl Read for TarReader {
                     self.remaining = entry.size;
                     self.padding = pad(entry.size);
                     self.current = match &entry.source {
-                        Some(path) if entry.size > 0 => std::fs::File::open(path).ok(),
+                        Some(path) if entry.size > 0 => Some(std::fs::File::open(path)?),
                         _ => None,
                     };
                 }
@@ -359,113 +358,128 @@ pub async fn send(
     {
         return Err("Cap returned an invalid submission".into());
     }
-    let parts_path = format!(
-        "/api/desktop/repair/submissions/{}/parts",
-        created.submission_id
-    );
-    let part_count = total.div_ceil(part_size);
-    let put_client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30 * 60))
-        .connect_timeout(Duration::from_secs(20))
-        .build()
-        .map_err(|error| error.to_string())?;
-    let mut reader = Some(plan.reader());
-    let mut etags: Vec<serde_json::Value> = Vec::new();
-    let mut sent = 0u64;
-    let mut part = 1u64;
-    while part <= part_count {
-        let batch: Vec<u64> = (part..=part_count.min(part + URL_BATCH as u64 - 1)).collect();
-        let fetch_urls = |numbers: Vec<u64>| {
-            let parts_path = parts_path.clone();
-            let upload_id = created.upload_id.clone();
-            async move {
-                let urls: PartUrls = serde_json::from_value(
-                    api_post(
-                        &parts_path,
-                        json!({ "uploadId": upload_id, "partNumbers": numbers }),
-                    )
-                    .await?,
-                )
-                .map_err(|_| "Cap returned an unexpected response".to_string())?;
-                Ok::<_, String>(urls.urls)
-            }
-        };
-        let mut urls = fetch_urls(batch.clone()).await?;
-        for number in batch {
-            if cancelled() {
-                return Err("cancelled".into());
-            }
-            let length = part_size.min(total - (number - 1) * part_size);
-            let taken = reader
-                .take()
-                .ok_or_else(|| "archive reader lost".to_string())?;
-            let (returned, buffer) = tokio::task::spawn_blocking(move || {
-                let mut taken = taken;
-                let mut buffer = vec![0u8; length as usize];
-                let result = taken.read_exact(&mut buffer).map(|()| buffer);
-                (taken, result)
-            })
-            .await
-            .map_err(|error| error.to_string())?;
-            reader = Some(returned);
-            let buffer = bytes::Bytes::from(
-                buffer.map_err(|error| format!("Could not read the recording: {error}"))?,
-            );
-            let mut attempt = 0;
-            let etag = loop {
-                attempt += 1;
-                let url = urls
-                    .get(&number.to_string())
-                    .cloned()
-                    .ok_or_else(|| "Cap did not return an upload address".to_string())?;
-                if !url.starts_with("https://") {
-                    return Err("Cap returned an insecure upload address".into());
-                }
-                let outcome = put_client
-                    .put(&url)
-                    .header(reqwest::header::CONTENT_LENGTH, buffer.len())
-                    .body(buffer.clone())
-                    .send()
-                    .await;
-                match outcome {
-                    Ok(response) if response.status().is_success() => {
-                        let Some(etag) = response
-                            .headers()
-                            .get(reqwest::header::ETAG)
-                            .and_then(|value| value.to_str().ok())
-                        else {
-                            return Err("Upload did not return a receipt".into());
-                        };
-                        break etag.to_string();
-                    }
-                    Ok(response) if response.status() == reqwest::StatusCode::FORBIDDEN => {
-                        if attempt >= PART_ATTEMPTS {
-                            return Err("Upload was refused".into());
-                        }
-                        urls.extend(fetch_urls(vec![number]).await?);
-                    }
-                    _ if attempt >= PART_ATTEMPTS => {
-                        return Err("Upload failed; check your connection and try again".into());
-                    }
-                    _ => {}
-                }
-                tokio::time::sleep(Duration::from_secs(1 << (attempt - 1))).await;
-            };
-            etags.push(json!({ "partNumber": number, "etag": etag }));
-            sent += length;
-            progress(sent, total);
-        }
-        part += URL_BATCH as u64;
-    }
-    api_post(
-        &format!(
-            "/api/desktop/repair/submissions/{}/complete",
+    let result = async {
+        let parts_path = format!(
+            "/api/desktop/repair/submissions/{}/parts",
             created.submission_id
-        ),
-        json!({ "uploadId": created.upload_id, "parts": etags }),
-    )
-    .await?;
-    Ok(())
+        );
+        let part_count = total.div_ceil(part_size);
+        let put_client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(30 * 60))
+            .connect_timeout(Duration::from_secs(20))
+            .build()
+            .map_err(|error| error.to_string())?;
+        let mut reader = Some(plan.reader());
+        let mut etags: Vec<serde_json::Value> = Vec::new();
+        let mut sent = 0u64;
+        let mut part = 1u64;
+        while part <= part_count {
+            let batch: Vec<u64> = (part..=part_count.min(part + URL_BATCH as u64 - 1)).collect();
+            let fetch_urls = |numbers: Vec<u64>| {
+                let parts_path = parts_path.clone();
+                let upload_id = created.upload_id.clone();
+                async move {
+                    let urls: PartUrls = serde_json::from_value(
+                        api_post(
+                            &parts_path,
+                            json!({ "uploadId": upload_id, "partNumbers": numbers }),
+                        )
+                        .await?,
+                    )
+                    .map_err(|_| "Cap returned an unexpected response".to_string())?;
+                    Ok::<_, String>(urls.urls)
+                }
+            };
+            let mut urls = fetch_urls(batch.clone()).await?;
+            for number in batch {
+                if cancelled() {
+                    return Err("cancelled".into());
+                }
+                let length = part_size.min(total - (number - 1) * part_size);
+                let taken = reader
+                    .take()
+                    .ok_or_else(|| "archive reader lost".to_string())?;
+                let (returned, buffer) = tokio::task::spawn_blocking(move || {
+                    let mut taken = taken;
+                    let mut buffer = vec![0u8; length as usize];
+                    let result = taken.read_exact(&mut buffer).map(|()| buffer);
+                    (taken, result)
+                })
+                .await
+                .map_err(|error| error.to_string())?;
+                reader = Some(returned);
+                let buffer = bytes::Bytes::from(
+                    buffer.map_err(|error| format!("Could not read the recording: {error}"))?,
+                );
+                let mut attempt = 0;
+                let etag = loop {
+                    attempt += 1;
+                    let url = urls
+                        .get(&number.to_string())
+                        .cloned()
+                        .ok_or_else(|| "Cap did not return an upload address".to_string())?;
+                    if !url.starts_with("https://") {
+                        return Err("Cap returned an insecure upload address".into());
+                    }
+                    let outcome = put_client
+                        .put(&url)
+                        .header(reqwest::header::CONTENT_LENGTH, buffer.len())
+                        .body(buffer.clone())
+                        .send()
+                        .await;
+                    match outcome {
+                        Ok(response) if response.status().is_success() => {
+                            let Some(etag) = response
+                                .headers()
+                                .get(reqwest::header::ETAG)
+                                .and_then(|value| value.to_str().ok())
+                            else {
+                                return Err("Upload did not return a receipt".into());
+                            };
+                            break etag.to_string();
+                        }
+                        Ok(response) if response.status() == reqwest::StatusCode::FORBIDDEN => {
+                            if attempt >= PART_ATTEMPTS {
+                                return Err("Upload was refused".into());
+                            }
+                            urls.extend(fetch_urls(vec![number]).await?);
+                        }
+                        _ if attempt >= PART_ATTEMPTS => {
+                            return Err("Upload failed; check your connection and try again".into());
+                        }
+                        _ => {}
+                    }
+                    tokio::time::sleep(Duration::from_secs(1 << (attempt - 1))).await;
+                };
+                etags.push(json!({ "partNumber": number, "etag": etag }));
+                sent += length;
+                progress(sent, total);
+            }
+            part += URL_BATCH as u64;
+        }
+        api_post(
+            &format!(
+                "/api/desktop/repair/submissions/{}/complete",
+                created.submission_id
+            ),
+            json!({ "uploadId": created.upload_id, "parts": etags }),
+        )
+        .await?;
+        Ok::<(), String>(())
+    }
+    .await;
+    if result.is_err() {
+        api_post(
+            &format!(
+                "/api/desktop/repair/submissions/{}/abort",
+                created.submission_id
+            ),
+            json!({ "uploadId": created.upload_id }),
+        )
+        .await
+        .ok();
+    }
+    result
 }
 
 #[cfg(test)]
@@ -574,17 +588,20 @@ mod tests {
     }
 
     #[test]
-    fn shrinking_files_keep_the_declared_size() {
+    fn files_that_shrink_or_vanish_fail_instead_of_sending_zeros() {
         let root =
             std::env::temp_dir().join(format!("cap-repair-tar-shrink-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("a.m4s"), vec![1u8; 2000]).unwrap();
         let plan = TarPlan::build(&root).unwrap();
-        let total = plan.total_size();
         std::fs::write(root.join("a.m4s"), vec![1u8; 10]).unwrap();
-        let mut archive = Vec::new();
-        plan.reader().read_to_end(&mut archive).unwrap();
-        assert_eq!(archive.len() as u64, total);
+        let error = plan.reader().read_to_end(&mut Vec::new()).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::UnexpectedEof);
+
+        let plan = TarPlan::build(&root).unwrap();
+        std::fs::remove_file(root.join("a.m4s")).unwrap();
+        let error = plan.reader().read_to_end(&mut Vec::new()).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
         std::fs::remove_dir_all(root).ok();
     }
 
