@@ -554,7 +554,7 @@ fn removing_hundreds_of_fillers_from_twenty_thousand_words_is_fast() {
             format!("w{index}")
         };
         words.push((text, time, time + 0.25));
-        time += 0.36;
+        time += if index % 400 == 399 { 1.96 } else { 0.36 };
     }
     let durations = [time + 1.0];
     let mut project = project(&borrowed(&words), &durations);
@@ -585,6 +585,12 @@ fn removing_hundreds_of_fillers_from_twenty_thousand_words_is_fast() {
     assert_eq!(cut.len(), 500);
     assert!(cut.iter().all(|word| doc.words[*word].text == "um,"));
 
+    let started = std::time::Instant::now();
+    let pauses = plan_pause_cuts(&doc, &edl, None, 1.0, 0.5);
+    let pause_plan = started.elapsed();
+    assert_eq!(pauses.len(), 49);
+    assert!(pauses.iter().all(|pause| pause.after_word % 400 == 399));
+
     let limit = |release_ms: u64| {
         std::time::Duration::from_millis(if cfg!(debug_assertions) {
             release_ms * 15
@@ -592,10 +598,13 @@ fn removing_hundreds_of_fillers_from_twenty_thousand_words_is_fast() {
             release_ms
         })
     };
-    println!("20k words: doc {build:?}, 500 cuts {apply:?}, edl {rebuild:?}");
+    println!(
+        "20k words: doc {build:?}, 500 cuts {apply:?}, edl {rebuild:?}, pauses {pause_plan:?}"
+    );
     assert!(build < limit(80), "{build:?}");
     assert!(apply < limit(16), "{apply:?}");
     assert!(rebuild < limit(8), "{rebuild:?}");
+    assert!(pause_plan < limit(2), "{pause_plan:?}");
 }
 
 #[test]

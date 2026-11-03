@@ -108,6 +108,12 @@ pub fn plan_pause_cuts(
     keep: f64,
 ) -> Vec<PauseCut> {
     let keep = keep.max(0.0);
+    let floor = longer_than.max(keep + MIN_PAUSE_CUT);
+    let slowest = edl
+        .mappings
+        .iter()
+        .map(|mapping| mapping.timescale)
+        .fold(f64::INFINITY, f64::min);
     let mut pauses = Vec::new();
     for index in 1..doc.words.len() {
         if !edl.is_kept(index - 1) || !edl.is_kept(index) {
@@ -115,6 +121,9 @@ pub fn plan_pause_cuts(
         }
         let previous_end = doc.words[index - 1].end;
         let next_start = doc.words[index].start;
+        if slowest > 0.0 && (next_start - previous_end) / slowest <= floor {
+            continue;
+        }
         let Some(timescale) = edl.timescale_over(previous_end..next_start) else {
             continue;
         };
