@@ -2354,3 +2354,106 @@ fn recovery_aligns_tracks_with_the_start_times_persisted_while_recording() {
         Some(0.31)
     );
 }
+
+fn interrupted_after_resume_fixture() -> TestRecording {
+    let recording = TestRecording::new().unwrap();
+    let display = recording.create_display_dir(0).unwrap();
+    write_synthetic_fragments(&display, 180, Duration::from_secs(2));
+    std::fs::create_dir_all(recording.path().join("content/segments/segment-1/display")).unwrap();
+    recording
+        .write_recording_meta(StudioRecordingStatus::Failed {
+            error: "stop_pipeline: display: Task capture-video failed: Capture setup cancelled"
+                .into(),
+        })
+        .unwrap();
+    std::fs::write(
+        recording.path().join("recording-diagnostics.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "version": 2,
+            "segments": [{
+                "segmentIndex": 1,
+                "start": 6.0,
+                "end": 6.1,
+                "trackFailures": [{
+                    "track": "display",
+                    "stage": "runtime",
+                    "error": "Task capture-video failed: Capture setup cancelled"
+                }]
+            }]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    recording
+}
+
+#[test]
+fn salvage_recovers_an_interrupted_recording_that_strict_recovery_refuses() {
+    test_utils::init_tracing();
+    let recording = interrupted_after_resume_fixture();
+    let incomplete = RecoveryManager::inspect_recording(recording.path()).unwrap();
+    let before = recovery_input_bytes(recording.path());
+    assert!(matches!(
+        RecoveryManager::recover(&incomplete),
+        Err(RecoveryError::RequiredTrackFailure(_))
+    ));
+    assert_eq!(recovery_input_bytes(recording.path()), before);
+
+    let recovered = RecoveryManager::salvage(&incomplete).expect("salvage should succeed");
+    let StudioRecordingMeta::MultipleSegments { inner } = &recovered.meta else {
+        panic!("segmented meta expected");
+    };
+    assert_eq!(inner.segments.len(), 1);
+
+    let meta = RecordingMeta::load_for_project(recording.path()).unwrap();
+    let studio = meta.studio_meta().unwrap();
+    assert!(matches!(studio.status(), StudioRecordingStatus::Complete));
+    studio
+        .ensure_ordinary_media_access(recording.path())
+        .expect("a salvaged recording opens in the editor");
+    assert!(!recording.path().join("recording-diagnostics.json").exists());
+    assert_eq!(
+        std::fs::read(
+            recording
+                .path()
+                .join(cap_recording::recovery::RECOVERED_DIAGNOSTICS_FILE)
+        )
+        .unwrap(),
+        before[Path::new("recording-diagnostics.json")]
+    );
+
+    let display_mp4 = recording
+        .path()
+        .join("content/segments/segment-0/display.mp4");
+    assert!(probe_video_can_decode(&display_mp4).unwrap());
+    assert!(
+        cap_enc_ffmpeg::remux::get_media_duration(&display_mp4).unwrap() >= Duration::from_secs(4)
+    );
+
+    let backup = std::fs::read_dir(recording.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| path.join("original-segments").is_dir())
+        .expect("the original fragments stay in the recovery backup");
+    for (path, bytes) in &before {
+        if let Ok(relative) = path.strip_prefix("content/segments") {
+            assert_eq!(
+                &std::fs::read(backup.join("original-segments").join(relative)).unwrap(),
+                bytes
+            );
+        }
+    }
+}
+
+#[test]
+fn salvage_without_any_display_media_reports_nothing_to_recover() {
+    test_utils::init_tracing();
+    let recording = TestRecording::new().unwrap();
+    std::fs::create_dir_all(recording.path().join("content/segments/segment-0/display")).unwrap();
+    recording
+        .write_recording_meta(StudioRecordingStatus::Failed {
+            error: "display failed".into(),
+        })
+        .unwrap();
+    assert!(RecoveryManager::inspect_recording(recording.path()).is_none());
+}

@@ -82,6 +82,7 @@ struct FragmentsInfo {
 enum RecoveryPurpose {
     Recover,
     Finalize,
+    Salvage,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -104,16 +105,22 @@ impl RecoveryPurpose {
         }
     }
 
+    fn keeps_failed_tracks_out(self) -> bool {
+        !matches!(self, Self::Salvage)
+    }
+
     fn success_message(self) -> &'static str {
         match self {
-            Self::Recover => "Successfully recovered recording",
+            Self::Recover | Self::Salvage => "Successfully recovered recording",
             Self::Finalize => "Successfully finalized fragmented recording",
         }
     }
 
     fn timeline_message(self) -> &'static str {
         match self {
-            Self::Recover => "Created project configuration with timeline for recovered recording",
+            Self::Recover | Self::Salvage => {
+                "Created project configuration with timeline for recovered recording"
+            }
             Self::Finalize => "Created project configuration with timeline for finalized recording",
         }
     }
@@ -149,6 +156,10 @@ pub struct RecoveryManager;
 /// (`crate::studio_recording::SegmentStartTimes`); the in-progress meta has
 /// no segments, so this is what recovery aligns the tracks with.
 pub const SEGMENT_START_TIMES_FILE: &str = "start-times.json";
+
+/// Where [`RecoveryManager::salvage`] keeps a recovered recording's track
+/// failure evidence, so it no longer blocks opening the recovered project.
+pub const RECOVERED_DIAGNOSTICS_FILE: &str = "recording-diagnostics.recovered.json";
 
 fn persisted_start_times(segment_dir: &Path) -> Option<crate::studio_recording::SegmentStartTimes> {
     let raw = std::fs::read(segment_dir.join(SEGMENT_START_TIMES_FILE)).ok()?;
@@ -1178,6 +1189,25 @@ impl RecoveryManager {
         Self::finalize_with_purpose(recording, RecoveryPurpose::Recover)
     }
 
+    /// Recovers every track that holds media, up to where the recording was
+    /// interrupted, even when a requested track failed or a whole segment never
+    /// wrote any media. Only the user asks for this: the originals stay in the
+    /// recovery backup, and the failure evidence moves to
+    /// [`RECOVERED_DIAGNOSTICS_FILE`] so the recovered project opens.
+    pub fn salvage(recording: &IncompleteRecording) -> Result<RecoveredRecording, RecoveryError> {
+        let recovered = Self::finalize_with_purpose(recording, RecoveryPurpose::Salvage)?;
+        let diagnostics = recording.project_path.join("recording-diagnostics.json");
+        match std::fs::rename(
+            &diagnostics,
+            recording.project_path.join(RECOVERED_DIAGNOSTICS_FILE),
+        ) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+        Ok(recovered)
+    }
+
     pub fn finalize(recording: &IncompleteRecording) -> Result<RecoveredRecording, RecoveryError> {
         Self::finalize_with_purpose(recording, RecoveryPurpose::Finalize)
     }
@@ -1251,7 +1281,9 @@ impl RecoveryManager {
         preparing: Option<PreparingStudioJob>,
     ) -> Result<RecoveredRecording, RecoveryError> {
         let started = Instant::now();
-        Self::require_no_track_failure(&recording.project_path)?;
+        if purpose.keeps_failed_tracks_out() {
+            Self::require_no_track_failure(&recording.project_path)?;
+        }
         let project = &recording.project_path;
         let lock = HeldRecoveryLock::new(acquire(project)?, preparing.is_some());
         let mut preparing = preparing;
@@ -1273,7 +1305,7 @@ impl RecoveryManager {
             VideoValidation::Full => RecoveryCopyDurability::Durable,
             VideoValidation::Bounded => RecoveryCopyDurability::Deferred,
         };
-        Self::require_recoverable_tracks(recording)?;
+        Self::require_recoverable_tracks_for(recording, purpose)?;
         let preparing_source = prepare_studio_source(recording, preparing.as_mut(), &lock);
         let workspace = project.join(format!(".recovery-{}", uuid::Uuid::new_v4()));
         create_private_recovery_dir(&workspace)?;
@@ -1356,7 +1388,7 @@ impl RecoveryManager {
                 elapsed_ms = analyzing.elapsed().as_secs_f64() * 1000.0,
                 "Studio finalization staged analysis ready"
             );
-            Self::require_recoverable_tracks(&staged_recording)?;
+            Self::require_recoverable_tracks_for(&staged_recording, purpose)?;
             Self::require_local_fragments(&staged_recording)?;
             let validating = Instant::now();
             Self::validate_staged_inputs(&staged_recording, video_validation)?;
@@ -1388,7 +1420,9 @@ impl RecoveryManager {
                 "Studio finalization staging synced"
             );
             before_source_check(project, &staged)?;
-            Self::require_no_track_failure(project)?;
+            if purpose.keeps_failed_tracks_out() {
+                Self::require_no_track_failure(project)?;
+            }
             let rechecking = Instant::now();
             if recovery_snapshot(project)? != before {
                 return Err(RecoveryError::Validation(
@@ -1500,6 +1534,23 @@ impl RecoveryManager {
                     ));
                 }
             }
+        }
+        Ok(())
+    }
+
+    fn require_recoverable_tracks_for(
+        recording: &IncompleteRecording,
+        purpose: RecoveryPurpose,
+    ) -> Result<(), RecoveryError> {
+        if purpose.keeps_failed_tracks_out() {
+            return Self::require_recoverable_tracks(recording);
+        }
+        if recording
+            .recoverable_segments
+            .iter()
+            .all(|segment| segment.display_fragments.is_empty())
+        {
+            return Err(RecoveryError::NoRecoverableSegments);
         }
         Ok(())
     }
@@ -1853,7 +1904,9 @@ impl RecoveryManager {
         purpose: RecoveryPurpose,
         video_validation: VideoValidation,
     ) -> Result<RecoveredRecording, RecoveryError> {
-        Self::require_no_track_failure(&recording.project_path)?;
+        if purpose.keeps_failed_tracks_out() {
+            Self::require_no_track_failure(&recording.project_path)?;
+        }
         if recording.recoverable_segments.is_empty() {
             return Err(RecoveryError::NoRecoverableSegments);
         }
