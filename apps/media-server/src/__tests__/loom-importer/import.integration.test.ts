@@ -1,5 +1,13 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import {
+	cp,
+	mkdir,
+	mkdtemp,
+	readdir,
+	readFile,
+	rm,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "bun";
@@ -169,6 +177,77 @@ describe("runLoomImport", () => {
 				"manifest.mpd",
 			],
 			dash,
+		);
+		const manifest = await readFile(join(dash, "manifest.mpd"), "utf8");
+		await writeFile(
+			join(dash, "manifest-zero.mpd"),
+			manifest.replaceAll(
+				"</SegmentTimeline>",
+				'<S d="0" /></SegmentTimeline>',
+			),
+		);
+		await cp(hls, join(root, "hls-gap"), { recursive: true });
+		await rm(join(root, "hls-gap", "stream2-002.ts"));
+		await cp(hls, join(root, "hls-holes"), { recursive: true });
+		await rm(join(root, "hls-holes", "stream2-001.ts"));
+		await rm(join(root, "hls-holes", "stream2-003.ts"));
+		const audioOnly = join(root, "hls-audio");
+		await mkdir(audioOnly);
+		ffmpeg(
+			[
+				"-f",
+				"lavfi",
+				"-i",
+				"sine=frequency=440:sample_rate=48000",
+				"-t",
+				"7",
+				"-c:a",
+				"aac",
+				"-f",
+				"hls",
+				"-hls_time",
+				"2",
+				"-hls_playlist_type",
+				"vod",
+				"-hls_segment_filename",
+				"audio-%03d.ts",
+				"audio.m3u8",
+			],
+			audioOnly,
+		);
+		const audioPlaylist = await readFile(join(audioOnly, "audio.m3u8"), "utf8");
+		await writeFile(
+			join(audioOnly, "video.m3u8"),
+			audioPlaylist.replaceAll("audio-", "video-"),
+		);
+		for (const entry of await readdir(audioOnly))
+			if (entry.startsWith("audio-"))
+				await writeFile(join(audioOnly, entry.replace("audio-", "video-")), "");
+		await writeFile(
+			join(audioOnly, "master.m3u8"),
+			[
+				"#EXTM3U",
+				"#EXT-X-VERSION:3",
+				'#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="audio",DEFAULT="YES",URI="audio.m3u8"',
+				'#EXT-X-STREAM-INF:BANDWIDTH=1500000,RESOLUTION=NaNx720,AUDIO="audio"',
+				"video.m3u8",
+			].join("\n"),
+		);
+		await cp(audioOnly, join(root, "hls-audio-gap"), { recursive: true });
+		await rm(join(root, "hls-audio-gap", "audio-001.ts"));
+		ffmpeg(
+			[
+				"-f",
+				"lavfi",
+				"-i",
+				"sine=frequency=330:sample_rate=48000",
+				"-t",
+				"5",
+				"-c:a",
+				"libopus",
+				"opus-only.webm",
+			],
+			root,
 		);
 		server = Bun.serve({
 			port: 0,
@@ -353,6 +432,126 @@ describe("runLoomImport", () => {
 			(payload) => payload.videoId === "dash-video",
 		);
 		expect(complete?.deferredSourceKey).toBe("user/dash-video/raw-upload.webm");
+	}, 60_000);
+
+	test("imports DASH timelines that end with a zero-length entry", async () => {
+		const job = await run(
+			request(
+				"dash-zero",
+				`${base}/media/dash/manifest-zero.mpd?${SIGNATURE}`,
+				{
+					originalUpload: {
+						key: "user/dash-zero/raw-upload.webm",
+						upload: { type: "put", url: `${base}/put/dash-zero/raw.webm` },
+					},
+				},
+			),
+		);
+		expect(job?.phase).toBe("complete");
+		expect(job?.deferredSourceKey).toBe("user/dash-zero/raw-upload.webm");
+		expect(job?.metadata?.duration).toBeCloseTo(9, 0);
+	}, 60_000);
+
+	test("skips one segment Loom no longer has and keeps later audio in place", async () => {
+		const job = await run(
+			request("hls-gap", `${base}/media/hls-gap/master.m3u8?${SIGNATURE}`),
+		);
+		expect(job?.phase).toBe("complete");
+		const imported = join(root, "gap.mp4");
+		await writeFile(
+			imported,
+			uploads.get("hls-gap/result.mp4") ?? new Uint8Array(),
+		);
+		expect(Number(probe(imported).format.duration)).toBeCloseTo(9, 0);
+		const audioTimes = spawnSync({
+			cmd: [
+				"ffprobe",
+				"-v",
+				"error",
+				"-select_streams",
+				"a:0",
+				"-show_entries",
+				"packet=pts_time",
+				"-of",
+				"csv=p=0",
+				imported,
+			],
+		})
+			.stdout.toString()
+			.trim()
+			.split("\n")
+			.map(Number);
+		const gaps = audioTimes
+			.slice(1)
+			.map((time, index) => time - (audioTimes[index] ?? time))
+			.filter((delta) => delta > 0.5);
+		expect(gaps).toHaveLength(1);
+		expect(gaps[0]).toBeCloseTo(2, 0);
+	}, 60_000);
+
+	test("fails when Loom is missing more segments than can be skipped", async () => {
+		const job = await run(
+			request("hls-holes", `${base}/media/hls-holes/master.m3u8?${SIGNATURE}`),
+		);
+		expect(job?.phase).toBe("error");
+		expect(job?.error).toContain("Loom is missing 2 of 5 audio segments");
+	}, 60_000);
+
+	test("imports an audio-only HLS recording with a still video track", async () => {
+		const job = await run(
+			request("hls-audio", `${base}/media/hls-audio/master.m3u8?${SIGNATURE}`),
+		);
+		expect(job?.phase).toBe("complete");
+		expect(job?.deferredSourceKey).toBeUndefined();
+		expect(job?.metadata).toMatchObject({
+			width: 1280,
+			height: 720,
+			videoCodec: "h264",
+			audioCodec: "aac",
+		});
+		expect(job?.metadata?.duration).toBeCloseTo(7, 0);
+		expect(uploads.get("hls-audio/thumbnail.jpg")?.byteLength).toBeGreaterThan(
+			0,
+		);
+	}, 60_000);
+
+	test("keeps the full length of an audio-only recording with a missing segment", async () => {
+		const job = await run(
+			request(
+				"hls-audio-gap",
+				`${base}/media/hls-audio-gap/master.m3u8?${SIGNATURE}`,
+			),
+		);
+		expect(job?.phase).toBe("complete");
+		const imported = join(root, "audio-gap.mp4");
+		await writeFile(
+			imported,
+			uploads.get("hls-audio-gap/result.mp4") ?? new Uint8Array(),
+		);
+		const output = probe(imported);
+		expect(Number(output.format.duration)).toBeCloseTo(7, 0);
+		expect(
+			Number(
+				output.streams.find((stream) => stream.codec_type === "video")
+					?.start_time,
+			),
+		).toBe(0);
+	}, 60_000);
+
+	test("imports an Opus-only file as an MP4 with AAC audio", async () => {
+		const job = await run(
+			request("opus-only", `${base}/media/opus-only.webm?${SIGNATURE}`),
+		);
+		expect(job?.phase).toBe("complete");
+		expect(job?.deferredSourceKey).toBeUndefined();
+		expect(job?.metadata).toMatchObject({
+			videoCodec: "h264",
+			audioCodec: "aac",
+		});
+		expect(job?.metadata?.duration).toBeCloseTo(5, 0);
+		expect(uploads.get("opus-only/result.mp4")?.byteLength).toBeGreaterThan(
+			10_000,
+		);
 	}, 60_000);
 
 	test("fails VP9 sources that have nowhere to store the original", async () => {

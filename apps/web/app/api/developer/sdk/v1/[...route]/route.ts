@@ -1,6 +1,11 @@
 import { Hono } from "hono";
 import { handle } from "hono/vercel";
-import { developerRateLimiter, developerSdkCors } from "../../../../utils";
+import {
+	developerApiError,
+	developerApiNotFound,
+	developerRateLimiter,
+	developerSdkCors,
+} from "../../../../utils";
 import * as upload from "./upload";
 import * as videoCreate from "./video-create";
 
@@ -9,7 +14,9 @@ const app = new Hono()
 	.use(developerSdkCors)
 	.use(developerRateLimiter)
 	.route("/videos", videoCreate.app)
-	.route("/upload/multipart", upload.app);
+	.route("/upload/multipart", upload.app)
+	.notFound(developerApiNotFound)
+	.onError(developerApiError);
 
 export const GET = handle(app);
 export const POST = handle(app);

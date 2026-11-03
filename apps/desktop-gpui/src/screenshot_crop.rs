@@ -37,6 +37,7 @@ use crate::editor_crop::{
     self as engine, CropAnim, CropBounds, CropDrag, CropField, CropHit, CropMenuChoice, CropState,
     HANDLES, ResizeSession, SE_HANDLE, Vec2,
 };
+use crate::i18n::tr;
 use crate::screenshot_editor::ScreenshotEditorWindow;
 use crate::theme::Theme;
 use crate::ui;
@@ -757,8 +758,18 @@ impl ScreenshotEditorWindow {
                     .flex_row()
                     .gap(px(32.))
                     .flex_none()
-                    .child(group("Size", CropField::Width, CropField::Height, self))
-                    .child(group("Position", CropField::X, CropField::Y, self)),
+                    .child(group(
+                        tr::screenshot_editor::style::size_label(),
+                        CropField::Width,
+                        CropField::Height,
+                        self,
+                    ))
+                    .child(group(
+                        tr::screenshot_editor::crop::position(),
+                        CropField::X,
+                        CropField::Y,
+                        self,
+                    )),
             )
             .child(
                 div()
@@ -807,7 +818,7 @@ impl ScreenshotEditorWindow {
                     .child(
                         ui::EditorButton::plain(&theme, "screenshot-crop-full")
                             .left_icon("icons/maximize.svg")
-                            .label("Full")
+                            .label(tr::screenshot_editor::crop::full())
                             .disabled(full)
                             .on_click(cx.listener(|this, _, window, cx| {
                                 if let Some(dialog) = this.crop.as_mut() {
@@ -820,7 +831,7 @@ impl ScreenshotEditorWindow {
                     .child(
                         ui::EditorButton::plain(&theme, "screenshot-crop-reset")
                             .left_icon("icons/circle-x.svg")
-                            .label("Reset")
+                            .label(tr::common::reset())
                             .disabled(untouched)
                             .on_click(cx.listener(|this, _, window, cx| {
                                 if let Some(dialog) = this.crop.as_mut() {
@@ -1046,7 +1057,7 @@ impl ScreenshotEditorWindow {
                         .text_size(px(12.))
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(Hsla::from(theme.gray_10))
-                        .child("Loading frame…")
+                        .child(tr::screenshot_editor::crop::loading_frame())
                         .into_any_element(),
                 ),
             })
@@ -1089,7 +1100,7 @@ impl ScreenshotEditorWindow {
                     ui::ButtonVariant::Primary,
                     ui::ButtonSize::Md,
                 )
-                .label("Save")
+                .label(tr::common::save())
                 .on_click(cx.listener(|this, _, window, cx| this.save_crop_dialog(window, cx))),
             )
             .into_any_element()

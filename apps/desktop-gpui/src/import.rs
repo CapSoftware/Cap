@@ -25,6 +25,8 @@ use cap_project::{
 use ffmpeg::{ChannelLayout, codec as avcodec, format as avformat};
 use gpui::{App, Global};
 
+use crate::i18n::tr;
+
 /// `import.rs:38-44` in the Tauri binary.
 pub const VIDEO_IMPORT_EXTENSIONS: &[&str] =
     &["mp4", "mov", "avi", "mkv", "webm", "wmv", "m4v", "flv"];
@@ -307,7 +309,11 @@ pub fn pick_and_import_video(cx: &mut App) {
     cx.spawn(async move |cx| {
         // Blocking modal, so from a spawned task with no borrow held -- the
         // `save_file_panel` rule.
-        let Some(path) = pick_import_file(&[("Video Files", VIDEO_IMPORT_EXTENSIONS)], cx).await
+        let Some(path) = pick_import_file(
+            &[(tr::import::filter::video(), VIDEO_IMPORT_EXTENSIONS)],
+            cx,
+        )
+        .await
         else {
             return;
         };
@@ -318,7 +324,11 @@ pub fn pick_and_import_video(cx: &mut App) {
 
 pub fn pick_and_import_image(cx: &mut App) {
     cx.spawn(async move |cx| {
-        let Some(path) = pick_import_file(&[("Image Files", IMAGE_IMPORT_EXTENSIONS)], cx).await
+        let Some(path) = pick_import_file(
+            &[(tr::import::filter::image(), IMAGE_IMPORT_EXTENSIONS)],
+            cx,
+        )
+        .await
         else {
             return;
         };
@@ -333,9 +343,9 @@ pub fn pick_and_import_media(cx: &mut App) {
     cx.spawn(async move |cx| {
         let Some(path) = pick_import_file(
             &[
-                ("Media Files", MEDIA_IMPORT_EXTENSIONS),
-                ("Video Files", VIDEO_IMPORT_EXTENSIONS),
-                ("Image Files", IMAGE_IMPORT_EXTENSIONS),
+                (tr::import::filter::media(), MEDIA_IMPORT_EXTENSIONS),
+                (tr::import::filter::video(), VIDEO_IMPORT_EXTENSIONS),
+                (tr::import::filter::image(), IMAGE_IMPORT_EXTENSIONS),
             ],
             cx,
         )
@@ -351,7 +361,7 @@ pub fn pick_and_import_media(cx: &mut App) {
             cx.update(|cx| import_image_from_path(path, cx));
         } else {
             tracing::error!(path = %path.display(), "unsupported media import path");
-            show_error_dialog("Unsupported media file.".to_string());
+            show_error_dialog(tr::import::unsupported().to_string());
         }
     })
     .detach();
@@ -495,12 +505,15 @@ fn show_import_error(kind: ImportKind, message: &str) {
         ImportKind::Image => "image",
     };
     tracing::error!("failed to import {media}: {message}");
-    show_error_dialog(format!("Failed to import {media}: {message}"));
+    show_error_dialog(match kind {
+        ImportKind::Video => tr::import::video_failed(message),
+        ImportKind::Image => tr::import::image_failed(message),
+    });
 }
 
 fn show_error_dialog(description: String) {
     let _ = rfd::MessageDialog::new()
-        .set_title("Import Error")
+        .set_title(tr::import::error_title())
         .set_description(description)
         .set_level(rfd::MessageLevel::Error)
         .set_buttons(rfd::MessageButtons::Ok)
@@ -547,7 +560,7 @@ fn run_video_import(source_path: &Path, tx: &flume::Sender<ImportProgress>) {
         pretty_name: &project_name,
     };
 
-    sink.send(ImportStage::Probing, 0.0, "Analyzing video file...");
+    sink.send(ImportStage::Probing, 0.0, tr::import::progress::analyzing());
     match probe_video_can_decode(source_path) {
         Ok(true) => {}
         Ok(false) => {
@@ -603,7 +616,11 @@ fn run_video_import(source_path: &Path, tx: &flume::Sender<ImportProgress>) {
         return;
     }
 
-    sink.send(ImportStage::Converting, 0.0, "Starting conversion...");
+    sink.send(
+        ImportStage::Converting,
+        0.0,
+        tr::import::progress::starting(),
+    );
     let result = transcode_video(
         source_path,
         &output_video_path,
@@ -613,7 +630,7 @@ fn run_video_import(source_path: &Path, tx: &flume::Sender<ImportProgress>) {
             sink.send(
                 ImportStage::Converting,
                 progress,
-                &format!("Converting video... {}%", (progress * 100.0) as u32),
+                &tr::import::progress::converting((progress * 100.0) as u32),
             );
         },
         None,
@@ -652,7 +669,7 @@ fn run_video_import(source_path: &Path, tx: &flume::Sender<ImportProgress>) {
     sink.send(
         ImportStage::Finalizing,
         0.95,
-        "Creating project metadata...",
+        tr::import::progress::metadata(),
     );
 
     // `import.rs:1490-1504`: an Opus file this small is headers with no
@@ -687,7 +704,7 @@ fn run_video_import(source_path: &Path, tx: &flume::Sender<ImportProgress>) {
         tracing::warn!("could not write the imported video's thumbnail: {error}");
     }
 
-    sink.send(ImportStage::Complete, 1.0, "Import complete!");
+    sink.send(ImportStage::Complete, 1.0, tr::import::progress::complete());
     tracing::info!(path = %project_path.display(), "video import complete");
 }
 
@@ -734,7 +751,7 @@ fn run_image_import(source_path: &Path, tx: &flume::Sender<ImportProgress>) {
         pretty_name: &project_name,
     };
 
-    sink.send(ImportStage::Probing, 0.0, "Importing image...");
+    sink.send(ImportStage::Probing, 0.0, tr::import::progress::image());
 
     let (width, height, rgba) = match decode_image_rgba(source_path) {
         Ok(decoded) => decoded,
@@ -798,7 +815,7 @@ fn run_image_import(source_path: &Path, tx: &flume::Sender<ImportProgress>) {
         return;
     }
 
-    sink.send(ImportStage::Complete, 1.0, "Import complete!");
+    sink.send(ImportStage::Complete, 1.0, tr::import::progress::complete());
     tracing::info!(path = %project_path.display(), "image import complete");
 }
 

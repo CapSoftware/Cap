@@ -39,6 +39,16 @@ export const formatDuration = (seconds: number | null) => {
 	return "< 1 sec";
 };
 
+export const formatChapterTime = (seconds: number) => {
+	const total = Math.max(0, Math.floor(seconds));
+	const hours = Math.floor(total / 3600);
+	const minutes = Math.floor(total / 60) % 60;
+	const secs = (total % 60).toString().padStart(2, "0");
+	return hours > 0
+		? `${hours}:${minutes.toString().padStart(2, "0")}:${secs}`
+		: `${minutes}:${secs}`;
+};
+
 export const formatFileSize = (bytes: number | null | undefined) => {
 	if (bytes === null || bytes === undefined || !Number.isFinite(bytes)) {
 		return null;

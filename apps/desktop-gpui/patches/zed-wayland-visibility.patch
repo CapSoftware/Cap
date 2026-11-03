@@ -209,7 +209,7 @@
 +            }
 +            _ => return,
 +        }
-+        log::warn!("no configure after remapping a window; replacing its toplevel role");
++        log::info!("no configure after remapping a window; replacing its toplevel role");
 +        let xdg_surface =
 +            state
 +                .globals

@@ -175,16 +175,24 @@ impl Step {
     }
 }
 
-struct ModeDetail {
+pub(crate) struct ModeDetail {
     mode: Mode,
-    title: fn() -> &'static str,
-    tagline: fn() -> &'static str,
+    pub(crate) title: fn() -> &'static str,
+    pub(crate) tagline: fn() -> &'static str,
     description: fn() -> &'static str,
     icon: &'static str,
-    features: [fn() -> &'static str; 4],
+    pub(crate) features: [fn() -> &'static str; 4],
 }
 
-const MODES: [ModeDetail; 3] = [
+pub(crate) fn mode_detail(mode: Mode) -> &'static ModeDetail {
+    match mode {
+        Mode::Instant => &MODES[0],
+        Mode::Studio => &MODES[1],
+        Mode::Screenshot => &MODES[2],
+    }
+}
+
+static MODES: [ModeDetail; 3] = [
     ModeDetail {
         mode: Mode::Instant,
         title: tr::onboarding::modes::instant::title,
@@ -790,7 +798,7 @@ impl OnboardingWindow {
     }
 }
 
-fn mode_doodle(mode: Mode) -> &'static crate::doodle::Doodle {
+pub(crate) fn mode_doodle(mode: Mode) -> &'static crate::doodle::Doodle {
     match mode {
         Mode::Instant => &crate::onboarding_doodles::UPLOAD,
         Mode::Studio => &crate::onboarding_doodles::TRACKS,
@@ -1246,9 +1254,13 @@ impl OnboardingWindow {
                     .justify_center()
                     .gap(px(4.))
                     .child(
-                        copy(tr::onboarding::welcome::click_or_press(), 11., ink.opacity(0.55))
-                            .font_weight(FontWeight::NORMAL)
-                            .line_height(px(14.)),
+                        copy(
+                            tr::onboarding::welcome::click_or_press(),
+                            11.,
+                            ink.opacity(0.55),
+                        )
+                        .font_weight(FontWeight::NORMAL)
+                        .line_height(px(14.)),
                     )
                     .child(
                         copy(tr::onboarding::welcome::space_key(), 10., ink.opacity(0.7))
@@ -1290,18 +1302,14 @@ impl OnboardingWindow {
                     .child(welcome_script(written, title_opacity)),
             )
             .child(
-                copy(
-                    tr::onboarding::welcome::tagline(),
-                    22.,
-                    ink.opacity(0.75),
-                )
-                .relative()
-                .top(px(subtitle_y))
-                .opacity(subtitle_opacity)
-                .font_family("Source Serif 4")
-                .font_weight(FontWeight::LIGHT)
-                .line_height(px(32.))
-                .whitespace_nowrap(),
+                copy(tr::onboarding::welcome::tagline(), 22., ink.opacity(0.75))
+                    .relative()
+                    .top(px(subtitle_y))
+                    .opacity(subtitle_opacity)
+                    .font_family("Source Serif 4")
+                    .font_weight(FontWeight::LIGHT)
+                    .line_height(px(32.))
+                    .whitespace_nowrap(),
             )
             .child(button)
             .when_some(self.error.clone(), |el, error| {
@@ -1342,18 +1350,64 @@ impl OnboardingWindow {
 
     fn render_overview(&self) -> AnyElement {
         let theme = self.theme;
-        div().flex().flex_col().items_center().justify_center().min_h_full().px(px(40.)).gap(px(32.))
-            .child(self.heading(tr::onboarding::overview::title(), tr::onboarding::overview::subtitle()))
-            .child(div().flex().gap(px(16.)).w_full().max_w(px(540.)).children(MODES.iter().enumerate().map(|(index, mode)| {
-                let paper = stage::Paper::new(&theme);
-                let card = self.paper_card().flex_1().min_w_0().flex().flex_col().items_center().gap(px(10.)).px(px(20.)).pt(px(22.)).pb(px(24.))
-                    .child(crate::doodle::doodle(mode_doodle(mode.mode), paper.palette(), self.step_at + Duration::from_millis(index as u64 * 180), !self.animated, 96., 84.))
-                    .child(copy((mode.title)(), 15., paper.ink).font_weight(FontWeight::MEDIUM).text_center().mt(px(4.)))
-                    .child(copy((mode.tagline)(), 12., paper.soft).font_weight(FontWeight::NORMAL).line_height(px(16.)).text_center());
-                if !self.animated { return card.into_any_element(); }
-                card.with_animation(("overview-card", index), Animation::new(Duration::from_millis(700 + index as u64 * 100)),
-                        |el, t| el.relative().top(px(16. * (1. - ease(t)))).opacity(ease(t))).into_any_element()
-            }))).into_any_element()
+        div()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .min_h_full()
+            .px(px(40.))
+            .gap(px(32.))
+            .child(self.heading(
+                tr::onboarding::overview::title(),
+                tr::onboarding::overview::subtitle(),
+            ))
+            .child(div().flex().gap(px(16.)).w_full().max_w(px(540.)).children(
+                MODES.iter().enumerate().map(|(index, mode)| {
+                    let paper = stage::Paper::new(&theme);
+                    let card = self
+                        .paper_card()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .gap(px(10.))
+                        .px(px(20.))
+                        .pt(px(22.))
+                        .pb(px(24.))
+                        .child(crate::doodle::doodle(
+                            mode_doodle(mode.mode),
+                            paper.palette(),
+                            self.step_at + Duration::from_millis(index as u64 * 180),
+                            !self.animated,
+                            96.,
+                            84.,
+                        ))
+                        .child(
+                            copy((mode.title)(), 15., paper.ink)
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_center()
+                                .mt(px(4.)),
+                        )
+                        .child(
+                            copy((mode.tagline)(), 12., paper.soft)
+                                .font_weight(FontWeight::NORMAL)
+                                .line_height(px(16.))
+                                .text_center(),
+                        );
+                    if !self.animated {
+                        return card.into_any_element();
+                    }
+                    card.with_animation(
+                        ("overview-card", index),
+                        Animation::new(Duration::from_millis(700 + index as u64 * 100)),
+                        |el, t| el.relative().top(px(16. * (1. - ease(t)))).opacity(ease(t)),
+                    )
+                    .into_any_element()
+                }),
+            ))
+            .into_any_element()
     }
 
     fn render_detail(&self, index: usize) -> AnyElement {
@@ -1540,18 +1594,60 @@ impl OnboardingWindow {
 
     fn render_shortcuts(&self) -> AnyElement {
         let theme = self.theme;
-        div().flex().flex_col().items_center().justify_center().min_h_full().px(px(48.)).gap(px(24.))
-            .child(self.heading(tr::onboarding::customize::title(), tr::onboarding::customize::subtitle()))
-            .child(div().flex().flex_col().w_full().max_w(px(420.)).gap(px(8.)).children([
-                (tr::onboarding::customize::shortcuts::title(), tr::onboarding::customize::shortcuts::description()),
-                (tr::onboarding::customize::s3::title(), tr::onboarding::customize::s3::description()),
-                (tr::onboarding::customize::domain::title(), tr::onboarding::customize::domain::description()),
-                (tr::onboarding::customize::preferences::title(), tr::onboarding::customize::preferences::description()),
-            ].into_iter().map(|(title, description)| {
-                self.paper_card().rounded(px(16.)).px(px(18.)).py(px(13.)).flex().flex_col().gap(px(4.))
-                    .child(copy(title, 13., theme.gray_12).font_weight(FontWeight::MEDIUM))
-                    .child(copy(description, 11., theme.gray_10).line_height(px(15.)))
-            })))
+        div()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .min_h_full()
+            .px(px(48.))
+            .gap(px(24.))
+            .child(self.heading(
+                tr::onboarding::customize::title(),
+                tr::onboarding::customize::subtitle(),
+            ))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .w_full()
+                    .max_w(px(420.))
+                    .gap(px(8.))
+                    .children(
+                        [
+                            (
+                                tr::onboarding::customize::shortcuts::title(),
+                                tr::onboarding::customize::shortcuts::description(),
+                            ),
+                            (
+                                tr::onboarding::customize::s3::title(),
+                                tr::onboarding::customize::s3::description(),
+                            ),
+                            (
+                                tr::onboarding::customize::domain::title(),
+                                tr::onboarding::customize::domain::description(),
+                            ),
+                            (
+                                tr::onboarding::customize::preferences::title(),
+                                tr::onboarding::customize::preferences::description(),
+                            ),
+                        ]
+                        .into_iter()
+                        .map(|(title, description)| {
+                            self.paper_card()
+                                .rounded(px(16.))
+                                .px(px(18.))
+                                .py(px(13.))
+                                .flex()
+                                .flex_col()
+                                .gap(px(4.))
+                                .child(
+                                    copy(title, 13., theme.gray_12).font_weight(FontWeight::MEDIUM),
+                                )
+                                .child(copy(description, 11., theme.gray_10).line_height(px(15.)))
+                        }),
+                    ),
+            )
             .child(copy(tr::onboarding::customize::footer(), 12., theme.gray_9))
             .into_any_element()
     }
@@ -1621,13 +1717,17 @@ impl OnboardingWindow {
                                         )
                                         .when(index == 0, |el| {
                                             el.child(
-                                                copy(tr::onboarding::faq::pricing(), 13., theme.blue_10)
-                                                    .id("onboarding-faq-pricing")
-                                                    .cursor_pointer()
-                                                    .mt(px(8.))
-                                                    .on_click(|_, _, cx| {
-                                                        cx.open_url(crate::auth::PRICING_URL)
-                                                    }),
+                                                copy(
+                                                    tr::onboarding::faq::pricing(),
+                                                    13.,
+                                                    theme.blue_10,
+                                                )
+                                                .id("onboarding-faq-pricing")
+                                                .cursor_pointer()
+                                                .mt(px(8.))
+                                                .on_click(|_, _, cx| {
+                                                    cx.open_url(crate::auth::PRICING_URL)
+                                                }),
                                             )
                                         }),
                                 )
@@ -1912,12 +2012,17 @@ impl OnboardingWindow {
                                     .flex()
                                     .flex_col()
                                     .child(
-                                        copy(tr::onboarding::demo::start_recording(), 15., gpui::white())
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .whitespace_nowrap(),
+                                        copy(
+                                            tr::onboarding::demo::start_recording(),
+                                            15.,
+                                            gpui::white(),
+                                        )
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .whitespace_nowrap(),
                                     )
                                     .child(
-                                        copy((MODES[index].title)(), 11., gpui::white()).opacity(0.9),
+                                        copy((MODES[index].title)(), 11., gpui::white())
+                                            .opacity(0.9),
                                     ),
                             ),
                     )
@@ -2265,7 +2370,10 @@ impl OnboardingWindow {
                                     .border_color(theme.gray_3)
                                     .bg(theme.body_fill(2)),
                             )
-                            .child(copy(tr::onboarding::demo::background(), 8., theme.gray_9).mt(px(4.)))
+                            .child(
+                                copy(tr::onboarding::demo::background(), 8., theme.gray_9)
+                                    .mt(px(4.)),
+                            )
                             .child(div().flex().gap(px(4.)).children(
                                 [0x667eea, 0xf78c88, 0xcccccc].map(|color| {
                                     div()
@@ -2557,7 +2665,11 @@ impl OnboardingWindow {
                                                 12.,
                                                 self.success_palette().2,
                                             ))
-                                            .child(copy(tr::onboarding::demo::copied_to_clipboard(), 11., theme.gray_12)),
+                                            .child(copy(
+                                                tr::onboarding::demo::copied_to_clipboard(),
+                                                11.,
+                                                theme.gray_12,
+                                            )),
                                     ),
                             )
                         }),

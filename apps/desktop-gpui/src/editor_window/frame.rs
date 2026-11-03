@@ -8,37 +8,39 @@ use gpui::{
 };
 
 use super::EditorWindow;
-use crate::ui;
+use crate::{i18n::tr, ui};
 
-const FRAME_STYLES: [(FrameStyle, &str, &str, &str); 5] = [
+type Text = fn() -> &'static str;
+
+const FRAME_STYLES: [(FrameStyle, Text, Text, &str); 5] = [
     (
         FrameStyle::None,
-        "None",
-        "Show the recording as-is",
+        tr::editor::window::frame::none,
+        tr::editor::window::frame::none_description,
         "icons/ban.svg",
     ),
     (
         FrameStyle::MacOS,
-        "macOS",
-        "Window chrome with traffic lights",
+        || "macOS",
+        tr::editor::window::frame::macos_description,
         "icons/app-window-mac.svg",
     ),
     (
         FrameStyle::Windows,
-        "Windows",
-        "Title bar with window controls",
+        || "Windows",
+        tr::editor::window::frame::windows_description,
         "icons/app-window.svg",
     ),
     (
         FrameStyle::Browser,
-        "Browser",
-        "Browser chrome with address bar",
+        tr::editor::window::frame::browser,
+        tr::editor::window::frame::browser_description,
         "icons/globe.svg",
     ),
     (
         FrameStyle::Macbook,
-        "MacBook",
-        "Laptop bezel around the recording",
+        || "MacBook",
+        tr::editor::window::frame::macbook_description,
         "icons/laptop.svg",
     ),
 ];
@@ -102,8 +104,15 @@ impl FrameField {
 
     fn label(self) -> &'static str {
         match self {
-            Self::Url => "URL",
-            Self::Title => "Title",
+            Self::Url => tr::editor::window::frame::url(),
+            Self::Title => tr::editor::window::frame::title(),
+        }
+    }
+
+    fn placeholder(self) -> &'static str {
+        match self {
+            Self::Url => "cap.so",
+            Self::Title => tr::editor::window::frame::window_title_placeholder(),
         }
     }
 
@@ -174,13 +183,19 @@ fn apply_targeted_frame_change(
 
 fn button_content(style: FrameStyle) -> (&'static str, &'static str) {
     if style == FrameStyle::None {
-        return ("Frame", "icons/app-window-mac.svg");
+        return (
+            tr::editor::window::frame::button(),
+            "icons/app-window-mac.svg",
+        );
     }
     FRAME_STYLES
         .iter()
         .find(|option| option.0 == style)
-        .map(|option| (option.1, option.3))
-        .unwrap_or(("Frame", "icons/app-window-mac.svg"))
+        .map(|option| ((option.1)(), option.3))
+        .unwrap_or((
+            tr::editor::window::frame::button(),
+            "icons/app-window-mac.svg",
+        ))
 }
 
 impl EditorWindow {
@@ -252,7 +267,7 @@ impl EditorWindow {
                     .left_icon(icon)
                     .right_icon("icons/chevron-down.svg")
                     .when(!narrow, |button| button.label(label))
-                    .tooltip(&self.theme, "Add a frame")
+                    .tooltip(&self.theme, tr::editor::window::frame::add_tooltip())
                     .pressed(self.frame_controls.open)
                     .disabled(self.instance.is_none())
                     .on_click(cx.listener(|this, _, window, cx| {
@@ -287,10 +302,7 @@ impl EditorWindow {
             self.frame_controls.fields = Some([FrameField::Url, FrameField::Title].map(|field| {
                 let input = cx.new(|cx| {
                     let mut input = ui::TextInputState::single_line(window, cx);
-                    input.set_placeholder(match field {
-                        FrameField::Url => "cap.so",
-                        FrameField::Title => "Window title",
-                    });
+                    input.set_placeholder(field.placeholder());
                     input
                 });
                 let subscription =
@@ -305,6 +317,7 @@ impl EditorWindow {
         if let Some(inputs) = &self.frame_controls.fields {
             for field in [FrameField::Url, FrameField::Title] {
                 let input = &inputs[field.index()];
+                input.update(cx, |input, _| input.set_placeholder(field.placeholder()));
                 if !input.read(cx).focus_handle().is_focused(window) {
                     input.update(cx, |input, cx| {
                         input.set_text(field.text(&frame).to_owned(), cx)
@@ -415,13 +428,13 @@ impl EditorWindow {
                             .text_size(px(13.))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme.gray(12))
-                            .child("Frame"),
+                            .child(tr::editor::window::frame::heading()),
                     )
                     .child(
                         div().text_size(px(11.)).text_color(theme.gray(10)).child(
                             match &self.frame_controls.style_target {
                                 Some(target) if !target.matches(&self.project) => {
-                                    "This Style changed. Close and reopen Frame.".to_string()
+                                    tr::editor::window::frame::style_changed().to_string()
                                 }
                                 Some(target)
                                     if self
@@ -435,19 +448,12 @@ impl EditorWindow {
                                             segment.overrides.background.is_none()
                                         }) =>
                                 {
-                                    format!(
-                                        "Style {} only · Editing enables its background override.",
-                                        target.index + 1
-                                    )
+                                    tr::editor::window::frame::style_only_override(target.index + 1)
                                 }
-                                Some(target) => format!(
-                                    "Style {} only · Global settings stay unchanged.",
-                                    target.index + 1
-                                ),
-                                None => {
-                                    "Global frame · Applies wherever Style inherits background."
-                                        .to_string()
+                                Some(target) => {
+                                    tr::editor::window::frame::style_only(target.index + 1)
                                 }
+                                None => tr::editor::window::frame::global().to_string(),
                             },
                         ),
                     ),
@@ -455,6 +461,7 @@ impl EditorWindow {
             .child(div().flex().flex_col().gap(px(2.)).p(px(6.)).children(
                 FRAME_STYLES.into_iter().enumerate().map(
                     |(index, (value, label, description, icon))| {
+                        let (label, description) = (label(), description());
                         let selected = value == style;
                         div()
                             .id(("frame-style", index))
@@ -543,7 +550,7 @@ impl EditorWindow {
                                         .text_size(px(12.))
                                         .font_weight(FontWeight::MEDIUM)
                                         .text_color(theme.gray(11))
-                                        .child("Theme"),
+                                        .child(tr::editor::window::frame::theme()),
                                 )
                                 .child(
                                     div()
@@ -556,8 +563,14 @@ impl EditorWindow {
                                         .p(px(1.))
                                         .children(
                                             [
-                                                (FrameTheme::Light, "Light"),
-                                                (FrameTheme::Dark, "Dark"),
+                                                (
+                                                    FrameTheme::Light,
+                                                    tr::editor::window::frame::light(),
+                                                ),
+                                                (
+                                                    FrameTheme::Dark,
+                                                    tr::editor::window::frame::dark(),
+                                                ),
                                             ]
                                             .into_iter()
                                             .map(
@@ -671,7 +684,7 @@ mod tests {
     #[test]
     fn frame_styles_and_button_labels_match_tauri() {
         assert_eq!(
-            FRAME_STYLES.map(|option| option.1),
+            FRAME_STYLES.map(|option| (option.1)()),
             ["None", "macOS", "Windows", "Browser", "MacBook"]
         );
         assert_eq!(
@@ -679,7 +692,7 @@ mod tests {
             ("Frame", "icons/app-window-mac.svg")
         );
         for (style, label, _, icon) in FRAME_STYLES.into_iter().skip(1) {
-            assert_eq!(button_content(style), (label, icon));
+            assert_eq!(button_content(style), (label(), icon));
         }
     }
 

@@ -4740,6 +4740,89 @@ mod tests {
         assert!((left_at_second(&stream, 1) - expected(10_000)).abs() < 0.02);
     }
 
+    #[test]
+    fn parallel_music_load_matches_serial_mix_and_preserves_failed_cache_entries() {
+        ffmpeg::init().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let mut segments = Vec::new();
+        for (index, values) in [
+            [2_000, -4_000, 6_000],
+            [-3_000, 5_000, -7_000],
+            [1_000, 8_000, -2_000],
+        ]
+        .iter()
+        .enumerate()
+        {
+            let path = format!("music-{index}.wav");
+            write_step_wav(&dir.path().join(&path), values);
+            let mut segment = music_track_segment(&path, 0.0, 1.5, 0.125, 0.25);
+            segment.trim_start = 0.5;
+            segments.push(segment);
+        }
+        let project = music_project(segments.clone());
+        let mut reference = MusicTracks::new();
+        for segment in &segments {
+            reference.extend(crate::load_music_tracks_uncached(
+                &music_project(vec![segment.clone()]),
+                dir.path(),
+            ));
+        }
+        let mut cache = MusicTracks::new();
+        let actual = crate::load_music_tracks(&project, dir.path(), &mut cache);
+        assert_eq!(actual.len(), 3);
+        let repeated = crate::load_music_tracks(&project, dir.path(), &mut cache);
+        for (path, data) in &actual {
+            assert!(Arc::ptr_eq(data, &repeated[path]));
+        }
+        let render = |tracks| {
+            let mut renderer = AudioRenderer::new(vec![]).with_music(tracks);
+            render_export_audio(&mut renderer, &project, 30, 45)
+                .into_iter()
+                .map(f32::to_bits)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(render(actual.clone()), render(reference));
+        for retained in [1, 2] {
+            let mut partial = actual
+                .iter()
+                .take(retained)
+                .map(|(path, data)| (path.clone(), Arc::clone(data)))
+                .collect::<MusicTracks>();
+            let retained_entries = partial.clone();
+            let loaded = crate::load_music_tracks(&project, dir.path(), &mut partial);
+            assert_eq!(render(loaded), render(actual.clone()));
+            for (path, data) in &retained_entries {
+                assert!(Arc::ptr_eq(data, &partial[path]));
+            }
+        }
+        let corrupt_path = "corrupt.wav";
+        std::fs::write(dir.path().join(corrupt_path), b"invalid audio").unwrap();
+        let mut corrupt_segments = segments.clone();
+        corrupt_segments.push(music_track_segment(corrupt_path, 0.0, 1.5, 0.0, 0.0));
+        let mut corrupt_cache = MusicTracks::new();
+        let surviving = crate::load_music_tracks(
+            &music_project(corrupt_segments),
+            dir.path(),
+            &mut corrupt_cache,
+        );
+        assert_eq!(surviving.len(), 3);
+        assert!(!corrupt_cache.contains_key(corrupt_path));
+        assert_eq!(render(surviving), render(actual.clone()));
+        for segment in &mut segments {
+            std::fs::remove_file(dir.path().join(&segment.path)).unwrap();
+            segment.trim_start = 0.0;
+        }
+        let failed = crate::load_music_tracks(&music_project(segments), dir.path(), &mut cache);
+        assert!(failed.is_empty());
+        for (path, data) in &actual {
+            assert!(Arc::ptr_eq(data, &cache[path]));
+        }
+        let restored = crate::load_music_tracks(&project, dir.path(), &mut cache);
+        for (path, data) in &actual {
+            assert!(Arc::ptr_eq(data, &restored[path]));
+        }
+    }
+
     static CACHE_RELEASE: std::sync::RwLock<()> = std::sync::RwLock::new(());
 
     struct ProgressiveFixture {

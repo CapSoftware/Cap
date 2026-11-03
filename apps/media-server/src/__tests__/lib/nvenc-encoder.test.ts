@@ -1,4 +1,7 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { execFileSync, spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FfmpegExitError, ffmpegErrorLines } from "../../lib/ffmpeg-errors";
 import type { VideoMetadata } from "../../lib/job-manager";
@@ -537,8 +540,6 @@ describe("process video args", () => {
 			"4",
 			"-fflags",
 			"+genpts",
-			"-reinit_filter",
-			"0",
 			"-i",
 			"in.webm",
 			...nvencVideoArgs,
@@ -787,4 +788,142 @@ describe("nvenc jobs on hosts without an NVENC device", () => {
 			await output.cleanup();
 		}
 	});
+});
+
+describe("nvenc jobs on hosts with an NVENC device", () => {
+	const hasNvenc =
+		spawnSync("ffmpeg", [
+			"-v",
+			"error",
+			"-f",
+			"lavfi",
+			"-i",
+			"testsrc2=s=256x144:d=0.2",
+			"-c:v",
+			"h264_nvenc",
+			"-f",
+			"null",
+			"-",
+		]).status === 0;
+	const sections = [
+		{ width: 320, height: 240 },
+		{ width: 320, height: 180 },
+		{ width: 352, height: 240 },
+	];
+	let directory: string;
+	let resizing: string;
+
+	beforeAll(() => {
+		directory = mkdtempSync(join(tmpdir(), "nvenc-resize-"));
+		resizing = join(directory, "resizing.webm");
+		if (!hasNvenc) return;
+		// One VP9 stream whose frame size changes twice, the way a browser capture does when its tab is resized.
+		const parts = sections.map(({ width, height }, index) => {
+			const part = join(directory, `part-${index}.webm`);
+			execFileSync("ffmpeg", [
+				"-v",
+				"error",
+				"-f",
+				"lavfi",
+				"-i",
+				`testsrc2=s=${width}x${height}:r=30:d=1`,
+				"-c:v",
+				"libvpx-vp9",
+				"-deadline",
+				"realtime",
+				"-g",
+				"30",
+				"-y",
+				part,
+			]);
+			return part;
+		});
+		const list = join(directory, "parts.txt");
+		writeFileSync(list, parts.map((part) => `file '${part}'`).join("\n"));
+		execFileSync("ffmpeg", [
+			"-v",
+			"error",
+			"-f",
+			"concat",
+			"-safe",
+			"0",
+			"-i",
+			list,
+			"-c",
+			"copy",
+			"-y",
+			resizing,
+		]);
+	});
+
+	afterAll(() => rmSync(directory, { recursive: true, force: true }));
+
+	function sectionSsim(output: string, index: number) {
+		const { width, height } = sections[0] as { width: number; height: number };
+		const start = (index + 0.2).toString();
+		const stderr = spawnSync("ffmpeg", [
+			"-hide_banner",
+			"-ss",
+			start,
+			"-t",
+			"0.6",
+			"-i",
+			output,
+			"-ss",
+			start,
+			"-t",
+			"0.6",
+			"-i",
+			resizing,
+			"-filter_complex",
+			`[1:v]scale=${width}:${height},format=yuv420p[ref];[0:v]format=yuv420p[out];[out][ref]ssim`,
+			"-f",
+			"null",
+			"-",
+		]).stderr.toString();
+		return Number(stderr.match(/All:([0-9.]+)/)?.[1] ?? 0);
+	}
+
+	test.skipIf(!hasNvenc)(
+		"keeps NVENC and scales every frame to the first size when the capture resizes",
+		async () => {
+			const metadata = await probeVideo(`file://${resizing}`);
+			const before = getVideoEncoderStatus(enabled).nvenc;
+			const previous = process.env.CAP_MEDIA_VIDEO_ENCODER;
+			process.env.CAP_MEDIA_VIDEO_ENCODER = "nvenc";
+			let output: Awaited<ReturnType<typeof processVideo>> | undefined;
+			try {
+				output = await processVideo(resizing, metadata, {
+					maxWidth: 1920,
+					maxHeight: 1080,
+				});
+				const after = getVideoEncoderStatus(enabled).nvenc;
+				expect(after?.attempts).toBe((before?.attempts ?? 0) + 1);
+				expect(after?.fallbacks).toBe(before?.fallbacks ?? 0);
+				const frames = execFileSync("ffprobe", [
+					"-v",
+					"error",
+					"-select_streams",
+					"v:0",
+					"-show_entries",
+					"frame=width,height",
+					"-of",
+					"csv=p=0",
+					output.path,
+				])
+					.toString()
+					.trim()
+					.split("\n");
+				expect(frames).toHaveLength(90);
+				expect(new Set(frames)).toEqual(new Set(["320,240"]));
+				for (const index of sections.keys())
+					expect(sectionSsim(output.path, index)).toBeGreaterThan(0.9);
+			} finally {
+				await output?.cleanup();
+				if (previous === undefined) delete process.env.CAP_MEDIA_VIDEO_ENCODER;
+				else process.env.CAP_MEDIA_VIDEO_ENCODER = previous;
+			}
+		},
+		60_000,
+	);
 });

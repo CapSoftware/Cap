@@ -83,10 +83,11 @@ export class CapRecorder {
 		if (!this.listeners.has(event)) {
 			this.listeners.set(event, new Set());
 		}
+		const registeredHandler = handler as EventHandler<keyof RecorderEventMap>;
 		const set = this.listeners.get(event);
-		if (set) set.add(handler as EventHandler<keyof RecorderEventMap>);
+		if (set) set.add(registeredHandler);
 		return () => {
-			this.listeners.get(event)?.delete(handler);
+			this.listeners.get(event)?.delete(registeredHandler);
 		};
 	}
 
@@ -229,14 +230,12 @@ export class CapRecorder {
 
 		if (recorder.state !== "inactive") recorder.stop();
 		await stopped;
-		if (this.recorder !== recorder) {
-			throw new DOMException("Recording was canceled", "AbortError");
-		}
+		this.assertCurrentRecording(recorder);
 		if (streams) {
 			releaseStreams(streams);
 			this.streams = null;
 		}
-		return this.uploadRecording();
+		return this.uploadRecording(recorder);
 	}
 
 	destroy(): void {
@@ -247,10 +246,20 @@ export class CapRecorder {
 		this.setPhase("idle");
 	}
 
-	private async uploadRecording(): Promise<RecordingResult> {
+	private assertCurrentRecording(recorder: MediaRecorder) {
+		if (this.recorder !== recorder) {
+			throw new DOMException("Recording was canceled", "AbortError");
+		}
+	}
+
+	private async uploadRecording(
+		recorder: MediaRecorder,
+	): Promise<RecordingResult> {
+		const durationMs = this._durationMs;
 		this.setPhase("uploading");
 
 		try {
+			this.assertCurrentRecording(recorder);
 			const blob = new Blob(this.chunks, {
 				type: this.selectedMimeType || "video/webm",
 			});
@@ -259,11 +268,11 @@ export class CapRecorder {
 				userId: this.options.userId,
 			});
 
+			this.assertCurrentRecording(recorder);
 			this._videoId = videoId;
 
-			await this.client.uploadBlob(videoId, blob, {
-				durationMs: this._durationMs,
-			});
+			await this.client.uploadBlob(videoId, blob, { durationMs });
+			this.assertCurrentRecording(recorder);
 
 			const result: RecordingResult = {
 				videoId,
@@ -273,14 +282,15 @@ export class CapRecorder {
 
 			this.setPhase("complete");
 			this.emit("complete", result);
-			this.cleanup();
+			if (this.recorder === recorder) this.cleanup();
 
 			return result;
 		} catch (error) {
+			this.assertCurrentRecording(recorder);
 			this.setPhase("error");
 			const err = error instanceof Error ? error : new Error(String(error));
 			this.emit("error", { error: err });
-			this.cleanup();
+			if (this.recorder === recorder) this.cleanup();
 			throw err;
 		}
 	}

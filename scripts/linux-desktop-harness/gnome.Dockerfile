@@ -12,7 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       gnome-shell-extension-ubuntu-dock gnome-settings-daemon \
       gnome-shell-extension-appindicator pipewire wireplumber pipewire-pulse \
       mesa-vulkan-drivers libgl1-mesa-dri libegl-mesa0 python3 python3-gi gir1.2-glib-2.0 \
-      at-spi2-core gir1.2-atspi-2.0 \
+      at-spi2-core gir1.2-atspi-2.0 gnome-backgrounds \
       procps psmisc ca-certificates xdg-utils \
     && apt-get clean
 RUN useradd -m -u 1001 tester \

@@ -115,7 +115,7 @@ const StackedSteps = ({ className }: { className?: string }) => (
 									</span>
 								</span>
 								{step.extraChip ? (
-									<span className="rounded-full bg-[#E7EDF3] px-2.5 py-1 text-[12px] font-normal text-[rgba(17,17,17,0.55)]">
+									<span className="rounded-full bg-[#E7EDF3] px-2.5 py-1 text-[12px] font-normal text-[rgba(17,17,17,0.66)]">
 										{step.extraChip}
 									</span>
 								) : null}

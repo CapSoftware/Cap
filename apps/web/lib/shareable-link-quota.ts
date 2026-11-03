@@ -1,7 +1,8 @@
 import "server-only";
 
 import { db } from "@cap/database";
-import { videos } from "@cap/database/schema";
+import { users, videos } from "@cap/database/schema";
+import { userIsPro } from "@cap/utils";
 import { type User, Video } from "@cap/web-domain";
 import { and, count, eq, gte, lt, or } from "drizzle-orm";
 
@@ -47,6 +48,27 @@ export async function isVideoOverShareableLinkLimit(video: {
 		);
 
 	return (row?.earlier ?? 0) >= Video.FREE_PLAN_SHAREABLE_LINKS_PER_MONTH;
+}
+
+export async function isVideoLockedByShareableLinkLimit(
+	videoId: Video.VideoId,
+): Promise<boolean> {
+	const [video] = await db()
+		.select({
+			ownerId: videos.ownerId,
+			createdAt: videos.createdAt,
+			isScreenshot: videos.isScreenshot,
+			stripeSubscriptionStatus: users.stripeSubscriptionStatus,
+			thirdPartyStripeSubscriptionId: users.thirdPartyStripeSubscriptionId,
+		})
+		.from(videos)
+		.leftJoin(users, eq(users.id, videos.ownerId))
+		.where(eq(videos.id, videoId))
+		.limit(1);
+
+	if (!video || userIsPro(video)) return false;
+
+	return isVideoOverShareableLinkLimit({ id: videoId, ...video });
 }
 
 export async function getShareableLinkUsage(userId: User.UserId): Promise<{

@@ -1,6 +1,7 @@
 "use client";
 
 import { Card, CardDescription, CardHeader, CardTitle } from "@cap/ui";
+import { useDashboardContext } from "../../../Contexts";
 import AccessEmailDomain from "./AccessEmailDomain";
 import { CustomDomain } from "./CustomDomain";
 import { OrganizationIcon } from "./OrganizationIcon";
@@ -8,8 +9,12 @@ import OrgName from "./OrgName";
 import { ShareableLinkIcon } from "./ShareableLinkIcon";
 
 export const OrganizationDetailsCard = () => {
+	const { activeOrganization } = useDashboardContext();
 	return (
-		<Card className="flex flex-col flex-1 gap-6 w-full min-h-fit">
+		<Card
+			key={activeOrganization?.organization.id}
+			className="flex flex-col flex-1 gap-6 w-full min-h-fit"
+		>
 			<CardHeader>
 				<CardTitle>Settings</CardTitle>
 				<CardDescription>

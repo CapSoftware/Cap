@@ -6,6 +6,7 @@ import { buildEnv, serverEnv } from "@cap/env";
 import { eq } from "drizzle-orm";
 import { notFound } from "next/navigation";
 import { type NextRequest, NextResponse, userAgent } from "next/server";
+import { agentMarkdownResponse } from "@/lib/agent-markdown";
 import { getShareIframeRedirectUrl } from "@/lib/share-iframe-navigation";
 
 const addHttps = (s?: string) => {
@@ -44,6 +45,7 @@ const FRAME_PROTECTED_PATHS = [
 	"/admin",
 	"/signup",
 	"/verify-otp",
+	"/checkout",
 ];
 
 const isFrameProtectedPath = (path: string) =>
@@ -115,7 +117,10 @@ async function route(request: NextRequest) {
 				path.startsWith("/verify-otp") ||
 				path.startsWith("/embed/") ||
 				path.startsWith("/.well-known/workflow/") ||
-				path.startsWith("/.well-known/oauth-")
+				path.startsWith("/.well-known/oauth-") ||
+				path.startsWith("/.well-known/mcp") ||
+				path === "/.well-known/api-catalog" ||
+				path === "/openapi.json"
 			) &&
 			process.env.NODE_ENV !== "development"
 		)
@@ -124,7 +129,12 @@ async function route(request: NextRequest) {
 	}
 
 	if (mainOrigins.some((d) => url.origin.startsWith(d))) {
-		return NextResponse.next();
+		const markdown = await agentMarkdownResponse(request, { isPublicAsset });
+		if (!markdown) return NextResponse.next();
+		return new NextResponse(markdown.body, {
+			status: markdown.status,
+			headers: markdown.headers,
+		});
 	}
 
 	const webUrl = new URL(serverEnv().WEB_URL).hostname;

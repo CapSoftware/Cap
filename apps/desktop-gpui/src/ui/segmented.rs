@@ -314,7 +314,7 @@ impl RenderOnce for SegmentedControl {
                     .when_some(item_height, |this, height| this.h(height))
                     .rounded(item_radius)
                     .text_size(text_size)
-                    .when(stretch, |this| this.flex_1())
+                    .when(stretch, |this| this.flex_1().min_w_0())
                     .when_some(font_weight, |this, weight| this.font_weight(weight))
                     .when(disabled, |this| this.opacity(0.5))
                     .map(|this| {
@@ -347,7 +347,13 @@ impl RenderOnce for SegmentedControl {
                             .flex_shrink_0()
                             .text_color(if selected { selected_text } else { idle_text })
                     }))
-                    .children(option.label)
+                    .children(option.label.map(|label| {
+                        if stretch {
+                            div().min_w_0().truncate().child(label).into_any_element()
+                        } else {
+                            label.into_any_element()
+                        }
+                    }))
                     .when_some(handler.filter(|_| !disabled), |this, handler| {
                         this.on_click(move |_, window, cx| handler(&index, window, cx))
                     })

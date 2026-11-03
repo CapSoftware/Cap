@@ -1,14 +1,18 @@
 import { faChevronDown } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
-import moment from "moment";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
 import { editDate } from "@/actions/videos/edit-date";
 import { editTitle } from "@/actions/videos/edit-title";
 import { Tooltip } from "@/components/Tooltip";
+import { formatDateTime, formatFromNow } from "@/lib/date-format";
 import type { CapCardProps } from "./CapCard";
+
+// Only typed dates need moment's parser, so it loads when the date editor opens
+// instead of shipping with every dashboard page.
+const loadMoment = () => import("moment").then((module) => module.default);
 
 interface CapContentProps {
 	cap: CapCardProps["cap"];
@@ -32,9 +36,7 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 		? new Date(cap.metadata.customCreatedAt)
 		: cap.createdAt;
 
-	const [dateValue, setDateValue] = useState(
-		moment(effectiveDate).format("YYYY-MM-DD HH:mm:ss"),
-	);
+	const [dateValue, setDateValue] = useState(formatDateTime(effectiveDate));
 	const [isDateEditing, setIsDateEditing] = useState(false);
 	const [showFullDate, setShowFullDate] = useState(false);
 	const [title, setTitle] = useState(cap.name);
@@ -63,6 +65,7 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 	const handleDateClick = () => {
 		if (userId === cap.ownerId) {
 			if (!isDateEditing) {
+				loadMoment().catch(() => {});
 				setIsDateEditing(true);
 			}
 		} else {
@@ -81,11 +84,18 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 	};
 
 	const handleDateBlur = async () => {
+		let moment: Awaited<ReturnType<typeof loadMoment>>;
+		try {
+			moment = await loadMoment();
+		} catch {
+			toast.error("Failed to update date - please try again.");
+			return;
+		}
 		const isValidDate = moment(dateValue).isValid();
 
 		if (!isValidDate) {
 			toast.error("Invalid date format. Please use YYYY-MM-DD HH:mm:ss");
-			setDateValue(moment(effectiveDate).format("YYYY-MM-DD HH:mm:ss"));
+			setDateValue(formatDateTime(effectiveDate));
 			setIsDateEditing(false);
 			return;
 		}
@@ -95,7 +105,7 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 
 		if (selectedDate.isAfter(currentDate)) {
 			toast.error("Cannot set a date in the future");
-			setDateValue(moment(effectiveDate).format("YYYY-MM-DD HH:mm:ss"));
+			setDateValue(formatDateTime(effectiveDate));
 			setIsDateEditing(false);
 			return;
 		}
@@ -124,7 +134,7 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 			e.preventDefault();
 			handleDateBlur();
 		} else if (e.key === "Escape") {
-			setDateValue(moment(effectiveDate).format("YYYY-MM-DD HH:mm:ss"));
+			setDateValue(formatDateTime(effectiveDate));
 			setIsDateEditing(false);
 		}
 	};
@@ -219,8 +229,8 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 							onClick={handleDateClick}
 						>
 							{showFullDate
-								? moment(effectiveDate).format("YYYY-MM-DD HH:mm:ss")
-								: moment(effectiveDate).fromNow()}
+								? formatDateTime(effectiveDate)
+								: formatFromNow(effectiveDate)}
 						</p>
 					</Tooltip>
 				)}

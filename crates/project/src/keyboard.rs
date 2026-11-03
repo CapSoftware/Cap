@@ -73,7 +73,8 @@ impl KeyboardEvents {
 }
 
 const MODIFIER_KEYS: &[&str] = &[
-    "LShift", "RShift", "LControl", "RControl", "LAlt", "RAlt", "LMeta", "RMeta", "Meta", "Command",
+    "LShift", "RShift", "LControl", "RControl", "LAlt", "RAlt", "LOption", "ROption", "LMeta",
+    "RMeta", "Meta", "Command", "RCommand",
 ];
 
 const SPECIAL_KEY_SYMBOLS: &[(&str, &str)] = &[
@@ -126,17 +127,17 @@ fn modifier_prefix(active_modifiers: &[String]) -> String {
 
     let has = |names: &[&str]| active_modifiers.iter().any(|m| names.contains(&m.as_str()));
 
-    if has(&["LMeta", "RMeta", "Meta", "Command"]) {
-        parts.push("⌘");
-    }
     if has(&["LControl", "RControl"]) {
         parts.push("⌃");
     }
-    if has(&["LAlt", "RAlt"]) {
+    if has(&["LAlt", "RAlt", "LOption", "ROption"]) {
         parts.push("⌥");
     }
     if has(&["LShift", "RShift"]) {
         parts.push("⇧");
+    }
+    if has(&["LMeta", "RMeta", "Meta", "Command", "RCommand"]) {
+        parts.push("⌘");
     }
 
     if parts.is_empty() {
@@ -930,7 +931,7 @@ pub fn group_key_events(
         let has_command_mod = active_mods.iter().any(|m| {
             matches!(
                 m.as_str(),
-                "LMeta" | "RMeta" | "Meta" | "Command" | "LControl" | "RControl"
+                "LMeta" | "RMeta" | "Meta" | "Command" | "RCommand" | "LControl" | "RControl"
             )
         });
 
@@ -1498,6 +1499,39 @@ mod tests {
         let segments = group_key_events(&events, 300.0, 500.0, true, true);
         assert_eq!(segments.len(), 1);
         assert_eq!(segments[0].display_text, "⌘W");
+    }
+
+    #[test]
+    fn macos_option_and_right_command_count_as_modifiers() {
+        for (presses, expected) in [
+            (
+                vec![
+                    key_down("Command", 100.0),
+                    key_down("LOption", 110.0),
+                    key_down("Left", 150.0),
+                ],
+                vec!["⌘", "⌥⌘←"],
+            ),
+            (
+                vec![
+                    key_down("RCommand", 100.0),
+                    key_down("ROption", 110.0),
+                    key_down("LShift", 120.0),
+                    key_down("LControl", 130.0),
+                    key_down("z", 150.0),
+                ],
+                vec!["⌘", "⌥⌘", "⌥⇧⌘", "⌃⌥⇧⌘Z"],
+            ),
+        ] {
+            let segments = group_key_events(&KeyboardEvents { presses }, 300.0, 500.0, true, true);
+            assert_eq!(
+                segments
+                    .iter()
+                    .map(|segment| segment.display_text.as_str())
+                    .collect::<Vec<_>>(),
+                expected
+            );
+        }
     }
 
     #[test]

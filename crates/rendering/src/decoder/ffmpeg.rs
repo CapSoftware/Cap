@@ -795,7 +795,7 @@ impl FfmpegDecoder {
                     if let Some(cached) = sw_cache.get_mut(&requested_frame) {
                         let data = cached.produce(&mut sw_converter);
                         if reply.send(data.frame.clone()).is_err() {
-                            log::warn!(
+                            log::debug!(
                                 "FFmpeg '{name}': Failed to send cached frame {requested_frame}: receiver dropped"
                             );
                         }
@@ -866,7 +866,7 @@ impl FfmpegDecoder {
                             if let Some(reply) = reply_for_respond.borrow_mut().take()
                                 && reply.send(data.frame).is_err()
                             {
-                                log::warn!(
+                                log::debug!(
                                     "Failed to send decoded frame {frame_number}: receiver dropped"
                                 );
                             }
@@ -1360,7 +1360,7 @@ impl FfmpegDecoder {
                     let data = cached.produce(&mut converter);
 
                     if reply.send(data.frame.clone()).is_err() {
-                        log::warn!(
+                        log::debug!(
                             "FFmpeg '{name}': Failed to send cached frame {requested_frame}: receiver dropped"
                         );
                     }
@@ -1437,7 +1437,7 @@ impl FfmpegDecoder {
                         if let Some(reply) = reply_for_respond.borrow_mut().take()
                             && reply.send(data.frame).is_err()
                         {
-                            log::warn!(
+                            log::debug!(
                                 "Failed to send decoded frame {frame_number}: receiver dropped"
                             );
                         }

@@ -993,6 +993,27 @@ describe("recording storage lifecycle", () => {
 		});
 	});
 
+	it("keeps the screenshot type and viewer settings on duplicated Caps", async () => {
+		const database = databaseFixture(recording({ type: "webMP4" }));
+		const settings = { disableComments: true, defaultPlaybackSpeed: 1.5 };
+		database.rows.set(videoId, {
+			...database.rows.get(videoId),
+			isScreenshot: true,
+			settings,
+		});
+		const storage = await storageFixture([
+			[`${prefix}screenshot/screen-capture.png`, "uploaded-screenshot"],
+		]);
+		expect(Exit.isSuccess(await runVideoOperation("duplicate"))).toBe(true);
+		expect(
+			storage.objects.get(`${newPrefix}screenshot/screen-capture.png`),
+		).toBe("uploaded-screenshot");
+		expect(database.rows.get("duplicate-video")).toMatchObject({
+			isScreenshot: true,
+			settings,
+		});
+	});
+
 	it("does not duplicate source inventories, raw fragments, or comment attachments across pages", async () => {
 		const database = databaseFixture();
 		const retained = Array.from(
