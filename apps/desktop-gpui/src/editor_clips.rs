@@ -3221,6 +3221,26 @@ fn get_source_video_duration_secs(
 /// `source_timeline_segments_for_import` (`import.rs:862-931`): the source's
 /// own edited timeline, clamped and cleaned, or a full-length timeline per
 /// segment when it has none.
+/// A source project's markers, moved onto the segments they were copied to.
+/// Each gets a fresh id so it can never collide with one already in the
+/// target project.
+fn imported_markers(
+    markers: &[cap_project::TimelineMarker],
+    source_to_target_index: &HashMap<u32, u32>,
+) -> Vec<cap_project::TimelineMarker> {
+    markers
+        .iter()
+        .filter_map(|marker| {
+            let target = *source_to_target_index.get(&marker.recording_clip)?;
+            Some(cap_project::TimelineMarker {
+                label: marker.label.clone(),
+                color: marker.color.clone(),
+                ..cap_project::TimelineMarker::new(target, marker.time)
+            })
+        })
+        .collect()
+}
+
 fn source_timeline_segments_for_import(
     source_meta: &RecordingMeta,
     source_segments: &[MultipleSegment],
@@ -3521,6 +3541,12 @@ pub(crate) fn append_cap_project_to_editor(
     }
 
     add_clip_configs(&mut config, base_index, &copied_segments);
+    config.markers.extend(imported_markers(
+        &ProjectConfiguration::load(source_path)
+            .unwrap_or_default()
+            .markers,
+        &source_to_target_index,
+    ));
 
     target_meta
         .save_for_project()
@@ -3536,6 +3562,27 @@ pub(crate) fn append_cap_project_to_editor(
 mod tests {
     use super::*;
     use gpui::{point, size};
+
+    #[test]
+    fn appended_recordings_bring_their_markers_onto_the_copied_segments() {
+        let markers = vec![
+            cap_project::TimelineMarker {
+                label: "Intro".into(),
+                color: Some("#22c55e".into()),
+                ..cap_project::TimelineMarker::new(0, 1.5)
+            },
+            cap_project::TimelineMarker::new(1, 0.25),
+            cap_project::TimelineMarker::new(7, 3.0),
+        ];
+        let index = HashMap::from([(0, 4), (1, 5)]);
+        let imported = imported_markers(&markers, &index);
+        assert_eq!(imported.len(), 2);
+        assert_eq!((imported[0].recording_clip, imported[0].time), (4, 1.5));
+        assert_eq!(imported[0].label, "Intro");
+        assert_eq!(imported[0].color.as_deref(), Some("#22c55e"));
+        assert_ne!(imported[0].id, markers[0].id);
+        assert_eq!((imported[1].recording_clip, imported[1].time), (5, 0.25));
+    }
 
     #[test]
     fn split_thumbnails_use_requested_time_inside_keyframe_interval() {

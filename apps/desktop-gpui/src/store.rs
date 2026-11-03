@@ -977,6 +977,10 @@ pub struct GeneralSettings {
     pub default_zoom_amount: Option<f32>,
     pub capture_keyboard_events: bool,
     pub macbook_notch_overlay: bool,
+    /// GPUI-only `recordingMarkerSound`: a short cue when a marker is added
+    /// during a Studio recording. Off by default, because a microphone or
+    /// system audio capture can record the cue.
+    pub recording_marker_sound: bool,
     pub max_fps: u32,
     pub recordings_path: Option<String>,
     /// Custom folders the library has been pointed at before. Not rendered by
@@ -1007,6 +1011,21 @@ pub struct GeneralSettings {
 }
 
 pub const SHOW_MAIN_WINDOW_AFTER_INSTANT_KEY: &str = "showMainWindowAfterInstantRecording";
+
+pub const RECORDING_MARKER_SOUND_KEY: &str = "recordingMarkerSound";
+
+/// Read on every marker press, so it goes through the cached store rather
+/// than a full [`GeneralSettings::load`].
+pub fn recording_marker_sound_enabled() -> bool {
+    cached_store(&tauri_store_path())
+        .and_then(|store| {
+            store
+                .get(GENERAL_SETTINGS)
+                .and_then(Value::as_object)
+                .map(|settings| bool_at(settings, RECORDING_MARKER_SOUND_KEY, false))
+        })
+        .unwrap_or(false)
+}
 
 /// What follows a cleanly stopped Instant recording, the link always copied.
 /// Not one key: `disableAutoOpenLinks` (shared with the Tauri app) decides
@@ -1395,6 +1414,7 @@ impl GeneralSettings {
             default_zoom_amount: opt_f32_at(general, "defaultZoomAmount"),
             capture_keyboard_events: bool_at(general, "captureKeyboardEvents", true),
             macbook_notch_overlay: bool_at(general, "macbookNotchOverlay", false),
+            recording_marker_sound: bool_at(general, RECORDING_MARKER_SOUND_KEY, false),
             max_fps: u32_at(general, "maxFps", 60),
             recordings_path: opt_string_at(general, "recordingsPath"),
             previous_recordings_paths: strings_at(general, "previousRecordingsPaths"),
@@ -1554,6 +1574,54 @@ pub fn set_hotkeys_raw(map: &Map<String, Value>) -> bool {
 
 pub fn hotkey_from_value(value: &Value) -> Option<Hotkey> {
     serde_json::from_value(value.clone()).ok()
+}
+
+pub const RECORDING_MARKER_HOTKEY: &str = "addRecordingMarker";
+
+/// Set once the marker shortcut's default has been offered, so clearing the
+/// shortcut in Settings sticks across launches.
+const RECORDING_MARKER_HOTKEY_SEEDED: &str = "recordingMarkerSeeded";
+
+/// ⌃⌘M on macOS. Elsewhere Ctrl+Alt is AltGr on many layouts (AltGr+M types
+/// µ in German), so Alt+Shift+M instead.
+pub fn default_recording_marker_hotkey() -> Hotkey {
+    let macos = cfg!(target_os = "macos");
+    Hotkey {
+        code: "KeyM".into(),
+        meta: macos,
+        ctrl: macos,
+        alt: !macos,
+        shift: !macos,
+    }
+}
+
+/// Gives the marker shortcut its default the first time this build runs,
+/// unless the user already bound it, or bound something else to the default
+/// combo. Later launches leave the map alone.
+pub fn seed_recording_marker_hotkey() {
+    if store_section(HOTKEYS)
+        .get(RECORDING_MARKER_HOTKEY_SEEDED)
+        .and_then(Value::as_bool)
+        == Some(true)
+    {
+        return;
+    }
+    let mut map = hotkeys_raw();
+    let default = default_recording_marker_hotkey();
+    let taken = map
+        .values()
+        .filter_map(hotkey_from_value)
+        .any(|hotkey| hotkey == default);
+    if !map.contains_key(RECORDING_MARKER_HOTKEY) && !taken {
+        let Ok(value) = serde_json::to_value(&default) else {
+            return;
+        };
+        map.insert(RECORDING_MARKER_HOTKEY.into(), value);
+        if !set_hotkeys_raw(&map) {
+            return;
+        }
+    }
+    set_store_setting(HOTKEYS, RECORDING_MARKER_HOTKEY_SEEDED, Value::Bool(true));
 }
 
 // -- Transcription hints --------------------------------------------------------
@@ -3163,6 +3231,58 @@ mod tests {
         // The unknown action's binding -- including the field this build does
         // not model -- is still there.
         assert_eq!(after["hotkeys"]["hotkeys"]["someFutureAction"]["extra"], 1);
+    }
+
+    #[test]
+    fn the_marker_shortcut_default_is_offered_once() {
+        let store = TempStore::new("marker-seed", Some(r#"{ "hotkeys": { "hotkeys": {} } }"#));
+        seed_recording_marker_hotkey();
+        let default = default_recording_marker_hotkey();
+        assert_eq!(
+            hotkey_from_value(&hotkeys_raw()[RECORDING_MARKER_HOTKEY]),
+            Some(default.clone())
+        );
+        assert_eq!(
+            store.read()["hotkeys"][RECORDING_MARKER_HOTKEY_SEEDED],
+            true
+        );
+
+        let mut cleared = hotkeys_raw();
+        cleared.remove(RECORDING_MARKER_HOTKEY);
+        assert!(set_hotkeys_raw(&cleared));
+        seed_recording_marker_hotkey();
+        assert!(!hotkeys_raw().contains_key(RECORDING_MARKER_HOTKEY));
+    }
+
+    #[test]
+    fn the_marker_shortcut_default_never_takes_a_combo_in_use() {
+        let default = serde_json::to_string(&default_recording_marker_hotkey()).unwrap();
+        let store = TempStore::new(
+            "marker-seed-taken",
+            Some(&format!(
+                r#"{{ "hotkeys": {{ "hotkeys": {{ "stopRecording": {default} }} }} }}"#
+            )),
+        );
+        seed_recording_marker_hotkey();
+        assert!(!hotkeys_raw().contains_key(RECORDING_MARKER_HOTKEY));
+        assert_eq!(
+            store.read()["hotkeys"][RECORDING_MARKER_HOTKEY_SEEDED],
+            true
+        );
+    }
+
+    #[test]
+    fn the_marker_sound_is_off_until_turned_on() {
+        let _store = TempStore::new("marker-sound", Some(r#"{ "general_settings": {} }"#));
+        assert!(!recording_marker_sound_enabled());
+        assert!(!GeneralSettings::load().recording_marker_sound);
+        assert!(set_store_setting(
+            GENERAL_SETTINGS,
+            RECORDING_MARKER_SOUND_KEY,
+            Value::Bool(true)
+        ));
+        assert!(recording_marker_sound_enabled());
+        assert!(GeneralSettings::load().recording_marker_sound);
     }
 
     /// The automations model against the JSON `crates/automation/src/types.rs`

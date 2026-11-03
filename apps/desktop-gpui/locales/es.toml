@@ -206,6 +206,10 @@ fps_30 = "30 FPS"
 fps_60 = "60 FPS (recomendado)"
 label = "Velocidad de fotogramas máxima"
 
+[settings.general.recording.marker_sound]
+description = "Reproduce un sonido corto cuando añades un marcador durante una grabación Studio. Tu micrófono o el audio del sistema pueden captarlo."
+label = "Reproducir un sonido con los marcadores"
+
 [settings.general.storage]
 choose_folder = "Elegir carpeta"
 default_location = "Predeterminada (Application Support)"
@@ -431,6 +435,7 @@ studio_show_cap = "Mostrar Cap"
 studio_show_cap_hint = "Volver a la grabadora"
 
 [settings.shortcuts.label]
+add_marker = "Añadir marcador"
 cycle_mode = "Cambiar el modo de grabación"
 fallback = "Atajo"
 open_picker = "Abrir el selector de grabación"
@@ -447,6 +452,7 @@ start_studio = "Iniciar grabación Studio"
 stop = "Detener la grabación"
 
 [settings.shortcuts.effect]
+add_marker = "marcar este momento en una grabación Studio"
 cycle_mode = "cambiar entre los modos Studio, Instant y Captura de pantalla"
 instant_copy = "grabar la pantalla o ventana seleccionada en modo Instant y copiar el enlace para compartir al detenerla"
 instant_copy_and_open = "grabar la pantalla o ventana seleccionada en modo Instant y copiar y abrir el enlace para compartir al detenerla"
@@ -479,6 +485,7 @@ studio = "grabar la pantalla o ventana seleccionada en modo Studio"
 studio_open_editor = "grabar la pantalla o ventana seleccionada en modo Studio y abrir el editor al detenerla"
 
 [settings.shortcuts.sentence]
+add_marker = "Marcar este momento en una grabación Studio."
 cycle_mode = "Cambiar entre los modos Studio, Instant y Captura de pantalla."
 instant_copy = "Grabar la pantalla o ventana seleccionada en modo Instant y copiar el enlace para compartir al detenerla."
 instant_copy_and_open = "Grabar la pantalla o ventana seleccionada en modo Instant y copiar y abrir el enlace para compartir al detenerla."
@@ -1141,6 +1148,9 @@ pausing = "Pausa…"
 resuming = "Continúa…"
 saving = "Guardar…"
 starting = "Iniciando"
+
+[controls.marker]
+add = "Añadir marcador"
 
 [camera]
 waiting_title = "Esperando acceso a la cámara"
@@ -2908,6 +2918,21 @@ generate = "Generar"
 generating = "Generando…"
 no_clicks = "No se encontraron clics para hacer zoom. Arrastra sobre la pista para añadir uno."
 prompt = "Añadir zooms automáticamente"
+
+[editor.markers]
+add = "Añadir marcador"
+button = { one = "{count} marcador", other = "{count} marcadores" }
+default_name = "Marcador {number}"
+delete = "Eliminar marcador"
+done = "Listo"
+edit = "Editar marcador"
+empty = "Aún no hay marcadores. Pulsa M para marcar el cabezal de reproducción o añade marcadores mientras grabas."
+hidden = { one = "{count} marcador está en una parte que recortaste.", other = "{count} marcadores están en partes que recortaste." }
+next = "Marcador siguiente"
+previous = "Marcador anterior"
+split = "Dividir clips en los marcadores"
+stack = { one = "{count} marcador. Haz clic para verlo.", other = "{count} marcadores muy juntos. Haz clic para verlos." }
+title = "Marcadores"
 
 [ui]
 coming_soon = "Próximamente"

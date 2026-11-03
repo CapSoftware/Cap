@@ -14,8 +14,11 @@ use specta::Type;
 
 use crate::DisplayNotch;
 
+mod markers;
 #[cfg(test)]
 mod style_resolution_tests;
+
+pub use markers::{PlacedMarker, TimelineMarker};
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
@@ -2707,6 +2710,12 @@ pub struct ProjectConfiguration {
     /// durations from `fade_duration`.
     #[serde(default)]
     pub text_anim_version: u32,
+    #[serde(
+        default,
+        deserialize_with = "markers::deserialize_markers",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub markers: Vec<TimelineMarker>,
 }
 
 pub const TEXT_SIZE_VERSION: u32 = 1;
@@ -2758,6 +2767,7 @@ impl Default for ProjectConfiguration {
             color_correction: Default::default(),
             text_size_version: TEXT_SIZE_VERSION,
             text_anim_version: TEXT_ANIM_VERSION,
+            markers: Vec::new(),
         }
     }
 }
@@ -2843,6 +2853,7 @@ impl ProjectConfiguration {
         preset.text_anim_version = self.text_anim_version;
         preset.overlay_order = self.overlay_order.clone();
         preset.clips = self.clips.clone();
+        preset.markers = self.markers.clone();
         preset
     }
 

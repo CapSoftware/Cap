@@ -206,6 +206,10 @@ fps_30 = "30 FPS"
 fps_60 = "60 FPS (सुझाया गया)"
 label = "अधिकतम कैप्चर फ़्रेम रेट"
 
+[settings.general.recording.marker_sound]
+description = "Studio रिकॉर्डिंग के दौरान मार्कर जोड़ने पर एक छोटी आवाज़ चलाता है। आपका माइक्रोफ़ोन या सिस्टम ऑडियो इसे रिकॉर्ड कर सकता है।"
+label = "मार्कर के लिए आवाज़ चलाएँ"
+
 [settings.general.storage]
 choose_folder = "फ़ोल्डर चुनें"
 default_location = "डिफ़ॉल्ट (Application Support)"
@@ -431,6 +435,7 @@ studio_show_cap = "Cap दिखाएँ"
 studio_show_cap_hint = "रिकॉर्डर पर वापस"
 
 [settings.shortcuts.label]
+add_marker = "मार्कर जोड़ें"
 cycle_mode = "रिकॉर्डिंग मोड बदलें"
 fallback = "शॉर्टकट"
 open_picker = "रिकॉर्डिंग पिकर खोलें"
@@ -447,6 +452,7 @@ start_studio = "Studio रिकॉर्डिंग शुरू करें"
 stop = "रिकॉर्डिंग रोकें"
 
 [settings.shortcuts.effect]
+add_marker = "Studio रिकॉर्डिंग में इस पल को मार्क करें"
 cycle_mode = "Studio, Instant और स्क्रीनशॉट मोड के बीच बदलें"
 instant_copy = "चुनी गई स्क्रीन या विंडो को Instant मोड में रिकॉर्ड करें, फिर रोकने पर शेयर लिंक कॉपी करें"
 instant_copy_and_open = "चुनी गई स्क्रीन या विंडो को Instant मोड में रिकॉर्ड करें, फिर रोकने पर शेयर लिंक कॉपी करके खोलें"
@@ -479,6 +485,7 @@ studio = "चुनी गई स्क्रीन या विंडो क�
 studio_open_editor = "चुनी गई स्क्रीन या विंडो को Studio मोड में रिकॉर्ड करें, फिर रोकने पर एडिटर खोलें"
 
 [settings.shortcuts.sentence]
+add_marker = "Studio रिकॉर्डिंग में इस पल को मार्क करें।"
 cycle_mode = "Studio, Instant और स्क्रीनशॉट मोड के बीच बदलें।"
 instant_copy = "चुनी गई स्क्रीन या विंडो को Instant मोड में रिकॉर्ड करें, फिर रोकने पर शेयर लिंक कॉपी करें।"
 instant_copy_and_open = "चुनी गई स्क्रीन या विंडो को Instant मोड में रिकॉर्ड करें, फिर रोकने पर शेयर लिंक कॉपी करके खोलें।"
@@ -1141,6 +1148,9 @@ pausing = "पॉज़…"
 resuming = "फिर शुरू…"
 saving = "सहेज रहा…"
 starting = "शुरू हो रहा"
+
+[controls.marker]
+add = "मार्कर जोड़ें"
 
 [camera]
 waiting_title = "कैमरा एक्सेस का इंतज़ार है"
@@ -2908,6 +2918,21 @@ generate = "बनाएँ"
 generating = "बनाया जा रहा है…"
 no_clicks = "ज़ूम करने के लिए कोई क्लिक नहीं मिला। जोड़ने के लिए लेन पर खींचें।"
 prompt = "ज़ूम अपने आप जोड़ें"
+
+[editor.markers]
+add = "मार्कर जोड़ें"
+button = { one = "{count} मार्कर", other = "{count} मार्कर" }
+default_name = "मार्कर {number}"
+delete = "मार्कर हटाएँ"
+done = "हो गया"
+edit = "मार्कर संपादित करें"
+empty = "अभी कोई मार्कर नहीं है। प्लेहेड को मार्क करने के लिए M दबाएँ, या रिकॉर्ड करते समय मार्कर जोड़ें।"
+hidden = { one = "{count} मार्कर काटे गए हिस्से में है।", other = "{count} मार्कर काटे गए हिस्सों में हैं।" }
+next = "अगला मार्कर"
+previous = "पिछला मार्कर"
+split = "मार्कर पर क्लिप विभाजित करें"
+stack = { one = "{count} मार्कर। देखने के लिए क्लिक करें।", other = "{count} मार्कर पास-पास हैं। देखने के लिए क्लिक करें।" }
+title = "मार्कर"
 
 [ui]
 coming_soon = "जल्द आ रहा है"

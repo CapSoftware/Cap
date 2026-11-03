@@ -5,6 +5,7 @@ pub(super) fn is_editor_shell_surface_key(key: &str) -> bool {
         "editor.canvas.",
         "editor.clips.",
         "editor.export.",
+        "editor.markers.",
         "editor.modal.",
         "editor.preparing.",
         "editor.tabs.",
@@ -18,6 +19,10 @@ pub(super) fn is_editor_shell_surface_key(key: &str) -> bool {
 
 const FORMATTED: &[&str] = &[
     "editor.window.clip_menu.transition_seconds",
+    "editor.markers.button",
+    "editor.markers.default_name",
+    "editor.markers.hidden",
+    "editor.markers.stack",
     "editor.clips.append_error",
     "editor.clips.clip",
     "editor.clips.error.cannot_decode",
@@ -1122,6 +1127,18 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             "Play/Pause video",
         ),
         (tr::editor::window::transport::split(), "Split"),
+        (tr::editor::markers::title(), "Markers"),
+        (tr::editor::markers::add(), "Add marker"),
+        (tr::editor::markers::previous(), "Previous marker"),
+        (tr::editor::markers::next(), "Next marker"),
+        (tr::editor::markers::edit(), "Edit marker"),
+        (tr::editor::markers::delete(), "Delete marker"),
+        (tr::editor::markers::done(), "Done"),
+        (tr::editor::markers::split(), "Split clips at markers"),
+        (
+            tr::editor::markers::empty(),
+            "No markers yet. Press M to mark the playhead, or add markers while you record.",
+        ),
         (
             tr::editor::window::transport::split_tooltip(),
             "Click a segment to split. Esc to finish.",
@@ -1175,9 +1192,15 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             tr::editor::window::clip_menu::merge_blocker::speed(),
             "Match the clip speeds first",
         ),
-        (tr::editor::tabs::font::system_sans_serif(), "System Sans-Serif"),
+        (
+            tr::editor::tabs::font::system_sans_serif(),
+            "System Sans-Serif",
+        ),
         (tr::editor::tabs::font::system_serif(), "System Serif"),
-        (tr::editor::tabs::font::system_monospace(), "System Monospace"),
+        (
+            tr::editor::tabs::font::system_monospace(),
+            "System Monospace",
+        ),
         (tr::ui::selection::select_all(), "Select all"),
     ];
     for (translated, literal) in pairs {
@@ -1196,6 +1219,17 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
     for key in FORMATTED {
         assert!(KEYS.contains(key), "{key}");
     }
+    assert_eq!(tr::editor::markers::button(1), "1 marker");
+    assert_eq!(tr::editor::markers::button(12), "12 markers");
+    assert_eq!(tr::editor::markers::default_name(3), "Marker 3");
+    assert_eq!(
+        tr::editor::markers::hidden(2),
+        "2 markers are in parts you cut out."
+    );
+    assert_eq!(
+        tr::editor::markers::stack(4),
+        "4 markers close together. Click to see them."
+    );
 }
 
 #[test]
