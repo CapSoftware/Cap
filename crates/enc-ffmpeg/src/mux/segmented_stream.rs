@@ -310,7 +310,7 @@ impl SegmentedVideoEncoder {
         video_config: VideoInfo,
         config: SegmentedVideoEncoderConfig,
     ) -> Result<Self, InitError> {
-        Self::init_with_options(base_path, video_config, config, false, false)
+        Self::init_with_options(base_path, video_config, config, false, false, None)
     }
 
     pub fn init_with_timed_fragments(
@@ -319,7 +319,14 @@ impl SegmentedVideoEncoder {
         config: SegmentedVideoEncoderConfig,
         timed_fragments: bool,
     ) -> Result<Self, InitError> {
-        Self::init_with_options(base_path, video_config, config, timed_fragments, false)
+        Self::init_with_options(
+            base_path,
+            video_config,
+            config,
+            timed_fragments,
+            false,
+            None,
+        )
     }
 
     /// Like [`Self::init_with_timed_fragments`], but muxing, segment
@@ -334,7 +341,7 @@ impl SegmentedVideoEncoder {
         config: SegmentedVideoEncoderConfig,
         timed_fragments: bool,
     ) -> Result<Self, InitError> {
-        Self::init_with_options(base_path, video_config, config, timed_fragments, true)
+        Self::init_with_options(base_path, video_config, config, timed_fragments, true, None)
     }
 
     fn init_with_options(
@@ -343,6 +350,7 @@ impl SegmentedVideoEncoder {
         config: SegmentedVideoEncoderConfig,
         timed_fragments: bool,
         write_behind: bool,
+        encoder_priority: Option<&'static [&'static str]>,
     ) -> Result<Self, InitError> {
         std::fs::create_dir_all(&base_path)?;
 
@@ -387,6 +395,9 @@ impl SegmentedVideoEncoder {
         let mut builder = H264EncoderBuilder::new(video_config)
             .with_preset(config.preset)
             .with_bpp(config.bpp);
+        if let Some(priority) = encoder_priority {
+            builder = builder.with_encoder_priority_override(priority);
+        }
 
         if let Some((width, height)) = config.output_size {
             builder = builder.with_output_size(width, height)?;
@@ -647,6 +658,22 @@ impl SegmentedVideoEncoder {
                 },
             )
             .map_err(std::io::Error::from)?
+    }
+
+    #[cfg(test)]
+    fn init_libx264(
+        base_path: PathBuf,
+        video_config: VideoInfo,
+        config: SegmentedVideoEncoderConfig,
+    ) -> Result<Self, InitError> {
+        Self::init_with_options(
+            base_path,
+            video_config,
+            config,
+            false,
+            false,
+            Some(&["libx264"]),
+        )
     }
 
     #[cfg(test)]
@@ -1981,7 +2008,7 @@ mod tests {
         ffmpeg::init().unwrap();
         let temp = tempfile::tempdir().unwrap();
         let base_path = temp.path().to_path_buf();
-        let mut encoder = SegmentedVideoEncoder::init(
+        let mut encoder = SegmentedVideoEncoder::init_libx264(
             base_path.clone(),
             test_video_info(),
             SegmentedVideoEncoderConfig {
@@ -2043,7 +2070,7 @@ mod tests {
         ffmpeg::init().unwrap();
         let temp = tempfile::tempdir().unwrap();
         let base_path = temp.path().to_path_buf();
-        let mut encoder = SegmentedVideoEncoder::init(
+        let mut encoder = SegmentedVideoEncoder::init_libx264(
             base_path.clone(),
             test_video_info(),
             SegmentedVideoEncoderConfig::default(),
@@ -2078,7 +2105,7 @@ mod tests {
         ffmpeg::init().unwrap();
         let temp = tempfile::tempdir().unwrap();
         let base_path = temp.path().to_path_buf();
-        let mut encoder = SegmentedVideoEncoder::init(
+        let mut encoder = SegmentedVideoEncoder::init_libx264(
             base_path.clone(),
             test_video_info(),
             SegmentedVideoEncoderConfig::default(),
@@ -2119,7 +2146,7 @@ mod tests {
     fn encoder_failures_without_runtime_fallback_keep_their_previous_outcome() {
         ffmpeg::init().unwrap();
         let temp = tempfile::tempdir().unwrap();
-        let mut encoder = SegmentedVideoEncoder::init(
+        let mut encoder = SegmentedVideoEncoder::init_libx264(
             temp.path().to_path_buf(),
             test_video_info(),
             SegmentedVideoEncoderConfig::default(),
