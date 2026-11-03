@@ -2794,7 +2794,6 @@ pub enum FieldKey {
     KeyboardStart(usize),
     KeyboardEnd(usize),
     SyncOffset(usize, OffsetKind),
-    /// The captions tab's manual centre, as a percentage of the frame.
     CaptionManualX,
     CaptionManualY,
     /// The crop dialog's four `BoundInput`s (`Editor.tsx:1199-1216`). They do

@@ -8223,7 +8223,6 @@ fn join_layer<T>(handle: std::thread::ScopedJoinHandle<'_, T>) -> T {
 }
 
 impl RendererLayers {
-    /// The caption box the last prepared frame drew, if any.
     pub fn caption_frame_box(&self) -> Option<CaptionFrameBox> {
         self.overlays.as_ref()?.captions.frame_box()
     }

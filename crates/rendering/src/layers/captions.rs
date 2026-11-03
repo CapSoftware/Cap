@@ -124,7 +124,6 @@ impl CaptionFrameBox {
         self.position == CaptionPosition::Manual
     }
 
-    /// Whether this caption was laid out for the position setting `position`.
     pub fn is_at(&self, position: &str) -> bool {
         self.position == CaptionPosition::from_str(position)
     }

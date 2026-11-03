@@ -563,12 +563,10 @@ pub fn caption_manual_center(settings: &CaptionSettings) -> (f32, f32) {
     )
 }
 
-/// The manual centre as the panel's percentage, to a tenth.
 pub fn caption_percent_text(fraction: f32) -> String {
     ui::format_number((f64::from(fraction) * 1000.).round() / 10.)
 }
 
-/// "Reset position": Manual placement back on the default bottom-centre spot.
 pub fn reset_caption_manual_center(settings: &mut CaptionSettings) {
     let (x, y) = crate::editor_canvas::CAPTION_DEFAULT_CENTER;
     settings.position = "manual".to_string();
@@ -1202,8 +1200,6 @@ impl EditorWindow {
         }
     }
 
-    /// A caption placement write from the panel: no timeline rebuild, and
-    /// the style preset stays as it is.
     pub(crate) fn set_caption_placement(
         &mut self,
         window: &mut Window,
@@ -3304,7 +3300,6 @@ impl EditorWindow {
             .into_any_element()
     }
 
-    /// A manual position row: label, slider, and the exact percentage to type.
     fn caption_position_row(
         &self,
         name: impl Into<SharedString>,

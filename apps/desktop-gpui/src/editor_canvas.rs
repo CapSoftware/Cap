@@ -429,8 +429,6 @@ pub fn display_nudge_center(
 /// both axes.
 pub const CAPTION_SAFE_MARGIN: f64 = 0.05;
 
-/// Snap lines for a caption drag: the frame's edges and centre, its thirds,
-/// the safe-area margins, and every other visible element.
 pub fn caption_snap_targets(others: &[NormRect]) -> SnapTargets {
     let mut targets = build_snap_targets(others, Some((CAPTION_SAFE_MARGIN, CAPTION_SAFE_MARGIN)));
     for pos in [1. / 3., 2. / 3.] {
@@ -470,7 +468,6 @@ pub fn caption_drag_center(
     camera_drag_center(rect, canvas, delta, targets, shift)
 }
 
-/// One canvas pixel per arrow press, ten with Shift, inside the frame.
 pub fn caption_nudge_center(
     rect: NormRect,
     canvas: (f64, f64),
