@@ -503,6 +503,10 @@ pub struct CanvasDrag {
     pub resize: Option<CanvasResize>,
 }
 
+fn same_point(a: XY<f64>, b: XY<f64>) -> bool {
+    (a.x - b.x).abs() < 1e-6 && (a.y - b.y).abs() < 1e-6
+}
+
 impl EditorWindow {
     /// `overlayVisible()` (`:238`): only while paused, and only once the
     /// renderer has reported a layout.
@@ -1261,15 +1265,23 @@ impl EditorWindow {
                 };
                 // An animated property edits the key under the playhead
                 // (adding one there); a still one moves the overlay itself.
-                let at = (now - segment.start).clamp(0., segment.end - segment.start);
+                // A key is only written for a property the gesture changed:
+                // each span eases on its own, so an extra key bends the curve.
+                let at = segment.key_time(now);
+                let (current_center, current_size, _) = segment.keyframes.sample(
+                    segment.center,
+                    segment.size,
+                    f64::from(segment.opacity),
+                    at,
+                );
                 if segment.keyframes.position.is_empty() {
                     segment.center = center;
-                } else {
+                } else if !same_point(current_center, center) {
                     segment.keyframes.set_position(at, center);
                 }
                 if segment.keyframes.size.is_empty() {
                     segment.size = size;
-                } else {
+                } else if !same_point(current_size, size) {
                     segment.keyframes.set_size(at, size);
                 }
             }
@@ -1287,10 +1299,16 @@ impl EditorWindow {
                     return;
                 };
                 // Text keys position only; its box follows the font size.
-                let at = (now - segment.start).clamp(0., segment.end - segment.start);
+                let at = segment.key_time(now);
+                let (current_center, _, _) = segment.keyframes.sample(
+                    segment.center,
+                    segment.size,
+                    f64::from(segment.opacity),
+                    at,
+                );
                 if segment.keyframes.position.is_empty() {
                     segment.center = center;
-                } else {
+                } else if !same_point(current_center, center) {
                     segment.keyframes.set_position(at, center);
                 }
                 segment.size = size;

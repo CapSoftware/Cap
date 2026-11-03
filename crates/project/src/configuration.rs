@@ -1469,6 +1469,15 @@ impl TextSegment {
         }
     }
 
+    pub fn set_center_at(&mut self, time: f64, center: XY<f64>) {
+        if self.keyframes.position.is_empty() {
+            self.center = center;
+        } else {
+            let at = self.key_time(time);
+            self.keyframes.set_position(at, center);
+        }
+    }
+
     /// Text size is not keyed: its box follows the font size.
     pub fn add_keyframe_at(&mut self, time: f64) {
         let (center, _, opacity) = self.keyframes.sample(
@@ -2003,6 +2012,15 @@ impl ImageSegment {
         } else {
             let at = self.key_time(time);
             self.keyframes.set_opacity(at, value);
+        }
+    }
+
+    pub fn set_center_at(&mut self, time: f64, center: XY<f64>) {
+        if self.keyframes.position.is_empty() {
+            self.center = center;
+        } else {
+            let at = self.key_time(time);
+            self.keyframes.set_position(at, center);
         }
     }
 
@@ -3550,6 +3568,25 @@ mod tests {
         assert_eq!(image.keyframes.times(), vec![0.0, 4.0]);
         assert!((image.opacity_at(12.0) - 0.25).abs() < 1e-9);
         assert_eq!(image.opacity_at(30.0), 0.0);
+    }
+
+    #[test]
+    fn centering_a_keyed_image_moves_the_key_under_the_playhead() {
+        let mut image = ImageSegment {
+            start: 10.0,
+            end: 20.0,
+            ..Default::default()
+        };
+        image.set_center_at(12.0, XY::new(0.3, 0.3));
+        assert_eq!(image.center, XY::new(0.3, 0.3));
+        image.keyframes.set_position(0.0, XY::new(0.1, 0.1));
+        image.keyframes.set_position(10.0, XY::new(0.9, 0.9));
+        image.set_center_at(15.0, XY::new(0.5, 0.5));
+        assert_eq!(image.center, XY::new(0.3, 0.3));
+        assert_eq!(
+            image.keyframes.sample(image.center, image.size, 1.0, 5.0).0,
+            XY::new(0.5, 0.5)
+        );
     }
 
     #[test]

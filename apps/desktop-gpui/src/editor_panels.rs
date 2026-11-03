@@ -5836,6 +5836,7 @@ impl EditorWindow {
                                             // text belongs (`:3672-3677`).
                                             if value == TextLayout::Fullscreen {
                                                 segment.center = XY::new(0.5, 0.5);
+                                                segment.keyframes.position.clear();
                                             }
                                             true
                                         },
@@ -9587,13 +9588,14 @@ impl EditorWindow {
                         .label(tr::editor::panel::image::center())
                         .on_click(cx.listener(
                             move |this, _, window, cx| {
+                                let now = this.preview_or_playhead();
                                 this.edit_image_segment(
                                     "image-center",
                                     index,
                                     window,
                                     cx,
                                     |segment| {
-                                        segment.center = XY::new(0.5, 0.5);
+                                        segment.set_center_at(now, XY::new(0.5, 0.5));
                                         true
                                     },
                                 );
