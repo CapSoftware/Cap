@@ -490,20 +490,16 @@ pub fn target_to_display_and_crop(
                     .physical_bounds()
                     .ok_or_else(|| anyhow!("No window bounds"))?;
 
+                let relative = PhysicalBounds::new(
+                    PhysicalPosition::new(
+                        raw_window_bounds.position().x() - raw_display_bounds.position().x(),
+                        raw_window_bounds.position().y() - raw_display_bounds.position().y(),
+                    ),
+                    raw_window_bounds.size(),
+                );
                 Some(
-                    screen_capture::window_crop_on_display(
-                        PhysicalBounds::new(
-                            PhysicalPosition::new(
-                                raw_window_bounds.position().x()
-                                    - raw_display_bounds.position().x(),
-                                raw_window_bounds.position().y()
-                                    - raw_display_bounds.position().y(),
-                            ),
-                            raw_window_bounds.size(),
-                        ),
-                        raw_display_bounds.size(),
-                    )
-                    .ok_or_else(|| anyhow!("The window is not on its display"))?,
+                    screen_capture::window_crop_on_display(relative, raw_display_bounds.size())
+                        .unwrap_or(relative),
                 )
             }
 
