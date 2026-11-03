@@ -949,7 +949,6 @@ pub enum TrackKind {
 }
 
 impl TrackKind {
-    /// The track's part of a `ProjectConfiguration::track_names` key.
     pub fn name_key(self) -> &'static str {
         match self {
             Self::Clip => "clip",
@@ -1308,7 +1307,6 @@ impl TrackRow {
 /// Everything the timeline draws, derived once per project-config change.
 #[derive(Debug, Clone, Default)]
 pub struct TimelineModel {
-    /// Lane names the user gave, by `"<track>:<lane>"`.
     pub track_names: std::collections::BTreeMap<String, SharedString>,
     pub style: Vec<Segment>,
     pub image: Vec<Segment>,

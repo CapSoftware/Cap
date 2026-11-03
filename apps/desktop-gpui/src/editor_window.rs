@@ -4777,15 +4777,13 @@ impl EditorWindow {
                         target.lane,
                     )
                 });
-                if moved {
-                    edits::reorder_track_names(
-                        &mut self.project.track_names,
-                        reorder.source.kind,
-                        reorder.source.lane,
-                        target.lane,
-                    );
-                }
-                moved
+                let renamed = edits::reorder_track_names(
+                    &mut self.project.track_names,
+                    reorder.source.kind,
+                    reorder.source.lane,
+                    target.lane,
+                );
+                moved || renamed
             })
         };
         if changed {
@@ -6233,8 +6231,10 @@ impl EditorWindow {
                 cx,
             )
         } else {
-            self.edit(
-                |timeline| edits::delete_segments(timeline, selection.track, &selection.indices),
+            self.edit_timeline_project(
+                |project| {
+                    edits::delete_segments_with_names(project, selection.track, &selection.indices)
+                },
                 window,
                 cx,
             )
