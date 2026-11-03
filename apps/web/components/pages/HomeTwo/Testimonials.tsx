@@ -66,7 +66,7 @@ export const Testimonials = ({ eyebrow = true }: { eyebrow?: boolean }) => (
 								</p>
 								<span className="mt-auto flex items-center gap-3 pt-6">
 									<span
-										className="inline-flex shrink-0 rounded-full p-[2px]"
+										className="inline-flex shrink-0 rounded-full p-1"
 										style={{ background: accent }}
 									>
 										<Image
