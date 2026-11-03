@@ -617,6 +617,16 @@ pub enum ShapeDragMode {
     Draw { kind: ShapeKind, anchor: Px },
 }
 
+pub fn reveal_time(time: f64, start: f64, end: f64, animation_in: f64, animation_out: f64) -> f64 {
+    let low = start + animation_in.max(0.) + 0.05;
+    let high = end - animation_out.max(0.) - 0.05;
+    if low <= high {
+        time.clamp(low, high)
+    } else {
+        (start + end) / 2.
+    }
+}
+
 pub fn shows_handles(tool_armed: bool, drawing: bool, selected: usize) -> bool {
     !tool_armed && !drawing && selected == 1
 }
@@ -1105,14 +1115,8 @@ impl EditorWindow {
         animation_out: f64,
         cx: &mut Context<Self>,
     ) {
-        let low = start + animation_in.max(0.) + 0.05;
-        let high = end - animation_out.max(0.) - 0.05;
         let time = self.playhead;
-        let target = if low <= high {
-            time.clamp(low, high)
-        } else {
-            (start + end) / 2.
-        };
+        let target = reveal_time(time, start, end, animation_in, animation_out);
         if (target - time).abs() > f64::EPSILON {
             self.seek_to_time(target, cx);
         }
@@ -3026,5 +3030,14 @@ mod tests {
         assert!(!shows_handles(false, true, 1));
         assert!(!shows_handles(false, false, 0));
         assert!(!shows_handles(false, false, 2));
+    }
+
+    #[test]
+    fn revealing_a_new_shape_lands_past_its_entrance_and_before_its_exit() {
+        assert!(close(reveal_time(0., 0., 3., 0.4, 0.2), 0.45));
+        assert!(close(reveal_time(1.5, 0., 3., 0.4, 0.2), 1.5));
+        assert!(close(reveal_time(3., 0., 3., 0.4, 0.2), 2.75));
+        assert!(close(reveal_time(9., 7., 7.5, 0.4, 0.4), 7.25));
+        assert!(close(reveal_time(2., 1., 4., -1., f64::NEG_INFINITY), 2.));
     }
 }

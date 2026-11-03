@@ -6294,6 +6294,9 @@ impl EditorWindow {
         }
         let new_shape =
             (kind == TrackKind::Shape).then(|| self.new_shape_segment(start, end, lane));
+        let reveal = new_shape
+            .as_ref()
+            .map(|shape| (shape.animation_in_duration, shape.animation_out_duration));
         let mut index = 0;
         let inserted = self.edit(
             |timeline| {
@@ -6325,7 +6328,13 @@ impl EditorWindow {
             return;
         }
         self.set_selection(Some(Selection::single(kind, index)), cx);
-        self.seek_to_time(time.clamp(start, end), cx);
+        let target = match reveal {
+            Some((animation_in, animation_out)) => {
+                crate::editor_shapes::reveal_time(time, start, end, animation_in, animation_out)
+            }
+            None => time.clamp(start, end),
+        };
+        self.seek_to_time(target, cx);
         self.view.preview_time = None;
         self.audio_picker = None;
         self.note_edit("add-track", Some(kind));
@@ -8095,6 +8104,9 @@ impl EditorWindow {
 
         let new_shape =
             (kind == TrackKind::Shape).then(|| self.new_shape_segment(start, end, lane));
+        let reveal = new_shape
+            .as_ref()
+            .map(|shape| (shape.animation_in_duration, shape.animation_out_duration));
         let inserted = self.edit(
             |timeline| {
                 let index = match kind {
@@ -8158,8 +8170,15 @@ impl EditorWindow {
             _ => 0,
         };
         self.set_selection(Some(Selection::single(kind, index)), cx);
-        let pad = 0.15_f64.min(length / 4.0);
-        let target = time.max(start + pad).min(end - pad);
+        let target = match reveal {
+            Some((animation_in, animation_out)) => {
+                crate::editor_shapes::reveal_time(time, start, end, animation_in, animation_out)
+            }
+            None => {
+                let pad = 0.15_f64.min(length / 4.0);
+                time.max(start + pad).min(end - pad)
+            }
+        };
         if (target - time).abs() > f64::EPSILON {
             self.seek_to_time(target, cx);
         }
