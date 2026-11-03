@@ -530,6 +530,23 @@ fn every_overlay() -> ProjectConfiguration {
         project.captions = project.captions.or(overlay.captions);
         project.keyboard = project.keyboard.or(overlay.keyboard);
     }
+    let mut badge = cap_project::ShapeSegment::new(
+        cap_project::ShapeKind::Badge,
+        0.0,
+        3.0,
+        XY::new(0.8, 0.25),
+        4.0 / 3.0,
+    );
+    badge.animation_in = cap_project::ShapeAnimation::None;
+    let mut arrow = cap_project::ShapeSegment::new(
+        cap_project::ShapeKind::Arrow,
+        0.0,
+        3.0,
+        XY::new(0.4, 0.6),
+        4.0 / 3.0,
+    );
+    arrow.animation_in = cap_project::ShapeAnimation::None;
+    project.timeline.as_mut().unwrap().shape_segments = vec![badge, arrow];
     project
 }
 
@@ -787,4 +804,369 @@ async fn layers_sharing_a_pass_render_like_one_pass_per_layer() {
             "{name} renders differently when its layers share a pass"
         );
     }
+}
+
+fn red_shape(
+    kind: cap_project::ShapeKind,
+    from: (f64, f64),
+    to: (f64, f64),
+) -> cap_project::ShapeSegment {
+    cap_project::ShapeSegment {
+        start: 0.0,
+        end: 3.0,
+        kind,
+        from: XY::new(from.0, from.1),
+        to: XY::new(to.0, to.1),
+        stroke_color: "#FF0000".into(),
+        stroke_width: 40.0,
+        fill: false,
+        fill_color: "#0000FF".into(),
+        fill_opacity: 1.0,
+        shadow: 0.0,
+        animation_in: cap_project::ShapeAnimation::None,
+        animation_out: cap_project::ShapeAnimation::None,
+        ..Default::default()
+    }
+}
+
+fn with_shapes(shapes: Vec<cap_project::ShapeSegment>) -> ProjectConfiguration {
+    let mut project = project();
+    project.timeline.as_mut().unwrap().shape_segments = shapes;
+    project
+}
+
+struct Frame {
+    pixels: Vec<u8>,
+    width: usize,
+    height: usize,
+}
+
+impl Frame {
+    fn at(&self, x: f64, y: f64) -> [u8; 4] {
+        let x = ((x * self.width as f64) as usize).min(self.width - 1);
+        let y = ((y * self.height as f64) as usize).min(self.height - 1);
+        let index = (y * self.width + x) * 4;
+        self.pixels[index..index + 4].try_into().unwrap()
+    }
+}
+
+async fn render_frame(
+    constants: &RenderVideoConstants,
+    layers: &mut RendererLayers,
+    project: &ProjectConfiguration,
+    resolution: XY<u32>,
+) -> Frame {
+    let (frame, _) = render_for(constants, project, layers, 30, resolution, frames()).await;
+    Frame {
+        pixels: pixels(&frame),
+        width: frame.width as usize,
+        height: frame.height as usize,
+    }
+}
+
+fn close(actual: [u8; 4], expected: [u8; 3], tolerance: u8) -> bool {
+    actual[..3]
+        .iter()
+        .zip(expected)
+        .all(|(a, e)| a.abs_diff(e) <= tolerance)
+}
+
+#[tokio::test]
+async fn every_shape_kind_draws_its_outline_and_leaves_the_rest() {
+    use cap_project::ShapeKind;
+    let directory = tempfile::tempdir().unwrap();
+    let constants = constants(directory.path()).await;
+    let mut layers = RendererLayers::new(&constants.device, &constants.queue);
+    let resolution = XY::new(640, 480);
+    let base = render_frame(&constants, &mut layers, &project(), resolution).await;
+    let red = [255, 0, 0];
+    let blue = [0, 0, 255];
+
+    let rect = render_frame(
+        &constants,
+        &mut layers,
+        &with_shapes(vec![red_shape(
+            ShapeKind::Rectangle,
+            (0.25, 0.25),
+            (0.75, 0.75),
+        )]),
+        resolution,
+    )
+    .await;
+    assert!(
+        close(rect.at(0.25, 0.5), red, 2),
+        "{:?}",
+        rect.at(0.25, 0.5)
+    );
+    assert!(close(rect.at(0.5, 0.25), red, 2));
+    assert_eq!(rect.at(0.5, 0.5), base.at(0.5, 0.5));
+    assert_eq!(rect.at(0.1, 0.1), base.at(0.1, 0.1));
+    assert_eq!(rect.at(0.9, 0.5), base.at(0.9, 0.5));
+
+    let mut filled = red_shape(ShapeKind::Rectangle, (0.25, 0.25), (0.75, 0.75));
+    filled.fill = true;
+    let filled = render_frame(
+        &constants,
+        &mut layers,
+        &with_shapes(vec![filled]),
+        resolution,
+    )
+    .await;
+    assert!(close(filled.at(0.5, 0.5), blue, 2));
+    assert!(close(filled.at(0.25, 0.5), red, 2));
+
+    let ellipse = render_frame(
+        &constants,
+        &mut layers,
+        &with_shapes(vec![red_shape(
+            ShapeKind::Ellipse,
+            (0.25, 0.25),
+            (0.75, 0.75),
+        )]),
+        resolution,
+    )
+    .await;
+    assert!(close(ellipse.at(0.25, 0.5), red, 2));
+    assert!(close(ellipse.at(0.5, 0.75), red, 2));
+    assert_eq!(ellipse.at(0.28, 0.28), base.at(0.28, 0.28));
+    assert_eq!(ellipse.at(0.5, 0.5), base.at(0.5, 0.5));
+
+    let arrow = render_frame(
+        &constants,
+        &mut layers,
+        &with_shapes(vec![red_shape(ShapeKind::Arrow, (0.2, 0.5), (0.8, 0.5))]),
+        resolution,
+    )
+    .await;
+    assert!(close(arrow.at(0.5, 0.5), red, 2));
+    assert!(
+        close(arrow.at(0.78, 0.5), red, 2),
+        "the head reaches the tip"
+    );
+    assert!(
+        close(arrow.at(0.72, 0.47), red, 2),
+        "the head is wider than the shaft"
+    );
+    assert_eq!(arrow.at(0.5, 0.47), base.at(0.5, 0.47));
+    assert_eq!(arrow.at(0.85, 0.5), base.at(0.85, 0.5));
+
+    let line = render_frame(
+        &constants,
+        &mut layers,
+        &with_shapes(vec![red_shape(ShapeKind::Line, (0.2, 0.5), (0.8, 0.5))]),
+        resolution,
+    )
+    .await;
+    assert!(close(line.at(0.5, 0.5), red, 2));
+    assert_eq!(line.at(0.72, 0.47), base.at(0.72, 0.47));
+
+    let mut highlight = red_shape(ShapeKind::Highlight, (0.25, 0.25), (0.75, 0.75));
+    highlight.fill = true;
+    highlight.fill_color = "#FFFF00".into();
+    highlight.fill_opacity = 0.5;
+    highlight.stroke_width = 0.0;
+    let highlight = render_frame(
+        &constants,
+        &mut layers,
+        &with_shapes(vec![highlight]),
+        resolution,
+    )
+    .await;
+    let under = base.at(0.5, 0.5);
+    let tinted = highlight.at(0.5, 0.5);
+    let expected = [
+        (f32::from(under[0]) * 0.5 + 127.5).round() as u8,
+        (f32::from(under[1]) * 0.5 + 127.5).round() as u8,
+        (f32::from(under[2]) * 0.5).round() as u8,
+    ];
+    assert!(close(tinted, expected, 2), "{tinted:?} vs {expected:?}");
+
+    let mut badge = red_shape(ShapeKind::Badge, (0.4, 0.3), (0.6, 0.7));
+    badge.fill = true;
+    badge.fill_color = "#0000FF".into();
+    badge.stroke_width = 0.0;
+    badge.number = 8;
+    let badge_frame = render_frame(
+        &constants,
+        &mut layers,
+        &with_shapes(vec![badge]),
+        resolution,
+    )
+    .await;
+    assert!(close(badge_frame.at(0.5 - 0.1 * 0.75 * 0.75, 0.5), blue, 2));
+    assert_eq!(badge_frame.at(0.39, 0.5), base.at(0.39, 0.5));
+    let mut light = 0;
+    let (mut sum_y, mut count) = (0.0, 0.0);
+    let radius = badge_frame.width.min(badge_frame.height) as f64 * 0.2 * 0.6;
+    let (center_x, center_y) = (
+        badge_frame.width as f64 * 0.5,
+        badge_frame.height as f64 * 0.5,
+    );
+    for y in 0..badge_frame.height {
+        for x in 0..badge_frame.width {
+            if (x as f64 + 0.5 - center_x).hypot(y as f64 + 0.5 - center_y) > radius {
+                continue;
+            }
+            let pixel = badge_frame.at(
+                (x as f64 + 0.5) / badge_frame.width as f64,
+                (y as f64 + 0.5) / badge_frame.height as f64,
+            );
+            if pixel[0] > 200 && pixel[1] > 200 && pixel[2] > 200 {
+                light += 1;
+                sum_y += y as f64;
+                count += 1.0;
+            }
+        }
+    }
+    assert!(light > 20, "the badge number must draw");
+    let centroid = sum_y / count / badge_frame.height as f64;
+    eprintln!("badge digit vertical centroid {centroid:.4}");
+    assert!((centroid - 0.5).abs() < 0.005, "digit centroid {centroid}");
+    assert!(layers.overlays.as_ref().unwrap().shapes.labels_created());
+
+    let mut shadowed = red_shape(ShapeKind::Rectangle, (0.25, 0.25), (0.75, 0.75));
+    shadowed.shadow = 1.0;
+    let shadowed = render_frame(
+        &constants,
+        &mut layers,
+        &with_shapes(vec![shadowed]),
+        resolution,
+    )
+    .await;
+    let below = shadowed.at(0.5, 0.775);
+    let plain = base.at(0.5, 0.775);
+    assert!(
+        below[..3].iter().zip(&plain[..3]).all(|(s, p)| s <= p) && below != plain,
+        "the shadow darkens below the shape: {below:?} vs {plain:?}"
+    );
+}
+
+#[tokio::test]
+async fn shapes_match_across_output_resolutions() {
+    use cap_project::ShapeKind;
+    let directory = tempfile::tempdir().unwrap();
+    let constants = constants(directory.path()).await;
+    let mut layers = RendererLayers::new(&constants.device, &constants.queue);
+    let mut filled = red_shape(ShapeKind::Ellipse, (0.55, 0.2), (0.85, 0.6));
+    filled.fill = true;
+    filled.fill_opacity = 0.6;
+    filled.shadow = 0.6;
+    let project = with_shapes(vec![
+        red_shape(ShapeKind::Arrow, (0.1, 0.8), (0.5, 0.3)),
+        red_shape(ShapeKind::Rectangle, (0.1, 0.1), (0.4, 0.45)),
+        filled,
+    ]);
+    let small = render_frame(&constants, &mut layers, &project, XY::new(640, 480)).await;
+    let large = render_frame(&constants, &mut layers, &project, XY::new(1280, 960)).await;
+    assert_eq!(large.width, small.width * 2);
+    assert_eq!(large.height, small.height * 2);
+    let mut total = 0u64;
+    let mut worst = 0u8;
+    let mut differing = 0usize;
+    for y in 0..small.height {
+        for x in 0..small.width {
+            for channel in 0..3 {
+                let sum: u32 = [(0, 0), (1, 0), (0, 1), (1, 1)]
+                    .iter()
+                    .map(|(dx, dy)| {
+                        let index = ((y * 2 + dy) * large.width + x * 2 + dx) * 4 + channel;
+                        u32::from(large.pixels[index])
+                    })
+                    .sum();
+                let downsampled = ((sum + 2) / 4) as u8;
+                let diff = downsampled.abs_diff(small.pixels[(y * small.width + x) * 4 + channel]);
+                total += u64::from(diff);
+                worst = worst.max(diff);
+                differing += usize::from(diff > 24);
+            }
+        }
+    }
+    let mean = total as f64 / (small.width * small.height * 3) as f64;
+    eprintln!("shape resolution parity: mean {mean:.3}, worst {worst}, over 24: {differing}");
+    assert!(mean < 1.0, "mean difference {mean}");
+    assert!(
+        differing < small.width * small.height / 200,
+        "{differing} channels differ by more than 24"
+    );
+}
+
+#[tokio::test]
+async fn shape_tracks_follow_the_saved_overlay_order() {
+    use cap_project::{OverlayTrack, OverlayTrackKind, ShapeKind};
+    let directory = tempfile::tempdir().unwrap();
+    let constants = constants(directory.path()).await;
+    let mut layers = RendererLayers::new(&constants.device, &constants.queue);
+    let resolution = XY::new(640, 480);
+    let mut top = red_shape(ShapeKind::Rectangle, (0.3, 0.3), (0.7, 0.7));
+    top.fill = true;
+    top.fill_color = "#00FF00".into();
+    top.stroke_width = 0.0;
+    top.track = 1;
+    let mut bottom = red_shape(ShapeKind::Rectangle, (0.3, 0.3), (0.7, 0.7));
+    bottom.fill = true;
+    bottom.stroke_width = 0.0;
+    let mut project = with_shapes(vec![top, bottom]);
+    let shape = |track| OverlayTrack {
+        kind: OverlayTrackKind::Shape,
+        track,
+    };
+    project.set_overlay_order(vec![shape(1), shape(0)]);
+    let green_on_top = render_frame(&constants, &mut layers, &project, resolution).await;
+    assert!(close(green_on_top.at(0.5, 0.5), [0, 255, 0], 2));
+    project.set_overlay_order(vec![shape(0), shape(1)]);
+    let blue_on_top = render_frame(&constants, &mut layers, &project, resolution).await;
+    assert!(close(blue_on_top.at(0.5, 0.5), [0, 0, 255], 2));
+
+    let plain = render_frame(
+        &constants,
+        &mut layers,
+        &with_shapes(vec![red_shape(
+            ShapeKind::Rectangle,
+            (0.25, 0.25),
+            (0.75, 0.75),
+        )]),
+        resolution,
+    )
+    .await;
+    let mut mixed = with_shapes(vec![red_shape(
+        ShapeKind::Rectangle,
+        (0.25, 0.25),
+        (0.75, 0.75),
+    )]);
+    mixed.set_overlay_order(vec![shape(0)]);
+    let mixed = render_frame(&constants, &mut layers, &mixed, resolution).await;
+    assert_eq!(plain.pixels, mixed.pixels);
+}
+
+#[tokio::test]
+async fn the_instance_buffer_grows_once_for_a_hundred_shapes() {
+    use cap_project::ShapeKind;
+    let directory = tempfile::tempdir().unwrap();
+    let constants = constants(directory.path()).await;
+    let mut layers = RendererLayers::new(&constants.device, &constants.queue);
+    let shapes = (0..100)
+        .map(|index| {
+            let x = 0.05 + (index % 10) as f64 * 0.09;
+            let y = 0.05 + (index / 10) as f64 * 0.09;
+            let kind = ShapeKind::ALL[index % ShapeKind::ALL.len()];
+            let mut shape = red_shape(kind, (x, y), (x + 0.07, y + 0.07));
+            shape.stroke_width = 6.0;
+            shape.track = (index % 3) as u32;
+            shape
+        })
+        .collect::<Vec<_>>();
+    let crowded = with_shapes(shapes);
+    let resolution = XY::new(640, 480);
+    let first = render_frame(&constants, &mut layers, &crowded, resolution).await;
+    let capacity = layers.overlays.as_ref().unwrap().shapes.instance_capacity();
+    assert_eq!(capacity, 128);
+    let second = render_frame(&constants, &mut layers, &crowded, resolution).await;
+    assert_eq!(
+        layers.overlays.as_ref().unwrap().shapes.instance_capacity(),
+        capacity
+    );
+    assert_eq!(first.pixels, second.pixels);
+    let base = render_frame(&constants, &mut layers, &project(), resolution).await;
+    assert!(!layers.overlays.as_ref().unwrap().shapes.has_content());
+    assert_ne!(first.pixels, base.pixels);
 }

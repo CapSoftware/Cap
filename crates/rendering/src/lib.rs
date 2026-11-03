@@ -56,6 +56,7 @@ mod readiness;
 mod recorded_cursor_assets;
 mod scene;
 mod segment_timing;
+mod shape;
 pub mod spring_mass_damper;
 mod takeover;
 mod text;
@@ -224,6 +225,8 @@ use camera3d::{Camera3DFrame, interpolate_camera3d};
 pub use cursor_interpolation::{CursorEventOrder, PrecomputedCursorTimeline};
 use mask::interpolate_masks;
 use scene::*;
+pub use shape::PreparedShape;
+use shape::prepare_shapes;
 use takeover::InterpolatedTakeover;
 pub use takeover::TakeoverDisplayMorph;
 use text::{PreparedText, prepare_texts};
@@ -3141,6 +3144,9 @@ pub struct ProjectUniforms {
     pub motion_blur_amount: f32,
     pub masks: Vec<PreparedMask>,
     pub texts: Vec<PreparedText>,
+    /// Shape-track marks for this frame, drawn in output-frame space like
+    /// text: zoom, crop, scenes and the 3D camera never move them.
+    pub shapes: Vec<PreparedShape>,
     /// Effective 3D camera state for this frame; `None` when the frame is
     /// outside every 3d segment (the warp and blur passes are skipped).
     pub camera3d: Option<Camera3DFrame>,
@@ -5413,6 +5419,18 @@ impl ProjectUniforms {
             })
             .unwrap_or_default();
 
+        let shapes = project
+            .timeline
+            .as_ref()
+            .map(|timeline| {
+                prepare_shapes(
+                    XY::new(output_size.0, output_size.1),
+                    timeline_time,
+                    &timeline.shape_segments,
+                )
+            })
+            .unwrap_or_default();
+
         Self {
             output_size,
             cursor_size: project.cursor.size as f32,
@@ -5441,6 +5459,7 @@ impl ProjectUniforms {
             motion_blur_amount: cursor_motion_blur,
             masks,
             texts,
+            shapes,
             camera3d,
             camera3d_zoom,
             screen_color_grade,
@@ -8616,8 +8635,14 @@ impl RendererLayers {
 
         if let Some(overlays) = &mut self.overlays {
             overlays.images.prepare(constants, uniforms).await;
+            overlays.shapes.prepare(
+                &constants.device,
+                &constants.queue,
+                uniforms.output_size,
+                &uniforms.shapes,
+            );
 
-            if uniforms.project.overlay_order.is_empty() {
+            if !uniforms.project.has_overlay_order() {
                 overlays.text.prepare(
                     &constants.device,
                     &constants.queue,
@@ -8790,8 +8815,14 @@ impl RendererLayers {
         if let Some(overlays) = &mut self.overlays {
             let start = Instant::now();
             overlays.images.prepare(constants, uniforms).await;
+            overlays.shapes.prepare(
+                &constants.device,
+                &constants.queue,
+                uniforms.output_size,
+                &uniforms.shapes,
+            );
 
-            if uniforms.project.overlay_order.is_empty() {
+            if !uniforms.project.has_overlay_order() {
                 overlays.text.prepare(
                     &constants.device,
                     &constants.queue,
@@ -8875,7 +8906,7 @@ impl RendererLayers {
         let Some(overlays) = &self.overlays else {
             return false;
         };
-        if uniforms.masks.is_empty() || uniforms.project.overlay_order.is_empty() {
+        if uniforms.masks.is_empty() || !uniforms.project.has_overlay_order() {
             return false;
         }
         let mut overlay_below = false;
@@ -8885,6 +8916,9 @@ impl RendererLayers {
                     overlay_below |= overlays.images.has_track(overlay.track)
                 }
                 OverlayTrackKind::Text => overlay_below |= overlays.text.has_track(overlay.track),
+                OverlayTrackKind::Shape => {
+                    overlay_below |= overlays.shapes.has_track(overlay.track)
+                }
                 OverlayTrackKind::Mask => {
                     if overlay_below
                         && uniforms
@@ -9160,7 +9194,7 @@ impl RendererLayers {
     ) {
         let load = wgpu::LoadOp::Load;
 
-        if uniforms.project.overlay_order.is_empty() {
+        if !uniforms.project.has_overlay_order() {
             if parts.masks {
                 for mask in &uniforms.masks {
                     self.mask
@@ -9172,6 +9206,12 @@ impl RendererLayers {
                 if render_display && overlays.images.has_content() {
                     overlays
                         .images
+                        .render(passes.pass(session.current_texture_view(), load));
+                }
+
+                if overlays.shapes.has_content() {
+                    overlays
+                        .shapes
                         .render(passes.pass(session.current_texture_view(), load));
                 }
 
@@ -9212,7 +9252,18 @@ impl RendererLayers {
                             overlay.track,
                         );
                     }
-                    OverlayTrackKind::Mask | OverlayTrackKind::Text | OverlayTrackKind::Image => {}
+                    OverlayTrackKind::Shape
+                        if parts.overlays && overlays.shapes.has_track(overlay.track) =>
+                    {
+                        overlays.shapes.render_track(
+                            passes.pass(session.current_texture_view(), load),
+                            overlay.track,
+                        );
+                    }
+                    OverlayTrackKind::Mask
+                    | OverlayTrackKind::Text
+                    | OverlayTrackKind::Image
+                    | OverlayTrackKind::Shape => {}
                 }
             }
         }
