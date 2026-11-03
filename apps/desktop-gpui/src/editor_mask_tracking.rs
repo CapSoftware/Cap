@@ -37,9 +37,9 @@ const POINT_LABEL_SPACING: f32 = 18.;
 
 type TrackedRect = (f64, XY<f64>, XY<f64>);
 
-/// Where each point's number goes: pushed away from the points' centre so
-/// it never covers the corner it names, turning in 45 degree steps until it
-/// clears the numbers already placed.
+/// Numbers sit outside the shape, off their points, because a number over a
+/// point hides the pixel being aimed at; neighbouring points (a rounded
+/// shape's) would otherwise stack their numbers on one another.
 pub(crate) fn tracking_label_centers(points: &[XY<f64>], size: (f32, f32)) -> Vec<(f32, f32)> {
     let bounds = points
         .iter()
@@ -80,9 +80,8 @@ pub(crate) fn tracking_label_centers(points: &[XY<f64>], size: (f32, f32)) -> Ve
     labels
 }
 
-/// The outline around the picked points (their convex hull, clockwise from
-/// the top-left), which is what a rectangle's corners or points around a
-/// rounded shape enclose. `None` until there are three points to enclose.
+/// Points around a shape arrive in click order, which can cross itself; the
+/// convex hull is the outline that order-free clicks enclose.
 pub(crate) fn points_outline(points: &[XY<f64>]) -> Option<Vec<XY<f64>>> {
     let mut sorted = points.to_vec();
     sorted.sort_by(|a, b| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)));
@@ -108,8 +107,6 @@ pub(crate) fn points_outline(points: &[XY<f64>]) -> Option<Vec<XY<f64>>> {
     (hull.len() >= 3).then_some(hull)
 }
 
-/// A tracked mask's path on the canvas while it is selected: a faint line
-/// through its markers' centres, each marker a small handle-style dot.
 pub(crate) fn render_motion_path(
     theme: &Theme,
     segment: &MaskSegment,
