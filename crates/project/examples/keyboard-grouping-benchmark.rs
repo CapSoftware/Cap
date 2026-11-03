@@ -31,11 +31,11 @@ fn event(key: &str, time_ms: f64, down: bool) -> KeyPressEvent {
 }
 
 fn measure<T>(mut operation: impl FnMut() -> T) -> (f64, f64) {
-    for _ in 0..2 {
+    for _ in 0..3 {
         black_box(operation());
     }
     let mut times = Vec::new();
-    for _ in 0..7 {
+    for _ in 0..25 {
         let started = Instant::now();
         let output = black_box(operation());
         times.push(started.elapsed().as_secs_f64() * 1000.0);
@@ -43,7 +43,7 @@ fn measure<T>(mut operation: impl FnMut() -> T) -> (f64, f64) {
         drop(output);
     }
     times.sort_by(f64::total_cmp);
-    (times[times.len() / 2], times[times.len() - 1])
+    (times[times.len() / 2], times[times.len() * 95 / 100])
 }
 
 fn main() {

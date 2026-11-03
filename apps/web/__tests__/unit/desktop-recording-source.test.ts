@@ -8,6 +8,7 @@ import type { DesktopRecordingSourceCheckpoint } from "@/lib/desktop-recording-s
 import type { RecordingVerification } from "@/lib/desktop-recording-verification";
 
 const mocks = vi.hoisted(() => ({
+	env: vi.fn((): Record<string, string | undefined> => ({})),
 	storage: vi.fn(),
 	pageSize: undefined as number | undefined,
 	treePageSize: undefined as number | undefined,
@@ -16,6 +17,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@cap/web-backend/src/Storage/index", () => ({
 	Storage: { getAccessForVideo: mocks.storage },
 }));
+vi.mock("@cap/env", () => ({ serverEnv: mocks.env }));
 vi.mock("@/lib/desktop-recording-source-checkpoint", async (importOriginal) => {
 	const actual =
 		await importOriginal<
@@ -45,6 +47,7 @@ vi.mock("@/lib/video-storage", () => ({
 import {
 	advanceDesktopRecordingSourceCommit,
 	buildDesktopRecordingSourceUrls,
+	buildPreverifiedRunUrls,
 	commitDesktopRecordingSource,
 	DesktopRecordingSourceError,
 	getDesktopRecordingOutputKey,
@@ -121,7 +124,12 @@ function recording(source: VideoRow["source"] = { type: "desktopSegments" }) {
 	return { id: "owned-video", ownerId: "owned-user", source } as VideoRow;
 }
 
-function storageFixture(provider = "s3", customBucket = false) {
+function storageFixture(
+	provider = "s3",
+	customBucket = false,
+	// Mirrors Cap's S3 bucket: listings carry sizes and content ETags, and a copy keeps its source's ETag.
+	fixture = { listing: false, copiesKeepIdentity: false },
+) {
 	const objects = new Map<string, StoredObject>();
 	const uploads = new Map<
 		string,
@@ -153,7 +161,9 @@ function storageFixture(provider = "s3", customBucket = false) {
 		objects.set(key, {
 			body,
 			size: Buffer.byteLength(body),
-			identity: `"original-${++identity}"`,
+			identity: fixture.listing
+				? `"${createHash("md5").update(body).digest("hex")}"`
+				: `"original-${++identity}"`,
 		});
 	};
 	const bucket = {
@@ -180,6 +190,16 @@ function storageFixture(provider = "s3", customBucket = false) {
 				seed(key, body);
 			}),
 		),
+		...(fixture.listing
+			? {
+					putObjectWithETag: vi.fn((key: string, body: string) =>
+						checked(() => {
+							seed(key, body);
+							return { ETag: objects.get(key)?.identity };
+						}),
+					),
+				}
+			: {}),
 		...(provider === "googleDrive"
 			? {
 					putObjectWithChecksum: vi.fn((key: string, body: string) =>
@@ -204,7 +224,9 @@ function storageFixture(provider = "s3", customBucket = false) {
 				}
 				const copied = {
 					...value,
-					identity: `"snapshot-${++identity}"`,
+					identity: fixture.copiesKeepIdentity
+						? value.identity
+						: `"snapshot-${++identity}"`,
 					metadata: provider === "s3" ? options.Metadata : undefined,
 				};
 				objects.set(target, copied);
@@ -227,9 +249,15 @@ function storageFixture(provider = "s3", customBucket = false) {
 						.sort();
 					const start = continuationToken ? Number(continuationToken) : 0;
 					return {
-						Contents: keys
-							.slice(start, start + maxKeys)
-							.map((Key) => ({ Key })),
+						Contents: keys.slice(start, start + maxKeys).map((Key) =>
+							fixture.listing
+								? {
+										Key,
+										Size: objects.get(Key)?.size,
+										ETag: objects.get(Key)?.identity,
+									}
+								: { Key },
+						),
 						IsTruncated: start + maxKeys < keys.length,
 						NextContinuationToken:
 							start + maxKeys < keys.length
@@ -240,6 +268,9 @@ function storageFixture(provider = "s3", customBucket = false) {
 		),
 		getInternalSignedObjectUrl: vi.fn((key: string) =>
 			checked(() => `https://storage.example/${key}?signed=1`),
+		),
+		getInternalPresignedPutUrl: vi.fn((key: string) =>
+			checked(() => `https://storage.example/${key}?put=1`),
 		),
 		multipart: {
 			create: vi.fn(
@@ -351,7 +382,7 @@ function storageFixture(provider = "s3", customBucket = false) {
 			customBucket ? Option.some({ id: "custom-bucket" }) : Option.none(),
 		]),
 	);
-	return { bucket, objects, uploads, seed, object };
+	return { bucket, objects, uploads, seed, object, fixture };
 }
 
 function snapshotCheckpoint(): DesktopRecordingSourceCheckpoint {
@@ -461,6 +492,8 @@ function seedSegments(
 
 beforeEach(() => {
 	vi.clearAllMocks();
+	vi.unstubAllGlobals();
+	mocks.env.mockReturnValue({});
 	mocks.pageSize = undefined;
 	mocks.treePageSize = undefined;
 });
@@ -488,6 +521,11 @@ describe("recording source preparation during upload", () => {
 				generation,
 			);
 			expect(storage.bucket.copyObject).toHaveBeenCalledTimes(3);
+			for (const [, , args, options] of storage.bucket.copyObject.mock
+				.calls as unknown as Array<[string, string, unknown, unknown]>) {
+				expect(args).toMatchObject({ IfNoneMatch: "*" });
+				expect(options).toEqual({ retryWithoutUnsupportedIfNoneMatch: true });
+			}
 			expect(
 				readInventory(storage, source.inventoryKey).objects.every(
 					(entry) => !entry.key.includes("/prepared/"),
@@ -1593,6 +1631,12 @@ describe("large desktop recording snapshots", () => {
 		await advanceDesktopRecordingSourceCommit(video, checkpoint);
 		const source = await finishSnapshot(video, checkpoint);
 		expect(storage.bucket.multipart.complete).toHaveBeenCalledOnce();
+		expect(storage.bucket.multipart.complete).toHaveBeenCalledWith(
+			expect.any(String),
+			expect.any(String),
+			expect.objectContaining({ IfNoneMatch: "*" }),
+			{ retryWithoutUnsupportedIfNoneMatch: true },
+		);
 		expect(
 			(await buildDesktopRecordingSourceUrls(video, source)).sourceFileSize,
 		).toBe(8 * 1024 ** 3);
@@ -2375,5 +2419,634 @@ describe("committed source access", () => {
 				),
 			).toThrow();
 		}
+	});
+});
+
+function listedStorage() {
+	return storageFixture("s3", false, {
+		listing: true,
+		copiesKeepIdentity: true,
+	});
+}
+
+function seedRecording(
+	storage: ReturnType<typeof storageFixture>,
+	videoSegments: number,
+	audioSegments: number,
+) {
+	const manifest = {
+		version: 2,
+		video_init_uploaded: true,
+		audio_init_uploaded: audioSegments > 0,
+		video_segments: Array.from({ length: videoSegments }, (_, i) => i + 1),
+		audio_segments: Array.from({ length: audioSegments }, (_, i) => i + 1),
+		is_complete: true,
+	};
+	const json = `${JSON.stringify(manifest, null, 2)}\n`;
+	storage.seed(manifestKey, json);
+	storage.seed(videoInitKey, "video-init");
+	if (audioSegments > 0) storage.seed(audioInitKey, "audio-init");
+	const segmentKey = (track: "video" | "audio", index: number) =>
+		`${prefix}/segments/${track}/segment_${String(index).padStart(3, "0")}.m4s`;
+	for (let index = 1; index <= videoSegments; index++)
+		storage.seed(segmentKey("video", index), `video-fragment-${index}`);
+	for (let index = 1; index <= audioSegments; index++)
+		storage.seed(segmentKey("audio", index), `audio-fragment-${index}`);
+	return { json, manifest, segmentKey };
+}
+
+async function prepareAll(track: "video" | "audio", indices: number[]) {
+	for (let offset = 0; offset < indices.length; offset += 32)
+		await prepareDesktopRecordingSegments(
+			recording(),
+			indices.slice(offset, offset + 32).map((index) => ({ track, index })),
+			async () => true,
+		);
+}
+
+function inventoryShape(
+	storage: ReturnType<typeof storageFixture>,
+	inventoryKey: string,
+) {
+	return readInventory(storage, inventoryKey)
+		.objects.map((entry) => ({
+			originalKey: entry.originalKey,
+			size: entry.size,
+			body: storage.object(entry.key).body,
+			prepared: entry.key.includes("/prepared/"),
+			identityMatchesCopy:
+				storage.object(entry.key).identity === entry.objectIdentity,
+			originalIdentityMatches:
+				storage.object(entry.originalKey).identity === entry.originalIdentity,
+		}))
+		.sort((left, right) => left.originalKey.localeCompare(right.originalKey));
+}
+
+// Jumps the clock past the listed advance budget after the first checkpoint page is written.
+function expireBudgetAfterFirstPage(
+	storage: ReturnType<typeof storageFixture>,
+) {
+	const realNow = Date.now.bind(Date);
+	let offset = 0;
+	const clock = vi
+		.spyOn(Date, "now")
+		.mockImplementation(() => realNow() + offset);
+	const writer = storage.bucket.putObjectWithETag ?? storage.bucket.putObject;
+	const write = writer.getMockImplementation();
+	if (!write) throw new Error("Missing put implementation");
+	writer.mockImplementation((key: string, body: string) => {
+		const result = write(key, body);
+		if (offset === 0 && key.includes("/pages/")) offset = 25_000;
+		return result;
+	});
+	return () => {
+		clock.mockRestore();
+		writer.mockImplementation(write);
+	};
+}
+
+describe("listed source commit on Cap's bucket", () => {
+	it("commits the same inventory as per-object checks in one checkpoint, without per-fragment HEADs", async () => {
+		const legacy = storageFixture();
+		seedRecording(legacy, 300, 150);
+		await prepareAll(
+			"video",
+			Array.from({ length: 280 }, (_, i) => i + 1),
+		);
+		await prepareAll(
+			"audio",
+			Array.from({ length: 140 }, (_, i) => i + 1),
+		);
+		const legacySource = await commitDesktopRecordingSource(
+			recording(),
+			generation,
+		);
+		const expected = inventoryShape(legacy, legacySource.inventoryKey);
+
+		vi.clearAllMocks();
+		const listed = listedStorage();
+		seedRecording(listed, 300, 150);
+		await prepareAll(
+			"video",
+			Array.from({ length: 280 }, (_, i) => i + 1),
+		);
+		await prepareAll(
+			"audio",
+			Array.from({ length: 140 }, (_, i) => i + 1),
+		);
+		listed.bucket.headObject.mockClear();
+		listed.bucket.copyObject.mockClear();
+		const first = await advanceDesktopRecordingSourceCommit(
+			recording(),
+			snapshotCheckpoint(),
+		);
+		if (!("source" in first))
+			throw new Error("Listed commit should finish in one checkpoint");
+		expect(inventoryShape(listed, first.source.inventoryKey)).toEqual(expected);
+		expect(
+			inventoryShape(listed, first.source.inventoryKey).filter(
+				(entry) => entry.prepared,
+			),
+		).toHaveLength(420);
+		expect(listed.bucket.headObject).not.toHaveBeenCalled();
+		// Only the unprepared tail and init fragments are copied.
+		expect(listed.bucket.copyObject).toHaveBeenCalledTimes(32);
+		const urls = await buildDesktopRecordingSourceUrls(
+			recording(),
+			first.source,
+		);
+		expect(urls.videoSegmentUrls).toHaveLength(300);
+		expect(urls.audioSegmentUrls).toHaveLength(150);
+	});
+
+	it("advances one revision per checkpoint and resumes with the per-object path", async () => {
+		mocks.pageSize = 8;
+		const storage = listedStorage();
+		seedRecording(storage, 40, 0);
+		await prepareAll(
+			"video",
+			Array.from({ length: 30 }, (_, i) => i + 1),
+		);
+		const restore = expireBudgetAfterFirstPage(storage);
+		const first = await advanceDesktopRecordingSourceCommit(
+			recording(),
+			snapshotCheckpoint(),
+		);
+		restore();
+		if (!("checkpoint" in first)) throw new Error("Expected partial progress");
+		expect(first.checkpoint.revision).toBe(1);
+		expect(first.checkpoint).toMatchObject({ phase: "enumerate", cursor: 8 });
+		storage.fixture.listing = false;
+		const source = await finishSnapshot(recording(), first.checkpoint);
+		const shape = inventoryShape(storage, source.inventoryKey);
+		expect(shape).toHaveLength(41);
+		expect(shape.every((entry) => entry.identityMatchesCopy)).toBe(true);
+		expect(
+			shape.every((entry) =>
+				entry.body?.startsWith(
+					entry.originalKey.endsWith("init.mp4")
+						? "video-init"
+						: "video-fragment",
+				),
+			),
+		).toBe(true);
+	});
+
+	it("finishes a commit that per-object checks started", async () => {
+		mocks.pageSize = 8;
+		const storage = listedStorage();
+		seedRecording(storage, 40, 3);
+		await prepareAll(
+			"video",
+			Array.from({ length: 40 }, (_, i) => i + 1),
+		);
+		storage.fixture.listing = false;
+		let checkpoint = await advanceToPhase(
+			recording(),
+			snapshotCheckpoint(),
+			"copy",
+		);
+		const step = await advanceDesktopRecordingSourceCommit(
+			recording(),
+			checkpoint,
+		);
+		if (!("checkpoint" in step)) throw new Error("Expected copy progress");
+		checkpoint = step.checkpoint;
+		storage.fixture.listing = true;
+		const done = await advanceDesktopRecordingSourceCommit(
+			recording(),
+			checkpoint,
+		);
+		if (!("source" in done)) throw new Error("Listed advance should finish");
+		const shape = inventoryShape(storage, done.source.inventoryKey);
+		expect(shape).toHaveLength(45);
+		expect(shape.every((entry) => entry.originalIdentityMatches)).toBe(true);
+	});
+
+	it.each(["copy", "verify"] as const)(
+		"rejects a fragment replaced after its identity was planned, during %s",
+		async (phase) => {
+			mocks.pageSize = 8;
+			const storage = listedStorage();
+			const { segmentKey } = seedRecording(storage, 20, 0);
+			await prepareAll(
+				"video",
+				Array.from({ length: 20 }, (_, i) => i + 1),
+			);
+			storage.fixture.listing = false;
+			const checkpoint = await advanceToPhase(
+				recording(),
+				snapshotCheckpoint(),
+				phase,
+			);
+			storage.fixture.listing = true;
+			storage.seed(segmentKey("video", 7), "video-fragment-replaced");
+			await expect(
+				advanceDesktopRecordingSourceCommit(recording(), checkpoint),
+			).rejects.toMatchObject({ code: "source-changed" });
+			expect(
+				storage.bucket.putObject.mock.calls.some(([key]) =>
+					key.endsWith("/inventory.json"),
+				),
+			).toBe(false);
+		},
+	);
+
+	it("rejects a snapshot copy deleted before verification", async () => {
+		mocks.pageSize = 8;
+		const storage = listedStorage();
+		seedRecording(storage, 12, 0);
+		storage.fixture.listing = false;
+		const checkpoint = await advanceToPhase(
+			recording(),
+			snapshotCheckpoint(),
+			"verify",
+		);
+		const copied = storage.bucket.copyObject.mock.calls.at(-1)?.[1];
+		if (!copied) throw new Error("Missing snapshot copy");
+		storage.objects.delete(copied);
+		storage.fixture.listing = true;
+		await expect(
+			advanceDesktopRecordingSourceCommit(recording(), checkpoint),
+		).rejects.toMatchObject({ code: "source-missing" });
+	});
+
+	it("rejects a recording whose fragment never finished uploading", async () => {
+		const storage = listedStorage();
+		const { segmentKey } = seedRecording(storage, 10, 2);
+		storage.objects.delete(segmentKey("video", 4));
+		await expect(
+			commitDesktopRecordingSource(recording(), generation),
+		).rejects.toMatchObject({ code: "source-missing" });
+	});
+
+	it("does not reuse a prepared copy holding different bytes of the same size", async () => {
+		const storage = listedStorage();
+		seedRecording(storage, 3, 0);
+		await prepareAll("video", [1, 2, 3]);
+		const preparedCopy = storage.bucket.copyObject.mock.calls.find(([, key]) =>
+			key.endsWith("/video/2.m4s"),
+		)?.[1];
+		if (!preparedCopy) throw new Error("Missing prepared copy");
+		storage.seed(preparedCopy, "video-fragment-X");
+		const source = await commitDesktopRecordingSource(recording(), generation);
+		const fragment = inventoryShape(storage, source.inventoryKey).find(
+			(entry) => entry.originalKey.endsWith("segment_002.m4s"),
+		);
+		expect(fragment).toMatchObject({
+			body: "video-fragment-2",
+			prepared: false,
+			identityMatchesCopy: true,
+		});
+	});
+
+	it("checks copies whose ETag differs from the original one by one", async () => {
+		const storage = listedStorage();
+		storage.fixture.copiesKeepIdentity = false;
+		seedRecording(storage, 6, 2);
+		await prepareAll("video", [1, 2, 3, 4, 5, 6]);
+		storage.bucket.headObject.mockClear();
+		const source = await commitDesktopRecordingSource(recording(), generation);
+		const shape = inventoryShape(storage, source.inventoryKey);
+		expect(shape.filter((entry) => entry.prepared)).toHaveLength(6);
+		expect(shape.every((entry) => entry.identityMatchesCopy)).toBe(true);
+		expect(
+			storage.bucket.headObject.mock.calls.filter(([key]) =>
+				key.endsWith("segment_003.m4s"),
+			).length,
+		).toBeGreaterThan(0);
+	});
+
+	it("lists the snapshot once before verifying and once to verify it", async () => {
+		const storage = listedStorage();
+		seedRecording(storage, 20, 10);
+		const source = await commitDesktopRecordingSource(recording(), generation);
+		const listedPrefixes = storage.bucket.listObjects.mock.calls.map(
+			([input]) => input.prefix,
+		);
+		expect(
+			listedPrefixes.filter((prefix) => prefix?.endsWith("/segments/video/")),
+		).toHaveLength(2);
+		expect(
+			listedPrefixes.filter((prefix) => prefix?.endsWith("/segments/audio/")),
+		).toHaveLength(2);
+		const shape = inventoryShape(storage, source.inventoryKey);
+		expect(shape).toHaveLength(32);
+		expect(shape.every((entry) => entry.identityMatchesCopy)).toBe(true);
+	});
+
+	it("proves checkpoint writes by their ETag instead of reading them back", async () => {
+		const storage = listedStorage();
+		seedRecording(storage, 20, 10);
+		await commitDesktopRecordingSource(recording(), generation);
+		const written = new Set(
+			storage.bucket.putObjectWithETag?.mock.calls.map(([key]) => key),
+		);
+		expect(written.size).toBeGreaterThan(0);
+		// Finalize still compares the saved manifest copy with the original; that is a content check, not a readback.
+		expect(
+			storage.bucket.getObject.mock.calls.filter(
+				([key]) => written.has(key) && !key.endsWith("/manifest.json"),
+			),
+		).toHaveLength(0);
+		expect(storage.bucket.putObject).not.toHaveBeenCalled();
+	});
+
+	it("reads a checkpoint write back when its ETag is not the MD5 of its bytes", async () => {
+		const storage = listedStorage();
+		seedRecording(storage, 4, 1);
+		storage.bucket.putObjectWithETag?.mockImplementation(
+			(key: string, body: string) =>
+				checked(() => {
+					storage.seed(key, body);
+					return { ETag: '"not-an-md5"' };
+				}),
+		);
+		const source = await commitDesktopRecordingSource(recording(), generation);
+		expect(
+			storage.bucket.getObject.mock.calls.some(
+				([key]) => key === source.inventoryKey,
+			),
+		).toBe(true);
+		storage.bucket.putObjectWithETag?.mockImplementation(
+			(key: string, body: string) =>
+				checked(() => {
+					storage.seed(key, `${body} `);
+					return { ETag: '"not-an-md5"' };
+				}),
+		);
+		await expect(
+			commitDesktopRecordingSource(recording(), generation),
+		).rejects.toThrow("Durable recording source readback did not match");
+	});
+
+	it("checks a new copy whose response does not carry the original's ETag", async () => {
+		const storage = listedStorage();
+		storage.fixture.copiesKeepIdentity = false;
+		seedRecording(storage, 4, 1);
+		const source = await commitDesktopRecordingSource(recording(), generation);
+		const shape = inventoryShape(storage, source.inventoryKey);
+		expect(shape).toHaveLength(7);
+		expect(shape.every((entry) => entry.identityMatchesCopy)).toBe(true);
+		expect(
+			storage.bucket.putObject.mock.calls.filter(([key]) =>
+				key.endsWith("/receipt.json"),
+			),
+		).toHaveLength(7);
+	});
+
+	it("lets the per-object path verify and reuse copies made without receipts", async () => {
+		mocks.pageSize = 4;
+		const storage = listedStorage();
+		seedRecording(storage, 10, 0);
+		storage.fixture.listing = false;
+		let checkpoint = await advanceToPhase(
+			recording(),
+			snapshotCheckpoint(),
+			"copy",
+		);
+		storage.fixture.listing = true;
+		const restore = expireBudgetAfterFirstPage(storage);
+		const step = await advanceDesktopRecordingSourceCommit(
+			recording(),
+			checkpoint,
+		);
+		restore();
+		if (!("checkpoint" in step)) throw new Error("Expected copy progress");
+		checkpoint = step.checkpoint;
+		expect(checkpoint).toMatchObject({ phase: "copy", cursor: 4 });
+		expect(
+			storage.bucket.putObject.mock.calls.some(([key]) =>
+				key.endsWith("/receipt.json"),
+			),
+		).toBe(false);
+		storage.fixture.listing = false;
+		const source = await finishSnapshot(recording(), checkpoint);
+		const shape = inventoryShape(storage, source.inventoryKey);
+		expect(shape).toHaveLength(11);
+		expect(shape.every((entry) => entry.identityMatchesCopy)).toBe(true);
+		expect(storage.bucket.copyObject).toHaveBeenCalledTimes(11);
+	});
+
+	it.each(["missing ETag", "truncated without a token"] as const)(
+		"falls back to per-object checks when a listing has a %s",
+		async (defect) => {
+			const storage = listedStorage();
+			seedRecording(storage, 5, 1);
+			const list = storage.bucket.listObjects.getMockImplementation();
+			if (!list) throw new Error("Missing listObjects implementation");
+			storage.bucket.listObjects.mockImplementation((input) =>
+				list(input).pipe(
+					Effect.map((listing) =>
+						defect === "missing ETag"
+							? {
+									...listing,
+									Contents: listing.Contents.map(({ Key, Size }) => ({
+										Key,
+										Size,
+										ETag: undefined,
+									})),
+								}
+							: {
+									...listing,
+									IsTruncated: true,
+									NextContinuationToken: undefined,
+								},
+					),
+				),
+			);
+			storage.bucket.headObject.mockClear();
+			const source = await commitDesktopRecordingSource(
+				recording(),
+				generation,
+			);
+			expect(inventoryShape(storage, source.inventoryKey)).toHaveLength(8);
+			expect(
+				storage.bucket.headObject.mock.calls.filter(
+					([key]) => key === `${prefix}/segments/video/segment_001.m4s`,
+				),
+			).toHaveLength(3);
+		},
+	);
+
+	it("leaves custom S3-compatible buckets on per-object checks", async () => {
+		const storage = storageFixture("s3", true, {
+			listing: true,
+			copiesKeepIdentity: true,
+		});
+		seedRecording(storage, 4, 1);
+		storage.bucket.headObject.mockClear();
+		await commitDesktopRecordingSource(recording(), generation);
+		expect(
+			storage.bucket.headObject.mock.calls.filter(
+				([key]) => key === `${prefix}/segments/video/segment_001.m4s`,
+			),
+		).toHaveLength(3);
+	});
+});
+
+describe("decoding prepared fragments during the recording", () => {
+	const mediaEnv = {
+		MEDIA_SERVER_URL: "https://media.test/",
+		MEDIA_SERVER_WEBHOOK_SECRET: "media-secret",
+	};
+
+	function stubMediaServer() {
+		const fetch = vi.fn(
+			async (_url: string | URL, _init?: RequestInit) =>
+				new Response(null, { status: 202 }),
+		);
+		vi.stubGlobal("fetch", fetch);
+		return fetch;
+	}
+
+	function requests(fetch: ReturnType<typeof stubMediaServer>) {
+		return fetch.mock.calls.map(([url, init]) => ({
+			url: String(url),
+			secret: (init as RequestInit).headers as Record<string, string>,
+			body: JSON.parse(String((init as RequestInit).body)) as {
+				videoId: string;
+				init: { url: string; objectIdentity: string; size: number };
+				segments: { url: string; objectIdentity: string; size: number }[];
+				resultUploadUrl: string;
+			},
+		}));
+	}
+
+	it("asks the media server to decode each contiguous run of prepared video", async () => {
+		mocks.env.mockReturnValue(mediaEnv);
+		const fetch = stubMediaServer();
+		const storage = listedStorage();
+		seedRecording(storage, 8, 3);
+		const prepared = await prepareDesktopRecordingSegments(
+			recording(),
+			[1, 2, 3, 5, 6].map((index) => ({ track: "video" as const, index })),
+			async () => true,
+		);
+		expect(prepared).toHaveLength(5);
+		const sent = requests(fetch);
+		expect(sent).toHaveLength(2);
+		expect(
+			sent.every(
+				(request) =>
+					request.url === "https://media.test/video/preverify-segments",
+			),
+		).toBe(true);
+		expect(
+			sent.every(
+				(request) => request.secret["x-media-server-secret"] === "media-secret",
+			),
+		).toBe(true);
+		const [first, second] = sent
+			.map((request) => request.body)
+			.sort((left, right) => left.segments.length - right.segments.length)
+			.reverse();
+		expect(first?.segments).toHaveLength(3);
+		expect(second?.segments).toHaveLength(2);
+		expect(first?.init).toEqual({
+			url: expect.stringContaining("/segments/video/init.mp4"),
+			objectIdentity: storage.object(videoInitKey).identity,
+			size: storage.object(videoInitKey).size,
+		});
+		for (const segment of first?.segments ?? []) {
+			expect(segment.url).toContain("/.recording/sources/prepared/");
+		}
+		expect(first?.segments.map((segment) => segment.objectIdentity)).toEqual(
+			[1, 2, 3].map(
+				(index) =>
+					storage.object(
+						`${prefix}/segments/video/segment_${String(index).padStart(3, "0")}.m4s`,
+					).identity,
+			),
+		);
+		expect(first?.resultUploadUrl).toMatch(
+			/\/\.recording\/sources\/preverified\/000001-000003-[a-f0-9]{16}\.json\?put=1$/,
+		);
+	});
+
+	it.each([
+		[
+			"a custom bucket",
+			() =>
+				storageFixture("s3", true, { listing: true, copiesKeepIdentity: true }),
+			mediaEnv,
+		],
+		["Google Drive", () => storageFixture("googleDrive"), mediaEnv],
+		["no media server", () => listedStorage(), {}],
+	] as const)("does not ask for %s", async (_, makeStorage, env) => {
+		mocks.env.mockReturnValue(env);
+		const fetch = stubMediaServer();
+		const storage = makeStorage();
+		seedRecording(storage, 4, 0);
+		const prepared = await prepareDesktopRecordingSegments(
+			recording(),
+			[1, 2].map((index) => ({ track: "video" as const, index })),
+			async () => true,
+		);
+		expect(prepared).toHaveLength(2);
+		expect(fetch).not.toHaveBeenCalled();
+	});
+
+	it("still reports prepared fragments when the media server cannot be reached", async () => {
+		mocks.env.mockReturnValue(mediaEnv);
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => {
+				throw new Error("offline");
+			}),
+		);
+		const storage = listedStorage();
+		seedRecording(storage, 4, 0);
+		const prepared = await prepareDesktopRecordingSegments(
+			recording(),
+			[1, 2].map((index) => ({ track: "video" as const, index })),
+			async () => true,
+		);
+		expect(prepared).toHaveLength(2);
+	});
+
+	it("warns when the media server refuses a run without failing preparation", async () => {
+		mocks.env.mockReturnValue(mediaEnv);
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () =>
+				Response.json({ code: "SERVER_BUSY" }, { status: 503 }),
+			),
+		);
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const storage = listedStorage();
+		seedRecording(storage, 4, 0);
+		const prepared = await prepareDesktopRecordingSegments(
+			recording(),
+			[1, 2].map((index) => ({ track: "video" as const, index })),
+			async () => true,
+		);
+		expect(prepared).toHaveLength(2);
+		expect(warn).toHaveBeenCalledWith(
+			"[prepareDesktopRecordingSegments] Preverification skipped",
+			expect.objectContaining({
+				error: "Preverification request failed: HTTP 503",
+			}),
+		);
+		warn.mockRestore();
+	});
+
+	it("signs every saved run for the final verification on Cap's bucket only", async () => {
+		const storage = listedStorage();
+		storage.seed(
+			`${prefix}/.recording/sources/preverified/000001-000003-a.json`,
+			"{}",
+		);
+		storage.seed(
+			`${prefix}/.recording/sources/preverified/000004-000006-b.json`,
+			"{}",
+		);
+		storage.seed(`${prefix}/.recording/sources/preverified/partial.tmp`, "x");
+		expect(await buildPreverifiedRunUrls(recording())).toEqual([
+			`https://storage.example/${prefix}/.recording/sources/preverified/000001-000003-a.json?signed=1`,
+			`https://storage.example/${prefix}/.recording/sources/preverified/000004-000006-b.json?signed=1`,
+		]);
+		storageFixture("s3", true, { listing: true, copiesKeepIdentity: true });
+		expect(await buildPreverifiedRunUrls(recording())).toEqual([]);
 	});
 });

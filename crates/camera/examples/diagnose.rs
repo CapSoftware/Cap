@@ -196,6 +196,13 @@ fn capture_test(camera: &CameraInfo, mode: CaptureMode) {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn describe_frame(frame: &cap_camera::CapturedFrame<'_>) -> String {
+    let _ = frame;
+    "<frame>".to_string()
+}
+
+#[cfg(not(target_os = "linux"))]
 fn describe_frame(frame: &cap_camera::CapturedFrame) -> String {
     #[cfg(target_os = "macos")]
     {

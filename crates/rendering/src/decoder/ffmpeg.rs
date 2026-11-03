@@ -8,7 +8,7 @@ use std::{
     collections::BTreeMap,
     path::PathBuf,
     rc::Rc,
-    sync::{Arc, mpsc},
+    sync::{Arc, OnceLock, mpsc},
 };
 use tokio::sync::oneshot;
 use tracing::info;
@@ -21,8 +21,9 @@ use crate::cpu_yuv::YuvMatrix;
 
 use super::{
     DecoderInitResult, DecoderType, FRAME_CACHE_SIZE, ManagedVideoControl, ManagedVideoError,
-    ManagedVideoInput, VideoDecoderMessage, frame_converter::FrameConverter, pts_to_frame,
-    record_pts_hole,
+    ManagedVideoInput, VideoDecoderMessage,
+    frame_converter::{FrameConverter, PlanePool},
+    pts_to_frame, record_pts_hole,
 };
 
 #[cfg(test)]
@@ -38,8 +39,29 @@ struct ProcessedFrame {
     matrix: YuvMatrix,
     y_stride: u32,
     uv_stride: u32,
+    planes: Arc<PlanePool>,
     #[cfg(target_os = "linux")]
     cuda: Option<Arc<crate::linux_gpu::CudaNv12Frame>>,
+}
+
+fn empty_plane_slot() -> Arc<Vec<u8>> {
+    static EMPTY: OnceLock<Arc<Vec<u8>>> = OnceLock::new();
+    EMPTY.get_or_init(|| Arc::new(Vec::new())).clone()
+}
+
+impl Drop for ProcessedFrame {
+    fn drop(&mut self) {
+        // The cache and the renderer share this allocation. Recycle it only
+        // once both have released the frame; otherwise the next decode would
+        // write into a buffer the renderer still uploads.
+        if Arc::strong_count(&self.data) != 1 {
+            return;
+        }
+        let data = std::mem::replace(&mut self.data, empty_plane_slot());
+        if let Ok(buf) = Arc::try_unwrap(data) {
+            self.planes.recycle(buf);
+        }
+    }
 }
 
 impl ProcessedFrame {
@@ -89,7 +111,10 @@ const MAX_FRAME_CACHE_BYTES: usize = 128 * 1024 * 1024;
 #[cfg(target_os = "linux")]
 const CUDA_FRAME_CACHE_WEIGHT: usize = 16 * 1024 * 1024;
 
-fn extract_yuv_planes(frame: &frame::Video) -> Option<(Vec<u8>, PixelFormat, u32, u32)> {
+fn extract_yuv_planes(
+    frame: &frame::Video,
+    planes: &PlanePool,
+) -> Option<(Vec<u8>, PixelFormat, u32, u32)> {
     let height = frame.height();
 
     match frame.format() {
@@ -97,50 +122,69 @@ fn extract_yuv_planes(frame: &frame::Video) -> Option<(Vec<u8>, PixelFormat, u32
             let y_stride = frame.stride(0) as u32;
             let u_stride = frame.stride(1) as u32;
             let v_stride = frame.stride(2) as u32;
-
-            let y_size = (y_stride * height) as usize;
             let uv_height = frame.plane_height(1);
+            let y_size = (y_stride * height) as usize;
             let u_size = (u_stride * uv_height) as usize;
-
-            let mut data = Vec::with_capacity(y_size + 2 * u_size);
-            data.extend_from_slice(&frame.data(0)[..y_size]);
-            data.extend_from_slice(&frame.data(1)[..u_size]);
-
-            // Downstream consumers index both chroma planes with the single
-            // advertised uv_stride (the U stride). FFmpeg almost always gives
-            // U and V identical linesizes, but if they ever differ, repack the
-            // V rows to the U stride — otherwise every V row shifts and the
-            // whole image takes on a uniform wrong-chroma cast.
-            if v_stride == u_stride {
-                data.extend_from_slice(&frame.data(2)[..u_size]);
-            } else {
-                let row_bytes = u_stride.min(v_stride) as usize;
-                let pad = u_stride as usize - row_bytes;
-                let v_data = frame.data(2);
-                for row in 0..uv_height as usize {
-                    let start = row * v_stride as usize;
-                    data.extend_from_slice(&v_data[start..start + row_bytes]);
-                    data.resize(data.len() + pad, 128);
-                }
-            }
-
+            let data = pack_yuv420p(
+                planes,
+                &frame.data(0)[..y_size],
+                &frame.data(1)[..u_size],
+                frame.data(2),
+                u_stride,
+                v_stride,
+                uv_height,
+            );
             Some((data, PixelFormat::Yuv420p, y_stride, u_stride))
         }
         format::Pixel::NV12 => {
             let y_stride = frame.stride(0) as u32;
             let uv_stride = frame.stride(1) as u32;
-
             let y_size = (y_stride * height) as usize;
             let uv_size = (uv_stride * frame.plane_height(1)) as usize;
-
-            let mut data = Vec::with_capacity(y_size + uv_size);
-            data.extend_from_slice(&frame.data(0)[..y_size]);
-            data.extend_from_slice(&frame.data(1)[..uv_size]);
-
+            let data = pack_nv12(planes, &frame.data(0)[..y_size], &frame.data(1)[..uv_size]);
             Some((data, PixelFormat::Nv12, y_stride, uv_stride))
         }
         _ => None,
     }
+}
+
+fn pack_nv12(planes: &PlanePool, y: &[u8], uv: &[u8]) -> Vec<u8> {
+    let mut data = planes.take(y.len() + uv.len());
+    data.extend_from_slice(y);
+    data.extend_from_slice(uv);
+    data
+}
+
+fn pack_yuv420p(
+    planes: &PlanePool,
+    y: &[u8],
+    u: &[u8],
+    v: &[u8],
+    u_stride: u32,
+    v_stride: u32,
+    uv_height: u32,
+) -> Vec<u8> {
+    let mut data = planes.take(y.len() + u.len() + u.len());
+    data.extend_from_slice(y);
+    data.extend_from_slice(u);
+    // Downstream consumers index both chroma planes with the single
+    // advertised uv_stride (the U stride). FFmpeg almost always gives
+    // U and V identical linesizes, but if they ever differ, repack the
+    // V rows to the U stride — otherwise every V row shifts and the
+    // whole image takes on a uniform wrong-chroma cast.
+    if v_stride == u_stride {
+        data.extend_from_slice(&v[..u.len()]);
+    } else {
+        let u_stride = u_stride as usize;
+        let v_stride = v_stride as usize;
+        let row_bytes = u_stride.min(v_stride);
+        let pad = u_stride - row_bytes;
+        for row in v.chunks(v_stride).take(uv_height as usize) {
+            data.extend_from_slice(&row[..row_bytes]);
+            data.resize(data.len() + pad, 128);
+        }
+    }
+    data
 }
 
 impl CachedFrame {
@@ -173,14 +217,16 @@ impl CachedFrame {
                             matrix: YuvMatrix::from_color_space(frame.color_space()),
                             y_stride: cuda.y_pitch as u32,
                             uv_stride: cuda.uv_pitch as u32,
+                            planes: Arc::clone(converter.plane_pool()),
                             cuda: Some(Arc::new(cuda)),
                         }
                     };
                     *self = Self::Processed(data.clone());
                     return data;
                 }
+                let planes = Arc::clone(converter.plane_pool());
                 let data = if let Some((yuv_data, pixel_format, y_stride, uv_stride)) =
-                    extract_yuv_planes(frame)
+                    extract_yuv_planes(frame, &planes)
                 {
                     ProcessedFrame {
                         data: Arc::new(yuv_data),
@@ -191,6 +237,7 @@ impl CachedFrame {
                         matrix: YuvMatrix::from_color_space(frame.color_space()),
                         y_stride,
                         uv_stride,
+                        planes,
                         #[cfg(target_os = "linux")]
                         cuda: None,
                     }
@@ -205,6 +252,7 @@ impl CachedFrame {
                         matrix: YuvMatrix::from_color_space(frame.color_space()),
                         y_stride: frame.width() * 4,
                         uv_stride: 0,
+                        planes,
                         #[cfg(target_os = "linux")]
                         cuda: None,
                     }
@@ -747,7 +795,7 @@ impl FfmpegDecoder {
                     if let Some(cached) = sw_cache.get_mut(&requested_frame) {
                         let data = cached.produce(&mut sw_converter);
                         if reply.send(data.frame.clone()).is_err() {
-                            log::warn!(
+                            log::debug!(
                                 "FFmpeg '{name}': Failed to send cached frame {requested_frame}: receiver dropped"
                             );
                         }
@@ -818,7 +866,7 @@ impl FfmpegDecoder {
                             if let Some(reply) = reply_for_respond.borrow_mut().take()
                                 && reply.send(data.frame).is_err()
                             {
-                                log::warn!(
+                                log::debug!(
                                     "Failed to send decoded frame {frame_number}: receiver dropped"
                                 );
                             }
@@ -1312,7 +1360,7 @@ impl FfmpegDecoder {
                     let data = cached.produce(&mut converter);
 
                     if reply.send(data.frame.clone()).is_err() {
-                        log::warn!(
+                        log::debug!(
                             "FFmpeg '{name}': Failed to send cached frame {requested_frame}: receiver dropped"
                         );
                     }
@@ -1389,7 +1437,7 @@ impl FfmpegDecoder {
                         if let Some(reply) = reply_for_respond.borrow_mut().take()
                             && reply.send(data.frame).is_err()
                         {
-                            log::warn!(
+                            log::debug!(
                                 "Failed to send decoded frame {frame_number}: receiver dropped"
                             );
                         }
@@ -1715,6 +1763,7 @@ mod cache_tests {
             matrix: YuvMatrix::Bt601,
             y_stride: 2,
             uv_stride: 2,
+            planes: Arc::new(PlanePool::new()),
             #[cfg(target_os = "linux")]
             cuda: None,
         })
@@ -1764,6 +1813,193 @@ mod cache_tests {
 
         assert_eq!(cache.keys().copied().collect::<Vec<_>>(), vec![2]);
         assert_eq!(cache[&2].estimated_bytes(), 12);
+    }
+
+    #[test]
+    fn mismatched_v_stride_is_repacked_to_the_u_stride() {
+        let pool = PlanePool::new();
+        let y = vec![4u8; 8];
+        let u = vec![9u8; 8];
+        let wide_v = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+        let packed = pack_yuv420p(&pool, &y, &u, &wide_v, 4, 6, 2);
+        assert_eq!(
+            packed,
+            [
+                4, 4, 4, 4, 4, 4, 4, 4, 9, 9, 9, 9, 9, 9, 9, 9, 1, 2, 3, 4, 7, 8, 9, 10,
+            ]
+        );
+
+        let short_v = vec![1, 2, 3, 4];
+        let packed = pack_yuv420p(&pool, &y, &u, &short_v, 4, 2, 2);
+        assert_eq!(
+            &packed[y.len() + u.len()..],
+            &[1, 2, 128, 128, 3, 4, 128, 128]
+        );
+
+        let v = [7, 8, 9];
+        let packed = pack_yuv420p(&pool, &[1, 2, 3, 4], &[5, 6], &v, 2, 2, 1);
+        assert_eq!(packed, [1, 2, 3, 4, 5, 6, 7, 8]);
+    }
+
+    #[test]
+    fn released_software_frame_reuses_its_plane_buffer() {
+        for pixel_format in [
+            format::Pixel::YUV420P,
+            format::Pixel::NV12,
+            format::Pixel::RGBA,
+        ] {
+            let mut converter = FrameConverter::new();
+            let (cached, output) = decoded_packed(&mut converter, pixel_format, 1);
+            let ptr = output.frame.data().as_ptr() as usize;
+            assert_eq!(output.frame.data()[0], 1);
+            drop(output);
+            drop(cached);
+            let (_cached, output) = decoded_packed(&mut converter, pixel_format, 2);
+            assert_eq!(
+                output.frame.data().as_ptr() as usize,
+                ptr,
+                "{pixel_format:?}"
+            );
+            assert_eq!(output.frame.data()[0], 2);
+        }
+    }
+
+    #[test]
+    fn renderer_held_frame_is_not_recycled() {
+        let mut converter = FrameConverter::new();
+        let (cached, output) = decoded_packed(&mut converter, format::Pixel::YUV420P, 7);
+        let ptr = output.frame.data().as_ptr() as usize;
+        let y = output.frame.y_plane().unwrap().to_vec();
+        drop(cached);
+        let (_cached, next) = decoded_packed(&mut converter, format::Pixel::YUV420P, 8);
+        assert_ne!(next.frame.data().as_ptr() as usize, ptr);
+        assert_eq!(output.frame.y_plane().unwrap(), y.as_slice());
+        assert_eq!(output.frame.data()[0], 7);
+    }
+
+    #[test]
+    fn releasing_the_cache_keeps_two_spare_planes() {
+        let mut converter = FrameConverter::new();
+        let mut held = Vec::new();
+        for fill in 1..7u8 {
+            held.push(decoded_packed(&mut converter, format::Pixel::YUV420P, fill));
+        }
+        for (cached, output) in held {
+            drop(output);
+            drop(cached);
+        }
+        assert_eq!(converter.plane_pool().spare_count(), 2);
+    }
+
+    #[test]
+    fn pooled_1080p_yuv_copy_reuses_one_allocation() {
+        let pool = PlanePool::new();
+        let width = 1920usize;
+        let height = 1080usize;
+        let uv_height = height / 2;
+        let u_stride = width / 2;
+        let y = vec![16u8; width * height];
+        let u = vec![128u8; u_stride * uv_height];
+        let v = vec![90u8; u_stride * uv_height];
+        let total = y.len() + u.len() + v.len();
+        let u_stride = u_stride as u32;
+        let uv_height = uv_height as u32;
+
+        let warm = pack_yuv420p(&pool, &y, &u, &v, u_stride, u_stride, uv_height);
+        assert_eq!(warm.len(), total);
+        assert_eq!(warm[0], 16);
+        assert_eq!(warm[y.len()], 128);
+        assert_eq!(warm[y.len() + u.len()], 90);
+        let ptr = warm.as_ptr() as usize;
+        pool.recycle(warm);
+
+        let reused = pack_yuv420p(&pool, &y, &u, &v, u_stride, u_stride, uv_height);
+        assert_eq!(reused.as_ptr() as usize, ptr);
+        assert_eq!(reused.len(), total);
+        pool.recycle(reused);
+
+        let iters = 40;
+        let fresh = time_fresh_copies(&y, &u, &v, iters);
+        let pooled = time_pooled_copies(&pool, &y, &u, &v, u_stride, uv_height, iters);
+        let fresh_again = time_fresh_copies(&y, &u, &v, iters);
+        let fresh_alloc = time_fresh_alloc(total, iters);
+        let pooled_alloc = time_pooled_alloc(&pool, total, iters);
+        eprintln!(
+            "yuv420p 1920x1080 bytes={total} iters={iters} fresh_copy_us={} pooled_copy_us={} fresh_copy_again_us={} fresh_alloc_us={} pooled_alloc_us={}",
+            fresh.as_micros(),
+            pooled.as_micros(),
+            fresh_again.as_micros(),
+            fresh_alloc.as_micros(),
+            pooled_alloc.as_micros()
+        );
+    }
+
+    fn decoded_packed(
+        converter: &mut FrameConverter,
+        pixel_format: format::Pixel,
+        fill: u8,
+    ) -> (CachedFrame, OutputFrame) {
+        let mut source = frame::Video::new(pixel_format, 32, 16);
+        for plane in 0..source.planes() {
+            source.data_mut(plane).fill(fill.wrapping_add(plane as u8));
+        }
+        let mut cached = CachedFrame::Raw {
+            frame: source,
+            number: u32::from(fill),
+        };
+        let output = cached.produce(converter);
+        (cached, output)
+    }
+
+    fn time_fresh_copies(y: &[u8], u: &[u8], v: &[u8], iters: u32) -> std::time::Duration {
+        let start = std::time::Instant::now();
+        for _ in 0..iters {
+            let mut buf = Vec::with_capacity(y.len() + u.len() + v.len());
+            buf.extend_from_slice(y);
+            buf.extend_from_slice(u);
+            buf.extend_from_slice(v);
+            std::hint::black_box(buf.as_ptr());
+        }
+        start.elapsed()
+    }
+
+    fn time_pooled_copies(
+        pool: &PlanePool,
+        y: &[u8],
+        u: &[u8],
+        v: &[u8],
+        u_stride: u32,
+        uv_height: u32,
+        iters: u32,
+    ) -> std::time::Duration {
+        let start = std::time::Instant::now();
+        for _ in 0..iters {
+            let buf = pack_yuv420p(pool, y, u, v, u_stride, u_stride, uv_height);
+            std::hint::black_box(buf.as_ptr());
+            pool.recycle(buf);
+        }
+        start.elapsed()
+    }
+
+    fn time_fresh_alloc(total: usize, iters: u32) -> std::time::Duration {
+        let start = std::time::Instant::now();
+        for _ in 0..iters {
+            let buf = Vec::<u8>::with_capacity(total);
+            std::hint::black_box(buf.capacity());
+        }
+        start.elapsed()
+    }
+
+    fn time_pooled_alloc(pool: &PlanePool, total: usize, iters: u32) -> std::time::Duration {
+        let warm = pool.take(total);
+        pool.recycle(warm);
+        let start = std::time::Instant::now();
+        for _ in 0..iters {
+            let buf = pool.take(total);
+            std::hint::black_box(buf.capacity());
+            pool.recycle(buf);
+        }
+        start.elapsed()
     }
 }
 

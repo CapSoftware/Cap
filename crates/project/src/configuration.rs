@@ -1970,7 +1970,11 @@ impl TimelineConfiguration {
     /// Output-time windows where a fullscreen text segment pauses the
     /// recording clock, sorted and merged. Empty for every project without
     /// fullscreen text — the mapping below then short-circuits to the exact
-    /// pre-hold arithmetic.
+    /// pre-hold arithmetic. A hold that starts after the clips have ended
+    /// (a text card left there by a clip trim or delete, which do not ripple
+    /// text) has no frame to hold and is never reached, so it is left out
+    /// and adds nothing to `duration()`; one starting exactly at the end is
+    /// a closing title and stays.
     pub fn hold_windows(&self) -> Vec<(f64, f64)> {
         let mut windows: Vec<(f64, f64)> = self
             .text_segments
@@ -1989,6 +1993,15 @@ impl TimelineConfiguration {
             } else {
                 false
             }
+        });
+        let clips_end = self.clips_duration();
+        let mut held = 0.0;
+        windows.retain(|(start, end)| {
+            if start - held > clips_end + CLOSING_HOLD_TOLERANCE {
+                return false;
+            }
+            held += end - start;
+            true
         });
         windows
     }
@@ -2089,9 +2102,9 @@ impl TimelineConfiguration {
         }
 
         let mut segment_start = 0.0;
+        let mut incoming: Option<ClipTransition> = None;
 
         for (segment_index, segment) in self.segments.iter().enumerate() {
-            let incoming = self.effective_transition(segment_index);
             let incoming_duration = incoming.as_ref().map_or(0.0, |value| value.duration);
 
             if let Some(transition) = incoming {
@@ -2141,6 +2154,7 @@ impl TimelineConfiguration {
             }
 
             segment_start += segment.duration() - next_duration;
+            incoming = next_transition;
         }
 
         None
@@ -2811,6 +2825,27 @@ impl ProjectStyleCache {
 }
 
 impl ProjectConfiguration {
+    pub fn with_preset(&self, mut preset: Self) -> Self {
+        let settings = preset.captions.take().map(|captions| captions.settings);
+        preset.captions = match (self.captions.clone(), settings) {
+            (Some(mut captions), settings) => {
+                captions.settings = settings.unwrap_or_default();
+                Some(captions)
+            }
+            (None, Some(settings)) => Some(CaptionsData {
+                settings,
+                ..Default::default()
+            }),
+            (None, None) => None,
+        };
+        preset.timeline = self.timeline.clone();
+        preset.text_size_version = self.text_size_version;
+        preset.text_anim_version = self.text_anim_version;
+        preset.overlay_order = self.overlay_order.clone();
+        preset.clips = self.clips.clone();
+        preset
+    }
+
     pub fn resolved_overlay_order(&self, available: &[OverlayTrack]) -> Vec<OverlayTrack> {
         let mut ordered = Vec::with_capacity(available.len());
         for track in available {
@@ -3933,6 +3968,34 @@ mod tests {
     }
 
     #[test]
+    fn holds_left_past_the_end_of_the_clips_are_not_counted() {
+        let mut timeline = timeline_with_transitions(Vec::new());
+        timeline.segments.truncate(1);
+        timeline.segments[0].end = 3.2;
+        timeline.text_segments = vec![
+            fullscreen_text(1.0, 2.0),
+            fullscreen_text(4.2, 5.0),
+            fullscreen_text(6.4, 7.4),
+            fullscreen_text(9.0, 9.5),
+        ];
+
+        assert_eq!(timeline.hold_windows(), vec![(1.0, 2.0), (4.2, 5.0)]);
+        assert_eq!(timeline.duration(), 5.0);
+        for frame in 0..150 {
+            let time = f64::from(frame) / 30.0;
+            assert!(
+                timeline.get_frame_mapping(time).is_some(),
+                "no source at output time {time}"
+            );
+        }
+        assert!(timeline.get_frame_mapping(5.0).is_none());
+
+        timeline.segments[0].end = 2.0;
+        assert_eq!(timeline.hold_windows(), vec![(1.0, 2.0)]);
+        assert_eq!(timeline.duration(), 3.0);
+    }
+
+    #[test]
     fn fullscreen_title_does_not_create_a_source_for_an_empty_timeline() {
         let mut timeline = timeline_with_transitions(Vec::new());
         timeline.text_segments = vec![fullscreen_text(0.0, 3.0)];
@@ -4056,6 +4119,103 @@ mod tests {
                 && incoming.source_time == 10.5
                 && progress == 0.5
         ));
+    }
+
+    #[test]
+    fn adjacent_transition_mapping_matches_independent_clip_offsets() {
+        let mut timeline = timeline_with_transitions(Vec::new());
+        let template = timeline.segments[0].clone();
+        timeline.segments = (0..8)
+            .map(|index| {
+                let timescale = [0.5, 1.0, 2.0][index % 3];
+                TimelineSegment {
+                    recording_clip: index as u32,
+                    start: index as f64 * 10.0,
+                    end: index as f64 * 10.0 + 4.0 * timescale,
+                    timescale,
+                    ..template.clone()
+                }
+            })
+            .collect();
+        timeline.transitions = [1.0, 0.5, 999.0, f64::NAN, 0.0, 1.0, f64::INFINITY, 1.5, 1.0]
+            .into_iter()
+            .enumerate()
+            .map(|(index, duration)| ClipTransition {
+                segment_index: index as u32,
+                duration,
+                kind: if index % 2 == 0 {
+                    ClipTransitionType::CrossFade
+                } else {
+                    ClipTransitionType::FadeThroughBlack
+                },
+            })
+            .collect();
+        let offsets = crate::caption_timing::clip_timeline_offsets(&timeline);
+        for (index, segment) in timeline.segments.iter().enumerate() {
+            let start = offsets[index];
+            let incoming = timeline.effective_transition(index);
+            let next = timeline.effective_transition(index + 1);
+            let single_start = start + incoming.map_or(0.0, |transition| transition.duration);
+            let end =
+                start + segment.duration() - next.map_or(0.0, |transition| transition.duration);
+            for time in [single_start, (single_start + end) / 2.0, end.next_down()] {
+                let Some(TimelineFrameMapping::Single { source, output_end }) =
+                    timeline.get_frame_mapping(time)
+                else {
+                    panic!("expected single source at {time}");
+                };
+                assert_eq!(source.segment_index, index);
+                assert!(std::ptr::eq(source.segment, segment));
+                assert_eq!(
+                    source.source_time.to_bits(),
+                    (segment.start + (time - start) * segment.timescale).to_bits()
+                );
+                assert_eq!(output_end.to_bits(), end.to_bits());
+            }
+            if let Some(expected) = incoming {
+                for elapsed in [0.0, expected.duration / 2.0, expected.duration.next_down()] {
+                    let time = start + elapsed;
+                    if time >= start + expected.duration {
+                        continue;
+                    }
+                    let Some(TimelineFrameMapping::Transition {
+                        outgoing,
+                        incoming,
+                        kind,
+                        progress,
+                        duration,
+                        output_end,
+                    }) = timeline.get_frame_mapping(time)
+                    else {
+                        panic!("expected transition at {time}");
+                    };
+                    let previous = &timeline.segments[index - 1];
+                    let elapsed = time - start;
+                    assert_eq!(
+                        (outgoing.segment_index, incoming.segment_index),
+                        (index - 1, index)
+                    );
+                    assert!(std::ptr::eq(outgoing.segment, previous));
+                    assert!(std::ptr::eq(incoming.segment, segment));
+                    assert_eq!(
+                        outgoing.source_time.to_bits(),
+                        (previous.end - (expected.duration - elapsed) * previous.timescale)
+                            .to_bits()
+                    );
+                    assert_eq!(
+                        incoming.source_time.to_bits(),
+                        (segment.start + elapsed * segment.timescale).to_bits()
+                    );
+                    assert_eq!(kind, expected.kind);
+                    assert_eq!(duration.to_bits(), expected.duration.to_bits());
+                    assert_eq!(progress.to_bits(), (elapsed / duration).to_bits());
+                    assert_eq!(output_end.to_bits(), (start + duration).to_bits());
+                }
+            }
+        }
+        for time in [-1.0, timeline.duration(), f64::INFINITY, f64::NAN] {
+            assert!(timeline.get_frame_mapping(time).is_none());
+        }
     }
 
     #[test]

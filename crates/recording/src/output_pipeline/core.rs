@@ -757,6 +757,12 @@ fn video_mux_send_error(frame_count: u64, error: anyhow::Error) -> anyhow::Error
     anyhow!("Video muxer stopped accepting frames at frame {frame_count}: {error}")
 }
 
+/// Keeps the whole cause chain: a bare context such as "connect PipeWire
+/// stream to portal node" says nothing about why.
+fn task_failure(name: &str, error: &anyhow::Error) -> anyhow::Error {
+    anyhow!("Task {name} failed: {error:#}")
+}
+
 pub(crate) struct AudioTimestampGenerator {
     sample_rate: u32,
     total_samples: u64,
@@ -3261,7 +3267,7 @@ async fn finish_build(
             while let Some((result, name)) = futures.next().await {
                 let error = match result {
                     Err(_) => Some(anyhow::anyhow!("Task {name} failed unexpectedly")),
-                    Ok(Err(error)) => Some(anyhow::anyhow!("Task {name} failed: {error}")),
+                    Ok(Err(error)) => Some(task_failure(name, &error)),
                     Ok(Ok(())) => None,
                 };
                 if let Some(error) = error {
@@ -4121,11 +4127,7 @@ impl PreparedAudioSources {
                     scope.fail_required(format!("Required audio processing failed: {error:#}"));
                 }
                 let cancelled_at = Instant::now();
-                let pause_at_stop = if mixed_audio {
-                    shared_pause.captured_pause_duration(cancelled_at)
-                } else {
-                    shared_pause.total_pause_duration()
-                };
+                let pause_at_stop = shared_pause.captured_pause_duration(cancelled_at);
                 let cancellation_target_elapsed = if was_cancelled && !audio_degraded {
                     Some(cancelled_at.saturating_duration_since(timestamps.instant()).saturating_sub(pause_at_stop))
                 } else {
@@ -5389,6 +5391,17 @@ pub trait VideoMuxer: Muxer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 0.6.1 Niri logs only said "connect PipeWire stream to portal node".
+    #[test]
+    fn a_task_failure_names_its_root_cause() {
+        let error = anyhow!("Invalid argument (os error 22)")
+            .context("connect PipeWire stream to portal node");
+        assert_eq!(
+            task_failure("wayland-pipewire-capture-thread", &error).to_string(),
+            "Task wayland-pipewire-capture-thread failed: connect PipeWire stream to portal node: Invalid argument (os error 22)"
+        );
+    }
 
     #[cfg(not(target_os = "linux"))]
     mod video_skipped_frames {
@@ -10300,6 +10313,90 @@ mod tests {
             assert_eq!(harness.timestamp_generator.total_samples, 12_000);
             assert_eq!(harness.total_silence(), Duration::ZERO);
             assert_eq!(harness.overlap_dropped_frames(), 0);
+        }
+
+        #[tokio::test]
+        async fn single_source_stop_while_paused_excludes_unfinished_pause_from_tail() {
+            for cycles in [1, 8] {
+                let temp = tempfile::tempdir().unwrap();
+                let timestamps = Timestamps::now();
+                let sent = Arc::new(std::sync::Mutex::new(Vec::new()));
+                let pipeline = OutputPipeline::builder(temp.path().join("paused-audio.ogg"))
+                    .with_timestamps(timestamps)
+                    .with_audio_anchor(AudioAnchor::PipelineEpoch)
+                    .with_audio_source::<StopFrameSource>(None)
+                    .build::<RecordingAudioMuxer>(sent.clone())
+                    .await
+                    .unwrap();
+                let mut active_start = timestamps.instant();
+                let mut active_duration = Duration::ZERO;
+                for cycle in 0..cycles {
+                    tokio::time::sleep(Duration::from_millis(80 / cycles)).await;
+                    let paused_at = Instant::now();
+                    pipeline.shared_pause.set_paused_at(true, paused_at);
+                    active_duration += paused_at.duration_since(active_start);
+                    tokio::time::sleep(Duration::from_millis(40)).await;
+                    if cycle + 1 < cycles {
+                        active_start = Instant::now();
+                        pipeline.shared_pause.set_paused_at(false, active_start);
+                    }
+                }
+                pipeline.stop().await.unwrap();
+                let samples = sent
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .map(|frame| frame.samples)
+                    .sum::<usize>();
+                let encoded_duration =
+                    Duration::from_secs_f64(samples as f64 / f64::from(TEST_SAMPLE_RATE));
+                assert!(
+                    encoded_duration.abs_diff(active_duration) < Duration::from_millis(2),
+                    "{cycles} cycles: encoded {encoded_duration:?}, active {active_duration:?}"
+                );
+            }
+        }
+
+        #[tokio::test]
+        async fn single_source_paused_stop_writes_only_active_time_to_ogg() {
+            let temp = tempfile::tempdir().unwrap();
+            let path = temp.path().join("paused.ogg");
+            let timestamps = Timestamps::now();
+            let info = test_audio_info();
+            let (mut sender, receiver) = mpsc::channel(4);
+            let pipeline = OutputPipeline::builder(path.clone())
+                .with_timestamps(timestamps)
+                .with_audio_source::<ChannelAudioSource>(ChannelAudioSourceConfig::new(
+                    info, receiver,
+                ))
+                .build::<crate::ffmpeg::OggMuxer>(Default::default())
+                .await
+                .unwrap();
+            let mut first = pipeline.first_timestamp_watch();
+            sender
+                .send(AudioFrame::new(
+                    make_test_frame(&info, 480, 0.25),
+                    Timestamp::Instant(timestamps.instant()),
+                ))
+                .await
+                .unwrap();
+            tokio::time::timeout(Duration::from_secs(2), first.wait_for(Option::is_some))
+                .await
+                .unwrap()
+                .unwrap();
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            let paused_at = Instant::now();
+            pipeline.shared_pause.set_paused_at(true, paused_at);
+            let active_seconds = paused_at.duration_since(timestamps.instant()).as_secs_f64();
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            pipeline.stop().await.unwrap();
+            let input = ffmpeg::format::input(&path).unwrap();
+            let stream = input.streams().best(ffmpeg::media::Type::Audio).unwrap();
+            let encoded_seconds = stream.duration() as f64 * f64::from(stream.time_base());
+            assert!(
+                (encoded_seconds - active_seconds).abs() < 0.03,
+                "encoded {encoded_seconds:.3}s, active {active_seconds:.3}s"
+            );
         }
 
         #[tokio::test]

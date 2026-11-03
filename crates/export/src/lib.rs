@@ -190,6 +190,7 @@ impl ExporterBuilder {
             .map_err(Error::RendererSetup)?,
         );
 
+        let user_cancellation = cancellation.clone();
         let audio_cancellation = if stream_audio {
             cancellation.map(ExportAudioCancellation::new)
         } else {
@@ -254,10 +255,13 @@ impl ExporterBuilder {
             streaming_audio,
             streaming_output,
             audio_cancellation,
+            user_cancellation,
             sample_windows: None,
             sample_timing: None,
             #[cfg(feature = "test-hooks")]
             video_encoder_failure_at: None,
+            #[cfg(feature = "test-hooks")]
+            turbo_chunk_failure: None,
         })
     }
 }
@@ -449,6 +453,12 @@ impl Mp4ExporterBase {
     pub fn fail_video_encoder_at(&mut self, frames: u32) {
         self.0.fail_video_encoder_at(frames);
     }
+
+    /// Makes this turbo chunk's encoder fail after a few frames.
+    #[cfg(feature = "test-hooks")]
+    pub fn fail_turbo_chunk(&mut self, chunk: usize) {
+        self.0.turbo_chunk_failure = Some(chunk);
+    }
 }
 
 pub struct ExporterBase {
@@ -463,10 +473,13 @@ pub struct ExporterBase {
     streaming_audio: Option<ExportAudioRenderer>,
     streaming_output: Option<mp4::TemporaryExportOutput>,
     audio_cancellation: Option<ExportAudioCancellation>,
+    user_cancellation: Option<Arc<AtomicBool>>,
     sample_windows: Option<cap_rendering::FrameWindows>,
     sample_timing: Option<Arc<estimates::SampleTiming>>,
     #[cfg(feature = "test-hooks")]
     video_encoder_failure_at: Option<u32>,
+    #[cfg(feature = "test-hooks")]
+    turbo_chunk_failure: Option<usize>,
 }
 
 impl ExporterBase {

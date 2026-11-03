@@ -3,9 +3,9 @@
 Cap's desktop app, rewritten in [gpui](https://www.gpui.rs/). No Tauri, no
 webview — the whole UI is drawn by gpui and every pixel is Rust.
 
-This is the app that ships as **Cap**, from 0.6.1 on. The Tauri app in
-`apps/desktop` last shipped in 0.6.0 and is kept only for the dev harness; see
-[Shipping and updates](#shipping-and-updates).
+This is the app that ships as **Cap**, from 0.6.1 on, and the only desktop app
+in this repository. It replaced the Tauri app, which last shipped in 0.6.0; see
+[Shipping and updates](#shipping-and-updates) and [The Tauri app](#the-tauri-app).
 
 The main recording window uses a fixed 330×432 layout with device controls
 and recording and screenshot browsers. The expanded view is no longer available.
@@ -43,8 +43,10 @@ behind a plain-slice function and call that from the app.
 ./dev.sh
 ```
 
-`bun run dev:desktop` (from the repo root) starts this loop automatically next
-to the Tauri app, output prefixed `[gpui]`; set `CAP_GPUI_DEV=0` to opt out
+`bun run dev:desktop` from the repo root runs `bun run cap-setup`, checks out
+the patched gpui next to the repository (`scripts/prepare-gpui-dependency.sh`)
+and starts this loop. The loop needs macOS (BSD `stat` and `md5`); on Windows
+and Linux the same command builds and runs the app once
 (`scripts/dev-desktop.mjs`).
 
 Native Rust cannot hot-reload, so this is the Solid-dev-server feel rebuilt
@@ -67,15 +69,17 @@ by hand: switching between `./dev.sh` and `cargo build` rebuilds nothing.
 
 ### Why it is a separate workspace
 
-`Cargo.toml` declares its own `[workspace]`. The root workspace carries
-`[patch.crates-io]` entries — a vendored `wgpu-hal`, a forked `tao` — that exist
-only for the Tauri app and that gpui's tree does not want. Nesting a second
-workspace here leaves the root `Cargo.lock`, the `cargo hakari` workspace-hack
-and CI completely untouched.
+`Cargo.toml` declares its own `[workspace]`. gpui's dependency tree is enormous
+and pins its own git revisions of the wgpu and font stacks, and the root
+workspace's `[patch.crates-io]` entries (forked `reqwest` and `cidre`) are not
+ones that tree wants. Nesting a second workspace keeps the root `Cargo.lock`
+and the `cargo hakari` workspace-hack independent of it. The vendored
+`wgpu-hal` is patched in both workspaces.
 
 `rust-toolchain.toml` pins `stable` rather than the root's 1.88.0, because
-gpui's dependencies need 1.89+ (`smol_str` 0.3.6, `cosmic-text` 0.19). The
-nearest toolchain file wins, so the Tauri app is unaffected.
+gpui's dependencies need 1.89+ (`smol_str` 0.3.6, `cosmic-text` 0.19). CI and
+release builds use 1.95.0 explicitly. The nearest toolchain file wins, so the
+CLI and the shared crates keep building on 1.88.0.
 
 ## Shipping and updates
 
@@ -144,12 +148,22 @@ while a recording, export, upload, import or transcription is running.
 
 ### The Tauri app
 
-Releases no longer build the Tauri app. 0.6.0 was its last version, and the
-website's [all versions](https://cap.so/download/versions) page keeps it
-downloadable. In a debug build started from `target/`, Settings → Experimental
-still has the **Cap GPUI** switch that hands the session back to the Tauri
-app running under `bun run dev:desktop`, through the dev supervisor
-(`store::request_classic_reopen` and `cap-classic.pending`).
+0.6.0 was the last release of the Tauri app, and the website's
+[all versions](https://cap.so/download/versions) page keeps it downloadable.
+Its source (`apps/desktop`, with the shared Solid UI in `packages/ui-solid`)
+was removed from the repository after 0.6.2 and stays browsable at
+[`cap-v0.6.2`](https://github.com/CapSoftware/Cap/tree/cap-v0.6.2/apps/desktop).
+
+This app was built as a 1:1 port of it, so these notes and many comments in
+`src/` cite its files: `*.tsx` routes and components, `apps/desktop/...`,
+`packages/ui-solid/...`, often with line numbers. Those references all point
+at that tag.
+
+The formats it defined are still live: the `store` file in the app-data
+directory (its `general_settings`, `auth` and other sections), the
+`so.cap.desktop` identifier, the `cap-desktop` deep-link scheme and the
+updater key and endpoint. 0.6.0 installs update
+straight into this app and keep their recordings and settings.
 
 ## What is implemented
 
@@ -636,8 +650,8 @@ Sizes are the Tauri app's, from `apps/desktop/src-tauri/src/windows.rs`.
 | Teleprompter | 560×320 | **Done, with deviations** — resizable to the 420×220 floor, level 101 on all Spaces, the `"teleprompter"` material at radius 22, traffic lights at (14, 11) — the Tauri `(14, 14)` is a `position_window_controls` inset, not a top-left, auto-scroll from the ported `teleprompter-utils` maths, the full footer and settings popover, native window opacity, the `teleprompter` store section, capture exclusion + content protection. The script editor is a real multi-line field and Mirror is inert — see below |
 | Editor | 1275×800 | **E1–E5 done — window, shell, playback, timeline, editing, config sidebar.** The real 1275×800 window with the traffic lights at (20, 20) — the Tauri `(20, 32)` is a `position_window_controls` inset, not a top-left, the header, the letterboxed player, the 260px timeline strip and the 416px config sidebar with its six-tab rail; a real project through `EditorInstance`; play/pause (button + Space), a 60fps live playhead and clock, real audio, click/drag seeking, end-of-media stop; the timeline at 1:1 — all nine track types from the project's own config, waveforms, the ruler's resolution ladder, minimap, edge fade, hover ghost, zoom (keys, buttons, slider, wheel, pinch) and pan; and **timeline editing**: selection (single, ⌘-multi, ⇧-range, ⌘A), trim, move, split (S + C, with snapping), zoom-segment create/resize/move, delete, undo/redo and the debounced write back to `project-config.json`. and **the config sidebar in full**: the six-tab rail, the scroll body, selection routing, all six tabs at 1:1, the shared colour-correction section on both its targets, and the eight per-segment panels with multi-select where the source has it. Crop and export are the remaining units |
 | Screenshot editor | 1240×800 (min 800×600) | **Done, with deviations** — the real window (native traffic lights, resizable to the 800×600 floor), one editor per bundle keyed like the video editor's registry, opened from capture, Recents, the settings Screenshots page, the tray's Previous and image import. The still renders through the same GPU path the Tauri instance uses (`FrameRenderer::render_immediate`, `preserve_screen_alpha`, no camera) on a config watch, painted with `paint_image` instead of shipped over the frame websocket; edits publish to the renderer live, ride the 1000ms debounced `project-config.json` write, and walk a real undo history (⌘Z / ⌘⇧Z / ⌘Y, a drag's sixty intermediate values collapsed into one entry). Styling: background source tabs (color swatches, gradient presets, wallpaper grid with theme tabs and cached thumbnails, image picker), hex fields, blur/padding/rounding/shadow sliders at the popovers' ranges plus the advanced-shadow collapsible, squircle/rounded corner style, border toggle + width/color/opacity, aspect-ratio menu. Annotations: the full engine — all seven tools with their single-key shortcuts, the frame-space geometry of `layout.ts`/`arrow.ts` verbatim, selection handles, the per-type config bar (stroke/fill swatches with the colour popover, width/opacity/mask-level/text-size sliders), the layers panel with drag reorder, blur/pixelate masks resampled live off the rendered frame, inline text editing, ⌘C/⌘V duplicate, delete. Crop dialog: the `editor_crop` engine wholesale over `original.png` (`screenshot_crop.rs`) — Size/Position number boxes, the round ratio button and its options menu (right-click opens the same one at the cursor) with the snap-to-ratio toggle persisted in the shared store, Full/Reset, arrow-key nudges, one history entry on Save, Escape/backdrop cancel. Export: Copy/Save/Share all bake the annotations in (`screenshot_export.rs` — the `renderScreenshotExportCanvas` pass: masks re-filtered at export scale from an unmodified copy, shapes via tiny-skia, text via cosmic-text at the preview's Helvetica baseline, the output expanded to the union of image and annotation boxes with the source's white-fill rules); Copy composites over white and lands PNG on the clipboard, Save writes PNG, Share fingerprints the config (`sha256` over recursively key-sorted JSON), short-circuits to the stored link on a hash match, and otherwise uploads JPEG-0.9 (PNG when transparency is actually needed) through create-or-get + presigned PUT — reusing `sharing.id` so the link survives edits — then persists `SharingMeta { id, link, content_hash }`, with Tauri's exact auth gates and toast ladder; reveal, delete behind a native confirm. Deviations: no OCR text-selection overlay (Vision OCR feeding an invisible DOM-style selectable text layer has no gpui equivalent yet; the layer is invisible in the Tauri editor too, so zero visual impact); the colour swatches are inert — no native colour panel is wired to this window, the hex fields are the input; the skeleton's Cap logo is drawn still (the app ships no bare glyph to spin, only the full lockup); the crop options menu has no separator row (`ui::Menu` has none, so its two groups sit adjacent); no `PendingScreenshots` in-memory hand-off (the PNG is on disk before the editor opens) |
-| Tray (status item) | menu bar | **Done, with deviations** — a native `NSStatusItem` (no gpui API exists for one; built on AppKit with the color-panel channel discipline), menu byte-identical to `build_tray_menu`: Open Main Window, Record Display/Window/Area (screenshot-mode relabels), Select Mode ▸ with the ✓, Previous ▸ with 32px cover-cropped thumbnails and the 🎬⚡📷 prefixes, View all recordings / screenshots, Settings, version row, Quit Cap. The icon follows the mode and becomes the stop icon while recording, when clicking the item stops the capture (the menu is detached so the button's action can fire). Select Mode writes the same `recording_settings.mode` store key the Tauri app reads. Take a Screenshot captures the display under the cursor and Import Media… routes video/image imports; a Previous screenshot opens the screenshot editor. Deviations: Upload Logs renders disabled (no log-upload infrastructure yet) |
-| App menu + shortcuts | menu bar | **Done** — the `build_macos_app_menu` structure (Cap / File / Edit / View / Window / Help) via `cx.set_menus`, with ⌘W closing the key window through each window's own close path (main hides, Tauri's `CloseRequested` arm transcribed: camera bubble closed, overlays closed, feeds released when idle), ⌘M / Zoom / ⌃⌘F on the key window, ⌘H / ⌥⌘H, ⌘Q, and Edit items dispatching the text-input actions. Dock-icon policy (Regular ↔ Accessory per `hideDockIcon` + visible windows) synced on every window show/hide seam |
+| Tray (status item) | menu bar | **Done, with deviations** — a native `NSStatusItem` (no gpui API exists for one; built on AppKit with the color-panel channel discipline), menu in `build_menu`'s own grouping: Open Main Window; the current mode as the group label (an `NSMenu` section header reading e.g. `Studio` plus a palette item with the mode icons on macOS 14+ (the header follows the palette's highlight in italic), a ✓-ticked `Recording Mode ▸` submenu on older macOS and on Windows); Record Display/Window/Area + Take a Screenshot (screenshot-mode relabels); Previous ▸ (clock glyph) with 32px cover-cropped thumbnails and the 🎬⚡📷 prefixes, View all recordings / screenshots; Import Media…, Settings (⌘,), Upload Logs; Quit Cap with the version as a trailing section header on macOS and as a disabled row above Quit elsewhere. The four record rows, Previous ▸, Import Media… and Settings each carry an SF Symbol (`display`, `interface.window` (`macwindow` below macOS 26), `rectangle.dashed`, `camera.on.rectangle`, `clock.arrow.circlepath`, `square.and.arrow.down`, `gear`) drawn straight from the system catalog on macOS 11+ with no fallback — an unresolvable name leaves the row bare — while Windows draws the cached 32×32 raster of the same SVG their in-app buttons use (`ROW_ICON_SOURCES` / `svg_icon_png`); the macOS glyphs are template images the menu tints, and Previous's own rows keep their photo thumbnails; the chrome rows (Open Main Window, View all …, Upload Logs, Quit) stay bare. The icon follows the mode and becomes the stop icon while recording, when clicking the item stops the capture (the menu is detached so the button's action can fire). The mode picker writes the same `recording_settings.mode` store key the Tauri app reads. Take a Screenshot captures the display under the cursor and Import Media… routes video/image imports; a Previous screenshot opens the screenshot editor. Deviations: Upload Logs renders disabled (no log-upload infrastructure yet) |
+| App menu + shortcuts | menu bar | **Done** — the `build_macos_app_menu` structure (Cap / File / Edit / View / Window / Help) via `cx.set_menus`, with ⌘W closing the key window through each window's own close path (main hides, Tauri's `CloseRequested` arm transcribed: camera bubble closed, overlays closed, feeds released when idle), ⌘M / Zoom / ⌃⌘F on the key window, ⌘H / ⌥⌘H, ⌘Q, and Edit items dispatching the text-input actions. The Cap menu carries About (AppKit's own `orderFrontStandardAboutPanel:`, patched in by row position, so there is no gpui About action), Check for Update and Preferences… with ⌘,. The update row resolves to three states — `Check for Update`, `Download update…` and `Restart to update…`, with `Checking for Update…` greyed out while a check runs — and is rewritten in place in the live `NSMenu` (`platform::set_update_menu_item`, by row position, `setBadge:` on macOS 14+) so an open menu survives a status change; the version, and the download percentage on macOS, ride the badge, and the menu bar is only reinstalled on the other platforms when the state itself changes. File carries Open File… (an existing recording or screenshot, routed through the tray's `open_previous_item`), Import Media… (the same picker the tray runs), the AppKit-managed Open Recent list — every editor open registers its bundle with `add_recent_document`, and a click comes back through `application:openURLs:` → `deeplink` → `open_editor` — and Close Window. Help carries the Changelog and the cap.so/help links. Dock-icon policy (Regular ↔ Accessory per `hideDockIcon` + visible windows) synced on every window show/hide seam |
 
 ## Recording
 
@@ -697,7 +711,7 @@ Recording-specific deviations:
 | **Settings button is inert** | The bar's recording-settings popover menu is not built; the same applies to the gear button in the overlay's start cluster. |
 | **No overlay blur** | The recording overlay is `bg-gray-1/80` without `backdrop-blur-xs`; this gpui rev has no per-element backdrop blur hook. The target-select overlay's liquid-glass surfaces drop their `backdrop-blur-xl` for the same reason. |
 | **Escape is a focused key handler** | The Tauri app registers Escape as a *global* shortcut while the overlays are up; here it is a key handler on the overlay that holds focus (the one on the cursor's display). Escape pressed while another app is active does not dismiss. |
-| **Overlay cluster is start-only** | The device row (camera/microphone selects under the start pill), the mode dropdown behind the caret, and the "What is X Mode?" link are deferred — device pickers live in the main window. The area toolbar shows the size readout but not the aspect-ratio/reset/fill/lock controls. |
+| **Overlay cluster is start-only** | The device row (camera/microphone selects under the start pill), the mode dropdown behind the caret, and the "What is X Mode?" link are deferred — device pickers live in the main window. The area toolbar shows the size readout and an aspect-ratio control, but not the reset/fill/lock controls. |
 | **Camera-only keeps the bubble** | The TSX inlines a camera preview into the camera-only overlay; ours keeps the separate camera preview window it already has. |
 | **Camera id is DeviceID-only** | The Tauri app persists `ModelID` when a camera advertises one, so the same camera survives re-plugging into a different port. |
 | **Defaults are the builder's** | `desktop_recording_defaults` (studio quality, fps caps, custom cursor) is not applied yet — it reads the Tauri settings store. |
@@ -1046,7 +1060,7 @@ Settings-specific deviations:
 | **Settings does not park the other windows** | `ShowCapWindow::Settings::show` also calls `hide_recording_windows` and `release_camera_preview_if_idle`, and its close calls `restore_camera_window`. Neither half is reproduced — the gear hides the main window and nothing else. |
 | **Several settings persist without a consumer** | `hideDockIcon`, `enableNotifications`, the countdown, the post-recording behaviours and the update channel write the same store keys as Tauri; the machinery that would obey them is not built yet. Theme is applied. |
 | **No confirm on the recordings folder move** | `pickRecordingsFolder` offers to migrate existing recordings afterwards; here the path is written and nothing is moved. |
-| **Version is this crate's** | The sidebar footer shows the crate version from `CARGO_PKG_VERSION` (kept in lockstep with the Tauri app by `scripts/sync-desktop-versions.mjs`), not `getVersion()`. "Check for updates" runs the native updater and shows its download progress in place. |
+| **Version is this crate's** | The sidebar footer shows the crate version from `CARGO_PKG_VERSION` (the bundled CLI is kept in lockstep with it by `scripts/sync-desktop-versions.mjs`), not `getVersion()`. "Check for updates" runs the native updater and shows its download progress in place. |
 
 ## Mode select
 

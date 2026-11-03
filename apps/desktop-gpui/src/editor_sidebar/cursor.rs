@@ -21,11 +21,11 @@ enum CursorCard {
 impl CursorCard {
     fn label(self) -> &'static str {
         match self {
-            Self::Default => "Default",
+            Self::Default => tr::editor::sidebar::cursor::default(),
             Self::Family(CursorFamily::MacOS) => "macOS",
             Self::Family(CursorFamily::MacOSTahoe) => "macOS Tahoe",
             Self::Family(CursorFamily::Windows) => "Windows",
-            Self::Circle => "Circle",
+            Self::Circle => tr::editor::sidebar::cursor::circle(),
         }
     }
 
@@ -201,12 +201,16 @@ impl EditorWindow {
                         ARROW_BOX,
                     ),
                 )
-                .child(div().text_size(px(12.)).child("Default"))
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .child(tr::editor::sidebar::cursor::default()),
+                )
                 .child(
                     div()
                         .text_size(px(11.))
                         .text_color(Hsla::from(theme.gray_11))
-                        .child("Recorded cursors"),
+                        .child(tr::editor::sidebar::cursor::recorded()),
                 )
                 .into_any_element(),
             CursorCard::Family(family) => self.cursor_art(family.arrow(), ARROW_BOX),
@@ -237,7 +241,8 @@ impl EditorWindow {
             })
             .when(recorded, |this| {
                 this.tooltip(move |_window, cx| {
-                    ui::Tooltip::new(&theme, "Recorded with this cursor").view(cx)
+                    ui::Tooltip::new(&theme, tr::editor::sidebar::cursor::recorded_tooltip())
+                        .view(cx)
                 })
             })
             .child(art)
@@ -307,17 +312,17 @@ impl EditorWindow {
         let recorded = self.recorded_cursor_family;
 
         let description = match selected {
-            CursorCard::Default => "Keeps the cursor shapes and appearance from your recording.",
+            CursorCard::Default => tr::editor::sidebar::cursor::description_default(),
             CursorCard::Family(CursorFamily::MacOS) => {
-                "Classic macOS appearance. Custom cursors keep their recorded shape."
+                tr::editor::sidebar::cursor::description_macos()
             }
             CursorCard::Family(CursorFamily::MacOSTahoe) => {
-                "macOS Tahoe appearance. Custom cursors keep their recorded shape."
+                tr::editor::sidebar::cursor::description_tahoe()
             }
             CursorCard::Family(CursorFamily::Windows) => {
-                "Windows appearance. Custom cursors keep their recorded shape."
+                tr::editor::sidebar::cursor::description_windows()
             }
-            CursorCard::Circle => "Replaces all cursor shapes with a circle.",
+            CursorCard::Circle => tr::editor::sidebar::cursor::description_circle(),
         };
         div()
             .flex()
@@ -357,7 +362,7 @@ impl EditorWindow {
             .flex()
             .flex_col()
             .child(
-                ui::Field::inline(&theme, "Click Ripple").value(
+                ui::Field::inline(&theme, tr::editor::sidebar::cursor::click_ripple()).value(
                     ui::Toggle::plain(&theme, "cursor-ripple", enabled)
                         .on_click(cx.listener(move |this, _, window, cx| {
                             let next = !this.style_control_project().cursor.ripple.enabled;
@@ -379,27 +384,29 @@ impl EditorWindow {
                     .pt(px(4.))
                     .pb(px(8.))
                     .child(
-                        ui::Subfield::plain(&theme, "Color").child(self.render_rgb_input(
-                            "cursor-ripple-color",
-                            ColorTarget::CursorRipple,
-                            color,
-                            cx,
-                        )),
+                        ui::Subfield::plain(&theme, tr::editor::sidebar::cursor::color()).child(
+                            self.render_rgb_input(
+                                "cursor-ripple-color",
+                                ColorTarget::CursorRipple,
+                                color,
+                                cx,
+                            ),
+                        ),
                     )
                     .child(self.slider_field(
-                        "Strength",
+                        tr::editor::sidebar::cursor::strength(),
                         SliderKey::Cursor(CursorSlider::RippleStrength),
                         "%",
                         cx,
                     ))
                     .child(self.slider_field(
-                        "Size",
+                        tr::editor::sidebar::cursor::ripple_size(),
                         SliderKey::Cursor(CursorSlider::RippleSize),
                         "%",
                         cx,
                     ))
                     .child(self.slider_field(
-                        "Duration",
+                        tr::editor::sidebar::cursor::duration(),
                         SliderKey::Cursor(CursorSlider::RippleDuration),
                         "secs",
                         cx,

@@ -5,7 +5,7 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { comments, notifications } from "@cap/database/schema";
 import { Storage, VideosRepo } from "@cap/web-backend";
 import type { Comment, Video } from "@cap/web-domain";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { revalidatePath } from "next/cache";
 import * as EffectRuntime from "@/lib/server";
@@ -84,7 +84,7 @@ export async function deleteComment({
 					.delete(notifications)
 					.where(
 						and(
-							eq(notifications.type, "comment"),
+							inArray(notifications.type, ["comment", "reaction"]),
 							sql`JSON_EXTRACT(${notifications.data}, '$.comment.id') = ${commentId}`,
 						),
 					);

@@ -88,6 +88,58 @@ const wrapS3Promise = <T>(
 		),
 	);
 
+export type ConditionalWriteOptions = {
+	// Some S3-compatible providers reject If-None-Match with 501 NotImplemented, which
+	// fails the write every time. Only callers whose key is unique to the attempt and
+	// whose object is verified afterwards opt in to one retry without the header.
+	retryWithoutUnsupportedIfNoneMatch?: boolean;
+};
+
+const isUnsupportedIfNoneMatch = (error: S3Error) => {
+	const cause = error.cause;
+	if (typeof cause !== "object" || cause === null) return false;
+	const record = cause as {
+		name?: unknown;
+		Code?: unknown;
+		Header?: unknown;
+		$metadata?: { httpStatusCode?: unknown };
+	};
+	return (
+		record.$metadata?.httpStatusCode === 501 &&
+		(record.name === "NotImplemented" || record.Code === "NotImplemented") &&
+		(record.Header === undefined ||
+			(typeof record.Header === "string" &&
+				record.Header.toLowerCase() === "if-none-match"))
+	);
+};
+
+const withoutUnsupportedIfNoneMatch = <
+	Args extends { IfNoneMatch?: string },
+	T,
+>(
+	args: Args | undefined,
+	send: (args: Args | undefined) => Effect.Effect<T, S3Error>,
+	operation: string,
+	options: ConditionalWriteOptions | undefined,
+) =>
+	send(args).pipe(
+		Effect.catchIf(
+			(error) =>
+				options?.retryWithoutUnsupportedIfNoneMatch === true &&
+				args?.IfNoneMatch !== undefined &&
+				isUnsupportedIfNoneMatch(error),
+			() => {
+				const { IfNoneMatch: _ignored, ...unconditional } = args as Args;
+				return Effect.logWarning(
+					"Storage provider does not support If-None-Match; retrying without it",
+				).pipe(
+					Effect.annotateLogs({ operation }),
+					Effect.zipRight(send(unconditional as Args)),
+				);
+			},
+		),
+	);
+
 export const createS3BucketAccess = Effect.gen(function* () {
 	const provider = yield* S3BucketClientProvider;
 	let requestAccessiblePublicClient: {
@@ -243,10 +295,34 @@ export const createS3BucketAccess = Effect.gen(function* () {
 					),
 				),
 			),
+		getObjectWithETag: (key: string) =>
+			wrapS3Promise(
+				provider.getInternal.pipe(
+					Effect.map(async (client) => {
+						const response = await client
+							.send(
+								new S3.GetObjectCommand({ Bucket: provider.bucket, Key: key }),
+							)
+							.catch((e) => {
+								if (e instanceof S3.NoSuchKey) return null;
+								throw e;
+							});
+						const body = await response?.Body?.transformToString();
+						return body === undefined
+							? Option.none()
+							: Option.some({ body, eTag: response?.ETag });
+					}),
+				),
+			),
 		putObject: <E>(
 			key: string,
 			body: string | Uint8Array | ArrayBuffer | Stream.Stream<Uint8Array, E>,
-			fields?: { contentType?: string; contentLength?: number },
+			fields?: {
+				contentType?: string;
+				contentLength?: number;
+				ifMatch?: string;
+				ifNoneMatch?: string;
+			},
 		) =>
 			wrapS3Promise(
 				provider.getInternal.pipe(
@@ -273,6 +349,8 @@ export const createS3BucketAccess = Effect.gen(function* () {
 									Body: _body,
 									ContentType: fields?.contentType,
 									ContentLength: fields?.contentLength,
+									IfMatch: fields?.ifMatch,
+									IfNoneMatch: fields?.ifNoneMatch,
 								}),
 							);
 						}),
@@ -286,20 +364,27 @@ export const createS3BucketAccess = Effect.gen(function* () {
 			source: string,
 			key: string,
 			args?: Omit<S3.CopyObjectCommandInput, "Bucket" | "CopySource" | "Key">,
+			options?: ConditionalWriteOptions,
 		) =>
-			wrapS3Promise(
-				provider.getInternal.pipe(
-					Effect.map((client) =>
-						client.send(
-							new S3.CopyObjectCommand({
-								Bucket: provider.bucket,
-								CopySource: source,
-								Key: key,
-								...args,
-							}),
+			withoutUnsupportedIfNoneMatch(
+				args,
+				(input) =>
+					wrapS3Promise(
+						provider.getInternal.pipe(
+							Effect.map((client) =>
+								client.send(
+									new S3.CopyObjectCommand({
+										Bucket: provider.bucket,
+										CopySource: source,
+										Key: key,
+										...input,
+									}),
+								),
+							),
 						),
 					),
-				),
+				"CopyObject",
+				options,
 			),
 		deleteObject: (key: string) =>
 			wrapS3Promise(
@@ -440,20 +525,27 @@ export const createS3BucketAccess = Effect.gen(function* () {
 					S3.CompleteMultipartUploadCommandInput,
 					"Key" | "Bucket" | "UploadId"
 				>,
+				options?: ConditionalWriteOptions,
 			) =>
-				wrapS3Promise(
-					provider.getInternal.pipe(
-						Effect.map((client) =>
-							client.send(
-								new S3.CompleteMultipartUploadCommand({
-									Bucket: provider.bucket,
-									Key: key,
-									UploadId: uploadId,
-									...args,
-								}),
+				withoutUnsupportedIfNoneMatch(
+					args,
+					(input) =>
+						wrapS3Promise(
+							provider.getInternal.pipe(
+								Effect.map((client) =>
+									client.send(
+										new S3.CompleteMultipartUploadCommand({
+											Bucket: provider.bucket,
+											Key: key,
+											UploadId: uploadId,
+											...input,
+										}),
+									),
+								),
 							),
 						),
-					),
+					"CompleteMultipartUpload",
+					options,
 				),
 			copyPart: (
 				key: string,

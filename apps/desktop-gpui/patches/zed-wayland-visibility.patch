@@ -1,0 +1,286 @@
+--- a/crates/gpui_linux/src/linux/wayland/window.rs
++++ b/crates/gpui_linux/src/linux/wayland/window.rs
+@@ -93,9 +93,20 @@
+     tiling: Tiling,
+ }
+ 
++/// How long a remapped toplevel waits for its configure before it is given a
++/// new role. Compositors that send one do so within a frame or two.
++const REMAP_CONFIGURE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
++
+ #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+ enum VisibilityPhase {
+     Visible,
++    /// Hidden before its first buffer: the surface was never mapped, so it is
++    /// already invisible. It keeps its renderer surface and acknowledges
++    /// configures but does not draw; showing it draws the first frame, which
++    /// maps it. Unmapping it instead would wait for a configure the compositor
++    /// owes nobody (Mutter and Hyprland send none for a surface that already
++    /// acknowledged its first configure and never attached a buffer).
++    Withheld,
+     Draining(u64),
+     Unmapping(u64),
+     Hidden,
+@@ -161,7 +172,7 @@
+         let visible = self.phase == VisibilityPhase::Visible;
+         if !matches!(
+             self.phase,
+-            VisibilityPhase::Visible | VisibilityPhase::Hidden
++            VisibilityPhase::Visible | VisibilityPhase::Hidden | VisibilityPhase::Withheld
+         ) || visible != self.desired
+         {
+             return;
+@@ -246,6 +257,11 @@
+     hovered: bool,
+     pub(crate) force_render_after_recovery: bool,
+     renderer_presented: bool,
++    /// A buffer is committed on the surface: it is mapped.
++    buffer_attached: bool,
++    /// The renderer's surface was retired by an unmap and must be recreated
++    /// when the window is configured again.
++    surface_retired: bool,
+     in_progress_configure: Option<InProgressConfigure>,
+     resize_throttle: bool,
+     in_progress_window_controls: Option<WindowControls>,
+@@ -661,6 +677,36 @@
+ }
+ 
+ impl WaylandWindowState {
++    /// Toplevel requests a remapped surface repeats before its initial commit.
++    fn apply_toplevel_state(&self) {
++        let WaylandSurfaceState::Xdg(xdg) = &self.surface_state else {
++            return;
++        };
++        xdg.toplevel.set_title(self.title.clone());
++        if let Some(app_id) = &self.app_id {
++            xdg.toplevel.set_app_id(app_id.clone());
++        }
++        let parent = self.parent.as_ref().and_then(|parent| parent.toplevel());
++        xdg.toplevel.set_parent(parent.as_ref());
++        if let Some(minimum) = self.minimum_size {
++            xdg.toplevel.set_min_size(
++                f32::from(minimum.width) as i32,
++                f32::from(minimum.height) as i32,
++            );
++        }
++        let maximum = self.renderer.max_texture_size() as i32;
++        xdg.toplevel.set_max_size(maximum, maximum);
++        if self.maximized {
++            xdg.toplevel.set_maximized();
++        }
++        if self.fullscreen {
++            xdg.toplevel.set_fullscreen(self.fullscreen_output());
++        }
++        if let Some(decoration) = &xdg.decoration {
++            decoration.set_mode(self.decorations.to_xdg());
++        }
++    }
++
+     fn fullscreen_output(&self) -> Option<&wl_output::WlOutput> {
+         self.preferred_output.as_ref().filter(|output| {
+             let Some(global_name) = output.data::<u32>() else {
+@@ -781,6 +827,8 @@
+             hovered: false,
+             force_render_after_recovery: false,
+             renderer_presented: false,
++            buffer_attached: false,
++            surface_retired: false,
+             in_progress_window_controls: None,
+             window_controls: WindowControls::default(),
+             client_inset: None,
+@@ -1089,6 +1137,7 @@
+     fn unmap_surface(&self, transition: u64) {
+         let mut state = self.state.borrow_mut();
+         let surface = state.renderer.take_surface_for_visibility();
++        state.surface_retired = true;
+         let background = state
+             .client
+             .get_client()
+@@ -1115,6 +1164,7 @@
+                 }
+                 state.surface.attach(None, 0, 0);
+                 state.surface.commit();
++                state.buffer_attached = false;
+                 state.visibility.phase = VisibilityPhase::Unmapping(transition);
+                 Self::visibility_sync(&state, transition, false);
+             })
+@@ -1125,6 +1175,26 @@
+         let mut state = self.state.borrow_mut();
+         state.visibility.complete();
+         match (state.visibility.phase, state.visibility.desired) {
++            (VisibilityPhase::Visible, false) if !state.buffer_attached => {
++                state.visibility.phase = VisibilityPhase::Withheld;
++                state.visibility.complete();
++            }
++            (VisibilityPhase::Withheld, true) => {
++                state.visibility.sequence = state.visibility.sequence.wrapping_add(1);
++                let transition = state.visibility.sequence;
++                state.visibility.phase = VisibilityPhase::Configuring(transition);
++                // The window has never drawn a frame the compositor kept, so
++                // the next one has to be rendered even if nothing changed.
++                state.force_render_after_recovery = true;
++                if state.acknowledged_first_configure {
++                    // Requests arrive inside the caller's window update, where
++                    // gpui cannot draw this window; frame on the next turn.
++                    let foreground = state.globals.executor.clone();
++                    drop(state);
++                    let window = self.clone();
++                    foreground.spawn(async move { window.frame() }).detach();
++                }
++            }
+             (VisibilityPhase::Visible, false) => {
+                 let transition = state.visibility.begin_unmap();
+                 drop(state);
+@@ -1139,38 +1209,78 @@
+                 state.renderer_presented = false;
+                 state.resize_throttle = false;
+                 state.fixed_geometry_size = None;
+-                if let WaylandSurfaceState::Xdg(xdg) = &state.surface_state {
+-                    xdg.toplevel.set_title(state.title.clone());
+-                    if let Some(app_id) = &state.app_id {
+-                        xdg.toplevel.set_app_id(app_id.clone());
+-                    }
+-                    let parent = state.parent.as_ref().and_then(|parent| parent.toplevel());
+-                    xdg.toplevel.set_parent(parent.as_ref());
+-                    if let Some(minimum) = state.minimum_size {
+-                        xdg.toplevel.set_min_size(
+-                            f32::from(minimum.width) as i32,
+-                            f32::from(minimum.height) as i32,
+-                        );
+-                    }
+-                    let maximum = state.renderer.max_texture_size() as i32;
+-                    xdg.toplevel.set_max_size(maximum, maximum);
+-                    if state.maximized {
+-                        xdg.toplevel.set_maximized();
+-                    }
+-                    if state.fullscreen {
+-                        xdg.toplevel.set_fullscreen(state.fullscreen_output());
+-                    }
+-                    if let Some(decoration) = &xdg.decoration {
+-                        decoration.set_mode(state.decorations.to_xdg());
+-                    }
+-                }
++                state.apply_toplevel_state();
+                 state.update_size_constraints();
+                 state.surface.commit();
++                // Hyprland never answers the initial commit of a remapped
++                // toplevel with a configure; give it a fresh role if nothing
++                // arrives (GNOME and wlroots configure within milliseconds).
++                let background = state
++                    .client
++                    .get_client()
++                    .borrow()
++                    .common
++                    .background_executor
++                    .clone();
++                let foreground = state.globals.executor.clone();
++                drop(state);
++                let window = self.clone();
++                foreground
++                    .spawn(async move {
++                        background.timer(REMAP_CONFIGURE_TIMEOUT).await;
++                        window.recreate_role_if_unconfigured(transition);
++                    })
++                    .detach();
+             }
+             _ => {}
+         }
+     }
+ 
++    /// The surface is unmapped and still waiting for the configure that the
++    /// protocol says must answer its initial commit. Destroying the toplevel and
++    /// creating a new one on the same surface (what GTK does on every hide)
++    /// gets a configure from every compositor.
++    fn recreate_role_if_unconfigured(&self, transition: u64) {
++        let mut state = self.state.borrow_mut();
++        if state.visibility.phase != VisibilityPhase::Configuring(transition)
++            || state.acknowledged_first_configure
++            || state.buffer_attached
++        {
++            return;
++        }
++        match &state.surface_state {
++            WaylandSurfaceState::Xdg(xdg) if xdg.dialog.is_none() => {
++                if let Some(decoration) = &xdg.decoration {
++                    decoration.destroy();
++                }
++                xdg.toplevel.destroy();
++                xdg.xdg_surface.destroy();
++            }
++            _ => return,
++        }
++        log::info!("no configure after remapping a window; replacing its toplevel role");
++        let xdg_surface =
++            state
++                .globals
++                .wm_base
++                .get_xdg_surface(&state.surface, &state.globals.qh, state.surface.id());
++        let toplevel = xdg_surface.get_toplevel(&state.globals.qh, state.surface.id());
++        let decoration = state.globals.decoration_manager.as_ref().map(|manager| {
++            manager.get_toplevel_decoration(&toplevel, &state.globals.qh, state.surface.id())
++        });
++        state.surface_state = WaylandSurfaceState::Xdg(WaylandXdgSurfaceState {
++            xdg_surface,
++            toplevel,
++            decoration,
++            dialog: None,
++        });
++        // The first remap attempt cached its size limits for the old role.
++        state.fixed_geometry_size = None;
++        state.apply_toplevel_state();
++        state.update_size_constraints();
++        state.surface.commit();
++    }
++
+     pub(crate) fn visibility_processed(&self, sync: &VisibilitySync) {
+         let mut state = self.state.borrow_mut();
+         if state.surface.id() != sync.surface
+@@ -1315,6 +1425,7 @@
+ 
+             if matches!(state.visibility.phase, VisibilityPhase::Configuring(_))
+                 && !state.acknowledged_first_configure
++                && state.surface_retired
+             {
+                 let raw = RawWindow {
+                     window: state.surface.id().as_ptr().cast::<c_void>(),
+@@ -1348,6 +1459,7 @@
+                     self.unmap_surface(transition);
+                     return;
+                 }
++                state.surface_retired = false;
+                 state.force_render_after_recovery = true;
+             }
+             let request_frame_callback = !state.acknowledged_first_configure;
+@@ -2176,6 +2288,7 @@
+         }
+ 
+         state.renderer_presented = state.renderer.draw(scene);
++        state.buffer_attached |= state.renderer_presented;
+         if state.renderer_presented
+             && let VisibilityPhase::Configuring(transition) = state.visibility.phase
+         {
+@@ -2676,6 +2789,24 @@
+         }
+     }
+ 
++    /// A window hidden before its first buffer stays configurable but never
++    /// draws, and its hide is acknowledged at once: there is nothing to unmap.
++    #[test]
++    fn a_never_mapped_window_is_withheld_and_acknowledged_immediately() {
++        assert!(VisibilityPhase::Withheld.can_acknowledge_configure());
++        assert!(!VisibilityPhase::Withheld.can_draw(true));
++
++        let mut visibility = RetainedVisibility::default();
++        let mut hidden = visibility.request(false);
++        visibility.phase = VisibilityPhase::Withheld;
++        visibility.complete();
++        assert_eq!(block_on(hidden).unwrap().unwrap(), (1, false));
++
++        let mut shown = visibility.request(true);
++        visibility.complete();
++        assert!(shown.try_recv().unwrap().is_none());
++    }
++
+     #[test]
+     fn normal_unmap_still_begins_draining_before_acknowledgement() {
+         let mut visibility = RetainedVisibility::default();

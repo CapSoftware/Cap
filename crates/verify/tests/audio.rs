@@ -88,6 +88,14 @@ fn studio_sound(config: &mut ProjectConfiguration) {
     config.audio.improve = true;
 }
 
+/// Studio Sound across a cut shorter than its warm-up read-back inside one
+/// clip (GitHub #2790: every such export failed in 0.6.1 with "Invalid
+/// sequential export audio window").
+fn studio_sound_short_cut(config: &mut ProjectConfiguration) {
+    common::set_cuts(config, &[(0.5, 3.0, 1.0), (3.2, 5.0, 1.0), (5.3, 7.8, 1.0)]);
+    config.audio.improve = true;
+}
+
 fn transition(config: &mut ProjectConfiguration) {
     common::set_cuts(config, &[(0.3, 3.5, 1.0), (4.5, 7.8, 1.0)]);
     common::add_transition(config, 1, 0.4);
@@ -141,6 +149,10 @@ fn variants() -> Vec<Variant> {
         Variant {
             edit: "studio-sound",
             apply: studio_sound,
+        },
+        Variant {
+            edit: "studio-sound-short-cut",
+            apply: studio_sound_short_cut,
         },
         Variant {
             edit: "transition",

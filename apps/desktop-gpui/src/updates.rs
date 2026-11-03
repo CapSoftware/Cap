@@ -5,22 +5,28 @@ use gpui::{App, Global};
 use semver::Version;
 
 use crate::{
+    i18n::tr,
     installer::{self, ArtifactKind, Release},
     session::RecordingSession,
-    store::{GeneralSettings, UpdateChannel},
+    store::{GeneralSettings, UpdateChannel, UpdateDownloadPolicy},
 };
 
 const STABLE_FIRST_CHECK_DELAY: Duration = Duration::from_secs(10);
 const NIGHTLY_FIRST_CHECK_DELAY: Duration = Duration::from_secs(60);
 const NIGHTLY_CHECK_INTERVAL: Duration = Duration::from_secs(2 * 60 * 60);
 const BUSY_RETRY_DELAY: Duration = Duration::from_secs(5 * 60);
-const BUSY_MESSAGE: &str =
-    "Finish your recording, export, upload, import, or transcription task before updating Cap.";
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) enum UpdateStatus {
     #[default]
     Idle,
+    Checking,
+    /// Only the debug update simulation waits here. A real check asks in a
+    /// dialog first, so a real update goes straight to `Downloading`.
+    #[cfg_attr(not(debug_assertions), allow(dead_code))]
+    Available {
+        version: Version,
+    },
     Downloading {
         version: Version,
         fraction: Option<f32>,
@@ -70,6 +76,7 @@ struct UpdateScheduler {
     pending: PendingUpdateRequests,
     manual_in_flight: bool,
     status: UpdateStatus,
+    download_policy: UpdateDownloadPolicy,
     staged: Option<StagedUpdate>,
     download: Option<gpui::Task<()>>,
     download_epoch: u64,
@@ -173,6 +180,7 @@ fn set_status(status: UpdateStatus, cx: &mut App) {
     }
     scheduler.status = status;
     crate::app_windows::refresh_settings(cx);
+    crate::menus::refresh_update_menu(cx);
 }
 
 pub(crate) fn check_manually(cx: &mut App) {
@@ -185,18 +193,22 @@ pub(crate) fn check_manually(cx: &mut App) {
             prompt_restart(cx);
             return;
         }
+        UpdateStatus::Available { version } => {
+            simulate_download(version, cx);
+            return;
+        }
         UpdateStatus::Downloading { version, .. } | UpdateStatus::Installing { version } => {
             cx.spawn(async move |_| {
                 crate::platform::activate_app();
                 crate::platform::alert_dialog(
-                    "Update Cap",
-                    &format!("Cap is already getting version {version} ready."),
+                    tr::dialog::update::title(),
+                    &tr::dialog::update::already_getting(version),
                 );
             })
             .detach();
             return;
         }
-        UpdateStatus::Idle => {}
+        UpdateStatus::Idle | UpdateStatus::Checking => {}
     }
 
     let scheduler = cx.global_mut::<UpdateScheduler>();
@@ -221,7 +233,10 @@ pub(crate) fn update_channel_changed(channel: UpdateChannel, cx: &mut App) {
 fn channel_switch_drops_pending_package(status: &UpdateStatus) -> bool {
     matches!(
         status,
-        UpdateStatus::Downloading { .. } | UpdateStatus::Ready { .. }
+        UpdateStatus::Checking
+            | UpdateStatus::Available { .. }
+            | UpdateStatus::Downloading { .. }
+            | UpdateStatus::Ready { .. }
     )
 }
 
@@ -256,10 +271,95 @@ fn finish_manual_check(cx: &mut App, manual: bool) {
 fn busy_alert(cx: &mut App) {
     cx.spawn(async move |_| {
         crate::platform::activate_app();
-        crate::platform::alert_dialog("Cap is busy", BUSY_MESSAGE);
+        crate::platform::alert_dialog(tr::dialog::update::busy_title(), tr::dialog::update::busy());
     })
     .detach();
 }
+
+/// `CAP_GPUI_UPDATE_SIMULATION_VERSION=<version>` (debug builds only): skip
+/// the network check, announce a newer version, play a fake download, then
+/// stop at Ready without installing anything.
+#[cfg(debug_assertions)]
+fn harness_update_version() -> Option<Version> {
+    let value = std::env::var("CAP_GPUI_UPDATE_SIMULATION_VERSION").ok()?;
+    let version = Version::parse(&value).ok()?;
+    if current_version().is_ok_and(|current| version > current) {
+        Some(version)
+    } else {
+        tracing::warn!(
+            version = %version,
+            "CAP_GPUI_UPDATE_SIMULATION_VERSION must be newer than the running version"
+        );
+        None
+    }
+}
+
+#[cfg(debug_assertions)]
+fn simulate_update(version: Version, cx: &mut App) {
+    tracing::info!(%version, "CAP_GPUI_UPDATE_SIMULATION_VERSION: available");
+    set_status(
+        UpdateStatus::Available {
+            version: version.clone(),
+        },
+        cx,
+    );
+    cx.spawn(async move |cx| {
+        cx.background_executor()
+            .timer(Duration::from_millis(400))
+            .await;
+        cx.update(crate::menus::reapply_update_row);
+    })
+    .detach();
+
+    if GeneralSettings::load().update_download_policy != UpdateDownloadPolicy::Auto {
+        tracing::info!("CAP_GPUI_UPDATE_SIMULATION_VERSION: manual policy, waiting");
+        return;
+    }
+    cx.spawn(async move |cx| {
+        cx.background_executor().timer(Duration::from_secs(3)).await;
+        cx.update(|cx| simulate_download(version, cx));
+    })
+    .detach();
+}
+
+#[cfg(debug_assertions)]
+fn simulate_download(version: Version, cx: &mut App) {
+    if !matches!(status(cx), UpdateStatus::Available { .. }) {
+        return;
+    }
+    tracing::info!(%version, "CAP_GPUI_UPDATE_SIMULATION_VERSION: downloading");
+    set_status(
+        UpdateStatus::Downloading {
+            version: version.clone(),
+            fraction: Some(0.0),
+        },
+        cx,
+    );
+    cx.spawn(async move |cx| {
+        for step in 1..=10u8 {
+            cx.background_executor()
+                .timer(Duration::from_millis(800))
+                .await;
+            cx.update(|cx| {
+                set_status(
+                    UpdateStatus::Downloading {
+                        version: version.clone(),
+                        fraction: Some(step as f32 / 10.0),
+                    },
+                    cx,
+                );
+            });
+        }
+        cx.update(|cx| {
+            tracing::info!(%version, "CAP_GPUI_UPDATE_SIMULATION_VERSION: ready");
+            set_status(UpdateStatus::Ready { version }, cx);
+        });
+    })
+    .detach();
+}
+
+#[cfg(not(debug_assertions))]
+fn simulate_download(_version: Version, _cx: &mut App) {}
 
 pub(crate) fn schedule_startup_check(cx: &mut App) {
     let (wake, requests) = flume::bounded(1);
@@ -268,17 +368,33 @@ pub(crate) fn schedule_startup_check(cx: &mut App) {
         pending: PendingUpdateRequests::default(),
         manual_in_flight: false,
         status: UpdateStatus::Idle,
+        download_policy: GeneralSettings::load().update_download_policy,
         staged: None,
         download: None,
         download_epoch: 0,
     });
+
+    #[cfg(debug_assertions)]
+    if let Some(version) = harness_update_version() {
+        simulate_update(version, cx);
+        return;
+    }
+    #[cfg(not(debug_assertions))]
+    if std::env::var_os("CAP_GPUI_UPDATE_SIMULATION_VERSION").is_some() {
+        tracing::warn!("CAP_GPUI_UPDATE_SIMULATION_VERSION is ignored in release builds");
+    }
 
     cx.spawn(async move |cx| {
         let mut channel = cx
             .background_executor()
             .spawn(async { GeneralSettings::load().update_channel })
             .await;
-        let mut delay = (!cfg!(debug_assertions)).then(|| first_check_delay(channel));
+        let mut policy = cx.update(|cx| cx.global::<UpdateScheduler>().download_policy);
+        let mut delay = if policy == UpdateDownloadPolicy::Never {
+            None
+        } else {
+            (!cfg!(debug_assertions)).then(|| first_check_delay(channel))
+        };
         let mut ignored_version: Option<Version> = None;
 
         loop {
@@ -306,6 +422,19 @@ pub(crate) fn schedule_startup_check(cx: &mut App) {
                 std::mem::take(&mut scheduler.pending)
             });
 
+            let policy_now = cx.update(|cx| cx.global::<UpdateScheduler>().download_policy);
+            if policy_now != policy {
+                let was_never = policy == UpdateDownloadPolicy::Never;
+                policy = policy_now;
+                // Moving between Ask first and Auto keeps the schedule, so a
+                // switch before the first check does not cancel it.
+                if policy == UpdateDownloadPolicy::Never {
+                    delay = None;
+                } else if was_never {
+                    delay = Some(first_check_delay(channel));
+                }
+            }
+
             if signaled && request == PendingUpdateRequests::default() {
                 continue;
             }
@@ -313,10 +442,14 @@ pub(crate) fn schedule_startup_check(cx: &mut App) {
             if let Some(next_channel) = request.channel {
                 channel = next_channel;
                 ignored_version = None;
-                let _ = cx.update(drop_pending_update_from_previous_channel);
+                cx.update(drop_pending_update_from_previous_channel);
             }
 
             let manual = request.manual;
+            if policy == UpdateDownloadPolicy::Never && !manual {
+                delay = None;
+                continue;
+            }
             if cfg!(debug_assertions) && !manual {
                 delay = None;
                 continue;
@@ -332,6 +465,8 @@ pub(crate) fn schedule_startup_check(cx: &mut App) {
                 cx.update(|cx| finish_manual_check(cx, manual));
                 continue;
             }
+
+            cx.update(|cx| set_status(UpdateStatus::Checking, cx));
 
             let result = match cx
                 .update(|cx| gpui_tokio::Tokio::spawn(cx, available_release(channel)))
@@ -351,29 +486,32 @@ pub(crate) fn schedule_startup_check(cx: &mut App) {
                 channel_changed || (!manual && scheduler.pending.manual)
             });
             if superseded {
+                cx.update(|cx| set_status(UpdateStatus::Idle, cx));
                 continue;
             }
 
             let release = match result {
                 Ok(Some(release)) => release,
                 Ok(None) => {
+                    cx.update(|cx| set_status(UpdateStatus::Idle, cx));
                     if manual {
                         crate::platform::activate_app();
                         crate::platform::alert_dialog(
-                            "No Update Available",
-                            "You're already using the latest version of Cap.",
+                            tr::dialog::update::no_update_title(),
+                            tr::dialog::update::no_update(),
                         );
                         cx.update(|cx| finish_manual_check(cx, true));
                     }
                     continue;
                 }
                 Err(error) => {
+                    cx.update(|cx| set_status(UpdateStatus::Idle, cx));
                     tracing::warn!("update check failed: {error}");
                     if manual {
                         crate::platform::activate_app();
                         crate::platform::alert_dialog(
-                            "Update Cap",
-                            &format!("Couldn't check for updates: {error}"),
+                            tr::dialog::update::title(),
+                            &tr::dialog::update::check_failed(error),
                         );
                         cx.update(|cx| finish_manual_check(cx, true));
                     }
@@ -382,6 +520,7 @@ pub(crate) fn schedule_startup_check(cx: &mut App) {
             };
 
             if !manual && ignored_version.as_ref() == Some(&release.version) {
+                cx.update(|cx| set_status(UpdateStatus::Idle, cx));
                 continue;
             }
 
@@ -389,6 +528,11 @@ pub(crate) fn schedule_startup_check(cx: &mut App) {
             // check holds it until a recording, export, import or
             // transcription has finished rather than interrupting it.
             let mut superseded = false;
+            if holds_scheduled_prompt(manual, cx.update(work_in_flight)) {
+                // Leave the menu's Check for Update row usable for the length
+                // of a recording; a manual check replaces the held prompt.
+                cx.update(|cx| set_status(UpdateStatus::Idle, cx));
+            }
             while holds_scheduled_prompt(manual, cx.update(work_in_flight)) {
                 let timer = cx.background_executor().timer(BUSY_RETRY_DELAY);
                 let request = requests.recv_async();
@@ -396,28 +540,39 @@ pub(crate) fn schedule_startup_check(cx: &mut App) {
                 if let Either::Right((Err(_), _)) = select(timer, request).await {
                     return;
                 }
-                superseded = cx.update(|cx| {
-                    supersedes_held_prompt(&cx.global::<UpdateScheduler>().pending)
-                });
+                superseded =
+                    cx.update(|cx| supersedes_held_prompt(&cx.global::<UpdateScheduler>().pending));
                 if superseded {
                     break;
                 }
             }
             if superseded {
                 // Run the queued manual check or channel change straight away.
+                cx.update(|cx| set_status(UpdateStatus::Idle, cx));
                 delay = Some(Duration::ZERO);
                 continue;
             }
 
+            let policy = cx.update(|cx| cx.global::<UpdateScheduler>().download_policy);
+            if policy == UpdateDownloadPolicy::Never && !manual {
+                cx.update(|cx| set_status(UpdateStatus::Idle, cx));
+                delay = next_check_delay(channel);
+                continue;
+            }
+            if policy == UpdateDownloadPolicy::Auto {
+                cx.update(|cx| finish_manual_check(cx, manual));
+                cx.update(|cx| start_download(release, cx));
+                continue;
+            }
+
+            cx.update(|cx| set_status(UpdateStatus::Idle, cx));
+
             crate::platform::activate_app();
             let accepted = crate::platform::confirm_dialog(
-                "Update Cap",
-                &format!(
-                    "Version {} of Cap is available. Cap will download it in the background and let you know when it's ready to install.",
-                    release.version
-                ),
-                "Download",
-                "Not Now",
+                tr::dialog::update::title(),
+                &tr::dialog::update::available(&release.version),
+                tr::dialog::update::download(),
+                tr::dialog::update::not_now(),
                 false,
             );
             cx.update(|cx| finish_manual_check(cx, manual));
@@ -429,6 +584,14 @@ pub(crate) fn schedule_startup_check(cx: &mut App) {
         }
     })
     .detach();
+}
+
+pub(crate) fn update_download_policy_changed(policy: UpdateDownloadPolicy, cx: &mut App) {
+    if !cx.has_global::<UpdateScheduler>() {
+        return;
+    }
+    cx.global_mut::<UpdateScheduler>().download_policy = policy;
+    let _ = cx.global::<UpdateScheduler>().wake.try_send(());
 }
 
 fn start_download(release: Release, cx: &mut App) {
@@ -509,7 +672,7 @@ fn start_download(release: Release, cx: &mut App) {
                 }
                 Err(error) => {
                     tracing::warn!(%version, "update download failed: {error}");
-                    update_failed(&format!("Couldn't download version {version}: {error}"), cx);
+                    update_failed(&tr::dialog::update::download_failed(&version, error), cx);
                 }
             }
         });
@@ -519,11 +682,10 @@ fn start_download(release: Release, cx: &mut App) {
 
 fn update_failed(message: &str, cx: &mut App) {
     set_status(UpdateStatus::Idle, cx);
-    let message =
-        format!("{message}\n\nYou can always download the latest version from cap.so/download.");
+    let message = tr::dialog::update::failed(message);
     cx.spawn(async move |_| {
         crate::platform::activate_app();
-        crate::platform::alert_dialog("Update Cap", &message);
+        crate::platform::alert_dialog(tr::dialog::update::title(), &message);
     })
     .detach();
 }
@@ -546,10 +708,10 @@ fn prompt_restart(cx: &mut App) {
     cx.spawn(async move |cx| {
         crate::platform::activate_app();
         if crate::platform::confirm_dialog(
-            "Update Cap",
-            &format!("Cap {version} is ready. Restart Cap to finish updating."),
-            "Restart Now",
-            "Later",
+            tr::dialog::update::title(),
+            &tr::dialog::update::ready(&version),
+            tr::dialog::update::restart_now(),
+            tr::dialog::update::later(),
             false,
         ) {
             cx.update(install_and_relaunch);
@@ -575,7 +737,7 @@ pub(crate) fn install_and_relaunch(cx: &mut App) {
     }
     if let Err(error) = crate::app_windows::flush_pending_editor_saves(cx) {
         cx.spawn(async move |_| {
-            crate::platform::alert_dialog("Cap is still open", &error);
+            crate::platform::alert_dialog(tr::dialog::quit::still_open(), &error);
         })
         .detach();
         return;
@@ -620,7 +782,7 @@ pub(crate) fn install_and_relaunch(cx: &mut App) {
             Err(error) => {
                 tracing::error!(%version, "update install failed: {error}");
                 cx.global_mut::<UpdateScheduler>().staged = None;
-                update_failed(&format!("Couldn't install version {version}: {error}"), cx);
+                update_failed(&tr::dialog::update::install_failed(&version, error), cx);
             }
         });
     })

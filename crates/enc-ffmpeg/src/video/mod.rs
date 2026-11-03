@@ -7,8 +7,31 @@ pub mod hevc;
 mod packed_yuv;
 pub mod prores;
 mod rgb_to_yuv;
+#[cfg(target_os = "linux")]
+pub(crate) mod vaapi;
 #[cfg(target_os = "macos")]
 pub mod videotoolbox_hw;
+
+/// Hands an encoder the frame it takes: a GPU surface for encoders that only
+/// encode those (VA-API), the software frame itself for every other.
+#[derive(Default)]
+pub(crate) struct HwUpload {
+    #[cfg(target_os = "linux")]
+    pub(crate) vaapi: Option<vaapi::VaapiFrames>,
+}
+
+impl HwUpload {
+    pub(crate) fn frame<'a>(
+        &'a mut self,
+        frame: &'a frame::Video,
+    ) -> Result<&'a frame::Video, ffmpeg::Error> {
+        #[cfg(target_os = "linux")]
+        if let Some(vaapi) = &mut self.vaapi {
+            return vaapi.upload(frame);
+        }
+        Ok(frame)
+    }
+}
 
 pub(crate) fn convert_or_scale(
     src: &frame::Video,

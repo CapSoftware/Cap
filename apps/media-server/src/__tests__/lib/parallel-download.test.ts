@@ -50,6 +50,28 @@ beforeAll(async () => {
 			if (url.pathname === "/changed" && Number(range[1]) > 0) {
 				return new Response("precondition", { status: 412 });
 			}
+			if (url.pathname.startsWith("/mismatched-") && Number(range[1]) > 0) {
+				const start = Number(range[1]);
+				const end = Math.min(Number(range[2]), payload.length - 1);
+				const kind = url.pathname.slice("/mismatched-".length);
+				const contentRange =
+					kind === "missing"
+						? undefined
+						: kind === "unknown-total"
+							? `bytes ${start}-${end}/*`
+							: kind === "start"
+								? `bytes 0-${end - start}/${payload.length}`
+								: kind === "end"
+									? `bytes ${start}-${end + 1}/${payload.length}`
+									: `bytes ${start}-${end}/${payload.length + 1}`;
+				return new Response(payload.subarray(0, end - start + 1), {
+					status: 206,
+					headers: {
+						ETag: '"v1"',
+						...(contentRange ? { "Content-Range": contentRange } : {}),
+					},
+				});
+			}
 			const start = Number(range[1]);
 			const end = Math.min(Number(range[2]), payload.length - 1);
 			const body =
@@ -165,6 +187,100 @@ describe("parallel download", () => {
 			),
 		).rejects.toThrow("invalid size");
 		expect(rangeRequests).toBe(before + 1);
+	});
+
+	test.each(["start", "end", "total", "missing", "unknown-total"])(
+		"rejects a same-sized response with mismatched range metadata (%s)",
+		async (kind) => {
+			await expect(
+				downloadUrlToPathParallel(
+					`http://localhost:${server.port}/mismatched-${kind}`,
+					join(dir, `mismatched-${kind}.bin`),
+					{ concurrency: 4, partBytes: MB },
+				),
+			).rejects.toThrow("Content-Range");
+		},
+	);
+
+	test.each(["buffer", "stream"])(
+		"does not write beyond a declared range before rejecting an oversized %s",
+		async (mode) => {
+			const path = join(dir, `oversized-${mode}.bin`);
+			const chunks = [
+				new Uint8Array(MB / 2),
+				new Uint8Array(MB / 2),
+				new Uint8Array(1),
+			];
+			const body =
+				mode === "buffer"
+					? new Uint8Array(MB + 1)
+					: new ReadableStream<Uint8Array>({
+							pull(controller) {
+								const chunk = chunks.shift();
+								if (chunk) controller.enqueue(chunk);
+								else controller.close();
+							},
+						});
+			const fetchImpl = Object.assign(
+				async () =>
+					new Response(body, {
+						status: 206,
+						headers: { "Content-Range": `bytes 0-${MB - 1}/${MB}` },
+					}),
+				{ preconnect: fetch.preconnect },
+			);
+			await expect(
+				downloadUrlToPathParallel("https://media.test/file", path, {
+					concurrency: 2,
+					partBytes: MB,
+					fetchImpl,
+				}),
+			).rejects.toThrow("expected");
+			const saved = await readFile(path);
+			expect(saved.length).toBeLessThanOrEqual(MB);
+			if (mode === "stream") expect(saved.length).toBe(MB);
+		},
+	);
+
+	test("cancels an unread response whose range cannot be placed", async () => {
+		let cancelled = false;
+		let requests = 0;
+		const fetchImpl = Object.assign(
+			async () => {
+				requests++;
+				if (requests === 1) {
+					return new Response(new Uint8Array(MB), {
+						status: 206,
+						headers: { "Content-Range": `bytes 0-${MB - 1}/${2 * MB}` },
+					});
+				}
+				return new Response(
+					new ReadableStream({
+						cancel() {
+							cancelled = true;
+						},
+					}),
+					{
+						status: 206,
+						headers: { "Content-Range": `bytes 0-${MB - 1}/${2 * MB}` },
+					},
+				);
+			},
+			{ preconnect: fetch.preconnect },
+		);
+		await expect(
+			downloadUrlToPathParallel(
+				"https://media.test/file",
+				join(dir, "cancelled-range.bin"),
+				{
+					concurrency: 2,
+					partBytes: MB,
+					fetchImpl,
+				},
+			),
+		).rejects.toThrow("Content-Range");
+		expect(cancelled).toBe(true);
+		expect(requests).toBe(2);
 	});
 
 	test("fails when a part comes back short", async () => {

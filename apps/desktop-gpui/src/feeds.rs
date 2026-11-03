@@ -341,9 +341,9 @@ impl RecordingCameraWorker {
         }
         self.publisher.publish(
             cap_recording::instant_recording::LinuxProcessedCameraFrame {
-                bgra: cap_recording::instant_recording::LinuxCameraPixels::new(
-                    RenderImagePixels(image.clone()),
-                ),
+                bgra: cap_recording::instant_recording::LinuxCameraPixels::new(RenderImagePixels(
+                    image.clone(),
+                )),
                 dimensions: (dims.0 as u32, dims.1 as u32),
                 stride: dims.0 * 4,
                 timestamp,

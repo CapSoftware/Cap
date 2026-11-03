@@ -510,6 +510,12 @@ export const videos = mysqlTable(
 			table.ownerId,
 			table.folderId,
 		),
+		index("org_owner_folder_effective_idx").on(
+			table.orgId,
+			table.ownerId,
+			table.folderId,
+			table.effectiveCreatedAt,
+		),
 		index("org_effective_created_idx").on(
 			table.orgId,
 			table.effectiveCreatedAt,
@@ -671,6 +677,7 @@ export const notifications = mysqlTable(
 		typeRecipientVideoCreatedIndex: index(
 			"type_recipient_video_created_idx",
 		).on(table.type, table.recipientId, table.videoId, table.createdAt),
+		videoIdIndex: index("video_id_idx").on(table.videoId),
 	}),
 );
 
@@ -1567,6 +1574,7 @@ export const videoUploads = mysqlTable(
 			table.updatedAt,
 			table.videoId,
 		),
+		index("started_at_idx").on(table.startedAt),
 	],
 );
 

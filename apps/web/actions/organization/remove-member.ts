@@ -2,6 +2,7 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { releaseProSeatSubscription } from "@cap/database/pro-seat-subscription";
 import {
 	organizationInvites,
 	organizationMembers,
@@ -16,7 +17,6 @@ import {
 	canRemoveOrganizationMember,
 	getEffectiveOrganizationRole,
 } from "@/lib/permissions/roles";
-import { releaseProSeatSubscription } from "@/lib/pro-seat-subscription";
 import { requireOrganizationSettingsManager } from "./authorization";
 
 export async function removeOrganizationMember(
@@ -73,6 +73,21 @@ export async function removeOrganizationMember(
 			throw new Error("You do not have permission to remove this member");
 		}
 
+		const [result] = await tx
+			.delete(organizationMembers)
+			.where(
+				and(
+					eq(organizationMembers.id, memberId),
+					eq(organizationMembers.organizationId, organizationId),
+				),
+			);
+
+		if (result.affectedRows === 0) throw new Error("Member not found");
+
+		if (member.hasProSeat) {
+			await releaseProSeatSubscription(tx, member.userId);
+		}
+
 		const organizationSpaces = await tx
 			.select({ id: spaces.id })
 			.from(spaces)
@@ -98,21 +113,6 @@ export async function removeOrganizationMember(
 					eq(organizationInvites.invitedEmail, member.email.toLowerCase()),
 				),
 			);
-
-		const [result] = await tx
-			.delete(organizationMembers)
-			.where(
-				and(
-					eq(organizationMembers.id, memberId),
-					eq(organizationMembers.organizationId, organizationId),
-				),
-			);
-
-		if (result.affectedRows === 0) throw new Error("Member not found");
-
-		if (member.hasProSeat) {
-			await releaseProSeatSubscription(tx, member.userId);
-		}
 	});
 
 	revalidatePath("/dashboard/settings/organization");

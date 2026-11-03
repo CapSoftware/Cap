@@ -28,7 +28,6 @@ import {
 	PreparingVideoOverlay,
 	RecordingInProgressOverlay,
 } from "./RecordingInProgress";
-import { ShareableLinkLimitOverlay } from "./ShareableLinkLimitOverlay";
 import {
 	isRecordingUpload,
 	shouldDeferPlaybackSource,
@@ -51,6 +50,11 @@ const CapVideoPlayer = dynamic(() =>
 );
 const HLSVideoPlayer = dynamic(() =>
 	import("./HLSVideoPlayer").then((m) => m.HLSVideoPlayer),
+);
+const ShareableLinkLimitOverlay = dynamic(() =>
+	import("./ShareableLinkLimitOverlay").then(
+		(m) => m.ShareableLinkLimitOverlay,
+	),
 );
 
 // Both ride outside the first paint: the tracker only mounts mid-upload (its
@@ -81,6 +85,7 @@ export const ShareVideo = forwardRef<
 			hasActiveUpload?: boolean;
 		};
 		initialPlaybackUrl?: Promise<string | null>;
+		serverPlaybackUrl?: string | null;
 		comments: MaybePromise<CommentWithAuthor[]>;
 		chapters?: { title: string; start: number }[];
 		areChaptersDisabled?: boolean;
@@ -108,6 +113,7 @@ export const ShareVideo = forwardRef<
 		{
 			data,
 			initialPlaybackUrl,
+			serverPlaybackUrl = null,
 			comments,
 			chapters = NO_CHAPTERS,
 			areCaptionsDisabled,
@@ -560,6 +566,7 @@ export const ShareVideo = forwardRef<
 							videoSrc={videoSrc}
 							rawFallbackSrc={rawFallbackSrc}
 							initialPlaybackUrl={initialPlaybackUrl}
+							serverPlaybackUrl={serverPlaybackUrl}
 							duration={data.duration}
 							defaultPlaybackSpeed={defaultPlaybackSpeed}
 							showPlaybackStatusBadge={showPlaybackStatusBadge}

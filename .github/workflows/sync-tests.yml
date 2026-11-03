@@ -160,6 +160,7 @@ jobs:
         shell: bash
         run: |
           cargo test --locked -p cap-audio --lib
+          cargo test --locked -p cap-media-info --lib
           cargo test --locked -p cap-export --lib
           cargo test --locked -p cap-editor --lib audio::tests::
           cargo test --locked -p cap-editor --lib audio_output::tests::
