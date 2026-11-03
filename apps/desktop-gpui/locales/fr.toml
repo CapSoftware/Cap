@@ -2898,6 +2898,7 @@ delete = "Supprimer"
 [editor.window.transport]
 done_splitting = "Terminer la découpe"
 play_pause = "Lire/mettre en pause la vidéo"
+speed = "Vitesse de l'aperçu"
 split = "Couper"
 split_tooltip = "Cliquez sur un segment pour le couper. Échap pour terminer."
 zoom_in = "Zoom avant"

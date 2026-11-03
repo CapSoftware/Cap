@@ -2900,6 +2900,7 @@ delete = "Delete"
 [editor.window.transport]
 done_splitting = "Done splitting"
 play_pause = "Play/Pause video"
+speed = { text = "Preview speed", context = "Tooltip for the menu in the editor transport bar that sets how fast the preview plays. It never changes the exported video." }
 split = "Split"
 split_tooltip = "Click a segment to split. Esc to finish."
 zoom_in = "Zoom in"

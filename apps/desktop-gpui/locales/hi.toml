@@ -2898,6 +2898,7 @@ delete = "हटाएँ"
 [editor.window.transport]
 done_splitting = "विभाजन पूरा"
 play_pause = "वीडियो चलाएँ/रोकें"
+speed = "प्रीव्यू की स्पीड"
 split = "विभाजित करें"
 split_tooltip = "विभाजित करने के लिए किसी सेगमेंट पर क्लिक करें। खत्म करने के लिए Esc दबाएँ।"
 zoom_in = "ज़ूम इन"

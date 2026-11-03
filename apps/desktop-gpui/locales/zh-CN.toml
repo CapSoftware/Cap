@@ -2898,6 +2898,7 @@ delete = "删除"
 [editor.window.transport]
 done_splitting = "完成拆分"
 play_pause = "播放/暂停视频"
+speed = "预览播放速度"
 split = "拆分"
 split_tooltip = "点击一个分段进行拆分。按 Esc 结束。"
 zoom_in = "放大"

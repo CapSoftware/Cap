@@ -2898,6 +2898,7 @@ delete = "Löschen"
 [editor.window.transport]
 done_splitting = "Teilen beenden"
 play_pause = "Video abspielen/pausieren"
+speed = "Vorschaugeschwindigkeit"
 split = "Teilen"
 split_tooltip = "Klicken Sie auf ein Segment, um es zu teilen. Esc zum Beenden."
 zoom_in = "Vergrößern"

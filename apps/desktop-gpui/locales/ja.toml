@@ -2898,6 +2898,7 @@ delete = "削除"
 [editor.window.transport]
 done_splitting = "分割を終了"
 play_pause = "動画を再生/一時停止"
+speed = "プレビューの再生速度"
 split = "分割"
 split_tooltip = "セグメントをクリックして分割します。Escで終了します。"
 zoom_in = "ズームイン"
