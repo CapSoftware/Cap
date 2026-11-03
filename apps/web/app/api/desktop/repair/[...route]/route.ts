@@ -12,6 +12,7 @@ import {
 	stopRepairSession,
 } from "@/lib/recording-repair/sandbox";
 import {
+	abortSubmission,
 	completeSubmission,
 	createSubmission,
 	isSubmissionId,
@@ -167,6 +168,27 @@ authed.post(
 			return c.json({ ok: true });
 		} catch (error) {
 			console.error("[recording-repair] submission complete failed", error);
+			return c.json({ error: "unavailable" }, 503);
+		}
+	},
+);
+
+authed.post(
+	"/submissions/:submissionId/abort",
+	zValidator("json", z.object({ uploadId: z.string().min(1).max(1024) })),
+	async (c) => {
+		const submissionId = c.req.param("submissionId");
+		if (!isSubmissionId(submissionId))
+			return c.json({ error: "not_found" }, 404);
+		try {
+			await abortSubmission(
+				c.get("user").id,
+				submissionId,
+				c.req.valid("json").uploadId,
+			);
+			return c.json({ ok: true });
+		} catch (error) {
+			console.error("[recording-repair] submission abort failed", error);
 			return c.json({ error: "unavailable" }, 503);
 		}
 	},
