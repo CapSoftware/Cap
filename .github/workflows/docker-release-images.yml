@@ -1,0 +1,81 @@
+name: "Docker Release Images"
+
+# Publishes versioned self-hosting images (cap-web:x.y.z, cap-media-server:x.y.z)
+# for every stable cap-v{version} release.
+#
+# desktop-release.yml creates the cap-v tag with GITHUB_TOKEN, so a `push: tags`
+# trigger would never fire. Instead this checks once a day for a stable release
+# whose images are missing and dispatches the existing Docker workflows on that
+# tag (workflow_dispatch is one of the events GITHUB_TOKEN may trigger). Nothing
+# runs when the images already exist, and `latest` is left untouched.
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish, e.g. 0.6.2. Defaults to the latest stable release."
+        required: false
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: docker-release-images
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    name: Dispatch missing release images
+    if: github.repository == 'CapSoftware/Cap' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+      packages: read
+
+    steps:
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Dispatch Docker builds
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$VERSION" ]]; then
+            tag="cap-v${VERSION#cap-v}"
+          else
+            tag="$(gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=30" --jq \
+              '[.[] | select(.draft == false and .prerelease == false and (.tag_name | test("^cap-v[0-9]+\\.[0-9]+\\.[0-9]+$")))][0].tag_name // ""')"
+          fi
+          if [[ ! "$tag" =~ ^cap-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "No stable cap-v release found (got '${tag}')"
+            exit 0
+          fi
+          version="${tag#cap-v}"
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          for pair in cap-web:docker-build-web.yml cap-media-server:docker-build-media-server.yml; do
+            image="ghcr.io/${owner}/${pair%%:*}:${version}"
+            workflow="${pair#*:}"
+            if docker buildx imagetools inspect "$image" >/dev/null 2>&1; then
+              echo "${image} already exists"
+              continue
+            fi
+            # A build started yesterday may still be running; don't queue a second one.
+            running="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$workflow" --branch "$tag" \
+              --event workflow_dispatch --json status --jq '[.[] | select(.status != "completed")] | length')"
+            if [[ "$running" != "0" ]]; then
+              echo "${workflow} is already running on ${tag}"
+              continue
+            fi
+            echo "Dispatching ${workflow} on ${tag} for ${image}"
+            gh workflow run "$workflow" --repo "$GITHUB_REPOSITORY" --ref "$tag" -f tag="$version"
+          done
