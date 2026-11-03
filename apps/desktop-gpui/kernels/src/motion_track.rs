@@ -644,39 +644,41 @@ impl MotionTracker {
             LOCAL_RADIUS.max(self.velocity.1.abs() * 1.5 + 12.0),
         );
         let (width, height) = self.size_at(1.0);
-        let best = [&self.original, &self.recent]
-            .into_iter()
-            .filter_map(|appearance| {
-                search(
-                    pyramid,
-                    &appearance.templates(width, height, MIN_COARSE_SIDE),
-                    predicted,
-                    radius,
-                    MIN_VISIBLE,
-                )
-            })
-            .max_by(|a, b| a.score.total_cmp(&b.score))
-            .filter(|found| found.score >= LOST_SCORE);
-        let Some(best) = best else {
-            // Fine detail (text a pixel or two tall) that has moved by a
-            // fraction of a pixel no longer matches itself; smoothed, it
-            // does. Only tried after the sharp match fails, because smoothing
-            // also lets look-alikes match each other.
-            let found = [&self.original, &self.recent]
+        let templates = |appearance: &Appearance, w, h, smoothed| {
+            if smoothed {
+                appearance.smoothed_templates(w, h, MIN_COARSE_SIDE)
+            } else {
+                appearance.templates(w, h, MIN_COARSE_SIDE)
+            }
+        };
+        let find = |levels: &Pyramid, smoothed| {
+            [&self.original, &self.recent]
                 .into_iter()
                 .filter_map(|appearance| {
                     search(
-                        pyramid.smoothed(),
-                        &appearance.smoothed_templates(width, height, MIN_COARSE_SIDE),
+                        levels,
+                        &templates(appearance, width, height, smoothed),
                         predicted,
                         radius,
                         MIN_VISIBLE,
                     )
                 })
                 .max_by(|a, b| a.score.total_cmp(&b.score))
-                .filter(|found| found.score >= SMOOTHED_SCORE)?;
-            return Some(self.accept(pyramid, found, 1.0));
         };
+        // Fine detail (text a pixel or two tall) that has moved by a fraction
+        // of a pixel no longer matches itself; smoothed, it does. Smoothed
+        // frames are only tried after the sharp match fails, because
+        // smoothing also lets look-alikes match each other. Whichever found
+        // the target is also used to measure how it grew or shrank.
+        let (levels, smoothed, best, floor) =
+            match find(pyramid, false).filter(|found| found.score >= LOST_SCORE) {
+                Some(best) => (pyramid, false, best, LOST_SCORE),
+                None => {
+                    let levels = pyramid.smoothed();
+                    let best = find(levels, true).filter(|found| found.score >= SMOOTHED_SCORE)?;
+                    (levels, true, best, SMOOTHED_SCORE)
+                }
+            };
 
         let center = (
             best.x as f64 + width as f64 / 2.0,
@@ -687,8 +689,8 @@ impl MotionTracker {
             .filter_map(|step| {
                 let (w, h) = self.size_at(step);
                 search(
-                    pyramid,
-                    &self.original.templates(w, h, MIN_COARSE_SIDE),
+                    levels,
+                    &templates(&self.original, w, h, smoothed),
                     (center.0 - w as f64 / 2.0, center.1 - h as f64 / 2.0),
                     (
                         REFINE_RADIUS as f64 * 2.0 + (w as f64 - self.width).abs() / 2.0,
@@ -702,7 +704,7 @@ impl MotionTracker {
         let unscaled = sized
             .iter()
             .find(|(step, _)| *step == 1.0)
-            .map_or(LOST_SCORE, |(_, found)| found.score.max(LOST_SCORE));
+            .map_or(floor, |(_, found)| found.score.max(floor));
         let (scale, chosen) = sized
             .into_iter()
             .filter(|(step, found)| *step != 1.0 && found.score > unscaled + SCALE_GAIN)
@@ -1169,19 +1171,15 @@ mod tests {
         assert!(left > 100.0, "never jumps to the look-alike: {left}");
     }
 
-    /// A window of one-pixel text strokes dragged by fractional pixels each
-    /// frame, the way a screen recording scaled down to tracking resolution
-    /// moves a terminal: each frame is the sharp page shifted at four times
-    /// the resolution and averaged down, so the strokes land on different
-    /// pixel phases. Matched only on the sharp frames, this target was lost
-    /// as soon as it moved.
-    #[test]
-    fn follows_fine_text_moving_by_fractions_of_a_pixel() {
-        const FINE: usize = 4;
-        let (page_w, page_h) = (160 * FINE, 100 * FINE);
+    const FINE: usize = 4;
+    const PAGE: (usize, usize) = (160, 100);
+
+    /// A page of one-pixel text strokes at `FINE` times the frame's
+    /// resolution: lines of words with irregular lengths and gaps, so no
+    /// shift of the page resembles itself.
+    fn fine_text_page() -> Vec<f32> {
+        let (page_w, page_h) = (PAGE.0 * FINE, PAGE.1 * FINE);
         let mut page = vec![40.0_f32; page_w * page_h];
-        // Lines of words with irregular lengths and gaps, each word a run of
-        // one-pixel glyph strokes, so no shift of the page resembles itself.
         let mut seed = 7_u64;
         let mut next = |range: usize| {
             seed = seed
@@ -1207,64 +1205,106 @@ mod tests {
                 x += (2 + next(6)) * 2 * FINE + (2 + next(3)) * FINE;
             }
         }
-        let frame = |at: (f64, f64)| {
-            let mut pixels = vec![120.0_f32; WIDTH * HEIGHT];
-            let (ox, oy) = (
-                (at.0 * FINE as f64).round() as isize,
-                (at.1 * FINE as f64).round() as isize,
-            );
-            for y in 0..HEIGHT {
-                for x in 0..WIDTH {
-                    let mut sum = 0.0;
-                    let mut inside = 0;
-                    for sy in 0..FINE {
-                        for sx in 0..FINE {
-                            let px = (x * FINE + sx) as isize - ox;
-                            let py = (y * FINE + sy) as isize - oy;
-                            if (0..page_w as isize).contains(&px)
-                                && (0..page_h as isize).contains(&py)
-                            {
-                                sum += page[py as usize * page_w + px as usize];
-                                inside += 1;
-                            }
+        page
+    }
+
+    /// The page drawn at `at` and `scale` times its size, sampled at `FINE`
+    /// times the frame's resolution and averaged down, the way a recording
+    /// scaled to tracking resolution lands text on fractional pixels.
+    fn fine_text_frame(page: &[f32], at: (f64, f64), scale: f64) -> LumaFrame {
+        let (page_w, page_h) = (PAGE.0 * FINE, PAGE.1 * FINE);
+        let mut pixels = vec![120.0_f32; WIDTH * HEIGHT];
+        for y in 0..HEIGHT {
+            for x in 0..WIDTH {
+                let mut sum = 0.0;
+                let mut inside = 0;
+                for sy in 0..FINE {
+                    for sx in 0..FINE {
+                        let fx = (x * FINE + sx) as f64 / FINE as f64;
+                        let fy = (y * FINE + sy) as f64 / FINE as f64;
+                        let px = ((fx - at.0) / scale * FINE as f64).floor() as isize;
+                        let py = ((fy - at.1) / scale * FINE as f64).floor() as isize;
+                        if (0..page_w as isize).contains(&px) && (0..page_h as isize).contains(&py)
+                        {
+                            sum += page[py as usize * page_w + px as usize];
+                            inside += 1;
                         }
                     }
-                    if inside == FINE * FINE {
-                        pixels[y * WIDTH + x] = sum / inside as f32;
-                    }
+                }
+                if inside == FINE * FINE {
+                    pixels[y * WIDTH + x] = sum / inside as f32;
                 }
             }
-            LumaFrame {
-                width: WIDTH,
-                height: HEIGHT,
-                pixels: pixels.into(),
-            }
-        };
-        let path = |step: usize| (40.0 + 3.37 * step as f64, 30.0 + 1.61 * step as f64);
-        let start = path(0);
+        }
+        LumaFrame {
+            width: WIDTH,
+            height: HEIGHT,
+            pixels: pixels.into(),
+        }
+    }
+
+    /// Tracks the fine-text page along `path` (position and scale per step)
+    /// and checks the box was never lost and covers it to within `slack`
+    /// pixels on every side.
+    fn assert_follows_fine_text(path: impl Fn(usize) -> ((f64, f64), f64), slack: f64) {
+        let page = fine_text_page();
+        let (start, _) = path(0);
+        let (w, h) = (PAGE.0 as f64, PAGE.1 as f64);
         let mut session = TrackSession::new(
-            &frame(start),
+            &fine_text_frame(&page, start, 1.0),
             0.0,
             (
-                (start.0 + 80.0) / WIDTH as f64,
-                (start.1 + 50.0) / HEIGHT as f64,
+                (start.0 + w / 2.0) / WIDTH as f64,
+                (start.1 + h / 2.0) / HEIGHT as f64,
             ),
-            (160.0 / WIDTH as f64, 100.0 / HEIGHT as f64),
+            (w / WIDTH as f64, h / HEIGHT as f64),
         )
         .unwrap();
         for step in 1..=30 {
-            session.push(step as f64, frame(path(step)));
+            let (at, scale) = path(step);
+            session.push(step as f64, fine_text_frame(&page, at, scale));
         }
         let (points, lost) = session.finish();
         assert!(lost.is_empty(), "lost {lost:?}");
         for step in 1..=30 {
-            let (left, top, _, _) = box_at(&points, step as f64);
-            let (x, y) = path(step);
+            let ((x, y), scale) = path(step);
+            let (left, top, right, bottom) = box_at(&points, step as f64);
             assert!(
-                (left - x).abs() <= 1.5 && (top - y).abs() <= 1.5,
-                "{step}: box at {left:.1},{top:.1}, window at {x:.1},{y:.1}"
+                left <= x + slack
+                    && top <= y + slack
+                    && right >= x + w * scale - slack
+                    && bottom >= y + h * scale - slack,
+                "{step}: box {left:.1},{top:.1}..{right:.1},{bottom:.1}, page {x:.1},{y:.1}..{:.1},{:.1}",
+                x + w * scale,
+                y + h * scale
             );
         }
+    }
+
+    /// Text dragged by fractional pixels each frame. Matched only on the
+    /// sharp frames, this target was lost as soon as it moved.
+    #[test]
+    fn follows_fine_text_moving_by_fractions_of_a_pixel() {
+        assert_follows_fine_text(
+            |step| ((40.0 + 3.37 * step as f64, 30.0 + 1.61 * step as f64), 1.0),
+            1.5,
+        );
+    }
+
+    /// Text zooming while it drifts, so it is found on the smoothed frames:
+    /// the box has to grow with it there too. Holding its first size, it fell
+    /// 58 pixels short across and the target was soon lost. Sizes are tried
+    /// in 3.5% steps, so the box trails a zoom by a few pixels; the editor's
+    /// margin for sensitive masks covers that.
+    #[test]
+    fn grows_with_fine_text_that_zooms() {
+        assert_follows_fine_text(
+            |step| {
+                let t = step as f64;
+                ((40.0 + 0.73 * t, 20.0 + 0.41 * t), 1.0 + 0.012 * t)
+            },
+            3.5,
+        );
     }
 
     #[test]
