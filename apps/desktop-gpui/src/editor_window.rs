@@ -1716,7 +1716,7 @@ const CLIP_MENU_WIDTH: f32 = 300.;
 const DEFAULT_CLIP_TRANSITION_DURATION: f64 = 0.5;
 /// Lengths longer than half the shorter clip are left out of the menu.
 const CLIP_TRANSITION_DURATIONS: [f64; 4] = [0.25, 0.5, 1.0, 1.5];
-const TRANSITION_POPOVER_WIDTH: f32 = 312.;
+const TRANSITION_POPOVER_WIDTH: f32 = 340.;
 /// A press this close to a transition's edge resizes it.
 const TRANSITION_EDGE_PX: f32 = 6.;
 const TRANSITION_JOIN_CHIP: f32 = 18.;

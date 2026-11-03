@@ -620,7 +620,8 @@ impl EditorWindow {
                 .flex_col()
                 .items_center()
                 .gap(px(4.))
-                .p(px(4.))
+                .px(px(2.))
+                .py(px(4.))
                 .rounded(px(8.))
                 .border_1()
                 .cursor_pointer()
@@ -663,7 +664,7 @@ impl EditorWindow {
                         .whitespace_nowrap()
                         .overflow_hidden()
                         .text_ellipsis()
-                        .text_size(px(10.5))
+                        .text_size(px(10.))
                         .text_color(Hsla::from(if selected {
                             theme.editor.text_1
                         } else {
