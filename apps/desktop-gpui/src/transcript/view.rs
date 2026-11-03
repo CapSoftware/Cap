@@ -32,7 +32,6 @@ const FOLLOW_MARGIN: f32 = 48.;
 /// While following playback the active line is kept this far down the
 /// viewport, so the words coming next are visible.
 const FOLLOW_ANCHOR: f32 = 0.32;
-/// Listening to a filler plays this much before and after it.
 const LISTEN_BEFORE: f64 = 1.5;
 const LISTEN_AFTER: f64 = 1.0;
 
@@ -161,8 +160,6 @@ impl Palette {
     }
 }
 
-/// Everything one paragraph needs to draw itself, cheap to clone into the
-/// list's item closure.
 struct ParagraphPainter {
     doc: Arc<TranscriptDoc>,
     edl: Option<Arc<TranscriptEdl>>,
@@ -956,7 +953,7 @@ impl EditorWindow {
         }
     }
 
-    fn transcript_restore(
+    pub(super) fn transcript_restore(
         &mut self,
         words: Range<usize>,
         window: &mut Window,
@@ -1002,8 +999,6 @@ impl EditorWindow {
         }
         self.invalidate_transcript(cx);
     }
-
-    // -- Search ---------------------------------------------------------------
 
     pub(super) fn transcript_open_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(search) = &self.transcript.search {
@@ -1121,9 +1116,6 @@ impl EditorWindow {
         self.invalidate_transcript(cx);
     }
 
-    // -- Clean up ---------------------------------------------------------------
-
-    /// Fillers that still play and that the user has not chosen to keep.
     fn transcript_live_fillers(&self) -> Vec<(usize, Disfluency)> {
         let (Some(doc), Some(edl)) = (&self.transcript.doc, &self.transcript.edl) else {
             return Vec::new();
@@ -1245,8 +1237,6 @@ impl EditorWindow {
         cleanup.persist_pauses();
         self.invalidate_transcript(cx);
     }
-
-    // -- Layout -----------------------------------------------------------------
 
     pub(crate) fn transcript_resize_move(
         &mut self,
@@ -2039,11 +2029,13 @@ impl EditorWindow {
                     if kept == 0 {
                         tr::editor::transcript::selection_cut(range.len()).into()
                     } else {
-                        let seconds: f64 = range
-                            .clone()
-                            .filter(|word| edl.is_kept(*word))
-                            .map(|word| doc.words[word].end - doc.words[word].start)
-                            .sum();
+                        let mut kept_words = range.clone().filter(|word| edl.is_kept(*word));
+                        let first = kept_words.next().unwrap_or(range.start);
+                        let last = kept_words.next_back().unwrap_or(first);
+                        let seconds = edl
+                            .source_to_output(doc.words[last].end)
+                            .zip(edl.source_to_output(doc.words[first].start))
+                            .map_or(0.0, |(end, start)| (end - start).max(0.0));
                         tr::editor::transcript::selection(
                             kept,
                             crate::i18n::decimal(format!("{seconds:.1}")),

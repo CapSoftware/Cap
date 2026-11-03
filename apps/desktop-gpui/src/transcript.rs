@@ -159,7 +159,6 @@ pub(crate) fn category_index(kind: DisfluencyKind) -> usize {
 
 pub(crate) struct TranscriptState {
     pub open: bool,
-    /// The player card's share of the row while the panel is open.
     pub player_share: f32,
     pub doc: Option<Arc<TranscriptDoc>>,
     pub edl: Option<Arc<TranscriptEdl>>,
@@ -228,8 +227,6 @@ impl TranscriptState {
         );
     }
 
-    /// Re-derives the document when the caption words changed and the clip
-    /// mapping when the timeline did. Returns whether anything was rebuilt.
     pub fn refresh(
         &mut self,
         project: &cap_project::ProjectConfiguration,

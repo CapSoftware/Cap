@@ -23,7 +23,6 @@ const TOUCHING_SEARCH: f64 = 0.04;
 /// quieter than the middle to win, so equal silence splits a pause evenly.
 const EDGE_PENALTY_DB: f32 = 6.0;
 const MAX_SEARCH_STEPS: usize = 4_000;
-/// Pause cuts shorter than this are not worth a clip boundary.
 const MIN_PAUSE_CUT: f64 = 0.05;
 
 /// The quietest point in `lo..hi`, preferring the middle when the audio does
@@ -101,8 +100,6 @@ pub fn plan_word_cuts(
     )
 }
 
-/// One pause the shorten-pauses action would trim: the words on either side
-/// and the source range that would go.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PauseCut {
     pub after_word: usize,
@@ -226,7 +223,6 @@ pub enum RestoreBlocker {
     /// The clips on either side of the cut are not neighbours on the
     /// timeline (it was reordered), or the cut is not next to any clip.
     NotAdjacent,
-    /// A transition sits on the cut.
     Transition,
 }
 

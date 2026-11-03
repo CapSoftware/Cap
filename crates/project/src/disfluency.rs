@@ -351,7 +351,6 @@ fn takes_clause_complement(norm: &str, clause_len: usize) -> bool {
     )
 }
 
-/// The longest silence between consecutive words from `from` to `to`.
 fn longest_silence(words: &[Word], from: usize, to: usize) -> f64 {
     (from + 1..=to.min(words.len().saturating_sub(1)))
         .map(|at| words[at].start - words[at - 1].end)

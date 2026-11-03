@@ -31,7 +31,6 @@ pub struct Word {
 pub struct Paragraph {
     pub words: Range<usize>,
     pub text: SharedString,
-    /// Byte range of each word inside `text`, in word order.
     pub spans: Vec<Range<usize>>,
 }
 
@@ -57,7 +56,6 @@ pub struct TranscriptDoc {
     pub paragraphs: Vec<Paragraph>,
     pub paragraph_of: Vec<u32>,
     pub fillers: Vec<Disfluency>,
-    /// For each word, the index into `fillers` covering it, or `u32::MAX`.
     pub filler_of: Vec<u32>,
     pub signature: u64,
 }
@@ -340,9 +338,7 @@ pub struct TranscriptEdl {
     pub kept: Vec<bool>,
     pub mappings: Vec<Mapping>,
     pub holds: Vec<(f64, f64)>,
-    /// The union of every clip's source range, sorted and merged.
     pub kept_ranges: Vec<Range<f64>>,
-    /// Maximal runs of consecutive cut words.
     pub cut_runs: Vec<Range<usize>>,
     pub kept_count: usize,
 }
@@ -468,8 +464,6 @@ impl TranscriptEdl {
         )
     }
 
-    /// The cut source stretch around `source`: the gap between the kept
-    /// ranges on either side of it.
     pub fn hole_around(&self, source: f64) -> Option<Range<f64>> {
         let after = self
             .kept_ranges
@@ -487,7 +481,6 @@ impl TranscriptEdl {
         Some(start..end)
     }
 
-    /// Whether every instant of `range` plays somewhere.
     pub fn covers(&self, range: Range<f64>) -> bool {
         let index = self
             .kept_ranges

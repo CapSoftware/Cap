@@ -6,7 +6,7 @@
 //! Actions: `open`, `seed:<words>`, `transcribe`, `select:<a>-<b>`, `delete`,
 //! `cleanup[:pauses]`, `fillers`, `pauses`, `cuts:<n>`, `search:<query>`,
 //! `seek:<seconds>`, `play`, `stop`, `wait:<ms>`, `scroll:<frames>`,
-//! `follow:<seconds>`, `undo`, `redo`, `hover-cut`, `dump:<path>`.
+//! `follow:<seconds>`, `undo`, `redo`, `hover-cut`, `restore`, `dump:<path>`.
 
 use std::time::{Duration, Instant};
 
@@ -224,6 +224,17 @@ pub(crate) async fn run(handle: WindowHandle<EditorWindow>, cx: &mut AsyncApp) {
                         .map(|_| 0);
                     view.invalidate_transcript(cx);
                     String::new()
+                }
+                "restore" => {
+                    let run = view
+                        .transcript
+                        .edl
+                        .as_ref()
+                        .and_then(|edl| edl.cut_runs.first().cloned());
+                    if let Some(run) = run {
+                        view.transcript_restore(run, window, cx);
+                    }
+                    view.timeline_summary()
                 }
                 "dump" => view.transcript_dump(argument),
                 _ => String::new(),
