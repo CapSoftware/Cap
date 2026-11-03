@@ -2999,6 +2999,11 @@ fn validate_recovery_manifests(dir: &Path) -> Result<(), RecoveryError> {
                     ));
                 }
             }
+            // A power loss can keep the fsynced manifest while dropping the
+            // unflushed bytes of the newest M4S fragments, so only a torn run
+            // at the very end of the manifest is skipped; anything earlier is
+            // still a hard failure.
+            let mut torn_tail: Option<PathBuf> = None;
             for fragment in manifest
                 .get("segments")
                 .or_else(|| manifest.get("fragments"))
@@ -3019,20 +3024,37 @@ fn validate_recovery_manifests(dir: &Path) -> Result<(), RecoveryError> {
                 {
                     continue;
                 }
-                let metadata = path.symlink_metadata()?;
-                if !metadata.is_file()
-                    || fragment
-                        .get("file_size")
-                        .and_then(serde_json::Value::as_u64)
-                        .is_some_and(|size| size != metadata.len())
-                    || (path.extension().is_some_and(|ext| ext == "m4s")
-                        && !RecoveryManager::is_m4s_complete(&path))
-                {
-                    return Err(RecoveryError::Validation(format!(
+                let invalid = |path: &Path| {
+                    RecoveryError::Validation(format!(
                         "Invalid declared complete fragment: {}",
                         path.display()
-                    )));
+                    ))
+                };
+                let metadata = path.symlink_metadata()?;
+                if !metadata.is_file() {
+                    return Err(invalid(&path));
                 }
+                let is_m4s = path.extension().is_some_and(|ext| ext == "m4s");
+                let torn = fragment
+                    .get("file_size")
+                    .and_then(serde_json::Value::as_u64)
+                    .is_some_and(|size| size != metadata.len())
+                    || (is_m4s && !RecoveryManager::is_m4s_complete(&path));
+                if !torn {
+                    if let Some(earlier) = &torn_tail {
+                        return Err(invalid(earlier));
+                    }
+                } else if is_m4s {
+                    torn_tail.get_or_insert(path);
+                } else {
+                    return Err(invalid(&path));
+                }
+            }
+            if let Some(first) = torn_tail {
+                warn!(
+                    "Skipping torn trailing fragments from {} after an interrupted write",
+                    first.display()
+                );
             }
         }
     }
@@ -4742,6 +4764,42 @@ mod clean_studio_snapshot_tests {
         assert!(RecoveryManager::recover(&recording).is_err());
         assert_eq!(recovery_snapshot(project).unwrap(), before);
         assert!(!project.join(OUTPUT).exists());
+    }
+
+    fn tear_fragment_tail(path: &Path) {
+        let length = fs::metadata(path).unwrap().len() as usize;
+        fs::write(path, vec![0; length]).unwrap();
+        assert!(!RecoveryManager::is_m4s_complete(path));
+    }
+
+    #[test]
+    fn power_loss_torn_declared_complete_tail_recovers_the_durable_prefix() {
+        let directory = playable_studio_project(StudioRecordingStatus::InProgress);
+        let project = directory.path();
+        tear_fragment_tail(&project.join(format!("{DISPLAY}/segment_002.m4s")));
+        let recording = RecoveryManager::inspect_recording(project).unwrap();
+        RecoveryManager::recover(&recording)
+            .expect("A torn trailing fragment must not block recovering the frames before it");
+        validate_recovered_track(&project.join(OUTPUT), ffmpeg::media::Type::Video).unwrap();
+        let packets = ffmpeg::format::input(&project.join(OUTPUT))
+            .unwrap()
+            .packets()
+            .count();
+        assert!(
+            (1..60).contains(&packets),
+            "expected only the durable first fragment, got {packets} packets"
+        );
+    }
+
+    #[test]
+    fn torn_declared_complete_fragment_before_a_valid_one_still_fails() {
+        let directory = playable_studio_project(StudioRecordingStatus::InProgress);
+        let project = directory.path();
+        tear_fragment_tail(&project.join(FRAGMENT));
+        let before = recovery_snapshot(project).unwrap();
+        let recording = RecoveryManager::inspect_recording(project).unwrap();
+        assert!(RecoveryManager::recover(&recording).is_err());
+        assert_eq!(recovery_snapshot(project).unwrap(), before);
     }
 
     #[test]
