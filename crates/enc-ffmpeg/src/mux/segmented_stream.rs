@@ -604,6 +604,10 @@ impl SegmentMux {
                     break;
                 }
             };
+            // The manifest is fsynced, so the fragment must be durable before
+            // it is declared complete or a power loss leaves a torn file the
+            // manifest still vouches for.
+            sync_file(&segment_path);
 
             self.completed_segments.push(VideoSegmentInfo {
                 path: segment_path.clone(),
