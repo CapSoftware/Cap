@@ -26,6 +26,7 @@ import type { VideoData } from "../../types";
 import { type CaptionLanguage, useCaptionContext } from "../CaptionContext";
 import type { TranscriptEntry } from "../utils/parse-transcript-vtt";
 import { parseTranscriptVTT } from "../utils/parse-transcript-vtt";
+import { formatTime } from "../utils/transcript-utils";
 import { TranscriptEditor, TranscriptRow } from "./transcript-row";
 
 interface TranscriptProps {
@@ -326,19 +327,6 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 			const startSeconds = entry.startTime;
 			const nextEntry = entries[index + 1];
 			const endSeconds = nextEntry ? nextEntry.startTime : startSeconds + 3;
-
-			const formatTime = (seconds: number): string => {
-				const hours = Math.floor(seconds / 3600);
-				const minutes = Math.floor((seconds % 3600) / 60);
-				const secs = Math.floor(seconds % 60);
-				const milliseconds = Math.floor((seconds % 1) * 1000);
-
-				return `${hours.toString().padStart(2, "0")}:${minutes
-					.toString()
-					.padStart(2, "0")}:${secs.toString().padStart(2, "0")}.${milliseconds
-					.toString()
-					.padStart(3, "0")}`;
-			};
 
 			return `${entry.id}\n${formatTime(startSeconds)} --> ${formatTime(
 				endSeconds,
