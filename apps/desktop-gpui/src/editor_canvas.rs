@@ -683,6 +683,14 @@ impl EditorWindow {
     /// `useCanvasSnapTargets()` (`:70-129`): every other visible element's
     /// edges and centres, the frame's own, and the classic camera margin.
     pub(crate) fn canvas_snap_targets(&self, exclude: CanvasSelection) -> SnapTargets {
+        self.canvas_snap_targets_moving(exclude, &[])
+    }
+
+    pub(crate) fn canvas_snap_targets_moving(
+        &self,
+        exclude: CanvasSelection,
+        moving_shapes: &[usize],
+    ) -> SnapTargets {
         let mut rects: Vec<NormRect> = Vec::new();
         let Some(layout) = self.frame_layout.as_ref() else {
             return build_snap_targets(&rects, None);
@@ -732,7 +740,7 @@ impl EditorWindow {
                 });
             }
             for index in self.visible_shape_order(t) {
-                if exclude == CanvasSelection::Shape(index) {
+                if exclude == CanvasSelection::Shape(index) || moving_shapes.contains(&index) {
                     continue;
                 }
                 if let Some(segment) = timeline.shape_segments.get(index) {
@@ -801,6 +809,7 @@ impl EditorWindow {
         let Some(rect) = self.element_rect(element) else {
             return;
         };
+        self.shape_drag_up(window, cx);
         self.history.pause();
         self.canvas_drag = Some(CanvasDrag {
             element,
@@ -859,6 +868,7 @@ impl EditorWindow {
             .into_owned();
         let (max_width, padding_scale) =
             display_resize_scales(rect, &layout, effective.aspect_ratio.is_some());
+        self.shape_drag_up(window, cx);
         self.history.pause();
         self.canvas_drag = Some(CanvasDrag {
             element,
@@ -1316,7 +1326,7 @@ impl EditorWindow {
         }
     }
 
-    fn element_rect(&self, element: CanvasSelection) -> Option<NormRect> {
+    pub(crate) fn element_rect(&self, element: CanvasSelection) -> Option<NormRect> {
         match element {
             CanvasSelection::Display => self.display_rect(),
             CanvasSelection::Camera => self.camera_rect(),
@@ -1638,7 +1648,7 @@ impl EditorWindow {
     ) -> AnyElement {
         let theme = self.theme;
         let selected = self.canvas_selection == Some(element);
-        let hovered = self.hovered_canvas == Some(element);
+        let hovered = self.hovered_canvas == Some(element) && self.shape_hover.is_none();
         let dragging = self
             .canvas_drag
             .as_ref()

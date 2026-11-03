@@ -1,13 +1,3 @@
-//! The Shape track's on-canvas editing: hit testing, handles, move, resize,
-//! endpoint drags, drawing and snapping, all as pure geometry over the
-//! letterboxed preview frame, plus the editor glue that drives it.
-//!
-//! Every gesture works in **canvas pixels** (the frame as drawn on screen)
-//! and writes **output-frame fractions** back to the segment, so a shape
-//! keeps its place at every export resolution. Aspect ratio and the
-//! 45-degree snap are judged in pixels, because a fraction of a 16:9 frame
-//! is not square.
-
 use cap_project::{
     SHAPE_REFERENCE_HEIGHT, ShapeArrowHead, ShapeKind, ShapeRect, ShapeSegment, XY, arrow_head_size,
 };
@@ -20,22 +10,14 @@ use crate::editor_canvas::{
 pub type Px = (f64, f64);
 
 pub const HANDLE_SIZE: f64 = 10.;
-/// The pointer target around a handle, larger than what is drawn so a
-/// handle on a small shape is still easy to catch.
 pub const HANDLE_HIT: f64 = 20.;
 const HIT_SLOP: f64 = 6.;
 const MIN_EXTENT_PX: f64 = 2.;
-/// A press that travels less than this places a default shape instead of
-/// drawing one.
 pub const MIN_DRAW_PX: f64 = 4.;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShapeHandle {
-    /// A box handle: `x`/`y` are -1, 0 or 1 for the edge it moves.
-    Box {
-        x: i8,
-        y: i8,
-    },
+    Box { x: i8, y: i8 },
     From,
     To,
 }
@@ -79,8 +61,6 @@ pub fn stroke_on_canvas(segment: &ShapeSegment, canvas: Px) -> f64 {
     f64::from(segment.stroke_width.max(0.)) * canvas.1 / SHAPE_REFERENCE_HEIGHT
 }
 
-/// The box a shape occupies, in output-frame fractions. A line's box is the
-/// one its endpoints span.
 pub fn shape_bounds(segment: &ShapeSegment) -> NormRect {
     let rect = segment.rect();
     NormRect {
@@ -91,10 +71,6 @@ pub fn shape_bounds(segment: &ShapeSegment) -> NormRect {
     }
 }
 
-/// The handles a selected shape shows, corners first so they win where they
-/// overlap an edge handle on a small shape. Edge handles drop out once the
-/// side is too short to hold three targets, and a badge only takes corners
-/// because it stays round.
 pub fn handles(segment: &ShapeSegment, canvas: Px) -> Vec<(ShapeHandle, Px)> {
     if segment.kind.is_line() {
         return vec![
@@ -151,9 +127,6 @@ pub fn distance_to_segment(point: Px, a: Px, b: Px) -> f64 {
     (point.0 - (a.0 + vx * t)).hypot(point.1 - (a.1 + vy * t))
 }
 
-/// Signed distance from an ellipse's outline along the ray from its
-/// centre: negative inside. Exact on the axes and close enough for a pointer
-/// band everywhere else.
 fn ellipse_radial_distance(point: Px, center: Px, radii: Px) -> f64 {
     let (dx, dy) = (point.0 - center.0, point.1 - center.1);
     let distance = dx.hypot(dy);
@@ -168,10 +141,6 @@ fn ellipse_radial_distance(point: Px, center: Px, radii: Px) -> f64 {
     distance - boundary
 }
 
-/// Whether `point` lands on the shape. Filled shapes, highlights and badges
-/// take a press anywhere inside; an unfilled rectangle or ellipse only along
-/// its stroke, so the recording underneath stays clickable, unless it is
-/// already selected and the press is meant to move it.
 pub fn hit_shape(segment: &ShapeSegment, canvas: Px, point: Px, selected: bool) -> bool {
     let stroke = stroke_on_canvas(segment, canvas);
     let slop = HIT_SLOP + stroke / 2.;
@@ -231,8 +200,6 @@ pub fn hit_shape(segment: &ShapeSegment, canvas: Px, point: Px, selected: bool) 
     }
 }
 
-/// The topmost shape under `point` among `candidates`, which are config
-/// indices in paint order (bottom first).
 pub fn topmost_hit(
     segments: &[ShapeSegment],
     candidates: &[usize],
@@ -247,9 +214,6 @@ pub fn topmost_hit(
     })
 }
 
-/// A move: the shape's box slides with the pointer, snaps its edges and
-/// centre to the frame and the other elements, and keeps its centre inside
-/// the frame. `axis_lock` keeps the larger of the two motions only.
 pub fn moved(
     start: &ShapeSegment,
     delta: Px,
@@ -303,9 +267,6 @@ pub fn moved(
     )
 }
 
-/// One axis of a box resize: the edge under the pointer moves to `moving`,
-/// and the box spans from `anchor` to it (or symmetrically about `anchor`
-/// when resizing from the centre). Returns the signed extent from the anchor.
 struct AxisResize {
     anchor: f64,
     extent: f64,
@@ -356,10 +317,6 @@ pub struct ResizeOptions {
     pub snap: bool,
 }
 
-/// A box resize from one of the eight handles. Dragging past the opposite
-/// edge flips the box rather than stopping, `keep_aspect` (Shift, or always
-/// for a badge) holds the pixel aspect, and `from_center` (Alt/Option)
-/// moves the opposite edge by the same amount.
 pub fn resized(
     start: ShapeRect,
     handle: (i8, i8),
@@ -402,15 +359,22 @@ pub fn resized(
 
     let (width, height) = (right - left, bottom - top);
     if keep_aspect && width > f64::EPSILON && height > f64::EPSILON {
+        let min_scale = MIN_EXTENT_PX / width.min(height);
+        let rescale = |axis: &mut AxisResize, scale: f64| {
+            let sign = if axis.extent < 0. { -1. } else { 1. };
+            axis.extent = axis.base * scale * sign;
+        };
+        let scale_of = |axis: &AxisResize| axis.extent.abs() / axis.base.max(f64::EPSILON);
         match (x.as_mut(), y.as_mut()) {
             (Some(ax), Some(ay)) => {
-                let scale = (ax.extent.abs() / ax.base.max(f64::EPSILON))
-                    .max(ay.extent.abs() / ay.base.max(f64::EPSILON));
-                ax.extent = ax.base * scale * ax.extent.signum();
-                ay.extent = ay.base * scale * ay.extent.signum();
+                let scale = scale_of(ax).max(scale_of(ay)).max(min_scale);
+                rescale(ax, scale);
+                rescale(ay, scale);
             }
             (Some(ax), None) => {
-                let half = height * ax.extent.abs() / ax.base.max(f64::EPSILON) / 2.;
+                let scale = scale_of(ax).max(min_scale);
+                rescale(ax, scale);
+                let half = height * scale / 2.;
                 let (low, high) = span(ax, from_center);
                 let center = (top + bottom) / 2.;
                 return finish(
@@ -421,7 +385,9 @@ pub fn resized(
                 );
             }
             (None, Some(ay)) => {
-                let half = width * ay.extent.abs() / ay.base.max(f64::EPSILON) / 2.;
+                let scale = scale_of(ay).max(min_scale);
+                rescale(ay, scale);
+                let half = width * scale / 2.;
                 let (low, high) = span(ay, from_center);
                 let center = (left + right) / 2.;
                 return finish(
@@ -478,8 +444,6 @@ fn finish(
     (rect, guides)
 }
 
-/// Rotates `point` about `pivot` onto the nearest multiple of 45 degrees,
-/// keeping its distance.
 pub fn snap_angle(pivot: Px, point: Px) -> Px {
     let (dx, dy) = (point.0 - pivot.0, point.1 - pivot.1);
     let length = dx.hypot(dy);
@@ -494,9 +458,6 @@ pub fn snap_angle(pivot: Px, point: Px) -> Px {
     )
 }
 
-/// An endpoint drag on an arrow or line. Shift locks the segment to
-/// 45-degree steps around the other end; otherwise the end snaps to the
-/// frame and element lines.
 pub fn endpoint_dragged(
     start: &ShapeSegment,
     handle: ShapeHandle,
@@ -537,9 +498,6 @@ pub fn endpoint_dragged(
     (point, guides)
 }
 
-/// The two points of a shape drawn by dragging from `anchor` to `current`.
-/// Lines follow the pointer (Shift: 45-degree steps); boxes span the drag
-/// (Shift or a badge: square in pixels; Alt/Option: centred on the press).
 pub fn drawn(
     kind: ShapeKind,
     anchor: Px,
@@ -597,9 +555,6 @@ pub fn nudged(
     )
 }
 
-/// Reshapes `segment` for a new kind: a box keeps its box, a line becomes
-/// the box's diagonal and back, and a badge becomes a circle about the old
-/// centre whose diameter is the shorter side.
 pub fn convert_kind(segment: &mut ShapeSegment, kind: ShapeKind, aspect: f64) {
     if segment.kind == kind {
         return;
@@ -641,10 +596,6 @@ pub fn convert_kind(segment: &mut ShapeSegment, kind: ShapeKind, aspect: f64) {
     segment.number = keep.3;
 }
 
-// ---------------------------------------------------------------------------
-// The editor glue
-// ---------------------------------------------------------------------------
-
 use crate::editor_canvas::CanvasSelection;
 use crate::editor_edits::{self as edits, Selection};
 use crate::editor_timeline::TrackKind;
@@ -666,9 +617,6 @@ pub enum ShapeDragMode {
     Draw { kind: ShapeKind, anchor: Px },
 }
 
-/// One live gesture on the shape layer. `starts` are the shapes as they
-/// were at the press, so every pointer move is computed from the same
-/// origin and nothing accumulates rounding.
 pub struct ShapeDrag {
     pub mode: ShapeDragMode,
     pub primary: Option<usize>,
@@ -803,8 +751,6 @@ fn paint_chrome(chrome: &ShapeChrome, bounds: Bounds<Pixels>, window: &mut Windo
     }
 }
 
-/// The lowest lane on which `start..end` overlaps nothing, or a new lane
-/// above the used ones.
 pub fn free_lane(segments: &[ShapeSegment], start: f64, end: f64) -> u32 {
     let used = edits::used_lane_count(segments);
     (0..used)
@@ -816,9 +762,6 @@ pub fn free_lane(segments: &[ShapeSegment], start: f64, end: f64) -> u32 {
         .unwrap_or(used)
 }
 
-/// Copies of `shapes` moved to start at `time` (keeping their relative
-/// timing, and pulled back so the last one still ends inside `total`), and
-/// nudged by `offset` so they do not hide the shapes they were copied from.
 pub fn pasted(
     shapes: &[ShapeSegment],
     time: f64,
@@ -884,9 +827,6 @@ impl EditorWindow {
         indices
     }
 
-    /// The shapes on screen at `time`, in paint order (bottom first): shape
-    /// tracks in the overlay stack, then config order within a track, the
-    /// order the renderer draws them in.
     pub(crate) fn visible_shape_order(&self, time: f64) -> Vec<usize> {
         let segments = self.shape_segments();
         if segments.is_empty() {
@@ -913,6 +853,79 @@ impl EditorWindow {
         order
     }
 
+    /// Whether a text, image or mask box on a track stacked above the
+    /// shape's own covers `point`. The shape layer sits over every other
+    /// canvas box, so without this a filled shape would take presses meant
+    /// for the text drawn on top of it.
+    fn covered_above(&self, shape: usize, point: XY<f64>) -> bool {
+        let Some(track) = self
+            .shape_segments()
+            .get(shape)
+            .map(|segment| segment.track)
+        else {
+            return false;
+        };
+        let Some(timeline) = self.project.timeline.as_ref() else {
+            return false;
+        };
+        let order = self.project.overlay_tracks();
+        let Some(position) = order.iter().position(|candidate| {
+            candidate.kind == cap_project::OverlayTrackKind::Shape && candidate.track == track
+        }) else {
+            return false;
+        };
+        let time = self.preview_or_playhead();
+        let contains = |element: CanvasSelection| {
+            self.element_rect(element).is_some_and(|rect| {
+                point.x >= rect.x
+                    && point.x <= rect.x + rect.w
+                    && point.y >= rect.y
+                    && point.y <= rect.y + rect.h
+            })
+        };
+        order[..position].iter().any(|above| match above.kind {
+            cap_project::OverlayTrackKind::Text => {
+                timeline
+                    .text_segments
+                    .iter()
+                    .enumerate()
+                    .any(|(index, segment)| {
+                        segment.track == above.track
+                            && segment.enabled
+                            && time >= segment.start
+                            && time < segment.end
+                            && contains(CanvasSelection::Text(index))
+                    })
+            }
+            cap_project::OverlayTrackKind::Image => {
+                timeline
+                    .image_segments
+                    .iter()
+                    .enumerate()
+                    .any(|(index, segment)| {
+                        segment.track == above.track
+                            && segment.is_active_at(time)
+                            && segment.opacity > 0.
+                            && contains(CanvasSelection::Image(index))
+                    })
+            }
+            cap_project::OverlayTrackKind::Mask => {
+                timeline
+                    .mask_segments
+                    .iter()
+                    .enumerate()
+                    .any(|(index, segment)| {
+                        segment.track == above.track
+                            && segment.enabled
+                            && time >= segment.start
+                            && time < segment.end
+                            && contains(CanvasSelection::Mask(index))
+                    })
+            }
+            cap_project::OverlayTrackKind::Shape => false,
+        })
+    }
+
     fn shape_canvas(&self) -> Option<(Bounds<Pixels>, Px)> {
         let bounds = self.canvas_bounds()?;
         let size = (
@@ -933,8 +946,6 @@ impl EditorWindow {
         ))
     }
 
-    /// The output frame's width over its height, which is what turns a
-    /// pixel-square default into output-frame fractions.
     pub(crate) fn shape_output_aspect(&self) -> f64 {
         self.frame_layout
             .as_ref()
@@ -992,8 +1003,6 @@ impl EditorWindow {
             .map(|(start, end)| (lanes, start, end))
     }
 
-    /// Adds `shapes` in one history step and selects them. Returns their
-    /// config indices after the track re-sorts.
     fn insert_shapes(
         &mut self,
         shapes: Vec<ShapeSegment>,
@@ -1040,9 +1049,6 @@ impl EditorWindow {
         indices
     }
 
-    /// The add-track tile and a click on an empty Shape lane land here: a
-    /// shape of the last-used kind, centred, selected, already fully
-    /// visible at the playhead.
     pub(crate) fn add_shape_at_playhead(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let kind = self.last_shape_kind;
         self.place_shape(kind, XY::new(0.5, 0.5), window, cx);
@@ -1075,9 +1081,6 @@ impl EditorWindow {
         Some(index)
     }
 
-    /// Moves the playhead inside the shape's fully drawn window when it
-    /// would otherwise sit on an entrance or exit, so the user sees the
-    /// shape they just made.
     fn reveal_shape_at_playhead(
         &mut self,
         start: f64,
@@ -1131,6 +1134,7 @@ impl EditorWindow {
                         point,
                         selected_one,
                     )
+                    .filter(|index| !self.covered_above(*index, to_norm(point, canvas)))
                 })
         };
         if self.shape_hover != next {
@@ -1150,6 +1154,9 @@ impl EditorWindow {
         };
         if let Some(kind) = self.shape_tool {
             cx.stop_propagation();
+            if self.canvas_drag.is_some() {
+                self.canvas_mouse_up(window, cx);
+            }
             self.set_selection(None, cx);
             self.canvas_selection = None;
             self.history.pause();
@@ -1190,6 +1197,9 @@ impl EditorWindow {
         ) else {
             return;
         };
+        if self.covered_above(index, to_norm(point, canvas)) {
+            return;
+        }
         cx.stop_propagation();
         let toggle = event.modifiers.shift || event.modifiers.platform || event.modifiers.control;
         let indices = if toggle {
@@ -1262,11 +1272,11 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let mut targets = self.canvas_snap_targets(CanvasSelection::Shape(primary));
-        if starts.len() > 1 {
-            let moving: Vec<usize> = starts.iter().map(|(index, _)| *index).collect();
-            targets = self.shape_snap_targets(&moving);
+        if self.canvas_drag.is_some() {
+            self.canvas_mouse_up(window, cx);
         }
+        let moving: Vec<usize> = starts.iter().map(|(index, _)| *index).collect();
+        let targets = self.canvas_snap_targets_moving(CanvasSelection::Shape(primary), &moving);
         self.history.pause();
         self.shape_drag = Some(ShapeDrag {
             mode,
@@ -1278,29 +1288,6 @@ impl EditorWindow {
         });
         cx.notify();
         window.refresh();
-    }
-
-    /// The snap lines a group move uses: the frame, the other elements, and
-    /// every visible shape that is not moving.
-    fn shape_snap_targets(&self, moving: &[usize]) -> SnapTargets {
-        let mut targets = self.canvas_snap_targets(CanvasSelection::Display);
-        let time = self.preview_or_playhead();
-        let others: Vec<NormRect> = self
-            .visible_shape_order(time)
-            .into_iter()
-            .filter(|index| !moving.contains(index))
-            .filter_map(|index| self.shape_segments().get(index).map(shape_bounds))
-            .collect();
-        let extra = crate::editor_canvas::build_snap_targets(&others, None);
-        targets.v.extend(extra.v.into_iter().skip(3));
-        targets.h.extend(extra.h.into_iter().skip(3));
-        if let Some(layout) = self.frame_layout.as_ref() {
-            let display = crate::editor_canvas::norm_rect(layout.display, layout);
-            let display_targets = crate::editor_canvas::build_snap_targets(&[display], None);
-            targets.v.extend(display_targets.v.into_iter().skip(3));
-            targets.h.extend(display_targets.h.into_iter().skip(3));
-        }
-        targets
     }
 
     pub(crate) fn shape_drag_move(
@@ -1352,7 +1339,10 @@ impl EditorWindow {
                     let mut shape = self.shape_template(kind, center, start, end, lane);
                     shape.from = from;
                     shape.to = to;
+                    let (animation_in, animation_out) =
+                        (shape.animation_in_duration, shape.animation_out_duration);
                     let index = self.insert_shapes(vec![shape], window, cx).first().copied();
+                    self.reveal_shape_at_playhead(start, end, animation_in, animation_out, cx);
                     if let Some(drag) = self.shape_drag.as_mut() {
                         drag.primary = index;
                         drag.moved = true;
@@ -1462,8 +1452,6 @@ impl EditorWindow {
         cx.notify();
     }
 
-    /// The arrow keys on a shape selection: every selected shape moves
-    /// together, one canvas pixel or ten with Shift.
     pub(crate) fn shape_nudge(
         &mut self,
         direction: Px,
@@ -1507,8 +1495,6 @@ impl EditorWindow {
         })
     }
 
-    /// Cmd+D: copies of the selected shapes, offset so both stay visible,
-    /// over the same time range on free lanes.
     pub(crate) fn duplicate_shapes(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let indices = self.selected_shape_indices();
         if indices.is_empty() {
@@ -1546,8 +1532,6 @@ impl EditorWindow {
         !self.shape_clipboard.is_empty()
     }
 
-    /// Cmd+V: the copied shapes at the playhead, offset from any shape they
-    /// would land exactly on top of.
     pub(crate) fn paste_shapes(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         if self.shape_clipboard.is_empty() {
             return false;
@@ -1583,8 +1567,6 @@ impl EditorWindow {
         inserted
     }
 
-    /// The interactive layer over the preview: hit testing, hover and
-    /// selection outlines, and the handles of a single selected shape.
     pub(crate) fn render_shapes_layer(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let (_, canvas) = self.shape_canvas()?;
         let time = self.preview_or_playhead();
@@ -1772,8 +1754,6 @@ impl EditorWindow {
             )
     }
 
-    /// The kind picker under the toolbar button: one tile per kind. Picking
-    /// one arms the draw tool; the next press on the preview draws it.
     pub(crate) fn render_shape_tool_popover(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if !self.shape_tool_menu {
             return None;
@@ -1883,10 +1863,6 @@ impl EditorWindow {
     }
 }
 
-// ---------------------------------------------------------------------------
-// The inspector
-// ---------------------------------------------------------------------------
-
 use crate::editor_panels::PanelSlider;
 use crate::editor_sidebar::{ColorTarget, SliderKey};
 use cap_project::{SHAPE_MAX_ANIMATION_DURATION, SHAPE_MAX_STROKE_WIDTH, ShapeAnimation};
@@ -1932,8 +1908,6 @@ impl ShapeProperty {
         }
     }
 
-    /// Writes `value`, clamped; false when it is not a number or nothing
-    /// changed, so a slider pinned at its end writes no history.
     pub fn write(self, segment: &mut ShapeSegment, value: f32) -> bool {
         if !value.is_finite() {
             return false;
@@ -2016,8 +1990,6 @@ impl EditorWindow {
         .into_any_element()
     }
 
-    /// The Shape inspector: kind, stroke, fill, the kind's own controls,
-    /// look and animation, in the order and grammar of the Text panel.
     pub(crate) fn render_shape_panel(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
         let theme = self.theme;
         let Some(segment) = self.shape_segments().get(index) else {
@@ -2731,6 +2703,36 @@ mod tests {
         let (x, y, w, h) = px_rect(rect);
         assert!(close(x + w / 2., 600.) && close(y + h / 2., 337.5));
         assert!(close(w / h, 400. / 225.));
+    }
+
+    #[test]
+    fn shift_side_resizes_keep_both_sides_above_the_minimum() {
+        let start = ShapeRect {
+            x: 0.25,
+            y: 0.25,
+            w: 0.25,
+            h: 0.25,
+        };
+        for (handle, delta) in [
+            ((1, 0), (-400., 0.)),
+            ((0, 1), (0., -225.)),
+            ((1, 1), (-400., -225.)),
+        ] {
+            let (rect, _) = resized(
+                start,
+                handle,
+                delta,
+                CANVAS,
+                &no_targets(),
+                options(true, false),
+            );
+            let (_, _, w, h) = px_rect(rect);
+            assert!(
+                w >= MIN_EXTENT_PX - 1e-9 && h >= MIN_EXTENT_PX - 1e-9,
+                "{handle:?} {w} {h}"
+            );
+            assert!(close(w / h, 400. / 225.), "{handle:?} {w} {h}");
+        }
     }
 
     #[test]
