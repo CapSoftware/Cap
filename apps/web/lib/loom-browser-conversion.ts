@@ -789,6 +789,7 @@ export async function saveLoomStreamAsMp4({
 
 	try {
 		const mediabunny = await import("mediabunny");
+		if (signal?.aborted) throw createAbortError();
 		const {
 			ALL_FORMATS,
 			Conversion,
@@ -806,12 +807,14 @@ export async function saveLoomStreamAsMp4({
 		} = mediabunny;
 
 		await assertMp4EncodingSupported(canEncodeVideo, canEncodeAudio);
+		if (signal?.aborted) throw createAbortError();
 
 		conversionTarget = await createConversionTarget({
 			filename,
 			BufferTarget,
 			StreamTarget,
 		});
+		if (signal?.aborted) throw createAbortError();
 
 		if (isDashManifestUrl(url)) {
 			await convertDashWebmManifestToMp4({
@@ -821,6 +824,7 @@ export async function saveLoomStreamAsMp4({
 				onProgress,
 				mediabunny,
 			});
+			if (signal?.aborted) throw createAbortError();
 			completed = true;
 			return getBufferTargetBlob(conversionTarget);
 		}
@@ -854,6 +858,7 @@ export async function saveLoomStreamAsMp4({
 			formats: ALL_FORMATS,
 		});
 
+		if (signal?.aborted) throw createAbortError();
 		const output = new Output({
 			format: new Mp4OutputFormat({ fastStart: false }),
 			target: conversionTarget.target,
@@ -874,6 +879,7 @@ export async function saveLoomStreamAsMp4({
 			},
 			showWarnings: false,
 		});
+		if (signal?.aborted) throw createAbortError();
 
 		if (!conversion.isValid) {
 			const reasons = conversion.discardedTracks.map((track) => track.reason);
@@ -894,6 +900,7 @@ export async function saveLoomStreamAsMp4({
 		signal?.addEventListener("abort", abortConversion, { once: true });
 
 		await conversion.execute();
+		if (signal?.aborted) throw createAbortError();
 		completed = true;
 		onProgress?.({ percent: 100, processedSeconds: 0 });
 		return getBufferTargetBlob(conversionTarget);
