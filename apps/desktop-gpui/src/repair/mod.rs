@@ -15,7 +15,7 @@ pub use session::{
     RepairController, RepairOperation, RepairPhase, RepairRequest, RepairSnapshot, ToolVerb,
     TraceItem, TraceState, start,
 };
-pub use workspace::recover_interrupted_repairs;
+pub use workspace::{bundle_busy, recover_interrupted_repairs};
 
 pub fn init(cx: &mut gpui::App) {
     availability::refresh(cx);

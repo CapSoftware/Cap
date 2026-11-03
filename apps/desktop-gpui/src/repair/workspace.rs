@@ -47,6 +47,20 @@ fn is_active(dir: &Path) -> bool {
         .is_some_and(|set| set.contains(dir))
 }
 
+/// Whether a repair still holds this bundle, even after its window closed:
+/// a cancelled session finishes its current tool (possibly mid-apply) before
+/// it lets go.
+pub fn bundle_busy(bundle_root: &Path) -> bool {
+    let root = dunce::canonicalize(bundle_root)
+        .unwrap_or_else(|_| bundle_root.to_path_buf())
+        .join(REPAIR_DIR);
+    ACTIVE
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .as_ref()
+        .is_some_and(|set| set.iter().any(|dir| dir.starts_with(&root)))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum JournalState {

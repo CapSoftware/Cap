@@ -1713,6 +1713,9 @@ pub fn open_repair_window(request: crate::repair::RepairRequest, cx: &mut App) {
         return;
     }
     let key = editor_key(&request.project_path);
+    if repair_window_handle(&key, cx).is_none() && crate::repair::bundle_busy(&key) {
+        return;
+    }
     if let Some(handle) = repair_window_handle(&key, cx) {
         let native = handle
             .update(cx, |_, window, _| platform::native_window(window))
@@ -1817,13 +1820,34 @@ fn repair_window_handle(project_path: &Path, cx: &App) -> Option<WindowHandle<Re
 /// and Discard stay disabled meanwhile: both would race the session's staged
 /// commit on the same files.
 pub fn is_repair_open(project_path: &Path, cx: &App) -> bool {
-    repair_window_handle(project_path, cx).is_some()
+    repair_window_handle(project_path, cx).is_some() || crate::repair::bundle_busy(project_path)
 }
 
 pub fn repair_closed(window_id: gpui::WindowId, cx: &mut App) {
-    cx.global_mut::<AppWindows>()
+    let windows = cx.global_mut::<AppWindows>();
+    let key = windows
+        .repairs
+        .iter()
+        .find(|(_, handle)| handle.window_id() == window_id)
+        .map(|(key, _)| key.clone());
+    windows
         .repairs
         .retain(|(_, handle)| handle.window_id() != window_id);
+    refresh_main_window(cx);
+    if let Some(key) = key.filter(|key| crate::repair::bundle_busy(key)) {
+        cx.spawn(async move |cx| {
+            while crate::repair::bundle_busy(&key) {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(250))
+                    .await;
+            }
+            cx.update(refresh_main_window);
+        })
+        .detach();
+    }
+}
+
+fn refresh_main_window(cx: &mut App) {
     let main = cx.global::<AppWindows>().main;
     main.update(cx, |_, window, cx| {
         cx.notify();
