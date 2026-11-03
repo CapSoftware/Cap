@@ -1660,6 +1660,13 @@ impl EditorWindow {
                 }),
             );
 
+        // The caption is drawn over every other element, so its box takes the
+        // pointer from the boxes under it; otherwise the screen box under it
+        // can win the hover and light up while the caption is the target.
+        if element == CanvasSelection::Captions {
+            box_el = box_el.occlude();
+        }
+
         if show {
             let label_left = (6. - left).max(6.);
             let label_top = if top >= 28. { -24. } else { (6. - top).max(6.) };
