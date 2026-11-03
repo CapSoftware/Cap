@@ -1,1 +1,15 @@
-[[{"text":"Wait,","start":0.44,"end":0.71},{"text":"uh,","start":1.13,"end":1.34},{"text":"I-I","start":1.44,"end":1.87},{"text":"need","start":2.0,"end":2.45},{"text":"to","start":2.45,"end":2.7},{"text":"turn","start":2.92,"end":3.26},{"text":"on","start":3.33,"end":3.61},{"text":"the,","start":3.61,"end":4.12},{"text":"um,","start":4.41,"end":4.63},{"text":"the","start":4.92,"end":5.29},{"text":"webcam.","start":5.81,"end":6.63}]]
+[
+	[
+		{ "text": "Wait,", "start": 0.44, "end": 0.71 },
+		{ "text": "uh,", "start": 1.13, "end": 1.34 },
+		{ "text": "I-I", "start": 1.44, "end": 1.87 },
+		{ "text": "need", "start": 2.0, "end": 2.45 },
+		{ "text": "to", "start": 2.45, "end": 2.7 },
+		{ "text": "turn", "start": 2.92, "end": 3.26 },
+		{ "text": "on", "start": 3.33, "end": 3.61 },
+		{ "text": "the,", "start": 3.61, "end": 4.12 },
+		{ "text": "um,", "start": 4.41, "end": 4.63 },
+		{ "text": "the", "start": 4.92, "end": 5.29 },
+		{ "text": "webcam.", "start": 5.81, "end": 6.63 }
+	]
+]

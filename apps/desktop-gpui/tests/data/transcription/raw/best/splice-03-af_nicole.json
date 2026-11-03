@@ -1,1 +1,15 @@
-[[{"text":"I","start":0.56,"end":0.8},{"text":"I","start":0.96,"end":1.1999999},{"text":"wanted","start":1.36,"end":1.92},{"text":"to","start":1.92,"end":2.1599998},{"text":"show","start":2.32,"end":2.72},{"text":"you","start":2.72,"end":2.96},{"text":"how","start":3.2,"end":3.44},{"text":"the","start":3.6,"end":3.84},{"text":"um","start":3.92,"end":4.16},{"text":"export","start":4.64,"end":5.2},{"text":"works.","start":5.52,"end":6.0}]]
+[
+	[
+		{ "text": "I", "start": 0.56, "end": 0.8 },
+		{ "text": "I", "start": 0.96, "end": 1.1999999 },
+		{ "text": "wanted", "start": 1.36, "end": 1.92 },
+		{ "text": "to", "start": 1.92, "end": 2.1599998 },
+		{ "text": "show", "start": 2.32, "end": 2.72 },
+		{ "text": "you", "start": 2.72, "end": 2.96 },
+		{ "text": "how", "start": 3.2, "end": 3.44 },
+		{ "text": "the", "start": 3.6, "end": 3.84 },
+		{ "text": "um", "start": 3.92, "end": 4.16 },
+		{ "text": "export", "start": 4.64, "end": 5.2 },
+		{ "text": "works.", "start": 5.52, "end": 6.0 }
+	]
+]

@@ -1,1 +1,16 @@
-[[{"text":"So,","start":0.32,"end":0.56},{"text":"um,","start":1.2,"end":1.44},{"text":"I","start":1.92,"end":2.1599998},{"text":"think","start":2.24,"end":2.48},{"text":"we","start":2.56,"end":2.8},{"text":"should","start":2.96,"end":3.28},{"text":"I","start":3.52,"end":3.76},{"text":"start","start":4.08,"end":4.56},{"text":"with","start":4.8,"end":5.04},{"text":"the","start":5.2,"end":5.4399996},{"text":"the","start":5.52,"end":5.7599998},{"text":"dashboard.","start":5.76,"end":6.4799995}]]
+[
+	[
+		{ "text": "So,", "start": 0.32, "end": 0.56 },
+		{ "text": "um,", "start": 1.2, "end": 1.44 },
+		{ "text": "I", "start": 1.92, "end": 2.1599998 },
+		{ "text": "think", "start": 2.24, "end": 2.48 },
+		{ "text": "we", "start": 2.56, "end": 2.8 },
+		{ "text": "should", "start": 2.96, "end": 3.28 },
+		{ "text": "I", "start": 3.52, "end": 3.76 },
+		{ "text": "start", "start": 4.08, "end": 4.56 },
+		{ "text": "with", "start": 4.8, "end": 5.04 },
+		{ "text": "the", "start": 5.2, "end": 5.4399996 },
+		{ "text": "the", "start": 5.52, "end": 5.7599998 },
+		{ "text": "dashboard.", "start": 5.76, "end": 6.4799995 }
+	]
+]

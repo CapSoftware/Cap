@@ -1,1 +1,7 @@
-[[{"text":"Uh.","start":0.7,"end":1.1800001},{"text":"Sorry,","start":1.28,"end":1.6},{"text":"Led.","start":1.84,"end":2.48}]]
+[
+	[
+		{ "text": "Uh.", "start": 0.7, "end": 1.1800001 },
+		{ "text": "Sorry,", "start": 1.28, "end": 1.6 },
+		{ "text": "Led.", "start": 1.84, "end": 2.48 }
+	]
+]

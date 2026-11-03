@@ -1,1 +1,12 @@
-[[{"text":"editor","start":1.22,"end":1.62},{"text":"has","start":1.86,"end":1.87},{"text":"of","start":3.8849998,"end":4.1249995},{"text":"it,","start":4.125,"end":4.205},{"text":"you're","start":4.285,"end":4.605},{"text":"now","start":4.605,"end":4.845},{"text":"Molly.","start":4.9249997,"end":5.4049997},{"text":"Prov.","start":5.28,"end":5.68}]]
+[
+	[
+		{ "text": "editor", "start": 1.22, "end": 1.62 },
+		{ "text": "has", "start": 1.86, "end": 1.87 },
+		{ "text": "of", "start": 3.8849998, "end": 4.1249995 },
+		{ "text": "it,", "start": 4.125, "end": 4.205 },
+		{ "text": "you're", "start": 4.285, "end": 4.605 },
+		{ "text": "now", "start": 4.605, "end": 4.845 },
+		{ "text": "Molly.", "start": 4.9249997, "end": 5.4049997 },
+		{ "text": "Prov.", "start": 5.28, "end": 5.68 }
+	]
+]

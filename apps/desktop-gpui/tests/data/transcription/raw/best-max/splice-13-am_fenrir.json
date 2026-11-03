@@ -1,1 +1,16 @@
-[[{"text":"The","start":0.32,"end":0.56},{"text":"new","start":0.8,"end":1.1999999},{"text":"editor","start":1.28,"end":1.76},{"text":"has","start":1.92,"end":2.1599998},{"text":"heard","start":2.48,"end":2.88},{"text":"a","start":3.28,"end":3.52},{"text":"lot","start":3.52,"end":3.76},{"text":"of","start":3.84,"end":4.08},{"text":"you","start":4.32,"end":4.56},{"text":"know","start":4.56,"end":4.7999997},{"text":"my","start":4.88,"end":5.12},{"text":"improvements.","start":5.2,"end":5.7599998}]]
+[
+	[
+		{ "text": "The", "start": 0.32, "end": 0.56 },
+		{ "text": "new", "start": 0.8, "end": 1.1999999 },
+		{ "text": "editor", "start": 1.28, "end": 1.76 },
+		{ "text": "has", "start": 1.92, "end": 2.1599998 },
+		{ "text": "heard", "start": 2.48, "end": 2.88 },
+		{ "text": "a", "start": 3.28, "end": 3.52 },
+		{ "text": "lot", "start": 3.52, "end": 3.76 },
+		{ "text": "of", "start": 3.84, "end": 4.08 },
+		{ "text": "you", "start": 4.32, "end": 4.56 },
+		{ "text": "know", "start": 4.56, "end": 4.7999997 },
+		{ "text": "my", "start": 4.88, "end": 5.12 },
+		{ "text": "improvements.", "start": 5.2, "end": 5.7599998 }
+	]
+]

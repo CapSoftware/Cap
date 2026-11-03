@@ -1,1 +1,41 @@
-[[{"text":"So,","start":0.0,"end":0.24},{"text":"well,","start":0.31,"end":0.6},{"text":"how","start":0.6,"end":0.77},{"text":"we","start":0.77,"end":0.89},{"text":"did","start":0.9,"end":1.08},{"text":"do","start":1.08,"end":1.2},{"text":"that?","start":1.2,"end":1.68},{"text":"Well,","start":1.68,"end":2.15},{"text":"we","start":2.18,"end":2.36},{"text":"made","start":2.36,"end":2.64},{"text":"an","start":2.7,"end":2.86},{"text":"investigation","start":2.89,"end":3.46},{"text":"of","start":3.53,"end":3.6},{"text":"the","start":3.69,"end":3.9},{"text":"market","start":3.98,"end":4.3},{"text":"by","start":4.52,"end":4.6},{"text":"Trent","start":4.6,"end":5.0},{"text":"Watchers.","start":5.0,"end":5.76}],[{"text":"They","start":6.0,"end":6.19},{"text":"watched","start":6.19,"end":6.95},{"text":"it","start":6.95,"end":7.15},{"text":"in","start":7.16,"end":7.32},{"text":"cities","start":7.4,"end":7.88},{"text":"like","start":8.02,"end":8.45},{"text":"Paris","start":8.45,"end":8.99},{"text":"and","start":8.99,"end":9.31},{"text":"Milan.","start":9.31,"end":9.89},{"text":"Of","start":10.23,"end":10.41},{"text":"course,","start":10.54,"end":11.07},{"text":"well","start":11.18,"end":11.51},{"text":"known","start":11.51,"end":11.77},{"text":"for","start":11.77,"end":12.23},{"text":"their,","start":12.23,"end":12.86},{"text":"uh,","start":12.94,"end":13.13},{"text":"Trent's.","start":13.25,"end":13.78}]]
+[
+	[
+		{ "text": "So,", "start": 0.0, "end": 0.24 },
+		{ "text": "well,", "start": 0.31, "end": 0.6 },
+		{ "text": "how", "start": 0.6, "end": 0.77 },
+		{ "text": "we", "start": 0.77, "end": 0.89 },
+		{ "text": "did", "start": 0.9, "end": 1.08 },
+		{ "text": "do", "start": 1.08, "end": 1.2 },
+		{ "text": "that?", "start": 1.2, "end": 1.68 },
+		{ "text": "Well,", "start": 1.68, "end": 2.15 },
+		{ "text": "we", "start": 2.18, "end": 2.36 },
+		{ "text": "made", "start": 2.36, "end": 2.64 },
+		{ "text": "an", "start": 2.7, "end": 2.86 },
+		{ "text": "investigation", "start": 2.89, "end": 3.46 },
+		{ "text": "of", "start": 3.53, "end": 3.6 },
+		{ "text": "the", "start": 3.69, "end": 3.9 },
+		{ "text": "market", "start": 3.98, "end": 4.3 },
+		{ "text": "by", "start": 4.52, "end": 4.6 },
+		{ "text": "Trent", "start": 4.6, "end": 5.0 },
+		{ "text": "Watchers.", "start": 5.0, "end": 5.76 }
+	],
+	[
+		{ "text": "They", "start": 6.0, "end": 6.19 },
+		{ "text": "watched", "start": 6.19, "end": 6.95 },
+		{ "text": "it", "start": 6.95, "end": 7.15 },
+		{ "text": "in", "start": 7.16, "end": 7.32 },
+		{ "text": "cities", "start": 7.4, "end": 7.88 },
+		{ "text": "like", "start": 8.02, "end": 8.45 },
+		{ "text": "Paris", "start": 8.45, "end": 8.99 },
+		{ "text": "and", "start": 8.99, "end": 9.31 },
+		{ "text": "Milan.", "start": 9.31, "end": 9.89 },
+		{ "text": "Of", "start": 10.23, "end": 10.41 },
+		{ "text": "course,", "start": 10.54, "end": 11.07 },
+		{ "text": "well", "start": 11.18, "end": 11.51 },
+		{ "text": "known", "start": 11.51, "end": 11.77 },
+		{ "text": "for", "start": 11.77, "end": 12.23 },
+		{ "text": "their,", "start": 12.23, "end": 12.86 },
+		{ "text": "uh,", "start": 12.94, "end": 13.13 },
+		{ "text": "Trent's.", "start": 13.25, "end": 13.78 }
+	]
+]

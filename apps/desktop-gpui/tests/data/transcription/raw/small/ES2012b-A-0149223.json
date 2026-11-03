@@ -1,1 +1,37 @@
-[[{"text":"I'm","start":0.0,"end":0.1},{"text":"actually","start":0.24,"end":0.83},{"text":"achieving","start":0.83,"end":1.5},{"text":"that,","start":1.52,"end":2.0},{"text":"in","start":2.0,"end":2.03},{"text":"terms","start":2.03,"end":2.11},{"text":"of","start":2.11,"end":2.13},{"text":"whether","start":2.14,"end":2.25},{"text":"the,","start":2.25,"end":2.3},{"text":"you","start":2.36,"end":2.4},{"text":"know,","start":2.4,"end":2.51},{"text":"the","start":2.52,"end":2.52},{"text":"power","start":2.59,"end":2.83},{"text":"requirements","start":2.83,"end":3.5},{"text":"of","start":3.5,"end":3.59},{"text":"the,","start":3.63,"end":4.69},{"text":"such","start":4.69,"end":5.49},{"text":"a","start":5.56,"end":5.73},{"text":"source,","start":5.73,"end":7.04},{"text":"you","start":7.04,"end":7.1},{"text":"know,","start":7.1,"end":7.21},{"text":"compromise","start":7.26,"end":8.14},{"text":"the,","start":8.14,"end":8.6},{"text":"our,","start":8.66,"end":9.0},{"text":"our","start":9.0,"end":9.47},{"text":"need","start":9.47,"end":10.1},{"text":"for,","start":10.1,"end":10.9},{"text":"you","start":10.9,"end":11.15},{"text":"know,","start":11.27,"end":11.81},{"text":"it","start":11.93,"end":12.07},{"text":"being,","start":12.07,"end":12.82},{"text":"um,","start":13.0,"end":13.23},{"text":"permanently.","start":13.24,"end":14.68}]]
+[
+	[
+		{ "text": "I'm", "start": 0.0, "end": 0.1 },
+		{ "text": "actually", "start": 0.24, "end": 0.83 },
+		{ "text": "achieving", "start": 0.83, "end": 1.5 },
+		{ "text": "that,", "start": 1.52, "end": 2.0 },
+		{ "text": "in", "start": 2.0, "end": 2.03 },
+		{ "text": "terms", "start": 2.03, "end": 2.11 },
+		{ "text": "of", "start": 2.11, "end": 2.13 },
+		{ "text": "whether", "start": 2.14, "end": 2.25 },
+		{ "text": "the,", "start": 2.25, "end": 2.3 },
+		{ "text": "you", "start": 2.36, "end": 2.4 },
+		{ "text": "know,", "start": 2.4, "end": 2.51 },
+		{ "text": "the", "start": 2.52, "end": 2.52 },
+		{ "text": "power", "start": 2.59, "end": 2.83 },
+		{ "text": "requirements", "start": 2.83, "end": 3.5 },
+		{ "text": "of", "start": 3.5, "end": 3.59 },
+		{ "text": "the,", "start": 3.63, "end": 4.69 },
+		{ "text": "such", "start": 4.69, "end": 5.49 },
+		{ "text": "a", "start": 5.56, "end": 5.73 },
+		{ "text": "source,", "start": 5.73, "end": 7.04 },
+		{ "text": "you", "start": 7.04, "end": 7.1 },
+		{ "text": "know,", "start": 7.1, "end": 7.21 },
+		{ "text": "compromise", "start": 7.26, "end": 8.14 },
+		{ "text": "the,", "start": 8.14, "end": 8.6 },
+		{ "text": "our,", "start": 8.66, "end": 9.0 },
+		{ "text": "our", "start": 9.0, "end": 9.47 },
+		{ "text": "need", "start": 9.47, "end": 10.1 },
+		{ "text": "for,", "start": 10.1, "end": 10.9 },
+		{ "text": "you", "start": 10.9, "end": 11.15 },
+		{ "text": "know,", "start": 11.27, "end": 11.81 },
+		{ "text": "it", "start": 11.93, "end": 12.07 },
+		{ "text": "being,", "start": 12.07, "end": 12.82 },
+		{ "text": "um,", "start": 13.0, "end": 13.23 },
+		{ "text": "permanently.", "start": 13.24, "end": 14.68 }
+	]
+]
