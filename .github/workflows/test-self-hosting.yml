@@ -41,11 +41,11 @@ jobs:
           timeout 120 bash -c 'until docker inspect cap-mysql --format="{{.State.Health.Status}}" 2>/dev/null | grep -q "healthy"; do sleep 2; done'
           echo "MySQL is healthy"
 
-      - name: Wait for MinIO to be healthy
+      - name: Wait for RustFS to be healthy
         run: |
-          echo "Waiting for MinIO..."
-          timeout 60 bash -c 'until docker inspect cap-minio --format="{{.State.Health.Status}}" 2>/dev/null | grep -q "healthy"; do sleep 2; done'
-          echo "MinIO is healthy"
+          echo "Waiting for RustFS..."
+          timeout 60 bash -c 'until docker inspect cap-rustfs --format="{{.State.Health.Status}}" 2>/dev/null | grep -q "healthy"; do sleep 2; done'
+          echo "RustFS is healthy"
 
       - name: Wait for Media Server to be healthy
         run: |
@@ -106,16 +106,21 @@ jobs:
             exit 1
           fi
 
-      - name: Test MinIO bucket exists
+      - name: Test RustFS bucket exists
         run: |
-          echo "Testing MinIO bucket..."
-          if docker compose logs minio-setup 2>&1 | grep -q "Bucket created successfully\|already exists"; then
-            echo "✓ MinIO bucket is configured"
-          else
-            echo "✗ MinIO bucket setup failed"
-            docker compose logs minio-setup
+          echo "Testing RustFS bucket..."
+          setup_container=$(docker compose ps -a -q rustfs-setup)
+          if [ -z "$setup_container" ] || [ "$(docker inspect --format '{{.State.Status}}:{{.State.ExitCode}}' "$setup_container")" != "exited:0" ]; then
+            echo "✗ RustFS bucket setup failed"
+            docker compose logs rustfs-setup
             exit 1
           fi
+          # Query S3 directly; mc log wording is not a reliable bucket check.
+          docker compose run --rm --no-deps --entrypoint /bin/sh rustfs-setup -ec '
+            mc alias set caprustfs http://rustfs:9000 "$RUSTFS_ACCESS_KEY" "$RUSTFS_SECRET_KEY" >/dev/null
+            mc stat caprustfs/cap
+          '
+          echo "✓ RustFS bucket is configured"
 
       - name: Show Cap Web logs
         if: always()
