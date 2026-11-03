@@ -24,7 +24,7 @@ RUN bun test src/__tests__/lib/audio-quality-policy.test.ts src/__tests__/lib/au
 	&& bun test src/__tests__/routes/recording-verification.test.ts \
 	&& bun test src/__tests__/routes/video.test.ts \
 	&& bun test src/__tests__/routes/preverify.test.ts \
-	&& bun test src/__tests__/lib/lifecycle.test.ts src/__tests__/lib/temp-files.test.ts \
+	&& bun test src/__tests__/lib/lifecycle.test.ts src/__tests__/lib/temp-files.test.ts src/__tests__/lib/process-guards.test.ts \
 	&& bun test src/__tests__/routes/lifecycle.test.ts \
 	&& bun test src/__tests__/routes/peer-jobs.test.ts \
 	&& bun test src/__tests__/lib/live-transcribe.test.ts src/__tests__/routes/live-transcribe.test.ts \
