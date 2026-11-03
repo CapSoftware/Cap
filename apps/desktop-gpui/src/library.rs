@@ -638,15 +638,16 @@ fn recover_interrupted_for_editing_in(
             active == project_path || active.canonicalize().ok() == project_path.canonicalize().ok()
         }),
     };
-    let in_library = project_path.canonicalize().is_ok_and(|canonical| {
-        dirs.iter().any(|dir| {
-            dir.canonicalize()
-                .is_ok_and(|canonical_dir| canonical.starts_with(canonical_dir))
+    let library_path = project_path.canonicalize().ok().and_then(|canonical| {
+        dirs.iter().find_map(|dir| {
+            let relative = canonical.strip_prefix(dir.canonicalize().ok()?).ok()?;
+            Some(dir.join(relative))
         })
     });
-    if !interrupted || !in_library {
+    let Some(library_path) = library_path.filter(|_| interrupted) else {
         return Ok(false);
-    }
+    };
+    let project_path = library_path.as_path();
     if RecoveryManager::inspect_recording(project_path).is_none() {
         return match studio.status() {
             StudioRecordingStatus::Failed { .. } => Ok(false),
@@ -3011,6 +3012,22 @@ mod tests {
         let error = recover_interrupted_for_editing_in(dirs, &damaged, None).unwrap_err();
         assert!(error.contains("Nothing was deleted"), "{error}");
         assert_eq!(std::fs::read(&fragment).unwrap(), fragment_before);
+
+        #[cfg(unix)]
+        {
+            let linked = root.join("linked-recordings");
+            std::os::unix::fs::symlink(&recordings, &linked).unwrap();
+            let error = recover_interrupted_for_editing_in(
+                std::slice::from_ref(&linked),
+                &damaged.canonicalize().unwrap(),
+                None,
+            )
+            .unwrap_err();
+            assert!(
+                error.contains("Nothing was deleted"),
+                "an editor path in canonical form still reaches recovery: {error}"
+            );
+        }
 
         std::fs::remove_dir_all(root).unwrap();
     }
