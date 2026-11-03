@@ -8855,17 +8855,14 @@ impl RendererLayers {
 
     /// What one side of a layered transition draws: its own content on a
     /// transparent frame, with its masks, so a blurred region moves with the
-    /// footage it hides. A focus blur or a highlight mask covers the
-    /// background too, so a side with one keeps its background to stay
-    /// identical to its plain frames. When a mask is ordered above a text or
+    /// footage it hides. Masks and a focus blur read and cover the
+    /// background too (a pixelated cell at a clip's edge samples it), so a
+    /// side with either keeps its background to stay identical to its plain
+    /// frames. When a mask is ordered above a text or
     /// image overlay it has to cover that overlay as well, which only a whole
     /// frame can show correctly, so the overlays travel with the clips then.
     fn transition_side_parts(&self, uniforms: &ProjectUniforms) -> LayerParts {
-        let background = self.camera3d.blur_kind().is_some()
-            || uniforms
-                .masks
-                .iter()
-                .any(|mask| mask.mode == MaskRenderMode::Highlight);
+        let background = self.camera3d.blur_kind().is_some() || !uniforms.masks.is_empty();
         LayerParts {
             background,
             content: true,

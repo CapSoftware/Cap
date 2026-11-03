@@ -687,3 +687,53 @@ async fn a_highlight_ordered_above_an_image_dims_each_frame_once() {
         assert!(last.0 <= 1, "{kind:?} at its last frame: {last:?}");
     }
 }
+
+#[tokio::test]
+async fn a_sensitive_mask_over_a_clip_edge_matches_the_plain_frames_at_both_ends() {
+    let mut fixture = fixture_with(false, true).await;
+    let mut project = (*fixture.project).clone();
+    project.background.padding = 20.0;
+    if let Some(timeline) = project.timeline.as_mut() {
+        timeline.mask_segments[0].center = XY::new(0.12, 0.5);
+        timeline.mask_segments[0].size = XY::new(0.2, 0.4);
+    }
+    fixture.project = Arc::new(project);
+    let cursor = CursorEvents::default();
+    let mut sides = sides(&fixture, &cursor);
+    let zoom = ZoomTransformTimeline::from_project(
+        &fixture.project,
+        &cursor,
+        10.0,
+        XY::new(WIDTH, HEIGHT),
+    );
+    let striped = striped_frames(1.0);
+    sides.outgoing = (
+        striped.clone(),
+        ProjectUniforms::new(
+            &fixture.constants,
+            &fixture.project,
+            60,
+            60,
+            XY::new(WIDTH, HEIGHT),
+            &cursor,
+            &striped,
+            10.0,
+            &zoom,
+        ),
+    );
+    let outgoing = render_plain(&fixture, &sides.outgoing, &cursor).await;
+    let incoming = render_plain(&fixture, &sides.incoming, &cursor).await;
+    for kind in [
+        ClipTransitionType::PushLeft,
+        ClipTransitionType::PushDown,
+        ClipTransitionType::WipeRight,
+        ClipTransitionType::Zoom,
+    ] {
+        let start = render_transition(&fixture, &sides, &cursor, kind, 0.0).await;
+        let first = worst_pixel(&start, &outgoing);
+        assert!(first.0 <= 1, "{kind:?} at its first frame: {first:?}");
+        let end = render_transition(&fixture, &sides, &cursor, kind, 1.0).await;
+        let last = worst_pixel(&end, &incoming);
+        assert!(last.0 <= 1, "{kind:?} at its last frame: {last:?}");
+    }
+}
