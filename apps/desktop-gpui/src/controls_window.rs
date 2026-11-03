@@ -112,11 +112,18 @@ impl ControlsWindow {
 
     fn issue(&self, cx: &gpui::App) -> Option<String> {
         let session = self.session.read(cx);
-        session.error.clone().or_else(|| {
-            session
-                .storage_warning
-                .then(|| tr::controls::low_storage().to_owned())
-        })
+        session
+            .error
+            .clone()
+            .or_else(|| {
+                (session.paused_for_sleep && session.is_paused())
+                    .then(|| tr::controls::paused_for_sleep().to_owned())
+            })
+            .or_else(|| {
+                session
+                    .storage_warning
+                    .then(|| tr::controls::low_storage().to_owned())
+            })
     }
 
     fn fit_to_issue(&mut self, window: &mut Window, cx: &mut Context<Self>) {

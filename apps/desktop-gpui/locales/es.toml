@@ -1125,6 +1125,7 @@ window = "Ventana"
 [controls]
 disk_full_resume = "No hay espacio suficiente para reanudar. Libera espacio e inténtalo de nuevo, o pulsa Detener para guardar."
 low_storage = "Poco almacenamiento. Cap se detendrá pronto para guardar tu grabación."
+paused_for_sleep = "La grabación se pausó porque tu Mac entró en reposo. Reanúdala cuando quieras o pulsa Detener para guardarla."
 
 [controls.confirm]
 delete = "Eliminar"

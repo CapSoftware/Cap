@@ -475,6 +475,8 @@ pub struct RecordingSession {
     marker_count: usize,
     /// When the last marker went in, for the controls bar's acknowledgement.
     marker_added_at: Option<Instant>,
+    /// The recording was paused because the Mac went to sleep.
+    pub paused_for_sleep: bool,
     #[cfg(target_os = "linux")]
     instant_attempt: Option<recording::InstantAttempt>,
     #[cfg(target_os = "linux")]
@@ -525,6 +527,7 @@ impl RecordingSession {
             pause_control_error: None,
             marker_count: 0,
             marker_added_at: None,
+            paused_for_sleep: false,
             #[cfg(target_os = "linux")]
             instant_attempt: None,
             #[cfg(target_os = "linux")]
@@ -747,6 +750,7 @@ impl RecordingSession {
         self.pause_control.invalidate();
         self.pause_control.uncertain = false;
         self.pause_control_error = None;
+        self.paused_for_sleep = false;
         self.pipeline_failed = false;
         self.marker_count = 0;
         self.marker_added_at = None;
@@ -1313,6 +1317,7 @@ impl RecordingSession {
             self.stop_requested = false;
         }
         self.stopped_elapsed = Some(self.elapsed());
+        self.paused_for_sleep = false;
         self.pause_control.cancel_for_stop();
         self.phase = Phase::Stopping;
         self.preparing_studio_editor =
@@ -1511,6 +1516,9 @@ impl RecordingSession {
                 if let Some(paused) = outcome.paused {
                     let was_paused = this.is_paused();
                     this.phase = Phase::Recording { paused };
+                    if !paused {
+                        this.paused_for_sleep = false;
+                    }
                     if was_paused && !paused {
                         if let Some(since) = this.paused_since.take() {
                             this.paused_accum += since.elapsed();
@@ -1534,6 +1542,27 @@ impl RecordingSession {
             .ok();
         })
         .detach();
+    }
+
+    /// Pauses a running recording before the Mac sleeps. Returns whether a
+    /// pause is on its way, which the sleep is then held for.
+    pub fn pause_for_sleep(&mut self, cx: &mut Context<Self>) -> bool {
+        if !pauses_for_sleep(self.phase, self.pause_unavailable()) {
+            return false;
+        }
+        self.toggle_pause(cx);
+        let pausing = self.pause_control.pending.is_some();
+        if pausing {
+            self.paused_for_sleep = true;
+            cx.notify();
+        }
+        pausing
+    }
+
+    pub fn woke_from_sleep(&mut self, cx: &mut Context<Self>) {
+        if self.paused_for_sleep {
+            cx.notify();
+        }
     }
 
     #[cfg(target_os = "linux")]
@@ -2054,6 +2083,7 @@ impl RecordingSession {
         self.pause_control.invalidate();
         self.pause_control.uncertain = false;
         self.pause_control_error = None;
+        self.paused_for_sleep = false;
         self.pipeline_failed = false;
         self.storage_monitor = None;
         self.countdown_remaining = None;
@@ -2066,6 +2096,10 @@ impl RecordingSession {
         self.paused_since = None;
         cx.notify();
     }
+}
+
+fn pauses_for_sleep(phase: Phase, pause_unavailable: bool) -> bool {
+    phase == (Phase::Recording { paused: false }) && !pause_unavailable
 }
 
 fn recording_failure_is_current(phase: Phase, current: u64, completed: u64) -> bool {
@@ -2693,6 +2727,20 @@ mod recording_failure_tests {
 #[cfg(test)]
 mod pause_control_tests {
     use super::*;
+
+    #[test]
+    fn only_a_running_recording_that_can_pause_is_paused_for_sleep() {
+        assert!(pauses_for_sleep(Phase::Recording { paused: false }, false));
+        assert!(!pauses_for_sleep(Phase::Recording { paused: false }, true));
+        for phase in [
+            Phase::Idle,
+            Phase::Starting,
+            Phase::Recording { paused: true },
+            Phase::Stopping,
+        ] {
+            assert!(!pauses_for_sleep(phase, false), "{phase:?}");
+        }
+    }
 
     #[test]
     fn rapid_toggle_does_not_dispatch_a_second_control() {
