@@ -1658,7 +1658,6 @@ pub struct EditorWindow {
     presets_menu: Option<PresetsMenu>,
     preset_dialog: Option<PresetDialog>,
     style_presets: style_preset_ui::StylePresetsState,
-    /// The lane being renamed (double-click on its label), and the input.
     track_rename: Option<TrackRow>,
     track_name_input: Entity<ui::TextInputState>,
     caption_sync_signature: Option<u64>,
@@ -8098,8 +8097,6 @@ impl EditorWindow {
         cx.notify();
     }
 
-    /// Double-click on a lane's label: rename it. An empty name restores the
-    /// track's own label.
     fn open_track_rename(&mut self, row: TrackRow, window: &mut Window, cx: &mut Context<Self>) {
         if !self.project_ready() {
             return;
