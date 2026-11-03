@@ -244,6 +244,13 @@ pub struct TransitionCompositor {
     textures: Option<TransitionTextures>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CompositePass {
+    Frames,
+    LayersOverBackground,
+    LayersOnClear,
+}
+
 pub struct TransitionParameters {
     pub kind: ClipTransitionType,
     pub progress: f32,
@@ -459,17 +466,25 @@ impl TransitionCompositor {
         parameters: TransitionParameters,
     ) {
         self.capture_incoming(encoder, source);
-        self.draw(queue, encoder, target, &parameters, false);
+        self.draw(queue, encoder, target, &parameters, CompositePass::Frames);
     }
 
+    /// Draws the two captured sides over the background already in
+    /// `target`, or over a cleared target when the sides carry their own.
     pub fn render_layers(
         &self,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
         parameters: TransitionParameters,
+        sides_have_background: bool,
     ) {
-        self.draw(queue, encoder, target, &parameters, true);
+        let pass = if sides_have_background {
+            CompositePass::LayersOnClear
+        } else {
+            CompositePass::LayersOverBackground
+        };
+        self.draw(queue, encoder, target, &parameters, pass);
     }
 
     fn draw(
@@ -478,8 +493,9 @@ impl TransitionCompositor {
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
         parameters: &TransitionParameters,
-        layered: bool,
+        pass: CompositePass,
     ) {
+        let layered = pass != CompositePass::Frames;
         let Some(textures) = &self.textures else {
             return;
         };
@@ -499,10 +515,12 @@ impl TransitionCompositor {
                 view: target,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: if layered {
-                        wgpu::LoadOp::Load
-                    } else {
-                        wgpu::LoadOp::Clear(wgpu::Color::BLACK)
+                    load: match pass {
+                        CompositePass::Frames => wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        CompositePass::LayersOverBackground => wgpu::LoadOp::Load,
+                        CompositePass::LayersOnClear => {
+                            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
+                        }
                     },
                     store: wgpu::StoreOp::Store,
                 },

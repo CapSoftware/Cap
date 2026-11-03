@@ -9478,7 +9478,10 @@ async fn produce_transition_texture(
         return Ok(incoming_encoder);
     }
 
-    let incoming_parts = layers.transition_side_parts(&incoming.uniforms);
+    // Both sides take the outgoing side's parts: masks, 3D blur and overlay
+    // order are timeline state shared by the two, and a background drawn
+    // into the sides must not be drawn again underneath them.
+    let incoming_parts = outgoing_parts;
     layers.render_parts(
         &constants.device,
         &constants.queue,
@@ -9489,20 +9492,23 @@ async fn produce_transition_texture(
         incoming_parts,
     )?;
     compositor.capture_incoming(&mut incoming_encoder, session.current_texture());
-    layers.render_parts(
-        &constants.device,
-        &constants.queue,
-        &mut incoming_encoder,
-        session,
-        &incoming.uniforms,
-        incoming.render_display,
-        LayerParts::BACKGROUND,
-    )?;
+    if !incoming_parts.background {
+        layers.render_parts(
+            &constants.device,
+            &constants.queue,
+            &mut incoming_encoder,
+            session,
+            &incoming.uniforms,
+            incoming.render_display,
+            LayerParts::BACKGROUND,
+        )?;
+    }
     compositor.render_layers(
         &constants.queue,
         &mut incoming_encoder,
         session.current_texture_view(),
         parameters,
+        incoming_parts.background,
     );
     if !incoming_parts.overlays {
         layers.render_parts(

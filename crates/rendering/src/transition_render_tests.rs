@@ -737,3 +737,31 @@ async fn a_sensitive_mask_over_a_clip_edge_matches_the_plain_frames_at_both_ends
         assert!(last.0 <= 1, "{kind:?} at its last frame: {last:?}");
     }
 }
+
+#[tokio::test]
+async fn a_masked_transition_over_a_translucent_background_draws_it_once() {
+    let mut fixture = fixture_with(false, true).await;
+    let mut project = (*fixture.project).clone();
+    project.background.padding = 20.0;
+    project.background.source = BackgroundSource::Color {
+        value: [0, 0, 255],
+        alpha: 128,
+    };
+    fixture.project = Arc::new(project);
+    let cursor = CursorEvents::default();
+    let sides = sides(&fixture, &cursor);
+    let outgoing = render_plain(&fixture, &sides.outgoing, &cursor).await;
+    let incoming = render_plain(&fixture, &sides.incoming, &cursor).await;
+    for kind in [
+        ClipTransitionType::PushLeft,
+        ClipTransitionType::WipeDown,
+        ClipTransitionType::Zoom,
+    ] {
+        let start = render_transition(&fixture, &sides, &cursor, kind, 0.0).await;
+        let first = worst_pixel(&start, &outgoing);
+        assert!(first.0 <= 1, "{kind:?} at its first frame: {first:?}");
+        let end = render_transition(&fixture, &sides, &cursor, kind, 1.0).await;
+        let last = worst_pixel(&end, &incoming);
+        assert!(last.0 <= 1, "{kind:?} at its last frame: {last:?}");
+    }
+}
