@@ -304,13 +304,15 @@ fn seeked_playhead(time: f64, frame: u32, playing: bool) -> f64 {
 }
 
 /// The part of a frame layout the canvas overlay draws from. A preset
-/// caption has no box on the canvas, so a new caption under the playhead only
-/// rebuilds the editor when it is placed manually.
-fn canvas_hit_layout(layout: FrameLayout) -> FrameLayout {
+/// caption has no box on the canvas, and the overlay only draws while the
+/// player is hovered or dragged, so a new caption under the playhead only
+/// rebuilds the editor when its box could be on screen. Hovering the player
+/// rebuilds the editor anyway, which picks up the latest box.
+fn canvas_hit_layout(layout: FrameLayout, overlay_live: bool) -> FrameLayout {
     FrameLayout {
         caption: layout
             .caption
-            .filter(cap_rendering::CaptionFrameBox::is_manual),
+            .filter(|caption| overlay_live && caption.is_manual()),
         ..layout
     }
 }
@@ -6638,8 +6640,11 @@ impl EditorWindow {
         }
         let handoff_target = self.transport.as_ref().and(self.ordinary_handoff_frame);
         let first_frame = self.latest_frame.is_none();
-        let layout_changed =
-            self.frame_layout.map(canvas_hit_layout) != Some(canvas_hit_layout(frame.layout));
+        let overlay_live = self.player_panel_hovered || self.canvas_drag.is_some();
+        let layout_changed = self
+            .frame_layout
+            .map(|layout| canvas_hit_layout(layout, overlay_live))
+            != Some(canvas_hit_layout(frame.layout, overlay_live));
         if self.frame_layout.map(|layout| layout.output_size) != Some(frame.layout.output_size) {
             tracing::info!(
                 output_size = ?frame.layout.output_size,
@@ -14583,7 +14588,8 @@ mod tests {
 
     /// Scrubbing across preset captions changes only the caption box, which
     /// the canvas never draws, so it costs no editor rebuild. A manual
-    /// caption's box is a canvas hit target, so its change does.
+    /// caption's box is a canvas hit target, so its change does while the
+    /// overlay is live, and not while the pointer is elsewhere.
     #[test]
     fn only_a_manual_caption_box_changes_the_canvas_layout() {
         let base = FrameLayout {
@@ -14600,16 +14606,20 @@ mod tests {
             caption: Some(cap_rendering::CaptionFrameBox::new(bounds, "manual")),
             ..base
         };
-        assert_eq!(canvas_hit_layout(preset([0., 0., 10., 10.])), base);
+        assert_eq!(canvas_hit_layout(preset([0., 0., 10., 10.]), true), base);
         assert_eq!(
-            canvas_hit_layout(preset([0., 0., 10., 10.])),
-            canvas_hit_layout(preset([5., 5., 50., 20.]))
+            canvas_hit_layout(preset([0., 0., 10., 10.]), true),
+            canvas_hit_layout(preset([5., 5., 50., 20.]), true)
         );
         assert_ne!(
-            canvas_hit_layout(manual([0., 0., 10., 10.])),
-            canvas_hit_layout(manual([5., 5., 50., 20.]))
+            canvas_hit_layout(manual([0., 0., 10., 10.]), true),
+            canvas_hit_layout(manual([5., 5., 50., 20.]), true)
         );
-        assert_ne!(canvas_hit_layout(manual([0., 0., 10., 10.])), base);
+        assert_ne!(canvas_hit_layout(manual([0., 0., 10., 10.]), true), base);
+        assert_eq!(
+            canvas_hit_layout(manual([0., 0., 10., 10.]), false),
+            canvas_hit_layout(manual([5., 5., 50., 20.]), false)
+        );
     }
 
     /// Every failure `EditorInstance::new` would return, plus the one it would
