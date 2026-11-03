@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::ops::Range;
 
 use bytemuck::{Pod, Zeroable};
-use cap_project::{CaptionWord, XY};
+use cap_project::{CaptionWord, XY, caption_words::caption_display_segment};
 use glyphon::cosmic_text::LayoutRunIter;
 use glyphon::{
     Attrs, Buffer, Cache, Color, Family, FontSystem, Metrics, Resolution, Shaping, SwashCache,
@@ -652,9 +652,12 @@ impl CaptionsLayer {
         let default_fade = caption_data.settings.fade_duration;
         let word_transition_duration = caption_data.settings.word_transition_duration;
 
-        let Some(active) =
-            find_active_caption_segment(current_time, &timeline.caption_segments, default_fade)
-        else {
+        let Some(active) = find_active_caption_segment(
+            current_time,
+            &timeline.caption_segments,
+            default_fade,
+            caption_data.settings.show_filler_words,
+        ) else {
             self.current_text = None;
             return;
         };
@@ -664,7 +667,7 @@ impl CaptionsLayer {
             .fade_duration_override
             .unwrap_or(default_fade) as f64;
 
-        let effective_end = caption_segment_effective_end(active.segment);
+        let effective_end = caption_segment_effective_end(&active.segment);
 
         self.update_caption(
             Some(active.segment.text.clone()),
@@ -1174,7 +1177,7 @@ impl CaptionsLayer {
 }
 
 struct ActiveCaptionSegment<'a> {
-    segment: &'a cap_project::CaptionTrackSegment,
+    segment: Cow<'a, cap_project::CaptionTrackSegment>,
 }
 
 fn caption_segment_effective_end(segment: &cap_project::CaptionTrackSegment) -> f64 {
@@ -1190,20 +1193,33 @@ fn find_active_caption_segment<'a>(
     time: f64,
     segments: &'a [cap_project::CaptionTrackSegment],
     default_fade_duration: f32,
+    show_filler_words: bool,
 ) -> Option<ActiveCaptionSegment<'a>> {
     for segment in segments {
-        if time >= segment.start && time < caption_segment_effective_end(segment) {
-            return Some(ActiveCaptionSegment { segment });
+        if time < segment.start || time >= caption_segment_effective_end(segment) {
+            continue;
+        }
+        if let Some(display) = caption_display_segment(segment, show_filler_words)
+            && time >= display.start
+            && time < caption_segment_effective_end(&display)
+        {
+            return Some(ActiveCaptionSegment { segment: display });
         }
     }
 
     for segment in segments {
-        let effective_end = caption_segment_effective_end(segment);
         let fade = segment
             .fade_duration_override
             .unwrap_or(default_fade_duration) as f64;
-        if time >= effective_end && time < effective_end + fade {
-            return Some(ActiveCaptionSegment { segment });
+        let raw_end = caption_segment_effective_end(segment);
+        if time < segment.start.min(raw_end) || time >= raw_end + fade {
+            continue;
+        }
+        if let Some(display) = caption_display_segment(segment, show_filler_words) {
+            let effective_end = caption_segment_effective_end(&display);
+            if time >= effective_end && time < effective_end + fade {
+                return Some(ActiveCaptionSegment { segment: display });
+            }
         }
     }
 
@@ -1317,12 +1333,44 @@ mod tests {
     }
 
     #[test]
+    fn hidden_fillers_do_not_show_or_hold_a_caption() {
+        let mut seg = segment(
+            1.0,
+            3.2,
+            vec![
+                word(1.0, 1.4),
+                word(1.6, 1.9),
+                word(1.9, 2.4),
+                word(2.8, 3.2),
+            ],
+        );
+        for (word, text) in seg.words.iter_mut().zip(["Um,", "we", "ship", "uh."]) {
+            word.text = text.to_string();
+        }
+        seg.text = "Um, we ship uh.".to_string();
+        let segments = vec![seg];
+
+        assert!(find_active_caption_segment(1.2, &segments, 0.0, false).is_none());
+        assert!(find_active_caption_segment(3.0, &segments, 0.0, false).is_none());
+        let active = find_active_caption_segment(1.7, &segments, 0.0, false).unwrap();
+        assert_eq!(active.segment.text, "we ship");
+        assert_eq!(active.segment.words.len(), 2);
+        assert!((caption_segment_effective_end(&active.segment) - 2.4).abs() < 1e-6);
+        let lingering = find_active_caption_segment(2.5, &segments, 0.2, false).unwrap();
+        assert_eq!(lingering.segment.text, "we ship");
+
+        let verbatim = find_active_caption_segment(1.2, &segments, 0.0, true).unwrap();
+        assert_eq!(verbatim.segment.text, "Um, we ship uh.");
+        assert!(find_active_caption_segment(3.0, &segments, 0.0, true).is_some());
+    }
+
+    #[test]
     fn inflated_caption_does_not_stay_active_after_clamp() {
         let segments = vec![segment(36.1, 42.31, vec![word(36.1, 42.31)])];
         // Well within the original (bloated) end, but past the clamped end.
-        assert!(find_active_caption_segment(41.0, &segments, 0.2).is_none());
+        assert!(find_active_caption_segment(41.0, &segments, 0.2, false).is_none());
         // Still active while the (capped) word is on screen.
-        assert!(find_active_caption_segment(37.0, &segments, 0.2).is_some());
+        assert!(find_active_caption_segment(37.0, &segments, 0.2, false).is_some());
     }
 
     #[test]
