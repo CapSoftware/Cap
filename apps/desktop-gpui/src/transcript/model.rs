@@ -430,6 +430,33 @@ impl TranscriptEdl {
         ))
     }
 
+    pub fn output_start_of(&self, word: &Word) -> Option<f64> {
+        self.source_to_output(word.start).or_else(|| {
+            let index = self
+                .kept_ranges
+                .partition_point(|range| range.end <= word.start);
+            let range = self.kept_ranges.get(index)?;
+            if range.start >= word.end {
+                return None;
+            }
+            self.source_to_output(range.start.max(word.start))
+        })
+    }
+
+    pub fn output_end_of(&self, word: &Word) -> Option<f64> {
+        self.source_to_output(word.end).or_else(|| {
+            let index = self
+                .kept_ranges
+                .partition_point(|range| range.start < word.end)
+                .checked_sub(1)?;
+            let range = &self.kept_ranges[index];
+            if range.end <= word.start {
+                return None;
+            }
+            self.source_to_output(range.end.min(word.end))
+        })
+    }
+
     /// The speed `range` plays at when one clip plays all of it; `None` when it
     /// is cut, or crosses into another clip where the speed may differ.
     pub fn timescale_over(&self, range: Range<f64>) -> Option<f64> {

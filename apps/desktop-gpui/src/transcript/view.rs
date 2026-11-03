@@ -265,11 +265,7 @@ impl ParagraphPainter {
 
         let first_kept = paragraph.words.clone().find(|word| self.is_kept(*word));
         let stamp = first_kept
-            .and_then(|word| {
-                self.edl
-                    .as_ref()?
-                    .source_to_output(self.doc.words[word].start)
-            })
+            .and_then(|word| self.edl.as_ref()?.output_start_of(&self.doc.words[word]))
             .map(crate::editor_timeline::format_time);
         let hovering_cut_here = self
             .hovered_cut
@@ -405,7 +401,7 @@ fn filler_row(
         },
     )]);
     let stamp = edl
-        .source_to_output(doc.words[words.start].start)
+        .output_start_of(&doc.words[words.start])
         .map(crate::editor_timeline::format_time)
         .unwrap_or_default();
     let on_row = {
@@ -506,7 +502,7 @@ fn pause_row(
 ) -> AnyElement {
     let word = pause.after_word;
     let stamp = edl
-        .source_to_output(doc.words[word].end)
+        .output_end_of(&doc.words[word])
         .map(crate::editor_timeline::format_time)
         .unwrap_or_default();
     let before = doc.text_of(word.saturating_sub(3)..word + 1);
@@ -697,14 +693,16 @@ impl EditorWindow {
         let Some((doc, edl)) = self.transcript_doc() else {
             return;
         };
-        let Some(source) = doc.words.get(word).map(|word| word.start) else {
+        let Some(output) = doc
+            .words
+            .get(word)
+            .and_then(|word| edl.output_start_of(word))
+        else {
             return;
         };
-        if let Some(output) = edl.source_to_output(source) {
-            self.transcript.user_scrolled = None;
-            self.seek_to_time(output, cx);
-            self.transcript.active = edl.is_kept(word).then_some(word);
-        }
+        self.transcript.user_scrolled = None;
+        self.seek_to_time(output, cx);
+        self.transcript.active = edl.is_kept(word).then_some(word);
     }
 
     pub(crate) fn transcript_mouse_down(
@@ -1022,9 +1020,8 @@ impl EditorWindow {
         };
         let last = kept.next_back().unwrap_or(first);
         let (Some(from), Some(until)) = (
-            edl.source_to_output(doc.words[first].start),
-            edl.source_to_output(doc.words[last].end)
-                .or_else(|| edl.source_to_output(doc.words[last].start)),
+            edl.output_start_of(&doc.words[first]),
+            edl.output_end_of(&doc.words[last]),
         ) else {
             return;
         };
@@ -1137,7 +1134,7 @@ impl EditorWindow {
         {
             let join = (first..doc.words.len())
                 .find(|word| edl.is_kept(*word))
-                .and_then(|word| edl.source_to_output(doc.words[word].start));
+                .and_then(|word| edl.output_start_of(&doc.words[word]));
             if let Some(join) = join {
                 self.seek_to_time(join, cx);
                 self.transcript_sync_active(false, cx);
@@ -1371,9 +1368,8 @@ impl EditorWindow {
         self.transcript_reveal(words.start, false);
         if listen
             && let (Some(start), Some(end)) = (
-                edl.source_to_output(doc.words[words.start].start),
-                edl.source_to_output(doc.words[words.end - 1].end)
-                    .or_else(|| edl.source_to_output(doc.words[words.end - 1].start)),
+                edl.output_start_of(&doc.words[words.start]),
+                edl.output_end_of(&doc.words[words.end - 1]),
             )
         {
             self.play_range((start - LISTEN_BEFORE).max(0.0), end + LISTEN_AFTER, cx);
@@ -2127,8 +2123,8 @@ impl EditorWindow {
                         let first = kept_words.next().unwrap_or(range.start);
                         let last = kept_words.next_back().unwrap_or(first);
                         let seconds = edl
-                            .source_to_output(doc.words[last].end)
-                            .zip(edl.source_to_output(doc.words[first].start))
+                            .output_end_of(&doc.words[last])
+                            .zip(edl.output_start_of(&doc.words[first]))
                             .map_or(0.0, |(end, start)| (end - start).max(0.0));
                         tr::editor::transcript::selection(
                             kept,

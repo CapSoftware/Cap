@@ -899,3 +899,28 @@ fn a_restore_that_fails_part_way_changes_nothing() {
     assert_eq!(result, Err(RestoreBlocker::Transition));
     assert_eq!(bounds(&project), before);
 }
+
+#[test]
+fn partly_trimmed_words_map_to_their_surviving_part() {
+    let words = [
+        ("first", 0.5, 1.0),
+        ("middle", 1.2, 1.7),
+        ("last", 1.9, 2.4),
+    ];
+    let durations = [3.0];
+    let mut project = project(&words, &durations);
+    let segment = &mut timeline_mut(&mut project).segments[0];
+    segment.start = 0.65;
+    segment.end = 2.2;
+    let (doc, edl) = model(&project, &durations);
+    assert!(edl.is_kept(0) && edl.is_kept(2));
+    assert_eq!(edl.source_to_output(doc.words[0].start), None);
+    assert_eq!(edl.source_to_output(doc.words[2].end), None);
+
+    let start = edl.output_start_of(&doc.words[0]).unwrap();
+    assert!(close(start, 0.0), "{start}");
+    let end = edl.output_end_of(&doc.words[2]).unwrap();
+    assert!(close(end, 2.2 - 0.65), "{end}");
+    let middle = edl.output_start_of(&doc.words[1]).unwrap();
+    assert!(close(middle, 1.2 - 0.65), "{middle}");
+}
