@@ -9,6 +9,7 @@ import { type User, Video } from "@cap/web-domain";
 import {
 	and,
 	asc,
+	desc,
 	eq,
 	gte,
 	inArray,
@@ -38,6 +39,7 @@ export const DESKTOP_SEGMENTS_RECOVERY_MIN_AGE_MS = 60 * 60 * 1_000;
 export const DESKTOP_SEGMENTS_RECOVERY_BATCH_SIZE = 20;
 export const DESKTOP_SEGMENTS_LEGACY_RECOVERY_MAX_AGE_MS =
 	7 * 24 * 60 * 60 * 1_000;
+export const DESKTOP_SEGMENTS_LEGACY_NEWEST_BATCH_SIZE = 5;
 
 const RECOVERABLE_UPLOAD_PHASES = [
 	"uploading",
@@ -253,35 +255,49 @@ export async function recoverStaleDesktopSegments({
 	const staleBefore = new Date(
 		now.getTime() - DESKTOP_SEGMENTS_RECOVERY_MIN_AGE_MS,
 	);
-	const legacy = await db()
-		.select({ videoId: videos.id, ownerId: videos.ownerId })
-		.from(videoUploads)
-		.innerJoin(videos, eq(videoUploads.videoId, videos.id))
-		.leftJoin(
-			videoProcessingJobs,
-			eq(videoUploads.videoId, videoProcessingJobs.videoId),
-		)
-		.where(
-			and(
-				inArray(videoUploads.phase, RECOVERABLE_UPLOAD_PHASES),
-				lte(videoUploads.updatedAt, staleBefore),
-				gte(
-					videoUploads.startedAt,
-					new Date(now.getTime() - DESKTOP_SEGMENTS_LEGACY_RECOVERY_MAX_AGE_MS),
-				),
-				isNull(videoProcessingJobs.videoId),
-				or(
-					isNull(videoUploads.processingError),
-					notLike(
-						videoUploads.processingError,
-						`${DESKTOP_RECORDING_SOURCE_REUPLOAD_REQUIRED}:%`,
+	const listLegacy = (order: typeof asc, limit: number) =>
+		db()
+			.select({ videoId: videos.id, ownerId: videos.ownerId })
+			.from(videoUploads)
+			.innerJoin(videos, eq(videoUploads.videoId, videos.id))
+			.leftJoin(
+				videoProcessingJobs,
+				eq(videoUploads.videoId, videoProcessingJobs.videoId),
+			)
+			.where(
+				and(
+					inArray(videoUploads.phase, RECOVERABLE_UPLOAD_PHASES),
+					lte(videoUploads.updatedAt, staleBefore),
+					gte(
+						videoUploads.startedAt,
+						new Date(
+							now.getTime() - DESKTOP_SEGMENTS_LEGACY_RECOVERY_MAX_AGE_MS,
+						),
 					),
+					isNull(videoProcessingJobs.videoId),
+					or(
+						isNull(videoUploads.processingError),
+						notLike(
+							videoUploads.processingError,
+							`${DESKTOP_RECORDING_SOURCE_REUPLOAD_REQUIRED}:%`,
+						),
+					),
+					sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.source}, '$.type')) = 'desktopSegments'`,
 				),
-				sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.source}, '$.type')) = 'desktopSegments'`,
-			),
-		)
-		.orderBy(asc(videoUploads.updatedAt), asc(videoUploads.videoId))
-		.limit(remaining);
+			)
+			.orderBy(order(videoUploads.updatedAt), order(videoUploads.videoId))
+			.limit(limit);
+	// Legacy rows that never finish keep their oldest `updatedAt`, so the
+	// oldest-first pass checks each recording only shortly before it leaves
+	// the window. That pass keeps every slot it had; a few of the newest
+	// eligible rows are checked on top, so a recording is first checked soon
+	// after it qualifies.
+	const oldest = await listLegacy(asc, remaining);
+	const picked = new Set(oldest.map((candidate) => candidate.videoId));
+	const newest = (
+		await listLegacy(desc, DESKTOP_SEGMENTS_LEGACY_NEWEST_BATCH_SIZE)
+	).filter((candidate) => !picked.has(candidate.videoId));
+	const legacy = [...oldest, ...newest];
 	for (const candidate of legacy) {
 		try {
 			const result = await completeDesktopSegmentsManifestAndQueue({

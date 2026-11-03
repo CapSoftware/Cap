@@ -34,6 +34,7 @@ import {
 	uploadFileToStorage,
 	uploadToS3,
 } from "../../lib/media-video";
+import { ensureTempDir, getTempDir } from "../../lib/temp-files";
 
 const FIXTURES_DIR = join(import.meta.dir, "..", "fixtures");
 const TEST_VIDEO_WITH_AUDIO = join(FIXTURES_DIR, "test-with-audio.mp4");
@@ -67,6 +68,23 @@ function readH264Level(filePath: string): number {
 		.trim();
 
 	return Number.parseInt(output, 10);
+}
+
+function readVideoPixelFormat(filePath: string): string {
+	return execFileSync("ffprobe", [
+		"-hide_banner",
+		"-v",
+		"error",
+		"-select_streams",
+		"v:0",
+		"-show_entries",
+		"stream=pix_fmt",
+		"-of",
+		"default=noprint_wrappers=1:nokey=1",
+		filePath,
+	])
+		.toString()
+		.trim();
 }
 
 function readDecodedStreamHash(filePath: string, stream: "v" | "a") {
@@ -511,6 +529,78 @@ describe("generatePreviewGif integration tests", () => {
 });
 
 describe("processVideo integration tests", () => {
+	test.each([false, true])(
+		"rejects cancelled video processing with remuxOnly=%s",
+		async (remuxOnly) => {
+			const metadata = await probeVideo(`file://${TEST_VIDEO_WITH_AUDIO}`);
+			const controller = new AbortController();
+			const reason = new Error("Recording worker lease expired");
+			controller.abort(reason);
+			const outcome = await processVideo(
+				TEST_VIDEO_WITH_AUDIO,
+				metadata,
+				{ remuxOnly },
+				undefined,
+				controller.signal,
+			).then(
+				(output) => {
+					tempFiles.push(output.path);
+					return output;
+				},
+				(error: unknown) => error,
+			);
+			expect(outcome).toBe(reason);
+		},
+	);
+
+	test("rejects cancellation during video processing setup", async () => {
+		const metadata = await probeVideo(`file://${TEST_VIDEO_WITH_AUDIO}`);
+		const controller = new AbortController();
+		const reason = new Error("Recording worker lease expired");
+		const processing = processVideo(
+			TEST_VIDEO_WITH_AUDIO,
+			metadata,
+			{},
+			undefined,
+			controller.signal,
+		);
+		queueMicrotask(() => controller.abort(reason));
+		const outcome = await processing.then(
+			(output) => {
+				tempFiles.push(output.path);
+				return output;
+			},
+			(error: unknown) => error,
+		);
+		expect(outcome).toBe(reason);
+	});
+
+	test("rejects cancellation during video progress and removes the output", async () => {
+		const metadata = await probeVideo(`file://${TEST_VIDEO_WITH_AUDIO}`);
+		const controller = new AbortController();
+		const reason = new Error("Recording worker lease expired");
+		await ensureTempDir();
+		const existingFiles = new Set(readdirSync(getTempDir()));
+		const outcome = await processVideo(
+			TEST_VIDEO_WITH_AUDIO,
+			metadata,
+			{ remuxOnly: true },
+			() => controller.abort(reason),
+			controller.signal,
+		).then(
+			(output) => {
+				tempFiles.push(output.path);
+				return output;
+			},
+			(error: unknown) => error,
+		);
+		expect(controller.signal.aborted).toBe(true);
+		expect(outcome).toBe(reason);
+		expect(
+			readdirSync(getTempDir()).filter((name) => !existingFiles.has(name)),
+		).toEqual([]);
+	});
+
 	test.each(["libvpx", "libvpx-vp9"])(
 		"preserves the playable ending of sparse %s screen recordings",
 		async (codec) => {
@@ -732,6 +822,57 @@ describe("processVideo integration tests", () => {
 			expect(audioPlaylist).toContain(
 				"https://cdn.example/video/audio/chunk-48000.m4s?Policy=a&Signature=b",
 			);
+		} finally {
+			globalThis.fetch = originalFetch;
+			rmSync(manifestDir, { recursive: true, force: true });
+		}
+	});
+
+	test("skips the zero-length closing entry Loom adds to DASH timelines", async () => {
+		const originalFetch = globalThis.fetch;
+		const manifestDir = mkdtempSync(join(tmpdir(), "cap-mpd-zero-"));
+
+		globalThis.fetch = (async () =>
+			new Response(
+				`<MPD mediaPresentationDuration="PT7.001S">
+					<Period id="0">
+						<AdaptationSet id="1" contentType="video">
+							<Representation id="1" bandwidth="500000" codecs="vp9" mimeType="video/webm" width="1280" height="720">
+								<SegmentTemplate timescale="1000000" initialization="loom-video-init.webm" media="loom-video-$Number$.webm" startNumber="0">
+									<SegmentTimeline>
+										<S t="0" d="3539000"/>
+										<S t="3522000" d="3479000"/>
+										<S t="7001000" d="0"/>
+									</SegmentTimeline>
+								</SegmentTemplate>
+							</Representation>
+						</AdaptationSet>
+					</Period>
+				</MPD>`,
+				{ status: 200, statusText: "OK" },
+			)) as unknown as typeof fetch;
+
+		try {
+			const masterPath = await materializeMpdAsHlsPlaylist(
+				"https://luna.example/id/x/resource/dash/playlist.mpd?Signature=s",
+				manifestDir,
+			);
+			const masterLines = readFileSync(masterPath, "utf8").split("\n");
+			const videoPlaylist = readFileSync(
+				masterLines[
+					masterLines.findIndex((line) =>
+						line.startsWith("#EXT-X-STREAM-INF:"),
+					) + 1
+				] ?? "",
+				"utf8",
+			);
+
+			expect(videoPlaylist).toContain("loom-video-0.webm?Signature=s");
+			expect(videoPlaylist).toContain("loom-video-1.webm?Signature=s");
+			expect(videoPlaylist).not.toContain("loom-video-2.webm");
+			expect(videoPlaylist.match(/#EXTINF:/g)?.length).toBe(2);
+			expect(videoPlaylist).toContain("#EXTINF:3.539000,");
+			expect(videoPlaylist).toContain("#EXTINF:3.479000,");
 		} finally {
 			globalThis.fetch = originalFetch;
 			rmSync(manifestDir, { recursive: true, force: true });
@@ -1185,6 +1326,56 @@ describe("processVideo integration tests", () => {
 			expect(outputMetadata.duration).toBeCloseTo(metadata.duration, 2);
 
 			await tempFile.cleanup();
+		} finally {
+			rmSync(workDir, { recursive: true, force: true });
+		}
+	}, 120000);
+
+	test("re-encodes h264 input that is not 8-bit 4:2:0", async () => {
+		const workDir = mkdtempSync(join(tmpdir(), "cap-h264-pixel-format-"));
+		try {
+			for (const source of [
+				{ pixelFormat: "yuv444p", level: "3.0" },
+				{ pixelFormat: "yuv420p10le", level: "3.0" },
+				{ pixelFormat: "yuv444p", level: "6.2" },
+			]) {
+				const sourcePath = join(
+					workDir,
+					`${source.pixelFormat}-${source.level}.mp4`,
+				);
+				execFileSync("ffmpeg", [
+					"-hide_banner",
+					"-loglevel",
+					"error",
+					"-y",
+					"-i",
+					TEST_VIDEO_WITH_AUDIO,
+					"-c:v",
+					"libx264",
+					"-pix_fmt",
+					source.pixelFormat,
+					"-level:v",
+					source.level,
+					"-c:a",
+					"copy",
+					sourcePath,
+				]);
+				const metadata = await probeVideo(`file://${sourcePath}`);
+
+				const tempFile = await processVideo(sourcePath, metadata, {
+					maxWidth: metadata.width,
+					maxHeight: metadata.height,
+					normalizeH264Level: true,
+				});
+				tempFiles.push(tempFile.path);
+
+				expect(readVideoPixelFormat(tempFile.path)).toBe("yuv420p");
+				const outputMetadata = await probeVideo(`file://${tempFile.path}`);
+				expect(outputMetadata.videoCodec).toBe("h264");
+				expect(outputMetadata.audioCodec).toBe("aac");
+
+				await tempFile.cleanup();
+			}
 		} finally {
 			rmSync(workDir, { recursive: true, force: true });
 		}

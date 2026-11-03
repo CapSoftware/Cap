@@ -4,7 +4,7 @@ An independent Next.js app for `status.cap.so`. It reuses the current landing pa
 
 ## Deploy on Vercel
 
-1. Import this repository into a **separate Vercel project**, with root directory **`apps/status`**, framework **Next.js**, and build command **`bun run build`**. Keep access to the repository root enabled so Vercel uses the existing Bun workspace and lockfile. Use Bun 1.4.0. Do not attach the main site’s environment variables.
+1. Import this repository into a **separate Vercel project**, with root directory **`apps/status`**, framework **Next.js**, and build command **`bun run build`**. Keep access to the repository root enabled so Vercel uses the existing Bun workspace and lockfile. Use Bun 1.4.4. Do not attach the main site’s environment variables.
 2. Attach a dedicated Upstash Redis database through the Vercel Marketplace. Set `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` on the production environment. Keep preview data in a separate database, or leave preview storage unconfigured.
 3. Set a random `CRON_SECRET` of at least 32 bytes on production. Vercel sends it as the cron’s Bearer token. Do not prefix any of these variables with `NEXT_PUBLIC_`.
 4. Configure the production service URLs below. Deploy on a plan supporting **five-minute cron jobs** (Vercel Pro or higher), then add `status.cap.so` to this project and point its DNS at Vercel. The page starts with honest “no data” states until checks run.

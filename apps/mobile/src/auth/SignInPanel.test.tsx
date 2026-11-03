@@ -934,6 +934,72 @@ describe("SignInPanel", () => {
 		).toBe(true);
 	});
 
+	it("shows a retry-later message when code requests are throttled", async () => {
+		const { MobileApiError } = await import("@/api/mobile");
+		authFns.requestEmailCode.mockRejectedValueOnce(
+			new MobileApiError("Too Many Requests", 429, null),
+		);
+		const renderer = await renderPanel();
+		const [emailInput] = renderer.root.findAllByProps({
+			placeholder: "tim@apple.com",
+		});
+		const [emailButton] = renderer.root.findAllByProps({
+			accessibilityLabel: "Login with email",
+		});
+		if (!emailInput || !emailButton) {
+			throw new Error("Email sign in controls were not rendered");
+		}
+
+		await act(async () => {
+			emailInput.props.onChangeText("richie@cap.so");
+		});
+		await act(async () => {
+			await emailButton.props.onPress();
+		});
+
+		expect(getTextNodes(renderer.toJSON())).toContain(
+			"Too many codes requested. Try again in a few minutes.",
+		);
+	});
+
+	it("shows a retry-later message when code verification is throttled", async () => {
+		const { MobileApiError } = await import("@/api/mobile");
+		authFns.verifyEmailCode.mockRejectedValueOnce(
+			new MobileApiError("Too Many Requests", 429, null),
+		);
+		const renderer = await renderPanel();
+		const [emailInput] = renderer.root.findAllByProps({
+			placeholder: "tim@apple.com",
+		});
+		const [emailButton] = renderer.root.findAllByProps({
+			accessibilityLabel: "Login with email",
+		});
+		if (!emailInput || !emailButton) {
+			throw new Error("Email sign in controls were not rendered");
+		}
+
+		await act(async () => {
+			emailInput.props.onChangeText("richie@cap.so");
+		});
+		await act(async () => {
+			await emailButton.props.onPress();
+		});
+
+		const [codeInput] = renderer.root.findAllByProps({
+			textContentType: "oneTimeCode",
+		});
+		if (!codeInput) throw new Error("One-time code input was not rendered");
+
+		await act(async () => {
+			codeInput.props.onChangeText("123456");
+			await Promise.resolve();
+		});
+
+		expect(getTextNodes(renderer.toJSON())).toContain(
+			"Too many attempts. Try again in a few minutes.",
+		);
+	});
+
 	it("switches to a web-like verification code step after requesting email", async () => {
 		const renderer = await renderPanel();
 		const [emailInput] = renderer.root.findAllByProps({

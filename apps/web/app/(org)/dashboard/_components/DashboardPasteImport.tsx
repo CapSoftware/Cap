@@ -82,6 +82,7 @@ export function DashboardPasteImport() {
 			})
 				.then((ok) => {
 					if (ok) router.push("/dashboard/caps");
+					else router.refresh();
 				})
 				.finally(() => {
 					handlingPasteRef.current = false;

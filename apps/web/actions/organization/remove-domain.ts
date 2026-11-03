@@ -28,7 +28,7 @@ export async function removeOrganizationDomain(
 
 	try {
 		if (organization.customDomain) {
-			await fetch(
+			const response = await fetch(
 				`https://api.vercel.com/v9/projects/${
 					process.env.VERCEL_PROJECT_ID
 				}/domains/${organization.customDomain.toLowerCase()}?teamId=${
@@ -41,6 +41,9 @@ export async function removeOrganizationDomain(
 					},
 				},
 			);
+			if (!response.ok && response.status !== 404) {
+				throw new Error("Failed to remove domain from hosting provider");
+			}
 		}
 
 		await db()

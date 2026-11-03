@@ -1,0 +1,209 @@
+---
+title: "A technical deep dive into Cap's migration to GPUI"
+description: Why we moved Cap's desktop app off Tauri and web views, how we rebuilt it in GPUI, and what changed once there was no browser inside it.
+publishedAt: "2026-10-21"
+category: Technical
+image: /blog/rebuilding-cap-in-gpui.jpg
+video: /blog/rebuilding-cap-in-gpui.mp4
+author: Richie McIlroy
+tags: Engineering, Rust, GPUI, Performance
+layout: feature
+---
+
+Cap 0.6.1 is out. It's the biggest change we've made to the desktop app since we started, and it's the first version that doesn't have a web browser inside it.
+
+<CapEmbed id="68d8avca11vv12x" title="Cap v0.6.1 release video" />
+
+Until now, Cap's desktop app was built with [Tauri](https://tauri.app). Tauri is a lot like Electron, in that you build your app's interface with HTML, CSS and JavaScript. The difference is that Electron ships a full copy of Chromium inside every app, while Tauri uses the browser engine that already comes with your operating system, which is called a web view. So every window in Cap was really a small web page, running on Safari's engine on a Mac, Microsoft Edge's on Windows and WebKitGTK on Linux.
+
+That kept Cap small and fast for a long time. It also meant our interface was running in three different browsers that we didn't control, and a lot of our bugs came from there. Cap's panels overflowed on Windows if you'd changed your text size, windows showed up blank on some Linux graphics drivers, and area selection on WebKit cancelled itself as soon as you started dragging.
+
+In 0.6.1 every window is drawn on your GPU by Rust code instead, using [GPUI](https://www.gpui.rs), the UI framework the Zed team built for their code editor. It should look and work like the Cap you're used to.
+
+<BeforeAfter />
+
+We had the first GPUI build working overnight in August. We could have shipped it sooner, but we wanted to roll it out safely, so it spent a few weeks as an experimental option in 0.6.0 first. The engine mostly came across as it was, with a few changes to get the most out of the new app.
+
+## Drawn like a game
+
+If I had to explain it in one line, Cap's interface used to work like a web page, and now it works more like a video game.
+
+A web page is a document. Each Cap window was a tree of HTML elements, and the browser had to style, lay out, paint and composite all of it, using whatever browser engine your OS shipped with.
+
+Games work differently. They describe the whole screen and draw it on the GPU each time, and GPUI does the same. When a window changes, GPUI lays it out again and turns it into one flat list of shapes. Cap's main window only uses five kinds of shape.
+
+- **Shadows.** Blurred rounded rectangles under the window and its cards.
+- **Quads.** Every box, with its fill, border and rounded corners.
+- **Glyphs.** The text. Each letter is cut out of a texture that stays on the GPU.
+- **Icons.** SVGs, rasterized once and reused on every frame.
+- **Images.** Full-colour pictures, like the Cap logo.
+
+That list is sent to the GPU in batches and drawn by a handful of small shaders, using Metal on macOS, Direct3D 11 on Windows and Vulkan on Linux. There's no DOM, CSS engine or JavaScript involved. One thing Cap doesn't copy from games is redrawing 60 times a second for no reason. If a window has nothing new to show, it stops asking for frames (more on that further down).
+
+Zed wrote about this in more depth in [Leveraging Rust and the GPU to render user interfaces at 120 FPS](https://zed.dev/blog/videogame).
+
+## Where we started
+
+Cap has always been made of two parts.
+
+The first is the engine. It captures your screen, camera, mic and system audio, writes everything to disk without dropping frames, renders your edits on the GPU and encodes your exports. It's been written in Rust from day one, and it lives in a set of crates (Rust's name for libraries) that don't know anything about windows or buttons.
+
+The second is the interface. Up to 0.6.0 that was a [SolidJS](https://www.solidjs.com) app running inside Tauri. Each Cap window (the main window, the camera bubble, the recording bar, the editor and so on) had its own web view, which is basically a browser tab without the browser around it. The JavaScript running in those web views couldn't touch the recording engine directly, so every click turned into a message to the Rust side, which did the work and sent the result back.
+
+You also don't ship the web view yourself. On a Mac it's WKWebView, which updates along with Safari and macOS. On Windows it's WebView2, which is built on Microsoft Edge and updates itself in the background. On Linux it's WebKitGTK, in whatever version your distro packages. So the browser running Cap's interface was different on every platform, and it could change without us shipping anything.
+
+We love Tauri. It let a small team ship a fast recorder on three platforms, and I don't think Cap would be where it is today without it. For a lot of apps it's still the right choice. Cap just ended up needing more control over its interface than a web view can give.
+
+## Why the rewrite
+
+### Three operating systems, three browsers
+
+Using the system web view means you're really using three different browsers. The same CSS and JavaScript went through three different layout engines and three different text renderers, and each of them had its own quirks. These are some of the ones we ran into this year.
+
+- **Blank windows on Linux.** On some graphics drivers, WebKitGTK's DMA-BUF renderer leaves web view windows completely blank. We had to ship with it turned off.
+- **Text size on Windows.** WebView2 picks up its zoom level from the Windows "Text size" setting, so anyone who had turned that up saw Cap's panels overflow. We ended up pinning the zoom through WebView2's own APIs.
+- **Moving between monitors on Windows.** If you dragged a window onto a monitor with different scaling, WebView2 didn't always pick up the new scale, so we had to listen for the change and pass it on ourselves.
+- **Area selection on WebKit.** When you clicked and dragged to select an area, WebKit could fire a blur event before it had finished capturing the pointer. Our code saw that as the drag ending, so the selection cancelled itself straight away, for both recordings and screenshots.
+- **Lost clicks.** The overlay you pick a display or window from was its own web view. In some cases it closed itself before the click on the record button had made it across to the Rust side, so the click just disappeared. There was no recording and no error, and because the main window had already hidden itself, it looked like Cap had quit.
+- **Crashes in the macOS picker.** Opening and closing the display picker a few times could crash Cap on a Mac. The picker was a web view inside a floating panel, and the library that turned its window into a panel was releasing that window one time too many while WebKit was still attached to it. Fixing it meant forking the panel library.
+
+All of these came from the browser layer, which we couldn't control or update, and we usually heard about them from someone whose setup we'd never seen. Getting rid of that whole category of problem is the main reason for this release. The speed improvements are great and I'll get to them, but more than anything we wanted Cap to behave the same on every computer.
+
+### A detour through Electron
+
+In August I tried moving Cap from Tauri to Electron, mostly out of curiosity. Electron ships its own copy of Chromium, so at least we'd have the same browser on every platform. After a night of optimising, the Electron build was faster than the Tauri app we had in production. That wasn't a completely fair comparison, since I'd made optimisations specifically for the Electron build that the Tauri app never got. It still got me wondering how far we could go with a fully native interface.
+
+<Tweet id="2089061554570293447" />
+
+<Tweet id="2089444596111597621" />
+
+That first GPUI build was a prototype. It was fast, but a lot of the app was missing. We shipped it in 0.6.0 as an opt-in preview under **Settings > Experimental**, then spent the next five weeks filling in the gaps until it could replace the Tauri app completely. That's what 0.6.1 is.
+
+### Getting the community involved
+
+We wanted the community to be part of this, and to show what open source can really do. So I asked for help on X, and said anyone who sent us a decent performance PR would get sponsored on GitHub. A lot of people took us up on it. Since mid-August, 65 people have had pull requests merged into Cap, and 111 of those PRs were performance work from 42 different people. Cap now sponsors 20 developers on GitHub. Two of the export improvements later in this post came from them. [Hona](https://github.com/Hona) fixed Windows exports and [Aqua-123](https://github.com/Aqua-123) made ProRes exports faster.
+
+Having that many people involved also meant Cap was tested on far more kinds of machines than we have on our desks, and that's how a lot of the edge cases turned up.
+
+### Testing all of it
+
+More PRs meant more to test, and CI quickly became the slowest part of the process. GitHub Actions only lets us run five macOS jobs at a time, so PRs sat in a queue waiting for a Mac. [Blacksmith](https://www.blacksmith.sh) generously offered to sponsor Cap's CI, and moving our test suites over to them got rid of the queue. Their jobs start straight away and there's no limit on how many run at once.
+
+We've had help with reviews too. [Greptile](https://www.greptile.com) sponsors the AI code review that checks our PRs for bugs, and [Superagent](https://superagent.sh) keeps watch over security.
+
+## Picking a stack
+
+Moving off the web view meant we had to draw the interface ourselves. Realistically we could use a native toolkit on each platform (AppKit, WinUI and GTK), Electron, or a cross-platform Rust UI framework. Going with native toolkits would have meant building Cap's interface three times. Electron fixes the different-browsers problem by bundling one, but the app gets bigger, and our own tests already had a GPU-drawn app well ahead of it.
+
+We went with GPUI for four reasons.
+
+**It's Rust.** So is Cap's engine. In Tauri, the interface and the engine talked to each other over a bridge, and every command was converted to JSON on one side and parsed on the other. GPUI doesn't need that. The editor calls the same engine crates as the CLI, with the same types, in the same process.
+
+**Everything is drawn on the GPU.** It's the game approach from earlier. There's no browser engine sitting between Cap and the screen, and we can read and change every part of it.
+
+**There's one implementation for every platform.** Layout, text and drawing all run the same code on Mac, Windows and Linux. The only thing that changes is a thin layer at the bottom, which talks to Metal on macOS, Direct3D 11 on Windows and Vulkan on Linux. If there's a layout bug on one platform, it shows up on all of them, so we actually see it and can fix it.
+
+**It still reads like Tailwind.** I didn't expect this to matter as much as it did. Below is the same toggle switch in the old app and in the new one.
+
+<CodeCompare />
+
+Width, height, padding, flex, rounded corners and backgrounds are all written almost the same way. That's a big part of how we managed to port the whole app without redesigning it.
+
+A few people have pointed out that GPUI isn't "native" in the same way AppKit or WinUI is, and they have a point. Cap doesn't use the system's own buttons and text fields. The windows themselves are real platform windows, and everything inside them is drawn by Rust talking directly to the GPU. There's no WebKit, Chromium or JavaScript anywhere in the app.
+
+## How it's built
+
+We rewrote Cap's interface and kept the engine. The old app and the new one share fourteen engine crates, covering screen and camera capture, the recorder, the renderer (backgrounds, zooms, cursors and captions), the editor's playback engine and the exporter. The Cap CLI is built on the same crates and has been exporting videos with no web view since 2024, so we were confident they'd hold up without Tauri. The Tauri app actually exported videos by launching a renamed copy of the CLI as a separate process. The new app just calls the exporter directly.
+
+Your files carry over too. 0.6.1 reads the same projects, settings and recordings as 0.6.0 and updates in place, so you don't need to migrate anything.
+
+### Getting video frames to the screen
+
+The biggest single change is in the editor. When you hit play, Cap's renderer puts together your recording, background, cursor, camera, zooms and captions on the GPU, 60 times a second. That bit is the same in both apps. What's changed is how each finished frame gets onto your screen.
+
+A web page has no access to the GPU memory Rust is using, so in the Tauri app every frame went through six steps.
+
+1. Rendered on the GPU
+2. Copied into regular memory
+3. Sent over a local WebSocket
+4. Passed to a JavaScript worker
+5. Uploaded to the GPU again
+6. Composited by the browser, and then displayed
+
+At the default preview size that adds up to around 216 MB of raw pixels every second, plus about 5,000 lines of Rust and TypeScript that existed purely to make the trip fast enough.
+
+On a Mac, the new app copies each frame into an IOSurface, which is a chunk of graphics memory that macOS lets two renderers share, and GPUI draws directly from that. The frame stays on the GPU the whole way.
+
+<Screenshot src="/blog/gpui/editor-061.webp" width="2200" height="1381" alt="The Cap 0.6.1 editor, with a recording of the Cap website on a gradient background, the background settings on the right and the timeline below" caption="The 0.6.1 editor. The preview, the timeline and every control around them are drawn by GPUI." ribbons="2" />
+
+## Making it feel like the same app
+
+We wanted 0.6.1 to feel like the Cap you already know. So we went through every window (the recorder, target picker, camera bubble, recording bar, settings, editor, screenshot editor, onboarding and teleprompter) and checked it against the old version, one interaction at a time. The engine was the easy part. Most of the hard work was rebuilding things a browser handles for you without you ever thinking about them.
+
+<Screenshot src="/blog/gpui/settings-061.webp" width="1200" height="1189" alt="The General page of Cap 0.6.1's settings, with the appearance picker, toggles and a countdown menu" caption="Settings in 0.6.1. There's no web view behind any of it, down to the toggles and the menu." size="narrow" ribbons="1" />
+
+These are a few of them.
+
+- **Text fields.** In a browser you get typing, selection, copy and paste, undo, accents and input methods for languages like Japanese for free. In GPUI you build the text field yourself on top of the operating system's text input APIs. Ours is about 2,700 lines of Rust.
+- **One-line CSS.** Things like backdrop blur, masks and fancy gradients are one line of CSS. In GPUI some of them became shaders, some needed a patch to the framework, and for some we changed the design. The Liquid Glass background on macOS 26 is the actual system material placed behind the GPUI window, which ended up being easier than trying to fake it.
+- **Windows that aren't normal windows.** In the Tauri app the recording bar was a web view that could only be fully clickable or fully click-through. To make it work we checked where its buttons were 20 times a second and switched the whole window between the two modes. In the new app the bar is a native panel and that loop doesn't exist anymore.
+- **A brand new macOS.** On macOS 26, windows started reporting that they were visible using an undocumented flag, and GPUI waits for a window to be visible before it draws anything. So every window drew a single frame and then froze. We now patch that check when the app launches. Having the framework's source code is what made that fix possible.
+- **Idling properly.** GPUI wakes up on every screen refresh to check if anything needs redrawing, which is 120 times a second on a ProMotion display. We patched it so that if a window has had nothing to draw for 100 ms, it stops checking. An idle Cap window on macOS went from 121 wake-ups a second to 1.
+
+## Performance
+
+### The numbers
+
+These measurements are from August. They compare the Tauri app we were shipping, the Electron experiment and the first GPUI build, on the same Mac with the same recording. You can switch between playback and recording.
+
+<ResourceChart />
+
+Most of the CPU saving comes from the new frame path described above. Most of the memory saving comes from dropping the browser engine. Every Tauri window had its own web view, with its own JavaScript runtime, layout engine and caches, even when it was sitting there doing nothing.
+
+### Exports
+
+Exports never ran inside the web view, so moving to GPUI doesn't speed them up on its own. A lot of export work landed in this release anyway, and on some machines it makes a big difference.
+
+On one of our Windows test laptops, an 83 second recording used to take 99.5 seconds to export at 1080p60. The renderer was waiting on Windows' default 15.6 ms timer between frames, which left the GPU and the hardware encoder idle most of the time. Fixing that, moving audio onto its own thread and removing a few remaining sleeps got it down to about 20 seconds.
+
+On Mac, MP4 exports were already running as fast as Apple's hardware encoder can go, so we worked on everything around it. Exports now use about 11% less CPU, audio is encoded with Apple's AudioToolbox on a separate thread, and ProRes exports use every CPU core instead of just one.
+
+<ExportRace />
+
+Mac exports are smaller now too. Because of a missing setting, the hardware encoder was writing a full keyframe every 12 frames. We changed it to one every two seconds, and a one minute recording exported at 4K Maximum went from 93 MB to 30 MB with no visible drop in quality.
+
+### Download size
+
+Dropping the web view also means there's less to download. Every 0.6.1 download is smaller than before, and on macOS and Linux they're about half the size.
+
+| Download | 0.6.0 | 0.6.1 | Smaller by |
+| --- | ---: | ---: | ---: |
+| macOS, Apple silicon (.dmg) | 189.6 MB | 95.8 MB | 49% |
+| macOS, Intel (.dmg) | 200.9 MB | 106.1 MB | 47% |
+| Windows (.exe) | 203.7 MB | 133.4 MB | 35% |
+| Linux (.deb) | 224.4 MB | 94.9 MB | 58% |
+| Linux (.AppImage) | 264.7 MB | 129.0 MB | 51% |
+| Linux (.rpm) | 202.8 MB | 99.4 MB | 51% |
+
+Not all of that is down to GPUI. 0.6.0 included both apps (the Tauri app and the native preview) plus a second copy of the CLI, and we also switched every installer to stronger compression. The Linux AppImage used to bundle WebKitGTK and all of its dependencies, and our release build now fails if any of them get added back.
+
+## Trade-offs
+
+Going native wasn't free, and some of it we're still paying for.
+
+- **We have to build things the browser used to give us.** Text fields, menus, scroll views and focus handling are all our own code now. The new app is about 182,000 lines of Rust, which is almost exactly the size of the 181,000 lines of TypeScript and Rust it replaced.
+- **Keyboard navigation isn't everywhere yet.** In a browser, tabbing between controls just works. In GPUI we have to set it up window by window, and we haven't finished.
+- **No hot reload.** The old app used Vite, so a style tweak showed up in the running app the moment you saved. Rebuilding the GPUI app only takes a few seconds, but you still relaunch it and click back to whatever you were working on.
+- **A smaller ecosystem.** GPUI is young and it's built for Zed first. There are far fewer libraries to pull in than on the web, and we carry four small patches on top of it.
+
+## Where we go from here
+
+Everything we build from now on will be on top of the native app. Next on the list is full keyboard navigation in every window, Cap in more languages, and more performance work, now that we can change every step from capture to screen.
+
+You can download Cap 0.6.1 at [Cap.so/download](https://cap.so/download), and if you already have Cap installed it'll update in place. The [changelog](/changelog/desktop) lists the 180+ other fixes and improvements that shipped alongside it.
+
+Thanks to everyone who turned on the preview in 0.6.0 and told us what was broken. And a huge thank you to the 41 people who contributed to this release.
+
+@yashranaway, @Hona, @AatmanAJ, @AksharP5, @tadhgdowdall, @jatmn, @celeroncoder, @YoavLevavi, @Theophilus2003, @viralcodex, @unhingedpanda, @notkainoa, @nikolas-sapa, @himanshu748, @dheeraj-juvvadi, @cesarfrancots, @x1xhlol, @wleeaf, @vagxrth, @shubhook, @qflen, @patrickballard, @mihir0209, @melcheikh, @maddiedreese, @hridaya423, @harshav167, @dennisimoo, @colinvkim, @cartesian-plane, @apoorvdarshan, @ajanraj, @Zingzy, @The-Best-Codes, @Supernova-45, @SoulSniper-V2, @OptimistOtaku, @JeffreyLin1, @Ehsan-hash, @EfeDurmaz16 and @Aqua-123.
+
+Richie

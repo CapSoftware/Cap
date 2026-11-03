@@ -58,7 +58,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { workspace = true, features = ["Win32_Media"] }
+windows = { workspace = true, features = ["Win32_Foundation", "Win32_Media", "Win32_Security", "Win32_System_Threading"] }
 
 [dev-dependencies]
 cap-audio = { path = "../audio", features = ["test-support"] }

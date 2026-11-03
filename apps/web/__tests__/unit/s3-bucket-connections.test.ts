@@ -1,10 +1,17 @@
 import { createServer, request as httpRequest } from "node:http";
 import type { Socket } from "node:net";
-import { S3Bucket } from "@cap/web-domain";
-import { ConfigProvider, Effect, Layer, ManagedRuntime, Option } from "effect";
+import { DatabaseError, S3Bucket, User } from "@cap/web-domain";
+import {
+	ConfigProvider,
+	Effect,
+	Either,
+	Layer,
+	ManagedRuntime,
+	Option,
+} from "effect";
 import { describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({ getById: vi.fn() }));
+const mocks = vi.hoisted(() => ({ getById: vi.fn(), getForUser: vi.fn() }));
 
 vi.mock("@cap/database/crypto", () => ({
 	decrypt: async (value: string) => value,
@@ -34,13 +41,19 @@ vi.mock("@cap/web-backend/src/Aws.ts", async () => {
 vi.mock("@cap/web-backend/src/S3Buckets/S3BucketsRepo.ts", async () => {
 	const { Effect } = await import("effect");
 	class S3BucketsRepo extends Effect.Service<S3BucketsRepo>()("S3BucketsRepo", {
-		sync: () => ({ getById: mocks.getById }),
+		sync: () => ({
+			getById: mocks.getById,
+			getForUser: mocks.getForUser,
+		}),
 	}) {}
 	return { S3BucketsRepo };
 });
 
 import { S3Buckets } from "@cap/web-backend/src/S3Buckets";
-import { s3ConnectionPool } from "@cap/web-backend/src/S3Buckets/S3ConnectionPool";
+import {
+	defaultBucketS3ConnectionPool,
+	s3ConnectionPool,
+} from "@cap/web-backend/src/S3Buckets/S3ConnectionPool";
 
 async function storageFixture() {
 	let connections = 0;
@@ -97,25 +110,27 @@ async function storageFixture() {
 }
 
 describe("S3 connection reuse", () => {
-	it("bounds connections across simultaneous recording checkpoints", async () => {
+	it("reuses one bounded set of connections across recording checkpoints", async () => {
 		const fixture = await storageFixture();
 		try {
-			await Promise.all(
-				Array.from({ length: 24 }, async (_, recording) => {
-					const [access] = await fixture.runtime.runPromise(
-						fixture.service.getBucketAccess(Option.none()),
-					);
-					await Promise.all(
-						Array.from({ length: 8 }, (_, index) =>
-							fixture.runtime.runPromise(
-								access.headObject(`recording/${recording}/${index}`),
+			// Two waves of checkpoints: the second must reuse the first wave's sockets instead of opening its own.
+			for (let wave = 0; wave < 2; wave++)
+				await Promise.all(
+					Array.from({ length: 16 }, async (_, recording) => {
+						const [access] = await fixture.runtime.runPromise(
+							fixture.service.getBucketAccess(Option.none()),
+						);
+						await Promise.all(
+							Array.from({ length: 8 }, (_, index) =>
+								fixture.runtime.runPromise(
+									access.headObject(`recording/${wave}/${recording}/${index}`),
+								),
 							),
-						),
-					);
-				}),
-			);
-			expect(fixture.authorizations).toHaveLength(192);
-			expect(fixture.connections()).toBeLessThanOrEqual(50);
+						);
+					}),
+				);
+			expect(fixture.authorizations).toHaveLength(256);
+			expect(fixture.connections()).toBeLessThanOrEqual(128);
 		} finally {
 			await fixture.close();
 		}
@@ -193,6 +208,40 @@ describe("S3 connection reuse", () => {
 		}
 	});
 
+	it("keeps default bucket connections warm across 32-wide snapshot pages", async () => {
+		const fixture = await storageFixture();
+		try {
+			const [access] = await fixture.runtime.runPromise(
+				fixture.service.getBucketAccess(Option.none()),
+			);
+			for (let checkpoint = 0; checkpoint < 10; checkpoint++) {
+				await Promise.all(
+					Array.from({ length: 32 }, (_, index) =>
+						fixture.runtime.runPromise(
+							access.headObject(`recording/${checkpoint}/${index}`),
+						),
+					),
+				);
+			}
+			expect(fixture.authorizations).toHaveLength(320);
+			expect(fixture.connections()).toBeLessThanOrEqual(40);
+		} finally {
+			await fixture.close();
+		}
+	});
+
+	it("keeps the custom bucket idle connection bound", async () => {
+		const pools = await Effect.runPromise(
+			Effect.scoped(
+				Effect.all([s3ConnectionPool, defaultBucketS3ConnectionPool]),
+			),
+		);
+		expect(pools.map((pool) => pool.httpsAgent.maxFreeSockets)).toEqual([
+			8, 256,
+		]);
+		expect(pools.map((pool) => pool.httpsAgent.maxSockets)).toEqual([50, 256]);
+	});
+
 	it("reuses custom bucket connections while using current credentials", async () => {
 		const fixture = await storageFixture();
 		try {
@@ -223,6 +272,79 @@ describe("S3 connection reuse", () => {
 				);
 			}
 			expect(fixture.connections()).toBeLessThanOrEqual(2);
+		} finally {
+			await fixture.close();
+		}
+	});
+});
+
+describe("personal bucket selection", () => {
+	it("propagates lookup failures instead of selecting Cap storage", async () => {
+		const fixture = await storageFixture();
+		const error = new DatabaseError({ cause: new Error("Connection lost") });
+		mocks.getForUser.mockReturnValue(Effect.fail(error));
+		try {
+			const result = await fixture.runtime.runPromise(
+				fixture.service
+					.getBucketAccessForUser(User.UserId.make("owner"))
+					.pipe(Effect.either),
+			);
+			expect(result).toEqual(Either.left(error));
+			expect(mocks.getForUser).toHaveBeenLastCalledWith("owner");
+		} finally {
+			await fixture.close();
+		}
+	});
+
+	it("uses Cap storage when the user has no active custom bucket", async () => {
+		const fixture = await storageFixture();
+		mocks.getForUser.mockReturnValue(Effect.succeed(Option.none()));
+		try {
+			const [access, bucket] = await fixture.runtime.runPromise(
+				fixture.service.getBucketAccessForUser(User.UserId.make("owner")),
+			);
+			expect(bucket).toEqual(Option.none());
+			const url = new URL(
+				await fixture.runtime.runPromise(
+					access.getPresignedPutUrl("recording.mp4"),
+				),
+			);
+			expect(url.pathname).toBe("/capso/recording.mp4");
+			expect(url.searchParams.get("X-Amz-Credential")).toContain(
+				"default-key/",
+			);
+		} finally {
+			await fixture.close();
+		}
+	});
+
+	it("signs new uploads with the user's active custom bucket", async () => {
+		const fixture = await storageFixture();
+		const customBucket = S3Bucket.decodeSync({
+			id: "custom-bucket",
+			ownerId: "owner",
+			region: "eu-west-1",
+			endpoint: fixture.endpoint,
+			name: "custom-storage",
+			accessKeyId: "custom-key",
+			secretAccessKey: "custom-secret",
+		});
+		mocks.getForUser.mockReturnValue(Effect.succeed(Option.some(customBucket)));
+		try {
+			const [access, bucket] = await fixture.runtime.runPromise(
+				fixture.service.getBucketAccessForUser(User.UserId.make("owner")),
+			);
+			expect(bucket).toEqual(Option.some(customBucket));
+			const url = new URL(
+				await fixture.runtime.runPromise(
+					access.getPresignedPutUrl("recording.mp4"),
+				),
+			);
+			expect(url.pathname).toBe("/custom-storage/recording.mp4");
+			expect(url.searchParams.get("X-Amz-Credential")).toContain("custom-key/");
+			expect(url.searchParams.get("X-Amz-Credential")).toContain(
+				"/eu-west-1/s3/",
+			);
 		} finally {
 			await fixture.close();
 		}

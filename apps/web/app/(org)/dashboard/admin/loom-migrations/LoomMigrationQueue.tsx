@@ -11,9 +11,11 @@ import {
 	importFromLoomCsvForConcierge,
 	type LoomCsvImportRow,
 	type LoomCsvImportRowResult,
+	resumeConciergeLoomFileUpload,
 } from "@/actions/loom";
 import {
 	getLoomMigrationOperatorQueue,
+	reconcileLoomMigrationInventory,
 	updateLoomMigrationStatus,
 } from "@/actions/loom-concierge";
 import type { OperatorLoomMigrationView } from "@/lib/loom-concierge";
@@ -45,6 +47,8 @@ function QueueItem({ request }: { request: OperatorLoomMigrationView }) {
 		request.importedVideoCount.toString(),
 	);
 	const [verified, setVerified] = useState(false);
+	const [deletedRecordingsVerified, setDeletedRecordingsVerified] =
+		useState(false);
 	const [csvRows, setCsvRows] = useState<LoomCsvImportRow[]>([]);
 	const [processedRows, setProcessedRows] = useState(0);
 	const [startedRows, setStartedRows] = useState(0);
@@ -55,6 +59,8 @@ function QueueItem({ request }: { request: OperatorLoomMigrationView }) {
 	const [fileTitle, setFileTitle] = useState("");
 	const [file, setFile] = useState<File | null>(null);
 	const [uploadPercent, setUploadPercent] = useState(0);
+	const [previousProcessingStopped, setPreviousProcessingStopped] =
+		useState(false);
 
 	useEffect(() => {
 		setNextStatus(request.status);
@@ -62,6 +68,7 @@ function QueueItem({ request }: { request: OperatorLoomMigrationView }) {
 		setExpectedVideoCount(request.expectedVideoCount?.toString() ?? "");
 		setImportedVideoCount(request.importedVideoCount.toString());
 		setVerified(false);
+		setDeletedRecordingsVerified(false);
 	}, [
 		request.status,
 		request.capMessage,
@@ -89,6 +96,24 @@ function QueueItem({ request }: { request: OperatorLoomMigrationView }) {
 		onSuccess: async () => {
 			await refresh();
 			toast.success("Migration status updated.");
+		},
+		onError: (error) => toast.error(error.message),
+	});
+	const reconcileMutation = useMutation({
+		mutationFn: async () =>
+			unwrapLoomMigrationResult(
+				await reconcileLoomMigrationInventory({
+					requestId: request.id,
+					verified: deletedRecordingsVerified,
+				}),
+			),
+		onSuccess: async ({ removedCount, hasMore }) => {
+			setVerified(false);
+			setDeletedRecordingsVerified(false);
+			await refresh();
+			toast.success(
+				`Removed ${removedCount} deleted recording entries. ${hasMore ? "More entries remain; reconcile again." : "Check source counts before completing the migration."}`,
+			);
 		},
 		onError: (error) => toast.error(error.message),
 	});
@@ -183,6 +208,31 @@ function QueueItem({ request }: { request: OperatorLoomMigrationView }) {
 			);
 		},
 	});
+	const resumeFileMutation = useMutation({
+		mutationFn: async () =>
+			unwrapLoomMigrationResult(
+				await resumeConciergeLoomFileUpload({
+					requestId: request.id,
+					loomUrl: fileLoomUrl,
+					userEmail: fileOwnerEmail,
+					confirmedPreviousProcessingStopped: previousProcessingStopped,
+				}),
+			),
+		onSuccess: async (result) => {
+			await refresh();
+			setPreviousProcessingStopped(false);
+			toast.success(
+				result.status === "started"
+					? "Uploaded Loom file processing has started."
+					: "Uploaded Loom file processing was already underway.",
+			);
+		},
+		onError: async (error) => {
+			await refresh();
+			toast.error(error.message);
+		},
+	});
+	const filePending = fileMutation.isPending || resumeFileMutation.isPending;
 
 	return (
 		<div className="rounded-xl border border-gray-4 bg-gray-1 p-5">
@@ -237,7 +287,7 @@ function QueueItem({ request }: { request: OperatorLoomMigrationView }) {
 				<input
 					accept=".csv,text/csv"
 					className="mt-2 block w-full text-sm text-gray-11"
-					disabled={importMutation.isPending}
+					disabled={importMutation.isPending || filePending}
 					id={`loom-csv-${request.id}`}
 					onChange={async (event) => {
 						const file = event.target.files?.[0];
@@ -266,7 +316,9 @@ function QueueItem({ request }: { request: OperatorLoomMigrationView }) {
 				)}
 				<Button
 					className="mt-3"
-					disabled={importMutation.isPending || csvRows.length === 0}
+					disabled={
+						importMutation.isPending || filePending || csvRows.length === 0
+					}
 					onClick={() => importMutation.mutate()}
 					size="sm"
 					variant="dark"
@@ -321,7 +373,10 @@ function QueueItem({ request }: { request: OperatorLoomMigrationView }) {
 						<input
 							className="mt-1 w-full rounded-lg border border-gray-6 bg-gray-1 px-3 py-2 text-gray-12"
 							id={`loom-file-url-${request.id}`}
-							onChange={(event) => setFileLoomUrl(event.target.value)}
+							onChange={(event) => {
+								setFileLoomUrl(event.target.value);
+								setPreviousProcessingStopped(false);
+							}}
 							placeholder="https://www.loom.com/share/..."
 							type="url"
 							value={fileLoomUrl}
@@ -335,7 +390,10 @@ function QueueItem({ request }: { request: OperatorLoomMigrationView }) {
 						<input
 							className="mt-1 w-full rounded-lg border border-gray-6 bg-gray-1 px-3 py-2 text-gray-12"
 							id={`loom-file-owner-${request.id}`}
-							onChange={(event) => setFileOwnerEmail(event.target.value)}
+							onChange={(event) => {
+								setFileOwnerEmail(event.target.value);
+								setPreviousProcessingStopped(false);
+							}}
 							type="email"
 							value={fileOwnerEmail}
 						/>
@@ -379,7 +437,7 @@ function QueueItem({ request }: { request: OperatorLoomMigrationView }) {
 					/>
 				</label>
 				<Button
-					disabled={fileMutation.isPending || importMutation.isPending || !file}
+					disabled={filePending || importMutation.isPending || !file}
 					size="sm"
 					type="submit"
 					variant="dark"
@@ -388,6 +446,39 @@ function QueueItem({ request }: { request: OperatorLoomMigrationView }) {
 						? `Uploading ${uploadPercent}%`
 						: "Upload and process"}
 				</Button>
+				<label className="flex items-start gap-2 text-xs text-gray-10">
+					<input
+						checked={previousProcessingStopped}
+						disabled={filePending}
+						onChange={(event) =>
+							setPreviousProcessingStopped(event.target.checked)
+						}
+						type="checkbox"
+					/>
+					I verified the complete MP4 is uploaded and the previous processing
+					has stopped.
+				</label>
+				<Button
+					disabled={
+						filePending ||
+						importMutation.isPending ||
+						!previousProcessingStopped ||
+						!fileLoomUrl.trim() ||
+						!fileOwnerEmail.trim()
+					}
+					onClick={() => resumeFileMutation.mutate()}
+					size="sm"
+					type="button"
+					variant="gray"
+				>
+					{resumeFileMutation.isPending
+						? "Starting processing..."
+						: "Process uploaded file"}
+				</Button>
+				<p className="text-xs text-gray-10">
+					Process an existing recording after its MP4 has finished uploading to
+					Cap storage. Review its Loom URL and owner first.
+				</p>
 			</form>
 
 			<form
@@ -488,8 +579,9 @@ function QueueItem({ request }: { request: OperatorLoomMigrationView }) {
 				<Button
 					disabled={
 						statusMutation.isPending ||
+						reconcileMutation.isPending ||
 						importMutation.isPending ||
-						fileMutation.isPending ||
+						filePending ||
 						(nextStatus === "completed" && request.activeImportCount > 0)
 					}
 					size="sm"
@@ -499,6 +591,41 @@ function QueueItem({ request }: { request: OperatorLoomMigrationView }) {
 					Save status
 				</Button>
 			</form>
+			<div className="mt-4 space-y-3 border-t border-gray-6 pt-4">
+				<p className="text-sm text-gray-11">
+					Remove inventory entries for recordings that no longer exist. Existing
+					recordings and source mappings are kept. This does not complete the
+					migration.
+				</p>
+				<label className="flex items-start gap-2 text-sm text-gray-11">
+					<input
+						checked={deletedRecordingsVerified}
+						className="mt-1"
+						type="checkbox"
+						onChange={(event) =>
+							setDeletedRecordingsVerified(event.target.checked)
+						}
+					/>
+					I reconciled deleted recordings against the agreed source list and
+					re-imported any missing sources.
+				</label>
+				<Button
+					type="button"
+					size="sm"
+					variant="gray"
+					disabled={
+						!deletedRecordingsVerified ||
+						reconcileMutation.isPending ||
+						statusMutation.isPending ||
+						importMutation.isPending ||
+						filePending ||
+						request.activeImportCount > 0
+					}
+					onClick={() => reconcileMutation.mutate()}
+				>
+					Reconcile deleted recordings
+				</Button>
+			</div>
 		</div>
 	);
 }

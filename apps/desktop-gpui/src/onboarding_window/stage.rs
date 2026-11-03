@@ -15,6 +15,7 @@ use gpui::{
 
 use super::OnboardingWindow;
 use crate::doodle::{self, Doodle, Palette};
+use crate::i18n::tr;
 use crate::onboarding_doodles as art;
 use crate::permissions::{self, OSPermission, OSPermissionStatus};
 use crate::permissions_ui::RowAction;
@@ -146,35 +147,35 @@ struct Copy {
 fn copy_for(permission: OSPermission) -> Copy {
     match permission {
         OSPermission::ScreenRecording => Copy {
-            title: "Let Cap see your screen",
-            body: "Screen Recording lets Cap capture your displays, windows and system audio.",
-            done_title: "Screen recording is on",
-            done_body: "Cap can capture your screen.",
-            allow: "Allow screen recording",
+            title: tr::permission::onboarding::screen::title(),
+            body: tr::permission::onboarding::screen::body(),
+            done_title: tr::permission::onboarding::screen::done_title(),
+            done_body: tr::permission::onboarding::screen::done_body(),
+            allow: tr::permission::onboarding::screen::allow(),
             doodle: &art::SCREEN,
         },
         OSPermission::Accessibility => Copy {
-            title: "Let Cap follow your cursor",
-            body: "Accessibility lets Cap see your clicks and cursor, on this Mac only, so auto zoom knows where to look.",
-            done_title: "Accessibility is on",
-            done_body: "Auto zoom can follow your clicks.",
-            allow: "Allow accessibility",
+            title: tr::permission::onboarding::accessibility::title(),
+            body: tr::permission::onboarding::accessibility::body(),
+            done_title: tr::permission::onboarding::accessibility::done_title(),
+            done_body: tr::permission::onboarding::accessibility::done_body(),
+            allow: tr::permission::onboarding::accessibility::allow(),
             doodle: &art::CURSOR,
         },
         OSPermission::Microphone => Copy {
-            title: "Let Cap hear you",
-            body: "Add your voice to your recordings. You can skip this and turn it on later.",
-            done_title: "Microphone is on",
-            done_body: "Your voice can be in your recordings.",
-            allow: "Allow microphone",
+            title: tr::permission::onboarding::microphone::title(),
+            body: tr::permission::onboarding::microphone::body(),
+            done_title: tr::permission::onboarding::microphone::done_title(),
+            done_body: tr::permission::onboarding::microphone::done_body(),
+            allow: tr::permission::onboarding::microphone::allow(),
             doodle: &art::MICROPHONE,
         },
         OSPermission::Camera => Copy {
-            title: "Let Cap see you",
-            body: "Show yourself in a corner of your recordings. Skip it if you don't need it.",
-            done_title: "Camera is on",
-            done_body: "You can add your camera to any recording.",
-            allow: "Allow camera",
+            title: tr::permission::onboarding::camera::title(),
+            body: tr::permission::onboarding::camera::body(),
+            done_title: tr::permission::onboarding::camera::done_title(),
+            done_body: tr::permission::onboarding::camera::done_body(),
+            allow: tr::permission::onboarding::camera::allow(),
             doodle: &art::CAMERA,
         },
     }
@@ -329,13 +330,13 @@ impl OnboardingWindow {
     fn render_checklist(&self, paper: &Paper, cx: &mut Context<Self>) -> Div {
         let (title, lede) = if self.permissions_only {
             (
-                "Cap needs a permission back",
-                "Something was switched off in System Settings. Turn it back on to keep recording.",
+                tr::permission::onboarding::checklist::regained_title(),
+                tr::permission::onboarding::checklist::regained_lede(),
             )
         } else {
             (
-                "Let's get Cap ready",
-                "macOS asks you to OK a few things first. It only takes a minute.",
+                tr::permission::onboarding::checklist::title(),
+                tr::permission::onboarding::checklist::lede(),
             )
         };
         let stage = self.current_stage();
@@ -398,15 +399,15 @@ impl OnboardingWindow {
             Mark::Skipped => &art::MARK_SKIPPED,
         };
         let (caption, caption_color) = if status.permitted() {
-            ("Allowed", paper.green)
+            (tr::permission::onboarding::status::allowed(), paper.green)
         } else if self.is_skipped(permission) {
-            ("Skipped for now", paper.soft)
+            (tr::permission::onboarding::status::skipped(), paper.soft)
         } else if status == OSPermissionStatus::Denied {
-            ("Off in System Settings", paper.red)
+            (tr::permission::onboarding::status::off(), paper.red)
         } else if permission.required() {
-            ("Required", paper.soft)
+            (tr::permission::onboarding::status::required(), paper.soft)
         } else {
-            ("Optional", paper.soft)
+            (tr::permission::onboarding::status::optional(), paper.soft)
         };
         let paper = *paper;
         div()
@@ -447,6 +448,7 @@ impl OnboardingWindow {
                 div()
                     .flex()
                     .flex_col()
+                    .min_w_0()
                     .gap(px(1.))
                     .child(
                         div()
@@ -454,7 +456,8 @@ impl OnboardingWindow {
                             .line_height(px(18.))
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(paper.ink)
-                            .child(permission.label()),
+                            .truncate()
+                            .child(permission.display_name()),
                     )
                     .child(
                         div()
@@ -462,6 +465,7 @@ impl OnboardingWindow {
                             .line_height(px(16.))
                             .font_weight(FontWeight::NORMAL)
                             .text_color(caption_color)
+                            .truncate()
                             .child(caption),
                     ),
             )
@@ -498,15 +502,18 @@ impl OnboardingWindow {
                     168.,
                     146.,
                 ))
-                .child(stage_title(paper, "One restart and you're set"))
+                .child(stage_title(
+                    paper,
+                    tr::permission::onboarding::relaunch::title(),
+                ))
                 .child(stage_body(
                     paper,
-                    "macOS turns on screen recording once Cap restarts. You'll pick up right here.",
+                    tr::permission::onboarding::relaunch::body(),
                 ))
                 .child(div().mt(px(24.)).child(paper_button(
                     paper,
                     "perm-relaunch-done",
-                    "Relaunch Cap",
+                    tr::onboarding::nav::relaunch(),
                     true,
                     true,
                     cx.listener(|_, _, _, cx| permissions::relaunch(cx)),
@@ -520,13 +527,16 @@ impl OnboardingWindow {
                     168.,
                     146.,
                 ))
-                .child(stage_title(paper, "You're all set"))
+                .child(stage_title(
+                    paper,
+                    tr::permission::onboarding::all_set::title(),
+                ))
                 .child(stage_body(
                     paper,
                     if self.permissions_only {
-                        "Thanks. Cap can record again."
+                        tr::permission::onboarding::all_set::regained()
                     } else {
-                        "Cap has everything it needs. Next, a quick look at what it can do."
+                        tr::permission::onboarding::all_set::body()
                     },
                 )),
             Stage::Permission(permission) => {
@@ -548,19 +558,18 @@ impl OnboardingWindow {
                             copy.done_title
                         } else if self.stage.waiting_on == Some(permission) && permission.required()
                         {
-                            "Switch Cap on in System Settings"
+                            tr::permission::onboarding::switch_on_title()
                         } else {
                             copy.title
                         },
                     ));
                 if granted {
-                    let done_body = if permission == OSPermission::ScreenRecording
-                        && self.needs_relaunch()
-                    {
-                        "macOS applies it after Cap restarts. You can do that once you're done here."
-                    } else {
-                        copy.done_body
-                    };
+                    let done_body =
+                        if permission == OSPermission::ScreenRecording && self.needs_relaunch() {
+                            tr::permission::onboarding::relaunch::later()
+                        } else {
+                            copy.done_body
+                        };
                     card.child(stage_body(paper, done_body)).child(allowed_pill(
                         paper,
                         self.stage.marks[index(permission)].1,
@@ -590,21 +599,21 @@ impl OnboardingWindow {
         let guided = crate::permission_guide::eligible(permission);
         let waiting_required = waiting && permission.required();
         let body = if waiting_required && guided {
-            "Drag Cap from the panel under System Settings into the list. Already listed? Just switch it on."
+            tr::permission::onboarding::hint::drag_into_list()
         } else if waiting_required {
-            "Find Cap in the list and switch it on. If macOS asked first, choose Open System Settings."
+            tr::permission::onboarding::hint::find_in_list()
         } else if status == OSPermissionStatus::Denied && !permission.required() {
-            "It was turned off earlier, so switch Cap on in System Settings. Or skip it for now."
+            tr::permission::onboarding::hint::turned_off()
         } else if action == Some(RowAction::OpenSettings) && permission.required() {
-            "Open System Settings, find Cap in the list and switch it on."
+            tr::permission::onboarding::hint::open_settings()
         } else {
             copy.body
         };
         let primary_label = if waiting_required {
-            "Open System Settings again"
+            tr::permission::onboarding::open_settings_again()
         } else {
             match action {
-                Some(RowAction::OpenSettings) => "Open System Settings",
+                Some(RowAction::OpenSettings) => tr::main::device::access::open_system_settings(),
                 _ => copy.allow,
             }
         };
@@ -629,7 +638,7 @@ impl OnboardingWindow {
                     row.child(paper_button(
                         &paper_copy,
                         SharedString::from(format!("perm-skip-{}", permission.label())),
-                        "Skip for now",
+                        tr::permission::onboarding::skip(),
                         false,
                         true,
                         cx.listener(move |this, _, _, cx| this.skip_permission(permission, cx)),
@@ -658,12 +667,12 @@ impl OnboardingWindow {
                             .text_size(px(12.))
                             .font_weight(FontWeight::NORMAL)
                             .text_color(paper.soft)
-                            .child("No prompt showed up? Switch Cap on in System Settings."),
+                            .child(tr::permission::onboarding::hint::no_prompt()),
                     )
                     .child(paper_button(
                         paper,
                         SharedString::from(format!("perm-settings-{}", permission.label())),
-                        "Open System Settings",
+                        tr::main::device::access::open_system_settings(),
                         false,
                         true,
                         cx.listener(move |this, _, _, cx| {
@@ -675,9 +684,9 @@ impl OnboardingWindow {
             )
         } else if waiting {
             let hint = if permission.required() || action == Some(RowAction::OpenSettings) {
-                "Waiting for System Settings"
+                tr::permission::onboarding::waiting::system_settings()
             } else {
-                "Choose Allow in the macOS prompt"
+                tr::permission::onboarding::waiting::prompt()
             };
             card.child(
                 div()
@@ -728,12 +737,12 @@ impl OnboardingWindow {
                             .line_height(px(17.))
                             .font_weight(FontWeight::NORMAL)
                             .text_color(paper.soft)
-                            .child("Switched on but still waiting? Restart Cap to apply it."),
+                            .child(tr::permission::onboarding::relaunch::hint()),
                     )
                     .child(paper_button(
                         paper,
                         "perm-relaunch",
-                        "Relaunch",
+                        tr::permission::onboarding::relaunch::button(),
                         false,
                         true,
                         cx.listener(|_, _, _, cx| permissions::relaunch(cx)),
@@ -790,7 +799,7 @@ fn allowed_pill(paper: &Paper, shown_at: Instant, still: bool) -> Div {
             22.,
             22.,
         ))
-        .child("Allowed")
+        .child(tr::permission::onboarding::status::allowed())
 }
 
 /// The extension's `.cta`: an ink pill. Primary is filled; secondary is the

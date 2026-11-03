@@ -2,11 +2,11 @@
 
 import { Button } from "@cap/ui";
 import * as MediaParser from "@remotion/media-parser";
-import type { WebCodecsController } from "@remotion/webcodecs";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { trackEvent } from "@/app/utils/analytics";
+import { waitForVideoEvent } from "@/lib/wait-for-video-event";
 
 export const SUPPORTED_FORMATS = {
 	video: ["mp4", "webm", "mov", "avi", "mkv"],
@@ -252,8 +252,15 @@ export const MediaFormatConverter = ({
 	};
 
 	const validateAndSetFile = (selectedFile: File) => {
+		if (isConverting) return;
+
 		setError(null);
+		setFile(null);
+		if (outputUrl) {
+			URL.revokeObjectURL(outputUrl);
+		}
 		setOutputUrl(null);
+		recordedChunksRef.current = [];
 
 		const expectedMimeType = getMimeType(currentSourceFormat);
 
@@ -389,16 +396,13 @@ export const MediaFormatConverter = ({
 
 	const extractAudioFromVideo = async (inputFile: File): Promise<void> => {
 		try {
-			const parser = await import("@remotion/media-parser");
 			const webcodecs = await import("@remotion/webcodecs");
 
 			const _handleProgress = (progressEvent: { progress: number }) => {
 				setProgress(Math.min(Math.round(progressEvent.progress * 100), 99));
 			};
 
-			const controller = parser.mediaParserController
-				? parser.mediaParserController()
-				: null;
+			const controller = webcodecs.webcodecsController();
 			parserControllerRef.current = controller;
 
 			const result = await webcodecs.convertMedia({
@@ -409,7 +413,7 @@ export const MediaFormatConverter = ({
 						setProgress(Math.min(Math.round(overallProgress * 100), 99));
 					}
 				},
-				controller: controller as unknown as WebCodecsController,
+				controller,
 			});
 
 			const blob = await result.save();
@@ -430,6 +434,8 @@ export const MediaFormatConverter = ({
 	};
 
 	const convertVideoToGif = async (inputFile: File): Promise<void> => {
+		const videoElement = document.createElement("video");
+		let videoUrl: string | undefined;
 		try {
 			const parser = await import("@remotion/media-parser");
 			const _webcodecs = await import("@remotion/webcodecs");
@@ -484,19 +490,18 @@ export const MediaFormatConverter = ({
 			const GifModule = await import("gif.js");
 			const GIF = GifModule.default;
 
-			const videoElement = document.createElement("video");
 			videoElement.muted = true;
 			videoElement.playsInline = true;
-			videoElement.src = URL.createObjectURL(inputFile);
-
-			await new Promise((resolve) => {
-				videoElement.onloadedmetadata = () => resolve(null);
+			videoUrl = URL.createObjectURL(inputFile);
+			const sourceUrl = videoUrl;
+			await waitForVideoEvent(videoElement, "loadedmetadata", () => {
+				videoElement.src = sourceUrl;
 			});
 
 			const videoDuration = videoElement.duration;
 			const fps = gifFps;
 			const frameCount = Math.min(Math.floor(videoDuration * fps), gifFps * 15);
-			const frameDelay = 1000 / fps;
+			const frameDelay = (videoDuration * 1000) / frameCount;
 
 			const canvas = document.createElement("canvas");
 			canvas.width = targetWidth;
@@ -517,14 +522,11 @@ export const MediaFormatConverter = ({
 			});
 
 			const captureFrame = async (time: number): Promise<void> => {
-				return new Promise((resolve) => {
+				await waitForVideoEvent(videoElement, "seeked", () => {
 					videoElement.currentTime = time;
-					videoElement.onseeked = () => {
-						ctx.drawImage(videoElement, 0, 0, targetWidth, targetHeight);
-						gifEncoder.addFrame(canvas, { delay: frameDelay, copy: true });
-						resolve();
-					};
 				});
+				ctx.drawImage(videoElement, 0, 0, targetWidth, targetHeight);
+				gifEncoder.addFrame(canvas, { delay: frameDelay, copy: true });
 			};
 
 			gifEncoder.on("progress", (progress: number) => {
@@ -553,8 +555,6 @@ export const MediaFormatConverter = ({
 				});
 				gifEncoder.render();
 			});
-
-			URL.revokeObjectURL(videoElement.src);
 
 			const gifUrl = URL.createObjectURL(gifBlob);
 			setOutputUrl(gifUrl);
@@ -588,6 +588,13 @@ export const MediaFormatConverter = ({
 			}
 
 			throw error;
+		} finally {
+			if (videoUrl) {
+				URL.revokeObjectURL(videoUrl);
+				videoElement.pause();
+				videoElement.removeAttribute("src");
+				videoElement.load();
+			}
 		}
 	};
 
@@ -606,9 +613,7 @@ export const MediaFormatConverter = ({
 				}
 			};
 
-			const controller = parser.mediaParserController
-				? parser.mediaParserController()
-				: null;
+			const controller = webcodecs.webcodecsController();
 			parserControllerRef.current = controller;
 
 			console.log(`Starting conversion with Remotion: ${conversionPath}`);
@@ -652,7 +657,7 @@ export const MediaFormatConverter = ({
 				container: outputContainer as any,
 				videoCodec: videoCodec as any,
 				onProgress,
-				controller: controller as unknown as WebCodecsController,
+				controller,
 				expectedDurationInSeconds: metadata.durationInSeconds || undefined,
 			});
 
@@ -718,7 +723,7 @@ export const MediaFormatConverter = ({
 		const fileExtension = `.${currentSourceFormat}`;
 		const newExtension = `.${actualExtension}`;
 		const downloadFileName = file.name.replace(
-			new RegExp(`${fileExtension}$`),
+			new RegExp(`${fileExtension}$`, "i"),
 			newExtension,
 		);
 
@@ -980,6 +985,7 @@ export const MediaFormatConverter = ({
 				<input
 					type="file"
 					accept={getAcceptAttribute(currentSourceFormat)}
+					disabled={isConverting}
 					className="hidden"
 					onChange={handleFileChange}
 					ref={fileInputRef}

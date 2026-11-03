@@ -8,7 +8,7 @@ use gpui::{
     prelude::FluentBuilder, px, svg,
 };
 
-use super::menu::OpenHandler;
+use super::{keyboard_nav, menu::OpenHandler};
 use crate::theme::Theme;
 
 /// The click handler every component takes. `cx.listener(..)` produces exactly
@@ -194,26 +194,43 @@ impl Button {
         variant: ButtonVariant,
         size: ButtonSize,
     ) -> Self {
-        let control_fill = theme
-            .material
-            .map(|material| Hsla::from(material.control_fill))
-            .unwrap_or_else(|| Hsla::from(theme.gray_5));
-
-        // No `:hover` arm: the settings block's hover rules land on the nav and
-        // profile rows, not on `button[data-variant]`, and the window has never
-        // drawn one.
+        // macOS's bordered buttons in a grouped form
+        // (`scripts/glass-reference/gallery.swift`): a capsule with a soft grey
+        // fill and no outline, or the accent for the prominent family.
+        let (fill, hover) = if theme.is_dark() {
+            (gpui::hsla(0., 0., 1., 0.12), gpui::hsla(0., 0., 1., 0.18))
+        } else {
+            (gpui::hsla(0., 0., 0., 0.06), gpui::hsla(0., 0., 0., 0.1))
+        };
+        let accent: Hsla = gpui::rgb(Theme::SETTINGS_ACCENT).into();
+        let edge = if theme.is_dark() {
+            gpui::hsla(0., 0., 1., 0.08)
+        } else {
+            gpui::hsla(0., 0., 0., 0.07)
+        };
         let paint = match variant {
-            ButtonVariant::Gray | ButtonVariant::White | ButtonVariant::Outline => ButtonPaint {
-                bg: Some(control_fill),
-                hover_bg: None,
+            ButtonVariant::Gray
+            | ButtonVariant::White
+            | ButtonVariant::Outline
+            | ButtonVariant::Ghost => ButtonPaint {
+                bg: Some(fill),
+                hover_bg: Some(hover),
                 text: theme.settings_text(),
                 hover_text: None,
-                border: Some(theme.settings_border()),
+                border: Some(edge),
+                hover_border: None,
+            },
+            ButtonVariant::Destructive => ButtonPaint {
+                bg: Some(fill),
+                hover_bg: Some(hover),
+                text: gpui::rgb(0xff3b30).into(),
+                hover_text: None,
+                border: None,
                 hover_border: None,
             },
             _ => ButtonPaint {
-                bg: Some(gpui::rgb(Theme::SETTINGS_ACCENT).into()),
-                hover_bg: None,
+                bg: Some(accent),
+                hover_bg: Some(accent.blend(gpui::hsla(0., 0., 0., 0.1))),
                 text: gpui::white(),
                 hover_text: None,
                 border: None,
@@ -222,7 +239,7 @@ impl Button {
         };
 
         Self {
-            radius: Some(px(8.)),
+            radius: Some(px(999.)),
             ..Self::plain(theme, id, variant, size)
         }
         .paint(paint)
@@ -408,7 +425,7 @@ fn radix_paint(theme: &Theme, variant: ButtonVariant) -> ButtonPaint {
 }
 
 impl RenderOnce for Button {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let Button {
             id,
             label,
@@ -433,6 +450,8 @@ impl RenderOnce for Button {
         div()
             .id(id)
             .tab_index(0)
+            .tab_stop(!disabled)
+            .when(keyboard_nav::active(window, cx), keyboard_nav::ring)
             .flex()
             .flex_row()
             .items_center()
@@ -635,7 +654,7 @@ impl IconButton {
 }
 
 impl RenderOnce for IconButton {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let IconButton {
             id,
             icon,
@@ -659,6 +678,8 @@ impl RenderOnce for IconButton {
             .id(id)
             .when(occlude, |this| this.occlude())
             .tab_index(0)
+            .tab_stop(!disabled)
+            .when(keyboard_nav::active(window, cx), keyboard_nav::ring)
             .flex()
             .items_center()
             .justify_center()

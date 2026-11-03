@@ -266,37 +266,6 @@
 	border-radius: 0 0 6px;
 }
 
-.cap-extension-camera-dismiss-btn {
-	position: absolute;
-	top: 10px;
-	right: 10px;
-	z-index: 12;
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	width: 26px;
-	height: 26px;
-	border: none;
-	border-radius: 50%;
-	background: rgba(18, 18, 23, 0.65);
-	color: #ffffff;
-	cursor: pointer;
-	opacity: 0;
-	pointer-events: none;
-	transition: all 140ms ease;
-	backdrop-filter: blur(8px);
-}
-
-.cap-extension-camera-window:hover .cap-extension-camera-dismiss-btn {
-	opacity: 1;
-	pointer-events: auto;
-}
-
-.cap-extension-camera-dismiss-btn:hover {
-	background: rgba(239, 68, 68, 0.9);
-	transform: scale(1.1);
-}
-
 .cap-extension-camera-iframe {
 	position: absolute;
 	inset: 0;
@@ -578,6 +547,23 @@
 	box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.16);
 }
 
+.cap-extension-control-bar-dot.is-starting {
+	background: #f5a524;
+	box-shadow: 0 0 0 3px rgba(245, 165, 36, 0.18);
+	animation: cap-extension-pulse 1.6s ease-in-out infinite;
+}
+
+.cap-extension-control-bar-dot.is-error {
+	background: #e5484d;
+	box-shadow: 0 0 0 3px rgba(229, 72, 77, 0.16);
+}
+
+.cap-extension-control-bar-subtitle-text {
+	max-width: 220px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
 .cap-extension-control-bar-divider {
 	width: 1px;
 	align-self: stretch;
@@ -714,6 +700,19 @@
 .cap-extension-control-bar-pill.is-start:hover:not(:disabled),
 .cap-extension-control-bar-pill.is-start:focus-visible {
 	background: #1d4ed8;
+}
+
+.cap-extension-control-bar-pill.is-cancel {
+	gap: 7px;
+	background: #f4f4f5;
+	border-color: rgba(18, 18, 23, 0.1);
+	box-shadow: none;
+	color: #18181b;
+}
+
+.cap-extension-control-bar-pill.is-cancel:hover:not(:disabled),
+.cap-extension-control-bar-pill.is-cancel:focus-visible {
+	background: #e4e4e7;
 }
 
 .cap-extension-recording-rail {

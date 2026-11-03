@@ -16,7 +16,7 @@ export const openSourceScreenRecorderContent: SeoPageContent = {
 		{
 			title: "Fully Open Source on GitHub",
 			description:
-				"Cap's entire codebase is publicly available and MIT-licensed on GitHub. Inspect every line of code, understand exactly what happens to your recordings, and contribute features or fixes back to the community.",
+				"Cap's source is publicly available on GitHub. Most code is licensed under AGPLv3, with specified Rust crate families under MIT. Inspect every line of code, understand exactly what happens to your recordings, and contribute features or fixes back to the community.",
 		},
 		{
 			title: "Self-Host Your Recordings",
@@ -87,7 +87,7 @@ export const openSourceScreenRecorderContent: SeoPageContent = {
 		rows: [
 			[
 				"Open source",
-				{ text: "Yes — MIT licensed", status: "positive" },
+				{ text: "Yes — AGPLv3 and MIT crates", status: "positive" },
 				{ text: "No", status: "negative" },
 				{ text: "No", status: "negative" },
 				{ text: "No", status: "negative" },
@@ -212,7 +212,7 @@ export const openSourceScreenRecorderContent: SeoPageContent = {
 		{
 			question: "Is Cap really open source?",
 			answer:
-				"Yes. Cap is fully open source and MIT-licensed. The complete codebase — desktop app, web app, Rust media processing pipeline, and all backend services — is publicly available on GitHub. You can inspect every line, fork the project, and contribute back to the community.",
+				"Yes. Cap is open source, with most code under AGPLv3 and specified Rust crates under MIT. The complete codebase — desktop app, web app, Rust media processing pipeline, and all backend services — is publicly available on GitHub. You can inspect every line, fork the project, and contribute back to the community.",
 		},
 		{
 			question: "Can I self-host Cap's screen recordings?",
@@ -247,7 +247,7 @@ export const openSourceScreenRecorderContent: SeoPageContent = {
 		{
 			question: "What license does Cap use?",
 			answer:
-				"Cap is released under the MIT License, one of the most permissive open-source licenses available. You are free to use, copy, modify, merge, publish, distribute, sublicense, and sell copies of the software. Commercial use is permitted. Attribution is required.",
+				"Most Cap code is licensed under AGPLv3. The cap-camera* and scap-* Rust crate families are licensed under MIT. See the repository LICENSE for the terms that apply to each part of the project.",
 		},
 	],
 

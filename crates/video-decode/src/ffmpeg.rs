@@ -179,6 +179,8 @@ fn configure_software_threading(decoder: &mut avcodec::decoder::Decoder, width: 
 
 pub struct FFmpegDecoder {
     input: DecoderInput,
+    // Declared before `hw_device` so the codec context, whose get_format
+    // callback writes to the device's fallback flag, is freed first.
     decoder: avcodec::decoder::Video,
     stream_index: usize,
     hw_device: Option<HwDevice>,
@@ -459,8 +461,13 @@ impl FFmpegDecoder {
         self.start_time
     }
 
+    /// Whether frames come from the hardware decoder. False once FFmpeg has
+    /// fallen back to software because the hardware setup failed, which is
+    /// only known after the first packet is decoded.
     pub fn is_hardware_accelerated(&self) -> bool {
-        self.hw_device.is_some()
+        self.hw_device
+            .as_ref()
+            .is_some_and(|device| !device.is_software_fallback())
     }
 }
 
@@ -477,6 +484,13 @@ pub struct FramesIter<'a> {
 impl FramesIter<'_> {
     pub fn decoder(&self) -> &avcodec::decoder::Video {
         self.decoder
+    }
+
+    /// [`FFmpegDecoder::is_hardware_accelerated`] while frames are read.
+    pub fn is_hardware_accelerated(&self) -> bool {
+        self.hw_device
+            .as_ref()
+            .is_some_and(|device| !device.is_software_fallback())
     }
 }
 

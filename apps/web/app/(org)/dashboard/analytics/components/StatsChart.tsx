@@ -1,259 +1,286 @@
 "use client";
 
-import { Check } from "lucide-react";
-import { cloneElement, type SVGProps, useMemo, useRef, useState } from "react";
+import NumberFlow from "@number-flow/react";
+import clsx from "clsx";
+import { type ReactNode, useMemo, useState } from "react";
 import {
-	CapIcon,
-	ChatIcon,
-	ClapIcon,
-	ReactionIcon,
-} from "@/app/(org)/dashboard/_components/AnimatedIcons";
-import { classNames } from "@/utils/helpers";
-import type { CapIconHandle } from "../../_components/AnimatedIcons/Cap";
-import ChartArea from "./ChartArea";
-
-type boxes = "caps" | "views" | "comments" | "reactions";
-type ChartPoint = {
-	bucket: string;
-	caps: number;
-	views: number;
-	comments: number;
-	reactions: number;
-};
-
-const formatCount = (value: number) => {
-	if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
-	if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`;
-	return value.toLocaleString();
-};
+	BubbleDoodle,
+	EyeDoodle,
+	PaperPlaneDoodle,
+	ReelDoodle,
+	SmileDoodle,
+	SquiggleLoader,
+} from "./Doodles";
+import type { Granularity } from "./format";
+import TrafficChart, {
+	type ChartPoint,
+	METRIC_META,
+	type Metric,
+} from "./TrafficChart";
 
 interface StatsChartProps {
-	counts: Record<boxes, number>;
+	counts: Record<Metric, number>;
 	data: ChartPoint[];
 	isLoading?: boolean;
 	capId?: string | null;
+	granularity: Granularity;
+	animationKey: string;
+	emptyAction?: ReactNode;
 }
 
-export default function StatsBox({
+const DOODLES: Record<Metric, () => ReactNode> = {
+	views: () => <EyeDoodle />,
+	comments: () => <BubbleDoodle />,
+	reactions: () => <SmileDoodle />,
+	caps: () => <ReelDoodle />,
+};
+
+export default function StatsChart({
 	counts,
 	data,
 	isLoading,
 	capId,
+	granularity,
+	animationKey,
+	emptyAction,
 }: StatsChartProps) {
-	const [selectedBoxes, setSelectedBoxes] = useState<Set<boxes>>(
-		new Set(["views", "comments", "reactions"]),
+	const available: Metric[] = capId
+		? ["views", "comments", "reactions"]
+		: ["views", "comments", "reactions", "caps"];
+	const [selected, setSelected] = useState<Set<Metric>>(
+		() => new Set<Metric>(["views", "comments", "reactions"]),
 	);
 
-	const capsBoxRef = useRef<CapIconHandle | null>(null);
-	const viewsBoxRef = useRef<CapIconHandle | null>(null);
-	const chatsBoxRef = useRef<CapIconHandle | null>(null);
-	const reactionsBoxRef = useRef<CapIconHandle | null>(null);
+	const withVisibleMetric = (set: Set<Metric>) =>
+		available.some((m) => set.has(m)) ? set : new Set<Metric>(["views"]);
+	const effective = withVisibleMetric(selected);
 
-	const toggleHandler = (box: boxes) => {
-		setSelectedBoxes((prev) => {
-			const next = new Set(prev);
-			if (next.has(box)) {
-				next.delete(box);
+	const toggle = (metric: Metric) => {
+		setSelected((prev) => {
+			const next = new Set(withVisibleMetric(prev));
+			if (next.has(metric)) {
+				const visibleCount = available.filter((m) => next.has(m)).length;
+				if (visibleCount > 1) next.delete(metric);
 			} else {
-				next.add(box);
+				next.add(metric);
 			}
 			return next;
 		});
 	};
 
-	const formattedCounts = useMemo(
-		() => ({
-			caps: formatCount(counts.caps),
-			views: formatCount(counts.views),
-			comments: formatCount(counts.comments),
-			reactions: formatCount(counts.reactions),
-		}),
-		[counts],
+	const metrics = available.filter((m) => effective.has(m));
+	const display = useMemo(
+		() => rollUpLongRanges(data, granularity),
+		[data, granularity],
+	);
+	const completeBuckets = Math.max(1, data.length - 1);
+	const perUnit = granularity === "hour" ? "an hour" : "a day";
+
+	const hints = useMemo<Record<Metric, string>>(() => {
+		const per100 = (value: number) =>
+			counts.views > 0
+				? `${((value / counts.views) * 100).toFixed(1).replace(/\.0$/, "")} per 100 views`
+				: "No views yet";
+		const avg = (value: number) => {
+			const v = value / completeBuckets;
+			if (value === 0) return "None yet";
+			return `About ${v >= 10 ? Math.round(v).toLocaleString() : v.toFixed(1).replace(/\.0$/, "")} ${perUnit}`;
+		};
+		return {
+			views: avg(counts.views),
+			comments: per100(counts.comments),
+			reactions: per100(counts.reactions),
+			caps: counts.caps === 0 ? "None yet" : avg(counts.caps),
+		};
+	}, [counts, completeBuckets, perUnit]);
+
+	const hasActivity = data.some(
+		(p) => p.views > 0 || p.comments > 0 || p.reactions > 0 || p.caps > 0,
 	);
 
 	return (
-		<div className="flex flex-col gap-4 px-8 pt-8 w-full rounded-xl border bg-gray-2 border-gray-3">
-			<div className="flex flex-wrap gap-4">
+		<section className="overflow-hidden w-full rounded-2xl border shadow-[0_1px_2px_rgba(0,0,0,0.04)] bg-gray-1 border-gray-4">
+			<div
+				className={clsx(
+					"grid gap-px border-b bg-gray-3 border-gray-3",
+					available.length === 4
+						? "grid-cols-2 lg:grid-cols-4"
+						: "grid-cols-1 sm:grid-cols-3",
+				)}
+			>
+				{available.map((metric) => (
+					<StatTile
+						key={metric}
+						metric={metric}
+						value={counts[metric]}
+						hint={hints[metric]}
+						isSelected={effective.has(metric)}
+						isLoading={isLoading}
+						onClick={() => toggle(metric)}
+					/>
+				))}
+			</div>
+			<div className="px-3 pt-4 pb-3 sm:px-5">
 				{isLoading ? (
-					Array.from({ length: capId ? 3 : 4 }, (_, index) => (
-						<StatBoxSkeleton key={`skeleton-${capId ? 3 : 4}-${index}`} />
-					))
+					<div className="flex h-[340px] flex-col items-center justify-center gap-3">
+						<SquiggleLoader />
+						<p className="text-sm text-gray-10">Counting views…</p>
+					</div>
+				) : !hasActivity ? (
+					<div className="flex h-[340px] flex-col items-center justify-center text-center">
+						<PaperPlaneDoodle />
+						<p className="mt-5 text-lg font-medium text-gray-12">
+							No views in this period
+						</p>
+						<p className="mt-1 max-w-sm text-sm text-gray-10 text-pretty">
+							{capId
+								? "Send this Cap to someone and every view, comment and reaction will land here."
+								: "Share a Cap and every view, comment and reaction will land here."}
+						</p>
+						{emptyAction && <div className="mt-5">{emptyAction}</div>}
+					</div>
 				) : (
-					<>
-						<StatBox
-							onClick={() => toggleHandler("views")}
-							isSelected={selectedBoxes.has("views")}
-							title="Views"
-							value={formattedCounts.views}
-							metric="views"
-							onMouseEnter={() => viewsBoxRef.current?.startAnimation()}
-							onMouseLeave={() => viewsBoxRef.current?.stopAnimation()}
-							icon={<ClapIcon ref={viewsBoxRef} size={20} />}
-						/>
-						<StatBox
-							onClick={() => toggleHandler("comments")}
-							isSelected={selectedBoxes.has("comments")}
-							title="Comments"
-							value={formattedCounts.comments}
-							metric="comments"
-							onMouseEnter={() => chatsBoxRef.current?.startAnimation()}
-							onMouseLeave={() => chatsBoxRef.current?.stopAnimation()}
-							icon={<ChatIcon ref={chatsBoxRef} size={20} />}
-						/>
-						<StatBox
-							onClick={() => toggleHandler("reactions")}
-							isSelected={selectedBoxes.has("reactions")}
-							title="Reactions"
-							value={formattedCounts.reactions}
-							metric="reactions"
-							onMouseEnter={() => reactionsBoxRef.current?.startAnimation()}
-							onMouseLeave={() => reactionsBoxRef.current?.stopAnimation()}
-							icon={<ReactionIcon ref={reactionsBoxRef} size={20} />}
-						/>
-						{!capId && (
-							<StatBox
-								onClick={() => toggleHandler("caps")}
-								isSelected={selectedBoxes.has("caps")}
-								title="Caps"
-								value={formattedCounts.caps}
-								metric="caps"
-								onMouseEnter={() => capsBoxRef.current?.startAnimation()}
-								onMouseLeave={() => capsBoxRef.current?.stopAnimation()}
-								icon={<CapIcon ref={capsBoxRef} size={20} />}
-							/>
-						)}
-					</>
+					<TrafficChart
+						data={display.data}
+						metrics={metrics}
+						granularity={display.granularity}
+						animationKey={`${animationKey}-${display.data.length}-${display.data[0]?.bucket ?? ""}`}
+					/>
 				)}
 			</div>
-			<ChartArea
-				selectedMetrics={Array.from(selectedBoxes).filter(
-					(metric) => !capId || metric !== "caps",
-				)}
-				data={data}
-				isLoading={isLoading}
-			/>
-		</div>
+		</section>
 	);
 }
 
-const metricColors = {
-	views: {
-		bg: "rgba(59, 130, 246, 0.03)",
-		bgHover: "rgba(59, 130, 246, 0.05)",
-		bgSelected: "rgba(59, 130, 246, 0.08)",
-		border: "rgba(59, 130, 246, 0.15)",
-		borderSelected: "rgba(59, 130, 246, 0.25)",
-	},
-	comments: {
-		bg: "rgba(236, 72, 153, 0.03)",
-		bgHover: "rgba(236, 72, 153, 0.05)",
-		bgSelected: "rgba(236, 72, 153, 0.08)",
-		border: "rgba(236, 72, 153, 0.15)",
-		borderSelected: "rgba(236, 72, 153, 0.25)",
-	},
-	reactions: {
-		bg: "rgba(249, 115, 22, 0.03)",
-		bgHover: "rgba(249, 115, 22, 0.05)",
-		bgSelected: "rgba(249, 115, 22, 0.08)",
-		border: "rgba(249, 115, 22, 0.15)",
-		borderSelected: "rgba(249, 115, 22, 0.25)",
-	},
-	caps: {
-		bg: "rgba(0, 0, 0, 0.02)",
-		bgHover: "rgba(0, 0, 0, 0.03)",
-		bgSelected: "rgba(0, 0, 0, 0.05)",
-		border: "rgba(0, 0, 0, 0.12)",
-		borderSelected: "rgba(0, 0, 0, 0.2)",
-	},
-} as const;
+const WEEKLY_THRESHOLD = 92;
 
-interface StatBoxProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
-	title: string;
-	value: string;
-	icon: React.ReactElement<SVGProps<SVGSVGElement>>;
-	isSelected?: boolean;
-	metric: boxes;
-}
-function StatBox({
-	title,
-	value,
-	icon,
-	isSelected = false,
+const rollUpLongRanges = (
+	data: ChartPoint[],
+	granularity: Granularity,
+): { data: ChartPoint[]; granularity: Granularity } => {
+	if (granularity !== "day" || data.length <= WEEKLY_THRESHOLD) {
+		return { data, granularity };
+	}
+	const weeks: ChartPoint[] = [];
+	for (let end = data.length; end > 0; end -= 7) {
+		const chunk = data.slice(Math.max(0, end - 7), end);
+		const first = chunk[0];
+		const last = chunk[chunk.length - 1];
+		if (!first || !last) continue;
+		weeks.unshift(
+			chunk.reduce(
+				(acc, point) => ({
+					bucket: acc.bucket,
+					bucketEnd: acc.bucketEnd,
+					views: acc.views + point.views,
+					comments: acc.comments + point.comments,
+					reactions: acc.reactions + point.reactions,
+					caps: acc.caps + point.caps,
+				}),
+				{
+					bucket: first.bucket,
+					bucketEnd: last.bucket,
+					views: 0,
+					comments: 0,
+					reactions: 0,
+					caps: 0,
+				},
+			),
+		);
+	}
+	return { data: weeks, granularity: "week" };
+};
+
+function StatTile({
 	metric,
-	...props
-}: StatBoxProps) {
-	const colors = metricColors[metric];
+	value,
+	hint,
+	isSelected,
+	isLoading,
+	onClick,
+}: {
+	metric: Metric;
+	value: number;
+	hint: string;
+	isSelected: boolean;
+	isLoading?: boolean;
+	onClick: () => void;
+}) {
+	const [hovered, setHovered] = useState(false);
+	const meta = METRIC_META[metric];
 
 	return (
 		<button
-			{...props}
 			type="button"
-			className={classNames(
-				"flex flex-col flex-1 min-w-[150px] gap-2 px-8 py-6 rounded-xl border transition-all duration-200 cursor-pointer group h-fit border-gray-5 text-left",
-				isSelected ? "border-gray-8" : "",
+			onClick={onClick}
+			onMouseEnter={() => setHovered(true)}
+			onMouseLeave={() => setHovered(false)}
+			onFocus={() => setHovered(true)}
+			onBlur={() => setHovered(false)}
+			aria-pressed={isSelected}
+			data-doodle-hover={hovered ? "" : undefined}
+			className={clsx(
+				"group relative flex flex-col gap-1 px-6 py-5 text-left transition-colors duration-200 outline-none bg-gray-1 focus-visible:bg-gray-2 hover:bg-gray-2",
 			)}
-			style={{
-				backgroundColor: isSelected ? colors.bgSelected : colors.bg,
-				borderColor: isSelected ? colors.borderSelected : colors.border,
-			}}
-			onMouseEnter={(e) => {
-				if (!isSelected) {
-					e.currentTarget.style.backgroundColor = colors.bgHover;
-				}
-				props.onMouseEnter?.(e);
-			}}
-			onMouseLeave={(e) => {
-				if (!isSelected) {
-					e.currentTarget.style.backgroundColor = colors.bg;
-				}
-				props.onMouseLeave?.(e);
-			}}
 		>
-			<div className="flex gap-2 items-center h-fit justify-between">
-				<div className="flex gap-2 items-center h-fit">
-					{cloneElement(icon, {
-						className: classNames(
-							"group-hover:text-gray-12 transition-colors duration-200",
+			<div className="flex justify-between items-center">
+				<div className="flex gap-2 items-center">
+					<span className="-ml-1 flex size-7 items-center justify-center">
+						{DOODLES[metric]()}
+					</span>
+					<span
+						className={clsx(
+							"text-sm font-medium transition-colors",
 							isSelected ? "text-gray-12" : "text-gray-10",
-						),
-					})}
-					<p
-						className={classNames(
-							"text-base font-medium transition-colors duration-200 group-hover:text-gray-12 text-gray-10",
-							isSelected && "text-gray-12",
 						)}
 					>
-						{title}
-					</p>
+						{meta.label}
+					</span>
 				</div>
-				<div
-					className={classNames(
-						"flex items-center justify-center size-5 rounded border transition-all duration-200",
-						isSelected
-							? "bg-gray-3 border-gray-9 dark:bg-gray-10 dark:border-gray-10"
-							: "bg-transparent border-gray-8 group-hover:border-gray-10",
+				<span
+					className={clsx(
+						"flex size-4 items-center justify-center rounded-[5px] border-[1.5px] transition-all duration-200",
+						!isSelected && "border-gray-7 group-hover:border-gray-9",
 					)}
+					style={
+						isSelected
+							? { background: meta.color, borderColor: meta.color }
+							: undefined
+					}
+					aria-hidden="true"
 				>
 					{isSelected && (
-						<Check className="size-3.5 text-gray-12 dark:text-gray-1" />
+						<svg viewBox="0 0 12 12" className="size-2.5" aria-hidden="true">
+							<path
+								d="M2.5 6.2 5 8.5 9.5 3.5"
+								fill="none"
+								stroke="white"
+								strokeWidth={1.8}
+								strokeLinecap="round"
+								strokeLinejoin="round"
+							/>
+						</svg>
 					)}
-				</div>
+				</span>
 			</div>
-			<p className="text-2xl font-medium transition-colors duration-200 text-gray-12">
-				{value}
-			</p>
+			{isLoading ? (
+				<>
+					<div className="mt-1.5 h-8 w-20 rounded-md animate-pulse bg-gray-3" />
+					<div className="mt-1 h-3.5 w-28 rounded animate-pulse bg-gray-3" />
+				</>
+			) : (
+				<>
+					<NumberFlow
+						value={value}
+						format={value >= 10_000 ? { notation: "compact" } : undefined}
+						className={clsx(
+							"text-[32px] font-semibold leading-tight tracking-tight tabular-nums transition-colors",
+							isSelected ? "text-gray-12" : "text-gray-9",
+						)}
+					/>
+					<span className="text-[13px] text-gray-10">{hint}</span>
+				</>
+			)}
 		</button>
-	);
-}
-
-function StatBoxSkeleton() {
-	return (
-		<div className="flex flex-col flex-1 min-w-[150px] gap-2 px-8 py-6 bg-transparent rounded-xl border border-gray-5 h-fit">
-			<div className="flex gap-2 items-center h-fit">
-				<div className="size-5 rounded bg-gray-4 animate-pulse" />
-				<div className="h-4 w-20 rounded bg-gray-4 animate-pulse" />
-			</div>
-			<div className="h-8 w-16 rounded bg-gray-4 animate-pulse" />
-		</div>
 	);
 }

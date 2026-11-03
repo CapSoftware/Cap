@@ -1,6 +1,14 @@
-import { Hono } from "hono";
+import { type Context, Hono } from "hono";
 import { z } from "zod";
-import { validateMediaServerSecret } from "../lib/auth";
+import { canReadStatus, validateMediaServerSecret } from "../lib/auth";
+import {
+	DRAIN_RETRY_AFTER_SECONDS,
+	DRAINING_DETAILS,
+	getIdleTimeoutSeconds,
+	isDraining,
+	restoreIdleTimeoutOnFirstChunk,
+	setRequestIdleTimeout,
+} from "../lib/lifecycle";
 import {
 	canAcceptNewAudioOperation as canAcceptNewProcess,
 	checkHasAudioTrack,
@@ -11,6 +19,9 @@ import {
 
 const audio = new Hono();
 const MEDIA_ENGINE_ERROR_CODE = ["FF", "MPEG_ERROR"].join("");
+// A streamed MP3 of a multi-hour recording takes minutes to encode, so the
+// default 2-minute extraction limit would cut it off mid-response.
+const STREAMED_AUDIO_TIMEOUT_MS = 15 * 60 * 1000;
 
 const videoUrlSchema = z.object({
 	videoUrl: z.string().url(),
@@ -35,7 +46,22 @@ function isTimeoutError(err: unknown): boolean {
 	return err instanceof Error && err.message.includes("timed out");
 }
 
+function drainingResponse(c: Context) {
+	c.header("Retry-After", DRAIN_RETRY_AFTER_SECONDS.toString());
+	return c.json(
+		{
+			error: "Server is busy",
+			code: "SERVER_BUSY",
+			details: DRAINING_DETAILS,
+		},
+		503,
+	);
+}
+
 audio.get("/status", (c) => {
+	if (!canReadStatus(c)) {
+		return c.json({ error: "Unauthorized" }, 401);
+	}
 	return c.json({
 		activeProcesses: getActiveProcessCount(),
 		canAcceptNewProcess: canAcceptNewProcess(),
@@ -60,6 +86,8 @@ audio.post("/check", async (c) => {
 			400,
 		);
 	}
+
+	if (isDraining()) return drainingResponse(c);
 
 	try {
 		const hasAudio = await checkHasAudioTrack(result.data.videoUrl);
@@ -120,6 +148,11 @@ audio.post("/extract", async (c) => {
 	}
 
 	const { videoUrl, stream: useStreaming } = result.data;
+	if (isDraining()) return drainingResponse(c);
+	setRequestIdleTimeout(c.env, c.req.raw, 0);
+	const restoreIdleTimeout = () =>
+		setRequestIdleTimeout(c.env, c.req.raw, getIdleTimeoutSeconds());
+	let streaming = false;
 
 	try {
 		const hasAudio = await checkHasAudioTrack(videoUrl);
@@ -131,18 +164,24 @@ audio.post("/extract", async (c) => {
 		}
 
 		if (useStreaming) {
-			const { stream, cleanup } = extractAudioStream(videoUrl);
+			const { stream, cleanup } = extractAudioStream(videoUrl, {
+				timeoutMs: STREAMED_AUDIO_TIMEOUT_MS,
+			});
 
 			c.req.raw.signal.addEventListener("abort", () => {
 				cleanup();
 			});
 
-			return new Response(stream, {
-				headers: {
-					"Content-Type": "audio/mpeg",
-					"Transfer-Encoding": "chunked",
+			streaming = true;
+			return new Response(
+				restoreIdleTimeoutOnFirstChunk(stream, restoreIdleTimeout),
+				{
+					headers: {
+						"Content-Type": "audio/mpeg",
+						"Transfer-Encoding": "chunked",
+					},
 				},
-			});
+			);
 		}
 
 		const audioData = await extractAudio(videoUrl);
@@ -186,6 +225,8 @@ audio.post("/extract", async (c) => {
 			},
 			500,
 		);
+	} finally {
+		if (!streaming) restoreIdleTimeout();
 	}
 });
 
@@ -209,23 +250,32 @@ audio.post("/convert", async (c) => {
 	}
 
 	const { audioUrl, bitrate } = result.data;
+	if (isDraining()) return drainingResponse(c);
+	setRequestIdleTimeout(c.env, c.req.raw, 0);
+	const restoreIdleTimeout = () =>
+		setRequestIdleTimeout(c.env, c.req.raw, getIdleTimeoutSeconds());
+	let streaming = false;
 
 	try {
 		const { stream, cleanup } = extractAudioStream(audioUrl, {
 			bitrate,
-			timeoutMs: 15 * 60 * 1000,
+			timeoutMs: STREAMED_AUDIO_TIMEOUT_MS,
 		});
 
 		c.req.raw.signal.addEventListener("abort", () => {
 			cleanup();
 		});
 
-		return new Response(stream, {
-			headers: {
-				"Content-Type": "audio/mpeg",
-				"Transfer-Encoding": "chunked",
+		streaming = true;
+		return new Response(
+			restoreIdleTimeoutOnFirstChunk(stream, restoreIdleTimeout),
+			{
+				headers: {
+					"Content-Type": "audio/mpeg",
+					"Transfer-Encoding": "chunked",
+				},
 			},
-		});
+		);
 	} catch (err) {
 		console.error("[audio/convert] Error:", err);
 
@@ -259,6 +309,8 @@ audio.post("/convert", async (c) => {
 			},
 			500,
 		);
+	} finally {
+		if (!streaming) restoreIdleTimeout();
 	}
 });
 

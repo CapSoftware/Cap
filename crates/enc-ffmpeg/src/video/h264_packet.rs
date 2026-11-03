@@ -7,12 +7,14 @@ use ffmpeg::{
     frame,
 };
 
+use crate::video::HwUpload;
 use crate::video::h264::OpenedVideoEncoder;
 
 pub struct H264PacketEncoder {
     encoder: encoder::Video,
     converter: Option<ffmpeg::software::scaling::Context>,
     converted_frame_pool: Option<frame::Video>,
+    hw_upload: HwUpload,
     output_format: format::Pixel,
     output_width: u32,
     output_height: u32,
@@ -56,6 +58,7 @@ impl H264PacketEncoder {
             encoder: opened.encoder,
             converter: opened.converter,
             converted_frame_pool: opened.converted_frame_pool,
+            hw_upload: opened.hw_upload,
             output_format: opened.output_format,
             output_width: opened.output_width,
             output_height: opened.output_height,
@@ -140,8 +143,7 @@ impl H264PacketEncoder {
             let converted = self.converted_frame_pool.as_mut().expect(
                 "converted_frame_pool present whenever converter is Some (invariant preserved by from_opened)",
             );
-            converter
-                .run(&frame, converted)
+            super::convert_or_scale(&frame, converted, converter)
                 .map_err(EncodePacketError::Converter)?;
             converted.set_pts(pts);
             converted as &frame::Video
@@ -149,6 +151,10 @@ impl H264PacketEncoder {
             &frame
         };
 
+        let frame_to_send = self
+            .hw_upload
+            .frame(frame_to_send)
+            .map_err(EncodePacketError::Encode)?;
         self.encoder
             .send_frame(frame_to_send)
             .map_err(EncodePacketError::Encode)?;
@@ -173,8 +179,7 @@ impl H264PacketEncoder {
             let converted = converted_frame.get_or_insert_with(|| {
                 frame::Video::new(self.output_format, self.output_width, self.output_height)
             });
-            converter
-                .run(frame, converted)
+            super::convert_or_scale(frame, converted, converter)
                 .map_err(EncodePacketError::Converter)?;
             converted.set_pts(pts);
             converted as &frame::Video
@@ -182,6 +187,10 @@ impl H264PacketEncoder {
             frame as &frame::Video
         };
 
+        let frame_to_send = self
+            .hw_upload
+            .frame(frame_to_send)
+            .map_err(EncodePacketError::Encode)?;
         self.encoder
             .send_frame(frame_to_send)
             .map_err(EncodePacketError::Encode)?;

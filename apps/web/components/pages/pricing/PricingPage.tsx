@@ -69,10 +69,10 @@ const Hero = () => (
 				<span
 					className={`${MONO} hidden rounded-full bg-[#8DBCF0] px-2 py-[5px] text-[10.5px] uppercase leading-none tracking-[0.06em] text-[#111111] sm:inline-block`}
 				>
-					50,000+
+					80,000+
 				</span>
 				<span className="truncate pl-2 sm:hidden">
-					Trusted by 50,000+ users
+					Trusted by 80,000+ users
 				</span>
 				<span className="hidden truncate sm:inline">
 					Trusted by teams and creators

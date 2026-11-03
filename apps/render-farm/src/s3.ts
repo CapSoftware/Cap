@@ -60,11 +60,15 @@ export function mediaS3ConfigFromEnv(env = process.env): S3Config {
 
 const EMPTY_SHA = createHash("sha256").update("").digest("hex");
 
+function encodeUriComponent(value: string) {
+	return encodeURIComponent(value).replace(
+		/[!'()*]/g,
+		(character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
+	);
+}
+
 function encodeKey(key: string) {
-	return key
-		.split("/")
-		.map((part) => encodeURIComponent(part))
-		.join("/");
+	return key.split("/").map(encodeUriComponent).join("/");
 }
 
 function hmac(key: Buffer | string, value: string) {
@@ -108,30 +112,60 @@ export class S3 {
 			return;
 		}
 		this.refreshing ??= (async () => {
-			const token = await (
-				await fetch("http://169.254.169.254/latest/api/token", {
-					method: "PUT",
-					headers: { "x-aws-ec2-metadata-token-ttl-seconds": "21600" },
-				})
-			).text();
+			const signal = AbortSignal.timeout(5_000);
+			const metadata = async (url: string, init?: RequestInit) => {
+				const response = await fetch(url, { ...init, signal });
+				if (!response.ok) {
+					throw new Error(`IMDS request failed: ${response.status}`);
+				}
+				return response;
+			};
+			const token = (
+				await (
+					await metadata("http://169.254.169.254/latest/api/token", {
+						method: "PUT",
+						headers: { "x-aws-ec2-metadata-token-ttl-seconds": "21600" },
+					})
+				).text()
+			).trim();
+			if (!token) throw new Error("IMDS returned an empty token");
 			const headers = { "x-aws-ec2-metadata-token": token };
 			const base =
 				"http://169.254.169.254/latest/meta-data/iam/security-credentials/";
-			const role = (await (await fetch(base, { headers })).text())
+			const role = (await (await metadata(base, { headers })).text())
 				.trim()
 				.split("\n")[0];
-			const credentials = (await (
-				await fetch(`${base}${role}`, { headers })
-			).json()) as {
-				AccessKeyId: string;
-				SecretAccessKey: string;
-				Token: string;
-				Expiration: string;
-			};
+			if (!role) throw new Error("IMDS returned an empty role");
+			const credentials: unknown = await (
+				await metadata(`${base}${role}`, { headers })
+			).json();
+			if (
+				!credentials ||
+				typeof credentials !== "object" ||
+				!("Code" in credentials) ||
+				credentials.Code !== "Success" ||
+				!("AccessKeyId" in credentials) ||
+				typeof credentials.AccessKeyId !== "string" ||
+				!credentials.AccessKeyId ||
+				!("SecretAccessKey" in credentials) ||
+				typeof credentials.SecretAccessKey !== "string" ||
+				!credentials.SecretAccessKey ||
+				!("Token" in credentials) ||
+				typeof credentials.Token !== "string" ||
+				!credentials.Token ||
+				!("Expiration" in credentials) ||
+				typeof credentials.Expiration !== "string"
+			) {
+				throw new Error("IMDS returned invalid credentials");
+			}
+			const expiresAt = Date.parse(credentials.Expiration);
+			if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+				throw new Error("IMDS returned expired or invalid credentials");
+			}
 			this.config.accessKeyId = credentials.AccessKeyId;
 			this.config.secretAccessKey = credentials.SecretAccessKey;
 			this.config.sessionToken = credentials.Token;
-			this.expiresAt = Date.parse(credentials.Expiration);
+			this.expiresAt = expiresAt;
 			this.fetchedAt = Date.now();
 		})().finally(() => {
 			this.refreshing = null;
@@ -163,12 +197,13 @@ export class S3 {
 	}
 
 	private canonicalQuery(query: Record<string, string>) {
-		return Object.keys(query)
-			.sort()
+		return Object.entries(query)
 			.map(
-				(name) =>
-					`${encodeURIComponent(name)}=${encodeURIComponent(query[name] ?? "")}`,
+				([name, value]) =>
+					[encodeUriComponent(name), encodeUriComponent(value)] as const,
 			)
+			.sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+			.map(([name, value]) => `${name}=${value}`)
 			.join("&");
 	}
 

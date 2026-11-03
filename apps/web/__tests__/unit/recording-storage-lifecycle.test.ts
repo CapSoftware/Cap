@@ -156,6 +156,16 @@ function databaseFixture(video = recording(), password?: string | null) {
 		],
 	]);
 	const uploads = new Map<string, typeof Db.videoUploads.$inferSelect>();
+	const shares = new Map<unknown, Map<string, { videoId: string }>>(
+		[Db.sharedVideos, Db.spaceVideos].map((table) => [
+			table,
+			new Map([
+				["root-share", { videoId }],
+				["folder-share", { videoId }],
+				["other-share", { videoId: "other-video" }],
+			]),
+		]),
+	);
 	const mutations: DatabaseMutation[] = [];
 	const events: string[] = [];
 	const objectDeleteConditions: SQL[] = [];
@@ -248,6 +258,12 @@ function databaseFixture(video = recording(), password?: string | null) {
 						: mutation.table === Db.videoProcessingJobs
 							? jobs
 							: null;
+				const shareRows = shares.get(mutation.table);
+				if (shareRows && mutation.operation === "delete") {
+					for (const [id, row] of shareRows) {
+						if (row.videoId === mutation.id) shareRows.delete(id);
+					}
+				}
 				if (!table) continue;
 				if (mutation.operation === "delete" && mutation.id)
 					table.delete(mutation.id);
@@ -304,6 +320,7 @@ function databaseFixture(video = recording(), password?: string | null) {
 		rows,
 		jobs,
 		uploads,
+		shares,
 		mutations,
 		events,
 		objectDeleteConditions,
@@ -976,6 +993,27 @@ describe("recording storage lifecycle", () => {
 		});
 	});
 
+	it("keeps the screenshot type and viewer settings on duplicated Caps", async () => {
+		const database = databaseFixture(recording({ type: "webMP4" }));
+		const settings = { disableComments: true, defaultPlaybackSpeed: 1.5 };
+		database.rows.set(videoId, {
+			...database.rows.get(videoId),
+			isScreenshot: true,
+			settings,
+		});
+		const storage = await storageFixture([
+			[`${prefix}screenshot/screen-capture.png`, "uploaded-screenshot"],
+		]);
+		expect(Exit.isSuccess(await runVideoOperation("duplicate"))).toBe(true);
+		expect(
+			storage.objects.get(`${newPrefix}screenshot/screen-capture.png`),
+		).toBe("uploaded-screenshot");
+		expect(database.rows.get("duplicate-video")).toMatchObject({
+			isScreenshot: true,
+			settings,
+		});
+	});
+
 	it("does not duplicate source inventories, raw fragments, or comment attachments across pages", async () => {
 		const database = databaseFixture();
 		const retained = Array.from(
@@ -1082,6 +1120,19 @@ describe("recording storage lifecycle", () => {
 		},
 	);
 
+	it("removes organization and space shares only for the deleted recording", async () => {
+		const database = databaseFixture();
+		await storageFixture([[outputKey, "verified-video"]]);
+
+		expect(Exit.isSuccess(await runVideoOperation("delete"))).toBe(true);
+		expect(database.rows.has(videoId)).toBe(false);
+		for (const table of [Db.sharedVideos, Db.spaceVideos]) {
+			expect(database.shares.get(table)).toEqual(
+				new Map([["other-share", { videoId: "other-video" }]]),
+			);
+		}
+	});
+
 	it("waits for job deletion before deleting any dependent database row", async () => {
 		const database = databaseFixture();
 		let release: (() => void) | undefined;
@@ -1137,6 +1188,13 @@ describe("recording storage lifecycle", () => {
 			state: "source-blocked",
 			errorCode: "video-deleting",
 		});
+		for (const shares of database.shares.values()) {
+			expect([...shares.values()].map((share) => share.videoId)).toEqual([
+				videoId,
+				videoId,
+				"other-video",
+			]);
+		}
 		storage.deniedDeletes.clear();
 		expect(Exit.isSuccess(await runVideoOperation("delete"))).toBe(true);
 		expect(database.rows.has(videoId)).toBe(false);

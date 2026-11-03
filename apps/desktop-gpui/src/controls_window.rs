@@ -10,13 +10,15 @@
 use std::time::Duration;
 
 use gpui::{
-    Context, Entity, FontWeight, InteractiveElement as _, IntoElement, MouseButton,
-    ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled, Window, div,
-    prelude::FluentBuilder as _, px, svg,
+    AppContext as _, Context, Entity, FontWeight, InteractiveElement as _, IntoElement,
+    MouseButton, ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled,
+    Window, div, prelude::FluentBuilder as _, px, svg,
 };
 
+use crate::i18n::tr;
+use crate::theme::LocaleFont as _;
 use crate::{
-    feeds::{self, Feeds},
+    feeds::Feeds,
     recording::RecordingMode,
     session::{Phase, RecordingSession},
     theme::Theme,
@@ -33,9 +35,8 @@ pub struct ControlsWindow {
     /// platform, so the tick both notifies and asks for a frame explicitly.
     _tick: gpui::Task<()>,
     ticking_live: bool,
-    /// The mic level bar's fill in device pixels as last drawn, `None` while
-    /// the bar is hidden.
-    drawn_level_px: std::cell::Cell<Option<u32>>,
+    level_bar: Entity<ui::MicrophoneLevel>,
+    issue_room: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -63,6 +64,7 @@ impl ControlsWindow {
         crate::theme::bind_window(window, cx);
         let theme = Theme::for_window(window, cx, false);
         cx.observe_in(&session, window, |this, _, window, cx| {
+            this.fit_to_issue(window, cx);
             let live = this.timer_is_live(cx);
             if live != this.ticking_live {
                 this.ticking_live = live;
@@ -71,6 +73,15 @@ impl ControlsWindow {
             cx.notify();
         })
         .detach();
+        let mic_level = Feeds::global(cx).read(cx).mic_level().clone();
+        let level_bar = cx.new(|cx| {
+            ui::MicrophoneLevel::new(
+                ui::MicrophoneLevelKind::RecordingBar,
+                &mic_level,
+                window,
+                cx,
+            )
+        });
 
         let mut this = Self {
             session,
@@ -80,11 +91,39 @@ impl ControlsWindow {
             confirmation_pending: false,
             _tick: gpui::Task::ready(()),
             ticking_live: false,
-            drawn_level_px: std::cell::Cell::new(None),
+            level_bar,
+            issue_room: false,
         };
         this.ticking_live = this.timer_is_live(cx);
         this._tick = Self::spawn_tick(window, cx);
+        // Once the platform window is finished: an issue may already be up.
+        cx.defer_in(window, |this, window, cx| this.fit_to_issue(window, cx));
         this
+    }
+
+    fn issue(&self, cx: &gpui::App) -> Option<String> {
+        let session = self.session.read(cx);
+        session.error.clone().or_else(|| {
+            session
+                .storage_warning
+                .then(|| tr::controls::low_storage().to_owned())
+        })
+    }
+
+    fn fit_to_issue(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let issue = self.issue(cx).is_some();
+        if issue == self.issue_room {
+            return;
+        }
+        self.issue_room = issue;
+        let Some(native) = crate::platform::native_window(window) else {
+            return;
+        };
+        let scale = window.scale_factor();
+        cx.spawn(async move |_, _| {
+            crate::app_windows::fit_controls_to_issue(&native, issue, scale);
+        })
+        .detach();
     }
 
     fn timer_is_live(&self, cx: &gpui::App) -> bool {
@@ -121,17 +160,10 @@ impl ControlsWindow {
         })
     }
 
-    /// Whether a new mic level would move the bar by at least a device pixel.
-    pub fn level_bar_moves(&self, db: f64, scale: f32) -> bool {
-        self.drawn_level_px
-            .get()
-            .is_some_and(|drawn| drawn != level_bar_px(db, scale))
-    }
-
-    /// `formatTime`: `M:SS`, hours folded into minutes the same way.
+    /// `formatTime`, through the editor clock's formatter, so a recording past
+    /// an hour reads `H:MM:SS` where the source folds the hours into minutes.
     fn format_elapsed(elapsed: Duration) -> String {
-        let total = elapsed.as_secs();
-        format!("{}:{:02}", total / 60, total % 60)
+        crate::editor_timeline::format_time(elapsed.as_secs_f64())
     }
 
     fn action_button(
@@ -171,20 +203,20 @@ impl ControlsWindow {
         let label: SharedString = if let Some(countdown) = countdown.filter(|value| *value > 0) {
             countdown.to_string().into()
         } else if starting {
-            "Starting".into()
+            tr::controls::stop::starting().into()
         } else if stopping {
-            "Saving…".into()
+            tr::controls::stop::saving().into()
         } else if session.pause_pending() {
             if session.is_paused() {
-                "Resuming…"
+                tr::controls::stop::resuming()
             } else {
-                "Pausing…"
+                tr::controls::stop::pausing()
             }
             .into()
         } else if session.is_paused() {
-            "Paused".into()
+            tr::controls::stop::paused().into()
         } else if session.error.is_some() {
-            "Error".into()
+            tr::controls::stop::error().into()
         } else {
             Self::format_elapsed(session.elapsed()).into()
         };
@@ -231,17 +263,21 @@ impl ControlsWindow {
     /// gray-10 track). In instant mode with a live mic it doubles as the mute
     /// button -- studio deliberately does not expose mute, since the mic is an
     /// editable track and muted spans would bake zeros in.
-    fn render_microphone(&self, scale: f32, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_microphone(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let session = self.session.read(cx);
         let muted = session.mic_muted;
         let can_mute = session.mode() == Some(RecordingMode::Instant)
             && session.has_microphone()
             && matches!(session.phase, Phase::Recording { .. });
-        let level_db = Feeds::global(cx).read(cx).mic_level_db;
-        let level = feeds::bar_level(level_db);
-        self.drawn_level_px
-            .set((self.has_microphone && !muted).then(|| level_bar_px(level_db, scale)));
+        self.level_bar.update(cx, |bar, cx| {
+            bar.configure(
+                self.has_microphone && !muted,
+                theme.blue_9.into(),
+                theme.gray_10.into(),
+                cx,
+            );
+        });
 
         let icon = if !self.has_microphone || muted {
             "icons/mic-off.svg"
@@ -277,26 +313,7 @@ impl ControlsWindow {
             })
             .child(svg().path(icon).size(px(20.)).text_color(icon_color))
             .when(self.has_microphone && !muted, |this| {
-                this.child(
-                    div()
-                        .absolute()
-                        .bottom(px(4.))
-                        .left(px(4.))
-                        .right(px(4.))
-                        .h(px(2.))
-                        .rounded_full()
-                        .overflow_hidden()
-                        .bg(theme.gray_10)
-                        .child(
-                            div()
-                                .absolute()
-                                .left_0()
-                                .top_0()
-                                .bottom_0()
-                                .w(gpui::relative(level as f32))
-                                .bg(theme.blue_9),
-                        ),
-                )
+                this.child(self.level_bar.clone())
             })
     }
 
@@ -308,14 +325,14 @@ impl ControlsWindow {
     ) {
         let (title, message, accept) = match action {
             DestructiveAction::Restart => (
-                "Confirm Restart",
-                "Are you sure you want to restart the recording? The current recording will be discarded.",
-                "Restart",
+                tr::controls::confirm::restart_title(),
+                tr::controls::confirm::restart_message(),
+                tr::controls::confirm::restart(),
             ),
             DestructiveAction::Delete => (
-                "Confirm Delete",
-                "Are you sure you want to delete the recording?",
-                "Delete",
+                tr::controls::confirm::delete_title(),
+                tr::controls::confirm::delete_message(),
+                tr::controls::confirm::delete(),
             ),
         };
 
@@ -333,8 +350,14 @@ impl ControlsWindow {
                 return;
             };
             self.confirmation_pending = true;
-            let response =
-                crate::editor_modal::confirm_action(title, message, accept, "Cancel", window, cx);
+            let response = crate::editor_modal::confirm_action(
+                title,
+                message,
+                accept,
+                tr::common::cancel(),
+                window,
+                cx,
+            );
             cx.spawn_in(window, async move |this, cx| {
                 let confirmed = response.await;
                 let _ = this.update_in(cx, |this, window, cx| {
@@ -361,7 +384,8 @@ impl ControlsWindow {
 
         #[cfg(not(target_os = "linux"))]
         cx.spawn_in(window, async move |this, cx| {
-            if !crate::platform::confirm_dialog(title, message, accept, "Cancel", true) {
+            if !crate::platform::confirm_dialog(title, message, accept, tr::common::cancel(), true)
+            {
                 return;
             }
 
@@ -376,24 +400,24 @@ impl ControlsWindow {
         .detach();
     }
 
-    fn render_bar(&mut self, scale: f32, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let session = self.session.read(cx);
         let paused = session.is_paused();
         let busy = !matches!(session.phase, Phase::Recording { .. }) || session.pause_unavailable();
         let pause_pending = session.pause_pending();
         let pause_tooltip = if session.pause_uncertain() {
-            "Capture state is unconfirmed. Use Stop."
+            tr::controls::pause::unconfirmed()
         } else if pause_pending {
             if paused {
-                "Resuming recording…"
+                tr::controls::pause::resuming()
             } else {
-                "Pausing recording…"
+                tr::controls::pause::pausing()
             }
         } else if paused {
-            "Resume recording"
+            tr::controls::pause::resume()
         } else {
-            "Pause recording"
+            tr::controls::pause::pause()
         };
 
         div()
@@ -434,7 +458,7 @@ impl ControlsWindow {
                             .items_center()
                             .gap(px(2.))
                             .flex_shrink_0()
-                            .child(self.render_microphone(scale, cx))
+                            .child(self.render_microphone(cx))
                             .child(
                                 self.action_button(
                                     "pause",
@@ -517,12 +541,7 @@ impl ControlsWindow {
 impl Render for ControlsWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.theme.refresh(window, cx, false);
-        let session = self.session.read(cx);
-        let issue = session.error.clone().or_else(|| {
-            session
-                .storage_warning
-                .then(|| "Low storage. Cap will stop soon to save your recording.".to_owned())
-        });
+        let issue = self.issue(cx);
 
         div()
             .size_full()
@@ -531,6 +550,7 @@ impl Render for ControlsWindow {
             .justify_end()
             .p(px(12.))
             .font_family(crate::theme::UI_FONT)
+            .locale_font()
             // `body { font-weight: 500 }` (`ui-solid/src/main.css:189-192`).
             .font_weight(FontWeight::MEDIUM)
             .when_some(issue, |this, issue| {
@@ -559,7 +579,7 @@ impl Render for ControlsWindow {
                         .child(recording_issue_text(issue)),
                 )
             })
-            .child(self.render_bar(window.scale_factor(), cx))
+            .child(self.render_bar(cx))
     }
 }
 
@@ -572,19 +592,15 @@ fn recording_issue_text(error: String) -> impl IntoElement + Styled {
         .max_h(px(56.))
         .overflow_x_scroll()
         .overflow_y_scroll()
-        .child(if error.contains("Insufficient disk space")
-            && error.contains("Your recording is still paused")
-        {
-            "Not enough disk space to resume. Free up space and try again, or press Stop to save."
-                .to_owned()
-        } else {
-            error
-        })
-}
-
-/// The bar's track is 20pt wide.
-fn level_bar_px(db: f64, scale: f32) -> u32 {
-    (feeds::bar_level(db) * 20.0 * f64::from(scale)).round() as u32
+        .child(
+            if error.contains("Insufficient disk space")
+                && error.contains("Your recording is still paused")
+            {
+                tr::controls::disk_full_resume().to_owned()
+            } else {
+                crate::i18n::messages::localize(&error)
+            },
+        )
 }
 
 fn tick_delay(live: bool, elapsed: Duration) -> Duration {
@@ -619,6 +635,16 @@ mod repaint_tests {
     }
 
     #[test]
+    fn the_timer_shows_hours_from_an_hour_on() {
+        let label = |seconds| ControlsWindow::format_elapsed(Duration::from_secs_f64(seconds));
+        assert_eq!(label(0.), "0:00");
+        assert_eq!(label(95.7), "1:35");
+        assert_eq!(label(3_599.9), "59:59");
+        assert_eq!(label(3_600.), "1:00:00");
+        assert_eq!(label(3_905.), "1:05:05");
+    }
+
+    #[test]
     fn a_resumed_timer_wakes_at_the_next_second_and_a_paused_one_idles() {
         assert_eq!(
             tick_delay(true, Duration::from_millis(3_900)),
@@ -628,16 +654,5 @@ mod repaint_tests {
             tick_delay(false, Duration::from_millis(3_900)),
             Duration::from_secs(1)
         );
-    }
-
-    #[test]
-    fn level_changes_under_a_device_pixel_do_not_move_the_bar() {
-        assert_eq!(level_bar_px(-30.0, 2.0), level_bar_px(-30.5, 2.0));
-        assert_ne!(level_bar_px(-30.0, 2.0), level_bar_px(-32.0, 2.0));
-        assert_eq!(level_bar_px(-30.0, 1.0), level_bar_px(-31.0, 1.0));
-        assert_ne!(level_bar_px(-30.0, 1.0), level_bar_px(-33.0, 1.0));
-        assert_eq!(level_bar_px(-96.0, 2.0), 0);
-        assert_eq!(level_bar_px(0.0, 1.0), 20);
-        assert_eq!(level_bar_px(0.0, 2.0), 40);
     }
 }

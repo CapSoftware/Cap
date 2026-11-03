@@ -8,6 +8,7 @@ import {
 import { readFileSync } from "node:fs";
 import { ANNEX_B_PARAMETER_SETS } from "./boxes.test-util";
 import type { Job, TaskState } from "./coordinator";
+import type { Engine } from "./engine";
 import * as fmp4 from "./fmp4";
 import * as hls from "./hls";
 import * as mp4 from "./mp4";
@@ -31,6 +32,11 @@ function harness(env: Record<string, string> = {}) {
 	let copyGate: (source: string) => Promise<void> | undefined = () => undefined;
 	const completedParts: number[][] = [];
 	const timers: (() => void)[] = [];
+	const timerDelays: number[] = [];
+	const clearedTimers: unknown[] = [];
+	const engineCalls: ReturnType<typeof Promise.withResolvers<unknown>>[] = [];
+	const engineKills: (NodeJS.Signals | undefined)[] = [];
+	const engineLabels: string[] = [];
 	const watchdogs: (() => void)[] = [];
 	let putGate: Promise<void> | undefined;
 	let headGate: Promise<void> | undefined;
@@ -166,8 +172,38 @@ function harness(env: Record<string, string> = {}) {
 		},
 		s3ConfigFromEnv: () => ({}),
 		mediaS3ConfigFromEnv: () => ({}),
+		ProjectCache: class {
+			constructor(
+				_s3: unknown,
+				readonly root: string,
+			) {}
+			async materialize() {
+				return { bytes: 0, requests: 0, ms: 0 };
+			}
+			close() {}
+		},
 		ProbeEngine: class {},
-		Engine: class {},
+		Engine: class {
+			alive = true;
+			private pending?: ReturnType<typeof Promise.withResolvers<unknown>>;
+			constructor(
+				_binary: string,
+				_env: Record<string, string>,
+				readonly label: string,
+			) {
+				engineLabels.push(label);
+			}
+			request() {
+				this.pending = Promise.withResolvers<unknown>();
+				engineCalls.push(this.pending);
+				return this.pending.promise;
+			}
+			kill(signal?: NodeJS.Signals) {
+				engineKills.push(signal);
+				this.alive = false;
+				this.pending?.reject(new Error("audio engine exited"));
+			}
+		},
 		process: {
 			env: {
 				RF_TOKEN: "test",
@@ -185,11 +221,12 @@ function harness(env: Record<string, string> = {}) {
 		setInterval: (callback: () => void) => {
 			watchdogs.push(callback);
 		},
-		setTimeout: (callback: () => void) => {
+		setTimeout: (callback: () => void, delay: number) => {
 			timers.push(callback);
+			timerDelays.push(delay);
 			return { unref() {} };
 		},
-		clearTimeout: () => {},
+		clearTimeout: (timer: unknown) => clearedTimers.push(timer),
 		fetch: async (url: string, init: RequestInit) => {
 			callbacks.push({ url, init });
 			return new Response("ok");
@@ -202,8 +239,13 @@ function harness(env: Record<string, string> = {}) {
 	const compiled = new Bun.Transpiler({ loader: "ts" }).transformSync(source);
 	const coordinator = new Function(
 		...Object.keys(deps),
-		`${compiled}\nreturn {jobs, queue, straggler, dispatchedTask, onVideoDone, onAudioDone, publishPlaylist, journalJob, resumeJobs, newHlsState, finish, requeue, sourceIndex, assemble, stitchAhead, sweepStashes, setPlanner: (fn) => { planJob = fn; }};`,
+		`${compiled}\nreturn {withAudioEngine, pumpLocalAudio, jobs, queue, straggler, dispatchedTask, onVideoDone, onAudioDone, publishPlaylist, journalJob, resumeJobs, newHlsState, finish, requeue, sourceIndex, assemble, stitchAhead, sweepStashes, setPlanner: (fn) => { planJob = fn; }};`,
 	)(...Object.values(deps)) as {
+		pumpLocalAudio: () => void;
+		withAudioEngine: <T>(
+			fn: (engine: Engine) => Promise<T>,
+			timeoutMs: number,
+		) => Promise<T>;
 		setPlanner: (fn: (job: Job) => Promise<void>) => void;
 		sourceIndex: (prefix: string, sourceRoot?: string) => Promise<unknown>;
 		assemble: (job: Job) => Promise<void>;
@@ -250,6 +292,11 @@ function harness(env: Record<string, string> = {}) {
 		},
 		callbacks,
 		timers,
+		timerDelays,
+		clearedTimers,
+		engineCalls,
+		engineKills,
+		engineLabels,
 		watchdogs,
 		fetch: (request: Request) => fetchHandler(request),
 		gate: (gate?: Promise<void>) => {
@@ -1366,5 +1413,87 @@ describe("jobs for the product", () => {
 			progress: number;
 		};
 		expect(summary.progress).toBe(0.75);
+	});
+});
+
+describe("local audio deadlines", () => {
+	test("local sections include preroll in their deadlines and fail after three hung attempts", async () => {
+		const h = harness({ RF_LOCAL_AUDIO_SLOTS: "1" });
+		const j = job();
+		const state: TaskState = {
+			task: {
+				kind: "audio",
+				taskId: "job:a0",
+				jobId: j.id,
+				section: 0,
+				fps: 30,
+				range: [0, 300 * 48_000],
+				preroll: 30 * 48_000,
+				files: [],
+			},
+			state: "queued",
+			attempts: 0,
+		};
+		j.tasks.set(state.task.taskId, state);
+		h.jobs.set(j.id, j);
+		h.queue.push(state);
+		h.pumpLocalAudio();
+		for (let attempt = 1; attempt <= 3; attempt++) {
+			await Bun.sleep(0);
+			expect(h.engineCalls).toHaveLength(attempt);
+			expect(h.timerDelays.at(-1)).toBe(110_000);
+			h.timers.at(-1)?.();
+			await Bun.sleep(0);
+			if (attempt < 3) {
+				expect(j.status).toBe("rendering");
+				expect(h.timerDelays.at(-1)).toBe(1000 * attempt);
+				h.timers.at(-1)?.();
+			}
+		}
+		expect(j.status).toBe("error");
+		expect(j.error).toBe("audio engine exited");
+		expect(state.attempts).toBe(3);
+		expect(h.engineKills).toEqual(["SIGKILL", "SIGKILL", "SIGKILL"]);
+		expect(j.audioSections.size).toBe(0);
+		expect(h.queue).toHaveLength(0);
+	});
+
+	test("a hung engine is killed and replaced before queued work runs", async () => {
+		const h = harness({ RF_LOCAL_AUDIO_SLOTS: "1" });
+		const first = h.withAudioEngine(
+			(engine) => engine.request("audio", {}),
+			60_000,
+		);
+		first.catch(() => {});
+		const second = h.withAudioEngine(
+			(engine) => engine.request("audio", {}),
+			90_000,
+		);
+		expect(h.engineCalls).toHaveLength(1);
+		expect(h.timerDelays).toEqual([60_000]);
+		h.timers[0]?.();
+		await expect(first).rejects.toThrow("audio engine exited");
+		expect(h.engineKills).toEqual(["SIGKILL"]);
+		expect(h.engineLabels).toEqual(["audio0", "audio0"]);
+		expect(h.engineCalls).toHaveLength(2);
+		expect(h.timerDelays).toEqual([60_000, 90_000]);
+		h.engineCalls[1]?.resolve("recovered");
+		expect(await second).toBe("recovered");
+		expect(h.clearedTimers).toHaveLength(2);
+	});
+
+	test("successful requests clear their deadlines and keep the warm engine", async () => {
+		const h = harness({ RF_LOCAL_AUDIO_SLOTS: "1" });
+		for (let index = 0; index < 2; index++) {
+			const pending = h.withAudioEngine(
+				(engine) => engine.request("audio", {}),
+				60_000,
+			);
+			h.engineCalls[index]?.resolve(index);
+			expect(await pending).toBe(index);
+		}
+		expect(h.engineLabels).toEqual(["audio0"]);
+		expect(h.engineKills).toEqual([]);
+		expect(h.clearedTimers).toHaveLength(2);
 	});
 });

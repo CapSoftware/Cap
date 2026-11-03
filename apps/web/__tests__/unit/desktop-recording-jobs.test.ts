@@ -16,6 +16,7 @@ import {
 	persistCommittedSource,
 	persistSourceCommitCheckpoint,
 	retireDesktopRecordingJobForOutputReplacement,
+	retryBlockedDesktopRecording,
 	scheduleRetry,
 	waitForDesktopRecordingCapacity,
 } from "@/lib/desktop-recording-jobs";
@@ -35,6 +36,7 @@ vi.mock("@cap/database/schema", () => {
 	return {
 		videos: table("videos", ["id", "ownerId", "source"]),
 		videoUploads: table("uploads", ["videoId"]),
+		mediaProcessingBudgets: table("budgets", ["id"]),
 		videoProcessingJobs: table("jobs", [
 			"videoId",
 			"ownerId",
@@ -173,6 +175,17 @@ function createClient() {
 				},
 			};
 		},
+		delete(table: Table) {
+			return {
+				where: async (condition: Condition) => {
+					const before = rows[table.table] ?? [];
+					rows[table.table] = before.filter((row) => !matches(row, condition));
+					return [
+						{ affectedRows: before.length - (rows[table.table]?.length ?? 0) },
+					];
+				},
+			};
+		},
 		insert(table: Table) {
 			return {
 				values(values: Row) {
@@ -236,6 +249,7 @@ beforeEach(() => {
 		],
 		jobs: [],
 		uploads: [],
+		budgets: [],
 	};
 	mocks.db.mockReturnValue(createClient());
 });
@@ -286,6 +300,94 @@ describe("durable recording job ownership", () => {
 		]);
 		expect(results.filter(Boolean)).toHaveLength(1);
 		expect(rows.jobs?.[0]?.attemptCount).toBe(1);
+	});
+
+	const stepIds = (attemptCount: number) => `step-attempt-${attemptCount}`;
+
+	it("returns a live attempt to the caller that named it", async () => {
+		const { job } = await ensureSegmentProcessingJob({ videoId, userId });
+		const first = await claimProcessingAttempt({
+			videoId,
+			generation: job.generation,
+			attemptIdFor: stepIds,
+		});
+		expect(first).toMatchObject({
+			attemptId: "step-attempt-1",
+			attemptCount: 1,
+		});
+		const output = {
+			kind: "desktop-recording-source-commit",
+			revision: 3,
+		};
+		Object.assign(rows.jobs?.[0] ?? {}, { output });
+		const resumed = await claimProcessingAttempt({
+			videoId,
+			generation: job.generation,
+			attemptIdFor: stepIds,
+		});
+		expect(resumed).toMatchObject({
+			attemptId: "step-attempt-1",
+			attemptCount: 1,
+			output,
+		});
+		expect(
+			await claimProcessingAttempt({
+				videoId,
+				generation: job.generation,
+				attemptIdFor: (attemptCount) => `other-step-${attemptCount}`,
+			}),
+		).toBeNull();
+		expect(
+			await claimProcessingAttempt({ videoId, generation: job.generation }),
+		).toBeNull();
+		expect(rows.jobs?.[0]?.attemptCount).toBe(1);
+	});
+
+	it("names a replacement for an expired attempt so a later retry still recognises it", async () => {
+		const { job } = await ensureSegmentProcessingJob({ videoId, userId });
+		await claimProcessingAttempt({
+			videoId,
+			generation: job.generation,
+			attemptIdFor: stepIds,
+		});
+		vi.setSystemTime(new Date(now.getTime() + 6 * 60_000));
+		const replacement = await claimProcessingAttempt({
+			videoId,
+			generation: job.generation,
+			attemptIdFor: stepIds,
+		});
+		expect(replacement).toMatchObject({
+			attemptId: "step-attempt-2",
+			attemptCount: 2,
+		});
+		const retried = await claimProcessingAttempt({
+			videoId,
+			generation: job.generation,
+			attemptIdFor: stepIds,
+		});
+		expect(retried).toMatchObject({
+			attemptId: "step-attempt-2",
+			attemptCount: 2,
+		});
+		expect(rows.jobs?.[0]?.attemptCount).toBe(2);
+	});
+
+	it("does not resume a finished attempt under its old id", async () => {
+		const { job } = await ensureSegmentProcessingJob({ videoId, userId });
+		const first = await claimProcessingAttempt({
+			videoId,
+			generation: job.generation,
+			attemptIdFor: stepIds,
+		});
+		if (!first) throw new Error("Fixture attempt was not claimed");
+		Object.assign(rows.jobs?.[0] ?? {}, { state: "verified" });
+		expect(
+			await claimProcessingAttempt({
+				videoId,
+				generation: job.generation,
+				attemptIdFor: stepIds,
+			}),
+		).toBeNull();
 	});
 
 	it("keeps physical worker leases private and clears their checkpoint for a new attempt", async () => {
@@ -607,6 +709,95 @@ describe("late verification and source commitment", () => {
 		expect(next.job.generation).not.toBe(old.generation);
 		expect(await persistCommittedSource(old, source)).toBe(false);
 		expect(next.job.source).toBeNull();
+	});
+});
+
+describe("operator retry of blocked recordings", () => {
+	async function blockedWithSource(errorCode: string) {
+		const attempt = await createAttempt();
+		await persistCommittedSource(attempt, source);
+		Object.assign(getJobRow(), {
+			state: "source-blocked",
+			leaseExpiresAt: null,
+			nextRetryAt: new Date(now.getTime() + 3_600_000),
+			attemptCount: 4,
+			errorCode,
+			errorMessage: "earlier failure",
+		});
+		rows.uploads = [{ videoId, phase: "error", processingError: "earlier" }];
+		const { recordingBudgetKey } = await import(
+			"@/lib/media-processing-budget"
+		);
+		rows.budgets = [
+			{
+				id: recordingBudgetKey(videoId, attempt.generation),
+				reservedBytes: 900,
+			},
+			{ id: recordingBudgetKey("other-video", "other"), reservedBytes: 1 },
+		];
+		return attempt;
+	}
+
+	it.each([
+		"processing-budget-exhausted",
+		"source-invalid",
+		"processing-retry-exhausted",
+	])(
+		"releases a %s recording with a committed source back into normal processing",
+		async (errorCode) => {
+			const attempt = await blockedWithSource(errorCode);
+			expect(await retryBlockedDesktopRecording({ videoId })).toEqual({
+				status: "queued",
+				ownerId: userId,
+				previousErrorCode: errorCode,
+			});
+			expect(getJobRow()).toMatchObject({
+				generation: attempt.generation,
+				state: "retry",
+				source,
+				attemptCount: 0,
+				leaseExpiresAt: null,
+				nextRetryAt: now,
+				errorCode: null,
+				errorMessage: null,
+			});
+			expect(rows.budgets?.map((row) => row.reservedBytes)).toEqual([1]);
+			expect(rows.uploads?.[0]).toMatchObject({
+				phase: "processing",
+				processingError: null,
+			});
+			const next = await claimProcessingAttempt({
+				videoId,
+				generation: attempt.generation,
+			});
+			expect(next).toMatchObject({
+				state: "processing",
+				attemptCount: 1,
+				source,
+			});
+		},
+	);
+
+	it.each([
+		["a recording without a committed source", { source: null }],
+		["an intentionally replaced output", { errorCode: "output-replaced" }],
+		["a recording being deleted", { errorCode: "video-deleting" }],
+		["a verified recording", { state: "verified", errorCode: null }],
+		["a recording still processing", { state: "processing", errorCode: null }],
+	])("leaves %s untouched", async (_name, change) => {
+		await blockedWithSource("processing-budget-exhausted");
+		Object.assign(getJobRow(), change);
+		const before = structuredClone(rows);
+		expect(await retryBlockedDesktopRecording({ videoId })).toMatchObject({
+			status: "not-retryable",
+		});
+		expect(rows).toEqual(before);
+	});
+
+	it("reports a missing job", async () => {
+		expect(await retryBlockedDesktopRecording({ videoId })).toEqual({
+			status: "not-found",
+		});
 	});
 });
 

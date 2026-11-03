@@ -69,6 +69,7 @@ async fn record(dir: &Path) -> anyhow::Result<()> {
         .with_timestamps(timestamps)
         .build::<FragmentedAudioMuxer>(FragmentedAudioMuxerConfig {
             shared_pause_state: None,
+            write_behind: false,
         })
         .await
         .map_err(|e| anyhow!("mic pipeline: {e:#}"))?;

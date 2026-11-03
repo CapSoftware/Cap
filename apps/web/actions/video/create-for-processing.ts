@@ -15,6 +15,7 @@ import {
 } from "@cap/web-domain";
 import { Option } from "effect";
 import { revalidatePath } from "next/cache";
+import { requirePersonalFolder } from "@/actions/folders/require-personal-folder";
 import { requireOrganizationAccess } from "@/actions/organization/authorization";
 import { runPromise } from "@/lib/server";
 
@@ -61,6 +62,7 @@ export async function createVideoForServerProcessing({
 	}
 
 	await requireOrganizationAccess(user.id, orgId);
+	if (folderId) await requirePersonalFolder(user.id, orgId, folderId);
 
 	const videoId = Video.VideoId.make(nanoId());
 

@@ -332,6 +332,132 @@ fn collect_track(
     Ok(events)
 }
 
+/// Seals the manifest of a track whose recording was interrupted, so its
+/// upload can resume from what was saved. Keeps the run of segments from
+/// `segment_001` that every check in `collect_track` accepts, renames the
+/// unfinished tail and any other media the sealed manifest does not list to
+/// `<name>.unsealed` (never deleting it), and marks the manifest complete.
+/// Returns how many segments it kept. A manifest that is already complete is
+/// left as it is, so sealing twice changes nothing.
+pub fn seal_interrupted_track(
+    directory: &Path,
+    media_type: SegmentMediaType,
+) -> Result<usize, String> {
+    metadata(directory, true)?;
+    let manifest_path = directory.join("manifest.json");
+    metadata(&manifest_path, false)?;
+    let bytes = fs::read(&manifest_path).map_err(|error| error.to_string())?;
+    let manifest: Manifest = serde_json::from_slice(&bytes)
+        .map_err(|error| format!("{}: {error}", manifest_path.display()))?;
+    let (version, kind, stream_kind) = match media_type {
+        SegmentMediaType::Video => (5, "m4s_segments", ffmpeg::media::Type::Video),
+        SegmentMediaType::Audio => (2, "m4s_audio_segments", ffmpeg::media::Type::Audio),
+    };
+    if manifest.version != version || manifest.kind != kind || manifest.init_segment != "init.mp4" {
+        return Err(format!(
+            "{}: recording manifest is not supported",
+            manifest_path.display()
+        ));
+    }
+    if manifest.is_complete {
+        return Ok(manifest.segments.len());
+    }
+    let init = directory.join(&manifest.init_segment);
+    metadata(&init, false)?;
+    let input =
+        ffmpeg::format::input(&init).map_err(|error| format!("{}: {error}", init.display()))?;
+    if input.streams().best(stream_kind).is_none() {
+        return Err(format!(
+            "{}: required initialization stream is missing",
+            init.display()
+        ));
+    }
+    drop(input);
+
+    let mut raw: serde_json::Value = serde_json::from_slice(&bytes)
+        .map_err(|error| format!("{}: {error}", manifest_path.display()))?;
+    let mut entries: Vec<(Segment, serde_json::Value)> = manifest
+        .segments
+        .into_iter()
+        .zip(
+            raw["segments"]
+                .as_array()
+                .cloned()
+                .ok_or_else(|| format!("{}: segments missing", manifest_path.display()))?,
+        )
+        .collect();
+    entries.sort_by_key(|(segment, _)| segment.index);
+    let mut kept = Vec::new();
+    let mut total_duration = 0.0;
+    for (position, (segment, entry)) in entries.into_iter().enumerate() {
+        let path = directory.join(&segment.path);
+        let usable = u64::from(segment.index) == position as u64 + 1
+            && segment.path == format!("segment_{:03}.m4s", segment.index)
+            && segment.is_complete
+            && segment.duration.is_finite()
+            && segment.duration > 0.0
+            && segment.file_size.is_some_and(|size| size > 0)
+            && metadata(&path, false).is_ok_and(|actual| Some(actual.len()) == segment.file_size)
+            && cap_enc_ffmpeg::fragmented_mp4::tail_is_complete(&path).unwrap_or(false);
+        if !usable {
+            break;
+        }
+        total_duration += segment.duration;
+        kept.push((segment.path, entry));
+    }
+    if kept.is_empty() {
+        return Err(format!(
+            "{}: no complete segments to resume",
+            manifest_path.display()
+        ));
+    }
+
+    let listed: HashSet<&str> = kept.iter().map(|(path, _)| path.as_str()).collect();
+    let mut set_aside = Vec::new();
+    for entry in fs::read_dir(directory).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let media = name.ends_with(".m4s") || name.ends_with(".m4s.tmp");
+        if !media || listed.contains(name.as_str()) {
+            continue;
+        }
+        if entry
+            .file_type()
+            .map_err(|error| error.to_string())?
+            .is_symlink()
+        {
+            return Err(format!(
+                "{}: linked recording input",
+                entry.path().display()
+            ));
+        }
+        set_aside.push(entry.path());
+    }
+    for path in set_aside {
+        let target = path.with_file_name(format!(
+            "{}.unsealed",
+            path.file_name().unwrap_or_default().to_string_lossy()
+        ));
+        if target.exists() {
+            return Err(format!("{}: already set aside", target.display()));
+        }
+        fs::rename(&path, &target).map_err(|error| format!("{}: {error}", path.display()))?;
+    }
+
+    let count = kept.len();
+    raw["segments"] = serde_json::Value::Array(kept.into_iter().map(|(_, entry)| entry).collect());
+    raw["total_duration"] = serde_json::json!(total_duration);
+    raw["is_complete"] = serde_json::Value::Bool(true);
+    let sealed = serde_json::to_vec(&raw).map_err(|error| error.to_string())?;
+    let temporary = directory.join(format!(".manifest-{}.sealing", uuid::Uuid::new_v4()));
+    fs::write(&temporary, sealed).map_err(|error| error.to_string())?;
+    if let Err(error) = fs::rename(&temporary, &manifest_path) {
+        let _ = fs::remove_file(&temporary);
+        return Err(format!("{}: {error}", manifest_path.display()));
+    }
+    Ok(count)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -701,6 +827,213 @@ mod tests {
         )
         .unwrap();
         assert!(collect_segment_events(project.path(), true).is_err());
+    }
+
+    fn track_manifest(project: &Path, track: &str) -> PathBuf {
+        project.join("content").join(track).join("manifest.json")
+    }
+
+    /// Lists copies of `segment_001` as further segments, so a track holds
+    /// `total` complete segments.
+    fn extend_track(project: &Path, track: &str, total: u32) {
+        let directory = project.join("content").join(track);
+        let path = track_manifest(project, track);
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        let first = manifest["segments"][0].clone();
+        let bytes = fs::read(directory.join("segment_001.m4s")).unwrap();
+        let segments = manifest["segments"].as_array_mut().unwrap();
+        segments.truncate(1);
+        for index in 2..=total {
+            let name = format!("segment_{index:03}.m4s");
+            fs::write(directory.join(&name), &bytes).unwrap();
+            let mut entry = first.clone();
+            entry["index"] = serde_json::json!(index);
+            entry["path"] = serde_json::json!(name);
+            segments.push(entry);
+        }
+        fs::write(path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    }
+
+    /// Leaves a finished track the way a crash does: an in-progress manifest
+    /// whose next segment is unfinished, with that segment's partial bytes on
+    /// disk. Returns how many complete segments it lists, and the partial bytes.
+    fn interrupt_track(project: &Path, track: &str) -> (usize, Vec<u8>) {
+        let path = track_manifest(project, track);
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        let count = manifest["segments"].as_array().unwrap().len();
+        let next = count + 1;
+        manifest["is_complete"] = serde_json::json!(false);
+        manifest["total_duration"] = serde_json::Value::Null;
+        manifest["segments"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+                "path": format!("segment_{next:03}.m4s"),
+                "index": next,
+                "duration": 0.0,
+                "is_complete": false,
+                "file_size": null,
+            }));
+        fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        let partial = b"partial fragment".to_vec();
+        fs::write(
+            path.with_file_name(format!("segment_{next:03}.m4s.tmp")),
+            &partial,
+        )
+        .unwrap();
+        (count, partial)
+    }
+
+    fn snapshot(directory: &Path) -> Vec<(String, Vec<u8>)> {
+        let mut files: Vec<_> = fs::read_dir(directory)
+            .unwrap()
+            .map(|entry| {
+                let path = entry.unwrap().path();
+                (
+                    path.file_name().unwrap().to_string_lossy().into_owned(),
+                    fs::read(path).unwrap(),
+                )
+            })
+            .collect();
+        files.sort();
+        files
+    }
+
+    #[test]
+    fn an_interrupted_recording_resumes_from_its_saved_segments_once_sealed() {
+        let project = fixture();
+        let mut tracks = Vec::new();
+        for (track, media_type) in [
+            ("display", SegmentMediaType::Video),
+            ("audio", SegmentMediaType::Audio),
+        ] {
+            extend_track(project.path(), track, 3);
+            tracks.push((track, media_type, interrupt_track(project.path(), track)));
+        }
+        assert!(collect_segment_events(project.path(), true).is_err());
+        for (track, media_type, (count, partial)) in &tracks {
+            let directory = project.path().join("content").join(track);
+            assert_eq!(seal_interrupted_track(&directory, *media_type), Ok(*count));
+            let next = count + 1;
+            assert_eq!(
+                &fs::read(directory.join(format!("segment_{next:03}.m4s.tmp.unsealed"))).unwrap(),
+                partial
+            );
+        }
+        let events = collect_segment_events(project.path(), true).unwrap();
+        for (_, media_type, (count, _)) in &tracks {
+            let segments = events
+                .iter()
+                .filter(|event| !event.is_init && event.media_type == *media_type)
+                .count();
+            assert_eq!(segments, *count);
+        }
+        for (track, media_type, (count, _)) in &tracks {
+            let directory = project.path().join("content").join(track);
+            let before = snapshot(&directory);
+            assert_eq!(seal_interrupted_track(&directory, *media_type), Ok(*count));
+            assert_eq!(snapshot(&directory), before);
+        }
+    }
+
+    #[test]
+    fn sealing_keeps_only_segments_before_the_first_failed_check() {
+        for (damage, kept) in [
+            ("truncate", 1),
+            ("incomplete", 1),
+            ("gap", 1),
+            ("missing", 1),
+        ] {
+            let project = fixture();
+            extend_track(project.path(), "display", 4);
+            interrupt_track(project.path(), "display");
+            let directory = project.path().join("content/display");
+            match damage {
+                "truncate" => {
+                    let path = directory.join("segment_002.m4s");
+                    let mut bytes = fs::read(&path).unwrap();
+                    bytes.pop();
+                    fs::write(path, bytes).unwrap();
+                }
+                "incomplete" => edit_manifest(project.path(), |manifest| {
+                    manifest["segments"][1]["is_complete"] = serde_json::json!(false)
+                }),
+                "gap" => edit_manifest(project.path(), |manifest| {
+                    manifest["segments"].as_array_mut().unwrap().remove(1);
+                }),
+                _ => fs::remove_file(directory.join("segment_002.m4s")).unwrap(),
+            }
+            assert_eq!(
+                seal_interrupted_track(&directory, SegmentMediaType::Video),
+                Ok(kept),
+                "{damage}"
+            );
+            for index in 2..=4 {
+                let original = directory.join(format!("segment_{index:03}.m4s"));
+                assert!(!original.exists(), "{damage}: {index}");
+                let aside = original.with_file_name(format!("segment_{index:03}.m4s.unsealed"));
+                assert_eq!(
+                    aside.exists(),
+                    damage != "missing" || index != 2,
+                    "{damage}: {index}"
+                );
+            }
+            let events = collect_segment_events(project.path(), false).unwrap();
+            let video = events
+                .iter()
+                .filter(|event| !event.is_init && event.media_type == SegmentMediaType::Video)
+                .count();
+            assert_eq!(video, kept, "{damage}");
+        }
+    }
+
+    #[test]
+    fn sealing_changes_nothing_when_it_cannot_keep_a_segment() {
+        type Edit = fn(&mut serde_json::Value);
+        let cases: [(&str, Edit); 4] = [
+            ("no complete segment", |manifest| {
+                manifest["segments"][0]["is_complete"] = serde_json::json!(false)
+            }),
+            ("unsupported version", |manifest| {
+                manifest["version"] = serde_json::json!(4)
+            }),
+            ("unsupported kind", |manifest| {
+                manifest["type"] = serde_json::json!("m4s_audio_segments")
+            }),
+            ("escaping init", |manifest| {
+                manifest["init_segment"] = serde_json::json!("../init.mp4")
+            }),
+        ];
+        for (case, edit) in cases {
+            let project = fixture();
+            interrupt_track(project.path(), "display");
+            edit_manifest(project.path(), edit);
+            let directory = project.path().join("content/display");
+            let before = snapshot(&directory);
+            assert!(
+                seal_interrupted_track(&directory, SegmentMediaType::Video).is_err(),
+                "{case}"
+            );
+            assert_eq!(snapshot(&directory), before, "{case}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sealing_refuses_linked_media_without_moving_anything() {
+        let project = fixture();
+        extend_track(project.path(), "display", 2);
+        interrupt_track(project.path(), "display");
+        let directory = project.path().join("content/display");
+        let outside = project.path().join("outside.m4s");
+        fs::write(&outside, b"outside").unwrap();
+        std::os::unix::fs::symlink(&outside, directory.join("segment_009.m4s")).unwrap();
+        let before = snapshot(&directory);
+        assert!(seal_interrupted_track(&directory, SegmentMediaType::Video).is_err());
+        assert_eq!(snapshot(&directory), before);
+        assert_eq!(fs::read(outside).unwrap(), b"outside");
     }
 
     #[cfg(unix)]

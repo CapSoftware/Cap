@@ -1,23 +1,32 @@
-//! Persisted state: this app's own, and the Tauri app's settings store.
+//! Persisted state: this app's own, and the settings store it shares with
+//! 0.6.0 and earlier (the Tauri app, still downloadable and able to open the
+//! same data after a downgrade).
 //!
 //! Two files, both inside `so.cap.desktop`'s app-data dir:
 //!
-//! - `gpui-state.json` -- ours. The Tauri app keeps the camera window's chrome
+//! - `gpui-state.json` -- ours. The Tauri app kept the camera window's chrome
 //!   state in the webview's `localStorage` (`cameraWindowState`); there is no
 //!   webview here, so the same shape lives in a file. Reads happen once at
 //!   open; writes are whole-file rewrites on a background thread -- the state
 //!   is a handful of scalars, atomicity beyond rename is not worth plumbing.
-//! - `store` -- the tauri-plugin-store file the shipping app loads
-//!   (`Store.load("store")` in `apps/desktop/src/store.ts`), holding
-//!   `general_settings`, `recording_start_safety`, `auth`, `presets` and the
-//!   rest. Both apps read and write it, so every write here is a
+//! - `store` -- the tauri-plugin-store file 0.6.0 loads
+//!   (`Store.load("store")` in `apps/desktop/src/store.ts` at `cap-v0.6.2`),
+//!   holding `general_settings`, `recording_start_safety`, `auth`, `presets`
+//!   and the rest. Both apps read and write it, so every write here is a
 //!   read-modify-write on the raw JSON that touches exactly one key: see
 //!   [`set_store_setting`].
 
-use std::path::{Path, PathBuf};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    sync::{Arc, LazyLock, Mutex, MutexGuard, PoisonError},
+    time::{Duration, SystemTime},
+};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+
+use crate::i18n::tr;
 
 /// `CameraPreviewShape` in the web app.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -56,9 +65,9 @@ impl BlurMode {
     pub fn label(self) -> Option<&'static str> {
         match self {
             Self::Off => None,
-            Self::Light => Some("Light"),
-            Self::Heavy => Some("Heavy"),
-            Self::Remove => Some("Cutout"),
+            Self::Light => Some(tr::camera::blur::light()),
+            Self::Heavy => Some(tr::camera::blur::heavy()),
+            Self::Remove => Some(tr::camera::blur::cutout()),
         }
     }
 }
@@ -141,13 +150,15 @@ pub struct ExportPrefs {
     pub advanced_open: bool,
     #[serde(default)]
     pub organization_id: Option<String>,
+    #[serde(default)]
+    pub turbo: bool,
 }
 
 /// `so.cap.desktop`'s app-data dir -- where both stores live.
 ///
-/// Same identifier the Tauri app uses (`so.cap.desktop`), resolved the way
-/// each OS's app-data convention spells it so a recording made on Windows or
-/// Linux lands in the folder both apps already agree on.
+/// The identifier every Cap release has used (`so.cap.desktop`), resolved
+/// the way each OS's app-data convention spells it, so recordings and
+/// settings from 0.6.0 and earlier are found where those builds left them.
 pub fn app_data_dir() -> PathBuf {
     if let Ok(dir) = std::env::var("CAP_GPUI_APP_DATA_DIR")
         && !dir.trim().is_empty()
@@ -212,81 +223,6 @@ fn bundled_resource_dirs_for(
     directories
 }
 
-/// The Tauri dev harness's hand-off marker (`gpui_app.rs` over there): it
-/// survives the whole session and is removed only on a clean quit, so a marker
-/// left behind reads as a crash and routes the next `bun run dev:desktop` back
-/// to the classic app.
-pub fn handoff_marker_path() -> PathBuf {
-    app_data_dir().join("cap-gpui.handoff")
-}
-
-pub fn mark_handoff_session() {
-    if let Err(error) = mark_handoff_session_at(&handoff_marker_path()) {
-        tracing::warn!("writing the hand-off marker: {error}");
-    }
-}
-
-fn mark_handoff_session_at(path: &Path) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let staged = path.with_extension(format!("handoff-{}", std::process::id()));
-    std::fs::write(&staged, std::process::id().to_string())?;
-    std::fs::rename(&staged, path).inspect_err(|_| {
-        let _ = std::fs::remove_file(&staged);
-    })
-}
-
-pub fn clear_handoff_marker() {
-    clear_handoff_marker_at(&handoff_marker_path());
-}
-
-fn clear_handoff_marker_at(path: &Path) {
-    match std::fs::remove_file(path) {
-        Ok(()) => tracing::info!("cleared the hand-off marker"),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => tracing::warn!("clearing the hand-off marker: {error}"),
-    }
-}
-
-/// A dev-checkout switch-back has no `Cap.app` to `open`: the classic app only
-/// runs inside its `tauri dev` harness, which exited with the hand-off. This
-/// sentinel asks whatever supervises the dev session (`scripts/dev-desktop.mjs`
-/// watches for it) to start that harness again; with no supervisor listening it
-/// is inert, and the flag written alongside it still routes the next
-/// `bun run dev:desktop` to the classic app.
-pub fn classic_reopen_path() -> PathBuf {
-    app_data_dir().join("cap-classic.reopen")
-}
-
-pub fn request_classic_reopen() -> std::io::Result<()> {
-    let path = classic_reopen_path();
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(&path, std::process::id().to_string())
-}
-
-pub fn classic_pending_path() -> PathBuf {
-    app_data_dir().join("cap-classic.pending")
-}
-
-pub fn mark_classic_pending() -> std::io::Result<()> {
-    let path = classic_pending_path();
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(&path, std::process::id().to_string())
-}
-
-pub fn clear_classic_pending() {
-    if let Err(error) = std::fs::remove_file(classic_pending_path())
-        && error.kind() != std::io::ErrorKind::NotFound
-    {
-        tracing::warn!(%error, "couldn't clear classic handoff readiness");
-    }
-}
-
 fn state_path() -> PathBuf {
     app_data_dir().join("gpui-state.json")
 }
@@ -339,6 +275,11 @@ thread_local! {
 }
 
 #[cfg(test)]
+thread_local! {
+    static TEST_STORE_FILE_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
 pub(crate) fn set_test_tauri_store_path(path: Option<PathBuf>) {
     TEST_TAURI_STORE_PATH.with(|current| *current.borrow_mut() = path);
 }
@@ -370,6 +311,8 @@ static STORE_UPDATE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// *not*: it is returned as `None` so no write path can silently replace
 /// someone's settings with a fresh object.
 fn read_store(path: &std::path::Path) -> Option<Map<String, Value>> {
+    #[cfg(test)]
+    TEST_STORE_FILE_READS.with(|reads| reads.set(reads.get() + 1));
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Some(Map::new()),
@@ -391,24 +334,113 @@ fn read_store(path: &std::path::Path) -> Option<Map<String, Value>> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct StoreFileStamp {
+    len: u64,
+    modified: Option<SystemTime>,
+    #[cfg(unix)]
+    inode: (u64, u64),
+    #[cfg(unix)]
+    changed: (i64, i64),
+}
+
+/// Filesystem mtimes are only as fine as the clock that stamps them (a
+/// scheduler tick on Linux, two seconds on FAT), so a rewrite that lands in
+/// the same tick as the read we cached can leave every field of the stamp
+/// unchanged. A cached parse is only trusted once the file's mtime is older
+/// than the read by more than that, the same rule git uses for racily clean
+/// index entries.
+const STORE_MTIME_SETTLE: Duration = Duration::from_secs(3);
+
+impl StoreFileStamp {
+    fn of(metadata: &std::fs::Metadata) -> Self {
+        #[cfg(unix)]
+        use std::os::unix::fs::MetadataExt;
+
+        Self {
+            len: metadata.len(),
+            modified: metadata.modified().ok(),
+            #[cfg(unix)]
+            inode: (metadata.dev(), metadata.ino()),
+            #[cfg(unix)]
+            changed: (metadata.ctime(), metadata.ctime_nsec()),
+        }
+    }
+
+    fn settled_before(&self, read_at: SystemTime) -> bool {
+        self.modified
+            .and_then(|modified| modified.checked_add(STORE_MTIME_SETTLE))
+            .is_some_and(|settled| settled < read_at)
+    }
+}
+
+struct CachedStore {
+    stamp: StoreFileStamp,
+    read_at: SystemTime,
+    store: Arc<Map<String, Value>>,
+}
+
+static STORE_CACHE: LazyLock<Mutex<HashMap<PathBuf, CachedStore>>> =
+    LazyLock::new(Default::default);
+
+fn store_cache() -> MutexGuard<'static, HashMap<PathBuf, CachedStore>> {
+    STORE_CACHE.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// [`read_store`] for readers, which run inside render: the export page asks
+/// for the auth section on every progress tick. The file is shared with the
+/// Tauri app, which can rewrite it at any time, so every call still stats it
+/// and re-reads when anything about the file changed; only the read and parse
+/// are skipped. Writers keep reading the disk directly.
+fn cached_store(path: &Path) -> Option<Arc<Map<String, Value>>> {
+    let read_at = SystemTime::now();
+    let stamp = match std::fs::metadata(path) {
+        Ok(metadata) => StoreFileStamp::of(&metadata),
+        Err(_) => {
+            store_cache().remove(path);
+            return read_store(path).map(Arc::new);
+        }
+    };
+
+    if let Some(cached) = store_cache().get(path)
+        && cached.stamp == stamp
+        && cached.stamp.settled_before(cached.read_at)
+    {
+        return Some(cached.store.clone());
+    }
+
+    let Some(store) = read_store(path).map(Arc::new) else {
+        store_cache().remove(path);
+        return None;
+    };
+    store_cache().insert(
+        path.to_path_buf(),
+        CachedStore {
+            stamp,
+            read_at,
+            store: store.clone(),
+        },
+    );
+    Some(store)
+}
+
 /// One section of the store (`general_settings`, `recording_start_safety`,
 /// ...) as raw JSON. Empty when absent or the wrong shape.
 pub fn store_section(section: &str) -> Map<String, Value> {
-    read_store(&tauri_store_path())
-        .and_then(|mut store| store.remove(section))
-        .and_then(|value| match value {
-            Value::Object(map) => Some(map),
+    cached_store(&tauri_store_path())
+        .and_then(|store| match store.get(section) {
+            Some(Value::Object(map)) => Some(map.clone()),
             _ => None,
         })
         .unwrap_or_default()
 }
 
 pub fn notification_sounds_enabled() -> bool {
-    read_store(&tauri_store_path())
-        .and_then(|mut store| store.remove(GENERAL_SETTINGS))
-        .and_then(|settings| {
-            settings
-                .as_object()
+    cached_store(&tauri_store_path())
+        .and_then(|store| {
+            store
+                .get(GENERAL_SETTINGS)
+                .and_then(Value::as_object)
                 .map(|settings| bool_at(settings, "enableNotifications", true))
         })
         .unwrap_or(false)
@@ -486,7 +518,12 @@ fn update_store(mutate: impl FnOnce(&mut Map<String, Value>) -> bool) -> bool {
     let Some(mut store) = read_store(&path) else {
         return false;
     };
-    mutate(&mut store) && write_store(&path, &Value::Object(store))
+    if !mutate(&mut store) {
+        return false;
+    }
+    let written = write_store(&path, &Value::Object(store));
+    store_cache().remove(&path);
+    written
 }
 
 /// Pretty JSON, two-space indent, no trailing newline -- byte-shape identical
@@ -605,7 +642,7 @@ macro_rules! settings_enum {
     (
         $(#[$meta:meta])*
         $name:ident {
-            $($variant:ident = $json:literal, $label:literal;)+
+            $($variant:ident = $json:literal, $label:expr;)+
         }
         default = $default:ident
     ) => {
@@ -650,9 +687,9 @@ settings_enum! {
     /// `AppTheme`. The previews are labelled System/Light/Dark in
     /// `AppearanceSection`.
     AppTheme {
-        System = "system", "System";
-        Light = "light", "Light";
-        Dark = "dark", "Dark";
+        System = "system", tr::settings::general::appearance::system();
+        Light = "light", tr::settings::general::appearance::light();
+        Dark = "dark", tr::settings::general::appearance::dark();
     }
     default = System
 }
@@ -660,9 +697,9 @@ settings_enum! {
 settings_enum! {
     /// `StudioRecordingQuality`, whose Rust default is `balanced`.
     StudioQuality {
-        Compatibility = "compatibility", "Compatibility";
-        Balanced = "balanced", "Balanced";
-        Ultra = "ultra", "Ultra";
+        Compatibility = "compatibility", tr::settings::options::studio_quality::compatibility();
+        Balanced = "balanced", tr::settings::options::studio_quality::balanced();
+        Ultra = "ultra", tr::settings::options::studio_quality::ultra();
     }
     default = Balanced
 }
@@ -681,18 +718,29 @@ settings_enum! {
     /// `MainWindowRecordingStartBehaviour`. British spelling in both the JSON
     /// and the label, as shipped.
     MainWindowStartBehaviour {
-        Close = "close", "Close";
-        Minimise = "minimise", "Minimise";
+        Close = "close", tr::settings::options::main_window_start::close();
+        Minimise = "minimise", tr::settings::options::main_window_start::minimise();
     }
     default = Close
 }
 
 settings_enum! {
+    /// How a window recording captures the picked window: the region of the
+    /// screen it covers, or (Focused) the window by itself, centred by the
+    /// picker and followed if it moves.
+    WindowCaptureStyle {
+        ScreenRegion = "screenRegion", tr::settings::options::window_capture::screen_region();
+        FocusedWindow = "focusedWindow", tr::settings::options::window_capture::focused_window();
+    }
+    default = ScreenRegion
+}
+
+settings_enum! {
     /// `PostStudioRecordingBehaviour`.
     PostStudioBehaviour {
-        OpenEditor = "openEditor", "Open editor";
-        ShowOverlay = "showOverlay", "Show Cap";
-        DoNothing = "doNothing", "Do nothing";
+        OpenEditor = "openEditor", tr::settings::options::post_studio::open_editor();
+        ShowOverlay = "showOverlay", tr::settings::options::post_studio::show_cap();
+        DoNothing = "doNothing", tr::settings::options::post_studio::do_nothing();
     }
     default = OpenEditor
 }
@@ -701,10 +749,10 @@ settings_enum! {
     /// What a finished screenshot does next. GPUI-only: the Tauri app always
     /// opened the editor and never reads this key.
     PostScreenshotBehaviour {
-        OpenEditor = "openEditor", "Open editor";
-        Copy = "copy", "Copy to clipboard";
-        CopyAndOpenEditor = "copyAndOpenEditor", "Copy and open editor";
-        Save = "save", "Do nothing";
+        OpenEditor = "openEditor", tr::settings::options::post_screenshot::open_editor();
+        Copy = "copy", tr::settings::options::post_screenshot::copy();
+        CopyAndOpenEditor = "copyAndOpenEditor", tr::settings::options::post_screenshot::copy_and_open_editor();
+        Save = "save", tr::settings::options::post_screenshot::do_nothing();
     }
     default = OpenEditor
 }
@@ -722,8 +770,8 @@ impl PostScreenshotBehaviour {
 settings_enum! {
     /// `PostDeletionBehaviour`.
     PostDeletionBehaviour {
-        DoNothing = "doNothing", "Do nothing";
-        ReopenRecordingWindow = "reopenRecordingWindow", "Reopen recording window";
+        DoNothing = "doNothing", tr::settings::options::post_deletion::do_nothing();
+        ReopenRecordingWindow = "reopenRecordingWindow", tr::settings::options::post_deletion::reopen();
     }
     default = DoNothing
 }
@@ -738,10 +786,19 @@ settings_enum! {
 }
 
 settings_enum! {
+    UpdateDownloadPolicy {
+        Manual = "manual", "Manual";
+        Auto = "auto", "Auto";
+        Never = "never", "Never";
+    }
+    default = Manual
+}
+
+settings_enum! {
     EditorPreviewQuality {
-        Quarter = "quarter", "Quarter";
-        Half = "half", "Half";
-        Full = "full", "Full";
+        Quarter = "quarter", tr::settings::options::preview_quality::quarter();
+        Half = "half", tr::settings::options::preview_quality::half();
+        Full = "full", tr::settings::options::preview_quality::full();
     }
     default = Half
 }
@@ -893,13 +950,23 @@ pub const DEFAULT_PROJECT_NAME_TEMPLATE: &str = "{target_name} ({target_kind}) {
 #[derive(Debug, Clone, PartialEq)]
 pub struct GeneralSettings {
     pub theme: AppTheme,
+    /// `uiLanguage`: absent, `"system"`, or a catalog code such as `"fr"`. A
+    /// GPUI-only key; the Tauri app keeps it as an unknown field.
+    pub ui_language: Option<String>,
     pub hide_dock_icon: bool,
     pub enable_notifications: bool,
     pub instant_mode_max_resolution: u32,
     pub disable_auto_open_links: bool,
+    /// GPUI-only `showMainWindowAfterInstantRecording`: whether the main
+    /// window comes back after an Instant recording whose link did not open.
+    /// Kept as stored, absent included, so every reader resolves it the same
+    /// way in [`Self::post_instant_behaviour`].
+    pub show_main_window_after_instant: Option<bool>,
     pub studio_recording_quality: StudioQuality,
     pub recording_countdown: Option<u32>,
     pub main_window_recording_start_behaviour: MainWindowStartBehaviour,
+    pub window_capture_style: WindowCaptureStyle,
+    pub focus_center: bool,
     pub post_studio_recording_behaviour: PostStudioBehaviour,
     pub post_screenshot_behaviour: PostScreenshotBehaviour,
     pub post_deletion_behaviour: PostDeletionBehaviour,
@@ -920,6 +987,7 @@ pub struct GeneralSettings {
     pub default_project_name_template: Option<String>,
     pub excluded_windows: Vec<WindowExclusion>,
     pub update_channel: UpdateChannel,
+    pub update_download_policy: UpdateDownloadPolicy,
     pub server_url: String,
     pub enable_telemetry: bool,
     pub editor_preview_quality: EditorPreviewQuality,
@@ -938,9 +1006,67 @@ pub struct GeneralSettings {
     pub studio_sound_by_default: bool,
 }
 
+pub const SHOW_MAIN_WINDOW_AFTER_INSTANT_KEY: &str = "showMainWindowAfterInstantRecording";
+
+/// What follows a cleanly stopped Instant recording, the link always copied.
+/// Not one key: `disableAutoOpenLinks` (shared with the Tauri app) decides
+/// whether the link opens, `showMainWindowAfterInstantRecording` whether the
+/// main window comes back when it does not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PostInstantBehaviour {
+    OpenLink,
+    ShowCap,
+    CopyLink,
+}
+
+impl PostInstantBehaviour {
+    /// `(disableAutoOpenLinks, showMainWindowAfterInstantRecording)`.
+    pub fn store_values(self) -> (bool, bool) {
+        match self {
+            Self::OpenLink => (false, false),
+            Self::ShowCap => (true, true),
+            Self::CopyLink => (true, false),
+        }
+    }
+}
+
 /// The section names, so the write calls read as the store keys they are.
 pub const GENERAL_SETTINGS: &str = "general_settings";
 pub const RECORDING_START_SAFETY: &str = "recording_start_safety";
+
+/// Changes the recordings folder and remembers the old one, like Tauri's
+/// `remember_previous_recordings_path`, so the library keeps listing projects
+/// left in earlier folders.
+pub fn set_recordings_path(path: Option<&str>) -> bool {
+    const MAX_PREVIOUS_PATHS: usize = 20;
+
+    update_store_section(GENERAL_SETTINGS, |settings| {
+        let mut previous_paths = strings_at(settings, "previousRecordingsPaths");
+        if let Some(path) = path {
+            previous_paths.retain(|previous| previous != path);
+        }
+        if let Some(previous) = opt_string_at(settings, "recordingsPath")
+            && Some(previous.as_str()) != path
+            && !previous_paths.contains(&previous)
+        {
+            previous_paths.push(previous);
+            let len = previous_paths.len();
+            if len > MAX_PREVIOUS_PATHS {
+                previous_paths.drain(..len - MAX_PREVIOUS_PATHS);
+            }
+        }
+        settings.insert(
+            "recordingsPath".into(),
+            path.map_or(Value::Null, Value::from),
+        );
+        settings.insert(
+            "previousRecordingsPaths".into(),
+            Value::from(previous_paths),
+        );
+        true
+    })
+}
+
 /// `audioEnhancementStore` (`apps/desktop/src/store.ts`): whether new Studio
 /// recordings start with Studio Sound on. Defaults on; the editor's Audio tab
 /// and the Recording settings card both write it.
@@ -986,7 +1112,7 @@ pub fn set_studio_sound_defaults(enabled: bool, isolation: cap_project::VoiceIso
     set_store_value(AUDIO_ENHANCEMENT, Value::Object(section))
 }
 /// `RecordingSettingsStore::KEY` (`src-tauri/src/recording_settings.rs:37`) --
-/// the section the tray's Select Mode submenu reads and writes.
+/// the section the tray's mode picker reads and writes.
 pub const RECORDING_SETTINGS: &str = "recording_settings";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -1205,8 +1331,20 @@ impl Default for GeneralSettings {
 }
 
 impl GeneralSettings {
+    pub fn post_instant_behaviour(&self) -> PostInstantBehaviour {
+        if !self.disable_auto_open_links {
+            PostInstantBehaviour::OpenLink
+        } else if self.show_main_window_after_instant.unwrap_or(true) {
+            // Absent: "copy link only" brought the main window back before
+            // the key existed, so a store that never set it keeps doing that.
+            PostInstantBehaviour::ShowCap
+        } else {
+            PostInstantBehaviour::CopyLink
+        }
+    }
+
     pub fn load() -> Self {
-        let store = read_store(&tauri_store_path()).unwrap_or_default();
+        let store = cached_store(&tauri_store_path()).unwrap_or_default();
         let empty = Map::new();
         let section = |name: &str| store.get(name).and_then(Value::as_object).unwrap_or(&empty);
         Self::from_sections(
@@ -1223,16 +1361,22 @@ impl GeneralSettings {
     ) -> Self {
         Self {
             theme: enum_at(general, "theme"),
+            ui_language: opt_string_at(general, crate::i18n::SETTING_KEY),
             hide_dock_icon: bool_at(general, "hideDockIcon", false),
             enable_notifications: bool_at(general, "enableNotifications", true),
             instant_mode_max_resolution: u32_at(general, "instantModeMaxResolution", 1920),
             disable_auto_open_links: bool_at(general, "disableAutoOpenLinks", false),
+            show_main_window_after_instant: general
+                .get(SHOW_MAIN_WINDOW_AFTER_INSTANT_KEY)
+                .and_then(Value::as_bool),
             studio_recording_quality: enum_at(general, "studioRecordingQuality"),
             recording_countdown: opt_u32_at(general, "recordingCountdown"),
             main_window_recording_start_behaviour: enum_at(
                 general,
                 "mainWindowRecordingStartBehaviour",
             ),
+            window_capture_style: enum_at(general, "windowCaptureStyle"),
+            focus_center: bool_at(general, "focusCenter", false),
             post_studio_recording_behaviour: enum_at(general, "postStudioRecordingBehaviour"),
             post_screenshot_behaviour: enum_at(general, "postScreenshotBehaviour"),
             post_deletion_behaviour: enum_at(general, "postDeletionBehaviour"),
@@ -1269,6 +1413,7 @@ impl GeneralSettings {
                 })
                 .unwrap_or_else(default_excluded_windows),
             update_channel: enum_at(general, "updateChannel"),
+            update_download_policy: enum_at(general, "updateDownloadPolicy"),
             server_url: string_at(general, "serverUrl", DEFAULT_SERVER_URL),
             enable_telemetry: bool_at(general, "enableTelemetry", true),
             editor_preview_quality: enum_at(general, "editorPreviewQuality"),
@@ -1843,7 +1988,7 @@ pub enum ExportDestination {
 /// overwrite-on-next-save semantics as the Tauri app.
 pub fn automations() -> AutomationsStore {
     let Some(value) =
-        read_store(&tauri_store_path()).and_then(|mut store| store.remove(AUTOMATIONS))
+        cached_store(&tauri_store_path()).and_then(|store| store.get(AUTOMATIONS).cloned())
     else {
         return AutomationsStore::default();
     };
@@ -1888,23 +2033,6 @@ pub fn preset_names() -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn the_handoff_marker_holds_this_pid_until_a_clean_quit_clears_it() {
-        let directory =
-            std::env::temp_dir().join(format!("cap-gpui-handoff-{}", super::new_uuid_v4()));
-        let marker = directory.join("cap-gpui.handoff");
-        super::mark_handoff_session_at(&marker).unwrap();
-        assert_eq!(
-            std::fs::read_to_string(&marker).unwrap(),
-            std::process::id().to_string()
-        );
-        assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
-        super::clear_handoff_marker_at(&marker);
-        assert!(!marker.exists());
-        super::clear_handoff_marker_at(&marker);
-        std::fs::remove_dir_all(directory).unwrap();
-    }
-
     use super::*;
 
     struct TempStore {
@@ -1962,6 +2090,236 @@ mod tests {
             let _store = TempStore::new("general-settings-load", contents);
             assert_eq!(GeneralSettings::load(), load_general_settings_separately());
         }
+    }
+
+    fn backdate(path: &Path, modified: SystemTime) {
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
+    }
+
+    fn seconds_ago(seconds: u64) -> SystemTime {
+        SystemTime::now()
+            .checked_sub(Duration::from_secs(seconds))
+            .unwrap()
+    }
+
+    fn store_file_reads() -> usize {
+        TEST_STORE_FILE_READS.with(std::cell::Cell::get)
+    }
+
+    #[test]
+    fn render_reads_parse_the_store_once_until_the_file_changes() {
+        let store = TempStore::new(
+            "cache-render-reads",
+            Some(
+                r#"{"auth":{"secret":{"token":"aaaa"},"organizations":[{"id":"1","name":"One"},{"id":"2","name":"Two"}]}}"#,
+            ),
+        );
+        backdate(&store.path, seconds_ago(60));
+        let before = store_file_reads();
+        for _ in 0..100 {
+            assert!(auth_snapshot().signed_in());
+            assert_eq!(auth_snapshot().organizations.len(), 2);
+            assert_eq!(auth_snapshot().organizations.len(), 2);
+        }
+        assert_eq!(store_file_reads() - before, 1);
+
+        std::fs::write(
+            &store.path,
+            r#"{"auth":{"secret":{"token":"bbbb"},"organizations":[{"id":"1","name":"One"},{"id":"2","name":"Two"}]}}"#,
+        )
+        .unwrap();
+        backdate(&store.path, seconds_ago(30));
+        assert_eq!(auth_snapshot().token.as_deref(), Some("bbbb"));
+        assert_eq!(auth_snapshot().token.as_deref(), Some("bbbb"));
+        assert_eq!(store_file_reads() - before, 2);
+    }
+
+    #[test]
+    fn a_same_length_rewrite_within_the_cached_mtime_tick_is_still_read() {
+        let store = TempStore::new(
+            "cache-racy-rewrite",
+            Some(r#"{"general_settings":{"hasCompletedStartup":true}}"#),
+        );
+        assert!(has_completed_startup());
+        let modified = std::fs::metadata(&store.path).unwrap().modified().unwrap();
+        std::fs::write(
+            &store.path,
+            r#"{"general_settings":{"hasCompletedStartup":null}}"#,
+        )
+        .unwrap();
+        backdate(&store.path, modified);
+        assert!(!has_completed_startup());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_in_place_rewrite_that_restores_the_old_mtime_is_still_read() {
+        let store = TempStore::new(
+            "cache-restored-mtime",
+            Some(r#"{"general_settings":{"hasCompletedStartup":true}}"#),
+        );
+        let modified = seconds_ago(60);
+        backdate(&store.path, modified);
+        assert!(has_completed_startup());
+        std::thread::sleep(Duration::from_millis(50));
+        std::fs::write(
+            &store.path,
+            r#"{"general_settings":{"hasCompletedStartup":null}}"#,
+        )
+        .unwrap();
+        backdate(&store.path, modified);
+        assert!(!has_completed_startup());
+    }
+
+    #[test]
+    fn a_store_that_stops_parsing_or_disappears_is_not_served_from_the_cache() {
+        let store = TempStore::new(
+            "cache-broken",
+            Some(r#"{"general_settings":{"hasCompletedStartup":true}}"#),
+        );
+        backdate(&store.path, seconds_ago(60));
+        assert!(has_completed_startup());
+        std::fs::write(&store.path, "{ not json").unwrap();
+        backdate(&store.path, seconds_ago(30));
+        assert!(!has_completed_startup());
+        assert!(!set_has_completed_onboarding(true));
+        std::fs::remove_file(&store.path).unwrap();
+        assert!(!has_completed_startup());
+        assert!(store_section(GENERAL_SETTINGS).is_empty());
+    }
+
+    #[test]
+    fn every_store_writer_is_visible_to_the_next_cached_read() {
+        let store = TempStore::new("cache-writers", Some("{}"));
+        let settle = || {
+            backdate(&store.path, seconds_ago(60));
+            store_section(GENERAL_SETTINGS);
+        };
+
+        settle();
+        assert!(set_store_setting(
+            GENERAL_SETTINGS,
+            "hasCompletedStartup",
+            Value::Bool(true)
+        ));
+        assert!(has_completed_startup());
+        assert_eq!(GeneralSettings::load(), load_general_settings_separately());
+
+        settle();
+        assert!(set_has_completed_onboarding(true));
+        assert!(has_completed_onboarding());
+
+        settle();
+        assert!(set_store_value(
+            "presets",
+            serde_json::json!({"presets": [{"name": "Mine", "config": {}}], "default": 0})
+        ));
+        assert_eq!(preset_names(), vec!["Mine".to_string()]);
+
+        settle();
+        let mut presets = crate::presets::PresetsStore::load();
+        presets.create("Second".into(), serde_json::json!({}), true);
+        assert!(presets.save());
+        assert_eq!(crate::presets::PresetsStore::load(), presets);
+
+        settle();
+        assert!(update_store_section(RECORDING_SETTINGS, |section| {
+            section.insert("mode".into(), Value::String("studio".into()));
+            true
+        }));
+        assert_eq!(recording_mode_slug().as_deref(), Some("studio"));
+
+        settle();
+        assert!(set_auth(Some(
+            serde_json::json!({"secret": {"token": "abc"}, "plan": {"upgraded": true}})
+        )));
+        assert!(auth_snapshot().signed_in());
+        assert!(auth_snapshot().is_upgraded());
+
+        settle();
+        assert!(set_auth(None));
+        assert!(!auth_snapshot().signed_in());
+
+        settle();
+        let mut hotkeys = Map::new();
+        hotkeys.insert("startStudioRecording".into(), serde_json::json!({}));
+        assert!(set_hotkeys_raw(&hotkeys));
+        assert_eq!(hotkeys_raw(), hotkeys);
+
+        settle();
+        let rules = AutomationsStore {
+            version: 7,
+            ..AutomationsStore::default()
+        };
+        assert!(set_automations(&rules));
+        assert_eq!(automations().version, 7);
+
+        settle();
+        assert!(set_store_setting(
+            GENERAL_SETTINGS,
+            "enableNotifications",
+            Value::Bool(false)
+        ));
+        assert!(!notification_sounds_enabled());
+    }
+
+    #[test]
+    #[ignore]
+    fn benchmark_cached_store_section_reads() {
+        use std::{hint::black_box, time::Instant};
+
+        let config = crate::presets::preset_config(&cap_project::ProjectConfiguration::default());
+        let contents = serde_json::to_string_pretty(&serde_json::json!({
+            "general_settings": {"theme": "dark", "maxFps": 60, "hasCompletedStartup": true},
+            "recording_start_safety": {"confirmBeforeRecordingWithoutMicrophone": false},
+            "audio_enhancement": {"enabledByDefault": true},
+            "auth": {
+                "secret": {"api_key": "k".repeat(64)},
+                "plan": {"upgraded": true, "manual": false},
+                "organizations": [{"id": "1", "name": "One"}, {"id": "2", "name": "Two"}]
+            },
+            "presets": {"presets": [{"name": "Preset", "config": config}], "default": null},
+            "teleprompter": {"script": "A recording script. ".repeat(60)}
+        }))
+        .unwrap();
+        let store = TempStore::new("cache-benchmark", Some(&contents));
+        backdate(&store.path, seconds_ago(60));
+        let uncached = || {
+            read_store(&tauri_store_path())
+                .and_then(|mut store| store.remove("auth"))
+                .and_then(|value| match value {
+                    Value::Object(map) => Some(map),
+                    _ => None,
+                })
+                .unwrap_or_default()
+        };
+        assert_eq!(uncached(), store_section("auth"));
+        let measure = |read: &dyn Fn() -> Map<String, Value>| {
+            let start = Instant::now();
+            for _ in 0..1000 {
+                black_box(read());
+            }
+            start.elapsed().as_secs_f64() * 1_000_000.0 / 1000.0
+        };
+        let mut before = Vec::new();
+        let mut after = Vec::new();
+        for _ in 0..9 {
+            before.push(measure(&uncached));
+            after.push(measure(&|| store_section("auth")));
+        }
+        before.sort_by(f64::total_cmp);
+        after.sort_by(f64::total_cmp);
+        eprintln!(
+            "store_bytes={} uncached_median_us={:.3} cached_median_us={:.3} uncached_runs_us={before:?} cached_runs_us={after:?}",
+            contents.len(),
+            before[4],
+            after[4]
+        );
     }
 
     #[test]
@@ -2035,6 +2393,127 @@ mod tests {
             false
         }));
         assert_eq!(store.read()["auth"]["user_id"], "a");
+    }
+
+    #[test]
+    fn recordings_folder_changes_remember_previous_locations() {
+        let store = TempStore::new(
+            "recordings-folder-history",
+            Some(
+                r#"{"general_settings":{"recordingsPath":"old","previousRecordingsPaths":["older","new"],"maxFps":30,"future":true},"auth":{"user_id":"keep"}}"#,
+            ),
+        );
+
+        assert!(set_recordings_path(Some("new")));
+        let reloaded = store_section(GENERAL_SETTINGS);
+        assert_eq!(reloaded["recordingsPath"], "new");
+        assert_eq!(
+            strings_at(&reloaded, "previousRecordingsPaths"),
+            ["older", "old"]
+        );
+
+        assert!(set_recordings_path(Some("new")));
+        assert_eq!(store_section(GENERAL_SETTINGS), reloaded);
+
+        assert!(set_recordings_path(None));
+        let reloaded = store_section(GENERAL_SETTINGS);
+        assert_eq!(reloaded["recordingsPath"], Value::Null);
+        assert_eq!(
+            strings_at(&reloaded, "previousRecordingsPaths"),
+            ["older", "old", "new"]
+        );
+
+        assert!(set_recordings_path(Some("old")));
+        let reloaded = store_section(GENERAL_SETTINGS);
+        assert_eq!(reloaded["recordingsPath"], "old");
+        assert_eq!(
+            strings_at(&reloaded, "previousRecordingsPaths"),
+            ["older", "new"]
+        );
+        assert_eq!(reloaded["maxFps"], 30);
+        assert_eq!(store.read()[GENERAL_SETTINGS]["future"], true);
+        assert_eq!(store.read()["auth"]["user_id"], "keep");
+    }
+
+    #[test]
+    fn recordings_folder_changes_limit_history_without_duplicates() {
+        let _store = TempStore::new("recordings-folder-history-limit", None);
+        for index in 0..25 {
+            assert!(set_recordings_path(Some(&format!("folder-{index}"))));
+        }
+        let expected = (4..24)
+            .map(|index| format!("folder-{index}"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            strings_at(&store_section(GENERAL_SETTINGS), "previousRecordingsPaths"),
+            expected
+        );
+
+        assert!(set_recordings_path(Some("folder-23")));
+        assert!(set_recordings_path(Some("folder-24")));
+        assert_eq!(
+            strings_at(&store_section(GENERAL_SETTINGS), "previousRecordingsPaths"),
+            expected
+        );
+    }
+
+    #[test]
+    fn recordings_folder_changes_merge_concurrent_updates() {
+        let store = TempStore::new(
+            "recordings-folder-concurrent",
+            Some(r#"{"general_settings":{"recordingsPath":"original","maxFps":30}}"#),
+        );
+        let barrier = Arc::new(std::sync::Barrier::new(8));
+        let workers = (0..8)
+            .map(|index| {
+                let path = store.path.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    set_test_tauri_store_path(Some(path));
+                    barrier.wait();
+                    let saved = set_recordings_path(Some(&format!("folder-{index}")));
+                    set_test_tauri_store_path(None);
+                    saved
+                })
+            })
+            .collect::<Vec<_>>();
+        for worker in workers {
+            assert!(worker.join().unwrap());
+        }
+        let reloaded = store_section(GENERAL_SETTINGS);
+        let mut paths = strings_at(&reloaded, "previousRecordingsPaths");
+        assert_eq!(paths.remove(0), "original");
+        paths.push(opt_string_at(&reloaded, "recordingsPath").unwrap());
+        paths.sort();
+        assert_eq!(
+            paths,
+            (0..8)
+                .map(|index| format!("folder-{index}"))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(reloaded["maxFps"], 30);
+    }
+
+    #[test]
+    fn recordings_folder_changes_preserve_preferences_when_saving_fails() {
+        let contents = r#"{"general_settings":{"recordingsPath":"old","maxFps":30}}"#;
+        let store = TempStore::new("recordings-folder-write-failure", Some(contents));
+        let staged = store.path.with_extension("gpui-tmp");
+        std::fs::create_dir(&staged).unwrap();
+        let saved = set_recordings_path(Some("new"));
+        std::fs::remove_dir(staged).unwrap();
+
+        assert!(!saved);
+        assert_eq!(std::fs::read_to_string(&store.path).unwrap(), contents);
+        assert_eq!(store_section(GENERAL_SETTINGS)["recordingsPath"], "old");
+    }
+
+    #[test]
+    fn recordings_folder_changes_preserve_unreadable_stores() {
+        let store = TempStore::new("recordings-folder-corrupt", Some("not JSON"));
+        assert!(!set_recordings_path(Some("new")));
+        assert!(!set_recordings_path(None));
+        assert_eq!(std::fs::read_to_string(&store.path).unwrap(), "not JSON");
     }
 
     #[test]
@@ -2423,6 +2902,33 @@ mod tests {
         assert!(!settings.studio_sound_by_default);
         // The section it created did not disturb the others.
         assert_eq!(store.read()["auth"]["user_id"], "u_1");
+    }
+
+    #[test]
+    fn ui_language_round_trips_without_touching_other_keys() {
+        let store = TempStore::new(
+            "ui-language",
+            Some(
+                r#"{"general_settings":{"theme":"dark","uiLanguage":"pt-BR","futureSetting":{"keep":[1]}}}"#,
+            ),
+        );
+        assert_eq!(
+            GeneralSettings::load().ui_language.as_deref(),
+            Some("pt-BR")
+        );
+        assert!(super::set_store_setting(
+            GENERAL_SETTINGS,
+            crate::i18n::SETTING_KEY,
+            Value::from("fr")
+        ));
+        let after = store.read();
+        assert_eq!(after["general_settings"]["uiLanguage"], "fr");
+        assert_eq!(after["general_settings"]["theme"], "dark");
+        assert_eq!(
+            after["general_settings"]["futureSetting"],
+            serde_json::json!({ "keep": [1] })
+        );
+        assert_eq!(GeneralSettings::load().ui_language.as_deref(), Some("fr"));
     }
 
     /// A store that does not parse is someone's settings in a state we do not
@@ -2822,5 +3328,60 @@ mod tests {
         general.insert("excludedWindows".to_string(), Value::Array(Vec::new()));
         let cleared = GeneralSettings::from_sections(&general, &Map::new(), &Map::new());
         assert!(cleared.excluded_windows.is_empty());
+    }
+
+    /// A store written before `showMainWindowAfterInstantRecording` keeps
+    /// what it did: "copy link only" brought the main window back, so it reads
+    /// as Show Cap; every outcome round-trips through its two keys.
+    #[test]
+    fn post_instant_behaviour_reads_old_stores_and_round_trips() {
+        let settings = |pairs: &[(&str, bool)]| {
+            let general = pairs
+                .iter()
+                .map(|(key, value)| (key.to_string(), Value::Bool(*value)))
+                .collect::<Map<_, _>>();
+            GeneralSettings::from_sections(&general, &Map::new(), &Map::new())
+                .post_instant_behaviour()
+        };
+        assert_eq!(settings(&[]), PostInstantBehaviour::OpenLink);
+        assert_eq!(
+            settings(&[("disableAutoOpenLinks", false)]),
+            PostInstantBehaviour::OpenLink
+        );
+        assert_eq!(
+            settings(&[("disableAutoOpenLinks", true)]),
+            PostInstantBehaviour::ShowCap
+        );
+        assert_eq!(
+            settings(&[
+                ("disableAutoOpenLinks", false),
+                (SHOW_MAIN_WINDOW_AFTER_INSTANT_KEY, true)
+            ]),
+            PostInstantBehaviour::OpenLink
+        );
+        // The Quality page's auto-open toggle writes only
+        // `disableAutoOpenLinks`; the open window and a reload must agree.
+        let toggled = GeneralSettings {
+            disable_auto_open_links: true,
+            ..GeneralSettings::default()
+        };
+        assert_eq!(
+            toggled.post_instant_behaviour(),
+            settings(&[("disableAutoOpenLinks", true)])
+        );
+        for behaviour in [
+            PostInstantBehaviour::OpenLink,
+            PostInstantBehaviour::ShowCap,
+            PostInstantBehaviour::CopyLink,
+        ] {
+            let (disable_open, show_main) = behaviour.store_values();
+            assert_eq!(
+                settings(&[
+                    ("disableAutoOpenLinks", disable_open),
+                    (SHOW_MAIN_WINDOW_AFTER_INSTANT_KEY, show_main),
+                ]),
+                behaviour
+            );
+        }
     }
 }

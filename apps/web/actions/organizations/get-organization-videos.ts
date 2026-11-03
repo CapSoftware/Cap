@@ -5,6 +5,7 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { sharedVideos } from "@cap/database/schema";
 import type { Organisation } from "@cap/web-domain";
 import { and, eq, isNull } from "drizzle-orm";
+import { getOrganizationAccess } from "@/actions/organization/authorization";
 
 export async function getOrganizationVideoIds(
 	organizationId: Organisation.OrganisationId,
@@ -18,6 +19,11 @@ export async function getOrganizationVideoIds(
 
 		if (!organizationId) {
 			throw new Error("Organization ID is required");
+		}
+
+		const access = await getOrganizationAccess(user.id, organizationId);
+		if (!access) {
+			throw new Error("Organization not found");
 		}
 
 		const videoIds = await db()
