@@ -9676,7 +9676,6 @@ enum KeyframeTarget {
 #[derive(Debug, Clone, Copy)]
 enum KeyframeAction {
     Add(f64),
-    /// Segment-relative time.
     Remove(f64),
     Clear,
 }
