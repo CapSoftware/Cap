@@ -78,6 +78,7 @@ mod picker_probe;
 mod picker_ui_benchmark;
 mod platform;
 mod presets;
+mod style_presets;
 mod project_save;
 mod recording;
 mod screenshot;

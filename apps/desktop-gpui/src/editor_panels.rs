@@ -720,7 +720,8 @@ pub fn pick_font_family(stack: &[&str], installed: &[String]) -> String {
         .map_or_else(|| "sans-serif".to_string(), |family| (*family).to_string())
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
 pub struct TextStyle {
     pub font_family: String,
     pub font_size: f32,
@@ -4127,6 +4128,7 @@ impl EditorWindow {
             TrackKind::Style => self.stacked_panel(
                 "style",
                 "style",
+                Some(crate::style_presets::PresetKind::Style),
                 count(timeline.style_segments.len()),
                 cx,
                 |this, index, cx| this.render_style_panel(index, cx),
@@ -4134,6 +4136,7 @@ impl EditorWindow {
             TrackKind::Image => self.stacked_panel(
                 "image",
                 "image",
+                None,
                 count(timeline.image_segments.len()),
                 cx,
                 |this, index, cx| this.render_image_panel(index, cx),
@@ -4179,6 +4182,7 @@ impl EditorWindow {
             TrackKind::Text => self.stacked_panel(
                 "text",
                 "text",
+                Some(crate::style_presets::PresetKind::Text),
                 count(timeline.text_segments.len()),
                 cx,
                 |this, index, cx| this.render_text_panel(index, cx),
@@ -4186,6 +4190,7 @@ impl EditorWindow {
             TrackKind::Caption => self.stacked_panel(
                 "caption",
                 "caption",
+                None,
                 count(timeline.caption_segments.len()),
                 cx,
                 |this, index, cx| this.render_caption_panel(index, cx),
@@ -4193,6 +4198,7 @@ impl EditorWindow {
             TrackKind::Audio => self.stacked_panel(
                 "audio",
                 "audio",
+                None,
                 count(timeline.audio_segments.len()),
                 cx,
                 |this, index, cx| this.render_audio_panel(index, cx),
@@ -4200,6 +4206,7 @@ impl EditorWindow {
             TrackKind::Mask => self.stacked_panel(
                 "mask",
                 "mask",
+                Some(crate::style_presets::PresetKind::Mask),
                 count(timeline.mask_segments.len()),
                 cx,
                 |this, index, cx| this.render_mask_panel(index, cx),
@@ -4207,6 +4214,7 @@ impl EditorWindow {
             TrackKind::Keyboard => self.stacked_panel(
                 "keyboard",
                 "keyboard",
+                None,
                 count(timeline.keyboard_segments.len()),
                 cx,
                 |this, index, cx| this.render_keyboard_panel(index, cx),
@@ -4298,6 +4306,7 @@ impl EditorWindow {
         &self,
         id: &'static str,
         noun: &'static str,
+        presets: Option<crate::style_presets::PresetKind>,
         indices: Vec<usize>,
         cx: &mut Context<Self>,
         mut render: impl FnMut(&Self, usize, &mut Context<Self>) -> AnyElement,
@@ -4306,7 +4315,12 @@ impl EditorWindow {
             .flex()
             .flex_col()
             .gap(px(16.))
-            .child(self.panel_header(id, noun, indices.len(), cx));
+            .child(self.panel_header(id, noun, indices.len(), cx))
+            .children(
+                presets
+                    .filter(|_| !indices.is_empty())
+                    .map(|kind| self.render_style_presets_bar(kind, &indices, cx)),
+            );
         for index in indices {
             let content = render(self, index, cx);
             column = column.child(self.panel_card(content));
