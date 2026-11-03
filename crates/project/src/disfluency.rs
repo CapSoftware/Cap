@@ -531,18 +531,31 @@ fn detect_repetitions(words: &[Word], out: &mut Vec<(DisfluencyKind, usize, usiz
 }
 
 /// A cut-off fragment ("wh-", "comp—") is always a false start. A clause is
-/// a false start when it is abandoned with a dash, an ellipsis, a fragment or
-/// a hesitation and the speaker restarts on the same opening word with
-/// different words: "we should, um, we need to".
+/// a false start when it starts at a clause boundary, is abandoned with a
+/// dash, an ellipsis, a fragment or a hesitation, and the speaker restarts on
+/// the same opening word with different words: "we should, um, we need to".
+/// "For the bug report, uh, the user" is not one: its "the" is inside a
+/// phrase, not opening a clause.
 fn detect_false_starts(words: &[Word], out: &mut Vec<(DisfluencyKind, usize, usize)>) {
     for (at, word) in words.iter().enumerate() {
         if word.cut_off && !word.hesitation {
             out.push((DisfluencyKind::FalseStart, at, at + 1));
         }
     }
+    let context = Context { words };
     for start in 0..words.len() {
         let opener = &words[start];
         if opener.hesitation || opener.cut_off || !is_clause_opener(&opener.norm) {
+            continue;
+        }
+        let at_boundary = context.set_off_before(start)
+            || start.checked_sub(1).is_some_and(|previous| {
+                matches!(
+                    words[previous].norm.as_str(),
+                    "and" | "but" | "so" | "then" | "because" | "or" | "if" | "when"
+                )
+            });
+        if !at_boundary {
             continue;
         }
         for size in 2..=MAX_FALSE_START {

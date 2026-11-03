@@ -176,6 +176,155 @@ Everything is okay now.
 [D Okay] [D so] the timeline is loaded.
 "#;
 
+/// Written after the rules above were frozen and never used to tune them:
+/// stand-ups, bug reports and support replies, read aloud. Its scores are the
+/// honest estimate of how the classifier does on speech it has not seen.
+const HELD_OUT: &str = r#"
+[H Um,] yesterday I finished the billing page.
+[D So] the main blocker is still the flaky test.
+[R I] I pushed a fix for it this morning.
+[H Uh,] it only fails on the slow runners.
+[D Basically,] the mock server starts too late.
+I like the new retry logic a lot.
+It was, [D like,] twenty seconds before the first request.
+[F We could,] [H um,] we might just raise the timeout.
+That would hide the real problem though.
+[D You know,] I think the order of the setup is wrong.
+The setup runs before the database is ready.
+[H Hmm,] let me check the logs again.
+[R The] the logs say the port was busy.
+So we need a random port per test.
+[D Okay,] [D so] that is my update.
+For the bug report, [H uh,] the user sees a blank screen.
+It happens right after they log in.
+[F It is-] it was fine last week.
+I think [R we we] we broke it with the new router.
+[D Actually,] the router change shipped on Monday.
+The screen is blank for, [D like,] two seconds.
+Then [R it,] [H um,] it comes back on its own.
+That sounds like a loading state problem.
+[D I mean,] the data is there, it just does not render.
+Do you know which version they are on?
+They are on the latest one, I checked.
+[D Right,] [D so] I will add a spinner for now.
+[H Ah,] and the support ticket from yesterday.
+They asked how to, [H uh,] export without the camera.
+You can turn the camera off in the sidebar.
+It is kind of hidden, to be honest.
+[D Well,] we should probably make it more obvious.
+I would like to move it to the top.
+[R Can you] can you take a look at the design?
+[F The design,] [H um,] the current design has room for it.
+It looks like there is space next to the title.
+That is a good spot, actually.
+[D So] next week I will focus on performance.
+[H Um] [H uh] the profiler shows two hot paths.
+The first one is the thumbnail cache.
+The second one is, [D you know,] the waveform drawing.
+[R It it] it redraws every frame right now.
+We only need to redraw when the zoom changes.
+That should cut the CPU use by half.
+[F My-] my guess is more than half.
+So far so good on the memory side.
+No no, the memory is fine.
+[D Okay.] That is everything from me.
+Thanks, everyone.
+"#;
+
+#[test]
+fn held_out_precision_and_recall() {
+    let (scores, removal, mistakes) = evaluate_text(HELD_OUT);
+    let report = scores
+        .iter()
+        .map(|(kind, score)| {
+            format!(
+                "{kind:?}: precision {:.3} recall {:.3} ({score:?})",
+                score.precision(),
+                score.recall()
+            )
+        })
+        .chain([format!(
+            "Any removal: precision {:.3} recall {:.3} ({removal:?})",
+            removal.precision(),
+            removal.recall()
+        )])
+        .collect::<Vec<_>>()
+        .join("\n");
+    println!("held out\n{report}\n{}", mistakes.join("\n"));
+    assert!(
+        removal.precision() >= 0.95 && removal.recall() >= 0.85,
+        "{report}\n{}",
+        mistakes.join("\n")
+    );
+    let hesitation = scores[0].1;
+    assert!(hesitation.precision() == 1.0 && hesitation.recall() == 1.0);
+}
+
+/// A second held-out set, written after the clause-boundary fix that the first
+/// one exposed, and measured once: a teacher walking through a spreadsheet and
+/// a podcast intro.
+const HELD_OUT_SECOND: &str = r#"
+[H Um,] welcome back to the show.
+[D So] this week we have a really fun guest.
+She builds, [H uh,] tiny robots out of old phones.
+[D Honestly,] I did not know that was possible.
+[R She she] she showed me one before we started.
+It walks, [D like,] really slowly across the desk.
+[D Okay,] [D so] let's get into the spreadsheet.
+Column A has the names of every student.
+[H Uh,] column B has their scores.
+I want to, [H um,] sort them from high to low.
+[F You click,] [H uh,] you right click the header.
+Then you pick sort from the menu.
+[D You know,] most people miss that option.
+The scores are, [D kind of,] all over the place.
+[R Some] some students did really well.
+Others, [H um,] need a bit more help.
+I think we should talk about the average next.
+The average is just the sum divided by the count.
+[D Basically,] the formula does that for you.
+[H Hmm,] the average looks low.
+[D Well,] one student has a zero.
+That zero is, [H uh,] a missing test.
+[F We need,] [H um,] we should mark it as absent.
+Then the average makes more sense.
+I like using colors for the grades.
+Green is good and red needs work.
+[D Right,] that covers the basics.
+[D So] next time we will build a chart.
+A chart makes the trends much easier to see.
+[H Ah,] one more thing before I go.
+Save your work often, [D you know?]
+The app does not always save on its own.
+[R It it] it crashed on me last week.
+I lost, [D like,] an hour of work.
+[D Anyway,] thanks for listening.
+See you next week.
+"#;
+
+#[test]
+fn second_held_out_precision_and_recall() {
+    let (scores, removal, mistakes) = evaluate_text(HELD_OUT_SECOND);
+    let report = scores
+        .iter()
+        .map(|(kind, score)| {
+            format!(
+                "{kind:?}: precision {:.3} recall {:.3} ({score:?})",
+                score.precision(),
+                score.recall()
+            )
+        })
+        .chain([format!(
+            "Any removal: precision {:.3} recall {:.3} ({removal:?})",
+            removal.precision(),
+            removal.recall()
+        )])
+        .collect::<Vec<_>>()
+        .join("\n");
+    println!("second held out\n{report}\n{}", mistakes.join("\n"));
+    assert!(scores[0].1.precision() == 1.0, "{report}");
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct Gold(Option<DisfluencyKind>);
 
@@ -244,13 +393,17 @@ impl Score {
 }
 
 fn evaluate() -> (Vec<(DisfluencyKind, Score)>, Score, Vec<String>) {
+    evaluate_text(CORPUS)
+}
+
+fn evaluate_text(corpus: &str) -> (Vec<(DisfluencyKind, Score)>, Score, Vec<String>) {
     let mut scores: Vec<(DisfluencyKind, Score)> = DisfluencyKind::ALL
         .iter()
         .map(|kind| (*kind, Score::default()))
         .collect();
     let mut removal = Score::default();
     let mut mistakes = Vec::new();
-    for line in CORPUS.lines().filter(|line| !line.trim().is_empty()) {
+    for line in corpus.lines().filter(|line| !line.trim().is_empty()) {
         let parsed = parse_line(line);
         let tokens: Vec<_> = parsed
             .iter()
