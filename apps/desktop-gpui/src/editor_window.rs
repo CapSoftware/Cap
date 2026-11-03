@@ -1601,6 +1601,7 @@ struct HistoryMenu {
     origin: gpui::Point<Pixels>,
     scroll: gpui::ScrollHandle,
     labels: Vec<String>,
+    revision: u64,
 }
 
 struct PresetsMenu {
@@ -2266,6 +2267,7 @@ impl EditorWindow {
         self.sidebar.menu = None;
         self.selection = None;
         self.canvas_selection = None;
+        self.history_menu = None;
         self.project = config;
         self.synchronize_caption_track(true);
         self.history = ProjectHistory::new(self.project.clone());
@@ -2596,8 +2598,18 @@ impl EditorWindow {
         self.note_edit("redo", None);
     }
 
-    fn jump_to_history(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+    fn jump_to_history(
+        &mut self,
+        index: usize,
+        revision: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.history_menu = None;
+        if revision != self.history.revision() {
+            cx.notify();
+            return;
+        }
         self.close_frame_controls(window, cx);
         self.end_field_edit(cx);
         self.close_color_picker(cx);
@@ -9137,13 +9149,15 @@ impl EditorWindow {
         self.presets_menu = None;
         self.toolbar_menu = None;
         let viewport = window.viewport_size();
-        let x = f32::from(anchor.x)
-            .min(f32::from(viewport.width) - HISTORY_MENU_WIDTH - 12.)
-            .max(12.);
+        let x = f32::from(anchor.x).clamp(
+            12.,
+            (f32::from(viewport.width) - HISTORY_MENU_WIDTH - 12.).max(12.),
+        );
         self.history_menu = Some(HistoryMenu {
             origin: point(px(x), px(f32::from(anchor.y) + 8.)),
             scroll: gpui::ScrollHandle::new(),
             labels: self.history.labels(),
+            revision: self.history.revision(),
         });
         cx.notify();
     }
@@ -9153,7 +9167,9 @@ impl EditorWindow {
             origin,
             scroll,
             labels,
+            revision,
         } = self.history_menu.as_ref()?;
+        let revision = *revision;
         let theme = self.theme;
         let cursor = self.history.cursor();
         let rows = labels
@@ -9196,7 +9212,7 @@ impl EditorWindow {
                             .child(SharedString::from(label.clone())),
                     )
                     .on_click(cx.listener(move |this, _, window, cx| {
-                        this.jump_to_history(index, window, cx);
+                        this.jump_to_history(index, revision, window, cx);
                     }))
                     .into_any_element()
             })
@@ -11720,6 +11736,13 @@ fn is_playback_shortcut(
 impl Render for EditorWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_appearance(window, cx);
+        if self
+            .history_menu
+            .as_ref()
+            .is_some_and(|menu| menu.revision != self.history.revision())
+        {
+            self.history_menu = None;
+        }
         let title_disabled = !self.visual_ready();
         if self.name_input.read(cx).is_disabled() != title_disabled {
             self.name_input

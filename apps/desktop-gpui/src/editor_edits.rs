@@ -151,6 +151,7 @@ pub struct ProjectHistory {
     /// Whether the limit has dropped the oldest entries, so the first one left
     /// is no longer the state the project opened in.
     trimmed: bool,
+    revision: u64,
     /// `history().count` -- steps walked back from the newest entry.
     count: usize,
     /// `pauseCount` (`:1917`). A drag brackets itself with `pause`/`resume` so
@@ -169,6 +170,7 @@ impl ProjectHistory {
         Self {
             entries: vec![initial],
             trimmed: false,
+            revision: 0,
             count: 0,
             paused: 0,
             dirty: false,
@@ -191,6 +193,7 @@ impl ProjectHistory {
         }
         self.entries.push(config.clone());
         self.count = 0;
+        self.revision += 1;
     }
 
     /// `projectHistory.pause()`.
@@ -260,6 +263,10 @@ impl ProjectHistory {
             .collect()
     }
 
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
     pub fn cursor(&self) -> usize {
         self.entries.len() - self.count - 1
     }
@@ -290,11 +297,14 @@ pub fn describe_change(before: &ProjectConfiguration, after: &ProjectConfigurati
         return "Edit".to_string();
     };
     let empty = serde_json::Map::new();
-    let timeline = |map: &serde_json::Map<String, serde_json::Value>| match map.get("timeline") {
-        Some(serde_json::Value::Object(timeline)) => timeline.clone(),
-        _ => empty.clone(),
-    };
-    let (before_timeline, after_timeline) = (timeline(&before), timeline(&after));
+    let before_timeline = before
+        .get("timeline")
+        .and_then(serde_json::Value::as_object)
+        .unwrap_or(&empty);
+    let after_timeline = after
+        .get("timeline")
+        .and_then(serde_json::Value::as_object)
+        .unwrap_or(&empty);
     let count =
         |value: Option<&serde_json::Value>| value.and_then(|v| v.as_array()).map_or(0, Vec::len);
     let mut keys: Vec<&String> = before_timeline
@@ -3157,6 +3167,23 @@ mod tests {
         timeline.audio_segments[0].start += 1.0;
         timeline.caption_segments.remove(1);
         assert_eq!(describe_change(&before, &shifted), "Deleted caption");
+    }
+
+    #[test]
+    fn history_revision_moves_only_when_the_entries_change() {
+        let mut history = ProjectHistory::new(with_zoom_count(0));
+        history.record(&with_zoom_count(1));
+        let recorded = history.revision();
+        history.undo();
+        assert_eq!(history.revision(), recorded, "undo keeps the labels");
+        history.redo();
+        history.jump_to(0);
+        assert_eq!(history.revision(), recorded, "jumps keep the labels");
+        history.pause();
+        history.record(&with_zoom_count(2));
+        assert_eq!(history.revision(), recorded, "paused");
+        history.resume(&with_zoom_count(2));
+        assert_ne!(history.revision(), recorded, "resumed");
     }
 
     #[test]
