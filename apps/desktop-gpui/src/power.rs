@@ -196,25 +196,30 @@ mod macos {
         let session = RecordingSession::global(cx);
         match event {
             PowerEvent::WillSleep(notification) => {
-                let pausing = session.update(cx, |session, cx| session.pause_for_sleep(cx));
-                tracing::info!(pausing, "system going to sleep");
-                if !pausing {
-                    allow_power_change(notification);
-                    return;
-                }
+                tracing::info!("system going to sleep");
                 let started = Instant::now();
                 cx.spawn(async move |cx| {
-                    while cx.update(|cx| session.read(cx).pause_pending())
-                        && started.elapsed() < SLEEP_PAUSE_TIMEOUT
-                    {
+                    let mut dispatched = false;
+                    while started.elapsed() < SLEEP_PAUSE_TIMEOUT {
+                        let settling = cx.update(|cx| session.read(cx).sleep_should_wait());
+                        if !settling {
+                            let acted = cx.update(|cx| {
+                                session.update(cx, |session, cx| session.prepare_for_sleep(cx))
+                            });
+                            if !acted {
+                                break;
+                            }
+                            dispatched = true;
+                        }
                         cx.background_executor()
                             .timer(Duration::from_millis(25))
                             .await;
                     }
                     tracing::info!(
+                        dispatched,
                         paused = cx.update(|cx| session.read(cx).is_paused()),
                         waited_ms = started.elapsed().as_millis() as u64,
-                        "recording paused for sleep"
+                        "recording ready for sleep"
                     );
                     allow_power_change(notification);
                 })

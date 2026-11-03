@@ -475,7 +475,6 @@ pub struct RecordingSession {
     marker_count: usize,
     /// When the last marker went in, for the controls bar's acknowledgement.
     marker_added_at: Option<Instant>,
-    /// The recording was paused because the Mac went to sleep.
     pub paused_for_sleep: bool,
     #[cfg(target_os = "linux")]
     instant_attempt: Option<recording::InstantAttempt>,
@@ -1544,11 +1543,18 @@ impl RecordingSession {
         .detach();
     }
 
-    /// Pauses a running recording before the Mac sleeps. Returns whether a
-    /// pause is on its way, which the sleep is then held for.
-    pub fn pause_for_sleep(&mut self, cx: &mut Context<Self>) -> bool {
+    /// Gets a running recording out of capture before the Mac sleeps: Studio
+    /// pauses, which closes its segment, and Instant stops and saves, because
+    /// an Instant pause keeps ScreenCaptureKit running. Returns whether
+    /// anything was dispatched; the sleep is held while it settles.
+    pub fn prepare_for_sleep(&mut self, cx: &mut Context<Self>) -> bool {
         if !pauses_for_sleep(self.phase, self.pause_unavailable()) {
             return false;
+        }
+        if self.mode() == Some(recording::RecordingMode::Instant) {
+            tracing::info!("stopping the Instant recording before sleep");
+            self.stop(cx);
+            return self.phase == Phase::Stopping;
         }
         self.toggle_pause(cx);
         let pausing = self.pause_control.pending.is_some();
@@ -1557,6 +1563,12 @@ impl RecordingSession {
             cx.notify();
         }
         pausing
+    }
+
+    /// Whether a control the user (or sleep) already started is still
+    /// settling: a pause or resume in flight, or a stop.
+    pub fn sleep_should_wait(&self) -> bool {
+        self.pause_pending() || self.phase == Phase::Stopping
     }
 
     pub fn woke_from_sleep(&mut self, cx: &mut Context<Self>) {
