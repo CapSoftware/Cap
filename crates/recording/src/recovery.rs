@@ -1195,24 +1195,7 @@ impl RecoveryManager {
     /// recovery backup, and the failure evidence moves to
     /// [`RECOVERED_DIAGNOSTICS_FILE`] so the recovered project opens.
     pub fn salvage(recording: &IncompleteRecording) -> Result<RecoveredRecording, RecoveryError> {
-        // The evidence moves before publication: a project left mid-way still
-        // reads as interrupted and is salvaged again, while one published
-        // `Complete` never keeps a failure that would block the editor.
-        let diagnostics = recording.project_path.join("recording-diagnostics.json");
-        let retained = recording.project_path.join(RECOVERED_DIAGNOSTICS_FILE);
-        let moved = match std::fs::rename(&diagnostics, &retained) {
-            Ok(()) => true,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
-            Err(error) => return Err(error.into()),
-        };
-        let recovered = Self::finalize_with_purpose(recording, RecoveryPurpose::Salvage);
-        if recovered.is_err()
-            && moved
-            && let Err(error) = std::fs::rename(&retained, &diagnostics)
-        {
-            warn!(%error, path = %retained.display(), "Could not restore recording diagnostics after a failed salvage");
-        }
-        recovered
+        Self::finalize_with_purpose(recording, RecoveryPurpose::Salvage)
     }
 
     pub fn finalize(recording: &IncompleteRecording) -> Result<RecoveredRecording, RecoveryError> {
@@ -1293,6 +1276,11 @@ impl RecoveryManager {
         }
         let project = &recording.project_path;
         let lock = HeldRecoveryLock::new(acquire(project)?, preparing.is_some());
+        let mut retired_diagnostics = if purpose.keeps_failed_tracks_out() {
+            RetiredDiagnostics::default()
+        } else {
+            RetiredDiagnostics::retire(project)?
+        };
         let mut preparing = preparing;
         let before = recovery_snapshot(project)?;
         debug!(
@@ -1468,6 +1456,7 @@ impl RecoveryManager {
         {
             warn!(path = %workspace.display(), %error, "Original media backup retained");
         }
+        retired_diagnostics.keep();
         Ok(RecoveredRecording {
             project_path: project.clone(),
             meta,
@@ -3323,6 +3312,42 @@ fn validate_recovery_track_inputs(
         }
     }
     Ok(())
+}
+
+/// Salvage moves the failure evidence aside while it holds the recovery lock,
+/// so a project published `Complete` never keeps a sidecar that would block the
+/// editor, and a salvage that fails puts it back before the lock is released.
+#[derive(Default)]
+struct RetiredDiagnostics(Option<PathBuf>);
+
+impl RetiredDiagnostics {
+    fn retire(project: &Path) -> Result<Self, RecoveryError> {
+        match std::fs::rename(
+            project.join("recording-diagnostics.json"),
+            project.join(RECOVERED_DIAGNOSTICS_FILE),
+        ) {
+            Ok(()) => Ok(Self(Some(project.to_path_buf()))),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Self(None)),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    fn keep(&mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for RetiredDiagnostics {
+    fn drop(&mut self) {
+        if let Some(project) = self.0.take()
+            && let Err(error) = std::fs::rename(
+                project.join(RECOVERED_DIAGNOSTICS_FILE),
+                project.join("recording-diagnostics.json"),
+            )
+        {
+            warn!(%error, path = %project.display(), "Could not restore recording diagnostics after a failed salvage");
+        }
+    }
 }
 
 const RECOVERY_INPUTS: [&str; 4] = [
