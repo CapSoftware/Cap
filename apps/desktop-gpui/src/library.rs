@@ -603,11 +603,34 @@ fn recovery_failure_message(
         RecoveryError::NoRecoverableSegments => {
             tr::main::recovery::error::nothing_saved(path).to_string()
         }
-        RecoveryError::Io(io) if io.kind() == std::io::ErrorKind::StorageFull => {
-            tr::main::recovery::error::storage(io.to_string(), path).to_string()
+        error if is_storage_full(error) => {
+            tr::main::recovery::error::storage(error.to_string(), path).to_string()
         }
         error => tr::main::recovery::error::rebuild_failed(error.to_string(), path).to_string(),
     }
+}
+
+/// A full disk can surface as the recovery's own IO error or inside the FFmpeg
+/// remux that rebuilds a track, so the remux error's chain is checked too.
+fn is_storage_full(error: &cap_recording::recovery::RecoveryError) -> bool {
+    use cap_recording::recovery::RecoveryError;
+    let mut current: Option<&(dyn std::error::Error + 'static)> = Some(match error {
+        RecoveryError::VideoConcat(remux)
+        | RecoveryError::AudioConcat(remux)
+        | RecoveryError::MediaMerge(remux) => remux,
+        error => error,
+    });
+    while let Some(error) = current {
+        if error
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io| io.kind() == std::io::ErrorKind::StorageFull)
+            || error.to_string().contains("No space left on device")
+        {
+            return true;
+        }
+        current = error.source();
+    }
+    false
 }
 
 /// Recovers a studio recording that a crash, a force quit or a failed stop left
@@ -2941,6 +2964,29 @@ mod tests {
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].project_path, failed);
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_full_disk_inside_a_track_rebuild_gets_the_free_space_advice() {
+        use cap_enc_ffmpeg::remux::RemuxError;
+        use cap_recording::recovery::RecoveryError;
+        let path = Path::new("/recordings/Cap.cap");
+        let full = || std::io::Error::from(std::io::ErrorKind::StorageFull);
+        for error in [
+            RecoveryError::Io(full()),
+            RecoveryError::VideoConcat(RemuxError::Io(full())),
+            RecoveryError::AudioConcat(RemuxError::Io(full())),
+            RecoveryError::MediaMerge(RemuxError::Io(full())),
+        ] {
+            let message = recovery_failure_message(&error, path);
+            assert!(
+                message.starts_with("There is not enough free space"),
+                "{message}"
+            );
+        }
+        let message =
+            recovery_failure_message(&RecoveryError::VideoConcat(RemuxError::NoFragments), path);
+        assert!(message.starts_with("Cap could not rebuild"), "{message}");
     }
 
     #[test]
