@@ -1091,6 +1091,11 @@ segments = { one = "{count} Segment", other = "{count} Segmente" }
 segments_with_duration = { one = "{count} Segment · {duration}", other = "{count} Segmente · {duration}" }
 title = "Unvollständige Aufnahme"
 
+[main.recovery.error]
+nothing_saved = "Bevor diese Aufnahme endete, wurde kein Video gespeichert, daher gibt es nichts wiederherzustellen. Die Dateien befinden sich weiterhin in {path}."
+rebuild_failed = "Cap konnte diese Aufnahme nicht wiederherstellen ({error}). Es wurde nichts gelöscht, die Originaldateien befinden sich in {path}."
+storage = "Es ist nicht genug Speicherplatz frei, um diese Aufnahme wiederherzustellen ({error}). Geben Sie Speicherplatz frei und klicken Sie erneut auf Wiederherstellen. Es wurde nichts gelöscht, die Dateien befinden sich in {path}."
+
 [main.sign_in]
 message = "Der Instant-Modus lädt schon während der Aufnahme hoch, sodass Ihr Link zum Teilen sofort nach dem Stoppen bereit ist."
 not_now = "Nicht jetzt"

@@ -645,6 +645,12 @@ impl RecordingSession {
         cx.notify();
     }
 
+    pub fn active_project_dir(&self) -> Option<&std::path::Path> {
+        self.active
+            .as_ref()
+            .map(|active| active.project_dir.as_path())
+    }
+
     /// Whether the live recording actually has a microphone attached.
     pub fn has_microphone(&self) -> bool {
         self.active

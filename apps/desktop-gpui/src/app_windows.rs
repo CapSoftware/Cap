@@ -5524,6 +5524,7 @@ fn load_editor_project_candidate(
     previous: Option<Arc<cap_editor::EditorInstance>>,
     cx: &mut App,
 ) {
+    let ordinary_open = finalization.is_none() && previous.is_none();
     let preparing_output = finalization.as_ref().map(|_| editor_audio_output());
     let current_join =
         finalization
@@ -5611,6 +5612,30 @@ fn load_editor_project_candidate(
         }
         if handle.update(cx, |_, _, _| ()).is_err() {
             return;
+        }
+        if ordinary_open {
+            let active = cx.update(|cx| {
+                RecordingSession::global(cx)
+                    .read(cx)
+                    .active_project_dir()
+                    .map(Path::to_path_buf)
+            });
+            let recover_path = path.clone();
+            let recovered = cx
+                .background_executor()
+                .spawn(async move {
+                    crate::library::recover_interrupted_for_editing(
+                        &recover_path,
+                        active.as_deref(),
+                    )
+                })
+                .await;
+            if let Err(message) = recovered {
+                handle
+                    .update(cx, |view, window, cx| view.set_error(message, window, cx))
+                    .ok();
+                return;
+            }
         }
         let preflight_path = path.clone();
         let summary = cx
