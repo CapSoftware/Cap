@@ -2470,8 +2470,9 @@ pub fn sync_caption_words_with_text(
 /// `updateSelectedCaption`'s source write-through (`CaptionsTab.tsx:257-315`):
 /// after a track segment's start/end/text was edited in output time, route
 /// the timing and content back onto the source-time caption master so the
-/// edit survives future clip changes. Style overrides stay on the track and
-/// are carried across by source id when re-derived.
+/// edit survives future clip changes. When a cut splits the caption into
+/// pieces, only the words this piece shows are rewritten. Style overrides
+/// stay on the track and are carried across by source id when re-derived.
 pub fn write_caption_edit_to_source(
     project: &mut ProjectConfiguration,
     index: usize,
@@ -2483,7 +2484,7 @@ pub fn write_caption_edit_to_source(
     let Some(track_segment) = timeline.caption_segments.get(index) else {
         return;
     };
-    let source_id = source_caption_id(&track_segment.id).to_string();
+    let track_id = track_segment.id.clone();
     let (track_start, track_end, track_text) = (
         track_segment.start,
         track_segment.end,
@@ -2500,29 +2501,46 @@ pub fn write_caption_edit_to_source(
     let Some(source) = captions
         .segments
         .iter_mut()
-        .find(|segment| segment.id == source_id)
+        .find(|segment| segment.id == source_caption_id(&track_id))
     else {
         return;
     };
 
-    let source_range = Some((f64::from(source.start), f64::from(source.end)));
-    if let Some(start) =
+    let piece =
+        cap_project::caption_piece_source_words(source, &track_id, timeline, recording_durations)
+            .unwrap_or(0..source.words.len());
+    let starts_caption = piece.start == 0;
+    let ends_caption = piece.end == source.words.len();
+    let mut start = f64::from(if starts_caption {
+        source.start
+    } else {
+        source.words[piece.start].start
+    });
+    let mut end = f64::from(if ends_caption {
+        source.end
+    } else {
+        source.words[piece.end - 1].end
+    });
+    let source_range = Some((start, end));
+    if let Some(mapped) =
         map_edited_time_to_source(track_start, timeline, recording_durations, source_range)
     {
-        source.start = start as f32;
+        start = mapped;
     }
-    if let Some(end) =
+    if let Some(mapped) =
         map_edited_time_to_source(track_end, timeline, recording_durations, source_range)
     {
+        end = mapped;
+    }
+    let words = sync_caption_words_with_text(&track_text, &source.words[piece.clone()], start, end);
+    source.words.splice(piece, words);
+    if starts_caption {
+        source.start = start as f32;
+    }
+    if ends_caption {
         source.end = end as f32;
     }
-    source.text = track_text;
-    source.words = sync_caption_words_with_text(
-        &source.text,
-        &source.words,
-        f64::from(source.start),
-        f64::from(source.end),
-    );
+    source.text = caption_text_from_words(&source.words);
 }
 
 /// `applyCaptionResultToProject` (`captions.ts:469-527`): set the captions
@@ -2838,6 +2856,80 @@ mod tests {
                     .all(|pair| pair[0].end <= pair[1].start)
             );
         }
+    }
+
+    #[test]
+    fn editing_one_piece_of_a_cut_caption_keeps_the_other_piece() {
+        type Edit = fn(&mut CaptionTrackSegment);
+        let edits: [(usize, Edit, &str); 4] = [
+            (0, |piece| piece.text = "hi there".into(), "hi there"),
+            (0, |piece| piece.start = 1.25, "hello there"),
+            (
+                1,
+                |piece| piece.text = "big wide world".into(),
+                "big wide world",
+            ),
+            (
+                1,
+                |piece| (piece.start, piece.end) = (2.5, 3.5),
+                "big world",
+            ),
+        ];
+        let shown = |project: &ProjectConfiguration| {
+            project
+                .timeline
+                .as_ref()
+                .unwrap()
+                .caption_segments
+                .iter()
+                .map(|piece| (piece.text.clone(), word_timings(&piece.words)))
+                .collect::<Vec<_>>()
+        };
+        for (index, edit, edited_text) in edits {
+            let mut project = ProjectConfiguration {
+                timeline: Some(timeline(serde_json::json!({
+                    "segments": [
+                        { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 2.0 },
+                        { "recordingSegment": 0, "timescale": 1.0, "start": 5.0, "end": 8.0 }
+                    ],
+                    "zoomSegments": []
+                }))),
+                captions: Some(CaptionsData {
+                    segments: vec![caption(
+                        "caption",
+                        1.0,
+                        6.0,
+                        &[
+                            ("hello", 1.0, 1.5),
+                            ("there", 1.5, 2.0),
+                            ("big", 5.0, 5.5),
+                            ("world", 5.5, 6.0),
+                        ],
+                    )],
+                    source_timed: true,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            let durations = [10.0];
+            cap_project::synchronize_captions(&mut project, &durations);
+            let before = shown(&project);
+            assert_eq!(before[0].0, "hello there");
+            assert_eq!(before[1].0, "big world");
+
+            edit(&mut project.timeline.as_mut().unwrap().caption_segments[index]);
+            write_caption_edit_to_source(&mut project, index, &durations);
+            cap_project::synchronize_captions(&mut project, &durations);
+
+            let after = shown(&project);
+            assert_eq!(after.len(), 2);
+            assert_eq!(after[index].0, edited_text);
+            assert_eq!(after[1 - index], before[1 - index]);
+        }
+    }
+
+    fn word_timings(words: &[CaptionWord]) -> Vec<(f32, f32)> {
+        words.iter().map(|word| (word.start, word.end)).collect()
     }
 
     #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
