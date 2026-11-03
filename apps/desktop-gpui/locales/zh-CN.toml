@@ -1986,6 +1986,55 @@ edit_cursor = "编辑光标"
 help = "覆盖设置仅在此分段期间生效。启用一个分组即可复制其全局设置。"
 reset_crop = "重置裁剪"
 
+[editor.panel.style_presets]
+apply = "应用"
+create = "保存"
+create_title = "保存样式预设"
+custom = "自定义样式"
+default_badge = "默认"
+delete = "删除"
+delete_confirm = "删除“{name}”？已使用此样式的项目会保留它。"
+delete_title = "删除样式预设"
+empty = "还没有已保存的预设"
+empty_help = "保存样式后可在任何项目中重复使用。"
+font_missing = "此电脑未安装 {font}，因此改用{fallback}。"
+move_down = "下移"
+move_up = "上移"
+remove_default = "取消默认"
+rename = "重命名"
+rename_title = "重命名样式预设"
+save = "将样式保存为预设"
+save_failed = "无法保存预设。Cap 无法写入其设置文件。"
+set_default = "设为默认"
+tooltip = "样式预设"
+update = "用当前样式更新"
+
+[editor.panel.style_presets.captions]
+default_name = "我的字幕样式"
+use_for_new = "用于新字幕"
+used_for_new = "新字幕使用此样式"
+
+[editor.panel.style_presets.mask]
+applied_all = "已应用到所有遮罩（{number}）"
+apply_all = "应用到所有遮罩（{number}）"
+default_name = "我的遮罩样式"
+use_for_new = "用于新遮罩"
+used_for_new = "新遮罩使用此样式"
+
+[editor.panel.style_presets.style]
+applied_all = "已应用到所有样式分段（{number}）"
+apply_all = "应用到所有样式分段（{number}）"
+default_name = "我的样式"
+use_for_new = "用于新样式分段"
+used_for_new = "新样式分段使用此样式"
+
+[editor.panel.style_presets.text_segment]
+applied_all = "已应用到所有文字分段（{number}）"
+apply_all = "应用到所有文字分段（{number}）"
+default_name = "我的文字样式"
+use_for_new = "用于新文字"
+used_for_new = "新文字使用此样式"
+
 [editor.panel.text_animation]
 bounce = "弹跳"
 fade = "淡入淡出"
