@@ -238,6 +238,8 @@ impl ReferenceModel {
             .collect();
         let unsupported = if timeline.text_segments.iter().any(|t| t.enabled) {
             Some("text segments".to_string())
+        } else if timeline.shape_segments.iter().any(|s| s.enabled) {
+            Some("shape segments".to_string())
         } else if !timeline.zoom_segments.is_empty() {
             Some("zoom segments".to_string())
         } else if !timeline.camera3d_segments.is_empty() {

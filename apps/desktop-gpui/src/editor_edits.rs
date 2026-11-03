@@ -2144,6 +2144,7 @@ pub fn ensure_timeline(project: &mut ProjectConfiguration, clip_display_duration
         camera3d_segments: Vec::new(),
         style_segments: Vec::new(),
         image_segments: Vec::new(),
+        shape_segments: Vec::new(),
     });
     true
 }
