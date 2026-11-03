@@ -60,6 +60,8 @@ pub mod spring_mass_damper;
 mod takeover;
 mod text;
 mod transition;
+#[cfg(test)]
+mod transition_render_tests;
 pub mod yuv_converter;
 mod zoom;
 mod zoom_spring;
@@ -86,6 +88,9 @@ pub use managed_segment::{
 use overlay_layers::OverlayLayers;
 pub use project_recordings::{ProjectRecordingsMeta, SegmentRecordings, Video};
 pub use recorded_cursor_assets::{FrozenCursorAssetError, FrozenRecordedCursorAssets};
+pub use transition::{
+    TransitionComposite, TransitionDip, TransitionLayer, TransitionWipe, ease_in_out_cubic,
+};
 use transition::{TransitionCompositor, TransitionParameters};
 
 /// Warms the process-wide system-font scan used by the text/captions/keyboard
@@ -8837,20 +8842,63 @@ impl RendererLayers {
         uniforms: &ProjectUniforms,
         render_display: bool,
     ) -> Result<(), RenderingError> {
+        self.render_parts(
+            device,
+            queue,
+            encoder,
+            session,
+            uniforms,
+            render_display,
+            LayerParts::ALL,
+        )
+    }
+
+    /// What one side of a layered transition draws: its own content on a
+    /// transparent frame. A focus blur covers the background too, so a side
+    /// with one keeps its background to stay identical to its plain frames.
+    fn transition_side_parts(&self) -> LayerParts {
+        if self.camera3d.blur_kind().is_some() {
+            LayerParts {
+                background: true,
+                content: true,
+                overlays: false,
+            }
+        } else {
+            LayerParts::CONTENT
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_parts(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        session: &mut RenderSession,
+        uniforms: &ProjectUniforms,
+        render_display: bool,
+        parts: LayerParts,
+    ) -> Result<(), RenderingError> {
         self.validate_overlay_uniforms(uniforms)?;
 
         let session_views = [session.current_texture_view(), session.other_texture_view()];
         self.background_blur.retain_views(session_views);
         self.background_color_grade.retain_views(session_views);
         self.camera3d.retain_views(session_views);
-        self.mask.begin_frame(session_views);
-
-        if render_display {
-            self.display.copy_to_texture(encoder);
+        if parts.overlays {
+            self.mask.begin_frame(session_views);
         }
-        self.camera.copy_to_texture(encoder);
-        self.camera_only.copy_to_texture(encoder);
-        self.background.render_surface(encoder);
+
+        if parts.content {
+            if render_display {
+                self.display.copy_to_texture(encoder);
+            }
+            self.camera.copy_to_texture(encoder);
+            self.camera_only.copy_to_texture(encoder);
+        }
+        if parts.background {
+            self.background.render_surface(encoder);
+        }
 
         let mut passes = LayerPasses {
             encoder,
@@ -8858,6 +8906,37 @@ impl RendererLayers {
             #[cfg(test)]
             split: self.split_layer_passes,
         };
+        if parts.background {
+            self.render_background(device, &mut passes, session, uniforms);
+        } else if parts.content {
+            passes.pass(
+                session.current_texture_view(),
+                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+            );
+        }
+        if parts.content {
+            self.render_content(device, &mut passes, session, uniforms, render_display);
+        }
+        if parts.overlays {
+            self.render_overlays(
+                device,
+                queue,
+                &mut passes,
+                session,
+                uniforms,
+                render_display,
+            );
+        }
+        Ok(())
+    }
+
+    fn render_background(
+        &mut self,
+        device: &wgpu::Device,
+        passes: &mut LayerPasses<'_>,
+        session: &mut RenderSession,
+        uniforms: &ProjectUniforms,
+    ) {
         let clear = wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT);
         let load = wgpu::LoadOp::Load;
 
@@ -8924,6 +9003,18 @@ impl RendererLayers {
 
             session.swap_textures();
         }
+    }
+
+    fn render_content(
+        &mut self,
+        device: &wgpu::Device,
+        passes: &mut LayerPasses<'_>,
+        session: &mut RenderSession,
+        uniforms: &ProjectUniforms,
+        render_display: bool,
+    ) {
+        let clear = wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT);
+        let load = wgpu::LoadOp::Load;
 
         let should_render_screen = render_display
             && uniforms.scene.should_render_screen()
@@ -9021,6 +9112,18 @@ impl RendererLayers {
             }
             None => {}
         }
+    }
+
+    fn render_overlays(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        passes: &mut LayerPasses<'_>,
+        session: &mut RenderSession,
+        uniforms: &ProjectUniforms,
+        render_display: bool,
+    ) {
+        let load = wgpu::LoadOp::Load;
 
         if uniforms.project.overlay_order.is_empty() {
             if !uniforms.masks.is_empty() {
@@ -9088,8 +9191,37 @@ impl RendererLayers {
                     .render(passes.pass(session.current_texture_view(), load));
             }
         }
-        Ok(())
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct LayerParts {
+    background: bool,
+    content: bool,
+    overlays: bool,
+}
+
+impl LayerParts {
+    const ALL: Self = Self {
+        background: true,
+        content: true,
+        overlays: true,
+    };
+    const BACKGROUND: Self = Self {
+        background: true,
+        content: false,
+        overlays: false,
+    };
+    const CONTENT: Self = Self {
+        background: false,
+        content: true,
+        overlays: false,
+    };
+    const OVERLAYS: Self = Self {
+        background: false,
+        content: false,
+        overlays: true,
+    };
 }
 
 /// Lets consecutive layer draws into the same texture share one render pass.
@@ -9226,6 +9358,13 @@ async fn produce_transition_texture(
     session: &mut RenderSession,
     compositor: &TransitionCompositor,
 ) -> Result<wgpu::CommandEncoder, RenderingError> {
+    let parameters = TransitionParameters {
+        kind: transition.0,
+        progress: transition.1,
+        opaque: outgoing.render_display || incoming.render_display,
+    };
+    let layered = parameters.composite().is_layered();
+
     let mut outgoing_encoder =
         constants
             .device
@@ -9242,13 +9381,19 @@ async fn produce_transition_texture(
             outgoing.render_display,
         )
         .await?;
-    layers.render(
+    let outgoing_parts = if layered {
+        layers.transition_side_parts()
+    } else {
+        LayerParts::ALL
+    };
+    layers.render_parts(
         &constants.device,
         &constants.queue,
         &mut outgoing_encoder,
         session,
         &outgoing.uniforms,
         outgoing.render_display,
+        outgoing_parts,
     )?;
     compositor.capture_outgoing(&mut outgoing_encoder, session.current_texture());
     constants
@@ -9274,25 +9419,61 @@ async fn produce_transition_texture(
         .await;
     layers.camera_blur_unavailable |= outgoing_camera_blur_unavailable;
     incoming_prepare?;
-    layers.render(
+
+    if !layered {
+        layers.render(
+            &constants.device,
+            &constants.queue,
+            &mut incoming_encoder,
+            session,
+            &incoming.uniforms,
+            incoming.render_display,
+        )?;
+        compositor.capture_incoming_and_render(
+            &constants.queue,
+            &mut incoming_encoder,
+            session.current_texture(),
+            session.current_texture_view(),
+            parameters,
+        );
+        return Ok(incoming_encoder);
+    }
+
+    let incoming_parts = layers.transition_side_parts();
+    layers.render_parts(
         &constants.device,
         &constants.queue,
         &mut incoming_encoder,
         session,
         &incoming.uniforms,
         incoming.render_display,
+        incoming_parts,
     )?;
-    compositor.capture_incoming_and_render(
+    compositor.capture_incoming(&mut incoming_encoder, session.current_texture());
+    layers.render_parts(
+        &constants.device,
         &constants.queue,
         &mut incoming_encoder,
-        session.current_texture(),
+        session,
+        &incoming.uniforms,
+        incoming.render_display,
+        LayerParts::BACKGROUND,
+    )?;
+    compositor.render_layers(
+        &constants.queue,
+        &mut incoming_encoder,
         session.current_texture_view(),
-        TransitionParameters {
-            kind: transition.0,
-            progress: transition.1,
-            opaque: outgoing.render_display || incoming.render_display,
-        },
+        parameters,
     );
+    layers.render_parts(
+        &constants.device,
+        &constants.queue,
+        &mut incoming_encoder,
+        session,
+        &incoming.uniforms,
+        incoming.render_display,
+        LayerParts::OVERLAYS,
+    )?;
 
     Ok(incoming_encoder)
 }
