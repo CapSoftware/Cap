@@ -6,6 +6,8 @@
 //! does. Each move runs the timeline's own hover handler, then one synchronous
 //! `Window::draw` (view renders + layout + prepaint + paint) is timed with it.
 //! `CAP_GPUI_AUTO_SIDEBAR` picks the sidebar tab that stays open meanwhile.
+//! `CAP_GPUI_AUTO_HOVER_BENCH_SCRUB=1` holds the ruler down for the whole run,
+//! so every move is also a paused scrub step through the ruler's own handlers.
 //!
 //! Run:
 //!   CAP_GPUI_AUTO_EDITOR=<project.cap> CAP_GPUI_AUTO_HOVER_BENCH=1 \
@@ -14,7 +16,7 @@
 
 use std::time::{Duration, Instant};
 
-use gpui::{App, WindowHandle};
+use gpui::{App, MouseButton, MouseDownEvent, MouseMoveEvent, WindowHandle, point, px};
 
 use crate::editor_window::EditorWindow;
 
@@ -51,6 +53,24 @@ pub async fn run(handle: WindowHandle<EditorWindow>, cx: &mut gpui::AsyncApp) {
         .and_then(|value| value.parse::<f32>().ok())
         .filter(|secs| *secs > 0.)
         .unwrap_or(DEFAULT_SWEEP_SECS);
+    let scrub = std::env::var("CAP_GPUI_AUTO_HOVER_BENCH_SCRUB").is_ok_and(|value| value == "1");
+    let pointer_x = |width: f32, phase: f32| 140. + (width - 180.).max(1.) * phase;
+    if scrub {
+        cx.update(|cx| {
+            handle
+                .update(cx, |view, window, cx| {
+                    let x = pointer_x(f32::from(window.viewport_size().width), 0.);
+                    let event = MouseDownEvent {
+                        button: MouseButton::Left,
+                        position: point(px(x), px(0.)),
+                        click_count: 1,
+                        ..Default::default()
+                    };
+                    view.timeline_mouse_down(&event, true, window, cx);
+                })
+                .ok()
+        });
+    }
     let started = Instant::now();
     let mut next_move = started;
     let mut move_us = Vec::new();
@@ -85,9 +105,16 @@ pub async fn run(handle: WindowHandle<EditorWindow>, cx: &mut gpui::AsyncApp) {
         let hovered = cx.update(|cx| {
             handle
                 .update(cx, |view, window, cx| {
-                    let width = f32::from(window.viewport_size().width);
-                    let x = 140. + (width - 180.).max(1.) * phase;
+                    let x = pointer_x(f32::from(window.viewport_size().width), phase);
                     view.timeline_hover(x, window, cx);
+                    if scrub {
+                        let event = MouseMoveEvent {
+                            position: point(px(x), px(0.)),
+                            pressed_button: Some(MouseButton::Left),
+                            ..Default::default()
+                        };
+                        view.timeline_mouse_move(&event, window, cx);
+                    }
                 })
                 .is_ok()
         });
@@ -105,8 +132,16 @@ pub async fn run(handle: WindowHandle<EditorWindow>, cx: &mut gpui::AsyncApp) {
         .zip(frames_at_start)
         .map(|(end, start)| end.saturating_sub(start));
 
+    if scrub {
+        cx.update(|cx| {
+            handle
+                .update(cx, |view, _, cx| view.window_mouse_up(cx))
+                .ok()
+        });
+    }
     println!(
-        "hover-bench: sidebar tab {}, pointer at {mouse_hz}Hz crossing the timeline in {sweep_secs}s, {} moves handled and {frames:?} preview frames presented in {:.1}s",
+        "hover-bench: {}sidebar tab {}, pointer at {mouse_hz}Hz crossing the timeline in {sweep_secs}s, {} moves handled and {frames:?} preview frames presented in {:.1}s",
+        if scrub { "ruler scrub, " } else { "" },
         std::env::var("CAP_GPUI_AUTO_SIDEBAR").unwrap_or_else(|_| "default".into()),
         move_us.len(),
         MEASURED.as_secs_f64(),

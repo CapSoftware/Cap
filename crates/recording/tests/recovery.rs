@@ -1745,12 +1745,14 @@ fn set_recovery_optional_tracks(project: &Path) {
         start_time: Some(0.0),
         device_id: None,
         gap_summary: None,
+        digital_silence_ms: None,
     });
     segment.system_audio = Some(cap_project::AudioMeta {
         path: RelativePathBuf::from("content/segments/segment-0/system_audio.ogg"),
         start_time: Some(0.0),
         device_id: None,
         gap_summary: None,
+        digital_silence_ms: None,
     });
     meta.save_for_project().unwrap();
 }

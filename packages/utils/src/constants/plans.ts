@@ -16,6 +16,14 @@ export const STRIPE_PLAN_IDS = {
 	},
 };
 
+export const isValidStripePlanPriceId = (
+	priceId: string,
+	environment: keyof typeof STRIPE_PLAN_IDS,
+): boolean => {
+	const envPlans = STRIPE_PLAN_IDS[environment];
+	return priceId === envPlans.yearly || priceId === envPlans.monthly;
+};
+
 export const STRIPE_SIGNED_BAA_PRICE_IDS: Record<string, string> = {
 	development: "price_1U5xKIFJxA1XpeSsdg4Q8H3Z",
 	production: "price_1U6C99FJxA1XpeSsUg1rXHo2",

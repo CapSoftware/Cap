@@ -58,6 +58,7 @@ use crate::{
     editor_tabs::{AudioSlider, CameraSlider, CaptionSlider, CursorSlider, KeyboardSlider},
     editor_timeline::TrackKind,
     editor_window::EditorWindow,
+    i18n::tr,
     library,
     ui::{self, CollapsibleState, SliderTrack},
 };
@@ -138,6 +139,17 @@ pub const BACKGROUND_THEMES: [(&str, &str); 6] = [
     ("orange", "Orange"),
 ];
 
+pub fn background_theme_label(id: &str) -> &'static str {
+    match id {
+        "dark" => tr::editor::sidebar::wallpaper_theme::dark(),
+        "blue" => tr::editor::sidebar::wallpaper_theme::blue(),
+        "cities" => tr::editor::sidebar::wallpaper_theme::cities(),
+        "purple" => tr::editor::sidebar::wallpaper_theme::purple(),
+        "orange" => tr::editor::sidebar::wallpaper_theme::orange(),
+        _ => "macOS",
+    }
+}
+
 /// `BACKGROUND_COLORS` (`:259-277`). The last one is transparent and renders as
 /// a checkerboard rather than a swatch.
 pub const BACKGROUND_COLORS: [&str; 17] = [
@@ -196,6 +208,7 @@ pub const BACKGROUND_IMAGE_EXTENSIONS: [&str; 6] = ["jpg", "jpeg", "png", "gif",
 pub const CURRENT_DESKTOP_BACKGROUND_BASENAME: &str = "current-desktop-background";
 /// `recording.rs:92-93`.
 const DESKTOP_BACKGROUND_MAX_DIMENSION: u32 = 2560;
+#[cfg(target_os = "macos")]
 const DESKTOP_BACKGROUND_JPEG_QUALITY: u8 = 82;
 
 /// The sidebar's fallback border/shadow objects. The UI's numbers, **not**
@@ -265,8 +278,19 @@ impl SidebarTab {
         }
     }
 
-    /// The tab's own name. Used by the timeline's own logging and by the tests
-    /// that pin the rail's order; the rail itself is icon-only.
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::Background => tr::editor::sidebar::tab::background(),
+            Self::Camera => tr::editor::sidebar::tab::camera(),
+            Self::Audio => tr::editor::sidebar::tab::audio(),
+            Self::Cursor => tr::editor::sidebar::tab::cursor(),
+            Self::Keyboard => tr::editor::sidebar::tab::keyboard(),
+            Self::Captions => tr::editor::sidebar::tab::captions(),
+        }
+    }
+
+    /// The tab's own English name, which `CAP_GPUI_AUTO_SIDEBAR` matches
+    /// and the tests that pin the rail's order read.
     #[allow(dead_code)]
     pub fn label(self) -> &'static str {
         match self {
@@ -309,13 +333,13 @@ impl SourceTab {
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::Desktop => "Desktop",
-            Self::Wallpaper => "Wallpaper",
-            Self::Image => "Image",
-            Self::Color => "Color",
-            Self::Gradient => "Gradient",
-            Self::AnimatedGradient => "Animated",
-            Self::None => "None",
+            Self::Desktop => tr::editor::sidebar::source::desktop(),
+            Self::Wallpaper => tr::editor::sidebar::source::wallpaper(),
+            Self::Image => tr::editor::sidebar::source::image(),
+            Self::Color => tr::editor::sidebar::source::color(),
+            Self::Gradient => tr::editor::sidebar::source::gradient(),
+            Self::AnimatedGradient => tr::editor::sidebar::source::animated(),
+            Self::None => tr::editor::sidebar::source::none(),
         }
     }
 }
@@ -510,35 +534,8 @@ fn wallpaper_dir_from(
     candidates.push(PathBuf::from(
         "/Applications/Cap.app/Contents/Resources/assets/backgrounds",
     ));
-    candidates.push(
-        manifest
-            .join("../desktop/src-tauri/assets/backgrounds")
-            .clean(),
-    );
+    candidates.push(manifest.join("assets/backgrounds"));
     candidates.into_iter().find(|path| path.is_dir())
-}
-
-/// `PathBuf::canonicalize` fails on a path that does not exist, and a `..`
-/// segment left in place reads badly in a log line, so the `../` is folded
-/// here instead.
-trait Clean {
-    fn clean(self) -> PathBuf;
-}
-
-impl Clean for PathBuf {
-    fn clean(self) -> PathBuf {
-        let mut out = PathBuf::new();
-        for component in self.components() {
-            match component {
-                std::path::Component::ParentDir => {
-                    out.pop();
-                }
-                std::path::Component::CurDir => {}
-                other => out.push(other),
-            }
-        }
-        out
-    }
 }
 
 pub fn wallpaper_path(id: &str) -> Option<PathBuf> {
@@ -596,6 +593,36 @@ fn noise_texture(width: u32, height: u32, base_frequency: f32) -> Arc<RenderImag
     )]))
 }
 
+#[derive(Default)]
+struct NoiseCache {
+    current: Option<(i32, Arc<RenderImage>)>,
+    retired: Vec<Arc<RenderImage>>,
+}
+
+impl NoiseCache {
+    fn image(&mut self, scale: f32) -> Arc<RenderImage> {
+        let key = scale.round() as i32;
+        if let Some((cached, image)) = &self.current
+            && *cached == key
+        {
+            return image.clone();
+        }
+        let image = noise_texture(
+            GRADIENT_PREVIEW_WIDTH as u32,
+            GRADIENT_PREVIEW_HEIGHT as u32,
+            noise_base_frequency(scale),
+        );
+        if let Some((_, previous)) = self.current.replace((key, image.clone())) {
+            self.retired.push(previous);
+        }
+        image
+    }
+
+    fn take_retired(&mut self) -> Vec<Arc<RenderImage>> {
+        std::mem::take(&mut self.retired)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
@@ -622,6 +649,31 @@ pub enum BgSlider {
 }
 
 impl BgSlider {
+    /// Whether this slider writes a field
+    /// [`crate::editor_timeline::TimelineModel::build`] or
+    /// [`crate::editor_timeline::TrackLanes::from_project`] reads. The match
+    /// is exhaustive so a new slider has to make the choice explicitly.
+    pub(crate) fn changes_timeline_model(self) -> bool {
+        match self {
+            Self::Blur
+            | Self::Padding
+            | Self::Rounding
+            | Self::MotionBlur
+            | Self::BorderWidth
+            | Self::BorderOpacity
+            | Self::NotchWidth
+            | Self::NotchHeight
+            | Self::NotchX
+            | Self::Shadow
+            | Self::ShadowSize
+            | Self::ShadowOpacity
+            | Self::ShadowBlur
+            | Self::GradientAngle
+            | Self::GradientNoise
+            | Self::GradientGrain => false,
+        }
+    }
+
     /// `minValue` / `maxValue` / `step`, per call site. `NotchX`'s maximum is
     /// `notchXMax()` and therefore not constant; it is patched in by
     /// [`EditorWindow::slider_limits`].
@@ -730,6 +782,11 @@ pub struct SidebarState {
     pub audio_enhancement_default: bool,
     pub audio_enhancement_error: Option<String>,
     pub(crate) style_target: Option<(usize, StyleGroup)>,
+    /// Set while `EditorWindow::with_style_controls` has swapped the scoped
+    /// project into place. Controls rendered inside that scope read it through
+    /// `style_control_project`, which would otherwise clone the whole project
+    /// again for every slider and swatch on the page.
+    style_scoped: bool,
     pub(crate) image_import_error: Option<String>,
     pub(crate) image_asset_status: Option<(String, bool)>,
     animated_gradient: animated_gradient::AnimatedGradientState,
@@ -764,9 +821,6 @@ pub struct SidebarState {
     /// `ColorCorrectionSection`'s `adjustOpen` signal -- one per instance, so
     /// the Background tab's and the Camera tab's open independently.
     grade_adjust: [CollapsibleState; 2],
-    /// The nine preset tiles, generated once for the process. The catalogue is
-    /// static, so nothing can invalidate them.
-    pub(crate) grade_previews: std::cell::RefCell<HashMap<&'static str, Arc<RenderImage>>>,
     /// The camera tab's own `ShadowSettings` reveal, and the cursor tab's
     /// `KCollapsible open={!project.cursor.raw}` physics panel.
     pub camera_shadow_open: CollapsibleState,
@@ -787,7 +841,7 @@ pub struct SidebarState {
     /// The gradient preview's grain, cached by the grain-scale step it was
     /// generated for -- regenerating 42k pixels of noise on every frame of a
     /// slider drag would be the one expensive thing in this panel.
-    noise: std::cell::RefCell<Option<(i32, Arc<RenderImage>)>>,
+    noise: std::cell::RefCell<NoiseCache>,
 
     /// The open `KSelect`'s menu, if any -- one slot for every select in the
     /// sidebar, the settings window's `Menu.popup()` stand-in.
@@ -850,6 +904,7 @@ impl SidebarState {
             audio_enhancement_default: crate::store::studio_sound_by_default(),
             audio_enhancement_error: None,
             style_target: None,
+            style_scoped: false,
             image_import_error: None,
             image_asset_status: None,
             animated_gradient: animated_gradient::AnimatedGradientState::new(),
@@ -869,14 +924,13 @@ impl SidebarState {
             pads: std::cell::RefCell::new(HashMap::new()),
             pad_drag: None,
             grade_adjust: [CollapsibleState::new(false), CollapsibleState::new(false)],
-            grade_previews: std::cell::RefCell::new(HashMap::new()),
             camera_shadow_open: CollapsibleState::new(false),
             cursor_physics_open: CollapsibleState::new(!config.cursor.raw),
             cursor_ripple_open: CollapsibleState::new(config.cursor.ripple.enabled),
             cursor_previews: std::cell::RefCell::new(BTreeMap::new()),
             cursor_scale: 2.,
             panel_sections: std::cell::RefCell::new(HashMap::new()),
-            noise: std::cell::RefCell::new(None),
+            noise: std::cell::RefCell::default(),
             menu: None,
             caption_model: "best",
             caption_language: "auto",
@@ -905,19 +959,16 @@ impl SidebarState {
 
     /// The grain texture for a grain-scale value, generated once per step.
     fn noise_image(&self, scale: f32) -> Arc<RenderImage> {
-        let key = scale.round() as i32;
-        if let Some((cached, image)) = self.noise.borrow().as_ref()
-            && *cached == key
-        {
-            return image.clone();
+        self.noise.borrow_mut().image(scale)
+    }
+
+    /// Evicts the grain textures earlier steps of a slider drag left in the
+    /// window's atlas. The panel is built without a `&mut Window`, so they
+    /// are queued there and released from `render` on the next frame.
+    pub(crate) fn release_retired_images(&self, window: &mut Window) {
+        for image in self.noise.borrow_mut().take_retired() {
+            let _ = window.drop_image(image);
         }
-        let image = noise_texture(
-            GRADIENT_PREVIEW_WIDTH as u32,
-            GRADIENT_PREVIEW_HEIGHT as u32,
-            noise_base_frequency(scale),
-        );
-        *self.noise.borrow_mut() = Some((key, image.clone()));
-        image
     }
 
     /// The stored track rect, without creating one -- the pointer maths reads
@@ -1032,6 +1083,32 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.edit_background_inner(true, reason, change, window, cx);
+    }
+
+    /// [`Self::edit_background`] for edits that cannot change the timeline
+    /// model or its lanes -- the background tab's sliders and the
+    /// animated-gradient add/remove/stop/reset edits, whose fields
+    /// [`crate::editor_timeline::TimelineModel::build`] and
+    /// [`crate::editor_timeline::TrackLanes::from_project`] do not read.
+    fn edit_background_without_timeline(
+        &mut self,
+        reason: &'static str,
+        change: impl FnOnce(&mut ProjectConfiguration) -> bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.edit_background_inner(false, reason, change, window, cx);
+    }
+
+    fn edit_background_inner(
+        &mut self,
+        rebuild_timeline: bool,
+        reason: &'static str,
+        change: impl FnOnce(&mut ProjectConfiguration) -> bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if !self.project_ready() {
             return;
         }
@@ -1046,7 +1123,11 @@ impl EditorWindow {
         if !self.apply_control_change(change) {
             return;
         }
-        self.project_changed(window, cx);
+        if rebuild_timeline {
+            self.project_changed(window, cx);
+        } else {
+            self.project_changed_without_timeline(window, cx);
+        }
         self.remember_animated_gradient_selection(previous_animated_gradient, window, cx);
         self.note_sidebar_edit(reason);
     }
@@ -1062,6 +1143,31 @@ impl EditorWindow {
         cx: &mut Context<Self>,
         change: impl FnOnce(&mut ProjectConfiguration) -> bool,
     ) {
+        self.edit_project_with_rebuild(true, reason, window, cx, change);
+    }
+
+    /// [`Self::edit_project`] for edits that cannot change the timeline model.
+    pub(crate) fn edit_project_without_timeline(
+        &mut self,
+        reason: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        change: impl FnOnce(&mut ProjectConfiguration) -> bool,
+    ) {
+        self.edit_project_with_rebuild(false, reason, window, cx, change);
+    }
+
+    /// The shared project write. `rebuild_timeline` is true for edits that
+    /// touch a field [`crate::editor_timeline::TimelineModel::build`] or
+    /// [`crate::editor_timeline::TrackLanes::from_project`] reads.
+    pub(crate) fn edit_project_with_rebuild(
+        &mut self,
+        rebuild_timeline: bool,
+        reason: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        change: impl FnOnce(&mut ProjectConfiguration) -> bool,
+    ) {
         if !self.project_ready() {
             return;
         }
@@ -1069,7 +1175,11 @@ impl EditorWindow {
         if !self.apply_control_change(change) {
             return;
         }
-        self.project_changed(window, cx);
+        if rebuild_timeline {
+            self.project_changed(window, cx);
+        } else {
+            self.project_changed_without_timeline(window, cx);
+        }
         self.note_project_edit(reason);
     }
 
@@ -1315,7 +1425,8 @@ impl EditorWindow {
         cx: &mut Context<Self>,
     ) {
         let base = self.notch_base();
-        self.edit_background(
+        self.edit_background_inner(
+            slider.changes_timeline_model(),
             "slider",
             |project| {
                 let background = &mut project.background;
@@ -1895,22 +2006,7 @@ fn decode_scaled_rgba(path: &Path, max: u32) -> Option<image::RgbaImage> {
 }
 
 fn decode_jpeg_thumbnail(bytes: &[u8], max: u32) -> Option<(image::DynamicImage, u32, u32)> {
-    let mut decoder = jpeg_decoder::Decoder::new(bytes);
-    decoder.read_info().ok()?;
-    let info = decoder.info()?;
-    let requested = max.clamp(1, u16::MAX as u32) as u16;
-    let (width, height) = decoder.scale(requested, requested).ok()?;
-    let pixels = decoder.decode().ok()?;
-    let decoded = match info.pixel_format {
-        jpeg_decoder::PixelFormat::RGB24 => image::DynamicImage::ImageRgb8(
-            image::RgbImage::from_raw(width as u32, height as u32, pixels)?,
-        ),
-        jpeg_decoder::PixelFormat::L8 => image::DynamicImage::ImageLuma8(
-            image::GrayImage::from_raw(width as u32, height as u32, pixels)?,
-        ),
-        _ => return None,
-    };
-    Some((decoded, info.width as u32, info.height as u32))
+    crate::jpeg_thumbnail::decode_jpeg_thumbnail(bytes, |_, _| (max, max))
 }
 
 /// [`decode_scaled_rgba`] in gpui's BGRA order.
@@ -1923,8 +2019,9 @@ const WALLPAPER_TILE_MAX: u32 = 128;
 
 /// One wallpaper tile, through the persistent cache. The bundled assets are
 /// immutable in practice, so after the first-ever run every theme switch is
-/// eighteen ~3KB JPEG reads instead of eighteen 4000x2500 decodes; the mtime
-/// in the key still invalidates if an app update ever replaces them.
+/// eighteen ~3KB JPEG reads instead of eighteen 4000x2500 decodes; the
+/// version (mtime plus length) in the key still invalidates if an app update
+/// ever replaces them.
 pub(crate) fn decode_wallpaper_thumbnail(id: &str) -> Option<Arc<RenderImage>> {
     let path = wallpaper_path(id)?;
     // Ids are catalogue paths ("macOS/tahoe-dusk-min"); flattened so the key
@@ -1953,31 +2050,38 @@ pub(crate) fn decode_wallpaper_thumbnail(id: &str) -> Option<Arc<RenderImage>> {
 /// re-encoding to JPEG at quality 82. The `sips` path matters -- macOS ships
 /// HEIC wallpapers the `image` crate cannot decode.
 fn write_desktop_background_snapshot(source: &Path, output: &Path) -> Result<(), String> {
-    let needs_downscale = image::image_dimensions(source).is_ok_and(|(width, height)| {
-        width > DESKTOP_BACKGROUND_MAX_DIMENSION || height > DESKTOP_BACKGROUND_MAX_DIMENSION
-    });
-
-    let mut command = std::process::Command::new("sips");
-    command
-        .arg("-s")
-        .arg("format")
-        .arg("jpeg")
-        .arg("-s")
-        .arg("formatOptions")
-        .arg(DESKTOP_BACKGROUND_JPEG_QUALITY.to_string());
-    if needs_downscale {
-        command
-            .arg("-Z")
-            .arg(DESKTOP_BACKGROUND_MAX_DIMENSION.to_string());
-    }
-    if let Ok(output_status) = command.arg(source).arg("--out").arg(output).output()
-        && output_status.status.success()
+    #[cfg(target_os = "macos")]
     {
-        return Ok(());
+        let needs_downscale = image::image_dimensions(source).is_ok_and(|(width, height)| {
+            width > DESKTOP_BACKGROUND_MAX_DIMENSION || height > DESKTOP_BACKGROUND_MAX_DIMENSION
+        });
+
+        let mut command = std::process::Command::new("sips");
+        command
+            .arg("-s")
+            .arg("format")
+            .arg("jpeg")
+            .arg("-s")
+            .arg("formatOptions")
+            .arg(DESKTOP_BACKGROUND_JPEG_QUALITY.to_string());
+        if needs_downscale {
+            command
+                .arg("-Z")
+                .arg(DESKTOP_BACKGROUND_MAX_DIMENSION.to_string());
+        }
+        if let Ok(output_status) = command.arg(source).arg("--out").arg(output).output()
+            && output_status.status.success()
+        {
+            return Ok(());
+        }
     }
 
-    let decoded = cap_gpui_kernels::codec::open_image(source)
-        .map_err(|err| format!("failed to decode desktop background: {err}"))?;
+    #[cfg(target_os = "linux")]
+    let decoded = crate::linux_wallpaper::decode_jpeg_xl(source)
+        .unwrap_or_else(|| cap_gpui_kernels::codec::decode_image_file(source));
+    #[cfg(not(target_os = "linux"))]
+    let decoded = cap_gpui_kernels::codec::decode_image_file(source);
+    let decoded = decoded.map_err(|err| format!("failed to decode desktop background: {err}"))?;
     let decoded = if decoded.width() > DESKTOP_BACKGROUND_MAX_DIMENSION
         || decoded.height() > DESKTOP_BACKGROUND_MAX_DIMENSION
     {
@@ -2137,7 +2241,9 @@ impl EditorWindow {
     /// selected path.
     fn ensure_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(path) = self.preview_path() else {
-            self.sidebar.preview = None;
+            if let Some((_, previous)) = self.sidebar.preview.take() {
+                let _ = window.drop_image(previous);
+            }
             return;
         };
         if self
@@ -2157,8 +2263,10 @@ impl EditorWindow {
                     .await
             };
             let Some(image) = decoded else { return };
-            this.update(cx, |this, cx| {
-                this.sidebar.preview = Some((target, image));
+            this.update_in(cx, |this, window, cx| {
+                if let Some((_, previous)) = this.sidebar.preview.replace((target, image)) {
+                    let _ = window.drop_image(previous);
+                }
                 cx.notify();
             })
             .ok();
@@ -2315,7 +2423,7 @@ impl EditorWindow {
     /// goes through a task rather than the click's update, and the chosen file
     /// is copied into the app-data dir as `bg-<ts>-<name>` exactly as the
     /// `<input type="file">` handler does (`:2513-2541`).
-    fn pick_background_image(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn pick_background_image(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.sidebar.picking_image {
             return;
         }
@@ -2323,6 +2431,17 @@ impl EditorWindow {
         let style_target = self.sidebar.style_target;
         let style_fingerprint = self.style_target_fingerprint();
         self.sidebar.picker_task = Some(cx.spawn_in(window, async move |this, cx| {
+            #[cfg(target_os = "linux")]
+            let picked = crate::platform::open_file_panel_async(
+                &[(
+                    tr::editor::sidebar::source::image(),
+                    &BACKGROUND_IMAGE_EXTENSIONS[..],
+                )],
+                None,
+                cx,
+            )
+            .await;
+            #[cfg(not(target_os = "linux"))]
             let picked = cx
                 .update(|_, _| crate::platform::open_image_panel(&BACKGROUND_IMAGE_EXTENSIONS))
                 .ok()
@@ -2370,6 +2489,7 @@ impl EditorWindow {
                 }
                 match stored {
                     Ok(path) => {
+                        tracing::info!(path = %path.display(), "background image chosen");
                         this.edit_background(
                             "image",
                             |project| {
@@ -2395,7 +2515,11 @@ impl EditorWindow {
     }
 
     /// `importDesktopBackground` (`:2033-2052`).
-    fn import_desktop_background(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn import_desktop_background(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.sidebar.importing_desktop {
             return;
         }
@@ -2419,6 +2543,7 @@ impl EditorWindow {
                 }
                 match imported {
                     Ok(path) => {
+                        tracing::info!(path = %path.display(), "desktop wallpaper imported");
                         this.sidebar.desktop_background = Some(path.clone());
                         this.sidebar.source_tab = SourceTab::Desktop;
                         this.ensure_background_presentation(from_none);
@@ -2426,6 +2551,13 @@ impl EditorWindow {
                     }
                     Err(error) => {
                         tracing::error!("couldn't import your desktop wallpaper: {error}");
+                        cx.spawn(async move |_, _| {
+                            crate::platform::alert_dialog(
+                                tr::editor::sidebar::desktop_import_failed(),
+                                &error,
+                            );
+                        })
+                        .detach();
                     }
                 }
                 cx.notify();
@@ -2472,7 +2604,7 @@ impl EditorWindow {
                 // the indicator is hidden (`:586-592, 667-677`).
                 ui::TabRailItem::new(
                     tab.icon(),
-                    tab.label(),
+                    tab.title(),
                     selection.is_none() && tab == selected_tab,
                     disabled,
                 )
@@ -2513,11 +2645,11 @@ impl EditorWindow {
                             .text_color(Hsla::from(theme.editor.text_1))
                             .child(error.clone())
                     }))
-                    .children(
-                        self.sidebar
-                            .picking_image
-                            .then(|| div().p(px(12.)).child("Importing image…")),
-                    )
+                    .children(self.sidebar.picking_image.then(|| {
+                        div()
+                            .p(px(12.))
+                            .child(tr::editor::sidebar::importing_image())
+                    }))
                     .child(if let Some((index, group)) = self.sidebar.style_target {
                         self.render_style_group(index, group, cx)
                     } else if self.audio_picker.is_some() {
@@ -2544,10 +2676,11 @@ impl EditorWindow {
             SidebarTab::Captions => self.render_captions_tab(cx),
         };
 
+        // Block, not a flex column: its one child lays out the same, without
+        // the extra layout pass a flex column spends sizing it on every rebuild.
         div()
             .id("sidebar-scroll")
-            .flex()
-            .flex_col()
+            .block()
             .flex_1()
             .min_h_0()
             .overflow_x_hidden()
@@ -2599,18 +2732,18 @@ impl EditorWindow {
             .child(self.render_source_field(cx))
             .child(dashed_divider(Hsla::from(theme.editor.line)))
             .child(
-                ui::Field::section(&theme, "Layout").child(
+                ui::Field::section(&theme, tr::editor::sidebar::layout::title()).child(
                     div()
                         .flex()
                         .flex_col()
                         .child(self.slider_field(
-                            "Background Blur",
+                            tr::editor::sidebar::layout::background_blur(),
                             SliderKey::Bg(BgSlider::Blur),
                             "%",
                             cx,
                         ))
                         .child(self.slider_field(
-                            "Padding",
+                            tr::editor::sidebar::layout::padding(),
                             SliderKey::Bg(BgSlider::Padding),
                             "%",
                             cx,
@@ -2626,14 +2759,16 @@ impl EditorWindow {
                                 .h(px(34.))
                                 .child(
                                     div()
+                                        .min_w_0()
+                                        .truncate()
                                         .text_size(px(12.))
                                         .text_color(Hsla::from(theme.editor.text_2))
-                                        .child("Custom screen position (dragged on canvas)"),
+                                        .child(tr::editor::sidebar::layout::custom_position()),
                                 )
                                 .child(section_action(
                                     &theme,
                                     "reset-display-position",
-                                    "Reset",
+                                    tr::common::reset(),
                                     None,
                                     false,
                                     cx.listener(|this, _, window, cx| {
@@ -2651,7 +2786,7 @@ impl EditorWindow {
                                 .into_any_element()
                         }))
                         .child(self.slider_field(
-                            "Rounded Corners",
+                            tr::editor::sidebar::layout::rounded_corners(),
                             SliderKey::Bg(BgSlider::Rounding),
                             "%",
                             cx,
@@ -2659,7 +2794,7 @@ impl EditorWindow {
                         .child(self.render_corner_style(cx))
                         .children(self.sidebar.style_target.is_none().then(|| {
                             self.slider_field(
-                                "Motion Blur",
+                                tr::editor::sidebar::layout::motion_blur(),
                                 SliderKey::Bg(BgSlider::MotionBlur),
                                 "x100%",
                                 cx,
@@ -2694,7 +2829,7 @@ impl EditorWindow {
             .map(|item| ui::SegmentOption::new(item.label(), tab == item))
             .collect();
 
-        ui::Field::section(&theme, "Background")
+        ui::Field::section(&theme, tr::editor::sidebar::background::title())
             .value(section_action(
                 &theme,
                 "source-none",
@@ -2745,9 +2880,9 @@ impl EditorWindow {
         let theme = self.theme;
         let importing = self.sidebar.importing_desktop;
         let label = if importing {
-            "Importing..."
+            tr::editor::sidebar::desktop::importing()
         } else {
-            "Import desktop background"
+            tr::editor::sidebar::desktop::import()
         };
 
         match self.sidebar.desktop_background.clone() {
@@ -2772,7 +2907,7 @@ impl EditorWindow {
                     div()
                         .text_size(px(13.))
                         .text_color(Hsla::from(theme.editor.text_1))
-                        .child("Use the wallpaper from your desktop"),
+                        .child(tr::editor::sidebar::desktop::prompt()),
                 )
                 .child(
                     ui::EditorButton::plain(&theme, "import-desktop")
@@ -2834,9 +2969,9 @@ impl EditorWindow {
                                 .left_icon("icons/monitor-outline.svg")
                                 .icon_size(px(16.))
                                 .label(if importing {
-                                    "Importing..."
+                                    tr::editor::sidebar::desktop::importing()
                                 } else {
-                                    "Re-import"
+                                    tr::editor::sidebar::desktop::reimport()
                                 })
                                 .disabled(importing)
                                 .on_click(cx.listener(|this, _, window, cx| {
@@ -2890,7 +3025,7 @@ impl EditorWindow {
                         BACKGROUND_THEMES
                             .iter()
                             .enumerate()
-                            .map(|(index, (_, label))| {
+                            .map(|(index, (id, _))| {
                                 let selected = index == selected_theme;
                                 div()
                                     .id(SharedString::from(format!("wallpaper-theme-{index}")))
@@ -2911,7 +3046,7 @@ impl EditorWindow {
                                             .cursor_pointer()
                                             .hover(|this| this.bg(Hsla::from(theme.editor.ctl)))
                                     })
-                                    .child(*label)
+                                    .child(background_theme_label(id))
                                     .on_click(cx.listener(move |this, _, window, cx| {
                                         this.sidebar.wallpaper_theme = index;
                                         this.ensure_wallpapers(window, cx);
@@ -3004,7 +3139,7 @@ impl EditorWindow {
                 .child(
                     div()
                         .text_color(Hsla::from(theme.editor.text_1))
-                        .child("Click to select or drag and drop image"),
+                        .child(tr::editor::sidebar::image::prompt()),
                 )
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.pick_background_image(window, cx);
@@ -3248,14 +3383,14 @@ impl EditorWindow {
                     .items_end()
                     .child(self.render_gradient_stop(
                         "gradient-from",
-                        "From",
+                        tr::editor::sidebar::gradient::from(),
                         ColorTarget::GradientFrom,
                         from,
                         cx,
                     ))
                     .child(self.render_gradient_stop(
                         "gradient-to",
-                        "To",
+                        tr::editor::sidebar::gradient::to(),
                         ColorTarget::GradientTo,
                         to,
                         cx,
@@ -3267,13 +3402,13 @@ impl EditorWindow {
                     .flex()
                     .flex_col()
                     .child(self.slider_field(
-                        "Angle",
+                        tr::editor::sidebar::gradient::angle(),
                         SliderKey::Bg(BgSlider::GradientAngle),
                         "deg",
                         cx,
                     ))
                     .child(self.slider_field(
-                        "Noise",
+                        tr::editor::sidebar::gradient::noise(),
                         SliderKey::Bg(BgSlider::GradientNoise),
                         "%",
                         cx,
@@ -3281,7 +3416,7 @@ impl EditorWindow {
                     // Grain Scale appears only while noise is on (`:204-221`).
                     .children((noise > 0.).then(|| {
                         self.slider_field(
-                            "Grain Scale",
+                            tr::editor::sidebar::gradient::grain_scale(),
                             SliderKey::Bg(BgSlider::GradientGrain),
                             "%",
                             cx,
@@ -3426,16 +3561,18 @@ impl EditorWindow {
         let theme = self.theme;
         let current = self.project.background.rounding_type;
         let label = match current {
-            CornerStyle::Squircle => "Squircle",
-            CornerStyle::Rounded => "Rounded",
+            CornerStyle::Squircle => tr::editor::sidebar::corner::squircle(),
+            CornerStyle::Rounded => tr::editor::sidebar::corner::rounded(),
         };
 
-        ui::Field::inline(&theme, "Corner Style").child(div().w(px(150.)).child(self.menu_select(
-            crate::editor_tabs::SidebarMenu::BackgroundCornerStyle,
-            "corner-style",
-            label,
-            cx,
-        )))
+        ui::Field::inline(&theme, tr::editor::sidebar::corner::title()).child(
+            div().w(px(150.)).child(self.menu_select(
+                crate::editor_tabs::SidebarMenu::BackgroundCornerStyle,
+                "corner-style",
+                label,
+                cx,
+            )),
+        )
     }
 
     fn render_border_field(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -3448,7 +3585,7 @@ impl EditorWindow {
             .flex()
             .flex_col()
             .child(
-                ui::Field::inline(&theme, "Border").value(
+                ui::Field::inline(&theme, tr::editor::sidebar::border::title()).value(
                     ui::Toggle::plain(&theme, "border-enabled", enabled)
                         .on_click(cx.listener(move |this, _, window, cx| {
                             let next = !enabled;
@@ -3482,21 +3619,23 @@ impl EditorWindow {
                     .flex()
                     .flex_col()
                     .child(self.slider_field(
-                        "Border Width",
+                        tr::editor::sidebar::border::width(),
                         SliderKey::Bg(BgSlider::BorderWidth),
                         "px",
                         cx,
                     ))
                     .child(
-                        ui::Field::stacked(&theme, "Border Color").child(self.render_rgb_input(
-                            "border-color",
-                            ColorTarget::BorderColor,
-                            color,
-                            cx,
-                        )),
+                        ui::Field::stacked(&theme, tr::editor::sidebar::border::color()).child(
+                            self.render_rgb_input(
+                                "border-color",
+                                ColorTarget::BorderColor,
+                                color,
+                                cx,
+                            ),
+                        ),
                     )
                     .child(self.slider_field(
-                        "Border Opacity",
+                        tr::editor::sidebar::border::opacity(),
                         SliderKey::Bg(BgSlider::BorderOpacity),
                         "%",
                         cx,
@@ -3518,7 +3657,7 @@ impl EditorWindow {
             .flex()
             .flex_col()
             .child(
-                ui::Field::inline(&theme, "MacBook notch").value(
+                ui::Field::inline(&theme, tr::editor::sidebar::notch::title()).value(
                     ui::Toggle::plain(&theme, "notch-enabled", enabled)
                         .on_click(cx.listener(move |this, _, window, cx| {
                             let next = !enabled;
@@ -3555,26 +3694,22 @@ impl EditorWindow {
                             .pt(px(4.))
                             .text_size(px(12.))
                             .text_color(Hsla::from(theme.editor.text_2))
-                            .child(
-                                "Draws a MacBook notch over the recording. Recordings made \
-                                 on a Mac with a notch use their own measurements; \
-                                 otherwise start from the size below and adjust to match.",
-                            ),
+                            .child(tr::editor::sidebar::notch::description()),
                     )
                     .child(self.slider_field(
-                        "Notch Width",
+                        tr::editor::sidebar::notch::width(),
                         SliderKey::Bg(BgSlider::NotchWidth),
                         "pct",
                         cx,
                     ))
                     .child(self.slider_field(
-                        "Notch Height",
+                        tr::editor::sidebar::notch::height(),
                         SliderKey::Bg(BgSlider::NotchHeight),
                         "pct",
                         cx,
                     ))
                     .child(self.slider_field(
-                        "Notch Position",
+                        tr::editor::sidebar::notch::position(),
                         SliderKey::Bg(BgSlider::NotchX),
                         "pct",
                         cx,
@@ -3590,7 +3725,12 @@ impl EditorWindow {
         div()
             .flex()
             .flex_col()
-            .child(self.slider_field("Shadow", SliderKey::Bg(BgSlider::Shadow), "%", cx))
+            .child(self.slider_field(
+                tr::editor::sidebar::shadow::title(),
+                SliderKey::Bg(BgSlider::Shadow),
+                "%",
+                cx,
+            ))
             // `ShadowSettings` (`ShadowSettings.tsx:37-86`): its own trigger
             // row with a rotating chevron, over three sliders.
             .child(
@@ -3600,7 +3740,7 @@ impl EditorWindow {
                     .child(disclosure_row(
                         &theme,
                         "shadow-advanced",
-                        "Advanced shadow settings",
+                        tr::editor::sidebar::shadow::advanced(),
                         open,
                         cx.listener(|this, _, window, cx| {
                             this.sidebar.shadow_open.toggle();
@@ -3613,19 +3753,19 @@ impl EditorWindow {
                             .flex()
                             .flex_col()
                             .child(self.slider_field(
-                                "Size",
+                                tr::editor::sidebar::shadow::shadow_size(),
                                 SliderKey::Bg(BgSlider::ShadowSize),
                                 "",
                                 cx,
                             ))
                             .child(self.slider_field(
-                                "Opacity",
+                                tr::editor::sidebar::shadow::opacity(),
                                 SliderKey::Bg(BgSlider::ShadowOpacity),
                                 "",
                                 cx,
                             ))
                             .child(self.slider_field(
-                                "Blur",
+                                tr::editor::sidebar::shadow::blur(),
                                 SliderKey::Bg(BgSlider::ShadowBlur),
                                 "",
                                 cx,
@@ -4071,6 +4211,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_new_grain_step_retires_the_old_texture_for_atlas_eviction() {
+        let mut noise = NoiseCache::default();
+        let first = noise.image(20.);
+        assert!(Arc::ptr_eq(&noise.image(20.2), &first));
+        assert!(noise.take_retired().is_empty());
+
+        let second = noise.image(35.);
+        let third = noise.image(50.);
+        assert!(!Arc::ptr_eq(&second, &first));
+        let retired = noise.take_retired();
+        assert_eq!(retired.len(), 2);
+        assert!(Arc::ptr_eq(&retired[0], &first));
+        assert!(Arc::ptr_eq(&retired[1], &second));
+        assert!(noise.take_retired().is_empty());
+        assert!(Arc::ptr_eq(&noise.image(50.), &third));
+    }
+
+    #[test]
     fn the_catalogue_matches_the_source() {
         assert_eq!(WALLPAPER_NAMES.len(), 53);
         assert_eq!(GRADIENT_PRESETS.len(), 18);
@@ -4335,9 +4493,9 @@ pub(crate) enum StyleGroup {
 impl StyleGroup {
     pub(crate) fn label(self) -> &'static str {
         match self {
-            Self::Background => "Background & frame",
-            Self::Camera => "Camera",
-            Self::Cursor => "Cursor",
+            Self::Background => tr::editor::sidebar::style_group::background(),
+            Self::Camera => tr::editor::sidebar::style_group::camera(),
+            Self::Cursor => tr::editor::sidebar::style_group::cursor(),
         }
     }
 
@@ -4421,6 +4579,12 @@ impl EditorWindow {
     }
 
     pub(crate) fn style_control_project(&self) -> std::borrow::Cow<'_, ProjectConfiguration> {
+        // `with_style_controls` already replaced `self.project` with the scoped
+        // configuration, so inside its closure the override is in place and a
+        // second clone would only copy the copy.
+        if self.sidebar.style_scoped {
+            return std::borrow::Cow::Borrowed(&self.project);
+        }
         let Some((index, group)) = self.sidebar.style_target else {
             return std::borrow::Cow::Borrowed(&self.project);
         };
@@ -4454,12 +4618,20 @@ impl EditorWindow {
     }
 
     pub(crate) fn with_style_controls<R>(&mut self, render: impl FnOnce(&mut Self) -> R) -> R {
+        // A nested scope would see the outer override through the flag and
+        // silently render with it, so callers must enter one scope at a time.
+        debug_assert!(
+            !self.sidebar.style_scoped,
+            "with_style_controls must not nest"
+        );
         let std::borrow::Cow::Owned(scoped) = self.style_control_project() else {
             return render(self);
         };
         // Existing controls read the project while building their elements. Restore the base before any event can publish or save it.
         let base = std::mem::replace(&mut self.project, scoped);
+        self.sidebar.style_scoped = true;
         let result = render(self);
+        self.sidebar.style_scoped = false;
         self.project = base;
         result
     }
@@ -4526,12 +4698,15 @@ impl EditorWindow {
                             .gap(px(8.))
                             .font_weight(gpui::FontWeight::MEDIUM)
                             .child(svg().path(group.icon()).size(px(16.)))
-                            .child(format!("Style {} · {}", index + 1, group.label())),
+                            .child(tr::editor::sidebar::style_group::title(
+                                index + 1,
+                                group.label(),
+                            )),
                     )
                     .child(
                         div()
                             .text_size(px(11.))
-                            .child("Editing this segment only. Global settings are unchanged."),
+                            .child(tr::editor::sidebar::style_group::editing_note()),
                     )
                     .child(
                         div()
@@ -4545,7 +4720,7 @@ impl EditorWindow {
                                     .items_center()
                                     .gap(px(4.))
                                     .child(svg().path("icons/arrow-left.svg").size(px(14.)))
-                                    .child("Back to Style"),
+                                    .child(tr::editor::sidebar::style_group::back()),
                             )
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.end_field_edit(cx);

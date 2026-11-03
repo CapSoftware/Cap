@@ -36,7 +36,7 @@ FFmpeg also documents that fragmented MP4 remains decodable after interrupted wr
 | Successful encoder completion is not universal device quiescence | Some macOS/non-Windows source stop errors or timeouts are logged; a clean output token does not prove every device/preview writer has exited.                                                      | Preserve generation/ownership checks and explicit quiescence acknowledgement. Do not use the existing token to bypass all source protection.                                               |
 | Normal Stop repeatedly reads/copies the entire recording         | Studio performs four full input snapshots, a private copy, remux/validation and publication; Instant also copies and scans.                                                                        | First remove only provably redundant work. A later read-only-source finalizer must leave original fragments unchanged until commit.                                                        |
 
-Relevant source seams: `crates/project/src/meta.rs`; `crates/recording/src/recovery.rs`; `crates/recording/src/fragmentation/mod.rs`; `crates/enc-ffmpeg/src/mux/{fragment_manifest,segmented_stream,dash_audio,segmented_audio}.rs`; `apps/desktop/src-tauri/src/{recording,upload}.rs`; `apps/desktop-gpui/src/{recording,upload,session}.rs`; `apps/web/app/api/upload/[...route]/recording-complete.ts`.
+Relevant source seams: `crates/project/src/meta.rs`; `crates/recording/src/recovery.rs`; `crates/recording/src/fragmentation/mod.rs`; `crates/enc-ffmpeg/src/mux/{fragment_manifest,segmented_stream,dash_audio,segmented_audio}.rs`; `apps/desktop-gpui/src/{recording,upload,session}.rs`; `apps/web/app/api/upload/[...route]/recording-complete.ts`.
 
 ## Shared safety contract
 

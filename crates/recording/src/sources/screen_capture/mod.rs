@@ -23,6 +23,8 @@ pub use macos::*;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "linux")]
+mod linux_dmabuf_import;
+#[cfg(target_os = "linux")]
 mod linux_shm;
 #[cfg(target_os = "linux")]
 pub use linux::*;
@@ -380,10 +382,50 @@ pub struct Config {
     show_cursor: bool,
     #[cfg(target_os = "linux")]
     linux_source: LinuxCaptureSource,
+    /// Capture this window itself rather than a crop of its display.
+    #[cfg(any(target_os = "macos", windows))]
+    window: Option<WindowId>,
 }
 
 #[cfg(target_os = "macos")]
 pub type CropBounds = LogicalBounds;
+
+/// macOS hands a single window over with its rounded corners transparent,
+/// which the encoder fills with black. Window-only capture reads this many
+/// points in from every edge: a corner's curve clears 0.29 of its radius in,
+/// and this covers radii up to 27 pt.
+#[cfg(target_os = "macos")]
+pub const WINDOW_CORNER_TRIM: f64 = 8.0;
+
+/// `bounds` shrunk to whole, even pixel dimensions at `scale`. The encoder
+/// needs even frames; a region an odd number of pixels across would be read
+/// whole and squeezed a pixel smaller, resampling, and so softening, every
+/// line of text. Reading the even region instead copies pixels one to one.
+#[cfg(target_os = "macos")]
+pub fn even_pixel_crop(bounds: CropBounds, scale: f64) -> CropBounds {
+    let size = bounds.size();
+    let pixels = |points: f64| ensure_even((points * scale).floor() as u32) as f64 / scale;
+    LogicalBounds::new(
+        bounds.position(),
+        LogicalSize::new(pixels(size.width()), pixels(size.height())),
+    )
+}
+
+/// `bounds` with [`WINDOW_CORNER_TRIM`] taken off every side, or as it was
+/// when the window is too small to trim.
+#[cfg(target_os = "macos")]
+pub fn trim_window_corners(bounds: CropBounds) -> CropBounds {
+    let size = bounds.size();
+    let trim = WINDOW_CORNER_TRIM;
+    if size.width() <= trim * 4. || size.height() <= trim * 4. {
+        return bounds;
+    }
+    let position = bounds.position();
+    LogicalBounds::new(
+        LogicalPosition::new(position.x() + trim, position.y() + trim),
+        LogicalSize::new(size.width() - 2. * trim, size.height() - 2. * trim),
+    )
+}
 
 #[cfg(windows)]
 pub type CropBounds = PhysicalBounds;
@@ -436,8 +478,8 @@ fn logical_axis_to_physical(
     let start = position.clamp(0.0, logical_extent);
     let end = (position + size).clamp(0.0, logical_extent);
     let scale = physical_extent / logical_extent;
-    let physical_start = start.min(end) * scale;
-    let physical_end = start.max(end) * scale;
+    let physical_start = (start.min(end) * scale).round();
+    let physical_end = (start.max(end) * scale).round();
     let min_size = 2.0_f64.min(physical_extent);
     let size = (physical_end - physical_start).clamp(min_size, physical_extent);
     let position = physical_start.min(physical_extent - size).max(0.0);
@@ -471,6 +513,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureConfig<TCaptureFormat> {
         max_capture_size: Option<(u32, u32)>,
         start_time: SystemTime,
         system_audio: bool,
+        #[cfg(any(target_os = "macos", windows))] window: Option<WindowId>,
         #[cfg(target_os = "linux")] linux_source: LinuxCaptureSource,
         #[cfg(windows)] d3d_device: ::windows::Win32::Graphics::Direct3D11::ID3D11Device,
         #[cfg(target_os = "macos")] shareable_content: SendableShareableContent,
@@ -481,21 +524,36 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureConfig<TCaptureFormat> {
         let target_refresh = validated_refresh_rate(display.refresh_rate());
         let fps = std::cmp::max(1, std::cmp::min(max_fps, target_refresh));
 
+        // The capture reads the window inside its corners (see
+        // `WINDOW_CORNER_TRIM`), so the output and the cursor crop match that.
+        #[cfg(target_os = "macos")]
+        let crop_bounds = match window {
+            Some(_) => crop_bounds.map(trim_window_corners),
+            None => crop_bounds,
+        };
+        // Read exactly as many pixels as the frame holds (see `even_pixel_crop`).
+        #[cfg(target_os = "macos")]
+        let crop_bounds = crop_bounds
+            .map(|bounds| even_pixel_crop(bounds, display.raw_handle().scale().unwrap_or(1.0)));
+
         let native_output_size: PhysicalSize = {
             #[cfg(target_os = "macos")]
             {
                 crop_bounds.and_then(|b| {
                     let logical_size = b.size();
                     let scale = display.raw_handle().scale()?;
-                    let width = ensure_even((logical_size.width() * scale) as u32) as f64;
-                    let height = ensure_even((logical_size.height() * scale) as u32) as f64;
+                    let width = ensure_even((logical_size.width() * scale).round() as u32) as f64;
+                    let height = ensure_even((logical_size.height() * scale).round() as u32) as f64;
                     Some(PhysicalSize::new(width, height))
                 })
             }
 
             #[cfg(target_os = "windows")]
             {
-                crop_bounds.map(|b| b.size().map(|v| (v / 2.0).floor() * 2.0))
+                window
+                    .as_ref()
+                    .and_then(window_capture_size)
+                    .or_else(|| crop_bounds.map(|b| b.size().map(|v| (v / 2.0).floor() * 2.0)))
             }
 
             #[cfg(target_os = "linux")]
@@ -533,6 +591,8 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureConfig<TCaptureFormat> {
                 show_cursor,
                 #[cfg(target_os = "linux")]
                 linux_source,
+                #[cfg(any(target_os = "macos", windows))]
+                window,
             },
             video_info: VideoInfo::from_raw_ffmpeg(
                 TCaptureFormat::pixel_format(),
@@ -616,8 +676,12 @@ pub fn list_displays() -> Vec<(CaptureDisplay, Display)> {
         .collect()
 }
 
+// NSFloatingWindowLevel is 3; Stay On Top moves Simulator windows to this level.
 #[cfg(target_os = "macos")]
-fn is_listable_macos_window(
+const MACOS_FLOATING_WINDOW_LEVEL: i32 = 3;
+
+#[cfg(target_os = "macos")]
+pub fn is_listable_macos_window(
     level: Option<i32>,
     owner_name: &str,
     bundle_identifier: Option<&str>,
@@ -632,12 +696,18 @@ fn is_listable_macos_window(
         return true;
     }
 
-    matches!(level, Some(level) if level > 0)
-        && include_accessory_panels
-        && is_accessory_application
-        && bundle_identifier.is_some_and(|identifier| {
-            !identifier.starts_with("com.apple.") && !identifier.starts_with("so.cap.desktop")
-        })
+    let is_third_party_bundle = bundle_identifier.is_some_and(|identifier| {
+        !identifier.starts_with("com.apple.") && !identifier.starts_with("so.cap.desktop")
+    });
+
+    if is_accessory_application {
+        return matches!(level, Some(level) if level > 0)
+            && include_accessory_panels
+            && is_third_party_bundle;
+    }
+
+    level == Some(MACOS_FLOATING_WINDOW_LEVEL)
+        && bundle_identifier.is_some_and(|identifier| !identifier.starts_with("so.cap.desktop"))
 }
 
 pub fn list_windows() -> Vec<(CaptureWindow, Window)> {
@@ -663,8 +733,7 @@ fn list_windows_inner(_include_accessory_panels: bool) -> Vec<(CaptureWindow, Wi
                 let owner_name = v.owner_name()?;
                 let level = v.raw_handle().level();
                 let bundle_identifier = v.raw_handle().bundle_identifier();
-                let is_accessory_application = _include_accessory_panels
-                    && matches!(level, Some(level) if level > 0)
+                let is_accessory_application = matches!(level, Some(level) if level > 0)
                     && v.raw_handle().is_accessory_application();
 
                 if !is_listable_macos_window(
@@ -795,7 +864,7 @@ mod tests {
             true,
             true,
         ));
-        assert!(!is_listable_macos_window(
+        assert!(is_listable_macos_window(
             Some(3),
             "Example",
             Some("com.example.app"),
@@ -830,6 +899,123 @@ mod tests {
             true,
             true,
         ));
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn macos_window_filter_lists_floating_app_windows_in_the_picker() {
+        assert!(is_listable_macos_window(
+            Some(MACOS_FLOATING_WINDOW_LEVEL),
+            "Simulator",
+            Some("com.apple.iphonesimulator"),
+            false,
+            false,
+        ));
+        assert!(is_listable_macos_window(
+            Some(MACOS_FLOATING_WINDOW_LEVEL),
+            "Example",
+            Some("com.example.app"),
+            false,
+            false,
+        ));
+        assert!(!is_listable_macos_window(
+            Some(MACOS_FLOATING_WINDOW_LEVEL),
+            "Cap",
+            Some("so.cap.desktop.dev"),
+            false,
+            false,
+        ));
+        assert!(!is_listable_macos_window(
+            Some(MACOS_FLOATING_WINDOW_LEVEL),
+            "cap-gpui",
+            None,
+            false,
+            false,
+        ));
+        assert!(!is_listable_macos_window(
+            Some(MACOS_FLOATING_WINDOW_LEVEL + 1),
+            "Example",
+            Some("com.example.app"),
+            false,
+            false,
+        ));
+        assert!(!is_listable_macos_window(
+            Some(25),
+            "Control Centre",
+            Some("com.apple.controlcenter"),
+            false,
+            false,
+        ));
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn macos_window_filter_preserves_normal_windows_and_rejects_other_levels() {
+        for accessory in [false, true] {
+            assert!(is_listable_macos_window(
+                Some(0),
+                "Example",
+                None,
+                false,
+                accessory
+            ));
+        }
+        for level in [None, Some(-1), Some(1), Some(2), Some(4), Some(25)] {
+            for include_accessory_panels in [false, true] {
+                assert!(!is_listable_macos_window(
+                    level,
+                    "Example",
+                    Some("com.example.app"),
+                    include_accessory_panels,
+                    false,
+                ));
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn macos_window_filter_preserves_accessory_panel_exclusions() {
+        for level in [Some(3), Some(25)] {
+            for bundle in [
+                None,
+                Some("com.apple.controlcenter"),
+                Some("so.cap.desktop.dev"),
+            ] {
+                for include_accessory_panels in [false, true] {
+                    assert!(!is_listable_macos_window(
+                        level,
+                        "Panel",
+                        bundle,
+                        include_accessory_panels,
+                        true,
+                    ));
+                }
+            }
+            assert!(!is_listable_macos_window(
+                level,
+                "Panel",
+                Some("com.example.app"),
+                false,
+                true,
+            ));
+            assert!(is_listable_macos_window(
+                level,
+                "Panel",
+                Some("com.example.app"),
+                true,
+                true,
+            ));
+        }
+        for level in [Some(0), Some(3)] {
+            assert!(!is_listable_macos_window(
+                level,
+                "Window Server",
+                Some("com.example.app"),
+                false,
+                false,
+            ));
+        }
     }
 
     #[test]
@@ -929,6 +1115,38 @@ mod tests {
     }
 
     #[test]
+    fn fractional_area_edges_round_to_pixels_and_stay_inside_the_display() {
+        for (position, size, expected) in [
+            (100.2, 800.4, (150.0, 1201.0)),
+            (-0.2, 100.4, (0.0, 150.0)),
+            (1279.8, 10.0, (1918.0, 2.0)),
+        ] {
+            assert_eq!(
+                logical_axis_to_physical(position, size, 1280.0, 1920.0),
+                Some(expected),
+            );
+        }
+    }
+
+    #[test]
+    fn full_overlay_selection_keeps_native_resolution_at_fractional_scales() {
+        for scale in [1.25, 1.5, 1.75] {
+            let physical = PhysicalSize::new(1920.0, 1080.0);
+            let logical = LogicalSize::new(physical.width() / scale, physical.height() / scale);
+            let overlay_size = LogicalSize::new(
+                f64::from(logical.width() as f32),
+                f64::from(logical.height() as f32),
+            );
+            let selection = LogicalBounds::new(LogicalPosition::new(0.0, 0.0), overlay_size);
+            let crop = logical_area_to_physical_bounds(selection, logical, physical).unwrap();
+            let output = constrain_capture_size(crop.size(), None);
+
+            assert_eq!(output.width(), physical.width(), "scale {scale}");
+            assert_eq!(output.height(), physical.height(), "scale {scale}");
+        }
+    }
+
+    #[test]
     fn partial_selection_scales_by_display_dpi() {
         // 150% display: logical 1280x720 backed by physical 1920x1080.
         let logical = LogicalSize::new(1280.0, 720.0);
@@ -945,5 +1163,48 @@ mod tests {
         assert_eq!(crop.position().y(), 150.0);
         assert_eq!(crop.size().width(), 750.0);
         assert_eq!(crop.size().height(), 450.0);
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod window_corner_tests {
+    use super::*;
+
+    #[test]
+    fn window_capture_reads_inside_the_rounded_corners() {
+        let window = LogicalBounds::new(
+            LogicalPosition::new(100., 50.),
+            LogicalSize::new(920., 436.),
+        );
+        let trimmed = trim_window_corners(window);
+        assert_eq!(trimmed.position().x(), 108.);
+        assert_eq!(trimmed.position().y(), 58.);
+        assert_eq!(trimmed.size().width(), 904.);
+        assert_eq!(trimmed.size().height(), 420.);
+    }
+
+    #[test]
+    fn crops_read_whole_even_pixels() {
+        let odd = LogicalBounds::new(LogicalPosition::new(8., 8.), LogicalSize::new(1690., 753.));
+        let even = even_pixel_crop(odd, 1.0);
+        assert_eq!(even.size().width(), 1690.);
+        assert_eq!(even.size().height(), 752.);
+        assert_eq!(even.position().x(), 8.);
+        // At 2x, a half point is a whole pixel: 753.5 pt is 1507 px, read as 1506.
+        let retina = even_pixel_crop(
+            LogicalBounds::new(LogicalPosition::new(0., 0.), LogicalSize::new(845., 753.5)),
+            2.0,
+        );
+        assert_eq!(retina.size().width() * 2.0, 1690.);
+        assert_eq!(retina.size().height() * 2.0, 1506.);
+    }
+
+    #[test]
+    fn a_tiny_window_is_left_whole() {
+        let window = LogicalBounds::new(LogicalPosition::new(0., 0.), LogicalSize::new(30., 200.));
+        let kept = trim_window_corners(window);
+        assert_eq!(kept.position().x(), 0.);
+        assert_eq!(kept.size().width(), 30.);
+        assert_eq!(kept.size().height(), 200.);
     }
 }

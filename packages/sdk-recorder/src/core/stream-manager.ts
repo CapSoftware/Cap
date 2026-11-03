@@ -16,6 +16,7 @@ export interface ManagedStreams {
 
 export async function acquireStreams(
 	config: StreamConfig,
+	signal: AbortSignal,
 ): Promise<ManagedStreams> {
 	const result: ManagedStreams = {
 		display: null,
@@ -23,50 +24,65 @@ export async function acquireStreams(
 		microphone: null,
 	};
 
-	if (config.mode !== "camera") {
-		const displayMediaOptions: DisplayMediaStreamOptions = {
-			video: true,
-			audio: config.systemAudio ?? false,
-		};
+	signal.throwIfAborted();
+	const onAbort = () => releaseStreams(result);
+	signal.addEventListener("abort", onAbort, { once: true });
 
-		if (config.mode === "window") {
-			(displayMediaOptions as Record<string, unknown>).preferCurrentTab = false;
+	try {
+		if (config.mode !== "camera") {
+			const displayMediaOptions: DisplayMediaStreamOptions = {
+				video: true,
+				audio: config.systemAudio ?? false,
+			};
+
+			if (config.mode === "window") {
+				(displayMediaOptions as Record<string, unknown>).preferCurrentTab =
+					false;
+			}
+
+			result.display =
+				await navigator.mediaDevices.getDisplayMedia(displayMediaOptions);
+			signal.throwIfAborted();
 		}
 
-		result.display =
-			await navigator.mediaDevices.getDisplayMedia(displayMediaOptions);
-	}
-
-	if (config.camera?.enabled !== false) {
-		const constraints: MediaStreamConstraints = {
-			video: config.camera?.deviceId
-				? { deviceId: { exact: config.camera.deviceId } }
-				: true,
-			audio: false,
-		};
-		try {
-			result.camera = await navigator.mediaDevices.getUserMedia(constraints);
-		} catch {
-			result.camera = null;
+		if (config.camera?.enabled !== false) {
+			const constraints: MediaStreamConstraints = {
+				video: config.camera?.deviceId
+					? { deviceId: { exact: config.camera.deviceId } }
+					: true,
+				audio: false,
+			};
+			try {
+				result.camera = await navigator.mediaDevices.getUserMedia(constraints);
+			} catch {
+				result.camera = null;
+			}
+			signal.throwIfAborted();
 		}
-	}
 
-	if (config.microphone?.enabled !== false) {
-		const constraints: MediaStreamConstraints = {
-			video: false,
-			audio: config.microphone?.deviceId
-				? { deviceId: { exact: config.microphone.deviceId } }
-				: true,
-		};
-		try {
-			result.microphone =
-				await navigator.mediaDevices.getUserMedia(constraints);
-		} catch {
-			result.microphone = null;
+		if (config.microphone?.enabled !== false) {
+			const constraints: MediaStreamConstraints = {
+				video: false,
+				audio: config.microphone?.deviceId
+					? { deviceId: { exact: config.microphone.deviceId } }
+					: true,
+			};
+			try {
+				result.microphone =
+					await navigator.mediaDevices.getUserMedia(constraints);
+			} catch {
+				result.microphone = null;
+			}
+			signal.throwIfAborted();
 		}
-	}
 
-	return result;
+		return result;
+	} catch (error) {
+		releaseStreams(result);
+		throw error;
+	} finally {
+		signal.removeEventListener("abort", onAbort);
+	}
 }
 
 export function releaseStreams(streams: ManagedStreams) {

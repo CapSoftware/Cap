@@ -1,21 +1,40 @@
-import { db } from "@cap/database";
+import { isCrossSiteCookieWrite } from "@cap/database/auth/request-site";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { users } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
-import { stripe, userIsPro } from "@cap/utils";
-import { eq } from "drizzle-orm";
+import { isValidStripePlanPriceId, stripe, userIsPro } from "@cap/utils";
 import type { NextRequest } from "next/server";
-import type Stripe from "stripe";
+import { ensureStripeCustomerId } from "@/lib/checkout/customer";
+import { customCheckoutEnabled } from "@/lib/checkout/enabled";
+import { checkoutPath, planForPriceId } from "@/lib/checkout/plans";
+import { parseCheckoutQuantity } from "@/lib/checkout-quantity";
 import { trackServerEvent } from "@/lib/server-analytics";
 
 export async function POST(request: NextRequest) {
-	const user = await getCurrentUser();
-	let customerId = user?.stripeCustomerId;
-	const { priceId, quantity, isOnBoarding } = await request.json();
+	const user = isCrossSiteCookieWrite(request) ? null : await getCurrentUser();
+	const { priceId, quantity, isOnBoarding, hosted } = await request.json();
 
-	if (!priceId) {
-		console.error("Price ID not found");
-		return Response.json({ error: true }, { status: 400 });
+	const environment =
+		serverEnv().VERCEL_ENV === "production" ? "production" : "development";
+
+	if (
+		!priceId ||
+		typeof priceId !== "string" ||
+		!isValidStripePlanPriceId(priceId, environment)
+	) {
+		console.error("Invalid or missing priceId");
+		return Response.json(
+			{ error: true, message: "Invalid priceId" },
+			{ status: 400 },
+		);
+	}
+
+	const safeQuantity = parseCheckoutQuantity(quantity);
+	if (safeQuantity === null) {
+		console.error("Invalid quantity");
+		return Response.json(
+			{ error: true, message: "Invalid quantity" },
+			{ status: 400 },
+		);
 	}
 
 	if (!user) {
@@ -23,49 +42,39 @@ export async function POST(request: NextRequest) {
 		return Response.json({ error: true, auth: false }, { status: 401 });
 	}
 
+	const plan = planForPriceId(priceId, environment);
+	const inAppCheckout = plan && hosted !== true && customCheckoutEnabled();
+
 	if (userIsPro(user)) {
+		if (plan && inAppCheckout) {
+			return Response.json(
+				{ url: checkoutPath({ plan, seats: safeQuantity }) },
+				{ status: 200 },
+			);
+		}
 		console.error("User already has pro plan");
 		return Response.json({ error: true, subscription: true }, { status: 400 });
 	}
 
+	if (plan && inAppCheckout) {
+		return Response.json(
+			{
+				url: checkoutPath({
+					plan,
+					seats: safeQuantity,
+					onboarding: Boolean(isOnBoarding),
+				}),
+			},
+			{ status: 200 },
+		);
+	}
+
 	try {
-		if (!user.stripeCustomerId) {
-			const existingCustomers = await stripe().customers.list({
-				email: user.email,
-				limit: 1,
-			});
-
-			let customer: Stripe.Customer;
-			if (existingCustomers.data.length > 0 && existingCustomers.data[0]) {
-				customer = existingCustomers.data[0];
-
-				customer = await stripe().customers.update(customer.id, {
-					metadata: {
-						...customer.metadata,
-						userId: user.id,
-					},
-				});
-			} else {
-				customer = await stripe().customers.create({
-					email: user.email,
-					metadata: {
-						userId: user.id,
-					},
-				});
-			}
-
-			await db()
-				.update(users)
-				.set({
-					stripeCustomerId: customer.id,
-				})
-				.where(eq(users.id, user.id));
-			customerId = customer.id;
-		}
+		const customerId = await ensureStripeCustomerId(user);
 
 		const checkoutSession = await stripe().checkout.sessions.create({
-			customer: customerId as string,
-			line_items: [{ price: priceId, quantity: quantity }],
+			customer: customerId,
+			line_items: [{ price: priceId, quantity: safeQuantity }],
 			mode: "subscription",
 			success_url: isOnBoarding
 				? `${serverEnv().WEB_URL}/dashboard/settings/organization?upgrade=true&session_id={CHECKOUT_SESSION_ID}`
@@ -84,7 +93,7 @@ export async function POST(request: NextRequest) {
 		if (checkoutSession.url) {
 			trackServerEvent(user.id, "checkout_started", {
 				price_id: priceId,
-				quantity: quantity,
+				quantity: safeQuantity,
 				platform: "web",
 			});
 

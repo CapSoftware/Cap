@@ -61,6 +61,10 @@ const viewPolicy = Context.GenericTag<{
 	canViewLoaded: () => Effect.Effect<void>;
 }>("EditNavigationViewPolicy");
 
+vi.mock("next/headers", () => ({ headers: async () => new Headers() }));
+vi.mock("@/lib/share-web-url", () => ({
+	resolveForeignShareRedirect: async () => null,
+}));
 vi.mock("@cap/database", () => ({
 	db: () => ({
 		select: database.select,
@@ -99,7 +103,7 @@ vi.mock("next/navigation", () => ({
 		throw new Error("NEXT_NOT_FOUND");
 	},
 }));
-vi.mock("@/actions/videos/get-analytics", () => ({}));
+vi.mock("@/lib/video-view-count", () => ({}));
 vi.mock("@/app/(org)/dashboard/dashboard-data", () => ({}));
 vi.mock("@/lib/ai/provider", () => ({}));
 vi.mock("@/lib/desktop-segments-recovery", () => ({}));
@@ -108,8 +112,8 @@ vi.mock("@/lib/public-share-video", () => ({}));
 vi.mock("@/lib/shareable-link-quota", () => ({}));
 vi.mock("@/lib/transcribe", () => ({}));
 vi.mock("@/utils/flags", () => ({}));
-vi.mock("@/app/s/[videoId]/_components/PasswordOverlay", () => ({
-	PasswordOverlay: () => null,
+vi.mock("@/app/s/[videoId]/_components/PasswordGate", () => ({
+	PasswordGate: () => null,
 }));
 vi.mock("@/app/s/[videoId]/_components/PendingRecordingShare", () => ({}));
 vi.mock("@/app/s/[videoId]/_components/ShareHeader", () => ({}));

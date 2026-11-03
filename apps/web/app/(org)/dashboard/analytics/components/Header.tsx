@@ -3,14 +3,16 @@
 import type { Organisation } from "@cap/web-domain";
 import * as SelectPrimitive from "@radix-ui/react-select";
 import clsx from "clsx";
+import { motion } from "framer-motion";
 import {
 	ArrowLeft,
+	ArrowUpRight,
+	Check,
 	ChevronDown,
-	ChevronLeft,
-	ChevronRight,
+	RotateCw,
 } from "lucide-react";
-import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import Link from "next/link";
+import { useEffect } from "react";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import type { Organization, Spaces } from "../../dashboard-data";
@@ -21,6 +23,8 @@ interface HeaderProps {
 	value: AnalyticsRange;
 	onChange: (value: AnalyticsRange) => void;
 	isLoading?: boolean;
+	isFetching?: boolean;
+	onRefresh?: () => void;
 	organizations?: Organization[] | null;
 	activeOrganization?: Organization | null;
 	spacesData?: Spaces[] | null;
@@ -33,72 +37,16 @@ interface HeaderProps {
 	capName?: string | null;
 }
 
-const DATE_RANGE_OPTIONS = [
-	{ value: "today", label: "Today" },
-	{ value: "yesterday", label: "Yesterday" },
-	{ value: "24h", label: "Last 24 hours" },
-	{ value: "7d", label: "Last 7 days" },
-	{ value: "30d", label: "Last 30 days" },
-	{ value: "wtd", label: "Week to date" },
-	{ value: "mtd", label: "Month to date" },
-	{ value: "lifetime", label: "Lifetime" },
-] as const;
-
-const mapToBackendRange = (value: string): AnalyticsRange => {
-	if (
-		value === "24h" ||
-		value === "7d" ||
-		value === "30d" ||
-		value === "lifetime"
-	) {
-		return value as AnalyticsRange;
-	}
-	if (value === "today" || value === "yesterday") {
-		return "24h";
-	}
-	if (value === "wtd") {
-		return "7d";
-	}
-	if (value === "mtd") {
-		return "30d";
-	}
-	return "7d";
-};
-
-const getDisplayValue = (
-	backendValue: AnalyticsRange,
-	lastUISelection?: string,
-): string => {
-	if (
-		lastUISelection &&
-		(lastUISelection === "today" || lastUISelection === "yesterday")
-	) {
-		if (backendValue === "24h") {
-			return lastUISelection;
-		}
-	}
-	if (lastUISelection && lastUISelection === "wtd") {
-		if (backendValue === "7d") {
-			return lastUISelection;
-		}
-	}
-	if (lastUISelection && lastUISelection === "mtd") {
-		if (backendValue === "30d") {
-			return lastUISelection;
-		}
-	}
-	if (backendValue === "lifetime") return "lifetime";
-	if (backendValue === "24h") return "24h";
-	if (backendValue === "7d") return "7d";
-	if (backendValue === "30d") return "30d";
-	return "7d";
-};
+const chip =
+	"flex items-center gap-2 h-10 rounded-xl border border-gray-4 bg-gray-1 px-3.5 shadow-[0_1px_2px_rgba(0,0,0,0.04)] outline-none transition-colors hover:bg-gray-2 focus-visible:ring-2 focus-visible:ring-blue-9/40";
 
 export default function Header({
-	options: _options,
+	options,
 	value,
 	onChange,
 	isLoading,
+	isFetching,
+	onRefresh,
 	organizations,
 	activeOrganization,
 	spacesData,
@@ -111,26 +59,6 @@ export default function Header({
 	capName,
 }: HeaderProps) {
 	const user = useCurrentUser();
-	const router = useRouter();
-	const [open, setOpen] = useState(false);
-	const [orgOpen, setOrgOpen] = useState(false);
-	const [lastUISelection, setLastUISelection] = useState<string | undefined>(
-		undefined,
-	);
-
-	useEffect(() => {
-		if (!lastUISelection) {
-			if (value === "24h") {
-				setLastUISelection("24h");
-			} else if (value === "7d") {
-				setLastUISelection("7d");
-			} else if (value === "30d") {
-				setLastUISelection("30d");
-			} else if (value === "lifetime") {
-				setLastUISelection("lifetime");
-			}
-		}
-	}, [value, lastUISelection]);
 
 	useEffect(() => {
 		const currentOrgId =
@@ -150,59 +78,23 @@ export default function Header({
 		onSpaceChange,
 	]);
 
-	const selectedOption =
-		DATE_RANGE_OPTIONS.find(
-			(opt) => opt.value === getDisplayValue(value, lastUISelection),
-		) || DATE_RANGE_OPTIONS[3];
-
-	const handleValueChange = (newValue: string) => {
-		setLastUISelection(newValue);
-		const backendRange = mapToBackendRange(newValue);
-		onChange(backendRange);
-		setOpen(false);
-	};
-
-	const handlePrevious = () => {
-		const currentIndex = DATE_RANGE_OPTIONS.findIndex(
-			(opt) => opt.value === selectedOption.value,
-		);
-		if (currentIndex > 0) {
-			const prevOption = DATE_RANGE_OPTIONS[currentIndex - 1];
-			handleValueChange(prevOption?.value ?? "");
-		}
-	};
-
-	const handleNext = () => {
-		const currentIndex = DATE_RANGE_OPTIONS.findIndex(
-			(opt) => opt.value === selectedOption.value,
-		);
-		if (currentIndex < DATE_RANGE_OPTIONS.length - 1) {
-			const nextOption = DATE_RANGE_OPTIONS[currentIndex + 1];
-			handleValueChange(nextOption?.value ?? "");
-		}
-	};
-
-	const canGoPrevious =
-		DATE_RANGE_OPTIONS.findIndex((opt) => opt.value === selectedOption.value) >
-		0;
-	const canGoNext =
-		DATE_RANGE_OPTIONS.findIndex((opt) => opt.value === selectedOption.value) <
-		DATE_RANGE_OPTIONS.length - 1;
+	if (!activeOrganization) {
+		return null;
+	}
 
 	const selectedOrgId =
-		selectedOrganizationId || activeOrganization?.organization.id;
+		selectedOrganizationId || activeOrganization.organization.id;
 	const selectedOrg =
 		organizations?.find((org) => org.organization.id === selectedOrgId) ||
-		activeOrganization ||
-		organizations?.[0];
+		activeOrganization;
 
 	const filteredSpaces = spacesData?.filter(
 		(space) => space.organizationId === selectedOrgId,
 	);
 
-	const handleOrgChange = (value: string) => {
-		if (value.startsWith("space:")) {
-			const spaceId = value.replace("space:", "");
+	const handleOrgChange = (next: string) => {
+		if (next.startsWith("space:")) {
+			const spaceId = next.replace("space:", "");
 			const space = filteredSpaces?.find((s) => s.id === spaceId);
 			if (space) {
 				onSpaceChange?.(spaceId);
@@ -212,143 +104,122 @@ export default function Header({
 			}
 		} else {
 			onSpaceChange?.(null);
-			onOrganizationChange?.(value as Organisation.OrganisationId);
+			onOrganizationChange?.(next as Organisation.OrganisationId);
 		}
-		setOrgOpen(false);
 	};
 
 	const selectedSpace = selectedSpaceId
 		? filteredSpaces?.find((s) => s.id === selectedSpaceId)
 		: null;
 
-	const isMyCapsSelected =
-		!selectedSpaceId &&
-		selectedOrg?.organization.id === activeOrganization?.organization.id;
-
-	const displayName = selectedSpace
-		? selectedSpace.name
-		: isMyCapsSelected
-			? user?.name
-				? `${user.name}'s Caps`
-				: "My Caps"
-			: selectedOrg?.organization.name || "Select organization";
-
+	const myCapsLabel = user?.name ? `${user.name}'s Caps` : "My Caps";
+	const displayName = selectedSpace ? selectedSpace.name : myCapsLabel;
 	const displayIcon = selectedSpace
 		? selectedSpace.iconUrl
-		: isMyCapsSelected
-			? user?.imageUrl || selectedOrg?.organization.iconUrl || undefined
-			: selectedOrg?.organization.iconUrl;
-
+		: user?.imageUrl || selectedOrg?.organization.iconUrl || undefined;
 	const displayIconName = selectedSpace
 		? selectedSpace.name
-		: isMyCapsSelected
-			? user?.name || selectedOrg?.organization.name || "My Caps"
-			: selectedOrg?.organization.name || "Select organization";
-
-	if (!activeOrganization) {
-		return null;
-	}
+		: user?.name || selectedOrg?.organization.name || "My Caps";
 
 	const selectValue = selectedSpaceId
 		? `space:${selectedSpaceId}`
-		: selectedOrgId || activeOrganization.organization.id;
-
-	const handleBackClick = () => {
-		router.push("/dashboard/analytics");
-	};
+		: activeOrganization.organization.id;
 
 	return (
-		<div className="flex gap-2 items-center">
+		<div className="flex flex-wrap gap-2.5 items-center">
 			{capId && (
-				<div className="flex items-center rounded-xl border border-gray-4 bg-gray-2 overflow-hidden">
-					<button
-						type="button"
-						onClick={handleBackClick}
-						className="flex items-center justify-center px-3 py-2.5 border-r border-gray-4 transition-colors text-gray-11 cursor-pointer"
+				<>
+					<Link
+						href="/dashboard/analytics"
+						className={clsx(chip, "justify-center w-10 px-0")}
+						aria-label="Back to all analytics"
 					>
-						<ArrowLeft className="size-4" />
-					</button>
-					<div className="flex items-center px-4 py-2.5">
+						<ArrowLeft className="size-4 text-gray-11" />
+					</Link>
+					<a
+						href={`/s/${capId}`}
+						target="_blank"
+						rel="noreferrer"
+						className={clsx(chip, "group max-w-[min(420px,100%)]")}
+					>
+						<span className="flex flex-shrink-0 justify-center items-center rounded-md size-5 bg-[#4785ff]">
+							<svg viewBox="0 0 12 12" className="size-2" aria-hidden="true">
+								<path d="M3 1.8v8.4L10 6z" fill="white" />
+							</svg>
+						</span>
 						{capName ? (
-							<span className="text-sm font-semibold text-gray-12">
+							<span className="text-sm font-semibold truncate text-gray-12">
 								{capName}
 							</span>
 						) : (
-							<div className="h-4 w-32 rounded bg-gray-4 animate-pulse" />
+							<span className="w-32 h-4 rounded animate-pulse bg-gray-4" />
 						)}
-					</div>
-				</div>
+						<ArrowUpRight className="flex-shrink-0 transition-transform size-3.5 text-gray-10 group-hover:translate-x-px group-hover:-translate-y-px" />
+					</a>
+				</>
 			)}
+
 			{!hideCapsSelect && (
 				<SelectPrimitive.Root
 					value={selectValue}
 					onValueChange={handleOrgChange}
-					open={orgOpen}
-					onOpenChange={setOrgOpen}
 					disabled={isLoading}
 				>
-					<SelectPrimitive.Trigger className="flex items-center gap-2 rounded-xl border border-gray-4 bg-gray-2 px-4 py-2.5 outline-none transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
-						{displayIconName && (
-							<SignedImageUrl
-								image={displayIcon}
-								name={displayIconName}
-								className="size-5 flex-shrink-0"
-							/>
+					<SelectPrimitive.Trigger
+						className={clsx(
+							chip,
+							"disabled:opacity-50 disabled:cursor-not-allowed",
 						)}
+					>
+						<SignedImageUrl
+							image={displayIcon}
+							name={displayIconName}
+							className="flex-shrink-0 size-5"
+						/>
 						<span className="text-sm font-semibold text-gray-12">
 							{displayName}
 						</span>
-						<SelectPrimitive.Icon className="ml-1">
+						<SelectPrimitive.Icon>
 							<ChevronDown className="size-4 text-gray-9" />
 						</SelectPrimitive.Icon>
 					</SelectPrimitive.Trigger>
 
 					<SelectPrimitive.Portal>
 						<SelectPrimitive.Content
-							className="z-50 min-w-[200px] rounded-xl border border-gray-4 bg-gray-2 shadow-lg overflow-hidden data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[side=bottom]:slide-in-from-top-2"
+							className="z-50 min-w-[220px] rounded-xl border border-gray-4 bg-gray-1 shadow-lg overflow-hidden data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[side=bottom]:slide-in-from-top-2"
 							position="popper"
-							sideOffset={4}
+							sideOffset={6}
 						>
 							<SelectPrimitive.Viewport className="p-1">
-								<SelectPrimitive.Item
-									key={activeOrganization.organization.id}
-									value={activeOrganization.organization.id}
-									className="relative flex w-full cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-sm outline-none transition-colors font-semibold text-gray-12 data-[state=checked]:bg-gray-3 data-[highlighted]:bg-gray-3 data-[highlighted]:text-gray-12"
-								>
+								<SelectItem value={activeOrganization.organization.id}>
 									<SignedImageUrl
 										image={
 											user?.imageUrl || activeOrganization.organization.iconUrl
 										}
 										name={user?.name || activeOrganization.organization.name}
-										className="size-5 flex-shrink-0"
+										className="flex-shrink-0 size-5"
 									/>
 									<SelectPrimitive.ItemText>
-										{user?.name ? `${user.name}'s Caps` : "My Caps"}
+										{myCapsLabel}
 									</SelectPrimitive.ItemText>
-								</SelectPrimitive.Item>
+								</SelectItem>
 								{filteredSpaces && filteredSpaces.length > 0 && (
 									<>
-										<div className="px-3 py-2 text-xs font-semibold text-gray-9 uppercase tracking-wider">
+										<div className="px-3 pt-3 pb-1 text-xs font-medium text-gray-10">
 											Spaces
 										</div>
-										{filteredSpaces.map((space) => {
-											return (
-												<SelectPrimitive.Item
-													key={space.id}
-													value={`space:${space.id}`}
-													className="relative flex w-full cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-sm outline-none transition-colors text-gray-12 data-[state=checked]:bg-gray-3 data-[highlighted]:bg-gray-3 data-[highlighted]:text-gray-12"
-												>
-													<SignedImageUrl
-														image={space.iconUrl}
-														name={space.name}
-														className="size-5 flex-shrink-0"
-													/>
-													<SelectPrimitive.ItemText>
-														{space.name}
-													</SelectPrimitive.ItemText>
-												</SelectPrimitive.Item>
-											);
-										})}
+										{filteredSpaces.map((space) => (
+											<SelectItem key={space.id} value={`space:${space.id}`}>
+												<SignedImageUrl
+													image={space.iconUrl}
+													name={space.name}
+													className="flex-shrink-0 size-5"
+												/>
+												<SelectPrimitive.ItemText>
+													{space.name}
+												</SelectPrimitive.ItemText>
+											</SelectItem>
+										))}
 									</>
 								)}
 							</SelectPrimitive.Viewport>
@@ -357,82 +228,73 @@ export default function Header({
 				</SelectPrimitive.Root>
 			)}
 
-			<SelectPrimitive.Root
-				value={selectedOption.value}
-				onValueChange={handleValueChange}
-				open={open}
-				onOpenChange={setOpen}
-				disabled={isLoading}
-			>
-				<div className="flex items-center rounded-xl border border-gray-4 bg-gray-2 overflow-hidden">
-					<button
-						type="button"
-						onClick={handlePrevious}
-						disabled={!canGoPrevious || isLoading}
+			<fieldset className="flex items-center gap-0.5 p-1 h-10 rounded-xl border shadow-[0_1px_2px_rgba(0,0,0,0.04)] border-gray-4 bg-gray-1 m-0 min-w-0">
+				<legend className="sr-only">Date range</legend>
+				{options.map((option) => {
+					const selected = option.value === value;
+					return (
+						<button
+							key={option.value}
+							type="button"
+							aria-pressed={selected}
+							onClick={() => onChange(option.value)}
+							className={clsx(
+								"relative h-full px-3 text-[13px] font-medium rounded-lg transition-colors outline-none focus-visible:ring-2 focus-visible:ring-blue-9/40",
+								selected ? "text-gray-1" : "text-gray-10 hover:text-gray-12",
+							)}
+						>
+							{selected && (
+								<motion.span
+									layoutId="analytics-range-pill"
+									className="absolute inset-0 rounded-lg bg-gray-12"
+									transition={{ type: "spring", stiffness: 500, damping: 38 }}
+								/>
+							)}
+							<span className="relative whitespace-nowrap">{option.label}</span>
+						</button>
+					);
+				})}
+			</fieldset>
+
+			{onRefresh && (
+				<button
+					type="button"
+					onClick={onRefresh}
+					disabled={isFetching}
+					className={clsx(
+						chip,
+						"justify-center w-10 px-0 disabled:cursor-default",
+					)}
+					aria-label="Refresh analytics"
+				>
+					<RotateCw
 						className={clsx(
-							"flex items-center justify-center px-3 py-2.5 border-r border-gray-4 transition-colors",
-							canGoPrevious && !isLoading
-								? "text-gray-11 cursor-pointer"
-								: "text-gray-6 cursor-not-allowed",
+							"size-4 text-gray-11",
+							isFetching && "animate-spin [animation-duration:0.8s]",
 						)}
-					>
-						<ChevronLeft className="size-4" />
-					</button>
-
-					<SelectPrimitive.Trigger className="flex-1 flex items-center justify-between px-4 py-2.5 border-r border-gray-4 outline-none hover:bg-gray-3 transition-colors disabled:opacity-50 disabled:cursor-not-allowed space-x-1">
-						<span className="text-sm font-semibold text-gray-12">
-							{selectedOption.label}
-						</span>
-						<SelectPrimitive.Icon>
-							<ChevronDown className="size-4 text-gray-9" />
-						</SelectPrimitive.Icon>
-					</SelectPrimitive.Trigger>
-
-					<button
-						type="button"
-						onClick={handleNext}
-						disabled={!canGoNext || isLoading}
-						className={clsx(
-							"flex items-center justify-center px-3 py-2.5 transition-colors",
-							canGoNext && !isLoading
-								? "text-gray-6 cursor-pointer"
-								: "text-gray-4 cursor-not-allowed",
-						)}
-					>
-						<ChevronRight className="size-4" />
-					</button>
-				</div>
-
-				<SelectPrimitive.Portal>
-					<SelectPrimitive.Content
-						className="z-50 min-w-[200px] rounded-xl border border-gray-4 bg-gray-2 shadow-lg overflow-hidden data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[side=bottom]:slide-in-from-top-2"
-						position="popper"
-						sideOffset={4}
-					>
-						<SelectPrimitive.Viewport className="p-1">
-							{DATE_RANGE_OPTIONS.map((option) => {
-								const isSelected = selectedOption.value === option.value;
-								return (
-									<SelectPrimitive.Item
-										key={option.value}
-										value={option.value}
-										className={clsx(
-											"relative flex w-full cursor-pointer items-center rounded-lg px-3 py-2 text-sm outline-none transition-colors font-semibold",
-											isSelected
-												? "bg-gray-3 text-gray-12 data-[highlighted]:bg-gray-3 data-[highlighted]:text-gray-12"
-												: "text-gray-12 data-[highlighted]:bg-gray-3 data-[highlighted]:text-gray-12",
-										)}
-									>
-										<SelectPrimitive.ItemText>
-											{option.label}
-										</SelectPrimitive.ItemText>
-									</SelectPrimitive.Item>
-								);
-							})}
-						</SelectPrimitive.Viewport>
-					</SelectPrimitive.Content>
-				</SelectPrimitive.Portal>
-			</SelectPrimitive.Root>
+					/>
+				</button>
+			)}
 		</div>
+	);
+}
+
+function SelectItem({
+	value,
+	children,
+}: {
+	value: string;
+	children: React.ReactNode;
+}) {
+	return (
+		<SelectPrimitive.Item
+			value={value}
+			className="flex relative gap-2 items-center py-2 pr-8 pl-3 w-full text-sm rounded-lg transition-colors cursor-pointer outline-none text-gray-12 data-[highlighted]:bg-gray-3"
+		>
+			{children}
+			<SelectPrimitive.ItemIndicator className="absolute right-2.5">
+				<Check className="size-3.5 text-gray-11" />
+			</SelectPrimitive.ItemIndicator>
+		</SelectPrimitive.Item>
 	);
 }

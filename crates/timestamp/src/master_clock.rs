@@ -12,6 +12,10 @@ pub const AUDIO_OUTPUT_FRAMES: u64 = 1024;
 pub const DEFAULT_SAMPLE_RATE: u32 = 48_000;
 pub const TS_SMOOTHING_THRESHOLD_NS: u64 = 70_000_000;
 pub const MAX_TS_VAR_NS: u64 = 2_000_000_000;
+/// How far from its source time a frame must be stamped to count as moved off
+/// it: under the shortest display refresh in use (240 Hz, 4.2 ms), above
+/// capture-timestamp jitter.
+const OFF_SOURCE_TIME_NS: u64 = 4_000_000;
 
 #[derive(Debug)]
 pub struct MasterClock {
@@ -173,6 +177,7 @@ pub struct SourceClockState {
     detect_skipped_frames: bool,
     pending_lag_ns: Option<i64>,
     skip_confirmed: bool,
+    off_source_time: bool,
     skip_count: u64,
     snap_count: u64,
     hard_reset_count: u64,
@@ -192,6 +197,7 @@ impl SourceClockState {
             detect_skipped_frames: false,
             pending_lag_ns: None,
             skip_confirmed: false,
+            off_source_time: false,
             skip_count: 0,
             snap_count: 0,
             hard_reset_count: 0,
@@ -236,6 +242,14 @@ impl SourceClockState {
 
     pub fn lag_pending(&self) -> bool {
         self.pending_lag_ns.is_some()
+    }
+
+    /// Whether the last frame was stamped `OFF_SOURCE_TIME_NS` or more away
+    /// from its own source time: a pending skip, or a frame the cadence moved
+    /// a display refresh early or late. Only tracked with
+    /// `detecting_skipped_frames`.
+    pub fn off_source_time(&self) -> bool {
+        self.off_source_time
     }
 
     pub fn snap_count(&self) -> u64 {
@@ -358,6 +372,8 @@ impl SourceClockState {
             outcome = SourceClockOutcome::FirstFrame;
         }
         self.next_expected_ns = Some(ts_ns.saturating_add(duration_ns));
+        self.off_source_time =
+            self.detect_skipped_frames && abs_diff_u64(ts_ns, raw_ns) >= OFF_SOURCE_TIME_NS;
 
         let mut output_ns = ts_ns.saturating_add(self.timing_adjust).max(0) as u64;
         if smooth {
@@ -387,8 +403,14 @@ impl SourceClockState {
         pending_lag_ns: Option<i64>,
         skip_confirmed: bool,
     ) -> bool {
-        let half_frame_ns = duration_ns / 2;
-        if !self.detect_skipped_frames || half_frame_ns == 0 || lag_ns < half_frame_ns {
+        // Half a frame less a 32nd: at 30 fps on a 60 Hz display (or 60 fps
+        // at 120 Hz) a delivery that moves one refresh later lags by exactly
+        // half a frame, give or take a mach tick of rounding, and an exact
+        // half-frame bound left it to that rounding whether the ladder
+        // followed the source or kept every later frame a refresh before its
+        // capture time.
+        let min_lag_ns = duration_ns / 2 - duration_ns / 32;
+        if !self.detect_skipped_frames || min_lag_ns <= 0 || lag_ns < min_lag_ns {
             return false;
         }
         if skip_confirmed
@@ -407,6 +429,7 @@ impl SourceClockState {
         self.last_cadence_output_ns = None;
         self.pending_lag_ns = None;
         self.skip_confirmed = false;
+        self.off_source_time = false;
     }
 }
 
@@ -1134,6 +1157,135 @@ mod tests {
         assert_eq!(state.skip_count(), 2);
         let last = raws.len() - 1;
         assert!((raws[last] as u64).abs_diff(output[last]) < 1_000_000);
+    }
+
+    #[test]
+    fn frames_moved_a_display_refresh_are_off_source_time() {
+        let refresh = |n: i64| n * 1_000_000_000 / 60;
+        let frame_ns = 33_333_333;
+        for (slip, label) in [(-1, "early"), (1, "late")] {
+            let mut state = skip_tracking();
+            let mut off = Vec::new();
+            for frame in 0..12i64 {
+                // A slip one refresh later lags the cadence by a hair under
+                // half a frame, as rounded mach ticks do on the runners.
+                let slipped = refresh(slip) - i64::from(slip > 0) * 1_000;
+                let raw = refresh(2 * frame) + if frame >= 6 { slipped } else { 0 };
+                state.remap_ns(raw, raw + 20_000_000, frame_ns, true);
+                off.push(state.off_source_time());
+            }
+            assert!(off[..6].iter().all(|off| !off), "{label}: {off:?}");
+            assert!(off[6], "{label}: {off:?}");
+            if slip > 0 {
+                assert!(off[7..].iter().all(|off| !off), "{label}: {off:?}");
+            }
+        }
+
+        let mut rng = TestRng(0x0FF);
+        let mut state = skip_tracking();
+        for frame in 0..300i64 {
+            let jitter = ((rng.next_f64() * 2.0 - 1.0) * 3_000_000.0) as i64;
+            let raw = frame * frame_ns as i64 + if frame > 0 { jitter } else { 0 };
+            state.remap_ns(raw, raw + 20_000_000, frame_ns, true);
+            assert!(!state.off_source_time(), "frame {frame}");
+        }
+    }
+
+    #[test]
+    fn jitter_under_half_a_frame_matches_legacy() {
+        for nominal in [24u64, 30, 60] {
+            let frame_ns = 1_000_000_000 / nominal;
+            for seed in 0..20 {
+                let mut rng = TestRng(0x7177 + seed);
+                let raws: Vec<i64> = (0..600i64)
+                    .map(|frame| {
+                        let magnitude = 0.25 + 0.2 * rng.next_f64();
+                        let sign = if rng.next_f64() < 0.5 { 1.0 } else { -1.0 };
+                        let jitter = (sign * magnitude * frame_ns as f64) as i64;
+                        frame * frame_ns as i64 + if frame > 0 { jitter } else { 0 }
+                    })
+                    .collect();
+                let mut state = skip_tracking();
+                let output = replay(&mut state, &raws, frame_ns);
+                assert_eq!(
+                    output,
+                    replay(&mut SourceClockState::new("legacy"), &raws, frame_ns),
+                    "nominal={nominal} seed={seed}"
+                );
+                assert_eq!(state.skip_count(), 0, "nominal={nominal} seed={seed}");
+                assert!(output.windows(2).all(|pair| pair[1] > pair[0]));
+            }
+        }
+    }
+
+    // Frame `index` of a `fps` capture on a `hz` display lands on the first
+    // refresh at or after its due time, moved by `slips` refreshes from the
+    // given frames on.
+    fn refresh_grid(fps: u64, hz: u64, frames: u64, slips: &[(u64, i64)]) -> Vec<i64> {
+        (0..frames)
+            .map(|index| {
+                let refresh = (index * hz).div_ceil(fps) as i64
+                    + slips
+                        .iter()
+                        .filter(|(from, _)| index >= *from)
+                        .map(|(_, by)| by)
+                        .sum::<i64>();
+                refresh * 1_000_000_000 / hz as i64
+            })
+            .collect()
+    }
+
+    #[test]
+    fn refresh_ratio_cadences_match_legacy() {
+        for (fps, hz, slips) in [
+            (24, 60, &[][..]),
+            (25, 50, &[][..]),
+            (25, 60, &[][..]),
+            (30, 50, &[][..]),
+            (30, 120, &[(40, 1), (90, -1), (200, -2)][..]),
+            (60, 120, &[][..]),
+        ] {
+            let frame_ns = 1_000_000_000 / fps;
+            let raws = refresh_grid(fps, hz, 300, slips);
+            let mut state = skip_tracking();
+            assert_eq!(
+                replay(&mut state, &raws, frame_ns),
+                replay(&mut SourceClockState::new("legacy"), &raws, frame_ns),
+                "{fps} fps at {hz} Hz"
+            );
+            assert_eq!(state.skip_count(), 0, "{fps} fps at {hz} Hz");
+        }
+    }
+
+    #[test]
+    fn slow_display_stays_within_half_a_frame_of_source_time() {
+        // 60 fps on a 59.94 Hz display: one delivery per refresh, 16.683 ms
+        // apart, so the cadence falls behind by 17 us a frame until the lag
+        // reads as a skip and the ladder returns to source time.
+        let raws: Vec<i64> = (0..1800i64)
+            .map(|frame| frame * 1_001_000_000 / 60)
+            .collect();
+        let mut state = skip_tracking();
+        let output = replay(&mut state, &raws, FRAME_60_NS);
+        assert!(output.windows(2).all(|pair| pair[1] > pair[0]));
+        let worst_early = raws
+            .iter()
+            .zip(&output)
+            .map(|(&raw, &mapped)| raw - mapped as i64)
+            .max()
+            .unwrap();
+        assert!(worst_early < 8_000_000, "worst early {worst_early}ns");
+        assert!(
+            output
+                .iter()
+                .zip(&raws)
+                .all(|(&mapped, &raw)| mapped as i64 <= raw)
+        );
+        assert!(
+            (2..=4).contains(&state.skip_count()),
+            "{}",
+            state.skip_count()
+        );
     }
 
     #[test]

@@ -88,6 +88,14 @@ fn studio_sound(config: &mut ProjectConfiguration) {
     config.audio.improve = true;
 }
 
+/// Studio Sound across a cut shorter than its warm-up read-back inside one
+/// clip (GitHub #2790: every such export failed in 0.6.1 with "Invalid
+/// sequential export audio window").
+fn studio_sound_short_cut(config: &mut ProjectConfiguration) {
+    common::set_cuts(config, &[(0.5, 3.0, 1.0), (3.2, 5.0, 1.0), (5.3, 7.8, 1.0)]);
+    config.audio.improve = true;
+}
+
 fn transition(config: &mut ProjectConfiguration) {
     common::set_cuts(config, &[(0.3, 3.5, 1.0), (4.5, 7.8, 1.0)]);
     common::add_transition(config, 1, 0.4);
@@ -143,6 +151,10 @@ fn variants() -> Vec<Variant> {
             apply: studio_sound,
         },
         Variant {
+            edit: "studio-sound-short-cut",
+            apply: studio_sound_short_cut,
+        },
+        Variant {
             edit: "transition",
             apply: transition,
         },
@@ -161,7 +173,7 @@ const FPS: u32 = 30;
 const RES: (u32, u32) = (320, 180);
 
 fn export_case(spec: &FixtureSpec, variant: &Variant, path: ExportPath) -> Option<String> {
-    export_case_at(spec, variant, path, FPS)
+    export_case_at(spec, variant, path, FPS, None)
 }
 
 fn export_case_at(
@@ -169,6 +181,7 @@ fn export_case_at(
     variant: &Variant,
     path: ExportPath,
     fps: u32,
+    video_encoder_failure_at: Option<u32>,
 ) -> Option<String> {
     let id = format!("audio/{}/{}/{}{fps}", spec.name, variant.edit, path.label());
     if !report::selected(&id) {
@@ -180,13 +193,14 @@ fn export_case_at(
     (variant.apply)(&mut config);
     let mut case = Case::new(&id);
     let dir = common::scratch_dir(&id);
-    match rt.block_on(audio_support::export(
+    match rt.block_on(audio_support::export_failing_encoder_at(
         &project,
         config.clone(),
         path,
         fps,
         RES,
         dir.path(),
+        video_encoder_failure_at,
     )) {
         Err(e) => case.problem("error", format!("export failed: {e}")),
         Ok(out) => match path {
@@ -201,6 +215,17 @@ fn export_case_at(
                 );
             }
             _ => {
+                // libx264 tags its stream with a version SEI; the restarted
+                // export must come from it.
+                if video_encoder_failure_at.is_some()
+                    && !std::fs::read(&out)
+                        .is_ok_and(|bytes| bytes.windows(11).any(|w| w == b"x264 - core"))
+                {
+                    case.problem(
+                        "error",
+                        "export after the video encoder failed was not encoded by libx264",
+                    );
+                }
                 let model = audio_support::audio_model(&project, &config);
                 match audio_support::exported_mono(&out) {
                     Err(e) => case.problem("error", e),
@@ -266,9 +291,28 @@ fn export_studio_sound_low_fps() {
         },
         ExportPath::App,
         10,
+        None,
     )
     .into_iter()
     .collect();
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// A hardware video encoder can fail mid-export when the media engine is
+/// busy or resets (VideoToolbox error -19092 on shared macOS runners). The
+/// export restarts on libx264 and must still match the audio and video
+/// models, on the streaming (app) and in-memory (plain) audio paths.
+#[test]
+fn encoder_fallback() {
+    let spec = audio_fixture::mix(report::tier());
+    let variant = Variant {
+        edit: "encoder-fallback",
+        apply: full,
+    };
+    let failures: Vec<String> = [ExportPath::App, ExportPath::Plain]
+        .into_iter()
+        .filter_map(|path| export_case_at(&spec, &variant, path, FPS, Some(FPS * 3)))
+        .collect();
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 

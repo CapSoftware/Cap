@@ -43,6 +43,7 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
+use crate::i18n::tr;
 use crate::{editor_timeline::TrackKind, editor_window::EditorWindow};
 use cap_project::{CameraXPosition, CameraYPosition, OverlayTrackKind, SceneMode, XY};
 use cap_rendering::FrameLayout;
@@ -305,12 +306,10 @@ fn overlay_drag_center(
     } else {
         snap_moving_rect(raw, targets, 7. / canvas.0.max(1.), 7. / canvas.1.max(1.))
     };
-    let x = (raw.x + dx).clamp(0., 1.);
-    let y = (raw.y + dy).clamp(0., 1.);
     (
         XY {
-            x: (x + raw.w / 2.).clamp(0., 1.),
-            y: (y + raw.h / 2.).clamp(0., 1.),
+            x: (raw.x + dx + raw.w / 2.).clamp(0., 1.),
+            y: (raw.y + dy + raw.h / 2.).clamp(0., 1.),
         },
         guides,
     )
@@ -453,11 +452,11 @@ pub enum CanvasSelection {
 impl CanvasSelection {
     fn label(self) -> SharedString {
         match self {
-            Self::Display => "Screen".into(),
-            Self::Camera => "Camera".into(),
-            Self::Mask(_) => "Mask".into(),
-            Self::Text(_) => "Text".into(),
-            Self::Image(_) => "Image".into(),
+            Self::Display => tr::editor::canvas::screen().into(),
+            Self::Camera => tr::editor::canvas::camera().into(),
+            Self::Mask(_) => tr::editor::canvas::mask().into(),
+            Self::Text(_) => tr::editor::canvas::text_item().into(),
+            Self::Image(_) => tr::editor::canvas::image().into(),
         }
     }
 
@@ -1465,12 +1464,12 @@ impl EditorWindow {
             CanvasSelection::Display => (
                 self.display_draggable(),
                 self.display_draggable(),
-                (!self.display_draggable()).then_some("Screen is locked while a zoom is active"),
+                (!self.display_draggable()).then(tr::editor::canvas::screen_locked),
             ),
             CanvasSelection::Camera => (
                 true,
                 self.camera_resizable(),
-                (!self.camera_resizable()).then_some("Camera size follows the zoom — drag to move"),
+                (!self.camera_resizable()).then(tr::editor::canvas::camera_follows_zoom),
             ),
             CanvasSelection::Mask(_) | CanvasSelection::Text(_) | CanvasSelection::Image(_) => {
                 (true, true, None)
@@ -1571,7 +1570,7 @@ impl EditorWindow {
                                 .rounded(px(6.))
                                 .bg(gpui::hsla(0., 0., 1., 0.15))
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .child("Edit zoom")
+                                .child(tr::editor::canvas::edit_zoom())
                                 .on_mouse_down(
                                     MouseButton::Left,
                                     cx.listener(|this, event, _, cx| {
@@ -2001,6 +2000,59 @@ mod tests {
         assert!((center.x - 0.6).abs() < 1e-9);
         assert!((center.y - 0.6).abs() < 1e-9);
         assert!(guides.is_empty());
+    }
+
+    #[test]
+    fn overlay_drag_preserves_pointer_motion_near_top_and_left_edges() {
+        let rect = NormRect {
+            x: -0.1,
+            y: -0.05,
+            w: 0.4,
+            h: 0.3,
+        };
+        for canvas in [(800., 450.), (450., 800.), (500., 500.)] {
+            let (center, guides) = overlay_drag_center(
+                rect,
+                canvas,
+                (canvas.0 * 0.02, canvas.1 * 0.03),
+                &SnapTargets::default(),
+                true,
+            );
+            assert!((center.x - 0.12).abs() < 1e-9, "{center:?}");
+            assert!((center.y - 0.13).abs() < 1e-9, "{center:?}");
+            assert!(guides.is_empty());
+        }
+    }
+
+    #[test]
+    fn overlay_drag_clamps_the_center_at_every_frame_edge() {
+        let rect = NormRect {
+            x: 0.3,
+            y: 0.35,
+            w: 0.4,
+            h: 0.3,
+        };
+        for (delta, expected) in [((-900., -1600.), 0.), ((900., 1600.), 1.)] {
+            let (center, _) =
+                overlay_drag_center(rect, (450., 800.), delta, &SnapTargets::default(), true);
+            assert!((center.x - expected).abs() < 1e-9, "{center:?}");
+            assert!((center.y - expected).abs() < 1e-9, "{center:?}");
+        }
+    }
+
+    #[test]
+    fn overlay_drag_applies_snapping_while_overhanging_the_frame() {
+        let rect = NormRect {
+            x: -0.09,
+            y: -0.1,
+            w: 0.2,
+            h: 0.4,
+        };
+        let targets = build_snap_targets(&[], None);
+        let (center, guides) = overlay_drag_center(rect, (450., 800.), (0., 0.), &targets, false);
+        assert!(center.x.abs() < 1e-9, "{center:?}");
+        assert!((center.y - 0.1).abs() < 1e-9, "{center:?}");
+        assert!(guides.iter().any(|guide| guide.axis == GuideAxis::V));
     }
 
     #[test]

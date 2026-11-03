@@ -37,6 +37,7 @@ use crate::editor_crop::{
     self as engine, CropAnim, CropBounds, CropDrag, CropField, CropHit, CropMenuChoice, CropState,
     HANDLES, ResizeSession, SE_HANDLE, Vec2,
 };
+use crate::i18n::tr;
 use crate::screenshot_editor::ScreenshotEditorWindow;
 use crate::theme::Theme;
 use crate::ui;
@@ -84,6 +85,18 @@ pub struct ScreenshotCropDialog {
     fields: HashMap<CropField, Entity<ui::TextInputState>>,
     /// Dropped with the dialog, which is what unsubscribes the field events.
     _field_subscriptions: Vec<gpui::Subscription>,
+}
+
+impl ScreenshotCropDialog {
+    /// The original is decoded at full resolution (about 59 MB at 5K) and the
+    /// window's atlas keeps every painted image until it is told otherwise, so
+    /// each closed dialog would otherwise stay resident until the editor
+    /// window closes.
+    fn release_image(&mut self, window: &mut Window) {
+        if let Some(image) = self.image.take() {
+            let _ = window.drop_image(image);
+        }
+    }
 }
 
 impl ScreenshotEditorWindow {
@@ -163,10 +176,16 @@ impl ScreenshotEditorWindow {
 
     /// Close without writing -- Escape or the backdrop. The project was never
     /// touched, so there is nothing to roll back.
-    pub(crate) fn cancel_crop_dialog(&mut self, reason: &'static str, cx: &mut Context<Self>) {
-        if self.crop.take().is_none() {
+    pub(crate) fn cancel_crop_dialog(
+        &mut self,
+        reason: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(mut dialog) = self.crop.take() else {
             return;
-        }
+        };
+        dialog.release_image(window);
         tracing::info!(reason, "screenshot crop cancelled");
         cx.notify();
     }
@@ -174,10 +193,11 @@ impl ScreenshotEditorWindow {
     /// The footer's Save (`Editor.tsx:463-482`): one `setProject` write of
     /// `background.crop`, so one history entry, then close.
     fn save_crop_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(dialog) = self.crop.take() else {
+        let Some(mut dialog) = self.crop.take() else {
             return;
         };
         let bounds = dialog.state.real();
+        dialog.release_image(window);
         let crop = Crop {
             position: XY::new(bounds.x.max(0.) as u32, bounds.y.max(0.) as u32),
             size: XY::new(bounds.width.max(0.) as u32, bounds.height.max(0.) as u32),
@@ -470,7 +490,7 @@ impl ScreenshotEditorWindow {
             return true;
         }
         if key == "escape" {
-            self.cancel_crop_dialog("escape", cx);
+            self.cancel_crop_dialog("escape", window, cx);
             return true;
         }
         let Some(nudge) = engine::is_nudge_key(key) else {
@@ -668,8 +688,8 @@ impl ScreenshotEditorWindow {
                         .absolute()
                         .inset_0()
                         .bg(gpui::hsla(0., 0., 0., 0.8))
-                        .on_click(cx.listener(|this, _, _window, cx| {
-                            this.cancel_crop_dialog("backdrop", cx)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.cancel_crop_dialog("backdrop", window, cx)
                         })),
                 )
                 .child(
@@ -738,8 +758,18 @@ impl ScreenshotEditorWindow {
                     .flex_row()
                     .gap(px(32.))
                     .flex_none()
-                    .child(group("Size", CropField::Width, CropField::Height, self))
-                    .child(group("Position", CropField::X, CropField::Y, self)),
+                    .child(group(
+                        tr::screenshot_editor::style::size_label(),
+                        CropField::Width,
+                        CropField::Height,
+                        self,
+                    ))
+                    .child(group(
+                        tr::screenshot_editor::crop::position(),
+                        CropField::X,
+                        CropField::Y,
+                        self,
+                    )),
             )
             .child(
                 div()
@@ -788,7 +818,7 @@ impl ScreenshotEditorWindow {
                     .child(
                         ui::EditorButton::plain(&theme, "screenshot-crop-full")
                             .left_icon("icons/maximize.svg")
-                            .label("Full")
+                            .label(tr::screenshot_editor::crop::full())
                             .disabled(full)
                             .on_click(cx.listener(|this, _, window, cx| {
                                 if let Some(dialog) = this.crop.as_mut() {
@@ -801,7 +831,7 @@ impl ScreenshotEditorWindow {
                     .child(
                         ui::EditorButton::plain(&theme, "screenshot-crop-reset")
                             .left_icon("icons/circle-x.svg")
-                            .label("Reset")
+                            .label(tr::common::reset())
                             .disabled(untouched)
                             .on_click(cx.listener(|this, _, window, cx| {
                                 if let Some(dialog) = this.crop.as_mut() {
@@ -1027,7 +1057,7 @@ impl ScreenshotEditorWindow {
                         .text_size(px(12.))
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(Hsla::from(theme.gray_10))
-                        .child("Loading frame…")
+                        .child(tr::screenshot_editor::crop::loading_frame())
                         .into_any_element(),
                 ),
             })
@@ -1070,7 +1100,7 @@ impl ScreenshotEditorWindow {
                     ui::ButtonVariant::Primary,
                     ui::ButtonSize::Md,
                 )
-                .label("Save")
+                .label(tr::common::save())
                 .on_click(cx.listener(|this, _, window, cx| this.save_crop_dialog(window, cx))),
             )
             .into_any_element()

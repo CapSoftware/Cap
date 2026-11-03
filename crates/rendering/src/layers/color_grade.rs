@@ -1,6 +1,7 @@
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 
+use super::SourceBindGroups;
 use crate::ProjectUniforms;
 
 /// Full-frame pass applying the screen grade to the background canvas so the
@@ -9,6 +10,7 @@ pub struct ColorGradeLayer {
     active: bool,
     uniforms_buffer: wgpu::Buffer,
     pipeline: ColorGradePipeline,
+    bind_groups: SourceBindGroups,
 }
 
 impl ColorGradeLayer {
@@ -21,6 +23,7 @@ impl ColorGradeLayer {
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             }),
             pipeline: ColorGradePipeline::new(device),
+            bind_groups: SourceBindGroups::default(),
         }
     }
 
@@ -48,20 +51,29 @@ impl ColorGradeLayer {
         );
     }
 
+    pub fn retain_views(&mut self, views: [&wgpu::TextureView; 2]) {
+        self.bind_groups.retain_views(views);
+    }
+
+    #[cfg(test)]
+    pub fn bind_groups_created(&self) -> usize {
+        self.bind_groups.created()
+    }
+
     pub fn render(
-        &self,
+        &mut self,
         pass: &mut wgpu::RenderPass<'_>,
         device: &wgpu::Device,
         source_texture: &wgpu::TextureView,
     ) {
+        let bind_group =
+            self.bind_groups
+                .get_or_create(&self.uniforms_buffer, source_texture, || {
+                    self.pipeline
+                        .bind_group(device, &self.uniforms_buffer, source_texture)
+                });
         pass.set_pipeline(&self.pipeline.render_pipeline);
-        pass.set_bind_group(
-            0,
-            &self
-                .pipeline
-                .bind_group(device, &self.uniforms_buffer, source_texture),
-            &[],
-        );
+        pass.set_bind_group(0, bind_group, &[]);
         pass.draw(0..3, 0..1);
     }
 }

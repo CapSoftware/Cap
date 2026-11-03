@@ -2,7 +2,12 @@ import { describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { MIN_PART, type TranscodeTask, type WorkItem } from "./protocol";
+import {
+	MIN_PART,
+	type TranscodeTask,
+	type VideoTask,
+	type WorkItem,
+} from "./protocol";
 import * as stitch from "./stitch";
 import * as transcode from "./transcode";
 
@@ -26,6 +31,8 @@ function harness(
 		randomUUID,
 		join,
 		...transcode,
+		processCpuSeconds: async () => 0,
+		sampleThreads: async () => ({}),
 		availableParallelism: () => 1,
 		hostname: () => "worker-test",
 		mkdirSync: () => {},
@@ -34,6 +41,13 @@ function harness(
 		s3ConfigFromEnv: () => ({}),
 		...stitch,
 		MIN_PART,
+		ProjectCache: class {
+			root = "/work/job";
+			async materialize() {
+				return { bytes: 0, ms: 0, requests: 0 };
+			}
+			close() {}
+		},
 		S3: class {
 			async presignFresh() {
 				await options.presignGate;
@@ -97,8 +111,18 @@ function harness(
 	const compiled = new Bun.Transpiler({ loader: "ts" }).transformSync(source);
 	const worker = new Function(
 		...Object.keys(deps),
-		`${compiled}\nreturn {runTranscode, cancel, busy, progress, transcoders, engineEnv, uploadLayout};`,
+		`${compiled}\nreturn {runVideo, runTranscode, cancel, busy, progress, transcoders, engineEnv, uploadLayout};`,
 	)(...Object.values(deps)) as {
+		runVideo: (
+			task: VideoTask,
+			engine: {
+				pid: number;
+				onEvent: ((event: Record<string, unknown>) => void) | null;
+				onProgress: ((frames: number) => void) | null;
+				request: () => Promise<never>;
+			},
+			queuedMs: number,
+		) => Promise<unknown>;
 		runTranscode: (task: TranscodeTask, slot: number) => Promise<number>;
 		cancel: (taskIds: string[]) => void;
 		busy: Map<number, WorkItem>;
@@ -226,4 +250,42 @@ describe("chunk upload", () => {
 			stash: { key: "stash/job/0", bytes: chunk.byteLength },
 		});
 	});
+});
+
+test("a failed video render removes its temporary output", async () => {
+	const worker = harness();
+	const task: VideoTask = {
+		kind: "video",
+		taskId: "job:v0",
+		jobId: "job",
+		chunk: 0,
+		fps: 30,
+		resolution: [1920, 1080],
+		bpp: 0.1,
+		frames: [0, 30],
+		threads: 1,
+		files: [],
+		upload: {
+			key: "out/job.mp4",
+			uploadId: "upload",
+			firstPart: 2,
+			partLimit: 3,
+			partTarget: MIN_PART,
+			stashKey: "stash/job/0",
+		},
+		audio: null,
+		hls: null,
+	};
+	const engine = {
+		pid: 1,
+		onEvent: null,
+		onProgress: null,
+		request: () => Promise.reject(new Error("render failed")),
+	};
+	await expect(worker.runVideo(task, engine, 0)).rejects.toThrow(
+		"render failed",
+	);
+	expect(worker.removed).toHaveLength(1);
+	expect(worker.removed[0]).toStartWith("/work/job/v0-");
+	expect(worker.removed[0]).toEndWith(".h264");
 });

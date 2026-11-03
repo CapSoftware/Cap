@@ -10,7 +10,11 @@ import { Database } from "../Database.ts";
 export type CreateVideoInput = Omit<
 	Schema.Type<typeof Video.Video>,
 	"id" | "createdAt" | "updatedAt"
-> & { password?: string; importSource?: Video.ImportSource };
+> &
+	Pick<typeof Db.videos.$inferInsert, "isScreenshot" | "settings"> & {
+		password?: string;
+		importSource?: Video.ImportSource;
+	};
 
 export class VideosRepo extends Effect.Service<VideosRepo>()("VideosRepo", {
 	effect: Effect.gen(function* () {
@@ -21,29 +25,39 @@ export class VideosRepo extends Effect.Service<VideosRepo>()("VideosRepo", {
 		 *
 		 * The password is returned separately as the `Video` class is client-safe
 		 */
+		const decodeRow = (v: typeof Db.videos.$inferSelect) =>
+			[
+				Video.Video.decodeSync({
+					...v,
+					bucketId: v.bucket,
+					storageIntegrationId: v.storageIntegrationId,
+					createdAt: v.createdAt.toISOString(),
+					updatedAt: v.updatedAt.toISOString(),
+					metadata: v.metadata as any,
+				}),
+				Option.fromNullable(v.password),
+			] as const;
+
 		const getById = (id: Video.VideoId) =>
 			Effect.gen(function* () {
 				const [video] = yield* db.use((db) =>
 					db.select().from(Db.videos).where(Dz.eq(Db.videos.id, id)),
 				);
 
-				return Option.fromNullable(video).pipe(
-					Option.map(
-						(v) =>
-							[
-								Video.Video.decodeSync({
-									...v,
-									bucketId: v.bucket,
-									storageIntegrationId: v.storageIntegrationId,
-									createdAt: v.createdAt.toISOString(),
-									updatedAt: v.updatedAt.toISOString(),
-									metadata: v.metadata as any,
-								}),
-								Option.fromNullable(video?.password),
-							] as const,
-					),
-				);
+				return Option.fromNullable(video).pipe(Option.map(decodeRow));
 			});
+
+		const getByIds = (ids: ReadonlyArray<Video.VideoId>) =>
+			ids.length === 0
+				? Effect.succeed([])
+				: db
+						.use((db) =>
+							db
+								.select()
+								.from(Db.videos)
+								.where(Dz.inArray(Db.videos.id, [...new Set(ids)])),
+						)
+						.pipe(Effect.map((rows) => rows.map(decodeRow)));
 
 		const hasViewerGrant = (id: Video.VideoId, email: string) =>
 			db.use(async (database) => {
@@ -109,6 +123,10 @@ export class VideosRepo extends Effect.Service<VideosRepo>()("VideosRepo", {
 						}
 					}
 					await Promise.all([
+						db
+							.delete(Db.sharedVideos)
+							.where(Dz.eq(Db.sharedVideos.videoId, id)),
+						db.delete(Db.spaceVideos).where(Dz.eq(Db.spaceVideos.videoId, id)),
 						db.delete(Db.importedVideos).where(Dz.eq(Db.importedVideos.id, id)),
 						db.delete(Db.videos).where(Dz.eq(Db.videos.id, id)),
 						db
@@ -130,9 +148,19 @@ export class VideosRepo extends Effect.Service<VideosRepo>()("VideosRepo", {
 
 				yield* db.use((db) =>
 					db.transaction(async (db) => {
+						const {
+							createdAt: _createdAt,
+							updatedAt: _updatedAt,
+							id: _id,
+							...insertData
+						} = data as CreateVideoInput & {
+							createdAt?: unknown;
+							updatedAt?: unknown;
+							id?: unknown;
+						};
 						await db.insert(Db.videos).values([
 							{
-								...data,
+								...insertData,
 								id,
 								orgId: data.orgId,
 								bucket: Option.getOrNull(data.bucketId ?? Option.none()),
@@ -171,7 +199,14 @@ export class VideosRepo extends Effect.Service<VideosRepo>()("VideosRepo", {
 				return id;
 			});
 
-		return { getById, hasViewerGrant, prepareDelete, delete: delete_, create };
+		return {
+			getById,
+			getByIds,
+			hasViewerGrant,
+			prepareDelete,
+			delete: delete_,
+			create,
+		};
 	}),
 	dependencies: [Database.Default],
 }) {}

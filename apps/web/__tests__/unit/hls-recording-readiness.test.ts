@@ -206,6 +206,37 @@ describe("Instant player readiness and failure UX", () => {
 		expect(mocks.pause).toHaveBeenCalled();
 	});
 
+	it.each([
+		[false, "requireComplete=1"],
+		[true, "earlyPlayback=1"],
+	])(
+		"plays early only on MediaSource (available: %s)",
+		async (available, expected) => {
+			if (available) vi.stubGlobal("MediaSource", class {});
+			await act(async () => {
+				root.render(
+					createElement(HLSVideoPlayer, {
+						videoId: "recording" as Parameters<
+							typeof HLSVideoPlayer
+						>[0]["videoId"],
+						videoSrc:
+							"/api/playlist?videoId=recording&videoType=segments-master&earlyPlayback=1",
+						videoRef,
+						chaptersSrc: "",
+						captionsSrc: "",
+						isLiveSegments: true,
+						hasActiveUpload: true,
+						allowSegmentProbeDuringUpload: true,
+						earlyPlayback: true,
+					}),
+				);
+			});
+			const probe = String(vi.mocked(fetch).mock.calls[0]?.[0]);
+			expect(probe).toContain("videoType=segments-status");
+			expect(probe).toContain(expected);
+		},
+	);
+
 	it("keeps a playable source available when only final processing fails", async () => {
 		await render();
 		await decodeFrame();

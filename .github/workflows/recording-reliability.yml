@@ -46,6 +46,7 @@ jobs:
             __tests__/unit/recording-storage-lifecycle.test.ts \
             __tests__/unit/desktop-recording-*.test.ts \
             __tests__/unit/desktop-segments-*.test.ts \
+            __tests__/unit/segments-audio-download.test.ts \
             __tests__/unit/finalize-desktop-recording.test.ts \
             __tests__/unit/media-server-progress.test.ts \
             __tests__/unit/media-processing-budget.test.ts \
@@ -56,4 +57,7 @@ jobs:
             __tests__/unit/video-edit-published-output.test.ts \
             __tests__/unit/upload-progress-playback.test.ts \
             __tests__/unit/recording-prepare.test.ts \
-            __tests__/unit/s3-bucket-connections.test.ts
+            __tests__/unit/s3-bucket-connections.test.ts \
+            __tests__/unit/media-processing-workflows.test.ts \
+            __tests__/unit/new-media-comment-thumbnail.test.ts \
+            __tests__/unit/comment-reply-parent.test.ts

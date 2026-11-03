@@ -177,6 +177,7 @@ async function startMediaServerProcessJob(
 		webhookSecret?: string;
 		inputExtension: string;
 		audioLevels?: boolean;
+		importedOriginal?: boolean;
 	},
 ): Promise<string> {
 	for (let attempt = 0; attempt < MEDIA_SERVER_START_MAX_ATTEMPTS; attempt++) {
@@ -350,6 +351,9 @@ async function processVideoOnMediaServer(
 		webhookUrl,
 		webhookSecret: webhookSecret || undefined,
 		inputExtension: getInputExtension(rawFileKey),
+		importedOriginal:
+			video.metadata?.loomDeferredProcessing?.rawFileKey === rawFileKey ||
+			undefined,
 	});
 }
 

@@ -1,0 +1,3 @@
+NSCameraUsageDescription = "Cap utilise votre caméra pour vous enregistrer dans vos Caps.";
+NSMicrophoneUsageDescription = "Cap utilise votre micro pour vous enregistrer dans vos Caps.";
+NSScreenCaptureUsageDescription = "Cap enregistre votre écran pour créer vos Caps.";

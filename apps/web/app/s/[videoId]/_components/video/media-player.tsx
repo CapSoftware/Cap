@@ -59,6 +59,7 @@ import {
 	normalizePlaybackSpeed,
 	PLAYBACK_SPEEDS,
 } from "@/lib/playback-speed";
+import { seekLength } from "../early-length";
 import { Badge } from "./badge";
 import { Button as PlayerButton } from "./button";
 import {
@@ -562,7 +563,7 @@ function MediaPlayerRootImpl(props: MediaPlayerRootProps) {
 						dispatch({
 							type: MediaActionTypes.MEDIA_SEEK_REQUEST,
 							detail: Math.min(
-								mediaElement.duration,
+								seekLength(mediaElement, mediaElement.duration),
 								mediaElement.currentTime + SEEK_STEP_SHORT,
 							),
 						});
@@ -700,7 +701,7 @@ function MediaPlayerRootImpl(props: MediaPlayerRootProps) {
 					dispatch({
 						type: MediaActionTypes.MEDIA_SEEK_REQUEST,
 						detail: Math.min(
-							mediaElement.duration,
+							seekLength(mediaElement, mediaElement.duration),
 							mediaElement.currentTime + SEEK_STEP_LONG,
 						),
 					});
@@ -719,7 +720,8 @@ function MediaPlayerRootImpl(props: MediaPlayerRootProps) {
 				case "9": {
 					event.preventDefault();
 					const percent = Number.parseInt(event.key, 10) / 10;
-					const seekTime = mediaElement.duration * percent;
+					const seekTime =
+						seekLength(mediaElement, mediaElement.duration) * percent;
 					dispatch({
 						type: MediaActionTypes.MEDIA_SEEK_REQUEST,
 						detail: seekTime,
@@ -740,7 +742,7 @@ function MediaPlayerRootImpl(props: MediaPlayerRootProps) {
 					event.preventDefault();
 					dispatch({
 						type: MediaActionTypes.MEDIA_SEEK_REQUEST,
-						detail: mediaElement.duration,
+						detail: seekLength(mediaElement, mediaElement.duration),
 					});
 					break;
 				}
@@ -1530,15 +1532,25 @@ function MediaPlayerSeekForward(props: MediaPlayerSeekForwardProps) {
 
 			if (event.defaultPrevented) return;
 
+			const media = document.getElementById(context.mediaId);
 			dispatch({
 				type: MediaActionTypes.MEDIA_SEEK_REQUEST,
 				detail: Math.min(
-					seekableEnd ?? Number.POSITIVE_INFINITY,
+					media instanceof HTMLMediaElement
+						? seekLength(media, seekableEnd ?? Number.POSITIVE_INFINITY)
+						: (seekableEnd ?? Number.POSITIVE_INFINITY),
 					mediaCurrentTime + seconds,
 				),
 			});
 		},
-		[dispatch, props.onClick, mediaCurrentTime, seekableEnd, seconds],
+		[
+			dispatch,
+			props.onClick,
+			mediaCurrentTime,
+			seekableEnd,
+			seconds,
+			context.mediaId,
+		],
 	);
 
 	return (
@@ -1577,6 +1589,9 @@ interface MediaPlayerSeekProps
 	withoutChapter?: boolean;
 	withoutTooltip?: boolean;
 	fallbackDuration?: number | null;
+	expectedDuration?: number | null;
+	pendingFrom?: number | null;
+	heldSeekTime?: number | null;
 	tooltipThumbnailSrc?: string | ((time: number) => string | undefined | null);
 	tooltipTimeVariant?: "current" | "progress";
 	tooltipSideOffset?: number;
@@ -1592,6 +1607,9 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 		withoutChapter = false,
 		withoutTooltip = false,
 		fallbackDuration,
+		expectedDuration,
+		pendingFrom,
+		heldSeekTime,
 		tooltipTimeVariant = "current",
 		tooltipThumbnailSrc,
 		tooltipSideOffset,
@@ -1651,15 +1669,20 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 		const mediaValues = [mediaDuration, seekableEnd].filter(
 			(d) => Number.isFinite(d) && d > 0,
 		);
-		if (mediaValues.length > 0) return Math.max(...mediaValues);
-		if (
+		let resolved = 0;
+		if (mediaValues.length > 0) resolved = Math.max(...mediaValues);
+		else if (
 			fallbackDuration != null &&
 			Number.isFinite(fallbackDuration) &&
 			fallbackDuration > 0
 		)
-			return fallbackDuration;
-		return 0;
-	}, [fallbackDuration, mediaDuration, seekableEnd]);
+			resolved = fallbackDuration;
+		return expectedDuration != null &&
+			Number.isFinite(expectedDuration) &&
+			expectedDuration > resolved
+			? expectedDuration
+			: resolved;
+	}, [fallbackDuration, expectedDuration, mediaDuration, seekableEnd]);
 	const lastKnownDurationRef = React.useRef(resolvedDuration);
 
 	React.useEffect(() => {
@@ -1867,6 +1890,15 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 			}
 		}
 	}, [mediaCurrentTime, seekState.pendingSeekTime]);
+
+	const previousHeldSeekRef = React.useRef(heldSeekTime);
+	React.useEffect(() => {
+		const previous = previousHeldSeekRef.current;
+		previousHeldSeekRef.current = heldSeekTime;
+		if (previous != null && heldSeekTime == null) {
+			setSeekState((prev) => ({ ...prev, pendingSeekTime: null }));
+		}
+	}, [heldSeekTime]);
 
 	React.useEffect(() => {
 		if (!seekState.isHovering || tooltipDisabled) return;
@@ -2265,6 +2297,17 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 							width: `${bufferedProgress * 100}%`,
 						}}
 					/>
+					{pendingFrom != null &&
+						effectiveDuration > 0 &&
+						pendingFrom < effectiveDuration && (
+							<div
+								data-slot="media-player-seek-pending"
+								className="absolute inset-y-0 right-0 animate-pulse bg-[repeating-linear-gradient(135deg,rgb(255_255_255/0.28)_0_4px,transparent_4px_8px)]"
+								style={{
+									left: `${(Math.max(0, pendingFrom) / effectiveDuration) * 100}%`,
+								}}
+							/>
+						)}
 					<SliderPrimitive.Range className="absolute h-full bg-white will-change-[width]" />
 					{seekState.isHovering && effectiveDuration > 0 && (
 						<div
@@ -2535,6 +2578,7 @@ interface MediaPlayerTimeProps extends React.ComponentProps<"div"> {
 	variant?: "progress" | "remaining" | "duration";
 	asChild?: boolean;
 	fallbackDuration?: number | null;
+	expectedDuration?: number | null;
 }
 
 function MediaPlayerTime(props: MediaPlayerTimeProps) {
@@ -2543,6 +2587,7 @@ function MediaPlayerTime(props: MediaPlayerTimeProps) {
 		asChild,
 		className,
 		fallbackDuration,
+		expectedDuration,
 		...timeProps
 	} = props;
 
@@ -2554,15 +2599,20 @@ function MediaPlayerTime(props: MediaPlayerTimeProps) {
 		const mediaValues = [mediaDuration, seekableEnd].filter(
 			(d) => Number.isFinite(d) && d > 0,
 		);
-		if (mediaValues.length > 0) return Math.max(...mediaValues);
-		if (
+		let resolved = 0;
+		if (mediaValues.length > 0) resolved = Math.max(...mediaValues);
+		else if (
 			fallbackDuration != null &&
 			Number.isFinite(fallbackDuration) &&
 			fallbackDuration > 0
 		)
-			return fallbackDuration;
-		return 0;
-	}, [fallbackDuration, mediaDuration, seekableEnd]);
+			resolved = fallbackDuration;
+		return expectedDuration != null &&
+			Number.isFinite(expectedDuration) &&
+			expectedDuration > resolved
+			? expectedDuration
+			: resolved;
+	}, [fallbackDuration, expectedDuration, mediaDuration, seekableEnd]);
 	const lastKnownDurationRef = React.useRef(resolvedDuration);
 
 	React.useEffect(() => {

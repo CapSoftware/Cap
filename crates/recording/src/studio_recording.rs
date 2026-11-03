@@ -16,7 +16,7 @@ use crate::{
         CursorActor, CursorActorResponse, Cursors, IncrementalCaptureOutputs, spawn_cursor_recorder,
     },
     feeds::{camera::CameraFeedLock, microphone::MicrophoneFeedLock},
-    ffmpeg::{FragmentedAudioMuxer, FragmentedAudioMuxerConfig, OggMuxer},
+    ffmpeg::{FragmentedAudioMuxer, FragmentedAudioMuxerConfig, OggMuxer, OggMuxerConfig},
     output_pipeline::{
         AudioAnchor, AudioGapSummary, DoneFut, FinishedOutputPipeline, OutputPipeline,
         PipelineDoneError,
@@ -145,7 +145,9 @@ fn persist_segment_input_events(
             moves: response.moves,
         })
         .map_err(anyhow::Error::from)
-        .and_then(|events| std::fs::write(path, events).map_err(anyhow::Error::from))
+        .and_then(|events| {
+            crate::cursor::write_atomically(path, &[events.as_bytes()]).map_err(anyhow::Error::from)
+        })
         .with_context(|| format!("Could not save cursor events to {}", path.display()));
         accumulate_finalization_error(failure, result);
     }
@@ -156,8 +158,11 @@ fn persist_segment_input_events(
         let result = KeyboardEvents {
             presses: response.keyboard_presses,
         }
-        .write_to_file(path)
+        .to_bytes()
         .map_err(anyhow::Error::msg)
+        .and_then(|bytes| {
+            crate::cursor::write_atomically(path, &[&bytes]).map_err(anyhow::Error::from)
+        })
         .with_context(|| format!("Could not save keyboard events to {}", path.display()));
         accumulate_finalization_error(failure, result);
     }
@@ -2139,6 +2144,7 @@ pub struct ActorBuilder {
     lifetime: StudioLifetimeOwner,
     output_path: PathBuf,
     capture_target: screen_capture::ScreenCaptureTarget,
+    window_only: bool,
     system_audio: bool,
     mic_feed: Option<Arc<MicrophoneFeedLock>>,
     camera_feed: Option<Arc<CameraFeedLock>>,
@@ -2163,6 +2169,7 @@ impl ActorBuilder {
             },
             output_path: output,
             capture_target,
+            window_only: false,
             system_audio: false,
             mic_feed: None,
             camera_feed: None,
@@ -2180,6 +2187,12 @@ impl ActorBuilder {
 
     pub fn with_system_audio(mut self, system_audio: bool) -> Self {
         self.system_audio = system_audio;
+        self
+    }
+
+    /// Record only the target window, following it, on macOS and Windows.
+    pub fn with_window_only(mut self, window_only: bool) -> Self {
+        self.window_only = window_only;
         self
     }
 
@@ -2260,6 +2273,7 @@ impl ActorBuilder {
             self.output_path,
             RecordingBaseInputs {
                 capture_target: self.capture_target,
+                window_only: self.window_only,
                 capture_system_audio: self.system_audio,
                 mic_feed: self.mic_feed,
                 camera_feed: self.camera_feed,
@@ -2838,12 +2852,14 @@ async fn stop_recording(
                         start_time: mic_start_time,
                         device_id: s.mic_device_id.clone(),
                         gap_summary: to_project_gap_summary(mic.audio_gap_summary),
+                        digital_silence_ms: mic.digital_silence_ms,
                     }),
                     system_audio: s.pipeline.system_audio.map(|audio| AudioMeta {
                         path: make_relative(&audio.path),
                         start_time: start_times.system_audio,
                         device_id: None,
                         gap_summary: to_project_gap_summary(audio.audio_gap_summary),
+                        digital_silence_ms: None,
                     }),
                     cursor: s
                         .pipeline
@@ -3406,6 +3422,8 @@ async fn create_segment_pipeline(
             max_capture_size,
             start_time.system_time(),
             base_inputs.capture_system_audio,
+            #[cfg(any(target_os = "macos", windows))]
+            crate::window_only_target(&capture_target, base_inputs.window_only),
             #[cfg(target_os = "linux")]
             sources::screen_capture::LinuxCaptureSource::from_target(&capture_target),
             #[cfg(windows)]
@@ -3562,6 +3580,7 @@ async fn create_segment_pipeline(
                 .with_start_gate(start_gate.clone())
                 .build::<FragmentedAudioMuxer>(FragmentedAudioMuxerConfig {
                     shared_pause_state: shared_pause_state.clone(),
+                    write_behind: cfg!(target_os = "macos"),
                 })
                 .instrument(error_span!("mic-out"))
                 .await
@@ -3570,7 +3589,9 @@ async fn create_segment_pipeline(
                 .with_audio_source::<sources::Microphone>(mic_feed)
                 .with_timestamps(start_time)
                 .with_start_gate(start_gate.clone())
-                .build::<OggMuxer>(())
+                .build::<OggMuxer>(OggMuxerConfig {
+                    write_behind: cfg!(target_os = "macos"),
+                })
                 .instrument(error_span!("mic-out"))
                 .await
         };
@@ -3594,6 +3615,7 @@ async fn create_segment_pipeline(
                 .with_audio_anchor(AudioAnchor::PipelineEpoch)
                 .build::<FragmentedAudioMuxer>(FragmentedAudioMuxerConfig {
                     shared_pause_state: shared_pause_state.clone(),
+                    write_behind: cfg!(target_os = "macos"),
                 })
                 .instrument(error_span!("system-audio-out"))
                 .await
@@ -3603,7 +3625,9 @@ async fn create_segment_pipeline(
                 .with_timestamps(start_time)
                 .with_start_gate(start_gate.clone())
                 .with_audio_anchor(AudioAnchor::PipelineEpoch)
-                .build::<OggMuxer>(())
+                .build::<OggMuxer>(OggMuxerConfig {
+                    write_behind: cfg!(target_os = "macos"),
+                })
                 .instrument(error_span!("system-audio-out"))
                 .await
         };
@@ -3643,6 +3667,11 @@ async fn create_segment_pipeline(
                         display: cursor_display,
                         #[cfg(target_os = "linux")]
                         window: base_inputs.capture_target.window(),
+                        #[cfg(not(target_os = "linux"))]
+                        window: crate::window_only_target(
+                            &base_inputs.capture_target,
+                            base_inputs.window_only,
+                        ),
                     },
                     cursors_dir.to_path_buf(),
                     prev_cursors,
@@ -3653,6 +3682,7 @@ async fn create_segment_pipeline(
                         cursor: incremental_output,
                         keyboard: keyboard_incremental_output,
                     },
+                    keyboard_capture,
                 );
 
                 Ok::<_, CreateSegmentPipelineError>(CursorPipeline {
@@ -3973,6 +4003,7 @@ mod tests {
                     root.join("content/cursors"),
                     RecordingBaseInputs {
                         capture_target: screen_capture::ScreenCaptureTarget::CameraOnly,
+                        window_only: false,
                         capture_system_audio: false,
                         mic_feed: None,
                         camera_feed: None,
@@ -4083,6 +4114,7 @@ mod tests {
             path.join("content/cursors"),
             RecordingBaseInputs {
                 capture_target: target.clone(),
+                window_only: false,
                 capture_system_audio: false,
                 mic_feed: None,
                 camera_feed: None,
@@ -4181,6 +4213,7 @@ mod tests {
             path.join("content/cursors"),
             RecordingBaseInputs {
                 capture_target: target.clone(),
+                window_only: false,
                 capture_system_audio: false,
                 mic_feed: None,
                 camera_feed: None,
@@ -4318,6 +4351,7 @@ mod tests {
                 path.join("content/cursors"),
                 RecordingBaseInputs {
                     capture_target: target.clone(),
+                    window_only: false,
                     capture_system_audio: false,
                     mic_feed: None,
                     camera_feed: None,
@@ -4562,6 +4596,7 @@ mod tests {
                 path.join("content/cursors"),
                 RecordingBaseInputs {
                     capture_target: target.clone(),
+                    window_only: false,
                     capture_system_audio: false,
                     mic_feed: None,
                     camera_feed: None,
@@ -4607,6 +4642,7 @@ mod tests {
                         video_frame_count: 30,
                         video_timestamp_span: Some((Duration::ZERO, Duration::from_millis(967))),
                         audio_gap_summary: None,
+                        digital_silence_ms: None,
                     },
                     microphone: None,
                     camera: None,
@@ -5399,6 +5435,7 @@ mod tests {
             video_frame_count,
             video_timestamp_span: None,
             audio_gap_summary: None,
+            digital_silence_ms: None,
         }
     }
 
@@ -6239,6 +6276,7 @@ mod tests {
             recording_dir.join("content/cursors"),
             RecordingBaseInputs {
                 capture_target: screen_capture::ScreenCaptureTarget::CameraOnly,
+                window_only: false,
                 capture_system_audio: false,
                 mic_feed: None,
                 camera_feed: None,
@@ -6486,6 +6524,7 @@ mod windows_cancel_tests {
             PathBuf::new(),
             RecordingBaseInputs {
                 capture_target: screen_capture::ScreenCaptureTarget::CameraOnly,
+                window_only: false,
                 capture_system_audio: false,
                 mic_feed: None,
                 camera_feed: None,

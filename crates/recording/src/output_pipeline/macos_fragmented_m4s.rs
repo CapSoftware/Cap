@@ -299,7 +299,7 @@ impl MacOSFragmentedM4SMuxer {
             prefer_videotoolbox_hw_input: true,
         };
 
-        let mut encoder = SegmentedVideoEncoder::init_with_timed_fragments(
+        let mut encoder = SegmentedVideoEncoder::init_write_behind(
             self.base_path.clone(),
             self.video_config,
             encoder_config,
@@ -690,7 +690,7 @@ impl MacOSFragmentedM4SCameraMuxer {
             prefer_videotoolbox_hw_input: false,
         };
 
-        let mut encoder = SegmentedVideoEncoder::init_with_timed_fragments(
+        let mut encoder = SegmentedVideoEncoder::init_write_behind(
             self.base_path.clone(),
             self.video_config,
             encoder_config,

@@ -33,7 +33,7 @@ cidre = { workspace = true }
 cap-recording = { path = "../recording", features = ["test-utils"] }
 cap-editor = { path = "../editor", features = ["test-hooks"] }
 cap-audio = { path = "../audio" }
-cap-export = { path = "../export" }
+cap-export = { path = "../export", features = ["test-hooks"] }
 cap-rendering = { path = "../rendering" }
 cpal = { workspace = true }
 tempfile = "3"

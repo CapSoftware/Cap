@@ -7,6 +7,7 @@ import {
 	faExclamationCircle,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { captureException } from "@sentry/nextjs";
 import { AnimatePresence, motion } from "framer-motion";
 import Cookies from "js-cookie";
 import { LucideArrowUpRight } from "lucide-react";
@@ -40,7 +41,9 @@ export function LoginForm() {
 	const searchParams = useSearchParams();
 	const router = useRouter();
 	const next = searchParams?.get("next");
-	const [email, setEmail] = useState("");
+	const [email, setEmail] = useState(
+		() => searchParams?.get("email")?.trim().toLowerCase() ?? "",
+	);
 	const [loading, setLoading] = useState(false);
 	const [emailSent, setEmailSent] = useState(false);
 	const [oauthError, setOauthError] = useState(false);
@@ -162,19 +165,37 @@ export function LoginForm() {
 		});
 		signIn("google", {
 			...(nextPath ? { callbackUrl: nextPath } : {}),
+		}).catch((error) => {
+			captureException(error, {
+				tags: { auth_provider: "google", auth_surface: "login" },
+			});
+			toast.error(
+				"Could not start sign-in. Check your connection and try again.",
+			);
 		});
 	}, [getNextPath]);
 
 	const handleAppleSignIn = useCallback(() => {
-		const nextPath = getNextPath();
-		trackEvent("auth_started", {
-			method: "apple",
-			is_signup: false,
-			auth_surface: "login",
-		});
-		signIn("apple", {
-			...(nextPath ? { callbackUrl: nextPath } : {}),
-		});
+		const startAppleSignIn = () => {
+			const nextPath = getNextPath();
+			trackEvent("auth_started", {
+				method: "apple",
+				is_signup: false,
+				auth_surface: "login",
+			});
+			signIn("apple", {
+				...(nextPath ? { callbackUrl: nextPath } : {}),
+			}).catch((error) => {
+				captureException(error, {
+					tags: { auth_provider: "apple", auth_surface: "login" },
+				});
+				toast.error(
+					"Could not start sign-in. Check your connection and try again.",
+					{ action: { label: "Try again", onClick: startAppleSignIn } },
+				);
+			});
+		};
+		startAppleSignIn();
 	}, [getNextPath]);
 
 	const handleOidcSignIn = useCallback(() => {

@@ -19,28 +19,37 @@ use gpui::{
     SharedString, StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder, px,
 };
 
-use crate::theme::Theme;
+use crate::{i18n::tr, theme::Theme};
 
 use super::{ClickHandler, EditorButton};
 
 /// `{count} {noun} {segment|segments} selected` -- the sentence seven of the
-/// eight headers build inline.
+/// eight headers build inline. Each noun is its own message so translations
+/// can inflect it with the count.
 pub fn selection_label(noun: &str, count: usize) -> String {
-    format!(
-        "{count} {noun} segment{} selected",
-        if count == 1 { "" } else { "s" }
-    )
+    match noun {
+        "style" => tr::ui::selection::style(count),
+        "image" => tr::ui::selection::image(count),
+        "text" => tr::ui::selection::text_segments(count),
+        "caption" => tr::ui::selection::caption(count),
+        "audio" => tr::ui::selection::audio(count),
+        "mask" => tr::ui::selection::mask(count),
+        "keyboard" => tr::ui::selection::keyboard(count),
+        "3D" => tr::ui::selection::three_d(count),
+        "scene" => tr::ui::selection::scene(count),
+        _ => tr::ui::selection::segments(count),
+    }
 }
 
 /// The zoom header's own, terser wording (`ConfigSidebar.tsx:1528-1537`): the
 /// sidebar column is narrow, so the count drops the noun and gains a total.
 pub fn zoom_selection_label(count: usize, total: usize) -> String {
     if total > 1 && count == total {
-        format!("All {total} selected")
+        tr::ui::selection::zoom_all(total)
     } else if total > 1 {
-        format!("{count} of {total} selected")
+        tr::ui::selection::zoom_some(count, total)
     } else {
-        format!("{count} selected")
+        tr::ui::selection::zoom(count)
     }
 }
 
@@ -129,7 +138,7 @@ impl RenderOnce for SelectionHeader {
                     .child(
                         EditorButton::plain(&theme, SharedString::from(format!("{id}-done")))
                             .left_icon("icons/check.svg")
-                            .label("Done")
+                            .label(tr::ui::selection::done())
                             .when_some(on_done, |button, handler| button.on_click(handler)),
                     )
                     .child(
@@ -146,7 +155,7 @@ impl RenderOnce for SelectionHeader {
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_color(action_color)
                                 .cursor_pointer()
-                                .child("Select all")
+                                .child(tr::ui::selection::select_all())
                                 .on_click(move |event, window, cx| handler(event, window, cx)),
                         )
                     }),
@@ -155,7 +164,7 @@ impl RenderOnce for SelectionHeader {
                 EditorButton::plain(&theme, SharedString::from(format!("{id}-delete")))
                     .danger(&theme)
                     .left_icon("icons/trash.svg")
-                    .label("Delete")
+                    .label(tr::ui::selection::delete())
                     .when_some(on_delete, |button, handler| button.on_click(handler)),
             )
     }

@@ -1,5 +1,5 @@
 <p align="center">
-	<img width="150" height="150" src="https://github.com/CapSoftware/Cap/blob/main/apps/desktop/src-tauri/icons/Square310x310Logo.png" alt="Cap logo">
+	<img width="150" height="150" src="https://github.com/CapSoftware/Cap/blob/main/apps/desktop-gpui/icons/Square310x310Logo.png" alt="Cap logo">
 </p>
 
 <h1 align="center">Cap</h1>
@@ -37,7 +37,7 @@ Use Cap for product demos, bug reports, onboarding, tutorials, design reviews, e
 - **Record, edit, share.** Capture your screen, camera, and microphone, then share a link or export a finished video.
 - **Instant Mode for speed.** Upload while recording and get a shareable link the moment you stop.
 - **Studio Mode for polish.** Record locally, edit with backgrounds, zooms, trimming, captions, and export controls.
-- **Desktop apps for your team.** Cap runs on macOS and Windows, with a web dashboard for viewing, sharing, and managing recordings.
+- **A native desktop app.** Cap runs on macOS, Windows, and Linux, with a web dashboard for viewing, sharing, and managing recordings.
 - **Own your storage.** Use Cap Cloud, connect your own S3-compatible bucket, keep recordings local, or self-host the full platform.
 - **Privacy by default.** Share publicly or privately, add passwords, use your own domain, or keep sensitive recordings off hosted infrastructure.
 - **Async collaboration.** Comments, reactions, transcripts, viewer analytics, and team workspaces keep feedback attached to the video.
@@ -65,7 +65,7 @@ Cap is designed for people and teams who do not want their recording workflow lo
 
 For most users, the fastest path is:
 
-1. Download Cap for macOS or Windows from [cap.so/download](https://cap.so/download).
+1. Download Cap for macOS, Windows, or Linux from [cap.so/download](https://cap.so/download).
 2. Sign in or create an account.
 3. Choose Instant Mode or Studio Mode.
 4. Record your first Cap.
@@ -110,15 +110,19 @@ S3_PUBLIC_URL=https://s3.yourdomain.com
 
 See the [self-hosting guide](https://cap.so/docs/self-hosting) for email setup, AI providers, SSL, storage, production hardening, and troubleshooting.
 
+For single-owner instances behind an authenticating reverse proxy, see
+[trusted-proxy authentication](docs/trusted-proxy-auth.md) for the required shared
+secret, proxy hardening, and how to trigger sign-in without a built-in login button.
+
 ## Local Development
 
-Cap is a Turborepo monorepo with Rust, TypeScript, Tauri, SolidStart, Next.js, Drizzle, MySQL, Tailwind CSS, and shared media crates.
+Cap is a Turborepo monorepo. The desktop app is native Rust with a [GPUI](https://www.gpui.rs/) interface, the web app is Next.js with Drizzle and MySQL, and recording, rendering, and export live in shared Rust crates.
 
 Requirements:
 
-- Node.js 20 or newer
-- Bun 1.4.0
-- Rust 1.88 or newer
+- Node.js 24 or newer
+- Bun 1.4.4
+- Rust via [rustup](https://rustup.rs). The workspace pins 1.88; the desktop app pins its own toolchain, which rustup installs on first build.
 - Docker for MySQL, MinIO, and local services
 
 Install and set up the repo:
@@ -135,9 +139,9 @@ Common commands:
 | --- | --- |
 | `bun run dev` | Start the full local development stack |
 | `bun run dev:web` | Start the web app without the desktop app |
-| `bun run dev:desktop` | Start the desktop app |
+| `bun run dev:desktop` | Build and run the desktop app, rebuilding on save on macOS |
 | `bun run build` | Build the workspace |
-| `bun run tauri:build` | Build the desktop release |
+| `bun run gpui:build <target>` | Build and package a desktop release for a Rust target triple |
 | `bun run lint` | Run Biome linting |
 | `bun run format` | Format with Biome |
 | `bun run typecheck` | Run TypeScript project references |
@@ -155,14 +159,13 @@ Database commands:
 
 | Path | What lives there |
 | --- | --- |
-| `apps/desktop` | Tauri v2 desktop app with SolidStart UI and Rust backend |
+| `apps/desktop-gpui` | The Cap desktop app: native Rust and GPUI for macOS, Windows, and Linux |
 | `apps/web` | Next.js web app for marketing, docs, dashboard, sharing, API routes, and auth |
 | `apps/cli` | Rust CLI |
 | `apps/media-server` | Media processing service used by the web app |
 | `apps/discord-bot` | Discord integration |
 | `packages/database` | Drizzle schema and database access |
 | `packages/ui` | Shared React UI |
-| `packages/ui-solid` | Shared Solid UI |
 | `packages/web-backend` | Backend service layer |
 | `packages/web-domain` | Web domain models and types |
 | `packages/env` | Environment validation |

@@ -15,6 +15,7 @@ use cap_utils::disk_space::{DiskSpaceStatus, RecordingStorageMonitor};
 use gpui::{App, AppContext as _, Context, Entity, Global, Task};
 
 use crate::app_sounds::AppSound;
+use crate::i18n::tr;
 use crate::recording::{self, ActiveRecording, StartConfig};
 
 /// `Idle -> Starting -> Recording -> Stopping -> Idle`; pause is a flag on
@@ -76,6 +77,24 @@ enum CountdownAdvance {
     Tick(u32),
     PlaySound,
     Start,
+}
+
+/// Waits for the pipeline to be primed, then plays the cue. A start that is
+/// dropped before it primes plays nothing.
+async fn play_cue_when_primed<F, Fut>(
+    primed: Option<tokio::sync::watch::Receiver<bool>>,
+    gate: cap_recording::RecordingStartGate,
+    play: F,
+) where
+    F: FnOnce(cap_recording::RecordingStartGate) -> Fut,
+    Fut: Future<Output = ()>,
+{
+    if let Some(mut primed) = primed
+        && primed.wait_for(|primed| *primed).await.is_err()
+    {
+        return;
+    }
+    play(gate).await;
 }
 
 fn countdown_advance(
@@ -416,6 +435,10 @@ pub struct RecordingSession {
     /// Taken by the phase observer to honour `postStudioRecordingBehaviour`
     /// (`openEditor` by default) the way the Tauri app does.
     pub finished_studio: Option<std::path::PathBuf>,
+    /// An instant recording stopped cleanly and its share link was handed
+    /// out. Taken by the phase observer, which brings the main window back
+    /// only for the "Show Cap" Instant outcome.
+    pub finished_instant: bool,
     preparing_studio_editor: Option<PreparingStudioEditor>,
     /// `EditorRecordingTarget` (`src-tauri/src/windows.rs:3679-3697`): the
     /// open editor project a "Record a new clip" capture must land back in.
@@ -440,6 +463,10 @@ pub struct RecordingSession {
     /// A capture pipeline that finished warming up while the countdown or the
     /// start cue was still running; activated the moment the cue ends.
     primed: Option<ActiveRecording>,
+    /// Set once the pipeline is primed. The start cue waits for it, so the cue
+    /// never promises a recording that has not begun capturing (an Instant
+    /// start waits on the server's video before it builds the pipeline).
+    primed_ready: Option<tokio::sync::watch::Sender<bool>>,
     /// Teardown of a cancelled primed start still releasing its devices; the
     /// next start waits for it before locking the mic and camera again.
     discarding: Option<Task<Result<(), tokio::task::JoinError>>>,
@@ -475,6 +502,7 @@ impl RecordingSession {
             controls_open: false,
             mic_muted: false,
             finished_studio: None,
+            finished_instant: false,
             preparing_studio_editor: None,
             editor_recording_target: None,
             started_at: None,
@@ -488,6 +516,7 @@ impl RecordingSession {
             start_gate: None,
             start_cue: None,
             primed: None,
+            primed_ready: None,
             discarding: None,
             pause_control: PauseControlState::default(),
             pause_control_error: None,
@@ -665,6 +694,7 @@ impl RecordingSession {
         self.start_gate = Some(start_gate);
         self.start_cue = Some(crate::app_sounds::prime_recording_start_sound());
         self.discard_primed(cx);
+        self.primed_ready = Some(tokio::sync::watch::channel(false).0);
         self.pause_control.invalidate();
         self.pause_control.uncertain = false;
         self.pause_control_error = None;
@@ -687,7 +717,8 @@ impl RecordingSession {
         cx.notify();
 
         // The pipeline warms up during the final countdown second so capture is
-        // live when the cue ends; without a countdown it warms up under the cue.
+        // live when the cue ends; without a countdown it warms up before the cue.
+        // Either way the cue waits until the pipeline is primed.
         if countdown <= 1 {
             self.prime_engine(config.clone(), generation, cx);
         }
@@ -742,27 +773,29 @@ impl RecordingSession {
         .detach();
     }
 
-    /// Plays the start cue; the returned future completes once the recording's
-    /// start gate is armed, whether the cue played, failed or was aborted.
+    /// Plays the start cue once the pipeline is primed; the returned future
+    /// completes once the recording's start gate is armed, whether the cue
+    /// played, failed or was aborted.
     fn play_start_cue(
         &mut self,
         cx: &mut Context<Self>,
     ) -> std::pin::Pin<Box<dyn Future<Output = ()>>> {
         let gate = self.start_gate.clone().unwrap_or_default();
         let cue = self.start_cue.take();
+        let primed = self.primed_ready.as_ref().map(|ready| ready.subscribe());
         let (abort, registration) = futures_util::future::AbortHandle::new_pair();
         self.countdown_cue_abort = Some(abort);
         let task = gpui_tokio::Tokio::spawn(
             cx,
             futures_util::future::Abortable::new(
-                async move {
+                play_cue_when_primed(primed, gate, move |gate| async move {
                     match cue {
                         Some(cue) => crate::app_sounds::play_recording_start_sound(cue, gate).await,
                         None => {
                             gate.arm();
                         }
                     }
-                },
+                }),
                 registration,
             ),
         );
@@ -842,6 +875,9 @@ impl RecordingSession {
                     Ok(Ok(active)) => {
                         if this.countdown_remaining.is_some() {
                             this.primed = Some(active);
+                            if let Some(ready) = &this.primed_ready {
+                                ready.send_replace(true);
+                            }
                         } else {
                             this.activate(active, cx);
                         }
@@ -913,6 +949,12 @@ impl RecordingSession {
 
     fn activate(&mut self, active: ActiveRecording, cx: &mut Context<Self>) {
         tracing::info!(dir = %active.project_dir.display(), "recording started");
+        if let Some(video_id) = active.instant_video_id().map(str::to_owned) {
+            cx.background_spawn(async move {
+                crate::upload::instant_cleanup::started(&video_id);
+            })
+            .detach();
+        }
         let project_dir = active.project_dir.clone();
         let done = active.done_fut();
         self.active = Some(active);
@@ -945,16 +987,25 @@ impl RecordingSession {
 
     fn discard_stale_start(&mut self, active: ActiveRecording, cx: &mut Context<Self>) {
         let previous = self.discarding.take();
+        let video_id = active.instant_video_id().map(str::to_owned);
         self.discarding = Some(gpui_tokio::Tokio::spawn(cx, async move {
+            use crate::upload::instant_cleanup::{self, CleanupReason};
+            if let Some(video_id) = &video_id {
+                instant_cleanup::abandon(video_id, CleanupReason::StartCancelled, None);
+            }
             if let Some(previous) = previous {
                 let _ = previous.await;
             }
-            #[cfg(target_os = "linux")]
-            let discarded = active.cancel_preserving().await;
-            #[cfg(not(target_os = "linux"))]
-            let discarded = active.cancel_and_delete().await;
-            if let Err(error) = discarded {
-                tracing::warn!(%error, "discarding a cancelled recording start failed");
+            let discarded = active.discard_cancelled_start().await;
+            match discarded {
+                Ok(()) => {
+                    if let Some(video_id) = &video_id {
+                        instant_cleanup::resolved(video_id);
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "discarding a cancelled recording start failed");
+                }
             }
         }));
     }
@@ -1032,8 +1083,7 @@ impl RecordingSession {
                             DiskSpaceStatus::Exhausted => {
                                 this.storage_warning = true;
                                 this.stopped_for_low_storage = true;
-                                this.storage_notice =
-                                    Some("Low storage. Stopping and saving your recording…".into());
+                                this.storage_notice = Some(tr::dialog::storage::stopping().into());
                                 this.stop(cx);
                                 false
                             }
@@ -1057,11 +1107,6 @@ impl RecordingSession {
     }
 
     pub fn stop(&mut self, cx: &mut Context<Self>) {
-        if self.phase == Phase::Starting && self.countdown_remaining.is_some() {
-            self.countdown_remaining = None;
-            self.finish(cx);
-            return;
-        }
         #[cfg(target_os = "linux")]
         if matches!(self.phase, Phase::Starting | Phase::Stopping)
             && let Some(attempt) = self.instant_attempt.clone()
@@ -1072,6 +1117,10 @@ impl RecordingSession {
                 cx.notify();
                 return;
             }
+            self.countdown_remaining = None;
+            self.abort_start_cue();
+            self.discard_primed(cx);
+            self.phase = Phase::Stopping;
             self.stop_requested = true;
             let generation = self.recording_generation;
             let task =
@@ -1079,10 +1128,11 @@ impl RecordingSession {
             cx.spawn(async move |this, cx| {
                 let result = task.await;
                 this.update(cx, |this, cx| {
-                    if this.recording_generation != generation || this.phase != Phase::Starting || this.active.is_some() { return; }
+                    if this.recording_generation != generation || this.phase != Phase::Stopping || this.active.is_some() { return; }
                     if matches!(result, Ok(cap_recording::instant_recording::InstantQuiescence::Joined)) {
                         this.finish(cx);
                     } else {
+                        this.phase = Phase::Starting;
                         this.stop_requested = false;
                         this.clean_control.uncertain = true;
                         this.error = Some("Capture cleanup is unconfirmed. Local files are preserved; use Ctrl+Shift+F9 to retry Stop.".into());
@@ -1091,6 +1141,11 @@ impl RecordingSession {
                 }).ok();
             }).detach();
             cx.notify();
+            return;
+        }
+        if self.phase == Phase::Starting && self.countdown_remaining.is_some() {
+            self.countdown_remaining = None;
+            self.finish(cx);
             return;
         }
         #[cfg(target_os = "linux")]
@@ -1316,7 +1371,7 @@ impl RecordingSession {
                         tracing::info!(dir = %project_dir.display(), "recording finished");
                         stop_sound.call_once(|| AppSound::StopRecording.play());
                         if low_storage {
-                            this.storage_notice = Some("Recording stopped because storage is low. Your recording was saved.".into());
+                            this.storage_notice = Some(tr::dialog::storage::stopped_saved().into());
                         }
                         if this.mode() == Some(crate::recording::RecordingMode::Studio) && !low_storage {
                             this.finished_studio = Some(project_dir);
@@ -1328,17 +1383,18 @@ impl RecordingSession {
                                 let separator = if link.contains('?') { '&' } else { '?' };
                                 cx.open_url(&format!("{link}{separator}recordingStopped=1"));
                             }
+                            this.finished_instant = !low_storage;
                             cx.write_to_clipboard(gpui::ClipboardItem::new_string(link));
                         }
                     }
                     Ok(Err(error)) => {
                         tracing::error!("recording failed to stop cleanly: {error:#}");
-                        this.storage_notice = low_storage.then(|| "Recording stopped because storage is low. Your recording files were kept. Free up space, then recover the recording below.".into());
+                        this.storage_notice = low_storage.then(|| tr::dialog::storage::stopped_kept().into());
                         this.error = Some(format!("{error:#}"));
                     }
                     Err(join_error) => {
                         tracing::error!("recording stop task died: {join_error}");
-                        this.storage_notice = low_storage.then(|| "Recording stopped because storage is low. Your recording files were kept. Free up space, then recover the recording below.".into());
+                        this.storage_notice = low_storage.then(|| tr::dialog::storage::stopped_kept().into());
                         this.error = Some("Stop task failed.".into());
                     }
                 }
@@ -1922,6 +1978,7 @@ impl RecordingSession {
     fn finish(&mut self, cx: &mut Context<Self>) {
         self.abort_start_cue();
         self.discard_primed(cx);
+        self.primed_ready = None;
         self.start_gate = None;
         #[cfg(target_os = "linux")]
         if !self.instant_cleanup_safe() {
@@ -1967,6 +2024,96 @@ fn recording_failure_is_current(phase: Phase, current: u64, completed: u64) -> b
 #[cfg(test)]
 mod countdown_tests {
     use super::*;
+
+    /// The start cue promises that recording has begun, so it must not play
+    /// before the pipeline is built (an Instant start first waits for the
+    /// server to create the video).
+    #[tokio::test]
+    async fn start_cue_waits_for_the_primed_pipeline() {
+        let (ready, primed) = tokio::sync::watch::channel(false);
+        let played = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let gate = cap_recording::RecordingStartGate::new();
+        let cue = tokio::spawn({
+            let played = played.clone();
+            let gate = gate.clone();
+            play_cue_when_primed(Some(primed), gate, move |gate| async move {
+                played.store(true, std::sync::atomic::Ordering::SeqCst);
+                gate.arm();
+            })
+        });
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(!played.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(!gate.is_armed());
+        ready.send_replace(true);
+        cue.await.unwrap();
+        assert!(played.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(gate.is_armed());
+    }
+
+    #[tokio::test]
+    async fn start_cue_stays_silent_when_the_start_is_dropped_before_it_primes() {
+        let (ready, primed) = tokio::sync::watch::channel(false);
+        let gate = cap_recording::RecordingStartGate::new();
+        let cue = tokio::spawn(play_cue_when_primed(
+            Some(primed),
+            gate.clone(),
+            |_| async {
+                panic!("the cue played for a start that never primed");
+            },
+        ));
+        drop(ready);
+        cue.await.unwrap();
+        assert!(!gate.is_armed());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn countdown_stop_cancels_an_unpolled_instant_start() {
+        for countdown in [1, 0] {
+            let runtime = tokio::runtime::Handle::current();
+            gpui_platform::headless().run(move |cx| {
+                gpui_tokio::init_from_handle(cx, runtime);
+                let session = RecordingSession::init(cx);
+                let attempt = recording::InstantAttempt::new();
+                let gate = cap_recording::RecordingStartGate::new();
+                let (cue_abort, _) = futures_util::future::AbortHandle::new_pair();
+                session.update(cx, |session, cx| {
+                    session.phase = Phase::Starting;
+                    session.countdown_remaining = Some(countdown);
+                    session.countdown_cue_abort = Some(cue_abort.clone());
+                    session.start_gate = Some(gate.clone());
+                    session.instant_attempt = Some(attempt.clone());
+                    session.stop(cx);
+                    assert_eq!(session.countdown_remaining, None);
+                });
+                assert!(cue_abort.is_aborted());
+                assert!(!gate.is_armed());
+                assert_eq!(
+                    attempt.quiescence(),
+                    cap_recording::instant_recording::InstantQuiescence::Joined
+                );
+                session.update(cx, |session, cx| session.stop(cx));
+                cx.spawn(async move |cx| {
+                    for _ in 0..500 {
+                        if session.read_with(cx, |session, _| session.phase) == Phase::Idle {
+                            break;
+                        }
+                        cx.background_executor()
+                            .timer(Duration::from_millis(10))
+                            .await;
+                    }
+                    cx.update(|cx| {
+                        cx.quit();
+                        let session = session.read(cx);
+                        assert_eq!(session.phase, Phase::Idle);
+                        assert!(session.error.is_none());
+                        assert!(session.start_gate.is_none());
+                    });
+                })
+                .detach();
+            });
+        }
+    }
 
     #[test]
     fn countdown_ticks_until_the_final_step_before_start() {

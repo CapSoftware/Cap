@@ -81,6 +81,7 @@ function matchesRow(condition: SQL | undefined, scope: RowScope) {
 function createDatabase(seed: Map<MySqlTable, Row[]>) {
 	const tables = new Map(seed);
 	const hooks: { beforeUpdate?: (table: MySqlTable) => void } = {};
+	const lockedTables: MySqlTable[] = [];
 	const rows = (table: MySqlTable) => {
 		const result = tables.get(table);
 		if (!result) throw new Error("Unexpected table");
@@ -118,6 +119,7 @@ function createDatabase(seed: Map<MySqlTable, Row[]>) {
 		}
 
 		for() {
+			if (this.table) lockedTables.push(this.table);
 			return Promise.resolve().then(() => this.execute());
 		}
 
@@ -223,7 +225,7 @@ function createDatabase(seed: Map<MySqlTable, Row[]>) {
 			},
 		),
 	};
-	return { client, rows, hooks };
+	return { client, rows, hooks, lockedTables };
 }
 
 const USER_ID = User.UserId.make("sso-user");
@@ -322,18 +324,21 @@ function makeFixture() {
 						id: "same-org-invite",
 						organizationId: ORGANIZATION_ID,
 						invitedEmail: PROFILE.email,
+						role: "member",
 						status: "pending",
 					},
 					{
 						id: "other-org-invite",
 						organizationId: OTHER_ORGANIZATION_ID,
 						invitedEmail: PROFILE.email,
+						role: "admin",
 						status: "pending",
 					},
 					{
 						id: "other-email-invite",
 						organizationId: ORGANIZATION_ID,
 						invitedEmail: "someone@company.example",
+						role: "admin",
 						status: "pending",
 					},
 				],
@@ -678,6 +683,28 @@ describe("SSO membership provisioning", () => {
 				?.activeOrganizationId,
 		).toBe(OTHER_ORGANIZATION_ID);
 		expect(mocks.stripe).not.toHaveBeenCalled();
+	});
+
+	it("joins with the admin role from the accepted invitation", async () => {
+		const fixture = makeFixture();
+		fixture.link();
+		const invite = fixture
+			.rows(Db.organizationInvites)
+			.find((row) => row.id === "same-org-invite");
+		if (!invite) throw new Error("Fixture invite was not found");
+		invite.role = "admin";
+
+		await provisionSsoMembership(USER_ID, IDENTITY);
+
+		expect(fixture.rows(Db.organizationMembers)).toEqual([
+			expect.objectContaining({
+				userId: USER_ID,
+				organizationId: ORGANIZATION_ID,
+				role: "admin",
+			}),
+		]);
+		expect(invite.status).toBe("accepted");
+		expect(fixture.lockedTables).toContain(Db.organizationInvites);
 	});
 
 	it.each(["owner", "admin", "member"])(

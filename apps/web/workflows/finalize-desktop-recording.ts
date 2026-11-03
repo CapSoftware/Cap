@@ -1,10 +1,12 @@
+import { createHash } from "node:crypto";
 import { db } from "@cap/database";
 import { users, videos } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import { Storage } from "@cap/web-backend/src/Storage/index";
 import { type User, Video } from "@cap/web-domain";
 import { and, eq } from "drizzle-orm";
-import { sleep } from "workflow";
+import { Option } from "effect";
+import { getStepMetadata, sleep } from "workflow";
 import { z } from "zod";
 import { isAiGenerationEnabledForUser } from "@/lib/ai-generation-entitlement";
 import { observeDesktopRecordingJob } from "@/lib/desktop-recording-job-status";
@@ -27,6 +29,7 @@ import {
 import {
 	advanceDesktopRecordingSourceCommit,
 	buildDesktopRecordingSourceUrls,
+	buildPreverifiedRunUrls,
 	getDesktopRecordingOutputKey,
 } from "@/lib/desktop-recording-source";
 import type { RecordingVerification } from "@/lib/desktop-recording-verification";
@@ -83,8 +86,14 @@ const COMPLETION_POLL_INTERVAL_MS = 15_000;
 const ATTEMPT_MAX_DURATION_MS = 6 * 60 * 60 * 1_000;
 const PRESIGNED_EXPIRES_SECONDS = 6 * 60 * 60;
 const MULTIPART_OUTPUT_PART_SIZE_BYTES = 64 * 1024 * 1024;
-const SOURCE_COMMIT_BATCH_MAX_CHECKPOINTS = 32;
-const SOURCE_COMMIT_BATCH_DURATION_MS = 15_000;
+// A remux is about as large as its source, so a source that fits in one part is
+// uploaded with one PUT instead of sign-part + PUT + complete round trips.
+const SINGLE_PUT_OUTPUT_MAX_SOURCE_BYTES = MULTIPART_OUTPUT_PART_SIZE_BYTES;
+const SOURCE_COMMIT_BATCH_MAX_CHECKPOINTS = 128;
+// A page can still run for its 180 s timeout after this budget is spent, so a step stays far inside
+// the function's max duration while a long commit needs a third of the step hops it did at 15 s.
+const SOURCE_COMMIT_BATCH_DURATION_MS = 45_000;
+const TRANSCRIPTION_QUEUE_MAX_ATTEMPTS = 12;
 
 function getErrorMessage(error: unknown) {
 	return error instanceof Error ? error.message : String(error);
@@ -115,14 +124,15 @@ export async function finalizeDesktopRecordingWorkflow(
 ): Promise<WorkflowResult> {
 	"use workflow";
 
-	const generation = await ensureWorkflowJob(payload);
+	// Every step costs a queue hop (~0.7 s in prod), so skip the lookup when the caller already knows the generation.
+	const generation = payload.generation ?? (await ensureWorkflowJob(payload));
 	let completedJobId: string | undefined;
 	let mediaServerUnavailable = false;
 	let retainedAttempt: DesktopRecordingAttempt | undefined;
 	processing: for (;;) {
 		const next = retainedAttempt
 			? { status: "attempt" as const, attempt: retainedAttempt }
-			: await acquireDesktopRecordingAttempt({
+			: await acquireAndStartDesktopRecordingAttempt({
 					...payload,
 					generation,
 				});
@@ -137,19 +147,26 @@ export async function finalizeDesktopRecordingWorkflow(
 		}
 		const attempt = next.attempt;
 		try {
-			let committed = await commitDesktopRecordingAttempt(attempt);
-			while (committed === "progress") {
-				committed = await commitDesktopRecordingAttempt(attempt);
+			if ("failure" in next && next.failure)
+				throw new AttemptStepFailure(next.failure.message, next.failure.code);
+			let committed =
+				"started" in next && next.started
+					? next.started
+					: await commitAndStartDesktopRecordingAttempt(attempt);
+			while (committed.committed === "progress") {
+				committed = await commitAndStartDesktopRecordingAttempt(attempt);
 			}
-			if (committed !== "ready") {
-				return { success: false, reason: committed };
+			if (committed.committed !== "ready") {
+				return { success: false, reason: committed.committed };
 			}
-			if (await completeWithoutMediaServerIfUnavailable(attempt)) {
-				mediaServerUnavailable = true;
-				break;
-			}
-			const started = await startDesktopRecordingJob(attempt);
+			const started = committed.dispatched
+				? committed.started
+				: await startDesktopRecordingJob(attempt);
 			if (typeof started === "object") {
+				if (started.status === "media-server-unconfigured") {
+					mediaServerUnavailable = true;
+					break;
+				}
 				if (started.status === "capacity") {
 					retainedAttempt = attempt;
 					await sleep(started.retryAfterMs);
@@ -190,7 +207,7 @@ export async function finalizeDesktopRecordingWorkflow(
 			if (retained !== "retry") return { success: false, reason: retained };
 		}
 	}
-	for (let attempt = 0; ; attempt++) {
+	for (let attempt = 0; attempt < TRANSCRIPTION_QUEUE_MAX_ATTEMPTS; attempt++) {
 		let queued: boolean;
 		try {
 			queued = await queueFinalizedRecordingTranscription(
@@ -201,7 +218,9 @@ export async function finalizeDesktopRecordingWorkflow(
 			queued = false;
 		}
 		if (queued) break;
-		await sleep(Math.min(15_000 * 2 ** Math.min(attempt, 5), 300_000));
+		if (attempt + 1 < TRANSCRIPTION_QUEUE_MAX_ATTEMPTS) {
+			await sleep(Math.min(15_000 * 2 ** Math.min(attempt, 5), 300_000));
+		}
 	}
 	return mediaServerUnavailable
 		? { success: false, reason: "media-server-unconfigured" }
@@ -222,15 +241,7 @@ async function ensureWorkflowJob(
 	return job.generation;
 }
 
-export async function acquireDesktopRecordingAttempt({
-	videoId,
-	userId,
-	generation,
-}: {
-	videoId: string;
-	userId: User.UserId;
-	generation: string;
-}): Promise<
+type AttemptAcquisition =
 	| { status: "attempt"; attempt: DesktopRecordingAttempt }
 	| { status: "wait"; until: Date }
 	| {
@@ -239,23 +250,37 @@ export async function acquireDesktopRecordingAttempt({
 				| "source-blocked"
 				| "superseded"
 				| "already-processing";
-	  }
-> {
-	"use step";
+	  };
 
+async function acquireAttempt({
+	videoId,
+	userId,
+	generation,
+	attemptIdFor,
+}: {
+	videoId: string;
+	userId: User.UserId;
+	generation: string;
+	attemptIdFor?: (attemptCount: number) => string;
+}): Promise<AttemptAcquisition> {
 	const id = Video.VideoId.make(videoId);
 	const job = await getProcessingState({ videoId: id, generation });
 	if (!job || job.ownerId !== userId) return { status: "superseded" };
 	if (job.state === "verified") return { status: "verified" };
 	if (job.state === "source-blocked") return { status: "source-blocked" };
 	const now = new Date();
-	if (job.leaseExpiresAt && job.leaseExpiresAt > now) {
-		return { status: "already-processing" };
-	}
-	if (job.nextRetryAt > now) return { status: "wait", until: job.nextRetryAt };
+	const live = Boolean(job.leaseExpiresAt && job.leaseExpiresAt > now);
+	const ownLive =
+		live &&
+		attemptIdFor !== undefined &&
+		job.attemptId === attemptIdFor(job.attemptCount);
+	if (live && !ownLive) return { status: "already-processing" };
+	if (!ownLive && job.nextRetryAt > now)
+		return { status: "wait", until: job.nextRetryAt };
 	const attempt = await claimProcessingAttempt({
 		videoId: id,
 		generation,
+		attemptIdFor,
 		now,
 	});
 	return attempt
@@ -263,11 +288,112 @@ export async function acquireDesktopRecordingAttempt({
 		: { status: "already-processing" };
 }
 
+class AttemptStepFailure extends Error {
+	constructor(
+		message: string,
+		readonly code: ReturnType<typeof getSourceErrorCode>,
+	) {
+		super(message);
+	}
+}
+
+// A retried step keeps its step id, so ids derived from it and the attempt number let the retry recognise
+// its own claim, including a replacement claimed after its earlier attempt's lease expired.
+function stepAttemptId(stepId: string, attemptCount: number) {
+	const digest = createHash("sha256")
+		.update(`${stepId}:${attemptCount}`)
+		.digest("hex");
+	const variant = (8 + (Number.parseInt(digest.charAt(16), 16) % 4)).toString(
+		16,
+	);
+	return `${digest.slice(0, 8)}-${digest.slice(8, 12)}-4${digest.slice(13, 16)}-${variant}${digest.slice(17, 20)}-${digest.slice(20, 32)}`;
+}
+
+const ACQUIRE_AND_START_RETRIES = 3;
+
+// Claiming an attempt and committing its source share one step, saving the queue hop between them. A failure
+// is retried as a step, which resumes the same attempt; after the last try it comes back as data so the
+// workflow retries the claimed attempt as the separate commit step would have.
+export async function acquireAndStartDesktopRecordingAttempt(input: {
+	videoId: string;
+	userId: User.UserId;
+	generation: string;
+}): Promise<
+	| Exclude<AttemptAcquisition, { status: "attempt" }>
+	| {
+			status: "attempt";
+			attempt: DesktopRecordingAttempt;
+			started?: Awaited<ReturnType<typeof commitAndStart>>;
+			failure?: {
+				message: string;
+				code: ReturnType<typeof getSourceErrorCode>;
+			};
+	  }
+> {
+	"use step";
+
+	const { stepId } = getStepMetadata();
+	const acquired = await acquireAttempt({
+		...input,
+		attemptIdFor: (attemptCount) => stepAttemptId(stepId, attemptCount),
+	});
+	if (acquired.status !== "attempt") return acquired;
+	try {
+		return { ...acquired, started: await commitAndStart(acquired.attempt) };
+	} catch (error) {
+		if (getStepMetadata().attempt <= ACQUIRE_AND_START_RETRIES) throw error;
+		return {
+			...acquired,
+			failure: {
+				message: getErrorMessage(error),
+				code: getSourceErrorCode(error),
+			},
+		};
+	}
+}
+acquireAndStartDesktopRecordingAttempt.maxRetries = ACQUIRE_AND_START_RETRIES;
+
 export async function commitDesktopRecordingAttempt(
 	attempt: DesktopRecordingAttempt,
 ): Promise<SourceCommitResult> {
 	"use step";
 
+	return commitDesktopRecordingBatch(attempt);
+}
+
+// Each step costs a queue hop, so a commit that finishes inside its batch budget dispatches in the same step.
+// A slow commit returns without dispatching and the workflow runs startDesktopRecordingJob as its own step.
+export async function commitAndStartDesktopRecordingAttempt(
+	attempt: DesktopRecordingAttempt,
+) {
+	"use step";
+
+	return commitAndStart(attempt);
+}
+
+async function commitAndStart(
+	attempt: DesktopRecordingAttempt,
+): Promise<
+	| { committed: SourceCommitResult; dispatched?: undefined }
+	| { committed: "ready"; dispatched: true; started: DesktopRecordingDispatch }
+> {
+	const startedAt = Date.now();
+	const committed = await commitDesktopRecordingBatch(attempt);
+	if (
+		committed !== "ready" ||
+		Date.now() - startedAt >= SOURCE_COMMIT_BATCH_DURATION_MS
+	)
+		return { committed };
+	return {
+		committed,
+		dispatched: true,
+		started: await dispatchDesktopRecordingJob(attempt),
+	};
+}
+
+async function commitDesktopRecordingBatch(
+	attempt: DesktopRecordingAttempt,
+): Promise<SourceCommitResult> {
 	const startedAt = Date.now();
 	for (let index = 0; index < SOURCE_COMMIT_BATCH_MAX_CHECKPOINTS; index++) {
 		try {
@@ -293,6 +419,7 @@ export async function commitDesktopRecordingAttempt(
 async function advanceDesktopRecordingAttempt(
 	attempt: DesktopRecordingAttempt,
 ): Promise<SourceCommitResult> {
+	const startedAt = performance.now();
 	const current = await getProcessingState(attempt);
 	if (!current || current.attemptId !== attempt.attemptId) return "superseded";
 	if (current.source) return "ready";
@@ -306,24 +433,45 @@ async function advanceDesktopRecordingAttempt(
 	try {
 		const checkpoint = await initializeSourceCommitCheckpoint(attempt);
 		if (!checkpoint) return "superseded";
+		const loadedAt = performance.now();
+		let heartbeatMs = 0;
 		const result = await advanceDesktopRecordingSourceCommit(
 			video,
 			checkpoint,
 			current.verification ?? undefined,
 			async () => {
-				if (!(await heartbeatAttempt(attempt))) {
+				const heartbeatAt = performance.now();
+				const alive = await heartbeatAttempt(attempt);
+				heartbeatMs += performance.now() - heartbeatAt;
+				if (!alive) {
 					throw new Error("Recording source commit lease was superseded");
 				}
 			},
 		);
-		if ("checkpoint" in result) {
-			return (await persistSourceCommitCheckpoint(attempt, result.checkpoint))
-				? "progress"
-				: "superseded";
-		}
-		return (await persistCommittedSource(attempt, result.source))
-			? "ready"
-			: "superseded";
+		const advancedAt = performance.now();
+		const outcome =
+			"checkpoint" in result
+				? (await persistSourceCommitCheckpoint(attempt, result.checkpoint))
+					? "progress"
+					: "superseded"
+				: (await persistCommittedSource(attempt, result.source))
+					? "ready"
+					: "superseded";
+		console.info(
+			JSON.stringify({
+				event: "desktop_source_commit_advance",
+				videoId: attempt.videoId,
+				attemptId: attempt.attemptId,
+				phase: checkpoint.phase,
+				next: "checkpoint" in result ? result.checkpoint.phase : "committed",
+				outcome,
+				loadMs: Math.round(loadedAt - startedAt),
+				heartbeatMs: Math.round(heartbeatMs),
+				advanceMs: Math.round(advancedAt - loadedAt),
+				persistMs: Math.round(performance.now() - advancedAt),
+			}),
+		);
+		return outcome;
 	} catch (error) {
 		const code = getSourceErrorCode(error);
 		if (!code) throw error;
@@ -339,8 +487,6 @@ async function advanceDesktopRecordingAttempt(
 async function completeWithoutMediaServerIfUnavailable(
 	attempt: DesktopRecordingAttempt,
 ): Promise<boolean> {
-	"use step";
-
 	if (serverEnv().MEDIA_SERVER_URL) return false;
 	const deferred = await deferWithoutMediaServer(attempt);
 	if (deferred) {
@@ -356,11 +502,13 @@ async function completeWithoutMediaServerIfUnavailable(
 async function buildDesktopSegmentsOutput({
 	video,
 	attempt,
+	sourceBytes,
 }: {
 	video: typeof videos.$inferSelect;
 	attempt: DesktopRecordingAttemptFence;
+	sourceBytes: number;
 }) {
-	const [bucket] = await Storage.getAccessForVideo(
+	const [bucket, customBucket] = await Storage.getAccessForVideo(
 		decodeStorageVideo(video),
 	).pipe(runWorkflowPromise);
 	const outputKey = getDesktopRecordingOutputKey(
@@ -373,24 +521,53 @@ async function buildDesktopSegmentsOutput({
 	const env = serverEnv();
 	const webhookBaseUrl = env.MEDIA_SERVER_WEBHOOK_URL || env.WEB_URL;
 	const webhookSecret = env.MEDIA_SERVER_WEBHOOK_SECRET;
-	const outputVerificationUrl = await bucket
-		.getInternalSignedObjectUrl(outputKey, {
-			expiresIn: PRESIGNED_EXPIRES_SECONDS,
-		})
-		.pipe(runWorkflowPromise);
-	const outputPresignedUrl = await bucket
-		.getInternalPresignedPutUrl(
-			outputKey,
-			{ ContentType: "video/mp4" },
-			{ expiresIn: PRESIGNED_EXPIRES_SECONDS },
-		)
-		.pipe(runWorkflowPromise);
+	// Each Google Drive target is a resumable session costing two Drive round trips, so create them together.
+	const [
+		outputVerificationUrl,
+		outputPresignedUrl,
+		thumbnailPresignedUrl,
+		previewGifPresignedUrl,
+	] = await Promise.all([
+		bucket
+			.getInternalSignedObjectUrl(outputKey, {
+				expiresIn: PRESIGNED_EXPIRES_SECONDS,
+			})
+			.pipe(runWorkflowPromise),
+		bucket
+			.getInternalPresignedPutUrl(
+				outputKey,
+				{ ContentType: "video/mp4" },
+				{ expiresIn: PRESIGNED_EXPIRES_SECONDS },
+			)
+			.pipe(runWorkflowPromise),
+		bucket
+			.getInternalPresignedPutUrl(
+				`${candidateDirectory}/screenshot.jpg`,
+				{ ContentType: "image/jpeg" },
+				{ expiresIn: PRESIGNED_EXPIRES_SECONDS },
+			)
+			.pipe(runWorkflowPromise),
+		bucket
+			.getInternalPresignedPutUrl(
+				`${candidateDirectory}/preview.gif`,
+				{
+					ContentType: "image/gif",
+					CacheControl: "public, max-age=31536000, immutable",
+				},
+				{ expiresIn: PRESIGNED_EXPIRES_SECONDS },
+			)
+			.pipe(runWorkflowPromise),
+	]);
 	let outputUpload: DesktopSegmentsOutputUpload = {
 		type: "put",
 		url: outputPresignedUrl,
 		ifNoneMatch: "*",
 	};
-	if (bucket.provider === "s3" && webhookSecret) {
+	const singlePut =
+		bucket.provider === "s3" &&
+		Option.isNone(customBucket) &&
+		sourceBytes <= SINGLE_PUT_OUTPUT_MAX_SOURCE_BYTES;
+	if (bucket.provider === "s3" && webhookSecret && !singlePut) {
 		const multipart = await bucket.multipart
 			.create(outputKey, { ContentType: "video/mp4" })
 			.pipe(runWorkflowPromise);
@@ -419,23 +596,6 @@ async function buildDesktopSegmentsOutput({
 			webhookSecret,
 		};
 	}
-	const thumbnailPresignedUrl = await bucket
-		.getInternalPresignedPutUrl(
-			`${candidateDirectory}/screenshot.jpg`,
-			{ ContentType: "image/jpeg" },
-			{ expiresIn: PRESIGNED_EXPIRES_SECONDS },
-		)
-		.pipe(runWorkflowPromise);
-	const previewGifPresignedUrl = await bucket
-		.getInternalPresignedPutUrl(
-			`${candidateDirectory}/preview.gif`,
-			{
-				ContentType: "image/gif",
-				CacheControl: "public, max-age=31536000, immutable",
-			},
-			{ expiresIn: PRESIGNED_EXPIRES_SECONDS },
-		)
-		.pipe(runWorkflowPromise);
 	return {
 		outputKey,
 		outputVerificationUrl,
@@ -446,15 +606,27 @@ async function buildDesktopSegmentsOutput({
 	};
 }
 
-export async function startDesktopRecordingJob(
-	attempt: DesktopRecordingAttempt,
-): Promise<
+type DesktopRecordingDispatch =
 	| string
 	| undefined
 	| { status: "deferred" }
 	| { status: "capacity"; retryAfterMs: number }
-> {
+	| { status: "media-server-unconfigured" };
+
+export async function startDesktopRecordingJob(
+	attempt: DesktopRecordingAttempt,
+): Promise<DesktopRecordingDispatch> {
 	"use step";
+
+	return dispatchDesktopRecordingJob(attempt);
+}
+
+async function dispatchDesktopRecordingJob(
+	attempt: DesktopRecordingAttempt,
+): Promise<DesktopRecordingDispatch> {
+	if (await completeWithoutMediaServerIfUnavailable(attempt)) {
+		return { status: "media-server-unconfigured" };
+	}
 
 	const current = await getProcessingState(attempt);
 	if (!current || current.attemptId !== attempt.attemptId || !current.source) {
@@ -483,6 +655,11 @@ export async function startDesktopRecordingJob(
 	if (!env.MEDIA_SERVER_URL || !env.MEDIA_SERVER_WEBHOOK_SECRET) {
 		throw new Error("Recording content verification is not configured");
 	}
+	// Listing the runs decoded during the recording needs nothing below, so it overlaps the inventory read.
+	const preverifiedRunUrls =
+		current.source.kind === "mp4"
+			? Promise.resolve([])
+			: buildPreverifiedRunUrls(video);
 	const urls = await buildDesktopRecordingSourceUrls(
 		video,
 		current.source,
@@ -497,16 +674,17 @@ export async function startDesktopRecordingJob(
 		}
 		throw error;
 	});
+	const sourceBytes = urls.sourceObjects.reduce(
+		(total, object) => total + object.size,
+		0,
+	);
 	let downloadBudgetBytes: number;
 	try {
 		downloadBudgetBytes = await reserveMediaProcessingBudget({
 			videoId: current.videoId,
 			generation: current.generation,
 			attemptId: attempt.attemptId,
-			sourceBytes: urls.sourceObjects.reduce(
-				(total, object) => total + object.size,
-				0,
-			),
+			sourceBytes,
 		});
 	} catch (error) {
 		if (error instanceof MediaProcessingBudgetError) {
@@ -570,12 +748,17 @@ export async function startDesktopRecordingJob(
 			);
 		}
 		path = "/video/mux-segments";
+		const [output, runUrls] = await Promise.all([
+			buildDesktopSegmentsOutput({ video, attempt, sourceBytes }),
+			preverifiedRunUrls,
+		]);
 		body = {
 			audioLevels: true,
 			...context,
 			...urls,
-			...(await buildDesktopSegmentsOutput({ video, attempt })),
+			...output,
 			manifestSha256: current.source.manifestSha256,
+			...(runUrls.length > 0 ? { preverifiedRunUrls: runUrls } : {}),
 		};
 	}
 	try {
@@ -780,7 +963,7 @@ async function queueFinalizedRecordingTranscription(
 		);
 		if (result.success) return true;
 		console.warn(
-			"[finalizeDesktopRecordingWorkflow] Transcription enqueue will retry",
+			"[finalizeDesktopRecordingWorkflow] Transcription enqueue failed",
 			{ videoId, message: result.message },
 		);
 	} catch (error) {

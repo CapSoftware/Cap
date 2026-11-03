@@ -85,6 +85,30 @@ function createServerEnv() {
 			OIDC_CLIENT_SECRET: z.string().optional(),
 			OIDC_NAME: z.string().optional(),
 
+			/// Reverse-proxy (trusted header) auth
+			// Sign in via an authenticating reverse proxy (e.g. OpenHost). Set all
+			// three values to enable. SECURITY: keep the origin private; the proxy
+			// must strip client-sent trust/secret headers and set both only after auth.
+			TRUSTED_PROXY_AUTH_HEADER: z
+				.string()
+				.optional()
+				.describe(
+					"Header an authenticating reverse proxy sets to 'true' on owner-authenticated requests (e.g. 'x-openhost-is-owner'). Unset disables the provider.",
+				),
+			TRUSTED_PROXY_AUTH_EMAIL: z
+				.string()
+				.email()
+				.optional()
+				.describe(
+					"Email of the Cap account to sign in when the trusted header is present.",
+				),
+			TRUSTED_PROXY_AUTH_SECRET: z
+				.string()
+				.optional()
+				.describe(
+					"Required to enable trusted-proxy auth: a non-blank shared secret the proxy must send as 'x-trusted-proxy-secret'. Unset or blank disables the provider. Keep this server-side, never in browser code.",
+				),
+
 			/// Settings
 			CAP_VIDEOS_DEFAULT_PUBLIC: boolString(true).describe(
 				"Should videos be public or private by default",
@@ -106,6 +130,24 @@ function createServerEnv() {
 
 			/// AI providers
 			ASSEMBLY_API_KEY: z.string().optional().describe("Audio transcription"),
+			ASSEMBLY_BASE_URL: z
+				.string()
+				.optional()
+				.describe(
+					"Transcription API base URL (eg. https://api.eu.assemblyai.com)",
+				),
+			LIVE_TRANSCRIBE_CONTEXT_SECONDS: z
+				.string()
+				.optional()
+				.describe(
+					"Seconds of earlier audio sent with each instant-mode live transcription chunk (more accurate, more audio billed; default 0)",
+				),
+			LIVE_TRANSCRIBE_RUNNER: z
+				.string()
+				.optional()
+				.describe(
+					"Set to media-server to run instant-mode live transcription on the media server instead of a workflow (falls back to the workflow)",
+				),
 			ANTHROPIC_API_KEY: z.string().optional().describe("AI chat"),
 			OPENAI_API_KEY: z.string().optional().describe("AI summaries"),
 			GROQ_API_KEY: z.string().optional().describe("AI summaries"),
@@ -155,6 +197,12 @@ function createServerEnv() {
 			/// Cap Cloud
 			// These are only needed for Cap Cloud (https://cap.so)
 			STRIPE_SECRET_KEY: z.string().optional(),
+			STRIPE_PUBLISHABLE_KEY: z
+				.string()
+				.optional()
+				.describe(
+					"Enables the in-app Cap Pro checkout; hosted Stripe Checkout is used without it",
+				),
 			STRIPE_SAML_SSO_PRICE_ID: z.string().optional(),
 			STRIPE_WEBHOOK_SECRET: z.string().optional(),
 			DISCORD_FEEDBACK_WEBHOOK_URL: z.string().optional(),
@@ -197,6 +245,12 @@ function createServerEnv() {
 				.optional()
 				.describe(
 					"Base URL for media server webhooks (use host.docker.internal for Docker setups)",
+				),
+			LOOM_IMPORTER_URL: z
+				.string()
+				.optional()
+				.describe(
+					"URL of the dedicated Loom importer; Loom downloads use the media server when unset",
 				),
 
 			/// Ignore

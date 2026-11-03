@@ -727,6 +727,10 @@ pub(crate) const EXPORT_STALL_LIMIT: Duration = Duration::from_secs(120);
 enum FrameDeadline {
     /// Playback: a missed deadline returns no frame so the caller can move on.
     Drop,
+    /// The first frame after a seek or for a paused preview. Nothing asks for
+    /// it again, so on macOS a missed deadline switches to software decoding
+    /// at once, which then answers it.
+    Initial,
     /// Offline export: a missed deadline keeps waiting for the same reply.
     Wait,
 }
@@ -754,6 +758,60 @@ struct MacOsDecoderFallback {
     path: PathBuf,
     fps: u32,
     decoder: tokio::sync::OnceCell<Result<AsyncVideoDecoderHandle, String>>,
+    stall: Mutex<PrimaryStall>,
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Default)]
+struct PrimaryStall {
+    timed_out_rounds: u32,
+    last_timeout: Option<tokio::time::Instant>,
+}
+
+#[cfg(target_os = "macos")]
+impl MacOsDecoderFallback {
+    /// A single playback timeout is a busy machine, not a dead reader: only a
+    /// reader that misses this many playback rounds in a row without
+    /// delivering any frame is replaced by software decoding.
+    const MAX_TIMED_OUT_ROUNDS: u32 = 3;
+
+    fn new(name: &'static str, path: PathBuf, fps: u32) -> Self {
+        Self {
+            name,
+            path,
+            fps,
+            decoder: tokio::sync::OnceCell::new(),
+            stall: Mutex::new(PrimaryStall::default()),
+        }
+    }
+
+    fn primary_answered(&self) {
+        *self
+            .stall
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = PrimaryStall::default();
+    }
+
+    /// Playback keeps many requests in flight, and one slow decode times them
+    /// out together; only a request sent after the previous timeout starts a
+    /// new round.
+    fn primary_stalled(&self, sent_at: tokio::time::Instant) -> bool {
+        let mut stall = self
+            .stall
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if stall.last_timeout.is_none_or(|last| sent_at >= last) {
+            stall.timed_out_rounds += 1;
+            stall.last_timeout = Some(tokio::time::Instant::now());
+        }
+        stall.timed_out_rounds >= Self::MAX_TIMED_OUT_ROUNDS
+    }
+}
+
+enum FrameReply {
+    Frame(DecodedFrame),
+    NoFrame,
+    TimedOut,
 }
 
 impl AsyncVideoDecoderHandle {
@@ -789,7 +847,7 @@ impl AsyncVideoDecoderHandle {
             Self::INITIAL_SEEK_TIMEOUT_MS,
             self.max_fallback_distance
                 .min(Self::INITIAL_MAX_FALLBACK_DISTANCE),
-            FrameDeadline::Drop,
+            FrameDeadline::Initial,
         )
         .await
         .ok()
@@ -836,12 +894,24 @@ impl AsyncVideoDecoderHandle {
                     Err(_) => Ok(None),
                 };
             }
-            let primary = self
-                .request_frame(time, timeout_ms, max_fallback_distance, deadline)
-                .await;
-            if let Ok(Some(frame)) = primary {
-                return Ok(Some(frame));
-            }
+            let sent_at = tokio::time::Instant::now();
+            let (fallback_reason, primary) = match self
+                .send_frame_request(time, timeout_ms, max_fallback_distance, deadline)
+                .await
+            {
+                Ok(FrameReply::Frame(frame)) => {
+                    fallback.primary_answered();
+                    return Ok(Some(frame));
+                }
+                Ok(FrameReply::TimedOut)
+                    if deadline == FrameDeadline::Drop && !fallback.primary_stalled(sent_at) =>
+                {
+                    return Ok(None);
+                }
+                Ok(FrameReply::TimedOut) => ("AVAssetReader stopped answering", Ok(None)),
+                Ok(FrameReply::NoFrame) => ("AVAssetReader returned no frame", Ok(None)),
+                Err(stalled) => ("AVAssetReader stalled", Err(stalled)),
+            };
             let result = fallback
                 .decoder
                 .get_or_init(|| async {
@@ -858,8 +928,7 @@ impl AsyncVideoDecoderHandle {
                         false,
                     )
                     .await?;
-                    decoder.status.fallback_reason =
-                        Some("AVAssetReader returned no frame".to_string());
+                    decoder.status.fallback_reason = Some(fallback_reason.to_string());
                     Ok(decoder)
                 })
                 .await;
@@ -886,6 +955,21 @@ impl AsyncVideoDecoderHandle {
         max_fallback_distance: u32,
         deadline: FrameDeadline,
     ) -> Result<Option<DecodedFrame>, DecodeStalled> {
+        self.send_frame_request(time, timeout_ms, max_fallback_distance, deadline)
+            .await
+            .map(|reply| match reply {
+                FrameReply::Frame(frame) => Some(frame),
+                FrameReply::NoFrame | FrameReply::TimedOut => None,
+            })
+    }
+
+    async fn send_frame_request(
+        &self,
+        time: f32,
+        timeout_ms: u64,
+        max_fallback_distance: u32,
+        deadline: FrameDeadline,
+    ) -> Result<FrameReply, DecodeStalled> {
         let (tx, mut rx) = tokio::sync::oneshot::channel();
         let adjusted_time = self.get_time(time);
 
@@ -902,13 +986,14 @@ impl AsyncVideoDecoderHandle {
                 time = adjusted_time,
                 "decoder thread is gone; frame request dropped"
             );
-            return Ok(None);
+            return Ok(FrameReply::NoFrame);
         }
 
         let started = tokio::time::Instant::now();
         loop {
             match tokio::time::timeout(Duration::from_millis(timeout_ms), &mut rx).await {
-                Ok(result) => return Ok(result.ok()),
+                Ok(Ok(frame)) => return Ok(FrameReply::Frame(frame)),
+                Ok(Err(_)) => return Ok(FrameReply::NoFrame),
                 Err(_) if deadline == FrameDeadline::Wait => {
                     let waited = started.elapsed();
                     if waited >= EXPORT_STALL_LIMIT {
@@ -932,7 +1017,7 @@ impl AsyncVideoDecoderHandle {
                         timeout_ms = timeout_ms,
                         "Frame decode request timed out"
                     );
-                    return Ok(None);
+                    return Ok(FrameReply::TimedOut);
                 }
             }
         }
@@ -1515,12 +1600,11 @@ pub async fn spawn_decoder(
                         status,
                         max_fallback_distance: DEFAULT_MAX_FALLBACK_DISTANCE,
                         #[cfg(target_os = "macos")]
-                        fallback: Some(Arc::new(MacOsDecoderFallback {
+                        fallback: Some(Arc::new(MacOsDecoderFallback::new(
                             name,
-                            path: path.clone(),
+                            path.clone(),
                             fps,
-                            decoder: tokio::sync::OnceCell::new(),
-                        })),
+                        ))),
                         #[cfg(target_os = "macos")]
                         sequential_access: Some(sequential_access),
                     })
@@ -2448,15 +2532,22 @@ mod managed_worker_tests {
                 fallback_reason: None,
             },
             max_fallback_distance: 2,
-            fallback: Some(Arc::new(MacOsDecoderFallback {
-                name: "screen",
-                path: directory.path().to_path_buf(),
-                fps: 30,
-                decoder: tokio::sync::OnceCell::new(),
-            })),
+            fallback: Some(Arc::new(MacOsDecoderFallback::new(
+                "screen",
+                directory.path().to_path_buf(),
+                30,
+            ))),
             sequential_access: None,
         };
         let cloned = decoder.clone();
+        for _ in 1..MacOsDecoderFallback::MAX_TIMED_OUT_ROUNDS {
+            let (first, second) = tokio::join!(
+                decoder.get_frame_with_timeout(0.0, 200, 2, FrameDeadline::Drop),
+                cloned.get_frame_with_timeout(0.0, 200, 2, FrameDeadline::Drop)
+            );
+            assert!(matches!((first, second), (Ok(None), Ok(None))));
+            assert_eq!(decoder.decoder_type(), DecoderType::AVAssetReader);
+        }
         let (first, second) = tokio::join!(
             decoder.get_frame_with_timeout(0.0, 200, 2, FrameDeadline::Drop),
             cloned.get_frame_with_timeout(0.0, 200, 2, FrameDeadline::Drop)
@@ -2468,14 +2559,20 @@ mod managed_worker_tests {
         );
         assert_eq!(decoder.decoder_type(), DecoderType::FFmpegSoftware);
         assert_eq!(cloned.decoder_type(), DecoderType::FFmpegSoftware);
-        assert!(decoder.fallback_reason().is_some());
+        assert_eq!(
+            decoder.fallback_reason(),
+            Some("AVAssetReader stopped answering")
+        );
         let (reference, join) = ordinary_worker(directory.path().to_path_buf(), 0.25, false).await;
         assert_eq!(
             frame_pixels(&first),
             frame_pixels(&reference.get_frame_initial(0.0).await.unwrap())
         );
         let pending_before = receiver.try_iter().count();
-        assert_eq!(pending_before, 2);
+        assert_eq!(
+            pending_before,
+            2 * MacOsDecoderFallback::MAX_TIMED_OUT_ROUNDS as usize
+        );
         assert!(decoder.get_frame_initial(0.5).await.is_some());
         assert_eq!(receiver.try_iter().count(), 0);
         drop(reference);

@@ -43,6 +43,135 @@ fn parse_json(output: &Output) -> Value {
     })
 }
 
+#[tokio::test]
+async fn organization_operations_validate_wait_timeouts_before_submitting() {
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
+
+    for (arguments, method, path, body) in [
+        (
+            vec!["organizations", "delete", "org_test"],
+            "DELETE",
+            "/api/v1/organizations/org_test",
+            serde_json::json!({}),
+        ),
+        (
+            vec!["organizations", "domain", "remove", "org_test"],
+            "DELETE",
+            "/api/v1/organizations/org_test/domain",
+            serde_json::json!({}),
+        ),
+        (
+            vec!["organizations", "domain", "verify", "org_test"],
+            "POST",
+            "/api/v1/organizations/org_test/domain/verify",
+            serde_json::json!({}),
+        ),
+        (
+            vec![
+                "organizations",
+                "domain",
+                "set",
+                "org_test",
+                "clips.example.com",
+            ],
+            "PUT",
+            "/api/v1/organizations/org_test/domain",
+            serde_json::json!({"domain": "clips.example.com"}),
+        ),
+    ] {
+        for (wait, timeout, expected_requests) in [
+            (true, "0", 0),
+            (true, "86401", 0),
+            (true, "86400", 2),
+            (false, "0", 1),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let (sender, receiver) = mpsc::channel();
+            let server = tokio::spawn(async move {
+                loop {
+                    let (mut stream, _) = listener.accept().await.unwrap();
+                    let mut reader = tokio::io::BufReader::new(&mut stream);
+                    let mut request = String::new();
+                    reader.read_line(&mut request).await.unwrap();
+                    let mut length = 0;
+                    loop {
+                        let mut header = String::new();
+                        reader.read_line(&mut header).await.unwrap();
+                        if header == "\r\n" {
+                            break;
+                        }
+                        if let Some((name, value)) = header.split_once(':')
+                            && name.eq_ignore_ascii_case("content-length")
+                        {
+                            length = value.trim().parse::<usize>().unwrap();
+                        }
+                    }
+                    let mut bytes = vec![0; length];
+                    reader.read_exact(&mut bytes).await.unwrap();
+                    let state = if request.starts_with("GET ") {
+                        "succeeded"
+                    } else {
+                        "queued"
+                    };
+                    sender.send((request, bytes)).unwrap();
+                    let response = serde_json::json!({"id": "op_test", "state": state}).to_string();
+                    stream
+                        .write_all(
+                            format!(
+                                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}",
+                                response.len()
+                            )
+                            .as_bytes(),
+                        )
+                        .await
+                        .unwrap();
+                }
+            });
+            let mut args = arguments.clone();
+            args.extend(["--yes", "--json", "--timeout", timeout]);
+            if wait {
+                args.push("--wait");
+            }
+            let output = tokio::task::spawn_blocking(move || {
+                cap()
+                    .args(args)
+                    .env("CAP_AGENT_TOKEN", "cap_cli_synthetic_test_token")
+                    .env("CAP_SERVER_URL", format!("http://{address}"))
+                    .output()
+                    .expect("failed to spawn cap binary")
+            })
+            .await
+            .unwrap();
+            server.abort();
+            assert!(server.await.unwrap_err().is_cancelled());
+            let requests = receiver.try_iter().collect::<Vec<_>>();
+            assert_eq!(requests.len(), expected_requests, "{arguments:?} {timeout}");
+            if expected_requests == 0 {
+                assert!(!output.status.success());
+                assert!(output.stdout.is_empty());
+                assert!(
+                    stderr(&output)
+                        .contains("INVALID_REQUEST: --timeout must be between 1 and 86400 seconds")
+                );
+                continue;
+            }
+            assert!(output.status.success(), "{}", stderr(&output));
+            assert_eq!(requests[0].0, format!("{method} {path} HTTP/1.1\r\n"));
+            assert_eq!(
+                serde_json::from_slice::<Value>(&requests[0].1).unwrap(),
+                body
+            );
+            if wait {
+                assert_eq!(requests[1].0, "GET /api/v1/operations/op_test HTTP/1.1\r\n");
+            }
+            let value = parse_json(&output);
+            assert_eq!(value["id"], "op_test");
+            assert_eq!(value["state"], if wait { "succeeded" } else { "queued" });
+        }
+    }
+}
+
 #[test]
 fn help_succeeds_and_lists_commands() {
     let output = run(&["--help"]);
@@ -609,6 +738,51 @@ fn recordings_list_empty_dir_is_empty_json() {
     assert_eq!(json.as_array().map(|a| a.len()), Some(0));
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn recordings_list_follows_desktop_storage_unless_dir_is_explicit() {
+    let root = tempfile::tempdir().unwrap();
+    let app_data = root.path().join("so.cap.desktop");
+    let default = app_data.join("recordings");
+    let current = root.path().join("custom");
+    let previous = root.path().join("previous");
+    for dir in [&default, &current, &previous] {
+        write_single_segment_meta(&dir.join("example.cap"));
+    }
+    std::fs::write(
+        app_data.join("store"),
+        serde_json::to_vec(&serde_json::json!({
+            "general_settings": {
+                "recordingsPath": current,
+                "previousRecordingsPaths": [previous, current]
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let list = |dir: Option<&Path>| {
+        let mut command = cap();
+        command
+            .env("XDG_DATA_HOME", root.path())
+            .args(["recordings", "list", "--json"]);
+        if let Some(dir) = dir {
+            command.arg("--dir").arg(dir);
+        }
+        let output = command.output().unwrap();
+        assert!(output.status.success(), "stderr: {}", stderr(&output));
+        parse_json(&output)
+    };
+
+    assert_eq!(list(None).as_array().unwrap().len(), 3);
+    let explicit = list(Some(&current));
+    assert_eq!(explicit.as_array().unwrap().len(), 1);
+    assert_eq!(
+        explicit[0]["path"],
+        current.join("example.cap").to_str().unwrap()
+    );
+}
+
 #[test]
 fn project_config_set_then_get_roundtrips() {
     let dir = tempfile::tempdir().unwrap();
@@ -657,7 +831,30 @@ fn project_config_get_without_file_returns_default() {
     ]);
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let json = parse_json(&output);
-    assert!(json.is_object(), "expected a default project config object");
+    let expected_json =
+        serde_json::to_string(&cap_project::ProjectConfiguration::default()).unwrap();
+    assert_eq!(json, serde_json::from_str::<Value>(&expected_json).unwrap());
+}
+
+#[test]
+fn project_config_commands_reject_directories_without_recordings() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("not-a-recording.cap");
+    std::fs::create_dir(&project).unwrap();
+
+    for command in ["get", "set"] {
+        let mut args = vec!["project", "config", command, project.to_str().unwrap()];
+        if command == "set" {
+            args.extend(["--settings-json", "{}"]);
+        }
+        args.push("--json");
+
+        let output = run(&args);
+        assert!(!output.status.success(), "{command} unexpectedly succeeded");
+        assert!(parse_json(&output)["error"].is_string());
+    }
+
+    assert!(!project.join("project-config.json").exists());
 }
 
 #[test]
@@ -1433,4 +1630,23 @@ fn write_single_segment_meta(project: &Path) {
         serde_json::to_vec_pretty(&meta).unwrap(),
     )
     .unwrap();
+}
+
+#[test]
+fn caps_json_errors_include_the_standard_error_field() {
+    for flags in [&["--json"][..], &["--format", "json"][..]] {
+        let output = cap()
+            .args(["caps", "get", "!"])
+            .args(flags)
+            .env("CAP_AGENT_TOKEN", "cap_cli_synthetic_test_token")
+            .env("CAP_SERVER_URL", "http://127.0.0.1:9")
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        let error = parse_json(&output);
+        assert_eq!(error["error"], "Cap ID contains invalid characters");
+        assert_eq!(error["message"], "Cap ID contains invalid characters");
+        assert_eq!(error["code"], "INVALID_REQUEST");
+        assert_eq!(error["retryable"], false);
+    }
 }

@@ -1,4 +1,4 @@
-FROM oven/bun:1.4.0
+FROM oven/bun:1.4.4
 
 RUN apt-get update \
 	&& apt-get install -y --no-install-recommends ffmpeg \

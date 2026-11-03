@@ -9,6 +9,7 @@ import {
 import { sendEmail } from "@cap/database/emails/config";
 import { OrganizationInvite } from "@cap/database/emails/organization-invite";
 import { nanoId, nanoIdLong } from "@cap/database/helpers";
+import { releaseProSeatSubscription } from "@cap/database/pro-seat-subscription";
 import * as Db from "@cap/database/schema";
 import { getNewVideoPublic } from "@cap/database/video-sharing-default";
 import { buildEnv, serverEnv } from "@cap/env";
@@ -115,6 +116,7 @@ import {
 	runAgentMutation,
 	updateAgentCap,
 } from "@/lib/agent-write";
+import { withJsonNotFound } from "@/lib/api-errors";
 import { hashKey } from "@/lib/developer-key-hash";
 import { startAiGeneration } from "@/lib/generate-ai";
 import { probeVideoViaMediaServer } from "@/lib/media-client";
@@ -126,8 +128,14 @@ import {
 } from "@/lib/permissions/roles";
 import { normalizePlaybackSpeed } from "@/lib/playback-speed";
 import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
+import {
+	blockedS3EndpointMessage,
+	isDisallowedS3Endpoint,
+	publicOnlyS3Agents,
+} from "@/lib/s3-endpoint-policy";
 import { transcribeVideo } from "@/lib/transcribe";
 import { startVideoProcessingWorkflow } from "@/lib/video-processing";
+import { isVideoStorageKey } from "@/lib/video-storage-key";
 import { isAiGenerationEnabled } from "@/utils/flags";
 import {
 	calculateProSeats,
@@ -348,12 +356,16 @@ const notReady = (requestId: string, message: string) =>
 		requestId,
 	});
 
-const temporarilyUnavailable = (requestId: string, message: string) =>
+const temporarilyUnavailable = (
+	requestId: string,
+	message: string,
+	retryAfterMs: number | null = null,
+) =>
 	new Agent.AgentTemporaryUnavailableError({
 		message,
 		code: "TEMPORARY_UNAVAILABLE",
 		retryable: true,
-		retryAfterMs: null,
+		retryAfterMs,
 		requestId,
 	});
 
@@ -668,9 +680,12 @@ const getViewableCap = Effect.fn("Agent.getViewableCap")(function* (
 ) {
 	const principal = yield* Agent.AgentPrincipal;
 	const video = yield* getViewableVideo(videoId, verifiedPasswordHashes);
-	const [row] = yield* getCapRows(videoId);
+	const [[row], spaceRulesResult] = yield* Effect.all(
+		[getCapRows(videoId), getSpaceRules([videoId]).pipe(Effect.exit)],
+		{ concurrency: 2 },
+	);
 	if (!row) return yield* Effect.fail(new Video.NotFoundError());
-	const spaces = yield* getSpaceRules([videoId]);
+	const spaces = yield* spaceRulesResult;
 	const rules = rulesForRow(row, spaces);
 	return {
 		video,
@@ -1335,6 +1350,9 @@ const resolveAgentS3Config = Effect.fn("Agent.resolveS3Config")(function* (
 		} catch {
 			return yield* badRequest(requestId, "S3 endpoint is invalid");
 		}
+		if (yield* Effect.promise(() => isDisallowedS3Endpoint(endpoint))) {
+			return yield* badRequest(requestId, blockedS3EndpointMessage);
+		}
 	}
 	let accessKeyId = payload.accessKeyId.trim();
 	let secretAccessKey = payload.secretAccessKey.trim();
@@ -1411,6 +1429,7 @@ const testAgentS3Config = Effect.fn("Agent.testS3Config")(function* (
 						accessKeyId: config.accessKeyId,
 						secretAccessKey: config.secretAccessKey,
 					},
+					requestHandler: publicOnlyS3Agents(),
 				});
 				await client.send(
 					new HeadBucketCommand({ Bucket: config.bucketName }),
@@ -2307,6 +2326,13 @@ const queueAgentLoomImport = Effect.fn("Agent.queueLoomImport")(
 								"Loom could not be reached",
 							),
 					});
+					if (download.errorCode === "loom_temporarily_unavailable") {
+						return yield* temporarilyUnavailable(
+							input.requestId,
+							download.error ?? "Loom is temporarily unavailable",
+							download.retryAfterMs ?? null,
+						);
+					}
 					if (!download.success || !download.videoId || !download.downloadUrl) {
 						return yield* badRequest(
 							input.requestId,
@@ -4912,8 +4938,15 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 											}),
 											idempotencyKey: providerIdempotencyKey,
 										});
-										if (delivery?.error)
+										if (delivery?.error) {
+											if (delivery.error.name === "email_not_configured") {
+												return {
+													...invitation,
+													emailDelivery: "not_configured" as const,
+												};
+											}
 											throw new Error(delivery.error.message);
+										}
 										return {
 											...invitation,
 											emailDelivery: "accepted" as const,
@@ -5191,53 +5224,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 										.update(Db.organizationMembers)
 										.set({ hasProSeat: false })
 										.where(eq(Db.organizationMembers.id, path.memberId));
-									const otherProSeats = await tx
-										.select({ id: Db.organizationMembers.id })
-										.from(Db.organizationMembers)
-										.where(
-											and(
-												eq(Db.organizationMembers.userId, member.userId),
-												eq(Db.organizationMembers.hasProSeat, true),
-											),
-										)
-										.limit(1);
-									if (otherProSeats.length === 0) {
-										await tx
-											.update(Db.users)
-											.set({ thirdPartyStripeSubscriptionId: null })
-											.where(eq(Db.users.id, member.userId));
-									} else {
-										const [remainingOrganization] = await tx
-											.select({
-												stripeSubscriptionId: Db.users.stripeSubscriptionId,
-											})
-											.from(Db.organizationMembers)
-											.innerJoin(
-												Db.organizations,
-												eq(
-													Db.organizationMembers.organizationId,
-													Db.organizations.id,
-												),
-											)
-											.innerJoin(
-												Db.users,
-												eq(Db.organizations.ownerId, Db.users.id),
-											)
-											.where(
-												and(
-													eq(Db.organizationMembers.userId, member.userId),
-													eq(Db.organizationMembers.hasProSeat, true),
-												),
-											)
-											.limit(1);
-										await tx
-											.update(Db.users)
-											.set({
-												thirdPartyStripeSubscriptionId:
-													remainingOrganization?.stripeSubscriptionId ?? null,
-											})
-											.where(eq(Db.users.id, member.userId));
-									}
+									await releaseProSeatSubscription(tx, member.userId);
 								}
 								const now = new Date();
 								return {
@@ -5291,6 +5278,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 									.select({
 										userId: Db.organizationMembers.userId,
 										role: Db.organizationMembers.role,
+										hasProSeat: Db.organizationMembers.hasProSeat,
 										email: Db.users.email,
 									})
 									.from(Db.organizationMembers)
@@ -5326,6 +5314,21 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 								) {
 									return { state: "forbidden" };
 								}
+								const result = await tx
+									.delete(Db.organizationMembers)
+									.where(
+										and(
+											eq(Db.organizationMembers.id, path.memberId),
+											eq(
+												Db.organizationMembers.organizationId,
+												path.organizationId,
+											),
+										),
+									);
+								if (affectedRows(result) === 0) return { state: "not_found" };
+								if (member.hasProSeat) {
+									await releaseProSeatSubscription(tx, member.userId);
+								}
 								const organizationSpaces = await tx
 									.select({ id: Db.spaces.id })
 									.from(Db.spaces)
@@ -5352,18 +5355,6 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 											sql`LOWER(TRIM(${Db.organizationInvites.invitedEmail})) = ${member.email.toLowerCase()}`,
 										),
 									);
-								const result = await tx
-									.delete(Db.organizationMembers)
-									.where(
-										and(
-											eq(Db.organizationMembers.id, path.memberId),
-											eq(
-												Db.organizationMembers.organizationId,
-												path.organizationId,
-											),
-										),
-									);
-								if (affectedRows(result) === 0) return { state: "not_found" };
 								const now = new Date();
 								return {
 									state: "success",
@@ -7038,6 +7029,17 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 								"The upload completion state is unavailable",
 							);
 						}
+						if (
+							!isVideoStorageKey(
+								{ id: path.id, ownerId: principal.id },
+								acceptedRawFileKey,
+							)
+						) {
+							return yield* badRequest(
+								requestId,
+								"Upload completion is invalid",
+							);
+						}
 						if (payload.rawFileKey !== acceptedRawFileKey) {
 							yield* deleteStoredKeyIfPresent(payload.rawFileKey);
 						}
@@ -7094,6 +7096,17 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 								};
 							},
 						});
+						if (
+							!isVideoStorageKey(
+								{ id: state.id, ownerId: state.ownerId },
+								state.rawFileKey,
+							)
+						) {
+							return yield* badRequest(
+								requestId,
+								"Upload completion is invalid",
+							);
+						}
 						const processing = yield* Effect.tryPromise(() =>
 							startVideoProcessingWorkflow({
 								videoId: state.id,
@@ -8155,15 +8168,15 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 								);
 							}
 						}
-						const folderId = Folder.FolderId.make(nanoId());
 						return yield* runAgentMutation({
 							principal,
 							operation: "create_folder",
 							idempotencyKey: yield* requestIdempotencyKey,
-							request: { path, payload: { ...payload, name }, folderId },
+							request: { path, payload: { ...payload, name } },
 							requestId,
 							decodeReplay: decodeMutationResponse,
 							execute: async (tx) => {
+								const folderId = Folder.FolderId.make(nanoId());
 								const now = new Date();
 								await tx.insert(Db.folders).values({
 									id: folderId,
@@ -8492,7 +8505,6 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 								"Cap Pro is required for these space settings",
 							);
 						}
-						const spaceId = Space.SpaceId.make(nanoId());
 						return yield* runAgentMutation({
 							principal,
 							operation: "create_space",
@@ -8500,7 +8512,6 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 							request: {
 								path,
 								payload: { ...payload, name, description },
-								spaceId,
 							},
 							requestId,
 							decodeReplay: decodeMutationResponse,
@@ -8517,6 +8528,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 									.limit(1)
 									.for("update");
 								if (existing) return { state: "conflict" };
+								const spaceId = Space.SpaceId.make(nanoId());
 								const now = new Date();
 								await tx.insert(Db.spaces).values({
 									id: spaceId,
@@ -9011,7 +9023,7 @@ const ApiLive = HttpApiBuilder.api(Agent.AgentApiContract).pipe(
 	),
 );
 
-const handler = agentApiToHandler(ApiLive);
+const handler = withJsonNotFound(agentApiToHandler(ApiLive));
 
 export const GET = handler;
 export const OPTIONS = handler;

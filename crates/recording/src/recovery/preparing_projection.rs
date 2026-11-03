@@ -11,7 +11,10 @@ use cap_project::{
     StudioRecordingStatus, VideoMeta,
 };
 
-use super::{IncompleteRecording, RecoveryManager, is_apple_double, reject_recovery_link};
+use super::{
+    IncompleteRecording, RecoveryManager, SEGMENT_START_TIMES_FILE, is_apple_double,
+    reject_recovery_link,
+};
 use crate::studio_recording::CleanStoppedStudioClaim;
 
 const MAX_JSON_BYTES: u64 = 8 * 1024 * 1024;
@@ -229,6 +232,9 @@ pub(super) fn project(
             return Err("Stopped cursor sidecar does not match discovery".into());
         }
         let keyboard_path = keyboard(&mut inventory, metadata, &segment_dir)?;
+        inventory
+            .files
+            .remove(&segment_dir.join(SEGMENT_START_TIMES_FILE));
         if let Some(notch) = metadata.display_notch
             && (!notch.x.is_finite() || !notch.width.is_finite() || !notch.height.is_finite())
         {
@@ -990,12 +996,14 @@ mod tests {
                     overlap_dropped_frames: 2,
                     startup_overlap_drops: 1,
                 }),
+                digital_silence_ms: None,
             });
             metadata.segments[0].system_audio = Some(AudioMeta {
                 path: RelativePathBuf::from(format!("{base}/system_audio.ogg")),
                 start_time: Some(0.375),
                 device_id: None,
                 gap_summary: None,
+                digital_silence_ms: None,
             });
             metadata.segments[0].cursor =
                 Some(RelativePathBuf::from(format!("{base}/cursor.json")));
@@ -1135,6 +1143,28 @@ mod tests {
         std::fs::create_dir(content.join("cursors")).unwrap();
         std::fs::write(content.join("cursors/._cursor_0.png"), apple_double).unwrap();
         assert!(fixture.project().is_ok());
+    }
+
+    #[test]
+    fn preparing_projection_accepts_segment_start_times_but_not_other_extra_files() {
+        let fixture = Fixture::new(2);
+        let segments = fixture.directory.path().join("content/segments");
+        for index in 0..2 {
+            std::fs::write(
+                segments
+                    .join(format!("segment-{index}"))
+                    .join(SEGMENT_START_TIMES_FILE),
+                br#"{"display":0.0}"#,
+            )
+            .unwrap();
+        }
+        assert!(fixture.project().is_ok());
+
+        std::fs::write(segments.join("segment-1/stray.json"), b"{}").unwrap();
+        assert_eq!(
+            fixture.project().err().as_deref(),
+            Some("Unrepresented source files or respawn layouts require ordinary finalization")
+        );
     }
 
     #[test]

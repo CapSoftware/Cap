@@ -2,13 +2,26 @@ use cap_media_info::AudioInfo;
 use ffmpeg::{format, frame};
 use std::{path::PathBuf, time::Duration};
 
+use super::write_behind::{AUDIO_BUDGET_BYTES, MuxSink, MuxTarget};
 use crate::audio::aac::{AACEncoder, AACEncoderError};
 
 pub struct FragmentedAudioFile {
     encoder: AACEncoder,
-    output: format::context::Output,
+    output: MuxSink<AudioOutput>,
     finished: bool,
     has_frames: bool,
+}
+
+struct AudioOutput(format::context::Output);
+
+impl MuxTarget for AudioOutput {
+    fn output(&self) -> &format::context::Output {
+        &self.0
+    }
+
+    fn output_mut(&mut self) -> &mut format::context::Output {
+        &mut self.0
+    }
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -103,10 +116,17 @@ impl FragmentedAudioFile {
 
         Ok(Self {
             encoder,
-            output,
+            output: MuxSink::Direct(AudioOutput(output)),
             finished: false,
             has_frames: false,
         })
+    }
+
+    /// Hands encoded packets to a dedicated writer thread so a stalled
+    /// output volume no longer blocks the caller (an async runtime worker in
+    /// the recording pipeline). Bytes on disk and their order are unchanged.
+    pub fn enable_write_behind(&mut self) -> std::io::Result<()> {
+        self.output.enable_write_behind("audio", AUDIO_BUDGET_BYTES)
     }
 
     pub fn encoder(&self) -> &AACEncoder {
@@ -118,8 +138,16 @@ impl FragmentedAudioFile {
         frame: frame::Audio,
         timestamp: Duration,
     ) -> Result<(), ffmpeg::Error> {
+        if self.finished && self.output.is_write_behind() {
+            return Err(ffmpeg::Error::Exit);
+        }
         self.has_frames = true;
-        self.encoder.send_frame(frame, timestamp, &mut self.output)
+        self.encoder
+            .send_frame_to(frame, timestamp, &mut self.output)
+    }
+
+    pub fn is_write_behind(&self) -> bool {
+        self.output.is_write_behind()
     }
 
     pub fn finish(&mut self) -> Result<Result<(), ffmpeg::Error>, FinishError> {
@@ -136,12 +164,21 @@ impl FragmentedAudioFile {
 
         self.finished = true;
 
-        let flush_result = if self.has_frames {
-            self.encoder.flush(&mut self.output)
-        } else {
-            Ok(())
-        };
-        let trailer_result = self.output.write_trailer();
+        let has_frames = self.has_frames;
+        let encoder = &mut self.encoder;
+        let (flush_result, trailer_result) = self
+            .output
+            .finish(
+                |output| {
+                    if has_frames {
+                        encoder.flush_to(output)
+                    } else {
+                        Ok(())
+                    }
+                },
+                |output: &mut AudioOutput, flush_result| (flush_result, output.0.write_trailer()),
+            )
+            .map_err(|stalled| FinishError::WriteTrailerFailed(stalled.into()))?;
         finish_result(flush_result, trailer_result)
     }
 }
@@ -243,6 +280,48 @@ mod publication_tests {
     }
 
     #[test]
+    fn write_behind_audio_matches_inline_bytes() {
+        let directory = tempfile::tempdir().unwrap();
+        let info = AudioInfo::new_raw(Sample::F32(Type::Packed), 48_000, 1);
+        let inline_path = directory.path().join("inline.m4a");
+        let mut inline = FragmentedAudioFile::init(inline_path.clone(), info).unwrap();
+        queue_tone(&mut inline, 300);
+        inline.finish().unwrap().unwrap();
+
+        let behind_path = directory.path().join("behind.m4a");
+        let mut behind = FragmentedAudioFile::init(behind_path.clone(), info).unwrap();
+        behind.enable_write_behind().unwrap();
+        queue_tone(&mut behind, 300);
+        behind.output.drain();
+        let mut input = format::input(&behind_path).unwrap();
+        assert!(input.packets().next().is_some());
+        drop(input);
+        behind.finish().unwrap().unwrap();
+
+        assert_eq!(
+            std::fs::read(&inline_path).unwrap(),
+            std::fs::read(&behind_path).unwrap()
+        );
+    }
+
+    #[test]
+    fn write_behind_audio_rejects_frames_after_finish() {
+        let directory = tempfile::tempdir().unwrap();
+        let info = AudioInfo::new_raw(Sample::F32(Type::Packed), 48_000, 1);
+        let mut output =
+            FragmentedAudioFile::init(directory.path().join("finished.m4a"), info).unwrap();
+        output.enable_write_behind().unwrap();
+        queue_tone(&mut output, 10);
+        output.finish().unwrap().unwrap();
+        let frame =
+            ffmpeg::frame::Audio::new(Sample::F32(Type::Packed), 1024, ffmpeg::ChannelLayout::MONO);
+        assert_eq!(
+            output.queue_frame(frame, Duration::from_secs(1)),
+            Err(ffmpeg::Error::Exit)
+        );
+    }
+
+    #[test]
     fn short_fragmented_audio_remains_readable_after_finish() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("short.m4a");
@@ -306,7 +385,7 @@ mod publication_tests {
 
     fn set_output_error(output: &mut FragmentedAudioFile) {
         unsafe {
-            let context = output.output.as_mut_ptr();
+            let context = output.output.with_target(|output| output.0.as_mut_ptr());
             assert!(!(*context).pb.is_null());
             (*(*context).pb).error = ffmpeg::Error::Other {
                 errno: ffmpeg::error::EIO,

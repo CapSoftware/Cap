@@ -15,6 +15,7 @@ import { revalidatePath } from "next/cache";
 import { start } from "workflow/api";
 import { assertLegacyEditsQuiescent } from "@/lib/legacy-video-edit-recovery";
 import { runPromise } from "@/lib/server";
+import { isStorageObjectNotFound } from "@/lib/storage-not-found";
 import {
 	clearPendingEdit,
 	type EditOperation,
@@ -53,7 +54,7 @@ async function objectExists(
 ) {
 	return await bucket.headObject(key).pipe(
 		Effect.as(true),
-		Effect.catchAll(() => Effect.succeed(false)),
+		Effect.catchIf(isStorageObjectNotFound, () => Effect.succeed(false)),
 		runPromise,
 	);
 }

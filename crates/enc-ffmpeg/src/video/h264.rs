@@ -11,7 +11,8 @@ use ffmpeg::{
 };
 use tracing::{debug, error, info, trace, warn};
 
-use crate::base::EncoderBase;
+use crate::base::{EncoderBase, PacketSink};
+use crate::video::HwUpload;
 use crate::video::h264_packet::H264PacketEncoder;
 #[cfg(target_os = "macos")]
 use crate::video::videotoolbox_hw::VideoToolboxHwFrames;
@@ -34,6 +35,30 @@ pub struct H264EncoderBuilder {
     encoder_priority_override: Option<&'static [&'static str]>,
     is_export: bool,
     crf: Option<u8>,
+    software_tuning: Option<SoftwareEncoderTuning>,
+}
+
+/// libx264 settings for an export split across several encoders running at
+/// once: each gets a share of the CPU threads, and `capped_crf` switches rate
+/// control to constant quality with the export bitrate as its ceiling.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SoftwareEncoderTuning {
+    pub threads: usize,
+    pub capped_crf: Option<u8>,
+}
+
+impl SoftwareEncoderTuning {
+    fn apply(&self, codec: &Codec, options: &mut Dictionary<'static>, max_bitrate: usize) {
+        if codec.name() != "libx264" {
+            return;
+        }
+        options.set("threads", &self.threads.max(1).to_string());
+        if let Some(crf) = self.capped_crf {
+            options.set("crf", &crf.to_string());
+            options.set("maxrate", &max_bitrate.to_string());
+            options.set("bufsize", &max_bitrate.saturating_mul(2).to_string());
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -60,12 +85,14 @@ pub enum H264EncoderError {
     SelfTest(String),
     #[error("VideoToolbox hardware input unavailable: {0}")]
     VideoToolboxHwInput(String),
+    #[error("VA-API: {0}")]
+    Vaapi(String),
 }
 
 fn is_hardware_h264(codec_name: &str) -> bool {
     matches!(
         codec_name,
-        "h264_videotoolbox" | "h264_nvenc" | "h264_qsv" | "h264_amf" | "h264_mf"
+        "h264_videotoolbox" | "h264_nvenc" | "h264_qsv" | "h264_amf" | "h264_mf" | "h264_vaapi"
     )
 }
 
@@ -84,7 +111,13 @@ impl H264EncoderBuilder {
             encoder_priority_override: None,
             is_export: false,
             crf: None,
+            software_tuning: None,
         }
+    }
+
+    pub fn with_software_tuning(mut self, tuning: SoftwareEncoderTuning) -> Self {
+        self.software_tuning = Some(tuning);
+        self
     }
 
     pub fn with_preset(mut self, preset: H264Preset) -> Self {
@@ -168,8 +201,20 @@ impl H264EncoderBuilder {
 
         let mut last_error = None;
 
-        for (codec, encoder_options) in candidates {
+        for (codec, mut encoder_options) in candidates {
             let codec_name = codec.name().to_string();
+            if let Some(tuning) = &self.software_tuning {
+                tuning.apply(
+                    &codec,
+                    &mut encoder_options,
+                    get_bitrate(
+                        output_width,
+                        output_height,
+                        input_config.frame_rate.0 as f32 / input_config.frame_rate.1.max(1) as f32,
+                        self.bpp,
+                    ),
+                );
+            }
 
             if is_hardware_h264(&codec_name)
                 && let Err(reason) = cached_hardware_self_test(
@@ -270,6 +315,7 @@ impl H264EncoderBuilder {
             input_format,
             input_width,
             input_height,
+            hw_upload,
         } = open_video_encoder(
             codec,
             encoder_options,
@@ -298,6 +344,76 @@ impl H264EncoderBuilder {
             input_width,
             input_height,
             converted_frame_pool,
+            hw_upload,
+            #[cfg(target_os = "macos")]
+            videotoolbox_hw: None,
+        })
+    }
+
+    /// Opens libx264 without an output file, for packets written through a
+    /// [`PacketSink`] as stream 0 and muxed into an output later.
+    pub fn build_software_detached(self) -> Result<H264Encoder, H264EncoderError> {
+        let input_config = self.input_config;
+        let (raw_width, raw_height) = self
+            .output_size
+            .unwrap_or((input_config.width, input_config.height));
+        let candidates = get_codec_and_options(
+            &input_config,
+            self.preset,
+            Some(&["libx264"]),
+            self.is_export,
+            self.crf,
+        );
+        let (codec, mut encoder_options) = candidates
+            .into_iter()
+            .next()
+            .ok_or(H264EncoderError::CodecNotFound)?;
+        let (output_width, output_height) = (ensure_even(raw_width), ensure_even(raw_height));
+        if let Some(tuning) = &self.software_tuning {
+            tuning.apply(
+                &codec,
+                &mut encoder_options,
+                get_bitrate(
+                    output_width,
+                    output_height,
+                    input_config.frame_rate.0 as f32 / input_config.frame_rate.1.max(1) as f32,
+                    self.bpp,
+                ),
+            );
+        }
+        let OpenedVideoEncoder {
+            encoder,
+            converter,
+            converted_frame_pool,
+            output_format,
+            output_width,
+            output_height,
+            input_format,
+            input_width,
+            input_height,
+            hw_upload,
+        } = open_video_encoder(
+            codec,
+            encoder_options,
+            &input_config,
+            output_width,
+            output_height,
+            self.bpp,
+            self.external_conversion,
+            self.crf,
+        )?;
+        Ok(H264Encoder {
+            base: EncoderBase::new(0),
+            encoder,
+            converter,
+            output_format,
+            output_width,
+            output_height,
+            input_format,
+            input_width,
+            input_height,
+            converted_frame_pool,
+            hw_upload,
             #[cfg(target_os = "macos")]
             videotoolbox_hw: None,
         })
@@ -432,6 +548,7 @@ impl H264EncoderBuilder {
             input_width: input_config.width,
             input_height: input_config.height,
             converted_frame_pool: None,
+            hw_upload: HwUpload::default(),
             videotoolbox_hw: Some(Arc::new(hw_frames)),
         })
     }
@@ -567,6 +684,8 @@ pub(crate) struct OpenedVideoEncoder {
     pub input_format: format::Pixel,
     pub input_width: u32,
     pub input_height: u32,
+    /// Where software frames go before the encoder takes them.
+    pub hw_upload: HwUpload,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -640,11 +759,18 @@ fn open_video_encoder_inner(
     crf: Option<u8>,
     global_header: bool,
 ) -> Result<OpenedVideoEncoder, H264EncoderError> {
-    let encoder_supports_input_format = codec
-        .video()
-        .ok()
-        .and_then(|codec_video| codec_video.formats())
-        .is_some_and(|mut formats| formats.any(|f| f == input_config.pixel_format));
+    // `h264_vaapi` lists only VA surfaces; the frames it is handed are NV12
+    // that gets uploaded into one.
+    let vaapi = codec.name() == "h264_vaapi";
+    let encoder_supports_input_format = if vaapi {
+        input_config.pixel_format == ffmpeg::format::Pixel::NV12
+    } else {
+        codec
+            .video()
+            .ok()
+            .and_then(|codec_video| codec_video.formats())
+            .is_some_and(|mut formats| formats.any(|f| f == input_config.pixel_format))
+    };
 
     let mut needs_pixel_conversion = false;
 
@@ -749,14 +875,26 @@ fn open_video_encoder_inner(
         .map(|v| v.get())
         .unwrap_or(1);
 
-    let encoder = {
+    let open = |hw_upload: &HwUpload,
+                encoder_options: Dictionary<'static>|
+     -> Result<encoder::Video, ffmpeg::Error> {
         let mut encoder_ctx = context::Context::new_with_codec(codec);
         encoder_ctx.set_threading(Config::count(thread_count));
         let mut encoder = encoder_ctx.encoder().video()?;
 
         encoder.set_width(output_width);
         encoder.set_height(output_height);
-        encoder.set_format(output_format);
+        encoder.set_format(if vaapi {
+            ffmpeg::format::Pixel::VAAPI
+        } else {
+            output_format
+        });
+        #[cfg(target_os = "linux")]
+        if let Some(frames) = &hw_upload.vaapi {
+            unsafe { frames.attach(encoder.as_mut_ptr()) };
+        }
+        #[cfg(not(target_os = "linux"))]
+        let _ = hw_upload;
         encoder.set_time_base(input_config.time_base);
         encoder.set_frame_rate(Some(input_config.frame_rate));
         encoder.set_colorspace(color::Space::BT709);
@@ -784,7 +922,22 @@ fn open_video_encoder_inner(
             encoder.set_max_bit_rate(bitrate * 3 / 2);
         }
 
-        encoder.open_as_with(codec, encoder_options)?
+        encoder.open_as_with(codec, encoder_options)
+    };
+
+    #[cfg(target_os = "linux")]
+    let (encoder, hw_upload) = if vaapi {
+        open_on_a_vaapi_node(output_width, output_height, |hw_upload| {
+            open(hw_upload, clone_options(&encoder_options))
+        })?
+    } else {
+        let hw_upload = HwUpload::default();
+        (open(&hw_upload, encoder_options)?, hw_upload)
+    };
+    #[cfg(not(target_os = "linux"))]
+    let (encoder, hw_upload) = {
+        let hw_upload = HwUpload::default();
+        (open(&hw_upload, encoder_options)?, hw_upload)
     };
 
     let converted_frame_pool = if converter.is_some() {
@@ -807,7 +960,43 @@ fn open_video_encoder_inner(
         input_format: input_config.pixel_format,
         input_width: input_config.width,
         input_height: input_config.height,
+        hw_upload,
     })
+}
+
+/// Opens the encoder on the first render node whose VA-API driver both makes
+/// NV12 surfaces and encodes H264: a GPU can do the first and not the second.
+#[cfg(target_os = "linux")]
+fn open_on_a_vaapi_node(
+    width: u32,
+    height: u32,
+    mut open: impl FnMut(&HwUpload) -> Result<encoder::Video, ffmpeg::Error>,
+) -> Result<(encoder::Video, HwUpload), H264EncoderError> {
+    let mut errors = Vec::new();
+    for node in super::vaapi::render_nodes() {
+        let frames = match super::vaapi::VaapiFrames::open(&node, width, height) {
+            Ok(frames) => frames,
+            Err(error) => {
+                errors.push(format!("{}: {error}", node.display()));
+                continue;
+            }
+        };
+        let hw_upload = HwUpload {
+            vaapi: Some(frames),
+        };
+        match open(&hw_upload) {
+            Ok(encoder) => {
+                debug!(node = %node.display(), "H264 encodes through VA-API");
+                return Ok((encoder, hw_upload));
+            }
+            Err(error) => errors.push(format!("{}: {error}", node.display())),
+        }
+    }
+    Err(H264EncoderError::Vaapi(if errors.is_empty() {
+        "no render node with a VA-API driver".to_string()
+    } else {
+        errors.join("; ")
+    }))
 }
 
 pub struct H264Encoder {
@@ -821,6 +1010,7 @@ pub struct H264Encoder {
     input_width: u32,
     input_height: u32,
     converted_frame_pool: Option<frame::Video>,
+    hw_upload: HwUpload,
     #[cfg(target_os = "macos")]
     videotoolbox_hw: Option<Arc<VideoToolboxHwFrames>>,
 }
@@ -879,6 +1069,14 @@ impl H264Encoder {
             .map_err(|e| H264EncoderError::VideoToolboxHwInput(e.to_string()))
     }
 
+    /// Whether the selected codec is a hardware encoder, which can fail at
+    /// runtime after opening (a busy or reset media engine).
+    pub fn is_hardware(&self) -> bool {
+        self.encoder
+            .codec()
+            .is_some_and(|codec| is_hardware_h264(codec.name()))
+    }
+
     pub fn conversion_requirements(&self) -> ConversionRequirements {
         let needs_conversion = self.input_format != self.output_format
             || self.input_width != self.output_width
@@ -896,9 +1094,18 @@ impl H264Encoder {
 
     pub fn queue_frame(
         &mut self,
-        mut frame: frame::Video,
+        frame: frame::Video,
         timestamp: Duration,
         output: &mut format::context::Output,
+    ) -> Result<(), QueueFrameError> {
+        self.queue_frame_to(frame, timestamp, output)
+    }
+
+    pub fn queue_frame_to<S: PacketSink + ?Sized>(
+        &mut self,
+        mut frame: frame::Video,
+        timestamp: Duration,
+        output: &mut S,
     ) -> Result<(), QueueFrameError> {
         self.base
             .update_pts(&mut frame, timestamp, &mut self.encoder);
@@ -906,14 +1113,17 @@ impl H264Encoder {
         let frame_to_send = if let Some(converter) = &mut self.converter {
             let pts = frame.pts();
             let converted = self.converted_frame_pool.as_mut().unwrap();
-            converter
-                .run(&frame, converted)
+            super::convert_or_scale(&frame, converted, converter)
                 .map_err(QueueFrameError::Converter)?;
             converted.set_pts(pts);
             converted as &frame::Video
         } else {
             &frame
         };
+        let frame_to_send = self
+            .hw_upload
+            .frame(frame_to_send)
+            .map_err(QueueFrameError::Encode)?;
 
         self.base
             .send_frame(frame_to_send, output, &mut self.encoder)
@@ -922,12 +1132,12 @@ impl H264Encoder {
         Ok(())
     }
 
-    pub fn queue_frame_reusable(
+    pub fn queue_frame_reusable<S: PacketSink + ?Sized>(
         &mut self,
         frame: &mut frame::Video,
         converted_frame: &mut Option<frame::Video>,
         timestamp: Duration,
-        output: &mut format::context::Output,
+        output: &mut S,
     ) -> Result<(), QueueFrameError> {
         self.base.update_pts(frame, timestamp, &mut self.encoder);
 
@@ -936,14 +1146,17 @@ impl H264Encoder {
             let converted = converted_frame.get_or_insert_with(|| {
                 frame::Video::new(self.output_format, self.output_width, self.output_height)
             });
-            converter
-                .run(frame, converted)
+            super::convert_or_scale(frame, converted, converter)
                 .map_err(QueueFrameError::Converter)?;
             converted.set_pts(pts);
             converted as &frame::Video
         } else {
             frame as &frame::Video
         };
+        let frame_to_send = self
+            .hw_upload
+            .frame(frame_to_send)
+            .map_err(QueueFrameError::Encode)?;
 
         self.base
             .send_frame(frame_to_send, output, &mut self.encoder)
@@ -970,9 +1183,13 @@ impl H264Encoder {
 
         self.base
             .update_pts(&mut frame, timestamp, &mut self.encoder);
+        let frame = self
+            .hw_upload
+            .frame(&frame)
+            .map_err(QueueFrameError::Encode)?;
 
         self.base
-            .send_frame(&frame, output, &mut self.encoder)
+            .send_frame(frame, output, &mut self.encoder)
             .map_err(QueueFrameError::Encode)?;
 
         Ok(())
@@ -980,6 +1197,28 @@ impl H264Encoder {
 
     pub fn flush(&mut self, output: &mut format::context::Output) -> Result<(), ffmpeg::Error> {
         self.base.process_eof(output, &mut self.encoder)
+    }
+
+    pub fn flush_to<S: PacketSink + ?Sized>(
+        &mut self,
+        output: &mut S,
+    ) -> Result<(), ffmpeg::Error> {
+        self.base.process_eof(output, &mut self.encoder)
+    }
+
+    /// Configured target bitrate in bits per second, estimated from the
+    /// output geometry when the encoder runs without a bitrate target.
+    pub fn bit_rate(&self) -> u64 {
+        let configured = unsafe { (*self.encoder.as_ptr()).bit_rate };
+        if configured > 0 {
+            return configured as u64;
+        }
+        get_bitrate(
+            self.output_width,
+            self.output_height,
+            30.0,
+            H264EncoderBuilder::QUALITY_BPP,
+        ) as u64
     }
 
     pub fn set_packet_stats(&mut self, stats: Arc<crate::EncodedPacketStats>) {
@@ -1094,11 +1333,16 @@ fn requires_software_encoder(config: &VideoInfo, preset: H264Preset, is_export: 
 }
 
 #[cfg(target_os = "linux")]
-fn linux_encoder_priority(nvidia_device_available: bool) -> &'static [&'static str] {
-    if nvidia_device_available {
-        &["h264_nvenc", "libx264"]
-    } else {
-        &["libx264"]
+fn linux_encoder_priority(
+    nvidia_device_available: bool,
+    vaapi_device_available: bool,
+) -> &'static [&'static str] {
+    match (nvidia_device_available, vaapi_device_available) {
+        // A laptop's NVIDIA GPU first, its integrated GPU if NVENC fails.
+        (true, true) => &["h264_nvenc", "h264_vaapi", "libx264"],
+        (true, false) => &["h264_nvenc", "libx264"],
+        (false, true) => &["h264_vaapi", "libx264"],
+        (false, false) => &["libx264"],
     }
 }
 
@@ -1135,7 +1379,10 @@ fn get_default_encoder_priority(_config: &VideoInfo) -> &'static [&'static str] 
 
     #[cfg(target_os = "linux")]
     {
-        linux_encoder_priority(std::path::Path::new("/dev/nvidiactl").exists())
+        linux_encoder_priority(
+            std::path::Path::new("/dev/nvidiactl").exists(),
+            !super::vaapi::render_nodes().is_empty(),
+        )
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
@@ -1278,6 +1525,10 @@ fn get_codec_and_options(
                 }
                 options.set("g", &keyframe_interval_str);
             }
+            "h264_vaapi" => {
+                options.set("profile", "high");
+                options.set("g", &keyframe_interval_str);
+            }
             "h264_mf" => {
                 options.set("hw_encoding", "true");
                 if is_export {
@@ -1367,7 +1618,8 @@ fn cached_hardware_self_test(
         sync::{Mutex, OnceLock},
     };
 
-    if !(cfg!(target_os = "windows") || (cfg!(target_os = "linux") && codec.name() == "h264_nvenc"))
+    if !(cfg!(target_os = "windows")
+        || (cfg!(target_os = "linux") && matches!(codec.name(), "h264_nvenc" | "h264_vaapi")))
     {
         return Ok(());
     }
@@ -1465,6 +1717,7 @@ fn hardware_encoder_self_test(
     )
     .map_err(|e| format!("test encoder open: {e}"))?;
     let mut encoder = opened.encoder;
+    let mut hw_upload = opened.hw_upload;
 
     // Mid-gray is neutral in both RGB (128,128,128) and YUV (Y=128, U=V=128)
     // representations, so filling every plane with 128 produces a valid gray
@@ -1495,8 +1748,11 @@ fn hardware_encoder_self_test(
     const TEST_FRAME_COUNT: i64 = 8;
     for i in 0..TEST_FRAME_COUNT {
         test_frame.set_pts(Some(i * pts_step));
+        let frame = hw_upload
+            .frame(&test_frame)
+            .map_err(|e| format!("upload: {e}"))?;
         encoder
-            .send_frame(&test_frame)
+            .send_frame(frame)
             .map_err(|e| format!("send_frame: {e}"))?;
         drain_packets(&mut encoder, &mut packets);
     }
@@ -1701,13 +1957,30 @@ mod self_test_tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn linux_nvidia_device_prefers_nvenc_and_keeps_software_fallback() {
-        assert_eq!(linux_encoder_priority(true), &["h264_nvenc", "libx264"]);
+        assert_eq!(
+            linux_encoder_priority(true, false),
+            &["h264_nvenc", "libx264"]
+        );
     }
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn linux_without_nvidia_preserves_software_encoder() {
-        assert_eq!(linux_encoder_priority(false), &["libx264"]);
+    fn linux_amd_and_intel_gpus_encode_through_va_api() {
+        assert_eq!(
+            linux_encoder_priority(false, true),
+            &["h264_vaapi", "libx264"]
+        );
+        // A hybrid laptop falls back to its integrated GPU before software.
+        assert_eq!(
+            linux_encoder_priority(true, true),
+            &["h264_nvenc", "h264_vaapi", "libx264"]
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_without_a_hardware_encoder_preserves_software_encoder() {
+        assert_eq!(linux_encoder_priority(false, false), &["libx264"]);
     }
 
     #[cfg(target_os = "linux")]
@@ -1719,7 +1992,7 @@ mod self_test_tests {
             get_encoder_priority_with_override(
                 &config,
                 H264Preset::HighThroughput,
-                Some(linux_encoder_priority(true)),
+                Some(linux_encoder_priority(true, true)),
                 false,
             ),
             &["libx264"],
@@ -1734,7 +2007,7 @@ mod self_test_tests {
         let codecs = get_codec_and_options(
             &config,
             H264Preset::Ultrafast,
-            Some(linux_encoder_priority(true)),
+            Some(linux_encoder_priority(true, true)),
             true,
             Some(23),
         );
@@ -1769,6 +2042,52 @@ mod self_test_tests {
 
         cached_hardware_self_test(codec, &options, &config, 160, 120, 0.3, None)
             .expect("real NVIDIA hardware preserves neutral gray through encode and decode");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_vaapi_self_test_decodes_real_gray_frames_when_available() {
+        if super::super::vaapi::render_nodes().is_empty() {
+            return;
+        }
+
+        ffmpeg::init().ok();
+        let Some(codec) = encoder::find_by_name("h264_vaapi") else {
+            return;
+        };
+        let config = VideoInfo::from_raw(cap_media_info::RawVideoFormat::Bgra, 640, 360, 30);
+        let options = get_codec_and_options(
+            &config,
+            H264Preset::Ultrafast,
+            Some(&["h264_vaapi", "libx264"]),
+            false,
+            None,
+        )
+        .into_iter()
+        .find(|(candidate, _)| candidate.name() == "h264_vaapi")
+        .expect("available VA-API encoder is configured")
+        .1;
+        // Only hardware that opens an H264 encoder is tested (a render node
+        // can be inaccessible, render-only, or lack its VA-API driver), but
+        // one that opens must keep the gray.
+        if open_video_encoder_inner(
+            codec,
+            clone_options(&options),
+            &config,
+            640,
+            360,
+            0.3,
+            true,
+            None,
+            false,
+        )
+        .is_err()
+        {
+            return;
+        }
+
+        cached_hardware_self_test(codec, &options, &config, 640, 360, 0.3, None)
+            .expect("a VA-API GPU preserves neutral gray through upload, encode and decode");
     }
 }
 
@@ -2056,6 +2375,58 @@ mod rgb_color_tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn queue_frame_to_bgrz_flat_red_decodes_as_bt709() {
+        ffmpeg::init().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("bgrz.mp4");
+        let mut output = format::output_as(&path, "mp4").unwrap();
+        let info = VideoInfo::from_raw_ffmpeg(format::Pixel::BGRZ, 64, 64, 30);
+        let mut encoder = H264Encoder::builder(info)
+            .with_preset(H264Preset::Ultrafast)
+            .with_crf(18)
+            .with_encoder_priority_override(&["libx264"])
+            .build(&mut output)
+            .unwrap();
+        let mut frame = frame::Video::new(format::Pixel::BGRZ, 64, 64);
+        for y in 0..64 {
+            let stride = frame.stride(0);
+            for x in 0..64 {
+                let offset = y * stride + x * 4;
+                frame.data_mut(0)[offset..offset + 4].copy_from_slice(&[40, 40, 220, 255]);
+            }
+        }
+        let mut sink = crate::PacketQueue::new(ffmpeg::Rational(1, 90_000));
+        encoder
+            .queue_frame_to(frame, Duration::ZERO, &mut sink)
+            .unwrap();
+        encoder.flush_to(&mut sink).unwrap();
+        let packets = sink.take();
+        assert!(!packets.is_empty());
+
+        let codec = ffmpeg::decoder::find(ffmpeg::codec::Id::H264).unwrap();
+        let mut decoder = context::Context::new_with_codec(codec)
+            .decoder()
+            .video()
+            .unwrap();
+        let mut frames = Vec::new();
+        for packet in &packets {
+            decoder.send_packet(packet).unwrap();
+            receive_frames(&mut decoder, &mut frames);
+        }
+        decoder.send_eof().unwrap();
+        receive_frames(&mut decoder, &mut frames);
+        assert_eq!(frames.len(), 1);
+        let decoded = &frames[0];
+        assert_eq!(decoded.color_space(), color::Space::BT709);
+        assert_eq!(decoded.color_range(), color::Range::MPEG);
+        let y = decoded.data(0)[32 * decoded.stride(0) + 32];
+        assert!(
+            y.abs_diff(83) <= 2,
+            "decoded luma {y} is not limited BT.709 red"
+        );
     }
 
     #[test]
