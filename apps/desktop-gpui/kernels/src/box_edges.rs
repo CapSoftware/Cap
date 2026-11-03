@@ -18,8 +18,10 @@ use crate::motion_track::{LumaFrame, TrackPoint};
 /// How far a side may be moved from where it was last seen, or from where
 /// the fit put it, in pixels.
 const SEARCH: isize = 28;
-/// How many lines in from the side the outline may run.
+/// How many lines in from the clicked side the outline may run...
 const OUTLINE_DEPTH: isize = 3;
+/// ...and how many lines out, for clicks that fell inside it.
+const OUTLINE_SLACK: isize = 3;
 /// How many frames in a row an edge may go unfound and still hold its side.
 const HOLD_FRAMES: u32 = 15;
 /// How far an edge may move between frames and still count as staying put.
@@ -83,6 +85,8 @@ struct Edge {
 
 pub(crate) struct BoxEdges {
     edges: Vec<Edge>,
+    /// The estimate on the previous frame.
+    previous: Option<Rect>,
 }
 
 impl BoxEdges {
@@ -100,13 +104,15 @@ impl BoxEdges {
                 let at = rect.side(side).round() as isize;
                 // The outline is the band of lines, near the side, that are
                 // each one colour along their length and stand out from
-                // what is beyond. Points are clicked on or just inside
-                // it, so the band is searched inwards; searching outwards
-                // finds the page around the target. The edge is the
-                // outermost line of the band's typical colour: on scaled,
-                // compressed video the outermost pixel is often a blend
-                // with what is beyond, off the band's colour, and moves in
-                // colour as the edge moves by a fraction of a pixel.
+                // what is beyond. Points land on it or a few pixels inside
+                // it, so the search starts a few pixels outside the clicked
+                // side; the page beyond fails the stand-out test (it shares
+                // the colour beyond it), so the search cannot settle there.
+                // The edge is the outermost line of the band's typical
+                // colour: on scaled, compressed video the outermost pixel is
+                // often a blend with what is beyond, off the band's colour,
+                // and moves in colour as the edge moves by a fraction of a
+                // pixel.
                 let qualifies = |line: isize| {
                     let colour = even_colour(frame, &rect, side, line)?;
                     rare_beyond(frame, &rect, side, line, colour)?.then_some((line, colour))
@@ -114,7 +120,7 @@ impl BoxEdges {
                 // A thin rim the page shares (a grey border on dark text)
                 // is skipped: the band starts at the first line in reach
                 // that stands out, such as the fill just inside the rim.
-                let band = (0..=OUTLINE_DEPTH)
+                let band = (-OUTLINE_SLACK..=OUTLINE_DEPTH)
                     .map(|inward| at - inward * side.outward())
                     .skip_while(|&line| qualifies(line).is_none())
                     .map_while(qualifies)
@@ -128,18 +134,21 @@ impl BoxEdges {
                         let edge = Edge {
                             side,
                             colour,
-                            offset: line as f64 - rect.side(side),
+                            offset: line as f64 - mask_side(&rect, side, line),
                             last: line,
                             missed: 0,
                             estimated_at_last: rect.side(side),
                         };
-                        locate(frame, &rect, &edge, &[line])
+                        locate(frame, &rect, &edge, line, line, 0.0)
                             .is_some_and(|found| (found - line).abs() <= 1)
                             .then_some(edge)
                     })
             })
             .collect();
-        Self { edges }
+        Self {
+            edges,
+            previous: Some(rect),
+        }
     }
 
     /// `fitted` with each remembered side moved onto its edge, where enough
@@ -152,7 +161,20 @@ impl BoxEdges {
         let mut found = 0;
         for edge in &mut self.edges {
             let predicted = (original.side(edge.side) + edge.offset).round() as isize;
-            match locate(frame, &original, edge, &[edge.last, predicted]) {
+            // How far the target moved as a whole along this side's axis:
+            // both opposite sides of the estimate moved by at least this.
+            // A single side jumping is the estimate wavering, not the
+            // target moving.
+            let (near, far) = match edge.side {
+                Side::Left | Side::Right => (Side::Left, Side::Right),
+                Side::Top | Side::Bottom => (Side::Top, Side::Bottom),
+            };
+            let estimate_moved = self.previous.map_or(0.0, |previous| {
+                (original.side(near) - previous.side(near))
+                    .abs()
+                    .min((original.side(far) - previous.side(far)).abs())
+            });
+            match locate(frame, &original, edge, edge.last, predicted, estimate_moved) {
                 Some(line) => {
                     edge.last = line;
                     edge.missed = 0;
@@ -167,13 +189,35 @@ impl BoxEdges {
                 // whose estimate is not moving.
                 None if edge.missed < HOLD_FRAMES => {
                     edge.missed += 1;
-                    let moved = original.side(edge.side) - edge.estimated_at_last;
-                    rect.set_side(edge.side, edge.last as f64 - edge.offset + moved);
+                    let estimated = original.side(edge.side);
+                    let moved = estimated - edge.estimated_at_last;
+                    let held = edge.last as f64 - edge.offset + moved;
+                    // Unsure which is right, take whichever lies further out:
+                    // a mask a little too large hides nothing it should show.
+                    let outermost = match edge.side.outward() {
+                        -1 => held.min(estimated),
+                        _ => held.max(estimated),
+                    };
+                    rect.set_side(edge.side, outermost);
                 }
                 None => edge.missed += 1,
             }
         }
+        self.previous = Some(original);
         (rect.into_point(fitted.time, frame), found)
+    }
+}
+
+/// Where the mask's side goes for an outline found at `line`: on the
+/// outline's outer boundary when that lies outside the clicked side (the
+/// clicks fell inside the outline), otherwise where it was clicked.
+fn mask_side(rect: &Rect, side: Side, line: isize) -> f64 {
+    let outline = line as f64 + if side.outward() > 0 { 1.0 } else { 0.0 };
+    let clicked = rect.side(side);
+    if (outline - clicked) * side.outward() as f64 > 0.0 {
+        outline
+    } else {
+        clicked
     }
 }
 
@@ -199,13 +243,20 @@ fn clicked_along(frame: &LumaFrame, rect: &Rect, side: Side, points: &[(f64, f64
     along.len() >= 2 && covered.contains(&(from + trim)) && covered.contains(&(to - trim))
 }
 
-/// Where the edge is now: near `around[0]` (where it was last seen) if
-/// enough positions along the side still see it there, otherwise the line
-/// within [`SEARCH`] of any of `around` that the most positions see, if
-/// enough do. Staying put first keeps an edge that has not moved (the
-/// anchored side of a resized panel) from being pulled onto a look-alike
-/// line elsewhere in the target.
-fn locate(frame: &LumaFrame, rect: &Rect, edge: &Edge, around: &[isize]) -> Option<isize> {
+/// Where the edge is now: within [`STAY`] of `last` (where it was last seen)
+/// if enough positions along the side still see it there, otherwise the line
+/// within [`SEARCH`] of `last` or `predicted` (where the estimate puts it)
+/// that enough positions see and that is nearest `predicted`. Staying put
+/// first keeps an edge that has not moved (the anchored side of a resized
+/// panel) from being pulled onto a look-alike line elsewhere in the target.
+fn locate(
+    frame: &LumaFrame,
+    rect: &Rect,
+    edge: &Edge,
+    last: isize,
+    predicted: isize,
+    estimate_moved: f64,
+) -> Option<isize> {
     let positions = positions(frame, rect, edge.side)?;
     let needed = positions.len() as f64 * MIN_AGREEMENT;
     let limit = if edge.side.vertical() {
@@ -232,19 +283,35 @@ fn locate(frame: &LumaFrame, rect: &Rect, edge: &Edge, around: &[isize]) -> Opti
     let best = |lines: &mut dyn Iterator<Item = isize>| {
         lines
             .map(|line| (line, votes(line)))
-            .max_by_key(|&(line, votes)| (votes, std::cmp::Reverse((line - around[0]).abs())))
+            .max_by_key(|&(line, votes)| (votes, std::cmp::Reverse((line - last).abs())))
             .filter(|&(_, votes)| votes as f64 >= needed)
             .map(|(line, _)| line)
     };
-    best(&mut (around[0] - STAY..=around[0] + STAY)).or_else(|| {
-        let mut lines = around
-            .iter()
-            .flat_map(|center| center - SEARCH..=center + SEARCH)
-            .collect::<Vec<_>>();
-        lines.sort_unstable();
-        lines.dedup();
-        best(&mut lines.into_iter())
-    })
+    // An edge seen where it was last is only trusted if the target did not
+    // just move as a whole: when it did, a line now at the old
+    // place is another of its lines (one under a title bar moves onto the
+    // old top edge when a window is dragged up by its height).
+    (estimate_moved <= STAY as f64)
+        .then(|| best(&mut (last - STAY..=last + STAY)))
+        .flatten()
+        .or_else(|| {
+            // The edge moved further than it can between frames on its own,
+            // so the target was dragged or zoomed and the estimate moved with
+            // it. Of the lines that look like the edge, the one nearest where
+            // the estimate puts it is the edge; the one most positions agree on
+            // may be another straight line inside the target, such as the line
+            // under a title bar.
+            let mut lines = [last, predicted]
+                .iter()
+                .flat_map(|center| center - SEARCH..=center + SEARCH)
+                .collect::<Vec<_>>();
+            lines.sort_unstable();
+            lines.dedup();
+            lines
+                .into_iter()
+                .filter(|&line| votes(line) as f64 >= needed)
+                .min_by_key(|&line| (line - predicted).abs())
+        })
 }
 
 /// Whether `colour` stands out from nearly everything just outside `line`.

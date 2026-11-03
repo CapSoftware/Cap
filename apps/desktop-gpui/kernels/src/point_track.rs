@@ -32,10 +32,15 @@ const PATCH_SIDES: [f64; 3] = [16.0, 24.0, 32.0];
 /// Cap zoom scales about 7% a frame; a fit beyond this is patches failing
 /// together, not the target changing.
 const MAX_STEP_SCALE: f64 = 1.25;
+/// Below this intersection over union, the fit and the whole-box track are
+/// following different things rather than disagreeing about one.
+const AGREEING_OVERLAP: f64 = 0.5;
 
 #[derive(Clone)]
 struct Patch {
     tracker: MotionTracker,
+    /// Which clicked point this patch follows; each point has up to two.
+    point: usize,
     /// The clicked point, as a fraction of the starting box.
     anchor: Point,
     /// Where the point sits in the patch, relative to the patch centre and
@@ -52,7 +57,18 @@ impl Patch {
     }
 }
 
+/// What to do where two plausible estimates of the box disagree.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Disagreement {
+    /// Keep the more trusted estimate: the box follows the target closely.
+    PickOne,
+    /// Cover both: a mask hiding sensitive content may grow a little but
+    /// never shows what one of the estimates says is there.
+    CoverBoth,
+}
+
 pub struct PointTrackSession {
+    disagreement: Disagreement,
     region: Option<TrackSession>,
     patches: Vec<Patch>,
     frame: Point,
@@ -64,7 +80,12 @@ pub struct PointTrackSession {
 impl PointTrackSession {
     /// `points` are normalized to the frame. `None` with fewer than four,
     /// when they span no area, or when no patch around them has detail.
-    pub fn new(frame: &LumaFrame, time: f64, points: &[Point]) -> Option<Self> {
+    pub fn new(
+        frame: &LumaFrame,
+        time: f64,
+        points: &[Point],
+        disagreement: Disagreement,
+    ) -> Option<Self> {
         if points.len() < 4
             || !time.is_finite()
             || points.iter().any(|&(x, y)| {
@@ -84,7 +105,7 @@ impl PointTrackSession {
         }
         let center = ((left + right) / 2.0, (top + bottom) / 2.0);
         let mut patches = Vec::new();
-        for &point in points {
+        for (index, &point) in points.iter().enumerate() {
             let anchor = ((point.0 - left) / size.0, (point.1 - top) / size.1);
             // The unit step from the point towards the middle of the shape:
             // (±1, ±1) at a corner, (0, ±1) on the middle of an edge.
@@ -108,7 +129,10 @@ impl PointTrackSession {
                         )
                     });
                 if let Some(found) = found {
-                    patches.push(found);
+                    patches.push(Patch {
+                        point: index,
+                        ..found
+                    });
                     placed += 1;
                 }
             }
@@ -119,12 +143,16 @@ impl PointTrackSession {
         if patches.len() < 3 {
             return None;
         }
-        let start = TrackPoint { time, center, size };
+        let clicked = TrackPoint { time, center, size };
+        let mut edges = BoxEdges::new(frame, clicked, points);
+        // Where clicks fell inside a straight outline, the box starts on it.
+        let (start, _) = edges.snap(frame, clicked);
         Some(Self {
+            disagreement,
             region: TrackSession::new(frame, time, center, size),
             patches,
             frame: (width, height),
-            edges: BoxEdges::new(frame, start, points),
+            edges,
             fitted: vec![start],
             unresolved: Vec::new(),
         })
@@ -163,17 +191,35 @@ impl PointTrackSession {
             .as_ref()
             .map(TrackSession::latest)
             .filter(|(region, _)| region.time == time);
-        // A fit backed by most matched patches wins. When only a few back
-        // it, they are more likely stuck on the background than right, so
-        // the whole-box track is preferred and the fit used only without
-        // one. Straight edges then correct the sides of whichever is chosen.
+        // A fit backed by most matched patches, from at least three clicked
+        // points, wins. A point's two patches see much the same pixels, so a
+        // fit two points back is a guess about the rest of the shape; with
+        // fewer behind it, those few are more likely stuck on the background
+        // than right, so the whole-box track is preferred and the fit used
+        // only without one. Straight edges then correct the chosen sides.
         let (estimate, inliers) = match (fit, region) {
-            (Some((fit, inliers)), _) if inliers.len() * 5 >= measurements.len() * 3 => {
+            (Some((fit, inliers)), _)
+                if inliers.len() * 5 >= measurements.len() * 3
+                    && self.distinct_points(&matches, &inliers) >= 3 =>
+            {
                 (Some(fit), inliers)
             }
             (_, Some((region, _))) => (Some(region), Vec::new()),
             (Some((fit, inliers)), None) => (Some(fit), inliers),
             (None, None) => (None, Vec::new()),
+        };
+        // Two estimates that roughly agree but differ at a side (the fit and
+        // the whole-box track disagree most when the target turns sharply)
+        // are both covered when asked. Estimates that disagree outright mean
+        // one has followed something else, so the chosen one stands.
+        let estimate = match (estimate, region) {
+            (Some(chosen), Some((region, _)))
+                if self.disagreement == Disagreement::CoverBoth
+                    && overlap_ratio(chosen, region) >= AGREEING_OVERLAP =>
+            {
+                Some(union(chosen, region))
+            }
+            (chosen, _) => chosen,
         };
         // With no estimate, the box's straight edges can still be found
         // from where it last was: a window resized past what its patches
@@ -182,7 +228,21 @@ impl PointTrackSession {
         let base = estimate.or_else(|| self.fitted.last().map(|last| TrackPoint { time, ..*last }));
         let expected = base.and_then(|base| {
             let (snapped, edges) = self.edges.snap(&frame, base);
-            (!held || edges > 0).then_some(snapped)
+            if held && edges == 0 {
+                return None;
+            }
+            // Snapped edges are one more estimate: an edge can settle on
+            // another straight line of the target (the one under a title
+            // bar) just as the estimate can lag a resize. Covering both
+            // hides whichever is right.
+            Some(match self.disagreement {
+                Disagreement::CoverBoth
+                    if !held && overlap_ratio(snapped, base) >= AGREEING_OVERLAP =>
+                {
+                    union(snapped, base)
+                }
+                _ => snapped,
+            })
         });
         match expected {
             Some(expected) => self.fitted.push(expected),
@@ -210,6 +270,21 @@ impl PointTrackSession {
                 }
             }
         }
+    }
+
+    /// How many clicked points the `inliers` (indices into `matches`) follow.
+    fn distinct_points(
+        &self,
+        matches: &[(usize, Point, MotionTracker)],
+        inliers: &[usize],
+    ) -> usize {
+        let mut points = inliers
+            .iter()
+            .map(|&position| self.patches[matches[position].0].point)
+            .collect::<Vec<_>>();
+        points.sort_unstable();
+        points.dedup();
+        points.len()
     }
 
     /// The path, and the spans in which the target could not be found.
@@ -269,6 +344,37 @@ impl PointTrackSession {
     }
 }
 
+/// Intersection over union of two boxes.
+fn overlap_ratio(a: TrackPoint, b: TrackPoint) -> f64 {
+    let sides = |p: TrackPoint| {
+        (
+            p.center.0 - p.size.0 / 2.0,
+            p.center.1 - p.size.1 / 2.0,
+            p.center.0 + p.size.0 / 2.0,
+            p.center.1 + p.size.1 / 2.0,
+        )
+    };
+    let (a, b) = (sides(a), sides(b));
+    let width = (a.2.min(b.2) - a.0.max(b.0)).max(0.0);
+    let height = (a.3.min(b.3) - a.1.max(b.1)).max(0.0);
+    let inter = width * height;
+    let area = |s: (f64, f64, f64, f64)| (s.2 - s.0) * (s.3 - s.1);
+    inter / (area(a) + area(b) - inter).max(1e-12)
+}
+
+/// The smallest box holding both, at `a`'s time.
+fn union(a: TrackPoint, b: TrackPoint) -> TrackPoint {
+    let left = (a.center.0 - a.size.0 / 2.0).min(b.center.0 - b.size.0 / 2.0);
+    let top = (a.center.1 - a.size.1 / 2.0).min(b.center.1 - b.size.1 / 2.0);
+    let right = (a.center.0 + a.size.0 / 2.0).max(b.center.0 + b.size.0 / 2.0);
+    let bottom = (a.center.1 + a.size.1 / 2.0).max(b.center.1 + b.size.1 / 2.0);
+    TrackPoint {
+        time: a.time,
+        center: ((left + right) / 2.0, (top + bottom) / 2.0),
+        size: (right - left, bottom - top),
+    }
+}
+
 fn plausible_scale(ratio: f64) -> bool {
     (1.0 / MAX_STEP_SCALE..=MAX_STEP_SCALE).contains(&ratio)
 }
@@ -300,6 +406,7 @@ fn patch(frame: &LumaFrame, point: Point, anchor: Point, side: f64, shift: Point
     let tracker = MotionTracker::new(frame, x as usize, y as usize, side as usize, side as usize)?;
     Some(Patch {
         tracker,
+        point: 0,
         anchor,
         offset: ((px - x) / side - 0.5, (py - y) / side - 0.5),
     })
@@ -420,9 +527,13 @@ mod tests {
     #[test]
     fn follows_independent_width_and_height_changes_with_changing_contents() {
         let (first, points) = window(0, false);
-        let mut session =
-            PointTrackSession::new(&first, 0.0, &[points[2], points[0], points[3], points[1]])
-                .unwrap();
+        let mut session = PointTrackSession::new(
+            &first,
+            0.0,
+            &[points[2], points[0], points[3], points[1]],
+            Disagreement::PickOne,
+        )
+        .unwrap();
         for step in 1..=20 {
             session.push(step as f64 / 30.0, window(step, false).0);
         }
@@ -476,7 +587,8 @@ mod tests {
     #[test]
     fn supplemental_points_follow_resizing_when_two_corners_disappear() {
         let (first, points) = window(0, true);
-        let mut session = PointTrackSession::new(&first, 0.0, &points).unwrap();
+        let mut session =
+            PointTrackSession::new(&first, 0.0, &points, Disagreement::PickOne).unwrap();
         for step in 1..=20 {
             session.push(step as f64 / 30.0, window(step, true).0);
         }

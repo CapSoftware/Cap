@@ -6,8 +6,8 @@ use std::sync::{
 use cap_editor::EditorInstance;
 use cap_export::preview::{ExportPreviewSettings, render_frame_with_editor};
 use cap_gpui_kernels::motion_track::{LumaFrame, TrackSession};
-use cap_gpui_kernels::point_track::PointTrackSession;
-use cap_project::{MaskSegment, ProjectConfiguration, XY};
+use cap_gpui_kernels::point_track::{Disagreement, PointTrackSession};
+use cap_project::{MaskKind, MaskSegment, ProjectConfiguration, XY};
 use gpui::{
     AnyElement, Context, CursorStyle, Div, FontWeight, Hsla, InteractiveElement, IntoElement,
     MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement, Pixels, Point, Styled, Task,
@@ -22,11 +22,14 @@ use crate::{
 const TRACK_FPS: f64 = 30.;
 const TRACK_RESOLUTION: XY<u32> = XY { x: 960, y: 540 };
 const MARKER_TOLERANCE: f64 = 0.003;
-/// How much a Track Points mask is widened and heightened past the box
-/// around its points (about 4 pixels a side at 1280 wide): measured on
-/// clicks around round and rectangular targets, it covers how far inside
-/// the outline a careful click lands.
-const POINT_OUTLINE_MARGIN: f64 = 0.006;
+/// How much a tracked mask is widened past the tracked box, and heightened
+/// by as many pixels: 0.6% of the frame's width a side. For Track Points it
+/// covers clicks landing up to about four screen pixels inside the outline
+/// on a side with no straight outline to find (one over a dark dock, say);
+/// for a sensitive mask from Track Motion, the few pixels a box lags a fast
+/// zoom. Measured on a dragged window recorded at 3600 pixels wide and the
+/// scenarios in `kernels/tests/mask_tracking_scenarios.rs`.
+const TRACKED_MARGIN: f64 = 0.012;
 /// The canvas's resize handle (`render_element_box`): picked points use the
 /// same disc so the picker reads as part of the selection, hollow so the
 /// pixel being tracked stays visible through it.
@@ -171,8 +174,8 @@ pub(crate) struct MaskTrackingPoints {
 }
 
 enum TrackingTarget {
-    Box(XY<f64>, XY<f64>),
-    Points(Vec<(f64, f64)>),
+    Box(XY<f64>, XY<f64>, Disagreement),
+    Points(Vec<(f64, f64)>, Disagreement),
 }
 
 enum TrackingSession {
@@ -486,7 +489,16 @@ impl EditorWindow {
         }
         let (center, size) = segment.rect_at(from - segment.start);
         tracing::debug!(index, from, ?points, "mask tracking started");
-        let target = points.map_or(TrackingTarget::Box(center, size), TrackingTarget::Points);
+        // A sensitive mask covers every place the trackers think the target
+        // might be, with a margin; a highlight follows it closely.
+        let disagreement = match segment.mask_type {
+            MaskKind::Sensitive => Disagreement::CoverBoth,
+            MaskKind::Highlight => Disagreement::PickOne,
+        };
+        let target = match points {
+            Some(points) => TrackingTarget::Points(points, disagreement),
+            None => TrackingTarget::Box(center, size, disagreement),
+        };
         let Ok(snapshot) = serde_json::to_value(&self.project) else {
             return;
         };
@@ -595,6 +607,7 @@ async fn track(
     let steps = ((to - from) * TRACK_FPS).floor().max(0.) as usize;
     let mut session: Option<TrackingSession> = None;
     let mut needs_review = false;
+    let mut aspect = 1.0;
     for step in 0..=steps {
         if cancel.load(Ordering::Acquire) {
             needs_review = true;
@@ -607,6 +620,7 @@ async fn track(
             needs_review = true;
             break;
         };
+        aspect = f64::from(frame.width) / f64::from(frame.height.max(1));
         #[cfg(debug_assertions)]
         dump_tracking_frame(&frame);
         let luma = LumaFrame::from_rgba(
@@ -620,12 +634,13 @@ async fn track(
             Some(TrackingSession::Points(session)) => session.push(time, luma),
             None => {
                 let created = match &target {
-                    TrackingTarget::Box(center, size) => {
+                    TrackingTarget::Box(center, size, _) => {
                         TrackSession::new(&luma, time, (center.x, center.y), (size.x, size.y))
                             .map(TrackingSession::Box)
                     }
-                    TrackingTarget::Points(points) => {
-                        PointTrackSession::new(&luma, time, points).map(TrackingSession::Points)
+                    TrackingTarget::Points(points, disagreement) => {
+                        PointTrackSession::new(&luma, time, points, *disagreement)
+                            .map(TrackingSession::Points)
                     }
                 };
                 let Some(created) = created else {
@@ -644,16 +659,22 @@ async fn track(
         };
     };
     // Points are clicked on, or just inside, the outline of what they mark,
-    // so the box around them falls a few pixels short of it.
-    let (points, lost, outline_margin) = match session {
-        TrackingSession::Box(session) => {
-            let (points, lost) = session.finish();
-            (points, lost, 0.0)
-        }
-        TrackingSession::Points(session) => {
-            let (points, lost) = session.finish();
-            (points, lost, POINT_OUTLINE_MARGIN)
-        }
+    // so the box around them falls a few pixels short of it; a sensitive
+    // mask tracked as a box can lag its target by a few pixels. A miss is as
+    // many pixels up and down as across, so the height's share of the margin
+    // is scaled by the frame's aspect ratio.
+    let margined = matches!(
+        target,
+        TrackingTarget::Points(..) | TrackingTarget::Box(_, _, Disagreement::CoverBoth)
+    );
+    let margin = if margined {
+        XY::new(TRACKED_MARGIN, TRACKED_MARGIN * aspect)
+    } else {
+        XY::new(0.0, 0.0)
+    };
+    let (points, lost) = match session {
+        TrackingSession::Box(session) => session.finish(),
+        TrackingSession::Points(session) => session.finish(),
     };
     if !lost.is_empty() {
         tracing::info!(?lost, "mask target was out of sight");
@@ -664,7 +685,7 @@ async fn track(
             (
                 point.time - segment_start,
                 XY::new(point.center.0, point.center.1),
-                XY::new(point.size.0 + outline_margin, point.size.1 + outline_margin),
+                XY::new(point.size.0 + margin.x, point.size.1 + margin.y),
             )
         })
         .collect();

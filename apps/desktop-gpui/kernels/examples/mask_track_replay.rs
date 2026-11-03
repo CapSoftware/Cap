@@ -10,12 +10,13 @@
 //! editor logs when tracking starts.
 //!
 //! Points are normalized to the frame (0..1), taken on the first frame. Four
-//! or more track points; two (centre, size) track the whole box instead.
+//! or more track points (covering both estimates where they disagree, as a
+//! sensitive mask does); two (centre, size) track the whole box instead.
 //! Prints the tracked box per frame as `time left top right bottom` in
 //! pixels, then the spans in which the target was lost.
 
 use cap_gpui_kernels::motion_track::{LumaFrame, TrackSession};
-use cap_gpui_kernels::point_track::PointTrackSession;
+use cap_gpui_kernels::point_track::{Disagreement, PointTrackSession};
 
 fn main() {
     let args = std::env::args().collect::<Vec<_>>();
@@ -43,7 +44,8 @@ fn main() {
         .map(|frame| LumaFrame::from_rgba(frame, width, height, (width * 4) as usize));
     let first = frames.next().expect("at least one frame");
     let (path, lost) = if points.len() >= 4 {
-        let mut session = PointTrackSession::new(&first, 0.0, &points).expect("trackable points");
+        let mut session = PointTrackSession::new(&first, 0.0, &points, Disagreement::CoverBoth)
+            .expect("trackable points");
         for (index, frame) in frames.enumerate() {
             session.push((index + 1) as f64 / fps, frame);
         }

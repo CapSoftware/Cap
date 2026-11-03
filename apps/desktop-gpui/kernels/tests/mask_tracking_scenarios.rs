@@ -11,7 +11,7 @@
 //! that loosens tracking shows up as a named scenario and a frame time.
 
 use cap_gpui_kernels::motion_track::{LumaFrame, TrackPoint, TrackSession};
-use cap_gpui_kernels::point_track::PointTrackSession;
+use cap_gpui_kernels::point_track::{Disagreement, PointTrackSession};
 use cap_project::{MaskKind, MaskSegment, XY};
 
 const WIDTH: usize = 960;
@@ -646,7 +646,8 @@ fn track_points(
         .map(|(x, y)| (x / WIDTH as f64, y / HEIGHT as f64))
         .collect::<Vec<_>>();
     let mut session =
-        PointTrackSession::new(&frames[0].luma, 0.0, &points).expect("trackable points");
+        PointTrackSession::new(&frames[0].luma, 0.0, &points, Disagreement::CoverBoth)
+            .expect("trackable points");
     let mut kept = Vec::with_capacity(frames.len());
     for (index, frame) in frames.into_iter().enumerate() {
         if index > 0 {
