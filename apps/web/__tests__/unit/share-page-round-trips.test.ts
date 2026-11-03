@@ -81,7 +81,10 @@ vi.mock("@/lib/share-playback", () => ({
 		defaultStorage: true,
 	}),
 }));
-vi.mock("@/lib/share-web-url", () => ({ resolveShareWebUrl: vi.fn() }));
+vi.mock("@/lib/share-web-url", () => ({
+	resolveShareWebUrl: vi.fn(),
+	resolveForeignShareRedirect: async () => null,
+}));
 vi.mock("@/lib/transcribe", () => ({ transcribeVideo: vi.fn() }));
 vi.mock("@/utils/flags", () => ({ isAiGenerationEnabled: async () => true }));
 vi.mock("@/app/s/[videoId]/_components/PasswordGate", () => ({
