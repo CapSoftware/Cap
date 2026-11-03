@@ -139,6 +139,10 @@ pub struct Workspace {
     attempts: u32,
     fixed: bool,
     initialized: bool,
+    /// Journal entries of an apply that has not been committed or rolled
+    /// back yet. While set, the on-disk journal is what restores the
+    /// originals, so nothing may overwrite it.
+    unsettled: Option<Vec<JournalEntry>>,
 }
 
 fn now_unix() -> u64 {
@@ -350,6 +354,7 @@ impl Workspace {
             attempts: 0,
             fixed: false,
             initialized: false,
+            unsettled: None,
         })
     }
 
@@ -1146,6 +1151,7 @@ impl Workspace {
         self.ensure_dir()?;
         let entries = self.journal_entries();
         self.write_journal(JournalState::Committing, entries.clone())?;
+        self.unsettled = Some(entries.clone());
         let changes: Vec<(RelPath, Staged)> = self
             .changes
             .iter()
@@ -1165,6 +1171,7 @@ impl Workspace {
                 match verifier(self.bundle.root()) {
                     Ok(path) => {
                         self.write_journal(JournalState::Committed, entries)?;
+                        self.unsettled = None;
                         self.fixed = true;
                         self.cleanup_staged();
                         return Ok(VerifyOutcome {
@@ -1180,6 +1187,7 @@ impl Workspace {
         };
         rollback_entries(&self.bundle, &self.dir, &entries)?;
         self.write_journal(JournalState::RolledBack, entries)?;
+        self.unsettled = None;
         Ok(VerifyOutcome {
             fixed: false,
             error: verify_error.map(|error| self.redactor.text(&error)),
@@ -1197,6 +1205,16 @@ impl Workspace {
     pub fn close(&mut self) {
         if !self.initialized {
             return;
+        }
+        if let Some(entries) = self.unsettled.take() {
+            let settled = rollback_entries(&self.bundle, &self.dir, &entries)
+                .and_then(|()| self.write_journal(JournalState::RolledBack, entries));
+            if let Err(error) = settled {
+                tracing::warn!(%error, "repair rollback on close failed; left for startup recovery");
+                mark_active(&self.dir, false);
+                self.initialized = false;
+                return;
+            }
         }
         if !self.fixed {
             self.discard().ok();
