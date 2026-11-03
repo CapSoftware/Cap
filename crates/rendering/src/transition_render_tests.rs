@@ -477,6 +477,6 @@ async fn preview_and_export_render_the_same_transition_frame() {
                 .expect("queued export")
                 .expect("export frame"),
         };
-        assert_eq!(export.data, preview.data, "{kind:?}");
+        assert_eq!(max_difference(&export, &preview), 0, "{kind:?}");
     }
 }
