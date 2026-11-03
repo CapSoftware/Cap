@@ -854,7 +854,7 @@ impl SettingsWindow {
         let pages = crate::settings_pages::PagesState::new(window, cx);
         let page_scroll = ScrollHandle::new();
         let keyboard_nav = ui::keyboard_nav::install(window, cx, |this: &Self, _| {
-            this.menu.is_some() || this.shortcut_listening() || this.switch_back_running()
+            this.menu.is_some() || this.shortcut_listening()
         });
 
         Self {
@@ -1736,9 +1736,6 @@ fn covers_default_exclusion(entry: &WindowExclusion, default: &WindowExclusion) 
 impl Render for SettingsWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_appearance(window, cx);
-        if self.switch_back_running() {
-            ui::keyboard_nav::leave(window, cx);
-        }
         self.keyboard_nav = ui::keyboard_nav::active(window, cx);
         let theme = self.theme;
         if self.page == Page::Quality
@@ -1852,9 +1849,6 @@ impl Render for SettingsWindow {
             // the drag layer the zoom slider needs while the button is held.
             .children(self.render_menu(cx))
             .children(self.render_slider_drag_layer(cx))
-            // Over everything, including the menus: the Experimental page's
-            // hand-back takes the whole window while it counts down.
-            .children(self.render_switch_overlay(cx))
     }
 }
 

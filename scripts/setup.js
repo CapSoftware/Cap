@@ -7,10 +7,7 @@ import * as path from "node:path";
 import { env } from "node:process";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import {
-	createLinuxBundleConfig,
-	GPUI_RPM_DEPENDS,
-} from "./linux-bundle-config.mjs";
+import { createLinuxBundleConfig } from "./linux-bundle-config.mjs";
 
 const exec = promisify(execCb);
 const execFile = promisify(execFileCb);
@@ -324,7 +321,7 @@ async function main() {
 			console.log(
 				`Staged ${bundledLibraries.length} shared libraries for Linux bundling`,
 			);
-			await writeLinuxTauriConfig(bundledLibraries);
+			await writeLinuxBundleConfig(bundledLibraries);
 
 			cargoConfigContents += `ORT_DYLIB_PATH = { relative = true, force = true, value = "${cargoConfigPath(
 				path.relative(__root, onnxRuntimePath),
@@ -714,7 +711,7 @@ async function fileExists(path) {
 		.catch(() => false);
 }
 
-async function writeLinuxTauriConfig(sonameLibs) {
+async function writeLinuxBundleConfig(sonameLibs) {
 	const pluginName = "libasound_module_pcm_pulse.so";
 	const pluginDirectories = [
 		`/usr/lib/${arch}-linux-gnu/alsa-lib`,
@@ -741,23 +738,6 @@ async function writeLinuxTauriConfig(sonameLibs) {
 	await fs.mkdir(appimageLibDir, { recursive: true });
 	await fs.copyFile(pulsePlugin, path.join(appimageLibDir, pluginName));
 
-	const tauriDirectory = path.join(__root, "apps", "desktop", "src-tauri");
-	const tauriConfig = JSON.parse(
-		await fs.readFile(path.join(tauriDirectory, "tauri.conf.json"), "utf8"),
-	);
-	await writeFileIfChanged(
-		path.join(tauriDirectory, "tauri.linux.conf.json"),
-		`${JSON.stringify(
-			createLinuxBundleConfig(
-				sonameLibs,
-				tauriConfig.bundle.linux.deb.files,
-				tauriConfig.bundle.linux.deb.depends,
-			),
-			null,
-			"\t",
-		)}\n`,
-	);
-
 	const gpuiDirectory = path.join(__root, "apps", "desktop-gpui");
 	const gpuiConfig = JSON.parse(
 		await fs.readFile(path.join(gpuiDirectory, "tauri.conf.json"), "utf8"),
@@ -765,22 +745,13 @@ async function writeLinuxTauriConfig(sonameLibs) {
 	await writeFileIfChanged(
 		path.join(gpuiDirectory, "tauri.linux.conf.json"),
 		`${JSON.stringify(
-			createLinuxBundleConfig(
-				sonameLibs,
-				{},
-				gpuiConfig.bundle.linux.deb.depends,
-				{
-					root: "../..",
-					rpmDependencies: GPUI_RPM_DEPENDS,
-					mediaFramework: false,
-				},
-			),
+			createLinuxBundleConfig(sonameLibs, gpuiConfig.bundle.linux.deb.depends),
 			null,
 			"\t",
 		)}\n`,
 	);
 	console.log(
-		`Generated Linux Tauri package configs with ${sonameLibs.length} shared libraries`,
+		`Generated the Linux package config with ${sonameLibs.length} shared libraries`,
 	);
 }
 
@@ -846,7 +817,7 @@ async function ensureMsvcVersion() {
 				`(e.g. __std_find_last_of_trivial_pos_*, __std_remove_8) that only exist in vcruntime140_1.lib from MSVC 14.42+.\n` +
 				`\nUpdate via the Visual Studio Installer, or from an elevated PowerShell:\n` +
 				`  winget upgrade --id Microsoft.VisualStudio.2022.BuildTools\n` +
-				`After updating, run: cargo clean -p cap-desktop && bun run dev:windows\n`,
+				`After updating, run: cargo clean --manifest-path apps/desktop-gpui/Cargo.toml -p cap-desktop-gpui && bun run dev:desktop\n`,
 		);
 	}
 

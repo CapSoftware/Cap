@@ -22,25 +22,22 @@
 		"targets": "all",
 		"category": "Video",
 		"longDescription": "Cap is the open source alternative to Loom. Lightweight, powerful, and cross-platform. Record and share in seconds.",
-		"externalBin": [
-			"../desktop/src-tauri/binaries/cap-muxer",
-			"../desktop/src-tauri/binaries/cap-cli"
-		],
+		"externalBin": ["binaries/cap-muxer", "binaries/cap-cli"],
 		"icon": [
-			"../desktop/src-tauri/icons/32x32.png",
-			"../desktop/src-tauri/icons/128x128.png",
-			"../desktop/src-tauri/icons/128x128@2x.png",
-			"../desktop/src-tauri/icons/macos/icon.icns",
-			"../desktop/src-tauri/icons/icon.ico"
+			"icons/32x32.png",
+			"icons/128x128.png",
+			"icons/128x128@2x.png",
+			"icons/macos/icon.icns",
+			"icons/icon.ico"
 		],
 		"resources": {
-			"../desktop/src-tauri/assets/backgrounds/macOS/*": "assets/backgrounds/macOS/",
-			"../desktop/src-tauri/assets/backgrounds/blue/*": "assets/backgrounds/blue/",
-			"../desktop/src-tauri/assets/backgrounds/cities/*": "assets/backgrounds/cities/",
-			"../desktop/src-tauri/assets/backgrounds/dark/*": "assets/backgrounds/dark/",
-			"../desktop/src-tauri/assets/backgrounds/orange/*": "assets/backgrounds/orange/",
-			"../desktop/src-tauri/assets/backgrounds/purple/*": "assets/backgrounds/purple/",
-			"../desktop/src/assets/music/*.mp3": "assets/music/"
+			"assets/backgrounds/macOS/*": "assets/backgrounds/macOS/",
+			"assets/backgrounds/blue/*": "assets/backgrounds/blue/",
+			"assets/backgrounds/cities/*": "assets/backgrounds/cities/",
+			"assets/backgrounds/dark/*": "assets/backgrounds/dark/",
+			"assets/backgrounds/orange/*": "assets/backgrounds/orange/",
+			"assets/backgrounds/purple/*": "assets/backgrounds/purple/",
+			"assets/music/*.mp3": "assets/music/"
 		},
 		"fileAssociations": [
 			{
@@ -52,7 +49,7 @@
 		],
 		"macOS": {
 			"minimumSystemVersion": "12.3",
-			"entitlements": "../desktop/src-tauri/Entitlements.plist",
+			"entitlements": "packaging/macos/Entitlements.plist",
 			"frameworks": ["../../target/native-deps/Spacedrive.framework"],
 			"files": {
 				"Resources/en.lproj/InfoPlist.strings": "macos/en.lproj/InfoPlist.strings",
@@ -64,7 +61,7 @@
 				"Resources/hi.lproj/InfoPlist.strings": "macos/hi.lproj/InfoPlist.strings"
 			},
 			"dmg": {
-				"background": "../desktop/src-tauri/assets/dmg-background.png",
+				"background": "packaging/macos/dmg-background.png",
 				"appPosition": {
 					"x": 180,
 					"y": 140
@@ -77,9 +74,9 @@
 		},
 		"windows": {
 			"nsis": {
-				"headerImage": "../desktop/src-tauri/assets/nsis-header.bmp",
-				"sidebarImage": "../desktop/src-tauri/assets/nsis-sidebar.bmp",
-				"installerIcon": "../desktop/src-tauri/icons/icon.ico",
+				"headerImage": "packaging/windows/nsis-header.bmp",
+				"sidebarImage": "packaging/windows/nsis-sidebar.bmp",
+				"installerIcon": "icons/icon.ico",
 				"installerHooks": "packaging/windows/installer-hooks.nsh",
 				"compression": "lzma"
 			},

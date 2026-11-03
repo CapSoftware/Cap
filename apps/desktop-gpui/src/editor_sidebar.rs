@@ -534,35 +534,8 @@ fn wallpaper_dir_from(
     candidates.push(PathBuf::from(
         "/Applications/Cap.app/Contents/Resources/assets/backgrounds",
     ));
-    candidates.push(
-        manifest
-            .join("../desktop/src-tauri/assets/backgrounds")
-            .clean(),
-    );
+    candidates.push(manifest.join("assets/backgrounds"));
     candidates.into_iter().find(|path| path.is_dir())
-}
-
-/// `PathBuf::canonicalize` fails on a path that does not exist, and a `..`
-/// segment left in place reads badly in a log line, so the `../` is folded
-/// here instead.
-trait Clean {
-    fn clean(self) -> PathBuf;
-}
-
-impl Clean for PathBuf {
-    fn clean(self) -> PathBuf {
-        let mut out = PathBuf::new();
-        for component in self.components() {
-            match component {
-                std::path::Component::ParentDir => {
-                    out.pop();
-                }
-                std::path::Component::CurDir => {}
-                other => out.push(other),
-            }
-        }
-        out
-    }
 }
 
 pub fn wallpaper_path(id: &str) -> Option<PathBuf> {

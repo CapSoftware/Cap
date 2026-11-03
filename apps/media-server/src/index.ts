@@ -1,6 +1,12 @@
 import app from "./app";
 import { abortAllJobs } from "./lib/job-manager";
-import { createShutdownHandler, getIdleTimeoutSeconds } from "./lib/lifecycle";
+import {
+	createShutdownHandler,
+	getIdleTimeoutSeconds,
+	setDraining,
+	trackBackgroundTask,
+} from "./lib/lifecycle";
+import { releaseLiveSessions } from "./lib/live-transcribe";
 import { cancelAllMediaOperations } from "./lib/media-operations";
 import {
 	cleanupMediaTransferCache,
@@ -24,7 +30,8 @@ void Promise.allSettled([
 	}
 });
 
-const shutdown = createShutdownHandler(async () => {
+const drainAndShutdown = createShutdownHandler(async () => {
+	await releaseLiveSessions();
 	const abortedJobs = await abortAllJobs();
 	if (abortedJobs > 0) {
 		console.log(`[media-server] Aborted ${abortedJobs} active jobs`);
@@ -34,6 +41,14 @@ const shutdown = createShutdownHandler(async () => {
 	await removeOwnTempDir();
 	process.exit(0);
 });
+
+// Live transcription sessions last as long as a recording, so they move to
+// another server as soon as draining starts instead of holding it open.
+const shutdown = (signal: string) => {
+	setDraining(true);
+	void trackBackgroundTask(releaseLiveSessions());
+	return drainAndShutdown(signal);
+};
 
 process.on("SIGINT", () => {
 	void shutdown("SIGINT");

@@ -816,6 +816,38 @@ fn translated_path(
 pub enum WaveformTrack {
     Mic,
     System,
+    Imported,
+}
+
+/// An imported audio file's 10 Hz peak table, built from the samples playback
+/// already decoded. `peaks[0]` starts at source frame `source_start`, and the
+/// table is good for the 48 kHz frame range `source_start..source_end`, the
+/// span that decode covers.
+#[derive(Debug, Clone)]
+pub struct ImportedWaveform {
+    pub peaks: Arc<Vec<f32>>,
+    pub source_start: usize,
+    pub source_end: usize,
+}
+
+impl ImportedWaveform {
+    pub fn from_audio(audio: &cap_audio::AudioData) -> Self {
+        Self {
+            peaks: Arc::new(waveform_peaks(&[audio.samples()], audio.channels())),
+            source_start: audio.source_start_sample(),
+            source_end: audio.covered_source_end_sample(),
+        }
+    }
+
+    pub fn covers(&self, (start, end): (usize, usize)) -> bool {
+        start >= self.source_start && end <= self.source_end
+    }
+
+    /// The [`WaveformGeometry::source_start`] for a segment trimmed to
+    /// `trim_start`: the table's own index 0 is `source_start`, not source 0.
+    fn source_origin(&self, trim_start: f64) -> f64 {
+        trim_start - self.source_start as f64 / f64::from(cap_audio::AudioData::SAMPLE_RATE)
+    }
 }
 
 /// Shared by every clone of the model, so a drag preview reuses the committed
@@ -1250,6 +1282,9 @@ pub enum SegmentDetail {
         enabled: bool,
         fade_in: f64,
         fade_out: f64,
+        path: SharedString,
+        trim_start: f64,
+        volume_db: f64,
     },
     /// `TL/CaptionsTrack.tsx:176-273`.
     Caption {
@@ -1315,6 +1350,8 @@ pub struct TimelineModel {
     /// (`TL/ClipTrack.tsx:713-730`).
     pub mic_waveforms: Vec<Arc<Vec<f32>>>,
     pub system_waveforms: Vec<Arc<Vec<f32>>>,
+    /// Imported audio peak tables, keyed by the segment's config `path`.
+    pub imported_waveforms: Arc<HashMap<String, ImportedWaveform>>,
     pub waveform_paths: Arc<WaveformPaths>,
     /// The span a live ghost trim is removing, in output time. Drawn as a gap
     /// with a red duration badge, the way Blip's ghost resize marks the cut.
@@ -1463,6 +1500,9 @@ impl TimelineModel {
                     enabled: segment.enabled,
                     fade_in: segment.fade_in,
                     fade_out: segment.fade_out,
+                    path: SharedString::from(segment.path.clone()),
+                    trim_start: segment.trim_start,
+                    volume_db: f64::from(segment.volume_db),
                 },
             })
             .collect();
@@ -1548,6 +1588,7 @@ impl TimelineModel {
             system_volume_db: config.audio.system_volume_db as f64,
             mic_waveforms: Vec::new(),
             system_waveforms: Vec::new(),
+            imported_waveforms: Arc::default(),
             waveform_paths: Arc::default(),
             clip_ghost_gap: None,
         };
@@ -2828,6 +2869,25 @@ fn render_segment(
         ));
     }
 
+    if let SegmentDetail::Audio {
+        path,
+        trim_start,
+        volume_db,
+        ..
+    } = &segment.detail
+    {
+        fill = fill.child(render_imported_waveform(
+            model,
+            index,
+            segment,
+            (path, *trim_start, *volume_db),
+            view,
+            width,
+            height,
+            color,
+        ));
+    }
+
     fill = fill.child(render_label(
         theme,
         color,
@@ -3357,12 +3417,95 @@ fn render_waveform(
     };
     let mic_scale = gain_to_scale(model.mic_volume_db) * volume;
     let system_scale = gain_to_scale(model.system_volume_db) * volume;
-    let timeline_start = segment.start;
-    let output_duration = (segment.end - segment.start).max(0.0001);
     let holds: Vec<(f64, f64)> = holds
         .iter()
         .map(|(start, end)| (start - segment.start, end - segment.start))
         .collect();
+    waveform_canvas(
+        model,
+        segment,
+        [
+            (WaveformTrack::Mic, mic, mic_scale),
+            (WaveformTrack::System, system, system_scale),
+        ]
+        .into_iter()
+        .map(|(track, peaks, scale)| WaveformSource {
+            slot: (index, track),
+            peaks,
+            scale,
+            source_start: segment_start,
+            timescale,
+        })
+        .collect(),
+        holds,
+        view,
+        width,
+        height,
+        color,
+    )
+}
+
+/// An imported audio segment's waveform. Same painter and path cache as the
+/// clip track's, so a timeline that only scrolls or plays reuses the built
+/// path; the peak table is the one [`ImportedWaveform`] already derived.
+#[allow(clippy::too_many_arguments)]
+fn render_imported_waveform(
+    model: &TimelineModel,
+    index: usize,
+    segment: &Segment,
+    (path, trim_start, volume_db): (&SharedString, f64, f64),
+    view: TimelineView,
+    width: f32,
+    height: f32,
+    color: Hsla,
+) -> AnyElement {
+    let scale = gain_to_scale(volume_db);
+    let Some(waveform) = model
+        .imported_waveforms
+        .get(path.as_ref())
+        .filter(|waveform| scale > 0. && !waveform.peaks.is_empty())
+    else {
+        return div().into_any_element();
+    };
+    waveform_canvas(
+        model,
+        segment,
+        vec![WaveformSource {
+            slot: (index, WaveformTrack::Imported),
+            peaks: waveform.peaks.clone(),
+            scale,
+            source_start: waveform.source_origin(trim_start),
+            timescale: 1.,
+        }],
+        Vec::new(),
+        view,
+        width,
+        height,
+        color,
+    )
+}
+
+struct WaveformSource {
+    slot: (usize, WaveformTrack),
+    peaks: Arc<Vec<f32>>,
+    scale: f64,
+    source_start: f64,
+    timescale: f64,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn waveform_canvas(
+    model: &TimelineModel,
+    segment: &Segment,
+    sources: Vec<WaveformSource>,
+    holds: Vec<(f64, f64)>,
+    view: TimelineView,
+    width: f32,
+    height: f32,
+    color: Hsla,
+) -> AnyElement {
+    let timeline_start = segment.start;
+    let output_duration = (segment.end - segment.start).max(0.0001);
     let transform = view.transform;
     let full_width = width.max(1.) as f64;
     let wave_height = height.min(WAVEFORM_MAX_HEIGHT);
@@ -3381,23 +3524,20 @@ fn render_waveform(
                 return;
             };
 
-            for (track, peaks, scale) in [
-                (WaveformTrack::Mic, &mic, mic_scale),
-                (WaveformTrack::System, &system, system_scale),
-            ] {
+            for source in &sources {
                 let geometry = WaveformGeometry {
-                    peaks: peaks.clone(),
+                    peaks: source.peaks.clone(),
                     range: layout.range,
                     target_samples: layout.samples,
                     holds: holds.clone(),
-                    source_start: segment_start,
-                    timescale,
+                    source_start: source.source_start,
+                    timescale: source.timescale,
                     origin: layout.origin,
                     size: layout.size,
-                    scale,
+                    scale: source.scale,
                     clip_bounds: layout.clip_bounds,
                 };
-                if let Some(path) = paths.get_or_build((index, track), geometry) {
+                if let Some(path) = paths.get_or_build(source.slot, geometry) {
                     let path = translated_path(path, bounds.origin);
                     window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
                         window.paint_path(path, wave_color)
@@ -5104,6 +5244,108 @@ mod tests {
                 "{visible_start}: {layout:?} last {last}"
             );
         }
+    }
+
+    fn imported_audio(silent_secs: usize, loud_secs: usize) -> cap_audio::AudioData {
+        let mut samples = vec![0.0_f32; silent_secs * AUDIO_SAMPLE_RATE * 2];
+        samples.resize((silent_secs + loud_secs) * AUDIO_SAMPLE_RATE * 2, 0.5);
+        cap_audio::AudioData::from_samples(samples, 2)
+    }
+
+    #[test]
+    fn an_imported_waveform_follows_the_segments_trim() {
+        let waveform = ImportedWaveform::from_audio(&imported_audio(5, 1));
+        assert_eq!(waveform.peaks.len(), 60);
+        assert!(waveform.covers((0, 6 * AUDIO_SAMPLE_RATE)));
+
+        let untrimmed = waveform.source_origin(0.);
+        assert_eq!(
+            waveform_amplitude(&waveform.peaks, Some(untrimmed + 0.5)),
+            0.
+        );
+        assert!(waveform_amplitude(&waveform.peaks, Some(untrimmed + 5.5)) > 0.8);
+
+        let trimmed = waveform.source_origin(5.);
+        assert!(waveform_amplitude(&waveform.peaks, Some(trimmed + 0.5)) > 0.8);
+        assert_eq!(waveform_amplitude(&waveform.peaks, Some(trimmed + 1.5)), 0.);
+    }
+
+    #[test]
+    fn a_range_decoded_waveform_is_indexed_from_its_first_decoded_frame() {
+        let loud = ImportedWaveform::from_audio(&imported_audio(0, 1));
+        let waveform = ImportedWaveform {
+            peaks: loud.peaks,
+            source_start: 5 * AUDIO_SAMPLE_RATE,
+            source_end: 6 * AUDIO_SAMPLE_RATE,
+        };
+        let origin = waveform.source_origin(5.);
+        assert!(waveform_amplitude(&waveform.peaks, Some(origin + 0.05)) > 0.8);
+        assert!(waveform_amplitude(&waveform.peaks, Some(origin + 0.95)) > 0.8);
+        assert_eq!(waveform_amplitude(&waveform.peaks, Some(origin + 1.05)), 0.);
+        assert_eq!(waveform_amplitude(&waveform.peaks, Some(origin - 0.05)), 0.);
+
+        assert!(waveform.covers((5 * AUDIO_SAMPLE_RATE, 6 * AUDIO_SAMPLE_RATE)));
+        assert!(!waveform.covers((4 * AUDIO_SAMPLE_RATE, 6 * AUDIO_SAMPLE_RATE)));
+        assert!(!waveform.covers((5 * AUDIO_SAMPLE_RATE, 7 * AUDIO_SAMPLE_RATE)));
+    }
+
+    #[test]
+    fn audio_segments_carry_the_source_mapping_their_waveform_reads() {
+        let config: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "timeline": {
+                "segments": [{ "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 20.0 }],
+                "zoomSegments": [],
+                "audioSegments": [
+                    { "start": 2.0, "end": 6.0, "track": 0, "path": "audio/song.mp3",
+                      "trimStart": 1.5, "volumeDb": -6.0 }
+                ]
+            }
+        }))
+        .expect("the fixture parses");
+        let model = TimelineModel::build(&config, false, false);
+        let SegmentDetail::Audio {
+            path,
+            trim_start,
+            volume_db,
+            ..
+        } = &model.audio[0].detail
+        else {
+            panic!("{:?}", model.audio[0].detail);
+        };
+        assert_eq!(path.as_ref(), "audio/song.mp3");
+        assert_eq!(*trim_start, 1.5);
+        assert_eq!(*volume_db, -6.);
+    }
+
+    #[test]
+    fn imported_and_clip_waveforms_cache_in_separate_slots() {
+        let canvas = (px(44.), px(600.), px(44.), px(18.));
+        let layout = waveform_layout((0., 20.), (0., 10.), 600., canvas).unwrap();
+        let geometry = |peaks: Arc<Vec<f32>>| WaveformGeometry {
+            peaks,
+            range: layout.range,
+            target_samples: layout.samples,
+            holds: Vec::new(),
+            source_start: 0.,
+            timescale: 1.,
+            origin: layout.origin,
+            size: layout.size,
+            scale: 1.,
+            clip_bounds: layout.clip_bounds,
+        };
+        let clip = Arc::new(vec![-12.0_f32; 100]);
+        let imported = ImportedWaveform::from_audio(&imported_audio(5, 5)).peaks;
+        let paths = WaveformPaths::default();
+        for _ in 0..3 {
+            paths
+                .get_or_build((0, WaveformTrack::Mic), geometry(clip.clone()))
+                .unwrap();
+            paths
+                .get_or_build((0, WaveformTrack::Imported), geometry(imported.clone()))
+                .unwrap();
+        }
+        let stats = paths.stats();
+        assert_eq!((stats.builds, stats.hits), (2, 4));
     }
 
     #[test]

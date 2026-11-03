@@ -65,7 +65,9 @@ export interface LoomDownloadResult {
 	retryAfterMs?: number;
 }
 
-export type LoomImportErrorCode = "loom_temporarily_unavailable";
+export type LoomImportErrorCode =
+	| "loom_temporarily_unavailable"
+	| "loom_import_start_failed";
 
 export interface LoomImportResult {
 	success: boolean;
@@ -393,6 +395,7 @@ export async function importLoomVideoForOwner({
 						error instanceof Error
 							? error.message
 							: "Loom import could not restart.",
+					errorCode: "loom_import_start_failed",
 				};
 			}
 			revalidatePath("/dashboard/caps");
@@ -458,6 +461,7 @@ export async function importLoomVideoForOwner({
 			success: false,
 			error:
 				"Could not prepare storage for this import. Please try again or contact support.",
+			errorCode: "loom_import_start_failed",
 		};
 	}
 
@@ -564,6 +568,7 @@ export async function importLoomVideoForOwner({
 			videoId,
 			error:
 				error instanceof Error ? error.message : "Loom import could not start.",
+			errorCode: "loom_import_start_failed",
 		};
 	}
 

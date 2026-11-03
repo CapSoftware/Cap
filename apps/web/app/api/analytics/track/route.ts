@@ -1,7 +1,7 @@
 import { db } from "@cap/database";
 import { isCrossSiteCookieWrite } from "@cap/database/auth/request-site";
 import { videos, videoUploads } from "@cap/database/schema";
-import { provideOptionalAuth, Tinybird } from "@cap/web-backend";
+import { provideOptionalAuth, Tinybird, VideosPolicy } from "@cap/web-backend";
 import { CurrentUser, Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
@@ -107,8 +107,11 @@ export async function POST(request: NextRequest) {
 			const [videoRecord] = yield* Effect.tryPromise(() =>
 				db()
 					.select({
+						id: videos.id,
 						orgId: videos.orgId,
 						ownerId: videos.ownerId,
+						public: videos.public,
+						password: videos.password,
 						firstViewEmailSentAt: videos.firstViewEmailSentAt,
 						videoName: videos.name,
 						createdAt: videos.createdAt,
@@ -119,20 +122,7 @@ export async function POST(request: NextRequest) {
 					.leftJoin(videoUploads, eq(videoUploads.videoId, videos.id))
 					.where(eq(videos.id, Video.VideoId.make(body.videoId)))
 					.limit(1),
-			).pipe(
-				Effect.orElseSucceed(
-					() =>
-						[] as {
-							orgId: string;
-							ownerId: string;
-							firstViewEmailSentAt: Date | null;
-							videoName: string;
-							createdAt: Date;
-							updatedAt: Date;
-							activeUploadVideoId: string | null;
-						}[],
-				),
-			);
+			).pipe(Effect.orElseSucceed(() => []));
 
 			if (!videoRecord || userId === videoRecord.ownerId) {
 				return;
@@ -144,6 +134,15 @@ export async function POST(request: NextRequest) {
 			) {
 				return;
 			}
+
+			const videosPolicy = yield* VideosPolicy;
+			const canView = yield* videosPolicy
+				.canViewLoaded(videoRecord, Option.fromNullable(videoRecord.password))
+				.pipe(
+					Effect.as(true),
+					Effect.orElseSucceed(() => false),
+				);
+			if (!canView) return;
 
 			const tinybird = yield* Tinybird;
 			yield* tinybird.appendEvents([

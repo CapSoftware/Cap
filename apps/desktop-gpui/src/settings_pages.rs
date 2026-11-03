@@ -360,12 +360,6 @@ pub(crate) struct PagesState {
     s3: S3Page,
     gdrive: GDrivePage,
 
-    // Experimental (experimental.tsx). The Developer section's hand-back takes the
-    // whole settings window over, so its clock and the ticker that repaints the
-    // sequence live here and the overlay renders from the window root.
-    switch_back: Option<SwitchBack>,
-    switch_back_ticker: Option<gpui::Task<()>>,
-
     // Automations (automations.tsx)
     automations: AutomationsStore,
     automations_loaded: bool,
@@ -475,8 +469,6 @@ impl PagesState {
                 error: None,
                 poll: None,
             },
-            switch_back: None,
-            switch_back_ticker: None,
             automations: AutomationsStore::default(),
             automations_loaded: false,
             automations_save_failed: false,
@@ -1439,10 +1431,6 @@ impl SettingsWindow {
 
     pub(crate) fn shortcut_listening(&self) -> bool {
         self.pages.listening.is_some()
-    }
-
-    pub(crate) fn switch_back_running(&self) -> bool {
-        self.pages.switch_back.is_some()
     }
 
     /// Leave recording mode without touching the binding. Safe to call when
@@ -2666,75 +2654,13 @@ impl SettingsWindow {
 // Experimental (experimental.tsx)
 // ---------------------------------------------------------------------------
 
-pub(crate) enum SwitchBack {
-    Running(std::time::Instant),
-    WaitingForClassic,
-    Failed(String),
-}
-
-/// A cold dev build can genuinely take this long; past it, assume the build
-/// failed and hand the user back their app with a pointer at the terminal.
-const CLASSIC_WAIT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
-
-const SWITCH_SENTENCES: &[fn() -> &'static str] = &[
-    tr::settings::experimental::switch::switching,
-    tr::settings::experimental::switch::data_stays,
-];
-const SWITCH_SENTENCE_MS: u64 = 2000;
-const SWITCH_FADE_MS: f32 = 400.;
-const SWITCH_COUNTDOWN_FROM: u32 = 5;
-const SWITCH_TAKEOVER_MS: u64 = SWITCH_COUNTDOWN_FROM as u64 * 1000;
-
-/// The overlay's whole appearance at one instant: which sentence, how opaque,
-/// and the number.
-fn takeover_frame(elapsed_ms: f32) -> (usize, f32, u32) {
-    let last = SWITCH_SENTENCES.len() - 1;
-    let index = ((elapsed_ms / SWITCH_SENTENCE_MS as f32) as usize).min(last);
-    let within = elapsed_ms - index as f32 * SWITCH_SENTENCE_MS as f32;
-    let fade_in = (within / SWITCH_FADE_MS).clamp(0., 1.);
-    // The last line holds rather than fading out; blanking the column while the
-    // countdown finishes would read as a stall.
-    let alpha = if index == last {
-        fade_in
-    } else {
-        fade_in.min(((SWITCH_SENTENCE_MS as f32 - within) / SWITCH_FADE_MS).clamp(0., 1.))
-    };
-    // Five on the first frame down to one in the last second; the switch fires
-    // rather than ever showing zero.
-    let left = SWITCH_TAKEOVER_MS as f32 - elapsed_ms;
-    let remaining = (left / 1000.)
-        .ceil()
-        .clamp(1., SWITCH_COUNTDOWN_FROM as f32) as u32;
-    (index, alpha, remaining)
-}
-
-/// Cap ships as this app alone, so the classic Tauri app only exists inside
-/// the `tauri dev` harness: a debug cargo build can hand the session back to
-/// it through the dev-session supervisor (`store::request_classic_reopen`),
-/// and nothing else has a classic app to switch to.
-fn dev_supervisor_available_for(exe: Option<&std::path::Path>, debug_build: bool) -> bool {
-    debug_build
-        && exe.is_some_and(|exe| {
-            exe.components()
-                .any(|component| component.as_os_str() == "target")
-        })
-}
-
-fn dev_supervisor_available() -> bool {
-    dev_supervisor_available_for(
-        std::env::current_exe().ok().as_deref(),
-        cfg!(debug_assertions),
-    )
-}
-
 impl SettingsWindow {
     pub(crate) fn render_experimental(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
-        // No "Native camera preview" toggle here: in this app the native
-        // camera path is the only implementation, so the Tauri page's
-        // experimental switch has nothing to switch. The store key
-        // (`enableNativeCameraPreview`) stays readable in `store.rs` and is
-        // left untouched in the shared store -- the Tauri app still uses it.
-        let mut sections = vec![
+        // No "Native camera preview" toggle here: the native camera path is
+        // the only implementation, so the 0.6.0 page's experimental switch has
+        // nothing to switch. The store key (`enableNativeCameraPreview`) stays
+        // readable in `store.rs` and is left untouched in the store.
+        vec![
             self.section(
                 tr::settings::experimental::reliability(),
                 None,
@@ -2763,283 +2689,7 @@ impl SettingsWindow {
                 ],
             )
             .into_any_element(),
-        ];
-        if dev_supervisor_available() {
-            sections.push(
-                self.section(
-                    tr::settings::experimental::developer(),
-                    Some(tr::settings::experimental::developer_description()),
-                    None,
-                    vec![self.rows(vec![self.classic_app_row(cx)]).into_any_element()],
-                )
-                .into_any_element(),
-            );
-        }
-        sections
-    }
-
-    /// The dev harness's way back to the classic app: being in this app is what
-    /// the toggle means, and turning it off reopens the classic app under
-    /// `tauri dev`.
-    fn classic_app_row(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let checked = !matches!(self.pages.switch_back, Some(SwitchBack::Running(_)));
-        self.setting_row(
-            tr::settings::experimental::native_app(),
-            Some(tr::settings::experimental::native_app_description()),
-            self.toggle(
-                "enable-gpui-app",
-                tr::settings::experimental::native_app(),
-                checked,
-                cx,
-                |this, cx| {
-                    match this.pages.switch_back {
-                        Some(SwitchBack::Running(_)) => this.cancel_switch_back(cx),
-                        // Committed: the classic app is already being brought up.
-                        Some(SwitchBack::WaitingForClassic) => {}
-                        _ => this.start_switch_back(cx),
-                    }
-                },
-            )
-            .into_any_element(),
-        )
-    }
-
-    /// The full-window takeover, painted from `SettingsWindow::render` so it
-    /// covers the sidebar and the menus too.
-    pub(crate) fn render_switch_overlay(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
-        let switch = self.pages.switch_back.as_ref()?;
-        let white = gpui::white();
-        let mut column = div()
-            .absolute()
-            .inset_0()
-            .when(cfg!(target_os = "windows"), |overlay| overlay.top(px(36.)))
-            // Nothing behind the takeover is clickable while it runs.
-            .occlude()
-            .flex()
-            .flex_col()
-            .items_center()
-            .justify_center()
-            .gap(px(28.))
-            .bg(gpui::hsla(0., 0., 0., 0.92));
-
-        match switch {
-            SwitchBack::Running(started) => {
-                let (index, alpha, remaining) =
-                    takeover_frame(started.elapsed().as_secs_f32() * 1000.);
-                column = column
-                    .child(
-                        div()
-                            .text_size(px(72.))
-                            .line_height(px(76.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(white)
-                            .child(SharedString::from(remaining.to_string())),
-                    )
-                    .child(
-                        div()
-                            .h(px(40.))
-                            .max_w(px(380.))
-                            .flex()
-                            .items_center()
-                            .text_size(px(15.))
-                            .text_center()
-                            .text_color(gpui::hsla(0., 0., 1., alpha))
-                            .child(SWITCH_SENTENCES[index]()),
-                    );
-            }
-            SwitchBack::WaitingForClassic => {
-                column = column
-                    .child(
-                        div()
-                            .max_w(px(380.))
-                            .text_size(px(17.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_center()
-                            .text_color(white)
-                            .child(tr::settings::experimental::switch::opening()),
-                    )
-                    .child(
-                        div()
-                            .max_w(px(380.))
-                            .text_size(px(14.))
-                            .text_center()
-                            .text_color(gpui::hsla(0., 0., 1., 0.7))
-                            .child(tr::settings::experimental::switch::opening_detail()),
-                    );
-            }
-            SwitchBack::Failed(error) => {
-                column = column.child(
-                    div()
-                        .max_w(px(380.))
-                        .text_size(px(14.))
-                        .text_center()
-                        .text_color(rgb(0xf87171))
-                        .child(SharedString::from(error.clone())),
-                );
-            }
-        }
-
-        // Committed states have nothing to cancel.
-        if matches!(switch, SwitchBack::WaitingForClassic) {
-            return Some(column.into_any_element());
-        }
-
-        Some(
-            column
-                .child(
-                    div()
-                        .id("switch-back-cancel")
-                        .flex()
-                        .items_center()
-                        .px(px(16.))
-                        .h(px(32.))
-                        .rounded(px(8.))
-                        .border_1()
-                        .border_color(gpui::hsla(0., 0., 1., 0.25))
-                        .text_size(px(13.))
-                        .text_color(white)
-                        .cursor_pointer()
-                        .hover(|style| style.bg(gpui::hsla(0., 0., 1., 0.12)))
-                        .on_click(cx.listener(|this, _, _window, cx| this.cancel_switch_back(cx)))
-                        .child(if matches!(switch, SwitchBack::Failed(_)) {
-                            tr::common::close()
-                        } else {
-                            tr::common::cancel()
-                        }),
-                )
-                .into_any_element(),
-        )
-    }
-
-    fn start_switch_back(&mut self, cx: &mut Context<Self>) {
-        if self.switch_back_blocked(cx) {
-            return;
-        }
-
-        self.pages.switch_back = Some(SwitchBack::Running(std::time::Instant::now()));
-        // gpui only renders on invalidation, so the fades and the countdown
-        // need a pulse to run at all -- the `toggle_placeholders` shape.
-        // Assigning over the previous task drops it, which is how Cancel and a
-        // restart stop the one already in flight.
-        self.pages.switch_back_ticker = Some(cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor()
-                    .timer(Duration::from_millis(16))
-                    .await;
-                let running = this
-                    .update(cx, |this, cx| {
-                        let started = match &this.pages.switch_back {
-                            Some(SwitchBack::Running(started)) => *started,
-                            _ => return false,
-                        };
-                        if started.elapsed() >= Duration::from_millis(SWITCH_TAKEOVER_MS) {
-                            this.finish_switch_back(cx);
-                            return false;
-                        }
-                        cx.notify();
-                        true
-                    })
-                    .unwrap_or(false);
-                if !running {
-                    return;
-                }
-            }
-        }));
-        cx.notify();
-    }
-
-    fn cancel_switch_back(&mut self, cx: &mut Context<Self>) {
-        self.pages.switch_back = None;
-        self.pages.switch_back_ticker = None;
-        cx.notify();
-    }
-
-    fn switch_back_blocked(&mut self, cx: &mut Context<Self>) -> bool {
-        if !crate::updates::work_in_flight(cx) {
-            return false;
-        }
-
-        self.pages.switch_back = Some(SwitchBack::Failed(
-            tr::settings::experimental::switch::busy().to_string(),
-        ));
-        cx.notify();
-        true
-    }
-
-    /// Hand the session (`enableGpuiApp`) to the classic dev app, ask the dev
-    /// supervisor to start it, then quit once it is visible.
-    fn finish_switch_back(&mut self, cx: &mut Context<Self>) {
-        if self.switch_back_blocked(cx) {
-            return;
-        }
-        if !dev_supervisor_available() {
-            self.pages.switch_back = Some(SwitchBack::Failed(
-                tr::settings::experimental::switch::not_found().to_string(),
-            ));
-            cx.notify();
-            return;
-        }
-        if let Err(error) = crate::app_windows::flush_pending_editor_saves(cx) {
-            self.pages.switch_back = Some(SwitchBack::Failed(error));
-            cx.notify();
-            return;
-        }
-
-        if !store::set_store_setting(GENERAL_SETTINGS, "enableGpuiApp", Value::Bool(false)) {
-            self.pages.switch_back = Some(SwitchBack::Failed(
-                tr::settings::experimental::switch::save_failed().to_string(),
-            ));
-            cx.notify();
-            return;
-        }
-        let pending = store::mark_classic_pending();
-        self.pages.switch_back = Some(SwitchBack::WaitingForClassic);
-        self.pages.switch_back_ticker = None;
-        cx.notify();
-
-        // The handoff must finish even if its settings window closes.
-        cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_executor()
-                .spawn(async move { pending.and_then(|()| store::request_classic_reopen()) })
-                .await;
-            let mut failure = result
-                .err()
-                .map(tr::settings::experimental::switch::open_failed);
-            let started = std::time::Instant::now();
-            while failure.is_none() {
-                match store::classic_pending_path().try_exists() {
-                    Ok(false) => {
-                        tracing::info!("classic app is visible; quitting GPUI");
-                        cx.update(crate::menus::quit);
-                        return;
-                    }
-                    Ok(true) => {}
-                    Err(error) => {
-                        failure = Some(tr::settings::experimental::switch::check_failed(error));
-                        break;
-                    }
-                }
-                if started.elapsed() >= CLASSIC_WAIT_TIMEOUT {
-                    failure = Some(tr::settings::experimental::switch::timed_out().to_string());
-                    break;
-                }
-                cx.background_executor()
-                    .timer(Duration::from_millis(250))
-                    .await;
-            }
-            let message =
-                failure.unwrap_or_else(|| tr::settings::experimental::switch::failed().to_string());
-            tracing::error!("{message}");
-            store::clear_classic_pending();
-            store::set_store_setting(GENERAL_SETTINGS, "enableGpuiApp", Value::Bool(true));
-            this.update(cx, |this, cx| {
-                this.pages.switch_back = Some(SwitchBack::Failed(message));
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
+        ]
     }
 }
 
@@ -8823,41 +8473,6 @@ mod tests {
             hotkey_display_keys(&hotkey),
             ["meta", "alt", "shift", "KeyS"]
         );
-    }
-
-    #[test]
-    fn only_debug_cargo_builds_can_switch_back_to_the_dev_harness() {
-        let cargo_build =
-            std::path::Path::new("/Users/x/Cap/apps/desktop-gpui/target/debug/cap-gpui");
-        let installed_app = std::path::Path::new("/Applications/Cap.app/Contents/MacOS/Cap");
-
-        assert!(dev_supervisor_available_for(Some(cargo_build), true));
-        assert!(!dev_supervisor_available_for(Some(cargo_build), false));
-        assert!(!dev_supervisor_available_for(Some(installed_app), true));
-        assert!(!dev_supervisor_available_for(Some(installed_app), false));
-        assert!(!dev_supervisor_available_for(None, true));
-    }
-
-    /// The takeover's whole timeline, read off its one clock.
-    #[test]
-    fn the_takeover_counts_down_while_the_lines_fade() {
-        // The number is up from the first frame and never reaches zero.
-        assert_eq!(takeover_frame(0.).2, SWITCH_COUNTDOWN_FROM);
-        assert_eq!(takeover_frame(1000.).2, SWITCH_COUNTDOWN_FROM - 1);
-        assert_eq!(takeover_frame(SWITCH_TAKEOVER_MS as f32 - 1.).2, 1);
-        assert_eq!(takeover_frame(SWITCH_TAKEOVER_MS as f32).2, 1);
-
-        // First line, faded in over its lead, and out again as its slot ends.
-        let (index, alpha, _) = takeover_frame(0.);
-        assert_eq!(index, 0);
-        assert_eq!(alpha, 0.);
-        assert_eq!(takeover_frame(SWITCH_FADE_MS).1, 1.);
-        assert_eq!(takeover_frame(SWITCH_SENTENCE_MS as f32 - 1.).1.round(), 0.);
-
-        // The last line holds rather than blanking while the number finishes.
-        let (index, alpha, _) = takeover_frame(SWITCH_TAKEOVER_MS as f32 - 1.);
-        assert_eq!(index, SWITCH_SENTENCES.len() - 1);
-        assert_eq!(alpha, 1.);
     }
 
     /// `conditionAppliesToTrigger` / `actionAppliesToTrigger` against the
