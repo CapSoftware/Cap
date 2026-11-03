@@ -43,6 +43,30 @@ const DESKTOP_TOOLS = new Map([
 	["apply_and_verify", 1_200_000],
 ]);
 
+const SESSION_LOG = path.join(
+	path.dirname(new URL(import.meta.url).pathname),
+	"session-log.jsonl",
+);
+const MAX_SESSION_LOG = 8 * 1024 * 1024;
+const LOG_FIELD = 8000;
+let sessionLogBytes = 0;
+
+const logText = (value) => {
+	const text =
+		typeof value === "string" ? value : JSON.stringify(value ?? null);
+	return text.length > LOG_FIELD ? `${text.slice(0, LOG_FIELD)}…` : text;
+};
+
+const logEntry = (entry) => {
+	const line = `${JSON.stringify({ at: Date.now(), ...entry })}\n`;
+	if (sessionLogBytes + line.length > MAX_SESSION_LOG && entry.kind !== "end")
+		return;
+	sessionLogBytes += line.length;
+	try {
+		fs.appendFileSync(SESSION_LOG, line, { mode: 0o600 });
+	} catch {}
+};
+
 const PROMPT =
 	"Repair the Cap recording that is connected through the cap-recording tools. Follow AGENTS.md exactly. Start by calling describe_recording.";
 
@@ -85,6 +109,7 @@ const pushEvent = (event) => {
 const markDone = () => {
 	if (done) return;
 	done = true;
+	logEntry({ kind: "end", costUsd });
 	for (const [id, entry] of pending) {
 		clearTimeout(entry.timer);
 		entry.resolve({ ok: false, error: "The session ended." });
@@ -95,6 +120,7 @@ const markDone = () => {
 };
 
 const fail = (message) => {
+	logEntry({ kind: "error", message });
 	pushEvent({ type: "error", message: clip(message, 400) });
 	stopAgent();
 	markDone();
@@ -339,6 +365,13 @@ const handleTool = async (req, res) => {
 			typeof args.id === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(args.id)
 				? args.id
 				: "step";
+		logEntry({
+			kind: "step",
+			id,
+			state,
+			title: args.title,
+			detail: args.detail,
+		});
 		pushEvent({
 			type: "step",
 			id,
@@ -354,6 +387,7 @@ const handleTool = async (req, res) => {
 		const outcome = args.outcome === "fixed" ? "fixed" : "cant_fix";
 		if (!finishing) {
 			finishing = true;
+			logEntry({ kind: "finish", outcome, summary: args.summary });
 			pushEvent({ type: "finish", outcome, summary: clip(args.summary, 1200) });
 			setTimeout(() => {
 				stopAgent();
@@ -369,7 +403,15 @@ const handleTool = async (req, res) => {
 			ok: false,
 			error: "The session is finishing.",
 		});
-	sendJson(res, 200, await callDesktop(tool, args));
+	const result = await callDesktop(tool, args);
+	logEntry({
+		kind: "desktop",
+		tool,
+		args: logText(args),
+		ok: result?.ok !== false,
+		result: logText(result?.result ?? result?.error),
+	});
+	sendJson(res, 200, result);
 };
 
 const ACTIVITY = {
@@ -403,10 +445,17 @@ const handleAgentEvent = (event) => {
 	const part = event?.part ?? {};
 	if (event.type === "text" || event.type === "reasoning") {
 		const text = typeof part.text === "string" ? part.text.trim() : "";
+		if (text) logEntry({ kind: event.type, text: logText(text) });
 		if (text) pushEvent({ type: "thought", text: clip(text, 2000) });
 	} else if (event.type === "tool_use") {
 		const tool = String(part.tool ?? "");
 		if (tool.startsWith("cap-recording_")) return;
+		logEntry({
+			kind: "agent_tool",
+			tool,
+			input: logText(part.state?.input),
+			output: logText(part.state?.output ?? part.state?.error),
+		});
 		const verb = ACTIVITY[tool];
 		if (verb)
 			pushEvent({
@@ -416,6 +465,7 @@ const handleAgentEvent = (event) => {
 			});
 	} else if (event.type === "step_finish") {
 		costUsd += Number(part.cost ?? 0) || 0;
+		logEntry({ kind: "usage", costUsd, tokens: part.tokens ?? null });
 		if (costUsd > COST_LIMIT)
 			fail("The repair reached its budget before finishing.");
 	} else if (event.type === "error") {
@@ -424,11 +474,13 @@ const handleAgentEvent = (event) => {
 			event.error?.name ??
 			"The repair agent failed.";
 		console.error("agent error:", message);
+		logEntry({ kind: "agent_error", message: logText(message) });
 	}
 };
 
 const startAgent = () => {
 	agentStarted = true;
+	logEntry({ kind: "start", model: MODEL, costLimitUsd: COST_LIMIT });
 	const config = JSON.parse(OPENCODE_CONFIG);
 	config.mcp = {
 		"cap-recording": {
