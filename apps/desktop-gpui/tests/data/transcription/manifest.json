@@ -1,0 +1,917 @@
+{
+ "name": "fixtures",
+ "timing": "exact",
+ "attribution": "Clips named splice-* were synthesised for Cap with Kokoro-82M (https://huggingface.co/hexgrad/Kokoro-82M, Apache-2.0), one word at a time, and spliced at known samples, so their word boundaries are exact. Clips named after AMI meetings come from the AMI Meeting Corpus (https://groups.inf.ed.ac.uk/ami/corpus/, Carletta et al. 2005), licensed CC BY 4.0, cut from individual headset channels and re-encoded; their word list is the corpus transcript and their times are not used.",
+ "clips": [
+  {
+   "id": "splice-00-af_heart",
+   "audio": "audio/splice-00-af_heart.ogg",
+   "duration": 6.712,
+   "source": "Kokoro-82M voice af_heart",
+   "words": [
+    {
+     "text": "So,",
+     "start": 0.52621,
+     "end": 0.88371
+    },
+    {
+     "text": "um,",
+     "start": 1.30187,
+     "end": 1.69938,
+     "filler": "um"
+    },
+    {
+     "text": "I",
+     "start": 1.97608,
+     "end": 2.25108
+    },
+    {
+     "text": "think",
+     "start": 2.25108,
+     "end": 2.60358
+    },
+    {
+     "text": "we",
+     "start": 2.65954,
+     "end": 2.90954
+    },
+    {
+     "text": "should,",
+     "start": 3.02838,
+     "end": 3.38587
+    },
+    {
+     "text": "uh,",
+     "start": 3.45396,
+     "end": 3.89646,
+     "filler": "uh"
+    },
+    {
+     "text": "start",
+     "start": 3.94404,
+     "end": 4.31904
+    },
+    {
+     "text": "with",
+     "start": 5.00496,
+     "end": 5.29996
+    },
+    {
+     "text": "the",
+     "start": 5.35496,
+     "end": 5.56746
+    },
+    {
+     "text": "the",
+     "start": 5.56746,
+     "end": 5.77996
+    },
+    {
+     "text": "dashboard.",
+     "start": 5.77996,
+     "end": 6.14746
+    }
+   ]
+  },
+  {
+   "id": "splice-03-af_nicole",
+   "audio": "audio/splice-03-af_nicole.ogg",
+   "duration": 6.541,
+   "source": "Kokoro-82M voice af_nicole",
+   "words": [
+    {
+     "text": "I",
+     "start": 0.72621,
+     "end": 0.90121
+    },
+    {
+     "text": "I",
+     "start": 0.93442,
+     "end": 1.10692
+    },
+    {
+     "text": "wanted",
+     "start": 1.4885,
+     "end": 1.9785
+    },
+    {
+     "text": "to",
+     "start": 1.9785,
+     "end": 2.3485
+    },
+    {
+     "text": "show",
+     "start": 2.3485,
+     "end": 2.761
+    },
+    {
+     "text": "you",
+     "start": 2.77992,
+     "end": 3.18242
+    },
+    {
+     "text": "how",
+     "start": 3.18242,
+     "end": 3.54492
+    },
+    {
+     "text": "the,",
+     "start": 3.59713,
+     "end": 3.86463
+    },
+    {
+     "text": "um,",
+     "start": 3.86463,
+     "end": 4.39462,
+     "filler": "um"
+    },
+    {
+     "text": "export",
+     "start": 4.83642,
+     "end": 5.38642
+    },
+    {
+     "text": "works.",
+     "start": 5.44633,
+     "end": 5.94883
+    }
+   ]
+  },
+  {
+   "id": "splice-09-am_fenrir",
+   "audio": "audio/splice-09-am_fenrir.ogg",
+   "duration": 6.085,
+   "source": "Kokoro-82M voice am_fenrir",
+   "words": [
+    {
+     "text": "So",
+     "start": 0.4575,
+     "end": 0.7525
+    },
+    {
+     "text": "the",
+     "start": 1.13975,
+     "end": 1.32975
+    },
+    {
+     "text": "the",
+     "start": 1.98475,
+     "end": 2.17475
+    },
+    {
+     "text": "main",
+     "start": 2.17475,
+     "end": 2.51225
+    },
+    {
+     "text": "reason",
+     "start": 2.51225,
+     "end": 2.89475
+    },
+    {
+     "text": "we",
+     "start": 3.04667,
+     "end": 3.26417
+    },
+    {
+     "text": "built",
+     "start": 3.26417,
+     "end": 3.59167
+    },
+    {
+     "text": "this",
+     "start": 3.776,
+     "end": 4.051
+    },
+    {
+     "text": "was,",
+     "start": 4.17621,
+     "end": 4.43621
+    },
+    {
+     "text": "um,",
+     "start": 4.754,
+     "end": 5.1465,
+     "filler": "um"
+    },
+    {
+     "text": "speed.",
+     "start": 5.1465,
+     "end": 5.444
+    }
+   ]
+  },
+  {
+   "id": "splice-10-bm_george",
+   "audio": "audio/splice-10-bm_george.ogg",
+   "duration": 6.462,
+   "source": "Kokoro-82M voice bm_george",
+   "words": [
+    {
+     "text": "Uh,",
+     "start": 0.72013,
+     "end": 1.34013,
+     "filler": "uh"
+    },
+    {
+     "text": "sorry,",
+     "start": 1.41013,
+     "end": 1.93263
+    },
+    {
+     "text": "let",
+     "start": 1.93263,
+     "end": 2.35263
+    },
+    {
+     "text": "me",
+     "start": 2.83746,
+     "end": 3.24496
+    },
+    {
+     "text": "cha-",
+     "start": 3.41033,
+     "end": 3.85033,
+     "truncated": true
+    },
+    {
+     "text": "change",
+     "start": 3.89883,
+     "end": 4.47133
+    },
+    {
+     "text": "the",
+     "start": 4.52538,
+     "end": 4.79537
+    },
+    {
+     "text": "camera",
+     "start": 4.79537,
+     "end": 5.32538
+    },
+    {
+     "text": "first.",
+     "start": 5.59421,
+     "end": 6.07171
+    }
+   ]
+  },
+  {
+   "id": "splice-12-am_michael",
+   "audio": "audio/splice-12-am_michael.ogg",
+   "duration": 4.483,
+   "source": "Kokoro-82M voice am_michael",
+   "words": [
+    {
+     "text": "Hmm,",
+     "start": 0.584,
+     "end": 1.094,
+     "filler": "hmm"
+    },
+    {
+     "text": "okay,",
+     "start": 1.464,
+     "end": 1.909
+    },
+    {
+     "text": "so,",
+     "start": 1.909,
+     "end": 2.264
+    },
+    {
+     "text": "um,",
+     "start": 2.61287,
+     "end": 3.06288,
+     "filler": "um"
+    },
+    {
+     "text": "where",
+     "start": 3.16004,
+     "end": 3.51754
+    },
+    {
+     "text": "was",
+     "start": 3.54354,
+     "end": 3.87854
+    },
+    {
+     "text": "I?",
+     "start": 3.93325,
+     "end": 4.15325
+    }
+   ]
+  },
+  {
+   "id": "splice-13-am_fenrir",
+   "audio": "audio/splice-13-am_fenrir.ogg",
+   "duration": 6.184,
+   "source": "Kokoro-82M voice am_fenrir",
+   "words": [
+    {
+     "text": "The",
+     "start": 0.33675,
+     "end": 0.52675
+    },
+    {
+     "text": "new",
+     "start": 0.99854,
+     "end": 1.27604
+    },
+    {
+     "text": "editor",
+     "start": 1.35429,
+     "end": 1.71679
+    },
+    {
+     "text": "has,",
+     "start": 1.71679,
+     "end": 2.04679
+    },
+    {
+     "text": "er,",
+     "start": 2.47046,
+     "end": 2.91546,
+     "filler": "er"
+    },
+    {
+     "text": "a",
+     "start": 3.35658,
+     "end": 3.52158
+    },
+    {
+     "text": "lot",
+     "start": 3.74229,
+     "end": 4.04479
+    },
+    {
+     "text": "of,",
+     "start": 4.04479,
+     "end": 4.26229
+    },
+    {
+     "text": "you",
+     "start": 4.30692,
+     "end": 4.54442,
+     "filler": "you know"
+    },
+    {
+     "text": "know,",
+     "start": 4.54442,
+     "end": 4.86192,
+     "filler": "you know"
+    },
+    {
+     "text": "small",
+     "start": 4.86192,
+     "end": 5.18192
+    },
+    {
+     "text": "improvements.",
+     "start": 5.205,
+     "end": 5.6625
+    }
+   ]
+  },
+  {
+   "id": "splice-22-bf_emma",
+   "audio": "audio/splice-22-bf_emma.ogg",
+   "duration": 5.726,
+   "source": "Kokoro-82M voice bf_emma",
+   "words": [
+    {
+     "text": "Right,",
+     "start": 0.57412,
+     "end": 0.88413
+    },
+    {
+     "text": "so,",
+     "start": 0.93167,
+     "end": 1.21917
+    },
+    {
+     "text": "er,",
+     "start": 1.21917,
+     "end": 1.88417,
+     "filler": "er"
+    },
+    {
+     "text": "the",
+     "start": 2.13092,
+     "end": 2.31842
+    },
+    {
+     "text": "audio",
+     "start": 2.58554,
+     "end": 2.95304
+    },
+    {
+     "text": "and",
+     "start": 2.95304,
+     "end": 3.21554
+    },
+    {
+     "text": "the",
+     "start": 3.76638,
+     "end": 3.95388
+    },
+    {
+     "text": "video",
+     "start": 3.95388,
+     "end": 4.32388
+    },
+    {
+     "text": "stay",
+     "start": 4.32388,
+     "end": 4.64888
+    },
+    {
+     "text": "in",
+     "start": 4.64888,
+     "end": 4.91137
+    },
+    {
+     "text": "sync.",
+     "start": 4.97167,
+     "end": 5.26167
+    }
+   ]
+  },
+  {
+   "id": "splice-27-af_nicole",
+   "audio": "audio/splice-27-af_nicole.ogg",
+   "duration": 7.104,
+   "source": "Kokoro-82M voice af_nicole",
+   "words": [
+    {
+     "text": "Wait,",
+     "start": 0.42296,
+     "end": 0.84796
+    },
+    {
+     "text": "uh,",
+     "start": 1.10817,
+     "end": 1.53317,
+     "filler": "uh"
+    },
+    {
+     "text": "I",
+     "start": 1.978,
+     "end": 2.1505
+    },
+    {
+     "text": "I",
+     "start": 2.1505,
+     "end": 2.3255
+    },
+    {
+     "text": "need",
+     "start": 2.38929,
+     "end": 2.83429
+    },
+    {
+     "text": "to",
+     "start": 2.90971,
+     "end": 3.27971
+    },
+    {
+     "text": "turn",
+     "start": 3.30642,
+     "end": 3.77892
+    },
+    {
+     "text": "on",
+     "start": 3.83583,
+     "end": 4.32583
+    },
+    {
+     "text": "the,",
+     "start": 4.38363,
+     "end": 4.65113
+    },
+    {
+     "text": "um,",
+     "start": 4.89817,
+     "end": 5.47317,
+     "filler": "um"
+    },
+    {
+     "text": "the",
+     "start": 5.79054,
+     "end": 6.05554
+    },
+    {
+     "text": "webcam.",
+     "start": 6.13237,
+     "end": 6.71737
+    }
+   ]
+  },
+  {
+   "id": "TS3010c-D-0086277",
+   "audio": "audio/TS3010c-D-0086277.ogg",
+   "duration": 14.15,
+   "source": "TS3010c headset 3 speaker D 862.77-876.92s",
+   "words": [
+    {
+     "text": "So",
+     "start": 0.25,
+     "end": 0.39
+    },
+    {
+     "text": "well",
+     "start": 0.39,
+     "end": 0.57
+    },
+    {
+     "text": "how",
+     "start": 0.57,
+     "end": 0.69
+    },
+    {
+     "text": "we",
+     "start": 0.69,
+     "end": 0.79
+    },
+    {
+     "text": "did",
+     "start": 0.79,
+     "end": 0.98
+    },
+    {
+     "text": "do",
+     "start": 0.98,
+     "end": 1.15
+    },
+    {
+     "text": "that",
+     "start": 1.15,
+     "end": 1.44
+    },
+    {
+     "text": "Uh",
+     "start": 1.44,
+     "end": 1.8,
+     "filler": "uh"
+    },
+    {
+     "text": "well",
+     "start": 1.8,
+     "end": 2.09
+    },
+    {
+     "text": "we",
+     "start": 2.09,
+     "end": 2.47
+    },
+    {
+     "text": "made",
+     "start": 2.47,
+     "end": 2.7
+    },
+    {
+     "text": "an",
+     "start": 2.7,
+     "end": 2.8
+    },
+    {
+     "text": "investigation",
+     "start": 2.8,
+     "end": 3.54
+    },
+    {
+     "text": "of",
+     "start": 3.54,
+     "end": 3.66
+    },
+    {
+     "text": "the",
+     "start": 3.66,
+     "end": 3.97
+    },
+    {
+     "text": "market",
+     "start": 3.97,
+     "end": 4.51
+    },
+    {
+     "text": "by",
+     "start": 4.51,
+     "end": 4.66
+    },
+    {
+     "text": "Trendwatchers",
+     "start": 4.66,
+     "end": 5.95
+    },
+    {
+     "text": "They",
+     "start": 5.95,
+     "end": 6.17
+    },
+    {
+     "text": "uh",
+     "start": 6.17,
+     "end": 6.39,
+     "filler": "uh"
+    },
+    {
+     "text": "watch",
+     "start": 6.39,
+     "end": 6.76
+    },
+    {
+     "text": "in",
+     "start": 6.76,
+     "end": 7.12
+    },
+    {
+     "text": "uh",
+     "start": 7.12,
+     "end": 7.3,
+     "filler": "uh"
+    },
+    {
+     "text": "cities",
+     "start": 7.3,
+     "end": 7.68
+    },
+    {
+     "text": "like",
+     "start": 7.68,
+     "end": 8.01
+    },
+    {
+     "text": "uh",
+     "start": 8.01,
+     "end": 8.91,
+     "filler": "uh"
+    },
+    {
+     "text": "Paris",
+     "start": 8.91,
+     "end": 9.3
+    },
+    {
+     "text": "and",
+     "start": 9.3,
+     "end": 9.53
+    },
+    {
+     "text": "Milan",
+     "start": 9.53,
+     "end": 10.37
+    },
+    {
+     "text": "Of",
+     "start": 10.37,
+     "end": 10.46
+    },
+    {
+     "text": "course",
+     "start": 10.46,
+     "end": 10.69
+    },
+    {
+     "text": "well",
+     "start": 10.69,
+     "end": 10.86
+    },
+    {
+     "text": "known",
+     "start": 10.86,
+     "end": 11.07
+    },
+    {
+     "text": "for",
+     "start": 11.07,
+     "end": 11.26
+    },
+    {
+     "text": "their",
+     "start": 11.26,
+     "end": 11.5
+    },
+    {
+     "text": "uh",
+     "start": 11.5,
+     "end": 12.85,
+     "filler": "uh"
+    },
+    {
+     "text": "trend",
+     "start": 12.85,
+     "end": 13.29
+    },
+    {
+     "text": "uh",
+     "start": 13.29,
+     "end": 13.45,
+     "filler": "uh"
+    },
+    {
+     "text": "trends",
+     "start": 13.45,
+     "end": 13.9
+    }
+   ]
+  },
+  {
+   "id": "ES2012b-A-0149223",
+   "audio": "audio/ES2012b-A-0149223.ogg",
+   "duration": 14.87,
+   "source": "ES2012b headset 0 speaker A 1492.23-1507.10s",
+   "words": [
+    {
+     "text": "actually",
+     "start": 0.25,
+     "end": 0.53
+    },
+    {
+     "text": "achieving",
+     "start": 0.53,
+     "end": 0.89
+    },
+    {
+     "text": "that",
+     "start": 0.89,
+     "end": 1.05
+    },
+    {
+     "text": "in",
+     "start": 1.05,
+     "end": 1.17
+    },
+    {
+     "text": "terms",
+     "start": 1.17,
+     "end": 1.57
+    },
+    {
+     "text": "of",
+     "start": 1.57,
+     "end": 1.85
+    },
+    {
+     "text": "whether",
+     "start": 1.85,
+     "end": 2.14
+    },
+    {
+     "text": "the",
+     "start": 2.14,
+     "end": 2.25
+    },
+    {
+     "text": "you",
+     "start": 2.25,
+     "end": 2.33
+    },
+    {
+     "text": "know",
+     "start": 2.33,
+     "end": 2.43
+    },
+    {
+     "text": "the",
+     "start": 2.43,
+     "end": 2.53
+    },
+    {
+     "text": "power",
+     "start": 2.53,
+     "end": 2.83
+    },
+    {
+     "text": "requirements",
+     "start": 2.83,
+     "end": 3.51
+    },
+    {
+     "text": "of",
+     "start": 3.51,
+     "end": 3.61
+    },
+    {
+     "text": "the",
+     "start": 3.61,
+     "end": 3.93
+    },
+    {
+     "text": "uh",
+     "start": 3.93,
+     "end": 5.54,
+     "filler": "uh"
+    },
+    {
+     "text": "such",
+     "start": 5.54,
+     "end": 5.84
+    },
+    {
+     "text": "a",
+     "start": 5.84,
+     "end": 5.91
+    },
+    {
+     "text": "source",
+     "start": 5.91,
+     "end": 6.42
+    },
+    {
+     "text": "um",
+     "start": 6.42,
+     "end": 6.93,
+     "filler": "um"
+    },
+    {
+     "text": "you",
+     "start": 6.93,
+     "end": 7.05
+    },
+    {
+     "text": "know",
+     "start": 7.05,
+     "end": 7.2
+    },
+    {
+     "text": "compromise",
+     "start": 7.2,
+     "end": 7.97
+    },
+    {
+     "text": "the",
+     "start": 7.97,
+     "end": 8.67
+    },
+    {
+     "text": "our",
+     "start": 8.67,
+     "end": 9.43
+    },
+    {
+     "text": "our",
+     "start": 9.43,
+     "end": 9.61
+    },
+    {
+     "text": "need",
+     "start": 9.61,
+     "end": 9.87
+    },
+    {
+     "text": "for",
+     "start": 9.87,
+     "end": 10.2
+    },
+    {
+     "text": "uh",
+     "start": 10.2,
+     "end": 11.18,
+     "filler": "uh"
+    },
+    {
+     "text": "you",
+     "start": 11.18,
+     "end": 11.31
+    },
+    {
+     "text": "know",
+     "start": 11.31,
+     "end": 11.42
+    },
+    {
+     "text": "it",
+     "start": 11.42,
+     "end": 11.69
+    },
+    {
+     "text": "it",
+     "start": 11.69,
+     "end": 11.88
+    },
+    {
+     "text": "being",
+     "start": 11.88,
+     "end": 12.2
+    },
+    {
+     "text": "um",
+     "start": 12.97,
+     "end": 13.39,
+     "filler": "um"
+    },
+    {
+     "text": "mm",
+     "start": 13.39,
+     "end": 13.74,
+     "filler": "mm"
+    },
+    {
+     "text": "permanently",
+     "start": 13.74,
+     "end": 14.62
+    }
+   ]
+  }
+ ]
+}
