@@ -14,9 +14,9 @@ use specta::Type;
 
 use crate::DisplayNotch;
 
-mod markers;
 #[cfg(test)]
 mod clip_transition_tests;
+mod markers;
 #[cfg(test)]
 mod style_resolution_tests;
 
