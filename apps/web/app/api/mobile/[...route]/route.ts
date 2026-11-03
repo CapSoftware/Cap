@@ -58,8 +58,6 @@ import {
 } from "drizzle-orm";
 import { Effect, Layer, Option } from "effect";
 import { revalidatePath } from "next/cache";
-import { start } from "workflow/api";
-import { downloadLoomVideo } from "@/actions/loom";
 import { getOrgAnalyticsData } from "@/app/(org)/dashboard/analytics/data";
 import {
 	createAccountDeletionRequest,
@@ -71,6 +69,7 @@ import {
 	isEmailCodeSendLimited,
 	isEmailCodeVerifyLimited,
 } from "@/lib/email-code-rate-limit";
+import { importLoomVideoForOwner } from "@/lib/loom-csv-import";
 import {
 	resolveMobileRequestOrigin,
 	resolveMobileWebResourceUrl,
@@ -84,7 +83,6 @@ import { canViewSpaceAnalytics } from "@/lib/space-analytics-access";
 import { enqueueVideoStorageNameSync } from "@/lib/sync-video-storage-names";
 import { canUserDownloadVideo } from "@/lib/video-download-permissions";
 import { startVideoProcessingWorkflow } from "@/lib/video-processing";
-import { importLoomVideoWorkflow } from "@/workflows/import-loom-video";
 
 export const dynamic = "force-dynamic";
 
@@ -2892,110 +2890,25 @@ const importLoom = Effect.fn("Mobile.importLoom")(function* (
 	);
 	if (limited) return yield* Effect.fail(new HttpApiError.BadRequest());
 
-	const download = yield* Effect.tryPromise({
-		try: () => downloadLoomVideo(loomUrl),
-		catch: () => new HttpApiError.InternalServerError(),
-	});
-	if (!download.success || !download.videoId || !download.downloadUrl) {
-		return yield* Effect.fail(new HttpApiError.BadRequest());
-	}
-	const loomVideoId = download.videoId;
-
-	const storage = yield* Storage;
-	const writable = yield* storage.getWritableAccessForUser(
-		user.id,
-		user.activeOrganizationId,
-	);
-	const videoId = Video.VideoId.make(nanoId());
-	const now = new Date();
-	const importState = yield* database.use((db) =>
-		db.transaction(async (tx) => {
-			const [existing] = await tx
-				.select({
-					importId: Db.importedVideos.id,
-					videoId: Db.videos.id,
-				})
-				.from(Db.importedVideos)
-				.leftJoin(
-					Db.videos,
-					and(
-						eq(Db.videos.id, Db.importedVideos.id),
-						eq(Db.videos.orgId, Db.importedVideos.orgId),
-					),
-				)
-				.where(
-					and(
-						eq(Db.importedVideos.orgId, user.activeOrganizationId),
-						eq(Db.importedVideos.source, "loom"),
-						eq(Db.importedVideos.sourceId, loomVideoId),
-					),
-				)
-				.limit(1);
-			if (existing?.videoId) return "conflict" as const;
-			if (existing) {
-				await tx
-					.delete(Db.importedVideos)
-					.where(
-						and(
-							eq(Db.importedVideos.orgId, user.activeOrganizationId),
-							eq(Db.importedVideos.source, "loom"),
-							eq(Db.importedVideos.sourceId, loomVideoId),
-						),
-					);
-			}
-
-			await tx.insert(Db.videos).values({
-				id: videoId,
-				name:
-					download.videoName?.slice(0, 255) ??
-					`Loom Import - ${now.toISOString().slice(0, 10)}`,
-				ownerId: user.id,
-				orgId: user.activeOrganizationId,
-				source: { type: "webMP4" },
-				bucket: Option.getOrNull(writable.bucketId),
-				storageIntegrationId: Option.getOrNull(writable.storageIntegrationId),
-				public: await getNewVideoPublic(user.activeOrganizationId),
-				duration: download.durationSeconds,
-				width: download.width,
-				height: download.height,
-			});
-			await tx.insert(Db.videoUploads).values({
-				videoId,
-				phase: "uploading",
-				processingProgress: 0,
-				processingMessage: "Importing from Loom...",
-			});
-			await tx.insert(Db.importedVideos).values({
-				id: videoId,
-				orgId: user.activeOrganizationId,
-				source: "loom",
-				sourceId: loomVideoId,
-			});
-			return "ready" as const;
-		}),
-	);
-	if (importState === "conflict") {
-		return yield* Effect.fail(new HttpApiError.BadRequest());
-	}
-
-	const rawFileKey = `${user.id}/${videoId}/raw-upload.mp4`;
-	yield* Effect.tryPromise({
+	const result = yield* Effect.tryPromise({
 		try: () =>
-			start(importLoomVideoWorkflow, [
-				{
-					videoId,
-					userId: user.id,
-					rawFileKey,
-					bucketId: Option.getOrNull(writable.bucketId),
-					loomVideoId,
-				},
-			]),
+			importLoomVideoForOwner({
+				loomUrl,
+				orgId: user.activeOrganizationId,
+				ownerId: user.id,
+			}),
 		catch: () => new HttpApiError.InternalServerError(),
 	});
-	yield* Effect.sync(() => revalidatePath("/dashboard/caps"));
+	if (!result.success || !result.videoId) {
+		return yield* Effect.fail(
+			result.errorCode
+				? new HttpApiError.InternalServerError()
+				: new HttpApiError.BadRequest(),
+		);
+	}
 	return {
-		id: videoId,
-		shareUrl: `${getMobilePublicOrigin(request)}/s/${videoId}`,
+		id: result.videoId,
+		shareUrl: `${getMobilePublicOrigin(request)}/s/${result.videoId}`,
 	};
 });
 
