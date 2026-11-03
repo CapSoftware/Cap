@@ -3006,7 +3006,10 @@ zoom_some = { one = "{count} de {total} seleccionado", other = "{count} de {tota
 
 [dialog.quit]
 canceled = "Se canceló la salida: {error}. Cap seguirá abierto para que puedas terminar o recuperar la grabación."
+files_kept = "Todo lo grabado hasta ahora se queda en la carpeta de la grabación."
+keep_open = "Mantener Cap abierto"
 pending = "Se canceló la salida porque la grabación todavía se está deteniendo. Cap seguirá abierto. Usa Detener cuando esté disponible y vuelve a intentar salir."
+quit_anyway = "Salir de todos modos"
 still_open = "Cap sigue abierto"
 unconfirmed = "Se canceló la salida porque no se pudo confirmar que la grabación se detuviera. Cap seguirá abierto. Usa Detener y vuelve a intentar salir."
 

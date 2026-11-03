@@ -3008,7 +3008,10 @@ zoom_some = { one = "{count} of {total} selected", other = "{count} of {total} s
 
 [dialog.quit]
 canceled = { text = "Quit canceled: {error}. Cap will stay open so you can finish or recover the recording.", context = "{error} explains why the recording could not stop." }
+files_kept = "Everything recorded so far stays in the recording's folder."
+keep_open = "Keep Cap Open"
 pending = "Quit canceled because recording shutdown is still pending. Cap will stay open. Use Stop once available, then try Quit again."
+quit_anyway = "Quit Anyway"
 still_open = "Cap is still open"
 unconfirmed = "Quit canceled because recording shutdown could not be confirmed. Cap will stay open. Use Stop, then try Quit again."
 
