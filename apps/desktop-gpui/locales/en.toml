@@ -2891,6 +2891,11 @@ not_saved_message = { text = "{error}\n\nYour title is still in the editor. Try 
 read_failed = "Could not read the recording title for {path}: {error}"
 save_failed = "Could not save the recording title for {path}: {error}"
 
+[editor.window.safe_zones]
+button = "Safe zones"
+overlay = { text = "{platform} safe zone", context = "Label on the preview guide; {platform} is a product name such as TikTok or YouTube Shorts." }
+tooltip = "Safe zones: Off / Reels / TikTok / Shorts"
+
 [editor.window.track]
 clear_all = "Clear all"
 delete = "Delete"

@@ -2889,6 +2889,11 @@ not_saved_message = "{error}\n\nタイトルはエディタに残っています
 read_failed = "{path}の録画タイトルを読み込めませんでした：{error}"
 save_failed = "{path}の録画タイトルを保存できませんでした：{error}"
 
+[editor.window.safe_zones]
+button = "セーフゾーン"
+overlay = "{platform} のセーフゾーン"
+tooltip = "セーフゾーン: オフ / Reels / TikTok / Shorts"
+
 [editor.window.track]
 clear_all = "すべて消去"
 delete = "削除"

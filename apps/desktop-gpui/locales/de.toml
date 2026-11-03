@@ -2889,6 +2889,11 @@ not_saved_message = "{error}\n\nIhr Titel ist noch im Editor. Versuchen Sie erne
 read_failed = "Der Aufnahmetitel für {path} konnte nicht gelesen werden: {error}"
 save_failed = "Der Aufnahmetitel für {path} konnte nicht gespeichert werden: {error}"
 
+[editor.window.safe_zones]
+button = "Sichere Bereiche"
+overlay = "Sicherer Bereich für {platform}"
+tooltip = "Sichere Bereiche: Aus / Reels / TikTok / Shorts"
+
 [editor.window.track]
 clear_all = "Alle entfernen"
 delete = "Löschen"

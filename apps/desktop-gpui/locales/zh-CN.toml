@@ -2889,6 +2889,11 @@ not_saved_message = "{error}\n\n你的标题仍在编辑器中。请再次尝试
 read_failed = "无法读取 {path} 的录制标题：{error}"
 save_failed = "无法保存 {path} 的录制标题：{error}"
 
+[editor.window.safe_zones]
+button = "安全区"
+overlay = "{platform} 安全区"
+tooltip = "安全区：关闭 / Reels / TikTok / Shorts"
+
 [editor.window.track]
 clear_all = "全部清除"
 delete = "删除"

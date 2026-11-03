@@ -288,9 +288,8 @@ pub fn letterbox(container: (f32, f32), frame: (f32, f32)) -> (f32, f32) {
     }
 }
 
-/// Where the preview draws a `frame_size` frame inside `bounds`: inset by
-/// [`STAGE_INSET`], letterboxed and centred. Overlays that must line up with
-/// the video use this on their own bounds in the same paint.
+/// Overlays that must line up with the video call this on their own bounds
+/// in the same paint, so they never lag the preview's layout.
 pub(crate) fn preview_frame_bounds(
     bounds: gpui::Bounds<Pixels>,
     frame_size: (f32, f32),
@@ -6518,7 +6517,9 @@ impl EditorWindow {
         let handoff_target = self.transport.as_ref().and(self.ordinary_handoff_frame);
         let first_frame = self.latest_frame.is_none();
         let layout_changed = self.frame_layout != Some(frame.layout);
-        if self.frame_layout.map(|layout| layout.output_size) != Some(frame.layout.output_size) {
+        let output_size_changed =
+            self.frame_layout.map(|layout| layout.output_size) != Some(frame.layout.output_size);
+        if output_size_changed {
             tracing::info!(
                 output_size = ?frame.layout.output_size,
                 display = ?frame.layout.display,
@@ -6549,12 +6550,16 @@ impl EditorWindow {
         if let Some(stats) = &self.stats {
             stats.presented.fetch_add(1, Ordering::Relaxed);
         }
-        if frame_layout_requires_editor_invalidation(
-            first_frame,
-            self.playing,
-            layout_changed,
-            cleared_drag_rect,
-        ) {
+        // The safe-zone button and guides depend on the output's aspect, so
+        // an aspect change repaints the editor even mid-playback.
+        if output_size_changed
+            || frame_layout_requires_editor_invalidation(
+                first_frame,
+                self.playing,
+                layout_changed,
+                cleared_drag_rect,
+            )
+        {
             cx.notify();
         }
         // `refresh()` is a whole-window invalidation, so calling it per frame on
@@ -14420,7 +14425,6 @@ mod tests {
         assert_eq!(frame.size, gpui::size(px(width), px(height)));
         assert_eq!(f32::from(frame.origin.x), 100. + (1000. - width) / 2.);
         assert_eq!(f32::from(frame.origin.y), 50. + (600. - height) / 2.);
-        // A resize moves the frame with the bounds it is given.
         let wider = preview_frame_bounds(
             gpui::Bounds {
                 size: gpui::size(px(1400.), px(600.)),

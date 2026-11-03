@@ -79,15 +79,16 @@ impl EditorWindow {
             return None;
         }
         let theme = self.theme;
-        let label = self
-            .safe_zone
-            .map_or("Safe zones", SafeZonePlatform::short_label);
+        let label = self.safe_zone.map_or_else(
+            || tr::editor::window::safe_zones::button().to_string(),
+            |platform| platform.short_label().to_string(),
+        );
         Some(
             ui::EditorButton::plain(&theme, "safe-zones")
                 .text(&theme)
                 .left_icon("icons/smartphone.svg")
                 .when(!narrow, |button| button.label(label))
-                .tooltip(&theme, "Safe zones: Off / Reels / TikTok / Shorts")
+                .tooltip(&theme, tr::editor::window::safe_zones::tooltip())
                 .disabled(!self.project_ready())
                 .pressed(self.safe_zone.is_some())
                 .on_click(cx.listener(|this, _, window, cx| {
@@ -108,7 +109,7 @@ impl EditorWindow {
         let border = Hsla::from(theme.editor.accent);
         let label_bg = Hsla::from(theme.editor.card).opacity(0.85);
         let label_fg = Hsla::from(theme.editor.text_1);
-        let label: SharedString = format!("{} safe zone", platform.label()).into();
+        let label: SharedString = tr::editor::window::safe_zones::overlay(platform.label()).into();
         Some(
             gpui::canvas(
                 |bounds, _window, _cx| bounds,

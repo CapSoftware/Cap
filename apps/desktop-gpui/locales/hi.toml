@@ -2889,6 +2889,11 @@ not_saved_message = "{error}\n\nआपका टाइटल अब भी ए�
 read_failed = "{path} का रिकॉर्डिंग टाइटल पढ़ा नहीं जा सका: {error}"
 save_failed = "{path} का रिकॉर्डिंग टाइटल सेव नहीं हो सका: {error}"
 
+[editor.window.safe_zones]
+button = "सेफ़ ज़ोन"
+overlay = "{platform} सेफ़ ज़ोन"
+tooltip = "सेफ़ ज़ोन: बंद / Reels / TikTok / Shorts"
+
 [editor.window.track]
 clear_all = "सब साफ़ करें"
 delete = "हटाएँ"

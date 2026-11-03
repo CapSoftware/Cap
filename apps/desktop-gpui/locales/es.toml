@@ -2889,6 +2889,11 @@ not_saved_message = "{error}\n\nTu título sigue en el editor. Intenta guardarlo
 read_failed = "No se pudo leer el título de la grabación de {path}: {error}"
 save_failed = "No se pudo guardar el título de la grabación de {path}: {error}"
 
+[editor.window.safe_zones]
+button = "Zonas seguras"
+overlay = "Zona segura de {platform}"
+tooltip = "Zonas seguras: desactivadas / Reels / TikTok / Shorts"
+
 [editor.window.track]
 clear_all = "Borrar todo"
 delete = "Eliminar"
