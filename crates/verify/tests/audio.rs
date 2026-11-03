@@ -1085,3 +1085,143 @@ fn timing_repair() {
     }
     common::assert_passed(failures);
 }
+
+fn largest_step(interleaved: &[f32]) -> f32 {
+    let channels = 2;
+    (0..channels)
+        .map(|channel| {
+            interleaved
+                .iter()
+                .skip(channel)
+                .step_by(channels)
+                .collect::<Vec<_>>()
+                .windows(2)
+                .map(|pair| (pair[1] - pair[0]).abs())
+                .fold(0.0, f32::max)
+        })
+        .fold(0.0, f32::max)
+}
+
+fn rms(samples: &[f32]) -> f64 {
+    (samples
+        .iter()
+        .map(|v| f64::from(*v) * f64::from(*v))
+        .sum::<f64>()
+        / samples.len().max(1) as f64)
+        .sqrt()
+}
+
+/// The editor's preview speed plays the timeline faster or slower through
+/// the real output source pipeline without clicks or level changes: every
+/// offered speed, and switches between them mid-play, keep the largest
+/// sample-to-sample step within the 1x render's. Returning to 1x hands the
+/// untouched 1x audio back, sample for sample. Clip speeds compose with it.
+#[test]
+fn preview_speed_playback() {
+    let spec = audio_fixture::mix(report::tier());
+    let project = audio_support::project(&spec);
+    let rt = common::runtime();
+    let mut failures = Vec::new();
+    let edits: [(&str, fn(&mut ProjectConfiguration)); 2] =
+        [("full", full), ("speeds-match", speeds_match)];
+    for (edit, apply) in edits {
+        let id = format!("audio/{}/{edit}/preview-speed", spec.name);
+        if !report::selected(&id) {
+            continue;
+        }
+        let mut case = Case::new(&id);
+        let mut config = project.config();
+        apply(&mut config);
+        let mut player = OfflinePlayer::open(&rt, &project, config);
+        player.play(0.0);
+        let normal = player.pull(player.duration + 0.3);
+        let normal_step = largest_step(&normal);
+        let normal_level = rms(&normal);
+        let allowed_step = normal_step * 1.5 + 1e-3;
+
+        for speed in cap_editor::PreviewSpeed::ALL {
+            if speed.is_normal() {
+                continue;
+            }
+            player.preview_speed.set(speed);
+            player.play(0.0);
+            let seconds = (player.duration / speed.as_f64()).min(3.0);
+            let pcm = player.pull(seconds);
+            let step = largest_step(&pcm);
+            case.measure(&speed.label(), "largest-step", f64::from(step));
+            if step > allowed_step {
+                case.problem(
+                    "click",
+                    format!(
+                        "{} played a step of {step:.4}, the 1x render's largest is {normal_step:.4}",
+                        speed.label()
+                    ),
+                );
+            }
+            let level = rms(&pcm);
+            let window = &normal[..pcm.len().min(normal.len()) * 2 / 2];
+            let expected = rms(&window
+                [..((window.len() as f64 * speed.as_f64()) as usize).min(window.len()) / 2 * 2]);
+            if expected > 1e-3 && !(0.7..1.3).contains(&(level / expected)) {
+                case.problem(
+                    "level",
+                    format!(
+                        "{} played at {:.1}% of the 1x level over the same stretch",
+                        speed.label(),
+                        level / expected * 100.0
+                    ),
+                );
+            }
+        }
+
+        player.preview_speed.set(cap_editor::PreviewSpeed::NORMAL);
+        player.play(0.0);
+        let mut switched = Vec::new();
+        for value in [1.0, 2.0, 0.5, 3.0, 1.25, 1.0, 1.75, 0.75, 1.5, 1.0] {
+            player
+                .preview_speed
+                .set(cap_editor::PreviewSpeed::from_f64(value).expect("offered speed"));
+            switched.extend(player.pull(0.4));
+        }
+        let step = largest_step(&switched);
+        case.measure("switching", "largest-step", f64::from(step));
+        if step > allowed_step {
+            case.problem(
+                "click",
+                format!(
+                    "switching speeds mid-play stepped {step:.4}, the 1x render's largest is {normal_step:.4}"
+                ),
+            );
+        }
+        let tail = &switched[switched.len() - 2 * 16_800..];
+        let handed_back = normal
+            .chunks_exact(2)
+            .enumerate()
+            .any(|(frame, _)| normal[frame * 2..].starts_with(tail));
+        case.measure("switching", "handed-back", f64::from(u8::from(handed_back)));
+        if rms(tail) <= 1e-4 {
+            case.problem(
+                "fixture",
+                "the last 0.35 s after returning to 1x is silent, so the hand-back cannot be checked",
+            );
+        } else if !handed_back {
+            case.problem(
+                "hand-back",
+                "after returning to 1x the output is not the 1x render sample for sample",
+            );
+        }
+        if normal_level <= 1e-4 {
+            case.problem("fixture", "the 1x render is silent");
+        }
+        if player.starved > 0 {
+            case.problem(
+                "audio-starved",
+                format!("{} pulls starved (samples never rendered)", player.starved),
+            );
+        }
+        if let Err(message) = report::settle(case) {
+            failures.push(message);
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}

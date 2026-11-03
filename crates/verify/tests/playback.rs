@@ -550,18 +550,27 @@ fn preview_speed_av_sync() {
     let end = drifts.last().map_or(0.0, |(at, _)| *at);
     let first_minute = minute(WARMUP_SECS, WARMUP_SECS + 60.0);
     let last_minute = minute(end - 60.0, end + 1.0);
-    let timeline_heard = drifts.len() as f64 * 0.5;
-    let expected_markers = schedule
-        .iter()
-        .filter(|time| {
-            let played = video_secs(*onsets.last().unwrap()).unwrap_or(0.0);
-            **time > WARMUP_SECS * speed.as_f64() + 0.5 && **time < played - 0.5
-        })
-        .count();
+    let mut heard: Vec<f64> = Vec::new();
+    for onset in &onsets {
+        if let Some(video) = video_secs(*onset)
+            && onset.saturating_duration_since(first).as_secs_f64() >= WARMUP_SECS
+            && let Some(nearest) = schedule
+                .iter()
+                .copied()
+                .filter(|time| (time - video).abs() < 0.2)
+                .min_by(|a, b| (a - video).abs().total_cmp(&(b - video).abs()))
+            && !heard.contains(&nearest)
+        {
+            heard.push(nearest);
+        }
+    }
+    let span = heard.first().copied().unwrap_or(0.0)..=heard.last().copied().unwrap_or(0.0);
+    let expected_markers = schedule.iter().filter(|time| span.contains(time)).count();
+    let timeline_heard = span.end() - span.start();
     println!(
-        "preview {} for {seconds:.0}s: {} markers heard of {expected_markers} expected (~{timeline_heard:.0}s of timeline), audio minus video: mean {:+.1} ms, sd {:.1} ms, min {:+.1} ms, max {:+.1} ms, first minute {:+.1} ms, last minute {:+.1} ms, drift {:+.1} ms",
+        "preview {} for {seconds:.0}s: {} of {expected_markers} markers heard over {timeline_heard:.0}s of timeline, audio minus video: mean {:+.1} ms, sd {:.1} ms, min {:+.1} ms, max {:+.1} ms, first minute {:+.1} ms, last minute {:+.1} ms, drift {:+.1} ms",
         speed.label(),
-        drifts.len(),
+        heard.len(),
         mean * 1000.0,
         spread * 1000.0,
         min * 1000.0,
@@ -569,6 +578,11 @@ fn preview_speed_av_sync() {
         first_minute * 1000.0,
         last_minute * 1000.0,
         (last_minute - first_minute) * 1000.0,
+    );
+    assert!(
+        heard.len() * 100 >= expected_markers * 98,
+        "{} of {expected_markers} markers were heard",
+        heard.len()
     );
     let tolerance = 0.045 * speed.as_f64().max(1.0);
     assert!(

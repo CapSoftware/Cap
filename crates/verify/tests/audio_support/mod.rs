@@ -135,6 +135,7 @@ pub struct OfflinePlayer {
     generation: Option<u64>,
     /// Pulls whose samples did not render in time (silence was played).
     pub starved: usize,
+    pub preview_speed: cap_editor::PreviewSpeedHandle,
 }
 
 impl OfflinePlayer {
@@ -163,6 +164,7 @@ impl OfflinePlayer {
             playhead: None,
             generation: None,
             starved: 0,
+            preview_speed: Default::default(),
         }
     }
 
@@ -179,7 +181,7 @@ impl OfflinePlayer {
                 duration_secs: self.duration,
                 start_playhead_secs: start,
                 playhead_rx: rx,
-                preview_speed: Default::default(),
+                preview_speed: self.preview_speed.clone(),
             })
             .expect("offline audio output accepted the play request");
         self.playhead = Some(tx);
