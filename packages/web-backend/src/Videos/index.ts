@@ -12,7 +12,7 @@ import {
 	Video,
 } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
-import { Effect, Exit, Option } from "effect";
+import { Array as Arr, Cause, Effect, Exit, Option } from "effect";
 import type { Schema } from "effect/Schema";
 
 import { Database } from "../Database.ts";
@@ -236,19 +236,64 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 			},
 		);
 
+		const getThumbnailURLForVideo = Effect.fn("Videos.getThumbnailURLForVideo")(
+			function* (video: Video.Video) {
+				const [bucket] = yield* storage.getAccessForVideo(video);
+				const publishedThumbnail = getPublishedRecordingThumbnailKey(video);
+				if (publishedThumbnail) {
+					return Option.some(
+						yield* bucket.getSignedObjectUrl(publishedThumbnail),
+					);
+				}
+				const listResponse = yield* bucket.listObjects({
+					prefix: `${video.ownerId}/${video.id}/`,
+				});
+				const contents = listResponse.Contents || [];
+				const thumbnailKey = findScreenshotObjectKey(contents);
+				if (!thumbnailKey) return Option.none<string>();
+				const url = yield* bucket.getSignedObjectUrl(thumbnailKey);
+				return Option.some(url);
+			},
+		);
+
 		const getAnalyticsBulkInternal = Effect.fn("Videos.getAnalyticsBulk")(
 			function* (videoIds: ReadonlyArray<Video.VideoId>) {
 				if (videoIds.length === 0)
 					return [] as Array<Exit.Exit<{ count: number }, unknown>>;
 
-				const videoExits = yield* Effect.forEach(
-					videoIds,
-					(videoId) => getByIdForViewing(videoId).pipe(Effect.exit),
-					{ concurrency: 10 },
+				const rows = yield* db.use((database) =>
+					database
+						.select({
+							id: Db.videos.id,
+							orgId: Db.videos.orgId,
+							ownerId: Db.videos.ownerId,
+							public: Db.videos.public,
+							password: Db.videos.password,
+						})
+						.from(Db.videos)
+						.where(Dz.inArray(Db.videos.id, [...new Set(videoIds)])),
+				);
+				const policyExits = yield* policy.canViewLoadedBulk(
+					rows.map(
+						(video) => [video, Option.fromNullable(video.password)] as const,
+					),
+				);
+				const resultsById = new Map(
+					Arr.zipWith(
+						rows,
+						policyExits,
+						(video, exit) =>
+							[video.id, Exit.map(exit, () => Option.some(video))] as const,
+					),
+				);
+				const videoExits = videoIds.map(
+					(videoId) =>
+						resultsById.get(videoId) ??
+						Exit.succeed(Option.none<(typeof rows)[number]>()),
 				);
 				const analyticsVideos = videoExits.flatMap((exit) => {
 					if (!Exit.isSuccess(exit) || Option.isNone(exit.value)) return [];
-					const [video] = exit.value.value;
+					const video = exit.value.value;
 					return [{ id: video.id, orgId: video.orgId }];
 				});
 				const countsByPathname = yield* getAnalyticsCounts(analyticsVideos);
@@ -800,22 +845,45 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 				const maybeVideo = yield* policy.getViewableById(videoId);
 				if (Option.isNone(maybeVideo)) return Option.none();
 				const [video] = maybeVideo.value;
+				return yield* getThumbnailURLForVideo(video);
+			}),
 
-				const [bucket] = yield* storage.getAccessForVideo(video);
-				const publishedThumbnail = getPublishedRecordingThumbnailKey(video);
-				if (publishedThumbnail) {
-					return Option.some(
-						yield* bucket.getSignedObjectUrl(publishedThumbnail),
-					);
-				}
-				const listResponse = yield* bucket.listObjects({
-					prefix: `${video.ownerId}/${video.id}/`,
-				});
-				const contents = listResponse.Contents || [];
-				const thumbnailKey = findScreenshotObjectKey(contents);
-				if (!thumbnailKey) return Option.none();
-				const url = yield* bucket.getSignedObjectUrl(thumbnailKey);
-				return Option.some(url);
+			getThumbnailURLs: Effect.fn("Videos.getThumbnailURLs")(function* (
+				videoIds: ReadonlyArray<Video.VideoId>,
+			) {
+				const loaded = yield* repo.getByIds(videoIds);
+				const policyExits = yield* policy.canViewLoadedBulk(loaded);
+				const viewableById = new Map(
+					Arr.zipWith(
+						loaded,
+						policyExits,
+						([video], exit) => [video.id, { video, exit }] as const,
+					),
+				);
+
+				return yield* Effect.forEach(
+					videoIds,
+					(videoId) => {
+						const entry = viewableById.get(videoId);
+						if (!entry)
+							return Effect.succeed(Exit.succeed(Option.none<string>()));
+						return Exit.matchEffect(entry.exit, {
+							onFailure: (cause) => {
+								const failure = Cause.failureOption(cause);
+								if (Option.isNone(failure))
+									return Effect.die(Cause.squash(cause));
+								if (failure.value._tag === "DatabaseError")
+									return Effect.fail(failure.value);
+								return Effect.succeed(Exit.fail(failure.value));
+							},
+							onSuccess: () =>
+								getThumbnailURLForVideo(entry.video).pipe(
+									Effect.map((url) => Exit.succeed(url)),
+								),
+						});
+					},
+					{ concurrency: 10 },
+				);
 			}),
 
 			getAnalytics: Effect.fn("Videos.getAnalytics")(function* (

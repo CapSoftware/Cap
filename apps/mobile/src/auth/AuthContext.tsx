@@ -9,6 +9,7 @@ import {
 	useContext,
 	useEffect,
 	useMemo,
+	useRef,
 	useState,
 } from "react";
 import {
@@ -70,6 +71,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 		null,
 	);
 	const [loading, setLoading] = useState(true);
+	const sessionRevision = useRef(0);
 
 	const client = useMemo(
 		() =>
@@ -89,8 +91,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 	);
 
 	const refresh = useCallback(async () => {
+		const revision = sessionRevision.current;
 		const response = await client.bootstrap();
-		setBootstrap(response);
+		if (revision === sessionRevision.current) setBootstrap(response);
 	}, [client]);
 
 	useEffect(() => {
@@ -126,7 +129,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 			return;
 		}
 
+		const revision = sessionRevision.current;
 		refresh().catch(() => {
+			if (revision !== sessionRevision.current) return;
+			sessionRevision.current += 1;
 			setApiKey(null);
 			setUserId(null);
 			setBootstrap(null);
@@ -137,6 +143,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
 	const storeSession = useCallback(
 		async (session: { apiKey: string; userId: string | null }) => {
+			sessionRevision.current += 1;
 			await SecureStore.setItemAsync(
 				sessionKey,
 				session.apiKey,
@@ -219,6 +226,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 	);
 
 	const signOut = useCallback(async () => {
+		sessionRevision.current += 1;
 		if (apiKey) {
 			await client.revokeSession().catch(() => {});
 		}
@@ -226,6 +234,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 			SecureStore.deleteItemAsync(sessionKey),
 			SecureStore.deleteItemAsync(userIdKey),
 		]);
+		sessionRevision.current += 1;
 		setApiKey(null);
 		setUserId(null);
 		setBootstrap(null);
@@ -233,8 +242,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
 	const setActiveOrganization = useCallback(
 		async (organizationId: string) => {
+			const revision = sessionRevision.current;
 			const nextBootstrap = await client.setActiveOrganization(organizationId);
-			setBootstrap(nextBootstrap);
+			if (revision === sessionRevision.current) setBootstrap(nextBootstrap);
 		},
 		[client],
 	);

@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { lstat, mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { spawn } from "bun";
 import { z } from "zod";
@@ -13,6 +12,7 @@ import {
 } from "./audio-quality-policy";
 import { proveRecordingPackets } from "./recording-packet-proof";
 import { registerSubprocess, unregisterSubprocess } from "./subprocess";
+import { ensureTempDir, getTempDir } from "./temp-files";
 
 const streamSchema = z.object({
 	codec_type: z.string(),
@@ -307,7 +307,8 @@ export async function createAudioQualityCandidate(
 			Math.abs(videoDuration - input.duration) > 0.1
 		)
 			return { status: "unchanged", reason: "source-duration-mismatch" };
-		directory = await mkdtemp(join(tmpdir(), "cap-audio-quality-"));
+		await ensureTempDir();
+		directory = await mkdtemp(join(getTempDir(), "audio-quality-"));
 		let path = join(directory, "candidate.mp4");
 		const renderArgs = [
 			"ffmpeg",

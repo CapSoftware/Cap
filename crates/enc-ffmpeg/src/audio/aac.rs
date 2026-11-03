@@ -162,7 +162,7 @@ impl AACEncoder {
                 let Some(&rate) = rates
                     .iter()
                     .find(|r| **r >= input_config.rate())
-                    .or(rates.first())
+                    .or(rates.last())
                 else {
                     return Err(AACEncoderError::RateNotSupported(input_config.rate()));
                 };
@@ -278,6 +278,74 @@ impl AudioEncoder for AACEncoder {
 mod tests {
     use super::*;
     use ffmpeg::ChannelLayout;
+
+    #[test]
+    fn sample_rate_selection_preserves_supported_rates_and_clamps_outliers() {
+        let directory = tempfile::tempdir().unwrap();
+        for (input_rate, expected_rate) in [
+            (4_000, 7_350),
+            (44_100, 44_100),
+            (45_000, 48_000),
+            (96_000, 96_000),
+            (192_000, 96_000),
+        ] {
+            let mut output =
+                format::output(&directory.path().join(format!("{input_rate}.mp4"))).unwrap();
+            let encoder = AACEncoder::init(
+                AudioInfo::new_raw(Sample::F32(Type::Packed), input_rate, 1),
+                &mut output,
+            )
+            .unwrap();
+            let stream = output.stream(encoder.stream_index()).unwrap();
+            let decoder = context::Context::from_parameters(stream.parameters())
+                .unwrap()
+                .decoder()
+                .audio()
+                .unwrap();
+            assert_eq!(decoder.rate(), expected_rate, "input rate {input_rate}");
+        }
+    }
+
+    #[test]
+    fn high_rate_input_keeps_high_frequency_audio_through_encode_decode() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("high-rate.mp4");
+        let mut output = format::output(&path).unwrap();
+        let mut encoder = AACEncoder::init(
+            AudioInfo::new_raw(Sample::F32(Type::Packed), 192_000, 1),
+            &mut output,
+        )
+        .unwrap();
+        output.write_header().unwrap();
+
+        let mut audio = frame::Audio::new(Sample::F32(Type::Packed), 192_000, ChannelLayout::MONO);
+        audio.set_rate(192_000);
+        audio.set_pts(Some(0));
+        for (index, sample) in audio.plane_mut::<f32>(0).iter_mut().enumerate() {
+            *sample = 0.5 * (std::f32::consts::TAU * 12_000.0 * index as f32 / 192_000.0).sin();
+        }
+        encoder
+            .send_frame(audio, Duration::MAX, &mut output)
+            .unwrap();
+        encoder.flush(&mut output).unwrap();
+        output.write_trailer().unwrap();
+        drop(encoder);
+        drop(output);
+
+        let (samples, track_end) = decode_first_channel(&path);
+        assert_eq!(track_end, 48_000);
+        assert!(samples.len() >= 96_000, "decoded {} samples", samples.len());
+        let mut sine = 0.0;
+        let mut cosine = 0.0;
+        let signal = &samples[9_600..86_400];
+        for (index, sample) in signal.iter().enumerate() {
+            let phase = std::f64::consts::TAU * 12_000.0 * index as f64 / 96_000.0;
+            sine += f64::from(*sample) * phase.sin();
+            cosine += f64::from(*sample) * phase.cos();
+        }
+        let amplitude = 2.0 * sine.hypot(cosine) / signal.len() as f64;
+        assert!(amplitude > 0.4, "12 kHz tone amplitude {amplitude}");
+    }
 
     fn input_frame(start: i64, samples: usize) -> frame::Audio {
         let mut audio =

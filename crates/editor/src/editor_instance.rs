@@ -8,8 +8,8 @@ use cap_project::{
 };
 use cap_rendering::{
     PrecomputedCursorTimeline, ProjectRecordingsMeta, ProjectUniforms, RecordingSegmentDecoders,
-    RenderVideoConstants, SegmentVideoPaths, SharedWgpuDevice, Video, ZoomTransformTimeline,
-    get_duration, spring_mass_damper::SpringMassDamperSimulationConfig,
+    RenderVideoConstants, RendererLayers, SegmentVideoPaths, SharedWgpuDevice, Video,
+    ZoomTransformTimeline, get_duration, spring_mass_damper::SpringMassDamperSimulationConfig,
 };
 use std::{
     collections::HashMap,
@@ -248,6 +248,7 @@ pub struct EditorInstance {
     meta: RecordingMeta,
     pub export_preview_active: AtomicBool,
     pub export_active: AtomicBool,
+    pub preview_layers: std::sync::Mutex<Option<RendererLayers>>,
     runtime_handle: tokio::runtime::Handle,
     audio_output: Arc<crate::AudioOutput>,
 }
@@ -655,6 +656,7 @@ impl EditorInstance {
             playback_active_rx,
             export_preview_active: AtomicBool::new(false),
             export_active: AtomicBool::new(false),
+            preview_layers: std::sync::Mutex::new(None),
             playback_epoch: AtomicU64::new(0),
             runtime_handle: tokio::runtime::Handle::current(),
             audio_output,
@@ -781,6 +783,7 @@ impl EditorInstance {
             meta: self.meta.clone(),
             export_preview_active: AtomicBool::new(false),
             export_active: AtomicBool::new(false),
+            preview_layers: std::sync::Mutex::new(None),
             runtime_handle: self.runtime_handle.clone(),
             audio_output: self.audio_output.clone(),
         });
@@ -864,6 +867,13 @@ impl EditorInstance {
     /// config off the async runtime so playback start isn't blocked by ffmpeg.
     async fn load_music_tracks(&self) -> crate::MusicTracks {
         let project = self.project_config.1.borrow().clone();
+        self.load_music_tracks_for(project).await
+    }
+
+    /// [`Self::load_music_tracks`] for an explicit config. The timeline's
+    /// imported-audio waveforms read their samples through this so they share
+    /// playback's decode cache instead of decoding the files a second time.
+    pub async fn load_music_tracks_for(&self, project: ProjectConfiguration) -> crate::MusicTracks {
         let project_path = self.project_path.clone();
         let cache = self.music_cache.clone();
 
@@ -1849,8 +1859,7 @@ async fn create_segments_with_audio(
                     .unwrap_or_else(AudioLoader::none);
 
                 let system_audio = s
-                    .system_audio
-                    .as_ref()
+                    .usable_system_audio()
                     .filter(|_| load_audio)
                     .map(|audio| {
                         audio_loader_with_completed(

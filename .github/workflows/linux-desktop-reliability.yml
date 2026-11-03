@@ -1,0 +1,588 @@
+name: Linux desktop reliability
+
+# The built GPUI app on real Linux desktops: Ubuntu 26.04 with GNOME 50 and
+# Arch with Hyprland, each with its real portals and tray host, in systemd
+# containers (scripts/linux-desktop-harness). Each case starts a Display
+# recording the way a person does (overlay Start, approve the shortcut or use
+# the tray, approve the screen share), stops it, and checks it finished.
+
+on:
+  pull_request:
+    paths:
+      - "apps/desktop-gpui/**"
+      - "crates/recording/**"
+      - "crates/camera/**"
+      - "crates/camera-ffmpeg/**"
+      - "crates/utils/**"
+      - "crates/scap-targets/**"
+      - "scripts/linux-desktop-harness/**"
+      - "scripts/prepare-gpui-dependency.sh"
+      - "scripts/finalize-linux-appimage.mjs"
+      - ".github/workflows/linux-desktop-reliability.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The package only supplies the desktop file and runtime dependencies; the
+  # binary under test is this commit's build.
+  CAP_DEB_URL: https://cdn.crabnebula.app/asset/01M5CHFS77QM2HSZ69KT784SAV
+  CAP_DEB_SHA256: bb03dddc5268f64d3e6eb4c11534462e5b7a8a5c1c7bb5bca5f5bdaa99d11c56
+  # The 0.6.1 AppImage, whose libraries the NixOS check lays out both ways.
+  CAP_APPIMAGE_URL: https://cdn.crabnebula.app/asset/01M5CHFYYW4JXX4M9SPZ1NF6HM
+  CAP_APPIMAGE_SHA256: dd579d76b91173a2e620034c407e63ec3ae4ae5420540de80f5fededb7519b97
+
+jobs:
+  # A pull request from a fork that changes only this workflow or the harness
+  # does not queue the desktop jobs; one that also changes the app does, and
+  # so does any change from this repository.
+  scope:
+    name: Scope
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.scope.outputs.run }}
+    steps:
+      - name: Scope
+        id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          PR: ${{ github.event.pull_request.number }}
+          SAME_REPO: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT" != pull_request || "$SAME_REPO" == true ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --paginate --jq '.[].filename' > "$RUNNER_TEMP/changed.txt"
+          if grep -qE '^(apps/desktop-gpui/|crates/(recording|camera|camera-ffmpeg|utils|scap-targets)/|scripts/(prepare-gpui-dependency\.sh|finalize-linux-appimage\.mjs)$)' "$RUNNER_TEMP/changed.txt"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "A fork pull request that changes no app code does not run the Linux desktop suite." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
+  desktops:
+    name: Record on GNOME
+    needs: scope
+    if: needs.scope.outputs.run == 'true'
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 90
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Linux desktop dependencies
+        uses: ./.github/actions/install-desktop-deps
+
+      - name: Rust setup
+        uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: x86_64-unknown-linux-gnu
+          prefix-key: v1-rust-gpui
+          save-cache: "false"
+          workspaces: apps/desktop-gpui -> target
+
+      - name: Run setup
+        run: node scripts/setup.js
+        env:
+          RUST_TARGET_TRIPLE: x86_64-unknown-linux-gnu
+
+      - name: Prepare GPUI dependency
+        run: |
+          node scripts/sync-desktop-versions.mjs
+          ./scripts/prepare-gpui-dependency.sh
+
+      - name: Build cap-gpui
+        run: cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --locked --bin cap-gpui
+
+      # niri 26.04 shares screencasts only as DMA-BUFs with a mandatory
+      # modifier (GitHub #2941). niri itself refuses software rendering, so a
+      # producer that negotiates and shares frames the way it does stands in.
+      - name: Capture from a niri-style DMA-BUF screencast
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}/target/native-deps/lib
+        run: |
+          sudo apt-get install -y -qq pipewire wireplumber libpipewire-0.3-dev dbus >/dev/null
+          RUSTUP_TOOLCHAIN=1.95.0 bash scripts/linux-desktop-harness/niri-screencast/run.sh
+
+      - name: Confirmation dialog without zenity (X11 input)
+        run: |
+          sudo apt-get install -y -qq xdotool xvfb >/dev/null
+          bash scripts/linux-desktop-harness/dialog-x11.sh \
+            apps/desktop-gpui/target/debug/cap-gpui target/native-deps/lib
+
+      - name: X11 display, area and window recordings, audio and a screenshot
+        run: |
+          sudo apt-get install -y -qq x11-utils pulseaudio pulseaudio-utils libasound2-plugins ffmpeg >/dev/null
+          bash scripts/linux-desktop-harness/x11-capture.sh \
+            apps/desktop-gpui/target/debug/cap-gpui target/native-deps/lib "$RUNNER_TEMP/out/x11-capture"
+
+      # A systemd user environment keeps WAYLAND_DISPLAY after a Wayland
+      # session ends.
+      - name: X11 launch with a stale WAYLAND_DISPLAY
+        run: |
+          bash scripts/linux-desktop-harness/x11-stale-wayland.sh \
+            apps/desktop-gpui/target/debug/cap-gpui target/native-deps/lib "$RUNNER_TEMP/out/x11-stale-wayland"
+
+      - name: Fetch the Cap package for desktop integration
+        run: |
+          curl --fail --location --retry 3 -o "$RUNNER_TEMP/cap.deb" "$CAP_DEB_URL"
+          echo "$CAP_DEB_SHA256  $RUNNER_TEMP/cap.deb" | sha256sum --check
+
+      - name: GNOME 50 (shortcut approval, screen share dialog)
+        env:
+          DEV_BIN: ${{ github.workspace }}/apps/desktop-gpui/target/debug/cap-gpui
+          DEV_LIBS: ${{ github.workspace }}/target/native-deps/lib
+        run: |
+          sudo -E bash scripts/linux-desktop-harness/run-desktop.sh gnome "$RUNNER_TEMP/cap.deb" \
+            "$RUNNER_TEMP/out/gnome" LAUNCH=dock APPROVE_SHORTCUT_AFTER=6
+
+      - name: GNOME 50 tray fallback (no app id, AppIndicator icon and menu)
+        env:
+          DEV_BIN: ${{ github.workspace }}/apps/desktop-gpui/target/debug/cap-gpui
+          DEV_LIBS: ${{ github.workspace }}/target/native-deps/lib
+        run: |
+          sudo -E bash scripts/linux-desktop-harness/run-desktop.sh gnome "$RUNNER_TEMP/cap.deb" \
+            "$RUNNER_TEMP/out/gnome-tray" LAUNCH=terminal TRAY_CLICK=pointer GNOME_UNSAFE=1 \
+            CAP_GPUI_PORTAL_APP_ID=0
+
+      # A terminal launch has no launcher unit for the portals to name Cap
+      # after; Cap registers its own app id so GlobalShortcuts still works.
+      - name: GNOME 50 shortcut from a terminal launch
+        env:
+          DEV_BIN: ${{ github.workspace }}/apps/desktop-gpui/target/debug/cap-gpui
+          DEV_LIBS: ${{ github.workspace }}/target/native-deps/lib
+        run: |
+          sudo -E bash scripts/linux-desktop-harness/run-desktop.sh gnome "$RUNNER_TEMP/cap.deb" \
+            "$RUNNER_TEMP/out/gnome-terminal" LAUNCH=terminal APPROVE_SHORTCUT_AFTER=6
+          cat "$RUNNER_TEMP/out/gnome-terminal/result.txt"
+          grep -qx attempt1_control=shortcut "$RUNNER_TEMP/out/gnome-terminal/result.txt"
+          grep -qx app_id_required=0 "$RUNNER_TEMP/out/gnome-terminal/result.txt"
+
+      # Every shell launch names itself to the portals, including the ones
+      # that have just written the desktop entry the portal looks the id up in.
+      - name: GNOME 50 shell launches register Cap's app id
+        env:
+          DEV_BIN: ${{ github.workspace }}/apps/desktop-gpui/target/debug/cap-gpui
+          DEV_LIBS: ${{ github.workspace }}/target/native-deps/lib
+          SCENARIO: register
+        run: |
+          sudo -E bash scripts/linux-desktop-harness/run-desktop.sh gnome "$RUNNER_TEMP/cap.deb" \
+            "$RUNNER_TEMP/out/gnome-register" ROUNDS=4
+          cat "$RUNNER_TEMP/out/gnome-register/result.txt"
+          for line in fresh_registered=4 again_registered=4 entry_written=yes panics=0; do
+            grep -qx "$line" "$RUNNER_TEMP/out/gnome-register/result.txt"
+          done
+
+      # Fedora's GNOME without the AppIndicator extension, launched where the
+      # portal grants no shortcut: no tray and no Stop shortcut. Cap records
+      # with its controls visible instead of refusing to start.
+      - name: GNOME 50 without a tray or a shortcut records with visible controls
+        env:
+          DEV_BIN: ${{ github.workspace }}/apps/desktop-gpui/target/debug/cap-gpui
+          DEV_LIBS: ${{ github.workspace }}/target/native-deps/lib
+        run: |
+          sudo -E bash scripts/linux-desktop-harness/run-desktop.sh gnome "$RUNNER_TEMP/cap.deb" \
+            "$RUNNER_TEMP/out/gnome-no-control" LAUNCH=terminal GNOME_TRAY=0 CAP_GPUI_PORTAL_APP_ID=0 \
+            GNOME_UNSAFE=1
+          cat "$RUNNER_TEMP/out/gnome-no-control/result.txt"
+          for line in attempt1_control=visible visible_controls_shown=yes attempt1_finished=yes blocked=0 \
+            restoration_unconfirmed=0 panics=0; do
+            grep -qx "$line" "$RUNNER_TEMP/out/gnome-no-control/result.txt"
+          done
+
+      - name: GNOME 50 settings window closes from its own button
+        env:
+          DEV_BIN: ${{ github.workspace }}/apps/desktop-gpui/target/debug/cap-gpui
+          DEV_LIBS: ${{ github.workspace }}/target/native-deps/lib
+          SCENARIO: settings-close
+        run: |
+          sudo -E bash scripts/linux-desktop-harness/run-desktop.sh gnome "$RUNNER_TEMP/cap.deb" \
+            "$RUNNER_TEMP/out/gnome-settings" GNOME_UNSAFE=1
+          cat "$RUNNER_TEMP/out/gnome-settings/result.txt"
+          grep -qx settings_closed=yes "$RUNNER_TEMP/out/gnome-settings/result.txt"
+
+      - name: GNOME 50 relaunch from the app grid reaches the running Cap
+        env:
+          DEV_BIN: ${{ github.workspace }}/apps/desktop-gpui/target/debug/cap-gpui
+          DEV_LIBS: ${{ github.workspace }}/target/native-deps/lib
+          SCENARIO: reopen
+        run: |
+          sudo -E bash scripts/linux-desktop-harness/run-desktop.sh gnome "$RUNNER_TEMP/cap.deb" \
+            "$RUNNER_TEMP/out/gnome-reopen"
+          cat "$RUNNER_TEMP/out/gnome-reopen/result.txt"
+          grep -qx reopen_forwarded=yes "$RUNNER_TEMP/out/gnome-reopen/result.txt"
+
+      - name: GNOME 50 relaunch brings Cap to the front over its settings
+        env:
+          DEV_BIN: ${{ github.workspace }}/apps/desktop-gpui/target/debug/cap-gpui
+          DEV_LIBS: ${{ github.workspace }}/target/native-deps/lib
+          SCENARIO: raise
+        run: |
+          for window in main onboarding; do
+            sudo -E bash scripts/linux-desktop-harness/run-desktop.sh gnome "$RUNNER_TEMP/cap.deb" \
+              "$RUNNER_TEMP/out/gnome-raise-$window" GNOME_UNSAFE=1 RAISE_WINDOW=$window
+            cat "$RUNNER_TEMP/out/gnome-raise-$window/result.txt"
+            grep -qx main_raised=yes "$RUNNER_TEMP/out/gnome-raise-$window/result.txt"
+          done
+
+      - name: GNOME 50 editor background image from the portal file chooser
+        env:
+          DEV_BIN: ${{ github.workspace }}/apps/desktop-gpui/target/debug/cap-gpui
+          DEV_LIBS: ${{ github.workspace }}/target/native-deps/lib
+          SCENARIO: pick-background
+        run: |
+          sudo -E bash scripts/linux-desktop-harness/run-desktop.sh gnome "$RUNNER_TEMP/cap.deb" \
+            "$RUNNER_TEMP/out/gnome-pick-background" GNOME_UNSAFE=1 LAUNCH=dock APPROVE_SHORTCUT_AFTER=6
+          cat "$RUNNER_TEMP/out/gnome-pick-background/result.txt"
+          for line in recorded=yes editor_opened=yes chooser_opened=yes background_chosen=yes cap_alive=yes; do
+            grep -qx "$line" "$RUNNER_TEMP/out/gnome-pick-background/result.txt"
+          done
+
+      # GNOME's default wallpaper is JPEG XL.
+      - name: GNOME 50 editor background from the desktop wallpaper
+        env:
+          DEV_BIN: ${{ github.workspace }}/apps/desktop-gpui/target/debug/cap-gpui
+          DEV_LIBS: ${{ github.workspace }}/target/native-deps/lib
+          SCENARIO: wallpaper
+        run: |
+          sudo -E bash scripts/linux-desktop-harness/run-desktop.sh gnome "$RUNNER_TEMP/cap.deb" \
+            "$RUNNER_TEMP/out/gnome-wallpaper" LAUNCH=dock APPROVE_SHORTCUT_AFTER=6
+          cat "$RUNNER_TEMP/out/gnome-wallpaper/result.txt"
+          for line in recorded=yes expected_exists=yes editor_opened=yes wallpaper_found=yes wallpaper_imported=yes \
+            cap_alive=yes; do
+            grep -qx "$line" "$RUNNER_TEMP/out/gnome-wallpaper/result.txt"
+          done
+
+      # GNOME asks once whether Cap may take screenshots, and only while Cap
+      # has focus.
+      - name: GNOME 50 screenshot, allowed when the portal asks
+        env:
+          DEV_BIN: ${{ github.workspace }}/apps/desktop-gpui/target/debug/cap-gpui
+          DEV_LIBS: ${{ github.workspace }}/target/native-deps/lib
+          SCENARIO: screenshot
+        run: |
+          sudo -E bash scripts/linux-desktop-harness/run-desktop.sh gnome "$RUNNER_TEMP/cap.deb" \
+            "$RUNNER_TEMP/out/gnome-screenshot" LAUNCH=dock GNOME_UNSAFE=1
+          cat "$RUNNER_TEMP/out/gnome-screenshot/result.txt" "$RUNNER_TEMP/out/gnome-screenshot/actions.log"
+          for line in screenshot_taken=yes screenshot_size=yes capture_failed=0 cap_alive=yes panics=0; do
+            grep -qx "$line" "$RUNNER_TEMP/out/gnome-screenshot/result.txt"
+          done
+
+      - name: GNOME 50 screenshot from a terminal launch (Cap names itself so.cap.Cap)
+        env:
+          DEV_BIN: ${{ github.workspace }}/apps/desktop-gpui/target/debug/cap-gpui
+          DEV_LIBS: ${{ github.workspace }}/target/native-deps/lib
+          SCENARIO: screenshot
+        run: |
+          sudo -E bash scripts/linux-desktop-harness/run-desktop.sh gnome "$RUNNER_TEMP/cap.deb" \
+            "$RUNNER_TEMP/out/gnome-screenshot-terminal" LAUNCH=terminal PRELAUNCH=1 GNOME_UNSAFE=1
+          cat "$RUNNER_TEMP/out/gnome-screenshot-terminal/result.txt" "$RUNNER_TEMP/out/gnome-screenshot-terminal/actions.log"
+          for line in screenshot_taken=yes screenshot_size=yes capture_failed=0 cap_alive=yes panics=0; do
+            grep -qx "$line" "$RUNNER_TEMP/out/gnome-screenshot-terminal/result.txt"
+          done
+
+      - name: GNOME 50 area recording (portal stream cropped to the area)
+        env:
+          DEV_BIN: ${{ github.workspace }}/apps/desktop-gpui/target/debug/cap-gpui
+          DEV_LIBS: ${{ github.workspace }}/target/native-deps/lib
+        run: |
+          sudo -E bash scripts/linux-desktop-harness/run-desktop.sh gnome "$RUNNER_TEMP/cap.deb" \
+            "$RUNNER_TEMP/out/gnome-area" LAUNCH=dock APPROVE_SHORTCUT_AFTER=6 AREA=200,150,800,450
+          cat "$RUNNER_TEMP/out/gnome-area/result.txt"
+          for line in attempt1_finished=yes area_video=yes panics=0; do
+            grep -qx "$line" "$RUNNER_TEMP/out/gnome-area/result.txt"
+          done
+
+      - name: GNOME 50 editor export to MP4 and GIF
+        env:
+          DEV_BIN: ${{ github.workspace }}/apps/desktop-gpui/target/debug/cap-gpui
+          DEV_LIBS: ${{ github.workspace }}/target/native-deps/lib
+          SCENARIO: export
+        run: |
+          sudo -E bash scripts/linux-desktop-harness/run-desktop.sh gnome "$RUNNER_TEMP/cap.deb" \
+            "$RUNNER_TEMP/out/gnome-export" LAUNCH=dock APPROVE_SHORTCUT_AFTER=6
+          cat "$RUNNER_TEMP/out/gnome-export/result.txt"
+          for line in recorded=yes mp4_exported=yes mp4_has_video=yes mp4_cap_alive=yes gif_exported=yes \
+            gif_has_video=yes gif_cap_alive=yes; do
+            grep -qx "$line" "$RUNNER_TEMP/out/gnome-export/result.txt"
+          done
+
+      - name: Check results
+        run: |
+          bash scripts/linux-desktop-harness/check-results.sh \
+            "$RUNNER_TEMP/out/gnome" "$RUNNER_TEMP/out/gnome-tray" "$RUNNER_TEMP/out/gnome-terminal"
+
+      - name: Package the build for the Hyprland job
+        run: |
+          mkdir -p "$RUNNER_TEMP/build/libs"
+          cp apps/desktop-gpui/target/debug/cap-gpui "$RUNNER_TEMP/build/cap-gpui"
+          strip --strip-debug "$RUNNER_TEMP/build/cap-gpui"
+          cp -a target/native-deps/lib/. "$RUNNER_TEMP/build/libs/"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cap-gpui-linux
+          path: ${{ runner.temp }}/build
+          retention-days: 1
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-desktop-reliability-gnome
+          path: ${{ runner.temp }}/out
+          if-no-files-found: ignore
+
+  hyprland:
+    name: Record on Hyprland
+    needs: desktops
+    # vkms, the virtual display Hyprland runs on, is in the hosted runner's
+    # extra kernel modules; Blacksmith's kernel does not ship it.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: cap-gpui-linux
+          path: ${{ runner.temp }}/build
+
+      - name: Virtual display devices
+        run: |
+          # Newer runner kernels ship vkms in the base modules package and
+          # have no linux-modules-extra package at all.
+          if ! sudo modprobe vkms 2>/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq "linux-modules-extra-$(uname -r)"
+            sudo modprobe vkms
+          fi
+          ls -la /dev/dri
+
+      - name: Hyprland (portal refuses host apps, tray Stop control)
+        run: |
+          chmod +x "$RUNNER_TEMP/build/cap-gpui"
+          sudo -E env DEV_BIN="$RUNNER_TEMP/build/cap-gpui" DEV_LIBS="$RUNNER_TEMP/build/libs" \
+            bash scripts/linux-desktop-harness/run-desktop.sh hyprland "$RUNNER_TEMP/build/cap-gpui" \
+            "$RUNNER_TEMP/out/hyprland" LAUNCH=dock
+
+      # A GPU without a Vulkan driver renders through wgpu's GL backend, whose
+      # surfaces have no Mailbox present mode. Hiding the Vulkan drivers puts
+      # Cap there; showing its hidden windows again must not panic.
+      - name: Hyprland on OpenGL (no Vulkan driver)
+        run: |
+          sudo -E env DEV_BIN="$RUNNER_TEMP/build/cap-gpui" DEV_LIBS="$RUNNER_TEMP/build/libs" \
+            bash scripts/linux-desktop-harness/run-desktop.sh hyprland "$RUNNER_TEMP/build/cap-gpui" \
+            "$RUNNER_TEMP/out/hyprland-gl" LAUNCH=dock VK_ICD_FILENAMES=/nonexistent.json
+          grep -q 'Selected GPU adapter: .*(Gl)' "$RUNNER_TEMP/out/hyprland-gl/cap.log"
+
+      - name: Hyprland screenshot
+        env:
+          SCENARIO: screenshot
+        run: |
+          sudo -E env DEV_BIN="$RUNNER_TEMP/build/cap-gpui" DEV_LIBS="$RUNNER_TEMP/build/libs" \
+            bash scripts/linux-desktop-harness/run-desktop.sh hyprland "$RUNNER_TEMP/build/cap-gpui" \
+            "$RUNNER_TEMP/out/hyprland-screenshot" LAUNCH=dock
+          cat "$RUNNER_TEMP/out/hyprland-screenshot/result.txt"
+          for line in screenshot_taken=yes screenshot_size=yes capture_failed=0 cap_alive=yes panics=0; do
+            grep -qx "$line" "$RUNNER_TEMP/out/hyprland-screenshot/result.txt"
+          done
+
+      # The hosted runner can build v4l2loopback; Blacksmith's kernel cannot.
+      - name: Install Linux desktop dependencies
+        uses: ./.github/actions/install-desktop-deps
+
+      - name: X11 recording with a camera
+        run: |
+          sudo apt-get install -y -qq "linux-headers-$(uname -r)" v4l2loopback-dkms xvfb xdotool ffmpeg dbus >/dev/null
+          chmod +x "$RUNNER_TEMP/build/cap-gpui"
+          # Each format Cap's Linux camera path converts: packed YUYV, NV12 and
+          # MJPEG (decoded before use).
+          for format in yuyv422 nv12 mjpeg; do
+            dir="$RUNNER_TEMP/out/x11-camera-$format"
+            sudo install -d -o "$(id -u)" -g "$(id -g)" "$dir"
+            CAMERA_FORMAT=$format bash scripts/linux-desktop-harness/x11-camera.sh \
+              "$RUNNER_TEMP/build/cap-gpui" "$RUNNER_TEMP/build/libs" "$dir"
+          done
+
+      - name: Hyprland area recording
+        run: |
+          sudo -E env DEV_BIN="$RUNNER_TEMP/build/cap-gpui" DEV_LIBS="$RUNNER_TEMP/build/libs" \
+            bash scripts/linux-desktop-harness/run-desktop.sh hyprland "$RUNNER_TEMP/build/cap-gpui" \
+            "$RUNNER_TEMP/out/hyprland-area" LAUNCH=dock AREA=200,150,800,450
+          cat "$RUNNER_TEMP/out/hyprland-area/result.txt"
+          for line in attempt1_finished=yes area_video=yes panics=0; do
+            grep -qx "$line" "$RUNNER_TEMP/out/hyprland-area/result.txt"
+          done
+
+      - name: Hyprland clipboard (Ctrl+V into and Ctrl+C out of a text field)
+        env:
+          SCENARIO: clipboard
+        run: |
+          sudo -E env DEV_BIN="$RUNNER_TEMP/build/cap-gpui" DEV_LIBS="$RUNNER_TEMP/build/libs" \
+            bash scripts/linux-desktop-harness/run-desktop.sh hyprland "$RUNNER_TEMP/build/cap-gpui" \
+            "$RUNNER_TEMP/out/hyprland-clipboard"
+          for key in typing_reached_field paste_reached_field copy_reached_clipboard; do
+            grep -qx "$key=yes" "$RUNNER_TEMP/out/hyprland-clipboard/result.txt"
+          done
+
+      # Omarchy draws its wallpaper with swaybg.
+      - name: Hyprland editor background from the swaybg wallpaper
+        env:
+          SCENARIO: wallpaper
+        run: |
+          sudo -E env DEV_BIN="$RUNNER_TEMP/build/cap-gpui" DEV_LIBS="$RUNNER_TEMP/build/libs" \
+            bash scripts/linux-desktop-harness/run-desktop.sh hyprland "$RUNNER_TEMP/build/cap-gpui" \
+            "$RUNNER_TEMP/out/hyprland-wallpaper" LAUNCH=dock WALLPAPER=swaybg
+          cat "$RUNNER_TEMP/out/hyprland-wallpaper/result.txt"
+          for line in recorded=yes editor_opened=yes wallpaper_found=yes wallpaper_imported=yes cap_alive=yes; do
+            grep -qx "$line" "$RUNNER_TEMP/out/hyprland-wallpaper/result.txt"
+          done
+
+      - name: Check results
+        run: |
+          bash scripts/linux-desktop-harness/check-results.sh \
+            "$RUNNER_TEMP/out/hyprland" "$RUNNER_TEMP/out/hyprland-gl"
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-desktop-reliability-hyprland
+          path: ${{ runner.temp }}/out
+          if-no-files-found: ignore
+
+  appimage-nixos:
+    name: AppImage screen capture on NixOS
+    needs: scope
+    if: needs.scope.outputs.run == 'true'
+    # NixOS users run the AppImage through appimage-run. The PipeWire plugins
+    # that load into Cap there link NixOS's FFmpeg, which needs a newer libva
+    # than the one 0.6.1 bundled ahead of the host's (GitHub #2941). This
+    # connects a capture stream through the real launchers, with the AppDir as
+    # 0.6.1 shipped it and as scripts/finalize-linux-appimage.mjs lays it out.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Fetch the 0.6.1 AppImage
+        run: |
+          curl --fail --location --retry 3 -o "$RUNNER_TEMP/Cap.AppImage" "$CAP_APPIMAGE_URL"
+          echo "$CAP_APPIMAGE_SHA256  $RUNNER_TEMP/Cap.AppImage" | sha256sum --check
+
+      - name: Connect a capture stream in NixOS appimage-run
+        run: |
+          sudo bash scripts/linux-desktop-harness/appimage-pipewire/run.sh \
+            "$RUNNER_TEMP/Cap.AppImage" "$RUNNER_TEMP/out/appimage-nixos"
+
+      - name: Check results
+        run: |
+          set -euo pipefail
+          result="$RUNNER_TEMP/out/appimage-nixos/result.txt"
+          cat "$result"
+          # The shipped layout is the control: it must still reproduce the
+          # failure, or the check proves nothing.
+          grep -qx "shipped_connects=no" "$result"
+          grep -qx "fixed_connects=yes" "$result"
+          # Programs Cap starts (xdg-open, file managers) no longer inherit
+          # the bundle's libraries.
+          grep -qx "shipped_children_get_bundle_libraries=yes" "$result"
+          grep -qx "fixed_children_get_bundle_libraries=no" "$result"
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-desktop-reliability-appimage-nixos
+          path: ${{ runner.temp }}/out
+          if-no-files-found: ignore
+
+  niri:
+    name: Record on niri
+    needs: desktops
+    # niri 26.04 shares screencasts only as DMA-BUFs with a mandatory
+    # modifier (GitHub #2941). It refuses software rendering, so this builds
+    # the release with only that check removed and runs it on vkms.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: cap-gpui-linux
+          path: ${{ runner.temp }}/build
+
+      - name: Virtual display devices
+        run: |
+          # Newer runner kernels ship vkms in the base modules package and
+          # have no linux-modules-extra package at all.
+          if ! sudo modprobe vkms 2>/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq "linux-modules-extra-$(uname -r)"
+            sudo modprobe vkms
+          fi
+          ls -la /dev/dri
+
+      - name: Build niri
+        run: |
+          cd scripts/linux-desktop-harness
+          sudo docker build -q -f arch.Dockerfile -t cap-harness-arch . >/dev/null
+          sudo docker build -q -f niri-software.Dockerfile -t cap-harness-arch-niri . >/dev/null
+
+      # The runner's Hyper-V display (card1, Virtual-1) is a second output; with
+      # two, the screen-share dialog waits for a pick the harness never makes.
+      - name: niri (DMA-BUF screencast, tray Stop control)
+        run: |
+          chmod +x "$RUNNER_TEMP/build/cap-gpui"
+          sudo -E env DEV_BIN="$RUNNER_TEMP/build/cap-gpui" DEV_LIBS="$RUNNER_TEMP/build/libs" \
+            HARNESS_IMAGE=cap-harness-arch-niri \
+            bash scripts/linux-desktop-harness/run-desktop.sh niri "$RUNNER_TEMP/build/cap-gpui" \
+            "$RUNNER_TEMP/out/niri" LAUNCH=dock NIRI_RENDER_DEVICE=vkms NIRI_OUTPUTS_OFF=Virtual-1 \
+            GSK_RENDERER=cairo
+
+      - name: niri clipboard (Ctrl+V into and Ctrl+C out of a text field)
+        env:
+          SCENARIO: clipboard
+        run: |
+          sudo -E env DEV_BIN="$RUNNER_TEMP/build/cap-gpui" DEV_LIBS="$RUNNER_TEMP/build/libs" \
+            HARNESS_IMAGE=cap-harness-arch-niri \
+            bash scripts/linux-desktop-harness/run-desktop.sh niri "$RUNNER_TEMP/build/cap-gpui" \
+            "$RUNNER_TEMP/out/niri-clipboard" NIRI_RENDER_DEVICE=vkms NIRI_OUTPUTS_OFF=Virtual-1 \
+            GSK_RENDERER=cairo
+          for key in typing_reached_field paste_reached_field copy_reached_clipboard; do
+            grep -qx "$key=yes" "$RUNNER_TEMP/out/niri-clipboard/result.txt"
+          done
+
+      - name: Check results
+        run: |
+          bash scripts/linux-desktop-harness/check-results.sh "$RUNNER_TEMP/out/niri"
+          grep -q "negotiated DMA-BUF frames" "$RUNNER_TEMP/out/niri/cap.log"
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-desktop-reliability-niri
+          path: ${{ runner.temp }}/out
+          if-no-files-found: ignore
+

@@ -8,6 +8,7 @@ import {
 	StudioIcon,
 } from "@/components/pages/HomePage/modeIcons";
 import { MacCursor, WindowsCursor } from "./cursors";
+import { HALLOWEEN } from "./halloween";
 import { H_HERO, INK, MODE_THEME, type ModeKey } from "./theme";
 
 type SlideKey = ModeKey | "all";
@@ -25,8 +26,9 @@ const SLIDES: Slide[] = [
 	{ key: "screenshot", tail: "screenshots, too." },
 ];
 
-const NUDGE = "Click me \u{1F440}";
-const NUDGE_TOUCH = "Tap me \u{1F440}";
+const NUDGE_EMOJI = HALLOWEEN ? "\u{1F47B}" : "\u{1F440}";
+const NUDGE = `Click me ${NUDGE_EMOJI}`;
+const NUDGE_TOUCH = `Tap me ${NUDGE_EMOJI}`;
 const TOUCH_QUERY = "(max-width: 767px)";
 const TYPE_MS = 26;
 
@@ -251,7 +253,7 @@ export const HeroHeadline = () => {
 				{CSS}
 			</style>
 
-			<div className="ht-rise relative pb-10 [--d:0.35s] md:pb-14">
+			<div className="ht-rise relative pb-10 [--d:0.08s] md:pb-14">
 				<div className="mx-auto flex w-fit flex-nowrap items-center justify-center gap-0.5 rounded-full border border-[#DDE4EB] bg-white/70 p-1 shadow-[0_1px_2px_rgba(17,17,17,0.04)]">
 					{PILLS.map((pill) => {
 						const active = index === pill.slide;
@@ -302,7 +304,7 @@ export const HeroHeadline = () => {
 			</div>
 
 			<h1
-				className={`ht-rise ht-rise-soft [--d:0.5s] ${H_HERO} max-w-[15ch] text-balance text-[clamp(34px,4.4vw,60px)] sm:max-w-none`}
+				className={`ht-rise ht-rise-soft [--d:0.1s] ${H_HERO} max-w-[15ch] text-balance text-[clamp(34px,4.4vw,60px)] sm:max-w-none`}
 			>
 				<span className="sr-only">
 					The open source screen recorder for everyone. Cap has three recording
@@ -330,8 +332,8 @@ export const HeroHeadline = () => {
 
 const CSS = `
 /* The hero's entrance, staggered by --d on each piece. */
-.ht-rise { animation: ht-rise 1.1s cubic-bezier(0.16, 1, 0.3, 1) var(--d, 0s) both; }
-.ht-rise-soft { animation-name: ht-rise-soft; animation-duration: 1.3s; }
+.ht-rise { animation: ht-rise 0.7s cubic-bezier(0.16, 1, 0.3, 1) var(--d, 0s) both; }
+.ht-rise-soft { animation-name: ht-rise-soft; animation-duration: 0.8s; }
 @keyframes ht-rise {
 	from { opacity: 0; transform: translate3d(0, 14px, 0); }
 	to { opacity: 1; transform: none; }

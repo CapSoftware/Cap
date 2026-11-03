@@ -1,5 +1,6 @@
 import { db } from "@cap/database";
 import { isBlockedAccountEmail } from "@cap/database/auth/domain-utils";
+import { isCrossSiteCookieWrite } from "@cap/database/auth/request-site";
 import { getCurrentUser } from "@cap/database/auth/session";
 import {
 	authApiKeys,
@@ -13,6 +14,12 @@ import { and, eq, isNull } from "drizzle-orm";
 import type { Context } from "hono";
 import { cors } from "hono/cors";
 import { createMiddleware } from "hono/factory";
+import { HTTPException } from "hono/http-exception";
+import {
+	apiErrorBody,
+	apiInternalErrorBody,
+	apiNotFoundBody,
+} from "@/lib/api-errors";
 import { hashKey } from "@/lib/developer-key-hash";
 
 const RATE_LIMIT_WINDOW_MS = 60_000;
@@ -58,7 +65,18 @@ export const developerRateLimiter = createMiddleware(async (c, next) => {
 	} else {
 		entry.count++;
 		if (entry.count > RATE_LIMIT_MAX_REQUESTS) {
-			return c.json({ error: "Rate limit exceeded" }, 429);
+			c.header(
+				"Retry-After",
+				String(Math.max(1, Math.ceil((entry.resetAt - now) / 1000))),
+			);
+			return c.json(
+				apiErrorBody(
+					"rate_limited",
+					"Rate limit exceeded",
+					`Wait for the Retry-After seconds, then retry. Each key allows ${RATE_LIMIT_MAX_REQUESTS} requests per minute.`,
+				),
+				429,
+			);
 		}
 	}
 
@@ -93,7 +111,7 @@ async function getAuth(c: Context) {
 			.where(eq(authApiKeys.id, authHeader));
 		user = res[0]?.users;
 		if (user && isBlockedAccountEmail(user.email)) user = undefined;
-	} else {
+	} else if (!isCrossSiteCookieWrite(c.req.raw)) {
 		user = await getCurrentUser();
 	}
 
@@ -157,7 +175,14 @@ export const withDeveloperPublicAuth = createMiddleware<{
 }>(async (c, next) => {
 	const authHeader = c.req.header("authorization")?.split(" ")[1];
 	if (!authHeader?.startsWith("cpk_")) {
-		return c.json({ error: "Invalid public key" }, 401);
+		return c.json(
+			apiErrorBody(
+				"invalid_public_key",
+				"Invalid public key",
+				"Send Authorization: Bearer cpk_... with a public key from https://cap.so/dashboard/developers.",
+			),
+			401,
+		);
 	}
 
 	const keyHash = await hashKey(authHeader);
@@ -184,14 +209,25 @@ export const withDeveloperPublicAuth = createMiddleware<{
 		.limit(1);
 
 	if (!row) {
-		return c.json({ error: "Invalid or revoked public key" }, 401);
+		return c.json(
+			apiErrorBody(
+				"invalid_public_key",
+				"Invalid or revoked public key",
+				"Copy the current public key for your app from https://cap.so/dashboard/developers. Regenerating keys revokes the previous pair.",
+			),
+			401,
+		);
 	}
 
 	const origin = c.req.header("origin");
 	if (row.environment === "production") {
 		if (!origin) {
 			return c.json(
-				{ error: "Origin header required for production apps" },
+				apiErrorBody(
+					"origin_required",
+					"Origin header required for production apps",
+					"Call the SDK API from a browser on an allowed domain, or use a development app for server-side testing.",
+				),
 				403,
 			);
 		}
@@ -207,7 +243,14 @@ export const withDeveloperPublicAuth = createMiddleware<{
 			.limit(1);
 
 		if (!allowedDomain) {
-			return c.json({ error: "Origin not allowed" }, 403);
+			return c.json(
+				apiErrorBody(
+					"origin_not_allowed",
+					"Origin not allowed",
+					"Add this origin to the app's allowed domains at https://cap.so/dashboard/developers.",
+				),
+				403,
+			);
 		}
 	}
 
@@ -226,7 +269,14 @@ export const withDeveloperSecretAuth = createMiddleware<{
 }>(async (c, next) => {
 	const authHeader = c.req.header("authorization")?.split(" ")[1];
 	if (!authHeader?.startsWith("csk_")) {
-		return c.json({ error: "Invalid secret key" }, 401);
+		return c.json(
+			apiErrorBody(
+				"invalid_secret_key",
+				"Invalid secret key",
+				"Send Authorization: Bearer csk_... with a secret key from https://cap.so/dashboard/developers.",
+			),
+			401,
+		);
 	}
 
 	const keyHash = await hashKey(authHeader);
@@ -250,7 +300,14 @@ export const withDeveloperSecretAuth = createMiddleware<{
 		.limit(1);
 
 	if (!row) {
-		return c.json({ error: "Invalid or revoked secret key" }, 401);
+		return c.json(
+			apiErrorBody(
+				"invalid_secret_key",
+				"Invalid or revoked secret key",
+				"Copy the current secret key for your app from https://cap.so/dashboard/developers. Regenerating keys revokes the previous pair.",
+			),
+			401,
+		);
 	}
 
 	debouncedLastUsedUpdate(keyHash);
@@ -259,3 +316,12 @@ export const withDeveloperSecretAuth = createMiddleware<{
 	c.set("developerKeyType", "secret" as const);
 	await next();
 });
+
+export const developerApiNotFound = (c: Context) =>
+	c.json(apiNotFoundBody(new URL(c.req.url).pathname), 404);
+
+export const developerApiError = (error: Error, c: Context) => {
+	if (error instanceof HTTPException) return error.getResponse();
+	console.error("Developer API error:", error);
+	return c.json(apiInternalErrorBody(), 500);
+};

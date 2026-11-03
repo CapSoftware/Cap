@@ -4,6 +4,7 @@ import { makeCurrentUserLayer } from "@cap/web-backend";
 import { Folder } from "@cap/web-domain";
 import { Effect } from "effect";
 import { notFound } from "next/navigation";
+import { canViewFolder } from "@/actions/folders/folder-access";
 import {
 	getChildFolders,
 	getFolderBreadcrumb,
@@ -31,6 +32,14 @@ const FolderPage = async (props: PageProps<"/dashboard/folder/[id]">) => {
 	const user = await getCurrentUser();
 	if (!user || !user.activeOrganizationId) return notFound();
 
+	const folder = await getFolderById(folderId).pipe(
+		Effect.provide(makeCurrentUserLayer(user)),
+		Effect.catchAllCause(() => Effect.succeed(null)),
+		runPromise,
+	);
+
+	if (!folder || !(await canViewFolder(user.id, folder))) return notFound();
+
 	return Effect.gen(function* () {
 		const [childFolders, breadcrumb, videosData, share] = yield* Effect.all(
 			[
@@ -40,7 +49,6 @@ const FolderPage = async (props: PageProps<"/dashboard/folder/[id]">) => {
 					variant: "user",
 				}),
 				Effect.gen(function* () {
-					const folder = yield* getFolderById(folderId);
 					// Mirrors FoldersPolicy.canEdit for personal folders: only the
 					// creator may manage sharing; the Pro gate uses the folder's own
 					// organization, which is what the server enforces on writes.

@@ -13,6 +13,11 @@ import { type NextRequest, NextResponse } from "next/server";
 import NextAuth from "next-auth";
 import { getToken } from "next-auth/jwt";
 import { getSafeNextPath } from "@/app/(org)/safe-next";
+import {
+	isEmailCodeSendLimited,
+	isEmailCodeVerifyLimited,
+	normalizeSignInEmail,
+} from "@/lib/email-code-rate-limit";
 import { isRateLimited } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
@@ -56,6 +61,7 @@ async function readSignInBody(request: NextRequest) {
 				json: payload.json === "true",
 				callbackUrl:
 					typeof payload.callbackUrl === "string" ? payload.callbackUrl : null,
+				email: typeof payload.email === "string" ? payload.email : null,
 			};
 		}
 		if (contentType?.includes("application/x-www-form-urlencoded")) {
@@ -63,10 +69,48 @@ async function readSignInBody(request: NextRequest) {
 			return {
 				json: body.get("json") === "true",
 				callbackUrl: body.get("callbackUrl"),
+				email: body.get("email"),
 			};
 		}
 	} catch {
 		return null;
+	}
+	return null;
+}
+
+function authErrorUrl(error: string) {
+	const url = new URL("/api/auth/error", serverEnv().WEB_URL);
+	url.searchParams.set("error", error);
+	return url.toString();
+}
+
+async function emailCodeLimitResponse(
+	request: NextRequest,
+	nextauth: string[],
+) {
+	if (nextauth[1] !== "email") return null;
+	if (nextauth[0] === "signin" && request.method === "POST") {
+		const body = await readSignInBody(request);
+		const email = normalizeSignInEmail(body?.email);
+		if (!email || !(await isEmailCodeSendLimited(email, request.headers))) {
+			return null;
+		}
+		const url = authErrorUrl("EmailSignin");
+		return body?.json
+			? NextResponse.json({ url }, { status: 429 })
+			: NextResponse.redirect(url, 302);
+	}
+	if (nextauth[0] === "callback") {
+		const query = request.nextUrl.searchParams;
+		const email = normalizeSignInEmail(query.get("email"));
+		if (
+			!email ||
+			!query.get("token") ||
+			!(await isEmailCodeVerifyLimited(email, request.headers))
+		) {
+			return null;
+		}
+		return NextResponse.redirect(authErrorUrl("Verification"), 302);
 	}
 	return null;
 }
@@ -76,6 +120,8 @@ async function handler(
 	context: { params: Promise<{ nextauth: string[] }> },
 ) {
 	const { nextauth } = await context.params;
+	const limitedResponse = await emailCodeLimitResponse(request, nextauth);
+	if (limitedResponse) return limitedResponse;
 	if (nextauth[1] !== "workos") {
 		return NextAuth(request, context, authOptions());
 	}

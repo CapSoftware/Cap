@@ -7,7 +7,7 @@ use gpui::{
     div, prelude::FluentBuilder, px,
 };
 
-use crate::{theme::Theme, ui};
+use crate::{i18n::tr, theme::Theme, ui};
 
 #[derive(Clone, Copy)]
 enum MessageKind {
@@ -20,7 +20,8 @@ pub(crate) fn retained_alert(
     window: &mut Window,
     cx: &mut App,
 ) -> impl Future<Output = ()> + use<> {
-    let response = informational_alert("Recording retained", message, window, cx);
+    let response =
+        informational_alert(tr::editor::modal::recording_retained(), message, window, cx);
     async move {
         let _ = response.await;
     }
@@ -36,7 +37,7 @@ pub(crate) fn informational_alert(
         MessageKind::Retained,
         title,
         message,
-        vec![PromptButton::ok("OK")],
+        vec![PromptButton::ok(tr::common::ok())],
         window,
         cx,
     );
@@ -48,10 +49,10 @@ pub(crate) fn confirm_cancel_export(
     cx: &mut App,
 ) -> impl Future<Output = bool> + use<> {
     confirm_action(
-        "Cancel export?",
-        "Are you sure you want to cancel the export?",
-        "Cancel export",
-        "Keep exporting",
+        tr::editor::modal::cancel_export_title(),
+        tr::editor::modal::cancel_export_message(),
+        tr::editor::modal::cancel_export(),
+        tr::editor::modal::keep_exporting(),
         window,
         cx,
     )

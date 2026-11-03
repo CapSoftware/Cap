@@ -26,7 +26,7 @@ That's it! Cap will be available at `http://localhost:3000`.
 The default `docker-compose.yml` includes placeholder secrets for quick local testing. **If you're deploying to a public server or production environment**, you must change these values. See the [Production Checklist](#production-checklist) below.
 </Warning>
 
-Login links will appear in the logs since email isn't configured:
+Login codes will appear in the logs until email is configured, and the verify screen says "Email (Resend) is not configured":
 ```bash
 docker compose logs cap-web
 ```
@@ -97,7 +97,7 @@ For Coolify users, use `docker-compose.coolify.yml` which includes environment v
 
 ## Email Configuration
 
-By default, login links are printed to the server logs. To send emails:
+Email is optional. Without it, login codes are printed to the cap-web logs, the verify screen shows "Email (Resend) is not configured", and invite or notification emails are skipped (invite links still work). Cap only sends email when **both** variables below are set; if Resend rejects a message, the error is logged and the sign-in fails instead of claiming a code was sent. To send emails:
 
 1. Create an account at [Resend](https://resend.com)
 2. Add these environment variables:
@@ -105,6 +105,7 @@ By default, login links are printed to the server logs. To send emails:
    RESEND_API_KEY=re_xxxxx
    RESEND_FROM_DOMAIN=yourdomain.com
    ```
+3. Verify the domain in Resend. Login emails are sent from `auth@RESEND_FROM_DOMAIN`.
 
 ## Optional Features
 
@@ -158,6 +159,12 @@ the provider selected by `AI_PROVIDER`:
 AI_MODEL=your-model          # Generation: titles, summaries, chapters, translation
 AI_CHAT_MODEL=your-model     # Support chat
 AI_STREAM_MODEL=your-model   # Streaming docs Ask AI
+```
+
+To keep transcription in the EU, set:
+
+```bash
+ASSEMBLY_BASE_URL=https://api.eu.assemblyai.com
 ```
 
 For the AssemblyAI EU gateway, set

@@ -120,7 +120,7 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 				if (Option.isSome(data.parentId)) {
 					const parentId = data.parentId.value;
 
-					yield* repo
+					const parent = yield* repo
 						.getById(parentId, {
 							organizationId: Organisation.OrganisationId.make(
 								user.activeOrganizationId,
@@ -134,6 +134,8 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 								),
 							),
 						);
+					if (parent.spaceId !== Option.getOrNull(data.spaceId))
+						return yield* new Folder.NotFoundError();
 				}
 
 				yield* repo.create({
@@ -215,6 +217,8 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 								),
 							),
 						);
+					if (parentFolder.spaceId !== folder.spaceId)
+						return yield* new Folder.ParentNotFoundError();
 
 					// Check for circular references in the folder hierarchy
 					let currentParentId = parentFolder.parentId;

@@ -18,8 +18,8 @@ resolver = "2"
 # https://doc.rust-lang.org/rustc/platform-support.html
 # Every target desktop-release.yml ships. Leaving a target out here leaves its
 # platform-specific deps (windows-sys, libc, ...) un-unified, so the sidecar
-# `cargo build -p cap` and Tauri's `cargo build -p cap-desktop` resolve
-# different feature sets and recompile ~500 shared crates in the same job.
+# `cargo build -p cap` and the desktop app's build of the same crates resolve
+# different feature sets and recompile hundreds of shared crates in one job.
 platforms = [
     "x86_64-unknown-linux-gnu",
     "x86_64-apple-darwin",
@@ -37,11 +37,11 @@ platforms = [
 [traversal-excludes]
 workspace-members = ["cap-muxer", "cap-muxer-protocol", "cap-verify-expect"]
 
-# hakari unifies dev-dependencies as well, so left alone it pins tauri with its
-# `test` feature and tokio `test-util` into every release binary and pulls the
-# Tauri/WebKit stack into the standalone GPUI workspace. Only crates whose
-# feature drift actually cascades through the sidecar and desktop builds stay
-# in the hack; everything else keeps its natural per-binary resolution.
+# hakari unifies dev-dependencies as well, so left alone it pins tokio
+# `test-util` into every release binary and drags dev-only stacks into the
+# standalone GPUI workspace. Only crates whose feature drift actually cascades
+# through the sidecar and desktop builds stay in the hack; everything else
+# keeps its natural per-binary resolution.
 [final-excludes]
 third-party = [
     { name = "softbuffer" },
@@ -79,8 +79,6 @@ third-party = [
     { name = "smallvec" },
     { name = "swift-rs" },
     { name = "syn" },
-    { name = "tauri" },
-    { name = "tauri-build" },
     { name = "tokio" },
     { name = "tokio-util" },
     { name = "toml" },

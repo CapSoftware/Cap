@@ -77,6 +77,7 @@ export interface JobProgress {
 	errorCode?: RecordingErrorCode;
 	metadata?: VideoMetadata;
 	outputUrl?: string;
+	deferredSourceKey?: string;
 }
 
 export interface RecordingWorkerAcknowledgement {
@@ -124,6 +125,7 @@ export interface Job {
 	webhookLastAttemptAt?: number;
 	recordingVerificationDeadlineAt?: number;
 	recordingProcessingDeadlineAt?: number;
+	lifetimeDeadlineAt?: number;
 	recordingVerification?: RecordingVerificationProof;
 	manifestSha256?: string;
 	jobId: string;
@@ -136,6 +138,7 @@ export interface Job {
 	errorCode?: RecordingErrorCode;
 	metadata?: VideoMetadata;
 	outputUrl?: string;
+	deferredSourceKey?: string;
 	createdAt: number;
 	updatedAt: number;
 	inputTempFile?: TempFileHandle;
@@ -147,9 +150,17 @@ export interface Job {
 }
 
 const jobs = new Map<string, Job>();
+const jobTotals = {
+	created: 0,
+	completed: 0,
+	errored: 0,
+	cancelled: 0,
+	expired: 0,
+};
 const JOB_TTL_MS = 60 * 60 * 1000;
 const STALE_JOB_MS = 15 * 60 * 1000;
 const MAX_JOB_LIFETIME_MS = 60 * 60 * 1000;
+const MAX_EXTENDED_JOB_LIFETIME_MS = 4 * 60 * 60 * 1000;
 const MAX_RECORDING_PROCESSING_BUDGET_MS = 3 * 60 * 60 * 1000;
 const WEBHOOK_MAX_ATTEMPTS = 3;
 const WEBHOOK_RETRY_BASE_MS = 500;
@@ -366,7 +377,12 @@ export function createJob(
 		webhookSecret,
 	};
 	jobs.set(jobId, job);
+	jobTotals.created++;
 	return job;
+}
+
+export function getJobTotals(): typeof jobTotals {
+	return { ...jobTotals };
 }
 
 export function getJob(jobId: string): Job | undefined {
@@ -391,6 +407,7 @@ export function updateJob(
 			| "manifestSha256"
 			| "recordingVerification"
 			| "outputUrl"
+			| "deferredSourceKey"
 			| "inputTempFile"
 			| "outputTempFile"
 			| "mediaOperation"
@@ -410,10 +427,35 @@ export function updateJob(
 		job.terminalAt ??= job.updatedAt;
 		if (job.recordingWorkerLeaseTimer)
 			clearTimeout(job.recordingWorkerLeaseTimer);
+		if (job.phase === "complete") jobTotals.completed++;
+		else if (job.phase === "error") jobTotals.errored++;
+		else jobTotals.cancelled++;
 	}
 	if (!isActivePhase(job.phase) && job.webhookInFlight)
 		job.webhookPending = true;
 	return job;
+}
+
+export function extendJobLifetime(
+	jobId: string,
+	remainingBudgetMs: number,
+): number | undefined {
+	const job = jobs.get(jobId);
+	if (
+		!job ||
+		!isActivePhase(job.phase) ||
+		!Number.isFinite(remainingBudgetMs) ||
+		remainingBudgetMs <= 0
+	)
+		return undefined;
+	job.lifetimeDeadlineAt = Math.min(
+		job.createdAt + MAX_EXTENDED_JOB_LIFETIME_MS,
+		Math.max(
+			job.lifetimeDeadlineAt ?? job.createdAt + MAX_JOB_LIFETIME_MS,
+			Date.now() + remainingBudgetMs,
+		),
+	);
+	return job.lifetimeDeadlineAt;
 }
 
 export function touchJob(jobId: string): Job | undefined {
@@ -556,11 +598,14 @@ export function cleanupExpiredJobs(): number {
 					`[job-manager] Cleaning up expired job ${jobId} (phase=${job.phase}, age=${Math.round(age / 60000)}m)`,
 				);
 				job.abortController?.abort();
-				updateJob(jobId, {
-					phase: "error",
-					error: `Job expired: no progress update for ${Math.round(staleness / 60000)} minutes`,
-					message: "Processing failed (expired)",
-				});
+				if (
+					updateJob(jobId, {
+						phase: "error",
+						error: `Job expired: no progress update for ${Math.round(staleness / 60000)} minutes`,
+						message: "Processing failed (expired)",
+					})
+				)
+					jobTotals.expired++;
 				void sendWebhook(job);
 			}
 			cleaned++;
@@ -572,34 +617,40 @@ export function cleanupExpiredJobs(): number {
 				`[job-manager] Marking stale job ${jobId} as error (phase=${job.phase}, no update for ${Math.round(staleness / 60000)}m)`,
 			);
 			job.abortController?.abort();
-			updateJob(jobId, {
-				phase: "error",
-				error: `Job stale: no progress update for ${Math.round(staleness / 60000)} minutes`,
-				message: "Processing failed (stale)",
-			});
+			if (
+				updateJob(jobId, {
+					phase: "error",
+					error: `Job stale: no progress update for ${Math.round(staleness / 60000)} minutes`,
+					message: "Processing failed (stale)",
+				})
+			)
+				jobTotals.expired++;
 			void sendWebhook(job);
 			cleaned++;
 			continue;
 		}
 
+		const lifetimeDeadline =
+			job.lifetimeDeadlineAt ?? job.createdAt + MAX_JOB_LIFETIME_MS;
 		const deadline =
 			job.recordingVerificationDeadlineAt ??
 			job.recordingProcessingDeadlineAt ??
-			job.createdAt + MAX_JOB_LIFETIME_MS;
+			lifetimeDeadline;
 		if (isActivePhase(job.phase) && now > deadline) {
 			console.warn(
 				`[job-manager] Marking long-running job ${jobId} as error (phase=${job.phase}, age=${Math.round(age / 60000)}m)`,
 			);
 			job.abortController?.abort();
-			updateJob(jobId, {
+			const expired = updateJob(jobId, {
 				phase: "error",
 				error:
 					job.recordingVerificationDeadlineAt === undefined &&
 					job.recordingProcessingDeadlineAt === undefined
-						? `Job exceeded maximum lifetime of ${Math.round(MAX_JOB_LIFETIME_MS / 60000)} minutes`
+						? `Job exceeded maximum lifetime of ${Math.round((lifetimeDeadline - job.createdAt) / 60000)} minutes`
 						: "Recording verification timed out",
 				message: "Processing failed (timeout)",
 			});
+			if (expired) jobTotals.expired++;
 			void sendWebhook(job);
 			cleaned++;
 			continue;
@@ -641,6 +692,7 @@ export function getJobProgress(job: Job): JobProgress {
 		errorCode: job.errorCode,
 		metadata: job.metadata,
 		outputUrl: job.outputUrl,
+		deferredSourceKey: job.deferredSourceKey,
 	};
 }
 

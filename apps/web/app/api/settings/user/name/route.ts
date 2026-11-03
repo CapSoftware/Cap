@@ -1,11 +1,12 @@
 import { db } from "@cap/database";
+import { isCrossSiteCookieWrite } from "@cap/database/auth/request-site";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { users } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
 import type { NextRequest } from "next/server";
 
 export async function POST(request: NextRequest) {
-	const user = await getCurrentUser();
+	const user = isCrossSiteCookieWrite(request) ? null : await getCurrentUser();
 	const { firstName, lastName } = await request.json();
 
 	if (!user) {

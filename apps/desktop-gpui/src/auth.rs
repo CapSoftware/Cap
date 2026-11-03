@@ -246,7 +246,7 @@ pub fn sign_out() -> bool {
 pub fn apply_desktop_headers(mut request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
     request = request
         .header("X-Cap-Desktop-Version", env!("CARGO_PKG_VERSION"))
-        .header("X-Cap-Desktop-Features", "googleDriveUpload");
+        .header("X-Cap-Desktop-Features", "googleDriveUpload,gpui");
     if let Ok(secret) = std::env::var("VITE_VERCEL_AUTOMATION_BYPASS_SECRET")
         && !secret.is_empty()
     {
@@ -323,12 +323,66 @@ impl UploadRequestContext {
     }
 }
 
-pub fn api_client() -> Result<reqwest::Client, AuthApiError> {
+/// Idle API connections are dropped after 4 s, before the 5 s keep-alive
+/// timeout of a self-hosted Node server, so a request is never sent on a
+/// connection the server is closing.
+pub(crate) const API_POOL_IDLE_TIMEOUT: Duration = Duration::from_secs(4);
+/// The shared API client is rebuilt this often, so system proxy changes still
+/// apply. It is wall clock time, which counts a sleep where the pool's idle
+/// clock does not, so calls after a longer sleep start on new connections.
+const API_CLIENT_MAX_AGE: Duration = Duration::from_secs(30);
+
+fn api_client_builder() -> reqwest::ClientBuilder {
     reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(45))
+}
+
+/// Multipart uploads hold their own client and drop it when the upload ends,
+/// so a later upload never starts on a pooled connection from an earlier
+/// network (#2522).
+pub fn api_client() -> Result<reqwest::Client, AuthApiError> {
+    api_client_builder()
         .build()
         .map_err(|error| AuthApiError::Other(error.to_string()))
+}
+
+static SHARED_API_CLIENT: Mutex<Option<(std::time::SystemTime, reqwest::Client)>> =
+    Mutex::new(None);
+
+/// Held by every test that resets the shared client or counts its
+/// connections, so a reset on one thread cannot land in another's count.
+#[cfg(test)]
+pub(crate) static SHARED_API_CLIENT_TEST_LOCK: tokio::sync::Mutex<()> =
+    tokio::sync::Mutex::const_new(());
+
+/// Drops the shared client, as quitting the app does, for tests that model a
+/// relaunch.
+#[cfg(test)]
+pub(crate) fn reset_shared_api_client() {
+    *SHARED_API_CLIENT
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = None;
+}
+
+/// The client `authed_request` uses. Calls close together, like Instant
+/// presigns about once a second or the requests after a recording stops,
+/// reuse its open connections instead of each paying a TCP and TLS handshake.
+fn shared_api_client() -> Result<reqwest::Client, AuthApiError> {
+    let mut shared = SHARED_API_CLIENT
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    if let Some((built, client)) = shared.as_ref()
+        && built.elapsed().is_ok_and(|age| age < API_CLIENT_MAX_AGE)
+    {
+        return Ok(client.clone());
+    }
+    let client = api_client_builder()
+        .pool_idle_timeout(API_POOL_IDLE_TIMEOUT)
+        .build()
+        .map_err(|error| AuthApiError::Other(error.to_string()))?;
+    *shared = Some((std::time::SystemTime::now(), client.clone()));
+    Ok(client)
 }
 
 pub async fn authed_request(
@@ -336,7 +390,7 @@ pub async fn authed_request(
     path: &str,
     body: Option<Value>,
 ) -> Result<reqwest::Response, AuthApiError> {
-    authed_request_with(&api_client()?, method, path, body).await
+    authed_request_with(&shared_api_client()?, method, path, body).await
 }
 
 pub async fn authed_request_with(

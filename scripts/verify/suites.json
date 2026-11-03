@@ -29,6 +29,7 @@
 					"macos": ["export/*/ffmpeg", "export/backward-hold/*/mp430/*"],
 					"windows": [
 						"export/*/mp460/*",
+						"export/*/mp4-turbo60/*",
 						"export/backward-hold/*",
 						"export/jitter-camera-*",
 						"export/*/uhd-*"
@@ -191,14 +192,14 @@
 			"cases": {
 				"prefix": "audio/",
 				"fast": {
-					"linux": 56,
-					"macos": 40,
-					"windows": 39
+					"linux": 58,
+					"macos": 41,
+					"windows": 40
 				},
 				"full": {
-					"linux": 58,
-					"macos": 58,
-					"windows": 58
+					"linux": 60,
+					"macos": 60,
+					"windows": 60
 				}
 			}
 		},
@@ -340,7 +341,7 @@
 			"target": "aarch64-apple-darwin",
 			"shards": {
 				"fast": 1,
-				"full": 2
+				"full": 4
 			},
 			"archive": false
 		},

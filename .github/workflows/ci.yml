@@ -22,8 +22,8 @@ jobs:
     runs-on: blacksmith-8vcpu-ubuntu-2404
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
-      gpui: ${{ steps.filter.outputs.rust == 'true' || steps.filter.outputs.gpui == 'true' || steps.desktop-resources.outputs.desktop-resources == 'true' }}
-      tauri-plugins: ${{ steps.filter.outputs.tauri-plugins }}
+      gpui: ${{ steps.filter.outputs.rust == 'true' || steps.filter.outputs.gpui == 'true' }}
+      gpui-patches: ${{ steps.filter.outputs.gpui-patches }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -42,16 +42,13 @@ jobs:
               - 'crates/**'
               - 'vendor/**'
               - 'scripts/diagnostic-build.rs'
-              - 'scripts/setup.js'
+              - 'scripts/setup*'
               - 'Cargo.toml'
               - 'Cargo.lock'
             gpui:
               - '.gitattributes'
               - 'apps/desktop-gpui/**'
-              - 'apps/desktop/src/assets/**'
-              - 'apps/desktop/src-tauri/src/recording_start_sound.rs'
               - 'apps/media-server/src/__tests__/fixtures/**'
-              - 'packages/ui-solid/icons/**'
               - 'scripts/build-desktop-binaries*'
               - 'scripts/build-gpui-binary.sh'
               - 'scripts/build-linux-packages.mjs'
@@ -61,30 +58,11 @@ jobs:
               - 'scripts/finalize-macos-*'
               - 'scripts/linux-bundle-config*'
               - 'scripts/prepare-gpui-dependency*'
-              - 'scripts/run-gpui-build*'
               - 'scripts/sync-desktop-versions.mjs'
-              - 'scripts/verify-gpui-release-inputs.mjs'
               - 'scripts/verify-windows-stack.mjs'
-            tauri-plugins:
-              - 'Cargo.lock'
-              - 'bun.lock'
-              - 'scripts/check-tauri-plugin-versions*'
-              - 'apps/desktop/package.json'
-
-      # Cap ships as the GPUI app, which embeds icons, sounds, assets and test
-      # data from apps/desktop. Only the Tauri app's own sources are skipped.
-      - name: Check for GPUI resources in apps/desktop
-        uses: dorny/paths-filter@v3
-        id: desktop-resources
-        with:
-          predicate-quantifier: every
-          filters: |
-            desktop-resources:
-              - 'apps/desktop/**'
-              - '!apps/desktop/src/**'
-              - '!apps/desktop/src-tauri/src/**'
-              - '!apps/desktop/src-tauri/tests/**'
-              - '!apps/desktop/src-tauri/gen/**'
+            gpui-patches:
+              - 'apps/desktop-gpui/patches/**'
+              - 'scripts/prepare-gpui-dependency.sh'
 
   typecheck:
     name: Typecheck
@@ -102,13 +80,18 @@ jobs:
 
       - name: Test workspace tooling
         run: |
-          node --test scripts/bun-scripts.test.mjs scripts/check-tauri-plugin-versions.test.mjs
-          bun run --cwd apps/desktop vitest run scripts/prepare.test.js
+          node --test scripts/bun-scripts.test.mjs
 
       - name: Test Loops profile sync
         run: |
           bun test scripts/loops/profile.test.ts scripts/loops/lifecycle.test.ts
           bun run tsc --noEmit --strict --jsx react-jsx --allowImportingTsExtensions --target ESNext --module ESNext --moduleResolution bundler --resolveJsonModule --types bun --skipLibCheck scripts/loops/*.ts
+
+      - name: Test Chrome extension
+        run: bun run --cwd apps/chrome-extension test
+
+      - name: Test recorder SDK
+        run: bun --no-install test packages/sdk-recorder
 
       - name: Test render farm orchestration
         run: |
@@ -118,15 +101,50 @@ jobs:
       - name: Test web React compatibility
         run: >-
           bun run --cwd apps/web test
+          __tests__/unit/analytics-track-route.test.ts
+          __tests__/unit/caps-analytics-round-trips.test.ts
+          __tests__/unit/caps-keyboard.test.ts
+          __tests__/unit/comment-composer-composition.test.ts
+          __tests__/unit/dashboard-analytics-cap-access.test.ts
+          __tests__/unit/dashboard-analytics-space-access.test.ts
           __tests__/unit/embed-video-playback-chrome.test.ts
+          __tests__/unit/folder-videos.test.ts
           __tests__/unit/homepage-demo-accessibility.test.ts
+          __tests__/unit/invite-decline-pro-seat.test.ts
+          __tests__/unit/invite-decline.test.ts
           __tests__/unit/linkified-text.test.ts
           __tests__/unit/loom-import-ui.test.ts
+          __tests__/unit/media-comment-playback-cleanup.test.ts
+          __tests__/unit/media-format-converter-selection.test.ts
+          __tests__/unit/media-format-converter.test.ts
           __tests__/unit/media-player-store-refs.test.ts
+          __tests__/unit/mobile-caps-list.test.ts
+          __tests__/unit/mobile-organization-analytics.test.ts
+          __tests__/unit/notification-read-state.test.ts
+          __tests__/unit/playback-store.test.ts
+          __tests__/unit/remove-organization-member.test.ts
+          __tests__/unit/reply-notification.test.ts
           __tests__/unit/seo-demo-videos.test.ts
+          __tests__/unit/share-page-round-trips.test.ts
+          __tests__/unit/share-transcript-rendering.test.ts
+          __tests__/unit/share-video-quota-loading.test.ts
           __tests__/unit/signed-baa-card.test.ts
+          __tests__/unit/space-folder-page-access.test.ts
+          __tests__/unit/space-page-round-trips.test.ts
+          __tests__/unit/speed-controller-playback-failure.test.ts
+          __tests__/unit/speed-controller.test.ts
+          __tests__/unit/summary-chapters.test.ts
           __tests__/unit/summary-editor.test.ts
           __tests__/unit/sso-login-pages.test.ts
+          __tests__/unit/timeline-paused-window.test.ts
+          __tests__/unit/toggle-pro-seat.test.ts
+          __tests__/unit/transcript-hours.test.ts
+          __tests__/unit/transcript-numbers.test.ts
+          __tests__/unit/video-analytics-access.test.ts
+          __tests__/unit/video-analytics-bulk.test.ts
+          __tests__/unit/video-create-atomicity.test.ts
+          __tests__/unit/video-download-permissions.test.ts
+          __tests__/unit/voice-note-playback.test.ts
 
       - name: Typecheck
         run: bun run typecheck
@@ -228,10 +246,8 @@ jobs:
         shell: bash
         run: cargo test --locked -p cap-utils -p cap-cli-install --lib
 
-      # cap-desktop is the Tauri app, which no longer ships; Cap is the GPUI app
-      # plus the cap-muxer and cap-cli sidecars built from this workspace.
       - name: Run Clippy
-        run: cargo clippy --workspace --exclude cap-desktop --all-features --locked -- -D warnings
+        run: cargo clippy --workspace --all-features --locked -- -D warnings
 
   lint-biome:
     name: Lint (Biome)
@@ -273,6 +289,9 @@ jobs:
           prefix-key: v1-rust-tests
           save-cache: ${{ github.ref == 'refs/heads/main' }}
 
+      - name: Test native dependency setup
+        run: node --test scripts/setup.test.mjs
+
       - name: Run setup
         run: node scripts/setup.js
 
@@ -280,8 +299,13 @@ jobs:
         run: |
           cargo test --locked -p cap-utils -p cap-cli-install --lib
           cargo test --locked -p cap --bin cap record::tests
+          cargo test --locked -p cap --bin cap recordings::tests
+          cargo test --locked -p cap --test cli recordings_list
+          cargo test --locked -p cap --test cli project_config_get_without_file_returns_default
+          cargo test --locked -p cap --test cli caps_json_errors_include_the_standard_error_field
           cargo test --locked -p cap-recording --lib -- --test-threads=1
           cargo test --locked -p cap-recording --test x11_shm_capture -- --test-threads=1
+          cargo test --locked -p scap-targets --lib --test linux_targets
           cargo test --locked -p cap-enc-ffmpeg
 
   build-gpui:
@@ -369,18 +393,82 @@ jobs:
             cargo +1.95.0 test --manifest-path apps/desktop-gpui/Cargo.toml --locked --target ${{ matrix.settings.target }} --bin cap-gpui
           fi
           cargo +1.95.0 test --manifest-path apps/desktop-gpui/Cargo.toml --locked --target ${{ matrix.settings.target }} -p cap-gpui-kernels
+          cargo +1.95.0 test --manifest-path apps/desktop-gpui/Cargo.toml --locked --target ${{ matrix.settings.target }} -p cap-glass
+          cargo +1.95.0 test --manifest-path apps/desktop-gpui/Cargo.toml --locked --target ${{ matrix.settings.target }} -p cap-i18n-build
 
-  tauri-plugins:
-    name: Verify Tauri plugin versions
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+  # Cap only builds gpui's crates as dependencies, so their own tests never run
+  # in the app jobs above. Run the ones covering Cap's patches against real
+  # devices: Metal on macOS, WARP on Windows, and Mesa's lavapipe (Vulkan) and
+  # llvmpipe (GL) on Linux. Windows renders with D3D11 and its runners expose
+  # no wgpu adapter, so wgpu's tests run on macOS and Linux only. Zed's lockfile predates the patches' dependency
+  # changes, so these builds cannot use --locked.
+  gpui-patch-tests:
+    name: GPUI patch tests (${{ matrix.settings.name }})
     needs: changes
-    if: needs.changes.outputs.tauri-plugins == 'true'
+    if: needs.changes.outputs.gpui-patches == 'true'
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - name: macOS
+            runner: blacksmith-6vcpu-macos-15
+          - name: Windows
+            runner: blacksmith-8vcpu-windows-2025
+          - name: Linux
+            runner: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ${{ matrix.settings.runner }}
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - uses: ./.github/actions/setup-js
+      - name: Install Linux desktop dependencies
+        if: ${{ runner.os == 'Linux' }}
+        uses: ./.github/actions/install-desktop-deps
 
-      - name: Run verify
+      - name: Install software GPU drivers
+        if: ${{ runner.os == 'Linux' }}
+        run: sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers libvulkan1 libegl1 libegl-mesa0 libgl1-mesa-dri
+
+      - name: Allow long paths in Zed's git dependencies
+        if: ${{ runner.os == 'Windows' }}
+        run: git config --global core.longpaths true
+
+      - name: Rust setup
+        uses: dtolnay/rust-toolchain@1.95.0
+
+      - name: Prepare GPUI dependency
         shell: bash
-        run: node scripts/check-tauri-plugin-versions.js
+        run: ./scripts/prepare-gpui-dependency.sh
+
+      - name: Test GPUI patches
+        shell: bash
+        working-directory: ../zed-cap
+        env:
+          GPUI_REQUIRE_TEST_DEVICE: "1"
+        run: |
+          cargo +1.95.0 test -p gpui --lib stream
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            WGPU_BACKEND=vulkan cargo +1.95.0 test -p gpui_wgpu --lib wgpu_atlas -- --nocapture
+            WGPU_BACKEND=gl cargo +1.95.0 test -p gpui_wgpu --lib wgpu_atlas -- --nocapture
+          elif [[ "$RUNNER_OS" == "macOS" ]]; then
+            cargo +1.95.0 test -p gpui_wgpu --lib wgpu_atlas -- --nocapture
+            # Run under lldb: a SIGSEGV in these tests (1 run in about 36 so
+            # far) leaves no Rust backtrace, and Blacksmith's macOS VMs write
+            # no crash reports. lldb exits 0 whatever the tests return, so
+            # pass their exit status through.
+            exe=$(cargo +1.95.0 test -p gpui_macos --lib --no-run --message-format json \
+              | jq -r 'select(.reason == "compiler-artifact" and .target.name == "gpui_macos" and .profile.test) | .executable' | tail -1)
+            lldb --batch -o "process launch" -k "thread backtrace all" -k "quit 1" \
+              -- "$exe" metal_atlas metal_renderer 2>&1 | tee "$RUNNER_TEMP/gpui-macos-tests.log"
+            if grep -q "stop reason = " "$RUNNER_TEMP/gpui-macos-tests.log"; then
+              echo "::error::gpui_macos tests crashed; the backtrace is above"
+              exit 1
+            fi
+            status=$(sed -n 's/.*exited with status = \([0-9]*\).*/\1/p' "$RUNNER_TEMP/gpui-macos-tests.log" | tail -1)
+            [[ "$status" == 0 ]] || { echo "::error::gpui_macos tests exited with status ${status:-unknown}"; exit 1; }
+          else
+            cargo +1.95.0 test -p gpui_windows --lib directx_atlas
+          fi

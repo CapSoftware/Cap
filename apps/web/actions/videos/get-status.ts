@@ -44,7 +44,7 @@ export interface VideoStatusResult {
 
 export async function getVideoStatus(
 	videoId: Video.VideoId,
-): Promise<VideoStatusResult | { success: false }> {
+): Promise<VideoStatusResult | { success: false; reason?: "not_found" }> {
 	if (!videoId) throw new Error("Video ID not provided");
 
 	const exit = await Effect.gen(function* () {
@@ -58,7 +58,7 @@ export async function getVideoStatus(
 	if (Exit.isFailure(exit)) return { success: false };
 
 	const video = exit.value[0];
-	if (!video) throw new Error("Video not found");
+	if (!video) return { success: false, reason: "not_found" };
 
 	const metadata: VideoMetadata = (video.metadata as VideoMetadata) || {};
 

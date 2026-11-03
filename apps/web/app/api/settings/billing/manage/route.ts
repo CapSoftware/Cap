@@ -1,4 +1,5 @@
 import { db } from "@cap/database";
+import { isCrossSiteCookieWrite } from "@cap/database/auth/request-site";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { users } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
@@ -7,8 +8,8 @@ import { eq } from "drizzle-orm";
 import { type NextRequest, NextResponse } from "next/server";
 import type Stripe from "stripe";
 
-export async function POST(_request: NextRequest) {
-	const user = await getCurrentUser();
+export async function POST(request: NextRequest) {
+	const user = isCrossSiteCookieWrite(request) ? null : await getCurrentUser();
 	let customerId = user?.stripeCustomerId;
 
 	if (!user) {

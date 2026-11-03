@@ -33,6 +33,9 @@ const getEmailRequestErrorMessage = (error: unknown) => {
 		if (error.status === 403) {
 			return "This email cannot be used to sign in to Cap.";
 		}
+		if (error.status === 429) {
+			return "Too many codes requested. Try again in a few minutes.";
+		}
 	}
 	return error instanceof Error
 		? error.message
@@ -43,6 +46,9 @@ const getCodeVerificationErrorMessage = (error: unknown) => {
 	if (error instanceof MobileApiError) {
 		if (error.status === 400) return "Enter a valid email and 6-digit code.";
 		if (error.status === 403) return "That code is invalid or expired.";
+		if (error.status === 429) {
+			return "Too many attempts. Try again in a few minutes.";
+		}
 	}
 	return error instanceof Error ? error.message : "Unable to verify that code.";
 };

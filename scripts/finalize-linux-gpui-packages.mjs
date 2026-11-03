@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
 	mkdir,
 	mkdtemp,
@@ -13,10 +14,25 @@ import {
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
+	notifyStartupInDesktopEntries,
 	runCommand,
 	signUpdaterArtifact,
 	withoutUpdaterSecrets,
 } from "./finalize-linux-appimage.mjs";
+
+const DESKTOP_ENTRY = "usr/share/applications/Cap.desktop";
+
+export async function withUpdatedChecksums(md5sums, root, files) {
+	const lines = md5sums.split("\n");
+	for (const file of files) {
+		const digest = createHash("md5")
+			.update(await readFile(path.join(root, file)))
+			.digest("hex");
+		const index = lines.findIndex((line) => line.endsWith(`  ${file}`));
+		if (index >= 0) lines[index] = `${digest}  ${file}`;
+	}
+	return lines.join("\n");
+}
 
 export const webviewDebPackages = new Set([
 	"libwebkit2gtk-4.1-0",
@@ -315,6 +331,7 @@ export async function finalizeGpuiDeb(
 		const linked = await linkDuplicateLibraries(
 			path.join(root, "usr", "lib", "cap"),
 		);
+		const notified = await notifyStartupInDesktopEntries(root, [DESKTOP_ENTRY]);
 		const control = path.join(root, "DEBIAN", "control");
 		await verifyDebGlibc(root, await readFile(control, "utf8"), {
 			env: tools,
@@ -328,6 +345,16 @@ export async function finalizeGpuiDeb(
 			),
 		);
 		const md5sums = path.join(root, "DEBIAN", "md5sums");
+		if (notified.length > 0 && (await stat(md5sums).catch(() => null))) {
+			await writeFile(
+				md5sums,
+				await withUpdatedChecksums(
+					await readFile(md5sums, "utf8"),
+					root,
+					notified,
+				),
+			);
+		}
 		if (linked.length > 0 && (await stat(md5sums).catch(() => null))) {
 			await writeFile(
 				md5sums,
@@ -430,6 +457,7 @@ export async function finalizeGpuiRpm(
 			await mkdir(path.join(top, directory), { recursive: true });
 		}
 		await run("bsdtar", ["-xf", rpm, "-C", staging], { env: tools });
+		await notifyStartupInDesktopEntries(staging, [DESKTOP_ENTRY]);
 		const linked = new Set(
 			(
 				await linkDuplicateLibraries(path.join(staging, "usr", "lib", "cap"))

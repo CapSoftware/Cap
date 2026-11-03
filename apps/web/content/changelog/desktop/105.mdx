@@ -1,0 +1,91 @@
+---
+title: Multi-Language Support, Turbo Export & Focus Mode
+app: Cap Desktop
+publishedAt: "2026-10-28"
+version: 0.6.2
+image:
+---
+
+Cap 0.6.2 is available in seven languages, adds Turbo export for MP4 exports up to 2.8x faster, and brings Focus mode for recording a single window. The picker and main window have a redesigned, cohesive look across macOS, Windows and Linux, and the release includes more than 200 fixes and performance improvements.
+
+## Features
+
+- **Multi-language support** - Cap is available in English, Simplified Chinese, Japanese, French, Spanish, German and Hindi. It follows your system language, or pick one in Settings → General → Language. The app switches straight away, with no restart.
+- **Turbo export** - A new toggle on the export page uses every core to finish MP4 exports 2-2.8x faster.
+- **Focus mode** - On macOS and Windows, record a window by itself. Other windows, even ones on top of it, stay out of the video, and the recording follows the window if it moves. Turn on **Center on screen** to move the window to the middle while you record; it goes back where it was afterwards. Set your default in Settings → General → Window capture style.
+- **Redesigned picker and main window** - The recording picker, main window, recordings library and capture cards have a cohesive new design that looks the same on macOS, Windows and Linux.
+- **Resize a window before recording** - In the window picker, the size chip resizes the picked window to 21:9, 16:9, 16:10, 4:3, 1:1 or 9:16, or to 720p, 1080p, 1440p or 4K.
+- **Better area picking** - One-click chips for Free, 16:9, 4:3, 1:1 and 9:16, with more ratios in a menu, plus Fill and Reset. Lock an area and Cap opens with it next time. Edges snap to windows and the menu bar, Dock or taskbar (hold Command or Ctrl to turn snapping off). Click without dragging to fit the area to the window under the cursor, nudge it with the arrow keys and press Return to start.
+- **Clip transitions** - Add a crossfade or fade through black between clips from the clip menu, from 0.25 to 1.5 seconds. Transitions show on the timeline.
+- **Copy and paste text styles** - Right-click a text segment on the timeline to copy its style and paste it onto another.
+- **Custom domain links** - Instant recordings, Studio uploads and screenshot shares now copy links on your team's verified custom domain.
+- **macOS menus** - The app menu gains Open File, Open Recent, Import Media, Check for Update and a full Help menu. The menu bar icon has a new mode picker.
+- **Random project names** - Use `{random}` or `{random:N}` in project name templates.
+
+## Recording fixes
+
+- **Start cue timing** - The start sound plays only once capture is ready, so the opening of a recording is never lost. An audio output that can't play the cue no longer delays the start by 1.5 s.
+- **Microphone during calls** - Cap detects when a VoIP call takes over the microphone instead of quietly recording silence.
+- **Camera size changes** - On macOS, a webcam that switches resolution mid-recording keeps recording instead of freezing.
+- **External and slow drives** - Recordings on exFAT drives (SD cards, most USB sticks) now finish and recover. macOS recordings survive storage stalls without losing video or audio.
+- **Audio quality** - Mic audio resampled from 44.1 kHz no longer drifts against the video. 192 kHz interfaces keep their full range in exports. Stopping while paused no longer adds silence to the end.
+- **Instant recordings** - Crashed Instant recordings finish uploading after relaunch, and failed or cancelled starts no longer leave an empty cap stuck at "Uploading 0%".
+- **Recording bar** - The space above the recording controls can be clicked again while recording.
+- **Window picker** - Always-on-top windows such as the iOS Simulator now appear on macOS. The camera bubble stays above the picker.
+- **Recovery** - Recordings with an empty leftover segment folder can be recovered. The editor's live preview is back while a Studio recording is prepared.
+- **Fractional scaling** - Area recordings at scales like 175% keep their exact size.
+
+## Editing and export fixes
+
+- **Manual captions** - Captions set to Manual position can be dragged into place.
+- **Captions** - Generating captions only transcribes the parts of the timeline you kept. Chinese, Japanese, Korean, Arabic and Hindi captions use Whisper so the chosen language is respected. Editing caption text keeps word timings in order. Interrupted model downloads are no longer mistaken for installed models.
+- **Presets** - Applying a preset no longer replaces a recording's caption text or resets its text styles.
+- **Undo and redo** - Drags that end where they started, unchanged timing fields and interrupted canvas drags no longer clear redo or skip an undo.
+- **Timeline** - New and resized segments stay inside their gap. Waveforms show on clips at any speed. Mask animations stay in place when splitting or trimming. The Zoom lane accepts new zooms while the Generate prompt shows. Times past an hour show hours.
+- **Auto zoom and cursor** - Auto zoom ignores cursor movement in cut sections. Smoothed cursors reach where the mouse stopped, and text cursors confirmed by a click keep their shape.
+- **Layout** - Portrait videos fill a vertical project. The camera lays out from each clip's own size. The camera size during zoom slider works again.
+- **Playback** - Seeking to the very end shows the final frame. Zooming the timeline keeps an offscreen playhead in view. Editor shortcuts work again after clicking the preview.
+- **Audio** - Overlapping music tracks no longer clip depending on track order. Short cuts with Studio Sound export correctly.
+- **Text** - Titles placed after the last clip no longer extend the video. Text that fits in the editor no longer wraps in 4K exports.
+- **Exports** - Failed or cancelled MOV exports leave an existing file untouched. Suggested file names are always valid. Exports fall back to software encoding when VideoToolbox fails, and to another GPU when the first can't start.
+- **Screenshots** - Area screenshots start with an empty selection, annotations past the edge are kept in exports, and long window titles no longer stop a save.
+- **Sharing** - Share progress counts only uploaded parts, so it no longer sits at 99%. Cancelling a share as it finishes no longer copies the link. Google Drive uploads no longer fail on chunk size.
+- **Project safety** - Project saves are flushed to disk before replacing the old file, so a crash can't leave an empty project.
+
+## App fixes
+
+- **Library** - Recordings in earlier recordings folders stay in the library after changing folders. Deleting a recording updates every window and the tray. Recordings with damaged upload state can be deleted. Library buttons always act on the right recording.
+- **Automations** - A delete rule waits for every upload rule on the same trigger to finish.
+- **Crash reports** - Crashes now leave a record that is included when you send logs from Settings → Feedback.
+- **GPU resets** - Sleep, GPU switches and driver resets no longer crash the editor or exports.
+- **Camera window** - The camera preview reopens fully on screen.
+- **Displays** - Windows are placed correctly on displays above or below the main display.
+- **Sign-in** - Signing out and back in no longer gets undone by a stale request. Custom server URLs are fully validated.
+
+## Platform fixes
+
+- **macOS** - No more double traffic lights at launch. Key overlays show Option and right Command. The MacBook notch setting applies to new Studio recordings.
+- **Windows** - Camera background blur no longer crashes when DirectML is missing, and is turned off after a crash so Cap can relaunch. Each Studio recording no longer keeps a second full copy of its media. Cap explains why screen capture couldn't start. Ctrl editing shortcuts work in text fields. Show in folder and Import desktop background work.
+- **Linux** - Recording starts and stops on GNOME 50 and Hyprland, and shows visible controls when there is no tray or Stop shortcut. Screen capture works in the AppImage on NixOS and on niri. Confirmations and alerts appear without zenity. Screenshot permission prompts appear on GNOME Wayland, and relaunching Cap brings its window forward. Cap falls back to X11 when no Wayland compositor is running. Image, wallpaper and audio pickers work. System audio is recorded in stereo. X11 recordings respect the resolution limit, partly visible windows stay selectable, and the picker sizes correctly at high DPI.
+
+## CLI
+
+- **Batch export** - `cap export` accepts several projects at once.
+- **More output** - `cap project validate` and `inspect` report `durationSeconds`, and `cap --version` reports the real Cap version.
+- **Fixes** - `cap recordings list` finds recordings in custom storage folders, uploads work without `--name`, `cap jobs wait --timeout` is enforced, and project config commands reject folders that aren't recordings.
+
+## Performance
+
+- **Faster Instant links** - After you stop, the upload finishes about 40% sooner. A 30-minute recording makes 51 upload signing requests instead of 949.
+- **Linux hardware encoding** - AMD and Intel GPUs now record and export with VA-API hardware H.264 instead of the CPU.
+- **Faster editor opening** - The first editor open after launch shows its frame right away. Autosaves of long captioned projects no longer block the editor.
+- **Smoother editing** - Scrubbing backwards on macOS reuses decoded frames, slider edits skip timeline rebuilds, long menus such as the font picker use 9-40x less CPU, and long text fields stay responsive.
+- **Faster stops** - Studio stop no longer waits for its thumbnail, and the camera preview converts frames off the main thread.
+- **Lower CPU** - Windows playback no longer busy-waits on every frame. The audio mixer wakes only when audio arrives, the cursor recorder skips key scans when keyboard capture is off, and the picker repaints only when something changes.
+- **Picker memory** - On macOS, the area picker needs 32 MB of extra graphics memory, down from 74 MB.
+- **Screenshots** - Pixel packing is 5-6x faster on Apple Silicon. Pixelate masks are 23-34x faster and blur masks 4-12x faster.
+- **Lighter media work** - Camera frames are shared instead of copied, GIF exports skip a full copy per frame, and software decoding and conversion use AVX2 on x86 CPUs.
+
+## Thanks
+
+A huge thank you to everyone who contributed to this release: @yashranaway, @kyzer1023, @vedanth-jadhav, @AksharP5, @celeroncoder, @PravinMandal, @himanshu748, @tadhgdowdall, @patrickballard, @kartikkabadi, @jatmn, @Theophilus2003, @OptimistOtaku, @AatmanAJ, @sloemo01, @flyingwebie, @dovidmoishe, @Wraient, @Ehsan-hash, @vedantggwp, @shubhook, @sharifhsn, @shaileshvats, @notkainoa, @mynameistito, @iwillwin-wcy, @colinvkim, @chrvasile, @Zingzy, @Markgatcha, @ManthanNimodiya, @Ker102, @JasonLovesDoggo, @ItsEeleeya, @FranprzDev, @Baytowne, @MinitJain, @Stephen-Psaradellis and @Ectropy.

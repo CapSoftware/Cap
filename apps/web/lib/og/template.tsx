@@ -1,4 +1,10 @@
 import type { CSSProperties, ReactNode } from "react";
+import {
+	CAP_ICON_DATA_URI,
+	CAP_WORDMARK_ASPECT,
+	CAP_WORDMARK_DATA_URI,
+	CAP_WORDMARK_GAP,
+} from "@/lib/og/cap-logo";
 import { OG_MONO, OG_SANS, OG_SERIF } from "@/lib/og/fonts";
 
 export const OG_WIDTH = 1200;
@@ -174,41 +180,33 @@ export const CapAppIcon = ({ size }: { size: number }) => (
 			height: size,
 			borderRadius: Math.round(size * 0.2),
 			boxShadow: "0 4px 14px rgba(23,58,128,0.18)",
+			backgroundImage: `url(${CAP_ICON_DATA_URI})`,
+			backgroundSize: `${size}px ${size}px`,
 		})}
-	>
-		<svg
-			role="img"
-			aria-label="Cap"
-			width={size}
-			height={size}
-			viewBox="0 0 40 40"
-		>
-			<rect width="40" height="40" rx="8" fill="white" />
-			{logoMark()}
-		</svg>
-	</div>
+	/>
 );
 
-export const CapWordmark = ({
-	height = 52,
-	color = OG_INK,
-}: {
-	height?: number;
-	color?: string;
-}) => (
-	<div style={flex({ alignItems: "center", gap: Math.round(height * 0.28) })}>
-		<CapAppIcon size={height} />
-		<svg
-			role="img"
-			aria-label="Cap"
-			width={Math.round((height * 58) / 40)}
-			height={height}
-			viewBox="46 0 58 40"
+export const CapWordmark = ({ height = 52 }: { height?: number }) => {
+	const width = Math.round(height * CAP_WORDMARK_ASPECT);
+	return (
+		<div
+			style={flex({
+				alignItems: "center",
+				gap: Math.round(height * CAP_WORDMARK_GAP),
+			})}
 		>
-			<path fill={color} d={WORDMARK_PATH} />
-		</svg>
-	</div>
-);
+			<CapAppIcon size={height} />
+			<div
+				style={flex({
+					width,
+					height,
+					backgroundImage: `url(${CAP_WORDMARK_DATA_URI})`,
+					backgroundSize: `${width}px ${height}px`,
+				})}
+			/>
+		</div>
+	);
+};
 
 /** The in-app logo — bare mark + wordmark, as the main window renders it. */
 const CapFullLogo = ({ height, color }: { height: number; color: string }) => (

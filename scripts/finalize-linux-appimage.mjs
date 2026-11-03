@@ -6,6 +6,7 @@ import {
 	chmod,
 	copyFile,
 	lstat,
+	mkdir,
 	mkdtemp,
 	open,
 	readdir,
@@ -24,8 +25,8 @@ import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-const desktopDirectory = fileURLToPath(
-	new URL("../apps/desktop/", import.meta.url),
+const gpuiDirectory = fileURLToPath(
+	new URL("../apps/desktop-gpui/", import.meta.url),
 );
 
 const upstreamGtkBackendAssignment =
@@ -104,11 +105,142 @@ esac
 exec "$cap_appdir/AppRun.cap-original" "$@"
 `;
 
-export async function preserveAppImageWorkingDirectory(appDir) {
+// The GPUI app finds every bundled library through RUNPATH, so it starts Cap
+// directly. The generic AppImage launcher's LD_LIBRARY_PATH, PYTHONHOME and
+// friends reached the host's PipeWire plugins inside Cap and every program Cap
+// starts (file managers, xdg-open), which then loaded Ubuntu's libraries: on
+// NixOS and Arch screen capture failed to connect and folders did not open.
+// It keeps what that launcher did for Cap: `usr/bin` first on PATH (Cap runs
+// the bundled pactl), the bundled data directory, and `usr` as the working
+// directory. The bundled libva is only used when the host has none, because
+// host PipeWire plugins link a host FFmpeg that needs the host's newer libva.
+export const directAppRunWrapper = `#!/bin/sh
+unset OWD
+if cap_original_directory="$(pwd -P && printf '.')"; then
+	OWD="\${cap_original_directory%?}"
+	OWD="\${OWD%?}"
+	export OWD
+fi
+case "$0" in
+	*/*) cap_appdir="\${0%/*}" ;;
+	*) cap_appdir=. ;;
+esac
+cap_appdir="$(cd "$cap_appdir" && pwd -P)" || exit 1
+export PATH="$cap_appdir/usr/bin:\${PATH:-/usr/local/bin:/usr/bin:/bin}"
+export XDG_DATA_DIRS="$cap_appdir/usr/share:\${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+cap_host_libva=0
+for cap_directory in /usr/lib/x86_64-linux-gnu /lib/x86_64-linux-gnu /usr/lib/aarch64-linux-gnu /lib/aarch64-linux-gnu /usr/lib64 /lib64 /usr/lib /lib; do
+	if [ -e "$cap_directory/libva.so.2" ] && [ -e "$cap_directory/libva-drm.so.2" ]; then
+		cap_host_libva=1
+		break
+	fi
+done
+if [ "$cap_host_libva" = 0 ] && ldconfig -p 2>/dev/null | grep -q 'libva-drm[.]so[.]2 '; then
+	cap_host_libva=1
+fi
+if [ "$cap_host_libva" = 0 ]; then
+	export LD_LIBRARY_PATH="$cap_appdir/usr/lib/cap/libva\${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
+unset cap_original_directory cap_directory cap_host_libva
+cd "$cap_appdir/usr" || exit 1
+exec "$cap_appdir/usr/bin/Cap" "$@"
+`;
+
+const libvaPattern = /^libva(?:-drm)?\.so\.2(?:\..+)?$/;
+
+// The fallback libva, for hosts without one. It must be new enough for the
+// host's own FFmpeg, which host PipeWire plugins load into Cap: NixOS's
+// FFmpeg 9 needs vaMapBuffer2, which the build image's libva 2.20 lacks. A
+// newer libva keeps the ABI the bundled FFmpeg was built against. These need
+// glibc 2.38, older than the build image's.
+export const fallbackLibvaPackages = [
+	{
+		url: "http://archive.ubuntu.com/ubuntu/pool/main/libv/libva/libva2_2.23.0-1ubuntu1_amd64.deb",
+		sha256: "83053abb11b8b0169bfb2abbd209a44ddeb4e56223980cdcfc0218b09e845f00",
+	},
+	{
+		url: "http://archive.ubuntu.com/ubuntu/pool/main/libv/libva/libva-drm2_2.23.0-1ubuntu1_amd64.deb",
+		sha256: "f56b0cb850dcd8af45929b2da7cc1fbdf64245fbcec99033298499a8db2765a3",
+	},
+];
+
+/**
+ * The directory holding the fallback libva: `CAP_APPIMAGE_LIBVA_DIR`, or the
+ * pinned packages above, downloaded, checked and unpacked into `work`.
+ */
+export async function fallbackLibvaDirectory(
+	work,
+	{ env = process.env, run = runCommand, download = fetch } = {},
+) {
+	if (env.CAP_APPIMAGE_LIBVA_DIR) return env.CAP_APPIMAGE_LIBVA_DIR;
+	const root = path.join(work, "libva");
+	await mkdir(root, { recursive: true });
+	for (const { url, sha256 } of fallbackLibvaPackages) {
+		const response = await download(url);
+		if (!response.ok)
+			throw new Error(`Downloading ${url} failed: ${response.status}`);
+		const bytes = Buffer.from(await response.arrayBuffer());
+		const digest = createHash("sha256").update(bytes).digest("hex");
+		if (digest !== sha256) {
+			throw new Error(`${url} has sha256 ${digest}, expected ${sha256}`);
+		}
+		const deb = path.join(root, path.basename(url));
+		await writeFile(deb, bytes);
+		await run("dpkg-deb", ["-x", deb, root], { env, stdio: "inherit" });
+	}
+	return path.join(root, "usr/lib/x86_64-linux-gnu");
+}
+
+/**
+ * Moves the bundled libva out of RUNPATH's reach into the launcher's fallback
+ * directory, replaced by the libraries in `replacement` when given.
+ */
+export async function isolateBundledLibva(appDir, { replacement } = {}) {
+	const libraries = path.join(appDir, "usr/lib");
+	const fallback = path.join(libraries, "cap/libva");
+	const moved = [];
+	for (const entry of await readdir(libraries, { withFileTypes: true })) {
+		if (!libvaPattern.test(entry.name) || entry.isDirectory()) continue;
+		await mkdir(fallback, { recursive: true });
+		await rename(
+			path.join(libraries, entry.name),
+			path.join(fallback, entry.name),
+		);
+		moved.push(entry.name);
+	}
+	if (replacement) {
+		const libraries = (await readdir(replacement)).filter((name) =>
+			libvaPattern.test(name),
+		);
+		for (const name of ["libva.so.2", "libva-drm.so.2"]) {
+			if (!libraries.includes(name)) {
+				throw new Error(`${replacement} has no ${name}`);
+			}
+		}
+		await rm(fallback, { recursive: true, force: true });
+		await mkdir(fallback, { recursive: true });
+		for (const name of libraries) {
+			const source = path.join(replacement, name);
+			const entry = await lstat(source);
+			if (entry.isSymbolicLink()) {
+				await symlink(await readlink(source), path.join(fallback, name));
+			} else {
+				await copyFile(source, path.join(fallback, name));
+			}
+		}
+	}
+	return moved.sort();
+}
+
+export async function preserveAppImageWorkingDirectory(
+	appDir,
+	{ direct = false } = {},
+) {
+	const wrapper = direct ? directAppRunWrapper : appRunWrapper;
 	const launcher = path.join(appDir, "AppRun");
 	const original = path.join(appDir, "AppRun.cap-original");
 	if ((await readdir(appDir)).includes(path.basename(original))) {
-		if ((await readFile(launcher, "utf8")) !== appRunWrapper) {
+		if ((await readFile(launcher, "utf8")) !== wrapper) {
 			throw new Error("AppImage already contains a different AppRun wrapper");
 		}
 		await access(original, constants.X_OK);
@@ -116,7 +248,37 @@ export async function preserveAppImageWorkingDirectory(appDir) {
 	}
 	await access(launcher, constants.X_OK);
 	await rename(launcher, original);
-	await writeFile(launcher, appRunWrapper, { mode: 0o755, flag: "wx" });
+	await writeFile(launcher, wrapper, { mode: 0o755, flag: "wx" });
+}
+
+// Desktop launchers (GNOME's app grid among them) only hand an app an
+// XDG_ACTIVATION_TOKEN when its entry asks for startup notification. Without
+// one, Wayland focus stealing prevention keeps Cap's first window, and the
+// running Cap a relaunch raises, behind whatever had focus.
+export function withStartupNotify(entry) {
+	if (/^StartupNotify=/m.test(entry)) {
+		return entry.replace(/^StartupNotify=.*$/m, "StartupNotify=true");
+	}
+	return entry.replace(
+		/^\[Desktop Entry\]\n/m,
+		"[Desktop Entry]\nStartupNotify=true\n",
+	);
+}
+
+export async function notifyStartupInDesktopEntries(root, entries) {
+	const changed = [];
+	for (const entry of entries) {
+		const filename = path.join(root, entry);
+		const stats = await lstat(filename).catch(() => null);
+		if (!stats?.isFile()) continue;
+		const before = await readFile(filename, "utf8");
+		const after = withStartupNotify(before);
+		if (after !== before) {
+			await writeFile(filename, after);
+			changed.push(entry);
+		}
+	}
+	return changed;
 }
 
 export function runCommand(command, args, options = {}) {
@@ -429,7 +591,7 @@ export async function signUpdaterArtifact(
 	{ env = process.env, run = runCommand } = {},
 ) {
 	await run("bun", ["run", "tauri", "signer", "sign", filename], {
-		cwd: desktopDirectory,
+		cwd: gpuiDirectory,
 		env: {
 			...env,
 			TAURI_PRIVATE_KEY: env.TAURI_SIGNING_PRIVATE_KEY,
@@ -492,8 +654,17 @@ export async function finalizeLinuxAppImage(
 				...(await removeWebviewRuntime(appDir, { env: tools, run })),
 			);
 		}
+		if (!webview) {
+			await isolateBundledLibva(appDir, {
+				replacement: await fallbackLibvaDirectory(work, { env: tools, run }),
+			});
+			await notifyStartupInDesktopEntries(appDir, [
+				"Cap.desktop",
+				"usr/share/applications/Cap.desktop",
+			]);
+		}
 		await relativizeDirIcon(appDir);
-		await preserveAppImageWorkingDirectory(appDir);
+		await preserveAppImageWorkingDirectory(appDir, { direct: !webview });
 		const output = path.join(work, path.basename(image));
 		await run(
 			outputPlugin,

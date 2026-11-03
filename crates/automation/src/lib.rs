@@ -307,17 +307,18 @@ pub async fn run<H: AutomationHost>(
     let matched = evaluate(store, trigger, ctx);
     let caps = host.capabilities();
     let mut results = Vec::new();
+    let mut remaining_uploads = matched
+        .iter()
+        .flat_map(|(_, actions)| actions)
+        .filter(|action| matches!(action, Action::Upload { .. }))
+        .count();
+    let requires_upload_verification =
+        remaining_uploads > 0 || *trigger == Trigger::UploadCompleted;
+    let mut upload_failed = false;
 
     for (rule_id, actions) in matched {
         info!(rule_id = %rule_id, trigger = ?trigger, "Running automation rule");
         let mut action_results = Vec::new();
-        let mut remaining_uploads = actions
-            .iter()
-            .filter(|action| matches!(action, Action::Upload { .. }))
-            .count();
-        let requires_upload_verification =
-            remaining_uploads > 0 || *trigger == Trigger::UploadCompleted;
-        let mut upload_failed = false;
 
         for action in &actions {
             let is_upload = matches!(action, Action::Upload { .. });

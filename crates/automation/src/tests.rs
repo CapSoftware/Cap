@@ -816,6 +816,59 @@ async fn standalone_deletion_is_preserved_but_unsupported_upload_cannot_authoriz
     assert!(host.actions_run().is_empty());
 }
 
+#[tokio::test]
+async fn deletion_in_another_rule_waits_for_all_uploads() {
+    for delete_first in [false, true] {
+        for upload_result in [Err("storage offline".to_string()), Ok(())] {
+            let upload_succeeded = upload_result.is_ok();
+            let mut host = MockHost::new(desktop_capabilities());
+            host.upload_verification = Ok(true);
+            host.upload_results.lock().unwrap().push_back(upload_result);
+
+            let mut store =
+                upload_cleanup_store(Trigger::StudioRecordingFinished, vec![upload_action()]);
+            store.rules[0].id = "upload".to_string();
+            let mut delete_rule = store.rules[0].clone();
+            delete_rule.id = "delete".to_string();
+            delete_rule.actions = vec![Action::DeleteLocalFiles];
+            if delete_first {
+                store.rules.insert(0, delete_rule);
+            } else {
+                store.rules.push(delete_rule);
+            }
+
+            let results = run(
+                &host,
+                &store,
+                &Trigger::StudioRecordingFinished,
+                &TriggerContext::new(),
+            )
+            .await;
+            let deletion = results
+                .iter()
+                .find(|result| result.rule_id == "delete")
+                .unwrap();
+            let should_delete = !delete_first && upload_succeeded;
+            assert_eq!(deletion.action_results[0].success, should_delete);
+            if should_delete {
+                assert_eq!(
+                    host.actions_run(),
+                    vec!["upload", "verify_upload", "delete_local_files"]
+                );
+            } else {
+                assert!(
+                    deletion.action_results[0]
+                        .error
+                        .as_deref()
+                        .unwrap()
+                        .contains("retained")
+                );
+                assert_eq!(host.actions_run(), vec!["upload"]);
+            }
+        }
+    }
+}
+
 // Both surfaces share the same engine + store, so they must match the same rules and run the same
 // actions in the same order — the only difference being that surface-specific actions (clipboard on the
 // CLI) are skipped, never silently reordered or dropped.

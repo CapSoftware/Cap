@@ -146,7 +146,7 @@ const CommentComponent: React.FC<{
 							)}
 						</div>
 					) : (
-						<p className="mt-2 text-sm text-gray-11">
+						<p className="mt-2 whitespace-pre-wrap text-sm text-gray-11">
 							<LinkifiedText text={comment.content} />
 						</p>
 					)}

@@ -595,6 +595,18 @@ export function AdminPanel({
 						>
 							Replace video
 						</Link>
+						<Link
+							href="/admin/retry-recordings"
+							className="rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
+						>
+							Retry blocked recordings
+						</Link>
+						<Link
+							href="/admin/rebuild-manifests"
+							className="rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
+						>
+							Rebuild missing manifests
+						</Link>
 					</div>
 				</div>
 			</div>

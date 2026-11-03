@@ -12,3 +12,17 @@ export function validateMediaServerSecret(c: MediaServerContext): boolean {
 	}
 	return c.req.header("x-media-server-secret") === secret;
 }
+
+export function hasMediaServerSecret(c: MediaServerContext): boolean {
+	return (
+		c.req.header("x-media-server-secret") !== undefined &&
+		validateMediaServerSecret(c)
+	);
+}
+
+export function canReadStatus(c: MediaServerContext): boolean {
+	const publicStatus = process.env.MEDIA_SERVER_PUBLIC_STATUS?.toLowerCase();
+	return publicStatus === "false" || publicStatus === "0"
+		? validateMediaServerSecret(c)
+		: true;
+}

@@ -27,7 +27,7 @@ export const hipaaCompliantScreenRecordingContent: SeoPageContent = {
 		{
 			title: "Open-Source and Auditable",
 			description:
-				"Cap is MIT-licensed and fully open source on GitHub. Your security and compliance teams can audit every line of code. No black-box behavior, no undisclosed data collection — full transparency for your compliance reviews and vendor assessments.",
+				"Cap is open source on GitHub, with most code under AGPLv3 and specified Rust crates under MIT. Your security and compliance teams can audit every line of code. No black-box behavior, no undisclosed data collection — full transparency for your compliance reviews and vendor assessments.",
 		},
 		{
 			title: "Access-Controlled Sharing",
@@ -107,7 +107,7 @@ export const hipaaCompliantScreenRecordingContent: SeoPageContent = {
 			],
 			[
 				"Open-source code",
-				{ text: "Yes — MIT", status: "positive" },
+				{ text: "Yes — AGPLv3 and MIT crates", status: "positive" },
 				{ text: "No", status: "negative" },
 				{ text: "No", status: "negative" },
 				{ text: "No", status: "negative" },
@@ -257,7 +257,7 @@ export const hipaaCompliantScreenRecordingContent: SeoPageContent = {
 			question:
 				"Is Cap open source and auditable for HIPAA vendor assessments?",
 			answer:
-				"Yes. Cap is MIT-licensed and fully open source on GitHub. Your security and compliance teams can audit the complete source code to verify data handling behavior, network calls, and storage logic. This transparency simplifies HIPAA vendor security reviews compared to closed-source recording tools.",
+				"Yes. Cap is open source on GitHub, with most code under AGPLv3 and specified Rust crates under MIT. Your security and compliance teams can audit the complete source code to verify data handling behavior, network calls, and storage logic. This transparency simplifies HIPAA vendor security reviews compared to closed-source recording tools.",
 		},
 		{
 			question: "Can I disable AI transcription in Cap for HIPAA compliance?",

@@ -8,6 +8,11 @@ patch_paths=(
 	"apps/desktop-gpui/patches/zed-windows.patch"
 	"apps/desktop-gpui/patches/zed-linux.patch"
 	"apps/desktop-gpui/patches/zed-idle-frames.patch"
+	"apps/desktop-gpui/patches/zed-streaming-image.patch"
+	"apps/desktop-gpui/patches/zed-wayland-visibility.patch"
+	"apps/desktop-gpui/patches/zed-wayland-activation.patch"
+	"apps/desktop-gpui/patches/zed-closed-window-events.patch"
+	"apps/desktop-gpui/patches/zed-glass.patch"
 )
 patch_files=("${patch_paths[@]/#/$repo_root/}")
 base_revision="5d1f83d9f27a19bec1fb241dc33b42238af9cf8d"

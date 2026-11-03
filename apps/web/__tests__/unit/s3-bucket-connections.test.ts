@@ -40,7 +40,10 @@ vi.mock("@cap/web-backend/src/S3Buckets/S3BucketsRepo.ts", async () => {
 });
 
 import { S3Buckets } from "@cap/web-backend/src/S3Buckets";
-import { s3ConnectionPool } from "@cap/web-backend/src/S3Buckets/S3ConnectionPool";
+import {
+	defaultBucketS3ConnectionPool,
+	s3ConnectionPool,
+} from "@cap/web-backend/src/S3Buckets/S3ConnectionPool";
 
 async function storageFixture() {
 	let connections = 0;
@@ -97,25 +100,27 @@ async function storageFixture() {
 }
 
 describe("S3 connection reuse", () => {
-	it("bounds connections across simultaneous recording checkpoints", async () => {
+	it("reuses one bounded set of connections across recording checkpoints", async () => {
 		const fixture = await storageFixture();
 		try {
-			await Promise.all(
-				Array.from({ length: 24 }, async (_, recording) => {
-					const [access] = await fixture.runtime.runPromise(
-						fixture.service.getBucketAccess(Option.none()),
-					);
-					await Promise.all(
-						Array.from({ length: 8 }, (_, index) =>
-							fixture.runtime.runPromise(
-								access.headObject(`recording/${recording}/${index}`),
+			// Two waves of checkpoints: the second must reuse the first wave's sockets instead of opening its own.
+			for (let wave = 0; wave < 2; wave++)
+				await Promise.all(
+					Array.from({ length: 16 }, async (_, recording) => {
+						const [access] = await fixture.runtime.runPromise(
+							fixture.service.getBucketAccess(Option.none()),
+						);
+						await Promise.all(
+							Array.from({ length: 8 }, (_, index) =>
+								fixture.runtime.runPromise(
+									access.headObject(`recording/${wave}/${recording}/${index}`),
+								),
 							),
-						),
-					);
-				}),
-			);
-			expect(fixture.authorizations).toHaveLength(192);
-			expect(fixture.connections()).toBeLessThanOrEqual(50);
+						);
+					}),
+				);
+			expect(fixture.authorizations).toHaveLength(256);
+			expect(fixture.connections()).toBeLessThanOrEqual(128);
 		} finally {
 			await fixture.close();
 		}
@@ -191,6 +196,40 @@ describe("S3 connection reuse", () => {
 		} finally {
 			await fixture.close();
 		}
+	});
+
+	it("keeps default bucket connections warm across 32-wide snapshot pages", async () => {
+		const fixture = await storageFixture();
+		try {
+			const [access] = await fixture.runtime.runPromise(
+				fixture.service.getBucketAccess(Option.none()),
+			);
+			for (let checkpoint = 0; checkpoint < 10; checkpoint++) {
+				await Promise.all(
+					Array.from({ length: 32 }, (_, index) =>
+						fixture.runtime.runPromise(
+							access.headObject(`recording/${checkpoint}/${index}`),
+						),
+					),
+				);
+			}
+			expect(fixture.authorizations).toHaveLength(320);
+			expect(fixture.connections()).toBeLessThanOrEqual(40);
+		} finally {
+			await fixture.close();
+		}
+	});
+
+	it("keeps the custom bucket idle connection bound", async () => {
+		const pools = await Effect.runPromise(
+			Effect.scoped(
+				Effect.all([s3ConnectionPool, defaultBucketS3ConnectionPool]),
+			),
+		);
+		expect(pools.map((pool) => pool.httpsAgent.maxFreeSockets)).toEqual([
+			8, 256,
+		]);
+		expect(pools.map((pool) => pool.httpsAgent.maxSockets)).toEqual([50, 256]);
 	});
 
 	it("reuses custom bucket connections while using current credentials", async () => {

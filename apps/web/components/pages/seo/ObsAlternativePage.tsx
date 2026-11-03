@@ -53,7 +53,7 @@ export const obsAlternativeContent: SeoPageContent = {
 		{
 			title: "Open Source Like OBS",
 			description:
-				"Cap is MIT-licensed and fully open source on GitHub, just like OBS. You can audit the code, contribute features, and self-host the entire platform. You get OBS's commitment to transparency with the usability of a modern sharing tool.",
+				"Cap is open source on GitHub, with most code under AGPLv3 and specified Rust crates under MIT. You can audit the code, contribute features, and self-host the entire platform. You get OBS's commitment to transparency with the usability of a modern sharing tool.",
 		},
 	],
 
@@ -117,7 +117,7 @@ export const obsAlternativeContent: SeoPageContent = {
 			],
 			[
 				"Open source",
-				{ text: "Yes — MIT licensed", status: "positive" },
+				{ text: "Yes — AGPLv3 and MIT crates", status: "positive" },
 				{ text: "Yes — GPL licensed", status: "positive" },
 				{ text: "No", status: "negative" },
 				{ text: "No", status: "negative" },
@@ -250,7 +250,7 @@ export const obsAlternativeContent: SeoPageContent = {
 		{
 			question: "Is Cap open source like OBS?",
 			answer:
-				"Yes. Cap is fully open source and MIT-licensed on GitHub. You can inspect the complete codebase, contribute features, and self-host the entire platform. Both Cap and OBS are open source — but Cap uses the permissive MIT License while OBS uses the GPL.",
+				"Yes. Cap's source is available on GitHub. Most Cap code uses AGPLv3, with specified Rust crates under MIT; OBS uses the GPL. You can inspect the code, contribute features, and self-host the platform.",
 		},
 		{
 			question: "Can Cap do live streaming like OBS?",
