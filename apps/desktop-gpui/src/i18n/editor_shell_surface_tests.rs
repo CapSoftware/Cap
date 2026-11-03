@@ -89,6 +89,7 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             tr::editor::canvas::camera_follows_zoom(),
             "Camera size follows the zoom — drag to move",
         ),
+        (tr::editor::canvas::captions(), "Captions"),
         (tr::editor::canvas::edit_zoom(), "Edit zoom"),
         (tr::editor::canvas::image(), "Image"),
         (tr::editor::canvas::mask(), "Mask"),
@@ -578,6 +579,10 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         (
             tr::editor::tabs::captions::regenerate(),
             "Regenerate Captions",
+        ),
+        (
+            tr::editor::tabs::captions::reset_position(),
+            "Reset Position",
         ),
         (tr::editor::tabs::captions::size_label(), "Size"),
         (tr::editor::tabs::captions::style(), "Style"),

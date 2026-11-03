@@ -303,6 +303,18 @@ fn seeked_playhead(time: f64, frame: u32, playing: bool) -> f64 {
     if playing { time } else { frame_seconds(frame) }
 }
 
+/// The part of a frame layout the canvas overlay draws from. A preset
+/// caption has no box on the canvas, so a new caption under the playhead only
+/// rebuilds the editor when it is placed manually.
+fn canvas_hit_layout(layout: FrameLayout) -> FrameLayout {
+    FrameLayout {
+        caption: layout
+            .caption
+            .filter(cap_rendering::CaptionFrameBox::is_manual),
+        ..layout
+    }
+}
+
 fn frame_layout_requires_editor_invalidation(
     first_frame: bool,
     playing: bool,
@@ -6626,7 +6638,8 @@ impl EditorWindow {
         }
         let handoff_target = self.transport.as_ref().and(self.ordinary_handoff_frame);
         let first_frame = self.latest_frame.is_none();
-        let layout_changed = self.frame_layout != Some(frame.layout);
+        let layout_changed =
+            self.frame_layout.map(canvas_hit_layout) != Some(canvas_hit_layout(frame.layout));
         if self.frame_layout.map(|layout| layout.output_size) != Some(frame.layout.output_size) {
             tracing::info!(
                 output_size = ?frame.layout.output_size,
@@ -14566,6 +14579,37 @@ mod tests {
         assert!(frame_layout_requires_editor_invalidation(
             false, true, true, true
         ));
+    }
+
+    /// Scrubbing across preset captions changes only the caption box, which
+    /// the canvas never draws, so it costs no editor rebuild. A manual
+    /// caption's box is a canvas hit target, so its change does.
+    #[test]
+    fn only_a_manual_caption_box_changes_the_canvas_layout() {
+        let base = FrameLayout {
+            display: [0., 0., 1920., 1080.],
+            camera: None,
+            output_size: [1920, 1080],
+            caption: None,
+        };
+        let preset = |bounds| FrameLayout {
+            caption: Some(cap_rendering::CaptionFrameBox::new(bounds, "bottom-center")),
+            ..base
+        };
+        let manual = |bounds| FrameLayout {
+            caption: Some(cap_rendering::CaptionFrameBox::new(bounds, "manual")),
+            ..base
+        };
+        assert_eq!(canvas_hit_layout(preset([0., 0., 10., 10.])), base);
+        assert_eq!(
+            canvas_hit_layout(preset([0., 0., 10., 10.])),
+            canvas_hit_layout(preset([5., 5., 50., 20.]))
+        );
+        assert_ne!(
+            canvas_hit_layout(manual([0., 0., 10., 10.])),
+            canvas_hit_layout(manual([5., 5., 50., 20.]))
+        );
+        assert_ne!(canvas_hit_layout(manual([0., 0., 10., 10.])), base);
     }
 
     /// Every failure `EditorInstance::new` would return, plus the one it would

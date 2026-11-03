@@ -46,7 +46,7 @@ use std::rc::Rc;
 use crate::i18n::tr;
 use crate::{editor_timeline::TrackKind, editor_window::EditorWindow};
 use cap_project::{CameraXPosition, CameraYPosition, OverlayTrackKind, SceneMode, XY};
-use cap_rendering::FrameLayout;
+use cap_rendering::{CaptionFrameBox, FrameLayout};
 use gpui::{
     AnyElement, Bounds, Context, CursorStyle, FontWeight, Hsla, InteractiveElement, IntoElement,
     MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement, Pixels, Point, SharedString,
@@ -104,6 +104,7 @@ pub enum SnapLineKind {
     Margin,
     ElementEdge,
     ElementCenter,
+    Third,
 }
 
 impl SnapLineKind {
@@ -424,6 +425,84 @@ pub fn display_nudge_center(
     XY::new(x + rect.w / 2., y + rect.h / 2.)
 }
 
+/// The caption safe area: the renderer's own 5% caption margin, applied to
+/// both axes.
+pub const CAPTION_SAFE_MARGIN: f64 = 0.05;
+
+/// Snap lines for a caption drag: the frame's edges and centre, its thirds,
+/// the safe-area margins, and every other visible element.
+pub fn caption_snap_targets(others: &[NormRect]) -> SnapTargets {
+    let mut targets = build_snap_targets(others, Some((CAPTION_SAFE_MARGIN, CAPTION_SAFE_MARGIN)));
+    for pos in [1. / 3., 2. / 3.] {
+        let line = SnapLine {
+            pos,
+            kind: SnapLineKind::Third,
+            reference: None,
+        };
+        targets.v.push(line);
+        targets.h.push(line);
+    }
+    targets
+}
+
+/// The caption box the renderer draws for a manual `center` and a box of
+/// `size`, both normalised: centred on the point, then pushed back inside the
+/// frame (`caption_box_origin` in `cap-rendering`).
+pub fn caption_rest_rect(center: (f64, f64), size: (f64, f64)) -> NormRect {
+    let (w, h) = size;
+    NormRect {
+        x: (center.0 - w / 2.).clamp(0., (1. - w).max(0.)),
+        y: (center.1 - h / 2.).clamp(0., (1. - h).max(0.)),
+        w,
+        h,
+    }
+}
+
+/// A caption drag keeps the whole box in the frame, the clamp the renderer
+/// applies, so the stored centre is always the one drawn.
+pub fn caption_drag_center(
+    rect: NormRect,
+    canvas: (f64, f64),
+    delta: (f64, f64),
+    targets: &SnapTargets,
+    shift: bool,
+) -> (XY<f64>, Vec<SnapGuide>) {
+    camera_drag_center(rect, canvas, delta, targets, shift)
+}
+
+/// One canvas pixel per arrow press, ten with Shift, inside the frame.
+pub fn caption_nudge_center(
+    rect: NormRect,
+    canvas: (f64, f64),
+    direction: (f64, f64),
+    shift: bool,
+) -> XY<f64> {
+    camera_nudge_center(rect, canvas, direction, shift)
+}
+
+/// Where Manual placement centres the captions when no position is stored:
+/// the bottom-centre spot the renderer falls back to.
+pub const CAPTION_DEFAULT_CENTER: (f64, f64) = (0.5, 0.85);
+
+/// The caption box to hit-test on the canvas. Only a caption the renderer
+/// placed manually gets one, so preset captions never take a click from the
+/// elements under them. The size is the renderer's; the position comes from
+/// the stored centre so a drag never waits on a frame.
+pub fn caption_canvas_rect(
+    layout: &FrameLayout,
+    manual_position: Option<XY<f32>>,
+) -> Option<NormRect> {
+    let caption = layout.caption.filter(CaptionFrameBox::is_manual)?;
+    let drawn = norm_rect(caption.bounds, layout);
+    if drawn.w <= 0. || drawn.h <= 0. {
+        return None;
+    }
+    let center = manual_position.map_or(CAPTION_DEFAULT_CENTER, |position| {
+        (f64::from(position.x), f64::from(position.y))
+    });
+    Some(caption_rest_rect(center, (drawn.w, drawn.h)))
+}
+
 // ---------------------------------------------------------------------------
 // The live drag
 // ---------------------------------------------------------------------------
@@ -447,6 +526,7 @@ pub enum CanvasSelection {
     Mask(usize),
     Text(usize),
     Image(usize),
+    Captions,
 }
 
 impl CanvasSelection {
@@ -457,6 +537,7 @@ impl CanvasSelection {
             Self::Mask(_) => tr::editor::canvas::mask().into(),
             Self::Text(_) => tr::editor::canvas::text_item().into(),
             Self::Image(_) => tr::editor::canvas::image().into(),
+            Self::Captions => tr::editor::canvas::captions().into(),
         }
     }
 
@@ -467,6 +548,7 @@ impl CanvasSelection {
             Self::Mask(index) => format!("canvas-mask-{index}").into(),
             Self::Text(index) => format!("canvas-text-{index}").into(),
             Self::Image(index) => format!("canvas-image-{index}").into(),
+            Self::Captions => "canvas-captions".into(),
         }
     }
 
@@ -542,6 +624,16 @@ impl EditorWindow {
 
     fn show_camera(&self) -> bool {
         self.canvas_overlay_visible() && !self.pane_scene() && self.camera_rect().is_some()
+    }
+
+    fn caption_rect(&self) -> Option<NormRect> {
+        let layout = self.frame_layout.as_ref()?;
+        let captions = self.project.captions.as_ref()?;
+        caption_canvas_rect(layout, captions.settings.manual_position)
+    }
+
+    fn show_captions(&self) -> bool {
+        self.canvas_overlay_visible() && self.caption_rect().is_some()
     }
 
     /// `displayDraggable()` (`:249`): the rendered display rect is
@@ -649,6 +741,9 @@ impl EditorWindow {
                 });
             }
         }
+        if exclude == CanvasSelection::Captions {
+            return caption_snap_targets(&rects);
+        }
         let wants_margin = matches!(exclude, CanvasSelection::Display | CanvasSelection::Camera);
         build_snap_targets(&rects, wants_margin.then(|| classic_margin(layout)))
     }
@@ -682,7 +777,8 @@ impl EditorWindow {
             CanvasSelection::Camera
             | CanvasSelection::Mask(_)
             | CanvasSelection::Text(_)
-            | CanvasSelection::Image(_) => true,
+            | CanvasSelection::Image(_)
+            | CanvasSelection::Captions => true,
         };
         if !draggable {
             cx.notify();
@@ -717,6 +813,7 @@ impl EditorWindow {
             CanvasSelection::Display => self.display_draggable(),
             CanvasSelection::Camera => self.camera_resizable(),
             CanvasSelection::Mask(_) | CanvasSelection::Text(_) | CanvasSelection::Image(_) => true,
+            CanvasSelection::Captions => false,
         };
         if !resizable {
             return;
@@ -920,6 +1017,7 @@ impl EditorWindow {
                     self.canvas_overlay_rect = Some(rect);
                     self.write_overlay_rect(element, rect, cx);
                 }
+                CanvasSelection::Captions => {}
             }
             let _ = (window, output_w, output_h);
             return;
@@ -941,6 +1039,7 @@ impl EditorWindow {
                 };
                 overlay_drag_center(bounds, size, delta, &targets, shift)
             }
+            CanvasSelection::Captions => caption_drag_center(start, size, delta, &targets, shift),
         };
         self.snap_guides = guides;
         let optimistic = NormRect {
@@ -961,6 +1060,7 @@ impl EditorWindow {
                 self.canvas_overlay_rect = Some(optimistic);
                 self.write_overlay_rect(element, optimistic, cx);
             }
+            CanvasSelection::Captions => self.write_caption_center(center, cx),
         }
         let _ = window;
     }
@@ -1009,6 +1109,15 @@ impl EditorWindow {
                 CanvasSelection::Image(index) => {
                     tracing::info!(index, "canvas image drag");
                 }
+                CanvasSelection::Captions => tracing::info!(
+                    position = ?self
+                        .project
+                        .captions
+                        .as_ref()
+                        .and_then(|captions| captions.settings.manual_position)
+                        .map(|p| format!("{:.6},{:.6}", p.x, p.y)),
+                    "canvas captions drag"
+                ),
             }
         }
         cx.notify();
@@ -1061,6 +1170,7 @@ impl EditorWindow {
             CanvasSelection::Mask(_) | CanvasSelection::Text(_) | CanvasSelection::Image(_) => {
                 overlay_nudge_center(rect, direction, shift)
             }
+            CanvasSelection::Captions => caption_nudge_center(rect, size, direction, shift),
         };
         let optimistic = NormRect {
             x: center.x - rect.w / 2.,
@@ -1080,6 +1190,7 @@ impl EditorWindow {
                 self.canvas_overlay_rect = Some(optimistic);
                 self.write_overlay_rect(selected, optimistic, cx);
             }
+            CanvasSelection::Captions => self.write_caption_center(center, cx),
         }
         self.schedule_save(window, cx);
         true
@@ -1111,6 +1222,21 @@ impl EditorWindow {
             },
             cx,
         );
+    }
+
+    /// The manual caption centre. The placement setting itself is left alone:
+    /// the box only exists while the caption on screen is already manual,
+    /// whether through the setting or its segment's override.
+    fn write_caption_center(&mut self, center: XY<f64>, cx: &mut Context<Self>) {
+        let Some(captions) = self.project.captions.as_mut() else {
+            return;
+        };
+        let next = XY::new(center.x as f32, center.y as f32);
+        if captions.settings.manual_position == Some(next) {
+            return;
+        }
+        captions.settings.manual_position = Some(next);
+        self.project_changed_live(cx);
     }
 
     fn write_canvas_style(
@@ -1207,6 +1333,7 @@ impl EditorWindow {
                     h: segment.size.y,
                 })
             }
+            CanvasSelection::Captions => self.caption_rect(),
         }
     }
 
@@ -1422,6 +1549,12 @@ impl EditorWindow {
                 }
             }
         }
+        if self.show_captions()
+            && let Some(rect) = self.caption_rect()
+        {
+            layer =
+                layer.child(self.render_element_box(CanvasSelection::Captions, rect, (cw, ch), cx));
+        }
         for guide in &self.snap_guides {
             let color = gpui::rgb(0xFF3B6B);
             layer = layer.child(match guide.axis {
@@ -1474,7 +1607,9 @@ impl EditorWindow {
             CanvasSelection::Mask(_) | CanvasSelection::Text(_) | CanvasSelection::Image(_) => {
                 (true, true, None)
             }
+            CanvasSelection::Captions => (true, false, None),
         };
+        let has_handles = element != CanvasSelection::Captions;
 
         let left = rect.x as f32 * canvas.0;
         let top = rect.y as f32 * canvas.1;
@@ -1598,7 +1733,10 @@ impl EditorWindow {
                 (1, -1, CursorStyle::ResizeUpRightDownLeft),
                 (-1, 1, CursorStyle::ResizeUpRightDownLeft),
                 (1, 1, CursorStyle::ResizeUpLeftDownRight),
-            ] {
+            ]
+            .into_iter()
+            .filter(|_| has_handles)
+            {
                 let hx = if dir_x < 0 {
                     if flush.0 { 0. } else { -6. }
                 } else if flush.2 {
@@ -1955,6 +2093,7 @@ mod tests {
             display,
             camera: None,
             output_size: [width, height],
+            caption: None,
         }
     }
 
@@ -2211,6 +2350,159 @@ mod tests {
         // From the other rect's top (0.0) to the moving rect's bottom (0.7).
         assert!((guide.start - 0.0).abs() < 1e-9);
         assert!((guide.end - 0.7).abs() < 1e-9);
+    }
+
+    fn caption_layout(width: u32, height: u32, bounds: [f32; 4], position: &str) -> FrameLayout {
+        FrameLayout {
+            caption: Some(CaptionFrameBox::new(bounds, position)),
+            ..layout(width, height, [0., 0., width as f32, height as f32])
+        }
+    }
+
+    fn near(a: f64, b: f64) -> bool {
+        (a - b).abs() < 1e-6
+    }
+
+    /// A preset caption gets no hit box at all, so a click on it reaches the
+    /// text, mask or screen underneath exactly as before.
+    #[test]
+    fn only_a_manual_caption_takes_clicks() {
+        let bounds = [700., 870., 1220., 930.];
+        for preset in [
+            "top-left",
+            "top-center",
+            "top-right",
+            "bottom-left",
+            "bottom-center",
+            "bottom-right",
+        ] {
+            let layout = caption_layout(1920, 1080, bounds, preset);
+            assert_eq!(caption_canvas_rect(&layout, Some(XY::new(0.5, 0.5))), None);
+        }
+        assert_eq!(caption_canvas_rect(&layout(1920, 1080, bounds), None), None);
+        let manual = caption_layout(1920, 1080, bounds, "manual");
+        assert!(caption_canvas_rect(&manual, None).is_some());
+        let empty = caption_layout(1920, 1080, [900., 900., 900., 900.], "manual");
+        assert_eq!(caption_canvas_rect(&empty, None), None);
+    }
+
+    /// The hit box is the renderer's box size at the stored centre, so it
+    /// covers the caption on screen and a click inside it lands.
+    #[test]
+    fn the_caption_hit_box_covers_the_drawn_caption() {
+        let canvas = Bounds {
+            origin: gpui::point(px(40.), px(20.)),
+            size: gpui::size(px(960.), px(540.)),
+        };
+        let layout = caption_layout(1920, 1080, [576., 186., 1056., 246.], "manual");
+        let rect = caption_canvas_rect(&layout, Some(XY::new(0.425, 0.2))).unwrap();
+        assert!(near(rect.x, 576. / 1920.));
+        assert!(near(rect.y, 186. / 1080.));
+        assert!(near(rect.w, 480. / 1920.));
+        assert!(near(rect.h, 60. / 1080.));
+        assert!(rect_contains(
+            canvas,
+            rect,
+            gpui::point(px(40. + 0.425 * 960.), px(20. + 0.2 * 540.))
+        ));
+        assert!(!rect_contains(
+            canvas,
+            rect,
+            gpui::point(px(40. + 0.425 * 960.), px(20. + 0.5 * 540.))
+        ));
+    }
+
+    /// No stored centre is the renderer's bottom-centre fallback, and a
+    /// centre near an edge is drawn pushed back inside the frame, in every
+    /// aspect.
+    #[test]
+    fn the_caption_rect_follows_the_renderer_clamp() {
+        let layout = caption_layout(1920, 1080, [700., 888., 1220., 948.], "manual");
+        let rect = caption_canvas_rect(&layout, None).unwrap();
+        assert!(near(rect.x + rect.w / 2., 0.5));
+        assert!(near(rect.y + rect.h / 2., 0.85));
+
+        for (width, height) in [(1920, 1080), (1080, 1920), (1080, 1080), (1440, 1080)] {
+            let bounds = [0., 0., width as f32 * 0.4, height as f32 * 0.06];
+            let layout = caption_layout(width, height, bounds, "manual");
+            for spot in [XY::new(0., 0.), XY::new(1., 1.), XY::new(0.98, 0.01)] {
+                let rect = caption_canvas_rect(&layout, Some(spot)).unwrap();
+                assert!(rect.x >= 0. && rect.x + rect.w <= 1. + 1e-9);
+                assert!(rect.y >= 0. && rect.y + rect.h <= 1. + 1e-9);
+            }
+        }
+    }
+
+    /// A caption drag snaps to the frame centre, the thirds and the safe
+    /// margins, and shows the guide it snapped to.
+    #[test]
+    fn a_caption_drag_snaps_to_centre_thirds_and_safe_margins() {
+        let targets = caption_snap_targets(&[]);
+        let rect = NormRect {
+            x: 0.1,
+            y: 0.6,
+            w: 0.3,
+            h: 0.06,
+        };
+        let canvas = (960., 540.);
+
+        let to_centre = (0.5 - 0.25 - 3. / 960.) * 960.;
+        let (center, guides) = caption_drag_center(rect, canvas, (to_centre, 0.), &targets, false);
+        assert!(near(center.x, 0.5));
+        assert!(
+            guides
+                .iter()
+                .any(|guide| guide.axis == GuideAxis::V && guide.kind == SnapLineKind::FrameCenter)
+        );
+
+        let to_third = (2. / 3. - 0.63 + 4. / 540.) * 540.;
+        let (center, guides) = caption_drag_center(rect, canvas, (0., to_third), &targets, false);
+        assert!(near(center.y, 2. / 3.));
+        assert!(
+            guides
+                .iter()
+                .any(|guide| guide.axis == GuideAxis::H && guide.kind == SnapLineKind::Third)
+        );
+
+        let to_margin = (0.05 - 0.1 + 2. / 960.) * 960.;
+        let (center, guides) = caption_drag_center(rect, canvas, (to_margin, 0.), &targets, false);
+        assert!(near(center.x - rect.w / 2., CAPTION_SAFE_MARGIN));
+        assert!(
+            guides
+                .iter()
+                .any(|guide| guide.axis == GuideAxis::V && guide.kind == SnapLineKind::Margin)
+        );
+
+        let (center, guides) = caption_drag_center(rect, canvas, (to_centre, 0.), &targets, true);
+        assert!(near(center.x, 0.25 + to_centre / 960.));
+        assert!(guides.is_empty());
+    }
+
+    /// The stored centre after a drag or a nudge is always the one drawn:
+    /// the box cannot be pushed past an edge.
+    #[test]
+    fn a_caption_drag_and_nudge_keep_the_box_in_frame() {
+        let rect = NormRect {
+            x: 0.6,
+            y: 0.9,
+            w: 0.3,
+            h: 0.06,
+        };
+        let targets = SnapTargets::default();
+        let (center, _) = caption_drag_center(rect, (960., 540.), (900., 900.), &targets, true);
+        assert!(near(center.x, 1. - 0.15));
+        assert!(near(center.y, 1. - 0.03));
+        let (center, _) = caption_drag_center(rect, (960., 540.), (-2000., -900.), &targets, true);
+        assert!(near(center.x, 0.15));
+        assert!(near(center.y, 0.03));
+
+        let center = caption_nudge_center(rect, (960., 540.), (-1., 0.), false);
+        assert!(near(center.x, 0.75 - 1. / 960.));
+        let center = caption_nudge_center(rect, (960., 540.), (0., -1.), true);
+        assert!(near(center.y, 0.93 - 10. / 540.));
+        let flush = NormRect { x: 0.7, ..rect };
+        let center = caption_nudge_center(flush, (960., 540.), (1., 0.), true);
+        assert!(near(center.x, 0.85));
     }
 }
 
