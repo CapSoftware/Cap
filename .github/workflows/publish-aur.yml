@@ -141,7 +141,16 @@ jobs:
               ! cmp -s "$AUR/PKGBUILD" "$PACKAGE/PKGBUILD"; then
               # Same upstream version but a changed recipe: installed users
               # only upgrade on a higher pkgrel, so carry the AUR's forward.
-              NEW_PKGREL=$(( $(pkgrel_of "$AUR/.SRCINFO") + 1 ))
+              # The AUR clone is not Cap-controlled, so never let its pkgrel
+              # reach shell arithmetic unvalidated: bash re-evaluates command
+              # substitutions inside $(( )), which would run attacker-chosen
+              # commands with AUR_SSH_PRIVATE_KEY in scope. Fail closed.
+              AUR_PKGREL="$(pkgrel_of "$AUR/.SRCINFO")"
+              if ! [[ "$AUR_PKGREL" =~ ^[0-9]+$ ]]; then
+                echo "::error::Refusing to publish: AUR .SRCINFO has non-numeric pkgrel: $AUR_PKGREL" >&2
+                exit 1
+              fi
+              NEW_PKGREL=$(( AUR_PKGREL + 1 ))
               sed -i "s/^pkgrel=.*/pkgrel=$NEW_PKGREL/" "$PACKAGE/PKGBUILD"
               sed -i "s/^\(\tpkgrel = \).*/\1$NEW_PKGREL/" "$PACKAGE/.SRCINFO"
               echo "::notice::Recipe changed for $PKGBASE $VERSION, publishing as pkgrel $NEW_PKGREL."
