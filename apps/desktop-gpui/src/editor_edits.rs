@@ -4669,6 +4669,63 @@ mod tests {
     }
 
     #[test]
+    fn locked_captions_stay_put_through_a_clip_delete_and_a_reopen() {
+        let project = |locked: bool| {
+            let mut project = config(serde_json::json!({
+                "timeline": {
+                    "segments": [
+                        { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 10.0 },
+                        { "recordingSegment": 0, "timescale": 1.0, "start": 10.0, "end": 30.0 }
+                    ],
+                    "zoomSegments": []
+                },
+                "captions": {
+                    "segments": [{
+                        "id": "c0",
+                        "start": 12.0,
+                        "end": 14.0,
+                        "text": "hello there",
+                        "words": [
+                            { "text": "hello", "start": 12.0, "end": 13.0 },
+                            { "text": "there", "start": 13.0, "end": 14.0 }
+                        ]
+                    }],
+                    "settings": {},
+                    "sourceTimed": true
+                }
+            }));
+            if locked {
+                project.locked_tracks = vec![LockableTimelineTrack::Caption];
+            }
+            let durations = [30.0];
+            cap_project::synchronize_captions(&mut project, &durations);
+            let locked_tracks = project.locked_tracks.clone();
+            assert!(with_locked_tracks(
+                project.timeline.as_mut().unwrap(),
+                &locked_tracks,
+                |timeline| delete_clip_segments(timeline, &[0]),
+            ));
+            cap_project::synchronize_captions(&mut project, &durations);
+            let edited = project.timeline.as_ref().unwrap().caption_segments.clone();
+
+            let mut reopened: ProjectConfiguration =
+                serde_json::from_value(serde_json::to_value(&project).unwrap()).unwrap();
+            cap_project::synchronize_captions(&mut reopened, &durations);
+            let reopened = reopened.timeline.unwrap().caption_segments;
+            assert_eq!(reopened.len(), edited.len());
+            (
+                edited[0].start,
+                edited[0].end,
+                reopened[0].start,
+                reopened[0].end,
+            )
+        };
+
+        assert_eq!(project(true), (12.0, 14.0, 12.0, 14.0));
+        assert_eq!(project(false), (2.0, 4.0, 2.0, 4.0));
+    }
+
+    #[test]
     fn deleting_a_masks_only_lane_renumbers_the_lanes_above_it() {
         let mut config = config(serde_json::json!({
             "timeline": {

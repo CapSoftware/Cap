@@ -2525,6 +2525,10 @@ impl EditorWindow {
         let timeline = self.project.timeline.as_ref()?;
         let mut hasher = std::hash::DefaultHasher::new();
         captions.source_timed.hash(&mut hasher);
+        self.project
+            .locked_tracks
+            .contains(&cap_project::LockableTimelineTrack::Caption)
+            .hash(&mut hasher);
         for segment in &captions.segments {
             segment.id.hash(&mut hasher);
             segment.start.to_bits().hash(&mut hasher);

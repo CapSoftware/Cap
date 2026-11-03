@@ -1,8 +1,9 @@
 use crate::caption_words::{MAX_CAPTION_WORD_DURATION, caption_text_from_words};
 use crate::{
-    CaptionSegment, CaptionTrackSegment, CaptionWord, ProjectConfiguration, TimelineConfiguration,
+    CaptionSegment, CaptionTrackSegment, CaptionWord, LockableTimelineTrack, ProjectConfiguration,
+    TimelineConfiguration,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub(crate) fn clip_timeline_offsets(timeline: &TimelineConfiguration) -> Vec<f64> {
     let mut offset = 0.0;
@@ -378,6 +379,9 @@ pub fn derive_caption_track_segments(
 }
 
 pub fn synchronize_captions(project: &mut ProjectConfiguration, recording_durations: &[f64]) {
+    let locked = project
+        .locked_tracks
+        .contains(&LockableTimelineTrack::Caption);
     let (Some(captions), Some(timeline)) = (&mut project.captions, &mut project.timeline) else {
         return;
     };
@@ -438,8 +442,39 @@ pub fn synchronize_captions(project: &mut ProjectConfiguration, recording_durati
             .sort_by(|a, b| a.start.total_cmp(&b.start));
         captions.source_timed = true;
     }
-    timeline.caption_segments =
-        derive_caption_track_segments(&captions.segments, timeline, recording_durations);
+    let derived = derive_caption_track_segments(&captions.segments, timeline, recording_durations);
+    timeline.caption_segments = if locked {
+        keep_locked_caption_positions(&timeline.caption_segments, derived, &captions.segments)
+    } else {
+        derived
+    };
+}
+
+fn keep_locked_caption_positions(
+    current: &[CaptionTrackSegment],
+    derived: Vec<CaptionTrackSegment>,
+    sources: &[CaptionSegment],
+) -> Vec<CaptionTrackSegment> {
+    let source_ids = sources
+        .iter()
+        .map(|source| source.id.as_str())
+        .collect::<HashSet<_>>();
+    let mut kept = current
+        .iter()
+        .filter(|segment| source_ids.contains(source_caption_id(&segment.id)))
+        .cloned()
+        .collect::<Vec<_>>();
+    let placed = kept
+        .iter()
+        .map(|segment| source_caption_id(&segment.id).to_string())
+        .collect::<HashSet<_>>();
+    kept.extend(
+        derived
+            .into_iter()
+            .filter(|segment| !placed.contains(source_caption_id(&segment.id))),
+    );
+    kept.sort_by(|a, b| a.start.total_cmp(&b.start));
+    kept
 }
 
 #[cfg(test)]
@@ -490,6 +525,46 @@ mod tests {
             transcription_source_ranges(Some(&timeline), &[10.0]),
             vec![0.0..4.0, 8.0..10.0]
         );
+    }
+
+    #[test]
+    fn locked_caption_track_keeps_positions_but_follows_source_deletions_and_additions() {
+        let mut project: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "timeline": {
+                "segments": [{ "recordingSegment": 0, "timescale": 1.0, "start": 5.0, "end": 20.0 }],
+                "zoomSegments": [],
+                "captionSegments": [
+                    { "id": "kept", "start": 12.0, "end": 14.0, "text": "kept" },
+                    { "id": "removed", "start": 1.0, "end": 2.0, "text": "removed" }
+                ]
+            },
+            "captions": {
+                "segments": [
+                    { "id": "kept", "start": 12.0, "end": 14.0, "text": "kept" },
+                    { "id": "added", "start": 8.0, "end": 9.0, "text": "added" }
+                ],
+                "settings": {},
+                "sourceTimed": true
+            },
+            "lockedTracks": ["caption"]
+        }))
+        .unwrap();
+
+        synchronize_captions(&mut project, &[20.0]);
+
+        let track = &project.timeline.as_ref().unwrap().caption_segments;
+        assert_eq!(
+            track
+                .iter()
+                .map(|segment| (segment.id.as_str(), segment.start, segment.end))
+                .collect::<Vec<_>>(),
+            vec![("added", 3.0, 4.0), ("kept", 12.0, 14.0)]
+        );
+
+        project.locked_tracks.clear();
+        synchronize_captions(&mut project, &[20.0]);
+        let track = &project.timeline.as_ref().unwrap().caption_segments;
+        assert_eq!((track[1].start, track[1].end), (7.0, 9.0));
     }
 
     #[test]
