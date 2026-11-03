@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use crate::{MaskScalarKeyframe, MaskSegment, MaskVectorKeyframe, XY};
+use crate::{MaskKind, MaskScalarKeyframe, MaskSegment, MaskVectorKeyframe, XY};
 
 const MARKER_TIME_EPSILON: f64 = 1e-3;
 
@@ -93,13 +93,27 @@ impl MaskSegment {
             .map(|(&point, _)| point)
             .collect::<Vec<_>>();
 
+        // Simplifying lets each edge drift up to `tolerance` from the tracked
+        // box, which on a tightly tracked sensitive mask uncovers a sliver of
+        // what it hides. Grow those masks by that much so the error falls
+        // outside the content. Re-tracking a tracked range starts from the
+        // grown box, so repeated runs widen it slightly; that errs towards
+        // hiding more.
+        let margin = match self.mask_type {
+            MaskKind::Sensitive => 2.0 * tolerance,
+            MaskKind::Highlight => 0.0,
+        };
         let outside =
             |time: f64| time < from - MARKER_TIME_EPSILON || time > to + MARKER_TIME_EPSILON;
         self.keyframes.position.retain(|key| outside(key.time));
         self.keyframes.size.retain(|key| outside(key.time));
         for (time, center, size) in markers {
             upsert_vector_keyframe(&mut self.keyframes.position, time, center);
-            upsert_vector_keyframe(&mut self.keyframes.size, time, size);
+            upsert_vector_keyframe(
+                &mut self.keyframes.size,
+                time,
+                XY::new(size.x + margin, size.y + margin),
+            );
         }
     }
 }
@@ -321,10 +335,53 @@ mod tests {
         assert_eq!(mask.rect_at(9.0).0, XY::new(0.7, 0.7));
         let size = mask.rect_at(4.2).1;
         assert!(
-            (size.x - 0.264).abs() < 1e-9 && (size.y - 0.1).abs() < 1e-9,
-            "{size:?}"
+            (size.x - 0.272).abs() < 1e-9 && (size.y - 0.108).abs() < 1e-9,
+            "sensitive masks grow by twice the tolerance: {size:?}"
         );
         assert_eq!(mask.rect_at(0.5).1, XY::new(0.2, 0.2));
+    }
+
+    #[test]
+    fn a_simplified_sensitive_path_still_covers_every_tracked_box() {
+        let path = (0..=60)
+            .map(|step| {
+                let time = f64::from(step) / 30.0;
+                let wobble = 0.003 * (time * 9.0).sin();
+                (
+                    time,
+                    XY::new(0.2 + 0.3 * time + wobble, 0.4 - wobble),
+                    XY::new(0.2 + 0.05 * time, 0.1 + wobble),
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut sensitive = mask();
+        sensitive.apply_tracked_path(&path, 0.003);
+        let mut highlight = mask();
+        highlight.mask_type = MaskKind::Highlight;
+        highlight.apply_tracked_path(&path, 0.003);
+
+        for &(time, center, size) in &path {
+            let (at, grown) = sensitive.rect_at(time);
+            for (tracked, mask) in [
+                (center.x - size.x / 2.0, at.x - grown.x / 2.0),
+                (center.y - size.y / 2.0, at.y - grown.y / 2.0),
+            ] {
+                assert!(
+                    mask <= tracked + 1e-9,
+                    "{time}: edge {mask} inside {tracked}"
+                );
+            }
+            for (tracked, mask) in [
+                (center.x + size.x / 2.0, at.x + grown.x / 2.0),
+                (center.y + size.y / 2.0, at.y + grown.y / 2.0),
+            ] {
+                assert!(
+                    mask >= tracked - 1e-9,
+                    "{time}: edge {mask} inside {tracked}"
+                );
+            }
+        }
+        assert_eq!(highlight.rect_at(0.0).1, path[0].2);
     }
 
     fn old_interpolate_vector(base: XY<f64>, keys: &[MaskVectorKeyframe], time: f64) -> XY<f64> {
