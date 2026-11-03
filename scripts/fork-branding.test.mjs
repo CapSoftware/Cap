@@ -11,6 +11,10 @@ import {
 	logoMarkSvg,
 	masterParts,
 	masterPath,
+	skinMaster,
+	skinNames,
+	skinParts,
+	tileSvg,
 } from "./fork-brand-assets.mjs";
 
 const desktop = new URL("../apps/desktop-gpui/", import.meta.url);
@@ -86,39 +90,103 @@ test("protected asset paths keep the fork side on upstream merges", () => {
 	}
 });
 
-test("the master carries brand.json's palette and nothing else", () => {
-	const master = readFileSync(masterPath, "utf8");
-	assert.equal(
-		applyPalette(master),
-		master,
-		"brand.svg is stale: run node scripts/fork-brand-assets.mjs",
-	);
-	const art = master.slice(master.indexOf("</defs>"));
-	const glyph = art.slice(
-		art.indexOf('<g id="glyph"'),
-		art.indexOf('<g id="wordmark"'),
-	);
-	assert.deepEqual(
-		art.replace(glyph, "").match(/#[0-9a-f]{3,8}\b/gi) ?? [],
-		[],
-		"colours belong in brand.json's palette; paint with url(#token)",
+const everyMaster = () => [
+	{
+		name: "default",
+		master: readFileSync(masterPath, "utf8"),
+		palette: brand.palette,
+	},
+	...skinNames().map((name) => ({ name, ...skinMaster(name) })),
+];
+
+const withoutGroup = (art, id, next) =>
+	art.includes(`<g id="${id}"`)
+		? art.replace(
+				art.slice(art.indexOf(`<g id="${id}"`), art.indexOf(next)),
+				"",
+			)
+		: art;
+
+test("every master carries its palette and nothing else", () => {
+	for (const { name, master, palette } of everyMaster()) {
+		assert.equal(
+			applyPalette(master, palette),
+			master,
+			`${name}'s brand.svg is stale: run node scripts/fork-brand-assets.mjs`,
+		);
+		const art = master.slice(master.indexOf("</defs>"));
+		assert.deepEqual(
+			withoutGroup(art, "glyph", '<g id="wordmark"').match(
+				/#[0-9a-f]{3,8}\b/gi,
+			) ?? [],
+			[],
+			`${name}: colours belong in its palette; paint with url(#token)`,
+		);
+		assert.doesNotMatch(master, /star/i, `${name}: the Worm mark has no star`);
+	}
+});
+
+test("a palette swaps colours without new artwork, in every master", () => {
+	for (const { name, master, palette } of everyMaster()) {
+		const blue = Object.fromEntries(
+			Object.entries(palette).map(([token, value]) => [
+				token,
+				Array.isArray(value) ? value.map(() => "#1E5BD8") : "#1E5BD8",
+			]),
+		);
+		const skinned = applyPalette(master, blue);
+		assert.notEqual(skinned, master, name);
+		assert.equal(
+			skinned.replace(/stop-color="[^"]*"/g, ""),
+			master.replace(/stop-color="[^"]*"/g, ""),
+			name,
+		);
+	}
+});
+
+test("the Commune skin is stored, with its own artwork and every size", () => {
+	assert.ok(skinNames().includes("commune"));
+	const defaultMaster = readFileSync(masterPath, "utf8");
+	for (const name of skinNames()) {
+		const { master } = skinMaster(name);
+		assert.notEqual(
+			masterParts(master, ["mark"]).mark,
+			masterParts(defaultMaster).mark,
+			`${name} has no artwork of its own`,
+		);
+		const parts = skinParts(master, defaultMaster);
+		for (const pixels of [16, 48, 128, 192, 256, 1024]) {
+			const svg = tileSvg(parts, pixels);
+			assert.doesNotMatch(svg, /undefined/, `${name} at ${pixels}`);
+			assert.ok(svg.includes(parts.tile), `${name} at ${pixels}`);
+		}
+	}
+});
+
+test("skins share one menu bar glyph and one wordmark", () => {
+	const defaultMaster = readFileSync(masterPath, "utf8");
+	const shared = masterParts(defaultMaster);
+	for (const name of skinNames()) {
+		const { master } = skinMaster(name);
+		const parts = skinParts(master, defaultMaster);
+		assert.equal(parts.glyph, shared.glyph, name);
+		assert.equal(parts.wordmark, shared.wordmark, name);
+		assert.doesNotMatch(master, /<g id="(glyph|wordmark)"/, name);
+	}
+	assert.throws(
+		() =>
+			skinParts(
+				'<defs></defs>\n<g id="tile">\nx\n</g>\n<g id="mark">\nx\n</g>\n<g id="mark-small">\nx\n</g>\n<g id="mark-tiny">\nx\n</g>\n<g id="glyph">\nx\n</g>\n</svg>',
+				defaultMaster,
+			),
+		/cannot carry its own glyph/,
 	);
 });
 
-test("a skin swaps colours without new artwork", () => {
-	const master = readFileSync(masterPath, "utf8");
-	const blue = Object.fromEntries(
-		Object.entries(brand.palette).map(([token, value]) => [
-			token,
-			Array.isArray(value) ? value.map(() => "#1E5BD8") : "#1E5BD8",
-		]),
-	);
-	const skinned = applyPalette(master, blue);
-	assert.notEqual(skinned, master);
-	assert.equal(
-		skinned.replace(/stop-color="[^"]*"/g, ""),
-		master.replace(/stop-color="[^"]*"/g, ""),
-	);
+test("a stored skin stays out of the shipped app", () => {
+	for (const source of ["src/assets.rs", "src/ux_walk/assets.rs"]) {
+		assert.doesNotMatch(text(source), /skins\//, source);
+	}
 });
 
 test("derived logos and glyphs are what the master generates", () => {
@@ -139,7 +207,6 @@ test("derived logos and glyphs are what the master generates", () => {
 			`${file} is stale: run node scripts/fork-brand-assets.mjs`,
 		);
 	}
-	assert.doesNotMatch(master, /star/i, "the Worm mark has no star");
 });
 
 test("every generated image exists at its size", () => {

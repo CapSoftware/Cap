@@ -22,11 +22,11 @@
 	"default_server_url": "",
 	"long_description": "%app% combines Cap screen recording and editing with UX Walk notes, chapters, transcripts and agent-ready evidence.",
 	"palette": {
-		"field": "#B3130F",
-		"gold": "#FFC61A",
-		"ray": "#FFC61A",
-		"ring": "#B3130F",
-		"soil": "#FFC61A",
+		"field": "#F8F9FB",
+		"edge": "#C4CAD4",
+		"deep": "#0A72E8",
+		"mid": "#1C9DF8",
+		"light": "#39BCFF",
 		"ink": "#12161F",
 		"ink-dark": "#FFFFFF"
 	},
