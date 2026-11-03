@@ -368,6 +368,7 @@ fn ripple_every_track(timeline: &mut TimelineConfiguration, edges: TransitionEdg
     ripple(&mut timeline.scene_segments, edges, shift);
     ripple(&mut timeline.mask_segments, edges, shift);
     ripple(&mut timeline.text_segments, edges, shift);
+    ripple(&mut timeline.shape_segments, edges, shift);
     ripple(&mut timeline.caption_segments, edges, shift);
     ripple(&mut timeline.camera3d_segments, edges, shift);
     for segment in &mut timeline.keyboard_segments {

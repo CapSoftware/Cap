@@ -87,6 +87,7 @@ const FORMATTED: &[&str] = &[
     "ui.selection.image",
     "ui.selection.keyboard",
     "ui.selection.mask",
+    "ui.selection.shape",
     "ui.selection.scene",
     "ui.selection.segments",
     "ui.selection.style",
@@ -1336,6 +1337,16 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             "System Monospace",
         ),
         (tr::ui::selection::select_all(), "Select all"),
+        (tr::editor::canvas::shape(), "Shape"),
+        (tr::editor::timeline::track::shape(), "Shape"),
+        (
+            tr::editor::timeline::remove::shape(),
+            "Remove the Shape track.",
+        ),
+        (
+            tr::editor::timeline::picker::shape(),
+            "Draw arrows, boxes, circles and highlights over your recording.",
+        ),
     ];
     for (translated, literal) in pairs {
         assert_eq!(translated, literal);

@@ -120,6 +120,12 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     // 0.5xx), music, video, rotate-3d, clock, monitor, columns-2, panel-right.
     "box-select.svg",
     "columns-2.svg",
+    // The Shape track's glyphs: Lucide's shapes, highlighter and a slash for
+    // the line, plus a numbered circle for the step badge.
+    "shapes.svg",
+    "highlighter.svg",
+    "slash.svg",
+    "circle-number.svg",
     "monitor-outline.svg",
     "music.svg",
     "panel-right.svg",
