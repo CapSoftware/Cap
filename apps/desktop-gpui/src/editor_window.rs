@@ -14403,6 +14403,29 @@ mod tests {
         }
 
         #[gpui::test]
+        fn split_mode_presses_go_through_a_transition(cx: &mut gpui::TestAppContext) {
+            let (editor, cx) = split_clip(cx);
+            editor.update(cx, |editor, cx| {
+                assert!(crate::editor_clips::set_clip_transition(
+                    editor.project.timeline.as_mut().unwrap(),
+                    1,
+                    cap_project::ClipTransitionType::Zoom,
+                    1.0,
+                ));
+                editor.rebuild_timeline();
+                cx.notify();
+            });
+            cx.run_until_parked();
+            assert!(cx.debug_bounds("clip-transition-1").is_some());
+            editor.update(cx, |editor, cx| editor.toggle_split_mode(cx));
+            cx.run_until_parked();
+            assert!(
+                cx.debug_bounds("clip-transition-1").is_none(),
+                "the band steps aside so the press reaches the split"
+            );
+        }
+
+        #[gpui::test]
         fn dragging_a_transitions_edges_changes_its_length(cx: &mut gpui::TestAppContext) {
             let (editor, cx) = split_clip(cx);
             editor.update(cx, |editor, cx| {

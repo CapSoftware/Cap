@@ -145,7 +145,6 @@ impl EditorWindow {
         self.transition_popover.map(|popover| popover.index)
     }
 
-    /// Opens the popover for the transition into clip `index` at `origin`.
     pub(super) fn open_transition_popover(
         &mut self,
         index: usize,
@@ -301,7 +300,6 @@ impl EditorWindow {
         cx.notify();
     }
 
-    /// A press on one edge of the transition into clip `index`.
     fn press_transition_edge(
         &mut self,
         index: usize,
@@ -386,9 +384,6 @@ impl EditorWindow {
         }
     }
 
-    /// The clip row's transition affordances: every transition as a
-    /// clickable band with draggable edges, and a `+` at each cut next to
-    /// the hovered clip.
     pub(super) fn render_transition_overlays(
         &self,
         model: &timeline::TimelineModel,
@@ -422,6 +417,7 @@ impl EditorWindow {
             };
             let x = ((clip.start - position) / secs_per_pixel) as f32;
             match transition_in {
+                Some(_) if self.split_mode => {}
                 Some((seconds, kind)) => {
                     let width = (*seconds / secs_per_pixel) as f32;
                     let band_width = width.max(TRANSITION_EDGE_PX * 2. + 2.);

@@ -280,7 +280,6 @@ pub(crate) fn max_transition_duration(
     }
 }
 
-/// Whether the cut before clip `segment_index` has room for a transition.
 pub(crate) fn can_add_transition(timeline: &TimelineConfiguration, segment_index: usize) -> bool {
     segment_index > 0
         && max_transition_duration(timeline, segment_index)
