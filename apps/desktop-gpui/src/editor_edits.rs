@@ -1698,23 +1698,55 @@ pub fn cut_clip_range(
 
 /// The inverse ripple: every track item at or past `boundary` (output time)
 /// moves later by `shift`, and one spanning it grows, the way trimming a clip
-/// back out pushes everything after it.
-pub fn ripple_insert_output_tracks(
-    timeline: &mut TimelineConfiguration,
-    boundary: f64,
-    shift: f64,
-) {
+/// back out pushes everything after it. Keyframes inside a growing mask or 3D
+/// shot move with the material after the boundary instead of stretching.
+pub fn ripple_insert_output_tracks(timeline: &mut TimelineConfiguration, boundary: f64, shift: f64) {
     use crate::editor_clips::{ripple_keyboard_track, ripple_track};
     ripple_track(&mut timeline.style_segments, boundary, shift);
     ripple_track(&mut timeline.image_segments, boundary, shift);
     ripple_track(&mut timeline.zoom_segments, boundary, shift);
     ripple_track(&mut timeline.scene_segments, boundary, shift);
-    ripple_track(&mut timeline.mask_segments, boundary, shift);
     ripple_track(&mut timeline.text_segments, boundary, shift);
     ripple_track(&mut timeline.caption_segments, boundary, shift);
-    ripple_track(&mut timeline.camera3d_segments, boundary, shift);
     ripple_keyboard_track(&mut timeline.keyboard_segments, boundary, shift);
     ripple_track(&mut timeline.audio_segments, boundary, shift);
+    for segment in &mut timeline.mask_segments {
+        if segment.start >= boundary {
+            segment.start += shift;
+            segment.end += shift;
+        } else if segment.end > boundary {
+            let local = boundary - segment.start;
+            for time in segment
+                .keyframes
+                .position
+                .iter_mut()
+                .map(|key| &mut key.time)
+                .chain(segment.keyframes.size.iter_mut().map(|key| &mut key.time))
+                .chain(segment.keyframes.intensity.iter_mut().map(|key| &mut key.time))
+            {
+                if *time >= local {
+                    *time += shift;
+                }
+            }
+            segment.end += shift;
+        }
+    }
+    for segment in &mut timeline.camera3d_segments {
+        if segment.start >= boundary {
+            segment.start += shift;
+            segment.end += shift;
+        } else if segment.end > boundary {
+            let local = boundary - segment.start;
+            for track in segment.tracks.all_tracks_mut() {
+                for keyframe in track.iter_mut() {
+                    if keyframe.time >= local {
+                        keyframe.time += shift;
+                    }
+                }
+            }
+            segment.end += shift;
+        }
+    }
 }
 
 /// The seven plain splits. 3D is **not** among them: `splitCamera3DSegment`
