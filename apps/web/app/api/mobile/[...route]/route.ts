@@ -2577,7 +2577,7 @@ const readHeader = (
 	}
 };
 
-/** Mirrors /api/analytics/track for signed-in viewers watching in the app. */
+/** Mirrors the share page's view tracking for signed-in viewers watching in the app. */
 const trackMobileCapView = Effect.fn("Mobile.trackCapView")(function* (
 	videoId: Video.VideoId,
 	sessionId: string,
@@ -2636,6 +2636,12 @@ const trackMobileCapView = Effect.fn("Mobile.trackCapView")(function* (
 			},
 		])
 		.pipe(Effect.catchAll(() => Effect.void));
+
+	yield* Effect.forkDaemon(
+		Effect.tryPromise(() =>
+			createNotification({ type: "view", videoId, authorId: user.id }),
+		).pipe(Effect.catchAll(() => Effect.void)),
+	);
 
 	if (
 		video.createdAt >= MOBILE_FIRST_VIEW_EMAIL_CUTOFF &&
