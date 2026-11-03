@@ -236,8 +236,6 @@ pub struct Playback {
     pub music: crate::audio::MusicTracks,
     pub audio_output: Arc<AudioOutput>,
     pub telemetry: Option<PlaybackTelemetry>,
-    /// Wall-clock speed multiplier for editing review (J/K/L shuttle). The
-    /// audio output consumes source audio at the same rate, keeping pitch.
     pub playback_rate: f64,
 }
 

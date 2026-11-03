@@ -9,7 +9,6 @@ const FINE_STEP: usize = 2;
 /// consumed audio once more than four grains are behind), with room for one
 /// 4x hop and a refill. Reserved up front so the audio callback never grows it.
 const INPUT_CAPACITY_FRAMES: usize = GRAIN_FRAMES * 8 + 1024;
-/// Output frames queued at most: one device block plus a hop.
 const READY_CAPACITY_FRAMES: usize = 8192 + HOP_FRAMES;
 
 /// Streaming WSOLA time-stretcher for interleaved f32 audio: consumes source
@@ -69,7 +68,6 @@ impl TimeStretch {
         self.input_offset + self.input.len() / self.channels
     }
 
-    /// Absolute source frame the next hop needs available.
     pub fn frames_needed(&self) -> usize {
         let target = self.analysis_frame as usize + SEARCH_FRAMES;
         let natural = self.previous_frame.map_or(0, |frame| frame + HOP_FRAMES);
@@ -92,7 +90,6 @@ impl TimeStretch {
         self.ready.pop_front()
     }
 
-    /// Source seconds already pulled from the buffer but not yet heard.
     pub fn pending_source_secs(&self, sample_rate: u32) -> f64 {
         let unconsumed = self.input_frames() as f64 - self.analysis_frame;
         let queued = (self.ready.len() / self.channels) as f64 * self.rate;

@@ -996,6 +996,7 @@ pub struct Desired {
     pub seek: Option<u32>,
     pub seek_gen: u64,
     pub resolution: XY<u32>,
+    pub rate: f64,
 }
 
 impl Default for Desired {
@@ -1005,8 +1006,15 @@ impl Default for Desired {
             seek: None,
             seek_gen: 0,
             resolution: default_preview_resolution(),
+            rate: 1.0,
         }
     }
+}
+
+// A running session plays at the rate it started with, so a new rate needs a
+// fresh session even when the UI's pause and play collapsed into one write.
+fn rate_needs_restart(applied_playing: bool, applied_rate: f64, want: &Desired) -> bool {
+    applied_playing && want.playing && want.rate.to_bits() != applied_rate.to_bits()
 }
 
 /// The UI half. Cheap to clone, safe to call from the main thread: writing it
@@ -1070,6 +1078,10 @@ impl TransportHandle {
         self.modify(|desired| desired.resolution = resolution);
     }
 
+    pub fn set_rate(&self, rate: f64) {
+        self.modify(|desired| desired.rate = rate);
+    }
+
     pub fn play_from(&self, frame: u32) {
         self.modify(|desired| {
             desired.playing = true;
@@ -1102,6 +1114,7 @@ pub async fn run_transport(instance: Arc<EditorInstance>, driver: TransportDrive
     let fps = EDITOR_PREVIEW_FPS;
     let mut applied_playing = false;
     let mut applied_gen = 0u64;
+    let mut applied_rate = 1.0f64;
     // The engine's own liveness, epoch-guarded inside `EditorInstance` so a
     // deliberate stop/start transition can never masquerade as a death.
     let mut active_rx = instance.playback_watch();
@@ -1148,7 +1161,9 @@ pub async fn run_transport(instance: Arc<EditorInstance>, driver: TransportDrive
         // instead of paying stop/warmup/audio-attach per tick -- the round
         // trip the source pays in `seekPlayheadTo`
         // (`Timeline/index.tsx:829-853`).
-        if applied_playing && !want.playing {
+        if (applied_playing && !want.playing)
+            || rate_needs_restart(applied_playing, applied_rate, &want)
+        {
             applied_playing = false;
             let handle = {
                 let mut state = instance.state.lock().await;
@@ -1197,6 +1212,8 @@ pub async fn run_transport(instance: Arc<EditorInstance>, driver: TransportDrive
         }
 
         if want.playing && !applied_playing {
+            instance.set_playback_rate(want.rate);
+            applied_rate = want.rate;
             match instance
                 .start_playback_with_handle(fps, want.resolution, None)
                 .await
@@ -3288,8 +3305,8 @@ impl EditorWindow {
 
     fn set_playback_rate(&mut self, rate: f64) {
         self.playback_rate = rate;
-        if let Some(instance) = &self.instance {
-            instance.set_playback_rate(rate);
+        if let Some(transport) = &self.transport {
+            transport.set_rate(rate);
         }
     }
 
@@ -11880,8 +11897,6 @@ const MAX_PLAYHEAD_EXTRAPOLATION: f64 = 0.25;
 /// back: the "playhead jumps on play, then goes back" glitch. So: no epoch
 /// sample yet, no extrapolation -- the line holds still, which is exactly
 /// what the engine is doing.
-/// `rate` is the shuttle speed: the timeline advances `rate` seconds per
-/// wall-clock second, so the glide (and its cap) scale with it.
 fn playhead_extrapolation(
     playing: bool,
     epoch_has_sample: bool,
@@ -11899,7 +11914,6 @@ fn playhead_extrapolation(
     since_last_sample.clamp(0.0, MAX_PLAYHEAD_EXTRAPOLATION) * rate
 }
 
-/// The transport's speed badge: "2x", "0.5x".
 fn shuttle_rate_label(rate: f64) -> String {
     let text = format!("{rate:.2}");
     format!("{}x", text.trim_end_matches('0').trim_end_matches('.'))
@@ -14603,6 +14617,21 @@ mod tests {
     }
 
     #[test]
+    fn a_shuttle_speed_change_restarts_even_when_pause_and_play_collapse() {
+        let (handle, driver, _stopped) = transport();
+        handle.play_from(60);
+        handle.set_rate(2.0);
+        handle.pause();
+        handle.play_from(90);
+        let want = *driver.desired.lock().unwrap();
+        assert!(want.playing);
+        assert_eq!(want.rate, 2.0);
+        assert!(rate_needs_restart(true, 1.0, &want));
+        assert!(!rate_needs_restart(true, 2.0, &want));
+        assert!(!rate_needs_restart(false, 1.0, &want));
+    }
+
+    #[test]
     fn the_speed_badge_reads_like_the_shuttle_rates() {
         assert_eq!(shuttle_rate_label(2.0), "2x");
         assert_eq!(shuttle_rate_label(0.5), "0.5x");
@@ -14619,7 +14648,6 @@ mod tests {
             playhead_extrapolation(true, true, 3.0, 1.0),
             MAX_PLAYHEAD_EXTRAPOLATION
         );
-        // Shuttling: the line glides at the playback speed.
         assert_eq!(playhead_extrapolation(true, true, 0.016, 2.0), 0.032);
         assert_eq!(playhead_extrapolation(true, true, 0.016, 0.5), 0.008);
         assert_eq!(
