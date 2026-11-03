@@ -131,19 +131,28 @@ fn simplify_path(
     let (start_time, start_center, start_size) = path[first];
     let (end_time, end_center, end_size) = path[last];
     let span = (end_time - start_time).max(1e-9);
-    let deviation = |start: XY<f64>, end: XY<f64>, point: XY<f64>, t: f64| {
-        (point.x - (start.x + (end.x - start.x) * t))
-            .hypot(point.y - (start.y + (end.y - start.y) * t))
+    // A mask edge sits at the centre plus or minus half the size, so centre
+    // and size errors add at an edge. Measuring each of the four edges keeps
+    // every edge of the simplified path within `tolerance` of the tracked box.
+    let edges = |center: XY<f64>, size: XY<f64>| {
+        [
+            center.x - size.x / 2.0,
+            center.x + size.x / 2.0,
+            center.y - size.y / 2.0,
+            center.y + size.y / 2.0,
+        ]
     };
+    let (start_edges, end_edges) = (edges(start_center, start_size), edges(end_center, end_size));
     let (farthest, distance) = (first + 1..last)
         .map(|index| {
             let (time, center, size) = path[index];
             let t = (time - start_time) / span;
-            (
-                index,
-                deviation(start_center, end_center, center, t)
-                    .max(deviation(start_size, end_size, size, t) / 2.0),
-            )
+            let deviation = edges(center, size)
+                .into_iter()
+                .zip(start_edges.into_iter().zip(end_edges))
+                .map(|(edge, (start, end))| (edge - (start + (end - start) * t)).abs())
+                .fold(0.0, f64::max);
+            (index, deviation)
         })
         .fold((first, 0.0), |best, candidate| {
             if candidate.1 > best.1 {
@@ -382,6 +391,26 @@ mod tests {
             }
         }
         assert_eq!(highlight.rect_at(0.0).1, path[0].2);
+    }
+
+    #[test]
+    fn centre_and_size_errors_that_add_at_an_edge_still_keep_the_sample() {
+        // Each error alone is under the tolerance, but together they move
+        // the left edge past it.
+        let path = [
+            (0.0, XY::new(0.5, 0.5), XY::new(0.2, 0.2)),
+            (1.0, XY::new(0.4976, 0.5), XY::new(0.2048, 0.2)),
+            (2.0, XY::new(0.5, 0.5), XY::new(0.2, 0.2)),
+        ];
+        let mut sensitive = mask();
+        sensitive.apply_tracked_path(&path, 0.003);
+        let (center, size) = sensitive.rect_at(1.0);
+        let tracked_left = path[1].1.x - path[1].2.x / 2.0;
+        assert!(
+            center.x - size.x / 2.0 <= tracked_left + 1e-9,
+            "mask left {} uncovers tracked left {tracked_left}",
+            center.x - size.x / 2.0
+        );
     }
 
     fn old_interpolate_vector(base: XY<f64>, keys: &[MaskVectorKeyframe], time: f64) -> XY<f64> {
