@@ -1,13 +1,8 @@
 name: "Docker Release Images"
 
-# Publishes versioned self-hosting images (cap-web:x.y.z, cap-media-server:x.y.z)
-# for every stable cap-v{version} release.
-#
 # desktop-release.yml creates the cap-v tag with GITHUB_TOKEN, so a `push: tags`
-# trigger would never fire. Instead this checks once a day for a stable release
-# whose images are missing and dispatches the existing Docker workflows on that
-# tag (workflow_dispatch is one of the events GITHUB_TOKEN may trigger). Nothing
-# runs when the images already exist, and `latest` is left untouched.
+# trigger would never fire. workflow_dispatch is one of the events GITHUB_TOKEN
+# may trigger, hence the daily check that dispatches the existing Docker workflows.
 
 on:
   schedule:
@@ -65,9 +60,14 @@ jobs:
           for pair in cap-web:docker-build-web.yml cap-media-server:docker-build-media-server.yml; do
             image="ghcr.io/${owner}/${pair%%:*}:${version}"
             workflow="${pair#*:}"
-            if docker buildx imagetools inspect "$image" >/dev/null 2>&1; then
+            if inspect="$(docker buildx imagetools inspect "$image" 2>&1)"; then
               echo "${image} already exists"
               continue
+            fi
+            # Rebuilding over a pinned version tag is worse than skipping a day.
+            if [[ "$inspect" != *": not found" ]]; then
+              echo "::error::Cannot check ${image}: ${inspect}"
+              exit 1
             fi
             # A build started yesterday may still be running; don't queue a second one.
             running="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$workflow" --branch "$tag" \
