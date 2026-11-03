@@ -99,6 +99,9 @@ fn sd_round_rect(p: vec2<f32>, half_size: vec2<f32>, radius: f32) -> f32 {
 fn sd_ellipse(p: vec2<f32>, ab: vec2<f32>) -> f32 {
     let r = max(ab, vec2<f32>(1.0e-3));
     let pa = abs(p);
+    if (dot(pa, pa) < 1.0e-12) {
+        return -min(r.x, r.y);
+    }
     var t = vec2<f32>(0.70710678, 0.70710678);
     for (var i = 0; i < 4; i = i + 1) {
         let xy = r * t;

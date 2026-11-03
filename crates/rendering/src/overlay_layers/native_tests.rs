@@ -1045,6 +1045,43 @@ async fn every_shape_kind_draws_its_outline_and_leaves_the_rest() {
 }
 
 #[tokio::test]
+async fn a_circle_centred_on_a_pixel_leaves_its_centre_clear() {
+    use cap_project::ShapeKind;
+    let directory = tempfile::tempdir().unwrap();
+    let constants = constants(directory.path()).await;
+    let mut layers = RendererLayers::new(&constants.device, &constants.queue);
+    let resolution = XY::new(640, 480);
+    let base = render_frame(&constants, &mut layers, &project(), resolution).await;
+    let (width, height) = (base.width as f64, base.height as f64);
+    let (cx, cy, radius) = (
+        (base.width / 2) as f64 + 0.5,
+        (base.height / 2) as f64 + 0.5,
+        100.0,
+    );
+    let circle = red_shape(
+        ShapeKind::Ellipse,
+        ((cx - radius) / width, (cy - radius) / height),
+        ((cx + radius) / width, (cy + radius) / height),
+    );
+    let frame = render_frame(
+        &constants,
+        &mut layers,
+        &with_shapes(vec![circle]),
+        resolution,
+    )
+    .await;
+    assert!(close(
+        frame.at((cx - radius) / width, cy / height),
+        [255, 0, 0],
+        2
+    ));
+    assert_eq!(
+        frame.at(cx / width, cy / height),
+        base.at(cx / width, cy / height)
+    );
+}
+
+#[tokio::test]
 async fn shapes_match_across_output_resolutions() {
     use cap_project::ShapeKind;
     let directory = tempfile::tempdir().unwrap();
