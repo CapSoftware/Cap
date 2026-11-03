@@ -36,6 +36,8 @@ const FORMATTED: &[&str] = &[
     "editor.panel.style_presets.font_missing",
     "editor.panel.style_presets.mask.applied_all",
     "editor.panel.style_presets.mask.apply_all",
+    "editor.panel.style_presets.shape.applied_all",
+    "editor.panel.style_presets.shape.apply_all",
     "editor.panel.style_presets.style.applied_all",
     "editor.panel.style_presets.style.apply_all",
     "editor.panel.style_presets.text_segment.applied_all",
@@ -917,6 +919,18 @@ fn editor_panels_match_the_literals_they_replaced() {
             "New style segments use this style",
         ),
         (
+            tr::editor::panel::style_presets::shape::default_name(),
+            "My shape style",
+        ),
+        (
+            tr::editor::panel::style_presets::shape::use_for_new(),
+            "Use for new shapes",
+        ),
+        (
+            tr::editor::panel::style_presets::shape::used_for_new(),
+            "New shapes use this style",
+        ),
+        (
             tr::editor::panel::style_presets::text_segment::default_name(),
             "My text style",
         ),
@@ -1011,6 +1025,14 @@ fn style_preset_messages_format_their_arguments() {
     assert_eq!(
         tr::editor::panel::style_presets::style::applied_all(3),
         "Applied to all style segments (3)"
+    );
+    assert_eq!(
+        tr::editor::panel::style_presets::shape::apply_all(5),
+        "Apply to all shapes (5)"
+    );
+    assert_eq!(
+        tr::editor::panel::style_presets::shape::applied_all(5),
+        "Applied to all shapes (5)"
     );
 }
 

@@ -2039,6 +2039,13 @@ default_name = { text = "My mask style", context = "Suggested name for a new mas
 use_for_new = "Use for new masks"
 used_for_new = "New masks use this style"
 
+[editor.panel.style_presets.shape]
+applied_all = { text = "Applied to all shapes ({number})", context = "{number} is how many shapes the project has." }
+apply_all = { text = "Apply to all shapes ({number})", context = "{number} is how many shapes the project has." }
+default_name = { text = "My shape style", context = "Suggested name for a new shape style preset." }
+use_for_new = "Use for new shapes"
+used_for_new = "New shapes use this style"
+
 [editor.panel.style_presets.style]
 applied_all = { text = "Applied to all style segments ({number})", context = "{number} is how many style segments the project has." }
 apply_all = { text = "Apply to all style segments ({number})", context = "{number} is how many style segments the project has." }

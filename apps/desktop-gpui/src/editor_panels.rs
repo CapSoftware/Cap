@@ -4286,6 +4286,7 @@ impl EditorWindow {
             TrackKind::Shape => self.stacked_panel(
                 "shape",
                 "shape",
+                Some(crate::style_presets::PresetKind::Shape),
                 count(timeline.shape_segments.len()),
                 cx,
                 |this, index, cx| this.render_shape_panel(index, cx),

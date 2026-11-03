@@ -980,7 +980,13 @@ impl EditorWindow {
         end: f64,
         lane: u32,
     ) -> ShapeSegment {
-        let mut segment = ShapeSegment::new(kind, start, end, center, self.shape_output_aspect());
+        let mut segment = crate::style_presets::new_shape_segment(
+            kind,
+            start,
+            end,
+            center,
+            self.shape_output_aspect(),
+        );
         segment.track = lane;
         if kind == ShapeKind::Badge {
             segment.number = cap_project::next_badge_number(self.shape_segments());
