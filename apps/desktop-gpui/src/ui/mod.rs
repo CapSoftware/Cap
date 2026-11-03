@@ -101,7 +101,7 @@ pub use number_field::{
     NumberChange, NumberField, NumberFieldState, NumberLimits, format_number, parse_number,
 };
 #[allow(unused_imports)]
-pub use position_pad::{PAD_HEIGHT, PositionPad, pad_position};
+pub use position_pad::{PAD_HEIGHT, PadBackdrop, PositionPad, pad_position};
 #[allow(unused_imports)]
 pub use progress::CircularProgress;
 #[allow(unused_imports)]

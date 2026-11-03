@@ -822,6 +822,7 @@ pub struct SidebarState {
     /// The live pad drag, and whether it is holding a `history.pause()`.
     pub pad_drag: Option<PadKey>,
     pub voice_eq: crate::editor_voice_eq::VoiceEqView,
+    pub(crate) zoom_frame: crate::editor_panels::ZoomFocalFrame,
 
     /// `ColorCorrectionSection`'s `adjustOpen` signal -- one per instance, so
     /// the Background tab's and the Camera tab's open independently.
@@ -929,6 +930,7 @@ impl SidebarState {
             pads: std::cell::RefCell::new(HashMap::new()),
             pad_drag: None,
             voice_eq: crate::editor_voice_eq::VoiceEqView::default(),
+            zoom_frame: Default::default(),
             grade_adjust: [CollapsibleState::new(false), CollapsibleState::new(false)],
             camera_shadow_open: CollapsibleState::new(false),
             cursor_physics_open: CollapsibleState::new(!config.cursor.raw),

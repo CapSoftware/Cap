@@ -22,16 +22,20 @@
 //! multi-select case draws the header **and nothing else** -- reproduced, not
 //! filled in.
 
+use std::sync::Arc;
+
 use cap_project::{
     AudioTrackSegment, Camera3DBlur, Camera3DBlurMode, Camera3DKeyframe, Camera3DProperties,
-    Camera3DSegment, CaptionTrackSegment, KeyboardTrackSegment, MaskKind, MaskSegment, SceneMode,
-    SceneSegment, SplitLayout, TextAlign, TextAnimation, TextBackgroundStyle, TextLayout,
-    TextSegment, TimelineConfiguration, XY, ZoomMode, ZoomSegment, mask_effect_contract,
+    Camera3DSegment, CaptionTrackSegment, KeyboardTrackSegment, MaskKind, MaskSegment,
+    ProjectConfiguration, SceneMode, SceneSegment, SplitLayout, TextAlign, TextAnimation,
+    TextBackgroundStyle, TextLayout, TextSegment, TimelineConfiguration, XY, ZoomMode, ZoomSegment,
+    mask_effect_contract,
 };
 use gpui::{
-    AnyElement, AppContext, Context, Entity, FontWeight, Hsla, InteractiveElement, IntoElement,
-    MouseDownEvent, ParentElement, SharedString, StatefulInteractiveElement, Styled, Window, div,
-    prelude::FluentBuilder, px, svg,
+    AnyElement, AppContext, Bounds, Context, Entity, FontWeight, Hsla, InteractiveElement,
+    IntoElement, MouseDownEvent, ParentElement, RenderImage, SharedString,
+    StatefulInteractiveElement, Styled, Window, canvas, div, point, prelude::FluentBuilder, px,
+    size, svg,
 };
 
 use crate::{
@@ -4141,6 +4145,15 @@ impl EditorWindow {
     }
 
     fn render_pad(&self, key: PadKey, cx: &mut Context<Self>) -> AnyElement {
+        self.render_pad_with(key, None, cx)
+    }
+
+    fn render_pad_with(
+        &self,
+        key: PadKey,
+        backdrop: Option<ui::PadBackdrop>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let (x, y) = self.pad_value(key);
         ui::PositionPad::plain(
             &self.theme,
@@ -4149,12 +4162,67 @@ impl EditorWindow {
             y,
             self.sidebar.pad(key),
         )
+        .backdrop(backdrop)
         .on_press(
             cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                 this.pad_mouse_down(key, event, window, cx);
             }),
         )
         .into_any_element()
+    }
+}
+
+const ZOOM_FRAME_MAX_WIDTH: u32 = 768;
+
+type ZoomFrameKey = (u32, i64);
+
+#[derive(Default)]
+pub(crate) struct ZoomFocalFrame {
+    shown: Option<ZoomFrameKey>,
+    image: Option<Arc<RenderImage>>,
+    loading: bool,
+}
+
+impl ZoomFocalFrame {
+    fn holds(&self, key: ZoomFrameKey) -> bool {
+        self.shown == Some(key)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ZoomFrameSource {
+    recording_clip: u32,
+    source_time: f64,
+}
+
+impl ZoomFrameSource {
+    fn at(project: &ProjectConfiguration, start: f64) -> Option<Self> {
+        let (source_time, segment) = project.get_segment_time(start)?;
+        Some(Self {
+            recording_clip: segment.recording_clip,
+            source_time,
+        })
+    }
+
+    fn key(self) -> ZoomFrameKey {
+        (
+            self.recording_clip,
+            (self.source_time * 1000.).round() as i64,
+        )
+    }
+}
+
+fn zoom_frame_crop(
+    project: &ProjectConfiguration,
+    start: f64,
+    (width, height): (u32, u32),
+) -> Bounds<f32> {
+    match &project.style_at(start).background.crop {
+        Some(crop) => Bounds::new(
+            point(crop.position.x as f32, crop.position.y as f32),
+            size(crop.size.x as f32, crop.size.y as f32),
+        ),
+        None => Bounds::new(point(0., 0.), size(width as f32, height as f32)),
     }
 }
 
@@ -4449,10 +4517,109 @@ impl EditorWindow {
                             },
                         ))
                         .child(self.zoom_mode_helper(manual, cx))
-                        .children(manual.then(|| self.render_pad(PadKey::ZoomManual(index), cx))),
+                        .children(manual.then(|| self.render_zoom_focal_pad(index, cx))),
                 ),
             )
             .into_any_element()
+    }
+
+    fn render_zoom_focal_pad(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
+        let backdrop = self.zoom_pad_backdrop(index);
+        let request = backdrop
+            .as_ref()
+            .map(|(source, _)| *source)
+            .filter(|source| !self.sidebar.zoom_frame.holds(source.key()));
+        let editor = cx.weak_entity();
+        div()
+            .relative()
+            .child(self.render_pad_with(
+                PadKey::ZoomManual(index),
+                backdrop.map(|(_, backdrop)| backdrop),
+                cx,
+            ))
+            .children(request.map(|source| {
+                canvas(
+                    move |_, window, cx| {
+                        editor
+                            .update(cx, |editor, cx| {
+                                editor.request_zoom_frame(source, window, cx);
+                            })
+                            .ok();
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .size_0()
+            }))
+            .into_any_element()
+    }
+
+    fn zoom_pad_backdrop(&self, index: usize) -> Option<(ZoomFrameSource, ui::PadBackdrop)> {
+        let instance = self.instance.as_ref()?;
+        let start = self.timeline()?.zoom_segments.get(index)?.start;
+        let source = ZoomFrameSource::at(&self.project, start)?;
+        let display = &instance
+            .recordings
+            .segments
+            .get(source.recording_clip as usize)?
+            .display;
+        let frame_size = (display.width, display.height);
+        Some((
+            source,
+            ui::PadBackdrop {
+                image: self.sidebar.zoom_frame.image.clone(),
+                frame_size: (display.width as f32, display.height as f32),
+                crop: zoom_frame_crop(&self.project, start, frame_size),
+            },
+        ))
+    }
+
+    fn request_zoom_frame(
+        &mut self,
+        source: ZoomFrameSource,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let key = source.key();
+        let state = &mut self.sidebar.zoom_frame;
+        if state.loading || state.holds(key) {
+            return;
+        }
+        state.loading = true;
+        let project_path = self.project_path.clone();
+        cx.spawn_in(window, async move |this, cx| {
+            let decoded = cx
+                .background_executor()
+                .spawn(async move {
+                    crate::editor_clips::decode_clip_thumbnail(
+                        &project_path,
+                        source.recording_clip,
+                        source.source_time,
+                        ZOOM_FRAME_MAX_WIDTH,
+                    )
+                })
+                .await;
+            this.update_in(cx, |this, window, cx| {
+                let image = decoded
+                    .inspect_err(|error| {
+                        tracing::warn!(
+                            segment = key.0,
+                            source_ms = key.1,
+                            "zoom focal frame decode failed: {error}"
+                        );
+                    })
+                    .ok();
+                let state = &mut this.sidebar.zoom_frame;
+                state.loading = false;
+                state.shown = Some(key);
+                if let Some(previous) = std::mem::replace(&mut state.image, image) {
+                    let _ = window.drop_image(previous);
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// `ZoomMultiSegmentConfig` (`:5882-6080`): one set of controls that writes
@@ -8504,6 +8671,53 @@ mod tests {
     }
 
     use super::*;
+
+    fn split_project() -> ProjectConfiguration {
+        serde_json::from_value(serde_json::json!({
+            "timeline": {
+                "segments": [
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 5.0 },
+                    { "recordingSegment": 1, "timescale": 1.0, "start": 10.0, "end": 20.0 }
+                ],
+                "zoomSegments": []
+            }
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn zoom_frame_source_follows_the_clip_under_the_zoom_start() {
+        let project = split_project();
+        assert_eq!(
+            ZoomFrameSource::at(&project, 2.),
+            Some(ZoomFrameSource {
+                recording_clip: 0,
+                source_time: 2.,
+            })
+        );
+        let later = ZoomFrameSource::at(&project, 7.).unwrap();
+        assert_eq!(later.recording_clip, 1);
+        assert!((later.source_time - 12.).abs() < 1e-9);
+        assert_eq!(later.key(), (1, 12_000));
+        assert_eq!(ZoomFrameSource::at(&project, 30.), None);
+    }
+
+    #[test]
+    fn zoom_frame_crop_uses_the_project_crop_or_the_whole_frame() {
+        let mut project = split_project();
+        assert_eq!(
+            zoom_frame_crop(&project, 1., (1920, 1080)),
+            Bounds::new(point(0., 0.), size(1920., 1080.))
+        );
+        project.background.crop = Some(cap_project::Crop {
+            position: XY::new(100, 50),
+            size: XY::new(800, 600),
+        });
+        assert_eq!(
+            zoom_frame_crop(&project, 1., (1920, 1080)),
+            Bounds::new(point(100., 50.), size(800., 600.))
+        );
+    }
 
     #[test]
     fn keyboard_start_field_preserves_keypress_times() {
