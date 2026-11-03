@@ -151,6 +151,7 @@ impl<S: PresetStyle> StylePresets<S> {
 
         let mut presets: Vec<StylePreset<S>> = Vec::with_capacity(entries.len());
         let mut unreadable = Vec::new();
+        let mut positions = Vec::with_capacity(entries.len());
         for (position, entry) in entries.iter().enumerate() {
             match StylePreset::<S>::from_value(entry, position) {
                 Some(mut preset) => {
@@ -160,6 +161,7 @@ impl<S: PresetStyle> StylePresets<S> {
                         preset.id = format!("{base}-{suffix}");
                         suffix += 1;
                     }
+                    positions.push((position, preset.id.clone()));
                     presets.push(preset);
                 }
                 None => unreadable.push(entry.clone()),
@@ -171,8 +173,12 @@ impl<S: PresetStyle> StylePresets<S> {
             Some(Value::Number(index)) => index
                 .as_u64()
                 .and_then(|index| usize::try_from(index).ok())
-                .and_then(|index| presets.get(index))
-                .map(|preset| preset.id.clone()),
+                .and_then(|index| {
+                    positions
+                        .iter()
+                        .find(|(position, _)| *position == index)
+                        .map(|(_, id)| id.clone())
+                }),
             _ => None,
         };
 
@@ -1325,6 +1331,22 @@ mod tests {
         let by_index = json!({ "presets": legacy, "default": 1 });
         let presets = StylePresets::<TextStyle>::from_value(&by_index);
         assert_eq!(presets.default_preset().unwrap().name, "Two");
+
+        let after_garbage = json!({
+            "presets": ["garbage", { "name": "A", "style": {} }, { "name": "B", "style": {} }],
+            "default": 1
+        });
+        let presets = StylePresets::<TextStyle>::from_value(&after_garbage);
+        assert_eq!(presets.default_preset().unwrap().name, "A");
+        let pointing_at_garbage = json!({
+            "presets": ["garbage", { "name": "A", "style": {} }],
+            "default": 0
+        });
+        assert!(
+            StylePresets::<TextStyle>::from_value(&pointing_at_garbage)
+                .default_preset()
+                .is_none()
+        );
 
         for bad in [
             json!("text"),
