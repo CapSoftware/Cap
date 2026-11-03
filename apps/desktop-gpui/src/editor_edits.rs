@@ -1130,7 +1130,38 @@ pub fn delete_track_lane_and_order(
             true
         }
     });
-    timeline_changed || order_changed
+    let names_changed = matches!(
+        kind,
+        TrackKind::Style | TrackKind::Image | TrackKind::Text | TrackKind::Mask | TrackKind::Audio
+    ) && delete_track_name(&mut project.track_names, kind, lane);
+    timeline_changed || order_changed || names_changed
+}
+
+fn delete_track_name(
+    names: &mut std::collections::BTreeMap<String, String>,
+    kind: TrackKind,
+    deleted: u32,
+) -> bool {
+    let prefix = format!("{}:", kind.name_key());
+    let lanes: Vec<(u32, String)> = names
+        .iter()
+        .filter_map(|(key, name)| {
+            let lane = key.strip_prefix(&prefix)?.parse::<u32>().ok()?;
+            (lane >= deleted).then(|| (lane, name.clone()))
+        })
+        .collect();
+    if lanes.is_empty() {
+        return false;
+    }
+    for (lane, _) in &lanes {
+        names.remove(&format!("{prefix}{lane}"));
+    }
+    for (lane, name) in lanes {
+        if lane > deleted {
+            names.insert(format!("{prefix}{}", lane - 1), name);
+        }
+    }
+    true
 }
 
 pub fn reorder_overlay_track(
@@ -1153,6 +1184,103 @@ pub fn reorder_overlay_track(
     true
 }
 
+fn reordered_lane(lane: u32, from: u32, to: u32) -> u32 {
+    if lane == from {
+        to
+    } else if from < to && lane > from && lane <= to {
+        lane - 1
+    } else if from > to && lane >= to && lane < from {
+        lane + 1
+    } else {
+        lane
+    }
+}
+
+pub fn reorder_track_names(
+    names: &mut std::collections::BTreeMap<String, String>,
+    kind: TrackKind,
+    from: u32,
+    to: u32,
+) -> bool {
+    let before = names.clone();
+    let prefix = format!("{}:", kind.name_key());
+    let moved: Vec<(u32, String)> = names
+        .iter()
+        .filter_map(|(key, name)| {
+            let lane = key.strip_prefix(&prefix)?.parse::<u32>().ok()?;
+            Some((lane, name.clone()))
+        })
+        .collect();
+    names.retain(|key, _| !key.starts_with(&prefix));
+    for (lane, name) in moved {
+        names.insert(format!("{prefix}{}", reordered_lane(lane, from, to)), name);
+    }
+    *names != before
+}
+
+/// Style and audio deletes renumber the lanes that still hold segments
+/// densely from zero, so names follow those lanes; a named lane left empty
+/// keeps its name below them.
+pub fn delete_segments_with_names(
+    project: &mut ProjectConfiguration,
+    kind: TrackKind,
+    indices: &[usize],
+) -> bool {
+    fn surviving_lanes<T: TrackSegmentOps>(segments: &[T], deleted: &[usize]) -> Vec<u32> {
+        let mut lanes: Vec<u32> = segments
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| !deleted.contains(index))
+            .map(|(_, segment)| segment.lane())
+            .collect();
+        lanes.sort_unstable();
+        lanes.dedup();
+        lanes
+    }
+    let Some(timeline) = project.timeline.as_mut() else {
+        return false;
+    };
+    let lanes = match kind {
+        TrackKind::Style => Some(surviving_lanes(&timeline.style_segments, indices)),
+        TrackKind::Audio => Some(surviving_lanes(&timeline.audio_segments, indices)),
+        _ => None,
+    };
+    if !delete_segments(timeline, kind, indices) {
+        return false;
+    }
+    if let Some(lanes) = lanes {
+        renumber_track_names(&mut project.track_names, kind, &lanes);
+    }
+    true
+}
+
+fn renumber_track_names(
+    names: &mut std::collections::BTreeMap<String, String>,
+    kind: TrackKind,
+    kept_lanes: &[u32],
+) {
+    let prefix = format!("{}:", kind.name_key());
+    let named: Vec<(u32, String)> = names
+        .iter()
+        .filter_map(|(key, name)| {
+            let lane = key.strip_prefix(&prefix)?.parse::<u32>().ok()?;
+            Some((lane, name.clone()))
+        })
+        .collect();
+    names.retain(|key, _| !key.starts_with(&prefix));
+    let mut next_empty = kept_lanes.len() as u32;
+    for (lane, name) in named {
+        let new_lane = match kept_lanes.iter().position(|kept| *kept == lane) {
+            Some(position) => position as u32,
+            None => {
+                next_empty += 1;
+                next_empty - 1
+            }
+        };
+        names.insert(format!("{prefix}{new_lane}"), name);
+    }
+}
+
 pub fn reorder_track_lane(
     timeline: &mut TimelineConfiguration,
     kind: TrackKind,
@@ -1172,15 +1300,7 @@ pub fn reorder_track_lane(
         let mut changed = false;
         for segment in segments {
             let lane = segment.lane();
-            let next = if lane == from {
-                to
-            } else if from < to && lane > from && lane <= to {
-                lane - 1
-            } else if from > to && lane >= to && lane < from {
-                lane + 1
-            } else {
-                lane
-            };
+            let next = reordered_lane(lane, from, to);
             if next != lane {
                 set(segment, next);
                 changed = true;
@@ -2908,6 +3028,130 @@ mod tests {
     }
 
     // -- Selection ----------------------------------------------------------
+
+    #[test]
+    fn deleting_a_lane_drops_its_name_and_shifts_the_names_above() {
+        let mut project = config(serde_json::json!({
+            "timeline": {
+                "segments": [{ "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 30.0 }],
+                "zoomSegments": [],
+                "audioSegments": [
+                    { "start": 0.0, "end": 5.0, "track": 0, "path": "voice.mp3", "name": "Voice", "duration": 5.0 },
+                    { "start": 0.0, "end": 5.0, "track": 1, "path": "music.mp3", "name": "Music", "duration": 5.0 }
+                ]
+            },
+            "trackNames": { "audio:0": "Voice", "audio:1": "Music", "text:0": "Titles" }
+        }));
+        assert!(delete_track_lane_and_order(
+            &mut project,
+            &[],
+            TrackKind::Audio,
+            0
+        ));
+        let names = |project: &ProjectConfiguration| {
+            project
+                .track_names
+                .iter()
+                .map(|(key, name)| (key.clone(), name.clone()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            names(&project),
+            [
+                ("audio:0".to_string(), "Music".to_string()),
+                ("text:0".to_string(), "Titles".to_string())
+            ]
+        );
+
+        let mut empty_lane = config(serde_json::json!({
+            "timeline": {
+                "segments": [{ "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 30.0 }],
+                "zoomSegments": []
+            },
+            "trackNames": { "text:0": "Empty", "text:1": "Above" }
+        }));
+        assert!(delete_track_lane_and_order(
+            &mut empty_lane,
+            &[],
+            TrackKind::Text,
+            0
+        ));
+        assert_eq!(
+            names(&empty_lane),
+            [("text:0".to_string(), "Above".to_string())]
+        );
+    }
+
+    #[test]
+    fn deleting_a_lanes_last_segment_moves_the_names_with_the_lanes() {
+        let mut project = config(serde_json::json!({
+            "timeline": {
+                "segments": [{ "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 30.0 }],
+                "zoomSegments": [],
+                "audioSegments": [
+                    { "start": 0.0, "end": 5.0, "track": 0, "path": "voice.mp3", "name": "Voice", "duration": 5.0 },
+                    { "start": 0.0, "end": 5.0, "track": 1, "path": "music.mp3", "name": "Music", "duration": 5.0 }
+                ]
+            },
+            "trackNames": { "audio:0": "Voice", "audio:1": "Music", "style:0": "Intro" }
+        }));
+        assert!(delete_segments_with_names(
+            &mut project,
+            TrackKind::Audio,
+            &[0]
+        ));
+        assert_eq!(
+            project.timeline.as_ref().unwrap().audio_segments[0].track,
+            0
+        );
+        assert_eq!(
+            project
+                .track_names
+                .iter()
+                .map(|(key, name)| (key.as_str(), name.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("audio:0", "Music"),
+                ("audio:1", "Voice"),
+                ("style:0", "Intro")
+            ]
+        );
+    }
+
+    #[test]
+    fn reordering_empty_named_lanes_still_moves_their_names() {
+        let mut names = std::collections::BTreeMap::from([
+            ("audio:0".to_string(), "A".to_string()),
+            ("audio:1".to_string(), "B".to_string()),
+        ]);
+        assert!(reorder_track_names(&mut names, TrackKind::Audio, 0, 1));
+        assert_eq!(names.get("audio:0").map(String::as_str), Some("B"));
+        assert_eq!(names.get("audio:1").map(String::as_str), Some("A"));
+        let mut unnamed = std::collections::BTreeMap::new();
+        assert!(!reorder_track_names(&mut unnamed, TrackKind::Audio, 0, 1));
+    }
+
+    #[test]
+    fn lane_names_follow_their_lane_when_lanes_are_reordered() {
+        let mut names = std::collections::BTreeMap::from([
+            ("audio:0".to_string(), "Voice".to_string()),
+            ("audio:1".to_string(), "Music".to_string()),
+            ("style:0".to_string(), "Intro".to_string()),
+        ]);
+        reorder_track_names(&mut names, TrackKind::Audio, 1, 0);
+        assert_eq!(names.get("audio:0").map(String::as_str), Some("Music"));
+        assert_eq!(names.get("audio:1").map(String::as_str), Some("Voice"));
+        assert_eq!(names.get("style:0").map(String::as_str), Some("Intro"));
+
+        let mut names = std::collections::BTreeMap::from([
+            ("audio:0".to_string(), "A".to_string()),
+            ("audio:2".to_string(), "C".to_string()),
+        ]);
+        reorder_track_names(&mut names, TrackKind::Audio, 0, 2);
+        assert_eq!(names.get("audio:2").map(String::as_str), Some("A"));
+        assert_eq!(names.get("audio:1").map(String::as_str), Some("C"));
+        assert!(!names.contains_key("audio:0"));
+    }
 
     #[test]
     fn a_plain_click_selects_one_segment() {

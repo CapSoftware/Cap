@@ -1954,6 +1954,7 @@ fn audio_project_key(project: &ProjectConfiguration) -> Option<Vec<u8>> {
         color_correction: _,
         text_size_version: _,
         text_anim_version: _,
+        track_names: _,
     } = project;
     let timeline = timeline.as_ref().map(|timeline| {
         let TimelineConfiguration {
