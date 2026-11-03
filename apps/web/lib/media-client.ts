@@ -71,6 +71,7 @@ async function fetchWithRetry(
 			}
 
 			if (attempt < maxRetries) {
+				await response.body?.cancel().catch(() => {});
 				const delay = INITIAL_RETRY_DELAY_MS * 2 ** attempt;
 				console.log(
 					`[media-client] Got ${response.status}, retrying in ${delay}ms (attempt ${attempt + 1}/${maxRetries})`,
