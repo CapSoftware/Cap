@@ -1,0 +1,34 @@
+{
+	"about": "Job layout of a real 15.5 minute walk: one microphone, ~5 minute live chunks, and each job's only voice labelled speaker_0. Words are synthetic, reduced to a few per job.",
+	"displaySpan": 931.38,
+	"jobs": [
+		{
+			"fill": "a",
+			"startMs": 0,
+			"endMs": 300000,
+			"speaker": "segment-0:microphone:aaaaaaaaaaaa:speaker_0",
+			"words": [3.14, 4, 299.5]
+		},
+		{
+			"fill": "b",
+			"startMs": 300000,
+			"endMs": 600000,
+			"speaker": "segment-0:microphone:bbbbbbbbbbbb:speaker_0",
+			"words": [0.36, 150, 299.5]
+		},
+		{
+			"fill": "c",
+			"startMs": 600000,
+			"endMs": 900000,
+			"speaker": "segment-0:microphone:cccccccccccc:speaker_0",
+			"words": [0.04, 150, 299.5]
+		},
+		{
+			"fill": "d",
+			"startMs": 900000,
+			"endMs": 931380,
+			"speaker": "segment-0:microphone:dddddddddddd:speaker_0",
+			"words": [0.5, 15, 30.5]
+		}
+	]
+}

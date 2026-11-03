@@ -740,7 +740,7 @@ test("a partial live cache never reports transcript ready or automatically resub
 			processChapter: async (_directory, cfg, options) => {
 				assert.equal(cfg.transcriber, "none");
 				assert.equal(options.brief, false);
-				assert.deepEqual(options.speakers, []);
+				assert.deepEqual(options.speakers, ["Tester"]);
 				return { transcript: true };
 			},
 			writeIndex: () => {},
@@ -761,6 +761,74 @@ test("a partial live cache never reports transcript ready or automatically resub
 		).transcriptError,
 		/partial/i,
 	);
+});
+
+test("a walk whose voices cannot be matched across chunks carries the notice into the report", async (t) => {
+	const f = fixture(t);
+	f.journal.events = f.journal.events.filter((event) => event.kind === "note");
+	f.journal.request.speakers = ["Ann", "Bo"];
+	f.save();
+	const { durableJson, sha256 } = await import("./checkpoint-store.mjs");
+	const root = path.join(f.directory, "checkpoints");
+	fs.mkdirSync(path.join(root, "jobs"), { recursive: true });
+	durableJson(path.join(root, "final-layout.json"), {
+		displaySpans: [10],
+		meta: {
+			segments: [{ display: { start_time: 0 }, mic: { start_time: 0 } }],
+		},
+		config: {},
+	});
+	for (const [fill, startMs] of [
+		["c", 0],
+		["d", 5000],
+	]) {
+		const id = fill.repeat(64);
+		const resultFile = path.join(root, `jobs/${id}.words.json`);
+		durableJson(resultFile, {
+			source: "segment-0:microphone",
+			words: [
+				{
+					start: startMs / 1000,
+					end: startMs / 1000 + 1,
+					text: "saved speech",
+					speaker: `${fill}:speaker_0`,
+				},
+			],
+		});
+		durableJson(path.join(root, `jobs/${id}.json`), {
+			jobId: id,
+			source: "segment-0:microphone",
+			sourceStartMs: startMs,
+			sourceEndMs: startMs + 5000,
+			state: "complete",
+			resultHash: sha256(fs.readFileSync(resultFile)),
+		});
+	}
+	await finishNativeWalk(
+		f.file,
+		{ transcriber: "elevenlabs" },
+		{
+			client: {
+				export: async (_project, output) => {
+					fs.writeFileSync(output, "export");
+					return { durationS: 10 };
+				},
+			},
+			prepareAudio: async () => {
+				throw new Error("Must reuse saved jobs");
+			},
+			processChapter: async (_directory, _cfg, options) => {
+				assert.deepEqual(options.speakers, []);
+				return { transcript: true };
+			},
+			writeIndex: () => {},
+			writeReport: () => {},
+		},
+	);
+	const chapter = JSON.parse(
+		fs.readFileSync(path.join(f.directory, "session.json")),
+	).chapters[0];
+	assert.match(chapter.speakerAttributionNotice, /can be the same person/);
 });
 
 test("explicit full transcription is available after unsupported live capture and ordinary reprocess reuses it", async (t) => {
