@@ -624,6 +624,7 @@ pub struct ShapeDrag {
     pub down: Point<Pixels>,
     pub targets: SnapTargets,
     pub moved: bool,
+    pub timeline_height: Option<f32>,
 }
 
 impl ShapeDrag {
@@ -1175,6 +1176,7 @@ impl EditorWindow {
                 down: event.position,
                 targets: self.canvas_snap_targets(CanvasSelection::Display),
                 moved: false,
+                timeline_height: Some(self.preferred_timeline_height()),
             });
             cx.notify();
             window.refresh();
@@ -1290,6 +1292,7 @@ impl EditorWindow {
             down: event.position,
             targets,
             moved: false,
+            timeline_height: None,
         });
         cx.notify();
         window.refresh();
