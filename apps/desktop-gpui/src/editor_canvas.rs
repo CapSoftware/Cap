@@ -1648,7 +1648,10 @@ impl EditorWindow {
     ) -> AnyElement {
         let theme = self.theme;
         let selected = self.canvas_selection == Some(element);
-        let hovered = self.hovered_canvas == Some(element) && !self.hovering_visible_shape();
+        let hovered = self.hovered_canvas == Some(element)
+            && !self.hovering_visible_shape()
+            && self.shape_tool.is_none()
+            && self.shape_drag.is_none();
         let dragging = self
             .canvas_drag
             .as_ref()
