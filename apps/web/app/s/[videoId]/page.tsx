@@ -1,5 +1,4 @@
 import { db } from "@cap/database";
-import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoIdLength } from "@cap/database/helpers";
 import {
 	comments,
@@ -38,12 +37,13 @@ import type { Metadata } from "next";
 import { headers } from "next/headers";
 import { notFound, redirect } from "next/navigation";
 import { after } from "next/server";
-import type { JSX } from "react";
+import { cache, type JSX } from "react";
 import {
 	getDashboardSpacesData,
 	type OrganizationSettings,
 	type Spaces,
 } from "@/app/(org)/dashboard/dashboard-data";
+import { getUser } from "@/app/utils/auth";
 import { isAiConfigured } from "@/lib/ai/provider";
 import { completeDesktopSegmentsManifestAndQueue } from "@/lib/desktop-segments-recovery";
 import { isEarlyInstantPlaybackEnabled } from "@/lib/early-instant-playback";
@@ -152,7 +152,9 @@ function resolveWithin<T>(promise: Promise<T>, ms: number): Promise<T | null> {
 	});
 }
 
-async function getSharedSpacesForVideo(videoId: Video.VideoId) {
+const getSharedSpacesForVideo = cache(async function getSharedSpacesForVideo(
+	videoId: Video.VideoId,
+) {
 	// Space-level and organization-level sharing are independent queries.
 	const [spaceSharing, orgSharing] = await Promise.all([
 		db()
@@ -220,7 +222,7 @@ async function getSharedSpacesForVideo(videoId: Video.VideoId) {
 		sharedSpaces,
 		sharedOrganizations: orgSharing.map(({ id, name }) => ({ id, name })),
 	};
-}
+});
 
 function PolicyDeniedView({
 	reason,
@@ -491,8 +493,7 @@ async function AuthorizedContent({
 	};
 	searchParams: ShareVideoSearchParams;
 }) {
-	// will have already been fetched if auth is required
-	const user = await getCurrentUser();
+	const user = await getUser();
 	const videoId = video.id;
 	let recoveredDesktopSegmentsUpload = false;
 
