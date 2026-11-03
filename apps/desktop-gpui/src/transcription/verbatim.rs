@@ -151,6 +151,7 @@ impl Loudness {
 const SPEECH_GAP_SECONDS: f64 = 0.12;
 const WORD_MARGIN_SECONDS: f64 = 0.06;
 const MIN_UNHEARD_SECONDS: f64 = 0.2;
+const MAX_OVERLAP_SECONDS: f32 = 0.05;
 
 /// Stretches of sound no word accounts for: a filler the model dropped, or a
 /// run of speech a decode lost. Each comes back padded by the silence around
@@ -245,6 +246,16 @@ pub(super) fn insert_recovered(
             continue;
         }
         let at = words.partition_point(|existing| existing.start <= word.start);
+        let overlaps = |existing: &CaptionWord| {
+            existing.end.min(word.end) - existing.start.max(word.start) > MAX_OVERLAP_SECONDS
+        };
+        if at
+            .checked_sub(1)
+            .is_some_and(|before| overlaps(&words[before]))
+            || words.get(at).is_some_and(overlaps)
+        {
+            continue;
+        }
         words.insert(at, word);
     }
 }
@@ -598,6 +609,11 @@ mod tests {
         insert_recovered(&mut words, found, (1.4, 1.9), 0.8);
         let texts: Vec<_> = words.iter().map(|w| w.text.as_str()).collect();
         assert_eq!(texts, ["so", "um,", "yes"]);
+
+        let mut heard = vec![word("Um", 0.56, 0.8), word("so", 1.3, 1.5)];
+        insert_recovered(&mut heard, vec![word("Hmm.", 0.68, 1.16)], (0.86, 1.2), 0.9);
+        let texts: Vec<_> = heard.iter().map(|w| w.text.as_str()).collect();
+        assert_eq!(texts, ["Um", "so"]);
 
         let mut words = vec![word("so", 0.5, 1.0)];
         insert_recovered(
