@@ -23,9 +23,10 @@
 //!   (one letter, or a short function word such as "of", "to", "is") takes
 //!   more words, up to eight; when one or two words would be left over and
 //!   the first of them is weak, they join the last caption. Pauses do not
-//!   split captions. Hesitation fillers ("um", "uh") are not counted: a
-//!   caption ends right after its last counted word, so a filler opens the
-//!   next caption, and fillers after the last counted word stay in the last.
+//!   split captions. In a transcript that reads as English, hesitation
+//!   fillers ("um", "uh") are not counted: a caption ends right after its
+//!   last counted word, so a filler opens the next caption, and fillers after
+//!   the last counted word stay in the last.
 //! - A caption spans its first word's start to its last word's end; its text
 //!   joins the words with spaces, except before attaching punctuation; ids
 //!   are `segment-<n>`.
@@ -124,8 +125,9 @@ fn filler(text: &str) -> bool {
 
 fn reference_segments(tokens: &[CaptionWord]) -> Vec<CaptionSegment> {
     let words = reference_words(tokens);
+    let english = cap_project::caption_words::reads_as_english(&words);
     let mut counted: Vec<usize> = (0..words.len())
-        .filter(|&i| !filler(&words[i].text))
+        .filter(|&i| !english || !filler(&words[i].text))
         .collect();
     if counted.is_empty() {
         counted = (0..words.len()).collect();

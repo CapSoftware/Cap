@@ -944,7 +944,7 @@ fn english_word_aligner(
     let words: Vec<CaptionWord> = groups.iter().flatten().cloned().collect();
     let english = match language {
         "en" => true,
-        "auto" => align::looks_english(&words),
+        "auto" => cap_project::caption_words::reads_as_english(&words),
         _ => false,
     };
     if english { load_word_aligner() } else { None }
@@ -1814,15 +1814,26 @@ fn caption_segments_from_tokens(
 /// normalized and chunked on its own, so a caption never spans two groups.
 fn caption_segments_from_groups(groups: Vec<Vec<CaptionWord>>) -> Vec<CaptionSegment> {
     let single = groups.len() == 1;
+    let groups: Vec<Vec<CaptionWord>> = groups
+        .into_iter()
+        .map(|group| {
+            normalize_caption_words(
+                group
+                    .into_iter()
+                    .filter(|token| !token.text.trim().is_empty())
+                    .collect(),
+            )
+        })
+        .collect();
+    let english = cap_project::caption_words::reads_as_english(groups.iter().flatten());
     let mut segments = Vec::new();
-    for (group_index, group) in groups.into_iter().enumerate() {
-        let words = normalize_caption_words(
-            group
-                .into_iter()
-                .filter(|token| !token.text.trim().is_empty())
-                .collect(),
-        );
-        for (chunk_idx, chunk) in caption_word_chunks(&words).into_iter().enumerate() {
+    for (group_index, words) in groups.into_iter().enumerate() {
+        let chunks = if english {
+            caption_word_chunks_skipping_fillers(&words)
+        } else {
+            caption_word_chunks(&words)
+        };
+        for (chunk_idx, chunk) in chunks.into_iter().enumerate() {
             segments.push(CaptionSegment {
                 id: if single {
                     format!("segment-{chunk_idx}")
@@ -2114,7 +2125,7 @@ fn transcribe_project_with(
 
 use cap_project::caption_words::{
     MAX_CAPTION_WORD_DURATION, caption_text_from_words, caption_word_chunks,
-    normalize_caption_words,
+    caption_word_chunks_skipping_fillers, normalize_caption_words,
 };
 
 // ---------------------------------------------------------------------------
@@ -2327,8 +2338,12 @@ pub fn apply_caption_result(
     recording_durations: &[f64],
     recording_duration: f64,
 ) {
+    let english = cap_project::caption_words::reads_as_english(
+        segments.iter().flat_map(|segment| &segment.words),
+    );
     let settings = CaptionSettings {
         enabled: true,
+        filler_language: english.then(|| "en".to_string()),
         ..project
             .captions
             .as_ref()

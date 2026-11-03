@@ -3065,30 +3065,32 @@ impl EditorWindow {
                                     )),
                                 ),
                         )
-                        .child(
-                            ui::Subfield::plain(
-                                &theme,
-                                tr::editor::tabs::captions::show_filler_words(),
-                            )
-                            .child(
-                                ui::Toggle::plain(
+                        .children(
+                            (settings.filler_language.as_deref() == Some("en")).then(|| {
+                                ui::Subfield::plain(
                                     &theme,
-                                    "caption-filler-words",
-                                    settings.show_filler_words,
+                                    tr::editor::tabs::captions::show_filler_words(),
                                 )
-                                .on_click(cx.listener(
-                                    |this, _, window, cx| {
-                                        let next =
-                                            !caption_settings(&this.project).show_filler_words;
-                                        this.set_caption_setting(
-                                            "caption-filler-words",
-                                            window,
-                                            cx,
-                                            move |settings| settings.show_filler_words = next,
-                                        );
-                                    },
-                                )),
-                            ),
+                                .child(
+                                    ui::Toggle::plain(
+                                        &theme,
+                                        "caption-filler-words",
+                                        settings.show_filler_words,
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _, window, cx| {
+                                            let next =
+                                                !caption_settings(&this.project).show_filler_words;
+                                            this.set_caption_setting(
+                                                "caption-filler-words",
+                                                window,
+                                                cx,
+                                                move |settings| settings.show_filler_words = next,
+                                            );
+                                        },
+                                    )),
+                                )
+                            }),
                         )
                         .child(
                             div()
