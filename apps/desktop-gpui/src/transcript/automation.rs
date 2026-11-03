@@ -4,7 +4,7 @@
 //! one `transcript-auto:` line with what it did and how long it took.
 //!
 //! Actions: `open`, `seed:<words>`, `transcribe`, `select:<a>-<b>`, `delete`,
-//! `cleanup`, `fillers`, `pauses`, `cuts:<n>`, `search:<query>`,
+//! `cleanup[:pauses]`, `fillers`, `pauses`, `cuts:<n>`, `search:<query>`,
 //! `seek:<seconds>`, `play`, `stop`, `wait:<ms>`, `scroll:<frames>`,
 //! `follow:<seconds>`, `undo`, `redo`, `hover-cut`, `dump:<path>`.
 
@@ -161,6 +161,11 @@ pub(crate) async fn run(handle: WindowHandle<EditorWindow>, cx: &mut AsyncApp) {
                 }
                 "cleanup" => {
                     view.transcript.cleanup.open = true;
+                    view.transcript.cleanup.tab = if argument == "pauses" {
+                        super::CleanupTab::Pauses
+                    } else {
+                        super::CleanupTab::Fillers
+                    };
                     view.invalidate_transcript(cx);
                     String::new()
                 }

@@ -17,7 +17,7 @@ use gpui::{
 use super::cuts::{self, CutReport, RestoreBlocker};
 use super::model::{TranscriptDoc, TranscriptEdl};
 use super::{
-    DragUnit, FOLLOW_PAUSE, MAX_PLAYER_SHARE, MIN_PLAYER_SHARE, PAUSE_KEEP_RANGE,
+    CleanupTab, DragUnit, FOLLOW_PAUSE, MAX_PLAYER_SHARE, MIN_PLAYER_SHARE, PAUSE_KEEP_RANGE,
     PAUSE_LONGER_RANGE, SearchState, WordDrag, WordSelection, category_index,
 };
 use crate::editor_window::EditorWindow;
@@ -1555,15 +1555,109 @@ impl EditorWindow {
             .iter()
             .map(|pause| pause.cut.end - pause.cut.start)
             .sum();
+        let on_pauses = cleanup.tab == CleanupTab::Pauses;
 
-        let section_title = |label: &'static str| {
-            div()
-                .text_size(px(12.))
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(palette.text_2)
-                .child(label)
+        let tabs = ui::SegmentedControl::editor(
+            &theme,
+            "transcript-cleanup-tabs",
+            vec![
+                ui::SegmentOption::new(tr::editor::transcript::fillers::title(), !on_pauses),
+                ui::SegmentOption::new(tr::editor::transcript::pauses::title(), on_pauses),
+            ],
+        )
+        .on_select(cx.listener(|this, index: &usize, _, cx| {
+            this.transcript.cleanup.tab = if *index == 1 {
+                CleanupTab::Pauses
+            } else {
+                CleanupTab::Fillers
+            };
+            this.invalidate_transcript(cx);
+        }));
+
+        let action = if on_pauses {
+            ui::Button::plain(
+                &theme,
+                "transcript-shorten-pauses",
+                ui::ButtonVariant::Primary,
+                ui::ButtonSize::Sm,
+            )
+            .label(tr::editor::transcript::pauses::apply())
+            .disabled(pauses.is_empty())
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.transcript_shorten_pauses(window, cx);
+            }))
+        } else {
+            ui::Button::plain(
+                &theme,
+                "transcript-remove-fillers",
+                ui::ButtonVariant::Primary,
+                ui::ButtonSize::Sm,
+            )
+            .label(SharedString::from(
+                tr::editor::transcript::fillers::remove_all(listed.len()),
+            ))
+            .disabled(listed.is_empty())
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.transcript_remove_fillers(window, cx);
+            }))
         };
 
+        let header = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_between()
+            .flex_none()
+            .gap(px(8.))
+            .px(px(12.))
+            .py(px(8.))
+            .child(tabs)
+            .child(action);
+
+        let body = if on_pauses {
+            self.render_transcript_pause_list(&doc, &edl, &pauses, saved, palette, cx)
+        } else {
+            self.render_transcript_filler_list(&doc, &edl, &listed, counts, palette, cx)
+        };
+
+        Some(
+            div()
+                .flex()
+                .flex_col()
+                .flex_none()
+                .max_h(gpui::relative(0.6))
+                .border_b_1()
+                .border_color(Hsla::from(theme.editor.line))
+                .bg(Hsla::from(theme.editor.card_2))
+                .child(header)
+                .child(
+                    div()
+                        .id("transcript-cleanup-body")
+                        .flex()
+                        .flex_col()
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_y_scroll()
+                        .track_scroll(&cleanup.list_scroll)
+                        .px(px(6.))
+                        .pb(px(8.))
+                        .child(body),
+                )
+                .into_any_element(),
+        )
+    }
+
+    fn render_transcript_filler_list(
+        &self,
+        doc: &TranscriptDoc,
+        edl: &TranscriptEdl,
+        listed: &[(usize, Disfluency)],
+        counts: [usize; 4],
+        palette: Palette,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let theme = self.theme;
+        let cleanup = &self.transcript.cleanup;
         let categories = DisfluencyKind::ALL.into_iter().map(|kind| {
             let index = category_index(kind);
             let checked = cleanup.categories[index];
@@ -1571,6 +1665,7 @@ impl EditorWindow {
                 .id(("transcript-category", index))
                 .flex()
                 .flex_row()
+                .flex_none()
                 .items_center()
                 .gap(px(8.))
                 .h(px(28.))
@@ -1617,12 +1712,14 @@ impl EditorWindow {
                         .gap(px(6.))
                         .child(
                             div()
+                                .flex_none()
                                 .text_size(px(13.))
                                 .text_color(palette.text_1)
                                 .child(kind_label(kind)),
                         )
                         .child(
                             div()
+                                .min_w_0()
                                 .text_size(px(12.))
                                 .text_color(palette.text_3)
                                 .truncate()
@@ -1640,34 +1737,24 @@ impl EditorWindow {
 
         let rows = listed.iter().map(|(index, filler)| {
             let words = filler.words.clone();
-            let before_start = doc.paragraphs[doc.paragraph_of(words.start)]
-                .words
-                .start
-                .max(words.start.saturating_sub(4));
+            let paragraph = &doc.paragraphs[doc.paragraph_of(words.start)].words;
+            let before_start = paragraph.start.max(words.start.saturating_sub(4));
             let after_end = doc.paragraphs[doc.paragraph_of(words.end - 1)]
                 .words
                 .end
                 .min(words.end + 4);
-            let before = doc.text_of(before_start..words.start);
             let phrase = doc.text_of(words.clone());
-            let after = doc.text_of(words.end..after_end);
-            let stamp = edl
-                .source_to_output(doc.words[words.start].start)
-                .map(crate::editor_timeline::format_time)
-                .unwrap_or_default();
             let mut snippet = String::new();
-            let mut highlight = 0..0;
             if before_start < words.start {
                 snippet.push_str("… ");
-                snippet.push_str(&before);
+                snippet.push_str(&doc.text_of(before_start..words.start));
                 snippet.push(' ');
             }
-            highlight.start = snippet.len();
+            let highlight = snippet.len()..snippet.len() + phrase.len();
             snippet.push_str(&phrase);
-            highlight.end = snippet.len();
-            if !after.is_empty() {
+            if words.end < after_end {
                 snippet.push(' ');
-                snippet.push_str(&after);
+                snippet.push_str(&doc.text_of(words.end..after_end));
                 snippet.push_str(" …");
             }
             let text = StyledText::new(snippet).with_highlights([(
@@ -1678,6 +1765,10 @@ impl EditorWindow {
                     ..Default::default()
                 },
             )]);
+            let stamp = edl
+                .source_to_output(doc.words[words.start].start)
+                .map(crate::editor_timeline::format_time)
+                .unwrap_or_default();
             let selected = self
                 .transcript
                 .selection
@@ -1690,10 +1781,11 @@ impl EditorWindow {
                 .id(("transcript-filler", *index))
                 .flex()
                 .flex_row()
+                .flex_none()
                 .items_center()
-                .gap(px(6.))
+                .gap(px(4.))
                 .px(px(6.))
-                .py(px(4.))
+                .py(px(2.))
                 .rounded(px(6.))
                 .when(selected, |this| this.bg(palette.selection.opacity(0.6)))
                 .hover(|style| style.bg(Hsla::from(theme.editor.ctl)))
@@ -1746,193 +1838,187 @@ impl EditorWindow {
                 )
         });
 
-        let stepper = |id: &'static str, value: f64, longer: bool| {
+        div()
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_none()
+                    .pb(px(4.))
+                    .children(categories),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .h(px(1.))
+                    .mx(px(6.))
+                    .mb(px(4.))
+                    .bg(Hsla::from(theme.editor.line)),
+            )
+            .when(listed.is_empty(), |this| {
+                this.child(
+                    div()
+                        .px(px(6.))
+                        .py(px(6.))
+                        .text_size(px(12.))
+                        .text_color(palette.text_3)
+                        .child(tr::editor::transcript::fillers::none()),
+                )
+            })
+            .children(rows)
+            .into_any_element()
+    }
+
+    fn render_transcript_pause_list(
+        &self,
+        doc: &TranscriptDoc,
+        edl: &TranscriptEdl,
+        pauses: &[cuts::PauseCut],
+        saved: f64,
+        palette: Palette,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let theme = self.theme;
+        let cleanup = &self.transcript.cleanup;
+        let control = |label: &'static str, id: &'static str, value: f64, longer: bool| {
             div()
                 .flex()
                 .flex_row()
+                .flex_none()
                 .items_center()
-                .gap(px(2.))
-                .child(
-                    ui::EditorButton::plain(&theme, (id, 0usize))
-                        .left_icon("icons/minus.svg")
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.transcript_step_pause(longer, -0.1, cx);
-                        })),
-                )
+                .justify_between()
+                .h(px(30.))
+                .px(px(6.))
                 .child(
                     div()
-                        .w(px(46.))
                         .text_size(px(13.))
                         .text_color(palette.text_1)
-                        .flex()
-                        .justify_center()
-                        .child(seconds_label(value)),
+                        .child(label),
                 )
-                .child(
-                    ui::EditorButton::plain(&theme, (id, 1usize))
-                        .left_icon("icons/plus.svg")
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.transcript_step_pause(longer, 0.1, cx);
-                        })),
-                )
-        };
-
-        let removable = listed.len();
-        Some(
-            div()
-                .id("transcript-cleanup")
-                .flex()
-                .flex_col()
-                .flex_none()
-                .max_h(gpui::relative(0.55))
-                .border_b_1()
-                .border_color(Hsla::from(theme.editor.line))
-                .bg(Hsla::from(theme.editor.card_2))
                 .child(
                     div()
                         .flex()
                         .flex_row()
                         .items_center()
-                        .justify_between()
-                        .px(px(12.))
-                        .pt(px(10.))
-                        .pb(px(4.))
-                        .child(section_title(tr::editor::transcript::fillers::title()))
+                        .gap(px(2.))
                         .child(
-                            ui::Button::plain(
-                                &theme,
-                                "transcript-remove-fillers",
-                                ui::ButtonVariant::Primary,
-                                ui::ButtonSize::Sm,
-                            )
-                            .label(SharedString::from(
-                                tr::editor::transcript::fillers::remove_all(removable),
-                            ))
-                            .disabled(removable == 0)
-                            .on_click(cx.listener(
-                                |this, _, window, cx| {
-                                    this.transcript_remove_fillers(window, cx);
-                                },
-                            )),
-                        ),
-                )
-                .child(div().px(px(6.)).flex().flex_col().children(categories))
-                .child(
-                    div()
-                        .id("transcript-filler-list")
-                        .flex()
-                        .flex_col()
-                        .min_h_0()
-                        .max_h(px(180.))
-                        .overflow_y_scroll()
-                        .track_scroll(&cleanup.list_scroll)
-                        .px(px(6.))
-                        .py(px(4.))
-                        .when(listed.is_empty(), |this| {
-                            this.child(
-                                div()
-                                    .px(px(6.))
-                                    .py(px(6.))
-                                    .text_size(px(12.))
-                                    .text_color(palette.text_3)
-                                    .child(tr::editor::transcript::fillers::none()),
-                            )
-                        })
-                        .children(rows),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(6.))
-                        .px(px(12.))
-                        .pt(px(8.))
-                        .pb(px(12.))
-                        .border_t_1()
-                        .border_color(Hsla::from(theme.editor.line))
-                        .child(section_title(tr::editor::transcript::pauses::title()))
-                        .child(
-                            div()
-                                .flex()
-                                .flex_row()
-                                .flex_wrap()
-                                .items_center()
-                                .gap(px(10.))
-                                .child(
-                                    div()
-                                        .flex()
-                                        .flex_row()
-                                        .items_center()
-                                        .gap(px(4.))
-                                        .child(
-                                            div()
-                                                .text_size(px(12.))
-                                                .text_color(palette.text_2)
-                                                .child(
-                                                    tr::editor::transcript::pauses::longer_than(),
-                                                ),
-                                        )
-                                        .child(stepper(
-                                            "transcript-pause-longer",
-                                            cleanup.pause_longer_than,
-                                            true,
-                                        )),
-                                )
-                                .child(
-                                    div()
-                                        .flex()
-                                        .flex_row()
-                                        .items_center()
-                                        .gap(px(4.))
-                                        .child(
-                                            div()
-                                                .text_size(px(12.))
-                                                .text_color(palette.text_2)
-                                                .child(tr::editor::transcript::pauses::keep()),
-                                        )
-                                        .child(stepper(
-                                            "transcript-pause-keep",
-                                            cleanup.pause_keep,
-                                            false,
-                                        )),
-                                ),
+                            ui::EditorButton::plain(&theme, (id, 0usize))
+                                .left_icon("icons/minus.svg")
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.transcript_step_pause(longer, -0.1, cx);
+                                })),
                         )
                         .child(
                             div()
+                                .w(px(46.))
+                                .text_size(px(13.))
+                                .text_color(palette.text_1)
                                 .flex()
-                                .flex_row()
-                                .items_center()
-                                .justify_between()
-                                .gap(px(8.))
-                                .child(div().text_size(px(12.)).text_color(palette.text_3).child(
-                                    if pauses.is_empty() {
-                                        SharedString::from(tr::editor::transcript::pauses::none())
-                                    } else {
-                                        SharedString::from(tr::editor::transcript::pauses::summary(
-                                            pauses.len(),
-                                            crate::i18n::decimal(format!("{saved:.1}")),
-                                        ))
-                                    },
-                                ))
-                                .child(
-                                    ui::Button::plain(
-                                        &theme,
-                                        "transcript-shorten-pauses",
-                                        ui::ButtonVariant::Gray,
-                                        ui::ButtonSize::Sm,
-                                    )
-                                    .label(tr::editor::transcript::pauses::apply())
-                                    .disabled(pauses.is_empty())
-                                    .on_click(cx.listener(
-                                        |this, _, window, cx| {
-                                            this.transcript_shorten_pauses(window, cx);
-                                        },
-                                    )),
-                                ),
+                                .justify_center()
+                                .child(seconds_label(value)),
+                        )
+                        .child(
+                            ui::EditorButton::plain(&theme, (id, 1usize))
+                                .left_icon("icons/plus.svg")
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.transcript_step_pause(longer, 0.1, cx);
+                                })),
                         ),
                 )
-                .into_any_element(),
-        )
+        };
+        let longer = control(
+            tr::editor::transcript::pauses::longer_than(),
+            "transcript-pause-longer",
+            cleanup.pause_longer_than,
+            true,
+        );
+        let shorter = control(
+            tr::editor::transcript::pauses::keep(),
+            "transcript-pause-keep",
+            cleanup.pause_keep,
+            false,
+        );
+        let keep = cleanup.pause_keep;
+        let rows = pauses.iter().map(|pause| {
+            let word = pause.after_word;
+            let stamp = edl
+                .source_to_output(doc.words[word].end)
+                .map(crate::editor_timeline::format_time)
+                .unwrap_or_default();
+            let before = doc.text_of(word.saturating_sub(3)..word + 1);
+            let after = doc.text_of(word + 1..(word + 4).min(doc.words.len()));
+            let text = format!(
+                "{before}  {} → {}  {after}",
+                seconds_label(pause.length),
+                seconds_label(keep)
+            );
+            div()
+                .id(("transcript-pause", word))
+                .flex()
+                .flex_row()
+                .flex_none()
+                .items_center()
+                .gap(px(4.))
+                .px(px(6.))
+                .h(px(26.))
+                .rounded(px(6.))
+                .hover(|style| style.bg(Hsla::from(theme.editor.ctl)))
+                .cursor_pointer()
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    window.focus(&this.transcript.focus, cx);
+                    this.transcript_focus_filler(word..word + 2, true, cx);
+                }))
+                .child(
+                    div()
+                        .flex_none()
+                        .w(px(38.))
+                        .text_size(px(11.))
+                        .text_color(palette.text_3)
+                        .child(stamp),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_size(px(13.))
+                        .text_color(palette.text_2)
+                        .truncate()
+                        .child(text),
+                )
+        });
+        div()
+            .flex()
+            .flex_col()
+            .child(longer)
+            .child(shorter)
+            .child(
+                div()
+                    .flex_none()
+                    .px(px(6.))
+                    .py(px(6.))
+                    .text_size(px(12.))
+                    .text_color(palette.text_3)
+                    .child(if pauses.is_empty() {
+                        SharedString::from(tr::editor::transcript::pauses::none())
+                    } else {
+                        SharedString::from(tr::editor::transcript::pauses::summary(
+                            pauses.len(),
+                            crate::i18n::decimal(format!("{saved:.1}")),
+                        ))
+                    }),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .h(px(1.))
+                    .mx(px(6.))
+                    .mb(px(4.))
+                    .bg(Hsla::from(theme.editor.line)),
+            )
+            .children(rows)
+            .into_any_element()
     }
 
     fn render_transcript_footer(&self) -> impl IntoElement {

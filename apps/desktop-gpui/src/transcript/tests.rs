@@ -268,6 +268,7 @@ fn restore_reaches_a_cut_at_the_start_and_end() {
     let mut project = project(&borrowed(&words), &durations);
     cut_words(&mut project, &durations, &[(0, 1), (3, 4)]);
     assert_eq!(kept(&project, &durations), [false, true, true, false]);
+    assert!(close(timeline(&project).segments[0].start, 1.41));
     let doc = TranscriptDoc::build(project.captions.as_ref().unwrap());
     restore_words(timeline_mut(&mut project), &durations, &doc, 0..1).unwrap();
     restore_words(timeline_mut(&mut project), &durations, &doc, 3..4).unwrap();
@@ -637,4 +638,108 @@ fn cuts_unknown_to_the_planner_are_no_ops() {
     let mut project = project(&[("a", 0.5, 0.8)], &durations);
     let report = cuts::apply_source_cuts(timeline_mut(&mut project), &durations, &[5.0..6.0]);
     assert_eq!(report, CutReport::default());
+}
+
+#[cfg(target_os = "linux")]
+mod keyboard {
+    use gpui::{
+        AppContext, Context, Entity, InteractiveElement, IntoElement, Render, Styled, Window, div,
+    };
+
+    use crate::editor_window::EditorWindow;
+    use crate::transcript::WordSelection;
+
+    struct KeyView {
+        editor: Entity<EditorWindow>,
+        _project: tempfile::TempDir,
+    }
+
+    impl Render for KeyView {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            self.editor.update(cx, |editor, cx| {
+                div()
+                    .size_full()
+                    .track_focus(&editor.transcript.focus)
+                    .on_key_down(cx.listener(EditorWindow::transcript_key_down))
+            })
+        }
+    }
+
+    fn fixture(
+        cx: &mut gpui::TestAppContext,
+    ) -> (Entity<EditorWindow>, &mut gpui::VisualTestContext) {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().to_path_buf();
+        let (view, cx) = cx.add_window_view(move |window, cx| {
+            let editor = cx.new(|cx| EditorWindow::new(path, window, cx));
+            editor.update(cx, |editor, cx| {
+                let words = super::spoken(&["One", "two.", "Three", "four", "five"]);
+                editor.project = super::project(&super::borrowed(&words), &[5.0]);
+                editor.clip_display_durations = vec![5.0];
+                editor.transcript.open = true;
+                editor.transcript.dirty = true;
+                editor.transcript_refresh();
+                window.focus(&editor.transcript.focus, cx);
+            });
+            KeyView {
+                editor,
+                _project: directory,
+            }
+        });
+        (view.read_with(cx, |view, _| view.editor.clone()), cx)
+    }
+
+    fn selection(
+        editor: &Entity<EditorWindow>,
+        cx: &mut gpui::VisualTestContext,
+    ) -> Option<WordSelection> {
+        editor.read_with(cx, |editor, _| editor.transcript.selection)
+    }
+
+    #[gpui::test]
+    fn arrows_extend_and_collapse_the_word_selection(cx: &mut gpui::TestAppContext) {
+        let (editor, cx) = fixture(cx);
+        cx.simulate_keystrokes("right");
+        assert_eq!(selection(&editor, cx), Some(WordSelection::single(0)));
+        cx.simulate_keystrokes("right right");
+        assert_eq!(selection(&editor, cx), Some(WordSelection::single(2)));
+        cx.simulate_keystrokes("shift-right shift-right");
+        assert_eq!(
+            selection(&editor, cx),
+            Some(WordSelection {
+                anchor: 2,
+                focus: 4
+            })
+        );
+        cx.simulate_keystrokes("shift-left shift-left shift-left");
+        assert_eq!(
+            selection(&editor, cx),
+            Some(WordSelection {
+                anchor: 2,
+                focus: 1
+            })
+        );
+        cx.simulate_keystrokes("escape");
+        assert_eq!(selection(&editor, cx), None);
+        cx.simulate_keystrokes("ctrl-a");
+        assert_eq!(selection(&editor, cx).map(WordSelection::range), Some(0..5));
+        cx.simulate_keystrokes("home");
+        assert_eq!(selection(&editor, cx), Some(WordSelection::single(0)));
+        cx.simulate_keystrokes("end");
+        assert_eq!(selection(&editor, cx), Some(WordSelection::single(4)));
+    }
+
+    #[gpui::test]
+    fn copy_puts_the_selected_words_on_the_clipboard(cx: &mut gpui::TestAppContext) {
+        let (editor, cx) = fixture(cx);
+        editor.update(cx, |editor, _| {
+            editor.transcript.selection = Some(WordSelection {
+                anchor: 1,
+                focus: 3,
+            });
+        });
+        cx.simulate_keystrokes("ctrl-c");
+        let copied = cx.read_from_clipboard().and_then(|item| item.text());
+        assert_eq!(copied.as_deref(), Some("two. Three four"));
+    }
 }

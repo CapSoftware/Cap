@@ -12,7 +12,9 @@ pub const TAIL_GUARD: f64 = 0.04;
 /// ...and this much before a kept word's onset.
 pub const ONSET_GUARD: f64 = 0.02;
 /// Where a word has no neighbour (the first or last word), the cut reaches
-/// this far into the silence beyond it.
+/// this far into the silence beyond it. A first word this close to the start
+/// takes the lead-in with it, so cutting an opening "um" starts the video on
+/// the next word instead of leaving a sliver of silence.
 pub const EDGE_REACH: f64 = 0.6;
 /// When two words touch, the cut point is searched within this distance of the
 /// shared boundary, and never past the middle of either word.
@@ -61,6 +63,7 @@ pub fn gap_cut(doc: &TranscriptDoc, energy: Option<&EnergyEnvelope>, index: usiz
     let next = doc.words.get(index);
     let (previous_end, next_start) = match (previous, next) {
         (Some(previous), Some(next)) => (previous.end, next.start),
+        (None, Some(next)) if next.start <= EDGE_REACH * 2.0 => return 0.0,
         (None, Some(next)) => ((next.start - EDGE_REACH).max(0.0), next.start),
         (Some(previous), None) => (previous.end, previous.end + EDGE_REACH),
         (None, None) => return 0.0,

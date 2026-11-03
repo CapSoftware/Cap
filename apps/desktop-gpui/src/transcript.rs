@@ -87,8 +87,15 @@ pub(crate) struct SearchState {
     pub query: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CleanupTab {
+    Fillers,
+    Pauses,
+}
+
 pub(crate) struct CleanupState {
     pub open: bool,
+    pub tab: CleanupTab,
     pub categories: [bool; 4],
     /// Fillers the user chose to keep, by their first word. For this session
     /// only: a new transcript or a reopened editor shows them again.
@@ -110,6 +117,7 @@ impl CleanupState {
         };
         Self {
             open: false,
+            tab: CleanupTab::Fillers,
             categories: [true, true, true, false],
             ignored: HashSet::new(),
             pause_longer_than: read(
