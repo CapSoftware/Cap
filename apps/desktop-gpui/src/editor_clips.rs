@@ -860,7 +860,9 @@ impl EditorWindow {
         cx.spawn(async move |this, cx| {
             let decoded = cx
                 .background_executor()
-                .spawn(async move { decode_clip_thumbnail(&project_path, key.0, start) })
+                .spawn(async move {
+                    decode_clip_thumbnail(&project_path, key.0, start, THUMB_MAX_WIDTH)
+                })
                 .await;
             this.update(cx, |this, cx| {
                 this.clips.thumbs_inflight = this.clips.thumbs_inflight.saturating_sub(1);
@@ -2270,10 +2272,11 @@ fn show_append_error(message: &str) {
 const THUMB_MAX_WIDTH: u32 = 192;
 const SEEK_DECODE_PACKET_LIMIT: usize = 4096;
 
-fn decode_clip_thumbnail(
+pub(crate) fn decode_clip_thumbnail(
     project_path: &Path,
     recording_segment: u32,
     time: f64,
+    max_width: u32,
 ) -> Result<Arc<RenderImage>, String> {
     let meta = RecordingMeta::load_for_project(project_path)
         .map_err(|error| format!("Failed to load recording meta: {error}"))?;
@@ -2290,13 +2293,18 @@ fn decode_clip_thumbnail(
             meta.path(&segment.display.path)
         }
     };
-    decode_thumbnail_frame(&display_path, time.max(0.0))
+    decode_thumbnail_frame(&display_path, time.max(0.0), max_width)
 }
 
-fn decode_thumbnail_frame(input: &Path, time: f64) -> Result<Arc<RenderImage>, String> {
+fn decode_thumbnail_frame(
+    input: &Path,
+    time: f64,
+    max_width: u32,
+) -> Result<Arc<RenderImage>, String> {
     decode_thumbnail_frame_with_budget(
         input,
         time,
+        max_width,
         SEEK_DECODE_PACKET_LIMIT,
         std::time::Duration::from_secs(2),
     )
@@ -2305,6 +2313,7 @@ fn decode_thumbnail_frame(input: &Path, time: f64) -> Result<Arc<RenderImage>, S
 fn decode_thumbnail_frame_with_budget(
     input: &Path,
     time: f64,
+    max_width: u32,
     packet_limit: usize,
     timeout: std::time::Duration,
 ) -> Result<Arc<RenderImage>, String> {
@@ -2339,7 +2348,7 @@ fn decode_thumbnail_frame_with_budget(
         return Err("Invalid video dimensions".to_string());
     }
 
-    let scale = (THUMB_MAX_WIDTH as f32 / src_width as f32).min(1.0);
+    let scale = (max_width as f32 / src_width as f32).min(1.0);
     let target_width = ((src_width as f32 * scale).round() as u32).max(1);
     let target_height = ((src_height as f32 * scale).round() as u32).max(1);
 
@@ -3635,7 +3644,7 @@ mod tests {
     fn split_thumbnails_use_requested_time_inside_keyframe_interval() {
         let fixture = ImportFixture::new(include_bytes!("../tests/data/clip-thumbnail-gop.mp4"));
         for (time, expected_channel) in [(0.0, 2), (1.5, 1), (2.5, 0), (3.0, 0)] {
-            let thumbnail = decode_thumbnail_frame(&fixture.source, time).unwrap();
+            let thumbnail = decode_thumbnail_frame(&fixture.source, time, THUMB_MAX_WIDTH).unwrap();
             let data = thumbnail.as_bytes(0).unwrap();
             let pixel = &data[..4];
             assert!(
@@ -3655,7 +3664,7 @@ mod tests {
         let fixture =
             ImportFixture::new(include_bytes!("../tests/data/clip-thumbnail-long-gop.mp4"));
         for time in [8.5, 10.0, 11.0] {
-            let thumbnail = decode_thumbnail_frame(&fixture.source, time).unwrap();
+            let thumbnail = decode_thumbnail_frame(&fixture.source, time, THUMB_MAX_WIDTH).unwrap();
             let data = thumbnail.as_bytes(0).unwrap();
             let pixel = &data[..4];
             assert!(
@@ -3677,8 +3686,13 @@ mod tests {
                 "time budget",
             ),
         ] {
-            let result =
-                decode_thumbnail_frame_with_budget(&fixture.source, 8.5, packet_limit, timeout);
+            let result = decode_thumbnail_frame_with_budget(
+                &fixture.source,
+                8.5,
+                THUMB_MAX_WIDTH,
+                packet_limit,
+                timeout,
+            );
             assert!(result.unwrap_err().contains(expected_error));
         }
     }

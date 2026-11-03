@@ -820,6 +820,7 @@ pub struct SidebarState {
     pads: std::cell::RefCell<HashMap<PadKey, SliderTrack>>,
     /// The live pad drag, and whether it is holding a `history.pause()`.
     pub pad_drag: Option<PadKey>,
+    pub(crate) zoom_frame: crate::editor_panels::ZoomFocalFrame,
 
     /// `ColorCorrectionSection`'s `adjustOpen` signal -- one per instance, so
     /// the Background tab's and the Camera tab's open independently.
@@ -926,6 +927,7 @@ impl SidebarState {
             tracks: std::cell::RefCell::new(HashMap::new()),
             pads: std::cell::RefCell::new(HashMap::new()),
             pad_drag: None,
+            zoom_frame: Default::default(),
             grade_adjust: [CollapsibleState::new(false), CollapsibleState::new(false)],
             camera_shadow_open: CollapsibleState::new(false),
             cursor_physics_open: CollapsibleState::new(!config.cursor.raw),
