@@ -343,7 +343,10 @@ fn check_project(case: &mut Case, project: &Path, takes: &Takes) {
         &takes.iter().map(|take| take.0).collect::<Vec<_>>(),
         |audio_path| {
             tokens = fake_tokens(audio_path)?;
-            Ok(caption_segments_from_tokens(tokens.clone()))
+            Ok(caption_segments_from_tokens(
+                tokens.clone(),
+                cap_project::TARGET_CAPTION_WORDS_PER_SEGMENT,
+            ))
         },
     );
     let segments = match result {
@@ -613,7 +616,10 @@ fn segmentation_case(id: &str, unicode: bool) {
             unicode,
         );
         let reference = reference_segments(&tokens);
-        let product = caption_segments_from_tokens(tokens.clone());
+        let product = caption_segments_from_tokens(
+            tokens.clone(),
+            cap_project::TARGET_CAPTION_WORDS_PER_SEGMENT,
+        );
         if product.is_empty() {
             empty += 1;
         }
@@ -812,11 +818,14 @@ fn transcription_keeps_speech_after_empty_ranges_and_cleans_up_on_failure() {
     let result = transcribe_project_with(&project, Some(&timeline), &durations, |path| {
         temporary = path.to_path_buf();
         calls += 1;
-        Ok(caption_segments_from_tokens([CaptionWord {
-            text: "speech".into(),
-            start: 1.1,
-            end: 1.2,
-        }]))
+        Ok(caption_segments_from_tokens(
+            [CaptionWord {
+                text: "speech".into(),
+                start: 1.1,
+                end: 1.2,
+            }],
+            cap_project::TARGET_CAPTION_WORDS_PER_SEGMENT,
+        ))
     })
     .unwrap();
     assert_eq!(calls, 1);
@@ -832,7 +841,10 @@ fn transcription_keeps_speech_after_empty_ranges_and_cleans_up_on_failure() {
     let empty = transcribe_project_with(&project, Some(&timeline), &durations, |_| Ok(Vec::new()))
         .unwrap_err();
     assert_eq!(empty, "No speech detected in the audio");
-    assert!(caption_segments_from_tokens(Vec::new()).is_empty());
+    assert!(
+        caption_segments_from_tokens(Vec::new(), cap_project::TARGET_CAPTION_WORDS_PER_SEGMENT)
+            .is_empty()
+    );
     let empty_timeline =
         serde_json::from_value(serde_json::json!({"segments":[],"zoomSegments":[]})).unwrap();
     let error = transcribe_project_with(&project, Some(&empty_timeline), &durations, |_| {
@@ -857,18 +869,21 @@ fn source_timestamps_restore_words_in_two_ranges() {
         },
     ];
     let segments = restore_source_timestamps(
-        caption_segments_from_tokens([
-            CaptionWord {
-                text: "first".into(),
-                start: 0.25,
-                end: 0.5,
-            },
-            CaptionWord {
-                text: "second".into(),
-                start: 2.25,
-                end: 2.5,
-            },
-        ]),
+        caption_segments_from_tokens(
+            [
+                CaptionWord {
+                    text: "first".into(),
+                    start: 0.25,
+                    end: 0.5,
+                },
+                CaptionWord {
+                    text: "second".into(),
+                    start: 2.25,
+                    end: 2.5,
+                },
+            ],
+            cap_project::TARGET_CAPTION_WORDS_PER_SEGMENT,
+        ),
         &offsets,
     );
     assert_eq!(segments.len(), 1);
@@ -898,18 +913,21 @@ fn source_timestamps_clamp_words_and_wordless_segments_at_junctions() {
             length: 3.0,
         },
     ];
-    let mut segments = caption_segments_from_tokens([
-        CaptionWord {
-            text: "across".into(),
-            start: 1.75,
-            end: 2.25,
-        },
-        CaptionWord {
-            text: "junction".into(),
-            start: 2.0,
-            end: 2.25,
-        },
-    ]);
+    let mut segments = caption_segments_from_tokens(
+        [
+            CaptionWord {
+                text: "across".into(),
+                start: 1.75,
+                end: 2.25,
+            },
+            CaptionWord {
+                text: "junction".into(),
+                start: 2.0,
+                end: 2.25,
+            },
+        ],
+        cap_project::TARGET_CAPTION_WORDS_PER_SEGMENT,
+    );
     segments.push(CaptionSegment {
         start: 1.75,
         end: 2.25,
@@ -937,11 +955,14 @@ fn source_timestamps_for_one_range_match_a_source_offset() {
         source_start: 37.0,
         length: 4.0,
     }];
-    let segments = caption_segments_from_tokens([CaptionWord {
-        text: "word".into(),
-        start: 0.25,
-        end: 0.5,
-    }]);
+    let segments = caption_segments_from_tokens(
+        [CaptionWord {
+            text: "word".into(),
+            start: 0.25,
+            end: 0.5,
+        }],
+        cap_project::TARGET_CAPTION_WORDS_PER_SEGMENT,
+    );
     let mut reference = segments.clone();
     for segment in &mut reference {
         segment.start += 37.0;
@@ -957,11 +978,14 @@ fn source_timestamps_for_one_range_match_a_source_offset() {
 
 #[test]
 fn source_timestamps_with_empty_ranges_produce_no_captions() {
-    let mut segments = caption_segments_from_tokens([CaptionWord {
-        text: "word".into(),
-        start: 0.25,
-        end: 0.5,
-    }]);
+    let mut segments = caption_segments_from_tokens(
+        [CaptionWord {
+            text: "word".into(),
+            start: 0.25,
+            end: 0.5,
+        }],
+        cap_project::TARGET_CAPTION_WORDS_PER_SEGMENT,
+    );
     segments.push(CaptionSegment {
         start: 0.25,
         end: 0.5,

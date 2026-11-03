@@ -899,6 +899,7 @@ fn styled_settings(rng: &mut Rng) -> CaptionSettings {
         linger_duration: 0.7,
         word_transition_duration: 0.1,
         active_word_highlight: true,
+        segment_words: rng.range(1, 9) as u32,
         manual_position: Some(cap_project::XY::new(0.25, 0.75)),
         preset: "custom".into(),
         animation: "pop".into(),
