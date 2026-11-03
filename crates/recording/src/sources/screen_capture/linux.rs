@@ -2252,11 +2252,9 @@ fn move_pactl_source_output(source_output: u32, source: &str) -> anyhow::Result<
             )?
         }
     };
-    if current_process_source_outputs().is_ok_and(|outputs| {
-        outputs
-            .iter()
-            .any(|output| output.id == source_output && output.source == source_index)
-    }) {
+    if current_process_source_outputs()
+        .is_ok_and(|outputs| source_output_matches_target(&outputs, source_output, source_index))
+    {
         return Ok(());
     }
 
@@ -2267,9 +2265,7 @@ fn move_pactl_source_output(source_output: u32, source: &str) -> anyhow::Result<
 
     if !status.success() {
         if current_process_source_outputs().is_ok_and(|outputs| {
-            outputs
-                .iter()
-                .any(|output| output.id == source_output && output.source == source_index)
+            source_output_matches_target(&outputs, source_output, source_index)
         }) {
             return Ok(());
         }
@@ -2299,6 +2295,16 @@ fn move_pactl_source_output(source_output: u32, source: &str) -> anyhow::Result<
     bail!(
         "PulseAudio/PipeWire acknowledged routing stream {source_output} to '{source}', but the input did not change within 2 seconds"
     )
+}
+
+fn source_output_matches_target(
+    outputs: &[PactlSourceOutput],
+    source_output: u32,
+    source_index: u32,
+) -> bool {
+    outputs
+        .iter()
+        .any(|output| output.id == source_output && output.source == source_index)
 }
 
 fn source_output_route_matches(
@@ -3442,9 +3448,12 @@ mod system_audio_tests {
                 source: 61,
             },
         ];
+        assert!(source_output_matches_target(&outputs, 1128, 47));
+        assert!(!source_output_matches_target(&outputs, 1128, 61));
+        assert!(!source_output_matches_target(&outputs, 1130, 47));
         assert!(source_output_route_matches(&outputs, 1128, 47).unwrap());
         assert!(!source_output_route_matches(&outputs, 1128, 61).unwrap());
-        assert!(!source_output_route_matches(&outputs, 1130, 47).unwrap());
+        assert!(source_output_route_matches(&outputs, 1130, 47).is_err());
     }
 
     #[test]
