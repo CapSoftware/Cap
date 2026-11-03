@@ -521,15 +521,13 @@ async fn main() {
             })
             .unwrap_or_default(),
     );
-    let speed_changes: Vec<(Duration, cap_editor::PreviewSpeed)> = arg_value(
-        &args,
-        "--preview-speed-changes",
-    )
-    .map(|value| {
-        value
-            .split(',')
-            .map(|change| {
-                change
+    let speed_changes: Vec<(Duration, cap_editor::PreviewSpeed)> =
+        arg_value(&args, "--preview-speed-changes")
+            .map(|value| {
+                value
+                    .split(',')
+                    .map(|change| {
+                        change
                     .split_once('@')
                     .and_then(|(speed, at)| {
                         Some((
@@ -543,10 +541,10 @@ async fn main() {
                         );
                         std::process::exit(2);
                     })
+                    })
+                    .collect()
             })
-            .collect()
-    })
-    .unwrap_or_default();
+            .unwrap_or_default();
     let start_frame_number = arg_value(&args, "--start-frame")
         .and_then(|s| s.parse().ok())
         .or_else(|| {
