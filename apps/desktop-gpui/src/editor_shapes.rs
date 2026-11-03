@@ -617,6 +617,10 @@ pub enum ShapeDragMode {
     Draw { kind: ShapeKind, anchor: Px },
 }
 
+pub fn shows_handles(tool_armed: bool, drawing: bool, selected: usize) -> bool {
+    !tool_armed && !drawing && selected == 1
+}
+
 pub struct ShapeDrag {
     pub mode: ShapeDragMode,
     pub primary: Option<usize>,
@@ -1653,7 +1657,7 @@ impl EditorWindow {
                 .size_full(),
             );
 
-        if !drawing && selected.len() == 1 {
+        if shows_handles(self.shape_tool.is_some(), drawing, selected.len()) {
             let index = selected[0];
             if let Some(segment) = self.shape_segments().get(index) {
                 layer = layer.child(self.render_shape_label(segment, canvas));
@@ -3007,5 +3011,14 @@ mod tests {
         let snapped = snap_angle((0., 0.), (10., 1.));
         assert!(close(snapped.1, 0.));
         assert!(close(snapped.0, (101_f64).sqrt()));
+    }
+
+    #[test]
+    fn handles_stay_hidden_while_the_draw_tool_is_armed() {
+        assert!(shows_handles(false, false, 1));
+        assert!(!shows_handles(true, false, 1));
+        assert!(!shows_handles(false, true, 1));
+        assert!(!shows_handles(false, false, 0));
+        assert!(!shows_handles(false, false, 2));
     }
 }
