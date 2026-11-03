@@ -152,15 +152,12 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let has_transition = self
-            .project
-            .timeline
-            .as_ref()
-            .and_then(|timeline| timeline.effective_transition(index))
-            .is_some();
-        if !has_transition {
+        let Some(clips) = self.project.timeline.as_ref().and_then(|timeline| {
+            timeline.effective_transition(index)?;
+            transition_clip_keys(timeline, index)
+        }) else {
             return;
-        }
+        };
         let focus = self.focus_handle_for_menu();
         window.focus(&focus, cx);
         self.clip_speed = None;
@@ -176,6 +173,7 @@ impl EditorWindow {
             left: placement.left,
             anchor: placement.anchor,
             hovered: None,
+            clips,
         });
         cx.notify();
     }

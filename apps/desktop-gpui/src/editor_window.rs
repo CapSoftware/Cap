@@ -1730,6 +1730,29 @@ struct TransitionPopover {
     anchor: ClipMenuAnchor,
     /// The kind tile under the pointer, whose preview plays.
     hovered: Option<cap_project::ClipTransitionType>,
+    /// The two clips the transition joins, so an edit that renumbers the
+    /// clips (a split, a delete, an undo) closes the popover instead of
+    /// leaving it on another cut.
+    clips: [TransitionClipKey; 2],
+}
+
+type TransitionClipKey = (u32, u64, u64);
+
+fn transition_clip_keys(
+    timeline: &TimelineConfiguration,
+    index: usize,
+) -> Option<[TransitionClipKey; 2]> {
+    let key = |segment: &cap_project::TimelineSegment| {
+        (
+            segment.recording_clip,
+            segment.start.to_bits(),
+            segment.end.to_bits(),
+        )
+    };
+    Some([
+        key(timeline.segments.get(index.checked_sub(1)?)?),
+        key(timeline.segments.get(index)?),
+    ])
 }
 const TEXT_MENU_WIDTH: f32 = 250.;
 /// Roughly the menu's laid-out height; only decides which side of its anchor
@@ -2392,15 +2415,14 @@ impl EditorWindow {
     fn dismiss_transient_menus(&mut self) {
         dismiss_indexed_sidebar_menu(&mut self.sidebar.menu);
         self.text_menu = None;
-        if let Some(index) = self.transition_popover_index()
-            && self
-                .project
-                .timeline
-                .as_ref()
-                .and_then(|timeline| timeline.effective_transition(index))
-                .is_none()
-        {
-            self.transition_popover = None;
+        if let Some(popover) = self.transition_popover {
+            let still_there = self.project.timeline.as_ref().is_some_and(|timeline| {
+                timeline.effective_transition(popover.index).is_some()
+                    && transition_clip_keys(timeline, popover.index) == Some(popover.clips)
+            });
+            if !still_there {
+                self.transition_popover = None;
+            }
         }
     }
 
@@ -14403,6 +14425,44 @@ mod tests {
                 (f64::from(word) - expected).abs() < 1e-3,
                 "first word at {word}, box at {start}"
             );
+        }
+
+        #[gpui::test]
+        fn renumbering_the_clips_closes_the_transition_popover(cx: &mut gpui::TestAppContext) {
+            let (editor, cx) = split_clip(cx);
+            editor.update(cx, |editor, cx| {
+                let timeline = editor.project.timeline.as_mut().unwrap();
+                assert!(edits::split_clip_segment(timeline, 7.0, None));
+                for index in [1, 2] {
+                    assert!(crate::editor_clips::set_clip_transition(
+                        timeline,
+                        index,
+                        cap_project::ClipTransitionType::CrossFade,
+                        0.5,
+                    ));
+                }
+                editor.rebuild_timeline();
+                cx.notify();
+            });
+            editor.update_in(cx, |editor, window, cx| {
+                editor.open_transition_popover(2, point(px(400.), px(500.)), window, cx);
+            });
+            editor.read_with(cx, |editor, _| {
+                assert_eq!(editor.transition_popover_index(), Some(2));
+            });
+
+            // Splitting the first clip moves the cut the popover was on to
+            // index 3, and puts a different transition at index 2.
+            editor.update(cx, |editor, cx| {
+                let timeline = editor.project.timeline.as_mut().unwrap();
+                assert!(edits::split_clip_segment(timeline, 1.0, Some(0)));
+                assert!(timeline.effective_transition(2).is_some());
+                editor.rebuild_timeline();
+                cx.notify();
+            });
+            editor.read_with(cx, |editor, _| {
+                assert_eq!(editor.transition_popover_index(), None);
+            });
         }
 
         #[gpui::test]
