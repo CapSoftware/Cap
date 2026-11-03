@@ -2457,3 +2457,25 @@ fn salvage_without_any_display_media_reports_nothing_to_recover() {
         .unwrap();
     assert!(RecoveryManager::inspect_recording(recording.path()).is_none());
 }
+
+#[test]
+fn a_failed_salvage_keeps_the_failure_evidence_where_it_was() {
+    test_utils::init_tracing();
+    let recording = interrupted_after_resume_fixture();
+    for fragment in list_m4s_segments(&recording.path().join("content/segments/segment-0/display"))
+    {
+        std::fs::write(&fragment, b"corrupt display media").unwrap();
+    }
+    let incomplete = RecoveryManager::inspect_recording(recording.path()).unwrap();
+    let before = recovery_input_bytes(recording.path());
+
+    assert!(RecoveryManager::salvage(&incomplete).is_err());
+
+    assert_eq!(recovery_input_bytes(recording.path()), before);
+    assert!(
+        !recording
+            .path()
+            .join(cap_recording::recovery::RECOVERED_DIAGNOSTICS_FILE)
+            .exists()
+    );
+}

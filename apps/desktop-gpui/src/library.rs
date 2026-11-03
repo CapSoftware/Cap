@@ -276,10 +276,11 @@ impl RecordingItem {
     }
 
     /// Complete studio rows open the editor, and so do interrupted ones (a
-    /// failed or unfinished recording): the editor recovers them first. Only a
-    /// recording still being written stays inert.
-    pub fn opens_editor(&self) -> bool {
-        self.mode == RecordingMode::Studio && !self.status.is_in_progress()
+    /// failed or unfinished recording): the editor recovers them first. Only
+    /// the recording being captured right now stays inert.
+    pub fn opens_editor(&self, active_recording: Option<&Path>) -> bool {
+        self.mode == RecordingMode::Studio
+            && !(self.status.is_in_progress() && active_recording == Some(self.path.as_path()))
     }
 }
 
@@ -649,8 +650,12 @@ fn recover_interrupted_for_editing_in(
     };
     let project_path = library_path.as_path();
     if RecoveryManager::inspect_recording(project_path).is_none() {
+        let has_segments = match studio {
+            StudioRecordingMeta::MultipleSegments { inner } => !inner.segments.is_empty(),
+            StudioRecordingMeta::SingleSegment { .. } => true,
+        };
         return match studio.status() {
-            StudioRecordingStatus::Failed { .. } => Ok(false),
+            StudioRecordingStatus::Failed { .. } if has_segments => Ok(false),
             _ => Err(tr::main::recovery::error::nothing_saved(project_path.display()).to_string()),
         };
     }
@@ -2454,7 +2459,7 @@ mod tests {
         );
         assert_eq!(multi.sharing.as_deref(), Some("https://cap.so/s/abc"));
         assert!(
-            multi.opens_editor(),
+            multi.opens_editor(None),
             "studio + Complete is the clickable row"
         );
         assert!(!multi.is_active());
@@ -2474,14 +2479,14 @@ mod tests {
         );
         assert_eq!(failed.status.error(), Some("encoder died"));
         assert!(
-            failed.opens_editor(),
+            failed.opens_editor(None),
             "a failed studio row opens the editor, which recovers it first"
         );
         assert!(!failed.is_active(), "Failed does not keep the poll running");
 
         let remux = by_name("Studio remux");
         assert_eq!(remux.status, RecordingStatus::NeedsRemux);
-        assert!(remux.opens_editor());
+        assert!(remux.opens_editor(None));
         assert!(
             !remux.is_active(),
             "deferred finalization does not keep polling"
@@ -2496,7 +2501,7 @@ mod tests {
             "the listing still reads saved instant upload state"
         );
         assert!(
-            !complete.opens_editor(),
+            !complete.opens_editor(None),
             "instant rows never open the editor, complete or not"
         );
 

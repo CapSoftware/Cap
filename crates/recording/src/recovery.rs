@@ -1195,17 +1195,24 @@ impl RecoveryManager {
     /// recovery backup, and the failure evidence moves to
     /// [`RECOVERED_DIAGNOSTICS_FILE`] so the recovered project opens.
     pub fn salvage(recording: &IncompleteRecording) -> Result<RecoveredRecording, RecoveryError> {
-        let recovered = Self::finalize_with_purpose(recording, RecoveryPurpose::Salvage)?;
+        // The evidence moves before publication: a project left mid-way still
+        // reads as interrupted and is salvaged again, while one published
+        // `Complete` never keeps a failure that would block the editor.
         let diagnostics = recording.project_path.join("recording-diagnostics.json");
-        match std::fs::rename(
-            &diagnostics,
-            recording.project_path.join(RECOVERED_DIAGNOSTICS_FILE),
-        ) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        let retained = recording.project_path.join(RECOVERED_DIAGNOSTICS_FILE);
+        let moved = match std::fs::rename(&diagnostics, &retained) {
+            Ok(()) => true,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
             Err(error) => return Err(error.into()),
+        };
+        let recovered = Self::finalize_with_purpose(recording, RecoveryPurpose::Salvage);
+        if recovered.is_err()
+            && moved
+            && let Err(error) = std::fs::rename(&retained, &diagnostics)
+        {
+            warn!(%error, path = %retained.display(), "Could not restore recording diagnostics after a failed salvage");
         }
-        Ok(recovered)
+        recovered
     }
 
     pub fn finalize(recording: &IncompleteRecording) -> Result<RecoveredRecording, RecoveryError> {

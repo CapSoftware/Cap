@@ -2881,7 +2881,11 @@ impl SettingsWindow {
         let theme = self.theme;
         let item = &row.item;
         // `studioCompleteCheck()`: the only rows whose body is a button.
-        let opens_editor = item.opens_editor();
+        let active = crate::session::RecordingSession::global(cx)
+            .read(cx)
+            .active_project_dir()
+            .map(std::path::Path::to_path_buf);
+        let opens_editor = item.opens_editor(active.as_deref());
         let path = item.path.clone();
 
         let thumbnail = match row.thumbnail.clone() {
@@ -3068,7 +3072,11 @@ impl SettingsWindow {
         let path = item.path.clone();
         let sharing = item.sharing.clone();
         let failed = item.status.error().is_some();
-        let in_progress = item.status.is_in_progress();
+        let active = crate::session::RecordingSession::global(cx)
+            .read(cx)
+            .active_project_dir()
+            .map(std::path::Path::to_path_buf);
+        let in_progress = !item.opens_editor(active.as_deref());
 
         let mut actions = div().flex().flex_row().items_center().gap(px(8.));
 
