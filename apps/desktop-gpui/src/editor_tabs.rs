@@ -1148,8 +1148,12 @@ impl EditorWindow {
                 // `STYLE_PRESET_KEYS` knocks the grade to "custom"
                 // (`CaptionsTab.tsx:326-336`). Every setter routed through here
                 // is one of those keys except the two `enabled`-style ones,
-                // which are handled by their own call sites.
-                if reason != "caption-enabled" && reason != "caption-export" {
+                // which are handled by their own call sites, and the filler
+                // word toggle, which is about content rather than style.
+                if !matches!(
+                    reason,
+                    "caption-enabled" | "caption-export" | "caption-filler-words"
+                ) {
                     settings.preset = "custom".to_string();
                 }
             })
@@ -3060,6 +3064,31 @@ impl EditorWindow {
                                         },
                                     )),
                                 ),
+                        )
+                        .child(
+                            ui::Subfield::plain(
+                                &theme,
+                                tr::editor::tabs::captions::show_filler_words(),
+                            )
+                            .child(
+                                ui::Toggle::plain(
+                                    &theme,
+                                    "caption-filler-words",
+                                    settings.show_filler_words,
+                                )
+                                .on_click(cx.listener(
+                                    |this, _, window, cx| {
+                                        let next =
+                                            !caption_settings(&this.project).show_filler_words;
+                                        this.set_caption_setting(
+                                            "caption-filler-words",
+                                            window,
+                                            cx,
+                                            move |settings| settings.show_filler_words = next,
+                                        );
+                                    },
+                                )),
+                            ),
                         )
                         .child(
                             div()
