@@ -308,8 +308,11 @@ impl EditorWindow {
                         .flex_none()
                         .text_color(Hsla::from(theme.editor.text_3)),
                 )
-                .tooltip(move |_window, cx| {
-                    ui::Tooltip::new(&theme, tr::editor::panel::style_presets::tooltip()).view(cx)
+                .when(!open, |this| {
+                    this.tooltip(move |_window, cx| {
+                        ui::Tooltip::new(&theme, tr::editor::panel::style_presets::tooltip())
+                            .view(cx)
+                    })
                 }),
             cx.listener(move |this, bounds: &Bounds<Pixels>, window, cx| {
                 this.open_style_presets_menu(kind, indices.clone(), *bounds, window, cx);
