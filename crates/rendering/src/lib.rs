@@ -10261,6 +10261,98 @@ mod project_uniforms_tests {
     }
 
     #[tokio::test]
+    async fn idle_hidden_cursor_never_flashes_while_resuming() {
+        let mut constants = cursor_test_constants().await;
+        let size = XY::new(320, 180);
+        constants.options.screen_size = size;
+        let events = CursorEvents {
+            moves: [0.0, 3000.0, 3050.0]
+                .into_iter()
+                .map(|time| cursor_move(time, 0.5, 0.5))
+                .collect(),
+            clicks: Vec::new(),
+        };
+        let mut project = ProjectConfiguration::default();
+        project.cursor.raw = true;
+        project.cursor.set_cursor_type(CursorType::Circle);
+        project.cursor.hide_when_idle = true;
+        project.cursor.hide_when_idle_delay = 0.5;
+        project.timeline = Some(
+            serde_json::from_value(serde_json::json!({
+                "segments": [{ "start": 0.0, "end": 4.0, "timescale": 1.0 }],
+                "zoomSegments": []
+            }))
+            .unwrap(),
+        );
+        let cursor = PrecomputedCursorTimeline::new(&events, None, None);
+        let zoom = ZoomTransformTimeline::from_project(&project, &events, 4.0, size);
+        let mut hidden_project = project.clone();
+        hidden_project.cursor.hide = true;
+        let project = Arc::new(project);
+        let hidden_project = Arc::new(hidden_project);
+        let source = DecodedFrame::new(vec![160; 320 * 180 * 4], size.x, size.y);
+        let mut renderer = FrameRenderer::new(&constants);
+        let mut layers = RendererLayers::new(&constants.device, &constants.queue);
+        let mut render = async |project: &Arc<ProjectConfiguration>, frame_number: u32| {
+            let time = frame_number as f32 / 60.0;
+            let frames = DecodedSegmentFrames {
+                screen_size: size,
+                screen_frame: Some(source.clone()),
+                camera_frame: None,
+                segment_time: time,
+                recording_time: time,
+                segment_has_camera: false,
+            };
+            let uniforms = ProjectUniforms::new_with_precomputed_cursor(
+                &constants,
+                project,
+                frame_number,
+                60,
+                size,
+                &events,
+                &frames,
+                4.0,
+                &zoom,
+                &cursor,
+            );
+            renderer
+                .render_immediate(frames, uniforms, &events, true, &mut layers)
+                .await
+                .unwrap()
+                .data
+        };
+        let background = render(&hidden_project, 180).await;
+        let mut coverage = Vec::new();
+        for frame_number in 160..=212 {
+            let frame = render(&project, frame_number).await;
+            let drawn: u64 = frame
+                .iter()
+                .zip(background.iter())
+                .map(|(a, b)| u64::from(a.abs_diff(*b)))
+                .sum();
+            coverage.push((frame_number, drawn));
+        }
+        assert_eq!(coverage[0].1, 0, "the cursor must start idle-hidden");
+        let full = coverage.last().unwrap().1;
+        assert!(full > 0, "the fixture must draw a cursor");
+        for pair in coverage.windows(2) {
+            assert!(
+                pair[1].1 >= pair[0].1,
+                "cursor coverage fell from {} at frame {} to {} at frame {}",
+                pair[0].1,
+                pair[0].0,
+                pair[1].1,
+                pair[1].0,
+            );
+        }
+        let at_resume = coverage.iter().find(|(frame, _)| *frame == 180).unwrap().1;
+        assert_eq!(
+            at_resume, full,
+            "the cursor must be fully visible when it moves"
+        );
+    }
+
+    #[tokio::test]
     #[ignore]
     async fn benchmark_idle_cursor_frame_preparation() {
         let mut constants = cursor_test_constants().await;
