@@ -5599,8 +5599,6 @@ impl EditorWindow {
         .detach();
     }
 
-    /// A library track dropped on the timeline: added on the audio lane it
-    /// landed on (a new lane anywhere else), starting under the pointer.
     fn drop_library_track(
         &mut self,
         drag: &crate::editor_audio::LibraryDrag,

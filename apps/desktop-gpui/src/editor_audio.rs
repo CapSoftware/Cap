@@ -235,14 +235,12 @@ impl EditorWindow {
     }
 }
 
-/// A library track being dragged toward the timeline.
 #[derive(Debug, Clone, Copy)]
 pub struct LibraryDrag {
     pub id: &'static str,
     pub name: &'static str,
 }
 
-/// The chip that follows the pointer during a [`LibraryDrag`].
 struct LibraryDragPreview {
     theme: Theme,
     name: &'static str,
@@ -299,7 +297,6 @@ fn render_library_row(
                     this.add_library_track(id, name, window, cx);
                 }))
         })
-        // Drag the row onto a timeline lane to add the track where it lands.
         .when(!importing && !replacing, |row| {
             let preview_theme = *theme;
             row.on_drag(LibraryDrag { id, name }, move |drag, _, _, cx| {
