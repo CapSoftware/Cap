@@ -1021,7 +1021,10 @@ async fn every_shape_kind_draws_its_outline_and_leaves_the_rest() {
     assert!(light > 20, "the badge number must draw");
     let centroid = sum_y / count / badge_frame.height as f64;
     eprintln!("badge digit vertical centroid {centroid:.4}");
-    assert!((centroid - 0.5).abs() < 0.005, "digit centroid {centroid}");
+    // The default sans-serif differs per platform (Helvetica, DejaVu Sans,
+    // Arial) and so do its ascent and descent, which moves the ink by about
+    // 1% of this frame's height off Apple's exact centre.
+    assert!((centroid - 0.5).abs() < 0.015, "digit centroid {centroid}");
     assert!(layers.overlays.as_ref().unwrap().shapes.labels_created());
 
     let mut shadowed = red_shape(ShapeKind::Rectangle, (0.25, 0.25), (0.75, 0.75));
