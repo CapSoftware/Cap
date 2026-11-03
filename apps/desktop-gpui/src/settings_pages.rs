@@ -941,8 +941,12 @@ const RECORDING_SHORTCUTS: [&str; 7] = [
     "cycleRecordingMode",
 ];
 
-const WHILE_RECORDING_SHORTCUTS: [&str; 3] =
-    ["stopRecording", "togglePauseRecording", "restartRecording"];
+const WHILE_RECORDING_SHORTCUTS: [&str; 4] = [
+    "stopRecording",
+    "togglePauseRecording",
+    "restartRecording",
+    store::RECORDING_MARKER_HOTKEY,
+];
 
 const SHORTCUT_SAVED_NOTICE: std::time::Duration = std::time::Duration::from_secs(6);
 
@@ -1058,6 +1062,7 @@ fn shortcut_label(action: &str) -> &'static str {
         "stopRecording" => tr::settings::shortcuts::label::stop(),
         "togglePauseRecording" => tr::settings::shortcuts::label::pause(),
         "restartRecording" => tr::settings::shortcuts::label::restart(),
+        store::RECORDING_MARKER_HOTKEY => tr::settings::shortcuts::label::add_marker(),
         _ => tr::settings::shortcuts::label::fallback(),
     }
 }
@@ -1226,6 +1231,10 @@ fn shortcut_effect(
             phrase: tr::settings::shortcuts::effect::restart,
             sentence: tr::settings::shortcuts::sentence::restart,
         },
+        store::RECORDING_MARKER_HOTKEY => ShortcutEffect {
+            phrase: tr::settings::shortcuts::effect::add_marker,
+            sentence: tr::settings::shortcuts::sentence::add_marker,
+        },
         _ => return None,
     };
     Some(effect)
@@ -1307,7 +1316,7 @@ const UNSUPPORTED_KEY: fn() -> &'static str = tr::settings::shortcuts::unsupport
 
 /// `HotkeyText`'s key list: modifiers in ⌘⌃⌥⇧ order, then the main key.
 /// [`ui::kbd_symbol`] does the per-OS glyph mapping.
-fn hotkey_display_keys(hotkey: &Hotkey) -> Vec<String> {
+pub(crate) fn hotkey_display_keys(hotkey: &Hotkey) -> Vec<String> {
     let mut keys = Vec::new();
     if hotkey.meta {
         keys.push("meta".to_string());
@@ -1351,7 +1360,7 @@ fn hotkey_inline_text(hotkey: &Hotkey) -> String {
         .join(separator)
 }
 
-fn hotkey_key_text(key: &str) -> SharedString {
+pub(crate) fn hotkey_key_text(key: &str) -> SharedString {
     if let Some(digit) = key.strip_prefix("Digit") {
         return SharedString::from(digit.to_string());
     }
@@ -8141,7 +8150,7 @@ mod tests {
             .chain(WHILE_RECORDING_SHORTCUTS.iter())
             .copied()
             .collect();
-        assert_eq!(shown.len(), 13);
+        assert_eq!(shown.len(), 14);
         let settings = store::GeneralSettings::default();
         for action in &shown {
             assert_eq!(shown.iter().filter(|other| *other == action).count(), 1);
@@ -8327,6 +8336,7 @@ mod tests {
             "stopRecording" => "stop the current recording".into(),
             "togglePauseRecording" => "pause the current recording, or resume it".into(),
             "restartRecording" => "throw away the current take and start again".into(),
+            "addRecordingMarker" => "mark this moment in a Studio recording".into(),
             _ => String::new(),
         }
     }
@@ -8371,7 +8381,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(checked.len(), 30, "every effect message is reachable");
+        assert_eq!(checked.len(), 31, "every effect message is reachable");
         assert!(shortcut_effect("nope", &settings, Mode::Studio).is_none());
     }
 

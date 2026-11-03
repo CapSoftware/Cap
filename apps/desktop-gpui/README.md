@@ -2006,6 +2006,7 @@ steps and side effects are the call site's.
 | | Uppercase / Active Word Highlight (+ Highlight Color, Style) | toggles, then a hex field and a select | — | `captions.settings.{uppercase,activeWordHighlight,highlightColor,highlightStyle}` |
 | | Background Settings → Color / Opacity | hex field + swatch, slider | 0–100 / 1 `%` | `captions.settings.{backgroundColor,backgroundOpacity}` |
 | | Position / Animation / Font Weight | three selects | — | `captions.settings.{position,fontWeight}`, `{fade,linger,wordTransition}Duration` |
+| | Manual position → Horizontal / Vertical / Reset Position | shown while Position is Manual: slider plus a typed percentage per axis, and a reset to bottom centre. The caption on the preview is also a canvas element then: hover, select, drag with centre, thirds and safe-margin guides, arrow keys nudge 1px (10 with Shift) | 0–100 `%` | `captions.settings.manualPosition`, the caption box's centre as a fraction of the output frame |
 
 Two things in these tabs are honest dead ends rather than key paths, and both
 say so in the UI:

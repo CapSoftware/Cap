@@ -14,8 +14,11 @@ use specta::Type;
 
 use crate::DisplayNotch;
 
+mod markers;
 #[cfg(test)]
 mod style_resolution_tests;
+
+pub use markers::{PlacedMarker, TimelineMarker};
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
@@ -2707,6 +2710,12 @@ pub struct ProjectConfiguration {
     /// durations from `fade_duration`.
     #[serde(default)]
     pub text_anim_version: u32,
+    #[serde(
+        default,
+        deserialize_with = "markers::deserialize_markers",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub markers: Vec<TimelineMarker>,
 }
 
 pub const TEXT_SIZE_VERSION: u32 = 1;
@@ -2758,6 +2767,7 @@ impl Default for ProjectConfiguration {
             color_correction: Default::default(),
             text_size_version: TEXT_SIZE_VERSION,
             text_anim_version: TEXT_ANIM_VERSION,
+            markers: Vec::new(),
         }
     }
 }
@@ -2843,6 +2853,7 @@ impl ProjectConfiguration {
         preset.text_anim_version = self.text_anim_version;
         preset.overlay_order = self.overlay_order.clone();
         preset.clips = self.clips.clone();
+        preset.markers = self.markers.clone();
         preset
     }
 
@@ -4801,6 +4812,57 @@ mod tests {
 
         assert_eq!(loaded.camera.manual_position, Some(XY::new(0.25, 0.75)));
         assert_eq!(loaded.background.display_position, Some(XY::new(0.5, 0.4)));
+    }
+
+    #[test]
+    fn manual_caption_position_loads_from_old_projects_and_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let mut value = serde_json::to_value(ProjectConfiguration::default()).unwrap();
+        value["captions"] = serde_json::json!({
+            "segments": [],
+            "settings": { "enabled": true, "position": "manual" },
+        });
+        std::fs::write(
+            dir.path().join("project-config.json"),
+            serde_json::to_string(&value).unwrap(),
+        )
+        .unwrap();
+        let old = ProjectConfiguration::load(dir.path()).unwrap();
+        let settings = &old.captions.as_ref().unwrap().settings;
+        assert_eq!(settings.position, "manual");
+        assert_eq!(settings.manual_position, None);
+
+        value["captions"]["settings"]["manualPosition"] = serde_json::json!({ "x": 0.3, "y": 0.2 });
+        std::fs::write(
+            dir.path().join("project-config.json"),
+            serde_json::to_string(&value).unwrap(),
+        )
+        .unwrap();
+        let tauri = ProjectConfiguration::load(dir.path()).unwrap();
+        assert_eq!(
+            tauri.captions.as_ref().unwrap().settings.manual_position,
+            Some(XY::new(0.3, 0.2))
+        );
+
+        let mut config = tauri;
+        config.captions.as_mut().unwrap().settings.manual_position =
+            Some(XY::new(0.423_7, 0.123_4));
+        let saved = serde_json::to_value(&config).unwrap();
+        assert_eq!(
+            saved["captions"]["settings"]["manualPosition"],
+            serde_json::json!({ "x": 0.423_7_f32, "y": 0.123_4_f32 })
+        );
+        std::fs::write(
+            dir.path().join("project-config.json"),
+            serde_json::to_string(&config).unwrap(),
+        )
+        .unwrap();
+        let reopened = ProjectConfiguration::load(dir.path()).unwrap();
+        assert_eq!(
+            reopened.captions.as_ref().unwrap().settings.manual_position,
+            Some(XY::new(0.423_7, 0.123_4))
+        );
     }
 
     fn write_config_with_text_segment(

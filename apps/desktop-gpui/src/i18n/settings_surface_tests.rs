@@ -426,6 +426,7 @@ fn settings_surfaces_match_the_literals_they_replaced() {
             "Cycle recording mode",
         ),
         (tr::settings::shortcuts::label::stop(), "Stop recording"),
+        (tr::settings::shortcuts::label::add_marker(), "Add marker"),
         (tr::settings::shortcuts::label::pause(), "Pause or resume"),
         (
             tr::settings::shortcuts::label::restart(),

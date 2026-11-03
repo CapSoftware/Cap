@@ -784,12 +784,33 @@ fn apply_quit_action(action: QuitAction, cx: &mut App) {
                 message
             });
             tracing::warn!(%message);
-            cx.spawn(async move |_| {
-                platform::alert_dialog(tr::dialog::quit::still_open(), &message)
+            let detail = format!("{message}\n\n{}", tr::dialog::quit::files_kept());
+            cx.spawn(async move |cx| {
+                let quit_anyway = platform::confirm_dialog(
+                    tr::dialog::quit::still_open(),
+                    &detail,
+                    tr::dialog::quit::quit_anyway(),
+                    tr::dialog::quit::keep_open(),
+                    true,
+                );
+                if quit_anyway {
+                    cx.update(quit_with_unconfirmed_recording);
+                }
             })
             .detach();
         }
     }
+}
+
+/// The user chose to quit although the recording could not be confirmed
+/// stopped. Every fragment written so far is already on disk, so this is
+/// never worse than the force quit it replaces.
+fn quit_with_unconfirmed_recording(cx: &mut App) {
+    tracing::warn!("quitting with an unconfirmed recording stop; its files are kept for recovery");
+    let coordinator = cx.global_mut::<QuitCoordinator>();
+    coordinator.gate.pending = None;
+    coordinator.gate.exit_committed = true;
+    apply_quit_action(QuitAction::Exit, cx);
 }
 
 // -- The dock icon -----------------------------------------------------------

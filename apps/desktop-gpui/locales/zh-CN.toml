@@ -206,6 +206,10 @@ fps_30 = "30 FPS"
 fps_60 = "60 FPS（推荐）"
 label = "最大捕获帧率"
 
+[settings.general.recording.marker_sound]
+description = "在 Studio 录制中添加标记时播放一段简短提示音。麦克风或系统音频可能会录入这段声音。"
+label = "添加标记时播放提示音"
+
 [settings.general.storage]
 choose_folder = "选择文件夹"
 default_location = "默认（Application Support）"
@@ -431,6 +435,7 @@ studio_show_cap = "显示 Cap"
 studio_show_cap_hint = "回到录制器"
 
 [settings.shortcuts.label]
+add_marker = "添加标记"
 cycle_mode = "切换录制模式"
 fallback = "快捷键"
 open_picker = "打开录制选择器"
@@ -447,6 +452,7 @@ start_studio = "开始 Studio 录制"
 stop = "停止录制"
 
 [settings.shortcuts.effect]
+add_marker = "在 Studio 录制中标记此刻"
 cycle_mode = "在 Studio、Instant 和截图模式之间切换"
 instant_copy = "以 Instant 模式录制所选屏幕或窗口，停止后复制分享链接"
 instant_copy_and_open = "以 Instant 模式录制所选屏幕或窗口，停止后复制并打开分享链接"
@@ -479,6 +485,7 @@ studio = "以 Studio 模式录制所选屏幕或窗口"
 studio_open_editor = "以 Studio 模式录制所选屏幕或窗口，停止后打开编辑器"
 
 [settings.shortcuts.sentence]
+add_marker = "在 Studio 录制中标记此刻。"
 cycle_mode = "在 Studio、Instant 和截图模式之间切换。"
 instant_copy = "以 Instant 模式录制所选屏幕或窗口，停止后复制分享链接。"
 instant_copy_and_open = "以 Instant 模式录制所选屏幕或窗口，停止后复制并打开分享链接。"
@@ -1141,6 +1148,9 @@ pausing = "暂停中…"
 resuming = "恢复中…"
 saving = "保存中…"
 starting = "正在开始"
+
+[controls.marker]
+add = "添加标记"
 
 [camera]
 waiting_title = "正在等待摄像头权限"
@@ -1986,6 +1996,55 @@ edit_cursor = "编辑光标"
 help = "覆盖设置仅在此分段期间生效。启用一个分组即可复制其全局设置。"
 reset_crop = "重置裁剪"
 
+[editor.panel.style_presets]
+apply = "应用"
+create = "保存"
+create_title = "保存样式预设"
+custom = "自定义样式"
+default_badge = "默认"
+delete = "删除"
+delete_confirm = "删除“{name}”？已使用此样式的项目会保留它。"
+delete_title = "删除样式预设"
+empty = "还没有已保存的预设"
+empty_help = "保存样式后可在任何项目中重复使用。"
+font_missing = "此电脑未安装 {font}，因此改用{fallback}。"
+move_down = "下移"
+move_up = "上移"
+remove_default = "取消默认"
+rename = "重命名"
+rename_title = "重命名样式预设"
+save = "将样式保存为预设"
+save_failed = "无法保存预设。Cap 无法写入其设置文件。"
+set_default = "设为默认"
+tooltip = "样式预设"
+update = "用当前样式更新"
+
+[editor.panel.style_presets.captions]
+default_name = "我的字幕样式"
+use_for_new = "用于新字幕"
+used_for_new = "新字幕使用此样式"
+
+[editor.panel.style_presets.mask]
+applied_all = "已应用到所有遮罩（{number}）"
+apply_all = "应用到所有遮罩（{number}）"
+default_name = "我的遮罩样式"
+use_for_new = "用于新遮罩"
+used_for_new = "新遮罩使用此样式"
+
+[editor.panel.style_presets.style]
+applied_all = "已应用到所有样式分段（{number}）"
+apply_all = "应用到所有样式分段（{number}）"
+default_name = "我的样式"
+use_for_new = "用于新样式分段"
+used_for_new = "新样式分段使用此样式"
+
+[editor.panel.style_presets.text_segment]
+applied_all = "已应用到所有文字分段（{number}）"
+apply_all = "应用到所有文字分段（{number}）"
+default_name = "我的文字样式"
+use_for_new = "用于新文字"
+used_for_new = "新文字使用此样式"
+
 [editor.panel.text_animation]
 bounce = "弹跳"
 fade = "淡入淡出"
@@ -2242,6 +2301,7 @@ purple = "紫色"
 [editor.canvas]
 camera = "摄像头"
 camera_follows_zoom = "摄像头大小随缩放变化；拖动即可移动"
+captions = "字幕"
 edit_zoom = "编辑缩放"
 image = "图片"
 mask = "遮罩"
@@ -2500,6 +2560,7 @@ model_downloaded = "已下载“{model}”模型"
 model_label = "模型"
 position = "位置"
 regenerate = "重新生成字幕"
+reset_position = "重置位置"
 size_label = "大小"
 style = "样式"
 text_color = "文字颜色"
@@ -2907,6 +2968,21 @@ generating = "正在生成…"
 no_clicks = "未找到可缩放的点击。在轨道上拖动即可添加。"
 prompt = "自动添加缩放"
 
+[editor.markers]
+add = "添加标记"
+button = { other = "{count} 个标记" }
+default_name = "标记 {number}"
+delete = "删除标记"
+done = "完成"
+edit = "编辑标记"
+empty = "还没有标记。按 M 标记播放头位置，或在录制时添加标记。"
+hidden = { other = "{count} 个标记位于已剪掉的部分。" }
+next = "下一个标记"
+previous = "上一个标记"
+split = "在标记处拆分片段"
+stack = { other = "{count} 个标记距离很近。点击查看。" }
+title = "标记"
+
 [ui]
 coming_soon = "即将推出"
 
@@ -2930,7 +3006,10 @@ zoom_some = { other = "已选择 {count}/{total} 个" }
 
 [dialog.quit]
 canceled = "已取消退出：{error}。Cap 将保持打开，以便你完成或恢复录制。"
+files_kept = "目前为止录制的所有内容都会保留在该录制的文件夹中。"
+keep_open = "保持 Cap 打开"
 pending = "录制仍在停止中，已取消退出。Cap 将保持打开。请在可用时点击“停止”，然后再次尝试退出。"
+quit_anyway = "仍然退出"
 still_open = "Cap 仍在运行"
 unconfirmed = "无法确认录制已停止，已取消退出。Cap 将保持打开。请点击“停止”，然后再次尝试退出。"
 
