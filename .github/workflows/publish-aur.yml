@@ -124,12 +124,27 @@ jobs:
           version_of() {
             awk -F ' = ' '$1 == "\tepoch" { epoch = $2 ":" } $1 == "\tpkgver" { pkgver = $2 } $1 == "\tpkgrel" { pkgrel = $2 } END { print epoch pkgver "-" pkgrel }' "$1"
           }
+          upstream_of() {
+            awk -F ' = ' '$1 == "\tepoch" { epoch = $2 ":" } $1 == "\tpkgver" { pkgver = $2 } END { print epoch pkgver }' "$1"
+          }
+          pkgrel_of() {
+            awk -F ' = ' '$1 == "\tpkgrel" { print $2 }' "$1"
+          }
           if [[ -f "$AUR/.SRCINFO" ]]; then
             CURRENT="$(version_of "$AUR/.SRCINFO")"
             NEW="$(version_of "$PACKAGE/.SRCINFO")"
             if (( $(docker run --rm --network none "$ARCH_IMAGE" vercmp "$NEW" "$CURRENT") < 0 )); then
               echo "::notice::The AUR already has $PKGBASE $CURRENT, which is newer than $NEW."
               exit 0
+            fi
+            if [[ "$(upstream_of "$AUR/.SRCINFO")" == "$(upstream_of "$PACKAGE/.SRCINFO")" ]] &&
+              ! cmp -s "$AUR/PKGBUILD" "$PACKAGE/PKGBUILD"; then
+              # Same upstream version but a changed recipe: installed users
+              # only upgrade on a higher pkgrel, so carry the AUR's forward.
+              NEW_PKGREL=$(( $(pkgrel_of "$AUR/.SRCINFO") + 1 ))
+              sed -i "s/^pkgrel=.*/pkgrel=$NEW_PKGREL/" "$PACKAGE/PKGBUILD"
+              sed -i "s/^\(\tpkgrel = \).*/\1$NEW_PKGREL/" "$PACKAGE/.SRCINFO"
+              echo "::notice::Recipe changed for $PKGBASE $VERSION, publishing as pkgrel $NEW_PKGREL."
             fi
           fi
           cp "$PACKAGE/PKGBUILD" "$PACKAGE/.SRCINFO" "$AUR/"
@@ -139,5 +154,5 @@ jobs:
             echo "The AUR already has $PKGBASE $VERSION."
             exit 0
           fi
-          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" commit -m "Update to $VERSION"
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" commit -m "Update to $(version_of .SRCINFO)"
           git push origin HEAD:master
