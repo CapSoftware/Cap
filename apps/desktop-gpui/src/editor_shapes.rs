@@ -1170,6 +1170,17 @@ impl EditorWindow {
         }
         let selected = self.selected_shape_indices();
         let selected_one = (selected.len() == 1).then(|| selected[0]);
+        if let Some(index) = selected_one
+            && let Some(handle) = self
+                .shape_segments()
+                .get(index)
+                .filter(|segment| segment.is_active_at(self.preview_or_playhead()))
+                .and_then(|segment| hit_handle(segment, canvas, point))
+        {
+            cx.stop_propagation();
+            self.begin_shape_handle(index, handle, event, window, cx);
+            return;
+        }
         let Some(index) = topmost_hit(
             self.shape_segments(),
             &self.visible_shape_order(self.preview_or_playhead()),
