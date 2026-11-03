@@ -77,6 +77,8 @@ struct Edge {
     last: isize,
     /// Frames in a row the edge has not been found.
     missed: u32,
+    /// Where the estimate put this side when the edge was last found.
+    estimated_at_last: f64,
 }
 
 pub(crate) struct BoxEdges {
@@ -129,6 +131,7 @@ impl BoxEdges {
                             offset: line as f64 - rect.side(side),
                             last: line,
                             missed: 0,
+                            estimated_at_last: rect.side(side),
                         };
                         locate(frame, &rect, &edge, &[line])
                             .is_some_and(|found| (found - line).abs() <= 1)
@@ -153,15 +156,19 @@ impl BoxEdges {
                 Some(line) => {
                     edge.last = line;
                     edge.missed = 0;
+                    edge.estimated_at_last = original.side(edge.side);
                     rect.set_side(edge.side, line as f64 - edge.offset);
                     found += 1;
                 }
                 // Missed for a frame or two (a cursor over it, an encoding
-                // glitch): the side stays where the edge just was rather
-                // than jumping back to the estimate it was correcting.
+                // glitch, a fast drag): the side keeps its correction to the
+                // estimate rather than jumping back to the estimate alone, so
+                // it moves with a dragged window but stays on a resized one
+                // whose estimate is not moving.
                 None if edge.missed < HOLD_FRAMES => {
                     edge.missed += 1;
-                    rect.set_side(edge.side, edge.last as f64 - edge.offset);
+                    let moved = original.side(edge.side) - edge.estimated_at_last;
+                    rect.set_side(edge.side, edge.last as f64 - edge.offset + moved);
                 }
                 None => edge.missed += 1,
             }
@@ -267,7 +274,7 @@ fn rare_beyond(
             near += usize::from((pixel(frame, side, beyond, along) - colour).abs() <= DISTINCT);
         }
     }
-    (total > 0).then(|| (near as f64) <= total as f64 * MAX_SHARED)
+    (total > 0).then_some((near as f64) <= total as f64 * MAX_SHARED)
 }
 
 /// The colour of `line` along the side, when most of it is within
