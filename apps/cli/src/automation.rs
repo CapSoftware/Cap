@@ -175,7 +175,7 @@ impl AutomationHost for CliAutomationHost {
     async fn upload(
         &self,
         ctx: &TriggerContext,
-        _organization_id: Option<&str>,
+        organization_id: Option<&str>,
         _copy_link: bool,
         open_in_browser: bool,
     ) -> Result<(), String> {
@@ -202,8 +202,12 @@ impl AutomationHost for CliAutomationHost {
             ));
         }
 
-        let link =
-            crate::upload::upload_video_path(&output, Some(meta.pretty_name.clone())).await?;
+        let link = crate::upload::upload_video_path(
+            &output,
+            Some(meta.pretty_name.clone()),
+            organization_id,
+        )
+        .await?;
         tracing::info!(link = %link, "automation: upload complete");
         if open_in_browser {
             open_path_or_url(&link)?;
