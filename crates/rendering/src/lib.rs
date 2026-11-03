@@ -8854,17 +8854,21 @@ impl RendererLayers {
     }
 
     /// What one side of a layered transition draws: its own content on a
-    /// transparent frame. A focus blur covers the background too, so a side
-    /// with one keeps its background to stay identical to its plain frames.
-    fn transition_side_parts(&self) -> LayerParts {
-        if self.camera3d.blur_kind().is_some() {
-            LayerParts {
-                background: true,
-                content: true,
-                overlays: false,
-            }
-        } else {
-            LayerParts::CONTENT
+    /// transparent frame, with its masks, so a blurred region moves with the
+    /// footage it hides. A focus blur or a highlight mask covers the
+    /// background too, so a side with one keeps its background to stay
+    /// identical to its plain frames.
+    fn transition_side_parts(&self, uniforms: &ProjectUniforms) -> LayerParts {
+        let background = self.camera3d.blur_kind().is_some()
+            || uniforms
+                .masks
+                .iter()
+                .any(|mask| mask.mode == MaskRenderMode::Highlight);
+        LayerParts {
+            background,
+            content: true,
+            masks: true,
+            overlays: false,
         }
     }
 
@@ -8885,7 +8889,7 @@ impl RendererLayers {
         self.background_blur.retain_views(session_views);
         self.background_color_grade.retain_views(session_views);
         self.camera3d.retain_views(session_views);
-        if parts.overlays {
+        if parts.masks {
             self.mask.begin_frame(session_views);
         }
 
@@ -8917,7 +8921,7 @@ impl RendererLayers {
         if parts.content {
             self.render_content(device, &mut passes, session, uniforms, render_display);
         }
-        if parts.overlays {
+        if parts.masks || parts.overlays {
             self.render_overlays(
                 device,
                 queue,
@@ -8925,6 +8929,7 @@ impl RendererLayers {
                 session,
                 uniforms,
                 render_display,
+                parts,
             );
         }
         Ok(())
@@ -9114,6 +9119,7 @@ impl RendererLayers {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_overlays(
         &mut self,
         device: &wgpu::Device,
@@ -9122,18 +9128,19 @@ impl RendererLayers {
         session: &mut RenderSession,
         uniforms: &ProjectUniforms,
         render_display: bool,
+        parts: LayerParts,
     ) {
         let load = wgpu::LoadOp::Load;
 
         if uniforms.project.overlay_order.is_empty() {
-            if !uniforms.masks.is_empty() {
+            if parts.masks {
                 for mask in &uniforms.masks {
                     self.mask
                         .render(device, queue, session, passes.encoder(), mask);
                 }
             }
 
-            if let Some(overlays) = &self.overlays {
+            if let Some(overlays) = self.overlays.as_ref().filter(|_| parts.overlays) {
                 if render_display && overlays.images.has_content() {
                     overlays
                         .images
@@ -9149,7 +9156,7 @@ impl RendererLayers {
         } else if let Some(overlays) = &self.overlays {
             for overlay in uniforms.project.overlay_tracks().into_iter().rev() {
                 match overlay.kind {
-                    OverlayTrackKind::Mask => {
+                    OverlayTrackKind::Mask if parts.masks => {
                         for mask in uniforms
                             .masks
                             .iter()
@@ -9160,25 +9167,29 @@ impl RendererLayers {
                         }
                     }
                     OverlayTrackKind::Image
-                        if render_display && overlays.images.has_track(overlay.track) =>
+                        if parts.overlays
+                            && render_display
+                            && overlays.images.has_track(overlay.track) =>
                     {
                         overlays.images.render_track(
                             passes.pass(session.current_texture_view(), load),
                             overlay.track,
                         );
                     }
-                    OverlayTrackKind::Text if overlays.text.has_track(overlay.track) => {
+                    OverlayTrackKind::Text
+                        if parts.overlays && overlays.text.has_track(overlay.track) =>
+                    {
                         overlays.text.render_track(
                             passes.pass(session.current_texture_view(), load),
                             overlay.track,
                         );
                     }
-                    OverlayTrackKind::Text | OverlayTrackKind::Image => {}
+                    OverlayTrackKind::Mask | OverlayTrackKind::Text | OverlayTrackKind::Image => {}
                 }
             }
         }
 
-        if let Some(overlays) = &self.overlays {
+        if let Some(overlays) = self.overlays.as_ref().filter(|_| parts.overlays) {
             if overlays.keyboard.has_content() {
                 overlays
                     .keyboard
@@ -9198,6 +9209,8 @@ impl RendererLayers {
 struct LayerParts {
     background: bool,
     content: bool,
+    masks: bool,
+    /// Every overlay but masks: images, text, keyboard and captions.
     overlays: bool,
 }
 
@@ -9205,21 +9218,19 @@ impl LayerParts {
     const ALL: Self = Self {
         background: true,
         content: true,
+        masks: true,
         overlays: true,
     };
     const BACKGROUND: Self = Self {
         background: true,
         content: false,
-        overlays: false,
-    };
-    const CONTENT: Self = Self {
-        background: false,
-        content: true,
+        masks: false,
         overlays: false,
     };
     const OVERLAYS: Self = Self {
         background: false,
         content: false,
+        masks: false,
         overlays: true,
     };
 }
@@ -9382,7 +9393,7 @@ async fn produce_transition_texture(
         )
         .await?;
     let outgoing_parts = if layered {
-        layers.transition_side_parts()
+        layers.transition_side_parts(&outgoing.uniforms)
     } else {
         LayerParts::ALL
     };
@@ -9439,7 +9450,7 @@ async fn produce_transition_texture(
         return Ok(incoming_encoder);
     }
 
-    let incoming_parts = layers.transition_side_parts();
+    let incoming_parts = layers.transition_side_parts(&incoming.uniforms);
     layers.render_parts(
         &constants.device,
         &constants.queue,

@@ -1,5 +1,5 @@
 use super::*;
-use cap_project::{BackgroundSource, ImageSegment};
+use cap_project::{BackgroundSource, ImageSegment, MaskKind, MaskSegment};
 
 const WIDTH: u32 = 160;
 const HEIGHT: u32 = 90;
@@ -21,6 +21,10 @@ impl Drop for Fixture {
 }
 
 async fn fixture(with_overlay: bool) -> Fixture {
+    fixture_with(with_overlay, false).await
+}
+
+async fn fixture_with(with_overlay: bool, with_mask: bool) -> Fixture {
     let instance = create_wgpu_instance_sync();
     let adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions::default())
@@ -36,13 +40,11 @@ async fn fixture(with_overlay: bool) -> Fixture {
         "camera": null, "audio": null, "cursor": null
     }))
     .expect("metadata");
+    static NEXT_FIXTURE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let directory = std::env::temp_dir().join(format!(
         "cap-transition-render-{}-{}",
         std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("clock")
-            .as_nanos()
+        NEXT_FIXTURE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
     std::fs::create_dir_all(directory.join("content/images")).expect("image directory");
     image::RgbaImage::from_pixel(8, 8, image::Rgba(YELLOW))
@@ -92,6 +94,24 @@ async fn fixture(with_overlay: bool) -> Fixture {
             ..Default::default()
         });
     }
+    if with_mask {
+        project.background.padding = 0.0;
+        timeline.mask_segments.push(MaskSegment {
+            start: 0.0,
+            end: 10.0,
+            track: 0,
+            enabled: true,
+            mask_type: MaskKind::Sensitive,
+            center: XY::new(0.5, 0.5),
+            size: XY::new(0.25, 0.3),
+            feather: 0.0,
+            opacity: 1.0,
+            pixelation: 80.0,
+            darkness: 0.0,
+            fade_duration: 0.0,
+            keyframes: Default::default(),
+        });
+    }
     project.timeline = Some(timeline);
 
     Fixture {
@@ -114,6 +134,27 @@ fn frames(color: [u8; 4], time: f32) -> DecodedSegmentFrames {
         recording_time: time,
         segment_has_camera: false,
     }
+}
+
+fn striped_frames(time: f32) -> DecodedSegmentFrames {
+    let mut data = Vec::with_capacity((WIDTH * HEIGHT * 4) as usize);
+    for _ in 0..HEIGHT {
+        for x in 0..WIDTH {
+            data.extend_from_slice(if x % 2 == 0 { &RED } else { &GREEN });
+        }
+    }
+    DecodedSegmentFrames {
+        screen_frame: Some(DecodedFrame::new(data, WIDTH, HEIGHT)),
+        ..frames(RED, time)
+    }
+}
+
+/// How many times the red channel jumps along a row near `x`: stripes jump
+/// every pixel, a pixelated region holds still across each block.
+fn stripe_edges(frame: &RenderedFrame, x: u32, y: u32) -> usize {
+    (x - 8..x + 8)
+        .filter(|column| pixel(frame, *column, y)[0].abs_diff(pixel(frame, column + 1, y)[0]) > 100)
+        .count()
 }
 
 struct Sides {
@@ -200,16 +241,23 @@ fn assert_close(actual: [u8; 4], expected: [u8; 4], tolerance: u8, context: &str
 }
 
 fn max_difference(a: &RenderedFrame, b: &RenderedFrame) -> u8 {
-    let mut max = 0;
+    worst_pixel(a, b).0
+}
+
+fn worst_pixel(a: &RenderedFrame, b: &RenderedFrame) -> (u8, u32, u32, [u8; 4], [u8; 4]) {
+    let mut worst = (0, 0, 0, [0; 4], [0; 4]);
     for y in 0..a.height {
         for x in 0..a.width {
             let (pa, pb) = (pixel(a, x, y), pixel(b, x, y));
             for channel in 0..4 {
-                max = max.max(pa[channel].abs_diff(pb[channel]));
+                let difference = pa[channel].abs_diff(pb[channel]);
+                if difference > worst.0 {
+                    worst = (difference, x, y, pa, pb);
+                }
             }
         }
     }
-    max
+    worst
 }
 
 #[tokio::test]
@@ -222,14 +270,10 @@ async fn every_transition_starts_on_the_outgoing_frame_and_ends_on_the_incoming_
     for kind in ClipTransitionType::ALL {
         let start = render_transition(&fixture, &sides, &cursor, kind, 0.0).await;
         let end = render_transition(&fixture, &sides, &cursor, kind, 1.0).await;
-        assert!(
-            max_difference(&start, &outgoing) <= 1,
-            "{kind:?} at its first frame"
-        );
-        assert!(
-            max_difference(&end, &incoming) <= 1,
-            "{kind:?} at its last frame"
-        );
+        let first = worst_pixel(&start, &outgoing);
+        assert!(first.0 <= 1, "{kind:?} at its first frame: {first:?}");
+        let last = worst_pixel(&end, &incoming);
+        assert!(last.0 <= 1, "{kind:?} at its last frame: {last:?}");
     }
 }
 
@@ -479,4 +523,62 @@ async fn preview_and_export_render_the_same_transition_frame() {
         };
         assert_eq!(max_difference(&export, &preview), 0, "{kind:?}");
     }
+}
+
+#[tokio::test]
+async fn a_sensitive_mask_moves_with_the_footage_it_hides() {
+    let fixture = fixture_with(false, true).await;
+    let cursor = CursorEvents::default();
+    let mut sides = sides(&fixture, &cursor);
+    let zoom = ZoomTransformTimeline::from_project(
+        &fixture.project,
+        &cursor,
+        10.0,
+        XY::new(WIDTH, HEIGHT),
+    );
+    let striped = striped_frames(1.0);
+    sides.outgoing = (
+        striped.clone(),
+        ProjectUniforms::new(
+            &fixture.constants,
+            &fixture.project,
+            60,
+            60,
+            XY::new(WIDTH, HEIGHT),
+            &cursor,
+            &striped,
+            10.0,
+            &zoom,
+        ),
+    );
+    assert!(!sides.outgoing.1.masks.is_empty());
+
+    let plain = render_plain(&fixture, &sides.outgoing, &cursor).await;
+    assert!(
+        stripe_edges(&plain, 80, 45) < 6,
+        "the mask hides the centre"
+    );
+    assert!(
+        stripe_edges(&plain, 40, 45) > 12,
+        "stripes beside it are untouched"
+    );
+
+    // Ease-in-out cubic reaches a quarter of the way at 4p^3 = 0.25.
+    let progress = (0.25f32 / 4.0).cbrt();
+    let frame = render_transition(
+        &fixture,
+        &sides,
+        &cursor,
+        ClipTransitionType::PushLeft,
+        progress,
+    )
+    .await;
+    assert!(
+        stripe_edges(&frame, 40, 45) < 6,
+        "the hidden region travelled left with its clip"
+    );
+    assert!(
+        stripe_edges(&frame, 80, 45) > 12,
+        "what slid under the mask's old place is not hidden by it"
+    );
 }

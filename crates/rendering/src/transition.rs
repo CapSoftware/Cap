@@ -450,7 +450,6 @@ impl TransitionCompositor {
         }
     }
 
-    /// Mixes the two captured whole frames into `target`, replacing it.
     pub fn capture_incoming_and_render(
         &self,
         queue: &wgpu::Queue,
@@ -463,8 +462,6 @@ impl TransitionCompositor {
         self.draw(queue, encoder, target, &parameters, false);
     }
 
-    /// Draws the two captured content layers over whatever `target` already
-    /// holds (the background).
     pub fn render_layers(
         &self,
         queue: &wgpu::Queue,
