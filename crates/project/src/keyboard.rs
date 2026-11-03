@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use std::path::Path;
+use std::{collections::HashMap, path::Path};
 
 pub const KEYBOARD_EVENTS_FILE_NAME: &str = "keyboard.bin";
 pub const LEGACY_KEYBOARD_EVENTS_FILE_NAME: &str = "keyboard.json";
@@ -549,6 +549,12 @@ pub fn synchronize_legacy_keyboard(
         project_keyboard_events(takes.as_deref().unwrap_or_default(), timeline, &settings);
     let clip_offsets = crate::caption_timing::clip_timeline_offsets(timeline);
     let holds = timeline.hold_windows();
+    let ordered = legacy.iter().all(|segment| segment.start.is_finite())
+        && legacy.is_sorted_by(|left, right| left.start <= right.start);
+    let mut saved_by_id = HashMap::with_capacity(timeline.keyboard_segments.len());
+    for previous in &timeline.keyboard_segments {
+        saved_by_id.entry(previous.id.as_str()).or_insert(previous);
+    }
     for segment in &mut generated {
         let Some(index) = segment
             .id
@@ -568,18 +574,19 @@ pub fn synchronize_legacy_keyboard(
         let source_time =
             clip.start + (segment.start - held_time - clip_offsets[index]) * clip.timescale;
         let captured = source_time + legacy_keyboard_capture_offset(meta, clip.recording_clip);
-        let Some(source) = legacy
+        let candidates = if ordered {
+            &legacy[..legacy.partition_point(|source| source.start <= captured)]
+        } else {
+            &legacy
+        };
+        let Some(source) = candidates
             .iter()
             .rev()
             .find(|source| captured >= source.start && captured < source.end)
         else {
             continue;
         };
-        let Some(previous) = timeline
-            .keyboard_segments
-            .iter()
-            .find(|previous| previous.id == source.id)
-        else {
+        let Some(previous) = saved_by_id.get(source.id.as_str()) else {
             continue;
         };
         segment.fade_duration_override = previous.fade_duration_override;
@@ -1716,6 +1723,106 @@ mod timing_tests {
                 .unwrap()
                 .presses,
             captured.presses
+        );
+    }
+
+    #[test]
+    fn legacy_styles_follow_reordered_sped_up_clips_with_overlapping_groups() {
+        let directory = tempfile::tempdir().unwrap();
+        let captured = events(&[("a", 0.25), ("b", 1.25), ("c", 2.25), ("d", 3.25)]);
+        captured
+            .write_to_file(&directory.path().join("keyboard.bin"))
+            .unwrap();
+        let mut meta: crate::RecordingMeta = serde_json::from_value(serde_json::json!({
+            "pretty_name":"legacy styles", "segments":[{"display":{"path":"display.mp4","fps":30,"start_time":0.0},"keyboard":"keyboard.bin"}],"cursors":{}
+        })).unwrap();
+        meta.project_path = directory.path().to_path_buf();
+        let settings = KeyboardSettings {
+            grouping_threshold_ms: 100.0,
+            linger_duration: 2.0,
+            ..Default::default()
+        };
+        let mut saved = group_key_events(&captured, 100.0, 2000.0, true, true);
+        for (index, segment) in saved.iter_mut().enumerate() {
+            segment.fade_duration_override = Some(index as f32 / 4.0);
+            segment.position_override = Some(format!("position-{index}"));
+            segment.color_override = Some(format!("color-{index}"));
+            segment.background_color_override = Some(format!("background-{index}"));
+            segment.font_size_override = Some(20 + index as u32);
+            segment.uppercase_override = Some(index % 2 == 0);
+        }
+        let mut project = crate::ProjectConfiguration {
+            keyboard: Some(crate::KeyboardData { settings }),
+            timeline: Some(timeline(serde_json::json!([
+                {"start":2.0,"end":4.0,"timescale":2.0},
+                {"start":0.0,"end":2.0,"timescale":1.0}
+            ]))),
+            ..Default::default()
+        };
+        project.timeline.as_mut().unwrap().keyboard_segments = saved.clone();
+        synchronize_legacy_keyboard(&meta, &mut project);
+        let migrated = &project.timeline.as_ref().unwrap().keyboard_segments;
+        assert_eq!(migrated.len(), 4);
+        for ((actual, original), start) in migrated
+            .iter()
+            .zip([&saved[2], &saved[3], &saved[0], &saved[1]])
+            .zip([0.125, 0.625, 1.25, 2.25])
+        {
+            assert_eq!(actual.start, start);
+            assert_eq!(actual.display_text, original.display_text);
+            assert_eq!(
+                actual.fade_duration_override,
+                original.fade_duration_override
+            );
+            assert_eq!(actual.position_override, original.position_override);
+            assert_eq!(actual.color_override, original.color_override);
+            assert_eq!(
+                actual.background_color_override,
+                original.background_color_override
+            );
+            assert_eq!(actual.font_size_override, original.font_size_override);
+            assert_eq!(actual.uppercase_override, original.uppercase_override);
+        }
+    }
+
+    #[test]
+    fn legacy_equal_time_shortcuts_keep_the_last_source_style() {
+        let directory = tempfile::tempdir().unwrap();
+        let captured = events(&[("a", 0.25), ("LMeta", 1.25), ("b", 1.25), ("c", 1.25)]);
+        captured
+            .write_to_file(&directory.path().join("keyboard.bin"))
+            .unwrap();
+        let mut meta: crate::RecordingMeta = serde_json::from_value(serde_json::json!({
+            "pretty_name":"equal time styles", "segments":[{"display":{"path":"display.mp4","fps":30,"start_time":0.0},"keyboard":"keyboard.bin"}],"cursors":{}
+        })).unwrap();
+        meta.project_path = directory.path().to_path_buf();
+        let mut saved = group_key_events(&captured, 500.0, 800.0, true, true);
+        assert_eq!(saved.len(), 3);
+        for segment in &mut saved {
+            segment.color_override = Some(segment.id.clone());
+        }
+        let mut project = crate::ProjectConfiguration {
+            timeline: Some(timeline(serde_json::json!([
+                {"start":0.0,"end":3.0,"timescale":1.0}
+            ]))),
+            ..Default::default()
+        };
+        project.timeline.as_mut().unwrap().keyboard_segments = saved;
+        synchronize_legacy_keyboard(&meta, &mut project);
+        let migrated = &project.timeline.as_ref().unwrap().keyboard_segments;
+        assert_eq!(
+            migrated
+                .iter()
+                .map(|segment| segment.display_text.as_str())
+                .collect::<Vec<_>>(),
+            ["a", "⌘B", "⌘C"]
+        );
+        assert_eq!(
+            migrated
+                .iter()
+                .map(|segment| segment.color_override.as_deref())
+                .collect::<Vec<_>>(),
+            [Some("kb-1"), Some("kb-3"), Some("kb-3")]
         );
     }
 
