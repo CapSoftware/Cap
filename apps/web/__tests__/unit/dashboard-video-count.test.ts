@@ -1,8 +1,8 @@
 import type { Database, ImageUploads, Spaces } from "@cap/web-backend";
 import { Effect, Layer } from "effect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import CapsPage from "@/app/(org)/dashboard/caps/page";
-import SharedCapsPage from "@/app/(org)/dashboard/spaces/[spaceId]/page";
+import CapsPage from "@/app/(org)/dashboard/caps/(list)/page";
+import SharedCapsPage from "@/app/(org)/dashboard/spaces/[spaceId]/(space)/page";
 
 const mocks = vi.hoisted(() => ({ query: vi.fn() }));
 

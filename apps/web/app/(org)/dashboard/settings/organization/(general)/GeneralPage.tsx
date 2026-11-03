@@ -1,7 +1,7 @@
 "use client";
 
-import DeleteOrg from "./components/DeleteOrg";
-import { OrganizationDetailsCard } from "./components/OrganizationDetailsCard";
+import DeleteOrg from "../components/DeleteOrg";
+import { OrganizationDetailsCard } from "../components/OrganizationDetailsCard";
 
 export function GeneralPage() {
 	return (
