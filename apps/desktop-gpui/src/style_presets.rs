@@ -62,7 +62,7 @@ impl<S: PresetStyle> StylePreset<S> {
         }
     }
 
-    fn from_value(value: &Value) -> Option<Self> {
+    fn from_value(value: &Value, position: usize) -> Option<Self> {
         let entry = value.as_object()?;
         let name = clean_name(entry.get("name")?.as_str()?)?;
         let stored_style = entry.get("style")?.as_object()?.clone();
@@ -71,7 +71,7 @@ impl<S: PresetStyle> StylePreset<S> {
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|id| !id.is_empty())
-            .map_or_else(crate::store::new_uuid_v4, str::to_string);
+            .map_or_else(|| format!("legacy-{position}"), str::to_string);
         let mut extra = entry.clone();
         for key in ["id", "name", "style"] {
             extra.remove(key);
@@ -151,11 +151,14 @@ impl<S: PresetStyle> StylePresets<S> {
 
         let mut presets: Vec<StylePreset<S>> = Vec::with_capacity(entries.len());
         let mut unreadable = Vec::new();
-        for entry in entries {
-            match StylePreset::<S>::from_value(entry) {
+        for (position, entry) in entries.iter().enumerate() {
+            match StylePreset::<S>::from_value(entry, position) {
                 Some(mut preset) => {
-                    if presets.iter().any(|existing| existing.id == preset.id) {
-                        preset.id = crate::store::new_uuid_v4();
+                    let base = preset.id.clone();
+                    let mut suffix = position;
+                    while presets.iter().any(|existing| existing.id == preset.id) {
+                        preset.id = format!("{base}-{suffix}");
+                        suffix += 1;
                     }
                     presets.push(preset);
                 }
@@ -571,12 +574,11 @@ impl MaskStyle {
 
     pub fn apply_to(&self, segment: &mut MaskSegment) -> bool {
         let previous = Self::of(segment);
-        if previous == *self {
+        let animated = !segment.keyframes.intensity.is_empty();
+        if previous == *self && !animated {
             return false;
         }
-        if previous.pixelation != self.pixelation || previous.opacity != self.opacity {
-            segment.keyframes.intensity.clear();
-        }
+        segment.keyframes.intensity.clear();
         segment.mask_type = self.mask_type;
         segment.feather = self.feather;
         segment.opacity = self.opacity;
@@ -1317,6 +1319,9 @@ mod tests {
         assert_eq!(ids.len(), 4);
         assert!(presets.presets().iter().all(|preset| !preset.id.is_empty()));
 
+        let again = StylePresets::<TextStyle>::from_value(&legacy);
+        assert_eq!(again, presets);
+
         let by_index = json!({ "presets": legacy, "default": 1 });
         let presets = StylePresets::<TextStyle>::from_value(&by_index);
         assert_eq!(presets.default_preset().unwrap().name, "Two");
@@ -1335,6 +1340,22 @@ mod tests {
                 .default_style()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn a_legacy_entry_can_be_edited_on_the_first_try() {
+        let store = TempStore::new(Some(
+            &json!({ "stylePresets": { "text": [{ "name": "Old", "style": { "fontSize": 40 } }] } })
+                .to_string(),
+        ));
+        let id = PresetLibrary::load().text.presets()[0].id.clone();
+        let (_, renamed) =
+            StylePresets::<TextStyle>::update(|presets| presets.rename(&id, "New")).unwrap();
+        assert!(renamed);
+        let entry = &store.read()["stylePresets"]["text"]["presets"][0];
+        assert_eq!(entry["name"], "New");
+        assert_eq!(entry["id"], id.as_str());
+        assert_eq!(PresetLibrary::load().text.presets()[0].id, id);
     }
 
     #[test]
@@ -1602,6 +1623,19 @@ mod tests {
         assert_eq!((mask.center.x, mask.center.y), (0.2, 0.3));
         assert!(mask.keyframes.intensity.is_empty());
         assert_eq!(mask.keyframes.position.len(), 1);
+
+        let timeline = project.timeline.as_mut().unwrap();
+        timeline.mask_segments[0]
+            .keyframes
+            .intensity
+            .push(cap_project::MaskScalarKeyframe {
+                time: 1.,
+                value: 0.4,
+            });
+        assert!(apply_to_all(&mut project, &style));
+        let mask = &project.timeline.as_ref().unwrap().mask_segments[0];
+        assert!(mask.keyframes.intensity.is_empty());
+        assert!(!apply_to_all(&mut project, &style));
 
         project.captions = Some(cap_project::CaptionsData {
             settings: CaptionSettings {
