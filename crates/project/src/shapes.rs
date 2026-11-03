@@ -35,13 +35,10 @@ impl ShapeKind {
         Self::Badge,
     ];
 
-    /// Arrows and lines are defined by their two endpoints; every other kind
-    /// by the box the two points span.
     pub fn is_line(self) -> bool {
         matches!(self, Self::Arrow | Self::Line)
     }
 
-    /// Badges are always round, so their box keeps a 1:1 pixel aspect.
     pub fn keeps_square(self) -> bool {
         matches!(self, Self::Badge)
     }
@@ -77,9 +74,6 @@ pub enum ShapeAnimation {
     Draw,
 }
 
-/// One annotation mark on the Shape track, shown for `start..end` of output
-/// time. `from` and `to` are fractions of the output frame: an arrow or line
-/// runs from one to the other, and every other kind fills the box they span.
 #[derive(Type, Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ShapeSegment {
@@ -134,7 +128,6 @@ impl Default for ShapeSegment {
     }
 }
 
-/// A box in output-frame fractions, `x`/`y` its top-left corner.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ShapeRect {
     pub x: f64,
@@ -161,8 +154,6 @@ impl ShapeRect {
 }
 
 impl ShapeSegment {
-    /// A new shape of `kind` centred on `center`, sized for a frame whose
-    /// width is `aspect` times its height, with the kind's own default look.
     pub fn new(kind: ShapeKind, start: f64, end: f64, center: XY<f64>, aspect: f64) -> Self {
         let aspect = if aspect.is_finite() && aspect > 0.0 {
             aspect
@@ -192,7 +183,6 @@ impl ShapeSegment {
         segment
     }
 
-    /// The look a freshly created shape of the current kind starts with.
     pub fn apply_kind_defaults(&mut self) {
         let base = Self::default();
         self.stroke_color = base.stroke_color;
@@ -249,7 +239,6 @@ impl ShapeSegment {
             && time < self.end
     }
 
-    /// The box the two points span, in output-frame fractions.
     pub fn rect(&self) -> ShapeRect {
         ShapeRect::from_points(self.from, self.to)
     }
@@ -261,8 +250,6 @@ impl ShapeSegment {
         self.to.y += dy;
     }
 
-    /// Every number the renderer reads, finite and inside its range. A
-    /// hand-edited or corrupt file must not reach the GPU as NaN.
     pub fn is_renderable(&self) -> bool {
         [self.from.x, self.from.y, self.to.x, self.to.y]
             .iter()
@@ -277,13 +264,10 @@ impl ShapeSegment {
     }
 }
 
-/// `(length, width)` of an arrow head in the same pixels as `stroke_width`,
-/// the screenshot editor's proportions, shrunk to fit an arrow that is too
-/// short to carry a full head.
 pub fn arrow_head_size(stroke_width: f64, arrow_length: f64) -> (f64, f64) {
     let width = stroke_width.max(1.0);
-    let length = (width * 4.5).max(16.0);
-    let head_width = (width * 4.0).max(14.0);
+    let length = (width * 5.0).max(18.0);
+    let head_width = (width * 4.5).max(16.0);
     let fit = if arrow_length.is_finite() && arrow_length > 0.0 {
         (arrow_length * 0.45 / length).min(1.0)
     } else {
@@ -292,8 +276,6 @@ pub fn arrow_head_size(stroke_width: f64, arrow_length: f64) -> (f64, f64) {
     (length * fit, head_width * fit)
 }
 
-/// The badge number for a new badge: one past the highest badge already on
-/// the timeline, so a run of clicks counts 1, 2, 3.
 pub fn next_badge_number(segments: &[ShapeSegment]) -> u32 {
     segments
         .iter()
@@ -458,12 +440,12 @@ mod tests {
     #[test]
     fn arrow_heads_shrink_on_short_arrows() {
         let (length, width) = arrow_head_size(6.0, 1000.0);
-        assert_eq!((length, width), (27.0, 24.0));
+        assert_eq!((length, width), (30.0, 27.0));
         let (short_length, short_width) = arrow_head_size(6.0, 20.0);
         assert!((short_length - 9.0).abs() < 1e-9);
         assert!(short_width < width);
-        assert_eq!(arrow_head_size(0.0, 1000.0), (16.0, 14.0));
-        assert_eq!(arrow_head_size(6.0, 0.0), (27.0, 24.0));
+        assert_eq!(arrow_head_size(0.0, 1000.0), (18.0, 16.0));
+        assert_eq!(arrow_head_size(6.0, 0.0), (30.0, 27.0));
     }
 
     #[test]
