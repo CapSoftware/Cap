@@ -2728,6 +2728,59 @@ text_track = "テキスト"
 video = "動画"
 zoom = "ズーム"
 
+[editor.transcript]
+cleanup = "クリーンアップ"
+cleanup_tooltip = "フィラーを削除し、間を短くします"
+delete_matches = "すべて削除"
+delete_matches_tooltip = "一致した箇所をすべて動画からカットします"
+empty_description = "このコンピュータで録画を文字起こしすると、テキストを編集して動画を編集できます。"
+empty_title = "文字起こしはまだありません"
+hint = "単語をクリックするとその位置に移動します。単語を選択して削除キーを押すと、動画からカットされます。"
+next_match = "次の一致"
+no_audio = "この録画には文字起こしできる音声がありません。"
+previous_match = "前の一致"
+restore_blocked = "この部分はタイムラインでカットされています。取り消すか、クリップの端をドラッグして戻してください。"
+restore_hint = { other = "クリックして{count}語を復元" }
+restore_transition = "復元するには、このカットの隣のトランジションを削除してください。"
+search = "検索"
+search_count = "{current}/{total}"
+search_none = "一致なし"
+search_placeholder = "文字起こしを検索"
+seconds = "{value}秒"
+selection = { other = "{count}語を選択中、{seconds}秒" }
+selection_cut = { other = "カット済みの{count}語を選択中。削除キーを押すと復元します。" }
+skipped_hold = { other = "全画面テキストがフレームを保持しているため、{count}件のカットをスキップしました" }
+skipped_last_clip = "最後のクリップはカットできません。"
+skipped_transition = { other = "トランジションに重なるため、{count}件のカットをスキップしました" }
+title = "文字起こし"
+transcribe = "文字起こし"
+transcribing = "文字起こし中…"
+words = { other = "{count}語" }
+
+[editor.transcript.fillers]
+discourse = "つなぎ言葉"
+discourse_hint = "like, you know, so"
+false_start = "言い直し"
+false_start_hint = "we should, we need"
+hesitation = "言いよどみ"
+hesitation_hint = "um, uh, hmm"
+keep = "残す"
+listen = "聞く"
+none = "このカテゴリにフィラーはありません"
+remove = "削除"
+remove_all = { other = "{count}件を削除" }
+repetition = "繰り返し"
+repetition_hint = "the the, I I"
+title = "フィラー"
+
+[editor.transcript.pauses]
+apply = "短くする"
+keep = "短縮後"
+longer_than = "次より長い間"
+none = "その長さの間はありません"
+summary = { other = "{count}か所、{seconds}秒短縮" }
+title = "間"
+
 [editor.window]
 audio_filter = "音声"
 audio_segment_changed = "この音声セグメントは変更されました。選択して、もう一度置き換えるファイルを選んでください。"
@@ -2830,11 +2883,12 @@ window_title_placeholder = "ウィンドウタイトル"
 windows_description = "ウィンドウボタン付きのタイトルバー"
 
 [editor.window.header]
-captions = "字幕"
 delete_recording = "録画を削除"
 export = "書き出し"
 open_bundle = "録画バンドルを開く"
 presets = "プリセット"
+transcript = "文字起こし"
+transcript_tooltip = "文字起こしで編集"
 
 [editor.window.image]
 changed = "置き換えを選んでいる間にこの画像が変更されました。選択してもう一度お試しください。"
