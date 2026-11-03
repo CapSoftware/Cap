@@ -103,13 +103,15 @@ fn clip_audio_changed(previous: &ProjectConfiguration, next: &ProjectConfigurati
     }
 }
 
-/// The music the live mix plays. An edit that reaches past the decoded source
-/// ranges decodes them on a blocking task, so the frame loop never waits on
-/// ffmpeg, and the mix refreshes once that decode lands.
+/// The music the live mix plays. Ranges an edit reaches past are decoded on a
+/// blocking task, so the frame loop never waits on ffmpeg.
 struct LiveMusic {
     tracks: MusicTracks,
     loader: MusicLoader,
-    pending: Option<tokio::task::JoinHandle<MusicTracks>>,
+    loading: Option<(
+        Arc<ProjectConfiguration>,
+        tokio::task::JoinHandle<MusicTracks>,
+    )>,
 }
 
 impl LiveMusic {
@@ -117,39 +119,39 @@ impl LiveMusic {
         Self {
             tracks,
             loader,
-            pending: None,
+            loading: None,
         }
     }
 
-    /// Whether the mix can refresh with [`Self::tracks`] right away after an
-    /// audio edit. When it cannot, the missing ranges start decoding.
-    fn edited(
+    /// Called every loop turn with the newest project, `edited` when its audio
+    /// just changed. Returns whether the mix should refresh: at once on an edit,
+    /// with the tracks at hand (`mix_music` skips samples they lack), and again
+    /// when the missing ranges land. One decode runs at a time, since each holds
+    /// the shared cache; edits made meanwhile are caught up when it finishes.
+    fn update(
         &mut self,
         project: &Arc<ProjectConfiguration>,
+        edited: bool,
         runtime: &tokio::runtime::Handle,
     ) -> bool {
-        if music_tracks_cover(&self.tracks, project) {
-            self.pending = None;
-            return true;
-        }
-        let loader = self.loader.clone();
-        let project = Arc::clone(project);
-        self.pending = Some(runtime.spawn_blocking(move || loader.load(&project)));
-        false
-    }
-
-    /// Adopts a finished decode, returning whether the mix should refresh.
-    fn take_loaded(&mut self, runtime: &tokio::runtime::Handle) -> bool {
-        let Some(load) = self.pending.take_if(|load| load.is_finished()) else {
-            return false;
-        };
-        match runtime.block_on(load) {
-            Ok(tracks) => {
+        let mut stale = edited;
+        let mut loaded = false;
+        if let Some((loaded_for, load)) = self.loading.take_if(|(_, load)| load.is_finished()) {
+            if let Ok(tracks) = runtime.block_on(load) {
                 self.tracks = tracks;
-                true
+                loaded = true;
             }
-            Err(_) => false,
+            stale |= !Arc::ptr_eq(&loaded_for, project);
         }
+        if stale && self.loading.is_none() && !music_tracks_cover(&self.tracks, project) {
+            let loader = self.loader.clone();
+            let target = Arc::clone(project);
+            self.loading = Some((
+                Arc::clone(project),
+                runtime.spawn_blocking(move || loader.load(&target)),
+            ));
+        }
+        edited || loaded
     }
 }
 
@@ -1634,7 +1636,7 @@ impl Playback {
                     continue;
                 }
 
-                let mut refresh_audio = live_music.take_loaded(&runtime);
+                let mut audio_edited = false;
                 if self.project.has_changed().unwrap_or(false) {
                     let next_project = self.project.borrow_and_update().clone();
                     let audio_changed = cached_project.audio != next_project.audio
@@ -1647,10 +1649,7 @@ impl Playback {
                         self.render_constants.options.screen_size,
                     );
                     cached_project = Arc::new(next_project);
-                    refresh_audio |= adopted.is_none()
-                        && audio_changed
-                        && audio_generation.is_some()
-                        && live_music.edited(&cached_project, &runtime);
+                    audio_edited = audio_changed;
                     if cursor_changed {
                         cursor_timelines = build_cursor_timelines(&cached_project);
                     }
@@ -1659,9 +1658,9 @@ impl Playback {
                         outgoing_zoom_timelines = build_outgoing_zoom_timelines(&cached_project);
                     }
                 }
-                if refresh_audio
-                    && adopted.is_none()
+                if adopted.is_none()
                     && let Some(generation) = audio_generation
+                    && live_music.update(&cached_project, audio_edited, &runtime)
                 {
                     self.audio_output.refresh_playback(
                         PlaySpec {
@@ -2516,7 +2515,7 @@ mod tests {
     }
 
     #[test]
-    fn a_live_trim_past_the_decoded_music_plays_the_new_range() {
+    fn live_music_edits_refresh_at_once_and_decode_one_range_at_a_time() {
         let _ = ffmpeg::init();
         let dir = tempfile::tempdir().unwrap();
         crate::audio::tests::write_step_wav(
@@ -2533,36 +2532,64 @@ mod tests {
             }
         }))
         .unwrap();
+        let edited = |edit: fn(&mut AudioTrackSegment)| {
+            let mut next = project.clone();
+            edit(&mut next.timeline.as_mut().unwrap().audio_segments[0]);
+            Arc::new(next)
+        };
         let runtime = tokio::runtime::Runtime::new().unwrap();
+        let handle = runtime.handle();
         let loader = MusicLoader::new(dir.path().to_path_buf());
         let mut live = LiveMusic::new(loader.load(&project), loader.clone());
 
-        let mut louder = project.clone();
-        louder.timeline.as_mut().unwrap().audio_segments[0].volume_db = 3.0;
-        assert!(live.edited(&Arc::new(louder), runtime.handle()));
-        assert!(live.pending.is_none());
+        assert!(live.update(&edited(|segment| segment.volume_db = 3.0), true, handle));
+        assert!(live.loading.is_none());
 
-        let mut trimmed = project.clone();
-        trimmed.timeline.as_mut().unwrap().audio_segments[0].trim_start = 3.0;
-        let trimmed = Arc::new(trimmed);
-        let refresh_now = live.edited(&trimmed, runtime.handle());
+        let trimmed = edited(|segment| segment.trim_start = 3.0);
+        let (release, gate) = std::sync::mpsc::channel::<()>();
+        let slow_loader = loader.clone();
+        let slow_project = Arc::clone(&trimmed);
+        live.loading = Some((
+            Arc::clone(&trimmed),
+            handle.spawn_blocking(move || {
+                gate.recv().ok();
+                slow_loader.load(&slow_project)
+            }),
+        ));
+
+        let trimmed_further = edited(|segment| segment.trim_start = 4.0);
+        assert!(live.update(&trimmed_further, true, handle));
+        assert!(Arc::ptr_eq(&live.loading.as_ref().unwrap().0, &trimmed));
+        assert!(!live.update(&trimmed_further, false, handle));
+
+        release.send(()).unwrap();
         let deadline = Instant::now() + Duration::from_secs(10);
-        while !refresh_now && !live.take_loaded(runtime.handle()) {
-            assert!(Instant::now() < deadline, "the trimmed range never decoded");
-            std::thread::sleep(Duration::from_millis(5));
-        }
+        let wait_for_load = |live: &mut LiveMusic| {
+            while !live.update(&trimmed_further, false, handle) {
+                assert!(Instant::now() < deadline, "the music never decoded");
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        };
+        wait_for_load(&mut live);
+        assert!(Arc::ptr_eq(
+            &live.loading.as_ref().unwrap().0,
+            &trimmed_further
+        ));
+        wait_for_load(&mut live);
+        assert!(live.loading.is_none());
+        assert!(!live.update(&trimmed_further, false, handle));
 
         let mut renderer = crate::AudioRenderer::new(Vec::new()).with_music(live.tracks.clone());
-        renderer.set_playhead(0.5, &trimmed);
-        let (_, samples) = renderer.render_frame_raw(480, &trimmed).unwrap();
+        renderer.set_playhead(0.5, &trimmed_further);
+        let (_, samples) = renderer.render_frame_raw(480, &trimmed_further).unwrap();
         assert!(
-            (samples[0] - 8_000.0 / 32_768.0).abs() < 0.02,
+            (samples[0] - 10_000.0 / 32_768.0).abs() < 0.02,
             "{}",
             samples[0]
         );
         assert!(Arc::ptr_eq(
             &live.tracks["music.wav"],
-            &loader.load(&trimmed)["music.wav"],
+            &loader.load(&trimmed_further)["music.wav"],
         ));
     }
 
