@@ -420,6 +420,17 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 					return yield* Effect.fail(new Video.NotFoundError());
 				const [video, password] = maybeVideo.value;
 
+				const [row] = yield* db.use((db) =>
+					db
+						.select({
+							isScreenshot: Db.videos.isScreenshot,
+							settings: Db.videos.settings,
+						})
+						.from(Db.videos)
+						.where(Dz.eq(Db.videos.id, videoId)),
+				);
+				if (!row) return yield* Effect.fail(new Video.NotFoundError());
+
 				const [bucket] = yield* storage.getAccessForVideo(video);
 
 				const publishedKeys = new Set(getPublishedRecordingCopyKeys(video));
@@ -508,6 +519,8 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 							width: video.width,
 							height: video.height,
 							duration: video.duration,
+							isScreenshot: row.isScreenshot,
+							settings: row.settings,
 							...(hasPassword ? { password: password.value } : {}),
 						},
 						{ id: newVideoId },
