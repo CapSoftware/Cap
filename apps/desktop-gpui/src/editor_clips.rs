@@ -280,6 +280,51 @@ pub(crate) fn max_transition_duration(
     }
 }
 
+/// Whether the cut before clip `segment_index` has room for a transition.
+pub(crate) fn can_add_transition(timeline: &TimelineConfiguration, segment_index: usize) -> bool {
+    segment_index > 0
+        && max_transition_duration(timeline, segment_index)
+            >= cap_project::MIN_CLIP_TRANSITION_DURATION
+}
+
+/// The length a transition drag asks for: the duration it started from, grown
+/// by `grow_by` output seconds and held to the room the two clips have. Below
+/// half the minimum the drag removes the transition (`None`), the threshold
+/// the clip body drag has always used.
+pub(crate) fn dragged_transition_duration(initial: f64, grow_by: f64, maximum: f64) -> Option<f64> {
+    if !maximum.is_finite() || maximum < cap_project::MIN_CLIP_TRANSITION_DURATION {
+        return None;
+    }
+    let requested = initial + grow_by;
+    if !requested.is_finite() || requested < cap_project::MIN_CLIP_TRANSITION_DURATION / 2.0 {
+        return None;
+    }
+    Some(requested.clamp(cap_project::MIN_CLIP_TRANSITION_DURATION, maximum))
+}
+
+/// One step of a transition drag. It always starts again from `base`, the
+/// timeline as it was when the drag began, so the other tracks are rippled
+/// once by the net change rather than by every pointer move in turn: a
+/// shrinking ripple clamps segments it straddles, which is not undone by
+/// growing again.
+pub(crate) fn apply_dragged_transition(
+    base: &TimelineConfiguration,
+    segment_index: usize,
+    kind: cap_project::ClipTransitionType,
+    duration: Option<f64>,
+) -> TimelineConfiguration {
+    let mut timeline = base.clone();
+    match duration {
+        Some(duration) => {
+            set_clip_transition(&mut timeline, segment_index, kind, duration);
+        }
+        None => {
+            drop_clip_transition(&mut timeline, segment_index);
+        }
+    }
+    timeline
+}
+
 /// The output times of a transition that overlaps `segment_index` with the
 /// clip before it by `overlap`: where the incoming clip starts, and where the
 /// outgoing one ends (the ripple boundary).
@@ -4146,6 +4191,134 @@ mod tests {
             instant_animation: false,
             edge_snap_ratio: 0.25,
         }
+    }
+
+    #[test]
+    fn a_transition_drag_grows_from_nothing_and_is_held_to_the_room() {
+        let min = cap_project::MIN_CLIP_TRANSITION_DURATION;
+        assert_eq!(dragged_transition_duration(0.0, 0.3, 2.0), Some(0.3));
+        assert_eq!(dragged_transition_duration(0.5, 0.25, 2.0), Some(0.75));
+        assert_eq!(dragged_transition_duration(0.5, 9.0, 2.0), Some(2.0));
+        assert_eq!(dragged_transition_duration(0.0, min * 0.6, 2.0), Some(min));
+        assert_eq!(dragged_transition_duration(0.0, min * 0.4, 2.0), None);
+        assert_eq!(dragged_transition_duration(0.5, -0.49, 2.0), None);
+        assert_eq!(dragged_transition_duration(0.5, -3.0, 2.0), None);
+        assert_eq!(dragged_transition_duration(0.0, 0.3, min * 0.9), None);
+        assert_eq!(dragged_transition_duration(0.0, f64::NAN, 2.0), None);
+        assert_eq!(dragged_transition_duration(0.0, 0.3, f64::NAN), None);
+    }
+
+    /// The reported bug: after splitting a clip, dragging one half onto the
+    /// other did nothing. Both halves come from one recording and sit end to
+    /// end in it, which is exactly the pair every other path must accept too.
+    #[test]
+    fn the_two_halves_of_a_split_clip_take_a_transition() {
+        let mut config = timeline(vec![segment(0, 0.0, 10.0)]);
+        assert!(edits::split_clip_segment(&mut config, 4.0, None));
+        assert_eq!(config.segments.len(), 2);
+        assert_eq!(config.segments[0].end, config.segments[1].start);
+        assert!(can_add_transition(&config, 1));
+        assert!(!can_add_transition(&config, 0));
+
+        let kind = cap_project::ClipTransitionType::PushLeft;
+        let dragged = apply_dragged_transition(&config, 1, kind, Some(0.5));
+        let transition = dragged.effective_transition(1).unwrap();
+        assert_eq!((transition.kind, transition.duration), (kind, 0.5));
+        assert_eq!(dragged.duration(), 9.5);
+        match dragged.get_frame_mapping(3.75) {
+            Some(cap_project::TimelineFrameMapping::Transition {
+                outgoing, incoming, ..
+            }) => {
+                assert_eq!(outgoing.segment_index, 0);
+                assert_eq!(incoming.segment_index, 1);
+                assert_eq!(outgoing.source_time, 3.75);
+                assert_eq!(incoming.source_time, 4.25);
+            }
+            other => panic!("expected a transition, got {other:?}"),
+        }
+
+        // Splitting the incoming half again keeps the transition on its cut.
+        assert!(edits::split_clip_segment(&mut config, 7.0, None));
+        let mut split_again = apply_dragged_transition(&config, 1, kind, Some(0.5));
+        assert!(edits::split_clip_segment(&mut split_again, 7.0, None));
+        assert_eq!(split_again.transitions.len(), 1);
+        assert_eq!(split_again.transitions[0].segment_index, 1);
+        assert!(can_add_transition(&split_again, 2));
+    }
+
+    #[test]
+    fn clips_from_different_recordings_and_reordered_clips_take_a_transition() {
+        let mut config = timeline(vec![
+            segment(0, 0.0, 6.0),
+            segment(1, 0.0, 6.0),
+            segment(2, 2.0, 9.0),
+        ]);
+        let kind = cap_project::ClipTransitionType::WipeRight;
+        for index in [1, 2] {
+            assert!(can_add_transition(&config, index));
+            let dragged = apply_dragged_transition(&config, index, kind, Some(1.0));
+            assert_eq!(dragged.effective_transition(index).unwrap().kind, kind);
+        }
+        assert!(move_clip(&mut config, 2, 0));
+        assert_eq!(config.segments[0].recording_clip, 2);
+        for index in [1, 2] {
+            assert!(can_add_transition(&config, index));
+            let dragged = apply_dragged_transition(&config, index, kind, Some(1.0));
+            assert_eq!(dragged.effective_transition(index).unwrap().duration, 1.0);
+        }
+    }
+
+    /// Every step of a drag starts again from the timeline the drag began
+    /// with, so a drag that overshoots and comes back lands exactly where a
+    /// single change to its final length would.
+    #[test]
+    fn a_wandering_transition_drag_lands_like_one_change() {
+        let mut base = timeline(vec![segment(0, 0.0, 10.0), segment(1, 0.0, 10.0)]);
+        base.zoom_segments = vec![zoom_at(9.8, 11.0), zoom_at(15.0, 18.0)];
+        base.scene_segments = vec![cap_project::SceneSegment {
+            start: 10.0,
+            end: 14.0,
+            mode: cap_project::SceneMode::CameraOnly,
+            split_layout: None,
+            transition_in: 0.3,
+            transition_out: 0.3,
+        }];
+        let kind = cap_project::ClipTransitionType::Zoom;
+        let mut live = base.clone();
+        for step in [0.2, 1.4, 3.0, 4.5, 0.1, 0.7] {
+            live = apply_dragged_transition(&base, 1, kind, Some(step));
+        }
+        let mut direct = base.clone();
+        assert!(set_clip_transition(&mut direct, 1, kind, 0.7));
+        let bounds = |config: &TimelineConfiguration| {
+            (
+                config
+                    .zoom_segments
+                    .iter()
+                    .map(|zoom| (zoom.start, zoom.end))
+                    .collect::<Vec<_>>(),
+                config
+                    .scene_segments
+                    .iter()
+                    .map(|scene| (scene.start, scene.end))
+                    .collect::<Vec<_>>(),
+            )
+        };
+        assert_eq!(bounds(&live), bounds(&direct));
+        assert_eq!(live.transitions, direct.transitions);
+
+        // The zoom crossing the cut and the scene starting on the incoming
+        // clip stay well formed, and the scene keeps its first frame.
+        let (zooms, scenes) = bounds(&live);
+        assert!(zooms.iter().all(|(start, end)| end > start));
+        assert_eq!(scenes.len(), 1);
+        assert!((scenes[0].0 - 9.3).abs() < 1e-9 && (scenes[0].1 - 13.3).abs() < 1e-9);
+
+        // Dragging all the way back removes it and gives everything back.
+        let removed = apply_dragged_transition(&live, 1, kind, None);
+        assert!(removed.transitions.is_empty());
+        let restored = apply_dragged_transition(&base, 1, kind, None);
+        assert_eq!(bounds(&restored), bounds(&base));
     }
 
     #[test]
