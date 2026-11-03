@@ -1243,9 +1243,6 @@ mod tests {
         }
     }
 
-    /// Tracks the fine-text page along `path` (position and scale per step)
-    /// and checks the box was never lost and covers it to within `slack`
-    /// pixels on every side.
     fn assert_follows_fine_text(path: impl Fn(usize) -> ((f64, f64), f64), slack: f64) {
         let page = fine_text_page();
         let (start, _) = path(0);
