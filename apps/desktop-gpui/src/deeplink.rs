@@ -549,10 +549,8 @@ impl DeepLinkAction {
                     RecordingMeta::load_for_project(&project_path).map_err(|v| v.to_string())?;
                 match &meta.inner {
                     RecordingMetaInner::Studio(studio) => {
-                        let recording_now = RecordingSession::global(cx)
-                            .read(cx)
-                            .active_project_dir()
-                            .is_some_and(|active| active == project_path.as_path());
+                        let recording_now = RecordingSession::active_project_dir_in(cx)
+                            .is_some_and(|active| active == project_path);
                         if matches!(studio.status(), StudioRecordingStatus::InProgress)
                             && recording_now
                         {

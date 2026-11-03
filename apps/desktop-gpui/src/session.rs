@@ -651,6 +651,17 @@ impl RecordingSession {
             .map(|active| active.project_dir.as_path())
     }
 
+    /// The recording being captured right now, if the session is installed.
+    pub fn active_project_dir_in(cx: &App) -> Option<std::path::PathBuf> {
+        cx.try_global::<SessionGlobal>().and_then(|session| {
+            session
+                .0
+                .read(cx)
+                .active_project_dir()
+                .map(std::path::Path::to_path_buf)
+        })
+    }
+
     /// Whether the live recording actually has a microphone attached.
     pub fn has_microphone(&self) -> bool {
         self.active
