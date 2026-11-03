@@ -6,12 +6,14 @@ export const TranscriptRow = memo(function TranscriptRow({
 	entry,
 	selected,
 	canEdit,
+	isSaving,
 	onSelect,
 	onEdit,
 }: {
 	entry: TranscriptEntry;
 	selected: boolean;
 	canEdit: boolean;
+	isSaving: boolean;
 	onSelect: (entry: TranscriptEntry) => void;
 	onEdit: (entry: TranscriptEntry) => void;
 }) {
@@ -35,6 +37,7 @@ export const TranscriptRow = memo(function TranscriptRow({
 			</button>
 			{canEdit && (
 				<button
+					disabled={isSaving}
 					onClick={(event) => {
 						event.stopPropagation();
 						onEdit(entry);
@@ -67,6 +70,7 @@ export function TranscriptEditor({
 	return (
 		<div className="min-w-0 flex-1 py-2">
 			<textarea
+				disabled={isSaving}
 				value={editText}
 				onChange={(e) => setEditText(e.target.value)}
 				className="w-full resize-none rounded-lg border border-gray-4 bg-gray-1 p-2.5 text-[13px] leading-[22px] text-gray-12 outline-none transition placeholder:text-gray-8 focus:border-blue-500/60 focus:ring-2 focus:ring-blue-500/20"

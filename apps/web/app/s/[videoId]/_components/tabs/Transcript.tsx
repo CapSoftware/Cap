@@ -797,6 +797,7 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 								entry={entry}
 								selected={selectedEntry === entry.id}
 								canEdit={canEdit}
+								isSaving={isSaving}
 								onSelect={handleTranscriptClick}
 								onEdit={startEditing}
 							/>
