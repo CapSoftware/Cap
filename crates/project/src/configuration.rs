@@ -3094,8 +3094,6 @@ pub struct ProjectConfiguration {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub markers: Vec<TimelineMarker>,
-    /// Names the user gave timeline lanes, keyed `"<track>:<lane>"` (for
-    /// example `"audio:1"`). Lanes without one show the track's own label.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub track_names: std::collections::BTreeMap<String, String>,
 }
