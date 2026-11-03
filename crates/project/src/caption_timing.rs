@@ -459,17 +459,15 @@ fn keep_locked_caption_positions(
         .iter()
         .map(|source| source.id.as_str())
         .collect::<HashSet<_>>();
-    let mut used = vec![false; derived.len()];
-    let mut kept = current
+    let locked = current
         .iter()
         .filter(|segment| source_ids.contains(source_caption_id(&segment.id)))
-        .map(|segment| {
-            let fresh = matching_fresh_part(segment, &derived, &used);
-            if let Some(index) = fresh {
-                used[index] = true;
-            }
-            locked_caption_content(segment, fresh.map(|index| &derived[index]))
-        })
+        .collect::<Vec<_>>();
+    let fresh_for = locked_part_sources(&locked, &derived);
+    let mut kept = locked
+        .iter()
+        .zip(&fresh_for)
+        .map(|(segment, fresh)| locked_caption_content(segment, fresh.map(|index| &derived[index])))
         .collect::<Vec<_>>();
     let placed = kept
         .iter()
@@ -484,37 +482,73 @@ fn keep_locked_caption_positions(
     kept
 }
 
-// A caption cut by the edit list is split into parts numbered in timeline
-// order, so after a clip reorder the same id names a different stretch of
-// speech. A locked part is matched to the fresh part holding its words.
-fn matching_fresh_part(
-    locked: &CaptionTrackSegment,
-    derived: &[CaptionTrackSegment],
-    used: &[bool],
-) -> Option<usize> {
-    let source = source_caption_id(&locked.id);
-    let locked_words = locked
+fn word_texts(segment: &CaptionTrackSegment) -> Vec<&str> {
+    segment
         .words
         .iter()
         .map(|word| word.text.as_str())
-        .collect::<Vec<_>>();
-    derived
+        .collect()
+}
+
+// A caption cut by the edit list is split into parts numbered in timeline
+// order, and those numbers shift when clips are reordered or deleted, so the
+// id cannot say which stretch of speech a locked part holds. The track keeps
+// no source times either, so a locked part is paired with the fresh part
+// carrying exactly its words. Only when none of a caption's parts match (its
+// text was rewritten) and the part counts agree are they paired in order; a
+// locked part left unpaired keeps its own words rather than borrow a
+// neighbour's.
+fn locked_part_sources(
+    locked: &[&CaptionTrackSegment],
+    derived: &[CaptionTrackSegment],
+) -> Vec<Option<usize>> {
+    let mut pairs = vec![None; locked.len()];
+    let mut used = vec![false; derived.len()];
+    for (slot, part) in locked.iter().enumerate() {
+        let source = source_caption_id(&part.id);
+        let words = word_texts(part);
+        pairs[slot] = derived
+            .iter()
+            .enumerate()
+            .filter(|(index, fresh)| {
+                !used[*index]
+                    && source_caption_id(&fresh.id) == source
+                    && word_texts(fresh) == words
+            })
+            .max_by_key(|(_, fresh)| fresh.id == part.id)
+            .map(|(index, _)| index);
+        if let Some(index) = pairs[slot] {
+            used[index] = true;
+        }
+    }
+    let mut sources = locked
         .iter()
-        .enumerate()
-        .filter(|(index, fresh)| !used[*index] && source_caption_id(&fresh.id) == source)
-        .max_by_key(|(_, fresh)| {
-            let fresh_words = fresh
-                .words
-                .iter()
-                .map(|word| word.text.as_str())
-                .collect::<Vec<_>>();
-            let shared = fresh_words
-                .iter()
-                .filter(|word| locked_words.contains(word))
-                .count();
-            (fresh_words == locked_words, shared, fresh.id == locked.id)
-        })
-        .map(|(index, _)| index)
+        .map(|part| source_caption_id(&part.id))
+        .collect::<Vec<_>>();
+    sources.sort_unstable();
+    sources.dedup();
+    for source in sources {
+        let parts = (0..locked.len())
+            .filter(|slot| source_caption_id(&locked[*slot].id) == source)
+            .collect::<Vec<_>>();
+        if parts.iter().any(|slot| pairs[*slot].is_some()) {
+            continue;
+        }
+        let fresh = (0..derived.len())
+            .filter(|index| source_caption_id(&derived[*index].id) == source)
+            .collect::<Vec<_>>();
+        if fresh.len() != parts.len() {
+            continue;
+        }
+        let mut parts = parts;
+        parts.sort_by(|a, b| locked[*a].start.total_cmp(&locked[*b].start));
+        let mut fresh = fresh;
+        fresh.sort_by(|a, b| derived[*a].start.total_cmp(&derived[*b].start));
+        for (slot, index) in parts.into_iter().zip(fresh) {
+            pairs[slot] = Some(index);
+        }
+    }
+    pairs
 }
 
 fn locked_caption_content(
@@ -762,6 +796,71 @@ mod tests {
         synchronize_captions(&mut project, &[10.0]);
 
         assert_eq!(parts(&project), before);
+    }
+
+    fn split_caption_locked(timeline_segments: serde_json::Value) -> ProjectConfiguration {
+        let mut project: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "timeline": {
+                "segments": [
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 5.0 },
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 5.0, "end": 10.0 }
+                ],
+                "zoomSegments": []
+            },
+            "captions": {
+                "segments": [{
+                    "id": "c", "start": 3.0, "end": 7.0, "text": "early late",
+                    "words": [
+                        { "text": "early", "start": 3.0, "end": 4.0 },
+                        { "text": "late", "start": 6.0, "end": 7.0 }
+                    ]
+                }],
+                "settings": {},
+                "sourceTimed": true
+            },
+            "lockedTracks": ["caption"]
+        }))
+        .unwrap();
+        synchronize_captions(&mut project, &[10.0]);
+        project.timeline.as_mut().unwrap().segments =
+            serde_json::from_value(timeline_segments).unwrap();
+        synchronize_captions(&mut project, &[10.0]);
+        project
+    }
+
+    fn locked_parts(project: &ProjectConfiguration) -> Vec<(f64, String, Vec<f32>)> {
+        let mut parts = project
+            .timeline
+            .as_ref()
+            .unwrap()
+            .caption_segments
+            .iter()
+            .map(|segment| {
+                (
+                    segment.start,
+                    segment.text.clone(),
+                    segment.words.iter().map(|word| word.start).collect(),
+                )
+            })
+            .collect::<Vec<_>>();
+        parts.sort_by(|a, b| a.0.total_cmp(&b.0));
+        parts
+    }
+
+    #[test]
+    fn deleting_either_clip_keeps_each_locked_part_on_its_own_words() {
+        let expected = vec![
+            (3.0, "early".to_string(), vec![3.0]),
+            (6.0, "late".to_string(), vec![6.0]),
+        ];
+        let first_deleted = split_caption_locked(serde_json::json!([
+            { "recordingSegment": 0, "timescale": 1.0, "start": 5.0, "end": 10.0 }
+        ]));
+        assert_eq!(locked_parts(&first_deleted), expected);
+        let second_deleted = split_caption_locked(serde_json::json!([
+            { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 5.0 }
+        ]));
+        assert_eq!(locked_parts(&second_deleted), expected);
     }
 
     #[test]
