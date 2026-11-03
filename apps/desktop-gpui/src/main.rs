@@ -98,6 +98,7 @@ mod target_overlay;
 mod target_thumbnails;
 mod teleprompter_window;
 mod theme;
+mod transcript;
 mod transcription;
 mod tray;
 mod ui;
