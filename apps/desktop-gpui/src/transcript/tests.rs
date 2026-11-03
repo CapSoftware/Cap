@@ -701,6 +701,51 @@ fn restoring_puts_back_a_whole_take_that_was_cut() {
 }
 
 #[test]
+fn a_restored_take_keeps_the_speed_of_its_neighbours() {
+    let durations = [2.0, 2.0, 2.0];
+    let words = [
+        ("first", 0.5, 0.9),
+        ("middle", 2.5, 2.9),
+        ("last", 4.5, 4.9),
+    ];
+    let mut project = project(&words, &durations);
+    for segment in &mut timeline_mut(&mut project).segments {
+        segment.timescale = 2.0;
+    }
+    assert!(editor_edits::delete_clip_segments(
+        timeline_mut(&mut project),
+        &[1]
+    ));
+    let doc = TranscriptDoc::build(project.captions.as_ref().unwrap());
+    restore_words(timeline_mut(&mut project), &durations, &doc, 1..2).unwrap();
+    assert!(
+        timeline(&project)
+            .segments
+            .iter()
+            .all(|segment| segment.timescale == 2.0)
+    );
+    assert!(close(
+        editor_edits::clip_timeline_duration(timeline(&project)),
+        3.0
+    ));
+}
+
+#[test]
+fn pauses_across_a_clip_boundary_are_left_alone() {
+    let words = [("before", 1.0, 1.4), ("after", 5.0, 5.4)];
+    let durations = [6.0];
+    let mut project = project(&words, &durations);
+    assert!(editor_edits::split_clip_segment(
+        timeline_mut(&mut project),
+        3.0,
+        None
+    ));
+    timeline_mut(&mut project).segments[1].timescale = 2.0;
+    let (doc, edl) = model(&project, &durations);
+    assert!(plan_pause_cuts(&doc, &edl, None, 1.0, 0.5).is_empty());
+}
+
+#[test]
 fn pauses_are_measured_and_kept_in_playback_time() {
     let words = [("before", 1.0, 1.4), ("after", 5.0, 5.4)];
     let durations = [6.0];
