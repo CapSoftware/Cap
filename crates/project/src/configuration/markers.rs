@@ -348,11 +348,11 @@ mod tests {
     #[test]
     fn long_recordings_keep_sub_frame_precision() {
         let timeline = timeline(vec![clip(0, 0.0, 3.0 * 3600.0), clip(1, 0.0, 3600.0)]);
-        let source = 3600.0 * 2.0 + 59.0 * 60.0 + 59.983_333;
+        let source = 3600.0 * 2.0 + 59.0 * 60.0 + 59.983333;
         let output = timeline.output_time_for_source(0, source).unwrap();
         assert!((output - source).abs() < 1e-9);
-        let late = timeline.output_time_for_source(1, 1799.016_666).unwrap();
-        assert!((late - (3.0 * 3600.0 + 1799.016_666)).abs() < 1e-9);
+        let late = timeline.output_time_for_source(1, 1799.016666).unwrap();
+        assert!((late - (3.0 * 3600.0 + 1799.016666)).abs() < 1e-9);
     }
 
     #[test]

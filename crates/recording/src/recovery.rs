@@ -2800,11 +2800,10 @@ impl RecoveryManager {
 
         let mut config = match ProjectConfiguration::load(&recording.project_path) {
             Ok(config) => config,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                let mut config = ProjectConfiguration::default();
-                config.markers = Self::recovered_markers(recording, inner, &timeline_segments);
-                config
-            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => ProjectConfiguration {
+                markers: Self::recovered_markers(recording, inner, &timeline_segments),
+                ..Default::default()
+            },
             Err(error) => return Err(error.into()),
         };
 
