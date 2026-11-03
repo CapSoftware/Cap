@@ -1267,15 +1267,12 @@ enum DragKind {
     ClipTrimEnd {
         end: f64,
     },
-    /// An Alt-drag on a clip handle: rolls the cut between clips `edge` and
-    /// `edge + 1`, moving both sides together so the length is unchanged.
     ClipRoll {
         edge: usize,
         left_end: f64,
         right_start: f64,
         min: f64,
         max: f64,
-        /// The cut's output time when the drag started.
         cut_time: f64,
     },
     /// `TL/ZoomTrack.tsx:188-295`: a press on bare zoom track, which becomes a
@@ -4345,7 +4342,6 @@ impl EditorWindow {
         } else {
             None
         };
-        // Alt on a clip handle rolls the cut it sits on instead of trimming.
         let roll_edge = match (kind, hit) {
             (TrackKind::Clip, Hit::Handle { start: true, .. }) if event.modifiers.alt => {
                 index.checked_sub(1)
@@ -4997,12 +4993,16 @@ impl EditorWindow {
                 max,
                 cut_time,
             } => {
-                let delta = delta.clamp(min, max);
+                let Some(timeline) = self.project.timeline.as_ref() else {
+                    return;
+                };
+                let delta = edits::clip_roll_delta(timeline, cut_time, delta).clamp(min, max);
                 if self.edit_live(
                     |timeline| edits::apply_clip_roll(timeline, edge, left_end, right_start, delta),
                     cx,
-                ) {
-                    self.set_preview_time(cut_time + delta);
+                ) && let Some(cut) = self.timeline.clips.get(edge).map(|clip| clip.end)
+                {
+                    self.set_preview_time(cut);
                 }
             }
             DragKind::CreateZoom {

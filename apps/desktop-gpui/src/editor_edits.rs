@@ -2139,6 +2139,12 @@ pub fn clip_roll_bounds(
     Some((min.min(0.), max.max(0.)))
 }
 
+pub fn clip_roll_delta(timeline: &TimelineConfiguration, cut_time: f64, pointer_delta: f64) -> f64 {
+    let holds = timeline.hold_windows();
+    let flow = |output: f64| output - held_time_before(&holds, output);
+    flow(cut_time + pointer_delta) - flow(cut_time)
+}
+
 /// Applies a roll of `delta` output seconds to the cut after clip `edge`,
 /// measured from the edges the drag started on.
 pub fn apply_clip_roll(
@@ -3074,6 +3080,47 @@ mod tests {
         assert!(apply_clip_roll(timeline, 0, 2.0, 10.0, 2.0));
         assert!((timeline.duration() - before).abs() < 1e-9);
         assert_eq!(timeline.effective_transition(1).unwrap().duration, 1.0);
+    }
+
+    #[test]
+    fn rolling_across_a_fullscreen_hold_lands_the_cut_where_it_is_drawn() {
+        let mut project = config(serde_json::json!({
+            "timeline": {
+                "segments": [
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 9.0 },
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 20.0, "end": 40.0 }
+                ],
+                "zoomSegments": [],
+                "textSegments": [
+                    { "start": 10.0, "end": 13.0, "layout": "fullscreen", "content": "Title" }
+                ]
+            }
+        }));
+        let timeline = project.timeline.as_mut().unwrap();
+        assert_eq!(timeline.hold_windows(), vec![(10.0, 13.0)]);
+        let cut = |timeline: &TimelineConfiguration| {
+            TimelineModel::build(
+                &ProjectConfiguration {
+                    timeline: Some(timeline.clone()),
+                    ..Default::default()
+                },
+                false,
+                false,
+            )
+            .clips[0]
+                .end
+        };
+        assert_eq!(cut(timeline), 9.0);
+
+        let delta = clip_roll_delta(timeline, 9.0, 0.5);
+        assert!((delta - 0.5).abs() < 1e-9);
+        assert!(apply_clip_roll(timeline, 0, 9.0, 20.0, delta));
+        assert!((cut(timeline) - 9.5).abs() < 1e-9);
+
+        let delta = clip_roll_delta(timeline, 9.0, 5.0);
+        assert!((delta - 2.0).abs() < 1e-9, "delta {delta}");
+        assert!(apply_clip_roll(timeline, 0, 9.0, 20.0, delta));
+        assert!((cut(timeline) - 14.0).abs() < 1e-9);
     }
 
     // -- Selection ----------------------------------------------------------
