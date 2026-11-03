@@ -115,6 +115,7 @@ export function useCommentRecorder(options: {
 
 	const {
 		mediaRecorderRef,
+		recorderError,
 		setLocalRecordingStrategy,
 		onRecorderDataAvailable,
 		onRecorderStop,
@@ -185,6 +186,14 @@ export function useCommentRecorder(options: {
 		[cleanupStreams, clearTimer, resetRecorder, resetTimer, updatePhase],
 	);
 
+	useEffect(() => {
+		if (!recorderError || (phase !== "recording" && phase !== "paused")) return;
+		runIdRef.current += 1;
+		micRunRef.current += 1;
+		discardRef.current = true;
+		failRecording("Recording stopped unexpectedly. Please try again.");
+	}, [recorderError, phase, failRecording]);
+
 	const stop = useCallback(async () => {
 		if (phaseRef.current !== "recording" && phaseRef.current !== "paused")
 			return;
@@ -200,14 +209,19 @@ export function useCommentRecorder(options: {
 		updatePhase("processing");
 
 		let blob: Blob | null = null;
+		let failed = false;
 		try {
 			blob = await stopRecordingInternal(cleanupStreams, clearTimer);
 		} catch (cause) {
+			failed = true;
 			console.error("Failed to finalize comment recording", cause);
 		}
 		resetRecorder();
 		resetTimer();
 		const discarded = discardRef.current;
+		if (failed && !discarded) {
+			setError("Recording stopped unexpectedly. Please try again.");
+		}
 		updatePhase("idle");
 
 		if (discarded || !blob || blob.size === 0) return;

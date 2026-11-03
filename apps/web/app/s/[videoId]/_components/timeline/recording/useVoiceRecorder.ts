@@ -16,6 +16,7 @@ export type VoiceRecorderPhase =
 	| "idle"
 	| "requesting"
 	| "denied"
+	| "error"
 	| "recording"
 	| "paused"
 	| "processing";
@@ -67,6 +68,7 @@ export function useVoiceRecorder(options: {
 
 	const {
 		mediaRecorderRef,
+		recorderError,
 		setLocalRecordingStrategy,
 		onRecorderDataAvailable,
 		onRecorderStop,
@@ -101,6 +103,26 @@ export function useVoiceRecorder(options: {
 		mixerRef.current = null;
 		if (mixer) void mixer.close();
 	}, []);
+
+	useEffect(() => {
+		if (!recorderError || (phase !== "recording" && phase !== "paused")) return;
+		runIdRef.current += 1;
+		micRunRef.current += 1;
+		discardRef.current = true;
+		cleanupStreams();
+		clearTimer();
+		resetRecorder();
+		resetTimer();
+		updatePhase("error");
+	}, [
+		recorderError,
+		phase,
+		cleanupStreams,
+		clearTimer,
+		resetRecorder,
+		resetTimer,
+		updatePhase,
+	]);
 
 	/** Point the level meter at a (new) mic stream on the mixer's context. */
 	const attachMeter = useCallback(
@@ -376,15 +398,21 @@ export function useVoiceRecorder(options: {
 		updatePhase("processing");
 
 		let blob: Blob | null = null;
+		let failed = false;
 		try {
 			blob = await stopRecordingInternal(cleanupStreams, clearTimer);
 		} catch (cause) {
+			failed = true;
 			console.error("Failed to finalize voice note", cause);
 		}
 		const livePeaks = peaksRef.current?.finish();
 		peaksRef.current = null;
 		resetRecorder();
 		resetTimer();
+		if (failed && !discardRef.current) {
+			updatePhase("error");
+			return;
+		}
 
 		if (discardRef.current || !blob || blob.size === 0) {
 			updatePhase("idle");
