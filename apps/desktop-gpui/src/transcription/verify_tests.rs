@@ -23,7 +23,9 @@
 //!   (one letter, or a short function word such as "of", "to", "is") takes
 //!   more words, up to eight; when one or two words would be left over and
 //!   the first of them is weak, they join the last caption. Pauses do not
-//!   split captions.
+//!   split captions. Hesitation fillers ("um", "uh") are not counted: a
+//!   caption ends right after its last counted word, so a filler opens the
+//!   next caption, and fillers after the last counted word stay in the last.
 //! - A caption spans its first word's start to its last word's end; its text
 //!   joins the words with spaces, except before attaching punctuation; ids
 //!   are `segment-<n>`.
@@ -111,24 +113,44 @@ fn reference_text(words: &[CaptionWord]) -> String {
     text
 }
 
+fn filler(text: &str) -> bool {
+    let letters: String = text
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == '\'')
+        .collect::<String>()
+        .to_lowercase();
+    matches!(letters.as_str(), "um" | "uh" | "hmm" | "er")
+}
+
 fn reference_segments(tokens: &[CaptionWord]) -> Vec<CaptionSegment> {
     let words = reference_words(tokens);
+    let mut counted: Vec<usize> = (0..words.len())
+        .filter(|&i| !filler(&words[i].text))
+        .collect();
+    if counted.is_empty() {
+        counted = (0..words.len()).collect();
+    }
     let mut groups: Vec<&[CaptionWord]> = Vec::new();
-    let mut rest = &words[..];
+    let mut rest = &counted[..];
+    let mut start = 0;
     while !rest.is_empty() {
-        if rest.len() <= 6 {
-            groups.push(rest);
-            break;
+        let mut take = rest.len().min(6);
+        if rest.len() > 6 {
+            while take < 8 && take < rest.len() && weak(&words[rest[take - 1]].text) {
+                take += 1;
+            }
+            let left = rest.len() - take;
+            if (1..3).contains(&left) && weak(&words[rest[take]].text) {
+                take = rest.len();
+            }
         }
-        let mut take = 6;
-        while take < 8 && take < rest.len() && weak(&rest[take - 1].text) {
-            take += 1;
-        }
-        let left = rest.len() - take;
-        if (1..3).contains(&left) && weak(&rest[take].text) {
-            take = rest.len();
-        }
-        groups.push(&rest[..take]);
+        let end = if take == rest.len() {
+            words.len()
+        } else {
+            rest[take - 1] + 1
+        };
+        groups.push(&words[start..end]);
+        start = end;
         rest = &rest[take..];
     }
     groups
@@ -549,9 +571,9 @@ fn instant_project_is_refused() {
     finish(case);
 }
 
-const ASCII_WORDS: [&str; 22] = [
+const ASCII_WORDS: [&str; 25] = [
     "hello", "world", "is", "a", "river", "cloud", "it", "to", "so", "screen", "record", "of",
-    "we", "on", "capture", "edit", "timeline", "in", "up", "my", "an", "I",
+    "we", "on", "capture", "edit", "timeline", "in", "up", "my", "an", "I", "um", "uh", "Hmm",
 ];
 /// Accented and CJK words, and "à", a one-letter (weak) French preposition
 /// outside ASCII.

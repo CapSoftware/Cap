@@ -54,6 +54,44 @@ use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextPar
 use crate::i18n::tr;
 use crate::{editor_timeline::clip_timeline_offsets, store};
 
+mod align;
+mod verbatim;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct VerbatimOptions {
+    pub parakeet_subword_words: bool,
+    pub whisper_filler_prompt: bool,
+    pub recover_speech: bool,
+    pub split_stutters: bool,
+    pub align_words: bool,
+    pub snap_to_pauses: bool,
+}
+
+impl VerbatimOptions {
+    #[cfg(test)]
+    pub const BASELINE: Self = Self {
+        parakeet_subword_words: false,
+        whisper_filler_prompt: false,
+        recover_speech: false,
+        split_stutters: false,
+        align_words: false,
+        snap_to_pauses: false,
+    };
+}
+
+impl Default for VerbatimOptions {
+    fn default() -> Self {
+        Self {
+            parakeet_subword_words: true,
+            whisper_filler_prompt: true,
+            recover_speech: true,
+            split_stutters: true,
+            align_words: true,
+            snap_to_pauses: true,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Model catalogue & shared paths
 // ---------------------------------------------------------------------------
@@ -323,6 +361,7 @@ pub fn run_model_delete(model: &str) {
     if let Err(error) = delete_model_files(model) {
         tracing::warn!(model, "failed to delete caption model: {error}");
     }
+    remove_word_aligner_if_unused();
     {
         let mut hub = hub();
         if hub.deleting.as_deref() == Some(model) {
@@ -797,6 +836,133 @@ async fn download_parakeet_model(_model: &str) -> Result<(), String> {
 }
 
 // ---------------------------------------------------------------------------
+// Word aligner
+// ---------------------------------------------------------------------------
+
+/// wav2vec2-base-960h (Apache-2.0) as an int8 ONNX export, pinned to a commit
+/// and checked by hash. It only refines the timing of words an engine already
+/// heard, in English, so a missing or failed download just keeps the engine's
+/// own timings.
+const ALIGNER_FILE: &str = "word-aligner-wav2vec2-base-960h-int8.onnx";
+const ALIGNER_URL: &str = "https://huggingface.co/Xenova/wav2vec2-base-960h/resolve/a19f851b3d42865797e410752b4c570c871e4825/onnx/model_quantized.onnx";
+const ALIGNER_SHA256: &str = "cd5040c147381580ed73258143dd8e0c28e800a09e74ee42ee2b3e8cb4d760a3";
+const ALIGNER_BYTES: u64 = 95_286_046;
+const ALIGNER_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+
+static ALIGNER_DOWNLOAD: Mutex<()> = Mutex::new(());
+
+fn aligner_path() -> PathBuf {
+    models_dir().join(ALIGNER_FILE)
+}
+
+fn aligner_installed(path: &Path) -> bool {
+    std::fs::metadata(path).is_ok_and(|metadata| metadata.len() == ALIGNER_BYTES)
+}
+
+async fn download_aligner(path: &Path) -> Result<(), String> {
+    use sha2::Digest as _;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("Failed to create {parent:?}: {e}"))?;
+    }
+    let staging = path.with_extension("onnx.downloading");
+    let result = async {
+        let response = HTTP
+            .get(ALIGNER_URL)
+            .timeout(ALIGNER_DOWNLOAD_TIMEOUT)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to download the word aligner: {e}"))?;
+        if !response.status().is_success() {
+            return Err(format!(
+                "Failed to download the word aligner: HTTP {}",
+                response.status()
+            ));
+        }
+        let mut file =
+            File::create(&staging).map_err(|e| format!("Failed to create {staging:?}: {e}"))?;
+        let mut hasher = sha2::Sha256::new();
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|e| format!("Error while downloading: {e}"))?;
+            hasher.update(&chunk);
+            file.write_all(&chunk)
+                .map_err(|e| format!("Error while writing the word aligner: {e}"))?;
+        }
+        file.flush()
+            .map_err(|e| format!("Failed to flush the word aligner: {e}"))?;
+        let digest = hasher.finalize();
+        let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+        if hex != ALIGNER_SHA256 {
+            return Err(format!(
+                "The word aligner download is corrupt (sha256 {hex})"
+            ));
+        }
+        std::fs::rename(&staging, path)
+            .map_err(|e| format!("Failed to install the word aligner: {e}"))
+    }
+    .await;
+    if result.is_err() {
+        let _ = std::fs::remove_file(&staging);
+    }
+    result
+}
+
+/// The aligner, downloaded on first use. `None` when it cannot be had now:
+/// offline, no async runtime to download on, or a platform without ONNX
+/// Runtime.
+fn load_word_aligner() -> Option<align::Acoustic> {
+    if !supports_parakeet() {
+        return None;
+    }
+    let path = aligner_path();
+    {
+        let _download = ALIGNER_DOWNLOAD
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if !aligner_installed(&path) {
+            let runtime = tokio::runtime::Handle::try_current().ok()?;
+            tracing::info!("Downloading the word aligner");
+            if let Err(error) = runtime.block_on(download_aligner(&path)) {
+                tracing::warn!("{error}");
+                return None;
+            }
+        }
+    }
+    align::Acoustic::load(&path)
+        .inspect_err(|error| tracing::warn!("{error}"))
+        .ok()
+}
+
+fn english_word_aligner(
+    language: &str,
+    groups: &[Vec<CaptionWord>],
+    options: &VerbatimOptions,
+) -> Option<align::Acoustic> {
+    if !options.align_words {
+        return None;
+    }
+    let words: Vec<CaptionWord> = groups.iter().flatten().cloned().collect();
+    let english = match language {
+        "en" => true,
+        "auto" => align::looks_english(&words),
+        _ => false,
+    };
+    if english { load_word_aligner() } else { None }
+}
+
+fn remove_word_aligner_if_unused() {
+    if MODEL_NAMES.iter().any(|model| model_files_present(model)) {
+        return;
+    }
+    let path = aligner_path();
+    if path.exists()
+        && let Err(error) = std::fs::remove_file(&path)
+    {
+        tracing::warn!("Failed to delete the word aligner: {error}");
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Engine contexts
 // ---------------------------------------------------------------------------
 
@@ -989,6 +1155,16 @@ fn decode_transcription_source(
 
 /// `normalize_audio_for_transcription` (`captions.rs:885-915`).
 fn normalize_audio_for_transcription(samples: &mut [f32]) -> f32 {
+    let gain = transcription_gain(samples);
+    if (gain - 1.0).abs() > 0.01 {
+        for sample in samples {
+            *sample = (*sample * gain).clamp(-0.98, 0.98);
+        }
+    }
+    gain
+}
+
+fn transcription_gain(samples: &[f32]) -> f32 {
     if samples.is_empty() {
         return 1.0;
     }
@@ -1009,15 +1185,7 @@ fn normalize_audio_for_transcription(samples: &mut [f32]) -> f32 {
     let target_rms = 0.08_f32;
     let desired_gain = (target_rms / rms).clamp(1.0, 8.0);
     let peak_limited_gain = 0.98 / peak;
-    let gain = desired_gain.min(peak_limited_gain);
-
-    if (gain - 1.0).abs() > 0.01 {
-        for sample in samples {
-            *sample = (*sample * gain).clamp(-0.98, 0.98);
-        }
-    }
-
-    gain
+    desired_gain.min(peak_limited_gain)
 }
 
 fn extract_project_audio(
@@ -1090,6 +1258,57 @@ fn extract_project_audio(
         final_samples.truncate(initial_len);
     }
     Ok(any_audio)
+}
+
+/// The samples of a 16 kHz mono 16-bit PCM WAV, read past its header and any
+/// extra chunks so the first sample lands at time zero.
+fn read_wav_16k_mono(path: &Path) -> Result<Vec<f32>, String> {
+    let mut bytes = Vec::new();
+    File::open(path)
+        .map_err(|e| format!("Failed to open audio file: {e} at path: {path:?}"))?
+        .read_to_end(&mut bytes)
+        .map_err(|e| format!("Failed to read audio file: {e}"))?;
+    if bytes.len() < 12 || &bytes[..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
+        return Err(format!("{} is not a WAV file", path.display()));
+    }
+    let mut offset = 12;
+    let mut format = None;
+    while offset + 8 <= bytes.len() {
+        let id = &bytes[offset..offset + 4];
+        let size = u32::from_le_bytes([
+            bytes[offset + 4],
+            bytes[offset + 5],
+            bytes[offset + 6],
+            bytes[offset + 7],
+        ]) as usize;
+        let body = offset + 8;
+        if id == b"fmt " && body + 16 <= bytes.len() {
+            let channels = u16::from_le_bytes([bytes[body + 2], bytes[body + 3]]);
+            let rate = u32::from_le_bytes([
+                bytes[body + 4],
+                bytes[body + 5],
+                bytes[body + 6],
+                bytes[body + 7],
+            ]);
+            let bits = u16::from_le_bytes([bytes[body + 14], bytes[body + 15]]);
+            format = Some((channels, rate, bits));
+        }
+        if id == b"data" {
+            if format != Some((1, WHISPER_SAMPLE_RATE, 16)) {
+                return Err(format!(
+                    "Expected 16 kHz mono 16-bit audio in {}, got {format:?}",
+                    path.display()
+                ));
+            }
+            let end = body.saturating_add(size).min(bytes.len());
+            return Ok(bytes[body..end]
+                .chunks_exact(2)
+                .map(|pair| f32::from(i16::from_le_bytes([pair[0], pair[1]])) / 32768.0)
+                .collect());
+        }
+        offset = body.saturating_add(size).saturating_add(size & 1);
+    }
+    Err(format!("{} has no audio data", path.display()))
 }
 
 /// The WAV encode half of the recording-directory arm
@@ -1203,6 +1422,23 @@ fn write_wav_16k_mono(mixed_samples: &[f32], output_path: &Path) -> Result<(), S
 // Whisper
 // ---------------------------------------------------------------------------
 
+/// Whisper copies the style of its prompt, and without a disfluent one it
+/// writes clean prose: fillers and repeats disappear and can never be offered
+/// for removal.
+const VERBATIM_PROMPT: &str =
+    "Umm, let me think like, hmm... Okay, here's what I'm, like, thinking.";
+
+fn whisper_prompt(transcription_hints: &[String], verbatim: bool) -> Option<String> {
+    let hints = build_initial_prompt(transcription_hints);
+    if !verbatim {
+        return hints;
+    }
+    Some(match hints {
+        Some(hints) => format!("{hints}. {VERBATIM_PROMPT}"),
+        None => VERBATIM_PROMPT.to_string(),
+    })
+}
+
 /// `build_initial_prompt` (`captions.rs:1181-1200`).
 fn build_initial_prompt(transcription_hints: &[String]) -> Option<String> {
     let mut normalized = Vec::new();
@@ -1225,6 +1461,12 @@ fn build_initial_prompt(transcription_hints: &[String]) -> Option<String> {
     }
 }
 
+fn default_transcription_hints() -> Vec<String> {
+    ["Cap", "TypeScript", "My Brand Name", "mywebsite.com"]
+        .map(str::to_string)
+        .to_vec()
+}
+
 /// `general_settings.transcriptionHints`, with the Rust store's own default
 /// list when the key is absent (`general_settings.rs:286-293`).
 fn transcription_hints() -> Vec<String> {
@@ -1235,12 +1477,7 @@ fn transcription_hints() -> Vec<String> {
             .filter_map(|value| value.as_str())
             .map(str::to_string)
             .collect(),
-        None => vec![
-            "Cap".to_string(),
-            "TypeScript".to_string(),
-            "My Brand Name".to_string(),
-            "mywebsite.com".to_string(),
-        ],
+        None => default_transcription_hints(),
     }
 }
 
@@ -1257,13 +1494,55 @@ fn is_special_token(token_text: &str) -> bool {
         || trimmed.contains("<|")
 }
 
+fn detect_whisper_language(
+    context: &WhisperContext,
+    samples: &[f32],
+) -> Result<&'static str, String> {
+    let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+    params.set_print_special(false);
+    params.set_print_progress(false);
+    params.set_print_realtime(false);
+    params.set_language(Some("auto"));
+    params.set_detect_language(true);
+    let mut state = context
+        .create_state()
+        .map_err(|e| format!("Failed to create Whisper state: {e}"))?;
+    let window = samples.len().min(30 * WHISPER_SAMPLE_RATE as usize);
+    state
+        .full(params, &samples[..window])
+        .map_err(|e| format!("Failed to detect the spoken language: {e}"))?;
+    let id = state
+        .full_lang_id_from_state()
+        .map_err(|e| format!("Failed to read the detected language: {e}"))?;
+    whisper_rs::get_lang_str(id).ok_or_else(|| format!("Unknown Whisper language id {id}"))
+}
+
 /// `process_with_whisper` (`captions.rs:917-1179`).
 fn process_with_whisper(
-    audio_path: &Path,
+    samples: &[f32],
     context: Arc<WhisperContext>,
     language: &str,
     transcription_hints: &[String],
-) -> Result<Vec<CaptionSegment>, String> {
+    options: &VerbatimOptions,
+) -> Result<Vec<Vec<CaptionWord>>, String> {
+    let audio_data_f32: std::borrow::Cow<'_, [f32]> =
+        if (transcription_gain(samples) - 1.0).abs() > 0.01 {
+            let mut boosted = samples.to_vec();
+            let gain = normalize_audio_for_transcription(&mut boosted);
+            tracing::info!("Applied Whisper input gain: {gain:.2}x");
+            boosted.into()
+        } else {
+            samples.into()
+        };
+    let language =
+        if options.whisper_filler_prompt && language == "auto" && !audio_data_f32.is_empty() {
+            let detected = detect_whisper_language(&context, &audio_data_f32)?;
+            tracing::info!("Whisper detected language: {detected}");
+            detected
+        } else {
+            language
+        };
+
     let mut params = FullParams::new(SamplingStrategy::BeamSearch {
         beam_size: 5,
         patience: 1.0,
@@ -1277,24 +1556,9 @@ fn process_with_whisper(
     params.set_language(Some(if language == "auto" { "auto" } else { language }));
     params.set_max_len(i32::MAX);
 
-    if let Some(initial_prompt) = build_initial_prompt(transcription_hints) {
+    let verbatim = options.whisper_filler_prompt && language == "en";
+    if let Some(initial_prompt) = whisper_prompt(transcription_hints, verbatim) {
         params.set_initial_prompt(&initial_prompt);
-    }
-
-    let mut audio_data = Vec::new();
-    File::open(audio_path)
-        .map_err(|e| format!("Failed to open audio file: {e} at path: {audio_path:?}"))?
-        .read_to_end(&mut audio_data)
-        .map_err(|e| format!("Failed to read audio file: {e}"))?;
-
-    let mut audio_data_f32: Vec<f32> = audio_data
-        .chunks_exact(2)
-        .map(|pair| f32::from(i16::from_le_bytes([pair[0], pair[1]])) / 32768.0)
-        .collect();
-
-    let gain = normalize_audio_for_transcription(&mut audio_data_f32);
-    if (gain - 1.0).abs() > 0.01 {
-        tracing::info!("Applied Whisper input gain: {gain:.2}x");
     }
 
     tracing::info!(
@@ -1316,18 +1580,14 @@ fn process_with_whisper(
         .full_n_segments()
         .map_err(|e| format!("Failed to get number of segments: {e}"))?;
 
-    let mut segments = Vec::new();
+    let mut groups = Vec::new();
 
     for i in 0..num_segments {
         let start_i64 = state
             .full_get_segment_t0(i)
             .map_err(|e| format!("Failed to get segment start time: {e}"))?;
-        let end_i64 = state
-            .full_get_segment_t1(i)
-            .map_err(|e| format!("Failed to get segment end time: {e}"))?;
 
         let start_time = (start_i64 as f32) / 100.0;
-        let end_time = (end_i64 as f32) / 100.0;
 
         let mut words = Vec::new();
         let num_tokens = state
@@ -1384,35 +1644,18 @@ fn process_with_whisper(
         }
 
         let words = normalize_caption_words(words);
-        if words.is_empty() {
-            continue;
-        }
-
-        for (chunk_idx, chunk_words) in caption_word_chunks(&words).into_iter().enumerate() {
-            let segment_text = caption_text_from_words(chunk_words);
-            let segment_start = chunk_words
-                .first()
-                .map(|word| word.start)
-                .unwrap_or(start_time);
-            let segment_end = chunk_words.last().map(|word| word.end).unwrap_or(end_time);
-
-            segments.push(CaptionSegment {
-                id: format!("segment-{i}-{chunk_idx}"),
-                start: segment_start,
-                end: segment_end,
-                text: segment_text,
-                words: chunk_words.to_vec(),
-            });
+        if !words.is_empty() {
+            groups.push(words);
         }
     }
 
     tracing::info!(
-        "Whisper produced {} caption segments ({} words)",
-        segments.len(),
-        segments.iter().map(|s| s.words.len()).sum::<usize>()
+        "Whisper produced {} segments ({} words)",
+        groups.len(),
+        groups.iter().map(Vec::len).sum::<usize>()
     );
 
-    Ok(segments)
+    Ok(groups)
 }
 
 // ---------------------------------------------------------------------------
@@ -1454,9 +1697,10 @@ fn parakeet_chunk_ranges(samples: &[f32], sample_rate: usize) -> Vec<std::ops::R
 /// `process_with_parakeet` (`captions.rs:1202-1302`).
 #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
 fn process_with_parakeet(
-    audio_path: &Path,
+    samples: &[f32],
     model_dir: &str,
-) -> Result<Vec<CaptionSegment>, String> {
+    options: &VerbatimOptions,
+) -> Result<Vec<Vec<CaptionWord>>, String> {
     let cached_model = {
         let guard = PARAKEET_CONTEXT
             .lock()
@@ -1496,90 +1740,179 @@ fn process_with_parakeet(
         }
     };
 
-    let mut reader = hound::WavReader::open(audio_path)
-        .map_err(|e| format!("Failed to open audio file: {e} at path: {audio_path:?}"))?;
-    let spec = reader.spec();
-    if spec.channels != 1 || spec.sample_rate != WHISPER_SAMPLE_RATE {
-        return Err(format!(
-            "Expected 16 kHz mono audio, got {} Hz with {} channels",
-            spec.sample_rate, spec.channels
-        ));
-    }
-    let sample_rate = spec.sample_rate;
-    let samples = reader
-        .samples::<i16>()
-        .map(|sample| sample.map(|sample| f32::from(sample) / 32768.0))
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| format!("Failed to read audio file: {e}"))?;
     if samples.is_empty() {
         return Ok(Vec::new());
     }
+    let rate = WHISPER_SAMPLE_RATE as usize;
+    let mode = if options.parakeet_subword_words {
+        TimestampMode::Tokens
+    } else {
+        TimestampMode::Words
+    };
+    let mut parakeet = model_arc
+        .lock()
+        .map_err(|e| format!("Failed to lock Parakeet model: {e}"))?;
+    let mut decode = |range: Range<usize>, padding: usize| -> Result<Vec<CaptionWord>, String> {
+        let mut audio = Vec::with_capacity(range.len() + 2 * padding);
+        audio.resize(padding, 0.0);
+        audio.extend_from_slice(&samples[range.clone()]);
+        audio.resize(audio.len() + padding, 0.0);
+        let offset = (range.start as f32 - padding as f32) / rate as f32;
+        let result = parakeet
+            .transcribe_samples(audio, WHISPER_SAMPLE_RATE, 1, Some(mode))
+            .map_err(|e| format!("Parakeet transcription failed: {e}"))?;
+        let timed = result.tokens.into_iter().map(|token| CaptionWord {
+            text: token.text,
+            start: token.start + offset,
+            end: token.end + offset,
+        });
+        Ok(if options.parakeet_subword_words {
+            verbatim::words_from_subword_tokens(timed)
+        } else {
+            timed.collect()
+        })
+    };
 
-    let mut tokens = Vec::new();
-    {
-        let mut parakeet = model_arc
-            .lock()
-            .map_err(|e| format!("Failed to lock Parakeet model: {e}"))?;
-        for range in parakeet_chunk_ranges(&samples, sample_rate as usize) {
-            let offset = range.start as f32 / sample_rate as f32;
-            let result = parakeet
-                .transcribe_samples(
-                    samples[range].to_vec(),
-                    sample_rate,
-                    1,
-                    Some(TimestampMode::Words),
-                )
-                .map_err(|e| format!("Parakeet transcription failed: {e}"))?;
-            tokens.extend(result.tokens.into_iter().map(|token| CaptionWord {
-                text: token.text,
-                start: token.start + offset,
-                end: token.end + offset,
-            }));
+    let mut words = Vec::new();
+    for range in parakeet_chunk_ranges(samples, rate) {
+        words.extend(decode(range, 0)?);
+    }
+    let decoded = words.len();
+    if options.recover_speech {
+        let loudness = verbatim::Loudness::new(samples, WHISPER_SAMPLE_RATE);
+        for span in verbatim::uncovered_speech(&words, &loudness) {
+            let first = ((span.0 * rate as f64) as usize).min(samples.len());
+            let last = ((span.1 * rate as f64) as usize).min(samples.len());
+            if last <= first {
+                continue;
+            }
+            let Some(voiced) = verbatim::span_voicing(samples, WHISPER_SAMPLE_RATE, span) else {
+                continue;
+            };
+            let found = decode(first..last, rate / 2)?;
+            verbatim::insert_recovered(&mut words, found, span, voiced);
         }
     }
 
-    tracing::info!("Parakeet produced {} timed tokens", tokens.len());
+    tracing::info!(
+        "Parakeet produced {} words ({} recovered from unheard speech)",
+        words.len(),
+        words.len().saturating_sub(decoded)
+    );
 
-    Ok(caption_segments_from_tokens(tokens))
+    Ok(vec![words])
 }
 
-/// Parakeet's timed word tokens -> caption segments: drop empty tokens,
-/// normalize the words and chunk them.
-#[cfg(any(test, not(all(target_os = "macos", target_arch = "x86_64"))))]
+#[cfg(test)]
 fn caption_segments_from_tokens(
     tokens: impl IntoIterator<Item = CaptionWord>,
 ) -> Vec<CaptionSegment> {
-    let words = normalize_caption_words(
-        tokens
-            .into_iter()
-            .filter(|token| !token.text.trim().is_empty())
-            .map(|token| CaptionWord {
-                text: token.text.trim().to_string(),
-                start: token.start,
-                end: token.end,
-            })
-            .collect(),
-    );
+    caption_segments_from_groups(vec![tokens.into_iter().collect()])
+}
 
+/// Each group (a Whisper segment, or everything Parakeet heard) is
+/// normalized and chunked on its own, so a caption never spans two groups.
+fn caption_segments_from_groups(groups: Vec<Vec<CaptionWord>>) -> Vec<CaptionSegment> {
+    let single = groups.len() == 1;
     let mut segments = Vec::new();
-    for (chunk_idx, chunk) in caption_word_chunks(&words).into_iter().enumerate() {
-        segments.push(CaptionSegment {
-            id: format!("segment-{chunk_idx}"),
-            start: chunk.first().map_or(0.0, |word| word.start),
-            end: chunk.last().map_or(0.0, |word| word.end),
-            text: caption_text_from_words(chunk),
-            words: chunk.to_vec(),
-        });
+    for (group_index, group) in groups.into_iter().enumerate() {
+        let words = normalize_caption_words(
+            group
+                .into_iter()
+                .filter(|token| !token.text.trim().is_empty())
+                .collect(),
+        );
+        for (chunk_idx, chunk) in caption_word_chunks(&words).into_iter().enumerate() {
+            segments.push(CaptionSegment {
+                id: if single {
+                    format!("segment-{chunk_idx}")
+                } else {
+                    format!("segment-{group_index}-{chunk_idx}")
+                },
+                start: chunk.first().map_or(0.0, |word| word.start),
+                end: chunk.last().map_or(0.0, |word| word.end),
+                text: caption_text_from_words(chunk),
+                words: chunk.to_vec(),
+            });
+        }
     }
-
     segments
+}
+
+fn finish_words(
+    groups: Vec<Vec<CaptionWord>>,
+    samples: &[f32],
+    options: &VerbatimOptions,
+    aligner: Option<&mut dyn align::Emissions>,
+) -> Vec<Vec<CaptionWord>> {
+    finish_words_tuned(groups, samples, options, aligner, &TUNING)
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Tuning {
+    snap: verbatim::SnapSettings,
+}
+
+const TUNING: Tuning = Tuning {
+    snap: verbatim::SNAP,
+};
+
+fn finish_words_tuned(
+    groups: Vec<Vec<CaptionWord>>,
+    samples: &[f32],
+    options: &VerbatimOptions,
+    aligner: Option<&mut dyn align::Emissions>,
+    tuning: &Tuning,
+) -> Vec<Vec<CaptionWord>> {
+    let groups: Vec<Vec<CaptionWord>> = groups
+        .into_iter()
+        .map(|group| {
+            normalize_caption_words(
+                group
+                    .into_iter()
+                    .filter(|token| !token.text.trim().is_empty())
+                    .collect(),
+            )
+        })
+        .filter(|group| !group.is_empty())
+        .collect();
+    let groups: Vec<Vec<CaptionWord>> = if options.split_stutters {
+        groups.into_iter().map(verbatim::split_stutters).collect()
+    } else {
+        groups
+    };
+    let lengths: Vec<usize> = groups.iter().map(Vec::len).collect();
+    let mut words: Vec<CaptionWord> = groups.into_iter().flatten().collect();
+    if let Some(acoustic) = aligner.filter(|_| options.align_words)
+        && let Err(error) = align::align(&mut words, samples, WHISPER_SAMPLE_RATE, acoustic)
+    {
+        tracing::warn!("Word alignment failed, keeping engine timings: {error}");
+    }
+    if options.snap_to_pauses {
+        let loudness = verbatim::Loudness::with_thresholds(
+            samples,
+            WHISPER_SAMPLE_RATE,
+            tuning.snap.above_floor_db,
+            tuning.snap.below_peak_db,
+        );
+        verbatim::snap_to_pauses(&mut words, &loudness, tuning.snap);
+    }
+    if options.snap_to_pauses || options.align_words {
+        align::keep_order(&mut words);
+    }
+    let mut words = words.into_iter();
+    lengths
+        .into_iter()
+        .map(|length| words.by_ref().take(length).collect())
+        .collect()
 }
 
 #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
 fn process_with_parakeet(
-    _audio_path: &Path,
+    _samples: &[f32],
     _model_dir: &str,
-) -> Result<Vec<CaptionSegment>, String> {
+    _options: &VerbatimOptions,
+) -> Result<Vec<Vec<CaptionWord>>, String> {
     Err(PARAKEET_UNSUPPORTED_MESSAGE.to_string())
 }
 
@@ -1681,15 +2014,26 @@ pub fn transcribe_blocking(
     let _guard = lock_transcription_worker_slot();
     let result =
         transcribe_project_with(project_path, timeline, recording_durations, |audio_path| {
-            if is_parakeet_model(model) {
+            let samples = read_wav_16k_mono(audio_path)?;
+            let options = VerbatimOptions::default();
+            let groups = if is_parakeet_model(model) {
                 tracing::info!("Using Parakeet TDT engine");
-                process_with_parakeet(audio_path, model_file.to_string_lossy().as_ref())
+                process_with_parakeet(&samples, model_file.to_string_lossy().as_ref(), &options)?
             } else {
                 tracing::info!("Using Whisper engine");
                 let hints = transcription_hints();
                 let context = get_whisper_context(model_file.to_string_lossy().as_ref())?;
-                process_with_whisper(audio_path, context, language, &hints)
-            }
+                process_with_whisper(&samples, context, language, &hints, &options)?
+            };
+            let mut aligner = english_word_aligner(language, &groups, &options);
+            Ok(caption_segments_from_groups(finish_words(
+                groups,
+                &samples,
+                &options,
+                aligner
+                    .as_mut()
+                    .map(|aligner| aligner as &mut dyn align::Emissions),
+            )))
         });
     if is_parakeet_model(model) {
         schedule_parakeet_release();
@@ -2055,6 +2399,10 @@ pub fn caption_generation_error_message(message: &str) -> String {
 #[cfg(test)]
 mod download_tests;
 #[cfg(test)]
+mod eval;
+#[cfg(test)]
+mod fixture_tests;
+#[cfg(test)]
 mod verify_tests;
 
 #[cfg(test)]
@@ -2134,12 +2482,15 @@ mod tests {
         let model = std::env::var("CAP_PARAKEET_BENCH_MODEL").expect("CAP_PARAKEET_BENCH_MODEL");
         let wav =
             PathBuf::from(std::env::var("CAP_PARAKEET_BENCH_WAV").expect("CAP_PARAKEET_BENCH_WAV"));
+        let samples = read_wav_16k_mono(&wav).expect("16 kHz mono WAV");
         let started = std::time::Instant::now();
-        let result = process_with_parakeet(&wav, &model);
+        let options = VerbatimOptions::default();
+        let result = process_with_parakeet(&samples, &model, &options)
+            .map(|groups| finish_words(groups, &samples, &options, None));
         let seconds = started.elapsed().as_secs_f64();
         match result {
-            Ok(segments) => {
-                let words: Vec<&CaptionWord> = segments.iter().flat_map(|s| &s.words).collect();
+            Ok(groups) => {
+                let words: Vec<&CaptionWord> = groups.iter().flatten().collect();
                 println!("parakeet_seconds={seconds:.2} words={}", words.len());
                 if let Ok(path) = std::env::var("CAP_PARAKEET_BENCH_WORDS") {
                     let dump: String = words
