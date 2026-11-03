@@ -314,6 +314,13 @@ describe("stopRepairSession", () => {
 			}),
 		).toBe(true);
 		expect(sandbox.stop).toHaveBeenCalled();
+		expect(sandbox.runCommand).toHaveBeenCalledWith(
+			expect.objectContaining({
+				cmd: "cat",
+				args: ["/opt/cap-repair/session-log.jsonl"],
+			}),
+		);
+		expect(runPromise).toHaveBeenCalled();
 		expect(
 			await stopRepairSession({ userId: "user-1", sessionId: "../x" }),
 		).toBe(false);

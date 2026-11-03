@@ -2,7 +2,10 @@ import { randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { serverEnv } from "@cap/env";
+import { S3Buckets } from "@cap/web-backend";
 import { Sandbox } from "@vercel/sandbox";
+import { Effect, Option } from "effect";
+import { runPromise } from "@/lib/server";
 
 export type RepairOperation = "recover" | "open";
 
@@ -312,6 +315,39 @@ export async function createRepairSession(args: {
 	}
 }
 
+export const sessionLogKey = (userId: string, sessionId: string) =>
+	`recording-repairs/sessions/${userId}/${sessionId}.jsonl`;
+
+async function saveSessionLog(
+	sandbox: Sandbox,
+	userId: string,
+	sessionId: string,
+) {
+	const command = await sandbox.runCommand({
+		cmd: "cat",
+		args: [`${RUNTIME}/session-log.jsonl`],
+		sudo: true,
+	});
+	if (command.exitCode !== 0) return;
+	const log = await command.stdout();
+	if (!log.trim()) return;
+	const header = JSON.stringify({
+		kind: "session",
+		sessionId,
+		userId,
+		operation: sandbox.tags?.operation ?? null,
+		savedAt: new Date().toISOString(),
+	});
+	await Effect.gen(function* () {
+		const [bucket] = yield* S3Buckets.getBucketAccess(Option.none());
+		yield* bucket.putObject(
+			sessionLogKey(userId, sessionId),
+			`${header}\n${log}`,
+			{ contentType: "application/x-ndjson" },
+		);
+	}).pipe(runPromise);
+}
+
 export async function stopRepairSession(args: {
 	userId: string;
 	sessionId: string;
@@ -319,6 +355,9 @@ export async function stopRepairSession(args: {
 	if (!isRepairSessionId(args.sessionId)) return false;
 	const sandbox = await Sandbox.get({ name: args.sessionId }).catch(() => null);
 	if (!sandbox || sandbox.tags?.repairUser !== args.userId) return false;
+	await saveSessionLog(sandbox, args.userId, args.sessionId).catch((error) =>
+		console.error("[recording-repair] session log not saved", error),
+	);
 	await sandbox.stop().catch(() => {});
 	return true;
 }
