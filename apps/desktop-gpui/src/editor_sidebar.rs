@@ -58,6 +58,7 @@ use crate::{
     editor_tabs::{AudioSlider, CameraSlider, CaptionSlider, CursorSlider, KeyboardSlider},
     editor_timeline::TrackKind,
     editor_window::EditorWindow,
+    i18n::tr,
     library,
     ui::{self, CollapsibleState, SliderTrack},
 };
@@ -137,6 +138,17 @@ pub const BACKGROUND_THEMES: [(&str, &str); 6] = [
     ("purple", "Purple"),
     ("orange", "Orange"),
 ];
+
+pub fn background_theme_label(id: &str) -> &'static str {
+    match id {
+        "dark" => tr::editor::sidebar::wallpaper_theme::dark(),
+        "blue" => tr::editor::sidebar::wallpaper_theme::blue(),
+        "cities" => tr::editor::sidebar::wallpaper_theme::cities(),
+        "purple" => tr::editor::sidebar::wallpaper_theme::purple(),
+        "orange" => tr::editor::sidebar::wallpaper_theme::orange(),
+        _ => "macOS",
+    }
+}
 
 /// `BACKGROUND_COLORS` (`:259-277`). The last one is transparent and renders as
 /// a checkerboard rather than a swatch.
@@ -266,8 +278,19 @@ impl SidebarTab {
         }
     }
 
-    /// The tab's own name. Used by the timeline's own logging and by the tests
-    /// that pin the rail's order; the rail itself is icon-only.
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::Background => tr::editor::sidebar::tab::background(),
+            Self::Camera => tr::editor::sidebar::tab::camera(),
+            Self::Audio => tr::editor::sidebar::tab::audio(),
+            Self::Cursor => tr::editor::sidebar::tab::cursor(),
+            Self::Keyboard => tr::editor::sidebar::tab::keyboard(),
+            Self::Captions => tr::editor::sidebar::tab::captions(),
+        }
+    }
+
+    /// The tab's own English name, which `CAP_GPUI_AUTO_SIDEBAR` matches
+    /// and the tests that pin the rail's order read.
     #[allow(dead_code)]
     pub fn label(self) -> &'static str {
         match self {
@@ -310,13 +333,13 @@ impl SourceTab {
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::Desktop => "Desktop",
-            Self::Wallpaper => "Wallpaper",
-            Self::Image => "Image",
-            Self::Color => "Color",
-            Self::Gradient => "Gradient",
-            Self::AnimatedGradient => "Animated",
-            Self::None => "None",
+            Self::Desktop => tr::editor::sidebar::source::desktop(),
+            Self::Wallpaper => tr::editor::sidebar::source::wallpaper(),
+            Self::Image => tr::editor::sidebar::source::image(),
+            Self::Color => tr::editor::sidebar::source::color(),
+            Self::Gradient => tr::editor::sidebar::source::gradient(),
+            Self::AnimatedGradient => tr::editor::sidebar::source::animated(),
+            Self::None => tr::editor::sidebar::source::none(),
         }
     }
 }
@@ -511,35 +534,8 @@ fn wallpaper_dir_from(
     candidates.push(PathBuf::from(
         "/Applications/Cap.app/Contents/Resources/assets/backgrounds",
     ));
-    candidates.push(
-        manifest
-            .join("../desktop/src-tauri/assets/backgrounds")
-            .clean(),
-    );
+    candidates.push(manifest.join("assets/backgrounds"));
     candidates.into_iter().find(|path| path.is_dir())
-}
-
-/// `PathBuf::canonicalize` fails on a path that does not exist, and a `..`
-/// segment left in place reads badly in a log line, so the `../` is folded
-/// here instead.
-trait Clean {
-    fn clean(self) -> PathBuf;
-}
-
-impl Clean for PathBuf {
-    fn clean(self) -> PathBuf {
-        let mut out = PathBuf::new();
-        for component in self.components() {
-            match component {
-                std::path::Component::ParentDir => {
-                    out.pop();
-                }
-                std::path::Component::CurDir => {}
-                other => out.push(other),
-            }
-        }
-        out
-    }
 }
 
 pub fn wallpaper_path(id: &str) -> Option<PathBuf> {
@@ -2437,7 +2433,10 @@ impl EditorWindow {
         self.sidebar.picker_task = Some(cx.spawn_in(window, async move |this, cx| {
             #[cfg(target_os = "linux")]
             let picked = crate::platform::open_file_panel_async(
-                &[("Image", &BACKGROUND_IMAGE_EXTENSIONS[..])],
+                &[(
+                    tr::editor::sidebar::source::image(),
+                    &BACKGROUND_IMAGE_EXTENSIONS[..],
+                )],
                 None,
                 cx,
             )
@@ -2516,7 +2515,11 @@ impl EditorWindow {
     }
 
     /// `importDesktopBackground` (`:2033-2052`).
-    pub(crate) fn import_desktop_background(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn import_desktop_background(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.sidebar.importing_desktop {
             return;
         }
@@ -2550,7 +2553,7 @@ impl EditorWindow {
                         tracing::error!("couldn't import your desktop wallpaper: {error}");
                         cx.spawn(async move |_, _| {
                             crate::platform::alert_dialog(
-                                "Couldn't import your desktop wallpaper",
+                                tr::editor::sidebar::desktop_import_failed(),
                                 &error,
                             );
                         })
@@ -2601,7 +2604,7 @@ impl EditorWindow {
                 // the indicator is hidden (`:586-592, 667-677`).
                 ui::TabRailItem::new(
                     tab.icon(),
-                    tab.label(),
+                    tab.title(),
                     selection.is_none() && tab == selected_tab,
                     disabled,
                 )
@@ -2642,11 +2645,11 @@ impl EditorWindow {
                             .text_color(Hsla::from(theme.editor.text_1))
                             .child(error.clone())
                     }))
-                    .children(
-                        self.sidebar
-                            .picking_image
-                            .then(|| div().p(px(12.)).child("Importing image…")),
-                    )
+                    .children(self.sidebar.picking_image.then(|| {
+                        div()
+                            .p(px(12.))
+                            .child(tr::editor::sidebar::importing_image())
+                    }))
                     .child(if let Some((index, group)) = self.sidebar.style_target {
                         self.render_style_group(index, group, cx)
                     } else if self.audio_picker.is_some() {
@@ -2729,18 +2732,18 @@ impl EditorWindow {
             .child(self.render_source_field(cx))
             .child(dashed_divider(Hsla::from(theme.editor.line)))
             .child(
-                ui::Field::section(&theme, "Layout").child(
+                ui::Field::section(&theme, tr::editor::sidebar::layout::title()).child(
                     div()
                         .flex()
                         .flex_col()
                         .child(self.slider_field(
-                            "Background Blur",
+                            tr::editor::sidebar::layout::background_blur(),
                             SliderKey::Bg(BgSlider::Blur),
                             "%",
                             cx,
                         ))
                         .child(self.slider_field(
-                            "Padding",
+                            tr::editor::sidebar::layout::padding(),
                             SliderKey::Bg(BgSlider::Padding),
                             "%",
                             cx,
@@ -2756,14 +2759,16 @@ impl EditorWindow {
                                 .h(px(34.))
                                 .child(
                                     div()
+                                        .min_w_0()
+                                        .truncate()
                                         .text_size(px(12.))
                                         .text_color(Hsla::from(theme.editor.text_2))
-                                        .child("Custom screen position (dragged on canvas)"),
+                                        .child(tr::editor::sidebar::layout::custom_position()),
                                 )
                                 .child(section_action(
                                     &theme,
                                     "reset-display-position",
-                                    "Reset",
+                                    tr::common::reset(),
                                     None,
                                     false,
                                     cx.listener(|this, _, window, cx| {
@@ -2781,7 +2786,7 @@ impl EditorWindow {
                                 .into_any_element()
                         }))
                         .child(self.slider_field(
-                            "Rounded Corners",
+                            tr::editor::sidebar::layout::rounded_corners(),
                             SliderKey::Bg(BgSlider::Rounding),
                             "%",
                             cx,
@@ -2789,7 +2794,7 @@ impl EditorWindow {
                         .child(self.render_corner_style(cx))
                         .children(self.sidebar.style_target.is_none().then(|| {
                             self.slider_field(
-                                "Motion Blur",
+                                tr::editor::sidebar::layout::motion_blur(),
                                 SliderKey::Bg(BgSlider::MotionBlur),
                                 "x100%",
                                 cx,
@@ -2824,7 +2829,7 @@ impl EditorWindow {
             .map(|item| ui::SegmentOption::new(item.label(), tab == item))
             .collect();
 
-        ui::Field::section(&theme, "Background")
+        ui::Field::section(&theme, tr::editor::sidebar::background::title())
             .value(section_action(
                 &theme,
                 "source-none",
@@ -2875,9 +2880,9 @@ impl EditorWindow {
         let theme = self.theme;
         let importing = self.sidebar.importing_desktop;
         let label = if importing {
-            "Importing..."
+            tr::editor::sidebar::desktop::importing()
         } else {
-            "Import desktop background"
+            tr::editor::sidebar::desktop::import()
         };
 
         match self.sidebar.desktop_background.clone() {
@@ -2902,7 +2907,7 @@ impl EditorWindow {
                     div()
                         .text_size(px(13.))
                         .text_color(Hsla::from(theme.editor.text_1))
-                        .child("Use the wallpaper from your desktop"),
+                        .child(tr::editor::sidebar::desktop::prompt()),
                 )
                 .child(
                     ui::EditorButton::plain(&theme, "import-desktop")
@@ -2964,9 +2969,9 @@ impl EditorWindow {
                                 .left_icon("icons/monitor-outline.svg")
                                 .icon_size(px(16.))
                                 .label(if importing {
-                                    "Importing..."
+                                    tr::editor::sidebar::desktop::importing()
                                 } else {
-                                    "Re-import"
+                                    tr::editor::sidebar::desktop::reimport()
                                 })
                                 .disabled(importing)
                                 .on_click(cx.listener(|this, _, window, cx| {
@@ -3020,7 +3025,7 @@ impl EditorWindow {
                         BACKGROUND_THEMES
                             .iter()
                             .enumerate()
-                            .map(|(index, (_, label))| {
+                            .map(|(index, (id, _))| {
                                 let selected = index == selected_theme;
                                 div()
                                     .id(SharedString::from(format!("wallpaper-theme-{index}")))
@@ -3041,7 +3046,7 @@ impl EditorWindow {
                                             .cursor_pointer()
                                             .hover(|this| this.bg(Hsla::from(theme.editor.ctl)))
                                     })
-                                    .child(*label)
+                                    .child(background_theme_label(id))
                                     .on_click(cx.listener(move |this, _, window, cx| {
                                         this.sidebar.wallpaper_theme = index;
                                         this.ensure_wallpapers(window, cx);
@@ -3134,7 +3139,7 @@ impl EditorWindow {
                 .child(
                     div()
                         .text_color(Hsla::from(theme.editor.text_1))
-                        .child("Click to select or drag and drop image"),
+                        .child(tr::editor::sidebar::image::prompt()),
                 )
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.pick_background_image(window, cx);
@@ -3378,14 +3383,14 @@ impl EditorWindow {
                     .items_end()
                     .child(self.render_gradient_stop(
                         "gradient-from",
-                        "From",
+                        tr::editor::sidebar::gradient::from(),
                         ColorTarget::GradientFrom,
                         from,
                         cx,
                     ))
                     .child(self.render_gradient_stop(
                         "gradient-to",
-                        "To",
+                        tr::editor::sidebar::gradient::to(),
                         ColorTarget::GradientTo,
                         to,
                         cx,
@@ -3397,13 +3402,13 @@ impl EditorWindow {
                     .flex()
                     .flex_col()
                     .child(self.slider_field(
-                        "Angle",
+                        tr::editor::sidebar::gradient::angle(),
                         SliderKey::Bg(BgSlider::GradientAngle),
                         "deg",
                         cx,
                     ))
                     .child(self.slider_field(
-                        "Noise",
+                        tr::editor::sidebar::gradient::noise(),
                         SliderKey::Bg(BgSlider::GradientNoise),
                         "%",
                         cx,
@@ -3411,7 +3416,7 @@ impl EditorWindow {
                     // Grain Scale appears only while noise is on (`:204-221`).
                     .children((noise > 0.).then(|| {
                         self.slider_field(
-                            "Grain Scale",
+                            tr::editor::sidebar::gradient::grain_scale(),
                             SliderKey::Bg(BgSlider::GradientGrain),
                             "%",
                             cx,
@@ -3556,16 +3561,18 @@ impl EditorWindow {
         let theme = self.theme;
         let current = self.project.background.rounding_type;
         let label = match current {
-            CornerStyle::Squircle => "Squircle",
-            CornerStyle::Rounded => "Rounded",
+            CornerStyle::Squircle => tr::editor::sidebar::corner::squircle(),
+            CornerStyle::Rounded => tr::editor::sidebar::corner::rounded(),
         };
 
-        ui::Field::inline(&theme, "Corner Style").child(div().w(px(150.)).child(self.menu_select(
-            crate::editor_tabs::SidebarMenu::BackgroundCornerStyle,
-            "corner-style",
-            label,
-            cx,
-        )))
+        ui::Field::inline(&theme, tr::editor::sidebar::corner::title()).child(
+            div().w(px(150.)).child(self.menu_select(
+                crate::editor_tabs::SidebarMenu::BackgroundCornerStyle,
+                "corner-style",
+                label,
+                cx,
+            )),
+        )
     }
 
     fn render_border_field(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -3578,7 +3585,7 @@ impl EditorWindow {
             .flex()
             .flex_col()
             .child(
-                ui::Field::inline(&theme, "Border").value(
+                ui::Field::inline(&theme, tr::editor::sidebar::border::title()).value(
                     ui::Toggle::plain(&theme, "border-enabled", enabled)
                         .on_click(cx.listener(move |this, _, window, cx| {
                             let next = !enabled;
@@ -3612,21 +3619,23 @@ impl EditorWindow {
                     .flex()
                     .flex_col()
                     .child(self.slider_field(
-                        "Border Width",
+                        tr::editor::sidebar::border::width(),
                         SliderKey::Bg(BgSlider::BorderWidth),
                         "px",
                         cx,
                     ))
                     .child(
-                        ui::Field::stacked(&theme, "Border Color").child(self.render_rgb_input(
-                            "border-color",
-                            ColorTarget::BorderColor,
-                            color,
-                            cx,
-                        )),
+                        ui::Field::stacked(&theme, tr::editor::sidebar::border::color()).child(
+                            self.render_rgb_input(
+                                "border-color",
+                                ColorTarget::BorderColor,
+                                color,
+                                cx,
+                            ),
+                        ),
                     )
                     .child(self.slider_field(
-                        "Border Opacity",
+                        tr::editor::sidebar::border::opacity(),
                         SliderKey::Bg(BgSlider::BorderOpacity),
                         "%",
                         cx,
@@ -3648,7 +3657,7 @@ impl EditorWindow {
             .flex()
             .flex_col()
             .child(
-                ui::Field::inline(&theme, "MacBook notch").value(
+                ui::Field::inline(&theme, tr::editor::sidebar::notch::title()).value(
                     ui::Toggle::plain(&theme, "notch-enabled", enabled)
                         .on_click(cx.listener(move |this, _, window, cx| {
                             let next = !enabled;
@@ -3685,26 +3694,22 @@ impl EditorWindow {
                             .pt(px(4.))
                             .text_size(px(12.))
                             .text_color(Hsla::from(theme.editor.text_2))
-                            .child(
-                                "Draws a MacBook notch over the recording. Recordings made \
-                                 on a Mac with a notch use their own measurements; \
-                                 otherwise start from the size below and adjust to match.",
-                            ),
+                            .child(tr::editor::sidebar::notch::description()),
                     )
                     .child(self.slider_field(
-                        "Notch Width",
+                        tr::editor::sidebar::notch::width(),
                         SliderKey::Bg(BgSlider::NotchWidth),
                         "pct",
                         cx,
                     ))
                     .child(self.slider_field(
-                        "Notch Height",
+                        tr::editor::sidebar::notch::height(),
                         SliderKey::Bg(BgSlider::NotchHeight),
                         "pct",
                         cx,
                     ))
                     .child(self.slider_field(
-                        "Notch Position",
+                        tr::editor::sidebar::notch::position(),
                         SliderKey::Bg(BgSlider::NotchX),
                         "pct",
                         cx,
@@ -3720,7 +3725,12 @@ impl EditorWindow {
         div()
             .flex()
             .flex_col()
-            .child(self.slider_field("Shadow", SliderKey::Bg(BgSlider::Shadow), "%", cx))
+            .child(self.slider_field(
+                tr::editor::sidebar::shadow::title(),
+                SliderKey::Bg(BgSlider::Shadow),
+                "%",
+                cx,
+            ))
             // `ShadowSettings` (`ShadowSettings.tsx:37-86`): its own trigger
             // row with a rotating chevron, over three sliders.
             .child(
@@ -3730,7 +3740,7 @@ impl EditorWindow {
                     .child(disclosure_row(
                         &theme,
                         "shadow-advanced",
-                        "Advanced shadow settings",
+                        tr::editor::sidebar::shadow::advanced(),
                         open,
                         cx.listener(|this, _, window, cx| {
                             this.sidebar.shadow_open.toggle();
@@ -3743,19 +3753,19 @@ impl EditorWindow {
                             .flex()
                             .flex_col()
                             .child(self.slider_field(
-                                "Size",
+                                tr::editor::sidebar::shadow::shadow_size(),
                                 SliderKey::Bg(BgSlider::ShadowSize),
                                 "",
                                 cx,
                             ))
                             .child(self.slider_field(
-                                "Opacity",
+                                tr::editor::sidebar::shadow::opacity(),
                                 SliderKey::Bg(BgSlider::ShadowOpacity),
                                 "",
                                 cx,
                             ))
                             .child(self.slider_field(
-                                "Blur",
+                                tr::editor::sidebar::shadow::blur(),
                                 SliderKey::Bg(BgSlider::ShadowBlur),
                                 "",
                                 cx,
@@ -4483,9 +4493,9 @@ pub(crate) enum StyleGroup {
 impl StyleGroup {
     pub(crate) fn label(self) -> &'static str {
         match self {
-            Self::Background => "Background & frame",
-            Self::Camera => "Camera",
-            Self::Cursor => "Cursor",
+            Self::Background => tr::editor::sidebar::style_group::background(),
+            Self::Camera => tr::editor::sidebar::style_group::camera(),
+            Self::Cursor => tr::editor::sidebar::style_group::cursor(),
         }
     }
 
@@ -4688,12 +4698,15 @@ impl EditorWindow {
                             .gap(px(8.))
                             .font_weight(gpui::FontWeight::MEDIUM)
                             .child(svg().path(group.icon()).size(px(16.)))
-                            .child(format!("Style {} · {}", index + 1, group.label())),
+                            .child(tr::editor::sidebar::style_group::title(
+                                index + 1,
+                                group.label(),
+                            )),
                     )
                     .child(
                         div()
                             .text_size(px(11.))
-                            .child("Editing this segment only. Global settings are unchanged."),
+                            .child(tr::editor::sidebar::style_group::editing_note()),
                     )
                     .child(
                         div()
@@ -4707,7 +4720,7 @@ impl EditorWindow {
                                     .items_center()
                                     .gap(px(4.))
                                     .child(svg().path("icons/arrow-left.svg").size(px(14.)))
-                                    .child("Back to Style"),
+                                    .child(tr::editor::sidebar::style_group::back()),
                             )
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.end_field_edit(cx);

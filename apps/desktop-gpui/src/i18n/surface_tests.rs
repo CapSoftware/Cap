@@ -45,21 +45,6 @@ fn main_surfaces_match_the_literals_they_replaced() {
         (tr::main::mode::name::studio(), "Studio"),
         (tr::main::mode::name::screenshot(), "Screenshot"),
         (
-            tr::main::mode::info::instant(),
-            "Share instantly with a link. Your recording uploads as you record, so you \
-                 can share it immediately when you're done.",
-        ),
-        (
-            tr::main::mode::info::studio(),
-            "Record locally in the highest quality for editing later. Perfect for \
-                 creating polished content with effects and transitions.",
-        ),
-        (
-            tr::main::mode::info::screenshot(),
-            "Capture and annotate screenshots instantly. Great for quick captures, bug \
-                 reports, and visual communication.",
-        ),
-        (
             tr::main::mode::hover::instant_description(),
             "No rendering required — uploads on the fly so you can share the link the moment you stop.",
         ),
@@ -76,7 +61,11 @@ fn main_surfaces_match_the_literals_they_replaced() {
             "Quality settings",
         ),
         (tr::main::mode::info::title(), "Recording Modes"),
+        (tr::main::mode::info::current(), "Current"),
         (tr::main::mode::info_tooltip(), "Recording mode info"),
+        (tr::camera::blur::light(), "Light"),
+        (tr::camera::blur::heavy(), "Heavy"),
+        (tr::camera::blur::cutout(), "Cutout"),
         (tr::main::target::display(), "Display"),
         (tr::main::target::window(), "Window"),
         (tr::main::target::area(), "Area"),

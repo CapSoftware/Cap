@@ -51,8 +51,59 @@ pub struct IncrementalCaptureOutputs {
 pub struct CursorCaptureTarget {
     pub crop_bounds: CursorCropBounds,
     pub display: scap_targets::Display,
-    #[cfg(target_os = "linux")]
     pub window: Option<scap_targets::WindowId>,
+}
+
+#[cfg(target_os = "macos")]
+fn macos_window_crop(
+    window: &scap_targets::WindowId,
+    display: &scap_targets::Display,
+) -> Option<CursorCropBounds> {
+    use scap_targets::bounds::{LogicalBounds, LogicalPosition};
+
+    let window_bounds = scap_targets::Window::from_id_direct(window)?
+        .raw_handle()
+        .logical_bounds()?;
+    let display_position = display.raw_handle().logical_position();
+    // The video reads the window inside its rounded corners; the cursor
+    // is placed against the same trimmed frame.
+    Some(CursorCropBounds::new_macos(
+        crate::sources::screen_capture::trim_window_corners(LogicalBounds::new(
+            LogicalPosition::new(
+                window_bounds.position().x() - display_position.x(),
+                window_bounds.position().y() - display_position.y(),
+            ),
+            window_bounds.size(),
+        )),
+    ))
+}
+
+#[cfg(windows)]
+fn windows_window_crop(
+    window: &scap_targets::WindowId,
+    display: &scap_targets::Display,
+) -> Option<CursorCropBounds> {
+    let window_bounds = scap_targets::Window::from_id_direct(window)?
+        .raw_handle()
+        .physical_bounds()?;
+    let display_bounds = display.raw_handle().physical_bounds()?;
+    Some(window_crop_on_display(window_bounds, display_bounds))
+}
+
+#[cfg(windows)]
+fn window_crop_on_display(
+    window_bounds: scap_targets::bounds::PhysicalBounds,
+    display_bounds: scap_targets::bounds::PhysicalBounds,
+) -> CursorCropBounds {
+    use scap_targets::bounds::{PhysicalBounds, PhysicalPosition};
+
+    CursorCropBounds::new_windows(PhysicalBounds::new(
+        PhysicalPosition::new(
+            window_bounds.position().x() - display_bounds.position().x(),
+            window_bounds.position().y() - display_bounds.position().y(),
+        ),
+        window_bounds.size(),
+    ))
 }
 
 #[cfg(target_os = "linux")]
@@ -106,6 +157,32 @@ fn normalized_window_cursor(x: i16, y: i16, width: u16, height: u16) -> Option<(
             f64::from(y) / f64::from(height),
         )
     })
+}
+
+#[cfg(all(test, windows))]
+mod windows_window_cursor_tests {
+    use super::window_crop_on_display;
+    use scap_targets::bounds::{PhysicalBounds, PhysicalPosition, PhysicalSize};
+
+    fn bounds(x: f64, y: f64, width: f64, height: f64) -> PhysicalBounds {
+        PhysicalBounds::new(
+            PhysicalPosition::new(x, y),
+            PhysicalSize::new(width, height),
+        )
+    }
+
+    #[test]
+    fn the_cursor_crop_follows_the_window_when_it_moves() {
+        let display = bounds(-1920.0, 0.0, 1920.0, 1080.0);
+        let started = window_crop_on_display(bounds(-1720.0, 200.0, 800.0, 600.0), display);
+        let moved = window_crop_on_display(bounds(-1320.0, 350.0, 800.0, 600.0), display);
+
+        assert_ne!(started, moved);
+        assert_eq!(
+            moved,
+            cap_cursor_capture::CursorCropBounds::new_windows(bounds(600.0, 350.0, 800.0, 600.0))
+        );
+    }
 }
 
 #[cfg(all(test, target_os = "linux"))]
@@ -634,6 +711,8 @@ pub fn spawn_cursor_recorder(
         });
         #[cfg(target_os = "linux")]
         let mut last_window_position = None;
+        #[cfg(any(windows, target_os = "macos"))]
+        let mut last_window_crop: Option<CursorCropBounds> = None;
         let device_state = DeviceState::new();
         // Reading the held keys asks the OS about every key it knows (two
         // CoreGraphics queries per key on macOS, 256 GetAsyncKeyState calls
@@ -714,6 +793,29 @@ pub fn spawn_cursor_recorder(
             {
                 last_window_position = window_position;
             }
+            // A window recording follows the window, so the cursor has to be
+            // placed against where the window is now, not where it started.
+            #[cfg(windows)]
+            let window_crop = target
+                .window
+                .as_ref()
+                .and_then(|window| windows_window_crop(window, &display));
+            #[cfg(target_os = "macos")]
+            let window_crop = target
+                .window
+                .as_ref()
+                .and_then(|window| macos_window_crop(window, &display));
+            #[cfg(any(windows, target_os = "macos"))]
+            let position_changed =
+                position_changed || (window_crop.is_some() && window_crop != last_window_crop);
+            #[cfg(any(windows, target_os = "macos"))]
+            {
+                if window_crop.is_some() {
+                    last_window_crop = window_crop;
+                }
+            }
+            #[cfg(any(windows, target_os = "macos"))]
+            let crop_bounds = last_window_crop.unwrap_or(crop_bounds);
 
             // The cursor image only labels this tick's move and click events,
             // and reading it builds a full TIFF of every representation

@@ -21,9 +21,6 @@ use cap_project::Camera3DSegment;
 /// What `Auto scene` builds when nobody has said how many shots they want.
 pub(crate) const CAMERA3D_AUTO_SHOTS: usize = 3;
 
-/// What the editor says when the track has no room left.
-pub(crate) const CAMERA3D_NO_ROOM: &str = "No room for another 3D shot";
-
 impl EditorWindow {
     /// Every shot's box, which is what the placement helper reasons over.
     pub(crate) fn camera3d_shot_ranges(&self) -> Vec<(f64, f64)> {
@@ -75,7 +72,7 @@ impl EditorWindow {
             CAMERA3D_DEFAULT_SHOT_DURATION,
             self.total_duration(),
         ) else {
-            self.show_notice(CAMERA3D_NO_ROOM, window, cx);
+            self.show_notice(tr::editor::window::no_room_for_3d_shot(), window, cx);
             return;
         };
         self.insert_camera3d_shots(
@@ -142,7 +139,7 @@ impl EditorWindow {
         let cuts = self.camera3d_clip_cuts();
         let generated = auto_camera3d_layout(count, 0., total, &cuts);
         if generated.is_empty() {
-            self.show_notice(CAMERA3D_NO_ROOM, window, cx);
+            self.show_notice(tr::editor::window::no_room_for_3d_shot(), window, cx);
             return;
         }
         self.camera3d_picker = false;

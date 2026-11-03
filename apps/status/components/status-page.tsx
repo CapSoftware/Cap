@@ -2,7 +2,12 @@
 
 import Image from "next/image";
 import { useEffect, useId, useState } from "react";
-import { emptyState, isStale, publicSnapshot } from "../lib/state";
+import {
+	emptyState,
+	firstMonitoredDay,
+	isStale,
+	publicSnapshot,
+} from "../lib/state";
 import type { Health, Snapshot } from "../lib/types";
 import { Arrow, Check } from "./icons";
 import { formatDate, ServiceRow } from "./service-row";
@@ -100,9 +105,14 @@ export function StatusPage() {
 	}, []);
 
 	const data = snapshot ?? (now ? publicSnapshot(emptyState(), now) : null);
+	const firstDay = firstMonitoredDay(data?.services ?? []);
+	const firstDate = data?.services[0]?.days[firstDay]?.date;
+	const period =
+		firstDay && firstDate ? `since ${formatDate(firstDate)}` : "last 90 days";
 	const services =
 		data?.services.map((service) => ({
 			...service,
+			days: service.days.slice(firstDay),
 			status:
 				unavailable || isStale(service.checkedAt, now ?? 0)
 					? ("unknown" as const)
@@ -226,18 +236,24 @@ export function StatusPage() {
 					</div>
 					<section
 						className="services-card"
-						aria-label="Service uptime over the past 90 days"
+						aria-label={`Service uptime ${period}`}
 						aria-busy={loading}
 					>
 						{services.map((service) => (
-							<ServiceRow key={service.id} service={service} />
+							<ServiceRow
+								key={service.id}
+								service={service}
+								since={
+									firstDay && firstDate ? formatDate(firstDate) : "90 days ago"
+								}
+							/>
 						))}
 						{!data && (
 							<div className="loading-services">Loading service health…</div>
 						)}
 					</section>
 					<div className="history-key">
-						<span>Daily uptime · last 90 days · UTC</span>
+						<span>Daily uptime · {period} · UTC</span>
 						<div>
 							<span>
 								<i className="key-swatch operational" />
@@ -359,10 +375,12 @@ export function StatusPage() {
 						<p>
 							Lightweight checks run every five minutes, independently of this
 							page. We retry an unhealthy response before recording it, confirm
-							incidents across two checks, and confirm recovery twice. Grey bars
-							mean no data; gaps are never counted as uptime. Percentages
-							describe successful observed checks, not unmonitored time. Select
-							a service or a day to explore its history. All times are UTC.
+							incidents across two checks, and confirm recovery twice. A day
+							shows an outage only when one was confirmed; a single failed check
+							shows as degraded. Grey bars mean no data; gaps are never counted
+							as uptime. Percentages describe successful observed checks, not
+							unmonitored time. Select a service or a day to explore its
+							history. All times are UTC.
 						</p>
 					</details>
 					<footer>

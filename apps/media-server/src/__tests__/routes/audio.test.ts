@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import app from "../../app";
 import * as mediaAudio from "../../lib/media-audio";
+import { BlockedUrlError } from "../../lib/url-policy";
 
 const MEDIA_SERVER_SECRET = "test-secret";
 const AUTH_HEADERS = {
@@ -9,6 +10,35 @@ const AUTH_HEADERS = {
 };
 
 process.env.MEDIA_SERVER_WEBHOOK_SECRET = MEDIA_SERVER_SECRET;
+
+describe("audio staging failures", () => {
+	beforeEach(() => mock.restore());
+
+	test.each(["/audio/extract", "/audio/convert"])(
+		"returns URL_NOT_ALLOWED JSON before streaming from %s",
+		async (path) => {
+			mock.module("../../lib/media-audio", () => ({
+				...mediaAudio,
+				checkHasAudioTrack: async () => true,
+				extractAudioStream: async () => {
+					await Promise.resolve();
+					throw new BlockedUrlError(
+						"http://127.0.0.1/private",
+						"private address",
+					);
+				},
+			}));
+			const response = await app.fetch(
+				audioPostRequest(path, {
+					videoUrl: "https://example.com/video.mp4",
+					audioUrl: "https://example.com/video.mp4",
+				}),
+			);
+			expect(response.status).toBe(400);
+			expect(await response.json()).toMatchObject({ code: "URL_NOT_ALLOWED" });
+		},
+	);
+});
 
 function audioPostRequest(path: string, body: unknown): Request {
 	return new Request(`http://localhost${path}`, {
@@ -179,6 +209,42 @@ describe("POST /audio/extract", () => {
 
 		const buffer = await response.arrayBuffer();
 		expect(new Uint8Array(buffer)).toEqual(mockAudioData);
+	});
+
+	test("gives streamed extraction long enough for multi-hour recordings", async () => {
+		let timeoutMs: number | undefined;
+
+		mock.module("../../lib/media-audio", () => ({
+			...mediaAudio,
+			checkHasAudioTrack: async () => true,
+			extractAudioStream: (
+				_videoUrl: string,
+				options?: { timeoutMs?: number },
+			) => {
+				timeoutMs = options?.timeoutMs;
+				return {
+					stream: new ReadableStream<Uint8Array>({
+						start(controller) {
+							controller.enqueue(new Uint8Array([0x49, 0x44, 0x33]));
+							controller.close();
+						},
+					}),
+					cleanup: () => {},
+				};
+			},
+		}));
+
+		const { default: appWithMock } = await import("../../app");
+
+		const response = await appWithMock.fetch(
+			audioPostRequest("/audio/extract", {
+				videoUrl: "https://example.com/video.mp4",
+			}),
+		);
+
+		expect(response.status).toBe(200);
+		await response.arrayBuffer();
+		expect(timeoutMs).toBe(15 * 60 * 1000);
 	});
 
 	test("returns 500 when mediaAudio extraction fails", async () => {

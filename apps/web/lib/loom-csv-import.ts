@@ -61,6 +61,8 @@ export interface LoomDownloadResult {
 	height?: number;
 	requiresProxy?: boolean;
 	error?: string;
+	errorCode?: LoomImportErrorCode;
+	retryAfterMs?: number;
 }
 
 export type LoomImportErrorCode = "loom_temporarily_unavailable";

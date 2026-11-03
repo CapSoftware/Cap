@@ -1626,6 +1626,175 @@ mod tests {
         }
     }
 
+    fn write_voice_like_wav(path: &Path, frames: usize, channels: u16, seed: u64) {
+        let data_size = frames as u32 * u32::from(channels) * 2;
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"RIFF");
+        bytes.extend_from_slice(&(36 + data_size).to_le_bytes());
+        bytes.extend_from_slice(b"WAVEfmt ");
+        bytes.extend_from_slice(&16u32.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&channels.to_le_bytes());
+        bytes.extend_from_slice(&48_000u32.to_le_bytes());
+        bytes.extend_from_slice(&(48_000u32 * u32::from(channels) * 2).to_le_bytes());
+        bytes.extend_from_slice(&(channels * 2).to_le_bytes());
+        bytes.extend_from_slice(&16u16.to_le_bytes());
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&data_size.to_le_bytes());
+        let mut state = seed | 1;
+        for frame in 0..frames {
+            let t = frame as f64 / 48_000.0;
+            let envelope = ((t * 2.7).sin() * 0.5 + 0.5).powi(3)
+                * if (t * 0.9).fract() < 0.2 { 0.02 } else { 1.0 };
+            for _ in 0..channels {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                let noise = (state >> 40) as f64 / (1u64 << 24) as f64 - 0.5;
+                let voice =
+                    (t * 2.0 * std::f64::consts::PI * (140.0 + 40.0 * (t * 3.1).sin())).sin();
+                let value = (voice * 0.6 + noise * 0.4) * envelope * 30_000.0;
+                bytes.extend_from_slice(&(value as i16).to_le_bytes());
+            }
+        }
+        std::fs::write(path, bytes).unwrap();
+    }
+
+    #[test]
+    fn studio_sound_random_cuts_never_reject_the_export_window() {
+        ffmpeg::init().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let paths =
+            ["mic.wav", "system.wav", "incoming.wav"].map(|name| directory.path().join(name));
+        for (((path, frames), channels), seed) in paths
+            .iter()
+            .zip([300_013, 250_007, 280_013])
+            .zip([1, 2, 2])
+            .zip([11, 23, 37])
+        {
+            write_voice_like_wav(path, frames, channels, seed);
+        }
+        let data = paths
+            .iter()
+            .map(|path| Arc::new(AudioData::from_file(path).unwrap()))
+            .collect::<Vec<_>>();
+        let iterations = std::env::var("CAP_AUDIO_FUZZ_ITERATIONS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(12u64);
+        let mut state = std::env::var("CAP_AUDIO_FUZZ_SEED")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(0x9e37_79b9_7f4a_7c15u64);
+        let mut next = move |bound: u64| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state % bound.max(1)
+        };
+        let mut failures = Vec::new();
+        for iteration in 0..iterations {
+            let mut project = project();
+            project.audio.improve = true;
+            project.audio.isolation = [
+                cap_project::VoiceIsolation::Light,
+                cap_project::VoiceIsolation::Balanced,
+                cap_project::VoiceIsolation::Strong,
+            ][next(3) as usize];
+            for clip in &mut project.clips {
+                clip.offsets.mic = if next(2) == 0 {
+                    0.0
+                } else {
+                    (next(600_001) as f32 - 300_000.0) / 1_000_000.0
+                };
+                clip.offsets.system_audio = if next(2) == 0 {
+                    0.0
+                } else {
+                    (next(600_001) as f32 - 300_000.0) / 1_000_000.0
+                };
+            }
+            let mut cursors = [
+                next(48_000) as f64 / 48_000.0,
+                next(48_000) as f64 / 48_000.0,
+            ];
+            let mut segments = Vec::new();
+            while segments.len() < 14 {
+                let clip = next(2) as usize;
+                if cursors[clip] > 6.0 {
+                    if cursors.iter().all(|cursor| *cursor > 6.0) {
+                        break;
+                    }
+                    continue;
+                }
+                let gap = match next(5) {
+                    0 => 0,
+                    1 => 1 + next(480),
+                    2 => 480 + next(9_600),
+                    3 => 9_600 + next(40_000),
+                    _ => 40_000 + next(100_000),
+                } as f64
+                    / 48_000.0;
+                let start = cursors[clip] + gap;
+                let end = start + (24 + next(60_000)) as f64 / 48_000.0;
+                segments.push(segment(clip as u32, start, end));
+                cursors[clip] = end;
+            }
+            project.timeline.as_mut().unwrap().segments = segments;
+            if !ExportAudioRenderer::eligible_sources(&project, 3) {
+                continue;
+            }
+            let request = [1, 480, 997, 4_096, 4_097, 48_001][next(6) as usize];
+            let (mut reference, mut candidate) = fixture(&paths, &data);
+            reference.set_playhead(0.0, &project);
+            let mut position = 0;
+            loop {
+                let expected = reference.render_frame_raw(request, &project);
+                let mut actual = Vec::new();
+                let written = match candidate.render_chunks(request, &project, |_, samples| {
+                    actual.extend_from_slice(samples);
+                    Ok(())
+                }) {
+                    Ok(written) => written,
+                    Err(error) => {
+                        let segments = project
+                            .timeline
+                            .as_ref()
+                            .unwrap()
+                            .segments
+                            .iter()
+                            .map(|segment| (segment.recording_clip, segment.start, segment.end))
+                            .collect::<Vec<_>>();
+                        let offsets = project
+                            .clips
+                            .iter()
+                            .map(|clip| (clip.offsets.mic, clip.offsets.system_audio))
+                            .collect::<Vec<_>>();
+                        failures.push(format!(
+                            "iteration {iteration} request {request} at output sample {position}: {error}\n{:?} {offsets:?}\n{segments:?}",
+                            project.audio.isolation
+                        ));
+                        break;
+                    }
+                };
+                assert_eq!(
+                    written,
+                    expected.as_ref().map(|(count, _)| *count),
+                    "iteration {iteration} request {request} at output sample {position}"
+                );
+                assert_eq!(
+                    actual.len(),
+                    expected.as_ref().map_or(0, |(_, data)| data.len()),
+                    "iteration {iteration} request {request} at output sample {position}"
+                );
+                let Some(written) = written else {
+                    break;
+                };
+                position += written;
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+    }
+
     #[test]
     fn fullscreen_holds_match_full_renderer_without_retaining_whole_tracks() {
         assert_bounded_sink_variants(26..32, &[1, 7, 997, 4_096, 48_001]);

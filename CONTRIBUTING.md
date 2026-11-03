@@ -27,7 +27,7 @@ There are many ways to contribute to Cap. You can:
 Before anything else, make sure you have the following installed:
 
 - Node Version 24+
-- Rust 1.88.0+
+- Rust via [rustup](https://rustup.rs) (the workspace pins 1.88.0; the desktop app pins its own toolchain, which rustup installs on first build)
 - Bun 1.4.4
 - Docker ([OrbStack](https://orbstack.dev/) recommended)
 
@@ -50,15 +50,24 @@ To run only one of them, use `bun run dev:desktop` or `bun run dev:web` respecti
 
 ### `@cap/desktop` (desktop app)
 
-When running `@cap/desktop` from a terminal on macOS,
+The desktop app lives in `apps/desktop-gpui`. It is native Rust with a [GPUI](https://www.gpui.rs/) interface,
+and [its README](apps/desktop-gpui/README.md) covers how it is built, packaged, and updated.
+
+`bun run dev:desktop` checks out Cap's patched gpui next to this repository (`../zed-cap`) on first run,
+then starts the app. On macOS it rebuilds on save and relaunches the app where you left it (`apps/desktop-gpui/dev.sh`);
+on Windows and Linux it builds and runs the app once. The first build takes around ten minutes.
+
+When running the desktop app from a terminal on macOS,
 you will need to grant permissions (screen recording, microphone, etc.) to the terminal, not the Cap app.
-For example, if you run `bun run dev:desktop` in the macOS `Terminal.app`,
-you will need to grant permissions to it instead of `Cap - Development.app`.
+For example, if you run `bun run dev:desktop` in the macOS `Terminal.app`, grant the permissions to `Terminal.app`.
 
 #### Where are my recordings stored?
 
-You can find your recordings at `~/Library/Application Support/so.cap.desktop.dev/recordings` on macOS,
-and `%programfiles%/so.cap.desktop.dev/recordings` on Windows.
+Development builds use the same data directory as an installed Cap:
+`~/Library/Application Support/so.cap.desktop/recordings` on macOS,
+`%APPDATA%\so.cap.desktop\recordings` on Windows,
+and `~/.local/share/so.cap.desktop/recordings` on Linux.
+Set `CAP_GPUI_APP_DATA_DIR` to keep a development build's recordings and settings separate.
 
 ### `@cap/web` (cap.so website)
 

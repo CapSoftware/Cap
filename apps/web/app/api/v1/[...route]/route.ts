@@ -116,6 +116,7 @@ import {
 	runAgentMutation,
 	updateAgentCap,
 } from "@/lib/agent-write";
+import { withJsonNotFound } from "@/lib/api-errors";
 import { hashKey } from "@/lib/developer-key-hash";
 import { startAiGeneration } from "@/lib/generate-ai";
 import { probeVideoViaMediaServer } from "@/lib/media-client";
@@ -355,12 +356,16 @@ const notReady = (requestId: string, message: string) =>
 		requestId,
 	});
 
-const temporarilyUnavailable = (requestId: string, message: string) =>
+const temporarilyUnavailable = (
+	requestId: string,
+	message: string,
+	retryAfterMs: number | null = null,
+) =>
 	new Agent.AgentTemporaryUnavailableError({
 		message,
 		code: "TEMPORARY_UNAVAILABLE",
 		retryable: true,
-		retryAfterMs: null,
+		retryAfterMs,
 		requestId,
 	});
 
@@ -2318,6 +2323,13 @@ const queueAgentLoomImport = Effect.fn("Agent.queueLoomImport")(
 								"Loom could not be reached",
 							),
 					});
+					if (download.errorCode === "loom_temporarily_unavailable") {
+						return yield* temporarilyUnavailable(
+							input.requestId,
+							download.error ?? "Loom is temporarily unavailable",
+							download.retryAfterMs ?? null,
+						);
+					}
 					if (!download.success || !download.videoId || !download.downloadUrl) {
 						return yield* badRequest(
 							input.requestId,
@@ -9009,7 +9021,7 @@ const ApiLive = HttpApiBuilder.api(Agent.AgentApiContract).pipe(
 	),
 );
 
-const handler = agentApiToHandler(ApiLive);
+const handler = withJsonNotFound(agentApiToHandler(ApiLive));
 
 export const GET = handler;
 export const OPTIONS = handler;

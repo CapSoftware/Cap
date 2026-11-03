@@ -867,6 +867,13 @@ impl EditorInstance {
     /// config off the async runtime so playback start isn't blocked by ffmpeg.
     async fn load_music_tracks(&self) -> crate::MusicTracks {
         let project = self.project_config.1.borrow().clone();
+        self.load_music_tracks_for(project).await
+    }
+
+    /// [`Self::load_music_tracks`] for an explicit config. The timeline's
+    /// imported-audio waveforms read their samples through this so they share
+    /// playback's decode cache instead of decoding the files a second time.
+    pub async fn load_music_tracks_for(&self, project: ProjectConfiguration) -> crate::MusicTracks {
         let project_path = self.project_path.clone();
         let cache = self.music_cache.clone();
 
