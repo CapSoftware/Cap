@@ -56,6 +56,7 @@ pub(crate) struct PreviewStretcher {
     template_mono: Box<[f32]>,
     coarse: Box<[f32]>,
     coarse_template: Box<[f32]>,
+    channel_signs: Box<[f32]>,
 }
 
 impl PreviewStretcher {
@@ -99,6 +100,7 @@ impl PreviewStretcher {
             template_mono: vec![0.0; frame_len].into_boxed_slice(),
             coarse: vec![0.0; search_len / COARSE + 1].into_boxed_slice(),
             coarse_template: vec![0.0; frame_len / COARSE].into_boxed_slice(),
+            channel_signs: vec![1.0; channels].into_boxed_slice(),
         }
     }
 
@@ -323,14 +325,46 @@ impl PreviewStretcher {
         self.discard_before((start + self.hop).min(next));
     }
 
+    /// The window search runs on one mixed-down signal. Channels in opposite
+    /// polarity (a phase-inverted stereo pair) would cancel in a plain sum and
+    /// leave nothing to match, so each channel is flipped to agree with the
+    /// loudest one before mixing.
+    fn align_channel_signs(&mut self, template: usize) {
+        let channels = self.channels;
+        if channels == 1 {
+            return;
+        }
+        let mut loudest = 0;
+        let mut loudest_energy = -1.0f64;
+        for channel in 0..channels {
+            let energy: f64 = (0..self.frame_len)
+                .map(|i| f64::from(self.sample(template + i, channel)).powi(2))
+                .sum();
+            if energy > loudest_energy {
+                loudest_energy = energy;
+                loudest = channel;
+            }
+        }
+        for channel in 0..channels {
+            let agreement: f64 = (0..self.frame_len)
+                .map(|i| {
+                    f64::from(self.sample(template + i, loudest))
+                        * f64::from(self.sample(template + i, channel))
+                })
+                .sum();
+            self.channel_signs[channel] = if agreement < 0.0 { -1.0 } else { 1.0 };
+        }
+    }
+
     fn best_start(&mut self, lo: usize, hi: usize, nominal: usize, template: usize) -> usize {
         let len = self.frame_len;
         let span = hi - lo;
         let channels = self.channels;
+        self.align_channel_signs(template);
         for i in 0..span + len {
             let mut sum = 0.0;
             for channel in 0..channels {
-                sum += self.sample(lo + i, channel);
+                sum += self.channel_signs[channel] * self.sample(lo + i, channel);
             }
             self.mono[i] = sum;
         }
@@ -338,7 +372,7 @@ impl PreviewStretcher {
         for i in 0..len {
             let mut sum = 0.0;
             for channel in 0..channels {
-                sum += self.sample(template + i, channel);
+                sum += self.channel_signs[channel] * self.sample(template + i, channel);
             }
             self.template_mono[i] = sum;
             template_energy += f64::from(sum) * f64::from(sum);
@@ -769,6 +803,31 @@ mod tests {
         }
         let first: Vec<f32> = out.iter().step_by(6).copied().collect();
         assert!(rms(&first[4_800..]) > 0.3);
+    }
+
+    #[test]
+    fn opposite_polarity_stereo_keeps_its_level() {
+        let tone = sine(440.0, 8.0);
+        let mut interleaved = Vec::with_capacity(tone.len() * 2);
+        for value in &tone {
+            interleaved.extend([*value, -*value]);
+        }
+        for speed in [1.5, 2.0, 3.0] {
+            let mut source = VecSource::new(interleaved.clone(), 2);
+            let mut stretcher = PreviewStretcher::new(RATE, 2);
+            let out = render_blocks(&mut stretcher, &mut source, speed, 96_000, 512);
+            let left: Vec<f32> = out.iter().step_by(2).copied().collect();
+            let expected = 0.5 / 2f64.sqrt();
+            let quietest = left[4_800..]
+                .chunks(480)
+                .map(rms)
+                .fold(f64::INFINITY, f64::min);
+            assert!(
+                quietest > expected * 0.9,
+                "{speed}x dipped to {:.0}% of the tone's level",
+                quietest / expected * 100.0
+            );
+        }
     }
 
     #[test]
