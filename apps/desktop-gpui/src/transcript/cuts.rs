@@ -337,17 +337,19 @@ pub fn restore_hole(
     Ok(())
 }
 
-/// Brings back every cut word in `words`, one cut stretch at a time. Returns
-/// how many stretches were restored; stops at the first one that cannot be.
+/// Brings back every cut word in `words`, one cut stretch at a time, and
+/// returns how many stretches that took. All or nothing: if any stretch
+/// cannot be restored, the timeline is left exactly as it was.
 pub fn restore_words(
     timeline: &mut TimelineConfiguration,
     recording_durations: &[f64],
     doc: &TranscriptDoc,
     words: Range<usize>,
 ) -> Result<usize, RestoreBlocker> {
+    let mut next = timeline.clone();
     let mut restored = 0;
     for _ in 0..=words.len() {
-        let edl = TranscriptEdl::build(doc, timeline, recording_durations);
+        let edl = TranscriptEdl::build(doc, &next, recording_durations);
         let Some(index) = words.clone().find(|word| !edl.is_kept(*word)) else {
             break;
         };
@@ -365,8 +367,9 @@ pub fn restore_words(
             word.start
         };
         let hole = edl.hole_around(point).ok_or(RestoreBlocker::NotAdjacent)?;
-        restore_hole(timeline, recording_durations, hole, point)?;
+        restore_hole(&mut next, recording_durations, hole, point)?;
         restored += 1;
     }
+    *timeline = next;
     Ok(restored)
 }

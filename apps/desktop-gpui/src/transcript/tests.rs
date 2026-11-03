@@ -743,3 +743,27 @@ mod keyboard {
         assert_eq!(copied.as_deref(), Some("two. Three four"));
     }
 }
+
+#[test]
+fn a_restore_that_fails_part_way_changes_nothing() {
+    let words = spoken(&["a", "b", "c", "d", "e", "f", "g", "h"]);
+    let durations = [5.0];
+    let mut project = project(&borrowed(&words), &durations);
+    cut_words(&mut project, &durations, &[(3, 4)]);
+    let timeline = timeline_mut(&mut project);
+    assert!(editor_edits::split_clip_segment(timeline, 2.55, None));
+    assert!(editor_edits::split_clip_segment(timeline, 2.85, None));
+    assert!(editor_edits::delete_clip_segments(timeline, &[2]));
+    timeline.transitions.push(ClipTransition {
+        segment_index: 2,
+        kind: ClipTransitionType::CrossFade,
+        duration: 0.06,
+    });
+    assert!(timeline.effective_transition(2).is_some());
+    let before = bounds(&project);
+    assert_eq!(kept(&project, &durations)[3..5], [false, false]);
+    let doc = TranscriptDoc::build(project.captions.as_ref().unwrap());
+    let result = restore_words(timeline_mut(&mut project), &durations, &doc, 3..5);
+    assert_eq!(result, Err(RestoreBlocker::Transition));
+    assert_eq!(bounds(&project), before);
+}
