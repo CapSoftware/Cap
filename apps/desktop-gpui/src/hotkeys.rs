@@ -719,7 +719,12 @@ pub fn reserve_clean_capture_stop(
         anyhow::bail!("A recording shortcut is already reserved.");
     }
     let key = HotKey::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::F9);
-    let actions = actions_for(&hotkeys.bindings, key.id());
+    let mut actions = actions_for(&hotkeys.bindings, key.id());
+    actions.extend(unregistered_scoped_actions(
+        &store::hotkeys_raw(),
+        &hotkeys.bindings,
+        key.id(),
+    ));
     if clean_capture_shortcut_conflicts(&actions) {
         anyhow::bail!(tr::dialog::capture::shortcut_conflict());
     }
@@ -849,6 +854,28 @@ fn register_binding(hotkeys: &mut Hotkeys, action: HotkeyAction, hotkey: HotKey)
             }
         }
     }
+}
+
+/// Recording-scoped actions bound to `id` in the store but not registered
+/// yet. The temporary Stop shortcut is reserved before a recording starts,
+/// when the marker shortcut is still unregistered, so its conflict check has
+/// to read the store.
+#[cfg(any(target_os = "linux", test))]
+fn unregistered_scoped_actions(
+    stored: &serde_json::Map<String, serde_json::Value>,
+    bindings: &[(HotKey, HotkeyAction)],
+    id: u32,
+) -> Vec<HotkeyAction> {
+    stored
+        .iter()
+        .filter_map(|(key, value)| stored_binding(key, value))
+        .filter(|(action, hotkey)| {
+            action.recording_scoped()
+                && hotkey.id() == id
+                && !bindings.iter().any(|(_, bound)| bound == action)
+        })
+        .map(|(action, _)| action)
+        .collect()
 }
 
 fn registers_now(action: HotkeyAction, recording_scope: bool) -> bool {
@@ -1238,6 +1265,38 @@ mod tests {
                 "{action:?}"
             );
         }
+    }
+
+    /// Linux reserves Ctrl+Shift+F9 as a temporary Stop before a recording
+    /// starts, while the marker shortcut is not registered yet, so a marker
+    /// bound to that combo has to count as a conflict from the store.
+    #[test]
+    fn a_marker_on_the_temporary_stop_combo_is_a_conflict_before_it_registers() {
+        use super::{Code, HotKey, HotkeyAction, Modifiers, unregistered_scoped_actions};
+
+        let stop = HotKey::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::F9);
+        let binding = |code: &str| serde_json::json!({ "code": code, "meta": false, "ctrl": true, "alt": false, "shift": true });
+        let mut stored = serde_json::Map::new();
+        stored.insert("addRecordingMarker".into(), binding("F9"));
+        stored.insert("stopRecording".into(), binding("F9"));
+        assert_eq!(
+            unregistered_scoped_actions(&stored, &[], stop.id()),
+            vec![HotkeyAction::AddRecordingMarker]
+        );
+        assert!(
+            unregistered_scoped_actions(
+                &stored,
+                &[(stop, HotkeyAction::AddRecordingMarker)],
+                stop.id()
+            )
+            .is_empty()
+        );
+        stored.insert("addRecordingMarker".into(), binding("F8"));
+        assert!(unregistered_scoped_actions(&stored, &[], stop.id()).is_empty());
+        #[cfg(target_os = "linux")]
+        assert!(super::clean_capture_shortcut_conflicts(&[
+            HotkeyAction::AddRecordingMarker
+        ]));
     }
 
     #[test]
