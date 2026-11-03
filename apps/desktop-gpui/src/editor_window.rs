@@ -81,8 +81,10 @@ use crate::{
 
 mod frame;
 mod loading;
+mod markers;
 mod scenes;
 mod snap;
+mod style_preset_ui;
 
 // ---------------------------------------------------------------------------
 // Window geometry
@@ -307,6 +309,20 @@ fn playhead_past_end(playhead: f64, total: f64) -> Option<f64> {
 /// a no-op instead of a second whole-editor rebuild for every scrub step.
 fn seeked_playhead(time: f64, frame: u32, playing: bool) -> f64 {
     if playing { time } else { frame_seconds(frame) }
+}
+
+/// The part of a frame layout the canvas overlay draws from. A preset
+/// caption has no box on the canvas, and the overlay only draws while the
+/// player is hovered or dragged, so a new caption under the playhead only
+/// rebuilds the editor when its box could be on screen. Hovering the player
+/// rebuilds the editor anyway, which picks up the latest box.
+fn canvas_hit_layout(layout: FrameLayout, overlay_live: bool) -> FrameLayout {
+    FrameLayout {
+        caption: layout
+            .caption
+            .filter(|caption| overlay_live && caption.is_manual()),
+        ..layout
+    }
 }
 
 fn frame_layout_requires_editor_invalidation(
@@ -1467,6 +1483,7 @@ pub struct EditorWindow {
     pub(crate) generating_keyboard: bool,
     pub(crate) keyboard_generation_message: Option<String>,
     clip_speed: Option<ClipSpeedMenu>,
+    markers: markers::MarkersState,
     timeline_scroll: gpui::ScrollHandle,
     minimap_drag: Option<timeline::MinimapDrag>,
     /// Magnetic edges for the live drag: playhead, clip cuts and every other
@@ -1606,6 +1623,7 @@ pub struct EditorWindow {
     /// exactly as the Solid dialogs replace the dropdown.
     presets_menu: Option<PresetsMenu>,
     preset_dialog: Option<PresetDialog>,
+    style_presets: style_preset_ui::StylePresetsState,
     caption_sync_signature: Option<u64>,
     pub(crate) export: Option<ExportUi>,
     pub(crate) sharing: Option<cap_project::SharingMeta>,
@@ -1636,6 +1654,7 @@ enum PresetDialog {
     Create { default: bool },
     Rename { index: usize },
     Delete { index: usize },
+    Style(style_preset_ui::StyleDialog),
 }
 
 /// The add-track tray, computed once when it opens. It slides out of the
@@ -2039,6 +2058,7 @@ impl EditorWindow {
                 _ => {}
             },
         ));
+        let markers_state = markers::MarkersState::new(window, cx, &mut text_events);
         let player_frame_rect = crate::editor_canvas::canvas_rect_cell();
         let preview = cx.new(|_| PreviewFrameView::new(player_frame_rect.clone()));
         let editor = cx.entity();
@@ -2138,6 +2158,7 @@ impl EditorWindow {
             generating_keyboard: false,
             keyboard_generation_message: None,
             clip_speed: None,
+            markers: markers_state,
             timeline_scroll: gpui::ScrollHandle::new(),
             minimap_drag: None,
             drag_snap_targets: snap::SnapTargets::default(),
@@ -2198,6 +2219,7 @@ impl EditorWindow {
             timeline_resize: None,
             presets_menu: None,
             preset_dialog: None,
+            style_presets: style_preset_ui::StylePresetsState::load(),
             caption_sync_signature: None,
             export: None,
             clips: crate::editor_clips::ClipsState::default(),
@@ -2345,6 +2367,7 @@ impl EditorWindow {
         self.timeline.imported_waveforms = imported;
         self.timeline.waveform_paths = waveform_paths;
         self.imported_waveforms_stale = true;
+        self.refresh_markers();
         if self.timeline.total_duration > 0.0 {
             self.total = self.timeline.total_duration;
             // Deleting or trimming the clip under the playhead shortens the
@@ -2626,6 +2649,7 @@ impl EditorWindow {
         self.synchronize_caption_track(false);
         self.history.record(&self.project);
         self.transcript.dirty = true;
+        self.style_presets.close_menu();
         if rebuild_timeline {
             self.rebuild_timeline();
         } else {
@@ -2777,6 +2801,7 @@ impl EditorWindow {
         self.sidebar.style_target = None;
         self.sidebar.menu = None;
         self.text_menu = None;
+        self.style_presets.close_menu();
         self.selection = None;
         self.sidebar.image_asset_status = None;
         self.canvas_selection = None;
@@ -3788,10 +3813,13 @@ impl EditorWindow {
             return;
         }
         if event.keystroke.key.as_str() == "escape"
-            && (self.presets_menu.is_some() || self.preset_dialog.is_some())
+            && (self.presets_menu.is_some()
+                || self.preset_dialog.is_some()
+                || self.style_presets.menu_open())
         {
             self.presets_menu = None;
             self.preset_dialog = None;
+            self.style_presets.close_menu();
             cx.stop_propagation();
             cx.notify();
             return;
@@ -3802,7 +3830,17 @@ impl EditorWindow {
             cx.stop_propagation();
             return;
         }
+        if event.keystroke.key.as_str() == "escape" && self.markers.popover_open() {
+            self.marker_escape(window, cx);
+            cx.stop_propagation();
+            return;
+        }
         if ui::text_input_has_focus(window, cx) {
+            return;
+        }
+        if self.marker_key(&event.keystroke, window, cx) {
+            cx.stop_propagation();
+            window.refresh();
             return;
         }
         let keystroke = &event.keystroke;
@@ -3899,6 +3937,7 @@ impl EditorWindow {
                     || self.sidebar.color_picker.is_some()
                     || self.presets_menu.is_some()
                     || self.preset_dialog.is_some()
+                    || self.style_presets.menu_open()
                     || self.clips.has_open_menu()
                     || self.audio_picker.is_some()
                     || self.camera3d_picker
@@ -3951,6 +3990,10 @@ impl EditorWindow {
                 }
                 if self.camera3d_picker {
                     self.close_camera3d_picker(cx);
+                    return;
+                }
+                if self.marker_escape(window, cx) {
+                    window.refresh();
                     return;
                 }
                 if self.split_mode {
@@ -4272,6 +4315,7 @@ impl EditorWindow {
     /// over the timeline seeks to where it landed.
     fn timeline_mouse_up(&mut self, cx: &mut Context<Self>) {
         if let Some(Scrub::Press { time }) = self.scrub.take() {
+            self.clear_marker_selection();
             self.seek_to_time(time, cx);
             // The other half of that listener: a press on bare timeline also
             // clears the selection (`TL/index.tsx:1157-1163`). It is gated on
@@ -4344,6 +4388,7 @@ impl EditorWindow {
     pub(crate) fn set_selection(&mut self, selection: Option<Selection>, cx: &mut Context<Self>) {
         if self.selection != selection {
             self.text_menu = None;
+            self.style_presets.close_menu();
             self.dismiss_frame_controls(cx);
             self.end_field_edit(cx);
             self.close_color_picker(cx);
@@ -4364,6 +4409,9 @@ impl EditorWindow {
                     _ => None,
                 }
             });
+            if selection.is_some() {
+                self.clear_marker_selection();
+            }
             self.selection = selection;
             self.refresh_image_asset_status();
             cx.notify();
@@ -6062,11 +6110,11 @@ impl EditorWindow {
                 index = match kind {
                     TrackKind::Text => edits::insert_text_segment(
                         timeline,
-                        edits::default_text_segment(start, end, lane),
+                        crate::style_presets::new_text_segment(start, end, lane),
                     ),
                     TrackKind::Mask => edits::insert_mask_segment(
                         timeline,
-                        edits::default_mask_segment(start, end, lane),
+                        crate::style_presets::new_mask_segment(start, end, lane),
                     ),
                     TrackKind::Scene => edits::insert_scene_segment(
                         timeline,
@@ -6672,7 +6720,11 @@ impl EditorWindow {
         }
         let handoff_target = self.transport.as_ref().and(self.ordinary_handoff_frame);
         let first_frame = self.latest_frame.is_none();
-        let layout_changed = self.frame_layout != Some(frame.layout);
+        let overlay_live = self.player_panel_hovered || self.canvas_drag.is_some();
+        let layout_changed = self
+            .frame_layout
+            .map(|layout| canvas_hit_layout(layout, overlay_live))
+            != Some(canvas_hit_layout(frame.layout, overlay_live));
         if self.frame_layout.map(|layout| layout.output_size) != Some(frame.layout.output_size) {
             tracing::info!(
                 output_size = ?frame.layout.output_size,
@@ -7540,6 +7592,11 @@ impl EditorWindow {
                     tracing::warn!("the presets store could not be written");
                 }
             }
+            PresetDialog::Style(dialog) => {
+                if !self.commit_style_dialog(dialog, &name, window, cx) {
+                    return;
+                }
+            }
         }
         self.preset_dialog = None;
         let focus = self.focus.clone();
@@ -7742,11 +7799,11 @@ impl EditorWindow {
                 let index = match kind {
                     TrackKind::Text => edits::insert_text_segment(
                         timeline,
-                        edits::default_text_segment(start, end, lane),
+                        crate::style_presets::new_text_segment(start, end, lane),
                     ),
                     TrackKind::Mask => edits::insert_mask_segment(
                         timeline,
-                        edits::default_mask_segment(start, end, lane),
+                        crate::style_presets::new_mask_segment(start, end, lane),
                     ),
                     _ => return false,
                 };
@@ -7818,12 +7875,7 @@ impl EditorWindow {
             |timeline| {
                 index = edits::insert_style_segment(
                     timeline,
-                    cap_project::StyleSegment {
-                        start,
-                        end,
-                        track: lane,
-                        ..Default::default()
-                    },
+                    crate::style_presets::new_style_segment(start, end, lane),
                 );
                 true
             },
@@ -9807,7 +9859,15 @@ impl EditorWindow {
         self.preset_name_input.update(cx, |input, _| {
             input.set_placeholder(tr::editor::window::presets::name_placeholder())
         });
+        let style_parts = match dialog {
+            PresetDialog::Style(style) => Some(self.style_dialog_parts(style, cx)),
+            _ => None,
+        };
         let (title, primary, danger) = match dialog {
+            PresetDialog::Style(_) => style_parts
+                .as_ref()
+                .map(|(title, primary, danger, _)| (*title, *primary, *danger))
+                .unwrap_or_default(),
             PresetDialog::Create { .. } => (
                 tr::editor::window::presets::create_title(),
                 tr::editor::window::presets::create(),
@@ -9826,6 +9886,9 @@ impl EditorWindow {
         };
 
         let body: gpui::AnyElement = match dialog {
+            PresetDialog::Style(_) => style_parts
+                .map(|(_, _, _, body)| body)
+                .unwrap_or_else(|| div().into_any_element()),
             PresetDialog::Delete { index } => div()
                 .text_size(px(14.))
                 .text_color(Hsla::from(theme.editor.text_2))
@@ -10933,6 +10996,8 @@ impl EditorWindow {
                     .gap(px(2.))
                     .justify_end()
                     .items_center()
+                    .child(self.render_markers_button(compact, cx))
+                    .child(self.header_divider())
                     // The split toggle (`Player.tsx:409-427`).
                     .child(
                         div()
@@ -11190,6 +11255,7 @@ impl EditorWindow {
             // while paused and while the pointer is over the content
             // column.
             .children(ghost_x.map(|x| timeline::render_preview_line(&theme, x)))
+            .children(self.render_marker_lines(viewport_width))
             // The playhead (`:1279-1295`). It dims to 50 % in split
             // mode, where the cut line is the thing to watch
             // (`TL/index.tsx:1281`).
@@ -11310,6 +11376,7 @@ impl EditorWindow {
                         ),
                 )
             })
+            .children(self.render_marker_flags(viewport_width, cx))
     }
 
     /// The scroll body (`TL/index.tsx:1317-1499`): `relative flex-1 min-h-0`
@@ -12179,6 +12246,7 @@ impl Render for EditorWindow {
                                         && this.drag.is_none()
                                         && this.lane_reorder.is_none()
                                         && this.minimap_drag.is_none()
+                                        && this.markers.drag.is_none()
                                     {
                                         return;
                                     }
@@ -12187,6 +12255,7 @@ impl Render for EditorWindow {
                                         // window never heard about (another
                                         // app, a system gesture): settle the
                                         // drag at its last state.
+                                        this.marker_drag_up(window, cx);
                                         this.window_mouse_up(cx);
                                         this.drag_mouse_up(window, cx);
                                         this.cancel_lane_reorder(cx);
@@ -12197,6 +12266,14 @@ impl Render for EditorWindow {
                                     }
                                     if this.lane_reorder.is_some() {
                                         this.update_lane_reorder(event.position, window, cx);
+                                        return;
+                                    }
+                                    if this.markers.drag.is_some() {
+                                        this.marker_drag_move(
+                                            f32::from(event.position.x),
+                                            window,
+                                            cx,
+                                        );
                                         return;
                                     }
                                     if let Some(drag) = this.minimap_drag {
@@ -12231,9 +12308,11 @@ impl Render for EditorWindow {
                                         && this.drag.is_none()
                                         && this.lane_reorder.is_none()
                                         && this.minimap_drag.is_none()
+                                        && this.markers.drag.is_none()
                                     {
                                         return;
                                     }
+                                    this.marker_drag_up(window, cx);
                                     this.window_mouse_up(cx);
                                     this.drag_mouse_up(window, cx);
                                     this.finish_lane_reorder(window, cx);
@@ -12559,7 +12638,9 @@ impl Render for EditorWindow {
             }))
             .children(self.with_style_controls(|this| this.render_color_picker_popover(cx)))
             .children(self.render_presets_menu(cx))
+            .children(self.render_style_presets_menu(cx))
             .children(self.render_preset_dialog(cx))
+            .children(self.render_marker_overlays(window, cx))
             // The clips overlays: import menu, record modal, and the card
             // drag's window-wide layer with its floating ghost.
             .children(self.render_clips_overlays(cx))
@@ -14662,6 +14743,42 @@ mod tests {
         assert!(frame_layout_requires_editor_invalidation(
             false, true, true, true
         ));
+    }
+
+    /// Scrubbing across preset captions changes only the caption box, which
+    /// the canvas never draws, so it costs no editor rebuild. A manual
+    /// caption's box is a canvas hit target, so its change does while the
+    /// overlay is live, and not while the pointer is elsewhere.
+    #[test]
+    fn only_a_manual_caption_box_changes_the_canvas_layout() {
+        let base = FrameLayout {
+            display: [0., 0., 1920., 1080.],
+            camera: None,
+            output_size: [1920, 1080],
+            caption: None,
+        };
+        let preset = |bounds| FrameLayout {
+            caption: Some(cap_rendering::CaptionFrameBox::new(bounds, "bottom-center")),
+            ..base
+        };
+        let manual = |bounds| FrameLayout {
+            caption: Some(cap_rendering::CaptionFrameBox::new(bounds, "manual")),
+            ..base
+        };
+        assert_eq!(canvas_hit_layout(preset([0., 0., 10., 10.]), true), base);
+        assert_eq!(
+            canvas_hit_layout(preset([0., 0., 10., 10.]), true),
+            canvas_hit_layout(preset([5., 5., 50., 20.]), true)
+        );
+        assert_ne!(
+            canvas_hit_layout(manual([0., 0., 10., 10.]), true),
+            canvas_hit_layout(manual([5., 5., 50., 20.]), true)
+        );
+        assert_ne!(canvas_hit_layout(manual([0., 0., 10., 10.]), true), base);
+        assert_eq!(
+            canvas_hit_layout(manual([0., 0., 10., 10.]), false),
+            canvas_hit_layout(manual([5., 5., 50., 20.]), false)
+        );
     }
 
     /// Every failure `EditorInstance::new` would return, plus the one it would

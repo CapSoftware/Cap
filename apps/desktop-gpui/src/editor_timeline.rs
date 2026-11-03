@@ -243,7 +243,7 @@ fn with_alpha(color: Hsla, alpha: f32) -> Hsla {
 
 /// Times read as columns of digits, so every one of them is set in the font's
 /// tabular figures.
-fn tabular_numerals() -> gpui::FontFeatures {
+pub(crate) fn tabular_numerals() -> gpui::FontFeatures {
     gpui::FontFeatures(Arc::new(vec![("tnum".to_string(), 1)]))
 }
 

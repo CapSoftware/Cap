@@ -685,7 +685,7 @@ async fn run_preview(
                     cursor_cache.event_order(&cursor),
                 )
             };
-            let layout = uniforms.frame_layout();
+            let mut layout = uniforms.frame_layout();
             let output = match options.frame_format {
                 EditorFrameFormat::Rgba => renderer
                     .render_immediate(frames, uniforms, &cursor, true, &mut layers)
@@ -697,6 +697,7 @@ async fn run_preview(
                     .await
                     .map(EditorFrameOutput::Surface),
             };
+            layout.caption = layers.caption_frame_box();
             check_cursor_error(&constants)?;
             control.check()?;
             decoders.check()?;

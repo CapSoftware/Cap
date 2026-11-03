@@ -611,6 +611,8 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
             // status item becomes a stop button while a capture runs.
             crate::tray::set_recording(recording, cx);
         }
+        let markers = session.read(cx).markers_available();
+        crate::hotkeys::set_recording_scope(markers, cx);
         if phase == Phase::Stopping {
             open_preparing_studio_editor(&session, cx);
         }

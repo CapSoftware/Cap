@@ -472,6 +472,9 @@ pub struct RecordingSession {
     discarding: Option<Task<Result<(), tokio::task::JoinError>>>,
     pause_control: PauseControlState,
     pause_control_error: Option<String>,
+    marker_count: usize,
+    /// When the last marker went in, for the controls bar's acknowledgement.
+    marker_added_at: Option<Instant>,
     #[cfg(target_os = "linux")]
     instant_attempt: Option<recording::InstantAttempt>,
     #[cfg(target_os = "linux")]
@@ -520,6 +523,8 @@ impl RecordingSession {
             discarding: None,
             pause_control: PauseControlState::default(),
             pause_control_error: None,
+            marker_count: 0,
+            marker_added_at: None,
             #[cfg(target_os = "linux")]
             instant_attempt: None,
             #[cfg(target_os = "linux")]
@@ -594,6 +599,50 @@ impl RecordingSession {
     /// where muted spans would silently bake zeros in).
     pub fn mode(&self) -> Option<crate::recording::RecordingMode> {
         self.last_config.as_ref().map(|config| config.mode)
+    }
+
+    /// Studio recordings take markers while they capture or sit paused.
+    /// Instant ones have no editor timeline to put a marker on.
+    pub fn markers_available(&self) -> bool {
+        matches!(self.phase, Phase::Recording { .. })
+            && self.mode() == Some(recording::RecordingMode::Studio)
+            && self.active.is_some()
+            && !self.pipeline_failed
+    }
+
+    pub fn marker_count(&self) -> usize {
+        self.marker_count
+    }
+
+    pub fn marker_added_at(&self) -> Option<Instant> {
+        self.marker_added_at
+    }
+
+    /// Marks the recording at `at`, the moment the shortcut or button was
+    /// pressed. A press while paused lands on the pause point.
+    pub fn add_marker(&mut self, at: Instant, cx: &mut Context<Self>) {
+        if !self.markers_available() {
+            return;
+        }
+        let Some(count) = self
+            .active
+            .as_ref()
+            .and_then(|active| active.add_marker(at))
+        else {
+            return;
+        };
+        self.marker_count = count;
+        self.marker_added_at = Some(Instant::now());
+        tracing::info!(
+            count,
+            paused = self.is_paused(),
+            latency_ms = at.elapsed().as_secs_f64() * 1000.0,
+            "recording marker added"
+        );
+        if crate::store::recording_marker_sound_enabled() {
+            AppSound::RecordingMarker.play();
+        }
+        cx.notify();
     }
 
     /// Whether the live recording actually has a microphone attached.
@@ -699,6 +748,8 @@ impl RecordingSession {
         self.pause_control.uncertain = false;
         self.pause_control_error = None;
         self.pipeline_failed = false;
+        self.marker_count = 0;
+        self.marker_added_at = None;
         #[cfg(target_os = "linux")]
         {
             self.instant_attempt = None;
