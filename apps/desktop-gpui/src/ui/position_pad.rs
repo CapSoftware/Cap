@@ -3,9 +3,7 @@
 //!
 //! Three call sites share it in the source: the scene panel's Screen Position
 //! and Camera Position (`:6462-6467, 6482-6487`) and the multi-zoom panel's
-//! shared focal point (`:6035-6038`). The single-zoom panel draws the *same*
-//! gesture over a decoded frame (`:5764-5867`), which it passes in as a
-//! [`PadBackdrop`].
+//! shared focal point (`:6035-6038`).
 //!
 //! The pad is `w-full h-28 rounded-lg border border-gray-3 bg-gray-2`, with a
 //! 1px cross through the centre and a `size-6` knob carrying a `size-1.5` dot.
