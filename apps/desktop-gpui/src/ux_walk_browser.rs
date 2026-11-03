@@ -465,6 +465,49 @@ mod owned {
         browser.journal = None;
     }
 
+    // Dropping a Browser closes its collector's stdin, and the collector then closes the one
+    // Chrome it launched. Nothing here can reach a Chrome this app did not start.
+    fn release_prepared(browsers: &mut Vec<Browser>) {
+        browsers.retain(|browser| browser.journal.is_some());
+    }
+
+    fn release_window(browsers: &mut Vec<Browser>, id: &str) {
+        browsers.retain(|browser| {
+            browser.journal.is_some() || browser.window_id.as_deref() != Some(id)
+        });
+    }
+
+    /// Stops every Chrome this app started for a walk once that walk is over, including windows
+    /// the walk never recorded.
+    pub fn end_walk(journal: &crate::ux_walk_journal::Journal, aborted: bool) {
+        finish(journal, aborted);
+        if let Ok(mut browsers) = browsers().lock() {
+            release_prepared(&mut browsers);
+        }
+    }
+
+    /// Stops the walk Chromes that no recording is using.
+    pub fn close_prepared() {
+        if let Ok(mut browsers) = browsers().lock() {
+            release_prepared(&mut browsers);
+        }
+    }
+
+    /// Stops one walk Chrome whose window nobody will use, such as a superseded open.
+    pub fn close_window(id: &str) {
+        if let Ok(mut browsers) = browsers().lock() {
+            release_window(&mut browsers, id);
+        }
+    }
+
+    pub fn window_is_owned(id: &str) -> bool {
+        browsers().lock().is_ok_and(|browsers| {
+            browsers
+                .iter()
+                .any(|browser| browser.window_id.as_deref() == Some(id))
+        })
+    }
+
     pub fn interrupt(journal: &crate::ux_walk_journal::Journal, reason: &str) {
         finish(journal, true);
         unavailable(journal, reason);
@@ -505,6 +548,63 @@ mod owned {
             let mut command = Command::new("/bin/sh");
             command.args(["-c", script]);
             start_collector(command, "stderr-test".into())
+        }
+
+        fn collector_until_stdin_closes(marker: &Path) -> Browser {
+            let script = format!(
+                r#"printf '{{"ready":true,"captureId":"stderr-test"}}\n'
+                cat >/dev/null
+                : > '{}'"#,
+                marker.display()
+            );
+            shell(&script).ok().unwrap()
+        }
+
+        fn stopped(marker: &Path) -> bool {
+            let started = Instant::now();
+            while started.elapsed() < Duration::from_secs(5) {
+                if marker.exists() {
+                    return true;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            false
+        }
+
+        #[test]
+        fn a_walk_stops_only_the_collectors_no_recording_is_using() {
+            let directory = std::env::temp_dir().join(format!(
+                "ux-walk-browser-release-{}-{}",
+                std::process::id(),
+                crate::store::new_uuid_v4()
+            ));
+            std::fs::create_dir_all(&directory).unwrap();
+            let [prepared, recording, other] =
+                ["prepared", "recording", "other"].map(|name| directory.join(name));
+            let mut first = collector_until_stdin_closes(&prepared);
+            first.window_id = Some("1".into());
+            let mut second = collector_until_stdin_closes(&recording);
+            second.window_id = Some("2".into());
+            second.journal = Some(directory.join("journal.json"));
+            let mut third = collector_until_stdin_closes(&other);
+            third.window_id = Some("3".into());
+            let mut browsers = vec![first, second, third];
+
+            release_window(&mut browsers, "1");
+            assert!(stopped(&prepared));
+            release_window(&mut browsers, "2");
+            assert_eq!(browsers.len(), 2);
+            assert!(!other.exists() && !recording.exists());
+
+            release_prepared(&mut browsers);
+            assert!(stopped(&other));
+            assert_eq!(browsers.len(), 1);
+            std::thread::sleep(Duration::from_millis(200));
+            assert!(!recording.exists());
+
+            browsers.clear();
+            assert!(stopped(&recording));
+            std::fs::remove_dir_all(directory).unwrap();
         }
 
         #[test]
@@ -649,7 +749,10 @@ EOF
 }
 
 #[cfg(target_os = "macos")]
-pub use owned::{begin, clock, finish, health, interrupt, open};
+pub use owned::{
+    begin, clock, close_prepared, close_window, end_walk, finish, health, interrupt, open,
+    window_is_owned,
+};
 
 #[cfg(not(target_os = "macos"))]
 pub fn open() -> Result<crate::devices::WindowOption, String> {
@@ -669,6 +772,20 @@ pub fn clock(_journal: &crate::ux_walk_journal::Journal, _offset_ms: u64, _pause
 
 #[cfg(not(target_os = "macos"))]
 pub fn finish(_journal: &crate::ux_walk_journal::Journal, _aborted: bool) {}
+
+#[cfg(not(target_os = "macos"))]
+pub fn end_walk(_journal: &crate::ux_walk_journal::Journal, _aborted: bool) {}
+
+#[cfg(not(target_os = "macos"))]
+pub fn close_prepared() {}
+
+#[cfg(not(target_os = "macos"))]
+pub fn close_window(_id: &str) {}
+
+#[cfg(not(target_os = "macos"))]
+pub fn window_is_owned(_id: &str) -> bool {
+    false
+}
 
 #[cfg(not(target_os = "macos"))]
 pub fn interrupt(_journal: &crate::ux_walk_journal::Journal, _reason: &str) {}

@@ -12,6 +12,7 @@ pub struct WalkState {
     pub notice: String,
     pub checkpoint_notice: String,
     pub note_draft: String,
+    pub(super) restarting: bool,
     checkpoint_monitor: Option<Task<()>>,
 }
 
@@ -29,6 +30,7 @@ impl WalkState {
                 .into(),
             checkpoint_notice: String::new(),
             note_draft: String::new(),
+            restarting: false,
             checkpoint_monitor: None,
         }
     }
@@ -244,7 +246,12 @@ impl RecordingSession {
         if let Some(walk) = self.walk.journal.as_mut()
             && walk.state == "recording"
         {
-            crate::ux_walk_browser::finish(walk, true);
+            // Restart records the same Chrome window again, so it has to stay open.
+            if self.walk.restarting {
+                crate::ux_walk_browser::finish(walk, true);
+            } else {
+                crate::ux_walk_browser::end_walk(walk, true);
+            }
             if let Err(error) = walk.abort() {
                 tracing::error!(%error, "saving interrupted walk journal");
             }
@@ -293,7 +300,7 @@ impl RecordingSession {
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    crate::ux_walk_browser::finish(&browser_journal, false);
+                    crate::ux_walk_browser::end_walk(&browser_journal, false);
                     crate::ux_walk::run_engine("snapshot", &file)
                 })
                 .await;

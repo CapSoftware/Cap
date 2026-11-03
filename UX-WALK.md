@@ -7,7 +7,7 @@ Worm was previously named Cap UX. The README explains what stayed the same so it
 ## Record a walk
 
 1. Select **UX Walk** in the menu bar, main recorder or mode picker. A fresh Chrome window opens at your configured start page and is selected for recording. The menu bar switches to the Worm mark. Onboarding introduces the same mode alongside Instant, Studio and Screenshot.
-2. Enter a topic and, when enabled, confirm speaker names in the recorder. The recorder warns if the selected transcription provider has no saved key. The new browser window stays selected while you configure the walk, and **Start Recording** stays visible at the bottom. **New walk window** opens another fresh window. You can switch to any display, window, area or camera with the existing capture-source controls.
+2. Enter a topic and, when enabled, confirm speaker names in the recorder. The recorder warns if the selected transcription provider has no saved key. The new browser window stays selected while you configure the walk, and **Start Recording** stays visible at the bottom. **New walk window** opens another fresh window. Every Chrome window the walk opened closes when the walk ends, when you leave UX Walk mode, or when its start fails or is superseded, and Restart keeps it open. Your own Chrome windows are never touched. You can switch to any display, window, area or camera with the existing capture-source controls.
 3. Choose a display, window, area or camera, then use the existing camera, microphone and system-audio controls. Start recording normally.
 4. Open **Walk notes & chapters** from the recording bar. Add an observation or give the next chapter a title. Notes save immediately. Cap's existing Stop, Pause, Resume, Restart and Delete controls own the capture lifecycle.
 5. Stop to save the Cap project and prepare the walk. The native review window shows progress, notes, the report and files. **Edit a copy** opens an independent editing project in the existing editor.
@@ -67,6 +67,8 @@ Automatic walk windows require Google Chrome. The walkthrough processor requires
 ## Build and preview
 
 Use the existing Cap GPUI setup and packaging pipeline. Install pinned engine dependencies with `npm ci --ignore-scripts --prefix vendor/ux-walk`, then run `node scripts/bundle-ux-walk.mjs /path/to/Worm.app` after packaging. The bundle contains Node, the pinned engine and a fork-owned native lifecycle adapter in `Contents/Resources/ux-walk`. No separate UX Walk application is required.
+
+The bundler also compiles `apps/desktop-gpui/ux-walk/walk-chrome-launcher.c` into the engine's `bin`. Walk Chrome starts through it so that macOS treats Chrome as responsible for itself. Otherwise macOS holds the app responsible and may say it was prevented from modifying apps. If the launcher is missing or fails, the collector logs a line to stderr and starts Chrome normally. Recording does not need App Management.
 
 The bundler copies the Node that runs it, so run it with a self-contained Node 22, such as the nodejs.org build or `actions/setup-node`. It refuses any other version, a Node linked to libraries outside `/usr/lib` and `/System`, such as a Homebrew one, and a Node that cannot run `--version` from the app.
 

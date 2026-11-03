@@ -1078,6 +1078,7 @@ impl MainWindow {
                 this.clear_mode_hover();
             }
             if phase == Phase::Idle && previous_phase != Phase::Idle {
+                this.walk_browser_closed();
                 this.scan_incomplete_recordings(window, cx, std::time::Duration::ZERO);
                 if let Some(notice) = session.read(cx).storage_notice.clone() {
                     let main = cx.global::<app_windows::AppWindows>().main;
@@ -2044,7 +2045,7 @@ impl MainWindow {
         {
             return;
         }
-        self.walk_deselect();
+        self.walk_deselect(cx);
         self.mode = mode;
         // Open overlays label their start button with the mode.
         let select = crate::target_overlay::TargetSelect::global(cx);

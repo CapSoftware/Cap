@@ -260,6 +260,42 @@ export class OwnedWindowEvents {
 	}
 }
 
+const CHROME_EXECUTABLE =
+	"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+
+export async function launchWalkChrome(
+	browserType,
+	options,
+	{
+		launcher = fileURLToPath(
+			new URL("./bin/walk-chrome-launcher", import.meta.url),
+		),
+		chrome = CHROME_EXECUTABLE,
+		log = console.error,
+	} = {},
+) {
+	try {
+		fs.accessSync(launcher, fs.constants.X_OK);
+	} catch {
+		log(
+			"walk-chrome-launcher is missing; starting Chrome normally, so macOS may ask for App Management in this app's name",
+		);
+		return browserType.launch(options);
+	}
+	try {
+		return await browserType.launch({
+			...options,
+			executablePath: launcher,
+			env: { ...process.env, UXW_CHROME_EXECUTABLE: chrome },
+		});
+	} catch (error) {
+		log(
+			`walk-chrome-launcher failed (${redactBrowserText(error.message.split("\n")[0], 300)}); starting Chrome normally, so macOS may ask for App Management in this app's name`,
+		);
+		return browserType.launch(options);
+	}
+}
+
 export async function flushNativeNotes(browser, evidence, events, throughMs) {
 	await browser.flushPendingNotes({
 		fromMs: evidence.active.metadata.startedAtMs,
@@ -298,7 +334,12 @@ export async function runNativeBrowser(captureId, workDir) {
 		);
 	});
 	await new Promise((resolve) => bootstrap.listen(0, "127.0.0.1", resolve));
+	let launched = null;
 	const browser = await openBrowser({
+		launch: async (browserType, options) => {
+			launched = await launchWalkChrome(browserType, options);
+			return launched;
+		},
 		url: `http://127.0.0.1:${bootstrap.address().port}/walk/${captureId}`,
 		metadataOnly: false,
 		authFile: cfg.authFile,
@@ -312,9 +353,10 @@ export async function runNativeBrowser(captureId, workDir) {
 		genericTestids: cfg.genericTestids,
 		onCommand: () =>
 			"Use the recording controls for notes, chapters and pause.",
-	}).catch((error) => {
+	}).catch(async (error) => {
 		bootstrap.closeAllConnections();
 		bootstrap.close();
+		await launched?.close().catch(() => {});
 		throw error;
 	});
 	const saveAuth = browser.saveAuth.bind(browser);
@@ -486,6 +528,6 @@ if (isMainModule()) {
 		process.stdout.write(
 			`${JSON.stringify({ ready: false, error: redactBrowserText(error.message, 500) })}\n`,
 		);
-		process.exitCode = 1;
+		process.exit(1);
 	});
 }

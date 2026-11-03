@@ -1875,7 +1875,9 @@ impl RecordingSession {
                 match result {
                     Ok((true, Ok(_))) => {
                         this.active = None;
+                        this.walk.restarting = restart.is_some();
                         this.finish(cx);
+                        this.walk.restarting = false;
                         if let Some(config) = restart {
                             this.start(config, cx);
                         }

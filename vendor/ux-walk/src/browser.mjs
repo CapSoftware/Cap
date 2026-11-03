@@ -790,8 +790,9 @@ input:focus{border-color:#4f46e5;box-shadow:0 0 0 3px rgba(79,70,229,.15)}input:
   addEventListener('drop', (e) => send({ ev: 'drop', el: desc(e.target) }), true);
 }
 
-export async function openBrowser({ url, metadataOnly = false, networkContext, authFile, windowSize, trace, ignoreWrites, write, onCommand, snapshotDir, notesDir, contextSelectors, genericTestids, canCapturePage }) {
-  const browser = await chromium.launch({
+// launch: how to start the browser. An embedding app can wrap it, for example to start Chrome through its own launcher.
+export async function openBrowser({ url, metadataOnly = false, networkContext, authFile, windowSize, trace, ignoreWrites, write, onCommand, snapshotDir, notesDir, contextSelectors, genericTestids, canCapturePage, launch = (browserType, options) => browserType.launch(options) }) {
+  const browser = await launch(chromium, {
     channel: 'chrome', headless: false, handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false,
     args: [`--window-size=${windowSize}`],
   });

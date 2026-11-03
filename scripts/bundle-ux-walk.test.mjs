@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
+	buildChromeLauncher,
 	bundledNodeMajor,
 	entitlements,
 	isSystemLibrary,
@@ -186,6 +187,22 @@ test(
 			framework,
 			node,
 		]);
+	},
+);
+
+test(
+	"the Chrome launcher builds as Mach-O code and is signed with the app",
+	macOnly,
+	async (t) => {
+		const directory = await fs.mkdtemp(path.join(os.tmpdir(), "ux-walk-sign-"));
+		t.after(() => fs.rm(directory, { recursive: true, force: true }));
+		const { app, node } = await appWithUnsignedFramework(directory);
+		const launcher = path.join(path.dirname(node), "walk-chrome-launcher");
+		buildChromeLauncher(launcher);
+		assert.ok((await nestedCode(app, "Test")).includes(launcher));
+		await signApp(app, "-");
+		codesign("--verify", "--deep", "--strict", app);
+		codesign("--verify", "--strict", launcher);
 	},
 );
 

@@ -2,7 +2,12 @@ import { execFileSync } from "node:child_process";
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { brand, brandBuiltApp, brandEngineText } from "./fork-brand.mjs";
+import {
+	brand,
+	brandBuiltApp,
+	brandEngineText,
+	minimumMacos,
+} from "./fork-brand.mjs";
 import { verifyUxWalkSource } from "./sync-ux-walk.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -160,6 +165,21 @@ export async function signApp(app, identity) {
 	run("codesign", ["--verify", "--deep", "--strict", appPath]);
 }
 
+export function buildChromeLauncher(output) {
+	run("cc", [
+		"-O2",
+		"-Wall",
+		"-Wextra",
+		"-Werror",
+		"-arch",
+		process.arch === "arm64" ? "arm64" : "x86_64",
+		`-mmacosx-version-min=${minimumMacos}`,
+		"-o",
+		output,
+		path.join(root, "apps/desktop-gpui/ux-walk/walk-chrome-launcher.c"),
+	]);
+}
+
 export async function bundleUxWalk(app) {
 	if (process.platform !== "darwin") throw new Error("Bundle UX Walk on macOS");
 	const contents = path.join(path.resolve(app), "Contents");
@@ -246,6 +266,7 @@ export async function bundleUxWalk(app) {
 			path.join(engine, file),
 		);
 	}
+	buildChromeLauncher(path.join(engine, "bin", "walk-chrome-launcher"));
 	await fs.writeFile(
 		path.join(resources, "engine-source.json"),
 		`${JSON.stringify({ repository: "https://github.com/CantrellJax/ux-walk-cap", sourceURL: `${parent.UXWalkSourceURL ?? `https://github.com/CantrellJax/ux-walk-cap/tree/${run("git", ["-C", root, "rev-parse", "HEAD"]).trim()}`}/vendor/ux-walk`, revision, node: nodeVersion }, null, 2)}\n`,

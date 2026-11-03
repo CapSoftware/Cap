@@ -14,6 +14,8 @@ use crate::{
 pub(super) struct RecorderWalk {
     pub(super) selected: bool,
     pub(super) opening: bool,
+    replacing_window: bool,
+    window_id: Option<String>,
     generation: u64,
     notice: Option<String>,
     key_warning: Option<String>,
@@ -116,6 +118,8 @@ impl RecorderWalk {
         Self {
             selected: crate::store::ux_walk_selected(),
             opening: false,
+            replacing_window: false,
+            window_id: None,
             generation: 0,
             notice: None,
             key_warning: None,
@@ -172,7 +176,9 @@ impl MainWindow {
         {
             return;
         }
+        self.walk.replacing_window = true;
         self.set_mode(Mode::Studio, cx);
+        self.walk.replacing_window = false;
         self.walk.selected = true;
         crate::store::set_ux_walk_selected(true);
         self.walk.generation = self.walk.generation.wrapping_add(1);
@@ -189,11 +195,20 @@ impl MainWindow {
                 .background_executor()
                 .spawn(async move { crate::ux_walk_browser::open() })
                 .await;
-            this.update(cx, |this, cx| {
+            let unused = result.as_ref().ok().map(|window| window.id.to_string());
+            let close_unused = move || {
+                if let Some(id) = &unused {
+                    crate::ux_walk_browser::close_window(id);
+                }
+            };
+            let late = close_unused.clone();
+            let updated = this.update(cx, |this, cx| {
                 if this.walk.generation != generation || !this.walk.selected {
+                    close_unused();
                     return;
                 }
                 if this.session.read(cx).phase != Phase::Idle {
+                    close_unused();
                     this.walk.opening = false;
                     this.walk.notice = None;
                     cx.notify();
@@ -209,6 +224,7 @@ impl MainWindow {
                         })
                         .unwrap_or(false);
                     if !current {
+                        close_unused();
                         return;
                     }
                     // Restoring the recorder clears its old target; apply the new window afterwards.
@@ -219,6 +235,7 @@ impl MainWindow {
                             Ok(window) => {
                                 view.devices.windows.retain(|known| known.id != window.id);
                                 view.devices.windows.push(window.clone());
+                                view.walk.window_id = Some(window.id.to_string());
                                 view.selected_window = Some(window);
                                 view.target = Some(TargetType::Window);
                                 view.panel = None;
@@ -231,10 +248,35 @@ impl MainWindow {
                     .ok();
                 });
                 cx.notify();
-            })
-            .ok();
+            });
+            if updated.is_err() {
+                late();
+            }
         })
         .detach();
+    }
+
+    pub(super) fn walk_browser_closed(&mut self) {
+        let Some(id) = self.walk.window_id.as_deref() else {
+            return;
+        };
+        if crate::ux_walk_browser::window_is_owned(id) {
+            return;
+        }
+        if self
+            .selected_window
+            .as_ref()
+            .is_some_and(|window| window.id.to_string() == id)
+        {
+            self.selected_window = None;
+            if self.walk.selected {
+                self.walk.notice = Some(
+                    "The walk window closed with the walk. Use New walk window for the next one."
+                        .into(),
+                );
+            }
+        }
+        self.walk.window_id = None;
     }
 
     pub(super) fn choose_mode_choice(&mut self, choice: ModeChoice, cx: &mut Context<Self>) {
@@ -253,11 +295,15 @@ impl MainWindow {
         }
     }
 
-    pub(super) fn walk_deselect(&mut self) {
+    pub(super) fn walk_deselect(&mut self, cx: &mut Context<Self>) {
         self.walk.selected = false;
         self.walk.generation = self.walk.generation.wrapping_add(1);
         self.walk.notice = None;
         crate::store::set_ux_walk_selected(false);
+        if !self.walk.replacing_window && self.session.read(cx).phase == Phase::Idle {
+            crate::ux_walk_browser::close_prepared();
+            self.walk_browser_closed();
+        }
     }
 
     pub(super) fn ux_walk_start_request(
