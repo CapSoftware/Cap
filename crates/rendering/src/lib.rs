@@ -9154,9 +9154,14 @@ impl RendererLayers {
                 }
             }
         } else if let Some(overlays) = &self.overlays {
+            // A mask ordered above a text or image track also hides that
+            // overlay. In a moving transition the clips carry their own
+            // masks, and the overlays are drawn here afterwards, so such a
+            // mask is applied again over them.
+            let mut overlay_below = false;
             for overlay in uniforms.project.overlay_tracks().into_iter().rev() {
                 match overlay.kind {
-                    OverlayTrackKind::Mask if parts.masks => {
+                    OverlayTrackKind::Mask if parts.masks || (parts.overlays && overlay_below) => {
                         for mask in uniforms
                             .masks
                             .iter()
@@ -9175,6 +9180,7 @@ impl RendererLayers {
                             passes.pass(session.current_texture_view(), load),
                             overlay.track,
                         );
+                        overlay_below = true;
                     }
                     OverlayTrackKind::Text
                         if parts.overlays && overlays.text.has_track(overlay.track) =>
@@ -9183,6 +9189,7 @@ impl RendererLayers {
                             passes.pass(session.current_texture_view(), load),
                             overlay.track,
                         );
+                        overlay_below = true;
                     }
                     OverlayTrackKind::Mask | OverlayTrackKind::Text | OverlayTrackKind::Image => {}
                 }

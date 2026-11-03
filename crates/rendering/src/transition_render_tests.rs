@@ -1,5 +1,7 @@
 use super::*;
-use cap_project::{BackgroundSource, ImageSegment, MaskKind, MaskSegment};
+use cap_project::{
+    BackgroundSource, ImageSegment, MaskKind, MaskSegment, OverlayTrack, OverlayTrackKind,
+};
 
 const WIDTH: u32 = 160;
 const HEIGHT: u32 = 90;
@@ -581,4 +583,50 @@ async fn a_sensitive_mask_moves_with_the_footage_it_hides() {
         stripe_edges(&frame, 80, 45) > 12,
         "what slid under the mask's old place is not hidden by it"
     );
+}
+
+#[tokio::test]
+async fn a_mask_ordered_above_an_image_still_hides_it_during_a_push() {
+    let mut fixture = fixture_with(true, true).await;
+    let mut striped = image::RgbaImage::new(16, 9);
+    for (x, _, pixel) in striped.enumerate_pixels_mut() {
+        *pixel = image::Rgba(if x % 2 == 0 {
+            [0, 0, 255, 255]
+        } else {
+            [255, 255, 255, 255]
+        });
+    }
+    striped
+        .save(fixture.directory.join("content/images/overlay.png"))
+        .expect("striped image");
+    let mut project = (*fixture.project).clone();
+    project.overlay_order = vec![
+        OverlayTrack {
+            kind: OverlayTrackKind::Mask,
+            track: 0,
+        },
+        OverlayTrack {
+            kind: OverlayTrackKind::Image,
+            track: 0,
+        },
+    ];
+    fixture.project = Arc::new(project);
+    let cursor = CursorEvents::default();
+    let sides = sides(&fixture, &cursor);
+
+    let plain = render_plain(&fixture, &sides.incoming, &cursor).await;
+    assert!(stripe_edges(&plain, 80, 45) < 6, "the mask hides the image");
+
+    let progress = (0.25f32 / 4.0).cbrt();
+    for kind in [
+        ClipTransitionType::PushLeft,
+        ClipTransitionType::WipeRight,
+        ClipTransitionType::Zoom,
+    ] {
+        let frame = render_transition(&fixture, &sides, &cursor, kind, progress).await;
+        assert!(
+            stripe_edges(&frame, 80, 45) < 6,
+            "{kind:?} leaves the image under its mask"
+        );
+    }
 }
