@@ -385,6 +385,7 @@ impl EditorWindow {
             return;
         }
         let split = self.edit(|timeline| split_clips_at(timeline, &times), window, cx);
+        self.focus_root(window, cx);
         if split {
             self.markers.list = None;
             self.note_edit("split-at-markers", Some(TrackKind::Clip));
