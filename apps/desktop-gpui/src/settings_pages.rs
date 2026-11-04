@@ -1047,6 +1047,25 @@ const INSTANT_OUTCOMES: [(store::PostInstantBehaviour, OutcomeOption); 3] = [
     ),
 ];
 
+const CANCEL_OUTCOMES: [(bool, OutcomeOption); 2] = [
+    (
+        false,
+        OutcomeOption {
+            icon: "icons/app-window.svg",
+            label: tr::settings::shortcuts::outcome::cancel_show_cap,
+            hint: tr::settings::shortcuts::outcome::cancel_show_cap_hint,
+        },
+    ),
+    (
+        true,
+        OutcomeOption {
+            icon: "icons/eye-off.svg",
+            label: tr::settings::shortcuts::outcome::cancel_stay_hidden,
+            hint: tr::settings::shortcuts::outcome::cancel_stay_hidden_hint,
+        },
+    ),
+];
+
 fn shortcut_label(action: &str) -> &'static str {
     match action {
         "screenshotArea" => tr::settings::shortcuts::label::screenshot_area(),
@@ -1688,6 +1707,30 @@ impl SettingsWindow {
             ),
         );
 
+        let cancel = vec![
+            self.render_outcome_panel(
+                "outcome-cancel",
+                tr::settings::shortcuts::on_cancel::title(),
+                tr::settings::shortcuts::on_cancel::hint(),
+                &CANCEL_OUTCOMES
+                    .iter()
+                    .map(|(keep_hidden, option)| {
+                        (
+                            *option,
+                            *keep_hidden == self.settings.keep_main_hidden_on_cancel,
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+                |this, index, cx| {
+                    if let Some((keep_hidden, _)) = CANCEL_OUTCOMES.get(index) {
+                        this.settings.keep_main_hidden_on_cancel = *keep_hidden;
+                        this.write_bool("keepMainHiddenOnCancel", *keep_hidden, cx);
+                    }
+                },
+                cx,
+            ),
+        ];
+
         let while_recording = rows_for(&WHILE_RECORDING_SHORTCUTS, cx);
 
         let listening_any = self.pages.listening.is_some();
@@ -1703,7 +1746,7 @@ impl SettingsWindow {
                 .into_any_element()
         };
 
-        vec![
+        let mut sections = vec![
             self.section(
                 tr::settings::shortcuts::screenshots_title(),
                 Some(tr::settings::shortcuts::screenshots_description()),
@@ -1718,6 +1761,21 @@ impl SettingsWindow {
                 vec![card("shortcuts-recording", recording, cx)],
             )
             .into_any_element(),
+        ];
+        // Linux has no main-window visibility probe, so a cancel there always
+        // counts the window as having been open and the choice would do nothing.
+        if !cfg!(target_os = "linux") {
+            sections.push(
+                self.section(
+                    tr::settings::shortcuts::cancelling_title(),
+                    Some(tr::settings::shortcuts::cancelling_description()),
+                    None,
+                    vec![card("shortcuts-cancel", cancel, cx)],
+                )
+                .into_any_element(),
+            );
+        }
+        sections.push(
             self.section(
                 tr::settings::shortcuts::while_recording_title(),
                 None,
@@ -1725,7 +1783,8 @@ impl SettingsWindow {
                 vec![card("shortcuts-while-recording", while_recording, cx)],
             )
             .into_any_element(),
-        ]
+        );
+        sections
     }
 
     fn render_outcome_panel(
