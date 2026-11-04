@@ -228,7 +228,10 @@ describe("status access", () => {
 		const job = createJob("job_private_status", "video-private", "user-id");
 		createdJobs.push(job.jobId);
 		const path = `http://localhost/video/process/${job.jobId}/status`;
-		for (const headers of [{}, { Accept: "text/event-stream" }]) {
+		for (const headers of [
+			{} as Record<string, string>,
+			{ Accept: "text/event-stream" },
+		]) {
 			const anonymous = await app.fetch(new Request(path, { headers }));
 			expect(anonymous.status).toBe(401);
 		}
