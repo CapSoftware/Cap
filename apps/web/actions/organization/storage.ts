@@ -25,6 +25,13 @@ import {
 import { type Organisation, S3Bucket, Storage } from "@cap/web-domain";
 import { and, desc, eq, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { headers } from "next/headers";
+import { getClientIp } from "@/lib/client-ip";
+import {
+	type CustomStorageSaveRejection,
+	getCustomStorageSaveRejection,
+	logCustomStorageAttempt,
+} from "@/lib/custom-storage-policy";
 import {
 	blockedS3EndpointMessage,
 	isDisallowedS3Endpoint,
@@ -124,6 +131,15 @@ const requireOrganizationStorageManagerPro = async (
 	const result = await requireOrganizationStorageManager(organizationId);
 	if (!userIsPro(result.user)) throw new Error(proRequiredMessage);
 	return result;
+};
+
+const getRequestClientIp = async () => {
+	try {
+		const requestHeaders = await headers();
+		return getClientIp((name) => requestHeaders.get(name));
+	} catch {
+		return null;
+	}
 };
 
 const decryptS3Config = async (
@@ -386,11 +402,35 @@ export async function getOrganizationStorageSettings(
 }
 
 export async function saveOrganizationS3Config(input: S3ConfigInput) {
-	const { user } = await requireOrganizationStorageManagerPro(
+	const { user } = await requireOrganizationStorageManager(
 		input.organizationId,
 	);
+	const clientIp = await getRequestClientIp();
+	const logAttempt = (rejection: CustomStorageSaveRejection["reason"] | null) =>
+		logCustomStorageAttempt({
+			userId: user.id,
+			action: "save_organization",
+			organizationId: input.organizationId,
+			rejection,
+			endpoint: input.endpoint,
+			clientIp,
+		});
+	if (!userIsPro(user)) {
+		logAttempt("pro_required");
+		throw new Error(proRequiredMessage);
+	}
 	if (await isDisallowedS3Endpoint(input.endpoint)) {
+		logAttempt("endpoint_not_allowed");
 		throw new Error(blockedS3EndpointMessage);
+	}
+	const rejection = await getCustomStorageSaveRejection({
+		user,
+		endpoint: input.endpoint,
+		checkPro: false,
+	});
+	logAttempt(rejection?.reason ?? null);
+	if (rejection) {
+		throw new Error(rejection.message);
 	}
 	const credentials = await getS3InputCredentials(input);
 	const encryptedConfig = {
@@ -433,8 +473,25 @@ export async function removeOrganizationS3Config(
 }
 
 export async function testOrganizationS3Config(input: S3ConfigInput) {
-	await requireOrganizationStorageManagerPro(input.organizationId);
-	if (await isDisallowedS3Endpoint(input.endpoint)) {
+	const { user } = await requireOrganizationStorageManager(
+		input.organizationId,
+	);
+	const isPro = userIsPro(user);
+	const blocked = isPro && (await isDisallowedS3Endpoint(input.endpoint));
+	logCustomStorageAttempt({
+		userId: user.id,
+		action: "test_organization",
+		organizationId: input.organizationId,
+		rejection: !isPro
+			? "pro_required"
+			: blocked
+				? "endpoint_not_allowed"
+				: null,
+		endpoint: input.endpoint,
+		clientIp: await getRequestClientIp(),
+	});
+	if (!isPro) throw new Error(proRequiredMessage);
+	if (blocked) {
 		throw new Error(blockedS3EndpointMessage);
 	}
 	const credentials = await getS3InputCredentials(input);

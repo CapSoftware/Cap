@@ -3,12 +3,20 @@ import { db } from "@cap/database";
 import { decrypt, encrypt } from "@cap/database/crypto";
 import { nanoId } from "@cap/database/helpers";
 import { s3Buckets } from "@cap/database/schema";
+import { userIsPro } from "@cap/utils";
 import { Organisation, S3Bucket } from "@cap/web-domain";
 import { zValidator } from "@hono/zod-validator";
 import { and, desc, eq, isNull } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
 import { withAuth } from "@/app/api/utils";
+import { getClientIp } from "@/lib/client-ip";
+import {
+	type CustomStorageSaveRejection,
+	customStorageProRequiredMessage,
+	getCustomStorageSaveRejection,
+	logCustomStorageAttempt,
+} from "@/lib/custom-storage-policy";
 import {
 	blockedS3EndpointMessage,
 	isDisallowedS3Endpoint,
@@ -83,12 +91,35 @@ app.post(
 	async (c) => {
 		const user = c.get("user");
 		const data = c.req.valid("json");
+		const logAttempt = (
+			rejection: CustomStorageSaveRejection["reason"] | null,
+		) =>
+			logCustomStorageAttempt({
+				userId: user.id,
+				action: "save_personal",
+				rejection,
+				endpoint: data.endpoint,
+				clientIp: getClientIp((name) => c.req.header(name)),
+			});
 
 		if (await isDisallowedS3Endpoint(data.endpoint)) {
+			logAttempt("endpoint_not_allowed");
 			return c.json(blockedEndpointResponse, { status: 400 });
 		}
 
 		try {
+			const rejection = await getCustomStorageSaveRejection({
+				user,
+				endpoint: data.endpoint,
+			});
+			logAttempt(rejection?.reason ?? null);
+			if (rejection) {
+				return c.json(
+					{ error: rejection.message, details: rejection.message },
+					{ status: rejection.status },
+				);
+			}
+
 			const encryptedConfig = {
 				id: S3Bucket.S3BucketId.make(nanoId()),
 				provider: data.provider,
@@ -240,11 +271,34 @@ app.post(
 	async (c) => {
 		const TIMEOUT_MS = 5000; // 5 second timeout
 		const data = c.req.valid("json");
+		const user = c.get("user");
+		const blocked = await isDisallowedS3Endpoint(data.endpoint);
+		const rejection =
+			blocked || userIsPro(user)
+				? null
+				: {
+						reason: "pro_required" as const,
+						message: customStorageProRequiredMessage,
+						status: 403 as const,
+					};
+		logCustomStorageAttempt({
+			userId: user.id,
+			action: "test_personal",
+			rejection: blocked ? "endpoint_not_allowed" : (rejection?.reason ?? null),
+			endpoint: data.endpoint,
+			clientIp: getClientIp((name) => c.req.header(name)),
+		});
 
-		if (await isDisallowedS3Endpoint(data.endpoint)) {
+		if (blocked) {
 			return c.json(
 				{ ...blockedEndpointResponse, metadata: undefined },
 				{ status: 400 },
+			);
+		}
+		if (rejection) {
+			return c.json(
+				{ error: rejection.message, details: rejection.message },
+				{ status: rejection.status },
 			);
 		}
 
