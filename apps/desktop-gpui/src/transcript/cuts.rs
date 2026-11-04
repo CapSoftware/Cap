@@ -20,8 +20,18 @@ const TOUCHING_SEARCH: f64 = 0.04;
 const EDGE_PENALTY_DB: f32 = 6.0;
 const MAX_SEARCH_STEPS: usize = 4_000;
 const MIN_PAUSE_CUT: f64 = 0.05;
+pub const LONG_GAP: f64 = 0.8;
 
 pub fn quietest_point(energy: Option<&EnergyEnvelope>, lo: f64, hi: f64) -> f64 {
+    quietest_mapped(energy, lo, hi, Some)
+}
+
+fn quietest_mapped(
+    energy: Option<&EnergyEnvelope>,
+    lo: f64,
+    hi: f64,
+    to_source: impl Fn(f64) -> Option<f64>,
+) -> f64 {
     let (lo, hi) = if lo <= hi { (lo, hi) } else { (hi, lo) };
     let centre = (lo + hi) / 2.0;
     let Some(energy) = energy else {
@@ -36,7 +46,7 @@ pub fn quietest_point(energy: Option<&EnergyEnvelope>, lo: f64, hi: f64) -> f64 
     let mut best: Option<(f32, f64)> = None;
     for index in 0..=steps {
         let time = (lo + index as f64 * step).min(hi);
-        let Some(db) = energy.smoothed_db(time) else {
+        let Some(db) = to_source(time).and_then(|source| energy.smoothed_db(source)) else {
             continue;
         };
         let score = db + EDGE_PENALTY_DB * ((time - centre).abs() / half) as f32;
@@ -47,13 +57,26 @@ pub fn quietest_point(energy: Option<&EnergyEnvelope>, lo: f64, hi: f64) -> f64 
     best.map_or(centre, |(_, time)| time)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Removing {
+    Before,
+    After,
+}
+
 /// The cut point between word `index - 1` and word `index` (`index` may be 0
-/// or `words.len()` for the edges). Deterministic per gap, so cutting two
-/// neighbouring words one at a time lands on exactly the same boundary as
-/// cutting them together.
-pub fn gap_cut(doc: &TranscriptDoc, energy: Option<&EnergyEnvelope>, index: usize) -> f64 {
-    let previous = index.checked_sub(1).and_then(|at| doc.words.get(at));
-    let next = doc.words.get(index);
+/// or `words.len()` for the edges), measured between the words' voiced parts.
+/// Up to `LONG_GAP` the point is the same whichever side is removed, so
+/// cutting two neighbours one at a time lands where cutting them together
+/// does. In a longer silence the removed word takes at most `LONG_GAP / 2` of
+/// it, and the rest stays for the pause controls to judge.
+pub fn gap_cut(
+    doc: &TranscriptDoc,
+    energy: Option<&EnergyEnvelope>,
+    index: usize,
+    removing: Removing,
+) -> f64 {
+    let previous = index.checked_sub(1).and_then(|at| doc.voiced.get(at));
+    let next = doc.voiced.get(index);
     let (previous_end, next_start) = match (previous, next) {
         (Some(previous), Some(next)) => (previous.end, next.start),
         (None, Some(next)) if next.start <= EDGE_REACH * 2.0 => return 0.0,
@@ -62,7 +85,12 @@ pub fn gap_cut(doc: &TranscriptDoc, energy: Option<&EnergyEnvelope>, index: usiz
         (None, None) => return 0.0,
     };
     let gap = next_start - previous_end;
-    let (lo, hi) = if gap > 0.0 {
+    let (lo, hi) = if gap > LONG_GAP && previous.is_some() && next.is_some() {
+        match removing {
+            Removing::After => (next_start - LONG_GAP / 2.0, next_start - ONSET_GUARD),
+            Removing::Before => (previous_end + TAIL_GUARD, previous_end + LONG_GAP / 2.0),
+        }
+    } else if gap > 0.0 {
         (
             previous_end + TAIL_GUARD.min(gap * 0.3),
             next_start - ONSET_GUARD.min(gap * 0.2),
@@ -82,12 +110,26 @@ pub fn gap_cut(doc: &TranscriptDoc, energy: Option<&EnergyEnvelope>, index: usiz
 pub fn plan_word_cuts(
     doc: &TranscriptDoc,
     energy: Option<&EnergyEnvelope>,
+    kept: Option<&[bool]>,
     runs: &[Range<usize>],
 ) -> Vec<Range<f64>> {
+    let is_kept = |word: usize| kept.is_none_or(|kept| kept.get(word).copied().unwrap_or(true));
     merge_ranges(
         runs.iter()
             .filter(|run| run.start < run.end && run.end <= doc.words.len())
-            .map(|run| gap_cut(doc, energy, run.start)..gap_cut(doc, energy, run.end))
+            .map(|run| {
+                let start = if run.start > 0 && !is_kept(run.start - 1) {
+                    Removing::Before
+                } else {
+                    Removing::After
+                };
+                let end = if run.end < doc.words.len() && !is_kept(run.end) {
+                    Removing::After
+                } else {
+                    Removing::Before
+                };
+                gap_cut(doc, energy, run.start, start)..gap_cut(doc, energy, run.end, end)
+            })
             .collect(),
     )
 }
@@ -95,9 +137,11 @@ pub fn plan_word_cuts(
 #[derive(Clone, Debug, PartialEq)]
 pub struct PauseCut {
     pub after_word: usize,
+    pub next_word: usize,
     pub length: f64,
     pub saves: f64,
-    pub cut: Range<f64>,
+    pub output: Range<f64>,
+    pub cuts: Vec<Range<f64>>,
 }
 
 pub fn plan_pause_cuts(
@@ -114,48 +158,73 @@ pub fn plan_pause_cuts(
         .iter()
         .map(|mapping| mapping.timescale)
         .fold(f64::INFINITY, f64::min);
+    let to_source = |output: f64| edl.output_to_source(output);
     let mut pauses = Vec::new();
-    for index in 1..doc.words.len() {
-        if !edl.is_kept(index - 1) || !edl.is_kept(index) {
+    let mut previous: Option<usize> = None;
+    for index in 0..doc.voiced.len() {
+        if !edl.is_kept(index) {
             continue;
         }
-        let previous_end = doc.words[index - 1].end;
-        let next_start = doc.words[index].start;
-        if slowest > 0.0 && (next_start - previous_end) / slowest <= floor {
-            continue;
-        }
-        let Some(timescale) = edl.timescale_over(previous_end..next_start) else {
+        let Some(before) = previous.replace(index) else {
             continue;
         };
-        let length = (next_start - previous_end) / timescale;
-        if length <= longer_than || length <= keep + MIN_PAUSE_CUT {
+        let source = doc.voiced[before].end..doc.voiced[index].start;
+        if source.end <= source.start
+            || (slowest > 0.0 && source.end - source.start <= floor * slowest)
+        {
             continue;
         }
-        let lead = keep * 0.45 * timescale;
-        let trail = keep * timescale - lead;
-        let lo_limit = previous_end + TAIL_GUARD.min(lead);
-        let hi_limit = next_start - ONSET_GUARD.min(trail);
-        let start_target = previous_end + lead;
-        let end_target = next_start - trail;
-        let start = quietest_point(
+        let (Some(from), Some(until)) = (
+            edl.output_end_of(&doc.voiced[before]),
+            edl.output_start_of(&doc.voiced[index]),
+        ) else {
+            continue;
+        };
+        let length = until - from;
+        if length <= floor {
+            continue;
+        }
+        let Some(pieces) = edl.source_pieces(from..until) else {
+            continue;
+        };
+        if pieces
+            .iter()
+            .any(|piece| piece.start < source.start - 1e-6 || piece.end > source.end + 1e-6)
+        {
+            continue;
+        }
+        let lead = keep * 0.45;
+        let trail = keep - lead;
+        let lo_limit = from + TAIL_GUARD.min(lead);
+        let hi_limit = until - ONSET_GUARD.min(trail);
+        let start_target = from + lead;
+        let end_target = until - trail;
+        let start = quietest_mapped(
             energy,
             (start_target - 0.06).max(lo_limit),
             (start_target + 0.06).min(end_target),
+            to_source,
         );
-        let end = quietest_point(
+        let end = quietest_mapped(
             energy,
             (end_target - 0.06).max(start),
             (end_target + 0.06).min(hi_limit),
+            to_source,
         );
-        let saves = (end - start) / timescale;
+        let saves = end - start;
         if saves < MIN_PAUSE_CUT {
             continue;
         }
+        let Some(cuts) = edl.source_pieces(start..end) else {
+            continue;
+        };
         pauses.push(PauseCut {
-            after_word: index - 1,
+            after_word: before,
+            next_word: index,
             length,
             saves,
-            cut: start..end,
+            output: from..until,
+            cuts,
         });
     }
     pauses

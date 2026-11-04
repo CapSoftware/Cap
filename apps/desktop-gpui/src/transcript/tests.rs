@@ -6,8 +6,8 @@ use cap_project::{
 };
 
 use super::cuts::{
-    self, CutReport, ONSET_GUARD, RestoreBlocker, TAIL_GUARD, apply_source_cuts, gap_cut,
-    plan_pause_cuts, plan_word_cuts, quietest_point, restore_words,
+    self, CutReport, LONG_GAP, ONSET_GUARD, Removing, RestoreBlocker, TAIL_GUARD,
+    apply_source_cuts, gap_cut, plan_pause_cuts, plan_word_cuts, quietest_point, restore_words,
 };
 use super::energy::{EnergyEnvelope, EnvelopeTrack, HOP_SECONDS, clip_envelope};
 use super::model::{TranscriptDoc, TranscriptEdl, flatten_words};
@@ -105,7 +105,7 @@ fn cut_words(
 ) -> CutReport {
     let doc = TranscriptDoc::build(project.captions.as_ref().unwrap());
     let runs: Vec<Range<usize>> = runs.iter().map(|(start, end)| *start..*end).collect();
-    let cuts = plan_word_cuts(&doc, None, &runs);
+    let cuts = plan_word_cuts(&doc, None, None, &runs);
     apply_source_cuts(timeline_mut(project), durations, &cuts)
 }
 
@@ -355,9 +355,15 @@ fn words_in_later_recordings_map_through_the_recording_offsets() {
     cut_words(&mut project, &durations, &[(2, 3)]);
     assert_eq!(kept(&project, &durations), [true, true, false, true]);
     let segments = &timeline(&project).segments;
-    assert_eq!(segments.len(), 2);
-    assert_eq!(segments[1].recording_clip, 1);
-    assert!(segments[1].start > 1.4 && segments[1].start < 1.6);
+    assert_eq!(segments.len(), 3);
+    assert!(
+        segments[1..]
+            .iter()
+            .all(|segment| segment.recording_clip == 1)
+    );
+    assert!(close(segments[1].start, 0.0));
+    assert!(segments[1].end >= 1.0 - LONG_GAP / 2.0 && segments[1].end < 1.0 - ONSET_GUARD);
+    assert!(segments[2].start > 1.4 && segments[2].start < 1.6);
 }
 
 #[test]
@@ -432,7 +438,7 @@ fn slivers_at_clip_edges_are_absorbed() {
 fn touching_words_cut_at_their_shared_boundary() {
     let data = captions(&[("one", 0.0, 0.5), ("two", 0.5, 1.0), ("three", 1.0, 1.5)]);
     let doc = TranscriptDoc::build(&data);
-    let point = gap_cut(&doc, None, 1);
+    let point = gap_cut(&doc, None, 1, Removing::After);
     assert!(close(point, 0.5));
 }
 
@@ -514,7 +520,7 @@ fn shortening_pauses_leaves_the_target_silence() {
     let pauses = plan_pause_cuts(&doc, &edl, None, 1.0, 0.5);
     assert_eq!(pauses.len(), 1);
     assert_eq!(pauses[0].after_word, 0);
-    let cuts: Vec<_> = pauses.iter().map(|pause| pause.cut.clone()).collect();
+    let cuts: Vec<_> = pauses.iter().flat_map(|pause| pause.cuts.clone()).collect();
     apply_source_cuts(timeline_mut(&mut project), &durations, &cuts);
     let (_, edl) = model(&project, &durations);
     let gap = edl.source_to_output(4.0).unwrap() - edl.source_to_output(1.4).unwrap();
@@ -550,7 +556,7 @@ fn hostile_transcripts_do_not_panic() {
     empty.captions = Some(captions(&[]));
     let doc = TranscriptDoc::build(empty.captions.as_ref().unwrap());
     assert!(doc.is_empty());
-    assert!(plan_word_cuts(&doc, None, std::slice::from_ref(&(0..3))).is_empty());
+    assert!(plan_word_cuts(&doc, None, None, std::slice::from_ref(&(0..3))).is_empty());
 }
 
 #[test]
@@ -606,7 +612,7 @@ fn removing_hundreds_of_fillers_from_twenty_thousand_words_is_fast() {
     assert_eq!(runs.len(), 500);
 
     let started = std::time::Instant::now();
-    let cuts = plan_word_cuts(&doc, None, &runs);
+    let cuts = plan_word_cuts(&doc, None, None, &runs);
     let report = apply_source_cuts(timeline_mut(&mut project), &durations, &cuts);
     let apply = started.elapsed();
     assert_eq!(report.applied, 500);
@@ -776,7 +782,7 @@ fn a_restored_take_keeps_the_speed_of_its_neighbours() {
 }
 
 #[test]
-fn pauses_across_a_clip_boundary_are_left_alone() {
+fn a_pause_across_a_clip_boundary_is_measured_at_each_clip_speed() {
     let words = [("before", 1.0, 1.4), ("after", 5.0, 5.4)];
     let durations = [6.0];
     let mut project = project(&words, &durations);
@@ -787,7 +793,54 @@ fn pauses_across_a_clip_boundary_are_left_alone() {
     ));
     timeline_mut(&mut project).segments[1].timescale = 2.0;
     let (doc, edl) = model(&project, &durations);
+    let pauses = plan_pause_cuts(&doc, &edl, None, 1.0, 0.5);
+    assert_eq!(pauses.len(), 1);
+    assert!(close(pauses[0].length, 1.6 + 1.0), "{}", pauses[0].length);
+    assert_eq!(pauses[0].cuts.len(), 2);
+    let cuts: Vec<_> = pauses.iter().flat_map(|pause| pause.cuts.clone()).collect();
+    apply_source_cuts(timeline_mut(&mut project), &durations, &cuts);
+    let (_, edl) = model(&project, &durations);
+    let gap = edl.source_to_output(5.0).unwrap() - edl.source_to_output(1.4).unwrap();
+    assert!((gap - 0.5).abs() < 1e-6, "{gap}");
     assert!(plan_pause_cuts(&doc, &edl, None, 1.0, 0.5).is_empty());
+}
+
+#[test]
+fn a_pause_that_crosses_a_transition_is_left_alone() {
+    let words = [("before", 1.0, 1.4), ("after", 5.0, 5.4)];
+    let durations = [6.0];
+    let mut project = project(&words, &durations);
+    let timeline = timeline_mut(&mut project);
+    assert!(editor_edits::split_clip_segment(timeline, 3.0, None));
+    timeline.transitions.push(ClipTransition {
+        segment_index: 1,
+        kind: ClipTransitionType::CrossFade,
+        duration: 0.5,
+    });
+    let (doc, edl) = model(&project, &durations);
+    assert!(plan_pause_cuts(&doc, &edl, None, 1.0, 0.5).is_empty());
+}
+
+#[test]
+fn a_pause_left_by_an_earlier_cut_joins_into_one() {
+    let words = [("before", 1.0, 1.4), ("um", 2.2, 2.5), ("after", 3.3, 3.7)];
+    let durations = [5.0];
+    let mut project = project(&words, &durations);
+    let (doc, edl) = model(&project, &durations);
+    assert!(plan_pause_cuts(&doc, &edl, None, 1.0, 0.5).is_empty());
+    apply_source_cuts(timeline_mut(&mut project), &durations, &[2.15..2.55]);
+    let (doc, edl) = model(&project, &durations);
+    assert_eq!(edl.kept, [true, false, true]);
+    let pauses = plan_pause_cuts(&doc, &edl, None, 1.0, 0.5);
+    assert_eq!(pauses.len(), 1);
+    assert_eq!((pauses[0].after_word, pauses[0].next_word), (0, 2));
+    assert!(close(pauses[0].length, 1.9 - 0.4), "{}", pauses[0].length);
+    let cuts: Vec<_> = pauses.iter().flat_map(|pause| pause.cuts.clone()).collect();
+    assert_eq!(cuts.len(), 2);
+    apply_source_cuts(timeline_mut(&mut project), &durations, &cuts);
+    let (_, edl) = model(&project, &durations);
+    let gap = edl.source_to_output(3.3).unwrap() - edl.source_to_output(1.4).unwrap();
+    assert!((gap - 0.5).abs() < 1e-6, "{gap}");
 }
 
 #[test]
@@ -801,7 +854,7 @@ fn pauses_are_measured_and_kept_in_playback_time() {
     let pauses = plan_pause_cuts(&doc, &edl, None, 1.5, 0.5);
     assert_eq!(pauses.len(), 1);
     assert!(close(pauses[0].length, 1.8));
-    let cuts: Vec<_> = pauses.iter().map(|pause| pause.cut.clone()).collect();
+    let cuts: Vec<_> = pauses.iter().flat_map(|pause| pause.cuts.clone()).collect();
     apply_source_cuts(timeline_mut(&mut project), &durations, &cuts);
     let (_, edl) = model(&project, &durations);
     let gap = edl.source_to_output(5.0).unwrap() - edl.source_to_output(1.4).unwrap();
@@ -983,11 +1036,11 @@ fn partly_trimmed_words_map_to_their_surviving_part() {
     assert_eq!(edl.source_to_output(doc.words[0].start), None);
     assert_eq!(edl.source_to_output(doc.words[2].end), None);
 
-    let start = edl.output_start_of(&doc.words[0]).unwrap();
+    let start = edl.output_start_of(&doc.voiced[0]).unwrap();
     assert!(close(start, 0.0), "{start}");
-    let end = edl.output_end_of(&doc.words[2]).unwrap();
+    let end = edl.output_end_of(&doc.voiced[2]).unwrap();
     assert!(close(end, 2.2 - 0.65), "{end}");
-    let middle = edl.output_start_of(&doc.words[1]).unwrap();
+    let middle = edl.output_start_of(&doc.voiced[1]).unwrap();
     assert!(close(middle, 1.2 - 0.65), "{middle}");
 }
 
@@ -1042,4 +1095,300 @@ fn a_restored_take_comes_back_with_its_own_settings() {
         editor_edits::clip_timeline_duration(timeline(&project)),
         2.0 + 1.0 + 2.0
     ));
+}
+
+struct Speech {
+    envelope: EnergyEnvelope,
+    voiced: Vec<(f64, f64)>,
+    duration: f64,
+}
+
+fn synthetic_speech(voiced: &[(f64, f64)], duration: f64) -> Speech {
+    let rate = 48_000.0;
+    let mut state: u32 = 0x9e37_79b9;
+    let mut noise = move || {
+        state ^= state << 13;
+        state ^= state >> 17;
+        state ^= state << 5;
+        (state as f64 / u32::MAX as f64) * 2.0 - 1.0
+    };
+    let samples: Vec<f32> = (0..(duration * rate) as usize)
+        .map(|index| {
+            let time = index as f64 / rate;
+            let room = noise() * 0.002;
+            let Some(&(start, end)) = voiced
+                .iter()
+                .find(|(start, end)| (*start..*end).contains(&time))
+            else {
+                return room as f32;
+            };
+            let local = time - start;
+            let closure = end - start > 0.3
+                && ((end - start) / 2.0..(end - start) / 2.0 + 0.06).contains(&local);
+            let voice = if local < 0.05 {
+                noise() * 0.015
+            } else if closure {
+                0.0
+            } else {
+                let syllable = 0.6 + 0.4 * (std::f64::consts::TAU * 4.0 * local).sin();
+                (1..=4)
+                    .map(|harmonic| {
+                        (std::f64::consts::TAU * 140.0 * harmonic as f64 * time).sin()
+                            / harmonic as f64
+                    })
+                    .sum::<f64>()
+                    * 0.05
+                    * syllable
+            };
+            (room + voice) as f32
+        })
+        .collect();
+    let clip = clip_envelope(
+        &[EnvelopeTrack {
+            slices: vec![samples.as_slice()],
+            channels: 1,
+            offset_seconds: 0.0,
+        }],
+        duration,
+    );
+    Speech {
+        envelope: EnergyEnvelope::new(vec![clip], &[duration]),
+        voiced: voiced.to_vec(),
+        duration,
+    }
+}
+
+impl Speech {
+    fn overlaps_voice(&self, range: &Range<f64>) -> bool {
+        self.voiced
+            .iter()
+            .any(|(start, end)| range.start < *end && *start < range.end)
+    }
+
+    fn all_quiet(&self, range: &Range<f64>) -> bool {
+        let threshold = self.envelope.silence_threshold_db(range.start).unwrap();
+        let mut time = range.start;
+        while time <= range.end {
+            if self.envelope.smoothed_db(time).unwrap() >= threshold {
+                return false;
+            }
+            time += HOP_SECONDS;
+        }
+        true
+    }
+}
+
+const RICHIE_VOICED: [(f64, f64); 8] = [
+    (0.50, 0.80),
+    (0.86, 1.25),
+    (1.30, 1.75),
+    (2.95, 3.40),
+    (4.70, 5.10),
+    (5.16, 5.50),
+    (7.70, 8.10),
+    (8.16, 8.70),
+];
+
+const RICHIE_WORDS: [(&str, f64, f64); 8] = [
+    ("Just", 0.50, 0.86),
+    ("doing", 0.86, 1.30),
+    ("works.", 1.30, 2.95),
+    ("Um", 2.95, 4.60),
+    ("Yeah,", 4.60, 5.16),
+    ("should", 5.16, 7.30),
+    ("make", 7.30, 8.16),
+    ("faster.", 8.16, 9.90),
+];
+
+fn stretched_fixture() -> (Speech, ProjectConfiguration, TranscriptDoc) {
+    let speech = synthetic_speech(&RICHIE_VOICED, 10.0);
+    let project = project(&RICHIE_WORDS, &[speech.duration]);
+    let mut doc = TranscriptDoc::build(project.captions.as_ref().unwrap());
+    doc.refine_voiced(Some(&speech.envelope));
+    (speech, project, doc)
+}
+
+#[test]
+fn silences_are_found_from_the_audio_in_room_noise() {
+    let voiced = [
+        (0.5, 1.0),
+        (1.1, 1.6),
+        (1.75, 2.2),
+        (2.6, 3.1),
+        (4.3, 4.8),
+        (6.8, 7.3),
+    ];
+    let speech = synthetic_speech(&voiced, 8.0);
+    let found = speech.envelope.silences();
+    let threshold = speech.envelope.silence_threshold_db(1.0).unwrap();
+    assert!((-50.0..-40.0).contains(&threshold), "{threshold}");
+    for silence in found {
+        assert!(!speech.overlaps_voice(silence), "{silence:?}");
+    }
+    let between: Vec<_> = found
+        .iter()
+        .filter(|silence| silence.start > 0.5 && silence.end <= 6.8 + 1e-6)
+        .collect();
+    assert_eq!(between.len(), 3, "{found:?}");
+    for (silence, (start, end)) in between.iter().zip([(2.2, 2.6), (3.1, 4.3), (4.8, 6.8)]) {
+        assert!(
+            silence.start - start < 0.03 && end - silence.end < 0.03,
+            "{silence:?}"
+        );
+    }
+}
+
+#[test]
+fn stretched_words_are_trimmed_to_their_voiced_part() {
+    let (_, _, doc) = stretched_fixture();
+    let near = |a: f64, b: f64| (a - b).abs() < 0.03;
+    for (index, word) in doc.words.iter().enumerate() {
+        let span = &doc.voiced[index];
+        let (start, end) = match index {
+            2 => (word.start, 1.75),
+            3 => (word.start, 3.40),
+            5 => (word.start, 5.50),
+            6 => (7.70, word.end),
+            7 => (word.start, 8.70),
+            _ => (word.start, word.end),
+        };
+        assert!(
+            near(span.start, start) && near(span.end, end),
+            "{index} {span:?}"
+        );
+        if !matches!(index, 2 | 3 | 5 | 6 | 7) {
+            assert_eq!(*span, word.start..word.end);
+        }
+    }
+}
+
+#[test]
+fn accurate_word_times_are_left_as_they_are() {
+    let speech = synthetic_speech(&RICHIE_VOICED, 10.0);
+    let words: Vec<_> = [
+        "Just", "doing", "works.", "Um", "Yeah,", "should", "make", "faster.",
+    ]
+    .iter()
+    .zip(RICHIE_VOICED)
+    .map(|(text, (start, end))| (*text, start, end))
+    .collect();
+    let project = project(&words, &[speech.duration]);
+    let mut doc = TranscriptDoc::build(project.captions.as_ref().unwrap());
+    let plain = doc.voiced.clone();
+    doc.refine_voiced(Some(&speech.envelope));
+    assert_eq!(doc.voiced, plain);
+}
+
+#[test]
+fn stretched_words_get_their_pauses_from_the_audio() {
+    let (speech, mut project, doc) = stretched_fixture();
+    let durations = [speech.duration];
+    let plain = TranscriptDoc::build(project.captions.as_ref().unwrap());
+    let edl = TranscriptEdl::build(&plain, timeline(&project), &durations);
+    assert!(plan_pause_cuts(&plain, &edl, Some(&speech.envelope), 1.0, 0.5).is_empty());
+
+    let edl = TranscriptEdl::build(&doc, timeline(&project), &durations);
+    let pauses = plan_pause_cuts(&doc, &edl, Some(&speech.envelope), 1.0, 0.5);
+    let found: Vec<_> = pauses
+        .iter()
+        .map(|pause| (pause.after_word, pause.next_word))
+        .collect();
+    assert_eq!(found, [(2, 3), (3, 4), (5, 6)]);
+    for (pause, length) in pauses.iter().zip([1.2, 1.2, 2.2]) {
+        assert!((pause.length - length).abs() < 0.05, "{pause:?}");
+        for cut in &pause.cuts {
+            assert!(!speech.overlaps_voice(cut), "{cut:?}");
+            assert!(speech.all_quiet(cut), "{cut:?}");
+        }
+    }
+    let cuts: Vec<_> = pauses.iter().flat_map(|pause| pause.cuts.clone()).collect();
+    apply_source_cuts(timeline_mut(&mut project), &durations, &cuts);
+    let edl = TranscriptEdl::build(&doc, timeline(&project), &durations);
+    assert!(edl.kept.iter().all(|kept| *kept));
+    for (before, after) in [(2, 3), (3, 4), (5, 6)] {
+        let gap = edl.output_start_of(&doc.voiced[after]).unwrap()
+            - edl.output_end_of(&doc.voiced[before]).unwrap();
+        assert!((gap - 0.5).abs() < 0.01, "{before} {gap}");
+    }
+    assert!(plan_pause_cuts(&doc, &edl, Some(&speech.envelope), 1.0, 0.5).is_empty());
+}
+
+#[test]
+fn deleting_a_stretched_word_keeps_the_silence_beside_it() {
+    let (speech, mut project, doc) = stretched_fixture();
+    let durations = [speech.duration];
+    let cuts = plan_word_cuts(&doc, Some(&speech.envelope), None, &[3..4]);
+    assert_eq!(cuts.len(), 1);
+    let cut = &cuts[0];
+    assert!(
+        cut.start <= 2.95 - ONSET_GUARD && cut.end >= 3.40 + TAIL_GUARD,
+        "{cut:?}"
+    );
+    let silence_removed = (2.95 - cut.start) + (cut.end - 3.40);
+    assert!(silence_removed <= LONG_GAP + 1e-9, "{cut:?}");
+    for (start, end) in RICHIE_VOICED.iter().filter(|(start, _)| *start != 2.95) {
+        assert!(!(cut.start < *end && *start < cut.end), "{cut:?}");
+    }
+
+    apply_source_cuts(timeline_mut(&mut project), &durations, &cuts);
+    let edl = TranscriptEdl::build(&doc, timeline(&project), &durations);
+    assert_eq!(edl.kept, [true, true, true, false, true, true, true, true]);
+    let pauses = plan_pause_cuts(&doc, &edl, Some(&speech.envelope), 1.0, 0.5);
+    assert_eq!(
+        (pauses[0].after_word, pauses[0].next_word),
+        (2, 4),
+        "{pauses:?}"
+    );
+    assert!(pauses[0].length > 1.5, "{:?}", pauses[0]);
+}
+
+#[test]
+fn deleting_neighbours_one_at_a_time_matches_deleting_them_together() {
+    let (speech, _, doc) = stretched_fixture();
+    let together = plan_word_cuts(&doc, Some(&speech.envelope), None, &[2..4]);
+    let first = plan_word_cuts(&doc, Some(&speech.envelope), None, &[2..3]);
+    let mut kept = vec![true; doc.words.len()];
+    kept[2] = false;
+    let second = plan_word_cuts(&doc, Some(&speech.envelope), Some(&kept), &[3..4]);
+    assert!(close(first[0].start, together[0].start));
+    assert!(close(second[0].end, together[0].end));
+    assert!(
+        second[0].start <= first[0].end + 1e-9,
+        "{first:?} {second:?}"
+    );
+}
+
+#[test]
+fn short_gaps_cut_at_the_same_point_from_either_side() {
+    let (speech, _, doc) = stretched_fixture();
+    for index in [1, 2, 5, 7] {
+        let after = gap_cut(&doc, Some(&speech.envelope), index, Removing::After);
+        let before = gap_cut(&doc, Some(&speech.envelope), index, Removing::Before);
+        let gap = doc.voiced[index].start - doc.voiced[index - 1].end;
+        if gap <= LONG_GAP {
+            assert!(close(after, before), "{index}");
+        }
+    }
+}
+
+#[test]
+fn silence_detection_on_two_hours_is_fast() {
+    let hops = (7200.0 / HOP_SECONDS) as usize;
+    let clip: Vec<f32> = (0..hops)
+        .map(|hop| {
+            let phase = hop % 400;
+            if phase < 300 {
+                0.003 * (1.0 + (hop % 7) as f32)
+            } else {
+                0.000_002 * (1.0 + (hop % 3) as f32)
+            }
+        })
+        .collect();
+    let started = std::time::Instant::now();
+    let envelope = EnergyEnvelope::new(vec![clip], &[7200.0]);
+    let elapsed = started.elapsed();
+    assert_eq!(envelope.silences().len(), hops / 400);
+    let limit = std::time::Duration::from_millis(if cfg!(debug_assertions) { 3000 } else { 200 });
+    println!("2 h silence detection {elapsed:?}");
+    assert!(elapsed < limit, "{elapsed:?}");
 }

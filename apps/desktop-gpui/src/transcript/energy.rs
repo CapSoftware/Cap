@@ -1,14 +1,23 @@
+use std::ops::Range;
 use std::sync::Arc;
 
 /// 5 ms hops: fine enough to land a cut between two syllables, coarse enough
 /// that a two hour recording costs under 6 MB.
 pub const HOP_SECONDS: f64 = 0.005;
 const SAMPLE_RATE: f64 = 48_000.0;
+pub const MIN_SILENCE: f64 = 0.2;
+const DIGITAL_SILENCE_DB: f32 = -90.0;
+const FLOOR_PERCENTILE: f64 = 0.05;
+const SPEECH_PERCENTILE: f64 = 0.95;
+const MIN_MARGIN_DB: f32 = 6.0;
+const MAX_MARGIN_DB: f32 = 15.0;
 
 #[derive(Debug, Default)]
 pub struct EnergyEnvelope {
     clips: Vec<Arc<[f32]>>,
     clip_offsets: Vec<f64>,
+    thresholds: Vec<f32>,
+    silences: Vec<Range<f64>>,
 }
 
 pub struct EnvelopeTrack<'a> {
@@ -67,10 +76,41 @@ pub fn clip_envelope(tracks: &[EnvelopeTrack<'_>], duration: f64) -> Vec<f32> {
 
 impl EnergyEnvelope {
     pub fn new(clips: Vec<Vec<f32>>, recording_durations: &[f64]) -> Self {
-        Self {
-            clip_offsets: super::model::recording_offsets(recording_durations),
-            clips: clips.into_iter().map(Arc::from).collect(),
+        let clip_offsets = super::model::recording_offsets(recording_durations);
+        let mut thresholds = Vec::with_capacity(clips.len());
+        let mut silences = Vec::new();
+        for (clip, offset) in clips.iter().zip(&clip_offsets) {
+            let (threshold, runs) = clip_silences(clip);
+            thresholds.push(threshold);
+            silences.extend(runs.into_iter().map(|run| {
+                offset + run.start as f64 * HOP_SECONDS..offset + run.end as f64 * HOP_SECONDS
+            }));
         }
+        Self {
+            clip_offsets,
+            clips: clips.into_iter().map(Arc::from).collect(),
+            thresholds,
+            silences,
+        }
+    }
+
+    pub fn silences(&self) -> &[Range<f64>] {
+        &self.silences
+    }
+
+    pub fn silences_overlapping(&self, range: Range<f64>) -> &[Range<f64>] {
+        let first = self
+            .silences
+            .partition_point(|silence| silence.end <= range.start);
+        let last = self
+            .silences
+            .partition_point(|silence| silence.start < range.end);
+        &self.silences[first..last.max(first)]
+    }
+
+    pub fn silence_threshold_db(&self, source: f64) -> Option<f32> {
+        let (clip, _) = self.locate(source)?;
+        self.thresholds.get(clip).copied()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -107,4 +147,65 @@ impl EnergyEnvelope {
         }
         (count > 0).then(|| 10.0 * (total / count as f32 + 1e-10).log10())
     }
+}
+
+fn to_db(energy: f32) -> f32 {
+    10.0 * (energy + 1e-10).log10()
+}
+
+fn from_db(db: f32) -> f32 {
+    10f32.powf(db / 10.0)
+}
+
+fn percentile(values: &mut [f32], fraction: f64) -> f32 {
+    let index = ((values.len() - 1) as f64 * fraction).round() as usize;
+    *values
+        .select_nth_unstable_by(index, |a, b| a.total_cmp(b))
+        .1
+}
+
+pub fn clip_silences(clip: &[f32]) -> (f32, Vec<Range<usize>>) {
+    let smoothed: Vec<f32> = (0..clip.len())
+        .map(|index| {
+            let window = &clip[index.saturating_sub(1)..(index + 2).min(clip.len())];
+            window.iter().sum::<f32>() / window.len() as f32
+        })
+        .collect();
+    let audible_floor = from_db(DIGITAL_SILENCE_DB);
+    let stride = (smoothed.len() / 250_000).max(1);
+    let mut audible: Vec<f32> = smoothed
+        .iter()
+        .step_by(stride)
+        .copied()
+        .filter(|energy| *energy > audible_floor)
+        .collect();
+    let threshold = if audible.is_empty() {
+        DIGITAL_SILENCE_DB
+    } else {
+        let floor = to_db(percentile(&mut audible, FLOOR_PERCENTILE));
+        let speech = to_db(percentile(&mut audible, SPEECH_PERCENTILE));
+        floor + ((speech - floor) * 0.5).clamp(MIN_MARGIN_DB, MAX_MARGIN_DB)
+    };
+    let quiet = from_db(threshold) - 1e-10;
+    let min_hops = (MIN_SILENCE / HOP_SECONDS).round() as usize;
+    let mut runs = Vec::new();
+    let mut start = None;
+    for (index, energy) in smoothed.iter().enumerate() {
+        match (start, *energy < quiet) {
+            (None, true) => start = Some(index),
+            (Some(from), false) => {
+                if index - from >= min_hops {
+                    runs.push(from..index);
+                }
+                start = None;
+            }
+            _ => {}
+        }
+    }
+    if let Some(from) = start
+        && smoothed.len() - from >= min_hops
+    {
+        runs.push(from..smoothed.len());
+    }
+    (threshold, runs)
 }

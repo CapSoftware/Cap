@@ -265,7 +265,7 @@ impl ParagraphPainter {
 
         let first_kept = paragraph.words.clone().find(|word| self.is_kept(*word));
         let stamp = first_kept
-            .and_then(|word| self.edl.as_ref()?.output_start_of(&self.doc.words[word]))
+            .and_then(|word| self.edl.as_ref()?.output_start_of(&self.doc.voiced[word]))
             .map(crate::editor_timeline::format_time);
         let hovering_cut_here = self
             .hovered_cut
@@ -401,7 +401,7 @@ fn filler_row(
         },
     )]);
     let stamp = edl
-        .output_start_of(&doc.words[words.start])
+        .output_start_of(&doc.voiced[words.start])
         .map(crate::editor_timeline::format_time)
         .unwrap_or_default();
     let on_row = {
@@ -495,18 +495,15 @@ fn pause_row(
     theme: &Theme,
     palette: Palette,
     doc: &TranscriptDoc,
-    edl: &TranscriptEdl,
     pause: &cuts::PauseCut,
     keep: f64,
     editor: WeakEntity<EditorWindow>,
 ) -> AnyElement {
     let word = pause.after_word;
-    let stamp = edl
-        .output_end_of(&doc.words[word])
-        .map(crate::editor_timeline::format_time)
-        .unwrap_or_default();
+    let next = pause.next_word;
+    let stamp = crate::editor_timeline::format_time(pause.output.start);
     let before = doc.text_of(word.saturating_sub(3)..word + 1);
-    let after = doc.text_of(word + 1..(word + 4).min(doc.words.len()));
+    let after = doc.text_of(next..(next + 3).min(doc.words.len()));
     let text = format!(
         "{before}  {} → {}  {after}",
         seconds_label(pause.length),
@@ -528,7 +525,7 @@ fn pause_row(
             editor
                 .update(cx, |this, cx| {
                     window.focus(&this.transcript.focus, cx);
-                    this.transcript_focus_filler(word..word + 2, true, cx);
+                    this.transcript_focus_filler(word..next + 1, true, cx);
                 })
                 .ok();
         })
@@ -694,7 +691,7 @@ impl EditorWindow {
             return;
         };
         let Some(output) = doc
-            .words
+            .voiced
             .get(word)
             .and_then(|word| edl.output_start_of(word))
         else {
@@ -1020,8 +1017,8 @@ impl EditorWindow {
         };
         let last = kept.next_back().unwrap_or(first);
         let (Some(from), Some(until)) = (
-            edl.output_start_of(&doc.words[first]),
-            edl.output_end_of(&doc.words[last]),
+            edl.output_start_of(&doc.voiced[first]),
+            edl.output_end_of(&doc.voiced[last]),
         ) else {
             return;
         };
@@ -1039,7 +1036,13 @@ impl EditorWindow {
             return CutReport::default();
         };
         let energy = self.transcript.energy.clone();
-        let cuts = cuts::plan_word_cuts(&doc, energy.as_deref(), runs);
+        let edl = self.transcript.edl.clone();
+        let cuts = cuts::plan_word_cuts(
+            &doc,
+            energy.as_deref(),
+            edl.as_ref().map(|edl| edl.kept.as_slice()),
+            runs,
+        );
         self.transcript_apply_cuts(&cuts, reason, window, cx)
     }
 
@@ -1134,7 +1137,7 @@ impl EditorWindow {
         {
             let join = (first..doc.words.len())
                 .find(|word| edl.is_kept(*word))
-                .and_then(|word| edl.output_start_of(&doc.words[word]));
+                .and_then(|word| edl.output_start_of(&doc.voiced[word]));
             if let Some(join) = join {
                 self.seek_to_time(join, cx);
                 self.transcript_sync_active(false, cx);
@@ -1375,8 +1378,8 @@ impl EditorWindow {
         self.transcript_reveal(words.start, false);
         if listen
             && let (Some(start), Some(end)) = (
-                edl.output_start_of(&doc.words[words.start]),
-                edl.output_end_of(&doc.words[words.end - 1]),
+                edl.output_start_of(&doc.voiced[words.start]),
+                edl.output_end_of(&doc.voiced[words.end - 1]),
             )
         {
             self.play_range((start - LISTEN_BEFORE).max(0.0), end + LISTEN_AFTER, cx);
@@ -1386,7 +1389,7 @@ impl EditorWindow {
         self.invalidate_transcript(cx);
     }
 
-    fn transcript_pause_plan(&self) -> Vec<cuts::PauseCut> {
+    pub(super) fn transcript_pause_plan(&self) -> Vec<cuts::PauseCut> {
         let (Some(doc), Some(edl)) = (&self.transcript.doc, &self.transcript.edl) else {
             return Vec::new();
         };
@@ -1407,7 +1410,7 @@ impl EditorWindow {
         let cuts: Vec<Range<f64>> = self
             .transcript_pause_plan()
             .into_iter()
-            .map(|pause| pause.cut)
+            .flat_map(|pause| pause.cuts)
             .collect();
         self.transcript_apply_cuts(&cuts, "transcript-shorten-pauses", window, cx);
         self.invalidate_transcript(cx);
@@ -1802,7 +1805,7 @@ impl EditorWindow {
             .child(action);
 
         let body = if on_pauses {
-            self.render_transcript_pause_list(&doc, &edl, pauses, saved, palette, cx)
+            self.render_transcript_pause_list(&doc, pauses, saved, palette, cx)
         } else {
             self.render_transcript_filler_list(&doc, &edl, listed, counts, palette, cx)
         };
@@ -1987,7 +1990,6 @@ impl EditorWindow {
     fn render_transcript_pause_list(
         &self,
         doc: &Arc<TranscriptDoc>,
-        edl: &Arc<TranscriptEdl>,
         pauses: Vec<cuts::PauseCut>,
         saved: f64,
         palette: Palette,
@@ -2064,16 +2066,13 @@ impl EditorWindow {
         let count = pauses.len();
         let rows = {
             let doc = doc.clone();
-            let edl = edl.clone();
             let pauses = Arc::new(pauses);
             let keep = cleanup.pause_keep;
             let editor = cx.entity().downgrade();
             gpui::uniform_list("transcript-pause-rows", count, move |range, _, _| {
                 range
                     .filter_map(|row| pauses.get(row))
-                    .map(|pause| {
-                        pause_row(&theme, palette, &doc, &edl, pause, keep, editor.clone())
-                    })
+                    .map(|pause| pause_row(&theme, palette, &doc, pause, keep, editor.clone()))
                     .collect::<Vec<_>>()
             })
             .track_scroll(&cleanup.pause_rows)
@@ -2130,8 +2129,8 @@ impl EditorWindow {
                         let first = kept_words.next().unwrap_or(range.start);
                         let last = kept_words.next_back().unwrap_or(first);
                         let seconds = edl
-                            .output_end_of(&doc.words[last])
-                            .zip(edl.output_start_of(&doc.words[first]))
+                            .output_end_of(&doc.voiced[last])
+                            .zip(edl.output_start_of(&doc.voiced[first]))
                             .map_or(0.0, |(end, start)| (end - start).max(0.0));
                         tr::editor::transcript::selection(
                             kept,
@@ -2309,6 +2308,7 @@ impl EditorWindow {
         }
         if !envelope.is_empty() {
             self.transcript.energy = Some(Arc::new(envelope));
+            self.transcript.dirty = true;
         }
         self.invalidate_transcript(cx);
         true
@@ -2374,6 +2374,8 @@ impl EditorWindow {
                 .await;
             tracing::info!(
                 elapsed_ms = started.elapsed().as_secs_f64() * 1000.0,
+                silences = envelope.silences().len(),
+                silence_threshold_db = envelope.silence_threshold_db(0.0),
                 "transcript loudness envelope ready"
             );
             this.update(cx, |this, cx| {

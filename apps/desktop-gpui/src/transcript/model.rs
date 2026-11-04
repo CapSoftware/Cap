@@ -4,6 +4,7 @@ use cap_project::disfluency::{Disfluency, DisfluencyToken, detect_disfluencies};
 use cap_project::{CaptionsData, TimelineConfiguration};
 use gpui::SharedString;
 
+use super::energy::EnergyEnvelope;
 use crate::editor_edits;
 use crate::editor_timeline;
 
@@ -12,6 +13,9 @@ const SENTENCE_PARAGRAPH_PAUSE: f64 = 0.7;
 const SOFT_PARAGRAPH_WORDS: usize = 70;
 const HARD_PARAGRAPH_WORDS: usize = 140;
 const ACTIVE_WORD_LINGER: f64 = 0.25;
+pub const WORD_TRIM_MIN: f64 = 0.25;
+const WORD_EDGE_SLACK: f64 = 0.08;
+const MIN_VOICED: f64 = 0.04;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Word {
@@ -41,8 +45,10 @@ impl Paragraph {
     }
 }
 
+#[derive(Clone)]
 pub struct TranscriptDoc {
     pub words: Vec<Word>,
+    pub voiced: Vec<Range<f64>>,
     pub paragraphs: Vec<Paragraph>,
     pub paragraph_of: Vec<u32>,
     pub fillers: Vec<Disfluency>,
@@ -213,6 +219,7 @@ impl TranscriptDoc {
             .collect();
 
         Self {
+            voiced: words.iter().map(|word| word.start..word.end).collect(),
             words,
             paragraphs,
             paragraph_of,
@@ -232,11 +239,18 @@ impl TranscriptDoc {
 
     pub fn word_at_source(&self, source: f64) -> Option<usize> {
         let index = self
-            .words
-            .partition_point(|word| word.start <= source)
+            .voiced
+            .partition_point(|span| span.start <= source)
             .checked_sub(1)?;
-        let word = &self.words[index];
-        (source <= word.end.max(word.start) + ACTIVE_WORD_LINGER).then_some(index)
+        let span = &self.voiced[index];
+        (source <= span.end.max(span.start) + ACTIVE_WORD_LINGER).then_some(index)
+    }
+
+    pub fn refine_voiced(&mut self, energy: Option<&EnergyEnvelope>) {
+        self.voiced = match energy {
+            Some(energy) => voiced_spans(&self.words, energy),
+            None => self.words.iter().map(|word| word.start..word.end).collect(),
+        };
     }
 
     pub fn filler(&self, word: usize) -> Option<&Disfluency> {
@@ -325,6 +339,34 @@ pub struct TranscriptEdl {
     pub kept_count: usize,
 }
 
+pub fn voiced_spans(words: &[Word], energy: &EnergyEnvelope) -> Vec<Range<f64>> {
+    words
+        .iter()
+        .map(|word| {
+            let (mut start, mut end) = (word.start, word.end);
+            if end - start < WORD_TRIM_MIN + MIN_VOICED {
+                return start..end;
+            }
+            let silences = energy.silences_overlapping(start..end);
+            if let Some(head) = silences.first()
+                && head.start <= start + WORD_EDGE_SLACK
+                && head.end - start >= WORD_TRIM_MIN
+                && head.end + MIN_VOICED <= end
+            {
+                start = head.end;
+            }
+            if let Some(tail) = silences.last()
+                && tail.end >= end - WORD_EDGE_SLACK
+                && end - tail.start >= WORD_TRIM_MIN
+                && tail.start - MIN_VOICED >= start
+            {
+                end = tail.start;
+            }
+            start..end
+        })
+        .collect()
+}
+
 pub fn merge_ranges(mut ranges: Vec<Range<f64>>) -> Vec<Range<f64>> {
     ranges.retain(|range| range.end > range.start);
     ranges.sort_by(|a, b| a.start.total_cmp(&b.start));
@@ -351,9 +393,9 @@ impl TranscriptEdl {
                 .map(|mapping| mapping.source_start..mapping.source_end)
                 .collect(),
         );
-        let mut kept = Vec::with_capacity(doc.words.len());
+        let mut kept = Vec::with_capacity(doc.voiced.len());
         let mut cursor = 0;
-        for word in &doc.words {
+        for word in &doc.voiced {
             while kept_ranges
                 .get(cursor)
                 .is_some_and(|range| range.end <= word.start)
@@ -430,7 +472,7 @@ impl TranscriptEdl {
         ))
     }
 
-    pub fn output_start_of(&self, word: &Word) -> Option<f64> {
+    pub fn output_start_of(&self, word: &Range<f64>) -> Option<f64> {
         self.source_to_output(word.start).or_else(|| {
             let index = self
                 .kept_ranges
@@ -443,7 +485,7 @@ impl TranscriptEdl {
         })
     }
 
-    pub fn output_end_of(&self, word: &Word) -> Option<f64> {
+    pub fn output_end_of(&self, word: &Range<f64>) -> Option<f64> {
         self.source_to_output(word.end).or_else(|| {
             let index = self
                 .kept_ranges
@@ -457,15 +499,40 @@ impl TranscriptEdl {
         })
     }
 
-    /// The speed `range` plays at when one clip plays all of it; `None` when it
-    /// is cut, or crosses into another clip where the speed may differ.
-    pub fn timescale_over(&self, range: Range<f64>) -> Option<f64> {
-        self.mappings
+    pub fn source_pieces(&self, output: Range<f64>) -> Option<Vec<Range<f64>>> {
+        if self
+            .holds
             .iter()
-            .find(|mapping| {
-                mapping.source_start <= range.start + 1e-9 && range.end <= mapping.source_end + 1e-9
-            })
-            .map(|mapping| mapping.timescale)
+            .any(|(start, end)| *start < output.end && output.start < *end)
+        {
+            return None;
+        }
+        let from = output.start - editor_edits::held_time_before(&self.holds, output.start);
+        let until = from + (output.end - output.start);
+        let first = self
+            .mappings
+            .partition_point(|mapping| mapping.effective_end() <= from + 1e-9);
+        let mut pieces = Vec::new();
+        let mut previous_end: Option<f64> = None;
+        for mapping in &self.mappings[first..] {
+            if mapping.effective_start >= until - 1e-9 {
+                break;
+            }
+            if previous_end.is_some_and(|end| mapping.effective_start < end - 1e-6) {
+                return None;
+            }
+            let start = from.max(mapping.effective_start);
+            let end = until.min(mapping.effective_end());
+            if end > start {
+                pieces.push(
+                    mapping.source_start + (start - mapping.effective_start) * mapping.timescale
+                        ..mapping.source_start
+                            + (end - mapping.effective_start) * mapping.timescale,
+                );
+            }
+            previous_end = Some(mapping.effective_end());
+        }
+        Some(pieces)
     }
 
     pub fn output_to_source(&self, output: f64) -> Option<f64> {
