@@ -30,6 +30,8 @@ vi.mock("@cap/web-backend", async () => {
 		complete: (...args: unknown[]) =>
 			Effect.sync(() => mocks.complete(...args)),
 		abort: (...args: unknown[]) => Effect.sync(() => mocks.abort(...args)),
+		listParts: () =>
+			Effect.succeed([{ PartNumber: 1, ETag: '"etag-1"', Size: 1024 }]),
 	};
 	return {
 		provideOptionalAuth: <T>(effect: T) => effect,
