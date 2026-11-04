@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import {
 	beginRequest,
 	createShutdownHandler,
@@ -171,6 +171,91 @@ describe("shutdown handler", () => {
 
 		work.resolve();
 		await task;
+	});
+});
+
+describe("shutdown failures", () => {
+	function exitRecorder() {
+		const codes: number[] = [];
+		return { codes, exit: (code: number) => void codes.push(code) };
+	}
+
+	test("exits when a cleanup step rejects", async () => {
+		const { codes, exit } = exitRecorder();
+		const errors = spyOn(console, "error").mockImplementation(() => {});
+		try {
+			const shutdown = createShutdownHandler(
+				async () => {
+					throw new Error("release failed");
+				},
+				() => 0,
+				exit,
+			);
+
+			await shutdown("SIGTERM");
+
+			expect(codes).toEqual([1]);
+			expect(errors).toHaveBeenCalled();
+		} finally {
+			errors.mockRestore();
+		}
+	});
+
+	test("exits on a repeated signal while cleanup is stuck", async () => {
+		const { codes, exit } = exitRecorder();
+		const cleanup = deferred();
+		const shutdown = createShutdownHandler(
+			() => cleanup.promise,
+			() => 0,
+			exit,
+		);
+
+		const shuttingDown = shutdown("SIGTERM");
+		await Bun.sleep(20);
+		expect(codes).toEqual([]);
+		await shutdown("SIGTERM");
+		expect(codes).toEqual([1]);
+
+		cleanup.resolve();
+		await shuttingDown;
+		expect(codes).toEqual([1]);
+	});
+
+	test("exits on a repeated signal when cleanup is stuck after the drain", async () => {
+		const { codes, exit } = exitRecorder();
+		const cleanup = deferred();
+		const finalizing = deferred();
+		const shutdown = createShutdownHandler(
+			() => {
+				finalizing.resolve();
+				return cleanup.promise;
+			},
+			() => 10_000,
+			exit,
+		);
+
+		const shuttingDown = shutdown("SIGHUP");
+		await finalizing.promise;
+		expect(isDraining()).toBe(true);
+		await shutdown("SIGTERM");
+		expect(codes).toEqual([1]);
+
+		cleanup.resolve();
+		await shuttingDown;
+	});
+
+	test("does not exit on its own when cleanup succeeds", async () => {
+		const { codes, exit } = exitRecorder();
+		const shutdown = createShutdownHandler(
+			async () => {},
+			() => 0,
+			exit,
+		);
+
+		await shutdown("SIGTERM");
+		await shutdown("SIGTERM");
+
+		expect(codes).toEqual([]);
 	});
 });
 

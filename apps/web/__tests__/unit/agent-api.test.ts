@@ -194,6 +194,31 @@ describe("agent API normalization", () => {
 		expect(status.ai.status).toBe("queued");
 	});
 
+	it("reports stable upload error codes without raw processing details", () => {
+		const status = (uploadError: string | null) =>
+			agentStatus({
+				id: Video.VideoId.make("cap_synthetic_failed"),
+				updatedAt: new Date("2026-07-18T12:00:00.000Z"),
+				transcriptionStatus: null,
+				uploadPhase: "error",
+				uploadError,
+			}).upload;
+
+		expect(status("AGENT_UPLOAD_DURATION_LIMIT_EXCEEDED")).toEqual({
+			status: "error",
+			reason: "AGENT_UPLOAD_DURATION_LIMIT_EXCEEDED",
+			retryable: true,
+		});
+		expect(
+			status("ffmpeg exited with code 1: Invalid data found at /tmp/x"),
+		).toEqual({
+			status: "error",
+			reason: "PROCESSING_FAILED",
+			retryable: true,
+		});
+		expect(status(null).reason).toBe("PROCESSING_FAILED");
+	});
+
 	it("creates portable download names", () => {
 		expect(safeDownloadFileName("  Q3: Roadmap / review?  ")).toBe(
 			"Q3-Roadmap-review.mp4",

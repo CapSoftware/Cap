@@ -26,6 +26,10 @@ const mocks = vi.hoisted(() => ({
 	tokenRow: null as TokenRow | null,
 	selectBarrier: null as null | { size: number; waiting: (() => void)[] },
 	apiKeys: [] as string[],
+	getUserByEmail: vi.fn(async (email: string) => ({
+		id: "user-1",
+		email,
+	})),
 	dispose: async () => {},
 }));
 
@@ -66,10 +70,7 @@ vi.mock("@cap/database/auth/auth-options", () => ({
 				id: "user-1",
 				email,
 			})),
-			getUserByEmail: vi.fn(async (email: string) => ({
-				id: "user-1",
-				email,
-			})),
+			getUserByEmail: mocks.getUserByEmail,
 			updateUser: vi.fn(async ({ id }: { id: string }) => ({ id })),
 		},
 	}),
@@ -313,6 +314,21 @@ describe("mobile email sessions", () => {
 			"rl_auth_otp_send",
 			"rl_auth_otp_verify",
 		]);
+	});
+
+	it("sends and signs in under the compatibility-normalized email", async () => {
+		const code = await requestCode("Person@\uFF25xample.com");
+		expect(mocks.sendEmail.mock.calls.at(-1)?.[0]).toMatchObject({
+			email: "person@example.com",
+		});
+
+		const response = await post("verify", {
+			email: "person@example.com",
+			code,
+		});
+
+		expect(response.status).toBe(200);
+		expect(mocks.getUserByEmail).toHaveBeenLastCalledWith("person@example.com");
 	});
 
 	it("uses one bucket per normalized email", async () => {

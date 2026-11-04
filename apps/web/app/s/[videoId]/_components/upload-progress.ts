@@ -28,6 +28,7 @@ export type UploadProgress =
 			status: "error";
 			lastUpdated: Date;
 			errorMessage: string | null;
+			errorKind?: "source-unavailable" | "retryable" | null;
 			hasRawFallback: boolean;
 	  }
 	| {
@@ -67,9 +68,10 @@ export function hasUnplayableRecordingSource(
 ): boolean {
 	return (
 		uploadProgress?.status === "error" &&
-		/^source-(?:incomplete|invalid|missing):/i.test(
-			uploadProgress.errorMessage ?? "",
-		)
+		(uploadProgress.errorKind === "source-unavailable" ||
+			/^source-(?:incomplete|invalid|missing):/i.test(
+				uploadProgress.errorMessage ?? "",
+			))
 	);
 }
 

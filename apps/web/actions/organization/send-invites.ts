@@ -20,6 +20,7 @@ import {
 	type AssignableOrganizationRole,
 	normalizeAssignableOrganizationRole,
 } from "@/lib/permissions/roles";
+import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 import { requireOrganizationSettingsManager } from "./authorization";
 
 type OrganizationInviteInput = {
@@ -93,6 +94,19 @@ export async function sendOrganizationInvites(
 			failedEmails: [] as string[],
 			skippedEmails: [] as string[],
 		};
+	}
+
+	const inviteLimitKeys = [
+		`organization-invite:organization:${organizationId}`,
+		`organization-invite:user:${user.id}`,
+	];
+	const inviteLimitResults = await Promise.all(
+		inviteLimitKeys.map((key) =>
+			isRateLimited(RATE_LIMIT_IDS.ORGANIZATION_INVITE, { key }),
+		),
+	);
+	if (inviteLimitResults.some(Boolean)) {
+		throw new Error("Too many invites sent. Please try again later.");
 	}
 
 	if (options.sendEmailNotifications === false) {

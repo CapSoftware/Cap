@@ -45,6 +45,13 @@ export const useDetectPlatform = (): PlatformInfo => {
 				return;
 			}
 
+			// Android user agents say "Linux" too, but a phone or tablet can't run
+			// the desktop Linux builds.
+			if (userAgent.includes("Android")) {
+				if (isMounted) setPlatform("android");
+				return;
+			}
+
 			if (userAgent.includes("Linux")) {
 				if (isMounted) setPlatform("linux");
 				return;

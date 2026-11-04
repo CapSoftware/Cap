@@ -13,7 +13,6 @@ import {
 	BODY_TEXT,
 	H_SECTION,
 	MODE_THEME,
-	MONO,
 } from "@/components/pages/HomeTwo/theme";
 import { PRICING } from "@/data/pricing";
 
@@ -404,9 +403,7 @@ export const ComparePlans = () => {
 							{sections.map((section) => (
 								<Fragment key={section.title}>
 									<tr>
-										<td
-											className={`${MONO} px-5 pb-3 pt-8 text-[11.5px] uppercase leading-none tracking-[0.05em] text-[rgba(17,17,17,0.5)]`}
-										>
+										<td className="px-5 pb-3 pt-8 text-[13px] leading-none text-[rgba(17,17,17,0.5)]">
 											{section.title}
 										</td>
 										<td />
@@ -474,9 +471,7 @@ export const ComparePlans = () => {
 
 					{sections.map((section) => (
 						<div key={section.title}>
-							<p
-								className={`${MONO} pb-2 pt-7 text-[11px] uppercase leading-none tracking-[0.05em] text-[rgba(17,17,17,0.5)]`}
-							>
+							<p className="pb-2 pt-7 text-[12.5px] leading-none text-[rgba(17,17,17,0.5)]">
 								{section.title}
 							</p>
 							<div className="divide-y divide-[#E1E7EE] border-y border-[#E1E7EE]">
