@@ -1155,7 +1155,15 @@ impl Workspace {
         self.attempts += 1;
         let attempts_left = MAX_ATTEMPTS - self.attempts;
         if self.changes.is_empty() {
-            return Ok(match verifier(self.bundle.root()) {
+            let hold = !self.initialized;
+            if hold {
+                mark_active(&self.dir, true);
+            }
+            let verified = verifier(self.bundle.root());
+            if hold {
+                mark_active(&self.dir, false);
+            }
+            return Ok(match verified {
                 Ok(path) => {
                     self.fixed = true;
                     VerifyOutcome {
