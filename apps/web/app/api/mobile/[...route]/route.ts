@@ -5,6 +5,7 @@ import {
 	normalizeEmailAddress,
 } from "@cap/database/auth/domain-utils";
 import {
+	bindVerificationToken,
 	decrypt,
 	encrypt,
 	hashPassword,
@@ -165,11 +166,14 @@ const getAffectedRows = (result: unknown) => {
 	return (result as { affectedRows?: number } | undefined)?.affectedRows ?? 0;
 };
 
-const hashEmailCode = (code: string) =>
-	crypto
-		.createHash("sha256")
-		.update(`${code}${serverEnv().NEXTAUTH_SECRET}`)
-		.digest("hex");
+const hashEmailCode = (identifier: string, code: string) =>
+	bindVerificationToken(
+		identifier,
+		crypto
+			.createHash("sha256")
+			.update(`${code}${serverEnv().NEXTAUTH_SECRET}`)
+			.digest("hex"),
+	);
 
 const sendMobileEmailCode = async (email: string, code: string) => {
 	const emailStatus = getEmailDeliveryStatus();
@@ -529,9 +533,9 @@ const requestEmailSession = Effect.fn("Mobile.requestEmailSession")(function* (
 	}
 
 	const code = crypto.randomInt(100000, 1000000).toString();
-	const token = hashEmailCode(code);
-	const expires = new Date(Date.now() + emailCodeTtlMs);
 	const identifier = getMobileEmailVerificationIdentifier(email);
+	const token = hashEmailCode(identifier, code);
+	const expires = new Date(Date.now() + emailCodeTtlMs);
 	const database = yield* Database;
 
 	yield* database.use(async (db) => {
@@ -586,8 +590,8 @@ const verifyEmailSession = Effect.fn("Mobile.verifyEmailSession")(function* (
 	}
 
 	const database = yield* Database;
-	const token = hashEmailCode(code);
 	const identifier = getMobileEmailVerificationIdentifier(email);
+	const token = hashEmailCode(identifier, code);
 	const verificationStatus = yield* database.use(async (db) => {
 		const [verificationToken] = await db
 			.select()

@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
 	accounts,
 	organizationInvites,
@@ -19,6 +19,7 @@ import {
 	provisionSsoMembership,
 	type ValidatedSsoIdentity,
 } from "../../../../packages/database/auth/sso";
+import { bindVerificationToken } from "../../../../packages/database/crypto";
 
 const fixture = vi.hoisted(() => ({
 	database: undefined as MySql2Database | undefined,
@@ -346,6 +347,50 @@ describe.runIf(Boolean(databaseUrl))(
 			).toHaveLength(0);
 		});
 
+		it("signs two emails sent the same code into their own accounts", async () => {
+			const first = `${id()}@example.com`;
+			const second = `${id()}@example.com`;
+			const token = createHash("sha256")
+				.update("123456test-secret")
+				.digest("hex");
+			const expires = new Date(Date.now() + 600_000);
+			const { createVerificationToken, useVerificationToken } = DrizzleAdapter(
+				database(),
+			);
+			if (!createVerificationToken || !useVerificationToken) {
+				throw new Error("Missing verification token adapter.");
+			}
+
+			const firstRow = await createVerificationToken({
+				identifier: first,
+				token,
+				expires,
+			});
+			await createVerificationToken({ identifier: second, token, expires });
+			const secondRow = await createVerificationToken({
+				identifier: second,
+				token,
+				expires,
+			});
+			expect(secondRow?.token).not.toBe(firstRow?.token);
+			await expect(
+				database()
+					.insert(verificationTokens)
+					.values({
+						identifier: `${id()}@example.com`,
+						token: firstRow?.token ?? "",
+						expires,
+					}),
+			).rejects.toMatchObject({ cause: { code: "ER_DUP_ENTRY" } });
+
+			await expect(
+				useVerificationToken({ identifier: first, token }),
+			).resolves.toMatchObject({ identifier: first });
+			await expect(
+				useVerificationToken({ identifier: second, token }),
+			).resolves.toMatchObject({ identifier: second });
+		});
+
 		it("burns an email OTP exactly once under concurrent guesses", async () => {
 			const identifier = `${id()}@example.com`;
 			const token = "482913";
@@ -355,7 +400,11 @@ describe.runIf(Boolean(databaseUrl))(
 			}
 			await database()
 				.insert(verificationTokens)
-				.values({ identifier, token, expires: new Date(Date.now() + 600_000) });
+				.values({
+					identifier,
+					token: bindVerificationToken(identifier, token),
+					expires: new Date(Date.now() + 600_000),
+				});
 
 			const attempts = await Promise.all(
 				Array.from({ length: 8 }, () =>
@@ -381,7 +430,11 @@ describe.runIf(Boolean(databaseUrl))(
 			}
 			await database()
 				.insert(verificationTokens)
-				.values({ identifier, token, expires: new Date(Date.now() + 600_000) });
+				.values({
+					identifier,
+					token: bindVerificationToken(identifier, token),
+					expires: new Date(Date.now() + 600_000),
+				});
 
 			const guesses = ["000000", "111111", token, "222222", "333333"];
 			const attempts = await Promise.all(
@@ -393,7 +446,7 @@ describe.runIf(Boolean(databaseUrl))(
 			const successes = attempts.filter((result) => result !== null);
 			expect(successes.length).toBeLessThanOrEqual(1);
 			for (const success of successes) {
-				expect(success).toMatchObject({ identifier, token });
+				expect(success).toMatchObject({ identifier });
 			}
 			expect(
 				await database()
