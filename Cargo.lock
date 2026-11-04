@@ -1334,6 +1334,7 @@ dependencies = [
  "flume",
  "futures",
  "image 0.25.8",
+ "libc",
  "lru",
  "ringbuf",
  "sentry",
