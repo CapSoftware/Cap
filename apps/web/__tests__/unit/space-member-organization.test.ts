@@ -35,7 +35,11 @@ import { updateSpace } from "@/actions/organization/update-space";
 import { addSpaceMembers } from "@/app/(org)/dashboard/spaces/[spaceId]/actions";
 
 const dialect = new MySqlDialect();
-const organizationUserIds = new Set(["creator", "teammate", "org-owner"]);
+const organizationMemberships = [
+	{ organizationId: "org-1", userId: "creator" },
+	{ organizationId: "org-1", userId: "teammate" },
+	{ organizationId: "org-2", userId: "outsider-user-1" },
+];
 let existingSpaceMembers: { userId: string; role: string }[];
 const insertedMembers: { userId: string; role: string }[] = [];
 
@@ -74,9 +78,13 @@ beforeEach(() => {
 		let params: unknown[] = [];
 		const rows = () => {
 			if (table === "organization_members")
-				return params
-					.filter((id) => typeof id === "string" && organizationUserIds.has(id))
-					.map((userId) => ({ userId }));
+				return organizationMemberships
+					.filter(
+						(membership) =>
+							params.includes(membership.organizationId) &&
+							params.includes(membership.userId),
+					)
+					.map(({ userId }) => ({ userId }));
 			if (table === "organizations")
 				return [{ id: "org-1", ownerId: "org-owner" }];
 			if (table === "spaces") {
