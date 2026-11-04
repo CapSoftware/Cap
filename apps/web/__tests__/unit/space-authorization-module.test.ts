@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 const modulePath = join(
@@ -8,12 +9,15 @@ const modulePath = join(
 );
 
 function moduleDirectives(source: string) {
+	const file = ts.createSourceFile("module.ts", source, ts.ScriptTarget.Latest);
 	const directives: string[] = [];
-	const prologue = /^(?:\s|\/\/[^\n]*\n|\/\*[\s\S]*?\*\/)*(["'])([^"'\n]+)\1;?/;
-	let rest = source;
-	for (let match = prologue.exec(rest); match; match = prologue.exec(rest)) {
-		directives.push(match[2] as string);
-		rest = rest.slice(match[0].length);
+	for (const statement of file.statements) {
+		if (
+			!ts.isExpressionStatement(statement) ||
+			!ts.isStringLiteral(statement.expression)
+		)
+			break;
+		directives.push(statement.expression.text);
 	}
 	return directives;
 }
