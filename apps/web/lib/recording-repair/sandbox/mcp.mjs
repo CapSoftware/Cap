@@ -35,7 +35,7 @@ const TOOLS = [
 	{
 		name: "read_file",
 		description:
-			"Read part of a file in the bundle. JSON free-text fields such as names and titles come back as <redacted:N>. Staged edits are reflected. Max 256 KiB per call (64 KiB for hex).",
+			"Read part of a file in the bundle. JSON free-text fields such as names and titles come back as <redacted:N>, and home paths in any non-media file come back as ~, whichever encoding you choose. Staged edits are reflected. Max 256 KiB per call (64 KiB for hex).",
 		inputSchema: object(
 			{
 				path,

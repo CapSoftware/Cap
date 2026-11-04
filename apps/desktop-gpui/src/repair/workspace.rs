@@ -16,6 +16,7 @@ pub const MAX_ATTEMPTS: u32 = 6;
 const MAX_TEXT_READ: u64 = 262_144;
 const MAX_HEX_READ: u64 = 65_536;
 const MAX_JSON_BYTES: u64 = 8 * 1024 * 1024;
+const MAX_TEXT_FILE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_JSON_OPS: usize = 200;
 const MAX_READ_FILES_RESPONSE: usize = 4 * 1024 * 1024;
 pub const MAX_OPS_FILE: u64 = 8 * 1024 * 1024;
@@ -515,7 +516,7 @@ impl Workspace {
 
     fn load_json_redacted(&self, source: &Path, len: u64) -> Result<(Vec<u8>, bool), String> {
         if len > MAX_JSON_BYTES {
-            return Err("JSON file is too large to read whole; use encoding hex or base64".into());
+            return Err("JSON file is too large to read whole".into());
         }
         let mut raw = Vec::new();
         std::fs::File::open(source)
@@ -533,6 +534,33 @@ impl Workspace {
                 Ok((out.into_bytes(), changed))
             }
         }
+    }
+
+    fn load_text_redacted(
+        &self,
+        rel: &RelPath,
+        source: &Path,
+        len: u64,
+    ) -> Result<(Vec<u8>, bool), String> {
+        if rel.is_json() && len <= MAX_JSON_BYTES {
+            return self.load_json_redacted(source, len);
+        }
+        if len > MAX_TEXT_FILE_BYTES {
+            return Err("file is too large to read with private text hidden".into());
+        }
+        let mut raw = Vec::new();
+        std::fs::File::open(source)
+            .and_then(|file| file.take(len).read_to_end(&mut raw))
+            .map_err(|error| format!("cannot read file: {error}"))?;
+        let text = String::from_utf8_lossy(&raw);
+        let (out, changed) = if rel.is_json() {
+            self.redactor.raw_json_text(&text)
+        } else {
+            let out = self.redactor.text(&text);
+            let changed = out != text;
+            (out, changed)
+        };
+        Ok((out.into_bytes(), changed))
     }
 
     pub fn redacted_json(&self, rel: &RelPath) -> Result<Vec<u8>, String> {
@@ -598,15 +626,8 @@ impl Workspace {
         } else {
             MAX_TEXT_READ
         };
-        let json_text = rel.is_json() && len <= MAX_JSON_BYTES;
-        let (bytes, size, redacted) = if json_text {
-            let (text, redacted) = self.load_json_redacted(&source, len)?;
-            let size = text.len() as u64;
-            let start = offset.min(size) as usize;
-            let want = length.unwrap_or(cap).min(cap) as usize;
-            let end = (start + want).min(text.len());
-            (text[start..end].to_vec(), size, redacted)
-        } else {
+        let binary = rel.is_media() || rel.extension().as_deref() == Some("png");
+        let (bytes, size, redacted) = if binary {
             let want = length
                 .unwrap_or(cap)
                 .min(cap)
@@ -618,16 +639,14 @@ impl Workspace {
             file.take(want)
                 .read_to_end(&mut buffer)
                 .map_err(|error| error.to_string())?;
-            let mut redacted = false;
-            if rel.is_json() {
-                let text = String::from_utf8_lossy(&buffer).into_owned();
-                let (out, changed) = self.redactor.raw_json_text(&text);
-                if changed {
-                    buffer = out.into_bytes();
-                    redacted = true;
-                }
-            }
-            (buffer, len, redacted)
+            (buffer, len, false)
+        } else {
+            let (text, redacted) = self.load_text_redacted(rel, &source, len)?;
+            let size = text.len() as u64;
+            let start = offset.min(size) as usize;
+            let want = length.unwrap_or(cap).min(cap) as usize;
+            let end = (start + want).min(text.len());
+            (text[start..end].to_vec(), size, redacted)
         };
         let (encoding_name, data) = match encoding {
             ReadEncoding::Hex => ("hex", hex_encode(&bytes)),
@@ -1882,6 +1901,53 @@ pub(crate) mod tests {
             assert!(!ws.apply_and_verify(&failing).unwrap().fixed);
         }
         assert!(ws.apply_and_verify(&failing).is_err());
+        std::fs::remove_dir_all(bundle.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn encoded_and_split_reads_of_text_files_stay_redacted() {
+        let bundle = fixture("encoded");
+        let home = "/Users/private-person";
+        std::fs::write(
+            bundle.join("recording-logs.log"),
+            format!("started {home}/Movies/clip.cap\nflushed\n"),
+        )
+        .unwrap();
+        let ws = Workspace::open(
+            Bundle::open(&bundle).unwrap(),
+            "rpr_test",
+            "open",
+            Redactor::new(Some(home.to_string()), Vec::new()),
+        )
+        .unwrap();
+        let log = RelPath::parse("recording-logs.log").unwrap();
+        let decode = |read: Value| -> String {
+            let data = read["data"].as_str().unwrap().to_string();
+            let bytes = match read["encoding"].as_str().unwrap() {
+                "hex" => (0..data.len())
+                    .step_by(2)
+                    .map(|i| u8::from_str_radix(&data[i..i + 2], 16).unwrap())
+                    .collect(),
+                "base64" => base64::engine::general_purpose::STANDARD
+                    .decode(data)
+                    .unwrap(),
+                _ => data.into_bytes(),
+            };
+            String::from_utf8_lossy(&bytes).into_owned()
+        };
+        for encoding in [ReadEncoding::Hex, ReadEncoding::Base64, ReadEncoding::Auto] {
+            let text = decode(ws.read(&log, None, None, encoding).unwrap());
+            assert!(!text.contains("private-person"), "{text}");
+            assert!(text.contains("~/Movies/clip.cap"), "{text}");
+        }
+        let mut joined = String::new();
+        for offset in (0..64).step_by(5) {
+            joined.push_str(&decode(
+                ws.read(&log, Some(offset), Some(5), ReadEncoding::Auto)
+                    .unwrap(),
+            ));
+        }
+        assert!(!joined.contains("private-person"), "{joined}");
         std::fs::remove_dir_all(bundle.parent().unwrap()).ok();
     }
 
