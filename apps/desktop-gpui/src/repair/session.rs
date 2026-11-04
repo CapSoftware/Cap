@@ -295,9 +295,15 @@ fn direct_source_from_env() -> Option<SessionSource> {
 fn live_verifier(request: &RepairRequest) -> Verifier {
     let path = request.project_path.clone();
     match request.operation {
-        RepairOperation::Recover => {
-            Arc::new(move |_: &std::path::Path| crate::library::recover_incomplete_recording(&path))
-        }
+        RepairOperation::Recover => Arc::new(move |_: &std::path::Path| {
+            let recovered = crate::library::recover_incomplete_recording(&path)?;
+            let studio = cap_project::RecordingMeta::load_for_project(&recovered)
+                .is_ok_and(|meta| meta.studio_meta().is_some());
+            if studio {
+                crate::editor_window::preflight(&recovered)?;
+            }
+            Ok(recovered)
+        }),
         RepairOperation::Open => Arc::new(move |_: &std::path::Path| {
             crate::editor_window::preflight(&path).map(|_| path.clone())
         }),
