@@ -223,8 +223,10 @@ app.post(
 
 					if (!account) return null;
 
-					const [charged] = await tx
-						.select({ id: developerCreditTransactions.id })
+					const [paid] = await tx
+						.select({
+							total: sql<number>`COALESCE(SUM(-${developerCreditTransactions.amountMicroCredits}), 0)`,
+						})
 						.from(developerCreditTransactions)
 						.where(
 							and(
@@ -236,20 +238,21 @@ app.post(
 								),
 								eq(developerCreditTransactions.type, "video_create"),
 							),
-						)
-						.limit(1);
+						);
 
-					if (charged) return true;
+					const remainingMicroCredits =
+						microCreditsToDebit - Number(paid?.total ?? 0);
+					if (remainingMicroCredits <= 0) return true;
 
 					const [result] = await tx
 						.update(developerCreditAccounts)
 						.set({
-							balanceMicroCredits: sql`${developerCreditAccounts.balanceMicroCredits} - ${microCreditsToDebit}`,
+							balanceMicroCredits: sql`${developerCreditAccounts.balanceMicroCredits} - ${remainingMicroCredits}`,
 						})
 						.where(
 							and(
 								eq(developerCreditAccounts.id, account.id),
-								sql`${developerCreditAccounts.balanceMicroCredits} >= ${microCreditsToDebit}`,
+								sql`${developerCreditAccounts.balanceMicroCredits} >= ${remainingMicroCredits}`,
 							),
 						);
 
@@ -273,7 +276,7 @@ app.post(
 						id: nanoId(),
 						accountId: account.id,
 						type: "video_create",
-						amountMicroCredits: -microCreditsToDebit,
+						amountMicroCredits: -remainingMicroCredits,
 						balanceAfterMicroCredits: updated.balanceMicroCredits,
 						referenceId: videoId,
 						referenceType: "developer_video",

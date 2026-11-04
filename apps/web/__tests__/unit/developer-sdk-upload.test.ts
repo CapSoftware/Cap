@@ -7,7 +7,7 @@ const mocks = vi.hoisted(() => ({
 		duration: number | null;
 		deletedAt: string | null;
 	},
-	charged: false,
+	paidMicroCredits: 0,
 	create: vi.fn(),
 	presign: vi.fn(),
 	complete: vi.fn(),
@@ -87,7 +87,7 @@ function writes() {
 beforeEach(() => {
 	vi.clearAllMocks();
 	mocks.video = inProgress;
-	mocks.charged = false;
+	mocks.paidMicroCredits = 0;
 	mocks.query.mockImplementation(async (query: string) => {
 		if (query.includes("from `developer_videos`")) {
 			const video = mocks.video;
@@ -98,7 +98,7 @@ beforeEach(() => {
 			};
 		}
 		if (query.includes("from `developer_credit_transactions`")) {
-			return { rows: mocks.charged ? [["transaction-1"]] : [] };
+			return { rows: [[mocks.paidMicroCredits]] };
 		}
 		if (query.includes("from `developer_credit_accounts`")) {
 			return {
@@ -186,7 +186,7 @@ describe("developer SDK multipart upload", () => {
 	});
 
 	it("charges a completion once even when a retry overlaps it", async () => {
-		mocks.charged = true;
+		mocks.paidMicroCredits = 1_000;
 
 		const response = await post("/complete", completeBody);
 
@@ -205,6 +205,22 @@ describe("developer SDK multipart upload", () => {
 				),
 			),
 		).toBe(false);
+	});
+
+	it("charges only the unpaid difference when a retry reports a longer upload", async () => {
+		mocks.paidMicroCredits = 400;
+
+		const response = await post("/complete", completeBody);
+
+		expect(response.status).toBe(200);
+		const debit = writes().find(([query]) =>
+			String(query).startsWith("update `developer_credit_accounts`"),
+		);
+		expect(debit?.[1]).toContain(600);
+		const record = writes().find(([query]) =>
+			String(query).startsWith("insert into `developer_credit_transactions`"),
+		);
+		expect(record?.[1]).toContain(-600);
 	});
 
 	it("refuses to complete an upload for a deleted video", async () => {
