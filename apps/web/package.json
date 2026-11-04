@@ -90,7 +90,6 @@
 		"@uidotdev/usehooks": "^2.4.1",
 		"@vercel/firewall": "^1.1.2",
 		"@vercel/functions": "^3.1.0",
-		"@vercel/sandbox": "3.9.1",
 		"@virtual-grid/react": "^2.0.3",
 		"@workos-inc/node": "^7.34.0",
 		"ai": "^7.0.59",

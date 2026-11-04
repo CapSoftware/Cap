@@ -39,7 +39,6 @@ const nextConfig = {
 		],
 		"/dashboard/settings/organization/billing": ["./lib/baa/*.pdf"],
 		"/api/settings/billing/baa/download": ["./lib/baa/*.pdf"],
-		"/api/desktop/repair/[...route]": ["./lib/recording-repair/sandbox/*"],
 	},
 	transpilePackages: [
 		"@cap/ui",

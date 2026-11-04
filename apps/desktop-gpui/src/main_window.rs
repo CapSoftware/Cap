@@ -1880,9 +1880,6 @@ impl MainWindow {
         let Some(recording) = self.incomplete_recording.clone() else {
             return;
         };
-        if app_windows::is_repair_open(&recording.project_path, cx) {
-            return;
-        }
         if !recover
             && !crate::platform::confirm_dialog(
                 "Cap",
@@ -1946,43 +1943,6 @@ impl MainWindow {
             })
             .ok();
         }));
-    }
-
-    pub(crate) fn recording_repaired(
-        &mut self,
-        original: &std::path::Path,
-        repaired: &std::path::Path,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.incomplete_recording.as_ref().is_some_and(|recording| {
-            recording.project_path == original || recording.project_path == repaired
-        }) {
-            self.incomplete_recording = None;
-            self.recovery_error = None;
-        }
-        self.refresh_open_library(window, cx);
-        self.scan_incomplete_recordings(window, cx, std::time::Duration::ZERO);
-        cx.notify();
-        window.refresh();
-    }
-
-    fn open_recording_repair(&self, cx: &mut gpui::App) {
-        let Some(recording) = self.incomplete_recording.as_ref() else {
-            return;
-        };
-        let Some(error) = self.recovery_error.clone() else {
-            return;
-        };
-        app_windows::open_repair_window(
-            crate::repair::RepairRequest {
-                project_path: recording.project_path.clone(),
-                operation: crate::repair::RepairOperation::Recover,
-                error_message: error,
-                display_name: recording.pretty_name.clone(),
-            },
-            cx,
-        );
     }
 
     /// Re-resolve the palette when the system appearance flips, or when the
@@ -3541,11 +3501,7 @@ impl MainWindow {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = self.theme;
-        let repairing = app_windows::is_repair_open(&recording.project_path, cx);
-        let pending = self.recovery_pending || repairing;
-        let can_fix = self.recovery_error.is_some()
-            && !self.recovery_pending
-            && crate::repair::availability::fix_enabled();
+        let pending = self.recovery_pending;
         let duration = recording.estimated_duration_secs.round() as u64;
         let segments = recovery_segments_label(recording.segment_count as usize, duration);
 
@@ -3609,32 +3565,11 @@ impl MainWindow {
                             .flex_row()
                             .flex_shrink_0()
                             .gap(px(6.))
-                            .when(can_fix, |this| {
-                                this.child(
-                                    ui::Button::plain(
-                                        &theme,
-                                        "fix-incomplete-recording",
-                                        ui::ButtonVariant::Primary,
-                                        ui::ButtonSize::Xs,
-                                    )
-                                    .label(tr::repair::fix())
-                                    .on_click(cx.listener(
-                                        |this, _, _, cx| {
-                                            this.open_recording_repair(cx);
-                                            cx.notify();
-                                        },
-                                    )),
-                                )
-                            })
                             .child(
                                 ui::Button::plain(
                                     &theme,
                                     "recover-incomplete-recording",
-                                    if can_fix {
-                                        ui::ButtonVariant::Gray
-                                    } else {
-                                        ui::ButtonVariant::Primary
-                                    },
+                                    ui::ButtonVariant::Primary,
                                     ui::ButtonSize::Xs,
                                 )
                                 .label(if pending {
