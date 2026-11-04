@@ -386,6 +386,8 @@ quarter = "Viertel"
 
 [settings.shortcuts]
 blocked_while_recording = "Tastenkürzel können nicht geändert werden, solange diese Aufnahme ihre Stopp-Taste belegt. Stoppen Sie zuerst die Aufnahme."
+cancelling_description = "Für Bildschirmfotos und Aufnahmen, die per Tastenkürzel oder über das Cap-Symbol gestartet werden."
+cancelling_title = "Abbrechen"
 needs_modifier_macos = "Verwenden Sie ⌘, ⌃ oder ⌥, damit das Tastenkürzel beim Tippen nicht stört."
 needs_modifier_other = "Verwenden Sie Strg, Alt oder Win, damit das Tastenkürzel beim Tippen nicht stört."
 record_shortcut = "Kürzel festlegen"
@@ -413,7 +415,15 @@ title = "Nach einer Studio-Aufnahme"
 hint = "Der Link zum Teilen wird immer kopiert"
 title = "Nach einer Instant-Aufnahme"
 
+[settings.shortcuts.on_cancel]
+hint = "Esc oder Schließen der Auswahl"
+title = "Beim Abbrechen"
+
 [settings.shortcuts.outcome]
+cancel_show_cap = "Cap anzeigen"
+cancel_show_cap_hint = "Zurück zum Rekorder"
+cancel_stay_hidden = "Ausgeblendet bleiben"
+cancel_stay_hidden_hint = "Außer Cap war geöffnet"
 instant_copy_link = "Nur Link kopieren"
 instant_copy_link_hint = "Nichts wird geöffnet"
 instant_open_link = "Link öffnen"
@@ -3222,3 +3232,72 @@ verification_failed = "Die Prüfung der Aufnahme ist fehlgeschlagen: {status}"
 
 [message.cli]
 binary_missing = "Mitgelieferte CLI unter {path} nicht gefunden"
+[repair]
+fix = "Reparieren"
+fix_recording = "Aufnahme reparieren"
+
+[repair.window]
+title = "Aufnahme reparieren"
+recover_failed = "Wiederherstellung fehlgeschlagen"
+open_failed = "Diese Aufnahme konnte nicht geöffnet werden"
+privacy = "Cap prüft die Dateien dieser Aufnahme, um sie zu reparieren. Sonst wird nichts auf Ihrem Computer gelesen."
+cancel = "Abbrechen"
+close = "Schließen"
+
+[repair.status]
+connecting = "Sichere Arbeitsumgebung wird gestartet"
+working = "Ihre Aufnahme wird untersucht"
+verifying = "Reparatur wird getestet"
+sending = "Wird an Cap gesendet"
+worked_for = "Fertig nach {duration}"
+duration_seconds = "{seconds} s"
+duration_minutes = "{minutes} min {seconds} s"
+timer_seconds = "{seconds} s"
+timer_minutes = "{minutes} min {seconds} s"
+earlier_thoughts = { one = "{count} frühere Notiz anzeigen", other = "{count} frühere Notizen anzeigen" }
+fewer_thoughts = "Weniger Notizen anzeigen"
+
+[repair.tool]
+describe = "Überblick"
+list = "Auflisten"
+read = "Lesen"
+inspect = "Prüfen"
+pull = "Kopieren"
+edit = "Bearbeiten"
+truncate = "Kürzen"
+remove = "Beiseitelegen"
+replace = "Ersetzen"
+verify = "Testen"
+source_read = "Quellcode lesen"
+search = "Suchen"
+run = "Ausführen"
+write = "Schreiben"
+
+[repair.fixed]
+title = "Ihre Aufnahme ist repariert"
+open = "Aufnahme öffnen"
+
+[repair.help]
+cant_fix_title = "Diese Aufnahme braucht einen genaueren Blick"
+failed_title = "Die Reparatur konnte nicht abgeschlossen werden"
+send_failed_title = "Das Senden wurde nicht abgeschlossen"
+explanation = "Senden Sie diese Aufnahme an das Cap-Team. Wir reparieren sie von Hand und schreiben Ihnen eine E-Mail."
+size_line = "Größe: {size}"
+send = "An Cap senden"
+
+[repair.sending]
+progress = "{sent} von {total}"
+
+[repair.sent]
+title = "Gesendet. Wir schreiben Ihnen, sobald sie repariert ist."
+
+[repair.sign_in]
+title = "Melden Sie sich an, um Aufnahmen zu reparieren"
+body = "Die Reparatur läuft über Ihr Cap-Konto."
+button = "Anmelden"
+waiting = "Warten auf Ihren Browser"
+
+[repair.bytes]
+gigabytes = "{value} GB"
+megabytes = "{value} MB"
+kilobytes = "{value} KB"

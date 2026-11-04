@@ -386,6 +386,8 @@ quarter = "1/4"
 
 [settings.shortcuts]
 blocked_while_recording = "当前录制占用了停止键，无法更改快捷键。请先停止录制。"
+cancelling_description = "适用于通过快捷键或 Cap 图标开始的截图和录制。"
+cancelling_title = "取消"
 needs_modifier_macos = "请包含 ⌘、⌃ 或 ⌥，以免快捷键干扰输入。"
 needs_modifier_other = "请包含 Ctrl、Alt 或 Win，以免快捷键干扰输入。"
 record_shortcut = "录制快捷键"
@@ -413,7 +415,15 @@ title = "Studio 录制之后"
 hint = "始终会复制分享链接"
 title = "Instant 录制之后"
 
+[settings.shortcuts.on_cancel]
+hint = "按 Esc 或关闭选择器"
+title = "取消时"
+
 [settings.shortcuts.outcome]
+cancel_show_cap = "显示 Cap"
+cancel_show_cap_hint = "回到录制器"
+cancel_stay_hidden = "保持隐藏"
+cancel_stay_hidden_hint = "除非 Cap 原本已打开"
 instant_copy_link = "仅复制链接"
 instant_copy_link_hint = "不打开任何内容"
 instant_open_link = "打开链接"
@@ -3222,3 +3232,72 @@ verification_failed = "录制验证失败：{status}"
 
 [message.cli]
 binary_missing = "未在 {path} 找到内置的 CLI 程序"
+[repair]
+fix = "修复"
+fix_recording = "修复录制"
+
+[repair.window]
+title = "修复录制"
+recover_failed = "恢复失败"
+open_failed = "无法打开此录制"
+privacy = "Cap 只查看此录制的文件来修复它，不会读取你电脑上的其他内容。"
+cancel = "取消"
+close = "关闭"
+
+[repair.status]
+connecting = "正在启动安全工作区"
+working = "正在检查你的录制"
+verifying = "正在测试修复"
+sending = "正在发送到 Cap"
+worked_for = "用时 {duration}"
+duration_seconds = "{seconds} 秒"
+duration_minutes = "{minutes} 分 {seconds} 秒"
+timer_seconds = "{seconds} 秒"
+timer_minutes = "{minutes} 分 {seconds} 秒"
+earlier_thoughts = { other = "显示之前的 {count} 条记录" }
+fewer_thoughts = "收起记录"
+
+[repair.tool]
+describe = "概览"
+list = "列出"
+read = "读取"
+inspect = "检查"
+pull = "复制"
+edit = "编辑"
+truncate = "截断"
+remove = "移到一旁"
+replace = "替换"
+verify = "测试"
+source_read = "阅读源码"
+search = "搜索"
+run = "运行"
+write = "写入"
+
+[repair.fixed]
+title = "你的录制已修复"
+open = "打开录制"
+
+[repair.help]
+cant_fix_title = "此录制需要进一步检查"
+failed_title = "修复未能完成"
+send_failed_title = "发送未能完成"
+explanation = "将此录制发送给 Cap 团队，我们会手动修复并发邮件通知你。"
+size_line = "大小：{size}"
+send = "发送到 Cap"
+
+[repair.sending]
+progress = "{sent} / {total}"
+
+[repair.sent]
+title = "已发送。修复完成后我们会发邮件通知你。"
+
+[repair.sign_in]
+title = "登录以修复录制"
+body = "修复需要使用你的 Cap 账号。"
+button = "登录"
+waiting = "正在等待浏览器"
+
+[repair.bytes]
+gigabytes = "{value} GB"
+megabytes = "{value} MB"
+kilobytes = "{value} KB"

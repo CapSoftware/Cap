@@ -51,15 +51,17 @@ checksum="$(sha256sum "$work/$deb_file" | cut -d ' ' -f 1)"
 cat > "$work/PKGBUILD" <<EOF
 # Maintainer: Cap Software <hello at cap dot so>
 pkgname=cap-bin
-pkgver=${version//-/_}
+pkgver=${version//-/pre}
 pkgrel=1
+# Retain this epoch so packages supersede the older underscore-format nightlies.
+epoch=1
 pkgdesc="Screen recording with Studio, Instant, and screenshot modes"
 arch=("$architecture")
 url="https://cap.so"
 license=("AGPL-3.0-only")
 depends=("libva" "libpulse" "libpipewire" "alsa-lib" "alsa-plugins" "libxkbcommon" "libxkbcommon-x11" "libx11" "openssl" "wayland" "libglvnd" "vulkan-icd-loader" "xdg-desktop-portal" "xdg-utils")
 optdepends=("xdg-desktop-portal-hyprland: screen capture on Hyprland and Omarchy" "vulkan-driver: hardware accelerated recording and editing")
-provides=("cap=\$pkgver")
+provides=("cap=\$epoch:\$pkgver")
 conflicts=("cap")
 options=("!strip" "!debug")
 source=("$deb_file${source_url:+::$source_url}")
@@ -81,3 +83,6 @@ if [[ -n "$source_url" ]]; then
 	makepkg --printsrcinfo > "$output/.SRCINFO"
 fi
 PKGDEST="$output" makepkg --nodeps --noconfirm
+package="$(PKGDEST="$output" makepkg --packagelist)"
+filename="${package##*/}"
+mv -- "$package" "$output/cap-bin-${filename#*:}"

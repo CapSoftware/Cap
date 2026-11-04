@@ -386,6 +386,8 @@ quarter = "Quart"
 
 [settings.shortcuts]
 blocked_while_recording = "Impossible de modifier les raccourcis tant que cet enregistrement utilise sa touche d'arrêt. Arrêtez d'abord l'enregistrement."
+cancelling_description = "Pour les captures et les enregistrements lancés depuis un raccourci ou l'icône de Cap."
+cancelling_title = "Annulation"
 needs_modifier_macos = "Incluez ⌘, ⌃ ou ⌥ pour que le raccourci ne gêne pas la saisie."
 needs_modifier_other = "Incluez Ctrl, Alt ou Win pour que le raccourci ne gêne pas la saisie."
 record_shortcut = "Définir un raccourci"
@@ -413,7 +415,15 @@ title = "Après un enregistrement Studio"
 hint = "Le lien de partage est toujours copié"
 title = "Après un enregistrement Instant"
 
+[settings.shortcuts.on_cancel]
+hint = "Esc ou fermeture du sélecteur"
+title = "Quand vous annulez"
+
 [settings.shortcuts.outcome]
+cancel_show_cap = "Afficher Cap"
+cancel_show_cap_hint = "Retour à l'enregistreur"
+cancel_stay_hidden = "Rester masqué"
+cancel_stay_hidden_hint = "Sauf si Cap était ouvert"
 instant_copy_link = "Copier le lien seulement"
 instant_copy_link_hint = "Rien ne s'ouvre"
 instant_open_link = "Ouvrir le lien"
@@ -3222,3 +3232,72 @@ verification_failed = "La vérification de l'enregistrement a échoué : {status
 
 [message.cli]
 binary_missing = "CLI intégrée introuvable dans {path}"
+[repair]
+fix = "Réparer"
+fix_recording = "Réparer l'enregistrement"
+
+[repair.window]
+title = "Réparer l'enregistrement"
+recover_failed = "La récupération a échoué"
+open_failed = "Impossible d'ouvrir cet enregistrement"
+privacy = "Cap examine les fichiers de cet enregistrement pour le réparer. Rien d'autre sur votre ordinateur n'est lu."
+cancel = "Annuler"
+close = "Fermer"
+
+[repair.status]
+connecting = "Préparation d'un espace de travail sécurisé"
+working = "Examen de votre enregistrement"
+verifying = "Test de la réparation"
+sending = "Envoi à Cap"
+worked_for = "Terminé en {duration}"
+duration_seconds = "{seconds} s"
+duration_minutes = "{minutes} min {seconds} s"
+timer_seconds = "{seconds} s"
+timer_minutes = "{minutes} min {seconds} s"
+earlier_thoughts = { one = "Afficher {count} note précédente", many = "Afficher {count} de notes précédentes", other = "Afficher {count} notes précédentes" }
+fewer_thoughts = "Afficher moins de notes"
+
+[repair.tool]
+describe = "Aperçu"
+list = "Lister"
+read = "Lire"
+inspect = "Analyser"
+pull = "Copier"
+edit = "Modifier"
+truncate = "Couper"
+remove = "Mettre de côté"
+replace = "Remplacer"
+verify = "Tester"
+source_read = "Lire le code"
+search = "Rechercher"
+run = "Exécuter"
+write = "Écrire"
+
+[repair.fixed]
+title = "Votre enregistrement est réparé"
+open = "Ouvrir l'enregistrement"
+
+[repair.help]
+cant_fix_title = "Cet enregistrement doit être examiné de plus près"
+failed_title = "La réparation n'a pas pu aboutir"
+send_failed_title = "L'envoi n'a pas abouti"
+explanation = "Envoyez cet enregistrement à l'équipe Cap : nous le réparerons à la main et vous enverrons un e-mail."
+size_line = "Taille : {size}"
+send = "Envoyer à Cap"
+
+[repair.sending]
+progress = "{sent} sur {total}"
+
+[repair.sent]
+title = "Envoyé. Nous vous enverrons un e-mail une fois la réparation faite."
+
+[repair.sign_in]
+title = "Connectez-vous pour réparer les enregistrements"
+body = "La réparation utilise votre compte Cap."
+button = "Se connecter"
+waiting = "En attente de votre navigateur"
+
+[repair.bytes]
+gigabytes = "{value} Go"
+megabytes = "{value} Mo"
+kilobytes = "{value} Ko"

@@ -386,6 +386,8 @@ quarter = "एक-चौथाई"
 
 [settings.shortcuts]
 blocked_while_recording = "जब तक यह रिकॉर्डिंग अपनी स्टॉप कुंजी इस्तेमाल कर रही है, शॉर्टकट नहीं बदले जा सकते। पहले रिकॉर्डिंग रोकें।"
+cancelling_description = "शॉर्टकट या Cap आइकन से शुरू किए गए स्क्रीनशॉट और रिकॉर्डिंग के लिए।"
+cancelling_title = "रद्द करना"
 needs_modifier_macos = "⌘, ⌃ या ⌥ शामिल करें ताकि शॉर्टकट टाइपिंग में बाधा न बने।"
 needs_modifier_other = "Ctrl, Alt या Win शामिल करें ताकि शॉर्टकट टाइपिंग में बाधा न बने।"
 record_shortcut = "शॉर्टकट सेट करें"
@@ -413,7 +415,15 @@ title = "Studio रिकॉर्डिंग के बाद"
 hint = "शेयर लिंक हमेशा कॉपी होता है"
 title = "Instant रिकॉर्डिंग के बाद"
 
+[settings.shortcuts.on_cancel]
+hint = "Esc या पिकर बंद करना"
+title = "रद्द करने पर"
+
 [settings.shortcuts.outcome]
+cancel_show_cap = "Cap दिखाएँ"
+cancel_show_cap_hint = "रिकॉर्डर पर वापस"
+cancel_stay_hidden = "छिपा रहे"
+cancel_stay_hidden_hint = "जब तक Cap पहले से खुला न हो"
 instant_copy_link = "सिर्फ़ लिंक कॉपी करें"
 instant_copy_link_hint = "कुछ नहीं खुलता"
 instant_open_link = "लिंक खोलें"
@@ -3222,3 +3232,72 @@ verification_failed = "रिकॉर्डिंग की जाँच वि
 
 [message.cli]
 binary_missing = "{path} पर बंडल की गई CLI नहीं मिली"
+[repair]
+fix = "ठीक करें"
+fix_recording = "रिकॉर्डिंग ठीक करें"
+
+[repair.window]
+title = "रिकॉर्डिंग ठीक करें"
+recover_failed = "रिकवरी नहीं हो सकी"
+open_failed = "यह रिकॉर्डिंग नहीं खुल सकी"
+privacy = "Cap इसे ठीक करने के लिए सिर्फ़ इस रिकॉर्डिंग की फ़ाइलें देखता है। आपके कंप्यूटर पर और कुछ नहीं पढ़ा जाता।"
+cancel = "रद्द करें"
+close = "बंद करें"
+
+[repair.status]
+connecting = "सुरक्षित वर्कस्पेस शुरू हो रहा है"
+working = "आपकी रिकॉर्डिंग देखी जा रही है"
+verifying = "सुधार की जाँच हो रही है"
+sending = "Cap को भेजा जा रहा है"
+worked_for = "{duration} में पूरा हुआ"
+duration_seconds = "{seconds} से."
+duration_minutes = "{minutes} मि. {seconds} से."
+timer_seconds = "{seconds} से."
+timer_minutes = "{minutes} मि. {seconds} से."
+earlier_thoughts = { one = "{count} पिछला नोट दिखाएँ", other = "{count} पिछले नोट दिखाएँ" }
+fewer_thoughts = "कम नोट दिखाएँ"
+
+[repair.tool]
+describe = "सारांश"
+list = "सूची"
+read = "पढ़ें"
+inspect = "जाँचें"
+pull = "कॉपी"
+edit = "बदलाव"
+truncate = "छोटा करें"
+remove = "अलग रखें"
+replace = "बदलें"
+verify = "टेस्ट"
+source_read = "सोर्स पढ़ें"
+search = "खोजें"
+run = "चलाएँ"
+write = "लिखें"
+
+[repair.fixed]
+title = "आपकी रिकॉर्डिंग ठीक हो गई है"
+open = "रिकॉर्डिंग खोलें"
+
+[repair.help]
+cant_fix_title = "इस रिकॉर्डिंग को और ध्यान से देखना होगा"
+failed_title = "सुधार पूरा नहीं हो सका"
+send_failed_title = "भेजना पूरा नहीं हो सका"
+explanation = "यह रिकॉर्डिंग Cap टीम को भेजें। हम इसे खुद ठीक करेंगे और आपको ईमेल करेंगे।"
+size_line = "साइज़: {size}"
+send = "Cap को भेजें"
+
+[repair.sending]
+progress = "{total} में से {sent}"
+
+[repair.sent]
+title = "भेज दिया गया। ठीक होने पर हम आपको ईमेल करेंगे।"
+
+[repair.sign_in]
+title = "रिकॉर्डिंग ठीक करने के लिए साइन इन करें"
+body = "सुधार आपके Cap अकाउंट से चलता है।"
+button = "साइन इन करें"
+waiting = "आपके ब्राउज़र का इंतज़ार है"
+
+[repair.bytes]
+gigabytes = "{value} GB"
+megabytes = "{value} MB"
+kilobytes = "{value} KB"

@@ -4661,6 +4661,10 @@ impl EditorWindow {
             });
             if selection.is_some() {
                 self.clear_marker_selection();
+                if self.audio_import_pending != Some(self.audio_picker_generation) {
+                    self.audio_picker = None;
+                    self.audio_picker_request = None;
+                }
             }
             self.selection = selection;
             self.refresh_image_asset_status();
@@ -11074,7 +11078,9 @@ impl EditorWindow {
     fn render_preview_canvas(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let body = match (&self.state, self.latest_frame.is_some()) {
-            (LoadState::Failed(message), _) => self.render_error_state(message).into_any_element(),
+            (LoadState::Failed(message), _) => {
+                self.render_error_state(message, cx).into_any_element()
+            }
             (_, true) => loading::reveal(
                 "editor-preview-ready",
                 self.preview
@@ -11110,8 +11116,9 @@ impl EditorWindow {
 
     /// `EditorErrorScreen` -- what a bundle that will not open shows instead of
     /// the canvas.
-    fn render_error_state(&self, message: &str) -> impl IntoElement {
+    fn render_error_state(&self, message: &str, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
+        let can_fix = crate::repair::availability::fix_enabled();
         div()
             .absolute()
             .inset_0()
@@ -11148,6 +11155,43 @@ impl EditorWindow {
                     .text_color(Hsla::from(theme.editor.text_3))
                     .child(SharedString::from(self.project_path.display().to_string())),
             )
+            .when(can_fix, |this| {
+                let message = message.to_string();
+                this.child(
+                    div().mt(px(4.)).child(
+                        ui::Button::plain(
+                            &theme,
+                            "editor-fix-recording",
+                            ui::ButtonVariant::Primary,
+                            ui::ButtonSize::Sm,
+                        )
+                        .label(tr::repair::fix_recording())
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            let project_path = this.project_path.clone();
+                            let display_name =
+                                cap_project::RecordingMeta::load_for_project(&project_path)
+                                    .map(|meta| meta.pretty_name)
+                                    .ok()
+                                    .filter(|name| !name.trim().is_empty())
+                                    .or_else(|| {
+                                        project_path
+                                            .file_stem()
+                                            .map(|stem| stem.to_string_lossy().into_owned())
+                                    })
+                                    .unwrap_or_default();
+                            crate::app_windows::open_repair_window(
+                                crate::repair::RepairRequest {
+                                    project_path,
+                                    operation: crate::repair::RepairOperation::Open,
+                                    error_message: message.clone(),
+                                    display_name,
+                                },
+                                cx,
+                            );
+                        })),
+                    ),
+                )
+            })
     }
 
     /// One of the transport's two zoom glyphs. `factor` is the multiplier the
@@ -14970,6 +15014,60 @@ mod tests {
             assert!(
                 (f64::from(word) - expected).abs() < 1e-3,
                 "first word at {word}, box at {start}"
+            );
+        }
+
+        #[gpui::test]
+        fn a_transition_drag_moves_transcript_words_with_their_clip(cx: &mut gpui::TestAppContext) {
+            let (editor, cx) = split_clip(cx);
+            let word_output = |editor: &Entity<EditorWindow>, cx: &mut gpui::VisualTestContext| {
+                editor.update(cx, |editor, _| {
+                    editor.transcript_refresh();
+                    editor
+                        .transcript
+                        .edl
+                        .as_ref()
+                        .unwrap()
+                        .source_to_output(6.0)
+                })
+            };
+            editor.update(cx, |editor, _| {
+                editor.project.captions = Some(cap_project::CaptionsData {
+                    segments: vec![cap_project::CaptionSegment {
+                        id: "said".into(),
+                        start: 6.0,
+                        end: 7.0,
+                        text: "hello".into(),
+                        words: vec![cap_project::CaptionWord {
+                            text: "hello".into(),
+                            start: 6.0,
+                            end: 7.0,
+                        }],
+                    }],
+                    settings: Default::default(),
+                    source_timed: true,
+                });
+                editor.transcript.open = true;
+                editor.transcript.dirty = true;
+            });
+            assert_eq!(word_output(&editor, cx), Some(6.0));
+
+            let (x, secs_per_pixel) = x_of(&editor, cx, 7.0);
+            let y = clip_row_y(cx);
+            cx.simulate_mouse_move(point(px(x), y), None, gpui::Modifiers::default());
+            cx.simulate_mouse_down(
+                point(px(x), y),
+                MouseButton::Left,
+                gpui::Modifiers::default(),
+            );
+            drag_to(&editor, cx, x - (0.6 / secs_per_pixel) as f32);
+            let made = transition(&editor, cx).expect("the drag made a transition");
+
+            let output = word_output(&editor, cx).unwrap();
+            let expected = 6.0 - made.duration;
+            assert!(
+                (output - expected).abs() < 1e-9,
+                "the word plays at {expected}, the transcript seeks to {output}"
             );
         }
 

@@ -386,6 +386,8 @@ quarter = "Un cuarto"
 
 [settings.shortcuts]
 blocked_while_recording = "No se pueden cambiar los atajos mientras esta grabación usa su tecla de detener. Detén la grabación primero."
+cancelling_description = "Para capturas y grabaciones iniciadas desde un atajo o el icono de Cap."
+cancelling_title = "Cancelación"
 needs_modifier_macos = "Incluye ⌘, ⌃ o ⌥ para que el atajo no interfiera al escribir."
 needs_modifier_other = "Incluye Ctrl, Alt o Win para que el atajo no interfiera al escribir."
 record_shortcut = "Asignar atajo"
@@ -413,7 +415,15 @@ title = "Después de una grabación Studio"
 hint = "El enlace para compartir siempre se copia"
 title = "Después de una grabación Instant"
 
+[settings.shortcuts.on_cancel]
+hint = "Esc o cerrar el selector"
+title = "Al cancelar"
+
 [settings.shortcuts.outcome]
+cancel_show_cap = "Mostrar Cap"
+cancel_show_cap_hint = "Volver a la grabadora"
+cancel_stay_hidden = "Seguir oculto"
+cancel_stay_hidden_hint = "Salvo que Cap estuviera abierto"
 instant_copy_link = "Solo copiar el enlace"
 instant_copy_link_hint = "No se abre nada"
 instant_open_link = "Abrir el enlace"
@@ -3222,3 +3232,72 @@ verification_failed = "La verificación de la grabación ha fallado: {status}"
 
 [message.cli]
 binary_missing = "No se encontró la CLI incluida en {path}"
+[repair]
+fix = "Reparar"
+fix_recording = "Reparar grabación"
+
+[repair.window]
+title = "Reparar grabación"
+recover_failed = "No se pudo recuperar"
+open_failed = "No se pudo abrir esta grabación"
+privacy = "Cap revisa los archivos de esta grabación para repararla. No se lee nada más de tu ordenador."
+cancel = "Cancelar"
+close = "Cerrar"
+
+[repair.status]
+connecting = "Preparando un espacio de trabajo seguro"
+working = "Revisando tu grabación"
+verifying = "Probando la reparación"
+sending = "Enviando a Cap"
+worked_for = "Terminado en {duration}"
+duration_seconds = "{seconds} s"
+duration_minutes = "{minutes} min {seconds} s"
+timer_seconds = "{seconds} s"
+timer_minutes = "{minutes} min {seconds} s"
+earlier_thoughts = { one = "Mostrar {count} nota anterior", many = "Mostrar {count} de notas anteriores", other = "Mostrar {count} notas anteriores" }
+fewer_thoughts = "Mostrar menos notas"
+
+[repair.tool]
+describe = "Resumen"
+list = "Listar"
+read = "Leer"
+inspect = "Analizar"
+pull = "Copiar"
+edit = "Editar"
+truncate = "Recortar"
+remove = "Apartar"
+replace = "Reemplazar"
+verify = "Probar"
+source_read = "Leer código"
+search = "Buscar"
+run = "Ejecutar"
+write = "Escribir"
+
+[repair.fixed]
+title = "Tu grabación está reparada"
+open = "Abrir grabación"
+
+[repair.help]
+cant_fix_title = "Esta grabación necesita una revisión más a fondo"
+failed_title = "No se pudo completar la reparación"
+send_failed_title = "No se pudo completar el envío"
+explanation = "Envía esta grabación al equipo de Cap: la repararemos a mano y te escribiremos un correo."
+size_line = "Tamaño: {size}"
+send = "Enviar a Cap"
+
+[repair.sending]
+progress = "{sent} de {total}"
+
+[repair.sent]
+title = "Enviada. Te escribiremos cuando esté reparada."
+
+[repair.sign_in]
+title = "Inicia sesión para reparar grabaciones"
+body = "La reparación usa tu cuenta de Cap."
+button = "Iniciar sesión"
+waiting = "Esperando a tu navegador"
+
+[repair.bytes]
+gigabytes = "{value} GB"
+megabytes = "{value} MB"
+kilobytes = "{value} KB"
