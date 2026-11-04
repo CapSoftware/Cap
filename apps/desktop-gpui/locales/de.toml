@@ -2037,6 +2037,13 @@ default_name = "Mein Maskenstil"
 use_for_new = "Für neue Masken verwenden"
 used_for_new = "Neue Masken verwenden diesen Stil"
 
+[editor.panel.style_presets.shape]
+applied_all = "Auf alle Formen angewendet ({number})"
+apply_all = "Auf alle Formen anwenden ({number})"
+default_name = "Mein Formstil"
+use_for_new = "Für neue Formen verwenden"
+used_for_new = "Neue Formen verwenden diesen Stil"
+
 [editor.panel.style_presets.style]
 applied_all = "Auf alle Stilsegmente angewendet ({number})"
 apply_all = "Auf alle Stilsegmente anwenden ({number})"
@@ -2313,6 +2320,7 @@ image = "Bild"
 mask = "Maske"
 screen = "Bildschirm"
 screen_locked = "Der Bildschirm ist gesperrt, solange ein Zoom aktiv ist"
+shape = "Form"
 text_item = "Text"
 
 [editor.clips]
@@ -2721,6 +2729,43 @@ system_sans_serif = "System-Sans-Serif"
 system_serif = "System-Serif"
 system_monospace = "System-Monospace"
 
+[editor.shape]
+title = "Form {number}"
+stroke = "Kontur"
+width = "Breite"
+fill = "Füllung"
+fill_opacity = "Deckkraft der Füllung"
+corner_radius = "Eckenradius"
+arrowhead = "Pfeilspitze"
+number = "Nummer"
+look = "Aussehen"
+shadow = "Schatten"
+animation = "Animation"
+draw = "Form zeichnen"
+toolbar = "Formen"
+draw_hint = "Ziehen Sie in der Vorschau, um zu zeichnen. Klicken Sie, um eine Form zu platzieren."
+decrease = "Verringern"
+increase = "Erhöhen"
+
+[editor.shape.kinds]
+arrow = "Pfeil"
+line = "Linie"
+rectangle = "Rechteck"
+ellipse = "Ellipse"
+highlight = "Markierung"
+badge = "Schritt"
+
+[editor.shape.heads]
+filled = "Gefüllt"
+open = "Offen"
+double = "Doppelt"
+
+[editor.shape.animations]
+none = "Keine"
+fade = "Einblenden"
+scale = "Skalieren"
+draw = "Zeichnen"
+
 [editor.timeline]
 add_shot = "Einstellung hinzufügen"
 add_shot_with_look = "Einstellung hinzufügen · {look} · {seconds} s"
@@ -2744,6 +2789,7 @@ keyboard = "Zeigen Sie beim Tippen Tastendrücke auf dem Bildschirm an."
 mask = "Machen Sie private Bildschirmbereiche unscharf oder schwärzen Sie sie."
 scene = "Wechseln Sie zwischen Layouts für Bildschirm und Kamera."
 scene_unavailable = "Nehmen Sie mit einer Kamera auf, um Szenen zu verwenden."
+shape = "Zeichnen Sie Pfeile, Rahmen, Kreise und Markierungen über Ihre Aufnahme."
 style = "Ändern Sie Hintergrund-, Kamera- und Cursoreinstellungen im Zeitverlauf."
 text_overlay = "Fügen Sie der Leinwand eigene Texteinblendungen und Titel hinzu."
 three_d = "Neigen Sie die Szene in 3D-Perspektive."
@@ -2757,6 +2803,7 @@ image = "Die Bildspur entfernen."
 keyboard = "Die Tastaturspur entfernen."
 mask = "Die Maskenspur entfernen."
 scene = "Die Szenenspur entfernen."
+shape = "Die Formen-Spur entfernen."
 style = "Die Stilspur entfernen."
 text_track = "Die Textspur entfernen."
 three_d = "Die 3D-Spur entfernen."
@@ -2790,10 +2837,64 @@ image = "Bild"
 keyboard = "Tastatur"
 mask = "Maske"
 scene = "Szene"
+shape = "Form"
 style = "Stil"
 text_track = "Text"
 video = "Video"
 zoom = "Zoom"
+
+[editor.transcript]
+cleanup = "Aufräumen"
+cleanup_tooltip = "Füllwörter entfernen und Pausen kürzen"
+delete_matches = "Alle löschen"
+delete_matches_tooltip = "Jeden Treffer aus dem Video schneiden"
+empty_description = "Transkribieren Sie diese Aufnahme auf diesem Computer und bearbeiten Sie dann das Video über seinen Text."
+empty_title = "Noch kein Transkript"
+hint = "Klicken Sie auf ein Wort, um dorthin zu springen. Wählen Sie Wörter aus und drücken Sie die Löschtaste, um sie aus dem Video zu schneiden."
+next_match = "Nächster Treffer"
+no_audio = "Diese Aufnahme hat keinen Ton zum Transkribieren."
+previous_match = "Vorheriger Treffer"
+restore_blocked = "Dieser Teil wurde in der Zeitleiste geschnitten. Nutzen Sie Rückgängig oder ziehen Sie den Clip-Rand, um ihn zurückzuholen."
+restore_hint = { one = "Klicken, um {count} Wort wiederherzustellen", other = "Klicken, um {count} Wörter wiederherzustellen" }
+restore_transition = "Entfernen Sie den Übergang neben diesem Schnitt, um ihn wiederherzustellen."
+search = "Suchen"
+search_count = "{current} von {total}"
+search_none = "Keine Treffer"
+search_placeholder = "Im Transkript suchen"
+seconds = "{value} s"
+selection = { one = "{count} Wort ausgewählt, {seconds} s", other = "{count} Wörter ausgewählt, {seconds} s" }
+selection_cut = { one = "{count} geschnittenes Wort ausgewählt. Drücken Sie die Löschtaste, um es wiederherzustellen.", other = "{count} geschnittene Wörter ausgewählt. Drücken Sie die Löschtaste, um sie wiederherzustellen." }
+skipped_hold = { one = "{count} Schnitt wurde übersprungen, weil eine Vollbild-Texttafel dieses Bild hält", other = "{count} Schnitte wurden übersprungen, weil Vollbild-Texttafeln diese Bilder halten" }
+skipped_last_clip = "Der letzte Clip kann nicht weggeschnitten werden."
+skipped_transition = { one = "{count} Schnitt wurde übersprungen, weil er einen Übergang berührt", other = "{count} Schnitte wurden übersprungen, weil sie Übergänge berühren" }
+title = "Transkript"
+transcribe = "Transkribieren"
+transcribing = "Wird transkribiert…"
+words = { one = "{count} Wort", other = "{count} Wörter" }
+
+[editor.transcript.fillers]
+discourse = "Füllphrasen"
+discourse_hint = "like, you know, so"
+false_start = "Fehlstarts"
+false_start_hint = "we should, we need"
+hesitation = "Zögerlaute"
+hesitation_hint = "um, uh, hmm"
+keep = "Dieses behalten"
+listen = "Anhören"
+none = "Keine Füllwörter in diesen Kategorien übrig"
+remove = "Dieses entfernen"
+remove_all = { one = "{count} entfernen", other = "{count} entfernen" }
+repetition = "Wiederholte Wörter"
+repetition_hint = "the the, I I"
+title = "Füllwörter"
+
+[editor.transcript.pauses]
+apply = "Kürzen"
+keep = "Kürzen auf"
+longer_than = "Pausen länger als"
+none = "Keine so langen Pausen"
+summary = { one = "{count} Pause, spart {seconds} s", other = "{count} Pausen, sparen {seconds} s" }
+title = "Pausen"
 
 [editor.window]
 audio_filter = "Audio"
@@ -2895,11 +2996,12 @@ window_title_placeholder = "Fenstertitel"
 windows_description = "Titelleiste mit Fenstersteuerung"
 
 [editor.window.header]
-captions = "Untertitel"
 delete_recording = "Aufnahme löschen"
 export = "Exportieren"
 open_bundle = "Aufnahmepaket öffnen"
 presets = "Vorlagen"
+transcript = "Transkript"
+transcript_tooltip = "Per Transkript bearbeiten"
 
 [editor.window.image]
 changed = "Dieses Bild hat sich bei der Auswahl eines Ersatzes geändert. Wählen Sie es aus und versuchen Sie es erneut."
@@ -3021,6 +3123,7 @@ mask = { one = "{count} Maskensegment ausgewählt", other = "{count} Maskensegme
 scene = { one = "{count} Szenensegment ausgewählt", other = "{count} Szenensegmente ausgewählt" }
 segments = { one = "{count} Segment ausgewählt", other = "{count} Segmente ausgewählt" }
 select_all = "Alle auswählen"
+shape = { one = "{count} Form ausgewählt", other = "{count} Formen ausgewählt" }
 style = { one = "{count} Stilsegment ausgewählt", other = "{count} Stilsegmente ausgewählt" }
 text_segments = { one = "{count} Textsegment ausgewählt", other = "{count} Textsegmente ausgewählt" }
 three_d = { one = "{count} 3D-Segment ausgewählt", other = "{count} 3D-Segmente ausgewählt" }

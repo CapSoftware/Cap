@@ -2037,6 +2037,13 @@ default_name = "Mon style de masque"
 use_for_new = "Utiliser pour les nouveaux masques"
 used_for_new = "Les nouveaux masques utilisent ce style"
 
+[editor.panel.style_presets.shape]
+applied_all = "Appliqué à toutes les formes ({number})"
+apply_all = "Appliquer à toutes les formes ({number})"
+default_name = "Mon style de forme"
+use_for_new = "Utiliser pour les nouvelles formes"
+used_for_new = "Les nouvelles formes utilisent ce style"
+
 [editor.panel.style_presets.style]
 applied_all = "Appliqué à tous les segments de style ({number})"
 apply_all = "Appliquer à tous les segments de style ({number})"
@@ -2313,6 +2320,7 @@ image = "Image"
 mask = "Masque"
 screen = "Écran"
 screen_locked = "L'écran est verrouillé tant qu'un zoom est actif"
+shape = "Forme"
 text_item = "Texte"
 
 [editor.clips]
@@ -2721,6 +2729,43 @@ system_sans_serif = "Sans-serif système"
 system_serif = "Serif système"
 system_monospace = "Monospace système"
 
+[editor.shape]
+title = "Forme {number}"
+stroke = "Contour"
+width = "Épaisseur"
+fill = "Remplissage"
+fill_opacity = "Opacité du remplissage"
+corner_radius = "Arrondi des coins"
+arrowhead = "Pointe de flèche"
+number = "Numéro"
+look = "Apparence"
+shadow = "Ombre"
+animation = "Animation"
+draw = "Dessiner une forme"
+toolbar = "Formes"
+draw_hint = "Faites glisser sur l’aperçu pour dessiner. Cliquez pour en placer une."
+decrease = "Diminuer"
+increase = "Augmenter"
+
+[editor.shape.kinds]
+arrow = "Flèche"
+line = "Ligne"
+rectangle = "Rectangle"
+ellipse = "Ellipse"
+highlight = "Surlignage"
+badge = "Étape"
+
+[editor.shape.heads]
+filled = "Pleine"
+open = "Ouverte"
+double = "Double"
+
+[editor.shape.animations]
+none = "Aucune"
+fade = "Fondu"
+scale = "Échelle"
+draw = "Tracé"
+
 [editor.timeline]
 add_shot = "Ajouter un plan"
 add_shot_with_look = "Ajouter un plan · {look} · {seconds} s"
@@ -2744,6 +2789,7 @@ keyboard = "Affichez les touches à l'écran pendant que vous tapez."
 mask = "Floutez ou noircissez les zones privées de l'écran."
 scene = "Alternez les dispositions entre votre écran et votre caméra."
 scene_unavailable = "Enregistrez avec une caméra pour utiliser les scènes."
+shape = "Dessinez des flèches, des cadres, des cercles et des surlignages sur votre enregistrement."
 style = "Modifiez l'arrière-plan, la caméra et le curseur au fil du temps."
 text_overlay = "Ajoutez des textes et des titres personnalisés sur le canevas."
 three_d = "Inclinez la scène en perspective 3D."
@@ -2757,6 +2803,7 @@ image = "Supprimer la piste Image."
 keyboard = "Supprimer la piste Clavier."
 mask = "Supprimer la piste Masque."
 scene = "Supprimer la piste Scène."
+shape = "Supprimer la piste Formes."
 style = "Supprimer la piste Style."
 text_track = "Supprimer la piste Texte."
 three_d = "Supprimer la piste 3D."
@@ -2790,10 +2837,64 @@ image = "Image"
 keyboard = "Clavier"
 mask = "Masque"
 scene = "Scène"
+shape = "Forme"
 style = "Style"
 text_track = "Texte"
 video = "Vidéo"
 zoom = "Zoom"
+
+[editor.transcript]
+cleanup = "Nettoyer"
+cleanup_tooltip = "Supprimer les mots de remplissage et raccourcir les pauses"
+delete_matches = "Tout supprimer"
+delete_matches_tooltip = "Couper chaque résultat de la vidéo"
+empty_description = "Transcrivez cet enregistrement sur cet ordinateur, puis modifiez la vidéo en modifiant son texte."
+empty_title = "Pas encore de transcription"
+hint = "Cliquez sur un mot pour y aller. Sélectionnez des mots et appuyez sur la touche Supprimer pour les couper de la vidéo."
+next_match = "Résultat suivant"
+no_audio = "Cet enregistrement n'a pas d'audio à transcrire."
+previous_match = "Résultat précédent"
+restore_blocked = "Cette partie a été coupée dans la timeline. Utilisez Annuler ou faites glisser le bord du clip pour la récupérer."
+restore_hint = { one = "Cliquez pour restaurer {count} mot", many = "Cliquez pour restaurer {count} de mots", other = "Cliquez pour restaurer {count} mots" }
+restore_transition = "Supprimez la transition à côté de cette coupe pour la restaurer."
+search = "Rechercher"
+search_count = "{current} sur {total}"
+search_none = "Aucun résultat"
+search_placeholder = "Rechercher dans la transcription"
+seconds = "{value} s"
+selection = { one = "{count} mot sélectionné, {seconds} s", many = "{count} de mots sélectionnés, {seconds} s", other = "{count} mots sélectionnés, {seconds} s" }
+selection_cut = { one = "{count} mot coupé sélectionné. Appuyez sur la touche Supprimer pour le restaurer.", many = "{count} de mots coupés sélectionnés. Appuyez sur la touche Supprimer pour les restaurer.", other = "{count} mots coupés sélectionnés. Appuyez sur la touche Supprimer pour les restaurer." }
+skipped_hold = { one = "{count} coupe ignorée, car une carte de texte plein écran fige cette image", many = "{count} de coupes ignorées, car des cartes de texte plein écran figent ces images", other = "{count} coupes ignorées, car des cartes de texte plein écran figent ces images" }
+skipped_last_clip = "Le dernier clip ne peut pas être coupé."
+skipped_transition = { one = "{count} coupe ignorée, car elle touche une transition", many = "{count} de coupes ignorées, car elles touchent des transitions", other = "{count} coupes ignorées, car elles touchent des transitions" }
+title = "Transcription"
+transcribe = "Transcrire"
+transcribing = "Transcription…"
+words = { one = "{count} mot", many = "{count} de mots", other = "{count} mots" }
+
+[editor.transcript.fillers]
+discourse = "Expressions de remplissage"
+discourse_hint = "like, you know, so"
+false_start = "Faux départs"
+false_start_hint = "we should, we need"
+hesitation = "Hésitations"
+hesitation_hint = "um, uh, hmm"
+keep = "Garder celui-ci"
+listen = "Écouter"
+none = "Plus de mots de remplissage dans ces catégories"
+remove = "Supprimer celui-ci"
+remove_all = { one = "Supprimer {count}", many = "Supprimer {count}", other = "Supprimer {count}" }
+repetition = "Mots répétés"
+repetition_hint = "the the, I I"
+title = "Mots de remplissage"
+
+[editor.transcript.pauses]
+apply = "Raccourcir"
+keep = "Raccourcir à"
+longer_than = "Pauses de plus de"
+none = "Aucune pause aussi longue"
+summary = { one = "{count} pause, gagne {seconds} s", many = "{count} de pauses, gagnent {seconds} s", other = "{count} pauses, gagnent {seconds} s" }
+title = "Pauses"
 
 [editor.window]
 audio_filter = "Audio"
@@ -2895,11 +2996,12 @@ window_title_placeholder = "Titre de la fenêtre"
 windows_description = "Barre de titre avec boutons de fenêtre"
 
 [editor.window.header]
-captions = "Sous-titres"
 delete_recording = "Supprimer l'enregistrement"
 export = "Exporter"
 open_bundle = "Ouvrir le dossier de l'enregistrement"
 presets = "Préréglages"
+transcript = "Transcription"
+transcript_tooltip = "Modifier via la transcription"
 
 [editor.window.image]
 changed = "Cette image a changé pendant le choix d'un remplacement. Sélectionnez-la et réessayez."
@@ -3021,6 +3123,7 @@ mask = { one = "{count} segment de masque sélectionné", other = "{count} segme
 scene = { one = "{count} segment de scène sélectionné", other = "{count} segments de scène sélectionnés" }
 segments = { one = "{count} segment sélectionné", other = "{count} segments sélectionnés" }
 select_all = "Tout sélectionner"
+shape = { one = "{count} forme sélectionnée", other = "{count} formes sélectionnées" }
 style = { one = "{count} segment de style sélectionné", other = "{count} segments de style sélectionnés" }
 text_segments = { one = "{count} segment de texte sélectionné", other = "{count} segments de texte sélectionnés" }
 three_d = { one = "{count} segment 3D sélectionné", other = "{count} segments 3D sélectionnés" }

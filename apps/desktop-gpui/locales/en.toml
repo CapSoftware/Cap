@@ -2039,6 +2039,13 @@ default_name = { text = "My mask style", context = "Suggested name for a new mas
 use_for_new = "Use for new masks"
 used_for_new = "New masks use this style"
 
+[editor.panel.style_presets.shape]
+applied_all = { text = "Applied to all shapes ({number})", context = "{number} is how many shapes the project has." }
+apply_all = { text = "Apply to all shapes ({number})", context = "{number} is how many shapes the project has." }
+default_name = { text = "My shape style", context = "Suggested name for a new shape style preset." }
+use_for_new = "Use for new shapes"
+used_for_new = "New shapes use this style"
+
 [editor.panel.style_presets.style]
 applied_all = { text = "Applied to all style segments ({number})", context = "{number} is how many style segments the project has." }
 apply_all = { text = "Apply to all style segments ({number})", context = "{number} is how many style segments the project has." }
@@ -2315,6 +2322,7 @@ image = "Image"
 mask = "Mask"
 screen = "Screen"
 screen_locked = "Screen is locked while a zoom is active"
+shape = "Shape"
 text_item = "Text"
 
 [editor.clips]
@@ -2723,6 +2731,43 @@ system_sans_serif = { text = "System Sans-Serif", context = "Font option for cap
 system_serif = { text = "System Serif", context = "Font option for captions and keyboard overlays. Match editor.panel.font." }
 system_monospace = { text = "System Monospace", context = "Font option for captions and keyboard overlays. Match editor.panel.font." }
 
+[editor.shape]
+title = { text = "Shape {number}", context = "Inspector heading; {number} starts at 1." }
+stroke = "Stroke"
+width = "Width"
+fill = "Fill"
+fill_opacity = "Fill Opacity"
+corner_radius = "Corner Radius"
+arrowhead = "Arrowhead"
+number = "Number"
+look = "Look"
+shadow = "Shadow"
+animation = "Animation"
+draw = "Draw a shape"
+toolbar = "Shapes"
+draw_hint = "Drag on the preview to draw. Click to place one."
+decrease = "Decrease"
+increase = "Increase"
+
+[editor.shape.kinds]
+arrow = "Arrow"
+line = "Line"
+rectangle = "Rectangle"
+ellipse = "Ellipse"
+highlight = "Highlight"
+badge = { text = "Step", context = "A numbered circle marking a step in a tutorial." }
+
+[editor.shape.heads]
+filled = "Filled"
+open = "Open"
+double = "Double"
+
+[editor.shape.animations]
+none = "None"
+fade = "Fade"
+scale = "Scale"
+draw = "Draw on"
+
 [editor.timeline]
 add_shot = "Add shot"
 add_shot_with_look = { text = "Add shot · {look} · {seconds}s", context = "Ghost on the 3D track. {look} is the camera move name, {seconds} a length such as 2.5." }
@@ -2746,6 +2791,7 @@ keyboard = "Display key presses on screen as you type."
 mask = "Blur or black out private areas of the screen."
 scene = "Switch layouts between your screen and camera."
 scene_unavailable = "Record with a camera to use scenes."
+shape = "Draw arrows, boxes, circles and highlights over your recording."
 style = "Change background, camera and cursor settings over time."
 text_overlay = "Add custom text overlays and titles to the canvas."
 three_d = "Tilt the scene in 3D perspective."
@@ -2759,6 +2805,7 @@ image = "Remove the Image track."
 keyboard = "Remove the Keyboard track."
 mask = "Remove the Mask track."
 scene = "Remove the Scene track."
+shape = "Remove the Shape track."
 style = "Remove the Style track."
 text_track = "Remove the Text track."
 three_d = "Remove the 3D track."
@@ -2792,10 +2839,64 @@ image = "Image"
 keyboard = "Keyboard"
 mask = "Mask"
 scene = "Scene"
+shape = "Shape"
 style = "Style"
 text_track = "Text"
 video = { text = "Video", context = "Timeline gutter label of the recording's video track." }
 zoom = "Zoom"
+
+[editor.transcript]
+cleanup = "Clean up"
+cleanup_tooltip = "Remove filler words and shorten pauses"
+delete_matches = "Delete all"
+delete_matches_tooltip = "Cut every match from the video"
+empty_description = "Transcribe this recording on this computer, then edit the video by editing its text."
+empty_title = "No transcript yet"
+hint = "Click a word to jump to it. Select words and press Delete to cut them from the video."
+next_match = "Next match"
+no_audio = "This recording has no audio to transcribe."
+previous_match = "Previous match"
+restore_blocked = "This part was cut on the timeline. Use Undo or drag the clip edge to bring it back."
+restore_hint = { one = "Click to restore {count} word", other = "Click to restore {count} words" }
+restore_transition = "Remove the transition next to this cut to restore it."
+search = "Find"
+search_count = { text = "{current} of {total}", context = "Search results: {current} is the highlighted match, {total} how many there are." }
+search_none = "No matches"
+search_placeholder = "Find in transcript"
+seconds = { text = "{value} s", context = "{value} is a number of seconds such as 1.5." }
+selection = { one = "{count} word selected, {seconds} s", other = "{count} words selected, {seconds} s", context = "{seconds} is how long the selected words take to say, such as 2.4." }
+selection_cut = { one = "{count} cut word selected. Press Delete to restore it.", other = "{count} cut words selected. Press Delete to restore them." }
+skipped_hold = { one = "{count} cut was skipped because a fullscreen text card holds that frame", other = "{count} cuts were skipped because fullscreen text cards hold those frames" }
+skipped_last_clip = "The last clip cannot be cut away."
+skipped_transition = { one = "{count} cut was skipped because it touches a transition", other = "{count} cuts were skipped because they touch transitions" }
+title = "Transcript"
+transcribe = "Transcribe"
+transcribing = "Transcribing…"
+words = { one = "{count} word", other = "{count} words" }
+
+[editor.transcript.fillers]
+discourse = "Filler phrases"
+discourse_hint = { text = "like, you know, so", context = "English examples of the fillers this category finds. Detection is English only, so keep them in English." }
+false_start = "False starts"
+false_start_hint = { text = "we should, we need", context = "An English example of a restarted sentence. Keep it in English." }
+hesitation = "Hesitations"
+hesitation_hint = { text = "um, uh, hmm", context = "English hesitation sounds. Keep them in English." }
+keep = "Keep this one"
+listen = "Listen"
+none = "No filler words left in these categories"
+remove = "Remove this one"
+remove_all = { one = "Remove {count}", other = "Remove {count}" }
+repetition = "Repeated words"
+repetition_hint = { text = "the the, I I", context = "English examples of a repeated word. Keep them in English." }
+title = "Filler words"
+
+[editor.transcript.pauses]
+apply = "Shorten"
+keep = "Shorten to"
+longer_than = "Pauses longer than"
+none = "No pauses that long"
+summary = { one = "{count} pause, saves {seconds} s", other = "{count} pauses, saves {seconds} s", context = "{seconds} is how much shorter the video gets, such as 12.5." }
+title = "Pauses"
 
 [editor.window]
 audio_filter = { text = "Audio", context = "File type filter name in the audio file picker." }
@@ -2897,11 +2998,12 @@ window_title_placeholder = "Window title"
 windows_description = "Title bar with window controls"
 
 [editor.window.header]
-captions = "Captions"
 delete_recording = "Delete recording"
 export = "Export"
 open_bundle = "Open recording bundle"
 presets = "Presets"
+transcript = "Transcript"
+transcript_tooltip = "Edit by transcript"
 
 [editor.window.image]
 changed = "This image changed while choosing a replacement. Select it and try again."
@@ -3023,6 +3125,7 @@ mask = { one = "{count} mask segment selected", other = "{count} mask segments s
 scene = { one = "{count} scene segment selected", other = "{count} scene segments selected" }
 segments = { one = "{count} segment selected", other = "{count} segments selected" }
 select_all = "Select all"
+shape = { one = "{count} shape selected", other = "{count} shapes selected" }
 style = { one = "{count} style segment selected", other = "{count} style segments selected" }
 text_segments = { one = "{count} text segment selected", other = "{count} text segments selected" }
 three_d = { one = "{count} 3D segment selected", other = "{count} 3D segments selected" }

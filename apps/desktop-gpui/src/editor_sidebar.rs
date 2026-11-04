@@ -752,6 +752,9 @@ pub enum ColorTarget {
     /// The right-hand stop of the horizontal gradient, only reachable while
     /// `gradient_color` is set.
     TextGradient(usize),
+    /// A shape's stroke and fill, per shape index.
+    ShapeStroke(usize),
+    ShapeFill(usize),
 }
 
 impl ColorTarget {
@@ -1808,6 +1811,18 @@ impl EditorWindow {
                 .as_ref()
                 .and_then(|timeline| timeline.text_segments.get(index))
                 .and_then(|segment| segment.gradient_color.clone()),
+            ColorTarget::ShapeStroke(index) => self
+                .project
+                .timeline
+                .as_ref()
+                .and_then(|timeline| timeline.shape_segments.get(index))
+                .map(|segment| segment.stroke_color.clone()),
+            ColorTarget::ShapeFill(index) => self
+                .project
+                .timeline
+                .as_ref()
+                .and_then(|timeline| timeline.shape_segments.get(index))
+                .map(|segment| segment.fill_color.clone()),
             _ => None,
         }
     }
@@ -1952,6 +1967,24 @@ impl EditorWindow {
                         return false;
                     }
                     segment.gradient_color = Some(hex);
+                    true
+                })
+            }
+            ColorTarget::ShapeStroke(index) => {
+                self.edit_shape_segment("shape-stroke-color", index, window, cx, move |segment| {
+                    if segment.stroke_color == hex {
+                        return false;
+                    }
+                    segment.stroke_color = hex;
+                    true
+                })
+            }
+            ColorTarget::ShapeFill(index) => {
+                self.edit_shape_segment("shape-fill-color", index, window, cx, move |segment| {
+                    if segment.fill_color == hex {
+                        return false;
+                    }
+                    segment.fill_color = hex;
                     true
                 })
             }
@@ -4180,6 +4213,7 @@ impl EditorWindow {
             "text" => TrackKind::Text,
             "caption" => TrackKind::Caption,
             "mask" => TrackKind::Mask,
+            "shape" => TrackKind::Shape,
             "audio" => TrackKind::Audio,
             "keyboard" => TrackKind::Keyboard,
             "scene" => TrackKind::Scene,

@@ -2903,7 +2903,7 @@ impl EditorWindow {
                     .full_width()
                     .disabled(generating || any_deleting)
                     .on_click(cx.listener(|this, _, window, cx| {
-                        this.generate_captions_clicked(window, cx);
+                        this.generate_transcript(true, window, cx);
                     })),
                 );
             }
@@ -3501,7 +3501,7 @@ impl EditorWindow {
     /// -- reattach the progress poller. Deferred out of render because it
     /// mutates the sidebar state, and keyed by entity so it runs once per
     /// window.
-    fn ensure_captions_init(&self, cx: &mut Context<Self>) {
+    pub(crate) fn ensure_captions_init(&self, cx: &mut Context<Self>) {
         static INITIALISED: LazyLock<Mutex<HashSet<EntityId>>> =
             LazyLock::new(|| Mutex::new(HashSet::new()));
         if !INITIALISED
@@ -3572,11 +3572,14 @@ impl EditorWindow {
     /// tab reads the download, so only the sidebar is rebuilt.
     pub(crate) fn repaint_caption_download(&mut self, cx: &mut Context<Self>) {
         self.invalidate_sidebar(cx);
+        if self.transcript.open {
+            self.invalidate_transcript(cx);
+        }
     }
 
     /// `downloadModel` (`CaptionsTab.tsx:643-690`). The download runs on the
     /// tokio runtime and survives this window; the poll task repaints.
-    fn start_caption_model_download(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn start_caption_model_download(&mut self, cx: &mut Context<Self>) {
         let model = self.selected_caption_model().name;
         if !transcription::begin_download(model) {
             return;
@@ -3604,8 +3607,15 @@ impl EditorWindow {
 
     /// `generateCaptions` (`CaptionsTab.tsx:715-757`): transcribe on the
     /// tokio blocking pool, then apply the result through one `edit_project`
-    /// write so a regenerate is a single undo entry.
-    fn generate_captions_clicked(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// write so a regenerate is a single undo entry. The transcript panel
+    /// passes `show_captions: false`: transcribing to edit by text must not
+    /// switch subtitles on.
+    pub(crate) fn generate_transcript(
+        &mut self,
+        show_captions: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(summary) = self.summary() else {
             return;
         };
@@ -3661,6 +3671,7 @@ impl EditorWindow {
                             segments,
                             &recording_durations,
                             recording_duration,
+                            show_captions,
                             window,
                             cx,
                         );
@@ -3697,11 +3708,16 @@ impl EditorWindow {
         segments: Vec<CaptionSegment>,
         recording_durations: &[f64],
         recording_duration: f64,
+        show_captions: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let recording_durations = recording_durations.to_vec();
         self.edit_project("caption-generate", window, cx, move |project| {
+            let shown = project
+                .captions
+                .as_ref()
+                .is_some_and(|captions| captions.settings.enabled);
             crate::style_presets::seed_default_captions(project);
             transcription::apply_caption_result(
                 project,
@@ -3709,10 +3725,15 @@ impl EditorWindow {
                 &recording_durations,
                 recording_duration,
             );
+            if !show_captions && let Some(captions) = project.captions.as_mut() {
+                captions.settings.enabled = shown;
+            }
             true
         });
-        // `setEditorState("timeline", "tracks", "caption", true)`.
-        self.tracks.caption = true;
+        if show_captions {
+            // `setEditorState("timeline", "tracks", "caption", true)`.
+            self.tracks.caption = true;
+        }
         cx.notify();
     }
 

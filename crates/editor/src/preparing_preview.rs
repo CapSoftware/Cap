@@ -376,7 +376,7 @@ pub(crate) fn validate_input(input: &PreparingPreviewInput) -> Result<f64, Prepa
         || project.keyboard.is_some()
         || !project.annotations.is_empty()
         || !project.hidden_text_segments.is_empty()
-        || !project.overlay_order.is_empty()
+        || project.has_overlay_order()
         || !timeline.transitions.is_empty()
         || !timeline.scene_segments.is_empty()
         || !timeline.mask_segments.is_empty()
@@ -386,6 +386,7 @@ pub(crate) fn validate_input(input: &PreparingPreviewInput) -> Result<f64, Prepa
         || !timeline.audio_segments.is_empty()
         || !timeline.style_segments.is_empty()
         || !timeline.image_segments.is_empty()
+        || !timeline.shape_segments.is_empty()
         || !timeline.camera3d_segments.is_empty()
     {
         return Err(invalid("Presentation requires ordinary project loading"));

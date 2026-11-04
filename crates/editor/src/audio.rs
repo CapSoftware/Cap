@@ -271,6 +271,8 @@ impl AudioRenderer {
             // it, so timeline-positioned music is aligned to the same grid.
             let frame_start = self.elapsed_samples;
             let (written, mut buf) = self.render_timeline_frame_raw(samples, project, timeline)?;
+            let joins = crate::join_fade::hard_cut_joins(timeline, Self::SAMPLE_RATE);
+            crate::join_fade::apply_join_fades(&mut buf, frame_start, &joins);
 
             if !self.music.is_empty() && !timeline.audio_segments.is_empty() {
                 mix_music(&self.music, timeline, frame_start, written, &mut buf);
@@ -320,6 +322,7 @@ impl AudioRenderer {
             self.cursor.samples += written;
             return Ok((written != 0).then_some(written));
         };
+        let joins = crate::join_fade::hard_cut_joins(timeline, Self::SAMPLE_RATE);
         while written < samples {
             sources.check_cancelled()?;
             let (mapping, span) = if !timeline.transitions.is_empty()
@@ -417,6 +420,11 @@ impl AudioRenderer {
                         );
                     }
                 }
+                crate::join_fade::apply_join_fades(
+                    output,
+                    self.elapsed_samples + span_offset,
+                    &joins,
+                );
                 emit(written + span_offset, output)?;
                 span_offset += count;
             }
@@ -1943,6 +1951,7 @@ fn audio_project_key(project: &ProjectConfiguration) -> Option<Vec<u8>> {
         hotkeys: _,
         timeline,
         overlay_order: _,
+        overlay_order_with_shapes: _,
         captions: _,
         keyboard: _,
         clips,
@@ -1968,6 +1977,7 @@ fn audio_project_key(project: &ProjectConfiguration) -> Option<Vec<u8>> {
             audio_segments,
             style_segments: _,
             image_segments: _,
+            shape_segments: _,
             camera3d_segments: _,
         } = timeline;
         let segments = segments
@@ -3545,6 +3555,7 @@ mod tests {
                 scene_segments: Vec::new(),
                 style_segments: Vec::new(),
                 image_segments: Vec::new(),
+                shape_segments: Vec::new(),
                 mask_segments: Vec::new(),
                 text_segments: Vec::new(),
                 caption_segments: Vec::new(),
@@ -3681,6 +3692,7 @@ mod tests {
                     scene_segments: Vec::new(),
                     style_segments: Vec::new(),
                     image_segments: Vec::new(),
+                    shape_segments: Vec::new(),
                     mask_segments: Vec::new(),
                     text_segments: Vec::new(),
                     caption_segments: Vec::new(),
@@ -3969,6 +3981,7 @@ mod tests {
                 scene_segments: Vec::new(),
                 style_segments: Vec::new(),
                 image_segments: Vec::new(),
+                shape_segments: Vec::new(),
                 mask_segments: Vec::new(),
                 text_segments: Vec::new(),
                 caption_segments: Vec::new(),
@@ -4085,6 +4098,7 @@ mod tests {
                 scene_segments: Vec::new(),
                 style_segments: Vec::new(),
                 image_segments: Vec::new(),
+                shape_segments: Vec::new(),
                 mask_segments: Vec::new(),
                 text_segments: Vec::new(),
                 caption_segments: Vec::new(),
@@ -4316,6 +4330,7 @@ mod tests {
                 scene_segments: Vec::new(),
                 style_segments: Vec::new(),
                 image_segments: Vec::new(),
+                shape_segments: Vec::new(),
                 mask_segments: Vec::new(),
                 text_segments: Vec::new(),
                 caption_segments: Vec::new(),
@@ -4358,6 +4373,7 @@ mod tests {
                 scene_segments: Vec::new(),
                 style_segments: Vec::new(),
                 image_segments: Vec::new(),
+                shape_segments: Vec::new(),
                 mask_segments: Vec::new(),
                 text_segments: Vec::new(),
                 caption_segments: Vec::new(),
@@ -4501,6 +4517,7 @@ mod tests {
                 scene_segments: Vec::new(),
                 style_segments: Vec::new(),
                 image_segments: Vec::new(),
+                shape_segments: Vec::new(),
                 mask_segments: Vec::new(),
                 text_segments: Vec::new(),
                 caption_segments: Vec::new(),
@@ -4905,6 +4922,7 @@ mod tests {
                     scene_segments: Vec::new(),
                     style_segments: Vec::new(),
                     image_segments: Vec::new(),
+                    shape_segments: Vec::new(),
                     mask_segments: Vec::new(),
                     text_segments: Vec::new(),
                     caption_segments: Vec::new(),

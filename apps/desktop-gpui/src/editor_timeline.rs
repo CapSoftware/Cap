@@ -42,7 +42,7 @@ pub use playback_follow::PlaybackFollow;
 
 use cap_project::{
     CaptionTrackSegment, MaskKind, OverlayTrack, OverlayTrackKind, ProjectConfiguration, SceneMode,
-    TextLayout, TimelineConfiguration, ZoomMode,
+    ShapeKind, TextLayout, TimelineConfiguration, ZoomMode,
 };
 use gpui::{
     AnyElement, FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement, Pixels,
@@ -187,6 +187,7 @@ pub mod track_color {
     pub const IMAGE: u32 = 0xf59e0b;
     pub const TEXT: u32 = 0x14b8a6;
     pub const MASK: u32 = 0xef4444;
+    pub const SHAPE: u32 = 0xd946ef;
     pub const SCENE: u32 = 0x8b5cf6;
     pub const AUDIO: u32 = 0x22c55e;
     pub const THREE_D: u32 = 0x6366f1;
@@ -973,6 +974,7 @@ pub enum TrackKind {
     Caption,
     Keyboard,
     Text,
+    Shape,
     Mask,
     Audio,
     Zoom,
@@ -992,6 +994,7 @@ impl TrackKind {
             Self::Caption => tr::editor::timeline::track::captions(),
             Self::Keyboard => tr::editor::timeline::track::keyboard(),
             Self::Text => tr::editor::timeline::track::text_track(),
+            Self::Shape => tr::editor::timeline::track::shape(),
             Self::Mask => tr::editor::timeline::track::mask(),
             Self::Audio => tr::editor::timeline::track::audio(),
             Self::Zoom => tr::editor::timeline::track::zoom(),
@@ -1008,6 +1011,7 @@ impl TrackKind {
             Self::Caption => "icons/captions.svg",
             Self::Keyboard => "icons/keyboard.svg",
             Self::Text => "icons/type.svg",
+            Self::Shape => "icons/shapes.svg",
             Self::Mask => "icons/box-select.svg",
             Self::Audio => "icons/music.svg",
             Self::Zoom => "icons/search.svg",
@@ -1024,6 +1028,7 @@ impl TrackKind {
             Self::Caption => track_color::CAPTION,
             Self::Keyboard => track_color::KEYBOARD,
             Self::Text => track_color::TEXT,
+            Self::Shape => track_color::SHAPE,
             Self::Mask => track_color::MASK,
             Self::Audio => track_color::AUDIO,
             Self::Zoom => track_color::ZOOM,
@@ -1049,6 +1054,7 @@ impl TrackKind {
             Self::Caption => tr::editor::timeline::picker::caption(),
             Self::Keyboard => tr::editor::timeline::picker::keyboard(),
             Self::Text => tr::editor::timeline::picker::text_overlay(),
+            Self::Shape => tr::editor::timeline::picker::shape(),
             Self::Mask => tr::editor::timeline::picker::mask(),
             Self::Audio => tr::editor::timeline::picker::audio(),
             Self::Scene => tr::editor::timeline::picker::scene(),
@@ -1066,6 +1072,7 @@ impl TrackKind {
             Self::Caption => tr::editor::timeline::remove::captions(),
             Self::Keyboard => tr::editor::timeline::remove::keyboard(),
             Self::Text => tr::editor::timeline::remove::text_track(),
+            Self::Shape => tr::editor::timeline::remove::shape(),
             Self::Mask => tr::editor::timeline::remove::mask(),
             Self::Audio => tr::editor::timeline::remove::audio(),
             Self::Zoom => tr::editor::timeline::remove::zoom(),
@@ -1084,7 +1091,7 @@ impl TrackKind {
     pub fn supports_multiple(self) -> bool {
         matches!(
             self,
-            Self::Text | Self::Mask | Self::Audio | Self::Style | Self::Image
+            Self::Text | Self::Shape | Self::Mask | Self::Audio | Self::Style | Self::Image
         )
     }
 
@@ -1093,6 +1100,7 @@ impl TrackKind {
             Self::Mask => OverlayTrackKind::Mask,
             Self::Image => OverlayTrackKind::Image,
             Self::Text => OverlayTrackKind::Text,
+            Self::Shape => OverlayTrackKind::Shape,
             _ => return None,
         };
         Some(OverlayTrack { kind, track })
@@ -1105,6 +1113,7 @@ pub const ADD_TRACK_OPTIONS: &[TrackKind] = &[
     TrackKind::Caption,
     TrackKind::Keyboard,
     TrackKind::Text,
+    TrackKind::Shape,
     TrackKind::Mask,
     TrackKind::Audio,
     TrackKind::Scene,
@@ -1120,6 +1129,7 @@ pub struct TrackLanes {
     pub scene: bool,
     pub three_d: bool,
     pub text: u32,
+    pub shape: u32,
     pub mask: u32,
     pub audio: u32,
 }
@@ -1159,6 +1169,9 @@ impl TrackLanes {
             text: timeline.map_or(0, |timeline| {
                 used_config_lane_count(timeline.text_segments.iter().map(|segment| segment.track))
             }),
+            shape: timeline.map_or(0, |timeline| {
+                used_config_lane_count(timeline.shape_segments.iter().map(|segment| segment.track))
+            }),
             mask: timeline.map_or(0, |timeline| {
                 used_config_lane_count(timeline.mask_segments.iter().map(|segment| segment.track))
             }),
@@ -1177,6 +1190,7 @@ impl TrackLanes {
             TrackKind::Style => self.style > 0,
             TrackKind::Image => self.image > 0,
             TrackKind::Text => self.text > 0,
+            TrackKind::Shape => self.shape > 0,
             TrackKind::Mask => self.mask > 0,
             TrackKind::Audio => self.audio > 0,
             TrackKind::Clip | TrackKind::Zoom => true,
@@ -1188,6 +1202,7 @@ impl TrackLanes {
             TrackKind::Style => self.style,
             TrackKind::Image => self.image,
             TrackKind::Text => self.text,
+            TrackKind::Shape => self.shape,
             TrackKind::Mask => self.mask,
             TrackKind::Audio => self.audio,
             _ => 0,
@@ -1275,6 +1290,12 @@ pub enum SegmentDetail {
     Mask {
         label: &'static str,
     },
+    /// The shape's kind, and its stroke (or fill) colour as a swatch.
+    Shape {
+        kind: ShapeKind,
+        color: Hsla,
+        enabled: bool,
+    },
     /// `TL/AudioTrack.tsx:449-540`.
     Audio {
         name: SharedString,
@@ -1314,6 +1335,7 @@ impl TrackRow {
             OverlayTrackKind::Mask => TrackKind::Mask,
             OverlayTrackKind::Image => TrackKind::Image,
             OverlayTrackKind::Text => TrackKind::Text,
+            OverlayTrackKind::Shape => TrackKind::Shape,
         };
         Self {
             kind,
@@ -1333,6 +1355,7 @@ pub struct TimelineModel {
     pub scene: Vec<Segment>,
     pub three_d: Vec<Segment>,
     pub text: Vec<Segment>,
+    pub shape: Vec<Segment>,
     pub mask: Vec<Segment>,
     pub audio: Vec<Segment>,
     pub caption: Vec<Segment>,
@@ -1377,6 +1400,7 @@ impl TimelineModel {
             TrackKind::Caption => &self.caption,
             TrackKind::Keyboard => &self.keyboard,
             TrackKind::Text => &self.text,
+            TrackKind::Shape => &self.shape,
             TrackKind::Mask => &self.mask,
             TrackKind::Audio => &self.audio,
             TrackKind::Zoom => &self.zoom,
@@ -1459,6 +1483,21 @@ impl TimelineModel {
                     // draws bold.
                     bold: segment.font_weight >= 600.,
                     fullscreen: matches!(segment.layout, TextLayout::Fullscreen),
+                    enabled: segment.enabled,
+                },
+            })
+            .collect();
+
+        let shape = timeline
+            .shape_segments
+            .iter()
+            .map(|segment| Segment {
+                start: segment.start,
+                end: segment.end,
+                lane: segment.track,
+                detail: SegmentDetail::Shape {
+                    kind: segment.kind,
+                    color: shape_swatch(segment),
                     enabled: segment.enabled,
                 },
             })
@@ -1577,6 +1616,7 @@ impl TimelineModel {
             scene,
             three_d,
             text,
+            shape,
             mask,
             audio,
             caption,
@@ -1653,6 +1693,7 @@ fn build_rows(
     let mut overlay_tracks = Vec::new();
     for (kind, segments, count) in [
         (TrackKind::Text, &model.text, lanes.text),
+        (TrackKind::Shape, &model.shape, lanes.shape),
         (TrackKind::Image, &model.image, lanes.image),
         (TrackKind::Mask, &model.mask, lanes.mask),
     ] {
@@ -2789,6 +2830,7 @@ fn render_segment(
     // `"opacity-50"` (audio, `TL/AudioTrack.tsx:457`).
     let dim = match &segment.detail {
         SegmentDetail::Text { enabled, .. }
+        | SegmentDetail::Shape { enabled, .. }
         | SegmentDetail::Style { enabled, .. }
         | SegmentDetail::Image { enabled, .. }
             if !enabled =>
@@ -3856,6 +3898,31 @@ fn label_body(
         // The mask track passes no `glyph`.
         (SegmentDetail::Mask { .. }, LabelTier::Glyph) => return None,
 
+        (
+            SegmentDetail::Shape {
+                kind,
+                color: swatch,
+                ..
+            },
+            LabelTier::Full | LabelTier::Compact,
+        ) => label_row()
+            .gap(px(6.))
+            .child(
+                svg()
+                    .path(shape_kind_icon(*kind))
+                    .size(px(12.))
+                    .flex_none()
+                    .text_color(*swatch),
+            )
+            .child(label_primary(theme, color).child(shape_kind_label(*kind)))
+            .into_any_element(),
+        (SegmentDetail::Shape { kind, .. }, LabelTier::Glyph) => label_glyph(
+            theme,
+            color,
+            shape_kind_icon(*kind),
+            (visible_width - 8.).clamp(8., 12.) as f32,
+        ),
+
         // -- Audio (`TL/AudioTrack.tsx:532-549`) --------------------------
         (SegmentDetail::Audio { name, .. }, LabelTier::Full) => label_row()
             .child(label_primary(theme, color).child(name.clone()))
@@ -3888,6 +3955,41 @@ fn label_body(
             .child("\u{2328}")
             .into_any_element(),
     })
+}
+
+pub fn shape_kind_icon(kind: ShapeKind) -> &'static str {
+    match kind {
+        ShapeKind::Arrow => "icons/arrow-up-right.svg",
+        ShapeKind::Line => "icons/slash.svg",
+        ShapeKind::Rectangle => "icons/square.svg",
+        ShapeKind::Ellipse => "icons/circle.svg",
+        ShapeKind::Highlight => "icons/highlighter.svg",
+        ShapeKind::Badge => "icons/circle-number.svg",
+    }
+}
+
+pub fn shape_kind_label(kind: ShapeKind) -> &'static str {
+    match kind {
+        ShapeKind::Arrow => tr::editor::shape::kinds::arrow(),
+        ShapeKind::Line => tr::editor::shape::kinds::line(),
+        ShapeKind::Rectangle => tr::editor::shape::kinds::rectangle(),
+        ShapeKind::Ellipse => tr::editor::shape::kinds::ellipse(),
+        ShapeKind::Highlight => tr::editor::shape::kinds::highlight(),
+        ShapeKind::Badge => tr::editor::shape::kinds::badge(),
+    }
+}
+
+fn shape_swatch(segment: &cap_project::ShapeSegment) -> Hsla {
+    let fill_first = match segment.kind {
+        ShapeKind::Highlight | ShapeKind::Badge => segment.fill,
+        _ => segment.fill && segment.stroke_width <= 0.,
+    };
+    let color = if fill_first {
+        &segment.fill_color
+    } else {
+        &segment.stroke_color
+    };
+    parse_hex_color(color).unwrap_or_else(gpui::white)
 }
 
 /// The clip's state badges -- muted, cursor hidden (`TL/ClipTrack.tsx`).
@@ -5754,6 +5856,57 @@ mod style_image_tests {
                 }
             ]
         );
+    }
+
+    #[test]
+    fn shape_lanes_build_rows_and_segments_in_the_overlay_stack() {
+        let project: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "timeline": {
+                "segments": [{"start": 0, "end": 20, "timescale": 1}],
+                "zoomSegments": [],
+                "textSegments": [{"start": 0.0, "end": 2.0}],
+                "shapeSegments": [
+                    {"start": 1.0, "end": 3.0, "kind": "badge", "fill": true, "fillColor": "#00FF00"},
+                    {"start": 2.0, "end": 4.0, "track": 1, "kind": "rectangle", "enabled": false}
+                ]
+            }
+        }))
+        .unwrap();
+        let model = TimelineModel::build(&project, false, false);
+        let lanes = TrackLanes::from_project(&project, false);
+        assert_eq!(lanes.shape, 2);
+        assert!(lanes.is_active(TrackKind::Shape));
+        assert_eq!(lanes.count(TrackKind::Shape), 2);
+        let overlays = model
+            .rows
+            .iter()
+            .filter(|row| row.kind.overlay_track(row.lane).is_some())
+            .map(|row| (row.kind, row.lane))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            overlays,
+            [
+                (TrackKind::Text, 0),
+                (TrackKind::Shape, 1),
+                (TrackKind::Shape, 0)
+            ]
+        );
+        let shapes = model.segments(TrackKind::Shape);
+        assert_eq!(shapes.len(), 2);
+        assert!(matches!(
+            shapes[0].detail,
+            SegmentDetail::Shape {
+                kind: ShapeKind::Badge,
+                enabled: true,
+                ..
+            }
+        ));
+        assert!(matches!(
+            shapes[1].detail,
+            SegmentDetail::Shape { enabled: false, .. }
+        ));
+        assert!(TrackKind::Shape.supports_multiple());
+        assert!(ADD_TRACK_OPTIONS.contains(&TrackKind::Shape));
     }
 
     #[test]
