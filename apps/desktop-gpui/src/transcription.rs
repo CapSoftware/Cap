@@ -3242,6 +3242,45 @@ mod tests {
     }
 
     #[test]
+    fn re_transcribing_or_closing_stops_a_running_refinement() {
+        let path = PathBuf::from("/tmp/cap-refinement-cancel-test.cap");
+        let stop = begin_refinement(&path).expect("free slot");
+        assert!(
+            begin_refinement(&path).is_none(),
+            "one refinement per project"
+        );
+        assert!(ui_snapshot(&path).refining);
+        assert!(begin_generation(&path));
+        assert!(stop.load(Ordering::Relaxed));
+        assert!(!ui_snapshot(&path).refining);
+        finish_generation(&path, None);
+
+        let stop = begin_refinement(&path).expect("free again");
+        cancel_refinement(&path);
+        assert!(stop.load(Ordering::Relaxed));
+        let next = begin_refinement(&path).expect("free after cancel");
+        finish_refinement(&path, &stop);
+        assert!(
+            ui_snapshot(&path).refining,
+            "a stale finish leaves the new run alone"
+        );
+        finish_refinement(&path, &next);
+        assert!(!ui_snapshot(&path).refining);
+    }
+
+    #[test]
+    fn a_refinement_request_persists_until_it_is_cleared() {
+        let project = tempfile::tempdir().unwrap();
+        assert!(refinement_request(project.path()).is_none());
+        let request = RefinementRequest::new("best", "en", &[0.0..12.5, 20.0..30.0]);
+        save_refinement_request(project.path(), &request).unwrap();
+        assert_eq!(refinement_request(project.path()), Some(request));
+        clear_refinement_request(project.path());
+        assert!(refinement_request(project.path()).is_none());
+        clear_refinement_request(project.path());
+    }
+
+    #[test]
     fn a_refinement_keeps_caption_edits_made_while_it_ran() {
         let mut project = cut_project();
         let input = project.captions.as_ref().unwrap().segments.clone();

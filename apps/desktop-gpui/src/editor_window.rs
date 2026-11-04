@@ -3774,7 +3774,7 @@ impl EditorWindow {
         cx.on_next_frame(window, move |this, window, cx| {
             this.frame_stats_tick(started, now, seconds, intervals, window, cx);
         });
-        window.request_animation_frame();
+        cx.notify();
     }
 
     /// Harness only (`CAP_GPUI_AUTO_PLAYBACK`): stop and emit the run's
