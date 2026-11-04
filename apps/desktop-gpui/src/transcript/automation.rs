@@ -353,6 +353,8 @@ impl EditorWindow {
                     "text": word.text,
                     "start": word.start,
                     "end": word.end,
+                    "voiced_start": doc.voiced[index].start,
+                    "voiced_end": doc.voiced[index].end,
                     "kept": edl.is_kept(index),
                     "output_start": edl.source_to_output(word.start),
                     "output_end": edl.source_to_output(word.end),
@@ -369,6 +371,17 @@ impl EditorWindow {
                     .collect::<Vec<_>>()
             }),
             "words": words,
+            "energy": self.transcript.energy.is_some(),
+            "silences": self.transcript.energy.as_ref().map(|energy| energy.silences().to_vec()),
+            "pauses": self.transcript_pause_plan().iter().map(|pause| {
+                serde_json::json!({
+                    "after_word": pause.after_word,
+                    "next_word": pause.next_word,
+                    "length": pause.length,
+                    "saves": pause.saves,
+                    "cuts": pause.cuts,
+                })
+            }).collect::<Vec<_>>(),
         });
         match std::fs::write(path, serde_json::to_vec_pretty(&body).unwrap_or_default()) {
             Ok(()) => format!("wrote {path}"),

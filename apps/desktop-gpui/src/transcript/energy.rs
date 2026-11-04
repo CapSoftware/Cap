@@ -1,14 +1,25 @@
+use std::ops::Range;
 use std::sync::Arc;
 
 /// 5 ms hops: fine enough to land a cut between two syllables, coarse enough
 /// that a two hour recording costs under 6 MB.
 pub const HOP_SECONDS: f64 = 0.005;
 const SAMPLE_RATE: f64 = 48_000.0;
+pub const MIN_SILENCE: f64 = 0.2;
+const DIGITAL_SILENCE_DB: f32 = -90.0;
+const FLOOR_PERCENTILE: f64 = 0.02;
+const SPEECH_SECONDS: f64 = 1.0;
+const SPEECH_SHARE: f64 = 0.02;
+const MIN_MARGIN_DB: f32 = 6.0;
+const MAX_MARGIN_DB: f32 = 15.0;
+const MIN_SEPARATION_DB: f32 = 2.0 * MIN_MARGIN_DB;
 
 #[derive(Debug, Default)]
 pub struct EnergyEnvelope {
     clips: Vec<Arc<[f32]>>,
     clip_offsets: Vec<f64>,
+    thresholds: Vec<f32>,
+    silences: Vec<Range<f64>>,
 }
 
 pub struct EnvelopeTrack<'a> {
@@ -67,10 +78,41 @@ pub fn clip_envelope(tracks: &[EnvelopeTrack<'_>], duration: f64) -> Vec<f32> {
 
 impl EnergyEnvelope {
     pub fn new(clips: Vec<Vec<f32>>, recording_durations: &[f64]) -> Self {
-        Self {
-            clip_offsets: super::model::recording_offsets(recording_durations),
-            clips: clips.into_iter().map(Arc::from).collect(),
+        let clip_offsets = super::model::recording_offsets(recording_durations);
+        let mut thresholds = Vec::with_capacity(clips.len());
+        let mut silences = Vec::new();
+        for (clip, offset) in clips.iter().zip(&clip_offsets) {
+            let (threshold, runs) = clip_silences(clip);
+            thresholds.push(threshold);
+            silences.extend(runs.into_iter().map(|run| {
+                offset + run.start as f64 * HOP_SECONDS..offset + run.end as f64 * HOP_SECONDS
+            }));
         }
+        Self {
+            clip_offsets,
+            clips: clips.into_iter().map(Arc::from).collect(),
+            thresholds,
+            silences,
+        }
+    }
+
+    pub fn silences(&self) -> &[Range<f64>] {
+        &self.silences
+    }
+
+    pub fn silences_overlapping(&self, range: Range<f64>) -> &[Range<f64>] {
+        let first = self
+            .silences
+            .partition_point(|silence| silence.end <= range.start);
+        let last = self
+            .silences
+            .partition_point(|silence| silence.start < range.end);
+        &self.silences[first..last.max(first)]
+    }
+
+    pub fn silence_threshold_db(&self, source: f64) -> Option<f32> {
+        let (clip, _) = self.locate(source)?;
+        self.thresholds.get(clip).copied()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -107,4 +149,82 @@ impl EnergyEnvelope {
         }
         (count > 0).then(|| 10.0 * (total / count as f32 + 1e-10).log10())
     }
+}
+
+fn to_db(energy: f32) -> f32 {
+    10.0 * (energy + 1e-10).log10()
+}
+
+fn from_db(db: f32) -> f32 {
+    10f32.powf(db / 10.0)
+}
+
+fn percentile(values: &mut [f32], fraction: f64) -> f32 {
+    let index = ((values.len() - 1) as f64 * fraction).round() as usize;
+    *values
+        .select_nth_unstable_by(index, |a, b| a.total_cmp(b))
+        .1
+}
+
+fn silence_threshold(smoothed: &[f32], window: usize) -> f32 {
+    if smoothed.is_empty() {
+        return DIGITAL_SILENCE_DB;
+    }
+    let window = window.clamp(1, smoothed.len());
+    let stride = (smoothed.len() / 250_000).max(1);
+    let mut sums = Vec::with_capacity(smoothed.len() / stride + 1);
+    let mut sum: f64 = smoothed[..window]
+        .iter()
+        .map(|energy| f64::from(*energy))
+        .sum();
+    for index in window..=smoothed.len() {
+        if (index - window).is_multiple_of(stride) {
+            sums.push((sum / window as f64) as f32);
+        }
+        if index < smoothed.len() {
+            sum += f64::from(smoothed[index]) - f64::from(smoothed[index - window]);
+        }
+    }
+    let floor = to_db(percentile(&mut sums, FLOOR_PERCENTILE).max(0.0));
+    let mut hops: Vec<f32> = smoothed.iter().step_by(stride).copied().collect();
+    let loudest = ((SPEECH_SECONDS / HOP_SECONDS) as usize / stride)
+        .max((hops.len() as f64 * SPEECH_SHARE) as usize);
+    let fraction = (1.0 - loudest as f64 / hops.len() as f64).max(0.5);
+    let speech = to_db(percentile(&mut hops, fraction));
+    if speech - floor < MIN_SEPARATION_DB {
+        return DIGITAL_SILENCE_DB;
+    }
+    floor + ((speech - floor) * 0.5).clamp(MIN_MARGIN_DB, MAX_MARGIN_DB)
+}
+
+pub fn clip_silences(clip: &[f32]) -> (f32, Vec<Range<usize>>) {
+    let smoothed: Vec<f32> = (0..clip.len())
+        .map(|index| {
+            let window = &clip[index.saturating_sub(1)..(index + 2).min(clip.len())];
+            window.iter().sum::<f32>() / window.len() as f32
+        })
+        .collect();
+    let min_hops = (MIN_SILENCE / HOP_SECONDS).round() as usize;
+    let threshold = silence_threshold(&smoothed, min_hops);
+    let quiet = from_db(threshold) - 1e-10;
+    let mut runs = Vec::new();
+    let mut start = None;
+    for (index, energy) in smoothed.iter().enumerate() {
+        match (start, *energy < quiet) {
+            (None, true) => start = Some(index),
+            (Some(from), false) => {
+                if index - from >= min_hops {
+                    runs.push(from..index);
+                }
+                start = None;
+            }
+            _ => {}
+        }
+    }
+    if let Some(from) = start
+        && smoothed.len() - from >= min_hops
+    {
+        runs.push(from..smoothed.len());
+    }
+    (threshold, runs)
 }

@@ -180,6 +180,7 @@ pub(crate) struct TranscriptState {
     pub energy: Option<Arc<EnergyEnvelope>>,
     pub energy_loading: bool,
     pub energy_offsets: Vec<(f64, f64)>,
+    pub voiced_for: usize,
 }
 
 impl TranscriptState {
@@ -213,6 +214,7 @@ impl TranscriptState {
             energy: None,
             energy_loading: false,
             energy_offsets: Vec::new(),
+            voiced_for: 0,
         }
     }
 
@@ -260,6 +262,18 @@ impl TranscriptState {
             self.cleanup.ignored.clear();
             self.doc = Some(Arc::new(doc));
             self.edl_key = 0;
+            self.voiced_for = 0;
+            changed = true;
+        }
+        let energy_key = self
+            .energy
+            .as_ref()
+            .map_or(1, |energy| Arc::as_ptr(energy) as usize);
+        if energy_key != self.voiced_for
+            && let Some(doc) = self.doc.as_mut()
+        {
+            Arc::make_mut(doc).refine_voiced(self.energy.as_deref());
+            self.voiced_for = energy_key;
             changed = true;
         }
         let key = timeline_key(project.timeline.as_ref(), recording_durations);
