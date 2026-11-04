@@ -31,6 +31,7 @@ import {
 	type CustomStorageSaveRejection,
 	getCustomStorageSaveRejection,
 	logCustomStorageAttempt,
+	reserveCustomStorageSave,
 } from "@/lib/custom-storage-policy";
 import {
 	blockedS3EndpointMessage,
@@ -445,6 +446,7 @@ export async function saveOrganizationS3Config(input: S3ConfigInput) {
 	};
 
 	await db().transaction(async (tx) => {
+		await reserveCustomStorageSave(tx, user.id);
 		await tx
 			.update(s3Buckets)
 			.set({ active: false })

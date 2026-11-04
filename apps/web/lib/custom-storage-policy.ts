@@ -1,5 +1,5 @@
 import { db } from "@cap/database";
-import { s3Buckets } from "@cap/database/schema";
+import { s3Buckets, users } from "@cap/database/schema";
 import { userIsPro } from "@cap/utils";
 import type { User } from "@cap/web-domain";
 import { and, count, eq, gt } from "drizzle-orm";
@@ -114,6 +114,44 @@ export async function getCustomStorageSaveRejection(input: {
 		};
 	}
 	return null;
+}
+
+export class CustomStorageRateLimitedError extends Error {
+	constructor() {
+		super(customStorageRateLimitMessage);
+		this.name = "CustomStorageRateLimitedError";
+	}
+}
+
+type StorageTransaction = Parameters<
+	Parameters<ReturnType<typeof db>["transaction"]>[0]
+>[0];
+
+// Locks the owner's row so concurrent saves count each other before inserting.
+export async function reserveCustomStorageSave(
+	tx: StorageTransaction,
+	ownerId: User.UserId,
+	now = new Date(),
+) {
+	await tx
+		.select({ id: users.id })
+		.from(users)
+		.where(eq(users.id, ownerId))
+		.for("update");
+	const [row] = await tx
+		.select({ value: count() })
+		.from(s3Buckets)
+		.where(
+			and(
+				eq(s3Buckets.ownerId, ownerId),
+				gt(
+					s3Buckets.createdAt,
+					new Date(now.getTime() - CUSTOM_STORAGE_SAVE_WINDOW_MS),
+				),
+			),
+		);
+	if (Number(row?.value ?? 0) >= CUSTOM_STORAGE_SAVE_LIMIT)
+		throw new CustomStorageRateLimitedError();
 }
 
 export type CustomStorageAttemptAction =

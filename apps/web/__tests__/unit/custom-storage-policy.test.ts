@@ -36,10 +36,12 @@ vi.mock("@cap/database", () => ({
 import { getClientIp } from "@/lib/client-ip";
 import {
 	CUSTOM_STORAGE_SAVE_LIMIT,
+	CustomStorageRateLimitedError,
 	getCustomStorageSaveRejection,
 	getEndpointHostForLog,
 	isInsecureS3Endpoint,
 	logCustomStorageAttempt,
+	reserveCustomStorageSave,
 } from "@/lib/custom-storage-policy";
 import { isRestrictedCustomStorageHost } from "@/lib/s3-endpoint-policy";
 
@@ -143,6 +145,47 @@ describe("custom storage save policy", () => {
 				getCustomStorageSaveRejection({ user, endpoint }),
 			).resolves.toBeNull();
 		}
+	});
+});
+
+describe("reserveCustomStorageSave", () => {
+	const makeTx = (recentSaves: number) => {
+		const calls: string[] = [];
+		const tx = {
+			select: () => ({
+				from: () => ({
+					where: () => {
+						const rows = Promise.resolve([{ value: recentSaves }]);
+						return Object.assign(rows, {
+							for: (mode: string) => {
+								calls.push(`lock:${mode}`);
+								return Promise.resolve([{ id: user.id }]);
+							},
+						});
+					},
+				}),
+			}),
+		};
+		return { tx, calls };
+	};
+
+	it("locks the owner row before counting", async () => {
+		const { tx, calls } = makeTx(4);
+		await reserveCustomStorageSave(
+			tx as unknown as Parameters<typeof reserveCustomStorageSave>[0],
+			user.id,
+		);
+		expect(calls).toEqual(["lock:update"]);
+	});
+
+	it("refuses the save once the hourly limit is reached", async () => {
+		const { tx } = makeTx(5);
+		await expect(
+			reserveCustomStorageSave(
+				tx as unknown as Parameters<typeof reserveCustomStorageSave>[0],
+				user.id,
+			),
+		).rejects.toBeInstanceOf(CustomStorageRateLimitedError);
 	});
 });
 

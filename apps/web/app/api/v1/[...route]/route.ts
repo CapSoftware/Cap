@@ -120,11 +120,13 @@ import { withJsonNotFound } from "@/lib/api-errors";
 import { getClientIp } from "@/lib/client-ip";
 import {
 	type CustomStorageAttemptAction,
+	CustomStorageRateLimitedError,
 	customStorageHttpsRequiredMessage,
 	customStorageUnavailableMessage,
 	getCustomStorageSaveRejection,
 	isInsecureS3Endpoint,
 	logCustomStorageAttempt,
+	reserveCustomStorageSave,
 } from "@/lib/custom-storage-policy";
 import { hashKey } from "@/lib/developer-key-hash";
 import { startAiGeneration } from "@/lib/generate-ai";
@@ -5959,24 +5961,36 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 										};
 									});
 									const id = S3Bucket.S3BucketId.make(nanoId());
-									yield* database.use((db) =>
-										db.transaction(async (tx) => {
-											await tx
-												.update(Db.s3Buckets)
-												.set({ active: false })
-												.where(
-													eq(Db.s3Buckets.organizationId, path.organizationId),
-												);
-											await tx.insert(Db.s3Buckets).values({
-												id,
-												ownerId: principal.id,
-												organizationId: path.organizationId,
-												provider: config.provider,
-												...encrypted,
-												active: true,
-											});
-										}),
-									);
+									yield* database
+										.use((db) =>
+											db.transaction(async (tx) => {
+												await reserveCustomStorageSave(tx, principal.id);
+												await tx
+													.update(Db.s3Buckets)
+													.set({ active: false })
+													.where(
+														eq(
+															Db.s3Buckets.organizationId,
+															path.organizationId,
+														),
+													);
+												await tx.insert(Db.s3Buckets).values({
+													id,
+													ownerId: principal.id,
+													organizationId: path.organizationId,
+													provider: config.provider,
+													...encrypted,
+													active: true,
+												});
+											}),
+										)
+										.pipe(
+											Effect.catchTag("DatabaseError", (error) =>
+												error.cause instanceof CustomStorageRateLimitedError
+													? rateLimited(requestId)
+													: Effect.fail(error),
+											),
+										);
 									return mutationResponse(
 										"storage_s3",
 										id,

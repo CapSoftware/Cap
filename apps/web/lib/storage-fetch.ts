@@ -1,5 +1,9 @@
+import { Agent as HttpAgent, request as httpRequest } from "node:http";
+import { Agent as HttpsAgent, request as httpsRequest } from "node:https";
+import { Readable } from "node:stream";
 import {
 	isBlockedS3Endpoint,
+	publicOnlyLookup,
 	shouldBlockPrivateS3Endpoints,
 } from "@/lib/s3-endpoint-policy";
 
@@ -20,11 +24,71 @@ function blocksPrivateStorage() {
 	}
 }
 
-// Storage URLs can point at user-configured endpoints, so every redirect hop must resolve to a public address.
+const httpAgent = new HttpAgent({ keepAlive: true, lookup: publicOnlyLookup });
+const httpsAgent = new HttpsAgent({
+	keepAlive: true,
+	lookup: publicOnlyLookup,
+});
+
+// The connection resolves through publicOnlyLookup, so the address it dials is the address that was checked.
+export function requestPublicOnly(
+	url: string,
+	init: RequestInit = {},
+): Promise<Response> {
+	if (init.body !== undefined && init.body !== null)
+		return Promise.reject(
+			new Error("Storage requests do not send a request body"),
+		);
+	const target = new URL(url);
+	const isHttps = target.protocol === "https:";
+	if (!isHttps && target.protocol !== "http:")
+		return Promise.reject(
+			new StorageFetchRefusedError("Storage URLs must use http or https"),
+		);
+	const method = init.method ?? "GET";
+	return new Promise((resolve, reject) => {
+		const request = (isHttps ? httpsRequest : httpRequest)(
+			target,
+			{
+				method,
+				headers: Object.fromEntries(new Headers(init.headers)),
+				agent: isHttps ? httpsAgent : httpAgent,
+				signal: init.signal ?? undefined,
+			},
+			(response) => {
+				const headers = new Headers();
+				for (const [name, value] of Object.entries(response.headers)) {
+					if (Array.isArray(value))
+						for (const entry of value) headers.append(name, entry);
+					else if (value !== undefined) headers.set(name, value);
+				}
+				const status = response.statusCode ?? 502;
+				const hasBody = method !== "HEAD" && status !== 204 && status !== 304;
+				if (!hasBody) response.resume();
+				resolve(
+					new Response(
+						hasBody
+							? (Readable.toWeb(response) as ReadableStream<Uint8Array>)
+							: null,
+						{ status, statusText: response.statusMessage, headers },
+					),
+				);
+			},
+		);
+		request.on("error", reject);
+		request.end();
+	});
+}
+
+// Storage URLs can point at user-configured endpoints, so every redirect hop must connect to a public address.
 export async function fetchStorageUrl(
 	url: string,
 	init: RequestInit = {},
 	isBlocked: (url: string) => Promise<boolean> = isBlockedS3Endpoint,
+	request: (
+		url: string,
+		init: RequestInit,
+	) => Promise<Response> = requestPublicOnly,
 ): Promise<Response> {
 	if (!blocksPrivateStorage()) return fetch(url, init);
 	let current = url;
@@ -33,7 +97,7 @@ export async function fetchStorageUrl(
 			throw new StorageFetchRefusedError(
 				"Refused to fetch a storage URL on a private address",
 			);
-		const response = await fetch(current, { ...init, redirect: "manual" });
+		const response = await request(current, init);
 		const location = response.headers.get("location");
 		if (response.status < 300 || response.status > 399 || !location)
 			return response;

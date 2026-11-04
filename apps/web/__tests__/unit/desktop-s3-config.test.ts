@@ -54,7 +54,10 @@ vi.mock("@cap/database", () => {
 				where: () =>
 					fields && "value" in fields
 						? Promise.resolve([{ value: state.recentSaves }])
-						: { limit: async () => [{ preferences: null }] },
+						: {
+								limit: async () => [{ preferences: null }],
+								for: async () => [{ id: "usr_synthetic" }],
+							},
 			}),
 		}),
 		update: () => ({
@@ -167,6 +170,28 @@ describe("desktop personal S3 config", () => {
 	it("rejects IP literal endpoints on Cap Cloud", async () => {
 		const response = await save("https://93.184.216.34");
 		expect(response.status).toBe(400);
+		expect(state.inserts).toHaveLength(0);
+	});
+
+	it("returns 429 when a parallel save fills the hourly limit first", async () => {
+		const response = await (async () => {
+			let checks = 0;
+			const original = state.recentSaves;
+			Object.defineProperty(state, "recentSaves", {
+				configurable: true,
+				get: () => (checks++ === 0 ? original : 5),
+			});
+			try {
+				return await save("https://s3.example.com");
+			} finally {
+				Object.defineProperty(state, "recentSaves", {
+					configurable: true,
+					writable: true,
+					value: original,
+				});
+			}
+		})();
+		expect(response.status).toBe(429);
 		expect(state.inserts).toHaveLength(0);
 	});
 

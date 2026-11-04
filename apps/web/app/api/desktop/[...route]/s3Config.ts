@@ -12,10 +12,13 @@ import { z } from "zod";
 import { withAuth } from "@/app/api/utils";
 import { getClientIp } from "@/lib/client-ip";
 import {
+	CustomStorageRateLimitedError,
 	type CustomStorageSaveRejection,
 	customStorageProRequiredMessage,
+	customStorageRateLimitMessage,
 	getCustomStorageSaveRejection,
 	logCustomStorageAttempt,
+	reserveCustomStorageSave,
 } from "@/lib/custom-storage-policy";
 import {
 	blockedS3EndpointMessage,
@@ -134,6 +137,7 @@ app.post(
 			};
 
 			await db().transaction(async (tx) => {
+				await reserveCustomStorageSave(tx, user.id);
 				await tx
 					.update(s3Buckets)
 					.set({ active: false })
@@ -148,6 +152,16 @@ app.post(
 
 			return c.json({ success: true });
 		} catch (error) {
+			if (error instanceof CustomStorageRateLimitedError) {
+				logAttempt("rate_limited");
+				return c.json(
+					{
+						error: customStorageRateLimitMessage,
+						details: customStorageRateLimitMessage,
+					},
+					{ status: 429 },
+				);
+			}
 			console.error("Error in S3 config route:", error);
 			return c.json(
 				{
