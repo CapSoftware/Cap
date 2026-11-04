@@ -1392,3 +1392,41 @@ fn silence_detection_on_two_hours_is_fast() {
     println!("2 h silence detection {elapsed:?}");
     assert!(elapsed < limit, "{elapsed:?}");
 }
+
+#[test]
+fn a_word_whose_audio_sits_in_its_neighbour_is_treated_as_silence() {
+    let speech = synthetic_speech(&[(0.5, 0.9), (2.2, 2.6)], 3.5);
+    let words = [
+        ("as", 0.5, 0.85),
+        ("fast.", 0.85, 1.9),
+        ("Hopefully", 1.9, 2.6),
+    ];
+    let durations = [speech.duration];
+    let mut project = project(&words, &durations);
+    let mut doc = TranscriptDoc::build(project.captions.as_ref().unwrap());
+    doc.refine_voiced(Some(&speech.envelope));
+    assert!(doc.voiced[1].is_empty(), "{:?}", doc.voiced[1]);
+    assert!(
+        (doc.voiced[1].start - 0.9).abs() < 0.03,
+        "{:?}",
+        doc.voiced[1]
+    );
+    assert!(
+        (doc.voiced[2].start - 2.2).abs() < 0.03,
+        "{:?}",
+        doc.voiced[2]
+    );
+
+    let edl = TranscriptEdl::build(&doc, timeline(&project), &durations);
+    let pauses = plan_pause_cuts(&doc, &edl, Some(&speech.envelope), 1.0, 0.5);
+    assert_eq!(pauses.len(), 1, "{pauses:?}");
+    assert_eq!((pauses[0].after_word, pauses[0].next_word), (0, 2));
+    for cut in &pauses[0].cuts {
+        assert!(!speech.overlaps_voice(cut), "{cut:?}");
+        assert!(speech.all_quiet(cut), "{cut:?}");
+    }
+    let cuts: Vec<_> = pauses.iter().flat_map(|pause| pause.cuts.clone()).collect();
+    apply_source_cuts(timeline_mut(&mut project), &durations, &cuts);
+    let edl = TranscriptEdl::build(&doc, timeline(&project), &durations);
+    assert_eq!(edl.kept, [true, true, true]);
+}

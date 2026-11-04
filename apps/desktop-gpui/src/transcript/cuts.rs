@@ -162,7 +162,7 @@ pub fn plan_pause_cuts(
     let mut pauses = Vec::new();
     let mut previous: Option<usize> = None;
     for index in 0..doc.voiced.len() {
-        if !edl.is_kept(index) {
+        if !edl.is_kept(index) || doc.voiced[index].is_empty() {
             continue;
         }
         let Some(before) = previous.replace(index) else {

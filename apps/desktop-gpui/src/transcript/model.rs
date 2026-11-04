@@ -348,6 +348,12 @@ pub fn voiced_spans(words: &[Word], energy: &EnergyEnvelope) -> Vec<Range<f64>> 
                 return start..end;
             }
             let silences = energy.silences_overlapping(start..end);
+            if let Some(cover) = silences.iter().find(|silence| {
+                silence.start <= start + WORD_EDGE_SLACK && silence.end >= end - WORD_EDGE_SLACK
+            }) {
+                let point = cover.start.clamp(start, end);
+                return point..point;
+            }
             if let Some(head) = silences.first()
                 && head.start <= start + WORD_EDGE_SLACK
                 && head.end - start >= WORD_TRIM_MIN
