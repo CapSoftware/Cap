@@ -5804,6 +5804,7 @@ mod tests {
             let (config_tx, config_rx) = tokio::sync::watch::channel(ConfigUpdate {
                 revision: 0,
                 config: config.clone(),
+                preview_render_size: full_render_size((100, 100), &config),
             });
             let (view, cx) = cx.add_window_view(move |window, cx| {
                 let editor =
