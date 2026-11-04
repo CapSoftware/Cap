@@ -160,23 +160,26 @@ pub fn plan_pause_cuts(
         .fold(f64::INFINITY, f64::min);
     let to_source = |output: f64| edl.output_to_source(output);
     let mut pauses = Vec::new();
-    let mut previous: Option<usize> = None;
+    let mut previous: Option<(usize, Range<f64>)> = None;
     for index in 0..doc.voiced.len() {
-        if !edl.is_kept(index) || doc.voiced[index].is_empty() {
+        if doc.voiced[index].is_empty() {
             continue;
         }
-        let Some(before) = previous.replace(index) else {
+        let Some(heard) = edl.audible_part(&doc.voiced[index]) else {
             continue;
         };
-        let source = doc.voiced[before].end..doc.voiced[index].start;
+        let Some((before, before_heard)) = previous.replace((index, heard.clone())) else {
+            continue;
+        };
+        let source = before_heard.end..heard.start;
         if source.end <= source.start
             || (slowest > 0.0 && source.end - source.start <= floor * slowest)
         {
             continue;
         }
         let (Some(from), Some(until)) = (
-            edl.output_end_of(&doc.voiced[before]),
-            edl.output_start_of(&doc.voiced[index]),
+            edl.output_end_of(&before_heard),
+            edl.output_start_of(&heard),
         ) else {
             continue;
         };

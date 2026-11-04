@@ -478,6 +478,24 @@ impl TranscriptEdl {
         ))
     }
 
+    pub fn audible_part(&self, span: &Range<f64>) -> Option<Range<f64>> {
+        let first = self
+            .kept_ranges
+            .partition_point(|range| range.end <= span.start);
+        let mut heard: Option<Range<f64>> = None;
+        for range in self.kept_ranges[first..]
+            .iter()
+            .take_while(|range| range.start < span.end)
+        {
+            let start = range.start.max(span.start);
+            let end = range.end.min(span.end);
+            if end > start {
+                heard = Some(heard.map_or(start, |heard| heard.start)..end);
+            }
+        }
+        heard
+    }
+
     pub fn output_start_of(&self, word: &Range<f64>) -> Option<f64> {
         self.source_to_output(word.start).or_else(|| {
             let index = self

@@ -1716,3 +1716,55 @@ fn a_brief_loud_sound_does_not_turn_a_quiet_word_into_silence() {
         "{between:?}"
     );
 }
+
+fn three_words_with_a_cut(cut: Range<f64>) -> (ProjectConfiguration, TranscriptDoc, TranscriptEdl) {
+    let words = [
+        ("before", 1.0, 1.4),
+        ("middle", 2.2, 2.8),
+        ("after", 4.0, 4.4),
+    ];
+    let durations = [5.0];
+    let mut project = project(&words, &durations);
+    apply_source_cuts(timeline_mut(&mut project), &durations, &[cut]);
+    let (doc, edl) = model(&project, &durations);
+    (project, doc, edl)
+}
+
+#[test]
+fn a_pause_never_cuts_the_audible_tail_of_a_mostly_cut_word() {
+    let (_, doc, edl) = three_words_with_a_cut(2.2..2.55);
+    assert_eq!(edl.kept, [true, false, true]);
+    let pauses = plan_pause_cuts(&doc, &edl, None, 1.0, 0.5);
+    assert_eq!(pauses.len(), 1, "{pauses:?}");
+    assert_eq!((pauses[0].after_word, pauses[0].next_word), (1, 2));
+    assert!(close(pauses[0].length, 1.2), "{:?}", pauses[0]);
+    for cut in pauses.iter().flat_map(|pause| &pause.cuts) {
+        assert!(cut.end <= 2.55 || cut.start >= 2.8, "{cut:?}");
+    }
+}
+
+#[test]
+fn a_pause_never_cuts_the_audible_head_of_a_mostly_cut_word() {
+    let (_, doc, edl) = three_words_with_a_cut(2.45..2.8);
+    assert_eq!(edl.kept, [true, false, true]);
+    let pauses = plan_pause_cuts(&doc, &edl, None, 1.0, 0.5);
+    assert_eq!(pauses.len(), 1, "{pauses:?}");
+    assert_eq!((pauses[0].after_word, pauses[0].next_word), (1, 2));
+    assert!(close(pauses[0].length, 1.2), "{:?}", pauses[0]);
+    for cut in pauses.iter().flat_map(|pause| &pause.cuts) {
+        assert!(cut.end <= 2.2 || cut.start >= 2.45, "{cut:?}");
+    }
+}
+
+#[test]
+fn a_word_cut_entirely_still_lets_the_pause_around_it_join() {
+    let (_, doc, edl) = three_words_with_a_cut(2.15..2.85);
+    assert_eq!(edl.kept, [true, false, true]);
+    let pauses = plan_pause_cuts(&doc, &edl, None, 1.0, 0.5);
+    assert_eq!(pauses.len(), 1, "{pauses:?}");
+    assert_eq!((pauses[0].after_word, pauses[0].next_word), (0, 2));
+    assert!(close(pauses[0].length, 0.75 + 1.15), "{:?}", pauses[0]);
+    for cut in pauses.iter().flat_map(|pause| &pause.cuts) {
+        assert!(cut.end <= 2.15 || cut.start >= 2.85, "{cut:?}");
+    }
+}
