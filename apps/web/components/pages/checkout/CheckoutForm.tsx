@@ -507,6 +507,10 @@ function PromotionCode({ checkout }: { checkout: Checkout }) {
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 
+	// A partner referral discount is applied as a coupon. Stripe won't stack a
+	// promotion code on top of it, so there is nothing to offer here.
+	if (!applied && checkout.discountAmounts?.length) return null;
+
 	if (applied?.promotionCode) {
 		return (
 			<div className="mt-4 flex items-center justify-between gap-3 rounded-[12px] border border-white/80 bg-white/55 px-3 py-2 text-[13px]">
