@@ -256,3 +256,48 @@ describe("desktop diagnostic reconstruction", () => {
 		expect(analysis.coverage.recordsOmittedForOperationLimit).toBe(3);
 	});
 });
+
+describe("desktop log size bounds", () => {
+	it("forwards the largest log a desktop client sends unchanged", async () => {
+		const desktopRequestBudget = 4 * 1024 * 1024 - 64 * 1024;
+		const log = `${"a".repeat(desktopRequestBudget - 1)}\n`;
+
+		const form = createDesktopLogUpload({ log });
+
+		const forwarded = form.get("files[0]");
+		if (!(forwarded instanceof Blob)) throw new Error("Missing log");
+		expect(await forwarded.text()).toBe(log);
+	});
+
+	it("keeps the newest part of a log larger than any desktop client sends", async () => {
+		const maxLogBytes = 4 * 1024 * 1024;
+		const older = "older line é\n".repeat(400_000);
+		const newest = "newest line\n";
+
+		const form = createDesktopLogUpload({ log: older + newest });
+
+		const forwarded = form.get("files[0]");
+		if (!(forwarded instanceof Blob)) throw new Error("Missing log");
+		const text = await forwarded.text();
+		expect(forwarded.size).toBeLessThanOrEqual(maxLogBytes);
+		expect(text.startsWith("[Earlier bytes omitted by the server]\n")).toBe(
+			true,
+		);
+		expect(text.endsWith(newest)).toBe(true);
+		expect(text).not.toContain("\uFFFD");
+	});
+
+	it("bounds the platform and version labels", async () => {
+		const form = createDesktopLogUpload({
+			log: "log",
+			os: "o".repeat(10_000),
+			version: "v".repeat(10_000),
+		});
+
+		const attachment = form.get("files[1]");
+		if (!(attachment instanceof Blob)) throw new Error("Missing attachment");
+		const parsed = JSON.parse(await attachment.text());
+		expect(parsed.os).toHaveLength(256);
+		expect(parsed.version).toHaveLength(256);
+	});
+});

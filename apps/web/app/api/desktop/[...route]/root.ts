@@ -31,6 +31,7 @@ import {
 	createDesktopLogUpload,
 } from "@/lib/desktop-log-upload";
 import { getCheckoutRedirectUrls } from "@/lib/mobile-checkout";
+import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 import { runPromise } from "@/lib/server";
 import { trackServerEvent } from "@/lib/server-analytics";
 import { withAuth, withOptionalAuth } from "../../utils";
@@ -209,6 +210,15 @@ app.post(
 			context,
 		} = c.req.valid("form");
 		const user = c.get("user");
+
+		if (
+			await isRateLimited(RATE_LIMIT_IDS.DESKTOP_LOGS, {
+				headers: c.req.raw.headers,
+				...(user ? { key: `desktop-logs:${user.id}` } : {}),
+			})
+		) {
+			return c.json({ error: "Too many log uploads" }, { status: 429 });
+		}
 
 		try {
 			const discordWebhookUrl = serverEnv().DISCORD_LOGS_WEBHOOK_URL;
