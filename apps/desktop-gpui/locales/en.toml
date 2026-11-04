@@ -2798,6 +2798,59 @@ text_track = "Text"
 video = { text = "Video", context = "Timeline gutter label of the recording's video track." }
 zoom = "Zoom"
 
+[editor.transcript]
+cleanup = "Clean up"
+cleanup_tooltip = "Remove filler words and shorten pauses"
+delete_matches = "Delete all"
+delete_matches_tooltip = "Cut every match from the video"
+empty_description = "Transcribe this recording on this computer, then edit the video by editing its text."
+empty_title = "No transcript yet"
+hint = "Click a word to jump to it. Select words and press Delete to cut them from the video."
+next_match = "Next match"
+no_audio = "This recording has no audio to transcribe."
+previous_match = "Previous match"
+restore_blocked = "This part was cut on the timeline. Use Undo or drag the clip edge to bring it back."
+restore_hint = { one = "Click to restore {count} word", other = "Click to restore {count} words" }
+restore_transition = "Remove the transition next to this cut to restore it."
+search = "Find"
+search_count = { text = "{current} of {total}", context = "Search results: {current} is the highlighted match, {total} how many there are." }
+search_none = "No matches"
+search_placeholder = "Find in transcript"
+seconds = { text = "{value} s", context = "{value} is a number of seconds such as 1.5." }
+selection = { one = "{count} word selected, {seconds} s", other = "{count} words selected, {seconds} s", context = "{seconds} is how long the selected words take to say, such as 2.4." }
+selection_cut = { one = "{count} cut word selected. Press Delete to restore it.", other = "{count} cut words selected. Press Delete to restore them." }
+skipped_hold = { one = "{count} cut was skipped because a fullscreen text card holds that frame", other = "{count} cuts were skipped because fullscreen text cards hold those frames" }
+skipped_last_clip = "The last clip cannot be cut away."
+skipped_transition = { one = "{count} cut was skipped because it touches a transition", other = "{count} cuts were skipped because they touch transitions" }
+title = "Transcript"
+transcribe = "Transcribe"
+transcribing = "Transcribing…"
+words = { one = "{count} word", other = "{count} words" }
+
+[editor.transcript.fillers]
+discourse = "Filler phrases"
+discourse_hint = { text = "like, you know, so", context = "English examples of the fillers this category finds. Detection is English only, so keep them in English." }
+false_start = "False starts"
+false_start_hint = { text = "we should, we need", context = "An English example of a restarted sentence. Keep it in English." }
+hesitation = "Hesitations"
+hesitation_hint = { text = "um, uh, hmm", context = "English hesitation sounds. Keep them in English." }
+keep = "Keep this one"
+listen = "Listen"
+none = "No filler words left in these categories"
+remove = "Remove this one"
+remove_all = { one = "Remove {count}", other = "Remove {count}" }
+repetition = "Repeated words"
+repetition_hint = { text = "the the, I I", context = "English examples of a repeated word. Keep them in English." }
+title = "Filler words"
+
+[editor.transcript.pauses]
+apply = "Shorten"
+keep = "Shorten to"
+longer_than = "Pauses longer than"
+none = "No pauses that long"
+summary = { one = "{count} pause, saves {seconds} s", other = "{count} pauses, saves {seconds} s", context = "{seconds} is how much shorter the video gets, such as 12.5." }
+title = "Pauses"
+
 [editor.window]
 audio_filter = { text = "Audio", context = "File type filter name in the audio file picker." }
 audio_segment_changed = "This audio segment changed. Select it and choose a replacement again."
@@ -2898,11 +2951,12 @@ window_title_placeholder = "Window title"
 windows_description = "Title bar with window controls"
 
 [editor.window.header]
-captions = "Captions"
 delete_recording = "Delete recording"
 export = "Export"
 open_bundle = "Open recording bundle"
 presets = "Presets"
+transcript = "Transcript"
+transcript_tooltip = "Edit by transcript"
 
 [editor.window.image]
 changed = "This image changed while choosing a replacement. Select it and try again."

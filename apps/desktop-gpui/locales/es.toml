@@ -2796,6 +2796,59 @@ text_track = "Texto"
 video = "Vídeo"
 zoom = "Zoom"
 
+[editor.transcript]
+cleanup = "Limpiar"
+cleanup_tooltip = "Quitar muletillas y acortar pausas"
+delete_matches = "Eliminar todo"
+delete_matches_tooltip = "Cortar del vídeo cada coincidencia"
+empty_description = "Transcribe esta grabación en este ordenador y luego edita el vídeo editando su texto."
+empty_title = "Aún no hay transcripción"
+hint = "Haz clic en una palabra para ir a ella. Selecciona palabras y pulsa la tecla de borrar para cortarlas del vídeo."
+next_match = "Siguiente coincidencia"
+no_audio = "Esta grabación no tiene audio que transcribir."
+previous_match = "Coincidencia anterior"
+restore_blocked = "Esta parte se cortó en la línea de tiempo. Usa Deshacer o arrastra el borde del clip para recuperarla."
+restore_hint = { one = "Haz clic para restaurar {count} palabra", many = "Haz clic para restaurar {count} de palabras", other = "Haz clic para restaurar {count} palabras" }
+restore_transition = "Quita la transición junto a este corte para restaurarlo."
+search = "Buscar"
+search_count = "{current} de {total}"
+search_none = "Sin coincidencias"
+search_placeholder = "Buscar en la transcripción"
+seconds = "{value} s"
+selection = { one = "{count} palabra seleccionada, {seconds} s", many = "{count} de palabras seleccionadas, {seconds} s", other = "{count} palabras seleccionadas, {seconds} s" }
+selection_cut = { one = "{count} palabra cortada seleccionada. Pulsa la tecla de borrar para restaurarla.", many = "{count} de palabras cortadas seleccionadas. Pulsa la tecla de borrar para restaurarlas.", other = "{count} palabras cortadas seleccionadas. Pulsa la tecla de borrar para restaurarlas." }
+skipped_hold = { one = "Se omitió {count} corte porque una tarjeta de texto a pantalla completa retiene ese fotograma", many = "Se omitieron {count} de cortes porque tarjetas de texto a pantalla completa retienen esos fotogramas", other = "Se omitieron {count} cortes porque tarjetas de texto a pantalla completa retienen esos fotogramas" }
+skipped_last_clip = "No se puede cortar el último clip."
+skipped_transition = { one = "Se omitió {count} corte porque toca una transición", many = "Se omitieron {count} de cortes porque tocan transiciones", other = "Se omitieron {count} cortes porque tocan transiciones" }
+title = "Transcripción"
+transcribe = "Transcribir"
+transcribing = "Transcribiendo…"
+words = { one = "{count} palabra", many = "{count} de palabras", other = "{count} palabras" }
+
+[editor.transcript.fillers]
+discourse = "Frases de relleno"
+discourse_hint = "like, you know, so"
+false_start = "Comienzos en falso"
+false_start_hint = "we should, we need"
+hesitation = "Titubeos"
+hesitation_hint = "um, uh, hmm"
+keep = "Conservar esta"
+listen = "Escuchar"
+none = "No quedan muletillas en estas categorías"
+remove = "Quitar esta"
+remove_all = { one = "Quitar {count}", many = "Quitar {count}", other = "Quitar {count}" }
+repetition = "Palabras repetidas"
+repetition_hint = "the the, I I"
+title = "Muletillas"
+
+[editor.transcript.pauses]
+apply = "Acortar"
+keep = "Acortar a"
+longer_than = "Pausas de más de"
+none = "No hay pausas tan largas"
+summary = { one = "{count} pausa, ahorra {seconds} s", many = "{count} de pausas, ahorran {seconds} s", other = "{count} pausas, ahorran {seconds} s" }
+title = "Pausas"
+
 [editor.window]
 audio_filter = "Audio"
 audio_segment_changed = "Este segmento de audio cambió. Selecciónalo y vuelve a elegir un reemplazo."
@@ -2896,11 +2949,12 @@ window_title_placeholder = "Título de la ventana"
 windows_description = "Barra de título con controles de ventana"
 
 [editor.window.header]
-captions = "Subtítulos"
 delete_recording = "Eliminar grabación"
 export = "Exportar"
 open_bundle = "Abrir paquete de la grabación"
 presets = "Preajustes"
+transcript = "Transcripción"
+transcript_tooltip = "Editar con la transcripción"
 
 [editor.window.image]
 changed = "Esta imagen cambió mientras elegías un reemplazo. Selecciónala e inténtalo de nuevo."

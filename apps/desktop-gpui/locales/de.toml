@@ -2796,6 +2796,59 @@ text_track = "Text"
 video = "Video"
 zoom = "Zoom"
 
+[editor.transcript]
+cleanup = "Aufräumen"
+cleanup_tooltip = "Füllwörter entfernen und Pausen kürzen"
+delete_matches = "Alle löschen"
+delete_matches_tooltip = "Jeden Treffer aus dem Video schneiden"
+empty_description = "Transkribieren Sie diese Aufnahme auf diesem Computer und bearbeiten Sie dann das Video über seinen Text."
+empty_title = "Noch kein Transkript"
+hint = "Klicken Sie auf ein Wort, um dorthin zu springen. Wählen Sie Wörter aus und drücken Sie die Löschtaste, um sie aus dem Video zu schneiden."
+next_match = "Nächster Treffer"
+no_audio = "Diese Aufnahme hat keinen Ton zum Transkribieren."
+previous_match = "Vorheriger Treffer"
+restore_blocked = "Dieser Teil wurde in der Zeitleiste geschnitten. Nutzen Sie Rückgängig oder ziehen Sie den Clip-Rand, um ihn zurückzuholen."
+restore_hint = { one = "Klicken, um {count} Wort wiederherzustellen", other = "Klicken, um {count} Wörter wiederherzustellen" }
+restore_transition = "Entfernen Sie den Übergang neben diesem Schnitt, um ihn wiederherzustellen."
+search = "Suchen"
+search_count = "{current} von {total}"
+search_none = "Keine Treffer"
+search_placeholder = "Im Transkript suchen"
+seconds = "{value} s"
+selection = { one = "{count} Wort ausgewählt, {seconds} s", other = "{count} Wörter ausgewählt, {seconds} s" }
+selection_cut = { one = "{count} geschnittenes Wort ausgewählt. Drücken Sie die Löschtaste, um es wiederherzustellen.", other = "{count} geschnittene Wörter ausgewählt. Drücken Sie die Löschtaste, um sie wiederherzustellen." }
+skipped_hold = { one = "{count} Schnitt wurde übersprungen, weil eine Vollbild-Texttafel dieses Bild hält", other = "{count} Schnitte wurden übersprungen, weil Vollbild-Texttafeln diese Bilder halten" }
+skipped_last_clip = "Der letzte Clip kann nicht weggeschnitten werden."
+skipped_transition = { one = "{count} Schnitt wurde übersprungen, weil er einen Übergang berührt", other = "{count} Schnitte wurden übersprungen, weil sie Übergänge berühren" }
+title = "Transkript"
+transcribe = "Transkribieren"
+transcribing = "Wird transkribiert…"
+words = { one = "{count} Wort", other = "{count} Wörter" }
+
+[editor.transcript.fillers]
+discourse = "Füllphrasen"
+discourse_hint = "like, you know, so"
+false_start = "Fehlstarts"
+false_start_hint = "we should, we need"
+hesitation = "Zögerlaute"
+hesitation_hint = "um, uh, hmm"
+keep = "Dieses behalten"
+listen = "Anhören"
+none = "Keine Füllwörter in diesen Kategorien übrig"
+remove = "Dieses entfernen"
+remove_all = { one = "{count} entfernen", other = "{count} entfernen" }
+repetition = "Wiederholte Wörter"
+repetition_hint = "the the, I I"
+title = "Füllwörter"
+
+[editor.transcript.pauses]
+apply = "Kürzen"
+keep = "Kürzen auf"
+longer_than = "Pausen länger als"
+none = "Keine so langen Pausen"
+summary = { one = "{count} Pause, spart {seconds} s", other = "{count} Pausen, sparen {seconds} s" }
+title = "Pausen"
+
 [editor.window]
 audio_filter = "Audio"
 audio_segment_changed = "Dieses Audiosegment hat sich geändert. Wählen Sie es aus und wählen Sie erneut einen Ersatz."
@@ -2896,11 +2949,12 @@ window_title_placeholder = "Fenstertitel"
 windows_description = "Titelleiste mit Fenstersteuerung"
 
 [editor.window.header]
-captions = "Untertitel"
 delete_recording = "Aufnahme löschen"
 export = "Exportieren"
 open_bundle = "Aufnahmepaket öffnen"
 presets = "Vorlagen"
+transcript = "Transkript"
+transcript_tooltip = "Per Transkript bearbeiten"
 
 [editor.window.image]
 changed = "Dieses Bild hat sich bei der Auswahl eines Ersatzes geändert. Wählen Sie es aus und versuchen Sie es erneut."
