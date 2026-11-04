@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	sourceDigest,
 	splitTranslationChunks,
+	withSourceFingerprint,
 } from "@/actions/videos/translation-vtt";
 
 const ownerId = "owner";
@@ -18,6 +19,7 @@ const mocks = vi.hoisted(() => ({
 	provider: "s3" as "s3" | "googleDrive",
 	conditionalWritesSupported: true,
 	heldMarkerReads: 0,
+	beforeMarkerRead: null as (() => void) | null,
 	claimWrites: 0,
 	generateText: vi.fn(),
 	isRateLimited: vi.fn(async () => false),
@@ -80,6 +82,9 @@ vi.mock("@cap/web-backend", () => ({
 						),
 					getObjectWithETag: (key: string) =>
 						afterStorageRoundTrip(key, () => {
+							const beforeRead = mocks.beforeMarkerRead;
+							mocks.beforeMarkerRead = null;
+							beforeRead?.();
 							const stored = mocks.objects.get(key);
 							return stored
 								? Option.some({ body: stored.body, eTag: stored.eTag })
@@ -212,6 +217,7 @@ beforeEach(() => {
 	mocks.nextETag = 0;
 	mocks.claimWrites = 0;
 	mocks.heldMarkerReads = 0;
+	mocks.beforeMarkerRead = null;
 	store(sourceKey, source);
 	mocks.provider = "s3";
 	mocks.conditionalWritesSupported = true;
@@ -407,6 +413,27 @@ describe("translateTranscript runs one translation pass per video and language",
 		expect(markerKeys()).toEqual([]);
 	});
 
+	it("serves a translation stored by another instance just before its claim", async () => {
+		const translated = translatedChunk(
+			`VTT content to translate:\n\n${source}`,
+		);
+		const finishedElsewhere = withSourceFingerprint(source, translated);
+		if (!finishedElsewhere) throw new Error("Missing stored translation");
+		mocks.beforeMarkerRead = () => {
+			store(`${ownerId}/${videoId}/transcription.ja.vtt`, finishedElsewhere);
+		};
+		succeed();
+		const translateTranscript = await loadAction();
+
+		await expect(translateTranscript(videoId, "ja")).resolves.toEqual({
+			success: true,
+			translatedVtt: translated,
+			message: "Retrieved cached translation",
+		});
+		expect(mocks.generateText).not.toHaveBeenCalled();
+		expect(markerKeys()).toEqual([]);
+	});
+
 	it("leaves an expired claim to a fresh request once it has waited too long", async () => {
 		vi.useFakeTimers({ toFake: ["setTimeout", "Date"] });
 		store(
@@ -424,6 +451,7 @@ describe("translateTranscript runs one translation pass per video and language",
 
 		await expect(waiting).resolves.toEqual({
 			success: false,
+			inProgress: true,
 			message: "Translation in progress",
 		});
 		expect(mocks.generateText).not.toHaveBeenCalled();

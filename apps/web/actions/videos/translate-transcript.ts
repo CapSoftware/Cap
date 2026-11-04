@@ -30,6 +30,7 @@ interface TranslateResult {
 	success: boolean;
 	translatedVtt?: string;
 	message: string;
+	inProgress?: boolean;
 }
 
 export async function translateTranscript(
@@ -346,6 +347,17 @@ async function translateOnce(
 			recordFailure(translation.pairKey, claim.at);
 			return TRANSLATION_FAILED;
 		}
+		if (claim.kind === "owned") {
+			const storedAfterClaim = await readStoredTranslation(translation);
+			if (storedAfterClaim) {
+				await releaseClaim(translation, claim);
+				return {
+					success: true,
+					translatedVtt: storedAfterClaim,
+					message: "Retrieved cached translation",
+				};
+			}
+		}
 		if (claim.kind === "owned" || claim.kind === "untracked") {
 			return runTranslation(translation, claim);
 		}
@@ -353,7 +365,11 @@ async function translateOnce(
 			claim.kind === "late" ||
 			Date.now() - startedAt >= TRANSLATION_WAIT_MS
 		) {
-			return { success: false, message: "Translation in progress" };
+			return {
+				success: false,
+				inProgress: true,
+				message: "Translation in progress",
+			};
 		}
 	}
 }
