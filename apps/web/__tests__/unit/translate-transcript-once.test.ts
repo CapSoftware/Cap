@@ -407,6 +407,34 @@ describe("translateTranscript runs one translation pass per video and language",
 		expect(markerKeys()).toEqual([]);
 	});
 
+	it("leaves an expired claim to a fresh request once it has waited too long", async () => {
+		vi.useFakeTimers({ toFake: ["setTimeout", "Date"] });
+		store(
+			markerKey(source),
+			JSON.stringify({
+				state: "pending",
+				source: sourceDigest(source),
+				at: Date.now() - 4 * 60 * 1000,
+			}),
+		);
+		succeed();
+		const waitingInstance = await loadAction();
+		const waiting = waitingInstance(videoId, "ja");
+		await vi.advanceTimersByTimeAsync(2 * 60 * 1000);
+
+		await expect(waiting).resolves.toEqual({
+			success: false,
+			message: "Translation in progress",
+		});
+		expect(mocks.generateText).not.toHaveBeenCalled();
+
+		const freshRequest = await loadAction();
+		const fresh = freshRequest(videoId, "ja");
+		await vi.advanceTimersByTimeAsync(10_000);
+		await expect(fresh).resolves.toMatchObject({ success: true });
+		expect(mocks.generateText).toHaveBeenCalledTimes(chunkCount);
+	});
+
 	it("still translates when the storage cannot record claims", async () => {
 		mocks.conditionalWritesSupported = false;
 		succeed();

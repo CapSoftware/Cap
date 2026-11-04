@@ -135,15 +135,18 @@ type TranslationClaim =
 	| { kind: "owned"; eTag: string | undefined }
 	| { kind: "untracked" }
 	| { kind: "busy" }
+	| { kind: "late" }
 	| { kind: "failed"; at: number };
 
 // The owner renews its pending marker after every chunk, so the lease only has
 // to outlast one chunk's model calls; an older marker belongs to a stopped pass.
 const PENDING_TRANSLATION_LEASE_MS = 5 * 60 * 1000;
 const FAILED_TRANSLATION_RETRY_MS = 10 * 60 * 1000;
-// Waiting viewers stay inside the default 300 s function duration.
+// Waiting viewers stay inside the default 300 s function duration, and only a
+// request that still has most of that budget left starts a pass.
 const TRANSLATION_WAIT_MS = 4 * 60 * 1000;
 const TRANSLATION_WAIT_POLL_MS = 3 * 1000;
+const TRANSLATION_START_WINDOW_MS = 30 * 1000;
 
 const TRANSLATION_FAILED: TranslateResult = {
 	success: false,
@@ -231,9 +234,13 @@ function isClaimConflict(error: unknown) {
 
 async function claimTranslation(
 	translation: PairTranslation,
+	canStart: boolean,
 ): Promise<TranslationClaim> {
+	const unclaimed: TranslationClaim = canStart
+		? { kind: "untracked" }
+		: { kind: "late" };
 	const { bucket } = translation;
-	if (bucket.provider !== "s3") return { kind: "untracked" };
+	if (bucket.provider !== "s3") return unclaimed;
 
 	try {
 		const current = await bucket
@@ -251,9 +258,8 @@ async function claimTranslation(
 				return { kind: "busy" };
 			}
 		}
-		if (Option.isSome(current) && !current.value.eTag) {
-			return { kind: "untracked" };
-		}
+		if (!canStart) return { kind: "late" };
+		if (Option.isSome(current) && !current.value.eTag) return unclaimed;
 
 		const written = await bucket
 			.putObjectWithETag(
@@ -271,7 +277,7 @@ async function claimTranslation(
 	} catch (error) {
 		if (isClaimConflict(error)) return { kind: "busy" };
 		console.warn("[translateTranscript] Could not claim translation:", error);
-		return { kind: "untracked" };
+		return unclaimed;
 	}
 }
 
@@ -317,7 +323,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 async function translateOnce(
 	translation: PairTranslation,
 ): Promise<TranslateResult> {
-	const deadline = Date.now() + TRANSLATION_WAIT_MS;
+	const startedAt = Date.now();
 	for (let round = 0; ; round++) {
 		if (round > 0) await sleep(TRANSLATION_WAIT_POLL_MS);
 
@@ -332,13 +338,21 @@ async function translateOnce(
 
 		if (hasRecentFailure(translation.pairKey)) return TRANSLATION_FAILED;
 
-		const claim = await claimTranslation(translation);
+		const claim = await claimTranslation(
+			translation,
+			Date.now() - startedAt < TRANSLATION_START_WINDOW_MS,
+		);
 		if (claim.kind === "failed") {
 			recordFailure(translation.pairKey, claim.at);
 			return TRANSLATION_FAILED;
 		}
-		if (claim.kind !== "busy") return runTranslation(translation, claim);
-		if (Date.now() >= deadline) {
+		if (claim.kind === "owned" || claim.kind === "untracked") {
+			return runTranslation(translation, claim);
+		}
+		if (
+			claim.kind === "late" ||
+			Date.now() - startedAt >= TRANSLATION_WAIT_MS
+		) {
 			return { success: false, message: "Translation in progress" };
 		}
 	}
