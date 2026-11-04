@@ -7644,7 +7644,7 @@ impl EditorWindow {
         Some(
             ui::Menu::editor(&self.theme, "toolbar-menu", items, &menu.state)
                 .min_width(match kind {
-                    ToolbarMenu::AspectRatio => px(200.),
+                    ToolbarMenu::AspectRatio | ToolbarMenu::Reel => px(200.),
                     ToolbarMenu::PreviewSpeed => px(96.),
                 })
                 .on_select(cx.listener(move |this, index: &usize, window, cx| {
