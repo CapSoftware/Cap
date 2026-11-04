@@ -100,4 +100,20 @@ describe("organization preferences after switching organizations", () => {
 			"org-a",
 		);
 	});
+
+	it("saves nothing when the organization changes while an edit waits on the debounce", async () => {
+		await render();
+		await pickSpeed("2×");
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(500);
+		});
+
+		mocks.organizationId = "org-b";
+		mocks.organizationSettings = { disableComments: true };
+		await render();
+		await waitForDebounce();
+		await waitForDebounce();
+
+		expect(mocks.updateSettings).not.toHaveBeenCalled();
+	});
 });
