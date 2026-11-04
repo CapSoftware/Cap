@@ -427,6 +427,9 @@ pub async fn send(
                         .body(buffer.clone())
                         .send()
                         .await;
+                    if cancelled() {
+                        return Err("cancelled".into());
+                    }
                     match outcome {
                         Ok(response) if response.status().is_success() => {
                             let Some(etag) = response
@@ -456,6 +459,9 @@ pub async fn send(
                 progress(sent, total);
             }
             part += URL_BATCH as u64;
+        }
+        if cancelled() {
+            return Err("cancelled".into());
         }
         api_post(
             &format!(
