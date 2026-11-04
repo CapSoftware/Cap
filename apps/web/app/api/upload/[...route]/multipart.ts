@@ -28,6 +28,11 @@ import {
 } from "@/lib/desktop-reupload-token";
 import { invalidateGoogleDriveStorageQuotaCache } from "@/lib/google-drive-storage-quota";
 import {
+	getMediaProcessingRejection,
+	isNonMediaRawUploadKey,
+	nonMediaUploadMessage,
+} from "@/lib/media-processing-policy";
+import {
 	queueVideoTranscription,
 	shouldQueueTranscriptionAfterMultipartComplete,
 } from "@/lib/queue-video-transcription";
@@ -102,6 +107,9 @@ app.post(
 		const user = c.get("user");
 
 		const fileKey = getMultipartFileKey(user.id, body);
+		if (isNonMediaRawUploadKey(fileKey)) {
+			return c.json({ error: nonMediaUploadMessage }, 400);
+		}
 
 		const videoIdFromFileKey = fileKey.split("/")[1];
 		const videoIdRaw = "videoId" in body ? body.videoId : videoIdFromFileKey;
@@ -939,10 +947,17 @@ app.post(
 
 					const mediaServerUrl = serverEnv().MEDIA_SERVER_URL;
 					let mediaProcessingPending = false;
+					const remuxAllowed = Effect.promise(() =>
+						getMediaProcessingRejection({
+							ownerId: user.id,
+							rawFileKey: fileKey,
+						}),
+					).pipe(Effect.map((rejection) => rejection === null));
 					if (
 						bucket.provider === "s3" &&
 						video.source.type === "webMP4" &&
-						mediaServerUrl
+						mediaServerUrl &&
+						(yield* remuxAllowed)
 					) {
 						const webhookSecret = serverEnv().MEDIA_SERVER_WEBHOOK_SECRET;
 						const inputUrl = yield* bucket.getInternalSignedObjectUrl(fileKey, {

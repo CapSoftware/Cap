@@ -219,6 +219,8 @@ Run this command three times to generate values for:
 
 - [ ] Set secure passwords: `MYSQL_PASSWORD`, `MINIO_ROOT_PASSWORD`
 - [ ] Set secure secrets: `DATABASE_ENCRYPTION_KEY`, `NEXTAUTH_SECRET`, `MEDIA_SERVER_WEBHOOK_SECRET`
+- [ ] Media server status endpoints (`/video/status`, `/audio/status`, `/live-transcribe/status`, `/video/process/:jobId/status`) require `MEDIA_SERVER_WEBHOOK_SECRET` by default. Set `MEDIA_SERVER_PUBLIC_STATUS=true` only if an external monitor needs them without the secret; anonymous callers then see counts and job phase/progress, never video ids or errors.
+- [ ] HLS/DASH sources are only accepted from `MEDIA_SERVER_STREAMING_HOSTS` (default `loom.com`).
 - [ ] Set `CAP_URL` to your public URL
 - [ ] Set `S3_PUBLIC_URL` to your MinIO/S3 public URL
 - [ ] Configure a reverse proxy (nginx, Caddy, Traefik) with SSL

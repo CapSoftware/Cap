@@ -429,6 +429,8 @@ POST /api/developer/sdk/v1/upload/multipart/complete
 
 Credits are debited when the upload completes. Cap bills 5,000 micro-credits per minute using the greater of the submitted duration and the file-size-based minimum, capped at four hours.
 
+Each video accepts one completed upload. Once it completes, initiate and presign-part return `409`, and repeating complete returns `{ "success": true }` without charging again. Uploads for deleted videos return `404`. To upload a new file, create a new video.
+
 #### Abort Upload
 
 Cancel an in-progress multipart upload.
