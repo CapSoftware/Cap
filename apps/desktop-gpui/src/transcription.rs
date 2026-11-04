@@ -1486,9 +1486,10 @@ fn write_wav_16k_mono(mixed_samples: &[f32], output_path: &Path) -> Result<(), S
 
 /// Whisper copies the style of its prompt, and without a disfluent one it
 /// writes clean prose: fillers and repeats disappear and can never be offered
-/// for removal.
-const VERBATIM_PROMPT: &str =
-    "Umm, let me think like, hmm... Okay, here's what I'm, like, thinking.";
+/// for removal. One short sentence with its fillers in the middle: a longer
+/// prompt made Whisper medium decode about 7% slower, and fillers at the start
+/// of the prompt made it invent them at the start of fluent sentences.
+const VERBATIM_PROMPT: &str = "So, um, I think, uh, we should start.";
 
 fn whisper_prompt(transcription_hints: &[String], verbatim: bool) -> Option<String> {
     let hints = build_initial_prompt(transcription_hints);

@@ -878,6 +878,52 @@ mod run {
         );
     }
 
+    /// Whisper's first pass on one recording, with the model already loaded,
+    /// as the app runs it before the transcript appears.
+    #[test]
+    #[ignore = "needs CAP_BENCH_WAV and CAP_BENCH_WHISPER"]
+    fn bench_whisper_first_pass() {
+        let samples = read_wav_16k_mono(Path::new(
+            &std::env::var("CAP_BENCH_WAV").expect("CAP_BENCH_WAV"),
+        ))
+        .expect("wav");
+        let model = std::env::var("CAP_BENCH_WHISPER").expect("CAP_BENCH_WHISPER");
+        let config = std::env::var("CAP_EVAL_CONFIG").unwrap_or_else(|_| "default".into());
+        let options = options_from_config(&config).first_pass();
+        let language = language();
+        let context = get_whisper_context(&model).expect("whisper model loads");
+        let started = Instant::now();
+        let groups = process_with_whisper(
+            &samples,
+            context,
+            &language,
+            &default_transcription_hints(),
+            &options,
+        )
+        .expect("first pass");
+        let words = finish_words_tuned(
+            groups,
+            &samples,
+            &options,
+            None,
+            &TUNING,
+            &AtomicBool::new(false),
+        );
+        let seconds = started.elapsed().as_secs_f64();
+        let audio = samples.len() as f64 / 16_000.0;
+        let fillers = words
+            .iter()
+            .flatten()
+            .filter(|word| is_hesitation_filler(&word.text))
+            .count();
+        println!(
+            "whisper config={config} language={language} words={} fillers={fillers} first_rtf={:.4} first_min_per_hour={:.2}",
+            words.iter().map(Vec::len).sum::<usize>(),
+            seconds / audio,
+            seconds / audio * 60.0
+        );
+    }
+
     fn load_aligner(path: &Path) -> align::Acoustic {
         let threads = std::env::var("CAP_EVAL_ALIGNER_THREADS")
             .ok()
