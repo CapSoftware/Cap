@@ -7936,6 +7936,35 @@ mod transactional_recovery_tests {
     }
 
     #[test]
+    fn hardlink_staging_keeps_output_names_and_durable_inputs_independent() {
+        let dir = tempfile::tempdir().unwrap();
+        let cases = [
+            ("display.mp4", RecoveryCopyDurability::Deferred),
+            ("camera.mp4", RecoveryCopyDurability::Deferred),
+            ("audio-input.m4a", RecoveryCopyDurability::Deferred),
+            ("system_audio.ogg", RecoveryCopyDurability::Deferred),
+            ("fragment.m4s", RecoveryCopyDurability::Durable),
+        ];
+
+        for (index, (name, durability)) in cases.into_iter().enumerate() {
+            let case_dir = dir.path().join(format!("case-{index}"));
+            std::fs::create_dir(&case_dir).unwrap();
+            let source = case_dir.join(name);
+            let bytes: Vec<u8> = (0..1024).map(|byte| (byte % 251) as u8).collect();
+            std::fs::write(&source, &bytes).unwrap();
+            let staged = case_dir.join("staged");
+            stage_recovery_input(&source, &staged, durability, RecoveryStaging::Hardlink).unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                assert_eq!(std::fs::metadata(&staged).unwrap().nlink(), 1);
+            }
+            std::fs::write(&staged, b"mutated").unwrap();
+            assert_eq!(std::fs::read(&source).unwrap(), bytes, "{name}");
+        }
+    }
+
+    #[test]
     fn recovery_copies_and_snapshots_skip_apple_double_siblings() {
         let dir = tempfile::tempdir().unwrap();
         let project = dir.path().join("project");
