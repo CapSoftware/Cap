@@ -79,6 +79,7 @@ beforeEach(() => {
 		.mockImplementation(async () => [{ id: "video-1", password: "hash:open" }]);
 	mocks.spacePasswordRows.mockReset().mockResolvedValue([]);
 	vi.spyOn(console, "warn").mockImplementation(() => {});
+	vi.stubEnv("VERCEL", "1");
 	fromIp("203.0.113.1");
 });
 
@@ -144,6 +145,37 @@ describe("verifyVideoPassword attempt limits", () => {
 		expect(await verifyVideoPassword("video-2" as never, "other")).toEqual(
 			VERIFIED,
 		);
+	});
+
+	it("shares the per-video budget across id casing", async () => {
+		const verifyVideoPassword = await loadAction();
+
+		for (let client = 0; client < 10; client++) {
+			fromIp(`198.51.100.${client}`);
+			for (let attempt = 0; attempt < 20; attempt++) {
+				await verifyVideoPassword(
+					(attempt % 2 === 0 ? "video-1" : "VIDEO-1") as never,
+					"nope",
+				);
+			}
+		}
+		mocks.verifyPassword.mockClear();
+
+		fromIp("192.0.2.200");
+		expect(await verifyVideoPassword("Video-1" as never, "open")).toEqual(
+			TOO_MANY,
+		);
+		expect(mocks.verifyPassword).not.toHaveBeenCalled();
+	});
+
+	it("rejects ids outside the id alphabet before any lookup", async () => {
+		const verifyVideoPassword = await loadAction();
+
+		expect(await verifyVideoPassword("video-1 " as never, "open")).toEqual(
+			WRONG,
+		);
+		expect(mocks.videoRows).not.toHaveBeenCalled();
+		expect(mocks.verifyPassword).not.toHaveBeenCalled();
 	});
 
 	it("does not count attempts rejected per client against the video", async () => {

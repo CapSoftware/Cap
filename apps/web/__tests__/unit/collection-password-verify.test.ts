@@ -54,6 +54,7 @@ beforeEach(() => {
 			id === "collection-open" ? null : `hash:${id}-secret`,
 		);
 	vi.spyOn(console, "warn").mockImplementation(() => {});
+	vi.stubEnv("VERCEL", "1");
 	fromIp("203.0.113.1");
 });
 
@@ -114,6 +115,40 @@ describe("verifyCollectionPassword attempt limits", () => {
 		expect(
 			await verifyCollectionPassword("collection-2", "collection-2-secret"),
 		).toEqual(VERIFIED);
+	});
+
+	it("shares the per-collection budget across id casing", async () => {
+		mocks.getPublicCollectionPasswordHash.mockResolvedValue(
+			"hash:collection-1-secret",
+		);
+		const verifyCollectionPassword = await loadAction();
+
+		for (let client = 0; client < 10; client++) {
+			fromIp(`198.51.100.${client}`);
+			for (let attempt = 0; attempt < 20; attempt++) {
+				await verifyCollectionPassword(
+					attempt % 2 === 0 ? "collection-1" : "COLLECTION-1",
+					"nope",
+				);
+			}
+		}
+		mocks.verifyPassword.mockClear();
+
+		fromIp("192.0.2.200");
+		expect(
+			await verifyCollectionPassword("Collection-1", "collection-1-secret"),
+		).toEqual(TOO_MANY);
+		expect(mocks.verifyPassword).not.toHaveBeenCalled();
+	});
+
+	it("rejects ids outside the id alphabet before any lookup", async () => {
+		const verifyCollectionPassword = await loadAction();
+
+		expect(
+			await verifyCollectionPassword("collection-1 ", "collection-1-secret"),
+		).toEqual(WRONG);
+		expect(mocks.getPublicCollectionPasswordHash).not.toHaveBeenCalled();
+		expect(mocks.verifyPassword).not.toHaveBeenCalled();
 	});
 
 	it("does not count attempts rejected per client against the collection", async () => {
