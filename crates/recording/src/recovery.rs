@@ -96,6 +96,18 @@ enum RecoveryCopyDurability {
     Deferred,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RecoveryStaging {
+    Copy,
+    Hardlink,
+}
+
+#[derive(Clone, Copy)]
+struct FinalizePlan {
+    purpose: RecoveryPurpose,
+    staging: RecoveryStaging,
+}
+
 impl RecoveryPurpose {
     fn video_validation(self, status: Option<StudioRecordingStatus>) -> VideoValidation {
         match (self, status) {
@@ -291,7 +303,10 @@ impl RecoveryManager {
         let published_workspace = std::cell::RefCell::new(None);
         Self::finalize_with_publication(
             &incomplete,
-            RecoveryPurpose::Finalize,
+            FinalizePlan {
+                purpose: RecoveryPurpose::Finalize,
+                staging: RecoveryStaging::Hardlink,
+            },
             copy_recovery_input_with_durability,
             |_, _| Ok(()),
             |project, workspace| {
@@ -1188,7 +1203,10 @@ impl RecoveryManager {
     ) -> Result<RecoveredRecording, RecoveryError> {
         Self::finalize_with_publication(
             recording,
-            RecoveryPurpose::Finalize,
+            FinalizePlan {
+                purpose: RecoveryPurpose::Finalize,
+                staging: RecoveryStaging::Hardlink,
+            },
             copy_recovery_input_with_durability,
             |_, _| Ok(()),
             publish_recovery,
@@ -1203,7 +1221,10 @@ impl RecoveryManager {
     ) -> Result<RecoveredRecording, RecoveryError> {
         Self::finalize_with_publication(
             recording,
-            RecoveryPurpose::Finalize,
+            FinalizePlan {
+                purpose: RecoveryPurpose::Finalize,
+                staging: RecoveryStaging::Hardlink,
+            },
             copy_recovery_input_with_durability,
             |_, _| Ok(()),
             |project, workspace| publish_recovery_with_source(project, workspace, source),
@@ -1216,14 +1237,22 @@ impl RecoveryManager {
         recording: &IncompleteRecording,
         purpose: RecoveryPurpose,
     ) -> Result<RecoveredRecording, RecoveryError> {
-        Self::finalize_with_operations(
+        let staging = match purpose {
+            RecoveryPurpose::Recover => RecoveryStaging::Copy,
+            RecoveryPurpose::Finalize => RecoveryStaging::Hardlink,
+        };
+        Self::finalize_with_publication(
             recording,
-            purpose,
+            FinalizePlan { purpose, staging },
             copy_recovery_input_with_durability,
             |_, _| Ok(()),
+            publish_recovery,
+            RecoveryLock::acquire,
+            None,
         )
     }
 
+    #[cfg(test)]
     fn finalize_with_operations(
         recording: &IncompleteRecording,
         purpose: RecoveryPurpose,
@@ -1232,7 +1261,10 @@ impl RecoveryManager {
     ) -> Result<RecoveredRecording, RecoveryError> {
         Self::finalize_with_publication(
             recording,
-            purpose,
+            FinalizePlan {
+                purpose,
+                staging: RecoveryStaging::Copy,
+            },
             copy_input,
             before_source_check,
             publish_recovery,
@@ -1243,13 +1275,14 @@ impl RecoveryManager {
 
     fn finalize_with_publication(
         recording: &IncompleteRecording,
-        purpose: RecoveryPurpose,
+        plan: FinalizePlan,
         mut copy_input: impl FnMut(&Path, &Path, RecoveryCopyDurability) -> Result<(), RecoveryError>,
         before_source_check: impl FnOnce(&Path, &Path) -> Result<(), RecoveryError>,
         publish: impl FnOnce(&Path, &Path) -> Result<(), RecoveryError>,
         acquire: impl FnOnce(&Path) -> Result<RecoveryLock, RecoveryError>,
         preparing: Option<PreparingStudioJob>,
     ) -> Result<RecoveredRecording, RecoveryError> {
+        let FinalizePlan { purpose, staging } = plan;
         let started = Instant::now();
         Self::require_no_track_failure(&recording.project_path)?;
         let project = &recording.project_path;
@@ -1284,7 +1317,16 @@ impl RecoveryManager {
             for name in RECOVERY_INPUTS {
                 let source = project.join(name);
                 if source.try_exists()? {
-                    copy_input(&source, &staged.join(name), staging_durability)?;
+                    if staging == RecoveryStaging::Hardlink {
+                        stage_recovery_input(
+                            &source,
+                            &staged.join(name),
+                            staging_durability,
+                            staging,
+                        )?;
+                    } else {
+                        copy_input(&source, &staged.join(name), staging_durability)?;
+                    }
                 }
             }
             debug!(
@@ -3499,6 +3541,73 @@ fn copy_recovery_input_with_durability(
     Ok(())
 }
 
+fn recovery_input_can_hardlink(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    if matches!(name, "display.mp4" | "camera.mp4")
+        || name.starts_with("audio-input.")
+        || name.starts_with("system_audio.")
+    {
+        return false;
+    }
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "m4s" | "mp4" | "m4a" | "aac" | "wav" | "png" | "jpg" | "jpeg" | "webp" | "bin"
+            )
+        })
+}
+
+fn stage_recovery_input(
+    source: &Path,
+    destination: &Path,
+    durability: RecoveryCopyDurability,
+    staging: RecoveryStaging,
+) -> Result<(), RecoveryError> {
+    if staging == RecoveryStaging::Copy {
+        return copy_recovery_input_with_durability(source, destination, durability);
+    }
+
+    let metadata = source.symlink_metadata()?;
+    reject_recovery_link(&metadata)?;
+    if metadata.is_dir() {
+        std::fs::create_dir(destination)?;
+        for entry in std::fs::read_dir(source)? {
+            let entry = entry?;
+            if is_apple_double(&entry.file_name()) {
+                continue;
+            }
+            stage_recovery_input(
+                &entry.path(),
+                &destination.join(entry.file_name()),
+                durability,
+                staging,
+            )?;
+        }
+    } else if metadata.is_file() {
+        // Finalization only unlinks or renames staged fragments; output
+        // filenames are copied above because some remux writers truncate
+        // their destination. A hardlink keeps the source bytes untouched.
+        if durability == RecoveryCopyDurability::Deferred
+            && !metadata.permissions().readonly()
+            && recovery_input_can_hardlink(source)
+            && std::fs::hard_link(source, destination).is_ok()
+        {
+            return Ok(());
+        }
+        copy_recovery_input_with_durability(source, destination, durability)?;
+    } else {
+        return Err(RecoveryError::Validation(format!(
+            "Unsupported recovery input: {}",
+            source.display()
+        )));
+    }
+    Ok(())
+}
+
 #[cfg(target_os = "macos")]
 fn clone_recovery_file(input: &std::fs::File, destination: &Path) -> bool {
     use std::{os::fd::AsRawFd, os::unix::ffi::OsStrExt};
@@ -4781,6 +4890,54 @@ mod clean_studio_snapshot_tests {
     }
 
     #[test]
+    fn hardlink_staging_finalization_matches_copy_finalization() {
+        let hardlinked = playable_studio_project(StudioRecordingStatus::NeedsRemux);
+        let copied = playable_studio_project(StudioRecordingStatus::NeedsRemux);
+        let hardlinked_recording = RecoveryManager::inspect_recording(hardlinked.path()).unwrap();
+        let copied_recording = RecoveryManager::inspect_recording(copied.path()).unwrap();
+
+        RecoveryManager::finalize(&hardlinked_recording).unwrap();
+        RecoveryManager::finalize_with_operations(
+            &copied_recording,
+            RecoveryPurpose::Finalize,
+            copy_recovery_input_with_durability,
+            |_, _| Ok(()),
+        )
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read(hardlinked.path().join(OUTPUT)).unwrap(),
+            std::fs::read(copied.path().join(OUTPUT)).unwrap()
+        );
+    }
+
+    #[test]
+    fn hardlink_finalization_failure_preserves_originals() {
+        let directory = playable_studio_project(StudioRecordingStatus::NeedsRemux);
+        let project = directory.path();
+        let before = recovery_snapshot(project).unwrap();
+        let recording = RecoveryManager::inspect_recording(project).unwrap();
+        let error = RecoveryManager::finalize_with_publication(
+            &recording,
+            FinalizePlan {
+                purpose: RecoveryPurpose::Finalize,
+                staging: RecoveryStaging::Hardlink,
+            },
+            copy_recovery_input_with_durability,
+            |_, _| Err(RecoveryError::Validation("injected failure".into())),
+            publish_recovery,
+            RecoveryLock::acquire,
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(error, RecoveryError::Validation(message) if message == "injected failure")
+        );
+        assert_eq!(recovery_snapshot(project).unwrap(), before);
+        assert_unpublished(project);
+    }
+
+    #[test]
     fn respawn_only_studio_recovery_preserves_video_camera_and_audio() {
         let directory = respawn_only_studio_project();
         let project = directory.path();
@@ -5358,7 +5515,10 @@ mod clean_studio_snapshot_tests {
         let mut retained = None;
         RecoveryManager::finalize_with_publication(
             &recording,
-            RecoveryPurpose::Finalize,
+            FinalizePlan {
+                purpose: RecoveryPurpose::Finalize,
+                staging: RecoveryStaging::Copy,
+            },
             copy_recovery_input_with_durability,
             |_, _| {
                 let sources = match observer.latest() {
@@ -5414,7 +5574,10 @@ mod clean_studio_snapshot_tests {
         let recording = RecoveryManager::analyze_incomplete(project, &metadata).unwrap();
         RecoveryManager::finalize_with_publication(
             &recording,
-            RecoveryPurpose::Finalize,
+            FinalizePlan {
+                purpose: RecoveryPurpose::Finalize,
+                staging: RecoveryStaging::Copy,
+            },
             copy_recovery_input_with_durability,
             |_, _| {
                 assert!(matches!(
@@ -5448,7 +5611,10 @@ mod clean_studio_snapshot_tests {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             RecoveryManager::finalize_with_publication(
                 &recording,
-                RecoveryPurpose::Finalize,
+                FinalizePlan {
+                    purpose: RecoveryPurpose::Finalize,
+                    staging: RecoveryStaging::Copy,
+                },
                 copy_recovery_input_with_durability,
                 |_, _| {
                     let sources = match observer.latest() {
@@ -7743,6 +7909,30 @@ mod transactional_recovery_tests {
                 .unwrap();
             assert_eq!(std::fs::read(&empty_destination).unwrap(), b"");
         }
+    }
+
+    #[test]
+    fn hardlink_staging_unlinks_staged_copy_without_touching_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("fragment.m4s");
+        let bytes: Vec<u8> = (0..1024 * 1024).map(|index| (index % 251) as u8).collect();
+        std::fs::write(&source, &bytes).unwrap();
+        let staged = dir.path().join("staged.m4s");
+        stage_recovery_input(
+            &source,
+            &staged,
+            RecoveryCopyDurability::Deferred,
+            RecoveryStaging::Hardlink,
+        )
+        .unwrap();
+        assert_eq!(std::fs::read(&staged).unwrap(), bytes);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            assert!(std::fs::metadata(&staged).unwrap().nlink() > 1);
+        }
+        std::fs::remove_file(&staged).unwrap();
+        assert_eq!(std::fs::read(&source).unwrap(), bytes);
     }
 
     #[test]
