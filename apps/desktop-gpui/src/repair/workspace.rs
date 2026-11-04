@@ -807,6 +807,7 @@ impl Workspace {
     }
 
     pub fn stage_json_edit(&mut self, rel: &RelPath, ops: &[JsonOp]) -> Result<Value, String> {
+        self.settle()?;
         self.check_writable(rel)?;
         if !rel.is_json() {
             return Err("only .json files can be edited".into());
@@ -902,6 +903,7 @@ impl Workspace {
     }
 
     pub fn stage_truncate(&mut self, rel: &RelPath, length: u64) -> Result<Value, String> {
+        self.settle()?;
         self.check_writable(rel)?;
         if !rel.is_media() {
             return Err("only media files can be truncated; edit JSON with stage_json_edit".into());
@@ -937,6 +939,7 @@ impl Workspace {
     }
 
     pub fn stage_remove(&mut self, rel: &RelPath) -> Result<Value, String> {
+        self.settle()?;
         self.check_writable(rel)?;
         if !rel.is_media() {
             return Err("only media files can be removed; edit JSON with stage_json_edit".into());
@@ -966,6 +969,7 @@ impl Workspace {
     }
 
     pub fn stage_replace(&mut self, rel: &RelPath, incoming: &Path) -> Result<Value, String> {
+        self.settle()?;
         let result = self.stage_replace_inner(rel, incoming);
         if result.is_err() {
             std::fs::remove_file(incoming).ok();
@@ -1048,6 +1052,7 @@ impl Workspace {
     }
 
     pub fn discard(&mut self) -> Result<Value, String> {
+        self.settle()?;
         let count = self.changes.len() as u32;
         for staged in std::mem::take(&mut self.changes).into_values() {
             if let Change::Edit { staged: path } | Change::Replace { staged: path } = staged.change
@@ -1143,6 +1148,7 @@ impl Workspace {
         if self.fixed {
             return Err("already repaired".into());
         }
+        self.settle()?;
         if self.attempts >= MAX_ATTEMPTS {
             return Err("no attempts left".into());
         }
@@ -1213,6 +1219,22 @@ impl Workspace {
             attempts_left,
             project_path: None,
         })
+    }
+
+    fn settle(&mut self) -> Result<(), String> {
+        let Some(entries) = self.unsettled.clone() else {
+            return Ok(());
+        };
+        rollback_entries(&self.bundle, &self.dir, &entries)
+            .and_then(|()| self.write_journal(JournalState::RolledBack, entries))
+            .map_err(|error| {
+                format!(
+                    "an earlier apply has not been undone yet, so no more changes are allowed: {}",
+                    self.redactor.text(&error)
+                )
+            })?;
+        self.unsettled = None;
+        Ok(())
     }
 
     fn cleanup_staged(&mut self) {
@@ -1948,6 +1970,48 @@ pub(crate) mod tests {
             ));
         }
         assert!(!joined.contains("private-person"), "{joined}");
+        std::fs::remove_dir_all(bundle.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn an_unfinished_apply_is_rolled_back_before_anything_else() {
+        let bundle = fixture("unsettled");
+        let original_manifest = std::fs::read(manifest().join_to(&bundle)).unwrap();
+        let mut ws = workspace(&bundle);
+        ws.stage_json_edit(
+            &manifest(),
+            &[op(
+                JsonOpKind::Set,
+                "/segments/1/is_complete",
+                Some(json!(false)),
+            )],
+        )
+        .unwrap();
+        let entries = ws.journal_entries();
+        ws.write_journal(JournalState::Committing, entries.clone())
+            .unwrap();
+        ws.unsettled = Some(entries);
+        let changes: Vec<_> = ws
+            .changes
+            .iter()
+            .map(|(r, s)| (r.clone(), s.clone()))
+            .collect();
+        for (rel, staged) in &changes {
+            ws.install(rel, staged).unwrap();
+        }
+        assert_ne!(
+            std::fs::read(manifest().join_to(&bundle)).unwrap(),
+            original_manifest
+        );
+        let verifier: Verifier = Arc::new(|_: &Path| Err("still broken".to_string()));
+        let outcome = ws.apply_and_verify(&verifier).unwrap();
+        assert!(!outcome.fixed);
+        assert!(ws.unsettled.is_none());
+        assert_eq!(
+            std::fs::read(manifest().join_to(&bundle)).unwrap(),
+            original_manifest
+        );
+        ws.close();
         std::fs::remove_dir_all(bundle.parent().unwrap()).ok();
     }
 
