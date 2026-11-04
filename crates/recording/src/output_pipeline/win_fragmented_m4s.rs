@@ -109,7 +109,6 @@ impl FrameDropTracker {
 
 /// Logs the first encode failures, then every 300th: a warning per frame from
 /// a dead encoder pushed its first error out of the size-capped log upload.
-/// Returns whether the frame was encoded.
 fn report_encode_result(
     encoder: &mut SegmentedVideoEncoder,
     result: Result<(), QueueFrameError>,
