@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import os from "node:os";
 import {
 	getContainerCpuLimit,
@@ -359,7 +360,7 @@ export function canAcceptNewVideoProcess(
 }
 
 export function generateJobId(): string {
-	return `job_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+	return `job_${Date.now()}_${randomUUID()}`;
 }
 
 export function createJob(

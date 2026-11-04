@@ -57,6 +57,7 @@ describe("GET /video/status", () => {
 		const response = await app.fetch(
 			new Request("http://localhost/video/status", {
 				method: "GET",
+				headers: AUTH_HEADERS,
 			}),
 		);
 
@@ -823,6 +824,7 @@ describe("GET /video/process/:jobId/status", () => {
 		const response = await appWithMock.fetch(
 			new Request("http://localhost/video/process/test-job-id/status", {
 				method: "GET",
+				headers: AUTH_HEADERS,
 			}),
 		);
 

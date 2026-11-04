@@ -104,7 +104,9 @@ async function startJob(requestBody: Record<string, unknown> = body) {
 }
 
 async function status(jobId: string): Promise<JobProgress> {
-	const response = await video.request(`/process/${jobId}/status`);
+	const response = await video.request(`/process/${jobId}/status`, {
+		headers,
+	});
 	expect(response.status).toBe(200);
 	return response.json();
 }
