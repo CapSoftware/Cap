@@ -1,18 +1,56 @@
 import type { Video } from "@cap/web-domain";
-import { Effect, Option } from "effect";
+import { Effect, Exit, Option } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { splitTranslationChunks } from "@/actions/videos/translation-vtt";
+import {
+	sourceDigest,
+	splitTranslationChunks,
+} from "@/actions/videos/translation-vtt";
 
 const ownerId = "owner";
 const videoId = "public-video" as Video.VideoId;
 const sourceKey = `${ownerId}/${videoId}/transcription.vtt`;
 
+type StoredObject = { body: string; eTag: string };
+
 const mocks = vi.hoisted(() => ({
-	objects: new Map<string, string>(),
+	objects: new Map<string, { body: string; eTag: string }>(),
+	nextETag: 0,
 	provider: "s3" as "s3" | "googleDrive",
+	conditionalWritesSupported: true,
+	heldMarkerReads: 0,
+	claimWrites: 0,
 	generateText: vi.fn(),
 	isRateLimited: vi.fn(async () => false),
 }));
+
+const store = (key: string, body: string) => {
+	mocks.nextETag += 1;
+	const stored: StoredObject = { body, eTag: `"etag-${mocks.nextETag}"` };
+	mocks.objects.set(key, stored);
+	return stored;
+};
+
+const writeFailure = (status: number) => ({
+	$metadata: { httpStatusCode: status },
+});
+
+const markerReadsHeld: Array<() => void> = [];
+
+const afterStorageRoundTrip = <A>(key: string, read: () => A) =>
+	Effect.promise(
+		() =>
+			new Promise<void>((resolve) => {
+				if (key.includes("/translation-status/") && mocks.heldMarkerReads > 0) {
+					markerReadsHeld.push(resolve);
+					if (markerReadsHeld.length === mocks.heldMarkerReads) {
+						mocks.heldMarkerReads = 0;
+						for (const release of markerReadsHeld.splice(0)) release();
+					}
+					return;
+				}
+				setTimeout(resolve, 0);
+			}),
+	).pipe(Effect.map(read));
 
 vi.mock("@cap/database", () => ({
 	db: () => ({
@@ -37,10 +75,42 @@ vi.mock("@cap/web-backend", () => ({
 				{
 					provider: mocks.provider,
 					getObject: (key: string) =>
-						Effect.sync(() => Option.fromNullable(mocks.objects.get(key))),
+						afterStorageRoundTrip(key, () =>
+							Option.fromNullable(mocks.objects.get(key)?.body),
+						),
+					getObjectWithETag: (key: string) =>
+						afterStorageRoundTrip(key, () => {
+							const stored = mocks.objects.get(key);
+							return stored
+								? Option.some({ body: stored.body, eTag: stored.eTag })
+								: Option.none();
+						}),
 					putObject: (key: string, body: string) =>
 						Effect.sync(() => {
-							mocks.objects.set(key, body);
+							store(key, body);
+						}),
+					putObjectWithETag: (
+						key: string,
+						body: string,
+						fields?: { ifMatch?: string; ifNoneMatch?: string },
+					) =>
+						Effect.suspend(() => {
+							mocks.claimWrites += 1;
+							const conditional =
+								fields?.ifMatch !== undefined ||
+								fields?.ifNoneMatch !== undefined;
+							if (conditional && !mocks.conditionalWritesSupported) {
+								return Effect.fail({ cause: writeFailure(501) });
+							}
+							const existing = mocks.objects.get(key);
+							if (
+								(fields?.ifNoneMatch === "*" && existing) ||
+								(fields?.ifMatch !== undefined &&
+									existing?.eTag !== fields.ifMatch)
+							) {
+								return Effect.fail({ cause: writeFailure(412) });
+							}
+							return Effect.succeed({ ETag: store(key, body).eTag });
 						}),
 					deleteObject: (key: string) =>
 						Effect.sync(() => {
@@ -52,7 +122,11 @@ vi.mock("@cap/web-backend", () => ({
 	},
 }));
 vi.mock("@/lib/server", () => ({
-	runPromise: Effect.runPromise,
+	runPromise: (effect: Effect.Effect<unknown, unknown>) =>
+		Effect.runPromiseExit(effect).then((exit) => {
+			if (Exit.isFailure(exit)) throw exit;
+			return exit.value;
+		}),
 	runPromiseExit: Effect.runPromiseExit,
 }));
 vi.mock("@/lib/video-storage", () => ({
@@ -88,6 +162,12 @@ const makeSource = (prefix: string) =>
 
 const source = makeSource("Original");
 const chunkCount = splitTranslationChunks(source)?.length ?? 0;
+
+const markerKey = (vtt: string, language = "ja") =>
+	`${ownerId}/${videoId}/translation-status/${language}.${sourceDigest(vtt).slice(0, 16)}.json`;
+
+const markerKeys = () =>
+	[...mocks.objects.keys()].filter((key) => key.endsWith(".json"));
 
 const translatedChunk = (prompt: string) => {
 	const chunk = prompt.split("VTT content to translate:\n\n")[1] ?? "";
@@ -128,8 +208,13 @@ const loadAction = async () => {
 };
 
 beforeEach(() => {
-	mocks.objects = new Map([[sourceKey, source]]);
+	mocks.objects = new Map();
+	mocks.nextETag = 0;
+	mocks.claimWrites = 0;
+	mocks.heldMarkerReads = 0;
+	store(sourceKey, source);
 	mocks.provider = "s3";
+	mocks.conditionalWritesSupported = true;
 	mocks.generateText.mockReset();
 	mocks.isRateLimited.mockClear();
 });
@@ -155,6 +240,26 @@ describe("translateTranscript runs one translation pass per video and language",
 		expect(mocks.isRateLimited).toHaveBeenCalledTimes(20);
 	});
 
+	it("lets only one instance claim a pair when several start together", async () => {
+		succeed();
+		const instances = [];
+		for (let index = 0; index < 3; index++) {
+			instances.push(await loadAction());
+		}
+		expect(new Set(instances).size).toBe(3);
+		mocks.heldMarkerReads = instances.length;
+
+		const results = await Promise.all(
+			instances.map((translateTranscript) =>
+				translateTranscript(videoId, "ja"),
+			),
+		);
+
+		expect(mocks.generateText).toHaveBeenCalledTimes(chunkCount);
+		expect(results.every((result) => result.success)).toBe(true);
+		expect(new Set(results.map((result) => result.translatedVtt)).size).toBe(1);
+	});
+
 	it("serves the stored translation afterwards without another pass", async () => {
 		succeed();
 		const translateTranscript = await loadAction();
@@ -172,9 +277,14 @@ describe("translateTranscript runs one translation pass per video and language",
 			success: true,
 			translatedVtt: first.translatedVtt,
 		});
-		expect(
-			[...mocks.objects.keys()].filter((key) => key.endsWith(".json")),
-		).toEqual([]);
+		expect(markerKeys()).toEqual([]);
+	});
+
+	it("renews its claim after every chunk", async () => {
+		succeed();
+		const translateTranscript = await loadAction();
+		await translateTranscript(videoId, "ja");
+		expect(mocks.claimWrites).toBe(chunkCount);
 	});
 
 	it("does not run the model again for a pair that just failed", async () => {
@@ -220,6 +330,8 @@ describe("translateTranscript runs one translation pass per video and language",
 		const translateTranscript = await loadAction();
 		await translateTranscript(videoId, "ja");
 		const calls = mocks.generateText.mock.calls.length;
+		const failedMarker = mocks.objects.get(markerKey(source))?.body;
+		expect(failedMarker).toContain('"failed"');
 
 		succeed();
 		await expect(translateTranscript(videoId, "fr")).resolves.toMatchObject({
@@ -227,14 +339,18 @@ describe("translateTranscript runs one translation pass per video and language",
 		});
 		expect(mocks.generateText).toHaveBeenCalledTimes(calls + chunkCount);
 
-		mocks.objects.set(sourceKey, makeSource("Edited"));
+		const edited = makeSource("Edited");
+		store(sourceKey, edited);
 		await expect(translateTranscript(videoId, "ja")).resolves.toMatchObject({
 			success: true,
 		});
 		expect(mocks.generateText).toHaveBeenCalledTimes(calls + chunkCount * 2);
+		expect(mocks.objects.get(markerKey(source))?.body).toBe(failedMarker);
+		expect(mocks.objects.has(markerKey(edited))).toBe(false);
 	});
 
 	it("waits for a pass already running elsewhere instead of starting another", async () => {
+		vi.useFakeTimers({ toFake: ["setTimeout", "Date"] });
 		succeed();
 		const runningInstance = await loadAction();
 		let releaseModel = () => {};
@@ -248,14 +364,21 @@ describe("translateTranscript runs one translation pass per video and language",
 			},
 		);
 		const running = runningInstance(videoId, "ja");
-		await vi.waitFor(() => expect(mocks.generateText).toHaveBeenCalledTimes(1));
+		await vi.advanceTimersByTimeAsync(10);
+		expect(mocks.generateText).toHaveBeenCalledTimes(1);
 
 		const waitingInstance = await loadAction();
-		const waiting = waitingInstance(videoId, "ja");
-		await new Promise((resolve) => setTimeout(resolve, 50));
+		let waitingResult: unknown;
+		const waiting = waitingInstance(videoId, "ja").then((result) => {
+			waitingResult = result;
+			return result;
+		});
+		await vi.advanceTimersByTimeAsync(60_000);
+		expect(waitingResult).toBeUndefined();
 		expect(mocks.generateText).toHaveBeenCalledTimes(1);
 
 		releaseModel();
+		await vi.advanceTimersByTimeAsync(10_000);
 		const [first, second] = await Promise.all([running, waiting]);
 
 		expect(mocks.generateText).toHaveBeenCalledTimes(chunkCount);
@@ -264,6 +387,36 @@ describe("translateTranscript runs one translation pass per video and language",
 			success: true,
 			translatedVtt: first.translatedVtt,
 		});
+	});
+
+	it("takes over a pass whose claim has expired", async () => {
+		store(
+			markerKey(source),
+			JSON.stringify({
+				state: "pending",
+				source: sourceDigest(source),
+				at: Date.now() - 6 * 60 * 1000,
+			}),
+		);
+		succeed();
+		const translateTranscript = await loadAction();
+		await expect(translateTranscript(videoId, "ja")).resolves.toMatchObject({
+			success: true,
+		});
+		expect(mocks.generateText).toHaveBeenCalledTimes(chunkCount);
+		expect(markerKeys()).toEqual([]);
+	});
+
+	it("still translates when the storage cannot record claims", async () => {
+		mocks.conditionalWritesSupported = false;
+		succeed();
+		const translateTranscript = await loadAction();
+		const results = await Promise.all(
+			Array.from({ length: 5 }, () => translateTranscript(videoId, "ja")),
+		);
+		expect(results.every((result) => result.success)).toBe(true);
+		expect(mocks.generateText).toHaveBeenCalledTimes(chunkCount);
+		expect(markerKeys()).toEqual([]);
 	});
 
 	it("still translates when the storage provider is not S3", async () => {
@@ -275,9 +428,7 @@ describe("translateTranscript runs one translation pass per video and language",
 		);
 		expect(results.every((result) => result.success)).toBe(true);
 		expect(mocks.generateText).toHaveBeenCalledTimes(chunkCount);
-		expect(
-			[...mocks.objects.keys()].filter((key) => key.endsWith(".json")),
-		).toEqual([]);
+		expect(markerKeys()).toEqual([]);
 	});
 
 	it("keeps the request limit check ahead of any model call", async () => {

@@ -93,17 +93,19 @@ export async function translateTranscript(
 		return { success: false, message: "Original transcript not found" };
 	}
 
-	const pairKey = `${videoId}:${targetLanguage}:${sourceDigest(originalVtt.value)}`;
+	const digest = sourceDigest(originalVtt.value);
+	const pairKey = `${videoId}:${targetLanguage}:${digest}`;
 	const running = translationsInFlight.get(pairKey);
 	if (running) return running;
 
 	const translation = translateOnce({
 		bucket,
 		pairKey,
+		digest,
 		source: originalVtt.value,
 		targetLanguage,
 		translatedKey: `${video.ownerId}/${videoId}/transcription.${targetLanguage}.vtt`,
-		attemptKey: `${video.ownerId}/${videoId}/translation-status/${targetLanguage}.json`,
+		attemptKey: `${video.ownerId}/${videoId}/translation-status/${targetLanguage}.${digest.slice(0, 16)}.json`,
 	}).finally(() => translationsInFlight.delete(pairKey));
 	translationsInFlight.set(pairKey, translation);
 	return translation;
@@ -116,6 +118,7 @@ type VideoBucket = Effect.Effect.Success<
 interface PairTranslation {
 	bucket: VideoBucket;
 	pairKey: string;
+	digest: string;
 	source: string;
 	targetLanguage: LanguageCode;
 	translatedKey: string;
@@ -128,12 +131,19 @@ interface TranslationAttempt {
 	at: number;
 }
 
-// A pass cannot outlive its function invocation (Vercel's default 300 s limit),
-// so an older pending marker belongs to a pass that was stopped.
+type TranslationClaim =
+	| { kind: "owned"; eTag: string | undefined }
+	| { kind: "untracked" }
+	| { kind: "busy" }
+	| { kind: "failed"; at: number };
+
+// The owner renews its pending marker after every chunk, so the lease only has
+// to outlast one chunk's model calls; an older marker belongs to a stopped pass.
 const PENDING_TRANSLATION_LEASE_MS = 5 * 60 * 1000;
 const FAILED_TRANSLATION_RETRY_MS = 10 * 60 * 1000;
-const TRANSLATION_WAIT_MS = 20 * 1000;
-const TRANSLATION_WAIT_POLL_MS = 2 * 1000;
+// Waiting viewers stay inside the default 300 s function duration.
+const TRANSLATION_WAIT_MS = 4 * 60 * 1000;
+const TRANSLATION_WAIT_POLL_MS = 3 * 1000;
 
 const TRANSLATION_FAILED: TranslateResult = {
 	success: false,
@@ -188,69 +198,129 @@ function parseAttempt(body: string): TranslationAttempt | null {
 	return null;
 }
 
-async function readAttempt(
-	translation: PairTranslation,
-): Promise<TranslationAttempt | null> {
-	if (translation.bucket.provider !== "s3") return null;
-	try {
-		const stored = await translation.bucket
-			.getObject(translation.attemptKey)
-			.pipe(runPromise);
-		const attempt = Option.isSome(stored) ? parseAttempt(stored.value) : null;
-		if (!attempt || attempt.source !== sourceDigest(translation.source)) {
-			return null;
-		}
-		const ttl =
-			attempt.state === "pending"
-				? PENDING_TRANSLATION_LEASE_MS
-				: FAILED_TRANSLATION_RETRY_MS;
-		return Date.now() - attempt.at < ttl ? attempt : null;
-	} catch (error) {
-		console.warn("[translateTranscript] Could not read attempt:", error);
-		return null;
-	}
-}
-
-async function writeAttempt(
+function attemptBody(
 	translation: PairTranslation,
 	state: TranslationAttempt["state"],
 ) {
-	if (translation.bucket.provider !== "s3") return;
 	const attempt: TranslationAttempt = {
 		state,
-		source: sourceDigest(translation.source),
+		source: translation.digest,
 		at: Date.now(),
 	};
+	return JSON.stringify(attempt);
+}
+
+function errorStatus(error: unknown) {
+	const pending = [error];
+	for (let index = 0; index < pending.length && index < 16; index++) {
+		const value = pending[index];
+		if (typeof value !== "object" || value === null) continue;
+		const record = value as Record<string, unknown>;
+		const status = (record.$metadata as { httpStatusCode?: unknown } | null)
+			?.httpStatusCode;
+		if (typeof status === "number") return status;
+		pending.push(record.cause, record.error);
+	}
+	return undefined;
+}
+
+function isClaimConflict(error: unknown) {
+	const status = errorStatus(error);
+	return status === 412 || status === 409;
+}
+
+async function claimTranslation(
+	translation: PairTranslation,
+): Promise<TranslationClaim> {
+	const { bucket } = translation;
+	if (bucket.provider !== "s3") return { kind: "untracked" };
+
 	try {
-		await translation.bucket
-			.putObject(translation.attemptKey, JSON.stringify(attempt), {
-				contentType: "application/json",
-			})
+		const current = await bucket
+			.getObjectWithETag(translation.attemptKey)
 			.pipe(runPromise);
+		const attempt = Option.isSome(current)
+			? parseAttempt(current.value.body)
+			: null;
+		if (attempt?.source === translation.digest) {
+			const age = Date.now() - attempt.at;
+			if (attempt.state === "failed" && age < FAILED_TRANSLATION_RETRY_MS) {
+				return { kind: "failed", at: attempt.at };
+			}
+			if (attempt.state === "pending" && age < PENDING_TRANSLATION_LEASE_MS) {
+				return { kind: "busy" };
+			}
+		}
+		if (Option.isSome(current) && !current.value.eTag) {
+			return { kind: "untracked" };
+		}
+
+		const written = await bucket
+			.putObjectWithETag(
+				translation.attemptKey,
+				attemptBody(translation, "pending"),
+				{
+					contentType: "application/json",
+					...(Option.isSome(current)
+						? { ifMatch: current.value.eTag }
+						: { ifNoneMatch: "*" }),
+				},
+			)
+			.pipe(runPromise);
+		return { kind: "owned", eTag: written.ETag };
 	} catch (error) {
-		console.warn("[translateTranscript] Could not record attempt:", error);
+		if (isClaimConflict(error)) return { kind: "busy" };
+		console.warn("[translateTranscript] Could not claim translation:", error);
+		return { kind: "untracked" };
 	}
 }
 
-async function clearAttempt(translation: PairTranslation) {
-	if (translation.bucket.provider !== "s3") return;
+async function updateClaim(
+	translation: PairTranslation,
+	claim: TranslationClaim,
+	state: TranslationAttempt["state"],
+) {
+	const { bucket } = translation;
+	if (claim.kind !== "owned" || !claim.eTag || bucket.provider !== "s3") {
+		return;
+	}
+	try {
+		const written = await bucket
+			.putObjectWithETag(
+				translation.attemptKey,
+				attemptBody(translation, state),
+				{ contentType: "application/json", ifMatch: claim.eTag },
+			)
+			.pipe(runPromise);
+		claim.eTag = written.ETag;
+	} catch (error) {
+		console.warn("[translateTranscript] Could not update claim:", error);
+	}
+}
+
+async function releaseClaim(
+	translation: PairTranslation,
+	claim: TranslationClaim,
+) {
+	if (claim.kind !== "owned") return;
 	try {
 		await translation.bucket
 			.deleteObject(translation.attemptKey)
 			.pipe(runPromise);
 	} catch (error) {
-		console.warn("[translateTranscript] Could not clear attempt:", error);
+		console.warn("[translateTranscript] Could not release claim:", error);
 	}
 }
 
-async function waitForTranslation(
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function translateOnce(
 	translation: PairTranslation,
 ): Promise<TranslateResult> {
 	const deadline = Date.now() + TRANSLATION_WAIT_MS;
-	while (Date.now() < deadline) {
-		await new Promise((resolve) =>
-			setTimeout(resolve, TRANSLATION_WAIT_POLL_MS),
-		);
+	for (let round = 0; ; round++) {
+		if (round > 0) await sleep(TRANSLATION_WAIT_POLL_MS);
+
 		const stored = await readStoredTranslation(translation);
 		if (stored) {
 			return {
@@ -259,47 +329,34 @@ async function waitForTranslation(
 				message: "Retrieved cached translation",
 			};
 		}
-		const attempt = await readAttempt(translation);
-		if (attempt?.state === "failed") {
-			recordFailure(translation.pairKey, attempt.at);
+
+		if (hasRecentFailure(translation.pairKey)) return TRANSLATION_FAILED;
+
+		const claim = await claimTranslation(translation);
+		if (claim.kind === "failed") {
+			recordFailure(translation.pairKey, claim.at);
 			return TRANSLATION_FAILED;
 		}
-		if (!attempt) break;
+		if (claim.kind !== "busy") return runTranslation(translation, claim);
+		if (Date.now() >= deadline) {
+			return { success: false, message: "Translation in progress" };
+		}
 	}
-	return { success: false, message: "Translation in progress" };
 }
 
-async function translateOnce(
+async function runTranslation(
 	translation: PairTranslation,
+	claim: TranslationClaim,
 ): Promise<TranslateResult> {
-	const stored = await readStoredTranslation(translation);
-	if (stored) {
-		return {
-			success: true,
-			translatedVtt: stored,
-			message: "Retrieved cached translation",
-		};
-	}
-
-	if (hasRecentFailure(translation.pairKey)) return TRANSLATION_FAILED;
-
-	const attempt = await readAttempt(translation);
-	if (attempt?.state === "failed") {
-		recordFailure(translation.pairKey, attempt.at);
-		return TRANSLATION_FAILED;
-	}
-	if (attempt?.state === "pending") return waitForTranslation(translation);
-
-	await writeAttempt(translation, "pending");
-
 	const translatedVtt = await translateVttContent(
 		translation.source,
 		translation.targetLanguage,
+		() => updateClaim(translation, claim, "pending"),
 	);
 
 	if (!translatedVtt) {
 		recordFailure(translation.pairKey, Date.now());
-		await writeAttempt(translation, "failed");
+		await updateClaim(translation, claim, "failed");
 		return TRANSLATION_FAILED;
 	}
 
@@ -318,7 +375,7 @@ async function translateOnce(
 			);
 		}
 	}
-	await clearAttempt(translation);
+	await releaseClaim(translation, claim);
 
 	return {
 		success: true,
@@ -330,6 +387,7 @@ async function translateOnce(
 async function translateVttContent(
 	vttContent: string,
 	targetLanguage: LanguageCode,
+	onChunkTranslated: () => Promise<void>,
 ): Promise<string | null> {
 	const targetLanguageName = SUPPORTED_LANGUAGES[targetLanguage];
 	const chunks = splitTranslationChunks(vttContent);
@@ -374,6 +432,7 @@ ${chunk}`;
 				},
 			);
 			translations.push(translatedChunk);
+			if (translations.length < chunks.length) await onChunkTranslated();
 		} catch (error) {
 			console.error("[translateVttContent] Translation error:", error);
 			return null;
