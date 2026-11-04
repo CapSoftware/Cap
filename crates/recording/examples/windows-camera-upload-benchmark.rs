@@ -468,22 +468,34 @@ mod windows_bench {
         let gpu = Gpu::new()?;
         let mut buffers = CameraBuffers::new();
         let mut checks = Vec::new();
-        for (width, height) in [(64u32, 32u32), (128, 48), (64, 32)] {
+        for (width, height) in [(64u32, 32u32), (128, 48), (64, 32), (3, 2)] {
             for format in [
                 PixelFormat::YUYV422,
                 PixelFormat::UYVY422,
                 PixelFormat::NV12,
                 PixelFormat::RGB32,
                 PixelFormat::ARGB,
+                PixelFormat::RGB24,
+                PixelFormat::BGR24,
             ] {
+                let is_rgb24 = matches!(format, PixelFormat::RGB24 | PixelFormat::BGR24);
+                if !width.is_multiple_of(2) && !is_rgb24 {
+                    continue;
+                }
                 for flip in [false, true] {
                     for sequence in 0..3u8 {
                         let row_bytes = width as usize
                             * match format {
                                 PixelFormat::NV12 => 1,
                                 PixelFormat::RGB32 | PixelFormat::ARGB => 4,
+                                PixelFormat::RGB24 | PixelFormat::BGR24 => 3,
                                 _ => 2,
                             };
+                        let upload_row_bytes = if is_rgb24 {
+                            width as usize * 4
+                        } else {
+                            row_bytes
+                        };
                         let pitch = row_bytes + 16;
                         let rows = height as usize
                             + if format == PixelFormat::NV12 {
@@ -500,7 +512,7 @@ mod windows_bench {
                                     .wrapping_add(sequence.wrapping_mul(53));
                             }
                         }
-                        let mut expected = vec![0; row_bytes * rows];
+                        let mut expected = vec![0; upload_row_bytes * rows];
                         for row in 0..rows {
                             let source_row = if !flip {
                                 row
@@ -510,8 +522,15 @@ mod windows_bench {
                                 rows - 1 - (row - height as usize)
                             };
                             let source = &bytes[source_row * pitch..source_row * pitch + row_bytes];
-                            let dest = &mut expected[row * row_bytes..(row + 1) * row_bytes];
-                            if format == PixelFormat::UYVY422 {
+                            let dest =
+                                &mut expected[row * upload_row_bytes..(row + 1) * upload_row_bytes];
+                            if is_rgb24 {
+                                for (src, dst) in
+                                    source.chunks_exact(3).zip(dest.chunks_exact_mut(4))
+                                {
+                                    dst.copy_from_slice(&[src[0], src[1], src[2], 255]);
+                                }
+                            } else if format == PixelFormat::UYVY422 {
                                 for (src, dst) in
                                     source.chunks_exact(4).zip(dest.chunks_exact_mut(4))
                                 {
@@ -534,6 +553,9 @@ mod windows_bench {
                             upload_mf_buffer_to_texture(&gpu.device, &frame, &mut buffers)?;
                         let mut desc = D3D11_TEXTURE2D_DESC::default();
                         unsafe { texture.GetDesc(&mut desc) };
+                        if is_rgb24 && desc.Format != DXGI_FORMAT_B8G8R8A8_UNORM {
+                            bail!("Expected BGRA texture for {format:?}");
+                        }
                         desc.Usage = D3D11_USAGE_STAGING;
                         desc.BindFlags = 0;
                         desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ.0 as u32;
@@ -546,7 +568,7 @@ mod windows_bench {
                                 &texture,
                             );
                         }
-                        checks.push((readback, expected, row_bytes, rows, format, flip));
+                        checks.push((readback, expected, upload_row_bytes, rows, format, flip));
                     }
                 }
             }
@@ -575,6 +597,24 @@ mod windows_bench {
             unsafe { gpu.context.Unmap(&readback, 0) };
             if !matches {
                 bail!("Readback mismatch for {format:?} flip={flip}");
+            }
+        }
+        for pixel_format in [PixelFormat::RGB24, PixelFormat::BGR24] {
+            for bottom_up in [false, true] {
+                for len in [8, 17] {
+                    let raw = RawFrame {
+                        bytes: vec![0; len],
+                        width: 3,
+                        height: 2,
+                        pixel_format,
+                        bottom_up,
+                        counter: 0,
+                    };
+                    let frame = new_frame(&raw)?;
+                    if upload_mf_buffer_to_texture(&gpu.device, &frame, &mut buffers).is_ok() {
+                        bail!("Accepted malformed {pixel_format:?} buffer with {len} bytes");
+                    }
+                }
             }
         }
         println!("Validation: {count} GPU readbacks matched");

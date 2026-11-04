@@ -1,7 +1,9 @@
 use crate::{
     AudioFrame, AudioMuxer, Muxer, TaskPool, VideoFrame, VideoMuxer,
     output_pipeline::{
-        HealthSender, PipelineHealthEvent, emit_health,
+        HealthSender, PipelineHealthEvent,
+        camera_rgb::convert_rgb24_to_bgra_into,
+        emit_health,
         frame_pacing::{FramePacer, Paced},
         mjpeg::MjpegDecoder,
     },
@@ -122,8 +124,7 @@ use windows::{
     Win32::Graphics::{
         Direct3D11::ID3D11Device,
         Dxgi::Common::{
-            DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12, DXGI_FORMAT_R8G8B8A8_UNORM,
-            DXGI_FORMAT_YUY2,
+            DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12, DXGI_FORMAT_YUY2,
         },
     },
 };
@@ -628,10 +629,10 @@ impl NativeCameraFrame {
             cap_camera_windows::PixelFormat::YUYV422 | cap_camera_windows::PixelFormat::UYVY422 => {
                 DXGI_FORMAT_YUY2
             }
-            cap_camera_windows::PixelFormat::ARGB | cap_camera_windows::PixelFormat::RGB32 => {
-                DXGI_FORMAT_B8G8R8A8_UNORM
-            }
-            cap_camera_windows::PixelFormat::RGB24 => DXGI_FORMAT_R8G8B8A8_UNORM,
+            cap_camera_windows::PixelFormat::ARGB
+            | cap_camera_windows::PixelFormat::RGB32
+            | cap_camera_windows::PixelFormat::RGB24
+            | cap_camera_windows::PixelFormat::BGR24 => DXGI_FORMAT_B8G8R8A8_UNORM,
             _ => DXGI_FORMAT_NV12,
         }
     }
@@ -669,7 +670,7 @@ fn ffmpeg_pixel_to_dxgi(pixel: ffmpeg::format::Pixel) -> DXGI_FORMAT {
         ffmpeg::format::Pixel::NV12 => DXGI_FORMAT_NV12,
         ffmpeg::format::Pixel::YUYV422 | ffmpeg::format::Pixel::UYVY422 => DXGI_FORMAT_YUY2,
         ffmpeg::format::Pixel::BGRA | ffmpeg::format::Pixel::RGBA => DXGI_FORMAT_B8G8R8A8_UNORM,
-        ffmpeg::format::Pixel::BGR24 | ffmpeg::format::Pixel::RGB24 => DXGI_FORMAT_R8G8B8A8_UNORM,
+        ffmpeg::format::Pixel::BGR24 | ffmpeg::format::Pixel::RGB24 => DXGI_FORMAT_B8G8R8A8_UNORM,
         _ => DXGI_FORMAT_NV12,
     }
 }
@@ -1098,6 +1099,7 @@ impl AudioMuxer for WindowsCameraMuxer {
 pub struct CameraBuffers {
     uyvy_buffer: Vec<u8>,
     flip_buffer: Vec<u8>,
+    bgra_buffer: Vec<u8>,
     texture: Option<CameraUploadTexture>,
 }
 
@@ -1114,6 +1116,7 @@ impl CameraBuffers {
         Self {
             uyvy_buffer: Vec::new(),
             flip_buffer: Vec::new(),
+            bgra_buffer: Vec::new(),
             texture: None,
         }
     }
@@ -1903,10 +1906,35 @@ pub fn upload_mf_buffer_to_texture(
     let dynamic = cached.dynamic;
 
     let needs_uyvy_conversion = frame.pixel_format == cap_camera_windows::PixelFormat::UYVY422;
+    let needs_rgb_conversion = matches!(
+        frame.pixel_format,
+        cap_camera_windows::PixelFormat::RGB24 | cap_camera_windows::PixelFormat::BGR24
+    );
     let needs_flip = frame.is_bottom_up;
     let mut row_pitch = layout.primary_stride as u32;
 
     let data: &[u8] = match (needs_uyvy_conversion, needs_flip) {
+        (false, flip) if needs_rgb_conversion => {
+            row_pitch = frame.width.checked_mul(4).ok_or_else(|| {
+                windows::core::Error::new(
+                    windows::Win32::Foundation::E_INVALIDARG,
+                    "Camera BGRA row pitch is too large",
+                )
+            })?;
+            // Windows RGB24 stores BGR bytes, just like BGR24 and the FFmpeg fallback.
+            convert_rgb24_to_bgra_into(
+                original_data,
+                &mut buffers.bgra_buffer,
+                frame.width as usize,
+                frame.height as usize,
+                layout.primary_stride,
+                false,
+                flip,
+            )
+            .map_err(|message| {
+                windows::core::Error::new(windows::Win32::Foundation::E_INVALIDARG, message)
+            })?
+        }
         (false, false) => original_data,
         (true, false) => {
             let uyvy_size = (frame.width * frame.height * 2) as usize;
