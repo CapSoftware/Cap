@@ -264,8 +264,7 @@ pub fn interpolate_cursor_with_click_spring(
     let time_ms = (time_secs * 1000.0) as f64;
 
     if let Some(smoothing_config) = smoothing {
-        let filtered_moves = filter_cursor_shake(&cursor.moves);
-        let prepared_moves = decimate_cursor_moves(filtered_moves.as_ref());
+        let prepared_moves = prepare_cursor_moves(&cursor.moves);
         let timeline = build_smoothed_timeline(
             cursor,
             prepared_moves.as_ref(),
@@ -399,8 +398,7 @@ impl PrecomputedCursorTimeline {
         }
 
         let smoothing_config = smoothing.unwrap();
-        let filtered_moves = filter_cursor_shake(&cursor.moves);
-        let prepared_moves = decimate_cursor_moves(filtered_moves.as_ref());
+        let prepared_moves = prepare_cursor_moves(&cursor.moves);
         let built = build_smoothed_timeline(
             cursor,
             prepared_moves.as_ref(),
@@ -706,6 +704,72 @@ fn interpolate_timeline(
     })
 }
 
+fn prepare_cursor_moves(moves: &[CursorMoveEvent]) -> Cow<'_, [CursorMoveEvent]> {
+    let Some(first) = moves.first() else {
+        return Cow::Borrowed(moves);
+    };
+    let mut previous = first;
+    let mut filtered = moves
+        .iter()
+        .enumerate()
+        .filter(|&(index, curr)| {
+            if index == 0 || index + 1 == moves.len() {
+                previous = curr;
+                return true;
+            }
+            let next = &moves[index + 1];
+            if curr.cursor_id != previous.cursor_id
+                || curr.cursor_id != next.cursor_id
+                || next.time_ms - previous.time_ms > SHAKE_DETECTION_WINDOW_MS
+            {
+                previous = curr;
+                return true;
+            }
+            let to_curr = (curr.x - previous.x, curr.y - previous.y);
+            let to_next = (next.x - curr.x, next.y - curr.y);
+            let reversal = to_curr.0 * to_next.0 + to_curr.1 * to_next.1 < 0.0;
+            let small = (to_curr.0.powi(2) + to_curr.1.powi(2)).sqrt() < SHAKE_THRESHOLD_UV
+                && (to_next.0.powi(2) + to_next.1.powi(2)).sqrt() < SHAKE_THRESHOLD_UV;
+            if reversal && small {
+                return false;
+            }
+            previous = curr;
+            true
+        })
+        .peekable();
+
+    let frame_ms = (1000.0 / DECIMATE_FPS).floor();
+    let mut last_kept = first;
+    let mut kept = 0;
+    let mut out: Option<Vec<CursorMoveEvent>> = None;
+    while let Some((index, curr)) = filtered.next() {
+        if kept > 0
+            && curr.cursor_id == last_kept.cursor_id
+            && let Some((_, next)) = filtered.peek()
+        {
+            let quick = next.time_ms - last_kept.time_ms < frame_ms;
+            let dx = curr.x - last_kept.x;
+            let dy = curr.y - last_kept.y;
+            if quick || (dx * dx + dy * dy).sqrt() < DECIMATE_MIN_DIST_UV {
+                continue;
+            }
+        }
+        if out.is_none() && index != kept {
+            out = Some(moves[..kept].to_vec());
+        }
+        if let Some(out) = &mut out {
+            out.push(curr.clone());
+        }
+        last_kept = curr;
+        kept += 1;
+    }
+    match out {
+        Some(out) => Cow::Owned(out),
+        None => Cow::Borrowed(moves),
+    }
+}
+
+#[cfg(test)]
 fn filter_cursor_shake<'a>(moves: &'a [CursorMoveEvent]) -> Cow<'a, [CursorMoveEvent]> {
     if moves.len() < 3 {
         return Cow::Borrowed(moves);
@@ -764,6 +828,7 @@ fn filter_cursor_shake<'a>(moves: &'a [CursorMoveEvent]) -> Cow<'a, [CursorMoveE
     Cow::Owned(filtered)
 }
 
+#[cfg(test)]
 fn decimate_cursor_moves<'a>(moves: &'a [CursorMoveEvent]) -> Cow<'a, [CursorMoveEvent]> {
     if moves.len() < 2 {
         return Cow::Borrowed(moves);
@@ -832,6 +897,200 @@ mod tests {
             cursor_num: 0,
             time_ms,
             down,
+        }
+    }
+
+    #[test]
+    fn prepared_cursor_moves_match_two_pass_reference() {
+        let mut state = 0x5eeda11_u64;
+        for length in [0, 1, 2, 3, 4, 17, 128, 1024] {
+            for variant in 0..16 {
+                let moves: Vec<_> = (0..length)
+                    .map(|index| {
+                        state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+                        let mut event = cursor_move(
+                            index as f64 * [1.0, 8.0, 16.0, 50.0][variant % 4],
+                            if variant < 4 {
+                                (index % 2) as f64 * 0.001
+                            } else {
+                                (state % 1000) as f64 / 1000.0
+                            },
+                            if variant < 4 {
+                                0.5
+                            } else {
+                                ((state >> 20) % 1000) as f64 / 1000.0
+                            },
+                        );
+                        if variant % 3 == 0 {
+                            event.cursor_id = (index % 3).to_string();
+                            event.active_modifiers = vec!["Shift".into(), index.to_string()];
+                        }
+                        if index % 7 == 3 {
+                            match variant {
+                                8 => event.time_ms = f64::NAN,
+                                9 => event.time_ms = f64::NEG_INFINITY,
+                                10 => event.time_ms = f64::INFINITY,
+                                11 => event.time_ms = 0.0,
+                                12 => event.x = f64::NAN,
+                                13 => event.y = f64::INFINITY,
+                                14 => event.time_ms = -(index as f64),
+                                _ => {}
+                            }
+                        }
+                        event
+                    })
+                    .collect();
+                let filtered = filter_cursor_shake(&moves);
+                let expected = decimate_cursor_moves(&filtered);
+                let actual = prepare_cursor_moves(&moves);
+                assert_eq!(
+                    actual.len(),
+                    expected.len(),
+                    "length={length} variant={variant}"
+                );
+                for (a, b) in actual.iter().zip(expected.iter()) {
+                    assert_eq!(a.cursor_id, b.cursor_id);
+                    assert_eq!(a.active_modifiers, b.active_modifiers);
+                    assert_eq!(a.time_ms.to_bits(), b.time_ms.to_bits());
+                    assert_eq!(a.x.to_bits(), b.x.to_bits());
+                    assert_eq!(a.y.to_bits(), b.y.to_bits());
+                }
+                if actual.len() == moves.len() {
+                    assert!(matches!(actual, Cow::Borrowed(_)));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn prepared_cursor_timeline_matches_two_pass_reference() {
+        for variant in 0..8 {
+            let mut cursor = dense_cursor(8);
+            match variant {
+                1 => cursor.moves[50].time_ms = cursor.moves[49].time_ms,
+                2 => cursor.moves.swap(50, 100),
+                3 => cursor.moves[100].time_ms = f64::NAN,
+                4 => cursor.clicks.reverse(),
+                5 => cursor.clicks.clear(),
+                6 => cursor.moves[100].time_ms = f64::NEG_INFINITY,
+                7 => cursor.moves.iter_mut().for_each(|event| {
+                    event.x = 0.5;
+                    event.y = 0.5;
+                }),
+                _ => {}
+            }
+            let filtered = filter_cursor_shake(&cursor.moves);
+            let moves = decimate_cursor_moves(&filtered);
+            for config in [DEFAULT_CLICK_SPRING, DRAG_SPRING] {
+                let expected = linear_build_smoothed_timeline(&cursor, &moves, config, None);
+                let actual = PrecomputedCursorTimeline::new(&cursor, Some(config), None);
+                assert_timeline_bits(&expected, &actual.timeline, &actual.cursor_ids);
+            }
+        }
+    }
+
+    fn two_pass_cursor_timeline(cursor: &CursorEvents) -> PrecomputedCursorTimeline {
+        let event_order = CursorEventOrder::new(cursor);
+        let filtered = filter_cursor_shake(&cursor.moves);
+        let moves = decimate_cursor_moves(&filtered);
+        let built = build_smoothed_timeline(cursor, &moves, DEFAULT_CLICK_SPRING, None);
+        PrecomputedCursorTimeline {
+            timeline: built.events,
+            cursor_ids: built.cursor_ids,
+            raw_cursor: CursorEvents::default(),
+            event_order,
+            has_smoothing: true,
+            variants: Mutex::new(Vec::new()),
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn benchmark_cursor_preparation() {
+        use std::{hint::black_box, time::Instant};
+        for (seconds, pattern) in [
+            (10, "dense"),
+            (600, "dense"),
+            (3600, "dense"),
+            (600, "high_rate"),
+            (600, "sparse"),
+            (600, "jitter"),
+        ] {
+            let mut cursor = dense_cursor(if pattern == "high_rate" {
+                seconds * 2
+            } else {
+                seconds
+            });
+            if pattern == "sparse" {
+                cursor.moves = cursor.moves.into_iter().step_by(4).collect();
+            }
+            for (index, event) in cursor.moves.iter_mut().enumerate() {
+                if pattern == "high_rate" {
+                    event.time_ms *= 0.5;
+                } else if pattern == "jitter" {
+                    event.cursor_id = "primary".into();
+                    event.x = 0.5 + (index % 2) as f64 * 0.001;
+                    event.y = 0.5;
+                }
+                if index % 120 < 12 {
+                    event.active_modifiers = vec!["Shift".into()];
+                }
+            }
+            let old = two_pass_cursor_timeline(&cursor);
+            let new = PrecomputedCursorTimeline::new(&cursor, Some(DEFAULT_CLICK_SPRING), None);
+            assert_eq!(old.timeline.len(), new.timeline.len());
+            for (a, b) in old.timeline.iter().zip(&new.timeline) {
+                assert_eq!(a.time.to_bits(), b.time.to_bits());
+                assert_eq!(a.position.x.to_bits(), b.position.x.to_bits());
+                assert_eq!(a.position.y.to_bits(), b.position.y.to_bits());
+                assert_eq!(a.velocity.x.to_bits(), b.velocity.x.to_bits());
+                assert_eq!(a.velocity.y.to_bits(), b.velocity.y.to_bits());
+                assert_eq!(
+                    old.cursor_ids[a.cursor_id as usize],
+                    new.cursor_ids[b.cursor_id as usize]
+                );
+            }
+            drop((old, new));
+            let measure = |baseline| {
+                let start = Instant::now();
+                let timeline = if baseline {
+                    two_pass_cursor_timeline(black_box(&cursor))
+                } else {
+                    PrecomputedCursorTimeline::new(
+                        black_box(&cursor),
+                        Some(DEFAULT_CLICK_SPRING),
+                        None,
+                    )
+                };
+                let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+                drop(black_box(timeline));
+                elapsed
+            };
+            let (mut old, mut new) = (Vec::new(), Vec::new());
+            for round in 0..11 {
+                let (a, b) = if round % 2 == 0 {
+                    (measure(true), measure(false))
+                } else {
+                    let b = measure(false);
+                    (measure(true), b)
+                };
+                if round > 1 {
+                    old.push(a);
+                    new.push(b);
+                }
+            }
+            old.sort_by(f64::total_cmp);
+            new.sort_by(f64::total_cmp);
+            println!(
+                "cursor_constructor seconds={seconds} pattern={pattern} moves={} before_ms={:.3} after_ms={:.3} before_range={:.3}..{:.3} after_range={:.3}..{:.3}",
+                cursor.moves.len(),
+                old[4],
+                new[4],
+                old[0],
+                old[8],
+                new[0],
+                new[8]
+            );
         }
     }
 
