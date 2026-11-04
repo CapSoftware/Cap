@@ -10,3 +10,18 @@ export function hasBrowserShortcutModifier(event: ModifierEvent) {
 		!event.getModifierState("AltGraph")
 	);
 }
+
+// A keyup can arrive without its modifier (Ctrl released first), so keyup only acts on keys the player handled on keydown.
+export function createHandledKeyTracker() {
+	let handled: string | null = null;
+	return {
+		down(key: string) {
+			handled = key;
+		},
+		up(key: string) {
+			const matches = handled === key;
+			if (matches) handled = null;
+			return matches;
+		},
+	};
+}

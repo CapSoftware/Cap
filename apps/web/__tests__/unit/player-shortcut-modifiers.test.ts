@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { hasBrowserShortcutModifier } from "@/app/s/[videoId]/_components/video/shortcut-modifiers";
+import {
+	createHandledKeyTracker,
+	hasBrowserShortcutModifier,
+} from "@/app/s/[videoId]/_components/video/shortcut-modifiers";
 
 const press = (mods: {
 	metaKey?: boolean;
@@ -28,5 +31,19 @@ describe("hasBrowserShortcutModifier", () => {
 				press({ ctrlKey: true, altKey: true, altGraph: true }),
 			),
 		).toBe(false);
+	});
+});
+
+describe("createHandledKeyTracker", () => {
+	it("ignores a keyup whose keydown the player skipped (Ctrl released first)", () => {
+		const keys = createHandledKeyTracker();
+		expect(keys.up("arrowup")).toBe(false);
+	});
+
+	it("matches a keyup to the keydown the player handled, once", () => {
+		const keys = createHandledKeyTracker();
+		keys.down("arrowup");
+		expect(keys.up("arrowup")).toBe(true);
+		expect(keys.up("arrowup")).toBe(false);
 	});
 });
