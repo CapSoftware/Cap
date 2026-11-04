@@ -84,6 +84,7 @@ const MULTIPART_MIN_PART_SIZE_BYTES = 5 * 1024 * 1024;
 const MULTIPART_MAX_PARTS = 10_000;
 const MULTIPART_ABORT_TIMEOUT_MS = 30_000;
 const STORAGE_ERROR_BODY_LIMIT_BYTES = 2_048;
+const MAX_DASH_SEGMENTS = 200_000;
 export const LOOM_IMPORT_MAX_BYTES = 10 * 1024 ** 3;
 
 export type StorageUploadTarget =
@@ -609,6 +610,7 @@ function buildDashSegments(
 	resourceBaseUrl: string,
 	query: string,
 	presentationDuration: number | null,
+	maxSegments: number,
 ): DashSegment[] {
 	const media = templateAttrs.media;
 	if (!media) {
@@ -623,6 +625,13 @@ function buildDashSegments(
 			? Math.ceil(presentationDuration * timescale)
 			: null;
 	const segments: DashSegment[] = [];
+	const assertWithinLimit = (count: number) => {
+		if (count > maxSegments) {
+			throw new Error(
+				`DASH manifest lists more than ${MAX_DASH_SEGMENTS} segments`,
+			);
+		}
+	};
 
 	if (timeline) {
 		const timelineSegments = getXmlElementBlocks(timeline.content, "S");
@@ -655,6 +664,7 @@ function buildDashSegments(
 				}
 				count = Math.max(0, Math.ceil((endTime - currentTime) / duration));
 			}
+			assertWithinLimit(segments.length + count);
 
 			for (let offset = 0; offset < count; offset++) {
 				const time = currentTime + duration * offset;
@@ -685,6 +695,7 @@ function buildDashSegments(
 	}
 
 	const segmentCount = Math.max(1, Math.ceil(totalDurationTicks / duration));
+	assertWithinLimit(segmentCount);
 	for (let index = 0; index < segmentCount; index++) {
 		const remainingDuration = totalDurationTicks - duration * index;
 		const segmentDuration = Math.min(duration, remainingDuration);
@@ -710,7 +721,7 @@ function quoteHlsAttribute(value: string): string {
 	return `"${value.replace(/"/g, "%22").replace(/[\r\n]/g, "")}"`;
 }
 
-async function writeDashRepresentationPlaylist(
+export async function writeDashRepresentationPlaylist(
 	dirPath: string,
 	initUrl: string,
 	segments: DashSegment[],
@@ -719,10 +730,11 @@ async function writeDashRepresentationPlaylist(
 		throw new Error("DASH manifest did not resolve any media segments");
 	}
 
-	const targetDuration = Math.max(
-		1,
-		Math.ceil(Math.max(...segments.map((segment) => segment.duration))),
+	const longestSegment = segments.reduce(
+		(longest, segment) => Math.max(longest, segment.duration),
+		0,
 	);
+	const targetDuration = Math.max(1, Math.ceil(longestSegment));
 	const playlistPath = join(dirPath, `${randomUUID()}.m3u8`);
 	const lines = [
 		"#EXTM3U",
@@ -786,6 +798,7 @@ export async function materializeMpdAsHlsPlaylist(
 		parseIsoDurationSeconds(periodAttrs.duration) ??
 		parseIsoDurationSeconds(mpdAttrs.mediaPresentationDuration);
 	const playlists: DashRepresentationPlaylist[] = [];
+	let segmentTotal = 0;
 
 	for (const adaptation of getXmlElementBlocks(
 		periodContent,
@@ -852,7 +865,9 @@ export async function materializeMpdAsHlsPlaylist(
 				resourceBaseUrl,
 				query,
 				presentationDuration,
+				MAX_DASH_SEGMENTS - segmentTotal,
 			);
+			segmentTotal += segments.length;
 			const path = await writeDashRepresentationPlaylist(
 				dirPath,
 				initUrl,
