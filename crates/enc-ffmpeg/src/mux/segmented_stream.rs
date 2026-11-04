@@ -290,6 +290,10 @@ pub struct SegmentedVideoEncoderConfig {
     /// [`SegmentedVideoEncoder::queue_hw_pixel_buffer`]) before falling back
     /// to the software-frame path. Ignored on other platforms.
     pub prefer_videotoolbox_hw_input: bool,
+    /// When set, pixel format conversion and scaling run outside the encoder
+    /// (for example via [`cap_frame_converter::AsyncConverterPool`]) so
+    /// readback and GPU conversion can overlap encoding.
+    pub prefer_external_conversion: bool,
 }
 
 impl Default for SegmentedVideoEncoderConfig {
@@ -300,6 +304,7 @@ impl Default for SegmentedVideoEncoderConfig {
             bpp: H264EncoderBuilder::QUALITY_BPP,
             output_size: None,
             prefer_videotoolbox_hw_input: false,
+            prefer_external_conversion: false,
         }
     }
 }
@@ -401,6 +406,10 @@ impl SegmentedVideoEncoder {
 
         if let Some((width, height)) = config.output_size {
             builder = builder.with_output_size(width, height)?;
+        }
+
+        if config.prefer_external_conversion {
+            builder = builder.with_external_conversion();
         }
 
         #[cfg(target_os = "macos")]
@@ -616,6 +625,35 @@ impl SegmentedVideoEncoder {
 
     pub fn take_encoder_fallback(&mut self) -> Option<EncoderFallback> {
         self.pending_fallback.take()
+    }
+
+    pub fn conversion_requirements(&self) -> crate::video::h264::ConversionRequirements {
+        self.encoder.conversion_requirements()
+    }
+
+    pub fn queue_preconverted_frame(
+        &mut self,
+        frame: frame::Video,
+        timestamp: Duration,
+    ) -> Result<(), QueueFrameError> {
+        let mut sink = SinkProbe::new(&mut self.mux);
+        let result = self
+            .encoder
+            .queue_preconverted_frame_to(frame, timestamp, &mut sink);
+        let sink_failed = sink.failed;
+        match result {
+            Ok(()) => self.consecutive_codec_failures = 0,
+            Err(EncodeError::Encode(error)) if !sink_failed => {
+                if !self.recover_from_codec_failure(error) {
+                    return Err(EncodeError::Encode(error).into());
+                }
+            }
+            Err(error) => return Err(error.into()),
+        }
+
+        self.mux.frame_queued();
+
+        Ok(())
     }
 
     pub fn finish(&mut self) -> Result<(), FinishError> {
@@ -2067,6 +2105,56 @@ mod tests {
                 .unwrap();
         assert_eq!(manifest["is_complete"], true);
         assert!(manifest["total_duration"].as_f64().unwrap() > 4.5);
+    }
+
+    #[test]
+    fn preconverted_frames_fall_back_to_the_software_encoder() {
+        ffmpeg::init().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let base_path = temp.path().to_path_buf();
+        let mut encoder = SegmentedVideoEncoder::init_libx264(
+            base_path.clone(),
+            test_video_info(),
+            SegmentedVideoEncoderConfig::default(),
+        )
+        .unwrap();
+        encoder.force_runtime_fallback(true);
+        encoder.encoder.inject_codec_failure_after(
+            30,
+            HARDWARE_FAILURE,
+            Some(H264Preset::Ultrafast),
+        );
+
+        let total_frames = 90u64;
+        let mut rejected = 0;
+        for i in 0..total_frames {
+            let requirements = encoder.conversion_requirements();
+            let mut frame = ffmpeg::frame::Video::new(
+                requirements.output_format,
+                requirements.output_width,
+                requirements.output_height,
+            );
+            for plane in 0..frame.planes() {
+                frame.data_mut(plane).fill(128);
+            }
+            if encoder
+                .queue_preconverted_frame(frame, Duration::from_micros(i * 33_333))
+                .is_err()
+            {
+                rejected += 1;
+            }
+        }
+
+        let fallback = encoder.take_encoder_fallback().expect("encoder replaced");
+        assert_eq!(fallback.replacement, "libx264");
+        assert_eq!(rejected, HARDWARE_FAILURES_BEFORE_FALLBACK - 1);
+        encoder.finish().unwrap();
+
+        let decoded = decode_every_packet(&recorded_track(&base_path));
+        assert_eq!(
+            decoded.frames,
+            total_frames as usize - HARDWARE_FAILURES_BEFORE_FALLBACK as usize
+        );
     }
 
     #[test]

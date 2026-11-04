@@ -7,6 +7,9 @@ pub use pool::*;
 mod frame_pool;
 pub use frame_pool::*;
 
+mod reorder;
+pub use reorder::*;
+
 #[cfg(target_os = "macos")]
 mod videotoolbox;
 #[cfg(target_os = "macos")]
