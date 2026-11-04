@@ -404,7 +404,7 @@ const toMobileCapSummary = (
 						phase: row.uploadPhase ?? "uploading",
 						processingProgress: Number(row.processingProgress ?? 0),
 						processingMessage: row.processingMessage,
-						processingError: row.processingError,
+						processingError: row.processingError ? "Processing failed" : null,
 					}
 				: null,
 		ownedByCurrentUser: row.ownerId === currentUserId,
@@ -1785,7 +1785,7 @@ const getCapStatuses = Effect.fn("Mobile.getCapStatuses")(function* (
 							phase: row.phase ?? "uploading",
 							processingProgress: Number(row.processingProgress ?? 0),
 							processingMessage: row.processingMessage,
-							processingError: row.processingError,
+							processingError: row.processingError ? "Processing failed" : null,
 						}
 					: null,
 		})),

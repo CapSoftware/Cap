@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
 	statusFetch: vi.fn(),
 	dispatch: vi.fn(),
 	mediaJobFailed: vi.fn(),
+	mediaRejection: vi.fn(),
 	sleep: vi.fn(),
 	env: {} as Record<string, string>,
 	loomSourceUrl: "https://cdn.loom.com/original.mp4",
@@ -75,6 +76,11 @@ vi.mock("workflow", () => ({
 	RetryableError: class RetryableError extends Error {},
 }));
 
+vi.mock("@/lib/media-processing-policy", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@/lib/media-processing-policy")>()),
+	getMediaProcessingRejection: mocks.mediaRejection,
+}));
+
 vi.mock("@/lib/loom-media-dispatch", () => ({
 	recordLoomMediaDispatch: mocks.dispatch,
 	isLoomMediaJobFailed: mocks.mediaJobFailed,
@@ -121,6 +127,7 @@ describe("media processing workflows", () => {
 		}));
 		mocks.rows = [];
 		mocks.env = {};
+		mocks.mediaRejection.mockReset().mockResolvedValue(null);
 		mocks.loomSourceUrl = "https://cdn.loom.com/original.mp4";
 		mocks.where
 			.mockReset()
@@ -257,6 +264,61 @@ describe("media processing workflows", () => {
 		expect(mocks.remove).not.toHaveBeenCalled();
 		expect(mocks.fetch).toHaveBeenCalledTimes(3);
 		expect(mocks.sleep.mock.calls).toEqual([[15_000], [30_000]]);
+	});
+
+	it("does not dispatch sources that fail the processing gate", async () => {
+		mocks.mediaRejection.mockResolvedValue(
+			"media-input-rejected: the uploaded file is not a supported video file",
+		);
+		mocks.rows = [
+			[video],
+			[{ ...pending, rawFileKey: payload.rawFileKey }],
+			[video],
+		];
+		await expect(processVideoWorkflow(payload)).rejects.toThrow(
+			"media-input-rejected",
+		);
+		expect(mocks.mediaRejection).toHaveBeenCalledWith({
+			ownerId: "owner",
+			rawFileKey: payload.rawFileKey,
+		});
+		expect(mocks.fetch).not.toHaveBeenCalled();
+		expect(mocks.write).toHaveBeenCalled();
+	});
+
+	it("stops retrying once the media server rejects the input", async () => {
+		mocks.rows = [
+			[video],
+			[{ ...pending, rawFileKey: payload.rawFileKey }],
+			[video],
+			[
+				{
+					...pending,
+					phase: "error",
+					processingError: "media-input-rejected: not a media file",
+				},
+			],
+		];
+		await expect(processVideoWorkflow(payload)).rejects.toThrow(
+			"media-input-rejected",
+		);
+		expect(mocks.fetch).toHaveBeenCalledOnce();
+		expect(mocks.sleep).not.toHaveBeenCalledWith(15_000);
+	});
+
+	it("does not dispatch Loom imports that fail the processing gate", async () => {
+		mocks.mediaRejection.mockResolvedValue(
+			"media-processing-suspended: media processing is unavailable for this account",
+		);
+		mocks.rows = [[video], [pending]];
+		await expect(importLoomVideoWorkflow(payload)).rejects.toThrow(
+			"media-processing-suspended",
+		);
+		expect(
+			mocks.fetch.mock.calls.some(([url]) =>
+				String(url).startsWith("https://worker.example.com/video/"),
+			),
+		).toBe(false);
 	});
 
 	it("recovers from a confirmed worker failure with a bounded durable retry", async () => {

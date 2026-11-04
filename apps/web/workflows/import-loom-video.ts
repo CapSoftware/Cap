@@ -28,6 +28,7 @@ import {
 	isLoomMediaJobFailed,
 	recordLoomMediaDispatch,
 } from "@/lib/loom-media-dispatch";
+import { getMediaProcessingRejection } from "@/lib/media-processing-policy";
 import {
 	createMediaServerCapacityError,
 	isMediaServerCapacityError,
@@ -555,6 +556,15 @@ async function processVideoOnMediaServer(
 		}
 		if (video.ownerId !== userId) {
 			return yield* Effect.fail(new FatalError("Loom import owner changed"));
+		}
+		const rejection = yield* Effect.promise(() =>
+			getMediaProcessingRejection({
+				ownerId: video.ownerId,
+				rawFileKey: loomSourceUrl ? null : rawFileKey,
+			}),
+		);
+		if (rejection) {
+			return yield* Effect.fail(new FatalError(rejection));
 		}
 		const videoDomain = Video.Video.decodeSync({
 			...video,

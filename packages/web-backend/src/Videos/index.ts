@@ -604,9 +604,10 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 						phase: automaticRetry ? "processing" : result.phase,
 						processingProgress: result.processingProgress,
 						processingMessage: Option.fromNullable(result.processingMessage),
-						processingError: automaticRetry
-							? Option.none()
-							: Option.fromNullable(result.processingError),
+						processingError: Option.none(),
+						processingErrorKind: automaticRetry
+							? undefined
+							: Video.getUploadProgressErrorKind(result.processingError),
 						hasRawFallback: result.rawFileKey != null,
 						automaticRetry,
 					}),
