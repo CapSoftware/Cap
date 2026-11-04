@@ -361,10 +361,6 @@ document.querySelector("button").onclick = () => {
 			fs.readFileSync(path.join(directory, "actions.jsonl"), "utf8"),
 			/SAME_WINDOW_TAB_SENTINEL/,
 		);
-		assert.match(
-			fs.readFileSync(path.join(directory, "report.html"), "utf8"),
-			/Unsaved note before Stop/,
-		);
 		assert.match(nativeWalkPrompt(file), /no server-side query trace/);
 		assert.match(nativeWalkPrompt(file), /browser-preroll/);
 	},

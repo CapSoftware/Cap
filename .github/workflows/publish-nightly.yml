@@ -15,8 +15,6 @@ name: "publish-nightly"
 # shipped, and promote-nightly.yml can only promote nightlies users could run.
 
 on:
-  schedule:
-    - cron: "0 3 * * *"
   workflow_dispatch:
     inputs:
       force:

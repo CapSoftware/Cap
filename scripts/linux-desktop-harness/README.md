@@ -2,8 +2,7 @@
 
 Runs the GPUI app on real Linux desktops in systemd containers and drives a
 recording the way a person does, so Wayland start and stop failures reproduce
-in CI instead of on users' machines. `.github/workflows/linux-desktop-reliability.yml`
-runs it on every pull request that touches the desktop app.
+instead of on users' machines. Run it by hand; no workflow runs it any more.
 
 | Desktop | Image | What it stands in for |
 | --- | --- | --- |
