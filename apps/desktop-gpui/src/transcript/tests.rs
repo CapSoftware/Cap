@@ -262,6 +262,42 @@ fn restoring_undoes_the_cut_exactly() {
 }
 
 #[test]
+fn shapes_ripple_with_a_cut_and_come_back_when_it_is_restored() {
+    let words = spoken(&["so", "um", "the", "export", "works"]);
+    let durations = [5.0];
+    let mut project = project(&borrowed(&words), &durations);
+    let shape = |start: f64, end: f64| cap_project::ShapeSegment {
+        start,
+        end,
+        ..Default::default()
+    };
+    timeline_mut(&mut project).shape_segments = vec![shape(3.0, 3.5), shape(1.2, 3.5)];
+    let before = editor_edits::clip_timeline_duration(timeline(&project));
+
+    cut_words(&mut project, &durations, &[(1, 2)]);
+    let removed = before - editor_edits::clip_timeline_duration(timeline(&project));
+    assert!(removed > 0.2);
+    let shapes = &timeline(&project).shape_segments;
+    assert!(close(shapes[0].start, 3.0 - removed) && close(shapes[0].end, 3.5 - removed));
+    assert!(close(shapes[1].start, 1.2) && close(shapes[1].end, 3.5 - removed));
+
+    let doc = TranscriptDoc::build(project.captions.as_ref().unwrap());
+    let restored = restore_words(timeline_mut(&mut project), &durations, &[], &doc, 1..2).unwrap();
+    assert_eq!(restored, 1);
+    let shapes = &timeline(&project).shape_segments;
+    assert!(
+        close(shapes[0].start, 3.0) && close(shapes[0].end, 3.5),
+        "{:?}",
+        (shapes[0].start, shapes[0].end)
+    );
+    assert!(
+        close(shapes[1].start, 1.2) && close(shapes[1].end, 3.5),
+        "{:?}",
+        (shapes[1].start, shapes[1].end)
+    );
+}
+
+#[test]
 fn restore_reaches_a_cut_at_the_start_and_end() {
     let words = spoken(&["um", "hello", "there", "uh"]);
     let durations = [4.0];

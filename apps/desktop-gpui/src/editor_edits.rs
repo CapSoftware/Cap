@@ -1737,6 +1737,7 @@ pub fn ripple_insert_output_tracks(
     ripple_track(&mut timeline.zoom_segments, boundary, shift);
     ripple_track(&mut timeline.scene_segments, boundary, shift);
     ripple_track(&mut timeline.text_segments, boundary, shift);
+    ripple_track(&mut timeline.shape_segments, boundary, shift);
     ripple_track(&mut timeline.caption_segments, boundary, shift);
     ripple_keyboard_track(&mut timeline.keyboard_segments, boundary, shift);
     ripple_track(&mut timeline.audio_segments, boundary, shift);
