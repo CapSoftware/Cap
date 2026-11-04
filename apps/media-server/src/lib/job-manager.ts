@@ -910,10 +910,18 @@ export function sendWebhook(
 			acknowledgement = await deliverWebhook(job, getJobProgress(job));
 		}
 		return acknowledgement;
-	})().finally(() => {
-		job.webhookInFlight = false;
-		job.webhookPromise = undefined;
-	});
+	})()
+		.catch((error: unknown) => {
+			console.error(
+				`[job-manager] Webhook delivery failed for job ${job.jobId}:`,
+				error,
+			);
+			return undefined;
+		})
+		.finally(() => {
+			job.webhookInFlight = false;
+			job.webhookPromise = undefined;
+		});
 	return job.webhookPromise;
 }
 
