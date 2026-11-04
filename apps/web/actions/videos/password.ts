@@ -11,7 +11,9 @@ import { collectPasswordHashes } from "@cap/web-backend";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { TOO_MANY_PASSWORD_ATTEMPTS } from "@/lib/password-attempts";
 import { setVerifiedPasswordCookie } from "@/lib/password-cookie";
+import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 
 export async function setVideoPassword(
 	videoId: Video.VideoId,
@@ -90,6 +92,15 @@ export async function verifyVideoPassword(
 	try {
 		if (!videoId || typeof password !== "string")
 			return { success: false, error: "Failed to verify password" };
+
+		if (
+			(await isRateLimited(RATE_LIMIT_IDS.VIDEO_PASSWORD)) ||
+			(await isRateLimited(RATE_LIMIT_IDS.VIDEO_PASSWORD_PER_VIDEO, {
+				key: `video:${videoId}`,
+			}))
+		) {
+			return { success: false, error: TOO_MANY_PASSWORD_ATTEMPTS };
+		}
 
 		const [video] = await db()
 			.select()

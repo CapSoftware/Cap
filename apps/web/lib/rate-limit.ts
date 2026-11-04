@@ -130,6 +130,14 @@ export const RATE_LIMIT_IDS = {
 	DOCS_ASK: "rl_docs_ask",
 	AUTH_SSO_START: "rl_auth_sso_start",
 	MCP_CLIENT_REGISTRATION: "rl_mcp_client_registration",
+	/** Share-page video password attempts. Suggested: 20 / 10m per IP. */
+	VIDEO_PASSWORD: "rl_video_password",
+	/** Video password attempts across all clients. Suggested: 200 / 10m per key (video). */
+	VIDEO_PASSWORD_PER_VIDEO: "rl_video_password_per_video",
+	/** Public collection password attempts. Suggested: 20 / 10m per IP. */
+	COLLECTION_PASSWORD: "rl_collection_password",
+	/** Collection password attempts across all clients. Suggested: 200 / 10m per key (collection). */
+	COLLECTION_PASSWORD_PER_COLLECTION: "rl_collection_password_per_collection",
 } as const;
 
 type FallbackRateLimit = { limit: number; windowMs: number };
@@ -156,6 +164,16 @@ const FALLBACK_RATE_LIMITS: Record<string, FallbackRateLimit> = {
 	[RATE_LIMIT_IDS.DOCS_ASK]: { limit: 10, windowMs: MINUTE_MS },
 	[RATE_LIMIT_IDS.AUTH_SSO_START]: { limit: 100, windowMs: MINUTE_MS },
 	[RATE_LIMIT_IDS.MCP_CLIENT_REGISTRATION]: { limit: 60, windowMs: MINUTE_MS },
+	[RATE_LIMIT_IDS.VIDEO_PASSWORD]: { limit: 20, windowMs: 10 * MINUTE_MS },
+	[RATE_LIMIT_IDS.VIDEO_PASSWORD_PER_VIDEO]: {
+		limit: 200,
+		windowMs: 10 * MINUTE_MS,
+	},
+	[RATE_LIMIT_IDS.COLLECTION_PASSWORD]: { limit: 20, windowMs: 10 * MINUTE_MS },
+	[RATE_LIMIT_IDS.COLLECTION_PASSWORD_PER_COLLECTION]: {
+		limit: 200,
+		windowMs: 10 * MINUTE_MS,
+	},
 };
 
 const DEFAULT_FALLBACK_RATE_LIMIT: FallbackRateLimit = {
