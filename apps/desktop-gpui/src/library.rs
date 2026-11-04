@@ -16,6 +16,9 @@
 //! all it does is fan jobs out to that executor. Nothing here touches gpui
 //! state.
 
+mod file_copy;
+pub use file_copy::duplicate_file;
+
 use std::{
     collections::HashSet,
     path::{Path, PathBuf},
