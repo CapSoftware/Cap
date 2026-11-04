@@ -2478,8 +2478,10 @@ pub fn sync_caption_words_with_text(
 /// after a track segment's start/end/text was edited in output time, route
 /// the timing and content back onto the source-time caption master so the
 /// edit survives future clip changes. Only the words this piece shows are
-/// rewritten, so a cut that splits the caption leaves its other pieces alone;
-/// a moved or resized piece retimes its words onto the new span. Style
+/// rewritten, so a cut that splits the caption leaves its other pieces alone.
+/// A moved or resized piece retimes its words within its own clip, stopping
+/// at the clip's edges and at the longest word projection keeps; a word
+/// shared with another piece keeps its part outside this clip. Style
 /// overrides stay on the track and are carried across by source id when
 /// re-derived.
 pub fn write_caption_edit_to_source(
@@ -2529,7 +2531,8 @@ pub fn write_caption_edit_to_source(
         .map_or((f64::NEG_INFINITY, f64::INFINITY), |clip| {
             (clip.source_start, clip.source_end)
         });
-    let mut words: Vec<CaptionWord> = piece
+    let in_clip = |time: f32| f64::from(time).clamp(clip_start, clip_end);
+    let original: Vec<CaptionWord> = piece
         .source_words
         .iter()
         .map(|&index| {
@@ -2541,49 +2544,85 @@ pub fn write_caption_edit_to_source(
             }
         })
         .collect();
-    let in_clip = |time: f32| f64::from(time).clamp(clip_start, clip_end);
+    let mut words: Vec<CaptionWord> = original
+        .iter()
+        .map(|word| CaptionWord {
+            text: word.text.clone(),
+            start: in_clip(word.start) as f32,
+            end: in_clip(word.end) as f32,
+        })
+        .collect();
     let (shown_start, shown_end) = if words.is_empty() {
         (in_clip(source.start), in_clip(source.end))
     } else {
         words
             .iter()
             .fold((f64::INFINITY, f64::NEG_INFINITY), |(start, end), word| {
-                (start.min(in_clip(word.start)), end.max(in_clip(word.end)))
+                (
+                    start.min(f64::from(word.start)),
+                    end.max(f64::from(word.end)),
+                )
             })
     };
-    let holds = timeline.hold_windows();
-    let to_source = |edited: f64, shown_at: f64, shown: f64| {
-        if edited == shown_at {
-            return shown;
+
+    let (mut start, mut end) = (shown_start, shown_end);
+    if let Some(clip) = &clip {
+        let holds = timeline.hold_windows();
+        let effective = |time: f64| time - held_time_before(&holds, time);
+        let (first, last) = (clip.edited_start, clip.edited_end());
+        let (start_moved, end_moved) = (track_start != piece.start, track_end != piece.end);
+        let (mut edited_start, mut edited_end) = (effective(track_start), effective(track_end));
+        if start_moved && end_moved {
+            let overflow = (first - edited_start).max(0.) + (last - edited_end).min(0.);
+            edited_start += overflow;
+            edited_end += overflow;
         }
-        let Some(clip) = clip.as_ref() else {
-            return shown;
-        };
-        let effective = edited - held_time_before(&holds, edited);
-        if (clip.edited_start..=clip.edited_end()).contains(&effective) {
-            return clip.source_time(effective);
+        if start_moved {
+            start = clip.source_time(edited_start.clamp(first, last));
         }
-        map_edited_time_to_source(edited, timeline, recording_durations, None).unwrap_or_else(
-            || clip.source_time(effective.clamp(clip.edited_start, clip.edited_end())),
-        )
-    };
-    let start = to_source(track_start, piece.start, shown_start);
-    let end = to_source(track_end, piece.end, shown_end);
+        if end_moved {
+            end = clip.source_time(edited_end.clamp(first, last));
+        }
+        let longest_word = words
+            .iter()
+            .map(|word| f64::from(word.end - word.start))
+            .fold(0., f64::max);
+        if longest_word > 0. {
+            let longest_span =
+                (shown_end - shown_start) * f64::from(MAX_CAPTION_WORD_DURATION) / longest_word;
+            if end - start > longest_span {
+                if end_moved {
+                    end = start + longest_span;
+                } else {
+                    start = end - longest_span;
+                }
+            }
+        }
+        if end <= start {
+            (start, end) = (shown_start, shown_end);
+        }
+    }
     if (start, end) != (shown_start, shown_end) && shown_end > shown_start {
         let scale = (end - start) / (shown_end - shown_start);
-        let retime = |time: f32| {
-            let time = f64::from(time);
-            if time < clip_start || time > clip_end {
-                return time as f32;
-            }
-            (start + (time - shown_start) * scale) as f32
-        };
+        let retime = |time: f32| (start + (f64::from(time) - shown_start) * scale) as f32;
         for word in &mut words {
             word.start = retime(word.start);
             word.end = retime(word.end);
         }
     }
-    let words = sync_caption_words_with_text(&track_text, &words, start, end);
+    let mut words = sync_caption_words_with_text(&track_text, &words, start, end);
+    if let (Some(word), Some(original)) = (words.first_mut(), original.first())
+        && f64::from(original.start) < clip_start
+    {
+        word.start = original.start;
+        word.end = word.end.min(original.start + MAX_CAPTION_WORD_DURATION);
+    }
+    if let (Some(word), Some(original)) = (words.last_mut(), original.last())
+        && f64::from(original.end) > clip_end
+    {
+        word.end = original.end;
+        word.start = word.start.max(original.end - MAX_CAPTION_WORD_DURATION);
+    }
 
     let starts_caption = piece.source_words.first().is_none_or(|&index| index == 0);
     let ends_caption = piece
@@ -3081,18 +3120,66 @@ mod tests {
     }
 
     #[test]
-    fn dragging_a_piece_into_the_next_clip_keeps_its_words() {
+    fn dragging_a_piece_past_its_clip_stops_at_the_clip_edge() {
         let mut project =
             cut_caption_project(&[(0.0, 5.0, 1.0), (5.0, 10.0, 1.0)], &[("word", 1.0, 2.0)]);
 
-        let edited = edit_caption_piece(&mut project, 0, |piece| {
+        edit_caption_piece(&mut project, 0, |piece| {
             (piece.start, piece.end) = (6.0, 7.0);
         });
 
         let after = shown_pieces(&project);
         assert_eq!(after.len(), 1);
-        assert_eq!(after[0].0, "word");
-        assert_eq!((after[0].1, after[0].2), edited);
+        assert_eq!(
+            (after[0].0.as_str(), after[0].1, after[0].2),
+            ("word", 4.0, 5.0)
+        );
+    }
+
+    #[test]
+    fn dragging_a_piece_across_reversed_clips_keeps_its_word() {
+        let mut project =
+            cut_caption_project(&[(5.0, 10.0, 1.0), (0.0, 5.0, 1.0)], &[("word", 6.0, 7.0)]);
+
+        edit_caption_piece(&mut project, 0, |piece| {
+            (piece.start, piece.end) = (4.5, 5.5);
+        });
+
+        let after = shown_pieces(&project);
+        assert_eq!(after.len(), 1);
+        assert_eq!(
+            (after[0].0.as_str(), after[0].1, after[0].2),
+            ("word", 4.0, 5.0)
+        );
+    }
+
+    #[test]
+    fn retyping_a_piece_keeps_its_shared_word_in_the_other_piece() {
+        let mut project = cut_caption_project(
+            &[(0.0, 5.0, 1.0), (6.0, 10.0, 1.0)],
+            &[("one", 1.0, 2.0), ("shared", 4.5, 6.5), ("two", 8.0, 9.0)],
+        );
+        let before = shown_pieces(&project);
+
+        edit_caption_piece(&mut project, 0, |piece| {
+            piece.text = "one new shared".into();
+        });
+
+        let after = shown_pieces(&project);
+        assert_eq!(after[0].0, "one new shared");
+        assert_eq!(after[1], before[1]);
+    }
+
+    #[test]
+    fn stretching_a_word_stops_at_the_longest_word_projection_keeps() {
+        let mut project = cut_caption_project(&[(0.0, 10.0, 1.0)], &[("word", 1.0, 2.0)]);
+
+        edit_caption_piece(&mut project, 0, |piece| piece.end = 5.0);
+
+        let after = shown_pieces(&project);
+        assert_eq!((after[0].1, after[0].2), (1.0, 3.5));
+        let source = &project.captions.as_ref().unwrap().segments[0];
+        assert_eq!(word_timings(&source.words), [(1.0, 3.5)]);
     }
 
     #[test]
