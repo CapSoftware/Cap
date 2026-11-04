@@ -41,8 +41,6 @@ impl MaskKindChoice {
         }
     }
 
-    /// Each kind seeds its own defaults on the switch, the way the video
-    /// editor's kind radio does.
     fn apply(self, annotation: &mut Annotation) -> bool {
         if Self::of(annotation) == self {
             return false;
@@ -529,8 +527,6 @@ impl ScreenshotEditorWindow {
         ]
     }
 
-    /// The header popovers' chrome (`render_popover`): same surface, same
-    /// slider rows, anchored under the bar's settings button.
     pub(super) fn render_mask_settings(
         &self,
         window: &Window,
@@ -635,7 +631,6 @@ impl ScreenshotEditorWindow {
         )
     }
 
-    /// `slider_row` from the header popovers, over an annotation slider.
     fn mask_slider_row(
         &self,
         label: &'static str,
@@ -677,8 +672,6 @@ impl ScreenshotEditorWindow {
     }
 }
 
-/// `config_item` with a fixed-width readout, so the slider beside it does
-/// not slide as the number grows a digit.
 fn mask_item(
     theme: &Theme,
     label: &'static str,

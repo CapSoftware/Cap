@@ -4029,7 +4029,6 @@ fn mask_request(mask: &Annotation, frame: MaskFrame) -> Option<MaskRequest> {
         region,
         shape,
         frame,
-        // The preview filters the atlas's BGRA, so the colour swaps to match.
         style: mask::mask_style(mask, true),
     })
 }
