@@ -1082,6 +1082,7 @@ impl ScreenshotEditorWindow {
             this.hex_inputs.insert(target, input);
         }
         this.init_annotation_inputs(window, cx);
+        window.focus(&this.focus, cx);
 
         this
     }
