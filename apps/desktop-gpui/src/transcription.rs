@@ -2559,8 +2559,13 @@ pub fn write_caption_edit_to_source(
         let Some(clip) = clip.as_ref() else {
             return shown;
         };
-        let edited = edited - held_time_before(&holds, edited);
-        clip.source_time(edited.clamp(clip.edited_start, clip.edited_end()))
+        let effective = edited - held_time_before(&holds, edited);
+        if (clip.edited_start..=clip.edited_end()).contains(&effective) {
+            return clip.source_time(effective);
+        }
+        map_edited_time_to_source(edited, timeline, recording_durations, None).unwrap_or_else(
+            || clip.source_time(effective.clamp(clip.edited_start, clip.edited_end())),
+        )
     };
     let start = to_source(track_start, piece.start, shown_start);
     let end = to_source(track_end, piece.end, shown_end);
@@ -3073,6 +3078,21 @@ mod tests {
             .map(|piece| (piece.1, piece.2))
             .collect();
         assert_eq!(spans, [(3.5, 5.0), (4.5, 7.0)]);
+    }
+
+    #[test]
+    fn dragging_a_piece_into_the_next_clip_keeps_its_words() {
+        let mut project =
+            cut_caption_project(&[(0.0, 5.0, 1.0), (5.0, 10.0, 1.0)], &[("word", 1.0, 2.0)]);
+
+        let edited = edit_caption_piece(&mut project, 0, |piece| {
+            (piece.start, piece.end) = (6.0, 7.0);
+        });
+
+        let after = shown_pieces(&project);
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].0, "word");
+        assert_eq!((after[0].1, after[0].2), edited);
     }
 
     #[test]
