@@ -7,7 +7,7 @@ import {
 } from "@cap/database/schema";
 import { provideOptionalAuth, S3Buckets } from "@cap/web-backend";
 import { zValidator } from "@hono/zod-validator";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { Hono } from "hono";
 import { z } from "zod";
@@ -44,7 +44,9 @@ app.post(
 				s3Key: developerVideos.s3Key,
 			})
 			.from(developerVideos)
-			.where(eq(developerVideos.id, videoId))
+			.where(
+				and(eq(developerVideos.id, videoId), isNull(developerVideos.deletedAt)),
+			)
 			.limit(1);
 
 		if (!video || video.appId !== appId) {
@@ -111,7 +113,9 @@ app.post(
 				s3Key: developerVideos.s3Key,
 			})
 			.from(developerVideos)
-			.where(eq(developerVideos.id, videoId))
+			.where(
+				and(eq(developerVideos.id, videoId), isNull(developerVideos.deletedAt)),
+			)
 			.limit(1);
 
 		if (!video || video.appId !== appId) {
@@ -176,7 +180,9 @@ app.post(
 				s3Key: developerVideos.s3Key,
 			})
 			.from(developerVideos)
-			.where(eq(developerVideos.id, videoId))
+			.where(
+				and(eq(developerVideos.id, videoId), isNull(developerVideos.deletedAt)),
+			)
 			.limit(1);
 
 		if (!video || video.appId !== appId) {
