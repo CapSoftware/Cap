@@ -13,12 +13,18 @@ vi.mock("@/lib/s3-endpoint-policy", async () => {
 		...actual,
 		isBlockedS3Endpoint: vi.fn(async () => false),
 		shouldBlockPrivateS3Endpoints: () => true,
-		publicOnlyLookup: ((...args: Parameters<typeof lookup>) =>
+		publicOnlyLookup: ((hostname, options, callback) =>
 			lookupState.allowLoopback
-				? lookup(...args)
+				? (lookup as unknown as typeof actual.publicOnlyLookup)(
+						hostname,
+						options,
+						callback,
+					)
 				: actual.publicOnlyLookup(
-						...(args as Parameters<typeof actual.publicOnlyLookup>),
-					)) as typeof actual.publicOnlyLookup,
+						hostname,
+						options,
+						callback,
+					)) satisfies typeof actual.publicOnlyLookup,
 	};
 });
 
