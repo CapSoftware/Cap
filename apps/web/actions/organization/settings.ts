@@ -8,6 +8,7 @@ import {
 	AI_GENERATION_LANGUAGE_AUTO,
 	type AiGenerationLanguage,
 	isAiGenerationLanguage,
+	type Organisation,
 } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
@@ -63,6 +64,7 @@ const preserveProSettings = (
 
 export async function updateOrganizationSettings(
 	settings: OrganizationSettingsInput,
+	organizationId: Organisation.OrganisationId,
 ) {
 	const user = await getCurrentUser();
 
@@ -81,20 +83,16 @@ export async function updateOrganizationSettings(
 		throw new Error("Unsupported AI generation language");
 	}
 
-	if (!user.activeOrganizationId) {
-		throw new Error("Organization not found");
-	}
-
 	const [organization] = await db()
 		.select()
 		.from(organizations)
-		.where(eq(organizations.id, user.activeOrganizationId));
+		.where(eq(organizations.id, organizationId));
 
 	if (!organization) {
 		throw new Error("Organization not found");
 	}
 
-	await requireOrganizationSettingsManager(user.id, user.activeOrganizationId);
+	await requireOrganizationSettingsManager(user.id, organizationId);
 
 	const sanitizedSettings =
 		settings.defaultPlaybackSpeed !== undefined
@@ -113,7 +111,7 @@ export async function updateOrganizationSettings(
 	await db()
 		.update(organizations)
 		.set({ settings: nextSettings })
-		.where(eq(organizations.id, user.activeOrganizationId));
+		.where(eq(organizations.id, organizationId));
 
 	revalidatePath("/dashboard/caps");
 	revalidatePath("/dashboard/settings/organization");

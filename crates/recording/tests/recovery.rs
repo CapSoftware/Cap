@@ -1222,20 +1222,29 @@ fn make_synthetic_video_frame(width: u32, height: u32) -> ffmpeg::frame::Video {
     frame
 }
 
-fn synthetic_video_info() -> cap_media_info::VideoInfo {
+fn synthetic_video_info(fps: u32) -> cap_media_info::VideoInfo {
     cap_media_info::VideoInfo {
         pixel_format: cap_media_info::Pixel::NV12,
         width: 320,
         height: 240,
         time_base: ffmpeg::Rational(1, 1_000_000),
-        frame_rate: ffmpeg::Rational(30, 1),
+        frame_rate: ffmpeg::Rational(fps as i32, 1),
     }
 }
 
 fn write_synthetic_fragments(display_dir: &Path, total_frames: u64, segment_duration: Duration) {
+    write_synthetic_fragments_at(display_dir, 30, total_frames, segment_duration);
+}
+
+fn write_synthetic_fragments_at(
+    display_dir: &Path,
+    fps: u32,
+    total_frames: u64,
+    segment_duration: Duration,
+) {
     let mut encoder = SegmentedVideoEncoder::init(
         display_dir.to_path_buf(),
-        synthetic_video_info(),
+        synthetic_video_info(fps),
         SegmentedVideoEncoderConfig {
             segment_duration,
             ..Default::default()
@@ -1245,7 +1254,7 @@ fn write_synthetic_fragments(display_dir: &Path, total_frames: u64, segment_dura
 
     for i in 0..total_frames {
         let frame = make_synthetic_video_frame(320, 240);
-        let ts = Duration::from_nanos(i * 1_000_000_000 / 30);
+        let ts = Duration::from_nanos(i * 1_000_000_000 / u64::from(fps));
         encoder.queue_frame(frame, ts).expect("queue frame");
     }
 
@@ -1485,7 +1494,7 @@ fn finalize_needs_remux_includes_validated_respawn_groups() {
     for directory in [&display, &respawn] {
         let mut encoder = SegmentedVideoEncoder::init(
             directory.to_path_buf(),
-            synthetic_video_info(),
+            synthetic_video_info(30),
             SegmentedVideoEncoderConfig {
                 segment_duration: Duration::from_secs(2),
                 ..Default::default()
@@ -2353,6 +2362,46 @@ fn recovery_aligns_tracks_with_the_start_times_persisted_while_recording() {
         segment.system_audio.as_ref().unwrap().start_time,
         Some(0.31)
     );
+}
+
+#[test]
+fn recovery_keeps_the_camera_frame_rate_of_an_interrupted_recording() {
+    test_utils::init_tracing();
+
+    let recording = TestRecording::new().unwrap();
+    let display_dir = recording.create_display_dir(0).unwrap();
+    let camera_dir = recording.create_segment_dir(0).unwrap().join("camera");
+    std::fs::create_dir(&camera_dir).unwrap();
+    write_synthetic_fragments(&display_dir, 180, Duration::from_secs(2));
+    write_synthetic_fragments_at(&camera_dir, 60, 360, Duration::from_secs(2));
+    let meta = RecordingMeta {
+        platform: None,
+        project_path: recording.path().to_path_buf(),
+        pretty_name: "Test Recording".to_string(),
+        sharing: None,
+        upload: None,
+        inner: RecordingMetaInner::Studio(Box::new(StudioRecordingMeta::MultipleSegments {
+            inner: MultipleSegments {
+                segments: Vec::new(),
+                cursors: Cursors::default(),
+                status: Some(StudioRecordingStatus::InProgress),
+            },
+        })),
+    };
+    std::fs::write(
+        recording.path().join("recording-meta.json"),
+        serde_json::to_string_pretty(&meta).unwrap(),
+    )
+    .unwrap();
+
+    let incomplete = RecoveryManager::inspect_recording(recording.path()).unwrap();
+    let recovered = RecoveryManager::recover(&incomplete).expect("recovery should succeed");
+
+    let StudioRecordingMeta::MultipleSegments { inner } = recovered.meta else {
+        panic!("segmented meta expected");
+    };
+    assert_eq!(inner.segments[0].display.fps, 30);
+    assert_eq!(inner.segments[0].camera.as_ref().unwrap().fps, 60);
 }
 
 fn interrupted_after_resume_fixture() -> TestRecording {

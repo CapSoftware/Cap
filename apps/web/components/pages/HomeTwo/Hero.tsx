@@ -20,7 +20,6 @@ import {
 	BTN_PRIMARY,
 	BTN_SECONDARY,
 	MODE_THEME,
-	MONO,
 	meshStyle,
 } from "./theme";
 
@@ -133,9 +132,7 @@ export const Hero = () => {
 					}
 					className="ht-rise group mb-7 inline-flex [--d:0.04s] max-w-full items-center gap-2.5 rounded-full bg-[#111111] py-1.5 pl-1.5 pr-3.5 text-[13px] leading-none text-white shadow-[0_1px_2px_rgba(17,17,17,0.12),0_10px_24px_-14px_rgba(17,17,17,0.6)] transition-colors duration-200 hover:bg-[#2A2A2A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#111111] focus-visible:ring-offset-2 focus-visible:ring-offset-[#EDF1F6] md:mb-9"
 				>
-					<span
-						className={`${MONO} rounded-full bg-[#8DBCF0] px-2 py-[5px] text-[10.5px] uppercase leading-none tracking-[0.06em] text-[#111111]`}
-					>
+					<span className="rounded-full bg-[#8DBCF0] px-2 py-[5px] text-[12px] leading-none text-[#111111]">
 						New
 					</span>
 					<span className="truncate">Cap's migration to GPUI</span>
