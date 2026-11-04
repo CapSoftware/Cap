@@ -149,37 +149,6 @@ function createServerEnv() {
 					"Set to media-server to run instant-mode live transcription on the media server instead of a workflow (falls back to the workflow)",
 				),
 			ANTHROPIC_API_KEY: z.string().optional().describe("AI chat"),
-			AI_GATEWAY_API_KEY: z
-				.string()
-				.optional()
-				.describe(
-					"Vercel AI Gateway key for the desktop recording repair agent",
-				),
-			RECORDING_REPAIR_MODEL: z
-				.enum(["claude-opus-5-5", "gpt-6.1-terra"])
-				.optional()
-				.describe(
-					"Model for the desktop recording repair agent (default claude-opus-5-5). Uses AI_GATEWAY_API_KEY when set, otherwise ANTHROPIC_API_KEY or OPENAI_API_KEY",
-				),
-			RECORDING_REPAIR_ENABLED: boolString(false).describe(
-				"Offer the desktop Fix recording agent. Desktop apps hide the Fix button while this is false",
-			),
-			RECORDING_REPAIR_SUBMISSIONS_ENABLED: boolString(true).describe(
-				"Let users send a recording the repair agent can't fix to Cap",
-			),
-			RECORDING_REPAIR_COST_LIMIT_USD: z.coerce
-				.number()
-				.positive()
-				.optional()
-				.describe("Model spend limit per repair session in USD (default 5)"),
-			RECORDING_REPAIR_DAILY_LIMIT: z.coerce
-				.number()
-				.int()
-				.positive()
-				.optional()
-				.describe(
-					"Repair sessions each user may start per 24 hours (default 6)",
-				),
 			OPENAI_API_KEY: z.string().optional().describe("AI summaries"),
 			GROQ_API_KEY: z.string().optional().describe("AI summaries"),
 			AI_PROVIDER: z
