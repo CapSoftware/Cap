@@ -397,6 +397,7 @@ fn start_instant_upload_with_ownership(
                 .map_err(|error| format!("Failed to start instant upload: {error}"))?,
         );
 
+        let transfer = crate::network_health::acquire_transfer();
         let upload_video = video.clone();
         let upload_cancel = cancel.clone();
         let upload_metadata_lock = metadata_lock.clone();
@@ -406,6 +407,7 @@ fn start_instant_upload_with_ownership(
             context,
             upload_reads,
             async move {
+                let _transfer = transfer;
                 run_segment_upload(
                     upload_video,
                     project_path,
@@ -593,6 +595,7 @@ async fn run_segment_upload(
     metadata_lock: Arc<Mutex<()>>,
     authorization: Option<CompletionRequirement>,
 ) -> Result<(), String> {
+    let _transfer = crate::network_health::acquire_transfer();
     let result = upload_segments(
         &LiveSegmentTransport::default(),
         &video.id,
@@ -1381,6 +1384,7 @@ async fn upload_exported_video_inner(
     cancel: Arc<AtomicBool>,
     defer_completion: bool,
 ) -> Result<(UploadResult, Option<String>), String> {
+    let _transfer = crate::network_health::acquire_transfer();
     check_export_cancelled(&cancel).map_err(|error| error.to_string())?;
     if store_auth_missing() {
         let _ = crate::store::set_auth(None);

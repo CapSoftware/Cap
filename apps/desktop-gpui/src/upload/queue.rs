@@ -698,9 +698,11 @@ impl<B: UploadBackend> Manager<B> {
             request_context: upload.request_context.clone(),
             reads: upload.reads.clone(),
         };
+        let transfer = crate::network_health::acquire_transfer();
         let manager = self.clone();
         let path = canonical.clone();
         let task = tokio::spawn(async move {
+            let _transfer = transfer;
             manager.run_job(path, owned, state, cancelled).await;
         });
         jobs.insert(
@@ -723,6 +725,7 @@ impl<B: UploadBackend> Manager<B> {
         mut state: UploadState,
         mut cancelled: tokio::sync::watch::Receiver<bool>,
     ) {
+        let _transfer = crate::network_health::acquire_transfer();
         let context = upload.request_context.clone();
         let reads = upload.reads.clone();
         let result = std::panic::AssertUnwindSafe(with_upload_context(context, reads, async {
