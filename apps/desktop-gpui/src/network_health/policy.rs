@@ -1,6 +1,7 @@
 use std::time::{Duration, SystemTime};
 
 pub const MEASUREMENT_TTL: Duration = Duration::from_secs(15 * 60);
+pub const AUTOMATIC_PROBE_INTERVAL: Duration = Duration::from_secs(10 * 60);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Scope {
@@ -87,12 +88,13 @@ impl Measurement {
 #[derive(Default)]
 pub struct Admission {
     recording: bool,
+    transfers: usize,
     generation: u64,
 }
 
 impl Admission {
     pub fn begin_probe(&mut self) -> Option<u64> {
-        if self.recording {
+        if self.recording || self.transfers > 0 {
             return None;
         }
         self.invalidate();
@@ -100,7 +102,7 @@ impl Admission {
     }
 
     pub fn accepts(&self, generation: u64) -> bool {
-        !self.recording && self.generation == generation
+        !self.recording && self.transfers == 0 && self.generation == generation
     }
 
     pub fn admit_recording(&mut self) {
@@ -110,6 +112,15 @@ impl Admission {
 
     pub fn release_recording(&mut self) {
         self.recording = false;
+    }
+
+    pub fn admit_transfer(&mut self) {
+        self.transfers = self.transfers.saturating_add(1);
+        self.invalidate();
+    }
+
+    pub fn release_transfer(&mut self) {
+        self.transfers = self.transfers.saturating_sub(1);
     }
 
     pub fn invalidate(&mut self) {
@@ -201,6 +212,44 @@ mod tests {
     }
 
     #[test]
+    fn automatic_refresh_interval_keeps_slow_connection_limits_fresh() {
+        assert!(AUTOMATIC_PROBE_INTERVAL < MEASUREMENT_TTL);
+        let first = measure(3., 3.);
+        let refreshed_at = first.checked_at + AUTOMATIC_PROBE_INTERVAL;
+        assert_eq!(
+            first.max_width_for(&scope(), Some("org-1"), refreshed_at),
+            Some(1280)
+        );
+        let second = Measurement::from_samples(
+            scope(),
+            "org-1".into(),
+            [
+                Sample {
+                    bytes: 2 * 1024 * 1024,
+                    body_read_ms: 2. * 1024. * 1024. * 8. / (3. * 1000.),
+                },
+                Sample {
+                    bytes: 2 * 1024 * 1024,
+                    body_read_ms: 2. * 1024. * 1024. * 8. / (3. * 1000.),
+                },
+            ],
+            refreshed_at + Duration::from_secs(30),
+        );
+        for elapsed_mins in 0..=24 {
+            let now = first.checked_at + Duration::from_secs(elapsed_mins * 60);
+            let active = if now >= second.checked_at {
+                &second
+            } else {
+                &first
+            };
+            assert_eq!(
+                active.max_width_for(&scope(), Some("org-1"), now),
+                Some(1280)
+            );
+        }
+    }
+
+    #[test]
     fn recording_admission_rejects_in_flight_and_new_probe_results() {
         let mut admission = Admission::default();
         let ticket = admission.begin_probe().unwrap();
@@ -213,6 +262,23 @@ mod tests {
         let next = admission.begin_probe().unwrap();
         assert!(admission.accepts(next));
         assert!(!admission.accepts(ticket));
+    }
+
+    #[test]
+    fn background_transfers_reject_in_flight_and_new_probe_results() {
+        let mut admission = Admission::default();
+        let ticket = admission.begin_probe().unwrap();
+        assert!(admission.accepts(ticket));
+        admission.admit_transfer();
+        admission.admit_transfer();
+        assert!(!admission.accepts(ticket));
+        assert_eq!(admission.begin_probe(), None);
+        admission.release_transfer();
+        assert_eq!(admission.begin_probe(), None);
+        admission.release_transfer();
+        assert!(!admission.accepts(ticket));
+        let next = admission.begin_probe().unwrap();
+        assert!(admission.accepts(next));
     }
 
     #[test]

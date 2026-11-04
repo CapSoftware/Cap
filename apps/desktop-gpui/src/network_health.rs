@@ -5,14 +5,12 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use futures_util::future::{AbortHandle, Abortable};
+use futures_util::future::{AbortHandle, AbortRegistration, Abortable, select};
 use gpui::App;
-use policy::{Admission, Measurement, Sample, Scope};
+use policy::{AUTOMATIC_PROBE_INTERVAL, Admission, Measurement, Sample, Scope};
 use serde::Deserialize;
 
 use crate::{auth, session::RecordingSession, store};
-
-const AUTOMATIC_PROBE_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 #[derive(Clone, Copy, Default)]
 enum Status {
@@ -49,6 +47,15 @@ fn controller() -> MutexGuard<'static, Controller> {
         .unwrap_or_else(|error| error.into_inner())
 }
 
+fn wake_channel() -> &'static (flume::Sender<()>, flume::Receiver<()>) {
+    static WAKE: OnceLock<(flume::Sender<()>, flume::Receiver<()>)> = OnceLock::new();
+    WAKE.get_or_init(|| flume::bounded(1))
+}
+
+fn notify_wake() {
+    let _ = wake_channel().0.try_send(());
+}
+
 impl Controller {
     fn admit_recording(&mut self) {
         self.applied_width = None;
@@ -57,6 +64,110 @@ impl Controller {
         if let Some(running) = &self.running {
             running.abort.abort();
         }
+    }
+
+    fn admit_transfer(&mut self) {
+        self.status = Status::Unknown;
+        self.admission.admit_transfer();
+        if let Some(running) = &self.running {
+            running.abort.abort();
+        }
+    }
+
+    fn release_transfer(&mut self) {
+        self.admission.release_transfer();
+    }
+
+    fn begin_request(
+        &mut self,
+        scope: Option<Scope>,
+        recording_in_flight: bool,
+        manual: bool,
+        now: SystemTime,
+    ) -> Option<(Scope, u64, AbortRegistration, Completion)> {
+        if self.scope != scope {
+            self.admission.invalidate();
+            if let Some(running) = &self.running {
+                running.abort.abort();
+            }
+            self.scope = scope.clone();
+            self.measurement = None;
+            self.attempted_at = None;
+            self.status = Status::Unknown;
+        }
+        let scope = scope?;
+        let interval = if manual {
+            Duration::from_secs(60)
+        } else {
+            AUTOMATIC_PROBE_INTERVAL
+        };
+        if self.running.is_some()
+            || recording_in_flight
+            || self
+                .attempted_at
+                .is_some_and(|at| now.duration_since(at).is_ok_and(|age| age < interval))
+        {
+            return None;
+        }
+        let ticket = self.admission.begin_probe()?;
+        let (abort, registration) = AbortHandle::new_pair();
+        let (done, receiver) = flume::bounded(1);
+        self.running = Some(Running {
+            ticket,
+            abort,
+            done: receiver,
+        });
+        self.status = Status::Checking;
+        self.attempted_at = Some(now);
+        Some((scope, ticket, registration, Completion(done)))
+    }
+
+    fn finish_request(
+        &mut self,
+        ticket: u64,
+        expected_scope: &Scope,
+        current_scope: Option<&Scope>,
+        result: Result<Measurement, ProbeError>,
+        now: SystemTime,
+    ) -> bool {
+        if !self
+            .running
+            .as_ref()
+            .is_some_and(|running| running.ticket == ticket)
+        {
+            return false;
+        }
+        self.running = None;
+        if !self.admission.accepts(ticket) || current_scope != Some(expected_scope) {
+            self.status = Status::Unknown;
+            self.attempted_at = self
+                .measurement
+                .as_ref()
+                .map(|measurement| measurement.checked_at);
+        } else {
+            match result {
+                Ok(measurement) => {
+                    self.attempted_at = Some(measurement.checked_at);
+                    self.measurement = Some(measurement);
+                    self.status = Status::Ready;
+                }
+                Err(ProbeError::Unsupported) => {
+                    self.measurement = None;
+                    self.status = Status::Unsupported;
+                }
+                Err(ProbeError::Failed) => {
+                    if self
+                        .measurement
+                        .as_ref()
+                        .is_none_or(|measurement| !measurement.fresh_for(expected_scope, now))
+                    {
+                        self.measurement = None;
+                    }
+                    self.status = Status::Failed;
+                }
+            }
+        }
+        true
     }
 }
 
@@ -85,6 +196,8 @@ pub(crate) fn invalidate() {
     state.measurement = None;
     state.attempted_at = None;
     state.status = Status::Unknown;
+    drop(state);
+    notify_wake();
 }
 
 pub(crate) fn recording_admitted() {
@@ -95,6 +208,24 @@ pub(crate) fn recording_released() {
     let mut state = controller();
     state.admission.release_recording();
     state.applied_width = None;
+    drop(state);
+    notify_wake();
+}
+
+pub(crate) struct TransferLease;
+
+impl Drop for TransferLease {
+    fn drop(&mut self) {
+        let mut state = controller();
+        state.release_transfer();
+        drop(state);
+        notify_wake();
+    }
+}
+
+pub(crate) fn acquire_transfer() -> TransferLease {
+    controller().admit_transfer();
+    TransferLease
 }
 
 #[cfg(test)]
@@ -139,7 +270,10 @@ pub(crate) fn indicator() -> Option<Indicator> {
     let measurement = state
         .measurement
         .as_ref()
-        .filter(|measurement| measurement.fresh_for(&scope, SystemTime::now()));
+        .filter(|measurement| {
+            !matches!(state.status, Status::Failed)
+                && measurement.fresh_for(&scope, SystemTime::now())
+        });
     let (label, tooltip, failed, limited) = if let Some(width) = state.applied_width {
         (
             format!("Instant limited: {}p", width * 9 / 16),
@@ -231,90 +365,34 @@ impl Drop for Completion {
 
 pub(crate) fn request(cx: &mut App, manual: bool) {
     let scope = current_scope();
-    let launch = {
-        let mut state = controller();
-        if state.scope != scope {
-            state.admission.invalidate();
-            if let Some(running) = &state.running {
-                running.abort.abort();
-            }
-            state.scope = scope.clone();
-            state.measurement = None;
-            state.attempted_at = None;
-            state.status = Status::Unknown;
-        }
-        let Some(scope) = scope else {
-            return;
-        };
-        let interval = if manual {
-            Duration::from_secs(60)
-        } else {
-            AUTOMATIC_PROBE_INTERVAL
-        };
-        if state.running.is_some()
-            || RecordingSession::recording_in_flight(cx)
-            || state
-                .attempted_at
-                .is_some_and(|at| at.elapsed().is_ok_and(|age| age < interval))
-        {
-            return;
-        }
-        let Some(ticket) = state.admission.begin_probe() else {
-            return;
-        };
-        let (abort, registration) = AbortHandle::new_pair();
-        let (done, receiver) = flume::bounded(1);
-        state.running = Some(Running {
-            ticket,
-            abort,
-            done: receiver,
-        });
-        state.status = Status::Checking;
-        state.attempted_at = Some(SystemTime::now());
-        (scope, ticket, registration, Completion(done))
+    let recording_in_flight = RecordingSession::recording_in_flight(cx);
+    let Some((scope, ticket, registration, completion)) =
+        controller().begin_request(scope, recording_in_flight, manual, SystemTime::now())
+    else {
+        return;
     };
-    let (scope, ticket, registration, completion) = launch;
     let expected_scope = scope.clone();
     let task = gpui_tokio::Tokio::spawn(cx, async move {
         let _completion = completion;
-        Abortable::new(probe(scope), registration).await
+        Abortable::new(probe(scope, ticket), registration).await
     });
     cx.spawn(async move |cx| {
-        let result = task.await;
+        let result = match task.await {
+            Ok(Ok(result)) => result,
+            _ => Err(ProbeError::Failed),
+        };
         cx.update(|cx| {
-            let mut state = controller();
-            if !state
-                .running
-                .as_ref()
-                .is_some_and(|running| running.ticket == ticket)
-            {
-                return;
+            let active_scope = current_scope();
+            let updated = controller().finish_request(
+                ticket,
+                &expected_scope,
+                active_scope.as_ref(),
+                result,
+                SystemTime::now(),
+            );
+            if updated {
+                cx.refresh_windows();
             }
-            state.running = None;
-            if !state.admission.accepts(ticket) || current_scope().as_ref() != Some(&expected_scope)
-            {
-                state.status = Status::Unknown;
-                if state.measurement.is_none() {
-                    state.attempted_at = None;
-                }
-            } else {
-                match result {
-                    Ok(Ok(Ok(measurement))) => {
-                        state.measurement = Some(measurement);
-                        state.status = Status::Ready;
-                    }
-                    Ok(Ok(Err(ProbeError::Unsupported))) => {
-                        state.measurement = None;
-                        state.status = Status::Unsupported;
-                    }
-                    _ => {
-                        state.measurement = None;
-                        state.status = Status::Failed;
-                    }
-                }
-            }
-            drop(state);
-            cx.refresh_windows();
         });
     })
     .detach();
@@ -322,12 +400,13 @@ pub(crate) fn request(cx: &mut App, manual: bool) {
 }
 
 pub(crate) fn init(cx: &mut App) {
+    let wake = wake_channel().1.clone();
     cx.spawn(async move |cx| {
         loop {
             cx.update(|cx| request(cx, false));
-            cx.background_executor()
-                .timer(Duration::from_secs(15))
-                .await;
+            let timer = cx.background_executor().timer(Duration::from_secs(15));
+            let notified = wake.recv_async();
+            let _ = select(std::pin::pin!(timer), std::pin::pin!(notified)).await;
         }
     })
     .detach();
@@ -347,12 +426,19 @@ struct ProbeResponse {
     organization_id: String,
 }
 
-async fn probe(scope: Scope) -> Result<Measurement, ProbeError> {
+fn probe_admitted(ticket: u64, scope: &Scope) -> bool {
+    current_scope().as_ref() == Some(scope) && controller().admission.accepts(ticket)
+}
+
+async fn probe(scope: Scope, ticket: u64) -> Result<Measurement, ProbeError> {
     let client = auth::api_client().map_err(|_| ProbeError::Failed)?;
     let context = auth::UploadRequestContext::for_upload(&scope.server, Some(&scope.owner))
         .map_err(|_| ProbeError::Failed)?;
     context
         .run(async {
+            if !probe_admitted(ticket, &scope) {
+                return Err(ProbeError::Failed);
+            }
             let warm = auth::authed_request_with(
                 &client,
                 reqwest::Method::GET,
@@ -383,7 +469,7 @@ async fn probe(scope: Scope) -> Result<Measurement, ProbeError> {
             }; 2];
             let mut organization: Option<String> = None;
             for (index, sample) in samples.iter_mut().enumerate() {
-                if current_scope().as_ref() != Some(&scope) {
+                if !probe_admitted(ticket, &scope) {
                     return Err(ProbeError::Failed);
                 }
                 let path = if index == 0 {
@@ -502,5 +588,137 @@ mod tests {
         };
         drop(task);
         assert_eq!(receiver.try_recv(), Ok(()));
+    }
+
+    fn test_scope() -> Scope {
+        Scope {
+            server: "https://cap.example".into(),
+            owner: "owner".into(),
+            organization: Some("org-1".into()),
+        }
+    }
+
+    fn slow_measurement(scope: Scope, checked_at: SystemTime) -> Measurement {
+        let sample = Sample {
+            bytes: 2 * 1024 * 1024,
+            body_read_ms: 2. * 1024. * 1024. * 8. / (3. * 1000.),
+        };
+        Measurement::from_samples(scope, "org-1".into(), [sample, sample], checked_at)
+    }
+
+    #[tokio::test]
+    async fn background_transfer_aborts_an_in_flight_probe_and_blocks_new_ones() {
+        let active = Arc::new(AtomicBool::new(false));
+        let mut state = Controller::default();
+        let scope = test_scope();
+        let t0 = SystemTime::now();
+        let (_, ticket, registration, completion) = state
+            .begin_request(Some(scope.clone()), false, false, t0)
+            .unwrap();
+        let receiver = state.running.as_ref().unwrap().done.clone();
+        let (started, ready) = flume::bounded(1);
+        let transfer_active = active.clone();
+        let task = tokio::spawn(async move {
+            let _completion = completion;
+            Abortable::new(
+                async move {
+                    transfer_active.store(true, Ordering::SeqCst);
+                    let _transfer = ActiveTransfer(transfer_active);
+                    started.send(()).unwrap();
+                    std::future::pending::<()>().await;
+                },
+                registration,
+            )
+            .await
+        });
+        ready.recv_async().await.unwrap();
+        assert!(active.load(Ordering::SeqCst));
+        state.admit_transfer();
+        tokio::time::timeout(Duration::from_secs(1), receiver.recv_async())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!active.load(Ordering::SeqCst));
+        assert!(task.await.unwrap().is_err());
+        assert!(
+            state.finish_request(
+                ticket,
+                &scope,
+                Some(&scope),
+                Err(ProbeError::Failed),
+                t0 + Duration::from_secs(1),
+            )
+        );
+        assert_eq!(state.attempted_at, None);
+        assert!(
+            state
+                .begin_request(
+                    Some(scope.clone()),
+                    false,
+                    true,
+                    t0 + Duration::from_secs(120),
+                )
+                .is_none()
+        );
+        state.release_transfer();
+        assert!(
+            state
+                .begin_request(Some(scope), false, false, t0 + Duration::from_secs(2))
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn automatic_checks_refresh_before_measurement_ttl_expires_and_preserve_fresh_caps() {
+        let mut state = Controller::default();
+        let scope = test_scope();
+        let t0 = SystemTime::now();
+        let (_, first_ticket, _, _completion) = state
+            .begin_request(Some(scope.clone()), false, false, t0)
+            .unwrap();
+        let first_checked_at = t0 + Duration::from_secs(5);
+        assert!(state.finish_request(
+            first_ticket,
+            &scope,
+            Some(&scope),
+            Ok(slow_measurement(scope.clone(), first_checked_at)),
+            first_checked_at,
+        ));
+        assert!(
+            state
+                .begin_request(
+                    Some(scope.clone()),
+                    false,
+                    false,
+                    first_checked_at + AUTOMATIC_PROBE_INTERVAL - Duration::from_secs(1),
+                )
+                .is_none()
+        );
+        let refresh_start = first_checked_at + AUTOMATIC_PROBE_INTERVAL;
+        assert_eq!(
+            state
+                .measurement
+                .as_ref()
+                .and_then(|m| m.max_width_for(&scope, Some("org-1"), refresh_start)),
+            Some(1280)
+        );
+        let (_, second_ticket, _, _completion) = state
+            .begin_request(Some(scope.clone()), false, false, refresh_start)
+            .unwrap();
+        let refresh_failed_at = refresh_start + Duration::from_secs(5);
+        assert!(state.finish_request(
+            second_ticket,
+            &scope,
+            Some(&scope),
+            Err(ProbeError::Failed),
+            refresh_failed_at,
+        ));
+        assert_eq!(
+            state
+                .measurement
+                .as_ref()
+                .and_then(|m| m.max_width_for(&scope, Some("org-1"), refresh_failed_at)),
+            Some(1280)
+        );
     }
 }
