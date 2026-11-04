@@ -137,7 +137,9 @@ impl LiveMusic {
         let mut stale = edited;
         let mut loaded = false;
         if let Some((loaded_for, load)) = self.loading.take_if(|(_, load)| load.is_finished()) {
-            if let Ok(tracks) = runtime.block_on(load) {
+            if let Ok(tracks) = runtime.block_on(load)
+                && !music_tracks_cover(&self.tracks, project)
+            {
                 self.tracks = tracks;
                 loaded = true;
             }
@@ -2591,6 +2593,49 @@ mod tests {
             &live.tracks["music.wav"],
             &loader.load(&trimmed_further)["music.wav"],
         ));
+    }
+
+    #[test]
+    fn live_music_keeps_tracks_that_serve_the_latest_edit_over_an_older_load() {
+        let _ = ffmpeg::init();
+        let dir = tempfile::tempdir().unwrap();
+        crate::audio::tests::write_step_wav(
+            &dir.path().join("music.wav"),
+            &[2_000, 4_000, 6_000, 8_000, 10_000, 12_000],
+        );
+        let project: Arc<ProjectConfiguration> = Arc::new(
+            serde_json::from_value(serde_json::json!({
+                "timeline": {
+                    "zoomSegments": [],
+                    "segments": [
+                        { "recordingSegment": 0, "start": 0.0, "end": 2.0, "timescale": 1.0 }
+                    ],
+                    "audioSegments": [{ "start": 0.0, "end": 2.0, "path": "music.wav" }]
+                }
+            }))
+            .unwrap(),
+        );
+        let mut trimmed = (*project).clone();
+        trimmed.timeline.as_mut().unwrap().audio_segments[0].trim_start = 3.0;
+        let trimmed = Arc::new(trimmed);
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let handle = runtime.handle();
+        let loader = MusicLoader::new(dir.path().to_path_buf());
+        let mut live = LiveMusic::new(loader.load(&project), loader.clone());
+
+        let older = Arc::clone(&trimmed);
+        let older_loader = loader.clone();
+        let load = handle.spawn_blocking(move || older_loader.load(&older));
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !load.is_finished() {
+            assert!(Instant::now() < deadline, "the music never decoded");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        live.loading = Some((trimmed, load));
+
+        assert!(!live.update(&project, false, handle));
+        assert!(live.loading.is_none());
+        assert!(music_tracks_cover(&live.tracks, &project));
     }
 
     #[test]
