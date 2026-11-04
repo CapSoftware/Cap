@@ -206,6 +206,12 @@ app.post(
 
 			if (microCreditsToDebit > 0) {
 				const debited = await db().transaction(async (tx) => {
+					await tx
+						.select({ id: developerVideos.id })
+						.from(developerVideos)
+						.where(eq(developerVideos.id, videoId))
+						.for("update");
+
 					const [account] = await tx
 						.select({
 							id: developerCreditAccounts.id,
@@ -216,6 +222,24 @@ app.post(
 						.limit(1);
 
 					if (!account) return null;
+
+					const [charged] = await tx
+						.select({ id: developerCreditTransactions.id })
+						.from(developerCreditTransactions)
+						.where(
+							and(
+								eq(developerCreditTransactions.accountId, account.id),
+								eq(developerCreditTransactions.referenceId, videoId),
+								eq(
+									developerCreditTransactions.referenceType,
+									"developer_video",
+								),
+								eq(developerCreditTransactions.type, "video_create"),
+							),
+						)
+						.limit(1);
+
+					if (charged) return true;
 
 					const [result] = await tx
 						.update(developerCreditAccounts)

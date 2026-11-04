@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
 		duration: number | null;
 		deletedAt: string | null;
 	},
+	charged: false,
 	create: vi.fn(),
 	presign: vi.fn(),
 	complete: vi.fn(),
@@ -86,6 +87,7 @@ function writes() {
 beforeEach(() => {
 	vi.clearAllMocks();
 	mocks.video = inProgress;
+	mocks.charged = false;
 	mocks.query.mockImplementation(async (query: string) => {
 		if (query.includes("from `developer_videos`")) {
 			const video = mocks.video;
@@ -94,6 +96,9 @@ beforeEach(() => {
 					? [[video.appId, s3Key, video.duration, video.deletedAt]]
 					: [],
 			};
+		}
+		if (query.includes("from `developer_credit_transactions`")) {
+			return { rows: mocks.charged ? [["transaction-1"]] : [] };
 		}
 		if (query.includes("from `developer_credit_accounts`")) {
 			return {
@@ -178,6 +183,28 @@ describe("developer SDK multipart upload", () => {
 		await expect(response.json()).resolves.toEqual({ success: true });
 		expect(mocks.complete).not.toHaveBeenCalled();
 		expect(writes()).toHaveLength(0);
+	});
+
+	it("charges a completion once even when a retry overlaps it", async () => {
+		mocks.charged = true;
+
+		const response = await post("/complete", completeBody);
+
+		expect(response.status).toBe(200);
+		expect(mocks.complete).toHaveBeenCalledTimes(1);
+		const queries = mocks.query.mock.calls.map(([query]) => String(query));
+		expect(
+			queries.some((query) =>
+				/from `developer_videos`.*for update/i.test(query),
+			),
+		).toBe(true);
+		expect(
+			writes().some(([query]) =>
+				/^(update `developer_credit_accounts`|insert into `developer_credit_transactions`)/.test(
+					String(query),
+				),
+			),
+		).toBe(false);
 	});
 
 	it("refuses to complete an upload for a deleted video", async () => {
