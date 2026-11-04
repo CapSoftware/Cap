@@ -51,6 +51,8 @@ const PICKER_H: f64 = 41.0;
 const PILL_W: f64 = 42.0;
 const PILL_H: f64 = 29.0;
 const PILL_GAP: f64 = 4.0;
+/// Minimum touch target height. Only the hit test uses it; the visual pill stays `PILL_H`.
+const PILL_HIT_MIN_H: f64 = 36.0;
 const CAPSULE_PAD: f64 = 3.0;
 const RIGHT_INSET: f64 = 12.0;
 const TITLE_INSET: f64 = 18.0;
@@ -381,12 +383,15 @@ impl ModePickerView {
     }
 
     fn pill_at_point(&self, p: NSPoint) -> Option<usize> {
+        let bounds = self.bounds();
         (0..PICKER_MODES.len()).find(|&i| {
             let r = self.pill_rect(i);
+            let hit_h = PILL_HIT_MIN_H.max(r.size.height).min(bounds.size.height);
+            let hit_y = r.origin.y + r.size.height / 2.0 - hit_h / 2.0;
             p.x >= r.origin.x - PILL_GAP / 2.0
                 && p.x <= r.origin.x + r.size.width + PILL_GAP / 2.0
-                && p.y >= r.origin.y
-                && p.y <= r.origin.y + r.size.height
+                && p.y >= hit_y
+                && p.y <= hit_y + hit_h
         })
     }
 
