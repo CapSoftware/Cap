@@ -900,6 +900,39 @@ test.describe("extension recording upload", () => {
 		await expectSuccessfulUpload(messengerPage, mockServer.state);
 	});
 
+	test("records a tab in the tab's own shape", async () => {
+		if (!extension || !mockServer)
+			throw new Error("Test harness did not start");
+		test.skip(!canLaunchHeaded, "Tab capture needs a headed browser");
+		await extension.cleanup();
+		extension = await launchExtensionContext({ tabCapture: true });
+		const worker = await getServiceWorker(extension.context);
+		const { capturePage, messengerPage } = await startRecording(
+			extension.context,
+			worker,
+			mockServer.origin,
+			{
+				...DEFAULT_RECORDING_OPTIONS,
+				mode: "tab",
+				systemAudio: true,
+				durationMs: 2_000,
+			},
+		);
+		const tab = await capturePage.evaluate(() => ({
+			width: window.innerWidth,
+			height: window.innerHeight,
+		}));
+		const stopResponse = await sendServiceWorkerMessage(messengerPage, {
+			target: "service-worker",
+			type: "stop-recording",
+		});
+		expect(stopResponse).toMatchObject({ ok: true });
+		await expectSuccessfulUpload(messengerPage, mockServer.state);
+
+		const { video } = await probeUploadedRecording(mockServer.state);
+		expect(video.width / video.height).toBeCloseTo(tab.width / tab.height, 1);
+	});
+
 	for (const options of [
 		{
 			name: "fullscreen with microphone",
