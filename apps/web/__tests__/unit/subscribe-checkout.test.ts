@@ -1,4 +1,5 @@
 import { isValidStripePlanPriceId, STRIPE_PLAN_IDS } from "@cap/utils";
+import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { POST as subscribe } from "@/app/api/settings/billing/subscribe/route";
 
@@ -60,11 +61,11 @@ vi.mock("@/lib/server-analytics", () => ({
 }));
 
 const makeSubscribeRequest = (body: Record<string, unknown>) =>
-	new Request("https://cap.so/api/settings/billing/subscribe", {
+	new NextRequest("https://cap.so/api/settings/billing/subscribe", {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify(body),
-	}) as unknown as import("next/server").NextRequest;
+	});
 
 describe("Stripe plan allowlist", () => {
 	it("rejects IDs that are not a Pro plan price in either environment", () => {

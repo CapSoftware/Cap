@@ -4513,6 +4513,8 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 													platform: "agent",
 													organizationId: path.organizationId,
 													userId: principal.id,
+													// Lets Dub credit the sale to a partner referral.
+													dubCustomerId: principal.id,
 												},
 											},
 											{

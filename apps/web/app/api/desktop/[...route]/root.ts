@@ -27,6 +27,12 @@ import { type Context, Hono } from "hono";
 import type Stripe from "stripe";
 import { z } from "zod";
 import {
+	createWithReferralDiscount,
+	referralDiscountForCheckout,
+	referralDiscountMetadata,
+	referralDiscountParams,
+} from "@/lib/checkout/referral";
+import {
 	confirmedDesktopLogWebhookUrl,
 	createDesktopLogUpload,
 } from "@/lib/desktop-log-upload";
@@ -588,6 +594,9 @@ app.post(
 			);
 		}
 
+		// Starts now so the Dub lookup overlaps the Stripe customer calls below.
+		const referralDiscountLookup = referralDiscountForCheckout(user);
+
 		let customerId = user.stripeCustomerId;
 
 		if (user.stripeCustomerId === null) {
@@ -631,19 +640,28 @@ app.post(
 		}
 
 		console.log("[POST] Creating checkout session");
+		const referralDiscount = await referralDiscountLookup;
 		const redirects = getCheckoutRedirectUrls(
 			checkoutPlatform,
 			serverEnv().WEB_URL,
 		);
-		const checkoutSession = await stripe().checkout.sessions.create({
-			customer: customerId as string,
-			line_items: [{ price: priceId, quantity: 1 }],
-			mode: "subscription",
-			success_url: redirects.successUrl,
-			cancel_url: redirects.cancelUrl,
-			allow_promotion_codes: true,
-			metadata: { platform: checkoutPlatform, dubCustomerId: user.id },
-		});
+		const checkoutSession = await createWithReferralDiscount(
+			referralDiscount,
+			(discount) =>
+				stripe().checkout.sessions.create({
+					customer: customerId as string,
+					line_items: [{ price: priceId, quantity: 1 }],
+					mode: "subscription",
+					success_url: redirects.successUrl,
+					cancel_url: redirects.cancelUrl,
+					...referralDiscountParams(discount),
+					metadata: {
+						platform: checkoutPlatform,
+						dubCustomerId: user.id,
+						...referralDiscountMetadata(discount),
+					},
+				}),
+		);
 
 		if (checkoutSession.url) {
 			console.log("[POST] Checkout session created successfully");

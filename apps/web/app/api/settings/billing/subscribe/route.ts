@@ -1,11 +1,18 @@
 import { isCrossSiteCookieWrite } from "@cap/database/auth/request-site";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { DUB_CLICK_ID_COOKIE } from "@cap/database/referrals";
 import { serverEnv } from "@cap/env";
 import { isValidStripePlanPriceId, stripe, userIsPro } from "@cap/utils";
 import type { NextRequest } from "next/server";
 import { ensureStripeCustomerId } from "@/lib/checkout/customer";
 import { customCheckoutEnabled } from "@/lib/checkout/enabled";
 import { checkoutPath, planForPriceId } from "@/lib/checkout/plans";
+import {
+	createWithReferralDiscount,
+	referralDiscountForCheckout,
+	referralDiscountMetadata,
+	referralDiscountParams,
+} from "@/lib/checkout/referral";
 import { parseCheckoutQuantity } from "@/lib/checkout-quantity";
 import { trackServerEvent } from "@/lib/server-analytics";
 
@@ -70,25 +77,36 @@ export async function POST(request: NextRequest) {
 	}
 
 	try {
-		const customerId = await ensureStripeCustomerId(user);
+		const [customerId, referralDiscount] = await Promise.all([
+			ensureStripeCustomerId(user),
+			referralDiscountForCheckout(
+				user,
+				request.cookies.get(DUB_CLICK_ID_COOKIE)?.value,
+			),
+		]);
 
-		const checkoutSession = await stripe().checkout.sessions.create({
-			customer: customerId,
-			line_items: [{ price: priceId, quantity: safeQuantity }],
-			mode: "subscription",
-			success_url: isOnBoarding
-				? `${serverEnv().WEB_URL}/dashboard/settings/organization?upgrade=true&session_id={CHECKOUT_SESSION_ID}`
-				: `${serverEnv().WEB_URL}/dashboard/caps?upgrade=true&session_id={CHECKOUT_SESSION_ID}`,
-			cancel_url: isOnBoarding
-				? `${serverEnv().WEB_URL}/onboarding`
-				: `${serverEnv().WEB_URL}/pricing`,
-			allow_promotion_codes: true,
-			metadata: {
-				platform: "web",
-				dubCustomerId: user.id,
-				isOnBoarding: isOnBoarding ? "true" : "false",
-			},
-		});
+		const checkoutSession = await createWithReferralDiscount(
+			referralDiscount,
+			(discount) =>
+				stripe().checkout.sessions.create({
+					customer: customerId,
+					line_items: [{ price: priceId, quantity: safeQuantity }],
+					mode: "subscription",
+					success_url: isOnBoarding
+						? `${serverEnv().WEB_URL}/dashboard/settings/organization?upgrade=true&session_id={CHECKOUT_SESSION_ID}`
+						: `${serverEnv().WEB_URL}/dashboard/caps?upgrade=true&session_id={CHECKOUT_SESSION_ID}`,
+					cancel_url: isOnBoarding
+						? `${serverEnv().WEB_URL}/onboarding`
+						: `${serverEnv().WEB_URL}/pricing`,
+					...referralDiscountParams(discount),
+					metadata: {
+						platform: "web",
+						dubCustomerId: user.id,
+						isOnBoarding: isOnBoarding ? "true" : "false",
+						...referralDiscountMetadata(discount),
+					},
+				}),
+		);
 
 		if (checkoutSession.url) {
 			trackServerEvent(user.id, "checkout_started", {

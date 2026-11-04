@@ -2,9 +2,10 @@
 
 import { timingSafeEqual } from "node:crypto";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { DUB_CLICK_ID_COOKIE } from "@cap/database/referrals";
 import { serverEnv } from "@cap/env";
 import { userIsPro } from "@cap/utils";
-import { headers } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { ensureStripeCustomerId } from "@/lib/checkout/customer";
 import { customCheckoutEnabled } from "@/lib/checkout/enabled";
 import {
@@ -18,6 +19,13 @@ import {
 	planPriceId,
 	sessionIdFromClientSecret,
 } from "@/lib/checkout/plans";
+import {
+	createWithReferralDiscount,
+	guestReferralParams,
+	referralDiscountForCheckout,
+	referralDiscountMetadata,
+	referralDiscountParams,
+} from "@/lib/checkout/referral";
 import { checkoutStripe } from "@/lib/checkout/stripe";
 import { MAX_CHECKOUT_QUANTITY } from "@/lib/checkout-quantity";
 import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
@@ -80,6 +88,7 @@ export async function createProCheckout(input: {
 	const onboarding = input.onboarding === true;
 	const environment = checkoutEnvironment();
 	const requestHeaders = await headers();
+	const referralClickId = (await cookies()).get(DUB_CLICK_ID_COOKIE)?.value;
 	const user = await getCurrentUser();
 
 	if (user && userIsPro(user)) return { ok: false, reason: "already_pro" };
@@ -93,9 +102,12 @@ export async function createProCheckout(input: {
 	}
 
 	try {
-		const [customerId, currencies] = await Promise.all([
+		const [customerId, currencies, referralDiscount] = await Promise.all([
 			user ? ensureStripeCustomerId(user) : Promise.resolve(null),
 			planCurrencies(environment),
+			user
+				? referralDiscountForCheckout(user, referralClickId)
+				: Promise.resolve(null),
 		]);
 		const currency = pickCheckoutCurrency(
 			currencyForCountry(
@@ -104,43 +116,49 @@ export async function createProCheckout(input: {
 			CHECKOUT_PLANS.map((p) => currencies.get(p) ?? new Set<string>()),
 		);
 
-		const session = await checkoutStripe().checkout.sessions.create({
-			mode: "subscription",
-			ui_mode: "elements",
-			line_items: [
-				{
-					price: planPriceId(plan, environment),
-					quantity: seats,
-					adjustable_quantity: {
-						enabled: true,
-						minimum: 1,
-						maximum: MAX_CHECKOUT_QUANTITY,
+		const session = await createWithReferralDiscount(
+			referralDiscount,
+			(discount) =>
+				checkoutStripe().checkout.sessions.create({
+					mode: "subscription",
+					ui_mode: "elements",
+					line_items: [
+						{
+							price: planPriceId(plan, environment),
+							quantity: seats,
+							adjustable_quantity: {
+								enabled: true,
+								minimum: 1,
+								maximum: MAX_CHECKOUT_QUANTITY,
+							},
+						},
+					],
+					currency,
+					return_url: `${serverEnv().WEB_URL}/checkout/complete?session_id={CHECKOUT_SESSION_ID}`,
+					...referralDiscountParams(discount),
+					...(user ? {} : guestReferralParams(referralClickId)),
+					billing_address_collection: "auto",
+					name_collection: { business: { enabled: true, optional: true } },
+					tax_id_collection: { enabled: true },
+					integration_identifier: INTEGRATION_IDENTIFIER,
+					// Newer API versions default subscriptions to flexible billing, which
+					// the 2023-10-16 seat management (upcoming invoice previews) rejects.
+					subscription_data: { billing_mode: { type: "classic" } },
+					...(customerId
+						? {
+								customer: customerId,
+								customer_update: { name: "auto", address: "auto" },
+							}
+						: {}),
+					metadata: {
+						platform: "web",
+						checkoutUi: "elements",
+						isOnBoarding: onboarding ? "true" : "false",
+						...(user ? { dubCustomerId: user.id } : { guestCheckout: "true" }),
+						...referralDiscountMetadata(discount),
 					},
-				},
-			],
-			currency,
-			return_url: `${serverEnv().WEB_URL}/checkout/complete?session_id={CHECKOUT_SESSION_ID}`,
-			allow_promotion_codes: true,
-			billing_address_collection: "auto",
-			name_collection: { business: { enabled: true, optional: true } },
-			tax_id_collection: { enabled: true },
-			integration_identifier: INTEGRATION_IDENTIFIER,
-			// Newer API versions default subscriptions to flexible billing, which
-			// the 2023-10-16 seat management (upcoming invoice previews) rejects.
-			subscription_data: { billing_mode: { type: "classic" } },
-			...(customerId
-				? {
-						customer: customerId,
-						customer_update: { name: "auto", address: "auto" },
-					}
-				: {}),
-			metadata: {
-				platform: "web",
-				checkoutUi: "elements",
-				isOnBoarding: onboarding ? "true" : "false",
-				...(user ? { dubCustomerId: user.id } : { guestCheckout: "true" }),
-			},
-		});
+				}),
+		);
 
 		if (!session.client_secret) {
 			console.error("Checkout session created without a client secret", {
