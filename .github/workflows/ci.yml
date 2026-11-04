@@ -110,6 +110,7 @@ jobs:
           __tests__/unit/currency-hook.test.ts
           __tests__/unit/dashboard-analytics-cap-access.test.ts
           __tests__/unit/dashboard-analytics-space-access.test.ts
+          __tests__/unit/detect-platform.test.ts
           __tests__/unit/embed-page-round-trips.test.ts
           __tests__/unit/embed-video-playback-chrome.test.ts
           __tests__/unit/first-view-email.test.ts
