@@ -336,7 +336,7 @@ impl DeepLinkAction {
                 let capture_target: ScreenCaptureTarget = match capture_mode {
                     CaptureMode::Screen(name) => cap_recording::screen_capture::list_displays()
                         .into_iter()
-                        .find(|(s, _)| s.name == name)
+                        .find(|(s, _)| name == "default" || name == "primary" || s.name == name)
                         .map(|(s, _)| ScreenCaptureTarget::Display { id: s.id })
                         .ok_or(format!("No screen with name \"{}\"", name))?,
                     CaptureMode::Window(name) => cap_recording::screen_capture::list_windows()
@@ -856,6 +856,34 @@ mod tests {
         assert_eq!(mic_label.as_deref(), Some("Shure MV7+"));
         assert!(capture_system_audio);
         assert_eq!(mode, cap_recording::RecordingMode::Studio);
+    }
+
+    #[test]
+    fn parses_start_recording_action_url_default_screen() {
+        let url = Url::parse(
+            "cap-desktop://action?value=%7B%22start_recording%22%3A%7B%22capture_mode%22%3A%7B%22screen%22%3A%22default%22%7D%2C%22camera%22%3Anull%2C%22mic_label%22%3Anull%2C%22capture_system_audio%22%3Atrue%2C%22mode%22%3A%22instant%22%7D%7D",
+        )
+        .unwrap();
+
+        let Ok(DeepLinkAction::StartRecording {
+            capture_mode,
+            camera,
+            mic_label,
+            capture_system_audio,
+            mode,
+        }) = DeepLinkAction::try_from(&url)
+        else {
+            panic!("expected start recording action");
+        };
+
+        assert_eq!(
+            capture_mode,
+            CaptureMode::Screen("default".to_string())
+        );
+        assert_eq!(camera, None);
+        assert_eq!(mic_label, None);
+        assert!(capture_system_audio);
+        assert_eq!(mode, cap_recording::RecordingMode::Instant);
     }
 
     #[test]

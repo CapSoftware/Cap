@@ -16,7 +16,6 @@ export async function triggerCapAction(actionPayload: unknown): Promise<void> {
 	try {
 		await open(url);
 	} catch {
-		// Fallback to cap-desktop:// scheme
 		const fallbackUrl = `cap-desktop://action?value=${encodeURIComponent(
 			JSON.stringify(actionPayload),
 		)}`;
