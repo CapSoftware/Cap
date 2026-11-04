@@ -116,10 +116,6 @@ function useVideoThumbnail(videoId: Video.VideoId | null, enabled: boolean) {
 	return thumbnail;
 }
 
-/**
- * Without a `videoId` the dialog edits the owner's default call to action,
- * which every video without its own shows.
- */
 export function CallToActionDialog({
 	open,
 	onOpenChange,

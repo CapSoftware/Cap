@@ -180,10 +180,6 @@ export type ResolvedCallToAction = {
 	source: CallToActionSource | null;
 };
 
-/**
- * A video's own call to action wins. `false` means the owner turned calls to
- * action off for this video, so their default doesn't apply to it either.
- */
 export function resolveShareCallToAction(
 	videoSettings: unknown,
 	ownerPreferences: unknown,
