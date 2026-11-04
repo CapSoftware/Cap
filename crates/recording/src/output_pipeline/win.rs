@@ -342,7 +342,7 @@ impl Muxer for WindowsMuxer {
                     either::Left((mut encoder, mut muxer)) => {
                         trace!("Running native encoder with frame pacing");
                         let mut pacer = FramePacer::new(config.frame_rate);
-                        let mut last_texture: Option<windows::Win32::Graphics::Direct3D11::ID3D11Texture2D> = None;
+                        let mut last_frame: Option<screen_capture::ScreenFrame> = None;
                         let mut first_timestamp: Option<Duration> = None;
                         let mut frame_count: u64 = 0;
                         let mut frames_reused: u64 = 0;
@@ -353,11 +353,12 @@ impl Muxer for WindowsMuxer {
                                 let (texture, timestamp) = match pacer.next(&video_rx, &pause_flag) {
                                     Paced::Frame(frame, timestamp) => {
                                         let texture = frame.texture().clone();
-                                        last_texture = Some(texture.clone());
+                                        // Retain the pool lease through the encoder's copy and any paced repeats.
+                                        last_frame = Some(frame);
                                         (texture, timestamp)
                                     }
                                     Paced::Repeat(timestamp) => {
-                                        let Some(texture) = &last_texture else {
+                                        let Some(frame) = &last_frame else {
                                             continue;
                                         };
                                         frames_reused += 1;
@@ -368,7 +369,7 @@ impl Muxer for WindowsMuxer {
                                                 "Frame pacing: reusing frames due to slow capture"
                                             );
                                         }
-                                        (texture.clone(), timestamp)
+                                        (frame.texture().clone(), timestamp)
                                     }
                                     Paced::End => {
                                         trace!("End of stream signal received");
