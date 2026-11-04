@@ -442,7 +442,7 @@ impl EditorInstance {
             );
         }
 
-        let mut project = recording_meta.project_config();
+        let mut project = recording_meta.project_config_for_editing();
 
         if project.timeline.is_none() {
             warn!("Project config has no timeline, creating one from recording segments");
