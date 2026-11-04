@@ -17,6 +17,21 @@ import { withDeveloperPublicAuth } from "../../../../utils";
 const MICRO_CREDITS_PER_MINUTE = 5_000;
 const MAX_DURATION_SECS = 4 * 60 * 60;
 
+async function findAppVideo(appId: string, videoId: string) {
+	const [video] = await db()
+		.select({
+			appId: developerVideos.appId,
+			s3Key: developerVideos.s3Key,
+			duration: developerVideos.duration,
+			deletedAt: developerVideos.deletedAt,
+		})
+		.from(developerVideos)
+		.where(eq(developerVideos.id, videoId))
+		.limit(1);
+
+	return video && video.appId === appId ? video : null;
+}
+
 export const app = new Hono<{
 	Variables: {
 		developerAppId: string;
@@ -37,18 +52,14 @@ app.post(
 		const appId = c.get("developerAppId");
 		const { videoId, contentType } = c.req.valid("json");
 
-		const [video] = await db()
-			.select({
-				id: developerVideos.id,
-				appId: developerVideos.appId,
-				s3Key: developerVideos.s3Key,
-			})
-			.from(developerVideos)
-			.where(eq(developerVideos.id, videoId))
-			.limit(1);
+		const video = await findAppVideo(appId, videoId);
 
-		if (!video || video.appId !== appId) {
+		if (!video || video.deletedAt) {
 			return c.json({ error: "Video not found" }, 404);
+		}
+
+		if (video.duration !== null) {
+			return c.json({ error: "Upload already completed" }, 409);
 		}
 
 		if (!video.s3Key) {
@@ -104,18 +115,14 @@ app.post(
 		const appId = c.get("developerAppId");
 		const { videoId, uploadId, partNumber } = c.req.valid("json");
 
-		const [video] = await db()
-			.select({
-				id: developerVideos.id,
-				appId: developerVideos.appId,
-				s3Key: developerVideos.s3Key,
-			})
-			.from(developerVideos)
-			.where(eq(developerVideos.id, videoId))
-			.limit(1);
+		const video = await findAppVideo(appId, videoId);
 
-		if (!video || video.appId !== appId) {
+		if (!video || video.deletedAt) {
 			return c.json({ error: "Video not found" }, 404);
+		}
+
+		if (video.duration !== null) {
+			return c.json({ error: "Upload already completed" }, 409);
 		}
 
 		if (!video.s3Key) {
@@ -169,18 +176,14 @@ app.post(
 
 		const clampedDuration = Math.min(durationInSecs, MAX_DURATION_SECS);
 
-		const [video] = await db()
-			.select({
-				id: developerVideos.id,
-				appId: developerVideos.appId,
-				s3Key: developerVideos.s3Key,
-			})
-			.from(developerVideos)
-			.where(eq(developerVideos.id, videoId))
-			.limit(1);
+		const video = await findAppVideo(appId, videoId);
 
-		if (!video || video.appId !== appId) {
+		if (!video || video.deletedAt) {
 			return c.json({ error: "Video not found" }, 404);
+		}
+
+		if (video.duration !== null) {
+			return c.json({ success: true });
 		}
 
 		if (!video.s3Key) {
@@ -316,17 +319,9 @@ app.post(
 		const appId = c.get("developerAppId");
 		const { videoId, uploadId } = c.req.valid("json");
 
-		const [video] = await db()
-			.select({
-				id: developerVideos.id,
-				appId: developerVideos.appId,
-				s3Key: developerVideos.s3Key,
-			})
-			.from(developerVideos)
-			.where(eq(developerVideos.id, videoId))
-			.limit(1);
+		const video = await findAppVideo(appId, videoId);
 
-		if (!video || video.appId !== appId) {
+		if (!video) {
 			return c.json({ error: "Video not found" }, 404);
 		}
 

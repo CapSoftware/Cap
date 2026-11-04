@@ -12,6 +12,10 @@ import {
 import type { Organisation, Video } from "@cap/web-domain";
 import { and, eq, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import {
+	canManageOrganizationSettings,
+	getEffectiveOrganizationRole,
+} from "@/lib/permissions/roles";
 
 export async function removeVideosFromOrganization(
 	organizationId: Organisation.OrganisationId,
@@ -38,11 +42,11 @@ export async function removeVideosFromOrganization(
 		}
 
 		const isOrgOwner = organization.ownerId === user.id;
-		let hasAccess = isOrgOwner;
+		let memberRole: string | null = null;
 
 		if (!isOrgOwner) {
-			const orgMembership = await db()
-				.select({ id: organizationMembers.id })
+			const [orgMembership] = await db()
+				.select({ role: organizationMembers.role })
 				.from(organizationMembers)
 				.where(
 					and(
@@ -51,13 +55,33 @@ export async function removeVideosFromOrganization(
 					),
 				)
 				.limit(1);
-			hasAccess = orgMembership.length > 0;
+			if (!orgMembership) {
+				throw new Error(
+					"You don't have permission to remove videos from this organization",
+				);
+			}
+			memberRole = orgMembership.role;
 		}
 
-		if (!hasAccess) {
-			throw new Error(
-				"You don't have permission to remove videos from this organization",
-			);
+		const role = getEffectiveOrganizationRole({
+			userId: user.id,
+			ownerId: organization.ownerId,
+			memberRole,
+		});
+
+		let removableVideoIds = videoIds;
+
+		if (!canManageOrganizationSettings(role)) {
+			const userVideos = await db()
+				.select({ id: videos.id })
+				.from(videos)
+				.where(and(eq(videos.ownerId, user.id), inArray(videos.id, videoIds)));
+
+			removableVideoIds = userVideos.map((v) => v.id);
+
+			if (removableVideoIds.length === 0) {
+				throw new Error("No valid videos found");
+			}
 		}
 
 		// Only allow removing videos that are currently shared with the organization
@@ -67,7 +91,7 @@ export async function removeVideosFromOrganization(
 			.where(
 				and(
 					eq(sharedVideos.organizationId, organizationId),
-					inArray(sharedVideos.videoId, videoIds),
+					inArray(sharedVideos.videoId, removableVideoIds),
 				),
 			);
 
