@@ -1091,6 +1091,11 @@ segments = { one = "{count} segmento", many = "{count} de segmentos", other = "{
 segments_with_duration = { one = "{count} segmento · {duration}", many = "{count} de segmentos · {duration}", other = "{count} segmentos · {duration}" }
 title = "Grabación incompleta"
 
+[main.recovery.error]
+nothing_saved = "No se guardó ningún vídeo antes de que se detuviera esta grabación, así que no hay nada que recuperar. Sus archivos siguen en {path}."
+rebuild_failed = "Cap no pudo reconstruir esta grabación ({error}). No se ha eliminado nada y los archivos originales están en {path}."
+storage = "No hay suficiente espacio libre para recuperar esta grabación ({error}). Libera espacio y vuelve a pulsar Recuperar. No se ha eliminado nada y los archivos están en {path}."
+
 [main.sign_in]
 message = "Con el modo Instant, la grabación se sube mientras grabas, así que tu enlace para compartir está listo en cuanto te detienes."
 not_now = "Ahora no"

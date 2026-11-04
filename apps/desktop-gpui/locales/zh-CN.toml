@@ -1091,6 +1091,11 @@ segments = { other = "{count} 个分段" }
 segments_with_duration = { other = "{count} 个分段 · {duration}" }
 title = "未完成的录制"
 
+[main.recovery.error]
+nothing_saved = "此录制停止前没有保存任何视频，因此没有可恢复的内容。其文件仍在 {path} 中。"
+rebuild_failed = "Cap 无法重建此录制 ({error})。没有删除任何内容，原始文件位于 {path}。"
+storage = "可用空间不足，无法恢复此录制 ({error})。请释放一些空间后再次点击“恢复”。没有删除任何内容，文件位于 {path}。"
+
 [main.sign_in]
 message = "Instant 模式会边录边上传，停止的那一刻分享链接就已就绪。"
 not_now = "以后再说"

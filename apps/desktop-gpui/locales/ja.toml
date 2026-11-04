@@ -1091,6 +1091,11 @@ segments = { other = "{count}セグメント" }
 segments_with_duration = { other = "{count}セグメント · {duration}" }
 title = "未完了の録画"
 
+[main.recovery.error]
+nothing_saved = "この録画が停止する前に保存されたビデオがないため、復元できるものはありません。ファイルは引き続き {path} にあります。"
+rebuild_failed = "Cap はこの録画を再構築できませんでした ({error})。何も削除されていません。元のファイルは {path} にあります。"
+storage = "この録画を復元するための空き容量が不足しています ({error})。空き容量を確保してから、もう一度「復元」を押してください。何も削除されていません。ファイルは {path} にあります。"
+
 [main.sign_in]
 message = "Instantモードは録画しながらアップロードするので、停止した瞬間に共有リンクが用意されます。"
 not_now = "今はしない"
