@@ -78,7 +78,7 @@ vi.mock("../../../../packages/database/auth/drizzle-adapter", () => ({
 		const asAdapterUser = (user: { id: string; email: string }) =>
 			({ ...user, emailVerified: null }) as StoredUser;
 		return {
-			async createUser(user) {
+			async createUser(user: Omit<AdapterUser, "id">) {
 				const created = {
 					id: `user-${mocks.users.length + 1}`,
 					email: user.email,
