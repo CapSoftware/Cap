@@ -314,7 +314,6 @@ fn log_softmax(log_probs: &mut [f32], classes: usize) {
     }
 }
 
-/// Frames wav2vec2's feature encoder makes from `samples` samples.
 pub(super) fn output_frames(samples: usize) -> usize {
     [(10, 5), (3, 2), (3, 2), (3, 2), (3, 2), (2, 2), (2, 2)]
         .iter()

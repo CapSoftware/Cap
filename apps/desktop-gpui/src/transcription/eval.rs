@@ -695,6 +695,7 @@ mod run {
                 options,
                 &tuning(),
                 || aligner,
+                || None,
                 || {
                     let groups = match self {
                         Self::Whisper(model) => {
