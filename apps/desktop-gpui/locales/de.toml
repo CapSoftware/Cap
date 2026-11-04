@@ -2688,6 +2688,7 @@ font_weight = "Schriftstärke"
 generate = "Tastatursegmente erstellen"
 generating = "Tastatursegmente werden erstellt..."
 grouping_threshold = "Gruppierungsschwelle"
+keycap_design = "Tastenkappen-Design"
 linger_duration = "Anzeigedauer"
 load_failed = "Aufnahmedaten konnten nicht geladen werden: {error}"
 no_presses = "Es wurden keine aufgezeichneten Tastendrücke gefunden."
@@ -2696,11 +2697,21 @@ regenerate = "Tastatursegmente neu erstellen"
 show_modifiers = "Modifikatortasten anzeigen"
 show_special_keys = "Spezialtasten anzeigen"
 size_label = "Größe"
+style = "Stil"
 text_color = "Textfarbe"
+theme = "Design"
 timeline_unavailable = "Die Projektzeitleiste ist nicht verfügbar."
 timeline_unreadable = "Die Projektzeitleiste konnte nicht gelesen werden."
 title = "Tastatur anzeigen"
 uppercase = "Großbuchstaben"
+
+[editor.tabs.keyboard_style]
+keycaps = "Tastenkappen"
+plain = "Text"
+
+[editor.tabs.keycap_theme]
+black = "Schwarz"
+white = "Weiß"
 
 [editor.tabs.position]
 bottom_center = "Unten mittig"

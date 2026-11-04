@@ -2688,6 +2688,7 @@ font_weight = "フォントの太さ"
 generate = "キーボードセグメントを生成"
 generating = "キーボードセグメントを生成中..."
 grouping_threshold = "グループ化のしきい値"
+keycap_design = "キーキャップデザイン"
 linger_duration = "表示を残す時間"
 load_failed = "録画データを読み込めませんでした：{error}"
 no_presses = "記録されたキー入力が見つかりませんでした。"
@@ -2696,11 +2697,21 @@ regenerate = "キーボードセグメントを再生成"
 show_modifiers = "修飾キーを表示"
 show_special_keys = "特殊キーを表示"
 size_label = "サイズ"
+style = "スタイル"
 text_color = "テキストの色"
+theme = "テーマ"
 timeline_unavailable = "プロジェクトのタイムラインを利用できません。"
 timeline_unreadable = "プロジェクトのタイムラインを読み込めませんでした。"
 title = "キーボードを表示"
 uppercase = "大文字"
+
+[editor.tabs.keyboard_style]
+keycaps = "キーキャップ"
+plain = "テキスト"
+
+[editor.tabs.keycap_theme]
+black = "ブラック"
+white = "ホワイト"
 
 [editor.tabs.position]
 bottom_center = "下中央"

@@ -707,6 +707,7 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             tr::editor::tabs::keyboard::grouping_threshold(),
             "Grouping Threshold",
         ),
+        (tr::editor::tabs::keyboard::keycap_design(), "Keycap Design"),
         (
             tr::editor::tabs::keyboard::linger_duration(),
             "Linger Duration",
@@ -729,7 +730,9 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             "Show Special Keys",
         ),
         (tr::editor::tabs::keyboard::size_label(), "Size"),
+        (tr::editor::tabs::keyboard::style(), "Style"),
         (tr::editor::tabs::keyboard::text_color(), "Text Color"),
+        (tr::editor::tabs::keyboard::theme(), "Theme"),
         (
             tr::editor::tabs::keyboard::timeline_unavailable(),
             "The project timeline is unavailable.",
@@ -740,6 +743,10 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         ),
         (tr::editor::tabs::keyboard::title(), "Show keyboard"),
         (tr::editor::tabs::keyboard::uppercase(), "Uppercase"),
+        (tr::editor::tabs::keyboard_style::keycaps(), "Keycaps"),
+        (tr::editor::tabs::keyboard_style::plain(), "Text"),
+        (tr::editor::tabs::keycap_theme::black(), "Black"),
+        (tr::editor::tabs::keycap_theme::white(), "White"),
         (tr::editor::tabs::position::bottom_center(), "Bottom Center"),
         (tr::editor::tabs::position::bottom_left(), "Bottom Left"),
         (tr::editor::tabs::position::bottom_right(), "Bottom Right"),

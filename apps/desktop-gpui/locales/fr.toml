@@ -2688,6 +2688,7 @@ font_weight = "Graisse"
 generate = "Générer les segments clavier"
 generating = "Génération des segments clavier..."
 grouping_threshold = "Seuil de regroupement"
+keycap_design = "Design des touches"
 linger_duration = "Durée d'affichage"
 load_failed = "Impossible de charger les données d'enregistrement : {error}"
 no_presses = "Aucune frappe enregistrée n'a été trouvée."
@@ -2696,11 +2697,21 @@ regenerate = "Régénérer les segments clavier"
 show_modifiers = "Afficher les modificateurs"
 show_special_keys = "Afficher les touches spéciales"
 size_label = "Taille"
+style = "Style"
 text_color = "Couleur du texte"
+theme = "Thème"
 timeline_unavailable = "La timeline du projet n'est pas disponible."
 timeline_unreadable = "Impossible de lire la timeline du projet."
 title = "Afficher le clavier"
 uppercase = "Majuscules"
+
+[editor.tabs.keyboard_style]
+keycaps = "Touches"
+plain = "Texte"
+
+[editor.tabs.keycap_theme]
+black = "Noir"
+white = "Blanc"
 
 [editor.tabs.position]
 bottom_center = "En bas au centre"

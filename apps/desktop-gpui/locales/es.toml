@@ -2688,6 +2688,7 @@ font_weight = "Grosor de fuente"
 generate = "Generar segmentos de teclado"
 generating = "Generando segmentos de teclado..."
 grouping_threshold = "Umbral de agrupación"
+keycap_design = "Diseño de teclas"
 linger_duration = "Tiempo en pantalla"
 load_failed = "No se pudieron cargar los datos de la grabación: {error}"
 no_presses = "No se encontraron pulsaciones de teclado grabadas."
@@ -2696,11 +2697,21 @@ regenerate = "Regenerar segmentos de teclado"
 show_modifiers = "Mostrar modificadores"
 show_special_keys = "Mostrar teclas especiales"
 size_label = "Tamaño"
+style = "Estilo"
 text_color = "Color del texto"
+theme = "Tema"
 timeline_unavailable = "La línea de tiempo del proyecto no está disponible."
 timeline_unreadable = "No se pudo leer la línea de tiempo del proyecto."
 title = "Mostrar teclado"
 uppercase = "Mayúsculas"
+
+[editor.tabs.keyboard_style]
+keycaps = "Teclas"
+plain = "Texto"
+
+[editor.tabs.keycap_theme]
+black = "Negro"
+white = "Blanco"
 
 [editor.tabs.position]
 bottom_center = "Abajo al centro"
