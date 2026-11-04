@@ -1091,6 +1091,11 @@ segments = { other = "{count} 个分段" }
 segments_with_duration = { other = "{count} 个分段 · {duration}" }
 title = "未完成的录制"
 
+[main.recovery.error]
+nothing_saved = "此录制停止前没有保存任何视频，因此没有可恢复的内容。其文件仍在 {path} 中。"
+rebuild_failed = "Cap 无法重建此录制 ({error})。没有删除任何内容，原始文件位于 {path}。"
+storage = "可用空间不足，无法恢复此录制 ({error})。请释放一些空间后再次点击“恢复”。没有删除任何内容，文件位于 {path}。"
+
 [main.sign_in]
 message = "Instant 模式会边录边上传，停止的那一刻分享链接就已就绪。"
 not_now = "以后再说"
@@ -1125,6 +1130,7 @@ window = "窗口"
 [controls]
 disk_full_resume = "磁盘空间不足，无法继续。请释放空间后重试，或按“停止”保存。"
 low_storage = "存储空间不足。Cap 即将停止以保存你的录制。"
+paused_for_sleep = "由于你的 Mac 进入睡眠，录制已暂停。准备好后继续录制，或点击“停止”保存。"
 
 [controls.confirm]
 delete = "删除"
@@ -2858,8 +2864,6 @@ split_hint = "将播放头移到此片段内"
 volume = "音量"
 transition = "转场"
 transition_none = "无"
-transition_crossfade = "交叉淡化"
-transition_fade = "淡入淡出"
 transition_seconds = "{seconds} 秒"
 
 [editor.window.clip_menu.merge_blocker]
@@ -2953,6 +2957,25 @@ save_failed = "无法保存 {path} 的录制标题：{error}"
 [editor.window.track]
 clear_all = "全部清除"
 delete = "删除"
+
+[editor.window.transition]
+title = "转场"
+add = "添加转场"
+duration = "时长"
+seconds_unit = "秒"
+remove = "移除转场"
+cross_fade = "交叉溶解"
+fade_through_black = "黑场过渡"
+fade_through_white = "白场过渡"
+push_left = "向左推入"
+push_right = "向右推入"
+push_up = "向上推入"
+push_down = "向下推入"
+wipe_left = "向左擦除"
+wipe_right = "向右擦除"
+wipe_up = "向上擦除"
+wipe_down = "向下擦除"
+zoom = "缩放"
 
 [editor.window.transport]
 done_splitting = "完成拆分"

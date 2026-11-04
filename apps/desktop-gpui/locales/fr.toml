@@ -1091,6 +1091,11 @@ segments = { one = "{count} segment", many = "{count} de segments", other = "{co
 segments_with_duration = { one = "{count} segment · {duration}", many = "{count} de segments · {duration}", other = "{count} segments · {duration}" }
 title = "Enregistrement incomplet"
 
+[main.recovery.error]
+nothing_saved = "Aucune vidéo n'a été enregistrée avant l'arrêt de cet enregistrement, il n'y a donc rien à récupérer. Ses fichiers se trouvent toujours dans {path}."
+rebuild_failed = "Cap n'a pas pu reconstruire cet enregistrement ({error}). Rien n'a été supprimé et les fichiers d'origine se trouvent dans {path}."
+storage = "L'espace libre est insuffisant pour récupérer cet enregistrement ({error}). Libérez de l'espace puis cliquez à nouveau sur Récupérer. Rien n'a été supprimé et les fichiers se trouvent dans {path}."
+
 [main.sign_in]
 message = "Le mode Instant met en ligne pendant l'enregistrement : votre lien de partage est prêt dès l'arrêt."
 not_now = "Pas maintenant"
@@ -1125,6 +1130,7 @@ window = "Fenêtre"
 [controls]
 disk_full_resume = "Espace disque insuffisant pour reprendre. Libérez de l'espace et réessayez, ou appuyez sur Arrêter pour enregistrer."
 low_storage = "Espace de stockage faible. Cap va bientôt s'arrêter pour préserver votre enregistrement."
+paused_for_sleep = "L'enregistrement a été mis en pause car votre Mac s'est mis en veille. Reprenez-le quand vous êtes prêt, ou cliquez sur Arrêter pour l'enregistrer."
 
 [controls.confirm]
 delete = "Supprimer"
@@ -2858,8 +2864,6 @@ split_hint = "Placez la tête de lecture dans ce clip"
 volume = "Volume"
 transition = "TRANSITION"
 transition_none = "Aucune"
-transition_crossfade = "Fondu enchaîné"
-transition_fade = "Fondu"
 transition_seconds = "{seconds} s"
 
 [editor.window.clip_menu.merge_blocker]
@@ -2953,6 +2957,25 @@ save_failed = "Impossible d'enregistrer le titre de l'enregistrement pour {path}
 [editor.window.track]
 clear_all = "Tout effacer"
 delete = "Supprimer"
+
+[editor.window.transition]
+title = "Transition"
+add = "Ajouter une transition"
+duration = "Durée"
+seconds_unit = "s"
+remove = "Supprimer la transition"
+cross_fade = "Fondu enchaîné"
+fade_through_black = "Fondu au noir"
+fade_through_white = "Fondu au blanc"
+push_left = "Pousser vers la gauche"
+push_right = "Pousser vers la droite"
+push_up = "Pousser vers le haut"
+push_down = "Pousser vers le bas"
+wipe_left = "Volet vers la gauche"
+wipe_right = "Volet vers la droite"
+wipe_up = "Volet vers le haut"
+wipe_down = "Volet vers le bas"
+zoom = "Zoom"
 
 [editor.window.transport]
 done_splitting = "Terminer la découpe"

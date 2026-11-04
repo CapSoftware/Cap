@@ -1091,6 +1091,11 @@ segments = { one = "{count} segmento", many = "{count} de segmentos", other = "{
 segments_with_duration = { one = "{count} segmento · {duration}", many = "{count} de segmentos · {duration}", other = "{count} segmentos · {duration}" }
 title = "Grabación incompleta"
 
+[main.recovery.error]
+nothing_saved = "No se guardó ningún vídeo antes de que se detuviera esta grabación, así que no hay nada que recuperar. Sus archivos siguen en {path}."
+rebuild_failed = "Cap no pudo reconstruir esta grabación ({error}). No se ha eliminado nada y los archivos originales están en {path}."
+storage = "No hay suficiente espacio libre para recuperar esta grabación ({error}). Libera espacio y vuelve a pulsar Recuperar. No se ha eliminado nada y los archivos están en {path}."
+
 [main.sign_in]
 message = "Con el modo Instant, la grabación se sube mientras grabas, así que tu enlace para compartir está listo en cuanto te detienes."
 not_now = "Ahora no"
@@ -1125,6 +1130,7 @@ window = "Ventana"
 [controls]
 disk_full_resume = "No hay espacio suficiente para reanudar. Libera espacio e inténtalo de nuevo, o pulsa Detener para guardar."
 low_storage = "Poco almacenamiento. Cap se detendrá pronto para guardar tu grabación."
+paused_for_sleep = "La grabación se pausó porque tu Mac entró en reposo. Reanúdala cuando quieras o pulsa Detener para guardarla."
 
 [controls.confirm]
 delete = "Eliminar"
@@ -2858,8 +2864,6 @@ split_hint = "Mueve el cabezal dentro de este clip"
 volume = "Volumen"
 transition = "TRANSICIÓN"
 transition_none = "Ninguna"
-transition_crossfade = "Fundido encadenado"
-transition_fade = "Fundido"
 transition_seconds = "{seconds} s"
 
 [editor.window.clip_menu.merge_blocker]
@@ -2953,6 +2957,25 @@ save_failed = "No se pudo guardar el título de la grabación de {path}: {error}
 [editor.window.track]
 clear_all = "Borrar todo"
 delete = "Eliminar"
+
+[editor.window.transition]
+title = "Transición"
+add = "Añadir transición"
+duration = "Duración"
+seconds_unit = "s"
+remove = "Quitar transición"
+cross_fade = "Fundido encadenado"
+fade_through_black = "Fundido a negro"
+fade_through_white = "Fundido a blanco"
+push_left = "Empujar a la izquierda"
+push_right = "Empujar a la derecha"
+push_up = "Empujar hacia arriba"
+push_down = "Empujar hacia abajo"
+wipe_left = "Barrido a la izquierda"
+wipe_right = "Barrido a la derecha"
+wipe_up = "Barrido hacia arriba"
+wipe_down = "Barrido hacia abajo"
+zoom = "Zoom"
 
 [editor.window.transport]
 done_splitting = "Terminar de dividir"

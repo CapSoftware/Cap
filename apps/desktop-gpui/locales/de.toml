@@ -1091,6 +1091,11 @@ segments = { one = "{count} Segment", other = "{count} Segmente" }
 segments_with_duration = { one = "{count} Segment · {duration}", other = "{count} Segmente · {duration}" }
 title = "Unvollständige Aufnahme"
 
+[main.recovery.error]
+nothing_saved = "Bevor diese Aufnahme endete, wurde kein Video gespeichert, daher gibt es nichts wiederherzustellen. Die Dateien befinden sich weiterhin in {path}."
+rebuild_failed = "Cap konnte diese Aufnahme nicht wiederherstellen ({error}). Es wurde nichts gelöscht, die Originaldateien befinden sich in {path}."
+storage = "Es ist nicht genug Speicherplatz frei, um diese Aufnahme wiederherzustellen ({error}). Geben Sie Speicherplatz frei und klicken Sie erneut auf Wiederherstellen. Es wurde nichts gelöscht, die Dateien befinden sich in {path}."
+
 [main.sign_in]
 message = "Der Instant-Modus lädt schon während der Aufnahme hoch, sodass Ihr Link zum Teilen sofort nach dem Stoppen bereit ist."
 not_now = "Nicht jetzt"
@@ -1125,6 +1130,7 @@ window = "Fenster"
 [controls]
 disk_full_resume = "Nicht genug Speicherplatz zum Fortsetzen. Geben Sie Speicher frei und versuchen Sie es erneut, oder drücken Sie Stopp, um zu speichern."
 low_storage = "Wenig Speicherplatz. Cap beendet die Aufnahme bald, um sie zu sichern."
+paused_for_sleep = "Die Aufnahme wurde pausiert, weil Ihr Mac in den Ruhezustand gewechselt ist. Setzen Sie sie fort, wenn Sie bereit sind, oder klicken Sie auf Stopp, um sie zu sichern."
 
 [controls.confirm]
 delete = "Löschen"
@@ -2858,8 +2864,6 @@ split_hint = "Bewegen Sie den Abspielkopf in diesen Clip"
 volume = "Lautstärke"
 transition = "ÜBERGANG"
 transition_none = "Keiner"
-transition_crossfade = "Überblendung"
-transition_fade = "Schwarzblende"
 transition_seconds = "{seconds} s"
 
 [editor.window.clip_menu.merge_blocker]
@@ -2953,6 +2957,25 @@ save_failed = "Der Aufnahmetitel für {path} konnte nicht gespeichert werden: {e
 [editor.window.track]
 clear_all = "Alle entfernen"
 delete = "Löschen"
+
+[editor.window.transition]
+title = "Übergang"
+add = "Übergang hinzufügen"
+duration = "Dauer"
+seconds_unit = "s"
+remove = "Übergang entfernen"
+cross_fade = "Überblendung"
+fade_through_black = "Schwarzblende"
+fade_through_white = "Weißblende"
+push_left = "Nach links schieben"
+push_right = "Nach rechts schieben"
+push_up = "Nach oben schieben"
+push_down = "Nach unten schieben"
+wipe_left = "Wischen nach links"
+wipe_right = "Wischen nach rechts"
+wipe_up = "Wischen nach oben"
+wipe_down = "Wischen nach unten"
+zoom = "Zoom"
 
 [editor.window.transport]
 done_splitting = "Teilen beenden"

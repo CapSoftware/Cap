@@ -5524,6 +5524,7 @@ fn load_editor_project_candidate(
     previous: Option<Arc<cap_editor::EditorInstance>>,
     cx: &mut App,
 ) {
+    let ordinary_open = finalization.is_none() && previous.is_none();
     let preparing_output = finalization.as_ref().map(|_| editor_audio_output());
     let current_join =
         finalization
@@ -5611,6 +5612,30 @@ fn load_editor_project_candidate(
         }
         if handle.update(cx, |_, _, _| ()).is_err() {
             return;
+        }
+        if ordinary_open {
+            let active = cx.update(|cx| {
+                RecordingSession::global(cx)
+                    .read(cx)
+                    .active_project_dir()
+                    .map(Path::to_path_buf)
+            });
+            let recover_path = path.clone();
+            let recovered = cx
+                .background_executor()
+                .spawn(async move {
+                    crate::library::recover_interrupted_for_editing(
+                        &recover_path,
+                        active.as_deref(),
+                    )
+                })
+                .await;
+            if let Err(message) = recovered {
+                handle
+                    .update(cx, |view, window, cx| view.set_error(message, window, cx))
+                    .ok();
+                return;
+            }
         }
         let preflight_path = path.clone();
         let summary = cx
@@ -6046,6 +6071,7 @@ async fn drive_auto_sidebar(handle: WindowHandle<EditorWindow>, cx: &mut gpui::A
     let clip_menu = std::env::var("CAP_GPUI_AUTO_CLIP_MENU").ok();
     let camera3d = std::env::var("CAP_GPUI_AUTO_CAMERA3D").ok();
     let add_track = std::env::var("CAP_GPUI_AUTO_ADD_TRACK").ok();
+    let transition = std::env::var("CAP_GPUI_AUTO_TRANSITION").ok();
     let generate_zoom =
         std::env::var("CAP_GPUI_AUTO_GENERATE_ZOOM").is_ok_and(|value| value == "1");
     let pick_background =
@@ -6059,6 +6085,7 @@ async fn drive_auto_sidebar(handle: WindowHandle<EditorWindow>, cx: &mut gpui::A
         && clip_menu.is_none()
         && camera3d.is_none()
         && add_track.is_none()
+        && transition.is_none()
         && !generate_zoom
         && !pick_background
         && !desktop_background
@@ -6144,6 +6171,18 @@ async fn drive_auto_sidebar(handle: WindowHandle<EditorWindow>, cx: &mut gpui::A
         handle
             .update(cx, |view, window, cx| {
                 view.auto_clip_menu(&spec, window, cx)
+            })
+            .ok();
+    }
+
+    // `CAP_GPUI_AUTO_TRANSITION=<index>[:<kind>]`: open the popover for the
+    // transition into clip `<index>` (adding a cross dissolve first if the
+    // cut has none, and switching it to `<kind>` when given), the way a click
+    // on the transition does.
+    if let Some(spec) = transition {
+        handle
+            .update(cx, |view, window, cx| {
+                view.auto_transition(&spec, window, cx)
             })
             .ok();
     }
