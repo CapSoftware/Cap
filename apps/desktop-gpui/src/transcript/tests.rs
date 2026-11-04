@@ -1104,10 +1104,14 @@ struct Speech {
 }
 
 fn synthetic_speech(voiced: &[(f64, f64)], duration: f64) -> Speech {
-    synthetic_speech_in(voiced, duration, 0.002)
+    synthetic_speech_in(voiced, duration, |_| 0.002)
 }
 
-fn synthetic_speech_in(voiced: &[(f64, f64)], duration: f64, room_level: f64) -> Speech {
+fn synthetic_speech_in(
+    voiced: &[(f64, f64)],
+    duration: f64,
+    room_level: impl Fn(f64) -> f64,
+) -> Speech {
     let rate = 48_000.0;
     let mut state: u32 = 0x9e37_79b9;
     let mut noise = move || {
@@ -1119,7 +1123,7 @@ fn synthetic_speech_in(voiced: &[(f64, f64)], duration: f64, room_level: f64) ->
     let samples: Vec<f32> = (0..(duration * rate) as usize)
         .map(|index| {
             let time = index as f64 / rate;
-            let room = noise() * room_level;
+            let room = noise() * room_level(time);
             let Some(&(start, end)) = voiced
                 .iter()
                 .find(|(start, end)| (*start..*end).contains(&time))
@@ -1521,7 +1525,7 @@ fn shapes_follow_a_deleted_stretched_word_and_come_back_on_restore() {
 
 #[test]
 fn a_noise_gated_recording_finds_its_digital_silence_and_keeps_every_word() {
-    let speech = synthetic_speech_in(&RICHIE_VOICED, 10.0, 0.0);
+    let speech = synthetic_speech_in(&RICHIE_VOICED, 10.0, |_| 0.0);
     let threshold = speech.envelope.silence_threshold_db(1.0).unwrap();
     assert!(threshold < -80.0, "{threshold}");
     for silence in speech.envelope.silences() {
@@ -1554,7 +1558,7 @@ fn a_noise_gated_recording_finds_its_digital_silence_and_keeps_every_word() {
 
 #[test]
 fn a_recording_with_no_quiet_moment_reports_no_silence() {
-    let speech = synthetic_speech_in(&[(0.0, 6.0)], 6.0, 0.0);
+    let speech = synthetic_speech_in(&[(0.0, 6.0)], 6.0, |_| 0.0);
     assert!(
         speech.envelope.silences().is_empty(),
         "{:?}",
@@ -1641,5 +1645,38 @@ fn a_few_words_in_a_long_quiet_recording_still_find_their_pause() {
     for cut in &pauses[0].cuts {
         assert!(!speech.overlaps_voice(cut), "{cut:?}");
         assert!(speech.all_quiet(cut), "{cut:?}");
+    }
+}
+
+#[test]
+fn a_background_that_changes_level_still_counts_as_quiet() {
+    let voiced = [
+        (3.0, 3.5),
+        (3.6, 4.1),
+        (6.0, 6.5),
+        (6.6, 7.1),
+        (10.0, 10.5),
+        (10.6, 11.1),
+        (14.0, 14.5),
+        (14.6, 15.1),
+    ];
+    let speech = synthetic_speech_in(
+        &voiced,
+        20.0,
+        |time| if time < 2.0 { 0.0008 } else { 0.0035 },
+    );
+    let threshold = speech.envelope.silence_threshold_db(1.0).unwrap();
+    assert!((-55.0..-35.0).contains(&threshold), "{threshold}");
+    let found = speech.envelope.silences();
+    for silence in found {
+        assert!(!speech.overlaps_voice(silence), "{silence:?}");
+    }
+    for (start, end) in [(4.1, 6.0), (7.1, 10.0), (11.1, 14.0)] {
+        assert!(
+            found
+                .iter()
+                .any(|silence| silence.start - start < 0.03 && end - silence.end < 0.03),
+            "{start} {found:?}"
+        );
     }
 }
