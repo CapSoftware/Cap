@@ -18,25 +18,20 @@ export function firewallRequestHeaders(source: Headers): Headers {
 }
 
 /**
- * Best-effort per-key rate limiting backed by the Vercel Firewall.
+ * Per-key rate limiting backed by the Vercel Firewall, with an in-process
+ * fallback.
  *
- * IMPORTANT: each `ruleId` passed here must also be configured as a Rate Limit
- * rule in the Vercel Firewall dashboard (Firewall → Rate Limiting) with a
- * `@vercel/firewall` rule condition whose ID matches `ruleId`, plus the desired
- * window / limit / action. An ID that has no matching dashboard rule fails
- * OPEN (`checkRateLimit` returns `{ rateLimited: false, error: "not-found" }`),
- * so this helper never breaks self-hosted deploys that lack the firewall — but
- * it also provides no protection until the rule exists.
- *
- * Mirrors the existing pattern in `actions/collections/password.ts` and
- * `actions/send-download-link.ts`:
- *  - only enforced in production,
- *  - best-effort (any error → not limited) so a firewall/IP-header outage can
- *    never take down the underlying feature.
+ * Each `ruleId` should also exist as a Rate Limit rule in the Vercel Firewall
+ * dashboard with a `@vercel/firewall` condition matching the id. When the
+ * firewall answers (allowed, limited or blocked) its decision is final. When it
+ * cannot answer (non-production, rule not configured, missing client address
+ * or any firewall error) the request is counted against a fixed-window limit
+ * kept in this process (`FALLBACK_RATE_LIMITS`). That fallback is per instance,
+ * so it is a backstop, not a replacement for the dashboard rule.
  *
  * @param ruleId   Stable rule id, also configured in the Vercel Firewall.
  * @param opts.key Optional bucket key (e.g. per-email / per-user). Defaults to
- *                 the caller IP (the firewall's default behaviour).
+ *                 the caller IP.
  * @param opts.headers Optional request headers (required inside Hono handlers
  *                 where `next/headers` is unavailable; defaults to the App
  *                 Router request headers).
@@ -46,27 +41,64 @@ export async function isRateLimited(
 	ruleId: string,
 	opts?: { key?: string; headers?: Headers },
 ): Promise<boolean> {
-	if (process.env.NODE_ENV !== "production") return false;
-
 	try {
 		const headersList = firewallRequestHeaders(
-			opts?.headers ?? (await nextHeaders()),
+			opts?.headers ?? (await appRouterHeaders()),
 		);
-		const request = new Request("https://cap.so/api/rate-limit", {
-			method: "POST",
-			headers: headersList,
-		});
+		const firewallDecision = await checkFirewallRateLimit(
+			ruleId,
+			headersList,
+			opts?.key,
+		);
+		if (firewallDecision !== undefined) return firewallDecision;
 
-		const { rateLimited } = await checkRateLimit(ruleId, {
-			request,
-			...(opts?.key ? { rateLimitKey: opts.key } : {}),
-		});
-
-		return rateLimited;
+		return await isLocallyRateLimited(
+			ruleId,
+			opts?.key || clientAddress(headersList),
+		);
 	} catch (error) {
 		console.warn(`Rate limit check failed for "${ruleId}":`, error);
 		return false;
 	}
+}
+
+async function appRouterHeaders(): Promise<Headers> {
+	try {
+		return new Headers(await nextHeaders());
+	} catch {
+		return new Headers();
+	}
+}
+
+async function checkFirewallRateLimit(
+	ruleId: string,
+	headersList: Headers,
+	key: string | undefined,
+): Promise<boolean | undefined> {
+	if (process.env.NODE_ENV !== "production") return undefined;
+
+	try {
+		const request = new Request("https://cap.so/api/rate-limit", {
+			method: "POST",
+			headers: headersList,
+		});
+		const result = await checkRateLimit(ruleId, {
+			request,
+			...(key ? { rateLimitKey: key } : {}),
+		});
+		return result.error === "not-found" ? undefined : result.rateLimited;
+	} catch (error) {
+		console.warn(`Rate limit check failed for "${ruleId}":`, error);
+		return undefined;
+	}
+}
+
+function clientAddress(headersList: Headers): string | undefined {
+	return (
+		headersList.get("x-real-ip")?.trim() ||
+		headersList.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+		undefined
+	);
 }
 
 /**
@@ -91,7 +123,7 @@ export const RATE_LIMIT_IDS = {
 	MESSENGER_MESSAGE: "rl_messenger_message",
 	/** Unauthed analytics view tracking (Tinybird ingest + notifications). Suggested: 60 / 1m per IP. */
 	ANALYTICS_TRACK: "rl_analytics_track",
-	/** Unauthed guest checkout (Stripe object/cost abuse). Suggested: 10 / 10m per IP. */
+	/** Unauthed guest checkout (Stripe object/cost abuse). Suggested: 20 / 10m per IP. */
 	GUEST_CHECKOUT: "rl_guest_checkout",
 	/** Unauthed desktop log → Discord forwarding (spam). Suggested: 10 / 1m per IP. */
 	DESKTOP_LOGS: "rl_desktop_logs",
@@ -99,4 +131,91 @@ export const RATE_LIMIT_IDS = {
 	MOBILE_VIDEO_PASSWORD: "rl_mobile_video_password",
 	/** Unauthed docs Ask AI questions (Anthropic cost). Suggested: 10 / 1m per IP. */
 	DOCS_ASK: "rl_docs_ask",
+	AUTH_SSO_START: "rl_auth_sso_start",
+	MCP_CLIENT_REGISTRATION: "rl_mcp_client_registration",
 } as const;
+
+type FallbackRateLimit = { limit: number; windowMs: number };
+
+const MINUTE_MS = 60_000;
+
+const FALLBACK_RATE_LIMITS: Record<string, FallbackRateLimit> = {
+	[RATE_LIMIT_IDS.AGENT_TOKEN_EXCHANGE]: { limit: 120, windowMs: MINUTE_MS },
+	[RATE_LIMIT_IDS.AGENT_AUTHORIZATION]: { limit: 10, windowMs: 10 * MINUTE_MS },
+	[RATE_LIMIT_IDS.AGENT_UNLOCK]: { limit: 30, windowMs: 10 * MINUTE_MS },
+	[RATE_LIMIT_IDS.AGENT_LOOM_IMPORT]: { limit: 20, windowMs: MINUTE_MS },
+	[RATE_LIMIT_IDS.AUTH_OTP_VERIFY]: { limit: 10, windowMs: 10 * MINUTE_MS },
+	[RATE_LIMIT_IDS.AUTH_OTP_SEND]: { limit: 5, windowMs: 10 * MINUTE_MS },
+	[RATE_LIMIT_IDS.LOOM_DOWNLOAD]: { limit: 10, windowMs: MINUTE_MS },
+	[RATE_LIMIT_IDS.TRANSLATE_TRANSCRIPT]: { limit: 10, windowMs: MINUTE_MS },
+	[RATE_LIMIT_IDS.MESSENGER_MESSAGE]: { limit: 20, windowMs: MINUTE_MS },
+	[RATE_LIMIT_IDS.ANALYTICS_TRACK]: { limit: 60, windowMs: MINUTE_MS },
+	[RATE_LIMIT_IDS.GUEST_CHECKOUT]: { limit: 20, windowMs: 10 * MINUTE_MS },
+	[RATE_LIMIT_IDS.DESKTOP_LOGS]: { limit: 10, windowMs: MINUTE_MS },
+	[RATE_LIMIT_IDS.MOBILE_VIDEO_PASSWORD]: {
+		limit: 10,
+		windowMs: 10 * MINUTE_MS,
+	},
+	[RATE_LIMIT_IDS.DOCS_ASK]: { limit: 10, windowMs: MINUTE_MS },
+	[RATE_LIMIT_IDS.AUTH_SSO_START]: { limit: 100, windowMs: MINUTE_MS },
+	[RATE_LIMIT_IDS.MCP_CLIENT_REGISTRATION]: { limit: 60, windowMs: MINUTE_MS },
+};
+
+const DEFAULT_FALLBACK_RATE_LIMIT: FallbackRateLimit = {
+	limit: 60,
+	windowMs: MINUTE_MS,
+};
+
+// Without a key or client address every caller shares one bucket (a proxy
+// that forwards no client IP), so that bucket gets a multiple of the
+// per-client limit to avoid locking out a whole self-hosted deploy.
+const ANONYMOUS_LIMIT_MULTIPLIER = 10;
+const MAX_LOCAL_BUCKETS = 10_000;
+const MAX_PLAIN_BUCKET_KEY_LENGTH = 256;
+
+const localBuckets = new Map<string, { count: number; resetAt: number }>();
+
+async function isLocallyRateLimited(
+	ruleId: string,
+	clientKey: string | undefined,
+): Promise<boolean> {
+	const rule = FALLBACK_RATE_LIMITS[ruleId] ?? DEFAULT_FALLBACK_RATE_LIMIT;
+	const limit = clientKey
+		? rule.limit
+		: rule.limit * ANONYMOUS_LIMIT_MULTIPLIER;
+	const bucketKey = clientKey
+		? `${ruleId}|key|${await compactBucketKey(clientKey)}`
+		: `${ruleId}|anonymous`;
+	const now = Date.now();
+
+	const bucket = localBuckets.get(bucketKey);
+	if (bucket && bucket.resetAt > now) {
+		bucket.count += 1;
+		return bucket.count > limit;
+	}
+
+	localBuckets.delete(bucketKey);
+	reserveLocalBucket(now);
+	localBuckets.set(bucketKey, { count: 1, resetAt: now + rule.windowMs });
+	return limit < 1;
+}
+
+function reserveLocalBucket(now: number) {
+	if (localBuckets.size < MAX_LOCAL_BUCKETS) return;
+	for (const [key, bucket] of localBuckets) {
+		if (bucket.resetAt <= now) localBuckets.delete(key);
+	}
+	for (const key of localBuckets.keys()) {
+		if (localBuckets.size < MAX_LOCAL_BUCKETS) return;
+		localBuckets.delete(key);
+	}
+}
+
+async function compactBucketKey(key: string): Promise<string> {
+	if (key.length <= MAX_PLAIN_BUCKET_KEY_LENGTH) return key;
+	const digest = await globalThis.crypto.subtle.digest(
+		"SHA-256",
+		new TextEncoder().encode(key),
+	);
+	return `sha256:${Buffer.from(digest).toString("hex")}`;
+}
