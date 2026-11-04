@@ -10415,7 +10415,12 @@ mod project_uniforms_tests {
             if order != CursorEventOrder::default() {
                 ordered_cases += 1;
             }
-            let zoom = ZoomTransformTimeline::from_project(&project, events, 10.0, size);
+            let zoom = ZoomTransformTimeline::from_project(
+                &project,
+                events,
+                10.0,
+                ZoomLayoutInputs::screen_only(size),
+            );
             let event_frames = events
                 .moves
                 .iter()
@@ -10535,8 +10540,12 @@ mod project_uniforms_tests {
                     clicks: true
                 }
             );
-            let zoom =
-                ZoomTransformTimeline::from_project(&project, &events, duration_secs as f64, size);
+            let zoom = ZoomTransformTimeline::from_project(
+                &project,
+                &events,
+                duration_secs as f64,
+                ZoomLayoutInputs::screen_only(size),
+            );
             for workload in ["middle", "end"] {
                 let mut baseline = Vec::new();
                 let mut optimized = Vec::new();
@@ -10761,7 +10770,12 @@ mod project_uniforms_tests {
             .unwrap(),
         );
         let cursor = PrecomputedCursorTimeline::new(&events, None, None);
-        let zoom = ZoomTransformTimeline::from_project(&project, &events, 4.0, size);
+        let zoom = ZoomTransformTimeline::from_project(
+            &project,
+            &events,
+            4.0,
+            ZoomLayoutInputs::screen_only(size),
+        );
         let mut hidden_project = project.clone();
         hidden_project.cursor.hide = true;
         let project = Arc::new(project);
