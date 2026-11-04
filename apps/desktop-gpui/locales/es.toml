@@ -2409,6 +2409,7 @@ file = "Archivo"
 link = "Enlace para compartir"
 
 [editor.export.done]
+copy_file = "Copiar archivo"
 copy_link = "Copiar enlace"
 instant_hint = "Usa el modo Instant en tu próxima grabación si quieres un enlace en cuanto te detengas."
 link_copied = "Enlace copiado"
@@ -2416,6 +2417,7 @@ open_file = "Abrir archivo"
 open_link = "Abrir enlace"
 retry_copy = "Reintentar copia"
 reuploaded = "Tu última edición está lista en el mismo enlace"
+saved_copy = "Copia guardada como {name}"
 uploaded = "Tu Cap se subió correctamente"
 
 [editor.export.estimate]
