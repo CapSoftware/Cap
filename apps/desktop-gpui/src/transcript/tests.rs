@@ -874,6 +874,36 @@ mod keyboard {
         let copied = cx.read_from_clipboard().and_then(|item| item.text());
         assert_eq!(copied.as_deref(), Some("two. Three four"));
     }
+
+    #[gpui::test]
+    fn a_loudness_envelope_loaded_with_old_audio_offsets_is_dropped(cx: &mut gpui::TestAppContext) {
+        let (editor, cx) = fixture(cx);
+        editor.update(cx, |editor, cx| {
+            editor.transcript.energy_loading = true;
+            editor.transcript.dirty = false;
+            let envelope = super::EnergyEnvelope::new(vec![vec![0.01; 200]], &[1.0]);
+            let installed = editor.transcript_energy_loaded(
+                vec![(0.0, 0.0)],
+                Some(vec![(0.25, 0.0)]),
+                envelope,
+                cx,
+            );
+            assert!(!installed);
+            assert!(editor.transcript.energy.is_none());
+            assert!(editor.transcript.dirty);
+            assert!(!editor.transcript.energy_loading);
+
+            let envelope = super::EnergyEnvelope::new(vec![vec![0.01; 200]], &[1.0]);
+            let installed = editor.transcript_energy_loaded(
+                vec![(0.25, 0.0)],
+                Some(vec![(0.25, 0.0)]),
+                envelope,
+                cx,
+            );
+            assert!(installed);
+            assert!(editor.transcript.energy.is_some());
+        });
+    }
 }
 
 #[test]

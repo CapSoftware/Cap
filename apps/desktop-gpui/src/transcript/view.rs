@@ -2266,6 +2266,54 @@ impl EditorWindow {
             .into_any_element()
     }
 
+    fn transcript_energy_offsets(&self) -> Option<Vec<(f64, f64)>> {
+        let instance = self.instance.as_ref()?;
+        Some(
+            instance
+                .segment_medias
+                .iter()
+                .enumerate()
+                .map(|(index, media)| {
+                    let clip = self
+                        .project
+                        .clips
+                        .iter()
+                        .find(|clip| clip.index == index as u32)
+                        .map(|clip| clip.offsets)
+                        .unwrap_or_default();
+                    let repair = media.audio_timing_repair;
+                    (
+                        f64::from(clip.mic + repair.mic_offset_secs),
+                        f64::from(clip.system_audio + repair.system_audio_offset_secs),
+                    )
+                })
+                .collect(),
+        )
+    }
+
+    pub(super) fn transcript_energy_loaded(
+        &mut self,
+        loaded_with: Vec<(f64, f64)>,
+        current: Option<Vec<(f64, f64)>>,
+        envelope: super::energy::EnergyEnvelope,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        self.transcript.energy_loading = false;
+        if current.as_ref() != Some(&loaded_with) {
+            self.transcript.energy = None;
+            self.transcript.energy_offsets.clear();
+            self.transcript.dirty = true;
+            self.transcript_load_energy(cx);
+            self.invalidate_transcript(cx);
+            return false;
+        }
+        if !envelope.is_empty() {
+            self.transcript.energy = Some(Arc::new(envelope));
+        }
+        self.invalidate_transcript(cx);
+        true
+    }
+
     fn transcript_load_energy(&mut self, cx: &mut Context<Self>) {
         if self.transcript.energy_loading {
             return;
@@ -2274,30 +2322,15 @@ impl EditorWindow {
             return;
         };
         let durations = self.clip_display_durations.clone();
-        let offsets: Vec<(f64, f64)> = instance
-            .segment_medias
-            .iter()
-            .enumerate()
-            .map(|(index, media)| {
-                let clip = self
-                    .project
-                    .clips
-                    .iter()
-                    .find(|clip| clip.index == index as u32)
-                    .map(|clip| clip.offsets)
-                    .unwrap_or_default();
-                let repair = media.audio_timing_repair;
-                (
-                    f64::from(clip.mic + repair.mic_offset_secs),
-                    f64::from(clip.system_audio + repair.system_audio_offset_secs),
-                )
-            })
-            .collect();
+        let Some(offsets) = self.transcript_energy_offsets() else {
+            return;
+        };
         if self.transcript.energy.is_some() && self.transcript.energy_offsets == offsets {
             return;
         }
         self.transcript.energy_offsets = offsets.clone();
         self.transcript.energy_loading = true;
+        let loaded_with = offsets.clone();
         cx.spawn(async move |this, cx| {
             let task = cx.update(|cx| {
                 gpui_tokio::Tokio::spawn(cx, async move {
@@ -2344,11 +2377,8 @@ impl EditorWindow {
                 "transcript loudness envelope ready"
             );
             this.update(cx, |this, cx| {
-                this.transcript.energy_loading = false;
-                if !envelope.is_empty() {
-                    this.transcript.energy = Some(Arc::new(envelope));
-                }
-                this.invalidate_transcript(cx);
+                let current = this.transcript_energy_offsets();
+                this.transcript_energy_loaded(loaded_with, current, envelope, cx);
             })
             .ok();
         })
