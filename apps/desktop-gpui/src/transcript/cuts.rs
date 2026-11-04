@@ -229,6 +229,7 @@ const TOUCH_EPSILON: f64 = 1e-6;
 pub fn restore_hole(
     timeline: &mut TimelineConfiguration,
     recording_durations: &[f64],
+    removed_takes: &[cap_project::TimelineSegment],
     hole: Range<f64>,
     must_cover: f64,
 ) -> Result<(), RestoreBlocker> {
@@ -321,20 +322,27 @@ pub fn restore_hole(
             .unwrap_or_else(|| editor_edits::clip_timeline_duration(&next));
         let holds = next.hold_windows();
         let boundary = editor_edits::effective_to_output(&holds, effective);
-        let neighbour = left
-            .or(right)
-            .and_then(|mapping| timeline.segments.get(mapping.segment));
+        let removed = removed_takes
+            .iter()
+            .find(|segment| segment.recording_clip == clip);
+        let template = removed
+            .or_else(|| {
+                left.or(right)
+                    .and_then(|mapping| timeline.segments.get(mapping.segment))
+            })
+            .cloned()
+            .unwrap_or(cap_project::TimelineSegment {
+                timescale: 1.0,
+                ..Default::default()
+            });
         next.segments.insert(
             index,
             cap_project::TimelineSegment {
                 recording_clip: clip,
                 start: 0.0,
                 end: duration,
-                name: None,
-                ..neighbour.cloned().unwrap_or(cap_project::TimelineSegment {
-                    timescale: 1.0,
-                    ..Default::default()
-                })
+                name: removed.and(template.name.clone()),
+                ..template
             },
         );
         for transition in next.transitions.iter_mut() {
@@ -386,6 +394,7 @@ pub fn restore_hole(
 pub fn restore_words(
     timeline: &mut TimelineConfiguration,
     recording_durations: &[f64],
+    removed_takes: &[cap_project::TimelineSegment],
     doc: &TranscriptDoc,
     words: Range<usize>,
 ) -> Result<usize, RestoreBlocker> {
@@ -410,7 +419,7 @@ pub fn restore_words(
             word.start
         };
         let hole = edl.hole_around(point).ok_or(RestoreBlocker::NotAdjacent)?;
-        restore_hole(&mut next, recording_durations, hole, point)?;
+        restore_hole(&mut next, recording_durations, removed_takes, hole, point)?;
         restored += 1;
     }
     *timeline = next;

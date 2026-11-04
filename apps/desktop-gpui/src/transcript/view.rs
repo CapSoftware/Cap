@@ -1152,13 +1152,20 @@ impl EditorWindow {
             return;
         };
         let durations = self.clip_display_durations.clone();
+        let removed_takes = self
+            .project
+            .timeline
+            .as_ref()
+            .map(|timeline| self.history.removed_takes(timeline))
+            .unwrap_or_default();
         let mut outcome = Ok(0);
         self.edit_timeline_project(
             |project| {
                 let Some(timeline) = project.timeline.as_mut() else {
                     return false;
                 };
-                outcome = cuts::restore_words(timeline, &durations, &doc, words.clone());
+                outcome =
+                    cuts::restore_words(timeline, &durations, &removed_takes, &doc, words.clone());
                 matches!(outcome, Ok(count) if count > 0)
             },
             window,

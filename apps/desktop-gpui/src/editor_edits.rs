@@ -206,6 +206,30 @@ impl ProjectHistory {
         }
     }
 
+    pub fn removed_takes(
+        &self,
+        timeline: &cap_project::TimelineConfiguration,
+    ) -> Vec<cap_project::TimelineSegment> {
+        let mut seen: std::collections::HashSet<u32> = timeline
+            .segments
+            .iter()
+            .map(|segment| segment.recording_clip)
+            .collect();
+        let mut found = Vec::new();
+        let current = self.entries.len() - self.count;
+        for entry in self.entries[..current].iter().rev() {
+            let Some(past) = entry.timeline.as_ref() else {
+                continue;
+            };
+            for segment in &past.segments {
+                if seen.insert(segment.recording_clip) {
+                    found.push(segment.clone());
+                }
+            }
+        }
+        found
+    }
+
     /// `canUndo = list.length - count > 1`.
     pub fn can_undo(&self) -> bool {
         self.entries.len() - self.count > 1

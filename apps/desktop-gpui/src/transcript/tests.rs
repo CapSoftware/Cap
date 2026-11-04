@@ -252,7 +252,7 @@ fn restoring_undoes_the_cut_exactly() {
     let with_text = project.clone();
     cut_words(&mut project, &durations, &[(1, 2)]);
     let doc = TranscriptDoc::build(project.captions.as_ref().unwrap());
-    let restored = restore_words(timeline_mut(&mut project), &durations, &doc, 1..2).unwrap();
+    let restored = restore_words(timeline_mut(&mut project), &durations, &[], &doc, 1..2).unwrap();
     assert_eq!(restored, 1);
     assert_eq!(bounds(&project), bounds(&original));
     let text = &timeline(&project).text_segments[0];
@@ -270,8 +270,8 @@ fn restore_reaches_a_cut_at_the_start_and_end() {
     assert_eq!(kept(&project, &durations), [false, true, true, false]);
     assert!(close(timeline(&project).segments[0].start, 1.41));
     let doc = TranscriptDoc::build(project.captions.as_ref().unwrap());
-    restore_words(timeline_mut(&mut project), &durations, &doc, 0..1).unwrap();
-    restore_words(timeline_mut(&mut project), &durations, &doc, 3..4).unwrap();
+    restore_words(timeline_mut(&mut project), &durations, &[], &doc, 0..1).unwrap();
+    restore_words(timeline_mut(&mut project), &durations, &[], &doc, 3..4).unwrap();
     assert_eq!(kept(&project, &durations), [true; 4]);
     assert_eq!(bounds(&project), [(0.0, 4.0)]);
 }
@@ -285,7 +285,7 @@ fn restore_refuses_a_cut_between_reordered_clips() {
     timeline_mut(&mut project).segments.swap(0, 1);
     let before = bounds(&project);
     let doc = TranscriptDoc::build(project.captions.as_ref().unwrap());
-    let result = restore_words(timeline_mut(&mut project), &durations, &doc, 1..2);
+    let result = restore_words(timeline_mut(&mut project), &durations, &[], &doc, 1..2);
     assert_eq!(result, Err(RestoreBlocker::NotAdjacent));
     assert_eq!(bounds(&project), before);
 }
@@ -668,7 +668,7 @@ fn restoring_brings_back_mask_keyframes_with_the_material() {
     timeline_mut(&mut project).mask_segments.push(mask);
     cut_words(&mut project, &durations, &[(1, 2)]);
     let doc = TranscriptDoc::build(project.captions.as_ref().unwrap());
-    restore_words(timeline_mut(&mut project), &durations, &doc, 1..2).unwrap();
+    restore_words(timeline_mut(&mut project), &durations, &[], &doc, 1..2).unwrap();
     let mask = &timeline(&project).mask_segments[0];
     assert!(close(mask.end, 4.0));
     let times: Vec<f64> = mask
@@ -695,7 +695,7 @@ fn restoring_puts_back_a_whole_take_that_was_cut() {
     ));
     assert_eq!(kept(&project, &durations), [true, false, true]);
     let doc = TranscriptDoc::build(project.captions.as_ref().unwrap());
-    restore_words(timeline_mut(&mut project), &durations, &doc, 1..2).unwrap();
+    restore_words(timeline_mut(&mut project), &durations, &[], &doc, 1..2).unwrap();
     assert_eq!(kept(&project, &durations), [true, true, true]);
     let clips: Vec<u32> = timeline(&project)
         .segments
@@ -726,7 +726,7 @@ fn a_restored_take_keeps_the_speed_of_its_neighbours() {
         &[1]
     ));
     let doc = TranscriptDoc::build(project.captions.as_ref().unwrap());
-    restore_words(timeline_mut(&mut project), &durations, &doc, 1..2).unwrap();
+    restore_words(timeline_mut(&mut project), &durations, &[], &doc, 1..2).unwrap();
     assert!(
         timeline(&project)
             .segments
@@ -895,7 +895,7 @@ fn a_restore_that_fails_part_way_changes_nothing() {
     let before = bounds(&project);
     assert_eq!(kept(&project, &durations)[3..5], [false, false]);
     let doc = TranscriptDoc::build(project.captions.as_ref().unwrap());
-    let result = restore_words(timeline_mut(&mut project), &durations, &doc, 3..5);
+    let result = restore_words(timeline_mut(&mut project), &durations, &[], &doc, 3..5);
     assert_eq!(result, Err(RestoreBlocker::Transition));
     assert_eq!(bounds(&project), before);
 }
@@ -923,4 +923,57 @@ fn partly_trimmed_words_map_to_their_surviving_part() {
     assert!(close(end, 2.2 - 0.65), "{end}");
     let middle = edl.output_start_of(&doc.words[1]).unwrap();
     assert!(close(middle, 1.2 - 0.65), "{middle}");
+}
+
+#[test]
+fn a_restored_take_comes_back_with_its_own_settings() {
+    let durations = [2.0, 2.0, 2.0];
+    let words = [
+        ("first", 0.5, 0.9),
+        ("middle", 2.5, 2.9),
+        ("last", 4.5, 4.9),
+    ];
+    let mut project = project(&words, &durations);
+    let middle = &mut timeline_mut(&mut project).segments[1];
+    middle.timescale = 2.0;
+    middle.volume = Some(0.5);
+    middle.speed_audio_mode = Some(cap_project::ClipSpeedAudioMode::MaintainPitch);
+    middle.hide_cursor = Some(true);
+    middle.name = Some("Second take".into());
+    let original = middle.clone();
+    let mut history = editor_edits::ProjectHistory::new(project.clone());
+
+    let report = apply_source_cuts(timeline_mut(&mut project), &durations, &[2.0..4.0]);
+    assert_eq!(report.applied, 1);
+    assert_eq!(timeline(&project).segments.len(), 2);
+    history.record(&project);
+    assert_eq!(kept(&project, &durations), [true, false, true]);
+
+    let settings = |segment: &cap_project::TimelineSegment| {
+        (
+            segment.recording_clip,
+            segment.timescale,
+            segment.start,
+            segment.end,
+            segment.name.clone(),
+            segment.speed_audio_mode,
+            segment.volume,
+            segment.hide_cursor,
+        )
+    };
+    let removed = history.removed_takes(timeline(&project));
+    assert_eq!(removed.len(), 1);
+    assert_eq!(settings(&removed[0]), settings(&original));
+    let doc = TranscriptDoc::build(project.captions.as_ref().unwrap());
+    restore_words(timeline_mut(&mut project), &durations, &removed, &doc, 1..2).unwrap();
+    assert_eq!(kept(&project, &durations), [true, true, true]);
+    let segments = &timeline(&project).segments;
+    assert_eq!(segments.len(), 3);
+    assert_eq!(settings(&segments[1]), settings(&original));
+    assert!(segments[0].timescale == 1.0 && segments[2].timescale == 1.0);
+    assert!(segments[0].volume.is_none() && segments[2].hide_cursor.is_none());
+    assert!(close(
+        editor_edits::clip_timeline_duration(timeline(&project)),
+        2.0 + 1.0 + 2.0
+    ));
 }
