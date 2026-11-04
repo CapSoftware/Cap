@@ -16,6 +16,7 @@ import {
 	createMobileApiClient,
 	createSessionRequestUrl,
 	type MobileApiClient,
+	MobileApiError,
 	type MobileAuthConfigResponse,
 	type MobileBootstrapResponse,
 } from "@/api/mobile";
@@ -72,6 +73,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 	);
 	const [loading, setLoading] = useState(true);
 	const sessionRevision = useRef(0);
+	const bootstrapRevision = useRef(0);
+	const refreshSequence = useRef({ started: 0, applied: 0 });
+	const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const clearBootstrapRetry = useCallback(() => {
+		if (retryTimer.current !== null) {
+			clearTimeout(retryTimer.current);
+			retryTimer.current = null;
+		}
+	}, []);
 
 	const client = useMemo(
 		() =>
@@ -92,9 +102,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
 	const refresh = useCallback(async () => {
 		const revision = sessionRevision.current;
-		const response = await client.bootstrap();
-		if (revision === sessionRevision.current) setBootstrap(response);
-	}, [client]);
+		const requestRevision = bootstrapRevision.current;
+		const sequence = ++refreshSequence.current.started;
+		try {
+			const response = await client.bootstrap();
+			if (
+				revision !== sessionRevision.current ||
+				requestRevision !== bootstrapRevision.current ||
+				sequence < refreshSequence.current.applied
+			)
+				return;
+			refreshSequence.current.applied = sequence;
+			clearBootstrapRetry();
+			setBootstrap(response);
+		} catch (error) {
+			if (
+				revision === sessionRevision.current &&
+				requestRevision === bootstrapRevision.current &&
+				sequence >= refreshSequence.current.applied
+			)
+				throw error;
+		}
+	}, [client, clearBootstrapRetry]);
 
 	useEffect(() => {
 		let active = true;
@@ -130,16 +159,39 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 		}
 
 		const revision = sessionRevision.current;
-		refresh().catch(() => {
-			if (revision !== sessionRevision.current) return;
-			sessionRevision.current += 1;
-			setApiKey(null);
-			setUserId(null);
-			setBootstrap(null);
-			SecureStore.deleteItemAsync(sessionKey).catch(() => {});
-			SecureStore.deleteItemAsync(userIdKey).catch(() => {});
-		});
-	}, [apiKey, refresh]);
+		let cancelled = false;
+		let retryDelayMs = 2_000;
+		const attemptBootstrap = () => {
+			retryTimer.current = null;
+			const requestRevision = bootstrapRevision.current;
+			const sequence = refreshSequence.current.started + 1;
+			void refresh().catch((error: unknown) => {
+				if (
+					cancelled ||
+					revision !== sessionRevision.current ||
+					requestRevision !== bootstrapRevision.current ||
+					sequence < refreshSequence.current.applied
+				)
+					return;
+				if (error instanceof MobileApiError && error.status === 401) {
+					sessionRevision.current += 1;
+					setApiKey(null);
+					setUserId(null);
+					setBootstrap(null);
+					SecureStore.deleteItemAsync(sessionKey).catch(() => {});
+					SecureStore.deleteItemAsync(userIdKey).catch(() => {});
+					return;
+				}
+				retryTimer.current = setTimeout(attemptBootstrap, retryDelayMs);
+				retryDelayMs = Math.min(retryDelayMs * 2, 30_000);
+			});
+		};
+		attemptBootstrap();
+		return () => {
+			cancelled = true;
+			clearBootstrapRetry();
+		};
+	}, [apiKey, refresh, clearBootstrapRetry]);
 
 	const storeSession = useCallback(
 		async (session: { apiKey: string; userId: string | null }) => {
@@ -244,9 +296,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 		async (organizationId: string) => {
 			const revision = sessionRevision.current;
 			const nextBootstrap = await client.setActiveOrganization(organizationId);
-			if (revision === sessionRevision.current) setBootstrap(nextBootstrap);
+			if (revision === sessionRevision.current) {
+				bootstrapRevision.current += 1;
+				clearBootstrapRetry();
+				setBootstrap(nextBootstrap);
+			}
 		},
-		[client],
+		[client, clearBootstrapRetry],
 	);
 
 	const value = useMemo<AuthState>(
