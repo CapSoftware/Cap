@@ -23,7 +23,17 @@ vi.mock("@cap/env", () => ({
 		WEB_URL: "https://cap.test",
 	}),
 }));
-vi.mock("next/headers", () => ({ headers: async () => new Headers() }));
+vi.mock("next/headers", () => ({
+	cookies: async () => ({ get: () => undefined }),
+	headers: async () => new Headers(),
+}));
+vi.mock("@cap/database/referrals", () => ({
+	DUB_CLICK_ID_COOKIE: "dub_id",
+	findReferralCustomer: vi.fn(async () => ({ status: "unavailable" })),
+	getReferralDiscount: vi.fn(async () => null),
+	parseDubClickId: () => null,
+	trackReferralLead: vi.fn(async () => false),
+}));
 vi.mock("@/lib/checkout/customer", () => ({
 	ensureStripeCustomerId: mocks.ensureStripeCustomerId,
 }));
