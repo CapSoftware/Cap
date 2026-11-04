@@ -1,5 +1,7 @@
 import * as Db from "@cap/database/schema";
 import { resolveRecordingObjectKey } from "@cap/web-backend/src/Storage/recording-output";
+import type { SQL } from "drizzle-orm";
+import { MySqlDialect } from "drizzle-orm/mysql-core";
 import { Effect } from "effect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { RetryableError } from "workflow";
@@ -192,9 +194,19 @@ describe("content transfer workflow", () => {
 			expect(resolved).not.toBe(`${prefix}${key}`);
 			expect(objects.has(resolved)).toBe(true);
 		}
-		expect(
-			writes.find((write) => write.table === Db.comments)?.set,
-		).toHaveProperty("mediaKey");
+		const commentUpdate = writes.find(
+			(write) => write.table === Db.comments,
+		)?.set;
+		expect(commentUpdate).toHaveProperty("mediaKey");
+		expect(commentUpdate).toHaveProperty("mediaMeta");
+		const poster = new MySqlDialect().sqlToQuery(
+			commentUpdate?.mediaMeta as SQL,
+		);
+		expect(poster.sql).toContain("'$.thumbnailKey'");
+		expect(poster.params).toEqual([
+			`${sourceOwnerId}/${videoId}/`,
+			`${targetUserId}/${videoId}/`,
+		]);
 		expect([...objects.keys()].every((key) => key.startsWith(prefix))).toBe(
 			true,
 		);

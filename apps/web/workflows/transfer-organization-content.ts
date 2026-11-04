@@ -832,6 +832,7 @@ export async function transferOneVideo(
 				.update(Db.comments)
 				.set({
 					mediaKey: sql`REPLACE(${Db.comments.mediaKey}, ${sourcePrefix}, ${destinationPrefix})`,
+					mediaMeta: sql`JSON_REPLACE(${Db.comments.mediaMeta}, '$.thumbnailKey', REPLACE(JSON_UNQUOTE(JSON_EXTRACT(${Db.comments.mediaMeta}, '$.thumbnailKey')), ${sourcePrefix}, ${destinationPrefix}))`,
 				})
 				.where(
 					and(
