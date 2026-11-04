@@ -1607,3 +1607,39 @@ fn restoring_a_trimmed_word_leaves_a_shortened_pause_cut() {
         );
     }
 }
+
+#[test]
+fn a_few_words_in_a_long_quiet_recording_still_find_their_pause() {
+    let voiced = [(1.0, 1.4), (1.5, 1.9), (30.0, 30.4), (30.5, 30.9)];
+    let speech = synthetic_speech(&voiced, 40.0);
+    let threshold = speech.envelope.silence_threshold_db(1.0).unwrap();
+    assert!((-55.0..-35.0).contains(&threshold), "{threshold}");
+    let words = [
+        ("one", 1.0, 1.45),
+        ("two", 1.45, 29.0),
+        ("three", 29.0, 30.45),
+        ("four", 30.45, 30.9),
+    ];
+    let durations = [speech.duration];
+    let project = project(&words, &durations);
+    let mut doc = TranscriptDoc::build(project.captions.as_ref().unwrap());
+    doc.refine_voiced(Some(&speech.envelope));
+    assert!(
+        (doc.voiced[1].end - 1.9).abs() < 0.03,
+        "{:?}",
+        doc.voiced[1]
+    );
+    assert!(
+        (doc.voiced[2].start - 30.0).abs() < 0.03,
+        "{:?}",
+        doc.voiced[2]
+    );
+    let edl = TranscriptEdl::build(&doc, timeline(&project), &durations);
+    let pauses = plan_pause_cuts(&doc, &edl, Some(&speech.envelope), 1.0, 0.5);
+    assert_eq!(pauses.len(), 1, "{pauses:?}");
+    assert_eq!((pauses[0].after_word, pauses[0].next_word), (1, 2));
+    for cut in &pauses[0].cuts {
+        assert!(!speech.overlaps_voice(cut), "{cut:?}");
+        assert!(speech.all_quiet(cut), "{cut:?}");
+    }
+}
