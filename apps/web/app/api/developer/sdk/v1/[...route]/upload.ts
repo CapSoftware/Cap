@@ -210,19 +210,43 @@ app.post(
 						})
 						.from(developerCreditAccounts)
 						.where(eq(developerCreditAccounts.appId, appId))
-						.limit(1);
+						.limit(1)
+						.for("update");
 
 					if (!account) return null;
+
+					const videoCharges = await tx
+						.select({
+							amountMicroCredits:
+								developerCreditTransactions.amountMicroCredits,
+						})
+						.from(developerCreditTransactions)
+						.where(
+							and(
+								eq(developerCreditTransactions.accountId, account.id),
+								eq(developerCreditTransactions.referenceId, videoId),
+								eq(
+									developerCreditTransactions.referenceType,
+									"developer_video",
+								),
+							),
+						);
+
+					const microCreditsDue = videoCharges.reduce(
+						(due, charge) => due + charge.amountMicroCredits,
+						microCreditsToDebit,
+					);
+					if (microCreditsDue <= 0) return true;
 
 					const [result] = await tx
 						.update(developerCreditAccounts)
 						.set({
-							balanceMicroCredits: sql`${developerCreditAccounts.balanceMicroCredits} - ${microCreditsToDebit}`,
+							balanceMicroCredits: sql`${developerCreditAccounts.balanceMicroCredits} - ${microCreditsDue}`,
 						})
 						.where(
 							and(
 								eq(developerCreditAccounts.id, account.id),
-								sql`${developerCreditAccounts.balanceMicroCredits} >= ${microCreditsToDebit}`,
+								sql`${developerCreditAccounts.balanceMicroCredits} >= ${microCreditsDue}`,
 							),
 						);
 
@@ -246,7 +270,7 @@ app.post(
 						id: nanoId(),
 						accountId: account.id,
 						type: "video_create",
-						amountMicroCredits: -microCreditsToDebit,
+						amountMicroCredits: -microCreditsDue,
 						balanceAfterMicroCredits: updated.balanceMicroCredits,
 						referenceId: videoId,
 						referenceType: "developer_video",
