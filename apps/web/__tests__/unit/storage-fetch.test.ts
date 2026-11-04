@@ -2,13 +2,25 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-vi.mock("@/lib/s3-endpoint-policy", async () => ({
-	...(await vi.importActual<typeof import("@/lib/s3-endpoint-policy")>(
-		"@/lib/s3-endpoint-policy",
-	)),
-	isBlockedS3Endpoint: vi.fn(async () => false),
-	shouldBlockPrivateS3Endpoints: () => true,
-}));
+const lookupState = vi.hoisted(() => ({ allowLoopback: false }));
+
+vi.mock("@/lib/s3-endpoint-policy", async () => {
+	const actual = await vi.importActual<
+		typeof import("@/lib/s3-endpoint-policy")
+	>("@/lib/s3-endpoint-policy");
+	const { lookup } = await import("node:dns");
+	return {
+		...actual,
+		isBlockedS3Endpoint: vi.fn(async () => false),
+		shouldBlockPrivateS3Endpoints: () => true,
+		publicOnlyLookup: ((...args: Parameters<typeof lookup>) =>
+			lookupState.allowLoopback
+				? lookup(...args)
+				: actual.publicOnlyLookup(
+						...(args as Parameters<typeof actual.publicOnlyLookup>),
+					)) as typeof actual.publicOnlyLookup,
+	};
+});
 
 const { fetchStorageUrl, requestPublicOnly, StorageFetchRefusedError } =
 	await import("@/lib/storage-fetch");
@@ -75,7 +87,17 @@ describe("requestPublicOnly", () => {
 	let port: number;
 
 	beforeAll(async () => {
-		server = createServer((_, res) => res.end("internal"));
+		server = createServer((req, res) => {
+			const status = Number(
+				new URL(req.url ?? "/", "http://x").searchParams.get("status"),
+			);
+			if (status) {
+				res.writeHead(status);
+				res.end(status === 205 ? undefined : "body");
+				return;
+			}
+			res.end("internal");
+		});
 		await new Promise<void>((resolve) => server.listen(0, resolve));
 		port = (server.address() as AddressInfo).port;
 	});
@@ -88,6 +110,23 @@ describe("requestPublicOnly", () => {
 		await expect(
 			requestPublicOnly(`http://localhost:${port}/secret`),
 		).rejects.toThrow("Refused to connect to private address");
+	});
+
+	it("returns bodyless statuses without throwing", async () => {
+		lookupState.allowLoopback = true;
+		try {
+			for (const status of [204, 205, 304]) {
+				const response = await requestPublicOnly(
+					`http://localhost:${port}/?status=${status}`,
+				);
+				expect(response.status).toBe(status);
+				expect(response.body).toBeNull();
+			}
+			const ok = await requestPublicOnly(`http://localhost:${port}/`);
+			expect(await ok.text()).toBe("internal");
+		} finally {
+			lookupState.allowLoopback = false;
+		}
 	});
 
 	it("refuses non-http schemes", async () => {

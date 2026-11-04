@@ -24,6 +24,8 @@ function blocksPrivateStorage() {
 	}
 }
 
+const BODYLESS_STATUSES = new Set([204, 205, 304]);
+
 const httpAgent = new HttpAgent({ keepAlive: true, lookup: publicOnlyLookup });
 const httpsAgent = new HttpsAgent({
 	keepAlive: true,
@@ -56,23 +58,37 @@ export function requestPublicOnly(
 				signal: init.signal ?? undefined,
 			},
 			(response) => {
-				const headers = new Headers();
-				for (const [name, value] of Object.entries(response.headers)) {
-					if (Array.isArray(value))
-						for (const entry of value) headers.append(name, entry);
-					else if (value !== undefined) headers.set(name, value);
+				try {
+					const status = response.statusCode ?? 0;
+					if (status < 200 || status > 599) {
+						response.destroy();
+						reject(
+							new StorageFetchRefusedError(
+								`Storage responded with unsupported status ${status}`,
+							),
+						);
+						return;
+					}
+					const headers = new Headers();
+					for (const [name, value] of Object.entries(response.headers)) {
+						if (Array.isArray(value))
+							for (const entry of value) headers.append(name, entry);
+						else if (value !== undefined) headers.set(name, value);
+					}
+					const hasBody = method !== "HEAD" && !BODYLESS_STATUSES.has(status);
+					if (!hasBody) response.resume();
+					resolve(
+						new Response(
+							hasBody
+								? (Readable.toWeb(response) as ReadableStream<Uint8Array>)
+								: null,
+							{ status, statusText: response.statusMessage, headers },
+						),
+					);
+				} catch (error) {
+					response.destroy();
+					reject(error);
 				}
-				const status = response.statusCode ?? 502;
-				const hasBody = method !== "HEAD" && status !== 204 && status !== 304;
-				if (!hasBody) response.resume();
-				resolve(
-					new Response(
-						hasBody
-							? (Readable.toWeb(response) as ReadableStream<Uint8Array>)
-							: null,
-						{ status, statusText: response.statusMessage, headers },
-					),
-				);
 			},
 		);
 		request.on("error", reject);
