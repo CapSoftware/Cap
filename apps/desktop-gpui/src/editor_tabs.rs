@@ -3812,7 +3812,12 @@ impl EditorWindow {
                             == Some(&request)
                         {
                             this.land_caption_refinement(&refined, window, cx);
-                            transcription::clear_refinement_request(&project_path);
+                            match this.flush_pending_saves(cx) {
+                                Ok(()) => transcription::clear_refinement_request(&project_path),
+                                Err(error) => tracing::warn!(
+                                    "Keeping the caption refinement request until the project saves: {error}"
+                                ),
+                            }
                         }
                     });
                 }

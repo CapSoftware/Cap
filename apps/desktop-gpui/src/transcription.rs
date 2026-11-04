@@ -1864,6 +1864,40 @@ fn process_with_parakeet(
     Ok(vec![words])
 }
 
+/// When the first decode hears nothing at all, which the int8 model does on
+/// some recordings that start after a pause, the re-decoding that normally
+/// waits for the refinement runs now: otherwise there is no transcript to
+/// refine.
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+fn recover_empty_first_pass(
+    samples: &[f32],
+    model_dir: &str,
+    options: &VerbatimOptions,
+) -> Result<Vec<Vec<CaptionWord>>, String> {
+    let model = cached_parakeet(model_dir)?;
+    let mut parakeet = model
+        .lock()
+        .map_err(|e| format!("Failed to lock Parakeet model: {e}"))?;
+    let mut words = Vec::new();
+    recover_unheard_speech(
+        samples,
+        &mut words,
+        &mut parakeet,
+        options.parakeet_subword_words,
+        &AtomicBool::new(false),
+    );
+    Ok(vec![words])
+}
+
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+fn recover_empty_first_pass(
+    _samples: &[f32],
+    _model_dir: &str,
+    _options: &VerbatimOptions,
+) -> Result<Vec<Vec<CaptionWord>>, String> {
+    Ok(Vec::new())
+}
+
 /// The int8 Parakeet model can stop emitting after a pause and lose the rest
 /// of a chunk. Sound no word covers is decoded again on its own, in bounded
 /// chunks; a failed span keeps the words already heard.
@@ -2150,7 +2184,13 @@ pub fn transcribe_blocking(
             let options = VerbatimOptions::default().first_pass();
             let groups = if is_parakeet_model(model) {
                 tracing::info!("Using Parakeet TDT engine");
-                process_with_parakeet(&samples, model_file.to_string_lossy().as_ref(), &options)?
+                let model_dir = model_file.to_string_lossy();
+                let groups = process_with_parakeet(&samples, &model_dir, &options)?;
+                if groups.iter().all(Vec::is_empty) {
+                    recover_empty_first_pass(&samples, &model_dir, &options)?
+                } else {
+                    groups
+                }
             } else {
                 tracing::info!("Using Whisper engine");
                 let hints = transcription_hints();
@@ -2194,6 +2234,7 @@ fn with_transcription_audio<T>(
     project_path: &Path,
     ranges: &[Range<f64>],
     recording_durations: &[f64],
+    stop: &AtomicBool,
     engine: impl FnOnce(&Path, &[TranscriptionAudioOffset]) -> Result<T, String>,
 ) -> Result<T, String> {
     ffmpeg::init().map_err(|e| format!("Failed to initialise ffmpeg: {e}"))?;
@@ -2216,6 +2257,9 @@ fn with_transcription_audio<T>(
         let mut samples = Vec::new();
         let mut offsets = Vec::new();
         for range in ranges.iter().cloned() {
+            if stop.load(Ordering::Relaxed) {
+                return Err("Audio extraction stopped".to_string());
+            }
             let start = samples.len();
             if !extract_project_audio(
                 &meta,
@@ -2261,6 +2305,7 @@ fn transcribe_project_with(
         project_path,
         &ranges,
         recording_durations,
+        &AtomicBool::new(false),
         |path, offsets| Ok(restore_source_timestamps(engine(path)?, offsets)),
     )?;
     if segments.is_empty() {

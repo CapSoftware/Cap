@@ -128,7 +128,6 @@ fn words_signature(segments: &[CaptionSegment]) -> u64 {
     hasher.finish()
 }
 
-/// Refined captions for the captions they were refined from.
 #[derive(Debug, Clone)]
 pub struct RefinedCaptions {
     input_signature: u64,
@@ -241,7 +240,6 @@ fn regroup(groups: &[Vec<CaptionWord>], words: Vec<CaptionWord>) -> Vec<Vec<Capt
     regrouped
 }
 
-/// What a refinement hears and how.
 pub(super) struct Pass<'a> {
     pub samples: &'a [f32],
     pub language: &'a str,
@@ -285,6 +283,36 @@ pub(super) fn refine_groups<A: align::Emissions>(
     (!pass.stop.load(Ordering::Relaxed)).then_some(refined)
 }
 
+const MAX_RANGES: usize = 4096;
+
+/// The request's ranges, read from a file beside the project, clamped to the
+/// recording and merged so no audio is extracted twice.
+fn sanitized_ranges(
+    request: &RefinementRequest,
+    recording_durations: &[f64],
+) -> Result<Vec<Range<f64>>, String> {
+    let total: f64 = recording_durations.iter().sum();
+    let mut ranges: Vec<Range<f64>> = request
+        .ranges
+        .iter()
+        .filter(|range| range.iter().all(|time| time.is_finite()))
+        .map(|&[start, end]| start.max(0.0)..end.min(total))
+        .filter(|range| range.end > range.start)
+        .collect();
+    ranges.sort_by(|a, b| a.start.total_cmp(&b.start));
+    let mut merged: Vec<Range<f64>> = Vec::with_capacity(ranges.len());
+    for range in ranges {
+        match merged.last_mut() {
+            Some(last) if range.start <= last.end => last.end = last.end.max(range.end),
+            _ => merged.push(range),
+        }
+    }
+    if merged.is_empty() || merged.len() > MAX_RANGES {
+        return Err("The caption refinement request does not match the recording".to_string());
+    }
+    Ok(merged)
+}
+
 fn to_concatenated_time(time: f32, offsets: &[TranscriptionAudioOffset]) -> Option<f32> {
     let time = f64::from(time);
     offsets
@@ -312,11 +340,7 @@ pub fn refine_blocking(
         return Err(format!("The {model} model is no longer downloaded"));
     }
     let model_file = model_path(model);
-    let ranges: Vec<Range<f64>> = request
-        .ranges
-        .iter()
-        .map(|&[start, end]| start..end)
-        .collect();
+    let ranges = sanitized_ranges(request, recording_durations)?;
     let _guard = lock_transcription_worker_slot();
     if stop.load(Ordering::Relaxed) {
         return Ok(None);
@@ -326,10 +350,12 @@ pub fn refine_blocking(
         project_path,
         &ranges,
         recording_durations,
+        stop,
         |audio_path, offsets| {
             let samples = read_wav_16k_mono(audio_path)?;
             let groups = input
                 .iter()
+                .filter(|segment| !segment.words.is_empty())
                 .map(|segment| {
                     segment
                         .words
@@ -377,19 +403,49 @@ pub fn refine_blocking(
                 tuning: &TUNING,
                 stop,
             };
-            Ok(
-                refine_groups(&pass, groups, recover, aligner).map(|groups| {
-                    restore_source_timestamps(
-                        caption_segments_from_groups(groups, &request.language),
-                        offsets,
-                    )
-                }),
-            )
+            Ok(refine_groups(&pass, groups, recover, aligner)
+                .map(|groups| keep_caption_identities(input, groups, &request.language, offsets)))
         },
     )?;
     Ok(segments
         .filter(|segments| !segments.is_empty())
         .map(|segments| RefinedCaptions::new(input, segments)))
+}
+
+/// Re-chunks each input caption's refined words on its own. The first chunk
+/// keeps the caption's id and any later one gets `<id>-<n>`, so per-caption
+/// overrides, which follow ids, stay on the caption they were set on.
+fn keep_caption_identities(
+    input: &[CaptionSegment],
+    groups: Vec<Vec<CaptionWord>>,
+    language: &str,
+    offsets: &[TranscriptionAudioOffset],
+) -> Vec<CaptionSegment> {
+    let mut groups = groups.into_iter();
+    let mut refined = Vec::with_capacity(input.len());
+    for segment in input {
+        if segment.words.is_empty() {
+            refined.push(segment.clone());
+            continue;
+        }
+        let Some(group) = groups.next() else {
+            break;
+        };
+        for (chunk, part) in caption_segments_from_groups(vec![group], language)
+            .into_iter()
+            .enumerate()
+        {
+            if let Some(mut restored) = restore_source_timestamps(vec![part], offsets).pop() {
+                restored.id = if chunk == 0 {
+                    segment.id.clone()
+                } else {
+                    format!("{}-{chunk}", segment.id)
+                };
+                refined.push(restored);
+            }
+        }
+    }
+    refined
 }
 
 #[cfg(test)]
@@ -402,6 +458,66 @@ mod tests {
             start,
             end,
         }
+    }
+
+    #[test]
+    fn request_ranges_are_clamped_and_merged() {
+        let request = RefinementRequest {
+            model: "best".to_string(),
+            language: "en".to_string(),
+            ranges: vec![
+                [5.0, 8.0],
+                [0.0, 6.0],
+                [0.0, 6.0],
+                [f64::NAN, 3.0],
+                [-4.0, 1.0],
+                [9.0, 400.0],
+                [500.0, 600.0],
+            ],
+        };
+        assert_eq!(
+            sanitized_ranges(&request, &[10.0]).unwrap(),
+            vec![0.0..8.0, 9.0..10.0]
+        );
+        let outside = RefinementRequest {
+            ranges: vec![[20.0, 30.0]],
+            ..request
+        };
+        assert!(sanitized_ranges(&outside, &[10.0]).is_err());
+    }
+
+    #[test]
+    fn captions_keep_their_ids_when_recovered_words_split_them() {
+        let caption = |id: &str, words: Vec<CaptionWord>| CaptionSegment {
+            id: id.to_string(),
+            start: words[0].start,
+            end: words[words.len() - 1].end,
+            text: String::new(),
+            words,
+        };
+        let input = vec![
+            caption("segment-0", vec![word("so", 0.0, 0.2)]),
+            caption("segment-1", vec![word("done", 9.0, 9.4)]),
+        ];
+        let grown: Vec<CaptionWord> = (0..14)
+            .map(|index| word("word", index as f32 * 0.4, index as f32 * 0.4 + 0.3))
+            .collect();
+        let offsets = [TranscriptionAudioOffset {
+            concatenated_start: 0.0,
+            source_start: 0.0,
+            length: 60.0,
+        }];
+        let refined = keep_caption_identities(
+            &input,
+            vec![grown, vec![word("done", 9.0, 9.4)]],
+            "en",
+            &offsets,
+        );
+        let ids: Vec<&str> = refined.iter().map(|segment| segment.id.as_str()).collect();
+        assert!(ids.len() > 2, "{ids:?}");
+        assert_eq!(ids[0], "segment-0");
+        assert_eq!(ids[1], "segment-0-1");
+        assert_eq!(*ids.last().unwrap(), "segment-1");
     }
 
     #[test]
