@@ -11,7 +11,9 @@
 //! ```
 //!
 //! `hyp:` re-scores the raw engine words a previous run wrote, so the
-//! finishing steps can be tuned without running a model again. The aligner
+//! finishing steps can be tuned without running a model again; set
+//! `CAP_EVAL_HYP_WHISPER` when those words came from Whisper, which aligns
+//! after recognition rather than alongside it. The aligner
 //! hears each clip while the engine runs, as in the app;
 //! `CAP_EVAL_ALIGNER_SESSIONS` and `CAP_EVAL_ALIGNER_THREADS` override how
 //! many ONNX sessions it uses and their threads. `bench_word_aligner` times
@@ -689,7 +691,11 @@ mod run {
             write_wav_16k(&wav, &normalized)?;
             let input = read_wav_16k_mono(&wav)?;
             let mut raw = Vec::new();
-            let overlap = !matches!(self, Self::Whisper(_));
+            let overlap = match self {
+                Self::Whisper(_) => false,
+                Self::Parakeet(_) => true,
+                Self::Hypotheses(_) => std::env::var("CAP_EVAL_HYP_WHISPER").is_err(),
+            };
             let (ready, fetch) = if overlap {
                 (aligner, None)
             } else {
@@ -850,7 +856,13 @@ mod run {
         let mut aligner = std::env::var("CAP_EVAL_ALIGNER")
             .ok()
             .filter(|_| options.align_words)
-            .map(|path| load_aligner(Path::new(&path), matches!(engine, Engine::Whisper(_))));
+            .map(|path| {
+                load_aligner(
+                    Path::new(&path),
+                    matches!(engine, Engine::Whisper(_))
+                        || std::env::var("CAP_EVAL_HYP_WHISPER").is_ok(),
+                )
+            });
         let load_seconds = load_started.elapsed().as_secs_f64();
         let mut rows = Vec::new();
         let mut summaries = BTreeMap::new();
