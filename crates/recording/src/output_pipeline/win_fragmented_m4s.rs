@@ -854,7 +854,6 @@ impl WindowsFragmentedM4SMuxer {
                 let mut pacer = FramePacer::new(video_config.fps());
                 let mut last_frame: Option<screen_capture::ScreenFrame> = None;
                 let mut first_timestamp: Option<Duration> = None;
-                let mut failed_writes = 0u64;
                 let mut disk_monitor = DiskSpaceMonitor::new();
 
                 let result = encoder.run(
@@ -890,32 +889,32 @@ impl WindowsFragmentedM4SMuxer {
                         return Ok(Some((texture, duration_to_timespan(normalized))));
                     },
                     |sample| {
-                        let packet = match cap_mediafoundation_ffmpeg::sample_to_packet(
+                        let packet = cap_mediafoundation_ffmpeg::sample_to_packet(
                             &sample,
                             cap_mediafoundation_ffmpeg::MF_TIMEBASE,
                             0,
-                        ) {
-                            Ok(packet) => packet,
-                            Err(error) => {
-                                warn!("Failed to convert Media Foundation sample: {error}");
-                                return Ok(());
-                            }
-                        };
+                        )
+                        .map_err(|error| {
+                            windows::core::Error::new(
+                                windows::Win32::Foundation::E_FAIL,
+                                format!("Failed to convert Media Foundation sample: {error}"),
+                            )
+                        })?;
 
-                        let Ok(mut muxer) = muxer.lock() else {
-                            return Ok(());
-                        };
-                        if let Err(error) =
-                            muxer.write_packet(packet, cap_mediafoundation_ffmpeg::MF_TIMEBASE)
-                        {
-                            failed_writes += 1;
-                            if failed_writes == 1 || failed_writes.is_multiple_of(300) {
-                                warn!(
-                                    failed_writes,
-                                    "Failed to write Media Foundation sample: {error}"
-                                );
-                            }
-                        }
+                        let mut muxer = muxer.lock().map_err(|_| {
+                            windows::core::Error::new(
+                                windows::Win32::Foundation::E_FAIL,
+                                "Media Foundation muxer mutex poisoned",
+                            )
+                        })?;
+                        muxer
+                            .write_packet(packet, cap_mediafoundation_ffmpeg::MF_TIMEBASE)
+                            .map_err(|error| {
+                                windows::core::Error::new(
+                                    windows::Win32::Foundation::E_FAIL,
+                                    format!("Failed to write Media Foundation sample: {error}"),
+                                )
+                            })?;
                         Ok(())
                     },
                 );
