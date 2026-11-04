@@ -260,8 +260,8 @@ impl RecordingMeta {
 
     /// [`Self::project_config`] for the editor: see
     /// [`ProjectConfiguration::load_for_editing`].
-    pub fn project_config_for_editing(&self) -> ProjectConfiguration {
-        self.with_legacy_captions(ProjectConfiguration::load_for_editing(&self.project_path))
+    pub fn project_config_for_editing(&self) -> std::io::Result<ProjectConfiguration> {
+        Ok(self.with_legacy_captions(ProjectConfiguration::load_for_editing(&self.project_path)?))
     }
 
     fn with_legacy_captions(&self, mut config: ProjectConfiguration) -> ProjectConfiguration {
@@ -939,7 +939,12 @@ mod metadata_save_tests {
         let meta = recording(directory.path());
         let first = write_unreadable_config(directory.path());
 
-        assert!(meta.project_config_for_editing().timeline.is_none());
+        assert!(
+            meta.project_config_for_editing()
+                .unwrap()
+                .timeline
+                .is_none()
+        );
         assert_eq!(
             project_files(directory.path()),
             ["project-config.unreadable.json"]
@@ -952,7 +957,12 @@ mod metadata_save_tests {
         let mut second = write_unreadable_config(directory.path());
         second.push(b'\n');
         std::fs::write(directory.path().join("project-config.json"), &second).unwrap();
-        assert!(meta.project_config_for_editing().timeline.is_none());
+        assert!(
+            meta.project_config_for_editing()
+                .unwrap()
+                .timeline
+                .is_none()
+        );
         assert_eq!(
             std::fs::read(directory.path().join("project-config.unreadable.json")).unwrap(),
             first
@@ -963,17 +973,41 @@ mod metadata_save_tests {
         );
     }
 
+    // A backup name that is a symlink loop makes the move fail while the
+    // folder stays writable, so a save after it would still have landed.
+    #[cfg(unix)]
+    #[test]
+    fn editing_never_saves_over_a_config_it_could_not_keep() {
+        let directory = tempfile::tempdir().unwrap();
+        let meta = recording(directory.path());
+        let original = write_unreadable_config(directory.path());
+        let backup = directory.path().join("project-config.unreadable.json");
+        std::os::unix::fs::symlink(&backup, &backup).unwrap();
+
+        assert!(meta.project_config_for_editing().is_err());
+        assert_eq!(
+            std::fs::read(directory.path().join("project-config.json")).unwrap(),
+            original
+        );
+    }
+
     #[test]
     fn editing_a_missing_or_readable_config_moves_nothing() {
         let directory = tempfile::tempdir().unwrap();
         let meta = recording(directory.path());
-        assert!(meta.project_config_for_editing().timeline.is_none());
+        assert!(
+            meta.project_config_for_editing()
+                .unwrap()
+                .timeline
+                .is_none()
+        );
         assert!(project_files(directory.path()).is_empty());
 
         one_clip_config().write(directory.path()).unwrap();
         let saved = std::fs::read(directory.path().join("project-config.json")).unwrap();
         assert_eq!(
             meta.project_config_for_editing()
+                .unwrap()
                 .timeline
                 .unwrap()
                 .segments

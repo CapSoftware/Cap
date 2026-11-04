@@ -3320,29 +3320,29 @@ impl ProjectConfiguration {
     /// [`Self::load`] for an editor, which saves what this returns. A missing
     /// file is the default. So is one that cannot be read, after it is moved
     /// to a `project-config.unreadable.json` beside it, so saving does not
-    /// replace the only copy of the edits.
-    pub fn load_for_editing(project_path: impl AsRef<Path>) -> Self {
+    /// replace the only copy of the edits. When it cannot be moved, this is
+    /// an error rather than a default the editor would save over it.
+    pub fn load_for_editing(project_path: impl AsRef<Path>) -> std::io::Result<Self> {
         let project_path = project_path.as_ref();
         let error = match Self::load(project_path) {
-            Ok(config) => return config,
+            Ok(config) => return Ok(config),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Self::default();
+                return Ok(Self::default());
             }
             Err(error) => error,
         };
-        match set_aside_unreadable_config(project_path) {
-            Ok(backup) => tracing::warn!(
-                %error,
-                backup = %backup.display(),
-                "Opening with default settings: project-config.json could not be read"
-            ),
-            Err(move_error) => tracing::error!(
-                %error,
-                %move_error,
-                "Opening with default settings: project-config.json could not be read or kept"
-            ),
-        }
-        Self::default()
+        let backup = set_aside_unreadable_config(project_path).map_err(|move_error| {
+            std::io::Error::new(
+                move_error.kind(),
+                format!("project-config.json could not be read ({error}) or kept ({move_error})"),
+            )
+        })?;
+        tracing::warn!(
+            %error,
+            backup = %backup.display(),
+            "Opening with default settings: project-config.json could not be read"
+        );
+        Ok(Self::default())
     }
 
     pub fn write(&self, project_path: impl AsRef<Path>) -> Result<(), std::io::Error> {
