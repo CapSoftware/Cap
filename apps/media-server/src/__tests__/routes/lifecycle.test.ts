@@ -177,19 +177,37 @@ describe("draining", () => {
 		expect((await health.json()).status).toBe("draining");
 
 		const status = await app.fetch(
-			new Request(`http://localhost/video/process/${job.jobId}/status`),
+			new Request(`http://localhost/video/process/${job.jobId}/status`, {
+				headers: AUTH_HEADERS,
+			}),
 		);
 		expect(status.status).toBe(200);
 		expect((await status.json()).jobId).toBe(job.jobId);
 
 		const serverStatus = await app.fetch(
-			new Request("http://localhost/video/status"),
+			new Request("http://localhost/video/status", { headers: AUTH_HEADERS }),
 		);
 		expect(serverStatus.status).toBe(200);
 	});
 });
 
 describe("status access", () => {
+	test("requires the secret by default", async () => {
+		delete process.env.MEDIA_SERVER_PUBLIC_STATUS;
+		for (const path of ["/video/status", "/video/process/job-missing/status"]) {
+			const anonymous = await app.fetch(new Request(`http://localhost${path}`));
+			expect(anonymous.status).toBe(401);
+		}
+	});
+
+	test("serves status publicly only when explicitly enabled", async () => {
+		process.env.MEDIA_SERVER_PUBLIC_STATUS = "true";
+		const anonymous = await app.fetch(
+			new Request("http://localhost/video/status"),
+		);
+		expect(anonymous.status).toBe(200);
+	});
+
 	test("requires the secret when public status is disabled", async () => {
 		process.env.MEDIA_SERVER_PUBLIC_STATUS = "false";
 		for (const path of [

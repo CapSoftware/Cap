@@ -1,4 +1,13 @@
-import { beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import {
+	afterAll,
+	beforeAll,
+	beforeEach,
+	describe,
+	expect,
+	mock,
+	spyOn,
+	test,
+} from "bun:test";
 import app from "../../app";
 import * as jobManager from "../../lib/job-manager";
 import * as mediaProbe from "../../lib/media-probe";
@@ -8,6 +17,16 @@ import {
 	tryAcquireDirectVideoProcessSlot,
 	type VideoProcessSlot,
 } from "../../lib/video-capacity";
+
+const previousPublicStatus = process.env.MEDIA_SERVER_PUBLIC_STATUS;
+beforeAll(() => {
+	process.env.MEDIA_SERVER_PUBLIC_STATUS = "true";
+});
+afterAll(() => {
+	if (previousPublicStatus === undefined)
+		delete process.env.MEDIA_SERVER_PUBLIC_STATUS;
+	else process.env.MEDIA_SERVER_PUBLIC_STATUS = previousPublicStatus;
+});
 
 const MEDIA_SERVER_SECRET = "test-secret";
 const AUTH_HEADERS = {

@@ -1,6 +1,7 @@
 import {
 	afterAll,
 	afterEach,
+	beforeAll,
 	beforeEach,
 	describe,
 	expect,
@@ -14,6 +15,16 @@ import * as mediaProbe from "../../lib/media-probe";
 import type { RemoteRecordingVerificationResult } from "../../lib/recording-verification";
 import * as recordingVerification from "../../lib/recording-verification";
 import video from "../../routes/video";
+
+const previousPublicStatus = process.env.MEDIA_SERVER_PUBLIC_STATUS;
+beforeAll(() => {
+	process.env.MEDIA_SERVER_PUBLIC_STATUS = "true";
+});
+afterAll(() => {
+	if (previousPublicStatus === undefined)
+		delete process.env.MEDIA_SERVER_PUBLIC_STATUS;
+	else process.env.MEDIA_SERVER_PUBLIC_STATUS = previousPublicStatus;
+});
 
 const originalFetch = globalThis.fetch;
 const originalSecret = process.env.MEDIA_SERVER_WEBHOOK_SECRET;

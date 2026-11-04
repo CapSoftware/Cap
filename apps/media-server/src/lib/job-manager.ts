@@ -4,6 +4,10 @@ import {
 	getContainerCpuUsageMicros,
 } from "./container-cpu";
 import { getContainerMemoryMetrics } from "./container-memory";
+import {
+	INPUT_POLICY_VIOLATION,
+	isInputPolicyViolationMessage,
+} from "./media-input-policy";
 import type { MediaOperationHandle } from "./media-operations";
 import type { TempFileHandle } from "./temp-files";
 import { getActiveDirectVideoProcessCount } from "./video-capacity";
@@ -25,7 +29,8 @@ export type RecordingErrorCode =
 	| "source-changed"
 	| "output-invalid"
 	| "processing-unavailable"
-	| "processing-budget-exhausted";
+	| "processing-budget-exhausted"
+	| typeof INPUT_POLICY_VIOLATION;
 
 export interface RecordingVerificationRequest {
 	version: 1;
@@ -430,6 +435,21 @@ export function updateJob(
 		if (job.phase === "complete") jobTotals.completed++;
 		else if (job.phase === "error") jobTotals.errored++;
 		else jobTotals.cancelled++;
+		if (
+			job.phase === "error" &&
+			!job.errorCode &&
+			isInputPolicyViolationMessage(job.error)
+		) {
+			job.errorCode = INPUT_POLICY_VIOLATION;
+			console.warn(
+				JSON.stringify({
+					event: "input_policy_violation",
+					jobId: job.jobId,
+					videoId: job.videoId,
+					userId: job.userId,
+				}),
+			);
+		}
 	}
 	if (!isActivePhase(job.phase) && job.webhookInFlight)
 		job.webhookPending = true;
