@@ -66,7 +66,6 @@ import { union } from "drizzle-orm/mysql-core";
 import { Effect, Layer, Option, Schema } from "effect";
 import { revalidatePath } from "next/cache";
 import { start } from "workflow/api";
-import { downloadLoomVideo } from "@/actions/loom";
 import { getOrgAnalyticsData } from "@/app/(org)/dashboard/analytics/data";
 import {
 	createAgentAccessGrant,
@@ -130,6 +129,7 @@ import {
 } from "@/lib/custom-storage-policy";
 import { hashKey } from "@/lib/developer-key-hash";
 import { startAiGeneration } from "@/lib/generate-ai";
+import { resolveLoomDownload } from "@/lib/loom-csv-import";
 import { probeVideoViaMediaServer } from "@/lib/media-client";
 import { provisionOrganizationInvitee } from "@/lib/organization-provisioning";
 import {
@@ -2388,7 +2388,7 @@ const queueAgentLoomImport = Effect.fn("Agent.queueLoomImport")(
 						return yield* rateLimited(input.requestId);
 					}
 					const download = yield* Effect.tryPromise({
-						try: () => downloadLoomVideo(loomUrl),
+						try: () => resolveLoomDownload(loomUrl),
 						catch: () =>
 							temporarilyUnavailable(
 								input.requestId,
@@ -4513,6 +4513,8 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 													platform: "agent",
 													organizationId: path.organizationId,
 													userId: principal.id,
+													// Lets Dub credit the sale to a partner referral.
+													dubCustomerId: principal.id,
 												},
 											},
 											{

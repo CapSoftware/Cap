@@ -16,6 +16,32 @@ import { withDeveloperPublicAuth } from "../../../../utils";
 
 const MICRO_CREDITS_PER_MINUTE = 5_000;
 const MAX_DURATION_SECS = 4 * 60 * 60;
+const BILLED_BYTES_PER_SECOND = 2_500_000;
+
+type StoredPart = { PartNumber?: number; ETag?: string; Size?: number };
+
+const withoutQuotes = (etag: string | undefined) => etag?.replaceAll('"', "");
+
+function storedBytesForParts(
+	requestedParts: { partNumber: number; etag: string }[],
+	storedParts: readonly StoredPart[],
+) {
+	const storedByNumber = new Map(
+		storedParts.map((part) => [part.PartNumber, part]),
+	);
+	let totalBytes = 0;
+	for (const requested of requestedParts) {
+		const stored = storedByNumber.get(requested.partNumber);
+		if (
+			stored?.Size === undefined ||
+			withoutQuotes(stored.ETag) !== withoutQuotes(requested.etag)
+		) {
+			return null;
+		}
+		totalBytes += stored.Size;
+	}
+	return totalBytes;
+}
 
 async function findAppVideo(appId: string, videoId: string) {
 	const [video] = await db()
@@ -193,8 +219,19 @@ app.post(
 		const s3Key = video.s3Key;
 
 		try {
-			const totalBytes = parts.reduce((sum, p) => sum + p.size, 0);
-			const sizeBasedMinDuration = totalBytes / 2_500_000;
+			const storedParts = await Effect.gen(function* () {
+				const [bucket] = yield* S3Buckets.getBucketAccess(Option.none());
+				return yield* bucket.multipart.listParts(s3Key, uploadId);
+			}).pipe(provideOptionalAuth, runPromise);
+
+			const totalBytes = storedBytesForParts(parts, storedParts);
+			if (totalBytes === null) {
+				return c.json(
+					{ error: "Uploaded parts do not match the request" },
+					400,
+				);
+			}
+			const sizeBasedMinDuration = totalBytes / BILLED_BYTES_PER_SECOND;
 			const billingDuration = Math.min(
 				Math.max(clampedDuration, sizeBasedMinDuration),
 				MAX_DURATION_SECS,
