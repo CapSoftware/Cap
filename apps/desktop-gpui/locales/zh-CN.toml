@@ -386,6 +386,8 @@ quarter = "1/4"
 
 [settings.shortcuts]
 blocked_while_recording = "当前录制占用了停止键，无法更改快捷键。请先停止录制。"
+cancelling_description = "适用于通过快捷键或 Cap 图标开始的截图和录制。"
+cancelling_title = "取消"
 needs_modifier_macos = "请包含 ⌘、⌃ 或 ⌥，以免快捷键干扰输入。"
 needs_modifier_other = "请包含 Ctrl、Alt 或 Win，以免快捷键干扰输入。"
 record_shortcut = "录制快捷键"
@@ -413,7 +415,15 @@ title = "Studio 录制之后"
 hint = "始终会复制分享链接"
 title = "Instant 录制之后"
 
+[settings.shortcuts.on_cancel]
+hint = "按 Esc 或关闭选择器"
+title = "取消时"
+
 [settings.shortcuts.outcome]
+cancel_show_cap = "显示 Cap"
+cancel_show_cap_hint = "回到录制器"
+cancel_stay_hidden = "保持隐藏"
+cancel_stay_hidden_hint = "除非 Cap 原本已打开"
 instant_copy_link = "仅复制链接"
 instant_copy_link_hint = "不打开任何内容"
 instant_open_link = "打开链接"
