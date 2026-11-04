@@ -213,7 +213,8 @@ export async function updateSeatQuantity(
 	}
 
 	const isSeatIncrease = newQuantity > currentQuantity;
-	const wasCanceling = subscription.cancel_at_period_end;
+	const clearsScheduledCancellation =
+		isSeatIncrease && subscription.cancel_at_period_end;
 	// Stripe rejects cancel_at_period_end combined with
 	// payment_behavior=pending_if_incomplete, so increases clear cancellation
 	// first. Every failure path afterwards must re-schedule it: the committed
@@ -236,7 +237,7 @@ export async function updateSeatQuantity(
 	};
 
 	try {
-		if (isSeatIncrease && wasCanceling) {
+		if (clearsScheduledCancellation) {
 			await stripe().subscriptions.update(subscription.id, {
 				cancel_at_period_end: false,
 			});
@@ -255,9 +256,6 @@ export async function updateSeatQuantity(
 				...(isSeatIncrease
 					? { payment_behavior: "pending_if_incomplete" as const }
 					: {}),
-				...(!isSeatIncrease && wasCanceling
-					? { cancel_at_period_end: false }
-					: {}),
 			},
 		);
 
@@ -267,7 +265,7 @@ export async function updateSeatQuantity(
 			);
 		}
 	} catch (error) {
-		if (wasCanceling) {
+		if (clearsScheduledCancellation) {
 			await restoreScheduledCancellation(
 				"We couldn't complete the seat change or keep your scheduled cancellation. Please contact support.",
 			);
@@ -291,7 +289,7 @@ export async function updateSeatQuantity(
 		// The committed quantity stays: the customer.subscription.updated
 		// webhook recomputes inviteQuota from Stripe, so local state
 		// self-heals. Only the cleared cancellation needs compensating here.
-		if (wasCanceling) {
+		if (clearsScheduledCancellation) {
 			await restoreScheduledCancellation(
 				`Billing was updated to ${newQuantity} seats, but we couldn't save it locally or keep your scheduled cancellation. Please contact support.`,
 			);
