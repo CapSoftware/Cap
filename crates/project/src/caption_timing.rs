@@ -246,6 +246,7 @@ struct MappedCaption {
     text: String,
     words: Vec<CaptionWord>,
     source_words: Vec<usize>,
+    source_clip: (f64, f64),
 }
 
 fn map_captions_to_edited_timeline(
@@ -263,6 +264,7 @@ fn map_captions_to_edited_timeline(
                 end: f64::from(segment.end),
                 text: segment.text,
                 source_words: (0..segment.words.len()).collect(),
+                source_clip: (f64::NEG_INFINITY, f64::INFINITY),
                 words: segment.words,
             })
             .collect();
@@ -390,6 +392,7 @@ fn map_captions_to_edited_timeline(
                     text: caption_text_from_words(&mapped_words),
                     words: mapped_words,
                     source_words,
+                    source_clip: (mapping.source_start, mapping.source_end),
                 });
             } else {
                 let Some((start, end)) = map_time_range_within_mapping(
@@ -407,6 +410,7 @@ fn map_captions_to_edited_timeline(
                     text: caption.text.clone(),
                     words: Vec::new(),
                     source_words: Vec::new(),
+                    source_clip: (mapping.source_start, mapping.source_end),
                 });
             }
         }
@@ -421,13 +425,14 @@ fn map_captions_to_edited_timeline(
     result
 }
 
-/// One track piece of a source caption: its output-time span and the indices
-/// of the caption words it shows. A word straddling a cut belongs to the
-/// pieces on both sides.
+/// One track piece of a source caption: its output-time span, the indices
+/// of the caption words it shows and the source range of the clip showing
+/// them. A word straddling a cut belongs to the pieces on both sides.
 pub struct CaptionPiece {
     pub start: f64,
     pub end: f64,
     pub source_words: Vec<usize>,
+    pub source_clip: (f64, f64),
 }
 
 pub fn caption_piece(
@@ -443,6 +448,7 @@ pub fn caption_piece(
             start: piece.start,
             end: piece.end,
             source_words: piece.source_words,
+            source_clip: piece.source_clip,
         })
 }
 

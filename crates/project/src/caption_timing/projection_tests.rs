@@ -14,6 +14,14 @@ fn assert_projection_matches(
         assert_eq!(actual.end.to_bits(), expected.end.to_bits());
         assert_eq!(actual.text, expected.text);
         assert_eq!(actual.source_words, expected.source_words);
+        assert_eq!(
+            actual.source_clip.0.to_bits(),
+            expected.source_clip.0.to_bits()
+        );
+        assert_eq!(
+            actual.source_clip.1.to_bits(),
+            expected.source_clip.1.to_bits()
+        );
         assert_eq!(actual.words.len(), expected.words.len());
         for (actual, expected) in actual.words.iter().zip(&expected.words) {
             assert_eq!(actual.text, expected.text);
@@ -240,6 +248,7 @@ fn baseline_projection(
                 end: f64::from(segment.end),
                 text: segment.text,
                 source_words: (0..segment.words.len()).collect(),
+                source_clip: (f64::NEG_INFINITY, f64::INFINITY),
                 words: segment.words,
             })
             .collect();
@@ -323,6 +332,7 @@ fn baseline_projection(
                     text: caption_text_from_words(&mapped_words),
                     words: mapped_words,
                     source_words,
+                    source_clip: (mapping.source_start, mapping.source_end),
                 });
             } else {
                 let Some((start, end)) = map_time_range_within_mapping(
@@ -340,6 +350,7 @@ fn baseline_projection(
                     text: caption.text.clone(),
                     words: Vec::new(),
                     source_words: Vec::new(),
+                    source_clip: (mapping.source_start, mapping.source_end),
                 });
             }
         }

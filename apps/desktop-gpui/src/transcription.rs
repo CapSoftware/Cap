@@ -2512,35 +2512,51 @@ pub fn write_caption_edit_to_source(
     else {
         return;
     };
+    let (clip_start, clip_end) = piece.source_clip;
     let mut words: Vec<CaptionWord> = piece
         .source_words
         .iter()
-        .map(|&index| source.words[index].clone())
+        .map(|&index| {
+            let word = &source.words[index];
+            CaptionWord {
+                text: word.text.clone(),
+                start: word.start,
+                end: word.end.min(word.start + MAX_CAPTION_WORD_DURATION),
+            }
+        })
         .collect();
-    let source_range = if words.is_empty() {
-        (f64::from(source.start), f64::from(source.end))
+    let in_clip = |time: f32| f64::from(time).clamp(clip_start, clip_end);
+    let (shown_start, shown_end) = if words.is_empty() {
+        (in_clip(source.start), in_clip(source.end))
     } else {
         words
             .iter()
             .fold((f64::INFINITY, f64::NEG_INFINITY), |(start, end), word| {
-                (
-                    start.min(f64::from(word.start)),
-                    end.max(f64::from(word.end)),
-                )
+                (start.min(in_clip(word.start)), end.max(in_clip(word.end)))
             })
     };
-    let to_source =
-        |time| map_edited_time_to_source(time, timeline, recording_durations, Some(source_range));
-    let (Some(shown_start), Some(shown_end)) = (to_source(piece.start), to_source(piece.end))
-    else {
-        return;
+    let to_source = |edited: f64, shown_at: f64, shown: f64| {
+        if edited == shown_at {
+            return shown;
+        }
+        map_edited_time_to_source(
+            edited,
+            timeline,
+            recording_durations,
+            Some(piece.source_clip),
+        )
+        .unwrap_or(shown)
     };
-    let start = to_source(track_start).unwrap_or(shown_start);
-    let end = to_source(track_end).unwrap_or(shown_end);
-    if (track_start, track_end) != (piece.start, piece.end) && shown_end > shown_start {
+    let start = to_source(track_start, piece.start, shown_start);
+    let end = to_source(track_end, piece.end, shown_end);
+    if (start, end) != (shown_start, shown_end) && shown_end > shown_start {
         let scale = (end - start) / (shown_end - shown_start);
         let retime = |time: f32| {
-            (start + (f64::from(time).clamp(shown_start, shown_end) - shown_start) * scale) as f32
+            let time = f64::from(time);
+            if time < clip_start || time > clip_end {
+                return time as f32;
+            }
+            (start + (time - shown_start) * scale) as f32
         };
         for word in &mut words {
             word.start = retime(word.start);
@@ -2554,11 +2570,17 @@ pub fn write_caption_edit_to_source(
         .source_words
         .last()
         .is_none_or(|&index| index + 1 == source.words.len());
-    let insert_at = piece.source_words.first().copied().unwrap_or(0);
-    for &index in piece.source_words.iter().rev() {
-        source.words.remove(index);
+    if words.len() == piece.source_words.len() {
+        for (&index, word) in piece.source_words.iter().zip(words) {
+            source.words[index] = word;
+        }
+    } else {
+        let insert_at = piece.source_words.first().copied().unwrap_or(0);
+        for &index in piece.source_words.iter().rev() {
+            source.words.remove(index);
+        }
+        source.words.splice(insert_at..insert_at, words);
     }
-    source.words.splice(insert_at..insert_at, words);
     if starts_caption {
         source.start = start as f32;
     }
@@ -2917,6 +2939,41 @@ mod tests {
         edited
     }
 
+    fn cut_caption_project(
+        clips: &[(f64, f64, f64)],
+        words: &[(&str, f32, f32)],
+    ) -> ProjectConfiguration {
+        let segments: Vec<_> = clips
+            .iter()
+            .map(|(start, end, timescale)| {
+                serde_json::json!({
+                    "recordingSegment": 0, "timescale": timescale, "start": start, "end": end
+                })
+            })
+            .collect();
+        let mut project = ProjectConfiguration {
+            timeline: Some(timeline(
+                serde_json::json!({ "segments": segments, "zoomSegments": [] }),
+            )),
+            captions: Some(CaptionsData {
+                segments: vec![caption(
+                    "caption",
+                    words
+                        .iter()
+                        .map(|word| word.1)
+                        .fold(f32::INFINITY, f32::min),
+                    words.iter().map(|word| word.2).fold(0.0, f32::max),
+                    words,
+                )],
+                source_timed: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        cap_project::synchronize_captions(&mut project, &[10.0]);
+        project
+    }
+
     #[test]
     fn editing_one_piece_of_a_cut_caption_keeps_the_other_piece() {
         type Edit = fn(&mut CaptionTrackSegment);
@@ -2936,32 +2993,15 @@ mod tests {
             (1, |piece| piece.end = 3.5, "big world"),
         ];
         for (index, edit, edited_text) in edits {
-            let mut project = ProjectConfiguration {
-                timeline: Some(timeline(serde_json::json!({
-                    "segments": [
-                        { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 2.0 },
-                        { "recordingSegment": 0, "timescale": 1.0, "start": 5.0, "end": 8.0 }
-                    ],
-                    "zoomSegments": []
-                }))),
-                captions: Some(CaptionsData {
-                    segments: vec![caption(
-                        "caption",
-                        1.0,
-                        6.0,
-                        &[
-                            ("hello", 1.0, 1.5),
-                            ("there", 1.5, 2.0),
-                            ("big", 5.0, 5.5),
-                            ("world", 5.5, 6.0),
-                        ],
-                    )],
-                    source_timed: true,
-                    ..Default::default()
-                }),
-                ..Default::default()
-            };
-            cap_project::synchronize_captions(&mut project, &[10.0]);
+            let mut project = cut_caption_project(
+                &[(0.0, 2.0, 1.0), (5.0, 8.0, 1.0)],
+                &[
+                    ("hello", 1.0, 1.5),
+                    ("there", 1.5, 2.0),
+                    ("big", 5.0, 5.5),
+                    ("world", 5.5, 6.0),
+                ],
+            );
             let before = shown_pieces(&project);
             assert_eq!(before[0].0, "hello there");
             assert_eq!(before[1].0, "big world");
@@ -2977,32 +3017,41 @@ mod tests {
     }
 
     #[test]
+    fn resizing_a_piece_keeps_its_shared_word_in_the_other_piece() {
+        let mut project = cut_caption_project(
+            &[(0.0, 5.0, 1.0), (6.0, 10.0, 1.0)],
+            &[("one", 1.0, 2.0), ("shared", 4.5, 6.5), ("two", 8.0, 9.0)],
+        );
+        let before = shown_pieces(&project);
+        assert_eq!(before[0].0, "one shared");
+        assert_eq!(before[1].0, "shared two");
+
+        let edited = edit_caption_piece(&mut project, 0, |piece| piece.start = 0.5);
+
+        let after = shown_pieces(&project);
+        assert_eq!((after[0].1, after[0].2), edited);
+        assert_eq!(after[1], before[1]);
+    }
+
+    #[test]
+    fn spelling_edits_stick_at_a_rounded_clip_end() {
+        let mut project = cut_caption_project(&[(0.0, 1.0, 1.5)], &[("hi", 0.5, 1.0)]);
+
+        edit_caption_piece(&mut project, 0, |piece| piece.text = "Hi".into());
+
+        assert_eq!(shown_pieces(&project)[0].0, "Hi");
+    }
+
+    #[test]
     fn editing_a_piece_of_unsorted_caption_words_keeps_the_other_piece() {
-        let mut project = ProjectConfiguration {
-            timeline: Some(timeline(serde_json::json!({
-                "segments": [
-                    { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 5.0 },
-                    { "recordingSegment": 0, "timescale": 1.0, "start": 6.0, "end": 10.0 }
-                ],
-                "zoomSegments": []
-            }))),
-            captions: Some(CaptionsData {
-                segments: vec![caption(
-                    "caption",
-                    0.0,
-                    0.5,
-                    &[
-                        ("late-first", 4.0, 4.5),
-                        ("second-clip", 7.0, 7.5),
-                        ("early-last", 1.0, 1.5),
-                    ],
-                )],
-                source_timed: true,
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-        cap_project::synchronize_captions(&mut project, &[10.0]);
+        let mut project = cut_caption_project(
+            &[(0.0, 5.0, 1.0), (6.0, 10.0, 1.0)],
+            &[
+                ("late-first", 4.0, 4.5),
+                ("second-clip", 7.0, 7.5),
+                ("early-last", 1.0, 1.5),
+            ],
+        );
         let before = shown_pieces(&project);
         assert_eq!(before[0].0, "late-first early-last");
         assert_eq!(before[1].0, "second-clip");
@@ -3015,6 +3064,8 @@ mod tests {
         assert_eq!(after[0].0, "Late-first early-last");
         assert_eq!(after[0].3, before[0].3);
         assert_eq!(after[1], before[1]);
+        let source = &project.captions.as_ref().unwrap().segments[0];
+        assert_eq!(source.text, "Late-first second-clip early-last");
     }
 
     fn word_timings(words: &[CaptionWord]) -> Vec<(f32, f32)> {
