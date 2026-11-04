@@ -20,11 +20,15 @@ use objc2_app_kit::{
     NSForegroundColorAttributeName, NSImage, NSImageScaling, NSImageView, NSMenu, NSMenuItem,
     NSStringDrawing, NSTrackingArea, NSTrackingAreaOptions, NSView, NSWindow,
 };
+use objc2_core_graphics::CGAffineTransformMake;
 use objc2_foundation::{
     MainThreadMarker, NSArray, NSData, NSDictionary, NSPoint, NSRect, NSRunLoop, NSSize, NSString,
-    NSTimer,
+    NSTimer, NSValue, ns_string,
 };
-use objc2_quartz_core::{CALayer, CATransaction, kCACornerCurveContinuous};
+use objc2_quartz_core::{
+    CABasicAnimation, CALayer, CAMediaTiming, CAMediaTimingFunction, CATransaction, CATransform3D,
+    kCACornerCurveContinuous, kCAMediaTimingFunctionEaseOut,
+};
 
 use super::mac::{post, set_status_mode};
 use super::{TrayItem, mode_heading, mode_name, mode_picker_icon};
@@ -55,6 +59,8 @@ const PILL_RADIUS: f64 = 14.0;
 const CAPSULE_RADIUS: f64 = 17.0;
 /// Optical nudge for a pill's glyph, left of its centred position.
 const STUDIO_ICON_NUDGE: f64 = -1.0;
+const PRESS_SCALE: f64 = 0.85;
+const PRESS_DURATION: f64 = 0.25;
 
 thread_local! {
     /// The live picker and its menu item, read by the key hook. Set on every rebuild.
@@ -103,7 +109,8 @@ struct PickerIvars {
     selected: Cell<usize>,
     focused: Cell<Option<usize>>,
     flash: Cell<bool>,
-    pressed: Cell<bool>,
+    /// The pill the mouse went down on, until mouse-up.
+    pressed: Cell<Option<usize>>,
     /// `actions` index of the first pill; pill `i` posts `tag_base + i`.
     tag_base: isize,
     capsule: RefCell<Option<Retained<CALayer>>>,
@@ -178,17 +185,19 @@ define_class!(
 
         #[unsafe(method(mouseExited:))]
         fn mouse_exited(&self, _event: &NSEvent) {
-            if self.ivars().pressed.get() {
-                return;
-            }
+            self.release_press();
             self.ivars().focused.set(None);
             self.refresh();
         }
 
         #[unsafe(method(mouseDown:))]
         fn mouse_down(&self, event: &NSEvent) {
-            self.ivars().pressed.set(true);
-            self.update_focus(self.pill_at(event));
+            let hit = self.pill_at(event);
+            self.ivars().pressed.set(hit);
+            self.update_focus(hit);
+            if let Some(i) = hit {
+                self.set_icon_pressed(i, true);
+            }
         }
 
         #[unsafe(method(mouseDragged:))]
@@ -198,7 +207,7 @@ define_class!(
 
         #[unsafe(method(mouseUp:))]
         fn mouse_up(&self, event: &NSEvent) {
-            self.ivars().pressed.set(false);
+            self.release_press();
             // The release point chooses the pill; a release outside the menu
             // changes nothing, so the shown and applied modes stay in sync.
             match self.pill_at(event) {
@@ -220,7 +229,7 @@ impl ModePickerView {
             selected: Cell::new(selected),
             focused: Cell::new(None),
             flash: Cell::new(false),
-            pressed: Cell::new(false),
+            pressed: Cell::new(None),
             tag_base,
             capsule: RefCell::new(None),
             pills: RefCell::new(Vec::new()),
@@ -269,6 +278,7 @@ impl ModePickerView {
                 view.setImage(Some(&image));
             }
             view.setImageScaling(NSImageScaling::ScaleNone);
+            view.setWantsLayer(true);
             this.addSubview(&view);
             this.ivars().icons.borrow_mut().push(view);
         }
@@ -320,10 +330,16 @@ impl ModePickerView {
     }
 
     fn clear_focus(&self) {
-        if self.ivars().pressed.get() {
-            return;
-        }
+        self.release_press();
         self.update_focus(None);
+    }
+
+    /// Ends any mouse press, animating its icon back to rest. Safe to call when
+    /// no press is active.
+    fn release_press(&self) {
+        if let Some(i) = self.ivars().pressed.replace(None) {
+            self.set_icon_pressed(i, false);
+        }
     }
 
     // -- geometry ----------------------------------------------------------
@@ -392,6 +408,35 @@ impl ModePickerView {
     fn refresh(&self) {
         self.sync();
         self.setNeedsDisplay(true);
+    }
+
+    /// Scales pill `i`'s icon about its center, animated, for a press or release.
+    fn set_icon_pressed(&self, i: usize, pressed: bool) {
+        let icons = self.ivars().icons.borrow();
+        let Some(layer) = icons.get(i).and_then(|icon| icon.layer()) else {
+            return;
+        };
+        let scale = if pressed { PRESS_SCALE } else { 1.0 };
+        let size = layer.bounds().size;
+        let inset_x = size.width * (1.0 - scale) / 2.0;
+        let inset_y = size.height * (1.0 - scale) / 2.0;
+        let to = CATransform3D::new_affine_transform(CGAffineTransformMake(
+            scale, 0.0, 0.0, scale, inset_x, inset_y,
+        ));
+        let from =
+            unsafe { layer.presentationLayer() }.map_or(layer.transform(), |p| p.transform());
+        layer.setTransform(to);
+
+        let anim = CABasicAnimation::animationWithKeyPath(Some(ns_string!("transform")));
+        unsafe {
+            anim.setFromValue(Some(&NSValue::new(from)));
+            anim.setToValue(Some(&NSValue::new(to)));
+        }
+        anim.setDuration(PRESS_DURATION);
+        anim.setTimingFunction(Some(&CAMediaTimingFunction::functionWithName(unsafe {
+            kCAMediaTimingFunctionEaseOut
+        })));
+        layer.addAnimation_forKey(&anim, Some(ns_string!("press")));
     }
 
     /// The only place state becomes layer properties.
@@ -471,17 +516,19 @@ impl ModePickerView {
         let shown = focused.unwrap_or(selected);
 
         let mut font = heading_font();
-        if shown != selected {
+        let color = if shown != selected {
             font = italic(&font);
-        }
+            NSColor::secondaryLabelColor()
+        } else {
+            NSColor::labelColor()
+        };
 
-        let secondary = NSColor::secondaryLabelColor();
         let subtitle = NSString::from_str(mode_heading(PICKER_MODES[shown].0));
         let attrs = NSDictionary::from_slices(
             &[unsafe { NSFontAttributeName }, unsafe {
                 NSForegroundColorAttributeName
             }],
-            &[&*font as &AnyObject, &*secondary as &AnyObject],
+            &[&*font as &AnyObject, &*color as &AnyObject],
         );
 
         let size = unsafe { subtitle.sizeWithAttributes(Some(&attrs)) };
