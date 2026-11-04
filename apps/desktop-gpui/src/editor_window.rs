@@ -2062,6 +2062,7 @@ impl EditorWindow {
                 return false;
             }
             let path = path.clone();
+            crate::transcription::cancel_refinement(&path);
             cx.defer(move |cx| crate::app_windows::editor_closed(&path, window_id, cx));
             true
         });
@@ -2759,6 +2760,35 @@ impl EditorWindow {
         self.transcript.dirty = true;
         self.publish_project();
         cx.notify();
+    }
+
+    /// Swaps refined word times into the project and into every undo entry
+    /// they apply to, so the refinement is not an undo step of its own and
+    /// undoing an earlier edit keeps the refined times.
+    pub(crate) fn land_caption_refinement(
+        &mut self,
+        refined: &crate::transcription::RefinedCaptions,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.project_ready() {
+            return;
+        }
+        let durations = self.clip_display_durations.clone();
+        let changed =
+            crate::transcription::apply_refined_captions(&mut self.project, refined, &durations);
+        self.history.amend_all(|entry| {
+            crate::transcription::apply_refined_captions(entry, refined, &durations);
+        });
+        if !changed {
+            return;
+        }
+        self.caption_sync_signature = self.caption_projection_signature();
+        self.transcript.dirty = true;
+        self.publish_project();
+        self.schedule_save(window, cx);
+        cx.notify();
+        window.refresh();
     }
 
     fn synchronize_caption_track(&mut self, force: bool) {
@@ -3693,6 +3723,58 @@ impl EditorWindow {
             + timeline::content_width(viewport_width) * fraction.clamp(0.0, 1.0) as f32;
         let time = self.time_at(x, viewport_width);
         self.seek_to_time(time, cx);
+    }
+
+    /// Harness only (`CAP_GPUI_AUTO_FRAME_STATS`): redraws every frame for
+    /// `seconds` and logs the intervals between frames, so background work
+    /// can be checked for jank in the editor.
+    pub fn measure_frame_times(
+        &mut self,
+        seconds: f64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let started = std::time::Instant::now();
+        let refining = crate::transcription::ui_snapshot(&self.project_path).refining;
+        tracing::info!(seconds, refining, "frame stats: start");
+        self.frame_stats_tick(started, started, seconds, Vec::new(), window, cx);
+    }
+
+    fn frame_stats_tick(
+        &mut self,
+        started: std::time::Instant,
+        last: std::time::Instant,
+        seconds: f64,
+        mut intervals: Vec<f64>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let now = std::time::Instant::now();
+        if last != started {
+            intervals.push(now.duration_since(last).as_secs_f64() * 1000.0);
+        }
+        if now.duration_since(started).as_secs_f64() >= seconds {
+            intervals.sort_by(f64::total_cmp);
+            let at = |share: f64| {
+                intervals
+                    .get(((intervals.len() as f64 - 1.0) * share).round() as usize)
+                    .copied()
+                    .unwrap_or(0.0)
+            };
+            tracing::info!(
+                frames = intervals.len(),
+                p50_ms = format!("{:.2}", at(0.5)),
+                p99_ms = format!("{:.2}", at(0.99)),
+                max_ms = format!("{:.2}", at(1.0)),
+                refining = crate::transcription::ui_snapshot(&self.project_path).refining,
+                "frame stats"
+            );
+            return;
+        }
+        cx.on_next_frame(window, move |this, window, cx| {
+            this.frame_stats_tick(started, now, seconds, intervals, window, cx);
+        });
+        window.request_animation_frame();
     }
 
     /// Harness only (`CAP_GPUI_AUTO_PLAYBACK`): stop and emit the run's

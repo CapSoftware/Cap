@@ -55,7 +55,13 @@ use crate::i18n::tr;
 use crate::{editor_timeline::clip_timeline_offsets, store};
 
 mod align;
+mod refine;
 mod verbatim;
+
+pub use refine::{
+    RefinedCaptions, RefinementRequest, apply_refined_captions, clear_refinement_request,
+    lower_thread_priority, refine_blocking, refinement_request, save_refinement_request,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct VerbatimOptions {
@@ -68,6 +74,17 @@ pub(crate) struct VerbatimOptions {
 }
 
 impl VerbatimOptions {
+    /// The steps that run before the transcript is shown. They cost nothing
+    /// over plain recognition; the rest wait for [`refine_blocking`].
+    pub fn first_pass(self) -> Self {
+        Self {
+            recover_speech: false,
+            align_words: false,
+            snap_to_pauses: false,
+            ..self
+        }
+    }
+
     #[cfg(test)]
     pub const BASELINE: Self = Self {
         parakeet_subword_words: false,
@@ -220,6 +237,8 @@ struct Hub {
     deleting: Option<String>,
     generating: HashSet<PathBuf>,
     generation_errors: HashMap<PathBuf, String>,
+    /// Word-timing refinements running, with the flag that stops each.
+    refining: HashMap<PathBuf, Arc<AtomicBool>>,
 }
 
 impl Hub {
@@ -251,6 +270,7 @@ pub struct CaptionsUiSnapshot {
     pub deleting: Option<String>,
     pub generating: bool,
     pub generation_error: Option<String>,
+    pub refining: bool,
 }
 
 pub fn ui_snapshot(project_path: &Path) -> CaptionsUiSnapshot {
@@ -261,6 +281,7 @@ pub fn ui_snapshot(project_path: &Path) -> CaptionsUiSnapshot {
         deleting: hub.deleting.clone(),
         generating: hub.generating.contains(project_path),
         generation_error: hub.generation_errors.get(project_path).cloned(),
+        refining: hub.refining.contains_key(project_path),
     }
 }
 
@@ -399,6 +420,9 @@ pub fn begin_generation(project_path: &Path) -> bool {
     if hub.generating.contains(project_path) {
         return false;
     }
+    if let Some(stop) = hub.refining.remove(project_path) {
+        stop.store(true, Ordering::Relaxed);
+    }
     hub.generation_errors.remove(project_path);
     hub.generating.insert(project_path.to_path_buf());
     true
@@ -417,6 +441,41 @@ pub fn finish_generation(project_path: &Path, error: Option<String>) {
         }
     }
 }
+
+/// Claims the project's one refinement slot; `None` while one already runs.
+pub fn begin_refinement(project_path: &Path) -> Option<Arc<AtomicBool>> {
+    let mut hub = hub();
+    if hub.refining.contains_key(project_path) || hub.generating.contains(project_path) {
+        return None;
+    }
+    let stop = Arc::new(AtomicBool::new(false));
+    hub.refining
+        .insert(project_path.to_path_buf(), Arc::clone(&stop));
+    Some(stop)
+}
+
+pub fn finish_refinement(project_path: &Path, stop: &Arc<AtomicBool>) {
+    let mut hub = hub();
+    if hub
+        .refining
+        .get(project_path)
+        .is_some_and(|current| Arc::ptr_eq(current, stop))
+    {
+        hub.refining.remove(project_path);
+    }
+}
+
+/// Stops a running refinement, for a closed editor or a deleted project. The
+/// request stays on disk, so it resumes when the project opens again.
+pub fn cancel_refinement(project_path: &Path) {
+    if let Some(stop) = hub().refining.remove(project_path) {
+        stop.store(true, Ordering::Relaxed);
+    }
+}
+
+/// Threads each refinement model gets: fewer than recognition's four, so the
+/// editor stays smooth while it runs.
+const REFINEMENT_THREADS: usize = 2;
 
 // ---------------------------------------------------------------------------
 // Downloads
@@ -907,19 +966,10 @@ async fn download_aligner(path: &Path) -> Result<(), String> {
     result
 }
 
-/// The aligner, downloaded on first use when given a `runtime` to download
-/// on. `None` when it cannot be had now: not downloaded yet and no
-/// `runtime`, offline, or a platform without ONNX Runtime.
-#[derive(Debug, Clone, Copy)]
-enum AlignerUse {
-    AlongsideRecognition,
-    AfterRecognition,
-}
-
-fn load_word_aligner(
-    runtime: Option<&tokio::runtime::Handle>,
-    usage: AlignerUse,
-) -> Option<align::AcousticPool> {
+/// The aligner, downloaded on first use. `None` when it cannot be had now:
+/// offline, no async runtime to download on, or a platform without ONNX
+/// Runtime.
+fn load_word_aligner(runtime: Option<&tokio::runtime::Handle>) -> Option<align::Acoustic> {
     if !supports_parakeet() {
         return None;
     }
@@ -936,12 +986,9 @@ fn load_word_aligner(
             }
         }
     }
-    match usage {
-        AlignerUse::AlongsideRecognition => align::AcousticPool::load(&path),
-        AlignerUse::AfterRecognition => align::AcousticPool::load_alone(&path),
-    }
-    .inspect_err(|error| tracing::warn!("{error}"))
-    .ok()
+    align::Acoustic::load(&path, REFINEMENT_THREADS)
+        .inspect_err(|error| tracing::warn!("{error}"))
+        .ok()
 }
 
 fn aligns_words_in(language: &str, groups: &[Vec<CaptionWord>]) -> bool {
@@ -963,71 +1010,6 @@ fn transcript_is_english<'a>(
     words: impl IntoIterator<Item = &'a CaptionWord>,
 ) -> bool {
     matches!(language, "en" | "auto") && cap_project::caption_words::reads_as_english(words)
-}
-
-/// Runs `recognize` and finishes its words with the word aligner.
-///
-/// With `overlap` (Parakeet, which leaves most cores idle) an already
-/// downloaded aligner (`ready`) hears the whole recording while recognition
-/// runs, and stops early once the words turn out not to be English. Whisper
-/// keeps the cores busy, so without `overlap` the aligner only hears the
-/// windows around the words, after recognition. Either way a first download
-/// (`fetch`) waits until the words read as English.
-fn recognize_and_finish<A: align::Emissions + Send>(
-    samples: &[f32],
-    language: &str,
-    options: &VerbatimOptions,
-    tuning: &Tuning,
-    overlap: bool,
-    ready: impl FnOnce() -> Option<A> + Send,
-    fetch: impl FnOnce() -> Option<A>,
-    recognize: impl FnOnce() -> Result<Vec<Vec<CaptionWord>>, String>,
-) -> Result<Vec<Vec<CaptionWord>>, String> {
-    let stop = AtomicBool::new(false);
-    let may_align = options.align_words && matches!(language, "en" | "auto");
-    std::thread::scope(|scope| {
-        let stop = &stop;
-        let hearing =
-            (overlap && may_align).then(|| scope.spawn(move || hear_with(samples, ready, stop)));
-        let groups = recognize();
-        let aligns = may_align
-            && groups
-                .as_ref()
-                .is_ok_and(|groups| aligns_words_in(language, groups));
-        if !aligns {
-            stop.store(true, Ordering::Relaxed);
-        }
-        let mut heard = hearing.and_then(|hearing| hearing.join().ok()).flatten();
-        let mut fetched = None;
-        if heard.is_none() && aligns {
-            if overlap {
-                heard = hear_with(samples, fetch, stop);
-            } else {
-                fetched = fetch();
-            }
-        }
-        let aligner = match (heard.as_mut(), fetched.as_mut()) {
-            (Some(heard), _) => Some(heard as &mut dyn align::Emissions),
-            (None, Some(fetched)) => Some(fetched as &mut dyn align::Emissions),
-            (None, None) => None,
-        }
-        .filter(|_| aligns);
-        Ok(finish_words_tuned(
-            groups?, samples, options, aligner, tuning,
-        ))
-    })
-}
-
-fn hear_with<A: align::Emissions>(
-    samples: &[f32],
-    aligner: impl FnOnce() -> Option<A>,
-    stop: &AtomicBool,
-) -> Option<align::Heard> {
-    let mut acoustic = aligner()?;
-    align::Heard::hear(samples, &mut acoustic, stop)
-        .inspect_err(|error| tracing::warn!("Word alignment failed: {error}"))
-        .ok()
-        .flatten()
 }
 
 fn remove_word_aligner_if_unused() {
@@ -1774,13 +1756,8 @@ fn parakeet_chunk_ranges(samples: &[f32], sample_rate: usize) -> Vec<std::ops::R
     ranges
 }
 
-/// `process_with_parakeet` (`captions.rs:1202-1302`).
 #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
-fn process_with_parakeet(
-    samples: &[f32],
-    model_dir: &str,
-    options: &VerbatimOptions,
-) -> Result<Vec<Vec<CaptionWord>>, String> {
+fn cached_parakeet(model_dir: &str) -> Result<Arc<Mutex<ParakeetTDT>>, String> {
     let cached_model = {
         let guard = PARAKEET_CONTEXT
             .lock()
@@ -1794,99 +1771,144 @@ fn process_with_parakeet(
         })
     };
 
-    let model_arc = if let Some(model) = cached_model {
+    if let Some(model) = cached_model {
         tracing::info!("Reusing cached Parakeet TDT model");
-        model
-    } else {
-        tracing::info!("Loading Parakeet TDT model from: {model_dir}");
-        cap_camera_effects::initialize_onnx_runtime().map_err(|error| format!("{error:#}"))?;
-        let model = ParakeetTDT::from_pretrained(model_dir, None).map_err(|e| format!("{e}"))?;
-        let loaded_model = Arc::new(Mutex::new(model));
-
-        let mut guard = PARAKEET_CONTEXT
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        if let Some(cached) = guard
-            .as_ref()
-            .filter(|cached| cached.model_dir == model_dir)
-        {
-            Arc::clone(&cached.model)
-        } else {
-            *guard = Some(CachedParakeetContext {
-                model_dir: model_dir.to_string(),
-                model: Arc::clone(&loaded_model),
-            });
-            loaded_model
-        }
-    };
-
-    if samples.is_empty() {
-        return Ok(Vec::new());
+        return Ok(model);
     }
+    tracing::info!("Loading Parakeet TDT model from: {model_dir}");
+    let loaded_model = Arc::new(Mutex::new(load_parakeet(model_dir, None)?));
+    let mut guard = PARAKEET_CONTEXT
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    if let Some(cached) = guard
+        .as_ref()
+        .filter(|cached| cached.model_dir == model_dir)
+    {
+        Ok(Arc::clone(&cached.model))
+    } else {
+        *guard = Some(CachedParakeetContext {
+            model_dir: model_dir.to_string(),
+            model: Arc::clone(&loaded_model),
+        });
+        Ok(loaded_model)
+    }
+}
+
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+fn load_parakeet(model_dir: &str, threads: Option<usize>) -> Result<ParakeetTDT, String> {
+    cap_camera_effects::initialize_onnx_runtime().map_err(|error| format!("{error:#}"))?;
+    let config =
+        threads.map(|threads| parakeet_rs::ExecutionConfig::default().with_intra_threads(threads));
+    ParakeetTDT::from_pretrained(model_dir, config).map_err(|e| format!("{e}"))
+}
+
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+fn decode_parakeet(
+    parakeet: &mut ParakeetTDT,
+    samples: &[f32],
+    range: Range<usize>,
+    padding: usize,
+    subwords: bool,
+) -> Result<Vec<CaptionWord>, String> {
     let rate = WHISPER_SAMPLE_RATE as usize;
-    let mode = if options.parakeet_subword_words {
+    let mode = if subwords {
         TimestampMode::Tokens
     } else {
         TimestampMode::Words
     };
+    let mut audio = Vec::with_capacity(range.len() + 2 * padding);
+    audio.resize(padding, 0.0);
+    audio.extend_from_slice(&samples[range.clone()]);
+    audio.resize(audio.len() + padding, 0.0);
+    let offset = (range.start as f32 - padding as f32) / rate as f32;
+    let result = parakeet
+        .transcribe_samples(audio, WHISPER_SAMPLE_RATE, 1, Some(mode))
+        .map_err(|e| format!("Parakeet transcription failed: {e}"))?;
+    let timed = result.tokens.into_iter().map(|token| CaptionWord {
+        text: token.text,
+        start: token.start + offset,
+        end: token.end + offset,
+    });
+    Ok(if subwords {
+        verbatim::words_from_subword_tokens(timed)
+    } else {
+        timed.collect()
+    })
+}
+
+/// `process_with_parakeet` (`captions.rs:1202-1302`).
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+fn process_with_parakeet(
+    samples: &[f32],
+    model_dir: &str,
+    options: &VerbatimOptions,
+) -> Result<Vec<Vec<CaptionWord>>, String> {
+    let model_arc = cached_parakeet(model_dir)?;
+    if samples.is_empty() {
+        return Ok(Vec::new());
+    }
     let mut parakeet = model_arc
         .lock()
         .map_err(|e| format!("Failed to lock Parakeet model: {e}"))?;
-    let mut decode = |range: Range<usize>, padding: usize| -> Result<Vec<CaptionWord>, String> {
-        let mut audio = Vec::with_capacity(range.len() + 2 * padding);
-        audio.resize(padding, 0.0);
-        audio.extend_from_slice(&samples[range.clone()]);
-        audio.resize(audio.len() + padding, 0.0);
-        let offset = (range.start as f32 - padding as f32) / rate as f32;
-        let result = parakeet
-            .transcribe_samples(audio, WHISPER_SAMPLE_RATE, 1, Some(mode))
-            .map_err(|e| format!("Parakeet transcription failed: {e}"))?;
-        let timed = result.tokens.into_iter().map(|token| CaptionWord {
-            text: token.text,
-            start: token.start + offset,
-            end: token.end + offset,
-        });
-        Ok(if options.parakeet_subword_words {
-            verbatim::words_from_subword_tokens(timed)
-        } else {
-            timed.collect()
-        })
-    };
-
     let mut words = Vec::new();
-    for range in parakeet_chunk_ranges(samples, rate) {
-        words.extend(decode(range, 0)?);
+    for range in parakeet_chunk_ranges(samples, WHISPER_SAMPLE_RATE as usize) {
+        words.extend(decode_parakeet(
+            &mut parakeet,
+            samples,
+            range,
+            0,
+            options.parakeet_subword_words,
+        )?);
     }
-    let decoded = words.len();
-    if options.recover_speech {
-        let loudness = verbatim::Loudness::new(samples, WHISPER_SAMPLE_RATE);
-        for span in verbatim::uncovered_speech(&words, &loudness) {
-            let first = ((span.0 * rate as f64) as usize).min(samples.len());
-            let last = ((span.1 * rate as f64) as usize).min(samples.len());
-            if last <= first {
-                continue;
-            }
-            let Some(voiced) = verbatim::span_voicing(samples, WHISPER_SAMPLE_RATE, span) else {
-                continue;
-            };
-            let mut found = Vec::new();
-            for part in parakeet_chunk_ranges(&samples[first..last], rate) {
-                match decode(first + part.start..first + part.end, rate / 2) {
-                    Ok(part_words) => found.extend(part_words),
-                    Err(error) => tracing::warn!("Re-decoding unheard speech failed: {error}"),
-                }
-            }
-            verbatim::insert_recovered(&mut words, found, span, voiced);
-        }
-    }
-
-    tracing::info!(
-        "Parakeet produced {} words ({} recovered from unheard speech)",
-        words.len(),
-        words.len().saturating_sub(decoded)
-    );
-
+    tracing::info!("Parakeet produced {} words", words.len());
     Ok(vec![words])
+}
+
+/// The int8 Parakeet model can stop emitting after a pause and lose the rest
+/// of a chunk. Sound no word covers is decoded again on its own, in bounded
+/// chunks; a failed span keeps the words already heard.
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+fn recover_unheard_speech(
+    samples: &[f32],
+    words: &mut Vec<CaptionWord>,
+    parakeet: &mut ParakeetTDT,
+    subwords: bool,
+    stop: &AtomicBool,
+) {
+    let rate = WHISPER_SAMPLE_RATE as usize;
+    let before = words.len();
+    let loudness = verbatim::Loudness::new(samples, WHISPER_SAMPLE_RATE);
+    for span in verbatim::uncovered_speech(words, &loudness) {
+        if stop.load(Ordering::Relaxed) {
+            return;
+        }
+        let first = ((span.0 * rate as f64) as usize).min(samples.len());
+        let last = ((span.1 * rate as f64) as usize).min(samples.len());
+        if last <= first {
+            continue;
+        }
+        let Some(voiced) = verbatim::span_voicing(samples, WHISPER_SAMPLE_RATE, span) else {
+            continue;
+        };
+        let mut found = Vec::new();
+        for part in parakeet_chunk_ranges(&samples[first..last], rate) {
+            match decode_parakeet(
+                parakeet,
+                samples,
+                first + part.start..first + part.end,
+                rate / 2,
+                subwords,
+            ) {
+                Ok(part_words) => found.extend(part_words),
+                Err(error) => tracing::warn!("Re-decoding unheard speech failed: {error}"),
+            }
+        }
+        verbatim::insert_recovered(words, found, span, voiced);
+    }
+    tracing::info!(
+        "Recovered {} words from unheard speech",
+        words.len().saturating_sub(before)
+    );
 }
 
 #[cfg(test)]
@@ -1946,7 +1968,14 @@ fn finish_words(
     options: &VerbatimOptions,
     aligner: Option<&mut dyn align::Emissions>,
 ) -> Vec<Vec<CaptionWord>> {
-    finish_words_tuned(groups, samples, options, aligner, &TUNING)
+    finish_words_tuned(
+        groups,
+        samples,
+        options,
+        aligner,
+        &TUNING,
+        &AtomicBool::new(false),
+    )
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1964,6 +1993,7 @@ fn finish_words_tuned(
     options: &VerbatimOptions,
     aligner: Option<&mut dyn align::Emissions>,
     tuning: &Tuning,
+    stop: &AtomicBool,
 ) -> Vec<Vec<CaptionWord>> {
     let groups: Vec<Vec<CaptionWord>> = groups
         .into_iter()
@@ -1985,7 +2015,8 @@ fn finish_words_tuned(
     let lengths: Vec<usize> = groups.iter().map(Vec::len).collect();
     let mut words: Vec<CaptionWord> = groups.into_iter().flatten().collect();
     if let Some(acoustic) = aligner.filter(|_| options.align_words)
-        && let Err(error) = align::align(&mut words, samples, WHISPER_SAMPLE_RATE, acoustic)
+        && let Err(error) = align::align(&mut words, samples, WHISPER_SAMPLE_RATE, acoustic, stop)
+        && error != align::STOPPED
     {
         tracing::warn!("Word alignment failed, keeping engine timings: {error}");
     }
@@ -2088,7 +2119,7 @@ pub fn transcribe_blocking(
     language: &str,
     timeline: Option<&TimelineConfiguration>,
     recording_durations: &[f64],
-) -> Result<Vec<CaptionSegment>, String> {
+) -> Result<Transcript, String> {
     let requested = model;
     // A model being downloaded should not be selected as a fallback, even
     // if an older copy still exists at its final path.
@@ -2116,41 +2147,24 @@ pub fn transcribe_blocking(
     let result =
         transcribe_project_with(project_path, timeline, recording_durations, |audio_path| {
             let samples = read_wav_16k_mono(audio_path)?;
-            let options = VerbatimOptions::default();
-            let runtime = tokio::runtime::Handle::try_current().ok();
-            let groups = recognize_and_finish(
+            let options = VerbatimOptions::default().first_pass();
+            let groups = if is_parakeet_model(model) {
+                tracing::info!("Using Parakeet TDT engine");
+                process_with_parakeet(&samples, model_file.to_string_lossy().as_ref(), &options)?
+            } else {
+                tracing::info!("Using Whisper engine");
+                let hints = transcription_hints();
+                let context = get_whisper_context(model_file.to_string_lossy().as_ref())?;
+                process_with_whisper(&samples, context, language, &hints, &options)?
+            };
+            let groups = finish_words_tuned(
+                groups,
                 &samples,
-                language,
                 &options,
+                None,
                 &TUNING,
-                is_parakeet_model(model),
-                || load_word_aligner(None, AlignerUse::AlongsideRecognition),
-                || {
-                    load_word_aligner(
-                        runtime.as_ref(),
-                        if is_parakeet_model(model) {
-                            AlignerUse::AlongsideRecognition
-                        } else {
-                            AlignerUse::AfterRecognition
-                        },
-                    )
-                },
-                || {
-                    if is_parakeet_model(model) {
-                        tracing::info!("Using Parakeet TDT engine");
-                        process_with_parakeet(
-                            &samples,
-                            model_file.to_string_lossy().as_ref(),
-                            &options,
-                        )
-                    } else {
-                        tracing::info!("Using Whisper engine");
-                        let hints = transcription_hints();
-                        let context = get_whisper_context(model_file.to_string_lossy().as_ref())?;
-                        process_with_whisper(&samples, context, language, &hints, &options)
-                    }
-                },
-            )?;
+                &AtomicBool::new(false),
+            );
             Ok(caption_segments_from_groups(groups, language))
         });
     if is_parakeet_model(model) {
@@ -2158,17 +2172,30 @@ pub fn transcribe_blocking(
     } else {
         release_whisper_context_after_transcription();
     }
-    result
+    Ok(Transcript {
+        segments: result?,
+        refinement: RefinementRequest::new(
+            model,
+            language,
+            &cap_project::transcription_source_ranges(timeline, recording_durations),
+        ),
+    })
 }
 
-/// Extracts the project's transcription audio to a temporary 16 kHz mono WAV
-/// and runs `engine` on it.
-fn transcribe_project_with(
+/// The first pass's captions, shown at once, and what refines them.
+pub struct Transcript {
+    pub segments: Vec<CaptionSegment>,
+    pub refinement: RefinementRequest,
+}
+
+/// Extracts `ranges` of the project's audio, as one 16 kHz mono WAV, and runs
+/// `engine` on it with where each range landed.
+fn with_transcription_audio<T>(
     project_path: &Path,
-    timeline: Option<&TimelineConfiguration>,
+    ranges: &[Range<f64>],
     recording_durations: &[f64],
-    engine: impl FnOnce(&Path) -> Result<Vec<CaptionSegment>, String>,
-) -> Result<Vec<CaptionSegment>, String> {
+    engine: impl FnOnce(&Path, &[TranscriptionAudioOffset]) -> Result<T, String>,
+) -> Result<T, String> {
     ffmpeg::init().map_err(|e| format!("Failed to initialise ffmpeg: {e}"))?;
     let meta = RecordingMeta::load_for_project(project_path)
         .map_err(|e| format!("Failed to read recording metadata: {e}"))?;
@@ -2188,7 +2215,7 @@ fn transcribe_project_with(
     let result = (|| {
         let mut samples = Vec::new();
         let mut offsets = Vec::new();
-        for range in cap_project::transcription_source_ranges(timeline, recording_durations) {
+        for range in ranges.iter().cloned() {
             let start = samples.len();
             if !extract_project_audio(
                 &meta,
@@ -2214,12 +2241,28 @@ fn transcribe_project_with(
         }
         write_wav_16k_mono(&samples, &audio_path)?;
         drop(samples);
-        Ok(restore_source_timestamps(engine(&audio_path)?, &offsets))
+        engine(&audio_path, &offsets)
     })();
 
     let _ = std::fs::remove_dir_all(&temp_dir);
+    result
+}
 
-    let segments = result?;
+/// [`with_transcription_audio`] over the timeline's ranges, with `engine`'s
+/// segments moved back to source time.
+fn transcribe_project_with(
+    project_path: &Path,
+    timeline: Option<&TimelineConfiguration>,
+    recording_durations: &[f64],
+    engine: impl FnOnce(&Path) -> Result<Vec<CaptionSegment>, String>,
+) -> Result<Vec<CaptionSegment>, String> {
+    let ranges = cap_project::transcription_source_ranges(timeline, recording_durations);
+    let segments = with_transcription_audio(
+        project_path,
+        &ranges,
+        recording_durations,
+        |path, offsets| Ok(restore_source_timestamps(engine(path)?, offsets)),
+    )?;
     if segments.is_empty() {
         return Err("No speech detected in the audio".to_string());
     }
@@ -3129,38 +3172,106 @@ mod tests {
         assert_eq!(track[0].text, "hello");
     }
 
-    #[test]
-    fn the_aligner_is_downloaded_only_once_the_words_read_as_english() {
-        let samples = vec![0.0f32; 16_000];
-        let options = VerbatimOptions::default();
-        let fetches = std::cell::Cell::new(0);
-        let transcribe = |text: &str| {
-            recognize_and_finish::<align::Heard>(
-                &samples,
-                "auto",
-                &options,
-                &TUNING,
-                true,
-                || None,
-                || {
-                    fetches.set(fetches.get() + 1);
-                    None
-                },
-                || {
-                    Ok(vec![vec![CaptionWord {
-                        text: text.to_string(),
-                        start: 0.1,
-                        end: 0.4,
-                    }]])
-                },
-            )
-            .unwrap()
-        };
+    fn cut_project() -> ProjectConfiguration {
+        let mut project = ProjectConfiguration::default();
+        apply_caption_result(
+            &mut project,
+            vec![caption(
+                "segment-0",
+                1.0,
+                3.0,
+                &[("so", 1.0, 1.4), ("um", 1.4, 2.0), ("yes", 2.0, 3.0)],
+            )],
+            "en",
+            &[10.0],
+            10.0,
+        );
+        let timeline = project.timeline.as_mut().unwrap();
+        let mut tail = timeline.segments[0].clone();
+        timeline.segments[0].end = 1.4;
+        tail.start = 2.0;
+        timeline.segments.push(tail);
+        project
+    }
 
-        transcribe("Hallo Welt");
-        assert_eq!(fetches.get(), 0);
-        transcribe("the");
-        assert_eq!(fetches.get(), 1);
+    #[test]
+    fn a_refinement_landing_after_a_cut_keeps_the_cut_and_uses_the_refined_times() {
+        let mut project = cut_project();
+        let clips_before = project.timeline.as_ref().unwrap().segments.clone();
+        let input = project.captions.as_ref().unwrap().segments.clone();
+        let refined_segments = vec![caption(
+            "segment-0",
+            1.05,
+            2.6,
+            &[("so", 1.05, 1.3), ("um", 1.5, 1.8), ("yes", 2.1, 2.6)],
+        )];
+        let refined = RefinedCaptions::new(&input, refined_segments.clone());
+
+        assert!(apply_refined_captions(&mut project, &refined, &[10.0]));
+
+        let timeline = project.timeline.as_ref().unwrap();
+        assert_eq!(timeline.segments.len(), clips_before.len());
+        for (after, before) in timeline.segments.iter().zip(&clips_before) {
+            assert_eq!((after.start, after.end), (before.start, before.end));
+        }
+        let captions = &project.captions.as_ref().unwrap().segments;
+        assert_eq!(captions[0].words[0].start, 1.05);
+        assert_eq!(captions[0].words[2].end, 2.6);
+        let mut expected = timeline.clone();
+        expected.caption_segments =
+            derive_caption_track_segments(&refined_segments, timeline, &[10.0]);
+        let derived = |segments: &[cap_project::CaptionTrackSegment]| -> Vec<(String, f32, f32)> {
+            segments
+                .iter()
+                .flat_map(|segment| &segment.words)
+                .map(|word| (word.text.clone(), word.start, word.end))
+                .collect()
+        };
+        assert_eq!(
+            derived(&timeline.caption_segments),
+            derived(&expected.caption_segments)
+        );
+        assert!(
+            timeline
+                .caption_segments
+                .iter()
+                .flat_map(|segment| &segment.words)
+                .all(|word| word.text != "um"),
+            "the cut word stays cut"
+        );
+    }
+
+    #[test]
+    fn a_refinement_keeps_caption_edits_made_while_it_ran() {
+        let mut project = cut_project();
+        let input = project.captions.as_ref().unwrap().segments.clone();
+        project.captions.as_mut().unwrap().segments[0].words[2].text = "yeah".to_string();
+        let refined = RefinedCaptions::new(
+            &input,
+            vec![caption(
+                "segment-0",
+                0.6,
+                2.6,
+                &[
+                    ("uh", 0.6, 0.9),
+                    ("so", 1.05, 1.3),
+                    ("um", 1.5, 1.8),
+                    ("yes", 2.1, 2.6),
+                ],
+            )],
+        );
+
+        assert!(apply_refined_captions(&mut project, &refined, &[10.0]));
+
+        let words = &project.captions.as_ref().unwrap().segments[0].words;
+        let words: Vec<(&str, f32, f32)> = words
+            .iter()
+            .map(|word| (word.text.as_str(), word.start, word.end))
+            .collect();
+        assert_eq!(
+            words,
+            vec![("so", 1.05, 1.3), ("um", 1.5, 1.8), ("yeah", 2.0, 3.0)]
+        );
     }
 
     #[test]

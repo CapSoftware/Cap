@@ -594,6 +594,10 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             "Playful caps that pop in with a vibrant accent.",
         ),
         (
+            tr::editor::tabs::captions::refining_word_timings(),
+            "Refining word timings…",
+        ),
+        (
             tr::editor::tabs::captions::regenerate(),
             "Regenerate Captions",
         ),

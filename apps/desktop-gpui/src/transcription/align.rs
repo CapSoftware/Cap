@@ -10,17 +10,6 @@ pub(super) trait Emissions {
         samples: &[f32],
         start_seconds: f64,
     ) -> Result<(Vec<f32>, usize), String>;
-
-    /// Several windows at once; implementations may run them in parallel.
-    fn log_probs_many(
-        &mut self,
-        windows: &[(&[f32], f64)],
-    ) -> Result<Vec<(Vec<f32>, usize)>, String> {
-        windows
-            .iter()
-            .map(|(samples, start)| self.log_probs(samples, *start))
-            .collect()
-    }
 }
 impl<T: Emissions + ?Sized> Emissions for &mut T {
     fn log_probs(
@@ -29,13 +18,6 @@ impl<T: Emissions + ?Sized> Emissions for &mut T {
         start_seconds: f64,
     ) -> Result<(Vec<f32>, usize), String> {
         (**self).log_probs(samples, start_seconds)
-    }
-
-    fn log_probs_many(
-        &mut self,
-        windows: &[(&[f32], f64)],
-    ) -> Result<Vec<(Vec<f32>, usize)>, String> {
-        (**self).log_probs_many(windows)
     }
 }
 
@@ -248,16 +230,9 @@ pub(super) struct Acoustic {
 pub(super) enum Acoustic {}
 
 #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-pub(super) type AcousticPool = Acoustic;
-
-#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
 impl Acoustic {
-    pub fn load(_path: &std::path::Path) -> Result<Self, String> {
+    pub fn load(_path: &std::path::Path, _threads: usize) -> Result<Self, String> {
         Err("The word aligner is not available on Intel macOS".to_string())
-    }
-
-    pub fn load_alone(path: &std::path::Path) -> Result<Self, String> {
-        Self::load(path)
     }
 }
 
@@ -274,11 +249,8 @@ impl Emissions for Acoustic {
 
 #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
 impl Acoustic {
-    fn load_with(
-        path: &std::path::Path,
-        threads: usize,
-        shared: &ort::session::builder::PrepackedWeights,
-    ) -> Result<Self, String> {
+    pub fn load(path: &std::path::Path, threads: usize) -> Result<Self, String> {
+        cap_camera_effects::initialize_onnx_runtime().map_err(|error| format!("{error:#}"))?;
         let failed =
             |error: &dyn std::fmt::Display| format!("Failed to load the word aligner: {error}");
         let session = ort::session::Session::builder()
@@ -289,141 +261,9 @@ impl Acoustic {
             .map_err(|error| failed(&error))?
             .with_intra_threads(threads)
             .map_err(|error| failed(&error))?
-            .with_prepacked_weights(shared)
-            .map_err(|error| failed(&error))?
             .commit_from_file(path)
             .map_err(|error| failed(&error))?;
         Ok(Self { session })
-    }
-}
-
-fn normalize_into(samples: &[f32], target: &mut [f32]) {
-    let count = samples.len().max(1) as f32;
-    let mean = samples.iter().sum::<f32>() / count;
-    let variance = samples.iter().map(|s| (s - mean).powi(2)).sum::<f32>() / count;
-    let scale = 1.0 / (variance + 1e-7).sqrt();
-    for (out, sample) in target.iter_mut().zip(samples) {
-        *out = (sample - mean) * scale;
-    }
-}
-
-fn log_softmax(log_probs: &mut [f32], classes: usize) {
-    for frame in log_probs.chunks_mut(classes.max(1)) {
-        let max = frame.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-        let sum = frame.iter().map(|value| (value - max).exp()).sum::<f32>();
-        let log_sum = max + sum.ln();
-        for value in frame {
-            *value -= log_sum;
-        }
-    }
-}
-
-pub(super) fn output_frames(samples: usize) -> usize {
-    [(10, 5), (3, 2), (3, 2), (3, 2), (3, 2), (2, 2), (2, 2)]
-        .iter()
-        .fold(samples, |length, (kernel, stride)| {
-            length.saturating_sub(*kernel) / stride + usize::from(length >= *kernel)
-        })
-}
-
-/// Separate sessions run separate windows at the same time: one session's
-/// own threads barely speed up a window, but windows are independent.
-#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
-pub(super) struct AcousticPool {
-    sessions: Vec<Acoustic>,
-}
-
-#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
-impl AcousticPool {
-    /// Sized for the cores speech recognition leaves free, since the two
-    /// run at the same time. More sessions cost memory more than they save
-    /// time.
-    pub fn load(path: &std::path::Path) -> Result<Self, String> {
-        let cores = std::thread::available_parallelism().map_or(4, usize::from);
-        let spare = cores.saturating_sub(RECOGNIZER_THREADS).max(2);
-        let count = (spare / 3).clamp(1, MAX_POOL_SESSIONS);
-        Self::load_sized(path, count, spare / count)
-    }
-
-    /// One session on every core, for when nothing else is running.
-    pub fn load_alone(path: &std::path::Path) -> Result<Self, String> {
-        Self::load_sized(path, 1, 0)
-    }
-
-    /// The sessions share one copy of the prepacked weights. Zero `threads`
-    /// leaves the count to ONNX Runtime.
-    pub fn load_sized(
-        path: &std::path::Path,
-        count: usize,
-        threads: usize,
-    ) -> Result<Self, String> {
-        cap_camera_effects::initialize_onnx_runtime().map_err(|error| format!("{error:#}"))?;
-        let shared = ort::session::builder::PrepackedWeights::new();
-        let sessions = (0..count.max(1))
-            .map(|_| Acoustic::load_with(path, threads, &shared))
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(Self { sessions })
-    }
-}
-
-#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
-type WindowEmissions = Result<(Vec<f32>, usize), String>;
-
-#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
-const RECOGNIZER_THREADS: usize = 4;
-#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
-const MAX_POOL_SESSIONS: usize = 2;
-
-#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
-impl Emissions for AcousticPool {
-    fn log_probs(
-        &mut self,
-        samples: &[f32],
-        start_seconds: f64,
-    ) -> Result<(Vec<f32>, usize), String> {
-        self.sessions[0].log_probs(samples, start_seconds)
-    }
-
-    fn log_probs_many(
-        &mut self,
-        windows: &[(&[f32], f64)],
-    ) -> Result<Vec<(Vec<f32>, usize)>, String> {
-        let count = self.sessions.len();
-        let mut results: Vec<Option<WindowEmissions>> = (0..windows.len()).map(|_| None).collect();
-        std::thread::scope(|scope| {
-            let handles: Vec<_> = self
-                .sessions
-                .iter_mut()
-                .enumerate()
-                .map(|(worker, session)| {
-                    scope.spawn(move || {
-                        windows
-                            .iter()
-                            .enumerate()
-                            .skip(worker)
-                            .step_by(count)
-                            .map(|(index, (samples, start))| {
-                                (index, session.log_probs(samples, *start))
-                            })
-                            .collect::<Vec<_>>()
-                    })
-                })
-                .collect();
-            for handle in handles {
-                match handle.join() {
-                    Ok(done) => {
-                        for (index, result) in done {
-                            results[index] = Some(result);
-                        }
-                    }
-                    Err(_) => return,
-                }
-            }
-        });
-        results
-            .into_iter()
-            .map(|result| result.unwrap_or_else(|| Err("Word aligner worker panicked".into())))
-            .collect()
     }
 }
 
@@ -434,8 +274,11 @@ impl Emissions for Acoustic {
         samples: &[f32],
         _start_seconds: f64,
     ) -> Result<(Vec<f32>, usize), String> {
-        let mut input = vec![0.0f32; samples.len()];
-        normalize_into(samples, &mut input);
+        let count = samples.len().max(1) as f32;
+        let mean = samples.iter().sum::<f32>() / count;
+        let variance = samples.iter().map(|s| (s - mean).powi(2)).sum::<f32>() / count;
+        let scale = 1.0 / (variance + 1e-7).sqrt();
+        let input: Vec<f32> = samples.iter().map(|s| (s - mean) * scale).collect();
         let tensor = ort::value::Tensor::from_array(([1usize, input.len()], input))
             .map_err(|error| format!("Failed to build aligner input: {error}"))?;
         let outputs = self
@@ -450,103 +293,15 @@ impl Emissions for Acoustic {
             return Err("Word aligner returned no classes".to_string());
         }
         let mut log_probs = logits.to_vec();
-        log_softmax(&mut log_probs, classes);
+        for frame in log_probs.chunks_mut(classes) {
+            let max = frame.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+            let sum = frame.iter().map(|value| (value - max).exp()).sum::<f32>();
+            let log_sum = max + sum.ln();
+            for value in frame {
+                *value -= log_sum;
+            }
+        }
         Ok((log_probs, classes))
-    }
-}
-
-/// Emissions for a whole recording, heard in fixed chunks before the words
-/// are known, so hearing can run while speech recognition is still going.
-pub(super) struct Heard {
-    log_probs: Vec<f32>,
-    classes: usize,
-}
-
-const SAMPLES_PER_FRAME: usize = 320;
-const RECEPTIVE_SAMPLES: usize = 400;
-const HEARD_CHUNK_FRAMES: usize = 500;
-const HEARD_CONTEXT_FRAMES: usize = 50;
-const HEARD_CHUNKS_PER_BATCH: usize = 16;
-
-impl Heard {
-    #[cfg(test)]
-    pub fn new(log_probs: Vec<f32>, classes: usize) -> Self {
-        Self { log_probs, classes }
-    }
-
-    #[cfg(test)]
-    pub fn into_parts(self) -> (Vec<f32>, usize) {
-        (self.log_probs, self.classes)
-    }
-
-    /// Hears 16 kHz `samples` in 10 s chunks, each run with a second of
-    /// audio either side as context and contributing only its own frames, so
-    /// every frame sits on one global 20 ms grid. Returns `None` once `stop`
-    /// is set.
-    pub fn hear(
-        samples: &[f32],
-        acoustic: &mut dyn Emissions,
-        stop: &std::sync::atomic::AtomicBool,
-    ) -> Result<Option<Self>, String> {
-        let total = output_frames(samples.len());
-        let window = HEARD_CHUNK_FRAMES + 2 * HEARD_CONTEXT_FRAMES;
-        let window_start = |chunk_start: usize| {
-            chunk_start
-                .saturating_sub(HEARD_CONTEXT_FRAMES)
-                .min(total.saturating_sub(window))
-        };
-        let chunks: Vec<std::ops::Range<usize>> = (0..total)
-            .step_by(HEARD_CHUNK_FRAMES)
-            .map(|first| first..(first + HEARD_CHUNK_FRAMES).min(total))
-            .collect();
-        let mut log_probs = Vec::new();
-        let mut classes = 0;
-        for batch in chunks.chunks(HEARD_CHUNKS_PER_BATCH) {
-            if stop.load(std::sync::atomic::Ordering::Relaxed) {
-                return Ok(None);
-            }
-            let audio: Vec<(&[f32], f64)> = batch
-                .iter()
-                .map(|chunk| {
-                    let from = window_start(chunk.start);
-                    let to = (from + window).min(total);
-                    let end = ((to - 1) * SAMPLES_PER_FRAME + RECEPTIVE_SAMPLES).min(samples.len());
-                    (
-                        &samples[from * SAMPLES_PER_FRAME..end],
-                        from as f64 * FRAME_SECONDS,
-                    )
-                })
-                .collect();
-            for (chunk, (probs, count)) in batch.iter().zip(acoustic.log_probs_many(&audio)?) {
-                let skip = chunk.start - window_start(chunk.start);
-                let wanted = (skip + chunk.len()) * count;
-                if count == 0 || probs.len() < wanted {
-                    return Err("The word aligner heard fewer frames than expected".to_string());
-                }
-                classes = count;
-                log_probs.extend_from_slice(&probs[skip * count..wanted]);
-            }
-        }
-        Ok(Some(Self { log_probs, classes }))
-    }
-}
-
-impl Emissions for Heard {
-    fn log_probs(
-        &mut self,
-        samples: &[f32],
-        start_seconds: f64,
-    ) -> Result<(Vec<f32>, usize), String> {
-        if self.classes == 0 {
-            return Err("The word aligner heard nothing".to_string());
-        }
-        let frames = self.log_probs.len() / self.classes;
-        let first = ((start_seconds / FRAME_SECONDS).round() as usize).min(frames);
-        let last = (first + output_frames(samples.len())).min(frames);
-        Ok((
-            self.log_probs[first * self.classes..last * self.classes].to_vec(),
-            self.classes,
-        ))
     }
 }
 
@@ -576,11 +331,14 @@ pub(super) fn windows(words: &[CaptionWord]) -> Vec<std::ops::Range<usize>> {
     ranges
 }
 
+pub(super) const STOPPED: &str = "Word alignment stopped";
+
 pub(super) fn align(
     words: &mut [CaptionWord],
     samples: &[f32],
     rate: u32,
     acoustic: &mut dyn Emissions,
+    stop: &std::sync::atomic::AtomicBool,
 ) -> Result<(), String> {
     let rate_f = f64::from(rate);
     let duration = samples.len() as f64 / rate_f;
@@ -605,12 +363,13 @@ pub(super) fn align(
             None => last + WINDOW_MARGIN_SECONDS,
         }
         .min(duration);
-        let from = (from / FRAME_SECONDS).floor() * FRAME_SECONDS;
+        if stop.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(STOPPED.to_string());
+        }
         if to <= from {
             continue;
         }
-        let start_sample = ((from * rate_f).round() as usize).min(samples.len());
-        let audio = &samples[start_sample..((to * rate_f) as usize).min(samples.len())];
+        let audio = &samples[(from * rate_f) as usize..((to * rate_f) as usize).min(samples.len())];
         let (log_probs, classes) = acoustic.log_probs(audio, from)?;
         let tokens: Vec<Vec<usize>> = words[range.clone()]
             .iter()
@@ -692,56 +451,6 @@ pub(super) fn keep_order(words: &mut [CaptionWord]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    struct FrameClock;
-
-    impl Emissions for FrameClock {
-        fn log_probs(
-            &mut self,
-            samples: &[f32],
-            start_seconds: f64,
-        ) -> Result<(Vec<f32>, usize), String> {
-            let first = (start_seconds / FRAME_SECONDS).round() as usize;
-            Ok((
-                (0..output_frames(samples.len()))
-                    .map(|frame| (first + frame) as f32)
-                    .collect(),
-                1,
-            ))
-        }
-    }
-
-    #[test]
-    fn hearing_in_chunks_keeps_every_frame_on_one_grid() {
-        for seconds in [0.5, 9.0, 12.3, 61.7] {
-            let samples = vec![0.1f32; (seconds * 16_000.0) as usize];
-            let (log_probs, classes) = Heard::hear(
-                &samples,
-                &mut FrameClock,
-                &std::sync::atomic::AtomicBool::new(false),
-            )
-            .unwrap()
-            .unwrap()
-            .into_parts();
-            assert_eq!(classes, 1);
-            let expected: Vec<f32> = (0..output_frames(samples.len()))
-                .map(|frame| frame as f32)
-                .collect();
-            assert_eq!(log_probs, expected, "{seconds} s");
-        }
-    }
-
-    #[test]
-    fn hearing_stops_when_asked() {
-        let samples = vec![0.1f32; 16_000 * 30];
-        let heard = Heard::hear(
-            &samples,
-            &mut FrameClock,
-            &std::sync::atomic::AtomicBool::new(true),
-        )
-        .unwrap();
-        assert!(heard.is_none());
-    }
 
     fn emissions(frames: &[usize], classes: usize) -> Vec<f32> {
         let mut out = vec![-8.0f32; frames.len() * classes];

@@ -29,17 +29,20 @@ fn clip_samples(path: &Path) -> Vec<f32> {
     read_wav_16k_mono(&wav).expect("read resampled")
 }
 
-struct Recorded;
+struct Recorded {
+    log_probs: Vec<f32>,
+    classes: usize,
+}
 
 impl Recorded {
-    fn load(path: &Path) -> align::Heard {
+    fn load(path: &Path) -> Self {
         let bytes = std::fs::read(path).expect("emissions");
         let classes = usize::from(bytes[0]);
         let log_probs = bytes[1..]
             .iter()
             .map(|byte| -f32::from(*byte) * LOG_PROB_STEP)
             .collect();
-        align::Heard::new(log_probs, classes)
+        Self { log_probs, classes }
     }
 
     fn encode(log_probs: &[f32], classes: usize) -> Vec<u8> {
@@ -50,6 +53,23 @@ impl Recorded {
                 .map(|value| (-value / LOG_PROB_STEP).round().clamp(0.0, 255.0) as u8),
         );
         bytes
+    }
+}
+
+impl align::Emissions for Recorded {
+    fn log_probs(
+        &mut self,
+        samples: &[f32],
+        start_seconds: f64,
+    ) -> Result<(Vec<f32>, usize), String> {
+        let frames = self.log_probs.len() / self.classes;
+        let first = ((start_seconds / align::FRAME_SECONDS).round() as usize).min(frames);
+        let count = samples.len() / 320;
+        let last = (first + count).min(frames);
+        Ok((
+            self.log_probs[first * self.classes..last * self.classes].to_vec(),
+            self.classes,
+        ))
     }
 }
 
@@ -130,32 +150,23 @@ fn verbatim_finish_keeps_fillers_and_tightens_every_engines_word_timing() {
 }
 
 #[test]
-#[ignore = "needs CAP_EVAL_ALIGNER, and CAP_FIXTURE_MODELS (a transcription_models directory) to re-record engine output"]
+#[ignore = "needs CAP_FIXTURE_MODELS (a transcription_models directory) and CAP_EVAL_ALIGNER"]
 fn record_verbatim_fixtures() {
-    let models = std::env::var("CAP_FIXTURE_MODELS").ok().map(PathBuf::from);
+    let models = PathBuf::from(std::env::var("CAP_FIXTURE_MODELS").expect("CAP_FIXTURE_MODELS"));
     let aligner = std::env::var("CAP_EVAL_ALIGNER").expect("CAP_EVAL_ALIGNER");
-    let mut acoustic = align::AcousticPool::load(Path::new(&aligner)).expect("aligner");
+    let mut acoustic = align::Acoustic::load(Path::new(&aligner), 0).expect("aligner");
     let manifest = Manifest::load(&fixture_dir()).expect("fixture manifest");
     let options = VerbatimOptions::default();
     for clip in &manifest.clips {
         let samples = clip_samples(&fixture_dir().join(&clip.audio));
-        let (log_probs, classes) = align::Heard::hear(
-            &samples,
-            &mut acoustic,
-            &std::sync::atomic::AtomicBool::new(false),
-        )
-        .expect("emissions")
-        .expect("not stopped")
-        .into_parts();
+        let (log_probs, classes) =
+            align::Emissions::log_probs(&mut acoustic, &samples, 0.0).expect("emissions");
         std::fs::create_dir_all(emissions_path(&clip.id).parent().unwrap()).unwrap();
         std::fs::write(
             emissions_path(&clip.id),
             Recorded::encode(&log_probs, classes),
         )
         .unwrap();
-        let Some(models) = &models else {
-            continue;
-        };
         for engine in ENGINES {
             let file = models.join(match engine {
                 "best" => "parakeet-best".to_string(),
@@ -163,7 +174,18 @@ fn record_verbatim_fixtures() {
                 other => format!("{other}.bin"),
             });
             let raw = if is_parakeet_model(engine) {
-                process_with_parakeet(&samples, &file.to_string_lossy(), &options)
+                process_with_parakeet(&samples, &file.to_string_lossy(), &options).map(|groups| {
+                    let mut words: Vec<CaptionWord> = groups.into_iter().flatten().collect();
+                    let model = cached_parakeet(&file.to_string_lossy()).expect("parakeet");
+                    recover_unheard_speech(
+                        &samples,
+                        &mut words,
+                        &mut model.lock().unwrap(),
+                        true,
+                        &std::sync::atomic::AtomicBool::new(false),
+                    );
+                    vec![words]
+                })
             } else {
                 let context = get_whisper_context(&file.to_string_lossy()).expect("whisper");
                 process_with_whisper(
@@ -192,7 +214,10 @@ fn make_caption_demo_project() {
     let out = PathBuf::from(std::env::var("CAP_DEMO_OUT").expect("CAP_DEMO_OUT"));
     let speech = PathBuf::from(std::env::var("CAP_DEMO_AUDIO").expect("CAP_DEMO_AUDIO"));
     let model = std::env::var("CAP_DEMO_MODEL").unwrap_or_else(|_| "best".into());
-    let duration = 14.5;
+    let duration: f64 = std::env::var("CAP_DEMO_SECONDS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(14.5);
     let spec = FixtureSpec {
         name: "caption-demo".into(),
         segments: vec![SegmentSpec {
@@ -239,10 +264,11 @@ fn make_caption_demo_project() {
         .expect("ffmpeg");
     assert!(encode.success());
     let durations = [duration];
-    let segments =
+    let transcript =
         transcribe_blocking(&out, &model, "en", None, &durations).expect("transcription");
+    save_refinement_request(&out, &transcript.refinement).expect("refinement request");
     let mut config = ProjectConfiguration::load(&out).unwrap_or_default();
-    apply_caption_result(&mut config, segments, "en", &durations, duration);
+    apply_caption_result(&mut config, transcript.segments, "en", &durations, duration);
     if let Some(captions) = config.captions.as_mut() {
         captions.settings.show_filler_words = std::env::var("CAP_DEMO_SHOW_FILLERS").is_ok();
     }

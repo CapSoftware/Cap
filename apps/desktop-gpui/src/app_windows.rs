@@ -5770,6 +5770,7 @@ fn load_editor_project_candidate(
                 view.set_summary(summary, window, cx);
                 view.set_project(config, window, cx);
                 view.set_instance(instance.clone());
+                view.refine_caption_timings(window, cx);
             })
             .is_err()
         {
@@ -6232,11 +6233,17 @@ async fn drive_auto_playback(
     let scrub_playing = std::env::var("CAP_GPUI_AUTO_SCRUB_PLAYING")
         .ok()
         .and_then(|value| value.parse::<u32>().ok());
+    // `CAP_GPUI_AUTO_FRAME_STATS=<seconds>`: redraw every frame for that long
+    // and log the frame intervals, alongside any playback below.
+    let frame_stats = std::env::var("CAP_GPUI_AUTO_FRAME_STATS")
+        .ok()
+        .and_then(|value| value.parse::<f64>().ok());
     if play_secs.is_none()
         && torture.is_none()
         && seek.is_none()
         && seek_time.is_none()
         && scrub_playing.is_none()
+        && frame_stats.is_none()
     {
         return;
     }
@@ -6343,6 +6350,14 @@ async fn drive_auto_playback(
         .ok()
         .and_then(|value| value.parse::<f64>().ok())
         .filter(|_| !CLOSE_SCENARIO_DONE.swap(true, std::sync::atomic::Ordering::SeqCst));
+
+    if let Some(seconds) = frame_stats {
+        handle
+            .update(cx, |view, window, cx| {
+                view.measure_frame_times(seconds, window, cx)
+            })
+            .ok();
+    }
 
     if let Some(secs) = play_secs {
         cx.update(|cx| cx.activate(true));

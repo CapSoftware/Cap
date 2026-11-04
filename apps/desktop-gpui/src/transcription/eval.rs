@@ -10,14 +10,12 @@
 //! cargo test --bin cap-gpui transcription_eval -- --ignored --nocapture
 //! ```
 //!
-//! `hyp:` re-scores the raw engine words a previous run wrote, so the
-//! finishing steps can be tuned without running a model again; set
-//! `CAP_EVAL_HYP_WHISPER` when those words came from Whisper, which aligns
-//! after recognition rather than alongside it. The aligner
-//! hears each clip while the engine runs, as in the app;
-//! `CAP_EVAL_ALIGNER_SESSIONS` and `CAP_EVAL_ALIGNER_THREADS` override how
-//! many ONNX sessions it uses and their threads. `bench_word_aligner` times
-//! hearing alone on `CAP_BENCH_WAV`.
+//! `hyp:` re-scores the first-pass engine words a previous run wrote, so
+//! the refinement can be tuned without running a model again (re-decoding
+//! unheard speech needs Parakeet, so it is skipped). Scores are for the
+//! refined words; each set also prints the first pass's own RTF.
+//! `bench_transcription_pipeline` times one recording the way the app runs
+//! it, with peak memory.
 
 use std::{
     collections::BTreeMap,
@@ -679,67 +677,86 @@ mod run {
         fn transcribe(
             &self,
             options: &VerbatimOptions,
-            aligner: Option<&mut align::AcousticPool>,
+            aligner: Option<&mut align::Acoustic>,
             dataset: &str,
             clip: &str,
             samples: &[f32],
-        ) -> Result<(Vec<Vec<CaptionWord>>, Vec<CaptionWord>), String> {
+        ) -> Result<Transcribed, String> {
             let scratch = tempfile::tempdir().map_err(|e| e.to_string())?;
             let wav = scratch.path().join("audio.wav");
             let mut normalized = samples.to_vec();
             normalize_audio_for_transcription(&mut normalized);
             write_wav_16k(&wav, &normalized)?;
             let input = read_wav_16k_mono(&wav)?;
-            let mut raw = Vec::new();
-            let overlap = match self {
-                Self::Whisper(_) => false,
-                Self::Parakeet(_) => true,
-                Self::Hypotheses(_) => std::env::var("CAP_EVAL_HYP_WHISPER").is_err(),
+            let started = Instant::now();
+            let first_options = options.first_pass();
+            let raw = match self {
+                Self::Whisper(model) => {
+                    let context = get_whisper_context(&model.to_string_lossy())?;
+                    process_with_whisper(
+                        &input,
+                        context,
+                        &language(),
+                        &default_transcription_hints(),
+                        &first_options,
+                    )?
+                }
+                Self::Parakeet(dir) => {
+                    process_with_parakeet(&input, &dir.to_string_lossy(), &first_options)?
+                }
+                Self::Hypotheses(dir) => {
+                    let path = dir.join(dataset).join(format!("{clip}.raw.json"));
+                    let text = std::fs::read_to_string(&path)
+                        .map_err(|e| format!("{}: {e}", path.display()))?;
+                    serde_json::from_str(&text).map_err(|e| e.to_string())?
+                }
             };
-            let (ready, fetch) = if overlap {
-                (aligner, None)
-            } else {
-                (None, aligner)
+            let stop = AtomicBool::new(false);
+            let first =
+                finish_words_tuned(raw.clone(), &input, &first_options, None, &tuning(), &stop);
+            let first_seconds = started.elapsed().as_secs_f64();
+            let recover = |words: &mut Vec<CaptionWord>| {
+                #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+                if let Self::Parakeet(dir) = self
+                    && let Ok(model) = cached_parakeet(&dir.to_string_lossy())
+                    && let Ok(mut parakeet) = model.lock()
+                {
+                    recover_unheard_speech(
+                        &input,
+                        words,
+                        &mut parakeet,
+                        options.parakeet_subword_words,
+                        &stop,
+                    );
+                }
+                #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+                let _ = words;
             };
-            let finished = recognize_and_finish(
-                &input,
-                &language(),
+            let language = language();
+            let tuning = tuning();
+            let pass = refine::Pass {
+                samples: &input,
+                language: &language,
                 options,
-                &tuning(),
-                overlap,
-                move || ready,
-                move || fetch,
-                || {
-                    let groups = match self {
-                        Self::Whisper(model) => {
-                            let context = get_whisper_context(&model.to_string_lossy())?;
-                            process_with_whisper(
-                                &input,
-                                context,
-                                &language(),
-                                &default_transcription_hints(),
-                                options,
-                            )?
-                        }
-                        Self::Parakeet(dir) => {
-                            process_with_parakeet(&input, &dir.to_string_lossy(), options)?
-                        }
-                        Self::Hypotheses(dir) => {
-                            let path = dir.join(dataset).join(format!("{clip}.raw.json"));
-                            let text = std::fs::read_to_string(&path)
-                                .map_err(|e| format!("{}: {e}", path.display()))?;
-                            serde_json::from_str(&text).map_err(|e| e.to_string())?
-                        }
-                    };
-                    raw.clone_from(&groups);
-                    Ok(groups)
-                },
-            )?
-            .into_iter()
-            .flatten()
-            .collect();
-            Ok((raw, finished))
+                tuning: &tuning,
+                stop: &stop,
+            };
+            let refined = refine::refine_groups(&pass, first.clone(), recover, || aligner)
+                .unwrap_or_else(|| first.clone());
+            Ok(Transcribed {
+                raw,
+                first: first.into_iter().flatten().collect(),
+                refined: refined.into_iter().flatten().collect(),
+                first_seconds,
+            })
         }
+    }
+
+    struct Transcribed {
+        raw: Vec<Vec<CaptionWord>>,
+        first: Vec<CaptionWord>,
+        refined: Vec<CaptionWord>,
+        first_seconds: f64,
     }
 
     fn tuning() -> Tuning {
@@ -792,52 +809,81 @@ mod run {
         options
     }
 
+    /// The app's own order on one recording: the first pass on recognition's
+    /// threads, then the refinement on a lowered-priority thread with one
+    /// model loaded at a time. Prints when the transcript and the refined
+    /// timings would appear, and the process's peak memory.
+    #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
     #[test]
-    #[ignore = "needs CAP_BENCH_WAV and CAP_EVAL_ALIGNER"]
-    fn bench_word_aligner() {
-        let samples = read_wav_16k(Path::new(
+    #[ignore = "needs CAP_BENCH_WAV, CAP_BENCH_PARAKEET and CAP_EVAL_ALIGNER"]
+    fn bench_transcription_pipeline() {
+        let samples = read_wav_16k_mono(Path::new(
             &std::env::var("CAP_BENCH_WAV").expect("CAP_BENCH_WAV"),
         ))
         .expect("wav");
-        let started = Instant::now();
-        let mut pool = load_aligner(
-            Path::new(&std::env::var("CAP_EVAL_ALIGNER").expect("CAP_EVAL_ALIGNER")),
-            false,
-        );
-        let loaded = started.elapsed().as_secs_f64();
-        let heard = align::Heard::hear(&samples, &mut pool, &AtomicBool::new(false))
-            .expect("emissions")
-            .expect("not stopped");
-        let seconds = started.elapsed().as_secs_f64() - loaded;
+        let model = std::env::var("CAP_BENCH_PARAKEET").expect("CAP_BENCH_PARAKEET");
+        let aligner_path = PathBuf::from(std::env::var("CAP_EVAL_ALIGNER").expect("aligner"));
+        let config = std::env::var("CAP_EVAL_CONFIG").unwrap_or_else(|_| "default".into());
+        let options = options_from_config(&config);
         let audio = samples.len() as f64 / 16_000.0;
+        let started = Instant::now();
+        let first_options = options.first_pass();
+        let raw = process_with_parakeet(&samples, &model, &first_options).expect("first pass");
+        let stop = AtomicBool::new(false);
+        let first = finish_words_tuned(raw, &samples, &first_options, None, &TUNING, &stop);
+        let first_seconds = started.elapsed().as_secs_f64();
+        let first_rss = peak_rss_bytes() / (1024 * 1024);
+        let refined = std::thread::scope(|scope| {
+            scope
+                .spawn(|| {
+                    lower_thread_priority();
+                    let pass = refine::Pass {
+                        samples: &samples,
+                        language: "en",
+                        options: &options,
+                        tuning: &TUNING,
+                        stop: &stop,
+                    };
+                    refine::refine_groups(
+                        &pass,
+                        first,
+                        |words| {
+                            invalidate_parakeet_cache_for_dir(Path::new(&model));
+                            let mut parakeet =
+                                load_parakeet(&model, Some(REFINEMENT_THREADS)).expect("parakeet");
+                            recover_unheard_speech(
+                                &samples,
+                                words,
+                                &mut parakeet,
+                                options.parakeet_subword_words,
+                                &stop,
+                            );
+                        },
+                        || align::Acoustic::load(&aligner_path, REFINEMENT_THREADS).ok(),
+                    )
+                })
+                .join()
+                .expect("refinement")
+        })
+        .expect("not stopped");
+        let total_seconds = started.elapsed().as_secs_f64();
         println!(
-            "aligner load={loaded:.2}s rtf={:.4} frames={} peak_rss={} MiB",
-            seconds / audio,
-            heard.into_parts().0.len() / 32,
+            "pipeline config={config} words={} first_rtf={:.4} first_min_per_hour={:.2} first_peak_rss={first_rss} MiB total_rtf={:.4} total_min_per_hour={:.2} peak_rss={} MiB",
+            refined.iter().map(Vec::len).sum::<usize>(),
+            first_seconds / audio,
+            first_seconds / audio * 60.0,
+            total_seconds / audio,
+            total_seconds / audio * 60.0,
             peak_rss_bytes() / (1024 * 1024)
         );
     }
 
-    fn load_aligner(path: &Path, alone: bool) -> align::AcousticPool {
-        #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
-        if let Ok(sessions) = std::env::var("CAP_EVAL_ALIGNER_SESSIONS") {
-            let threads = std::env::var("CAP_EVAL_ALIGNER_THREADS")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(2);
-            return align::AcousticPool::load_sized(
-                path,
-                sessions.parse().expect("CAP_EVAL_ALIGNER_SESSIONS"),
-                threads,
-            )
-            .expect("word aligner loads");
-        }
-        if alone {
-            align::AcousticPool::load_alone(path)
-        } else {
-            align::AcousticPool::load(path)
-        }
-        .expect("word aligner loads")
+    fn load_aligner(path: &Path) -> align::Acoustic {
+        let threads = std::env::var("CAP_EVAL_ALIGNER_THREADS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(REFINEMENT_THREADS);
+        align::Acoustic::load(path, threads).expect("word aligner loads")
     }
 
     #[test]
@@ -856,23 +902,23 @@ mod run {
         let mut aligner = std::env::var("CAP_EVAL_ALIGNER")
             .ok()
             .filter(|_| options.align_words)
-            .map(|path| {
-                load_aligner(
-                    Path::new(&path),
-                    matches!(engine, Engine::Whisper(_))
-                        || std::env::var("CAP_EVAL_HYP_WHISPER").is_ok(),
-                )
-            });
+            .map(|path| load_aligner(Path::new(&path)));
         let load_seconds = load_started.elapsed().as_secs_f64();
         let mut rows = Vec::new();
         let mut summaries = BTreeMap::new();
         for dir in data_dirs() {
             let manifest = Manifest::load(&dir).expect("manifest");
             let mut tally = Tally::default();
+            let mut first_seconds = 0.0;
             for clip in manifest.clips.iter().take(limit) {
                 let samples = read_wav_16k(&dir.join(&clip.audio)).expect("clip audio");
                 let started = Instant::now();
-                let (raw, words) = engine
+                let Transcribed {
+                    raw,
+                    first: first_words,
+                    refined: words,
+                    first_seconds: first,
+                } = engine
                     .transcribe(
                         &options,
                         aligner.as_mut(),
@@ -882,8 +928,14 @@ mod run {
                     )
                     .unwrap_or_else(|error| {
                         eprintln!("{} {}: {error}", manifest.name, clip.id);
-                        (Vec::new(), Vec::new())
+                        Transcribed {
+                            raw: Vec::new(),
+                            first: Vec::new(),
+                            refined: Vec::new(),
+                            first_seconds: 0.0,
+                        }
                     });
+                first_seconds += first;
                 tally.compute_seconds += started.elapsed().as_secs_f64();
                 tally.audio_seconds += samples.len() as f64 / 16_000.0;
                 let envelope = Envelope::new(&samples, 16_000);
@@ -897,12 +949,22 @@ mod run {
                     )
                     .expect("write hypothesis");
                     std::fs::write(
+                        dir.join(format!("{}.first.json", clip.id)),
+                        serde_json::to_string(&first_words).expect("first-pass json"),
+                    )
+                    .expect("write first pass");
+                    std::fs::write(
                         dir.join(format!("{}.raw.json", clip.id)),
                         serde_json::to_string(&raw).expect("raw json"),
                     )
                     .expect("write raw hypothesis");
                 }
             }
+            println!(
+                "first pass {}: RTF {:.3}",
+                manifest.name,
+                first_seconds / tally.audio_seconds.max(1e-9)
+            );
             let summary = tally.summary();
             rows.push(summary.row(&manifest.name, &config));
             summaries.insert(manifest.name.clone(), summary);
