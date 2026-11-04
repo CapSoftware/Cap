@@ -1,39 +1,11 @@
 "use server";
 
 import { verifyPassword as verifyPlainPassword } from "@cap/database/crypto";
-import { NODE_ENV } from "@cap/env";
-import { checkRateLimit } from "@vercel/firewall";
 import { revalidatePath } from "next/cache";
-import { headers } from "next/headers";
+import { TOO_MANY_PASSWORD_ATTEMPTS } from "@/lib/password-attempts";
 import { setVerifiedPasswordCookie } from "@/lib/password-cookie";
 import { getPublicCollectionPasswordHash } from "@/lib/public-collections";
-
-const COLLECTION_PASSWORD_RATE_LIMIT_ID = "rl_collection_password";
-
-/** Per-IP throttle so the public action isn't an open brute-force oracle. */
-async function isRateLimited() {
-	if (NODE_ENV !== "production") return false;
-
-	try {
-		const headersList = await headers();
-		const request = new Request("https://cap.so/api/collection-password", {
-			method: "POST",
-			headers: headersList,
-		});
-
-		const { rateLimited } = await checkRateLimit(
-			COLLECTION_PASSWORD_RATE_LIMIT_ID,
-			{ request },
-		);
-		return rateLimited;
-	} catch (error) {
-		// Best-effort: self-hosted deploys without the Vercel firewall (or an
-		// x-real-ip header) must not lose password verification entirely; the
-		// PBKDF2 verification cost still slows brute force.
-		console.warn("Collection password rate limit check failed:", error);
-		return false;
-	}
-}
+import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 
 export async function verifyCollectionPassword(
 	collectionId: string,
@@ -44,11 +16,13 @@ export async function verifyCollectionPassword(
 			return { success: false, error: "Failed to verify password" };
 		}
 
-		if (await isRateLimited()) {
-			return {
-				success: false,
-				error: "Too many attempts. Please try again later.",
-			};
+		if (
+			(await isRateLimited(RATE_LIMIT_IDS.COLLECTION_PASSWORD)) ||
+			(await isRateLimited(RATE_LIMIT_IDS.COLLECTION_PASSWORD_PER_COLLECTION, {
+				key: `collection:${collectionId}`,
+			}))
+		) {
+			return { success: false, error: TOO_MANY_PASSWORD_ATTEMPTS };
 		}
 
 		// Missing hash and wrong password are expected outcomes (typos, links to
