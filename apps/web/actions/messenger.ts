@@ -11,7 +11,10 @@ import { asc, desc, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
 import { generateMessengerAgentReply } from "@/lib/messenger/agent";
-import { MESSENGER_AGENT } from "@/lib/messenger/constants";
+import {
+	MESSENGER_AGENT,
+	MESSENGER_RATE_LIMITED_MESSAGE,
+} from "@/lib/messenger/constants";
 import {
 	getMessengerConversationForViewer,
 	getOrCreateAnonymousId,
@@ -30,9 +33,6 @@ import { sendMessengerSupportEmail } from "@/lib/messenger/support-email";
 import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 
 const normalizeContent = (content: string) => content.trim().slice(0, 6000);
-
-const MESSENGER_RATE_LIMITED_MESSAGE =
-	"You're sending messages too quickly. Please wait a minute and try again.";
 
 const MEMORY_SYNC_MESSAGE_LIMIT = 50;
 
@@ -99,12 +99,14 @@ const persistConversationToSupermemory = async ({
 	});
 };
 
-export const createMessengerConversation = async () => {
+export const createMessengerConversation = async (): Promise<
+	string | { error: string }
+> => {
 	assertMessengerEnabled();
 
 	const viewer = await getViewerContext();
 	if (await isMessengerRateLimited(viewer.user?.id ?? null)) {
-		throw new Error(MESSENGER_RATE_LIMITED_MESSAGE);
+		return { error: MESSENGER_RATE_LIMITED_MESSAGE };
 	}
 	const anonymousId = viewer.user
 		? viewer.anonymousId

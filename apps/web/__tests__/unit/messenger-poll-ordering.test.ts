@@ -202,6 +202,19 @@ describe.each(["page", "widget"] as const)("%s polling ownership", (kind) => {
 	});
 });
 
+it("shows the wait message on the widget home view when a new chat is turned away", async () => {
+	const notice = "Please wait a minute and try again.";
+	actions.createMessengerConversation.mockResolvedValue({ error: notice });
+	await act(async () => root?.render(createElement(MessengerWidget)));
+	const open = container.querySelector<HTMLButtonElement>(
+		"[aria-label='Open messenger']",
+	);
+	if (!open) throw new Error("Missing messenger button");
+	await act(async () => open.click());
+	expect(container.querySelector("[role='alert']")?.textContent).toBe(notice);
+	expect(actions.fetchMessengerConversation).not.toHaveBeenCalled();
+});
+
 it("does not replay a notification after a stale poll restores an older reply count", async () => {
 	await mount("widget");
 	vi.spyOn(document, "hidden", "get").mockReturnValue(true);

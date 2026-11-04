@@ -200,12 +200,14 @@ function HomeView({
 	onNewChat,
 	onSelectConversation,
 	isCreating,
+	notice,
 }: {
 	conversations: ConversationSummary[];
 	isLoading: boolean;
 	onNewChat: () => void;
 	onSelectConversation: (id: string) => void;
 	isCreating: boolean;
+	notice: string | null;
 }) {
 	return (
 		<div className="flex-1 overflow-y-auto overscroll-contain bg-gray-1 px-4 py-4">
@@ -232,6 +234,11 @@ function HomeView({
 				</svg>
 				{isCreating ? "Starting..." : "New conversation"}
 			</button>
+			{notice && (
+				<p role="alert" className="mt-2 px-1 text-[12px] text-gray-10">
+					{notice}
+				</p>
+			)}
 
 			{!isLoading && conversations.length > 0 && (
 				<div className="mt-4">
@@ -627,6 +634,7 @@ export function MessengerWidget() {
 	const [conversations, setConversations] = useState<ConversationSummary[]>([]);
 	const [isLoadingConversations, setIsLoadingConversations] = useState(false);
 	const [isCreating, setIsCreating] = useState(false);
+	const [createError, setCreateError] = useState<string | null>(null);
 	const [activeConversation, setActiveConversation] =
 		useState<ActiveConversation | null>(null);
 	const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
@@ -684,12 +692,13 @@ export function MessengerWidget() {
 			if (opened) return;
 		}
 
-		const conversationId = await createMessengerConversation().catch(
-			() => null,
-		);
-		if (conversationId) {
-			const opened = await openConversation(conversationId);
+		const created = await createMessengerConversation().catch(() => null);
+		if (typeof created === "string") {
+			setCreateError(null);
+			const opened = await openConversation(created);
 			if (opened) return;
+		} else if (created) {
+			setCreateError(created.error);
 		}
 
 		setView("home");
@@ -724,16 +733,14 @@ export function MessengerWidget() {
 		}
 
 		setIsCreating(true);
-		const conversationId = await createMessengerConversation().catch(
-			() => null,
-		);
-		if (!conversationId) {
+		const created = await createMessengerConversation().catch(() => null);
+		if (typeof created !== "string") {
+			setCreateError(created?.error ?? null);
 			setIsCreating(false);
 			return;
 		}
-		const data = await fetchMessengerConversation(conversationId).catch(
-			() => null,
-		);
+		setCreateError(null);
+		const data = await fetchMessengerConversation(created).catch(() => null);
 		setIsCreating(false);
 		if (!data) return;
 		setActiveConversation(data.conversation);
@@ -878,6 +885,7 @@ export function MessengerWidget() {
 								onNewChat={handleNewChat}
 								onSelectConversation={handleSelectConversation}
 								isCreating={isCreating}
+								notice={createError}
 							/>
 						</>
 					)}

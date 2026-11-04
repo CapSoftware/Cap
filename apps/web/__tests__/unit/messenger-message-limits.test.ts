@@ -171,6 +171,12 @@ const visitAs = ({
 	mocks.state.anonymousId = anonymousId;
 };
 
+const startConversation = async () => {
+	const conversation = await createMessengerConversation();
+	if (typeof conversation !== "string") throw new Error(conversation.error);
+	return conversation;
+};
+
 const seedConversation = (row: Row) => {
 	mocks.state.conversations.push({
 		agent: "Millie",
@@ -209,7 +215,7 @@ beforeEach(() => {
 describe("messenger message limits", () => {
 	it("stops replying once one visitor passes the limit and keeps serving other visitors", async () => {
 		visitAs({ ip: "198.51.100.1", anonymousId: "anon-a" });
-		const conversationId = await createMessengerConversation();
+		const conversationId = await startConversation();
 
 		const results = [];
 		for (let index = 1; index < LIMIT; index++) {
@@ -237,7 +243,7 @@ describe("messenger message limits", () => {
 		expect(countRows()).toEqual(rowsBefore);
 
 		visitAs({ ip: "203.0.113.7", anonymousId: "anon-b" });
-		const otherConversation = await createMessengerConversation();
+		const otherConversation = await startConversation();
 		await expect(
 			sendMessengerUserMessage({
 				conversationId: otherConversation,
@@ -255,7 +261,9 @@ describe("messenger message limits", () => {
 
 		visitAs({ ip: "198.51.100.1", anonymousId: null });
 		const rowsBefore = countRows();
-		await expect(createMessengerConversation()).rejects.toThrow(/too quickly/i);
+		await expect(createMessengerConversation()).resolves.toEqual({
+			error: expect.stringMatching(/too quickly/i),
+		});
 		expect(countRows()).toEqual(rowsBefore);
 
 		visitAs({ ip: "198.51.100.1", anonymousId: "fresh-cookie" });
@@ -305,7 +313,9 @@ describe("messenger message limits", () => {
 		await expect(
 			sendMessengerUserMessage({ conversationId: "missing", content: "hi" }),
 		).resolves.toEqual({ error: expect.any(String) });
-		await expect(createMessengerConversation()).rejects.toThrow(/too quickly/i);
+		await expect(createMessengerConversation()).resolves.toEqual({
+			error: expect.stringMatching(/too quickly/i),
+		});
 		expect(mocks.linkAnonymous).not.toHaveBeenCalled();
 		expect(countRows()).toEqual({ conversations: 0, messages: 0 });
 	});
