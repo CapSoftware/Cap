@@ -32,8 +32,8 @@
 		"effect": "^3.18.4",
 		"mysql2": "^3.15.2",
 		"nanoid": "^5.0.4",
-		"next": "16.3.0",
-		"next-auth": "^4.24.5",
+		"next": "16.4.5",
+		"next-auth": "^4.24.15",
 		"react-email": "^4.0.16",
 		"resend": "4.6.0",
 		"zod": "^3"
@@ -67,6 +67,7 @@
 		"./schema": "./schema.ts",
 		"./video-sharing-default": "./video-sharing-default.ts",
 		"./pro-seat-subscription": "./pro-seat-subscription.ts",
+		"./referrals": "./referrals.ts",
 		"./loops/*": "./loops/*.ts",
 		"./crypto": "./crypto.ts",
 		"./helpers": "./helpers.ts",

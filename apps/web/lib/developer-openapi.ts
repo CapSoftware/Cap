@@ -284,6 +284,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				requestBody: jsonBody("InitiateUploadRequest"),
 				responses: {
 					"200": json(ref("InitiateUploadResponse"), "The upload started."),
+					"409": response("UploadCompleted"),
 					...sdkErrors,
 				},
 			},
@@ -299,6 +300,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				requestBody: jsonBody("PresignPartRequest"),
 				responses: {
 					"200": json(ref("PresignPartResponse"), "The presigned part URL."),
+					"409": response("UploadCompleted"),
 					...sdkErrors,
 				},
 			},
@@ -308,7 +310,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				operationId: "completeSdkUpload",
 				summary: "Complete a multipart upload",
 				description:
-					"Finishes the upload, records duration and dimensions, and debits 5,000 micro-credits per minute of video (at most 4 hours).",
+					"Finishes the upload, records duration and dimensions, and debits 5,000 micro-credits per minute of video (at most 4 hours). Repeating the call after the upload completed returns success without charging again.",
 				tags: ["SDK"],
 				security: publicAuth,
 				requestBody: jsonBody("CompleteUploadRequest"),
@@ -531,6 +533,10 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				"A production app was called without an allowed Origin.",
 			),
 			NotFound: json(ref("Error"), "The video or route does not exist."),
+			UploadCompleted: json(
+				ref("Error"),
+				"The video's upload already completed. Create a new video to upload again.",
+			),
 			RateLimited: {
 				...json(
 					ref("Error"),

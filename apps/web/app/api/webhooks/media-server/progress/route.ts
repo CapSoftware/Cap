@@ -16,6 +16,11 @@ import {
 import { queueDesktopSegmentsFinalization } from "@/lib/desktop-segments-finalization";
 import { invalidateGoogleDriveStorageQuotaCache } from "@/lib/google-drive-storage-quota";
 import { signalLoomImportFinished } from "@/lib/loom-import-signal";
+import { recordMediaInputPolicyStrike } from "@/lib/media-input-policy-strikes";
+import {
+	MEDIA_INPUT_POLICY_ERROR_CODE,
+	MEDIA_INPUT_REJECTED_ERROR_PREFIX,
+} from "@/lib/media-processing-policy";
 import {
 	queueVideoTranscription,
 	shouldQueueTranscriptionAfterMediaComplete,
@@ -45,6 +50,7 @@ interface ProgressWebhookPayload {
 	progress: number;
 	message?: string;
 	error?: string;
+	errorCode?: string;
 	metadata?: {
 		duration: number;
 		width: number;
@@ -115,6 +121,21 @@ export async function POST(request: NextRequest) {
 		)
 			return NextResponse.json(await handleAudioLevelPublication(body));
 		const payload = body as ProgressWebhookPayload;
+		const isInputPolicyViolation =
+			payload.phase === "error" &&
+			payload.errorCode === MEDIA_INPUT_POLICY_ERROR_CODE;
+		if (isInputPolicyViolation && typeof payload.videoId === "string") {
+			try {
+				await recordMediaInputPolicyStrike({
+					videoId: payload.videoId as Video.VideoId,
+				});
+			} catch (error) {
+				console.error("[media-server-webhook] Failed to record input policy", {
+					videoId: payload.videoId,
+					error,
+				});
+			}
+		}
 		if (
 			await applyEditProgress(
 				payload,
@@ -345,9 +366,11 @@ export async function POST(request: NextRequest) {
 				}
 			}
 		} else if (dbPhase === "error") {
-			const processingError =
-				payload.error || payload.message || "Unknown error";
-			if (isRetryableWorkflowError) {
+			const detail = payload.error || payload.message || "Unknown error";
+			const processingError = isInputPolicyViolation
+				? `${MEDIA_INPUT_REJECTED_ERROR_PREFIX}: ${detail}`
+				: detail;
+			if (isRetryableWorkflowError && !isInputPolicyViolation) {
 				await db()
 					.update(videoUploads)
 					.set({

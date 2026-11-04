@@ -14,11 +14,20 @@ import type { Provider } from "next-auth/providers/index";
 import WorkOSProvider from "next-auth/providers/workos";
 import { getEmailDeliveryStatus, sendEmail } from "../emails/config.ts";
 import { db } from "../index.ts";
+import {
+	DUB_CLICK_ID_COOKIE,
+	DUB_PARTNER_DATA_COOKIE,
+	dubCookieDomain,
+	parseDubClickId,
+	trackReferralLead,
+} from "../referrals.ts";
 import { users } from "../schema.ts";
 import {
 	isBlockedAccountEmail,
 	isEmailAllowedForSignup,
 	isEmailBlockedFromSignup,
+	normalizeEmailAddress,
+	normalizeSignInEmail,
 } from "./domain-utils.ts";
 import { DrizzleAdapter } from "./drizzle-adapter.ts";
 import {
@@ -63,6 +72,47 @@ export async function decodeSessionToken(
 	if (sessionVersion !== user.authSessionVersion) return null;
 
 	return token;
+}
+
+// Credits a new account to the partner link it came from. Runs inside the
+// NextAuth callback, so it must never throw: a Dub outage cannot block sign-up.
+async function trackReferralSignup(user: {
+	id: string;
+	email?: string | null;
+	name?: string | null;
+	image?: string | null;
+}) {
+	try {
+		const { cookies, headers } = await import("next/headers");
+		const cookieStore = await cookies();
+		const clickId = parseDubClickId(
+			cookieStore.get(DUB_CLICK_ID_COOKIE)?.value,
+		);
+		if (!clickId) return;
+
+		const tracked = await trackReferralLead({
+			clickId,
+			user: {
+				id: user.id,
+				email: user.email,
+				name: user.name,
+				image: user.image,
+			},
+		});
+		if (!tracked) return;
+
+		// The click now belongs to this user; clear it so another account
+		// created in the same browser is not credited to the same partner.
+		const domain = dubCookieDomain((await headers()).get("host") ?? "");
+		for (const name of [DUB_CLICK_ID_COOKIE, DUB_PARTNER_DATA_COOKIE]) {
+			cookieStore.set(name, "", { domain, path: "/", maxAge: 0 });
+		}
+	} catch (error) {
+		console.error("[referrals] Failed to track referral sign-up", {
+			userId: user.id,
+			error: error instanceof Error ? error.message : String(error),
+		});
+	}
 }
 
 const OIDC_PROVIDER_ID = "oidc";
@@ -255,6 +305,11 @@ export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 					// practical brute-force target. The OTP email and the dev console
 					// have always told users 10 minutes; this makes that true.
 					maxAge: OTP_CODE_MAX_AGE_SECONDS,
+					normalizeIdentifier(identifier) {
+						const email = normalizeSignInEmail(identifier);
+						if (!email) throw new Error("Invalid email address format.");
+						return email;
+					},
 					async generateVerificationToken() {
 						return crypto.randomInt(100000, 1000000).toString();
 					},
@@ -366,7 +421,7 @@ export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 							? credentials.email
 							: null);
 				if (!rawEmail || typeof rawEmail !== "string") return true;
-				const userEmail = rawEmail.toLowerCase();
+				const userEmail = normalizeEmailAddress(rawEmail);
 
 				if (
 					isEmailBlockedFromSignup(
@@ -456,6 +511,11 @@ export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 				}
 
 				return token;
+			},
+		},
+		events: {
+			async signIn({ user, isNewUser }) {
+				if (isNewUser && user?.id) await trackReferralSignup(user);
 			},
 		},
 	};

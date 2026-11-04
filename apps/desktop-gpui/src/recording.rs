@@ -826,6 +826,23 @@ impl ActiveRecording {
         }
     }
 
+    /// Marks `at` in a Studio recording and returns the new marker count.
+    /// Instant recordings have no editor timeline to put a marker on, so
+    /// they take none.
+    pub fn add_marker(&self, at: std::time::Instant) -> Option<usize> {
+        match &self.handle {
+            Handle::Studio(handle) => handle.add_marker(at),
+            Handle::Instant(_) => None,
+        }
+    }
+
+    pub fn marker_count(&self) -> usize {
+        match &self.handle {
+            Handle::Studio(handle) => handle.marker_count(),
+            Handle::Instant(_) => 0,
+        }
+    }
+
     pub fn instant_share_url(&self) -> Option<&str> {
         self.instant_share_link.as_deref()
     }
@@ -2784,6 +2801,7 @@ pub fn recordings_dir() -> PathBuf {
 /// guarded recursive delete as the library with the active recordings folder
 /// as its only allowed root.
 pub fn delete_recording_directory(path: &std::path::Path) -> Result<(), String> {
+    crate::transcription::cancel_refinement(path);
     crate::library::delete_recording_directory_in(&[recordings_dir()], path)
 }
 

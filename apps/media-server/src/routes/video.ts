@@ -506,18 +506,20 @@ video.get("/status", async (c) => {
 		resources,
 		activeDirectVideoProcesses: getActiveDirectVideoProcessCount(),
 		jobCount: jobs.length,
-		jobs: jobs.map((j) => ({
-			jobId: j.jobId,
-			videoId: j.videoId,
-			phase: j.phase,
-			progress: j.progress,
-			createdAt: j.createdAt,
-			updatedAt: j.updatedAt,
-			ageMinutes: Math.round((now - j.createdAt) / 60000),
-			stalenessMinutes: Math.round((now - j.updatedAt) / 60000),
-			error: j.error,
-		})),
-		...(hasMediaServerSecret(c) && { runtime: await getRuntimeReport() }),
+		...(hasMediaServerSecret(c) && {
+			jobs: jobs.map((j) => ({
+				jobId: j.jobId,
+				videoId: j.videoId,
+				phase: j.phase,
+				progress: j.progress,
+				createdAt: j.createdAt,
+				updatedAt: j.updatedAt,
+				ageMinutes: Math.round((now - j.createdAt) / 60000),
+				stalenessMinutes: Math.round((now - j.updatedAt) / 60000),
+				error: j.error,
+			})),
+			runtime: await getRuntimeReport(),
+		}),
 	});
 });
 
@@ -1907,6 +1909,12 @@ video.get("/process/:jobId/status", async (c) => {
 	const jobId = c.req.param("jobId");
 	const job = getJob(jobId);
 	const accept = c.req.header("Accept");
+	const progressFor = hasMediaServerSecret(c)
+		? getJobProgress
+		: (current: NonNullable<ReturnType<typeof getJob>>) => {
+				const { jobId, phase, progress } = getJobProgress(current);
+				return { jobId, phase, progress };
+			};
 
 	if (!job) {
 		if (
@@ -1948,7 +1956,7 @@ video.get("/process/:jobId/status", async (c) => {
 						return false;
 					}
 
-					const progress = getJobProgress(currentJob);
+					const progress = progressFor(currentJob);
 					controller.enqueue(
 						encoder.encode(`data: ${JSON.stringify(progress)}\n\n`),
 					);
@@ -1989,7 +1997,7 @@ video.get("/process/:jobId/status", async (c) => {
 		});
 	}
 
-	return c.json(getJobProgress(job));
+	return c.json(progressFor(job));
 });
 
 video.post("/process/:jobId/cancel", async (c) => {

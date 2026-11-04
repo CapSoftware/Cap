@@ -3,6 +3,8 @@ import type { MessengerAgent } from "@cap/database/schema";
 export const MESSENGER_ADMIN_EMAIL = "richie@cap.so";
 export const MESSENGER_ANON_COOKIE = "cap-messenger-anon-id";
 export const MESSENGER_DEFAULT_KNOWLEDGE_TAG = "cap-support-knowledge";
+export const MESSENGER_RATE_LIMITED_MESSAGE =
+	"You're sending messages too quickly. Please wait a minute and try again.";
 
 export const MESSENGER_SUGGESTED_PROMPTS = [
 	"How do I record my screen?",

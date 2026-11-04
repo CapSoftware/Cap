@@ -79,12 +79,6 @@ const nextConfig = {
 		remotePatterns: [
 			{
 				protocol: "https",
-				hostname: "**",
-				port: "",
-				pathname: "**",
-			},
-			{
-				protocol: "https",
 				hostname: "l.cap.so",
 				port: "",
 				pathname: "**",

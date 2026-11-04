@@ -66,7 +66,6 @@ import { union } from "drizzle-orm/mysql-core";
 import { Effect, Layer, Option, Schema } from "effect";
 import { revalidatePath } from "next/cache";
 import { start } from "workflow/api";
-import { downloadLoomVideo } from "@/actions/loom";
 import { getOrgAnalyticsData } from "@/app/(org)/dashboard/analytics/data";
 import {
 	createAgentAccessGrant,
@@ -117,8 +116,20 @@ import {
 	updateAgentCap,
 } from "@/lib/agent-write";
 import { withJsonNotFound } from "@/lib/api-errors";
+import { getClientIp } from "@/lib/client-ip";
+import {
+	type CustomStorageAttemptAction,
+	CustomStorageRateLimitedError,
+	customStorageHttpsRequiredMessage,
+	customStorageUnavailableMessage,
+	getCustomStorageSaveRejection,
+	isInsecureS3Endpoint,
+	logCustomStorageAttempt,
+	reserveCustomStorageSave,
+} from "@/lib/custom-storage-policy";
 import { hashKey } from "@/lib/developer-key-hash";
 import { startAiGeneration } from "@/lib/generate-ai";
+import { resolveLoomDownload } from "@/lib/loom-csv-import";
 import { probeVideoViaMediaServer } from "@/lib/media-client";
 import { provisionOrganizationInvitee } from "@/lib/organization-provisioning";
 import {
@@ -130,6 +141,7 @@ import { normalizePlaybackSpeed } from "@/lib/playback-speed";
 import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 import {
 	blockedS3EndpointMessage,
+	isDisallowedCustomStorageEndpoint,
 	isDisallowedS3Endpoint,
 	publicOnlyS3Agents,
 } from "@/lib/s3-endpoint-policy";
@@ -313,6 +325,9 @@ const agentUploadVerifiedRawFileKey = (
 		videoId,
 		verificationId,
 	)}.mp4`;
+
+const agentStorageProRequiredMessage =
+	"Cap Pro is required to manage storage integrations";
 
 const badRequest = (requestId: string, message: string) =>
 	new Agent.AgentBadRequestError({
@@ -1406,6 +1421,57 @@ const resolveAgentS3Config = Effect.fn("Agent.resolveS3Config")(function* (
 	};
 });
 
+const agentS3RejectionReason = (error: unknown) => {
+	if (error instanceof Agent.AgentRateLimitedError) return "rate_limited";
+	if (error instanceof Agent.AgentForbiddenError) {
+		if (error.message === agentStorageProRequiredMessage) return "pro_required";
+		if (error.message === customStorageUnavailableMessage) return "unavailable";
+		return "not_permitted";
+	}
+	if (error instanceof Agent.AgentBadRequestError) {
+		if (error.message === blockedS3EndpointMessage)
+			return "endpoint_not_allowed";
+		if (error.message === customStorageHttpsRequiredMessage)
+			return "https_required";
+		return "invalid_request";
+	}
+	return "failed";
+};
+
+const logAgentS3Attempt = (
+	input: {
+		action: CustomStorageAttemptAction;
+		organizationId: Organisation.OrganisationId;
+		endpoint: string;
+	},
+	rejection: string | null,
+) =>
+	Effect.gen(function* () {
+		const principal = yield* Agent.AgentPrincipal;
+		const request = yield* HttpServerRequest.HttpServerRequest;
+		logCustomStorageAttempt({
+			userId: principal.id,
+			action: input.action,
+			organizationId: input.organizationId,
+			rejection,
+			endpoint: input.endpoint,
+			clientIp: getClientIp((name) => request.headers[name]),
+		});
+	});
+
+const tapAgentS3Attempt =
+	(input: {
+		action: CustomStorageAttemptAction;
+		organizationId: Organisation.OrganisationId;
+		endpoint: string;
+	}) =>
+	<A, E, R>(effect: Effect.Effect<A, E, R>) =>
+		Effect.tapBoth(effect, {
+			onSuccess: () => logAgentS3Attempt(input, null),
+			onFailure: (error) =>
+				logAgentS3Attempt(input, agentS3RejectionReason(error)),
+		});
+
 const testAgentS3Config = Effect.fn("Agent.testS3Config")(function* (
 	config: {
 		provider: string;
@@ -1527,7 +1593,13 @@ const toAgentOperationResponse = (
 	result: operation.result ?? null,
 	error:
 		operation.errorCode && operation.errorMessage
-			? { code: operation.errorCode, message: operation.errorMessage }
+			? {
+					code: operation.errorCode,
+					message:
+						operation.errorCode === "LOOM_IMPORT_FAILED"
+							? "The Loom import could not be processed"
+							: operation.errorMessage,
+				}
 			: null,
 	createdAt: operation.createdAt.toISOString(),
 	updatedAt: operation.updatedAt.toISOString(),
@@ -1605,10 +1677,7 @@ const requireAgentStorageManager = Effect.fn("Agent.requireStorageManager")(
 				.limit(1),
 		);
 		if (!account || !userIsPro(account)) {
-			return yield* forbidden(
-				requestId,
-				"Cap Pro is required to manage storage integrations",
-			);
+			return yield* forbidden(requestId, agentStorageProRequiredMessage);
 		}
 	},
 );
@@ -2319,7 +2388,7 @@ const queueAgentLoomImport = Effect.fn("Agent.queueLoomImport")(
 						return yield* rateLimited(input.requestId);
 					}
 					const download = yield* Effect.tryPromise({
-						try: () => downloadLoomVideo(loomUrl),
+						try: () => resolveLoomDownload(loomUrl),
 						catch: () =>
 							temporarilyUnavailable(
 								input.requestId,
@@ -4444,6 +4513,8 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 													platform: "agent",
 													organizationId: path.organizationId,
 													userId: principal.id,
+													// Lets Dub credit the sale to a partner referral.
+													dubCustomerId: principal.id,
 												},
 											},
 											{
@@ -5818,6 +5889,15 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 							payload,
 							requestId,
 						);
+						if (isDisallowedCustomStorageEndpoint(config.endpoint)) {
+							return yield* badRequest(requestId, blockedS3EndpointMessage);
+						}
+						if (isInsecureS3Endpoint(config.endpoint)) {
+							return yield* badRequest(
+								requestId,
+								customStorageHttpsRequiredMessage,
+							);
+						}
 						return yield* runAgentExternalMutation({
 							principal,
 							operation: "update_organization_s3",
@@ -5839,6 +5919,25 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 							decodeReplay: decodeMutationResponse,
 							execute: () =>
 								Effect.gen(function* () {
+									const rejection = yield* Effect.promise(() =>
+										getCustomStorageSaveRejection({
+											user: { id: principal.id },
+											endpoint: config.endpoint,
+											checkPro: false,
+										}),
+									);
+									if (rejection?.reason === "rate_limited") {
+										return yield* rateLimited(requestId);
+									}
+									if (
+										rejection?.reason === "https_required" ||
+										rejection?.reason === "endpoint_not_allowed"
+									) {
+										return yield* badRequest(requestId, rejection.message);
+									}
+									if (rejection) {
+										return yield* forbidden(requestId, rejection.message);
+									}
 									yield* testAgentS3Config(config, requestId);
 									const database = yield* Database;
 									const encrypted = yield* Effect.tryPromise(async () => {
@@ -5864,24 +5963,36 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 										};
 									});
 									const id = S3Bucket.S3BucketId.make(nanoId());
-									yield* database.use((db) =>
-										db.transaction(async (tx) => {
-											await tx
-												.update(Db.s3Buckets)
-												.set({ active: false })
-												.where(
-													eq(Db.s3Buckets.organizationId, path.organizationId),
-												);
-											await tx.insert(Db.s3Buckets).values({
-												id,
-												ownerId: principal.id,
-												organizationId: path.organizationId,
-												provider: config.provider,
-												...encrypted,
-												active: true,
-											});
-										}),
-									);
+									yield* database
+										.use((db) =>
+											db.transaction(async (tx) => {
+												await reserveCustomStorageSave(tx, principal.id);
+												await tx
+													.update(Db.s3Buckets)
+													.set({ active: false })
+													.where(
+														eq(
+															Db.s3Buckets.organizationId,
+															path.organizationId,
+														),
+													);
+												await tx.insert(Db.s3Buckets).values({
+													id,
+													ownerId: principal.id,
+													organizationId: path.organizationId,
+													provider: config.provider,
+													...encrypted,
+													active: true,
+												});
+											}),
+										)
+										.pipe(
+											Effect.mapError((error) =>
+												error.cause instanceof CustomStorageRateLimitedError
+													? rateLimited(requestId)
+													: error,
+											),
+										);
 									return mutationResponse(
 										"storage_s3",
 										id,
@@ -5891,7 +6002,13 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 									);
 								}),
 						});
-					}),
+					}).pipe(
+						tapAgentS3Attempt({
+							action: "save_organization",
+							organizationId: path.organizationId,
+							endpoint: payload.endpoint,
+						}),
+					),
 					requestId,
 				);
 			})
@@ -5941,7 +6058,13 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 									),
 								),
 						});
-					}),
+					}).pipe(
+						tapAgentS3Attempt({
+							action: "test_organization",
+							organizationId: path.organizationId,
+							endpoint: payload.endpoint,
+						}),
+					),
 					requestId,
 				);
 			})

@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import {
 	existsSync,
@@ -35,6 +35,16 @@ import {
 	uploadToS3,
 } from "../../lib/media-video";
 import { ensureTempDir, getTempDir } from "../../lib/temp-files";
+
+const previousStreamingHosts = process.env.MEDIA_SERVER_STREAMING_HOSTS;
+beforeAll(() => {
+	process.env.MEDIA_SERVER_STREAMING_HOSTS = "127.0.0.1,localhost,cdn.example";
+});
+afterAll(() => {
+	if (previousStreamingHosts === undefined)
+		delete process.env.MEDIA_SERVER_STREAMING_HOSTS;
+	else process.env.MEDIA_SERVER_STREAMING_HOSTS = previousStreamingHosts;
+});
 
 const FIXTURES_DIR = join(import.meta.dir, "..", "fixtures");
 const TEST_VIDEO_WITH_AUDIO = join(FIXTURES_DIR, "test-with-audio.mp4");
