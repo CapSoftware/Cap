@@ -2,6 +2,7 @@ import {
 	authOptions,
 	decodeSessionToken,
 } from "@cap/database/auth/auth-options";
+import { normalizeSignInEmail } from "@cap/database/auth/domain-utils";
 import { getWorkOS } from "@cap/database/auth/sso";
 import {
 	ssoIntentCookie,
@@ -16,7 +17,6 @@ import { getSafeNextPath } from "@/app/(org)/safe-next";
 import {
 	isEmailCodeSendLimited,
 	isEmailCodeVerifyLimited,
-	normalizeSignInEmail,
 } from "@/lib/email-code-rate-limit";
 import { isRateLimited } from "@/lib/rate-limit";
 
