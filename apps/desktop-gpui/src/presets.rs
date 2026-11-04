@@ -118,8 +118,6 @@ impl PresetsStore {
         }
     }
 
-    /// The default preset applied to a new recording's configuration, `None`
-    /// when no default is set or its config no longer deserializes.
     pub fn apply_default(&self, project: &ProjectConfiguration) -> Option<ProjectConfiguration> {
         let entry = self.presets.get(self.default?)?;
         let applied = apply_preset(&entry.config, project);
