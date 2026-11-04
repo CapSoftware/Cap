@@ -1,4 +1,7 @@
-use crate::mask_style::{MaskStyle, styled_mask};
+use crate::{
+    mask_style::{MaskStyle, styled_mask},
+    screenshot::blit_over,
+};
 use std::{collections::HashSet, hash::Hash};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -17,10 +20,18 @@ pub struct MaskRequest {
     pub region: (u32, u32, u32, u32),
     pub shape: (u32, u32, u32, u32),
     pub style: MaskStyle,
+    pub redactions: Vec<MaskRequest>,
 }
 
 impl MaskRequest {
     pub fn filter(&self, rgba: &[u8]) -> Option<image::RgbaImage> {
+        if self.redactions.is_empty() {
+            return self.filter_source(rgba);
+        }
+        self.filter_source(&redact(rgba, self.frame.size, &self.redactions))
+    }
+
+    pub fn filter_source(&self, rgba: &[u8]) -> Option<image::RgbaImage> {
         styled_mask(
             rgba,
             self.frame.size.0,
@@ -175,6 +186,65 @@ pub fn update_masks<T: Clone>(
         .collect()
 }
 
+/// A highlight paints over the whole content area, so it must sample a frame
+/// whose sensitive regions are already hidden, or its filter would put the
+/// hidden pixels back (or bleed them past the redaction's edge).
+pub fn redact(rgba: &[u8], size: (u32, u32), redactions: &[MaskRequest]) -> Vec<u8> {
+    let mut out = rgba.to_vec();
+    for redaction in redactions {
+        if let Some(image) = redaction.filter_source(rgba) {
+            blit_over(
+                &mut out,
+                size,
+                &image,
+                (redaction.region.0, redaction.region.1),
+            );
+        }
+    }
+    out
+}
+
+#[derive(Default)]
+pub struct MaskSources {
+    redacted: Option<(Vec<MaskRequest>, Vec<u8>)>,
+}
+
+impl MaskSources {
+    pub fn filter(&mut self, request: &MaskRequest, rgba: &[u8]) -> Option<image::RgbaImage> {
+        if request.redactions.is_empty() {
+            return request.filter_source(rgba);
+        }
+        if self
+            .redacted
+            .as_ref()
+            .is_none_or(|(redactions, _)| *redactions != request.redactions)
+        {
+            self.redacted = Some((
+                request.redactions.clone(),
+                redact(rgba, request.frame.size, &request.redactions),
+            ));
+        }
+        request.filter_source(&self.redacted.as_ref()?.1)
+    }
+}
+
+/// Every highlight first, sampling the redacted frame, then every sensitive
+/// mask on top, so no highlight can uncover or soften a redaction whatever
+/// order the masks were drawn in.
+pub fn order_masks(requests: Vec<MaskRequest>) -> Vec<MaskRequest> {
+    let (highlights, redactions): (Vec<_>, Vec<_>) = requests
+        .into_iter()
+        .partition(|request| request.style.invert);
+    highlights
+        .into_iter()
+        .map(|highlight| MaskRequest {
+            redactions: redactions.clone(),
+            ..highlight
+        })
+        .chain(redactions.iter().cloned())
+        .collect()
+}
+
 pub fn mask_region(
     mask: [f64; 4],
     content: [f64; 4],
@@ -217,6 +287,7 @@ mod tests {
                 region: (index as u32 * 4, 4, 32, 24),
                 shape: (index as u32 * 4, 4, 32, 24),
                 style: MaskStyle::plain(false, 16.),
+                redactions: Vec::new(),
             })
             .collect()
     }

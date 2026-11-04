@@ -221,15 +221,10 @@ pub fn composite(raw: &RawFrame, config: &ProjectConfiguration) -> Composited {
         width: content.width * scale_x,
         height: content.height * scale_y,
     });
-    for mask in &scaled {
-        if mask.annotation_type != AnnotationType::Mask {
-            continue;
-        }
-        if let Some((x0, y0, region)) =
-            annotations::masked_region_image(&raw.rgba, (width, height), mask, full, content)
-        {
-            pixels::blit_over(&mut canvas, (width, height), &region, (x0, y0));
-        }
+    for (x0, y0, region) in
+        annotations::masked_region_images(&raw.rgba, (width, height), &scaled, full, content)
+    {
+        pixels::blit_over(&mut canvas, (width, height), &region, (x0, y0));
     }
 
     let bounds = export_bounds(&scaled, (width, height));
@@ -810,6 +805,133 @@ mod tests {
         }
 
         assert_eq!(composite(&raw, &config).rgba, expected);
+    }
+
+    fn noisy_frame(width: u32, height: u32) -> RawFrame {
+        let rgba = (0..width * height)
+            .flat_map(|index| {
+                let seed = index.wrapping_mul(2_654_435_761);
+                [
+                    (seed >> 24) as u8,
+                    (seed >> 16) as u8,
+                    (seed >> 8) as u8,
+                    255,
+                ]
+            })
+            .collect();
+        RawFrame {
+            rgba,
+            width,
+            height,
+            base_width: width,
+            base_height: height,
+            content: None,
+        }
+    }
+
+    fn redaction(id: &str, rect: [f64; 4], solid: bool) -> Annotation {
+        let mut mask = annotation(AnnotationType::Mask, rect[0], rect[1], rect[2], rect[3]);
+        mask.id = id.into();
+        mask.mask_type = Some(cap_project::MaskType::Blur);
+        mask.mask_level = Some(8.);
+        mask.mask_options = Some(cap_project::MaskOptions {
+            solid,
+            ..Default::default()
+        });
+        mask
+    }
+
+    fn highlight(id: &str, rect: [f64; 4], blur: f64, darkness: f64) -> Annotation {
+        let mut mask = annotation(AnnotationType::Mask, rect[0], rect[1], rect[2], rect[3]);
+        mask.id = id.into();
+        let solid = blur < 1.;
+        mask.mask_type = Some(cap_project::MaskType::Blur);
+        mask.mask_level = Some(blur.max(1.));
+        mask.opacity = if solid { darkness } else { 1. };
+        mask.mask_options = Some(cap_project::MaskOptions {
+            invert: true,
+            solid,
+            tint: if solid { 0. } else { darkness },
+            ..Default::default()
+        });
+        mask
+    }
+
+    fn region_pixels(out: &Composited, rect: [u32; 4]) -> Vec<[u8; 4]> {
+        let [x, y, width, height] = rect;
+        (y..y + height)
+            .flat_map(|row| (x..x + width).map(move |column| (row, column)))
+            .map(|(row, column)| {
+                let index = (row * out.width + column) as usize * 4;
+                out.rgba[index..index + 4].try_into().unwrap()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_later_highlight_never_reveals_an_earlier_redaction() {
+        let raw = noisy_frame(32, 16);
+        let source = Composited {
+            rgba: raw.rgba.clone(),
+            width: 32,
+            height: 16,
+        };
+        let hidden = [2, 2, 8, 8];
+        let hidden_rect = hidden.map(f64::from);
+        for (blur, darkness) in [(1., 0.), (2., 0.1), (0., 0.)] {
+            for solid in [true, false] {
+                let mut sensitive_only = ProjectConfiguration::default();
+                sensitive_only
+                    .annotations
+                    .push(redaction("sensitive", hidden_rect, solid));
+                let mut config = sensitive_only.clone();
+                config
+                    .annotations
+                    .push(highlight("highlight", [20., 4., 8., 8.], blur, darkness));
+
+                let redacted = region_pixels(&composite(&raw, &sensitive_only), hidden);
+                let out = region_pixels(&composite(&raw, &config), hidden);
+
+                assert_eq!(
+                    out, redacted,
+                    "blur {blur}, darkness {darkness}, solid {solid}"
+                );
+                assert_ne!(out, region_pixels(&source, hidden));
+                if solid {
+                    assert!(out.iter().all(|pixel| *pixel == [0, 0, 0, 255]));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn highlights_never_leak_redacted_pixels_in_any_order() {
+        let raw = noisy_frame(40, 24);
+        let mut other = noisy_frame(40, 24);
+        for row in 6..14 {
+            for column in 10..20 {
+                let index = (row * 40 + column) * 4;
+                other.rgba[index..index + 4].copy_from_slice(&[9, 200, 31, 255]);
+            }
+        }
+        let sensitive = redaction("sensitive", [10., 6., 10., 8.], true);
+        let first = highlight("first", [26., 2., 8., 8.], 6., 0.);
+        let second = highlight("second", [2., 14., 6., 6.], 1., 0.2);
+        for annotations in [
+            vec![sensitive.clone(), first.clone()],
+            vec![first.clone(), sensitive.clone()],
+            vec![first.clone(), sensitive.clone(), second.clone()],
+            vec![sensitive.clone(), second.clone(), first.clone()],
+        ] {
+            let config = ProjectConfiguration {
+                annotations,
+                ..Default::default()
+            };
+            assert_eq!(
+                composite(&raw, &config).rgba,
+                composite(&other, &config).rgba
+            );
+        }
     }
 
     /// `stableValue`: keys sorted at every depth, arrays kept in order.

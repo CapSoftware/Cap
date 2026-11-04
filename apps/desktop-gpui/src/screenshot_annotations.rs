@@ -29,8 +29,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use cap_gpui_kernels::mask_cache::{
-    MaskEntry, MaskFrame, MaskRequest, finish_mask_build, retain_masks, retired_mask_values,
-    should_cancel_mask_build, update_masks,
+    MaskEntry, MaskFrame, MaskRequest, MaskSources, finish_mask_build, order_masks, retain_masks,
+    retired_mask_values, should_cancel_mask_build, update_masks,
 };
 use cap_project::{Annotation, AnnotationType, AspectRatio, Crop, MaskType};
 use gpui::{
@@ -2364,11 +2364,13 @@ impl ScreenshotEditorWindow {
                 .as_ref()
                 .map(|crop| [crop.position.x, crop.position.y, crop.size.x, crop.size.y]),
         };
-        self.project
-            .annotations
-            .iter()
-            .filter_map(|mask| mask_request(mask, frame))
-            .collect()
+        order_masks(
+            self.project
+                .annotations
+                .iter()
+                .filter_map(|mask| mask_request(mask, frame))
+                .collect(),
+        )
     }
 
     /// `renderMaskOverlays` (`Preview.tsx:579-687`), off the main thread. The
@@ -4002,8 +4004,9 @@ fn build_mask_overlays(
     previous: &[MaskEntry<MaskOverlay>],
     requests: &[MaskRequest],
 ) -> Vec<MaskEntry<MaskOverlay>> {
+    let mut sources = MaskSources::default();
     update_masks(previous, requests, |request| {
-        let processed = request.filter(bgra)?;
+        let processed = sources.filter(request, bgra)?;
         Some(MaskOverlay {
             rect: Rect {
                 x: request.region.0 as f64,
@@ -4019,57 +4022,74 @@ fn build_mask_overlays(
 }
 
 fn mask_request(mask: &Annotation, frame: MaskFrame) -> Option<MaskRequest> {
+    let content = frame.content.map(f64::from_bits);
+    mask_request_in(mask, content, frame, true)
+}
+
+fn mask_request_in(
+    mask: &Annotation,
+    clip: [f64; 4],
+    frame: MaskFrame,
+    bgra: bool,
+) -> Option<MaskRequest> {
     if mask.annotation_type != AnnotationType::Mask {
         return None;
     }
     let content = frame.content.map(f64::from_bits);
-    let (region, shape) = mask::mask_regions(mask, content, content, frame.size)?;
+    let (region, shape) = mask::mask_regions(mask, clip, content, frame.size)?;
     Some(MaskRequest {
         id: mask.id.clone(),
         region,
         shape,
         frame,
-        style: mask::mask_style(mask, true),
+        style: mask::mask_style(mask, bgra),
+        redactions: Vec::new(),
     })
 }
 
-/// One mask's blurred or pixelated pixels, sampled from `rgba` (an unmodified
-/// copy of the frame) and returned with the region's top-left in frame
-/// coordinates. The export's `applyMaskAnnotations` pass calls it with
-/// `rect` set to the whole canvas (`screenshotExport.ts:290-295` passes
-/// `{x:0,y:0,w,h}`).
-pub(crate) fn masked_region_image(
+/// Every mask's blurred, pixelated or solid pixels, sampled from `rgba` (an
+/// unmodified copy of the frame) in paint order, each with its region's
+/// top-left in frame coordinates. Highlights come first and sample the frame
+/// with every sensitive mask already applied; sensitive masks come last, so
+/// no highlight can reveal what one hides. The export's
+/// `applyMaskAnnotations` pass calls it with `rect` set to the whole canvas
+/// (`screenshotExport.ts:290-295` passes `{x:0,y:0,w,h}`).
+pub(crate) fn masked_region_images(
     rgba: &[u8],
     size: (u32, u32),
-    mask: &Annotation,
+    masks: &[Annotation],
     rect: Rect,
     content: Rect,
-) -> Option<(u32, u32, image::RgbaImage)> {
+) -> Vec<(u32, u32, image::RgbaImage)> {
     let (frame_width, frame_height) = size;
-    if frame_width == 0 || frame_height == 0 {
-        return None;
+    if frame_width == 0
+        || frame_height == 0
+        || rgba.len() < frame_width as usize * 4 * frame_height as usize
+    {
+        return Vec::new();
     }
-    let stride = frame_width as usize * 4;
-    if rgba.len() < stride * frame_height as usize {
-        return None;
-    }
-
-    let (region, shape) = mask::mask_regions(
-        mask,
-        [rect.x, rect.y, rect.width, rect.height],
-        [content.x, content.y, content.width, content.height],
+    let frame = MaskFrame {
+        revision: 0,
         size,
-    )?;
-    let processed = cap_gpui_kernels::mask_style::styled_mask(
-        rgba,
-        frame_width,
-        frame_height,
-        region,
-        shape,
-        &mask::mask_style(mask, false),
-    )?;
-
-    Some((region.0, region.1, processed))
+        content: [content.x, content.y, content.width, content.height].map(f64::to_bits),
+        padding: 0_f64.to_bits(),
+        crop: None,
+    };
+    let clip = [rect.x, rect.y, rect.width, rect.height];
+    let requests = order_masks(
+        masks
+            .iter()
+            .filter_map(|mask| mask_request_in(mask, clip, frame, false))
+            .collect(),
+    );
+    let mut sources = MaskSources::default();
+    requests
+        .iter()
+        .filter_map(|request| {
+            let image = sources.filter(request, rgba)?;
+            Some((request.region.0, request.region.1, image))
+        })
+        .collect()
 }
 
 /// One mask's region in whole frame pixels: its own rect, clipped to the
@@ -4630,6 +4650,99 @@ mod tests {
             let overlay = entry.value.as_ref().unwrap();
             assert_eq!(overlay.image.size(0), expected.size(0));
             assert_eq!(overlay.image.as_bytes(0), expected.as_bytes(0));
+        }
+    }
+
+    #[test]
+    fn preview_paints_highlights_under_redactions_like_the_export() {
+        let (width, height) = (40u32, 24u32);
+        let rgba: Vec<u8> = (0..width * height)
+            .flat_map(|index| {
+                let seed = index.wrapping_mul(2_654_435_761);
+                [
+                    (seed >> 24) as u8,
+                    (seed >> 16) as u8,
+                    (seed >> 8) as u8,
+                    255,
+                ]
+            })
+            .collect();
+        let mut bgra = rgba.clone();
+        cap_gpui_kernels::frame::swap_red_blue(&mut bgra);
+        let full = Rect {
+            x: 0.,
+            y: 0.,
+            width: f64::from(width),
+            height: f64::from(height),
+        };
+        let frame = MaskFrame {
+            revision: 1,
+            size: (width, height),
+            content: [full.x, full.y, full.width, full.height].map(f64::to_bits),
+            padding: 0_f64.to_bits(),
+            crop: None,
+        };
+        let mut sensitive = shape(AnnotationType::Mask, 10., 6., 10., 8.);
+        sensitive.id = "sensitive".into();
+        sensitive.mask_type = Some(MaskType::Blur);
+        sensitive.mask_options = Some(cap_project::MaskOptions {
+            solid: true,
+            color: "#ff8000".into(),
+            ..Default::default()
+        });
+        let mut highlight = shape(AnnotationType::Mask, 26., 2., 8., 8.);
+        highlight.id = "highlight".into();
+        highlight.mask_type = Some(MaskType::Blur);
+        highlight.mask_level = Some(2.);
+        highlight.mask_options = Some(cap_project::MaskOptions {
+            invert: true,
+            tint: 0.1,
+            ..Default::default()
+        });
+        let masks = [sensitive, highlight];
+
+        let requests = order_masks(
+            masks
+                .iter()
+                .filter_map(|mask| mask_request(mask, frame))
+                .collect(),
+        );
+        assert_eq!(
+            requests
+                .iter()
+                .map(|request| request.id.as_str())
+                .collect::<Vec<_>>(),
+            ["highlight", "sensitive"]
+        );
+        let mut preview = bgra.clone();
+        for entry in build_mask_overlays(&bgra, &[], &requests) {
+            let overlay = entry.value.unwrap();
+            let image = image::RgbaImage::from_raw(
+                overlay.rect.width as u32,
+                overlay.rect.height as u32,
+                overlay.image.as_bytes(0).unwrap().to_vec(),
+            )
+            .unwrap();
+            cap_gpui_kernels::screenshot::blit_over(
+                &mut preview,
+                (width, height),
+                &image,
+                (overlay.rect.x as u32, overlay.rect.y as u32),
+            );
+        }
+        cap_gpui_kernels::frame::swap_red_blue(&mut preview);
+
+        let mut export = rgba.clone();
+        for (x, y, image) in masked_region_images(&rgba, (width, height), &masks, full, full) {
+            cap_gpui_kernels::screenshot::blit_over(&mut export, (width, height), &image, (x, y));
+        }
+
+        assert_eq!(preview, export);
+        for row in 6..14 {
+            for column in 10..20 {
+                let index = (row * width as usize + column) * 4;
+                assert_eq!(export[index..index + 4], [255, 128, 0, 255]);
+            }
         }
     }
 

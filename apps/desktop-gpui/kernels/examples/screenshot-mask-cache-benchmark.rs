@@ -45,6 +45,7 @@ fn requests(count: usize, pixelate: bool, event: usize) -> Vec<MaskRequest> {
                 region,
                 shape: region,
                 style: MaskStyle::plain(pixelate, 16.),
+                redactions: Vec::new(),
             }
         })
         .collect()
