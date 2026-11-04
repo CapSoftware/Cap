@@ -531,11 +531,14 @@ fn read_caption_font(path: &Path) -> std::io::Result<Vec<u8>> {
     Ok(data)
 }
 
+/// Installed fonts can share the file's family name, so the file's faces are
+/// registered under a name nothing else uses.
+const CUSTOM_CAPTION_FAMILY: &str = "Cap Custom Caption Font";
+
 #[derive(Default)]
 struct CustomCaptionFont {
     path: Option<PathBuf>,
     faces: Vec<fontdb::ID>,
-    family: Option<FamilyOwned>,
 }
 
 impl CustomCaptionFont {
@@ -548,7 +551,6 @@ impl CustomCaptionFont {
         for face in self.faces.drain(..) {
             font_system.db_mut().remove_face(face);
         }
-        self.family = None;
         self.path = path.map(Path::to_path_buf);
         let Some(path) = path else {
             return true;
@@ -560,26 +562,38 @@ impl CustomCaptionFont {
                 return true;
             }
         };
+        let mut file_faces = fontdb::Database::new();
+        file_faces.load_font_source(fontdb::Source::Binary(Arc::new(data)));
         let db = font_system.db_mut();
+        for face in file_faces.faces() {
+            let mut face = face.clone();
+            face.families = vec![(
+                CUSTOM_CAPTION_FAMILY.to_string(),
+                fontdb::Language::English_UnitedStates,
+            )];
+            db.push_face_info(face);
+        }
         self.faces = db
-            .load_font_source(fontdb::Source::Binary(Arc::new(data)))
-            .to_vec();
-        self.family = self
-            .faces
-            .first()
-            .and_then(|face| db.face(*face))
-            .and_then(|face| face.families.first())
-            .map(|(name, _)| FamilyOwned::Name(name.as_str().into()));
-        if self.family.is_none() {
+            .faces()
+            .filter(|face| {
+                face.families
+                    .first()
+                    .is_some_and(|(name, _)| name == CUSTOM_CAPTION_FAMILY)
+            })
+            .map(|face| face.id)
+            .collect();
+        if self.faces.is_empty() {
             warn!("Caption font {} is not a usable font", path.display());
         }
         true
     }
 
     fn family_or(&self, fallback: &str) -> FamilyOwned {
-        self.family
-            .clone()
-            .unwrap_or_else(|| system_caption_family(fallback))
+        if self.faces.is_empty() {
+            system_caption_family(fallback)
+        } else {
+            FamilyOwned::Name(CUSTOM_CAPTION_FAMILY.into())
+        }
     }
 }
 
@@ -937,8 +951,8 @@ impl CaptionsLayer {
             &mut self.font_system,
             caption_data.settings.custom_font.as_deref(),
         ) {
-            // Two files can share a family name, so the shape key alone would
-            // keep glyphs from the faces that were just removed.
+            // Every file is registered under the same family name, so the shape
+            // key alone would keep glyphs from the faces that were just removed.
             self.text = CaptionText::new();
         }
         let font_family = self.custom_font.family_or(&caption_data.settings.font);
@@ -1683,7 +1697,10 @@ pub(super) mod custom_font_tests {
 
     use glyphon::{Color, FamilyOwned, FontSystem, Weight, fontdb};
 
-    use super::{CaptionTextColors, CustomCaptionFont, ShapedCaptionText, shape_caption_text};
+    use super::{
+        CUSTOM_CAPTION_FAMILY, CaptionTextColors, CustomCaptionFont, ShapedCaptionText,
+        shape_caption_text,
+    };
 
     fn shaped_face_ids(font_system: &mut FontSystem, family: FamilyOwned) -> Vec<fontdb::ID> {
         let shaped = ShapedCaptionText {
@@ -1702,32 +1719,22 @@ pub(super) mod custom_font_tests {
         ids
     }
 
-    const FIXTURE_FAMILY: &str = "Geist";
-
     pub(crate) fn fixture_font() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../apps/desktop-gpui/assets/fonts/Geist-Bold.ttf")
     }
 
-    /// Drops any installed copy of the fixture family, so the only faces that
-    /// can draw it are the ones loaded from the fixture file.
-    pub(crate) fn font_system_without_fixture_family() -> FontSystem {
+    /// Installs a copy of the fixture, so its family name also matches faces
+    /// that did not come from the selected file.
+    pub(crate) fn font_system_with_installed_fixture() -> FontSystem {
         let mut font_system = super::super::new_font_system();
-        let installed: Vec<_> = font_system
-            .db()
-            .faces()
-            .filter(|face| face.families.iter().any(|(name, _)| name == FIXTURE_FAMILY))
-            .map(|face| face.id)
-            .collect();
-        for id in installed {
-            font_system.db_mut().remove_face(id);
-        }
+        font_system.db_mut().load_font_file(fixture_font()).unwrap();
         font_system
     }
 
     #[test]
     fn custom_font_registers_its_family_and_unloads_when_cleared() {
-        let mut font_system = font_system_without_fixture_family();
+        let mut font_system = font_system_with_installed_fixture();
         let system_faces = font_system.db().len();
         let path = fixture_font();
         let mut font = CustomCaptionFont::default();
@@ -1737,7 +1744,7 @@ pub(super) mod custom_font_tests {
 
         assert!(font.sync(&mut font_system, Some(&path)));
         let family = font.family_or("System Sans-Serif");
-        assert_eq!(family, FamilyOwned::Name(FIXTURE_FAMILY.into()));
+        assert_eq!(family, FamilyOwned::Name(CUSTOM_CAPTION_FAMILY.into()));
         assert!(font_system.db().len() > system_faces);
         assert!(
             shaped_face_ids(&mut font_system, family)
@@ -1775,7 +1782,7 @@ pub(super) mod custom_font_tests {
 
     #[test]
     fn font_files_over_the_size_cap_are_not_read() {
-        let mut font_system = font_system_without_fixture_family();
+        let mut font_system = font_system_with_installed_fixture();
         let system_faces = font_system.db().len();
         let dir = tempfile::tempdir().unwrap();
         let oversized = dir.path().join("padded.ttf");
@@ -2178,7 +2185,7 @@ mod gpu_tests {
     };
 
     use super::CaptionsLayer;
-    use super::custom_font_tests::{fixture_font, font_system_without_fixture_family};
+    use super::custom_font_tests::{fixture_font, font_system_with_installed_fixture};
     use crate::{
         DecodedSegmentFrames, ProjectUniforms, RenderOptions, RenderVideoConstants,
         ZoomTransformTimeline,
@@ -2658,7 +2665,7 @@ mod gpu_tests {
         };
         let layer = || {
             let mut layer = CaptionsLayer::new(&constants.device, &constants.queue);
-            layer.font_system = font_system_without_fixture_family();
+            layer.font_system = font_system_with_installed_fixture();
             layer
         };
         let fresh = |settings: &CaptionSettings| render(&mut layer(), settings);
