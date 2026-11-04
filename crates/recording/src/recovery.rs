@@ -5209,6 +5209,17 @@ mod clean_studio_snapshot_tests {
         validate_recovered_track(&project.join(OUTPUT), ffmpeg::media::Type::Video).unwrap();
     }
 
+    fn assert_names_fragment(error: &RecoveryError, fragment: &Path) {
+        let named = |path: &Path| path.file_name().unwrap().to_string_lossy().into_owned();
+        let expected = format!(
+            "{}{}{}",
+            named(fragment.parent().unwrap()),
+            std::path::MAIN_SEPARATOR,
+            named(fragment)
+        );
+        assert!(error.to_string().ends_with(&expected), "{error}");
+    }
+
     fn recovered_packets(project: &Path) -> u64 {
         validate_recovered_track(&project.join(OUTPUT), ffmpeg::media::Type::Video).unwrap();
         ffmpeg::format::input(&project.join(OUTPUT))
@@ -5267,10 +5278,7 @@ mod clean_studio_snapshot_tests {
         tear_fragment(&torn);
         let error = validate_recovery_manifests(&project.join("content"), true)
             .expect_err("a torn fragment before a later respawned muxer must be rejected");
-        assert!(
-            error.to_string().contains(&torn.display().to_string()),
-            "{error}"
-        );
+        assert_names_fragment(&error, &torn);
         let recording = RecoveryManager::inspect_recording(project).unwrap();
         assert!(RecoveryManager::recover(&recording).is_err());
     }
@@ -5411,10 +5419,7 @@ mod clean_studio_snapshot_tests {
         let (directory, torn) = pending_after_torn_tail(None);
         let error = validate_instant_manifests(&directory.path().join("content"))
             .expect_err("a pending fragment the Instant rescue converts follows the torn tail");
-        assert!(
-            error.to_string().contains(&torn.display().to_string()),
-            "{error}"
-        );
+        assert_names_fragment(&error, &torn);
     }
 
     #[test]
