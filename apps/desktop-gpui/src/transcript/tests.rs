@@ -1403,11 +1403,11 @@ fn silence_detection_on_two_hours_is_fast() {
 
 #[test]
 fn a_word_whose_audio_sits_in_its_neighbour_is_treated_as_silence() {
-    let speech = synthetic_speech(&[(0.5, 0.9), (2.2, 2.6)], 3.5);
+    let speech = synthetic_speech(&[(0.2, 0.9), (2.2, 2.9)], 3.5);
     let words = [
-        ("as", 0.5, 0.85),
+        ("as", 0.2, 0.85),
         ("fast.", 0.85, 1.9),
-        ("Hopefully", 1.9, 2.6),
+        ("Hopefully", 1.9, 2.9),
     ];
     let durations = [speech.duration];
     let mut project = project(&words, &durations);
@@ -1679,4 +1679,40 @@ fn a_background_that_changes_level_still_counts_as_quiet() {
             "{start} {found:?}"
         );
     }
+}
+
+#[test]
+fn a_brief_loud_sound_does_not_turn_a_quiet_word_into_silence() {
+    let level = |db: f64| 10f64.powf(db / 10.0) as f32;
+    let hops = (60.0 / HOP_SECONDS) as usize;
+    let at = |seconds: f64| (seconds / HOP_SECONDS) as usize;
+    let mut clip: Vec<f32> = (0..hops)
+        .map(|hop| level(-60.0 + (hop % 5) as f64 * 0.4))
+        .collect();
+    let mut fill = |from: f64, until: f64, db: f64| {
+        for (offset, hop) in clip[at(from)..at(until)].iter_mut().enumerate() {
+            *hop = level(db + (offset % 5) as f64 * 0.25 - 0.5);
+        }
+    };
+    for second in 0..18 {
+        let start = 2.0 + second as f64 * 3.0;
+        fill(start, start + 1.0, -40.0);
+    }
+    fill(10.2, 10.7, -48.0);
+    fill(30.2, 30.7, -20.0);
+    let envelope = EnergyEnvelope::new(vec![clip], &[60.0]);
+    let threshold = envelope.silence_threshold_db(1.0).unwrap();
+    assert!(threshold < -48.5, "{threshold}");
+    assert!(
+        envelope.silences_overlapping(10.21..10.69).is_empty(),
+        "{:?}",
+        envelope.silences_overlapping(10.21..10.69)
+    );
+    let between = envelope.silences_overlapping(3.0..5.0);
+    assert!(
+        between
+            .iter()
+            .any(|silence| silence.start < 3.05 && silence.end > 4.95),
+        "{between:?}"
+    );
 }

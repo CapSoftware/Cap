@@ -8,8 +8,8 @@ const SAMPLE_RATE: f64 = 48_000.0;
 pub const MIN_SILENCE: f64 = 0.2;
 const DIGITAL_SILENCE_DB: f32 = -90.0;
 const FLOOR_PERCENTILE: f64 = 0.02;
-const SPEECH_PERCENTILE: f64 = 0.95;
-const LOUD_PERCENTILE: f64 = 0.99;
+const SPEECH_SECONDS: f64 = 1.0;
+const SPEECH_SHARE: f64 = 0.02;
 const MIN_MARGIN_DB: f32 = 6.0;
 const MAX_MARGIN_DB: f32 = 15.0;
 const MIN_SEPARATION_DB: f32 = 2.0 * MIN_MARGIN_DB;
@@ -187,13 +187,10 @@ fn silence_threshold(smoothed: &[f32], window: usize) -> f32 {
     }
     let floor = to_db(percentile(&mut sums, FLOOR_PERCENTILE).max(0.0));
     let mut hops: Vec<f32> = smoothed.iter().step_by(stride).copied().collect();
-    let overall = percentile(&mut hops, SPEECH_PERCENTILE);
-    let louder = from_db(floor + MIN_MARGIN_DB);
-    let mut loud: Vec<f32> = hops.into_iter().filter(|energy| *energy > louder).collect();
-    if loud.is_empty() {
-        return DIGITAL_SILENCE_DB;
-    }
-    let speech = to_db(overall.max(percentile(&mut loud, LOUD_PERCENTILE)));
+    let loudest = ((SPEECH_SECONDS / HOP_SECONDS) as usize / stride)
+        .max((hops.len() as f64 * SPEECH_SHARE) as usize);
+    let fraction = (1.0 - loudest as f64 / hops.len() as f64).max(0.5);
+    let speech = to_db(percentile(&mut hops, fraction));
     if speech - floor < MIN_SEPARATION_DB {
         return DIGITAL_SILENCE_DB;
     }
