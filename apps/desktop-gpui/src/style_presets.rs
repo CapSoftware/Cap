@@ -739,10 +739,14 @@ impl Default for CaptionStyle {
 }
 
 impl CaptionStyle {
+    /// Whether fillers show, and which language the transcript's fillers
+    /// are in, belong to the transcript rather than its look.
     pub fn of(settings: &CaptionSettings) -> Self {
         let mut settings = settings.clone();
         settings.enabled = false;
         settings.export_with_subtitles = false;
+        settings.show_filler_words = false;
+        settings.filler_language = None;
         Self(settings)
     }
 
@@ -750,6 +754,8 @@ impl CaptionStyle {
         CaptionSettings {
             enabled: current.enabled,
             export_with_subtitles: current.export_with_subtitles,
+            show_filler_words: current.show_filler_words,
+            filler_language: current.filler_language.clone(),
             ..self.0.clone()
         }
     }
@@ -772,6 +778,8 @@ impl PresetStyle for CaptionStyle {
         let settings = &mut self.0;
         settings.enabled = false;
         settings.export_with_subtitles = false;
+        settings.show_filler_words = false;
+        settings.filler_language = None;
         if !crate::editor_tabs::FONT_OPTIONS.contains(&settings.font.as_str()) {
             settings.font = fallback.font.clone();
         }
@@ -1649,7 +1657,7 @@ mod tests {
         assert_eq!(settings.color, "#FFD400");
         assert!(!settings.enabled);
 
-        crate::transcription::apply_caption_result(&mut project, Vec::new(), &[7200.], 7200.);
+        crate::transcription::apply_caption_result(&mut project, Vec::new(), "en", &[7200.], 7200.);
         let settings = &project.captions.as_ref().unwrap().settings;
         assert!(settings.enabled);
         assert_eq!(settings.size, 64);
@@ -1826,6 +1834,35 @@ mod tests {
         assert!(settings.enabled);
         assert!(settings.export_with_subtitles);
         assert_eq!(CaptionStyle::read(&project, 0).unwrap(), captions);
+    }
+
+    #[test]
+    fn caption_styles_leave_the_transcript_filler_settings_alone() {
+        let german = CaptionSettings {
+            size: 80,
+            filler_language: None,
+            ..CaptionSettings::default()
+        };
+        let english = CaptionSettings {
+            size: 40,
+            show_filler_words: true,
+            filler_language: Some("en".to_string()),
+            ..CaptionSettings::default()
+        };
+
+        let saved = CaptionStyle::of(&english);
+        assert_eq!(saved.0.filler_language, None);
+        assert!(!saved.0.show_filler_words);
+
+        let applied = saved.applied_to(&german);
+        assert_eq!(applied.size, 40);
+        assert_eq!(applied.filler_language, None);
+        assert!(!applied.show_filler_words);
+
+        let applied = CaptionStyle::of(&german).applied_to(&english);
+        assert_eq!(applied.size, 80);
+        assert_eq!(applied.filler_language.as_deref(), Some("en"));
+        assert!(applied.show_filler_words);
     }
 
     fn blue_outline() -> ShapeStyle {
