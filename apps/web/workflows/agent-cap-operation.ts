@@ -3,6 +3,10 @@ import * as Db from "@cap/database/schema";
 import { Organisations } from "@cap/web-backend/src/Organisations/index";
 import { Storage } from "@cap/web-backend/src/Storage/index";
 import {
+	getDuplicateVideoMetadata,
+	planVideoDuplicate,
+} from "@cap/web-backend/src/Videos/duplicate";
+import {
 	CurrentUser,
 	Folder,
 	Organisation,
@@ -141,10 +145,11 @@ async function copyCapObjects(payload: OperationPayload) {
 		throw new FatalError("Duplicate destination missing");
 	const { bucket, keys, prefix } = await listOperationObjects(payload.snapshot);
 	const destinationPrefix = `${payload.snapshot.ownerId}/${payload.destinationId}/`;
+	const plan = planVideoDuplicate(payload.snapshot);
 	await Effect.forEach(
-		keys,
+		[...plan.publishedKeys, ...keys.filter(plan.copiesListedKey)],
 		(key) =>
-			bucket.copyObject(
+			bucket.copyObjectForRecording(
 				`${bucket.bucketName}/${key}`,
 				key.replace(prefix, destinationPrefix),
 			),
@@ -170,6 +175,19 @@ async function createDuplicate(operationId: string, payload: OperationPayload) {
 			throw new FatalError("Duplicate destination conflicts with another Cap");
 		}
 		if (!existing) {
+			const [original] = await tx
+				.select({ password: Db.videos.password })
+				.from(Db.videos)
+				.where(
+					and(
+						eq(Db.videos.id, Video.VideoId.make(snapshot.id)),
+						eq(Db.videos.ownerId, User.UserId.make(snapshot.ownerId)),
+					),
+				)
+				.limit(1);
+			if (!original) {
+				throw new FatalError("The Cap to duplicate no longer exists");
+			}
 			await tx.insert(Db.videos).values({
 				id: destinationId,
 				ownerId: User.UserId.make(snapshot.ownerId),
@@ -187,8 +205,10 @@ async function createDuplicate(operationId: string, payload: OperationPayload) {
 				width: snapshot.width,
 				height: snapshot.height,
 				fps: snapshot.fps,
-				metadata: snapshot.metadata,
+				metadata:
+					snapshot.metadata && getDuplicateVideoMetadata(snapshot.metadata),
 				public: snapshot.public,
+				password: original.password,
 				settings: snapshot.settings,
 				transcriptionStatus: snapshot.transcriptionStatus as
 					| "PROCESSING"
@@ -197,7 +217,7 @@ async function createDuplicate(operationId: string, payload: OperationPayload) {
 					| "SKIPPED"
 					| "NO_AUDIO"
 					| null,
-				source: snapshot.source,
+				source: planVideoDuplicate(snapshot).source,
 				folderId: snapshot.folderId
 					? Folder.FolderId.make(snapshot.folderId)
 					: null,
