@@ -108,23 +108,23 @@ export const RATE_LIMIT_IDS = {
 	AGENT_AUTHORIZATION: "rl_agent_authorization",
 	AGENT_UNLOCK: "rl_agent_unlock",
 	AGENT_LOOM_IMPORT: "rl_loom_import_per_user",
-	/** Email OTP verification attempts (brute-force guard). Suggested: 10 / 10m per key (email). */
+	/** Email OTP verification attempts (brute-force guard). Suggested: 20 / 10m per key (email). */
 	AUTH_OTP_VERIFY: "rl_auth_otp_verify",
-	/** Email OTP / magic-link send (mailbomb + token-reseed guard). Suggested: 5 / 10m per key (email). */
+	/** Email OTP / magic-link send (mailbomb + token-reseed guard). Suggested: 10 / 10m per key (email). */
 	AUTH_OTP_SEND: "rl_auth_otp_send",
 	/** Unauthed Loom download/convert (ffmpeg + memory DoS). Suggested: 10 / 1m per IP. */
 	LOOM_DOWNLOAD: "rl_loom_download",
-	/** Unauthed transcript translation (Groq cost). Suggested: 10 / 1m per IP. */
+	/** Unauthed transcript translation (Groq cost). Suggested: 30 / 1m per IP. */
 	TRANSLATE_TRANSCRIPT: "rl_translate_transcript",
 	/** Anonymous support-chat messages (Groq + Supermemory cost). Suggested: 20 / 1m per IP. */
 	MESSENGER_MESSAGE: "rl_messenger_message",
-	/** Unauthed analytics view tracking (Tinybird ingest + notifications). Suggested: 60 / 1m per IP. */
+	/** Unauthed analytics view tracking (Tinybird ingest + notifications). Suggested: 120 / 1m per IP. */
 	ANALYTICS_TRACK: "rl_analytics_track",
 	/** Unauthed guest checkout (Stripe object/cost abuse). Suggested: 20 / 10m per IP. */
 	GUEST_CHECKOUT: "rl_guest_checkout",
 	/** Unauthed desktop log → Discord forwarding (spam). Suggested: 10 / 1m per IP. */
 	DESKTOP_LOGS: "rl_desktop_logs",
-	/** Mobile share password attempts (brute-force guard). Suggested: 10 / 10m per key (user). */
+	/** Mobile share password attempts (brute-force guard). Suggested: 20 / 10m per key (user). */
 	MOBILE_VIDEO_PASSWORD: "rl_mobile_video_password",
 	/** Unauthed docs Ask AI questions (Anthropic cost). Suggested: 10 / 1m per IP. */
 	DOCS_ASK: "rl_docs_ask",
@@ -141,16 +141,16 @@ const FALLBACK_RATE_LIMITS: Record<string, FallbackRateLimit> = {
 	[RATE_LIMIT_IDS.AGENT_AUTHORIZATION]: { limit: 10, windowMs: 10 * MINUTE_MS },
 	[RATE_LIMIT_IDS.AGENT_UNLOCK]: { limit: 30, windowMs: 10 * MINUTE_MS },
 	[RATE_LIMIT_IDS.AGENT_LOOM_IMPORT]: { limit: 20, windowMs: MINUTE_MS },
-	[RATE_LIMIT_IDS.AUTH_OTP_VERIFY]: { limit: 10, windowMs: 10 * MINUTE_MS },
-	[RATE_LIMIT_IDS.AUTH_OTP_SEND]: { limit: 5, windowMs: 10 * MINUTE_MS },
+	[RATE_LIMIT_IDS.AUTH_OTP_VERIFY]: { limit: 20, windowMs: 10 * MINUTE_MS },
+	[RATE_LIMIT_IDS.AUTH_OTP_SEND]: { limit: 10, windowMs: 10 * MINUTE_MS },
 	[RATE_LIMIT_IDS.LOOM_DOWNLOAD]: { limit: 10, windowMs: MINUTE_MS },
-	[RATE_LIMIT_IDS.TRANSLATE_TRANSCRIPT]: { limit: 10, windowMs: MINUTE_MS },
+	[RATE_LIMIT_IDS.TRANSLATE_TRANSCRIPT]: { limit: 30, windowMs: MINUTE_MS },
 	[RATE_LIMIT_IDS.MESSENGER_MESSAGE]: { limit: 20, windowMs: MINUTE_MS },
-	[RATE_LIMIT_IDS.ANALYTICS_TRACK]: { limit: 60, windowMs: MINUTE_MS },
+	[RATE_LIMIT_IDS.ANALYTICS_TRACK]: { limit: 120, windowMs: MINUTE_MS },
 	[RATE_LIMIT_IDS.GUEST_CHECKOUT]: { limit: 20, windowMs: 10 * MINUTE_MS },
 	[RATE_LIMIT_IDS.DESKTOP_LOGS]: { limit: 10, windowMs: MINUTE_MS },
 	[RATE_LIMIT_IDS.MOBILE_VIDEO_PASSWORD]: {
-		limit: 10,
+		limit: 20,
 		windowMs: 10 * MINUTE_MS,
 	},
 	[RATE_LIMIT_IDS.DOCS_ASK]: { limit: 10, windowMs: MINUTE_MS },

@@ -59,8 +59,8 @@ describe("isRateLimited outside production", () => {
 		const send = (key: string) =>
 			isRateLimited(RATE_LIMIT_IDS.AUTH_OTP_SEND, { key });
 
-		expect(await callTimes(5, () => send("email-a"))).toEqual(
-			Array(5).fill(false),
+		expect(await callTimes(10, () => send("email-a"))).toEqual(
+			Array(10).fill(false),
 		);
 		expect(await send("email-a")).toBe(true);
 		expect(await send("email-b")).toBe(false);
@@ -69,7 +69,7 @@ describe("isRateLimited outside production", () => {
 
 	it("keeps separate buckets per rule for the same key", async () => {
 		const { isRateLimited, RATE_LIMIT_IDS } = await loadRateLimit();
-		await callTimes(5, () =>
+		await callTimes(10, () =>
 			isRateLimited(RATE_LIMIT_IDS.AUTH_OTP_SEND, { key: "shared" }),
 		);
 
@@ -87,7 +87,7 @@ describe("isRateLimited outside production", () => {
 		const verify = () =>
 			isRateLimited(RATE_LIMIT_IDS.MOBILE_VIDEO_PASSWORD, { key: "user-1" });
 
-		await callTimes(10, verify);
+		await callTimes(20, verify);
 		expect(await verify()).toBe(true);
 
 		vi.advanceTimersByTime(10 * 60_000);
@@ -101,7 +101,7 @@ describe("isRateLimited outside production", () => {
 				headers: new Headers(init),
 			});
 
-		await callTimes(10, () =>
+		await callTimes(30, () =>
 			fromHeaders({
 				"x-real-ip": "203.0.113.1",
 				"x-forwarded-for": "198.51.100.9",
@@ -112,7 +112,7 @@ describe("isRateLimited outside production", () => {
 			false,
 		);
 
-		await callTimes(9, () =>
+		await callTimes(29, () =>
 			fromHeaders({ "x-forwarded-for": "198.51.100.9, 10.0.0.1" }),
 		);
 		expect(await fromHeaders({ "x-forwarded-for": "198.51.100.9" })).toBe(true);
@@ -123,7 +123,7 @@ describe("isRateLimited outside production", () => {
 		mocks.headers.mockResolvedValue(new Headers({ "x-real-ip": "192.0.2.4" }));
 		const { isRateLimited, RATE_LIMIT_IDS } = await loadRateLimit();
 
-		await callTimes(10, () =>
+		await callTimes(30, () =>
 			isRateLimited(RATE_LIMIT_IDS.TRANSLATE_TRANSCRIPT),
 		);
 		expect(await isRateLimited(RATE_LIMIT_IDS.TRANSLATE_TRANSCRIPT)).toBe(true);
@@ -141,8 +141,10 @@ describe("isRateLimited outside production", () => {
 				headers: new Headers({ "x-forwarded-for": ip }),
 			});
 
-		for (let index = 0; index < 100; index++) {
-			expect(await fromAddress(`198.51.100.${index}`)).toBe(false);
+		for (let index = 0; index < 300; index++) {
+			expect(await fromAddress(`198.51.${index >> 8}.${index & 255}`)).toBe(
+				false,
+			);
 		}
 		expect(await fromAddress("203.0.113.250")).toBe(true);
 	});
@@ -166,8 +168,10 @@ describe("isRateLimited outside production", () => {
 				headers: new Headers({ "x-real-ip": ip }),
 			});
 
-		for (let index = 0; index < 150; index++) {
-			expect(await fromAddress(`198.51.100.${index}`)).toBe(false);
+		for (let index = 0; index < 400; index++) {
+			expect(await fromAddress(`198.51.${index >> 8}.${index & 255}`)).toBe(
+				false,
+			);
 		}
 	});
 
@@ -176,7 +180,7 @@ describe("isRateLimited outside production", () => {
 		const { isRateLimited, RATE_LIMIT_IDS } = await loadRateLimit();
 		const anonymous = () => isRateLimited(RATE_LIMIT_IDS.TRANSLATE_TRANSCRIPT);
 
-		expect(await callTimes(100, anonymous)).toEqual(Array(100).fill(false));
+		expect(await callTimes(300, anonymous)).toEqual(Array(300).fill(false));
 		expect(await anonymous()).toBe(true);
 	});
 
@@ -193,7 +197,7 @@ describe("isRateLimited outside production", () => {
 		const send = (key: string) =>
 			isRateLimited(RATE_LIMIT_IDS.AUTH_OTP_SEND, { key });
 
-		await callTimes(5, () => send("oldest"));
+		await callTimes(10, () => send("oldest"));
 		expect(await send("oldest")).toBe(true);
 
 		for (let index = 0; index < 10_000; index++) await send(`filler-${index}`);
@@ -205,7 +209,7 @@ describe("isRateLimited outside production", () => {
 		const { isRateLimited, RATE_LIMIT_IDS } = await loadRateLimit();
 		const longKey = "x".repeat(100_000);
 
-		await callTimes(5, () =>
+		await callTimes(10, () =>
 			isRateLimited(RATE_LIMIT_IDS.AUTH_OTP_SEND, { key: longKey }),
 		);
 		expect(
@@ -261,7 +265,7 @@ describe("isRateLimited in production", () => {
 		const send = () =>
 			isRateLimited(RATE_LIMIT_IDS.AUTH_OTP_SEND, { key: "email" });
 
-		expect(await callTimes(5, send)).toEqual(Array(5).fill(false));
+		expect(await callTimes(10, send)).toEqual(Array(10).fill(false));
 		expect(await send()).toBe(true);
 	});
 
@@ -275,7 +279,7 @@ describe("isRateLimited in production", () => {
 				headers: new Headers({ "x-forwarded-for": "198.51.100.7" }),
 			});
 
-		expect(await callTimes(10, verify)).toEqual(Array(10).fill(false));
+		expect(await callTimes(20, verify)).toEqual(Array(20).fill(false));
 		await expect(verify()).resolves.toBe(true);
 	});
 });
