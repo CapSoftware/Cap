@@ -162,6 +162,37 @@ describe("email code verification", () => {
 		expect(keys[1]).toBe(keys[0]);
 	});
 
+	it("verifies a compatibility spelling under the identifier the code was issued to", async () => {
+		await GET(
+			emailCallback({
+				email: " Person@\uFF25xample.com",
+				token: "123456",
+				callbackUrl: "/dashboard",
+			}),
+			context("callback", "email"),
+		);
+
+		const forwarded = mocks.nextAuth.mock.calls[0]?.[0];
+		expect(forwarded?.nextUrl.searchParams.get("email")).toBe(
+			"person@example.com",
+		);
+		expect(forwarded?.nextUrl.searchParams.get("token")).toBe("123456");
+		expect(forwarded?.nextUrl.searchParams.get("callbackUrl")).toBe(
+			"/dashboard",
+		);
+	});
+
+	it("forwards an already normalized verification unchanged", async () => {
+		const request = emailCallback({
+			email: "person@example.com",
+			token: "123456",
+		});
+
+		await GET(request, context("callback", "email"));
+
+		expect(mocks.nextAuth.mock.calls[0]?.[0]).toBe(request);
+	});
+
 	it("redirects to the verification error without checking the code when limited", async () => {
 		mocks.isRateLimited.mockResolvedValue(true);
 
