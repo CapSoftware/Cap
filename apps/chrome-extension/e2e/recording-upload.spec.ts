@@ -386,15 +386,18 @@ const useSystemDevices = Boolean(process.env.CAP_E2E_SYSTEM_DEVICES);
 const launchExtensionContext = async ({
 	tabCapture = false,
 	fakeAudioFile,
+	viewport,
 }: {
 	tabCapture?: boolean;
 	fakeAudioFile?: string;
+	viewport?: null;
 } = {}) => {
 	const extension = await launchExtensionBrowser({
 		profilePrefix: "cap-extension-e2e-",
 		headless: !tabCapture,
 		// Without the fake permission UI, grant the camera and mic up front.
 		allowExtensionMedia: tabCapture,
+		viewport,
 		args: [
 			`--allowlisted-extension-id=${unpackedExtensionId}`,
 			"--allow-http-screen-capture",
@@ -448,6 +451,7 @@ type RecordingOptions = {
 	durationMs: number;
 	cachedPlan?: { isPro: boolean; maxRecordingSeconds: number | null };
 	microphoneWarning?: boolean;
+	viewport?: { width: number; height: number };
 };
 
 const DEFAULT_RECORDING_OPTIONS: RecordingOptions = {
@@ -836,6 +840,7 @@ const startRecording = async (
 	await configureExtension(worker, apiBaseUrl, options);
 	const messengerPage = await openExtensionMessengerPage(context, worker);
 	const capturePage = await context.newPage();
+	if (options.viewport) await capturePage.setViewportSize(options.viewport);
 	await capturePage.goto(`${apiBaseUrl}${options.capturePath}`);
 	await capturePage.bringToFront();
 
@@ -905,7 +910,23 @@ test.describe("extension recording upload", () => {
 			throw new Error("Test harness did not start");
 		test.skip(!canLaunchHeaded, "Tab capture needs a headed browser");
 		await extension.cleanup();
-		extension = await launchExtensionContext({ tabCapture: true });
+		// No default viewport, so pages report the real screen, which is the
+		// frame size unfixed tab capture records into. The tab must be a
+		// different shape for the check to catch a letterboxed recording.
+		extension = await launchExtensionContext({
+			tabCapture: true,
+			viewport: null,
+		});
+		const screenPage = await extension.context.newPage();
+		const screenAspect = await screenPage.evaluate(
+			() => window.screen.width / window.screen.height,
+		);
+		await screenPage.close();
+		const tab = { width: 1000, height: 1000 };
+		expect(Math.abs(screenAspect - tab.width / tab.height)).toBeGreaterThan(
+			0.1,
+		);
+
 		const worker = await getServiceWorker(extension.context);
 		const { capturePage, messengerPage } = await startRecording(
 			extension.context,
@@ -916,12 +937,12 @@ test.describe("extension recording upload", () => {
 				mode: "tab",
 				systemAudio: true,
 				durationMs: 2_000,
+				viewport: tab,
 			},
 		);
-		const tab = await capturePage.evaluate(() => ({
-			width: window.innerWidth,
-			height: window.innerHeight,
-		}));
+		await expect(
+			capturePage.evaluate(() => [window.innerWidth, window.innerHeight]),
+		).resolves.toEqual([tab.width, tab.height]);
 		const stopResponse = await sendServiceWorkerMessage(messengerPage, {
 			target: "service-worker",
 			type: "stop-recording",
