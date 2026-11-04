@@ -10,7 +10,6 @@ import {
 	videoUploads,
 } from "@cap/database/schema";
 import type { VideoEditSpec, VideoMetadata } from "@cap/database/types";
-import { serverEnv } from "@cap/env";
 import { Storage } from "@cap/web-backend/src/Storage/index";
 import {
 	type AiGenerationLanguage,
@@ -25,6 +24,11 @@ import {
 	createAssemblyAIClient,
 	getAssemblyAITranscriptionOptions,
 } from "@/lib/assemblyai";
+import {
+	type AsyncTranscriptionConfig,
+	type AsyncTranscriptionResult,
+	transcribeAsyncAudio,
+} from "@/lib/async-transcription";
 import {
 	ENHANCED_AUDIO_CONTENT_TYPE,
 	ENHANCED_AUDIO_EXTENSION,
@@ -50,6 +54,10 @@ import {
 import { planSegmentsAudioExtraction } from "@/lib/segments-audio";
 import { downloadConcatenatedSegments } from "@/lib/segments-audio-download";
 import { fetchStorageUrl } from "@/lib/storage-fetch";
+import {
+	getAsyncTranscriptionConfig,
+	hasTranscriptionProvider,
+} from "@/lib/transcription-provider";
 import { decodeStorageVideo } from "@/lib/video-storage";
 import { runWorkflowPromise } from "@/lib/workflow-runtime";
 
@@ -156,7 +164,7 @@ export async function transcribeVideoWorkflow(
 			};
 		}
 
-		const transcription = await transcribeWithAssemblyAI(
+		const transcription = await transcribeAudio(
 			audioUrl,
 			videoData.aiGenerationLanguage,
 			videoDurationMs,
@@ -218,7 +226,7 @@ export async function backfillEditTranscriptWorkflow(
 			return { success: false };
 		}
 
-		const editTranscript = await transcribeEditTranscriptWithAssemblyAI(
+		const editTranscript = await transcribeEditTranscript(
 			audioUrl,
 			videoEdit ? videoEdit.editSpec.sourceDuration : (video.duration ?? 0),
 		);
@@ -258,8 +266,8 @@ export async function backfillEditTranscriptWorkflow(
 async function validateVideo(videoId: string): Promise<VideoData> {
 	"use step";
 
-	if (!serverEnv().ASSEMBLY_API_KEY) {
-		throw new FatalError("Missing ASSEMBLY_API_KEY");
+	if (!hasTranscriptionProvider()) {
+		throw new FatalError("Missing transcription provider configuration");
 	}
 
 	const query = await db()
@@ -333,8 +341,8 @@ async function validateEditTranscriptBackfill(
 ) {
 	"use step";
 
-	if (!serverEnv().ASSEMBLY_API_KEY) {
-		throw new FatalError("Missing ASSEMBLY_API_KEY");
+	if (!hasTranscriptionProvider()) {
+		throw new FatalError("Missing transcription provider configuration");
 	}
 
 	const [video] = await db()
@@ -770,13 +778,103 @@ async function extractAudioFromSegmentsImpl(
 	}
 }
 
-async function transcribeWithAssemblyAI(
+async function transcribeAudio(
 	audioUrl: string,
 	language: AiGenerationLanguage,
 	videoDurationMs: number,
 ): Promise<TranscriptionArtifacts> {
 	"use step";
 
+	const config = getAsyncConfigForWorkflow();
+	if (!config)
+		return transcribeWithAssemblyAI(audioUrl, language, videoDurationMs);
+	const audioResponse = await fetchStorageUrl(audioUrl);
+	if (!audioResponse.ok)
+		throw new Error(`Audio URL not accessible: ${audioResponse.status}`);
+	const transcript = await transcribeAsyncAudioWithoutRetry(
+		config,
+		Buffer.from(await audioResponse.arrayBuffer()),
+		audioResponse.headers.get("content-type") || "application/octet-stream",
+	);
+	const durationMs =
+		videoDurationMs > 0 ? videoDurationMs : transcript.audio_duration * 1000;
+	const editTranscript = createAsyncEditTranscript(transcript, durationMs);
+	return {
+		vtt: editTranscriptWordsToCaptionVtt(editTranscript.words),
+		editTranscript: serializeEditTranscript(editTranscript),
+	};
+}
+
+async function transcribeEditTranscript(
+	audioUrl: string,
+	videoDurationSeconds: number,
+): Promise<string> {
+	"use step";
+
+	const config = getAsyncConfigForWorkflow();
+	if (!config)
+		return transcribeEditTranscriptWithAssemblyAI(
+			audioUrl,
+			videoDurationSeconds,
+		);
+	const audioResponse = await fetchStorageUrl(audioUrl);
+	if (!audioResponse.ok)
+		throw new Error(`Audio URL not accessible: ${audioResponse.status}`);
+	const transcript = await transcribeAsyncAudioWithoutRetry(
+		config,
+		Buffer.from(await audioResponse.arrayBuffer()),
+		audioResponse.headers.get("content-type") || "application/octet-stream",
+	);
+	const durationMs =
+		videoDurationSeconds > 0
+			? videoDurationSeconds * 1000
+			: transcript.audio_duration * 1000;
+	return serializeEditTranscript(
+		createAsyncEditTranscript(transcript, durationMs),
+	);
+}
+
+function getAsyncConfigForWorkflow() {
+	try {
+		return getAsyncTranscriptionConfig();
+	} catch {
+		throw new FatalError("Invalid asynchronous transcription configuration");
+	}
+}
+
+async function transcribeAsyncAudioWithoutRetry(
+	config: AsyncTranscriptionConfig,
+	audio: Buffer,
+	contentType: string,
+): Promise<AsyncTranscriptionResult> {
+	try {
+		return await transcribeAsyncAudio(config, audio, contentType);
+	} catch {
+		throw new FatalError(
+			"Async transcription failed; check the service configuration and logs",
+		);
+	}
+}
+
+function createAsyncEditTranscript(
+	transcript: AsyncTranscriptionResult,
+	durationMs: number,
+) {
+	if (transcript.words.length === 0) throw new FatalError("No spoken audio");
+	const editTranscript = createEditTranscript(transcript, durationMs);
+	if (editTranscript.words.length === 0) {
+		throw new FatalError(
+			"Async transcription returned no usable word timestamps",
+		);
+	}
+	return editTranscript;
+}
+
+async function transcribeWithAssemblyAI(
+	audioUrl: string,
+	language: AiGenerationLanguage,
+	videoDurationMs: number,
+): Promise<TranscriptionArtifacts> {
 	const audioResponse = await fetchStorageUrl(audioUrl);
 	if (!audioResponse.ok) {
 		throw new Error(
@@ -826,8 +924,6 @@ async function transcribeEditTranscriptWithAssemblyAI(
 	audioUrl: string,
 	videoDurationSeconds: number,
 ): Promise<string> {
-	"use step";
-
 	const audioResponse = await fetchStorageUrl(audioUrl);
 	if (!audioResponse.ok) {
 		throw new Error(

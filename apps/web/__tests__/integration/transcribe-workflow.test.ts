@@ -3,6 +3,7 @@ import { assemblyAIEditResponse } from "../fixtures/assemblyai-edit-response";
 
 const mocks = vi.hoisted(() => ({
 	transcribe: vi.fn(),
+	transcribeAsyncAudio: vi.fn(),
 	putObject: vi.fn(),
 	deleteObject: vi.fn(),
 	getInternalSignedObjectUrl: vi.fn(),
@@ -43,13 +44,22 @@ const videoRow = vi.hoisted(() => ({
 	},
 }));
 
-const state = vi.hoisted(() => ({ editRows: [] as unknown[] }));
+const state = vi.hoisted(() => ({
+	editRows: [] as unknown[],
+	asyncEnabled: false,
+}));
 
 vi.mock("@cap/env", () => ({
 	serverEnv: () => ({
 		ASSEMBLY_API_KEY: "test-assembly-api-key",
+		ASYNC_TRANSCRIPTION_URL: state.asyncEnabled ? "http://asr.test" : undefined,
+		ASYNC_TRANSCRIPTION_API_KEY: state.asyncEnabled ? "test-token" : undefined,
 		NEXTAUTH_SECRET: "test-secret-with-enough-entropy",
 	}),
+}));
+
+vi.mock("@/lib/async-transcription", () => ({
+	transcribeAsyncAudio: mocks.transcribeAsyncAudio,
 }));
 
 vi.mock("@cap/database/schema", () => schemaMocks);
@@ -175,6 +185,7 @@ function pipeValue(value: unknown) {
 
 describe("transcribeVideoWorkflow", () => {
 	beforeEach(() => {
+		state.asyncEnabled = false;
 		mocks.updates.length = 0;
 		state.editRows = [];
 		mocks.transcribe.mockResolvedValue({
@@ -193,9 +204,133 @@ describe("transcribeVideoWorkflow", () => {
 				ok: true,
 				status: 200,
 				statusText: "OK",
+				headers: new Headers({ "content-type": "audio/mpeg" }),
 				arrayBuffer: async () => new ArrayBuffer(8),
 			})),
 		);
+	});
+
+	it("uses async transcription for captions and an editable transcript without cloud fallback", async () => {
+		state.asyncEnabled = true;
+		mocks.transcribeAsyncAudio.mockResolvedValue({
+			...assemblyAIEditResponse,
+			audio_duration: 4,
+			language_code: "ru",
+			speech_model_used: "local-model",
+		});
+		const { transcribeVideoWorkflow } = await import("@/workflows/transcribe");
+		const result = await transcribeVideoWorkflow({
+			videoId: "video-123",
+			userId: "user-456",
+			aiGenerationEnabled: false,
+		});
+		expect(result.success).toBe(true);
+		expect(mocks.transcribeAsyncAudio).toHaveBeenCalledOnce();
+		expect(mocks.transcribe).not.toHaveBeenCalled();
+		const writes = new Map(
+			mocks.putObject.mock.calls.map((call) => [call[0] as string, call[1]]),
+		);
+		expect(writes.get("user-456/video-123/transcription.vtt")).toContain(
+			"this is a real example.",
+		);
+		expect(writes.get("user-456/video-123/transcription.edit.v3.json")).toEqual(
+			expect.any(String),
+		);
+	});
+
+	it("does not fall back to AssemblyAI when async transcription fails", async () => {
+		state.asyncEnabled = true;
+		mocks.transcribeAsyncAudio.mockRejectedValue(new Error("ASR unavailable"));
+		const { transcribeVideoWorkflow } = await import("@/workflows/transcribe");
+		await expect(
+			transcribeVideoWorkflow({
+				videoId: "video-123",
+				userId: "user-456",
+				aiGenerationEnabled: true,
+			}),
+		).rejects.toMatchObject({
+			message:
+				"Async transcription failed; check the service configuration and logs",
+		});
+		expect(mocks.transcribe).not.toHaveBeenCalled();
+		expect(mocks.startAiGeneration).not.toHaveBeenCalled();
+	});
+
+	it("marks an empty async transcript as silence", async () => {
+		state.asyncEnabled = true;
+		mocks.transcribeAsyncAudio.mockResolvedValue({
+			...assemblyAIEditResponse,
+			words: [],
+			audio_duration: 4,
+			language_code: "ru",
+			speech_model_used: "local-model",
+		});
+		const { transcribeVideoWorkflow } = await import("@/workflows/transcribe");
+		const result = await transcribeVideoWorkflow({
+			videoId: "video-123",
+			userId: "user-456",
+			aiGenerationEnabled: false,
+		});
+		expect(result.success).toBe(true);
+		expect(mocks.updates).toContainEqual({ transcriptionStatus: "NO_AUDIO" });
+		expect(mocks.transcribe).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		{ audio_duration: 4, words: [{ text: "bad", start: 500, end: 500 }] },
+		{ audio_duration: 4, words: [{ text: "bad", start: 5000, end: 6000 }] },
+	])(
+		"rejects unusable word timings instead of completing an empty transcript",
+		async (bad) => {
+			state.asyncEnabled = true;
+			mocks.transcribeAsyncAudio.mockResolvedValue({
+				...bad,
+				language_code: "ru",
+				speech_model_used: "local-model",
+			});
+			const { transcribeVideoWorkflow } = await import(
+				"@/workflows/transcribe"
+			);
+			await expect(
+				transcribeVideoWorkflow({
+					videoId: "video-123",
+					userId: "user-456",
+					aiGenerationEnabled: false,
+				}),
+			).rejects.toMatchObject({
+				message: "Async transcription returned no usable word timestamps",
+			});
+			expect(mocks.updates).toContainEqual({ transcriptionStatus: "ERROR" });
+			expect(mocks.transcribe).not.toHaveBeenCalled();
+		},
+	);
+
+	it("rejects unusable word timings when duration is unknown", async () => {
+		state.asyncEnabled = true;
+		videoRow.duration = 0;
+		mocks.transcribeAsyncAudio.mockResolvedValue({
+			words: [{ text: "bad", start: 100, end: 500 }],
+			audio_duration: 0,
+			language_code: "ru",
+			speech_model_used: "local-model",
+		});
+		try {
+			const { transcribeVideoWorkflow } = await import(
+				"@/workflows/transcribe"
+			);
+			await expect(
+				transcribeVideoWorkflow({
+					videoId: "video-123",
+					userId: "user-456",
+					aiGenerationEnabled: false,
+				}),
+			).rejects.toMatchObject({
+				message: "Async transcription returned no usable word timestamps",
+			});
+			expect(mocks.updates).toContainEqual({ transcriptionStatus: "ERROR" });
+		} finally {
+			videoRow.duration = 4;
+		}
 	});
 
 	it("persists captions and the word transcript from a single paid pass", async () => {
@@ -327,6 +462,7 @@ describe("transcribeVideoWorkflow", () => {
 
 describe("backfillEditTranscriptWorkflow", () => {
 	beforeEach(() => {
+		state.asyncEnabled = false;
 		state.editRows = [];
 		videoRow.metadata = {
 			editTranscriptBackfill: {
@@ -350,9 +486,70 @@ describe("backfillEditTranscriptWorkflow", () => {
 				ok: true,
 				status: 200,
 				statusText: "OK",
+				headers: new Headers({ "content-type": "audio/mpeg" }),
 				arrayBuffer: async () => new ArrayBuffer(8),
 			})),
 		);
+	});
+
+	it("uses async transcription to backfill editable transcripts", async () => {
+		state.asyncEnabled = true;
+		mocks.transcribeAsyncAudio.mockResolvedValue({
+			...assemblyAIEditResponse,
+			audio_duration: 4,
+			language_code: "ru",
+			speech_model_used: "local-model",
+		});
+		const { backfillEditTranscriptWorkflow } = await import(
+			"@/workflows/transcribe"
+		);
+		const result = await backfillEditTranscriptWorkflow({
+			videoId: "video-123",
+			userId: "user-456",
+			requestId: "request-1",
+		});
+		expect(result.success).toBe(true);
+		expect(mocks.transcribeAsyncAudio).toHaveBeenCalledOnce();
+		expect(mocks.transcribe).not.toHaveBeenCalled();
+		const { parseEditTranscript } = await import("@/lib/edit-transcript");
+		const { decryptEditTranscriptObject } = await import(
+			"@/lib/edit-transcript-storage"
+		);
+		const write = mocks.putObject.mock.calls.find(
+			(call) => call[0] === "user-456/video-123/transcription.edit.v3.json",
+		);
+		expect(
+			parseEditTranscript(
+				decryptEditTranscriptObject(
+					write?.[1] as string,
+					"user-456",
+					"video-123",
+				) ?? "",
+			),
+		).toMatchObject({ durationMs: 4_000, speechModelUsed: "local-model" });
+	});
+
+	it("rejects unusable word timings during backfill", async () => {
+		state.asyncEnabled = true;
+		mocks.transcribeAsyncAudio.mockResolvedValue({
+			words: [{ text: "bad", start: 5000, end: 6000 }],
+			audio_duration: 4,
+			language_code: "ru",
+			speech_model_used: "local-model",
+		});
+		const { backfillEditTranscriptWorkflow } = await import(
+			"@/workflows/transcribe"
+		);
+		const result = await backfillEditTranscriptWorkflow({
+			videoId: "video-123",
+			userId: "user-456",
+			requestId: "request-1",
+		});
+		expect(result.success).toBe(false);
+		expect(mocks.putObject.mock.calls.map((call) => call[0])).not.toContain(
+			"user-456/video-123/transcription.edit.v3.json",
+		);
+		expect(mocks.transcribe).not.toHaveBeenCalled();
 	});
 
 	it("transcribes the original media in the original timeline when edits exist", async () => {
