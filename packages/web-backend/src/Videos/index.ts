@@ -677,6 +677,28 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 					if (user.activeOrganizationId !== input.orgId)
 						return yield* Effect.fail(new Policy.PolicyDeniedError());
 
+					const folderId: RepoCreateVideoInput["folderId"] =
+						input.folderId ?? Option.none<Folder.FolderId>();
+					if (Option.isSome(folderId)) {
+						const requestedFolderId = folderId.value;
+						const [folder] = yield* db.use((db) =>
+							db
+								.select({ id: Db.folders.id })
+								.from(Db.folders)
+								.where(
+									Dz.and(
+										Dz.eq(Db.folders.id, requestedFolderId),
+										Dz.eq(Db.folders.organizationId, input.orgId),
+										Dz.eq(Db.folders.createdById, user.id),
+										Dz.isNull(Db.folders.spaceId),
+									),
+								)
+								.limit(1),
+						);
+						if (!folder)
+							return yield* Effect.fail(new Policy.PolicyDeniedError());
+					}
+
 					const writable = yield* storage.getWritableAccessForUser(
 						user.id,
 						input.orgId,
@@ -684,8 +706,6 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 					const bucketId: RepoCreateVideoInput["bucketId"] = writable.bucketId;
 					const storageIntegrationId: RepoCreateVideoInput["storageIntegrationId"] =
 						writable.storageIntegrationId;
-					const folderId: RepoCreateVideoInput["folderId"] =
-						input.folderId ?? Option.none<Folder.FolderId>();
 					const width: RepoCreateVideoInput["width"] = Option.fromNullable(
 						input.width,
 					);
