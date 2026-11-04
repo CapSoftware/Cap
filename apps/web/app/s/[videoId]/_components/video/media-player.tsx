@@ -62,6 +62,7 @@ import {
 import { seekLength } from "../early-length";
 import { Badge } from "./badge";
 import { Button as PlayerButton } from "./button";
+import { hasBrowserShortcutModifier } from "./shortcut-modifiers";
 import {
 	Tooltip,
 	TooltipContent,
@@ -518,6 +519,7 @@ function MediaPlayerRootImpl(props: MediaPlayerRootProps) {
 				document.activeElement?.closest('[data-slot="media-player"]') !== null;
 
 			if (!isMediaFocused && !isPlayerFocused) return;
+			if (hasBrowserShortcutModifier(event)) return;
 
 			if (autoHide) onControlsShow();
 
@@ -763,6 +765,7 @@ function MediaPlayerRootImpl(props: MediaPlayerRootProps) {
 	const onKeyUp = React.useCallback(
 		(event: React.KeyboardEvent<HTMLDivElement>) => {
 			rootImplProps.onKeyUp?.(event);
+			if (hasBrowserShortcutModifier(event)) return;
 
 			const key = event.key.toLowerCase();
 			if (key === "arrowup" || key === "arrowdown" || key === "m") {
