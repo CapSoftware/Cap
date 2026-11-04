@@ -26,6 +26,8 @@ import {
 	isBlockedAccountEmail,
 	isEmailAllowedForSignup,
 	isEmailBlockedFromSignup,
+	normalizeEmailAddress,
+	normalizeSignInEmail,
 } from "./domain-utils.ts";
 import { DrizzleAdapter } from "./drizzle-adapter.ts";
 import {
@@ -303,6 +305,11 @@ export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 					// practical brute-force target. The OTP email and the dev console
 					// have always told users 10 minutes; this makes that true.
 					maxAge: OTP_CODE_MAX_AGE_SECONDS,
+					normalizeIdentifier(identifier) {
+						const email = normalizeSignInEmail(identifier);
+						if (!email) throw new Error("Invalid email address format.");
+						return email;
+					},
 					async generateVerificationToken() {
 						return crypto.randomInt(100000, 1000000).toString();
 					},
@@ -414,7 +421,7 @@ export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 							? credentials.email
 							: null);
 				if (!rawEmail || typeof rawEmail !== "string") return true;
-				const userEmail = rawEmail.toLowerCase();
+				const userEmail = normalizeEmailAddress(rawEmail);
 
 				if (
 					isEmailBlockedFromSignup(

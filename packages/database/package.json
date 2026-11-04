@@ -33,7 +33,7 @@
 		"mysql2": "^3.15.2",
 		"nanoid": "^5.0.4",
 		"next": "16.4.5",
-		"next-auth": "^4.24.5",
+		"next-auth": "^4.24.15",
 		"react-email": "^4.0.16",
 		"resend": "4.6.0",
 		"zod": "^3"
