@@ -1907,19 +1907,39 @@ describe("DASH segment expansion", () => {
 		expect(performance.now() - startedAt).toBeLessThan(5_000);
 	});
 
-	test("stops a SegmentTimeline repeat count before expanding it", async () => {
-		const startedAt = performance.now();
-		await withManifest(
-			'<MPD mediaPresentationDuration="PT1S"><Period><AdaptationSet mimeType="video/mp4"><Representation id="v" bandwidth="1000000"><SegmentTemplate media="seg-$Time$.m4s" initialization="init.mp4" timescale="1000"><SegmentTimeline><S t="0" d="1" r="1000000000"/></SegmentTimeline></SegmentTemplate></Representation></AdaptationSet></Period></MPD>',
-			async (dir) => {
-				await expect(
-					materializeMpdAsHlsPlaylist(
+	test.each([
+		["a repeat count", "PT1S", '<S t="0" d="1" r="1000000000"/>'],
+		[
+			"an open-ended repeat up to the next entry",
+			"PT1S",
+			'<S t="0" d="1" r="-1"/><S t="86400000" d="1000"/>',
+		],
+		[
+			"an open-ended repeat up to the duration",
+			"PT24H",
+			'<S t="0" d="1" r="-1"/>',
+		],
+	])(
+		"stops a SegmentTimeline with %s before expanding it",
+		async (_, duration, timeline) => {
+			const startedAt = performance.now();
+			await withManifest(
+				`<MPD mediaPresentationDuration="${duration}"><Period><AdaptationSet mimeType="video/mp4"><Representation id="v" bandwidth="1000000"><SegmentTemplate media="seg-$Time$.m4s" initialization="init.mp4" timescale="1000"><SegmentTimeline>${timeline}</SegmentTimeline></SegmentTemplate></Representation></AdaptationSet></Period></MPD>`,
+				async (dir) => {
+					await expect(
+						materializeMpdAsHlsPlaylist(
+							"https://cdn.example/r/manifest.mpd",
+							dir,
+						),
+					).rejects.toThrow(/^DASH /);
+					const path = await materializeStreamingInput(
 						"https://cdn.example/r/manifest.mpd",
 						dir,
-					),
-				).rejects.toThrow(/^DASH /);
-			},
-		);
-		expect(performance.now() - startedAt).toBeLessThan(5_000);
-	});
+					);
+					expect(path.endsWith(".mpd")).toBe(true);
+				},
+			);
+			expect(performance.now() - startedAt).toBeLessThan(5_000);
+		},
+	);
 });
