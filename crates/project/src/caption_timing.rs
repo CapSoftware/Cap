@@ -68,6 +68,7 @@ fn clamp_caption_segment_words(segment: &CaptionSegment) -> CaptionSegment {
 }
 
 struct SourceToEditedMapping {
+    clip: usize,
     source_start: f64,
     source_end: f64,
     edited_start: f64,
@@ -105,12 +106,14 @@ fn build_source_to_edited_mappings(
         .segments
         .iter()
         .zip(edited_offsets)
-        .map(|(segment, edited_start)| {
+        .enumerate()
+        .map(|(clip, (segment, edited_start))| {
             let recording_offset = recording_offsets
                 .get(segment.recording_clip as usize)
                 .copied()
                 .unwrap_or(0.0);
             SourceToEditedMapping {
+                clip,
                 source_start: recording_offset + segment.start,
                 source_end: recording_offset + segment.end,
                 edited_start,
@@ -246,7 +249,7 @@ struct MappedCaption {
     text: String,
     words: Vec<CaptionWord>,
     source_words: Vec<usize>,
-    source_clip: (f64, f64),
+    clip: Option<usize>,
 }
 
 fn map_captions_to_edited_timeline(
@@ -264,7 +267,7 @@ fn map_captions_to_edited_timeline(
                 end: f64::from(segment.end),
                 text: segment.text,
                 source_words: (0..segment.words.len()).collect(),
-                source_clip: (f64::NEG_INFINITY, f64::INFINITY),
+                clip: None,
                 words: segment.words,
             })
             .collect();
@@ -392,7 +395,7 @@ fn map_captions_to_edited_timeline(
                     text: caption_text_from_words(&mapped_words),
                     words: mapped_words,
                     source_words,
-                    source_clip: (mapping.source_start, mapping.source_end),
+                    clip: Some(mapping.clip),
                 });
             } else {
                 let Some((start, end)) = map_time_range_within_mapping(
@@ -410,7 +413,7 @@ fn map_captions_to_edited_timeline(
                     text: caption.text.clone(),
                     words: Vec::new(),
                     source_words: Vec::new(),
-                    source_clip: (mapping.source_start, mapping.source_end),
+                    clip: Some(mapping.clip),
                 });
             }
         }
@@ -426,13 +429,14 @@ fn map_captions_to_edited_timeline(
 }
 
 /// One track piece of a source caption: its output-time span, the indices
-/// of the caption words it shows and the source range of the clip showing
-/// them. A word straddling a cut belongs to the pieces on both sides.
+/// of the caption words it shows and the timeline clip showing them (none
+/// without a timeline). A word straddling a cut belongs to the pieces on both
+/// sides.
 pub struct CaptionPiece {
     pub start: f64,
     pub end: f64,
     pub source_words: Vec<usize>,
-    pub source_clip: (f64, f64),
+    pub clip: Option<usize>,
 }
 
 pub fn caption_piece(
@@ -448,7 +452,7 @@ pub fn caption_piece(
             start: piece.start,
             end: piece.end,
             source_words: piece.source_words,
-            source_clip: piece.source_clip,
+            clip: piece.clip,
         })
 }
 

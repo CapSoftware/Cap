@@ -2339,6 +2339,16 @@ struct SourceToEditedMapping {
     timescale: f64,
 }
 
+impl SourceToEditedMapping {
+    fn edited_end(&self) -> f64 {
+        self.edited_start + (self.source_end - self.source_start) / self.timescale
+    }
+
+    fn source_time(&self, edited_time: f64) -> f64 {
+        self.source_start + (edited_time - self.edited_start) * self.timescale
+    }
+}
+
 /// `buildSourceToEditedMappings` (`captions.ts:98-128`), with the recording
 /// offsets built from `editorInstance.recordings.segments[].display.duration`
 /// -- here the pre-flight's `clip_display_durations`.
@@ -2404,11 +2414,8 @@ pub fn map_edited_time_to_source(
     let edited_time = edited_time - held_time_before(&timeline.hold_windows(), edited_time);
     let mut fallback = None;
     for mapping in build_source_to_edited_mappings(timeline, recording_durations) {
-        let edited_end =
-            mapping.edited_start + (mapping.source_end - mapping.source_start) / mapping.timescale;
-        if edited_time >= mapping.edited_start && edited_time <= edited_end {
-            let source_time =
-                mapping.source_start + (edited_time - mapping.edited_start) * mapping.timescale;
+        if edited_time >= mapping.edited_start && edited_time <= mapping.edited_end() {
+            let source_time = mapping.source_time(edited_time);
             if let Some((range_start, range_end)) = source_range
                 && range_start < mapping.source_end
                 && range_end > mapping.source_start
@@ -2512,7 +2519,16 @@ pub fn write_caption_edit_to_source(
     else {
         return;
     };
-    let (clip_start, clip_end) = piece.source_clip;
+    let clip = piece.clip.and_then(|clip| {
+        build_source_to_edited_mappings(timeline, recording_durations)
+            .into_iter()
+            .nth(clip)
+    });
+    let (clip_start, clip_end) = clip
+        .as_ref()
+        .map_or((f64::NEG_INFINITY, f64::INFINITY), |clip| {
+            (clip.source_start, clip.source_end)
+        });
     let mut words: Vec<CaptionWord> = piece
         .source_words
         .iter()
@@ -2535,17 +2551,16 @@ pub fn write_caption_edit_to_source(
                 (start.min(in_clip(word.start)), end.max(in_clip(word.end)))
             })
     };
+    let holds = timeline.hold_windows();
     let to_source = |edited: f64, shown_at: f64, shown: f64| {
         if edited == shown_at {
             return shown;
         }
-        map_edited_time_to_source(
-            edited,
-            timeline,
-            recording_durations,
-            Some(piece.source_clip),
-        )
-        .unwrap_or(shown)
+        let Some(clip) = clip.as_ref() else {
+            return shown;
+        };
+        let edited = edited - held_time_before(&holds, edited);
+        clip.source_time(edited.clamp(clip.edited_start, clip.edited_end()))
     };
     let start = to_source(track_start, piece.start, shown_start);
     let end = to_source(track_end, piece.end, shown_end);
@@ -3031,6 +3046,33 @@ mod tests {
         let after = shown_pieces(&project);
         assert_eq!((after[0].1, after[0].2), edited);
         assert_eq!(after[1], before[1]);
+    }
+
+    #[test]
+    fn resizing_a_piece_maps_through_its_own_clip_in_a_cross_fade() {
+        let mut project =
+            cut_caption_project(&[(0.0, 5.0, 1.0), (3.0, 10.0, 1.0)], &[("word", 5.0, 6.0)]);
+        project
+            .timeline
+            .as_mut()
+            .unwrap()
+            .transitions
+            .push(cap_project::ClipTransition {
+                segment_index: 1,
+                kind: cap_project::ClipTransitionType::CrossFade,
+                duration: 1.0,
+            });
+        cap_project::synchronize_captions(&mut project, &[10.0]);
+        let before = shown_pieces(&project);
+        assert_eq!((before[0].1, before[0].2), (6.0, 7.0));
+
+        edit_caption_piece(&mut project, 0, |piece| piece.start = 4.5);
+
+        let spans: Vec<_> = shown_pieces(&project)
+            .iter()
+            .map(|piece| (piece.1, piece.2))
+            .collect();
+        assert_eq!(spans, [(3.5, 5.0), (4.5, 7.0)]);
     }
 
     #[test]
