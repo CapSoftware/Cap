@@ -224,7 +224,7 @@ describe("updateSeatQuantity", () => {
 		});
 	});
 
-	it("clears scheduled cancellation in the same decrease update", async () => {
+	it("keeps the scheduled cancellation when seats decrease", async () => {
 		mockSeatLookup({ currentQuantity: 3 });
 		mockStripe.subscriptions.retrieve.mockResolvedValue({
 			id: "sub_1",
@@ -238,14 +238,133 @@ describe("updateSeatQuantity", () => {
 			"@/actions/organization/update-seat-quantity"
 		);
 
-		await updateSeatQuantity("org-1" as never, 2);
+		const result = await updateSeatQuantity("org-1" as never, 2);
 
+		expect(result).toEqual({
+			success: true,
+			newQuantity: 2,
+			cancelAtPeriodEnd: true,
+		});
 		expect(mockStripe.subscriptions.update).toHaveBeenCalledTimes(1);
 		expect(mockStripe.subscriptions.update).toHaveBeenCalledWith("sub_1", {
 			items: [{ id: "si_1", quantity: 2 }],
 			proration_behavior: "none",
-			cancel_at_period_end: false,
 		});
+		expect(mockDb.set).toHaveBeenCalledWith({ inviteQuota: 2 });
+	});
+
+	it("keeps the scheduled cancellation when the seat count is unchanged", async () => {
+		mockSeatLookup({ currentQuantity: 3 });
+		mockStripe.subscriptions.retrieve.mockResolvedValue({
+			id: "sub_1",
+			customer: "cus_1",
+			cancel_at_period_end: true,
+			items: {
+				data: [{ id: "si_1", quantity: 3 }],
+			},
+		});
+		const { updateSeatQuantity } = await import(
+			"@/actions/organization/update-seat-quantity"
+		);
+
+		const result = await updateSeatQuantity("org-1" as never, 3);
+
+		expect(result).toMatchObject({ cancelAtPeriodEnd: true });
+
+		expect(mockStripe.subscriptions.update).toHaveBeenCalledTimes(1);
+		expect(mockStripe.subscriptions.update).toHaveBeenCalledWith("sub_1", {
+			items: [{ id: "si_1", quantity: 3 }],
+			proration_behavior: "none",
+		});
+	});
+
+	it("leaves the scheduled cancellation untouched when a seat decrease fails", async () => {
+		mockSeatLookup({ currentQuantity: 3 });
+		mockStripe.subscriptions.retrieve.mockResolvedValue({
+			id: "sub_1",
+			customer: "cus_1",
+			cancel_at_period_end: true,
+			items: {
+				data: [{ id: "si_1", quantity: 3 }],
+			},
+		});
+		mockStripe.subscriptions.update.mockRejectedValueOnce(
+			new Error("stripe unavailable"),
+		);
+		const { updateSeatQuantity } = await import(
+			"@/actions/organization/update-seat-quantity"
+		);
+
+		await expect(updateSeatQuantity("org-1" as never, 2)).rejects.toThrow(
+			"stripe unavailable",
+		);
+		expect(mockStripe.subscriptions.update).toHaveBeenCalledTimes(1);
+		expect(mockDb.set).not.toHaveBeenCalled();
+	});
+
+	it("reports a failed local save after a seat decrease without touching the scheduled cancellation", async () => {
+		mockSeatLookup({ currentQuantity: 3 });
+		mockStripe.subscriptions.retrieve.mockResolvedValue({
+			id: "sub_1",
+			customer: "cus_1",
+			cancel_at_period_end: true,
+			items: {
+				data: [{ id: "si_1", quantity: 3 }],
+			},
+		});
+		mockDb.set.mockImplementation(() => {
+			throw new Error("db down");
+		});
+		const { updateSeatQuantity } = await import(
+			"@/actions/organization/update-seat-quantity"
+		);
+
+		await expect(updateSeatQuantity("org-1" as never, 2)).rejects.toThrow(
+			"Billing was updated to 2 seats, but saving it locally failed.",
+		);
+		expect(mockStripe.subscriptions.update).toHaveBeenCalledTimes(1);
+		expect(mockStripe.subscriptions.update).toHaveBeenCalledWith("sub_1", {
+			items: [{ id: "si_1", quantity: 2 }],
+			proration_behavior: "none",
+		});
+	});
+
+	it("clears the scheduled cancellation before a seat increase", async () => {
+		mockSeatLookup({ currentQuantity: 1 });
+		mockStripe.subscriptions.retrieve.mockResolvedValue({
+			id: "sub_1",
+			customer: "cus_1",
+			cancel_at_period_end: true,
+			items: {
+				data: [{ id: "si_1", quantity: 1 }],
+			},
+		});
+		const { updateSeatQuantity } = await import(
+			"@/actions/organization/update-seat-quantity"
+		);
+
+		const result = await updateSeatQuantity("org-1" as never, 2);
+
+		expect(result).toEqual({
+			success: true,
+			newQuantity: 2,
+			cancelAtPeriodEnd: false,
+		});
+		expect(mockStripe.subscriptions.update).toHaveBeenNthCalledWith(
+			1,
+			"sub_1",
+			{ cancel_at_period_end: false },
+		);
+		expect(mockStripe.subscriptions.update).toHaveBeenNthCalledWith(
+			2,
+			"sub_1",
+			{
+				items: [{ id: "si_1", quantity: 2 }],
+				payment_behavior: "pending_if_incomplete",
+				proration_behavior: "always_invoice",
+			},
+		);
+		expect(mockStripe.subscriptions.update).toHaveBeenCalledTimes(2);
 	});
 
 	it("restores scheduled cancellation when a seat increase fails", async () => {

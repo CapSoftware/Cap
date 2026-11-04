@@ -114,9 +114,22 @@ pub fn plan_word_cuts(
     runs: &[Range<usize>],
 ) -> Vec<Range<f64>> {
     let is_kept = |word: usize| kept.is_none_or(|kept| kept.get(word).copied().unwrap_or(true));
+    let mut runs: Vec<Range<usize>> = runs
+        .iter()
+        .filter(|run| run.start < run.end && run.end <= doc.words.len())
+        .cloned()
+        .collect();
+    runs.sort_by_key(|run| run.start);
+    let mut joined: Vec<Range<usize>> = Vec::with_capacity(runs.len());
+    for run in runs {
+        match joined.last_mut() {
+            Some(last) if run.start <= last.end => last.end = last.end.max(run.end),
+            _ => joined.push(run),
+        }
+    }
     merge_ranges(
-        runs.iter()
-            .filter(|run| run.start < run.end && run.end <= doc.words.len())
+        joined
+            .iter()
             .map(|run| {
                 let start = if run.start > 0 && !is_kept(run.start - 1) {
                     Removing::Before

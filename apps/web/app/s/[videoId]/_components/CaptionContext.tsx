@@ -21,6 +21,9 @@ import {
 
 export type CaptionLanguage = LanguageCode | "original" | "off";
 
+const TRANSLATION_RETRY_LIMIT = 3;
+const TRANSLATION_RETRY_DELAY_MS = 5_000;
+
 interface AvailableTranslation {
 	code: LanguageCode;
 	name: string;
@@ -78,6 +81,7 @@ function CaptionProviderForVideo({
 		null,
 	);
 	const mounted = useRef(true);
+	const selectedLanguageRef = useRef<CaptionLanguage>("original");
 	const translations = useRef(new Map<LanguageCode, string>());
 	const pending = useRef(new Map<LanguageCode, Promise<string | null>>());
 
@@ -108,6 +112,28 @@ function CaptionProviderForVideo({
 
 	const hasOriginal = availableData?.hasOriginal ?? false;
 
+	const translateWhileInProgress = useCallback(
+		async (language: LanguageCode) => {
+			const isStillWanted = () =>
+				mounted.current && selectedLanguageRef.current === language;
+			for (let retries = 0; ; retries++) {
+				const result = await translateTranscript(videoId, language);
+				if (
+					!result.inProgress ||
+					retries >= TRANSLATION_RETRY_LIMIT ||
+					!isStillWanted()
+				) {
+					return result;
+				}
+				await new Promise((resolve) =>
+					setTimeout(resolve, TRANSLATION_RETRY_DELAY_MS),
+				);
+				if (!isStillWanted()) return result;
+			}
+		},
+		[videoId],
+	);
+
 	const requestTranslation = useCallback(
 		(language: LanguageCode): Promise<string | null> => {
 			const cached = translations.current.get(language);
@@ -116,7 +142,7 @@ function CaptionProviderForVideo({
 			if (existing) return existing;
 
 			const request = Promise.resolve()
-				.then(() => translateTranscript(videoId, language))
+				.then(() => translateWhileInProgress(language))
 				.then((result) => {
 					if (!result.success || !result.translatedVtt) return null;
 					if (mounted.current) {
@@ -135,7 +161,7 @@ function CaptionProviderForVideo({
 			if (mounted.current) setIsTranslating(true);
 			return request;
 		},
-		[videoId],
+		[translateWhileInProgress],
 	);
 
 	const currentVttContent = useMemo(() => {
@@ -150,6 +176,7 @@ function CaptionProviderForVideo({
 
 	const handleSetSelectedLanguage = useCallback(
 		async (language: CaptionLanguage) => {
+			selectedLanguageRef.current = language;
 			setSelectedLanguage(language);
 
 			if (

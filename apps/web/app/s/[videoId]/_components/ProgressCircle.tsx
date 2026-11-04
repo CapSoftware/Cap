@@ -75,6 +75,7 @@ export function useUploadProgress(
 			status: "error",
 			lastUpdated,
 			errorMessage: Option.getOrNull(query.data.processingError),
+			errorKind: query.data.processingErrorKind ?? null,
 			hasRawFallback: query.data.hasRawFallback,
 		};
 	}

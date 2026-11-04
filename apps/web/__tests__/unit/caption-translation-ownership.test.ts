@@ -4,7 +4,7 @@ import type { Video } from "@cap/web-domain";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, createElement, StrictMode } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	CaptionProvider,
 	useCaptionContext,
@@ -162,4 +162,79 @@ it("does not cache an unsuccessful response", async () => {
 		expect(await captions.requestTranslation("es")).toBe("Spanish");
 	});
 	expect(translate).toHaveBeenCalledTimes(2);
+});
+describe("translations still running elsewhere", () => {
+	const inProgress = {
+		success: false,
+		inProgress: true,
+		message: "Translation in progress",
+	};
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+	it("asks again for the selected language until the translation is ready", async () => {
+		vi.useFakeTimers();
+		translate
+			.mockResolvedValueOnce(inProgress)
+			.mockResolvedValueOnce(inProgress)
+			.mockResolvedValueOnce({ success: true, translatedVtt: "Spanish" });
+		await act(async () => {
+			captions.setSelectedLanguage("es");
+		});
+		expect(translate).toHaveBeenCalledTimes(1);
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(5_000);
+		});
+		expect(translate).toHaveBeenCalledTimes(2);
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(5_000);
+		});
+		expect(translate).toHaveBeenCalledTimes(3);
+		expect(captions.translatedVttContent.get("es")).toBe("Spanish");
+		expect(captions.currentVttContent).toBe("Spanish");
+		expect(captions.isTranslating).toBe(false);
+	});
+	it("stops after a few attempts", async () => {
+		vi.useFakeTimers();
+		translate.mockResolvedValue(inProgress);
+		await act(async () => {
+			captions.setSelectedLanguage("es");
+		});
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(60_000);
+		});
+		expect(translate).toHaveBeenCalledTimes(4);
+		expect(captions.isTranslating).toBe(false);
+		expect(captions.translatedVttContent.has("es")).toBe(false);
+	});
+	it("stops asking once a different language is selected", async () => {
+		vi.useFakeTimers();
+		translate.mockResolvedValue(inProgress);
+		await act(async () => {
+			captions.setSelectedLanguage("es");
+		});
+		await act(async () => {
+			captions.setSelectedLanguage("original");
+		});
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(60_000);
+		});
+		expect(translate).toHaveBeenCalledTimes(1);
+		expect(captions.isTranslating).toBe(false);
+	});
+	it("does not ask again after any other failure", async () => {
+		vi.useFakeTimers();
+		translate.mockResolvedValue({
+			success: false,
+			message: "Translation failed",
+		});
+		await act(async () => {
+			captions.setSelectedLanguage("es");
+		});
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(60_000);
+		});
+		expect(translate).toHaveBeenCalledTimes(1);
+		expect(captions.isTranslating).toBe(false);
+	});
 });
