@@ -267,7 +267,7 @@ describe("createRepairSession", () => {
 
 	it("refuses a second concurrent session and the daily limit", async () => {
 		sandboxMock.list.mockResolvedValueOnce({
-			sandboxes: [{ status: "running", createdAt: Date.now() }],
+			sandboxes: [{ name: "a", status: "running", createdAt: Date.now() }],
 		});
 		await expect(
 			createRepairSession({
@@ -279,7 +279,8 @@ describe("createRepairSession", () => {
 		).rejects.toBeInstanceOf(RepairBusyError);
 
 		sandboxMock.list.mockResolvedValueOnce({
-			sandboxes: Array.from({ length: 6 }, () => ({
+			sandboxes: Array.from({ length: 6 }, (_, index) => ({
+				name: `s${index}`,
 				status: "stopped",
 				createdAt: Date.now() - 1000,
 			})),
@@ -293,6 +294,31 @@ describe("createRepairSession", () => {
 			}),
 		).rejects.toBeInstanceOf(RepairBusyError);
 		expect(sandboxMock.create).not.toHaveBeenCalled();
+	});
+
+	it("backs out when a concurrent request created a session first", async () => {
+		const { sandbox } = fakeSandbox();
+		sandboxMock.create.mockImplementation(
+			async ({ name }: { name: string }) => {
+				sandboxMock.list.mockResolvedValueOnce({
+					sandboxes: [
+						{ name, status: "pending", createdAt: Date.now() },
+						{ name: "earlier", status: "pending", createdAt: Date.now() - 50 },
+					],
+				});
+				return sandbox;
+			},
+		);
+		await expect(
+			createRepairSession({
+				userId: "user-1",
+				operation: "recover",
+				appVersion: "0.6.2",
+				model,
+			}),
+		).rejects.toBeInstanceOf(RepairBusyError);
+		expect(sandbox.stop).toHaveBeenCalled();
+		expect(sandbox.update).not.toHaveBeenCalled();
 	});
 });
 

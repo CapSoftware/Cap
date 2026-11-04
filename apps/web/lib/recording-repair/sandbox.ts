@@ -173,7 +173,10 @@ async function run(
 	return (await result.stdout()).trim();
 }
 
-async function assertCapacity(userId: string) {
+const ACTIVE_STATUSES = ["pending", "running"];
+const DAY_MS = 24 * 60 * 60_000;
+
+async function recentSandboxes(userId: string) {
 	const { sessionsPerDay } = repairSettings();
 	const { sandboxes } = await Sandbox.list({
 		tags: { repairUser: userId },
@@ -181,16 +184,33 @@ async function assertCapacity(userId: string) {
 		sortBy: "createdAt",
 		sortOrder: "desc",
 	});
-	const active = sandboxes.filter((sandbox) =>
-		["pending", "running"].includes(sandbox.status),
-	);
-	if (active.length > 0)
+	const dayAgo = Date.now() - DAY_MS;
+	return sandboxes
+		.filter((sandbox) => sandbox.createdAt > dayAgo)
+		.sort((a, b) => a.createdAt - b.createdAt || a.name.localeCompare(b.name));
+}
+
+async function assertCapacity(userId: string) {
+	const { sessionsPerDay } = repairSettings();
+	const recent = await recentSandboxes(userId);
+	if (recent.some((sandbox) => ACTIVE_STATUSES.includes(sandbox.status)))
 		throw new RepairBusyError("A repair is already running");
-	const dayAgo = Date.now() - 24 * 60 * 60_000;
+	if (recent.length >= sessionsPerDay)
+		throw new RepairBusyError("Daily repair limit reached");
+}
+
+export async function assertClaim(userId: string, sessionId: string) {
+	const { sessionsPerDay } = repairSettings();
+	const recent = await recentSandboxes(userId);
+	const found = recent.findIndex((sandbox) => sandbox.name === sessionId);
+	const rank = found === -1 ? recent.length : found;
 	if (
-		sandboxes.filter((sandbox) => sandbox.createdAt > dayAgo).length >=
-		sessionsPerDay
+		recent
+			.slice(0, rank)
+			.some((sandbox) => ACTIVE_STATUSES.includes(sandbox.status))
 	)
+		throw new RepairBusyError("A repair is already running");
+	if (rank >= sessionsPerDay)
 		throw new RepairBusyError("Daily repair limit reached");
 }
 
@@ -226,6 +246,7 @@ export async function createRepairSession(args: {
 	});
 
 	try {
+		await assertClaim(args.userId, sessionId);
 		const tag = repairTagForVersion(args.appVersion);
 		const clone = (ref: string | null) =>
 			`git clone --quiet --depth 1 ${ref ? `--branch ${shellQuote(ref)} ` : ""}--filter=blob:none --sparse ${REPO} /vercel/sandbox/cap && git -C /vercel/sandbox/cap sparse-checkout set ${SPARSE_PATHS.join(" ")}`;
