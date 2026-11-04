@@ -1430,3 +1430,87 @@ fn a_word_whose_audio_sits_in_its_neighbour_is_treated_as_silence() {
     let edl = TranscriptEdl::build(&doc, timeline(&project), &durations);
     assert_eq!(edl.kept, [true, true, true]);
 }
+
+fn shape(start: f64, end: f64) -> cap_project::ShapeSegment {
+    cap_project::ShapeSegment {
+        start,
+        end,
+        ..Default::default()
+    }
+}
+
+fn shape_bounds(project: &ProjectConfiguration) -> Vec<(f64, f64)> {
+    timeline(project)
+        .shape_segments
+        .iter()
+        .map(|segment| (segment.start, segment.end))
+        .collect()
+}
+
+#[test]
+fn shapes_follow_shortened_pauses_and_come_back_on_undo() {
+    let (speech, mut project, doc) = stretched_fixture();
+    let durations = [speech.duration];
+    timeline_mut(&mut project).shape_segments =
+        vec![shape(0.6, 0.9), shape(5.2, 7.9), shape(8.2, 8.6)];
+    let original = shape_bounds(&project);
+    let mut history = editor_edits::ProjectHistory::new(project.clone());
+    let before = editor_edits::clip_timeline_duration(timeline(&project));
+
+    let edl = TranscriptEdl::build(&doc, timeline(&project), &durations);
+    let pauses = plan_pause_cuts(&doc, &edl, Some(&speech.envelope), 1.0, 0.5);
+    assert_eq!(pauses.len(), 3);
+    let inside_spanning: f64 = pauses
+        .iter()
+        .filter(|pause| pause.after_word == 5)
+        .map(|pause| pause.saves)
+        .sum();
+    let cuts: Vec<_> = pauses.iter().flat_map(|pause| pause.cuts.clone()).collect();
+    apply_source_cuts(timeline_mut(&mut project), &durations, &cuts);
+    history.record(&project);
+    let removed = before - editor_edits::clip_timeline_duration(timeline(&project));
+    let saved: f64 = pauses.iter().map(|pause| pause.saves).sum();
+    assert!((removed - saved).abs() < 1e-6, "{removed} {saved}");
+
+    let shapes = shape_bounds(&project);
+    assert_eq!(shapes[0], original[0]);
+    let before_spanning = saved - inside_spanning;
+    assert!(
+        close(shapes[1].0, original[1].0 - before_spanning),
+        "{shapes:?}"
+    );
+    assert!(close(shapes[1].1, original[1].1 - saved), "{shapes:?}");
+    assert!(close(shapes[2].0, original[2].0 - removed), "{shapes:?}");
+    assert!(close(shapes[2].1, original[2].1 - removed), "{shapes:?}");
+
+    let undone = history.undo().unwrap().clone();
+    assert_eq!(shape_bounds(&undone), original);
+}
+
+#[test]
+fn shapes_follow_a_deleted_stretched_word_and_come_back_on_restore() {
+    let (speech, mut project, doc) = stretched_fixture();
+    let durations = [speech.duration];
+    timeline_mut(&mut project).shape_segments = vec![shape(1.0, 1.2), shape(5.0, 5.4)];
+    let original = shape_bounds(&project);
+    let before = editor_edits::clip_timeline_duration(timeline(&project));
+
+    let cuts = plan_word_cuts(&doc, Some(&speech.envelope), None, &[3..4]);
+    apply_source_cuts(timeline_mut(&mut project), &durations, &cuts);
+    let removed = before - editor_edits::clip_timeline_duration(timeline(&project));
+    assert!(close(removed, cuts[0].end - cuts[0].start));
+    let shapes = shape_bounds(&project);
+    assert_eq!(shapes[0], original[0]);
+    assert!(close(shapes[1].0, original[1].0 - removed), "{shapes:?}");
+    assert!(close(shapes[1].1, original[1].1 - removed), "{shapes:?}");
+
+    let restored = restore_words(timeline_mut(&mut project), &durations, &[], &doc, 3..4).unwrap();
+    assert_eq!(restored, 1);
+    let shapes = shape_bounds(&project);
+    for (shape, original) in shapes.iter().zip(&original) {
+        assert!(
+            close(shape.0, original.0) && close(shape.1, original.1),
+            "{shapes:?}"
+        );
+    }
+}
