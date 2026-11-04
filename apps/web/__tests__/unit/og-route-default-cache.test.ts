@@ -97,9 +97,11 @@ describe("/api/og default image reuse", () => {
 			Array.from({ length: 6 }, (_, i) => fetchOg(GET, `?s=cold${i}`)),
 		);
 
-		for (const res of responses) {
-			expect(res.bytes.equals(responses[0].bytes)).toBe(true);
-		}
+		const distinctImages = new Set(
+			responses.map((res) => res.bytes.toString("base64")),
+		);
+		expect(responses).toHaveLength(6);
+		expect(distinctImages.size).toBe(1);
 		expect(imageResponseConstructions.count).toBe(1);
 	});
 
