@@ -2,6 +2,7 @@ import * as Db from "@cap/database/schema";
 import { resolveRecordingObjectKey } from "@cap/web-backend/src/Storage/recording-output";
 import { Effect } from "effect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { RetryableError } from "workflow";
 import type {
 	ContentTransferPayload,
 	ContentTransferProgress,
@@ -154,6 +155,7 @@ beforeEach(() => {
 				bucketOrganizationId: null,
 				storageIntegrationOwnerId: null,
 				storageIntegrationOrganizationId: null,
+				source: recordingSource,
 				...storage,
 			},
 		],
@@ -196,5 +198,18 @@ describe("content transfer workflow", () => {
 		expect([...objects.keys()].every((key) => key.startsWith(prefix))).toBe(
 			true,
 		);
+	});
+
+	it("retries instead of moving keys when the recording's media changes during the copy", async () => {
+		const { type, outputKey, thumbnailKey, previewKey } = recordingSource;
+		const [copied] = selectResults[0] as Array<Record<string, unknown>>;
+		selectResults[0] = [
+			{ ...copied, source: { type, outputKey, thumbnailKey, previewKey } },
+		];
+
+		await expect(
+			transferOneVideo("operation", payload, item, progress),
+		).rejects.toBeInstanceOf(RetryableError);
+		expect(writes.some((write) => write.table === Db.videos)).toBe(false);
 	});
 });

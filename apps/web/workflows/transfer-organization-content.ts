@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { db } from "@cap/database";
 import * as Db from "@cap/database/schema";
 import { Storage } from "@cap/web-backend/src/Storage/index";
@@ -12,7 +13,7 @@ import {
 } from "@cap/web-domain";
 import { and, eq, inArray, isNull, like, notInArray, sql } from "drizzle-orm";
 import { Option } from "effect";
-import { FatalError } from "workflow";
+import { FatalError, RetryableError } from "workflow";
 import {
 	CONTENT_TRANSFER_KIND,
 	type ContentTransferPayload,
@@ -578,6 +579,7 @@ async function getCurrentVideo(item: ContentTransferVideoPlan) {
 			storageIntegrationOwnerId: Db.storageIntegrations.ownerId,
 			storageIntegrationOrganizationId: Db.storageIntegrations.organizationId,
 			uploadPhase: Db.videoUploads.phase,
+			source: Db.videos.source,
 		})
 		.from(Db.videos)
 		.leftJoin(Db.s3Buckets, eq(Db.videos.bucket, Db.s3Buckets.id))
@@ -717,6 +719,9 @@ export async function transferOneVideo(
 			lockedVideo.uploadPhase !== item.sourceUploadPhase
 		) {
 			throw new FatalError(`Storage changed for ${item.name}`);
+		}
+		if (!isDeepStrictEqual(lockedVideo.source, current.source)) {
+			throw new RetryableError(`Media changed while copying ${item.name}`);
 		}
 
 		const [destinationFolder] = await tx
