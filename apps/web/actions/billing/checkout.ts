@@ -4,8 +4,9 @@ import { timingSafeEqual } from "node:crypto";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { DUB_CLICK_ID_COOKIE } from "@cap/database/referrals";
 import { serverEnv } from "@cap/env";
-import { userIsPro } from "@cap/utils";
+import { isProSubscription, userIsPro } from "@cap/utils";
 import { cookies, headers } from "next/headers";
+import { after } from "next/server";
 import { ensureStripeCustomerId } from "@/lib/checkout/customer";
 import { customCheckoutEnabled } from "@/lib/checkout/enabled";
 import {
@@ -35,6 +36,7 @@ import { currencyForCountry } from "@/utils/currency";
 
 const INTEGRATION_IDENTIFIER = "cap_pro_checkout_rqmvbkzt";
 const PRICE_CURRENCY_TTL_MS = 10 * 60 * 1000;
+const LIVE_SUBSCRIPTION_STATUSES = new Set(["active", "trialing", "past_due"]);
 
 export type CreateCheckoutResult =
 	| { ok: true; clientSecret: string }
@@ -74,6 +76,40 @@ async function planCurrencies(environment: CheckoutEnvironment) {
 	return byPlan;
 }
 
+async function hasLiveProSubscription(customerId: string) {
+	const subscriptions = await checkoutStripe().subscriptions.list({
+		customer: customerId,
+		limit: 100,
+	});
+	return subscriptions.data.some(
+		(subscription) =>
+			isProSubscription(subscription) &&
+			LIVE_SUBSCRIPTION_STATUSES.has(subscription.status),
+	);
+}
+
+async function expireOtherOpenCheckouts(
+	customerId: string,
+	userId: string,
+	currentSessionId: string,
+) {
+	const sessions = await checkoutStripe().checkout.sessions.list({
+		customer: customerId,
+		status: "open",
+		limit: 100,
+	});
+	await Promise.all(
+		sessions.data
+			.filter(
+				(session) =>
+					session.id !== currentSessionId &&
+					session.metadata?.checkoutUi === "elements" &&
+					session.metadata?.dubCustomerId === userId,
+			)
+			.map((session) => checkoutStripe().checkout.sessions.expire(session.id)),
+	);
+}
+
 export async function createProCheckout(input: {
 	plan: string;
 	seats: number;
@@ -102,13 +138,20 @@ export async function createProCheckout(input: {
 	}
 
 	try {
-		const [customerId, currencies, referralDiscount] = await Promise.all([
-			user ? ensureStripeCustomerId(user) : Promise.resolve(null),
-			planCurrencies(environment),
-			user
-				? referralDiscountForCheckout(user, referralClickId)
-				: Promise.resolve(null),
-		]);
+		const customerLookup = user
+			? ensureStripeCustomerId(user)
+			: Promise.resolve(null);
+		const [customerId, alreadySubscribed, currencies, referralDiscount] =
+			await Promise.all([
+				customerLookup,
+				customerLookup.then((id) => (id ? hasLiveProSubscription(id) : false)),
+				planCurrencies(environment),
+				user
+					? referralDiscountForCheckout(user, referralClickId)
+					: Promise.resolve(null),
+			]);
+		if (alreadySubscribed) return { ok: false, reason: "already_pro" };
+
 		const currency = pickCheckoutCurrency(
 			currencyForCountry(
 				visitorCountry(requestHeaders.get("x-vercel-ip-country")),
@@ -165,6 +208,15 @@ export async function createProCheckout(input: {
 				sessionId: session.id,
 			});
 			return { ok: false, reason: "unavailable" };
+		}
+
+		if (user && customerId) {
+			after(() =>
+				expireOtherOpenCheckouts(customerId, user.id, session.id).catch(
+					(error) =>
+						console.error("Failed to expire earlier Cap Pro checkouts:", error),
+				),
+			);
 		}
 
 		trackServerEvent(
