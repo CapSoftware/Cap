@@ -1,4 +1,5 @@
 import argparse
+import hashlib
 import io
 import json
 import random
@@ -10,7 +11,9 @@ import zipfile
 from pathlib import Path
 
 ALIGNMENTS_URL = "https://zenodo.org/records/2619474/files/librispeech_alignments.zip"
+ALIGNMENTS_BYTES = 623_023_332
 AUDIO_URL = "https://www.openslr.org/resources/12/test-clean.tar.gz"
+AUDIO_SHA256 = "39fde525e59672dc6d1551919b1478f724438a95aa55f874b576be21967e6c23"
 ATTRIBUTION = (
     "LibriSpeech test-clean (Panayotov et al. 2015, https://www.openslr.org/12, CC BY 4.0) with "
     "Montreal Forced Aligner word alignments by Loren Lugosch (https://zenodo.org/records/2619474, "
@@ -70,7 +73,10 @@ def main():
     args = parser.parse_args()
 
     rng = random.Random(args.seed)
-    archive = zipfile.ZipFile(io.BufferedReader(RangeReader(ALIGNMENTS_URL), buffer_size=1 << 16))
+    alignments = RangeReader(ALIGNMENTS_URL)
+    if alignments.size != ALIGNMENTS_BYTES:
+        raise SystemExit(f"{ALIGNMENTS_URL}: {alignments.size} bytes, expected {ALIGNMENTS_BYTES}")
+    archive = zipfile.ZipFile(io.BufferedReader(alignments, buffer_size=1 << 16))
     grids = {}
     for name in archive.namelist():
         if name.startswith("test-clean/") and name.endswith(".TextGrid"):
@@ -97,6 +103,13 @@ def main():
     tarball = args.scratch / "test-clean.tar.gz"
     if not tarball.exists():
         urllib.request.urlretrieve(AUDIO_URL, tarball)
+    digest = hashlib.sha256()
+    with open(tarball, "rb") as file:
+        for block in iter(lambda: file.read(1 << 20), b""):
+            digest.update(block)
+    if digest.hexdigest() != AUDIO_SHA256:
+        tarball.unlink()
+        raise SystemExit(f"{AUDIO_URL}: sha256 {digest.hexdigest()}, expected {AUDIO_SHA256}")
     wanted = {f"{u}.flac": u for u, _ in chosen}
     flacs = {}
     with tarfile.open(tarball) as tar:

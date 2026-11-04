@@ -1,4 +1,5 @@
 import argparse
+import hashlib
 import json
 import random
 import re
@@ -9,9 +10,21 @@ from pathlib import Path
 import numpy
 import soundfile
 import torch
+from huggingface_hub import hf_hub_download
 from kokoro import KModel, KPipeline
 
 SAMPLE_RATE = 24_000
+KOKORO_REPO = "hexgrad/Kokoro-82M"
+KOKORO_REVISION = "f3ff3571791e39611d31c381e3a41a3af07b4987"
+KOKORO_SHA256 = {
+    "kokoro-v1_0.pth": "496dba118d1a58f5f3db2efc88dbdc216e0483fc89fe6e47ee1f2c53f18ad1e4",
+    "voices/af_heart.pt": "0ab5709b8ffab19bfd849cd11d98f75b60af7733253ad0d67b12382a102cb4ff",
+    "voices/am_michael.pt": "9a443b79a4b22489a5b0ab7c651a0bcd1a30bef675c28333f06971abbd47bd37",
+    "voices/af_bella.pt": "8cb64e02fcc8de0327a8e13817e49c76c945ecf0052ceac97d3081480e8e48d6",
+    "voices/am_fenrir.pt": "98e507eca1db08230ae3b6232d59c10aec9630022d19accac4f5d12fcec3c37a",
+    "voices/bf_emma.pt": "d0a423deabf4a52b4f49318c51742c54e21bb89bbbe9a12141e7758ddb5da701",
+    "voices/bm_george.pt": "f1bc812213dc59774769e5c80004b13eeb79bd78130b11b2d7f934542dab811b",
+}
 HESITATIONS = {"um", "umm", "uh", "uhm", "er", "erm", "ah", "eh", "hm", "hmm", "mm", "mmm"}
 ATTRIBUTION = (
     "Synthesised for Cap with Kokoro-82M (https://huggingface.co/hexgrad/Kokoro-82M, Apache-2.0). "
@@ -90,7 +103,7 @@ def synthesize(model, pipeline, voice, spoken, filler, rng):
     _, tokens = pipeline.g2p(spoken)
     phonemes = pipeline.tokens_to_ps(tokens)
     ids = [0] + [model.vocab[c] for c in phonemes if c in model.vocab] + [0]
-    ref_s = pipeline.load_voice(voice)[len(ids) - 3]
+    ref_s = pipeline.load_voice(kokoro_file(f"voices/{voice}.pt"))[len(ids) - 3]
     with torch.no_grad():
         input_ids = torch.LongTensor([ids])
         lengths = torch.full((1,), len(ids), dtype=torch.long)
@@ -147,6 +160,16 @@ def gap(rng, around_filler):
     return rng.uniform(0.3, 0.7)
 
 
+def kokoro_file(name):
+    path = hf_hub_download(KOKORO_REPO, name, revision=KOKORO_REVISION)
+    expected = KOKORO_SHA256.get(name)
+    if expected is not None:
+        digest = hashlib.sha256(Path(path).read_bytes()).hexdigest()
+        if digest != expected:
+            raise SystemExit(f"{name}: sha256 {digest}, expected {expected}")
+    return path
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--out", required=True, type=Path)
@@ -157,8 +180,10 @@ def main():
     rng = random.Random(args.seed)
     noise = numpy.random.default_rng(args.seed)
     torch.manual_seed(args.seed)
-    model = KModel(repo_id="hexgrad/Kokoro-82M").eval()
-    pipelines = {code: KPipeline(lang_code=code, repo_id="hexgrad/Kokoro-82M", model=False) for code in ("a", "b")}
+    model = KModel(
+        repo_id=KOKORO_REPO, config=kokoro_file("config.json"), model=kokoro_file("kokoro-v1_0.pth")
+    ).eval()
+    pipelines = {code: KPipeline(lang_code=code, repo_id=KOKORO_REPO, model=False) for code in ("a", "b")}
     args.out.mkdir(parents=True, exist_ok=True)
     manifest = {"name": "splice", "attribution": ATTRIBUTION, "timing": "exact", "clips": []}
     for script_index, script in enumerate(SCRIPTS):
