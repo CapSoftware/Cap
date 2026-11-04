@@ -4321,7 +4321,7 @@ impl EditorWindow {
     /// straight onto a scroll offset that is negative when scrolled down), so
     /// it is negated back into the source's convention before any of the
     /// source's arithmetic touches it.
-    fn timeline_wheel(
+    pub(crate) fn timeline_wheel(
         &mut self,
         event: &gpui::ScrollWheelEvent,
         window: &mut Window,
@@ -4331,6 +4331,7 @@ impl EditorWindow {
         let delta_x = -f32::from(pixels.x) as f64;
         let delta_y = -f32::from(pixels.y) as f64;
         let total = self.total_duration();
+        let before = self.view.transform;
 
         let horizontal = delta_x.abs() > delta_y.abs() * 0.5 || event.modifiers.shift;
         if event.modifiers.control || horizontal {
@@ -4366,6 +4367,12 @@ impl EditorWindow {
         } else {
             return;
         }
+        // A trackpad's momentum keeps sending wheel events after the
+        // transform has hit its clamp; redrawing the editor for each one
+        // changes nothing on screen.
+        if self.view.transform == before {
+            return;
+        }
         self.note_transform("wheel", None);
         cx.notify();
     }
@@ -4386,8 +4393,12 @@ impl EditorWindow {
         let origin = self.view.preview_time.unwrap_or(self.playhead);
         let delta_y = -(event.delta as f64) * 100.;
         let delta = timeline::wheel_zoom_delta(delta_y, self.view.transform.zoom);
-        let zoom = self.view.transform.zoom;
+        let before = self.view.transform;
+        let zoom = before.zoom;
         self.view.transform.update_zoom(zoom + delta, origin, total);
+        if self.view.transform == before {
+            return;
+        }
         self.note_transform("pinch", Some(origin));
         cx.notify();
     }
