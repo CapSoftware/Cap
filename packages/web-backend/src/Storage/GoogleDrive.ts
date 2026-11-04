@@ -92,6 +92,7 @@ export type CreateGoogleDriveUploadInput = {
 	contentType: string;
 	contentLength?: number;
 	videoTitle?: string;
+	skipRecordingFolders?: boolean;
 };
 
 const normalizeContentType = (contentType?: string | null) =>
@@ -1100,6 +1101,7 @@ const getGoogleDriveUploadParentId = (
 	tokenStore?: GoogleDriveTokenStore,
 ) =>
 	Effect.gen(function* () {
+		if (input.skipRecordingFolders) return config.folderId;
 		const folderParts = getDriveFolderParts(input.key, config);
 		let parentId = config.folderId;
 		const pathParts: string[] = [];
