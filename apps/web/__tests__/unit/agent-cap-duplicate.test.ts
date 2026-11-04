@@ -55,6 +55,10 @@ function bucketFor(video: StorageVideo) {
 			}),
 		copyObject: copy,
 		copyObjectForRecording: copy,
+		deleteObjects: (keys: Array<{ Key: string }>) =>
+			Effect.sync(() => {
+				for (const { Key } of keys) objects.delete(Key);
+			}),
 	};
 }
 
@@ -175,5 +179,17 @@ describe("agent duplicate_cap workflow", () => {
 					key.startsWith(`${destinationPrefix}comments/`),
 			),
 		).toEqual([]);
+	});
+
+	it("removes the copied files when the original is deleted before the copy is saved", async () => {
+		selectResults[2] = [];
+		const sourceKeys = [...objects.keys()];
+
+		await expect(
+			agentCapOperationWorkflow({ operationId: "operation" }),
+		).rejects.toThrow("no longer exists");
+
+		expect(inserts.some((insert) => insert.table === Db.videos)).toBe(false);
+		expect([...objects.keys()]).toEqual(sourceKeys);
 	});
 });

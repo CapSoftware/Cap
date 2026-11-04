@@ -239,10 +239,8 @@ async function createDuplicate(operationId: string, payload: OperationPayload) {
 	await enqueueVideoStorageNameSync(destinationId);
 }
 
-async function deleteCapObjects(payload: OperationPayload) {
-	"use step";
-
-	const { bucket, keys } = await listOperationObjects(payload.snapshot);
+async function deleteSnapshotObjects(snapshot: CapSnapshot) {
+	const { bucket, keys } = await listOperationObjects(snapshot);
 	for (let index = 0; index < keys.length; index += 1_000) {
 		await bucket
 			.deleteObjects(
@@ -250,6 +248,35 @@ async function deleteCapObjects(payload: OperationPayload) {
 			)
 			.pipe(runWorkflowPromise);
 	}
+}
+
+async function discardDuplicateObjects(payload: OperationPayload) {
+	"use step";
+
+	if (!payload.destinationId) return;
+	const [saved] = await db()
+		.select({ id: Db.videos.id })
+		.from(Db.videos)
+		.where(eq(Db.videos.id, Video.VideoId.make(payload.destinationId)))
+		.limit(1);
+	if (saved) return;
+	try {
+		await deleteSnapshotObjects({
+			...payload.snapshot,
+			id: payload.destinationId,
+		});
+	} catch (error) {
+		console.warn("Duplicate cleanup did not finish", {
+			videoId: payload.destinationId,
+			error,
+		});
+	}
+}
+
+async function deleteCapObjects(payload: OperationPayload) {
+	"use step";
+
+	await deleteSnapshotObjects(payload.snapshot);
 }
 
 async function deleteCapDatabase(
@@ -555,8 +582,13 @@ export async function agentCapOperationWorkflow(input: {
 		if (!operation) return;
 		if (operation.kind === "duplicate_cap") {
 			const payload = operation.payload as OperationPayload;
-			await copyCapObjects(payload);
-			await createDuplicate(input.operationId, payload);
+			try {
+				await copyCapObjects(payload);
+				await createDuplicate(input.operationId, payload);
+			} catch (error) {
+				await discardDuplicateObjects(payload);
+				throw error;
+			}
 			return;
 		}
 		if (operation.kind === "delete_cap") {
