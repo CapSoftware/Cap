@@ -138,6 +138,8 @@ export const RATE_LIMIT_IDS = {
 	COLLECTION_PASSWORD: "rl_collection_password",
 	/** Collection password attempts across all clients. Suggested: 200 / 10m per key (collection). */
 	COLLECTION_PASSWORD_PER_COLLECTION: "rl_collection_password_per_collection",
+	/** Organization invite batches, checked per organization and per sender. Suggested: 30 / 1h per key. */
+	ORGANIZATION_INVITE: "rl_organization_invite",
 } as const;
 
 type FallbackRateLimit = { limit: number; windowMs: number };
@@ -174,6 +176,7 @@ const FALLBACK_RATE_LIMITS: Record<string, FallbackRateLimit> = {
 		limit: 200,
 		windowMs: 10 * MINUTE_MS,
 	},
+	[RATE_LIMIT_IDS.ORGANIZATION_INVITE]: { limit: 30, windowMs: 60 * MINUTE_MS },
 };
 
 const DEFAULT_FALLBACK_RATE_LIMIT: FallbackRateLimit = {

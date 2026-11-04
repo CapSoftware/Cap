@@ -94,6 +94,24 @@ describe("isRateLimited outside production", () => {
 		expect(await verify()).toBe(false);
 	});
 
+	it("allows 30 organization invite batches per key each hour", async () => {
+		vi.useFakeTimers();
+		const { isRateLimited, RATE_LIMIT_IDS } = await loadRateLimit();
+		const invite = () =>
+			isRateLimited(RATE_LIMIT_IDS.ORGANIZATION_INVITE, {
+				key: "organization-invite:organization:org-1",
+			});
+
+		expect(await callTimes(30, invite)).toEqual(Array(30).fill(false));
+		expect(await invite()).toBe(true);
+
+		vi.advanceTimersByTime(59 * 60_000);
+		expect(await invite()).toBe(true);
+
+		vi.advanceTimersByTime(60_000);
+		expect(await invite()).toBe(false);
+	});
+
 	it("keys on x-real-ip, then the first x-forwarded-for entry", async () => {
 		const { isRateLimited, RATE_LIMIT_IDS } = await loadRateLimit();
 		const fromHeaders = (init: Record<string, string>) =>
