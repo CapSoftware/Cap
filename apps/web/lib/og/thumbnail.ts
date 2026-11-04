@@ -2,6 +2,8 @@
 // leave gaps and remote URLs can render blank), so the thumbnail is loaded
 // here, measured from its header, and drawn at an explicit cover size.
 
+import { fetchStorageUrl } from "@/lib/storage-fetch";
+
 export type ImageSize = { width: number; height: number };
 
 export type OgThumbnail = ImageSize & { src: string };
@@ -91,9 +93,10 @@ const readSource = async (url: string): Promise<Buffer | undefined> => {
 		return Buffer.from(url.slice(comma + 1), "base64");
 	}
 	if (!/^https?:\/\//i.test(url)) return;
-	const res = await fetch(url, {
+	const res = await fetchStorageUrl(url, {
 		signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-	});
+	}).catch(() => undefined);
+	if (!res) return;
 	if (!res.ok) return;
 	const length = Number(res.headers.get("content-length") ?? 0);
 	if (length > MAX_BYTES) return;
