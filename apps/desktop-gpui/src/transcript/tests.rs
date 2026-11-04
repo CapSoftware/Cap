@@ -1768,3 +1768,37 @@ fn a_word_cut_entirely_still_lets_the_pause_around_it_join() {
         assert!(cut.end <= 2.15 || cut.start >= 2.85, "{cut:?}");
     }
 }
+
+#[test]
+fn removing_neighbouring_fillers_together_matches_removing_them_one_at_a_time() {
+    let words = [
+        ("we", 1.0, 1.3),
+        ("um", 1.5, 1.8),
+        ("uh", 3.0, 3.3),
+        ("the", 3.5, 3.8),
+        ("export", 4.0, 4.4),
+    ];
+    let durations = [5.0];
+    let doc = TranscriptDoc::build(&captions(&words));
+    let runs: Vec<Range<usize>> = doc
+        .fillers
+        .iter()
+        .map(|filler| filler.words.clone())
+        .collect();
+    assert_eq!(runs, [1..2, 2..3]);
+
+    let mut together = project(&words, &durations);
+    let cuts = plan_word_cuts(&doc, None, None, &runs);
+    apply_source_cuts(timeline_mut(&mut together), &durations, &cuts);
+
+    let mut apart = project(&words, &durations);
+    for run in &runs {
+        let (doc, edl) = model(&apart, &durations);
+        let cuts = plan_word_cuts(&doc, None, Some(&edl.kept), std::slice::from_ref(run));
+        apply_source_cuts(timeline_mut(&mut apart), &durations, &cuts);
+    }
+
+    assert_eq!(kept(&apart, &durations), [true, false, false, true, true]);
+    assert_eq!(kept(&together, &durations), kept(&apart, &durations));
+    assert_eq!(bounds(&together), bounds(&apart));
+}
