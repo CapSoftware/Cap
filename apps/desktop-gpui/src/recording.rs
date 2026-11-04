@@ -2801,6 +2801,7 @@ pub fn recordings_dir() -> PathBuf {
 /// guarded recursive delete as the library with the active recordings folder
 /// as its only allowed root.
 pub fn delete_recording_directory(path: &std::path::Path) -> Result<(), String> {
+    crate::transcription::cancel_refinement(path);
     crate::library::delete_recording_directory_in(&[recordings_dir()], path)
 }
 
