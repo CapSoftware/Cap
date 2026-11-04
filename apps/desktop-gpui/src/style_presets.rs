@@ -514,7 +514,7 @@ impl PresetStyle for TextStyle {
             TEXT_FONT_SIZE_MAX,
         );
         self.font_weight = finite_f32(self.font_weight, fallback.font_weight, 100., 900.);
-        self.letter_spacing = finite_f32(self.letter_spacing, 0., -2., 20.);
+        self.letter_spacing = finite_f32(self.letter_spacing, 0., -3., 20.);
         self.line_height = finite_f32(self.line_height, fallback.line_height, 0.8, 2.);
         self.opacity = finite_f32(self.opacity, 1., 0., 1.);
         self.shadow = finite_f32(self.shadow, 0., 0., 1.);
@@ -1454,6 +1454,24 @@ mod tests {
         assert!(!captions.0.enabled);
         let position = captions.0.manual_position.unwrap();
         assert_eq!((position.x, position.y), (1., 0.));
+    }
+
+    #[test]
+    fn every_built_in_text_look_saves_as_a_preset_unchanged() {
+        for look in crate::editor_panels::TEXT_PRESETS {
+            let mut segment = crate::editor_edits::default_text_segment(0., 2., 0);
+            crate::editor_panels::apply_text_preset(&mut segment, look, &[]);
+            let style = TextStyle::of(&segment);
+            let mut presets = StylePresets::<TextStyle>::default();
+            let id = presets.add("Look", style.clone()).unwrap();
+            let reloaded = StylePresets::<TextStyle>::from_value(&presets.to_value());
+            assert_eq!(
+                reloaded.matching(&style).map(|preset| preset.id.as_str()),
+                Some(id.as_str()),
+                "{}",
+                look.id
+            );
+        }
     }
 
     #[test]
