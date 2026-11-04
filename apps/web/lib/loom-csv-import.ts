@@ -189,6 +189,68 @@ export async function fetchLoomOEmbed(
 	}
 }
 
+export async function resolveLoomDownload(
+	url: string,
+): Promise<LoomDownloadResult> {
+	if (!url || typeof url !== "string") {
+		return { success: false, error: "Please provide a valid URL." };
+	}
+
+	const videoId = extractLoomVideoId(url.trim());
+
+	if (!videoId) {
+		return {
+			success: false,
+			error:
+				"Invalid Loom URL. Please paste a valid Loom video link (e.g. https://www.loom.com/share/abc123).",
+		};
+	}
+
+	try {
+		const downloadUrl = await getLoomDownloadUrl(videoId);
+
+		if (!downloadUrl) {
+			return {
+				success: false,
+				error:
+					"Could not retrieve a download URL. The video may be private, password-protected, or the link may have expired.",
+			};
+		}
+
+		const [videoName, oembedMeta] = await Promise.all([
+			fetchVideoName(videoId),
+			fetchLoomOEmbed(videoId),
+		]);
+		return {
+			success: true,
+			videoId,
+			videoName: videoName ?? undefined,
+			downloadUrl,
+			downloadMode: isDirectMp4Url(downloadUrl)
+				? "direct-download"
+				: "browser-conversion",
+			durationSeconds: oembedMeta?.duration,
+			width: oembedMeta?.width,
+			height: oembedMeta?.height,
+			requiresProxy: false,
+		};
+	} catch (error) {
+		if (error instanceof LoomDownloadTemporaryError) {
+			return {
+				success: false,
+				error: error.message,
+				errorCode: "loom_temporarily_unavailable",
+				retryAfterMs: error.retryAfterMs,
+			};
+		}
+		return {
+			success: false,
+			error:
+				"An unexpected error occurred. Please try again or check your internet connection.",
+		};
+	}
+}
+
 export type LoomImportTransaction = Parameters<
 	Parameters<ReturnType<typeof db>["transaction"]>[0]
 >[0];

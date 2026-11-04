@@ -2669,16 +2669,16 @@ impl RecoveryManager {
                 let original_segment =
                     original_segments.and_then(|segs| segs.get(segment_index as usize));
 
-                let display_path = segment_dir.join("display.mp4");
                 // Decoders number frames on this rate. The file's average rate
                 // is far lower for a mostly static screen (11 fps for a 120 fps
                 // capture), and on that coarse grid playback and export drop
                 // every picture shorter than one step.
-                let fps = original_segment
-                    .map(|s| s.display.fps)
-                    .filter(|fps| *fps > 0)
-                    .or_else(|| get_video_base_fps(&display_path))
-                    .unwrap_or(30);
+                let recorded_fps = |recorded: Option<u32>, track: &str| {
+                    recorded
+                        .filter(|fps| *fps > 0)
+                        .or_else(|| get_video_base_fps(&segment_dir.join(track)))
+                        .unwrap_or(30)
+                };
 
                 let cursor_path = segment_dir.join("cursor.json");
                 let keyboard_path = {
@@ -2702,17 +2702,19 @@ impl RecoveryManager {
                 MultipleSegment {
                     display: VideoMeta {
                         path: RelativePathBuf::from(format!("{segment_base}/display.mp4")),
-                        fps,
+                        fps: recorded_fps(original_segment.map(|s| s.display.fps), "display.mp4"),
                         start_time: display_start_time,
                         device_id: original_segment.and_then(|s| s.display.device_id.clone()),
                     },
                     camera: if seg.camera_fragments.is_some() {
                         Some(VideoMeta {
                             path: RelativePathBuf::from(format!("{segment_base}/camera.mp4")),
-                            fps: original_segment
-                                .and_then(|s| s.camera.as_ref())
-                                .map(|c| c.fps)
-                                .unwrap_or(30),
+                            fps: recorded_fps(
+                                original_segment
+                                    .and_then(|s| s.camera.as_ref())
+                                    .map(|c| c.fps),
+                                "camera.mp4",
+                            ),
                             start_time: get_start_time_or_fallback(
                                 original_segment
                                     .and_then(|s| s.camera.as_ref())

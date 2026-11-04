@@ -4661,6 +4661,10 @@ impl EditorWindow {
             });
             if selection.is_some() {
                 self.clear_marker_selection();
+                if self.audio_import_pending != Some(self.audio_picker_generation) {
+                    self.audio_picker = None;
+                    self.audio_picker_request = None;
+                }
             }
             self.selection = selection;
             self.refresh_image_asset_status();
@@ -14970,6 +14974,60 @@ mod tests {
             assert!(
                 (f64::from(word) - expected).abs() < 1e-3,
                 "first word at {word}, box at {start}"
+            );
+        }
+
+        #[gpui::test]
+        fn a_transition_drag_moves_transcript_words_with_their_clip(cx: &mut gpui::TestAppContext) {
+            let (editor, cx) = split_clip(cx);
+            let word_output = |editor: &Entity<EditorWindow>, cx: &mut gpui::VisualTestContext| {
+                editor.update(cx, |editor, _| {
+                    editor.transcript_refresh();
+                    editor
+                        .transcript
+                        .edl
+                        .as_ref()
+                        .unwrap()
+                        .source_to_output(6.0)
+                })
+            };
+            editor.update(cx, |editor, _| {
+                editor.project.captions = Some(cap_project::CaptionsData {
+                    segments: vec![cap_project::CaptionSegment {
+                        id: "said".into(),
+                        start: 6.0,
+                        end: 7.0,
+                        text: "hello".into(),
+                        words: vec![cap_project::CaptionWord {
+                            text: "hello".into(),
+                            start: 6.0,
+                            end: 7.0,
+                        }],
+                    }],
+                    settings: Default::default(),
+                    source_timed: true,
+                });
+                editor.transcript.open = true;
+                editor.transcript.dirty = true;
+            });
+            assert_eq!(word_output(&editor, cx), Some(6.0));
+
+            let (x, secs_per_pixel) = x_of(&editor, cx, 7.0);
+            let y = clip_row_y(cx);
+            cx.simulate_mouse_move(point(px(x), y), None, gpui::Modifiers::default());
+            cx.simulate_mouse_down(
+                point(px(x), y),
+                MouseButton::Left,
+                gpui::Modifiers::default(),
+            );
+            drag_to(&editor, cx, x - (0.6 / secs_per_pixel) as f32);
+            let made = transition(&editor, cx).expect("the drag made a transition");
+
+            let output = word_output(&editor, cx).unwrap();
+            let expected = 6.0 - made.duration;
+            assert!(
+                (output - expected).abs() < 1e-9,
+                "the word plays at {expected}, the transcript seeks to {output}"
             );
         }
 

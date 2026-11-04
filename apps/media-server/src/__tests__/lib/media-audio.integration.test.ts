@@ -1,4 +1,4 @@
-import { describe, expect, spyOn, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,6 +9,16 @@ import {
 	getActiveProcessCount,
 } from "../../lib/media-audio";
 import * as subprocess from "../../lib/subprocess";
+
+const previousStreamingHosts = process.env.MEDIA_SERVER_STREAMING_HOSTS;
+beforeAll(() => {
+	process.env.MEDIA_SERVER_STREAMING_HOSTS = "127.0.0.1,localhost";
+});
+afterAll(() => {
+	if (previousStreamingHosts === undefined)
+		delete process.env.MEDIA_SERVER_STREAMING_HOSTS;
+	else process.env.MEDIA_SERVER_STREAMING_HOSTS = previousStreamingHosts;
+});
 
 const FIXTURES_DIR = join(import.meta.dir, "..", "fixtures");
 const TEST_VIDEO_WITH_AUDIO = `file://${join(FIXTURES_DIR, "test-with-audio.mp4")}`;
