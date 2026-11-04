@@ -547,6 +547,36 @@ export const createS3BucketAccess = Effect.gen(function* () {
 					"CompleteMultipartUpload",
 					options,
 				),
+			listParts: (key: string, uploadId: string) =>
+				Effect.gen(function* () {
+					const parts: S3.Part[] = [];
+					let partNumberMarker: string | undefined;
+					while (true) {
+						const page = yield* wrapS3Promise(
+							provider.getInternal.pipe(
+								Effect.map((client) =>
+									client.send(
+										new S3.ListPartsCommand({
+											Bucket: provider.bucket,
+											Key: key,
+											UploadId: uploadId,
+											PartNumberMarker: partNumberMarker,
+										}),
+									),
+								),
+							),
+						);
+						parts.push(...(page.Parts ?? []));
+						const nextMarker = page.NextPartNumberMarker;
+						if (
+							!page.IsTruncated ||
+							!nextMarker ||
+							nextMarker === partNumberMarker
+						)
+							return parts;
+						partNumberMarker = nextMarker;
+					}
+				}),
 			copyPart: (
 				key: string,
 				uploadId: string,
