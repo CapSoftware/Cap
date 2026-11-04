@@ -304,5 +304,10 @@ export async function updateSeatQuantity(
 
 	revalidatePath("/dashboard/settings/organization");
 
-	return { success: true, newQuantity, cancelAtPeriodEnd: false };
+	return {
+		success: true,
+		newQuantity,
+		cancelAtPeriodEnd:
+			subscription.cancel_at_period_end && !clearsScheduledCancellation,
+	};
 }

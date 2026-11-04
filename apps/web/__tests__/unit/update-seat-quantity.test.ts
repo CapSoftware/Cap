@@ -238,8 +238,13 @@ describe("updateSeatQuantity", () => {
 			"@/actions/organization/update-seat-quantity"
 		);
 
-		await updateSeatQuantity("org-1" as never, 2);
+		const result = await updateSeatQuantity("org-1" as never, 2);
 
+		expect(result).toEqual({
+			success: true,
+			newQuantity: 2,
+			cancelAtPeriodEnd: true,
+		});
 		expect(mockStripe.subscriptions.update).toHaveBeenCalledTimes(1);
 		expect(mockStripe.subscriptions.update).toHaveBeenCalledWith("sub_1", {
 			items: [{ id: "si_1", quantity: 2 }],
@@ -262,7 +267,9 @@ describe("updateSeatQuantity", () => {
 			"@/actions/organization/update-seat-quantity"
 		);
 
-		await updateSeatQuantity("org-1" as never, 3);
+		const result = await updateSeatQuantity("org-1" as never, 3);
+
+		expect(result).toMatchObject({ cancelAtPeriodEnd: true });
 
 		expect(mockStripe.subscriptions.update).toHaveBeenCalledTimes(1);
 		expect(mockStripe.subscriptions.update).toHaveBeenCalledWith("sub_1", {
@@ -320,6 +327,44 @@ describe("updateSeatQuantity", () => {
 			items: [{ id: "si_1", quantity: 2 }],
 			proration_behavior: "none",
 		});
+	});
+
+	it("clears the scheduled cancellation before a seat increase", async () => {
+		mockSeatLookup({ currentQuantity: 1 });
+		mockStripe.subscriptions.retrieve.mockResolvedValue({
+			id: "sub_1",
+			customer: "cus_1",
+			cancel_at_period_end: true,
+			items: {
+				data: [{ id: "si_1", quantity: 1 }],
+			},
+		});
+		const { updateSeatQuantity } = await import(
+			"@/actions/organization/update-seat-quantity"
+		);
+
+		const result = await updateSeatQuantity("org-1" as never, 2);
+
+		expect(result).toEqual({
+			success: true,
+			newQuantity: 2,
+			cancelAtPeriodEnd: false,
+		});
+		expect(mockStripe.subscriptions.update).toHaveBeenNthCalledWith(
+			1,
+			"sub_1",
+			{ cancel_at_period_end: false },
+		);
+		expect(mockStripe.subscriptions.update).toHaveBeenNthCalledWith(
+			2,
+			"sub_1",
+			{
+				items: [{ id: "si_1", quantity: 2 }],
+				payment_behavior: "pending_if_incomplete",
+				proration_behavior: "always_invoice",
+			},
+		);
+		expect(mockStripe.subscriptions.update).toHaveBeenCalledTimes(2);
 	});
 
 	it("restores scheduled cancellation when a seat increase fails", async () => {
