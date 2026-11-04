@@ -653,6 +653,15 @@ const requestAccountDeletion = Effect.fn("Mobile.requestAccountDeletion")(
 				await tx
 					.delete(Db.authApiKeys)
 					.where(eq(Db.authApiKeys.userId, user.id));
+				await tx
+					.update(Db.agentApiKeys)
+					.set({ revokedAt: new Date() })
+					.where(
+						and(
+							eq(Db.agentApiKeys.userId, user.id),
+							isNull(Db.agentApiKeys.revokedAt),
+						),
+					);
 			}),
 		);
 
