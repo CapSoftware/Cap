@@ -174,6 +174,16 @@ describe("developer SDK upload completion billing", () => {
 		expect(state.transactions).toHaveLength(1);
 	});
 
+	it("charges a video once when storage rejects a repeated completion", async () => {
+		expect((await complete("video-1")).status).toBe(200);
+
+		state.completeUpload.mockRejectedValueOnce(new Error("NoSuchUpload"));
+		expect((await complete("video-1")).status).toBe(500);
+
+		expect(state.balance).toBe(90_000);
+		expect(state.transactions).toHaveLength(1);
+	});
+
 	it("charges a video once when completion requests race", async () => {
 		const responses = await Promise.all([
 			complete("video-1"),
