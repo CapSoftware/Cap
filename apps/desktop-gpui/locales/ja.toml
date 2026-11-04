@@ -3222,3 +3222,72 @@ verification_failed = "録画の確認に失敗しました：{status}"
 
 [message.cli]
 binary_missing = "{path}に同梱のCLIが見つかりません"
+[repair]
+fix = "修復"
+fix_recording = "録画を修復"
+
+[repair.window]
+title = "録画を修復"
+recover_failed = "復元できませんでした"
+open_failed = "この録画を開けませんでした"
+privacy = "Capはこの録画のファイルだけを確認して修復します。コンピュータ上のほかのファイルは読み取りません。"
+cancel = "キャンセル"
+close = "閉じる"
+
+[repair.status]
+connecting = "安全な作業環境を準備しています"
+working = "録画を確認しています"
+verifying = "修復をテストしています"
+sending = "Capに送信しています"
+worked_for = "{duration}で完了"
+duration_seconds = "{seconds}秒"
+duration_minutes = "{minutes}分{seconds}秒"
+timer_seconds = "{seconds}秒"
+timer_minutes = "{minutes}分{seconds}秒"
+earlier_thoughts = { other = "以前のメモを{count}件表示" }
+fewer_thoughts = "メモを折りたたむ"
+
+[repair.tool]
+describe = "概要"
+list = "一覧"
+read = "読み取り"
+inspect = "検査"
+pull = "コピー"
+edit = "編集"
+truncate = "切り詰め"
+remove = "退避"
+replace = "置き換え"
+verify = "テスト"
+source_read = "ソースを読む"
+search = "検索"
+run = "実行"
+write = "書き込み"
+
+[repair.fixed]
+title = "録画を修復しました"
+open = "録画を開く"
+
+[repair.help]
+cant_fix_title = "この録画は詳しい確認が必要です"
+failed_title = "修復を完了できませんでした"
+send_failed_title = "送信を完了できませんでした"
+explanation = "この録画をCapチームに送信してください。手作業で修復し、メールでお知らせします。"
+size_line = "サイズ：{size}"
+send = "Capに送信"
+
+[repair.sending]
+progress = "{sent} / {total}"
+
+[repair.sent]
+title = "送信しました。修復が終わったらメールでお知らせします。"
+
+[repair.sign_in]
+title = "録画を修復するにはサインインしてください"
+body = "修復にはCapアカウントを使います。"
+button = "サインイン"
+waiting = "ブラウザを待っています"
+
+[repair.bytes]
+gigabytes = "{value} GB"
+megabytes = "{value} MB"
+kilobytes = "{value} KB"

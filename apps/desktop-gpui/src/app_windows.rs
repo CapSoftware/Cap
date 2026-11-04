@@ -31,6 +31,7 @@ use crate::{
     onboarding_window::{self, OnboardingWindow},
     platform,
     recording::{RecordingMode, StartConfig, StudioFinalization},
+    repair::window::{self as repair_window, RepairWindow},
     screenshot_editor::{self, ScreenshotEditorWindow},
     session::{Phase, RecordingSession, StudioEditorPresentation},
     settings_window::{self, Page, SettingsWindow},
@@ -272,6 +273,7 @@ pub struct AppWindows {
     /// One screenshot editor per `.cap` bundle -- the gpui spelling of
     /// `ScreenshotEditorWindowIds`, keyed by the bundle directory.
     pub screenshot_editors: Vec<(PathBuf, WindowHandle<ScreenshotEditorWindow>)>,
+    pub repairs: Vec<(PathBuf, WindowHandle<RepairWindow>)>,
     /// `hasHiddenMainWindowForPicker` (`new-main/index.tsx:2016-2059`): the
     /// main window hides while the target picker is up, and comes back only on
     /// a dismissal that reveals ("cancelled" -- Escape, the overlay's close
@@ -563,6 +565,7 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
         deleting_editors: HashSet::new(),
         preparing_cleanup: crate::editor_preparing::PreparingCleanupRegistry::default(),
         screenshot_editors: Vec::new(),
+        repairs: Vec::new(),
         main_hidden_for_picker: false,
         main_visible_before_picker: false,
         main_hidden_by_app: false,
@@ -1699,6 +1702,175 @@ pub fn set_recording_mode(mode: Mode, cx: &mut App) {
         .ok();
     // Open overlays label their start button with the mode.
     refresh_target_overlays(cx);
+}
+
+/// One Fix window per `.cap` bundle, keyed like the editors so a second Fix
+/// click on the same recording focuses the running session instead of
+/// starting another one against the same files.
+pub fn open_repair_window(request: crate::repair::RepairRequest, cx: &mut App) {
+    #[cfg(target_os = "linux")]
+    if defer_window_until_capture_safe(cx) {
+        return;
+    }
+    let key = editor_key(&request.project_path);
+    if repair_window_handle(&key, cx).is_none() && crate::repair::bundle_busy(&key) {
+        return;
+    }
+    if let Some(handle) = repair_window_handle(&key, cx) {
+        let native = handle
+            .update(cx, |_, window, _| platform::native_window(window))
+            .ok()
+            .flatten();
+        cx.spawn(async move |_| {
+            if let Some(native) = &native {
+                platform::show_native(native);
+            }
+        })
+        .detach();
+        return;
+    }
+    open_repair_window_with(
+        key,
+        move |window, cx| {
+            let controller = crate::repair::start(request, cx);
+            cx.new(|cx| RepairWindow::new(controller, window, cx))
+        },
+        cx,
+    );
+}
+
+#[cfg(debug_assertions)]
+pub fn open_repair_preview(
+    request: crate::repair::RepairRequest,
+    snapshot: crate::repair::RepairSnapshot,
+    cx: &mut App,
+) {
+    let key = request.project_path.clone();
+    open_repair_window_with(
+        key,
+        move |window, cx| cx.new(|cx| RepairWindow::preview(request, snapshot, window, cx)),
+        cx,
+    );
+}
+
+fn open_repair_window_with(
+    key: PathBuf,
+    build: impl FnOnce(&mut gpui::Window, &mut App) -> Entity<RepairWindow> + 'static,
+    cx: &mut App,
+) {
+    let (bounds, display_id) = opening_window_placement(
+        size(
+            px(repair_window::REPAIR_WIDTH),
+            px(repair_window::REPAIR_HEIGHT),
+        ),
+        cx,
+    );
+
+    let handle = cx.open_window(
+        WindowOptions {
+            #[cfg(target_os = "linux")]
+            app_id: Some(crate::app_windows::app_id().into()),
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            display_id,
+            titlebar: Some(gpui::TitlebarOptions {
+                title: Some("Cap Fix Recording".into()),
+                appears_transparent: true,
+                traffic_light_position: Some(repair_window::TRAFFIC_LIGHTS),
+            }),
+            kind: WindowKind::Normal,
+            focus: true,
+            show: true,
+            is_resizable: true,
+            is_minimizable: true,
+            window_min_size: Some(fitted_window_min_size(
+                size(
+                    px(repair_window::REPAIR_MIN_WIDTH),
+                    px(repair_window::REPAIR_MIN_HEIGHT),
+                ),
+                bounds,
+            )),
+            ..Default::default()
+        },
+        build,
+    );
+
+    let handle = match handle {
+        Ok(handle) => handle,
+        Err(error) => {
+            tracing::error!("repair window failed to open: {error:#}");
+            return;
+        }
+    };
+    cx.global_mut::<AppWindows>().repairs.push((key, handle));
+    handle
+        .update(cx, |_, window, _| platform::kick_display_link(window))
+        .ok();
+}
+
+fn repair_window_handle(project_path: &Path, cx: &App) -> Option<WindowHandle<RepairWindow>> {
+    let key = editor_key(project_path);
+    cx.global::<AppWindows>()
+        .repairs
+        .iter()
+        .find(|(path, _)| path == &key)
+        .map(|(_, handle)| *handle)
+}
+
+/// Whether a Fix session owns this bundle. The recovery toast's own Recover
+/// and Discard stay disabled meanwhile: both would race the session's staged
+/// commit on the same files.
+pub fn is_repair_open(project_path: &Path, cx: &App) -> bool {
+    repair_window_handle(project_path, cx).is_some() || crate::repair::bundle_busy(project_path)
+}
+
+pub fn repair_closed(window_id: gpui::WindowId, cx: &mut App) {
+    let windows = cx.global_mut::<AppWindows>();
+    let key = windows
+        .repairs
+        .iter()
+        .find(|(_, handle)| handle.window_id() == window_id)
+        .map(|(key, _)| key.clone());
+    windows
+        .repairs
+        .retain(|(_, handle)| handle.window_id() != window_id);
+    refresh_main_window(cx);
+    if let Some(key) = key.filter(|key| crate::repair::bundle_busy(key)) {
+        cx.spawn(async move |cx| {
+            while crate::repair::bundle_busy(&key) {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(250))
+                    .await;
+            }
+            cx.update(refresh_main_window);
+        })
+        .detach();
+    }
+}
+
+fn refresh_main_window(cx: &mut App) {
+    let main = cx.global::<AppWindows>().main;
+    main.update(cx, |_, window, cx| {
+        cx.notify();
+        window.refresh();
+    })
+    .ok();
+}
+
+pub fn recording_repaired(original: PathBuf, repaired: PathBuf, cx: &mut App) {
+    let main = cx.global::<AppWindows>().main;
+    main.update(cx, |view, window, cx| {
+        view.recording_repaired(&original, &repaired, window, cx)
+    })
+    .ok();
+}
+
+pub fn open_recovered_recording(project_path: PathBuf, cx: &mut App) {
+    let output = project_path.join("content/output.mp4");
+    if output.is_file() {
+        crate::library::reveal_path(&output, cx);
+    } else {
+        open_editor(project_path, cx);
+    }
 }
 
 // -- Teleprompter -----------------------------------------------------------
@@ -2956,6 +3128,7 @@ fn own_windows(cx: &mut App) -> Vec<OwnWindowHandle> {
         deleting_editors: _,
         preparing_cleanup: _,
         screenshot_editors,
+        repairs: _,
         main_hidden_for_picker: _,
         main_visible_before_picker: _,
         main_hidden_by_app: _,
