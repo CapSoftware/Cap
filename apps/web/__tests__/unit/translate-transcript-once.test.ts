@@ -1,0 +1,293 @@
+import type { Video } from "@cap/web-domain";
+import { Effect, Option } from "effect";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { splitTranslationChunks } from "@/actions/videos/translation-vtt";
+
+const ownerId = "owner";
+const videoId = "public-video" as Video.VideoId;
+const sourceKey = `${ownerId}/${videoId}/transcription.vtt`;
+
+const mocks = vi.hoisted(() => ({
+	objects: new Map<string, string>(),
+	provider: "s3" as "s3" | "googleDrive",
+	generateText: vi.fn(),
+	isRateLimited: vi.fn(async () => false),
+}));
+
+vi.mock("@cap/database", () => ({
+	db: () => ({
+		select: () => ({
+			from: () => ({
+				where: async () => [
+					{ video: { id: videoId, ownerId, bucketId: null } },
+				],
+			}),
+		}),
+	}),
+}));
+vi.mock("@cap/web-domain", () => ({
+	Policy: { withPublicPolicy: () => (effect: unknown) => effect },
+}));
+vi.mock("@cap/web-backend", () => ({
+	provideOptionalAuth: (effect: unknown) => effect,
+	VideosPolicy: Effect.succeed({ canView: () => Effect.void }),
+	Storage: {
+		getAccessForVideo: () =>
+			Effect.succeed([
+				{
+					provider: mocks.provider,
+					getObject: (key: string) =>
+						Effect.sync(() => Option.fromNullable(mocks.objects.get(key))),
+					putObject: (key: string, body: string) =>
+						Effect.sync(() => {
+							mocks.objects.set(key, body);
+						}),
+					deleteObject: (key: string) =>
+						Effect.sync(() => {
+							mocks.objects.delete(key);
+						}),
+				},
+				Option.none(),
+			]),
+	},
+}));
+vi.mock("@/lib/server", () => ({
+	runPromise: Effect.runPromise,
+	runPromiseExit: Effect.runPromiseExit,
+}));
+vi.mock("@/lib/video-storage", () => ({
+	decodeStorageVideo: (video: unknown) => video,
+}));
+vi.mock("@/lib/ai/provider", () => ({ isAiConfigured: () => true }));
+vi.mock("@/lib/ai/run", () => ({
+	runWithAiProviders: (
+		_role: string,
+		run: (selection: unknown) => Promise<unknown>,
+	) => run({ model: () => "model", supportsTemperature: false }),
+}));
+vi.mock("ai", () => ({ generateText: mocks.generateText }));
+vi.mock("@/lib/rate-limit", () => ({
+	RATE_LIMIT_IDS: { TRANSLATE_TRANSCRIPT: "rl_translate_transcript" },
+	isRateLimited: mocks.isRateLimited,
+}));
+
+const makeSource = (prefix: string) =>
+	[
+		"WEBVTT",
+		...Array.from(
+			{ length: 120 },
+			(_, index) =>
+				`${index + 1}\n00:00:${String(index % 60).padStart(2, "0")}.000 --> 00:00:${String(
+					index % 60,
+				).padStart(
+					2,
+					"0",
+				)}.900\n${prefix} line ${index} with some words to translate`,
+		),
+	].join("\n\n");
+
+const source = makeSource("Original");
+const chunkCount = splitTranslationChunks(source)?.length ?? 0;
+
+const translatedChunk = (prompt: string) => {
+	const chunk = prompt.split("VTT content to translate:\n\n")[1] ?? "";
+	return chunk
+		.split("\n\n")
+		.map((block) =>
+			block
+				.split("\n")
+				.map((line, index, lines) =>
+					index > lines.findIndex((value) => value.includes("-->")) &&
+					lines.some((value) => value.includes("-->"))
+						? `ja ${line}`
+						: line,
+				)
+				.join("\n"),
+		)
+		.join("\n\n");
+};
+
+const succeed = () =>
+	mocks.generateText.mockImplementation(
+		async ({ prompt }: { prompt: string }) => {
+			await new Promise((resolve) => setTimeout(resolve, 5));
+			return { text: translatedChunk(prompt), finishReason: "stop" };
+		},
+	);
+
+const fail = () =>
+	mocks.generateText.mockImplementation(async () => ({
+		text: "WEBVTT\n\nnot a translation",
+		finishReason: "stop",
+	}));
+
+const loadAction = async () => {
+	vi.resetModules();
+	return (await import("@/actions/videos/translate-transcript"))
+		.translateTranscript;
+};
+
+beforeEach(() => {
+	mocks.objects = new Map([[sourceKey, source]]);
+	mocks.provider = "s3";
+	mocks.generateText.mockReset();
+	mocks.isRateLimited.mockClear();
+});
+
+afterEach(() => {
+	vi.useRealTimers();
+});
+
+describe("translateTranscript runs one translation pass per video and language", () => {
+	it("shares one pass between concurrent requests for the same pair", async () => {
+		expect(chunkCount).toBeGreaterThan(1);
+		succeed();
+		const translateTranscript = await loadAction();
+
+		const results = await Promise.all(
+			Array.from({ length: 20 }, () => translateTranscript(videoId, "ja")),
+		);
+
+		expect(mocks.generateText).toHaveBeenCalledTimes(chunkCount);
+		expect(results.every((result) => result.success)).toBe(true);
+		expect(new Set(results.map((result) => result.translatedVtt)).size).toBe(1);
+		expect(results[0]?.translatedVtt).toContain("ja Original line 0");
+		expect(mocks.isRateLimited).toHaveBeenCalledTimes(20);
+	});
+
+	it("serves the stored translation afterwards without another pass", async () => {
+		succeed();
+		const translateTranscript = await loadAction();
+		const first = await translateTranscript(videoId, "ja");
+		expect(
+			mocks.objects.has(`${ownerId}/${videoId}/transcription.ja.vtt`),
+		).toBe(true);
+		mocks.generateText.mockClear();
+
+		const fresh = await loadAction();
+		const second = await fresh(videoId, "ja");
+
+		expect(mocks.generateText).not.toHaveBeenCalled();
+		expect(second).toMatchObject({
+			success: true,
+			translatedVtt: first.translatedVtt,
+		});
+		expect(
+			[...mocks.objects.keys()].filter((key) => key.endsWith(".json")),
+		).toEqual([]);
+	});
+
+	it("does not run the model again for a pair that just failed", async () => {
+		fail();
+		const translateTranscript = await loadAction();
+		await expect(translateTranscript(videoId, "ja")).resolves.toMatchObject({
+			success: false,
+		});
+		const calls = mocks.generateText.mock.calls.length;
+		expect(calls).toBeGreaterThan(0);
+
+		const repeats = await Promise.all(
+			Array.from({ length: 5 }, () => translateTranscript(videoId, "ja")),
+		);
+		expect(repeats.every((result) => !result.success)).toBe(true);
+		expect(mocks.generateText).toHaveBeenCalledTimes(calls);
+
+		const otherInstance = await loadAction();
+		await expect(otherInstance(videoId, "ja")).resolves.toMatchObject({
+			success: false,
+		});
+		expect(mocks.generateText).toHaveBeenCalledTimes(calls);
+	});
+
+	it("retries a failed pair once the retry window has passed", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		vi.setSystemTime(new Date("2026-11-04T10:00:00Z"));
+		fail();
+		const translateTranscript = await loadAction();
+		await translateTranscript(videoId, "ja");
+		const calls = mocks.generateText.mock.calls.length;
+
+		vi.setSystemTime(new Date("2026-11-04T10:30:00Z"));
+		succeed();
+		await expect(translateTranscript(videoId, "ja")).resolves.toMatchObject({
+			success: true,
+		});
+		expect(mocks.generateText).toHaveBeenCalledTimes(calls + chunkCount);
+	});
+
+	it("keeps other languages and edited transcripts translatable after a failure", async () => {
+		fail();
+		const translateTranscript = await loadAction();
+		await translateTranscript(videoId, "ja");
+		const calls = mocks.generateText.mock.calls.length;
+
+		succeed();
+		await expect(translateTranscript(videoId, "fr")).resolves.toMatchObject({
+			success: true,
+		});
+		expect(mocks.generateText).toHaveBeenCalledTimes(calls + chunkCount);
+
+		mocks.objects.set(sourceKey, makeSource("Edited"));
+		await expect(translateTranscript(videoId, "ja")).resolves.toMatchObject({
+			success: true,
+		});
+		expect(mocks.generateText).toHaveBeenCalledTimes(calls + chunkCount * 2);
+	});
+
+	it("waits for a pass already running elsewhere instead of starting another", async () => {
+		succeed();
+		const runningInstance = await loadAction();
+		let releaseModel = () => {};
+		const modelGate = new Promise<void>((resolve) => {
+			releaseModel = resolve;
+		});
+		mocks.generateText.mockImplementationOnce(
+			async ({ prompt }: { prompt: string }) => {
+				await modelGate;
+				return { text: translatedChunk(prompt), finishReason: "stop" };
+			},
+		);
+		const running = runningInstance(videoId, "ja");
+		await vi.waitFor(() => expect(mocks.generateText).toHaveBeenCalledTimes(1));
+
+		const waitingInstance = await loadAction();
+		const waiting = waitingInstance(videoId, "ja");
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(mocks.generateText).toHaveBeenCalledTimes(1);
+
+		releaseModel();
+		const [first, second] = await Promise.all([running, waiting]);
+
+		expect(mocks.generateText).toHaveBeenCalledTimes(chunkCount);
+		expect(first.success).toBe(true);
+		expect(second).toMatchObject({
+			success: true,
+			translatedVtt: first.translatedVtt,
+		});
+	});
+
+	it("still translates when the storage provider is not S3", async () => {
+		mocks.provider = "googleDrive";
+		succeed();
+		const translateTranscript = await loadAction();
+		const results = await Promise.all(
+			Array.from({ length: 5 }, () => translateTranscript(videoId, "ja")),
+		);
+		expect(results.every((result) => result.success)).toBe(true);
+		expect(mocks.generateText).toHaveBeenCalledTimes(chunkCount);
+		expect(
+			[...mocks.objects.keys()].filter((key) => key.endsWith(".json")),
+		).toEqual([]);
+	});
+
+	it("keeps the request limit check ahead of any model call", async () => {
+		succeed();
+		mocks.isRateLimited.mockResolvedValueOnce(true);
+		const translateTranscript = await loadAction();
+		await expect(translateTranscript(videoId, "ja")).resolves.toEqual({
+			success: false,
+			message: "Too many requests",
+		});
+		expect(mocks.generateText).not.toHaveBeenCalled();
+	});
+});

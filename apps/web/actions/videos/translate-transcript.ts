@@ -21,6 +21,7 @@ import {
 	isCompleteTranslation,
 	joinTranslationChunks,
 	readCachedTranslation,
+	sourceDigest,
 	splitTranslationChunks,
 	withSourceFingerprint,
 } from "./translation-vtt";
@@ -80,63 +81,236 @@ export async function translateTranscript(
 
 	const { video } = query[0];
 
-	const translatedKey = `${video.ownerId}/${videoId}/transcription.${targetLanguage}.vtt`;
+	const [bucket] = await Storage.getAccessForVideo(
+		decodeStorageVideo(video),
+	).pipe(runPromise);
 
-	const originalVtt = await Effect.gen(function* () {
-		const [bucket] = yield* Storage.getAccessForVideo(
-			decodeStorageVideo(video),
-		);
-		return yield* bucket.getObject(
-			`${video.ownerId}/${videoId}/transcription.vtt`,
-		);
-	}).pipe(runPromise);
+	const originalVtt = await bucket
+		.getObject(`${video.ownerId}/${videoId}/transcription.vtt`)
+		.pipe(runPromise);
 
 	if (Option.isNone(originalVtt)) {
 		return { success: false, message: "Original transcript not found" };
 	}
 
-	try {
-		const existingTranslation = await Effect.gen(function* () {
-			const [bucket] = yield* Storage.getAccessForVideo(
-				decodeStorageVideo(video),
-			);
-			return yield* bucket.getObject(translatedKey);
-		}).pipe(runPromise);
+	const pairKey = `${videoId}:${targetLanguage}:${sourceDigest(originalVtt.value)}`;
+	const running = translationsInFlight.get(pairKey);
+	if (running) return running;
 
-		const cachedTranslation = Option.isSome(existingTranslation)
-			? readCachedTranslation(originalVtt.value, existingTranslation.value)
+	const translation = translateOnce({
+		bucket,
+		pairKey,
+		source: originalVtt.value,
+		targetLanguage,
+		translatedKey: `${video.ownerId}/${videoId}/transcription.${targetLanguage}.vtt`,
+		attemptKey: `${video.ownerId}/${videoId}/translation-status/${targetLanguage}.json`,
+	}).finally(() => translationsInFlight.delete(pairKey));
+	translationsInFlight.set(pairKey, translation);
+	return translation;
+}
+
+type VideoBucket = Effect.Effect.Success<
+	ReturnType<typeof Storage.getAccessForVideo>
+>[0];
+
+interface PairTranslation {
+	bucket: VideoBucket;
+	pairKey: string;
+	source: string;
+	targetLanguage: LanguageCode;
+	translatedKey: string;
+	attemptKey: string;
+}
+
+interface TranslationAttempt {
+	state: "pending" | "failed";
+	source: string;
+	at: number;
+}
+
+// A pass cannot outlive its function invocation (Vercel's default 300 s limit),
+// so an older pending marker belongs to a pass that was stopped.
+const PENDING_TRANSLATION_LEASE_MS = 5 * 60 * 1000;
+const FAILED_TRANSLATION_RETRY_MS = 10 * 60 * 1000;
+const TRANSLATION_WAIT_MS = 20 * 1000;
+const TRANSLATION_WAIT_POLL_MS = 2 * 1000;
+
+const TRANSLATION_FAILED: TranslateResult = {
+	success: false,
+	message: "Translation failed",
+};
+
+const translationsInFlight = new Map<string, Promise<TranslateResult>>();
+const recentTranslationFailures = new Map<string, number>();
+
+function hasRecentFailure(pairKey: string) {
+	const failedAt = recentTranslationFailures.get(pairKey);
+	return (
+		failedAt !== undefined &&
+		Date.now() - failedAt < FAILED_TRANSLATION_RETRY_MS
+	);
+}
+
+function recordFailure(pairKey: string, failedAt: number) {
+	for (const [key, value] of recentTranslationFailures) {
+		if (Date.now() - value >= FAILED_TRANSLATION_RETRY_MS) {
+			recentTranslationFailures.delete(key);
+		}
+	}
+	recentTranslationFailures.set(pairKey, failedAt);
+}
+
+async function readStoredTranslation(translation: PairTranslation) {
+	try {
+		const existing = await translation.bucket
+			.getObject(translation.translatedKey)
+			.pipe(runPromise);
+		return Option.isSome(existing)
+			? readCachedTranslation(translation.source, existing.value)
 			: null;
-		if (cachedTranslation) {
+	} catch (e) {
+		console.debug("[translateTranscript] No cached translation found:", e);
+		return null;
+	}
+}
+
+function parseAttempt(body: string): TranslationAttempt | null {
+	try {
+		const value = JSON.parse(body) as Partial<TranslationAttempt>;
+		if (
+			(value.state === "pending" || value.state === "failed") &&
+			typeof value.source === "string" &&
+			typeof value.at === "number"
+		) {
+			return { state: value.state, source: value.source, at: value.at };
+		}
+	} catch {}
+	return null;
+}
+
+async function readAttempt(
+	translation: PairTranslation,
+): Promise<TranslationAttempt | null> {
+	if (translation.bucket.provider !== "s3") return null;
+	try {
+		const stored = await translation.bucket
+			.getObject(translation.attemptKey)
+			.pipe(runPromise);
+		const attempt = Option.isSome(stored) ? parseAttempt(stored.value) : null;
+		if (!attempt || attempt.source !== sourceDigest(translation.source)) {
+			return null;
+		}
+		const ttl =
+			attempt.state === "pending"
+				? PENDING_TRANSLATION_LEASE_MS
+				: FAILED_TRANSLATION_RETRY_MS;
+		return Date.now() - attempt.at < ttl ? attempt : null;
+	} catch (error) {
+		console.warn("[translateTranscript] Could not read attempt:", error);
+		return null;
+	}
+}
+
+async function writeAttempt(
+	translation: PairTranslation,
+	state: TranslationAttempt["state"],
+) {
+	if (translation.bucket.provider !== "s3") return;
+	const attempt: TranslationAttempt = {
+		state,
+		source: sourceDigest(translation.source),
+		at: Date.now(),
+	};
+	try {
+		await translation.bucket
+			.putObject(translation.attemptKey, JSON.stringify(attempt), {
+				contentType: "application/json",
+			})
+			.pipe(runPromise);
+	} catch (error) {
+		console.warn("[translateTranscript] Could not record attempt:", error);
+	}
+}
+
+async function clearAttempt(translation: PairTranslation) {
+	if (translation.bucket.provider !== "s3") return;
+	try {
+		await translation.bucket
+			.deleteObject(translation.attemptKey)
+			.pipe(runPromise);
+	} catch (error) {
+		console.warn("[translateTranscript] Could not clear attempt:", error);
+	}
+}
+
+async function waitForTranslation(
+	translation: PairTranslation,
+): Promise<TranslateResult> {
+	const deadline = Date.now() + TRANSLATION_WAIT_MS;
+	while (Date.now() < deadline) {
+		await new Promise((resolve) =>
+			setTimeout(resolve, TRANSLATION_WAIT_POLL_MS),
+		);
+		const stored = await readStoredTranslation(translation);
+		if (stored) {
 			return {
 				success: true,
-				translatedVtt: cachedTranslation,
+				translatedVtt: stored,
 				message: "Retrieved cached translation",
 			};
 		}
-	} catch (e) {
-		console.debug("[translateTranscript] No cached translation found:", e);
+		const attempt = await readAttempt(translation);
+		if (attempt?.state === "failed") {
+			recordFailure(translation.pairKey, attempt.at);
+			return TRANSLATION_FAILED;
+		}
+		if (!attempt) break;
+	}
+	return { success: false, message: "Translation in progress" };
+}
+
+async function translateOnce(
+	translation: PairTranslation,
+): Promise<TranslateResult> {
+	const stored = await readStoredTranslation(translation);
+	if (stored) {
+		return {
+			success: true,
+			translatedVtt: stored,
+			message: "Retrieved cached translation",
+		};
 	}
 
+	if (hasRecentFailure(translation.pairKey)) return TRANSLATION_FAILED;
+
+	const attempt = await readAttempt(translation);
+	if (attempt?.state === "failed") {
+		recordFailure(translation.pairKey, attempt.at);
+		return TRANSLATION_FAILED;
+	}
+	if (attempt?.state === "pending") return waitForTranslation(translation);
+
+	await writeAttempt(translation, "pending");
+
 	const translatedVtt = await translateVttContent(
-		originalVtt.value,
-		targetLanguage,
+		translation.source,
+		translation.targetLanguage,
 	);
 
 	if (!translatedVtt) {
-		return { success: false, message: "Translation failed" };
+		recordFailure(translation.pairKey, Date.now());
+		await writeAttempt(translation, "failed");
+		return TRANSLATION_FAILED;
 	}
 
-	const cacheBody = withSourceFingerprint(originalVtt.value, translatedVtt);
+	const cacheBody = withSourceFingerprint(translation.source, translatedVtt);
 	if (cacheBody) {
 		try {
-			await Effect.gen(function* () {
-				const [bucket] = yield* Storage.getAccessForVideo(
-					decodeStorageVideo(video),
-				);
-				yield* bucket.putObject(translatedKey, cacheBody, {
+			await translation.bucket
+				.putObject(translation.translatedKey, cacheBody, {
 					contentType: "text/vtt",
-				});
-			}).pipe(runPromise);
+				})
+				.pipe(runPromise);
 		} catch (error) {
 			console.error(
 				"[translateTranscript] Failed to cache translation:",
@@ -144,6 +318,7 @@ export async function translateTranscript(
 			);
 		}
 	}
+	await clearAttempt(translation);
 
 	return {
 		success: true,
