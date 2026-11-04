@@ -2859,8 +2859,6 @@ split_hint = "Placez la tête de lecture dans ce clip"
 volume = "Volume"
 transition = "TRANSITION"
 transition_none = "Aucune"
-transition_crossfade = "Fondu enchaîné"
-transition_fade = "Fondu"
 transition_seconds = "{seconds} s"
 
 [editor.window.clip_menu.merge_blocker]
@@ -2954,6 +2952,25 @@ save_failed = "Impossible d'enregistrer le titre de l'enregistrement pour {path}
 [editor.window.track]
 clear_all = "Tout effacer"
 delete = "Supprimer"
+
+[editor.window.transition]
+title = "Transition"
+add = "Ajouter une transition"
+duration = "Durée"
+seconds_unit = "s"
+remove = "Supprimer la transition"
+cross_fade = "Fondu enchaîné"
+fade_through_black = "Fondu au noir"
+fade_through_white = "Fondu au blanc"
+push_left = "Pousser vers la gauche"
+push_right = "Pousser vers la droite"
+push_up = "Pousser vers le haut"
+push_down = "Pousser vers le bas"
+wipe_left = "Volet vers la gauche"
+wipe_right = "Volet vers la droite"
+wipe_up = "Volet vers le haut"
+wipe_down = "Volet vers le bas"
+zoom = "Zoom"
 
 [editor.window.transport]
 done_splitting = "Terminer la découpe"

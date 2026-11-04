@@ -2859,8 +2859,6 @@ split_hint = "प्लेहेड को इस क्लिप के अं�
 volume = "वॉल्यूम"
 transition = "ट्रांज़िशन"
 transition_none = "कोई नहीं"
-transition_crossfade = "क्रॉसफ़ेड"
-transition_fade = "फ़ेड"
 transition_seconds = "{seconds} सेकंड"
 
 [editor.window.clip_menu.merge_blocker]
@@ -2954,6 +2952,25 @@ save_failed = "{path} का रिकॉर्डिंग टाइटल स�
 [editor.window.track]
 clear_all = "सब साफ़ करें"
 delete = "हटाएँ"
+
+[editor.window.transition]
+title = "ट्रांज़िशन"
+add = "ट्रांज़िशन जोड़ें"
+duration = "अवधि"
+seconds_unit = "सेकंड"
+remove = "ट्रांज़िशन हटाएँ"
+cross_fade = "क्रॉस डिज़ॉल्व"
+fade_through_black = "काले में फ़ेड"
+fade_through_white = "सफ़ेद में फ़ेड"
+push_left = "बाईं ओर पुश"
+push_right = "दाईं ओर पुश"
+push_up = "ऊपर पुश"
+push_down = "नीचे पुश"
+wipe_left = "बाईं ओर वाइप"
+wipe_right = "दाईं ओर वाइप"
+wipe_up = "ऊपर वाइप"
+wipe_down = "नीचे वाइप"
+zoom = "ज़ूम"
 
 [editor.window.transport]
 done_splitting = "विभाजन पूरा"

@@ -2859,8 +2859,6 @@ split_hint = "将播放头移到此片段内"
 volume = "音量"
 transition = "转场"
 transition_none = "无"
-transition_crossfade = "交叉淡化"
-transition_fade = "淡入淡出"
 transition_seconds = "{seconds} 秒"
 
 [editor.window.clip_menu.merge_blocker]
@@ -2954,6 +2952,25 @@ save_failed = "无法保存 {path} 的录制标题：{error}"
 [editor.window.track]
 clear_all = "全部清除"
 delete = "删除"
+
+[editor.window.transition]
+title = "转场"
+add = "添加转场"
+duration = "时长"
+seconds_unit = "秒"
+remove = "移除转场"
+cross_fade = "交叉溶解"
+fade_through_black = "黑场过渡"
+fade_through_white = "白场过渡"
+push_left = "向左推入"
+push_right = "向右推入"
+push_up = "向上推入"
+push_down = "向下推入"
+wipe_left = "向左擦除"
+wipe_right = "向右擦除"
+wipe_up = "向上擦除"
+wipe_down = "向下擦除"
+zoom = "缩放"
 
 [editor.window.transport]
 done_splitting = "完成拆分"

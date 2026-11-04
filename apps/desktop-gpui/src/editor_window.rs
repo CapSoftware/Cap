@@ -85,6 +85,7 @@ mod markers;
 mod scenes;
 mod snap;
 mod style_preset_ui;
+mod transitions;
 
 // ---------------------------------------------------------------------------
 // Window geometry
@@ -1288,6 +1289,17 @@ enum DragKind {
     ClipTrimEnd {
         end: f64,
     },
+    /// The length of the transition into clip `index`: a press on the clip's
+    /// body dragged onto the clip before it, or on one of the transition's
+    /// edges. `grow` is +1 when moving right lengthens it and -1 when moving
+    /// left does.
+    TransitionDuration {
+        index: usize,
+        initial: f64,
+        grow: f64,
+        kind: cap_project::ClipTransitionType,
+        from_body: bool,
+    },
     /// `TL/ZoomTrack.tsx:188-295`: a press on bare zoom track, which becomes a
     /// segment either on the first move (dragged to length) or on release
     /// (the default one-`minDuration` box).
@@ -1478,6 +1490,10 @@ pub struct EditorWindow {
     pub(crate) keyboard_generation_message: Option<String>,
     clip_speed: Option<ClipSpeedMenu>,
     markers: markers::MarkersState,
+    transition_popover: Option<TransitionPopover>,
+    /// The timeline as it was when a transition drag began; every step of the
+    /// drag is applied to a copy of it.
+    transition_drag_base: Option<TimelineConfiguration>,
     timeline_scroll: gpui::ScrollHandle,
     minimap_drag: Option<timeline::MinimapDrag>,
     /// Magnetic edges for the live drag: playhead, clip cuts and every other
@@ -1703,6 +1719,44 @@ const CLIP_MENU_WIDTH: f32 = 300.;
 const DEFAULT_CLIP_TRANSITION_DURATION: f64 = 0.5;
 /// Lengths longer than half the shorter clip are left out of the menu.
 const CLIP_TRANSITION_DURATIONS: [f64; 4] = [0.25, 0.5, 1.0, 1.5];
+const TRANSITION_POPOVER_WIDTH: f32 = 340.;
+/// A press this close to a transition's edge resizes it.
+const TRANSITION_EDGE_PX: f32 = 6.;
+const TRANSITION_JOIN_CHIP: f32 = 18.;
+
+/// The transition editor: opened by clicking a transition on the timeline,
+/// adding one at a cut, or from the clip menu.
+#[derive(Clone, Copy)]
+struct TransitionPopover {
+    index: usize,
+    left: Pixels,
+    anchor: ClipMenuAnchor,
+    /// The kind tile under the pointer, whose preview plays.
+    hovered: Option<cap_project::ClipTransitionType>,
+    /// The two clips the transition joins, so an edit that renumbers the
+    /// clips (a split, a delete, an undo) closes the popover instead of
+    /// leaving it on another cut.
+    clips: [TransitionClipKey; 2],
+}
+
+type TransitionClipKey = (u32, u64, u64);
+
+fn transition_clip_keys(
+    timeline: &TimelineConfiguration,
+    index: usize,
+) -> Option<[TransitionClipKey; 2]> {
+    let key = |segment: &cap_project::TimelineSegment| {
+        (
+            segment.recording_clip,
+            segment.start.to_bits(),
+            segment.end.to_bits(),
+        )
+    };
+    Some([
+        key(timeline.segments.get(index.checked_sub(1)?)?),
+        key(timeline.segments.get(index)?),
+    ])
+}
 const TEXT_MENU_WIDTH: f32 = 250.;
 /// Roughly the menu's laid-out height; only decides which side of its anchor
 /// the card opens on.
@@ -2149,6 +2203,8 @@ impl EditorWindow {
             keyboard_generation_message: None,
             clip_speed: None,
             markers: markers_state,
+            transition_popover: None,
+            transition_drag_base: None,
             timeline_scroll: gpui::ScrollHandle::new(),
             minimap_drag: None,
             drag_snap_targets: snap::SnapTargets::default(),
@@ -2364,6 +2420,15 @@ impl EditorWindow {
     fn dismiss_transient_menus(&mut self) {
         dismiss_indexed_sidebar_menu(&mut self.sidebar.menu);
         self.text_menu = None;
+        if let Some(popover) = self.transition_popover {
+            let still_there = self.project.timeline.as_ref().is_some_and(|timeline| {
+                timeline.effective_transition(popover.index).is_some()
+                    && transition_clip_keys(timeline, popover.index) == Some(popover.clips)
+            });
+            if !still_there {
+                self.transition_popover = None;
+            }
+        }
     }
 
     /// `getMicWaveforms()` / `getSystemAudioWaveforms()` resolving
@@ -3771,6 +3836,12 @@ impl EditorWindow {
             cx.notify();
             return;
         }
+        if self.transition_popover.is_some() && event.keystroke.key.as_str() == "escape" {
+            self.transition_popover = None;
+            cx.stop_propagation();
+            cx.notify();
+            return;
+        }
         if self.sidebar.color_picker.is_some() && event.keystroke.key.as_str() == "escape" {
             self.close_color_picker(cx);
             cx.stop_propagation();
@@ -3905,6 +3976,7 @@ impl EditorWindow {
                     || self.text_menu.is_some()
                     || self.add_track.is_some()
                     || self.clip_speed.is_some()
+                    || self.transition_popover.is_some()
                     || self.sidebar.color_picker.is_some()
                     || self.presets_menu.is_some()
                     || self.preset_dialog.is_some()
@@ -4606,9 +4678,8 @@ impl EditorWindow {
             (TrackKind::Clip, Hit::Handle { start: false, .. }) => {
                 source_edges.map(|(_, end)| DragKind::ClipTrimEnd { end })
             }
-            // The clip's *body* drag is a crossfade-duration drag, not a move
-            // (`TL/ClipTrack.tsx:849-945`); transitions have no drawn
-            // affordance here, so a body press only ever selects.
+            // The clip's *body* drag is a transition-duration drag, not a
+            // move (`TL/ClipTrack.tsx:849-945`): see `press_clip_body`.
             (TrackKind::Clip, Hit::Body { .. }) => None,
             (_, Hit::Handle { start: true, .. }) => {
                 let min = edits::min_segment_duration(kind, secs_per_pixel);
@@ -4643,30 +4714,14 @@ impl EditorWindow {
             Some(DragKind::ClipTrimStart { .. } | DragKind::ClipTrimEnd { .. })
         );
         let Some(drag_kind) = kind_of_drag else {
-            // A clip body press: select on release, nothing else.
-            self.drag = Some(Drag {
-                track: kind,
+            self.press_clip_body(
                 index,
-                kind: DragKind::Move {
-                    start,
-                    end,
-                    bounds: DragBounds { min: 0., max: 0. },
-                },
-                down_x: f32::from(event.position.x),
-                origin_x: None,
-                moved: false,
-                // 4px, the clip body's own promotion (`TL/ClipTrack.tsx:875`).
-                // Nothing happens past it here -- the transition drag is not
-                // reproduced -- but the threshold still decides whether the
-                // release selects.
-                threshold: 4.,
-                selects_on_click: true,
-                shift: modifiers.0,
-                multi: modifiers.1,
+                (start, end),
+                f32::from(event.position.x),
+                modifiers,
                 press_time,
-                paused: false,
-            });
-            cx.notify();
+                cx,
+            );
             return;
         };
 
@@ -5100,7 +5155,11 @@ impl EditorWindow {
         };
         // The promotion: `Math.abs(event.clientX - downEvent.clientX) > 2`,
         // capturing `initialMouseX` the first time it holds.
-        if (x - drag.down_x).abs() > drag.threshold && !drag.moved {
+        let starts_nothing = matches!(
+            drag.kind,
+            DragKind::TransitionDuration { initial, from_body: true, .. } if initial <= 0.
+        ) && x > drag.down_x;
+        if (x - drag.down_x).abs() > drag.threshold && !drag.moved && !starts_nothing {
             drag.moved = true;
             if drag.origin_x.is_none() {
                 drag.origin_x = Some(x);
@@ -5168,6 +5227,17 @@ impl EditorWindow {
                     cx,
                 ) {
                     self.set_preview_time(next);
+                }
+            }
+            DragKind::TransitionDuration {
+                index,
+                initial,
+                grow,
+                kind,
+                ..
+            } => {
+                if drag.moved {
+                    self.drag_transition(index, (initial, grow * delta), kind, cx);
                 }
             }
             DragKind::ClipTrimStart { start } => {
@@ -6114,6 +6184,14 @@ impl EditorWindow {
             self.clip_draft = None;
             return;
         };
+        let transition_drag = matches!(drag.kind, DragKind::TransitionDuration { .. });
+        if transition_drag {
+            self.transition_drag_base = None;
+            if drag.moved {
+                self.view.preview_time = None;
+                self.emit_preview_frame();
+            }
+        }
 
         // The ghost trim's single commit, before the history resume below so
         // the resumed snapshot records the committed config.
@@ -6170,7 +6248,9 @@ impl EditorWindow {
 
         if matches!(
             drag.kind,
-            DragKind::ClipTrimStart { .. } | DragKind::ClipTrimEnd { .. }
+            DragKind::ClipTrimStart { .. }
+                | DragKind::ClipTrimEnd { .. }
+                | DragKind::TransitionDuration { .. }
         ) {
             self.on_handle_released(cx);
         }
@@ -6178,6 +6258,7 @@ impl EditorWindow {
         self.note_edit(
             match (drag.moved, drag.kind) {
                 (_, DragKind::CreateZoom { .. }) => "create",
+                (true, DragKind::TransitionDuration { .. }) => "clip-transition",
                 (true, DragKind::Move { .. }) => "move",
                 (true, _) => "trim",
                 (false, _) => "select",
@@ -6376,6 +6457,11 @@ impl EditorWindow {
     /// them in reverse and refuses to empty itself, and the scene track's
     /// action takes one index at a time for the same reason.
     pub(crate) fn delete_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(popover) = self.transition_popover.take() {
+            self.set_clip_transition(popover.index, None, window, cx);
+            cx.notify();
+            return;
+        }
         let Some(selection) = self.selection.clone() else {
             return;
         };
@@ -8673,7 +8759,7 @@ impl EditorWindow {
     /// The clip menu's transition chips (`setClipTransition`,
     /// `TL/ClipTrack.tsx`): a `kind` transition `duration` long on clip
     /// `index`'s leading boundary, or, with `None`, no transition.
-    fn set_clip_transition(
+    pub(crate) fn set_clip_transition(
         &mut self,
         index: usize,
         transition: Option<(cap_project::ClipTransitionType, f64)>,
@@ -9065,22 +9151,6 @@ impl EditorWindow {
                     ),
             )
             .when(index > 0 && can_transition, |card| {
-                use cap_project::ClipTransitionType;
-                let duration =
-                    transition.map_or(DEFAULT_CLIP_TRANSITION_DURATION, |current| current.duration);
-                let kinds = [
-                    ("None", tr::editor::window::clip_menu::transition_none(), None),
-                    (
-                        "Crossfade",
-                        tr::editor::window::clip_menu::transition_crossfade(),
-                        Some(ClipTransitionType::CrossFade),
-                    ),
-                    (
-                        "Fade",
-                        tr::editor::window::clip_menu::transition_fade(),
-                        Some(ClipTransitionType::FadeThroughBlack),
-                    ),
-                ];
                 card.child(
                     div()
                         .flex()
@@ -9090,54 +9160,26 @@ impl EditorWindow {
                             &theme,
                             tr::editor::window::clip_menu::transition(),
                         ))
-                        .child(chip_row().children(kinds.into_iter().map(|(id, label, kind)| {
-                            let selected = transition.map(|current| current.kind) == kind;
-                            chip(
-                                SharedString::from(format!("clip-transition-{id}")),
-                                selected,
-                                label.to_string(),
+                        .child(
+                            clip_menu_row(
+                                &theme,
+                                "clip-menu-transition",
+                                "icons/arrow-left-right.svg",
+                                transition.map_or(
+                                    tr::editor::window::clip_menu::transition_none(),
+                                    |current| transitions::transition_label(current.kind),
+                                ),
+                                ClipMenuTrailing::None,
+                                true,
+                                false,
                             )
                             .on_click(cx.listener(
-                                move |this, _, window, cx| {
-                                    this.set_clip_transition(
-                                        index,
-                                        kind.map(|kind| (kind, duration)),
-                                        window,
-                                        cx,
-                                    );
+                                move |this, event: &gpui::ClickEvent, window, cx| {
+                                    this.clip_speed = None;
+                                    this.edit_transition_at(index, event.position(), window, cx);
                                 },
-                            ))
-                        })))
-                        .when_some(transition, |section, current| {
-                            section.child(
-                                chip_row().children(
-                                    CLIP_TRANSITION_DURATIONS
-                                        .into_iter()
-                                        .filter(|seconds| *seconds <= transition_room + 1e-9)
-                                        .map(|seconds| {
-                                            chip(
-                                                SharedString::from(format!(
-                                                    "clip-transition-{seconds}s"
-                                                )),
-                                                (current.duration - seconds).abs() < 1e-3,
-                                                tr::editor::window::clip_menu::transition_seconds(
-                                                    crate::i18n::decimal(seconds),
-                                                ),
-                                            )
-                                            .on_click(
-                                                cx.listener(move |this, _, window, cx| {
-                                                    this.set_clip_transition(
-                                                        index,
-                                                        Some((current.kind, seconds)),
-                                                        window,
-                                                        cx,
-                                                    );
-                                                }),
-                                            )
-                                        }),
-                                ),
-                            )
-                        }),
+                            )),
+                        ),
                 )
             })
             .child(divider())
@@ -11591,6 +11633,7 @@ impl EditorWindow {
                         (kind as usize as u64) << 16 | row.lane as u64,
                     ))
                     .relative()
+                    .debug_selector(move || format!("timeline-row-{kind:?}-{lane}"))
                     // Every track sets `hoveredTrack` on enter and clears it
                     // on leave (`TL/ZoomTrack.tsx:170-171` and its eight
                     // siblings); the zoom and 3D tracks read it to decide
@@ -11704,6 +11747,10 @@ impl EditorWindow {
                     // session-dismiss X, shown while cursor data exists.
                     .children(
                         (kind == TrackKind::Clip)
+                            .then(|| self.render_transition_overlays(model, viewport_width, cx)),
+                    )
+                    .children(
+                        (kind == TrackKind::Clip)
                             .then(|| self.render_clip_speed_overlays(model, viewport_width, cx)),
                     )
                     // The empty zoom lane's prompt, as the same dashed row
@@ -11767,9 +11814,10 @@ impl EditorWindow {
                                                 }
                                             }))
                                             .child(
-                                                div().min_w_0().truncate().child(
-                                                    self.auto_zoom_prompt(),
-                                                ),
+                                                div()
+                                                    .min_w_0()
+                                                    .truncate()
+                                                    .child(self.auto_zoom_prompt()),
                                             )
                                             .child(
                                                 ui::Button::plain(
@@ -12276,7 +12324,8 @@ impl Render for EditorWindow {
                 DragKind::TrimStart { .. }
                 | DragKind::TrimEnd { .. }
                 | DragKind::ClipTrimStart { .. }
-                | DragKind::ClipTrimEnd { .. } => gpui::CursorStyle::ResizeLeftRight,
+                | DragKind::ClipTrimEnd { .. }
+                | DragKind::TransitionDuration { .. } => gpui::CursorStyle::ResizeLeftRight,
                 DragKind::CreateZoom { .. } => gpui::CursorStyle::Arrow,
             })
             .or(self
@@ -12700,6 +12749,7 @@ impl Render for EditorWindow {
             .children(self.render_frame_controls(window, cx))
             .children(self.render_add_track_popover(cx))
             .children(self.render_clip_speed_popover(cx))
+            .children(self.render_transition_popover(cx))
             // The config sidebar's sliders take the same layer, for the same
             // reason -- and its release is what closes the undo bracket, so a
             // drag that ends outside the 32px row still records exactly one
@@ -14321,6 +14371,407 @@ mod tests {
             let lane = cx.debug_bounds("zoom-generate-prompt").unwrap();
             press(cx, point(lane.left() + px(24.), lane.center().y));
             editor.read_with(cx, |editor, _| assert!(editor.drag.is_none()));
+        }
+    }
+
+    // gpui's test windows have no platform window handle on macOS or Windows, which the editor needs.
+    #[cfg(target_os = "linux")]
+    mod clip_transitions {
+        use super::*;
+
+        struct ClipRowView {
+            editor: Entity<EditorWindow>,
+            _driver: TransportDriver,
+            _project: tempfile::TempDir,
+        }
+
+        impl Render for ClipRowView {
+            fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                let viewport_width = f32::from(window.viewport_size().width);
+                self.editor.update(cx, |editor, cx| {
+                    div()
+                        .size_full()
+                        .flex()
+                        .flex_col()
+                        .child(editor.render_timeline_body(viewport_width, cx))
+                })
+            }
+        }
+
+        /// One 10s recording split at 4s: the two halves the bug report was
+        /// about.
+        fn split_clip(
+            cx: &mut gpui::TestAppContext,
+        ) -> (Entity<EditorWindow>, &mut gpui::VisualTestContext) {
+            let project = tempfile::tempdir().unwrap();
+            let (handle, driver, _) = transport();
+            let (view, cx) = cx.add_window_view(move |window, cx| {
+                let editor = cx.new(|cx| EditorWindow::new(project.path().into(), window, cx));
+                editor.update(cx, |editor, cx| {
+                    let config: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+                        "timeline": {
+                            "segments": [
+                                { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 4.0 },
+                                { "recordingSegment": 0, "timescale": 1.0, "start": 4.0, "end": 10.0 }
+                            ],
+                            "zoomSegments": []
+                        }
+                    }))
+                    .unwrap();
+                    editor.set_summary(
+                        ProjectSummary {
+                            recordings: Arc::new(ProjectRecordingsMeta {
+                                segments: Vec::new(),
+                            }),
+                            pretty_name: "Recording".into(),
+                            timeline: TimelineModel::build(&config, false, false),
+                            duration: 10.,
+                            has_camera: false,
+                            has_cursor_data: false,
+                            recorded_cursor_family: None,
+                            clip_display_durations: vec![10.],
+                            recording_duration: 10.,
+                            multiple_clips: false,
+                            has_microphone: false,
+                            has_system_audio: false,
+                            mic_channels: None,
+                            recording_clips: 1,
+                        },
+                        window,
+                        cx,
+                    );
+                    editor.set_project(config, window, cx);
+                    editor.transport = Some(handle);
+                });
+                ClipRowView {
+                    editor,
+                    _driver: driver,
+                    _project: project,
+                }
+            });
+            (view.read_with(cx, |view, _| view.editor.clone()), cx)
+        }
+
+        /// Where output time `time` sits on screen, and the seconds one pixel
+        /// covers.
+        fn x_of(
+            editor: &Entity<EditorWindow>,
+            cx: &mut gpui::VisualTestContext,
+            time: f64,
+        ) -> (f32, f64) {
+            let viewport_width = cx.update(|window, _| f32::from(window.viewport_size().width));
+            editor.read_with(cx, |editor, _| {
+                let secs_per_pixel = editor.secs_per_pixel(viewport_width);
+                (
+                    timeline::content_left()
+                        + ((time - editor.view.transform.position) / secs_per_pixel) as f32,
+                    secs_per_pixel,
+                )
+            })
+        }
+
+        fn clip_row_y(cx: &mut gpui::VisualTestContext) -> Pixels {
+            cx.debug_bounds("timeline-row-Clip-0").unwrap().center().y
+        }
+
+        fn drag_to(editor: &Entity<EditorWindow>, cx: &mut gpui::VisualTestContext, x: f32) {
+            editor.update_in(cx, |editor, window, cx| {
+                editor.drag_mouse_move(x - 1., false, window, cx);
+                editor.drag_mouse_move(x, false, window, cx);
+                editor.drag_mouse_up(window, cx);
+            });
+            cx.run_until_parked();
+        }
+
+        fn transition(
+            editor: &Entity<EditorWindow>,
+            cx: &mut gpui::VisualTestContext,
+        ) -> Option<cap_project::ClipTransition> {
+            editor.read_with(cx, |editor, _| {
+                editor
+                    .project
+                    .timeline
+                    .as_ref()
+                    .and_then(|timeline| timeline.effective_transition(1))
+            })
+        }
+
+        #[gpui::test]
+        fn dragging_one_half_of_a_split_clip_onto_the_other_makes_a_transition(
+            cx: &mut gpui::TestAppContext,
+        ) {
+            let (editor, cx) = split_clip(cx);
+            let (x, secs_per_pixel) = x_of(&editor, cx, 7.0);
+            let y = clip_row_y(cx);
+            cx.simulate_mouse_move(point(px(x), y), None, gpui::Modifiers::default());
+            cx.simulate_mouse_down(
+                point(px(x), y),
+                MouseButton::Left,
+                gpui::Modifiers::default(),
+            );
+            let pull = (0.6 / secs_per_pixel) as f32;
+            drag_to(&editor, cx, x - pull);
+
+            let made = transition(&editor, cx).expect("the drag made a transition");
+            assert_eq!(made.kind, cap_project::ClipTransitionType::CrossFade);
+            assert!(
+                (made.duration - 0.6).abs() < secs_per_pixel * 2.,
+                "{made:?}"
+            );
+            editor.read_with(cx, |editor, _| {
+                assert!((editor.timeline.total_duration - (10. - made.duration)).abs() < 1e-9);
+                assert!(editor.transition_drag_base.is_none());
+            });
+
+            editor.update_in(cx, |editor, window, cx| editor.undo(window, cx));
+            assert!(
+                transition(&editor, cx).is_none(),
+                "one undo takes the whole drag back"
+            );
+            editor.update_in(cx, |editor, window, cx| editor.redo(window, cx));
+            assert_eq!(
+                transition(&editor, cx).map(|t| t.duration),
+                Some(made.duration)
+            );
+        }
+
+        /// A caption is stored in recording time and projected onto the
+        /// timeline; a transition drag moves its clip, so the words have to
+        /// be projected again with the box, not only the box rippled.
+        #[gpui::test]
+        fn a_transition_drag_moves_caption_words_with_their_clip(cx: &mut gpui::TestAppContext) {
+            let (editor, cx) = split_clip(cx);
+            editor.update(cx, |editor, cx| {
+                editor.project.captions = Some(cap_project::CaptionsData {
+                    segments: vec![cap_project::CaptionSegment {
+                        id: "said".into(),
+                        start: 6.0,
+                        end: 7.0,
+                        text: "hello there".into(),
+                        words: vec![
+                            cap_project::CaptionWord {
+                                text: "hello".into(),
+                                start: 6.0,
+                                end: 6.5,
+                            },
+                            cap_project::CaptionWord {
+                                text: "there".into(),
+                                start: 6.5,
+                                end: 7.0,
+                            },
+                        ],
+                    }],
+                    settings: Default::default(),
+                    source_timed: true,
+                });
+                editor.synchronize_caption_track(true);
+                editor.rebuild_timeline();
+                cx.notify();
+            });
+            cx.run_until_parked();
+            let caption = |editor: &Entity<EditorWindow>, cx: &mut gpui::VisualTestContext| {
+                editor.read_with(cx, |editor, _| {
+                    let segment =
+                        editor.project.timeline.as_ref().unwrap().caption_segments[0].clone();
+                    (segment.start, segment.words[0].start)
+                })
+            };
+            let (start, word) = caption(&editor, cx);
+            assert!((start - 6.0).abs() < 1e-6 && (f64::from(word) - 6.0).abs() < 1e-4);
+
+            let (x, secs_per_pixel) = x_of(&editor, cx, 7.0);
+            let y = clip_row_y(cx);
+            cx.simulate_mouse_move(point(px(x), y), None, gpui::Modifiers::default());
+            cx.simulate_mouse_down(
+                point(px(x), y),
+                MouseButton::Left,
+                gpui::Modifiers::default(),
+            );
+            drag_to(&editor, cx, x - (0.6 / secs_per_pixel) as f32);
+            let made = transition(&editor, cx).expect("the drag made a transition");
+
+            let (start, word) = caption(&editor, cx);
+            let expected = 6.0 - made.duration;
+            assert!(
+                (start - expected).abs() < 1e-3,
+                "box at {start}, expected {expected}"
+            );
+            assert!(
+                (f64::from(word) - expected).abs() < 1e-3,
+                "first word at {word}, box at {start}"
+            );
+        }
+
+        #[gpui::test]
+        fn renumbering_the_clips_closes_the_transition_popover(cx: &mut gpui::TestAppContext) {
+            let (editor, cx) = split_clip(cx);
+            editor.update(cx, |editor, cx| {
+                let timeline = editor.project.timeline.as_mut().unwrap();
+                assert!(edits::split_clip_segment(timeline, 7.0, None));
+                for index in [1, 2] {
+                    assert!(crate::editor_clips::set_clip_transition(
+                        timeline,
+                        index,
+                        cap_project::ClipTransitionType::CrossFade,
+                        0.5,
+                    ));
+                }
+                editor.rebuild_timeline();
+                cx.notify();
+            });
+            editor.update_in(cx, |editor, window, cx| {
+                editor.open_transition_popover(2, point(px(400.), px(500.)), window, cx);
+            });
+            editor.read_with(cx, |editor, _| {
+                assert_eq!(editor.transition_popover_index(), Some(2));
+            });
+
+            // Splitting the first clip moves the cut the popover was on to
+            // index 3, and puts a different transition at index 2.
+            editor.update(cx, |editor, cx| {
+                let timeline = editor.project.timeline.as_mut().unwrap();
+                assert!(edits::split_clip_segment(timeline, 1.0, Some(0)));
+                assert!(timeline.effective_transition(2).is_some());
+                editor.rebuild_timeline();
+                cx.notify();
+            });
+            editor.read_with(cx, |editor, _| {
+                assert_eq!(editor.transition_popover_index(), None);
+            });
+        }
+
+        #[gpui::test]
+        fn a_press_that_moves_right_first_only_selects_the_clip(cx: &mut gpui::TestAppContext) {
+            let (editor, cx) = split_clip(cx);
+            let (x, _) = x_of(&editor, cx, 7.0);
+            let y = clip_row_y(cx);
+            cx.simulate_mouse_move(point(px(x), y), None, gpui::Modifiers::default());
+            cx.simulate_mouse_down(
+                point(px(x), y),
+                MouseButton::Left,
+                gpui::Modifiers::default(),
+            );
+            drag_to(&editor, cx, x + 40.);
+            assert!(transition(&editor, cx).is_none());
+            editor.read_with(cx, |editor, _| {
+                assert_eq!(
+                    editor.selection,
+                    Some(Selection::single(TrackKind::Clip, 1))
+                );
+            });
+        }
+
+        #[gpui::test]
+        fn the_plus_at_a_cut_adds_a_transition_and_opens_its_popover(
+            cx: &mut gpui::TestAppContext,
+        ) {
+            let (editor, cx) = split_clip(cx);
+            let (x, _) = x_of(&editor, cx, 6.0);
+            let y = clip_row_y(cx);
+            cx.simulate_mouse_move(point(px(x), y), None, gpui::Modifiers::default());
+            cx.run_until_parked();
+            let chip = cx
+                .debug_bounds("clip-transition-add-1")
+                .expect("hovering the clip shows the + at its cut");
+            cx.simulate_mouse_move(chip.center(), None, gpui::Modifiers::default());
+            cx.simulate_click(chip.center(), gpui::Modifiers::default());
+            cx.run_until_parked();
+
+            let made = transition(&editor, cx).expect("the + made a transition");
+            assert_eq!(made.kind, cap_project::ClipTransitionType::CrossFade);
+            assert_eq!(made.duration, DEFAULT_CLIP_TRANSITION_DURATION);
+            editor.read_with(cx, |editor, _| {
+                assert_eq!(editor.transition_popover_index(), Some(1));
+            });
+
+            editor.update_in(cx, |editor, window, cx| {
+                editor.set_clip_transition(
+                    1,
+                    Some((cap_project::ClipTransitionType::PushUp, made.duration)),
+                    window,
+                    cx,
+                );
+            });
+            assert_eq!(
+                transition(&editor, cx).map(|t| t.kind),
+                Some(cap_project::ClipTransitionType::PushUp)
+            );
+            editor.update_in(cx, |editor, window, cx| editor.delete_selection(window, cx));
+            assert!(transition(&editor, cx).is_none());
+            editor.read_with(cx, |editor, _| {
+                assert!(editor.transition_popover.is_none());
+                assert_eq!(editor.project.timeline.as_ref().unwrap().segments.len(), 2);
+            });
+        }
+
+        #[gpui::test]
+        fn split_mode_presses_go_through_a_transition(cx: &mut gpui::TestAppContext) {
+            let (editor, cx) = split_clip(cx);
+            editor.update(cx, |editor, cx| {
+                assert!(crate::editor_clips::set_clip_transition(
+                    editor.project.timeline.as_mut().unwrap(),
+                    1,
+                    cap_project::ClipTransitionType::Zoom,
+                    1.0,
+                ));
+                editor.rebuild_timeline();
+                cx.notify();
+            });
+            cx.run_until_parked();
+            assert!(cx.debug_bounds("clip-transition-1").is_some());
+            editor.update(cx, |editor, cx| editor.toggle_split_mode(cx));
+            cx.run_until_parked();
+            assert!(
+                cx.debug_bounds("clip-transition-1").is_none(),
+                "the band steps aside so the press reaches the split"
+            );
+        }
+
+        #[gpui::test]
+        fn dragging_a_transitions_edges_changes_its_length(cx: &mut gpui::TestAppContext) {
+            let (editor, cx) = split_clip(cx);
+            editor.update(cx, |editor, cx| {
+                assert!(crate::editor_clips::set_clip_transition(
+                    editor.project.timeline.as_mut().unwrap(),
+                    1,
+                    cap_project::ClipTransitionType::WipeLeft,
+                    1.0,
+                ));
+                editor.rebuild_timeline();
+                cx.notify();
+            });
+            cx.run_until_parked();
+            let (_, secs_per_pixel) = x_of(&editor, cx, 0.0);
+            let band = cx
+                .debug_bounds("clip-transition-1")
+                .expect("the transition is drawn");
+            let left_edge = point(band.left() + px(2.), band.center().y);
+            cx.simulate_mouse_move(left_edge, None, gpui::Modifiers::default());
+            cx.simulate_mouse_down(left_edge, MouseButton::Left, gpui::Modifiers::default());
+            let grow = (0.5 / secs_per_pixel) as f32;
+            drag_to(&editor, cx, f32::from(left_edge.x) - grow);
+            let longer = transition(&editor, cx).unwrap();
+            assert_eq!(longer.kind, cap_project::ClipTransitionType::WipeLeft);
+            assert!(
+                (longer.duration - 1.5).abs() < secs_per_pixel * 2.,
+                "{longer:?}"
+            );
+
+            cx.run_until_parked();
+            let band = cx.debug_bounds("clip-transition-1").unwrap();
+            let right_edge = point(band.right() - px(2.), band.center().y);
+            cx.simulate_mouse_move(right_edge, None, gpui::Modifiers::default());
+            cx.simulate_mouse_down(right_edge, MouseButton::Left, gpui::Modifiers::default());
+            drag_to(
+                &editor,
+                cx,
+                f32::from(right_edge.x) - (1.0 / secs_per_pixel) as f32,
+            );
+            let shorter = transition(&editor, cx).unwrap();
+            assert!(
+                (shorter.duration - 0.5).abs() < secs_per_pixel * 2.,
+                "{shorter:?}"
+            );
         }
     }
 

@@ -2859,8 +2859,6 @@ split_hint = "Mueve el cabezal dentro de este clip"
 volume = "Volumen"
 transition = "TRANSICIÓN"
 transition_none = "Ninguna"
-transition_crossfade = "Fundido encadenado"
-transition_fade = "Fundido"
 transition_seconds = "{seconds} s"
 
 [editor.window.clip_menu.merge_blocker]
@@ -2954,6 +2952,25 @@ save_failed = "No se pudo guardar el título de la grabación de {path}: {error}
 [editor.window.track]
 clear_all = "Borrar todo"
 delete = "Eliminar"
+
+[editor.window.transition]
+title = "Transición"
+add = "Añadir transición"
+duration = "Duración"
+seconds_unit = "s"
+remove = "Quitar transición"
+cross_fade = "Fundido encadenado"
+fade_through_black = "Fundido a negro"
+fade_through_white = "Fundido a blanco"
+push_left = "Empujar a la izquierda"
+push_right = "Empujar a la derecha"
+push_up = "Empujar hacia arriba"
+push_down = "Empujar hacia abajo"
+wipe_left = "Barrido a la izquierda"
+wipe_right = "Barrido a la derecha"
+wipe_up = "Barrido hacia arriba"
+wipe_down = "Barrido hacia abajo"
+zoom = "Zoom"
 
 [editor.window.transport]
 done_splitting = "Terminar de dividir"

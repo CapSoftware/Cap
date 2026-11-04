@@ -2797,6 +2797,9 @@ pub enum FieldKey {
     SyncOffset(usize, OffsetKind),
     CaptionManualX,
     CaptionManualY,
+    /// The length, in seconds, of the transition into clip `.0`, in the
+    /// transition popover.
+    TransitionDuration(usize),
     /// The crop dialog's four `BoundInput`s (`Editor.tsx:1199-1216`). They do
     /// not edit the project at all -- they drive the open cropper, which is
     /// why they are the one key whose value comes from outside
@@ -2985,6 +2988,11 @@ impl EditorWindow {
             }
             FieldKey::KeyboardEnd(index) => {
                 let _ = write!(out, "{:.2}", timeline.keyboard_segments.get(index)?.end);
+            }
+            FieldKey::TransitionDuration(index) => {
+                out.push_str(&format_transition_duration(
+                    timeline.effective_transition(index)?.duration,
+                ));
             }
             // `Math.round((props.value ?? 0) * 1000)` -- the offset field is in
             // milliseconds (`:6182`).
@@ -3241,6 +3249,23 @@ impl EditorWindow {
                     None => return,
                 };
                 self.set_clip_offset(clip, kind, value, window, cx);
+            }
+            FieldKey::TransitionDuration(index) => {
+                if !final_commit {
+                    return;
+                }
+                let current = self
+                    .project
+                    .timeline
+                    .as_ref()
+                    .and_then(|timeline| timeline.effective_transition(index));
+                let Some(current) = current else {
+                    return;
+                };
+                let Some(value) = edited_transition_duration(&text, current.duration) else {
+                    return;
+                };
+                self.set_clip_transition(index, Some((current.kind, value)), window, cx);
             }
             _ => {}
         }
@@ -8256,6 +8281,12 @@ impl EditorWindow {
         // The crop dialog's four `BoundInput`s, while it is open. Created up
         // front because the match below bails early when the project has no
         // timeline and the dialog is independent of it.
+        if let Some(index) = self.transition_popover_index() {
+            let key = FieldKey::TransitionDuration(index);
+            self.ensure_field(key, window, cx);
+            fields.push(key);
+        }
+
         if self.crop.is_some() {
             use crate::editor_crop::CropField;
             for field in [
@@ -8404,8 +8435,42 @@ impl EditorWindow {
     }
 }
 
+fn format_transition_duration(duration: f64) -> String {
+    format!("{duration:.2}")
+}
+
+/// The length a committed duration field asks for, or `None` to leave the
+/// transition alone. The field shows the length rounded to hundredths, so
+/// text that still reads as the current length is not an edit, even when a
+/// drag left the stored length between two hundredths.
+fn edited_transition_duration(text: &str, current: f64) -> Option<f64> {
+    if text.trim() == format_transition_duration(current) {
+        return None;
+    }
+    ui::parse_number(text).filter(|value| value.is_finite())
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn leaving_an_untouched_transition_duration_changes_nothing() {
+        let dragged = 0.613_257;
+        let shown = super::format_transition_duration(dragged);
+        assert_eq!(shown, "0.61");
+        assert_eq!(super::edited_transition_duration(&shown, dragged), None);
+        assert_eq!(super::edited_transition_duration(" 0.61 ", dragged), None);
+        assert_eq!(
+            super::edited_transition_duration("0.75", dragged),
+            Some(0.75)
+        );
+        assert_eq!(
+            super::edited_transition_duration("0.613", dragged),
+            Some(0.613)
+        );
+        assert_eq!(super::edited_transition_duration("", dragged), None);
+        assert_eq!(super::edited_transition_duration("abc", dragged), None);
+    }
+
     use super::*;
 
     #[test]

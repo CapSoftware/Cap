@@ -2861,8 +2861,6 @@ split_hint = "Move the playhead into this clip"
 volume = "Volume"
 transition = { text = "TRANSITION", context = "Section heading in the clip menu, written in capitals." }
 transition_none = { text = "None", context = "Transition chip: no transition before this clip." }
-transition_crossfade = { text = "Crossfade", context = "Transition chip: the previous clip dissolves into this one." }
-transition_fade = { text = "Fade", context = "Transition chip: fade through black into this clip." }
 transition_seconds = { text = "{seconds}s", context = "Transition length chip; {seconds} is a number such as 0.5." }
 
 [editor.window.clip_menu.merge_blocker]
@@ -2956,6 +2954,25 @@ save_failed = "Could not save the recording title for {path}: {error}"
 [editor.window.track]
 clear_all = "Clear all"
 delete = "Delete"
+
+[editor.window.transition]
+title = { text = "Transition", context = "Title of the popover that edits the transition between two clips." }
+add = { text = "Add transition", context = "Tooltip on the + button at a cut between two clips on the timeline." }
+duration = { text = "Duration", context = "Label for the transition length field." }
+seconds_unit = { text = "s", context = "Unit after the transition length field: seconds." }
+remove = "Remove transition"
+cross_fade = { text = "Cross dissolve", context = "Transition type: the previous clip dissolves into the next." }
+fade_through_black = { text = "Dip to black", context = "Transition type: fades out to black, then in from black." }
+fade_through_white = { text = "Dip to white", context = "Transition type: fades out to white, then in from white." }
+push_left = { text = "Push left", context = "Transition type: the next clip slides in and pushes the previous one out to the left." }
+push_right = { text = "Push right", context = "Transition type: the next clip slides in and pushes the previous one out to the right." }
+push_up = { text = "Push up", context = "Transition type: the next clip slides in and pushes the previous one out the top." }
+push_down = { text = "Push down", context = "Transition type: the next clip slides in and pushes the previous one out the bottom." }
+wipe_left = { text = "Wipe left", context = "Transition type: an edge sweeping to the left uncovers the next clip." }
+wipe_right = { text = "Wipe right", context = "Transition type: an edge sweeping to the right uncovers the next clip." }
+wipe_up = { text = "Wipe up", context = "Transition type: an edge sweeping upward uncovers the next clip." }
+wipe_down = { text = "Wipe down", context = "Transition type: an edge sweeping downward uncovers the next clip." }
+zoom = { text = "Zoom", context = "Transition type: the picture zooms through the cut into the next clip." }
 
 [editor.window.transport]
 done_splitting = "Done splitting"
