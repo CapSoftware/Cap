@@ -1104,6 +1104,10 @@ struct Speech {
 }
 
 fn synthetic_speech(voiced: &[(f64, f64)], duration: f64) -> Speech {
+    synthetic_speech_in(voiced, duration, 0.002)
+}
+
+fn synthetic_speech_in(voiced: &[(f64, f64)], duration: f64, room_level: f64) -> Speech {
     let rate = 48_000.0;
     let mut state: u32 = 0x9e37_79b9;
     let mut noise = move || {
@@ -1115,7 +1119,7 @@ fn synthetic_speech(voiced: &[(f64, f64)], duration: f64) -> Speech {
     let samples: Vec<f32> = (0..(duration * rate) as usize)
         .map(|index| {
             let time = index as f64 / rate;
-            let room = noise() * 0.002;
+            let room = noise() * room_level;
             let Some(&(start, end)) = voiced
                 .iter()
                 .find(|(start, end)| (*start..*end).contains(&time))
@@ -1511,6 +1515,95 @@ fn shapes_follow_a_deleted_stretched_word_and_come_back_on_restore() {
         assert!(
             close(shape.0, original.0) && close(shape.1, original.1),
             "{shapes:?}"
+        );
+    }
+}
+
+#[test]
+fn a_noise_gated_recording_finds_its_digital_silence_and_keeps_every_word() {
+    let speech = synthetic_speech_in(&RICHIE_VOICED, 10.0, 0.0);
+    let threshold = speech.envelope.silence_threshold_db(1.0).unwrap();
+    assert!(threshold < -80.0, "{threshold}");
+    for silence in speech.envelope.silences() {
+        assert!(!speech.overlaps_voice(silence), "{silence:?}");
+    }
+    let words: Vec<_> = [
+        "Just", "doing", "works.", "Um", "Yeah,", "should", "make", "faster.",
+    ]
+    .iter()
+    .zip(RICHIE_VOICED)
+    .map(|(text, (start, end))| (*text, start, end))
+    .collect();
+    let accurate = project(&words, &[speech.duration]);
+    let mut doc = TranscriptDoc::build(accurate.captions.as_ref().unwrap());
+    let plain = doc.voiced.clone();
+    doc.refine_voiced(Some(&speech.envelope));
+    assert_eq!(doc.voiced, plain);
+
+    let stretched = project(&RICHIE_WORDS, &[speech.duration]);
+    let mut doc = TranscriptDoc::build(stretched.captions.as_ref().unwrap());
+    doc.refine_voiced(Some(&speech.envelope));
+    assert!(doc.voiced.iter().all(|span| !span.is_empty()));
+    let edl = TranscriptEdl::build(&doc, timeline(&stretched), &[speech.duration]);
+    let pauses = plan_pause_cuts(&doc, &edl, Some(&speech.envelope), 1.0, 0.5);
+    assert_eq!(pauses.len(), 3, "{pauses:?}");
+    for cut in pauses.iter().flat_map(|pause| &pause.cuts) {
+        assert!(!speech.overlaps_voice(cut), "{cut:?}");
+    }
+}
+
+#[test]
+fn a_recording_with_no_quiet_moment_reports_no_silence() {
+    let speech = synthetic_speech_in(&[(0.0, 6.0)], 6.0, 0.0);
+    assert!(
+        speech.envelope.silences().is_empty(),
+        "{:?}",
+        speech.envelope.silences()
+    );
+    let quiet: Vec<f32> = (0..1200)
+        .map(|hop| 0.001 * (1.0 + 0.3 * ((hop % 9) as f32 / 9.0)))
+        .collect();
+    let envelope = EnergyEnvelope::new(vec![quiet], &[6.0]);
+    assert!(envelope.silences().is_empty());
+    assert!(envelope.silence_threshold_db(1.0).unwrap() <= -90.0);
+}
+
+#[test]
+fn restoring_a_trimmed_word_leaves_a_shortened_pause_cut() {
+    let speech = synthetic_speech(&[(0.5, 0.9), (3.5, 4.0), (4.1, 4.5)], 5.0);
+    let words = [("a", 0.5, 0.9), ("long", 1.0, 4.0), ("b", 4.0, 4.5)];
+    let durations = [speech.duration];
+    let mut project = project(&words, &durations);
+    let mut doc = TranscriptDoc::build(project.captions.as_ref().unwrap());
+    doc.refine_voiced(Some(&speech.envelope));
+    assert!(
+        (doc.voiced[1].start - 3.5).abs() < 0.03,
+        "{:?}",
+        doc.voiced[1]
+    );
+
+    let edl = TranscriptEdl::build(&doc, timeline(&project), &durations);
+    let pauses = plan_pause_cuts(&doc, &edl, Some(&speech.envelope), 1.0, 0.5);
+    assert_eq!(pauses.len(), 1, "{pauses:?}");
+    apply_source_cuts(timeline_mut(&mut project), &durations, &pauses[0].cuts);
+    let shortened = bounds(&project);
+
+    let edl = TranscriptEdl::build(&doc, timeline(&project), &durations);
+    let cuts = plan_word_cuts(&doc, Some(&speech.envelope), Some(&edl.kept), &[1..2]);
+    apply_source_cuts(timeline_mut(&mut project), &durations, &cuts);
+    let edl = TranscriptEdl::build(&doc, timeline(&project), &durations);
+    assert_eq!(edl.kept, [true, false, true]);
+
+    let restored = restore_words(timeline_mut(&mut project), &durations, &[], &doc, 1..2).unwrap();
+    assert_eq!(restored, 1);
+    let edl = TranscriptEdl::build(&doc, timeline(&project), &durations);
+    assert_eq!(edl.kept, [true, true, true]);
+    let after = bounds(&project);
+    assert_eq!(after.len(), shortened.len(), "{after:?} {shortened:?}");
+    for (a, b) in after.iter().zip(&shortened) {
+        assert!(
+            close(a.0, b.0) && close(a.1, b.1),
+            "{after:?} {shortened:?}"
         );
     }
 }

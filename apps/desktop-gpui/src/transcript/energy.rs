@@ -7,10 +7,11 @@ pub const HOP_SECONDS: f64 = 0.005;
 const SAMPLE_RATE: f64 = 48_000.0;
 pub const MIN_SILENCE: f64 = 0.2;
 const DIGITAL_SILENCE_DB: f32 = -90.0;
-const FLOOR_PERCENTILE: f64 = 0.05;
+const FLOOR_PERCENTILE: f64 = 0.02;
 const SPEECH_PERCENTILE: f64 = 0.95;
 const MIN_MARGIN_DB: f32 = 6.0;
 const MAX_MARGIN_DB: f32 = 15.0;
+const MIN_SEPARATION_DB: f32 = 2.0 * MIN_MARGIN_DB;
 
 #[derive(Debug, Default)]
 pub struct EnergyEnvelope {
@@ -164,6 +165,34 @@ fn percentile(values: &mut [f32], fraction: f64) -> f32 {
         .1
 }
 
+fn silence_threshold(smoothed: &[f32], window: usize) -> f32 {
+    if smoothed.is_empty() {
+        return DIGITAL_SILENCE_DB;
+    }
+    let window = window.clamp(1, smoothed.len());
+    let stride = (smoothed.len() / 250_000).max(1);
+    let mut sums = Vec::with_capacity(smoothed.len() / stride + 1);
+    let mut sum: f64 = smoothed[..window]
+        .iter()
+        .map(|energy| f64::from(*energy))
+        .sum();
+    for index in window..=smoothed.len() {
+        if (index - window) % stride == 0 {
+            sums.push((sum / window as f64) as f32);
+        }
+        if index < smoothed.len() {
+            sum += f64::from(smoothed[index]) - f64::from(smoothed[index - window]);
+        }
+    }
+    let mut hops: Vec<f32> = smoothed.iter().step_by(stride).copied().collect();
+    let floor = to_db(percentile(&mut sums, FLOOR_PERCENTILE).max(0.0));
+    let speech = to_db(percentile(&mut hops, SPEECH_PERCENTILE));
+    if speech - floor < MIN_SEPARATION_DB {
+        return DIGITAL_SILENCE_DB;
+    }
+    floor + ((speech - floor) * 0.5).clamp(MIN_MARGIN_DB, MAX_MARGIN_DB)
+}
+
 pub fn clip_silences(clip: &[f32]) -> (f32, Vec<Range<usize>>) {
     let smoothed: Vec<f32> = (0..clip.len())
         .map(|index| {
@@ -171,23 +200,9 @@ pub fn clip_silences(clip: &[f32]) -> (f32, Vec<Range<usize>>) {
             window.iter().sum::<f32>() / window.len() as f32
         })
         .collect();
-    let audible_floor = from_db(DIGITAL_SILENCE_DB);
-    let stride = (smoothed.len() / 250_000).max(1);
-    let mut audible: Vec<f32> = smoothed
-        .iter()
-        .step_by(stride)
-        .copied()
-        .filter(|energy| *energy > audible_floor)
-        .collect();
-    let threshold = if audible.is_empty() {
-        DIGITAL_SILENCE_DB
-    } else {
-        let floor = to_db(percentile(&mut audible, FLOOR_PERCENTILE));
-        let speech = to_db(percentile(&mut audible, SPEECH_PERCENTILE));
-        floor + ((speech - floor) * 0.5).clamp(MIN_MARGIN_DB, MAX_MARGIN_DB)
-    };
-    let quiet = from_db(threshold) - 1e-10;
     let min_hops = (MIN_SILENCE / HOP_SECONDS).round() as usize;
+    let threshold = silence_threshold(&smoothed, min_hops);
+    let quiet = from_db(threshold) - 1e-10;
     let mut runs = Vec::new();
     let mut start = None;
     for (index, energy) in smoothed.iter().enumerate() {

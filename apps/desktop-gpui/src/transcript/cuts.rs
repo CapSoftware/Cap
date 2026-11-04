@@ -474,7 +474,7 @@ pub fn restore_words(
         let Some(index) = words.clone().find(|word| !edl.is_kept(*word)) else {
             break;
         };
-        let word = &doc.words[index];
+        let word = &doc.voiced[index];
         let first = edl
             .kept_ranges
             .partition_point(|range| range.end <= word.start);
