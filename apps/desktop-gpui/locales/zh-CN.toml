@@ -2795,6 +2795,59 @@ text_track = "文字"
 video = "视频"
 zoom = "缩放"
 
+[editor.transcript]
+cleanup = "清理"
+cleanup_tooltip = "移除填充词并缩短停顿"
+delete_matches = "全部删除"
+delete_matches_tooltip = "从视频中剪掉所有匹配项"
+empty_description = "在这台电脑上转写此录制内容，然后通过编辑文字来编辑视频。"
+empty_title = "还没有转写内容"
+hint = "点击单词即可跳转。选中单词后按删除键，即可从视频中剪掉。"
+next_match = "下一个匹配项"
+no_audio = "此录制内容没有可转写的音频。"
+previous_match = "上一个匹配项"
+restore_blocked = "这部分已在时间线上剪掉。请使用撤销，或拖动片段边缘将其恢复。"
+restore_hint = { other = "点击恢复 {count} 个词" }
+restore_transition = "请先移除此剪切旁的转场，再进行恢复。"
+search = "查找"
+search_count = "{current}/{total}"
+search_none = "无匹配项"
+search_placeholder = "在转写中查找"
+seconds = "{value} 秒"
+selection = { other = "已选中 {count} 个词，{seconds} 秒" }
+selection_cut = { other = "已选中 {count} 个已剪掉的词。按删除键可恢复。" }
+skipped_hold = { other = "已跳过 {count} 处剪切，因为全屏文字卡定格了这些画面" }
+skipped_last_clip = "无法剪掉最后一个片段。"
+skipped_transition = { other = "已跳过 {count} 处剪切，因为它们与转场重叠" }
+title = "转写"
+transcribe = "转写"
+transcribing = "正在转写…"
+words = { other = "{count} 个词" }
+
+[editor.transcript.fillers]
+discourse = "填充短语"
+discourse_hint = "like, you know, so"
+false_start = "说错重来"
+false_start_hint = "we should, we need"
+hesitation = "迟疑词"
+hesitation_hint = "um, uh, hmm"
+keep = "保留此项"
+listen = "试听"
+none = "这些类别中没有填充词"
+remove = "移除此项"
+remove_all = { other = "移除 {count} 个" }
+repetition = "重复词"
+repetition_hint = "the the, I I"
+title = "填充词"
+
+[editor.transcript.pauses]
+apply = "缩短"
+keep = "缩短到"
+longer_than = "停顿长于"
+none = "没有这么长的停顿"
+summary = { other = "{count} 处停顿，节省 {seconds} 秒" }
+title = "停顿"
+
 [editor.window]
 audio_filter = "音频"
 audio_segment_changed = "此音频分段已更改。请选中它并重新选择替换文件。"
@@ -2895,11 +2948,12 @@ window_title_placeholder = "窗口标题"
 windows_description = "带窗口控制按钮的标题栏"
 
 [editor.window.header]
-captions = "字幕"
 delete_recording = "删除录制"
 export = "导出"
 open_bundle = "打开录制包"
 presets = "预设"
+transcript = "转写"
+transcript_tooltip = "通过转写编辑"
 
 [editor.window.image]
 changed = "选择替换图片时此图片已更改。请选中它后重试。"

@@ -10,6 +10,7 @@ pub(super) fn is_editor_shell_surface_key(key: &str) -> bool {
         "editor.preparing.",
         "editor.tabs.",
         "editor.timeline.",
+        "editor.transcript.",
         "editor.window.",
         "ui.",
     ]
@@ -18,6 +19,16 @@ pub(super) fn is_editor_shell_surface_key(key: &str) -> bool {
 }
 
 const FORMATTED: &[&str] = &[
+    "editor.transcript.fillers.remove_all",
+    "editor.transcript.pauses.summary",
+    "editor.transcript.restore_hint",
+    "editor.transcript.search_count",
+    "editor.transcript.seconds",
+    "editor.transcript.selection",
+    "editor.transcript.selection_cut",
+    "editor.transcript.skipped_hold",
+    "editor.transcript.skipped_transition",
+    "editor.transcript.words",
     "editor.window.clip_menu.transition_seconds",
     "editor.markers.button",
     "editor.markers.default_name",
@@ -1025,7 +1036,6 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             tr::editor::window::frame::windows_description(),
             "Title bar with window controls",
         ),
-        (tr::editor::window::header::captions(), "Captions"),
         (
             tr::editor::window::header::delete_recording(),
             "Delete recording",
@@ -1036,6 +1046,105 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             "Open recording bundle",
         ),
         (tr::editor::window::header::presets(), "Presets"),
+        (tr::editor::transcript::cleanup(), "Clean up"),
+        (
+            tr::editor::transcript::cleanup_tooltip(),
+            "Remove filler words and shorten pauses",
+        ),
+        (tr::editor::transcript::delete_matches(), "Delete all"),
+        (
+            tr::editor::transcript::delete_matches_tooltip(),
+            "Cut every match from the video",
+        ),
+        (
+            tr::editor::transcript::empty_description(),
+            "Transcribe this recording on this computer, then edit the video by editing its text.",
+        ),
+        (tr::editor::transcript::empty_title(), "No transcript yet"),
+        (
+            tr::editor::transcript::fillers::discourse(),
+            "Filler phrases",
+        ),
+        (
+            tr::editor::transcript::fillers::discourse_hint(),
+            "like, you know, so",
+        ),
+        (
+            tr::editor::transcript::fillers::false_start(),
+            "False starts",
+        ),
+        (
+            tr::editor::transcript::fillers::false_start_hint(),
+            "we should, we need",
+        ),
+        (tr::editor::transcript::fillers::hesitation(), "Hesitations"),
+        (
+            tr::editor::transcript::fillers::hesitation_hint(),
+            "um, uh, hmm",
+        ),
+        (tr::editor::transcript::fillers::keep(), "Keep this one"),
+        (tr::editor::transcript::fillers::listen(), "Listen"),
+        (
+            tr::editor::transcript::fillers::none(),
+            "No filler words left in these categories",
+        ),
+        (tr::editor::transcript::fillers::remove(), "Remove this one"),
+        (
+            tr::editor::transcript::fillers::repetition(),
+            "Repeated words",
+        ),
+        (
+            tr::editor::transcript::fillers::repetition_hint(),
+            "the the, I I",
+        ),
+        (tr::editor::transcript::fillers::title(), "Filler words"),
+        (
+            tr::editor::transcript::hint(),
+            "Click a word to jump to it. Select words and press Delete to cut them from the video.",
+        ),
+        (tr::editor::transcript::next_match(), "Next match"),
+        (
+            tr::editor::transcript::no_audio(),
+            "This recording has no audio to transcribe.",
+        ),
+        (tr::editor::transcript::pauses::apply(), "Shorten"),
+        (tr::editor::transcript::pauses::keep(), "Shorten to"),
+        (
+            tr::editor::transcript::pauses::longer_than(),
+            "Pauses longer than",
+        ),
+        (
+            tr::editor::transcript::pauses::none(),
+            "No pauses that long",
+        ),
+        (tr::editor::transcript::pauses::title(), "Pauses"),
+        (tr::editor::transcript::previous_match(), "Previous match"),
+        (
+            tr::editor::transcript::restore_blocked(),
+            "This part was cut on the timeline. Use Undo or drag the clip edge to bring it back.",
+        ),
+        (
+            tr::editor::transcript::restore_transition(),
+            "Remove the transition next to this cut to restore it.",
+        ),
+        (tr::editor::transcript::search(), "Find"),
+        (tr::editor::transcript::search_none(), "No matches"),
+        (
+            tr::editor::transcript::search_placeholder(),
+            "Find in transcript",
+        ),
+        (
+            tr::editor::transcript::skipped_last_clip(),
+            "The last clip cannot be cut away.",
+        ),
+        (tr::editor::transcript::title(), "Transcript"),
+        (tr::editor::transcript::transcribe(), "Transcribe"),
+        (tr::editor::transcript::transcribing(), "Transcribing…"),
+        (tr::editor::window::header::transcript(), "Transcript"),
+        (
+            tr::editor::window::header::transcript_tooltip(),
+            "Edit by transcript",
+        ),
         (
             tr::editor::window::image::changed(),
             "This image changed while choosing a replacement. Select it and try again.",

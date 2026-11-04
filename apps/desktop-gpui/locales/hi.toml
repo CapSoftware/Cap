@@ -2795,6 +2795,59 @@ text_track = "टेक्स्ट"
 video = "वीडियो"
 zoom = "ज़ूम"
 
+[editor.transcript]
+cleanup = "साफ़ करें"
+cleanup_tooltip = "फ़िलर शब्द हटाएँ और ठहराव छोटे करें"
+delete_matches = "सभी हटाएँ"
+delete_matches_tooltip = "हर मिलान को वीडियो से काटें"
+empty_description = "इस कंप्यूटर पर इस रिकॉर्डिंग को ट्रांसक्राइब करें, फिर उसका टेक्स्ट बदलकर वीडियो एडिट करें।"
+empty_title = "अभी कोई ट्रांसक्रिप्ट नहीं"
+hint = "किसी शब्द पर जाने के लिए उस पर क्लिक करें। शब्द चुनें और डिलीट कुंजी दबाएँ, वे वीडियो से कट जाएँगे।"
+next_match = "अगला मिलान"
+no_audio = "इस रिकॉर्डिंग में ट्रांसक्राइब करने के लिए कोई ऑडियो नहीं है।"
+previous_match = "पिछला मिलान"
+restore_blocked = "यह हिस्सा टाइमलाइन में काटा गया था। इसे वापस लाने के लिए पूर्ववत करें या क्लिप का किनारा खींचें।"
+restore_hint = { one = "{count} शब्द वापस लाने के लिए क्लिक करें", other = "{count} शब्द वापस लाने के लिए क्लिक करें" }
+restore_transition = "इसे वापस लाने के लिए इस कट के पास का ट्रांज़िशन हटाएँ।"
+search = "खोजें"
+search_count = "{total} में से {current}"
+search_none = "कोई मिलान नहीं"
+search_placeholder = "ट्रांसक्रिप्ट में खोजें"
+seconds = "{value} सेकंड"
+selection = { one = "{count} शब्द चुना गया, {seconds} सेकंड", other = "{count} शब्द चुने गए, {seconds} सेकंड" }
+selection_cut = { one = "{count} कटा हुआ शब्द चुना गया। वापस लाने के लिए डिलीट कुंजी दबाएँ।", other = "{count} कटे हुए शब्द चुने गए। वापस लाने के लिए डिलीट कुंजी दबाएँ।" }
+skipped_hold = { one = "{count} कट छोड़ा गया क्योंकि फ़ुलस्क्रीन टेक्स्ट कार्ड उस फ़्रेम को रोके हुए है", other = "{count} कट छोड़े गए क्योंकि फ़ुलस्क्रीन टेक्स्ट कार्ड उन फ़्रेम को रोके हुए हैं" }
+skipped_last_clip = "आखिरी क्लिप को काटा नहीं जा सकता।"
+skipped_transition = { one = "{count} कट छोड़ा गया क्योंकि वह ट्रांज़िशन को छूता है", other = "{count} कट छोड़े गए क्योंकि वे ट्रांज़िशन को छूते हैं" }
+title = "ट्रांसक्रिप्ट"
+transcribe = "ट्रांसक्राइब करें"
+transcribing = "ट्रांसक्राइब हो रहा है…"
+words = { one = "{count} शब्द", other = "{count} शब्द" }
+
+[editor.transcript.fillers]
+discourse = "फ़िलर वाक्यांश"
+discourse_hint = "like, you know, so"
+false_start = "अधूरी शुरुआत"
+false_start_hint = "we should, we need"
+hesitation = "हिचक"
+hesitation_hint = "um, uh, hmm"
+keep = "इसे रखें"
+listen = "सुनें"
+none = "इन श्रेणियों में कोई फ़िलर शब्द नहीं बचा"
+remove = "इसे हटाएँ"
+remove_all = { one = "{count} हटाएँ", other = "{count} हटाएँ" }
+repetition = "दोहराए गए शब्द"
+repetition_hint = "the the, I I"
+title = "फ़िलर शब्द"
+
+[editor.transcript.pauses]
+apply = "छोटा करें"
+keep = "इतना करें"
+longer_than = "इससे लंबे ठहराव"
+none = "इतने लंबे ठहराव नहीं हैं"
+summary = { one = "{count} ठहराव, {seconds} सेकंड बचेंगे", other = "{count} ठहराव, {seconds} सेकंड बचेंगे" }
+title = "ठहराव"
+
 [editor.window]
 audio_filter = "ऑडियो"
 audio_segment_changed = "यह ऑडियो सेगमेंट बदल गया है। इसे चुनें और फिर से बदलने के लिए फ़ाइल चुनें।"
@@ -2895,11 +2948,12 @@ window_title_placeholder = "विंडो टाइटल"
 windows_description = "विंडो कंट्रोल के साथ टाइटल बार"
 
 [editor.window.header]
-captions = "कैप्शन"
 delete_recording = "रिकॉर्डिंग हटाएँ"
 export = "एक्सपोर्ट"
 open_bundle = "रिकॉर्डिंग बंडल खोलें"
 presets = "प्रीसेट"
+transcript = "ट्रांसक्रिप्ट"
+transcript_tooltip = "ट्रांसक्रिप्ट से एडिट करें"
 
 [editor.window.image]
 changed = "बदलने के लिए चुनते समय यह इमेज बदल गई। इसे चुनें और फिर से कोशिश करें।"

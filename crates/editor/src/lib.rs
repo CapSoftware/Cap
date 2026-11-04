@@ -4,6 +4,7 @@ mod completed_audio;
 mod editor;
 mod editor_instance;
 mod export_audio;
+mod join_fade;
 mod playback;
 mod preparing_audio;
 mod preparing_editor;

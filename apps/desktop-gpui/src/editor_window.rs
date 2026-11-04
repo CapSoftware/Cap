@@ -249,6 +249,12 @@ fn editor_player_width(viewport_width: f32) -> f32 {
     (viewport_width - SIDEBAR_WIDTH - 8. - 16. - 2.).max(0.)
 }
 
+const TRANSCRIPT_GRIP_WIDTH: f32 = 12.;
+
+fn transcript_row_width(viewport_width: f32) -> f32 {
+    (viewport_width - 16. - TRANSCRIPT_GRIP_WIDTH).max(0.)
+}
+
 // ---------------------------------------------------------------------------
 // Timeline metrics -- all of them now live in [`crate::editor_timeline`],
 // which owns the strip itself (`routes/editor/Timeline/index.tsx:62-68`).
@@ -746,6 +752,7 @@ enum EditorSection {
     Transport,
     Sidebar,
     Timeline,
+    Transcript,
 }
 
 struct EditorSectionView {
@@ -800,6 +807,7 @@ impl Render for EditorSectionView {
                         editor.render_preparing_sidebar(false),
                     )
                 }
+                EditorSection::Transcript => editor.render_transcript(window, cx),
                 EditorSection::Timeline => {
                     let viewport_width: f32 = window.viewport_size().width.into();
                     let viewport_height: f32 = window.viewport_size().height.into();
@@ -1511,7 +1519,7 @@ pub struct EditorWindow {
     clip_anim_generation: u64,
     /// `editorInstance.recordings.segments[i].display.duration`, which the clip
     /// trim clamps read (`TL/ClipTrack.tsx:1160-1162`).
-    clip_display_durations: Vec<f64>,
+    pub(crate) clip_display_durations: Vec<f64>,
     /// `editorInstance.recordingDuration` = `recordings.duration()`.
     recording_duration: f64,
     /// `meta().hasCamera` and "more than one recording clip", the two facts
@@ -1641,6 +1649,8 @@ pub struct EditorWindow {
     /// The Clips layout mode (`ClipsSidebar.tsx`): while open, the config
     /// sidebar's column draws the clips sidebar instead.
     pub(crate) clips: crate::editor_clips::ClipsState,
+    pub(crate) transcript: crate::transcript::TranscriptState,
+    transcript_view: Entity<EditorSectionView>,
 }
 
 struct PresetsMenu {
@@ -2130,6 +2140,10 @@ impl EditorWindow {
             let editor = editor.clone();
             move |cx| EditorSectionView::new(&editor, EditorSection::Sidebar, cx)
         });
+        let transcript_view = cx.new({
+            let editor = editor.clone();
+            move |cx| EditorSectionView::new(&editor, EditorSection::Transcript, cx)
+        });
         let timeline_view =
             cx.new(move |cx| EditorSectionView::new(&editor, EditorSection::Timeline, cx));
 
@@ -2270,12 +2284,22 @@ impl EditorWindow {
             caption_sync_signature: None,
             export: None,
             clips: crate::editor_clips::ClipsState::default(),
+            transcript: crate::transcript::TranscriptState::new(cx.focus_handle()),
+            transcript_view,
         }
     }
 
     /// `frameNumberToRender`'s time: `previewTime ?? playbackTime`
     /// (`Editor.tsx:515-519`), floored at zero.
     /// Where the playhead stands, for the panels that mark the pose on it.
+    fn player_width(&self, viewport_width: f32) -> f32 {
+        if self.transcript.open {
+            transcript_row_width(viewport_width) * self.transcript.player_share
+        } else {
+            editor_player_width(viewport_width)
+        }
+    }
+
     pub(crate) fn playhead_time(&self) -> f64 {
         self.playhead
     }
@@ -2370,6 +2394,7 @@ impl EditorWindow {
         self.canvas_selection = None;
         self.project = config;
         self.synchronize_caption_track(true);
+        self.transcript.dirty = true;
         self.history = ProjectHistory::new(self.project.clone());
         self.tracks = TrackLanes::from_project(&self.project, self.has_camera);
         self.rebuild_timeline();
@@ -2596,7 +2621,7 @@ impl EditorWindow {
         )
     }
 
-    fn edit_timeline_project(
+    pub(crate) fn edit_timeline_project(
         &mut self,
         change: impl FnOnce(&mut ProjectConfiguration) -> bool,
         window: &mut Window,
@@ -2617,7 +2642,7 @@ impl EditorWindow {
     /// `note_transform` exists: a drag's arithmetic is only checkable end to
     /// end if the numbers come out of the running app. Intermediate drag
     /// frames log at `debug`; the line below is the settled one.
-    fn note_edit(&self, reason: &'static str, track: Option<TrackKind>) {
+    pub(crate) fn note_edit(&self, reason: &'static str, track: Option<TrackKind>) {
         let timeline = self.project.timeline.as_ref();
         // The affected track's boxes, four decimals, so a scripted drag's
         // predicted seconds can be checked against what actually landed.
@@ -2693,6 +2718,7 @@ impl EditorWindow {
         }
         self.synchronize_caption_track(false);
         self.history.record(&self.project);
+        self.transcript.dirty = true;
         self.style_presets.close_menu();
         if rebuild_timeline {
             self.rebuild_timeline();
@@ -2711,6 +2737,7 @@ impl EditorWindow {
         }
         self.synchronize_caption_track(false);
         self.history.record(&self.project);
+        self.transcript.dirty = true;
         self.publish_project();
         cx.notify();
     }
@@ -2809,7 +2836,7 @@ impl EditorWindow {
     /// `projectHistory.undo()` -- reconcile the previous snapshot back over the
     /// store. The playhead is not moved and the selection is not restored;
     /// neither is in the snapshot (`editorState` is a separate store).
-    fn undo(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn undo(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.close_frame_controls(window, cx);
         self.end_field_edit(cx);
         self.close_color_picker(cx);
@@ -2821,7 +2848,7 @@ impl EditorWindow {
         self.note_edit("undo", None);
     }
 
-    fn redo(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn redo(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.close_frame_controls(window, cx);
         self.end_field_edit(cx);
         self.close_color_picker(cx);
@@ -2863,6 +2890,9 @@ impl EditorWindow {
                 != crate::editor_sidebar::is_none_background(&config);
         self.project = config;
         self.synchronize_caption_track(false);
+        self.transcript.dirty = true;
+        self.transcript.selection = None;
+        self.transcript.hovered_cut = None;
         self.rebuild_timeline();
         if self.animated_gradient_config().is_some() {
             self.sidebar.source_tab = crate::editor_sidebar::initial_source_tab(&self.project);
@@ -3311,6 +3341,7 @@ impl EditorWindow {
 
         self.last_playhead_redraw = Instant::now();
         self.invalidate_playback_chrome(window, cx);
+        self.transcript_sync_active(true, cx);
     }
 
     /// The pause half of `handlePlayPauseClick`, also used by the end-of-media
@@ -3497,8 +3528,18 @@ impl EditorWindow {
     /// picture for one decode instead of paying a warmup per tick.
     pub fn seek_to_time(&mut self, time: f64, cx: &mut Context<Self>) {
         if self.apply_seek(time) {
+            self.transcript_sync_active(true, cx);
             cx.notify();
         }
+    }
+
+    pub(crate) fn play_range(&mut self, from: f64, until: f64, cx: &mut Context<Self>) {
+        if self.playing {
+            self.stop_playback(cx);
+        }
+        self.start_playback(from.max(0.0), cx);
+        self.play_until = Some(until);
+        cx.notify();
     }
 
     /// One pointer move of a ruler scrub. While paused, the playhead is read
@@ -3513,6 +3554,7 @@ impl EditorWindow {
         if !self.apply_seek(time) {
             return;
         }
+        self.transcript_sync_active(true, cx);
         if self.playing || self.ordinary_handoff_frame.is_some() {
             cx.notify();
             return;
@@ -4274,6 +4316,10 @@ impl EditorWindow {
     /// toolbar, transport and timeline stay cached.
     pub(crate) fn invalidate_sidebar(&mut self, cx: &mut Context<Self>) {
         self.sidebar_view.update(cx, |_, cx| cx.notify());
+    }
+
+    pub(crate) fn invalidate_transcript(&mut self, cx: &mut Context<Self>) {
+        self.transcript_view.update(cx, |_, cx| cx.notify());
     }
 
     fn set_hovered_track(
@@ -10192,16 +10238,10 @@ impl EditorWindow {
     fn render_header(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let name_focused = self.name_input.read(cx).focus_handle().is_focused(window);
-        let has_captions = self.project.captions.as_ref().is_some_and(|captions| {
-            captions
-                .segments
-                .iter()
-                .any(|segment| !segment.words.is_empty())
-        });
         let compact = compact_header_controls(
             f32::from(window.viewport_size().width),
             cfg!(target_os = "windows"),
-            has_captions,
+            true,
         );
 
         let drag_area = |area: gpui::Div| {
@@ -10336,15 +10376,7 @@ impl EditorWindow {
                             })),
                     )
                     .child(self.render_clips_pill(compact, cx))
-                    // `<Show when={hasTranscript()}>`: the button only exists
-                    // once a transcript with words does.
-                    .children(has_captions.then(|| {
-                        self.header_pill(
-                            "icons/captions.svg",
-                            tr::editor::window::header::captions(),
-                            compact,
-                        )
-                    }))
+                    .child(self.render_transcript_pill(compact, cx))
                     .child(div().w(px(6.)).flex_none())
                     .when(self.sharing.is_some(), |group| {
                         group.child(self.render_reupload_button(cx))
@@ -10383,20 +10415,53 @@ impl EditorWindow {
             .bg(Hsla::from(self.theme.editor.line_strong))
     }
 
-    /// The Captions toggle. Inert -- the transcript layout mode does not exist
-    /// yet. Clips has its own live button (`crate::editor_clips`).
-    fn header_pill(
-        &self,
-        icon: &'static str,
-        label: &'static str,
-        compact: bool,
-    ) -> impl IntoElement {
+    fn render_transcript_pill(&self, compact: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
-        ui::EditorButton::plain(&theme, "editor-captions-pill")
-            .left_icon(icon)
-            .when(!compact, |button| button.label(label))
-            .tooltip(&theme, label)
-            .disabled(true)
+        ui::EditorButton::plain(&theme, "editor-transcript-pill")
+            .left_icon("icons/scan-text.svg")
+            .when(!compact, |button| {
+                button.label(tr::editor::window::header::transcript())
+            })
+            .tooltip(&theme, tr::editor::window::header::transcript_tooltip())
+            .pressed(self.transcript.open)
+            .disabled(!self.project_ready())
+            .on_click(cx.listener(|this, _, window, cx| this.toggle_transcript(window, cx)))
+    }
+
+    fn render_transcript_grip(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        div()
+            .id("transcript-resize-handle")
+            .group("transcript-grip")
+            .flex_none()
+            .w(px(TRANSCRIPT_GRIP_WIDTH))
+            .h_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .cursor(gpui::CursorStyle::ResizeLeftRight)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, event: &MouseDownEvent, _window, cx| {
+                    this.transcript.resize =
+                        Some((f32::from(event.position.x), this.transcript.player_share));
+                    cx.notify();
+                }),
+            )
+            .child(
+                div()
+                    .w(px(4.))
+                    .h(px(40.))
+                    .rounded(px(2.))
+                    .bg(if self.transcript.resize.is_some() {
+                        Hsla::from(theme.editor.text_3)
+                    } else {
+                        Hsla::from(theme.editor.line_strong)
+                    })
+                    .group_hover("transcript-grip", |this| {
+                        this.bg(Hsla::from(theme.editor.text_3))
+                    }),
+            )
     }
 
     /// The Export button: the one primary control in the editor, a vertical
@@ -10595,7 +10660,7 @@ impl EditorWindow {
     /// preview-resolution control on the right.
     fn render_player_toolbar(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
-        let narrow = editor_player_width(f32::from(window.viewport_size().width)) < 560.;
+        let narrow = self.player_width(f32::from(window.viewport_size().width)) < 560.;
         div()
             .w_full()
             .h_full()
@@ -10908,7 +10973,7 @@ impl EditorWindow {
     fn render_transport(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let editor = theme.editor;
-        let player_width = editor_player_width(f32::from(window.viewport_size().width));
+        let player_width = self.player_width(f32::from(window.viewport_size().width));
         let compact = player_width < 760.;
         let narrow = player_width < 620.;
         let total = self.total_duration();
@@ -12529,7 +12594,14 @@ impl Render for EditorWindow {
                                         div()
                                             .flex()
                                             .flex_col()
-                                            .flex_1()
+                                            .when(!self.transcript.open, |card| card.flex_1())
+                                            .when(self.transcript.open, |card| {
+                                                card.flex_none().w(px(transcript_row_width(
+                                                    viewport_width,
+                                                ) * self
+                                                    .transcript
+                                                    .player_share))
+                                            })
                                             .min_w_0()
                                             .min_h_0()
                                             .rounded(px(12.))
@@ -12543,15 +12615,26 @@ impl Render for EditorWindow {
                                     // The 8px gutter is the wrapper's, not the
                                     // sidebar view's: a margin inside a cached
                                     // element is not honoured.
-                                    .child(
-                                        div().flex_none().h_full().pl(px(8.)).child(
-                                            self.sidebar_view.clone().cached(
-                                                StyleRefinement::default()
-                                                    .w(px(SIDEBAR_WIDTH))
-                                                    .h_full(),
+                                    .when(!self.transcript.open, |row| {
+                                        row.child(
+                                            div().flex_none().h_full().pl(px(8.)).child(
+                                                self.sidebar_view.clone().cached(
+                                                    StyleRefinement::default()
+                                                        .w(px(SIDEBAR_WIDTH))
+                                                        .h_full(),
+                                                ),
                                             ),
-                                        ),
-                                    ),
+                                        )
+                                    })
+                                    .when(self.transcript.open, |row| {
+                                        row.child(self.render_transcript_grip(cx)).child(
+                                            div().flex_1().min_w_0().h_full().child(
+                                                self.transcript_view
+                                                    .clone()
+                                                    .cached(StyleRefinement::default().size_full()),
+                                            ),
+                                        )
+                                    }),
                             )
                             // The timeline card: the wrapper is owned here so
                             // `render_timeline` keeps laying out inside a plain
@@ -12660,6 +12743,19 @@ impl Render for EditorWindow {
                     }),
                 )
                 .cursor(gpui::CursorStyle::ResizeRow)
+            }))
+            .children(self.transcript.resize.is_some().then(|| {
+                ui::Slider::drag_layer(
+                    "transcript-split-drag",
+                    cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+                        let row = transcript_row_width(f32::from(window.viewport_size().width));
+                        this.transcript_resize_move(f32::from(event.position.x), row, cx);
+                    }),
+                    cx.listener(|this, _: &MouseUpEvent, _window, cx| {
+                        this.transcript_resize_end(cx);
+                    }),
+                )
+                .cursor(gpui::CursorStyle::ResizeLeftRight)
             }))
             .children(self.zoom_slider_drag.then(|| {
                 ui::Slider::drag_layer(
