@@ -2037,6 +2037,13 @@ default_name = "मेरी मास्क स्टाइल"
 use_for_new = "नए मास्क के लिए इस्तेमाल करें"
 used_for_new = "नए मास्क यह स्टाइल इस्तेमाल करते हैं"
 
+[editor.panel.style_presets.shape]
+applied_all = "सभी शेप पर लागू किया गया ({number})"
+apply_all = "सभी शेप पर लागू करें ({number})"
+default_name = "मेरी शेप स्टाइल"
+use_for_new = "नए शेप के लिए इस्तेमाल करें"
+used_for_new = "नए शेप यह स्टाइल इस्तेमाल करते हैं"
+
 [editor.panel.style_presets.style]
 applied_all = "सभी स्टाइल सेगमेंट पर लागू किया गया ({number})"
 apply_all = "सभी स्टाइल सेगमेंट पर लागू करें ({number})"
@@ -2313,6 +2320,7 @@ image = "इमेज"
 mask = "मास्क"
 screen = "स्क्रीन"
 screen_locked = "ज़ूम चालू रहने तक स्क्रीन लॉक रहती है"
+shape = "शेप"
 text_item = "टेक्स्ट"
 
 [editor.clips]
@@ -2721,6 +2729,43 @@ system_sans_serif = "सिस्टम Sans-Serif"
 system_serif = "सिस्टम Serif"
 system_monospace = "सिस्टम Monospace"
 
+[editor.shape]
+title = "शेप {number}"
+stroke = "स्ट्रोक"
+width = "चौड़ाई"
+fill = "फ़िल"
+fill_opacity = "फ़िल अपारदर्शिता"
+corner_radius = "कोने की गोलाई"
+arrowhead = "तीर का सिरा"
+number = "संख्या"
+look = "रूप"
+shadow = "छाया"
+animation = "एनिमेशन"
+draw = "शेप बनाएं"
+toolbar = "शेप"
+draw_hint = "बनाने के लिए प्रीव्यू पर ड्रैग करें। रखने के लिए क्लिक करें।"
+decrease = "घटाएं"
+increase = "बढ़ाएं"
+
+[editor.shape.kinds]
+arrow = "तीर"
+line = "रेखा"
+rectangle = "आयत"
+ellipse = "दीर्घवृत्त"
+highlight = "हाइलाइट"
+badge = "चरण"
+
+[editor.shape.heads]
+filled = "भरा हुआ"
+open = "खुला"
+double = "दोहरा"
+
+[editor.shape.animations]
+none = "कोई नहीं"
+fade = "फ़ेड"
+scale = "स्केल"
+draw = "ड्रॉ"
+
 [editor.timeline]
 add_shot = "शॉट जोड़ें"
 add_shot_with_look = "शॉट जोड़ें · {look} · {seconds} सेकंड"
@@ -2744,6 +2789,7 @@ keyboard = "टाइप करते समय स्क्रीन पर क
 mask = "स्क्रीन के निजी हिस्सों को धुंधला या काला करें।"
 scene = "अपनी स्क्रीन और कैमरे के बीच लेआउट बदलें।"
 scene_unavailable = "सीन इस्तेमाल करने के लिए कैमरे के साथ रिकॉर्ड करें।"
+shape = "अपनी रिकॉर्डिंग पर तीर, बॉक्स, गोले और हाइलाइट बनाएं।"
 style = "समय के साथ बैकग्राउंड, कैमरा और कर्सर सेटिंग्स बदलें।"
 text_overlay = "कैनवास पर कस्टम टेक्स्ट ओवरले और टाइटल जोड़ें।"
 three_d = "सीन को 3D पर्सपेक्टिव में झुकाएँ।"
@@ -2757,6 +2803,7 @@ image = "इमेज ट्रैक हटाएँ।"
 keyboard = "कीबोर्ड ट्रैक हटाएँ।"
 mask = "मास्क ट्रैक हटाएँ।"
 scene = "सीन ट्रैक हटाएँ।"
+shape = "शेप ट्रैक हटाएं।"
 style = "स्टाइल ट्रैक हटाएँ।"
 text_track = "टेक्स्ट ट्रैक हटाएँ।"
 three_d = "3D ट्रैक हटाएँ।"
@@ -2790,6 +2837,7 @@ image = "इमेज"
 keyboard = "कीबोर्ड"
 mask = "मास्क"
 scene = "सीन"
+shape = "शेप"
 style = "स्टाइल"
 text_track = "टेक्स्ट"
 video = "वीडियो"
@@ -3075,6 +3123,7 @@ mask = { one = "{count} मास्क सेगमेंट चुना ग�
 scene = { one = "{count} सीन सेगमेंट चुना गया", other = "{count} सीन सेगमेंट चुने गए" }
 segments = { one = "{count} सेगमेंट चुना गया", other = "{count} सेगमेंट चुने गए" }
 select_all = "सभी चुनें"
+shape = { one = "{count} शेप चुना गया", other = "{count} शेप चुने गए" }
 style = { one = "{count} स्टाइल सेगमेंट चुना गया", other = "{count} स्टाइल सेगमेंट चुने गए" }
 text_segments = { one = "{count} टेक्स्ट सेगमेंट चुना गया", other = "{count} टेक्स्ट सेगमेंट चुने गए" }
 three_d = { one = "{count} 3D सेगमेंट चुना गया", other = "{count} 3D सेगमेंट चुने गए" }

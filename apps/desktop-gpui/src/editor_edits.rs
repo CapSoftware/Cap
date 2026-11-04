@@ -28,8 +28,9 @@
 use cap_project::{
     AudioTrackSegment, Camera3DProperties, Camera3DSegment, CaptionTrackSegment,
     ClipSpeedAudioMode, CursorClickEvent, GlideDirection, KeyboardTrackSegment, MaskKind,
-    MaskSegment, OverlayTrack, ProjectConfiguration, SceneMode, SceneSegment, TextSegment,
-    TimelineConfiguration, TimelineSegment, XY, ZoomMode, ZoomSegment, mask_effect_contract,
+    MaskSegment, OverlayTrack, ProjectConfiguration, SceneMode, SceneSegment, ShapeSegment,
+    TextSegment, TimelineConfiguration, TimelineSegment, XY, ZoomMode, ZoomSegment,
+    mask_effect_contract,
 };
 
 use crate::editor_timeline::{self, Segment, TrackKind};
@@ -416,6 +417,7 @@ pub fn min_segment_duration(kind: TrackKind, secs_per_pixel: f64) -> f64 {
         TrackKind::ThreeD => (1., 40.),
         TrackKind::Text | TrackKind::Style | TrackKind::Image => (1., 80.),
         TrackKind::Mask => (1., 80.),
+        TrackKind::Shape => (0.5, 40.),
         TrackKind::Audio => (0.5, 60.),
         TrackKind::Caption => (0.5, 40.),
         TrackKind::Keyboard => (0.3, 30.),
@@ -427,7 +429,7 @@ pub fn min_segment_duration(kind: TrackKind, secs_per_pixel: f64) -> f64 {
 /// return;` in each `split*Segment` action (`ED/context.ts:601-1072`).
 pub fn min_split_duration(kind: TrackKind) -> f64 {
     match kind {
-        TrackKind::Audio | TrackKind::Caption => 0.5,
+        TrackKind::Audio | TrackKind::Caption | TrackKind::Shape => 0.5,
         TrackKind::Keyboard => 0.3,
         _ => 1.,
     }
@@ -675,6 +677,7 @@ impl TrackSegmentOps for MaskSegment {
     }
 }
 impl_track_segment!(TextSegment, lane: track);
+impl_track_segment!(ShapeSegment, lane: track);
 impl_track_segment!(cap_project::StyleSegment, lane: track);
 impl_track_segment!(cap_project::ImageSegment, lane: track);
 
@@ -926,6 +929,10 @@ macro_rules! with_track {
                 let $segments = &mut $timeline.mask_segments;
                 $body
             }
+            TrackKind::Shape => {
+                let $segments = &mut $timeline.shape_segments;
+                $body
+            }
             TrackKind::Audio => {
                 let $segments = &mut $timeline.audio_segments;
                 $body
@@ -955,6 +962,7 @@ pub fn segment_count(timeline: &TimelineConfiguration, kind: TrackKind) -> usize
         TrackKind::Image => timeline.image_segments.len(),
         TrackKind::Text => timeline.text_segments.len(),
         TrackKind::Mask => timeline.mask_segments.len(),
+        TrackKind::Shape => timeline.shape_segments.len(),
         TrackKind::Audio => timeline.audio_segments.len(),
         TrackKind::Caption => timeline.caption_segments.len(),
         TrackKind::Keyboard => timeline.keyboard_segments.len(),
@@ -1050,6 +1058,7 @@ pub fn delete_segments(
             deleted
         }
         TrackKind::Mask => delete_indices(&mut timeline.mask_segments, indices),
+        TrackKind::Shape => delete_indices(&mut timeline.shape_segments, indices),
         TrackKind::Text => delete_indices(&mut timeline.text_segments, indices),
         TrackKind::Audio => {
             let deleted = delete_indices(&mut timeline.audio_segments, indices);
@@ -1113,6 +1122,12 @@ pub fn delete_track_lane(timeline: &mut TimelineConfiguration, kind: TrackKind, 
             |segment| segment.track,
             |segment, value| segment.track = value,
         ),
+        TrackKind::Shape => apply(
+            &mut timeline.shape_segments,
+            lane,
+            |segment| segment.track,
+            |segment, value| segment.track = value,
+        ),
         TrackKind::Audio => apply(
             &mut timeline.audio_segments,
             lane,
@@ -1147,10 +1162,10 @@ pub fn delete_track_lane_and_order(
         .as_mut()
         .is_some_and(|timeline| delete_track_lane(timeline, kind, lane));
     let order_changed = next_order.is_some_and(|order| {
-        if project.overlay_order == order {
+        if project.overlay_order() == order.as_slice() {
             false
         } else {
-            project.overlay_order = order;
+            project.set_overlay_order(order);
             true
         }
     });
@@ -1173,7 +1188,7 @@ pub fn reorder_overlay_track(
     if order == project.resolved_overlay_order(available) {
         return false;
     }
-    project.overlay_order = order;
+    project.set_overlay_order(order);
     true
 }
 
@@ -1601,6 +1616,7 @@ fn ripple_delete_output_tracks(
     ripple_delete_camera3d_track(&mut timeline.camera3d_segments, cut_start, cut_end, shift);
     ripple_delete_mask_track(&mut timeline.mask_segments, cut_start, cut_end, shift);
     ripple_delete_track(&mut timeline.text_segments, cut_start, cut_end, shift);
+    ripple_delete_track(&mut timeline.shape_segments, cut_start, cut_end, shift);
     ripple_delete_track(&mut timeline.caption_segments, cut_start, cut_end, shift);
     timeline
         .keyboard_segments
@@ -1721,6 +1737,7 @@ pub fn ripple_insert_output_tracks(
     ripple_track(&mut timeline.zoom_segments, boundary, shift);
     ripple_track(&mut timeline.scene_segments, boundary, shift);
     ripple_track(&mut timeline.text_segments, boundary, shift);
+    ripple_track(&mut timeline.shape_segments, boundary, shift);
     ripple_track(&mut timeline.caption_segments, boundary, shift);
     ripple_keyboard_track(&mut timeline.keyboard_segments, boundary, shift);
     ripple_track(&mut timeline.audio_segments, boundary, shift);
@@ -1991,6 +2008,18 @@ pub fn insert_mask_segment(timeline: &mut TimelineConfiguration, segment: MaskSe
         .unwrap_or(timeline.mask_segments.len().saturating_sub(1))
 }
 
+pub fn insert_shape_segment(timeline: &mut TimelineConfiguration, segment: ShapeSegment) -> usize {
+    let start = segment.start;
+    let track = segment.track;
+    timeline.shape_segments.push(segment);
+    sort_lane_segments(&mut timeline.shape_segments);
+    timeline
+        .shape_segments
+        .iter()
+        .rposition(|item| item.start == start && item.track == track)
+        .unwrap_or(timeline.shape_segments.len().saturating_sub(1))
+}
+
 pub fn insert_audio_segment(
     timeline: &mut TimelineConfiguration,
     segment: AudioTrackSegment,
@@ -2144,6 +2173,7 @@ pub fn ensure_timeline(project: &mut ProjectConfiguration, clip_display_duration
         camera3d_segments: Vec::new(),
         style_segments: Vec::new(),
         image_segments: Vec::new(),
+        shape_segments: Vec::new(),
     });
     true
 }
@@ -2592,6 +2622,12 @@ pub fn snap_split_time(
         )
         .chain(
             timeline
+                .shape_segments
+                .iter()
+                .map(|segment| (segment.start, segment.end)),
+        )
+        .chain(
+            timeline
                 .caption_segments
                 .iter()
                 .map(|segment| (segment.start, segment.end)),
@@ -2837,6 +2873,10 @@ pub fn set_clip_segment_timescale(
         }
     }
     for segment in &mut timeline.text_segments {
+        segment.start += shift(segment.start);
+        segment.end += shift(segment.end);
+    }
+    for segment in &mut timeline.shape_segments {
         segment.start += shift(segment.start);
         segment.end += shift(segment.end);
     }
@@ -5441,6 +5481,111 @@ mod style_image_tests {
         timeline.image_segments.push(second);
         assert!(delete_segments(timeline, TrackKind::Image, &[0]));
         assert_eq!(timeline.image_segments[0].track, 2);
+    }
+
+    fn shape_project() -> ProjectConfiguration {
+        serde_json::from_value(serde_json::json!({"timeline": {"zoomSegments":[],
+            "segments": [{"start":0,"end":20,"timescale":1}],
+            "textSegments": [{"start":0,"end":2}],
+            "shapeSegments": [
+                {"start":2,"end":8,"track":0,"kind":"arrow","from":{"x":0.1,"y":0.2},"to":{"x":0.3,"y":0.4}},
+                {"start":4,"end":6,"track":1,"kind":"badge","number":3}
+            ]
+        }})).unwrap()
+    }
+
+    #[test]
+    fn shape_segments_split_move_trim_and_delete_like_overlays() {
+        let mut project = shape_project();
+        let timeline = project.timeline.as_mut().unwrap();
+        assert_eq!(segment_count(timeline, TrackKind::Shape), 2);
+        assert!(split_segment(timeline, TrackKind::Shape, 0, 3.));
+        assert_eq!(timeline.shape_segments.len(), 3);
+        let (head, tail) = (&timeline.shape_segments[0], &timeline.shape_segments[1]);
+        assert_eq!(
+            (head.start, head.end, tail.start, tail.end),
+            (2., 5., 5., 8.)
+        );
+        assert_eq!(head.from, tail.from);
+        assert_eq!(head.kind, cap_project::ShapeKind::Arrow);
+        assert!(!split_segment(timeline, TrackKind::Shape, 0, 0.2));
+        assert!(move_segment(timeline, TrackKind::Shape, 2, 10., 12.));
+        assert!(set_segment_end(timeline, TrackKind::Shape, 2, 14.));
+        assert_eq!(timeline.shape_segments[2].end, 14.);
+        assert!(delete_segments(timeline, TrackKind::Shape, &[0, 1]));
+        assert_eq!(timeline.shape_segments.len(), 1);
+        assert_eq!(timeline.shape_segments[0].number, 3);
+        assert_eq!(min_segment_duration(TrackKind::Shape, 0.001), 0.5);
+    }
+
+    #[test]
+    fn ripple_deletes_carry_and_trim_shapes() {
+        let mut project = shape_project();
+        let timeline = project.timeline.as_mut().unwrap();
+        ripple_delete_output_tracks(timeline, 3., 5., 2.);
+        let arrow = &timeline.shape_segments[0];
+        assert_eq!((arrow.start, arrow.end), (2., 6.));
+        let badge = &timeline.shape_segments[1];
+        assert_eq!((badge.start, badge.end), (3., 4.));
+        ripple_delete_output_tracks(timeline, 0., 20., 20.);
+        assert!(timeline.shape_segments.is_empty());
+    }
+
+    #[test]
+    fn shape_lanes_delete_and_renumber() {
+        let mut project = shape_project();
+        let timeline = project.timeline.as_mut().unwrap();
+        assert!(delete_track_lane(timeline, TrackKind::Shape, 0));
+        assert_eq!(timeline.shape_segments.len(), 1);
+        assert_eq!(timeline.shape_segments[0].track, 0);
+        assert_eq!(used_lane_count(&timeline.shape_segments), 1);
+    }
+
+    #[test]
+    fn inserting_shapes_keeps_lane_order_and_reports_the_index() {
+        let mut project = shape_project();
+        let timeline = project.timeline.as_mut().unwrap();
+        let shape = cap_project::ShapeSegment {
+            start: 0.5,
+            end: 1.5,
+            ..Default::default()
+        };
+        assert_eq!(insert_shape_segment(timeline, shape.clone()), 0);
+        assert_eq!(timeline.shape_segments[0], shape);
+        assert_eq!(timeline.shape_segments[2].track, 1);
+    }
+
+    #[test]
+    fn reordering_a_shape_track_keeps_the_legacy_order_parseable() {
+        let mut project = shape_project();
+        let text = cap_project::OverlayTrack {
+            kind: cap_project::OverlayTrackKind::Text,
+            track: 0,
+        };
+        let shape = cap_project::OverlayTrack {
+            kind: cap_project::OverlayTrackKind::Shape,
+            track: 0,
+        };
+        let top_shape = cap_project::OverlayTrack {
+            kind: cap_project::OverlayTrackKind::Shape,
+            track: 1,
+        };
+        let available = [text, top_shape, shape];
+        assert!(reorder_overlay_track(&mut project, &available, shape, 0));
+        assert_eq!(project.overlay_order(), [shape, text, top_shape]);
+        assert_eq!(project.overlay_order, [text]);
+        assert!(delete_track_lane_and_order(
+            &mut project,
+            &available,
+            TrackKind::Shape,
+            0,
+        ));
+        let renumbered = cap_project::OverlayTrack {
+            kind: cap_project::OverlayTrackKind::Shape,
+            track: 0,
+        };
+        assert_eq!(project.overlay_order(), [text, renumbered]);
+        assert_eq!(project.overlay_order, [text]);
     }
 
     #[test]

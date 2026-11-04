@@ -2037,6 +2037,13 @@ default_name = "Mein Maskenstil"
 use_for_new = "Für neue Masken verwenden"
 used_for_new = "Neue Masken verwenden diesen Stil"
 
+[editor.panel.style_presets.shape]
+applied_all = "Auf alle Formen angewendet ({number})"
+apply_all = "Auf alle Formen anwenden ({number})"
+default_name = "Mein Formstil"
+use_for_new = "Für neue Formen verwenden"
+used_for_new = "Neue Formen verwenden diesen Stil"
+
 [editor.panel.style_presets.style]
 applied_all = "Auf alle Stilsegmente angewendet ({number})"
 apply_all = "Auf alle Stilsegmente anwenden ({number})"
@@ -2313,6 +2320,7 @@ image = "Bild"
 mask = "Maske"
 screen = "Bildschirm"
 screen_locked = "Der Bildschirm ist gesperrt, solange ein Zoom aktiv ist"
+shape = "Form"
 text_item = "Text"
 
 [editor.clips]
@@ -2721,6 +2729,43 @@ system_sans_serif = "System-Sans-Serif"
 system_serif = "System-Serif"
 system_monospace = "System-Monospace"
 
+[editor.shape]
+title = "Form {number}"
+stroke = "Kontur"
+width = "Breite"
+fill = "Füllung"
+fill_opacity = "Deckkraft der Füllung"
+corner_radius = "Eckenradius"
+arrowhead = "Pfeilspitze"
+number = "Nummer"
+look = "Aussehen"
+shadow = "Schatten"
+animation = "Animation"
+draw = "Form zeichnen"
+toolbar = "Formen"
+draw_hint = "Ziehen Sie in der Vorschau, um zu zeichnen. Klicken Sie, um eine Form zu platzieren."
+decrease = "Verringern"
+increase = "Erhöhen"
+
+[editor.shape.kinds]
+arrow = "Pfeil"
+line = "Linie"
+rectangle = "Rechteck"
+ellipse = "Ellipse"
+highlight = "Markierung"
+badge = "Schritt"
+
+[editor.shape.heads]
+filled = "Gefüllt"
+open = "Offen"
+double = "Doppelt"
+
+[editor.shape.animations]
+none = "Keine"
+fade = "Einblenden"
+scale = "Skalieren"
+draw = "Zeichnen"
+
 [editor.timeline]
 add_shot = "Einstellung hinzufügen"
 add_shot_with_look = "Einstellung hinzufügen · {look} · {seconds} s"
@@ -2744,6 +2789,7 @@ keyboard = "Zeigen Sie beim Tippen Tastendrücke auf dem Bildschirm an."
 mask = "Machen Sie private Bildschirmbereiche unscharf oder schwärzen Sie sie."
 scene = "Wechseln Sie zwischen Layouts für Bildschirm und Kamera."
 scene_unavailable = "Nehmen Sie mit einer Kamera auf, um Szenen zu verwenden."
+shape = "Zeichnen Sie Pfeile, Rahmen, Kreise und Markierungen über Ihre Aufnahme."
 style = "Ändern Sie Hintergrund-, Kamera- und Cursoreinstellungen im Zeitverlauf."
 text_overlay = "Fügen Sie der Leinwand eigene Texteinblendungen und Titel hinzu."
 three_d = "Neigen Sie die Szene in 3D-Perspektive."
@@ -2757,6 +2803,7 @@ image = "Die Bildspur entfernen."
 keyboard = "Die Tastaturspur entfernen."
 mask = "Die Maskenspur entfernen."
 scene = "Die Szenenspur entfernen."
+shape = "Die Formen-Spur entfernen."
 style = "Die Stilspur entfernen."
 text_track = "Die Textspur entfernen."
 three_d = "Die 3D-Spur entfernen."
@@ -2790,6 +2837,7 @@ image = "Bild"
 keyboard = "Tastatur"
 mask = "Maske"
 scene = "Szene"
+shape = "Form"
 style = "Stil"
 text_track = "Text"
 video = "Video"
@@ -3075,6 +3123,7 @@ mask = { one = "{count} Maskensegment ausgewählt", other = "{count} Maskensegme
 scene = { one = "{count} Szenensegment ausgewählt", other = "{count} Szenensegmente ausgewählt" }
 segments = { one = "{count} Segment ausgewählt", other = "{count} Segmente ausgewählt" }
 select_all = "Alle auswählen"
+shape = { one = "{count} Form ausgewählt", other = "{count} Formen ausgewählt" }
 style = { one = "{count} Stilsegment ausgewählt", other = "{count} Stilsegmente ausgewählt" }
 text_segments = { one = "{count} Textsegment ausgewählt", other = "{count} Textsegmente ausgewählt" }
 three_d = { one = "{count} 3D-Segment ausgewählt", other = "{count} 3D-Segmente ausgewählt" }

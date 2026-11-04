@@ -2037,6 +2037,13 @@ default_name = "Mon style de masque"
 use_for_new = "Utiliser pour les nouveaux masques"
 used_for_new = "Les nouveaux masques utilisent ce style"
 
+[editor.panel.style_presets.shape]
+applied_all = "Appliqué à toutes les formes ({number})"
+apply_all = "Appliquer à toutes les formes ({number})"
+default_name = "Mon style de forme"
+use_for_new = "Utiliser pour les nouvelles formes"
+used_for_new = "Les nouvelles formes utilisent ce style"
+
 [editor.panel.style_presets.style]
 applied_all = "Appliqué à tous les segments de style ({number})"
 apply_all = "Appliquer à tous les segments de style ({number})"
@@ -2313,6 +2320,7 @@ image = "Image"
 mask = "Masque"
 screen = "Écran"
 screen_locked = "L'écran est verrouillé tant qu'un zoom est actif"
+shape = "Forme"
 text_item = "Texte"
 
 [editor.clips]
@@ -2721,6 +2729,43 @@ system_sans_serif = "Sans-serif système"
 system_serif = "Serif système"
 system_monospace = "Monospace système"
 
+[editor.shape]
+title = "Forme {number}"
+stroke = "Contour"
+width = "Épaisseur"
+fill = "Remplissage"
+fill_opacity = "Opacité du remplissage"
+corner_radius = "Arrondi des coins"
+arrowhead = "Pointe de flèche"
+number = "Numéro"
+look = "Apparence"
+shadow = "Ombre"
+animation = "Animation"
+draw = "Dessiner une forme"
+toolbar = "Formes"
+draw_hint = "Faites glisser sur l’aperçu pour dessiner. Cliquez pour en placer une."
+decrease = "Diminuer"
+increase = "Augmenter"
+
+[editor.shape.kinds]
+arrow = "Flèche"
+line = "Ligne"
+rectangle = "Rectangle"
+ellipse = "Ellipse"
+highlight = "Surlignage"
+badge = "Étape"
+
+[editor.shape.heads]
+filled = "Pleine"
+open = "Ouverte"
+double = "Double"
+
+[editor.shape.animations]
+none = "Aucune"
+fade = "Fondu"
+scale = "Échelle"
+draw = "Tracé"
+
 [editor.timeline]
 add_shot = "Ajouter un plan"
 add_shot_with_look = "Ajouter un plan · {look} · {seconds} s"
@@ -2744,6 +2789,7 @@ keyboard = "Affichez les touches à l'écran pendant que vous tapez."
 mask = "Floutez ou noircissez les zones privées de l'écran."
 scene = "Alternez les dispositions entre votre écran et votre caméra."
 scene_unavailable = "Enregistrez avec une caméra pour utiliser les scènes."
+shape = "Dessinez des flèches, des cadres, des cercles et des surlignages sur votre enregistrement."
 style = "Modifiez l'arrière-plan, la caméra et le curseur au fil du temps."
 text_overlay = "Ajoutez des textes et des titres personnalisés sur le canevas."
 three_d = "Inclinez la scène en perspective 3D."
@@ -2757,6 +2803,7 @@ image = "Supprimer la piste Image."
 keyboard = "Supprimer la piste Clavier."
 mask = "Supprimer la piste Masque."
 scene = "Supprimer la piste Scène."
+shape = "Supprimer la piste Formes."
 style = "Supprimer la piste Style."
 text_track = "Supprimer la piste Texte."
 three_d = "Supprimer la piste 3D."
@@ -2790,6 +2837,7 @@ image = "Image"
 keyboard = "Clavier"
 mask = "Masque"
 scene = "Scène"
+shape = "Forme"
 style = "Style"
 text_track = "Texte"
 video = "Vidéo"
@@ -3075,6 +3123,7 @@ mask = { one = "{count} segment de masque sélectionné", other = "{count} segme
 scene = { one = "{count} segment de scène sélectionné", other = "{count} segments de scène sélectionnés" }
 segments = { one = "{count} segment sélectionné", other = "{count} segments sélectionnés" }
 select_all = "Tout sélectionner"
+shape = { one = "{count} forme sélectionnée", other = "{count} formes sélectionnées" }
 style = { one = "{count} segment de style sélectionné", other = "{count} segments de style sélectionnés" }
 text_segments = { one = "{count} segment de texte sélectionné", other = "{count} segments de texte sélectionnés" }
 three_d = { one = "{count} segment 3D sélectionné", other = "{count} segments 3D sélectionnés" }

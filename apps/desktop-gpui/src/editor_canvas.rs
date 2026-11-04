@@ -205,7 +205,11 @@ pub fn build_snap_targets(others: &[NormRect], margin: Option<(f64, f64)>) -> Sn
 
 /// `snapAxis` (`snapping.ts:83-106`). Centre lines carry a `threshold * 0.15`
 /// cost bias so they win ties against edges.
-fn snap_axis(anchors: &[f64], lines: &[SnapLine], threshold: f64) -> Option<(f64, SnapLine)> {
+pub(crate) fn snap_axis(
+    anchors: &[f64],
+    lines: &[SnapLine],
+    threshold: f64,
+) -> Option<(f64, SnapLine)> {
     let mut best: Option<(f64, SnapLine)> = None;
     let mut best_cost = f64::INFINITY;
     for line in lines {
@@ -230,7 +234,7 @@ fn snap_axis(anchors: &[f64], lines: &[SnapLine], threshold: f64) -> Option<(f64
 }
 
 /// `guideFor` (`snapping.ts:108-125`).
-fn guide_for(axis: GuideAxis, line: SnapLine, moving: NormRect) -> SnapGuide {
+pub(crate) fn guide_for(axis: GuideAxis, line: SnapLine, moving: NormRect) -> SnapGuide {
     let Some((ref_start, ref_end)) = line.reference else {
         return SnapGuide {
             axis,
@@ -524,6 +528,7 @@ pub enum CanvasSelection {
     Text(usize),
     Image(usize),
     Captions,
+    Shape(usize),
 }
 
 impl CanvasSelection {
@@ -535,6 +540,7 @@ impl CanvasSelection {
             Self::Text(_) => tr::editor::canvas::text_item().into(),
             Self::Image(_) => tr::editor::canvas::image().into(),
             Self::Captions => tr::editor::canvas::captions().into(),
+            Self::Shape(_) => tr::editor::canvas::shape().into(),
         }
     }
 
@@ -546,6 +552,7 @@ impl CanvasSelection {
             Self::Text(index) => format!("canvas-text-{index}").into(),
             Self::Image(index) => format!("canvas-image-{index}").into(),
             Self::Captions => "canvas-captions".into(),
+            Self::Shape(index) => format!("canvas-shape-{index}").into(),
         }
     }
 
@@ -554,6 +561,7 @@ impl CanvasSelection {
             Self::Mask(index) => Some((TrackKind::Mask, index)),
             Self::Text(index) => Some((TrackKind::Text, index)),
             Self::Image(index) => Some((TrackKind::Image, index)),
+            Self::Shape(index) => Some((TrackKind::Shape, index)),
             _ => None,
         }
     }
@@ -675,6 +683,14 @@ impl EditorWindow {
     /// `useCanvasSnapTargets()` (`:70-129`): every other visible element's
     /// edges and centres, the frame's own, and the classic camera margin.
     pub(crate) fn canvas_snap_targets(&self, exclude: CanvasSelection) -> SnapTargets {
+        self.canvas_snap_targets_moving(exclude, &[])
+    }
+
+    pub(crate) fn canvas_snap_targets_moving(
+        &self,
+        exclude: CanvasSelection,
+        moving_shapes: &[usize],
+    ) -> SnapTargets {
         let mut rects: Vec<NormRect> = Vec::new();
         let Some(layout) = self.frame_layout.as_ref() else {
             return build_snap_targets(&rects, None);
@@ -722,6 +738,14 @@ impl EditorWindow {
                     w: size.x,
                     h: size.y,
                 });
+            }
+            for index in self.visible_shape_order(t) {
+                if exclude == CanvasSelection::Shape(index) || moving_shapes.contains(&index) {
+                    continue;
+                }
+                if let Some(segment) = timeline.shape_segments.get(index) {
+                    rects.push(crate::editor_shapes::shape_bounds(segment));
+                }
             }
             for (index, segment) in timeline.mask_segments.iter().enumerate() {
                 if exclude == CanvasSelection::Mask(index) {
@@ -776,6 +800,7 @@ impl EditorWindow {
             | CanvasSelection::Text(_)
             | CanvasSelection::Image(_)
             | CanvasSelection::Captions => true,
+            | CanvasSelection::Shape(_) => true,
         };
         if !draggable {
             cx.notify();
@@ -784,6 +809,7 @@ impl EditorWindow {
         let Some(rect) = self.element_rect(element) else {
             return;
         };
+        self.shape_drag_up(window, cx);
         self.history.pause();
         self.canvas_drag = Some(CanvasDrag {
             element,
@@ -809,7 +835,10 @@ impl EditorWindow {
         let resizable = match element {
             CanvasSelection::Display => self.display_draggable(),
             CanvasSelection::Camera => self.camera_resizable(),
-            CanvasSelection::Mask(_) | CanvasSelection::Text(_) | CanvasSelection::Image(_) => true,
+            CanvasSelection::Mask(_)
+            | CanvasSelection::Text(_)
+            | CanvasSelection::Image(_)
+            | CanvasSelection::Shape(_) => true,
             CanvasSelection::Captions => false,
         };
         if !resizable {
@@ -839,6 +868,7 @@ impl EditorWindow {
             .into_owned();
         let (max_width, padding_scale) =
             display_resize_scales(rect, &layout, effective.aspect_ratio.is_some());
+        self.shape_drag_up(window, cx);
         self.history.pause();
         self.canvas_drag = Some(CanvasDrag {
             element,
@@ -986,7 +1016,10 @@ impl EditorWindow {
                         cx,
                     );
                 }
-                CanvasSelection::Mask(_) | CanvasSelection::Text(_) | CanvasSelection::Image(_) => {
+                CanvasSelection::Mask(_)
+                | CanvasSelection::Text(_)
+                | CanvasSelection::Image(_)
+                | CanvasSelection::Shape(_) => {
                     let (rect, guides) = if let CanvasSelection::Image(index) = element {
                         let Some(segment) = self
                             .project
@@ -1022,7 +1055,10 @@ impl EditorWindow {
         let (center, guides) = match element {
             CanvasSelection::Display => display_drag_center(start, size, delta, &targets, shift),
             CanvasSelection::Camera => camera_drag_center(start, size, delta, &targets, shift),
-            CanvasSelection::Mask(_) | CanvasSelection::Text(_) | CanvasSelection::Image(_) => {
+            CanvasSelection::Mask(_)
+            | CanvasSelection::Text(_)
+            | CanvasSelection::Image(_)
+            | CanvasSelection::Shape(_) => {
                 let bounds = if let CanvasSelection::Image(index) = element {
                     let rotation = self
                         .project
@@ -1053,7 +1089,10 @@ impl EditorWindow {
                 self.canvas_drag_camera_rect = Some(optimistic);
                 self.write_camera_position(center, cx);
             }
-            CanvasSelection::Mask(_) | CanvasSelection::Text(_) | CanvasSelection::Image(_) => {
+            CanvasSelection::Mask(_)
+            | CanvasSelection::Text(_)
+            | CanvasSelection::Image(_)
+            | CanvasSelection::Shape(_) => {
                 self.canvas_overlay_rect = Some(optimistic);
                 self.write_overlay_rect(element, optimistic, cx);
             }
@@ -1063,6 +1102,7 @@ impl EditorWindow {
     }
 
     pub(crate) fn canvas_mouse_up(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.shape_drag_up(window, cx);
         let Some(drag) = self.canvas_drag.take() else {
             return;
         };
@@ -1115,6 +1155,9 @@ impl EditorWindow {
                         .map(|p| format!("{:.6},{:.6}", p.x, p.y)),
                     "canvas captions drag"
                 ),
+                CanvasSelection::Shape(index) => {
+                    tracing::info!(index, "canvas shape drag");
+                }
             }
         }
         cx.notify();
@@ -1131,7 +1174,7 @@ impl EditorWindow {
         let Some(selected) = self.canvas_selection else {
             return false;
         };
-        if !self.canvas_overlay_visible() {
+        if !self.canvas_overlay_visible() || matches!(selected, CanvasSelection::Shape(_)) {
             return false;
         }
         if let CanvasSelection::Image(index) = selected
@@ -1164,9 +1207,10 @@ impl EditorWindow {
         let center = match selected {
             CanvasSelection::Display => display_nudge_center(rect, size, direction, shift),
             CanvasSelection::Camera => camera_nudge_center(rect, size, direction, shift),
-            CanvasSelection::Mask(_) | CanvasSelection::Text(_) | CanvasSelection::Image(_) => {
-                overlay_nudge_center(rect, direction, shift)
-            }
+            CanvasSelection::Mask(_)
+            | CanvasSelection::Text(_)
+            | CanvasSelection::Image(_)
+            | CanvasSelection::Shape(_) => overlay_nudge_center(rect, direction, shift),
             CanvasSelection::Captions => caption_nudge_center(rect, size, direction, shift),
         };
         let optimistic = NormRect {
@@ -1183,7 +1227,10 @@ impl EditorWindow {
                 self.canvas_drag_camera_rect = Some(optimistic);
                 self.write_camera_position(center, cx);
             }
-            CanvasSelection::Mask(_) | CanvasSelection::Text(_) | CanvasSelection::Image(_) => {
+            CanvasSelection::Mask(_)
+            | CanvasSelection::Text(_)
+            | CanvasSelection::Image(_)
+            | CanvasSelection::Shape(_) => {
                 self.canvas_overlay_rect = Some(optimistic);
                 self.write_overlay_rect(selected, optimistic, cx);
             }
@@ -1279,7 +1326,7 @@ impl EditorWindow {
         }
     }
 
-    fn element_rect(&self, element: CanvasSelection) -> Option<NormRect> {
+    pub(crate) fn element_rect(&self, element: CanvasSelection) -> Option<NormRect> {
         match element {
             CanvasSelection::Display => self.display_rect(),
             CanvasSelection::Camera => self.camera_rect(),
@@ -1313,6 +1360,9 @@ impl EditorWindow {
                     self.project.timeline.as_ref()?.mask_segments.get(index)?,
                 )
             }
+            CanvasSelection::Shape(index) => Some(crate::editor_shapes::shape_bounds(
+                self.project.timeline.as_ref()?.shape_segments.get(index)?,
+            )),
             CanvasSelection::Text(index) => {
                 if self
                     .canvas_drag
@@ -1375,6 +1425,13 @@ impl EditorWindow {
                 segment.center = center;
                 segment.size = size;
             }
+            CanvasSelection::Shape(index) => {
+                let Some(segment) = timeline.shape_segments.get_mut(index) else {
+                    return;
+                };
+                segment.from = XY::new(rect.x, rect.y);
+                segment.to = XY::new(rect.x + rect.w, rect.y + rect.h);
+            }
             _ => return,
         }
         self.project_changed_live(cx);
@@ -1428,7 +1485,10 @@ impl EditorWindow {
     /// inside `size()` (`Player.tsx:636`), not the player pane.
     pub(crate) fn render_canvas_overlay(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if !self.canvas_overlay_visible()
-            || (!self.player_panel_hovered && self.canvas_drag.is_none())
+            || (!self.player_panel_hovered
+                && self.canvas_drag.is_none()
+                && self.shape_drag.is_none()
+                && self.shape_tool.is_none())
         {
             return None;
         }
@@ -1522,6 +1582,7 @@ impl EditorWindow {
                             }
                         }
                     }
+                    OverlayTrackKind::Shape => {}
                     OverlayTrackKind::Text => {
                         for (index, segment) in timeline
                             .text_segments
@@ -1551,6 +1612,9 @@ impl EditorWindow {
         {
             layer =
                 layer.child(self.render_element_box(CanvasSelection::Captions, rect, (cw, ch), cx));
+        }
+        if let Some(shapes) = self.render_shapes_layer(cx) {
+            layer = layer.child(shapes);
         }
         for guide in &self.snap_guides {
             let color = gpui::rgb(0xFF3B6B);
@@ -1584,7 +1648,10 @@ impl EditorWindow {
     ) -> AnyElement {
         let theme = self.theme;
         let selected = self.canvas_selection == Some(element);
-        let hovered = self.hovered_canvas == Some(element);
+        let hovered = self.hovered_canvas == Some(element)
+            && !self.hovering_visible_shape()
+            && self.shape_tool.is_none()
+            && self.shape_drag.is_none();
         let dragging = self
             .canvas_drag
             .as_ref()
@@ -1601,9 +1668,10 @@ impl EditorWindow {
                 self.camera_resizable(),
                 (!self.camera_resizable()).then(tr::editor::canvas::camera_follows_zoom),
             ),
-            CanvasSelection::Mask(_) | CanvasSelection::Text(_) | CanvasSelection::Image(_) => {
-                (true, true, None)
-            }
+            CanvasSelection::Mask(_)
+            | CanvasSelection::Text(_)
+            | CanvasSelection::Image(_)
+            | CanvasSelection::Shape(_) => (true, true, None),
             CanvasSelection::Captions => (true, false, None),
         };
         let has_handles = element != CanvasSelection::Captions;

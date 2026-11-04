@@ -500,6 +500,7 @@ pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
             camera3d_segments: Vec::new(),
             style_segments: Vec::new(),
             image_segments: Vec::new(),
+            shape_segments: Vec::new(),
         });
     }
 
@@ -1414,7 +1415,7 @@ pub struct EditorWindow {
     /// `editorState.playing`.
     pub(crate) playing: bool,
     /// `editorState.playbackTime`, in seconds.
-    playhead: f64,
+    pub(crate) playhead: f64,
     last_playhead_redraw: Instant,
     /// Whether the current play epoch has applied at least one engine sample.
     /// Every path that (re)starts the engine clears it -- `start_playback`,
@@ -1444,7 +1445,7 @@ pub struct EditorWindow {
     /// Every track the strip draws.
     timeline: TimelineModel,
     /// The viewport, the hover ghost and the hovered track.
-    view: TimelineView,
+    pub(crate) view: TimelineView,
     playback_follow: timeline::PlaybackFollow,
     /// `onMount`'s `checkBounds` runs once, when the timeline first has a
     /// width (`TL/index.tsx:689-703`). There is no mount hook here, so the
@@ -1607,6 +1608,17 @@ pub struct EditorWindow {
     pub(crate) canvas_overlay_rect: Option<crate::editor_canvas::NormRect>,
     /// `snapGuides()`.
     pub(crate) snap_guides: Vec<crate::editor_canvas::SnapGuide>,
+    /// The live gesture on the Shape layer: a move, a handle drag or a draw.
+    pub(crate) shape_drag: Option<crate::editor_shapes::ShapeDrag>,
+    /// The shape under the pointer, by config index.
+    pub(crate) shape_hover: Option<usize>,
+    /// The armed draw tool: the next press on the preview draws this kind.
+    pub(crate) shape_tool: Option<cap_project::ShapeKind>,
+    pub(crate) shape_tool_menu: bool,
+    pub(crate) shape_tool_trigger: Rc<std::cell::Cell<Option<Bounds<Pixels>>>>,
+    /// What a new shape is: the kind last drawn, added or picked.
+    pub(crate) last_shape_kind: cap_project::ShapeKind,
+    pub(crate) shape_clipboard: Vec<cap_project::ShapeSegment>,
 
     preview_quality: crate::store::EditorPreviewQuality,
     preview_speed: cap_editor::PreviewSpeed,
@@ -2257,6 +2269,13 @@ impl EditorWindow {
             canvas_drag_camera_rect: None,
             canvas_overlay_rect: None,
             snap_guides: Vec::new(),
+            shape_drag: None,
+            shape_hover: None,
+            shape_tool: None,
+            shape_tool_menu: false,
+            shape_tool_trigger: Rc::new(std::cell::Cell::new(None)),
+            last_shape_kind: cap_project::ShapeKind::Arrow,
+            shape_clipboard: Vec::new(),
             preview_quality: crate::store::GeneralSettings::load().editor_preview_quality,
             preview_speed: crate::store::GeneralSettings::load().editor_preview_speed,
             tracks: TrackLanes::from_project(&ProjectConfiguration::default(), false),
@@ -2880,6 +2899,8 @@ impl EditorWindow {
         self.canvas_drag_camera_rect = None;
         self.canvas_overlay_rect = None;
         self.snap_guides.clear();
+        self.shape_drag = None;
+        self.shape_hover = None;
         let previous_animated_gradient = self.animated_gradient_config().cloned();
         let animated_background_changed = self.animated_gradient_config()
             != match &config.background.source {
@@ -3799,6 +3820,40 @@ impl EditorWindow {
         // The canvas arrow-key nudge is scoped outside `useEditorShortcuts`
         // precisely so held keys repeat (`CanvasElementsOverlay.tsx:561-565`),
         // so it is the one editor shortcut that runs on a repeat.
+        if (self.shape_tool.is_some() || self.shape_tool_menu)
+            && event.keystroke.key == "escape"
+            && !event.is_held
+        {
+            self.arm_shape_tool(None, cx);
+            cx.stop_propagation();
+            window.refresh();
+            return;
+        }
+        if !event.keystroke.modifiers.platform
+            && !event.keystroke.modifiers.control
+            && !event.keystroke.modifiers.alt
+            && !ui::text_input_has_focus(window, cx)
+            && self.canvas_overlay_visible()
+            && self
+                .selection
+                .as_ref()
+                .is_some_and(|selection| selection.track == TrackKind::Shape)
+        {
+            let direction = match event.keystroke.key.as_str() {
+                "left" => Some((-1., 0.)),
+                "right" => Some((1., 0.)),
+                "up" => Some((0., -1.)),
+                "down" => Some((0., 1.)),
+                _ => None,
+            };
+            if let Some(direction) = direction
+                && self.shape_nudge(direction, event.keystroke.modifiers.shift, window, cx)
+            {
+                cx.stop_propagation();
+                window.refresh();
+                return;
+            }
+        }
         if !event.keystroke.modifiers.platform
             && !event.keystroke.modifiers.control
             && !event.keystroke.modifiers.alt
@@ -3950,6 +4005,33 @@ impl EditorWindow {
                 "y" => {
                     cx.stop_propagation();
                     self.redo(window, cx);
+                    window.refresh();
+                    return;
+                }
+                "d" if !keystroke.modifiers.shift
+                    && self
+                        .selection
+                        .as_ref()
+                        .is_some_and(|selection| selection.track == TrackKind::Shape) =>
+                {
+                    cx.stop_propagation();
+                    self.duplicate_shapes(window, cx);
+                    window.refresh();
+                    return;
+                }
+                "c" if !keystroke.modifiers.shift
+                    && self
+                        .selection
+                        .as_ref()
+                        .is_some_and(|selection| selection.track == TrackKind::Shape) =>
+                {
+                    cx.stop_propagation();
+                    self.copy_shapes();
+                    return;
+                }
+                "v" if !keystroke.modifiers.shift && !self.shape_clipboard.is_empty() => {
+                    cx.stop_propagation();
+                    self.paste_shapes(window, cx);
                     window.refresh();
                     return;
                 }
@@ -4430,7 +4512,7 @@ impl EditorWindow {
     // -- Editing: the pointer ------------------------------------------------
 
     /// `secsPerPixel()` (`TL/context.ts:91-92`), over the clip track's own box.
-    fn secs_per_pixel(&self, viewport_width: f32) -> f64 {
+    pub(crate) fn secs_per_pixel(&self, viewport_width: f32) -> f64 {
         self.view
             .transform
             .secs_per_pixel(timeline::content_width(viewport_width))
@@ -4491,6 +4573,7 @@ impl EditorWindow {
                     TrackKind::Image => Some(crate::editor_canvas::CanvasSelection::Image(index)),
                     TrackKind::Text => Some(crate::editor_canvas::CanvasSelection::Text(index)),
                     TrackKind::Mask => Some(crate::editor_canvas::CanvasSelection::Mask(index)),
+                    TrackKind::Shape => Some(crate::editor_canvas::CanvasSelection::Shape(index)),
                     _ => None,
                 }
             });
@@ -4650,7 +4733,10 @@ impl EditorWindow {
                 } else if kind == TrackKind::Audio {
                     cx.stop_propagation();
                     self.open_audio_picker(lane, cx);
-                } else if matches!(kind, TrackKind::Text | TrackKind::Mask | TrackKind::Scene) {
+                } else if matches!(
+                    kind,
+                    TrackKind::Text | TrackKind::Shape | TrackKind::Mask | TrackKind::Scene
+                ) {
                     cx.stop_propagation();
                     let time = if kind == TrackKind::Scene {
                         let Some(time) = timeline::preview_time_from_x(
@@ -4801,6 +4887,7 @@ impl EditorWindow {
             TrackKind::Style
                 | TrackKind::Image
                 | TrackKind::Text
+                | TrackKind::Shape
                 | TrackKind::Mask
                 | TrackKind::Audio
         )
@@ -5148,6 +5235,7 @@ impl EditorWindow {
             TrackKind::Caption,
             TrackKind::Keyboard,
             TrackKind::Text,
+            TrackKind::Shape,
             TrackKind::Mask,
             TrackKind::Audio,
             TrackKind::Zoom,
@@ -5800,7 +5888,14 @@ impl EditorWindow {
         EditorVerticalLayout::new(viewport_height, value).timeline_height
     }
 
-    fn preferred_timeline_height(&self) -> f32 {
+    pub(crate) fn preferred_timeline_height(&self) -> f32 {
+        if let Some(height) = self
+            .shape_drag
+            .as_ref()
+            .and_then(|drag| drag.timeline_height)
+        {
+            return height;
+        }
         self.timeline_height_override.unwrap_or_else(|| {
             DEFAULT_TIMELINE_HEIGHT
                 + self.initial_timeline_rows.map_or(0., |initial| {
@@ -6175,6 +6270,15 @@ impl EditorWindow {
                     .collect();
                 edits::find_placement(&lane_segments, time, length, total)
             }
+            TrackKind::Shape => {
+                let lane_segments: Vec<_> = timeline
+                    .shape_segments
+                    .iter()
+                    .filter(|segment| segment.track == lane)
+                    .cloned()
+                    .collect();
+                edits::find_placement(&lane_segments, time, length, total)
+            }
             TrackKind::Scene => timeline::new_scene_segment(&self.timeline, time),
             _ => None,
         };
@@ -6184,9 +6288,15 @@ impl EditorWindow {
         match kind {
             TrackKind::Text => self.tracks.text = self.tracks.text.max(lane + 1),
             TrackKind::Mask => self.tracks.mask = self.tracks.mask.max(lane + 1),
+            TrackKind::Shape => self.tracks.shape = self.tracks.shape.max(lane + 1),
             TrackKind::Scene => self.tracks.scene = true,
             _ => {}
         }
+        let new_shape =
+            (kind == TrackKind::Shape).then(|| self.new_shape_segment(start, end, lane));
+        let reveal = new_shape
+            .as_ref()
+            .map(|shape| (shape.animation_in_duration, shape.animation_out_duration));
         let mut index = 0;
         let inserted = self.edit(
             |timeline| {
@@ -6195,6 +6305,10 @@ impl EditorWindow {
                         timeline,
                         crate::style_presets::new_text_segment(start, end, lane),
                     ),
+                    TrackKind::Shape => match new_shape {
+                        Some(shape) => edits::insert_shape_segment(timeline, shape),
+                        None => return false,
+                    },
                     TrackKind::Mask => edits::insert_mask_segment(
                         timeline,
                         crate::style_presets::new_mask_segment(start, end, lane),
@@ -6214,7 +6328,13 @@ impl EditorWindow {
             return;
         }
         self.set_selection(Some(Selection::single(kind, index)), cx);
-        self.seek_to_time(time.clamp(start, end), cx);
+        let target = match reveal {
+            Some((animation_in, animation_out)) => {
+                crate::editor_shapes::reveal_time(time, start, end, animation_in, animation_out)
+            }
+            None => time.clamp(start, end),
+        };
+        self.seek_to_time(target, cx);
         self.view.preview_time = None;
         self.audio_picker = None;
         self.note_edit("add-track", Some(kind));
@@ -6563,6 +6683,7 @@ impl EditorWindow {
             TrackKind::Image => &mut self.tracks.image,
             TrackKind::Text => &mut self.tracks.text,
             TrackKind::Mask => &mut self.tracks.mask,
+            TrackKind::Shape => &mut self.tracks.shape,
             TrackKind::Audio => &mut self.tracks.audio,
             _ => return,
         };
@@ -6572,6 +6693,7 @@ impl EditorWindow {
             (TrackKind::Image, Some(timeline)) => edits::used_lane_count(&timeline.image_segments),
             (TrackKind::Text, Some(timeline)) => edits::used_lane_count(&timeline.text_segments),
             (TrackKind::Mask, Some(timeline)) => edits::used_lane_count(&timeline.mask_segments),
+            (TrackKind::Shape, Some(timeline)) => edits::used_lane_count(&timeline.shape_segments),
             (TrackKind::Audio, Some(timeline)) => edits::used_lane_count(&timeline.audio_segments),
             _ => 0,
         };
@@ -6581,6 +6703,7 @@ impl EditorWindow {
             TrackKind::Image => self.tracks.image = next,
             TrackKind::Text => self.tracks.text = next,
             TrackKind::Mask => self.tracks.mask = next,
+            TrackKind::Shape => self.tracks.shape = next,
             TrackKind::Audio => self.tracks.audio = next,
             _ => {}
         }
@@ -7865,6 +7988,7 @@ impl EditorWindow {
             TrackKind::Text | TrackKind::Mask => {
                 self.add_overlay_segment(kind, window, cx);
             }
+            TrackKind::Shape => self.add_shape_at_playhead(window, cx),
             _ => {}
         }
         cx.notify();
@@ -7897,6 +8021,10 @@ impl EditorWindow {
                 .tracks
                 .mask
                 .max(edits::used_lane_count(&timeline.mask_segments)),
+            TrackKind::Shape => self
+                .tracks
+                .shape
+                .max(edits::used_lane_count(&timeline.shape_segments)),
             _ => return,
         };
 
@@ -7916,6 +8044,15 @@ impl EditorWindow {
                 TrackKind::Mask => {
                     let lane_segments: Vec<_> = timeline
                         .mask_segments
+                        .iter()
+                        .filter(|segment| segment.track == index)
+                        .cloned()
+                        .collect();
+                    edits::place_segment_at_time(&lane_segments, time, length, total)
+                }
+                TrackKind::Shape => {
+                    let lane_segments: Vec<_> = timeline
+                        .shape_segments
                         .iter()
                         .filter(|segment| segment.track == index)
                         .cloned()
@@ -7942,6 +8079,7 @@ impl EditorWindow {
             match kind {
                 TrackKind::Text => self.tracks.text += 1,
                 TrackKind::Mask => self.tracks.mask += 1,
+                TrackKind::Shape => self.tracks.shape += 1,
                 _ => {}
             }
             self.rebuild_timeline();
@@ -7958,10 +8096,24 @@ impl EditorWindow {
         } else {
             self.tracks.mask
         };
+        self.tracks.shape = if kind == TrackKind::Shape {
+            lane_count.max(lane + 1)
+        } else {
+            self.tracks.shape
+        };
 
+        let new_shape =
+            (kind == TrackKind::Shape).then(|| self.new_shape_segment(start, end, lane));
+        let reveal = new_shape
+            .as_ref()
+            .map(|shape| (shape.animation_in_duration, shape.animation_out_duration));
         let inserted = self.edit(
             |timeline| {
                 let index = match kind {
+                    TrackKind::Shape => match new_shape {
+                        Some(shape) => edits::insert_shape_segment(timeline, shape),
+                        None => return false,
+                    },
                     TrackKind::Text => edits::insert_text_segment(
                         timeline,
                         crate::style_presets::new_text_segment(start, end, lane),
@@ -8004,11 +8156,29 @@ impl EditorWindow {
                         .rposition(|segment| segment.start == start && segment.track == lane)
                 })
                 .unwrap_or(0),
+            TrackKind::Shape => self
+                .project
+                .timeline
+                .as_ref()
+                .and_then(|timeline| {
+                    timeline
+                        .shape_segments
+                        .iter()
+                        .rposition(|segment| segment.start == start && segment.track == lane)
+                })
+                .unwrap_or(0),
             _ => 0,
         };
         self.set_selection(Some(Selection::single(kind, index)), cx);
-        let pad = 0.15_f64.min(length / 4.0);
-        let target = time.max(start + pad).min(end - pad);
+        let target = match reveal {
+            Some((animation_in, animation_out)) => {
+                crate::editor_shapes::reveal_time(time, start, end, animation_in, animation_out)
+            }
+            None => {
+                let pad = 0.15_f64.min(length / 4.0);
+                time.max(start + pad).min(end - pad)
+            }
+        };
         if (target - time).abs() > f64::EPSILON {
             self.seek_to_time(target, cx);
         }
@@ -8390,6 +8560,7 @@ impl EditorWindow {
             "keyboard" => TrackKind::Keyboard,
             "text" => TrackKind::Text,
             "mask" => TrackKind::Mask,
+            "shape" => TrackKind::Shape,
             "audio" => TrackKind::Audio,
             "scene" => TrackKind::Scene,
             "3d" => TrackKind::ThreeD,
@@ -10738,6 +10909,7 @@ impl EditorWindow {
                     })),
             )
             .child(self.render_frame_button(narrow, cx))
+            .child(self.render_shape_tool_button(narrow, cx))
     }
 
     /// The preview-resolution control: a segmented `Full | Half | Quarter`.
@@ -11683,6 +11855,7 @@ impl EditorWindow {
                     Some(tr::editor::window::track::delete())
                 }
                 TrackKind::Text
+                | TrackKind::Shape
                 | TrackKind::Mask
                 | TrackKind::Audio
                 | TrackKind::Style
@@ -12072,6 +12245,7 @@ impl EditorWindow {
                                                     this.delete_single_track(kind, window, cx);
                                                 }
                                                 TrackKind::Text
+                                                | TrackKind::Shape
                                                 | TrackKind::Mask
                                                 | TrackKind::Audio
                                                 | TrackKind::Style
@@ -12823,6 +12997,18 @@ impl Render for EditorWindow {
                 )
                 .cursor(cursor)
             }))
+            .children(self.shape_drag.as_ref().map(|drag| {
+                ui::Slider::drag_layer(
+                    "canvas-shape-drag",
+                    cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+                        this.shape_drag_move(event, window, cx);
+                    }),
+                    cx.listener(|this, _: &MouseUpEvent, window, cx| {
+                        this.shape_drag_up(window, cx);
+                    }),
+                )
+                .cursor(drag.cursor())
+            }))
             // The open `KSelect` menu, painted last of all so it is over the
             // sidebar and the drag layers alike.
             .children(
@@ -12844,6 +13030,7 @@ impl Render for EditorWindow {
             .children(self.render_text_menu(cx))
             .children(self.render_frame_controls(window, cx))
             .children(self.render_add_track_popover(cx))
+            .children(self.render_shape_tool_popover(cx))
             .children(self.render_clip_speed_popover(cx))
             .children(self.render_transition_popover(cx))
             // The config sidebar's sliders take the same layer, for the same
@@ -13489,6 +13676,7 @@ mod tests {
         editor.project.timeline = Some(TimelineConfiguration {
             style_segments: Vec::new(),
             image_segments: Vec::new(),
+            shape_segments: Vec::new(),
             segments: Vec::new(),
             transitions: Vec::new(),
             zoom_segments: Vec::new(),
@@ -13609,6 +13797,7 @@ mod tests {
                     ..Default::default()
                 }],
                 image_segments: Vec::new(),
+                shape_segments: Vec::new(),
                 camera3d_segments: Vec::new(),
             });
             editor.project = config;
@@ -13664,6 +13853,7 @@ mod tests {
                     ..Default::default()
                 }],
                 image_segments: Vec::new(),
+                shape_segments: Vec::new(),
                 camera3d_segments: Vec::new(),
             });
             editor.project = config;
@@ -13977,6 +14167,7 @@ mod tests {
                 camera3d_segments: Vec::new(),
                 style_segments: Vec::new(),
                 image_segments: Vec::new(),
+                shape_segments: Vec::new(),
             }),
             captions: Some(cap_project::CaptionsData {
                 segments: vec![cap_project::CaptionSegment {
@@ -14043,6 +14234,7 @@ mod tests {
                 camera3d_segments: Vec::new(),
                 style_segments: Vec::new(),
                 image_segments: Vec::new(),
+                shape_segments: Vec::new(),
             }),
             captions: Some(cap_project::CaptionsData {
                 segments: vec![cap_project::CaptionSegment {
@@ -14272,6 +14464,7 @@ mod tests {
             timeline: Some(TimelineConfiguration {
                 style_segments: Vec::new(),
                 image_segments: Vec::new(),
+                shape_segments: Vec::new(),
                 segments: Vec::new(),
                 transitions: Vec::new(),
                 zoom_segments: Vec::new(),
@@ -15001,6 +15194,7 @@ mod tests {
             editor.project.timeline = Some(TimelineConfiguration {
                 style_segments: Vec::new(),
                 image_segments: Vec::new(),
+                shape_segments: Vec::new(),
                 segments: Vec::new(),
                 transitions: Vec::new(),
                 zoom_segments: Vec::new(),

@@ -2037,6 +2037,13 @@ default_name = "我的遮罩样式"
 use_for_new = "用于新遮罩"
 used_for_new = "新遮罩使用此样式"
 
+[editor.panel.style_presets.shape]
+applied_all = "已应用到所有形状（{number}）"
+apply_all = "应用到所有形状（{number}）"
+default_name = "我的形状样式"
+use_for_new = "用于新形状"
+used_for_new = "新形状使用此样式"
+
 [editor.panel.style_presets.style]
 applied_all = "已应用到所有样式分段（{number}）"
 apply_all = "应用到所有样式分段（{number}）"
@@ -2313,6 +2320,7 @@ image = "图片"
 mask = "遮罩"
 screen = "屏幕"
 screen_locked = "缩放生效期间屏幕已锁定"
+shape = "形状"
 text_item = "文字"
 
 [editor.clips]
@@ -2721,6 +2729,43 @@ system_sans_serif = "系统无衬线"
 system_serif = "系统衬线"
 system_monospace = "系统等宽"
 
+[editor.shape]
+title = "形状 {number}"
+stroke = "描边"
+width = "粗细"
+fill = "填充"
+fill_opacity = "填充不透明度"
+corner_radius = "圆角"
+arrowhead = "箭头"
+number = "编号"
+look = "外观"
+shadow = "阴影"
+animation = "动画"
+draw = "绘制形状"
+toolbar = "形状"
+draw_hint = "在预览上拖动以绘制，点击即可放置。"
+decrease = "减少"
+increase = "增加"
+
+[editor.shape.kinds]
+arrow = "箭头"
+line = "直线"
+rectangle = "矩形"
+ellipse = "椭圆"
+highlight = "高亮"
+badge = "步骤"
+
+[editor.shape.heads]
+filled = "实心"
+open = "空心"
+double = "双向"
+
+[editor.shape.animations]
+none = "无"
+fade = "淡入淡出"
+scale = "缩放"
+draw = "描绘"
+
 [editor.timeline]
 add_shot = "添加镜头"
 add_shot_with_look = "添加镜头 · {look} · {seconds} 秒"
@@ -2744,6 +2789,7 @@ keyboard = "输入时在屏幕上显示按键。"
 mask = "模糊或涂黑屏幕上的隐私区域。"
 scene = "在屏幕和摄像头之间切换布局。"
 scene_unavailable = "使用摄像头录制后才能使用场景。"
+shape = "在录制内容上绘制箭头、方框、圆圈和高亮。"
 style = "随时间改变背景、摄像头和光标设置。"
 text_overlay = "在画布上添加自定义文字叠加和标题。"
 three_d = "以 3D 透视倾斜场景。"
@@ -2757,6 +2803,7 @@ image = "移除图片轨道。"
 keyboard = "移除键盘轨道。"
 mask = "移除遮罩轨道。"
 scene = "移除场景轨道。"
+shape = "移除形状轨道。"
 style = "移除样式轨道。"
 text_track = "移除文字轨道。"
 three_d = "移除 3D 轨道。"
@@ -2790,6 +2837,7 @@ image = "图片"
 keyboard = "键盘"
 mask = "遮罩"
 scene = "场景"
+shape = "形状"
 style = "样式"
 text_track = "文字"
 video = "视频"
@@ -3075,6 +3123,7 @@ mask = { other = "已选择 {count} 个遮罩分段" }
 scene = { other = "已选择 {count} 个场景分段" }
 segments = { other = "已选择 {count} 个分段" }
 select_all = "全选"
+shape = { other = "已选择 {count} 个形状" }
 style = { other = "已选择 {count} 个样式分段" }
 text_segments = { other = "已选择 {count} 个文字分段" }
 three_d = { other = "已选择 {count} 个 3D 分段" }
