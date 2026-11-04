@@ -1987,6 +1987,8 @@ pub struct TimelineConfiguration {
     pub style_segments: Vec<StyleSegment>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub image_segments: Vec<ImageSegment>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shape_segments: Vec<crate::ShapeSegment>,
     // Explicit rename: the digit boundary makes rename_all's camelCase output
     // easy to second-guess, and the editor TypeScript hardcodes this name.
     #[serde(default, rename = "camera3dSegments")]
@@ -2795,6 +2797,16 @@ pub enum OverlayTrackKind {
     Mask,
     Image,
     Text,
+    Shape,
+}
+
+impl OverlayTrackKind {
+    /// Kinds every shipped build can parse. 0.6.2 and earlier fail to load a
+    /// project whose `overlayOrder` names any other kind, so newer kinds are
+    /// kept out of that field.
+    pub fn is_legacy(self) -> bool {
+        !matches!(self, Self::Shape)
+    }
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -2814,8 +2826,17 @@ pub struct ProjectConfiguration {
     pub cursor: CursorConfiguration,
     pub hotkeys: HotkeysConfiguration,
     pub timeline: Option<TimelineConfiguration>,
+    /// The saved stacking order, restricted to [`OverlayTrackKind::is_legacy`]
+    /// kinds so older builds can still open the project. Read and write the
+    /// order through [`ProjectConfiguration::overlay_order`] and
+    /// [`ProjectConfiguration::set_overlay_order`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub overlay_order: Vec<OverlayTrack>,
+    /// The full saved stacking order whenever it includes a newer track kind.
+    /// Builds that do not know this field drop it, and fall back to
+    /// `overlay_order`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub overlay_order_with_shapes: Vec<OverlayTrack>,
     pub captions: Option<CaptionsData>,
     pub keyboard: Option<KeyboardData>,
     pub clips: Vec<ClipConfiguration>,
@@ -2892,6 +2913,7 @@ impl Default for ProjectConfiguration {
             hotkeys: Default::default(),
             timeline: Default::default(),
             overlay_order: Vec::new(),
+            overlay_order_with_shapes: Vec::new(),
             captions: Default::default(),
             keyboard: Default::default(),
             clips: Default::default(),
@@ -2994,19 +3016,50 @@ impl ProjectConfiguration {
         preset.text_size_version = self.text_size_version;
         preset.text_anim_version = self.text_anim_version;
         preset.overlay_order = self.overlay_order.clone();
+        preset.overlay_order_with_shapes = self.overlay_order_with_shapes.clone();
         preset.clips = self.clips.clone();
         preset.markers = self.markers.clone();
         preset
     }
 
+    /// The saved overlay stacking order, top first.
+    pub fn overlay_order(&self) -> &[OverlayTrack] {
+        if self.overlay_order_with_shapes.is_empty() {
+            &self.overlay_order
+        } else {
+            &self.overlay_order_with_shapes
+        }
+    }
+
+    pub fn has_overlay_order(&self) -> bool {
+        !self.overlay_order().is_empty()
+    }
+
+    /// Saves `order`, writing the newer kinds only to the field older builds
+    /// ignore.
+    pub fn set_overlay_order(&mut self, order: Vec<OverlayTrack>) {
+        if order.iter().all(|track| track.kind.is_legacy()) {
+            self.overlay_order = order;
+            self.overlay_order_with_shapes.clear();
+        } else {
+            self.overlay_order = order
+                .iter()
+                .copied()
+                .filter(|track| track.kind.is_legacy())
+                .collect();
+            self.overlay_order_with_shapes = order;
+        }
+    }
+
     pub fn resolved_overlay_order(&self, available: &[OverlayTrack]) -> Vec<OverlayTrack> {
+        let saved = self.overlay_order();
         let mut ordered = Vec::with_capacity(available.len());
         for track in available {
-            if !self.overlay_order.contains(track) && !ordered.contains(track) {
+            if !saved.contains(track) && !ordered.contains(track) {
                 ordered.push(*track);
             }
         }
-        for track in &self.overlay_order {
+        for track in saved {
             if available.contains(track) && !ordered.contains(track) {
                 ordered.push(*track);
             }
@@ -3024,6 +3077,14 @@ impl ProjectConfiguration {
                 OverlayTrackKind::Text,
                 timeline
                     .text_segments
+                    .iter()
+                    .map(|segment| segment.track)
+                    .collect::<Vec<_>>(),
+            ),
+            (
+                OverlayTrackKind::Shape,
+                timeline
+                    .shape_segments
                     .iter()
                     .map(|segment| segment.track)
                     .collect::<Vec<_>>(),
@@ -3525,6 +3586,7 @@ mod tests {
             audio_segments: Vec::new(),
             style_segments: Vec::new(),
             image_segments: Vec::new(),
+            shape_segments: Vec::new(),
             camera3d_segments: Vec::new(),
         }
     }
@@ -5088,6 +5150,7 @@ mod tests {
                 audio_segments: Vec::new(),
                 style_segments: Vec::new(),
                 image_segments: Vec::new(),
+                shape_segments: Vec::new(),
                 camera3d_segments: Vec::new(),
             }),
             ..Default::default()
@@ -5197,6 +5260,7 @@ mod tests {
                 audio_segments: Vec::new(),
                 style_segments: Vec::new(),
                 image_segments: Vec::new(),
+                shape_segments: Vec::new(),
                 camera3d_segments: Vec::new(),
             }),
             ..Default::default()
@@ -5519,6 +5583,124 @@ mod overlay_order_tests {
             project.resolved_overlay_order(&[text, new_image, image]),
             [new_image, image, text]
         );
+    }
+
+    #[derive(serde::Deserialize, Debug, PartialEq)]
+    #[serde(rename_all = "camelCase")]
+    enum ShippedKind {
+        Mask,
+        Image,
+        Text,
+    }
+
+    #[derive(serde::Deserialize, Debug, PartialEq)]
+    struct ShippedTrack {
+        kind: ShippedKind,
+        track: u32,
+    }
+
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct ShippedProject {
+        #[serde(default)]
+        overlay_order: Vec<ShippedTrack>,
+    }
+
+    #[test]
+    fn shape_layers_stay_out_of_the_field_shipped_builds_parse() {
+        let text = layer(OverlayTrackKind::Text, 0);
+        let shape = layer(OverlayTrackKind::Shape, 0);
+        let image = layer(OverlayTrackKind::Image, 0);
+        let mut project = ProjectConfiguration::default();
+        project.set_overlay_order(vec![shape, text, image]);
+        assert_eq!(project.overlay_order, [text, image]);
+        assert_eq!(project.overlay_order(), [shape, text, image]);
+
+        let json = serde_json::to_string(&project).unwrap();
+        let shipped: ShippedProject = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            shipped.overlay_order,
+            [
+                ShippedTrack {
+                    kind: ShippedKind::Text,
+                    track: 0
+                },
+                ShippedTrack {
+                    kind: ShippedKind::Image,
+                    track: 0
+                }
+            ]
+        );
+
+        let restored: ProjectConfiguration = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            restored.resolved_overlay_order(&[text, shape, image]),
+            [shape, text, image]
+        );
+    }
+
+    #[test]
+    fn an_order_without_shapes_clears_the_shape_aware_copy() {
+        let text = layer(OverlayTrackKind::Text, 0);
+        let shape = layer(OverlayTrackKind::Shape, 0);
+        let image = layer(OverlayTrackKind::Image, 0);
+        let mut project = ProjectConfiguration::default();
+        project.set_overlay_order(vec![shape, text]);
+        project.set_overlay_order(vec![image, text]);
+        assert!(project.overlay_order_with_shapes.is_empty());
+        assert_eq!(project.overlay_order(), [image, text]);
+        let json = serde_json::to_value(&project).unwrap();
+        assert!(json.get("overlayOrderWithShapes").is_none());
+        project.set_overlay_order(Vec::new());
+        assert!(!project.has_overlay_order());
+    }
+
+    #[test]
+    fn shape_tracks_default_between_text_and_images() {
+        let project: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "timeline": {
+                "segments": [],
+                "zoomSegments": [],
+                "textSegments": [{"start": 0.0, "end": 1.0}],
+                "maskSegments": [{
+                    "start": 0.0, "end": 1.0, "maskType": "sensitive",
+                    "center": {"x": 0.5, "y": 0.5}, "size": {"x": 0.2, "y": 0.2}
+                }],
+                "shapeSegments": [{"start": 0.0, "end": 1.0}, {"start": 0.0, "end": 1.0, "track": 1}]
+            }
+        }))
+        .unwrap();
+        assert_eq!(
+            project.overlay_tracks(),
+            [
+                layer(OverlayTrackKind::Text, 0),
+                layer(OverlayTrackKind::Shape, 1),
+                layer(OverlayTrackKind::Shape, 0),
+                layer(OverlayTrackKind::Mask, 0),
+            ]
+        );
+    }
+
+    #[test]
+    fn projects_without_shapes_serialize_without_shape_fields() {
+        let project: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "timeline": {"segments": [], "zoomSegments": []}
+        }))
+        .unwrap();
+        assert!(project.timeline.as_ref().unwrap().shape_segments.is_empty());
+        let json = serde_json::to_value(&project).unwrap();
+        assert!(json["timeline"].get("shapeSegments").is_none());
+        assert!(json.get("overlayOrderWithShapes").is_none());
+    }
+
+    #[test]
+    fn preset_application_keeps_the_shape_aware_order() {
+        let shape = layer(OverlayTrackKind::Shape, 0);
+        let text = layer(OverlayTrackKind::Text, 0);
+        let mut current = ProjectConfiguration::default();
+        current.set_overlay_order(vec![text, shape]);
+        let applied = current.with_preset(ProjectConfiguration::default());
+        assert_eq!(applied.overlay_order(), [text, shape]);
     }
 }
 

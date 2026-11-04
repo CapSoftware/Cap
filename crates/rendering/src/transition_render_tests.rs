@@ -1,6 +1,7 @@
 use super::*;
 use cap_project::{
     BackgroundSource, ImageSegment, MaskKind, MaskSegment, OverlayTrack, OverlayTrackKind,
+    ShapeAnimation, ShapeKind, ShapeSegment,
 };
 
 const WIDTH: u32 = 160;
@@ -763,5 +764,69 @@ async fn a_masked_transition_over_a_translucent_background_draws_it_once() {
         let end = render_transition(&fixture, &sides, &cursor, kind, 1.0).await;
         let last = worst_pixel(&end, &incoming);
         assert!(last.0 <= 1, "{kind:?} at its last frame: {last:?}");
+    }
+}
+
+fn filled_shape(
+    kind: ShapeKind,
+    from: (f64, f64),
+    to: (f64, f64),
+    fill_opacity: f32,
+) -> ShapeSegment {
+    ShapeSegment {
+        start: 0.0,
+        end: 10.0,
+        kind,
+        from: XY::new(from.0, from.1),
+        to: XY::new(to.0, to.1),
+        stroke_width: 0.0,
+        fill: true,
+        fill_color: "#FFFFFF".to_string(),
+        fill_opacity,
+        corner_radius: 0.0,
+        shadow: 0.0,
+        animation_in: ShapeAnimation::None,
+        animation_out: ShapeAnimation::None,
+        ..Default::default()
+    }
+}
+
+#[tokio::test]
+async fn shapes_stay_on_top_and_draw_once_during_every_layered_transition() {
+    let mut fixture = fixture(false).await;
+    let mut project = (*fixture.project).clone();
+    if let Some(timeline) = project.timeline.as_mut() {
+        timeline.shape_segments = vec![
+            filled_shape(ShapeKind::Highlight, (0.0, 0.0), (0.1, 0.15), 0.5),
+            filled_shape(ShapeKind::Rectangle, (0.4, 0.4), (0.6, 0.6), 1.0),
+        ];
+    }
+    fixture.project = Arc::new(project);
+    let cursor = CursorEvents::default();
+    let sides = sides(&fixture, &cursor);
+
+    let plain = render_plain(&fixture, &sides.outgoing, &cursor).await;
+    let corner = pixel(&plain, 4, 4);
+    assert!(
+        corner[0] > 60 && corner[2] > 200,
+        "the half-white highlight tints the blue background: {corner:?}"
+    );
+    assert_close(
+        pixel(&plain, 80, 45),
+        [255, 255, 255, 255],
+        1,
+        "opaque shape",
+    );
+
+    for kind in ClipTransitionType::ALL
+        .into_iter()
+        .filter(|kind| !kind.dips())
+    {
+        for progress in [0.2, 0.5, 0.8] {
+            let frame = render_transition(&fixture, &sides, &cursor, kind, progress).await;
+            let context = format!("{kind:?} at {progress}");
+            assert_close(pixel(&frame, 80, 45), [255, 255, 255, 255], 1, &context);
+            assert_close(pixel(&frame, 4, 4), corner, 2, &context);
+        }
     }
 }

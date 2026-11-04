@@ -37,6 +37,7 @@ mod editor_hover_bench;
 mod editor_modal;
 mod editor_panels;
 mod editor_preparing;
+mod editor_shapes;
 mod editor_sidebar;
 mod editor_tabs;
 mod editor_timeline;

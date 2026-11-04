@@ -9,7 +9,7 @@ use super::{EditorWindow, POPOVER_WINDOW_INSET, PresetDialog};
 use crate::editor_panels::TextStyle;
 use crate::i18n::tr;
 use crate::style_presets::{
-    CaptionStyle, MaskStyle, PresetKind, PresetLibrary, PresetTarget, StylePresets,
+    CaptionStyle, MaskStyle, PresetKind, PresetLibrary, PresetTarget, ShapeStyle, StylePresets,
     StyleTrackStyle, apply_to_all, apply_to_items,
 };
 use crate::ui;
@@ -37,6 +37,10 @@ macro_rules! with_kind {
             }
             PresetKind::Style => {
                 type $S = StyleTrackStyle;
+                $body
+            }
+            PresetKind::Shape => {
+                type $S = ShapeStyle;
                 $body
             }
         }
@@ -136,6 +140,13 @@ fn kind_copy(kind: PresetKind) -> KindCopy {
             default_name: tr::editor::panel::style_presets::style::default_name(),
             apply_all: Some(tr::editor::panel::style_presets::style::apply_all),
             applied_all: Some(tr::editor::panel::style_presets::style::applied_all),
+        },
+        PresetKind::Shape => KindCopy {
+            use_for_new: tr::editor::panel::style_presets::shape::use_for_new(),
+            used_for_new: tr::editor::panel::style_presets::shape::used_for_new(),
+            default_name: tr::editor::panel::style_presets::shape::default_name(),
+            apply_all: Some(tr::editor::panel::style_presets::shape::apply_all),
+            applied_all: Some(tr::editor::panel::style_presets::shape::applied_all),
         },
     }
 }

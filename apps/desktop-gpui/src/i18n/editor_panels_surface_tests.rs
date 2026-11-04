@@ -7,6 +7,7 @@ pub(super) fn is_editor_panels_surface_key(key: &str) -> bool {
         "editor.color.",
         "editor.audio.",
         "editor.crop.",
+        "editor.shape.",
     ]
     .iter()
     .any(|prefix| key.starts_with(prefix))
@@ -20,6 +21,7 @@ const FORMATTED: &[&str] = &[
     "editor.panel.keyboard.title",
     "editor.panel.audio.title",
     "editor.panel.mask.title",
+    "editor.shape.title",
     "editor.panel.camera3d.shots",
     "editor.panel.camera3d.pose_start",
     "editor.panel.camera3d.pose_end",
@@ -34,6 +36,8 @@ const FORMATTED: &[&str] = &[
     "editor.panel.style_presets.font_missing",
     "editor.panel.style_presets.mask.applied_all",
     "editor.panel.style_presets.mask.apply_all",
+    "editor.panel.style_presets.shape.applied_all",
+    "editor.panel.style_presets.shape.apply_all",
     "editor.panel.style_presets.style.applied_all",
     "editor.panel.style_presets.style.apply_all",
     "editor.panel.style_presets.text_segment.applied_all",
@@ -915,6 +919,18 @@ fn editor_panels_match_the_literals_they_replaced() {
             "New style segments use this style",
         ),
         (
+            tr::editor::panel::style_presets::shape::default_name(),
+            "My shape style",
+        ),
+        (
+            tr::editor::panel::style_presets::shape::use_for_new(),
+            "Use for new shapes",
+        ),
+        (
+            tr::editor::panel::style_presets::shape::used_for_new(),
+            "New shapes use this style",
+        ),
+        (
             tr::editor::panel::style_presets::text_segment::default_name(),
             "My text style",
         ),
@@ -926,6 +942,37 @@ fn editor_panels_match_the_literals_they_replaced() {
             tr::editor::panel::style_presets::text_segment::used_for_new(),
             "New text uses this style",
         ),
+        (tr::editor::shape::stroke(), "Stroke"),
+        (tr::editor::shape::width(), "Width"),
+        (tr::editor::shape::fill(), "Fill"),
+        (tr::editor::shape::fill_opacity(), "Fill Opacity"),
+        (tr::editor::shape::corner_radius(), "Corner Radius"),
+        (tr::editor::shape::arrowhead(), "Arrowhead"),
+        (tr::editor::shape::number(), "Number"),
+        (tr::editor::shape::look(), "Look"),
+        (tr::editor::shape::shadow(), "Shadow"),
+        (tr::editor::shape::animation(), "Animation"),
+        (tr::editor::shape::draw(), "Draw a shape"),
+        (tr::editor::shape::toolbar(), "Shapes"),
+        (
+            tr::editor::shape::draw_hint(),
+            "Drag on the preview to draw. Click to place one.",
+        ),
+        (tr::editor::shape::decrease(), "Decrease"),
+        (tr::editor::shape::increase(), "Increase"),
+        (tr::editor::shape::kinds::arrow(), "Arrow"),
+        (tr::editor::shape::kinds::line(), "Line"),
+        (tr::editor::shape::kinds::rectangle(), "Rectangle"),
+        (tr::editor::shape::kinds::ellipse(), "Ellipse"),
+        (tr::editor::shape::kinds::highlight(), "Highlight"),
+        (tr::editor::shape::kinds::badge(), "Step"),
+        (tr::editor::shape::heads::filled(), "Filled"),
+        (tr::editor::shape::heads::open(), "Open"),
+        (tr::editor::shape::heads::double(), "Double"),
+        (tr::editor::shape::animations::none(), "None"),
+        (tr::editor::shape::animations::fade(), "Fade"),
+        (tr::editor::shape::animations::scale(), "Scale"),
+        (tr::editor::shape::animations::draw(), "Draw on"),
     ];
     for (translated, literal) in pairs {
         assert_eq!(translated, literal);
@@ -979,6 +1026,14 @@ fn style_preset_messages_format_their_arguments() {
         tr::editor::panel::style_presets::style::applied_all(3),
         "Applied to all style segments (3)"
     );
+    assert_eq!(
+        tr::editor::panel::style_presets::shape::apply_all(5),
+        "Apply to all shapes (5)"
+    );
+    assert_eq!(
+        tr::editor::panel::style_presets::shape::applied_all(5),
+        "Applied to all shapes (5)"
+    );
 }
 
 #[test]
@@ -1008,6 +1063,10 @@ fn editor_panel_messages_format_like_the_code_they_replaced() {
         assert_eq!(
             tr::editor::panel::mask::title(number),
             format!("Mask {}", index + 1)
+        );
+        assert_eq!(
+            tr::editor::shape::title(number),
+            format!("Shape {}", index + 1)
         );
         assert_eq!(
             tr::editor::crop::editing_style(number),

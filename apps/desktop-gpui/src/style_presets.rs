@@ -1,6 +1,8 @@
 use cap_project::{
     BackgroundConfiguration, Camera, CaptionSettings, CursorConfiguration, MaskKind, MaskSegment,
-    ProjectConfiguration, StyleOverrides,
+    ProjectConfiguration, SHAPE_MAX_ANIMATION_DURATION, SHAPE_MAX_CORNER_RADIUS,
+    SHAPE_MAX_STROKE_WIDTH, ShapeAnimation, ShapeArrowHead, ShapeKind, ShapeSegment,
+    StyleOverrides,
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value, json};
@@ -22,6 +24,7 @@ pub enum PresetKind {
     Mask,
     Captions,
     Style,
+    Shape,
 }
 
 impl PresetKind {
@@ -31,6 +34,7 @@ impl PresetKind {
             Self::Mask => "mask",
             Self::Captions => "captions",
             Self::Style => "style",
+            Self::Shape => "shape",
         }
     }
 }
@@ -619,6 +623,105 @@ impl PresetStyle for MaskStyle {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ShapeStyle {
+    pub stroke_color: String,
+    pub stroke_width: f32,
+    pub fill: bool,
+    pub fill_color: String,
+    pub fill_opacity: f32,
+    pub corner_radius: f32,
+    pub arrow_head: ShapeArrowHead,
+    pub shadow: f32,
+    pub opacity: f32,
+    pub animation_in: ShapeAnimation,
+    pub animation_out: ShapeAnimation,
+    pub animation_in_duration: f64,
+    pub animation_out_duration: f64,
+}
+
+impl Default for ShapeStyle {
+    fn default() -> Self {
+        Self::of(&ShapeSegment::default())
+    }
+}
+
+impl ShapeStyle {
+    pub fn of(segment: &ShapeSegment) -> Self {
+        Self {
+            stroke_color: segment.stroke_color.clone(),
+            stroke_width: segment.stroke_width,
+            fill: segment.fill,
+            fill_color: segment.fill_color.clone(),
+            fill_opacity: segment.fill_opacity,
+            corner_radius: segment.corner_radius,
+            arrow_head: segment.arrow_head,
+            shadow: segment.shadow,
+            opacity: segment.opacity,
+            animation_in: segment.animation_in,
+            animation_out: segment.animation_out,
+            animation_in_duration: segment.animation_in_duration,
+            animation_out_duration: segment.animation_out_duration,
+        }
+    }
+
+    pub fn apply_to(&self, segment: &mut ShapeSegment) -> bool {
+        let previous = Self::of(segment);
+        segment.stroke_color = self.stroke_color.clone();
+        segment.stroke_width = self.stroke_width;
+        segment.fill = self.fill || matches!(segment.kind, ShapeKind::Highlight | ShapeKind::Badge);
+        segment.fill_color = self.fill_color.clone();
+        segment.fill_opacity = self.fill_opacity;
+        segment.corner_radius = self.corner_radius;
+        segment.arrow_head = self.arrow_head;
+        segment.shadow = self.shadow;
+        segment.opacity = self.opacity;
+        segment.animation_in = self.animation_in;
+        segment.animation_out = self.animation_out;
+        segment.animation_in_duration = self.animation_in_duration;
+        segment.animation_out_duration = self.animation_out_duration;
+        Self::of(segment) != previous
+    }
+}
+
+impl PresetStyle for ShapeStyle {
+    const KIND: PresetKind = PresetKind::Shape;
+
+    fn sanitize(&mut self) {
+        let fallback = Self::default();
+        valid_color(&mut self.stroke_color, &fallback.stroke_color);
+        valid_color(&mut self.fill_color, &fallback.fill_color);
+        self.stroke_width = finite_f32(
+            self.stroke_width,
+            fallback.stroke_width,
+            0.,
+            SHAPE_MAX_STROKE_WIDTH,
+        );
+        self.fill_opacity = finite_f32(self.fill_opacity, fallback.fill_opacity, 0., 1.);
+        self.corner_radius = finite_f32(
+            self.corner_radius,
+            fallback.corner_radius,
+            0.,
+            SHAPE_MAX_CORNER_RADIUS,
+        );
+        self.shadow = finite_f32(self.shadow, fallback.shadow, 0., 1.);
+        self.opacity = finite_f32(self.opacity, fallback.opacity, 0., 1.);
+        self.animation_in_duration = finite_f64(
+            self.animation_in_duration,
+            fallback.animation_in_duration,
+            0.,
+            SHAPE_MAX_ANIMATION_DURATION,
+        );
+        self.animation_out_duration = finite_f64(
+            self.animation_out_duration,
+            fallback.animation_out_duration,
+            0.,
+            SHAPE_MAX_ANIMATION_DURATION,
+        );
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct CaptionStyle(pub CaptionSettings);
@@ -758,6 +861,7 @@ pub struct PresetLibrary {
     pub mask: StylePresets<MaskStyle>,
     pub captions: StylePresets<CaptionStyle>,
     pub style: StylePresets<StyleTrackStyle>,
+    pub shape: StylePresets<ShapeStyle>,
 }
 
 impl PresetLibrary {
@@ -771,6 +875,7 @@ impl PresetLibrary {
             mask: StylePresets::from_section(section),
             captions: StylePresets::from_section(section),
             style: StylePresets::from_section(section),
+            shape: StylePresets::from_section(section),
         }
     }
 }
@@ -925,6 +1030,36 @@ impl PresetTarget for StyleTrackStyle {
     }
 }
 
+impl PresetTarget for ShapeStyle {
+    fn presets(library: &PresetLibrary) -> &StylePresets<Self> {
+        &library.shape
+    }
+
+    fn presets_mut(library: &mut PresetLibrary) -> &mut StylePresets<Self> {
+        &mut library.shape
+    }
+
+    fn count(project: &ProjectConfiguration) -> usize {
+        project
+            .timeline
+            .as_ref()
+            .map_or(0, |timeline| timeline.shape_segments.len())
+    }
+
+    fn read(project: &ProjectConfiguration, index: usize) -> Option<Self> {
+        let segment = project.timeline.as_ref()?.shape_segments.get(index)?;
+        Some(Self::of(segment))
+    }
+
+    fn write(&self, project: &mut ProjectConfiguration, index: usize) -> bool {
+        project
+            .timeline
+            .as_mut()
+            .and_then(|timeline| timeline.shape_segments.get_mut(index))
+            .is_some_and(|segment| self.apply_to(segment))
+    }
+}
+
 pub fn apply_to_items<S: PresetTarget>(
     project: &mut ProjectConfiguration,
     indices: &[usize],
@@ -960,6 +1095,20 @@ pub fn new_text_segment(start: f64, end: f64, track: u32) -> cap_project::TextSe
 pub fn new_mask_segment(start: f64, end: f64, track: u32) -> MaskSegment {
     let mut segment = crate::editor_edits::default_mask_segment(start, end, track);
     if let Some(style) = default_style::<MaskStyle>() {
+        style.apply_to(&mut segment);
+    }
+    segment
+}
+
+pub fn new_shape_segment(
+    kind: ShapeKind,
+    start: f64,
+    end: f64,
+    center: cap_project::XY<f64>,
+    aspect: f64,
+) -> ShapeSegment {
+    let mut segment = ShapeSegment::new(kind, start, end, center, aspect);
+    if let Some(style) = default_style::<ShapeStyle>() {
         style.apply_to(&mut segment);
     }
     segment
@@ -1714,5 +1863,167 @@ mod tests {
         assert_eq!(applied.size, 80);
         assert_eq!(applied.filler_language.as_deref(), Some("en"));
         assert!(applied.show_filler_words);
+    }
+
+    fn blue_outline() -> ShapeStyle {
+        ShapeStyle {
+            stroke_color: "#2563EB".to_string(),
+            stroke_width: 10.,
+            fill: false,
+            fill_color: "#93C5FD".to_string(),
+            fill_opacity: 0.5,
+            corner_radius: 4.,
+            arrow_head: ShapeArrowHead::Open,
+            shadow: 0.,
+            opacity: 0.8,
+            animation_in: ShapeAnimation::Scale,
+            animation_out: ShapeAnimation::None,
+            animation_in_duration: 0.6,
+            animation_out_duration: 0.,
+        }
+    }
+
+    fn project_with_shapes(kinds: &[ShapeKind]) -> ProjectConfiguration {
+        let mut project = timeline_project();
+        project.timeline.as_mut().unwrap().shape_segments = kinds
+            .iter()
+            .enumerate()
+            .map(|(index, kind)| {
+                let mut shape = ShapeSegment::new(
+                    *kind,
+                    index as f64,
+                    index as f64 + 2.,
+                    XY::new(0.3, 0.6),
+                    16. / 9.,
+                );
+                shape.track = index as u32;
+                shape.number = index as u32 + 1;
+                shape
+            })
+            .collect();
+        project
+    }
+
+    #[test]
+    fn shape_styles_carry_the_look_but_not_kind_geometry_timing_or_number() {
+        let mut project = project_with_shapes(&[ShapeKind::Arrow, ShapeKind::Rectangle]);
+        let before = project.timeline.as_ref().unwrap().shape_segments.clone();
+        assert!(apply_to_all(&mut project, &blue_outline()));
+        let after = &project.timeline.as_ref().unwrap().shape_segments;
+        for (old, new) in before.iter().zip(after) {
+            assert_eq!(ShapeStyle::of(new), blue_outline());
+            assert_eq!(new.kind, old.kind);
+            assert_eq!((new.from, new.to), (old.from, old.to));
+            assert_eq!(
+                (new.start, new.end, new.track),
+                (old.start, old.end, old.track)
+            );
+            assert_eq!(new.number, old.number);
+        }
+        assert!(!apply_to_all(&mut project, &blue_outline()));
+        assert_eq!(ShapeStyle::read(&project, 1).unwrap(), blue_outline());
+        assert_eq!(ShapeStyle::count(&project), 2);
+    }
+
+    #[test]
+    fn highlights_and_badges_keep_their_fill_under_an_outline_style() {
+        let mut project =
+            project_with_shapes(&[ShapeKind::Highlight, ShapeKind::Badge, ShapeKind::Ellipse]);
+        assert!(apply_to_all(&mut project, &blue_outline()));
+        let shapes = &project.timeline.as_ref().unwrap().shape_segments;
+        assert!(shapes[0].fill);
+        assert!(shapes[1].fill);
+        assert!(!shapes[2].fill);
+        assert_eq!(shapes[0].fill_color, "#93C5FD");
+        assert!(!apply_to_all(&mut project, &blue_outline()));
+    }
+
+    #[test]
+    fn applying_a_shape_style_to_a_selection_leaves_the_rest_alone() {
+        let mut project =
+            project_with_shapes(&[ShapeKind::Arrow, ShapeKind::Line, ShapeKind::Rectangle]);
+        let untouched = project.timeline.as_ref().unwrap().shape_segments[1].clone();
+        assert!(apply_to_items(&mut project, &[0, 2, 9], &blue_outline()));
+        let shapes = &project.timeline.as_ref().unwrap().shape_segments;
+        assert_eq!(ShapeStyle::of(&shapes[0]), blue_outline());
+        assert_eq!(shapes[1], untouched);
+        assert_eq!(ShapeStyle::of(&shapes[2]), blue_outline());
+    }
+
+    #[test]
+    fn hostile_shape_styles_are_clamped_to_the_inspector_ranges() {
+        let mut style = ShapeStyle {
+            stroke_color: "not a colour".to_string(),
+            stroke_width: f32::NAN,
+            fill_color: "#12".to_string(),
+            fill_opacity: 9.,
+            corner_radius: -5.,
+            shadow: f32::INFINITY,
+            opacity: -1.,
+            animation_in_duration: 1e9,
+            animation_out_duration: f64::NAN,
+            ..blue_outline()
+        };
+        style.sanitize();
+        let fallback = ShapeStyle::default();
+        assert_eq!(style.stroke_color, fallback.stroke_color);
+        assert_eq!(style.fill_color, fallback.fill_color);
+        assert_eq!(style.stroke_width, fallback.stroke_width);
+        assert_eq!(style.fill_opacity, 1.);
+        assert_eq!(style.corner_radius, 0.);
+        assert_eq!(style.shadow, fallback.shadow);
+        assert_eq!(style.opacity, 0.);
+        assert_eq!(style.animation_in_duration, SHAPE_MAX_ANIMATION_DURATION);
+        assert_eq!(
+            style.animation_out_duration,
+            fallback.animation_out_duration
+        );
+
+        let mut wide = ShapeStyle {
+            stroke_width: 500.,
+            corner_radius: 5000.,
+            ..blue_outline()
+        };
+        wide.sanitize();
+        assert_eq!(wide.stroke_width, SHAPE_MAX_STROKE_WIDTH);
+        assert_eq!(wide.corner_radius, SHAPE_MAX_CORNER_RADIUS);
+    }
+
+    #[test]
+    fn shape_presets_round_trip_and_new_shapes_start_from_the_default() {
+        let store = TempStore::new(None);
+        let plain = new_shape_segment(ShapeKind::Rectangle, 1., 3., XY::new(0.5, 0.5), 16. / 9.);
+        assert_eq!(
+            ShapeStyle::of(&plain),
+            ShapeStyle::of(&ShapeSegment::new(
+                ShapeKind::Rectangle,
+                1.,
+                3.,
+                XY::new(0.5, 0.5),
+                16. / 9.
+            ))
+        );
+
+        StylePresets::<ShapeStyle>::update(|presets| {
+            presets.make_default_from(blue_outline(), "Mine")
+        })
+        .unwrap();
+        assert_eq!(
+            store.read()["stylePresets"]["shape"]["presets"][0]["style"]["strokeColor"],
+            "#2563EB"
+        );
+        let library = PresetLibrary::load();
+        assert_eq!(library.shape.default_style(), Some(&blue_outline()));
+        assert!(library.mask.is_empty());
+
+        let shape = new_shape_segment(ShapeKind::Ellipse, 4., 6., XY::new(0.25, 0.75), 16. / 9.);
+        assert_eq!(ShapeStyle::of(&shape), blue_outline());
+        assert_eq!(
+            (shape.start, shape.end, shape.kind),
+            (4., 6., ShapeKind::Ellipse)
+        );
+        let badge = new_shape_segment(ShapeKind::Badge, 0., 2., XY::new(0.5, 0.5), 16. / 9.);
+        assert!(badge.fill);
+        assert_eq!(badge.stroke_color, "#2563EB");
     }
 }

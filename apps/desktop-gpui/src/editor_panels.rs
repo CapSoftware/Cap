@@ -2724,6 +2724,7 @@ pub fn mask_effect_amount(segment: &MaskSegment) -> f64 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PanelSlider {
     Image(ImageProperty),
+    Shape(crate::editor_shapes::ShapeProperty),
     StyleCameraOnlyPadding,
     ZoomAmount,
     /// The multi-zoom panel's single Amount slider, which writes every selected
@@ -3422,6 +3423,11 @@ segment_editor!(
     KeyboardTrackSegment
 );
 segment_editor!(edit_mask_segment, mask_segments, MaskSegment);
+segment_editor!(
+    edit_shape_segment,
+    shape_segments,
+    cap_project::ShapeSegment
+);
 segment_editor!(edit_scene_segment, scene_segments, SceneSegment);
 segment_editor!(edit_zoom_segment, zoom_segments, ZoomSegment);
 segment_editor!(edit_camera3d_segment, camera3d_segments, Camera3DSegment);
@@ -3438,6 +3444,7 @@ impl EditorWindow {
     pub(crate) fn panel_slider_limits(&self, slider: PanelSlider, index: usize) -> (f32, f32, f32) {
         match slider {
             PanelSlider::Image(property) => property.limits(),
+            PanelSlider::Shape(property) => property.limits(),
             PanelSlider::StyleCameraOnlyPadding => (0., 40., 1.),
             // `minValue={1} maxValue={4.5} step={0.001}` (`:5601-5603`).
             PanelSlider::ZoomAmount | PanelSlider::ZoomAmountAll => (1., 4.5, 0.001),
@@ -3489,6 +3496,10 @@ impl EditorWindow {
         match slider {
             PanelSlider::Image(property) => timeline
                 .image_segments
+                .get(index)
+                .map_or(0., |segment| property.read(segment)),
+            PanelSlider::Shape(property) => timeline
+                .shape_segments
                 .get(index)
                 .map_or(0., |segment| property.read(segment)),
             PanelSlider::StyleCameraOnlyPadding => timeline
@@ -3635,6 +3646,11 @@ impl EditorWindow {
                 self.edit_image_segment("image-transform", index, window, cx, move |segment| {
                     property.write(segment, value);
                     true
+                })
+            }
+            PanelSlider::Shape(property) => {
+                self.edit_shape_segment("shape-slider", index, window, cx, move |segment| {
+                    property.write(segment, value)
                 })
             }
             PanelSlider::StyleCameraOnlyPadding => {
@@ -4266,6 +4282,14 @@ impl EditorWindow {
                 count(timeline.mask_segments.len()),
                 cx,
                 |this, index, cx| this.render_mask_panel(index, cx),
+            ),
+            TrackKind::Shape => self.stacked_panel(
+                "shape",
+                "shape",
+                Some(crate::style_presets::PresetKind::Shape),
+                count(timeline.shape_segments.len()),
+                cx,
+                |this, index, cx| this.render_shape_panel(index, cx),
             ),
             TrackKind::Keyboard => self.stacked_panel(
                 "keyboard",
@@ -8356,6 +8380,14 @@ impl EditorWindow {
                             }
                             if segment.stroke_width > 0. {
                                 colors.push(ColorTarget::TextStroke(index));
+                            }
+                        }
+                    }
+                    TrackKind::Shape => {
+                        for index in indices(timeline.shape_segments.len()) {
+                            colors.push(ColorTarget::ShapeStroke(index));
+                            if timeline.shape_segments[index].fill {
+                                colors.push(ColorTarget::ShapeFill(index));
                             }
                         }
                     }
