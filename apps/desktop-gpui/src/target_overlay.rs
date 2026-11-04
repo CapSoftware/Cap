@@ -1632,6 +1632,7 @@ impl OverlayWindow {
         let native = crate::overlay_backdrop::native(window);
         let display = self.display_id.clone();
         let started = Instant::now();
+        let captured_display_size = self.display_size;
         let overlay_window = window.window_handle();
         cx.spawn(async move |this, cx| {
             let camera = cx.update(|cx| {
@@ -1659,7 +1660,7 @@ impl OverlayWindow {
                     )
                 });
                 this.backdrop_capture_crop = this.crop;
-                this.backdrop_display_size = image.as_ref().map(|_| size);
+                this.backdrop_display_size = image.as_ref().map(|_| captured_display_size);
                 this.backdrop.set_image(
                     image,
                     gpui::Bounds::new(
