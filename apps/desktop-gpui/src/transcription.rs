@@ -910,7 +910,16 @@ async fn download_aligner(path: &Path) -> Result<(), String> {
 /// The aligner, downloaded on first use when given a `runtime` to download
 /// on. `None` when it cannot be had now: not downloaded yet and no
 /// `runtime`, offline, or a platform without ONNX Runtime.
-fn load_word_aligner(runtime: Option<&tokio::runtime::Handle>) -> Option<align::AcousticPool> {
+#[derive(Debug, Clone, Copy)]
+enum AlignerUse {
+    AlongsideRecognition,
+    AfterRecognition,
+}
+
+fn load_word_aligner(
+    runtime: Option<&tokio::runtime::Handle>,
+    usage: AlignerUse,
+) -> Option<align::AcousticPool> {
     if !supports_parakeet() {
         return None;
     }
@@ -927,9 +936,12 @@ fn load_word_aligner(runtime: Option<&tokio::runtime::Handle>) -> Option<align::
             }
         }
     }
-    align::AcousticPool::load(&path)
-        .inspect_err(|error| tracing::warn!("{error}"))
-        .ok()
+    match usage {
+        AlignerUse::AlongsideRecognition => align::AcousticPool::load(&path),
+        AlignerUse::AfterRecognition => align::AcousticPool::load_alone(&path),
+    }
+    .inspect_err(|error| tracing::warn!("{error}"))
+    .ok()
 }
 
 fn aligns_words_in(language: &str, groups: &[Vec<CaptionWord>]) -> bool {
@@ -953,16 +965,20 @@ fn transcript_is_english<'a>(
     matches!(language, "en" | "auto") && cap_project::caption_words::reads_as_english(words)
 }
 
-/// Runs `recognize` while an already downloaded word aligner (`ready`) hears
-/// the recording on the cores recognition leaves free, then finishes the
-/// words with what it heard. Hearing stops early once the words turn out not
-/// to be English. Only then, if no aligner was ready, is one `fetch`ed, so a
-/// first download never delays a transcript that will not be aligned.
+/// Runs `recognize` and finishes its words with the word aligner.
+///
+/// With `overlap` (Parakeet, which leaves most cores idle) an already
+/// downloaded aligner (`ready`) hears the whole recording while recognition
+/// runs, and stops early once the words turn out not to be English. Whisper
+/// keeps the cores busy, so without `overlap` the aligner only hears the
+/// windows around the words, after recognition. Either way a first download
+/// (`fetch`) waits until the words read as English.
 fn recognize_and_finish<A: align::Emissions + Send>(
     samples: &[f32],
     language: &str,
     options: &VerbatimOptions,
     tuning: &Tuning,
+    overlap: bool,
     ready: impl FnOnce() -> Option<A> + Send,
     fetch: impl FnOnce() -> Option<A>,
     recognize: impl FnOnce() -> Result<Vec<Vec<CaptionWord>>, String>,
@@ -971,7 +987,8 @@ fn recognize_and_finish<A: align::Emissions + Send>(
     let may_align = options.align_words && matches!(language, "en" | "auto");
     std::thread::scope(|scope| {
         let stop = &stop;
-        let hearing = may_align.then(|| scope.spawn(move || hear_with(samples, ready, stop)));
+        let hearing =
+            (overlap && may_align).then(|| scope.spawn(move || hear_with(samples, ready, stop)));
         let groups = recognize();
         let aligns = may_align
             && groups
@@ -980,21 +997,23 @@ fn recognize_and_finish<A: align::Emissions + Send>(
         if !aligns {
             stop.store(true, Ordering::Relaxed);
         }
-        let heard = hearing.and_then(|hearing| hearing.join().ok()).flatten();
-        let mut heard = match heard {
-            Some(heard) => Some(heard),
-            None if aligns => hear_with(samples, fetch, stop),
-            None => None,
+        let mut heard = hearing.and_then(|hearing| hearing.join().ok()).flatten();
+        let mut fetched = None;
+        if heard.is_none() && aligns {
+            if overlap {
+                heard = hear_with(samples, fetch, stop);
+            } else {
+                fetched = fetch();
+            }
+        }
+        let aligner = match (heard.as_mut(), fetched.as_mut()) {
+            (Some(heard), _) => Some(heard as &mut dyn align::Emissions),
+            (None, Some(fetched)) => Some(fetched as &mut dyn align::Emissions),
+            (None, None) => None,
         }
         .filter(|_| aligns);
         Ok(finish_words_tuned(
-            groups?,
-            samples,
-            options,
-            heard
-                .as_mut()
-                .map(|heard| heard as &mut dyn align::Emissions),
-            tuning,
+            groups?, samples, options, aligner, tuning,
         ))
     })
 }
@@ -2104,8 +2123,18 @@ pub fn transcribe_blocking(
                 language,
                 &options,
                 &TUNING,
-                || load_word_aligner(None),
-                || load_word_aligner(runtime.as_ref()),
+                is_parakeet_model(model),
+                || load_word_aligner(None, AlignerUse::AlongsideRecognition),
+                || {
+                    load_word_aligner(
+                        runtime.as_ref(),
+                        if is_parakeet_model(model) {
+                            AlignerUse::AlongsideRecognition
+                        } else {
+                            AlignerUse::AfterRecognition
+                        },
+                    )
+                },
                 || {
                     if is_parakeet_model(model) {
                         tracing::info!("Using Parakeet TDT engine");
@@ -3110,6 +3139,7 @@ mod tests {
                 "auto",
                 &options,
                 &TUNING,
+                true,
                 || None,
                 || {
                     fetches.set(fetches.get() + 1);

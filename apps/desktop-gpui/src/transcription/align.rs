@@ -255,6 +255,10 @@ impl Acoustic {
     pub fn load(_path: &std::path::Path) -> Result<Self, String> {
         Err("The word aligner is not available on Intel macOS".to_string())
     }
+
+    pub fn load_alone(path: &std::path::Path) -> Result<Self, String> {
+        Self::load(path)
+    }
 }
 
 #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
@@ -283,7 +287,7 @@ impl Acoustic {
             .map_err(|error| failed(&error))?
             .with_inter_op_spinning(false)
             .map_err(|error| failed(&error))?
-            .with_intra_threads(threads.max(1))
+            .with_intra_threads(threads)
             .map_err(|error| failed(&error))?
             .with_prepacked_weights(shared)
             .map_err(|error| failed(&error))?
@@ -341,7 +345,13 @@ impl AcousticPool {
         Self::load_sized(path, count, spare / count)
     }
 
-    /// The sessions share one copy of the prepacked weights.
+    /// One session on every core, for when nothing else is running.
+    pub fn load_alone(path: &std::path::Path) -> Result<Self, String> {
+        Self::load_sized(path, 1, 0)
+    }
+
+    /// The sessions share one copy of the prepacked weights. Zero `threads`
+    /// leaves the count to ONNX Runtime.
     pub fn load_sized(
         path: &std::path::Path,
         count: usize,

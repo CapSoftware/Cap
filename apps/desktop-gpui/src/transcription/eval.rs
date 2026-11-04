@@ -689,13 +689,20 @@ mod run {
             write_wav_16k(&wav, &normalized)?;
             let input = read_wav_16k_mono(&wav)?;
             let mut raw = Vec::new();
+            let overlap = !matches!(self, Self::Whisper(_));
+            let (ready, fetch) = if overlap {
+                (aligner, None)
+            } else {
+                (None, aligner)
+            };
             let finished = recognize_and_finish(
                 &input,
                 &language(),
                 options,
                 &tuning(),
-                || aligner,
-                || None,
+                overlap,
+                move || ready,
+                move || fetch,
                 || {
                     let groups = match self {
                         Self::Whisper(model) => {
@@ -787,9 +794,10 @@ mod run {
         ))
         .expect("wav");
         let started = Instant::now();
-        let mut pool = load_aligner(Path::new(
-            &std::env::var("CAP_EVAL_ALIGNER").expect("CAP_EVAL_ALIGNER"),
-        ));
+        let mut pool = load_aligner(
+            Path::new(&std::env::var("CAP_EVAL_ALIGNER").expect("CAP_EVAL_ALIGNER")),
+            false,
+        );
         let loaded = started.elapsed().as_secs_f64();
         let heard = align::Heard::hear(&samples, &mut pool, &AtomicBool::new(false))
             .expect("emissions")
@@ -804,7 +812,7 @@ mod run {
         );
     }
 
-    fn load_aligner(path: &Path) -> align::AcousticPool {
+    fn load_aligner(path: &Path, alone: bool) -> align::AcousticPool {
         #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
         if let Ok(sessions) = std::env::var("CAP_EVAL_ALIGNER_SESSIONS") {
             let threads = std::env::var("CAP_EVAL_ALIGNER_THREADS")
@@ -818,7 +826,12 @@ mod run {
             )
             .expect("word aligner loads");
         }
-        align::AcousticPool::load(path).expect("word aligner loads")
+        if alone {
+            align::AcousticPool::load_alone(path)
+        } else {
+            align::AcousticPool::load(path)
+        }
+        .expect("word aligner loads")
     }
 
     #[test]
@@ -837,7 +850,7 @@ mod run {
         let mut aligner = std::env::var("CAP_EVAL_ALIGNER")
             .ok()
             .filter(|_| options.align_words)
-            .map(|path| load_aligner(Path::new(&path)));
+            .map(|path| load_aligner(Path::new(&path), matches!(engine, Engine::Whisper(_))));
         let load_seconds = load_started.elapsed().as_secs_f64();
         let mut rows = Vec::new();
         let mut summaries = BTreeMap::new();
