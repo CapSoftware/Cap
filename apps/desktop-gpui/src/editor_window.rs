@@ -11078,9 +11078,7 @@ impl EditorWindow {
     fn render_preview_canvas(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let body = match (&self.state, self.latest_frame.is_some()) {
-            (LoadState::Failed(message), _) => {
-                self.render_error_state(message, cx).into_any_element()
-            }
+            (LoadState::Failed(message), _) => self.render_error_state(message).into_any_element(),
             (_, true) => loading::reveal(
                 "editor-preview-ready",
                 self.preview
@@ -11116,9 +11114,8 @@ impl EditorWindow {
 
     /// `EditorErrorScreen` -- what a bundle that will not open shows instead of
     /// the canvas.
-    fn render_error_state(&self, message: &str, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_error_state(&self, message: &str) -> impl IntoElement {
         let theme = self.theme;
-        let can_fix = crate::repair::availability::fix_enabled();
         div()
             .absolute()
             .inset_0()
@@ -11155,43 +11152,6 @@ impl EditorWindow {
                     .text_color(Hsla::from(theme.editor.text_3))
                     .child(SharedString::from(self.project_path.display().to_string())),
             )
-            .when(can_fix, |this| {
-                let message = message.to_string();
-                this.child(
-                    div().mt(px(4.)).child(
-                        ui::Button::plain(
-                            &theme,
-                            "editor-fix-recording",
-                            ui::ButtonVariant::Primary,
-                            ui::ButtonSize::Sm,
-                        )
-                        .label(tr::repair::fix_recording())
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            let project_path = this.project_path.clone();
-                            let display_name =
-                                cap_project::RecordingMeta::load_for_project(&project_path)
-                                    .map(|meta| meta.pretty_name)
-                                    .ok()
-                                    .filter(|name| !name.trim().is_empty())
-                                    .or_else(|| {
-                                        project_path
-                                            .file_stem()
-                                            .map(|stem| stem.to_string_lossy().into_owned())
-                                    })
-                                    .unwrap_or_default();
-                            crate::app_windows::open_repair_window(
-                                crate::repair::RepairRequest {
-                                    project_path,
-                                    operation: crate::repair::RepairOperation::Open,
-                                    error_message: message.clone(),
-                                    display_name,
-                                },
-                                cx,
-                            );
-                        })),
-                    ),
-                )
-            })
     }
 
     /// One of the transport's two zoom glyphs. `factor` is the multiplier the

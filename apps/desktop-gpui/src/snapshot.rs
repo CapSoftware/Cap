@@ -10,7 +10,6 @@ use gpui::App;
 
 pub fn arm_from_env(cx: &mut App) {
     crate::permission_guide::preview_from_env(cx);
-    crate::repair::window::preview_from_env(cx);
     let Ok(spec) = std::env::var("CAP_GPUI_SNAPSHOT") else {
         return;
     };
@@ -36,11 +35,6 @@ pub fn arm_from_env(cx: &mut App) {
                 let target = std::env::var("CAP_GPUI_SNAPSHOT_WINDOW").unwrap_or_default();
                 let handle = if target == "guide" {
                     crate::permission_guide::window_handle(cx)
-                } else if target == "repair" {
-                    cx.global::<crate::app_windows::AppWindows>()
-                        .repairs
-                        .first()
-                        .map(|(_, handle)| (*handle).into())
                 } else if target == "main" {
                     Some(cx.global::<crate::app_windows::AppWindows>().main.into())
                 } else {
