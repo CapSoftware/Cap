@@ -388,29 +388,35 @@ pub fn render_thumbnail_slot(
     };
 
     let black = |alpha: f32| hsla(0., 0., 0., alpha);
-    // The inner corner radius: the card is `rounded(8.)` with a 1px border.
-    const TOP_RADIUS: f32 = 7.;
+    const RADIUS: f32 = 8.;
+    let glass = |light: f32, dark: f32| {
+        if theme.is_dark() {
+            hsla(0., 0., 1., dark)
+        } else {
+            hsla(0., 0., 0., light)
+        }
+    };
 
     div()
         .relative()
         .w_full()
-        .h(px(76.))
+        .h(px(84.))
         .overflow_hidden()
-        .rounded_t(px(TOP_RADIUS))
-        .bg(theme.body_fill(4))
+        .rounded(px(RADIUS))
+        .bg(glass(0.04, 0.08))
         .child(match thumb.image {
             Some(image) => img(image)
                 .size_full()
                 .object_fit(gpui::ObjectFit::Cover)
-                .rounded_t(px(TOP_RADIUS))
+                .rounded(px(RADIUS))
                 .into_any_element(),
             None => div()
                 .flex()
                 .size_full()
                 .items_center()
                 .justify_center()
-                .rounded_t(px(TOP_RADIUS))
-                .bg(theme.body_fill(4))
+                .rounded(px(RADIUS))
+                .bg(glass(0.04, 0.08))
                 .child(
                     // `svg()` does not inherit `text_color`; the fallback icon
                     // has to set its own or it paints black.
@@ -429,7 +435,7 @@ pub fn render_thumbnail_slot(
                     .flex()
                     .items_center()
                     .justify_center()
-                    .rounded_t(px(TOP_RADIUS))
+                    .rounded(px(RADIUS))
                     .bg(black(0.45))
                     .child(
                         img(app_icon)
@@ -448,10 +454,9 @@ pub fn render_thumbnail_slot(
             div()
                 .absolute()
                 .inset_0()
-                .rounded_t(px(TOP_RADIUS))
+                .rounded(px(RADIUS))
                 .border_1()
-                // `border-black/5` under `opacity-60`.
-                .border_color(black(0.03)),
+                .border_color(glass(0.08, 0.1)),
         )
         .child(
             div()
@@ -460,6 +465,7 @@ pub fn render_thumbnail_slot(
                 .left_0()
                 .right_0()
                 .h(px(40.))
+                .rounded_b(px(RADIUS))
                 .bg(linear_gradient(
                     0.,
                     linear_color_stop(black(0.4), 0.),
@@ -669,6 +675,11 @@ async fn capture_windows_inner(
     events: flume::Sender<WindowEvent>,
     current: HashMap<String, CapturedWindow>,
 ) {
+    #[cfg(target_os = "windows")]
+    let mut window_cache = scap_targets::platform::WindowListCache::default();
+    #[cfg(target_os = "windows")]
+    let targets = crate::devices::list_window_targets_inner(&mut window_cache);
+    #[cfg(not(target_os = "windows"))]
     let targets = crate::devices::list_window_targets();
     let total = targets.len();
     let mut captured = 0usize;
@@ -716,7 +727,11 @@ async fn capture_windows_inner(
             return;
         };
         let image = capture.map(crate::library::rgba_to_render_image);
-        let app_icon = window.app_icon().filter(|bytes| !bytes.is_empty());
+        #[cfg(target_os = "windows")]
+        let app_icon = window_cache.app_icon(&window);
+        #[cfg(not(target_os = "windows"))]
+        let app_icon = window.app_icon();
+        let app_icon = app_icon.filter(|bytes| !bytes.is_empty());
         if image.is_some() {
             captured += 1;
         }

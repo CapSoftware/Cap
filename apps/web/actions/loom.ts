@@ -135,12 +135,18 @@ export async function downloadLoomVideo(
 			requiresProxy: false,
 		};
 	} catch (error) {
+		if (error instanceof LoomDownloadTemporaryError) {
+			return {
+				success: false,
+				error: error.message,
+				errorCode: "loom_temporarily_unavailable",
+				retryAfterMs: error.retryAfterMs,
+			};
+		}
 		return {
 			success: false,
 			error:
-				error instanceof LoomDownloadTemporaryError
-					? error.message
-					: "An unexpected error occurred. Please try again or check your internet connection.",
+				"An unexpected error occurred. Please try again or check your internet connection.",
 		};
 	}
 }
@@ -240,9 +246,11 @@ export async function importFromLoom({
 export async function importFromLoomCsv({
 	rows,
 	orgId,
+	bulk = false,
 }: {
 	rows: LoomCsvImportRow[];
 	orgId: Organisation.OrganisationId;
+	bulk?: boolean;
 }): Promise<LoomCsvImportResult> {
 	const user = await getCurrentUser();
 	if (!user) {
@@ -276,7 +284,12 @@ export async function importFromLoomCsv({
 		};
 	}
 
-	return processLoomCsvRows({ rows, orgId, actorId: user.id });
+	return processLoomCsvRows({
+		rows,
+		orgId,
+		actorId: user.id,
+		...(bulk === true ? { importPriority: "bulk" as const } : {}),
+	});
 }
 
 export async function importFromLoomCsvForConcierge(input: {

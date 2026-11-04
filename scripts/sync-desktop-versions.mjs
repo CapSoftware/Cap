@@ -4,14 +4,12 @@ import { fileURLToPath } from "node:url";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "..");
-const tauriManifest = path.join(
+const desktopManifest = path.join(
 	repoRoot,
 	"apps",
-	"desktop",
-	"src-tauri",
+	"desktop-gpui",
 	"Cargo.toml",
 );
-const gpuiManifest = path.join(repoRoot, "apps", "desktop-gpui", "Cargo.toml");
 // The bundled `cap` CLI reports its own version (`cap --version`, MCP server
 // info, `cap doctor`), so it ships with the desktop version too.
 const cliManifest = path.join(repoRoot, "apps", "cli", "Cargo.toml");
@@ -42,27 +40,15 @@ function replacePackageVersion(source, manifestPath, version) {
 	return source.slice(0, packageStart) + nextSection + source.slice(end);
 }
 
-const [tauriSource, gpuiSource, cliSource] = await Promise.all([
-	fs.readFile(tauriManifest, "utf8"),
-	fs.readFile(gpuiManifest, "utf8"),
+const [desktopSource, cliSource] = await Promise.all([
+	fs.readFile(desktopManifest, "utf8"),
 	fs.readFile(cliManifest, "utf8"),
 ]);
-const version = packageVersion(tauriSource, tauriManifest);
-const gpuiVersion = packageVersion(gpuiSource, gpuiManifest);
+const version = packageVersion(desktopSource, desktopManifest);
 const cliVersion = packageVersion(cliSource, cliManifest);
 
 if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version))
 	throw new Error(`Invalid desktop version: ${version}`);
-
-if (gpuiVersion !== version) {
-	await fs.writeFile(
-		gpuiManifest,
-		replacePackageVersion(gpuiSource, gpuiManifest, version),
-	);
-	console.log(`Synchronized Cap GPUI ${gpuiVersion} -> ${version}`);
-} else {
-	console.log(`Cap desktop versions match: ${version}`);
-}
 
 if (cliVersion !== version) {
 	await fs.writeFile(
@@ -70,4 +56,6 @@ if (cliVersion !== version) {
 		replacePackageVersion(cliSource, cliManifest, version),
 	);
 	console.log(`Synchronized Cap CLI ${cliVersion} -> ${version}`);
+} else {
+	console.log(`Cap desktop and CLI versions match: ${version}`);
 }

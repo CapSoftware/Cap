@@ -4,21 +4,7 @@ export function supportedLinuxBundles(version) {
 		: ["deb", "rpm", "appimage"];
 }
 
-export const TAURI_RPM_DEPENDS = [
-	"webkit2gtk4.1",
-	"gtk3",
-	"libayatana-appindicator-gtk3",
-	"libva",
-	"pulseaudio-utils",
-	"pipewire-libs",
-	"alsa-lib",
-	"alsa-plugins-pulseaudio",
-	"libxkbcommon",
-	"libxkbcommon-x11",
-	"openssl-libs",
-];
-
-export const GPUI_RPM_DEPENDS = [
+export const RPM_DEPENDS = [
 	"libva",
 	"pulseaudio-utils",
 	"pipewire-libs",
@@ -34,17 +20,11 @@ export const GPUI_RPM_DEPENDS = [
 	"vulkan-loader",
 ];
 
-export function createLinuxBundleConfig(
-	libraryNames,
-	commonFiles = {},
-	debDependencies = [],
-	{
-		root = "../../..",
-		rpmDependencies = TAURI_RPM_DEPENDS,
-		mediaFramework = true,
-	} = {},
-) {
-	const files = { ...commonFiles };
+// Paths are relative to apps/desktop-gpui, where the config is written.
+const root = "../..";
+
+export function createLinuxBundleConfig(libraryNames, debDependencies = []) {
+	const files = {};
 	for (const name of [...new Set(libraryNames)].toSorted()) {
 		files[`/usr/lib/cap/${name}`] =
 			`${root}/target/native-deps/cap-deb-libs/${name}`;
@@ -62,14 +42,14 @@ export function createLinuxBundleConfig(
 				},
 				rpm: {
 					compression: { type: "zstd", level: 9 },
-					depends: [...rpmDependencies],
+					depends: [...RPM_DEPENDS],
 					files: {
 						...files,
 						"/usr/lib/cap/package-format": `${root}/packaging/linux/rpm`,
 					},
 				},
 				appimage: {
-					bundleMediaFramework: mediaFramework,
+					bundleMediaFramework: false,
 					files: {
 						...files,
 						"/usr/bin/pactl": "/usr/bin/pactl",

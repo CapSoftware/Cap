@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { videos } from "@cap/database/schema";
+import { serverEnv } from "@cap/env";
 import { Storage } from "@cap/web-backend/src/Storage/index";
 import { getRecordingObjectIdentity } from "@cap/web-backend/src/Storage/recording-object-identity";
 import { getPublishedRecordingOutputKey } from "@cap/web-backend/src/Storage/recording-output";
@@ -208,6 +209,8 @@ type SourceContext = {
 	pageSize: number;
 	// Only a commit in progress may reuse pages it verified; committed sources must prove their pages still exist.
 	reuseVerifiedPages?: boolean;
+	// Cap's own bucket lists sizes and ETags, so a commit can check every fragment with a few listings.
+	listed?: boolean;
 };
 type TreeKind = "plan" | "objects" | "parts";
 
@@ -278,6 +281,7 @@ function sourceLimits([bucket, customBucket]: RecordingStorageAccess) {
 		return {
 			concurrency: SOURCE_COMMIT_AWS_CONCURRENCY,
 			pageSize: SOURCE_COMMIT_AWS_PAGE_SIZE,
+			listed: true,
 		};
 	if (bucket.provider === "googleDrive")
 		return {
@@ -388,11 +392,27 @@ async function writeSourceText(
 	content: string,
 ) {
 	assertContextKey(context, key);
-	await context.run(
-		context.bucket.putObject(key, content, { contentType: "application/json" }),
-	);
-	if ((await readSourceText(context, key)) !== content)
-		throw new Error("Durable recording source readback did not match");
+	const bucket = context.bucket;
+	// Cap's bucket answers a single-part PUT with the MD5 of the bytes it stored, which proves the write as a
+	// readback does; any other answer still reads the object back.
+	if (context.listed && "putObjectWithETag" in bucket) {
+		const stored = await context.run(
+			bucket.putObjectWithETag(key, content, {
+				contentType: "application/json",
+			}),
+		);
+		if (
+			stored.ETag !== `"${createHash("md5").update(content).digest("hex")}"` &&
+			(await readSourceText(context, key)) !== content
+		)
+			throw new Error("Durable recording source readback did not match");
+	} else {
+		await context.run(
+			bucket.putObject(key, content, { contentType: "application/json" }),
+		);
+		if ((await readSourceText(context, key)) !== content)
+			throw new Error("Durable recording source readback did not match");
+	}
 	const sha256 = hash(content);
 	rememberVerifiedPage(key, sha256, content);
 	return { key, sha256 };
@@ -794,12 +814,7 @@ async function checkCopy(
 	key: string,
 	expectedIdentity?: string,
 ): Promise<SourceObject> {
-	assertContextKey(
-		key.startsWith(`${preparedSourcePrefix(context.video, original)}/`)
-			? { ...context, prefix: preparedSourcePrefix(context.video, original) }
-			: context,
-		key,
-	);
+	assertCopyKey(context, original, key);
 	const [head, originalHead] = await Promise.all([
 		context.run(context.bucket.headObject(key)),
 		checkOriginal(context, original),
@@ -966,12 +981,56 @@ async function copySmallObject(
 					Metadata: copyMetadata(original),
 					ContentType: original.track === "audio" ? "audio/mp4" : "video/mp4",
 				},
+				{ retryWithoutUnsupportedIfNoneMatch: true },
 			),
 		);
 	} catch (error) {
 		await checkOriginal(context, original);
 		throw error;
 	}
+	return saveObjectReceipt(context, await checkCopy(context, original, key));
+}
+
+// A listing already showed there is no reusable copy, and S3 copies the exact original version or fails,
+// so a copy whose response carries the original's ETag needs no HEAD or receipt; the listed verify
+// phase still lists it, and a retry on the per-object path reuses it through its copy metadata.
+async function copyListedObject(
+	context: SourceContext,
+	original: OriginalObject,
+	position: number,
+): Promise<SourceObject> {
+	const key = newCopyKey(context, original, position);
+	let copied: unknown;
+	try {
+		copied = await context.run(
+			context.bucket.copyObject(
+				`${context.bucket.bucketName}/${original.originalKey}`,
+				key,
+				{
+					CopySourceIfMatch: original.originalIdentity,
+					IfNoneMatch: "*",
+					MetadataDirective: "REPLACE",
+					Metadata: copyMetadata(original),
+					ContentType: original.track === "audio" ? "audio/mp4" : "video/mp4",
+				},
+				{ retryWithoutUnsupportedIfNoneMatch: true },
+			),
+		);
+	} catch (error) {
+		await checkOriginal(context, original);
+		throw error;
+	}
+	const identity =
+		copied &&
+		typeof copied === "object" &&
+		"CopyObjectResult" in copied &&
+		copied.CopyObjectResult &&
+		typeof copied.CopyObjectResult === "object" &&
+		"ETag" in copied.CopyObjectResult
+			? copied.CopyObjectResult.ETag
+			: undefined;
+	if (identity === original.originalIdentity)
+		return { ...original, key, objectIdentity: identity };
 	return saveObjectReceipt(context, await checkCopy(context, original, key));
 }
 
@@ -987,6 +1046,139 @@ function preparedSourcePrefix(video: DbVideo, original: OriginalObject) {
 
 function preparationMarkerKey(video: DbVideo) {
 	return `${sourcePrefix(video)}preparation.json`;
+}
+
+type ListedObject = { size: number; identity: string };
+type SnapshotListing = {
+	originals: Map<string, ListedObject>;
+	copies: Map<string, ListedObject>;
+	copyDirectories: Map<string, string[]>;
+};
+
+const LISTED_ADVANCE_BUDGET_MS = 20_000;
+const LISTING_MAX_PAGES = 64;
+const HEX_DIGITS = [..."0123456789abcdef"];
+
+// Returns null when the listing is incomplete or lacks a size or ETag, so callers fall back to per-object checks.
+async function listObjectsUnder(
+	context: SourceContext,
+	prefix: string,
+): Promise<Map<string, ListedObject> | null> {
+	const listed = new Map<string, ListedObject>();
+	let continuationToken: string | undefined;
+	for (let page = 0; page < LISTING_MAX_PAGES; page++) {
+		const listing = await context.run(
+			context.bucket.listObjects({ prefix, maxKeys: 1000, continuationToken }),
+		);
+		for (const entry of listing.Contents ?? []) {
+			if (!entry.Key?.startsWith(prefix)) return null;
+			const identity = "ETag" in entry ? entry.ETag : undefined;
+			if (
+				typeof entry.Size !== "number" ||
+				!Number.isSafeInteger(entry.Size) ||
+				typeof identity !== "string" ||
+				!recordingObjectIdentitySchema.safeParse(identity).success
+			)
+				return null;
+			listed.set(entry.Key, { size: entry.Size, identity });
+		}
+		if (!listing.IsTruncated) return listed;
+		if (!listing.NextContinuationToken) return null;
+		continuationToken = listing.NextContinuationToken;
+	}
+	return null;
+}
+
+async function listSnapshot(
+	context: SourceContext,
+	includeCopies: boolean,
+): Promise<SnapshotListing | null> {
+	const segments = `${context.video.ownerId}/${context.video.id}/segments/`;
+	const prepared = `${sourcePrefix(context.video)}prepared/`;
+	const listings = await Promise.all([
+		listObjectsUnder(context, `${segments}video/`),
+		listObjectsUnder(context, `${segments}audio/`),
+		...(includeCopies
+			? [
+					listObjectsUnder(context, `${context.prefix}/copies/`),
+					...HEX_DIGITS.map((digit) =>
+						listObjectsUnder(context, `${prepared}${digit}`),
+					),
+				]
+			: []),
+	]);
+	if (listings.some((listing) => listing === null)) return null;
+	const [video, audio, ...copyListings] = listings as Map<
+		string,
+		ListedObject
+	>[];
+	const copies = new Map(copyListings.flatMap((listing) => [...listing]));
+	const copyDirectories = new Map<string, string[]>();
+	for (const key of copies.keys()) {
+		const directory =
+			/^(.+\/copies\/\d+\/)[^/]+\/(?:video|audio)\/\d+\.(?:mp4|m4s)$/.exec(
+				key,
+			)?.[1];
+		if (!directory) continue;
+		const keys = copyDirectories.get(directory);
+		if (keys) keys.push(key);
+		else copyDirectories.set(directory, [key]);
+	}
+	return {
+		originals: new Map([...(video ?? []), ...(audio ?? [])]),
+		copies,
+		copyDirectories,
+	};
+}
+
+function listedOriginalMatches(
+	listing: SnapshotListing,
+	original: OriginalObject,
+) {
+	const listed = listing.originals.get(original.originalKey);
+	return (
+		listed?.identity === original.originalIdentity &&
+		listed.size === original.size
+	);
+}
+
+// A copy holds the original's bytes when it has the original's size and S3 content ETag. "unlisted" means no
+// copy exists to reuse; any other copy is left to the per-object checks, which compare its identity metadata.
+function findListedCopy(
+	context: SourceContext,
+	listing: SnapshotListing,
+	original: OriginalObject,
+	position: number,
+	prepared: boolean,
+): SourceObject | "unlisted" | null {
+	if (!listedOriginalMatches(listing, original)) return null;
+	const directories = [
+		...(prepared && original.index > 0
+			? [
+					`${preparedSourcePrefix(context.video, original)}/copies/${original.index}/`,
+				]
+			: []),
+		`${context.prefix}/copies/${position}/`,
+	];
+	let candidates = 0;
+	for (const directory of directories) {
+		for (const key of listing.copyDirectories.get(directory) ?? []) {
+			const copy = listing.copies.get(key);
+			candidates++;
+			if (
+				!copy ||
+				!key.endsWith(
+					`/${original.track}/${original.index}${original.index === 0 ? ".mp4" : ".m4s"}`,
+				) ||
+				copy.size !== original.size ||
+				copy.identity !== original.originalIdentity
+			)
+				continue;
+			assertCopyKey(context, original, key);
+			return { ...original, key, objectIdentity: copy.identity };
+		}
+	}
+	return candidates === 0 ? "unlisted" : null;
 }
 
 export const recordingPreparationSegmentSchema = z.object({
@@ -1020,7 +1212,7 @@ export async function prepareDesktopRecordingSegments(
 			operation.pipe(Effect.timeout(Math.min(5_000, remaining))),
 		);
 	};
-	const [bucket] = await run(
+	const [bucket, customBucket] = await run(
 		Storage.getAccessForVideo(decodeStorageVideo(video), {
 			resolvePublishedOutput: false,
 		}),
@@ -1033,6 +1225,7 @@ export async function prepareDesktopRecordingSegments(
 		concurrency: SOURCE_COMMIT_CONCURRENCY,
 		pageSize: SOURCE_COMMIT_PAGE_SIZE,
 	};
+	const videoCopies: SourceObject[] = [];
 	const unique = [
 		...new Map(
 			requested.map((entry) => [`${entry.track}/${entry.index}`, entry]),
@@ -1054,11 +1247,12 @@ export async function prepareDesktopRecordingSegments(
 						...segment,
 					});
 					if (original.size > 64 * 1024 * 1024) return null;
-					await copySmallObject(
+					const copy = await copySmallObject(
 						{ ...context, prefix: preparedSourcePrefix(video, original) },
 						original,
 						original.index,
 					);
+					if (segment.track === "video") videoCopies.push(copy);
 					return segment;
 				} catch {
 					return null;
@@ -1077,7 +1271,154 @@ export async function prepareDesktopRecordingSegments(
 			markerSaved = true;
 		}
 	}
+	if (
+		bucket.provider === "s3" &&
+		Option.isNone(customBucket) &&
+		videoCopies.length > 0
+	)
+		await requestSegmentPreverification(context, videoCopies).catch(
+			(error: unknown) => {
+				console.warn(
+					"[prepareDesktopRecordingSegments] Preverification skipped",
+					{
+						videoId: video.id,
+						error: error instanceof Error ? error.message : String(error),
+					},
+				);
+			},
+		);
 	return prepared;
+}
+
+function preverifiedRunPrefix(video: DbVideo) {
+	return `${sourcePrefix(video)}preverified/`;
+}
+
+// Asks the media server to decode the video fragments just secured, so the final verification only decodes
+// the tail. Each contiguous run becomes one signed result; nothing depends on the request succeeding.
+async function requestSegmentPreverification(
+	context: SourceContext,
+	copies: SourceObject[],
+) {
+	const env = serverEnv();
+	if (!env.MEDIA_SERVER_URL || !env.MEDIA_SERVER_WEBHOOK_SECRET) return;
+	const secret = env.MEDIA_SERVER_WEBHOOK_SECRET;
+	const { video, bucket } = context;
+	const initKey = `${video.ownerId}/${video.id}/segments/video/init.mp4`;
+	const init = await captureOriginal(context, {
+		originalKey: initKey,
+		track: "video",
+		index: 0,
+	});
+	const sign = (key: string) =>
+		context.run(bucket.getInternalSignedObjectUrl(key, { expiresIn: 3_600 }));
+	const initUrl = await sign(initKey);
+	const sorted = [...copies].sort((left, right) => left.index - right.index);
+	const runs: SourceObject[][] = [];
+	for (const copy of sorted) {
+		const current = runs.at(-1);
+		if (current && current.at(-1)?.index === copy.index - 1) current.push(copy);
+		else runs.push([copy]);
+	}
+	const mediaServerUrl = env.MEDIA_SERVER_URL.replace(/\/$/, "");
+	await Promise.all(
+		runs.map(async (run) => {
+			const first = run[0];
+			const last = run.at(-1);
+			if (!first || !last) return;
+			const digest = hash(
+				JSON.stringify([
+					init.originalIdentity,
+					...run.map((copy) => copy.objectIdentity),
+				]),
+			).slice(0, 16);
+			const resultKey = `${preverifiedRunPrefix(video)}${String(first.index).padStart(6, "0")}-${String(last.index).padStart(6, "0")}-${digest}.json`;
+			const [segments, resultUploadUrl] = await Promise.all([
+				Promise.all(
+					run.map(async (copy) => ({
+						url: await sign(copy.key),
+						objectIdentity: copy.objectIdentity,
+						size: copy.size,
+					})),
+				),
+				context.run(
+					bucket.getInternalPresignedPutUrl(
+						resultKey,
+						{ ContentType: "application/json" },
+						{ expiresIn: 3_600 },
+					),
+				),
+			]);
+			const response = await fetch(
+				`${mediaServerUrl}/video/preverify-segments`,
+				{
+					method: "POST",
+					headers: {
+						"Content-Type": "application/json",
+						"x-media-server-secret": secret,
+					},
+					body: JSON.stringify({
+						videoId: video.id,
+						init: {
+							url: initUrl,
+							objectIdentity: init.originalIdentity,
+							size: init.size,
+						},
+						segments,
+						resultUploadUrl,
+					}),
+					signal: AbortSignal.timeout(3_000),
+				},
+			);
+			await response.body?.cancel().catch(() => {});
+			if (!response.ok)
+				throw new Error(
+					`Preverification request failed: HTTP ${response.status}`,
+				);
+		}),
+	);
+}
+
+// Signed URLs for every run decoded during the recording; the media server checks each run's signature
+// and fragment identities itself, so an unusable run only costs a decode it would have done anyway.
+export async function buildPreverifiedRunUrls(
+	video: DbVideo,
+): Promise<string[]> {
+	try {
+		const access = await runWorkflowPromise(
+			Storage.getAccessForVideo(decodeStorageVideo(video), {
+				resolvePublishedOutput: false,
+			}),
+		);
+		const [bucket, customBucket] = access;
+		if (bucket.provider !== "s3" || Option.isSome(customBucket)) return [];
+		const listed = await listObjectsUnder(
+			{
+				video,
+				bucket,
+				run: (operation) =>
+					runWorkflowPromise(operation.pipe(Effect.timeout(10_000))),
+				prefix: sourcePrefix(video).slice(0, -1),
+				...sourceLimits(access),
+			},
+			preverifiedRunPrefix(video),
+		);
+		if (!listed) return [];
+		const keys = [...listed.keys()]
+			.filter((key) => key.endsWith(".json"))
+			.sort()
+			.slice(0, 4_096);
+		return await mapBounded(
+			keys,
+			(key) =>
+				runWorkflowPromise(
+					bucket.getInternalSignedObjectUrl(key, { expiresIn: 6 * 60 * 60 }),
+				),
+			64,
+		);
+	} catch {
+		return [];
+	}
 }
 
 async function advanceMultipartCopy(
@@ -1222,10 +1563,15 @@ async function copyMultipartPartBatch(
 	)
 		invalidSource("Multipart recording source is missing a copied range");
 	await context.run(
-		context.bucket.multipart.complete(multipart.key, multipart.uploadId, {
-			MultipartUpload: { Parts: parts },
-			IfNoneMatch: "*",
-		}),
+		context.bucket.multipart.complete(
+			multipart.key,
+			multipart.uploadId,
+			{
+				MultipartUpload: { Parts: parts },
+				IfNoneMatch: "*",
+			},
+			{ retryWithoutUnsupportedIfNoneMatch: true },
+		),
 	);
 	return {
 		object: await saveObjectReceipt(
@@ -1235,19 +1581,98 @@ async function copyMultipartPartBatch(
 	};
 }
 
+// Listed commits run phase after phase inside one checkpoint while their time budget lasts, saving the
+// checkpoint round trips; the saved checkpoint still advances by exactly one revision.
 async function advanceSourceSnapshot(
 	context: SourceContext,
 	checkpoint: DesktopRecordingSourceCheckpoint,
 	verification?: RecordingVerification,
+): Promise<
+	| { checkpoint: DesktopRecordingSourceCheckpoint }
+	| { source: DesktopRecordingSource }
+> {
+	if (!context.listed)
+		return advanceSourceSnapshotOnce(context, checkpoint, verification);
+	const deadline = Date.now() + LISTED_ADVANCE_BUDGET_MS;
+	const step: ListedStep = {};
+	let current = checkpoint;
+	for (;;) {
+		const result = await advanceSourceSnapshotOnce(
+			context,
+			current,
+			verification,
+			deadline,
+			step,
+		);
+		if ("source" in result) return { source: result.source };
+		current = result.checkpoint;
+		if (!result.listed || Date.now() >= deadline)
+			return { checkpoint: { ...current, revision: checkpoint.revision + 1 } };
+	}
+}
+
+function assertCopyKey(
+	context: SourceContext,
+	original: OriginalObject,
+	key: string,
 ) {
+	const prepared = preparedSourcePrefix(context.video, original);
+	assertContextKey(
+		key.startsWith(`${prepared}/`) ? { ...context, prefix: prepared } : context,
+		key,
+	);
+}
+
+function assertReceiptMatchesPlan(
+	object: SourceObject,
+	original: OriginalObject | undefined,
+): asserts original is OriginalObject {
+	if (
+		!original ||
+		object.originalKey !== original.originalKey ||
+		object.originalIdentity !== original.originalIdentity ||
+		object.size !== original.size ||
+		object.index !== original.index ||
+		object.track !== original.track
+	)
+		invalidSource("Recording copy receipt does not match its source plan");
+}
+
+// Nothing in the plan, enumerate or copy phases of one step writes a copy before the copy phase does, so they
+// share one listing; the only other writer, segment preparation, at worst leaves a copy unlisted and it is
+// copied again. Verification always lists afresh: it is what proves the originals did not change meanwhile.
+type ListedStep = { listing?: Promise<SnapshotListing | null> };
+
+function stepListing(context: SourceContext, step: ListedStep | undefined) {
+	if (!step) return listSnapshot(context, true);
+	step.listing ??= listSnapshot(context, true);
+	return step.listing;
+}
+
+async function advanceSourceSnapshotOnce(
+	context: SourceContext,
+	checkpoint: DesktopRecordingSourceCheckpoint,
+	verification?: RecordingVerification,
+	deadline?: number,
+	step?: ListedStep,
+): Promise<
+	| { checkpoint: DesktopRecordingSourceCheckpoint; listed?: boolean }
+	| { source: DesktopRecordingSource }
+> {
 	const next = { ...checkpoint, revision: checkpoint.revision + 1 };
 	if (checkpoint.phase === "plan") {
+		const segmented =
+			context.video.source.type === "desktopSegments" ||
+			verification?.artifact.kind === "segments";
+		const [plan, listing] = await Promise.all([
+			createSourcePlan(context, verification),
+			context.listed && segmented && deadline !== undefined
+				? stepListing(context, step)
+				: null,
+		]);
 		return {
-			checkpoint: {
-				...next,
-				phase: "enumerate" as const,
-				plan: await createSourcePlan(context, verification),
-			},
+			checkpoint: { ...next, phase: "enumerate" as const, plan },
+			listed: listing !== null,
 		};
 	}
 	if (!checkpoint.plan)
@@ -1258,9 +1683,56 @@ async function advanceSourceSnapshot(
 	if (!parsedPlan.success) invalidSource("Recording source plan is invalid");
 	const plan = parsedPlan.data;
 	const scope = checkpoint.plan.sha256;
+	const listed =
+		context.listed && plan.kind === "segments" && deadline !== undefined;
+	const pageEnd = (cursor: number) =>
+		Math.min(plan.objectCount, cursor + context.pageSize);
+	const positions = (start: number, end: number) =>
+		Array.from({ length: end - start }, (_, index) => start + index);
 	if (checkpoint.phase === "enumerate") {
 		if (treeCount(checkpoint.planRoots) !== checkpoint.cursor)
 			invalidSource("Recording source plan cursor is incomplete");
+		const listing = listed ? await stepListing(context, step) : null;
+		if (listing && deadline !== undefined) {
+			let cursor = checkpoint.cursor;
+			let planRoots = checkpoint.planRoots;
+			do {
+				const end = pageEnd(cursor);
+				const originals = await mapBounded(
+					positions(cursor, end),
+					(position) => {
+						const original = originalAt(context.video, plan, position);
+						const found = listing.originals.get(original.originalKey);
+						return found && found.size > 0
+							? Promise.resolve({
+									...original,
+									originalIdentity: found.identity,
+									size: found.size,
+								})
+							: captureOriginal(context, original, verification);
+					},
+					context.concurrency,
+				);
+				planRoots = await appendTree(
+					context,
+					planRoots,
+					"plan",
+					scope,
+					originals,
+				);
+				cursor = end;
+			} while (cursor < plan.objectCount && Date.now() < deadline);
+			const done = cursor === plan.objectCount;
+			return {
+				checkpoint: {
+					...next,
+					planRoots,
+					cursor: done ? 0 : cursor,
+					phase: done ? ("copy" as const) : ("enumerate" as const),
+				},
+				listed: true,
+			};
+		}
 		const end = Math.min(
 			plan.objectCount,
 			checkpoint.cursor + context.pageSize,
@@ -1302,6 +1774,69 @@ async function advanceSourceSnapshot(
 			invalidSource(
 				"Recording copy receipts do not match their checkpoint cursor",
 			);
+		const listing =
+			listed && !checkpoint.multipart ? await stepListing(context, step) : null;
+		if (listing && deadline !== undefined) {
+			let cursor = checkpoint.cursor;
+			let receiptRoots = checkpoint.receiptRoots;
+			do {
+				const end = pageEnd(cursor);
+				const originals = await readTree(
+					context,
+					checkpoint.planRoots,
+					"plan",
+					scope,
+					originalObjectSchema,
+					cursor,
+					end,
+				);
+				// Multipart copies keep their own per-object checkpoints, so they stay on the per-page path.
+				if (originals.some((original) => original.size > 5 * 1024 ** 3)) break;
+				const objects = await mapBounded(
+					originals.map((original, index) => ({
+						original,
+						position: cursor + index,
+					})),
+					({ original, position }) => {
+						const prepared = plan.sourcePreparation === true;
+						const found = findListedCopy(
+							context,
+							listing,
+							original,
+							position,
+							prepared,
+						);
+						if (found === "unlisted")
+							return copyListedObject(context, original, position);
+						return found
+							? Promise.resolve(found)
+							: copySmallObject(context, original, position, prepared);
+					},
+					context.concurrency,
+				);
+				receiptRoots = await appendTree(
+					context,
+					receiptRoots,
+					"objects",
+					scope,
+					objects,
+				);
+				cursor = end;
+			} while (cursor < plan.objectCount && Date.now() < deadline);
+			if (cursor !== checkpoint.cursor) {
+				const done = cursor === plan.objectCount;
+				return {
+					checkpoint: {
+						...next,
+						receiptRoots,
+						multipart: undefined,
+						cursor: done ? 0 : cursor,
+						phase: done ? ("verify" as const) : ("copy" as const),
+					},
+					listed: true,
+				};
+			}
+		}
 		let originals = await readTree(
 			context,
 			checkpoint.planRoots,
@@ -1371,6 +1906,71 @@ async function advanceSourceSnapshot(
 	if (treeCount(checkpoint.receiptRoots) !== plan.objectCount)
 		invalidSource("Recording snapshot is missing required copy receipts");
 	if (checkpoint.phase === "verify") {
+		const listing = listed ? await listSnapshot(context, true) : null;
+		if (listing && deadline !== undefined) {
+			let cursor = checkpoint.cursor;
+			do {
+				const end = pageEnd(cursor);
+				const [originals, objects] = await Promise.all([
+					readTree(
+						context,
+						checkpoint.planRoots,
+						"plan",
+						scope,
+						originalObjectSchema,
+						cursor,
+						end,
+					),
+					readTree(
+						context,
+						checkpoint.receiptRoots,
+						"objects",
+						scope,
+						sourceObjectSchema,
+						cursor,
+						end,
+					),
+				]);
+				await mapBounded(
+					objects.map((object, index) => ({
+						object,
+						original: originals[index],
+					})),
+					async ({ object, original }) => {
+						assertReceiptMatchesPlan(object, original);
+						const copy = listing.copies.get(object.key);
+						if (
+							copy?.size === original.size &&
+							copy.identity === object.objectIdentity &&
+							object.objectIdentity === original.originalIdentity &&
+							listedOriginalMatches(listing, original)
+						) {
+							assertCopyKey(context, original, object.key);
+							return;
+						}
+						await checkCopy(
+							context,
+							original,
+							object.key,
+							object.objectIdentity,
+						);
+					},
+					context.concurrency,
+				);
+				cursor = end;
+			} while (cursor < plan.objectCount && Date.now() < deadline);
+			return {
+				checkpoint: {
+					...next,
+					cursor,
+					phase:
+						cursor === plan.objectCount
+							? ("finalize" as const)
+							: ("verify" as const),
+				},
+				listed: true,
+			};
+		}
 		const end = Math.min(
 			plan.objectCount,
 			checkpoint.cursor + context.pageSize,
@@ -1398,17 +1998,7 @@ async function advanceSourceSnapshot(
 		await mapBounded(
 			objects.map((object, index) => ({ object, original: originals[index] })),
 			async ({ object, original }) => {
-				if (
-					!original ||
-					object.originalKey !== original.originalKey ||
-					object.originalIdentity !== original.originalIdentity ||
-					object.size !== original.size ||
-					object.index !== original.index ||
-					object.track !== original.track
-				)
-					invalidSource(
-						"Recording copy receipt does not match its source plan",
-					);
+				assertReceiptMatchesPlan(object, original);
 				await checkCopy(context, original, object.key, object.objectIdentity);
 			},
 			context.concurrency,

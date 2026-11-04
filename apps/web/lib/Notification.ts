@@ -110,7 +110,11 @@ export async function createNotification(
 
 			const recipientId = parentComment?.authorId;
 			if (!recipientId) return;
-			if (recipientId === videoResult.ownerId) return;
+			if (
+				recipientId === videoResult.ownerId ||
+				recipientId === notification.authorId
+			)
+				return;
 
 			const [recipientUser] = await db()
 				.select({
@@ -433,13 +437,6 @@ export async function sendFirstViewEmail(
 		if (!params.isAnonymous && params.viewerUserId === videoWithOwner.ownerId)
 			return;
 
-		const preferences = videoWithOwner.preferences as UserPreferences;
-		if (params.isAnonymous) {
-			if (preferences?.notifications?.pauseAnonViews) return;
-		} else {
-			if (preferences?.notifications?.pauseViews) return;
-		}
-
 		const [result] = await database
 			.update(videos)
 			.set({ firstViewEmailSentAt: new Date() })
@@ -451,6 +448,15 @@ export async function sendFirstViewEmail(
 			);
 
 		if (result.affectedRows === 0) return;
+
+		// The first view is claimed even when its email is paused: later views
+		// aren't the first, and Loops reads this column as "the Cap was shared".
+		const preferences = videoWithOwner.preferences as UserPreferences;
+		if (params.isAnonymous) {
+			if (preferences?.notifications?.pauseAnonViews) return;
+		} else {
+			if (preferences?.notifications?.pauseViews) return;
+		}
 
 		let viewerName: string;
 		if (params.isAnonymous) {

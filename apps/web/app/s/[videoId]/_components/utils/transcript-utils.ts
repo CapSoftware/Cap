@@ -1,5 +1,7 @@
 // Utility functions for transcript formatting
 
+import { formatTimestamp } from "@/lib/transcribe-utils";
+
 export interface TranscriptEntry {
 	id: number;
 	timestamp: string | number; // Allow both string and number types
@@ -8,24 +10,7 @@ export interface TranscriptEntry {
 }
 
 export const formatTime = (seconds: number): string => {
-	const hours = Math.floor(seconds / 3600);
-	const minutes = Math.floor((seconds % 3600) / 60);
-	const secs = Math.floor(seconds % 60);
-	const milliseconds = Math.floor((seconds % 1) * 1000);
-
-	return `${hours.toString().padStart(2, "0")}:${minutes
-		.toString()
-		.padStart(2, "0")}:${secs.toString().padStart(2, "0")}.${milliseconds
-		.toString()
-		.padStart(3, "0")}`;
-};
-
-export const formatTimeMinutes = (time: number) => {
-	const minutes = Math.floor(time / 60);
-	const seconds = Math.floor(time % 60);
-	return `${minutes.toString().padStart(2, "0")}:${seconds
-		.toString()
-		.padStart(2, "0")}`;
+	return formatTimestamp(seconds * 1000);
 };
 
 /**
@@ -138,7 +123,11 @@ export const parseVTT = (vttContent: string): TranscriptEntry[] => {
 			continue;
 		}
 
-		if (trimmedLine.includes("-->")) {
+		if (
+			/^\d+:\d+:\d+(?:[.,]\d+)?\s*-->\s*\d+:\d+:\d+(?:[.,]\d+)?(?:\s+.*)?$/.test(
+				trimmedLine,
+			)
+		) {
 			const [startTimeStr, endTimeStr] = trimmedLine.split(" --> ");
 			if (!startTimeStr || !endTimeStr) continue;
 

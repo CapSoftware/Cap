@@ -71,15 +71,37 @@ export function BlurOverlay({ active, onDone }: BlurOverlayProps) {
 			if (target.dataset.capBlurred === "true") {
 				const orig = target.dataset.capOrigFilter ?? "";
 				if (orig) {
-					target.style.filter = orig;
+					target.style.setProperty(
+						"filter",
+						orig,
+						target.dataset.capOrigFilterPriority ?? "",
+					);
 				} else {
 					target.style.removeProperty("filter");
 				}
-				target.style.removeProperty("user-select");
+				const originalSelection = target.dataset.capOrigUserSelect ?? "";
+				if (originalSelection) {
+					target.style.setProperty(
+						"user-select",
+						originalSelection,
+						target.dataset.capOrigUserSelectPriority ?? "",
+					);
+				} else {
+					target.style.removeProperty("user-select");
+				}
 				delete target.dataset.capBlurred;
 				delete target.dataset.capOrigFilter;
+				delete target.dataset.capOrigFilterPriority;
+				delete target.dataset.capOrigUserSelect;
+				delete target.dataset.capOrigUserSelectPriority;
 			} else {
 				target.dataset.capOrigFilter = target.style.filter || "";
+				target.dataset.capOrigFilterPriority =
+					target.style.getPropertyPriority("filter");
+				target.dataset.capOrigUserSelect =
+					target.style.getPropertyValue("user-select");
+				target.dataset.capOrigUserSelectPriority =
+					target.style.getPropertyPriority("user-select");
 				target.style.setProperty("filter", "blur(12px)", "important");
 				target.style.setProperty("user-select", "none", "important");
 				target.dataset.capBlurred = "true";

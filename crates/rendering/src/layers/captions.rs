@@ -101,13 +101,107 @@ pub struct CaptionOverlayLayout {
     pub position: CaptionPosition,
 }
 
+/// The caption box on the latest frame at rest, before the bounce and pop
+/// animations move it, in output-frame pixels (`[x0, y0, x1, y1]`). The
+/// editor hit-tests and drags this box when the caption is placed manually.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CaptionFrameBox {
+    pub bounds: [f32; 4],
+    position: CaptionPosition,
+}
+
+impl CaptionFrameBox {
+    pub fn new(bounds: [f32; 4], position: &str) -> Self {
+        Self {
+            bounds,
+            position: CaptionPosition::from_str(position),
+        }
+    }
+
+    /// Whether this caption sits at the Manual position, through the
+    /// settings or its segment's own override.
+    pub fn is_manual(&self) -> bool {
+        self.position == CaptionPosition::Manual
+    }
+
+    pub fn is_at(&self, position: &str) -> bool {
+        self.position == CaptionPosition::from_str(position)
+    }
+}
+
+/// Top-left corner of a caption box of `box_size` at rest in a frame of
+/// `frame` pixels. Manual placement centres the box on `manual`, a fraction
+/// of the frame, and keeps the whole box inside the frame.
+pub(crate) fn caption_box_origin(
+    position: CaptionPosition,
+    manual: Option<XY<f32>>,
+    box_size: (f32, f32),
+    frame: (f32, f32),
+) -> (f32, f32) {
+    let (box_width, box_height) = box_size;
+    let (width, height) = frame;
+    let margin = width * 0.05;
+    let max_left = (width - box_width).max(0.0);
+    let max_top = (height - box_height).max(0.0);
+    let manual = manual.filter(|_| position == CaptionPosition::Manual);
+    let left = match (position, manual) {
+        (_, Some(manual)) => {
+            (manual.x.clamp(0.0, 1.0) * width - box_width / 2.0).clamp(0.0, max_left)
+        }
+        (CaptionPosition::TopLeft | CaptionPosition::BottomLeft, _) => margin,
+        (CaptionPosition::TopRight | CaptionPosition::BottomRight, _) => {
+            (width - margin - box_width).max(0.0)
+        }
+        _ => ((width - box_width) / 2.0).max(0.0),
+    };
+    let center_y = match manual {
+        Some(manual) => manual.y.clamp(0.0, 1.0) * height,
+        None => height * position.y_factor(),
+    };
+    (left, (center_y - box_height / 2.0).clamp(0.0, max_top))
+}
+
+/// The centre of the caption box last drawn, as fractions of the frame, with
+/// the position setting it was drawn for. Left and right presets align the
+/// box's edge to the margin, so where its centre lands depends on the box
+/// width, which only this layer measures. The editor starts Manual placement
+/// here so switching to it leaves the captions where they were.
+static LAST_CAPTION_CENTER: std::sync::Mutex<Option<(CaptionPosition, [f32; 2])>> =
+    std::sync::Mutex::new(None);
+
+/// [`LAST_CAPTION_CENTER`] when the last caption was drawn at `position`.
+pub fn last_caption_center(position: &str) -> Option<(f32, f32)> {
+    let wanted = CaptionPosition::from_str(position);
+    let last = *LAST_CAPTION_CENTER
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    last.and_then(|(drawn, [x, y])| (drawn == wanted).then_some((x, y)))
+}
+
+fn caption_center(rect: [f32; 4], frame: (u32, u32)) -> Option<[f32; 2]> {
+    (frame.0 > 0 && frame.1 > 0).then(|| {
+        [
+            ((rect[0] + rect[2] / 2.0) / frame.0 as f32).clamp(0.0, 1.0),
+            ((rect[1] + rect[3] / 2.0) / frame.1 as f32).clamp(0.0, 1.0),
+        ]
+    })
+}
+
+fn record_caption_center(position: CaptionPosition, rect: [f32; 4], frame: (u32, u32)) {
+    if let Some(center) = caption_center(rect, frame) {
+        *LAST_CAPTION_CENTER
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((position, center));
+    }
+}
+
 const BASE_TEXT_OPACITY: f32 = 0.8;
 const BOUNCE_OFFSET_PIXELS: f32 = 8.0;
 // Safety net for caption segments whose trailing word end was stretched across a
 // silence by transcription (e.g. a 16s "seconds."). Without this, such a segment
-// stays on screen for the whole inflated duration. Kept in sync with
-// MAX_CAPTION_WORD_DURATION in the desktop transcription/projection layers.
-const MAX_CAPTION_WORD_DURATION: f64 = 2.5;
+// stays on screen for the whole inflated duration. Value comes from the shared
+// caption word utilities so it stays in sync with the transcription layers.
+const MAX_CAPTION_WORD_DURATION: f64 = cap_project::caption_words::MAX_CAPTION_WORD_DURATION as f64;
 
 fn ease_out_cubic(t: f32) -> f32 {
     let t = t.clamp(0.0, 1.0);
@@ -422,6 +516,7 @@ pub struct CaptionsLayer {
     output_size: (u32, u32),
     has_caption: bool,
     active_layout: Option<CaptionOverlayLayout>,
+    frame_box: Option<CaptionFrameBox>,
 }
 
 impl CaptionsLayer {
@@ -563,6 +658,7 @@ impl CaptionsLayer {
             output_size: (0, 0),
             has_caption: false,
             active_layout: None,
+            frame_box: None,
         }
     }
 
@@ -586,6 +682,7 @@ impl CaptionsLayer {
     ) {
         self.has_caption = false;
         self.active_layout = None;
+        self.frame_box = None;
         self.background_scissor = None;
         self.highlight_scissor = None;
         self.has_highlight = false;
@@ -844,39 +941,12 @@ impl CaptionsLayer {
         let box_width = (text_width + padding * 2.0).min(available_width).max(1.0);
         let box_height = (text_height + padding * 2.0).min(height as f32).max(1.0);
 
-        let background_left = if position == CaptionPosition::Manual {
-            caption_data
-                .settings
-                .manual_position
-                .map(|manual_position| {
-                    (manual_position.x.clamp(0.0, 1.0) * width as f32 - box_width / 2.0)
-                        .clamp(0.0, (width as f32 - box_width).max(0.0))
-                })
-                .unwrap_or_else(|| ((width as f32 - box_width) / 2.0).max(0.0))
-        } else {
-            match position {
-                CaptionPosition::TopLeft | CaptionPosition::BottomLeft => margin,
-                CaptionPosition::TopRight | CaptionPosition::BottomRight => {
-                    (width as f32 - margin - box_width).max(0.0)
-                }
-                CaptionPosition::TopCenter | CaptionPosition::BottomCenter => {
-                    ((width as f32 - box_width) / 2.0).max(0.0)
-                }
-                CaptionPosition::Manual => ((width as f32 - box_width) / 2.0).max(0.0),
-            }
-        };
-
-        let center_y = if position == CaptionPosition::Manual {
-            caption_data
-                .settings
-                .manual_position
-                .map(|manual_position| manual_position.y.clamp(0.0, 1.0) * height as f32)
-                .unwrap_or_else(|| height as f32 * CaptionPosition::BottomCenter.y_factor())
-        } else {
-            height as f32 * position.y_factor()
-        };
-        let base_background_top =
-            (center_y - box_height / 2.0).clamp(0.0, (height as f32 - box_height).max(0.0));
+        let (background_left, base_background_top) = caption_box_origin(
+            position,
+            caption_data.settings.manual_position,
+            (box_width, box_height),
+            (width as f32, height as f32),
+        );
         let background_top = (base_background_top + bounce_offset as f32)
             .clamp(0.0, (height as f32 - box_height).max(0.0));
 
@@ -979,7 +1049,18 @@ impl CaptionsLayer {
             draw_box_height,
         ];
 
+        let resting = [background_left, base_background_top, box_width, box_height];
         self.active_layout = Some(CaptionOverlayLayout { rect, position });
+        self.frame_box = Some(CaptionFrameBox {
+            bounds: [
+                resting[0],
+                resting[1],
+                resting[0] + resting[2],
+                resting[1] + resting[3],
+            ],
+            position,
+        });
+        record_caption_center(position, resting, (width, height));
 
         let background_uniforms = CaptionBackgroundUniforms {
             rect,
@@ -1100,6 +1181,10 @@ impl CaptionsLayer {
 
     pub fn active_layout(&self) -> Option<CaptionOverlayLayout> {
         self.active_layout
+    }
+
+    pub fn frame_box(&self) -> Option<CaptionFrameBox> {
+        self.frame_box
     }
 
     pub fn render(&self, pass: &mut wgpu::RenderPass<'_>) {
@@ -1223,10 +1308,11 @@ fn calculate_caption_bounce(current_time: f64, start: f64, end: f64, fade_durati
 #[cfg(test)]
 mod tests {
     use super::{
+        CaptionFrameBox, CaptionPosition, caption_box_origin, caption_center,
         caption_segment_effective_end, find_active_caption_segment, find_active_word_index,
         word_byte_range,
     };
-    use cap_project::{CaptionTrackSegment, CaptionWord};
+    use cap_project::{CaptionTrackSegment, CaptionWord, XY};
 
     fn segment(start: f64, end: f64, words: Vec<CaptionWord>) -> CaptionTrackSegment {
         CaptionTrackSegment {
@@ -1250,6 +1336,137 @@ mod tests {
             start,
             end,
         }
+    }
+
+    /// The caption box for a 24 px caption at 1080p is about this size; the
+    /// renderer scales the font with the frame height.
+    fn box_at(frame: (f32, f32)) -> (f32, f32) {
+        let scale = frame.1 / 1080.0;
+        (520.0 * scale, 60.0 * scale)
+    }
+
+    fn normalised_center(
+        position: CaptionPosition,
+        manual: Option<XY<f32>>,
+        frame: (f32, f32),
+    ) -> (f32, f32) {
+        let size = box_at(frame);
+        let (left, top) = caption_box_origin(position, manual, size, frame);
+        (
+            (left + size.0 / 2.0) / frame.0,
+            (top + size.1 / 2.0) / frame.1,
+        )
+    }
+
+    /// A stored manual centre is a fraction of the output frame, so the same
+    /// project places its captions at the same spot at every export size.
+    #[test]
+    fn a_manual_caption_lands_on_the_same_fraction_at_every_resolution() {
+        let spots = [XY::new(0.5, 0.5), XY::new(0.3, 0.2), XY::new(0.62, 0.9)];
+        for aspect in [
+            [(1280.0, 720.0), (1920.0, 1080.0), (3840.0, 2160.0)],
+            [(720.0, 1280.0), (1080.0, 1920.0), (2160.0, 3840.0)],
+            [(720.0, 720.0), (1080.0, 1080.0), (2160.0, 2160.0)],
+        ] {
+            for spot in spots {
+                let centers = aspect
+                    .map(|frame| normalised_center(CaptionPosition::Manual, Some(spot), frame));
+                for center in centers {
+                    assert!(
+                        (center.0 - centers[0].0).abs() < 1e-5,
+                        "{aspect:?} {spot:?}"
+                    );
+                    assert!(
+                        (center.1 - centers[0].1).abs() < 1e-5,
+                        "{aspect:?} {spot:?}"
+                    );
+                }
+            }
+        }
+        let center = normalised_center(
+            CaptionPosition::Manual,
+            Some(XY::new(0.3, 0.2)),
+            (1920.0, 1080.0),
+        );
+        assert!((center.0 - 0.3).abs() < 1e-6);
+        assert!((center.1 - 0.2).abs() < 1e-6);
+    }
+
+    /// A centre near an edge keeps the whole box in the frame, in every
+    /// aspect, rather than cutting the caption off.
+    #[test]
+    fn a_manual_caption_near_an_edge_stays_inside_the_frame() {
+        for frame in [(1920.0, 1080.0), (1080.0, 1920.0), (1440.0, 1080.0)] {
+            let size = box_at(frame);
+            for spot in [
+                XY::new(0.0, 0.0),
+                XY::new(1.0, 1.0),
+                XY::new(0.0, 1.0),
+                XY::new(-3.0, 7.0),
+            ] {
+                let (left, top) =
+                    caption_box_origin(CaptionPosition::Manual, Some(spot), size, frame);
+                assert!(
+                    left >= 0.0 && left + size.0 <= frame.0 + 1e-3,
+                    "{frame:?} {spot:?}"
+                );
+                assert!(
+                    top >= 0.0 && top + size.1 <= frame.1 + 1e-3,
+                    "{frame:?} {spot:?}"
+                );
+            }
+        }
+    }
+
+    /// The presets are unchanged by manual placement: a stored manual centre
+    /// does nothing until the position is Manual, and Manual without one is
+    /// the bottom-centre spot.
+    #[test]
+    fn presets_ignore_the_manual_centre() {
+        let frame = (1920.0, 1080.0);
+        let size = (400.0, 80.0);
+        let manual = Some(XY::new(0.1, 0.1));
+        let expected = [
+            (CaptionPosition::TopLeft, (96.0, 1080.0 * 0.08 - 40.0)),
+            (CaptionPosition::TopCenter, (760.0, 1080.0 * 0.08 - 40.0)),
+            (CaptionPosition::TopRight, (1424.0, 1080.0 * 0.08 - 40.0)),
+            (CaptionPosition::BottomLeft, (96.0, 1080.0 * 0.85 - 40.0)),
+            (CaptionPosition::BottomCenter, (760.0, 1080.0 * 0.85 - 40.0)),
+            (CaptionPosition::BottomRight, (1424.0, 1080.0 * 0.85 - 40.0)),
+        ];
+        for (position, origin) in expected {
+            assert_eq!(caption_box_origin(position, manual, size, frame), origin);
+            assert_eq!(caption_box_origin(position, None, size, frame), origin);
+        }
+        assert_eq!(
+            caption_box_origin(CaptionPosition::Manual, None, size, frame),
+            caption_box_origin(CaptionPosition::BottomCenter, None, size, frame)
+        );
+    }
+
+    #[test]
+    fn the_frame_box_knows_its_placement() {
+        let manual = CaptionFrameBox::new([0.0, 0.0, 10.0, 10.0], "manual");
+        assert!(manual.is_manual());
+        assert!(manual.is_at("manual"));
+        let preset = CaptionFrameBox::new([0.0, 0.0, 10.0, 10.0], "top");
+        assert!(!preset.is_manual());
+        assert!(preset.is_at("top-center"));
+        assert!(!preset.is_at("bottom-center"));
+    }
+
+    /// A 400 px box against the 96 px left margin of a 1920 px frame is
+    /// centred at 296 px, not at the 5% the preset table names.
+    #[test]
+    fn the_drawn_caption_centre_is_a_fraction_of_the_frame() {
+        let center = caption_center([96.0, 900.0, 400.0, 80.0], (1920, 1080)).unwrap();
+        assert!((center[0] - 296.0 / 1920.0).abs() < 1e-6);
+        assert!((center[1] - 940.0 / 1080.0).abs() < 1e-6);
+        assert!(caption_center([0.0, 0.0, 10.0, 10.0], (0, 1080)).is_none());
+        assert_eq!(
+            caption_center([1900.0, 0.0, 400.0, 10.0], (1920, 1080)).map(|c| c[0]),
+            Some(1.0)
+        );
     }
 
     #[test]
@@ -1817,6 +2034,7 @@ mod gpu_tests {
             audio_segments: vec![],
             style_segments: vec![],
             image_segments: vec![],
+            shape_segments: Vec::new(),
             camera3d_segments: vec![],
         });
         uniforms

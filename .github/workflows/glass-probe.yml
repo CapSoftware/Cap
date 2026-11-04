@@ -1,0 +1,207 @@
+name: Glass probe (real app)
+# Draws Cap Glass in the real GPUI app on macOS (Metal), Windows (Direct3D 11
+# on WARP) and Linux (wgpu on lavapipe), captures the window and scores every
+# scene and preset against the CPU model in apps/desktop-gpui/glass, which is
+# fitted to Apple's own glass.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "apps/desktop-gpui/glass/**"
+      - "apps/desktop-gpui/patches/zed-glass.patch"
+      - "apps/desktop-gpui/src/ui/glass.rs"
+      - "apps/desktop-gpui/src/glass_probe.rs"
+      - "scripts/glass-probe/**"
+      - ".github/workflows/glass-probe.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: glass-probe-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # A pull request from a fork that changes only this workflow or the probe's
+  # scripts does not queue the three-runner matrix; one that also changes the
+  # glass itself does, and so does any change from this repository.
+  scope:
+    name: Scope
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.scope.outputs.run }}
+    steps:
+      - name: Scope
+        id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          PR: ${{ github.event.pull_request.number }}
+          SAME_REPO: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT" != pull_request || "$SAME_REPO" == true ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --paginate --jq '.[].filename' > "$RUNNER_TEMP/changed.txt"
+          glass='^apps/desktop-gpui/(glass/.*|patches/zed-glass\.patch|src/ui/glass\.rs|src/glass_probe\.rs)$'
+          if grep -qE "$glass" "$RUNNER_TEMP/changed.txt"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "A fork pull request that changes no glass code does not run the glass probe." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
+  probe:
+    name: Glass probe (${{ matrix.settings.name }})
+    needs: scope
+    if: needs.scope.outputs.run == 'true'
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - name: macOS
+            slug: macos
+            target: aarch64-apple-darwin
+            runner: blacksmith-6vcpu-macos-15
+          - name: Windows
+            slug: windows
+            target: x86_64-pc-windows-msvc
+            runner: windows-2022
+          - name: Linux X11
+            slug: linux-x11
+            target: x86_64-unknown-linux-gnu
+            runner: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ${{ matrix.settings.runner }}
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Linux desktop dependencies
+        if: ${{ runner.os == 'Linux' }}
+        uses: ./.github/actions/install-desktop-deps
+
+      - name: Install a window manager and software Vulkan
+        if: ${{ runner.os == 'Linux' }}
+        run: sudo apt-get install -y openbox mesa-vulkan-drivers libvulkan1
+
+      - name: Rust setup
+        uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: ${{ matrix.settings.target }}
+
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: ${{ matrix.settings.target }}
+          prefix-key: v1-rust-gpui
+          save-cache: "false"
+          workspaces: apps/desktop-gpui -> target
+
+      - name: Run setup
+        shell: bash
+        run: node scripts/setup.js
+        env:
+          RUST_TARGET_TRIPLE: ${{ matrix.settings.target }}
+
+      - name: Prepare GPUI dependency
+        shell: bash
+        run: |
+          node scripts/sync-desktop-versions.mjs
+          ./scripts/prepare-gpui-dependency.sh
+
+      - name: Test the glass model
+        shell: bash
+        run: cargo +1.95.0 test --manifest-path apps/desktop-gpui/Cargo.toml --locked -p cap-glass
+
+      - name: Build the app
+        shell: bash
+        run: |
+          cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --locked \
+            --target ${{ matrix.settings.target }} --bin cap-gpui
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            for frameworks in "$GITHUB_WORKSPACE/apps/desktop-gpui/target/${{ matrix.settings.target }}/debug/Frameworks" \
+              "$GITHUB_WORKSPACE/apps/desktop-gpui/target/${{ matrix.settings.target }}/Frameworks"; do
+              mkdir -p "$frameworks"
+              ln -sfn "$GITHUB_WORKSPACE/target/Frameworks/Spacedrive.framework" "$frameworks/Spacedrive.framework"
+            done
+          fi
+
+      - name: Screen capture permission
+        if: ${{ runner.os == 'macOS' }}
+        run: |
+          set -euo pipefail
+          sudo pmset -a displaysleep 0 sleep 0 || true
+          caffeinate -u -t 2
+          app="$GITHUB_WORKSPACE/apps/desktop-gpui/target/${{ matrix.settings.target }}/debug/cap-gpui"
+          db="/Library/Application Support/com.apple.TCC/TCC.db"
+          now=$(date +%s)
+          for client in "$app" /bin/bash /Users/runner/bin/Runner.Worker /Users/runner/bin/Runner.Listener; do
+            sudo sqlite3 "$db" "INSERT OR REPLACE INTO access (service,client,client_type,auth_value,auth_reason,auth_version,indirect_object_identifier,flags,last_modified) VALUES ('kTCCServiceScreenCapture','$client',1,2,4,1,'UNUSED',0,$now);"
+          done
+          sudo killall tccd || true
+          sleep 2
+
+      - name: Glass probe
+        shell: bash
+        run: |
+          app="$GITHUB_WORKSPACE/apps/desktop-gpui/target/${{ matrix.settings.target }}/debug/cap-gpui"
+          out="$RUNNER_TEMP/glass-probe"
+          case "$RUNNER_OS" in
+            macOS)
+              scripts/glass-probe/run.sh "$app" "$out"
+              ;;
+            Windows)
+              export PATH="$(cygpath "$GITHUB_WORKSPACE/target/debug"):$PATH"
+              scripts/glass-probe/run.sh "$app.exe" "$out"
+              ;;
+            Linux)
+              export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/native-deps/lib:$GITHUB_WORKSPACE/target/debug${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+              Xvfb :99 -screen 0 1920x1080x24 -noreset &
+              export DISPLAY=:99
+              sleep 1
+              openbox &
+              sleep 1
+              scripts/glass-probe/run.sh "$app" "$out"
+              ;;
+          esac
+
+      - name: Upload captures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: glass-probe-${{ matrix.settings.slug }}
+          path: ${{ runner.temp }}/glass-probe
+          retention-days: 7
+
+      # The probed build itself, so the same binary can run on machines with
+      # real GPUs (the hosted runners draw on WARP and lavapipe).
+      - name: Stage the build
+        if: ${{ success() && runner.os != 'macOS' }}
+        shell: bash
+        run: |
+          out="$RUNNER_TEMP/cap-gpui-build"
+          mkdir -p "$out"
+          bin="$GITHUB_WORKSPACE/apps/desktop-gpui/target/${{ matrix.settings.target }}/debug/cap-gpui"
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            cp "$bin.exe" "$out/"
+            cp "$GITHUB_WORKSPACE"/target/debug/*.dll "$out/" 2>/dev/null || true
+          else
+            cp "$bin" "$out/"
+            cp -r "$GITHUB_WORKSPACE/target/native-deps/lib" "$out/lib" 2>/dev/null || true
+          fi
+
+      - name: Upload the build
+        if: ${{ success() && runner.os != 'macOS' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: cap-gpui-debug-${{ matrix.settings.slug }}
+          path: ${{ runner.temp }}/cap-gpui-build
+          if-no-files-found: ignore
+          retention-days: 3

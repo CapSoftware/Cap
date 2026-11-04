@@ -363,18 +363,13 @@ impl RequiredMicrophoneHealth {
     }
 }
 
-impl AudioSource for Microphone {
-    type Config = Arc<MicrophoneFeedLock>;
-
-    #[allow(clippy::manual_async_fn)]
-    fn setup(
-        feed_lock: Self::Config,
+impl Microphone {
+    pub(crate) fn setup_with_channels(
+        feed_lock: Arc<MicrophoneFeedLock>,
         mut audio_tx: mpsc::Sender<AudioFrame>,
         ctx: &mut crate::SetupCtx,
-    ) -> impl Future<Output = anyhow::Result<Self>> + 'static
-    where
-        Self: Sized,
-    {
+        target_channels: usize,
+    ) -> impl Future<Output = anyhow::Result<Self>> + 'static {
         let health_tx = ctx.health_tx().clone();
         let digital_silence_ms = ctx.digital_silence_ms();
         #[cfg(windows)]
@@ -409,10 +404,9 @@ impl AudioSource for Microphone {
         let setup = async move {
             let source_info = feed_lock.audio_info();
             let audio_info = source_info
-                .with_max_channels(MICROPHONE_TARGET_CHANNELS)
                 .with_sample_rate(AudioMixer::INFO.sample_rate)
                 .with_sample_format(AudioMixer::INFO.sample_format)
-                .with_channels(MICROPHONE_TARGET_CHANNELS as usize);
+                .with_channels(target_channels);
             let is_wireless = source_info.is_wireless_transport;
             let device_name = feed_lock.device_name().to_string();
             let reconnect_settings = microphone::MicrophoneDeviceSettings {
@@ -497,7 +491,9 @@ impl AudioSource for Microphone {
                 #[cfg(target_os = "linux")]
                 let required_health = required_health.clone();
                 async move {
-                    let mut digital_silence = DigitalSilenceDetector::new(audio_info.sample_rate);
+                    let mut digital_silence = DigitalSilenceDetector::new(
+                        audio_info.sample_rate * audio_info.channels as u32,
+                    );
                     let mut resampler: Option<MicResampler> = None;
                     let mut silence_mode = false;
                     let mut silence_start: Option<Instant> = None;
@@ -960,6 +956,23 @@ impl AudioSource for Microphone {
         {
             setup
         }
+    }
+}
+
+impl AudioSource for Microphone {
+    type Config = Arc<MicrophoneFeedLock>;
+
+    fn setup(
+        feed_lock: Self::Config,
+        audio_tx: mpsc::Sender<AudioFrame>,
+        ctx: &mut crate::SetupCtx,
+    ) -> impl Future<Output = anyhow::Result<Self>> + 'static {
+        Self::setup_with_channels(
+            feed_lock,
+            audio_tx,
+            ctx,
+            usize::from(MICROPHONE_TARGET_CHANNELS),
+        )
     }
 
     fn audio_info(&self) -> AudioInfo {

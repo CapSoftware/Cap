@@ -8,7 +8,7 @@
 //!   cargo test --bin cap-gpui real_app -- --ignored --test-threads=1
 //! ```
 
-use super::verify_tests::{API_KEY, MockCap, OWNER};
+use super::verify_tests::{API_KEY, Fault, MockCap, OWNER, Route, rule};
 use serde_json::{Value, json};
 use std::{
     path::{Path, PathBuf},
@@ -64,6 +64,13 @@ impl Sandbox {
         )
         .unwrap();
         Self { root }
+    }
+
+    fn set_general(&self, key: &str, value: Value) {
+        let path = self.root.path().join("store");
+        let mut store: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        store["general_settings"][key] = value;
+        std::fs::write(path, serde_json::to_vec(&store).unwrap()).unwrap();
     }
 
     fn launch(&self, name: &str, env: &[(&str, &str)]) -> App {
@@ -252,6 +259,23 @@ fn kill(app: App) {
     drop(app);
 }
 
+fn without_ansi(line: &str) -> String {
+    let mut plain = String::with_capacity(line.len());
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            for c in chars.by_ref() {
+                if c.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        } else {
+            plain.push(c);
+        }
+    }
+    plain
+}
+
 /// A normal Instant recording uploads, verifies, and leaves nothing for the
 /// cleanup journal.
 #[ignore]
@@ -284,6 +308,143 @@ async fn real_app_instant_recording_uploads_and_verifies() {
     );
     assert!(mock.deleted().is_empty(), "{:?}", mock.deleted());
     assert!(sandbox.journal().is_empty(), "{:?}", sandbox.journal());
+}
+
+/// An Instant recording with the camera on uploads and verifies. On Linux the
+/// camera is drawn into the screen video, so a camera that stalls or sends a
+/// bad frame stops the recording. Runs only with `CAP_GPUI_REAL_APP_CAMERA=1`,
+/// since it needs a camera attached; the CI job feeds a virtual one and checks
+/// its picture reached the video.
+#[ignore]
+#[tokio::test(flavor = "multi_thread")]
+async fn real_app_instant_recording_with_camera_uploads_and_verifies() {
+    if std::env::var("CAP_GPUI_REAL_APP_CAMERA").is_err() {
+        eprintln!("skipped: set CAP_GPUI_REAL_APP_CAMERA=1 where a camera is attached");
+        return;
+    }
+    let mock = MockCap::start(Vec::new()).await;
+    let sandbox = Sandbox::new(&mock.url, 0);
+    let app = sandbox.launch(
+        "camera",
+        &[
+            ("CAP_GPUI_AUTO_CAMERA", "1"),
+            ("CAP_GPUI_AUTO_RECORD", "instant:60"),
+        ],
+    );
+    // On X11 a window recorded with the camera hides Cap's controls, and the
+    // recording waits for the Stop shortcut to start; the same shortcut stops
+    // it, well before the automatic stop.
+    #[cfg(target_os = "linux")]
+    {
+        let press = || {
+            let status = Command::new("xdotool")
+                .args(["key", "ctrl+shift+F9"])
+                .status()
+                .expect("install xdotool");
+            assert!(status.success());
+        };
+        let sandbox = &sandbox;
+        let logged = |line: &'static str| move || sandbox.log("camera").contains(line);
+        let start = Duration::from_secs(60);
+        wait_for_app(
+            sandbox,
+            &app,
+            "the start press",
+            start,
+            logged("overlay start pressed"),
+        )
+        .await;
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        press();
+        wait_for_app(
+            sandbox,
+            &app,
+            "the recording to start",
+            start,
+            logged("recording started"),
+        )
+        .await;
+        tokio::time::sleep(Duration::from_secs(8)).await;
+        press();
+    }
+    wait_for_app(
+        &sandbox,
+        &app,
+        "a verified upload",
+        Duration::from_secs(180),
+        || {
+            sandbox
+                .projects()
+                .first()
+                .and_then(|project| state(project))
+                .is_some_and(|state| state["phase"] == "Verified")
+        },
+    )
+    .await;
+    kill(app);
+    let log = sandbox.log("camera");
+    assert!(log.contains("auto-selecting camera"), "no camera selected");
+    let video = mock.created();
+    assert_eq!(video.len(), 1, "{video:?}");
+    assert!(
+        mock.confirmations()
+            .iter()
+            .any(|confirmation| confirmation["videoId"] == video[0].as_str())
+    );
+    let project = sandbox.projects().remove(0);
+    assert!(finished_segments(&project) >= 3, "{}", project.display());
+    assert!(mock.deleted().is_empty(), "{:?}", mock.deleted());
+    assert!(sandbox.journal().is_empty(), "{:?}", sandbox.journal());
+    assert!(!log.contains("panicked at"), "the app panicked");
+}
+
+/// The After an Instant recording outcome decides whether the main window,
+/// hidden at start, comes back once the recording finishes: only Show Cap
+/// takes the reshow, so opening the link never leaves it on screen behind the
+/// browser. The reshow itself lands on onboarding here (the runner grants no
+/// Accessibility), so the check reads the decisions the app logs. Linux
+/// restores the window through its clean-capture lease instead, so the check
+/// is macOS only.
+#[cfg(target_os = "macos")]
+#[ignore]
+#[tokio::test(flavor = "multi_thread")]
+async fn real_app_instant_outcome_decides_whether_main_window_returns() {
+    for (name, disable_open, show_main, returns) in [
+        ("open-link", false, false, false),
+        ("show-cap", true, true, true),
+        ("copy-link", true, false, false),
+    ] {
+        let mock = MockCap::start(Vec::new()).await;
+        let sandbox = Sandbox::new(&mock.url, 0);
+        sandbox.set_general("disableAutoOpenLinks", json!(disable_open));
+        sandbox.set_general("showMainWindowAfterInstantRecording", json!(show_main));
+        let app = sandbox.launch(name, &[("CAP_GPUI_AUTO_RECORD", "instant:3")]);
+        wait_for_app(
+            &sandbox,
+            &app,
+            "a verified upload",
+            Duration::from_secs(180),
+            || {
+                sandbox
+                    .projects()
+                    .first()
+                    .and_then(|project| state(project))
+                    .is_some_and(|state| state["phase"] == "Verified")
+            },
+        )
+        .await;
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        kill(app);
+        let log = without_ansi(&sandbox.log(name));
+        let (_, after) = log
+            .split_once("recording finished")
+            .expect("the recording finished");
+        let kept_hidden = after.contains("main window kept hidden after the Instant recording");
+        let reshown = after.contains("showing the main window");
+        assert_eq!(kept_hidden, !returns, "{name}: {after}");
+        assert_eq!(reshown, returns, "{name}: {after}");
+        assert_eq!(mock.created().len(), 1, "{name}");
+    }
 }
 
 /// Kills the app at points from the server video's creation through the
@@ -459,4 +620,69 @@ async fn real_app_cancelled_start_deletes_its_video() {
         return;
     }
     panic!("no stop landed while the start was in flight");
+}
+
+/// The start cue tells the user they are recording. An Instant start first
+/// waits for the server to create its video, which takes seconds when earlier
+/// takes are still uploading. The cue must wait for capture too: it used to
+/// play and arm the start gate long before the pipeline existed, so the
+/// opening words of the take were never recorded.
+#[ignore]
+#[tokio::test(flavor = "multi_thread")]
+async fn real_app_start_cue_waits_for_a_slow_server_video() {
+    let mock = MockCap::start(vec![rule(
+        Route::Api("video/create"),
+        Fault::Delay(Duration::from_secs(4)),
+    )])
+    .await;
+    let sandbox = Sandbox::new(&mock.url, 0);
+    let app = sandbox.launch("slow-create", &[("CAP_GPUI_AUTO_RECORD", "instant:6")]);
+    wait_for_app(
+        &sandbox,
+        &app,
+        "a verified upload",
+        Duration::from_secs(180),
+        || {
+            sandbox
+                .projects()
+                .first()
+                .and_then(|project| state(project))
+                .is_some_and(|state| state["phase"] == "Verified")
+        },
+    )
+    .await;
+    kill(app);
+    let log = sandbox.log("slow-create");
+    let line = |needle: &str| {
+        log.lines()
+            .position(|line| line.contains(needle))
+            .unwrap_or_else(|| panic!("no {needle:?} in the app log:\n{log}"))
+    };
+    let building = line("starting recording");
+    assert!(
+        line("Recording start cue playing") > building,
+        "the start cue played before capture was being built"
+    );
+    // Capture that is already running when the cue ends holds its first frame
+    // behind the start gate. A cue that played first opened the gate before
+    // any capture existed, so nothing was ever held.
+    let first_frame = log
+        .lines()
+        .map(without_ansi)
+        .find(|line| {
+            line.contains("Start gate")
+                && (line.contains("video frame") || line.contains("frame on screen"))
+        })
+        .unwrap_or_else(|| panic!("no first video frame in the app log:\n{log}"));
+    let held = first_frame
+        .split("held_frames=")
+        .nth(1)
+        .and_then(|rest| rest.split(|c: char| !c.is_ascii_digit()).next())
+        .and_then(|count| count.parse::<u64>().ok())
+        .unwrap_or_else(|| panic!("no held_frames in {first_frame:?}"));
+    assert!(
+        held >= 1,
+        "capture was not running when the start cue ended: {first_frame}"
+    );
+    assert_eq!(mock.created().len(), 1);
 }

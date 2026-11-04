@@ -51,8 +51,59 @@ pub struct IncrementalCaptureOutputs {
 pub struct CursorCaptureTarget {
     pub crop_bounds: CursorCropBounds,
     pub display: scap_targets::Display,
-    #[cfg(target_os = "linux")]
     pub window: Option<scap_targets::WindowId>,
+}
+
+#[cfg(target_os = "macos")]
+fn macos_window_crop(
+    window: &scap_targets::WindowId,
+    display: &scap_targets::Display,
+) -> Option<CursorCropBounds> {
+    use scap_targets::bounds::{LogicalBounds, LogicalPosition};
+
+    let window_bounds = scap_targets::Window::from_id_direct(window)?
+        .raw_handle()
+        .logical_bounds()?;
+    let display_position = display.raw_handle().logical_position();
+    // The video reads the window inside its rounded corners; the cursor
+    // is placed against the same trimmed frame.
+    Some(CursorCropBounds::new_macos(
+        crate::sources::screen_capture::trim_window_corners(LogicalBounds::new(
+            LogicalPosition::new(
+                window_bounds.position().x() - display_position.x(),
+                window_bounds.position().y() - display_position.y(),
+            ),
+            window_bounds.size(),
+        )),
+    ))
+}
+
+#[cfg(windows)]
+fn windows_window_crop(
+    window: &scap_targets::WindowId,
+    display: &scap_targets::Display,
+) -> Option<CursorCropBounds> {
+    let window_bounds = scap_targets::Window::from_id_direct(window)?
+        .raw_handle()
+        .physical_bounds()?;
+    let display_bounds = display.raw_handle().physical_bounds()?;
+    Some(window_crop_on_display(window_bounds, display_bounds))
+}
+
+#[cfg(windows)]
+fn window_crop_on_display(
+    window_bounds: scap_targets::bounds::PhysicalBounds,
+    display_bounds: scap_targets::bounds::PhysicalBounds,
+) -> CursorCropBounds {
+    use scap_targets::bounds::{PhysicalBounds, PhysicalPosition};
+
+    CursorCropBounds::new_windows(PhysicalBounds::new(
+        PhysicalPosition::new(
+            window_bounds.position().x() - display_bounds.position().x(),
+            window_bounds.position().y() - display_bounds.position().y(),
+        ),
+        window_bounds.size(),
+    ))
 }
 
 #[cfg(target_os = "linux")]
@@ -106,6 +157,32 @@ fn normalized_window_cursor(x: i16, y: i16, width: u16, height: u16) -> Option<(
             f64::from(y) / f64::from(height),
         )
     })
+}
+
+#[cfg(all(test, windows))]
+mod windows_window_cursor_tests {
+    use super::window_crop_on_display;
+    use scap_targets::bounds::{PhysicalBounds, PhysicalPosition, PhysicalSize};
+
+    fn bounds(x: f64, y: f64, width: f64, height: f64) -> PhysicalBounds {
+        PhysicalBounds::new(
+            PhysicalPosition::new(x, y),
+            PhysicalSize::new(width, height),
+        )
+    }
+
+    #[test]
+    fn the_cursor_crop_follows_the_window_when_it_moves() {
+        let display = bounds(-1920.0, 0.0, 1920.0, 1080.0);
+        let started = window_crop_on_display(bounds(-1720.0, 200.0, 800.0, 600.0), display);
+        let moved = window_crop_on_display(bounds(-1320.0, 350.0, 800.0, 600.0), display);
+
+        assert_ne!(started, moved);
+        assert_eq!(
+            moved,
+            cap_cursor_capture::CursorCropBounds::new_windows(bounds(600.0, 350.0, 800.0, 600.0))
+        );
+    }
 }
 
 #[cfg(all(test, target_os = "linux"))]
@@ -634,6 +711,8 @@ pub fn spawn_cursor_recorder(
         });
         #[cfg(target_os = "linux")]
         let mut last_window_position = None;
+        #[cfg(any(windows, target_os = "macos"))]
+        let mut last_window_crop: Option<CursorCropBounds> = None;
         let device_state = DeviceState::new();
         // Reading the held keys asks the OS about every key it knows (two
         // CoreGraphics queries per key on macOS, 256 GetAsyncKeyState calls
@@ -714,6 +793,29 @@ pub fn spawn_cursor_recorder(
             {
                 last_window_position = window_position;
             }
+            // A window recording follows the window, so the cursor has to be
+            // placed against where the window is now, not where it started.
+            #[cfg(windows)]
+            let window_crop = target
+                .window
+                .as_ref()
+                .and_then(|window| windows_window_crop(window, &display));
+            #[cfg(target_os = "macos")]
+            let window_crop = target
+                .window
+                .as_ref()
+                .and_then(|window| macos_window_crop(window, &display));
+            #[cfg(any(windows, target_os = "macos"))]
+            let position_changed =
+                position_changed || (window_crop.is_some() && window_crop != last_window_crop);
+            #[cfg(any(windows, target_os = "macos"))]
+            {
+                if window_crop.is_some() {
+                    last_window_crop = window_crop;
+                }
+            }
+            #[cfg(any(windows, target_os = "macos"))]
+            let crop_bounds = last_window_crop.unwrap_or(crop_bounds);
 
             // The cursor image only labels this tick's move and click events,
             // and reading it builds a full TIFF of every representation
@@ -866,21 +968,28 @@ fn cursor_id_for_image(
     response: &mut CursorActorResponse,
     cursors_dir: &Path,
     writer: Option<&CursorFileWriter>,
-    last_cursor_image: &mut Option<(Vec<u8>, String)>,
+    last_cursor_image: &mut Option<(Vec<u8>, [u64; 2], String)>,
 ) -> String {
     use sha2::{Digest, Sha256};
 
     // Hashing a large macOS cursor TIFF costs milliseconds, and the image
     // rarely changes between ticks.
-    if let Some((image, cursor_id)) = last_cursor_image
+    let hotspot = [data.hotspot.x.to_bits(), data.hotspot.y.to_bits()];
+    if let Some((image, cached_hotspot, cursor_id)) = last_cursor_image
         && *image == data.image
+        && *cached_hotspot == hotspot
     {
         return cursor_id.clone();
     }
 
     let hash_bytes = Sha256::digest(&data.image);
+    let cursor_hash = Sha256::new()
+        .chain_update(hash_bytes)
+        .chain_update(hotspot[0].to_le_bytes())
+        .chain_update(hotspot[1].to_le_bytes())
+        .finalize();
     let id = u64::from_le_bytes(
-        hash_bytes[..8]
+        cursor_hash[..8]
             .try_into()
             .expect("sha256 produces at least 8 bytes"),
     );
@@ -924,7 +1033,7 @@ fn cursor_id_for_image(
     *last_cursor_image = response
         .cursors
         .contains_key(&id)
-        .then(|| (data.image, cursor_id.clone()));
+        .then(|| (data.image, hotspot, cursor_id.clone()));
     cursor_id
 }
 
@@ -2214,6 +2323,48 @@ mod cursor_image_tests {
         assert_eq!(response.cursors.len(), 2);
         assert!(dir.path().join("cursor_0.png").exists());
         assert!(dir.path().join("cursor_1.png").exists());
+    }
+
+    #[test]
+    fn identical_images_with_different_hotspots_keep_distinct_cursor_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut response = empty_response();
+        let mut last = None;
+        let image = png([255, 0, 0, 255]);
+        let origin = XY::new(0.0, 0.0);
+        let horizontal = XY::new(0.5, 0.0);
+        let vertical = XY::new(0.0, 0.5);
+
+        for reset_cache in [false, true] {
+            for (hotspot, expected) in [
+                (origin, "0"),
+                (horizontal, "1"),
+                (vertical, "2"),
+                (origin, "0"),
+            ] {
+                if reset_cache {
+                    last = None;
+                }
+                let mut data = cursor_data(image.clone());
+                data.hotspot = hotspot;
+                let id = cursor_id_for_image(data, &mut response, dir.path(), None, &mut last);
+                assert_eq!(id, expected);
+                let recorded = response
+                    .cursors
+                    .values()
+                    .find(|cursor| cursor.id.to_string() == id)
+                    .unwrap();
+                assert_eq!(recorded.hotspot, hotspot);
+            }
+        }
+        assert_eq!(response.cursors.len(), 3);
+        assert_eq!(response.next_cursor_id, 3);
+        for cursor in response.cursors.values() {
+            assert_eq!(
+                std::fs::read(dir.path().join(&cursor.file_name)).unwrap(),
+                image
+            );
+        }
     }
 
     #[test]

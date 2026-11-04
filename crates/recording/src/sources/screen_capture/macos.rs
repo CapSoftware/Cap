@@ -28,6 +28,82 @@ use tracing::{debug, error, info, warn};
 const MAX_CAPTURE_RESTARTS: u32 = 3;
 const RESTART_DELAY: Duration = Duration::from_secs(2);
 
+// The display filter is what hides excluded windows, so an excluded selection must stay on
+// the display-crop path instead of being captured on its own.
+fn capturable_window<'a>(
+    config: &'a Config,
+    excluded_windows: &[WindowId],
+    capture_phase: &'static str,
+) -> Option<&'a WindowId> {
+    let window_id = config.window.as_ref()?;
+
+    if excluded_windows.contains(window_id) {
+        warn!(
+            %window_id,
+            capture_phase,
+            "Capture window is excluded from recordings, using display crop with exclusions"
+        );
+        return None;
+    }
+
+    Some(window_id)
+}
+
+fn window_content_filter(
+    window_id: &WindowId,
+    content: &sc::ShareableContent,
+    capture_phase: &'static str,
+) -> Option<arc::R<sc::ContentFilter>> {
+    let Ok(native_id) = window_id.to_string().parse::<u32>() else {
+        warn!(%window_id, capture_phase, "Capture window has an invalid native id");
+        return None;
+    };
+
+    let windows = content.windows();
+    let Some(window) = windows.iter().find(|window| window.id() == native_id) else {
+        warn!(
+            %window_id,
+            capture_phase,
+            "Capture window missing from ScreenCaptureKit shareable content"
+        );
+        return None;
+    };
+
+    Some(sc::ContentFilter::with_desktop_independent_window(window))
+}
+
+/// A single window at the display's full pixel density, filling the frame.
+/// Left to themselves, window captures pick their resolution automatically,
+/// which can read a Retina window at 1x and upscale it, and do not scale the
+/// window to the output, leaving it in a corner of a larger frame.
+fn configure_window_capture(settings: &mut sc::StreamCfg) {
+    settings.set_scales_to_fit(true);
+    // Both arrived in macOS 14; Cap runs from 12.3.
+    if cidre::api::macos_available("14.0") {
+        unsafe {
+            settings.set_capture_resolution(sc::CaptureResolution::Best);
+            settings.set_preserves_aspect_ratio(true);
+        }
+    }
+}
+
+/// What the stream reads. A display capture crops to `crop_bounds`; a window
+/// capture reads the window itself, inside its rounded corners, where
+/// `crop_bounds` is the window already trimmed by `WINDOW_CORNER_TRIM`.
+fn source_rect(captures_window: bool, crop_bounds: super::CropBounds) -> cg::Rect {
+    let (x, y) = if captures_window {
+        (super::WINDOW_CORNER_TRIM, super::WINDOW_CORNER_TRIM)
+    } else {
+        (crop_bounds.position().x(), crop_bounds.position().y())
+    };
+    cg::Rect::new(
+        x,
+        y,
+        crop_bounds.size().width(),
+        crop_bounds.size().height(),
+    )
+}
+
 fn excluded_shareable_windows(
     excluded_windows: &[WindowId],
     content: &sc::ShareableContent,
@@ -178,6 +254,10 @@ pub enum SourceError {
     NoDisplay(DisplayId),
     #[error("AsContentFilter")]
     AsContentFilter,
+    /// A window-only capture whose window is gone. A display crop would
+    /// record whatever now covers the window's rectangle.
+    #[error("WindowGone: Id '{0}'")]
+    WindowGone(WindowId),
 }
 
 pub struct VideoFrame {
@@ -219,16 +299,32 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
         let display = Display::from_id(&self.config.display)
             .ok_or_else(|| SourceError::NoDisplay(self.config.display.clone()))?;
 
-        let excluded_sc_windows =
-            excluded_shareable_windows(&self.excluded_windows, &self.shareable_content, "initial");
+        let window_filter = capturable_window(&self.config, &self.excluded_windows, "initial")
+            .map(|id| {
+                window_content_filter(id, &self.shareable_content, "initial")
+                    .ok_or_else(|| SourceError::WindowGone(id.clone()))
+            })
+            .transpose()?;
+        let captures_window = window_filter.is_some();
 
-        let content_filter = display
-            .raw_handle()
-            .as_content_filter_excluding_windows(
-                self.shareable_content.clone(),
-                excluded_sc_windows,
-            )
-            .ok_or(SourceError::AsContentFilter)?;
+        let content_filter = match window_filter {
+            Some(filter) => filter,
+            None => {
+                let excluded_sc_windows = excluded_shareable_windows(
+                    &self.excluded_windows,
+                    &self.shareable_content,
+                    "initial",
+                );
+
+                display
+                    .raw_handle()
+                    .as_content_filter_excluding_windows(
+                        self.shareable_content.clone(),
+                        excluded_sc_windows,
+                    )
+                    .ok_or(SourceError::AsContentFilter)?
+            }
+        };
 
         debug!("SCK content filter: {:?}", content_filter);
 
@@ -256,15 +352,13 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
 
         settings.set_pixel_format(cv::PixelFormat::_420V);
         settings.set_color_space_name(cg::color_space::names::srgb());
+        if captures_window {
+            configure_window_capture(&mut settings);
+        }
 
         if let Some(crop_bounds) = self.config.crop_bounds {
             debug!("crop bounds: {:?}", crop_bounds);
-            settings.set_src_rect(cg::Rect::new(
-                crop_bounds.position().x(),
-                crop_bounds.position().y(),
-                crop_bounds.size().width(),
-                crop_bounds.size().height(),
-            ));
+            settings.set_src_rect(source_rect(captures_window, crop_bounds));
         }
         cap_fail::fail_err!(
             "macos::ScreenCaptureActor::new",
@@ -948,13 +1042,27 @@ async fn rebuild_capturer(params: &CapturerRebuildParams) -> anyhow::Result<Capt
     let display = Display::from_id(&params.display_id)
         .ok_or_else(|| anyhow!("Display not found during restart: {:?}", params.display_id))?;
 
-    let excluded_sc_windows =
-        excluded_shareable_windows(&params.excluded_windows, &shareable_content, "restart");
+    let window_filter = capturable_window(&params.config, &params.excluded_windows, "restart")
+        .map(|id| {
+            window_content_filter(id, &shareable_content, "restart").ok_or_else(|| {
+                anyhow!("Capture window {id} is gone; not falling back to the display")
+            })
+        })
+        .transpose()?;
+    let captures_window = window_filter.is_some();
 
-    let content_filter = display
-        .raw_handle()
-        .as_content_filter_excluding_windows(shareable_content, excluded_sc_windows)
-        .ok_or_else(|| anyhow!("Failed to create content filter during restart"))?;
+    let content_filter = match window_filter {
+        Some(filter) => filter,
+        None => {
+            let excluded_sc_windows =
+                excluded_shareable_windows(&params.excluded_windows, &shareable_content, "restart");
+
+            display
+                .raw_handle()
+                .as_content_filter_excluding_windows(shareable_content, excluded_sc_windows)
+                .ok_or_else(|| anyhow!("Failed to create content filter during restart"))?
+        }
+    };
 
     let size = PhysicalSize::new(
         params.video_info.width as f64,
@@ -976,14 +1084,12 @@ async fn rebuild_capturer(params: &CapturerRebuildParams) -> anyhow::Result<Capt
 
     settings.set_pixel_format(cv::PixelFormat::_420V);
     settings.set_color_space_name(cg::color_space::names::srgb());
+    if captures_window {
+        configure_window_capture(&mut settings);
+    }
 
     if let Some(crop_bounds) = params.config.crop_bounds {
-        settings.set_src_rect(cg::Rect::new(
-            crop_bounds.position().x(),
-            crop_bounds.position().y(),
-            crop_bounds.size().width(),
-            crop_bounds.size().height(),
-        ));
+        settings.set_src_rect(source_rect(captures_window, crop_bounds));
     }
 
     let expected_width = params.video_info.width as usize;
@@ -1322,5 +1428,75 @@ impl output_pipeline::AudioSource for SystemAudioSource {
 
     fn audio_info(&self) -> AudioInfo {
         self.inner.audio_info()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn window_id(id: &str) -> WindowId {
+        id.parse().unwrap()
+    }
+
+    fn window_config(window: Option<WindowId>) -> Config {
+        Config {
+            display: "1".parse().unwrap(),
+            crop_bounds: None,
+            fps: 60,
+            show_cursor: true,
+            window,
+        }
+    }
+
+    #[test]
+    fn initial_capture_uses_window_filter_for_non_excluded_window() {
+        let config = window_config(Some(window_id("247")));
+        let excluded = vec![window_id("12"), window_id("99")];
+
+        assert_eq!(
+            capturable_window(&config, &excluded, "initial"),
+            Some(&window_id("247"))
+        );
+    }
+
+    #[test]
+    fn initial_capture_keeps_excluded_window_on_display_path() {
+        let config = window_config(Some(window_id("247")));
+        let excluded = vec![window_id("12"), window_id("247")];
+
+        assert_eq!(capturable_window(&config, &excluded, "initial"), None);
+    }
+
+    #[test]
+    fn restart_capture_keeps_excluded_window_on_display_path() {
+        let config = window_config(Some(window_id("247")));
+        let excluded = vec![window_id("247")];
+        let (restart_config, restart_excluded) = (config.clone(), excluded.clone());
+
+        assert_eq!(
+            capturable_window(&restart_config, &restart_excluded, "restart"),
+            None
+        );
+    }
+
+    #[test]
+    fn restart_capture_uses_window_filter_for_non_excluded_window() {
+        let config = window_config(Some(window_id("247")));
+        let excluded = vec![window_id("12")];
+        let (restart_config, restart_excluded) = (config.clone(), excluded.clone());
+
+        assert_eq!(
+            capturable_window(&restart_config, &restart_excluded, "restart"),
+            Some(&window_id("247"))
+        );
+    }
+
+    #[test]
+    fn non_window_targets_never_use_window_filter() {
+        let config = window_config(None);
+
+        assert_eq!(capturable_window(&config, &[], "initial"), None);
+        assert_eq!(capturable_window(&config, &[], "restart"), None);
     }
 }
