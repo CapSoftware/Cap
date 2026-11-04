@@ -1125,6 +1125,7 @@ window = "Fenster"
 [controls]
 disk_full_resume = "Nicht genug Speicherplatz zum Fortsetzen. Geben Sie Speicher frei und versuchen Sie es erneut, oder drücken Sie Stopp, um zu speichern."
 low_storage = "Wenig Speicherplatz. Cap beendet die Aufnahme bald, um sie zu sichern."
+paused_for_sleep = "Die Aufnahme wurde pausiert, weil Ihr Mac in den Ruhezustand gewechselt ist. Setzen Sie sie fort, wenn Sie bereit sind, oder klicken Sie auf Stopp, um sie zu sichern."
 
 [controls.confirm]
 delete = "Löschen"

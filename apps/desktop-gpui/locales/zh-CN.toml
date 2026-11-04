@@ -1125,6 +1125,7 @@ window = "窗口"
 [controls]
 disk_full_resume = "磁盘空间不足，无法继续。请释放空间后重试，或按“停止”保存。"
 low_storage = "存储空间不足。Cap 即将停止以保存你的录制。"
+paused_for_sleep = "由于你的 Mac 进入睡眠，录制已暂停。准备好后继续录制，或点击“停止”保存。"
 
 [controls.confirm]
 delete = "删除"
