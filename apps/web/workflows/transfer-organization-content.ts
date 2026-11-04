@@ -22,6 +22,7 @@ import {
 	getContentTransferStorageBlockReason,
 	MAX_CONTENT_TRANSFER_FOLDERS,
 	MAX_CONTENT_TRANSFER_VIDEOS,
+	moveContentTransferSourceKeys,
 } from "@/lib/content-transfer";
 import { enqueueVideoStorageNameSync } from "@/lib/sync-video-storage-names";
 import { runWorkflowPromise } from "@/lib/workflow-runtime";
@@ -590,7 +591,7 @@ async function getCurrentVideo(item: ContentTransferVideoPlan) {
 	return video;
 }
 
-async function transferOneVideo(
+export async function transferOneVideo(
 	operationId: string,
 	payload: ContentTransferPayload,
 	item: ContentTransferVideoPlan,
@@ -696,6 +697,7 @@ async function transferOneVideo(
 				bucketId: Db.videos.bucket,
 				storageIntegrationId: Db.videos.storageIntegrationId,
 				uploadPhase: Db.videoUploads.phase,
+				source: Db.videos.source,
 			})
 			.from(Db.videos)
 			.leftJoin(Db.videoUploads, eq(Db.videos.id, Db.videoUploads.videoId))
@@ -782,18 +784,23 @@ async function transferOneVideo(
 			throw new FatalError(`Source placement changed for ${item.name}`);
 		}
 
+		const sourcePrefix = `${item.sourceOwnerId}/${item.videoId}/`;
+		const destinationPrefix = `${payload.targetUserId}/${item.videoId}/`;
 		await tx
 			.update(Db.videos)
 			.set({
 				ownerId: targetUserId,
 				folderId: destinationFolderId,
+				source: moveContentTransferSourceKeys(
+					lockedVideo.source,
+					sourcePrefix,
+					destinationPrefix,
+				),
 				updatedAt: new Date(),
 			})
 			.where(eq(Db.videos.id, videoId));
 
 		if (item.sourceOwnerId !== payload.targetUserId) {
-			const sourcePrefix = `${item.sourceOwnerId}/${item.videoId}/`;
-			const destinationPrefix = `${payload.targetUserId}/${item.videoId}/`;
 			await tx
 				.update(Db.videoUploads)
 				.set({
@@ -814,6 +821,17 @@ async function transferOneVideo(
 					and(
 						eq(Db.videoEdits.videoId, videoId),
 						like(Db.videoEdits.sourceKey, `${sourcePrefix}%`),
+					),
+				);
+			await tx
+				.update(Db.comments)
+				.set({
+					mediaKey: sql`REPLACE(${Db.comments.mediaKey}, ${sourcePrefix}, ${destinationPrefix})`,
+				})
+				.where(
+					and(
+						eq(Db.comments.videoId, videoId),
+						like(Db.comments.mediaKey, `${sourcePrefix}%`),
 					),
 				);
 		}
