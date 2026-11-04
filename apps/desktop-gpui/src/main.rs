@@ -77,7 +77,9 @@ mod picker_probe;
 #[cfg(debug_assertions)]
 mod picker_ui_benchmark;
 mod platform;
+mod power;
 mod presets;
+mod style_presets;
 mod project_save;
 mod recording;
 mod screenshot;
@@ -481,6 +483,7 @@ fn main() {
         .detach();
 
         app_windows::init(window_handle, session, cx);
+        power::install(cx);
         #[cfg(target_os = "macos")]
         match platform::install_native_quit_handler() {
             Ok(requests) => {

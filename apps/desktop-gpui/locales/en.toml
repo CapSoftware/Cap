@@ -208,6 +208,10 @@ fps_30 = { text = "30 FPS", max_px = 180, size = 12 }
 fps_60 = { text = "60 FPS (Recommended)", max_px = 180, size = 12 }
 label = "Max capture framerate"
 
+[settings.general.recording.marker_sound]
+description = "Plays a short sound when you add a marker during a Studio recording. Your microphone or system audio can pick it up."
+label = "Play a sound for markers"
+
 [settings.general.storage]
 choose_folder = "Choose Folder"
 default_location = { text = "Default (Application Support)", context = "Shown in place of a folder path when recordings use the default location." }
@@ -433,6 +437,7 @@ studio_show_cap = "Show Cap"
 studio_show_cap_hint = "Back to the recorder"
 
 [settings.shortcuts.label]
+add_marker = "Add marker"
 cycle_mode = "Cycle recording mode"
 fallback = "Shortcut"
 open_picker = "Open recording picker"
@@ -449,6 +454,7 @@ start_studio = "Start Studio recording"
 stop = "Stop recording"
 
 [settings.shortcuts.effect]
+add_marker = "mark this moment in a Studio recording"
 cycle_mode = "switch between Studio, Instant and Screenshot mode"
 instant_copy = "record your selected screen or window in Instant mode, then copy its share link when you stop"
 instant_copy_and_open = "record your selected screen or window in Instant mode, then copy and open its share link when you stop"
@@ -481,6 +487,7 @@ studio = "record your selected screen or window in Studio mode"
 studio_open_editor = "record your selected screen or window in Studio mode, then open the editor when you stop"
 
 [settings.shortcuts.sentence]
+add_marker = "Mark this moment in a Studio recording."
 cycle_mode = "Switch between Studio, Instant and Screenshot mode."
 instant_copy = "Record your selected screen or window in Instant mode, then copy its share link when you stop."
 instant_copy_and_open = "Record your selected screen or window in Instant mode, then copy and open its share link when you stop."
@@ -1086,6 +1093,11 @@ segments = { one = "{count} segment", other = "{count} segments" }
 segments_with_duration = { one = "{count} segment · {duration}", other = "{count} segments · {duration}", context = "{duration} is an estimate such as ~45s or ~2m 5s." }
 title = "Incomplete Recording"
 
+[main.recovery.error]
+nothing_saved = { text = "No video was saved before this recording stopped, so there is nothing to recover. Its files are still in {path}.", context = "{path} is a folder path." }
+rebuild_failed = { text = "Cap could not rebuild this recording ({error}). Nothing was deleted, and the original files are in {path}.", context = "{error} is a technical error message, usually in English. {path} is a folder path." }
+storage = { text = "There is not enough free space to recover this recording ({error}). Free up some space and press Recover again. Nothing was deleted, and the files are in {path}.", context = "{error} is a technical error message, usually in English. {path} is a folder path." }
+
 [main.sign_in]
 message = "Instant Mode uploads while you record, so your shareable link is ready the moment you stop."
 not_now = "Not now"
@@ -1120,6 +1132,7 @@ window = { text = "Window", max_px = 100, size = 12 }
 [controls]
 disk_full_resume = "Not enough disk space to resume. Free up space and try again, or press Stop to save."
 low_storage = "Low storage. Cap will stop soon to save your recording."
+paused_for_sleep = "Recording paused because your Mac went to sleep. Resume when you're ready, or press Stop to save it."
 
 [controls.confirm]
 delete = "Delete"
@@ -1143,6 +1156,9 @@ pausing = { text = "Pausing…", max_px = 73, size = 14 }
 resuming = { text = "Resuming…", max_px = 73, size = 14 }
 saving = { text = "Saving…", max_px = 73, size = 14 }
 starting = { text = "Starting", max_px = 73, size = 14 }
+
+[controls.marker]
+add = "Add marker"
 
 [camera]
 waiting_title = "Waiting for camera access"
@@ -1988,6 +2004,55 @@ edit_cursor = "Edit Cursor"
 help = "Overrides apply only during this segment. Enable a group to copy its global settings."
 reset_crop = "Reset crop"
 
+[editor.panel.style_presets]
+apply = "Apply"
+create = "Save"
+create_title = "Save Style Preset"
+custom = { text = "Custom style", context = "Shown on the presets button when the selected item matches no saved preset." }
+default_badge = { text = "Default", context = "Badge on the saved preset that new items start with." }
+delete = "Delete"
+delete_confirm = { text = "Delete \"{name}\"? Items that already use this style keep it.", context = "{name} is the preset's name." }
+delete_title = "Delete Style Preset"
+empty = "No saved presets yet"
+empty_help = "Save a style to reuse it in any project."
+font_missing = { text = "{font} is not installed on this computer, so {fallback} is used instead.", context = "{font} is a font family name; {fallback} is the name of the system font used in its place." }
+move_down = "Move down"
+move_up = "Move up"
+remove_default = "Remove as default"
+rename = "Rename"
+rename_title = "Rename Style Preset"
+save = "Save style as preset"
+save_failed = "Couldn't save presets. Cap can't write its settings file."
+set_default = "Set as default"
+tooltip = "Style presets"
+update = "Update with current style"
+
+[editor.panel.style_presets.captions]
+default_name = { text = "My caption style", context = "Suggested name for a new caption style preset." }
+use_for_new = "Use for new captions"
+used_for_new = "New captions use this style"
+
+[editor.panel.style_presets.mask]
+applied_all = { text = "Applied to all masks ({number})", context = "{number} is how many masks the project has." }
+apply_all = { text = "Apply to all masks ({number})", context = "{number} is how many masks the project has." }
+default_name = { text = "My mask style", context = "Suggested name for a new mask style preset." }
+use_for_new = "Use for new masks"
+used_for_new = "New masks use this style"
+
+[editor.panel.style_presets.style]
+applied_all = { text = "Applied to all style segments ({number})", context = "{number} is how many style segments the project has." }
+apply_all = { text = "Apply to all style segments ({number})", context = "{number} is how many style segments the project has." }
+default_name = { text = "My style", context = "Suggested name for a new style segment preset." }
+use_for_new = "Use for new style segments"
+used_for_new = "New style segments use this style"
+
+[editor.panel.style_presets.text_segment]
+applied_all = { text = "Applied to all text segments ({number})", context = "{number} is how many text segments the project has." }
+apply_all = { text = "Apply to all text segments ({number})", context = "{number} is how many text segments the project has." }
+default_name = { text = "My text style", context = "Suggested name for a new text style preset." }
+use_for_new = "Use for new text"
+used_for_new = "New text uses this style"
+
 [editor.panel.text_animation]
 bounce = "Bounce"
 fade = "Fade"
@@ -2244,6 +2309,7 @@ purple = "Purple"
 [editor.canvas]
 camera = "Camera"
 camera_follows_zoom = "Camera size follows the zoom — drag to move"
+captions = "Captions"
 edit_zoom = "Edit zoom"
 image = "Image"
 mask = "Mask"
@@ -2502,6 +2568,7 @@ model_downloaded = "{model} model downloaded"
 model_label = "Model"
 position = "Position"
 regenerate = "Regenerate Captions"
+reset_position = "Reset Position"
 show_filler_words = "Show Filler Words"
 size_label = "Size"
 style = "Style"
@@ -2800,8 +2867,6 @@ split_hint = "Move the playhead into this clip"
 volume = "Volume"
 transition = { text = "TRANSITION", context = "Section heading in the clip menu, written in capitals." }
 transition_none = { text = "None", context = "Transition chip: no transition before this clip." }
-transition_crossfade = { text = "Crossfade", context = "Transition chip: the previous clip dissolves into this one." }
-transition_fade = { text = "Fade", context = "Transition chip: fade through black into this clip." }
 transition_seconds = { text = "{seconds}s", context = "Transition length chip; {seconds} is a number such as 0.5." }
 
 [editor.window.clip_menu.merge_blocker]
@@ -2896,9 +2961,29 @@ save_failed = "Could not save the recording title for {path}: {error}"
 clear_all = "Clear all"
 delete = "Delete"
 
+[editor.window.transition]
+title = { text = "Transition", context = "Title of the popover that edits the transition between two clips." }
+add = { text = "Add transition", context = "Tooltip on the + button at a cut between two clips on the timeline." }
+duration = { text = "Duration", context = "Label for the transition length field." }
+seconds_unit = { text = "s", context = "Unit after the transition length field: seconds." }
+remove = "Remove transition"
+cross_fade = { text = "Cross dissolve", context = "Transition type: the previous clip dissolves into the next." }
+fade_through_black = { text = "Dip to black", context = "Transition type: fades out to black, then in from black." }
+fade_through_white = { text = "Dip to white", context = "Transition type: fades out to white, then in from white." }
+push_left = { text = "Push left", context = "Transition type: the next clip slides in and pushes the previous one out to the left." }
+push_right = { text = "Push right", context = "Transition type: the next clip slides in and pushes the previous one out to the right." }
+push_up = { text = "Push up", context = "Transition type: the next clip slides in and pushes the previous one out the top." }
+push_down = { text = "Push down", context = "Transition type: the next clip slides in and pushes the previous one out the bottom." }
+wipe_left = { text = "Wipe left", context = "Transition type: an edge sweeping to the left uncovers the next clip." }
+wipe_right = { text = "Wipe right", context = "Transition type: an edge sweeping to the right uncovers the next clip." }
+wipe_up = { text = "Wipe up", context = "Transition type: an edge sweeping upward uncovers the next clip." }
+wipe_down = { text = "Wipe down", context = "Transition type: an edge sweeping downward uncovers the next clip." }
+zoom = { text = "Zoom", context = "Transition type: the picture zooms through the cut into the next clip." }
+
 [editor.window.transport]
 done_splitting = "Done splitting"
 play_pause = "Play/Pause video"
+speed = { text = "Preview speed", context = "Tooltip for the menu in the editor transport bar that sets how fast the preview plays. It never changes the exported video." }
 split = "Split"
 split_tooltip = "Click a segment to split. Esc to finish."
 zoom_in = "Zoom in"
@@ -2909,6 +2994,21 @@ generate = "Generate"
 generating = "Generating…"
 no_clicks = "No clicks found to zoom into. Drag across the lane to add one."
 prompt = "Add zooms automatically"
+
+[editor.markers]
+add = "Add marker"
+button = { one = "{count} marker", other = "{count} markers" }
+default_name = { text = "Marker {number}", context = "{number} counts the markers in timeline order, starting at 1." }
+delete = "Delete marker"
+done = "Done"
+edit = "Edit marker"
+empty = "No markers yet. Press M to mark the playhead, or add markers while you record."
+hidden = { one = "{count} marker is in a part you cut out.", other = "{count} markers are in parts you cut out." }
+next = "Next marker"
+previous = "Previous marker"
+split = "Split clips at markers"
+stack = { one = "{count} marker. Click to see it.", other = "{count} markers close together. Click to see them." }
+title = "Markers"
 
 [ui]
 coming_soon = "Coming Soon"
@@ -2933,7 +3033,10 @@ zoom_some = { one = "{count} of {total} selected", other = "{count} of {total} s
 
 [dialog.quit]
 canceled = { text = "Quit canceled: {error}. Cap will stay open so you can finish or recover the recording.", context = "{error} explains why the recording could not stop." }
+files_kept = "Everything recorded so far stays in the recording's folder."
+keep_open = "Keep Cap Open"
 pending = "Quit canceled because recording shutdown is still pending. Cap will stay open. Use Stop once available, then try Quit again."
+quit_anyway = "Quit Anyway"
 still_open = "Cap is still open"
 unconfirmed = "Quit canceled because recording shutdown could not be confirmed. Cap will stay open. Use Stop, then try Quit again."
 

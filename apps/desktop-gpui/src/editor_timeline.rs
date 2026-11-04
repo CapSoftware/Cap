@@ -243,7 +243,7 @@ fn with_alpha(color: Hsla, alpha: f32) -> Hsla {
 
 /// Times read as columns of digits, so every one of them is set in the font's
 /// tabular figures.
-fn tabular_numerals() -> gpui::FontFeatures {
+pub(crate) fn tabular_numerals() -> gpui::FontFeatures {
     gpui::FontFeatures(Arc::new(vec![("tnum".to_string(), 1)]))
 }
 
@@ -1246,9 +1246,8 @@ pub enum SegmentDetail {
         holds: Arc<[(f64, f64)]>,
         /// The transition into this clip from the one before it: how long
         /// its overlap is on screen, in output seconds (holds inside it
-        /// stretch it), and whether it fades through black rather than
-        /// crossfading.
-        transition_in: Option<(f64, bool)>,
+        /// stretch it), and its kind.
+        transition_in: Option<(f64, cap_project::ClipTransitionType)>,
     },
     /// `TL/ZoomTrack.tsx:343-349`.
     Zoom {
@@ -1788,7 +1787,7 @@ fn clip_rows(
                     transition_in: timeline.effective_transition(index).map(|transition| {
                         (
                             effective_to_output(holds, previous + transition.duration) - start,
-                            transition.kind == cap_project::ClipTransitionType::FadeThroughBlack,
+                            transition.kind,
                         )
                     }),
                 },

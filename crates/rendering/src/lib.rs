@@ -60,6 +60,8 @@ pub mod spring_mass_damper;
 mod takeover;
 mod text;
 mod transition;
+#[cfg(test)]
+mod transition_render_tests;
 pub mod yuv_converter;
 mod zoom;
 mod zoom_spring;
@@ -75,7 +77,8 @@ pub use frame_pipeline::{GpuOutputFormat, Nv12RenderedFrame, RenderedFrame, Shar
 pub use frame_pipeline::{PendingSurface, RgbaToBgraSurfaceConverter};
 pub use frame_windows::FrameWindows;
 pub use layers::{
-    BackgroundTextureCache, clean_background_path, last_caption_center, new_font_system,
+    BackgroundTextureCache, CaptionFrameBox, clean_background_path, last_caption_center,
+    new_font_system,
 };
 pub use managed_segment::{
     ManagedRecordingSegmentDecoders, ManagedSegmentDecoderStatus, ManagedSegmentStopHandles,
@@ -85,6 +88,9 @@ pub use managed_segment::{
 use overlay_layers::OverlayLayers;
 pub use project_recordings::{ProjectRecordingsMeta, SegmentRecordings, Video};
 pub use recorded_cursor_assets::{FrozenCursorAssetError, FrozenRecordedCursorAssets};
+pub use transition::{
+    TransitionComposite, TransitionDip, TransitionLayer, TransitionWipe, ease_in_out_cubic,
+};
 use transition::{TransitionCompositor, TransitionParameters};
 
 /// Warms the process-wide system-font scan used by the text/captions/keyboard
@@ -3653,6 +3659,9 @@ pub struct FrameLayout {
     pub display: [f32; 4],
     pub camera: Option<[f32; 4]>,
     pub output_size: [u32; 2],
+    /// Only the caption layer measures its box, so this is filled in after
+    /// the frame renders and stays `None` from [`ProjectUniforms::frame_layout`].
+    pub caption: Option<CaptionFrameBox>,
 }
 
 /// Unzoomed placement of the display card in output-frame pixels. Without a
@@ -3682,6 +3691,7 @@ impl ProjectUniforms {
             display: self.display_outer_bounds,
             camera: self.camera.as_ref().map(|c| c.target_bounds),
             output_size: [self.output_size.0, self.output_size.1],
+            caption: None,
         }
     }
 
@@ -8218,6 +8228,10 @@ fn join_layer<T>(handle: std::thread::ScopedJoinHandle<'_, T>) -> T {
 }
 
 impl RendererLayers {
+    pub fn caption_frame_box(&self) -> Option<CaptionFrameBox> {
+        self.overlays.as_ref()?.captions.frame_box()
+    }
+
     pub fn reset_frame_state(&mut self) {
         self.display.reset_frame_state();
         self.camera.reset_frame_state();
@@ -8828,20 +8842,95 @@ impl RendererLayers {
         uniforms: &ProjectUniforms,
         render_display: bool,
     ) -> Result<(), RenderingError> {
+        self.render_parts(
+            device,
+            queue,
+            encoder,
+            session,
+            uniforms,
+            render_display,
+            LayerParts::ALL,
+        )
+    }
+
+    /// What one side of a layered transition draws: its own content on a
+    /// transparent frame, with its masks, so a blurred region moves with the
+    /// footage it hides. Masks and a focus blur read and cover the
+    /// background too (a pixelated cell at a clip's edge samples it), so a
+    /// side with either keeps its background to stay identical to its plain
+    /// frames. When a mask is ordered above a text or
+    /// image overlay it has to cover that overlay as well, which only a whole
+    /// frame can show correctly, so the overlays travel with the clips then.
+    fn transition_side_parts(&self, uniforms: &ProjectUniforms) -> LayerParts {
+        let background = self.camera3d.blur_kind().is_some() || !uniforms.masks.is_empty();
+        LayerParts {
+            background,
+            content: true,
+            masks: true,
+            overlays: self.masks_cover_overlays(uniforms),
+        }
+    }
+
+    fn masks_cover_overlays(&self, uniforms: &ProjectUniforms) -> bool {
+        let Some(overlays) = &self.overlays else {
+            return false;
+        };
+        if uniforms.masks.is_empty() || uniforms.project.overlay_order.is_empty() {
+            return false;
+        }
+        let mut overlay_below = false;
+        for overlay in uniforms.project.overlay_tracks().into_iter().rev() {
+            match overlay.kind {
+                OverlayTrackKind::Image => {
+                    overlay_below |= overlays.images.has_track(overlay.track)
+                }
+                OverlayTrackKind::Text => overlay_below |= overlays.text.has_track(overlay.track),
+                OverlayTrackKind::Mask => {
+                    if overlay_below
+                        && uniforms
+                            .masks
+                            .iter()
+                            .any(|mask| mask.track == overlay.track)
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_parts(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        session: &mut RenderSession,
+        uniforms: &ProjectUniforms,
+        render_display: bool,
+        parts: LayerParts,
+    ) -> Result<(), RenderingError> {
         self.validate_overlay_uniforms(uniforms)?;
 
         let session_views = [session.current_texture_view(), session.other_texture_view()];
         self.background_blur.retain_views(session_views);
         self.background_color_grade.retain_views(session_views);
         self.camera3d.retain_views(session_views);
-        self.mask.begin_frame(session_views);
-
-        if render_display {
-            self.display.copy_to_texture(encoder);
+        if parts.masks {
+            self.mask.begin_frame(session_views);
         }
-        self.camera.copy_to_texture(encoder);
-        self.camera_only.copy_to_texture(encoder);
-        self.background.render_surface(encoder);
+
+        if parts.content {
+            if render_display {
+                self.display.copy_to_texture(encoder);
+            }
+            self.camera.copy_to_texture(encoder);
+            self.camera_only.copy_to_texture(encoder);
+        }
+        if parts.background {
+            self.background.render_surface(encoder);
+        }
 
         let mut passes = LayerPasses {
             encoder,
@@ -8849,6 +8938,38 @@ impl RendererLayers {
             #[cfg(test)]
             split: self.split_layer_passes,
         };
+        if parts.background {
+            self.render_background(device, &mut passes, session, uniforms);
+        } else if parts.content {
+            passes.pass(
+                session.current_texture_view(),
+                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+            );
+        }
+        if parts.content {
+            self.render_content(device, &mut passes, session, uniforms, render_display);
+        }
+        if parts.masks || parts.overlays {
+            self.render_overlays(
+                device,
+                queue,
+                &mut passes,
+                session,
+                uniforms,
+                render_display,
+                parts,
+            );
+        }
+        Ok(())
+    }
+
+    fn render_background(
+        &mut self,
+        device: &wgpu::Device,
+        passes: &mut LayerPasses<'_>,
+        session: &mut RenderSession,
+        uniforms: &ProjectUniforms,
+    ) {
         let clear = wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT);
         let load = wgpu::LoadOp::Load;
 
@@ -8915,6 +9036,18 @@ impl RendererLayers {
 
             session.swap_textures();
         }
+    }
+
+    fn render_content(
+        &mut self,
+        device: &wgpu::Device,
+        passes: &mut LayerPasses<'_>,
+        session: &mut RenderSession,
+        uniforms: &ProjectUniforms,
+        render_display: bool,
+    ) {
+        let clear = wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT);
+        let load = wgpu::LoadOp::Load;
 
         let should_render_screen = render_display
             && uniforms.scene.should_render_screen()
@@ -9012,16 +9145,30 @@ impl RendererLayers {
             }
             None => {}
         }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_overlays(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        passes: &mut LayerPasses<'_>,
+        session: &mut RenderSession,
+        uniforms: &ProjectUniforms,
+        render_display: bool,
+        parts: LayerParts,
+    ) {
+        let load = wgpu::LoadOp::Load;
 
         if uniforms.project.overlay_order.is_empty() {
-            if !uniforms.masks.is_empty() {
+            if parts.masks {
                 for mask in &uniforms.masks {
                     self.mask
                         .render(device, queue, session, passes.encoder(), mask);
                 }
             }
 
-            if let Some(overlays) = &self.overlays {
+            if let Some(overlays) = self.overlays.as_ref().filter(|_| parts.overlays) {
                 if render_display && overlays.images.has_content() {
                     overlays
                         .images
@@ -9037,7 +9184,7 @@ impl RendererLayers {
         } else if let Some(overlays) = &self.overlays {
             for overlay in uniforms.project.overlay_tracks().into_iter().rev() {
                 match overlay.kind {
-                    OverlayTrackKind::Mask => {
+                    OverlayTrackKind::Mask if parts.masks => {
                         for mask in uniforms
                             .masks
                             .iter()
@@ -9048,25 +9195,29 @@ impl RendererLayers {
                         }
                     }
                     OverlayTrackKind::Image
-                        if render_display && overlays.images.has_track(overlay.track) =>
+                        if parts.overlays
+                            && render_display
+                            && overlays.images.has_track(overlay.track) =>
                     {
                         overlays.images.render_track(
                             passes.pass(session.current_texture_view(), load),
                             overlay.track,
                         );
                     }
-                    OverlayTrackKind::Text if overlays.text.has_track(overlay.track) => {
+                    OverlayTrackKind::Text
+                        if parts.overlays && overlays.text.has_track(overlay.track) =>
+                    {
                         overlays.text.render_track(
                             passes.pass(session.current_texture_view(), load),
                             overlay.track,
                         );
                     }
-                    OverlayTrackKind::Text | OverlayTrackKind::Image => {}
+                    OverlayTrackKind::Mask | OverlayTrackKind::Text | OverlayTrackKind::Image => {}
                 }
             }
         }
 
-        if let Some(overlays) = &self.overlays {
+        if let Some(overlays) = self.overlays.as_ref().filter(|_| parts.overlays) {
             if overlays.keyboard.has_content() {
                 overlays
                     .keyboard
@@ -9079,8 +9230,37 @@ impl RendererLayers {
                     .render(passes.pass(session.current_texture_view(), load));
             }
         }
-        Ok(())
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct LayerParts {
+    background: bool,
+    content: bool,
+    masks: bool,
+    /// Every overlay but masks: images, text, keyboard and captions.
+    overlays: bool,
+}
+
+impl LayerParts {
+    const ALL: Self = Self {
+        background: true,
+        content: true,
+        masks: true,
+        overlays: true,
+    };
+    const BACKGROUND: Self = Self {
+        background: true,
+        content: false,
+        masks: false,
+        overlays: false,
+    };
+    const OVERLAYS: Self = Self {
+        background: false,
+        content: false,
+        masks: false,
+        overlays: true,
+    };
 }
 
 /// Lets consecutive layer draws into the same texture share one render pass.
@@ -9217,6 +9397,13 @@ async fn produce_transition_texture(
     session: &mut RenderSession,
     compositor: &TransitionCompositor,
 ) -> Result<wgpu::CommandEncoder, RenderingError> {
+    let parameters = TransitionParameters {
+        kind: transition.0,
+        progress: transition.1,
+        opaque: outgoing.render_display || incoming.render_display,
+    };
+    let layered = parameters.composite().is_layered();
+
     let mut outgoing_encoder =
         constants
             .device
@@ -9233,13 +9420,19 @@ async fn produce_transition_texture(
             outgoing.render_display,
         )
         .await?;
-    layers.render(
+    let outgoing_parts = if layered {
+        layers.transition_side_parts(&outgoing.uniforms)
+    } else {
+        LayerParts::ALL
+    };
+    layers.render_parts(
         &constants.device,
         &constants.queue,
         &mut outgoing_encoder,
         session,
         &outgoing.uniforms,
         outgoing.render_display,
+        outgoing_parts,
     )?;
     compositor.capture_outgoing(&mut outgoing_encoder, session.current_texture());
     constants
@@ -9265,25 +9458,69 @@ async fn produce_transition_texture(
         .await;
     layers.camera_blur_unavailable |= outgoing_camera_blur_unavailable;
     incoming_prepare?;
-    layers.render(
+
+    if !layered {
+        layers.render(
+            &constants.device,
+            &constants.queue,
+            &mut incoming_encoder,
+            session,
+            &incoming.uniforms,
+            incoming.render_display,
+        )?;
+        compositor.capture_incoming_and_render(
+            &constants.queue,
+            &mut incoming_encoder,
+            session.current_texture(),
+            session.current_texture_view(),
+            parameters,
+        );
+        return Ok(incoming_encoder);
+    }
+
+    // Both sides take the outgoing side's parts: masks, 3D blur and overlay
+    // order are timeline state shared by the two, and a background drawn
+    // into the sides must not be drawn again underneath them.
+    let incoming_parts = outgoing_parts;
+    layers.render_parts(
         &constants.device,
         &constants.queue,
         &mut incoming_encoder,
         session,
         &incoming.uniforms,
         incoming.render_display,
+        incoming_parts,
     )?;
-    compositor.capture_incoming_and_render(
+    compositor.capture_incoming(&mut incoming_encoder, session.current_texture());
+    if !incoming_parts.background {
+        layers.render_parts(
+            &constants.device,
+            &constants.queue,
+            &mut incoming_encoder,
+            session,
+            &incoming.uniforms,
+            incoming.render_display,
+            LayerParts::BACKGROUND,
+        )?;
+    }
+    compositor.render_layers(
         &constants.queue,
         &mut incoming_encoder,
-        session.current_texture(),
         session.current_texture_view(),
-        TransitionParameters {
-            kind: transition.0,
-            progress: transition.1,
-            opaque: outgoing.render_display || incoming.render_display,
-        },
+        parameters,
+        incoming_parts.background,
     );
+    if !incoming_parts.overlays {
+        layers.render_parts(
+            &constants.device,
+            &constants.queue,
+            &mut incoming_encoder,
+            session,
+            &incoming.uniforms,
+            incoming.render_display,
+            LayerParts::OVERLAYS,
+        )?;
+    }
 
     Ok(incoming_encoder)
 }
