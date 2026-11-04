@@ -178,7 +178,7 @@ fn silence_threshold(smoothed: &[f32], window: usize) -> f32 {
         .map(|energy| f64::from(*energy))
         .sum();
     for index in window..=smoothed.len() {
-        if (index - window) % stride == 0 {
+        if (index - window).is_multiple_of(stride) {
             sums.push((sum / window as f64) as f32);
         }
         if index < smoothed.len() {
