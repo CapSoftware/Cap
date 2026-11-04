@@ -1,7 +1,8 @@
 import { writeFile } from "node:fs/promises";
-import { file, spawn } from "bun";
+import { file } from "bun";
 import { FfmpegExitError, ffmpegErrorLines } from "./ffmpeg-errors";
 import type { VideoMetadata } from "./job-manager";
+import { spawn } from "./media-spawn";
 import {
 	buildNvencEncodeArgs,
 	logNvencFallback,

@@ -7,6 +7,7 @@ import {
 	updateJob,
 	type VideoMetadata,
 } from "../lib/job-manager";
+import { trustLocalPlaylist } from "../lib/media-input-policy";
 import {
 	abortStorageUploadTarget,
 	generatePreviewGif,
@@ -190,6 +191,7 @@ async function prepareSource(
 		request.videoUrl,
 		manifestDir,
 		signal,
+		settings.allowedHosts,
 	);
 	if (!master.endsWith(".m3u8"))
 		throw new UnsupportedStreamError("This Loom DASH layout is not supported");
@@ -216,6 +218,7 @@ async function prepareSource(
 				);
 		},
 	});
+	trustLocalPlaylist(prefetched.masterPath);
 	return {
 		input: prefetched.masterPath,
 		inputArgs: PLAYLIST_INPUT_ARGS(await getFfmpegHlsCapabilities()),

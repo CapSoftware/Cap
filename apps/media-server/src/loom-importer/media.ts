@@ -1,6 +1,6 @@
 import { stat } from "node:fs/promises";
-import { spawn } from "bun";
 import type { VideoMetadata } from "../lib/job-manager";
+import { spawn } from "../lib/media-spawn";
 import type { FfmpegHlsCapabilities } from "../lib/media-video";
 import {
 	registerSubprocess,

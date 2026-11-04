@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { type BunFile, file, spawn } from "bun";
+import { type BunFile, file } from "bun";
 import {
 	type CapcodecOptions,
 	capcodecOptionsForJob,
@@ -21,7 +21,14 @@ import {
 	UPLOAD_TIMEOUT_MS,
 	withTimeout,
 } from "./media-common";
+import {
+	assertMediaFileContent,
+	assertTrustedStreamingUrl,
+	isMediaFileExtension,
+	trustLocalPlaylist,
+} from "./media-input-policy";
 import { probeVideoFile } from "./media-probe";
+import { spawn } from "./media-spawn";
 import { fetchMedia, materializeMedia } from "./media-transfer";
 import {
 	buildGpuDecodeInputArgs,
@@ -221,9 +228,8 @@ export function normalizeVideoInputExtension(
 	if (!inputExtension) return ".mp4";
 	const normalized = inputExtension.trim().toLowerCase();
 	if (!normalized) return ".mp4";
-	return normalized.startsWith(".")
-		? (normalized as `.${string}`)
-		: (`.${normalized}` as `.${string}`);
+	const extension = normalized.startsWith(".") ? normalized : `.${normalized}`;
+	return isMediaFileExtension(extension) ? (extension as `.${string}`) : ".mp4";
 }
 
 function isHlsUrl(url: string): boolean {
@@ -915,8 +921,12 @@ export async function materializeStreamingInput(
 	videoUrl: string,
 	dirPath: string,
 	abortSignal?: AbortSignal,
+	trustedHosts?: readonly string[],
 ): Promise<string> {
 	let inputPath: string;
+
+	if (isStreamingUrl(videoUrl))
+		assertTrustedStreamingUrl(videoUrl, trustedHosts);
 
 	if (isHlsUrl(videoUrl)) {
 		inputPath = await materializeHlsPlaylist(
@@ -948,6 +958,7 @@ export async function materializeStreamingInput(
 		}
 	}
 
+	trustLocalPlaylist(inputPath);
 	return inputPath;
 }
 
@@ -1310,6 +1321,7 @@ export async function downloadVideoToTemp(
 			if (file(tempFile.path).size === 0) {
 				throw new Error("Downloaded video is empty");
 			}
+			await assertMediaFileContent(tempFile.path);
 			return tempFile;
 		}
 
@@ -1357,6 +1369,7 @@ export async function downloadVideoToTemp(
 		if (file(tempFile.path).size === 0) {
 			throw new Error("Downloaded video is empty");
 		}
+		await assertMediaFileContent(tempFile.path);
 
 		return tempFile;
 	} catch (err) {

@@ -1,9 +1,9 @@
-import { spawn } from "bun";
 import {
 	decodeThreadsFromEnv,
 	PROCESS_TIMEOUT_MS,
 	withTimeout,
 } from "./media-common";
+import { spawn } from "./media-spawn";
 import { registerSubprocess, terminateProcess } from "./subprocess";
 
 const MAX_DIAGNOSTIC_LENGTH = 8_192;
