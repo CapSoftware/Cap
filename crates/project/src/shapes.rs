@@ -268,10 +268,10 @@ pub fn arrow_head_size(stroke_width: f64, arrow_length: f64) -> (f64, f64) {
     let width = stroke_width.max(1.0);
     let length = (width * 5.0).max(18.0);
     let head_width = (width * 4.5).max(16.0);
-    let fit = if arrow_length.is_finite() && arrow_length > 0.0 {
-        (arrow_length * 0.45 / length).min(1.0)
+    let fit = if arrow_length.is_nan() {
+        0.0
     } else {
-        1.0
+        (arrow_length.max(0.0) * 0.45 / length).min(1.0)
     };
     (length * fit, head_width * fit)
 }
@@ -445,7 +445,12 @@ mod tests {
         assert!((short_length - 9.0).abs() < 1e-9);
         assert!(short_width < width);
         assert_eq!(arrow_head_size(0.0, 1000.0), (18.0, 16.0));
-        assert_eq!(arrow_head_size(6.0, 0.0), (30.0, 27.0));
+        assert_eq!(arrow_head_size(6.0, 0.0), (0.0, 0.0));
+        assert_eq!(arrow_head_size(6.0, -5.0), (0.0, 0.0));
+        assert_eq!(arrow_head_size(6.0, f64::NAN), (0.0, 0.0));
+        assert_eq!(arrow_head_size(6.0, f64::INFINITY), (30.0, 27.0));
+        let (tiny, _) = arrow_head_size(6.0, 0.5);
+        assert!(tiny > 0.0 && tiny < 1.0);
     }
 
     #[test]
