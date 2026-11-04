@@ -5985,10 +5985,10 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 											}),
 										)
 										.pipe(
-											Effect.catchTag("DatabaseError", (error) =>
+											Effect.mapError((error) =>
 												error.cause instanceof CustomStorageRateLimitedError
 													? rateLimited(requestId)
-													: Effect.fail(error),
+													: error,
 											),
 										);
 									return mutationResponse(
